@@ -20,8 +20,8 @@ function renderStep() {
 describe('BillingStep phone', () => {
   it('formats while typing', () => {
     renderStep();
-    type('5551234567');
-    expect(phoneEl().value).toBe('(555) 123-4567');
+    type('2065550123');
+    expect(phoneEl().value).toBe('(206) 555-0123');
   });
 
   it('typing does not show the error before blur; blur does', () => {
@@ -36,7 +36,7 @@ describe('BillingStep phone', () => {
     renderStep();
     type('555');
     fireEvent.blur(phoneEl());
-    type('5551234567');
+    type('2065550123');
     expect(screen.queryByText(ERR)).toBeNull();
   });
 
@@ -44,7 +44,7 @@ describe('BillingStep phone', () => {
     renderStep();
     type('555');
     expect(confirm().disabled).toBe(true);
-    type('5551234567');
+    type('2065550123');
     expect(confirm().disabled).toBe(false);
     fireEvent.click(screen.getByLabelText('Someone else'));
     expect(confirm().disabled).toBe(false);
@@ -52,9 +52,9 @@ describe('BillingStep phone', () => {
     expect(confirm().disabled).toBe(true);
   });
 
-  it('a pasted +1 (555) 123-4567 is accepted', () => {
+  it('a pasted +1 (206) 555-0123 is accepted', () => {
     renderStep();
-    type('+1 (555) 123-4567');
+    type('+1 (206) 555-0123');
     fireEvent.blur(phoneEl());
     expect(screen.queryByText(ERR)).toBeNull();
     expect(confirm().disabled).toBe(false);

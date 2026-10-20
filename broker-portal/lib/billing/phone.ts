@@ -11,7 +11,7 @@
  *   anything else           -> NULL         (rejected)
  */
 
-export const PHONE_ERROR = 'Enter a valid phone number, like (555) 123-4567.';
+export const PHONE_ERROR = 'Enter a valid phone number, like (206) 555-0123.';
 
 export function normalizeBillingPhone(raw: string | null | undefined): string | null {
   const v = (raw ?? '').trim().replace(/[\s().-]/g, '');
@@ -26,7 +26,7 @@ export function isValidBillingPhone(raw: string | null | undefined): boolean {
 }
 
 /**
- * Format as the user types: "5551234567" -> "(555) 123-4567", "15551234567" -> "1 (555) 123-4567".
+ * Format as the user types: "2065550123" -> "(206) 555-0123", "12065550123" -> "1 (206) 555-0123".
  * Input with a "+", a letter or any other character is returned untouched so validation can see
  * exactly what was typed or pasted.
  */
