@@ -102,3 +102,16 @@ describe('BillingStep', () => {
     expect(screen.getByText('Your Keepr account manager changed this order.')).toBeTruthy();
   });
 });
+
+// Founder QA: the body colour turns white under a dark OS preference (globals.css), so a label with no
+// explicit colour of its own is unreadable on the white card.
+describe('BillingStep radio labels', () => {
+  it('"Who receives invoices" labels carry an explicit text-gray-900', () => {
+    render(<BillingStep organizationId={ORG} view={SETUP_VIEW_WAITING} />);
+    const radios = screen.getAllByRole('radio');
+    expect(radios).toHaveLength(2);
+    for (const radio of radios) {
+      expect(radio.closest('label')!.className).toContain('text-gray-900');
+    }
+  });
+});

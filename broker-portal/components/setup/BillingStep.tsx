@@ -165,12 +165,12 @@ export function BillingStep({ organizationId, view }: BillingStepProps) {
         <p className="mt-1 text-sm text-gray-600">Invoices are emailed here with a link to pay. No login is needed.</p>
         <fieldset className="mt-4 space-y-2">
           <legend className="sr-only">Who receives invoices</legend>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="radio" name="bs-who" checked={who === 'me'} onChange={() => setWho('me')} />
+          <label className="flex items-center gap-2 text-sm text-gray-900">
+            <input type="radio" className="h-4 w-4 border-gray-300 bg-white text-primary-600 focus:ring-primary-500" name="bs-who" checked={who === 'me'} onChange={() => setWho('me')} />
             Me{view.me ? ` (${view.me.email})` : ''}
           </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="radio" name="bs-who" checked={who === 'other'} onChange={() => setWho('other')} />
+          <label className="flex items-center gap-2 text-sm text-gray-900">
+            <input type="radio" className="h-4 w-4 border-gray-300 bg-white text-primary-600 focus:ring-primary-500" name="bs-who" checked={who === 'other'} onChange={() => setWho('other')} />
             Someone else
           </label>
         </fieldset>
