@@ -1,7 +1,7 @@
 import { getAuthenticatedUser } from '@/lib/supabase/server';
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Building2, Shield } from 'lucide-react';
+import { ArrowLeft, Building2, Shield, Users } from 'lucide-react';
 import { Card } from '@keepr/design-system';
 import { MembersTable, type MemberRow } from './components/MembersTable';
 import { PendingInvitationsTable, type PendingInvitationRow } from './components/PendingInvitationsTable';
@@ -131,6 +131,20 @@ export default async function OrganizationDetailPage({
     invitation_expires_at: p.invitation_expires_at,
   }));
 
+  // BACKLOG-4022: one Invite button, rendered in the header, the Members heading row and the
+  // empty state. Same props everywhere, so the same rules (billing card, deal, users.edit) hold.
+  const inviteButton = (
+    <OrgInviteButton
+      organizationId={org.id}
+      organizationName={org.name}
+      canInvite={!!canInvite}
+      canViewBilling={!!canViewBilling}
+      hasDeal={!!billing?.deal}
+      showBillingCard={shouldShowBillingCard(billing)}
+      isFirstInvite={members.length === 0 && pendingInvitations.length === 0}
+    />
+  );
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       {/* Back navigation */}
@@ -152,15 +166,7 @@ export default async function OrganizationDetailPage({
             <h1 className="text-2xl font-bold text-gray-900">{org.name}</h1>
             <p className="text-sm text-gray-500 mt-0.5">{org.slug}</p>
           </div>
-          <OrgInviteButton
-            organizationId={org.id}
-            organizationName={org.name}
-            canInvite={!!canInvite}
-            canViewBilling={!!canViewBilling}
-            hasDeal={!!billing?.deal}
-            showBillingCard={shouldShowBillingCard(billing)}
-            isFirstInvite={members.length === 0 && pendingInvitations.length === 0}
-          />
+          {inviteButton}
         </div>
 
         <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -214,10 +220,21 @@ export default async function OrganizationDetailPage({
 
       {/* Members table (includes license summary filter cards) */}
       <div>
-        <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider mb-4">
-          Members ({members.length})
-        </h2>
-        <MembersTable members={members} />
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">
+            Members ({members.length})
+          </h2>
+          {members.length > 0 && inviteButton}
+        </div>
+        {members.length === 0 ? (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
+            <Users className="mx-auto h-12 w-12 text-gray-300" />
+            <p className="mt-4 text-sm text-gray-500">No members yet.</p>
+            <div className="mt-4 flex justify-center">{inviteButton}</div>
+          </div>
+        ) : (
+          <MembersTable members={members} />
+        )}
       </div>
     </div>
   );
