@@ -323,6 +323,11 @@ export function repointMessageTransactionSync(messageId: string): void {
   dbRun(REPOINT_MESSAGE_TRANSACTION_SQL, [messageId]);
 }
 
+/** Promise-returning wrapper over the sync twin (BACKLOG-2960 naming rule). */
+export function repointMessageTransaction(messageId: string): Promise<void> {
+  return Promise.resolve(repointMessageTransactionSync(messageId));
+}
+
 /**
  * Get messages linked to a transaction
  */
