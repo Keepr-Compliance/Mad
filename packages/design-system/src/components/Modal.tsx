@@ -1,9 +1,11 @@
 'use client';
 
-import { useEffect } from 'react';
+import { createContext, useContext, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { cn } from '../cn';
+
+const ModalSizeContext = createContext<'sm' | 'lg'>('sm');
 
 export interface ModalProps {
   open: boolean;
@@ -81,7 +83,7 @@ export function Modal({
             </button>
           </div>
         )}
-        {children}
+        <ModalSizeContext.Provider value={size}>{children}</ModalSizeContext.Provider>
       </div>
     </div>
   );
@@ -92,7 +94,22 @@ export function ModalBody({ children, className }: { children: ReactNode; classN
   return <div className={cn('px-6 py-4 space-y-4', className)}>{children}</div>;
 }
 
-/** Right-aligned action row for modal footers. */
+/**
+ * Right-aligned action row for modal footers. In a `size="lg"` modal the body is edge to edge,
+ * so the footer carries its own padding and top border (same as the header's px-6 py-4 row).
+ */
 export function ModalFooter({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn('mt-6 flex justify-end gap-3', className)}>{children}</div>;
+  const size = useContext(ModalSizeContext);
+  return (
+    <div
+      className={cn(
+        size === 'lg'
+          ? 'flex justify-end gap-3 px-6 py-4 border-t border-gray-200'
+          : 'mt-6 flex justify-end gap-3',
+        className
+      )}
+    >
+      {children}
+    </div>
+  );
 }

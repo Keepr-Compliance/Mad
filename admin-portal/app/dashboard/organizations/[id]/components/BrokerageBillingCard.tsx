@@ -34,6 +34,8 @@ import {
   centsFromDollars,
   checkPrice,
   formatCents,
+  resolveDealReason,
+  visibleChangeLog,
   type OrgBilling,
 } from '@/lib/billing/dealRules';
 import { reinstateOrgAction, saveDealAction, suspendOrgAction } from '@/lib/actions/brokerageBilling';
@@ -65,6 +67,8 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
   const [editing, setEditing] = useState(false);
   const [suspending, setSuspending] = useState(false);
   const [reinstating, setReinstating] = useState(false);
+  const [logExpanded, setLogExpanded] = useState(false);
+  const { visible: visibleLog, hidden: hiddenLog } = visibleChangeLog(billing.log, logExpanded);
 
   const status = deal ? STATUS_BADGE[deal.status] ?? { label: deal.status, hue: 'gray' as const } : { label: 'No billing set up', hue: 'gray' as const };
   const manager = billing.account_managers.find((m) => m.id === deal?.account_manager_id);
@@ -133,7 +137,7 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
         <div className="mt-6">
           <h3 className="text-sm font-semibold text-gray-900">Change log</h3>
           <ul className="mt-2 divide-y divide-gray-100 text-sm">
-            {billing.log.map((e, i) => (
+            {visibleLog.map((e, i) => (
               <li key={`${e.created_at}-${i}`} className="flex flex-wrap justify-between gap-2 py-2">
                 <span className="text-gray-900">
                   {ACTION_LABEL[e.action] ?? e.action}
@@ -144,6 +148,20 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
               </li>
             ))}
           </ul>
+          {(hiddenLog > 0 || logExpanded) && (
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <p className="text-sm text-gray-500">Showing {visibleLog.length} of {billing.log.length}, newest first</p>
+              {hiddenLog > 0 ? (
+                <button type="button" onClick={() => setLogExpanded(true)} className="text-sm font-medium text-primary-600 hover:text-primary-800">
+                  Show more
+                </button>
+              ) : (
+                <button type="button" onClick={() => setLogExpanded(false)} className="text-sm font-medium text-primary-600 hover:text-primary-800">
+                  Show fewer
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -192,7 +210,7 @@ function Field({ label, value, help }: { label: string; value: string; help?: st
   );
 }
 
-function DealEditor({
+export function DealEditor({
   organizationId,
   organizationName,
   planName,
@@ -236,7 +254,8 @@ function DealEditor({
     if (!Number.isInteger(n) || n < 1) return setError('Enter at least 1 seat.');
     if (priceCents == null) return setError('Enter a price per seat.');
     if (!contactEmail.trim()) return setError('Enter the billing contact email. Invoices are sent there.');
-    if (!reason.trim()) return setError('Enter a reason. Every deal change is logged with who and why.');
+    const dealReason = resolveDealReason(!!deal, reason);
+    if (dealReason == null) return setError('Enter a reason. Every deal change is logged with who and why.');
     setSaving(true);
     const res = await saveDealAction({
       organizationId,
@@ -245,7 +264,7 @@ function DealEditor({
       billingContactName: contactName,
       billingContactEmail: contactEmail,
       accountManagerId: managerId || null,
-      reason,
+      reason: dealReason,
       expectedVersion: deal?.version ?? null,
     });
     setSaving(false);
@@ -295,11 +314,13 @@ function DealEditor({
             </Select>
           </div>
         </div>
-        <div className="mt-4">
-          <Label htmlFor="deal-reason" required>Reason</Label>
-          <Textarea id="deal-reason" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this deal changing?" />
-          <FieldHelp>Saved in the change log with your name.</FieldHelp>
-        </div>
+        {deal && (
+          <div className="mt-4">
+            <Label htmlFor="deal-reason" required>Reason</Label>
+            <Textarea id="deal-reason" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this deal changing?" />
+            <FieldHelp>Saved in the change log with your name.</FieldHelp>
+          </div>
+        )}
         {error && <FieldError className="mt-3">{error}</FieldError>}
       </ModalBody>
       <ModalFooter>
