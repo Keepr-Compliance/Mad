@@ -92,6 +92,7 @@ const mockStripe = {
   customersUpdate: jest.fn(),
   subscriptionsRetrieve: jest.fn(),
   invoicesList: jest.fn(),
+  clockRetrieve: jest.fn(),
   chargesList: jest.fn(),
   paymentMethodsRetrieve: jest.fn(),
 };
@@ -106,6 +107,7 @@ jest.mock('stripe', () => ({
     },
     subscriptions: { retrieve: (...a: unknown[]) => mockStripe.subscriptionsRetrieve(...a) },
     invoices: { list: (...a: unknown[]) => mockStripe.invoicesList(...a) },
+    testHelpers: { testClocks: { retrieve: (...a: unknown[]) => mockStripe.clockRetrieve(...a) } },
     charges: { list: (...a: unknown[]) => mockStripe.chargesList(...a) },
     paymentMethods: { retrieve: (...a: unknown[]) => mockStripe.paymentMethodsRetrieve(...a) },
   })),
@@ -148,6 +150,7 @@ jest.mock('next/navigation', () => ({
 
 import fs from 'fs';
 import path from 'path';
+import { OrgSuspendedBanner } from '@/components/billing/OrgSuspendedBanner';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { confirmAgentCheckout, startAgentCheckout } from '@/lib/actions/agentPlan';
 import { BillingDb, eqValue } from '../../../helpers/billingDb';
@@ -1020,14 +1023,12 @@ describe('C-B1: a suspended brokerage (BACKLOG-3853)', () => {
     expect(text).not.toContain('Pay overdue invoice');
   });
 
-  it('it_admin, non-payment: no pay sentence; a Broker or Admin can pay it', async () => {
+  it('it_admin, non-payment: same text as the Broker/Admin (they can pay too)', async () => {
     given([brokerageMembership('it_admin')]);
     suspend('non_payment');
     const text = await banner();
-    expect(text).toBe(
-      'Your brokerage is suspended for an unpaid invoice. Submissions, approvals and invites are paused. Agents can still view their own past submissions. A Broker or Admin can pay it; access returns once every overdue invoice is paid.Contact support'
-    );
-    expect(text).not.toContain('Pay from the link');
+    expect(text).toContain('Pay from the link in the suspension email; access returns once every overdue invoice is paid.');
+    expect(text).not.toContain('A Broker or Admin can pay it');
   });
 
   it('reason other: contact Keepr, no pay sentence', async () => {
@@ -1039,6 +1040,83 @@ describe('C-B1: a suspended brokerage (BACKLOG-3853)', () => {
     );
     expect(text).not.toContain('unpaid invoice');
     expect(text).not.toContain('Pay from the link');
+  });
+
+  // "Pay overdue invoice" (BACKLOG-3853): the oldest overdue invoice on the customer's test clock.
+  // Fixtures: __tests__/fixtures/stripe/p3853 (TEST captures; see its README). Five open invoices;
+  // due dates oldest first 1794754800 (in_1URdzA...), 1797346800, 1800025200, 1802703600, 1805122800.
+  const FX_P3853 = path.join(__dirname, '../../../fixtures/stripe/p3853');
+  const p3853 = (n: string) => JSON.parse(fs.readFileSync(path.join(FX_P3853, `${n}.json`), 'utf8'));
+  const OLDEST_PAY_URL = 'https://invoice.stripe.test/REDACTED/in_1URdzABg3cyTef3dyKhMzjZn';
+  const NEWEST_PAY_URL = 'https://invoice.stripe.test/REDACTED/in_1URe2FBg3cyTef3dddMb2Oqn';
+  function seedPay(frozen: number, invoices: unknown = p3853('inv-list-open')): void {
+    mockBillingDb.rows('org_billing_stripe').push({ organization_id: ORG, stripe_mode: 'test', stripe_customer_id: 'cus_VSZ7P8iqRvHlbC' });
+    mockStripe.customersRetrieve.mockResolvedValue(p3853('customer'));
+    mockStripe.clockRetrieve.mockResolvedValue({ ...p3853('clock'), frozen_time: frozen }); // [EDITED] frozen_time
+    mockStripe.invoicesList.mockResolvedValue(invoices);
+  }
+  async function payButton(role: string): Promise<{ href: string | null; target: string | null } | null> {
+    given([brokerageMembership(role)]);
+    const { container, unmount } = render(await BillingRoute({}));
+    const el = container.querySelector('[data-billing-action="pay_overdue_invoice"]');
+    const out = el ? { href: el.getAttribute('href'), target: el.getAttribute('target') } : null;
+    unmount();
+    return out;
+  }
+
+  it.each(['broker', 'admin', 'it_admin'])('%s, non-payment: Pay overdue invoice opens the OLDEST overdue invoice', async (role) => {
+    suspend('non_payment');
+    seedPay(1805122801); // every one of the five is overdue
+    expect(await payButton(role)).toEqual({ href: OLDEST_PAY_URL, target: '_blank' });
+    expect(mockStripe.clockRetrieve).toHaveBeenCalledWith(p3853('customer').test_clock);
+  });
+
+  it('only invoices past due ON THE CLOCK count: two overdue -> the older of the two', async () => {
+    suspend('non_payment');
+    seedPay(1797346801);
+    expect((await payButton('broker'))?.href).toBe(OLDEST_PAY_URL);
+    expect(NEWEST_PAY_URL).not.toBe(OLDEST_PAY_URL);
+  });
+
+  it('reason other: no Pay button', async () => {
+    suspend('other');
+    seedPay(1805122801);
+    expect(await payButton('broker')).toBeNull();
+  });
+
+  it('no overdue invoice yet (clock before the first due date): no Pay button, page still renders', async () => {
+    suspend('non_payment');
+    seedPay(1794754799);
+    expect(await payButton('admin')).toBeNull();
+  });
+
+  it('Stripe fails: no Pay button, the banner and Contact support still render', async () => {
+    suspend('non_payment');
+    seedPay(1805122801);
+    mockStripe.invoicesList.mockRejectedValue(new Error('stripe down'));
+    given([brokerageMembership('broker')]);
+    const { container, unmount } = render(await BillingRoute({}));
+    expect(container.querySelector('[data-billing-action="pay_overdue_invoice"]')).toBeNull();
+    expect(container.querySelector('[data-billing-action="contact_support"]')).not.toBeNull();
+    unmount();
+  });
+
+  it('an agent never sees it (the component refuses the role even when handed a URL)', () => {
+    const { container, unmount } = render(<OrgSuspendedBanner reason="non_payment" role="agent" payUrl={OLDEST_PAY_URL} />);
+    expect(container.querySelector('[data-billing-action="pay_overdue_invoice"]')).toBeNull();
+    unmount();
+  });
+
+  it('layout: Pay is first, Contact support second, in one bottom-right row', async () => {
+    suspend('non_payment');
+    seedPay(1805122801);
+    given([brokerageMembership('broker')]);
+    const { container, unmount } = render(await BillingRoute({}));
+    const row = container.querySelector('[data-billing-action="pay_overdue_invoice"]')?.parentElement as HTMLElement;
+    expect(Array.from(row.children).map((c) => c.getAttribute('data-billing-action'))).toEqual(['pay_overdue_invoice', 'contact_support']);
+    expect(row.className).toContain('sm:justify-end');
+    expect(row.className).toContain('flex-col');
+    unmount();
   });
 
   it('Contact support opens the support form preset: Invoice/payment issue, Urgent, with the brokerage name', async () => {
