@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { ExportUnencryptedNotice } from "./common/ExportUnencryptedNotice";
 import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import { InfoTooltip } from "./common/InfoTooltip";
@@ -73,6 +73,23 @@ function ExportModal({
   const [exportFormat, setExportFormat] = useState("combined-pdf"); // combined-pdf, folder, pdf, excel, csv, json, txt_eml
   const [emailExportMode, setEmailExportMode] = useState<"thread" | "individual">("thread");
   const [exporting, setExporting] = useState(false);
+  // BACKLOG-4016: one click, one export. The ref is the authority (two clicks in
+  // one task see it before any render); the state drives what the user sees
+  // (Export and the gate buttons disabled from the first click). Set before the
+  // first await, released in finally on every exit.
+  const exportBusyRef = useRef(false);
+  const [exportBusy, setExportBusy] = useState(false);
+  const runOnce = async (fn: () => Promise<void>): Promise<void> => {
+    if (exportBusyRef.current) return;
+    exportBusyRef.current = true;
+    setExportBusy(true);
+    try {
+      await fn();
+    } finally {
+      exportBusyRef.current = false;
+      setExportBusy(false);
+    }
+  };
   const [error, setError] = useState<string | null>(null);
   const [exportProgress, setExportProgress] = useState<{
     stage: string;
@@ -336,7 +353,9 @@ function ExportModal({
     }
   };
 
-  const handleExport = async () => {
+  const handleExport = () => runOnce(startExport);
+
+  const startExport = async () => {
     setError(null);
     setExportProgress(null);
 
@@ -418,7 +437,9 @@ function ExportModal({
   // BACKLOG-2292 (Layer 3): "Update now" from the export gate. Runs a targeted
   // import + expansion, then OBSERVES completeness (re-query) before exporting —
   // never swallows a failed import into a green export (BACKLOG-1875).
-  const handleGateUpdateNow = async () => {
+  const handleGateUpdateNow = () => runOnce(gateUpdateNow);
+
+  const gateUpdateNow = async () => {
     const auditStart = completenessGate?.auditStartISO ?? startDate;
     const outcome = await runMessagesImport(auditStart, transaction.id);
     // BACKLOG-3892 W2: recheck for the same source the gate was opened for.
@@ -485,7 +506,9 @@ function ExportModal({
     }
   };
 
-  const handleGateBackfilled = async () => {
+  const handleGateBackfilled = () => runOnce(gateBackfilled);
+
+  const gateBackfilled = async () => {
     const recheck = gateSource
       ? await checkExportCompleteness(transaction.id, gateSource)
       : await checkExportCompleteness(transaction.id);
@@ -508,10 +531,11 @@ function ExportModal({
 
   // "Export anyway" — the user makes an explicit, informed decision to export
   // without the older messages (converts silent incompleteness into a choice).
-  const handleGateExportAnyway = async () => {
-    setCompletenessGate(null);
-    await proceedWithExport();
-  };
+  const handleGateExportAnyway = () =>
+    runOnce(async () => {
+      setCompletenessGate(null);
+      await proceedWithExport();
+    });
 
   const handleGateCancel = () => {
     setCompletenessGate(null);
@@ -1044,7 +1068,7 @@ function ExportModal({
                   transactionLabel={transaction.property_address}
                   onUnlocked={() => {
                     setShowUnlockPrompt(false);
-                    void proceedWithExport();
+                    void runOnce(proceedWithExport);
                   }}
                   onCancel={() => {
                     setShowUnlockPrompt(false);
@@ -1069,9 +1093,9 @@ function ExportModal({
               </button>
               <button
                 onClick={step === 1 ? handleDateVerification : handleExport}
-                disabled={step === 1 && (!startDate || !endDate)}
+                disabled={exportBusy || (step === 1 && (!startDate || !endDate))}
                 className={`px-6 py-2 rounded-lg font-semibold transition-all ${
-                  step === 1 && (!startDate || !endDate)
+                  exportBusy || (step === 1 && (!startDate || !endDate))
                     ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                     : "bg-gradient-to-r from-purple-500 to-indigo-600 text-white hover:from-purple-600 hover:to-indigo-700 shadow-md hover:shadow-lg"
                 }`}
@@ -1082,9 +1106,9 @@ function ExportModal({
             {/* Mobile floating button */}
             <button
               onClick={step === 1 ? handleDateVerification : handleExport}
-              disabled={step === 1 && (!startDate || !endDate)}
+              disabled={exportBusy || (step === 1 && (!startDate || !endDate))}
               className={`sm:hidden fixed bottom-4 right-4 z-[71] px-6 py-3 rounded-full font-semibold text-sm shadow-lg transition-all ${
-                step === 1 && (!startDate || !endDate)
+                exportBusy || (step === 1 && (!startDate || !endDate))
                   ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                   : "bg-gradient-to-r from-purple-500 to-indigo-600 text-white hover:from-purple-600 hover:to-indigo-700 hover:shadow-xl"
               }`}
@@ -1097,7 +1121,7 @@ function ExportModal({
         {/* BACKLOG-2292 (Layer 3): export completeness gate. */}
         {completenessGate && (
           <ResponsiveModal
-            onClose={coverageImporting ? undefined : handleGateCancel}
+            onClose={coverageImporting || exportBusy ? undefined : handleGateCancel}
             zIndex="z-[80]"
             panelClassName="max-w-md"
           >
@@ -1173,7 +1197,7 @@ function ExportModal({
               <div className="flex items-center justify-end gap-3 mt-5">
                 <button
                   onClick={handleGateExportAnyway}
-                  disabled={coverageImporting}
+                  disabled={coverageImporting || exportBusy}
                   className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-lg font-medium transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                   data-testid="export-gate-export-anyway"
                 >
@@ -1182,7 +1206,7 @@ function ExportModal({
                 {completenessGate.importerAvailable && (
                   <button
                     onClick={handleGateUpdateNow}
-                    disabled={coverageImporting}
+                    disabled={coverageImporting || exportBusy}
                     className="px-5 py-2 rounded-lg font-semibold text-white bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 shadow-md transition-all disabled:opacity-60 disabled:cursor-not-allowed"
                     data-testid="export-gate-update-now"
                   >
