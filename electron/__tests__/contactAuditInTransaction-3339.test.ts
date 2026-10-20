@@ -237,8 +237,20 @@ function crashAtEntry(): void {
  * transaction state at that moment recorded. With `failAt = k`, the k-th run
  * throws once (later runs, such as the failure entry, go through).
  */
-function instrumentWrites(failAt?: number): { writes: Array<{ sql: string; inTx: boolean }> } {
-  const log: { writes: Array<{ sql: string; inTx: boolean }> } = { writes: [] };
+function instrumentWrites(failAt?: number): {
+  writes: Array<{ sql: string; inTx: boolean }>;
+  outerTransactions: number;
+} {
+  const log = { writes: [] as Array<{ sql: string; inTx: boolean }>, outerTransactions: 0 };
+  // Each top-level (not nested) transaction the handler opens.
+  const realTransaction = db.transaction.bind(db);
+  jest.spyOn(db, "transaction").mockImplementation(((fn: (...a: unknown[]) => unknown) => {
+    const wrapped = realTransaction(fn) as unknown as (...a: unknown[]) => unknown;
+    return (...a: unknown[]) => {
+      if (!db.inTransaction) log.outerTransactions++;
+      return wrapped(...a);
+    };
+  }) as never);
   const realPrepare = db.prepare.bind(db);
   jest.spyOn(db, "prepare").mockImplementation(((sql: string) => {
     const stmt = realPrepare(sql) as any;
@@ -400,7 +412,7 @@ describe.each(SITES)("$name", (site) => {
     ]);
   });
 
-  test("W every write runs inside one open transaction, the audit entry last", async () => {
+  test("W every write runs inside ONE top-level transaction, the audit entry last", async () => {
     site.seed();
     const log = instrumentWrites();
     const res = await site.call();
@@ -410,6 +422,7 @@ describe.each(SITES)("$name", (site) => {
     process.stderr.write(`[3339C] ${site.name}: N=${n} writes, inTx=${JSON.stringify(log.writes.map((w) => w.inTx))}\n`);
     expect(n).toBeGreaterThanOrEqual(2);
     expect(log.writes.map((w) => w.inTx)).toEqual(new Array(n).fill(true));
+    expect(log.outerTransactions).toBe(1);
     expect(log.writes[n - 1].sql).toMatch(/INSERT INTO audit_logs/i);
   });
 
@@ -433,6 +446,7 @@ describe.each(SITES)("$name", (site) => {
       const spy = instrumentWrites(k);
       const res = await site.call();
       (db.prepare as unknown as jest.Mock).mockRestore?.();
+      (db.transaction as unknown as jest.Mock).mockRestore?.();
       await settle();
       expect({ k, success: res.success }).toEqual({ k, success: false });
       expect({ k, state: changeState() }).toEqual({ k, state: before });
