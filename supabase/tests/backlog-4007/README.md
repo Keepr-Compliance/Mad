@@ -35,3 +35,9 @@ runs in its own subtransaction; a mutation is an exact-once text replacement of
   permission denied as anon, not `PGRST203`). Positive control: a scratch pair
   `p4007_probe(a)` / `p4007_probe(a, b DEFAULT NULL)` returned `PGRST203` for `{"a":1}`; the pair
   was dropped afterwards.
+
+## Why C_R3 is a real control
+
+A superseded reminder is marked with `processed_at`. The drain only claims rows with
+`processed_at IS NULL` (`billing_outbox_claim`, 20261011230913_backlog_3845_billing_foundation.sql:576),
+so a superseded row is never sent.
