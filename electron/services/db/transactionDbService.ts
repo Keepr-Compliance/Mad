@@ -15,6 +15,7 @@ import { DatabaseError } from "../../types";
 // BACKLOG-3067: a successful read mints the brand — see electron/types/ids.ts.
 import type { TransactionRow } from "../../types/ids";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
+import { repointMessageTransaction } from "./messageDbService";
 import { sql, type SafeSql } from "./core/sqlText";
 import {
   countLinkedEmailsByTransaction,
@@ -1325,12 +1326,33 @@ export function recordExportCompletion(
 }
 
 /**
+ * Texts whose deal column names this deal. Read before the delete: the
+ * `messages.transaction_id` foreign key is `ON DELETE SET NULL`, so the
+ * DELETE itself clears the column and these ids can no longer be found after it.
+ * Uses `idx_messages_transaction_id`.
+ */
+export const MESSAGES_NAMING_DEAL_SQL = sql`SELECT id FROM messages WHERE transaction_id = ?`;
+
+/**
  * Delete transaction. Synchronous, so it can run inside the caller's
  * transaction together with the audit entry that records it (BACKLOG-3339).
+ *
+ * A text can be linked to several deals while its column names only one. The
+ * DELETE clears the column (foreign key) and removes this deal's link rows
+ * (`communications` cascade); each text it named is then re-pointed to its
+ * most recent remaining link, or NULL when none is left (BACKLOG-4020,
+ * reusing BACKLOG-3908's `repointMessageTransaction`). All of it runs in one
+ * `dbTransaction`, a savepoint inside the handler's transaction, so a failure
+ * anywhere leaves the deal, its links and the column unchanged.
  */
 export function deleteTransactionSync(transactionId: string): void {
-  const statement = sql`DELETE FROM transactions WHERE id = ?`;
-  dbRun(statement, [transactionId]);
+  dbTransaction(() => {
+    const named = dbAll<{ id: string }>(MESSAGES_NAMING_DEAL_SQL, [transactionId]);
+    dbRun(sql`DELETE FROM transactions WHERE id = ?`, [transactionId]);
+    for (const { id } of named) {
+      repointMessageTransaction(id);
+    }
+  });
 }
 
 /**

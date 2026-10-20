@@ -1,8 +1,10 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-4020 REPRO. Deleting a deal leaves a shared text's messages.transaction_id
- * NULL while another deal still holds the text. Asserts TODAY's behaviour (the bug).
+ * BACKLOG-4020 REPRO. Deleting a deal used to leave a shared text's
+ * messages.transaction_id NULL while another deal still held the text. R1/R2
+ * were written against the bug and inverted with the fix: they now assert the
+ * column re-points to the remaining deal. M2/M3 pin the schema mechanism.
  *
  * Real driver, real schema.sql (FKs ON), REAL handlers (transactions:delete,
  * transactions:bulk-delete), real transactionService.linkMessages and
@@ -158,24 +160,24 @@ describe("R1 per-message links in A and B, column names A", () => {
     expect(links(B)).toEqual(IDS);
     expect(picker()).toEqual([]);
   });
-  test("single delete of A: column NULL while B still holds both texts (BUG)", async () => {
+  test("single delete of A: column re-points to B, which still holds both texts", async () => {
     const { A, B } = await sharedPerMessage();
     expect((await invoke("transactions:delete", A)).success).toBe(true);
-    expect(column()).toEqual([null, null]);
+    expect(column()).toEqual([B, B]);
     expect(links(B)).toEqual(IDS);
     expect(links(A)).toEqual([]);
-    expect(picker()).toEqual(IDS);
-    expect(getMessageTransactionIds(IDS)).toEqual([]);
+    expect(picker()).toEqual([]);
+    expect(getMessageTransactionIds(IDS)).toEqual([B, B]);
     expect(deletes()).toBe(1);
   });
-  test("bulk delete of [A]: same (BUG)", async () => {
+  test("bulk delete of [other, A]: same", async () => {
     const { A, B } = await sharedPerMessage();
     const other = deal("3 Fixture Way");
     const res = await invoke("transactions:bulk-delete", [other, A]);
     expect(res.deletedCount).toBe(2);
-    expect(column()).toEqual([null, null]);
+    expect(column()).toEqual([B, B]);
     expect(links(B)).toEqual(IDS);
-    expect(picker()).toEqual(IDS);
+    expect(picker()).toEqual([]);
     expect(deletes()).toBe(2);
   });
   test("deleting B (the column names A) leaves the column at A", async () => {
@@ -183,7 +185,7 @@ describe("R1 per-message links in A and B, column names A", () => {
     await invoke("transactions:delete", B);
     expect(column()).toEqual([A, A]);
   });
-  test("bulk delete of A and B: column NULL, no link left (correct today)", async () => {
+  test("bulk delete of A and B: column NULL, no link left", async () => {
     const { A, B } = await sharedPerMessage();
     await invoke("transactions:bulk-delete", [A, B]);
     expect(column()).toEqual([null, null]);
@@ -192,24 +194,28 @@ describe("R1 per-message links in A and B, column names A", () => {
 });
 
 describe("R2 A per-message, B holds the thread (auto-link)", () => {
-  test("single delete of A: column NULL while B's thread row remains (BUG)", async () => {
+  test("single delete of A: column re-points to B, which holds the thread row", async () => {
     const A = deal("1 Fixture Way"); const B = deal("2 Fixture Way");
     await transactionService.linkMessages(IDS, A);
     await createThreadCommunicationReference(THREAD, B, USER);
     expect(column()).toEqual([A, A]);
     await invoke("transactions:delete", A);
-    expect(column()).toEqual([null, null]);
+    expect(column()).toEqual([B, B]);
     expect(links(B)).toEqual([`thread:${THREAD}`]);
   });
 });
 
 describe("M mechanism", () => {
-  test("FKs OFF: the delete path writes nothing to the column (no explicit clear in code)", async () => {
-    const { A } = await sharedPerMessage();
+  // Before the fix this asserted [A, A]: with FKs OFF nothing on the delete path
+  // wrote the column, so the FK action was its only clearer. With the fix the
+  // re-point writes it, and skips A's links (left by the missing cascade)
+  // because A no longer exists.
+  test("FKs OFF: no cascade; the re-point skips the deleted deal's leftover links", async () => {
+    const { A, B } = await sharedPerMessage();
     db.exec("PRAGMA foreign_keys = OFF");
     await invoke("transactions:delete", A);
-    expect(column()).toEqual([A, A]); // dangling: only the FK action clears it
-    expect(links(A)).toEqual(IDS);     // and no cascade either
+    expect(column()).toEqual([B, B]);
+    expect(links(A)).toEqual(IDS); // no cascade
   });
   test("schema declares messages.transaction_id ON DELETE SET NULL and communications CASCADE", () => {
     const fk = (t: string) =>
