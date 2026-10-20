@@ -129,3 +129,25 @@ export function dealErrorMessage(code: string | null | undefined, detail?: { pct
   }
   return MESSAGES[code] ?? 'Something went wrong. Nothing was saved.';
 }
+
+/** What the change log records for a deal created without a typed reason. */
+export const NEW_DEAL_REASON = 'Deal created';
+
+/**
+ * The reason sent with a save. A NEW deal (no deal row yet) needs none: the log gets
+ * "Deal created". Every edit, including restarting a canceled deal, needs a typed reason;
+ * null means refuse the save.
+ */
+export function resolveDealReason(hasDeal: boolean, typed: string): string | null {
+  if (!hasDeal) return NEW_DEAL_REASON;
+  return typed.trim() ? typed : null;
+}
+
+/** Entries the change log shows before "Show more". */
+export const CHANGE_LOG_PAGE = 5;
+
+/** Newest-first log: the first CHANGE_LOG_PAGE entries, or all of them once expanded. */
+export function visibleChangeLog<T>(log: readonly T[], expanded: boolean): { visible: T[]; hidden: number } {
+  if (expanded || log.length <= CHANGE_LOG_PAGE) return { visible: [...log], hidden: 0 };
+  return { visible: log.slice(0, CHANGE_LOG_PAGE), hidden: log.length - CHANGE_LOG_PAGE };
+}
