@@ -271,7 +271,8 @@ BEGIN
     s := pg_temp.call_as(u_b, format(qc, o1, 2, '{"who":"me","phone":"12"}', co, 'false'));
     r := r || jsonb_build_object('C_PH1_bad_phone_refused', CASE WHEN pg_temp.j(s)->>'error' = 'invalid_phone' THEN 'PASS' ELSE 'FAIL ' || s END);
     s := pg_temp.call_as(u_b, format(qc, o1, 2, me, co, 'true'));
-    r := r || jsonb_build_object('C_BL1_billing_login_not_yet', CASE WHEN pg_temp.j(s)->>'error' = 'billing_login_not_available' THEN 'PASS' ELSE 'FAIL ' || s END);
+    -- BACKLOG-4007 PR-4: the billing-only login exists now; for "Me" it is refused before any write.
+    r := r || jsonb_build_object('C_BL1_billing_login_not_for_me', CASE WHEN pg_temp.j(s)->>'error' = 'billing_login_needs_someone_else' THEN 'PASS' ELSE 'FAIL ' || s END);
     r := r || jsonb_build_object('C_X_refusals_left_deal_waiting', CASE WHEN (SELECT status FROM public.org_deals WHERE organization_id = o1) = 'draft'
       AND pg_temp.sync_rows(o1) = 0 THEN 'PASS' ELSE 'FAIL' END);
 

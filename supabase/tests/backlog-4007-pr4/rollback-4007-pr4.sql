@@ -1,0 +1,157 @@
+-- BACKLOG-4007 PR-4 rollback: restores broker_complete_billing_setup to the 4007 PR-1 body
+-- (verbatim from 20261020100000) and checks its md5, drops every function this PR added, and
+-- removes the ledger row. org_contacts rows written by PR-4 (IT / office / MSP contacts) are
+-- kept as data; billing-only login member rows are kept (they are ordinary 'unassigned' members).
+
+BEGIN;
+
+DROP FUNCTION IF EXISTS public.org_billing_contact_login(uuid);
+DROP FUNCTION IF EXISTS public.org_billing_login_set(uuid, boolean);
+DROP FUNCTION IF EXISTS public._org_billing_login_create(uuid, uuid);
+DROP FUNCTION IF EXISTS public.org_contact_remove(uuid, uuid);
+DROP FUNCTION IF EXISTS public.org_contact_save(uuid, jsonb);
+DROP FUNCTION IF EXISTS public.admin_search_users_for_contact(uuid, text);
+DROP FUNCTION IF EXISTS public.org_contacts_list(uuid);
+DROP FUNCTION IF EXISTS public._org_user_in_other_brokerage(uuid, uuid);
+DROP FUNCTION IF EXISTS public._org_contact_caller(uuid, boolean);
+
+CREATE OR REPLACE FUNCTION public.broker_complete_billing_setup(
+  p_org uuid, p_expected_version integer, p_contact jsonb, p_company jsonb, p_billing_login boolean)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_deal public.org_deals%ROWTYPE;
+  v_who text := p_contact ->> 'who';
+  v_name text;
+  v_email text;
+  v_phone text;
+  v_contact uuid;
+  v_starts date;
+  v_version integer;
+  v_legal text := nullif(btrim(coalesce(p_company ->> 'legal_name', '')), '');
+  v_line1 text := nullif(btrim(coalesce(p_company ->> 'address_line1', '')), '');
+  v_line2 text := nullif(btrim(coalesce(p_company ->> 'address_line2', '')), '');
+  v_city text := nullif(btrim(coalesce(p_company ->> 'city', '')), '');
+  v_region text := nullif(btrim(coalesce(p_company ->> 'region', '')), '');
+  v_postal text := nullif(btrim(coalesce(p_company ->> 'postal_code', '')), '');
+  v_country text := upper(nullif(btrim(coalesce(p_company ->> 'country', '')), ''));
+  v_po text := nullif(btrim(coalesce(p_company ->> 'po_number', '')), '');
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated' USING ERRCODE = '42501';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.organization_members m
+                  WHERE m.organization_id = p_org AND m.user_id = v_uid
+                    AND m.license_status = 'active' AND m.role IN ('broker', 'admin')) THEN
+    RAISE EXCEPTION 'Not authorized' USING ERRCODE = '42501';
+  END IF;
+  -- The billing-only login (invite + email) ships in PR-4.
+  IF coalesce(p_billing_login, false) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'billing_login_not_available');
+  END IF;
+
+  IF v_who = 'me' THEN
+    SELECT coalesce(nullif(btrim(u.display_name), ''), nullif(btrim(concat_ws(' ', u.first_name, u.last_name)), ''), u.email),
+           u.email
+      INTO v_name, v_email
+      FROM public.users u WHERE u.id = v_uid;
+  ELSIF v_who = 'other' THEN
+    v_name := nullif(btrim(coalesce(p_contact ->> 'name', '')), '');
+    v_email := nullif(btrim(coalesce(p_contact ->> 'email', '')), '');
+  ELSE
+    RETURN jsonb_build_object('success', false, 'error', 'invalid_contact');
+  END IF;
+  IF v_name IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'contact_name_required');
+  END IF;
+  IF v_email IS NULL OR position('@' in v_email) < 2 THEN
+    RETURN jsonb_build_object('success', false, 'error', 'contact_email_required');
+  END IF;
+  v_phone := public._billing_normalize_phone(p_contact ->> 'phone');
+  IF v_phone IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'invalid_phone');
+  END IF;
+  IF v_legal IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'company_name_required');
+  END IF;
+  IF v_line1 IS NULL OR v_city IS NULL OR v_postal IS NULL OR v_country IS NULL OR v_country !~ '^[A-Z]{2}$'
+     OR (v_country = 'US' AND v_region IS NULL) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'billing_address_required');
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtextextended('billing_org:' || p_org::text, 0));
+  SELECT * INTO v_deal FROM public.org_deals WHERE organization_id = p_org FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('success', false, 'error', 'no_deal');
+  END IF;
+  IF v_deal.status = 'suspended' THEN
+    RETURN jsonb_build_object('success', false, 'error', 'account_suspended');
+  END IF;
+  IF v_deal.status <> 'draft' THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_waiting', 'status', v_deal.status);
+  END IF;
+  -- The broker confirms the price they saw: refuse if staff changed the deal since.
+  IF p_expected_version IS DISTINCT FROM v_deal.version THEN
+    RETURN jsonb_build_object('success', false, 'error', 'version_conflict', 'version', v_deal.version);
+  END IF;
+  -- Terms of Service and this order accepted by the caller for THIS deal version.
+  IF NOT EXISTS (SELECT 1 FROM public.org_terms_acceptances a
+                  WHERE a.organization_id = p_org AND a.user_id = v_uid
+                    AND a.deal_version = v_deal.version) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'terms_not_accepted');
+  END IF;
+  IF v_deal.stripe_mode = 'live' AND NOT public._billing_brokerage_live() THEN
+    RETURN jsonb_build_object('success', false, 'error', 'billing_not_live');
+  END IF;
+
+  v_contact := public._org_billing_contact_set(p_org, v_name, v_email, v_phone, v_uid);
+
+  INSERT INTO public.org_billing_profile (organization_id, legal_name, address_line1, address_line2, city,
+    region, postal_code, country, po_number, updated_by, updated_at)
+  VALUES (p_org, v_legal, v_line1, v_line2, v_city, v_region, v_postal, v_country, v_po, v_uid, now())
+  ON CONFLICT (organization_id) DO UPDATE SET
+    legal_name = EXCLUDED.legal_name, address_line1 = EXCLUDED.address_line1,
+    address_line2 = EXCLUDED.address_line2, city = EXCLUDED.city, region = EXCLUDED.region,
+    postal_code = EXCLUDED.postal_code, country = EXCLUDED.country, po_number = EXCLUDED.po_number,
+    updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at;
+
+  -- status AND version in one UPDATE: the 3853 trigger enqueues exactly one sync row.
+  v_starts := greatest(public._billing_business_date(), v_deal.start_date);
+  UPDATE public.org_deals SET
+    status = 'active',
+    version = version + 1,
+    billing_starts_on = v_starts,
+    setup_completed_at = now(),
+    setup_completed_by = v_uid,
+    updated_at = now(),
+    updated_by = v_uid
+  WHERE organization_id = p_org
+  RETURNING version INTO v_version;
+
+  PERFORM public._billing_apply_org_entitlement(p_org);
+
+  INSERT INTO public.billing_change_log (organization_id, actor_id, action, detail)
+  VALUES (p_org, v_uid, 'setup_completed', jsonb_build_object('version', v_version,
+          'billing_starts_on', v_starts, 'start_date', v_deal.start_date, 'contact_id', v_contact));
+
+  RETURN jsonb_build_object('success', true, 'version', v_version, 'billing_starts_on', v_starts);
+END
+$function$;
+REVOKE EXECUTE ON FUNCTION public.broker_complete_billing_setup(uuid, integer, jsonb, jsonb, boolean) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.broker_complete_billing_setup(uuid, integer, jsonb, jsonb, boolean) TO authenticated, service_role;
+
+DO $chk$
+BEGIN
+  IF md5(pg_get_functiondef('public.broker_complete_billing_setup(uuid,integer,jsonb,jsonb,boolean)'::regprocedure))
+     <> 'aeb580b568e706b950e759b309df784d' THEN
+    RAISE EXCEPTION 'rollback-4007-pr4: broker_complete_billing_setup md5 is not the PR-1 body';
+  END IF;
+END $chk$;
+
+DELETE FROM supabase_migrations.schema_migrations WHERE version = '20261020180000';
+
+COMMIT;
