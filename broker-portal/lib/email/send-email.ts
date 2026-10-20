@@ -13,7 +13,7 @@
 import * as Sentry from '@sentry/nextjs';
 import { getGraphClient } from './graph-client';
 import { createServiceClient } from '@/lib/supabase/service';
-import type { SendEmailParams, SendEmailResult, EmailType } from './types';
+import type { SendEmailParams, SendEmailResult, EmailType, EmailLogStatus } from './types';
 import { IN_REQUEST_BACKOFF_MS, isTransientError, sleep } from './retry';
 import { enqueueEmail } from './queue';
 
@@ -25,26 +25,37 @@ import { enqueueEmail } from './queue';
  * Log an email delivery attempt to the email_delivery_log table.
  * Uses the service role client to bypass RLS.
  * Never throws -- failures are logged to console + Sentry.
+ *
+ * BACKLOG-4001: supabase-js resolves a refused insert with { error } rather than
+ * throwing, so the result is read. Only the error code and the type/status tags are
+ * reported: a check-violation's `details` carries the whole row, recipient included.
  */
 async function logEmailDelivery(opts: {
   emailType: EmailType;
   recipientEmail: string;
-  status: 'sent' | 'failed' | 'skipped' | 'queued';
+  status: EmailLogStatus;
   errorMessage?: string | null;
   metadata?: Record<string, unknown>;
 }): Promise<void> {
+  const tags = { email_type: opts.emailType, email_log_status: opts.status };
   try {
     const supabase = createServiceClient();
-    await supabase.from('email_delivery_log').insert({
+    const { error } = await supabase.from('email_delivery_log').insert({
       email_type: opts.emailType,
       recipient_email: opts.recipientEmail,
       status: opts.status,
       error_message: opts.errorMessage || null,
       metadata: opts.metadata || {},
     });
-  } catch (logError) {
-    console.error('[Email] Failed to log email delivery:', logError);
+    if (error) {
+      const code = error.code ?? 'unknown';
+      console.error(`[Email] email_delivery_log insert refused (${code}) for ${opts.emailType}/${opts.status}`);
+      Sentry.captureMessage('email_delivery_log insert refused', { level: 'error', tags, extra: { code } });
+    }
+  } catch {
     // Never block email delivery due to logging failure
+    console.error(`[Email] email_delivery_log insert threw for ${opts.emailType}/${opts.status}`);
+    Sentry.captureMessage('email_delivery_log insert threw', { level: 'error', tags });
   }
 }
 
