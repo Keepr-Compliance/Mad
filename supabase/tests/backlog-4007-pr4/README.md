@@ -32,3 +32,12 @@ md5 must change, or the mode reports `MUTATION NOT APPLIED`.
 - base: 94 / 94, including the People matrix (6 callers x 5 operations, each cell rolled back).
 - 9 new SQL mutants, each applied and red. `access_ignores_removed` reds through the new
   C_F3_unassigned_again_old_contact_no_billing (a kept, licensed login un-licensed later).
+
+## Final fix-up 2026-10-20 (SR d0be3b9c S1/S4; founder F6 = REFUSE) — `results-2026-10-20-final.txt`
+
+- `_org_billing_login_create` returns `has_personal_account` for a user with an active personal-org
+  membership. Trigger `guard_billing_login_personal_account` (BEFORE UPDATE OF user_id) refuses claiming a
+  billing-only invitation for that user, so the personal membership is not retired.
+- `set_member_license` replaced (same signature, live md5 39e4d29c pinned by the pre-check): 'assign'
+  clears `provisioning_metadata.billing_only`. The rollback restores the 39e4d29c body.
+- base: 101 / 101. 5 new SQL mutants and the 26 earlier ones, each applied and red.
