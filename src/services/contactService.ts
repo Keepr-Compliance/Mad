@@ -133,19 +133,7 @@ export const contactService = {
   },
 
   /**
-   * Delete a contact
-   */
-  async delete(contactId: string): Promise<ApiResult> {
-    try {
-      const result = await window.api.contacts.delete(contactId);
-      return { success: result.success, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  /**
-   * Remove a contact (alias for delete)
+   * Remove a contact (writes a tombstone; the contact can be restored)
    */
   async remove(contactId: string): Promise<ApiResult> {
     try {

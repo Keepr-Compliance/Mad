@@ -99,15 +99,6 @@ export const transactionBridge = {
     ipcRenderer.invoke("transactions:get-pending-count", userId),
 
   /**
-   * Creates a new manual transaction
-   * @param userId - User ID creating the transaction
-   * @param transactionData - Transaction details (address, type, status, dates, etc.)
-   * @returns Created transaction
-   */
-  create: (userId: string, transactionData: NewTransaction) =>
-    ipcRenderer.invoke("transactions:create", userId, transactionData),
-
-  /**
    * Creates a new audited transaction with verified data
    * @param userId - User ID creating the transaction
    * @param transactionData - Audited transaction details

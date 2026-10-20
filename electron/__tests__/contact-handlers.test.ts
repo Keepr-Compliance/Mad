@@ -1983,83 +1983,6 @@ describe("Contact Handlers", () => {
     });
   });
 
-  describe("contacts:delete", () => {
-    const existingContact = {
-      id: TEST_CONTACT_ID,
-      user_id: TEST_USER_ID,
-      name: "John Doe",
-    } as Contact;
-
-    it("should delete contact successfully when no transactions", async () => {
-      mockDatabaseService.getContactById.mockResolvedValue(existingContact);
-      mockDatabaseService.getTransactionsByContact.mockResolvedValue([]);
-      mockDatabaseService.deleteContact.mockResolvedValue(undefined);
-
-      const handler = registeredHandlers.get("contacts:delete");
-      const result = await handler(mockEvent, TEST_CONTACT_ID);
-
-      expect(result.success).toBe(true);
-      expect(mockAuditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "CONTACT_DELETE",
-          success: true,
-        }),
-      );
-    });
-
-    it("DELETES a contact that has transactions — the old guard is gone", async () => {
-      // BACKLOG-2365, founder-approved. This test previously asserted the
-      // opposite: that a contact on a deal could not be deleted. That guard
-      // existed only because deletion cascaded away the contact's roles on
-      // those very deals. Removal is reversible now, so the contact a user most
-      // needs to correct is no longer the one contact they cannot touch.
-      mockDatabaseService.getContactById.mockResolvedValue(existingContact);
-      mockDatabaseService.getTransactionsByContact.mockResolvedValue([
-        { id: "txn-1" } as TransactionWithRoles,
-      ]);
-
-      const handler = registeredHandlers.get("contacts:delete");
-      const result = await handler(mockEvent, TEST_CONTACT_ID);
-
-      expect(result.success).toBe(true);
-      expect(mockDatabaseService.deleteContact).toHaveBeenCalledWith(
-        TEST_CONTACT_ID,
-        "user_deleted",
-      );
-      // The audit trail records the removal AND why.
-      expect(mockAuditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "CONTACT_DELETE",
-          resourceId: TEST_CONTACT_ID,
-          metadata: expect.objectContaining({ reason: "user_deleted" }),
-          success: true,
-        }),
-      );
-    });
-
-    it("should handle invalid contact ID", async () => {
-      const handler = registeredHandlers.get("contacts:delete");
-      const result = await handler(mockEvent, "");
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("Validation error");
-    });
-
-    it("should handle deletion failure", async () => {
-      mockDatabaseService.getContactById.mockResolvedValue(existingContact);
-      mockDatabaseService.getTransactionsByContact.mockResolvedValue([]);
-      mockDatabaseService.deleteContact.mockRejectedValue(
-        new Error("Delete failed"),
-      );
-
-      const handler = registeredHandlers.get("contacts:delete");
-      const result = await handler(mockEvent, TEST_CONTACT_ID);
-
-      expect(result.success).toBe(false);
-      expect(mockLogService.error).toHaveBeenCalled();
-    });
-  });
-
   describe("contacts:remove", () => {
     it("should remove contact from local database successfully", async () => {
       mockDatabaseService.getTransactionsByContact.mockResolvedValue([]);
@@ -2077,7 +2000,7 @@ describe("Contact Handlers", () => {
     it("REMOVES a contact that has transactions — the old guard is gone here too", async () => {
       // BACKLOG-2365. This is the path the Clients & Contacts remove button
       // takes, so leaving the guard here would have left the founder-facing
-      // flow behaving exactly as before no matter what contacts:delete did.
+      // flow behaving exactly as before no matter what the (since removed) contacts:delete channel did.
       mockDatabaseService.getTransactionsByContact.mockResolvedValue([
         { id: "txn-1" } as TransactionWithRoles,
       ]);

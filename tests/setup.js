@@ -59,7 +59,6 @@ if (typeof window !== 'undefined') {
     transactions: {
       getAll: jest.fn(),
       getPendingCount: jest.fn(),
-      create: jest.fn(),
       createAudited: jest.fn(),
       update: jest.fn(),
       delete: jest.fn(),
@@ -164,7 +163,6 @@ if (typeof window !== 'undefined') {
       update: jest.fn(),
       import: jest.fn(),
       checkCanDelete: jest.fn(),
-      delete: jest.fn(),
       remove: jest.fn(),
       // TASK-1995: email/phone entries with row IDs for multi-entry editing
       getEditData: jest.fn().mockResolvedValue({ success: true, emails: [], phones: [] }),

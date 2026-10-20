@@ -235,60 +235,6 @@ export function registerTransactionCrudHandlers(
     }, { module: "Transactions" }),
   );
 
-  // Create manual transaction
-  ipcMain.handle(
-    "transactions:create",
-    wrapHandler(async (
-      event: IpcMainInvokeEvent,
-      userId: string,
-      transactionData: unknown,
-    ): Promise<TransactionResponse> => {
-      // Validate inputs
-      const validatedUserId = validateUserId(userId);
-      if (!validatedUserId) {
-        throw new ValidationError("User ID validation failed", "userId");
-      }
-      const validatedData = validateTransactionData(transactionData, false);
-
-      const transaction = await transactionService.createManualTransaction(
-        validatedUserId,
-        validatedData as unknown as Partial<NewTransaction>,
-      );
-
-      // Audit log transaction creation
-      await auditService.log({
-        userId: validatedUserId,
-        action: "TRANSACTION_CREATE",
-        resourceType: "TRANSACTION",
-        resourceId: transaction.id,
-        metadata: { propertyAddress: transaction.property_address },
-        success: true,
-      });
-
-      logService.info("Transaction created", "Transactions", {
-        userId: validatedUserId,
-        transactionId: transaction.id,
-      });
-
-      // BACKLOG-1802 (founder policy): auto-sync this transaction's full audit
-      // window in the background the moment it's created — the user never clicks
-      // "Sync". Fire-and-forget; failures are non-fatal to the create response.
-      // BACKLOG-1832: pass lifecycle callbacks so the renderer can show a
-      // "fetching emails…" indicator and auto-refresh when the sync completes.
-      triggerTransactionSyncInBackground({
-        transactionId: transaction.id,
-        userId: validatedUserId,
-        reason: "create",
-        ...makeCreateSyncCallbacks(transaction.id, "create"),
-      });
-
-      return {
-        success: true,
-        transaction,
-      };
-    }, { module: "Transactions" }),
-  );
-
   // Get transaction details with communications
   ipcMain.handle(
     "transactions:get-details",

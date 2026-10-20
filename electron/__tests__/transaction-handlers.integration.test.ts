@@ -30,7 +30,6 @@ jest.mock("electron", () => ({
 const mockTransactionService = {
   scanAndExtractTransactions: jest.fn(),
   getTransactions: jest.fn(),
-  createManualTransaction: jest.fn(),
   getTransactionDetails: jest.fn(),
   updateTransaction: jest.fn(),
   deleteTransaction: jest.fn(),
@@ -402,13 +401,15 @@ describe("Transaction Handlers Integration Tests", () => {
     };
 
     it("should complete full lifecycle: create -> update -> export -> delete", async () => {
-      // Step 1: Create transaction
-      mockTransactionService.createManualTransaction.mockResolvedValue({
+      // Step 1: Create transaction (the channel the New Transaction screen calls).
+      // Its TRANSACTION_CREATE entry is written inside createAuditedTransaction,
+      // which is mocked here, so the handler-level check is that it was called.
+      mockTransactionService.createAuditedTransaction.mockResolvedValue({
         ...baseTransaction,
         id: TEST_TXN_ID,
       });
 
-      const createHandler = registeredHandlers.get("transactions:create");
+      const createHandler = registeredHandlers.get("transactions:create-audited");
       const createResult = await createHandler(mockEvent, TEST_USER_ID, {
         property_address: "123 Main St, City, State 12345",
         transaction_type: "purchase",
@@ -417,8 +418,11 @@ describe("Transaction Handlers Integration Tests", () => {
 
       expect(createResult.success).toBe(true);
       expect(createResult.transaction.id).toBe(TEST_TXN_ID);
-      expect(mockAuditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({ action: "TRANSACTION_CREATE" }),
+      expect(mockTransactionService.createAuditedTransaction).toHaveBeenCalledWith(
+        TEST_USER_ID,
+        expect.objectContaining({
+          property_address: "123 Main St, City, State 12345",
+        }),
       );
 
       // Step 2: Update transaction status
@@ -846,22 +850,6 @@ describe("Transaction Handlers Integration Tests", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("space");
-    });
-
-    it("should validate transaction data prevents XSS in property address", async () => {
-      const handler = registeredHandlers.get("transactions:create");
-
-      // Property address with script tag should be sanitized or rejected
-      const result = await handler(mockEvent, TEST_USER_ID, {
-        property_address: '<script>alert("xss")</script>123 Main St',
-        transaction_type: "purchase",
-        status: "pending",
-      });
-
-      // The validation should either reject or sanitize
-      if (result.success) {
-        expect(result.transaction.property_address).not.toContain("<script>");
-      }
     });
   });
 
