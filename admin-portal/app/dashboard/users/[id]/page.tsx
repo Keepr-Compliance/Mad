@@ -16,6 +16,7 @@ import { getSuspensionStatus } from '@/lib/suspension-queries';
 import { readPlanLines, validPlanLineIds } from '@/lib/planLines';
 import type { PlanLine } from '@keepr/shared';
 import * as Sentry from '@sentry/nextjs';
+import { pickOrgPlanRow, type OrgPlanEmbed } from '@/lib/orgPlanEmbed';
 
 export const dynamic = 'force-dynamic';
 
@@ -125,12 +126,9 @@ export default async function UserDetailPage({
   const orgMemberships = (orgsResult.data ?? []).map((m) => {
     const org = m.organizations as unknown as {
       name: string;
-      organization_plans: Array<{
-        plan_id: string;
-        plans: { id: string; name: string; tier: string };
-      }>;
+      organization_plans: OrgPlanEmbed;
     } | null;
-    const orgPlan = org?.organization_plans?.[0] ?? null;
+    const orgPlan = pickOrgPlanRow(org?.organization_plans);
     return {
       organization_id: m.organization_id,
       org_name: org?.name ?? null,
