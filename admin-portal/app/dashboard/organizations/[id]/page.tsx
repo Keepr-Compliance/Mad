@@ -231,9 +231,9 @@ export default async function OrganizationDetailPage({
           {members.length > 0 && inviteButton}
         </div>
         {members.length === 0 ? (
-          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12 text-center">
-            <Users className="mx-auto h-12 w-12 text-gray-300" />
-            <p className="mt-4 text-sm text-gray-500">No members yet.</p>
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12">
+            <Users className="mx-auto block h-12 w-12 text-gray-300" />
+            <p className="mt-4 text-center text-sm text-gray-500">No members yet.</p>
             <div className="mt-4 flex justify-center">{inviteButton}</div>
           </div>
         ) : (
