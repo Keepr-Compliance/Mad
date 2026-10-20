@@ -331,9 +331,10 @@ const EXEMPT: Record<string, string> = {
  *     here. 56 functions have the shape, 4 are multi-write, at `0dca6beb1`.
  *     Tracked by BACKLOG-3225.
  *   - Call-token counting is scoped OUT of `db/`. That is a floor with a
- *     measured size, not a proof of absence: turning it on surfaces EIGHT more,
- *     all real (a raw write plus a non-exported local helper that writes), of
- *     which six had no filed item until BACKLOG-3226. Tracked there.
+ *     measured size, not a proof of absence: turning it on surfaced EIGHT more
+ *     at `0dca6beb1`, all real (a raw write plus a non-exported local helper
+ *     that writes). After BACKLOG-3226 it surfaces SEVEN, a different seven —
+ *     see the BACKLOG-3226 paragraph at `isDbWriterCall` below.
  *
  *   - A write inside a NESTED PROMISE-RETURNING LITERAL is attributed to the
  *     unit that encloses it, so the headline can name a function that issues no
@@ -1077,6 +1078,23 @@ function unitsInFile(rel: string, lines: string[], dbWriters: Set<string>): Fn[]
   // holding its own UPDATE. Two are filed in BACKLOG-2554; the six are filed as
   // BACKLOG-3226, which also carries the rule change. Do not read the scoped-out
   // decision as "nothing is there".
+  //
+  // UPDATED BY BACKLOG-3226 — measured with call tokens ON in `db/` (the one-line
+  // flip of `inDbLayer` below), real driver. At `205144a0b`, before the fix, the
+  // set was eight units, a different eight from the list above:
+  // communicationDbService.ts createCommunicationReference (:808) and
+  // createThreadCommunicationReferenceSync (:1102); emailSyncStateService.ts
+  // (:158, :173); externalContactDbService.ts (:896, :930, :1262);
+  // rcsChatPeopleDbService.ts (:115). After the fix, seven: the
+  // createThreadCommunicationReferenceSync unit drops out. The other twins never
+  // appear because their callers wrap them by name.
+  //
+  // The flip would NOT have guarded BACKLOG-3226. Measured on the plan probe:
+  // with call tokens ON, three wrong fixes (a transaction around the INSERT only;
+  // an empty transaction in the seam; the fix plus a swallowed count error) ALSO
+  // clear that unit. What guards the two seams instead is the real-driver suite
+  // `communicationDbService.threadCountAtomicity-3226.test.ts`. So BACKLOG-3226
+  // does NOT carry the rule change; it is its own item, for its own SR ruling.
   const isDbWriterCall = inDbLayer
     ? null
     : (name: string) => dbWriters.has(name) || localWriters.has(name);
