@@ -58,11 +58,13 @@ jest.mock("../services/databaseService", () => {
       messageDerivedPending: false,
     })),
     createContact: jest.fn(),
+    createContactSync: jest.fn(),
     createContactsBatch: jest.fn(),
     updateContact: jest.fn(),
     getContactById: jest.fn(),
     deleteContact: jest.fn(),
     removeContact: jest.fn(),
+    removeContactSync: jest.fn(),
     getTransactionsByContact: jest.fn(),
     // BACKLOG-1933: contact-scoped comms
     getEmailsForContact: jest.fn(),
@@ -108,7 +110,10 @@ jest.mock("../services/auditService", () => ({
   __esModule: true,
   default: {
     log: jest.fn().mockResolvedValue(undefined),
+    recordInTransaction: jest.fn(),
+    recordFailure: jest.fn(),
   },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
 }));
 
 jest.mock("../services/logService", () => ({
@@ -397,6 +402,21 @@ function legacyReaderResult<T>(literal: T): ContactNamesResult {
 }
 
 const mockAuditService = auditService as jest.Mocked<typeof auditService>;
+
+/** BACKLOG-3339: create returns the new id from the sync core; the handler reads the contact back. */
+function mockCreated(contact: Contact): void {
+  mockDatabaseService.createContactSync.mockReturnValue(contact.id);
+  mockDatabaseService.getContactById.mockResolvedValue(contact);
+}
+
+/** BACKLOG-3339: remove reads the contact first (its owner is the entry's user). */
+function mockExistingContact(): void {
+  mockDatabaseService.getContactById.mockResolvedValue({
+    id: TEST_CONTACT_ID,
+    user_id: TEST_USER_ID,
+    name: "Existing Contact",
+  } as Contact);
+}
 const mockLogService = logService as jest.Mocked<typeof logService>;
 
 // Reset external contacts mock state
@@ -1782,17 +1802,18 @@ describe("Contact Handlers", () => {
         id: "contact-new",
         ...validContactData,
       } as Contact;
-      mockDatabaseService.createContact.mockResolvedValue(createdContact);
+      // BACKLOG-3339: the handler writes through createContactSync in one transaction and reads the contact back.
+      mockCreated(createdContact);
 
       const handler = registeredHandlers.get("contacts:create");
       const result = await handler(mockEvent, TEST_USER_ID, validContactData);
 
       expect(result.success).toBe(true);
       expect(result.contact).toEqual(createdContact);
-      expect(mockAuditService.log).toHaveBeenCalledWith(
+      expect(mockAuditService.recordInTransaction).toHaveBeenCalledWith(
         expect.objectContaining({
           action: "CONTACT_CREATE",
-          success: true,
+          resourceId: "contact-new",
         }),
       );
     });
@@ -1819,7 +1840,8 @@ describe("Contact Handlers", () => {
     ])(
       "persists distinct source %s via createContact",
       async (inputSource, expectedSource) => {
-        mockDatabaseService.createContact.mockResolvedValue({
+        // BACKLOG-3339: the handler writes through createContactSync in one transaction and reads the contact back.
+      mockCreated({
           id: "contact-src",
           name: "Imported Person",
         } as Contact);
@@ -1836,7 +1858,7 @@ describe("Contact Handlers", () => {
         // in the same transaction as the contact. Asserted rather than
         // wildcarded — a create that passed the wrong origin would otherwise
         // read as a pass here.
-        expect(mockDatabaseService.createContact).toHaveBeenCalledWith(
+        expect(mockDatabaseService.createContactSync).toHaveBeenCalledWith(
           expect.objectContaining({ source: expectedSource }),
           { kind: "derived" },
         );
@@ -1844,7 +1866,8 @@ describe("Contact Handlers", () => {
     );
 
     it("falls back to manual when source is an unrecognised value", async () => {
-      mockDatabaseService.createContact.mockResolvedValue({
+      // BACKLOG-3339: the handler writes through createContactSync in one transaction and reads the contact back.
+      mockCreated({
         id: "contact-fallback",
         name: "Unknown Origin",
       } as Contact);
@@ -1857,7 +1880,7 @@ describe("Contact Handlers", () => {
       });
 
       expect(result.success).toBe(true);
-      expect(mockDatabaseService.createContact).toHaveBeenCalledWith(
+      expect(mockDatabaseService.createContactSync).toHaveBeenCalledWith(
         expect.objectContaining({ source: "manual" }),
         // BACKLOG-2496 — the required origin argument.
         { kind: "derived" },
@@ -1865,9 +1888,9 @@ describe("Contact Handlers", () => {
     });
 
     it("should handle creation failure", async () => {
-      mockDatabaseService.createContact.mockRejectedValue(
-        new Error("Creation failed"),
-      );
+      mockDatabaseService.createContactSync.mockImplementationOnce(() => {
+        throw new Error("Creation failed");
+      });
 
       const handler = registeredHandlers.get("contacts:create");
       const result = await handler(mockEvent, TEST_USER_ID, validContactData);
@@ -1986,13 +2009,13 @@ describe("Contact Handlers", () => {
   describe("contacts:remove", () => {
     it("should remove contact from local database successfully", async () => {
       mockDatabaseService.getTransactionsByContact.mockResolvedValue([]);
-      mockDatabaseService.removeContact.mockResolvedValue(undefined);
+      mockExistingContact();
 
       const handler = registeredHandlers.get("contacts:remove");
       const result = await handler(mockEvent, TEST_CONTACT_ID);
 
       expect(result.success).toBe(true);
-      expect(mockDatabaseService.removeContact).toHaveBeenCalledWith(
+      expect(mockDatabaseService.removeContactSync).toHaveBeenCalledWith(
         TEST_CONTACT_ID,
       );
     });
@@ -2004,13 +2027,13 @@ describe("Contact Handlers", () => {
       mockDatabaseService.getTransactionsByContact.mockResolvedValue([
         { id: "txn-1" } as TransactionWithRoles,
       ]);
-      mockDatabaseService.removeContact.mockResolvedValue(undefined);
+      mockExistingContact();
 
       const handler = registeredHandlers.get("contacts:remove");
       const result = await handler(mockEvent, TEST_CONTACT_ID);
 
       expect(result.success).toBe(true);
-      expect(mockDatabaseService.removeContact).toHaveBeenCalledWith(
+      expect(mockDatabaseService.removeContactSync).toHaveBeenCalledWith(
         TEST_CONTACT_ID,
       );
     });
@@ -2025,9 +2048,10 @@ describe("Contact Handlers", () => {
 
     it("should handle removal failure", async () => {
       mockDatabaseService.getTransactionsByContact.mockResolvedValue([]);
-      mockDatabaseService.removeContact.mockRejectedValue(
-        new Error("Removal failed"),
-      );
+      mockExistingContact();
+      mockDatabaseService.removeContactSync.mockImplementation(() => {
+        throw new Error("Removal failed");
+      });
 
       const handler = registeredHandlers.get("contacts:remove");
       const result = await handler(mockEvent, TEST_CONTACT_ID);

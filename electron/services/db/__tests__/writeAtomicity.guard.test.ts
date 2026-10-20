@@ -415,12 +415,12 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // prove it — a no-op `dbTransaction(() => {})` anywhere in the handler also
   // clears the unit (measured, filed as BACKLOG-3352). The proof is the crash
   // and error sweeps in `contact-handlers.importAtomic-3220.test.ts`.
+  //
+  // `electron/handlers/contactHandlers.ts::ipc:contacts:create` (BACKLOG-3259)
+  // was DELETED when BACKLOG-3339 put the contact, both address backfills and
+  // the audit entry in one `dbTransaction`. Same caveat; the proof is the
+  // crash sweep in `contactAuditInTransaction-3339.test.ts`.
 
-  // --- BACKLOG-3259 (open): surfaced BY BACKLOG-3235's own fix ------------
-  // Listed, never fixed: the widening PR must list what it surfaces or CI is
-  // red and it cannot land; fixing a surfaced defect belongs to its own item.
-  "electron/handlers/contactHandlers.ts::ipc:contacts:create":
-    "BACKLOG-3259 @1cd39acd0 (:2547, createContact :2717 + backfillContactEmails :2774 + backfillContactPhones :2778, zero dbTransaction in the handler): reachable WITHOUT a crash — the catch arm at :2801-2815 returns { success: false } with no compensating delete, so an ordinary throw from either backfill (a malformed email or phone is enough) leaves the contact row committed and visible in Clients & Contacts holding the name and only some of the addresses the user typed, while the UI tells them it was not created; the user retries and gets a SECOND contact",
   "electron/handlers/messageImportHandlers.ts::ipc:messages:import-macos":
     "BACKLOG-3222 @0dca6beb1 (:148, backfillContactCommunicationDates :278 + backfillPhoneLastMessageTable :302): contacts showing a refreshed last-communication date while phone_last_message still holds the pre-import value, so the contact list and the phone-keyed views disagree until the next successful import",
 

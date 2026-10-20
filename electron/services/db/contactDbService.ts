@@ -353,6 +353,29 @@ export async function createContact(
   contactData: NewContact,
   origin: ContactOrigin,
 ): Promise<Contact> {
+  const id = createContactSync(contactData, origin);
+
+  // Read back AFTER the commit: the row is now durable, and this is a read, so
+  // it has no business holding the write transaction open.
+  const contact = await getContactById(id);
+  if (!contact) {
+    throw new DatabaseError("Failed to create contact");
+  }
+  return contact;
+}
+
+/**
+ * The synchronous core of `createContact` (BACKLOG-3339): the contact, its
+ * addresses and its origin row in one transaction, returning the new id.
+ *
+ * `contacts:create` calls this from inside its own `dbTransaction` so the
+ * contact and its audit entry commit together; the transaction here then runs
+ * as a savepoint. Read the contact back after the outer commit.
+ */
+export function createContactSync(
+  contactData: NewContact,
+  origin: ContactOrigin,
+): string {
   const id = crypto.randomUUID();
   const contactSource = contactData.source || "manual";
 
@@ -488,13 +511,7 @@ export async function createContact(
     writeContactOriginInTransaction(contactData.user_id, id, contactSource, origin);
   });
 
-  // Read back AFTER the commit: the row is now durable, and this is a read, so
-  // it has no business holding the write transaction open.
-  const contact = await getContactById(id);
-  if (!contact) {
-    throw new DatabaseError("Failed to create contact");
-  }
-  return contact;
+  return id;
 }
 
 /**
@@ -2388,6 +2405,14 @@ export async function deleteContact(
  * resurrection is closed from both ends rather than relying on this alone.
  */
 export async function removeContact(contactId: string): Promise<void> {
+  return Promise.resolve(removeContactSync(contactId));
+}
+
+/**
+ * The synchronous core of `removeContact` (BACKLOG-3339), for a caller that
+ * writes the removal and its audit entry in one `dbTransaction`.
+ */
+export function removeContactSync(contactId: string): void {
   dbRun(
     sql`UPDATE contacts
         SET removed_at = datetime('now'),
@@ -2430,6 +2455,14 @@ export async function removeContact(contactId: string): Promise<void> {
  * user from the row for its audit entry.
  */
 export async function restoreContact(contactId: string): Promise<boolean> {
+  return Promise.resolve(restoreContactSync(contactId));
+}
+
+/**
+ * The synchronous core of `restoreContact` (BACKLOG-3339), for a caller that
+ * writes the restore and its audit entry in one `dbTransaction`.
+ */
+export function restoreContactSync(contactId: string): boolean {
   const { changes } = dbRun(
     sql`UPDATE contacts
         SET removed_at = NULL,

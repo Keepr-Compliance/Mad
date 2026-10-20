@@ -74,7 +74,6 @@ const AUDITED_SITES_TOTAL = 38;
 
 type Reason = string;
 const R_SLICE2 = "BACKLOG-3339 slice 2 converts (deal detail toggles); seam check pending";
-const R_SLICE3 = "BACKLOG-3339 slice 3 converts (contacts, settings)";
 const R_REMOTE =
   "record-only: the change is a cloud write, which cannot share a local transaction";
 const R_SESSION =
@@ -89,12 +88,6 @@ const ALLOWLIST: Record<string, { count: number; reason: Reason }> = {
   "electron/handlers/hiddenTextHandlers.ts::transactions:hide-text-from-export::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE2 },
   "electron/handlers/hiddenTextHandlers.ts::transactions:unhide-text-from-export::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE2 },
   "electron/handlers/checklistHandlers.ts::auditChecklistAct::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE2 },
-  // B — contacts, C1 — local setting
-  "electron/handlers/contactHandlers.ts::contacts:create::CONTACT_CREATE": { count: 1, reason: R_SLICE3 },
-  "electron/handlers/contactHandlers.ts::contacts:update::CONTACT_UPDATE": { count: 1, reason: R_SLICE3 },
-  "electron/handlers/contactHandlers.ts::contacts:remove::CONTACT_DELETE": { count: 1, reason: R_SLICE3 },
-  "electron/handlers/contactHandlers.ts::contacts:restore::CONTACT_UPDATE": { count: 1, reason: R_SLICE3 },
-  "electron/handlers/userSettingsHandlers.ts::user:set-phone-type::SETTINGS_CHANGE": { count: 1, reason: R_SLICE3 },
   // C2, D — remote changes
   "electron/handlers/userSettingsHandlers.ts::user:set-phone-type-cloud::SETTINGS_CHANGE": { count: 1, reason: R_REMOTE },
   "electron/handlers/transactionExportHandlers.ts::transactions:submit::TRANSACTION_SUBMIT": { count: 1, reason: R_REMOTE },

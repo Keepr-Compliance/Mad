@@ -2105,6 +2105,11 @@ class DatabaseService implements IDatabaseService {
     return userDb.updateUser(userId, updates);
   }
 
+  /** Synchronous update, for callers inside a `dbTransaction` (BACKLOG-3339). */
+  updateUserSync(userId: string, updates: Partial<User>): void {
+    return userDb.updateUserSync(userId, updates);
+  }
+
   async deleteUser(userId: string): Promise<void> {
     return userDb.deleteUser(userId);
   }
@@ -2177,6 +2182,17 @@ class DatabaseService implements IDatabaseService {
     origin: Parameters<typeof contactDb.createContact>[1],
   ): Promise<Contact> {
     return contactDb.createContact(contactData, origin);
+  }
+
+  /**
+   * Synchronous create, for callers inside a `dbTransaction` (BACKLOG-3339).
+   * Returns the new contact's id; read the contact after the commit.
+   */
+  createContactSync(
+    contactData: NewContact,
+    origin: Parameters<typeof contactDb.createContact>[1],
+  ): string {
+    return contactDb.createContactSync(contactData, origin);
   }
 
   createContactsBatch(
@@ -2342,6 +2358,11 @@ class DatabaseService implements IDatabaseService {
     return contactDb.restoreContact(contactId);
   }
 
+  /** Synchronous restore, for callers inside a `dbTransaction` (BACKLOG-3339). */
+  restoreContactSync(contactId: string): boolean {
+    return contactDb.restoreContactSync(contactId);
+  }
+
   /**
    * Synchronous phone lookup scoped by user_id (BACKLOG-1469).
    * Used by Android contact promotion to check for duplicates.
@@ -2368,6 +2389,11 @@ class DatabaseService implements IDatabaseService {
 
   async removeContact(contactId: string): Promise<void> {
     return contactDb.removeContact(contactId);
+  }
+
+  /** Synchronous removal, for callers inside a `dbTransaction` (BACKLOG-3339). */
+  removeContactSync(contactId: string): void {
+    return contactDb.removeContactSync(contactId);
   }
 
   // ============================================

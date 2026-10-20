@@ -8,7 +8,9 @@
  *   - audit fails -> the file is still written, one failure entry, and the
  *     handler answers not-recorded with the fixed copy;
  *   - renderer id != session id -> refused before the save dialog, no file;
- *   - cancel -> no entry (unchanged).
+ *   - cancel -> no entry (unchanged);
+ *   - Sentry: one tags-only report per stretch of failures, cleared by the
+ *     next recorded export (fail -> fail = 1 report; fail -> ok -> fail = 2).
  *
  * Real driver, shipped schema, real auditService. The dialog, the data gather
  * and the file writer are mocked; "the file was written" is the writer call.
@@ -70,10 +72,13 @@ import { auditService, type AuditLogEntry } from "../../services/auditService";
 import databaseService from "../../services/databaseService";
 import sessionService from "../../services/sessionService";
 import { exportUserData, writeExportFile } from "../../services/ccpaExportService";
+import * as Sentry from "@sentry/electron/main";
 import {
   DATA_EXPORT_NOT_RECORDED_MESSAGE,
+  DATA_EXPORT_NOT_RECORDED_SENTRY_MESSAGE,
   DATA_EXPORT_WRONG_ACCOUNT_MESSAGE,
   registerCcpaHandlers,
+  resetDataExportAuditStretchForTests,
 } from "../ccpaHandlers";
 import {
   openAuditProbeDb,
@@ -120,6 +125,7 @@ beforeEach(() => {
   auditService.initialize(realAuditDb as never, fakeCloud as never);
   auditService.stopSyncInterval();
   jest.clearAllMocks();
+  resetDataExportAuditStretchForTests();
   (sessionService.loadSession as jest.Mock).mockResolvedValue({ user: { id: PROBE_USER } });
   mockShowSaveDialog.mockResolvedValue({ canceled: false, filePath: FILE });
 });
@@ -172,6 +178,47 @@ describe("BACKLOG-3339: Export My Data writes an audit entry", () => {
   it("the data gathered is the session user's", async () => {
     await invoke(PROBE_USER);
     expect((exportUserData as jest.Mock).mock.calls[0][0]).toBe(PROBE_USER);
+  });
+
+  const failAudit = () =>
+    db.exec("CREATE TRIGGER fail_audit_success BEFORE INSERT ON audit_logs WHEN NEW.success = 1 BEGIN SELECT RAISE(ABORT, 'forced'); END");
+  const allowAudit = () => db.exec("DROP TRIGGER fail_audit_success");
+
+  it("Sentry: two failures in a row send one tags-only report", async () => {
+    failAudit();
+    await invoke(PROBE_USER);
+    await invoke(PROBE_USER);
+    await settle();
+    const calls = (Sentry.captureMessage as jest.Mock).mock.calls.filter(
+      (c) => c[0] === DATA_EXPORT_NOT_RECORDED_SENTRY_MESSAGE,
+    );
+    expect(calls).toEqual([
+      [DATA_EXPORT_NOT_RECORDED_SENTRY_MESSAGE, { level: "error", tags: { operation: "privacy:export-data", format: "json" } }],
+    ]);
+    const payload = JSON.stringify(calls);
+    expect(payload).not.toContain(PROBE_USER);
+    expect(payload).not.toContain(FILE);
+    expect(payload).not.toContain("forced");
+  });
+
+  it("Sentry: a recorded export ends the stretch (fail -> ok -> fail sends two)", async () => {
+    failAudit();
+    await invoke(PROBE_USER);
+    allowAudit();
+    expect((await invoke(PROBE_USER)).success).toBe(true);
+    failAudit();
+    await invoke(PROBE_USER);
+    await settle();
+    expect(
+      (Sentry.captureMessage as jest.Mock).mock.calls.filter((c) => c[0] === DATA_EXPORT_NOT_RECORDED_SENTRY_MESSAGE),
+    ).toHaveLength(2);
+  });
+
+  it("Sentry: a recorded export sends no report", async () => {
+    await invoke(PROBE_USER);
+    expect(
+      (Sentry.captureMessage as jest.Mock).mock.calls.filter((c) => c[0] === DATA_EXPORT_NOT_RECORDED_SENTRY_MESSAGE),
+    ).toEqual([]);
   });
 
   it("cancel: no entry", async () => {
