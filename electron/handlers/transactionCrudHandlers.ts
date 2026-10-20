@@ -101,7 +101,6 @@ import databaseService from "../services/databaseService";
 import { wrapHandler } from "../utils/wrapHandler";
 import type {
   Transaction,
-  NewTransaction,
   UpdateTransaction,
 } from "../types/models";
 import type { TransactionResponse } from "../types/handlerTypes";

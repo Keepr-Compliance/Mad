@@ -647,7 +647,13 @@ export interface WindowApiTransactions {
       attachmentType?: ExportAttachmentType;
       emailExportMode?: ExportEmailMode;
     },
-  ) => Promise<{ success: boolean; path?: string; error?: string }>;
+  ) => Promise<{
+    success: boolean;
+    path?: string;
+    error?: string;
+    /** BACKLOG-3339: the file at `path` was saved but the export was not recorded. */
+    notRecorded?: boolean;
+  }>;
   assignContact: (
     transactionId: string,
     contactId: string,
@@ -1046,6 +1052,8 @@ export interface WindowApiTransactions {
     success: boolean;
     path?: string;
     error?: string;
+    /** BACKLOG-3339: the folder at `path` was saved but the export was not recorded. */
+    notRecorded?: boolean;
   }>;
   /** Get earliest communication date for contacts (TASK-1974) */
   getEarliestCommunicationDate: (contactIds: string[], userId: string) => Promise<{

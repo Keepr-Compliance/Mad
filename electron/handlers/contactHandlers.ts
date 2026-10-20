@@ -3585,10 +3585,8 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
           );
         }
 
-        // BACKLOG-2365: same guard, same removal, same reason as contacts:delete
-        // above. This is the path the Clients & Contacts remove button actually
-        // takes, so leaving the guard here would have left the founder-facing
-        // flow behaving exactly as before no matter what the delete path did.
+        // BACKLOG-2365: this is the path the Clients & Contacts remove button
+        // takes (the old `contacts:delete` channel was removed, BACKLOG-3339).
         //
         // Read the contact BEFORE the removal so the audit entry can name who
         // was removed — after it, the row is tombstoned but the name is still
@@ -3598,10 +3596,9 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
 
         await databaseService.removeContact(validatedContactId);
 
-        // BACKLOG-2365: this path had NO audit entry, while contacts:delete did
-        // — and this is the one a user actually presses. A compliance product
-        // that keeps the data but loses the record of who removed it, and when,
-        // has kept the wrong half.
+        // BACKLOG-2365: this path once had NO audit entry, and it is the one a
+        // user actually presses. A compliance product that keeps the data but
+        // loses the record of who removed it, and when, has kept the wrong half.
         await auditService.log({
           userId: removedContact?.user_id || "unknown",
           action: "CONTACT_DELETE",
@@ -3672,9 +3669,8 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
 
   // BACKLOG-2367: undo a contact removal.
   //
-  // The counterpart to `contacts:delete` / `contacts:remove` above. Both of
-  // those log CONTACT_DELETE and distinguish themselves through
-  // `metadata.reason`; this one logs CONTACT_UPDATE with `reason: "restore"`.
+  // The counterpart to `contacts:remove` above, which logs CONTACT_DELETE;
+  // this one logs CONTACT_UPDATE with `reason: "restore"`.
   //
   // The verb has to come from the permitted set: `audit_logs.action` carries a
   // CHECK constraint (schema.sql) and contains no RESTORE verb, while

@@ -857,7 +857,10 @@ describe("Transaction Handlers", () => {
 
       expect(result.success).toBe(true);
       expect(result.path).toBe("/path/to/export.pdf");
-      expect(mockAuditService.log).toHaveBeenCalled();
+      // BACKLOG-3339: written inside the export's transaction.
+      expect(mockAuditService.recordInTransaction).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "DATA_EXPORT" }),
+      );
     });
 
     it("should handle transaction not found", async () => {

@@ -16,6 +16,24 @@ import {
   type CrashReportingState,
 } from "../services/crashReportingPreference";
 import { handleBusy } from "../utils/busyIpc";
+import auditService from "../services/auditService";
+import databaseService from "../services/databaseService";
+import sessionService from "../services/sessionService";
+import { dbTransaction } from "../services/db/core/dbConnection";
+import { resolveAttachmentAuditUserId } from "../services/db/attachmentOpenSql";
+import { isAuditNotRecorded } from "../services/dealChangeAudit";
+
+/**
+ * BACKLOG-3339: shown when the data file was saved but the export could not
+ * be recorded in the audit log. The renderer shows it under the button and in
+ * the toast, without the "Failed to export data:" prefix.
+ */
+export const DATA_EXPORT_NOT_RECORDED_MESSAGE =
+  "Your data file was saved, but this export could not be recorded in the audit log. If this keeps happening, contact support.";
+
+/** The renderer asked for an account that is not the signed-in one. */
+export const DATA_EXPORT_WRONG_ACCOUNT_MESSAGE =
+  "Your data could not be exported because the signed-in account could not be confirmed. Sign in again and retry.";
 
 /**
  * Register CCPA/privacy IPC handlers
@@ -29,11 +47,16 @@ export function registerCcpaHandlers(): void {
    * 2. Show save dialog with default filename
    * 3. Gather all data categories with progress reporting
    * 4. Write JSON file
-   * 5. Return success/failure
+   * 5. Write the audit entry (BACKLOG-3339)
+   * 6. Return success/failure
+   *
+   * The account is the SESSION user, confirmed present locally. The renderer's
+   * id is only checked against it: an export (and its audit entry) is never
+   * attributed to an id the renderer supplies.
    */
   handleBusy(
     "privacy:export-data",
-    wrapHandler(async (event, userId: string): Promise<{ success: boolean; filePath?: string; error?: string }> => {
+    wrapHandler(async (event, userId: string): Promise<{ success: boolean; filePath?: string; error?: string; notRecorded?: boolean }> => {
       logService.info(
         "[CcpaHandlers] Export requested",
         "CcpaHandlers",
@@ -41,6 +64,19 @@ export function registerCcpaHandlers(): void {
 
       if (!userId) {
         return { success: false, error: "User ID is required" };
+      }
+
+      const session = await sessionService.loadSession().catch(() => null);
+      const sessionUserId = resolveAttachmentAuditUserId(
+        databaseService.getRawDatabase(),
+        session?.user?.id,
+      );
+      if (!sessionUserId || sessionUserId !== userId) {
+        logService.warn(
+          "[CcpaHandlers] Export refused: requested account is not the signed-in account",
+          "CcpaHandlers",
+        );
+        return { success: false, error: DATA_EXPORT_WRONG_ACCOUNT_MESSAGE };
       }
 
       // Get the BrowserWindow that sent the request
@@ -66,7 +102,7 @@ export function registerCcpaHandlers(): void {
       const filePath = dialogResult.filePath;
 
       // Gather data with progress reporting
-      const data = await exportUserData(userId, (category, progress) => {
+      const data = await exportUserData(sessionUserId, (category, progress) => {
         // Send progress to renderer
         if (event.sender && !event.sender.isDestroyed()) {
           event.sender.send("privacy:export-progress", {
@@ -78,6 +114,27 @@ export function registerCcpaHandlers(): void {
 
       // Write the file
       await writeExportFile(data, filePath);
+
+      // BACKLOG-3339: the audit entry, written so a failure can be reported
+      // (`auditService.log` swallows its own). No file path in it: the path
+      // holds the account name and the chosen file name, and it is synced.
+      const auditEntry = {
+        userId: sessionUserId,
+        action: "DATA_EXPORT" as const,
+        resourceType: "USER" as const,
+        resourceId: sessionUserId,
+        metadata: { format: "json" },
+      };
+      try {
+        dbTransaction(() => {
+          auditService.recordInTransaction(auditEntry);
+        });
+      } catch (err) {
+        if (!isAuditNotRecorded(err)) throw err;
+        auditService.recordFailure({ ...auditEntry, errorMessage: "audit_entry_not_written" });
+        logService.error("[CcpaHandlers] Export saved but not recorded in the audit log", "CcpaHandlers");
+        return { success: false, filePath, notRecorded: true, error: DATA_EXPORT_NOT_RECORDED_MESSAGE };
+      }
 
       logService.info(
         `[CcpaHandlers] Export complete: ${filePath}`,

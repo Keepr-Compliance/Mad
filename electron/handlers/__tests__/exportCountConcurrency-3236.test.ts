@@ -108,7 +108,14 @@ jest.mock("../../services/folderExportService", () => ({
 }));
 jest.mock("../../services/auditService", () => ({
   __esModule: true,
-  default: { log: jest.fn().mockResolvedValue(undefined) },
+  // BACKLOG-3339: completeExport writes its entry with recordInTransaction,
+  // and tells an audit failure apart by AuditNotRecordedError.
+  default: {
+    log: jest.fn().mockResolvedValue(undefined),
+    recordInTransaction: jest.fn(),
+    recordFailure: jest.fn(),
+  },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
 }));
 jest.mock("../../services/submissionService", () => ({ __esModule: true, default: {} }));
 jest.mock("../../services/submissionSyncService", () => ({
@@ -342,7 +349,7 @@ function withCrashAt(k: number): { restore: () => void; fired: () => number; inT
 }
 
 describe("BACKLOG-3236: the completion write is one statement and fails whole", () => {
-  it.each([EN, FO])("BASE %s: one autocommit write; CRASH@k for k = 1..N measured", async (ch) => {
+  it.each([EN, FO])("BASE %s: one write, inside the audit transaction; CRASH@k for k = 1..N measured", async (ch) => {
     seedCount(3);
     const base = withCrashAt(0);
     try {
@@ -352,7 +359,9 @@ describe("BACKLOG-3236: the completion write is one statement and fails whole", 
     }
     const N = base.inTx().length;
     expect(N).toBe(1);
-    expect(base.inTx()).toEqual([false]);
+    // BACKLOG-3339: still ONE statement, now inside the transaction that also
+    // writes its audit entry (it was autocommit before).
+    expect(base.inTx()).toEqual([true]);
 
     for (let k = 1; k <= N; k++) {
       seedCount(3);

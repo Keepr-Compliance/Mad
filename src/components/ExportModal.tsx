@@ -8,6 +8,7 @@ import logger from '../utils/logger';
 import { useFeatureGate } from "../hooks/useFeatureGate";
 import { UpgradePrompt } from "./common/UpgradePrompt";
 import { isPaywallLockedError } from "../services/entitlementService";
+import { EXPORT_NOT_RECORDED_BODY, EXPORT_NOT_RECORDED_HEADING } from "../utils/exportAuditCopy";
 import { ExportUnlockPrompt } from "./paywall/ExportUnlockPrompt";
 import { formatLastExported } from "../utils/formatUtils";
 import { dealLockReason, DEAL_LOCK_EDIT_TOOLTIP } from "../utils/dealLock";
@@ -98,6 +99,9 @@ function ExportModal({
     message: string;
   } | null>(null);
   const [exportedPath, setExportedPath] = useState<string | null>(null);
+  // BACKLOG-3339: the file was saved but the export was not recorded. Step 5
+  // then shows the warning form, and Done skips the "mark as closed?" prompt.
+  const [notRecorded, setNotRecorded] = useState(false);
   const [saveAsDefault, setSaveAsDefault] = useState(false);
 
   // BACKLOG-334: TRUE once the saved export preferences have loaded AND carry a
@@ -274,7 +278,7 @@ function ExportModal({
    * Fire the actual export IPC for the current format. Returns the raw result so
    * the caller can branch on success / PAYWALL_LOCKED (BACKLOG-2075) / other error.
    */
-  const runExportCall = async (): Promise<{ success: boolean; path?: string; error?: string }> => {
+  const runExportCall = async (): Promise<{ success: boolean; path?: string; error?: string; notRecorded?: boolean }> => {
     if (exportFormat === "folder") {
       // Folder export for a comprehensive audit package.
       // BACKLOG-2771: content is stated ONCE. This used to also send
@@ -313,9 +317,20 @@ function ExportModal({
     setExporting(true);
     setError(null);
     setExportProgress(null);
+    setNotRecorded(false);
     setStep(3);
     try {
       const result = await runExportCall();
+
+      // BACKLOG-3339: saved but not recorded. Checked BEFORE `success`, which
+      // is false here: the file exists, so this is the finished screen with
+      // Open still available, not an error on the options screen.
+      if (!result.success && result.notRecorded && result.path) {
+        setExportedPath(result.path);
+        setNotRecorded(true);
+        setStep(5);
+        return;
+      }
 
       if (result.success) {
         // 'path' (folder export) or 'filePath' (PDF export) response shapes.
@@ -572,6 +587,11 @@ function ExportModal({
   // "Done" on the success screen. If the transaction can still be closed, surface
   // the "mark as closed?" prompt (step 4); otherwise finish the flow.
   const handleDismissSuccess = () => {
+    if (notRecorded) {
+      // BACKLOG-3339: no close prompt for an export that was not recorded.
+      onExportComplete({ success: false, notRecorded: true, path: exportedPath });
+      return;
+    }
     if (transaction.status === "closed" || !closeOffered) {
       onExportComplete({ success: true, path: exportedPath });
     } else {
@@ -1009,7 +1029,41 @@ function ExportModal({
           )}
 
           {/* Step 5: Success with Finder Link */}
-          {step === 5 && (
+          {step === 5 && notRecorded && (
+            <div className="py-8 text-center" data-testid="export-not-recorded">
+              <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                <svg className="w-8 h-8 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                </svg>
+              </div>
+              <h4 className="text-lg font-semibold text-gray-900 mb-2">
+                {EXPORT_NOT_RECORDED_HEADING}
+              </h4>
+              <p className="text-sm text-gray-600 mb-6">{EXPORT_NOT_RECORDED_BODY}</p>
+              <div className="flex justify-center gap-4">
+                {exportedPath && (
+                  <button
+                    onClick={handleOpenInFinder}
+                    className="px-6 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-lg font-semibold hover:from-purple-600 hover:to-indigo-700 shadow-md hover:shadow-lg transition-all inline-flex items-center gap-2"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h4a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
+                    </svg>
+                    Open Audit
+                  </button>
+                )}
+                <button
+                  onClick={handleDismissSuccess}
+                  className="px-8 py-2 bg-gradient-to-r from-purple-500 to-indigo-600 text-white rounded-lg font-semibold hover:from-purple-600 hover:to-indigo-700 shadow-md hover:shadow-lg transition-all"
+                >
+                  Done
+                </button>
+              </div>
+              <ExportUnencryptedNotice />
+            </div>
+          )}
+
+          {step === 5 && !notRecorded && (
             <div className="py-8 text-center">
               <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">

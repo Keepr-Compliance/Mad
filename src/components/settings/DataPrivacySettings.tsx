@@ -3,6 +3,7 @@ import { useNotification } from "@/hooks/useNotification";
 import { useSyncOrchestrator } from '../../hooks/useSyncOrchestrator';
 import { formatFileSize, safeErrorMessage } from '../../utils/formatUtils';
 import logger from '../../utils/logger';
+import { DATA_EXPORT_NOT_RECORDED_MESSAGE } from '../../utils/exportAuditCopy';
 import { OPERATION_LABELS } from './types';
 
 interface FailureLogEntry {
@@ -186,7 +187,12 @@ export function DataPrivacySettings({ userId }: DataPrivacySettingsProps) {
       }
     } else if (ccpaItem?.status === 'error') {
       setExportResult({ success: false, message: safeErrorMessage(ccpaItem.error, 'Export failed') });
-      notify.error('Failed to export data: ' + safeErrorMessage(ccpaItem.error, 'Unknown error'));
+      // BACKLOG-3339: the file WAS saved, so no "Failed to export data:" prefix.
+      if (ccpaItem.error === DATA_EXPORT_NOT_RECORDED_MESSAGE) {
+        notify.error(DATA_EXPORT_NOT_RECORDED_MESSAGE);
+      } else {
+        notify.error('Failed to export data: ' + safeErrorMessage(ccpaItem.error, 'Unknown error'));
+      }
       setExporting(false);
     }
   }, [ccpaItem?.status, ccpaItem?.error]);
