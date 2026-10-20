@@ -584,6 +584,14 @@ function setupEventForwarding(): void {
     sendToMainWindow("sync:waiting-for-passcode", {});
   });
 
+  // BACKLOG-4002 (Windows): the backup tool is suspended ({ suspended: true, userError })
+  // or running again ({ suspended: false }). The renderer shows the notice in place of
+  // the "please don't cancel" panel.
+  orchestrator.on("tool-suspended", (payload: { suspended: boolean; userError?: unknown }) => {
+    log.info("[SyncHandlers] Backup tool suspended state", { suspended: payload.suspended });
+    sendToMainWindow("sync:tool-suspended", payload);
+  });
+
   orchestrator.on("passcode-entered", () => {
     log.info("[SyncHandlers] Device started sending files; transfer beginning");
     sendToMainWindow("sync:passcode-entered", {});

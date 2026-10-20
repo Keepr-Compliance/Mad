@@ -10,7 +10,13 @@ module.exports = {
   // Read tests/net-guard/install.js before changing any of the four.
   globalSetup: '<rootDir>/tests/net-guard/globalSetup.js',
   globalTeardown: '<rootDir>/tests/net-guard/globalTeardown.js',
-  setupFiles: ['<rootDir>/tests/setup-env.js', '<rootDir>/tests/net-guard/install.js'],
+  // BACKLOG-4002 (SR R10): toolSuspendProbe-guard.js stubs the Windows thread-state
+  // probe for every suite, so no run can start a real powershell.exe.
+  setupFiles: [
+    '<rootDir>/tests/setup-env.js',
+    '<rootDir>/tests/net-guard/install.js',
+    '<rootDir>/tests/toolSuspendProbe-guard.js',
+  ],
   setupFilesAfterEnv: ['<rootDir>/tests/setup.js', '<rootDir>/tests/net-guard/assert.js'],
 
   // Use node environment for backend tests

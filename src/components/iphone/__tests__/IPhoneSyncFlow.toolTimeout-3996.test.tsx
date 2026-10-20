@@ -77,10 +77,12 @@ describe("BACKLOG-3996 copy", () => {
     expect(TIMEOUT).toEqual({
       title: "This is taking longer than expected",
       description:
-        "Keepr stopped waiting for your iPhone after 90 seconds. Sometimes security software pauses Keepr's iPhone tools while it checks them.",
+        // BACKLOG-4002: no longer blames the phone ("stopped waiting for your iPhone").
+        "Keepr's iPhone check did not finish within 90 seconds, so Keepr stopped it. Sometimes security software pauses Keepr's iPhone tools while it checks them.",
       actionSuggestion: [
         "1. Make sure your iPhone is unlocked and still connected.",
-        "2. If your antivirus is showing an alert about Keepr, choose to allow it.",
+        // BACKLOG-4002: never "allow it" (the alert's own exception button quarantined the installer on the PC).
+        "2. If your antivirus is showing an alert about Keepr, open your antivirus program and add an exception for the Keepr folder.",
         "3. Wait a moment, then select Try Again.",
         "If this keeps happening, contact support.",
       ].join("\n"),
@@ -103,7 +105,11 @@ describe("BACKLOG-3996 IPhoneSyncFlow: iPhone query timed out", () => {
     expect(screen.getByText("This is taking longer than expected")).toBeInTheDocument();
     expect(screen.getByText(TIMEOUT.description)).toBeInTheDocument();
     expect(screen.getByText("Make sure your iPhone is unlocked and still connected.")).toBeInTheDocument();
-    expect(screen.getByText("If your antivirus is showing an alert about Keepr, choose to allow it.")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "If your antivirus is showing an alert about Keepr, open your antivirus program and add an exception for the Keepr folder.",
+      ),
+    ).toBeInTheDocument();
     expect(screen.getByText("Wait a moment, then select Try Again.")).toBeInTheDocument();
     expect(screen.getByText("If this keeps happening, contact support.")).toBeInTheDocument();
     expect(screen.queryByText("Sync Failed")).not.toBeInTheDocument();
