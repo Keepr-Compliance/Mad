@@ -226,4 +226,26 @@ describe("BACKLOG-3908 follow-up — the re-point skips links to deals that no l
 
     expect(column()).toEqual([TX_A, TX_A]);
   });
+
+  it("O5 orphan THREAD link newest, per-message A, remove from A -> succeeds, column NULL", async () => {
+    await transactionService.linkMessages(IDS, TX_A);
+    // Transcribed state (see header), thread arm: a thread-level link to a deal with no row.
+    realDb!.exec("PRAGMA foreign_keys = OFF");
+    realDb!
+      .prepare(
+        `INSERT INTO communications (id, user_id, transaction_id, thread_id, link_source, linked_at)
+         VALUES ('c-3908-orphan-thread', ?, ?, ?, 'auto', '2099-01-01 00:00:00')`,
+      )
+      .run(USER, TX_GONE, THREAD);
+    realDb!.exec("PRAGMA foreign_keys = ON");
+    expect(
+      (realDb!.prepare("SELECT COUNT(*) AS n FROM transactions WHERE id = ?").get(TX_GONE) as { n: number }).n,
+    ).toBe(0);
+
+    await transactionService.unlinkMessages(IDS, TX_A); // threw "Nothing was changed" with the EXISTS on the per-message arm only
+
+    expect(perMessageLinks(TX_A)).toEqual([]);
+    expect(column()).toEqual([null, null]);
+    expect(linkCount(TX_GONE)).toBe(1);
+  });
 });
