@@ -241,17 +241,13 @@ function TransactionList({
 
 
   const handleQuickExportComplete = (result: unknown): void => {
-    const exportResult = result as { path?: string; notRecorded?: boolean };
+    const exportResult = result as { path?: string };
     setQuickExportTransaction(null);
-    // BACKLOG-3339: a saved-but-not-recorded export already showed its error
-    // on the Export window's finished screen; no green banner for it.
-    if (!exportResult.notRecorded) {
-      setQuickExportSuccess(
-        exportResult.path || "Export completed successfully!",
-      );
-      // Auto-hide success message after 5 seconds
-      setTimeout(() => setQuickExportSuccess(null), 5000);
-    }
+    setQuickExportSuccess(
+      exportResult.path || "Export completed successfully!",
+    );
+    // Auto-hide success message after 5 seconds
+    setTimeout(() => setQuickExportSuccess(null), 5000);
     // Reload transactions to update export status
     loadTransactions();
     // BACKLOG-2090: a quick-export can include a paid unlock (the export modal's
