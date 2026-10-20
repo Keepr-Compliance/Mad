@@ -1,5 +1,6 @@
 -- BACKLOG-4007 PR-4 rollback: restores broker_complete_billing_setup and _org_billing_contact_set
--- to the 4007 PR-1 bodies (verbatim from 20261020100000) and checks their md5s, drops every function this PR added, and
+-- to the 4007 PR-1 bodies (verbatim from 20261020100000) and set_member_license to its pre-PR-4 body,
+-- checks their md5s, drops the F6 trigger, drops every function this PR added, and
 -- removes the ledger row. org_contacts rows written by PR-4 (IT / office / MSP contacts) are
 -- kept as data; billing-only login member rows are kept (they are ordinary 'unassigned' members).
 
@@ -14,6 +15,9 @@ DROP FUNCTION IF EXISTS public.admin_search_users_for_contact(uuid, text);
 DROP FUNCTION IF EXISTS public.org_contacts_list(uuid);
 DROP FUNCTION IF EXISTS public._org_user_in_other_brokerage(uuid, uuid);
 DROP FUNCTION IF EXISTS public._org_contact_caller(uuid, boolean);
+DROP TRIGGER IF EXISTS guard_billing_login_personal_account ON public.organization_members;
+DROP FUNCTION IF EXISTS public._guard_billing_login_personal_account();
+DROP FUNCTION IF EXISTS public._user_has_personal_account(uuid);
 
 CREATE OR REPLACE FUNCTION public.broker_complete_billing_setup(
   p_org uuid, p_expected_version integer, p_contact jsonb, p_company jsonb, p_billing_login boolean)
@@ -208,6 +212,115 @@ BEGIN
     RAISE EXCEPTION 'rollback-4007-pr4: _org_billing_contact_set md5 is not the PR-1 body';
   END IF;
 END $chk$;
+
+-- set_member_license: the body before this PR (md5 39e4d29c).
+CREATE OR REPLACE FUNCTION public.set_member_license(p_member_id uuid, p_action text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_uid          uuid := auth.uid();
+  v_org_id       uuid;
+  v_personal     boolean;
+  v_target       record;
+  v_caller_role  text;
+  v_new_status   text;
+  v_managers     integer;
+BEGIN
+  IF v_uid IS NULL OR p_member_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
+  END IF;
+  IF p_action IS NULL OR p_action NOT IN ('assign', 'unassign', 'reactivate') THEN
+    RETURN jsonb_build_object('success', false, 'error', 'invalid_transition');
+  END IF;
+
+  SELECT m.organization_id INTO v_org_id
+    FROM public.organization_members m WHERE m.id = p_member_id;
+  IF v_org_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
+  END IF;
+
+  -- Lock first: every count and status read below is taken under it.
+  SELECT o.personal_owner_user_id IS NOT NULL INTO v_personal
+    FROM public.organizations o WHERE o.id = v_org_id
+    FOR NO KEY UPDATE;
+
+  SELECT m.role INTO v_caller_role
+    FROM public.organization_members m
+   WHERE m.organization_id = v_org_id
+     AND m.user_id = v_uid
+     AND public.member_status_grants_access(m.license_status);
+  IF v_caller_role IS NULL
+     OR v_caller_role NOT IN ('broker', 'admin', 'it_admin')
+     OR (p_action = 'reactivate' AND v_caller_role NOT IN ('admin', 'it_admin')) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
+  END IF;
+
+  SELECT m.id, m.user_id, m.role, m.license_status INTO v_target
+    FROM public.organization_members m
+   WHERE m.id = p_member_id AND m.organization_id = v_org_id
+   FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
+  END IF;
+  IF v_target.user_id = v_uid THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authorized', 'reason', 'own_membership');
+  END IF;
+  IF v_target.role = 'it_admin' AND v_caller_role <> 'it_admin' THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
+  END IF;
+  IF v_personal IS DISTINCT FROM false OR v_target.user_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'invalid_transition');
+  END IF;
+
+  IF p_action = 'assign' AND v_target.license_status = 'unassigned' THEN
+    v_new_status := 'active';
+  ELSIF p_action = 'unassign' AND v_target.license_status = 'active' THEN
+    v_new_status := 'unassigned';
+  ELSIF p_action = 'reactivate' AND public.member_status_is_deactivated(v_target.license_status) THEN
+    v_new_status := 'active';
+  ELSE
+    RETURN jsonb_build_object('success', false, 'error', 'invalid_transition');
+  END IF;
+
+  IF v_new_status = 'unassigned' AND v_target.role IN ('broker', 'admin', 'it_admin') THEN
+    SELECT count(*) INTO v_managers
+      FROM public.organization_members m
+     WHERE m.organization_id = v_org_id
+       AND m.id <> v_target.id
+       AND m.user_id IS NOT NULL
+       AND m.role IN ('broker', 'admin', 'it_admin')
+       AND public.member_status_grants_access(m.license_status);
+    IF v_managers = 0 THEN
+      RETURN jsonb_build_object('success', false, 'error', 'last_manager');
+    END IF;
+  END IF;
+
+  BEGIN
+    UPDATE public.organization_members
+       SET license_status = v_new_status
+     WHERE id = v_target.id;
+  EXCEPTION WHEN SQLSTATE 'P0001' THEN
+    IF SQLERRM = 'seat_limit_reached' THEN
+      RETURN jsonb_build_object('success', false, 'error', 'seat_limit_reached', 'action', p_action);
+    END IF;
+    RAISE;
+  END;
+
+  RETURN jsonb_build_object('success', true, 'member_id', v_target.id, 'license_status', v_new_status);
+END;
+$function$;
+REVOKE EXECUTE ON FUNCTION public.set_member_license(uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.set_member_license(uuid, text) TO authenticated, service_role;
+DO $chk_sml$
+BEGIN
+  IF md5(pg_get_functiondef('public.set_member_license(uuid,text)'::regprocedure))
+     <> '39e4d29c33710ff4adaa169caeac77ba' THEN
+    RAISE EXCEPTION 'rollback-4007-pr4: set_member_license md5 is not the pre-PR-4 body';
+  END IF;
+END $chk_sml$;
 
 DELETE FROM supabase_migrations.schema_migrations WHERE version = '20261020180000';
 

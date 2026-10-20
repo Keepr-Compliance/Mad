@@ -161,6 +161,14 @@ describe('OrgPeoplePanel', () => {
     await act(async () => fireEvent.click(screen.getByText('Give billing-only login')));
     expect(screen.getByText(orgPeopleErrorMessage('duplicate_invitation'))).toBeInTheDocument();
     unmount();
+    // F6: the founder's sentence, exactly, when the person has their own Keepr account
+    const a6 = actions({ setBillingLogin: jest.fn(async () => ({ ok: false as const, error: 'has_personal_account' })) });
+    const r6 = render(<OrgPeoplePanel view={VIEW} actions={a6} phone={PHONE} onChanged={jest.fn()} />);
+    await act(async () => fireEvent.click(screen.getByText('Give billing-only login')));
+    expect(
+      screen.getByText('This person already has their own Keepr account. Pick another billing contact or invite them as a member.')
+    ).toBeInTheDocument();
+    r6.unmount();
     render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} readOnly />);
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
   });

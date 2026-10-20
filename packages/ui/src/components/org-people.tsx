@@ -122,6 +122,7 @@ export function orgPeopleErrorMessage(code: string): string {
     no_deal: 'Set up billing first.',
     contact_not_found: 'That contact no longer exists. Reload the page.',
     billing_login_exists: 'This brokerage already has a billing-only login.',
+    has_personal_account: 'This person already has their own Keepr account. Pick another billing contact or invite them as a member.',
     already_member: 'This person already has a login in this brokerage.',
     duplicate_invitation: 'This email already has an open invitation to Keepr.',
     account_suspended: 'This brokerage is suspended.',

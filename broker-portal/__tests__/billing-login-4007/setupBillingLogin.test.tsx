@@ -144,6 +144,12 @@ describe('Done step note', () => {
   it('nothing when there was no login', () => {
     expect(billingLoginNote(null)).toBeNull();
   });
+  it('F6: a person with their own Keepr account gets the founder sentence, exactly', () => {
+    expect(billingLoginNote('has_personal_account')).toEqual({
+      tone: 'warning',
+      text: 'This person already has their own Keepr account. Pick another billing contact or invite them as a member.',
+    });
+  });
 });
 
 describe('SR F3: Microsoft step from any Microsoft identity', () => {

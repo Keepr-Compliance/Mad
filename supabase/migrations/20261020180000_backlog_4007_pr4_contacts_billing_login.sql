@@ -40,11 +40,17 @@
 -- 9. org_billing_contact_login    true only when the CALLER is the member linked from the live
 --                                  billing contact of p_org and that member is still
 --                                  'unassigned'. The portal's Billing gate asks this.
+-- 11. set_member_license         (replaced, same signature) 'assign' also clears
+--                                  provisioning_metadata.billing_only.
+-- 12. guard_billing_login_personal_account  (trigger) a billing-only invitation is not claimed
+--                                  by a user with an active personal-org membership (founder
+--                                  F6 = REFUSE); _org_billing_login_create refuses that person
+--                                  too (has_personal_account).
 --
 -- Every change writes billing_change_log. New functions: REVOKE PUBLIC, anon; the public ones
 -- GRANT authenticated (auth.uid() checked inside), the helpers service_role only.
 -- Pre-check: broker_complete_billing_setup and _org_billing_contact_set are the 4007 PR-1
--- bodies (or this file's).
+-- bodies, set_member_license is md5 39e4d29c (or each is this file's).
 -- Rollback: supabase/tests/backlog-4007-pr4/rollback-4007-pr4.sql
 
 DO $pre$
@@ -62,6 +68,12 @@ BEGIN
    WHERE oid = to_regprocedure('public._org_billing_contact_set(uuid,text,text,text,uuid)');
   IF v_md5 IS NULL OR (v_md5 <> '767b797cbdc3ce12ec5754b771da3ac7' AND v_src NOT LIKE '%BACKLOG-4007 PR-4%') THEN
     RAISE EXCEPTION '4007 PR-4 pre-check: _org_billing_contact_set is not the 4007 PR-1 body (md5 %)', v_md5;
+  END IF;
+  v_md5 := NULL; v_src := NULL;
+  SELECT md5(pg_get_functiondef(oid)), prosrc INTO v_md5, v_src FROM pg_proc
+   WHERE oid = to_regprocedure('public.set_member_license(uuid,text)');
+  IF v_md5 IS NULL OR (v_md5 <> '39e4d29c33710ff4adaa169caeac77ba' AND v_src NOT LIKE '%BACKLOG-4007 PR-4%') THEN
+    RAISE EXCEPTION '4007 PR-4 pre-check: set_member_license is not the expected body (md5 %)', v_md5;
   END IF;
   IF to_regclass('public.org_contacts') IS NULL OR to_regclass('public.billing_change_log') IS NULL THEN
     RAISE EXCEPTION '4007 PR-4 pre-check: org_contacts or billing_change_log is missing';
@@ -110,6 +122,23 @@ AS $function$
 $function$;
 REVOKE EXECUTE ON FUNCTION public._org_user_in_other_brokerage(uuid, uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public._org_user_in_other_brokerage(uuid, uuid) TO service_role;
+
+-- The user has an active membership in their own personal organization (founder F6 = REFUSE).
+CREATE OR REPLACE FUNCTION public._user_has_personal_account(p_user uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+  SELECT EXISTS (SELECT 1 FROM public.organization_members m
+                   JOIN public.organizations o ON o.id = m.organization_id
+                  WHERE m.user_id = p_user
+                    AND o.personal_owner_user_id IS NOT NULL
+                    AND m.license_status = 'active')
+$function$;
+REVOKE EXECUTE ON FUNCTION public._user_has_personal_account(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._user_has_personal_account(uuid) TO service_role;
 
 -- =====================================================================================
 -- 2. List
@@ -459,6 +488,11 @@ BEGIN
   IF v_user IS NOT NULL AND public._org_user_in_other_brokerage(v_user, p_org) THEN
     RETURN jsonb_build_object('success', false, 'error', 'user_in_other_brokerage');
   END IF;
+  -- Founder 2026-10-20 (F6 = REFUSE): a person with their own active personal Keepr account
+  -- is never made the billing-only login. Acceptance has the same rule (section 12).
+  IF v_user IS NOT NULL AND public._user_has_personal_account(v_user) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'has_personal_account');
+  END IF;
 
   v_token := encode(gen_random_bytes(32), 'hex');
   INSERT INTO public.organization_members (
@@ -775,3 +809,147 @@ REVOKE EXECUTE ON FUNCTION public.org_billing_contact_login(uuid) FROM PUBLIC, a
 GRANT EXECUTE ON FUNCTION public.org_billing_contact_login(uuid) TO authenticated, service_role;
 COMMENT ON FUNCTION public.org_billing_contact_login(uuid) IS
   'BACKLOG-4007 PR-4: true only for the caller who is the unlicensed member linked from the live billing contact of p_org (the one billing-only login). The broker portal opens /dashboard/billing for that person and nothing else past the floor.';
+
+-- =====================================================================================
+-- 11. set_member_license (replaced, same signature) — BACKLOG-4007 PR-4
+-- =====================================================================================
+
+-- The live body (md5 39e4d29c, the same on keepr-test and production on 2026-10-20), plus one
+-- change: 'assign' also clears provisioning_metadata.billing_only. A member who was the
+-- billing-only login and is given a license is an ordinary member from then on, so a later
+-- 'unassign' followed by a billing-contact change does not remove them.
+CREATE OR REPLACE FUNCTION public.set_member_license(p_member_id uuid, p_action text)
+ RETURNS jsonb
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO ''
+AS $function$
+DECLARE
+  v_uid          uuid := auth.uid();
+  v_org_id       uuid;
+  v_personal     boolean;
+  v_target       record;
+  v_caller_role  text;
+  v_new_status   text;
+  v_managers     integer;
+BEGIN
+  IF v_uid IS NULL OR p_member_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
+  END IF;
+  IF p_action IS NULL OR p_action NOT IN ('assign', 'unassign', 'reactivate') THEN
+    RETURN jsonb_build_object('success', false, 'error', 'invalid_transition');
+  END IF;
+
+  SELECT m.organization_id INTO v_org_id
+    FROM public.organization_members m WHERE m.id = p_member_id;
+  IF v_org_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
+  END IF;
+
+  -- Lock first: every count and status read below is taken under it.
+  SELECT o.personal_owner_user_id IS NOT NULL INTO v_personal
+    FROM public.organizations o WHERE o.id = v_org_id
+    FOR NO KEY UPDATE;
+
+  SELECT m.role INTO v_caller_role
+    FROM public.organization_members m
+   WHERE m.organization_id = v_org_id
+     AND m.user_id = v_uid
+     AND public.member_status_grants_access(m.license_status);
+  IF v_caller_role IS NULL
+     OR v_caller_role NOT IN ('broker', 'admin', 'it_admin')
+     OR (p_action = 'reactivate' AND v_caller_role NOT IN ('admin', 'it_admin')) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
+  END IF;
+
+  SELECT m.id, m.user_id, m.role, m.license_status INTO v_target
+    FROM public.organization_members m
+   WHERE m.id = p_member_id AND m.organization_id = v_org_id
+   FOR UPDATE;
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
+  END IF;
+  IF v_target.user_id = v_uid THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authorized', 'reason', 'own_membership');
+  END IF;
+  IF v_target.role = 'it_admin' AND v_caller_role <> 'it_admin' THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
+  END IF;
+  IF v_personal IS DISTINCT FROM false OR v_target.user_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'invalid_transition');
+  END IF;
+
+  IF p_action = 'assign' AND v_target.license_status = 'unassigned' THEN
+    v_new_status := 'active';
+  ELSIF p_action = 'unassign' AND v_target.license_status = 'active' THEN
+    v_new_status := 'unassigned';
+  ELSIF p_action = 'reactivate' AND public.member_status_is_deactivated(v_target.license_status) THEN
+    v_new_status := 'active';
+  ELSE
+    RETURN jsonb_build_object('success', false, 'error', 'invalid_transition');
+  END IF;
+
+  IF v_new_status = 'unassigned' AND v_target.role IN ('broker', 'admin', 'it_admin') THEN
+    SELECT count(*) INTO v_managers
+      FROM public.organization_members m
+     WHERE m.organization_id = v_org_id
+       AND m.id <> v_target.id
+       AND m.user_id IS NOT NULL
+       AND m.role IN ('broker', 'admin', 'it_admin')
+       AND public.member_status_grants_access(m.license_status);
+    IF v_managers = 0 THEN
+      RETURN jsonb_build_object('success', false, 'error', 'last_manager');
+    END IF;
+  END IF;
+
+  BEGIN
+    -- BACKLOG-4007 PR-4: a license assigned ends the billing-only login (billing_only cleared).
+    UPDATE public.organization_members
+       SET license_status = v_new_status,
+           provisioning_metadata = CASE WHEN p_action = 'assign'
+                                        THEN provisioning_metadata - 'billing_only'
+                                        ELSE provisioning_metadata END
+     WHERE id = v_target.id;
+  EXCEPTION WHEN SQLSTATE 'P0001' THEN
+    IF SQLERRM = 'seat_limit_reached' THEN
+      RETURN jsonb_build_object('success', false, 'error', 'seat_limit_reached', 'action', p_action);
+    END IF;
+    RAISE;
+  END;
+
+  RETURN jsonb_build_object('success', true, 'member_id', v_target.id, 'license_status', v_new_status);
+END;
+$function$;
+REVOKE EXECUTE ON FUNCTION public.set_member_license(uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.set_member_license(uuid, text) TO authenticated, service_role;
+
+-- =====================================================================================
+-- 12. Accepting a billing-only invitation — BACKLOG-4007 PR-4 (founder F6 = REFUSE)
+-- =====================================================================================
+
+-- Any path that claims a billing-only invitation (user_id NULL -> a user) is refused when that
+-- user has an active personal-org membership. BEFORE the row changes, so the AFTER trigger that
+-- retires the personal membership never runs. Raised, not returned: every claim path (an RPC,
+-- the service role) goes through this row.
+CREATE OR REPLACE FUNCTION public._guard_billing_login_personal_account()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+BEGIN
+  IF coalesce(NEW.provisioning_metadata ->> 'billing_only', '') = 'true'
+     AND public._user_has_personal_account(NEW.user_id) THEN
+    RAISE EXCEPTION 'has_personal_account' USING ERRCODE = 'P0001';
+  END IF;
+  RETURN NEW;
+END
+$function$;
+REVOKE EXECUTE ON FUNCTION public._guard_billing_login_personal_account() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._guard_billing_login_personal_account() TO service_role;
+
+CREATE OR REPLACE TRIGGER guard_billing_login_personal_account
+  BEFORE UPDATE OF user_id ON public.organization_members
+  FOR EACH ROW
+  WHEN (OLD.user_id IS NULL AND NEW.user_id IS NOT NULL)
+  EXECUTE FUNCTION public._guard_billing_login_personal_account();

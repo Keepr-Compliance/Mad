@@ -9,6 +9,8 @@ export function billingLoginErrorMessage(code: string | undefined): string {
       return 'This email already has an open invitation to Keepr.';
     case 'user_in_other_brokerage':
       return 'This person belongs to another brokerage.';
+    case 'has_personal_account':
+      return 'This person already has their own Keepr account. Pick another billing contact or invite them as a member.';
     case 'billing_login_exists':
       return 'Your brokerage already has a billing-only login.';
     case 'account_suspended':

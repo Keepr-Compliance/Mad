@@ -98,6 +98,8 @@ export function billingLoginNote(outcome: string | null | undefined): { tone: 'i
   if (outcome === 'created') {
     return { tone: 'warning', text: 'The billing-only login was created, but its invitation email did not send. Resend it from the Users page.' };
   }
+  // Founder F6 (REFUSE): this sentence is shown exactly as written.
+  if (outcome === 'has_personal_account') return { tone: 'warning', text: billingLoginErrorMessage(outcome) };
   return { tone: 'warning', text: `${billingLoginErrorMessage(outcome)} The billing-only login was not created.` };
 }
 

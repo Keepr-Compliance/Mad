@@ -226,6 +226,20 @@ BEGIN
       $q$           AND m.license_status = 'unassigned'
            AND coalesce$q$, $q$           AND false
            AND coalesce$q$);
+    -- S1 (SR d0be3b9c): People open to a broker/admin or IT admin whose license is not active
+    WHEN 'sr_broker_unlicensed' THEN RETURN pg_temp.mut_fn(cl,
+      $q$AND m.license_status = 'active' AND m.role IN ('broker', 'admin'))$q$, $q$AND m.role IN ('broker', 'admin'))$q$);
+    WHEN 'sr_it_unlicensed' THEN RETURN pg_temp.mut_fn(cl,
+      $q$AND m.license_status = 'active' AND m.role = 'it_admin')$q$, $q$AND m.role = 'it_admin')$q$);
+    -- S4 (PM 30f312c8): 'assign' leaves provisioning_metadata.billing_only set
+    WHEN 'assign_keeps_billing_only' THEN RETURN pg_temp.mut_fn('public.set_member_license(uuid,text)',
+      $q$THEN provisioning_metadata - 'billing_only'$q$, $q$THEN provisioning_metadata$q$);
+    -- F6 (founder REFUSE): the billing-only login created for a person with a personal account
+    WHEN 'personal_create_unguarded' THEN RETURN pg_temp.mut_fn(lc,
+      $q$IF v_user IS NOT NULL AND public._user_has_personal_account(v_user) THEN$q$, 'IF false THEN');
+    -- F6: an older billing-only invitation accepted by a person with a personal account
+    WHEN 'personal_accept_unguarded' THEN RETURN pg_temp.mut_fn('public._guard_billing_login_personal_account()',
+      $q$AND public._user_has_personal_account(NEW.user_id) THEN$q$, 'AND false THEN');
     ELSE RAISE EXCEPTION 'unknown mode %', m;
     END CASE;
   END $b$$f$;
@@ -325,6 +339,23 @@ BEGIN
     r := r || jsonb_build_object('C_S4_accept_keeps_unassigned', CASE WHEN pg_temp.j(s)->>'license_status' = 'unassigned'
       AND (SELECT user_id FROM public.organization_members WHERE id = v_mem) = u_bo AND pg_temp.seats(o1) = v_seats
       THEN 'PASS' ELSE 'FAIL ' || left(s, 80) END);
+
+    -- ===== S4 (PM 30f312c8): licensed through 'assign', un-licensed through 'unassign', then the
+    -- billing contact changes: the member is kept (assign cleared billing_only). Rolled back. =====
+    BEGIN
+      s := pg_temp.call_as(u_b, format($q$SELECT public.set_member_license(%L::uuid, 'assign')$q$, v_mem));
+      s2 := (SELECT coalesce(provisioning_metadata->>'billing_only', 'cleared') FROM public.organization_members WHERE id = v_mem);
+      s := s || ' | ' || pg_temp.call_as(u_b, format($q$SELECT public.set_member_license(%L::uuid, 'unassign')$q$, v_mem));
+      s := s || ' | ' || pg_temp.call_as(u_b, format(qs, o1, '{"role":"billing","name":"P4007C S4 Payer","email":"p4007c-s4payer@example.test","phone":"202-555-0134"}'));
+      RAISE EXCEPTION 'S4_DONE' USING DETAIL = jsonb_build_object('calls', s, 'flag', s2,
+        'kept', EXISTS (SELECT 1 FROM public.organization_members WHERE id = v_mem AND user_id = u_bo AND license_status = 'unassigned'))::text;
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM = 'S4_DONE' THEN GET STACKED DIAGNOSTICS s = PG_EXCEPTION_DETAIL; ELSE s := '{"err":' || to_jsonb('ERR ' || SQLSTATE || ' ' || left(SQLERRM, 80))::text || '}'; END IF;
+    END;
+    r := r || jsonb_build_object('C_S4b_assign_clears_billing_only', CASE WHEN s::jsonb->>'flag' = 'cleared'
+      AND s::jsonb->>'calls' LIKE '%"license_status": "active"%' THEN 'PASS' ELSE 'FAIL ' || left(s, 160) END);
+    r := r || jsonb_build_object('C_S4b_assign_unassign_change_keeps_member', CASE WHEN s::jsonb->>'kept' = 'true'
+      AND s::jsonb->>'calls' LIKE '%"license_status": "unassigned"%' AND s::jsonb->>'calls' LIKE '%| {"id": %"success": true}' THEN 'PASS' ELSE 'FAIL ' || left(s, 300) END);
 
     -- ===== 4012 join guard: the billing-only login signs in with Microsoft in the brokerage's tenant =====
     -- JIT finds the existing member row and changes nothing (no seat, still billing-only).
@@ -620,6 +651,80 @@ BEGIN
       AND EXISTS (SELECT 1 FROM public.billing_change_log WHERE organization_id = o1 AND action = 'billing_login_added')
       AND EXISTS (SELECT 1 FROM public.billing_change_log WHERE organization_id = o1 AND action = 'billing_login_removed') THEN 'PASS' ELSE 'FAIL' END);
 
+    -- ===== S1 (SR d0be3b9c): an admin and an IT admin whose license is 'unassigned' get nothing
+    -- (list and save both 42501). Each fixture is rolled back. =====
+    DECLARE
+      v_role text; u_nl uuid;
+    BEGIN
+      FOREACH v_role IN ARRAY ARRAY['admin', 'it_admin'] LOOP
+        u_nl := gen_random_uuid();
+        BEGIN
+          INSERT INTO auth.users (id, email, aud, role, instance_id, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
+          VALUES (u_nl, 'p4007c-nl-' || left(u_nl::text, 8) || '@example.test', 'authenticated', 'authenticated', '00000000-0000-0000-0000-000000000000', '{"provider":"email"}', '{}', now(), now());
+          INSERT INTO public.users (id, email, oauth_provider, oauth_id, display_name)
+          VALUES (u_nl, 'p4007c-nl-' || left(u_nl::text, 8) || '@example.test', 'email', u_nl::text, 'P4007C NL') ON CONFLICT (id) DO NOTHING;
+          INSERT INTO public.organization_members (organization_id, user_id, role, license_status, joined_at) VALUES (o1, u_nl, v_role, 'unassigned', now());
+          s := pg_temp.call_as(u_nl, format('SELECT public.org_contacts_list(%L::uuid)', o1));
+          s2 := pg_temp.call_as(u_nl, format(qs, o1, '{"role":"office","name":"P4007C NL","email":"p4007c-nl-o@example.test"}'));
+          RAISE EXCEPTION 'S1_DONE' USING DETAIL = s || ' | ' || s2;
+        EXCEPTION WHEN OTHERS THEN
+          IF SQLERRM = 'S1_DONE' THEN GET STACKED DIAGNOSTICS s = PG_EXCEPTION_DETAIL; ELSE s := 'SETUP ' || SQLSTATE || ' ' || left(SQLERRM, 80); END IF;
+        END;
+        r := r || jsonb_build_object('C_S1_unlicensed_' || v_role || '_refused', CASE WHEN s LIKE 'ERR 42501%| ERR 42501%' THEN 'PASS' ELSE 'FAIL ' || left(s, 120) END);
+      END LOOP;
+    END;
+
+    -- ===== F6 (founder 2026-10-20, REFUSE): a person with an active personal Keepr account =====
+    DECLARE
+      u_po uuid := gen_random_uuid(); o_po uuid := gen_random_uuid();
+      po_email text; v_inv uuid; v_t text;
+    BEGIN
+      po_email := 'p4007c-po-' || left(u_po::text, 8) || '@example.test';
+      INSERT INTO auth.users (id, email, aud, role, instance_id, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
+      VALUES (u_po, po_email, 'authenticated', 'authenticated', '00000000-0000-0000-0000-000000000000', '{"provider":"email"}', '{}', now(), now());
+      INSERT INTO public.users (id, email, oauth_provider, oauth_id, display_name) VALUES (u_po, po_email, 'email', u_po::text, 'P4007C PO') ON CONFLICT (id) DO NOTHING;
+      INSERT INTO public.organizations (id, name, slug, max_seats, is_test, personal_owner_user_id)
+      VALUES (o_po, 'P4007C personal ' || left(u_po::text, 8), 'p4007c-personal-' || left(u_po::text, 8), 1, true, u_po);
+      INSERT INTO public.organization_members (organization_id, user_id, role, license_status, joined_at) VALUES (o_po, u_po, 'agent', 'active', now());
+
+      -- creation: o2's billing contact moves to this person, then "Give billing-only login"
+      BEGIN
+        s := pg_temp.call_as(u_x, format(qs, o2, json_build_object('role', 'billing', 'name', 'P4007C PO', 'email', po_email, 'phone', '202-555-0135')::text));
+        s := s || ' | ' || pg_temp.call_as(u_x, format('SELECT public.org_billing_login_set(%L::uuid, true)', o2));
+        RAISE EXCEPTION 'F6_DONE' USING DETAIL = jsonb_build_object('calls', s,
+          'rows', (SELECT count(*) FROM public.organization_members m WHERE m.organization_id = o2 AND lower(m.invited_email) = po_email))::text;
+      EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM = 'F6_DONE' THEN GET STACKED DIAGNOSTICS s = PG_EXCEPTION_DETAIL; ELSE s := '{"err":' || to_jsonb('ERR ' || SQLSTATE || ' ' || left(SQLERRM, 80))::text || '}'; END IF;
+      END;
+      r := r || jsonb_build_object('C_F6_create_refused_personal_account', CASE WHEN s::jsonb->>'calls' LIKE '%"error": "has_personal_account"%'
+        AND s::jsonb->>'calls' LIKE '{"id": %"success": true} | %' AND s::jsonb->>'rows' = '0' THEN 'PASS' ELSE 'FAIL ' || left(s, 200) END);
+
+      -- acceptance: an older billing-only invitation (written before this guard) for this person
+      FOREACH v_t IN ARRAY ARRAY['billing_only', 'ordinary'] LOOP
+        BEGIN
+          INSERT INTO public.organization_members (organization_id, invited_email, role, license_status,
+            invitation_token, invitation_expires_at, invited_by, invited_at, provisioned_by, provisioning_metadata)
+          VALUES (o2, po_email, 'agent', 'unassigned', 'p4007c-f6-' || v_t, now() + interval '7 days', u_x, now(), 'invite',
+                  CASE WHEN v_t = 'billing_only' THEN '{"billing_only": true}'::jsonb END)
+          RETURNING id INTO v_inv;
+          s := pg_temp.call_as(u_po, format('SELECT public.accept_invitation(%L)', 'p4007c-f6-' || v_t));
+          RAISE EXCEPTION 'F6_DONE' USING DETAIL = jsonb_build_object('accept', s,
+            'claimed', (SELECT user_id IS NOT NULL FROM public.organization_members WHERE id = v_inv),
+            'personal_kept', EXISTS (SELECT 1 FROM public.organization_members WHERE organization_id = o_po AND user_id = u_po AND license_status = 'active'))::text;
+        EXCEPTION WHEN OTHERS THEN
+          IF SQLERRM = 'F6_DONE' THEN GET STACKED DIAGNOSTICS s = PG_EXCEPTION_DETAIL; ELSE s := '{"err":' || to_jsonb('ERR ' || SQLSTATE || ' ' || left(SQLERRM, 80))::text || '}'; END IF;
+        END;
+        IF v_t = 'billing_only' THEN
+          r := r || jsonb_build_object('C_F6_accept_refused_personal_kept', CASE WHEN s::jsonb->>'accept' LIKE 'ERR P0001 has_personal_account%'
+            AND s::jsonb->>'claimed' = 'false' AND s::jsonb->>'personal_kept' = 'true' THEN 'PASS' ELSE 'FAIL ' || left(s, 200) END);
+        ELSE
+          -- the guard is for billing-only invitations only: an ordinary invitation is still accepted
+          r := r || jsonb_build_object('C_F6_ordinary_invite_still_accepted', CASE WHEN pg_temp.j(s::jsonb->>'accept')->>'success' = 'true'
+            AND s::jsonb->>'claimed' = 'true' THEN 'PASS' ELSE 'FAIL ' || left(s, 200) END);
+        END IF;
+      END LOOP;
+    END;
+
     -- ===== catalog =====
     r := r || jsonb_build_object('C_8_catalog', CASE WHEN
       NOT has_table_privilege('authenticated', 'public.org_contacts', 'SELECT')
@@ -629,10 +734,15 @@ BEGIN
       AND NOT has_function_privilege('authenticated', 'public._org_billing_login_create(uuid,uuid)', 'EXECUTE')
       AND NOT has_function_privilege('authenticated', 'public._org_contact_caller(uuid,boolean)', 'EXECUTE')
       AND NOT has_function_privilege('authenticated', 'public._org_user_in_other_brokerage(uuid,uuid)', 'EXECUTE')
+      AND NOT has_function_privilege('authenticated', 'public._user_has_personal_account(uuid)', 'EXECUTE')
+      AND NOT has_function_privilege('authenticated', 'public._guard_billing_login_personal_account()', 'EXECUTE')
+      AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'guard_billing_login_personal_account'
+                   AND tgrelid = 'public.organization_members'::regclass AND tgenabled = 'O')
       AND (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
             AND p.proname IN ('org_contacts_list', 'org_contact_save', 'org_contact_remove', 'org_billing_login_set',
                               'org_billing_contact_login', 'admin_search_users_for_contact', '_org_billing_login_create',
-                              '_org_contact_caller', '_org_user_in_other_brokerage')
+                              '_org_contact_caller', '_org_user_in_other_brokerage', '_user_has_personal_account',
+                              '_guard_billing_login_personal_account', 'set_member_license')
             AND NOT EXISTS (SELECT 1 FROM unnest(p.proconfig) c WHERE c LIKE 'search_path=%')) = 0
       THEN 'PASS' ELSE 'FAIL' END);
 
