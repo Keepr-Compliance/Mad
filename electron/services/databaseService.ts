@@ -80,6 +80,11 @@ import {
   V75_CHECKLIST_LINKS_TABLE_INFO_SQL,
 } from "./db/migrationV75Sql";
 import {
+  V76_BROKEN_TEXT_IDS_SQL,
+  V76_CLEAR_DANGLING_SQL,
+  V76_REPOINT_SQL,
+} from "./db/migrationV76Sql";
+import {
   SCHEMA_VERSION_UPDATE_SQL,
   SCHEMA_VERSION_TABLE_EXISTS_SQL,
   CONNECTIVITY_PROBE_SQL,
@@ -1894,6 +1899,30 @@ class DatabaseService implements IDatabaseService {
         if (!hasCol) {
           d.exec(V75_ADD_INCLUDE_OUTSIDE_DATES_SQL);
         }
+      },
+    },
+    {
+      version: 76,
+      description:
+        "BACKLOG-4018 re-point texts whose deal column is empty but which still " +
+        "have a per-message link (left by pre-3908 remove-conversation)",
+      // Data only: no schema change. A fresh install (BASELINE 70) runs it too and
+      // finds nothing to repair. Idempotent: every repaired row now has a non-NULL
+      // column and stops qualifying; a row put back to NULL by the dangling-id
+      // guard qualifies again and gets the same answer. See migrationV76Sql.ts.
+      migrate: (d) => {
+        const repoint = d.prepare(V76_REPOINT_SQL);
+        const clearDangling = d.prepare(V76_CLEAR_DANGLING_SQL);
+        const ids = d.prepare(V76_BROKEN_TEXT_IDS_SQL).all() as Array<{ id: string }>;
+        let repointed = 0;
+        let leftEmpty = 0;
+        for (const { id } of ids) {
+          repointed += repoint.run(id).changes;
+          leftEmpty += clearDangling.run(id).changes;
+        }
+        hostLogger.info(
+          `[v76] re-pointed ${repointed - leftEmpty} text(s); ${leftEmpty} left empty (newest link names a missing deal)`,
+        );
       },
     },
   ];
