@@ -178,6 +178,20 @@ describe("BACKLOG-4016: one click, one export", () => {
     expect(exportEnhancedMock).toHaveBeenCalledTimes(1);
   });
 
+  it("P4b gate: two 'Export anyway' clicks in one task (no render between) -> 1 export", async () => {
+    completenessMock.mockResolvedValue(INCOMPLETE);
+    renderModal();
+    await toStep2();
+    await click(await exportButton());
+    const a = await screen.findByTestId("export-gate-export-anyway");
+    await act(async () => {
+      fireEvent.click(a);
+      fireEvent.click(a);
+    });
+    await settle();
+    expect(exportEnhancedMock).toHaveBeenCalledTimes(1);
+  });
+
   it("P5 gate: 'Export anyway' during the 'Update now' re-check -> disabled, 1 export", async () => {
     await openGate();
     const recheck = deferred<typeof COMPLETE>();
