@@ -4,7 +4,8 @@
  */
 
 import type { Message, Communication } from "../../types";
-import { ensureDb } from "./core/dbConnection";
+import { ensureDb, dbRun } from "./core/dbConnection";
+import { sql } from "./core/sqlText";
 import logService from "../logService";
 import { toLookupKey } from "../../utils/phoneNormalization";
 import { LOCAL_REACTION_EXCLUSION, reactionExclusion } from "./reactionExclusion";
@@ -274,6 +275,47 @@ export function linkMessageToTransaction(messageId: string, transactionId: strin
 export function unlinkMessageFromTransaction(messageId: string): void {
   const db = ensureDb();
   db.prepare(`UPDATE messages SET transaction_id = NULL WHERE id = ?`).run(messageId);
+}
+
+/**
+ * BACKLOG-3908: point `messages.transaction_id` at the message's MOST RECENT
+ * remaining link, or NULL when no link remains. Called by `unlinkMessages`
+ * inside its transaction, after both delete loops, in place of the old
+ * unconditional NULL write.
+ *
+ * A text can be linked to several deals (one per-message row per deal, plus
+ * thread rows), but the column names one. Clearing it while another deal still
+ * holds the text put the text back in that deal's attach picker, roster and
+ * auto-link candidates.
+ *
+ * Remaining links are this message's own rows, or TEXT thread rows for its
+ * thread and user (`email_id IS NULL`: an email link row also carries a
+ * `thread_id`). "Most recent" is `linked_at`, then `rowid` (`linked_at` has
+ * second resolution). The deal-lock check reads this column when no deal is
+ * named (`dealLockState.ts`, `MESSAGE_TRANSACTION_ID_SQL`).
+ *
+ * Synchronous and through `dbRun`: it runs inside a `dbTransaction` body.
+ */
+export function repointMessageTransactionSync(messageId: string): void {
+  dbRun(
+    sql`UPDATE messages SET transaction_id = (
+      SELECT c.transaction_id FROM communications c
+      WHERE c.transaction_id IS NOT NULL
+        AND (
+          c.message_id = messages.id
+          OR (
+            c.message_id IS NULL
+            AND c.email_id IS NULL
+            AND c.thread_id IS NOT NULL
+            AND c.thread_id = messages.thread_id
+            AND c.user_id = messages.user_id
+          )
+        )
+      ORDER BY c.linked_at DESC, c.rowid DESC
+      LIMIT 1
+    ) WHERE id = ?`,
+    [messageId],
+  );
 }
 
 /**

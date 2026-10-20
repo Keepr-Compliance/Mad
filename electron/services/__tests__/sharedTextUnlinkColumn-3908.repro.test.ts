@@ -206,22 +206,22 @@ describe("BACKLOG-3908 repro — shared text removed from deal B", () => {
     expect(candidatesFor(TX_A)).toEqual([]); // the thread-row arm excludes it here
   });
 
-  it("AFTER unlink from B: A keeps its links, but the column is NULL and the text reappears", async () => {
+  it("AFTER unlink from B (fixed): A keeps its links, the column still names A, the text stays hidden", async () => {
     await linkAThenAutoLinkB();
     const ids = linkedTextMessageIdsForThreads(TX_B, [THREAD]);
     expect(ids.sort()).toEqual(IDS);
     await transactionService.unlinkMessages(ids, TX_B);
 
-    // A still holds both per-message links ...
+    // A still holds both per-message links, and the column is re-pointed at A
+    // (BACKLOG-3908) instead of cleared.
     expect(perMessageLinksA()).toEqual(IDS);
-    // ... but the column that named A was cleared by the unlink from B.
-    expect(column()).toEqual([null, null]);
-    // Attach picker (getMessagesByContact) and its contact roster show them as unlinked.
-    expect(picker()).toEqual(IDS);
-    expect(roster()).toEqual([PHONE]);
-    // A's auto-link candidate read returns the thread again, and the auto-link
-    // guard (isThreadLinkedToTransaction) does not see A's per-message links.
-    expect(candidatesFor(TX_A)).toEqual([THREAD]);
+    expect(column()).toEqual([TX_A, TX_A]);
+    // Attach picker, roster and A's auto-link candidates do not offer them.
+    expect(picker()).toEqual([]);
+    expect(roster()).toEqual([]);
+    expect(candidatesFor(TX_A)).toEqual([]);
+    // The thread guard still does not see per-message rows; the column is
+    // what excludes A, as before the unlink.
     expect(await isThreadLinkedToTransaction(THREAD, TX_A)).toBe(false);
     // B: suppressed, not a candidate.
     expect(candidatesFor(TX_B)).toEqual([]);

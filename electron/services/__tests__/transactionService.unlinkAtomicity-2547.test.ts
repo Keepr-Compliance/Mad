@@ -54,9 +54,10 @@
  * ===========================================================================
  * ONE instrumented handle sits under everything. `ensureDb()` and the mocked
  * `dbRun`/`dbGet`/`dbAll` all resolve to it, which is required rather than
- * tidy: group (c)'s `UPDATE messages` goes through `ensureDb().prepare()`
- * DIRECTLY (`messageDbService.unlinkMessageFromTransaction`), so a `dbRun`-level
- * injector would never see it and the sweep would silently skip that boundary.
+ * tidy: a writer that calls `ensureDb().prepare()` DIRECTLY would be invisible
+ * to a `dbRun`-level injector, and the sweep would silently skip that boundary.
+ * (The column write used to be such a writer; since BACKLOG-3908 it is
+ * `messageDbService.repointMessageTransactionSync`, through `dbRun`.)
  *
  * `crashAt = N` makes the Nth WRITE statement throw instead of executing, so
  * the observed state is "the first N-1 writes applied". N runs 1…EXPECTED_WRITES,
