@@ -7,7 +7,7 @@
  * actions; every rule is enforced by the database RPCs (org_contact_save, org_contact_remove,
  * org_billing_login_set), so this component only presents.
  *
- * One picker for every role: "Create new person" or "Select existing user". A broker picks from
+ * One picker for every role: "Select existing user" (the default) or "Create new person". A broker picks from
  * the brokerage's own members; staff can also search Keepr users (a user in another brokerage is
  * shown and cannot be picked).
  *
@@ -152,7 +152,7 @@ interface PickerState {
 }
 
 function emptyPicker(role: OrgContactRole, company = ''): PickerState {
-  return { role, mode: 'new', name: '', email: '', phone: '', company, userId: '' };
+  return { role, mode: 'existing', name: '', email: '', phone: '', company, userId: '' };
 }
 
 export function OrgPeoplePanel({ view, actions, phone, onChanged, readOnly = false }: OrgPeoplePanelProps) {
@@ -230,7 +230,7 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, readOnly = fal
   const roleLabel = (r: OrgContactRole) => ROLES.find((x) => x.key === r)?.label ?? r;
 
   return (
-    <div className="space-y-4" data-testid="org-people">
+    <div className="space-y-4 text-left" data-testid="org-people">
       {error ? <Alert variant="error">{error}</Alert> : null}
       {notice ? <Alert variant="info">{notice}</Alert> : null}
 
@@ -335,99 +335,96 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, readOnly = fal
       </ul>
 
       {picker ? (
-        <div className="rounded-md border border-primary-300" role="group" aria-label={`Add person: ${roleLabel(picker.role)}`}>
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-primary-200 bg-primary-50 px-4 py-2">
-            <p className="text-sm text-gray-900">
-              {picker.id ? 'Change' : 'Add person'} · <strong>{roleLabel(picker.role)}</strong>
-            </p>
-            {!picker.id ? (
-              <div className="flex gap-1" role="tablist" aria-label="Create or select">
-                {(['new', 'existing'] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    role="tab"
-                    aria-selected={picker.mode === m}
-                    className={`rounded px-3 py-1 text-sm ${picker.mode === m ? 'bg-gray-900 text-white' : 'text-gray-700'}`}
-                    onClick={() => setPicker({ ...picker, mode: m })}
-                  >
-                    {m === 'new' ? 'Create new person' : 'Select existing user'}
-                  </button>
-                ))}
+        <div className="rounded-md border border-gray-200 p-4" role="group" aria-label={`Add person: ${roleLabel(picker.role)}`}>
+          <p className="text-sm font-semibold text-gray-900">
+            {picker.id ? 'Change' : 'Add'} {roleLabel(picker.role).toLowerCase()}
+          </p>
+          {!picker.id ? (
+            <fieldset className="mt-3 flex flex-wrap gap-x-6 gap-y-2">
+              <legend className="sr-only">Create or select</legend>
+              {(['existing', 'new'] as const).map((m) => (
+                <label key={m} className="flex items-center gap-2 text-sm text-gray-900">
+                  <input
+                    type="radio"
+                    className="h-4 w-4 border-gray-300 bg-white text-primary-600 focus:ring-primary-500"
+                    name="op-mode"
+                    checked={picker.mode === m}
+                    onChange={() => setPicker({ ...picker, mode: m })}
+                  />
+                  {m === 'existing' ? 'Select existing user' : 'Create new person'}
+                </label>
+              ))}
+            </fieldset>
+          ) : null}
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            {picker.mode === 'new' ? (
+              <>
+                <div>
+                  <Label htmlFor="op-name" required className="text-gray-900">Full name</Label>
+                  <Input id="op-name" className="text-gray-900" value={picker.name} onChange={(e) => setPicker({ ...picker, name: e.target.value })} />
+                </div>
+                <div>
+                  <Label htmlFor="op-email" required className="text-gray-900">Email</Label>
+                  <Input id="op-email" type="email" className="text-gray-900" value={picker.email} onChange={(e) => setPicker({ ...picker, email: e.target.value })} />
+                </div>
+              </>
+            ) : (
+              <>
+                {actions.searchUsers ? (
+                  <div>
+                    <Label htmlFor="op-search" className="text-gray-900">Search users</Label>
+                    <Input id="op-search" className="text-gray-900" value={query} placeholder="Name or email" onChange={(e) => void search(e.target.value)} />
+                  </div>
+                ) : null}
+                <div>
+                  <Label htmlFor="op-user" className="text-gray-900">User</Label>
+                  <Select id="op-user" className="text-gray-900" value={picker.userId} onChange={(e) => setPicker({ ...picker, userId: e.target.value })}>
+                    <option value="">Choose a user</option>
+                    {existingChoices.map((u) => (
+                      <option key={u.user_id} value={u.user_id} disabled={u.status === 'other_brokerage'}>
+                        {u.name} ({u.email}){u.status === 'other_brokerage' ? ' · in another brokerage' : u.status === 'no_brokerage' ? ' · no brokerage' : ''}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              </>
+            )}
+            <div>
+              <Label htmlFor="op-phone" required={phoneRequired} className="text-gray-900">Phone</Label>
+              <Input
+                id="op-phone"
+                type="tel"
+                className="text-gray-900"
+                value={picker.phone}
+                onChange={(e) => setPicker({ ...picker, phone: phone.format(e.target.value) })}
+                onBlur={() => setPhoneTouched(true)}
+                aria-invalid={phoneTouched && !phoneOk}
+              />
+              {phoneTouched && !phoneOk ? (
+                <p role="alert" className="mt-1 text-sm text-red-600">
+                  {phone.error}
+                </p>
+              ) : null}
+            </div>
+            {picker.role === 'msp' ? (
+              <div>
+                <Label htmlFor="op-company" required className="text-gray-900">IT provider company</Label>
+                <Input id="op-company" className="text-gray-900" value={picker.company} onChange={(e) => setPicker({ ...picker, company: e.target.value })} />
               </div>
             ) : null}
           </div>
-          <div className="space-y-3 p-4">
-            {picker.mode === 'new' ? (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div>
-                  <Label htmlFor="op-name" required>Full name</Label>
-                  <Input id="op-name" value={picker.name} onChange={(e) => setPicker({ ...picker, name: e.target.value })} />
-                </div>
-                <div>
-                  <Label htmlFor="op-email" required>Email</Label>
-                  <Input id="op-email" type="email" value={picker.email} onChange={(e) => setPicker({ ...picker, email: e.target.value })} />
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {actions.searchUsers ? (
-                  <div>
-                    <Label htmlFor="op-search">Search users</Label>
-                    <Input id="op-search" value={query} placeholder="Name or email" onChange={(e) => void search(e.target.value)} />
-                  </div>
-                ) : null}
-                <Label htmlFor="op-user">User</Label>
-                <Select id="op-user" value={picker.userId} onChange={(e) => setPicker({ ...picker, userId: e.target.value })}>
-                  <option value="">Choose a user</option>
-                  {existingChoices.map((u) => (
-                    <option key={u.user_id} value={u.user_id} disabled={u.status === 'other_brokerage'}>
-                      {u.name} ({u.email}){u.status === 'other_brokerage' ? ' · in another brokerage' : u.status === 'no_brokerage' ? ' · no brokerage' : ''}
-                    </option>
-                  ))}
-                </Select>
-                <p className="text-xs text-gray-500">Name and email come from the account. A user in another brokerage cannot be added.</p>
-              </div>
-            )}
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <Label htmlFor="op-phone" required={phoneRequired}>Phone</Label>
-                <Input
-                  id="op-phone"
-                  type="tel"
-                  value={picker.phone}
-                  onChange={(e) => setPicker({ ...picker, phone: phone.format(e.target.value) })}
-                  onBlur={() => setPhoneTouched(true)}
-                  aria-invalid={phoneTouched && !phoneOk}
-                />
-                {phoneTouched && !phoneOk ? (
-                  <p role="alert" className="mt-1 text-sm text-red-600">
-                    {phone.error}
-                  </p>
-                ) : phoneRequired ? (
-                  <p className="mt-1 text-xs text-gray-500">Needed for invoices.</p>
-                ) : null}
-              </div>
-              {picker.role === 'msp' ? (
-                <div>
-                  <Label htmlFor="op-company" required>IT provider company</Label>
-                  <Input id="op-company" value={picker.company} onChange={(e) => setPicker({ ...picker, company: e.target.value })} />
-                </div>
-              ) : null}
-            </div>
-            <p className="text-xs text-gray-500">Contact only: no sign-in and no seat.</p>
-            <div className="flex justify-end gap-2">
-              <Button variant="secondary" size="sm" disabled={busy} onClick={() => setPicker(null)}>
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                disabled={busy || !phoneOk || (picker.mode === 'existing' && !picker.userId)}
-                onClick={savePicker}
-              >
-                {busy ? 'Saving…' : 'Save'}
-              </Button>
-            </div>
+          <p className="mt-3 text-xs text-gray-500">Contact only: no sign-in and no seat.</p>
+          <div className="mt-4 flex justify-end gap-3">
+            <Button variant="secondary" disabled={busy} onClick={() => setPicker(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              disabled={busy || !phoneOk || (picker.mode === 'existing' && !picker.userId)}
+              onClick={savePicker}
+            >
+              {busy ? 'Saving…' : 'Save'}
+            </Button>
           </div>
         </div>
       ) : null}
