@@ -3,8 +3,9 @@
 /**
  * CreateOrganizationDialog - Modal dialog for creating a new organization.
  *
- * Collects name and optional plan assignment. BACKLOG-4007: no Max Seats and no Default
- * License Status. Seats are entered once, on the deal; until a deal exists the database
+ * Collects name, optional plan and, while brokerage billing is off, max seats.
+ * BACKLOG-4007: no Default License Status. Once brokerage billing is live, Max Seats is
+ * hidden and not sent: seats are entered on the deal, and until a deal exists the database
  * default (admin_create_organization p_max_seats DEFAULT 5) applies.
  * Uses admin_create_organization RPC, then optionally admin_assign_org_plan.
  * Does NOT set the legacy `plan` column on organizations.
@@ -17,10 +18,13 @@ import { createOrganization, assignOrgPlan, getActivePlansForOrgs, type Plan } f
 interface CreateOrganizationDialogProps {
   onClose: () => void;
   onCreated: () => void;
+  /** Brokerage billing is live (billingLiveForNewOrg). Off: Max Seats is asked and sent. */
+  billingLive: boolean;
 }
 
-export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizationDialogProps) {
+export function CreateOrganizationDialog({ onClose, onCreated, billingLive }: CreateOrganizationDialogProps) {
   const [name, setName] = useState('');
+  const [maxSeats, setMaxSeats] = useState(5);
   const [selectedPlanId, setSelectedPlanId] = useState('');
   const [plans, setPlans] = useState<Plan[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -51,7 +55,9 @@ export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizat
     setError(null);
 
     // Step 1: Create the organization
-    const result = await createOrganization(name.trim());
+    const result = billingLive
+      ? await createOrganization(name.trim())
+      : await createOrganization(name.trim(), maxSeats);
 
     if (result.error) {
       setError(result.error.message);
@@ -81,7 +87,9 @@ export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizat
         Create Organization
       </h3>
       <p className="mt-1 text-sm text-gray-500">
-        Seats are set on the deal, after the organization exists.
+        {billingLive
+          ? 'Seats are set on the deal, after the organization exists.'
+          : 'Set up a new organization with a name and seat limit.'}
       </p>
 
       <form onSubmit={handleSubmit} className="mt-4 space-y-4">
@@ -98,6 +106,22 @@ export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizat
             autoFocus
           />
         </div>
+
+        {/* Max Seats: only while brokerage billing is off (once live, the deal sets seats) */}
+        {!billingLive && (
+          <div>
+            <Label htmlFor="org-max-seats">Max Seats</Label>
+            <Input
+              id="org-max-seats"
+              type="number"
+              min={1}
+              max={1000}
+              value={maxSeats}
+              onChange={(e) => setMaxSeats(Math.max(1, parseInt(e.target.value) || 1))}
+              disabled={isLoading}
+            />
+          </div>
+        )}
 
         {/* Optional Plan */}
         <div>

@@ -158,6 +158,7 @@ export default async function OrganizationDetailPage({
             canInvite={!!canInvite}
             canViewBilling={!!canViewBilling}
             hasDeal={!!billing?.deal}
+            showBillingCard={shouldShowBillingCard(billing)}
             isFirstInvite={members.length === 0 && pendingInvitations.length === 0}
           />
         </div>

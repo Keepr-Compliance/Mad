@@ -40,6 +40,8 @@ export interface OrganizationRow {
 interface OrganizationsTableProps {
   organizations: OrganizationRow[];
   canEdit: boolean;
+  /** Brokerage billing is live: Create Organization does not ask for Max Seats. */
+  billingLive: boolean;
 }
 
 function PlanBadge({ name, tier }: { name: string | null; tier: string | null }) {
@@ -61,7 +63,7 @@ function PlanBadge({ name, tier }: { name: string | null; tier: string | null })
   );
 }
 
-export function OrganizationsTable({ organizations, canEdit }: OrganizationsTableProps) {
+export function OrganizationsTable({ organizations, canEdit, billingLive }: OrganizationsTableProps) {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState('');
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -174,6 +176,7 @@ export function OrganizationsTable({ organizations, canEdit }: OrganizationsTabl
         <CreateOrganizationDialog
           onClose={() => setShowCreateDialog(false)}
           onCreated={handleCreated}
+          billingLive={billingLive}
         />
       )}
     </div>

@@ -125,6 +125,17 @@ export function shouldShowBillingCard(b: OrgBilling | null | undefined): b is Or
   return !!b && (b.billing_live === true || b.is_test === true);
 }
 
+/**
+ * Create Organization: is brokerage billing live? Same switch as the Billing card
+ * (billing_live, read via admin_get_brokerage_billing_live). There is no organization yet,
+ * so the card's is_test half does not apply. A failed read (e.g. the function is not
+ * deployed on that environment) counts as off, the same way the card stays hidden when
+ * admin_get_org_billing cannot be read.
+ */
+export function billingLiveForNewOrg(read: { data: unknown; error: unknown }): boolean {
+  return !read.error && read.data === true;
+}
+
 /** "24.99" -> 2499. Returns null for anything that is not a non-negative amount with at most 2 decimals. */
 export function centsFromDollars(input: string): number | null {
   const s = input.trim().replace(/^\$/, '');

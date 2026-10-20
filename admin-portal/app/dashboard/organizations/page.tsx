@@ -2,6 +2,7 @@ import { getAuthenticatedUser } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@keepr/design-system';
 import { OrganizationsTable, type OrganizationRow } from './components/OrganizationsTable';
+import { billingLiveForNewOrg } from '@/lib/billing/dealRules';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,6 +44,12 @@ export default async function OrganizationsPage() {
     required_permission: 'organizations.edit',
   });
 
+  // BACKLOG-4007: Create Organization asks for Max Seats only while brokerage billing is off.
+  // Same switch as the org page's Billing card; a failed read counts as off.
+  const billingLive = canEdit
+    ? billingLiveForNewOrg(await supabase.rpc('admin_get_brokerage_billing_live'))
+    : false;
+
   // Fetch all organizations via SECURITY DEFINER RPC (bypasses RLS join issues)
   const { data: rpcResult, error } = await supabase.rpc('admin_list_organizations');
 
@@ -74,7 +81,7 @@ export default async function OrganizationsPage() {
         subtitle={<>{organizations.length} organization{organizations.length !== 1 ? 's' : ''} total</>}
       />
 
-      <OrganizationsTable organizations={organizations} canEdit={!!canEdit} />
+      <OrganizationsTable organizations={organizations} canEdit={!!canEdit} billingLive={billingLive} />
     </div>
   );
 }

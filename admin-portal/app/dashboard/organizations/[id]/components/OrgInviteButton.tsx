@@ -3,6 +3,8 @@
 /**
  * OrgInviteButton - "Invite" on the organization page (BACKLOG-4007).
  *
+ * Shown only where the org page shows the Billing card (shouldShowBillingCard): while
+ * brokerage billing is dark, the Users page is the way to invite.
  * Opens InviteUserDialog with this organization prefilled and locked. It stays disabled
  * until the organization has a deal: an invite accepted before the deal exists would skip
  * the customer's billing setup. The license comes from the deal, so there is no license
@@ -22,6 +24,8 @@ export interface OrgInviteButtonProps {
   /** billing.view: without it the deal cannot be read, so the button stays off. */
   canViewBilling: boolean;
   hasDeal: boolean;
+  /** The org page shows the Billing card (shouldShowBillingCard). Without it: no button. */
+  showBillingCard: boolean;
   /** No member and no open invite yet. */
   isFirstInvite: boolean;
 }
@@ -33,10 +37,10 @@ export function inviteBlockedReason(p: Pick<OrgInviteButtonProps, 'canViewBillin
   return null;
 }
 
-export function OrgInviteButton({ organizationId, organizationName, canInvite, canViewBilling, hasDeal, isFirstInvite }: OrgInviteButtonProps) {
+export function OrgInviteButton({ organizationId, organizationName, canInvite, canViewBilling, hasDeal, showBillingCard, isFirstInvite }: OrgInviteButtonProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  if (!canInvite) return null;
+  if (!canInvite || !showBillingCard) return null;
   const blocked = inviteBlockedReason({ canViewBilling, hasDeal });
 
   return (

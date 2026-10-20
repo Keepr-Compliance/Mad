@@ -38,13 +38,27 @@ function fill() {
 }
 
 describe('OrgInviteButton gating', () => {
-  const base = { organizationId: 'org-a', organizationName: 'Org A', canInvite: true, canViewBilling: true, hasDeal: true, isFirstInvite: true };
+  const base = { organizationId: 'org-a', organizationName: 'Org A', canInvite: true, canViewBilling: true, hasDeal: true, showBillingCard: true, isFirstInvite: true };
   async function mount(p: Partial<typeof base>) {
     const { OrgInviteButton } = await import('@/app/dashboard/organizations/[id]/components/OrgInviteButton');
     return render(<OrgInviteButton {...base} {...p} />);
   }
   it('no users.edit: no button', async () => {
     const { container } = await mount({ canInvite: false });
+    expect(container.innerHTML).toBe('');
+  });
+  it('Billing card hidden (billing dark, not a test org): no button, even with a deal and every permission', async () => {
+    const { container } = await mount({ showBillingCard: false });
+    expect(container.innerHTML).toBe('');
+    expect(screen.queryByRole('button', { name: 'Invite' })).toBeNull();
+    expect(screen.queryByText('Set up billing first.')).toBeNull();
+  });
+  it('Billing card hidden and no deal: no button and no "Set up billing first."', async () => {
+    const { container } = await mount({ showBillingCard: false, hasDeal: false });
+    expect(container.innerHTML).toBe('');
+  });
+  it('Billing card hidden because billing.view is missing (billing not read): no button', async () => {
+    const { container } = await mount({ showBillingCard: false, canViewBilling: false, hasDeal: false });
     expect(container.innerHTML).toBe('');
   });
   it('no deal yet: disabled, "Set up billing first."', async () => {
