@@ -292,11 +292,21 @@ export function linkMessageToTransaction(messageId: string, transactionId: strin
  * ~22 s without it, ~9 s with it, the same as the old NULL write). With it the
  * arm probes `idx_communications_thread_id`. Pinned by the 3908 controls (C9).
  *
+ * Links whose deal has no `transactions` row are skipped (the `EXISTS` line):
+ * with foreign keys ON, choosing one would fail the messages -> transactions
+ * foreign key and roll back the whole unlink, so one such text blocked removal
+ * of every text in the batch. The text falls back to its newest link to a deal
+ * that exists, or NULL. Migration v76 keeps its frozen copy of this statement
+ * without that line (`V76_REPOINT_SQL`, migrationV76Sql.ts) and clears such a
+ * pick afterwards, so at upgrade an orphan-newest text stays NULL; here it
+ * re-points to the older real link. Pinned by the 3908 orphan controls.
+ *
  * Synchronous and through `dbRun`: it runs inside a `dbTransaction` body.
  */
 export const REPOINT_MESSAGE_TRANSACTION_SQL = sql`UPDATE messages SET transaction_id = (
       SELECT c.transaction_id FROM communications c
       WHERE c.transaction_id IS NOT NULL
+        AND EXISTS (SELECT 1 FROM transactions t WHERE t.id = c.transaction_id)
         AND (
           c.message_id = messages.id
           OR (

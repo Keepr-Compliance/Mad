@@ -226,9 +226,25 @@ describe("migration v76 — BACKLOG-4018, texts with an empty deal column on the
     // frozen literal (or remove this test).
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { V76_REPOINT_SQL } = require("../db/migrationV76Sql");
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { REPOINT_MESSAGE_TRANSACTION_SQL } = require("../db/messageDbService");
-    if (V76_REPOINT_SQL !== String(REPOINT_MESSAGE_TRANSACTION_SQL)) {
+    // Right-hand side replaced with the frozen literal (BACKLOG-3908 follow-up):
+    // the live statement now also skips links to deals with no transactions row.
+    const FROZEN_AT_BDC077644 = `UPDATE messages SET transaction_id = (
+      SELECT c.transaction_id FROM communications c
+      WHERE c.transaction_id IS NOT NULL
+        AND (
+          c.message_id = messages.id
+          OR (
+            c.message_id IS NULL
+            AND c.email_id IS NULL
+            AND c.thread_id IS NOT NULL
+            AND c.thread_id = messages.thread_id
+            AND +c.user_id = messages.user_id
+          )
+        )
+      ORDER BY c.linked_at DESC, c.rowid DESC
+      LIMIT 1
+    ) WHERE id = ?`;
+    if (V76_REPOINT_SQL !== FROZEN_AT_BDC077644) {
       throw new Error(
         "V76_REPOINT_SQL no longer matches REPOINT_MESSAGE_TRANSACTION_SQL. NEVER edit the frozen copy " +
           "in migrationV76Sql.ts (a merged migration never changes). Replace this test's right-hand side " +
