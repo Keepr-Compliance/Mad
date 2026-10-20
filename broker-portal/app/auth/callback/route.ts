@@ -26,6 +26,7 @@ import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
 import { clearInviteCookie, readInviteToken } from '@/lib/auth/inviteCookie';
 import { syncIdpNames } from '@/lib/auth/idpNames';
 import { isBrokerageSuspendedError } from '@/lib/auth/orgSuspension';
+import { isBillingSetupIncompleteError, jitTargetFor } from '@/lib/auth/jitIdentity';
 import {
   PORTAL_MEMBERSHIP_SELECT,
   classifyPortalAccess,
@@ -200,48 +201,20 @@ export async function GET(request: Request) {
         }
       }
 
-      // No membership and no pending invite - check if user can JIT-join an existing org
-      // Supports Azure AD (by tenant ID) and Google Workspace (by hosted domain)
-      const provider = user.app_metadata?.provider;
-
-      let jitProviderType: string | null = null;
-      let jitIdentifier: string | null = null;
-
-      if (provider === 'azure') {
-        const customClaims = user.user_metadata?.custom_claims as { tid?: string } | undefined;
-        const tenantId = customClaims?.tid;
-        if (tenantId) {
-          jitProviderType = 'azure_ad';
-          jitIdentifier = tenantId;
-        }
-      } else if (provider === 'google') {
-        // Only Google Workspace accounts with a corporate "hd" (hosted domain) claim
-        // can JIT-join. Consumer Gmail accounts are excluded:
-        //   - No hd claim        -> consumer Gmail (personal @gmail.com)
-        //   - hd = gmail.com     -> consumer with domain display
-        //   - hd = googlemail.com -> consumer alias domain
-        // Only proceed with JIT if hd is present and is a real corporate domain.
-        const hd = user.user_metadata?.hd as string | undefined;
-        const CONSUMER_GMAIL_DOMAINS = ['gmail.com', 'googlemail.com'];
-        const workspaceDomain = hd && !CONSUMER_GMAIL_DOMAINS.includes(hd.toLowerCase())
-          ? hd.toLowerCase()
-          : undefined;
-
-        if (workspaceDomain) {
-          jitProviderType = 'google_workspace';
-          jitIdentifier = workspaceDomain;
-        }
-      }
+      // No membership and no pending invite - check if user can JIT-join an existing org:
+      // Microsoft by tenant, Google Workspace by domain, from the identity THIS sign-in used
+      // (BACKLOG-4012; lib/auth/jitIdentity.ts). Consumer Google accounts never JIT-join.
+      const jitTarget = jitTargetFor(user);
 
       // A failed JIT join does not sign out yet: the owner of a personal
       // organization still gets the floor below. Its error code is kept for
       // everyone else.
       let jitErrorCode: string | null = null;
 
-      if (jitProviderType && jitIdentifier) {
+      if (jitTarget) {
         const { data: jitResult, error: jitError } = await supabase.rpc('jit_join_organization', {
-          p_provider_type: jitProviderType,
-          p_identifier: jitIdentifier,
+          p_provider_type: jitTarget.providerType,
+          p_identifier: jitTarget.identifier,
         });
         if (jitResult?.success) {
           if (process.env.NODE_ENV === 'development') {
@@ -253,12 +226,17 @@ export async function GET(request: Request) {
           console.error('JIT join RPC failed:', jitError);
         }
         // Determine appropriate error for user. BACKLOG-3853 PR-2B: the member
-        // trigger refuses a join into a suspended brokerage.
+        // trigger refuses a join into a suspended brokerage. BACKLOG-4012: the
+        // brokerage has not finished billing setup (the function's answer, or the
+        // member trigger's refusal). Anything else, reauth_required included, is
+        // org_not_setup.
         jitErrorCode = isBrokerageSuspendedError(jitError)
           ? 'brokerage_suspended'
-          : jitResult?.error === 'jit_disabled'
-            ? 'jit_disabled'
-            : 'org_not_setup';
+          : jitResult?.error === 'billing_setup_pending' || isBillingSetupIncompleteError(jitError)
+            ? 'billing_setup_pending'
+            : jitResult?.error === 'jit_disabled'
+              ? 'jit_disabled'
+              : 'org_not_setup';
       }
 
       // BACKLOG-3080: the owner of a personal organization gets the floor.

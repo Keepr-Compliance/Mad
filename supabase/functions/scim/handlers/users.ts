@@ -34,6 +34,11 @@ import {
   resolveRole,
   extractGroupRoleMapping,
 } from "../../_shared/groupRoleMapper.ts";
+import {
+  BILLING_SETUP_DETAIL,
+  BILLING_SETUP_INCOMPLETE,
+  isBillingSetupIncompleteError,
+} from "../../_shared/billingSetup.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers: Group Extraction & Role Resolution
@@ -243,6 +248,30 @@ async function refuseForSeats(
     scimTokenId: auth.tokenId,
   });
   return scimError(403, SEAT_LIMIT_DETAIL);
+}
+
+/**
+ * BACKLOG-4012: 403 while the brokerage's billing setup is pending (the member trigger refused
+ * the write). One request is one person; Entra retries the user on its next cycle, so they are
+ * provisioned after setup without any action. No email.
+ */
+async function refuseForBillingSetup(
+  supabaseAdmin: SupabaseClient,
+  auth: AuthResult,
+  p: { operation: "CREATE" | "UPDATE"; resourceId?: string; externalId?: string; body: unknown },
+): Promise<Response> {
+  await logScimOperation(supabaseAdmin, {
+    organizationId: auth.orgId,
+    operation: p.operation,
+    resourceType: "User",
+    resourceId: p.resourceId,
+    externalId: p.externalId,
+    requestPayload: p.body,
+    responseStatus: 403,
+    errorMessage: BILLING_SETUP_INCOMPLETE,
+    scimTokenId: auth.tokenId,
+  });
+  return scimError(403, BILLING_SETUP_DETAIL);
 }
 
 /** The org's default role, overridden by IdP group mapping when it resolves. */
@@ -477,6 +506,14 @@ export async function handleCreateUser(
       groups: created.groups,
     });
     if (memberError) {
+      if (isBillingSetupIncompleteError(memberError)) {
+        return refuseForBillingSetup(supabaseAdmin, auth, {
+          operation: "CREATE",
+          resourceId: existingByEmail.id,
+          externalId,
+          body,
+        });
+      }
       if (isSeatLimitError(memberError)) {
         return refuseForSeats(supabaseAdmin, deps, auth, {
           operation: "CREATE",
@@ -616,6 +653,9 @@ export async function handleCreateUser(
       .eq("id", newUser.id);
     if (removeError) {
       console.error(`[scim] could not remove users row ${newUser.id}:`, removeError.message);
+    }
+    if (isBillingSetupIncompleteError(newMemberError)) {
+      return refuseForBillingSetup(supabaseAdmin, auth, { operation: "CREATE", externalId, body });
     }
     if (isSeatLimitError(newMemberError)) {
       return refuseForSeats(supabaseAdmin, deps, auth, {
@@ -1003,6 +1043,9 @@ export async function handlePatchUser(
     .eq("user_id", userId);
 
   if (memberError) {
+    if (isBillingSetupIncompleteError(memberError)) {
+      return refuseForBillingSetup(supabaseAdmin, auth, { operation: "UPDATE", resourceId: userId, body });
+    }
     if (isSeatLimitError(memberError)) {
       const { data: who } = await supabaseAdmin
         .from("users")
