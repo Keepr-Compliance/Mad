@@ -3,11 +3,17 @@
  *
  * BACKLOG-4007 PR-3: who is sent to the setup guide (lib/billing/setupState.ts).
  */
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { billingSetupPending, setupLanding } from '@/lib/billing/setupState';
 import { SETUP_VIEW_ACTIVE, SETUP_VIEW_WAITING } from './fixtures';
 
 const ORG = 'ORG-4007-L';
-const client = (res: unknown) => ({ rpc: jest.fn(async () => res) });
+// The code under test only touches `rpc`; one cast here (not per call) gives it the
+// narrow client type while keeping the jest.Mock visible for assertions.
+type RpcClient = Pick<SupabaseClient, 'rpc'> & { rpc: jest.Mock };
+const fakeClient = (impl: () => Promise<unknown>): RpcClient =>
+  ({ rpc: jest.fn(impl) }) as unknown as RpcClient;
+const client = (res: unknown) => fakeClient(async () => res);
 
 describe('setupLanding / billingSetupPending', () => {
   it('a waiting deal sends a broker or admin to /dashboard/setup', async () => {
@@ -22,7 +28,7 @@ describe('setupLanding / billingSetupPending', () => {
     expect(await setupLanding(client({ data: SETUP_VIEW_ACTIVE, error: null }), { organizationId: ORG, role: 'admin' })).toBeNull();
     expect(await setupLanding(client({ data: { success: false, error: 'no_deal' }, error: null }), { organizationId: ORG, role: 'admin' })).toBeNull();
     expect(await setupLanding(client({ data: null, error: { code: '42501' } }), { organizationId: ORG, role: 'admin' })).toBeNull();
-    const throwing = { rpc: jest.fn(async () => { throw new Error('network'); }) };
+    const throwing = fakeClient(async () => { throw new Error('network'); });
     expect(await setupLanding(throwing, { organizationId: ORG, role: 'admin' })).toBeNull();
   });
 
