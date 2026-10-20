@@ -95,7 +95,7 @@ import {
   createThreadCommunicationReference,
   isThreadLinkedToTransaction,
 } from "../db/communicationDbService";
-import { getMessagesByContact } from "../db/messageDbService";
+import { getMessagesByContact, REPOINT_MESSAGE_TRANSACTION_SQL } from "../db/messageDbService";
 import { MESSAGE_ROSTER_SQL } from "../db/messageRosterDb";
 import { candidateMessageThreadsSql } from "../db/autoLinkSql";
 import { linkedTextMessageIdsForThreads } from "../db/transactionTextPagingMainDb";
@@ -304,5 +304,20 @@ describe("BACKLOG-3908 controls — unlink re-points the column to a remaining l
     await removeConversationFromB();
     expect(junction(TX_OTHER).n).toBe(1);
     expect(column()).toEqual([null, null]);
+  });
+
+  // The re-point runs once per removed text. Both arms must be index probes:
+  // a plan on idx_communications_user_id scans every link row the user has,
+  // per text (measured ~2.3x slower on a 671k-message store).
+  it("C9 plan: the re-point probes the message_id and thread_id indexes, never the user_id index", () => {
+    const plan = (
+      realDb!.prepare(`EXPLAIN QUERY PLAN ${REPOINT_MESSAGE_TRANSACTION_SQL}`).all("m-3908-1") as Array<{
+        detail: string;
+      }>
+    ).map((r) => r.detail);
+    expect(plan.some((d) => d.includes("USING INDEX idx_communications_message_id"))).toBe(true);
+    expect(plan.some((d) => d.includes("USING INDEX idx_communications_thread_id"))).toBe(true);
+    expect(plan.some((d) => d.includes("idx_communications_user_id"))).toBe(false);
+    expect(plan.some((d) => /SCAN c\b/.test(d))).toBe(false);
   });
 });
