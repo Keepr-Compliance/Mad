@@ -101,7 +101,7 @@ export function BillingStep({ organizationId, view }: BillingStepProps) {
           <Row label="Billing starts" value={formatDateOnly(view.billing_starts_on)} />
         </dl>
         <p className="mt-3 text-sm text-gray-600">
-          Billing starts on this date or the day you confirm, whichever is later. Invoices are due in 15 days.
+          Invoices are due in 15 days.
         </p>
         <div className="mt-3 text-sm">
           {asked === 'sent' ? (

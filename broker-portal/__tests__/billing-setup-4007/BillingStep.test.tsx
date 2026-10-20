@@ -115,3 +115,27 @@ describe('BillingStep radio labels', () => {
     }
   });
 });
+
+// Founder decision: "Billing starts" never shows a past date. broker_get_billing_setup returns
+// billing_starts_on = greatest(business date, start_date) (migration 20261020100000, line ~698); the
+// step shows that value and never start_date. The sentence explaining "whichever is later" is gone.
+describe('BillingStep billing start date', () => {
+  it('a start date in the past shows the business date (billing_starts_on), not start_date', () => {
+    const view = { ...SETUP_VIEW_WAITING, start_date: '2026-10-05', billing_starts_on: '2026-10-20' };
+    render(<BillingStep organizationId={ORG} view={view} />);
+    expect(screen.getByText('October 20, 2026')).toBeTruthy();
+    expect(screen.queryByText('October 5, 2026')).toBeNull();
+  });
+
+  it('a future start date shows that date', () => {
+    const view = { ...SETUP_VIEW_WAITING, start_date: '2026-11-03', billing_starts_on: '2026-11-03' };
+    render(<BillingStep organizationId={ORG} view={view} />);
+    expect(screen.getByText('November 3, 2026')).toBeTruthy();
+  });
+
+  it('no longer says "whichever is later"; keeps the 15-day invoice line', () => {
+    render(<BillingStep organizationId={ORG} view={SETUP_VIEW_WAITING} />);
+    expect(screen.queryByText(/whichever is later/i)).toBeNull();
+    expect(screen.getByText('Invoices are due in 15 days.')).toBeTruthy();
+  });
+});
