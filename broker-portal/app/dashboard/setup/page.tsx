@@ -16,7 +16,7 @@ import { notFound, redirect } from 'next/navigation';
 import { getImpersonationSession } from '@/lib/impersonation';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
 import { readBillingSetup, setupGuideApplies, setupRoleOf } from '@/lib/billing/setupState';
-import { setupStepFor } from '@/lib/billing/setupSteps';
+import { setupStepFor, signInProviderOf } from '@/lib/billing/setupSteps';
 import { NothingToSetUp, SetupGuide } from '@/components/setup/SetupGuide';
 
 type SearchParams = Record<string, string | string[] | undefined>;
@@ -40,7 +40,8 @@ export default async function SetupGuideRoute({ searchParams }: { searchParams?:
 
   const sp = (await searchParams) ?? {};
   const requested = typeof sp.step === 'string' ? sp.step : null;
-  const signInProvider = (portal.user.app_metadata?.provider as string | undefined) ?? null;
+  // SR F3 (PR-3 review): any Microsoft identity on the account, not only the first provider.
+  const signInProvider = signInProviderOf(portal.user);
   const step = setupStepFor({
     state: view.state,
     role: who.role,
@@ -57,6 +58,7 @@ export default async function SetupGuideRoute({ searchParams }: { searchParams?:
       view={view}
       isGoogleSignIn={signInProvider === 'google'}
       role={who.role}
+      billingLogin={step === 'done' && typeof sp.login === 'string' ? sp.login.slice(0, 64) : null}
     />
   );
 }

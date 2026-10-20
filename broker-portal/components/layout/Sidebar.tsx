@@ -58,6 +58,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
+  Contact,
   CreditCard,
   FileText,
   Files,
@@ -70,6 +71,7 @@ import {
 } from 'lucide-react';
 import { AppMark, Drawer, Wordmark } from '@keepr/ui';
 import { resolveViewerName } from '@/lib/utils/userDisplay';
+import { mayUsePeople } from '@/lib/people-roles';
 
 interface NavItem {
   label: string;
@@ -121,6 +123,12 @@ export function insertAfter(items: NavItem[], href: string, item: NavItem): NavI
   const i = items.findIndex((x) => x.href === href);
   return i < 0 ? [...items, item] : [...items.slice(0, i + 1), item, ...items.slice(i + 1)];
 }
+
+/**
+ * BACKLOG-4007 PR-4 (founder e8571c1f): People, for admin, IT admin and broker
+ * (lib/people-roles.ts). After the role's own entries, before Billing.
+ */
+const peopleNavItem: NavItem = { label: 'People', href: '/dashboard/people', icon: Contact };
 
 /** BACKLOG-3844: right before My Account, when the layout says so. */
 const billingNavItem: NavItem = { label: 'Billing', href: '/dashboard/billing', icon: CreditCard };
@@ -211,6 +219,7 @@ export function Sidebar({
   const showMemberNav = !showFloorNav && (isImpersonating || role !== 'it_admin');
   const showAdminNav =
     !showFloorNav && !isImpersonating && (role === 'admin' || role === 'it_admin');
+  const showPeople = !showFloorNav && !isImpersonating && mayUsePeople(role);
   const showChecklistsEntry = showChecklists && !isImpersonating;
   const showChecklistsGrayed =
     !showChecklistsEntry && !!checklistsUnavailableLabel && !isImpersonating && !showFloorNav;
@@ -308,6 +317,7 @@ export function Sidebar({
         {showMemberNav && memberNavItems.map(r)}
         {!showAdminNav && checklistsSlot && r(checklistsNavItem)}
         {showAdminNav && adminItems.map(r)}
+        {showPeople && r(peopleNavItem)}
         {showBilling && !isImpersonating && r(billingNavItem)}
         {personalNavItems.map(r)}
       </>

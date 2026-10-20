@@ -94,7 +94,7 @@ export const MY_TRANSACTIONS_PATHS = ['/dashboard/my-transactions'] as const;
 
 /**
  * Billing (BACKLOG-3844): passed through for the OWNER of a personal
- * organization only. A brokerage agent never gets it (their brokerage pays).
+ * organization, and (BACKLOG-4007 PR-4) for the brokerage's billing-only login. A brokerage agent never gets it (their brokerage pays).
  * Full-portal users are admitted above. The flag and the rest of the rule are
  * NOT read here; app/dashboard/billing/page.tsx refuses on its own, and that
  * refusal is the gate.
@@ -112,13 +112,25 @@ function isUnder(path: string, base: string): boolean {
  * `/dashboard` itself is matched exactly: every dashboard route starts with it,
  * so treating it as a prefix would open everything.
  */
-export function mayOpenDashboardPath(access: PortalAccess, pathname: string): boolean {
+export function mayOpenDashboardPath(
+  access: PortalAccess,
+  pathname: string,
+  opts: { billingContact?: boolean } = {}
+): boolean {
   if (access.kind === 'full') return true;
   if (access.kind === 'none') return false;
 
   if (pathname === '/dashboard') return true;
   for (const base of FLOOR_PATHS) {
     if (base !== '/dashboard' && isUnder(pathname, base)) return true;
+  }
+  // BACKLOG-4007 PR-4: the brokerage's billing-only login (an unlicensed member linked from the
+  // live billing contact; lib/auth/billingContact.ts asks the database) also opens Billing.
+  // Nothing else: the page refuses on its own as well.
+  if (access.kind === 'floor' && access.via === 'unlicensed' && opts.billingContact === true) {
+    for (const base of BILLING_PATHS) {
+      if (isUnder(pathname, base)) return true;
+    }
   }
   // BACKLOG-3917: a deactivated member opens the floor paths only. So does a
   // member with no license assigned (BACKLOG-3851). A deactivated member who

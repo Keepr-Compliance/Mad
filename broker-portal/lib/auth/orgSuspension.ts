@@ -43,6 +43,14 @@ export function brokerageOrgOf(access: PortalAccess | undefined | null): string 
 export async function readOrgBillingSuspended(client: RpcReader, access: PortalAccess | undefined | null): Promise<boolean | null> {
   const org = brokerageOrgOf(access);
   if (!org) return false;
+  return readOrgBillingSuspendedFor(client, org);
+}
+
+/**
+ * The same question for one organization id. BACKLOG-4007 PR-4: the Billing page asks it for
+ * the billing-only login, whose access (floor via 'unlicensed') brokerageOrgOf never names.
+ */
+export async function readOrgBillingSuspendedFor(client: RpcReader, org: string): Promise<boolean | null> {
   try {
     const { data, error } = await client.rpc('org_billing_suspended', { p_org: org });
     if (error) return null;

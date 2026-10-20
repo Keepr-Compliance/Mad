@@ -9,7 +9,7 @@
 
 import { baseLayout } from './base-layout';
 import type { EmailContent, InviteEmailParams } from '../types';
-import { UNLICENSED_INVITE_LINE } from '@/lib/invite/validateResult';
+import { BILLING_ONLY_INVITE_LINE, UNLICENSED_INVITE_LINE } from '@/lib/invite/validateResult';
 
 /**
  * Build the invite email content (subject, HTML, plain text).
@@ -25,13 +25,15 @@ export function buildInviteEmail(params: InviteEmailParams): EmailContent {
     expiresInDays,
     isResend = false,
     withoutLicense = false,
+    billingOnly = false,
     recipientFirstName,
   } = params;
 
   // BACKLOG-3851 PR-2f
   const firstName = recipientFirstName?.trim() || '';
   const greeting = firstName ? `Hi ${firstName},` : '';
-  const unlicensedLine = withoutLicense ? UNLICENSED_INVITE_LINE : '';
+  // BACKLOG-4007 PR-4: a billing-only login says what it opens, not "until your admin assigns one".
+  const unlicensedLine = billingOnly ? BILLING_ONLY_INVITE_LINE : withoutLicense ? UNLICENSED_INVITE_LINE : '';
 
   const isOrgInvite = organizationName && organizationName !== 'Keepr';
 

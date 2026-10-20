@@ -10,7 +10,9 @@
  *      its place.
  *   3. Not signed in                             -> /login.
  *   4. billingCapabilities(...) is null          -> 404: a brokerage agent, a
- *      failed membership read, no membership.
+ *      failed membership read, no membership. BACKLOG-4007 PR-4: an unlicensed
+ *      member is admitted only when the database says they are the brokerage's
+ *      billing-only login (org_billing_contact_login, read by getPortalAccess).
  *   5. BACKLOG-3878: a suspended brokerage member (organization page)
  *      -> /dashboard/account. The brokerage's bill is not theirs. A suspended
  *      personal owner IS shown the page: it is where they land.
@@ -42,6 +44,8 @@ import { suspendedForDispute } from '@/lib/billing/suspensionCause';
 import { oldestOverdueInvoiceUrl } from '@/lib/billing/orgPayLink';
 import { ORG_PAYER_ROLES } from '@/components/billing/orgPayerRoles';
 import type { OrgSuspensionReason } from '@/components/billing/OrgSuspendedBanner';
+import { BILLING_CONTACT_ROLE } from '@/lib/auth/billingContact';
+import { readOrgBillingSuspendedFor } from '@/lib/auth/orgSuspension';
 
 const SITUATION_3844 = {
   agentPlan: 'none',
@@ -109,16 +113,27 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
   const portal = await getPortalAccess();
   if (!portal) redirect('/login');
 
+  // BACKLOG-4007 PR-4: the brokerage's billing-only login (an unlicensed member linked from the
+  // live billing contact). getPortalAccess asked the database; false for everyone else.
+  const billingContact = portal.billingContact === true;
   const caps = billingCapabilities({
     access: portal.access,
     isImpersonating: false,
     enabled: true,
     ...SITUATION_3844,
+    billingContact,
   });
   if (!caps) notFound();
   if (caps.kind !== 'personal' && portal.suspended === true) redirect('/dashboard/account');
-  if (caps.kind !== 'personal') {
-    if (portal.orgSuspended === true && portal.access.kind === 'full') {
+  if (caps.kind !== 'personal' && portal.access.kind !== 'none' && portal.access.kind !== 'unknown') {
+    const organizationId = portal.access.organizationId;
+    // The billing-only login's access (floor via 'unlicensed') is never asked about the
+    // brokerage's suspension by getPortalAccess; ask here, after admission.
+    const orgSuspended = billingContact
+      ? await readOrgBillingSuspendedFor(portal.supabase, organizationId)
+      : portal.orgSuspended;
+    const role = billingContact ? BILLING_CONTACT_ROLE : portal.access.role;
+    if (orgSuspended === true && (portal.access.kind === 'full' || billingContact)) {
       // BACKLOG-3853 PR-2B: read after admission. The reason is service-side only.
       const orgCaps = billingCapabilities({
         access: portal.access,
@@ -126,25 +141,26 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
         enabled: true,
         ...SITUATION_3844,
         orgSuspended: true,
+        billingContact,
       });
       if (!orgCaps) notFound();
-      const reason = await orgSuspensionReason(portal.access.organizationId);
-      const organizationName = await orgName(portal.access.organizationId);
+      const reason = await orgSuspensionReason(organizationId);
+      const organizationName = await orgName(organizationId);
       // "Pay overdue invoice": non-payment only, for the roles that can pay; Stripe trouble hides it.
-      const stripe = reason === 'non_payment' && ORG_PAYER_ROLES.includes(portal.access.role) ? stripeOrNull() : null;
+      const stripe = reason === 'non_payment' && ORG_PAYER_ROLES.includes(role) ? stripeOrNull() : null;
       const payUrl = stripe
         ? await oldestOverdueInvoiceUrl({
             service: createServiceClient(),
             stripe,
             mode: currentStripeMode(),
-            organizationId: portal.access.organizationId,
+            organizationId,
           })
         : null;
       return (
         <BillingPage
           caps={orgCaps}
           orgBillingSetUp={SITUATION_3844.orgBillingSetUp}
-          orgSuspension={{ reason, role: portal.access.role, organizationName, payUrl }}
+          orgSuspension={{ reason, role, organizationName, payUrl }}
         />
       );
     }

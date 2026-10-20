@@ -8,6 +8,8 @@
  * Who (the access dimension, from classifyPortalAccess in lib/auth/membership.ts):
  *   - the OWNER of a personal organization  -> the personal page;
  *   - a full-portal user (broker, admin, it_admin) -> the organization page;
+ *   - the brokerage's billing-only login (BACKLOG-4007 PR-4) -> the organization
+ *     page, read-only: price, and payment/invoices once billing is set up;
  *   - everyone else -> null (the page answers 404): a brokerage agent (their
  *     brokerage pays; founder decision, no billing page at all), a failed
  *     membership read (fail closed), no membership, and any support /
@@ -65,6 +67,12 @@ export interface BillingSituation {
    * Pay button is BACKLOG-3855's). Organization pages only.
    */
   orgSuspended?: boolean;
+  /**
+   * BACKLOG-4007 PR-4: the person is the brokerage's billing-only login (floor via 'unlicensed',
+   * linked from the live billing contact; lib/auth/billingContact.ts). Read by the server; never
+   * true while impersonating.
+   */
+  billingContact?: boolean;
 }
 
 export interface BillingCapabilities {
@@ -149,11 +157,35 @@ function organization(role: string, s: BillingSituation): BillingCapabilities {
   };
 }
 
+/**
+ * BACKLOG-4007 PR-4: the billing-only login. It pays (sees the price, and the payment and
+ * invoice blocks once the brokerage's billing is set up) and manages nothing: no seats, no
+ * licenses, no Users page, nothing to buy.
+ */
+function billingContact(s: BillingSituation): BillingCapabilities {
+  const money = s.orgBillingSetUp;
+  return {
+    kind: 'organization',
+    blocks: money ? ['plan', 'seats', 'payment', 'invoices'] : ['plan', 'seats'],
+    showPrice: true,
+    canPay: money,
+    canUpdateCard: false,
+    canEndPlanNow: false,
+    canSeeInvoices: money,
+    canPurchase: false,
+    canManageLicenses: false,
+    canAddSeats: false,
+    showManageUsersLink: false,
+    primaryAction: null,
+  };
+}
+
 /** What the Billing page shows this person, or null when it must answer 404. */
 export function billingCapabilities(s: BillingSituation): BillingCapabilities | null {
   if (!s.enabled || s.isImpersonating || !s.access) return null;
   const a = s.access;
   if (a.kind === 'floor' && a.via === 'personal_owner') return personal(s);
+  if (a.kind === 'floor' && a.via === 'unlicensed' && s.billingContact === true) return billingContact(s);
   if (a.kind === 'full' && (ORG_ROLES as readonly string[]).includes(a.role)) {
     return organization(a.role, s);
   }
@@ -165,7 +197,7 @@ export function billingCapabilities(s: BillingSituation): BillingCapabilities | 
  * dimension only: the situation changes WHICH blocks, never WHO.
  */
 export function billingNavVisible(
-  s: Pick<BillingSituation, 'access' | 'isImpersonating' | 'enabled'>
+  s: Pick<BillingSituation, 'access' | 'isImpersonating' | 'enabled' | 'billingContact'>
 ): boolean {
   return (
     billingCapabilities({

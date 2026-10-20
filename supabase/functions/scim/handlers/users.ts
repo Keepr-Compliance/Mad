@@ -163,7 +163,7 @@ async function writeScimMembership(
   const now = new Date().toISOString();
   const { data: invites, error: inviteError } = await supabaseAdmin
     .from("organization_members")
-    .select("id, role, invited_email")
+    .select("id, role, invited_email, provisioning_metadata")
     .eq("organization_id", p.orgId)
     .is("user_id", null)
     // BACKLOG-3851 PR-2f: an invitation sent without a license ('unassigned') is claimed
@@ -172,7 +172,17 @@ async function writeScimMembership(
     .in("license_status", ["pending", "unassigned"]);
   if (inviteError) return { error: inviteError, claimedInvite: false };
 
-  const invite = ((invites ?? []) as Array<{ id: string; role: string; invited_email: string | null }>)
+  // BACKLOG-4007 PR-4: the brokerage's billing-only login is never claimed here. Claiming writes
+  // 'active', which would turn the one login that holds no seat into a licensed member. The
+  // person is provisioned like anyone else (the insert below); the billing-only invitation is
+  // left as it is.
+  const invite = ((invites ?? []) as Array<{
+    id: string;
+    role: string;
+    invited_email: string | null;
+    provisioning_metadata: Record<string, unknown> | null;
+  }>)
+    .filter((m) => m.provisioning_metadata?.billing_only !== true)
     .find((m) => (m.invited_email ?? "").trim().toLowerCase() === p.email);
 
   if (invite) {

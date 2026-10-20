@@ -45,5 +45,6 @@ export default async function SettingsPage() {
 
   const features = await resolveOrgSettingsFeatures(access.organizationId);
 
+  // BACKLOG-4007 PR-4: People is its own route (/dashboard/people), open to brokers too.
   return <OrgSettingsClient features={features} />;
 }

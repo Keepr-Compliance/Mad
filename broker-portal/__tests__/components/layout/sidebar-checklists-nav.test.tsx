@@ -106,6 +106,7 @@ describe('Sidebar — Checklists placement', () => {
       'Users',
       CHECKLISTS,
       'Org Settings',
+      'People',
       'My Account',
       'Sign Out',
     ]);
@@ -113,18 +114,19 @@ describe('Sidebar — Checklists placement', () => {
 
   it('full order for it_admin, which has no member nav', () => {
     renderSidebar({ role: 'it_admin', displayRole: 'it_admin', showChecklists: true });
-    expect(navLabels()).toEqual(['Users', CHECKLISTS, 'Org Settings', 'My Account', 'Sign Out']);
+    expect(navLabels()).toEqual(['Users', CHECKLISTS, 'Org Settings', 'People', 'My Account', 'Sign Out']);
   });
 
   it('full order for broker, which has no Users entry: after Support, before My Account', () => {
     renderSidebar({ role: 'broker', displayRole: 'broker', showChecklists: true });
-    expect(navLabels()).toEqual(['Dashboard', 'Submissions', 'Support', CHECKLISTS, 'My Account', 'Sign Out']);
+    expect(navLabels()).toEqual(['Dashboard', 'Submissions', 'Support', CHECKLISTS, 'People', 'My Account', 'Sign Out']);
   });
 
   it.each([
-    ['broker', ['Dashboard', 'Submissions', 'Support', 'My Account', 'Sign Out']],
-    ['admin', ['Dashboard', 'Submissions', 'Support', 'Users', 'Org Settings', 'My Account', 'Sign Out']],
-    ['it_admin', ['Users', 'Org Settings', 'My Account', 'Sign Out']],
+    // BACKLOG-4007 PR-4: People for all three (founder e8571c1f), before Billing / My Account.
+    ['broker', ['Dashboard', 'Submissions', 'Support', 'People', 'My Account', 'Sign Out']],
+    ['admin', ['Dashboard', 'Submissions', 'Support', 'Users', 'Org Settings', 'People', 'My Account', 'Sign Out']],
+    ['it_admin', ['Users', 'Org Settings', 'People', 'My Account', 'Sign Out']],
   ] as const)('leaves the %s nav untouched when off', (role, expected) => {
     renderSidebar({ role, displayRole: role, showChecklists: false });
     expect(navLabels()).toEqual(expected);
