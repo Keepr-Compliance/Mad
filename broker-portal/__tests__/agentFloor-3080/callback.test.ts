@@ -49,15 +49,23 @@ type Provider = 'email' | 'azure' | 'google';
 
 function signedIn(provider: Provider = 'email'): void {
   mockExchangeCodeForSession.mockResolvedValue({ error: null });
-  const user_metadata =
+  // BACKLOG-4012: the callback reads the identity this sign-in used (user.identities,
+  // newest updated_at), not app_metadata.provider / user_metadata.
+  const identity_data =
     provider === 'azure'
       ? { custom_claims: { tid: TENANT } }
       : provider === 'google'
-        ? { hd: 'fixture-workspace.example.test' }
+        ? { custom_claims: { hd: 'fixture-workspace.example.test' } }
         : {};
   mockGetUser.mockResolvedValue({
     data: {
-      user: { id: FIXTURE_USER_ID, email: EMAIL, app_metadata: { provider }, user_metadata },
+      user: {
+        id: FIXTURE_USER_ID,
+        email: EMAIL,
+        app_metadata: { provider },
+        user_metadata: identity_data,
+        identities: [{ provider, updated_at: '2026-10-20T12:00:00Z', identity_data }],
+      },
     },
   });
 }

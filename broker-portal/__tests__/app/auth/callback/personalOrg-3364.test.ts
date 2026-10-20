@@ -146,6 +146,8 @@ describe('a solo user holding only a personal organization', () => {
     signedIn({
       app_metadata: { provider: 'azure' },
       user_metadata: { custom_claims: { tid: 'fixture-tenant-3364' } },
+      // BACKLOG-4012: JIT reads the identity this sign-in used.
+      identities: [{ provider: 'azure', updated_at: '2026-10-20T12:00:00Z', identity_data: { custom_claims: { tid: 'fixture-tenant-3364' } } }],
     });
     given([personalMembership()]);
     mockRpc.mockResolvedValue({

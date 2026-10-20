@@ -19,6 +19,7 @@ import {
   SEAT_LIMIT_ERROR,
   type SeatNotifyDeps,
 } from '../../supabase/functions/scim/shared/seatLimit';
+import { BILLING_SETUP_DETAIL } from '../../supabase/functions/_shared/billingSetup';
 
 // users.ts is Deno source (jsr: and .ts-suffixed imports, the Deno global in auth.ts), which
 // the repo's tsc configs cannot compile; jest loads it fine. So it is required, not
@@ -55,7 +56,18 @@ interface FakeOpts {
   failWrite?: { table: string; op: 'insert' | 'update' | 'delete'; error: Err };
   /** Make user_id_for_auth_email return this error. */
   failLookup?: Err;
+  /**
+   * BACKLOG-4012: the brokerage's billing setup is pending. Emulates
+   * _billing_guard_idp_join_while_setup_pending as the caller here (service_role) meets it: an
+   * IdP-origin INSERT, or a re-activation of an IdP-origin row (suspended/expired -> live), is
+   * refused with P0001 billing_setup_incomplete. It is a BEFORE trigger, so it answers before
+   * the seat rule and the auth.users key. Error shape from keepr-test control C2.
+   */
+  billingPending?: boolean;
 }
+
+const IDP_ORIGINS = ['jit', 'scim', 'directory_sync'];
+const BILLING_REFUSAL = { code: 'P0001', message: 'billing_setup_incomplete', details: null, hint: 'This brokerage has not finished billing setup in Keepr. People can join once it is done.' };
 
 const ORG = 'org-1';
 const NOW = Date.parse('2026-10-16T12:00:00Z');
@@ -103,6 +115,10 @@ function makeDb(tables: Tables, opts: FakeOpts = {}) {
       }
       if (op === 'insert') {
         const row: Row = { id: `${table}-new-${++seq}`, ...payload };
+        if (table === 'organization_members' && opts.billingPending && IDP_ORIGINS.includes(String(row.provisioned_by))) {
+          writes.push({ table, op, payload, rows: [] });
+          return { data: null, error: BILLING_REFUSAL };
+        }
         if (table === 'organization_members') {
           if (opts.full && holdsSeat(row)) {
             writes.push({ table, op, payload, rows: [] });
@@ -123,6 +139,17 @@ function makeDb(tables: Tables, opts: FakeOpts = {}) {
       }
       const hit = rows.filter((r) => filters.every((f) => f(r)));
       if (op === 'update') {
+        if (table === 'organization_members' && opts.billingPending) {
+          for (const r of hit) {
+            const next = { ...r, ...payload };
+            if (IDP_ORIGINS.includes(String(next.provisioned_by))
+                && ['suspended', 'expired'].includes(String(r.license_status))
+                && ['active', 'pending', 'unassigned'].includes(String(next.license_status))) {
+              writes.push({ table, op, payload, rows: [] });
+              return { data: null, error: BILLING_REFUSAL };
+            }
+          }
+        }
         if (table === 'organization_members' && opts.full) {
           for (const r of hit) {
             const next = { ...r, ...payload };
@@ -574,6 +601,70 @@ describe('PATCH active', () => {
     const res = await handlePatchUser(patchReq(active(false)), 'u-p', AUTH as never, db.client as never, BASE, deps().d);
     expect(res.status).toBe(500);
     expect(userWrites(db.writes)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4012 (S1): billing setup pending -> 403, one log row, nothing written, no email
+// ---------------------------------------------------------------------------
+
+describe('billing setup pending (BACKLOG-4012)', () => {
+  const billingLog = (t: Tables) => t.scim_sync_log.filter((r) => r.error_message === 'billing_setup_incomplete');
+
+  it('POST existing person: 403 with the setup detail, no membership, users row untouched, one log row, no email', async () => {
+    const t = baseTables({ users: [...baseTables().users.filter((u) => u.id !== 'u-p'), { id: 'u-q', email: 'q@example.test' }] });
+    const db = makeDb(t, { billingPending: true, authIds: ['u-q'] });
+    const { d, fetch } = deps();
+    const res = await handleCreateUser(postReq('q@example.test'), AUTH as never, db.client as never, BASE, d);
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.detail).toBe(BILLING_SETUP_DETAIL);
+    expect(body.status).toBe('403');
+    expect(t.organization_members.some((m) => m.user_id === 'u-q')).toBe(false);
+    expect(userWrites(db.writes)).toEqual([]);
+    expect(billingLog(t)).toHaveLength(1);
+    expect(billingLog(t)[0]).toMatchObject({ response_status: 403, operation: 'CREATE' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('POST brand-new email: 403 with the setup detail and the fresh users row is removed', async () => {
+    const t = baseTables();
+    const db = makeDb(t, { billingPending: true, authIds: [] });
+    const { d, fetch } = deps();
+    const res = await handleCreateUser(postReq('new@example.test'), AUTH as never, db.client as never, BASE, d);
+    expect(res.status).toBe(403);
+    expect((await res.json()).detail).toBe(BILLING_SETUP_DETAIL);
+    expect(t.users.some((u) => u.email === 'new@example.test')).toBe(false);
+    expect(userWrites(db.writes).map((w) => w.op)).toEqual(['insert', 'delete']);
+    expect(billingLog(t)).toHaveLength(1);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('PATCH active:true on a suspended SCIM member: 403, still suspended, users row not written', async () => {
+    const t = baseTables();
+    t.users.find((u) => u.id === 'u-p')!.suspended_at = '2026-10-01T00:00:00Z';
+    t.organization_members.push({ id: 'm-p', organization_id: ORG, user_id: 'u-p', role: 'agent', license_status: 'suspended',
+      provisioned_by: 'scim', group_sync_enabled: false });
+    const db = makeDb(t, { billingPending: true, authIds: ['u-p', 'u-it', 'u-ad'] });
+    const { d, fetch } = deps();
+    const res = await handlePatchUser(patchReq([{ op: 'replace', path: 'active', value: true }]), 'u-p', AUTH as never, db.client as never, BASE, d);
+    expect(res.status).toBe(403);
+    expect((await res.json()).detail).toBe(BILLING_SETUP_DETAIL);
+    expect(t.organization_members.find((m) => m.id === 'm-p')?.license_status).toBe('suspended');
+    expect(userWrites(db.writes)).toEqual([]);
+    expect(billingLog(t)).toHaveLength(1);
+    expect(billingLog(t)[0]).toMatchObject({ operation: 'UPDATE', resource_id: 'u-p' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("POST that claims the person's staff invite still works (invite-based, not blocked)", async () => {
+    const t = baseTables({ users: [...baseTables().users.filter((u) => u.id !== 'u-p'), { id: 'u-q', email: 'q@example.test' }] });
+    t.organization_members.push({ id: 'm-inv', organization_id: ORG, user_id: null, role: 'broker', license_status: 'pending',
+      invited_email: 'q@example.test', provisioned_by: 'invite', invitation_token: 'tok', invitation_expires_at: '2026-10-20T00:00:00Z' });
+    const db = makeDb(t, { billingPending: true, authIds: ['u-q'] });
+    const res = await handleCreateUser(postReq('q@example.test'), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(201);
+    expect(t.organization_members.find((m) => m.id === 'm-inv')).toMatchObject({ user_id: 'u-q', license_status: 'active' });
   });
 });
 

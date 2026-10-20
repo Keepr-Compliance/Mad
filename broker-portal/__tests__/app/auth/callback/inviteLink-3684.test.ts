@@ -61,6 +61,14 @@ function signedIn(provider: 'email' | 'azure' = 'email'): void {
         email: EMAIL,
         app_metadata: { provider },
         user_metadata: provider === 'azure' ? { custom_claims: { tid: 'fixture-tenant-3684' } } : {},
+        // BACKLOG-4012: JIT reads the identity this sign-in used.
+        identities: [
+          {
+            provider,
+            updated_at: '2026-10-20T12:00:00Z',
+            identity_data: provider === 'azure' ? { custom_claims: { tid: 'fixture-tenant-3684' } } : {},
+          },
+        ],
       },
     },
   });

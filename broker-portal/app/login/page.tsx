@@ -34,6 +34,9 @@ const ERROR_MESSAGES: Record<string, string> = {
   invite_failed: "We couldn't accept your invitation. Open the invitation link again and try once more.",
   // BACKLOG-3853 PR-2B: the brokerage's account is suspended (plan v2 G5 text).
   brokerage_suspended: BROKERAGE_SUSPENDED_ERROR,
+  // BACKLOG-4012: auto-join waits until the brokerage has finished billing setup.
+  billing_setup_pending:
+    'Your brokerage is still finishing its Keepr setup. Try signing in again once your brokerage admin has completed it.',
 };
 
 // Option A brand palette (matches the app mark + landing; not in the sky-blue

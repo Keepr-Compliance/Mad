@@ -61,7 +61,17 @@ function arrange(branch: Branch, syncReply: () => Promise<unknown> = async () =>
   const user_metadata =
     branch === 'jit' ? AZURE_METADATA : { ...AZURE_METADATA, custom_claims: { ...(AZURE_METADATA.custom_claims as object), tid: undefined } };
   mockGetUser.mockResolvedValue({
-    data: { user: { id: FIXTURE_USER_ID, email: EMAIL, app_metadata: { provider }, user_metadata } },
+    data: {
+      user: {
+        id: FIXTURE_USER_ID,
+        email: EMAIL,
+        app_metadata: { provider },
+        user_metadata,
+        // BACKLOG-4012: JIT reads the identity this sign-in used (Azure identity_data has the
+        // same key set as user_metadata here).
+        identities: [{ provider, updated_at: '2026-10-20T12:00:00Z', identity_data: user_metadata }],
+      },
+    },
   });
   const rows: Record<Branch, Row[]> = {
     full: [brokerageMembership('broker')],
