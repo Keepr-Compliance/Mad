@@ -294,11 +294,15 @@ export function unlinkMessageFromTransaction(messageId: string): void {
  * second resolution). The deal-lock check reads this column when no deal is
  * named (`dealLockState.ts`, `MESSAGE_TRANSACTION_ID_SQL`).
  *
+ * The unary `+` on `c.user_id` keeps the planner off `idx_communications_user_id`:
+ * without it the thread arm scans every link row the user has, once per
+ * message (measured: a 5,040-text bulk remove on a 671k-message store took
+ * ~22 s without it, ~9 s with it, the same as the old NULL write). With it the
+ * arm probes `idx_communications_thread_id`. Pinned by the 3908 controls (C9).
+ *
  * Synchronous and through `dbRun`: it runs inside a `dbTransaction` body.
  */
-export function repointMessageTransactionSync(messageId: string): void {
-  dbRun(
-    sql`UPDATE messages SET transaction_id = (
+export const REPOINT_MESSAGE_TRANSACTION_SQL = sql`UPDATE messages SET transaction_id = (
       SELECT c.transaction_id FROM communications c
       WHERE c.transaction_id IS NOT NULL
         AND (
@@ -308,14 +312,15 @@ export function repointMessageTransactionSync(messageId: string): void {
             AND c.email_id IS NULL
             AND c.thread_id IS NOT NULL
             AND c.thread_id = messages.thread_id
-            AND c.user_id = messages.user_id
+            AND +c.user_id = messages.user_id
           )
         )
       ORDER BY c.linked_at DESC, c.rowid DESC
       LIMIT 1
-    ) WHERE id = ?`,
-    [messageId],
-  );
+    ) WHERE id = ?`;
+
+export function repointMessageTransactionSync(messageId: string): void {
+  dbRun(REPOINT_MESSAGE_TRANSACTION_SQL, [messageId]);
 }
 
 /**
