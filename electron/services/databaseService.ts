@@ -2665,10 +2665,6 @@ class DatabaseService implements IDatabaseService {
     return messageDb.linkMessageToTransaction(messageId, transactionId);
   }
 
-  async unlinkMessageFromTransaction(messageId: string): Promise<void> {
-    return messageDb.unlinkMessageFromTransaction(messageId);
-  }
-
   async getMessagesByTransaction(transactionId: string): Promise<Message[]> {
     return messageDb.getMessagesByTransaction(transactionId);
   }

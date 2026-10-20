@@ -270,14 +270,6 @@ export function linkMessageToTransaction(messageId: string, transactionId: strin
 }
 
 /**
- * Unlink a message from a transaction
- */
-export function unlinkMessageFromTransaction(messageId: string): void {
-  const db = ensureDb();
-  db.prepare(`UPDATE messages SET transaction_id = NULL WHERE id = ?`).run(messageId);
-}
-
-/**
  * BACKLOG-3908: point `messages.transaction_id` at the message's MOST RECENT
  * remaining link, or NULL when no link remains. Called by `unlinkMessages`
  * inside its transaction, after both delete loops, in place of the old

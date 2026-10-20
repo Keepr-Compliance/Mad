@@ -211,8 +211,6 @@ jest.mock("../databaseService", () => {
     __esModule: true,
     default: {
       getMessageById: async (id: string) => messageDb.getMessageById(id),
-      unlinkMessageFromTransaction: async (id: string) =>
-        messageDb.unlinkMessageFromTransaction(id),
       addIgnoredCommunication: async (data: any) =>
         communicationDb.addIgnoredCommunication(data),
       deleteCommunicationByMessageId: async (id: string) =>
