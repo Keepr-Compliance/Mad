@@ -185,6 +185,29 @@ maybe("BACKLOG-4017 controls", () => {
   });
 
   it("K12 empty-state count: zero for a contact with no texts at all", () => {
-    expect(readPickerForContact(USER, "+12065550199", TXN)).toEqual({ messages: [], linkedToDealThreadCount: 0 });
+    expect(readPickerForContact(USER, "+12065550199", TXN)).toEqual({ messages: [], linkedToDealThreadCount: 0, hasTextsAttachedToDeal: false });
+  });
+
+  it("K15 texts attached to this deal one by one: empty list, flag true; deal B's picker offers them, flag false", () => {
+    for (const id of IDS) linkMessageToTransaction(id, TXN);
+    expect(readPickerForContact(USER, PHONE, TXN)).toEqual({ messages: [], linkedToDealThreadCount: 0, hasTextsAttachedToDeal: true });
+    expect(readPickerForContact(USER, PHONE, TXN_B).hasTextsAttachedToDeal).toBe(false);
+    expect(picker(TXN_B)).toEqual([]); // column set: no deal's picker offers them
+  });
+
+  it("K16 texts attached to ANOTHER deal one by one do not trigger the line in this deal's picker", () => {
+    for (const id of IDS) linkMessageToTransaction(id, TXN_B);
+    expect(readPickerForContact(USER, PHONE, TXN)).toEqual({ messages: [], linkedToDealThreadCount: 0, hasTextsAttachedToDeal: false });
+  });
+
+  it("K17 mixed: one chat attached by hand, another still unattached -> the list is offered, flag false", () => {
+    for (const id of IDS) linkMessageToTransaction(id, TXN);
+    db.prepare(
+      `INSERT INTO messages (id, user_id, external_id, channel, direction, participants, participants_flat, thread_id, sent_at, message_type, body_text)
+       VALUES ('m-4017-9', ?, 'g-m-4017-9', 'imessage', 'inbound', ?, ?, 'ios-chat-4017-other', '2025-01-04T10:00:00Z', 'text', 'other')`,
+    ).run(USER, JSON.stringify({ from: PHONE, to: ["me"] }), PHONE.slice(1));
+    const res = readPickerForContact(USER, PHONE, TXN);
+    expect(res.messages.map((m) => m.id)).toEqual(["m-4017-9"]);
+    expect(res.hasTextsAttachedToDeal).toBe(false);
   });
 });

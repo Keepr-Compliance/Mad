@@ -58,7 +58,7 @@ const PHONE = "+12065550118";
 const THREAD = "ios-chat-4017-h";
 
 let db: DatabaseType;
-const invoke = (...args: unknown[]): Promise<{ success: boolean; messages?: Array<{ id: string }>; linkedToDealThreadCount?: number; error?: string }> => {
+const invoke = (...args: unknown[]): Promise<{ success: boolean; messages?: Array<{ id: string }>; linkedToDealThreadCount?: number; hasTextsAttachedToDeal?: boolean; error?: string }> => {
   const h = registeredHandlers.get("transactions:get-messages-by-contact");
   if (!h) throw new Error("handler not registered");
   return h({} as IpcMainInvokeEvent, ...args) as never;
@@ -104,6 +104,14 @@ maybe("BACKLOG-4017 get-messages-by-contact handler", () => {
     const res = await invoke(USER, PHONE, TXN_B);
     expect(res.messages?.map((m) => m.id).sort()).toEqual(["m-4017-h1", "m-4017-h2"]);
     expect(res.linkedToDealThreadCount).toBe(0);
+  });
+
+  it("H5 texts attached to this deal one by one -> no messages, hasTextsAttachedToDeal true; no texts at all -> false", async () => {
+    db.prepare("UPDATE messages SET transaction_id = ? WHERE user_id = ?").run(TXN, USER);
+    const res = await invoke(USER, PHONE, TXN);
+    expect(res.messages).toEqual([]);
+    expect(res.hasTextsAttachedToDeal).toBe(true);
+    expect((await invoke(USER, "+12065550199", TXN)).hasTextsAttachedToDeal).toBe(false);
   });
 
   it("H4 a missing deal id is refused, not read unscoped", async () => {

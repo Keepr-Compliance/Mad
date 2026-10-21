@@ -562,7 +562,7 @@ export function registerEmailLinkingHandlers(): void {
 
       // BACKLOG-4017: the same read also says how many of the contact's chats were
       // left out because they are linked to this deal (the picker's empty state).
-      const { messages, linkedToDealThreadCount } = await transactionService.readPickerForContact(
+      const { messages, linkedToDealThreadCount, hasTextsAttachedToDeal } = await transactionService.readPickerForContact(
         validatedUserId,
         contact,
         validatedTransactionId,
@@ -572,6 +572,7 @@ export function registerEmailLinkingHandlers(): void {
         success: true,
         messages,
         linkedToDealThreadCount,
+        hasTextsAttachedToDeal,
       };
     }, { module: "Transactions" }),
   );

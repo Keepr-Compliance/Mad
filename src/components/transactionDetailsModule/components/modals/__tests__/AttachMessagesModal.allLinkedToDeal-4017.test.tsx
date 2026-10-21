@@ -76,6 +76,41 @@ describe("BACKLOG-4017 picker empty states", () => {
     expect(screen.queryByText(ALL_LINKED_TO_DEAL_MESSAGE)).not.toBeInTheDocument();
   });
 
+  it("texts attached to this deal one by one (nothing offered) -> says they are already attached", async () => {
+    mockGetMessagesByContact.mockResolvedValue({
+      success: true,
+      messages: [],
+      linkedToDealThreadCount: 0,
+      hasTextsAttachedToDeal: true,
+    });
+    await openContact();
+    expect(await screen.findByText(ALL_LINKED_TO_DEAL_MESSAGE)).toBeInTheDocument();
+    expect(screen.queryByText(NO_TEXTS)).not.toBeInTheDocument();
+  });
+
+  it("some texts attached, some not -> the list is shown, not an empty state", async () => {
+    mockGetMessagesByContact.mockResolvedValue({
+      success: true,
+      messages: [
+        {
+          id: "m-1",
+          channel: "sms",
+          direction: "inbound",
+          body_text: "still unattached text",
+          thread_id: "t-1",
+          sent_at: "2024-01-18T10:00:00Z",
+          participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+        },
+      ],
+      linkedToDealThreadCount: 0,
+      hasTextsAttachedToDeal: false,
+    });
+    await openContact();
+    expect(await screen.findByText(/still unattached text/)).toBeInTheDocument();
+    expect(screen.queryByText(ALL_LINKED_TO_DEAL_MESSAGE)).not.toBeInTheDocument();
+    expect(screen.queryByText(NO_TEXTS)).not.toBeInTheDocument();
+  });
+
   it("the exact wording the founder approved", () => {
     expect(ALL_LINKED_TO_DEAL_MESSAGE).toBe("All of this contact's texts are already attached to this deal.");
   });

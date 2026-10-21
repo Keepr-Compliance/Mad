@@ -321,6 +321,7 @@ export function AttachMessagesModal({
                   success: boolean;
                   messages?: MessageLike[];
                   linkedToDealThreadCount?: number;
+                  hasTextsAttachedToDeal?: boolean;
                   error?: string;
                 }>
             )
@@ -365,7 +366,8 @@ export function AttachMessagesModal({
           const grouped = groupMessagesByThread(loaded);
           setThreads(grouped);
           setAllLinkedToDeal(
-            loaded.length === 0 && results.some((r) => (r.linkedToDealThreadCount ?? 0) > 0),
+            loaded.length === 0 &&
+              results.some((r) => (r.linkedToDealThreadCount ?? 0) > 0 || r.hasTextsAttachedToDeal === true),
           );
           setView("threads");
         } catch (err) {

@@ -2181,7 +2181,7 @@ class TransactionService {
     userId: string,
     contact: string,
     transactionId: string,
-  ): Promise<{ messages: PickerMessage[]; linkedToDealThreadCount: number }> {
+  ): Promise<{ messages: PickerMessage[]; linkedToDealThreadCount: number; hasTextsAttachedToDeal: boolean }> {
     const result = await databaseService.readPickerForContact(userId, contact, transactionId);
     const { messages } = result;
 

@@ -218,6 +218,37 @@ export interface PickerReadForContact {
   messages: PickerMessage[];
   /** Chats of this contact left out because they are linked to `transactionId` (thread level). */
   linkedToDealThreadCount: number;
+  /**
+   * True only when `messages` is empty AND this contact has texts attached to
+   * `transactionId` one by one (messages.transaction_id = the deal). Checked on the
+   * empty path only; the picker's "already attached" line also covers this case.
+   */
+  hasTextsAttachedToDeal: boolean;
+}
+
+/**
+ * Empty-path check (BACKLOG-4017): does this contact have texts attached to this deal
+ * one by one? `+user_id` pins the planner to idx_messages_transaction_id (the deal's
+ * own texts) instead of a per-user scan.
+ */
+function contactHasTextsInDeal(
+  db: ReturnType<typeof ensureDb>,
+  userId: string,
+  contact: string,
+  transactionId: string,
+): boolean {
+  const row = db
+    .prepare(
+      `SELECT EXISTS (
+         SELECT 1 FROM messages
+         WHERE transaction_id = ?
+           AND +user_id = ?
+           AND channel IN ('sms', 'imessage')
+           AND (json_extract(participants, '$.from') = ? OR json_extract(participants, '$.to[0]') = ?)
+       ) AS found`,
+    )
+    .get(transactionId, userId, contact, contact) as { found: number };
+  return row.found === 1;
 }
 
 /**
@@ -275,7 +306,13 @@ export function readPickerForContact(
       ORDER BY m.sent_at DESC
     `;
     const rows = db.prepare(fallbackSql).all(userId, contact, contact, transactionId) as PickerMessage[];
-    return { messages: rows.filter((m) => !isReactionRow(m)), linkedToDealThreadCount };
+    const messages = rows.filter((m) => !isReactionRow(m));
+    return {
+      messages,
+      linkedToDealThreadCount,
+      hasTextsAttachedToDeal:
+        messages.length === 0 && linkedToDealThreadCount === 0 && contactHasTextsInDeal(db, userId, contact, transactionId),
+    };
   }
 
   const placeholders = threadIds.map(() => '?').join(', ');
@@ -289,7 +326,7 @@ export function readPickerForContact(
     ORDER BY m.sent_at DESC
   `;
   const rows = db.prepare(messagesSql).all(userId, ...threadIds) as PickerMessage[];
-  return { messages: rows.filter((m) => !isReactionRow(m)), linkedToDealThreadCount };
+  return { messages: rows.filter((m) => !isReactionRow(m)), linkedToDealThreadCount, hasTextsAttachedToDeal: false };
 }
 
 // ============================================
