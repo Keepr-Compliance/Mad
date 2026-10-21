@@ -799,6 +799,9 @@ const KNOWN_ROUTE_HANDLERS = [
   // BACKLOG-3851 PR-2c: POST only, x-api-secret callers only (the scim Edge
   // Function); no session path, no request-supplied ids.
   'app/api/email/seat-limit-reached/route.ts',
+  // BACKLOG-4027: POST only, x-api-secret callers only (the scim and directory-sync Edge
+  // Functions); no session path, no request-supplied ids.
+  'app/api/email/last-admin-kept/route.ts',
   'app/api/email/send-download-invite/route.ts',
   'app/api/email/send-invite/route.ts',
   'app/api/email/ticket-confirmation/route.ts',
@@ -990,7 +993,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(24); // BACKLOG-3851 PR-2c: + email/seat-limit-reached
+    expect(handlers.length).toBe(25); // BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {

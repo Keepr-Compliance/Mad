@@ -119,6 +119,10 @@ export async function removeUser(input: RemoveInput): Promise<RemoveResult> {
     if (deleteError.message?.includes('billing_contact_member')) {
       return { success: false, error: BILLING_CONTACT_REMOVE_REFUSED };
     }
+    // BACKLOG-4027 (founder B): the database keeps the brokerage's last active admin.
+    if (deleteError.message?.includes('last_admin')) {
+      return { success: false, error: 'Cannot remove the last admin' };
+    }
     console.error('Error removing user:', deleteError);
     return { success: false, error: 'Failed to remove user' };
   }

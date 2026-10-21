@@ -347,3 +347,14 @@ export interface SetupReminderParams {
   organizationId: string;
   day: number;
 }
+
+/** BACKLOG-4027: the identity provider tried to demote or deactivate the brokerage's last active admin. */
+export interface LastAdminKeptParams {
+  /** Recipient: Keepr support, or the brokerage's IT contact */
+  recipientEmail: string;
+  /** Name or email of the admin who was kept */
+  personLabel: string;
+  brokerageName: string;
+  kind: 'deactivate' | 'demote';
+  source: 'scim' | 'directory_sync';
+}
