@@ -24,6 +24,7 @@ M = [
   ('K12 broker line ignores can_change', 'broker-portal/lib/billing/planEnd.ts', "return p.canChange ? `Your plan ends ${on}. Turn auto-renew back on in Billing.` : `Your plan ends ${on}. Contact support to keep it.`;", "return `Your plan ends ${on}. Turn auto-renew back on in Billing.`;", B, '__tests__/auto-renew-4019/autoRenewUi.test.tsx'),
   ('K13 staff buttons without billing.manage', 'admin-portal/lib/billing/dealRules.ts', "  if (!b.can_manage) return null;\n", "", A, '__tests__/auto-renew-4019'),
   ('K14 badge keeps Cancel pending', 'admin-portal/lib/billing/dealRules.ts', "  if (deal.status === 'canceling') {\n    const date", "  if (false) {\n    const date", A, '__tests__/auto-renew-4019'),
+  ('K16 IT admin reads the plan end', 'broker-portal/app/dashboard/billing/page.tsx', "const planEnd = role === 'broker' || role === 'admin' || billingContact ? await readPlanEnd(portal.supabase, organizationId) : null;", "const planEnd = await readPlanEnd(portal.supabase, organizationId);", B, '__tests__/app/dashboard/billing/billing-page.test.tsx'),
   ('K15 card field reads status only', 'admin-portal/lib/billing/dealRules.ts', "  const eff = deal.status === 'suspended' ? deal.status_before_suspension : deal.status;", "  const eff = deal.status;", A, '__tests__/auto-renew-4019'),
 ]
 if len(sys.argv) > 2:
