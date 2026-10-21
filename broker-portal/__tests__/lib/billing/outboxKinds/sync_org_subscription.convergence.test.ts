@@ -194,7 +194,8 @@ describe('sync_org_subscription', () => {
     expect(world.customers.size).toBe(1);
   });
 
-  it('C-S: a seat change updates quantity with proration none, keeps the price, creates nothing', async () => {
+  // BACKLOG-3854: rewritten on purpose. A seat INCREASE is now prorated (founder d0c22cef #1).
+  it('C-S: a seat increase updates quantity with create_prorations, keeps the price, creates nothing', async () => {
     await handleSyncOrgSubscriptionRow(row(1), ctx());
     saveDeal({ seats: 7 });
     const before = stripe.calls.length;
@@ -202,7 +203,7 @@ describe('sync_org_subscription', () => {
     expect(stripe.ops().slice(before).filter((o) => o.endsWith('.create'))).toEqual([]);
     const [[subId, params, opts]] = stripe.callsTo('subscriptions.update');
     expect(subId).toBe('sub_3853_2');
-    expect(params).toEqual({ items: [{ id: 'si_3853_2', quantity: 7 }], proration_behavior: 'none' });
+    expect(params).toEqual({ items: [{ id: 'si_3853_2', quantity: 7 }], proration_behavior: 'create_prorations' });
     expect(opts.idempotencyKey).toMatch(new RegExp(`^brokerage:${ORG}:test:subscription_update:v2:[0-9a-f]{16}$`));
   });
 
@@ -469,7 +470,8 @@ describe('sync_org_subscription — BACKLOG-4019 auto-renew', () => {
     saveDeal({ status: 'suspended', status_before_suspension: 'canceling', suspended_reason: 'other', seats: 7 });
     await handleSyncOrgSubscriptionRow(row(3), ctx());
     expect(updates()).toHaveLength(2);
-    expect(updates()[1][1]).toEqual({ items: [{ id: sub.items.data[0].id, quantity: 7 }], proration_behavior: 'none' });
+    // BACKLOG-3854: rewritten on purpose (5 -> 7 is an increase: prorated). Cancel stays untouched.
+    expect(updates()[1][1]).toEqual({ items: [{ id: sub.items.data[0].id, quantity: 7 }], proration_behavior: 'create_prorations' });
     expect(sub.cancel_at_period_end).toBe(true);
     // and from a subscription that does not say cancel yet, the suspended-canceling deal sends true
     sub.cancel_at_period_end = false;
@@ -478,13 +480,15 @@ describe('sync_org_subscription — BACKLOG-4019 auto-renew', () => {
     expect(updates()[2][1]).toEqual({ proration_behavior: 'none', cancel_at_period_end: true });
   });
 
-  it('a seat change on a renewing deal keeps the pre-4019 params and key digest (no cancel key)', async () => {
+  // BACKLOG-3854: rewritten on purpose. The increase is prorated, so the key's digest is the
+  // digest of the prorated parameters (no cancel key is added).
+  it('a seat change on a renewing deal keeps the param order and a digest of exactly those params (no cancel key)', async () => {
     await created({ seats: 7 });
     await handleSyncOrgSubscriptionRow(row(2), ctx());
     const [[, params, opts]] = updates();
-    expect(params).toEqual({ items: [{ id: 'si_3853_2', quantity: 7 }], proration_behavior: 'none' });
+    expect(params).toEqual({ items: [{ id: 'si_3853_2', quantity: 7 }], proration_behavior: 'create_prorations' });
     expect(Object.keys(params)).toEqual(['items', 'proration_behavior']);
-    const d = createHash('sha256').update(JSON.stringify({ items: [{ id: 'si_3853_2', quantity: 7 }], proration_behavior: 'none' })).digest('hex').slice(0, 16);
+    const d = createHash('sha256').update(JSON.stringify({ items: [{ id: 'si_3853_2', quantity: 7 }], proration_behavior: 'create_prorations' })).digest('hex').slice(0, 16);
     expect(opts.idempotencyKey).toBe(`brokerage:${ORG}:test:subscription_update:v2:${d}`);
   });
 
@@ -512,5 +516,87 @@ describe('sync_org_subscription — BACKLOG-4019 auto-renew', () => {
     deal().status = 'canceling';
     await expect(handleSyncOrgSubscriptionRow(row(1), ctx())).rejects.toMatchObject({ code: 'canceling_without_subscription' });
     expect(stripe.callsTo('subscriptions.create')).toEqual([]);
+  });
+});
+
+describe('sync_org_subscription — BACKLOG-3854 proration by state', () => {
+  /** v1 creates the subscription (5 seats at 2499); then the deal changes as `over` says, at v2. */
+  async function created(over: Obj, price?: number): Promise<Obj> {
+    await handleSyncOrgSubscriptionRow(row(1), ctx());
+    saveDeal(over);
+    if (price !== undefined) fake.db.rows('org_deal_lines')[0].unit_price_cents = price;
+    return [...world.subs.values()][0];
+  }
+  const updates = () => stripe.callsTo('subscriptions.update');
+  const proration = () => updates().map(([, p]) => p.proration_behavior);
+
+  it('P1 increase only -> one update, create_prorations', async () => {
+    await created({ seats: 6 });
+    await handleSyncOrgSubscriptionRow(row(2), ctx());
+    expect(updates()).toHaveLength(1);
+    expect(updates()[0][1]).toEqual({ items: [{ id: 'si_3853_2', quantity: 6 }], proration_behavior: 'create_prorations' });
+  });
+
+  it('P2 decrease -> none (no credit; the next invoice shows the lower quantity)', async () => {
+    await created({ seats: 3 });
+    await handleSyncOrgSubscriptionRow(row(2), ctx());
+    expect(updates()).toHaveLength(1);
+    expect(updates()[0][1]).toEqual({ items: [{ id: 'si_3853_2', quantity: 3 }], proration_behavior: 'none' });
+  });
+
+  it('P3 price only (staff Edit deal) -> none', async () => {
+    await created({}, 2199);
+    await handleSyncOrgSubscriptionRow(row(2), ctx());
+    expect(proration()).toEqual(['none']);
+    expect(updates()[0][1].items[0]).toMatchObject({ quantity: 5, price_data: { unit_amount: 2199 } });
+  });
+
+  it('P4 cancel only (auto-renew off) -> none', async () => {
+    await created({ status: 'canceling' });
+    await handleSyncOrgSubscriptionRow(row(2), ctx());
+    expect(updates()).toEqual([[expect.any(String), { proration_behavior: 'none', cancel_at_period_end: true }, expect.anything()]]);
+  });
+
+  it('P5 increase + price -> two updates: quantity at the old price prorated, then the price not prorated', async () => {
+    const sub = await created({ seats: 8 }, 2199);
+    await handleSyncOrgSubscriptionRow(row(2), ctx());
+    expect(updates()).toHaveLength(2);
+    const [[, first, k1], [, second, k2]] = updates();
+    expect(first).toEqual({ items: [{ id: 'si_3853_2', quantity: 8 }], proration_behavior: 'create_prorations' });
+    expect(second.items[0]).toMatchObject({ id: 'si_3853_2', quantity: 8, price_data: { unit_amount: 2199 } });
+    expect(second.proration_behavior).toBe('none');
+    expect(k1.idempotencyKey).not.toBe(k2.idempotencyKey);
+    expect(sub.items.data[0]).toMatchObject({ quantity: 8, price: { unit_amount: 2199 } });
+  });
+
+  it('P6 increase + price, retried after only the first update landed -> the second update with its own key and params, nothing else', async () => {
+    await created({ seats: 8 }, 2199);
+    const realUpdate = stripe.impl['subscriptions.update'];
+    let n = 0;
+    stripe.impl['subscriptions.update'] = (...a: unknown[]) => {
+      n += 1;
+      if (n === 2) throw new Error('network');
+      return realUpdate(...(a as [never]));
+    };
+    await expect(handleSyncOrgSubscriptionRow(row(2), ctx())).rejects.toThrow();
+    stripe.impl['subscriptions.update'] = realUpdate;
+    const before = updates().length;
+    await handleSyncOrgSubscriptionRow(row(2, { attempts: 2 }), ctx());
+    const retry = updates().slice(before);
+    expect(retry).toHaveLength(1);
+    expect(retry[0][1].proration_behavior).toBe('none');
+    expect(retry[0][1].items[0]).toMatchObject({ quantity: 8, price_data: { unit_amount: 2199 } });
+  });
+
+  it('P7 a trialing deal: the increase is still create_prorations (Stripe charges nothing during a trial)', async () => {
+    const sub = await created({ seats: 6 });
+    sub.status = 'trialing';
+    await handleSyncOrgSubscriptionRow(row(2), ctx());
+    expect(proration()).toEqual(['create_prorations']);
+  });
+
+  it('P8 creation stays none', async () => {
+    await handleSyncOrgSubscriptionRow(row(1), ctx());
+    expect(stripe.callsTo('subscriptions.create')[0][0].proration_behavior).toBe('none');
   });
 });
