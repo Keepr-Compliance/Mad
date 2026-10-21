@@ -8,6 +8,9 @@
 
 import type { AgentPlanState, BillingBlock, BillingCapabilities } from '@/lib/billing/capabilities';
 import { PlanBlock } from './PlanBlock';
+import { Alert } from '@keepr/design-system';
+import { AutoRenewBlock } from './AutoRenewBlock';
+import { planEndLine, type PlanEnd } from '@/lib/billing/planEnd';
 import { ChoosePlanBlock } from './ChoosePlanBlock';
 import { SeatsBlock } from './SeatsBlock';
 import { CreditsBlock } from './CreditsBlock';
@@ -59,6 +62,8 @@ export interface BillingPageProps {
   personal?: PersonalPlanData;
   /** BACKLOG-3853 PR-2B: the brokerage is suspended. Organization page only. */
   orgSuspension?: { reason: OrgSuspensionReason; role: string; organizationName?: string | null; payUrl?: string | null } | null;
+  /** BACKLOG-4019: the brokerage plan's auto-renew state. Organization page only, not while suspended. */
+  autoRenew?: { organizationId: string; planEnd: PlanEnd } | null;
 }
 
 function planLine(caps: BillingCapabilities, orgBillingSetUp: boolean): string {
@@ -67,7 +72,7 @@ function planLine(caps: BillingCapabilities, orgBillingSetUp: boolean): string {
   return orgBillingSetUp ? 'Organization plan' : 'Managed by Keepr';
 }
 
-export function BillingPage({ caps, orgBillingSetUp, personal, orgSuspension }: BillingPageProps) {
+export function BillingPage({ caps, orgBillingSetUp, personal, orgSuspension, autoRenew }: BillingPageProps) {
   // Blocks 4–6 are filled for a personal page only; organization pages keep the frame (3855).
   const b = caps.kind === 'personal' ? personal?.billing : undefined;
   const suspended = personal?.suspended === true;
@@ -113,7 +118,13 @@ export function BillingPage({ caps, orgBillingSetUp, personal, orgSuspension }: 
       ) : b && personal?.state === 'payment_failed' ? (
         <PaymentFailedBanner card={b.card} invoice={b.failedInvoice} canUpdateCard={caps.canUpdateCard && b.customer === 'present'} />
       ) : null}
+      {caps.kind === 'organization' && !orgSuspension && autoRenew && planEndLine(autoRenew.planEnd) ? (
+        <Alert variant="info">{planEndLine(autoRenew.planEnd)}</Alert>
+      ) : null}
       {caps.blocks.map(render)}
+      {caps.kind === 'organization' && !orgSuspension && autoRenew && autoRenew.planEnd.state !== 'none' ? (
+        <AutoRenewBlock organizationId={autoRenew.organizationId} planEnd={autoRenew.planEnd} />
+      ) : null}
     </div>
   );
 }

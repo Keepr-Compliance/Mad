@@ -34,6 +34,8 @@ export type BillingAlertName =
   | 'agent_subscription_brokerage_member'
   // BACKLOG-3853 PR-2 (brokerage subscription)
   | 'brokerage_orphan_object'
+  // BACKLOG-4019: the stored brokerage subscription ended while the deal was not canceling.
+  | 'brokerage_subscription_ended_unexpectedly'
   | 'brokerage_refund_or_dispute'
   | 'brokerage_no_account_manager'
   // BACKLOG-3853 PR-2B ("account suspended" email: the Pay button could not be built)

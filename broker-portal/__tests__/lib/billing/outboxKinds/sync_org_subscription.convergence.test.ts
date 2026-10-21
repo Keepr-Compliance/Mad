@@ -97,9 +97,16 @@ function stub(): StripeStub {
     'subscriptions.update': (id: string, p: Obj, o: Obj) =>
       idempotent(o?.idempotencyKey, [id, p], () => {
         const s = world.subs.get(id)!;
-        const it = p.items[0];
-        s.items.data[0].quantity = it.quantity;
-        if (it.price_data) s.items.data[0].price.unit_amount = it.price_data.unit_amount;
+        const it = p.items?.[0];
+        if (it) {
+          s.items.data[0].quantity = it.quantity;
+          if (it.price_data) s.items.data[0].price.unit_amount = it.price_data.unit_amount;
+        }
+        // BACKLOG-4019: the cancellation fields as the sandbox probe measured them (fixtures/stripe/p4019).
+        if ('cancel_at_period_end' in p) {
+          s.cancel_at_period_end = p.cancel_at_period_end;
+          s.cancel_at = p.cancel_at_period_end ? s.current_period_end : null;
+        }
         return s;
       }),
   });
@@ -407,5 +414,103 @@ describe('sync_org_subscription — 4007 billing start and customer details', ()
   it('C-C3: no company details yet -> name falls back to the organization, PO untouched', async () => {
     await handleSyncOrgSubscriptionRow(row(1), ctx());
     expect(stripe.callsTo('customers.update')[0][1]).toEqual({ email: 'billing-3853@example.test', name: 'Brokerage 3853 S' });
+  });
+});
+
+/**
+ * BACKLOG-4019 auto-renew. Subscription shapes: fixtures/stripe/p4019 (sub-create.json with the
+ * cancellation fields the sandbox probe measured, [EDITED] per its README).
+ */
+const FX4019 = path.join(__dirname, '../../../fixtures/stripe/p4019');
+const fx4019 = (n: string): Obj => JSON.parse(fs.readFileSync(path.join(FX4019, `${n}.json`), 'utf8'));
+
+describe('sync_org_subscription — BACKLOG-4019 auto-renew', () => {
+  /** v1 creates the subscription; then the deal changes as `over` says, at v2. */
+  async function created(over: Obj): Promise<Obj> {
+    await handleSyncOrgSubscriptionRow(row(1), ctx());
+    saveDeal(over);
+    return [...world.subs.values()][0];
+  }
+  const updates = () => stripe.callsTo('subscriptions.update');
+
+  it('C-S1 (W2): auto-renew off -> cancel_at_period_end true, no items, proration none, key per version', async () => {
+    const sub = await created({ status: 'canceling' });
+    await handleSyncOrgSubscriptionRow(row(2), ctx());
+    expect(updates()).toHaveLength(1);
+    const [[id, params, opts]] = updates();
+    expect(id).toBe(sub.id);
+    expect(params).toEqual({ proration_behavior: 'none', cancel_at_period_end: true });
+    expect(opts.idempotencyKey).toMatch(new RegExp(`^brokerage:${ORG}:test:subscription_update:v2:[0-9a-f]{16}$`));
+    expect(stripe.callsTo('subscriptions.create')).toHaveLength(1);
+  });
+
+  it('convergence: the stored subscription already says cancel (probe "A off" shape) -> no update', async () => {
+    const sub = await created({ status: 'canceling' });
+    const pending = fx4019('sub-cancel-pending');
+    expect(pending.cancel_at_period_end).toBe(true);
+    Object.assign(sub, { cancel_at_period_end: pending.cancel_at_period_end, cancel_at: pending.cancel_at });
+    await handleSyncOrgSubscriptionRow(row(2), ctx());
+    expect(updates()).toEqual([]);
+  });
+
+  it('back on -> cancel_at_period_end false', async () => {
+    const sub = await created({ status: 'canceling' });
+    await handleSyncOrgSubscriptionRow(row(2), ctx());
+    expect(sub.cancel_at_period_end).toBe(true);
+    saveDeal({ status: 'active' });
+    await handleSyncOrgSubscriptionRow(row(3), ctx());
+    expect(updates()[1][1]).toEqual({ proration_behavior: 'none', cancel_at_period_end: false });
+    expect(updates()[1][2].idempotencyKey).toMatch(/:subscription_update:v3:/);
+  });
+
+  it('C-S2 (W3): suspended while canceling -> a later version keeps cancel true, never sends false', async () => {
+    const sub = await created({ status: 'canceling' });
+    await handleSyncOrgSubscriptionRow(row(2), ctx());
+    saveDeal({ status: 'suspended', status_before_suspension: 'canceling', suspended_reason: 'other', seats: 7 });
+    await handleSyncOrgSubscriptionRow(row(3), ctx());
+    expect(updates()).toHaveLength(2);
+    expect(updates()[1][1]).toEqual({ items: [{ id: sub.items.data[0].id, quantity: 7 }], proration_behavior: 'none' });
+    expect(sub.cancel_at_period_end).toBe(true);
+    // and from a subscription that does not say cancel yet, the suspended-canceling deal sends true
+    sub.cancel_at_period_end = false;
+    saveDeal({});
+    await handleSyncOrgSubscriptionRow(row(4), ctx());
+    expect(updates()[2][1]).toEqual({ proration_behavior: 'none', cancel_at_period_end: true });
+  });
+
+  it('a seat change on a renewing deal keeps the pre-4019 params and key digest (no cancel key)', async () => {
+    await created({ seats: 7 });
+    await handleSyncOrgSubscriptionRow(row(2), ctx());
+    const [[, params, opts]] = updates();
+    expect(params).toEqual({ items: [{ id: 'si_3853_2', quantity: 7 }], proration_behavior: 'none' });
+    expect(Object.keys(params)).toEqual(['items', 'proration_behavior']);
+    const d = createHash('sha256').update(JSON.stringify({ items: [{ id: 'si_3853_2', quantity: 7 }], proration_behavior: 'none' })).digest('hex').slice(0, 16);
+    expect(opts.idempotencyKey).toBe(`brokerage:${ORG}:test:subscription_update:v2:${d}`);
+  });
+
+  it('C-S3 (W5): canceling, the stored subscription has ended -> no new subscription; the deal ends', async () => {
+    const sub = await created({ status: 'canceling' });
+    const ended = fx4019('sub-ended');
+    Object.assign(sub, { status: ended.status, ended_at: ended.ended_at, cancel_at_period_end: true });
+    await handleSyncOrgSubscriptionRow(row(2), ctx());
+    expect(stripe.callsTo('subscriptions.create')).toHaveLength(1); // v1's only
+    expect(stripe.callsTo('subscriptions.list')).toHaveLength(1); // v1's only: v2 never looks for one to adopt
+    expect(fake.callsTo('_billing_end_org_deal')).toEqual([{ p_org: ORG, p_mode: 'test', p_subscription_id: sub.id }]);
+    expect(deal().status).toBe('canceled');
+    expect(leaseHeld()).toBe(false);
+  });
+
+  it('an ACTIVE deal whose subscription ended still gets a new one (resume won the race; billing continues)', async () => {
+    const sub = await created({});
+    sub.status = 'canceled';
+    await handleSyncOrgSubscriptionRow(row(2), ctx());
+    expect(stripe.callsTo('subscriptions.create')).toHaveLength(2);
+    expect(fake.callsTo('_billing_end_org_deal')).toEqual([]);
+  });
+
+  it('canceling with no live subscription anywhere -> NonRetryable, never a create', async () => {
+    deal().status = 'canceling';
+    await expect(handleSyncOrgSubscriptionRow(row(1), ctx())).rejects.toMatchObject({ code: 'canceling_without_subscription' });
+    expect(stripe.callsTo('subscriptions.create')).toEqual([]);
   });
 });

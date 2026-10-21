@@ -29,6 +29,13 @@
  *   - "Now" for due dates is the customer's test clock time when it has one (SR plan review
  *     item 5); due_date is clock time, event.created is wall time.
  *
+ * BACKLOG-4019 auto-renew: a re-fetched subscription whose STATUS is 'canceled' (state, not event
+ * type, so a late .updated converges too) runs _billing_end_org_deal. It ends the deal only when
+ * the deal is effectively canceling and the subscription is the stored one; a second delivery is
+ * a no-op. A subscription that ended while the deal was NOT canceling (a cancel in the Stripe
+ * dashboard, Stripe's unpaid-invoice setting) leaves the deal as it is and alerts the account
+ * manager (reason subscription_ended_unexpectedly, once per subscription).
+ *
  * Known limit (SR plan review): while already past_due, a second invoice going overdue emits no
  * subscription event, so its account-manager email waits for the next subscription event.
  */
@@ -139,7 +146,7 @@ async function overdueInvoices(ctx: BillingContext, customerId: string, now: num
 async function notifyAccountManager(
   ctx: BillingContext,
   org: string,
-  reason: 'overdue' | 'payment_failed' | 'refund' | 'dispute',
+  reason: 'overdue' | 'payment_failed' | 'refund' | 'dispute' | 'subscription_ended_unexpectedly',
   stripeObjectId: string,
   dedupeSuffix: string
 ): Promise<void> {
@@ -231,6 +238,44 @@ async function mirrorSubscription(ctx: BillingContext, org: string, sub: Stripe.
   return true;
 }
 
+/** What _billing_end_org_deal answered. */
+export interface EndDealResult {
+  success?: boolean;
+  error?: string;
+  outcome?: 'ended' | 'already_canceled' | 'not_canceling' | 'not_stored';
+  status?: string;
+}
+
+/**
+ * BACKLOG-4019: the stored brokerage subscription has ended. Ends a canceling deal; anything
+ * else that is not already canceled gets one account-manager alert per subscription. Shared by
+ * the webhook and the payment-reconcile backstop (./reconcile.ts).
+ */
+export async function endedSubscription(
+  ctx: Pick<BillingContext, 'service' | 'mode'>,
+  org: string,
+  subId: string
+): Promise<EndDealResult> {
+  const { data, error } = await ctx.service.rpc('_billing_end_org_deal', { p_org: org, p_mode: ctx.mode, p_subscription_id: subId });
+  if (error) throw new Error(`_billing_end_org_deal failed: ${error.code ?? 'unknown'}`);
+  const res = (data ?? {}) as EndDealResult;
+  if (!res.success) throw new Error(`_billing_end_org_deal refused: ${res.error ?? 'unknown'}`);
+  if (res.outcome === 'not_canceling') {
+    billingAlert('brokerage_subscription_ended_unexpectedly', ctx.mode, { organization_id: org, subscription_id: subId, deal_status: res.status ?? null });
+    const dedupeKey = `${NOTIFY_ACCOUNT_MANAGER_KIND}:${ctx.mode}:${org}:subscription_ended_unexpectedly:${subId}`;
+    await enqueueOutbox(ctx.service, {
+      mode: ctx.mode,
+      kind: NOTIFY_ACCOUNT_MANAGER_KIND,
+      organizationId: org,
+      dedupeKey,
+      payload: { organization_id: org, reason: 'subscription_ended_unexpectedly', stripe_object_id: subId },
+      runAfter: new Date(),
+    });
+  }
+  console.info(`[billing/brokerage] subscription ${subId} ended: deal ${res.outcome}`);
+  return res;
+}
+
 export async function dispatchBrokerageEvent(ctx: BillingContext, objectId: string): Promise<boolean> {
   if (!BROKERAGE_EVENT_TYPES.has(ctx.event.type)) return false;
   const target = await resolveTarget(ctx, objectId);
@@ -247,7 +292,8 @@ export async function dispatchBrokerageEvent(ctx: BillingContext, objectId: stri
   switch (target.kind) {
     case 'subscription': {
       if (!(await mirrorSubscription(ctx, org, target.sub))) return true;
-      if (target.sub.status === 'past_due') await maybeNotifyOverdue(ctx, org, target.customerId);
+      if (target.sub.status === 'canceled') await endedSubscription(ctx, org, target.sub.id);
+      else if (target.sub.status === 'past_due') await maybeNotifyOverdue(ctx, org, target.customerId);
       else if (target.sub.status === 'active') await tryAutoReinstate(ctx, org, target.sub, target.customerId);
       return true;
     }

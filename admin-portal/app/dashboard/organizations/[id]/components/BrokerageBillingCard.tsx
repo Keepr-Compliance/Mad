@@ -9,6 +9,9 @@
  * or reinstate the brokerage. The database checks every permission and the Sales cap;
  * this card only mirrors the cap for the readout under the price.
  *
+ * BACKLOG-4019: Sales and Super Admin turn the deal's auto-renew off ("Ends <date>" at the
+ * Stripe period end) and back on, with a note; set_org_auto_renew checks the permission.
+ *
  * The page renders it only when brokerage billing is switched on or the organization is
  * a test organization (shouldShowBillingCard).
  */
@@ -32,20 +35,23 @@ import {
 } from '@keepr/design-system';
 import { formatDate } from '@/lib/format';
 import {
-  DEAL_STATUS_BADGE,
+  autoRenewAction,
+  autoRenewField,
   centsFromDollars,
   checkPrice,
   checkStartDate,
+  dealBadge,
   dealErrorMessage,
   formatCents,
   formatDay,
+  formatPeriodEnd,
   resolveDealReason,
   startDateEditable,
   subscriptionLine,
   visibleChangeLog,
   type OrgBilling,
 } from '@/lib/billing/dealRules';
-import { reinstateOrgAction, saveDealAction, suspendOrgAction } from '@/lib/actions/brokerageBilling';
+import { reinstateOrgAction, saveDealAction, setAutoRenewAction, suspendOrgAction } from '@/lib/actions/brokerageBilling';
 
 interface BrokerageBillingCardProps {
   organizationId: string;
@@ -59,7 +65,17 @@ const ACTION_LABEL: Record<string, string> = {
   setup_completed: 'Billing setup completed',
   suspended: 'Suspended',
   reinstated: 'Reinstated',
+  auto_renew_off: 'Auto-renew turned off',
+  auto_renew_on: 'Auto-renew turned on',
+  deal_ended: 'Deal ended',
 };
+
+/** BACKLOG-4019: the confirm text for turning auto-renew off. */
+export function autoRenewOffBody(billing: OrgBilling): string {
+  const date = formatPeriodEnd(billing.stripe?.current_period_end) ?? 'the end of the billing period';
+  if (billing.stripe?.status === 'trialing') return `It ends on ${date}, before the first invoice.`;
+  return `Billing stops on ${date}. Members keep access until then.`;
+}
 
 export function BrokerageBillingCard({ organizationId, organizationName, planName, billing }: BrokerageBillingCardProps) {
   const router = useRouter();
@@ -67,10 +83,13 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
   const [editing, setEditing] = useState(false);
   const [suspending, setSuspending] = useState(false);
   const [reinstating, setReinstating] = useState(false);
+  const [renewTarget, setRenewTarget] = useState<'off' | 'on' | null>(null);
   const [logExpanded, setLogExpanded] = useState(false);
   const { visible: visibleLog, hidden: hiddenLog } = visibleChangeLog(billing.log, logExpanded);
 
-  const status = deal ? DEAL_STATUS_BADGE[deal.status] ?? { label: deal.status, hue: 'gray' as const } : { label: 'No billing set up', hue: 'gray' as const };
+  const status = dealBadge(billing);
+  const renewAction = autoRenewAction(billing);
+  const renewField = autoRenewField(billing);
   const subscription = subscriptionLine(billing);
   const contact = billing.contact;
   const manager = billing.account_managers.find((m) => m.id === deal?.account_manager_id);
@@ -81,6 +100,7 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
     setEditing(false);
     setSuspending(false);
     setReinstating(false);
+    setRenewTarget(null);
     router.refresh();
   };
 
@@ -100,6 +120,12 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {renewAction === 'off' && (
+            <Button variant="secondary" size="sm" onClick={() => setRenewTarget('off')}>Turn off auto-renew</Button>
+          )}
+          {renewAction === 'on' && (
+            <Button variant="secondary" size="sm" onClick={() => setRenewTarget('on')}>Turn auto-renew back on</Button>
+          )}
           {billing.can_suspend && deal && (deal.status === 'active' || deal.status === 'canceling') && (
             <Button variant="dangerOutline" size="sm" onClick={() => setSuspending(true)}>Suspend organization</Button>
           )}
@@ -131,6 +157,7 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
           />
           <Field label="Start date" value={formatDay(deal.start_date)} />
           {subscription && <Field label="Stripe subscription" value={subscription.value} help={subscription.help} />}
+          {renewField && <Field label="Auto-renew" value={renewField} />}
           <Field
             label="Billing contact"
             value={contact ? contact.name || contact.email : deal.status === 'draft' ? 'Not set yet. The broker sets it in setup.' : 'Not set'}
@@ -193,6 +220,16 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
           withReason
           onClose={() => setSuspending(false)}
           onSubmit={(note, reason) => suspendOrgAction(organizationId, reason ?? 'non_payment', note)}
+          onDone={done}
+        />
+      )}
+      {renewTarget && deal && (
+        <ReasonDialog
+          title={renewTarget === 'off' ? 'Turn off auto-renew?' : 'Turn auto-renew back on?'}
+          body={renewTarget === 'off' ? autoRenewOffBody(billing) : 'Billing continues each month.'}
+          cta={renewTarget === 'off' ? 'Turn off auto-renew' : 'Turn auto-renew back on'}
+          onClose={() => setRenewTarget(null)}
+          onSubmit={(note) => setAutoRenewAction(organizationId, renewTarget === 'on', note, deal.version)}
           onDone={done}
         />
       )}
@@ -337,6 +374,9 @@ export function DealEditor({
             </Select>
           </div>
         </div>
+        {deal?.status === 'canceled' && (
+          <FieldHelp className="mt-4">Saving restarts this deal with a new subscription. Billing starts today.</FieldHelp>
+        )}
         {deal && (
           <div className="mt-4">
             <Label htmlFor="deal-reason" required>Reason</Label>
