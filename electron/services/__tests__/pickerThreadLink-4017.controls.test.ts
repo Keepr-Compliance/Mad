@@ -30,9 +30,9 @@ jest.mock("../logService", () => {
 
 import { setDb } from "../db/core/dbConnection";
 import { autoLinkCommunicationsForContact, resetExpansionWatermarksForTests } from "../autoLinkService";
-import { countContactTextsLinkedToDeal, getMessagesByContact } from "../db/messageDbService";
+import { countContactTextsLinkedToDeal, getMessagesByContact, linkMessageToTransaction } from "../db/messageDbService";
 import { MESSAGE_ROSTER_SQL } from "../db/messageRosterDb";
-import { createThreadCommunicationReference, getCommunicationsWithMessages } from "../db/communicationDbService";
+import { createCommunicationSync, createThreadCommunicationReference, getCommunicationsWithMessages } from "../db/communicationDbService";
 import { unlinkTextThreads } from "../transactionTextThreadsService";
 
 const DRIVER = path.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers");
@@ -175,6 +175,13 @@ maybe("BACKLOG-4017 controls", () => {
     await createThreadCommunicationReference("ios-chat-4017-other", TXN, USER, "auto", 0.9);
     expect(picker()).toEqual([...IDS, "m-4017-g"]);
     expect(hiddenCount()).toBe(0);
+  });
+
+  it("K14 a PER-MESSAGE link row that also carries the thread id hides only that text, not the chat", () => {
+    // createCommunicationSync is the generic writer; it accepts message_id and thread_id together.
+    createCommunicationSync({ user_id: USER, transaction_id: TXN, message_id: IDS[0], thread_id: THREAD } as Parameters<typeof createCommunicationSync>[0]);
+    linkMessageToTransaction(IDS[0], TXN);
+    expect(picker()).toEqual([IDS[1]]);
   });
 
   it("K12 empty-state count: zero for a contact with no texts at all", () => {
