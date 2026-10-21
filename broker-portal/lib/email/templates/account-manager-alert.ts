@@ -40,6 +40,14 @@ const REASON_TEXT: Record<AccountManagerAlertReason, { subject: string; line: st
     subject: 'no billing contact',
     line: 'The billing contact was removed by the identity provider and the brokerage has no active admin to take over. Set a new billing contact in People.',
   },
+  auto_renew_off: {
+    subject: 'auto-renew turned off',
+    line: 'The brokerage turned auto-renew off. Billing stops at the end of the current period and the plan ends then.',
+  },
+  subscription_ended_unexpectedly: {
+    subject: 'subscription ended',
+    line: 'The Stripe subscription ended while auto-renew was on. The deal is unchanged and no invoices will come. Check Stripe, then fix the deal from the admin portal.',
+  },
 };
 
 export function buildAccountManagerAlertEmail(params: AccountManagerAlertParams): EmailContent {

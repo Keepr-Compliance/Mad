@@ -41,6 +41,8 @@ export interface OrgDeal {
   suspended_at: string | null;
   suspended_reason: 'non_payment' | 'other' | null;
   suspended_note: string | null;
+  /** BACKLOG-4019: 'canceling' while suspended means auto-renew is off. */
+  status_before_suspension?: 'active' | 'canceling' | null;
   version: number;
   /** Day Stripe billing starts; set when the broker finishes setup. */
   billing_starts_on: string | null;
@@ -75,6 +77,58 @@ export const DEAL_STATUS_BADGE: Record<OrgDeal['status'], { label: string; hue: 
   canceling: { label: 'Cancel pending', hue: 'amber' },
   canceled: { label: 'Canceled', hue: 'gray' },
 };
+
+/**
+ * BACKLOG-4019 auto-renew, from the deal (and the Stripe mirror for the end date).
+ * 'renewing' | 'ending' (auto-renew off, ends at the period end) | 'ended' | null (no deal / draft).
+ */
+export function autoRenewState(b: OrgBilling): 'renewing' | 'ending' | 'ended' | null {
+  const deal = b.deal;
+  if (!deal || deal.status === 'draft') return null;
+  if (deal.status === 'canceled') return 'ended';
+  const eff = deal.status === 'suspended' ? deal.status_before_suspension : deal.status;
+  return eff === 'canceling' ? 'ending' : 'renewing';
+}
+
+/** A timestamp -> "Oct 30, 2026" in Pacific time (the business date), or null. */
+export function formatPeriodEnd(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return null;
+  return new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/Los_Angeles' });
+}
+
+/** The status badge; a canceling deal reads "Ends <date>". */
+export function dealBadge(b: OrgBilling): { label: string; hue: 'green' | 'red' | 'amber' | 'gray' } {
+  const deal = b.deal;
+  if (!deal) return { label: 'No billing set up', hue: 'gray' };
+  const base = DEAL_STATUS_BADGE[deal.status] ?? { label: deal.status, hue: 'gray' as const };
+  if (deal.status === 'canceling') {
+    const date = formatPeriodEnd(b.stripe?.current_period_end);
+    return { label: date ? `Ends ${date}` : base.label, hue: 'amber' };
+  }
+  return base;
+}
+
+/** The "Auto-renew" field on the card. */
+export function autoRenewField(b: OrgBilling): string | null {
+  const state = autoRenewState(b);
+  const date = formatPeriodEnd(b.stripe?.current_period_end);
+  if (state === 'renewing') return 'On';
+  if (state === 'ending') return date ? `Off · ends ${date}` : 'Off';
+  if (state === 'ended') return date ? `Ended ${date}` : 'Ended';
+  return null;
+}
+
+/** Which auto-renew button the card offers (staff with billing.manage only). */
+export function autoRenewAction(b: OrgBilling): 'off' | 'on' | null {
+  if (!b.can_manage) return null;
+  const state = autoRenewState(b);
+  if (b.stripe?.status === 'canceled') return null;
+  if (state === 'renewing' && b.stripe) return 'off';
+  if (state === 'ending') return 'on';
+  return null;
+}
 
 /** "2026-10-24" -> "Oct 24, 2026". A date with no time: never shifted by the viewer's time zone. */
 export function formatDay(day: string | null | undefined, fallback = 'Not set'): string {
@@ -211,6 +265,12 @@ const MESSAGES: Record<string, string> = {
   not_authorized: 'You do not have permission to do this.',
   mode_not_configured: 'This portal has no billing mode configured (STRIPE_MODE). Nothing was saved.',
   note_required: 'Enter a note. It is saved in the change log.',
+  // BACKLOG-4019 auto-renew
+  deal_not_started: 'Billing has not started for this organization yet.',
+  no_subscription: 'The Stripe subscription is not created yet. Try again in a minute.',
+  already_ended: 'The subscription has already ended. Use Edit deal to restart billing.',
+  deal_canceled: 'This deal has ended. Use Edit deal to restart billing.',
+  deal_suspended: 'Contact Keepr to change your plan.',
 };
 
 export function dealErrorMessage(code: string | null | undefined, detail?: { pct_off?: number; cap_pct?: number; assigned?: number }): string {
