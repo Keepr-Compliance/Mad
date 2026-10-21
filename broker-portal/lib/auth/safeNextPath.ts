@@ -23,7 +23,7 @@ export const NEXT_PATH_COOKIE_NAME = 'keepr_next';
 export const NEXT_PATH_COOKIE_PATH = '/auth';
 export const NEXT_PATH_COOKIE_MAX_AGE_SECONDS = 1800;
 
-const SINGLE_LEADING_SLASH = /^\/(?![\/\\])/;
+const SINGLE_LEADING_SLASH = /^\/(?![/\\])/;
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 const ALLOWED_BASE = '/dashboard';
