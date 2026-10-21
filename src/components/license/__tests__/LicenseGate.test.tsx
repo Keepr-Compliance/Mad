@@ -79,7 +79,11 @@ describe("LicenseGate blocked: Contact support (BACKLOG-4038 follow-up)", () => 
     // No user id on this path: main falls back to the saved session.
     jest.mocked(window.api.auth.getUserContact).mockImplementation(async (id?: string) =>
       id === undefined
-        ? { success: true, name: "Agent Name", email: "agent@example.com" }
+        ? {
+            success: true,
+            name: "Agent Name",
+            email: "agent@example.com",
+          }
         : { success: false, name: "", email: "" },
     );
     blockedWith("suspended");

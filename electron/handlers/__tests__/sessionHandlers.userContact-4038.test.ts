@@ -49,7 +49,11 @@ const BLOCKED_USER = {
 
 /** SessionData shape from sessionService.loadSession(). */
 const SAVED = {
-  user: { id: "u2", email: "saved@example.com", display_name: "Saved User" },
+  user: {
+    id: "u2",
+    email: "saved@example.com",
+    display_name: "Saved User",
+  },
   sessionToken: "st-secret",
   supabaseTokens: { access_token: "at-saved", refresh_token: "rt-saved" },
 };
@@ -64,7 +68,11 @@ describe("handleGetUserContact (BACKLOG-4038)", () => {
   it("deep-link block: no saved session, reads the in-memory session for that user id", async () => {
     mockGetSession.mockResolvedValue(supabaseSession(BLOCKED_USER));
     const result = await handleGetUserContact(null, "u1");
-    expect(result).toEqual({ success: true, name: "Agent Name", email: "agent@example.com" });
+    expect(result).toEqual({
+      success: true,
+      name: "Agent Name",
+      email: "agent@example.com",
+    });
   });
 
   it("returns exactly success, name and email: no token field reaches the renderer", async () => {
@@ -80,7 +88,11 @@ describe("handleGetUserContact (BACKLOG-4038)", () => {
   it("startup block: no user id, reads the saved session", async () => {
     mockLoadSession.mockResolvedValue(SAVED);
     const result = await handleGetUserContact(null);
-    expect(result).toEqual({ success: true, name: "Saved User", email: "saved@example.com" });
+    expect(result).toEqual({
+      success: true,
+      name: "Saved User",
+      email: "saved@example.com",
+    });
   });
 
   it("a saved session for a different user is never used for the blocked user id", async () => {

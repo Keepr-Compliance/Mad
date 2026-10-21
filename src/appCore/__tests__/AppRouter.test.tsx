@@ -364,7 +364,11 @@ describe("AppRouter", () => {
       // Main answers only for the id it is asked about (the handler's own userId check).
       jest.mocked(window.api.auth.getUserContact).mockImplementation(async (id?: string) =>
         id === "u1"
-          ? { success: true, name: "Agent Name", email: "agent@example.com" }
+          ? {
+            success: true,
+            name: "Agent Name",
+            email: "agent@example.com",
+          }
           : { success: false, name: "", email: "" },
       );
       mockRealUpgradeScreen = true;
