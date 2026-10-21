@@ -79,6 +79,7 @@ jest.mock("../../services/featureGateService", () => ({
 import { registerBillingHandlers } from "../billingHandlers";
 import entitlementService from "../../services/entitlementService";
 import {
+  BILLING_OFF_FALLBACK_URL,
   BILLING_PORTAL_OPEN_FAILED_ERROR,
   BILLING_PORTAL_URL_REFUSED_ERROR,
   PLAN_SUMMARY_TIMEOUT_MS,
@@ -173,6 +174,58 @@ describe("BACKLOG-3863 — billing:open-portal", () => {
       error: BILLING_PORTAL_OPEN_FAILED_ERROR,
       portalAddress: "https://app.keeprcompliance.com",
     });
+  });
+});
+
+describe("BACKLOG-3863 — billing:open-portal when billing is off (SR R4)", () => {
+  const BETA = "https://www.keeprcompliance.com/beta";
+
+  it("the fallback is the constant /beta page", () => {
+    expect(BILLING_OFF_FALLBACK_URL).toBe(BETA);
+  });
+
+  it("plan-summary 404 (billing off) → opens /beta, not Billing; handler still takes no argument", async () => {
+    mockFetch.mockResolvedValueOnce(response(404, { error: "not found" }));
+    expect(await invoke("billing:open-portal", "https://evil.example/")).toEqual({ success: true });
+    expect(mockOpenExternal.mock.calls).toEqual([[BETA]]);
+    expect(registeredHandlers.get("billing:open-portal").length).toBe(0);
+  });
+
+  it("404 and the browser cannot open → failure naming the fallback origin", async () => {
+    mockFetch.mockResolvedValueOnce(response(404, {}));
+    mockOpenExternal.mockRejectedValueOnce(new Error("no handler"));
+    expect(await invoke("billing:open-portal")).toEqual({
+      success: false,
+      error: BILLING_PORTAL_OPEN_FAILED_ERROR,
+      portalAddress: "https://www.keeprcompliance.com",
+    });
+  });
+
+  it.each([
+    ["200", () => mockFetch.mockResolvedValueOnce(response(200, ACTIVE_DTO))],
+    ["401", () => mockFetch.mockResolvedValueOnce(response(401, {}))],
+    ["500", () => mockFetch.mockResolvedValueOnce(response(500, {}))],
+    ["503", () => mockFetch.mockResolvedValueOnce(response(503, {}))],
+    ["network failure", () => mockFetch.mockRejectedValueOnce(new Error("net::ERR_FAILED"))],
+    ["offline", () => mockIsOnline.mockReturnValue(false)],
+    ["no session", () => mockGetAuthSession.mockResolvedValueOnce(null)],
+  ])("%s → opens Billing", async (_label, arrange) => {
+    arrange();
+    expect(await invoke("billing:open-portal")).toEqual({ success: true });
+    expect(mockOpenExternal.mock.calls).toEqual([[PROD_BILLING]]);
+  });
+
+  it("a probe that never answers opens Billing after the 5 s bound", async () => {
+    jest.useFakeTimers();
+    try {
+      mockFetch.mockImplementationOnce(() => new Promise(() => {}));
+      const answer = invoke("billing:open-portal");
+      await jest.advanceTimersByTimeAsync(PLAN_SUMMARY_TIMEOUT_MS);
+      expect(await answer).toEqual({ success: true });
+      expect(mockOpenExternal.mock.calls).toEqual([[PROD_BILLING]]);
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 

@@ -15,14 +15,48 @@ export type { PlanSummary, PlanSummaryResult, AgentPlanState } from "@electron/t
 
 const UNAVAILABLE: PlanSummaryResult = { unavailable: true };
 
+// Return-from-billing one-shot (SR R3). Every successful openPortal() arms it,
+// whichever component asked. The next window focus (the user coming back from
+// the browser) calls billing:refresh once, tells subscribers, and disarms.
+// No polling.
+let armed = false;
+let listening = false;
+const refreshListeners = new Set<(result: PlanSummaryResult) => void>();
+
+function onWindowFocus(): void {
+  if (!armed) return;
+  armed = false; // one-shot
+  void billingService.refresh().then((result) => {
+    refreshListeners.forEach((listener) => listener(result));
+  });
+}
+
+function arm(): void {
+  armed = true;
+  if (!listening && typeof window !== "undefined") {
+    window.addEventListener("focus", onWindowFocus);
+    listening = true;
+  }
+}
+
 export const billingService = {
   /** Open the portal Billing page in the browser (main builds the URL). */
   async openPortal(): Promise<OpenBillingPortalResult> {
     try {
-      return await window.api.billing.openPortal();
+      const result = await window.api.billing.openPortal();
+      if (result.success) arm();
+      return result;
     } catch {
       return { success: false };
     }
+  },
+
+  /** Be told the fresh summary after a return from the portal. Returns unsubscribe. */
+  onReturnRefresh(listener: (result: PlanSummaryResult) => void): () => void {
+    refreshListeners.add(listener);
+    return () => {
+      refreshListeners.delete(listener);
+    };
   },
 
   /** The user's own plan summary, or { unavailable: true }. */

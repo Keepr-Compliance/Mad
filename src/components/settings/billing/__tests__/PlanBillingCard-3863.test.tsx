@@ -49,7 +49,7 @@ const QUOTE = { nextUnitIndex: 3, unitPriceCents: 1499, currency: "USD", pricing
 const api = () => window.api as unknown as {
   billing: Record<"openPortal" | "getPlanSummary" | "refresh", jest.Mock>;
   featureGate: Record<"getAll", jest.Mock>;
-  entitlement: Record<"getQuote", jest.Mock>;
+  entitlement: Record<"getQuote" | "getBalance", jest.Mock>;
 };
 
 const RENEWAL = /Nov 1[01], 2026|Renews|until/;
@@ -72,6 +72,7 @@ beforeEach(() => {
   setSummary(ACTIVE);
   api().featureGate.getAll.mockResolvedValue(UNLIMITED_ON);
   api().entitlement.getQuote.mockResolvedValue(QUOTE);
+  api().entitlement.getBalance.mockResolvedValue(null);
   api().billing.openPortal.mockResolvedValue({ success: true });
 });
 
@@ -114,6 +115,43 @@ describe("BACKLOG-3863 — PlanBillingCard states", () => {
     expect(await screen.findByText("Pay as you go")).toBeInTheDocument();
     expect(await screen.findByText("$14.99 per export.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "See plans and billing" })).toBeInTheDocument();
+  });
+
+  it("pay as you go shows the credit balance from entitlement:get-balance", async () => {
+    setSummary(NONE);
+    api().entitlement.getBalance.mockResolvedValue(3);
+    await renderCard();
+    expect(await screen.findByText("3 credits")).toBeInTheDocument();
+  });
+
+  it("pay as you go with one credit reads singular", async () => {
+    setSummary(NONE);
+    api().entitlement.getBalance.mockResolvedValue(1);
+    await renderCard();
+    expect(await screen.findByText("1 credit")).toBeInTheDocument();
+  });
+
+  it("pay as you go with an unavailable balance (null) shows no count", async () => {
+    setSummary(NONE);
+    api().entitlement.getBalance.mockResolvedValue(null);
+    await renderCard();
+    expect(await screen.findByText("Pay as you go")).toBeInTheDocument();
+    expect(screen.queryByTestId("plan-billing-credits")).toBeNull();
+    expect(screen.queryByText(/credit/)).toBeNull();
+  });
+
+  it("a zero balance still shows 0 credits (only null hides)", async () => {
+    setSummary(NONE);
+    api().entitlement.getBalance.mockResolvedValue(0);
+    await renderCard();
+    expect(await screen.findByText("0 credits")).toBeInTheDocument();
+  });
+
+  it("agent active shows no credit count", async () => {
+    api().entitlement.getBalance.mockResolvedValue(3);
+    await renderCard();
+    expect(await screen.findByText("Agent")).toBeInTheDocument();
+    expect(screen.queryByTestId("plan-billing-credits")).toBeNull();
   });
 
   it("pay as you go without a quote: no price invented", async () => {

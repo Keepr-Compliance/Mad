@@ -36,6 +36,13 @@ const MODULE = "BillingService";
 export const PLAN_SUMMARY_TIMEOUT_MS = 5_000;
 export const PLAN_SUMMARY_PATH = "/api/billing/plan-summary";
 
+/**
+ * Where the Upgrade actions go when billing is switched off on the portal
+ * (plan-summary answers 404): the pre-billing page. A constant, never an
+ * argument (SR R4).
+ */
+export const BILLING_OFF_FALLBACK_URL = "https://www.keeprcompliance.com/beta";
+
 /** The configured portal address is not one this app will open. */
 export const BILLING_PORTAL_URL_REFUSED_ERROR =
   "The billing page address isn't one this app can open.";
@@ -83,8 +90,28 @@ export function parsePlanSummary(body: unknown): PlanSummary | null {
 }
 
 class BillingService {
-  /** Open the portal Billing page. Takes no URL and no path. */
+  /**
+   * Open the portal Billing page. Takes no URL and no path. When the portal
+   * says billing is off (plan-summary 404, read now, bounded by the 5 s
+   * timeout) it opens BILLING_OFF_FALLBACK_URL instead. 200, 401, 5xx,
+   * timeout, offline and no session all open Billing.
+   */
   async openPortal(): Promise<OpenBillingPortalResult> {
+    if (await this.isBillingOff()) {
+      try {
+        await shell.openExternal(BILLING_OFF_FALLBACK_URL);
+      } catch (error) {
+        logService.warn("[Billing] Could not open the fallback page", MODULE, {
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+        return {
+          success: false,
+          error: BILLING_PORTAL_OPEN_FAILED_ERROR,
+          portalAddress: new URL(BILLING_OFF_FALLBACK_URL).origin,
+        };
+      }
+      return { success: true };
+    }
     const url = portalUrl("billing");
     if (!url) {
       logService.warn("[Billing] Portal address refused", MODULE);
@@ -105,8 +132,26 @@ class BillingService {
     return { success: true };
   }
 
+  /** True only when the portal answered plan-summary with a 404. */
+  private async isBillingOff(): Promise<boolean> {
+    return (await this.readPlanSummary()).status === 404;
+  }
+
   /** The user's own plan summary, or { unavailable: true }. Never throws. */
   async getPlanSummary(): Promise<PlanSummaryResult> {
+    return (await this.readPlanSummary()).result;
+  }
+
+  /** One bounded read. `status` is the HTTP status when one was received, else null. */
+  private async readPlanSummary(): Promise<{ result: PlanSummaryResult; status: number | null }> {
+    let status: number | null = null;
+    const result = await this.readPlanSummaryInner((s) => {
+      status = s;
+    });
+    return { result, status };
+  }
+
+  private async readPlanSummaryInner(onStatus: (status: number) => void): Promise<PlanSummaryResult> {
     const origin = portalOrigin();
     if (!origin) return UNAVAILABLE;
     if (!isOnline()) return UNAVAILABLE;
@@ -137,6 +182,7 @@ class BillingService {
         });
         // 404 = billing off on this portal; 401 = session not accepted;
         // 5xx = the portal could not read. All mean "no summary to show".
+        onStatus(res.status);
         if (res.status !== 200) return UNAVAILABLE;
         const summary = parsePlanSummary(await res.json());
         return summary ? { unavailable: false, summary } : UNAVAILABLE;
