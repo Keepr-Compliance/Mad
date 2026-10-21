@@ -15,11 +15,13 @@ const mockCreateServiceClient = jest.fn();
 jest.mock('@/lib/impersonation-guards', () => ({ blockWriteDuringImpersonation: () => mockBlock() }));
 jest.mock('@/lib/supabase/server', () => ({ createClient: () => mockCreateClient() }));
 jest.mock('@/lib/supabase/service', () => ({ createServiceClient: () => mockCreateServiceClient() }));
+jest.mock('@sentry/nextjs', () => ({ captureException: jest.fn(), captureMessage: jest.fn(), addBreadcrumb: jest.fn() }));
 
 import { deactivateUser } from '@/lib/actions/deactivateUser';
 import { updateUserRole } from '@/lib/actions/updateUserRole';
 import { bulkUpdateRole } from '@/lib/actions/bulkUpdateRole';
 import { removeUser } from '@/lib/actions/removeUser';
+import { setMemberLicense } from '@/lib/actions/memberLicense';
 
 type Op = [string, ...unknown[]];
 
@@ -44,7 +46,9 @@ function makeClient(results: unknown[], userId: string | null) {
       return builder;
     },
   };
-  return { client, queries };
+  const rpcResults: unknown[] = [];
+  (client as Record<string, unknown>).rpc = async () => rpcResults.shift() ?? { data: null, error: null };
+  return { client, queries, rpcResults };
 }
 
 const CALLER = 'user-caller';
@@ -141,5 +145,19 @@ describe('removeUser', () => {
     );
     mockCreateClient.mockResolvedValue(user.client);
     expect(await removeUser({ memberId: MEMBER })).toEqual({ success: false, error: 'Cannot remove the last admin' });
+  });
+});
+
+describe('setMemberLicense (Unassign, a definer RPC: keepr-test T3c)', () => {
+  it('database refusal last_admin -> its own sentence, not "failed"', async () => {
+    const user = makeClient(
+      [{ data: { id: MEMBER, user_id: 'user-x', role: 'admin', organization_id: ORG, license_status: 'active' } }, CALLER_IT, LICENCE_ACTIVE],
+      CALLER,
+    );
+    user.rpcResults.push({ data: null, error: LAST_ADMIN });
+    mockCreateClient.mockResolvedValue(user.client);
+    expect(await setMemberLicense({ memberId: MEMBER, action: 'unassign' })).toEqual({
+      success: false, error: 'Cannot unassign the last admin. Assign another admin first.',
+    });
   });
 });

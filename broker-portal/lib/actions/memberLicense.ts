@@ -21,6 +21,7 @@ import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
 import { BROKERAGE_SUSPENDED_ERROR, isBrokerageSuspendedError } from '@/lib/auth/orgSuspension';
 import { MEMBER_LICENSE_ERRORS } from '@/lib/users/memberLicenseActions';
 import type { MemberLicenseAction } from '@/lib/users/memberLicenseActions';
+import { LAST_ADMIN_LICENSE_REFUSED } from '@/lib/users/roleRefusals';
 
 interface SetMemberLicenseInput {
   memberId: string;
@@ -71,6 +72,8 @@ export async function setMemberLicense(input: SetMemberLicenseInput): Promise<Se
   if (error) {
     // BACKLOG-3853 PR-2B: the brokerage is suspended; the member trigger refused.
     if (isBrokerageSuspendedError(error)) return { success: false, error: BROKERAGE_SUSPENDED_ERROR };
+    // BACKLOG-4027 (founder B): the database keeps the brokerage's last active admin.
+    if (error.message?.includes('last_admin')) return { success: false, error: LAST_ADMIN_LICENSE_REFUSED };
     Sentry.captureException(error, {
       tags: { action: 'set_member_license' },
       extra: { memberId: input.memberId, licenseAction: input.action },

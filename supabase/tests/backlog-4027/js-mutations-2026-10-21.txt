@@ -22,3 +22,5 @@ MUTATION APPLIED [J11 bulkUpdateRole: last_admin unmapped] broker-portal/lib/act
    -> 1 failed, 7 passed, 8 total; red: ['bulkUpdateRole › database refusal {']
 MUTATION APPLIED [J12 removeUser: last_admin unmapped] broker-portal/lib/actions/removeUser.ts: if (false) {
    -> 1 failed, 7 passed, 8 total; red: ['removeUser › database refusal last_admin -> "Cannot remove the last admin"']
+MUTATION APPLIED [J13 setMemberLicense: last_admin unmapped] broker-portal/lib/actions/memberLicense.ts: if (false) return
+   -> 1 failed, 8 passed, 9 total; red: ['setMemberLicense (Unassign, a definer RPC: keepr-test T3c) › database refusal last_admin -> its own sentence, not "failed"']

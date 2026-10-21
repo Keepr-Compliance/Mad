@@ -5,3 +5,4 @@
  */
 export const LAST_ADMIN_DEMOTE_REFUSED = 'Cannot demote the last admin. Assign another admin first.';
 export const ROLE_MANAGED_BY_IDP = 'Managed by your identity provider.';
+export const LAST_ADMIN_LICENSE_REFUSED = 'Cannot unassign the last admin. Assign another admin first.';

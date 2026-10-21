@@ -21,6 +21,7 @@ M = [
   ('J9 deactivateUser: last_admin unmapped', 'broker-portal/lib/actions/deactivateUser.ts', "    if (updateError.message?.includes('last_admin')) {", "    if (false) {", A),
   ('J10 updateUserRole: managed_by_idp unmapped', 'broker-portal/lib/actions/updateUserRole.ts', "    if (updateError.message?.includes('managed_by_idp')) {", "    if (false) {", A),
   ('J11 bulkUpdateRole: last_admin unmapped', 'broker-portal/lib/actions/bulkUpdateRole.ts', "    if (error.message?.includes('last_admin')) {", "    if (false) {", A),
+  ('J13 setMemberLicense: last_admin unmapped', 'broker-portal/lib/actions/memberLicense.ts', "    if (error.message?.includes('last_admin')) return", "    if (false) return", A),
   ('J12 removeUser: last_admin unmapped', 'broker-portal/lib/actions/removeUser.ts', "    if (deleteError.message?.includes('last_admin')) {", "    if (false) {", A),
 ]
 only = sys.argv[1:] 
