@@ -201,19 +201,42 @@ export type PickerMessage = Pick<
  *
  * BACKLOG-4017: `transactionId` is the deal the picker is open on. A chat linked
  * to THAT deal at thread level (auto-link) is not offered; a chat linked to another
- * deal still is. Step 1 and the fallback carry the predicate; step 2 reads only
- * thread ids step 1 already filtered.
+ * deal still is. Step 1 flags each thread with the shared predicate and keeps the
+ * unflagged ones; the fallback filters with it; step 2 reads only thread ids step 1
+ * kept. See `readPickerForContact` for the count the empty state uses.
  */
 export function getMessagesByContact(
   userId: string,
   contact: string,
   transactionId: string,
 ): PickerMessage[] {
+  return readPickerForContact(userId, contact, transactionId).messages;
+}
+
+/** BACKLOG-4017: the picker read plus how many of the contact's chats it left out. */
+export interface PickerReadForContact {
+  messages: PickerMessage[];
+  /** Chats of this contact left out because they are linked to `transactionId` (thread level). */
+  linkedToDealThreadCount: number;
+}
+
+/**
+ * `getMessagesByContact`, also returning `linkedToDealThreadCount` from the SAME
+ * step-1 scan (no second query), so the picker can tell "every chat is already in
+ * this deal" apart from "no texts at all".
+ */
+export function readPickerForContact(
+  userId: string,
+  contact: string,
+  transactionId: string,
+): PickerReadForContact {
   const db = ensureDb();
 
-  // Step 1: Find all thread_ids where the contact appears in any message
+  // Step 1: Find all thread_ids where the contact appears in any message, each
+  // flagged 1 when the chat is linked to this deal (BACKLOG-4017).
   const threadIdsSql = `
-    SELECT DISTINCT thread_id FROM messages
+    SELECT DISTINCT thread_id, CASE WHEN ${notInDealTextThread("messages")} THEN 0 ELSE 1 END AS linked_to_deal
+    FROM messages
     WHERE user_id = ?
       AND transaction_id IS NULL
       AND channel IN ('sms', 'imessage')
@@ -222,10 +245,13 @@ export function getMessagesByContact(
         json_extract(participants, '$.from') = ?
         OR json_extract(participants, '$.to[0]') = ?
       )
-      AND ${notInDealTextThread("messages")}
   `;
-  const threadRows = db.prepare(threadIdsSql).all(userId, contact, contact, transactionId) as { thread_id: string }[];
-  const threadIds = threadRows.map(r => r.thread_id);
+  const threadRows = db.prepare(threadIdsSql).all(transactionId, userId, contact, contact) as {
+    thread_id: string;
+    linked_to_deal: number;
+  }[];
+  const threadIds = threadRows.filter((r) => r.linked_to_deal === 0).map((r) => r.thread_id);
+  const linkedToDealThreadCount = threadRows.length - threadIds.length;
 
   // BACKLOG-2280: reaction rows live in the same threads and ride along on
   // SELECT *. Partition them out of the returned bubble list so they never render
@@ -249,7 +275,7 @@ export function getMessagesByContact(
       ORDER BY m.sent_at DESC
     `;
     const rows = db.prepare(fallbackSql).all(userId, contact, contact, transactionId) as PickerMessage[];
-    return rows.filter((m) => !isReactionRow(m));
+    return { messages: rows.filter((m) => !isReactionRow(m)), linkedToDealThreadCount };
   }
 
   const placeholders = threadIds.map(() => '?').join(', ');
@@ -263,37 +289,7 @@ export function getMessagesByContact(
     ORDER BY m.sent_at DESC
   `;
   const rows = db.prepare(messagesSql).all(userId, ...threadIds) as PickerMessage[];
-  return rows.filter((m) => !isReactionRow(m));
-}
-
-/**
- * BACKLOG-4017: how many of this contact's texts the picker left out because their
- * chat is linked (thread level) to `transactionId`. Same base conditions as step 1
- * of `getMessagesByContact`, with the shared predicate negated. Used only to tell
- * "everything is already attached to this deal" apart from "no texts at all".
- */
-export function countContactTextsLinkedToDeal(
-  userId: string,
-  contact: string,
-  transactionId: string,
-): number {
-  const db = ensureDb();
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) AS n FROM messages m
-       WHERE m.user_id = ?
-         AND m.transaction_id IS NULL
-         AND m.channel IN ('sms', 'imessage')
-         AND m.thread_id IS NOT NULL
-         AND (
-           json_extract(m.participants, '$.from') = ?
-           OR json_extract(m.participants, '$.to[0]') = ?
-         )
-         AND ${reactionExclusion("m")}
-         AND NOT ${notInDealTextThread("m")}`,
-    )
-    .get(userId, contact, contact, transactionId) as { n: number };
-  return row.n;
+  return { messages: rows.filter((m) => !isReactionRow(m)), linkedToDealThreadCount };
 }
 
 // ============================================

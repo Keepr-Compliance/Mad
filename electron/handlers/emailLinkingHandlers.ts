@@ -560,27 +560,18 @@ export function registerEmailLinkingHandlers(): void {
         throw new ValidationError("Transaction ID validation failed", "transactionId");
       }
 
-      const messages = await transactionService.getMessagesByContact(
+      // BACKLOG-4017: the same read also says how many of the contact's chats were
+      // left out because they are linked to this deal (the picker's empty state).
+      const { messages, linkedToDealThreadCount } = await transactionService.readPickerForContact(
         validatedUserId,
         contact,
         validatedTransactionId,
       );
 
-      // BACKLOG-4017: only when nothing is offered, say whether that is because the
-      // contact's texts are all in chats linked to this deal (same IPC call).
-      const linkedToDealCount =
-        messages.length === 0
-          ? await transactionService.countContactTextsLinkedToDeal(
-              validatedUserId,
-              contact,
-              validatedTransactionId,
-            )
-          : 0;
-
       return {
         success: true,
         messages,
-        linkedToDealCount,
+        linkedToDealThreadCount,
       };
     }, { module: "Transactions" }),
   );

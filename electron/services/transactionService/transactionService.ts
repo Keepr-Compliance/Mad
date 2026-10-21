@@ -2169,7 +2169,21 @@ class TransactionService {
     contact: string,
     transactionId: string,
   ): Promise<PickerMessage[]> {
-    const messages = await databaseService.getMessagesByContact(userId, contact, transactionId);
+    return (await this.readPickerForContact(userId, contact, transactionId)).messages;
+  }
+
+  /**
+   * The attach picker's read for one contact (BACKLOG-4017): the messages offered
+   * to `transactionId`, plus how many of the contact's chats were left out because
+   * they are linked to that deal (one scan, no extra query).
+   */
+  async readPickerForContact(
+    userId: string,
+    contact: string,
+    transactionId: string,
+  ): Promise<{ messages: PickerMessage[]; linkedToDealThreadCount: number }> {
+    const result = await databaseService.readPickerForContact(userId, contact, transactionId);
+    const { messages } = result;
 
     await logService.info(
       "Retrieved messages for contact",
@@ -2179,24 +2193,13 @@ class TransactionService {
         contact,
         transactionId,
         count: messages.length,
+        linkedToDealThreadCount: result.linkedToDealThreadCount,
       },
     );
 
-    return messages;
+    return result;
   }
 
-  /**
-   * BACKLOG-4017: the contact's texts left out of `transactionId`'s attach picker
-   * because their chat is linked to that deal. Lets the picker say "already
-   * attached" instead of "no chats".
-   */
-  async countContactTextsLinkedToDeal(
-    userId: string,
-    contact: string,
-    transactionId: string,
-  ): Promise<number> {
-    return databaseService.countContactTextsLinkedToDeal(userId, contact, transactionId);
-  }
 
   /**
    * Link messages to a transaction

@@ -11,8 +11,8 @@
  * REAL schema.sql, real driver, every write through the real producer:
  *   1. autoLinkCommunicationsForContact({ contactId, transactionId })   - the deal's auto-link
  *   2. unlinkTextThreads(transactionId, [thread])                       - remove conversation
- * Reads: getMessagesByContact (picker), countContactTextsLinkedToDeal (picker empty
- * state), MESSAGE_ROSTER_SQL, getCommunicationsWithMessages (the deal's Texts tab).
+ * Reads: getMessagesByContact (picker), readPickerForContact (linkedToDealThreadCount,
+ * the picker's empty state), MESSAGE_ROSTER_SQL, getCommunicationsWithMessages (the deal's Texts tab).
  *
  * Real driver: ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js --bail=0 <file>
  * Reserved 555-01xx numbers, .test addresses. Message row shape: iPhoneSyncStorageService.ts:574-577.
@@ -30,7 +30,7 @@ jest.mock("../logService", () => {
 
 import { setDb } from "../db/core/dbConnection";
 import { autoLinkCommunicationsForContact, resetExpansionWatermarksForTests } from "../autoLinkService";
-import { countContactTextsLinkedToDeal, getMessagesByContact, linkMessageToTransaction } from "../db/messageDbService";
+import { getMessagesByContact, linkMessageToTransaction, readPickerForContact } from "../db/messageDbService";
 import { MESSAGE_ROSTER_SQL } from "../db/messageRosterDb";
 import { createCommunicationSync, createThreadCommunicationReference, getCommunicationsWithMessages } from "../db/communicationDbService";
 import { unlinkTextThreads } from "../transactionTextThreadsService";
@@ -67,7 +67,7 @@ function insertText(id: string, sentAt: string): void {
 }
 
 const picker = (tx: string = TXN): string[] => getMessagesByContact(USER, PHONE, tx).map((m) => m.id).sort();
-const hiddenCount = (tx: string = TXN): number => countContactTextsLinkedToDeal(USER, PHONE, tx);
+const hiddenCount = (tx: string = TXN): number => readPickerForContact(USER, PHONE, tx).linkedToDealThreadCount;
 const roster = (): string[] => (db.prepare(MESSAGE_ROSTER_SQL).all(USER) as Array<{ contact: string }>).map((r) => r.contact);
 const dealTexts = async (): Promise<string[]> =>
   (await getCommunicationsWithMessages(TXN, "text")).map((c) => (c as unknown as { message_id?: string; id: string }).message_id ?? c.id).sort();
@@ -97,7 +97,7 @@ maybe("BACKLOG-4017 controls", () => {
     await autoLinkCommunicationsForContact({ contactId: "c1", transactionId: TXN });
     expect(await dealTexts()).toHaveLength(2);
     expect(picker()).toEqual([]);
-    expect(hiddenCount()).toBe(2);
+    expect(hiddenCount()).toBe(1); // one chat
   });
 
   it("K8 per deal: a chat linked to deal A stays in deal B's picker", async () => {
@@ -185,7 +185,6 @@ maybe("BACKLOG-4017 controls", () => {
   });
 
   it("K12 empty-state count: zero for a contact with no texts at all", () => {
-    expect(countContactTextsLinkedToDeal(USER, "+12065550199", TXN)).toBe(0);
-    expect(getMessagesByContact(USER, "+12065550199", TXN)).toEqual([]);
+    expect(readPickerForContact(USER, "+12065550199", TXN)).toEqual({ messages: [], linkedToDealThreadCount: 0 });
   });
 });

@@ -811,8 +811,8 @@ export interface WindowApiTransactions {
   getMessagesByContact: (userId: string, contact: string, transactionId: string) => Promise<{
     success: boolean;
     messages?: PickerMessage[];
-    /** BACKLOG-4017: set when `messages` is empty — texts left out because their chat is linked to this deal. */
-    linkedToDealCount?: number;
+    /** BACKLOG-4017: how many of the contact's chats were left out because they are linked to this deal. */
+    linkedToDealThreadCount?: number;
     error?: string;
   }>;
   /** Links messages to a transaction */

@@ -4,8 +4,9 @@
  * contact with no texts at all keeps today's empty state.
  *
  * The response shape is the handler's (emailLinkingHandlers.ts,
- * "transactions:get-messages-by-contact"): { success, messages, linkedToDealCount },
- * with linkedToDealCount from countContactTextsLinkedToDeal when messages is empty.
+ * "transactions:get-messages-by-contact"): { success, messages, linkedToDealThreadCount },
+ * where linkedToDealThreadCount counts the contact's chats linked to this deal
+ * (readPickerForContact, same scan as the picker read).
  */
 import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
@@ -62,14 +63,14 @@ describe("BACKLOG-4017 picker empty states", () => {
   });
 
   it("all texts already in a chat linked to this deal -> says they are already attached", async () => {
-    mockGetMessagesByContact.mockResolvedValue({ success: true, messages: [], linkedToDealCount: 2 });
+    mockGetMessagesByContact.mockResolvedValue({ success: true, messages: [], linkedToDealThreadCount: 1 });
     await openContact();
     expect(await screen.findByText(ALL_LINKED_TO_DEAL_MESSAGE)).toBeInTheDocument();
     expect(screen.queryByText(NO_TEXTS)).not.toBeInTheDocument();
   });
 
   it("a contact with no texts at all -> keeps today's empty state", async () => {
-    mockGetMessagesByContact.mockResolvedValue({ success: true, messages: [], linkedToDealCount: 0 });
+    mockGetMessagesByContact.mockResolvedValue({ success: true, messages: [], linkedToDealThreadCount: 0 });
     await openContact();
     expect(await screen.findByText(NO_TEXTS)).toBeInTheDocument();
     expect(screen.queryByText(ALL_LINKED_TO_DEAL_MESSAGE)).not.toBeInTheDocument();

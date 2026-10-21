@@ -320,7 +320,7 @@ export function AttachMessagesModal({
                 window.api.transactions.getMessagesByContact(userId, handle, transactionId) as Promise<{
                   success: boolean;
                   messages?: MessageLike[];
-                  linkedToDealCount?: number;
+                  linkedToDealThreadCount?: number;
                   error?: string;
                 }>
             )
@@ -365,7 +365,7 @@ export function AttachMessagesModal({
           const grouped = groupMessagesByThread(loaded);
           setThreads(grouped);
           setAllLinkedToDeal(
-            loaded.length === 0 && results.some((r) => (r.linkedToDealCount ?? 0) > 0),
+            loaded.length === 0 && results.some((r) => (r.linkedToDealThreadCount ?? 0) > 0),
           );
           setView("threads");
         } catch (err) {

@@ -3,9 +3,9 @@
  *
  * BACKLOG-4017: the real "transactions:get-messages-by-contact" handler, real
  * schema.sql, real driver. Pins the response the picker's empty state reads:
- *   - messages empty because every chat is linked to THIS deal -> linkedToDealCount > 0
- *   - a contact with no texts at all                           -> linkedToDealCount 0
- *   - texts offered                                            -> linkedToDealCount 0
+ *   - messages empty because every chat is linked to THIS deal -> linkedToDealThreadCount > 0
+ *   - a contact with no texts at all                           -> linkedToDealThreadCount 0
+ *   - texts offered                                            -> linkedToDealThreadCount 0
  *   - the deal id is required (no silent unscoped read)
  *
  * Real driver: ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js --bail=0 <file>
@@ -58,7 +58,7 @@ const PHONE = "+12065550118";
 const THREAD = "ios-chat-4017-h";
 
 let db: DatabaseType;
-const invoke = (...args: unknown[]): Promise<{ success: boolean; messages?: Array<{ id: string }>; linkedToDealCount?: number; error?: string }> => {
+const invoke = (...args: unknown[]): Promise<{ success: boolean; messages?: Array<{ id: string }>; linkedToDealThreadCount?: number; error?: string }> => {
   const h = registeredHandlers.get("transactions:get-messages-by-contact");
   if (!h) throw new Error("handler not registered");
   return h({} as IpcMainInvokeEvent, ...args) as never;
@@ -84,26 +84,26 @@ maybe("BACKLOG-4017 get-messages-by-contact handler", () => {
   });
   afterEach(() => db.close());
 
-  it("H1 every chat linked to this deal -> no messages, linkedToDealCount 2", async () => {
+  it("H1 every chat linked to this deal -> no messages, linkedToDealThreadCount 1", async () => {
     await createThreadCommunicationReference(THREAD, TXN, USER, "auto", 0.9);
     const res = await invoke(USER, PHONE, TXN);
     expect(res.success).toBe(true);
     expect(res.messages).toEqual([]);
-    expect(res.linkedToDealCount).toBe(2);
+    expect(res.linkedToDealThreadCount).toBe(1);
   });
 
-  it("H2 a contact with no texts at all -> no messages, linkedToDealCount 0", async () => {
+  it("H2 a contact with no texts at all -> no messages, linkedToDealThreadCount 0", async () => {
     const res = await invoke(USER, "+12065550199", TXN);
     expect(res.success).toBe(true);
     expect(res.messages).toEqual([]);
-    expect(res.linkedToDealCount).toBe(0);
+    expect(res.linkedToDealThreadCount).toBe(0);
   });
 
-  it("H3 the same chat from another deal -> offered, linkedToDealCount 0", async () => {
+  it("H3 the same chat from another deal -> offered, linkedToDealThreadCount 0", async () => {
     await createThreadCommunicationReference(THREAD, TXN, USER, "auto", 0.9);
     const res = await invoke(USER, PHONE, TXN_B);
     expect(res.messages?.map((m) => m.id).sort()).toEqual(["m-4017-h1", "m-4017-h2"]);
-    expect(res.linkedToDealCount).toBe(0);
+    expect(res.linkedToDealThreadCount).toBe(0);
   });
 
   it("H4 a missing deal id is refused, not read unscoped", async () => {
