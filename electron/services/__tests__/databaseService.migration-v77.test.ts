@@ -472,7 +472,12 @@ describe("migration v77 — BACKLOG-3983, texts whose deal column names a deal t
     email(db, "e-auto", "2026-03-03T00:00:00.000Z");
     const emailRun = await mm.autoLinkEmailsToTransaction(A);
     expect(emailRun.linked).toBe(0);
-    expect(emailRun.errors.join(" ")).toMatch(/no such column: m\.sender/);
+    expect(emailRun.errors.length).toBeGreaterThan(0);
+    // The failing read itself (the wrapped message differs by runner: CI's plain node
+    // reports "Unknown error", Electron's node the SQLite text).
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { EMAIL_CHANNEL_CANDIDATES_SQL } = require("../db/messageMatchingSql");
+    expect(() => db.prepare(EMAIL_CHANNEL_CANDIDATES_SQL)).toThrow(/no such column: m\.sender/);
     expect(take()).toEqual([]);
     expect(orphans()).toEqual([]);
     manual("e-auto", A);
