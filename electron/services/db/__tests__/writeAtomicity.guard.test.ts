@@ -492,24 +492,18 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // ==========================================================================
   // BACKLOG-3312 — SURFACED BY CONSTANT RESOLUTION
   // ==========================================================================
-  // Both ran HOISTED SQL CONSTANTS, so every previous version of this guard
-  // counted them as ZERO-write and reported them clean. Neither is new code and
-  // neither is fixed here; what is new is that the guard can see them.
+  // The units listed here ran HOISTED SQL CONSTANTS, so every previous version
+  // of this guard counted them as ZERO-write and reported them clean. None was
+  // new code and none was fixed by 3312; what was new is that the guard could
+  // see them.
   //
-  // Measured at `8f17c1e16`: these two are the ENTIRE pipeline-surviving
+  // Measured at `8f17c1e16`: two units were the ENTIRE pipeline-surviving
   // population of the widening — 21 units count more, 5 cross the threshold,
   // and the other three were each opened and read (two are genuinely atomic,
-  // one was a false positive of a naive resolver). The unwrapped set goes
-  // 18 -> 20 and loses nothing.
+  // one was a false positive of a naive resolver). The unwrapped set went
+  // 18 -> 20 and lost nothing. Neither entry remains listed here.
   //
-  // Damage strings TRANSCRIBED from each item's "Crash leaves" section. Note
-  // that `pruneOldEntries` cites 3319 and NOT its parent BACKLOG-2554, which
-  // names the same site: an entry citing a nine-bullet batch survives until the
-  // batch closes, so if 2554 shipped with this bullet unfixed the entry would
-  // cite a completed item while preserving a live defect — the BACKLOG-3053
-  // shape. The bullet was split out of 2554's scope for exactly that reason.
-  "electron/services/failureLogService.ts::pruneOldEntries":
-    "BACKLOG-3319 — the age DELETE commits and the cap DELETE does not, so the failure log keeps rows above the 500-row cap until the next startup prunes again. Diagnostics only — no user-visible record is lost. That is why this is low despite inheriting from a critical batch.",
+  // --- BACKLOG-3319: DISCHARGED — failureLogService.ts::pruneOldEntries now one dbTransaction; proof: failureLogService.pruneAtomicity-3319.test.ts
 
   // ==========================================================================
   // BACKLOG-3239 — SURFACED BY THE BRANCH-EXCLUSIVITY FIX
