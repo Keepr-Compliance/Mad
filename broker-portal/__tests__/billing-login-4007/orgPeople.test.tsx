@@ -70,7 +70,7 @@ async function openUserList() {
 
 const MEMBERS: OrgPeopleView['members'] = [
   { user_id: 'u-ag', member_id: 'm-ag', role: 'agent', name: 'agent one', email: 'agent@example.test' },
-  { user_id: 'u-b2', member_id: 'm-b2', role: 'agent', name: 'Bea Two', email: 'bea@example.test' },
+  { user_id: 'u-b2', member_id: 'm-b2', role: 'agent', name: 'Jane Doe', email: 'bea@example.test' },
 ];
 
 beforeEach(() => jest.clearAllMocks());
@@ -183,7 +183,7 @@ describe('OrgPeoplePanel', () => {
     fireEvent.change(screen.getByLabelText('Search users'), { target: { value: 'bea@' } });
     await openUserList();
     const names = screen.getAllByRole('option').map((o) => o.textContent);
-    expect(names).toEqual(['Bea Two (bea@example.test)']);
+    expect(names).toEqual(['Jane Doe (bea@example.test)']);
     expect(screen.queryByRole('option', { name: /agent one/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('option', { name: /stranger/ })).not.toBeInTheDocument();
   });
@@ -228,13 +228,13 @@ describe('OrgPeoplePanel', () => {
     const view = {
       ...VIEW,
       contacts: [
-        contact('b1', 'billing', { phone: '+12345678334' }),
+        contact('b1', 'billing', { phone: '+12025550123' }),
         contact('o1', 'office', { phone: '+442071838750' }),
       ],
     };
     render(<OrgPeoplePanel view={view} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
-    expect(within(row('billing')).getByText(/\(234\) 567-8334/)).toBeInTheDocument();
-    expect(within(row('billing')).queryByText(/\+12345678334/)).not.toBeInTheDocument();
+    expect(within(row('billing')).getByText(/\(202\) 555-0123/)).toBeInTheDocument();
+    expect(within(row('billing')).queryByText(/\+12025550123/)).not.toBeInTheDocument();
     expect(within(row('office')).getByText(/\+442071838750/)).toBeInTheDocument();
   });
 
