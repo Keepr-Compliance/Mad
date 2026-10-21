@@ -76,8 +76,6 @@ jest.mock("../services/databaseService", () => ({
   default: {
     getRawDatabase: () => db,
     getUserById: jest.fn(async () => ({ id: "user-2772" })),
-    backfillContactCommunicationDates: jest.fn(async () => 0),
-    backfillPhoneLastMessageTable: jest.fn(async () => 0),
   },
 }));
 
@@ -105,9 +103,10 @@ jest.mock("../services/autoLinkService", () => ({
   expandAttachedThreadsForUser: jest.fn().mockResolvedValue({ messagesLinked: 0, errors: 0 }),
 }));
 
-jest.mock("../services/db/externalContactDbService", () => ({
-  __esModule: true,
-  updateLastMessageAtFromLookupTable: jest.fn(() => 0),
+// BACKLOG-3222: the three post-import recency writes live in one owner now.
+const mockRefreshRecency = jest.fn(async (_userId: string) => ({ contacts: 0, phones: 0, external: 0 }));
+jest.mock("../services/messageRecencyRefresh", () => ({
+  refreshMessageRecencyAfterImport: (userId: string) => mockRefreshRecency(userId),
 }));
 
 jest.mock("../services/auditCoverageService", () => {
@@ -247,7 +246,10 @@ describe("BACKLOG-2772: every import entry point resolves its fetch once", () =>
   describe("the window rule, asserted at every entry point", () => {
     it("Import button: the deal's audit period stretches the stored 3-month window", async () => {
       insertDeal();
+      mockRefreshRecency.mockClear();
       const plan = await runImportButton(false);
+      // BACKLOG-3222 R3: the recency stub is wired (one refresh, for this user).
+      expect(mockRefreshRecency.mock.calls).toEqual([[USER]]);
 
       expect(plan.fetchStartISO).toBe(DEAL_START);
       expect(plan.mode).toBe("delta");
