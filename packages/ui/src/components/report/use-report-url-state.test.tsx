@@ -54,7 +54,9 @@ describe('useReportUrlState', () => {
     window.history.replaceState(null, '', '/reports/x?outcome=failed');
     render(<Report initial={codec.parse(new URLSearchParams(window.location.search))} />);
     fireEvent.click(screen.getByText('clear'));
-    expect(window.location.pathname + window.location.search).toBe('/reports/x');
+    // A bare trailing "?" reads as an empty search, so check the URL written.
+    expect(replace.mock.calls[replace.mock.calls.length - 1][2]).toBe('/reports/x');
+    expect(window.location.href.endsWith('/reports/x')).toBe(true);
   });
 
   it('renders on the server without touching history', () => {

@@ -32,11 +32,21 @@ describe('useClickOutside', () => {
     expect(cb).not.toHaveBeenCalled();
   });
 
-  it('removes its listener on unmount', () => {
+  it('removes the SAME listener it added, on unmount', () => {
+    // Behaviour alone cannot show a leak: React nulls the ref on unmount, so a
+    // leaked handler is silent. Check the listener itself.
+    const add = jest.spyOn(document, 'addEventListener');
+    const remove = jest.spyOn(document, 'removeEventListener');
     const cb = jest.fn();
     const { unmount } = render(<Box cb={cb} />);
+    const added = add.mock.calls.filter(([type]) => type === 'mousedown').map(([, fn]) => fn);
+    expect(added).toHaveLength(1);
     unmount();
+    const removed = remove.mock.calls.filter(([type]) => type === 'mousedown').map(([, fn]) => fn);
+    expect(removed).toContain(added[0]);
     fireEvent.mouseDown(document.body);
     expect(cb).not.toHaveBeenCalled();
+    add.mockRestore();
+    remove.mockRestore();
   });
 });
