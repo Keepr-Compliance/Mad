@@ -60,14 +60,14 @@ export function MyPhoneCard({ readOnly = false }: { readOnly?: boolean }) {
   return (
     <Card padding="none">
       <CardHeader>
-        <h2 className="text-lg font-semibold text-gray-900">Phone</h2>
+        <h2 className="text-lg font-semibold text-gray-900">Your phone</h2>
         <p className="mt-1 text-sm text-gray-600">Your brokerage admins and Keepr support can see it. Other agents cannot.</p>
       </CardHeader>
       <CardContent className="space-y-3">
         {error ? <AlertBanner variant="destructive">{error}</AlertBanner> : null}
         {saved ? <AlertBanner variant="success">Phone saved.</AlertBanner> : null}
         <div className="max-w-xs">
-          <Label htmlFor="my-phone" className="text-gray-900">Phone</Label>
+          <Label htmlFor="my-phone" className="text-gray-900">Phone number</Label>
           <Input
             id="my-phone"
             type="tel"

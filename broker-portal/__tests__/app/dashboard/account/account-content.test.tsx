@@ -24,6 +24,8 @@ import '@testing-library/jest-dom';
 const mockCreateClient = jest.fn();
 const mockGetDataClient = jest.fn();
 
+// BACKLOG-4007 People v2: My Account's phone card reads through a server action.
+jest.mock('@/lib/actions/myPhone', () => ({ getMyPhone: async () => ({ ok: true, phone: null }), setMyPhone: jest.fn() }));
 jest.mock('@/lib/supabase/server', () => ({
   createClient: (...args: unknown[]) => mockCreateClient(...args),
 }));
@@ -538,10 +540,11 @@ describe('AccountClient — saved settings', () => {
 
   it('offers no way to edit them', () => {
     render(<AccountClient account={makeAccount()} />);
-    // Sign Out All Devices is the only button this page should have.
+    // Sign Out All Devices, and (BACKLOG-4007 People v2) the person's own phone, are the only
+    // controls this page should have. The saved settings stay read-only.
     const buttons = screen.getAllByRole('button').map((b) => b.textContent);
-    expect(buttons).toEqual(['Sign Out All Devices']);
-    expect(screen.queryAllByRole('textbox')).toHaveLength(0);
+    expect(buttons).toEqual(['Save phone', 'Sign Out All Devices']);
+    expect(screen.queryAllByRole('textbox').map((t) => t.id)).toEqual(['my-phone']);
     expect(screen.queryAllByRole('combobox')).toHaveLength(0);
     expect(screen.queryAllByRole('switch')).toHaveLength(0);
   });

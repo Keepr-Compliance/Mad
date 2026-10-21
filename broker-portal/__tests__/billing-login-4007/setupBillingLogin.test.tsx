@@ -1,12 +1,12 @@
 /**
- * BACKLOG-4007 PR-4: the billing-only login from the setup guide's Billing step.
- *  - the action sends p_billing_login only for "Someone else" with the box ticked;
- *  - a created login (the RPC's billing_login, shape transcribed from keepr-test
- *    supabase/tests/backlog-4007-pr4: {success, token, email, name, org_name}) is emailed through
- *    the invite template with the billing-only line; a refusal ({success:false, error}) is reported
- *    and setup still counts as complete;
- *  - the checkbox shows for "Someone else" only;
- *  - the Done step words each outcome;
+ * BACKLOG-4007 PR-4 / People v2: the billing-only login from the setup guide's Billing step.
+ *  - People v2: there is no checkbox. "Someone else" who is not a member always gets the
+ *    billing-only login; p_billing_login is always false (ignored by the database);
+ *  - a created login (the RPC's billing_login, shape from keepr-test control
+ *    S1_setup_other_creates_login: {success, token, email, name, org_name}) is emailed through
+ *    the invite template with the billing-only line;
+ *  - a refusal stops setup (success false) with the founder's sentence (b7f3cefe);
+ *  - the Done step words a created login's email outcome;
  *  - SR F3: an account with a Microsoft identity is offered "Connect Microsoft" even when its
  *    first provider was Google.
  */
@@ -58,7 +58,6 @@ function input(over: Partial<CompleteBillingSetupInput> = {}): CompleteBillingSe
     acceptTerms: true,
     contact: { who: 'other', name: 'payer team', email: 'payer@example.test', phone: '202-555-0123' },
     company: { legal_name: 'Realty LLC', address_line1: '1 Main St', city: 'Seattle', region: 'WA', postal_code: '98101', country: 'US' },
-    billingLogin: true,
     ...over,
   };
 }
@@ -79,10 +78,10 @@ beforeEach(() => {
 });
 
 describe('completeBillingSetup with the billing-only login', () => {
-  it('"Someone else" + box: asks for the login, emails the invitation, reports sent', async () => {
+  it('"Someone else" not yet a member: the database creates the login; it is emailed and reported sent', async () => {
     completion(CREATED);
     const r = await completeBillingSetup(input());
-    expect(mockRpc.mock.calls[1][1]).toMatchObject({ p_billing_login: true });
+    expect(mockRpc.mock.calls[1][1]).toMatchObject({ p_billing_login: false });
     expect(r).toEqual({ success: true, billingStartsOn: '2026-10-30', billingLogin: 'sent' });
     expect(mockSendInvite).toHaveBeenCalledTimes(1);
     expect(mockSendInvite.mock.calls[0][0]).toMatchObject({
@@ -101,32 +100,34 @@ describe('completeBillingSetup with the billing-only login', () => {
     expect((await completeBillingSetup(input())) as { billingLogin?: string }).toMatchObject({ success: true, billingLogin: 'created' });
   });
 
-  it('a refusal (open invitation elsewhere): setup complete, code reported, no email', async () => {
-    completion({ success: false, error: 'duplicate_invitation' });
-    expect(await completeBillingSetup(input())).toEqual({ success: true, billingStartsOn: '2026-10-30', billingLogin: 'duplicate_invitation' });
+  it('a refusal stops setup with the founder sentence; no email', async () => {
+    mockRpc.mockImplementation(async (fn: string) => ({
+      data: fn === 'broker_accept_terms' ? { success: true } : { success: false, error: 'has_personal_account' },
+      error: null,
+    }));
+    expect(await completeBillingSetup(input())).toMatchObject({
+      success: false,
+      code: 'has_personal_account',
+      error: 'This person already has their own Keepr account. Pick another billing contact or invite them as a member.',
+    });
     expect(mockSendInvite).not.toHaveBeenCalled();
   });
 
-  it('"Me", or the box unticked: the login is never asked for', async () => {
+  it('"Me", or an existing member: no login is created and nothing is emailed', async () => {
     completion(null);
-    await completeBillingSetup(input({ contact: { who: 'me', phone: '202-555-0123' } }));
-    expect(mockRpc.mock.calls[1][1]).toMatchObject({ p_billing_login: false });
-    mockRpc.mockClear();
-    completion(null);
-    const r = await completeBillingSetup(input({ billingLogin: false }));
+    const r = await completeBillingSetup(input({ contact: { who: 'me', phone: '202-555-0123' } }));
     expect(mockRpc.mock.calls[1][1]).toMatchObject({ p_billing_login: false });
     expect(r).toEqual({ success: true, billingStartsOn: '2026-10-30' });
     expect(mockSendInvite).not.toHaveBeenCalled();
   });
 });
 
-describe('BillingStep checkbox', () => {
-  it('shows only for "Someone else"', () => {
+describe('BillingStep: no billing-only login checkbox', () => {
+  it('"Someone else" says what they get; there is no box', () => {
     render(<BillingStep organizationId="ORG-1" view={SETUP_VIEW_WAITING} />);
-    expect(screen.queryByLabelText('Give them a billing-only login')).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('Someone else'));
-    expect(screen.getByLabelText('Give them a billing-only login')).not.toBeChecked();
-    expect(screen.getByText(/It does not use a seat\./)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Give them a billing-only login')).not.toBeInTheDocument();
+    expect(screen.getByText(/they get a billing-only login: Billing and Support only, no seat\./)).toBeInTheDocument();
   });
 });
 
@@ -134,21 +135,14 @@ describe('Done step note', () => {
   it.each([
     ['sent', 'info', /emailed the billing contact an invitation/],
     ['created', 'warning', /did not send/],
-    ['duplicate_invitation', 'warning', /already has an open invitation.*was not created/],
-    ['something-else', 'warning', /could not be created.*was not created/],
   ])('%s', (outcome, tone, text) => {
     const n = billingLoginNote(outcome);
     expect(n?.tone).toBe(tone);
     expect(n?.text).toMatch(text);
   });
-  it('nothing when there was no login', () => {
+  it('nothing when there was no login, or for any other value (a refusal never reaches Done)', () => {
     expect(billingLoginNote(null)).toBeNull();
-  });
-  it('F6: a person with their own Keepr account gets the founder sentence, exactly', () => {
-    expect(billingLoginNote('has_personal_account')).toEqual({
-      tone: 'warning',
-      text: 'This person already has their own Keepr account. Pick another billing contact or invite them as a member.',
-    });
+    expect(billingLoginNote('duplicate_invitation')).toBeNull();
   });
 });
 
