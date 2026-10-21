@@ -50,7 +50,7 @@ jest.mock("../databaseService", () => {
     __esModule: true,
     default: {
       getMessageById: async (id: string) => messageDb.getMessageById(id),
-      getMessagesByContact: async (u: string, c: string) => messageDb.getMessagesByContact(u, c),
+      getMessagesByContact: async (u: string, c: string, t: string) => messageDb.getMessagesByContact(u, c, t),
       getCommunicationsByTransaction: async (txId: string) =>
         communicationDb.getCommunicationsByTransaction(txId),
       updateTransaction: async (txId: string, updates: any) => transactionDb.updateTransaction(txId, updates),
@@ -153,7 +153,7 @@ const perMessageLinksA = (): string[] =>
       )
       .all(TX_A) as Array<{ message_id: string }>
   ).map((r) => r.message_id);
-const picker = (): string[] => getMessagesByContact(USER, PHONE).map((m) => m.id).sort();
+const picker = (tx: string): string[] => getMessagesByContact(USER, PHONE, tx).map((m) => m.id).sort();
 const roster = (): string[] =>
   (realDb!.prepare(MESSAGE_ROSTER_SQL).all(USER) as Array<{ contact: string }>).map((r) => r.contact);
 const candidatesFor = (tx: string): string[] =>
@@ -184,7 +184,7 @@ describe("BACKLOG-3908 repro — shared text removed from deal B", () => {
     await linkAThenAutoLinkB();
     expect(column()).toEqual([TX_A, TX_A]);
     expect(perMessageLinksA()).toEqual(IDS);
-    expect(picker()).toEqual([]);
+    expect(picker(TX_A)).toEqual([]);
     expect(roster()).toEqual([]);
     expect(candidatesFor(TX_A)).toEqual([]);
     // Per-message rows carry no thread_id, so the auto-link thread guard is false for
@@ -202,7 +202,10 @@ describe("BACKLOG-3908 repro — shared text removed from deal B", () => {
   it("PRE-EXISTING: a thread linked to A only by auto-link (thread row) never sets the column", async () => {
     await createThreadCommunicationReference(THREAD, TX_A, USER, "auto", 0.9);
     expect(column()).toEqual([null, null]);
-    expect(picker()).toEqual(IDS);
+    // BACKLOG-4017 (inverted): the column stays NULL, but A's picker no longer offers
+    // a chat linked to A; B's picker still does.
+    expect(picker(TX_A)).toEqual([]);
+    expect(picker(TX_B)).toEqual(IDS);
     expect(candidatesFor(TX_A)).toEqual([]); // the thread-row arm excludes it here
   });
 
@@ -217,7 +220,7 @@ describe("BACKLOG-3908 repro — shared text removed from deal B", () => {
     expect(perMessageLinksA()).toEqual(IDS);
     expect(column()).toEqual([TX_A, TX_A]);
     // Attach picker, roster and A's auto-link candidates do not offer them.
-    expect(picker()).toEqual([]);
+    expect(picker(TX_A)).toEqual([]);
     expect(roster()).toEqual([]);
     expect(candidatesFor(TX_A)).toEqual([]);
     // The thread guard still does not see per-message rows; the column is

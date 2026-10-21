@@ -309,7 +309,7 @@ describe("C2 leakage enforcement — reactions never surface in list/count/searc
   });
 
   it("getMessagesByContact returns the real message only (in-memory partition)", () => {
-    const ids = getMessagesByContact(USER, "13105559999").map((m) => m.id);
+    const ids = getMessagesByContact(USER, "13105559999", "tx-no-thread-link").map((m) => m.id);
     expect(new Set(ids)).toEqual(new Set(["PU1"]));
   });
 

@@ -271,9 +271,11 @@ describe("AttachMessagesModal", () => {
 
       // Should call getMessagesByContact
       await waitFor(() => {
+        // BACKLOG-4017: the open deal's id scopes which texts are offered.
         expect(mockGetMessagesByContact).toHaveBeenCalledWith(
           "user-123",
-          "+14155550100"
+          "+14155550100",
+          "txn-456"
         );
       });
     });
@@ -647,9 +649,9 @@ describe("AttachMessagesModal", () => {
 
       // Messages loaded for EACH constituent handle.
       await waitFor(() => {
-        expect(mockGetMessagesByContact).toHaveBeenCalledWith("user-123", "+14155550100");
-        expect(mockGetMessagesByContact).toHaveBeenCalledWith("user-123", "4155550100");
-        expect(mockGetMessagesByContact).toHaveBeenCalledWith("user-123", "romina@icloud.com");
+        expect(mockGetMessagesByContact).toHaveBeenCalledWith("user-123", "+14155550100", "txn-456");
+        expect(mockGetMessagesByContact).toHaveBeenCalledWith("user-123", "4155550100", "txn-456");
+        expect(mockGetMessagesByContact).toHaveBeenCalledWith("user-123", "romina@icloud.com", "txn-456");
       });
 
       // The four raw threads collapse into a SINGLE conversation entry.

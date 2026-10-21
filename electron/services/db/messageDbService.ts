@@ -10,6 +10,7 @@ import logService from "../logService";
 import { toLookupKey } from "../../utils/phoneNormalization";
 import { LOCAL_REACTION_EXCLUSION, reactionExclusion } from "./reactionExclusion";
 import { isReactionRow } from "../../utils/reactionUtils";
+import { notInDealTextThread } from "./textThreadLinkExclusion";
 
 // ============================================
 // LLM ANALYSIS OPERATIONS
@@ -197,8 +198,17 @@ export type PickerMessage = Pick<
  * Strategy: First find all thread_ids where the contact appears, then fetch
  * ALL messages from those threads. This ensures group chats are fully captured
  * even when individual messages have different handles.
+ *
+ * BACKLOG-4017: `transactionId` is the deal the picker is open on. A chat linked
+ * to THAT deal at thread level (auto-link) is not offered; a chat linked to another
+ * deal still is. Step 1 and the fallback carry the predicate; step 2 reads only
+ * thread ids step 1 already filtered.
  */
-export function getMessagesByContact(userId: string, contact: string): PickerMessage[] {
+export function getMessagesByContact(
+  userId: string,
+  contact: string,
+  transactionId: string,
+): PickerMessage[] {
   const db = ensureDb();
 
   // Step 1: Find all thread_ids where the contact appears in any message
@@ -212,8 +222,9 @@ export function getMessagesByContact(userId: string, contact: string): PickerMes
         json_extract(participants, '$.from') = ?
         OR json_extract(participants, '$.to[0]') = ?
       )
+      AND ${notInDealTextThread("messages")}
   `;
-  const threadRows = db.prepare(threadIdsSql).all(userId, contact, contact) as { thread_id: string }[];
+  const threadRows = db.prepare(threadIdsSql).all(userId, contact, contact, transactionId) as { thread_id: string }[];
   const threadIds = threadRows.map(r => r.thread_id);
 
   // BACKLOG-2280: reaction rows live in the same threads and ride along on
@@ -234,9 +245,10 @@ export function getMessagesByContact(userId: string, contact: string): PickerMes
           json_extract(m.participants, '$.from') = ?
           OR json_extract(m.participants, '$.to[0]') = ?
         )
+        AND ${notInDealTextThread("m")}
       ORDER BY m.sent_at DESC
     `;
-    const rows = db.prepare(fallbackSql).all(userId, contact, contact) as PickerMessage[];
+    const rows = db.prepare(fallbackSql).all(userId, contact, contact, transactionId) as PickerMessage[];
     return rows.filter((m) => !isReactionRow(m));
   }
 
@@ -252,6 +264,36 @@ export function getMessagesByContact(userId: string, contact: string): PickerMes
   `;
   const rows = db.prepare(messagesSql).all(userId, ...threadIds) as PickerMessage[];
   return rows.filter((m) => !isReactionRow(m));
+}
+
+/**
+ * BACKLOG-4017: how many of this contact's texts the picker left out because their
+ * chat is linked (thread level) to `transactionId`. Same base conditions as step 1
+ * of `getMessagesByContact`, with the shared predicate negated. Used only to tell
+ * "everything is already attached to this deal" apart from "no texts at all".
+ */
+export function countContactTextsLinkedToDeal(
+  userId: string,
+  contact: string,
+  transactionId: string,
+): number {
+  const db = ensureDb();
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS n FROM messages m
+       WHERE m.user_id = ?
+         AND m.transaction_id IS NULL
+         AND m.channel IN ('sms', 'imessage')
+         AND m.thread_id IS NOT NULL
+         AND (
+           json_extract(m.participants, '$.from') = ?
+           OR json_extract(m.participants, '$.to[0]') = ?
+         )
+         AND ${reactionExclusion("m")}
+         AND NOT ${notInDealTextThread("m")}`,
+    )
+    .get(userId, contact, contact, transactionId) as { n: number };
+  return row.n;
 }
 
 // ============================================

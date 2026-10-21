@@ -50,7 +50,7 @@ jest.mock("../databaseService", () => {
     __esModule: true,
     default: {
       getMessageById: async (id: string) => messageDb.getMessageById(id),
-      getMessagesByContact: async (u: string, c: string) => messageDb.getMessagesByContact(u, c),
+      getMessagesByContact: async (u: string, c: string, t: string) => messageDb.getMessagesByContact(u, c, t),
       getCommunicationsByTransaction: async (txId: string) =>
         communicationDb.getCommunicationsByTransaction(txId),
       updateTransaction: async (txId: string, updates: any) => transactionDb.updateTransaction(txId, updates),
@@ -159,7 +159,7 @@ const perMessageLinksA = (): string[] =>
       )
       .all(TX_A) as Array<{ message_id: string }>
   ).map((r) => r.message_id);
-const picker = (): string[] => getMessagesByContact(USER, PHONE).map((m) => m.id).sort();
+const picker = (tx: string): string[] => getMessagesByContact(USER, PHONE, tx).map((m) => m.id).sort();
 const roster = (): string[] =>
   (realDb!.prepare(MESSAGE_ROSTER_SQL).all(USER) as Array<{ contact: string }>).map((r) => r.contact);
 const candidatesFor = (tx: string): string[] =>
@@ -203,7 +203,7 @@ describe("BACKLOG-3908 controls — unlink re-points the column to a remaining l
     await removeConversationFromB();
     expect(column()).toEqual([TX_A, TX_A]);
     expect(perMessageLinksA()).toEqual(IDS);
-    expect(picker()).toEqual([]);
+    expect(picker(TX_A)).toEqual([]);
     expect(roster()).toEqual([]);
     expect(candidatesFor(TX_A)).toEqual([]);
   });
@@ -214,7 +214,7 @@ describe("BACKLOG-3908 controls — unlink re-points the column to a remaining l
     expect(column()).toEqual([TX_B, TX_B]);
     await removeConversationFromB();
     expect(column()).toEqual([TX_A, TX_A]);
-    expect(picker()).toEqual([]);
+    expect(picker(TX_B)).toEqual([]);
   });
 
   it("C3 ordering: B holds per-message AND thread rows -> recompute must not see B's thread row", async () => {
@@ -231,7 +231,7 @@ describe("BACKLOG-3908 controls — unlink re-points the column to a remaining l
     await transactionService.linkMessages(IDS, TX_B);
     await removeConversationFromB();
     expect(column()).toEqual([null, null]);
-    expect(picker()).toEqual(IDS);
+    expect(picker(TX_B)).toEqual(IDS);
   });
 
   it("C5 atomicity: a failed re-point rolls back every write of the unlink", async () => {

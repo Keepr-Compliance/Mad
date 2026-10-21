@@ -1,10 +1,12 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-4017 REPRO (no fix). A conversation auto-linked to a deal at THREAD level
- * (a communications row with thread_id, message_id NULL) leaves messages.transaction_id
- * NULL, so the attach-texts picker (getMessagesByContact) and its contact roster
- * (MESSAGE_ROSTER_SQL) offer texts the deal already shows.
+ * BACKLOG-4017 REPRO, inverted with the fix. A conversation auto-linked to a deal at
+ * THREAD level (a communications row with thread_id, message_id NULL) leaves
+ * messages.transaction_id NULL. Before the fix the attach-texts picker
+ * (getMessagesByContact) offered texts the deal already shows. Now that deal's picker
+ * leaves them out. The contact roster (MESSAGE_ROSTER_SQL) is per user and still
+ * lists the contact (founder decision, option B).
  *
  * REAL schema.sql, real driver, every write through the real producer:
  *   1. autoLinkCommunicationsForContact({ contactId, transactionId })   - the deal's auto-link
@@ -66,7 +68,7 @@ function insertText(id: string, sentAt: string): void {
 
 const column = (): Array<string | null> =>
   (db.prepare("SELECT transaction_id FROM messages WHERE thread_id = ? ORDER BY id").all(THREAD) as Array<{ transaction_id: string | null }>).map((r) => r.transaction_id);
-const picker = (): string[] => getMessagesByContact(USER, PHONE).map((m) => m.id).sort();
+const picker = (): string[] => getMessagesByContact(USER, PHONE, TXN).map((m) => m.id).sort();
 const roster = (): string[] => (db.prepare(MESSAGE_ROSTER_SQL).all(USER) as Array<{ contact: string }>).map((r) => r.contact);
 const dealTexts = async (): Promise<string[]> =>
   (await getCommunicationsWithMessages(TXN, "text")).map((c) => (c as unknown as { message_id?: string; id: string }).message_id ?? c.id).sort();
@@ -94,24 +96,24 @@ maybe("BACKLOG-4017 repro: a thread-level auto-link leaves the texts in the atta
     expect(roster()).toContain(PHONE);
   });
 
-  it("BUG: after auto-link the deal shows the texts AND the picker still offers them", async () => {
+  it("FIXED: after auto-link the deal shows the texts and its picker no longer offers them", async () => {
     const res = await autoLinkCommunicationsForContact({ contactId: "c1", transactionId: TXN });
     expect(res.messagesLinked).toBe(1); // one thread
     const rows = db.prepare("SELECT message_id, email_id, thread_id FROM communications WHERE transaction_id = ?").all(TXN);
     expect(rows).toEqual([{ message_id: null, email_id: null, thread_id: THREAD }]);
     expect(await dealTexts()).toHaveLength(2); // the deal's Texts tab shows both
     expect(column()).toEqual([null, null]);
-    expect(picker()).toEqual(IDS); // BUG: offered as attachable
-    expect(roster()).toContain(PHONE); // BUG: contact listed as having attachable texts
+    expect(picker()).toEqual([]); // was IDS before BACKLOG-4017
+    expect(roster()).toContain(PHONE); // unchanged by design: the roster is per user (option B)
   });
 
-  it("BUG PERSISTS: thread expansion never touches a thread-level link", async () => {
+  it("thread expansion still never touches a thread-level link; the picker keys on the thread row instead", async () => {
     await autoLinkCommunicationsForContact({ contactId: "c1", transactionId: TXN });
     const exp = await expandAttachedThreadsForUser(USER);
     expect(exp.pairsExamined).toBe(0); // LINKED_THREAD_PAIRS_SQL requires c.message_id IS NOT NULL
     expect(exp.messagesLinked).toBe(0);
     expect(column()).toEqual([null, null]);
-    expect(picker()).toEqual(IDS);
+    expect(picker()).toEqual([]); // was IDS before BACKLOG-4017
   });
 
   it("removing the conversation leaves the texts in the picker (unchanged by any fix)", async () => {

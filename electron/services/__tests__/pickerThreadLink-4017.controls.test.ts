@@ -1,17 +1,18 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-4017 CONTROLS (proposed; red on today's code where noted). A conversation auto-linked to a deal at THREAD level
- * (a communications row with thread_id, message_id NULL) leaves messages.transaction_id
- * NULL, so the attach-texts picker (getMessagesByContact) and its contact roster
- * (MESSAGE_ROSTER_SQL) offer texts the deal already shows.
+ * BACKLOG-4017 CONTROLS. A conversation auto-linked to a deal at THREAD level (a
+ * communications row with thread_id, message_id NULL and email_id NULL) leaves
+ * messages.transaction_id NULL. The attach-texts picker (getMessagesByContact) for
+ * THAT deal leaves those texts out; every other deal's picker still offers them
+ * (founder decision: per deal). The contact roster (MESSAGE_ROSTER_SQL) is per user
+ * and unchanged (option B).
  *
  * REAL schema.sql, real driver, every write through the real producer:
  *   1. autoLinkCommunicationsForContact({ contactId, transactionId })   - the deal's auto-link
- *   2. expandAttachedThreadsForUser(userId)                             - "thread expansion"
- *   3. unlinkTextThreads(transactionId, [thread])                       - remove conversation
- * Reads: getMessagesByContact, MESSAGE_ROSTER_SQL (picker), getCommunicationsWithMessages
- * (the deal's Texts tab).
+ *   2. unlinkTextThreads(transactionId, [thread])                       - remove conversation
+ * Reads: getMessagesByContact (picker), countContactTextsLinkedToDeal (picker empty
+ * state), MESSAGE_ROSTER_SQL, getCommunicationsWithMessages (the deal's Texts tab).
  *
  * Real driver: ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js --bail=0 <file>
  * Reserved 555-01xx numbers, .test addresses. Message row shape: iPhoneSyncStorageService.ts:574-577.
@@ -28,8 +29,8 @@ jest.mock("../logService", () => {
 });
 
 import { setDb } from "../db/core/dbConnection";
-import { autoLinkCommunicationsForContact, expandAttachedThreadsForUser, resetExpansionWatermarksForTests } from "../autoLinkService";
-import { getMessagesByContact } from "../db/messageDbService";
+import { autoLinkCommunicationsForContact, resetExpansionWatermarksForTests } from "../autoLinkService";
+import { countContactTextsLinkedToDeal, getMessagesByContact } from "../db/messageDbService";
 import { MESSAGE_ROSTER_SQL } from "../db/messageRosterDb";
 import { getCommunicationsWithMessages } from "../db/communicationDbService";
 import { unlinkTextThreads } from "../transactionTextThreadsService";
@@ -51,6 +52,7 @@ const maybe = Database ? describe : describe.skip;
 
 const USER = "40170000-0000-4000-8000-0000000000aa"; // pii-allow-uuid: invented, not from any live row
 const TXN = "40170000-0000-4000-8000-0000000000bb"; // pii-allow-uuid: invented, not from any live row
+const TXN_B = "40170000-0000-4000-8000-0000000000cc"; // pii-allow-uuid: invented, not from any live row
 const PHONE = "+12065550117";
 const THREAD = "ios-chat-4017";
 const IDS = ["m-4017-1", "m-4017-2"];
@@ -64,9 +66,8 @@ function insertText(id: string, sentAt: string): void {
   ).run(id, USER, `g-${id}`, JSON.stringify({ from: PHONE, to: ["me"] }), PHONE.slice(1), THREAD, sentAt, `body ${id}`);
 }
 
-const column = (): Array<string | null> =>
-  (db.prepare("SELECT transaction_id FROM messages WHERE thread_id = ? ORDER BY id").all(THREAD) as Array<{ transaction_id: string | null }>).map((r) => r.transaction_id);
-const picker = (): string[] => getMessagesByContact(USER, PHONE).map((m) => m.id).sort();
+const picker = (tx: string = TXN): string[] => getMessagesByContact(USER, PHONE, tx).map((m) => m.id).sort();
+const hiddenCount = (tx: string = TXN): number => countContactTextsLinkedToDeal(USER, PHONE, tx);
 const roster = (): string[] => (db.prepare(MESSAGE_ROSTER_SQL).all(USER) as Array<{ contact: string }>).map((r) => r.contact);
 const dealTexts = async (): Promise<string[]> =>
   (await getCommunicationsWithMessages(TXN, "text")).map((c) => (c as unknown as { message_id?: string; id: string }).message_id ?? c.id).sort();
@@ -78,6 +79,7 @@ function seedBase(): void {
   db.exec(readFileSync(path.join(__dirname, "../../database/schema.sql"), "utf8"));
   db.prepare("INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, 'owner@example.test', 'google', 'o')").run(USER);
   db.prepare("INSERT INTO transactions (id, user_id, property_address, status, started_at) VALUES (?, ?, '1 Probe Way', 'active', '2020-01-01T00:00:00Z')").run(TXN, USER);
+  db.prepare("INSERT INTO transactions (id, user_id, property_address, status, started_at) VALUES (?, ?, '2 Probe Way', 'active', '2020-01-01T00:00:00Z')").run(TXN_B, USER);
   db.prepare("INSERT INTO contacts (id, user_id, display_name, source) VALUES ('c1', ?, 'Party', 'manual')").run(USER);
   db.prepare("INSERT INTO contact_phones (id, contact_id, phone_e164, phone_normalized) VALUES ('cp1', 'c1', ?, ?)").run(PHONE, PHONE.slice(1));
   db.prepare("INSERT INTO transaction_contacts (id, transaction_id, contact_id) VALUES ('tc1', ?, 'c1')").run(TXN);
@@ -91,11 +93,32 @@ maybe("BACKLOG-4017 controls", () => {
   beforeEach(seedBase);
   afterEach(() => db.close());
 
-  it("K1 reported case: after auto-link the picker and roster no longer offer the deal's texts; the deal still shows them", async () => {
+  it("K1 reported case: after auto-link this deal's picker no longer offers the deal's texts; the deal still shows them", async () => {
     await autoLinkCommunicationsForContact({ contactId: "c1", transactionId: TXN });
     expect(await dealTexts()).toHaveLength(2);
     expect(picker()).toEqual([]);
-    expect(roster()).not.toContain(PHONE);
+    expect(hiddenCount()).toBe(2);
+  });
+
+  it("K8 per deal: a chat linked to deal A stays in deal B's picker", async () => {
+    await autoLinkCommunicationsForContact({ contactId: "c1", transactionId: TXN });
+    expect(picker(TXN)).toEqual([]);
+    expect(picker(TXN_B)).toEqual(IDS);
+    expect(hiddenCount(TXN_B)).toBe(0);
+  });
+
+  it("K9 a chat linked to both deals is left out of both pickers", async () => {
+    await autoLinkCommunicationsForContact({ contactId: "c1", transactionId: TXN });
+    db.prepare("INSERT INTO transaction_contacts (id, transaction_id, contact_id) VALUES ('tc2', ?, 'c1')").run(TXN_B);
+    await autoLinkCommunicationsForContact({ contactId: "c1", transactionId: TXN_B });
+    expect(db.prepare("SELECT COUNT(*) n FROM communications WHERE thread_id = ? AND message_id IS NULL").get(THREAD)).toEqual({ n: 2 });
+    expect(picker(TXN)).toEqual([]);
+    expect(picker(TXN_B)).toEqual([]);
+  });
+
+  it("K10 the contact roster is per user and unchanged: the contact stays listed after the link", async () => {
+    await autoLinkCommunicationsForContact({ contactId: "c1", transactionId: TXN });
+    expect(roster()).toContain(PHONE);
   });
 
   it("K2 late sibling: a text arriving in the linked thread after the link is not offered either", async () => {
@@ -103,36 +126,47 @@ maybe("BACKLOG-4017 controls", () => {
     insertText("m-4017-3", "2025-01-03T10:00:00Z"); // what a later sync writes: column NULL
     expect(await dealTexts()).toHaveLength(3);
     expect(picker()).toEqual([]);
-    expect(roster()).not.toContain(PHONE);
+    expect(picker(TXN_B)).toEqual([...IDS, "m-4017-3"]);
   });
 
   it("K3 removing the conversation puts the texts back in the picker", async () => {
     await autoLinkCommunicationsForContact({ contactId: "c1", transactionId: TXN });
     await unlinkTextThreads(TXN, [THREAD]);
     expect(picker()).toEqual(IDS);
-    expect(roster()).toContain(PHONE);
+    expect(hiddenCount()).toBe(0);
   });
 
   it("K4 an EMAIL link row carrying the same thread_id does not hide texts", () => {
     db.prepare("INSERT INTO emails (id, user_id, subject, thread_id) VALUES ('e1', ?, 's', ?)").run(USER, THREAD);
     db.prepare("INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id, link_source) VALUES ('ce1', ?, ?, 'e1', ?, 'manual')").run(USER, TXN, THREAD);
     expect(picker()).toEqual(IDS);
-    expect(roster()).toContain(PHONE);
+    expect(hiddenCount()).toBe(0);
   });
 
-  it("K5 a thread row whose deal no longer exists does not hide texts (same rule as the 3908 re-point)", () => {
+  it("K5 a thread row whose deal no longer exists does not hide texts from an open deal's picker", () => {
     db.exec("PRAGMA foreign_keys = OFF");
     db.prepare("INSERT INTO communications (id, user_id, transaction_id, thread_id, link_source) VALUES ('co1', ?, 'gone-deal', ?, 'auto')").run(USER, THREAD);
-    expect(picker()).toEqual(IDS);
-    expect(roster()).toContain(PHONE);
+    expect(picker(TXN)).toEqual(IDS);
+    expect(picker(TXN_B)).toEqual(IDS);
   });
 
-  it("K7 a text with no thread_id still reaches the picker's fallback read when another thread is linked", async () => {
+  it("K11 another user's thread row for the same chat id and deal id does not hide texts", () => {
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.prepare("INSERT INTO communications (id, user_id, transaction_id, thread_id, link_source) VALUES ('cu1', 'other-user', ?, ?, 'auto')").run(TXN, THREAD);
+    expect(picker()).toEqual(IDS);
+  });
+
+  it("K7 a text with no thread_id still reaches the picker's fallback read when the contact's only thread is linked", async () => {
     await autoLinkCommunicationsForContact({ contactId: "c1", transactionId: TXN });
     db.prepare(
       `INSERT INTO messages (id, user_id, external_id, channel, direction, participants, participants_flat, thread_id, sent_at, message_type, body_text)
        VALUES ('m-4017-nt', ?, 'g-nt', 'sms', 'inbound', ?, ?, NULL, '2025-02-01T10:00:00Z', 'text', 'no thread')`,
     ).run(USER, JSON.stringify({ from: PHONE, to: ["me"] }), PHONE.slice(1));
     expect(picker()).toEqual(["m-4017-nt"]);
+  });
+
+  it("K12 empty-state count: zero for a contact with no texts at all", () => {
+    expect(countContactTextsLinkedToDeal(USER, "+12065550199", TXN)).toBe(0);
+    expect(getMessagesByContact(USER, "+12065550199", TXN)).toEqual([]);
   });
 });

@@ -263,14 +263,17 @@ describe("migration v76 — BACKLOG-4018, texts with an empty deal column on the
     expect(after["F7-1"]).toBeNull();
     // No link row is added or removed.
     expect(links(db)).toEqual(dumpLinks);
-    // The auto-linked thread (F4) stays in the attach picker; F1, now in deal A, does not.
+    // BACKLOG-4017 (inverted): the auto-linked thread (F4, thread row in tx-A) is left
+    // out of tx-A's attach picker and stays in any other deal's; F1, now in deal A, is
+    // in neither.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { getMessagesByContact } = require("../db/messageDbService");
-    expect(getMessagesByContact("u-4018", "+15550114").map((m: { id: string }) => m.id).sort()).toEqual([
+    expect(getMessagesByContact("u-4018", "+15550114", "tx-A")).toEqual([]);
+    expect(getMessagesByContact("u-4018", "+15550114", "tx-B").map((m: { id: string }) => m.id).sort()).toEqual([
       "F4-1",
       "F4-2",
     ]);
-    expect(getMessagesByContact("u-4018", "+15550111")).toEqual([]);
+    expect(getMessagesByContact("u-4018", "+15550111", "tx-A")).toEqual([]);
     // Idempotent.
     rerunV76(svc, db);
     expect(column(db)).toEqual(AFTER_ALL);

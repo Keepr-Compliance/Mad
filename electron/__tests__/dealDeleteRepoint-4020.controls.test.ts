@@ -145,7 +145,7 @@ const links = (tx: string): string[] =>
   (db.prepare(
     "SELECT coalesce(message_id, 'thread:' || thread_id) AS k FROM communications WHERE transaction_id = ? ORDER BY k",
   ).all(tx) as Array<{ k: string }>).map((r) => r.k);
-const picker = (): string[] => messageDb.getMessagesByContact(USER, PHONE).map((m) => m.id).sort();
+const picker = (tx: string): string[] => messageDb.getMessagesByContact(USER, PHONE, tx).map((m) => m.id).sort();
 const deletes = (): number =>
   (db.prepare("SELECT count(*) AS n FROM audit_logs WHERE action = 'TRANSACTION_DELETE' AND success = 1").get() as any).n;
 
@@ -188,7 +188,7 @@ test("C1 single delete of A: column re-points to B", async () => {
   expect(spy).toHaveBeenCalledTimes(2); // the spy seam reaches the production call site
   expect(column()).toEqual([B, B]);
   expect(getMessageTransactionIds(IDS)).toEqual([B, B]);
-  expect(picker()).toEqual([]);
+  expect(picker(B)).toEqual([]);
   expect(links(B)).toEqual(IDS);
   expect(deletes()).toBe(1);
 });
@@ -198,7 +198,7 @@ test("C2 bulk delete [other, A]: column re-points to B", async () => {
   const res = await invoke("transactions:bulk-delete", [other, A]);
   expect(res.deletedCount).toBe(2);
   expect(column()).toEqual([B, B]);
-  expect(picker()).toEqual([]);
+  expect(picker(B)).toEqual([]);
   expect(deletes()).toBe(2);
 });
 test("C3 B holds only the thread row: column re-points to B", async () => {
@@ -225,13 +225,15 @@ test("C5 deleting a deal the column does not name changes nothing; deleting the 
   await invoke("transactions:delete", A);
   expect(column()).toEqual([null, null]);
 });
-test("C6 a text auto-linked to B only keeps column NULL (stays in the picker)", async () => {
+test("C6 a text auto-linked to B only keeps column NULL (out of B's picker, in any other deal's)", async () => {
   const { A, B } = await sharedPerMessage();
   await autoOnly(B);
   expect(colX()).toBeNull();
   await invoke("transactions:delete", A);
   expect(colX()).toBeNull();
-  expect(picker()).toContain("m-4020-x");
+  // BACKLOG-4017 (inverted): B's picker leaves out a chat linked to B; another deal's offers it.
+  expect(picker(B)).not.toContain("m-4020-x");
+  expect(picker(deal("4 Fixture Way"))).toContain("m-4020-x");
 });
 
 describe("C7 crash sweep, single delete: nothing changes", () => {

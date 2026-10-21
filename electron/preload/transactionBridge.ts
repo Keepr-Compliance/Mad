@@ -425,8 +425,8 @@ export const transactionBridge = {
    * @param contact - Phone number/contact identifier
    * @returns List of messages for that contact
    */
-  getMessagesByContact: (userId: string, contact: string) =>
-    ipcRenderer.invoke("transactions:get-messages-by-contact", userId, contact),
+  getMessagesByContact: (userId: string, contact: string, transactionId: string) =>
+    ipcRenderer.invoke("transactions:get-messages-by-contact", userId, contact, transactionId),
 
   /**
    * Links messages to a transaction

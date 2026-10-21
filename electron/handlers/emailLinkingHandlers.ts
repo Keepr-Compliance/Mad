@@ -541,8 +541,9 @@ export function registerEmailLinkingHandlers(): void {
       event: IpcMainInvokeEvent,
       userId: string,
       contact: string,
+      transactionId: string,
     ): Promise<TransactionResponse> => {
-      logService.info("Getting messages by contact", "Transactions", { userId, contact });
+      logService.info("Getting messages by contact", "Transactions", { userId, contact, transactionId });
 
       const validatedUserId = validateUserId(userId);
       if (!validatedUserId) {
@@ -553,11 +554,33 @@ export function registerEmailLinkingHandlers(): void {
         throw new ValidationError("Contact is required", "contact");
       }
 
-      const messages = await transactionService.getMessagesByContact(validatedUserId, contact);
+      // BACKLOG-4017: the deal the picker is open on; its thread-linked chats are left out.
+      const validatedTransactionId = validateTransactionId(transactionId);
+      if (!validatedTransactionId) {
+        throw new ValidationError("Transaction ID validation failed", "transactionId");
+      }
+
+      const messages = await transactionService.getMessagesByContact(
+        validatedUserId,
+        contact,
+        validatedTransactionId,
+      );
+
+      // BACKLOG-4017: only when nothing is offered, say whether that is because the
+      // contact's texts are all in chats linked to this deal (same IPC call).
+      const linkedToDealCount =
+        messages.length === 0
+          ? await transactionService.countContactTextsLinkedToDeal(
+              validatedUserId,
+              contact,
+              validatedTransactionId,
+            )
+          : 0;
 
       return {
         success: true,
         messages,
+        linkedToDealCount,
       };
     }, { module: "Transactions" }),
   );
