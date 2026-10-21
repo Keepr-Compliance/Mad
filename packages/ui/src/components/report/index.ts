@@ -3,15 +3,18 @@
 export { SortableTh } from './sortable-th';
 export type { SortableThProps } from './sortable-th';
 
-export { useSortState, nextSort } from './use-sort-state';
+export { useSortState } from './use-sort-state';
+export { nextSort } from './sort';
 export type { SortDirection, SortState, UseSortStateOptions, UseSortStateResult } from './use-sort-state';
 
 export { useClickOutside } from './use-click-outside';
 
-export { MultiSelect, MultiSelectOptions, selectAllValues } from './multi-select';
+export { MultiSelect, MultiSelectOptions } from './multi-select';
+export { selectAllValues } from './select-all';
 export type { MultiSelectOption, MultiSelectOptionsProps, MultiSelectProps } from './multi-select';
 
-export { FilterBar, FilterCaption, filterCaptionText } from './filter-bar';
+export { FilterBar, FilterCaption } from './filter-bar';
+export { filterCaptionText } from './filter-caption-text';
 export type { FilterBarProps, FilterCaptionProps } from './filter-bar';
 
 export { PeriodPicker } from './period-picker';

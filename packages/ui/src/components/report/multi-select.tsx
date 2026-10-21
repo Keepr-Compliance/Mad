@@ -5,6 +5,7 @@ import { ChevronDown, X } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { Checkbox } from '../checkbox';
 import { useClickOutside } from './use-click-outside';
+import { selectAllValues } from './select-all';
 
 /**
  * Report kit — multi-select (BACKLOG-3502a, amendment A4).
@@ -45,18 +46,6 @@ export interface MultiSelectOptionsProps {
   /** Accessible name of the option group, e.g. "Outcome" (aria-label, no visible text). */
   ariaLabel?: string;
   className?: string;
-}
-
-/** Every option value selected, keeping anything already selected, no duplicates. */
-export function selectAllValues(
-  options: readonly MultiSelectOption[],
-  selected: readonly string[]
-): string[] {
-  const out = [...selected];
-  for (const option of options) {
-    if (!out.includes(option.value)) out.push(option.value);
-  }
-  return out;
 }
 
 export function MultiSelectOptions({

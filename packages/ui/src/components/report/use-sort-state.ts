@@ -1,6 +1,10 @@
 'use client';
 
 import * as React from 'react';
+import { nextSort } from './sort';
+import type { SortDirection, SortState } from './sort';
+
+export type { SortDirection, SortState };
 
 /**
  * Report kit — column sort state (BACKLOG-3502a).
@@ -11,25 +15,6 @@ import * as React from 'react';
  * implementation that looks right flips on every click, so a new column
  * inherits whatever direction the last one had.
  */
-export type SortDirection = 'asc' | 'desc';
-
-export interface SortState<K extends string> {
-  key: K;
-  direction: SortDirection;
-}
-
-/** Pure: the sort after `clicked` is clicked. */
-export function nextSort<K extends string>(
-  current: SortState<K>,
-  clicked: K,
-  defaultDirectionFor: (key: K) => SortDirection
-): SortState<K> {
-  if (clicked === current.key) {
-    return { key: clicked, direction: current.direction === 'asc' ? 'desc' : 'asc' };
-  }
-  return { key: clicked, direction: defaultDirectionFor(clicked) };
-}
-
 export interface UseSortStateOptions<K extends string> {
   initialKey: K;
   /** Defaults to `defaultDirectionFor(initialKey)`. */

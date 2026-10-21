@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { FilterBar, FilterCaption, filterCaptionText } from './filter-bar';
+import { FilterBar, FilterCaption } from './filter-bar';
+import { filterCaptionText } from './filter-caption-text';
 
 describe('FilterBar', () => {
   it('hides "Clear filters" while nothing is filtered', () => {

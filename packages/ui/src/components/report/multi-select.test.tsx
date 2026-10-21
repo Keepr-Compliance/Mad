@@ -1,6 +1,7 @@
 import * as React from 'react';
 import { render, screen, fireEvent, within } from '@testing-library/react';
-import { MultiSelect, MultiSelectOptions, selectAllValues, type MultiSelectOption } from './multi-select';
+import { MultiSelect, MultiSelectOptions, type MultiSelectOption } from './multi-select';
+import { selectAllValues } from './select-all';
 import { BottomSheet } from '../phone/bottom-sheet';
 import { FilterSelectButton } from '../phone/filter-select-button';
 
@@ -166,6 +167,27 @@ describe('MultiSelect (desktop)', () => {
     expect(screen.getAllByRole('checkbox')).toHaveLength(3);
     fireEvent.mouseDown(screen.getByText('elsewhere'));
     expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('clicking the trigger a second time closes the popover (mousedown then click, as a browser sends)', () => {
+    render(<Desktop />);
+    const press = () => {
+      fireEvent.mouseDown(trigger()[0]);
+      fireEvent.click(trigger()[0]);
+    };
+    press();
+    expect(screen.getAllByRole('checkbox')).toHaveLength(3);
+    press();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(trigger()[0]).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('a mousedown on the clear X (inside the container, outside the popover) leaves the popover open', () => {
+    render(<Desktop initial={['failed']} />);
+    fireEvent.click(trigger()[0]);
+    expect(screen.getAllByRole('checkbox')).toHaveLength(3);
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'Clear Outcome filter' }));
+    expect(screen.getAllByRole('checkbox')).toHaveLength(3);
   });
 
   it('closes on Escape', () => {

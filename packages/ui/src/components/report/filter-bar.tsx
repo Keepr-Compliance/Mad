@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { Filter, X } from 'lucide-react';
 import { cn } from '../../lib/cn';
+import { filterCaptionText } from './filter-caption-text';
 
 /**
  * Report kit — the desktop filter row and its caption (BACKLOG-3502a).
@@ -71,17 +72,6 @@ export interface FilterCaptionProps {
   /** Text when no filter is active. Default "no other filters". */
   emptyText?: string;
   className?: string;
-}
-
-/** The caption sentence, as a string (exported for reports that need the text). */
-export function filterCaptionText({
-  lead,
-  periodLabel,
-  filterNames,
-  emptyText = 'no other filters',
-}: Omit<FilterCaptionProps, 'className'>): string {
-  const rest = filterNames.length > 0 ? filterNames.join(' · ') : emptyText;
-  return `${lead}: ${periodLabel} · ${rest}`;
 }
 
 export function FilterCaption({ className, ...props }: FilterCaptionProps) {

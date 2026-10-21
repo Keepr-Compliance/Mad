@@ -12,6 +12,13 @@ const all = fs.readdirSync(__dirname).filter((f) => !/\.test\.tsx?$/.test(f) && 
 const components = all.filter((f) => f.endsWith('.tsx'));
 const hooks = all.filter((f) => f.endsWith('.ts') && /from 'react'/.test(source(f)));
 
+/**
+ * C1 (BACKLOG-3502a): pure helpers a Server Component may call. A 'use client'
+ * module's exports are client references on the server, so these live in
+ * directive-free files with no React.
+ */
+const PURE = ['sort.ts', 'select-all.ts', 'filter-caption-text.ts', 'url-params.ts'];
+
 describe("report kit 'use client' directive", () => {
   it('finds the component and hook files', () => {
     expect(components.length).toBeGreaterThanOrEqual(7);
@@ -20,5 +27,17 @@ describe("report kit 'use client' directive", () => {
 
   it.each([...components, ...hooks])('%s starts with the directive', (file) => {
     expect(source(file).split('\n')[0].trim()).toBe("'use client';");
+  });
+});
+
+describe('pure report helpers carry no directive', () => {
+  it.each(PURE)('%s has no use client directive and no React', (file) => {
+    const text = source(file);
+    expect(text).not.toMatch(/^\s*['"]use client['"]/m);
+    expect(text).not.toMatch(/from 'react'/);
+  });
+
+  it('the pure files are not picked up as hook files', () => {
+    for (const file of PURE) expect(hooks).not.toContain(file);
   });
 });

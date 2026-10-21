@@ -1,5 +1,6 @@
 import { renderHook, act } from '@testing-library/react';
-import { nextSort, useSortState, type SortDirection } from './use-sort-state';
+import { useSortState, type SortDirection } from './use-sort-state';
+import { nextSort } from './sort';
 
 type Key = 'when' | 'name';
 const def = (k: Key): SortDirection => (k === 'when' ? 'desc' : 'asc');

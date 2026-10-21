@@ -77,4 +77,16 @@ describe('PeriodPicker', () => {
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy).toHaveBeenLastCalledWith('custom', '2026-09-01', undefined);
   });
+
+  it('shows a new from / to when the parent changes them while custom stays selected', () => {
+    const props = { options: OPTIONS, value: 'custom' as const, customKey: 'custom' as const, onChange: () => {} };
+    const { rerender } = render(<PeriodPicker<P> {...props} from="2026-09-01" to="2026-09-30" />);
+    expect(screen.getByLabelText('From')).toHaveValue('2026-09-01');
+    rerender(<PeriodPicker<P> {...props} from="2026-07-04" to="2026-08-20" />);
+    expect(screen.getByLabelText('From')).toHaveValue('2026-07-04');
+    expect(screen.getByLabelText('To')).toHaveValue('2026-08-20');
+    rerender(<PeriodPicker<P> {...props} />);
+    expect(screen.getByLabelText('From')).toHaveValue('');
+    expect(screen.getByLabelText('To')).toHaveValue('');
+  });
 });
