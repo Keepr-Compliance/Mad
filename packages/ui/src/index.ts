@@ -89,3 +89,6 @@ export {
 
 // Phone kit (BACKLOG-3895) — phone-width components; see DESIGN-SYSTEM.md "Phone".
 export * from './components/phone';
+
+// Report kit (BACKLOG-3502a) — desktop report tables, filters, cards, URL state; see README "Report kit".
+export * from './components/report';
