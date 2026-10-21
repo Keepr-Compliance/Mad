@@ -4,12 +4,12 @@
  */
 
 import * as crypto from "crypto";
-import * as path from "path";
 import { ensureDb } from "./core/dbConnection";
 import { updateTransactionThreadCountSync } from "./communicationDbService";
 import { samePeople } from "../rcsImportStore";
 import { withLiveTransactionParam } from "./core/transactionEligibilitySql";
 import logService from "../logService";
+import { unreferencedAttachmentPaths } from "./attachmentFileRefsSql";
 import { clearRcsChatPeople, clearRcsChatPeopleForChats, clearRcsThreadNames, clearRcsThreadNamesForThreads } from "./rcsChatPeopleDbService";
 import { exclusionKeysFor, markPendingFullRead } from "./rcsPendingFullSyncDbService";
 import {
@@ -18,7 +18,6 @@ import {
   RCS_CLEAR_ATTACHMENT_PATHS_SQL,
   RCS_CLEAR_COUNTED_LINKS_SQL,
   RCS_CLEAR_LINKED_TRANSACTIONS_SQL,
-  RCS_CLEAR_FILE_REFERENCED_SQL,
   RCS_STAGING_PUT_CHAT_SQL,
   RCS_EXCLUSIONS_CONV_IDS_SQL,
   RCS_EXCLUSION_ADD_SQL,
@@ -371,16 +370,6 @@ export function findRcsContentDuplicates(
 }
 
 /**
- * BACKLOG-3667: does any attachments row (any user, any source) point to this
- * content-addressed file? Matched on the stored path or its file name.
- */
-export function attachmentFileReferenced(storagePath: string): boolean {
-  const db = ensureDb();
-  const name = path.basename(storagePath.replace(/\\/g, "/"));
-  return !!db.prepare(RCS_CLEAR_FILE_REFERENCED_SQL).get(storagePath, name, name, name, name);
-}
-
-/**
  * BACKLOG-3657: the database side of clearing Google Messages for Web texts
  * (see rcsClearService.ts). Every statement is scoped to the user.
  */
@@ -412,7 +401,8 @@ export function rcsClearDbOps(): import("../rcsClearService").RcsClearDbOps {
     setMessageCount: (userId, transactionId, count) => {
       db.prepare(RCS_CLEAR_SET_MESSAGE_COUNT_SQL).run(count, transactionId, userId);
     },
-    fileStillReferenced: (storagePath) => attachmentFileReferenced(storagePath),
+    // BACKLOG-4040: the shared check (attachmentFileRefs.ts).
+    unreferencedFiles: (paths) => unreferencedAttachmentPaths(db, paths),
     // The same rule as every link/unlink (communicationDbService), on this connection.
     refreshTextThreadCount: (transactionId) => updateTransactionThreadCountSync(transactionId),
   };
@@ -487,7 +477,8 @@ export function rcsStagingDbOps(): import("../rcsCacheStaging").RcsStagingDbOps 
     journalDelete: (filePath) => {
       db.prepare(RCS_PLACED_FILE_DELETE_SQL).run(filePath);
     },
-    fileStillReferenced: (filePath) => attachmentFileReferenced(filePath),
+    // BACKLOG-4040: the shared check (attachmentFileRefs.ts), on the current connection.
+    unreferencedFiles: (paths) => unreferencedAttachmentPaths(ensureDb(), paths),
   };
 }
 
@@ -600,7 +591,8 @@ export function rcsAutoDeleteDbOps(): import("../rcsClearService").RcsAutoDelete
     deleteAttachments: (userId, threadIds) =>
       db.prepare(RCS_THREADS_DELETE_ATTACHMENTS_SQL).run(userId, JSON.stringify(threadIds)).changes,
     deleteMessages: (userId, threadIds) => db.prepare(RCS_THREADS_DELETE_MESSAGES_SQL).run(userId, JSON.stringify(threadIds)).changes,
-    fileStillReferenced: (storagePath) => attachmentFileReferenced(storagePath),
+    // BACKLOG-4040: the shared check (attachmentFileRefs.ts).
+    unreferencedFiles: (paths) => unreferencedAttachmentPaths(db, paths),
   };
 }
 
@@ -766,10 +758,13 @@ export function deleteMessagesBySessionId(userId: string, sessionId: string): nu
 
 /**
  * Delete all attachments inserted during a specific sync session.
- * Returns the storage_path values so callers can clean up orphaned files.
+ * Returns the storage_path values no remaining row uses, as CANDIDATES for the
+ * caller's file cleanup.
  *
- * TASK-2110: Content-addressed files are only deleted if no other
- * attachment record references the same storage_path.
+ * TASK-2110 / BACKLOG-4040: content-addressed files are shared. `orphanedFiles`
+ * is only a candidate list: the caller deletes through
+ * removeUnreferencedAttachmentFiles, which re-checks after its awaits and
+ * refuses any path outside the attachment folders.
  */
 export function deleteAttachmentsBySessionId(sessionId: string): { deleted: number; orphanedFiles: string[] } {
   const db = ensureDb();
@@ -788,19 +783,13 @@ export function deleteAttachmentsBySessionId(sessionId: string): { deleted: numb
     `DELETE FROM attachments WHERE sync_session_id = ?`
   ).run(sessionId);
 
-  // Step 3: Find orphaned files (no other attachment references the same storage_path)
-  const orphanedFiles: string[] = [];
-  const checkStmt = db.prepare(
-    `SELECT COUNT(*) as cnt FROM attachments WHERE storage_path = ?`
+  // Step 3: candidates no remaining row uses (the shared check: same file
+  // name, any case, any directory, any user or source).
+  const paths = Array.from(
+    new Set(sessionAttachments.map((a) => a.storage_path).filter((p): p is string => !!p)),
   );
-
-  for (const att of sessionAttachments) {
-    if (!att.storage_path) continue;
-    const row = checkStmt.get(att.storage_path) as { cnt: number };
-    if (row.cnt === 0) {
-      orphanedFiles.push(att.storage_path);
-    }
-  }
+  const unreferenced = unreferencedAttachmentPaths(db, paths);
+  const orphanedFiles = paths.filter((p) => unreferenced.has(p));
 
   void logService.info(
     `Deleted ${deleteResult.changes} attachments for session ${sessionId}, ${orphanedFiles.length} orphaned files`,

@@ -8,13 +8,14 @@
  *
  *   1. The path resolves to a regular file inside an attachment root
  *      (`resolveContainedAttachment`). Anything else is refused untouched.
- *   2. No attachment row — any user, any kind — still references the path.
- *      Files are content-addressed (sha256), so one file can back a removed
- *      row and a kept one at once; the kept row keeps it.
+ *   2. No attachment row — any user, any kind — still references the file
+ *      (same file name, any case, absolute or relative). Files are
+ *      content-addressed (sha256), so one file can back a removed row and a
+ *      kept one at once; the kept row keeps it.
  *
- * Step 2 runs AFTER the containment await and immediately before the unlink,
- * so no other code in this process runs between the reference check and the
- * removal.
+ * BACKLOG-4040: both steps are the shared check in attachmentFileRefs.ts (the
+ * same one every other file-delete path uses); step 2 runs after every
+ * containment await, synchronously with the unlink.
  *
  * Best-effort by contract: it never throws. A failure leaves a file behind,
  * which is the state before this existed; it can never fail a re-cache.
@@ -22,11 +23,9 @@
  * Deliberately NOT a folder scan: an on-demand download may be writing a file
  * whose row does not exist yet, and a scan would take it.
  */
-import fs from "fs";
 import type { Database as DatabaseType } from "better-sqlite3";
 
-import { resolveContainedAttachment } from "./atRest/containment";
-import { isAttachmentStoragePathReferenced } from "./db/emailForceSetSql";
+import { ALL_ATTACHMENT_SCOPES, removeUnreferencedAttachmentFiles } from "./attachmentFileRefs";
 import logService from "./logService";
 
 export interface OrphanFileCleanupResult {
@@ -45,29 +44,11 @@ export async function removeOrphanedAttachmentFiles(
   candidates: readonly string[],
   userData: string,
 ): Promise<OrphanFileCleanupResult> {
-  const result: OrphanFileCleanupResult = { removed: 0, stillReferenced: 0, refused: 0, failed: 0 };
-  for (const storedPath of candidates) {
-    try {
-      let realPath: string;
-      try {
-        realPath = (await resolveContainedAttachment(storedPath, userData)).realPath;
-      } catch {
-        result.refused++;
-        continue;
-      }
-      // Synchronous from here to the unlink: nothing can insert a row between.
-      if (isAttachmentStoragePathReferenced(db, storedPath)) {
-        result.stillReferenced++;
-        continue;
-      }
-      fs.unlinkSync(realPath);
-      result.removed++;
-    } catch (error) {
-      result.failed++;
-      logService.warn("Email re-cache: could not remove an orphaned attachment file", "EmailForceOrphanFiles", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+  const r = await removeUnreferencedAttachmentFiles(db, candidates, { userData, scopes: ALL_ATTACHMENT_SCOPES });
+  if (r.failed > 0) {
+    logService.warn("Email re-cache: could not remove some orphaned attachment files", "EmailForceOrphanFiles", {
+      failed: r.failed,
+    });
   }
-  return result;
+  return { removed: r.removed, stillReferenced: r.stillReferenced, refused: r.refused, failed: r.failed };
 }

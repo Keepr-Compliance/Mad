@@ -130,44 +130,44 @@ describe("auto-delete of old chats linked to nothing (P3b, off by default)", () 
 
   const ids = () => (db.prepare("SELECT id FROM messages ORDER BY id").all() as Array<{ id: string }>).map((r) => r.id);
 
-  it("deletes the old unlinked chat with its reactions; linked chats are kept (A1)", () => {
-    const r = clearUnlinkedOldChats(USER, CUTOFF, rcsAutoDeleteDbOps(), files());
+  it("deletes the old unlinked chat with its reactions; linked chats are kept (A1)", async () => {
+    const r = await clearUnlinkedOldChats(USER, CUTOFF, rcsAutoDeleteDbOps(), files());
     expect(r).toMatchObject({ chats: 1, messages: 3 });
     expect(ids()).toEqual(["a1", "l1", "l2", "r1", "r2", "x1"]);
   });
 
   // SR S2: a removed chat has no link either, but "Show removed" must still
   // restore it.
-  it("a chat the user removed is kept (A5)", () => {
+  it("a chat the user removed is kept (A5)", async () => {
     msg("u1", USER, "gmweb2-removed", "2026-05-01T10:00:00.000Z");
     db.prepare(
       "INSERT INTO ignored_communications (id, user_id, transaction_id, thread_id, reason) VALUES ('ic-1', ?, 'tx-a', 'gmweb2-removed', 'Manually unlinked by user')",
     ).run(USER);
-    const r = clearUnlinkedOldChats(USER, CUTOFF, rcsAutoDeleteDbOps(), files());
+    const r = await clearUnlinkedOldChats(USER, CUTOFF, rcsAutoDeleteDbOps(), files());
     expect(r.chats).toBe(1); // only gmweb2-old
     expect(ids()).toContain("u1");
   });
 
-  it("a recent unlinked chat is kept (A2)", () => {
-    clearUnlinkedOldChats(USER, CUTOFF, rcsAutoDeleteDbOps(), files());
+  it("a recent unlinked chat is kept (A2)", async () => {
+    await clearUnlinkedOldChats(USER, CUTOFF, rcsAutoDeleteDbOps(), files());
     expect(ids()).toContain("r1");
     expect(ids()).toContain("r2");
   });
 
-  it("only this user's gmweb2 chats (A3)", () => {
-    clearUnlinkedOldChats(USER, CUTOFF, rcsAutoDeleteDbOps(), files());
+  it("only this user's gmweb2 chats (A3)", async () => {
+    await clearUnlinkedOldChats(USER, CUTOFF, rcsAutoDeleteDbOps(), files());
     expect(ids()).toContain("x1");
     expect(ids()).toContain("a1");
   });
 
-  it("deletes the chat's image files, but an image file another row uses is kept (A4)", () => {
+  it("deletes the chat's image files, but an image file another row uses is kept (A4)", async () => {
     const own = nodePath.join(attachmentsRoot, "own.png");
     const shared = nodePath.join(attachmentsRoot, "shared.png");
     fs.writeFileSync(own, "x");
     fs.writeFileSync(shared, "y");
     db.prepare("INSERT INTO attachments (id, message_id, filename, storage_path) VALUES ('at1', 'o1', 'a.png', ?), ('at2', 'o2', 'b.png', ?), ('at3', 'a1', 'c.png', ?)")
       .run(own, shared, shared);
-    const r = clearUnlinkedOldChats(USER, CUTOFF, rcsAutoDeleteDbOps(), files());
+    const r = await clearUnlinkedOldChats(USER, CUTOFF, rcsAutoDeleteDbOps(), files());
     expect(r.filesDeleted).toBe(1);
     expect(fs.existsSync(own)).toBe(false);
     expect(fs.existsSync(shared)).toBe(true);

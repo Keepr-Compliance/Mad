@@ -14,6 +14,9 @@ import { app } from "electron";
 import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
+import { removeUnreferencedAttachmentFiles } from "./attachmentFileRefs";
+import { SCOPE_MESSAGE_ATTACHMENTS } from "./atRest/markers";
+import { ensureDb } from "./db/core/dbConnection";
 import * as externalContactDb from "./db/externalContactDbService";
 import {
   holdContactLinking,
@@ -512,18 +515,24 @@ class IPhoneSyncStorageService {
     });
 
     try {
-      // 1. Delete attachments and get orphaned file paths
+      // 1. Delete attachments and get the candidate file paths
       const attachmentResult = databaseService.deleteAttachmentsBySessionId(sessionId);
 
-      // 2. Delete orphaned attachment files from disk
-      for (const filePath of attachmentResult.orphanedFiles) {
-        try {
-          await fs.promises.unlink(filePath);
-          log.debug(`[${IPhoneSyncStorageService.SERVICE_NAME}] Deleted orphaned file: ${filePath}`);
-        } catch (err) {
-          // File may already be deleted or inaccessible
-          log.debug(`[${IPhoneSyncStorageService.SERVICE_NAME}] Could not delete file: ${filePath}`);
-        }
+      // 2. BACKLOG-4040: delete the candidates through the shared check — only
+      // inside message-attachments, and only files no remaining row uses (any
+      // case, any directory), re-checked after the containment awaits. Never
+      // fails the rollback: a failure leaves files behind.
+      let filesRemoved = 0;
+      try {
+        const files = await removeUnreferencedAttachmentFiles(ensureDb(), attachmentResult.orphanedFiles, {
+          userData: app.getPath("userData"),
+          scopes: [SCOPE_MESSAGE_ATTACHMENTS],
+        });
+        filesRemoved = files.removed;
+      } catch (err) {
+        log.warn(`[${IPhoneSyncStorageService.SERVICE_NAME}] Rollback could not clean up attachment files`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
 
       // 3. Delete messages
@@ -535,7 +544,7 @@ class IPhoneSyncStorageService {
       log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Rollback complete for session ${sessionId}`, {
         messagesDeleted,
         attachmentsDeleted: attachmentResult.deleted,
-        orphanedFilesDeleted: attachmentResult.orphanedFiles.length,
+        orphanedFilesDeleted: filesRemoved,
         contactsDeleted,
       });
     } catch (error) {
