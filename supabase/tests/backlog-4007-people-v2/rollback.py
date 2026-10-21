@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """BACKLOG-4007 People v2 rollback (keepr-test only). Usage: rollback.py <out.sql> [--dry]
+Also importable: compose(dry=False) returns the text (r10a.py puts it in front of its fixture).
 Composes: drop this file's triggers / functions / table, put org_contacts' columns back (EMPTY:
 names, emails and phones are not restorable), member_id nullable with ON DELETE SET NULL, then
 re-run the PR-4 function bodies (20261020180000 minus its pre-check) and PR-1's
@@ -19,10 +20,12 @@ DROP TRIGGER IF EXISTS user_phones_claim_pending ON public.organization_members;
 DROP TRIGGER IF EXISTS org_billing_login_orphan_rekey ON public.organization_members;
 DROP TRIGGER IF EXISTS org_billing_contact_member_delete_guard ON public.organization_members;
 DROP TRIGGER IF EXISTS org_billing_contact_on_deprovision ON public.organization_members;
+DROP TRIGGER IF EXISTS org_billing_contact_member_suspend_guard ON public.organization_members;
 DROP TRIGGER IF EXISTS _guard_it_admin_grant_ins ON public.organization_members;
 DROP TRIGGER IF EXISTS _guard_it_admin_grant_upd ON public.organization_members;
 DROP FUNCTION IF EXISTS public._user_phones_claim_pending(), public._org_billing_login_orphan_rekey(),
   public._org_billing_contact_member_delete_guard(), public._org_billing_contact_on_deprovision(),
+  public._org_billing_contact_member_suspend_guard(),
   public._guard_it_admin_grant(), public._org_billing_contact_reassign(uuid, uuid, text),
   public.org_people_invite(uuid, jsonb), public._org_people_invite_row(uuid, text, text, text, text, uuid),
   public._org_billing_login_refusal(uuid, text), public.org_member_phone_set(uuid, uuid, text),
@@ -43,8 +46,13 @@ UPDATE public.org_contacts c SET full_name = coalesce(nullif(btrim(u.display_nam
   email = lower(coalesce(u.email, m.invited_email, 'unknown@example.invalid'))
   FROM public.organization_members m LEFT JOIN public.users u ON u.id = m.user_id WHERE m.id = c.member_id;
 """
-text = head + pr4 + '\n' + fn(pr1, 'admin_get_org_billing') + '\n' + fn(pr1, 'broker_get_billing_setup') + "\nDELETE FROM supabase_migrations.schema_migrations WHERE version = '20261020200000';\n"
-if '--dry' in sys.argv:
-    text += "\nDO $$ BEGIN RAISE EXCEPTION 'ROLLBACK_DRYRUN_OK'; END $$;\n"
-open(sys.argv[1], 'w').write(text)
-print(sys.argv[1], len(text))
+def compose(dry=False):
+    text = head + pr4 + '\n' + fn(pr1, 'admin_get_org_billing') + '\n' + fn(pr1, 'broker_get_billing_setup') + "\nDELETE FROM supabase_migrations.schema_migrations WHERE version = '20261020200000';\n"
+    if dry:
+        text += "\nDO $$ BEGIN RAISE EXCEPTION 'ROLLBACK_DRYRUN_OK'; END $$;\n"
+    return text
+
+if __name__ == '__main__':
+    text = compose('--dry' in sys.argv)
+    open(sys.argv[1], 'w').write(text)
+    print(sys.argv[1], len(text))

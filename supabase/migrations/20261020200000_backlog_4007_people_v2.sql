@@ -33,25 +33,27 @@
 --                                   - pending phone follows acceptance (R5, C7)
 --                                   - SCIM orphan: a member row created for the email of the
 --                                     billing-only invitation takes over the contact and phone (R10b)
---                                   - the live billing contact's member row: a client delete is
+--                                   - the live billing contact's member row: a client delete and a
+--                                     Users-page Deactivate (a suspend without scim_synced_at) are
 --                                     refused ("Pick another billing contact first"); an IdP
---                                     deprovision (service-role suspend) or a non-client delete
---                                     moves the contact to the account admin and queues an email;
---                                     no active admin -> the account manager is alerted (R9).
+--                                     deprovision (service-role suspend that stamps scim_synced_at)
+--                                     or a non-client delete moves the contact to the account admin
+--                                     and queues an email; no active admin -> the account manager
+--                                     is alerted (R9).
 --                                   - it_admin is set by a client only for an active admin / IT
 --                                     admin of that brokerage or Keepr staff (R7 DB guard)
 --                                   - _guard_billing_login_personal_account reads OLD too (a493cf6f)
 --  9. Removed for good              org_billing_login_set(uuid,boolean),
 --                                   admin_search_users_for_contact(uuid,text),
 --                                   _org_billing_login_create(uuid,uuid) (replaced by
---                                   _org_billing_login_invite).
+--                                   _org_billing_login_refusal + _org_people_invite_row).
 --
 -- Grants (R2): every helper REVOKE ALL FROM PUBLIC, anon, authenticated; GRANT service_role. Every
 -- public RPC REVOKE FROM PUBLIC, anon; GRANT authenticated, service_role. search_path '' on every
 -- function. No public.users column, grant or trigger changes (3998 guards untouched).
 -- Pre-check: each replaced function is the PR-1 / PR-4 body (md5 as applied on keepr-test
 -- 2026-10-20) or already this file's.
--- Rollback (keepr-test only): supabase/tests/backlog-4007-people-v2/rollback.sql
+-- Rollback (keepr-test only): supabase/tests/backlog-4007-people-v2/rollback.py composes it.
 
 DO $pre$
 DECLARE
@@ -965,9 +967,7 @@ BEGIN
       SELECT jsonb_agg(jsonb_build_object(
                'id', c.id, 'role', c.role, 'member_id', c.member_id,
                'name', public._member_person(m.id) ->> 'name',
-               -- An IT admin sees who the billing contact is and their phone, not their email (3855, PM c7c276be).
-               'email', CASE WHEN c.role = 'billing' AND v_caller = 'it_admin' THEN NULL
-                             ELSE public._member_person(m.id) ->> 'email' END,
+               'email', public._member_person(m.id) ->> 'email',
                'phone', public._member_phone(m.id),
                'company_name', c.company_name,
                'login', CASE WHEN c.role = 'billing' AND m.license_status = 'unassigned' THEN 'billing_only'
@@ -1491,10 +1491,39 @@ CREATE TRIGGER org_billing_contact_member_delete_guard
   FOR EACH ROW
   EXECUTE FUNCTION public._org_billing_contact_member_delete_guard();
 
+-- The Users-page Deactivate (broker-portal deactivateUser.ts) suspends the member row with the
+-- service client and does not stamp scim_synced_at. For the live billing contact's row that is
+-- refused, whatever the role: the IdP paths below always stamp scim_synced_at in the same UPDATE,
+-- so they are not affected. The portal maps billing_contact_member to the founder's sentence.
+CREATE OR REPLACE FUNCTION public._org_billing_contact_member_suspend_guard()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.org_contacts c
+              WHERE c.member_id = NEW.id AND c.role = 'billing' AND c.removed_at IS NULL) THEN
+    RAISE EXCEPTION 'billing_contact_member' USING ERRCODE = 'P0001',
+      HINT = 'Pick another billing contact first.';
+  END IF;
+  RETURN NEW;
+END
+$function$;
+REVOKE ALL ON FUNCTION public._org_billing_contact_member_suspend_guard() FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._org_billing_contact_member_suspend_guard() TO service_role;
+
+DROP TRIGGER IF EXISTS org_billing_contact_member_suspend_guard ON public.organization_members;
+CREATE TRIGGER org_billing_contact_member_suspend_guard
+  BEFORE UPDATE OF license_status ON public.organization_members
+  FOR EACH ROW
+  WHEN (OLD.license_status IS DISTINCT FROM 'suspended' AND NEW.license_status = 'suspended'
+        AND NEW.scim_synced_at IS NOT DISTINCT FROM OLD.scim_synced_at)
+  EXECUTE FUNCTION public._org_billing_contact_member_suspend_guard();
+
 -- IdP deprovision: SCIM DELETE / active:false and directory-sync removal suspend the member row
--- with the service role AND stamp scim_synced_at in the same UPDATE. The Users-page Deactivate
--- (broker-portal deactivateUser.ts) also writes with the service client but does not stamp
--- scim_synced_at, so it does not reassign.
+-- with the service role AND stamp scim_synced_at in the same UPDATE. A suspend without the stamp
+-- (the Users-page Deactivate) never gets here: the suspend guard above refuses it.
 CREATE OR REPLACE FUNCTION public._org_billing_contact_on_deprovision()
 RETURNS trigger
 LANGUAGE plpgsql

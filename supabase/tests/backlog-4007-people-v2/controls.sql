@@ -278,12 +278,35 @@ $q$, '');
       $q$  IF false THEN
     INSERT INTO public.billing_outbox (stripe_mode, kind, organization_id, dedupe_key, payload)
     VALUES (v_mode, 'notify_account_manager'$q$);
+    -- Shadowed since F1: the BEFORE suspend guard refuses a stamp-less suspend before this AFTER
+    -- trigger runs, so its scim_synced_at term no longer decides any cell (expected green).
     WHEN 'r9_any_service_suspend' THEN
       EXECUTE 'DROP TRIGGER org_billing_contact_on_deprovision ON public.organization_members';
       EXECUTE $t$CREATE TRIGGER org_billing_contact_on_deprovision AFTER UPDATE OF license_status, scim_synced_at ON public.organization_members
         FOR EACH ROW WHEN (OLD.license_status IS DISTINCT FROM 'suspended' AND NEW.license_status = 'suspended')
         EXECUTE FUNCTION public._org_billing_contact_on_deprovision()$t$;
       RETURN 'MUTATION APPLIED trigger WHEN without the scim_synced_at term';
+    -- R9 (F1): the Deactivate refusal off; the likely wrong build (no scim_synced_at term, so it
+    -- also refuses the IdP deprovision)
+    WHEN 'r9_suspend_guard_off' THEN
+      EXECUTE 'ALTER TABLE public.organization_members DISABLE TRIGGER org_billing_contact_member_suspend_guard';
+      RETURN 'MUTATION APPLIED DISABLE TRIGGER org_billing_contact_member_suspend_guard';
+    WHEN 'r9_suspend_guard_any_suspend' THEN
+      EXECUTE 'DROP TRIGGER org_billing_contact_member_suspend_guard ON public.organization_members';
+      EXECUTE $t$CREATE TRIGGER org_billing_contact_member_suspend_guard BEFORE UPDATE OF license_status ON public.organization_members
+        FOR EACH ROW WHEN (OLD.license_status IS DISTINCT FROM 'suspended' AND NEW.license_status = 'suspended')
+        EXECUTE FUNCTION public._org_billing_contact_member_suspend_guard()$t$;
+      RETURN 'MUTATION APPLIED suspend guard WHEN without the scim_synced_at term';
+    WHEN 'r9_suspend_guard_unworded' THEN RETURN pg_temp.mut_fn('public._org_billing_contact_member_suspend_guard()',
+      $q$    RAISE EXCEPTION 'billing_contact_member' USING ERRCODE = 'P0001',$q$, $q$    RAISE EXCEPTION 'suspend_refused' USING ERRCODE = 'P0001',$q$);
+    -- F2: the email mask put back (the cell now asserts the IT admin sees the email)
+    WHEN 'f2_mask_back' THEN RETURN pg_temp.mut_fn('public.org_contacts_list(uuid)',
+      $q$               'email', public._member_person(m.id) ->> 'email',
+               'phone', public._member_phone(m.id),
+               'company_name', c.company_name,$q$,
+      $q$               'email', CASE WHEN c.role = 'billing' AND v_caller = 'it_admin' THEN NULL ELSE public._member_person(m.id) ->> 'email' END,
+               'phone', public._member_phone(m.id),
+               'company_name', c.company_name,$q$);
     WHEN 'r9_deprovision_trigger_off' THEN
       EXECUTE 'ALTER TABLE public.organization_members DISABLE TRIGGER org_billing_contact_on_deprovision';
       RETURN 'MUTATION APPLIED DISABLE TRIGGER org_billing_contact_on_deprovision';
@@ -456,9 +479,12 @@ $q$, '');
     r := r || jsonb_build_object('C1_own_phone_my_phone_get', pg_temp.pass(
       pg_temp.j(pg_temp.call_as(u_ag2, 'SELECT public.my_phone_get()'))->>'phone' = '+12025550111', 'my_phone_get'));
     s := pg_temp.call_as(u_it, format(ql, o1));
-    r := r || jsonb_build_object('C1_it_admin_sees_billing_phone_not_email', pg_temp.pass(
+    -- PM 6a68d0a2 (F2): no email mask; an IT admin sees the billing contact's name, email and phone.
+    r := r || jsonb_build_object('C1_it_admin_sees_billing_phone_and_email', pg_temp.pass(
       EXISTS (SELECT 1 FROM jsonb_array_elements(pg_temp.j(s)->'contacts') e
-               WHERE e->>'role' = 'billing' AND e->>'phone' = '+12025550101' AND e->'email' = 'null'::jsonb), s));
+               WHERE e->>'role' = 'billing' AND e->>'phone' = '+12025550101'
+                 AND e->>'email' = public._member_person((e->>'member_id')::uuid) ->> 'email'
+                 AND e->>'email' IS NOT NULL), s));
 
     -- ===== C9: Stripe phone helper =====
     r := r || jsonb_build_object('C9_billing_contact_phone', pg_temp.pass(
@@ -696,10 +722,13 @@ $q$, '');
       pg_temp.outbox(o1, 'notify_billing_contact_reassigned') = n + 1
       AND EXISTS (SELECT 1 FROM public.billing_outbox b WHERE b.organization_id = o1 AND b.kind = 'notify_billing_contact_reassigned'
                    AND b.payload ->> 'member_id' = pg_temp.mem(o1, u_b)::text), 'outbox'));
-    -- a Users-page Deactivate (deactivateUser.ts: service client, no scim_synced_at) does not reassign
+    -- a Users-page Deactivate (deactivateUser.ts: service client, no scim_synced_at) is refused
+    -- (PM 6a68d0a2 F1): the member stays active and stays the billing contact.
     s := pg_temp.call_as(u_b, format(qs, o1, json_build_object('role', 'billing', 'member_id', pg_temp.mem(o1, u_br), 'phone', '202-555-0126')));
     s2 := pg_temp.as_service(format('UPDATE public.organization_members SET license_status = %L, updated_at = now() WHERE id = %L', 'suspended', pg_temp.mem(o1, u_br)));
-    r := r || jsonb_build_object('R9_users_page_deactivate_no_reassign', pg_temp.pass(s2 = 'ok' AND pg_temp.billing_member(o1) = pg_temp.mem(o1, u_br), s2));
+    r := r || jsonb_build_object('R9_users_page_deactivate_refused', pg_temp.pass(s2 LIKE 'ERR P0001 billing_contact_member%'
+      AND pg_temp.billing_member(o1) = pg_temp.mem(o1, u_br)
+      AND (SELECT m.license_status FROM public.organization_members m WHERE m.id = pg_temp.mem(o1, u_br)) = 'active', s || ' / ' || s2));
     -- no active admin: the deal cache is cleared and the account manager is alerted
     n := pg_temp.outbox(o5, 'notify_account_manager');
     s2 := pg_temp.as_service(format('UPDATE public.organization_members SET license_status = %L, scim_synced_at = now() WHERE id = %L', 'suspended', pg_temp.mem(o5, u_b5)));

@@ -29,6 +29,9 @@ interface DeactivateResult {
   error?: string;
 }
 
+/** Founder R9 (BACKLOG-4007): the exact sentence, the same as the Users-page removal. */
+const BILLING_CONTACT_DEACTIVATE_REFUSED = 'Pick another billing contact first.';
+
 // ============================================================================
 // Main Action
 // ============================================================================
@@ -127,6 +130,11 @@ export async function deactivateUser(input: DeactivateInput): Promise<Deactivate
     .eq('organization_id', targetMember.organization_id);
 
   if (updateError) {
+    // BACKLOG-4007 People v2 (PM 6a68d0a2): the live billing contact's member row cannot be
+    // deactivated from the Users page (the database refuses it: billing_contact_member).
+    if (updateError.message?.includes('billing_contact_member')) {
+      return { success: false, error: BILLING_CONTACT_DEACTIVATE_REFUSED };
+    }
     console.error('Error deactivating user:', updateError);
     return { success: false, error: 'Failed to deactivate user' };
   }

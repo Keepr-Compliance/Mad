@@ -2,7 +2,7 @@
 """BACKLOG-4007 People v2 JS controls. Each mutation: exact-once replace (raises on 0 or 2+),
 MUTATION APPLIED + md5 before/after printed, the named suite run with bail off, the test count
 asserted non-zero, failures recorded, the file restored with `git checkout --` (the fix is
-committed first). Usage: js_mutations.py <repo root>"""
+committed first). Usage: js_mutations.py <repo root> [J16,J17,...]  (optional id filter)"""
 import hashlib, json, re, subprocess, sys
 root = sys.argv[1]
 B, A = 'broker-portal', 'admin-portal'
@@ -22,7 +22,12 @@ M = [
   ('J13 admin IT invite emailed as billing-only', 'admin-portal/lib/actions/orgContacts.ts', "        ...(billingOnly ? { billingOnly: true } : {}),", "        billingOnly: true,", A, '__tests__/people-4007-pr4'),
   ('J14 deal save carries the contact', 'admin-portal/lib/actions/brokerageBilling.ts', "    p_billing_contact_email: null,", "    p_billing_contact_email: '',", A, '__tests__/onboarding-4007/dealEditor.test.tsx'),
   ('J15 broker in the IT list', 'broker-portal/lib/people-roles.ts', "export const PEOPLE_IT_ROLES = ['admin', 'it_admin'] as const;", "export const PEOPLE_IT_ROLES = ['admin', 'it_admin', 'broker'] as const;", B, '__tests__/billing-login-4007/peopleRoles.test.tsx'),
+  ('J16 deactivate refusal unworded', 'broker-portal/lib/actions/deactivateUser.ts', "if (updateError.message?.includes('billing_contact_member')) {", "if (false) {", B, '__tests__/lib/actions/deactivateUser-service-write.test.ts'),
+  ('J17 cancel-invite billing contact not refused', 'admin-portal/app/api/users/cancel-invite/route.ts', "  if (billingContact) {", "  if (false) {", A, '__tests__/people-v2-4007/cancelInviteBillingContact.test.ts'),
 ]
+if len(sys.argv) > 2:
+    keep = set(sys.argv[2].split(','))
+    M = [x for x in M if x[0].split()[0] in keep]
 
 def md5(p): return hashlib.md5(open(p, 'rb').read()).hexdigest()[:8]
 

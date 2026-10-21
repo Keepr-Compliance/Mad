@@ -201,13 +201,14 @@ describe('People actions: the three role lists', () => {
 
 describe('OrgPeoplePanel for an IT admin (can_edit_billing false)', () => {
   // Shape from org_contacts_list as an IT admin on keepr-test (People v2 control
-  // C1_it_admin_sees_billing_phone_not_email): the billing row has its name, login and phone; email null.
+  // C1_it_admin_sees_billing_phone_and_email): the billing row has its name, email, login and phone
+  // (PM 6a68d0a2 F2: no email mask).
   const VIEW: OrgPeopleView = {
     can_edit: true,
     can_edit_billing: false,
     deal_status: 'active',
     contacts: [
-      { id: 'b1', role: 'billing', name: 'payer person', email: null, phone: '+12025550133', company_name: null, member_id: 'm-b1', login: 'billing_only', login_claimed: true },
+      { id: 'b1', role: 'billing', name: 'payer person', email: 'payer@example.test', phone: '+12025550133', company_name: null, member_id: 'm-b1', login: 'billing_only', login_claimed: true },
     ],
     members: [],
   };

@@ -150,4 +150,27 @@ describe('deactivateUser service-role write (BACKLOG-3843)', () => {
     expect(mockCreateClient).not.toHaveBeenCalled();
     expect(mockCreateServiceClient).not.toHaveBeenCalled();
   });
+
+  it('BACKLOG-4007 F1: the database refuses the live billing contact -> "Pick another billing contact first."', async () => {
+    const user = makeClient(
+      [
+        { data: { id: MEMBER, user_id: 'user-x', role: 'agent', organization_id: ORG, license_status: 'active' } },
+        { data: { role: 'admin', license_status: 'active' } },
+        LICENCE_ACTIVE,
+      ],
+      ADMIN
+    );
+    // the PostgREST shape of the suspend guard's RAISE (P0001, message billing_contact_member)
+    const service = makeClient(
+      [{ data: null, error: { code: 'P0001', message: 'billing_contact_member', hint: 'Pick another billing contact first.' } }],
+      null
+    );
+    mockCreateClient.mockResolvedValue(user.client);
+    mockCreateServiceClient.mockReturnValue(service.client);
+
+    expect(await deactivateUser({ memberId: MEMBER })).toEqual({
+      success: false,
+      error: 'Pick another billing contact first.',
+    });
+  });
 });
