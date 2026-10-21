@@ -18,7 +18,6 @@ export const PAGE_TITLES = {
   submissions: 'Submissions',
   billing: 'Billing',
   setup: 'Account Setup',
-  people: 'People',
 } as const;
 
 /** Exact-path titles, relative to /dashboard. */
@@ -36,7 +35,6 @@ const EXACT: Record<string, string> = {
   '/submissions': PAGE_TITLES.submissions,
   '/billing': PAGE_TITLES.billing,
   '/setup': PAGE_TITLES.setup,
-  '/people': PAGE_TITLES.people,
 };
 
 /** One-segment detail routes: /dashboard/<section>/<id>. */

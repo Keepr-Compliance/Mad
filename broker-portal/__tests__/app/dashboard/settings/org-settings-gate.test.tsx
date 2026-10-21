@@ -89,7 +89,7 @@ describe('/dashboard/settings role gate', () => {
     expect(element.type).toBe(OrgSettingsClient);
   });
 
-  it.each([['agent'], ['broker']])(
+  it.each([['agent']])(
     'refuses %s — the request is redirected, not merely unlinked',
     async (role) => {
       signedInAs(role);
@@ -97,6 +97,19 @@ describe('/dashboard/settings role gate', () => {
       expect(redirectTargets).toEqual(['/dashboard']);
     }
   );
+
+  it('admits a broker, but only to the People card (BACKLOG-4007)', async () => {
+    signedInAs('broker');
+    const element = await SettingsPage();
+    expect(element.type).not.toBe(OrgSettingsClient);
+    expect(redirectTargets).toEqual([]);
+  });
+
+  it('a broker never triggers a feature lookup (no policy state is built for them)', async () => {
+    const stub = signedInAs('broker');
+    await SettingsPage();
+    expect(stub.rpc.mock.calls.filter((c: unknown[]) => c[0] !== 'org_billing_suspended')).toEqual([]);
+  });
 
   it('refuses a signed-in user with no membership row', async () => {
     signedInAs(null);

@@ -1,7 +1,7 @@
 'use server';
 
 /**
- * Brokerage people (/dashboard/people) — BACKLOG-4007 PR-4.
+ * Brokerage people (the People card on /dashboard/settings) — BACKLOG-4007 PR-4.
  *
  * Every rule lives in the database: org_contacts_list / org_contact_save / org_contact_remove /
  * org_billing_login_set check the caller and refuse everyone else with 42501. People: an active

@@ -4,7 +4,7 @@
  *   People (list, add / change / remove IT, office, MSP): admin, IT admin, broker.
  *   The billing contact and the billing-only login: admin and broker only (3855).
  *
- * One definition (lib/people-roles.ts) read by the /dashboard/people gate, the sidebar and the
+ * One definition (lib/people-roles.ts) read by the /dashboard/settings gate, the sidebar and the
  * server actions; the database rule (public._org_contact_caller and the billing checks in
  * org_contact_save / org_billing_login_set) is compared to it by reading the migration text.
  * Every role is enumerated, not sampled.
@@ -32,7 +32,7 @@ jest.mock('@/lib/email', () => ({ sendInviteEmail: jest.fn() }));
 jest.mock('next/navigation', () => ({ usePathname: () => '/dashboard' }));
 
 import { PEOPLE_BILLING_ROLES, PEOPLE_ROLES, mayEditBillingPeople, mayUsePeople } from '@/lib/people-roles';
-import { checkPeopleAccess } from '@/lib/people-access';
+import { checkOrgSettingsAccess, seesOrgPolicy } from '@/lib/org-settings-access';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { listOrgContacts, removeOrgContact, saveOrgContact, setOrgBillingLogin } from '@/lib/actions/orgContacts';
 import { OrgPeoplePanel, type OrgPeopleView } from '@keepr/ui';
@@ -81,56 +81,55 @@ describe('the database rule is the same set (migration 20261020180000)', () => {
   });
 });
 
-describe('/dashboard/people gate (checkPeopleAccess)', () => {
+describe('/dashboard/settings gate (checkOrgSettingsAccess)', () => {
   const full = (role: string): PortalAccess => ({ kind: 'full', role, organizationId: ORG } as PortalAccess);
+  const portal = (role: string) => ({ access: full(role), user: { id: 'u-1' }, suspended: false, orgSuspended: false });
   it.each(ALL_ROLES)('%s with full access', async (role) => {
-    mockGetPortalAccess.mockResolvedValue({ access: full(role), suspended: false, orgSuspended: false });
-    const r = await checkPeopleAccess();
+    mockGetPortalAccess.mockResolvedValue(portal(role));
+    const r = await checkOrgSettingsAccess();
     expect(r.allowed).toBe(PEOPLE.has(role));
+  });
+  it('only admin and IT admin see the policy cards; a broker sees People only', () => {
+    expect(ALL_ROLES.filter(seesOrgPolicy)).toEqual(['admin', 'it_admin']);
   });
   it('refused: floor access, a suspended account, a suspended brokerage, no session', async () => {
     mockGetPortalAccess.mockResolvedValueOnce({
+      ...portal('admin'),
       access: { kind: 'floor', via: 'unlicensed', role: 'admin', organizationId: ORG },
-      suspended: false,
-      orgSuspended: false,
     });
-    expect((await checkPeopleAccess()).allowed).toBe(false);
-    mockGetPortalAccess.mockResolvedValueOnce({ access: full('admin'), suspended: true, orgSuspended: false });
-    expect((await checkPeopleAccess()).allowed).toBe(false);
-    mockGetPortalAccess.mockResolvedValueOnce({ access: full('broker'), suspended: false, orgSuspended: true });
-    expect((await checkPeopleAccess()).allowed).toBe(false);
+    expect((await checkOrgSettingsAccess()).allowed).toBe(false);
+    mockGetPortalAccess.mockResolvedValueOnce({ ...portal('admin'), suspended: true });
+    expect((await checkOrgSettingsAccess()).allowed).toBe(false);
+    mockGetPortalAccess.mockResolvedValueOnce({ ...portal('broker'), orgSuspended: true });
+    expect((await checkOrgSettingsAccess()).allowed).toBe(false);
     mockGetPortalAccess.mockResolvedValueOnce(null);
-    expect((await checkPeopleAccess()).allowed).toBe(false);
+    expect((await checkOrgSettingsAccess()).allowed).toBe(false);
   });
   it('admits with the organization from the classifier', async () => {
-    mockGetPortalAccess.mockResolvedValue({ access: full('broker'), suspended: false, orgSuspended: false });
-    expect(await checkPeopleAccess()).toEqual({ allowed: true, organizationId: ORG, role: 'broker' });
+    mockGetPortalAccess.mockResolvedValue(portal('broker'));
+    expect(await checkOrgSettingsAccess()).toEqual({ allowed: true, userId: 'u-1', organizationId: ORG, role: 'broker' });
   });
 });
 
-describe('Sidebar: People', () => {
+describe('Sidebar: Org Settings (the People card lives there)', () => {
   const renderSidebar = (props: Partial<React.ComponentProps<typeof Sidebar>>) =>
     render(<Sidebar collapsed={false} onToggle={() => {}} isImpersonating={false} displayEmail="m@example.test" {...props} />);
   it.each(ALL_ROLES)('%s', (role) => {
     renderSidebar({ role, displayRole: role });
-    const link = screen.queryByRole('link', { name: 'People' });
-    if (PEOPLE.has(role)) expect(link).toHaveAttribute('href', '/dashboard/people');
+    const link = screen.queryByRole('link', { name: 'Org Settings' });
+    if (PEOPLE.has(role)) expect(link).toHaveAttribute('href', '/dashboard/settings');
     else expect(link).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
   });
-  it('a broker sees People but not Org Settings', () => {
-    renderSidebar({ role: 'broker', displayRole: 'broker' });
-    expect(screen.getByRole('link', { name: 'People' })).toBeInTheDocument();
+  it('absent during a support session (broker), on the floor, and while suspended', () => {
+    const { unmount } = renderSidebar({ role: 'broker', isImpersonating: true });
     expect(screen.queryByRole('link', { name: 'Org Settings' })).not.toBeInTheDocument();
-  });
-  it('absent during a support session, on the floor, and while suspended', () => {
-    const { unmount } = renderSidebar({ role: 'admin', isImpersonating: true });
-    expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
     unmount();
-    const b = renderSidebar({ role: 'admin', floorOnly: true });
-    expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
+    const b = renderSidebar({ role: 'broker', floorOnly: true });
+    expect(screen.queryByRole('link', { name: 'Org Settings' })).not.toBeInTheDocument();
     b.unmount();
-    renderSidebar({ role: 'admin', orgSuspended: true });
-    expect(screen.queryByRole('link', { name: 'People' })).not.toBeInTheDocument();
+    renderSidebar({ role: 'broker', orgSuspended: true });
+    expect(screen.queryByRole('link', { name: 'Org Settings' })).not.toBeInTheDocument();
   });
 });
 

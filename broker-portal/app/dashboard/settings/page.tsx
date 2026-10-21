@@ -22,11 +22,15 @@
 
 import { redirect } from 'next/navigation';
 import { getImpersonationSession } from '@/lib/impersonation';
+import { PageHeader } from '@keepr/design-system';
 import {
   checkOrgSettingsAccess,
   impersonationFeatureView,
   resolveOrgSettingsFeatures,
+  seesOrgPolicy,
 } from '@/lib/org-settings-access';
+import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
+import { PeopleCard } from '@/components/settings/PeopleCard';
 import OrgSettingsClient from './OrgSettingsClient';
 
 export default async function SettingsPage() {
@@ -43,8 +47,24 @@ export default async function SettingsPage() {
     redirect('/dashboard');
   }
 
+  // BACKLOG-4007: a broker may open this page and sees ONLY People. The policy cards (and the
+  // feature lookups behind them) are never built for a broker; their actions still refuse one.
+  if (!seesOrgPolicy(access.role)) {
+    return (
+      <div className="max-w-7xl mx-auto space-y-6 max-md:space-y-3">
+        <PageHeader
+          phoneHideTitle
+          phoneHideSubtitle
+          title={PAGE_TITLES.settings}
+          subtitle="Manage your brokerage's people"
+          className="max-md:mb-0"
+        />
+        <PeopleCard organizationId={access.organizationId} />
+      </div>
+    );
+  }
+
   const features = await resolveOrgSettingsFeatures(access.organizationId);
 
-  // BACKLOG-4007 PR-4: People is its own route (/dashboard/people), open to brokers too.
-  return <OrgSettingsClient features={features} />;
+  return <OrgSettingsClient features={features} peopleOrganizationId={access.organizationId} />;
 }

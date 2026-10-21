@@ -41,6 +41,7 @@ import {
 } from '@keepr/design-system';
 import { AlertBanner, Button } from '@keepr/ui';
 import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
+import { PeopleCard } from '@/components/settings/PeopleCard';
 
 interface ConsentInfo {
   organizationId: string;
@@ -70,9 +71,11 @@ const RETENTION_OPTIONS = [
 export interface OrgSettingsClientProps {
   /** How each gated card renders, resolved server-side. */
   features: OrgSettingsFeatureView;
+  /** BACKLOG-4007: renders the People card at the bottom. Absent for a support session. */
+  peopleOrganizationId?: string;
 }
 
-export default function OrgSettingsClient({ features }: OrgSettingsClientProps) {
+export default function OrgSettingsClient({ features, peopleOrganizationId }: OrgSettingsClientProps) {
   const { isImpersonating } = useImpersonation();
   const [consent, setConsent] = useState<ConsentInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -402,6 +405,9 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
           </div>
         </Link>
       )}
+
+      {/* People — BACKLOG-4007. Admin and IT admin here; a broker gets a People-only page. */}
+      {peopleOrganizationId && <PeopleCard organizationId={peopleOrganizationId} />}
     </div>
   );
 }
