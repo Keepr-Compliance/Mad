@@ -63,35 +63,30 @@ export function SubmissionFilterBar({
         options={statusOptions}
         selected={filters.statuses}
         onChange={(statuses) => onFiltersChange({ ...filters, statuses })}
-        bulkActions={false}
       />
       <MultiSelect
         label="Organization"
         options={orgOptions}
         selected={filters.orgs}
         onChange={(orgs) => onFiltersChange({ ...filters, orgs })}
-        bulkActions={false}
       />
       <MultiSelect
         label="Agent"
         options={agentOptions}
         selected={filters.agents}
         onChange={(agents) => onFiltersChange({ ...filters, agents })}
-        bulkActions={false}
       />
       <MultiSelect
         label="Reason"
         options={reasonOptions}
         selected={filters.reasons}
         onChange={(reasons) => onFiltersChange({ ...filters, reasons })}
-        bulkActions={false}
       />
       <MultiSelect
         label="Platform"
         options={platformOptions}
         selected={filters.platforms}
         onChange={(platforms) => onFiltersChange({ ...filters, platforms })}
-        bulkActions={false}
       />
 
       <div className="relative">
