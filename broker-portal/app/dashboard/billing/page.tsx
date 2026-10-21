@@ -47,6 +47,9 @@ import type { OrgSuspensionReason } from '@/components/billing/OrgSuspendedBanne
 import { BILLING_CONTACT_ROLE } from '@/lib/auth/billingContact';
 import { readOrgBillingSuspendedFor } from '@/lib/auth/orgSuspension';
 import { readPlanEnd } from '@/lib/billing/planEnd';
+import { readOrgBillingSetUp } from '@/lib/billing/orgBillingSetUp';
+import { readSeats } from '@/lib/billing/seats';
+import type { SeatsViewer } from '@/components/billing/SeatsBlock';
 
 const SITUATION_3844 = {
   agentPlan: 'none',
@@ -134,6 +137,14 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
       ? await readOrgBillingSuspendedFor(portal.supabase, organizationId)
       : portal.orgSuspended;
     const role = billingContact ? BILLING_CONTACT_ROLE : portal.access.role;
+    // BACKLOG-3854: billing set up for real (a non-draft deal and a Stripe customer in this mode),
+    // read after admission with the service client. It decides the money blocks, never WHO.
+    const orgBillingSetUp = await readOrgBillingSetUp(createServiceClient(), organizationId, currentStripeMode());
+    const viewer: SeatsViewer | null =
+      role === BILLING_CONTACT_ROLE ? 'billing_contact' : role === 'broker' || role === 'admin' || role === 'it_admin' ? role : null;
+    // Seat counts with the person's own session (the database decides who may read and add).
+    const seatsView = viewer ? await readSeats(portal.supabase, organizationId) : null;
+    const portalUnavailable = one(((await searchParams) ?? {}).portal) === 'unavailable';
     if (orgSuspended === true && (portal.access.kind === 'full' || billingContact)) {
       // BACKLOG-3853 PR-2B: read after admission. The reason is service-side only.
       const orgCaps = billingCapabilities({
@@ -141,6 +152,7 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
         isImpersonating: false,
         enabled: true,
         ...SITUATION_3844,
+        orgBillingSetUp,
         orgSuspended: true,
         billingContact,
       });
@@ -160,8 +172,10 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
       return (
         <BillingPage
           caps={orgCaps}
-          orgBillingSetUp={SITUATION_3844.orgBillingSetUp}
+          orgBillingSetUp={orgBillingSetUp}
           orgSuspension={{ reason, role, organizationName, payUrl }}
+          seats={{ view: seatsView, viewer }}
+          portalUnavailable={portalUnavailable}
         />
       );
     }
@@ -169,11 +183,22 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
     // may see and switch it); a failed read shows nothing.
     // IT admins never see billing details (3855): no read.
     const planEnd = role === 'broker' || role === 'admin' || billingContact ? await readPlanEnd(portal.supabase, organizationId) : null;
+    const orgCaps = billingCapabilities({
+      access: portal.access,
+      isImpersonating: false,
+      enabled: true,
+      ...SITUATION_3844,
+      orgBillingSetUp,
+      billingContact,
+    });
+    if (!orgCaps) notFound();
     return (
       <BillingPage
-        caps={caps}
-        orgBillingSetUp={SITUATION_3844.orgBillingSetUp}
+        caps={orgCaps}
+        orgBillingSetUp={orgBillingSetUp}
         autoRenew={planEnd ? { organizationId, planEnd } : null}
+        seats={{ view: seatsView, viewer }}
+        portalUnavailable={portalUnavailable}
       />
     );
   }

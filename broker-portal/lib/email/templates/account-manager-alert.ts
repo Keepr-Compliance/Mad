@@ -44,6 +44,10 @@ const REASON_TEXT: Record<AccountManagerAlertReason, { subject: string; line: st
     subject: 'auto-renew turned off',
     line: 'The brokerage turned auto-renew off. Billing stops at the end of the current period and the plan ends then.',
   },
+  seats_added: {
+    subject: 'seats added',
+    line: 'A Broker or Admin added seats from the Billing page. Stripe adds a prorated charge for the rest of this period to the next invoice.',
+  },
   subscription_ended_unexpectedly: {
     subject: 'subscription ended',
     line: 'The Stripe subscription ended while auto-renew was on. The deal is unchanged and no invoices will come. Check Stripe, then fix the deal from the admin portal.',

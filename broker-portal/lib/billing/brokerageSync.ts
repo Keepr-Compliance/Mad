@@ -2,7 +2,7 @@
  * billing_outbox kind `sync_org_subscription` — BACKLOG-3853 PR-2.
  *
  * Makes the brokerage's Stripe subscription match its saved deal: one monthly subscription,
- * collection_method send_invoice, net 15 (days_until_due 15), no proration, one line
+ * collection_method send_invoice, net 15 (days_until_due 15), one line
  * "<seats> x <seat price>" on the fixed product `keepr_team_seat`, payable by card, US bank
  * account or bank transfer. Enqueued by the org_deals trigger: one row per deal version
  * (save deal, seat change). The row carries ids only; everything is read at run time.
@@ -402,6 +402,23 @@ export const handleSyncOrgSubscriptionRow: OutboxHandler = async (row: OutboxRow
     const qtyDiffers = item.quantity !== deal.seats;
     const priceDiffers = item.price?.unit_amount !== unitAmount;
     const cancelDiffers = (sub.cancel_at_period_end === true) !== cancel;
+    // BACKLOG-3854 (founder d0c22cef #1, 6ca058d5): a seat INCREASE is prorated (Broker "Add seats"
+    // and staff Edit deal alike). The row does not know why the version moved, so the rule is on
+    // state: quantity going up -> create_prorations; a price change, a cancel switch or a decrease
+    // -> none (a decrease gives no credit; it shows on the next invoice). An increase together with
+    // a price change is two updates: the quantity at the old price first (prorated), then the price
+    // (not prorated), each under its own key. Creation stays 'none'.
+    const increase = typeof item.quantity === 'number' && item.quantity < deal.seats;
+    if (increase && priceDiffers) {
+      const first: Stripe.SubscriptionUpdateParams = {
+        items: [{ id: item.id, quantity: deal.seats }],
+        proration_behavior: 'create_prorations',
+      };
+      pastDeadline(ctx.deadline);
+      await stripe.subscriptions.update(sub.id, first, {
+        idempotencyKey: brokerageKey(org, mode, `subscription_update:v${deal.version}:${digest(first)}`),
+      });
+    }
     if (qtyDiffers || priceDiffers || cancelDiffers) {
       const params: Stripe.SubscriptionUpdateParams = {};
       if (qtyDiffers || priceDiffers) {
@@ -416,9 +433,10 @@ export const handleSyncOrgSubscriptionRow: OutboxHandler = async (row: OutboxRow
         }
         params.items = [itemPatch];
       }
-      // Key order kept as before (items, proration_behavior): the digest in the key is unchanged
-      // for a seat or price change.
-      params.proration_behavior = 'none';
+      // Key order kept as before (items, proration_behavior). After the split's first update, this
+      // one carries exactly the parameters a retry computes once the quantity has landed (each run
+      // re-reads the subscription), so a retry reuses this key with the same parameters.
+      params.proration_behavior = increase && !priceDiffers ? 'create_prorations' : 'none';
       if (cancelDiffers) params.cancel_at_period_end = cancel;
       pastDeadline(ctx.deadline);
       await stripe.subscriptions.update(sub.id, params, {

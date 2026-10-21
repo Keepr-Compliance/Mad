@@ -124,6 +124,8 @@ function stableJson(v: unknown): string {
  *                            BACKLOG-4007 People v2, lib/billing/billingContactReassigned.ts
  *                            (enqueued by the database when an IdP deprovision moved the billing
  *                            contact to the account admin)
+ *   - notify_seats_added     BACKLOG-3854, lib/billing/seatsAddedNotify.ts (enqueued by
+ *                            broker_add_seats: the billing contact's "seats added" email)
  */
 export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.freeze({
   agent_receipt: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
@@ -144,4 +146,6 @@ export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.f
     (await import('./setupReminder')).handleNotifySetupReminderRow(row, ctx),
   notify_billing_contact_reassigned: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
     (await import('./billingContactReassigned')).handleNotifyBillingContactReassignedRow(row, ctx),
+  notify_seats_added: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./seatsAddedNotify')).handleNotifySeatsAddedRow(row, ctx),
 });

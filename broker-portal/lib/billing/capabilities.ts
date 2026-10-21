@@ -21,8 +21,9 @@
  * 3853/3855):
  *   - personal, no Agent plan: plan, choose_plan, credits, payment, invoices;
  *     with an Agent plan (any state): plan, credits, payment, invoices.
- *   - organization, broker/admin with billing set up: plan, seats, payment,
- *     invoices. it_admin: plan, seats, and never a price or an invoice.
+ *   - organization, broker/admin with billing set up: plan, seats, manage_billing
+ *     (Stripe's page: invoices and payment method; BACKLOG-3854). it_admin: plan,
+ *     seats, and never a price or an invoice.
  *     Billing not set up yet ("Managed by Keepr"): plan, seats only.
  *   - account suspended: nothing can be bought; a purchasing primary action
  *     becomes "contact support".
@@ -31,7 +32,14 @@
 import type { PortalAccess } from '@/lib/auth/membership';
 import type { AgentPlanState } from '@keepr/shared';
 
-export type BillingBlock = 'plan' | 'choose_plan' | 'seats' | 'credits' | 'payment' | 'invoices';
+export type BillingBlock = 'plan' | 'choose_plan' | 'seats' | 'credits' | 'payment' | 'invoices' | 'manage_billing';
+
+/**
+ * BACKLOG-3854: an organization's money blocks once billing is set up. The payment method and the
+ * invoices are on Stripe's page ("Manage billing", founder 546c9af1); the empty org frames for
+ * `payment` and `invoices` are not shown.
+ */
+const ORG_MONEY_BLOCKS: BillingBlock[] = ['plan', 'seats', 'manage_billing'];
 
 /** The personal Agent plan as billing_subscriptions will report it (3847). Declared once, in packages/shared (BACKLOG-3859). */
 export type { AgentPlanState } from '@keepr/shared';
@@ -141,7 +149,7 @@ function organization(role: string, s: BillingSituation): BillingCapabilities {
   const canPurchase = money && !s.accountSuspended && !orgSuspended;
   return {
     kind: 'organization',
-    blocks: money ? ['plan', 'seats', 'payment', 'invoices'] : ['plan', 'seats'],
+    blocks: money ? ORG_MONEY_BLOCKS : ['plan', 'seats'],
     showPrice: payer,
     canPay: money,
     // Organization payment and plan changes are BACKLOG-3855's.
@@ -166,7 +174,7 @@ function billingContact(s: BillingSituation): BillingCapabilities {
   const money = s.orgBillingSetUp;
   return {
     kind: 'organization',
-    blocks: money ? ['plan', 'seats', 'payment', 'invoices'] : ['plan', 'seats'],
+    blocks: money ? ORG_MONEY_BLOCKS : ['plan', 'seats'],
     showPrice: true,
     canPay: money,
     canUpdateCard: false,

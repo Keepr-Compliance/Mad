@@ -378,7 +378,9 @@ describe('R2: a support session never sees billing', () => {
     given(rows);
     mockCookie = JSON.stringify({ session_id: SESSION_ID, target_user_id: TARGET_USER_ID });
     expect(await run()).toEqual(outcome);
-    expect(mockServiceTables).toEqual([]);
+    // No impersonation read. BACKLOG-3854: an admitted organization page reads whether billing is
+    // set up (org_deals + org_billing_stripe, service) after admission; nothing else.
+    expect(mockServiceTables).toEqual('notFound' in outcome ? [] : ['org_deals', 'org_billing_stripe']);
   });
 });
 
@@ -733,7 +735,9 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
       // BACKLOG-4019: a broker or admin reads the plan's auto-renew state (broker_get_plan_end,
       // own session); an IT admin reads nothing.
       const role = (row as { role?: string }).role;
-      const allowed = role === 'it_admin' ? ['org_billing_suspended'] : ['org_billing_suspended', 'broker_get_plan_end'];
+      // BACKLOG-3854: everyone on the organization page reads the seat counts (broker_get_seats, own
+      // session; the database gives IT admin no price).
+      const allowed = role === 'it_admin' ? ['org_billing_suspended', 'broker_get_seats'] : ['org_billing_suspended', 'broker_get_plan_end', 'broker_get_seats'];
       expect(mockSessionRpc.mock.calls.filter((c) => !allowed.includes(c[0] as string))).toEqual([]);
       if (role === 'it_admin') expect(mockSessionRpc.mock.calls.some((c) => c[0] === 'broker_get_plan_end')).toBe(false);
       expect(mockServiceRpc).not.toHaveBeenCalled();
@@ -1191,4 +1195,82 @@ describe('C-B1: a suspended brokerage (BACKLOG-3853)', () => {
     suspend('non_payment');
     expect(await run()).toEqual({ redirect: '/dashboard/account' });
   });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3854: billing set up for real (a non-draft deal + a Stripe customer in this mode) turns
+// on the money blocks: seats with counts and "Manage billing". IT admin never gets the money block.
+// The seats payload is broker_get_seats' output as read on keepr-test (QA Brokerage 1 Admin,
+// 2026-10-21), see __tests__/seats-3854/seatsUi.test.tsx.
+// ---------------------------------------------------------------------------
+describe('BACKLOG-3854: set-up brokerage -> seats + Manage billing', () => {
+  const ORG = FIXTURE_BROKERAGE_ORG_ID;
+  const SEATS = { free: 2, bought: 3, in_use: 1, can_add: true, version: 2, trialing: true, unlimited: false, unit_price_cents: 2499, cannot_add_reason: null, account_manager_email: null };
+  function setUp(status: string, mode: 'test' | 'live' = 'test', suspended = false): void {
+    mockSessionRpc.mockImplementation(async (fn: string) =>
+      // a suspended deal: what broker_get_seats returns then (S2_suspended) [EDITED can_add, reason, version]
+      fn === 'broker_get_seats' ? { data: suspended ? { ...SEATS, can_add: false, cannot_add_reason: 'deal_suspended', version: null } : SEATS, error: null } : fn === 'org_billing_suspended' ? { data: suspended, error: null } : { data: null, error: null }
+    );
+    mockBillingDb = new BillingDb({
+      org_deals: [{ organization_id: ORG, status, suspended_reason: suspended ? 'other' : null }],
+      org_billing_stripe: [{ organization_id: ORG, stripe_mode: mode, stripe_customer_id: 'cus_EDITED_3854' }],
+      organizations: [{ id: ORG, name: 'Fixture Realty' }],
+    });
+  }
+
+  it.each([
+    ['broker', ['Your plan', 'Seats & licenses', 'Invoices & payment method']],
+    ['admin', ['Your plan', 'Seats & licenses', 'Invoices & payment method']],
+    ['it_admin', ['Your plan', 'Seats & licenses']],
+  ] as [string, string[]][])('%s, active deal with a customer -> exactly these blocks', async (role, blocks) => {
+    given([brokerageMembership(role)]);
+    setUp('active');
+    expect(await renderedBlocks()).toEqual(blocks);
+    given([brokerageMembership(role)]);
+    setUp('active');
+    const { container, unmount } = render(await BillingRoute({}));
+    expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Free2');
+    expect(container.textContent).toContain('Organization plan');
+    expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(role === 'it_admin' ? 0 : 1);
+    expect(stripeCalls()).toBe(0);
+    unmount();
+  });
+
+  it.each([
+    ['a draft deal', 'draft', 'test'],
+    ['a customer in the other mode only', 'active', 'live'],
+  ] as [string, string, 'test' | 'live'][])('%s -> not set up: Managed by Keepr, no Manage billing', async (_n, status, mode) => {
+    given([brokerageMembership('admin')]);
+    setUp(status, mode);
+    expect(await renderedBlocks()).toEqual(['Your plan', 'Seats & licenses']);
+  });
+
+  // A deal saved but not yet synced (no Stripe customer): broker_get_seats says can_add (its refusals
+  // read no customer), the page is not set up, and the action would refuse -> no button.
+  it('active deal, no Stripe customer yet -> no Add seats, no Manage billing', async () => {
+    given([brokerageMembership('admin')]);
+    setUp('active');
+    mockBillingDb = new BillingDb({
+      org_deals: [{ organization_id: ORG, status: 'active', suspended_reason: null }],
+      organizations: [{ id: ORG, name: 'Fixture Realty' }],
+    });
+    const { container, unmount } = render(await BillingRoute({}));
+    expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Free2');
+    expect(within(container).queryAllByRole('button', { name: 'Add seats' })).toHaveLength(0);
+    expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(0);
+    unmount();
+  });
+
+  it.each([['broker', 1], ['admin', 1], ['it_admin', 0]] as [string, number][])(
+    'suspended + set up, %s -> Manage billing under the banner: %i',
+    async (role, n) => {
+      given([brokerageMembership(role)]);
+      setUp('suspended', 'test', true);
+      const { container, unmount } = render(await BillingRoute({}));
+      expect(container.querySelector('[data-billing-banner="org_suspended"]')).not.toBeNull();
+      expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(n);
+      expect(within(container).queryAllByRole('button', { name: 'Add seats' })).toHaveLength(0);
+      unmount();
+    }
+  );
 });

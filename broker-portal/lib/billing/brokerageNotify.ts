@@ -61,6 +61,8 @@ const AM_REASONS = new Set<AccountManagerAlertReason>([
   // and a subscription that ended while the deal was not canceling (./brokerage.ts).
   'auto_renew_off',
   'subscription_ended_unexpectedly',
+  // BACKLOG-3854: a Broker or Admin added seats (enqueued by broker_add_seats).
+  'seats_added',
 ]);
 
 interface DealRow {

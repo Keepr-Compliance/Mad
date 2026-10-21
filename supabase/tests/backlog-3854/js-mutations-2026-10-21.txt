@@ -1,0 +1,37 @@
+BACKLOG-3854 JS controls, run 2026-10-21 at 3e82bb35e. Each: exact-once replace, MUTATION APPLIED + md5, suite with --bail=0, non-zero count, restored with git checkout (fix committed first).
+J19 green: not load-bearing. openBrokerageBillingPortal reaches the customer read only after caps.canSeeInvoices, which needs orgBillingSetUp, which already needs the same customer row; so with no customer, no Stripe call happens at an earlier gate.
+{"mutation": "J1 W7 blanket create_prorations", "failed": 8, "total": 36, "red": true}
+{"mutation": "J2 increase left none", "failed": 5, "total": 36, "red": true}
+{"mutation": "J3 one combined update for qty+price", "failed": 2, "total": 36, "red": true}
+{"mutation": "J3b combined update prorated as one", "failed": 1, "total": 36, "red": true}
+{"mutation": "J4 seats_added not an AM reason", "failed": 1, "total": 5, "red": true}
+{"mutation": "J5 email sent twice (no dedupe)", "failed": 1, "total": 6, "red": true}
+{"mutation": "J6 no contact throws", "failed": 1, "total": 6, "red": true}
+{"mutation": "J7 trial promises a charge", "failed": 1, "total": 6, "red": true}
+{"mutation": "J8 W6 org from an argument", "failed": 1, "total": 24, "red": true}
+{"mutation": "J10 W2 IT admin reaches the RPC", "failed": 3, "total": 24, "red": true}
+{"mutation": "J11 W4 no live overdue check", "failed": 2, "total": 24, "red": true}
+{"mutation": "J12 live check fails open", "failed": 2, "total": 24, "red": true}
+{"mutation": "J13 W11 wall clock instead of the test clock", "failed": 2, "total": 24, "red": true}
+{"mutation": "J14 bounds widened", "failed": 1, "total": 24, "red": true}
+{"mutation": "J14b non-integer count accepted", "failed": 3, "total": 24, "red": true}
+{"mutation": "J15 W5 configuration not passed", "failed": 2, "total": 20, "red": true}
+{"mutation": "J16 W5 subscription_update not asserted", "failed": 1, "total": 20, "red": true}
+{"mutation": "J17 login_page not asserted", "failed": 1, "total": 20, "red": true}
+{"mutation": "J17b livemode not asserted", "failed": 1, "total": 20, "red": true}
+{"mutation": "J17c account default used", "failed": 1, "total": 20, "red": true}
+{"mutation": "J18 W9 redirect inside the try", "failed": 4, "total": 20, "red": true}
+{"mutation": "J19 9e Stripe before the customer row", "failed": 0, "total": 20, "red": false}
+{"mutation": "J20 IT admin opens the portal", "failed": 1, "total": 20, "red": true}
+{"mutation": "J21 impersonation allowed", "failed": 1, "total": 20, "red": true}
+{"mutation": "J22 SB payment/invoices frames left in", "failed": 2, "total": 16, "red": true}
+{"mutation": "J23 SR5 canceling copy not role-aware", "failed": 1, "total": 16, "red": true}
+{"mutation": "J24 button from the role, not can_add", "failed": 1, "total": 16, "red": true}
+{"mutation": "J25 trial promises a charge (modal)", "failed": 1, "total": 16, "red": true}
+{"mutation": "J26 set-up ignores draft", "failed": 1, "total": 101, "red": true}
+{"mutation": "J27 set-up ignores the mode", "failed": 1, "total": 101, "red": true}
+{"mutation": "J28 page keeps set-up false", "failed": 5, "total": 101, "red": true}
+{"mutation": "J29 suspended branch keeps set-up false", "failed": 2, "total": 101, "red": true}
+{"mutation": "J30 IT admin gets money", "failed": 2, "total": 101, "red": true}
+{"mutation": "J31 Add seats while suspended (caps gate dropped)", "failed": 1, "total": 101, "red": true}
+SUMMARY 33 of 34 red

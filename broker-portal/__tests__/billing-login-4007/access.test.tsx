@@ -126,8 +126,7 @@ describe('billingCapabilities for the billing-only login', () => {
     expect(billingCapabilities({ ...base, access: UNLICENSED, billingContact: true, orgBillingSetUp: true })?.blocks).toEqual([
       'plan',
       'seats',
-      'payment',
-      'invoices',
+      'manage_billing', // BACKLOG-3854: payment + invoices are Stripe's page
     ]);
   });
   it('null without the flag, for an agent, and while impersonating', () => {

@@ -48,6 +48,7 @@ export type {
   AccountManagerAlertParams,
   SetupReminderParams,
   BillingContactReassignedParams,
+  SeatsAddedParams,
 } from './types';
 
 // Queue (BACKLOG-2009)
@@ -72,6 +73,7 @@ import { buildAccountSuspendedEmail } from './templates/account-suspended';
 import { buildAccountManagerAlertEmail } from './templates/account-manager-alert';
 import { buildSetupReminderEmail } from './templates/setup-reminder';
 import { buildBillingContactReassignedEmail } from './templates/billing-contact-reassigned';
+import { buildSeatsAddedEmail } from './templates/seats-added';
 import type {
   InviteEmailParams,
   DownloadInviteEmailParams,
@@ -86,6 +88,7 @@ import type {
   AccountManagerAlertParams,
   SetupReminderParams,
   BillingContactReassignedParams,
+  SeatsAddedParams,
   SendEmailResult,
 } from './types';
 
@@ -324,6 +327,23 @@ export async function sendBillingContactReassignedEmail(params: BillingContactRe
     emailType: 'other',
     logMetadata: {
       kind: 'billing_contact_reassigned',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+    },
+  });
+}
+
+/** BACKLOG-3854: seats added, to the billing contact. Log type 'other' (the 4001 type check). */
+export async function sendSeatsAddedEmail(params: SeatsAddedParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildSeatsAddedEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'seats_added',
       outboxKey: params.outboxKey,
       organizationId: params.organizationId,
     },
