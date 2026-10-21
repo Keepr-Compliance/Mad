@@ -26,6 +26,7 @@ import { LICENCE_READ_FAILED, readOwnLicenceSuspended } from '@/lib/auth/suspens
 import { billingEnabled } from '@/lib/billing/flag';
 import { ORG_SUSPENSION_READ_FAILED, readOrgBillingSuspended } from '@/lib/auth/orgSuspension';
 import { readBillingContactLogin } from '@/lib/auth/billingContact';
+import { safeNextPath, setNextPathCookie } from '@/lib/auth/safeNextPath';
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
@@ -126,7 +127,11 @@ export async function middleware(request: NextRequest) {
     if (isProtectedRoute && !user) {
       const loginUrl = new URL('/login', request.url);
       loginUrl.searchParams.set('redirectTo', pathname);
-      return NextResponse.redirect(loginUrl);
+      const bounce = NextResponse.redirect(loginUrl);
+      // BACKLOG-3863 R7: /auth/callback reads this to land on the same page
+      // after OAuth. Only a path safeNextPath() accepts is stored.
+      setNextPathCookie(bounce, pathname);
+      return bounce;
     }
 
     // BACKLOG-3080: what this person may open, from the one shared classifier
@@ -198,8 +203,8 @@ export async function middleware(request: NextRequest) {
 
     // Redirect authenticated users from login page
     if (isAuthRoute && user) {
-      const rawRedirect = request.nextUrl.searchParams.get('redirectTo') ?? '/dashboard';
-      const redirectTo = /^\/[a-zA-Z0-9\-_\/\?\&\=\#\.]+$/.test(rawRedirect) ? rawRedirect : '/dashboard';
+      // BACKLOG-3705 / 3863 R7: the shared validator, never a local pattern.
+      const redirectTo = safeNextPath(request.nextUrl.searchParams.get('redirectTo'));
       return NextResponse.redirect(new URL(redirectTo, request.url));
     }
   } catch (error) {
