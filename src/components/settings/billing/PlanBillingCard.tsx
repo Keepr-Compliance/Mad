@@ -77,7 +77,7 @@ function formatDate(iso: string | null): string | null {
 }
 
 function formatPrice(cents: number | null, currency: string | null): string | null {
-  if (cents == null || !currency) return null;
+  if (cents === null || cents === undefined || !currency) return null;
   try {
     return new Intl.NumberFormat(undefined, { style: "currency", currency: currency.toUpperCase() }).format(
       cents / 100,

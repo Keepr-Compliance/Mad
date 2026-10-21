@@ -21,6 +21,7 @@ import React from "react";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PlanBillingCard } from "../PlanBillingCard";
+import type { PlanSummary } from "@/services/billingService";
 
 const mockLicense = { isLicenseResolved: true };
 jest.mock("@/contexts/LicenseContext", () => ({
@@ -53,7 +54,7 @@ const api = () => window.api as unknown as {
 
 const RENEWAL = /Nov 1[01], 2026|Renews|until/;
 
-function setSummary(summary: typeof ACTIVE | null): void {
+function setSummary(summary: PlanSummary | null): void {
   api().billing.getPlanSummary.mockResolvedValue(
     summary ? { unavailable: false, summary } : { unavailable: true },
   );
