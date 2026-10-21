@@ -277,7 +277,7 @@ const MESSAGES: Record<string, string> = {
   invalid_reason: 'Choose a suspension reason.',
   not_authorized: 'You do not have permission to do this.',
   mode_not_configured: 'This portal has no billing mode configured (STRIPE_MODE). Nothing was saved.',
-  note_required: 'Enter a note. It is saved in the change log.',
+  note_required: 'Enter a note. It is saved in Activity.',
   // BACKLOG-4019 auto-renew
   deal_not_started: 'Billing has not started for this organization yet.',
   no_subscription: 'The Stripe subscription is not created yet. Try again in a minute.',
@@ -308,13 +308,4 @@ export const NEW_DEAL_REASON = 'Deal created';
 export function resolveDealReason(hasDeal: boolean, typed: string): string | null {
   if (!hasDeal) return NEW_DEAL_REASON;
   return typed.trim() ? typed : null;
-}
-
-/** Entries the change log shows before "Show more". */
-export const CHANGE_LOG_PAGE = 5;
-
-/** Newest-first log: the first CHANGE_LOG_PAGE entries, or all of them once expanded. */
-export function visibleChangeLog<T>(log: readonly T[], expanded: boolean): { visible: T[]; hidden: number } {
-  if (expanded || log.length <= CHANGE_LOG_PAGE) return { visible: [...log], hidden: 0 };
-  return { visible: log.slice(0, CHANGE_LOG_PAGE), hidden: log.length - CHANGE_LOG_PAGE };
 }

@@ -24,6 +24,7 @@ import { NextResponse } from 'next/server';
 import { extractEmail } from '@/lib/auth/helpers';
 import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
 import { clearInviteCookie, readInviteToken } from '@/lib/auth/inviteCookie';
+import { DEFAULT_NEXT_PATH, clearNextPathCookie, readNextPathCookie } from '@/lib/auth/safeNextPath';
 import { syncIdpNames } from '@/lib/auth/idpNames';
 import { isBrokerageSuspendedError } from '@/lib/auth/orgSuspension';
 import { isBillingSetupIncompleteError, jitTargetFor } from '@/lib/auth/jitIdentity';
@@ -45,11 +46,13 @@ function inviteRefusalFor(error: unknown): string {
 
 /**
  * Every exit of this route: a redirect that also deletes the invite cookie, so
- * a token is never left behind for a later sign-in to use.
+ * a token is never left behind for a later sign-in to use, and the post-login
+ * path cookie (BACKLOG-3863), so a stale destination never outlives one sign-in.
  */
 function finish(location: string): NextResponse {
   const response = NextResponse.redirect(location);
   clearInviteCookie(response);
+  clearNextPathCookie(response);
   return response;
 }
 
@@ -75,8 +78,11 @@ export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const inviteToken = readInviteToken(request, 'invite');
   const code = searchParams.get('code');
-  const rawNext = searchParams.get('next') ?? '/dashboard';
-  const next = /^\/[a-zA-Z0-9\-_/?&=#.]+$/.test(rawNext) ? rawNext : '/dashboard';
+  // BACKLOG-3863 R7: the page middleware bounced to /login, from its cookie,
+  // re-validated by safeNextPath(). It replaces only the /dashboard default;
+  // the setup-guide, consent and invite branches below still decide first.
+  // (The old `?next=` query parameter had no writer and is no longer read.)
+  const next = readNextPathCookie(request) ?? DEFAULT_NEXT_PATH;
 
   if (code) {
     const supabase = await createClient();

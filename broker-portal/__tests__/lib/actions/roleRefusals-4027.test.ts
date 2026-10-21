@@ -78,7 +78,7 @@ describe('deactivateUser (W11)', () => {
     );
     mockCreateClient.mockResolvedValue(user.client);
     const res = await deactivateUser({ memberId: MEMBER });
-    expect(res).toEqual({ success: false, error: 'Cannot deactivate the last admin' });
+    expect(res).toEqual({ success: false, error: 'Cannot deactivate the last admin. Make another user an admin first, then try again.' });
     expect(mockCreateServiceClient).not.toHaveBeenCalled();
     const count = user.queries[3];
     expect(count).toEqual(expect.arrayContaining([['eq', 'role', 'admin'], ['not', 'user_id', 'is', null], ['neq', 'id', MEMBER]]));
@@ -98,7 +98,7 @@ describe('deactivateUser (W11)', () => {
     mockCreateClient.mockResolvedValue(user.client);
     mockCreateServiceClient.mockReturnValue(service.client);
     const res = await deactivateUser({ memberId: MEMBER });
-    expect(res).toEqual({ success: false, error: 'Cannot deactivate the last admin' });
+    expect(res).toEqual({ success: false, error: 'Cannot deactivate the last admin. Make another user an admin first, then try again.' });
   });
 
   it('control: an agent is deactivated without the admin count', async () => {
@@ -117,7 +117,7 @@ describe('deactivateUser (W11)', () => {
 describe('updateUserRole', () => {
   const target = { data: { id: MEMBER, user_id: 'user-x', role: 'agent', organization_id: ORG } };
   it.each([
-    [LAST_ADMIN, 'Cannot demote the last admin. Assign another admin first.'],
+    [LAST_ADMIN, 'Cannot demote the last admin. Make another user an admin first, then try again.'],
     [MANAGED, 'Managed by your identity provider.'],
   ])('database refusal %o -> Users-page sentence', async (err, sentence) => {
     const user = makeClient([target, CALLER_ADMIN, LICENCE_ACTIVE, { data: null, error: err }], CALLER);
@@ -128,7 +128,7 @@ describe('updateUserRole', () => {
 
 describe('bulkUpdateRole', () => {
   it.each([
-    [LAST_ADMIN, 'Cannot demote the last admin. Assign another admin first.'],
+    [LAST_ADMIN, 'Cannot demote the last admin. Make another user an admin first, then try again.'],
     [MANAGED, 'Managed by your identity provider.'],
   ])('database refusal %o -> Users-page sentence', async (err, sentence) => {
     const user = makeClient([CALLER_ADMIN, LICENCE_ACTIVE, { data: null, error: err }], CALLER);
@@ -144,7 +144,7 @@ describe('removeUser', () => {
       CALLER,
     );
     mockCreateClient.mockResolvedValue(user.client);
-    expect(await removeUser({ memberId: MEMBER })).toEqual({ success: false, error: 'Cannot remove the last admin' });
+    expect(await removeUser({ memberId: MEMBER })).toEqual({ success: false, error: 'Cannot remove the last admin. Make another user an admin first, then try again.' });
   });
 });
 
@@ -157,7 +157,7 @@ describe('setMemberLicense (Unassign, a definer RPC: keepr-test T3c)', () => {
     user.rpcResults.push({ data: null, error: LAST_ADMIN });
     mockCreateClient.mockResolvedValue(user.client);
     expect(await setMemberLicense({ memberId: MEMBER, action: 'unassign' })).toEqual({
-      success: false, error: 'Cannot unassign the last admin. Assign another admin first.',
+      success: false, error: 'Cannot unassign the last admin. Make another user an admin first, then try again.',
     });
   });
 });

@@ -36,8 +36,13 @@ vi.mock('@/lib/supabase/server', () => ({
     auth: { getUser: async () => ({ data: { user: { id: 'staff-1' } } }) },
     rpc: async () => ({ data: true, error: null }),
   }),
-  createServiceClient: () => ({ from: (name: string) => table(name) }),
+  createServiceClient: (opts?: { actorId?: string }) => {
+    serviceOpts.push(opts);
+    return { from: (name: string) => table(name) };
+  },
 }));
+
+const serviceOpts: Array<{ actorId?: string } | undefined> = [];
 
 function req(body: unknown) {
   return new Request('https://admin.test/api/users/cancel-invite', { method: 'POST', body: JSON.stringify(body) }) as never;
@@ -67,5 +72,7 @@ describe('cancel-invite and the live billing contact (BACKLOG-4007 F3)', () => {
     expect(res.status).toBe(200);
     expect(deletes()).toHaveLength(1);
     expect(deletes()[0].ops).toContainEqual(['eq', 'id', 'm-pay']);
+    // BACKLOG-4036: the removal names the signed-in staff user as the actor (x-keepr-actor)
+    expect(serviceOpts.at(-1)).toEqual({ actorId: 'staff-1' });
   });
 });

@@ -139,7 +139,7 @@ describe('from the invitation link', () => {
 
       expect(location).toBe(`${ORIGIN}/login?error=${code}`);
       expect(mockSignOut.mock.calls).toEqual([[{ scope: 'local' }]]);
-      expect(deleted).toEqual(['keepr_invite', 'sb-fixture-auth-token', 'sb-fixture-auth-token-code-verifier']);
+      expect(deleted).toEqual(['keepr_invite', 'keepr_next', 'sb-fixture-auth-token', 'sb-fixture-auth-token-code-verifier']); // BACKLOG-3863: every exit also clears keepr_next
       expect(mockEmulator.state.writes).toHaveLength(0);
       expect(rpcNames()).toEqual(['accept_invitation']);
     }
@@ -162,7 +162,7 @@ describe('from the invitation link', () => {
     const { location, deleted } = await run(WITH_INVITE);
 
     expect(location).toBe(`${ORIGIN}/login?error=email_mismatch`);
-    expect(deleted).toEqual(['keepr_invite', 'sb-fixture-auth-token', 'sb-fixture-auth-token-code-verifier']);
+    expect(deleted).toEqual(['keepr_invite', 'keepr_next', 'sb-fixture-auth-token', 'sb-fixture-auth-token-code-verifier']); // BACKLOG-3863: every exit also clears keepr_next
   });
 
   // Control 13: an RPC error never falls through to JIT or the floor.
@@ -199,7 +199,7 @@ describe('without the invitation link', () => {
     expect(mockEmulator.state.writes).toHaveLength(0);
     expect(rpcNames()).toEqual(['caller_has_pending_invite']);
     expect(mockSignOut.mock.calls).toEqual([[{ scope: 'local' }]]);
-    expect(deleted).toEqual(['keepr_invite', 'sb-fixture-auth-token', 'sb-fixture-auth-token-code-verifier']);
+    expect(deleted).toEqual(['keepr_invite', 'keepr_next', 'sb-fixture-auth-token', 'sb-fixture-auth-token-code-verifier']); // BACKLOG-3863: every exit also clears keepr_next
   });
 
   it('no pending invitation -> JIT as before', async () => {

@@ -109,7 +109,7 @@ export function SeatsBlock({ view, viewer }: { view: SeatsView | null; viewer: S
           <StatCard label="Seats" value={view.bought ?? 0} hue="gray" />
         )}
         <StatCard label="In use" value={view.inUse} hue="gray" />
-        {view.unlimited ? null : <StatCard label="Free" value={view.free ?? 0} hue="gray" />}
+        {view.unlimited ? null : <StatCard label="Available" value={view.free ?? 0} hue="gray" />}
       </div>
       {view.canAdd && view.version !== null ? (
         <div className="mt-4">

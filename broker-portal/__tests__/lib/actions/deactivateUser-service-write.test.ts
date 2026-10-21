@@ -15,7 +15,7 @@ jest.mock('@/lib/supabase/server', () => ({
   createClient: () => mockCreateClient(),
 }));
 jest.mock('@/lib/supabase/service', () => ({
-  createServiceClient: () => mockCreateServiceClient(),
+  createServiceClient: (...args: unknown[]) => mockCreateServiceClient(...args),
 }));
 
 import { deactivateUser } from '@/lib/actions/deactivateUser';
@@ -86,6 +86,8 @@ describe('deactivateUser service-role write (BACKLOG-3843)', () => {
     const res = await deactivateUser({ memberId: MEMBER });
 
     expect(res).toEqual({ success: true });
+    // BACKLOG-4036: the write names the signed-in admin as the actor (x-keepr-actor)
+    expect(mockCreateServiceClient).toHaveBeenCalledWith({ actorId: ADMIN });
     expect(service.queries).toHaveLength(1);
     const ops = service.queries[0];
     expect(ops[0]).toEqual(['from', 'organization_members']);

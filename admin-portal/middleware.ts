@@ -12,6 +12,7 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { isBareAuthTokenCookie, safeAuthErrorInfo } from '@/lib/supabase/cookie-guard';
+import { safeNextPath } from '@/lib/auth/safeNextPath';
 
 /** Maps route prefixes to required permission keys (any one grants access) */
 const ROUTE_PERMISSIONS: Record<string, string[]> = {
@@ -146,8 +147,7 @@ export async function middleware(request: NextRequest) {
         .single();
 
       if (internalRole) {
-        const rawRedirect = request.nextUrl.searchParams.get('redirectTo') ?? '/dashboard';
-        const redirectTo = /^\/[a-zA-Z0-9\-_\/\?\&\=\#\.]+$/.test(rawRedirect) ? rawRedirect : '/dashboard';
+        const redirectTo = safeNextPath(request.nextUrl.searchParams.get('redirectTo'));
         return NextResponse.redirect(new URL(redirectTo, request.url));
       }
     }

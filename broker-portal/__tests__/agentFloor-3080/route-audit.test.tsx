@@ -797,6 +797,9 @@ const RLS_GUARDED_HANDLERS = ['app/setup/consent/callback/route.ts'];
  * added here on purpose, where review sees it.
  */
 const KNOWN_ROUTE_HANDLERS = [
+  // BACKLOG-3863 PR-2: GET only, Bearer JWT (verifyBearerUser); reads the
+  // verified caller's own plan, no request-supplied ids. Display only.
+  'app/api/billing/plan-summary/route.ts',
   'app/api/cron/email-retry/route.ts',
   'app/api/cron/payment-reconcile/route.ts',
   'app/api/download/route.ts',
@@ -998,7 +1001,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(25); // BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept
+    expect(handlers.length).toBe(26); // BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {

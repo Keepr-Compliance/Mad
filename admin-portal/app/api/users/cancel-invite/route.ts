@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Use service role client to bypass RLS — admin portal users are not org members
-  const adminClient = createServiceClient();
+  const adminClient = createServiceClient({ actorId: user.id });
 
   // Verify it is actually a pending invitation before deleting
   const { data: membership, error: lookupError } = await adminClient
