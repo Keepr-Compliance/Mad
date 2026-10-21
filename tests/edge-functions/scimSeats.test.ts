@@ -404,7 +404,7 @@ describe('POST existing person', () => {
   });
 
   // BACKLOG-4007 PR-4 (SR F2): the billing-only login is an 'unassigned' agent invitation with
-  // provisioning_metadata {billing_only: true} (shape from _org_billing_login_create on
+  // provisioning_metadata {billing_only: true} (shape from _org_people_invite_row, formerly _org_billing_login_create, on
   // keepr-test). SCIM never claims it: claiming writes 'active' and the login would take a seat.
   const BILLING_ONLY_INVITE = { ...UNLICENSED_INVITE, id: 'm-bo', role: 'agent', provisioned_by: 'invite',
     provisioning_metadata: { billing_only: true } };
