@@ -15,6 +15,7 @@ import { formatDate as formatDateShared, formatCurrency as formatCurrencyShared 
 // "Purchase" token on the line, which is
 // why a text sweep never found it.
 import { TRANSACTION_TYPE_LABELS } from "../constants/transactionTypes";
+import billingService from "../services/billingService";
 
 interface StartNewAuditModalProps {
   /** Callback when user wants to view pending transaction details */
@@ -304,7 +305,7 @@ function StartNewAuditModal({
               title="Transaction Limit Reached"
               description={`You've used all ${transactionLimit} transactions in your plan (${transactionCount}/${transactionLimit}). Upgrade to create more.`}
               actionText="Upgrade"
-              onAction={() => window.open("https://www.keeprcompliance.com/beta", "_blank")}
+              onAction={() => void billingService.openPortal()}
               testId="modal-transaction-limit-banner"
             />
           )}

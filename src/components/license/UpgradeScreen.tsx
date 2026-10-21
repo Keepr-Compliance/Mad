@@ -7,6 +7,7 @@
  */
 
 import React from "react";
+import billingService from "../../services/billingService";
 
 export type UpgradeReason =
   | "trial_expired"
@@ -46,8 +47,8 @@ export function UpgradeScreen({ reason, onLogout }: UpgradeScreenProps): React.R
   const message = MESSAGES[reason];
 
   const handleUpgrade = () => {
-    // Open upgrade page in popup window (keeps user in-app)
-    window.api?.shell?.openPopup?.("https://www.keeprcompliance.com/beta", "Upgrade to Keepr Pro");
+    // BACKLOG-3863: the portal Billing page (main builds the URL), not the old /beta page.
+    void billingService.openPortal();
   };
 
   const handleLogout = async () => {
