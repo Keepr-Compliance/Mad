@@ -10,7 +10,7 @@ import { scrollToSettingsSection } from "../utils/scrollToSettingsSection";
 import Login from "../components/Login";
 import Dashboard from "../components/Dashboard";
 import OfflineFallback from "../components/OfflineFallback";
-import { UpgradeScreen, type UpgradeReason } from "../components/license/UpgradeScreen";
+import { UpgradeScreen, upgradeReasonFor, type UpgradeReason } from "../components/license/UpgradeScreen";
 import type { AppStateMachine } from "./state/types";
 import { useImportSource } from "../hooks/useImportSource";
 import { useOpenLinkScreen } from "../hooks/useOpenLinkScreen";
@@ -51,16 +51,8 @@ export function AppRouter({ app }: AppRouterProps) {
 
   // Handle license blocked during login
   const handleLicenseBlocked = useCallback((data: { userId: string; blockReason: string }) => {
-    // Map blockReason to UpgradeReason
-    let reason: UpgradeReason = "unknown";
-    if (data.blockReason === "expired") {
-      reason = "trial_expired";
-    } else if (data.blockReason === "transaction_limit") {
-      reason = "transaction_limit";
-    } else if (data.blockReason === "suspended") {
-      reason = "suspended";
-    }
-    setLicenseBlocked({ blocked: true, reason });
+    // BACKLOG-4038: expired -> ended, suspended -> suspended, anything else -> fallback.
+    setLicenseBlocked({ blocked: true, reason: upgradeReasonFor(data.blockReason) });
   }, []);
 
   // Handle logout from UpgradeScreen - reset blocked state and call app logout

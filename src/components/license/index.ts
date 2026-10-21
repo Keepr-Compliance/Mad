@@ -4,7 +4,7 @@
  */
 
 export { LicenseGate } from "./LicenseGate";
-export { UpgradeScreen } from "./UpgradeScreen";
+export { UpgradeScreen, upgradeReasonFor } from "./UpgradeScreen";
 export type { UpgradeReason } from "./UpgradeScreen";
 export { DeviceLimitScreen } from "./DeviceLimitScreen";
 export { TrialStatusBanner } from "./TrialStatusBanner";
