@@ -71,8 +71,12 @@ export interface FileCleanupResult {
   refused: number;
   /** Unlink attempted and failed: left behind. */
   failed: number;
-  /** Time spent reading the referenced names and looking candidates up. */
+  /** Time spent reading the referenced names and looking candidates up (all blocks). */
   lookupMs: number;
+  /** The longest single read of the names (one block's lookup). */
+  maxLookupMs: number;
+  /** The longest synchronous block (lookup + its unlinks). */
+  longestBlockMs: number;
   /** Time spent unlinking. */
   unlinkMs: number;
   /** Synchronous blocks used. */
@@ -106,7 +110,7 @@ export async function removeUnreferencedFiles(
   deps: FileCleanupDeps,
 ): Promise<FileCleanupResult> {
   const result: FileCleanupResult = {
-    removed: 0, stillReferenced: 0, refused: 0, failed: 0, lookupMs: 0, unlinkMs: 0, blocks: 0,
+    removed: 0, stillReferenced: 0, refused: 0, failed: 0, lookupMs: 0, maxLookupMs: 0, longestBlockMs: 0, unlinkMs: 0, blocks: 0,
   };
   const now = deps.now ?? (() => performance.now());
   const yieldToLoop = deps.yieldToLoop ?? (() => new Promise<void>((resolve) => setImmediate(resolve)));
@@ -150,6 +154,7 @@ export async function removeUnreferencedFiles(
     }
     const afterLookup = now();
     result.lookupMs += afterLookup - start;
+    result.maxLookupMs = Math.max(result.maxLookupMs, afterLookup - start);
     // At least half a budget of unlinks per block, so a slow read of the names
     // cannot turn the loop into one read per file.
     const unlinkBudget = Math.max(budget - (afterLookup - start), budget / 2);
@@ -166,7 +171,9 @@ export async function removeUnreferencedFiles(
         result.failed++;
       }
     } while (i < pending.length && now() - afterLookup < unlinkBudget);
-    result.unlinkMs += now() - afterLookup;
+    const end = now();
+    result.unlinkMs += end - afterLookup;
+    result.longestBlockMs = Math.max(result.longestBlockMs, end - start);
   }
   return result;
 }
