@@ -26,6 +26,8 @@ vi.mock('@/app/dashboard/organizations/[id]/components/PendingInvitationsTable',
 vi.mock('@/app/dashboard/organizations/[id]/components/PlanAssignment', () => ({ PlanAssignment: () => null }));
 vi.mock('@/app/dashboard/organizations/[id]/components/BrokerageBillingCard', () => ({ BrokerageBillingCard: () => <div>BILLING-CARD</div> }));
 vi.mock('@/app/dashboard/organizations/[id]/components/OrgPeopleCard', () => ({ OrgPeopleCard: () => <div>PEOPLE-CARD</div> }));
+// BACKLOG-4036: the Activity card has its own tests (activity-4036)
+vi.mock('@/app/dashboard/organizations/[id]/components/OrgActivityCard', () => ({ OrgActivityCard: () => null }));
 
 const state: { perms: Record<string, boolean>; isTest: boolean; live: boolean } = { perms: {}, isTest: true, live: false };
 const mockRpc = vi.fn();
@@ -58,6 +60,7 @@ vi.mock('@/lib/supabase/server', () => ({
             },
           };
         }
+        if (fn === 'admin_get_org_activity') return { data: [], error: null }; // BACKLOG-4036
         return mockRpc(fn, args);
       },
     },
