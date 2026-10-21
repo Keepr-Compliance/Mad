@@ -118,7 +118,7 @@ describe("UpgradeScreen (BACKLOG-4038)", () => {
     expect(email).toHaveValue("typed@example.com");
   });
 
-  it.each(["suspended", "ended"] as const)(
+  it.each(["suspended", "ended", "unknown"] as const)(
     "%s: priority starts High and the category resolves to Billing & Subscription by slug",
     async (reason) => {
       render(<UpgradeScreen reason={reason} onLogout={jest.fn()} />);
@@ -133,14 +133,6 @@ describe("UpgradeScreen (BACKLOG-4038)", () => {
     render(<UpgradeScreen reason="suspended" onLogout={jest.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
     await screen.findByRole("option", { name: "Technical Issue" });
-    expect(screen.getByLabelText(/Category/)).toHaveValue("");
-    expect(screen.getByLabelText(/Priority/)).toHaveValue("high");
-  });
-
-  it("the fallback screen presets priority but leaves the category unset", async () => {
-    render(<UpgradeScreen reason="unknown" onLogout={jest.fn()} />);
-    await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
-    await screen.findByRole("option", { name: "Billing & Subscription" });
     expect(screen.getByLabelText(/Category/)).toHaveValue("");
     expect(screen.getByLabelText(/Priority/)).toHaveValue("high");
   });

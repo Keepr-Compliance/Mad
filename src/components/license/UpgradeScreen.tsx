@@ -50,16 +50,16 @@ export function upgradeReasonFor(blockReason: string | null | undefined): Upgrad
 
 /**
  * BACKLOG-4038: support form presets. The category is matched by slug against
- * the categories the dialog loads (never a hardcoded id). The DECISION on 4038
- * names the suspended and ended screens, so the fallback screen leaves the
- * category unset. Priority is high on every variant: the user is locked out.
+ * the categories the dialog loads (never a hardcoded id). Every variant,
+ * including the fallback (PM ruling 2026-10-21), presets Billing & Subscription.
+ * Priority is high on every variant: the user is locked out.
  */
 export const BILLING_CATEGORY_SLUG = "billing-subscription";
 export const BLOCKED_SUPPORT_PRIORITY = "high" as const;
-const CATEGORY_SLUG_FOR: Record<UpgradeReason, string | undefined> = {
+const CATEGORY_SLUG_FOR: Record<UpgradeReason, string> = {
   suspended: BILLING_CATEGORY_SLUG,
   ended: BILLING_CATEGORY_SLUG,
-  unknown: undefined,
+  unknown: BILLING_CATEGORY_SLUG,
 };
 
 interface UpgradeScreenProps {
