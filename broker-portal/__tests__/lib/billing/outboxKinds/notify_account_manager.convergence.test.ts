@@ -91,6 +91,21 @@ describe('notify_account_manager', () => {
     expect(mockCaptureMessage).toHaveBeenCalledWith('billing alert: brokerage_no_account_manager', expect.anything());
   });
 
+  // BACKLOG-3854: the row broker_add_seats enqueues (migration 20261021020000 §3; keepr-test control
+  // S5_two_notify_rows asserted this key and detail shape).
+  it('seats_added (BACKLOG-3854) is an accepted reason: one alert with the detail line', async () => {
+    const detail = 'Added by P3854 Admin (Admin): 8 to 10 seats. A prorated charge for the rest of this period appears on the next invoice.';
+    await handleNotifyAccountManagerRow(
+      row({
+        dedupe_key: `notify_account_manager:test:${ORG}:seats_added:v2`,
+        payload: { organization_id: ORG, reason: 'seats_added', detail },
+      }),
+      ctx()
+    );
+    expect(mockSend).toHaveBeenCalledTimes(1);
+    expect(mockSend.mock.calls[0][0]).toMatchObject({ reason: 'seats_added', detail, stripeObjectId: null });
+  });
+
   it('an unknown reason -> NonRetryable bad_payload', async () => {
     await expect(handleNotifyAccountManagerRow(row({ payload: { organization_id: ORG, reason: 'nope' } }), ctx())).rejects.toMatchObject({
       code: 'bad_payload',
