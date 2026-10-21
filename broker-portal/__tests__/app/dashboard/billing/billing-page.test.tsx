@@ -1245,6 +1245,22 @@ describe('BACKLOG-3854: set-up brokerage -> seats + Manage billing', () => {
     expect(await renderedBlocks()).toEqual(['Your plan', 'Seats & licenses']);
   });
 
+  // A deal saved but not yet synced (no Stripe customer): broker_get_seats says can_add (its refusals
+  // read no customer), the page is not set up, and the action would refuse -> no button.
+  it('active deal, no Stripe customer yet -> no Add seats, no Manage billing', async () => {
+    given([brokerageMembership('admin')]);
+    setUp('active');
+    mockBillingDb = new BillingDb({
+      org_deals: [{ organization_id: ORG, status: 'active', suspended_reason: null }],
+      organizations: [{ id: ORG, name: 'Fixture Realty' }],
+    });
+    const { container, unmount } = render(await BillingRoute({}));
+    expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Free2');
+    expect(within(container).queryAllByRole('button', { name: 'Add seats' })).toHaveLength(0);
+    expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(0);
+    unmount();
+  });
+
   it.each([['broker', 1], ['admin', 1], ['it_admin', 0]] as [string, number][])(
     'suspended + set up, %s -> Manage billing under the banner: %i',
     async (role, n) => {
