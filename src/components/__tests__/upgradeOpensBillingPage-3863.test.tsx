@@ -113,7 +113,7 @@ function expectBillingPageOnly(): void {
   expect(openPortal().mock.calls[0]).toEqual([]);
   expect(windowOpen).not.toHaveBeenCalled();
   expect(window.api.shell.openExternal).not.toHaveBeenCalled();
-  const popup = (window.api.shell as { openPopup?: jest.Mock }).openPopup;
+  const popup = (window.api.shell as unknown as { openPopup?: jest.Mock }).openPopup;
   if (popup) expect(popup).not.toHaveBeenCalled();
 }
 
@@ -149,7 +149,7 @@ describe("BACKLOG-3863 — Upgrade actions open the portal Billing page", () => 
 
   it("UpgradeScreen: the upgrade button", async () => {
     // The popup opener exists in the app's preload; give it a spy so a revert is visible.
-    (window.api.shell as { openPopup?: jest.Mock }).openPopup = jest.fn();
+    (window.api.shell as unknown as { openPopup?: jest.Mock }).openPopup = jest.fn();
     render(<UpgradeScreen reason="transaction_limit" onLogout={jest.fn()} />);
     const buttons = screen.getAllByRole("button");
     const upgrade = buttons.find((b) => /upgrade/i.test(b.textContent ?? ""));
