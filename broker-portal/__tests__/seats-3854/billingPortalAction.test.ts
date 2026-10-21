@@ -154,8 +154,10 @@ describe('openBrokerageBillingPortal', () => {
     expect(stripeCalls()).toBe(0);
   });
 
-  it('IT admin, a draft deal, impersonation -> unavailable, zero Stripe calls', async () => {
+  it('IT admin, an agent, a draft deal, impersonation -> unavailable, zero Stripe calls', async () => {
     mockAccess = full('it_admin');
+    expect(await run()).toBe('/dashboard/billing?portal=unavailable');
+    mockAccess = { access: { kind: 'floor', via: 'brokerage', role: 'agent', organizationId: ORG_A } };
     expect(await run()).toBe('/dashboard/billing?portal=unavailable');
     mockAccess = full('admin');
     mockDeal = { status: 'draft' };

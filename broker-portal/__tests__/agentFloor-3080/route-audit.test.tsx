@@ -742,6 +742,11 @@ const FLOOR_ACTIONS = [
   // BACKLOG-4019: set_org_auto_renew with the user's session; the database admits only the
   // brokerage's Admin and billing contact (42501 for everyone else), refused while suspended.
   'lib/actions/autoRenew.ts#setAutoRenew',
+  // BACKLOG-3854: their own gate (lib/billing/orgActionContext.ts: flag, session, billingCapabilities
+  // with the real set-up), then broker_add_seats with the user's session (42501 unless an active
+  // Broker/Admin). An agent is refused before any Stripe call (__tests__/seats-3854).
+  'lib/actions/seats.ts#addSeats',
+  'lib/actions/billingPortal.ts#openBrokerageBillingPortal',
 ];
 
 /**
@@ -1010,7 +1015,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(56); // BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
+    expect(actions.length).toBe(58); // BACKLOG-3854: + addSeats, openBrokerageBillingPortal; BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
   });
 });
 
