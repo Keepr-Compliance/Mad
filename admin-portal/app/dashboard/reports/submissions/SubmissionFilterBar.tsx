@@ -3,12 +3,13 @@
 /**
  * Submissions report — filter row (BACKLOG-3715). Same shape as the iPhone
  * Sync filter bar. Only the period goes back to the server; every other
- * filter applies to the period's rows in the browser.
+ * filter applies to the period's rows in the browser. The shell, period
+ * picker and multi-selects come from the @keepr/ui report kit (BACKLOG-3502a).
  */
 
-import { Filter, Search, X } from 'lucide-react';
-import { MultiSelectDropdown } from '@/components/shared/MultiSelectDropdown';
-import { PERIOD_OPTIONS, type PeriodRange } from '@/lib/reports/period';
+import { Search } from 'lucide-react';
+import { FilterBar, MultiSelect, PeriodPicker } from '@keepr/ui';
+import { PERIOD_OPTIONS, type PeriodKey, type PeriodRange } from '@/lib/reports/period';
 import type { SubmissionFilters } from '@/lib/reports/submissions';
 
 const SELECT_CLASS =
@@ -46,75 +47,42 @@ export function SubmissionFilterBar({
   onFiltersChange,
   onClear,
 }: SubmissionFilterBarProps) {
-  const custom = period.key === 'custom';
-
   return (
-    <div className="flex flex-wrap items-center gap-3">
-      <div className="flex items-center gap-1.5 text-gray-500">
-        <Filter className="h-4 w-4" aria-hidden="true" />
-        <span className="text-sm font-medium">Filters</span>
-      </div>
-
-      <select
-        aria-label="Period"
+    <FilterBar hasFilters={hasFilters} onClear={onClear}>
+      <PeriodPicker<PeriodKey>
+        options={PERIOD_OPTIONS}
         value={period.key}
-        onChange={(e) =>
-          onPeriodChange(e.target.value, period.customFrom ?? undefined, period.customTo ?? undefined)
-        }
-        className={SELECT_CLASS}
-      >
-        {PERIOD_OPTIONS.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+        customKey="custom"
+        from={period.customFrom ?? undefined}
+        to={period.customTo ?? undefined}
+        onChange={onPeriodChange}
+      />
 
-      {custom ? (
-        <span className="flex items-center gap-2">
-          <input
-            type="date"
-            aria-label="From"
-            value={period.customFrom ?? ''}
-            onChange={(e) => onPeriodChange('custom', e.target.value, period.customTo ?? undefined)}
-            className={SELECT_CLASS}
-          />
-          <span className="text-sm text-gray-400">to</span>
-          <input
-            type="date"
-            aria-label="To"
-            value={period.customTo ?? ''}
-            onChange={(e) => onPeriodChange('custom', period.customFrom ?? undefined, e.target.value)}
-            className={SELECT_CLASS}
-          />
-        </span>
-      ) : null}
-
-      <MultiSelectDropdown
+      <MultiSelect
         label="Outcome"
         options={statusOptions}
         selected={filters.statuses}
         onChange={(statuses) => onFiltersChange({ ...filters, statuses })}
       />
-      <MultiSelectDropdown
+      <MultiSelect
         label="Organization"
         options={orgOptions}
         selected={filters.orgs}
         onChange={(orgs) => onFiltersChange({ ...filters, orgs })}
       />
-      <MultiSelectDropdown
+      <MultiSelect
         label="Agent"
         options={agentOptions}
         selected={filters.agents}
         onChange={(agents) => onFiltersChange({ ...filters, agents })}
       />
-      <MultiSelectDropdown
+      <MultiSelect
         label="Reason"
         options={reasonOptions}
         selected={filters.reasons}
         onChange={(reasons) => onFiltersChange({ ...filters, reasons })}
       />
-      <MultiSelectDropdown
+      <MultiSelect
         label="Platform"
         options={platformOptions}
         selected={filters.platforms}
@@ -135,17 +103,6 @@ export function SubmissionFilterBar({
           className={`${SELECT_CLASS} pl-8`}
         />
       </div>
-
-      {hasFilters ? (
-        <button
-          type="button"
-          onClick={onClear}
-          className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
-        >
-          <X className="h-3.5 w-3.5" aria-hidden="true" />
-          Clear filters
-        </button>
-      ) : null}
-    </div>
+    </FilterBar>
   );
 }

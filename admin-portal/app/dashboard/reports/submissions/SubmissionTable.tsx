@@ -4,12 +4,12 @@
  * Submissions report — attempt table (BACKLOG-3715)
  *
  * Every column sortable both ways. Ten rows, then "Show more". Clicking a row
- * opens the detail card below the table, one at a time. The sort header
- * pattern is copied from the iPhone Sync table, whose header is bound to its
- * own sort keys.
+ * opens the detail card below the table, one at a time. Header, row-cap
+ * notice and footer come from the @keepr/ui report kit (BACKLOG-3502a).
  */
 
-import { ArrowDown, ArrowUp, ArrowUpDown, X } from 'lucide-react';
+import { X } from 'lucide-react';
+import { ShowMoreFooter, SortableTh, TruncationNotice } from '@keepr/ui';
 import {
   formatCountCell,
   SUBMISSION_SORT_SPECS,
@@ -36,37 +36,6 @@ const COLUMNS: { key: SubmissionSortKey; align: 'left' | 'right' }[] = [
   { key: 'id', align: 'left' },
 ];
 
-function SortHeader({
-  column,
-  sortKey,
-  sortDirection,
-  onSort,
-}: {
-  column: { key: SubmissionSortKey; align: 'left' | 'right' };
-  sortKey: SubmissionSortKey;
-  sortDirection: SortDirection;
-  onSort: (key: SubmissionSortKey) => void;
-}) {
-  const active = sortKey === column.key;
-  const Icon = !active ? ArrowUpDown : sortDirection === 'asc' ? ArrowUp : ArrowDown;
-  return (
-    <th
-      scope="col"
-      aria-sort={active ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}
-      className={`whitespace-nowrap py-2 px-3 font-medium text-gray-500 ${column.align === 'right' ? 'text-right' : 'text-left'}`}
-    >
-      <button
-        type="button"
-        onClick={() => onSort(column.key)}
-        className={`inline-flex items-center gap-1 hover:text-gray-900 ${active ? 'text-gray-900' : ''}`}
-      >
-        {SUBMISSION_SORT_SPECS[column.key].label}
-        <Icon className="h-3 w-3" aria-hidden="true" />
-      </button>
-    </th>
-  );
-}
-
 export interface SubmissionTableProps {
   rows: Submission[];
   visibleCount: number;
@@ -76,6 +45,8 @@ export interface SubmissionTableProps {
   truncated: boolean;
   rowCap: number;
   periodLabel: string;
+  /** Rows each "Show more" adds; the button names it. */
+  showMoreStep: number;
   onSort: (key: SubmissionSortKey) => void;
   onShowMore: () => void;
   onToggleRow: (id: string) => void;
@@ -90,24 +61,25 @@ export function SubmissionTable({
   truncated,
   rowCap,
   periodLabel,
+  showMoreStep,
   onSort,
   onShowMore,
   onToggleRow,
 }: SubmissionTableProps) {
   const visible = rows.slice(0, visibleCount);
   const openRow = rows.find((r) => r.id === openRowId) ?? null;
-  const more = rows.length - visible.length;
 
   return (
     <section>
       <h2 className="mb-3 text-base font-semibold text-gray-900">Attempts in this period</h2>
 
       {truncated ? (
-        <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
-          <strong>This period holds more attempts than are shown.</strong> The query returns at most{' '}
-          {rowCap} rows and {periodLabel.toLowerCase()} reached that cap — every count and chart on
-          this page is therefore a floor, not a total. Narrow the period to see all of it.
-        </div>
+        <TruncationNotice
+          noun="attempts"
+          capPhrase={`at most ${rowCap} rows`}
+          periodLabel={periodLabel}
+          scope="every count and chart"
+        />
       ) : null}
 
       {rows.length === 0 ? (
@@ -124,13 +96,17 @@ export function SubmissionTable({
             <thead>
               <tr className="border-b border-gray-200">
                 {COLUMNS.map((column) => (
-                  <SortHeader
+                  <SortableTh
                     key={column.key}
-                    column={column}
-                    sortKey={sortKey}
-                    sortDirection={sortDirection}
+                    sortKey={column.key}
+                    activeKey={sortKey}
+                    direction={sortDirection}
                     onSort={onSort}
-                  />
+                    align={column.align}
+                    className="whitespace-nowrap"
+                  >
+                    {SUBMISSION_SORT_SPECS[column.key].label}
+                  </SortableTh>
                 ))}
               </tr>
             </thead>
@@ -177,22 +153,13 @@ export function SubmissionTable({
         </div>
       )}
 
-      {rows.length > 0 ? (
-        <div className="mt-3 flex flex-wrap items-center gap-3">
-          <p className="text-sm text-gray-500">
-            Showing {visible.length} of {rows.length} {rows.length === 1 ? 'attempt' : 'attempts'}
-          </p>
-          {more > 0 ? (
-            <button
-              type="button"
-              onClick={onShowMore}
-              className="text-sm font-medium text-primary-600 hover:text-primary-800"
-            >
-              Show more
-            </button>
-          ) : null}
-        </div>
-      ) : null}
+      <ShowMoreFooter
+        shown={visible.length}
+        total={rows.length}
+        noun={{ one: 'attempt', other: 'attempts' }}
+        step={showMoreStep}
+        onShowMore={onShowMore}
+      />
 
       {openRow ? (
         <div className="mt-4" data-submission-detail={openRow.submissionId}>
