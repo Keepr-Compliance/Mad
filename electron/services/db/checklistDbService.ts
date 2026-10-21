@@ -29,9 +29,15 @@
  * to explain. They come back as a `status`, and in both cases nothing is
  * written — not even the part of the request that was valid.
  *
- * No `*Sync` twins: `syncTwin.guard.test.ts` requires every paired `*Sync`
- * export to be reached from a transaction body, and nothing calls these from
- * one. A twin is added when a body first needs it.
+ * ## Two `*Sync` twins (BACKLOG-3339 slice T)
+ *
+ * `selectChecklistTemplateSync` and `removeChecklistSync` are the raw bodies,
+ * with no transaction of their own. The add / remove handlers call them inside
+ * their `dbTransaction` together with the audit entry, so the checklist and its
+ * entry commit together or not at all. The promise halves have no production
+ * caller: `syncTwin.guard.test.ts` requires one per twin, and they are fixture
+ * producers for the tests. Each runs its twin in ONE `dbTransaction`, so the
+ * rule above still holds for them. No other export here has a twin.
  */
 
 import { randomUUID } from "crypto";
@@ -159,15 +165,25 @@ function toItem(row: ItemRow): ChecklistItem {
  * so this no longer takes a checklist id to replace — the only way to remove
  * a checklist is `removeChecklist` below, which names the one it takes off.)
  */
+export function selectChecklistTemplateSync(
+  input: SelectChecklistTemplateInput,
+): SelectChecklistTemplateResult {
+  const transaction = dbGet<{ id: string }>(TRANSACTION_EXISTS_SQL, [input.transactionId]);
+  if (!transaction) return { status: "no_transaction" };
+  return insertTemplateChecklist(input);
+}
+
+/**
+ * No production caller: the promise half that syncTwin.guard requires for
+ * `selectChecklistTemplateSync`; a fixture producer for the checklist tests.
+ * The whole copy is ONE `dbTransaction`.
+ */
 export function selectChecklistTemplate(
   input: SelectChecklistTemplateInput,
 ): Promise<SelectChecklistTemplateResult> {
-  const result = dbTransaction<SelectChecklistTemplateResult>(() => {
-    const transaction = dbGet<{ id: string }>(TRANSACTION_EXISTS_SQL, [input.transactionId]);
-    if (!transaction) return { status: "no_transaction" };
-    return insertTemplateChecklist(input);
-  });
-  return Promise.resolve(result);
+  return Promise.resolve(
+    dbTransaction<SelectChecklistTemplateResult>(() => selectChecklistTemplateSync(input)),
+  );
 }
 
 /**
@@ -218,17 +234,27 @@ function insertTemplateChecklist(
  * untouched. Resolves the removed checklist, or `null` when that id is not a
  * checklist of that transaction (nothing is deleted then).
  */
+export function removeChecklistSync(
+  transactionId: string,
+  checklistId: string,
+): TransactionChecklist | null {
+  const row = dbGet<ChecklistRow>(GET_CHECKLIST_IN_TRANSACTION_SQL, [checklistId, transactionId]);
+  if (!row) return null;
+  dbRun(DELETE_CHECKLIST_IN_TRANSACTION_SQL, [row.id, transactionId]);
+  return toChecklist(row);
+}
+
+/**
+ * No production caller: the promise half that syncTwin.guard requires for
+ * `removeChecklistSync`; a fixture producer for the checklist tests.
+ */
 export function removeChecklist(
   transactionId: string,
   checklistId: string,
 ): Promise<TransactionChecklist | null> {
-  const result = dbTransaction<TransactionChecklist | null>(() => {
-    const row = dbGet<ChecklistRow>(GET_CHECKLIST_IN_TRANSACTION_SQL, [checklistId, transactionId]);
-    if (!row) return null;
-    dbRun(DELETE_CHECKLIST_IN_TRANSACTION_SQL, [row.id, transactionId]);
-    return toChecklist(row);
-  });
-  return Promise.resolve(result);
+  return Promise.resolve(
+    dbTransaction<TransactionChecklist | null>(() => removeChecklistSync(transactionId, checklistId)),
+  );
 }
 
 /** What `applyReviewChecklistPull` did (BACKLOG-3607). */
