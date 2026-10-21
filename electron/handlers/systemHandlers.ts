@@ -712,6 +712,13 @@ export function registerSystemHandlers(): void {
           message: "Ready",
         });
 
+        // BACKLOG-3319: prune the failure log once per launch, on the next
+        // event-loop turn so the DB-ready reply is not held behind it.
+        // initialize() catches internally; the .catch covers its own logging.
+        setImmediate(() => {
+          failureLogService.initialize().catch(() => {});
+        });
+
         return {
           success: true,
           available: true,
@@ -813,6 +820,7 @@ export function registerSystemHandlers(): void {
         }
 
         // TASK-2058: Initialize failure log service (create table + prune)
+        // UNREACHABLE: no renderer code invokes "system:initialize-database"; the live prune call is the "system:initialize-secure-storage" path above (BACKLOG-3319).
         failureLogService.initialize().catch((err) => {
           logService.warn("Failed to initialize failure log service: " + (err instanceof Error ? err.message : String(err)), "System");
         });

@@ -13,7 +13,8 @@
  * - pruneOldEntries(): Retention policy enforcement
  */
 
-import { dbRun, dbAll, dbGet, dbExec } from "./db/core/dbConnection";
+import { dbRun, dbAll, dbGet, dbExec, dbTransaction } from "./db/core/dbConnection";
+import { getErrorReporter } from "../capabilities/errorReporterProvider";
 import {
   ACKNOWLEDGE_ALL_SQL,
   CLEAR_FAILURE_LOG_SQL,
@@ -46,6 +47,9 @@ export interface FailureLogEntry {
 const MAX_ENTRIES = 500;
 /** Maximum age in days before pruning */
 const MAX_AGE_DAYS = 30;
+
+/** BACKLOG-3319: a prune slower than this is reported to Sentry as a warning. */
+const SLOW_PRUNE_MS = 1000;
 
 class FailureLogService {
   /**
@@ -176,32 +180,67 @@ class FailureLogService {
    */
   async pruneOldEntries(): Promise<void> {
     try {
-      // 1. Delete entries older than 30 days
-      const ageResult = dbRun(
-        PRUNE_BY_AGE_SQL,
-        [`-${MAX_AGE_DAYS} days`]
-      );
-
-      // 2. Cap at MAX_ENTRIES (keep newest)
-      const countRow = dbGet<{ count: number }>(
-        FAILURE_LOG_COUNT_SQL
-      );
-      const totalCount = countRow?.count ?? 0;
-
-      let capDeleted = 0;
-      if (totalCount > MAX_ENTRIES) {
-        const excess = totalCount - MAX_ENTRIES;
-        const result = dbRun(
-          PRUNE_BY_CAP_SQL,
-          [excess]
+      const startedAt = Date.now();
+      // BACKLOG-3319: the age DELETE, the count and the cap DELETE run in ONE
+      // transaction, so a crash between the two DELETEs leaves neither applied.
+      // The count stays inside and AFTER the age delete: counting first would
+      // over-delete by however many rows the age delete just removed.
+      const { ageDeleted, capDeleted, remaining } = dbTransaction(() => {
+        // 1. Delete entries older than 30 days
+        const ageResult = dbRun(
+          PRUNE_BY_AGE_SQL,
+          [`-${MAX_AGE_DAYS} days`]
         );
-        capDeleted = result.changes;
+
+        // 2. Cap at MAX_ENTRIES (keep newest)
+        const countRow = dbGet<{ count: number }>(
+          FAILURE_LOG_COUNT_SQL
+        );
+        const totalCount = countRow?.count ?? 0;
+
+        let capChanges = 0;
+        if (totalCount > MAX_ENTRIES) {
+          const excess = totalCount - MAX_ENTRIES;
+          const result = dbRun(
+            PRUNE_BY_CAP_SQL,
+            [excess]
+          );
+          capChanges = result.changes;
+        }
+
+        return {
+          ageDeleted: ageResult.changes,
+          capDeleted: capChanges,
+          remaining: totalCount - capChanges,
+        };
+      });
+      const ms = Date.now() - startedAt;
+
+      // Counts only, no row content. The breadcrumb rides on any later event;
+      // the warning is the signal that a real install needs a batched prune.
+      const numbers = { ms, ageDeleted, capDeleted, remaining };
+      const reporter = getErrorReporter();
+      reporter.addBreadcrumb({
+        category: "failure_log",
+        message: "prune",
+        data: numbers,
+      });
+      if (ms > SLOW_PRUNE_MS) {
+        reporter.captureMessage("failure_log prune slow", {
+          level: "warning",
+          extra: numbers,
+        });
       }
 
-      const totalPruned = ageResult.changes + capDeleted;
+      await logService.info(
+        `[PERF] failureLog prune: ${ms}ms (${remaining} rows remaining)`,
+        "FailureLogService"
+      );
+
+      const totalPruned = ageDeleted + capDeleted;
       if (totalPruned > 0) {
         await logService.info(
-          `[FailureLog] Pruned ${totalPruned} entries (${ageResult.changes} by age, ${capDeleted} by cap)`,
+          `[FailureLog] Pruned ${totalPruned} entries (${ageDeleted} by age, ${capDeleted} by cap)`,
           "FailureLogService"
         );
       }

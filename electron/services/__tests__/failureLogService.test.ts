@@ -15,6 +15,9 @@ jest.mock("../db/core/dbConnection", () => ({
   dbGet: (...args: unknown[]) => mockDbGet(...args),
   dbExec: (...args: unknown[]) => mockDbExec(...args),
   ensureDb: (...args: unknown[]) => mockEnsureDb(...args),
+  // BACKLOG-3319: pruneOldEntries runs in one transaction. This mock cannot see
+  // transaction placement; failureLogService.pruneAtomicity-3319.test.ts can.
+  dbTransaction: (fn: () => unknown) => fn(),
 }));
 
 jest.mock("../logService", () => ({
