@@ -30,7 +30,8 @@ const QUOTE: UnlockQuote = {
   currency: "USD",
   pricingTierId: "tier-1",
   // Band 1 (units 1-3, $14.99): next unit is index 3, 1 unlock left before the
-  // $13.00 band ⇒ TierProgressBar shows a live "last deal at this price" state.
+  // $13.00 band. Full ladder data on purpose: BACKLOG-3864 asserts the confirm
+  // screen shows none of it.
   currentBandMaxUnits: 3,
   unitsUntilNextBand: 1,
   nextBandUnitPriceCents: 1300,
@@ -392,7 +393,7 @@ describe("PurchaseUnlockHandoff — fail-closed / edge states", () => {
     expect(confirm).toHaveTextContent("Confirm — $14.99");
   });
 
-  it("renders the tier-progress incentive bar in the confirm state (discount-forward)", async () => {
+  it("BACKLOG-3864: confirm state shows no price-tier bar and no yearly paid-deal count", async () => {
     hasSavedCardMock.mockResolvedValue({ hasSavedCard: true });
 
     render(
@@ -405,10 +406,18 @@ describe("PurchaseUnlockHandoff — fail-closed / edge states", () => {
       { wrapper: strictWrapper },
     );
 
-    const bar = await screen.findByTestId("purchase-tier-progress");
-    // 1 unlock remaining in the band ⇒ 0 more after this ⇒ "last deal" copy, next $13.00.
-    expect(bar).toHaveTextContent(/last deal at this price/i);
-    expect(bar).toHaveTextContent("$13.00");
+    // Wait for the confirm state to be fully rendered before asserting absence,
+    // so the check cannot pass on a screen that has not drawn yet.
+    const confirm = await screen.findByTestId("purchase-confirm");
+    await waitFor(() => expect(confirm).toBeEnabled());
+    expect(confirm).toHaveTextContent("Confirm — $14.99");
+
+    // Absence by TEXT, not only by test id: a bar that lost its test id would
+    // still be caught.
+    expect(screen.queryByText(/at this price/i)).toBeNull();
+    expect(screen.queryByText(/paid deal this year/i)).toBeNull();
+    expect(screen.queryByText(/\$13\.00/)).toBeNull();
+    expect(screen.queryByTestId("purchase-tier-progress")).toBeNull();
   });
 
   it("fail-closed: confirm never returns unlocked → error state, onUnlocked NOT called", async () => {

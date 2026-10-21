@@ -23,7 +23,7 @@ const lockedWithQuote = (creditBalance: number | null): EntitlementStatus => ({
   fromCache: false,
   // A full tier-progress quote (nextUnitIndex 3 in the $13.00 band, 8 remaining):
   // present so we can assert the first prompt shows NO tier bar even when the
-  // ladder data is available (the bar lives on the confirm screen only).
+  // ladder data is available (BACKLOG-3864 removed the bar everywhere).
   quote: {
     nextUnitIndex: 3,
     unitPriceCents: 1300,
