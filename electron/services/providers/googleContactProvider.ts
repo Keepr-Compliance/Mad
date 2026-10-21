@@ -14,6 +14,7 @@
 
 import { google, people_v1 } from 'googleapis';
 import { gaxiosNetFetch } from '../mainNetFetch';
+import { persistRefreshedGoogleTokens } from '../googleTokenRefreshWriter';
 import * as Sentry from '@sentry/electron/main';
 import databaseService from '../databaseService';
 import googleAuthService from '../googleAuthService';
@@ -184,22 +185,8 @@ export class GoogleContactProvider implements ContactSyncProvider {
 
     // Handle token refresh events
     oauth2Client.on('tokens', (tokens) => {
-      void (async () => {
-        logService.info('Google tokens refreshed during contacts fetch', 'GoogleContactProvider');
-        if (tokens.access_token) {
-          await databaseService.updateOAuthToken(tokenRecord.id, {
-            access_token: tokens.access_token,
-            token_expires_at: tokens.expiry_date
-              ? new Date(tokens.expiry_date).toISOString()
-              : undefined,
-          });
-        }
-        if (tokens.refresh_token) {
-          await databaseService.updateOAuthToken(tokenRecord.id, {
-            refresh_token: tokens.refresh_token,
-          });
-        }
-      })();
+      void logService.info('Google tokens refreshed during contacts fetch', 'GoogleContactProvider');
+      void persistRefreshedGoogleTokens(tokenRecord.id, tokens, 'GoogleContactProvider');
     });
 
     const peopleService = google.people({ version: 'v1', auth: oauth2Client });
