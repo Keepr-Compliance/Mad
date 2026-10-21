@@ -91,6 +91,7 @@ test("R8 text thread link -> 1 (must stay)", async () => {
   expect(stored()).toBe(1);
 });
 test("R9 email auto/manual link (no recount) then a text link recounts -> 1", async () => {
+  expect(linkEmailManuallySync(E1, TXN, 0.95, "user_confirmed" as never)).toBe("linked");
   C.createThreadCommunicationReferenceSync(THREAD, TXN, USER, "manual", 1);
   expect(stored()).toBe(1);
 });
@@ -108,6 +109,7 @@ test("R11 stale stored value: a deal read does NOT recount; next recount does", 
   await linkEmail(E1, ETA);
   db.prepare("UPDATE transactions SET text_thread_count = 1 WHERE id = ?").run(TXN); // the value head leaves behind
   await getTransactions({ user_id: USER } as never); await getTransactionById(TXN);
+  expect(stored()).toBe(1); // reads do not recount
   C.updateTransactionThreadCountSync(TXN); // rcsClear / syncDb refreshTextThreadCount
   expect(stored()).toBe(0);
 });
