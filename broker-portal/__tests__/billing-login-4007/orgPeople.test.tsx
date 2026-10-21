@@ -76,18 +76,24 @@ function row(role: string): HTMLElement {
   return document.querySelector(`[data-role="${role}"]`) as HTMLElement;
 }
 
-// Radix Select under jsdom needs pointer-capture and scroll stubs (same as packages/ui/test/setup.ts).
-Object.assign(window.HTMLElement.prototype, {
-  hasPointerCapture: () => false,
-  setPointerCapture: () => undefined,
-  releasePointerCapture: () => undefined,
-  scrollIntoView: () => undefined,
-});
+// The Dropdown scrolls the active row into view; jsdom has no scrollIntoView.
+Object.assign(window.HTMLElement.prototype, { scrollIntoView: () => undefined });
+
+/** The "User" Dropdown trigger: its name is the label plus the chosen user (or the placeholder). */
+function userTrigger(): HTMLElement {
+  return screen.getByRole('button', { name: /^User / });
+}
 
 async function openUserList() {
-  await act(async () => {
-    fireEvent.keyDown(screen.getByRole('combobox', { name: 'User' }), { key: 'Enter' });
-  });
+  await act(async () => fireEvent.click(userTrigger()));
+}
+
+function search(text: string) {
+  fireEvent.change(screen.getByRole('combobox', { name: 'Search name or email' }), { target: { value: text } });
+}
+
+function optionNames(): string[] {
+  return screen.getAllByRole('option').map((o) => within(o).getAllByText(/./)[0].textContent ?? '');
 }
 
 async function pick(name: RegExp) {
@@ -105,7 +111,9 @@ describe('OrgPeoplePanel (People v2)', () => {
     fireEvent.click(within(row('office')).getByText('Add person'));
     expect(screen.queryByRole('radio', { name: 'Create new person' })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/Full name/)).not.toBeInTheDocument();
-    expect(screen.getByRole('combobox', { name: 'User' })).toBeInTheDocument();
+    expect(userTrigger()).toHaveTextContent('Choose a user');
+    // one control: no separate "Search users" box beside it
+    expect(screen.queryByLabelText('Search users')).not.toBeInTheDocument();
   });
 
   it('"Invite new person" for billing, IT contact and MSP calls onAddNew with the slot; never for office', () => {
@@ -119,28 +127,64 @@ describe('OrgPeoplePanel (People v2)', () => {
     expect(onAddNew.mock.calls).toEqual([['billing', undefined], ['it', undefined], ['msp', 'Fixture IT Co']]);
   });
 
-  it('Select existing user saves the member id; the search filters by name or email', async () => {
+  it('one User dropdown lists every member with email and role; typing filters by name', async () => {
+    render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
+    fireEvent.click(within(row('office')).getByText('Add person'));
+    await openUserList();
+    expect(optionNames()).toEqual(['Member ag', 'Jane Doe', 'fixture admin', 'Una Unlicensed', 'Ivy Idp']);
+    expect(screen.getByRole('option', { name: /Jane Doe/ })).toHaveTextContent('bea@example.test · Agent');
+    expect(screen.getByRole('option', { name: /fixture admin/ })).toHaveTextContent('adm@example.test · Admin');
+    search('una');
+    expect(optionNames()).toEqual(['Una Unlicensed']);
+  });
+
+  it('typing an email part the name does not contain finds the member', async () => {
+    // "bea" appears only in Jane Doe's email (bea@example.test), never in a name.
+    render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
+    fireEvent.click(within(row('office')).getByText('Add person'));
+    await openUserList();
+    search('bea@');
+    expect(optionNames()).toEqual(['Jane Doe']);
+  });
+
+  it('choosing a member saves the member id and pre-fills the phone', async () => {
     const a = actions();
     render(<OrgPeoplePanel view={VIEW} actions={a} phone={PHONE} onChanged={jest.fn()} />);
     fireEvent.click(within(row('office')).getByText('Add person'));
-    fireEvent.change(screen.getByLabelText('Search users'), { target: { value: 'bea@' } });
-    await openUserList();
-    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Jane Doe (bea@example.test)']);
-    await act(async () => fireEvent.click(screen.getByRole('option', { name: /Jane Doe/ })));
+    await pick(/Jane Doe/);
+    expect(userTrigger()).toHaveTextContent('Jane Doe');
     // the person's phone is filled in from the member
     expect(screen.getByLabelText(/Phone/)).toHaveValue('(202) 555-0131');
     await act(async () => fireEvent.click(screen.getByText('Save')));
     expect(a.save).toHaveBeenCalledWith({ role: 'office', member_id: 'm-bea', phone: '(202) 555-0131' });
   });
 
-  it('IT contact: an unlicensed or IdP-managed agent cannot be picked; an admin can', async () => {
+  it('the chosen user stays on the trigger while the search hides that row', async () => {
+    render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
+    fireEvent.click(within(row('office')).getByText('Add person'));
+    await pick(/Jane Doe/);
+    await openUserList();
+    search('una');
+    expect(optionNames()).toEqual(['Una Unlicensed']);
+    expect(userTrigger()).toHaveTextContent('Jane Doe');
+  });
+
+  it('IT contact: an unlicensed or IdP-managed agent shows the reason and cannot be picked; an admin can', async () => {
     render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
     fireEvent.click(within(row('it')).getByText('Add person'));
     await openUserList();
-    expect(screen.getByRole('option', { name: /Una Unlicensed.*Needs a license first/ })).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByRole('option', { name: /Ivy Idp.*Managed by your identity provider\./ })).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByRole('option', { name: /fixture admin/ })).not.toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByRole('option', { name: /Member ag/ })).not.toHaveAttribute('aria-disabled', 'true');
+    const una = screen.getByRole('option', { name: /Una Unlicensed/ });
+    expect(una).toHaveAttribute('aria-disabled', 'true');
+    expect(una).toHaveAccessibleDescription('Needs a license first');
+    const ivy = screen.getByRole('option', { name: /Ivy Idp/ });
+    expect(ivy).toHaveAttribute('aria-disabled', 'true');
+    expect(ivy).toHaveAccessibleDescription('Managed by your identity provider.');
+    expect(screen.getByRole('option', { name: /fixture admin/ })).not.toHaveAttribute('aria-disabled');
+    expect(screen.getByRole('option', { name: /Member ag/ })).not.toHaveAttribute('aria-disabled');
+    // clicking the blocked row picks nothing
+    await act(async () => fireEvent.click(una));
+    expect(userTrigger()).toHaveTextContent('Choose a user');
+    expect(screen.getByText('Save')).toBeDisabled();
   });
 
   it('an agent picked as IT contact: the database asks to confirm, the panel says so, the second save confirms', async () => {

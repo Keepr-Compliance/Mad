@@ -48,6 +48,7 @@ import {
 import type { StatusPillProps } from "@keepr/ui";
 import { useLicense } from "@/contexts/LicenseContext";
 import { useFeatureGate } from "@/hooks/useFeatureGate";
+import { useCreditBalance } from "@/hooks/useCreditBalance";
 import { entitlementService } from "@/services/entitlementService";
 import type { PlanSummary } from "@/services/billingService";
 import { usePlanSummary } from "./usePlanSummary";
@@ -66,6 +67,8 @@ interface View {
   title: string;
   pill?: { hue: StatusPillProps["hue"]; text: string };
   detail?: string;
+  /** Pay as you go only: the remaining credits, shown next to the title. */
+  showCredits?: boolean;
   action: Action;
 }
 
@@ -91,6 +94,7 @@ function payAsYouGo(price: string | null): View {
   return {
     title: "Pay as you go",
     detail: price ? `${price} per export.` : "You pay per export.",
+    showCredits: true,
     action: "plans",
   };
 }
@@ -133,6 +137,7 @@ export function PlanBillingCard({ organizationId }: PlanBillingCardProps) {
   const { features, hasInitialized } = useFeatureGate();
   const { summary, loading, unavailable, openBillingPortal, openFailed, openFailedAddress } =
     usePlanSummary();
+  const { balance, loading: balanceLoading } = useCreditBalance();
   const [price, setPrice] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
 
@@ -193,6 +198,11 @@ export function PlanBillingCard({ organizationId }: PlanBillingCardProps) {
         <div className="flex items-center gap-2">
           <CardTitle className="text-base">{view.title}</CardTitle>
           {view.pill && <StatusPill hue={view.pill.hue}>{view.pill.text}</StatusPill>}
+          {view.showCredits && !balanceLoading && balance !== null && (
+            <span data-testid="plan-billing-credits" className="text-sm text-gray-600">
+              {balance === 1 ? "1 credit" : `${balance} credits`}
+            </span>
+          )}
         </div>
         {view.detail && <CardDescription>{view.detail}</CardDescription>}
       </CardHeader>

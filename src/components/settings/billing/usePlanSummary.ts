@@ -2,11 +2,9 @@
  * usePlanSummary — BACKLOG-3863 (the hook slice 3's PlanBillingCard uses).
  *
  * - Reads the plan summary once on mount (Settings open).
- * - `openBillingPortal()` opens the portal Billing page and ARMS a one-shot
- *   flag. The next time this window gains focus (the user coming back from the
- *   browser) it calls `billing:refresh` once, which drops main's entitlement
- *   memo and feature cache and answers a fresh summary. Later focus events do
- *   nothing until the button is used again. No polling.
+ * - `openBillingPortal()` opens the portal Billing page. The renderer
+ *   billingService arms the return-from-billing one-shot (for every caller, not
+ *   only this hook) and this hook subscribes to the fresh summary it produces.
  *
  * Display only: `summary` never gates anything. `unavailable` means show the
  * feature-gate fallback line (billing off, offline, 5xx, timeout, signed out).
@@ -36,7 +34,6 @@ export function usePlanSummary(): UsePlanSummary {
   const [unavailable, setUnavailable] = useState(false);
   const [openFailed, setOpenFailed] = useState(false);
   const [openFailedAddress, setOpenFailedAddress] = useState<string | null>(null);
-  const armedRef = useRef(false);
   const mountedRef = useRef(true);
 
   const apply = useCallback(
@@ -62,21 +59,12 @@ export function usePlanSummary(): UsePlanSummary {
     };
   }, [apply]);
 
-  useEffect(() => {
-    const onFocus = (): void => {
-      if (!armedRef.current) return;
-      armedRef.current = false; // one-shot
-      void billingService.refresh().then(apply);
-    };
-    window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
-  }, [apply]);
+  useEffect(() => billingService.onReturnRefresh(apply), [apply]);
 
   const openBillingPortal = useCallback(async () => {
     const result = await billingService.openPortal();
     if (!mountedRef.current) return;
     if (result.success) {
-      armedRef.current = true;
       setOpenFailed(false);
       setOpenFailedAddress(null);
     } else {
