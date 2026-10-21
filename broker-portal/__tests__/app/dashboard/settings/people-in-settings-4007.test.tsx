@@ -32,7 +32,6 @@ jest.mock('@/lib/actions/orgContacts', () => ({
   listOrgContacts: async () => ({ ok: false }),
   removeOrgContact: jest.fn(),
   saveOrgContact: jest.fn(),
-  setOrgBillingLogin: jest.fn(),
 }));
 const redirectTargets: string[] = [];
 jest.mock('next/navigation', () => ({

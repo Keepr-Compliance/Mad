@@ -54,6 +54,9 @@ const AM_REASONS = new Set<AccountManagerAlertReason>([
   'setup_not_completed',
   'setup_no_recipient',
   'price_question',
+  // BACKLOG-4007 People v2: enqueued by the database (_org_billing_contact_reassign) when the
+  // deprovisioned billing contact's brokerage has no active admin.
+  'billing_contact_removed',
 ]);
 
 interface DealRow {

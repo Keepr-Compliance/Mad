@@ -278,15 +278,11 @@ export const handleSyncOrgSubscriptionRow: OutboxHandler = async (row: OutboxRow
     .eq('organization_id', org)
     .maybeSingle();
   if (profileErr) throw new Error(`org_billing_profile read failed: ${profileErr.code ?? 'unknown'}`);
+  // BACKLOG-4007 People v2: the billing contact's phone is the person's (public.user_phones),
+  // read through a service-role-only function.
   let phone: string | null = null;
   if (deal.billing_contact_id) {
-    const { data: contactData, error: contactErr } = await service
-      .from('org_contacts')
-      .select('phone')
-      .eq('id', deal.billing_contact_id)
-      .maybeSingle();
-    if (contactErr) throw new Error(`org_contacts read failed: ${contactErr.code ?? 'unknown'}`);
-    phone = (contactData as { phone?: string | null } | null)?.phone ?? null;
+    phone = (await rpc<string | null>(service, '_org_billing_contact_phone', { p_org: org })) ?? null;
   }
 
   const leased = await rpc<boolean>(service, '_billing_org_sync_lease', {

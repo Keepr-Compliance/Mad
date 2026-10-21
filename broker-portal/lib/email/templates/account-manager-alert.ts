@@ -36,6 +36,10 @@ const REASON_TEXT: Record<AccountManagerAlertReason, { subject: string; line: st
     subject: 'question about the price',
     line: 'The broker has a question about the price shown in billing setup. Contact them before they confirm.',
   },
+  billing_contact_removed: {
+    subject: 'no billing contact',
+    line: 'The billing contact was removed by the identity provider and the brokerage has no active admin to take over. Set a new billing contact in People.',
+  },
 };
 
 export function buildAccountManagerAlertEmail(params: AccountManagerAlertParams): EmailContent {

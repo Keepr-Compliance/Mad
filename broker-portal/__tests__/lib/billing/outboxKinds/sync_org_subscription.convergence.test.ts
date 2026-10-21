@@ -362,7 +362,10 @@ describe('sync_org_subscription — 4007 billing start and customer details', ()
 
   it('C-C1: company, phone and PO go on the Stripe customer; a second run changes nothing', async () => {
     deal().billing_contact_id = 'CONTACT-1';
-    fake.db.rows('org_contacts').push({ id: 'CONTACT-1', organization_id: ORG, phone: '+12065550100' });
+    // People v2: the contact is a member link; the phone is the person's (user_phones).
+    fake.db.rows('org_contacts').push({ id: 'CONTACT-1', organization_id: ORG, role: 'billing', member_id: 'MEMBER-1', removed_at: null });
+    fake.db.rows('organization_members').push({ id: 'MEMBER-1', organization_id: ORG, user_id: 'USER-1', role: 'admin', license_status: 'active' });
+    fake.db.rows('user_phones').push({ user_id: 'USER-1', pending_member_id: null, phone: '+12065550100' });
     fake.db.rows('org_billing_profile').push({
       organization_id: ORG,
       legal_name: 'Brokerage 3853 S LLC',

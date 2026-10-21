@@ -8,10 +8,16 @@
  * Body: { membershipId: string }
  *
  * BACKLOG-1581: Add resend invite button for pending invitations
+ * BACKLOG-4007 People v2: the live billing contact's invitation (a billing-only login not yet
+ * claimed) is refused with the founder's sentence. The database cannot tell this service-client
+ * delete from a cascade or an IdP removal (both reassign the contact), so the check is here.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient, createServiceClient } from '@/lib/supabase/server';
+
+/** Founder R9 (BACKLOG-4007): the exact sentence, the same as the Users-page removal. */
+const BILLING_CONTACT_CANCEL_REFUSED = 'Pick another billing contact first.';
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -67,6 +73,24 @@ export async function POST(request: NextRequest) {
   // Only allow cancelling pending invitations (user_id is null)
   if (membership.user_id) {
     return NextResponse.json({ error: 'This is not a pending invitation' }, { status: 400 });
+  }
+
+  // BACKLOG-4007 People v2 (PM 6a68d0a2, F3): not the live billing contact's invitation.
+  const { data: billingContact, error: contactError } = await adminClient
+    .from('org_contacts')
+    .select('id')
+    .eq('member_id', membershipId)
+    .eq('role', 'billing')
+    .is('removed_at', null)
+    .maybeSingle();
+
+  if (contactError) {
+    console.error('[cancel-invite] Contact lookup error:', contactError.message);
+    return NextResponse.json({ error: 'Failed to look up invitation' }, { status: 500 });
+  }
+
+  if (billingContact) {
+    return NextResponse.json({ error: BILLING_CONTACT_CANCEL_REFUSED }, { status: 409 });
   }
 
   const { error: deleteError } = await adminClient

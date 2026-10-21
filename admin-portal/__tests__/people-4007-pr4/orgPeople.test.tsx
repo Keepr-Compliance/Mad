@@ -4,7 +4,9 @@
  *    or a test organization). Same harness as members-invite-4022 (real page, fake Supabase).
  *  - The actions forward only the documented keys with the staffer's own client; the database
  *    checks billing.view / billing.manage (supabase/tests/backlog-4007-pr4).
- *  - A created billing-only login is emailed through the broker portal with billingOnly: true.
+ *  - People v2: "Invite new person" (org_people_invite) is emailed through the broker portal:
+ *    billingOnly: true for the billing slot, role "IT admin" for IT / MSP. The Give/Remove
+ *    billing-only login action and the Keepr-wide staff user search are gone.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
@@ -105,31 +107,47 @@ describe('staff People actions', () => {
   it('save forwards only the documented keys', async () => {
     const { saveOrgContactAction } = await import('@/lib/actions/orgContacts');
     mockRpc.mockResolvedValue({ data: { success: true }, error: null });
-    const r = await saveOrgContactAction('o1', { role: 'office', user_id: 'u-9', seats: 3 } as never);
+    const r = await saveOrgContactAction('o1', { role: 'office', member_id: 'm-9', user_id: 'u-9', seats: 3, phone: '' } as never);
     expect(r).toEqual({ ok: true });
-    expect(mockRpc).toHaveBeenCalledWith('org_contact_save', { p_org: 'o1', p_contact: { role: 'office', phone: '', company_name: '', user_id: 'u-9' } });
+    expect(mockRpc).toHaveBeenCalledWith('org_contact_save', { p_org: 'o1', p_contact: { role: 'office', member_id: 'm-9' } });
   });
 
-  it('a created billing-only login is emailed as billing-only through the broker portal', async () => {
-    const { setOrgBillingLoginAction } = await import('@/lib/actions/orgContacts');
+  it('the removed actions are gone', async () => {
+    const mod = (await import('@/lib/actions/orgContacts')) as Record<string, unknown>;
+    expect(mod.setOrgBillingLoginAction).toBeUndefined();
+    expect(mod.searchUsersForContactAction).toBeUndefined();
+  });
+
+  it.each([
+    ['billing', { billingOnly: true, role: 'Billing only' }],
+    ['it', { role: 'IT admin' }],
+  ] as const)('a %s invitation is emailed through the broker portal', async (slot, body) => {
+    const { invitePersonAction } = await import('@/lib/actions/orgContacts');
     mockRpc.mockResolvedValue({
-      data: { name: 'payer team', email: 'payer@example.test', token: 'c'.repeat(64), success: true, org_name: 'Org' },
+      data: { success: true, slot, email: 'new@example.test', token: 'c'.repeat(64), org_name: 'Org' },
       error: null,
     });
     fetchSpy.mockResolvedValue({ json: async () => ({ success: true }) });
-    const r = await setOrgBillingLoginAction('o1', true);
-    expect(mockRpc).toHaveBeenCalledWith('org_billing_login_set', { p_org: 'o1', p_enable: true });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const r = await invitePersonAction('o1', { slot, email: ' new@example.test ', firstName: 'Ned', lastName: 'New', phone: slot === 'billing' ? '202-555-0151' : '' });
+    expect(mockRpc).toHaveBeenCalledWith('org_people_invite', {
+      p_org: 'o1',
+      p_person: { slot, email: 'new@example.test', first_name: 'Ned', last_name: 'New', ...(slot === 'billing' ? { phone: '202-555-0151' } : {}) },
+    });
     const [url, init] = fetchSpy.mock.calls[0];
     expect(url).toBe('https://broker.example.test/api/email/send-invite');
-    expect(JSON.parse(init.body)).toMatchObject({ recipientEmail: 'payer@example.test', billingOnly: true, role: 'Billing only', inviterName: 'staff member' });
-    expect(r).toEqual({ ok: true, note: 'We emailed the billing contact an invitation to their billing-only login.' });
+    const sent = JSON.parse(init.body);
+    expect(sent).toMatchObject({ recipientEmail: 'new@example.test', inviterName: 'staff member', ...body });
+    if (slot === 'it') expect(sent.billingOnly).toBeUndefined();
+    expect(r).toEqual({ ok: true, emailSent: true, inviteLink: expect.stringMatching(/\/invite\/c{64}$/) });
   });
 
   it('a refusal is passed through and nothing is emailed; 42501 reads not_authorized', async () => {
-    const { setOrgBillingLoginAction, listOrgContactsAction } = await import('@/lib/actions/orgContacts');
+    const { invitePersonAction, listOrgContactsAction } = await import('@/lib/actions/orgContacts');
     mockRpc.mockResolvedValueOnce({ data: { success: false, error: 'already_member' }, error: null });
-    expect(await setOrgBillingLoginAction('o1', true)).toEqual({ ok: false, error: 'already_member' });
+    expect(await invitePersonAction('o1', { slot: 'billing', email: 'a@example.test', firstName: '', lastName: '', phone: '202-555-0152' })).toEqual({
+      ok: false,
+      error: 'already_member',
+    });
     expect(fetchSpy).not.toHaveBeenCalled();
     mockRpc.mockResolvedValueOnce({ data: null, error: { code: '42501' } });
     expect(await listOrgContactsAction('o1')).toBeNull();

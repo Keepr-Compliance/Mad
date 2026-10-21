@@ -85,6 +85,18 @@ export function createBrokerageFake(seed: Record<string, Row[]> = {}): Brokerage
       Object.assign(d, { status: 'active', suspended_reason: null, suspended_at: null });
       return { success: true };
     },
+    // BACKLOG-4007 People v2 (migration 20261020200000 §6): the live billing contact's member ->
+    // the account's phone (user_phones.user_id) or the invitation's (pending_member_id).
+    _org_billing_contact_phone: (a) => {
+      const c = db.rows('org_contacts').find((x) => x.organization_id === a.p_org && x.role === 'billing' && !x.removed_at);
+      if (!c) return null;
+      const m = db.rows('organization_members').find((x) => x.id === c.member_id);
+      if (!m) return null;
+      const p = db
+        .rows('user_phones')
+        .find((x) => (m.user_id ? x.user_id === m.user_id : x.pending_member_id === m.id));
+      return p ? p.phone : null;
+    },
     _billing_org_sync_lease: (a) => {
       const r = mirror(a.p_org, a.p_mode);
       const now = Date.now();

@@ -249,10 +249,8 @@ export function DealEditor({
   const currentSeats = deal && deal.status !== 'canceled' ? deal.seats : null;
   const [seats, setSeats] = useState(String(deal?.seats ?? Math.max(billing.assigned_seats, 1)));
   const [priceText, setPriceText] = useState(((current ?? list ?? 0) / 100).toFixed(2));
-  const [contactName, setContactName] = useState(deal?.billing_contact_name ?? '');
-  const [contactEmail, setContactEmail] = useState(deal?.billing_contact_email ?? '');
-  // BACKLOG-4007: the broker sets the billing contact in setup, so a new or waiting deal has no contact fields.
-  const showContact = !!deal && deal.status !== 'draft';
+  // BACKLOG-4007 People v2: the billing contact is a brokerage member, set in setup or in
+  // People (next to this card); the deal editor has no contact fields.
   const dateEditable = startDateEditable(deal);
   const [startDate, setStartDate] = useState(deal?.start_date ?? billing.business_date);
   const [managerId, setManagerId] = useState(deal?.account_manager_id ?? '');
@@ -285,8 +283,6 @@ export function DealEditor({
       organizationId,
       seats: n,
       unitPriceCents: priceCents,
-      billingContactName: showContact ? contactName : '',
-      billingContactEmail: showContact ? contactEmail : '',
       accountManagerId: managerId || null,
       reason: dealReason,
       expectedVersion: deal?.version ?? null,
@@ -331,19 +327,6 @@ export function DealEditor({
             <Input id="deal-price" inputMode="decimal" value={priceText} onChange={(e) => setPriceText(e.target.value)} />
             <FieldHelp>{priceReadout(check, list, Number(billing.cap_pct))}</FieldHelp>
           </div>
-          {showContact && (
-            <>
-              <div>
-                <Label htmlFor="deal-contact-name">Billing contact name</Label>
-                <Input id="deal-contact-name" value={contactName} onChange={(e) => setContactName(e.target.value)} />
-              </div>
-              <div>
-                <Label htmlFor="deal-contact-email">Billing contact email</Label>
-                <Input id="deal-contact-email" type="email" value={contactEmail} onChange={(e) => setContactEmail(e.target.value)} />
-                <FieldHelp>Invoices and reminders go here.</FieldHelp>
-              </div>
-            </>
-          )}
           <div>
             <Label htmlFor="deal-manager">Account manager</Label>
             <Select id="deal-manager" value={managerId} onChange={(e) => setManagerId(e.target.value)}>

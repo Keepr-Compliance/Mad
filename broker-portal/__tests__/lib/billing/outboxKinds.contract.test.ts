@@ -27,6 +27,7 @@ const EXPECTED_KINDS: string[] = [
   'notify_org_suspended', // BACKLOG-3853
   'notify_account_manager', // BACKLOG-3853
   'notify_setup_reminder', // BACKLOG-4007
+  'notify_billing_contact_reassigned', // BACKLOG-4007 People v2
 ];
 const DIR = path.join(__dirname, 'outboxKinds');
 

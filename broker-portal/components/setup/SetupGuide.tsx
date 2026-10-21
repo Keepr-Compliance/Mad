@@ -12,7 +12,6 @@ import type { BillingSetupView } from '@/lib/billing/setupState';
 import type { SetupStep } from '@/lib/billing/setupSteps';
 import { formatDateOnly } from '@/lib/billing/setupCopy';
 import { BillingStep } from './BillingStep';
-import { billingLoginErrorMessage } from '@/lib/billing/billingLoginErrors';
 
 const STEPS: Array<{ key: SetupStep; label: string }> = [
   { key: 'billing', label: 'Billing' },
@@ -27,7 +26,7 @@ export interface SetupGuideProps {
   view: BillingSetupView;
   isGoogleSignIn: boolean;
   role: string;
-  /** BACKLOG-4007 PR-4: the billing-only login's outcome from the Billing step ('sent', 'created' or a refusal code). */
+  /** BACKLOG-4007: a created billing-only login's invitation email ('sent' or 'created'). */
   billingLogin?: string | null;
 }
 
@@ -98,9 +97,8 @@ export function billingLoginNote(outcome: string | null | undefined): { tone: 'i
   if (outcome === 'created') {
     return { tone: 'warning', text: 'The billing-only login was created, but its invitation email did not send. Resend it from the Users page.' };
   }
-  // Founder F6 (REFUSE): this sentence is shown exactly as written.
-  if (outcome === 'has_personal_account') return { tone: 'warning', text: billingLoginErrorMessage(outcome) };
-  return { tone: 'warning', text: `${billingLoginErrorMessage(outcome)} The billing-only login was not created.` };
+  // People v2: a refusal stops the Billing step, so nothing else reaches the Done step.
+  return null;
 }
 
 function DoneStep({ view, isGoogleSignIn, role, billingLogin }: Pick<SetupGuideProps, 'view' | 'isGoogleSignIn' | 'role' | 'billingLogin'>) {

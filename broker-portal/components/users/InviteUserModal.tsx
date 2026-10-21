@@ -7,6 +7,11 @@
  * Includes email input, role selection, and displays invite link on success.
  *
  * TASK-1810: Invite user modal and server action
+ * BACKLOG-4007 People v2 (founder 723b63de): People's "Invite new person" opens this same
+ * modal with `people` set: the role is preset and shown read-only (billing-only login or IT
+ * admin), a phone field is added when the caller may write phones, and the submit goes to the
+ * People action (org_people_invite). "Invite without a license" is not offered there. Without
+ * `people` nothing changes.
  */
 
 import { useState } from 'react';
@@ -14,7 +19,7 @@ import { useRouter } from 'next/navigation';
 import { AlertTriangle, Check } from 'lucide-react';
 // Modal/ModalFooter/Input/Label/Select are Tier-2 (no @keepr/ui equivalent yet).
 import { Input, Label, Modal, ModalFooter, Select } from '@keepr/design-system';
-import { AlertBanner, Button } from '@keepr/ui';
+import { AlertBanner, Button, orgPeopleErrorMessage, type OrgPeopleInviteSlot } from '@keepr/ui';
 import { inviteUser } from '@/lib/actions/inviteUser';
 import OutOfLicensesNotice from './OutOfLicensesNotice';
 import { ASSIGNABLE_ROLES_BY_ADMIN, ROLE_LABELS } from '@/lib/types/users';
@@ -26,6 +31,35 @@ import type { Role } from '@/lib/types/users';
 // Types
 // ============================================================================
 
+/** People "Invite new person" (BACKLOG-4007 People v2). */
+export interface PeopleInviteInput {
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  companyName?: string;
+}
+
+export type PeopleInviteResult =
+  | { ok: true; emailSent: boolean; inviteLink: string | null }
+  | { ok: false; error: string };
+
+export interface PeopleInviteMode {
+  slot: OrgPeopleInviteSlot;
+  /** MSP: the company, prefilled from the brokerage's existing MSP rows. */
+  companyName?: string;
+  /** The caller may write a phone (admin, broker; not an IT admin). */
+  phoneAllowed: boolean;
+  phoneRule: { isValid: (raw: string) => boolean; format: (raw: string) => string; error: string };
+  submit: (input: PeopleInviteInput) => Promise<PeopleInviteResult>;
+}
+
+const PEOPLE_ROLE_LINE: Record<OrgPeopleInviteSlot, string> = {
+  billing: 'Billing only (no seat)',
+  it: 'IT admin',
+  msp: 'IT admin',
+};
+
 interface InviteUserModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -36,6 +70,8 @@ interface InviteUserModalProps {
   organizationName?: string | null;
   /** BACKLOG-3851 PR-2f: "Invite without a license" offered (default: the release switches). */
   allowInviteWithoutLicense?: boolean;
+  /** Opened from People: role preset, phone field, People submit. */
+  people?: PeopleInviteMode;
 }
 
 // Roles that can be assigned via invite (excludes it_admin)
@@ -52,6 +88,7 @@ export default function InviteUserModal({
   callerRole = 'admin',
   organizationName = null,
   allowInviteWithoutLicense = inviteWithoutLicenseAvailable(),
+  people,
 }: InviteUserModalProps) {
   const router = useRouter();
   const [email, setEmail] = useState('');
@@ -64,12 +101,45 @@ export default function InviteUserModal({
   const [emailSent, setEmailSent] = useState(false);
   const [copied, setCopied] = useState(false);
   const [outOfSeats, setOutOfSeats] = useState(false);
+  const [phone, setPhone] = useState('');
+  const [phoneTouched, setPhoneTouched] = useState(false);
+  const [companyName, setCompanyName] = useState(people?.companyName ?? '');
+  const phoneRequired = people?.slot === 'billing';
+  const phoneOk = !people || !people.phoneAllowed
+    ? true
+    : phone.trim() === ''
+      ? !phoneRequired
+      : people.phoneRule.isValid(phone);
+  const companyOk = people?.slot !== 'msp' || companyName.trim() !== '';
 
   // BACKLOG-3851 PR-2f: withoutLicense re-sends the same form as an unlicensed invitation.
   const sendInvite = async (withoutLicense: boolean) => {
     setIsSubmitting(true);
     setError(null);
     setOutOfSeats(false);
+
+    if (people) {
+      try {
+        const r = await people.submit({
+          email: email.trim(),
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          phone: people.phoneAllowed ? phone.trim() : '',
+          ...(people.slot === 'msp' ? { companyName: companyName.trim() } : {}),
+        });
+        if (!r.ok) {
+          setError(orgPeopleErrorMessage(r.error));
+        } else {
+          setInviteLink(r.inviteLink ?? '');
+          setEmailSent(r.emailSent);
+        }
+      } catch {
+        setError('An unexpected error occurred');
+      } finally {
+        setIsSubmitting(false);
+      }
+      return;
+    }
 
     try {
       const result = await inviteUser({
@@ -110,6 +180,8 @@ export default function InviteUserModal({
     setRole('agent');
     setError(null);
     setOutOfSeats(false);
+    setPhone('');
+    setPhoneTouched(false);
     setInviteLink(null);
     setEmailSent(false);
     setCopied(false);
@@ -138,7 +210,7 @@ export default function InviteUserModal({
 
   return (
     <Modal open={isOpen} onClose={handleClose} size="sm" title="Invite Team Member">
-      {inviteLink ? (
+      {inviteLink !== null ? (
         // Success state - varies based on whether email was sent
         <div className="space-y-4">
           {emailSent ? (
@@ -241,7 +313,48 @@ export default function InviteUserModal({
             />
           </div>
 
-          {/* Role select */}
+          {/* People mode: the role is preset (BACKLOG-4007 People v2) */}
+          {people ? (
+            <>
+              <div>
+                <Label htmlFor="invite-role-locked">Role</Label>
+                <Input className="!text-base md:!text-sm" type="text" id="invite-role-locked" value={PEOPLE_ROLE_LINE[people.slot]} readOnly disabled />
+                <p className="mt-1 text-xs text-gray-500">
+                  {people.slot === 'billing' ? 'Sees Billing and Support only. Uses no seat.' : 'Uses a seat.'}
+                </p>
+              </div>
+              {people.slot === 'msp' ? (
+                <div>
+                  <Label htmlFor="invite-company">IT provider company</Label>
+                  <Input
+                    className="!text-base md:!text-sm"
+                    type="text"
+                    id="invite-company"
+                    value={companyName}
+                    onChange={(e) => setCompanyName(e.target.value)}
+                    required
+                  />
+                </div>
+              ) : null}
+              {people.phoneAllowed ? (
+                <div>
+                  <Label htmlFor="invite-phone">{phoneRequired ? 'Phone' : 'Phone (optional)'}</Label>
+                  <Input
+                    className="!text-base md:!text-sm"
+                    type="tel"
+                    id="invite-phone"
+                    value={phone}
+                    onChange={(e) => setPhone(people.phoneRule.format(e.target.value))}
+                    onBlur={() => setPhoneTouched(true)}
+                    aria-invalid={phoneTouched && !phoneOk}
+                  />
+                  {phoneTouched && !phoneOk ? (
+                    <p role="alert" className="mt-1 text-sm text-red-600">{people.phoneRule.error}</p>
+                  ) : null}
+                </div>
+              ) : null}
+            </>
+          ) : (
           <div>
             <Label htmlFor="invite-role">Role</Label>
             <Select
@@ -257,6 +370,7 @@ export default function InviteUserModal({
               ))}
             </Select>
           </div>
+          )}
 
           {/* Error message */}
           {outOfSeats && (
@@ -274,7 +388,7 @@ export default function InviteUserModal({
             <Button type="button" variant="secondary" onClick={handleClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={isSubmitting || !email}>
+            <Button type="submit" disabled={isSubmitting || !email || !phoneOk || !companyOk}>
               {isSubmitting ? 'Inviting...' : 'Send Invite'}
             </Button>
           </ModalFooter>

@@ -59,7 +59,9 @@ describe('new deal', () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].fn).toBe('admin_save_deal');
     expect(calls[0].args.p_start_date).toBe('2030-02-01');
-    expect(calls[0].args.p_billing_contact_email).toBe('');
+    // BACKLOG-4007 People v2: the deal never carries the billing contact.
+    expect(calls[0].args.p_billing_contact_email).toBeNull();
+    expect(calls[0].args.p_billing_contact_name).toBeNull();
     expect(calls[0].args.p_reason).toBe('Deal created');
     expect(calls[0].args.p_expected_version).toBeNull();
   });
@@ -85,16 +87,17 @@ describe('waiting deal (draft)', () => {
 });
 
 describe('deal after setup (active)', () => {
-  it('date is locked and sent as null (key still present); contact fields shown', async () => {
+  it('date is locked and sent as null (key still present); no contact fields (People v2: set in People)', async () => {
     const onSaved = await editor(ACTIVE);
     expect(document.getElementById('deal-start-date')).toBeNull();
     expect(screen.getByText('Locked after customer setup.')).toBeTruthy();
-    expect(document.getElementById('deal-contact-email')).not.toBeNull();
+    expect(document.getElementById('deal-contact-email')).toBeNull();
+    expect(document.getElementById('deal-contact-name')).toBeNull();
     fireEvent.change(screen.getByLabelText(/Reason/), { target: { value: 'repriced' } });
     save();
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     expect('p_start_date' in calls[0].args).toBe(true);
     expect(calls[0].args.p_start_date).toBeNull();
-    expect(calls[0].args.p_billing_contact_email).toBe('billing@example.test');
+    expect(calls[0].args.p_billing_contact_email).toBeNull();
   });
 });

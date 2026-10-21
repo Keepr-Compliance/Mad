@@ -2,8 +2,8 @@
  * The billing-only login's invitation email — BACKLOG-4007 PR-4.
  *
  * The database creates the login (an 'unassigned' invitation linked from the billing contact,
- * `_org_billing_login_create`) and returns its token; a row insert sends nothing, so this is
- * the sender. The link is the ordinary /invite/<token> path; accept_invitation keeps an
+ * `_org_people_invite_row`, BACKLOG-4007 People v2) and returns its token; a row insert sends
+ * nothing, so this is the sender. The link is the ordinary /invite/<token> path; accept_invitation keeps an
  * 'unassigned' invitation unassigned. Server only.
  */
 

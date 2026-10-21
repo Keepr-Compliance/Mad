@@ -47,6 +47,7 @@ export type {
   AccountSuspendedParams,
   AccountManagerAlertParams,
   SetupReminderParams,
+  BillingContactReassignedParams,
 } from './types';
 
 // Queue (BACKLOG-2009)
@@ -70,6 +71,7 @@ import { buildTicketResolvedEmail } from './templates/ticket-resolved';
 import { buildAccountSuspendedEmail } from './templates/account-suspended';
 import { buildAccountManagerAlertEmail } from './templates/account-manager-alert';
 import { buildSetupReminderEmail } from './templates/setup-reminder';
+import { buildBillingContactReassignedEmail } from './templates/billing-contact-reassigned';
 import type {
   InviteEmailParams,
   DownloadInviteEmailParams,
@@ -83,6 +85,7 @@ import type {
   AccountSuspendedParams,
   AccountManagerAlertParams,
   SetupReminderParams,
+  BillingContactReassignedParams,
   SendEmailResult,
 } from './types';
 
@@ -310,6 +313,23 @@ export async function sendAccountManagerAlertEmail(
  * "Finish your Keepr setup" reminder (BACKLOG-4007 PR-3), sent by the billing outbox
  * (kind notify_setup_reminder). metadata.kind + outboxKey let the handler see a send it already made.
  */
+/** BACKLOG-4007 People v2: the account admin is now the billing contact. Log type 'other'. */
+export async function sendBillingContactReassignedEmail(params: BillingContactReassignedParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildBillingContactReassignedEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'billing_contact_reassigned',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+    },
+  });
+}
+
 export async function sendSetupReminderEmail(params: SetupReminderParams): Promise<SendEmailResult> {
   const { subject, html, text } = buildSetupReminderEmail(params);
   return sendEmail({

@@ -1,15 +1,17 @@
 /**
- * BACKLOG-4007 PR-4: the People panel (@keepr/ui OrgPeoplePanel, shared with the admin portal)
- * and the broker portal's People actions.
+ * BACKLOG-4007 PR-4 / People v2: the People panel (@keepr/ui OrgPeoplePanel, shared with the
+ * admin portal) and the broker portal's People actions.
  *
- * The view shape is transcribed from org_contacts_list on keepr-test (C_L1 in
- * supabase/tests/backlog-4007-pr4): {success, can_edit, deal_status, contacts[{id, role, name,
- * email, phone, company_name, member_id, login, login_claimed}], members[{user_id, member_id,
- * role, name, email}]}. Names and emails replaced with invented ones.
+ * The view shape is transcribed from org_contacts_list on keepr-test after 20261020200000
+ * (called as an admin of a QA brokerage, 2026-10-20): {success, caller, can_edit,
+ * can_edit_billing, can_edit_it, can_edit_phone, deal_status, contacts[{id, role, name, email,
+ * phone, company_name, member_id, login, login_claimed}], members[{member_id, user_id, role,
+ * license_status, billing_only, name, email, phone, idp_managed, pending}]}. Names, emails and
+ * ids replaced with invented ones; phones in the reserved 555-01xx range.
  */
 
 import '@testing-library/jest-dom';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 
 const mockRpc = jest.fn();
 const mockGate = jest.fn();
@@ -19,33 +21,53 @@ jest.mock('@/lib/auth/memberAccess', () => ({ requireActiveOrgRole: (...a: unkno
 jest.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
     rpc: mockRpc,
-    auth: { getUser: async () => ({ data: { user: { id: 'u-1', email: 'admin@example.test' } } }) },
+    auth: { getUser: async () => ({ data: { user: { id: 'u-1', email: 'admin@example.test', user_metadata: { first_name: 'fixture', last_name: 'admin' } } } }) },
   }),
 }));
 jest.mock('@/lib/email', () => ({ sendInviteEmail: (...a: unknown[]) => mockSendInvite(...a) }));
 
 import { OrgPeoplePanel, orgPeopleErrorMessage, type OrgPeopleView, type OrgPeopleActions } from '@keepr/ui';
 import { PHONE_ERROR, formatBillingPhoneInput, isValidBillingPhone } from '@/lib/billing/phone';
-import { listOrgContacts, saveOrgContact, setOrgBillingLogin } from '@/lib/actions/orgContacts';
+import { invitePerson, listOrgContacts, saveOrgContact } from '@/lib/actions/orgContacts';
 
 const PHONE = { isValid: isValidBillingPhone, format: formatBillingPhoneInput, error: PHONE_ERROR };
 
 function contact(id: string, role: 'billing' | 'it' | 'office' | 'msp', over: Record<string, unknown> = {}) {
-  return { id, role, name: `Person ${id}`, email: `p-${id}@example.test`, phone: null, company_name: null, member_id: null, login: null, login_claimed: false, ...over };
+  return {
+    id, role, name: `Person ${id}`, email: `p-${id}@example.test`, phone: null, company_name: null,
+    member_id: `m-${id}`, login: 'agent', login_claimed: true, ...over,
+  };
 }
+
+function member(id: string, over: Record<string, unknown> = {}) {
+  return {
+    member_id: `m-${id}`, user_id: `u-${id}`, role: 'agent', license_status: 'active', billing_only: false,
+    name: `Member ${id}`, email: `${id}@example.test`, phone: null, idp_managed: false, pending: false, ...over,
+  };
+}
+
+const MEMBERS = [
+  member('ag'),
+  member('bea', { name: 'Jane Doe', email: 'bea@example.test', phone: '+12025550131' }),
+  member('adm', { role: 'admin', name: 'fixture admin' }),
+  member('un', { license_status: 'unassigned', name: 'Una Unlicensed' }),
+  member('idp', { name: 'Ivy Idp', idp_managed: true }),
+];
 
 const VIEW: OrgPeopleView = {
   can_edit: true,
+  can_edit_billing: true,
+  can_edit_it: true,
+  can_edit_phone: true,
   deal_status: 'active',
-  contacts: [contact('b1', 'billing', { phone: '+12025550123' })],
-  members: [{ user_id: 'u-ag', member_id: 'm-ag', role: 'agent', name: 'agent one', email: 'agent@example.test' }],
+  contacts: [contact('b1', 'billing', { phone: '+12025550123', login: 'admin' })],
+  members: MEMBERS,
 };
 
 function actions(over: Partial<OrgPeopleActions> = {}): OrgPeopleActions {
   return {
     save: jest.fn(async () => ({ ok: true as const })),
     remove: jest.fn(async () => ({ ok: true as const })),
-    setBillingLogin: jest.fn(async () => ({ ok: true as const })),
     ...over,
   };
 }
@@ -68,245 +90,223 @@ async function openUserList() {
   });
 }
 
-const MEMBERS: OrgPeopleView['members'] = [
-  { user_id: 'u-ag', member_id: 'm-ag', role: 'agent', name: 'agent one', email: 'agent@example.test' },
-  { user_id: 'u-b2', member_id: 'm-b2', role: 'agent', name: 'Jane Doe', email: 'bea@example.test' },
-];
+async function pick(name: RegExp) {
+  await openUserList();
+  await act(async () => fireEvent.click(screen.getByRole('option', { name })));
+}
 
 beforeEach(() => jest.clearAllMocks());
 
-describe('OrgPeoplePanel', () => {
-  it('lists the four roles; the billing contact offers the billing-only login', async () => {
+describe('OrgPeoplePanel (People v2)', () => {
+  it('no billing-only login buttons and no "Create new person": the removed controls are gone', () => {
+    render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} onAddNew={jest.fn()} />);
+    expect(screen.queryByText('Give billing-only login')).not.toBeInTheDocument();
+    expect(screen.queryByText('Remove login')).not.toBeInTheDocument();
+    fireEvent.click(within(row('office')).getByText('Add person'));
+    expect(screen.queryByRole('radio', { name: 'Create new person' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Full name/)).not.toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'User' })).toBeInTheDocument();
+  });
+
+  it('"Invite new person" for billing, IT contact and MSP calls onAddNew with the slot; never for office', () => {
+    const onAddNew = jest.fn();
+    const view = { ...VIEW, contacts: [...VIEW.contacts, contact('m1', 'msp', { company_name: 'Fixture IT Co' })] };
+    render(<OrgPeoplePanel view={view} actions={actions()} phone={PHONE} onChanged={jest.fn()} onAddNew={onAddNew} />);
+    fireEvent.click(within(row('billing')).getByText('Invite new person'));
+    fireEvent.click(within(row('it')).getByText('Invite new person'));
+    fireEvent.click(within(row('msp')).getByText('Invite new person'));
+    expect(within(row('office')).queryByText('Invite new person')).not.toBeInTheDocument();
+    expect(onAddNew.mock.calls).toEqual([['billing', undefined], ['it', undefined], ['msp', 'Fixture IT Co']]);
+  });
+
+  it('Select existing user saves the member id; the search filters by name or email', async () => {
     const a = actions();
+    render(<OrgPeoplePanel view={VIEW} actions={a} phone={PHONE} onChanged={jest.fn()} />);
+    fireEvent.click(within(row('office')).getByText('Add person'));
+    fireEvent.change(screen.getByLabelText('Search users'), { target: { value: 'bea@' } });
+    await openUserList();
+    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Jane Doe (bea@example.test)']);
+    await act(async () => fireEvent.click(screen.getByRole('option', { name: /Jane Doe/ })));
+    // the person's phone is filled in from the member
+    expect(screen.getByLabelText(/Phone/)).toHaveValue('(202) 555-0131');
+    await act(async () => fireEvent.click(screen.getByText('Save')));
+    expect(a.save).toHaveBeenCalledWith({ role: 'office', member_id: 'm-bea', phone: '(202) 555-0131' });
+  });
+
+  it('IT contact: an unlicensed or IdP-managed agent cannot be picked; an admin can', async () => {
+    render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
+    fireEvent.click(within(row('it')).getByText('Add person'));
+    await openUserList();
+    expect(screen.getByRole('option', { name: /Una Unlicensed.*Needs a license first/ })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('option', { name: /Ivy Idp.*Managed by your identity provider\./ })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('option', { name: /fixture admin/ })).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('option', { name: /Member ag/ })).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('an agent picked as IT contact: the database asks to confirm, the panel says so, the second save confirms', async () => {
+    const save = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: false, error: 'role_change_needs_confirm', role: 'agent' })
+      .mockResolvedValueOnce({ ok: true });
     const onChanged = jest.fn();
-    render(<OrgPeoplePanel view={VIEW} actions={a} phone={PHONE} onChanged={onChanged} />);
-    expect(within(row('billing')).getByText('Person b1')).toBeInTheDocument();
-    expect(within(row('billing')).getByText('No login')).toBeInTheDocument();
-    expect(within(row('it')).getByText('No one added')).toBeInTheDocument();
-    await act(async () => fireEvent.click(within(row('billing')).getByText('Give billing-only login')));
-    expect(a.setBillingLogin).toHaveBeenCalledWith(true);
+    render(<OrgPeoplePanel view={VIEW} actions={actions({ save })} phone={PHONE} onChanged={onChanged} />);
+    fireEvent.click(within(row('it')).getByText('Add person'));
+    await pick(/Member ag/);
+    await act(async () => fireEvent.click(screen.getByText('Save')));
+    expect(screen.getByText('Member ag is now Agent. Saving makes them an IT admin.')).toBeInTheDocument();
+    expect(onChanged).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(screen.getByText('Make IT admin')));
+    expect(save.mock.calls[0][0]).toEqual({ role: 'it', member_id: 'm-ag' });
+    expect(save.mock.calls[1][0]).toEqual({ role: 'it', member_id: 'm-ag', confirm_role_change: true });
     expect(onChanged).toHaveBeenCalled();
   });
 
-  it('a billing-only login can be removed; no Remove for the billing contact itself', async () => {
-    const a = actions();
-    const view = { ...VIEW, contacts: [contact('b1', 'billing', { member_id: 'm-b', login: 'billing_only' })] };
-    render(<OrgPeoplePanel view={view} actions={a} phone={PHONE} onChanged={jest.fn()} />);
-    expect(within(row('billing')).getByText('Billing-only login')).toBeInTheDocument();
-    expect(within(row('billing')).queryByText('Remove')).not.toBeInTheDocument();
-    await act(async () => fireEvent.click(within(row('billing')).getByText('Remove login')));
-    expect(a.setBillingLogin).toHaveBeenCalledWith(false);
-  });
-
-  it('waiting for setup: the billing contact is set in the guide, no buttons on that row', () => {
-    render(<OrgPeoplePanel view={{ ...VIEW, deal_status: 'draft', contacts: [] }} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
-    expect(within(row('billing')).getByText('Set in the setup guide.')).toBeInTheDocument();
-    expect(within(row('billing')).queryByRole('button')).not.toBeInTheDocument();
-  });
-
-  it('Create new person: saves the typed person for the role; a bad phone blocks Save', async () => {
-    const a = actions();
-    render(<OrgPeoplePanel view={VIEW} actions={a} phone={PHONE} onChanged={jest.fn()} />);
-    fireEvent.click(within(row('it')).getByText('Add person'));
-    fireEvent.click(screen.getByRole('radio', { name: 'Create new person' }));
-    fireEvent.change(screen.getByLabelText(/Full name/), { target: { value: 'Help Desk' } });
-    fireEvent.change(screen.getByLabelText(/Email/), { target: { value: 'it@example.test' } });
-    fireEvent.change(screen.getByLabelText(/Phone/), { target: { value: '12' } });
-    fireEvent.blur(screen.getByLabelText(/Phone/));
-    expect(screen.getByRole('alert')).toHaveTextContent(PHONE_ERROR);
-    expect(screen.getByText('Save')).toBeDisabled();
-    fireEvent.change(screen.getByLabelText(/Phone/), { target: { value: '2025550124' } });
-    await act(async () => fireEvent.click(screen.getByText('Save')));
-    expect(a.save).toHaveBeenCalledWith({
-      id: undefined,
-      role: 'it',
-      name: 'Help Desk',
-      email: 'it@example.test',
-      phone: '(202) 555-0124',
-      company_name: '',
-    });
-  });
-
-  it('Add person opens on "Select existing user"; switching to "Create new person" shows the form (BACKLOG-4007)', () => {
-    render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
-    fireEvent.click(within(row('office')).getByText('Add person'));
-    expect(screen.getByRole('radio', { name: 'Select existing user' })).toBeChecked();
-    expect(screen.getByRole('radio', { name: 'Create new person' })).not.toBeChecked();
-    expect(screen.getByLabelText('User')).toBeInTheDocument();
-    expect(screen.queryByLabelText(/Full name/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('radio', { name: 'Create new person' }));
-    expect(screen.getByRole('radio', { name: 'Create new person' })).toBeChecked();
-    expect(screen.getByLabelText(/Full name/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Email/)).toBeInTheDocument();
-    expect(screen.queryByLabelText('User')).not.toBeInTheDocument();
-  });
-
-  it('button variants: Add person and Cancel are secondary, Save is primary, nothing is dark (BACKLOG-4007)', () => {
-    const { container } = render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
-    const add = within(row('office')).getByText('Add person');
-    expect(add.className).toContain('bg-white');
-    expect(add.className).toContain('border-gray-300');
-    fireEvent.click(add);
-    expect(screen.getByText('Cancel').className).toContain('bg-white');
-    expect(screen.getByText('Save').className).toContain('bg-primary-600');
-    expect(container.querySelector('.bg-gray-900')).toBeNull();
-    expect(container.querySelector('.text-white:not(button)')).toBeNull();
-  });
-
-  it('the billing contact needs a phone; MSP asks for the company', () => {
+  it('the billing contact needs a phone unless the person has one; MSP asks for the company', async () => {
     render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
     fireEvent.click(within(row('billing')).getByText('Change'));
-    fireEvent.change(screen.getByLabelText(/Phone/), { target: { value: '' } });
+    await pick(/Member ag/);
     expect(screen.getByText('Save')).toBeDisabled();
+    await pick(/Jane Doe/);
+    expect(screen.getByText('Save')).not.toBeDisabled();
     fireEvent.click(screen.getByText('Cancel'));
     fireEvent.click(within(row('msp')).getByText('Add person'));
     expect(screen.getByLabelText(/IT provider company/)).toBeInTheDocument();
   });
 
-  it('Select existing user (broker): the brokerage members only, saved by user id', async () => {
-    const a = actions();
-    render(<OrgPeoplePanel view={{ ...VIEW, members: MEMBERS }} actions={a} phone={PHONE} onChanged={jest.fn()} />);
+  it('an IT admin (can_edit_phone false, can_edit_billing false): no phone field, billing row read-only', () => {
+    const view = { ...VIEW, can_edit_billing: false, can_edit_phone: false };
+    render(<OrgPeoplePanel view={view} actions={actions()} phone={PHONE} onChanged={jest.fn()} onAddNew={jest.fn()} />);
+    expect(within(row('billing')).queryByRole('button')).not.toBeInTheDocument();
+    expect(within(row('billing')).getByText('Only a broker or admin can change it.')).toBeInTheDocument();
     fireEvent.click(within(row('office')).getByText('Add person'));
-    fireEvent.click(screen.getByRole('radio', { name: 'Select existing user' }));
-    await openUserList();
-    expect(screen.getAllByRole('option')).toHaveLength(2);
-    await act(async () => fireEvent.click(screen.getByRole('option', { name: /agent one/ })));
-    await act(async () => fireEvent.click(screen.getByText('Save')));
-    expect(a.save).toHaveBeenCalledWith(expect.objectContaining({ role: 'office', user_id: 'u-ag' }));
+    expect(screen.queryByLabelText(/Phone/)).not.toBeInTheDocument();
   });
 
-  it('Select existing user (broker): Search users filters the members by name or email and never shows a non-member', async () => {
-    const a = actions();
-    render(<OrgPeoplePanel view={{ ...VIEW, members: MEMBERS }} actions={a} phone={PHONE} onChanged={jest.fn()} />);
-    fireEvent.click(within(row('office')).getByText('Add person'));
-    fireEvent.click(screen.getByRole('radio', { name: 'Select existing user' }));
-    fireEvent.change(screen.getByLabelText('Search users'), { target: { value: 'bea@' } });
-    await openUserList();
-    const names = screen.getAllByRole('option').map((o) => o.textContent);
-    expect(names).toEqual(['Jane Doe (bea@example.test)']);
-    expect(screen.queryByRole('option', { name: /agent one/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: /stranger/ })).not.toBeInTheDocument();
+  it('a broker (can_edit_it false): the IT contact and MSP rows have no buttons (founder R7)', () => {
+    const view = { ...VIEW, can_edit_it: false };
+    render(<OrgPeoplePanel view={view} actions={actions()} phone={PHONE} onChanged={jest.fn()} onAddNew={jest.fn()} />);
+    expect(within(row('it')).queryByRole('button')).not.toBeInTheDocument();
+    expect(within(row('msp')).queryByRole('button')).not.toBeInTheDocument();
+    expect(within(row('it')).getByText('Only an admin or IT admin can change it.')).toBeInTheDocument();
+    expect(within(row('office')).getByText('Add person')).toBeInTheDocument();
+    expect(within(row('billing')).getByText('Change')).toBeInTheDocument();
   });
 
-  it('Select existing user (staff): search; a user in another brokerage cannot be picked', async () => {
-    const a = actions({
-      searchUsers: jest.fn(async () => [
-        { user_id: 'u-x', name: 'other user', email: 'other@example.test', status: 'other_brokerage' as const },
-        { user_id: 'u-s', name: 'solo user', email: 'solo@example.test', status: 'no_brokerage' as const },
-      ]),
-    });
-    render(<OrgPeoplePanel view={VIEW} actions={a} phone={PHONE} onChanged={jest.fn()} />);
-    fireEvent.click(within(row('office')).getByText('Add person'));
-    fireEvent.click(screen.getByRole('radio', { name: 'Select existing user' }));
-    await act(async () => fireEvent.change(screen.getByLabelText('Search users'), { target: { value: 'pe' } }));
-    await openUserList();
-    await waitFor(() => expect(screen.getByRole('option', { name: /other user.*in another brokerage/ })).toHaveAttribute('aria-disabled', 'true'));
-    expect(screen.getByRole('option', { name: /solo user.*no brokerage/ })).not.toHaveAttribute('aria-disabled', 'true');
+  it('waiting for setup: the billing contact is set in the guide, no buttons on that row', () => {
+    render(<OrgPeoplePanel view={{ ...VIEW, deal_status: 'draft' }} actions={actions()} phone={PHONE} onChanged={jest.fn()} onAddNew={jest.fn()} />);
+    expect(within(row('billing')).getByText('Set in the setup guide.')).toBeInTheDocument();
+    expect(within(row('billing')).queryByRole('button')).not.toBeInTheDocument();
   });
 
-  it('removing the billing-only login says who can no longer sign in (name, else email)', async () => {
-    const view = { ...VIEW, contacts: [contact('b1', 'billing', { member_id: 'm-b', login: 'billing_only', name: 'Pat Payer' })] };
-    const r = render(<OrgPeoplePanel view={view} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
-    await act(async () => fireEvent.click(screen.getByText('Remove login')));
-    expect(screen.getByText('Pat Payer can no longer sign in. They still get the invoices by email.')).toBeInTheDocument();
-    r.unmount();
-    const noName = { ...VIEW, contacts: [contact('b1', 'billing', { member_id: 'm-b', login: 'billing_only', name: '', email: 'pay@example.test' })] };
-    render(<OrgPeoplePanel view={noName} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
-    await act(async () => fireEvent.click(screen.getByText('Remove login')));
-    expect(screen.getByText('pay@example.test can no longer sign in. They still get the invoices by email.')).toBeInTheDocument();
-  });
-
-  it('the old wording is gone', () => {
-    const view = { ...VIEW, contacts: [contact('b1', 'billing', { member_id: 'm-b', login: 'billing_only' }), contact('o1', 'office')] };
-    render(<OrgPeoplePanel view={view} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
-    expect(screen.queryByText('Contact only')).not.toBeInTheDocument();
-    expect(screen.queryByText('Remove billing-only login')).not.toBeInTheDocument();
-    expect(within(row('office')).getByText('No login')).toBeInTheDocument();
+  it('button variants: Add person and Cancel are secondary, Save is primary, nothing is dark', () => {
+    const { container } = render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
+    const add = within(row('office')).getByText('Add person');
+    expect(add.className).toContain('bg-white');
+    fireEvent.click(add);
+    expect(screen.getByText('Cancel').className).toContain('bg-white');
+    expect(screen.getByText('Save').className).toContain('bg-primary-600');
+    expect(container.querySelector('.bg-gray-900')).toBeNull();
   });
 
   it('contact phones show formatted for US/CA numbers and as stored otherwise', () => {
-    const view = {
-      ...VIEW,
-      contacts: [
-        contact('b1', 'billing', { phone: '+12025550123' }),
-        contact('o1', 'office', { phone: '+442071838750' }),
-      ],
-    };
+    const view = { ...VIEW, contacts: [contact('b1', 'billing', { phone: '+12025550123' }), contact('o1', 'office', { phone: '+442071838750' })] };
     render(<OrgPeoplePanel view={view} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
     expect(within(row('billing')).getByText(/\(202\) 555-0123/)).toBeInTheDocument();
-    expect(within(row('billing')).queryByText(/\+12025550123/)).not.toBeInTheDocument();
     expect(within(row('office')).getByText(/\+442071838750/)).toBeInTheDocument();
   });
 
-  it('one IT contact: Change, no Add; office lists 5 then Show more', () => {
+  it('one IT contact: no Add; office lists 5 then Show more', () => {
     const office = Array.from({ length: 7 }, (_, i) => contact(`o${i}`, 'office'));
-    render(
-      <OrgPeoplePanel view={{ ...VIEW, contacts: [...VIEW.contacts, contact('i1', 'it'), ...office] }} actions={actions()} phone={PHONE} onChanged={jest.fn()} />
-    );
+    render(<OrgPeoplePanel view={{ ...VIEW, contacts: [...VIEW.contacts, contact('i1', 'it'), ...office] }} actions={actions()} phone={PHONE} onChanged={jest.fn()} onAddNew={jest.fn()} />);
     expect(within(row('it')).queryByText('Add person')).not.toBeInTheDocument();
-    expect(within(row('it')).queryByText('Add another')).not.toBeInTheDocument();
+    expect(within(row('it')).queryByText('Invite new person')).not.toBeInTheDocument();
     expect(within(row('office')).getAllByText(/^Person o/)).toHaveLength(5);
     fireEvent.click(within(row('office')).getByText('Show more (2)'));
     expect(within(row('office')).getAllByText(/^Person o/)).toHaveLength(7);
   });
 
   it('a refusal is worded; read-only shows no buttons', async () => {
-    const a = actions({ setBillingLogin: jest.fn(async () => ({ ok: false as const, error: 'duplicate_invitation' })) });
-    const { unmount } = render(<OrgPeoplePanel view={VIEW} actions={a} phone={PHONE} onChanged={jest.fn()} />);
-    await act(async () => fireEvent.click(screen.getByText('Give billing-only login')));
-    expect(screen.getByText(orgPeopleErrorMessage('duplicate_invitation'))).toBeInTheDocument();
-    unmount();
-    // F6: the founder's sentence, exactly, when the person has their own Keepr account
-    const a6 = actions({ setBillingLogin: jest.fn(async () => ({ ok: false as const, error: 'has_personal_account' })) });
-    const r6 = render(<OrgPeoplePanel view={VIEW} actions={a6} phone={PHONE} onChanged={jest.fn()} />);
-    await act(async () => fireEvent.click(screen.getByText('Give billing-only login')));
-    expect(
-      screen.getByText('This person already has their own Keepr account. Pick another billing contact or invite them as a member.')
-    ).toBeInTheDocument();
-    r6.unmount();
+    const a = actions({ save: jest.fn(async () => ({ ok: false as const, error: 'managed_by_idp' })) });
+    const r = render(<OrgPeoplePanel view={VIEW} actions={a} phone={PHONE} onChanged={jest.fn()} />);
+    fireEvent.click(within(row('office')).getByText('Add person'));
+    await pick(/Member ag/);
+    await act(async () => fireEvent.click(screen.getByText('Save')));
+    expect(screen.getByText('Managed by your identity provider.')).toBeInTheDocument();
+    r.unmount();
     render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} readOnly />);
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('the founder sentences, exactly', () => {
+    expect(orgPeopleErrorMessage('has_personal_account')).toBe(
+      'This person already has their own Keepr account. Pick another billing contact or invite them as a member.'
+    );
+    expect(orgPeopleErrorMessage('managed_by_idp')).toBe('Managed by your identity provider.');
   });
 });
 
 describe('broker People actions', () => {
-  it('refused before any RPC for anyone the gate refuses (lists: peopleRoles.test.tsx)', async () => {
+  it('refused before any RPC for anyone the gate refuses; IT / MSP use the IT list, billing the billing list', async () => {
     mockGate.mockResolvedValue({ ok: false });
     expect(await listOrgContacts('ORG-1')).toEqual({ ok: false, error: 'not_authorized' });
-    expect(await saveOrgContact('ORG-1', { role: 'it', name: 'x', email: 'x@example.test' })).toEqual({ ok: false, error: 'not_authorized' });
-    expect(await setOrgBillingLogin('ORG-1', true)).toEqual({ ok: false, error: 'not_authorized' });
+    expect(await saveOrgContact('ORG-1', { role: 'it', member_id: 'm-1' })).toEqual({ ok: false, error: 'not_authorized' });
+    expect(await saveOrgContact('ORG-1', { role: 'billing', member_id: 'm-1' })).toEqual({ ok: false, error: 'not_authorized' });
+    expect(await invitePerson('ORG-1', { slot: 'msp', email: 'x@example.test', firstName: '', lastName: '', phone: '' })).toEqual({
+      ok: false,
+      error: 'not_authorized',
+    });
     expect(mockRpc).not.toHaveBeenCalled();
-    expect(mockGate).toHaveBeenCalledWith(expect.anything(), 'u-1', 'ORG-1', ['admin', 'it_admin', 'broker']);
-    expect(mockGate).toHaveBeenCalledWith(expect.anything(), 'u-1', 'ORG-1', ['admin', 'broker']);
+    expect(mockGate.mock.calls.map((c) => c[3])).toEqual([
+      ['admin', 'it_admin', 'broker'],
+      ['admin', 'it_admin'],
+      ['admin', 'broker'],
+      ['admin', 'it_admin'],
+    ]);
   });
 
   it('only the documented keys travel', async () => {
     mockGate.mockResolvedValue({ ok: true });
     mockRpc.mockResolvedValue({ data: { success: true }, error: null });
-    await saveOrgContact('ORG-1', { role: 'msp', name: ' Ben ', email: 'b@example.test', phone: '', company_name: 'IT Co', seats: 99 } as never);
+    await saveOrgContact('ORG-1', { role: 'msp', member_id: 'm-1', phone: ' ', company_name: ' IT Co ', seats: 99, name: 'x' } as never);
     expect(mockRpc).toHaveBeenCalledWith('org_contact_save', {
       p_org: 'ORG-1',
-      p_contact: { role: 'msp', name: 'Ben', email: 'b@example.test', phone: '', company_name: 'IT Co' },
+      p_contact: { role: 'msp', member_id: 'm-1', company_name: 'IT Co' },
+    });
+    await invitePerson('ORG-1', {
+      slot: 'it', email: ' new@example.test ', firstName: 'Ned', lastName: 'New', phone: '', role: 'admin', billing_only: true,
+    } as never);
+    expect(mockRpc).toHaveBeenLastCalledWith('org_people_invite', {
+      p_org: 'ORG-1',
+      p_person: { slot: 'it', email: 'new@example.test', first_name: 'Ned', last_name: 'New' },
     });
   });
 
-  it('a created login is emailed (billing-only invite); the result notes it', async () => {
+  it('the confirm request comes back with the old role', async () => {
     mockGate.mockResolvedValue({ ok: true });
-    mockRpc.mockResolvedValue({
-      data: { name: 'payer team', email: 'payer@example.test', token: 'b'.repeat(64), success: true, org_name: 'fixture realty' },
-      error: null,
-    });
+    mockRpc.mockResolvedValue({ data: { success: false, error: 'role_change_needs_confirm', role: 'broker' }, error: null });
+    expect(await saveOrgContact('ORG-1', { role: 'it', member_id: 'm-1' })).toEqual({ ok: false, error: 'role_change_needs_confirm', role: 'broker' });
+  });
+
+  it('an IT admin invitation is emailed as "IT admin"; a billing one as billing-only', async () => {
+    mockGate.mockResolvedValue({ ok: true });
     mockSendInvite.mockResolvedValue({ success: true, outcome: 'sent' });
-    const r = await setOrgBillingLogin('ORG-1', true);
-    expect(mockRpc).toHaveBeenCalledWith('org_billing_login_set', { p_org: 'ORG-1', p_enable: true });
-    expect(mockSendInvite.mock.calls[0][0]).toMatchObject({ recipientEmail: 'payer@example.test', billingOnly: true });
-    expect(r).toEqual({ ok: true, note: 'We emailed the billing contact an invitation to their billing-only login.' });
+    mockRpc.mockResolvedValueOnce({ data: { success: true, slot: 'it', token: 'a'.repeat(64), email: 'it@example.test', org_name: 'fixture realty' }, error: null });
+    const r = await invitePerson('ORG-1', { slot: 'it', email: 'it@example.test', firstName: 'Ira', lastName: 'Tech', phone: '' });
+    expect(mockSendInvite.mock.calls[0][0]).toMatchObject({ recipientEmail: 'it@example.test', role: 'IT admin', inviterName: 'fixture admin' });
+    expect(mockSendInvite.mock.calls[0][0].billingOnly).toBeUndefined();
+    expect(r).toMatchObject({ ok: true, emailSent: true });
+    mockRpc.mockResolvedValueOnce({ data: { success: true, slot: 'billing', token: 'b'.repeat(64), email: 'pay@example.test', name: 'payer team', org_name: 'fixture realty' }, error: null });
+    await invitePerson('ORG-1', { slot: 'billing', email: 'pay@example.test', firstName: 'Pat', lastName: 'Payer', phone: '202-555-0132' });
+    expect(mockSendInvite.mock.calls[1][0]).toMatchObject({ recipientEmail: 'pay@example.test', billingOnly: true, role: 'Billing only' });
   });
 
-  it('the database refusal is passed through; 42501 reads not_authorized', async () => {
+  it('the database refusal is passed through and nothing is emailed; 42501 reads not_authorized', async () => {
     mockGate.mockResolvedValue({ ok: true });
-    mockRpc.mockResolvedValueOnce({ data: { success: false, error: 'billing_login_exists' }, error: null });
-    expect(await setOrgBillingLogin('ORG-1', true)).toEqual({ ok: false, error: 'billing_login_exists' });
+    mockRpc.mockResolvedValueOnce({ data: { success: false, error: 'seat_limit_reached' }, error: null });
+    expect(await invitePerson('ORG-1', { slot: 'it', email: 'it@example.test', firstName: '', lastName: '', phone: '' })).toEqual({
+      ok: false,
+      error: 'seat_limit_reached',
+    });
     mockRpc.mockResolvedValueOnce({ data: null, error: { code: '42501', message: 'Not authorized' } });
     expect(await listOrgContacts('ORG-1')).toEqual({ ok: false, error: 'not_authorized' });
     expect(mockSendInvite).not.toHaveBeenCalled();

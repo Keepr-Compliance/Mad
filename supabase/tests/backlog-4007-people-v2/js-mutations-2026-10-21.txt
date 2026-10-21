@@ -1,0 +1,7 @@
+MUTATION APPLIED J15 broker in the IT list broker-portal/lib/people-roles.ts 289629da->fecc9384
+{"mutation": "J15 broker in the IT list", "file": "broker-portal/lib/people-roles.ts", "suite": "__tests__/billing-login-4007/peopleRoles.test.tsx", "failed": 4, "total": 28, "red": true}
+MUTATION APPLIED J16 deactivate refusal unworded broker-portal/lib/actions/deactivateUser.ts e7fec57c->2153c97c
+{"mutation": "J16 deactivate refusal unworded", "file": "broker-portal/lib/actions/deactivateUser.ts", "suite": "__tests__/lib/actions/deactivateUser-service-write.test.ts", "failed": 1, "total": 5, "red": true}
+MUTATION APPLIED J17 cancel-invite billing contact not refused admin-portal/app/api/users/cancel-invite/route.ts 207b6855->a3358b12
+{"mutation": "J17 cancel-invite billing contact not refused", "file": "admin-portal/app/api/users/cancel-invite/route.ts", "suite": "__tests__/people-v2-4007/cancelInviteBillingContact.test.ts", "failed": 1, "total": 2, "red": true}
+SUMMARY 3 of 3 red
