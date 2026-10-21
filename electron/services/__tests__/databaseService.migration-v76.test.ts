@@ -213,9 +213,9 @@ describe("migration v76 — BACKLOG-4018, texts with an empty deal column on the
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("is in the chain as v76, the last entry", () => {
+  it("is in the chain as v76, right after v75", () => {
     const versions = chain(loadService()).map((m) => m.version);
-    expect(versions[versions.length - 1]).toBe(76);
+    expect(versions).toContain(76);
     expect(versions.indexOf(76)).toBe(versions.indexOf(75) + 1);
   });
 
@@ -256,7 +256,10 @@ describe("migration v76 — BACKLOG-4018, texts with an empty deal column on the
   it("U1: broken texts at v75 are re-pointed at v76; thread-only, healthy and orphan-only rows are not", async () => {
     const { svc, db, before, dumpLinks } = await upgradeFrom75("all");
     expect(before).toEqual(BEFORE_ALL);
-    expect(version(db)).toBe(76);
+    // The whole chain ran (v76 and every later version); the head is read from
+    // MIGRATIONS, so a later version does not turn this red.
+    expect(version(db)).toBe(chain(svc).at(-1)!.version);
+    expect(chain(svc).at(-1)!.version).toBeGreaterThanOrEqual(76);
     const after = column(db);
     expect(after).toEqual(AFTER_ALL);
     // The orphan link was the newest on F7-1; no deal row exists, so the column stays empty.
@@ -283,7 +286,7 @@ describe("migration v76 — BACKLOG-4018, texts with an empty deal column on the
   it("U2: no broken texts at v75 -> v76 changes nothing", async () => {
     const { svc, db, before, dumpLinks } = await upgradeFrom75("healthy");
     expect(Object.keys(before).sort()).toEqual(Object.keys(BEFORE_ALL).filter((id) => HEALTHY.test(id)).sort());
-    expect(version(db)).toBe(76);
+    expect(version(db)).toBe(chain(svc).at(-1)!.version);
     expect(column(db)).toEqual(before);
     expect(links(db)).toEqual(dumpLinks);
     rerunV76(svc, db);

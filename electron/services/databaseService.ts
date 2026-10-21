@@ -84,6 +84,7 @@ import {
   V76_CLEAR_DANGLING_SQL,
   V76_REPOINT_SQL,
 } from "./db/migrationV76Sql";
+import { V77_ORPHAN_TEXT_IDS_SQL, V77_REPOINT_SQL, V77_TEXT_DEAL_COLUMN_SQL } from "./db/migrationV77Sql";
 import {
   SCHEMA_VERSION_UPDATE_SQL,
   SCHEMA_VERSION_TABLE_EXISTS_SQL,
@@ -1923,6 +1924,29 @@ class DatabaseService implements IDatabaseService {
         hostLogger.info(
           `[v76] re-pointed ${repointed - leftEmpty} text(s); ${leftEmpty} left empty (newest link names a missing deal)`,
         );
+      },
+    },
+    {
+      version: 77,
+      description:
+        "BACKLOG-3983 repair texts whose deal column names a deal they hold no " +
+        "link to (left by pre-2550 expansion when the deal locked mid-write)",
+      // Data only: no schema change. A fresh install (BASELINE 70) runs it too and
+      // finds nothing to repair. Idempotent: every written row now names a deal it
+      // is linked to, or is NULL; neither qualifies. See migrationV77Sql.ts.
+      migrate: (d) => {
+        const repoint = d.prepare(V77_REPOINT_SQL);
+        const readColumn = d.prepare(V77_TEXT_DEAL_COLUMN_SQL);
+        const ids = d.prepare(V77_ORPHAN_TEXT_IDS_SQL).all() as Array<{ id: string }>;
+        let repointed = 0;
+        let cleared = 0;
+        for (const { id } of ids) {
+          repoint.run(id);
+          const row = readColumn.get(id) as { transaction_id: string | null } | undefined;
+          if (row?.transaction_id) repointed++;
+          else cleared++;
+        }
+        hostLogger.info(`[v77] re-pointed ${repointed} text(s), cleared ${cleared}`);
       },
     },
   ];
