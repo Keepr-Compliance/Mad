@@ -65,12 +65,22 @@ it("every deal not recorded: red banner with every address, no green banner", as
   expect(cb.showError).not.toHaveBeenCalledWith("Failed to export transactions");
 });
 
-it("not-recorded mixed with a real failure: the not-recorded deals are still named", async () => {
+it("not-recorded mixed with a real failure: the not-recorded deals are named, and the failure is counted", async () => {
   exportEnhancedMock.mockImplementation((id: string) =>
     Promise.resolve(id === "tx-a" ? { success: false, error: "disk full" } : NOT_RECORDED(id)),
   );
   const { cb } = await run(["tx-a", "tx-b", "tx-c"]);
-  expect(cb.showError).toHaveBeenCalledWith(PLURAL(2, "2 Fixture Way, 3 Fixture Way"));
+  expect(cb.showError).toHaveBeenCalledTimes(1);
+  expect(cb.showError).toHaveBeenCalledWith(`${PLURAL(2, "2 Fixture Way, 3 Fixture Way")} 1 other export failed.`);
+});
+
+it("one not recorded, two failed outright: both failures are counted", async () => {
+  exportEnhancedMock.mockImplementation((id: string) =>
+    Promise.resolve(id === "tx-b" ? NOT_RECORDED(id) : { success: false, error: "disk full" }),
+  );
+  const { cb } = await run(["tx-a", "tx-b", "tx-c"]);
+  expect(cb.showError).toHaveBeenCalledTimes(1);
+  expect(cb.showError).toHaveBeenCalledWith(`${SINGULAR("2 Fixture Way")} 2 other exports failed.`);
 });
 
 it("all recorded: no red banner", async () => {

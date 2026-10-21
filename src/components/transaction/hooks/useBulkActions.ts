@@ -8,7 +8,10 @@ import {
   describeBlockedExport,
   evaluateExportGate,
 } from "../../../services/exportReviewGate";
-import { bulkExportNotRecordedMessage } from "../../../utils/exportAuditCopy";
+import {
+  bulkExportNotRecordedMessage,
+  bulkExportOtherFailuresSentence,
+} from "../../../utils/exportAuditCopy";
 
 /**
  * Return type for useBulkActions hook
@@ -248,9 +251,12 @@ export function useBulkActions(
           if (notRecorded.length > 0) showError(bulkExportNotRecordedMessage(notRecorded));
         } else if (notRecorded.length > 0) {
           // Nothing was recorded, but files were saved: say so, by name, even
-          // when other deals failed outright. Selection is kept for the retry.
+          // when other deals failed outright; those are counted after it.
+          // Selection is kept for the retry.
           setBulkExportNotice(true);
-          showError(bulkExportNotRecordedMessage(notRecorded));
+          const failedNote =
+            errors.length > 0 ? ` ${bulkExportOtherFailuresSentence(errors.length)}` : "";
+          showError(`${bulkExportNotRecordedMessage(notRecorded)}${failedNote}`);
         } else if (lockedCount > 0 && errors.length === 0) {
           // Nothing exported solely because every selected deal is locked.
           showError(

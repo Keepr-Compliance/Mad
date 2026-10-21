@@ -7,6 +7,7 @@
  */
 
 import { ipcMain, dialog, BrowserWindow } from "electron";
+import * as Sentry from "@sentry/electron/main";
 import { exportUserData, writeExportFile } from "../services/ccpaExportService";
 import logService from "../services/logService";
 import { wrapHandler } from "../utils/wrapHandler";
@@ -34,6 +35,21 @@ export const DATA_EXPORT_NOT_RECORDED_MESSAGE =
 /** The renderer asked for an account that is not the signed-in one. */
 export const DATA_EXPORT_WRONG_ACCOUNT_MESSAGE =
   "Your data could not be exported because the signed-in account could not be confirmed. Sign in again and retry.";
+
+/** Sentry message for an Export My Data whose audit entry was not written. */
+export const DATA_EXPORT_NOT_RECORDED_SENTRY_MESSAGE = "Export My Data audit entry not written";
+
+/**
+ * BACKLOG-3339: Sentry is told once per stretch of failures, not once per
+ * failure. Set by the first not-recorded Export My Data, cleared by the next
+ * recorded one. Same rule as the deal export (`exportCompletion.ts`).
+ */
+let dataExportNotRecordedStretch = false;
+
+/** Test-only: start each test with no stretch open. */
+export function resetDataExportAuditStretchForTests(): void {
+  dataExportNotRecordedStretch = false;
+}
 
 /**
  * Register CCPA/privacy IPC handlers
@@ -133,8 +149,17 @@ export function registerCcpaHandlers(): void {
         if (!isAuditNotRecorded(err)) throw err;
         auditService.recordFailure({ ...auditEntry, errorMessage: "audit_entry_not_written" });
         logService.error("[CcpaHandlers] Export saved but not recorded in the audit log", "CcpaHandlers");
+        if (!dataExportNotRecordedStretch) {
+          dataExportNotRecordedStretch = true;
+          // Tags only: no path, user id or error text.
+          Sentry.captureMessage(DATA_EXPORT_NOT_RECORDED_SENTRY_MESSAGE, {
+            level: "error",
+            tags: { operation: "privacy:export-data", format: "json" },
+          });
+        }
         return { success: false, filePath, notRecorded: true, error: DATA_EXPORT_NOT_RECORDED_MESSAGE };
       }
+      dataExportNotRecordedStretch = false;
 
       logService.info(
         `[CcpaHandlers] Export complete: ${filePath}`,
