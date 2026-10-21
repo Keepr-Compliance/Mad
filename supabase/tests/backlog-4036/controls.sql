@@ -193,6 +193,9 @@ BEGIN
     -- the staff twin let through
     WHEN 'm3c_aal_twin' THEN RETURN pg_temp.mut_fn(rd,
       $q$a.action IN ('organization.created', 'org_plan.assigned')$q$, $q$a.action IN ('organization.created', 'org_plan.assigned', 'billing.deal_saved')$q$);
+    -- the header is trusted for every role except authenticated (anon spoof gets through)
+    WHEN 'm4b_anon_trusts_header' THEN RETURN pg_temp.mut_fn(ac,
+      $q$IF v_role IS DISTINCT FROM 'service_role' THEN$q$, $q$IF v_role = 'authenticated' THEN$q$);
     -- wrong build #3: the header is read first (whenever present)
     WHEN 'm4_header_first' THEN RETURN pg_temp.mut_fn(ac,
       $q$IF v_role IS DISTINCT FROM 'service_role' THEN$q$,
@@ -449,6 +452,13 @@ BEGIN
     s := pg_temp.as_service(format('UPDATE public.organization_members SET role = %L WHERE id = %L', 'agent', pg_temp.mem(o1, u_g1)), 'garbage');
     v := pg_temp.step();
     r := r || jsonb_build_object('C4c_garbage_headers_null', pg_temp.pass(s = 'ok:1' AND pg_temp.one(v, 'member_role_changed', NULL), s || ' ' || v::text));
+
+    -- an anon caller sending the header: it is ignored (auth.uid() is NULL for anon)
+    PERFORM set_config('request.jwt.claims', '{"role":"anon"}', true);
+    PERFORM set_config('request.jwt.claim.sub', '', true);
+    PERFORM set_config('request.headers', pg_temp.hdr(u_sup), true);
+    r := r || jsonb_build_object('C4d_anon_header_ignored', pg_temp.pass(public._activity_actor() IS NULL, coalesce(public._activity_actor()::text, 'null')));
+    PERFORM pg_temp.clear_claims();
 
     -- ===== C5: who can read what =====
     f := pg_temp.feed(u_a, o1);

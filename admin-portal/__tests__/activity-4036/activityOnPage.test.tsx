@@ -24,7 +24,7 @@ const ROWS = [{
   actor_is_staff: false,
   actor_is_subject: false,
 }];
-const state: { perms: Record<string, boolean>; activity: unknown; calls: Array<[string, unknown]> } = { perms: {}, activity: ROWS, calls: [] };
+const state: { perms: Record<string, boolean>; activity: unknown; activityError: unknown; calls: Array<[string, unknown]> } = { perms: {}, activity: ROWS, activityError: null, calls: [] };
 
 function table(name: string) {
   const rows: Record<string, unknown> = {
@@ -47,36 +47,41 @@ vi.mock('@/lib/supabase/server', () => ({
       rpc: async (fn: string, args: Record<string, unknown>) => {
         state.calls.push([fn, args]);
         if (fn === 'has_permission') return { data: state.perms[args.required_permission as string] ?? false };
-        if (fn === 'admin_get_org_activity') return { data: state.activity, error: null };
+        if (fn === 'admin_get_org_activity') return { data: state.activity, error: state.activityError };
         return { data: null };
       },
     },
   }),
 }));
 
-function findRows(node: ReactNode): unknown {
+function findProps(node: ReactNode): Record<string, unknown> | undefined {
   if (!node || typeof node !== 'object') return undefined;
   if (Array.isArray(node)) {
     for (const n of node) {
-      const r = findRows(n);
+      const r = findProps(n);
       if (r !== undefined) return r;
     }
     return undefined;
   }
   const el = node as { type?: unknown; props?: Record<string, unknown> };
-  if (el.type === OrgActivityCardStub) return el.props?.rows;
-  return el.props ? findRows(el.props.children as ReactNode) : undefined;
+  if (el.type === OrgActivityCardStub) return el.props;
+  return el.props ? findProps(el.props.children as ReactNode) : undefined;
+}
+
+async function renderedProps(): Promise<Record<string, unknown> | undefined> {
+  const { default: Page } = await import('@/app/dashboard/organizations/[id]/page');
+  return findProps((await Page({ params: Promise.resolve({ id: 'o1' }) })) as ReactNode);
 }
 
 async function rendered(): Promise<unknown> {
-  const { default: Page } = await import('@/app/dashboard/organizations/[id]/page');
-  return findRows((await Page({ params: Promise.resolve({ id: 'o1' }) })) as ReactNode);
+  return (await renderedProps())?.rows;
 }
 
 describe('Activity on the organization page (BACKLOG-4036)', () => {
   beforeEach(() => {
     state.perms = { 'organizations.view': true };
     state.activity = ROWS;
+    state.activityError = null;
     state.calls = [];
   });
 
@@ -85,8 +90,18 @@ describe('Activity on the organization page (BACKLOG-4036)', () => {
     expect(state.calls).toContainEqual(['admin_get_org_activity', { p_org: 'o1' }]);
   });
 
-  it('renders an empty card when the reader fails', async () => {
+  it('does not flag a failure when the reader succeeds', async () => {
+    expect((await renderedProps())?.failed).toBe(false);
+  });
+
+  it('tells the card the reader failed (error, not an empty history)', async () => {
     state.activity = null;
-    expect(await rendered()).toEqual([]);
+    state.activityError = { message: 'boom' };
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const props = await renderedProps();
+    expect(props?.rows).toEqual([]);
+    expect(props?.failed).toBe(true);
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
   });
 });

@@ -8,21 +8,24 @@
  */
 
 import { useState } from 'react';
-import { Badge, Button, Card, CardTitle, EmptyState } from '@keepr/design-system';
+import { Alert, Badge, Button, Card, CardTitle, EmptyState } from '@keepr/design-system';
 import { formatTimestamp } from '@/lib/format';
 import { activityNote, describeActivity, type ActivityRow } from '@/lib/activity/describeActivity';
 
 /** Rows shown before "Show more". */
 export const ACTIVITY_PAGE = 5;
 
-export function OrgActivityCard({ rows }: { rows: ActivityRow[] }) {
+/** `failed`: the reader errored, so say so instead of claiming there is no activity. */
+export function OrgActivityCard({ rows, failed = false }: { rows: ActivityRow[]; failed?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const visible = expanded ? rows : rows.slice(0, ACTIVITY_PAGE);
 
   return (
     <Card>
       <CardTitle>Activity</CardTitle>
-      {rows.length === 0 ? (
+      {failed ? (
+        <Alert className="mt-2">Couldn&apos;t load activity.</Alert>
+      ) : rows.length === 0 ? (
         <EmptyState card={false} title="No activity yet." />
       ) : (
         <>

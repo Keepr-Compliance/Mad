@@ -101,6 +101,8 @@ export default async function OrganizationDetailPage({
       .order('invited_at', { ascending: false }),
     supabase.rpc('admin_get_org_activity', { p_org: id }),
   ]);
+  const activityFailed = Boolean(activityResult.error) || !Array.isArray(activityResult.data);
+  if (activityFailed) console.error('admin_get_org_activity failed:', activityResult.error?.message ?? 'no rows array');
   const activity: ActivityRow[] = Array.isArray(activityResult.data) ? (activityResult.data as ActivityRow[]) : [];
 
   if (!orgResult.data) {
@@ -217,7 +219,7 @@ export default async function OrganizationDetailPage({
       {shouldShowBillingCard(billing) && <OrgPeopleCard organizationId={org.id} organizationName={org.name} />}
 
       {/* Activity (BACKLOG-4036): every organization, organizations.view */}
-      <OrgActivityCard rows={activity} />
+      <OrgActivityCard rows={activity} failed={activityFailed} />
 
       {/* Pending invitations */}
       {pendingInvitations.length > 0 && (

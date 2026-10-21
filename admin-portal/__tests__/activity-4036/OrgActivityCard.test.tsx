@@ -46,6 +46,12 @@ describe('OrgActivityCard (BACKLOG-4036)', () => {
     expect(screen.queryByRole('listitem')).toBeNull();
   });
 
+  it('shows an error, not the empty state, when the reader failed', () => {
+    render(<OrgActivityCard rows={[]} failed />);
+    expect(screen.getByRole('alert').textContent).toContain("Couldn't load activity.");
+    expect(screen.queryByText('No activity yet.')).toBeNull();
+  });
+
   it('marks staff rows with a Keepr badge and shows the note', () => {
     render(
       <OrgActivityCard
