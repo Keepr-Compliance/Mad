@@ -259,7 +259,7 @@ BEGIN
                                        ELSE 'Keepr' END),
            'actor_is_staff', x.actor_id IS NOT NULL
                              AND EXISTS (SELECT 1 FROM public.internal_roles ir WHERE ir.user_id = x.actor_id),
-           'actor_is_subject', x.actor_id IS NOT NULL AND x.actor_id = sm.user_id,
+           'actor_is_subject', coalesce(x.actor_id = sm.user_id, false),
            'subject_name', coalesce(public._member_person(sm.id) ->> 'name', x.detail ->> 'name', x.detail ->> 'email'),
            'detail', (SELECT coalesce(jsonb_object_agg(k.key, k.value), '{}'::jsonb)
                         FROM jsonb_each(x.detail) k
