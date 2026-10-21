@@ -94,19 +94,20 @@ describe("BACKLOG-4017 picker empty states", () => {
       messages: [
         {
           id: "m-1",
+          user_id: "user-123",
           channel: "sms",
           direction: "inbound",
           body_text: "still unattached text",
           thread_id: "t-1",
           sent_at: "2024-01-18T10:00:00Z",
-          participants: JSON.stringify({ from: "+14155550100", to: ["me"] }),
+          participants: JSON.stringify({ from: "+14155550100", to: ["+14155550101"] }),
         },
       ],
       linkedToDealThreadCount: 0,
       hasTextsAttachedToDeal: false,
     });
     await openContact();
-    expect(await screen.findByText(/still unattached text/)).toBeInTheDocument();
+    expect(await screen.findByTestId("message-thread-card")).toHaveAttribute("data-thread-id", "t-1");
     expect(screen.queryByText(ALL_LINKED_TO_DEAL_MESSAGE)).not.toBeInTheDocument();
     expect(screen.queryByText(NO_TEXTS)).not.toBeInTheDocument();
   });
