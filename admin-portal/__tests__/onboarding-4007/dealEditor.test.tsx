@@ -10,12 +10,14 @@ import type { OrgBilling } from '@/lib/billing/dealRules';
 import { ACTIVE, NO_DEAL, WAITING } from './fixtures';
 
 const calls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+// BACKLOG-3852: the save action reads admin_get_org_billing (business date) before saving; not counted in `calls`.
+let serverBilling: OrgBilling | null = null;
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock('@/lib/supabase/server', () => ({
   getAuthenticatedUser: async () => ({
     user: { id: 'u1' },
-    supabase: { rpc: async (fn: string, args: Record<string, unknown>) => { calls.push({ fn, args }); return { data: { success: true }, error: null }; } },
+    supabase: { rpc: async (fn: string, args: Record<string, unknown>) => { if (fn === 'admin_get_org_billing') return { data: serverBilling, error: null }; calls.push({ fn, args }); return { data: { success: true }, error: null }; } },
   }),
 }));
 
@@ -23,6 +25,7 @@ vi.mock('@/lib/supabase/server', () => ({
 const FAR = '2030-01-01';
 
 async function editor(billing: OrgBilling) {
+  serverBilling = billing;
   const { DealEditor } = await import('@/app/dashboard/organizations/[id]/components/BrokerageBillingCard');
   const onSaved = vi.fn();
   render(<DealEditor organizationId="o1" organizationName="Org" planName="Team" billing={billing} onClose={() => {}} onSaved={onSaved} />);

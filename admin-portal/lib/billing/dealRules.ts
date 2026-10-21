@@ -153,7 +153,19 @@ export function checkStartDate(value: string, businessDate: string, existing: st
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return 'invalid_start_date';
   if (existing != null && value === existing) return null;
   if (value < businessDate) return 'start_date_past';
+  if (value > latestStartDate(businessDate)) return 'start_date_too_far';
   return null;
+}
+
+/** BACKLOG-3852: a new start date can be at most this many days after the business date. */
+export const MAX_START_DAYS_AHEAD = 365;
+
+/** The latest start date allowed on a business date (yyyy-mm-dd + 365 days). */
+export function latestStartDate(businessDate: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(businessDate);
+  if (!m) return businessDate;
+  const t = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) + MAX_START_DAYS_AHEAD * 86_400_000;
+  return new Date(t).toISOString().slice(0, 10);
 }
 
 /** The Stripe subscription line on the Billing card. */
@@ -245,6 +257,7 @@ const MESSAGES: Record<string, string> = {
   reason_required: 'Enter a reason. Every deal change is logged with who and why.',
   billing_contact_required: 'Enter a valid billing contact email.',
   start_date_past: 'Pick today or a later start date.',
+  start_date_too_far: 'Pick a start date within 365 days from today.',
   start_date_locked: 'The start date is locked once the customer has finished setup.',
   invalid_start_date: 'Enter a start date.',
   invalid_price: 'Enter a price per seat.',
