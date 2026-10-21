@@ -89,7 +89,15 @@ export function BillingPage({ caps, orgBillingSetUp, personal, orgSuspension, au
       case 'choose_plan':
         return <ChoosePlanBlock key={block} prices={personal?.prices} suspended={suspended} />;
       case 'seats':
-        return <SeatsBlock key={block} view={seats?.view ?? null} viewer={seats?.viewer ?? null} />;
+        // The button follows the database (can_add); caps.canAddSeats (the action's own gate) can only
+        // take it away, never add it.
+        return (
+          <SeatsBlock
+            key={block}
+            view={seats?.view ? { ...seats.view, canAdd: seats.view.canAdd && caps.canAddSeats } : null}
+            viewer={seats?.viewer ?? null}
+          />
+        );
       case 'manage_billing':
         return <ManageBillingBlock key={block} unavailable={portalUnavailable === true} />;
       case 'credits':
