@@ -27,6 +27,7 @@ export { checklistBridge } from "./checklistBridge";
 export { rcsImportBridge } from "./rcsImportBridge";
 export { entitlementBridge } from "./entitlementBridge";
 export { paymentBridge, paymentEventBridge } from "./paymentBridge";
+export { billingBridge } from "./billingBridge";
 export { supportBridge } from "./supportBridge";
 export { pairingBridge } from "./pairingBridge";
 export { localSyncBridge } from "./localSyncBridge";
