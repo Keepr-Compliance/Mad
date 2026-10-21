@@ -1314,6 +1314,14 @@ function countTextThreadsForTransactionInternal(transactionId: string): number {
   //     (the old LEFT JOIN found no row: thread_id NULL, participants NULL)
   //   - a thread link whose thread has only non-text messages -> no row (filtered)
   //   - a message link -> unchanged: its one message, or the link when it is gone
+  //
+  // BACKLOG-4013: an email link also has message_id NULL and carries the email's thread_id,
+  // which no message shares, so the "no message at all" arm counted every linked email row
+  // as its own text thread. `email_id IS NULL` is the exact discriminator (schema CHECK:
+  // a row with message_id NULL is an email link iff email_id is set). Do not drop the
+  // "no message at all" arm instead: a text thread link whose texts are not on this Mac
+  // yet must still count (threadCountPerLink-3883 and textThreadCountExcludesEmails-4013 R6
+  // both go red if it is removed).
   const statement = sql`
     SELECT
       c.id AS id,
@@ -1325,6 +1333,7 @@ function countTextThreadsForTransactionInternal(transactionId: string): number {
     FROM communications c
     WHERE c.transaction_id = ?
       AND c.message_id IS NULL
+      AND c.email_id IS NULL
       AND c.thread_id IS NOT NULL
       AND (
         EXISTS (

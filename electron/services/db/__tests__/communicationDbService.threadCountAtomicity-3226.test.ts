@@ -82,6 +82,7 @@ import {
   createThreadCommunicationReference,
 } from "../communicationDbService";
 import { batchInsertMessages } from "../syncDbService";
+import { createCommunicationReferenceSync } from "../../messageMatchingService";
 import type { NewCommunication } from "../../../types";
 
 const SCHEMA = fs.readFileSync(
@@ -216,6 +217,50 @@ interface SeamPath {
   checkResult: (value: unknown) => void;
   /** End state after a successful call. */
   checkEnd: () => void;
+  /**
+   * Per-path setup, run unarmed BEFORE the snapshot (BASE, every CRASH@k, NESTED).
+   * Not in beforeEach: the message path would collide with a seeded MSG on
+   * idx_comm_msg_txn, and every path's linkCount would change.
+   */
+  setup?: () => void;
+}
+
+/**
+ * BACKLOG-4013 seed for the email path. A second text message (MSG2, its own thread)
+ * linked through messageMatchingService's real writer, which inserts the link and does
+ * NOT recount: stored count 0, true count 1. The email link's recount must then move
+ * 0 -> 1 INSIDE the transaction, so write 2 is observable by value. An email link
+ * correctly adds nothing to the count (an email is not a text thread), so without this
+ * seed the end value is 0 before and after and a recount that wrote nothing would pass.
+ * Limit: this proves write 2 is the recount and writes a freshly computed value; it
+ * cannot show the email link moved the count. That is held by
+ * textThreadCountExcludesEmails-4013.test.ts (R1, R5).
+ */
+const MSG2 = crypto.randomUUID();
+const THREAD2 = "thread2-" + crypto.randomUUID();
+function seedSecondTextLink(): void {
+  batchInsertMessages(
+    [
+      {
+        id: MSG2,
+        userId: USER,
+        channel: "imessage",
+        externalId: "ext-" + MSG2,
+        direction: "inbound",
+        bodyText: "Second chat",
+        participants: JSON.stringify({ from: "+15555550101", to: ["me"] }),
+        participantsFlat: "+15555550101",
+        threadId: THREAD2,
+        sentAt: "2026-06-02T00:00:00.000Z",
+        hasAttachments: 0,
+        messageType: null,
+        metadata: null,
+      },
+    ],
+    50,
+  );
+  expect(createCommunicationReferenceSync(MSG2, TXN, USER, "auto", 0.9)).toEqual(expect.any(String));
+  expect(threadCount()).toBe(0); // link written, no recount: stored 0, true 1
 }
 
 /** Transcribed from transactionService.ts `_saveCommunications` `commData`. */
@@ -243,11 +288,12 @@ const PATHS: SeamPath[] = [
       expect((v as { email_id: string }).email_id).toBe(EMAIL);
       expect((v as { thread_id: string }).thread_id).toBe(ETHREAD);
     },
+    setup: seedSecondTextLink,
     checkEnd: () => {
-      expect(linkCount()).toBe(1);
-      // The recount ran in the same transaction. Its VALUE for an email link is
-      // a separate finding (an email thread counts as a text thread), filed on
-      // its own; this suite asserts the count moved with the link, not its meaning.
+      // The seeded text link plus the email link.
+      expect(linkCount()).toBe(2);
+      // The recount ran in the same transaction and found the one real text thread
+      // (BACKLOG-4013: the email link itself adds nothing).
       expect(threadCount()).toBe(1);
     },
   },
@@ -302,6 +348,7 @@ describe("BACKLOG-3226: a link and the deal's text-thread count commit together"
   for (const P of PATHS) {
     describe(P.name, () => {
       it(`BASE: exactly ${P.n} writes, every one inside a transaction`, async () => {
+        P.setup?.();
         const before = snapshot();
         armed = true;
         resetInjector(0);
@@ -318,6 +365,7 @@ describe("BACKLOG-3226: a link and the deal's text-thread count commit together"
 
       const ks = Array.from({ length: P.n }, (_, i) => i + 1);
       it.each(ks)("CRASH@%i: the call throws and nothing changes; a retry succeeds", async (k) => {
+        P.setup?.();
         const before = snapshot();
         armed = true;
         resetInjector(k);
@@ -339,6 +387,7 @@ describe("BACKLOG-3226: a link and the deal's text-thread count commit together"
       });
 
       it(`NESTED: inside an outer transaction, a crash at write ${P.n} throws synchronously and rolls back to the savepoint`, () => {
+        P.setup?.();
         const before = snapshot();
         armed = true;
         resetInjector(P.n);
