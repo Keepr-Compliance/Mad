@@ -202,11 +202,13 @@ describe("cost (C7)", () => {
   const ROWS = 65_000;
   const CANDIDATES = 2_409;
 
-  // Asserted per block: a slow file system (Windows + Defender) means more
-  // blocks, each re-reading the names, so the TOTAL lookup grows with unlink
-  // speed (measured 1,959 ms total on a windows-latest runner). What freezes the
-  // main thread is one block; the per-file mutation makes ONE lookup ~35 s.
-  it(`${ROWS} rows x ${CANDIDATES} candidates: one read of the names stays under 1 s`, async () => {
+  // The hard timing assertion lives in the opt-in perf probe
+  // (electron/__tests__/perf/attachmentFileRefs.probe-4040.test.ts): on a
+  // windows-latest runner the TOTAL lookup measured 1,959 ms, because slow
+  // unlinks mean more blocks, each re-reading the names. The default run
+  // asserts the STRUCTURE that makes it cheap — one statement execution per
+  // block, never one per candidate — and logs the measured ms.
+  it(`${ROWS} rows x ${CANDIDATES} candidates: one read of the names per block, never one query per file`, async () => {
     const insert = db.prepare("INSERT INTO attachments (id, message_id, filename, storage_path) VALUES (?, 'm', 'f', ?)");
     db.transaction(() => {
       for (let n = 0; n < ROWS; n++) {
@@ -222,14 +224,26 @@ describe("cost (C7)", () => {
       const name = shared ? `${hash(1_000_000 + n)}.jpg` : `${hash(5_000_000 + n)}.heic`;
       candidates.push(file(name));
     }
+    // Count every statement execution the check makes.
+    let executions = 0;
+    const realPrepare = db.prepare.bind(db);
+    jest.spyOn(db, "prepare").mockImplementation(((q: string) => {
+      const st = realPrepare(q);
+      for (const m of ["get", "all", "iterate", "run"] as const) {
+        const fn = (st as unknown as Record<string, (...a: unknown[]) => unknown>)[m].bind(st);
+        (st as unknown as Record<string, unknown>)[m] = (...a: unknown[]) => (executions++, fn(...a));
+      }
+      return st;
+    }) as typeof db.prepare);
     const r = await removeUnreferencedAttachmentFiles(db, candidates, msgOnly);
     // tests/setup.js silences console; the measured numbers go to stdout.
     process.stdout.write(
       `[4040 C7] rows=${ROWS} candidates=${CANDIDATES} lookupMs=${r.lookupMs.toFixed(1)} maxLookupMs=${r.maxLookupMs.toFixed(1)} longestBlockMs=${r.longestBlockMs.toFixed(1)} ` +
-        `unlinkMs=${r.unlinkMs.toFixed(1)} blocks=${r.blocks} removed=${r.removed} kept=${r.stillReferenced}\n`,
+        `unlinkMs=${r.unlinkMs.toFixed(1)} blocks=${r.blocks} executions=${executions} removed=${r.removed} kept=${r.stillReferenced}\n`,
     );
     expect(r.removed).toBe(Math.floor(CANDIDATES / 2));
     expect(r.stillReferenced).toBe(Math.ceil(CANDIDATES / 2));
-    expect(r.maxLookupMs).toBeLessThan(1000);
+    expect(r.blocks).toBeGreaterThanOrEqual(1);
+    expect(executions).toBe(r.blocks);
   }, 120_000);
 });

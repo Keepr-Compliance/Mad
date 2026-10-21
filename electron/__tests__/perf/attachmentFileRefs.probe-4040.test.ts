@@ -85,9 +85,12 @@ run("BACKLOG-4040 file clean-up cost", () => {
     });
     process.stdout.write(
       `[4040 perf] rows=${ROWS} candidates=${count} lookupMs=${r.lookupMs.toFixed(1)} unlinkMs=${r.unlinkMs.toFixed(1)} ` +
-        `blocks=${r.blocks} longestBlockMs=${longest.toFixed(1)} removed=${r.removed}\n`,
+        `blocks=${r.blocks} longestBlockMs=${longest.toFixed(1)} maxLookupMs=${r.maxLookupMs.toFixed(1)} removed=${r.removed}\n`,
     );
     expect(r.removed).toBe(count);
+    // The timing gate (moved here from the default suite): one read of the
+    // names at 65,000 rows stays well under 1 s.
+    expect(r.maxLookupMs).toBeLessThan(1000);
     expect(longest).toBeLessThan(400);
   });
 });
