@@ -8,7 +8,7 @@
  * that existed before it. Asserts only on text and classes both versions emit.
  */
 
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { resolvePeriod } from '@/lib/reports/period';
 import { buildOpenAttempts, buildSubmissionsReport } from '@/lib/reports/submissions';
@@ -129,5 +129,23 @@ describe('initial sort (R-b)', () => {
     expect(sortable.textContent).toContain('Started');
     expect(sortable.getAttribute('aria-sort')).toBe('descending');
     expect(container.querySelectorAll('th[aria-sort]:not([aria-sort="none"])').length).toBe(1);
+  });
+});
+
+describe('filter bulk actions (founder decision)', () => {
+  it('Select all checks every Outcome option and Clear all unchecks them', () => {
+    mount();
+    // The filter-bar trigger comes first; the table's sort header is also "Outcome".
+    fireEvent.click(screen.getAllByRole('button', { name: /^Outcome/ })[0]);
+    const group = screen.getByRole('group', { name: /outcome/i });
+    const boxes = () => within(group).getAllByRole('checkbox');
+    expect(boxes().length).toBeGreaterThan(1);
+    expect(boxes().every((b) => b.getAttribute('aria-checked') === 'false')).toBe(true);
+
+    fireEvent.click(screen.getByText('Select all'));
+    expect(boxes().every((b) => b.getAttribute('aria-checked') === 'true')).toBe(true);
+
+    fireEvent.click(screen.getByText('Clear all'));
+    expect(boxes().every((b) => b.getAttribute('aria-checked') === 'false')).toBe(true);
   });
 });
