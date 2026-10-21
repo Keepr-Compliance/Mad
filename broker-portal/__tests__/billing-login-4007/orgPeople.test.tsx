@@ -89,6 +89,7 @@ describe('OrgPeoplePanel', () => {
     const a = actions();
     render(<OrgPeoplePanel view={VIEW} actions={a} phone={PHONE} onChanged={jest.fn()} />);
     fireEvent.click(within(row('it')).getByText('Add person'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Create new person' }));
     fireEvent.change(screen.getByLabelText(/Full name/), { target: { value: 'Help Desk' } });
     fireEvent.change(screen.getByLabelText(/Email/), { target: { value: 'it@example.test' } });
     fireEvent.change(screen.getByLabelText(/Phone/), { target: { value: '12' } });
@@ -107,6 +108,32 @@ describe('OrgPeoplePanel', () => {
     });
   });
 
+  it('Add person opens on "Select existing user"; switching to "Create new person" shows the form (BACKLOG-4007)', () => {
+    render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
+    fireEvent.click(within(row('office')).getByText('Add person'));
+    expect(screen.getByRole('radio', { name: 'Select existing user' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Create new person' })).not.toBeChecked();
+    expect(screen.getByLabelText('User')).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Full name/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('radio', { name: 'Create new person' }));
+    expect(screen.getByRole('radio', { name: 'Create new person' })).toBeChecked();
+    expect(screen.getByLabelText(/Full name/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Email/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('User')).not.toBeInTheDocument();
+  });
+
+  it('button variants: Add person and Cancel are secondary, Save is primary, nothing is dark (BACKLOG-4007)', () => {
+    const { container } = render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
+    const add = within(row('office')).getByText('Add person');
+    expect(add.className).toContain('bg-white');
+    expect(add.className).toContain('border-gray-300');
+    fireEvent.click(add);
+    expect(screen.getByText('Cancel').className).toContain('bg-white');
+    expect(screen.getByText('Save').className).toContain('bg-primary-600');
+    expect(container.querySelector('.bg-gray-900')).toBeNull();
+    expect(container.querySelector('.text-white:not(button)')).toBeNull();
+  });
+
   it('the billing contact needs a phone; MSP asks for the company', () => {
     render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
     fireEvent.click(within(row('billing')).getByText('Change'));
@@ -121,7 +148,7 @@ describe('OrgPeoplePanel', () => {
     const a = actions();
     render(<OrgPeoplePanel view={VIEW} actions={a} phone={PHONE} onChanged={jest.fn()} />);
     fireEvent.click(within(row('office')).getByText('Add person'));
-    fireEvent.click(screen.getByRole('tab', { name: 'Select existing user' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Select existing user' }));
     expect(screen.queryByLabelText('Search users')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('User'), { target: { value: 'u-ag' } });
     await act(async () => fireEvent.click(screen.getByText('Save')));
@@ -137,7 +164,7 @@ describe('OrgPeoplePanel', () => {
     });
     render(<OrgPeoplePanel view={VIEW} actions={a} phone={PHONE} onChanged={jest.fn()} />);
     fireEvent.click(within(row('office')).getByText('Add person'));
-    fireEvent.click(screen.getByRole('tab', { name: 'Select existing user' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Select existing user' }));
     await act(async () => fireEvent.change(screen.getByLabelText('Search users'), { target: { value: 'pe' } }));
     await waitFor(() => expect(screen.getByRole('option', { name: /other user/ })).toBeDisabled());
     expect(screen.getByRole('option', { name: /solo user/ })).not.toBeDisabled();
