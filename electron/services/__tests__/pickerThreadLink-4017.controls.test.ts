@@ -32,7 +32,7 @@ import { setDb } from "../db/core/dbConnection";
 import { autoLinkCommunicationsForContact, resetExpansionWatermarksForTests } from "../autoLinkService";
 import { countContactTextsLinkedToDeal, getMessagesByContact } from "../db/messageDbService";
 import { MESSAGE_ROSTER_SQL } from "../db/messageRosterDb";
-import { getCommunicationsWithMessages } from "../db/communicationDbService";
+import { createThreadCommunicationReference, getCommunicationsWithMessages } from "../db/communicationDbService";
 import { unlinkTextThreads } from "../transactionTextThreadsService";
 
 const DRIVER = path.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers");
@@ -163,6 +163,12 @@ maybe("BACKLOG-4017 controls", () => {
        VALUES ('m-4017-nt', ?, 'g-nt', 'sms', 'inbound', ?, ?, NULL, '2025-02-01T10:00:00Z', 'text', 'no thread')`,
     ).run(USER, JSON.stringify({ from: PHONE, to: ["me"] }), PHONE.slice(1));
     expect(picker()).toEqual(["m-4017-nt"]);
+  });
+
+  it("K13 another chat linked to this deal does not hide this contact's unlinked chat (outer row qualifier)", async () => {
+    await createThreadCommunicationReference("ios-chat-4017-other", TXN, USER, "auto", 0.9);
+    expect(picker()).toEqual(IDS);
+    expect(hiddenCount()).toBe(0);
   });
 
   it("K12 empty-state count: zero for a contact with no texts at all", () => {
