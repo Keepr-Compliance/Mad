@@ -303,7 +303,9 @@ $q$, '');
     r := r || jsonb_build_object('T2_sync_suspend_last_admin_kept', pg_temp.pass(
       s = 'ok:1' AND pg_temp.st(o1, u_a1) = 'admin/active' AND pg_temp.logs(o1, 'sync_change_skipped_last_admin') = 2
       AND NOT EXISTS (SELECT 1 FROM public.billing_change_log b WHERE b.organization_id = o1
-                       AND b.action NOT IN ('sync_change_skipped_last_admin')),
+                       AND b.action NOT IN ('sync_change_skipped_last_admin')
+                       -- BACKLOG-4036: member activity rows (fixtures) are not deprovision side effects
+                       AND b.source IS DISTINCT FROM 'trigger'),
       s || ' ' || coalesce(pg_temp.st(o1, u_a1), '?')));
     -- restore as the database owner (passes the guard), so one red does not cascade into the next
     UPDATE public.organization_members SET role = 'admin', license_status = 'active' WHERE id = pg_temp.mem(o1, u_a1);
