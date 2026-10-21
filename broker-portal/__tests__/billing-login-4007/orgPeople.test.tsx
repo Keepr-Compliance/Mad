@@ -11,6 +11,7 @@
  */
 
 import '@testing-library/jest-dom';
+import { useState } from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 
 const mockRpc = jest.fn();
@@ -569,5 +570,157 @@ describe('broker People actions', () => {
     mockRpc.mockResolvedValueOnce({ data: null, error: { code: '42501', message: 'Not authorized' } });
     expect(await listOrgContacts('ORG-1')).toEqual({ ok: false, error: 'not_authorized' });
     expect(mockSendInvite).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A portal stand-in: the "server" is `db`; onChanged re-reads it into a NEW view object, as the
+ * real portals do after a change. Save refuses the members in `refuse` with contact_exists (the
+ * refusal code the RPC uses; a real one for office and MSP adds).
+ */
+function liveHost(role: 'office' | 'msp', initial: Array<Record<string, unknown>>, opts: { refuse?: Set<string>; throwOn?: Set<string> } = {}) {
+  const db = [...initial];
+  const refuse = opts.refuse ?? new Set<string>();
+  const throwOn = opts.throwOn ?? new Set<string>();
+  let seq = 0;
+  const saveCalls: Array<Record<string, unknown>> = [];
+  const removeCalls: string[] = [];
+  const viewNow = (): OrgPeopleView => ({ ...VIEW, contacts: [...VIEW.contacts, ...db.map((c) => ({ ...c }))] as OrgPeopleView['contacts'] });
+  const changed = jest.fn();
+  const a: OrgPeopleActions = {
+    save: jest.fn(async (input) => {
+      saveCalls.push(input as unknown as Record<string, unknown>);
+      if (throwOn.has(input.member_id)) throw new Error('network');
+      if (refuse.has(input.member_id)) return { ok: false as const, error: 'contact_exists' };
+      if (input.id) {
+        const c = db.find((x) => x.id === input.id)!;
+        c.phone = input.phone ? `+1${input.phone.replace(/\D/g, '')}` : c.phone;
+        if (input.company_name !== undefined) c.company_name = input.company_name;
+      } else {
+        const m = MEMBERS.find((x) => x.member_id === input.member_id)!;
+        db.push(contact(`n${++seq}`, role, { member_id: m.member_id, name: m.name, phone: input.phone ? `+1${input.phone.replace(/\D/g, '')}` : null, company_name: input.company_name ?? null }));
+      }
+      return { ok: true as const };
+    }),
+    remove: jest.fn(async (id) => {
+      removeCalls.push(id);
+      const i = db.findIndex((x) => x.id === id);
+      if (i >= 0) db.splice(i, 1);
+      return { ok: true as const };
+    }),
+  };
+  function Host() {
+    const [view, setView] = useState(viewNow);
+    return <OrgPeoplePanel view={view} actions={a} phone={PHONE} onChanged={() => { changed(); setView(viewNow()); }} />;
+  }
+  return { Host, db, refuse, throwOn, saveCalls, removeCalls, changed };
+}
+
+describe('OrgPeoplePanel popup: a save that fails part-way', () => {
+  const JANE = (over: Record<string, unknown> = {}) => contact('o1', 'office', { member_id: 'm-bea', name: 'Jane Doe', phone: '+12025550131', ...over });
+
+  it('the error names the person whose change failed and says the earlier ones were saved; the list re-reads', async () => {
+    const h = liveHost('office', [], { refuse: new Set(['m-un']) });
+    render(<h.Host />);
+    openEdit('office');
+    await pick(/Jane Doe/, 'Add a person');
+    await pick(/Una Unlicensed/, 'Add a person');
+    await click('Save');
+    const alert = within(dialog()).getByText(/Una Unlicensed:/);
+    expect(alert).toHaveTextContent('Una Unlicensed: This person is already listed in this role. The changes before this one were saved.');
+    expect(h.changed).toHaveBeenCalledTimes(1);
+    expect(within(row('office')).getByText('Jane Doe')).toBeInTheDocument();
+    expect(dialog()).toBeInTheDocument();
+  });
+
+  it('the first change failing names the person and does not claim anything was saved', async () => {
+    const h = liveHost('office', [], { refuse: new Set(['m-bea']) });
+    render(<h.Host />);
+    openEdit('office');
+    await pick(/Jane Doe/, 'Add a person');
+    await click('Save');
+    expect(within(dialog()).getByText(/Jane Doe:/)).not.toHaveTextContent('were saved');
+    expect(h.changed).toHaveBeenCalledTimes(1);
+  });
+
+  it('removing a person saved a moment ago in the same popup calls remove, not a silent close', async () => {
+    const h = liveHost('office', [], { refuse: new Set(['m-un']) });
+    render(<h.Host />);
+    openEdit('office');
+    await pick(/Jane Doe/, 'Add a person');
+    await pick(/Una Unlicensed/, 'Add a person');
+    await click('Save');
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Remove Jane Doe' }));
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Remove Una Unlicensed' }));
+    await click('Save');
+    expect(h.removeCalls).toEqual(['n1']);
+    expect(h.db).toEqual([]);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('a second phone edit to a person saved in the failed attempt saves', async () => {
+    const h = liveHost('office', [JANE()], { refuse: new Set(['m-un']) });
+    render(<h.Host />);
+    openEdit('office');
+    fireEvent.change(screen.getByLabelText('Phone for Jane Doe'), { target: { value: '2025550171' } });
+    await pick(/Una Unlicensed/, 'Add a person');
+    await click('Save');
+    expect(h.db[0].phone).toBe('+12025550171');
+    fireEvent.click(within(dialog()).getByRole('button', { name: 'Remove Una Unlicensed' }));
+    fireEvent.change(screen.getByLabelText('Phone for Jane Doe'), { target: { value: '2025550172' } });
+    expect(primary('Save')).toBeEnabled();
+    await click('Save');
+    expect(h.saveCalls.map((c) => [c.member_id, c.id, c.phone])).toEqual([
+      ['m-bea', 'o1', '(202) 555-0171'],
+      ['m-un', undefined, undefined],
+      ['m-bea', 'o1', '(202) 555-0172'],
+    ]);
+    expect(h.db[0].phone).toBe('+12025550172');
+  });
+
+  it('a thrown action does not leave the popup stuck on Saving', async () => {
+    const h = liveHost('office', [], { throwOn: new Set(['m-bea']) });
+    render(<h.Host />);
+    openEdit('office');
+    await pick(/Jane Doe/, 'Add a person');
+    await click('Save');
+    expect(primary('Save')).toBeEnabled();
+    expect(within(dialog()).getByText(/Jane Doe: Something went wrong/)).toBeInTheDocument();
+    expect(within(dialog()).queryByText('Saving…')).not.toBeInTheDocument();
+  });
+
+  it('a thrown save or remove in a single-person popup does not leave it stuck on Saving', async () => {
+    const view = { ...VIEW, contacts: [...VIEW.contacts, contact('i1', 'it', { member_id: 'm-adm', name: 'fixture admin' })] };
+    const save = jest.fn(async () => {
+      throw new Error('network');
+    });
+    const remove = jest.fn(async () => {
+      throw new Error('network');
+    });
+    render(<OrgPeoplePanel view={view} actions={actions({ save, remove })} phone={PHONE} onChanged={jest.fn()} />);
+    openEdit('it');
+    await pick(/Jane Doe/);
+    await click('Save');
+    expect(primary('Save')).toBeEnabled();
+    expect(within(dialog()).getByText('Something went wrong. Please try again.')).toBeInTheDocument();
+    await click('Remove');
+    expect(remove).toHaveBeenCalledTimes(1);
+    expect(primary('Cancel')).toBeEnabled();
+    expect(within(dialog()).queryByText('Saving…')).not.toBeInTheDocument();
+  });
+
+  it('MSP: after a company change fails part-way, the retry sends only the person not yet saved', async () => {
+    const two = [contact('m1', 'msp', { member_id: 'm-adm', name: 'fixture admin', company_name: 'Old IT' }), contact('m2', 'msp', { member_id: 'm-ag', name: 'Member ag', company_name: 'Old IT' })];
+    const h = liveHost('msp', two, { refuse: new Set(['m-ag']) });
+    render(<h.Host />);
+    openEdit('msp');
+    fireEvent.change(screen.getByLabelText(/IT provider company/), { target: { value: 'New IT' } });
+    await click('Save');
+    expect(within(dialog()).getByText(/Member ag:/)).toBeInTheDocument();
+    h.refuse.clear();
+    h.saveCalls.length = 0;
+    await click('Save');
+    expect(h.saveCalls).toEqual([{ id: 'm2', role: 'msp', member_id: 'm-ag', company_name: 'New IT' }]);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });

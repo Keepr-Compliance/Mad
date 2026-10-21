@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { Dropdown } from './dropdown';
+import { Dropdown, dropdownSide } from './dropdown';
 import { DropdownOptions } from './dropdown-options';
 import type { DropdownOption, DropdownProps } from './types';
 import { Dialog, DialogContent, DialogTitle } from '../dialog';
@@ -470,5 +470,25 @@ describe('Dropdown placement inside a kit Dialog', () => {
     const content = screen.getByRole('dialog');
     expect(content.className).not.toMatch(/overflow-(hidden|auto|y-auto|scroll)/);
     expect(content.contains(panel)).toBe(true);
+  });
+});
+
+/**
+ * dropdownSide(rect, viewportHeight): 'top' only when less than 300px is free below the trigger
+ * AND more room is free above it. Rows sweep both sides of each boundary (SR review of #3156).
+ */
+describe('dropdownSide', () => {
+  const rect = (top: number) => ({ top, bottom: top + 36 });
+  const rows: Array<[string, number, number, 'top' | 'bottom']> = [
+    ['short below, more above', 500, 768, 'top'],
+    ['short below, LESS above than below', 200, 480, 'bottom'],
+    ['room below (>= 300)', 100, 768, 'bottom'],
+    ['exactly 300 below, more above', 432, 768, 'bottom'],
+    ['299 below, more above', 433, 768, 'top'],
+    ['100 below, more above', 632, 768, 'top'],
+    ['equal room above and below', 136, 308, 'bottom'],
+  ];
+  it.each(rows)('%s (top %i, viewport %i) -> %s', (_n, top, vh, want) => {
+    expect(dropdownSide(rect(top), vh)).toBe(want);
   });
 });

@@ -23,7 +23,7 @@
  * Copy rule (founder): short sentences; lists show 5 and "Show more".
  */
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { Alert, Badge, Button, Input, Label, type BadgeHue } from '@keepr/design-system';
 import { Dropdown, type DropdownOption } from './dropdown';
@@ -236,6 +236,8 @@ interface MultiRow {
   phone: string;
   /** The phone as saved (formatted), to tell a change from no change. */
   savedPhone: string;
+  /** The company as saved on this person's contact (MSP), to tell a change from no change. */
+  savedCompany: string;
 }
 
 interface EditorState {
@@ -249,7 +251,6 @@ interface EditorState {
   rows: MultiRow[];
   removed: string[];
   company: string;
-  savedCompany: string;
   invite: InviteDraft;
   /** The database asked to confirm a role change: the op to resend, the person, their role. */
   confirm?: { op: string; name: string; from: string };
@@ -270,6 +271,9 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, userHref, read
   const [notice, setNotice] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [touched, setTouched] = useState<Record<string, boolean>>({});
+  // Set after a multi save that changed or failed: the next view from the portal rebuilds the
+  // open editor, so ids and saved values come from the server and not from the stale rows.
+  const resync = useRef(false);
 
   const editable = view.can_edit && !readOnly;
   const rowEditable = (role: OrgContactRole) => {
@@ -320,11 +324,10 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, userHref, read
         ? []
         : people.map((c) => {
             const p = c.phone ? displayPhone(c.phone) : '';
-            return { memberId: c.member_id, contactId: c.id, phone: p, savedPhone: p };
+            return { memberId: c.member_id, contactId: c.id, phone: p, savedPhone: p, savedCompany: c.company_name ?? '' };
           }),
       removed: [],
       company,
-      savedCompany: company,
       invite: EMPTY_INVITE,
       applied: [],
     });
@@ -355,45 +358,55 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, userHref, read
     };
     setBusy(true);
     setError(null);
-    const r = await actions.save(input);
-    setBusy(false);
-    if (!r.ok) {
-      if (r.error === 'role_change_needs_confirm') {
-        setEd({ ...s, confirm: { op: 'single', name: nameOf(s.memberId), from: r.role ?? 'agent' } });
+    try {
+      const r = await actions.save(input);
+      if (!r.ok) {
+        if (r.error === 'role_change_needs_confirm') {
+          setEd({ ...s, confirm: { op: 'single', name: nameOf(s.memberId), from: r.role ?? 'agent' } });
+          return;
+        }
+        setError(orgPeopleErrorMessage(r.error));
         return;
       }
-      setError(orgPeopleErrorMessage(r.error));
-      return;
+      if (r.note) setNotice(r.note);
+      setEd(null);
+      onChanged();
+    } catch {
+      setError(orgPeopleErrorMessage('unexpected'));
+    } finally {
+      setBusy(false);
     }
-    if (r.note) setNotice(r.note);
-    setEd(null);
-    onChanged();
   };
 
   const removeSingle = async (s: EditorState) => {
     if (!s.contactId) return;
     setBusy(true);
     setError(null);
-    const r = await actions.remove(s.contactId);
-    setBusy(false);
-    if (!r.ok) {
-      setError(orgPeopleErrorMessage(r.error));
-      return;
+    try {
+      const r = await actions.remove(s.contactId);
+      if (!r.ok) {
+        setError(orgPeopleErrorMessage(r.error));
+        return;
+      }
+      setEd(null);
+      onChanged();
+    } catch {
+      setError(orgPeopleErrorMessage('unexpected'));
+    } finally {
+      setBusy(false);
     }
-    setEd(null);
-    onChanged();
   };
 
   // ---------------------------------------------------------------- several people: save a diff
   const multiOps = (s: EditorState): Op[] => {
     const ops: Op[] = [];
-    const companyChanged = s.role === 'msp' && s.company.trim() !== s.savedCompany.trim();
     for (const id of s.removed) {
       const c = view.contacts.find((x) => x.id === id);
       ops.push({ key: `rm:${id}`, name: c?.name ?? 'This person', run: () => actions.remove(id) });
     }
     for (const row of s.rows) {
       const isNew = !row.contactId;
+      const companyChanged = s.role === 'msp' && s.company.trim() !== row.savedCompany.trim();
       if (!isNew && row.phone === row.savedPhone && !companyChanged) continue;
       const input: OrgPeopleSaveInput = {
         ...(row.contactId ? { id: row.contactId } : {}),
@@ -403,7 +416,8 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, userHref, read
         ...(s.role === 'msp' ? { company_name: s.company } : {}),
       };
       ops.push({
-        key: `${isNew ? 'add' : 'up'}:${row.memberId}`,
+        // An update's key carries the values, so a later edit of the same person is a new op.
+        key: isNew ? `add:${row.memberId}` : `up:${row.memberId}:${row.phone}:${s.role === 'msp' ? s.company.trim() : ''}`,
         name: nameOf(row.memberId),
         run: (confirm) => actions.save(confirm ? { ...input, confirm_role_change: true } : input),
       });
@@ -416,27 +430,63 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, userHref, read
     let changed = false;
     setBusy(true);
     setError(null);
-    for (const op of multiOps(s)) {
-      const r = await op.run(s.confirm?.op === op.key);
-      if (!r.ok) {
-        setBusy(false);
-        if (r.error === 'role_change_needs_confirm') {
-          setEd({ ...s, applied, confirm: { op: op.key, name: op.name, from: r.role ?? 'agent' } });
-        } else {
-          setEd({ ...s, applied, confirm: undefined });
-          setError(orgPeopleErrorMessage(r.error));
+    try {
+      for (const op of multiOps(s)) {
+        let r: OrgPeopleResult;
+        try {
+          r = await op.run(s.confirm?.op === op.key);
+        } catch {
+          r = { ok: false, error: 'unexpected' };
         }
-        if (changed) onChanged();
-        return;
+        if (!r.ok) {
+          if (r.error === 'role_change_needs_confirm') {
+            setEd({ ...s, applied, confirm: { op: op.key, name: op.name, from: r.role ?? 'agent' } });
+            if (changed) {
+              resync.current = true;
+              onChanged();
+            }
+          } else {
+            // Name whose change failed, say the ones before it were saved, and re-read the list.
+            const earlier = applied.length > 0 ? ' The changes before this one were saved.' : '';
+            setEd({ ...s, applied, confirm: undefined });
+            setError(`${op.name}: ${orgPeopleErrorMessage(r.error)}${earlier}`);
+            resync.current = true;
+            onChanged();
+          }
+          return;
+        }
+        applied.push(op.key);
+        changed = true;
+        if (r.note) setNotice(r.note);
       }
-      applied.push(op.key);
-      changed = true;
-      if (r.note) setNotice(r.note);
+      setEd(null);
+      onChanged();
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
-    setEd(null);
-    onChanged();
   };
+
+  // After a failed or confirm-paused multi save the portal re-reads the list. Rebuild the open
+  // editor from it: saved people get their ids and saved values, so a later remove or phone edit
+  // reaches the database; what the user still wants (unsaved adds, edits, removes) is kept.
+  useEffect(() => {
+    if (!resync.current || !ed || !isMultiRole(ed.role)) return;
+    resync.current = false;
+    const server = view.contacts.filter((c) => c.role === ed.role);
+    const ids = new Set(server.map((c) => c.id));
+    const rows: MultiRow[] = [];
+    for (const c of server) {
+      if (ed.removed.includes(c.id)) continue;
+      const stored = c.phone ? displayPhone(c.phone) : '';
+      const old = ed.rows.find((r) => r.memberId === c.member_id);
+      rows.push({ memberId: c.member_id, contactId: c.id, phone: old ? old.phone : stored, savedPhone: stored, savedCompany: c.company_name ?? '' });
+    }
+    for (const r of ed.rows) {
+      if (!server.some((c) => c.member_id === r.memberId)) rows.push({ memberId: r.memberId, phone: r.phone, savedPhone: '', savedCompany: '' });
+    }
+    setEd({ ...ed, rows, removed: ed.removed.filter((id) => ids.has(id)), applied: [] });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the portal hands over a new view
+  }, [view]);
 
   // ---------------------------------------------------------------- invite
   const sendInvite = async (s: EditorState) => {
@@ -445,25 +495,30 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, userHref, read
     const email = s.invite.email.trim();
     setBusy(true);
     setError(null);
-    const r = await actions.invite(slot, {
-      email,
-      firstName: s.invite.firstName.trim(),
-      lastName: s.invite.lastName.trim(),
-      phone: phoneEditable ? s.invite.phone.trim() : '',
-      ...(slot === 'msp' ? { companyName: s.company.trim() } : {}),
-    });
-    setBusy(false);
-    if (!r.ok) {
-      setError(orgPeopleErrorMessage(r.error));
-      return;
+    try {
+      const r = await actions.invite(slot, {
+        email,
+        firstName: s.invite.firstName.trim(),
+        lastName: s.invite.lastName.trim(),
+        phone: phoneEditable ? s.invite.phone.trim() : '',
+        ...(slot === 'msp' ? { companyName: s.company.trim() } : {}),
+      });
+      if (!r.ok) {
+        setError(orgPeopleErrorMessage(r.error));
+        return;
+      }
+      setNotice(
+        r.emailSent
+          ? `Invite sent to ${email}.`
+          : `The invite was created but the email could not be sent. Share this link with ${email}: ${r.inviteLink ?? ''}`
+      );
+      setEd(null);
+      onChanged();
+    } catch {
+      setError(orgPeopleErrorMessage('unexpected'));
+    } finally {
+      setBusy(false);
     }
-    setNotice(
-      r.emailSent
-        ? `Invite sent to ${email}.`
-        : `The invite was created but the email could not be sent. Share this link with ${email}: ${r.inviteLink ?? ''}`
-    );
-    setEd(null);
-    onChanged();
   };
 
   // ---------------------------------------------------------------- dropdown options
@@ -727,7 +782,7 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, userHref, read
             setEd({
               ...s,
               confirm: undefined,
-              rows: [...s.rows, old ? { memberId: v, contactId: old.id, phone: saved, savedPhone: saved } : { memberId: v, phone: p, savedPhone: '' }],
+              rows: [...s.rows, old ? { memberId: v, contactId: old.id, phone: saved, savedPhone: saved, savedCompany: old.company_name ?? '' } : { memberId: v, phone: p, savedPhone: '', savedCompany: '' }],
               removed: old ? s.removed.filter((id) => id !== old.id) : s.removed,
             });
           }}
