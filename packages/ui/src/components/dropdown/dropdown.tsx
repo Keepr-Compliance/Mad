@@ -13,6 +13,10 @@ import type { DropdownProps } from './types';
  * Inline popover (no portal, no new dependency): a `relative` wrapper and an
  * `absolute z-50` panel under the trigger. An `overflow-hidden` ancestor
  * clips the panel; see README "Dropdown" for where that applies.
+ * - The panel opens upward when the viewport has less than PANEL_MAX px
+ *   below the trigger and more room above (measured on open), so inside a
+ *   fixed, centered kit Dialog near the bottom of the screen it stays on
+ *   screen (BACKLOG-4007 People popups).
  *
  * - The trigger shows the label of `value` looked up in the FULL `options`,
  *   so a search that hides the selected row never blanks the trigger.
@@ -25,6 +29,15 @@ import type { DropdownProps } from './types';
  * - Enter / click pick and return focus to the trigger. A pointerdown
  *   outside closes WITHOUT moving focus, so the user's click target keeps it.
  */
+/** Search field + `max-h-60` listbox + borders: the most the panel can need. */
+const PANEL_MAX = 300;
+
+/** 'top' when there is less than PANEL_MAX below the trigger and more room above. */
+export function dropdownSide(rect: { top: number; bottom: number }, viewportHeight: number): 'top' | 'bottom' {
+  const below = viewportHeight - rect.bottom;
+  return below < PANEL_MAX && rect.top > below ? 'top' : 'bottom';
+}
+
 export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
   const {
     options,
@@ -51,6 +64,7 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
 
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
+  const [side, setSide] = React.useState<'top' | 'bottom'>('bottom');
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
 
@@ -59,6 +73,8 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
 
   const openPanel = React.useCallback(() => {
     if (disabled) return;
+    const rect = triggerRef.current?.getBoundingClientRect();
+    setSide(rect && typeof window !== 'undefined' ? dropdownSide(rect, window.innerHeight) : 'bottom');
     setQuery('');
     setOpen(true);
   }, [disabled]);
@@ -109,55 +125,61 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
           {ariaLabel}
         </span>
       )}
-      <button
-        ref={triggerRef}
-        id={triggerId}
-        type="button"
-        disabled={disabled}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-labelledby={`${labelId} ${valueId}`}
-        aria-invalid={invalid ? true : undefined}
-        aria-describedby={showError ? errorId : undefined}
-        onClick={() => (open ? close(false) : openPanel())}
-        onKeyDown={onTriggerKeyDown}
-        className={cn(
-          'flex min-h-9 w-full items-center gap-2 rounded-md border bg-white px-3 py-1.5 text-left text-sm text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
-          invalid ? 'border-danger-600 ring-1 ring-danger-600' : 'border-gray-300',
-          open && !invalid && 'border-primary-500 ring-2 ring-primary-500',
-          disabled && 'cursor-not-allowed bg-gray-100 text-gray-400'
-        )}
-      >
-        <span
-          id={valueId}
-          data-placeholder={selected ? undefined : ''}
-          className={cn('min-w-0 flex-1 truncate', !selected && 'text-muted-foreground')}
+      <div className="relative">
+        <button
+          ref={triggerRef}
+          id={triggerId}
+          type="button"
+          disabled={disabled}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-labelledby={`${labelId} ${valueId}`}
+          aria-invalid={invalid ? true : undefined}
+          aria-describedby={showError ? errorId : undefined}
+          onClick={() => (open ? close(false) : openPanel())}
+          onKeyDown={onTriggerKeyDown}
+          className={cn(
+            'flex min-h-9 w-full items-center gap-2 rounded-md border bg-white px-3 py-1.5 text-left text-sm text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
+            invalid ? 'border-danger-600 ring-1 ring-danger-600' : 'border-gray-300',
+            open && !invalid && 'border-primary-500 ring-2 ring-primary-500',
+            disabled && 'cursor-not-allowed bg-gray-100 text-gray-400'
+          )}
         >
-          {selected ? selected.label : placeholder}
-        </span>
-        <ChevronDown className="h-4 w-4 flex-shrink-0 text-gray-500" aria-hidden="true" />
-      </button>
-      {open ? (
-        <div data-slot="dropdown-panel" className="absolute z-50 mt-1 w-full rounded-lg bg-white shadow-lg">
-          <DropdownOptions<V>
-            options={options}
-            value={value}
-            onSelect={(v) => {
-              onChange(v);
-              close(true);
-            }}
-            ariaLabel={nameText ?? ''}
-            labelledBy={labelId}
-            searchable={searchable}
-            searchPlaceholder={searchPlaceholder}
-            emptyText={emptyText}
-            query={query}
-            onQueryChange={setQuery}
-            autoFocus
-            onTabOut={() => close(true)}
-          />
-        </div>
-      ) : null}
+          <span
+            id={valueId}
+            data-placeholder={selected ? undefined : ''}
+            className={cn('min-w-0 flex-1 truncate', !selected && 'text-muted-foreground')}
+          >
+            {selected ? selected.label : placeholder}
+          </span>
+          <ChevronDown className="h-4 w-4 flex-shrink-0 text-gray-500" aria-hidden="true" />
+        </button>
+        {open ? (
+          <div
+            data-slot="dropdown-panel"
+            data-side={side}
+            className={cn('absolute z-50 w-full rounded-lg bg-white shadow-lg', side === 'top' ? 'bottom-full mb-1' : 'mt-1')}
+          >
+            <DropdownOptions<V>
+              options={options}
+              value={value}
+              onSelect={(v) => {
+                onChange(v);
+                close(true);
+              }}
+              ariaLabel={nameText ?? ''}
+              labelledBy={labelId}
+              searchable={searchable}
+              searchPlaceholder={searchPlaceholder}
+              emptyText={emptyText}
+              query={query}
+              onQueryChange={setQuery}
+              autoFocus
+              onTabOut={() => close(true)}
+            />
+          </div>
+        ) : null}
+      </div>
       {showError ? (
         <p id={errorId} role="alert" className="mt-1 flex items-center gap-1.5 text-xs text-danger-600">
           <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
