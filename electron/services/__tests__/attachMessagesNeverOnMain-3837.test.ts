@@ -254,6 +254,7 @@ maybe("BACKLOG-3837: Attach Messages never reads on main (real worker, encrypted
     main.prepare("DELETE FROM messages WHERE id LIKE 'x-%'").run();
     main.prepare("UPDATE messages SET transaction_id = NULL WHERE id LIKE 'm%' AND transaction_id = 'tx-1'").run();
     main.prepare("DELETE FROM message_thread_names WHERE thread_id = 'chat-Jordan Lee'").run();
+    main.prepare("DELETE FROM communications WHERE id LIKE 'x-%'").run();
   });
 
   afterAll(async () => {
@@ -418,6 +419,23 @@ maybe("BACKLOG-3837: Attach Messages never reads on main (real worker, encrypted
     // A group name for another chat.
     main.prepare("INSERT INTO message_thread_names (user_id, thread_id, display_name) VALUES (?, 'chat-Jordan Lee', 'Offer Review')").run(USER);
     await check(4);
+    nothingOnMain();
+  }, 900_000);
+
+  it("BACKLOG-4017 K6: a thread-level link, and its removal, invalidate the cached roster", async () => {
+    const spy = jest.spyOn(pool, "queryOnDedicatedWorker");
+    const first = await transactionService.getMessageContactsWithStatus(USER);
+    expect(rosterCalls(spy)).toBe(1);
+    expect(first.contacts.map((c) => c.contact)).toContain("+12005550101");
+    // the row createThreadCommunicationReferenceSync writes (auto-link of a whole chat)
+    main.prepare("INSERT INTO communications (id, user_id, transaction_id, thread_id, link_source, link_confidence, linked_at) VALUES ('x-ct1', ?, 'tx-1', 'chat-+12005550101', 'auto', 0.9, CURRENT_TIMESTAMP)").run(USER);
+    const linked = await transactionService.getMessageContactsWithStatus(USER);
+    expect(rosterCalls(spy)).toBe(2);
+    expect(linked.contacts.map((c) => c.contact)).not.toContain("+12005550101");
+    main.prepare("DELETE FROM communications WHERE id = 'x-ct1'").run();
+    const removed = await transactionService.getMessageContactsWithStatus(USER);
+    expect(rosterCalls(spy)).toBe(3);
+    expect(removed.contacts.map((c) => c.contact)).toContain("+12005550101");
     nothingOnMain();
   }, 900_000);
 });
