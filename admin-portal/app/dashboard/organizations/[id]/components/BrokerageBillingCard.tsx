@@ -40,6 +40,7 @@ import {
   centsFromDollars,
   checkPrice,
   checkStartDate,
+  latestStartDate,
   dealBadge,
   dealErrorMessage,
   formatCents,
@@ -343,7 +344,7 @@ export function DealEditor({
             {dateEditable ? (
               <>
                 <Label htmlFor="deal-start-date" required>Start date</Label>
-                <Input id="deal-start-date" type="date" min={billing.business_date} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+                <Input id="deal-start-date" type="date" min={billing.business_date} max={latestStartDate(billing.business_date)} value={startDate} onChange={(e) => setStartDate(e.target.value)} />
                 <FieldHelp>Today or later. Billing starts on this date or when the broker finishes setup, whichever is later.</FieldHelp>
               </>
             ) : (

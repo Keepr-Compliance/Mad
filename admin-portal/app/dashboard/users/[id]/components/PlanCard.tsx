@@ -3,14 +3,14 @@
  *
  * The line comes from the shared plan rule (@keepr/shared planLine), the same
  * rule the broker portal's Billing page uses. It carries the renewal (or end)
- * date, never a price or a charge amount.
+ * date. The price line (BACKLOG-3852) is passed in only for staff with billing.view.
  */
 
 import { CreditCard, AlertTriangle } from 'lucide-react';
 import { Card } from '@keepr/design-system';
 import type { PlanLine } from '@keepr/shared';
 
-export function PlanCard({ line }: { line: PlanLine | null }) {
+export function PlanCard({ line, amount = null }: { line: PlanLine | null; amount?: string | null }) {
   return (
     <Card>
       <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider flex items-center gap-2">
@@ -27,6 +27,11 @@ export function PlanCard({ line }: { line: PlanLine | null }) {
               </span>
             )}
           </p>
+          {amount && (
+            <p className="text-sm text-gray-700" data-testid="plan-amount">
+              {amount}
+            </p>
+          )}
           {line.warning && (
             <p className="text-xs text-warning-600 flex items-center gap-1.5" data-testid="plan-warning">
               <AlertTriangle className="h-3.5 w-3.5" />

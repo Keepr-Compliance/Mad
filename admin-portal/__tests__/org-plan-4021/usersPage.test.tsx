@@ -21,7 +21,7 @@ function OrgCardStub() { return null; }
 vi.mock('@/app/dashboard/users/[id]/components/OrganizationCard', () => ({ OrganizationCard: OrgCardStub }));
 vi.mock('@/lib/billing-queries', () => ({ getBillingData: async () => ({ errorMessages: [], creditBalance: 0 }) }));
 vi.mock('@/lib/suspension-queries', () => ({ getSuspensionStatus: async () => null }));
-vi.mock('@/lib/planLines', () => ({ readPlanLines: async () => ({}), validPlanLineIds: () => null }));
+vi.mock('@/lib/planLines', () => ({ readPlanLinesWithOrgs: async () => ({ lines: {}, brokerageOrgIds: {} }), validPlanLineIds: () => null }));
 
 const PLAN_ROW = { plan_id: 'p1', plans: { id: 'p1', name: 'Invented Team Plan', tier: 'team' } };
 const state: { embed: unknown } = { embed: null };
