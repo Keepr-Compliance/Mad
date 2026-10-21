@@ -339,8 +339,10 @@ const EXEMPT: Record<string, string> = {
  *   - A write inside a NESTED PROMISE-RETURNING LITERAL is attributed to the
  *     unit that encloses it, so the headline can name a function that issues no
  *     writes. Two of this round's entries — `gmailFetchService::initialize` and
- *     `googleContactProvider::fetchContacts` — are exactly that: both only
- *     REGISTER the `oauth2Client.on("tokens", ...)` callback holding the writes.
+ *     `googleContactProvider::fetchContacts` — were exactly that: both only
+ *     REGISTERED the `oauth2Client.on("tokens", ...)` callback holding the
+ *     writes. BACKLOG-3306 moved those writes into one UPDATE and the entries
+ *     left the list.
  *     Pre-existing (`captureBody` does the same for an `export function`); the
  *     class widening only put it on more units. Population unmeasured. Tracked
  *     by BACKLOG-3311, which also names the in-tree fix shape.
@@ -441,20 +443,9 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // paraphrased from the code — a reader following the citation must find the
   // same sentence. Measured at `abaa1ff20`; line numbers drift, the keys do not.
   //
-  // TWO SITES SHARE ONE ITEM. BACKLOG-3306 is one duplicated defect at two
-  // call sites, so it takes two entries. Deleting only one of them when 3306
-  // ships leaves the other as `fixedButStillListed` and reddens the shrink
-  // test — which is the intended behaviour, not a trap.
-  //
-  // NEITHER OF THESE TWO UNITS ACTUALLY WRITES. BACKLOG-3311: the reported
-  // function only REGISTERS the callback that holds the writes. The entries are
-  // keyed on what this guard reports, so they will need re-keying when 3311
-  // lands. Written down because an entry pointing at the wrong unit survives
-  // the fix and then blocks the "may only SHRINK" assertion.
-  "electron/services/gmailFetchService.ts::initialize":
-    "BACKLOG-3306 — one token column updated and the other stale: a stored new refresh_token beside an expired access_token. Self-healing, which is why it is low: the next API call 401s, the refresh fires again and both are written.",
-  "electron/services/providers/googleContactProvider.ts::fetchContacts":
-    "BACKLOG-3306 — the same duplicated token-refresh callback as gmailFetchService above, writing the two UPDATEs in the opposite order; a crash leaves one token column updated and the other stale.",
+  // BACKLOG-3306 had two entries here, `gmailFetchService.ts::initialize` and
+  // `googleContactProvider.ts::fetchContacts`. Both now save a refresh through
+  // one UPDATE in googleTokenRefreshWriter.ts, so neither is listed.
   "electron/services/transactionService/transactionService.ts::_saveCommunications":
     "BACKLOG-3308 — an emails row with no communications row: the email is stored but not attached to the transaction, so it does not appear on it. Partially self-healing, but only if a scan re-runs and nothing schedules one on this condition.",
 
