@@ -207,9 +207,9 @@ $q$, '');
   IF false THEN$q$);
     -- R6: org flag ignored / member flag ignored
     WHEN 'idp_org_flag_ignored' THEN RETURN pg_temp.mut_fn(im,
-      $q$coalesce(idp.attribute_mapping ->> 'group_sync_enabled', '') = 'true'$q$, 'true');
+      $q$(idp.attribute_mapping -> 'group_sync_enabled') = 'true'::jsonb$q$, 'true');
     WHEN 'idp_member_flag_ignored' THEN RETURN pg_temp.mut_fn(im,
-      $q$       AND coalesce(m.group_sync_enabled, true))$q$, ')');
+      $q$       AND m.group_sync_enabled IS DISTINCT FROM false)$q$, ')');
     -- R7: a broker may set the IT contact; an IT admin may set the billing contact
     WHEN 'r7_broker_sets_it' THEN RETURN pg_temp.mut_fn(sv,
       $q$OR (v_role IN ('it', 'msp') AND v_caller NOT IN ('staff', 'admin', 'it_admin')) THEN$q$,
@@ -396,13 +396,16 @@ $q$, '');
       (o6, u_b6, 'admin', 'active', now(), now()), (o6, u_g6, 'agent', 'active', now(), now()),
       (o6, u_f6, 'agent', 'active', now(), now()),
       (op, u_pers, 'admin', 'active', now(), now());
-    UPDATE public.organization_members SET group_sync_enabled = NULL WHERE organization_id = o6 AND user_id = u_g6;
+    -- BACKLOG-4027: only a SCIM / directory-sync member is IdP-managed (founder decision A)
+    UPDATE public.organization_members SET group_sync_enabled = NULL, provisioned_by = 'scim' WHERE organization_id = o6 AND user_id = u_g6;
+    UPDATE public.organization_members SET provisioned_by = 'scim' WHERE organization_id = o6 AND user_id = u_f6;
     UPDATE public.organization_members SET group_sync_enabled = false WHERE organization_id = o6 AND user_id = u_f6;
     -- o2 has an IdP with group mapping OFF; its agent is not opted out (flag NULL)
-    UPDATE public.organization_members SET group_sync_enabled = NULL WHERE organization_id = o2 AND user_id = u_xa;
+    UPDATE public.organization_members SET group_sync_enabled = NULL, provisioned_by = 'scim' WHERE organization_id = o2 AND user_id = u_xa;
     INSERT INTO public.organization_identity_providers (organization_id, provider_type, display_name, attribute_mapping, is_active)
-    VALUES (o6, 'azure_ad', 'P4007V IdP', '{"group_sync_enabled":"true"}', true),
-           (o2, 'azure_ad', 'P4007V IdP off', '{"group_sync_enabled":"false"}', true);
+    -- BACKLOG-4027: the helper reads a JSON boolean, as the edge functions do
+    VALUES (o6, 'azure_ad', 'P4007V IdP', '{"group_sync_enabled":true}', true),
+           (o2, 'azure_ad', 'P4007V IdP off', '{"group_sync_enabled":false}', true);
     -- a phone for the target agent (u_ag2), set by the person
     PERFORM pg_temp.as_user(u_ag2);
     PERFORM public.my_phone_set('202-555-0111');

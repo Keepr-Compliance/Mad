@@ -26,6 +26,7 @@ export { buildTicketReplyNotification } from './templates/ticket-reply-notificat
 export { buildTicketAssignmentNotification } from './templates/ticket-assignment-notification';
 export { buildTicketResolvedEmail } from './templates/ticket-resolved';
 export { buildSeatLimitReachedEmail } from './templates/seat-limit-reached';
+export { buildLastAdminKeptEmail } from './templates/last-admin-kept';
 export { buildAccountSuspendedEmail } from './templates/account-suspended';
 export { buildAccountManagerAlertEmail } from './templates/account-manager-alert';
 
@@ -44,6 +45,7 @@ export type {
   TicketAssignmentNotificationParams,
   TicketResolvedParams,
   SeatLimitReachedParams,
+  LastAdminKeptParams,
   AccountSuspendedParams,
   AccountManagerAlertParams,
   SetupReminderParams,
@@ -68,6 +70,7 @@ import { buildTicketConfirmationEmail } from './templates/ticket-confirmation';
 import { buildTicketReplyNotification } from './templates/ticket-reply-notification';
 import { buildTicketAssignmentNotification } from './templates/ticket-assignment-notification';
 import { buildSeatLimitReachedEmail } from './templates/seat-limit-reached';
+import { buildLastAdminKeptEmail } from './templates/last-admin-kept';
 import { buildTicketResolvedEmail } from './templates/ticket-resolved';
 import { buildAccountSuspendedEmail } from './templates/account-suspended';
 import { buildAccountManagerAlertEmail } from './templates/account-manager-alert';
@@ -84,6 +87,7 @@ import type {
   TicketAssignmentNotificationParams,
   TicketResolvedParams,
   SeatLimitReachedParams,
+  LastAdminKeptParams,
   AccountSuspendedParams,
   AccountManagerAlertParams,
   SetupReminderParams,
@@ -262,6 +266,21 @@ export async function sendSeatLimitReachedEmail(
     text,
     emailType: 'other',
     logMetadata: { kind: 'seat_limit_reached', seatKind: params.kind },
+  });
+}
+
+/**
+ * The brokerage's last active admin was kept (BACKLOG-4027). Logged as email_type 'other'.
+ */
+export async function sendLastAdminKeptEmail(params: LastAdminKeptParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildLastAdminKeptEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: { kind: 'last_admin_kept', lastAdminKind: params.kind, source: params.source },
   });
 }
 
