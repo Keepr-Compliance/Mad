@@ -2625,9 +2625,14 @@ class DatabaseService implements IDatabaseService {
     return transactionContactDb.getRemovedTransactionContacts(transactionId);
   }
 
-  /** BACKLOG-2367: clear a junction tombstone. False when there was nothing to restore. */
-  async restoreContactToTransaction(transactionId: string, contactId: string): Promise<boolean> {
-    return transactionContactDb.restoreContactToTransaction(transactionId, contactId);
+  /**
+   * BACKLOG-2367: clear a junction tombstone. False when there was nothing to
+   * restore. BACKLOG-3339 slice T: synchronous, called inside the
+   * `transactions:restore-contact` handler's `dbTransaction` with its audit
+   * entry. The async delegate was removed: nothing called it.
+   */
+  restoreContactToTransactionSync(transactionId: string, contactId: string): boolean {
+    return transactionContactDb.restoreContactToTransactionSync(transactionId, contactId);
   }
 
   async batchUpdateContactAssignments(transactionId: string, operations: transactionContactDb.ContactAssignmentOperation[]): Promise<void> {

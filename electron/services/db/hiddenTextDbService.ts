@@ -5,15 +5,20 @@
  *
  * Each export is a PLAIN function returning `Promise<T>`, never `async`
  * (BACKLOG-2960): the driver call is evaluated before `Promise.resolve` wraps
- * its value, so a failure throws before the promise exists. Every write here is
- * ONE statement, so none needs a transaction.
+ * its value, so a failure throws before the promise exists.
  *
- * No `*Sync` twins, deliberately. `syncTwin.guard.test.ts` requires every
- * paired `*Sync` export to be reached from a transaction body, and nothing
- * calls these from one. A twin is added when a body first needs it.
+ * ## The `*Sync` twins (BACKLOG-3339 slice T)
+ *
+ * `hideTextFromExportSync` and `unhideTextFromExportSync` are the raw write,
+ * called from the hide / unhide handlers' `dbTransaction` body together with
+ * the audit entry, so the change and its entry commit together or not at all.
+ * The promise halves have no production caller: they exist because
+ * `syncTwin.guard.test.ts` requires every `*Sync` twin to have one, and they
+ * are fixture producers for the tests. Each runs its twin in its own
+ * `dbTransaction`.
  */
 
-import { dbGet, dbRun } from "./core/dbConnection";
+import { dbGet, dbRun, dbTransaction } from "./core/dbConnection";
 import {
   HIDE_TEXT_FROM_EXPORT_SQL,
   IS_TEXT_HIDDEN_FROM_EXPORT_SQL,
@@ -32,26 +37,46 @@ export interface HideTextInput extends HiddenTextKey {
 }
 
 /**
- * Record a hide. Resolves true when a row was added; false when the message is
+ * Record a hide. Returns true when a row was added; false when the message is
  * not a linked, non-reaction text of this transaction, or is already hidden.
+ * Raw statement: the caller owns the transaction.
  */
-export function hideTextFromExport(input: HideTextInput): Promise<boolean> {
+export function hideTextFromExportSync(input: HideTextInput): boolean {
   const result = dbRun(HIDE_TEXT_FROM_EXPORT_SQL, [
     input.userId,
     input.messageId,
     input.transactionId,
   ]);
-  return Promise.resolve(result.changes > 0);
+  return result.changes > 0;
 }
 
-/** Remove every hide matching this text (by id or provider id). Resolves the count. */
-export function unhideTextFromExport(key: HiddenTextKey): Promise<number> {
+/**
+ * No production caller: the promise half that syncTwin.guard requires for
+ * `hideTextFromExportSync`; a fixture producer for the hidden-text tests.
+ */
+export function hideTextFromExport(input: HideTextInput): Promise<boolean> {
+  return Promise.resolve(dbTransaction(() => hideTextFromExportSync(input)));
+}
+
+/**
+ * Remove every hide matching this text (by id or provider id). Returns the
+ * count. Raw statement: the caller owns the transaction.
+ */
+export function unhideTextFromExportSync(key: HiddenTextKey): number {
   const result = dbRun(UNHIDE_TEXT_FROM_EXPORT_SQL, [
     key.transactionId,
     key.messageId,
     key.messageId,
   ]);
-  return Promise.resolve(result.changes);
+  return result.changes;
+}
+
+/**
+ * No production caller: the promise half that syncTwin.guard requires for
+ * `unhideTextFromExportSync`; a fixture producer for the hidden-text tests.
+ */
+export function unhideTextFromExport(key: HiddenTextKey): Promise<number> {
+  return Promise.resolve(dbTransaction(() => unhideTextFromExportSync(key)));
 }
 
 /** Read back whether this text is hidden in this transaction. */

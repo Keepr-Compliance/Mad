@@ -17,6 +17,7 @@ import {
   dealChangeUserError,
   isAuditNotRecorded,
 } from "../services/dealChangeAudit";
+import { dealToggleUserError } from "../services/dealToggleAudit";
 import { dbTransaction } from "../services/db/core/dbConnection";
 import logService from "../services/logService";
 import emailSyncService from "../services/emailSyncService";
@@ -1114,10 +1115,14 @@ export function registerTransactionCrudHandlers(
       const lockedRefusal = refuseIfDealLocked(validatedTransactionId as string, "add-contact");
       if (lockedRefusal) return lockedRefusal;
 
-      const restored = await databaseService.restoreContactToTransaction(
+      // BACKLOG-3339 slice T: the owner is read BEFORE the change, and a missing
+      // deal is refused (no "unknown" owner: the entry's user is a foreign key).
+      const transaction = await databaseService.getTransactionById(
         validatedTransactionId as string,
-        validatedContactId as string,
       );
+      if (!transaction) {
+        return { success: false, error: "Transaction not found" };
+      }
 
       // Audit the restore. Removal writes a trail entry; a compliance product
       // that records who took a party off a deal but not who put them back has
@@ -1138,18 +1143,29 @@ export function registerTransactionCrudHandlers(
       // the specific act — exactly the idiom BACKLOG-2365 used for removal,
       // where both delete and un-import log CONTACT_DELETE and are told apart
       // by `metadata.reason`.
-      if (restored) {
-        const transaction = await databaseService.getTransactionById(
-          validatedTransactionId as string,
-        );
-        await auditService.log({
-          userId: transaction?.user_id || "unknown",
-          action: "TRANSACTION_UPDATE",
-          resourceType: "TRANSACTION",
-          resourceId: validatedTransactionId as string,
-          metadata: { contactId: validatedContactId, reason: "contact_restore" },
-          success: true,
+      //
+      // BACKLOG-3339 slice T: the restore and its entry commit together or not
+      // at all. A failed entry cancels the restore.
+      const restoreEntry = {
+        userId: transaction.user_id,
+        action: "TRANSACTION_UPDATE" as const,
+        resourceType: "TRANSACTION" as const,
+        resourceId: validatedTransactionId as string,
+        metadata: { contactId: validatedContactId, reason: "contact_restore" },
+      };
+      let restored: boolean;
+      try {
+        restored = dbTransaction(() => {
+          const changed = databaseService.restoreContactToTransactionSync(
+            validatedTransactionId as string,
+            validatedContactId as string,
+          );
+          if (changed) auditService.recordInTransaction(restoreEntry);
+          return changed;
         });
+      } catch (error) {
+        auditService.recordFailure({ ...restoreEntry, errorMessage: dealChangeFailureCode(error) });
+        throw dealToggleUserError("restoreContact", error);
       }
 
       logService.info("Restored contact to transaction", "Transactions", {

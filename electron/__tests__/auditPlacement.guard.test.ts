@@ -73,7 +73,6 @@ const AUDIT_SERVICE_FILE = "electron/services/auditService.ts";
 const AUDITED_SITES_TOTAL = 38;
 
 type Reason = string;
-const R_SLICE2 = "BACKLOG-3339 slice 2 converts (deal detail toggles); seam check pending";
 const R_REMOTE =
   "record-only: the change is a cloud write, which cannot share a local transaction";
 const R_SESSION =
@@ -83,11 +82,7 @@ const R_UNREACHABLE = "no UI caller; waits on the founder's wire/delete ruling (
 
 /** Shrink-only. Key -> exact number of `log(` calls, and why it may stay. */
 const ALLOWLIST: Record<string, { count: number; reason: Reason }> = {
-  // A — deal / compliance
-  "electron/handlers/transactionCrudHandlers.ts::transactions:restore-contact::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE2 },
-  "electron/handlers/hiddenTextHandlers.ts::transactions:hide-text-from-export::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE2 },
-  "electron/handlers/hiddenTextHandlers.ts::transactions:unhide-text-from-export::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE2 },
-  "electron/handlers/checklistHandlers.ts::auditChecklistAct::TRANSACTION_UPDATE": { count: 1, reason: R_SLICE2 },
+  // A — deal / compliance: none left (BACKLOG-3339 slice T converted the last 4)
   // C2, D — remote changes
   "electron/handlers/userSettingsHandlers.ts::user:set-phone-type-cloud::SETTINGS_CHANGE": { count: 1, reason: R_REMOTE },
   "electron/handlers/transactionExportHandlers.ts::transactions:submit::TRANSACTION_SUBMIT": { count: 1, reason: R_REMOTE },

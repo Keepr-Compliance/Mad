@@ -18,10 +18,10 @@ import { dealChangeUserError } from "./dealChangeAudit";
 export type ContactChangeKind = "save" | "remove" | "restore" | "phoneType";
 
 export const CONTACT_AUDIT_NOT_SAVED_MESSAGE: Record<ContactChangeKind, string> = {
-  save: "The contact was not saved because its audit record could not be saved. Please try again.",
-  remove: "The contact was not removed because its audit record could not be saved. Please try again.",
-  restore: "The contact was not restored because its audit record could not be saved. Please try again.",
-  phoneType: "Your phone type was not saved because its audit record could not be saved. Please try again.",
+  save: "The contact was not saved because its audit record could not be saved. Please try again. If this keeps happening, contact support.",
+  remove: "The contact was not removed because its audit record could not be saved. Please try again. If this keeps happening, contact support.",
+  restore: "The contact was not restored because its audit record could not be saved. Please try again. If this keeps happening, contact support.",
+  phoneType: "Your phone type was not saved because its audit record could not be saved. Please try again. If this keeps happening, contact support.",
 };
 
 /** Edit / remove / restore of a contact row that is not there: nothing is written. */

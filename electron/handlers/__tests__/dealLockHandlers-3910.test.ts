@@ -66,8 +66,9 @@ jest.mock("../../services/transactionService", () => ({
 jest.mock("../../services/databaseService", () => ({
   __esModule: true,
   default: {
-    restoreContactToTransaction: jest.fn(() => Promise.resolve(false)),
-    getTransactionById: jest.fn(() => Promise.resolve(null)),
+    restoreContactToTransactionSync: jest.fn(() => false),
+    // BACKLOG-3339 slice T: restore-contact reads the deal's owner before its audit transaction.
+    getTransactionById: jest.fn((id: string) => Promise.resolve({ id, user_id: "user-3910" })),
     // BACKLOG-3339: the write transactions:update makes, inside its audit transaction.
     updateTransactionSync: jest.fn(),
   },
@@ -199,7 +200,7 @@ const EDITS: Edit[] = [
     channel: "transactions:restore-contact",
     args: [DEAL, CONTACT],
     refusedEdit: "add-contact",
-    downstream: () => jest.mocked(databaseService.restoreContactToTransaction) as unknown as jest.Mock,
+    downstream: () => jest.mocked(databaseService.restoreContactToTransactionSync) as unknown as jest.Mock,
   },
   {
     name: "attach emails (link-emails)",

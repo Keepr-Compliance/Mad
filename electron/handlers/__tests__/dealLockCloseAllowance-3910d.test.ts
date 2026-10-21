@@ -50,7 +50,7 @@ jest.mock("../../services/transactionService", () => ({
 jest.mock("../../services/databaseService", () => ({
   __esModule: true,
   default: {
-    restoreContactToTransaction: jest.fn(() => Promise.resolve(false)),
+    restoreContactToTransactionSync: jest.fn(() => false),
     getTransactionById: jest.fn(() => Promise.resolve(null)),
     // BACKLOG-3339: the write transactions:update / bulk-update-status make.
     updateTransactionSync: jest.fn(),

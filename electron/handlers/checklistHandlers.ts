@@ -65,12 +65,15 @@ import type { IpcMainInvokeEvent } from "electron";
 import auditService from "../services/auditService";
 import checklistTemplateService from "../services/checklistTemplateService";
 import databaseService from "../services/databaseService";
+import { dbTransaction } from "../services/db/core/dbConnection";
+import { dealChangeFailureCode } from "../services/dealChangeAudit";
+import { dealToggleUserError } from "../services/dealToggleAudit";
 import {
   addChecklistLink,
   getChecklistsForTransaction,
-  removeChecklist,
   removeChecklistLink,
-  selectChecklistTemplate,
+  removeChecklistSync,
+  selectChecklistTemplateSync,
   setChecklistItemChecked,
   setChecklistItemNote,
   setChecklistLinkIncludeOutsideDates,
@@ -298,28 +301,50 @@ function parseArgs<T>(
   return parsed.data;
 }
 
+type ChecklistActReason = "checklist_selected" | "checklist_removed";
+
 /**
- * Write one audit row for an act that destroys or replaces a whole checklist.
+ * Write one audit row for an act that adds or removes a whole checklist.
+ *
+ * BACKLOG-3339 slice T: synchronous, and called ONLY inside the add / remove
+ * handler's `dbTransaction`, after the change. The entry and the change commit
+ * together or not at all; a failed entry throws and cancels the change.
+ * `recordInTransaction` throws if no transaction is open.
  *
  * Ticking an item writes none: `checked_at` IS the record of it, held against
  * `is_checked` by a CHECK in schema.sql so the two cannot disagree. A row per
  * tick would duplicate that while adding a write to the most frequent action in
  * the feature.
  */
-async function auditChecklistAct(
+function recordChecklistActSync(
+  ownerUserId: string,
   transactionId: string,
-  reason: "checklist_selected" | "checklist_removed",
+  reason: ChecklistActReason,
   extra: Record<string, unknown> = {},
-): Promise<void> {
-  const transaction = await databaseService.getTransactionById(transactionId);
-  if (!transaction) return;
-  await auditService.log({
-    userId: transaction.user_id,
+): void {
+  auditService.recordInTransaction({
+    userId: ownerUserId,
     action: "TRANSACTION_UPDATE",
     resourceType: "TRANSACTION",
     resourceId: transactionId,
     metadata: { reason, transactionId, ...extra },
-    success: true,
+  });
+}
+
+/** Record a cancelled checklist act, after the rollback (fixed code only). */
+function recordChecklistActFailure(
+  ownerUserId: string,
+  transactionId: string,
+  reason: ChecklistActReason,
+  error: unknown,
+): void {
+  auditService.recordFailure({
+    userId: ownerUserId,
+    action: "TRANSACTION_UPDATE",
+    resourceType: "TRANSACTION",
+    resourceId: transactionId,
+    metadata: { reason, transactionId },
+    errorMessage: dealChangeFailureCode(error),
   });
 }
 
@@ -378,8 +403,9 @@ export function registerChecklistHandlers(): void {
    *
    * The items come from the template listing, not from the renderer: a caller
    * that supplied its own items could write any title it liked into a row the
-   * export renders. The whole copy is one database transaction inside
-   * `selectChecklistTemplate`.
+   * export renders. The whole copy and its audit entry are one database
+   * transaction (BACKLOG-3339 slice T: `selectChecklistTemplateSync` inside the
+   * handler's `dbTransaction`).
    */
   ipcMain.handle(
     "checklists:select-template",
@@ -415,24 +441,39 @@ export function registerChecklistHandlers(): void {
           return { success: false, error: CHECKLIST_TEMPLATE_NOT_FOUND_ERROR };
         }
 
-        const result = await selectChecklistTemplate({
-          transactionId: args.transactionId,
-          templateId: template.id,
-          templateName: template.name,
-          items: template.items.map((item) => ({
-            title: item.title,
-            description: item.description,
-            isRequired: item.isRequired,
-            expectedDocumentType: item.expectedDocumentType,
-            sortOrder: item.sortOrder,
-          })),
-        });
+        // BACKLOG-3339 slice T: the entry's owner, read before the
+        // transaction. A missing deal writes nothing, as before.
+        const transaction = await databaseService.getTransactionById(args.transactionId);
+        if (!transaction) {
+          return { success: true, result: { status: "no_transaction" } };
+        }
 
-        if (result.status === "added") {
-          await auditChecklistAct(args.transactionId, "checklist_selected", {
-            templateId: template.id,
-            checklistId: result.checklistId,
+        let result: SelectChecklistTemplateResult;
+        try {
+          result = dbTransaction(() => {
+            const added = selectChecklistTemplateSync({
+              transactionId: args.transactionId,
+              templateId: template.id,
+              templateName: template.name,
+              items: template.items.map((item) => ({
+                title: item.title,
+                description: item.description,
+                isRequired: item.isRequired,
+                expectedDocumentType: item.expectedDocumentType,
+                sortOrder: item.sortOrder,
+              })),
+            });
+            if (added.status === "added") {
+              recordChecklistActSync(transaction.user_id, args.transactionId, "checklist_selected", {
+                templateId: template.id,
+                checklistId: added.checklistId,
+              });
+            }
+            return added;
           });
+        } catch (error) {
+          recordChecklistActFailure(transaction.user_id, args.transactionId, "checklist_selected", error);
+          throw dealToggleUserError("addChecklist", error);
         }
 
         logService.info("Checklist template selected", "Checklists", {
@@ -582,14 +623,28 @@ export function registerChecklistHandlers(): void {
         // BACKLOG-3910 (slice d): ungated by the plan, but not by the lock.
         const lockedRefusal = refuseIfDealLocked(args.transactionId, "take-off-checklist");
         if (lockedRefusal) return lockedRefusal;
-        const removed = await removeChecklist(args.transactionId, args.checklistId);
-        if (removed) {
-          await auditChecklistAct(args.transactionId, "checklist_removed", {
-            checklistId: removed.id,
-            templateId: removed.templateId,
+        // BACKLOG-3339 slice T: the entry's owner, read before the
+        // transaction. A missing deal has no checklist to remove.
+        const transaction = await databaseService.getTransactionById(args.transactionId);
+        if (!transaction) return { success: true, changed: false };
+
+        let removed: boolean;
+        try {
+          removed = dbTransaction(() => {
+            const checklist = removeChecklistSync(args.transactionId, args.checklistId);
+            if (checklist) {
+              recordChecklistActSync(transaction.user_id, args.transactionId, "checklist_removed", {
+                checklistId: checklist.id,
+                templateId: checklist.templateId,
+              });
+            }
+            return checklist !== null;
           });
+        } catch (error) {
+          recordChecklistActFailure(transaction.user_id, args.transactionId, "checklist_removed", error);
+          throw dealToggleUserError("removeChecklist", error);
         }
-        return { success: true, changed: removed !== null };
+        return { success: true, changed: removed };
       },
       { module: "Checklists" },
     ),
