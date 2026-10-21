@@ -485,7 +485,7 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, userHref, read
       if (!server.some((c) => c.member_id === r.memberId)) rows.push({ memberId: r.memberId, phone: r.phone, savedPhone: '', savedCompany: '' });
     }
     setEd({ ...ed, rows, removed: ed.removed.filter((id) => ids.has(id)), applied: [] });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs when the portal hands over a new view
+    // Runs when the portal hands over a new view; ed is read from this render.
   }, [view]);
 
   // ---------------------------------------------------------------- invite
