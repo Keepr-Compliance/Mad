@@ -283,6 +283,40 @@ describe('Dropdown', () => {
     expect(screen.getByTestId('dlg')).toHaveTextContent('dlg-open');
   });
 
+  function TwoInDialog() {
+    const [dlg, setDlg] = React.useState(true);
+    return (
+      <>
+        <span data-testid="dlg">{dlg ? 'dlg-open' : 'dlg-closed'}</span>
+        <Dialog open={dlg} onOpenChange={setDlg}>
+          <DialogContent aria-describedby={undefined}>
+            <DialogTitle>Edit</DialogTitle>
+            <Dropdown label="First" options={ROLES} value="agent" onChange={() => {}} />
+            <Dropdown label="Second" options={ROLES} value="agent" onChange={() => {}} />
+          </DialogContent>
+        </Dialog>
+      </>
+    );
+  }
+
+  it('T16b closed dropdowns do not swallow Escape: the dialog closes', () => {
+    render(<TwoInDialog />);
+    key(screen.getByRole('button', { name: /^First/ }), 'Escape');
+    expect(screen.getByTestId('dlg')).toHaveTextContent('dlg-closed');
+  });
+
+  it('T16c after open and Escape-close of both dropdowns, Escape closes the dialog (no leaked listener)', () => {
+    render(<TwoInDialog />);
+    for (const name of [/^First/, /^Second/]) {
+      fireEvent.click(screen.getByRole('button', { name }));
+      key(screen.getByRole('combobox'), 'Escape');
+      expect(listbox()).toBeNull();
+      expect(screen.getByTestId('dlg')).toHaveTextContent('dlg-open');
+    }
+    key(screen.getByRole('button', { name: /^Second/ }), 'Escape');
+    expect(screen.getByTestId('dlg')).toHaveTextContent('dlg-closed');
+  });
+
   it('T17 clicking an enabled row picks it, closes and returns focus to the trigger', () => {
     const { onChange } = renderDropdown();
     openIt();
