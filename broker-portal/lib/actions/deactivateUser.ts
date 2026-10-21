@@ -124,7 +124,7 @@ export async function deactivateUser(input: DeactivateInput): Promise<Deactivate
   // check above has passed on the user's own session. The service client
   // bypasses RLS, so the write is scoped explicitly to the member AND the
   // organization the caller was just verified to administer.
-  const service = createServiceClient();
+  const service = createServiceClient({ actorId: user.id });
   const { error: updateError } = await service
     .from('organization_members')
     .update({

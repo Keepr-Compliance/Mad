@@ -49,7 +49,6 @@ import {
   resolveDealReason,
   startDateEditable,
   subscriptionLine,
-  visibleChangeLog,
   type OrgBilling,
 } from '@/lib/billing/dealRules';
 import { reinstateOrgAction, saveDealAction, setAutoRenewAction, suspendOrgAction } from '@/lib/actions/brokerageBilling';
@@ -60,16 +59,6 @@ interface BrokerageBillingCardProps {
   planName: string;
   billing: OrgBilling;
 }
-
-const ACTION_LABEL: Record<string, string> = {
-  deal_saved: 'Deal saved',
-  setup_completed: 'Billing setup completed',
-  suspended: 'Suspended',
-  reinstated: 'Reinstated',
-  auto_renew_off: 'Auto-renew turned off',
-  auto_renew_on: 'Auto-renew turned on',
-  deal_ended: 'Deal ended',
-};
 
 /** BACKLOG-4019: the confirm text for turning auto-renew off. */
 export function autoRenewOffBody(billing: OrgBilling): string {
@@ -85,8 +74,6 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
   const [suspending, setSuspending] = useState(false);
   const [reinstating, setReinstating] = useState(false);
   const [renewTarget, setRenewTarget] = useState<'off' | 'on' | null>(null);
-  const [logExpanded, setLogExpanded] = useState(false);
-  const { visible: visibleLog, hidden: hiddenLog } = visibleChangeLog(billing.log, logExpanded);
 
   const status = dealBadge(billing);
   const renewAction = autoRenewAction(billing);
@@ -176,38 +163,6 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
             <Field label="Terms accepted" value={formatDate(billing.terms_accepted.at)} help={billing.terms_accepted.by ?? undefined} />
           )}
         </dl>
-      )}
-
-      {billing.log.length > 0 && (
-        <div className="mt-6">
-          <h3 className="text-sm font-semibold text-gray-900">Change log</h3>
-          <ul className="mt-2 divide-y divide-gray-100 text-sm">
-            {visibleLog.map((e, i) => (
-              <li key={`${e.created_at}-${i}`} className="flex flex-wrap justify-between gap-2 py-2">
-                <span className="text-gray-900">
-                  {ACTION_LABEL[e.action] ?? e.action}
-                  {typeof e.detail?.reason === 'string' ? ` — ${e.detail.reason}` : ''}
-                  {typeof e.detail?.note === 'string' && e.detail.note ? ` — ${e.detail.note}` : ''}
-                </span>
-                <span className="text-gray-500">{e.actor ?? 'System'} · {formatDate(e.created_at)}</span>
-              </li>
-            ))}
-          </ul>
-          {(hiddenLog > 0 || logExpanded) && (
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <p className="text-sm text-gray-500">Showing {visibleLog.length} of {billing.log.length}, newest first</p>
-              {hiddenLog > 0 ? (
-                <button type="button" onClick={() => setLogExpanded(true)} className="text-sm font-medium text-primary-600 hover:text-primary-800">
-                  Show more
-                </button>
-              ) : (
-                <button type="button" onClick={() => setLogExpanded(false)} className="text-sm font-medium text-primary-600 hover:text-primary-800">
-                  Show fewer
-                </button>
-              )}
-            </div>
-          )}
-        </div>
       )}
 
       {editing && (
@@ -382,7 +337,7 @@ export function DealEditor({
           <div className="mt-4">
             <Label htmlFor="deal-reason" required>Reason</Label>
             <Textarea id="deal-reason" rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this deal changing?" />
-            <FieldHelp>Saved in the change log with your name.</FieldHelp>
+            <FieldHelp>Saved in Activity with your name.</FieldHelp>
           </div>
         )}
         {error && <FieldError className="mt-3">{error}</FieldError>}
@@ -431,7 +386,7 @@ function ReasonDialog({
   const [busy, setBusy] = useState(false);
 
   const submit = async () => {
-    if (!note.trim()) return setError('Enter a note. It is saved in the change log.');
+    if (!note.trim()) return setError('Enter a note. It is saved in Activity.');
     setBusy(true);
     const res = await onSubmit(note, withReason ? reason : undefined);
     setBusy(false);

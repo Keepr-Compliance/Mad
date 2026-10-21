@@ -9,6 +9,8 @@ import { PlanAssignment } from './components/PlanAssignment';
 import { BrokerageBillingCard } from './components/BrokerageBillingCard';
 import { OrgInviteButton } from './components/OrgInviteButton';
 import { OrgPeopleCard } from './components/OrgPeopleCard';
+import { OrgActivityCard } from './components/OrgActivityCard';
+import type { ActivityRow } from '@/lib/activity/describeActivity';
 import { shouldShowBillingCard, type OrgBilling } from '@/lib/billing/dealRules';
 import { formatDate } from '@/lib/format';
 import { pickOrgPlanRow, type OrgPlanEmbed } from '@/lib/orgPlanEmbed';
@@ -77,8 +79,8 @@ export default async function OrganizationDetailPage({
     billing = (billingData as OrgBilling | null) ?? null;
   }
 
-  // Fetch org details, members, and pending invitations in parallel
-  const [orgResult, membersResult, pendingResult] = await Promise.all([
+  // Fetch org details, members, pending invitations and activity (BACKLOG-4036) in parallel
+  const [orgResult, membersResult, pendingResult, activityResult] = await Promise.all([
     supabase
       .from('organizations')
       .select('id, name, slug, max_seats, created_at, organization_plans(plan_id, plans(id, name, tier))')
@@ -97,7 +99,11 @@ export default async function OrganizationDetailPage({
       .is('user_id', null)
       .not('invited_email', 'is', null)
       .order('invited_at', { ascending: false }),
+    supabase.rpc('admin_get_org_activity', { p_org: id }),
   ]);
+  const activityFailed = Boolean(activityResult.error) || !Array.isArray(activityResult.data);
+  if (activityFailed) console.error('admin_get_org_activity failed:', activityResult.error?.message ?? 'no rows array');
+  const activity: ActivityRow[] = Array.isArray(activityResult.data) ? (activityResult.data as ActivityRow[]) : [];
 
   if (!orgResult.data) {
     notFound();
@@ -211,6 +217,9 @@ export default async function OrganizationDetailPage({
 
       {/* Brokerage people (BACKLOG-4007 PR-4): next to the Billing card, same gate */}
       {shouldShowBillingCard(billing) && <OrgPeopleCard organizationId={org.id} organizationName={org.name} />}
+
+      {/* Activity (BACKLOG-4036): every organization, organizations.view */}
+      <OrgActivityCard rows={activity} failed={activityFailed} />
 
       {/* Pending invitations */}
       {pendingInvitations.length > 0 && (

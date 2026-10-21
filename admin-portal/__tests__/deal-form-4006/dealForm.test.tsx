@@ -1,16 +1,14 @@
 /**
  * BACKLOG-4006 (UI only): a NEW deal needs no typed reason (the log gets "Deal created"),
- * edits still do; the change log shows the latest 5 with "Show more"; a large modal's footer
+ * edits still do; a large modal's footer
  * carries its own padding and top border while small modals are unchanged.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Modal, ModalFooter } from '@keepr/design-system';
 import {
-  CHANGE_LOG_PAGE,
   NEW_DEAL_REASON,
   resolveDealReason,
-  visibleChangeLog,
   type OrgBilling,
   type OrgDeal,
 } from '@/lib/billing/dealRules';
@@ -87,19 +85,4 @@ describe('Part 3: modal footer', () => {
   it('small modal footer is unchanged', () => {
     expect(footer('sm')).toBe('mt-6 flex justify-end gap-3');
   });
-});
-
-describe('Part 4: change log shows the latest 5', () => {
-  const mk = (n: number) => Array.from({ length: n }, (_, i) => i);
-  it.each([
-    [0, 0, 0], [4, 4, 0], [5, 5, 0], [6, 5, 1], [20, 5, 15],
-  ])('%i entries: %i shown, %i hidden', (n, shown, hidden) => {
-    const r = visibleChangeLog(mk(n), false);
-    expect(r.visible).toEqual(mk(n).slice(0, shown));
-    expect(r.hidden).toBe(hidden);
-  });
-  it('expanded shows every entry', () => {
-    expect(visibleChangeLog(mk(20), true)).toEqual({ visible: mk(20), hidden: 0 });
-  });
-  it('page size is 5', () => { expect(CHANGE_LOG_PAGE).toBe(5); });
 });

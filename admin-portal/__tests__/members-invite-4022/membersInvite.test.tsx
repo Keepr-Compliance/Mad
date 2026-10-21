@@ -23,6 +23,8 @@ vi.mock('@/app/dashboard/organizations/[id]/components/MembersTable', () => ({ M
 vi.mock('@/app/dashboard/organizations/[id]/components/PendingInvitationsTable', () => ({ PendingInvitationsTable: () => null }));
 vi.mock('@/app/dashboard/organizations/[id]/components/PlanAssignment', () => ({ PlanAssignment: () => null }));
 vi.mock('@/app/dashboard/organizations/[id]/components/BrokerageBillingCard', () => ({ BrokerageBillingCard: () => null }));
+// BACKLOG-4036: the Activity card has its own tests (activity-4036)
+vi.mock('@/app/dashboard/organizations/[id]/components/OrgActivityCard', () => ({ OrgActivityCard: () => null }));
 
 const DEAL = { id: 'd1' };
 const state: {
