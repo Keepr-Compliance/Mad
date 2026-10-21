@@ -1,0 +1,24 @@
+MUTATION APPLIED [J1 create: userName only (emails[] ignored)] supabase/functions/scim/handlers/users.ts: const emailCandidates: string[] = [];
+   -> 2 failed, 13 passed, 15 total; red: ['SCIM create matches an existing account by userName, then emails[] › an open invitation sent to the mail address is claimed when userName is the UPN', 'SCIM create matches an existing account by userName, then emails[] › userName = UPN (no account), emails[0] = mail (an account): the existing account is added, no new users row']
+MUTATION APPLIED [J2 invite claim: userName only] supabase/functions/scim/handlers/users.ts: const candidates = [p.email];
+   -> 1 failed, 14 passed, 15 total; red: ['SCIM create matches an existing account by userName, then emails[] › an open invitation sent to the mail address is claimed when userName is the UPN']
+MUTATION APPLIED [J3 DELETE: kept admin answered 204] supabase/functions/scim/handlers/users.ts: if (false) {
+   -> 1 failed, 14 passed, 15 total; red: ['SCIM DELETE / PATCH active:false on the last admin › DELETE: 403 last_admin_kept, member still active, users row untouched, logged, one email to support + IT contact']
+MUTATION APPLIED [J4 PATCH active:false: kept admin answered 200] supabase/functions/scim/handlers/users.ts: if (false) {
+   -> 1 failed, 14 passed, 15 total; red: ['SCIM DELETE / PATCH active:false on the last admin › PATCH active:false: 403, member still active, users row untouched']
+MUTATION APPLIED [J5 de-dupe counts its own row (> 0)] supabase/functions/_shared/lastAdminNotify.ts: } else if ((recent ?? 0) > 0) {
+   -> 7 failed, 8 passed, 15 total; red: ['SCIM DELETE / PATCH active:false on the last admin › DELETE: 403 last_admin_kept, member still active, users row untouched, logged, one email to support + IT contact', 'SCIM DELETE / PATCH active:false on the last admin › PATCH active:false: 403, member still active, users row untouched', 'directory sync and the last admin › a second run within 24 h keeps the admin again and sends no second email', 'directory sync and the last admin › the last admin removed from the directory stays active, their users row is not suspended, counted, one email', 'notifyLastAdminKept de-dupe (J5) › an earlier row outside the 24 h window does not de-dupe', 'notifyLastAdminKept de-dupe (J5) › never throws: a portal error is "failed"', 'notifyLastAdminKept de-dupe (J5) › only the current row in the window: sends']
+MUTATION APPLIED [J6 dir-sync: kept suspend not detected] supabase/functions/directory-sync/index.ts: if (false) {
+   -> 2 failed, 13 passed, 15 total; red: ['directory sync and the last admin › a second run within 24 h keeps the admin again and sends no second email', 'directory sync and the last admin › the last admin removed from the directory stays active, their users row is not suspended, counted, one email']
+MUTATION APPLIED [J7 dir-sync: suspend without .select()] supabase/functions/directory-sync/index.ts: .eq("user_id", member.user_id);
+   -> 2 failed, 13 passed, 15 total; red: ['directory sync and the last admin › a second run within 24 h keeps the admin again and sends no second email', 'directory sync and the last admin › the last admin removed from the directory stays active, their users row is not suspended, counted, one email']
+MUTATION APPLIED [J8 deactivateUser counts admin + it_admin] broker-portal/lib/actions/deactivateUser.ts: .in('role', ['admin', 'it_admin'])
+   -> 1 failed, 7 passed, 8 total; red: ['deactivateUser (W11) › the only admin, with an IT admin beside them: refused by the app check (admin role only), no service write']
+MUTATION APPLIED [J9 deactivateUser: last_admin unmapped] broker-portal/lib/actions/deactivateUser.ts: if (false) {
+   -> 1 failed, 7 passed, 8 total; red: ['deactivateUser (W11) › the database refuses the service write (last_admin): the same sentence']
+MUTATION APPLIED [J10 updateUserRole: managed_by_idp unmapped] broker-portal/lib/actions/updateUserRole.ts: if (false) {
+   -> 1 failed, 7 passed, 8 total; red: ['updateUserRole › database refusal {']
+MUTATION APPLIED [J11 bulkUpdateRole: last_admin unmapped] broker-portal/lib/actions/bulkUpdateRole.ts: if (false) {
+   -> 1 failed, 7 passed, 8 total; red: ['bulkUpdateRole › database refusal {']
+MUTATION APPLIED [J12 removeUser: last_admin unmapped] broker-portal/lib/actions/removeUser.ts: if (false) {
+   -> 1 failed, 7 passed, 8 total; red: ['removeUser › database refusal last_admin -> "Cannot remove the last admin"']
