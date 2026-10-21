@@ -146,6 +146,22 @@ describe('mode is this deployment\'s', () => {
     expect((await call()).body.state).toBe('none');
   });
 
+  it.each(['?mode=live', '?stripe_mode=live&livemode=true', '?mode=LIVE'])(
+    'test key + %s in the query -> still the test row',
+    async (qs) => {
+      given(rows());
+      const { body } = await call(qs);
+      expect([body.state, body.cancel_at_period_end]).toEqual(['active', false]);
+    },
+  );
+
+  it('live key + ?mode=test in the query -> still the live row', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_live_fixture';
+    given(rows());
+    const { body } = await call('?mode=test');
+    expect([body.state, body.cancel_at_period_end]).toEqual(['cancel_pending', true]);
+  });
+
   it('the response names no mode', async () => {
     given(rows());
     const text = JSON.stringify((await call()).body);

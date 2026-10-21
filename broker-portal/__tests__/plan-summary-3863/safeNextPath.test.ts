@@ -42,6 +42,37 @@ describe('refused -> /dashboard', () => {
     expect(safeNextPath(raw)).toBe('/dashboard');
   });
 
+  it.each([
+    '/dashboard/%2e%2e/login',
+    '/dashboard/%2E%2E/login',
+    '/dashboard/%252e%252e/login',
+    '/dashboard/%25252e%25252e/login',
+    '/dashboard/%252e%252e/%5Cevil.test',
+    '%2F%2Fevil.test',
+    '/%2Fevil.test',
+    '/dashboard/%5Cevil.test',
+    '/dashboard/%255Cevil.test',
+    '/dashboard%2F..%2F',
+    '/dashboard/%2e%2e%2fadmin',
+    '/dashboard/%zz',
+    '/dashboard/x%0Ay',
+    '/dashboard/\\evil.test',
+    '/dashboard/a\\..\\login',
+  ])('encoded or backslash traversal: %s', (raw) => {
+    expect(isSafeNextPath(raw)).toBe(false);
+    expect(safeNextPath(raw)).toBe('/dashboard');
+  });
+
+  it('a value still changing after the decode cap is refused, one inside it is not', () => {
+    const nested = (rounds: number): string => {
+      let v = '%78'; // "x" encoded once
+      for (let i = 1; i < rounds; i++) v = v.replace(/%/g, '%25');
+      return `/dashboard/${v}`;
+    };
+    expect(isSafeNextPath(nested(2))).toBe(true);
+    expect(isSafeNextPath(nested(9))).toBe(false);
+  });
+
   it.each([null, undefined, 42, {}])('non-string %p', (raw) => {
     expect(safeNextPath(raw)).toBe('/dashboard');
   });

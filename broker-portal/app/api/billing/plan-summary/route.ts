@@ -21,31 +21,11 @@ import { verifyBearerUser } from '@/lib/stripe';
 import { createServiceClient } from '@/lib/supabase/service';
 import { billingEnabled } from '@/lib/billing/flag';
 import { currentStripeMode } from '@/lib/billing/mode';
-import { getAgentPlanView, type AgentPlanView } from '@/lib/billing/agentPlan';
+import { getAgentPlanView } from '@/lib/billing/agentPlan';
+import { toPlanSummary } from '@/lib/billing/planSummary';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-export interface PlanSummary {
-  state: AgentPlanView['state'];
-  interval: string | null;
-  current_period_end: string | null;
-  cancel_at_period_end: boolean;
-  paymentIncomplete: boolean;
-  supportGrantEffective: boolean;
-}
-
-/** The DTO, field by field from the view. Nothing else from the row is copied. */
-export function toPlanSummary(view: AgentPlanView): PlanSummary {
-  return {
-    state: view.state,
-    interval: view.row?.interval ?? null,
-    current_period_end: view.row?.current_period_end ?? null,
-    cancel_at_period_end: view.row?.cancel_at_period_end === true,
-    paymentIncomplete: view.paymentIncomplete,
-    supportGrantEffective: view.supportGrantEffective,
-  };
-}
 
 export async function GET(req: Request): Promise<Response> {
   if (!billingEnabled()) {

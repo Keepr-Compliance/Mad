@@ -64,6 +64,15 @@ describe('signed in on /login: redirectTo stays on this origin (BACKLOG-3705)', 
     ['//evil.test/dashboard', '/dashboard'],
     ['/\\evil.test', '/dashboard'],
     ['/dashboard/../admin', '/dashboard'],
+    ['/dashboard/%2e%2e/login', '/dashboard'],
+    ['/dashboard/%2E%2E/login', '/dashboard'],
+    ['/dashboard/%252e%252e/login', '/dashboard'],
+    ['/dashboard/%25252e%25252e/login', '/dashboard'],
+    ['/dashboard/%252e%252e/%5Cevil.test', '/dashboard'],
+    ['%2F%2Fevil.test', '/dashboard'],
+    ['/%2Fevil.test', '/dashboard'],
+    ['/dashboard/%5Cevil.test', '/dashboard'],
+    ['/dashboard/%255Cevil.test', '/dashboard'],
     ['/settings', '/dashboard'],
     ['/dashboard/billing', '/dashboard/billing'],
   ])('redirectTo=%s -> %s', async (raw, expected) => {
@@ -86,6 +95,18 @@ describe('signed out on a /dashboard path: post-login path cookie', () => {
       .getSetCookie()
       .find((c) => c.startsWith(`${NEXT_PATH_COOKIE_NAME}=`));
   }
+
+  // A single-encoded dot segment never reaches here: the URL parser resolves it to /login first.
+  it.each([
+    '/dashboard/%252e%252e/login',
+    '/dashboard/%252e%252e/%5Cevil.test',
+    '/dashboard/%255Cevil.test',
+  ])('a path that resolves outside /dashboard (%s) sets no cookie', async (path) => {
+    signedOut();
+    const response = await middleware(new NextRequest(`${ORIGIN}${path}`));
+    expect(new URL(response.headers.get('location')!).pathname).toBe('/login');
+    expect(cookieOf(response)).toBeUndefined();
+  });
 
   it('sets the cookie to the path, with its attributes, and still goes to /login', async () => {
     signedOut();

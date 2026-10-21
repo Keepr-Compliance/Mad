@@ -81,7 +81,25 @@ describe('the cookie replaces the /dashboard default', () => {
     expect(loc(await go(SB))).toBe(`${ORIGIN}/dashboard`);
   });
 
-  it.each(['//evil.test', '/\\evil.test', '/settings', '/dashboard/../admin'])(
+  it.each([
+    '//evil.test',
+    '/\\evil.test',
+    '/settings',
+    '/dashboard/../admin',
+    '/dashboard/%2e%2e/login',
+    '/dashboard/%2E%2E/login',
+    '/dashboard/%252e%252e/login',
+    '/dashboard/%25252e%25252e/login',
+    '/dashboard/%252e%252e/%5Cevil.test',
+    '%2F%2Fevil.test',
+    '/%2Fevil.test',
+    '/dashboard/%5Cevil.test',
+    '/dashboard/%255Cevil.test',
+    '/dashboard%2F..%2F',
+    '/dashboard/%2e%2e%2fadmin',
+    '/dashboard/%zz',
+    '/dashboard/x%0Ay',
+  ])(
     'an unsafe cookie value %s -> /dashboard on this origin, cookie cleared',
     async (raw) => {
       signedIn();
