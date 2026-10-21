@@ -15,6 +15,7 @@
  */
 
 import { useMemo, useState } from 'react';
+import { FilterCaption, StatCard, useSortState } from '@keepr/ui';
 import type { PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
 import {
@@ -32,7 +33,6 @@ import {
   STALL_MINUTES,
   STATUS_LABELS,
   SUBMISSION_SHOW_MORE_STEP,
-  type SortDirection,
   type Submission,
   type SubmissionFilters,
   type SubmissionSortKey,
@@ -57,18 +57,14 @@ function Tile({
   testId: string;
 }) {
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-5" data-tile={testId}>
-      <p className="text-sm font-medium text-gray-500">{label}</p>
-      <p
-        className={`mt-1 text-2xl font-semibold tabular-nums ${
-          tone === 'critical' && value > 0 ? 'text-red-700' : 'text-gray-900'
-        }`}
-        data-tile-value={testId}
-      >
-        {value}
-      </p>
-      {sub ? <p className="mt-0.5 text-xs text-gray-500">{sub}</p> : null}
-    </div>
+    <StatCard
+      data-tile={testId}
+      label={label}
+      value={value}
+      subtitle={sub}
+      tone={tone}
+      valueProps={{ 'data-tile-value': testId }}
+    />
   );
 }
 
@@ -107,8 +103,11 @@ export function SubmissionsReport({
   onNavigate,
 }: SubmissionsReportProps) {
   const [filters, setFilters] = useState<SubmissionFilters>(EMPTY_SUBMISSION_FILTERS);
-  const [sortKey, setSortKey] = useState<SubmissionSortKey>('started');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const { sortKey, sortDirection, onSort } = useSortState<SubmissionSortKey>({
+    initialKey: 'started',
+    initialDirection: 'desc',
+    defaultDirectionFor: defaultSubmissionDirection,
+  });
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_SUBMISSIONS);
   const [openRowId, setOpenRowId] = useState<string | null>(null);
 
@@ -141,24 +140,12 @@ export function SubmissionsReport({
     setOpenRowId(null);
   }
 
-  function handleSort(key: SubmissionSortKey) {
-    if (key === sortKey) {
-      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortKey(key);
-      setSortDirection(defaultSubmissionDirection(key));
-    }
-  }
-
   function navigateToPeriod(nextPeriod: string, from?: string, to?: string) {
     const search = typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, '');
     onNavigate?.(buildPeriodUrl(search, nextPeriod, from, to));
   }
 
   const filterNames = activeFilterNames(filters);
-  const caption = `Cards, charts and rows follow the filters: ${period.label}${
-    filterNames.length > 0 ? ` · ${filterNames.join(' · ')}` : ' · no other filters'
-  }`;
 
   return (
     <div className="space-y-6">
@@ -177,7 +164,12 @@ export function SubmissionsReport({
       />
 
       <div>
-        <p className="mb-2 text-xs text-gray-500">{caption}</p>
+        <FilterCaption
+          className="mb-2 text-xs"
+          lead="Cards, charts and rows follow the filters"
+          periodLabel={period.label}
+          filterNames={filterNames}
+        />
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
           <Tile testId="attempts" label="Attempts" value={counts.attempts} sub="Includes attempts still open" />
           <Tile
@@ -217,7 +209,8 @@ export function SubmissionsReport({
         truncated={truncated}
         rowCap={rowCap}
         periodLabel={period.label}
-        onSort={handleSort}
+        showMoreStep={SUBMISSION_SHOW_MORE_STEP}
+        onSort={onSort}
         onShowMore={() => setVisibleCount(visibleCount + SUBMISSION_SHOW_MORE_STEP)}
         onToggleRow={(id) => setOpenRowId(openRowId === id ? null : id)}
       />
