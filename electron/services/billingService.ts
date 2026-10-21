@@ -134,7 +134,9 @@ class BillingService {
 
   /** True only when the portal answered plan-summary with a 404. */
   private async isBillingOff(): Promise<boolean> {
-    return (await this.readPlanSummary()).status === 404;
+    // The portal answers 404 before it checks auth, so the probe also works
+    // with no session (it then sends no Authorization header).
+    return (await this.readPlanSummary(true)).status === 404;
   }
 
   /** The user's own plan summary, or { unavailable: true }. Never throws. */
@@ -143,27 +145,30 @@ class BillingService {
   }
 
   /** One bounded read. `status` is the HTTP status when one was received, else null. */
-  private async readPlanSummary(): Promise<{ result: PlanSummaryResult; status: number | null }> {
+  private async readPlanSummary(probe = false): Promise<{ result: PlanSummaryResult; status: number | null }> {
     let status: number | null = null;
-    const result = await this.readPlanSummaryInner((s) => {
+    const result = await this.readPlanSummaryInner(probe, (s) => {
       status = s;
     });
     return { result, status };
   }
 
-  private async readPlanSummaryInner(onStatus: (status: number) => void): Promise<PlanSummaryResult> {
+  private async readPlanSummaryInner(
+    probe: boolean,
+    onStatus: (status: number) => void,
+  ): Promise<PlanSummaryResult> {
     const origin = portalOrigin();
     if (!origin) return UNAVAILABLE;
     if (!isOnline()) return UNAVAILABLE;
 
-    let accessToken: string;
+    let accessToken: string | null = null;
     try {
       const session = await supabaseService.getAuthSession();
-      if (!session?.accessToken) return UNAVAILABLE;
-      accessToken = session.accessToken;
+      accessToken = session?.accessToken ?? null;
     } catch {
-      return UNAVAILABLE;
+      accessToken = null;
     }
+    if (!accessToken && !probe) return UNAVAILABLE;
 
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -177,7 +182,7 @@ class BillingService {
       const read = (async (): Promise<PlanSummaryResult> => {
         const res = await net.fetch(`${origin}${PLAN_SUMMARY_PATH}`, {
           method: "GET",
-          headers: { Authorization: `Bearer ${accessToken}` },
+          headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
           signal: controller.signal,
         });
         // 404 = billing off on this portal; 401 = session not accepted;

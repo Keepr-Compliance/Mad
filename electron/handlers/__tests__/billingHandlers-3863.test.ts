@@ -208,9 +208,23 @@ describe("BACKLOG-3863 — billing:open-portal when billing is off (SR R4)", () 
     ["503", () => mockFetch.mockResolvedValueOnce(response(503, {}))],
     ["network failure", () => mockFetch.mockRejectedValueOnce(new Error("net::ERR_FAILED"))],
     ["offline", () => mockIsOnline.mockReturnValue(false)],
-    ["no session", () => mockGetAuthSession.mockResolvedValueOnce(null)],
   ])("%s → opens Billing", async (_label, arrange) => {
     arrange();
+    expect(await invoke("billing:open-portal")).toEqual({ success: true });
+    expect(mockOpenExternal.mock.calls).toEqual([[PROD_BILLING]]);
+  });
+
+  it("no session + plan-summary 404 → opens /beta (404 comes before the auth check); no Authorization sent", async () => {
+    mockGetAuthSession.mockResolvedValueOnce(null);
+    mockFetch.mockResolvedValueOnce(response(404, {}));
+    expect(await invoke("billing:open-portal")).toEqual({ success: true });
+    expect(mockOpenExternal.mock.calls).toEqual([[BETA]]);
+    expect(mockFetch.mock.calls[0][1].headers).toEqual({});
+  });
+
+  it("no session + 401 → opens Billing", async () => {
+    mockGetAuthSession.mockResolvedValueOnce(null);
+    mockFetch.mockResolvedValueOnce(response(401, {}));
     expect(await invoke("billing:open-portal")).toEqual({ success: true });
     expect(mockOpenExternal.mock.calls).toEqual([[PROD_BILLING]]);
   });
