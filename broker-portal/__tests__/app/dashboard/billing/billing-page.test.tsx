@@ -378,7 +378,9 @@ describe('R2: a support session never sees billing', () => {
     given(rows);
     mockCookie = JSON.stringify({ session_id: SESSION_ID, target_user_id: TARGET_USER_ID });
     expect(await run()).toEqual(outcome);
-    expect(mockServiceTables).toEqual([]);
+    // No impersonation read. BACKLOG-3854: an admitted organization page reads whether billing is
+    // set up (org_deals + org_billing_stripe, service) after admission; nothing else.
+    expect(mockServiceTables).toEqual('notFound' in outcome ? [] : ['org_deals', 'org_billing_stripe']);
   });
 });
 
@@ -733,7 +735,9 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
       // BACKLOG-4019: a broker or admin reads the plan's auto-renew state (broker_get_plan_end,
       // own session); an IT admin reads nothing.
       const role = (row as { role?: string }).role;
-      const allowed = role === 'it_admin' ? ['org_billing_suspended'] : ['org_billing_suspended', 'broker_get_plan_end'];
+      // BACKLOG-3854: everyone on the organization page reads the seat counts (broker_get_seats, own
+      // session; the database gives IT admin no price).
+      const allowed = role === 'it_admin' ? ['org_billing_suspended', 'broker_get_seats'] : ['org_billing_suspended', 'broker_get_plan_end', 'broker_get_seats'];
       expect(mockSessionRpc.mock.calls.filter((c) => !allowed.includes(c[0] as string))).toEqual([]);
       if (role === 'it_admin') expect(mockSessionRpc.mock.calls.some((c) => c[0] === 'broker_get_plan_end')).toBe(false);
       expect(mockServiceRpc).not.toHaveBeenCalled();

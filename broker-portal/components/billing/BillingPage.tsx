@@ -12,7 +12,9 @@ import { Alert } from '@keepr/design-system';
 import { AutoRenewBlock } from './AutoRenewBlock';
 import { planEndLine, type PlanEnd } from '@/lib/billing/planEnd';
 import { ChoosePlanBlock } from './ChoosePlanBlock';
-import { SeatsBlock } from './SeatsBlock';
+import { SeatsBlock, type SeatsViewer } from './SeatsBlock';
+import { ManageBillingBlock } from './ManageBillingBlock';
+import type { SeatsView } from '@/lib/billing/seats';
 import { CreditsBlock } from './CreditsBlock';
 import { PaymentContactBlock } from './PaymentContactBlock';
 import { InvoicesBlock } from './InvoicesBlock';
@@ -64,6 +66,10 @@ export interface BillingPageProps {
   orgSuspension?: { reason: OrgSuspensionReason; role: string; organizationName?: string | null; payUrl?: string | null } | null;
   /** BACKLOG-4019: the brokerage plan's auto-renew state. Organization page only, not while suspended. */
   autoRenew?: { organizationId: string; planEnd: PlanEnd } | null;
+  /** BACKLOG-3854: seat counts (null view = the read failed). Organization page only. */
+  seats?: { view: SeatsView | null; viewer: SeatsViewer | null } | null;
+  /** BACKLOG-3854: back from a failed "Manage billing" (`?portal=unavailable`). */
+  portalUnavailable?: boolean;
 }
 
 function planLine(caps: BillingCapabilities, orgBillingSetUp: boolean): string {
@@ -72,7 +78,7 @@ function planLine(caps: BillingCapabilities, orgBillingSetUp: boolean): string {
   return orgBillingSetUp ? 'Organization plan' : 'Managed by Keepr';
 }
 
-export function BillingPage({ caps, orgBillingSetUp, personal, orgSuspension, autoRenew }: BillingPageProps) {
+export function BillingPage({ caps, orgBillingSetUp, personal, orgSuspension, autoRenew, seats, portalUnavailable }: BillingPageProps) {
   // Blocks 4–6 are filled for a personal page only; organization pages keep the frame (3855).
   const b = caps.kind === 'personal' ? personal?.billing : undefined;
   const suspended = personal?.suspended === true;
@@ -83,7 +89,9 @@ export function BillingPage({ caps, orgBillingSetUp, personal, orgSuspension, au
       case 'choose_plan':
         return <ChoosePlanBlock key={block} prices={personal?.prices} suspended={suspended} />;
       case 'seats':
-        return <SeatsBlock key={block} />;
+        return <SeatsBlock key={block} view={seats?.view ?? null} viewer={seats?.viewer ?? null} />;
+      case 'manage_billing':
+        return <ManageBillingBlock key={block} unavailable={portalUnavailable === true} />;
       case 'credits':
         return <CreditsBlock key={block} data={b && personal ? { balance: b.credits, state: personal.state, suspended } : undefined} />;
       case 'payment':
