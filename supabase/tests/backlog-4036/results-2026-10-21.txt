@@ -21,3 +21,8 @@ m5_no_billing_filter {"fail": 1, "pass": 38, "reds": ["C5b_no_billing_view_no_bi
 m6b_no_personal_skip {"fail": 1, "pass": 38, "reds": ["C6a_personal_org_silent"], "mutation": "MUTATION APPLIED public._org_member_change_log() 00dcf0ff->9fac3ee6 [IF NOT FOUND THEN]"}
 m6c_phone_raises_no_org "ERROR P0001 no org"
 m6c_phone_raises_no_org {"fail": 2, "pass": 37, "reds": ["C2g_claim_removal", "C6c_cancel_invite_with_phone"], "mutation": "MUTATION APPLIED public._user_phone_change_log() f9379937->d1365e6c [IF false THEN] + MUTATION APPLIED public._user_phone_change_log() d1365e6c->bc3caaa7 [      OR (r.pending_member_id IS NULL AND r.user_id IS NOT NULL AND m.user_id = r.user_id)]"}
+
+# Re-run after the txid index and the anon case (migration md5 c8550f0b): base 40/40;
+m4b_anon_trusts_header {"fail": 1, "pass": 39, "reds": ["C4d_anon_header_ignored"], "mutation": "MUTATION APPLIED public._activity_actor() 67fa88df->bb20150f [IF v_role = 'authenticated' THEN]"}
+m4_header_first {"fail": 2, "reds": ["C4a_spoof_header_ignored", "C4d_anon_header_ignored"]}
+# every other mode red exactly as listed above.
