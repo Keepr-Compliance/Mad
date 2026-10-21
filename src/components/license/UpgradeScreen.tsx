@@ -12,9 +12,14 @@
  *   Card/CardHeader/CardTitle/CardDescription/CardContent  packages/ui/src/components/card.tsx:13,28,40,55,67
  *   Button variant="primary" | "secondary" | "ghost"       packages/ui/src/components/button.tsx:22-27
  *   AppMark                                                packages/ui/src/components/app-mark.tsx:24
+ *
+ * BACKLOG-4038 follow-up: "Contact support" opens the in-app SupportTicketDialog
+ * (the form SupportWidget opens) instead of a mailto. The dialog needs only
+ * window.api.support.* and window.api.auth.getCurrentUser; no provider, and the
+ * main-process handlers carry no license check, so it submits while blocked.
  */
 
-import React from "react";
+import React, { useState } from "react";
 import {
   AppMark,
   Button,
@@ -25,11 +30,12 @@ import {
   CardTitle,
 } from "@keepr/ui";
 import billingService from "../../services/billingService";
+import { SupportTicketDialog } from "../support/SupportTicketDialog";
 
 export type UpgradeReason = "suspended" | "ended" | "unknown";
 
-/** The address "Contact support" opens (shell:open-external allows mailto:). */
-export const SUPPORT_MAILTO = "mailto:support@keeprcompliance.com";
+/** Shown as selectable text under the buttons, in case the support form cannot submit. */
+export const SUPPORT_EMAIL = "support@keeprcompliance.com";
 
 /**
  * Map a license blockReason (LicenseValidationResult["blockReason"], or the
@@ -66,14 +72,28 @@ const MESSAGES: Record<UpgradeReason, { title: string; description: string }> = 
 
 export function UpgradeScreen({ reason, onLogout }: UpgradeScreenProps): React.ReactElement {
   const message = MESSAGES[reason] ?? MESSAGES.unknown;
+  const [supportOpen, setSupportOpen] = useState(false);
+  const [userEmail, setUserEmail] = useState("");
+  const [userName, setUserName] = useState("");
 
   const handleManageBilling = () => {
     // BACKLOG-3863: the portal Billing page (main builds the URL).
     void billingService.openPortal();
   };
 
-  const handleContactSupport = () => {
-    void window.api?.shell?.openExternal?.(SUPPORT_MAILTO);
+  const handleContactSupport = async () => {
+    // Pre-fill name/email when a session exists (SupportWidget.tsx does the same).
+    // No session (blocked at sign-in) leaves the fields empty for the user to type.
+    try {
+      const result = await window.api?.auth?.getCurrentUser?.();
+      if (result?.success && result.user) {
+        setUserEmail(result.user.email || "");
+        setUserName(result.user.display_name || result.user.email || "");
+      }
+    } catch {
+      // No session or DB not ready: the dialog still opens with empty fields.
+    }
+    setSupportOpen(true);
   };
 
   const handleLogout = async () => {
@@ -110,8 +130,21 @@ export function UpgradeScreen({ reason, onLogout }: UpgradeScreenProps): React.R
           <Button variant="ghost" onClick={handleLogout}>
             Sign out
           </Button>
+          <p className="text-sm text-muted-foreground select-text">
+            Or email <span data-testid="upgrade-support-email">{SUPPORT_EMAIL}</span>
+          </p>
         </CardContent>
       </Card>
+      {supportOpen && (
+        // Category is a support_categories UUID loaded at runtime, so only the
+        // subject is preset; the dialog has no category preset.
+        <SupportTicketDialog
+          onClose={() => setSupportOpen(false)}
+          userEmail={userEmail}
+          userName={userName}
+          prefilledSubject={`Account or billing: ${message.title}`}
+        />
+      )}
     </div>
   );
 }

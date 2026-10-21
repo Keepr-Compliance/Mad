@@ -3,7 +3,7 @@
  * reason, the three actions, and no trial/limit copy anywhere.
  */
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { UpgradeScreen, upgradeReasonFor, type UpgradeReason } from "../UpgradeScreen";
@@ -25,8 +25,24 @@ const COPY: Record<UpgradeReason, { title: string; body: string }> = {
 
 const REASONS = Object.keys(COPY) as UpgradeReason[];
 
+// window.api.support is not in tests/setup.js; the dialog's hook calls all four.
+function installSupportApi(): { submitTicket: jest.Mock } {
+  const submitTicket = jest.fn().mockResolvedValue({ success: true, ticket_id: "t1", ticket_number: 42 });
+  (window.api as unknown as { support: Record<string, jest.Mock> }).support = {
+    getCategories: jest.fn().mockResolvedValue({ success: true, categories: [] }),
+    collectDiagnostics: jest.fn().mockResolvedValue({ success: true, diagnostics: null }),
+    captureScreenshot: jest.fn().mockResolvedValue({ success: true, screenshot: null }),
+    submitTicket,
+  };
+  return { submitTicket };
+}
+
+let submitTicket: jest.Mock;
+
 beforeEach(() => {
   jest.clearAllMocks();
+  ({ submitTicket } = installSupportApi());
+  jest.mocked(window.api.auth.getCurrentUser).mockResolvedValue({ success: false } as never);
 });
 
 describe("UpgradeScreen (BACKLOG-4038)", () => {
@@ -62,12 +78,64 @@ describe("UpgradeScreen (BACKLOG-4038)", () => {
     expect(window.api.shell.openExternal).not.toHaveBeenCalled();
   });
 
-  it("Contact support opens the support mailto through shell.openExternal", async () => {
+  it("Contact support opens the in-app support form, presets the subject, and opens no mailto", async () => {
     render(<UpgradeScreen reason="suspended" onLogout={jest.fn()} />);
+    expect(screen.queryByRole("heading", { name: "Contact Support" })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
-    expect(window.api.shell.openExternal).toHaveBeenCalledTimes(1);
-    expect(window.api.shell.openExternal).toHaveBeenCalledWith("mailto:support@keeprcompliance.com");
+    expect(await screen.findByRole("heading", { name: "Contact Support" })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Subject/)).toHaveValue("Account or billing: Your account is paused");
+    expect(window.api.shell.openExternal).not.toHaveBeenCalled();
     expect(window.api.billing.openPortal).not.toHaveBeenCalled();
+  });
+
+  it("the support form pre-fills name and email from the signed-in user", async () => {
+    jest.mocked(window.api.auth.getCurrentUser).mockResolvedValue({
+      success: true,
+      user: {
+        email: "agent@example.com",
+        display_name: "Agent Name",
+      },
+    } as never);
+    render(<UpgradeScreen reason="ended" onLogout={jest.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
+    expect(await screen.findByLabelText(/Your Email/)).toHaveValue("agent@example.com");
+    expect(screen.getByLabelText(/Your Name/)).toHaveValue("Agent Name");
+  });
+
+  it("submitting the support form calls support.submitTicket and shows the dialog's confirmation", async () => {
+    render(<UpgradeScreen reason="ended" onLogout={jest.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
+    await userEvent.type(await screen.findByLabelText(/Your Name/), "Agent Name");
+    await userEvent.type(screen.getByLabelText(/Your Email/), "agent@example.com");
+    await userEvent.type(screen.getByLabelText(/Description/), "My license shows as ended.");
+    const submit = screen.getByRole("button", { name: "Submit Ticket" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    await userEvent.click(submit);
+    expect(submitTicket).toHaveBeenCalledTimes(1);
+    expect(submitTicket.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        subject: "Account or billing: Your Keepr license has ended",
+        description: "My license shows as ended.",
+        requester_email: "agent@example.com",
+        requester_name: "Agent Name",
+      }),
+    );
+    expect(await screen.findByRole("heading", { name: "Ticket Submitted" })).toBeInTheDocument();
+  });
+
+  it("a failed submit keeps the dialog's error and the support email stays visible as text", async () => {
+    submitTicket.mockResolvedValue({ success: false, error: "Network unavailable" });
+    render(<UpgradeScreen reason="unknown" onLogout={jest.fn()} />);
+    expect(screen.getByTestId("upgrade-support-email")).toHaveTextContent("support@keeprcompliance.com");
+    await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
+    await userEvent.type(await screen.findByLabelText(/Your Name/), "A");
+    await userEvent.type(screen.getByLabelText(/Your Email/), "a@example.com");
+    await userEvent.type(screen.getByLabelText(/Description/), "help");
+    const submit = screen.getByRole("button", { name: "Submit Ticket" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    await userEvent.click(submit);
+    expect(await screen.findByText("Network unavailable")).toBeInTheDocument();
+    expect(screen.getByTestId("upgrade-support-email")).toHaveTextContent("support@keeprcompliance.com");
   });
 
   it("Sign out runs the provided logout handler", async () => {
