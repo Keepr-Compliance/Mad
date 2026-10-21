@@ -216,7 +216,7 @@ export default async function OrganizationDetailPage({
       )}
 
       {/* Brokerage people (BACKLOG-4007 PR-4): next to the Billing card, same gate */}
-      {shouldShowBillingCard(billing) && <OrgPeopleCard organizationId={org.id} organizationName={org.name} />}
+      {shouldShowBillingCard(billing) && <OrgPeopleCard organizationId={org.id} />}
 
       {/* Activity (BACKLOG-4036): every organization, organizations.view */}
       <OrgActivityCard rows={activity} failed={activityFailed} />

@@ -8,18 +8,27 @@
  * org_contact_remove, org_people_invite), so this component only presents.
  *
  * People v2 (founder 34ff8b68 / 723b63de): every contact is a member of the brokerage.
- * - "Select existing user": the brokerage's members in one searchable Dropdown (BACKLOG-4032).
- * - "Invite new person" (billing, IT contact, MSP; never office): the portal's own invite
- *   dialog with the role preset, opened through onAddNew.
+ * People popups (founder-approved mockup, BACKLOG-4007 follow-up): each role row shows its
+ * people (name, role pill, email · phone) and ONE "Edit" button that opens a kit Dialog.
+ * - Billing / IT contact: "Choose a user" (the brokerage's members in one searchable Dropdown)
+ *   or "Invite new person" (actions.invite, org_people_invite, role preset by slot). Remove sits
+ *   in the footer for the IT contact; the billing contact can be changed, not removed.
+ * - Office / MSP: the current people with an inline phone and a remove button, an "Add a
+ *   person" Dropdown; Save applies the changes one RPC at a time. Office is existing members
+ *   only; MSP adds the company name and an invite tab.
  * - An agent or broker picked as the IT contact / MSP becomes an IT admin after a confirm.
  * - Phone: shown and editable only for callers who may write phones (can_edit_phone).
+ * - userHref: the portal's link to a person's user page (null = plain text).
  *
  * Copy rule (founder): short sentences; lists show 5 and "Show more".
  */
 
-import { useMemo, useState } from 'react';
-import { Alert, Badge, Button, Input, Label } from '@keepr/design-system';
+import { useMemo, useState, type ReactNode } from 'react';
+import { X } from 'lucide-react';
+import { Alert, Badge, Button, Input, Label, type BadgeHue } from '@keepr/design-system';
 import { Dropdown, type DropdownOption } from './dropdown';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from './dialog';
+import { SegmentedTabs } from './phone/segmented-tabs';
 
 export type OrgContactRole = 'billing' | 'it' | 'office' | 'msp';
 export type OrgPeopleInviteSlot = 'billing' | 'it' | 'msp';
@@ -79,9 +88,24 @@ export interface OrgPeopleSaveInput {
 
 export type OrgPeopleResult = { ok: true; note?: string } | { ok: false; error: string; role?: string };
 
+/** "Invite new person" (org_people_invite): the fields the portals' invite dialogs sent. */
+export interface OrgPeopleInviteInput {
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  companyName?: string;
+}
+
+export type OrgPeopleInviteResult =
+  | { ok: true; emailSent: boolean; inviteLink: string | null }
+  | { ok: false; error: string };
+
 export interface OrgPeopleActions {
   save: (input: OrgPeopleSaveInput) => Promise<OrgPeopleResult>;
   remove: (contactId: string) => Promise<OrgPeopleResult>;
+  /** Absent = no "Invite new person" tab. */
+  invite?: (slot: OrgPeopleInviteSlot, input: OrgPeopleInviteInput) => Promise<OrgPeopleInviteResult>;
 }
 
 export interface OrgPeoplePhoneRule {
@@ -90,30 +114,50 @@ export interface OrgPeoplePhoneRule {
   error: string;
 }
 
+/** A person with a Keepr login (pending invitations have no user id and get no link). */
+export interface OrgPeopleUserRef {
+  member_id: string;
+  user_id: string;
+}
+
 export interface OrgPeoplePanelProps {
   view: OrgPeopleView;
   actions: OrgPeopleActions;
   phone: OrgPeoplePhoneRule;
   /** Called after any successful change, so the portal re-reads the list. */
   onChanged: () => void;
-  /** "Invite new person": the portal opens its invite dialog with the role preset. */
-  onAddNew?: (slot: OrgPeopleInviteSlot, companyName?: string) => void;
+  /** The portal's link to this person's user page; null (or absent) = the name is plain text. */
+  userHref?: (person: OrgPeopleUserRef) => string | null;
   /** Read-only (support session): no buttons. */
   readOnly?: boolean;
 }
 
-const ROLES: Array<{ key: OrgContactRole; label: string; sub: string; multi: boolean }> = [
-  { key: 'billing', label: 'Billing contact', sub: 'Gets the invoices.', multi: false },
-  { key: 'it', label: 'IT contact', sub: 'Optional. Becomes an IT admin.', multi: false },
-  { key: 'office', label: 'Office contacts', sub: 'Optional. Several allowed.', multi: true },
-  { key: 'msp', label: 'IT provider (MSP)', sub: 'Optional. A company and its people.', multi: true },
+const ROLES: Array<{ key: OrgContactRole; label: string; sub: string }> = [
+  { key: 'billing', label: 'Billing contact', sub: 'Gets the invoices.' },
+  { key: 'it', label: 'IT contact', sub: 'Optional. Becomes an IT admin.' },
+  { key: 'office', label: 'Office contacts', sub: 'Optional. Several allowed.' },
+  { key: 'msp', label: 'IT provider (MSP)', sub: 'Optional. A company and its people.' },
 ];
+
+const DIALOG: Record<OrgContactRole, { title: string; sub: string }> = {
+  billing: { title: 'Edit billing contact', sub: 'One person. Gets the invoices.' },
+  it: { title: 'Edit IT contact', sub: 'One person. They become an IT admin.' },
+  office: { title: 'Edit office contacts', sub: 'Pick people who already have a login. Several allowed.' },
+  msp: { title: 'Edit IT provider', sub: 'A company and its people. They become IT admins.' },
+};
 
 const ROLE_NAMES: Record<string, string> = {
   agent: 'Agent',
   broker: 'Broker',
   admin: 'Admin',
   it_admin: 'IT admin',
+};
+
+const ROLE_HUES: Record<string, BadgeHue> = {
+  admin: 'purple',
+  it_admin: 'blue',
+  agent: 'green',
+  broker: 'amber',
 };
 
 const SHOW = 5;
@@ -147,19 +191,20 @@ export function orgPeopleErrorMessage(code: string): string {
 }
 
 function loginBadge(c: OrgPeopleContact) {
-  if (c.login === 'billing_only') return <Badge hue="purple">Billing-only login</Badge>;
+  if (c.login === 'billing_only') return <Badge hue="gray">Billing-only login</Badge>;
   if (!c.login_claimed) return <Badge hue="gray">Invited</Badge>;
-  return <Badge hue="blue">{ROLE_NAMES[c.login ?? ''] ?? 'Member'}</Badge>;
+  return <Badge hue={ROLE_HUES[c.login ?? ''] ?? 'gray'}>{ROLE_NAMES[c.login ?? ''] ?? 'Member'}</Badge>;
 }
 
-interface PickerState {
-  role: OrgContactRole;
-  id?: string;
-  memberId: string;
-  phone: string;
-  company: string;
-  /** Set when the database asked to confirm a role change (from this role to IT admin). */
-  confirmFrom?: string;
+function memberBadge(m: OrgPeopleMember) {
+  if (m.billing_only) return <Badge hue="gray">Billing-only login</Badge>;
+  if (m.pending) return <Badge hue="gray">Invited</Badge>;
+  return <Badge hue={ROLE_HUES[m.role] ?? 'gray'}>{ROLE_NAMES[m.role] ?? m.role}</Badge>;
+}
+
+/** "an Agent", "a Broker". */
+function withArticle(word: string): string {
+  return `${/^[AEIOU]/i.test(word) ? 'an' : 'a'} ${word}`;
 }
 
 /** May this member fill this slot? null = yes, else the reason shown in the list. */
@@ -171,13 +216,60 @@ function pickBlock(role: OrgContactRole, m: OrgPeopleMember): string | null {
   return null;
 }
 
-export function OrgPeoplePanel({ view, actions, phone, onChanged, onAddNew, readOnly = false }: OrgPeoplePanelProps) {
-  const [picker, setPicker] = useState<PickerState | null>(null);
+const isMultiRole = (role: OrgContactRole) => role === 'office' || role === 'msp';
+
+type Tab = 'choose' | 'invite';
+
+interface InviteDraft {
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+}
+
+const EMPTY_INVITE: InviteDraft = { email: '', firstName: '', lastName: '', phone: '' };
+
+/** One person in the multi-person dialog. contactId is set for people already saved. */
+interface MultiRow {
+  memberId: string;
+  contactId?: string;
+  phone: string;
+  /** The phone as saved (formatted), to tell a change from no change. */
+  savedPhone: string;
+}
+
+interface EditorState {
+  role: OrgContactRole;
+  tab: Tab;
+  /** Single roles: the IT contact being changed (billing saves without an id, as before). */
+  contactId?: string;
+  memberId: string;
+  phone: string;
+  /** Multi roles. */
+  rows: MultiRow[];
+  removed: string[];
+  company: string;
+  savedCompany: string;
+  invite: InviteDraft;
+  /** The database asked to confirm a role change: the op to resend, the person, their role. */
+  confirm?: { op: string; name: string; from: string };
+  /** Multi save: ops already applied, so a resume after the confirm never resends them. */
+  applied: string[];
+}
+
+interface Op {
+  key: string;
+  name: string;
+  run: (confirm: boolean) => Promise<OrgPeopleResult>;
+}
+
+export function OrgPeoplePanel({ view, actions, phone, onChanged, userHref, readOnly = false }: OrgPeoplePanelProps) {
+  const [ed, setEd] = useState<EditorState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [phoneTouched, setPhoneTouched] = useState(false);
+  const [touched, setTouched] = useState<Record<string, boolean>>({});
 
   const editable = view.can_edit && !readOnly;
   const rowEditable = (role: OrgContactRole) => {
@@ -202,88 +294,517 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, onAddNew, read
 
   const memberById = (id: string) => view.members.find((m) => m.member_id === id);
 
-  const openPicker = (p: PickerState) => {
-    setPicker(p);
-    setError(null);
-    setNotice(null);
-    setPhoneTouched(false);
+  const hrefFor = (memberId: string): string | null => {
+    if (!userHref) return null;
+    const m = memberById(memberId);
+    if (!m || !m.user_id || m.pending) return null;
+    return userHref({ member_id: m.member_id, user_id: m.user_id });
   };
 
-  const picked = picker ? memberById(picker.memberId) : undefined;
-  // Billing needs a phone: typed now, or already on the person.
-  const phoneRequired = picker?.role === 'billing' && !picked?.phone;
-  const phoneOk = !picker || !phoneEditable
-    ? true
-    : picker.phone.trim() === ''
-      ? !phoneRequired
-      : phone.isValid(picker.phone);
+  /** "Invite new person", today's rule: billing always, IT only while empty, MSP always, office never. */
+  const canInvite = (role: OrgContactRole) =>
+    !!actions.invite && role !== 'office' && (role !== 'it' || byRole.it.length === 0);
 
-  const savePicker = async (confirm = false) => {
-    if (!picker) return;
+  const openEditor = (role: OrgContactRole) => {
+    const people = byRole[role];
+    const first = people[0];
+    const single = !isMultiRole(role);
+    const company = role === 'msp' ? first?.company_name ?? '' : '';
+    setEd({
+      role,
+      tab: 'choose',
+      contactId: role === 'it' ? first?.id : undefined,
+      memberId: single && first ? first.member_id : '',
+      phone: single && first?.phone ? displayPhone(first.phone) : '',
+      rows: single
+        ? []
+        : people.map((c) => {
+            const p = c.phone ? displayPhone(c.phone) : '';
+            return { memberId: c.member_id, contactId: c.id, phone: p, savedPhone: p };
+          }),
+      removed: [],
+      company,
+      savedCompany: company,
+      invite: EMPTY_INVITE,
+      applied: [],
+    });
+    setError(null);
+    setNotice(null);
+    setTouched({});
+  };
+
+  const close = () => {
+    setEd(null);
+    setError(null);
+  };
+
+  const nameOf = (memberId: string) =>
+    memberById(memberId)?.name ?? view.contacts.find((c) => c.member_id === memberId)?.name ?? 'This person';
+
+  const phoneFine = (raw: string, required: boolean) =>
+    !phoneEditable ? true : raw.trim() === '' ? !required : phone.isValid(raw);
+
+  // ---------------------------------------------------------------- single person: save / remove
+  const saveSingle = async (s: EditorState, confirm: boolean) => {
     const input: OrgPeopleSaveInput = {
-      id: picker.id,
-      role: picker.role,
-      member_id: picker.memberId,
-      ...(phoneEditable && picker.phone.trim() !== '' ? { phone: picker.phone } : {}),
-      ...(picker.role === 'msp' ? { company_name: picker.company } : {}),
+      ...(s.role === 'it' && s.contactId ? { id: s.contactId } : {}),
+      role: s.role,
+      member_id: s.memberId,
+      ...(phoneEditable && s.phone.trim() !== '' ? { phone: s.phone } : {}),
       ...(confirm ? { confirm_role_change: true } : {}),
     };
     setBusy(true);
     setError(null);
-    setNotice(null);
     const r = await actions.save(input);
     setBusy(false);
     if (!r.ok) {
       if (r.error === 'role_change_needs_confirm') {
-        setPicker({ ...picker, confirmFrom: r.role ?? 'agent' });
+        setEd({ ...s, confirm: { op: 'single', name: nameOf(s.memberId), from: r.role ?? 'agent' } });
         return;
       }
       setError(orgPeopleErrorMessage(r.error));
       return;
     }
     if (r.note) setNotice(r.note);
-    setPicker(null);
+    setEd(null);
     onChanged();
   };
 
-  const remove = async (id: string) => {
+  const removeSingle = async (s: EditorState) => {
+    if (!s.contactId) return;
     setBusy(true);
     setError(null);
-    setNotice(null);
-    const r = await actions.remove(id);
+    const r = await actions.remove(s.contactId);
     setBusy(false);
     if (!r.ok) {
       setError(orgPeopleErrorMessage(r.error));
       return;
     }
+    setEd(null);
     onChanged();
   };
 
-  // "Select existing user": every member this slot may list (billing-only people only for billing).
-  // The Dropdown searches name, email and role itself and looks the trigger label up in this full
-  // list, so the current pick needs no pinning against the search.
-  const choices: DropdownOption[] = picker
-    ? view.members
-        .filter((m) => picker.role === 'billing' || !m.billing_only || m.member_id === picker.memberId)
-        .map((m) => {
-          const block = pickBlock(picker.role, m);
-          const role = m.billing_only ? 'Billing only' : ROLE_NAMES[m.role] ?? m.role;
-          return {
-            value: m.member_id,
-            label: m.name,
-            description: `${m.email} · ${role}${m.pending ? ' · invited' : ''}`,
-            keywords: [m.email],
-            ...(block ? { disabled: true, hint: block } : {}),
-          };
-        })
-    : [];
+  // ---------------------------------------------------------------- several people: save a diff
+  const multiOps = (s: EditorState): Op[] => {
+    const ops: Op[] = [];
+    const companyChanged = s.role === 'msp' && s.company.trim() !== s.savedCompany.trim();
+    for (const id of s.removed) {
+      const c = view.contacts.find((x) => x.id === id);
+      ops.push({ key: `rm:${id}`, name: c?.name ?? 'This person', run: () => actions.remove(id) });
+    }
+    for (const row of s.rows) {
+      const isNew = !row.contactId;
+      if (!isNew && row.phone === row.savedPhone && !companyChanged) continue;
+      const input: OrgPeopleSaveInput = {
+        ...(row.contactId ? { id: row.contactId } : {}),
+        role: s.role,
+        member_id: row.memberId,
+        ...(phoneEditable && row.phone.trim() !== '' ? { phone: row.phone } : {}),
+        ...(s.role === 'msp' ? { company_name: s.company } : {}),
+      };
+      ops.push({
+        key: `${isNew ? 'add' : 'up'}:${row.memberId}`,
+        name: nameOf(row.memberId),
+        run: (confirm) => actions.save(confirm ? { ...input, confirm_role_change: true } : input),
+      });
+    }
+    return ops.filter((o) => !s.applied.includes(o.key));
+  };
 
-  const roleLabel = (r: OrgContactRole) => ROLES.find((x) => x.key === r)?.label ?? r;
-  const confirmName = picked?.name ?? 'This person';
+  const saveMulti = async (s: EditorState) => {
+    const applied = [...s.applied];
+    let changed = false;
+    setBusy(true);
+    setError(null);
+    for (const op of multiOps(s)) {
+      const r = await op.run(s.confirm?.op === op.key);
+      if (!r.ok) {
+        setBusy(false);
+        if (r.error === 'role_change_needs_confirm') {
+          setEd({ ...s, applied, confirm: { op: op.key, name: op.name, from: r.role ?? 'agent' } });
+        } else {
+          setEd({ ...s, applied, confirm: undefined });
+          setError(orgPeopleErrorMessage(r.error));
+        }
+        if (changed) onChanged();
+        return;
+      }
+      applied.push(op.key);
+      changed = true;
+      if (r.note) setNotice(r.note);
+    }
+    setBusy(false);
+    setEd(null);
+    onChanged();
+  };
+
+  // ---------------------------------------------------------------- invite
+  const sendInvite = async (s: EditorState) => {
+    if (!actions.invite || s.role === 'office') return;
+    const slot: OrgPeopleInviteSlot = s.role;
+    const email = s.invite.email.trim();
+    setBusy(true);
+    setError(null);
+    const r = await actions.invite(slot, {
+      email,
+      firstName: s.invite.firstName.trim(),
+      lastName: s.invite.lastName.trim(),
+      phone: phoneEditable ? s.invite.phone.trim() : '',
+      ...(slot === 'msp' ? { companyName: s.company.trim() } : {}),
+    });
+    setBusy(false);
+    if (!r.ok) {
+      setError(orgPeopleErrorMessage(r.error));
+      return;
+    }
+    setNotice(
+      r.emailSent
+        ? `Invite sent to ${email}.`
+        : `The invite was created but the email could not be sent. Share this link with ${email}: ${r.inviteLink ?? ''}`
+    );
+    setEd(null);
+    onChanged();
+  };
+
+  // ---------------------------------------------------------------- dropdown options
+  const optionsFor = (role: OrgContactRole, current: string, exclude: string[] = []): DropdownOption[] => {
+    // The current contact is always a member; if the caller's member list lacks them, still name them.
+    const saved = current && !memberById(current) ? view.contacts.find((c) => c.member_id === current) : undefined;
+    const fallback: DropdownOption[] = saved ? [{ value: saved.member_id, label: saved.name, description: saved.email ?? undefined }] : [];
+    return fallback.concat(memberOptions(role, current, exclude));
+  };
+
+  const memberOptions = (role: OrgContactRole, current: string, exclude: string[]): DropdownOption[] =>
+    view.members
+      .filter((m) => role === 'billing' || !m.billing_only || m.member_id === current)
+      .filter((m) => !exclude.includes(m.member_id))
+      .map((m) => {
+        const block = pickBlock(role, m);
+        const roleName = m.billing_only ? 'Billing only' : ROLE_NAMES[m.role] ?? m.role;
+        return {
+          value: m.member_id,
+          label: m.name,
+          description: `${m.email} · ${roleName}${m.pending ? ' · invited' : ''}`,
+          keywords: [m.email],
+          ...(block ? { disabled: true, hint: block } : {}),
+        };
+      });
+
+  // ---------------------------------------------------------------- card
+  const nameNode = (name: string, memberId: string) => {
+    const href = hrefFor(memberId);
+    return href ? (
+      <a href={href} className="text-sm font-medium text-primary-600 hover:underline">
+        {name}
+      </a>
+    ) : (
+      <span className="text-sm font-medium text-gray-900">{name}</span>
+    );
+  };
+
+  const personLine = (c: OrgPeopleContact) => (
+    <div key={c.id} className="flex min-w-0 flex-col gap-0.5" data-testid="org-person">
+      <div className="flex flex-wrap items-center gap-2">
+        {nameNode(c.name, c.member_id)}
+        {loginBadge(c)}
+      </div>
+      {c.email || c.phone ? (
+        <p className="break-all text-xs text-gray-500">
+          {c.email}
+          {c.phone ? `${c.email ? ' · ' : ''}${displayPhone(c.phone)}` : ''}
+        </p>
+      ) : null}
+    </div>
+  );
+
+  /** MSP: the company name above its people. */
+  const mspGroups = (people: OrgPeopleContact[]) => {
+    const groups: Array<{ company: string; people: OrgPeopleContact[] }> = [];
+    for (const c of people) {
+      const company = c.company_name ?? '';
+      const g = groups.find((x) => x.company === company);
+      if (g) g.people.push(c);
+      else groups.push({ company, people: [c] });
+    }
+    return groups;
+  };
+
+  // ---------------------------------------------------------------- dialog parts
+  const phoneInput = (
+    id: string,
+    value: string,
+    onChange: (v: string) => void,
+    opts: { label?: string; required?: boolean; ariaLabel?: string; compact?: boolean }
+  ) => {
+    const showErr = touched[id] === true && !phoneFine(value, opts.required === true);
+    return (
+      <div className={opts.compact ? 'w-36 shrink-0' : undefined}>
+        {opts.label ? (
+          <Label htmlFor={id} required={opts.required} className="text-gray-900">
+            {opts.label}
+            {opts.required ? null : <span className="font-normal text-gray-500"> (optional)</span>}
+          </Label>
+        ) : null}
+        <Input
+          id={id}
+          type="tel"
+          className="text-gray-900"
+          placeholder={opts.compact ? 'Phone' : '(202) 555-0100'}
+          aria-label={opts.ariaLabel}
+          value={value}
+          onChange={(e) => onChange(phone.format(e.target.value))}
+          onBlur={() => setTouched((t) => ({ ...t, [id]: true }))}
+          aria-invalid={showErr}
+        />
+        {showErr && !opts.compact ? (
+          <p role="alert" className="mt-1 text-sm text-red-600">
+            {phone.error}
+          </p>
+        ) : null}
+      </div>
+    );
+  };
+
+  const companyField = (s: EditorState) =>
+    s.role === 'msp' ? (
+      <div>
+        <Label htmlFor="op-company" required className="text-gray-900">
+          IT provider company
+        </Label>
+        <Input id="op-company" className="text-gray-900" value={s.company} onChange={(e) => setEd({ ...s, company: e.target.value })} />
+      </div>
+    ) : null;
+
+  const inviteBody = (s: EditorState) => {
+    const setInvite = (patch: Partial<InviteDraft>) => setEd({ ...s, invite: { ...s.invite, ...patch } });
+    return (
+      <div className="space-y-4" role="tabpanel" id="op-panel">
+        {companyField(s)}
+        <div>
+          <Label htmlFor="op-invite-email" required className="text-gray-900">
+            Work email
+          </Label>
+          <Input id="op-invite-email" type="email" className="text-gray-900" value={s.invite.email} onChange={(e) => setInvite({ email: e.target.value })} />
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label htmlFor="op-invite-first" className="text-gray-900">
+              First name
+            </Label>
+            <Input id="op-invite-first" className="text-gray-900" value={s.invite.firstName} onChange={(e) => setInvite({ firstName: e.target.value })} />
+          </div>
+          <div>
+            <Label htmlFor="op-invite-last" className="text-gray-900">
+              Last name
+            </Label>
+            <Input id="op-invite-last" className="text-gray-900" value={s.invite.lastName} onChange={(e) => setInvite({ lastName: e.target.value })} />
+          </div>
+        </div>
+        {phoneEditable
+          ? phoneInput('op-invite-phone', s.invite.phone, (v) => setInvite({ phone: v }), { label: 'Phone', required: s.role === 'billing' })
+          : null}
+        <p className="text-sm text-gray-600" data-testid="op-seat-line">
+          {s.role === 'billing' ? (
+            <>
+              We email them an invite. They join with a <strong className="font-semibold text-gray-900">Billing-only login</strong> and use no seat.
+            </>
+          ) : (
+            <>
+              We email them an invite. They join as an <strong className="font-semibold text-gray-900">IT admin</strong> and use 1 seat.
+            </>
+          )}
+        </p>
+      </div>
+    );
+  };
+
+  const confirmAlert = (s: EditorState) =>
+    s.confirm ? (
+      <Alert variant="warning">
+        {s.confirm.name} is {withArticle(ROLE_NAMES[s.confirm.from] ?? s.confirm.from)} now. Saving makes them an IT admin.
+      </Alert>
+    ) : null;
+
+  const tabs = (s: EditorState) =>
+    canInvite(s.role) ? (
+      <SegmentedTabs
+        ariaLabel="Who"
+        panelId="op-panel"
+        value={s.tab}
+        onValueChange={(v) => {
+          setEd({ ...s, tab: v === 'invite' ? 'invite' : 'choose', confirm: undefined });
+          setError(null);
+        }}
+        items={[
+          { value: 'choose', label: s.role === 'msp' ? 'Choose users' : 'Choose a user' },
+          { value: 'invite', label: 'Invite new person' },
+        ]}
+      />
+    ) : null;
+
+  const singleBody = (s: EditorState, phoneRequired: boolean) => (
+    <div className="space-y-4" role={canInvite(s.role) ? 'tabpanel' : undefined} id="op-panel">
+      <Dropdown
+        label="User"
+        id="op-user"
+        options={optionsFor(s.role, s.memberId)}
+        value={s.memberId || null}
+        placeholder="Choose a user"
+        searchPlaceholder="Search name or email"
+        onChange={(v) => {
+          const m = memberById(v);
+          setEd({ ...s, memberId: v, confirm: undefined, phone: m?.phone ? displayPhone(m.phone) : '' });
+        }}
+      />
+      {phoneEditable ? phoneInput('op-phone', s.phone, (v) => setEd({ ...s, phone: v }), { label: 'Phone', required: phoneRequired }) : null}
+      {confirmAlert(s)}
+    </div>
+  );
+
+  const multiBody = (s: EditorState, rowsPhoneOk: boolean) => (
+    <div className="space-y-4" role={canInvite(s.role) ? 'tabpanel' : undefined} id="op-panel">
+      {companyField(s)}
+      {s.rows.length > 0 ? (
+        <ul className="max-h-64 divide-y divide-gray-200 overflow-y-auto rounded-lg border border-gray-200" aria-label="People">
+          {s.rows.map((row) => {
+            const m = memberById(row.memberId);
+            const c = row.contactId ? view.contacts.find((x) => x.id === row.contactId) : undefined;
+            const name = m?.name ?? c?.name ?? 'This person';
+            return (
+              <li key={row.memberId} className="flex items-center gap-3 px-4 py-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-sm font-medium text-gray-900">{name}</span>
+                    {c ? loginBadge(c) : m ? memberBadge(m) : null}
+                  </div>
+                  <p className="break-all text-xs text-gray-500">{m?.email ?? c?.email}</p>
+                </div>
+                {phoneEditable
+                  ? phoneInput(
+                      `op-row-phone-${row.memberId}`,
+                      row.phone,
+                      (v) => setEd({ ...s, rows: s.rows.map((x) => (x.memberId === row.memberId ? { ...x, phone: v } : x)) }),
+                      { ariaLabel: `Phone for ${name}`, compact: true }
+                    )
+                  : null}
+                <button
+                  type="button"
+                  aria-label={`Remove ${name}`}
+                  disabled={busy}
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-gray-500 hover:bg-gray-100 hover:text-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+                  onClick={() =>
+                    setEd({
+                      ...s,
+                      confirm: undefined,
+                      rows: s.rows.filter((x) => x.memberId !== row.memberId),
+                      removed: row.contactId ? [...s.removed, row.contactId] : s.removed,
+                    })
+                  }
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <p className="text-sm italic text-gray-500">No one added</p>
+      )}
+      <div>
+        <Dropdown
+          label="Add a person"
+          id="op-add"
+          options={optionsFor(s.role, '', s.rows.map((r) => r.memberId))}
+          value={null}
+          placeholder="Search by name or email"
+          searchPlaceholder="Search name or email"
+          onChange={(v) => {
+            const m = memberById(v);
+            const p = m?.phone ? displayPhone(m.phone) : '';
+            // Re-adding someone removed in this dialog keeps their saved contact.
+            const old = byRole[s.role].find((c) => c.member_id === v && s.removed.includes(c.id));
+            const saved = old?.phone ? displayPhone(old.phone) : '';
+            setEd({
+              ...s,
+              confirm: undefined,
+              rows: [...s.rows, old ? { memberId: v, contactId: old.id, phone: saved, savedPhone: saved } : { memberId: v, phone: p, savedPhone: '' }],
+              removed: old ? s.removed.filter((id) => id !== old.id) : s.removed,
+            });
+          }}
+        />
+        {s.role === 'office' ? <p className="mt-1 text-xs text-gray-500">Not listed? Invite them from Users first.</p> : null}
+      </div>
+      {!rowsPhoneOk ? (
+        <p role="alert" className="text-sm text-red-600">
+          {phone.error}
+        </p>
+      ) : null}
+      {confirmAlert(s)}
+    </div>
+  );
+
+  const dialogBody = (s: EditorState) => {
+    const multi = isMultiRole(s.role);
+    const inviting = s.tab === 'invite' && canInvite(s.role);
+    const picked = multi ? undefined : memberById(s.memberId);
+    // Billing needs a phone: typed now, or already on the person.
+    const phoneRequired = s.role === 'billing' && !picked?.phone;
+    const rowsPhoneOk = s.rows.every((r) => phoneFine(r.phone, false));
+    const companyOk = s.role !== 'msp' || s.company.trim() !== '';
+
+    let primaryLabel = s.confirm ? 'Make IT admin' : 'Save';
+    let primaryDisabled = busy;
+    let onPrimary: () => void;
+    let body: ReactNode;
+    if (inviting) {
+      primaryLabel = 'Send invite';
+      primaryDisabled = primaryDisabled || s.invite.email.trim() === '' || !phoneFine(s.invite.phone, s.role === 'billing') || !companyOk;
+      onPrimary = () => void sendInvite(s);
+      body = inviteBody(s);
+    } else if (multi) {
+      primaryDisabled = primaryDisabled || !rowsPhoneOk || (s.rows.length > 0 && !companyOk) || multiOps(s).length === 0;
+      onPrimary = () => void saveMulti(s);
+      body = multiBody(s, rowsPhoneOk);
+    } else {
+      primaryDisabled = primaryDisabled || !phoneFine(s.phone, phoneRequired) || !s.memberId;
+      onPrimary = () => void saveSingle(s, !!s.confirm);
+      body = singleBody(s, phoneRequired);
+    }
+    const canRemove = !inviting && !multi && s.role !== 'billing' && !!s.contactId;
+
+    return (
+      <DialogContent className={multi ? 'max-w-[520px] bg-white' : 'max-w-[480px] bg-white'}>
+        <DialogHeader className="pr-8">
+          <DialogTitle className="text-gray-900">{DIALOG[s.role].title}</DialogTitle>
+          <DialogDescription className="text-gray-500">{DIALOG[s.role].sub}</DialogDescription>
+        </DialogHeader>
+        {tabs(s)}
+        {error ? <Alert variant="error">{error}</Alert> : null}
+        {body}
+        <DialogFooter className="sm:items-center">
+          {canRemove ? (
+            <button
+              type="button"
+              disabled={busy}
+              className="rounded-md px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 disabled:opacity-50 sm:mr-auto"
+              onClick={() => void removeSingle(s)}
+            >
+              Remove
+            </button>
+          ) : null}
+          <Button variant="secondary" disabled={busy} onClick={close}>
+            Cancel
+          </Button>
+          <Button variant="primary" disabled={primaryDisabled} onClick={onPrimary}>
+            {busy ? 'Saving…' : primaryLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    );
+  };
 
   return (
     <div className="space-y-4 text-left" data-testid="org-people">
-      {error ? <Alert variant="error">{error}</Alert> : null}
       {notice ? <Alert variant="info">{notice}</Alert> : null}
 
       <ul className="divide-y divide-gray-200 rounded-md border border-gray-200">
@@ -291,10 +812,8 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, onAddNew, read
           const people = byRole[r.key];
           const shown = expanded[r.key] ? people : people.slice(0, SHOW);
           const can = rowEditable(r.key) && !(r.key === 'billing' && waiting);
-          const canAdd = can && (r.multi || people.length === 0);
-          const canInvite = can && !!onAddNew && r.key !== 'office' && (r.multi || people.length === 0 || r.key === 'billing');
           return (
-            <li key={r.key} className="flex flex-col gap-2 p-4 sm:flex-row sm:items-start sm:justify-between" data-role={r.key}>
+            <li key={r.key} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:gap-6" data-role={r.key}>
               <div className="min-w-0 sm:w-1/3">
                 <p className="text-sm font-semibold text-gray-900">{r.label}</p>
                 <p className="text-xs text-gray-500">{r.key === 'billing' && waiting ? 'Set in the setup guide.' : r.sub}</p>
@@ -304,152 +823,40 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, onAddNew, read
                   </p>
                 ) : null}
               </div>
-              <div className="min-w-0 flex-1 space-y-2">
+              <div className="min-w-0 flex-1 space-y-3">
                 {people.length === 0 ? <p className="text-sm italic text-gray-500">No one added</p> : null}
-                {shown.map((c) => (
-                  <div key={c.id} className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-gray-900">
-                        {c.name}
-                        {c.company_name ? <span className="font-normal text-gray-500"> · {c.company_name}</span> : null}
-                      </p>
-                      <p className="break-all text-xs text-gray-500">
-                        {c.email}
-                        {c.phone ? `${c.email ? ' · ' : ''}${displayPhone(c.phone)}` : ''}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      {loginBadge(c)}
-                      {rowEditable(c.role) && !(c.role === 'billing' && waiting) ? (
-                        <>
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            disabled={busy}
-                            onClick={() =>
-                              openPicker({
-                                role: c.role,
-                                id: c.role === 'billing' ? undefined : c.id,
-                                memberId: c.member_id,
-                                phone: c.phone ? displayPhone(c.phone) : '',
-                                company: c.company_name ?? '',
-                              })
-                            }
-                          >
-                            Change
-                          </Button>
-                          {c.role !== 'billing' ? (
-                            <Button size="sm" variant="secondary" disabled={busy} onClick={() => void remove(c.id)}>
-                              Remove
-                            </Button>
-                          ) : null}
-                        </>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
+                {r.key === 'msp'
+                  ? mspGroups(shown).map((g) => (
+                      <div key={g.company} className="space-y-2">
+                        {g.company ? <p className="text-xs font-medium uppercase tracking-wide text-gray-700">{g.company}</p> : null}
+                        {g.people.map(personLine)}
+                      </div>
+                    ))
+                  : shown.map(personLine)}
                 {people.length > SHOW && !expanded[r.key] ? (
                   <button type="button" className="text-sm text-primary-600" onClick={() => setExpanded({ ...expanded, [r.key]: true })}>
                     Show more ({people.length - SHOW})
                   </button>
                 ) : null}
               </div>
-              {canAdd || canInvite ? (
-                <div className="flex flex-wrap gap-2 sm:pl-4">
-                  {canAdd && !(r.key === 'billing' && people.length > 0) ? (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={busy}
-                      onClick={() =>
-                        openPicker({ role: r.key, memberId: '', phone: '', company: r.key === 'msp' ? people[0]?.company_name ?? '' : '' })
-                      }
-                    >
-                      {people.length > 0 ? 'Add another' : 'Add person'}
-                    </Button>
-                  ) : null}
-                  {canInvite ? (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={busy}
-                      onClick={() => onAddNew?.(r.key as OrgPeopleInviteSlot, r.key === 'msp' ? people[0]?.company_name ?? undefined : undefined)}
-                    >
-                      Invite new person
-                    </Button>
-                  ) : null}
-                </div>
+              {can ? (
+                <Button size="sm" variant="secondary" disabled={busy} onClick={() => openEditor(r.key)} aria-label={`Edit ${r.label}`}>
+                  Edit
+                </Button>
               ) : null}
             </li>
           );
         })}
       </ul>
 
-      {picker ? (
-        <div className="rounded-md border border-gray-200 p-4" role="group" aria-label={`Select person: ${roleLabel(picker.role)}`}>
-          <p className="text-sm font-semibold text-gray-900">
-            {picker.id || picker.role === 'billing' ? 'Change' : 'Add'} {roleLabel(picker.role).toLowerCase()}
-          </p>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <Dropdown
-              label="User"
-              id="op-user"
-              options={choices}
-              value={picker.memberId || null}
-              placeholder="Choose a user"
-              searchPlaceholder="Search name or email"
-              onChange={(v) => {
-                const m = memberById(v);
-                setPicker({ ...picker, memberId: v, confirmFrom: undefined, phone: m?.phone ? displayPhone(m.phone) : '' });
-              }}
-            />
-            {phoneEditable ? (
-              <div>
-                <Label htmlFor="op-phone" required={phoneRequired} className="text-gray-900">Phone</Label>
-                <Input
-                  id="op-phone"
-                  type="tel"
-                  className="text-gray-900"
-                  value={picker.phone}
-                  onChange={(e) => setPicker({ ...picker, phone: phone.format(e.target.value) })}
-                  onBlur={() => setPhoneTouched(true)}
-                  aria-invalid={phoneTouched && !phoneOk}
-                />
-                {phoneTouched && !phoneOk ? (
-                  <p role="alert" className="mt-1 text-sm text-red-600">
-                    {phone.error}
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-            {picker.role === 'msp' ? (
-              <div>
-                <Label htmlFor="op-company" required className="text-gray-900">IT provider company</Label>
-                <Input id="op-company" className="text-gray-900" value={picker.company} onChange={(e) => setPicker({ ...picker, company: e.target.value })} />
-              </div>
-            ) : null}
-          </div>
-          {picker.confirmFrom ? (
-            <div className="mt-4">
-              <Alert variant="warning">
-                {confirmName} is now {ROLE_NAMES[picker.confirmFrom] ?? picker.confirmFrom}. Saving makes them an IT admin.
-              </Alert>
-            </div>
-          ) : null}
-          <div className="mt-4 flex justify-end gap-3">
-            <Button variant="secondary" disabled={busy} onClick={() => setPicker(null)}>
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              disabled={busy || !phoneOk || !picker.memberId}
-              onClick={() => void savePicker(!!picker.confirmFrom)}
-            >
-              {busy ? 'Saving…' : picker.confirmFrom ? 'Make IT admin' : 'Save'}
-            </Button>
-          </div>
-        </div>
-      ) : null}
+      <Dialog
+        open={ed !== null}
+        onOpenChange={(open) => {
+          if (!open && !busy) close();
+        }}
+      >
+        {ed ? dialogBody(ed) : null}
+      </Dialog>
     </div>
   );
 }

@@ -1,8 +1,8 @@
 /**
  * BACKLOG-4007 People v2 (broker portal):
- *  - J1 InviteUserModal in People mode (founder 723b63de): role preset and read-only, phone field,
- *    submit goes to the People action, never inviteUser, no "Invite without a license". Without
- *    `people` the modal is unchanged (role select, inviteUser).
+ *  - J1 InviteUserModal: the Users page invite (role select, inviteUser). People's "Invite new
+ *    person" moved into the People popup (@keepr/ui OrgPeoplePanel), so the modal has no People
+ *    mode any more.
  *  - J2 My Account phone: saved through my_phone_set (the person's own row).
  *  - J3 Users-page removal of the live billing contact: the database refusal is worded with the
  *    founder sentence (R9). Error text transcribed from keepr-test control
@@ -29,22 +29,10 @@ jest.mock('@/lib/supabase/server', () => ({
   }),
 }));
 
-import InviteUserModal, { type PeopleInviteMode } from '@/components/users/InviteUserModal';
+import InviteUserModal from '@/components/users/InviteUserModal';
 import { MyPhoneCard } from '@/components/account/MyPhoneCard';
 import { removeUser } from '@/lib/actions/removeUser';
-import { PHONE_ERROR, formatBillingPhoneInput, isValidBillingPhone } from '@/lib/billing/phone';
 
-const PHONE_RULE = { isValid: isValidBillingPhone, format: formatBillingPhoneInput, error: PHONE_ERROR };
-
-function people(over: Partial<PeopleInviteMode> = {}): PeopleInviteMode {
-  return {
-    slot: 'billing',
-    phoneAllowed: true,
-    phoneRule: PHONE_RULE,
-    submit: jest.fn(async () => ({ ok: true as const, emailSent: true, inviteLink: 'https://portal.example.test/invite/tok' })),
-    ...over,
-  };
-}
 
 const EMAIL_LABEL = 'Email Address';
 function typeEmail(value: string) {
@@ -53,43 +41,7 @@ function typeEmail(value: string) {
 
 beforeEach(() => jest.clearAllMocks());
 
-describe('J1 InviteUserModal in People mode', () => {
-  it('billing: role preset "Billing only (no seat)", phone required, submit to the People action', async () => {
-    const p = people();
-    render(<InviteUserModal isOpen onClose={jest.fn()} organizationId="org-1" people={p} />);
-    expect(screen.getByLabelText('Role')).toHaveValue('Billing only (no seat)');
-    expect(screen.getByLabelText('Role')).toBeDisabled();
-    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
-    typeEmail('pay@example.test');
-    expect(screen.getByText('Send Invite')).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Phone'), { target: { value: '2025550141' } });
-    expect(screen.getByText('Send Invite')).not.toBeDisabled();
-    await act(async () => fireEvent.click(screen.getByText('Send Invite')));
-    expect(p.submit).toHaveBeenCalledWith({ email: 'pay@example.test', firstName: '', lastName: '', phone: '(202) 555-0141' });
-    expect(mockInviteUser).not.toHaveBeenCalled();
-    expect(screen.getByText('Invitation Email Sent')).toBeInTheDocument();
-  });
-
-  it('MSP for an IT admin caller: role "IT admin", company required, no phone field', async () => {
-    const p = people({ slot: 'msp', phoneAllowed: false, companyName: 'Fixture IT Co' });
-    render(<InviteUserModal isOpen onClose={jest.fn()} organizationId="org-1" people={p} />);
-    expect(screen.getByLabelText('Role')).toHaveValue('IT admin');
-    expect(screen.queryByLabelText(/Phone/)).not.toBeInTheDocument();
-    expect(screen.getByLabelText('IT provider company')).toHaveValue('Fixture IT Co');
-    typeEmail('it@example.test');
-    await act(async () => fireEvent.click(screen.getByText('Send Invite')));
-    expect(p.submit).toHaveBeenCalledWith({ email: 'it@example.test', firstName: '', lastName: '', phone: '', companyName: 'Fixture IT Co' });
-  });
-
-  it('a refusal is worded (seat_limit_reached) and the out-of-licenses "Invite without a license" is not offered', async () => {
-    const p = people({ slot: 'it', submit: jest.fn(async () => ({ ok: false as const, error: 'seat_limit_reached' })) });
-    render(<InviteUserModal isOpen onClose={jest.fn()} organizationId="org-1" people={p} allowInviteWithoutLicense />);
-    typeEmail('it@example.test');
-    await act(async () => fireEvent.click(screen.getByText('Send Invite')));
-    expect(screen.getByText('No license is free. The IT contact uses a seat.')).toBeInTheDocument();
-    expect(screen.queryByText(/Invite without a license/)).not.toBeInTheDocument();
-  });
-
+describe('J1 InviteUserModal (People invites now live in the People popup)', () => {
   it('without people: the role select and inviteUser, as before', async () => {
     mockInviteUser.mockResolvedValue({ inviteLink: 'https://portal.example.test/invite/x', emailSent: true });
     render(<InviteUserModal isOpen onClose={jest.fn()} organizationId="org-1" />);

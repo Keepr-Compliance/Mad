@@ -419,3 +419,56 @@ describe('DropdownOptions (standalone, phone recipe base)', () => {
     expect(onSelect).toHaveBeenCalledWith('admin');
   });
 });
+
+/**
+ * BACKLOG-4007 People popups: the panel is not portalled. A kit Dialog sets no overflow, so it
+ * does not clip the panel, but the Dialog is fixed and centered: near the bottom of the screen a
+ * downward panel would run off the viewport (and the page cannot scroll while the Dialog is
+ * open). The Dropdown measures the trigger on open and opens upward when the room below is
+ * short. jsdom has no layout, so the trigger's rectangle is stubbed.
+ */
+describe('Dropdown placement inside a kit Dialog', () => {
+  const realHeight = window.innerHeight;
+  afterEach(() => {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: realHeight });
+    jest.restoreAllMocks();
+  });
+
+  function openAt(top: number, viewport: number) {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: viewport });
+    render(
+      <Dialog open>
+        <DialogContent aria-describedby={undefined}>
+          <DialogTitle>Edit</DialogTitle>
+          <Dropdown label="User" options={ROLES} value={null} onChange={() => undefined} />
+        </DialogContent>
+      </Dialog>
+    );
+    const trigger = screen.getByRole('button', { name: /^User/ });
+    jest.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({ top, bottom: top + 36, left: 0, right: 300, width: 300, height: 36, x: 0, y: top, toJSON: () => ({}) } as DOMRect);
+    act(() => {
+      fireEvent.click(trigger);
+    });
+    return document.querySelector('[data-slot="dropdown-panel"]') as HTMLElement;
+  }
+
+  it('near the bottom of the viewport the panel opens upward', () => {
+    const panel = openAt(700, 768);
+    expect(panel).toHaveAttribute('data-side', 'top');
+    expect(panel.className).toContain('bottom-full');
+    expect(panel.className).not.toContain('mt-1');
+  });
+
+  it('with room below it opens downward', () => {
+    const panel = openAt(200, 768);
+    expect(panel).toHaveAttribute('data-side', 'bottom');
+    expect(panel.className).toContain('mt-1');
+  });
+
+  it('the Dialog content sets no overflow that would clip the panel', () => {
+    const panel = openAt(200, 768);
+    const content = screen.getByRole('dialog');
+    expect(content.className).not.toMatch(/overflow-(hidden|auto|y-auto|scroll)/);
+    expect(content.contains(panel)).toBe(true);
+  });
+});
