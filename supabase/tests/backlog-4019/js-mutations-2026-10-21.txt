@@ -29,3 +29,6 @@ MUTATION APPLIED K14 badge keeps Cancel pending admin-portal/lib/billing/dealRul
 MUTATION APPLIED K15 card field reads status only admin-portal/lib/billing/dealRules.ts c41861ca->70d4f576
 {"mutation": "K15 card field reads status only", "file": "admin-portal/lib/billing/dealRules.ts", "suite": "__tests__/auto-renew-4019", "failed": 2, "total": 7, "red": true}
 SUMMARY 15 of 15 red
+MUTATION APPLIED K16 IT admin reads the plan end broker-portal/app/dashboard/billing/page.tsx 479461f2->12d695d0
+{"mutation": "K16 IT admin reads the plan end", "file": "broker-portal/app/dashboard/billing/page.tsx", "suite": "__tests__/app/dashboard/billing/billing-page.test.tsx", "failed": 1, "total": 92, "red": true}
+SUMMARY 1 of 1 red
