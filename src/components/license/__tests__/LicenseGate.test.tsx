@@ -68,4 +68,24 @@ describe("LicenseGate blocked: Contact support (BACKLOG-4038 follow-up)", () => 
     expect(await screen.findByRole("heading", { name: "Contact Support" })).toBeInTheDocument();
     expect(window.api.shell.openExternal).not.toHaveBeenCalled();
   });
+
+  it("the startup-blocked support form pre-fills name and email from the saved session (BACKLOG-4038)", async () => {
+    (window.api as unknown as { support: Record<string, jest.Mock> }).support = {
+      getCategories: jest.fn().mockResolvedValue({ success: true, categories: [] }),
+      collectDiagnostics: jest.fn().mockResolvedValue({ success: true, diagnostics: null }),
+      captureScreenshot: jest.fn().mockResolvedValue({ success: true, screenshot: null }),
+      submitTicket: jest.fn(),
+    };
+    // No user id on this path: main falls back to the saved session.
+    jest.mocked(window.api.auth.getUserContact).mockImplementation(async (id?: string) =>
+      id === undefined
+        ? { success: true, name: "Agent Name", email: "agent@example.com" }
+        : { success: false, name: "", email: "" },
+    );
+    blockedWith("suspended");
+    renderGate();
+    await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
+    expect(await screen.findByLabelText(/Your Email/)).toHaveValue("agent@example.com");
+    expect(screen.getByLabelText(/Your Name/)).toHaveValue("Agent Name");
+  });
 });

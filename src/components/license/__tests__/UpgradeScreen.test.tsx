@@ -26,10 +26,18 @@ const COPY: Record<UpgradeReason, { title: string; body: string }> = {
 const REASONS = Object.keys(COPY) as UpgradeReason[];
 
 // window.api.support is not in tests/setup.js; the dialog's hook calls all four.
-function installSupportApi(): { submitTicket: jest.Mock } {
+// BACKLOG-4038: shape of support_categories rows as support:get-categories returns
+// them (select("*"), SupportCategory in useSupportTicket.ts). Ids are deliberately
+// not the seeded ids, so a hardcoded id cannot pass the slug test.
+const CATEGORIES = [
+  { id: "cat-technical", name: "Technical Issue", slug: "technical-issue", description: null, parent_id: null, sort_order: 1, is_active: true },
+  { id: "cat-billing", name: "Billing & Subscription", slug: "billing-subscription", description: null, parent_id: null, sort_order: 3, is_active: true },
+];
+
+function installSupportApi(categories: unknown[] = CATEGORIES): { submitTicket: jest.Mock } {
   const submitTicket = jest.fn().mockResolvedValue({ success: true, ticket_id: "t1", ticket_number: 42 });
   (window.api as unknown as { support: Record<string, jest.Mock> }).support = {
-    getCategories: jest.fn().mockResolvedValue({ success: true, categories: [] }),
+    getCategories: jest.fn().mockResolvedValue({ success: true, categories }),
     collectDiagnostics: jest.fn().mockResolvedValue({ success: true, diagnostics: null }),
     captureScreenshot: jest.fn().mockResolvedValue({ success: true, screenshot: null }),
     submitTicket,
@@ -42,7 +50,7 @@ let submitTicket: jest.Mock;
 beforeEach(() => {
   jest.clearAllMocks();
   ({ submitTicket } = installSupportApi());
-  jest.mocked(window.api.auth.getCurrentUser).mockResolvedValue({ success: false } as never);
+  jest.mocked(window.api.auth.getUserContact).mockResolvedValue({ success: false, name: "", email: "" });
 });
 
 describe("UpgradeScreen (BACKLOG-4038)", () => {
@@ -88,18 +96,63 @@ describe("UpgradeScreen (BACKLOG-4038)", () => {
     expect(window.api.billing.openPortal).not.toHaveBeenCalled();
   });
 
-  it("the support form pre-fills name and email from the signed-in user", async () => {
-    jest.mocked(window.api.auth.getCurrentUser).mockResolvedValue({
+  it("the support form pre-fills name and email from main for the blocked user id", async () => {
+    jest.mocked(window.api.auth.getUserContact).mockResolvedValue({
       success: true,
-      user: {
-        email: "agent@example.com",
-        display_name: "Agent Name",
-      },
-    } as never);
-    render(<UpgradeScreen reason="ended" onLogout={jest.fn()} />);
+      name: "Agent Name",
+      email: "agent@example.com",
+    });
+    render(<UpgradeScreen reason="ended" userId="u1" onLogout={jest.fn()} />);
     await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
     expect(await screen.findByLabelText(/Your Email/)).toHaveValue("agent@example.com");
     expect(screen.getByLabelText(/Your Name/)).toHaveValue("Agent Name");
+    expect(window.api.auth.getUserContact).toHaveBeenCalledWith("u1");
+  });
+
+  it("with nothing to read, the form opens with empty, editable name and email", async () => {
+    render(<UpgradeScreen reason="ended" onLogout={jest.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
+    const email = await screen.findByLabelText(/Your Email/);
+    expect(email).toHaveValue("");
+    await userEvent.type(email, "typed@example.com");
+    expect(email).toHaveValue("typed@example.com");
+  });
+
+  it.each(["suspended", "ended"] as const)(
+    "%s: priority starts High and the category resolves to Billing & Subscription by slug",
+    async (reason) => {
+      render(<UpgradeScreen reason={reason} onLogout={jest.fn()} />);
+      await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
+      expect(await screen.findByLabelText(/Priority/)).toHaveValue("high");
+      await waitFor(() => expect(screen.getByLabelText(/Category/)).toHaveValue("cat-billing"));
+    },
+  );
+
+  it("a category list without the billing slug leaves the category unset", async () => {
+    installSupportApi([CATEGORIES[0]]);
+    render(<UpgradeScreen reason="suspended" onLogout={jest.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
+    await screen.findByRole("option", { name: "Technical Issue" });
+    expect(screen.getByLabelText(/Category/)).toHaveValue("");
+    expect(screen.getByLabelText(/Priority/)).toHaveValue("high");
+  });
+
+  it("the fallback screen presets priority but leaves the category unset", async () => {
+    render(<UpgradeScreen reason="unknown" onLogout={jest.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
+    await screen.findByRole("option", { name: "Billing & Subscription" });
+    expect(screen.getByLabelText(/Category/)).toHaveValue("");
+    expect(screen.getByLabelText(/Priority/)).toHaveValue("high");
+  });
+
+  it("the user can change the preset priority and category", async () => {
+    render(<UpgradeScreen reason="suspended" onLogout={jest.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
+    await waitFor(() => expect(screen.getByLabelText(/Category/)).toHaveValue("cat-billing"));
+    await userEvent.selectOptions(screen.getByLabelText(/Priority/), "low");
+    await userEvent.selectOptions(screen.getByLabelText(/Category/), "cat-technical");
+    expect(screen.getByLabelText(/Priority/)).toHaveValue("low");
+    expect(screen.getByLabelText(/Category/)).toHaveValue("cat-technical");
   });
 
   it("submitting the support form calls support.submitTicket and shows the dialog's confirmation", async () => {
@@ -118,6 +171,8 @@ describe("UpgradeScreen (BACKLOG-4038)", () => {
         description: "My license shows as ended.",
         requester_email: "agent@example.com",
         requester_name: "Agent Name",
+        priority: "high",
+        category_id: "cat-billing",
       }),
     );
     expect(await screen.findByRole("heading", { name: "Ticket Submitted" })).toBeInTheDocument();

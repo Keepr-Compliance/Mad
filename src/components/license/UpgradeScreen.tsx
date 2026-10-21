@@ -15,7 +15,7 @@
  *
  * BACKLOG-4038 follow-up: "Contact support" opens the in-app SupportTicketDialog
  * (the form SupportWidget opens) instead of a mailto. The dialog needs only
- * window.api.support.* and window.api.auth.getCurrentUser; no provider, and the
+ * window.api.support.* and window.api.auth.getUserContact; no provider, and the
  * main-process handlers carry no license check, so it submits while blocked.
  */
 
@@ -48,8 +48,28 @@ export function upgradeReasonFor(blockReason: string | null | undefined): Upgrad
   return "unknown";
 }
 
+/**
+ * BACKLOG-4038: support form presets. The category is matched by slug against
+ * the categories the dialog loads (never a hardcoded id). The DECISION on 4038
+ * names the suspended and ended screens, so the fallback screen leaves the
+ * category unset. Priority is high on every variant: the user is locked out.
+ */
+export const BILLING_CATEGORY_SLUG = "billing-subscription";
+export const BLOCKED_SUPPORT_PRIORITY = "high" as const;
+const CATEGORY_SLUG_FOR: Record<UpgradeReason, string | undefined> = {
+  suspended: BILLING_CATEGORY_SLUG,
+  ended: BILLING_CATEGORY_SLUG,
+  unknown: undefined,
+};
+
 interface UpgradeScreenProps {
   reason: UpgradeReason;
+  /**
+   * BACKLOG-4038: the blocked user's id, when the block came from a sign-in
+   * (the auth:deep-link-license-blocked event). Absent for the startup block,
+   * where main falls back to the saved session.
+   */
+  userId?: string;
   /** Called when the user signs out */
   onLogout?: () => Promise<void>;
 }
@@ -70,7 +90,7 @@ const MESSAGES: Record<UpgradeReason, { title: string; description: string }> = 
   },
 };
 
-export function UpgradeScreen({ reason, onLogout }: UpgradeScreenProps): React.ReactElement {
+export function UpgradeScreen({ reason, userId, onLogout }: UpgradeScreenProps): React.ReactElement {
   const message = MESSAGES[reason] ?? MESSAGES.unknown;
   const [supportOpen, setSupportOpen] = useState(false);
   const [userEmail, setUserEmail] = useState("");
@@ -82,16 +102,17 @@ export function UpgradeScreen({ reason, onLogout }: UpgradeScreenProps): React.R
   };
 
   const handleContactSupport = async () => {
-    // Pre-fill name/email when a session exists (SupportWidget.tsx does the same).
-    // No session (blocked at sign-in) leaves the fields empty for the user to type.
+    // BACKLOG-4038: pre-fill name/email from main (name + email only, no tokens).
+    // auth:get-current-user cannot do this for a sign-in block: no local session
+    // is saved before the block, so it answers "No active session".
     try {
-      const result = await window.api?.auth?.getCurrentUser?.();
-      if (result?.success && result.user) {
-        setUserEmail(result.user.email || "");
-        setUserName(result.user.display_name || result.user.email || "");
+      const result = await window.api?.auth?.getUserContact?.(userId);
+      if (result?.success) {
+        setUserEmail(result.email || "");
+        setUserName(result.name || result.email || "");
       }
     } catch {
-      // No session or DB not ready: the dialog still opens with empty fields.
+      // Nothing to read: the dialog still opens with empty, editable fields.
     }
     setSupportOpen(true);
   };
@@ -136,13 +157,13 @@ export function UpgradeScreen({ reason, onLogout }: UpgradeScreenProps): React.R
         </CardContent>
       </Card>
       {supportOpen && (
-        // Category is a support_categories UUID loaded at runtime, so only the
-        // subject is preset; the dialog has no category preset.
         <SupportTicketDialog
           onClose={() => setSupportOpen(false)}
           userEmail={userEmail}
           userName={userName}
           prefilledSubject={`Account or billing: ${message.title}`}
+          initialPriority={BLOCKED_SUPPORT_PRIORITY}
+          initialCategorySlug={CATEGORY_SLUG_FOR[reason]}
         />
       )}
     </div>

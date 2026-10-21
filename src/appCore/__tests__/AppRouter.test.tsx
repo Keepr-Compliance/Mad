@@ -354,6 +354,41 @@ describe("AppRouter", () => {
       }
     });
 
+    it("the sign-in blocked support form pre-fills name and email for the blocked user id (BACKLOG-4038)", async () => {
+      (window.api as unknown as { support: Record<string, jest.Mock> }).support = {
+        getCategories: jest.fn().mockResolvedValue({ success: true, categories: [] }),
+        collectDiagnostics: jest.fn().mockResolvedValue({ success: true, diagnostics: null }),
+        captureScreenshot: jest.fn().mockResolvedValue({ success: true, screenshot: null }),
+        submitTicket: jest.fn(),
+      };
+      // Main answers only for the id it is asked about (the handler's own userId check).
+      jest.mocked(window.api.auth.getUserContact).mockImplementation(async (id?: string) =>
+        id === "u1"
+          ? { success: true, name: "Agent Name", email: "agent@example.com" }
+          : { success: false, name: "", email: "" },
+      );
+      mockRealUpgradeScreen = true;
+      try {
+        const app = createAppStateMock({
+          currentStep: "login",
+          isOnline: true,
+          isAuthenticated: false,
+          currentUser: null,
+        });
+        render(<AppRouter app={app} />);
+        const onLicenseBlocked = mockLoginProps.onLicenseBlocked as (d: {
+          userId: string;
+          blockReason: string;
+        }) => void;
+        act(() => onLicenseBlocked({ userId: "u1", blockReason: "suspended" }));
+        await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
+        expect(await screen.findByLabelText(/Your Email/)).toHaveValue("agent@example.com");
+        expect(screen.getByLabelText(/Your Name/)).toHaveValue("Agent Name");
+      } finally {
+        mockRealUpgradeScreen = false;
+      }
+    });
+
     it("should render OfflineFallback when currentStep is login and offline", () => {
       const app = createAppStateMock({
         currentStep: "login",
