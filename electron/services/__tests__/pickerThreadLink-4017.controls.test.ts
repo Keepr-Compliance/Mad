@@ -165,9 +165,15 @@ maybe("BACKLOG-4017 controls", () => {
     expect(picker()).toEqual(["m-4017-nt"]);
   });
 
-  it("K13 another chat linked to this deal does not hide this contact's unlinked chat (outer row qualifier)", async () => {
+  it("K13 another chat linked to this deal does not hide this contact's unlinked group chat (outer row qualifier)", async () => {
+    // A group member's text: only step 2 (thread messages) returns it, the contact
+    // fallback does not, so an over-broad step 1 cannot be rescued by the fallback.
+    db.prepare(
+      `INSERT INTO messages (id, user_id, external_id, channel, direction, participants, participants_flat, thread_id, sent_at, message_type, body_text)
+       VALUES ('m-4017-g', ?, 'g-g', 'imessage', 'inbound', ?, '12065550120', ?, '2025-01-04T10:00:00Z', 'text', 'member')`,
+    ).run(USER, JSON.stringify({ from: "+12065550120", to: ["me", PHONE] }), THREAD);
     await createThreadCommunicationReference("ios-chat-4017-other", TXN, USER, "auto", 0.9);
-    expect(picker()).toEqual(IDS);
+    expect(picker()).toEqual([...IDS, "m-4017-g"]);
     expect(hiddenCount()).toBe(0);
   });
 
