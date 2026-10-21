@@ -33,6 +33,14 @@
  *    organization name; address from the profile; phone from the billing contact; the PO number
  *    as an invoice custom field on every invoice ("PO number"), removed when cleared.
  *
+ * BACKLOG-4019 auto-renew:
+ *  - cancel_at_period_end is derived from the deal: true when the deal is 'canceling', or
+ *    'suspended' with status_before_suspension 'canceling' (wantsCancel). It rides the same
+ *    subscription update as seats and price; the key carries digest(params), and every switch is
+ *    a new deal version, so off -> on -> off never reuses a key.
+ *  - A canceling deal whose stored subscription has ended never gets a new subscription: the row
+ *    ends the deal instead (_billing_end_org_deal; the webhook missed or not yet delivered).
+ *
  * Per-organization lease (_billing_org_sync_lease, 120 s >= the drain's 60 s maxDuration):
  * two overlapping drain runs never sync one organization at once. Not acquired -> an ordinary
  * throw; the row retries with backoff (a try is consumed; with the superseded rule most
@@ -64,6 +72,12 @@ interface Deal {
   billing_contact_email: string | null;
   billing_starts_on?: string | null;
   billing_contact_id?: string | null;
+  status_before_suspension?: string | null;
+}
+
+/** BACKLOG-4019: the deal asks Stripe to stop renewing (auto-renew off). */
+export function wantsCancel(deal: Pick<Deal, 'status' | 'status_before_suspension'>): boolean {
+  return deal.status === 'canceling' || (deal.status === 'suspended' && deal.status_before_suspension === 'canceling');
 }
 
 /** org_billing_profile as the sync reads it. */
@@ -239,7 +253,7 @@ export const handleSyncOrgSubscriptionRow: OutboxHandler = async (row: OutboxRow
 
   const { data: dealData, error: dealErr } = await service
     .from('org_deals')
-    .select('stripe_mode, version, seats, status, billing_contact_email, billing_starts_on, billing_contact_id')
+    .select('stripe_mode, version, seats, status, billing_contact_email, billing_starts_on, billing_contact_id, status_before_suspension')
     .eq('organization_id', org)
     .maybeSingle();
   if (dealErr) throw new Error(`org_deals read failed: ${dealErr.code ?? 'unknown'}`);
@@ -336,15 +350,35 @@ export const handleSyncOrgSubscriptionRow: OutboxHandler = async (row: OutboxRow
 
     // ---- subscription ----
     let sub: Stripe.Subscription | null = null;
+    const cancel = wantsCancel(deal);
     if (mirror.stripe_subscription_id) {
       pastDeadline(ctx.deadline);
       sub = await stripe.subscriptions.retrieve(mirror.stripe_subscription_id);
-      if (ENDED.has(sub.status)) sub = null;
+      if (ENDED.has(sub.status)) {
+        if (cancel) {
+          // BACKLOG-4019: auto-renew is off and the stored subscription has ended: end the deal,
+          // never start a new subscription.
+          const res = await rpc<{ success?: boolean; outcome?: string; error?: string } | null>(service, '_billing_end_org_deal', {
+            p_org: org,
+            p_mode: mode,
+            p_subscription_id: sub.id,
+          });
+          if (!res?.success) throw new Error(`_billing_end_org_deal refused: ${res?.error ?? 'unknown'}`);
+          console.info(`[billing/brokerage-sync] ${row.id}: subscription ended while canceling; deal ${res.outcome}`);
+          return;
+        }
+        sub = null;
+      }
     }
     if (!sub) {
       pastDeadline(ctx.deadline);
       const list = await stripe.subscriptions.list({ customer: customer.id, status: 'all', limit: 100 });
       sub = list.data.find((s) => s.metadata?.kind === 'brokerage' && !ENDED.has(s.status)) ?? null;
+    }
+    if (!sub && cancel) {
+      // Auto-renew off is refused without a stored subscription; a canceling deal with no live
+      // one is a contradiction, never a reason to bill.
+      throw new NonRetryableOutboxError('canceling_without_subscription');
     }
     if (!sub) {
       pastDeadline(ctx.deadline);
@@ -367,17 +401,25 @@ export const handleSyncOrgSubscriptionRow: OutboxHandler = async (row: OutboxRow
     if (!item) throw new NonRetryableOutboxError('subscription_has_no_item');
     const qtyDiffers = item.quantity !== deal.seats;
     const priceDiffers = item.price?.unit_amount !== unitAmount;
-    if (qtyDiffers || priceDiffers) {
-      const itemPatch: Stripe.SubscriptionUpdateParams.Item = { id: item.id, quantity: deal.seats };
-      if (priceDiffers) {
-        itemPatch.price_data = {
-          currency: 'usd',
-          product: BROKERAGE_PRODUCT_ID,
-          unit_amount: unitAmount,
-          recurring: { interval: 'month' },
-        };
+    const cancelDiffers = (sub.cancel_at_period_end === true) !== cancel;
+    if (qtyDiffers || priceDiffers || cancelDiffers) {
+      const params: Stripe.SubscriptionUpdateParams = {};
+      if (qtyDiffers || priceDiffers) {
+        const itemPatch: Stripe.SubscriptionUpdateParams.Item = { id: item.id, quantity: deal.seats };
+        if (priceDiffers) {
+          itemPatch.price_data = {
+            currency: 'usd',
+            product: BROKERAGE_PRODUCT_ID,
+            unit_amount: unitAmount,
+            recurring: { interval: 'month' },
+          };
+        }
+        params.items = [itemPatch];
       }
-      const params: Stripe.SubscriptionUpdateParams = { items: [itemPatch], proration_behavior: 'none' };
+      // Key order kept as before (items, proration_behavior): the digest in the key is unchanged
+      // for a seat or price change.
+      params.proration_behavior = 'none';
+      if (cancelDiffers) params.cancel_at_period_end = cancel;
       pastDeadline(ctx.deadline);
       await stripe.subscriptions.update(sub.id, params, {
         idempotencyKey: brokerageKey(org, mode, `subscription_update:v${deal.version}:${digest(params)}`),

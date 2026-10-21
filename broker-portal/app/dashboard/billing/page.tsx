@@ -46,6 +46,7 @@ import { ORG_PAYER_ROLES } from '@/components/billing/orgPayerRoles';
 import type { OrgSuspensionReason } from '@/components/billing/OrgSuspendedBanner';
 import { BILLING_CONTACT_ROLE } from '@/lib/auth/billingContact';
 import { readOrgBillingSuspendedFor } from '@/lib/auth/orgSuspension';
+import { readPlanEnd } from '@/lib/billing/planEnd';
 
 const SITUATION_3844 = {
   agentPlan: 'none',
@@ -164,7 +165,16 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
         />
       );
     }
-    return <BillingPage caps={caps} orgBillingSetUp={SITUATION_3844.orgBillingSetUp} />;
+    // BACKLOG-4019: auto-renew, read with the person's own session (the database decides who
+    // may see and switch it); a failed read shows nothing.
+    const planEnd = await readPlanEnd(portal.supabase, organizationId);
+    return (
+      <BillingPage
+        caps={caps}
+        orgBillingSetUp={SITUATION_3844.orgBillingSetUp}
+        autoRenew={planEnd ? { organizationId, planEnd } : null}
+      />
+    );
   }
 
   // BACKLOG-3847: the personal owner's Agent plan, read only now that the page is admitted.

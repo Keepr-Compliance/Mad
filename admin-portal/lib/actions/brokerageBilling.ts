@@ -93,6 +93,30 @@ export async function suspendOrgAction(
   return result;
 }
 
+/**
+ * BACKLOG-4019: turn the deal's auto-renew off or back on. set_org_auto_renew checks
+ * billing.manage itself and needs the note for staff; the version guards against a stale card.
+ */
+export async function setAutoRenewAction(
+  organizationId: string,
+  on: boolean,
+  note: string,
+  expectedVersion: number
+): Promise<ActionResult> {
+  if (!note.trim()) return { ok: false, error: dealErrorMessage('note_required') };
+  const { supabase, user } = await getAuthenticatedUser();
+  if (!user) return { ok: false, error: dealErrorMessage('not_authorized') };
+  const { data, error } = await supabase.rpc('set_org_auto_renew', {
+    p_org: organizationId,
+    p_on: on,
+    p_note: note.trim(),
+    p_expected_version: expectedVersion,
+  });
+  const result = fromRpc(data as RpcResult, error);
+  if (result.ok) revalidatePath(`/dashboard/organizations/${organizationId}`);
+  return result;
+}
+
 export async function reinstateOrgAction(organizationId: string, note: string): Promise<ActionResult> {
   if (!note.trim()) return { ok: false, error: dealErrorMessage('note_required') };
   const { supabase, user } = await getAuthenticatedUser();

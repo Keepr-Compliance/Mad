@@ -643,6 +643,8 @@ BEGIN
   RETURN jsonb_build_object(
     'state', v_state,
     'ends_on', CASE WHEN v_state IN ('ending', 'ended') THEN v_ends ELSE NULL END,
+    -- the current period's end, for the confirm dialog ("Your plan ends on <date>")
+    'period_end', v_ends,
     'can_change', v_can,
     'version', v_deal.version);
 END

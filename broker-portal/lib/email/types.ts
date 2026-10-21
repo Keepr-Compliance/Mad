@@ -308,7 +308,10 @@ export type AccountManagerAlertReason =
   | 'setup_no_recipient'
   | 'price_question'
   // BACKLOG-4007 People v2: the billing contact was deprovisioned and the brokerage has no active admin.
-  | 'billing_contact_removed';
+  | 'billing_contact_removed'
+  // BACKLOG-4019: auto-renew turned off by the brokerage; the subscription ended while not canceling.
+  | 'auto_renew_off'
+  | 'subscription_ended_unexpectedly';
 
 export interface AccountManagerAlertParams {
   /** The account manager's sign-in email */

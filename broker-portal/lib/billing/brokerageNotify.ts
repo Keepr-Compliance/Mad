@@ -57,6 +57,10 @@ const AM_REASONS = new Set<AccountManagerAlertReason>([
   // BACKLOG-4007 People v2: enqueued by the database (_org_billing_contact_reassign) when the
   // deprovisioned billing contact's brokerage has no active admin.
   'billing_contact_removed',
+  // BACKLOG-4019: the brokerage turned auto-renew off itself (enqueued by _billing_set_auto_renew),
+  // and a subscription that ended while the deal was not canceling (./brokerage.ts).
+  'auto_renew_off',
+  'subscription_ended_unexpectedly',
 ]);
 
 interface DealRow {

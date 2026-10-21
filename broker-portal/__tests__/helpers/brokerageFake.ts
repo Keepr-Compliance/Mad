@@ -97,6 +97,28 @@ export function createBrokerageFake(seed: Record<string, Row[]> = {}): Brokerage
         .find((x) => (m.user_id ? x.user_id === m.user_id : x.pending_member_id === m.id));
       return p ? p.phone : null;
     },
+    // BACKLOG-4019 (migration 20261020220000 §6): ends a deal that is effectively canceling,
+    // only for the stored subscription. Outcomes as the SQL returns them.
+    _billing_end_org_deal: (a) => {
+      const d = deal(a.p_org);
+      if (!d) return { success: false, error: 'no_deal' };
+      if (d.stripe_mode !== a.p_mode) return { success: false, error: 'mode_mismatch' };
+      const m = db.rows('org_billing_stripe').find((x) => x.organization_id === a.p_org && x.stripe_mode === a.p_mode);
+      if (!m?.stripe_subscription_id || m.stripe_subscription_id !== a.p_subscription_id) return { success: true, outcome: 'not_stored' };
+      if (d.status === 'canceled') return { success: true, outcome: 'already_canceled' };
+      const eff = d.status === 'suspended' ? d.status_before_suspension : d.status;
+      if (eff !== 'canceling') {
+        return { success: true, outcome: 'not_canceling', status: d.status, status_before_suspension: d.status_before_suspension ?? null };
+      }
+      Object.assign(d, {
+        status: 'canceled',
+        status_before_suspension: null,
+        suspended_reason: null,
+        suspended_at: null,
+        version: (d.version as number) + 1,
+      });
+      return { success: true, outcome: 'ended', ended_on: m.current_period_end ?? null };
+    },
     _billing_org_sync_lease: (a) => {
       const r = mirror(a.p_org, a.p_mode);
       const now = Date.now();

@@ -1,4 +1,4 @@
-BACKLOG-4019 SQL controls, keepr-test after apply (ledger top 20261020220000), one call ending in RAISE (rolled back).
+BACKLOG-4019 SQL controls, keepr-test after apply (ledger top 20261020220000, file md5 e38f7c6d), one call ending in RAISE (rolled back).
 base: pass=40 fail=0 reds={}
    none
 c1c_widen_suspended: pass=36 fail=4 reds=['C1c_suspended_not_widened', 'G3_finalize_plan_ended', 'G5_unlock_allowed', 'W8_canceled_features_off']
@@ -16,7 +16,7 @@ grant_end_to_authenticated: pass=39 fail=1 reds=['C7_grants']
 grant_switch_to_authenticated: pass=39 fail=1 reds=['C7_grants']
    MUTATION APPLIED GRANT EXECUTE _billing_set_auto_renew TO authenticated
 w11_reader_broker_admin_only: pass=39 fail=1 reds=['R_reader_renewing']
-   MUTATION APPLIED public.broker_get_plan_end(uuid) 825b8255->b1da6cc1 [  IF NOT EXISTS (]
+   MUTATION APPLIED public.broker_get_plan_end(uuid) 681043f8->3700fa87 [  IF NOT EXISTS (]
 w12_alert_for_staff: pass=36 fail=4 reds=['D4_off_again_noop', 'W12_alert_for_admin', 'W12_dedupe', 'W12_no_alert_for_staff']
    MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer) 1e5a198c->5c14b0e0 [  IF NOT p_on THEN]
 w1_no_version_bump: pass=33 fail=7 reds=['D4_off_again_noop', 'D4_on_by_admin', 'DB6_brokerage_refused_while_suspended', 'DB6_staff_allowed_while_suspended', 'W1_off_one_sync_row', 'W12_alert_for_admin', 'W6_resume_after_end_refused']

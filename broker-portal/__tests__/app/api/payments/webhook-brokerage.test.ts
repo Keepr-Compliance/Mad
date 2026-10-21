@@ -346,3 +346,79 @@ describe('4007: $0 invoices are not payments', () => {
     expect(deal().status).toBe('active');
   });
 });
+
+/**
+ * BACKLOG-4019: a subscription that ended. Shapes: fixtures/stripe/p4019/sub-ended.json (the
+ * sandbox probe's "A after end"), with id and customer set to this file's stored ones [EDITED].
+ */
+describe('subscription ended (auto-renew off) — BACKLOG-4019', () => {
+  const FX4019 = path.join(__dirname, '../../../fixtures/stripe/p4019');
+  const ENDED: Obj = JSON.parse(fs.readFileSync(path.join(FX4019, 'sub-ended.json'), 'utf8'));
+  const endedSub = (id = SUB_PASTDUE.id as string): Obj => ({ ...clone(ENDED), id, customer: CUSTOMER_ID });
+  const deleted = (id = SUB_PASTDUE.id as string) => envelope('customer.subscription.deleted', id, EV_PASTDUE.created + 120, `evt_4019_${id}`);
+
+  it('C-W2: canceling deal + its stored subscription deleted -> deal canceled (one end call)', async () => {
+    seed({ deal: { status: 'canceling' } });
+    serveAs(SUB_PASTDUE.id, endedSub());
+    const res = await deliver(deleted());
+    expect(res.status).toBe(200);
+    expect(fake.callsTo('_billing_end_org_deal')).toEqual([{ p_org: ORG, p_mode: 'test', p_subscription_id: SUB_PASTDUE.id }]);
+    expect(deal().status).toBe('canceled');
+    expect(mirror()).toMatchObject({ status: 'canceled' });
+    expect(amRows()).toEqual([]);
+  });
+
+  it('C-W2b: suspended while canceling -> canceled too', async () => {
+    seed({ deal: { status: 'suspended', status_before_suspension: 'canceling', suspended_reason: 'other', suspended_at: '2026-10-17T00:00:00Z' } });
+    serveAs(SUB_PASTDUE.id, endedSub());
+    await deliver(deleted());
+    expect(deal().status).toBe('canceled');
+    expect(deal().suspended_reason).toBeNull();
+  });
+
+  it('a second delivery is a no-op (already canceled), no alert', async () => {
+    seed({ deal: { status: 'canceling' } });
+    serveAs(SUB_PASTDUE.id, endedSub());
+    await deliver(deleted());
+    await deliver({ ...deleted(), id: 'evt_4019_again', created: EV_PASTDUE.created + 180 });
+    expect(fake.callsTo('_billing_end_org_deal')).toHaveLength(2);
+    expect(deal().status).toBe('canceled');
+    expect(amRows()).toEqual([]);
+    expect(alerts('brokerage_subscription_ended_unexpectedly')).toEqual([]);
+  });
+
+  it('C-W1: ACTIVE deal + stored subscription deleted -> deal stays active; one account-manager row + alert', async () => {
+    seed();
+    serveAs(SUB_PASTDUE.id, endedSub());
+    await deliver(deleted());
+    await deliver({ ...deleted(), id: 'evt_4019_again', created: EV_PASTDUE.created + 180 });
+    expect(deal().status).toBe('active');
+    expect(amRows('subscription_ended_unexpectedly')).toHaveLength(1);
+    expect(amRows('subscription_ended_unexpectedly')[0]).toMatchObject({ organization_id: ORG, stripe_mode: 'test' });
+    expect(alerts('brokerage_subscription_ended_unexpectedly').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('C-W1b: suspended (before active) + deleted -> stays suspended; account-manager row', async () => {
+    seed({ deal: { status: 'suspended', status_before_suspension: 'active', suspended_reason: 'other', suspended_at: '2026-10-17T00:00:00Z' } });
+    serveAs(SUB_PASTDUE.id, endedSub());
+    await deliver(deleted());
+    expect(deal().status).toBe('suspended');
+    expect(amRows('subscription_ended_unexpectedly')).toHaveLength(1);
+  });
+
+  it('C-W3: a deleted subscription that is not the stored one -> nothing ends, no alert', async () => {
+    seed({ deal: { status: 'canceling' } });
+    serveAs('sub_4019_other', endedSub('sub_4019_other'));
+    await deliver(deleted('sub_4019_other'));
+    expect(fake.callsTo('_billing_end_org_deal')).toEqual([]);
+    expect(deal().status).toBe('canceling');
+    expect(amRows()).toEqual([]);
+  });
+
+  it('a late subscription.updated that already reads canceled converges the same way (state, not event type)', async () => {
+    seed({ deal: { status: 'canceling' } });
+    serveAs(SUB_PASTDUE.id, endedSub());
+    await deliver(envelope('customer.subscription.updated', SUB_PASTDUE.id, EV_PASTDUE.created + 120, 'evt_4019_upd'));
+    expect(deal().status).toBe('canceled');
+  });
+});
