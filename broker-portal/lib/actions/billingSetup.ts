@@ -48,16 +48,14 @@ export interface CompleteBillingSetupInput {
   acceptTerms: boolean;
   contact: BillingSetupContactInput;
   company: BillingSetupCompanyInput;
-  /** BACKLOG-4007 PR-4: give "Someone else" the billing-only login (Billing and Support, no seat). */
-  billingLogin?: boolean;
 }
 
 /**
- * BACKLOG-4007 PR-4: what happened to the billing-only login. Setup is complete either way.
- * 'sent' = created and the invitation emailed; 'created' = created, email not sent; otherwise
- * the database's refusal code (billingLoginErrorMessage words it).
+ * BACKLOG-4007 People v2: "Someone else" who is not yet a member always gets the billing-only
+ * login; a refusal stops setup before any write (an ordinary error code). When a login was
+ * created: 'sent' = the invitation was emailed, 'created' = the email did not send.
  */
-export type BillingLoginResult = 'sent' | 'created' | string;
+export type BillingLoginResult = 'sent' | 'created';
 
 export type BillingSetupResult =
   | { success: true; billingStartsOn: string; billingLogin?: BillingLoginResult }
@@ -118,21 +116,17 @@ export async function completeBillingSetup(input: CompleteBillingSetupInput): Pr
     p_expected_version: input.expectedVersion,
     p_contact: contactPayload(input.contact),
     p_company: companyPayload(input.company),
-    // Only for "Someone else"; the database refuses it for "Me" before any write.
-    p_billing_login: input.billingLogin === true && input.contact.who === 'other',
+    // Ignored by the database since People v2 (the login is automatic); the signature is kept.
+    p_billing_login: false,
   });
   if (doneErr) return fail(doneErr.code === '42501' ? 'not_authorized' : 'failed');
   const r = done as RpcResult;
   if (!r?.success || !r.billing_starts_on) return fail(r?.error ?? 'failed');
 
   let billingLogin: BillingLoginResult | undefined;
-  if (input.billingLogin === true && input.contact.who === 'other') {
-    if (isBillingLoginCreated(r.billing_login)) {
-      const sent = await sendBillingLoginInvite(r.billing_login, user.email ?? 'Your broker');
-      billingLogin = sent ? 'sent' : 'created';
-    } else {
-      billingLogin = (r.billing_login as { error?: string } | null)?.error ?? 'billing_login_failed';
-    }
+  if (isBillingLoginCreated(r.billing_login)) {
+    const sent = await sendBillingLoginInvite(r.billing_login, user.email ?? 'Your broker');
+    billingLogin = sent ? 'sent' : 'created';
   }
 
   revalidatePath('/dashboard', 'layout');

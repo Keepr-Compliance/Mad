@@ -1,36 +1,36 @@
 'use server';
 
 /**
- * Brokerage people on the organization page — BACKLOG-4007 PR-4.
+ * Brokerage people on the organization page — BACKLOG-4007 PR-4, People v2.
  *
  * Staff add and change a brokerage's billing contact, IT contact, office contacts and IT
- * provider (MSP), and turn the one billing-only login on or off. Every rule is in the database:
+ * provider (MSP), and invite a new person for a slot. Every rule is in the database:
  * org_contacts_list needs billing.view, the writes need billing.manage (has_permission on
- * auth.uid()), admin_search_users_for_contact needs billing.manage. These actions forward the
- * documented keys with the staffer's own client and send the billing-only login's invitation
- * email through the broker portal (the same proxy the Invite button uses).
+ * auth.uid()). Every contact is a member of the brokerage, so staff pick from its member list
+ * (no Keepr-wide search, PM c7c276be item 6). These actions forward the documented keys with
+ * the staffer's own client and send the invitation email through the broker portal (the same
+ * proxy the Invite button uses).
  */
 
 import * as Sentry from '@sentry/nextjs';
 import { revalidatePath } from 'next/cache';
 import { getAuthenticatedUser } from '@/lib/supabase/server';
-import type { OrgPeopleResult, OrgPeopleSaveInput, OrgPeopleUserHit, OrgPeopleView } from '@keepr/ui';
+import type { OrgPeopleInviteSlot, OrgPeopleResult, OrgPeopleSaveInput, OrgPeopleView } from '@keepr/ui';
 
-type Rpc = { success?: boolean; error?: string } | null;
+type Rpc = { success?: boolean; error?: string; role?: string } | null;
 
 function rpcError(error: { code?: string } | null): OrgPeopleResult {
   return { ok: false, error: error?.code === '42501' ? 'not_authorized' : 'failed' };
 }
 
-function savePayload(input: OrgPeopleSaveInput): Record<string, string> {
+/** Only the documented keys travel. */
+function savePayload(input: OrgPeopleSaveInput): Record<string, string | boolean> {
   const t = (v: string | undefined) => (v ?? '').trim();
-  const out: Record<string, string> = { role: input.role, phone: t(input.phone), company_name: t(input.company_name) };
+  const out: Record<string, string | boolean> = { role: input.role, member_id: input.member_id };
   if (input.id) out.id = input.id;
-  if (input.user_id) out.user_id = input.user_id;
-  else {
-    out.name = t(input.name);
-    out.email = t(input.email);
-  }
+  if (t(input.phone)) out.phone = t(input.phone);
+  if (input.role === 'msp') out.company_name = t(input.company_name);
+  if (input.confirm_role_change === true) out.confirm_role_change = true;
   return out;
 }
 
@@ -43,18 +43,12 @@ export async function listOrgContactsAction(organizationId: string): Promise<Org
   return {
     can_edit: v.can_edit,
     can_edit_billing: v.can_edit_billing === true,
+    can_edit_it: v.can_edit_it === true,
+    can_edit_phone: v.can_edit_phone === true,
     deal_status: v.deal_status,
     contacts: v.contacts ?? [],
     members: v.members ?? [],
   };
-}
-
-export async function searchUsersForContactAction(organizationId: string, query: string): Promise<OrgPeopleUserHit[]> {
-  const { supabase, user } = await getAuthenticatedUser();
-  if (!user) return [];
-  const { data, error } = await supabase.rpc('admin_search_users_for_contact', { p_org: organizationId, p_query: query });
-  if (error) return [];
-  return ((data as { users?: OrgPeopleUserHit[] } | null)?.users ?? []).slice(0, 10);
 }
 
 export async function saveOrgContactAction(organizationId: string, input: OrgPeopleSaveInput): Promise<OrgPeopleResult> {
@@ -63,7 +57,7 @@ export async function saveOrgContactAction(organizationId: string, input: OrgPeo
   const { data, error } = await supabase.rpc('org_contact_save', { p_org: organizationId, p_contact: savePayload(input) });
   if (error) return rpcError(error);
   const r = data as Rpc;
-  if (!r?.success) return { ok: false, error: r?.error ?? 'failed' };
+  if (!r?.success) return { ok: false, error: r?.error ?? 'failed', ...(r?.role ? { role: r.role } : {}) };
   revalidatePath(`/dashboard/organizations/${organizationId}`);
   return { ok: true };
 }
@@ -79,20 +73,38 @@ export async function removeOrgContactAction(organizationId: string, contactId: 
   return { ok: true };
 }
 
-interface LoginCreated {
+export interface InvitePersonActionInput {
+  slot: OrgPeopleInviteSlot;
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  companyName?: string;
+}
+
+export type InvitePersonActionResult =
+  | { ok: true; emailSent: boolean; inviteLink: string | null }
+  | { ok: false; error: string };
+
+interface InviteCreated {
   success: true;
+  slot: OrgPeopleInviteSlot;
   token: string;
   email: string;
-  name?: string | null;
   org_name?: string | null;
 }
 
-/** Sends the billing-only login's invitation through the broker portal. Never throws. */
-async function sendBillingLoginEmail(created: LoginCreated, inviterName: string): Promise<boolean> {
+function inviteLinkFor(token: string): string {
+  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://app.keeprcompliance.com';
+  return `${baseUrl}/invite/${token}`;
+}
+
+/** Sends the invitation through the broker portal. Never throws. */
+async function sendPeopleInviteEmail(created: InviteCreated, inviterName: string): Promise<boolean> {
   const brokerPortalUrl = process.env.BROKER_PORTAL_URL;
   const apiSecret = process.env.INTERNAL_API_SECRET;
   if (!brokerPortalUrl || !apiSecret) return false;
-  const baseUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://app.keeprcompliance.com';
+  const billingOnly = created.slot === 'billing';
   try {
     const response = await fetch(`${brokerPortalUrl}/api/email/send-invite`, {
       method: 'POST',
@@ -101,38 +113,41 @@ async function sendBillingLoginEmail(created: LoginCreated, inviterName: string)
         recipientEmail: created.email,
         organizationName: created.org_name || 'Keepr',
         inviterName,
-        role: 'Billing only',
-        inviteLink: `${baseUrl}/invite/${created.token}`,
+        role: billingOnly ? 'Billing only' : 'IT admin',
+        inviteLink: inviteLinkFor(created.token),
         expiresInDays: 7,
-        billingOnly: true,
+        ...(billingOnly ? { billingOnly: true } : {}),
       }),
     });
     const result = (await response.json()) as { success?: boolean };
     return result.success === true;
   } catch (e) {
-    Sentry.captureException(e, { tags: { action: 'billing_login_invite' } });
+    Sentry.captureException(e, { tags: { action: 'people_invite' } });
     return false;
   }
 }
 
-export async function setOrgBillingLoginAction(organizationId: string, enable: boolean): Promise<OrgPeopleResult> {
+/** "Invite new person" from People (InviteUserDialog in People mode). */
+export async function invitePersonAction(organizationId: string, input: InvitePersonActionInput): Promise<InvitePersonActionResult> {
   const { supabase, user } = await getAuthenticatedUser();
   if (!user) return { ok: false, error: 'not_authorized' };
-  const { data, error } = await supabase.rpc('org_billing_login_set', { p_org: organizationId, p_enable: enable });
-  if (error) return rpcError(error);
+  const t = (v: string | undefined) => (v ?? '').trim();
+  const person: Record<string, string> = {
+    slot: input.slot,
+    email: t(input.email),
+    first_name: t(input.firstName),
+    last_name: t(input.lastName),
+  };
+  if (t(input.phone)) person.phone = t(input.phone);
+  if (input.slot === 'msp') person.company_name = t(input.companyName);
+  const { data, error } = await supabase.rpc('org_people_invite', { p_org: organizationId, p_person: person });
+  if (error) return { ok: false, error: error.code === '42501' ? 'not_authorized' : 'failed' };
   const r = data as Rpc;
   if (!r?.success) return { ok: false, error: r?.error ?? 'failed' };
   revalidatePath(`/dashboard/organizations/${organizationId}`);
-  if (!enable) return { ok: true, note: 'The billing-only login was removed.' };
-  const created = data as Partial<LoginCreated>;
-  if (typeof created.token !== 'string' || typeof created.email !== 'string') return { ok: true };
+  const created = data as InviteCreated;
   const inviterName =
     [user.user_metadata?.first_name, user.user_metadata?.last_name].filter(Boolean).join(' ') || user.email || 'Keepr Support';
-  const sent = await sendBillingLoginEmail(created as LoginCreated, inviterName);
-  return {
-    ok: true,
-    note: sent
-      ? 'We emailed the billing contact an invitation to their billing-only login.'
-      : 'The billing-only login was created, but its invitation email did not send. Resend it from Pending Invitations.',
-  };
+  const sent = await sendPeopleInviteEmail(created, inviterName);
+  return { ok: true, emailSent: sent, inviteLink: inviteLinkFor(created.token) };
 }

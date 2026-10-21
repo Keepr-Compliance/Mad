@@ -28,7 +28,12 @@ const MESSAGES: Record<string, string> = {
   invalid_terms: 'Something went wrong. Please try again.',
   not_authenticated: 'Your session ended. Sign in again.',
   not_authorized: 'Only a broker or admin of this brokerage can finish billing setup.',
-  billing_login_needs_someone_else: 'A billing-only login is for someone else. Choose "Someone else" or untick it.',
+  // BACKLOG-4007 People v2: "Someone else" who is not a member gets the billing-only login; a
+  // refusal stops setup (PM c7c276be item 4). has_personal_account is the founder's sentence (b7f3cefe).
+  has_personal_account: 'This person already has their own Keepr account. Pick another billing contact or invite them as a member.',
+  duplicate_invitation: 'This email already has an open invitation to Keepr. Pick another billing contact.',
+  user_in_other_brokerage: 'This person belongs to another brokerage. Pick another billing contact.',
+  already_member: 'This person is already a member of your brokerage.',
 };
 
 export function billingSetupErrorMessage(code: string): string {

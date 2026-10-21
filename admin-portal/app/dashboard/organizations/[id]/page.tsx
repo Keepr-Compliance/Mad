@@ -210,7 +210,7 @@ export default async function OrganizationDetailPage({
       )}
 
       {/* Brokerage people (BACKLOG-4007 PR-4): next to the Billing card, same gate */}
-      {shouldShowBillingCard(billing) && <OrgPeopleCard organizationId={org.id} />}
+      {shouldShowBillingCard(billing) && <OrgPeopleCard organizationId={org.id} organizationName={org.name} />}
 
       {/* Pending invitations */}
       {pendingInvitations.length > 0 && (

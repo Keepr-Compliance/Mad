@@ -97,7 +97,7 @@ export type {
   OrgPeopleContact,
   OrgPeopleMember,
   OrgPeopleView,
-  OrgPeopleUserHit,
+  OrgPeopleInviteSlot,
   OrgPeopleSaveInput,
   OrgPeopleResult,
   OrgPeopleActions,

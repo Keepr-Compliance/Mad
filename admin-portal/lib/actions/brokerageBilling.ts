@@ -23,8 +23,6 @@ export interface SaveDealInput {
   organizationId: string;
   seats: number;
   unitPriceCents: number;
-  billingContactName: string;
-  billingContactEmail: string;
   accountManagerId: string | null;
   reason: string;
   /** null when the organization has no deal yet. */
@@ -64,8 +62,9 @@ export async function saveDealAction(input: SaveDealInput): Promise<ActionResult
     p_stripe_mode: mode,
     p_seats: input.seats,
     p_unit_price_cents: input.unitPriceCents,
-    p_billing_contact_name: input.billingContactName,
-    p_billing_contact_email: input.billingContactEmail,
+    // BACKLOG-4007 People v2: the billing contact is set in People / setup, never from the deal.
+    p_billing_contact_name: null,
+    p_billing_contact_email: null,
     p_account_manager_id: input.accountManagerId,
     p_reason: input.reason,
     p_expected_version: input.expectedVersion,

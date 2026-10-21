@@ -306,7 +306,9 @@ export type AccountManagerAlertReason =
   // BACKLOG-4007 PR-3: onboarding (billing setup) alerts.
   | 'setup_not_completed'
   | 'setup_no_recipient'
-  | 'price_question';
+  | 'price_question'
+  // BACKLOG-4007 People v2: the billing contact was deprovisioned and the brokerage has no active admin.
+  | 'billing_contact_removed';
 
 export interface AccountManagerAlertParams {
   /** The account manager's sign-in email */
@@ -322,6 +324,16 @@ export interface AccountManagerAlertParams {
 }
 
 /** BACKLOG-4007 PR-3: "finish your setup" reminder (outbox kind notify_setup_reminder). */
+/** BACKLOG-4007 People v2: "You are now the billing contact" (founder R9 refinement). */
+export interface BillingContactReassignedParams {
+  recipientEmail: string;
+  brokerageName: string;
+  /** Org Settings, where People lives. */
+  url: string;
+  outboxKey: string;
+  organizationId: string;
+}
+
 export interface SetupReminderParams {
   recipientEmail: string;
   brokerageName: string;

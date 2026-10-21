@@ -120,6 +120,10 @@ function stableJson(v: unknown): string {
  *                            BACKLOG-3853, lib/billing/brokerageNotify.ts (organization rows)
  *   - notify_setup_reminder  BACKLOG-4007, lib/billing/setupReminder.ts (enqueued by the
  *                            organization_members trigger, +3 d / +7 d after a broker/admin invite)
+ *   - notify_billing_contact_reassigned
+ *                            BACKLOG-4007 People v2, lib/billing/billingContactReassigned.ts
+ *                            (enqueued by the database when an IdP deprovision moved the billing
+ *                            contact to the account admin)
  */
 export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.freeze({
   agent_receipt: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
@@ -138,4 +142,6 @@ export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.f
     (await import('./brokerageNotify')).handleNotifyAccountManagerRow(row, ctx),
   notify_setup_reminder: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
     (await import('./setupReminder')).handleNotifySetupReminderRow(row, ctx),
+  notify_billing_contact_reassigned: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./billingContactReassigned')).handleNotifyBillingContactReassignedRow(row, ctx),
 });

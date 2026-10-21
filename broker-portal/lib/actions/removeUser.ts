@@ -27,6 +27,9 @@ interface RemoveResult {
   error?: string;
 }
 
+/** Founder R9 (BACKLOG-4007): the exact sentence. */
+const BILLING_CONTACT_REMOVE_REFUSED = 'Pick another billing contact first.';
+
 // ============================================================================
 // Main Action
 // ============================================================================
@@ -111,6 +114,11 @@ export async function removeUser(input: RemoveInput): Promise<RemoveResult> {
     .eq('id', input.memberId);
 
   if (deleteError) {
+    // BACKLOG-4007 People v2 (founder R9): the live billing contact's member row cannot be
+    // removed from the Users page (the database refuses it: billing_contact_member).
+    if (deleteError.message?.includes('billing_contact_member')) {
+      return { success: false, error: BILLING_CONTACT_REMOVE_REFUSED };
+    }
     console.error('Error removing user:', deleteError);
     return { success: false, error: 'Failed to remove user' };
   }
