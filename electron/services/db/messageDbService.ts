@@ -471,12 +471,29 @@ export function getLastMessageDatesForPhones(userId: string, phones: string[]): 
 
 /**
  * Populate phone_last_message lookup table from messages (BACKLOG-567)
- * This aggregates all SMS/iMessage into a phone->lastDate lookup for O(1) queries
+ * This aggregates all SMS/iMessage into a phone->lastDate lookup for O(1) queries.
+ *
+ * Promise sibling of backfillPhoneLastMessageTableSync. BACKLOG-3222: the
+ * import path calls the Sync form inside its own transaction; this wrapper
+ * stays because syncTwin.guard rule (i) requires a sibling for every *Sync
+ * writer. Do not delete it without changing that rule.
  */
 export async function backfillPhoneLastMessageTable(userId: string): Promise<number> {
-  const db = ensureDb();
+  const count = ensureDb().transaction(() => backfillPhoneLastMessageTableSync(userId))();
+  await logService.info("Phone last message backfill complete", "messageDbService", {
+    userId,
+    phonesUpdated: count,
+  });
+  return count;
+}
 
-  await logService.info("Backfilling phone_last_message table", "messageDbService", { userId });
+/**
+ * BACKLOG-3222: the phone_last_message recompute with NO transaction of its
+ * own and no awaited logs, so a caller can run it inside one transaction with
+ * the other post-import writes.
+ */
+export function backfillPhoneLastMessageTableSync(userId: string): number {
+  const db = ensureDb();
 
   const messages = db.prepare(`
     SELECT participants_flat, MAX(sent_at) as last_date
@@ -513,22 +530,11 @@ export async function backfillPhoneLastMessageTable(userId: string): Promise<num
     VALUES (?, ?, ?)
   `);
 
-  const runInserts = db.transaction(() => {
-    let count = 0;
-    for (const [phone, lastDate] of phoneLastDates) {
-      insertStmt.run(phone, userId, lastDate);
-      count++;
-    }
-    return count;
-  });
-
-  const count = runInserts();
-
-  await logService.info("Phone last message backfill complete", "messageDbService", {
-    userId,
-    phonesUpdated: count,
-  });
-
+  let count = 0;
+  for (const [phone, lastDate] of phoneLastDates) {
+    insertStmt.run(phone, userId, lastDate);
+    count++;
+  }
   return count;
 }
 

@@ -422,9 +422,14 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // was DELETED when BACKLOG-3339 put the contact, both address backfills and
   // the audit entry in one `dbTransaction`. Same caveat; the proof is the
   // crash sweep in `contactAuditInTransaction-3339.test.ts`.
-
-  "electron/handlers/messageImportHandlers.ts::ipc:messages:import-macos":
-    "BACKLOG-3222 @0dca6beb1 (:148, backfillContactCommunicationDates :278 + backfillPhoneLastMessageTable :302): contacts showing a refreshed last-communication date while phone_last_message still holds the pre-import value, so the contact list and the phone-keyed views disagree until the next successful import",
+  //
+  // `electron/handlers/messageImportHandlers.ts::ipc:messages:import-macos`
+  // (BACKLOG-3222) was DELETED when the contact dates, phone_last_message and
+  // external_contacts.last_message_at moved into one `dbTransaction`
+  // (electron/services/messageRecencyRefresh.ts). Same caveat: a no-op
+  // `dbTransaction(() => {})` in the handler also clears the unit (measured).
+  // The proof is the crash and error sweeps in
+  // `messageImport.recencyAtomic-3222.test.ts`.
 
   // ORIGINAL NOTE, kept because it records why this list was empty and why the
   // nine-entry version of it was discarded rather than merged:

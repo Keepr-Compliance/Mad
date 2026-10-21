@@ -2317,10 +2317,6 @@ class DatabaseService implements IDatabaseService {
     return contactDb.getContactsSortedByActivityWithStatus(userId, propertyAddress, opts);
   }
 
-  async backfillContactCommunicationDates(userId: string): Promise<number> {
-    return contactDb.backfillContactCommunicationDates(userId);
-  }
-
   async searchContacts(query: string, userId: string): Promise<Contact[]> {
     return contactDb.searchContacts(query, userId);
   }
@@ -2401,10 +2397,6 @@ class DatabaseService implements IDatabaseService {
 
   getLastMessageDatesForPhones(userId: string, phones: string[]): Map<string, string> {
     return messageDb.getLastMessageDatesForPhones(userId, phones);
-  }
-
-  async backfillPhoneLastMessageTable(userId: string): Promise<number> {
-    return messageDb.backfillPhoneLastMessageTable(userId);
   }
 
   async getContactNamesByPhones(phones: string[]): Promise<Map<string, string>> {
