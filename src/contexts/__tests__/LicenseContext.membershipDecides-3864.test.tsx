@@ -99,10 +99,11 @@ const VALIDATE_TEAM = {
 const renders: { resolved: boolean; canSubmit: boolean; org: string | null }[] = [];
 
 function Probe(): React.ReactElement {
-  const { organizationId, canSubmit, isLicenseResolved } = useLicense();
+  const { organizationId, canSubmit, isLicenseResolved, licenseType } = useLicense();
   renders.push({ resolved: isLicenseResolved, canSubmit, org: organizationId });
   return (
     <div>
+      <span data-testid="license-type">{licenseType}</span>
       <span data-testid="org">{organizationId ?? "none"}</span>
       <span data-testid="can-submit">{String(canSubmit)}</span>
       <span data-testid="resolved">{String(isLicenseResolved)}</span>
@@ -198,6 +199,26 @@ describe("BACKLOG-3864 — personal user, licenses row says team", () => {
     expect(mockLicenseService.validate).toHaveBeenCalled();
     await new Promise((r) => setTimeout(r, LATE_MS));
     expect(canSubmitText()).toBe("false");
+    expect(renders.filter((r) => r.resolved && r.canSubmit)).toEqual([]);
+  });
+});
+
+describe("BACKLOG-3864 — license:get fails after validate landed", () => {
+  it.each([
+    ["rejects", () => new Promise((_, rej) => setTimeout(() => rej(new Error("x")), LATE_MS))],
+    ["success:false", after({ success: false, data: null }, LATE_MS)],
+  ])("get %s, validate=team first: Submit stays off", async (_n, impl) => {
+    mockLicenseService.get.mockImplementation(impl as never);
+    mockLicenseService.validate.mockImplementation(after(VALIDATE_TEAM, EARLY_MS));
+    render(
+      <LicenseProvider userId="user-3864-e">
+        <Probe />
+      </LicenseProvider>,
+    );
+    await waitFor(() => expect(resolvedText()).toBe("true"));
+    expect(canSubmitText()).toBe("false");
+    // validate's licenseType must not stick when get has failed
+    expect(screen.getByTestId("license-type").textContent).toBe("individual");
     expect(renders.filter((r) => r.resolved && r.canSubmit)).toEqual([]);
   });
 });
