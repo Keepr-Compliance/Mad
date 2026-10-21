@@ -317,8 +317,8 @@ describe('BACKLOG-3896 kit drawer', () => {
     );
     const dialog = screen.getByRole('dialog', { name: 'Main menu' });
     const links = within(dialog).getAllByRole('link');
-    // BACKLOG-4007 PR-4: a broker has People (founder e8571c1f).
-    expect(links.map((a) => a.textContent)).toEqual(['Dashboard', 'Submissions', 'Support', 'People', 'My Account', 'Sign Out']);
+    // BACKLOG-4007: a broker has Org Settings (founder 17ad88e3); People sidebar item removed.
+    expect(links.map((a) => a.textContent)).toEqual(['Dashboard', 'Submissions', 'Support', 'Org Settings', 'My Account', 'Sign Out']);
     for (const a of links) expect(tokens(a)).toContain('min-h-[44px]');
     const grayed = within(dialog).getByTestId('checklists-nav-grayed');
     expect(tokens(grayed)).toContain('min-h-[44px]');
