@@ -297,6 +297,12 @@ $q$, '');
         FOR EACH ROW WHEN (OLD.license_status IS DISTINCT FROM 'suspended' AND NEW.license_status = 'suspended')
         EXECUTE FUNCTION public._org_billing_contact_member_suspend_guard()$t$;
       RETURN 'MUTATION APPLIED suspend guard WHEN without the scim_synced_at term';
+    -- over-broad guards (SR delta cef0832c): refuse EVERY stamp-less suspend / any contact role
+    WHEN 'r9_suspend_guard_all' THEN RETURN pg_temp.mut_fn('public._org_billing_contact_member_suspend_guard()',
+      E'IF EXISTS (SELECT 1 FROM public.org_contacts c\n              WHERE c.member_id = NEW.id AND c.role = \'billing\' AND c.removed_at IS NULL) THEN',
+      'IF true THEN');
+    WHEN 'r9_suspend_guard_any_contact' THEN RETURN pg_temp.mut_fn('public._org_billing_contact_member_suspend_guard()',
+      $q$c.member_id = NEW.id AND c.role = 'billing' AND c.removed_at IS NULL$q$, $q$c.member_id = NEW.id AND c.removed_at IS NULL$q$);
     WHEN 'r9_suspend_guard_unworded' THEN RETURN pg_temp.mut_fn('public._org_billing_contact_member_suspend_guard()',
       $q$    RAISE EXCEPTION 'billing_contact_member' USING ERRCODE = 'P0001',$q$, $q$    RAISE EXCEPTION 'suspend_refused' USING ERRCODE = 'P0001',$q$);
     -- F2: the email mask put back (the cell now asserts the IT admin sees the email)
@@ -729,6 +735,15 @@ $q$, '');
     r := r || jsonb_build_object('R9_users_page_deactivate_refused', pg_temp.pass(s2 LIKE 'ERR P0001 billing_contact_member%'
       AND pg_temp.billing_member(o1) = pg_temp.mem(o1, u_br)
       AND (SELECT m.license_status FROM public.organization_members m WHERE m.id = pg_temp.mem(o1, u_br)) = 'active', s || ' / ' || s2));
+    -- a Users-page Deactivate of a member who is NOT the billing contact still succeeds
+    -- (SR delta cef0832c: a guard refusing every Deactivate left all other cells green)
+    s2 := pg_temp.as_service(format('UPDATE public.organization_members SET license_status = %L, updated_at = now() WHERE id = %L', 'suspended', pg_temp.mem(o1, u_ag)));
+    r := r || jsonb_build_object('R9_deactivate_non_contact_ok', pg_temp.pass(s2 = 'ok'
+      AND (SELECT m.license_status FROM public.organization_members m WHERE m.id = pg_temp.mem(o1, u_ag)) = 'suspended'
+      AND pg_temp.billing_member(o1) = pg_temp.mem(o1, u_br), s2));
+    s2 := pg_temp.as_service(format('UPDATE public.organization_members SET license_status = %L, updated_at = now() WHERE id = %L', 'suspended', pg_temp.mem(o1, u_it)));
+    r := r || jsonb_build_object('R9_deactivate_it_member_ok', pg_temp.pass(s2 = 'ok'
+      AND (SELECT m.license_status FROM public.organization_members m WHERE m.id = pg_temp.mem(o1, u_it)) = 'suspended', s2));
     -- no active admin: the deal cache is cleared and the account manager is alerted
     n := pg_temp.outbox(o5, 'notify_account_manager');
     s2 := pg_temp.as_service(format('UPDATE public.organization_members SET license_status = %L, scim_synced_at = now() WHERE id = %L', 'suspended', pg_temp.mem(o5, u_b5)));
