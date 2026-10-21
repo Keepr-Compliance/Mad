@@ -106,7 +106,7 @@ export const MEMBER_LICENSE_ERRORS = {
   notAuthenticated: 'Not authenticated',
   notFound: 'Member not found',
   notAuthorized: 'Not authorized',
-  lastManager: 'Cannot unassign the last admin.',
+  lastManager: 'Cannot unassign the last admin. Make another user an admin first, then try again.',
   invalidTransition: "This member's license cannot be changed that way. Refresh the page.",
   failed: 'Failed to update license',
 } as const;

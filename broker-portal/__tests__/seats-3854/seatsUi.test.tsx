@@ -67,7 +67,7 @@ describe('SeatsBlock', () => {
   it('counts; Add seats -> modal (trial copy promises no charge) -> addSeats(count to ADD, read version)', async () => {
     mockAddSeats.mockResolvedValue({ ok: true, error: null, seatsTo: 5 });
     const { container } = render(<SeatsBlock view={await view()} viewer="admin" />);
-    expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Free2');
+    expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Available2');
     fireEvent.click(screen.getByRole('button', { name: 'Add seats' }));
     fireEvent.change(screen.getByLabelText('Seats to add'), { target: { value: '2' } });
     expect(screen.getByText('You have 3 seats. After this: 5. The new seats are billed from the end of your trial.')).toBeInTheDocument();
@@ -130,10 +130,16 @@ describe('SeatsBlock', () => {
     expect(screen.getByText('Fewer seats? Email am-3854@example.test.')).toBeInTheDocument();
   });
 
-  it('unlimited -> "No seat limit", no Free', async () => {
+  it('limited -> the unused-seat count is labelled "Available", not "Free" (BACKLOG-4027)', async () => {
+    render(<SeatsBlock view={await view({})} viewer="admin" />);
+    expect(screen.getByText('Available')).toBeInTheDocument();
+    expect(screen.queryByText('Free')).toBeNull();
+  });
+
+  it('unlimited -> "No seat limit", no Available', async () => {
     render(<SeatsBlock view={await view({ unlimited: true, bought: null, free: null })} viewer="admin" />);
     expect(screen.getByText('No seat limit')).toBeInTheDocument();
-    expect(screen.queryByText('Free')).toBeNull();
+    expect(screen.queryByText('Available')).toBeNull();
   });
 
   it('a failed read -> one line, no button', () => {
