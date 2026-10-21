@@ -54,6 +54,25 @@ function row(role: string): HTMLElement {
   return document.querySelector(`[data-role="${role}"]`) as HTMLElement;
 }
 
+// Radix Select under jsdom needs pointer-capture and scroll stubs (same as packages/ui/test/setup.ts).
+Object.assign(window.HTMLElement.prototype, {
+  hasPointerCapture: () => false,
+  setPointerCapture: () => undefined,
+  releasePointerCapture: () => undefined,
+  scrollIntoView: () => undefined,
+});
+
+async function openUserList() {
+  await act(async () => {
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'User' }), { key: 'Enter' });
+  });
+}
+
+const MEMBERS: OrgPeopleView['members'] = [
+  { user_id: 'u-ag', member_id: 'm-ag', role: 'agent', name: 'agent one', email: 'agent@example.test' },
+  { user_id: 'u-b2', member_id: 'm-b2', role: 'agent', name: 'Bea Two', email: 'bea@example.test' },
+];
+
 beforeEach(() => jest.clearAllMocks());
 
 describe('OrgPeoplePanel', () => {
@@ -62,7 +81,7 @@ describe('OrgPeoplePanel', () => {
     const onChanged = jest.fn();
     render(<OrgPeoplePanel view={VIEW} actions={a} phone={PHONE} onChanged={onChanged} />);
     expect(within(row('billing')).getByText('Person b1')).toBeInTheDocument();
-    expect(within(row('billing')).getByText('Contact only')).toBeInTheDocument();
+    expect(within(row('billing')).getByText('No login')).toBeInTheDocument();
     expect(within(row('it')).getByText('No one added')).toBeInTheDocument();
     await act(async () => fireEvent.click(within(row('billing')).getByText('Give billing-only login')));
     expect(a.setBillingLogin).toHaveBeenCalledWith(true);
@@ -75,7 +94,7 @@ describe('OrgPeoplePanel', () => {
     render(<OrgPeoplePanel view={view} actions={a} phone={PHONE} onChanged={jest.fn()} />);
     expect(within(row('billing')).getByText('Billing-only login')).toBeInTheDocument();
     expect(within(row('billing')).queryByText('Remove')).not.toBeInTheDocument();
-    await act(async () => fireEvent.click(within(row('billing')).getByText('Remove billing-only login')));
+    await act(async () => fireEvent.click(within(row('billing')).getByText('Remove login')));
     expect(a.setBillingLogin).toHaveBeenCalledWith(false);
   });
 
@@ -146,13 +165,27 @@ describe('OrgPeoplePanel', () => {
 
   it('Select existing user (broker): the brokerage members only, saved by user id', async () => {
     const a = actions();
-    render(<OrgPeoplePanel view={VIEW} actions={a} phone={PHONE} onChanged={jest.fn()} />);
+    render(<OrgPeoplePanel view={{ ...VIEW, members: MEMBERS }} actions={a} phone={PHONE} onChanged={jest.fn()} />);
     fireEvent.click(within(row('office')).getByText('Add person'));
     fireEvent.click(screen.getByRole('radio', { name: 'Select existing user' }));
-    expect(screen.queryByLabelText('Search users')).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('User'), { target: { value: 'u-ag' } });
+    await openUserList();
+    expect(screen.getAllByRole('option')).toHaveLength(2);
+    await act(async () => fireEvent.click(screen.getByRole('option', { name: /agent one/ })));
     await act(async () => fireEvent.click(screen.getByText('Save')));
     expect(a.save).toHaveBeenCalledWith(expect.objectContaining({ role: 'office', user_id: 'u-ag' }));
+  });
+
+  it('Select existing user (broker): Search users filters the members by name or email and never shows a non-member', async () => {
+    const a = actions();
+    render(<OrgPeoplePanel view={{ ...VIEW, members: MEMBERS }} actions={a} phone={PHONE} onChanged={jest.fn()} />);
+    fireEvent.click(within(row('office')).getByText('Add person'));
+    fireEvent.click(screen.getByRole('radio', { name: 'Select existing user' }));
+    fireEvent.change(screen.getByLabelText('Search users'), { target: { value: 'bea@' } });
+    await openUserList();
+    const names = screen.getAllByRole('option').map((o) => o.textContent);
+    expect(names).toEqual(['Bea Two (bea@example.test)']);
+    expect(screen.queryByRole('option', { name: /agent one/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: /stranger/ })).not.toBeInTheDocument();
   });
 
   it('Select existing user (staff): search; a user in another brokerage cannot be picked', async () => {
@@ -166,8 +199,43 @@ describe('OrgPeoplePanel', () => {
     fireEvent.click(within(row('office')).getByText('Add person'));
     fireEvent.click(screen.getByRole('radio', { name: 'Select existing user' }));
     await act(async () => fireEvent.change(screen.getByLabelText('Search users'), { target: { value: 'pe' } }));
-    await waitFor(() => expect(screen.getByRole('option', { name: /other user/ })).toBeDisabled());
-    expect(screen.getByRole('option', { name: /solo user/ })).not.toBeDisabled();
+    await openUserList();
+    await waitFor(() => expect(screen.getByRole('option', { name: /other user.*in another brokerage/ })).toHaveAttribute('aria-disabled', 'true'));
+    expect(screen.getByRole('option', { name: /solo user.*no brokerage/ })).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('removing the billing-only login says who can no longer sign in (name, else email)', async () => {
+    const view = { ...VIEW, contacts: [contact('b1', 'billing', { member_id: 'm-b', login: 'billing_only', name: 'Pat Payer' })] };
+    const r = render(<OrgPeoplePanel view={view} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
+    await act(async () => fireEvent.click(screen.getByText('Remove login')));
+    expect(screen.getByText('Pat Payer can no longer sign in. They still get the invoices by email.')).toBeInTheDocument();
+    r.unmount();
+    const noName = { ...VIEW, contacts: [contact('b1', 'billing', { member_id: 'm-b', login: 'billing_only', name: '', email: 'pay@example.test' })] };
+    render(<OrgPeoplePanel view={noName} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
+    await act(async () => fireEvent.click(screen.getByText('Remove login')));
+    expect(screen.getByText('pay@example.test can no longer sign in. They still get the invoices by email.')).toBeInTheDocument();
+  });
+
+  it('the old wording is gone', () => {
+    const view = { ...VIEW, contacts: [contact('b1', 'billing', { member_id: 'm-b', login: 'billing_only' }), contact('o1', 'office')] };
+    render(<OrgPeoplePanel view={view} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
+    expect(screen.queryByText('Contact only')).not.toBeInTheDocument();
+    expect(screen.queryByText('Remove billing-only login')).not.toBeInTheDocument();
+    expect(within(row('office')).getByText('No login')).toBeInTheDocument();
+  });
+
+  it('contact phones show formatted for US/CA numbers and as stored otherwise', () => {
+    const view = {
+      ...VIEW,
+      contacts: [
+        contact('b1', 'billing', { phone: '+12345678334' }),
+        contact('o1', 'office', { phone: '+442071838750' }),
+      ],
+    };
+    render(<OrgPeoplePanel view={view} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
+    expect(within(row('billing')).getByText(/\(234\) 567-8334/)).toBeInTheDocument();
+    expect(within(row('billing')).queryByText(/\+12345678334/)).not.toBeInTheDocument();
+    expect(within(row('office')).getByText(/\+442071838750/)).toBeInTheDocument();
   });
 
   it('one IT contact: Change, no Add; office lists 5 then Show more', () => {

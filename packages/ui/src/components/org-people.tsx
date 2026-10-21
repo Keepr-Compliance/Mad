@@ -15,7 +15,8 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Alert, Badge, Button, Input, Label, Select } from '@keepr/design-system';
+import { Alert, Badge, Button, Input, Label } from '@keepr/design-system';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './select';
 
 export type OrgContactRole = 'billing' | 'it' | 'office' | 'msp';
 
@@ -137,7 +138,7 @@ export function orgPeopleErrorMessage(code: string): string {
 function loginBadge(c: OrgPeopleContact) {
   if (c.login === 'billing_only') return <Badge hue="purple">Billing-only login</Badge>;
   if (c.login) return <Badge hue="blue">Has a login</Badge>;
-  return <Badge hue="gray">Contact only</Badge>;
+  return <Badge hue="gray">No login</Badge>;
 }
 
 interface PickerState {
@@ -175,6 +176,12 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, readOnly = fal
     return out;
   }, [view.contacts]);
   const billing = byRole.billing[0] ?? null;
+
+  // US/CA numbers are stored as +1 and ten digits; show them through the existing phone formatter.
+  const displayPhone = (stored: string) => {
+    const m = /^\+1([2-9]\d{9})$/.exec(stored);
+    return m ? phone.format(m[1]) : stored;
+  };
 
   const run = async (fn: () => Promise<OrgPeopleResult>, done?: () => void) => {
     setBusy(true);
@@ -222,10 +229,20 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, readOnly = fal
   };
 
   // "Select existing user": the brokerage's members, plus staff search results.
-  const existingChoices: Array<{ user_id: string; name: string; email: string; status: OrgPeopleUserHit['status'] }> = [
-    ...view.members.map((m) => ({ user_id: m.user_id, name: m.name, email: m.email, status: 'this_brokerage' as const })),
-    ...hits.filter((h) => !view.members.some((m) => m.user_id === h.user_id)),
-  ];
+  const allMembers: Array<{ user_id: string; name: string; email: string; status: OrgPeopleUserHit['status'] }> = view.members.map((m) => ({
+    user_id: m.user_id,
+    name: m.name,
+    email: m.email,
+    status: 'this_brokerage' as const,
+  }));
+  // Staff: every member plus server search hits. Broker: the "Search users" box filters the brokerage's own
+  // members client-side (no server query), keeping the current pick listed so the trigger still shows it.
+  const needle = query.trim().toLowerCase();
+  const existingChoices: Array<{ user_id: string; name: string; email: string; status: OrgPeopleUserHit['status'] }> = actions.searchUsers
+    ? [...allMembers, ...hits.filter((h) => !view.members.some((m) => m.user_id === h.user_id))]
+    : allMembers.filter(
+        (m) => needle === '' || m.user_id === picker?.userId || m.name.toLowerCase().includes(needle) || m.email.toLowerCase().includes(needle),
+      );
 
   const roleLabel = (r: OrgContactRole) => ROLES.find((x) => x.key === r)?.label ?? r;
 
@@ -259,7 +276,7 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, readOnly = fal
                       </p>
                       <p className="break-all text-xs text-gray-500">
                         {c.email}
-                        {c.phone ? ` · ${c.phone}` : ''}
+                        {c.phone ? ` · ${displayPhone(c.phone)}` : ''}
                       </p>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -303,8 +320,14 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, readOnly = fal
                 {r.key === 'billing' && billing && editableBilling ? (
                   <div className="pt-1">
                     {billing.login === 'billing_only' ? (
-                      <Button size="sm" variant="secondary" disabled={busy} onClick={() => void run(() => actions.setBillingLogin(false))}>
-                        Remove billing-only login
+                      <Button size="sm" variant="secondary" disabled={busy} onClick={() =>
+                          void run(
+                            () => actions.setBillingLogin(false),
+                            () => setNotice(`${billing.name || billing.email} can no longer sign in. They still get the invoices by email.`),
+                          )
+                        }
+                      >
+                        Remove login
                       </Button>
                     ) : !billing.member_id ? (
                       <>
@@ -370,21 +393,23 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, readOnly = fal
               </>
             ) : (
               <>
-                {actions.searchUsers ? (
-                  <div>
-                    <Label htmlFor="op-search" className="text-gray-900">Search users</Label>
-                    <Input id="op-search" className="text-gray-900" value={query} placeholder="Name or email" onChange={(e) => void search(e.target.value)} />
-                  </div>
-                ) : null}
+                <div>
+                  <Label htmlFor="op-search" className="text-gray-900">Search users</Label>
+                  <Input id="op-search" className="text-gray-900" value={query} placeholder="Name or email" onChange={(e) => void search(e.target.value)} />
+                </div>
                 <div>
                   <Label htmlFor="op-user" className="text-gray-900">User</Label>
-                  <Select id="op-user" className="text-gray-900" value={picker.userId} onChange={(e) => setPicker({ ...picker, userId: e.target.value })}>
-                    <option value="">Choose a user</option>
-                    {existingChoices.map((u) => (
-                      <option key={u.user_id} value={u.user_id} disabled={u.status === 'other_brokerage'}>
-                        {u.name} ({u.email}){u.status === 'other_brokerage' ? ' · in another brokerage' : u.status === 'no_brokerage' ? ' · no brokerage' : ''}
-                      </option>
-                    ))}
+                  <Select value={picker.userId} onValueChange={(v) => setPicker({ ...picker, userId: v })}>
+                    <SelectTrigger id="op-user" className="text-left text-gray-900">
+                      <SelectValue placeholder="Choose a user" />
+                    </SelectTrigger>
+                    <SelectContent className="text-left text-gray-900">
+                      {existingChoices.map((u) => (
+                        <SelectItem key={u.user_id} value={u.user_id} disabled={u.status === 'other_brokerage'}>
+                          {u.name} ({u.email}){u.status === 'other_brokerage' ? ' · in another brokerage' : u.status === 'no_brokerage' ? ' · no brokerage' : ''}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
                   </Select>
                 </div>
               </>
