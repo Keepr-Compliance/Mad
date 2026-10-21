@@ -219,17 +219,17 @@ describe('OrgPeoplePanel for an IT admin (can_edit_billing false)', () => {
   });
   const row = (role: string) => document.querySelector(`[data-role="${role}"]`) as HTMLElement;
 
-  it('the billing row has no buttons and says who can change it; IT, office and MSP can be added', () => {
+  it('the billing row has no buttons and says who can change it; IT, office and MSP can be edited', () => {
     render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
     expect(within(row('billing')).getByText('payer person')).toBeInTheDocument();
     expect(within(row('billing')).queryByRole('button')).not.toBeInTheDocument();
     expect(within(row('billing')).getByText('Only a broker or admin can change it.')).toBeInTheDocument();
-    for (const r of ['it', 'office', 'msp']) expect(within(row(r)).getByText('Add person')).toBeInTheDocument();
+    for (const r of ['it', 'office', 'msp']) expect(within(row(r)).getByText('Edit')).toBeInTheDocument();
   });
 
-  it('a broker (can_edit_billing true) gets Change; no billing-only login buttons any more', () => {
+  it('a broker (can_edit_billing true) gets Edit; no billing-only login buttons any more', () => {
     render(<OrgPeoplePanel view={{ ...VIEW, can_edit_billing: true }} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
-    expect(within(row('billing')).getByText('Change')).toBeInTheDocument();
+    expect(within(row('billing')).getByText('Edit')).toBeInTheDocument();
     expect(within(row('billing')).queryByText('Give billing-only login')).not.toBeInTheDocument();
   });
 });

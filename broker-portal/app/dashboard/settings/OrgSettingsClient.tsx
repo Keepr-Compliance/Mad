@@ -407,7 +407,7 @@ export default function OrgSettingsClient({ features, peopleOrganizationId }: Or
       )}
 
       {/* People — BACKLOG-4007. Admin and IT admin here; a broker gets a People-only page. */}
-      {peopleOrganizationId && <PeopleCard organizationId={peopleOrganizationId} />}
+      {peopleOrganizationId && <PeopleCard organizationId={peopleOrganizationId} linkUsers />}
     </div>
   );
 }

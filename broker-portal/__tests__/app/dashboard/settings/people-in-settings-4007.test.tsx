@@ -77,6 +77,20 @@ describe('/dashboard/settings by role', () => {
     expect(redirectTargets).toEqual([]);
   });
 
+  it('broker: the People card is mounted without links (the member page admits admins only)', async () => {
+    as('broker');
+    const el = await SettingsPage();
+    const found: Array<{ linkUsers?: boolean }> = [];
+    const walk = (n: unknown) => {
+      if (!React.isValidElement(n)) return;
+      if (n.type === PeopleCard) found.push(n.props as { linkUsers?: boolean });
+      React.Children.forEach((n.props as { children?: React.ReactNode }).children, walk);
+    };
+    walk(el);
+    expect(found).toHaveLength(1);
+    expect(found[0].linkUsers).toBeFalsy();
+  });
+
   it.each(['admin', 'it_admin'])('%s: the policy cards plus People', async (role) => {
     as(role);
     const el = await SettingsPage();

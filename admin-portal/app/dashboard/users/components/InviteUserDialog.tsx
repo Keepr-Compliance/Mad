@@ -11,17 +11,12 @@
  * BACKLOG-1533: Organization optional for individual users
  * BACKLOG-4007: no License Status field (the license comes from the brokerage's deal).
  *   Opened from an organization page, the organization is prefilled and locked.
- * BACKLOG-4007 People v2 (founder 723b63de): People's "Invite new person" opens this same
- *   dialog with `people` set: the role is preset and shown read-only (billing-only login or
- *   IT admin), a phone field is added, and the submit goes to the People action
- *   (org_people_invite) instead of inviteUser. Without `people` nothing changes.
  */
 
 import { useState, useEffect, useRef, useId, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { Lock } from 'lucide-react';
 import { Button, FieldHelp, Input, Select, Label } from '@keepr/design-system';
-import { orgPeopleErrorMessage, type OrgPeopleInviteSlot } from '@keepr/ui';
 import { createClient } from '@/lib/supabase/client';
 import { inviteUser } from '@/lib/actions/inviteUser';
 
@@ -38,35 +33,6 @@ interface Organization {
 
 type InviteRole = (typeof ROLE_OPTIONS)[number]['value'];
 
-/** People "Invite new person" (BACKLOG-4007 People v2). */
-export interface PeopleInviteInput {
-  email: string;
-  firstName: string;
-  lastName: string;
-  phone: string;
-  companyName?: string;
-}
-
-export type PeopleInviteResult =
-  | { ok: true; emailSent: boolean; inviteLink: string | null }
-  | { ok: false; error: string };
-
-export interface PeopleInviteMode {
-  slot: OrgPeopleInviteSlot;
-  /** MSP: the company, prefilled from the brokerage's existing MSP rows. */
-  companyName?: string;
-  /** The caller may write a phone (staff with billing.manage). */
-  phoneAllowed: boolean;
-  phoneRule: { isValid: (raw: string) => boolean; format: (raw: string) => string; error: string };
-  submit: (input: PeopleInviteInput) => Promise<PeopleInviteResult>;
-}
-
-const PEOPLE_ROLE_LINE: Record<OrgPeopleInviteSlot, string> = {
-  billing: 'Billing only (no seat)',
-  it: 'IT admin',
-  msp: 'IT admin',
-};
-
 interface InviteUserDialogProps {
   onClose: () => void;
   onInvited: () => void;
@@ -74,26 +40,14 @@ interface InviteUserDialogProps {
   lockedOrganization?: Organization;
   /** Role preselected when the dialog opens (default Agent). */
   defaultRole?: InviteRole;
-  /** Opened from People: role preset, phone field, People submit. Needs lockedOrganization. */
-  people?: PeopleInviteMode;
 }
 
-export function InviteUserDialog({ onClose, onInvited, lockedOrganization, defaultRole = 'agent', people }: InviteUserDialogProps) {
+export function InviteUserDialog({ onClose, onInvited, lockedOrganization, defaultRole = 'agent' }: InviteUserDialogProps) {
   const [email, setEmail] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [organizationId, setOrganizationId] = useState(lockedOrganization?.id ?? '');
   const [role, setRole] = useState<InviteRole>(defaultRole);
-  const [phone, setPhone] = useState('');
-  const [phoneTouched, setPhoneTouched] = useState(false);
-  const [companyName, setCompanyName] = useState(people?.companyName ?? '');
-  const phoneRequired = people?.slot === 'billing';
-  const phoneOk = !people || !people.phoneAllowed
-    ? true
-    : phone.trim() === ''
-      ? !phoneRequired
-      : people.phoneRule.isValid(phone);
-  const companyOk = people?.slot !== 'msp' || companyName.trim() !== '';
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isDuplicateError, setIsDuplicateError] = useState(false);
@@ -173,23 +127,6 @@ export function InviteUserDialog({ onClose, onInvited, lockedOrganization, defau
     setIsDuplicateError(false);
     setExistingOrgId(null);
     setExistingOrgName(null);
-
-    if (people) {
-      const r = await people.submit({
-        email: email.trim(),
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
-        phone: people.phoneAllowed ? phone.trim() : '',
-        ...(people.slot === 'msp' ? { companyName: companyName.trim() } : {}),
-      });
-      setIsLoading(false);
-      if (!r.ok) {
-        setError(orgPeopleErrorMessage(r.error));
-        return;
-      }
-      setSuccessResult({ inviteLink: r.inviteLink, emailSent: r.emailSent, flow: 'org' });
-      return;
-    }
 
     const result = await inviteUser({
       email: email.trim(),
@@ -441,51 +378,8 @@ export function InviteUserDialog({ onClose, onInvited, lockedOrganization, defau
           </div>
           )}
 
-          {/* People mode: the role is preset (BACKLOG-4007 People v2) */}
-          {people && (
-            <div>
-              <Label htmlFor="invite-role-locked">Role</Label>
-              <div className="relative">
-                <Input id="invite-role-locked" type="text" value={PEOPLE_ROLE_LINE[people.slot]} readOnly disabled className="pr-9" />
-                <Lock className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" aria-hidden="true" />
-              </div>
-              <FieldHelp>{people.slot === 'billing' ? 'Sees Billing and Support only. Uses no seat.' : 'Uses a seat.'}</FieldHelp>
-            </div>
-          )}
-
-          {people?.slot === 'msp' && (
-            <div>
-              <Label htmlFor="invite-company">IT provider company</Label>
-              <Input
-                id="invite-company"
-                type="text"
-                value={companyName}
-                onChange={(e) => setCompanyName(e.target.value)}
-                disabled={isLoading}
-              />
-            </div>
-          )}
-
-          {people?.phoneAllowed && (
-            <div>
-              <Label htmlFor="invite-phone" required={phoneRequired}>Phone</Label>
-              <Input
-                id="invite-phone"
-                type="tel"
-                value={phone}
-                onChange={(e) => setPhone(people.phoneRule.format(e.target.value))}
-                onBlur={() => setPhoneTouched(true)}
-                aria-invalid={phoneTouched && !phoneOk}
-                disabled={isLoading}
-              />
-              {phoneTouched && !phoneOk && (
-                <p role="alert" className="mt-1 text-sm text-red-600">{people.phoneRule.error}</p>
-              )}
-            </div>
-          )}
-
           {/* Role (only shown when organization is selected) */}
-          {organizationId && !people && (
+          {organizationId && (
             <div>
               <Label htmlFor="invite-role">
                 Role
@@ -580,7 +474,7 @@ export function InviteUserDialog({ onClose, onInvited, lockedOrganization, defau
             </Button>
             <Button
               type="submit"
-              disabled={isLoading || !email.trim() || !firstName.trim() || !lastName.trim() || !phoneOk || !companyOk}
+              disabled={isLoading || !email.trim() || !firstName.trim() || !lastName.trim()}
             >
               {isLoading ? 'Sending...' : 'Send Invitation'}
             </Button>

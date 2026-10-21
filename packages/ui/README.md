@@ -167,6 +167,13 @@ The panel is not portalled, so an ancestor with `overflow: hidden` clips it:
   variant exists.
 - `@keepr/design-system` `Modal` is `max-h-[90vh] overflow-y-auto`: the panel
   scrolls inside the modal rather than overflowing it.
+- A kit `Dialog` (`DialogContent`) sets no overflow, so it does not clip the
+  panel. The Dialog is fixed and centered and the page cannot scroll while it
+  is open, so the panel measures the trigger on open and opens **upward**
+  (`data-side="top"`) when there is less than 300px below it and more room
+  above (`dropdownSide`, BACKLOG-4007 People popups). Inside a Dialog, put a
+  scrolling list in its own `max-h` + `overflow-y-auto` box and keep the
+  Dropdown outside it.
 - The portal page shells (broker `DashboardShell`, admin dashboard layout) wrap
   pages in `overflow-auto` `main`. That scrolls, it does not clip: a tall panel
   near the bottom extends the page and the active row is scrolled into view.

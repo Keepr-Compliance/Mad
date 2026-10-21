@@ -13,6 +13,10 @@ import type { DropdownProps } from './types';
  * Inline popover (no portal, no new dependency): a `relative` wrapper and an
  * `absolute z-50` panel under the trigger. An `overflow-hidden` ancestor
  * clips the panel; see README "Dropdown" for where that applies.
+ * - The panel opens upward when the viewport has less than PANEL_MAX px
+ *   below the trigger and more room above (measured on open), so inside a
+ *   fixed, centered kit Dialog near the bottom of the screen it stays on
+ *   screen (BACKLOG-4007 People popups).
  *
  * - The trigger shows the label of `value` looked up in the FULL `options`,
  *   so a search that hides the selected row never blanks the trigger.
@@ -25,6 +29,15 @@ import type { DropdownProps } from './types';
  * - Enter / click pick and return focus to the trigger. A pointerdown
  *   outside closes WITHOUT moving focus, so the user's click target keeps it.
  */
+/** Search field + `max-h-60` listbox + borders: the most the panel can need. */
+const PANEL_MAX = 300;
+
+/** 'top' when there is less than PANEL_MAX below the trigger and more room above. */
+export function dropdownSide(rect: { top: number; bottom: number }, viewportHeight: number): 'top' | 'bottom' {
+  const below = viewportHeight - rect.bottom;
+  return below < PANEL_MAX && rect.top > below ? 'top' : 'bottom';
+}
+
 export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
   const {
     options,
@@ -51,6 +64,7 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
 
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState('');
+  const [side, setSide] = React.useState<'top' | 'bottom'>('bottom');
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
 
@@ -59,6 +73,8 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
 
   const openPanel = React.useCallback(() => {
     if (disabled) return;
+    const rect = triggerRef.current?.getBoundingClientRect();
+    setSide(rect && typeof window !== 'undefined' ? dropdownSide(rect, window.innerHeight) : 'bottom');
     setQuery('');
     setOpen(true);
   }, [disabled]);
@@ -138,7 +154,11 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
         <ChevronDown className="h-4 w-4 flex-shrink-0 text-gray-500" aria-hidden="true" />
       </button>
       {open ? (
-        <div data-slot="dropdown-panel" className="absolute z-50 mt-1 w-full rounded-lg bg-white shadow-lg">
+        <div
+          data-slot="dropdown-panel"
+          data-side={side}
+          className={cn('absolute z-50 w-full rounded-lg bg-white shadow-lg', side === 'top' ? 'bottom-full mb-1' : 'mt-1')}
+        >
           <DropdownOptions<V>
             options={options}
             value={value}

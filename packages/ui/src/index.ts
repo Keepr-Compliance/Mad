@@ -88,7 +88,7 @@ export {
 } from './components/select';
 
 // Dropdown (BACKLOG-4032) — searchable single-choice picker; see README "Dropdown".
-export { Dropdown, DropdownOptions, filterDropdownOptions } from './components/dropdown';
+export { Dropdown, DropdownOptions, filterDropdownOptions, dropdownSide } from './components/dropdown';
 export type {
   DropdownOption,
   DropdownProps,
@@ -113,4 +113,7 @@ export type {
   OrgPeopleActions,
   OrgPeoplePhoneRule,
   OrgPeoplePanelProps,
+  OrgPeopleInviteInput,
+  OrgPeopleInviteResult,
+  OrgPeopleUserRef,
 } from './components/org-people';
