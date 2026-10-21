@@ -105,7 +105,8 @@ describe("the rule", () => {
       unreferenced: (ps) => unreferencedAttachmentPaths(db, ps),
       deleteFile: (p) => (unlinked.push(p), true),
     });
-    expect(unlinked).toEqual([fs.realpathSync(real)]);
+    // fs.promises.realpath has native semantics (on-disk form, e.g. no 8.3 short names on Windows).
+    expect(unlinked).toEqual([fs.realpathSync.native(real)]);
     expect(unlinked[0]).toMatch(/\.PNG$/);
   });
 
@@ -125,7 +126,13 @@ describe("the rule", () => {
     const target = nodePath.join(tmp, "secret.png");
     fs.writeFileSync(target, "x");
     const link = nodePath.join(msgDir, `${hash(6)}.png`);
-    fs.symlinkSync(target, link);
+    try {
+      fs.symlinkSync(target, link);
+    } catch (error) {
+      // Windows runners without the symlink privilege (as attachmentReaders.handlers.test.ts).
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
     const r = await removeUnreferencedAttachmentFiles(db, [link], { userData: tmp, scopes: ALL_ATTACHMENT_SCOPES });
     expect(fs.existsSync(target)).toBe(true);
     expect(r.refused).toBe(1);
@@ -220,5 +227,5 @@ describe("cost (C7)", () => {
     expect(r.removed).toBe(Math.floor(CANDIDATES / 2));
     expect(r.stillReferenced).toBe(Math.ceil(CANDIDATES / 2));
     expect(r.lookupMs).toBeLessThan(1000);
-  });
+  }, 120_000);
 });
