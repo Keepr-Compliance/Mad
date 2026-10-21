@@ -112,9 +112,36 @@ e.g. `hover:bg-primary/90` → `hsl(var(--primary) / 0.9)`.
 | `Checkbox` | Radix `Checkbox` | `role="checkbox"`, keyboard + `aria-checked`, indeterminate. |
 | `Select` set | Radix `Select` | `Trigger` (`role="combobox"`) / `Content` / `Item` / `Value` / `Group` / `Label` / `Separator`. |
 
+## Report kit (BACKLOG-3502a)
+
+Desktop report pieces in `src/components/report/`, exported from the package
+root. Each is a copy of behaviour an admin report already ships, with a test
+for the way it is most likely to be built wrong. No `next/*` imports:
+navigation arrives as callbacks.
+
+| Export | What it is |
+|---|---|
+| `SortableTh` | `<th scope="col">` with `aria-sort` (`ascending` / `descending` / `none`) and a button. |
+| `useSortState`, `nextSort` | Same column flips; a new column opens at `defaultDirectionFor(key)`. |
+| `useClickOutside` | `mousedown` outside a ref, only while `enabled`. |
+| `MultiSelect`, `MultiSelectOptions` | Desktop trigger ("Label" / "Label (n)") + popover; a sibling "Clear <Label> filter" button. `MultiSelectOptions` is the one list (optional Select all / Clear all rows via `bulkActions`, optional `count` per option), purely controlled. |
+| `FilterBar`, `FilterCaption` | Filter row shell (Clear shown only while filtered); the "<lead>: <period> · <filters>" caption. |
+| `PeriodPicker` | Period select; From / To only for `customKey`; dates commit when complete or on blur. |
+| `StatCard` | Superset of the design-system `StatCard`: `subtitle`, `footer`, `tone="critical"` (red only for a number above 0), `onClick` + `pressed` toggle, `valueProps`, `purple` hue. |
+| `ShowMoreFooter` | "Showing n of N …" + "Show k more" (k = min(step, remaining)) + "Show all". |
+| `TruncationNotice` | The row-cap notice: names the cap, the period, and "a floor, not a total". |
+| `useReportUrlState`, `readFirst`, `readList`, `readSort`, `writeSort`, `writeParam`, `buildParamUrl` | State mirrored to the query string with `history.replaceState` (never `pushState`); helpers that keep params they do not own. |
+
+**Phone multi-select recipe.** `FilterSelectButton` (value "n selected") opens
+a `BottomSheet` holding `<MultiSelectOptions bulkActions={false} />`. The sheet
+header (`headerAction`) carries "Select all" / "Clear" text buttons
+(`min-h-11 px-2 text-sm font-semibold text-primary-700`); the parent holds a
+*pending* selection and the footer button (`primaryAction`) applies it. The
+recipe is exercised in `report/multi-select.test.tsx`.
+
 ### Not yet at parity with @keepr/design-system
 
-The design system also ships `Badge`, `Table`, `Modal`, `PageHeader`, `StatCard`,
+The design system also ships `Badge`, `Table`, `Modal`, `PageHeader`,
 `Spinner`, `SearchInput`, and Button variants `dangerOutline` / `success` /
 `warning`. Those are out of scope for the Tier-1 seed; add in later waves.
 
