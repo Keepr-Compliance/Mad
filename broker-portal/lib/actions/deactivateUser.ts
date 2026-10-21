@@ -15,6 +15,7 @@ import type { Role } from '@/lib/types/users';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
 import { PORTAL_GRANTING_LICENSE_STATUSES } from '@/lib/auth/membership';
+import { LAST_ADMIN_DEACTIVATE_REFUSED } from '@/lib/users/roleRefusals';
 
 // ============================================================================
 // Types
@@ -31,9 +32,6 @@ interface DeactivateResult {
 
 /** Founder R9 (BACKLOG-4007): the exact sentence, the same as the Users-page removal. */
 const BILLING_CONTACT_DEACTIVATE_REFUSED = 'Pick another billing contact first.';
-
-/** BACKLOG-4027 (founder B): a brokerage always keeps one active admin. */
-const LAST_ADMIN_DEACTIVATE_REFUSED = 'Cannot deactivate the last admin';
 
 // ============================================================================
 // Main Action

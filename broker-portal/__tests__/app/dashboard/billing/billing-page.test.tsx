@@ -1229,7 +1229,7 @@ describe('BACKLOG-3854: set-up brokerage -> seats + Manage billing', () => {
     given([brokerageMembership(role)]);
     setUp('active');
     const { container, unmount } = render(await BillingRoute({}));
-    expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Free2');
+    expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Available2');
     expect(container.textContent).toContain('Organization plan');
     expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(role === 'it_admin' ? 0 : 1);
     expect(stripeCalls()).toBe(0);
@@ -1255,7 +1255,7 @@ describe('BACKLOG-3854: set-up brokerage -> seats + Manage billing', () => {
       organizations: [{ id: ORG, name: 'Fixture Realty' }],
     });
     const { container, unmount } = render(await BillingRoute({}));
-    expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Free2');
+    expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Available2');
     expect(within(container).queryAllByRole('button', { name: 'Add seats' })).toHaveLength(0);
     expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(0);
     unmount();

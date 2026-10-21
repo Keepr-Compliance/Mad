@@ -13,6 +13,7 @@ import { createClient } from '@/lib/supabase/server';
 import type { Role } from '@/lib/types/users';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
+import { LAST_ADMIN_REMOVE_REFUSED } from '@/lib/users/roleRefusals';
 
 // ============================================================================
 // Types
@@ -103,7 +104,7 @@ export async function removeUser(input: RemoveInput): Promise<RemoveResult> {
       .neq('id', input.memberId);
 
     if (count === 0) {
-      return { success: false, error: 'Cannot remove the last admin' };
+      return { success: false, error: LAST_ADMIN_REMOVE_REFUSED };
     }
   }
 
@@ -121,7 +122,7 @@ export async function removeUser(input: RemoveInput): Promise<RemoveResult> {
     }
     // BACKLOG-4027 (founder B): the database keeps the brokerage's last active admin.
     if (deleteError.message?.includes('last_admin')) {
-      return { success: false, error: 'Cannot remove the last admin' };
+      return { success: false, error: LAST_ADMIN_REMOVE_REFUSED };
     }
     console.error('Error removing user:', deleteError);
     return { success: false, error: 'Failed to remove user' };
