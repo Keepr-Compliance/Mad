@@ -8,7 +8,7 @@
  * org_contact_remove, org_people_invite), so this component only presents.
  *
  * People v2 (founder 34ff8b68 / 723b63de): every contact is a member of the brokerage.
- * - "Select existing user": the brokerage's members (Keepr Select + search, #3128).
+ * - "Select existing user": the brokerage's members in one searchable Dropdown (BACKLOG-4032).
  * - "Invite new person" (billing, IT contact, MSP; never office): the portal's own invite
  *   dialog with the role preset, opened through onAddNew.
  * - An agent or broker picked as the IT contact / MSP becomes an IT admin after a confirm.
@@ -19,7 +19,7 @@
 
 import { useMemo, useState } from 'react';
 import { Alert, Badge, Button, Input, Label } from '@keepr/design-system';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './select';
+import { Dropdown, type DropdownOption } from './dropdown';
 
 export type OrgContactRole = 'billing' | 'it' | 'office' | 'msp';
 export type OrgPeopleInviteSlot = 'billing' | 'it' | 'msp';
@@ -177,7 +177,6 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, onAddNew, read
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [query, setQuery] = useState('');
   const [phoneTouched, setPhoneTouched] = useState(false);
 
   const editable = view.can_edit && !readOnly;
@@ -208,7 +207,6 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, onAddNew, read
     setError(null);
     setNotice(null);
     setPhoneTouched(false);
-    setQuery('');
   };
 
   const picked = picker ? memberById(picker.memberId) : undefined;
@@ -261,19 +259,23 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, onAddNew, read
     onChanged();
   };
 
-  // "Select existing user": the brokerage's members, filtered by the search box, keeping the
-  // current pick listed so the trigger still shows it.
-  const needle = query.trim().toLowerCase();
-  const choices = picker
+  // "Select existing user": every member this slot may list (billing-only people only for billing).
+  // The Dropdown searches name, email and role itself and looks the trigger label up in this full
+  // list, so the current pick needs no pinning against the search.
+  const choices: DropdownOption[] = picker
     ? view.members
         .filter((m) => picker.role === 'billing' || !m.billing_only || m.member_id === picker.memberId)
-        .filter(
-          (m) =>
-            needle === '' ||
-            m.member_id === picker.memberId ||
-            m.name.toLowerCase().includes(needle) ||
-            m.email.toLowerCase().includes(needle),
-        )
+        .map((m) => {
+          const block = pickBlock(picker.role, m);
+          const role = m.billing_only ? 'Billing only' : ROLE_NAMES[m.role] ?? m.role;
+          return {
+            value: m.member_id,
+            label: m.name,
+            description: `${m.email} · ${role}${m.pending ? ' · invited' : ''}`,
+            keywords: [m.email],
+            ...(block ? { disabled: true, hint: block } : {}),
+          };
+        })
     : [];
 
   const roleLabel = (r: OrgContactRole) => ROLES.find((x) => x.key === r)?.label ?? r;
@@ -389,34 +391,18 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, onAddNew, read
             {picker.id || picker.role === 'billing' ? 'Change' : 'Add'} {roleLabel(picker.role).toLowerCase()}
           </p>
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <div>
-              <Label htmlFor="op-search" className="text-gray-900">Search users</Label>
-              <Input id="op-search" className="text-gray-900" value={query} placeholder="Name or email" onChange={(e) => setQuery(e.target.value)} />
-            </div>
-            <div>
-              <Label htmlFor="op-user" className="text-gray-900">User</Label>
-              <Select
-                value={picker.memberId}
-                onValueChange={(v) => {
-                  const m = memberById(v);
-                  setPicker({ ...picker, memberId: v, confirmFrom: undefined, phone: m?.phone ? displayPhone(m.phone) : '' });
-                }}
-              >
-                <SelectTrigger id="op-user" className="text-left text-gray-900">
-                  <SelectValue placeholder="Choose a user" />
-                </SelectTrigger>
-                <SelectContent className="text-left text-gray-900">
-                  {choices.map((u) => {
-                    const block = pickBlock(picker.role, u);
-                    return (
-                      <SelectItem key={u.member_id} value={u.member_id} disabled={block !== null}>
-                        {u.name} ({u.email}){u.pending ? ' · invited' : ''}{block ? ` · ${block}` : ''}
-                      </SelectItem>
-                    );
-                  })}
-                </SelectContent>
-              </Select>
-            </div>
+            <Dropdown
+              label="User"
+              id="op-user"
+              options={choices}
+              value={picker.memberId || null}
+              placeholder="Choose a user"
+              searchPlaceholder="Search name or email"
+              onChange={(v) => {
+                const m = memberById(v);
+                setPicker({ ...picker, memberId: v, confirmFrom: undefined, phone: m?.phone ? displayPhone(m.phone) : '' });
+              }}
+            />
             {phoneEditable ? (
               <div>
                 <Label htmlFor="op-phone" required={phoneRequired} className="text-gray-900">Phone</Label>
