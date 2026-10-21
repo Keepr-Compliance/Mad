@@ -167,7 +167,8 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
     }
     // BACKLOG-4019: auto-renew, read with the person's own session (the database decides who
     // may see and switch it); a failed read shows nothing.
-    const planEnd = await readPlanEnd(portal.supabase, organizationId);
+    // IT admins never see billing details (3855): no read.
+    const planEnd = role === 'broker' || role === 'admin' || billingContact ? await readPlanEnd(portal.supabase, organizationId) : null;
     return (
       <BillingPage
         caps={caps}

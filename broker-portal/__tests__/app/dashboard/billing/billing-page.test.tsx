@@ -730,7 +730,12 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
       seedCustomer();
       const r = await page([row]);
       // BACKLOG-3853 PR-2B: the portal's own brokerage-suspension read is not a billing read.
-      expect(mockSessionRpc.mock.calls.filter((c) => c[0] !== 'org_billing_suspended')).toEqual([]);
+      // BACKLOG-4019: a broker or admin reads the plan's auto-renew state (broker_get_plan_end,
+      // own session); an IT admin reads nothing.
+      const role = (row as { role?: string }).role;
+      const allowed = role === 'it_admin' ? ['org_billing_suspended'] : ['org_billing_suspended', 'broker_get_plan_end'];
+      expect(mockSessionRpc.mock.calls.filter((c) => !allowed.includes(c[0] as string))).toEqual([]);
+      if (role === 'it_admin') expect(mockSessionRpc.mock.calls.some((c) => c[0] === 'broker_get_plan_end')).toBe(false);
       expect(mockServiceRpc).not.toHaveBeenCalled();
       expect(stripeCalls()).toBe(0);
       expect(mockBillingDb.callsTo('stripe_customers', 'select')).toEqual([]);

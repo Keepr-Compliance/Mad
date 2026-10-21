@@ -739,6 +739,9 @@ const FLOOR_ACTIONS = [
   // BACKLOG-4007 People v2: My Account phone; my_phone_get / my_phone_set touch only auth.uid()'s row.
   'lib/actions/myPhone.ts#getMyPhone',
   'lib/actions/myPhone.ts#setMyPhone',
+  // BACKLOG-4019: set_org_auto_renew with the user's session; the database admits only the
+  // brokerage's Admin and billing contact (42501 for everyone else), refused while suspended.
+  'lib/actions/autoRenew.ts#setAutoRenew',
 ];
 
 /**
@@ -1007,7 +1010,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(55); // BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
+    expect(actions.length).toBe(56); // BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
   });
 });
 

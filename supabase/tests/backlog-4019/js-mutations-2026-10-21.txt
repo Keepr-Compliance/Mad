@@ -1,0 +1,31 @@
+MUTATION APPLIED K1 W2 sync ignores cancel broker-portal/lib/billing/brokerageSync.ts d4a7fc14->ad0f7b70
+{"mutation": "K1 W2 sync ignores cancel", "file": "broker-portal/lib/billing/brokerageSync.ts", "suite": "__tests__/lib/billing/outboxKinds/sync_org_subscription.convergence.test.ts", "failed": 3, "total": 28, "red": true}
+MUTATION APPLIED K2 W3 wantsCancel reads status only broker-portal/lib/billing/brokerageSync.ts d4a7fc14->34e0b239
+{"mutation": "K2 W3 wantsCancel reads status only", "file": "broker-portal/lib/billing/brokerageSync.ts", "suite": "__tests__/lib/billing/outboxKinds/sync_org_subscription.convergence.test.ts", "failed": 1, "total": 28, "red": true}
+MUTATION APPLIED K3 W5 ended sub while canceling re-created broker-portal/lib/billing/brokerageSync.ts d4a7fc14->6da7bbd6
+{"mutation": "K3 W5 ended sub while canceling re-created", "file": "broker-portal/lib/billing/brokerageSync.ts", "suite": "__tests__/lib/billing/outboxKinds/sync_org_subscription.convergence.test.ts", "failed": 1, "total": 28, "red": true}
+MUTATION APPLIED K4 W5 canceling with no live sub creates one broker-portal/lib/billing/brokerageSync.ts d4a7fc14->7dc2640b
+{"mutation": "K4 W5 canceling with no live sub creates one", "file": "broker-portal/lib/billing/brokerageSync.ts", "suite": "__tests__/lib/billing/outboxKinds/sync_org_subscription.convergence.test.ts", "failed": 1, "total": 28, "red": true}
+MUTATION APPLIED K5 W4 webhook never ends the deal broker-portal/lib/billing/brokerage.ts 4ca99e16->c8ac46c7
+{"mutation": "K5 W4 webhook never ends the deal", "file": "broker-portal/lib/billing/brokerage.ts", "suite": "__tests__/app/api/payments/webhook-brokerage.test.ts", "failed": 6, "total": 27, "red": true}
+MUTATION APPLIED K6 W4 unexpected end not alerted broker-portal/lib/billing/brokerage.ts 4ca99e16->5bc4e0af
+{"mutation": "K6 W4 unexpected end not alerted", "file": "broker-portal/lib/billing/brokerage.ts", "suite": "__tests__/app/api/payments/webhook-brokerage.test.ts", "failed": 2, "total": 27, "red": true}
+MUTATION APPLIED K7 backstop ends a sub Stripe still has open broker-portal/lib/billing/brokerageEndBackstop.ts 1f82085f->880e533f
+{"mutation": "K7 backstop ends a sub Stripe still has open", "file": "broker-portal/lib/billing/brokerageEndBackstop.ts", "suite": "__tests__/lib/billing/brokerageEndBackstop.test.ts", "failed": 1, "total": 5, "red": true}
+MUTATION APPLIED K8 backstop has no grace broker-portal/lib/billing/brokerageEndBackstop.ts 1f82085f->a687bad9
+{"mutation": "K8 backstop has no grace", "file": "broker-portal/lib/billing/brokerageEndBackstop.ts", "suite": "__tests__/lib/billing/brokerageEndBackstop.test.ts", "failed": 1, "total": 5, "red": true}
+MUTATION APPLIED K9 W10 action uses the service client broker-portal/lib/actions/autoRenew.ts 49781610->63a08887
+{"mutation": "K9 W10 action uses the service client", "file": "broker-portal/lib/actions/autoRenew.ts", "suite": "__tests__/auto-renew-4019/autoRenewAction.test.ts", "failed": 4, "total": 4, "red": true}
+MUTATION APPLIED K10 buttons from role, not can_change broker-portal/components/billing/AutoRenewBlock.tsx 9bc5bd8e->bca56289
+{"mutation": "K10 buttons from role, not can_change", "file": "broker-portal/components/billing/AutoRenewBlock.tsx", "suite": "__tests__/auto-renew-4019/autoRenewUi.test.tsx", "failed": 1, "total": 7, "red": true}
+MUTATION APPLIED K11 no confirm dialog broker-portal/components/billing/AutoRenewBlock.tsx 9bc5bd8e->e92cbb75
+{"mutation": "K11 no confirm dialog", "file": "broker-portal/components/billing/AutoRenewBlock.tsx", "suite": "__tests__/auto-renew-4019/autoRenewUi.test.tsx", "failed": 1, "total": 7, "red": true}
+MUTATION APPLIED K12 broker line ignores can_change broker-portal/lib/billing/planEnd.ts 5d84c4df->96d50e57
+{"mutation": "K12 broker line ignores can_change", "file": "broker-portal/lib/billing/planEnd.ts", "suite": "__tests__/auto-renew-4019/autoRenewUi.test.tsx", "failed": 1, "total": 7, "red": true}
+MUTATION APPLIED K13 staff buttons without billing.manage admin-portal/lib/billing/dealRules.ts c41861ca->b35735a3
+{"mutation": "K13 staff buttons without billing.manage", "file": "admin-portal/lib/billing/dealRules.ts", "suite": "__tests__/auto-renew-4019", "failed": 1, "total": 7, "red": true}
+MUTATION APPLIED K14 badge keeps Cancel pending admin-portal/lib/billing/dealRules.ts c41861ca->01a1d0ae
+{"mutation": "K14 badge keeps Cancel pending", "file": "admin-portal/lib/billing/dealRules.ts", "suite": "__tests__/auto-renew-4019", "failed": 2, "total": 7, "red": true}
+MUTATION APPLIED K15 card field reads status only admin-portal/lib/billing/dealRules.ts c41861ca->70d4f576
+{"mutation": "K15 card field reads status only", "file": "admin-portal/lib/billing/dealRules.ts", "suite": "__tests__/auto-renew-4019", "failed": 2, "total": 7, "red": true}
+SUMMARY 15 of 15 red
