@@ -81,9 +81,12 @@ interface LicenseContextValue {
    *      returns a positive "individual, no organization" when it has no
    *      session yet, and on the deferred-DB deep-link path `userId` is set
    *      before the session is written;
-   *   3. `validateLicense` has also landed (`validatedForUserId`) — it is a
-   *      second writer of `licenseType`, so until it speaks `canSubmit` is
-   *      still moving.
+   *   3. `validateLicense` has also landed (`validatedForUserId`). Since
+   *      BACKLOG-3864 it no longer writes `licenseType` — the org membership
+   *      from `license:get` alone decides that — but it still sets
+   *      `validationStatus` and its `blockReason`, which LicenseGate reads to
+   *      decide whether the user may use the app at all. Until it speaks, that
+   *      decision is still moving.
    *
    * It always settles. Every fetch and validate path — success, no-license,
    * and throw — clears `isLoading` and stamps its user; a load that FAILS
@@ -155,11 +158,13 @@ interface LicenseState {
   /**
    * BACKLOG-2885 — the userId `validateLicense` last completed for.
    *
-   * `validateLicense` overwrites `licenseType`, which drives `canSubmit`, and it
-   * runs on a different network call from `fetchLicense`. Until BOTH have landed
-   * the pair (licenseType, organizationId) is still moving, so declaring the
-   * license "known" after only one of them lets a user act on a value that is
-   * about to change — the same defect this item exists to remove.
+   * BACKLOG-3864: `validateLicense` no longer writes `licenseType`; only
+   * `fetchLicense` (the org membership from `license:get`) does, so
+   * (licenseType, organizationId) now arrive together. This stamp still gates
+   * `isLicenseResolved` because `validateLicense` runs on a different network
+   * call and sets `validationStatus` / `blockReason`, which LicenseGate reads.
+   * Declaring the license "known" before it lands lets the UI act on a
+   * validation status that is about to change.
    */
   validatedForUserId: string | null | undefined;
   // SPRINT-062: Validation status
@@ -346,8 +351,10 @@ export function LicenseProvider({
         setState((prev) => ({
           ...prev,
           validationStatus: validationResult,
-          // Map validation result to existing fields for backward compatibility
-          licenseType: validationResult.licenseType as LicenseType,
+          // BACKLOG-3864: licenseType is NOT written here. The org membership
+          // (fetchLicense, `license:get`) is its only writer; the licenses
+          // row's license_type used to race it and could revoke Submit for a
+          // brokerage member.
           hasAIAddon: validationResult.aiEnabled,
           isLoading: false,
           hasInitialized: true, // Mark as initialized after first successful load
@@ -407,8 +414,8 @@ export function LicenseProvider({
    * which is how a brokerage user ended up reading as an individual for minutes
    * at a time. This provider mounts above `AuthProvider`'s session check, so the
    * mount fetch runs with no session and gets the "individual, no organization"
-   * default; `validateLicense` then runs on login but sets only `licenseType`,
-   * never `organizationId`. Nothing re-read the license after login, so the
+   * default; `validateLicense` then ran on login but set only `licenseType`,
+   * never `organizationId` (since BACKLOG-3864 it sets neither). Nothing re-read the license after login, so the
    * organization arrived only when a window `focus` happened to fire the silent
    * background fetch — which is exactly what made the Export button appear
    * mid-click for the founder.
