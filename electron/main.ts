@@ -213,6 +213,7 @@ import { registerLicenseHandlers } from "./handlers/licenseHandlers";
 import { registerFeatureGateHandlers } from "./handlers/featureGateHandlers";
 import { registerEntitlementHandlers } from "./handlers/entitlementHandlers";
 import { registerPaymentHandlers } from "./handlers/paymentHandlers";
+import { registerBillingHandlers } from "./handlers/billingHandlers";
 import { sanitizeSessionId } from "./services/paymentService";
 import { registerPreAuthValidationHandler } from "./handlers/preAuthValidationHandler";
 import { registerSupportTicketHandlers } from "./handlers/supportTicketHandlers";
@@ -1973,6 +1974,7 @@ app.whenReady().then(async () => {
 
   // Register PAYG card-purchase handlers (BACKLOG-2015)
   registerPaymentHandlers();
+  registerBillingHandlers(); // BACKLOG-3863
 
   // TASK-2086: Register pre-DB auth validation handler (SOC 2 CC6.1)
   registerPreAuthValidationHandler();
