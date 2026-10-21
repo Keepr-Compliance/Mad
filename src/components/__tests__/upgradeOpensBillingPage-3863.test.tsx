@@ -181,9 +181,8 @@ describe("BACKLOG-3863 — Upgrade actions open the portal Billing page", () => 
     });
 
     it("UpgradeScreen click, then focus -> billing:refresh once", async () => {
-      render(<UpgradeScreen reason="transaction_limit" onLogout={jest.fn()} />);
-      const upgrade = screen.getAllByRole("button").find((b) => /upgrade/i.test(b.textContent ?? ""));
-      await userEvent.click(upgrade as HTMLElement);
+      render(<UpgradeScreen reason="unknown" onLogout={jest.fn()} />);
+      await userEvent.click(screen.getByRole("button", { name: "Manage billing on the website" }));
       await focusWindow();
       expect(refresh()).toHaveBeenCalledTimes(1);
     });
