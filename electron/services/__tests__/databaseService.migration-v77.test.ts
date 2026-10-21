@@ -340,15 +340,14 @@ describe("migration v77 — BACKLOG-3983, texts whose deal column names a deal t
     const { svc, db, before, pickerBefore, linksBefore, v77Log } = await upgradeFrom76("all");
     expect(before).toEqual(BEFORE_ALL);
     expect(version(db)).toBe(chain(svc).at(-1)!.version);
-    expect(column(db)).toEqual(AFTER_ALL);
-    expect(links(db)).toEqual(linksBefore);
-    expect(v77Log).toEqual(["[v77] re-pointed 3 text(s), cleared 2"]);
-
     // Coordinator's control: S1's column named deal A with no link to A, so it was
     // hidden from A's attach picker (the picker reads an empty column). After v77 it
     // is offered there. Real picker read (getMessagesByContact), not a fixture.
     expect(pickerBefore).toEqual([]);
     expect(pickerIds(A)).toEqual(["m-old1"]);
+    expect(column(db)).toEqual(AFTER_ALL);
+    expect(links(db)).toEqual(linksBefore);
+    expect(v77Log).toEqual(["[v77] re-pointed 3 text(s), cleared 2"]);
 
     rerunV77(svc, db);
     expect(column(db)).toEqual(AFTER_ALL);
