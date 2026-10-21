@@ -12,7 +12,7 @@
 import { revalidatePath } from 'next/cache';
 import { getAuthenticatedUser } from '@/lib/supabase/server';
 import { adminStripeMode, type StripeMode } from '@/lib/billing/stripeMode';
-import { dealErrorMessage } from '@/lib/billing/dealRules';
+import { checkStartDate, dealErrorMessage, type OrgBilling } from '@/lib/billing/dealRules';
 
 export interface ActionResult {
   ok: boolean;
@@ -56,6 +56,17 @@ export async function saveDealAction(input: SaveDealInput): Promise<ActionResult
 
   const { supabase, user } = await getAuthenticatedUser();
   if (!user) return { ok: false, error: dealErrorMessage('not_authorized') };
+
+  // BACKLOG-3852: the 365-day cap, enforced here before the save. The business date and the
+  // deal's current start date come from the database (admin_get_org_billing, session client),
+  // never from the caller. An unchanged existing date stays allowed.
+  if (input.startDate != null) {
+    const read = await supabase.rpc('admin_get_org_billing', { p_org: input.organizationId });
+    const billing = read.data as OrgBilling | null;
+    if (read.error || !billing?.business_date) return { ok: false, error: dealErrorMessage(null) };
+    const dateError = checkStartDate(input.startDate, billing.business_date, billing.deal?.start_date ?? null);
+    if (dateError) return { ok: false, error: dealErrorMessage(dateError) };
+  }
 
   const { data, error } = await supabase.rpc('admin_save_deal', {
     p_org: input.organizationId,
