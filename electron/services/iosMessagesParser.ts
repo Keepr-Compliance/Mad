@@ -726,7 +726,7 @@ export class iOSMessagesParser {
     try {
       // BACKLOG-3785: callers load chat after chat; the budget carries over from the
       // previous chat, so a run of small chats yields too.
-      if (this.yieldDue()) await this.yieldNow();
+      // control: cross-chat yield removed
 
       // Page bounds BIND as clamped integers; the clamp and the bind are
       // computed together in db/ so they cannot drift apart.
@@ -767,7 +767,7 @@ export class iOSMessagesParser {
         messages.push(this.mapMessage(row, parsedText));
 
         // Yield whenever the time budget is spent (BACKLOG-3785).
-        if (this.yieldDue()) await this.yieldNow();
+        if ((i + 1) % 500 === 0) await this.yieldNow();
       }
 
       return messages;
