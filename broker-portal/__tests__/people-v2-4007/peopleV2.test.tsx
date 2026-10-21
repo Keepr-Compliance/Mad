@@ -46,6 +46,11 @@ function people(over: Partial<PeopleInviteMode> = {}): PeopleInviteMode {
   };
 }
 
+const EMAIL_LABEL = 'Email Address';
+function typeEmail(value: string) {
+  fireEvent.change(screen.getByLabelText(EMAIL_LABEL), { target: { value } });
+}
+
 beforeEach(() => jest.clearAllMocks());
 
 describe('J1 InviteUserModal in People mode', () => {
@@ -55,7 +60,7 @@ describe('J1 InviteUserModal in People mode', () => {
     expect(screen.getByLabelText('Role')).toHaveValue('Billing only (no seat)');
     expect(screen.getByLabelText('Role')).toBeDisabled();
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Email Address'), { target: { value: 'pay@example.test' } });
+    typeEmail('pay@example.test');
     expect(screen.getByText('Send Invite')).toBeDisabled();
     fireEvent.change(screen.getByLabelText('Phone'), { target: { value: '2025550141' } });
     expect(screen.getByText('Send Invite')).not.toBeDisabled();
@@ -71,7 +76,7 @@ describe('J1 InviteUserModal in People mode', () => {
     expect(screen.getByLabelText('Role')).toHaveValue('IT admin');
     expect(screen.queryByLabelText(/Phone/)).not.toBeInTheDocument();
     expect(screen.getByLabelText('IT provider company')).toHaveValue('Fixture IT Co');
-    fireEvent.change(screen.getByLabelText('Email Address'), { target: { value: 'it@example.test' } });
+    typeEmail('it@example.test');
     await act(async () => fireEvent.click(screen.getByText('Send Invite')));
     expect(p.submit).toHaveBeenCalledWith({ email: 'it@example.test', firstName: '', lastName: '', phone: '', companyName: 'Fixture IT Co' });
   });
@@ -79,7 +84,7 @@ describe('J1 InviteUserModal in People mode', () => {
   it('a refusal is worded (seat_limit_reached) and the out-of-licenses "Invite without a license" is not offered', async () => {
     const p = people({ slot: 'it', submit: jest.fn(async () => ({ ok: false as const, error: 'seat_limit_reached' })) });
     render(<InviteUserModal isOpen onClose={jest.fn()} organizationId="org-1" people={p} allowInviteWithoutLicense />);
-    fireEvent.change(screen.getByLabelText('Email Address'), { target: { value: 'it@example.test' } });
+    typeEmail('it@example.test');
     await act(async () => fireEvent.click(screen.getByText('Send Invite')));
     expect(screen.getByText('No license is free. The IT contact uses a seat.')).toBeInTheDocument();
     expect(screen.queryByText(/Invite without a license/)).not.toBeInTheDocument();
@@ -90,7 +95,7 @@ describe('J1 InviteUserModal in People mode', () => {
     render(<InviteUserModal isOpen onClose={jest.fn()} organizationId="org-1" />);
     expect(screen.getByRole('combobox', { name: 'Role' })).toBeInTheDocument();
     expect(screen.queryByLabelText(/Phone/)).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Email Address'), { target: { value: 'a@example.test' } });
+    typeEmail('a@example.test');
     await act(async () => fireEvent.click(screen.getByText('Send Invite')));
     expect(mockInviteUser).toHaveBeenCalledWith(expect.objectContaining({ email: 'a@example.test', role: 'agent', organizationId: 'org-1' }));
   });

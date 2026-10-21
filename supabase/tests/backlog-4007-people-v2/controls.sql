@@ -639,7 +639,7 @@ $q$, '');
     r := r || jsonb_build_object('C5_accept_clearing_flag_refused', pg_temp.pass(v_txt = 'has_personal_account', v_txt));
 
     -- ===== setup "Someone else": existing member linked, else a billing-only login =====
-    s := pg_temp.call_as(u_b4, format(qc, o4, 1, json_build_object('who', 'other', 'name', 'Pat Payer', 'email', e_pay, 'phone', '202-555-0120')::text, co, 'false'));
+    s := pg_temp.call_as(u_b4, format(qc, o4, 1, json_build_object('who', 'other', 'name', 'payer team', 'email', e_pay, 'phone', '202-555-0120')::text, co, 'false'));
     SELECT m.* INTO rw FROM public.organization_members m WHERE m.organization_id = o4 AND m.invited_email = e_pay;
     r := r || jsonb_build_object('S1_setup_other_creates_login', pg_temp.pass(pg_temp.j(s)->>'success' = 'true'
       AND pg_temp.j(s)->'billing_login'->>'token' IS NOT NULL

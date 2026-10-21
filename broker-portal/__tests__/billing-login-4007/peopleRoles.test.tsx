@@ -207,7 +207,7 @@ describe('OrgPeoplePanel for an IT admin (can_edit_billing false)', () => {
     can_edit_billing: false,
     deal_status: 'active',
     contacts: [
-      { id: 'b1', role: 'billing', name: 'Payer Person', email: null, phone: '+12025550133', company_name: null, member_id: 'm-b1', login: 'billing_only', login_claimed: true },
+      { id: 'b1', role: 'billing', name: 'payer person', email: null, phone: '+12025550133', company_name: null, member_id: 'm-b1', login: 'billing_only', login_claimed: true },
     ],
     members: [],
   };
@@ -220,7 +220,7 @@ describe('OrgPeoplePanel for an IT admin (can_edit_billing false)', () => {
 
   it('the billing row has no buttons and says who can change it; IT, office and MSP can be added', () => {
     render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
-    expect(within(row('billing')).getByText('Payer Person')).toBeInTheDocument();
+    expect(within(row('billing')).getByText('payer person')).toBeInTheDocument();
     expect(within(row('billing')).queryByRole('button')).not.toBeInTheDocument();
     expect(within(row('billing')).getByText('Only a broker or admin can change it.')).toBeInTheDocument();
     for (const r of ['it', 'office', 'msp']) expect(within(row(r)).getByText('Add person')).toBeInTheDocument();

@@ -21,7 +21,7 @@ jest.mock('@/lib/auth/memberAccess', () => ({ requireActiveOrgRole: (...a: unkno
 jest.mock('@/lib/supabase/server', () => ({
   createClient: async () => ({
     rpc: mockRpc,
-    auth: { getUser: async () => ({ data: { user: { id: 'u-1', email: 'admin@example.test', user_metadata: { first_name: 'Ada', last_name: 'Admin' } } } }) },
+    auth: { getUser: async () => ({ data: { user: { id: 'u-1', email: 'admin@example.test', user_metadata: { first_name: 'fixture', last_name: 'admin' } } } }) },
   }),
 }));
 jest.mock('@/lib/email', () => ({ sendInviteEmail: (...a: unknown[]) => mockSendInvite(...a) }));
@@ -49,7 +49,7 @@ function member(id: string, over: Record<string, unknown> = {}) {
 const MEMBERS = [
   member('ag'),
   member('bea', { name: 'Jane Doe', email: 'bea@example.test', phone: '+12025550131' }),
-  member('adm', { role: 'admin', name: 'Ada Admin' }),
+  member('adm', { role: 'admin', name: 'fixture admin' }),
   member('un', { license_status: 'unassigned', name: 'Una Unlicensed' }),
   member('idp', { name: 'Ivy Idp', idp_managed: true }),
 ];
@@ -139,7 +139,7 @@ describe('OrgPeoplePanel (People v2)', () => {
     await openUserList();
     expect(screen.getByRole('option', { name: /Una Unlicensed.*Needs a license first/ })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('option', { name: /Ivy Idp.*Managed by your identity provider\./ })).toHaveAttribute('aria-disabled', 'true');
-    expect(screen.getByRole('option', { name: /Ada Admin/ })).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByRole('option', { name: /fixture admin/ })).not.toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('option', { name: /Member ag/ })).not.toHaveAttribute('aria-disabled', 'true');
   });
 
@@ -292,10 +292,10 @@ describe('broker People actions', () => {
     mockSendInvite.mockResolvedValue({ success: true, outcome: 'sent' });
     mockRpc.mockResolvedValueOnce({ data: { success: true, slot: 'it', token: 'a'.repeat(64), email: 'it@example.test', org_name: 'fixture realty' }, error: null });
     const r = await invitePerson('ORG-1', { slot: 'it', email: 'it@example.test', firstName: 'Ira', lastName: 'Tech', phone: '' });
-    expect(mockSendInvite.mock.calls[0][0]).toMatchObject({ recipientEmail: 'it@example.test', role: 'IT admin', inviterName: 'Ada Admin' });
+    expect(mockSendInvite.mock.calls[0][0]).toMatchObject({ recipientEmail: 'it@example.test', role: 'IT admin', inviterName: 'fixture admin' });
     expect(mockSendInvite.mock.calls[0][0].billingOnly).toBeUndefined();
     expect(r).toMatchObject({ ok: true, emailSent: true });
-    mockRpc.mockResolvedValueOnce({ data: { success: true, slot: 'billing', token: 'b'.repeat(64), email: 'pay@example.test', name: 'Pat Payer', org_name: 'fixture realty' }, error: null });
+    mockRpc.mockResolvedValueOnce({ data: { success: true, slot: 'billing', token: 'b'.repeat(64), email: 'pay@example.test', name: 'payer team', org_name: 'fixture realty' }, error: null });
     await invitePerson('ORG-1', { slot: 'billing', email: 'pay@example.test', firstName: 'Pat', lastName: 'Payer', phone: '202-555-0132' });
     expect(mockSendInvite.mock.calls[1][0]).toMatchObject({ recipientEmail: 'pay@example.test', billingOnly: true, role: 'Billing only' });
   });

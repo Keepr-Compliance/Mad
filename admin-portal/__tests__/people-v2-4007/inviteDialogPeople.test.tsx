@@ -36,8 +36,13 @@ function people(over: Partial<PeopleInviteMode> = {}): PeopleInviteMode {
   };
 }
 
+const EMAIL_LABEL = 'Email Address';
+function typeEmail(value: string) {
+  fireEvent.change(screen.getByLabelText(EMAIL_LABEL), { target: { value } });
+}
+
 function fillNames() {
-  fireEvent.change(screen.getByLabelText('Email Address'), { target: { value: 'pay@example.test' } });
+  typeEmail('pay@example.test');
   fireEvent.change(screen.getByLabelText('First Name'), { target: { value: 'Pat' } });
   fireEvent.change(screen.getByLabelText('Last Name'), { target: { value: 'Payer' } });
 }
