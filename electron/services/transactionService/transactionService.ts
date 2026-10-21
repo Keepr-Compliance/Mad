@@ -2161,13 +2161,29 @@ class TransactionService {
   }
 
   /**
-   * Get unlinked messages for a specific contact
+   * Get unlinked messages for a specific contact, as offered to `transactionId`'s
+   * attach picker (BACKLOG-4017: chats linked to that deal are left out).
    */
   async getMessagesByContact(
     userId: string,
     contact: string,
+    transactionId: string,
   ): Promise<PickerMessage[]> {
-    const messages = await databaseService.getMessagesByContact(userId, contact);
+    return (await this.readPickerForContact(userId, contact, transactionId)).messages;
+  }
+
+  /**
+   * The attach picker's read for one contact (BACKLOG-4017): the messages offered
+   * to `transactionId`, plus how many of the contact's chats were left out because
+   * they are linked to that deal (one scan, no extra query).
+   */
+  async readPickerForContact(
+    userId: string,
+    contact: string,
+    transactionId: string,
+  ): Promise<{ messages: PickerMessage[]; linkedToDealThreadCount: number; hasTextsAttachedToDeal: boolean }> {
+    const result = await databaseService.readPickerForContact(userId, contact, transactionId);
+    const { messages } = result;
 
     await logService.info(
       "Retrieved messages for contact",
@@ -2175,12 +2191,15 @@ class TransactionService {
       {
         userId,
         contact,
+        transactionId,
         count: messages.length,
+        linkedToDealThreadCount: result.linkedToDealThreadCount,
       },
     );
 
-    return messages;
+    return result;
   }
+
 
   /**
    * Link messages to a transaction

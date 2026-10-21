@@ -141,7 +141,7 @@ const links = (tx: string): string[] =>
   (db.prepare(
     "SELECT coalesce(message_id, 'thread:' || thread_id) AS k FROM communications WHERE transaction_id = ? ORDER BY k",
   ).all(tx) as Array<{ k: string }>).map((r) => r.k);
-const picker = (): string[] => getMessagesByContact(USER, PHONE).map((m) => m.id).sort();
+const picker = (tx: string): string[] => getMessagesByContact(USER, PHONE, tx).map((m) => m.id).sort();
 const deletes = (): number =>
   (db.prepare("SELECT count(*) AS n FROM audit_logs WHERE action = 'TRANSACTION_DELETE' AND success = 1").get() as any).n;
 
@@ -158,7 +158,7 @@ describe("R1 per-message links in A and B, column names A", () => {
     const { A, B } = await sharedPerMessage();
     expect(column()).toEqual([A, A]);
     expect(links(B)).toEqual(IDS);
-    expect(picker()).toEqual([]);
+    expect(picker(B)).toEqual([]);
   });
   test("single delete of A: column re-points to B, which still holds both texts", async () => {
     const { A, B } = await sharedPerMessage();
@@ -166,7 +166,7 @@ describe("R1 per-message links in A and B, column names A", () => {
     expect(column()).toEqual([B, B]);
     expect(links(B)).toEqual(IDS);
     expect(links(A)).toEqual([]);
-    expect(picker()).toEqual([]);
+    expect(picker(B)).toEqual([]);
     expect(getMessageTransactionIds(IDS)).toEqual([B, B]);
     expect(deletes()).toBe(1);
   });
@@ -177,7 +177,7 @@ describe("R1 per-message links in A and B, column names A", () => {
     expect(res.deletedCount).toBe(2);
     expect(column()).toEqual([B, B]);
     expect(links(B)).toEqual(IDS);
-    expect(picker()).toEqual([]);
+    expect(picker(B)).toEqual([]);
     expect(deletes()).toBe(2);
   });
   test("deleting B (the column names A) leaves the column at A", async () => {

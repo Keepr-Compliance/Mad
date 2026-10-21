@@ -22,6 +22,10 @@ import { formatDate } from "../../../../utils/formatUtils";
 import { extractAllHandles } from "../../../../utils/phoneNormalization";
 import { highlightMatch } from "../../../../utils/highlightMatch";
 
+/** BACKLOG-4017: empty state when every text of the contact is already in this deal. */
+export const ALL_LINKED_TO_DEAL_MESSAGE =
+  "All of this contact's texts are already attached to this deal.";
+
 interface AttachMessagesModalProps {
   /** User ID to fetch unlinked messages for */
   userId: string;
@@ -140,6 +144,9 @@ export function AttachMessagesModal({
   // Threads state (for selected contact)
   const [threads, setThreads] = useState<Map<string, MessageLike[]>>(new Map());
   const [loadingThreads, setLoadingThreads] = useState(false);
+  // BACKLOG-4017: nothing offered BECAUSE every text is in a chat already linked to
+  // this deal (as opposed to a contact with no texts at all).
+  const [allLinkedToDeal, setAllLinkedToDeal] = useState(false);
 
   // Selection state
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
@@ -299,6 +306,7 @@ export function AttachMessagesModal({
     // Ensure loading state is set synchronously
     setLoadingThreads(true);
     setError(null);
+    setAllLinkedToDeal(false);
 
     // Use setTimeout to defer the fetch and allow loading UI to render
     const timeoutId = setTimeout(() => {
@@ -307,9 +315,13 @@ export function AttachMessagesModal({
           const results = await Promise.all(
             selectedHandles.map(
               (handle) =>
-                window.api.transactions.getMessagesByContact(userId, handle) as Promise<{
+                // BACKLOG-4017: the deal id scopes WHICH texts are offered (chats already
+                // linked to this deal are left out). It is never passed to resolveHandles.
+                window.api.transactions.getMessagesByContact(userId, handle, transactionId) as Promise<{
                   success: boolean;
                   messages?: MessageLike[];
+                  linkedToDealThreadCount?: number;
+                  hasTextsAttachedToDeal?: boolean;
                   error?: string;
                 }>
             )
@@ -353,6 +365,10 @@ export function AttachMessagesModal({
 
           const grouped = groupMessagesByThread(loaded);
           setThreads(grouped);
+          setAllLinkedToDeal(
+            loaded.length === 0 &&
+              results.some((r) => (r.linkedToDealThreadCount ?? 0) > 0 || r.hasTextsAttachedToDeal === true),
+          );
           setView("threads");
         } catch (err) {
           setError(err instanceof Error ? err.message : "Failed to load messages");
@@ -366,7 +382,7 @@ export function AttachMessagesModal({
     // Cleanup on unmount or contact change
     return () => clearTimeout(timeoutId);
     // selectedHandlesKey collapses the selectedHandles array dep to a primitive.
-  }, [userId, selectedContact, selectedHandlesKey]);
+  }, [userId, transactionId, selectedContact, selectedHandlesKey]);
 
   // BACKLOG-2263: build the handle -> contact-name record consumed by the shared
   // identity helpers (getHandleMergeKey / mergeThreadsByContact). Mirrors the
@@ -559,6 +575,7 @@ export function AttachMessagesModal({
     setSelectedContactName(null);
     setSelectedHandles([]);
     setThreads(new Map());
+    setAllLinkedToDeal(false);
     setSelectedThreadIds(new Set());
   };
 
@@ -842,7 +859,11 @@ export function AttachMessagesModal({
                   <svg className="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                   </svg>
-                  <p className="text-gray-600 mb-2">No chats found with this contact</p>
+                  <p className="text-gray-600 mb-2">
+                    {allLinkedToDeal
+                      ? ALL_LINKED_TO_DEAL_MESSAGE
+                      : "No chats found with this contact"}
+                  </p>
                 </div>
               ) : (
                 <div data-testid="picker-thread-list">

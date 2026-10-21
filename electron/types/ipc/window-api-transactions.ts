@@ -807,10 +807,14 @@ export interface WindowApiTransactions {
     /** BACKLOG-3837: `rosterPending` = the roster itself is not read yet; `contacts` is empty. */
     contactsStatus?: { messageDerivedPending?: boolean; rosterPending?: boolean };
   }>;
-  /** Gets unlinked messages for a specific contact */
-  getMessagesByContact: (userId: string, contact: string) => Promise<{
+  /** Gets unlinked messages for a specific contact, minus chats linked to `transactionId` (BACKLOG-4017) */
+  getMessagesByContact: (userId: string, contact: string, transactionId: string) => Promise<{
     success: boolean;
     messages?: PickerMessage[];
+    /** BACKLOG-4017: how many of the contact's chats were left out because they are linked to this deal. */
+    linkedToDealThreadCount?: number;
+    /** BACKLOG-4017: no chats offered, and this contact's texts were attached to this deal one by one. */
+    hasTextsAttachedToDeal?: boolean;
     error?: string;
   }>;
   /** Links messages to a transaction */

@@ -112,7 +112,7 @@ describe("Google Messages group names (live)", () => {
     const roster = getMessageContacts(USER);
     const row = roster.find((r) => r.threadNames.includes("Closing Team"));
     expect(row).toBeDefined();
-    const rows = getMessagesByContact(USER, row!.contact) as unknown as Array<{ thread_display_name?: string | null }>;
+    const rows = getMessagesByContact(USER, row!.contact, "tx-no-thread-link") as unknown as Array<{ thread_display_name?: string | null }>;
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((r) => r.thread_display_name === "Closing Team")).toBe(true);
   });

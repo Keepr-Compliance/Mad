@@ -56,7 +56,7 @@ jest.mock("../databaseService", () => {
     __esModule: true,
     default: {
       getMessageById: async (id: string) => messageDb.getMessageById(id),
-      getMessagesByContact: async (u: string, c: string) => messageDb.getMessagesByContact(u, c),
+      getMessagesByContact: async (u: string, c: string, t: string) => messageDb.getMessagesByContact(u, c, t),
       getCommunicationsByTransaction: async (txId: string) =>
         communicationDb.getCommunicationsByTransaction(txId),
       updateTransaction: async (txId: string, updates: any) => transactionDb.updateTransaction(txId, updates),

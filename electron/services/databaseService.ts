@@ -2717,8 +2717,21 @@ class DatabaseService implements IDatabaseService {
     return messageDb.getMessageContacts(userId);
   }
 
-  async getMessagesByContact(userId: string, contact: string): Promise<messageDb.PickerMessage[]> {
-    return messageDb.getMessagesByContact(userId, contact);
+  async getMessagesByContact(
+    userId: string,
+    contact: string,
+    transactionId: string,
+  ): Promise<messageDb.PickerMessage[]> {
+    return messageDb.getMessagesByContact(userId, contact, transactionId);
+  }
+
+  /** BACKLOG-4017: the picker read plus the count of this contact's chats linked to `transactionId`. */
+  async readPickerForContact(
+    userId: string,
+    contact: string,
+    transactionId: string,
+  ): Promise<messageDb.PickerReadForContact> {
+    return messageDb.readPickerForContact(userId, contact, transactionId);
   }
 
   async linkMessageToTransaction(messageId: string, transactionId: string): Promise<void> {
