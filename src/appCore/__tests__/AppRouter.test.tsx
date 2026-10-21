@@ -9,18 +9,24 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { AppRouter } from "../AppRouter";
 import type { AppStateMachine } from "../state/types";
 
+// BACKLOG-4038: the last props Login received, so a test can fire onLicenseBlocked.
+let mockLoginProps: Record<string, unknown> = {};
+
 // Mock all child components to isolate routing logic
 jest.mock("../../components/Login", () => {
-  const MockLogin = (props: Record<string, unknown>) => (
-    <div data-testid="login-component" data-props={JSON.stringify(Object.keys(props))}>
-      Login Screen
-    </div>
-  );
+  const MockLogin = (props: Record<string, unknown>) => {
+    mockLoginProps = props;
+    return (
+      <div data-testid="login-component" data-props={JSON.stringify(Object.keys(props))}>
+        Login Screen
+      </div>
+    );
+  };
   MockLogin.displayName = "Login";
   return { __esModule: true, default: MockLogin };
 });
@@ -64,6 +70,8 @@ jest.mock("../../components/onboarding", () => ({
 }));
 
 jest.mock("../../components/license/UpgradeScreen", () => ({
+  // BACKLOG-4038: the real reason mapper; only the screen itself is stubbed.
+  upgradeReasonFor: jest.requireActual("../../components/license/UpgradeScreen").upgradeReasonFor,
   UpgradeScreen: ({ reason }: { reason: string }) => (
     <div data-testid="upgrade-screen-component" data-reason={reason}>
       Upgrade Screen
@@ -284,6 +292,28 @@ describe("AppRouter", () => {
       });
       render(<AppRouter app={app} />);
       expect(screen.getByTestId("login-component")).toBeInTheDocument();
+    });
+
+    // BACKLOG-4038: a license blocked at sign-in maps expired -> ended (never trial).
+    it.each([
+      ["expired", "ended"],
+      ["suspended", "suspended"],
+      ["transaction_limit", "unknown"],
+      ["load_error", "unknown"],
+    ])("license blocked at sign-in with %s shows the %s variant", (blockReason, expected) => {
+      const app = createAppStateMock({
+        currentStep: "login",
+        isOnline: true,
+        isAuthenticated: false,
+        currentUser: null,
+      });
+      render(<AppRouter app={app} />);
+      const onLicenseBlocked = mockLoginProps.onLicenseBlocked as (d: {
+        userId: string;
+        blockReason: string;
+      }) => void;
+      act(() => onLicenseBlocked({ userId: "u1", blockReason }));
+      expect(screen.getByTestId("upgrade-screen-component")).toHaveAttribute("data-reason", expected);
     });
 
     it("should render OfflineFallback when currentStep is login and offline", () => {

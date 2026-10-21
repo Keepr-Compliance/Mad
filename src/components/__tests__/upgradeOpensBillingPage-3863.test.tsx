@@ -147,14 +147,11 @@ describe("BACKLOG-3863 — Upgrade actions open the portal Billing page", () => 
     expectBillingPageOnly();
   });
 
-  it("UpgradeScreen: the upgrade button", async () => {
+  it("UpgradeScreen: Manage billing on the website (BACKLOG-4038 wording)", async () => {
     // The popup opener exists in the app's preload; give it a spy so a revert is visible.
     (window.api.shell as unknown as { openPopup?: jest.Mock }).openPopup = jest.fn();
-    render(<UpgradeScreen reason="transaction_limit" onLogout={jest.fn()} />);
-    const buttons = screen.getAllByRole("button");
-    const upgrade = buttons.find((b) => /upgrade/i.test(b.textContent ?? ""));
-    expect(upgrade).toBeDefined();
-    await userEvent.click(upgrade as HTMLElement);
+    render(<UpgradeScreen reason="unknown" onLogout={jest.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Manage billing on the website" }));
     expectBillingPageOnly();
   });
 });
