@@ -87,5 +87,15 @@ export {
   SelectScrollDownButton,
 } from './components/select';
 
+// Dropdown (BACKLOG-4032) — searchable single-choice picker; see README "Dropdown".
+export { Dropdown, DropdownOptions, filterDropdownOptions } from './components/dropdown';
+export type {
+  DropdownOption,
+  DropdownProps,
+  DropdownSingleProps,
+  DropdownLabelling,
+  DropdownOptionsProps,
+} from './components/dropdown';
+
 // Phone kit (BACKLOG-3895) — phone-width components; see DESIGN-SYSTEM.md "Phone".
 export * from './components/phone';
