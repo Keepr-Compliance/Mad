@@ -65,6 +65,16 @@ describe('OrgPeopleCard (staff)', () => {
     expect(screen.getAllByRole('link')).toHaveLength(1);
   });
 
+  it('Edit popup: the Who switch fills its row (equal grid columns)', async () => {
+    await renderCard();
+    const itRow = document.querySelector('[data-role="it"]') as HTMLElement;
+    fireEvent.click(within(itRow).getByRole('button', { name: /^Edit / }));
+    const list = within(screen.getByRole('dialog')).getByRole('tablist');
+    expect(list.className).toContain('grid');
+    expect(list.style.gridTemplateColumns).toBe('repeat(2, minmax(0, 1fr))');
+    for (const tab of within(list).getAllByRole('tab')) expect(tab.className).toContain('w-full');
+  });
+
   it('Edit opens the popup; the invite tab sends to invitePersonAction with the slot', async () => {
     await renderCard();
     const itRow = document.querySelector('[data-role="it"]') as HTMLElement;
