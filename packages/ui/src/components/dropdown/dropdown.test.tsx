@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { Dropdown } from './dropdown';
+import { Dropdown, dropdownSide } from './dropdown';
 import { DropdownOptions } from './dropdown-options';
 import type { DropdownOption, DropdownProps } from './types';
 import { Dialog, DialogContent, DialogTitle } from '../dialog';
@@ -417,5 +417,78 @@ describe('DropdownOptions (standalone, phone recipe base)', () => {
     expect(rows[0]).toHaveClass('min-h-12');
     fireEvent.click(rows[0]);
     expect(onSelect).toHaveBeenCalledWith('admin');
+  });
+});
+
+/**
+ * BACKLOG-4007 People popups: the panel is not portalled. A kit Dialog sets no overflow, so it
+ * does not clip the panel, but the Dialog is fixed and centered: near the bottom of the screen a
+ * downward panel would run off the viewport (and the page cannot scroll while the Dialog is
+ * open). The Dropdown measures the trigger on open and opens upward when the room below is
+ * short. jsdom has no layout, so the trigger's rectangle is stubbed.
+ */
+describe('Dropdown placement inside a kit Dialog', () => {
+  const realHeight = window.innerHeight;
+  afterEach(() => {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: realHeight });
+    jest.restoreAllMocks();
+  });
+
+  function openAt(top: number, viewport: number) {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: viewport });
+    render(
+      <Dialog open>
+        <DialogContent aria-describedby={undefined}>
+          <DialogTitle>Edit</DialogTitle>
+          <Dropdown label="User" options={ROLES} value={null} onChange={() => undefined} />
+        </DialogContent>
+      </Dialog>
+    );
+    const trigger = screen.getByRole('button', { name: /^User/ });
+    jest.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({ top, bottom: top + 36, left: 0, right: 300, width: 300, height: 36, x: 0, y: top, toJSON: () => ({}) } as DOMRect);
+    act(() => {
+      fireEvent.click(trigger);
+    });
+    return document.querySelector('[data-slot="dropdown-panel"]') as HTMLElement;
+  }
+
+  it('near the bottom of the viewport the panel opens upward', () => {
+    const panel = openAt(700, 768);
+    expect(panel).toHaveAttribute('data-side', 'top');
+    expect(panel.className).toContain('bottom-full');
+    expect(panel.className).not.toContain('mt-1');
+  });
+
+  it('with room below it opens downward', () => {
+    const panel = openAt(200, 768);
+    expect(panel).toHaveAttribute('data-side', 'bottom');
+    expect(panel.className).toContain('mt-1');
+  });
+
+  it('the Dialog content sets no overflow that would clip the panel', () => {
+    const panel = openAt(200, 768);
+    const content = screen.getByRole('dialog');
+    expect(content.className).not.toMatch(/overflow-(hidden|auto|y-auto|scroll)/);
+    expect(content.contains(panel)).toBe(true);
+  });
+});
+
+/**
+ * dropdownSide(rect, viewportHeight): 'top' only when less than 300px is free below the trigger
+ * AND more room is free above it. Rows sweep both sides of each boundary (SR review of #3156).
+ */
+describe('dropdownSide', () => {
+  const rect = (top: number) => ({ top, bottom: top + 36 });
+  const rows: Array<[string, number, number, 'top' | 'bottom']> = [
+    ['short below, more above', 500, 768, 'top'],
+    ['short below, LESS above than below', 200, 480, 'bottom'],
+    ['room below (>= 300)', 100, 768, 'bottom'],
+    ['exactly 300 below, more above', 432, 768, 'bottom'],
+    ['299 below, more above', 433, 768, 'top'],
+    ['100 below, more above', 632, 768, 'top'],
+    ['equal room above and below', 136, 308, 'bottom'],
+  ];
+  it.each(rows)('%s (top %i, viewport %i) -> %s', (_n, top, vh, want) => {
+    expect(dropdownSide(rect(top), vh)).toBe(want);
   });
 });
