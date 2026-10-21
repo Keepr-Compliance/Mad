@@ -87,6 +87,12 @@ describe('Dropdown', () => {
     expect(activeLabel()).toBe('Agent');
   });
 
+  it('T2b a disabled selected value does not become the active row; the first enabled row does', () => {
+    renderDropdown({ value: 'billing' });
+    openIt();
+    expect(activeLabel()).toBe('Owner');
+  });
+
   it('T3 typing filters by label and description, case-insensitive; active moves to the first result', () => {
     renderDropdown();
     const input = openIt();
