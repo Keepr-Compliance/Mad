@@ -311,7 +311,9 @@ export type AccountManagerAlertReason =
   | 'billing_contact_removed'
   // BACKLOG-4019: auto-renew turned off by the brokerage; the subscription ended while not canceling.
   | 'auto_renew_off'
-  | 'subscription_ended_unexpectedly';
+  | 'subscription_ended_unexpectedly'
+  // BACKLOG-3854: a Broker or Admin added seats (enqueued by broker_add_seats).
+  | 'seats_added';
 
 export interface AccountManagerAlertParams {
   /** The account manager's sign-in email */
@@ -327,6 +329,19 @@ export interface AccountManagerAlertParams {
 }
 
 /** BACKLOG-4007 PR-3: "finish your setup" reminder (outbox kind notify_setup_reminder). */
+/** BACKLOG-3854: seats added, to the deal's billing contact (founder d0c22cef #2). */
+export interface SeatsAddedParams {
+  recipientEmail: string;
+  brokerageName: string;
+  seatsFrom: number;
+  seatsTo: number;
+  /** The brokerage is in its trial: no prorated charge now. */
+  trialing: boolean;
+  addedBy: string;
+  outboxKey: string;
+  organizationId: string;
+}
+
 /** BACKLOG-4007 People v2: "You are now the billing contact" (founder R9 refinement). */
 export interface BillingContactReassignedParams {
   recipientEmail: string;
