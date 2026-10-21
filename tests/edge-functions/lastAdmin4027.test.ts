@@ -351,6 +351,68 @@ describe('directory sync and the last admin', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Group mapping demotes the last admin (kept branches; SR review 09a5d79a)
+// ---------------------------------------------------------------------------
+
+describe('a group mapping that would demote the last admin is kept', () => {
+  const MAPPING = { group_sync_enabled: true, group_role_mapping: { 'idp-group-agents': 'agent' }, default_role: 'agent' };
+  const IDP_ROW = { id: 'idp-1', organization_id: ORG, is_active: true, attribute_mapping: MAPPING };
+
+  it('SCIM PATCH: groups resolve the only admin to agent: 200, role stays admin, logged last_admin_kept, one demote email', async () => {
+    const t = tables({ organization_identity_providers: [IDP_ROW] });
+    const db = makeDb(t);
+    const { d, fetch } = deps();
+    const req = new Request(`${BASE}/scim/v2/Users/u-ad`, {
+      method: 'PATCH',
+      body: JSON.stringify({ schemas: [], groups: [{ value: 'idp-group-agents' }], Operations: [{ op: 'replace', path: 'displayName', value: 'Ada Admin' }] }),
+    });
+    const res = await users.handlePatchUser(req, 'u-ad', AUTH as never, db.client as never, BASE, d);
+    expect(res.status).toBe(200);
+    expect(member(t, 'u-ad')?.role).toBe('admin');
+    expect(member(t, 'u-ad')?.license_status).toBe('active');
+    expect(t.scim_sync_log.map((l) => [l.operation, l.response_status, l.error_message])).toContainEqual(['UPDATE', 200, LAST_ADMIN_KEPT]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String((fetch.mock.calls[0] as [string, RequestInit])[1].body))).toMatchObject({ kind: 'demote', source: 'scim' });
+  });
+
+  it('SCIM PATCH control: the same groups on an admin who is not the last one demote them; nothing kept, no email', async () => {
+    const t = tables({ organization_identity_providers: [IDP_ROW] });
+    t.organization_members.push({ id: 'm-ad2', organization_id: ORG, user_id: 'u-ad2', role: 'admin', license_status: 'active', scim_synced_at: null });
+    t.users.push({ id: 'u-ad2', email: 'admin2@example.test', suspended_at: null });
+    const db = makeDb(t);
+    const { d, fetch } = deps();
+    const req = new Request(`${BASE}/scim/v2/Users/u-ad`, {
+      method: 'PATCH',
+      body: JSON.stringify({ schemas: [], groups: [{ value: 'idp-group-agents' }], Operations: [{ op: 'replace', path: 'displayName', value: 'Ada Admin' }] }),
+    });
+    const res = await users.handlePatchUser(req, 'u-ad', AUTH as never, db.client as never, BASE, d);
+    expect(res.status).toBe(200);
+    expect(member(t, 'u-ad')?.role).toBe('agent');
+    expect(t.scim_sync_log.some((l) => l.error_message === LAST_ADMIN_KEPT)).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('directory sync: groups resolve the only admin to agent: role stays admin, skipped_last_admin counted, one demote email', async () => {
+    const t = tables();
+    t.organization_members = [
+      { id: 'm-ad', organization_id: ORG, user_id: 'u-ad', role: 'admin', license_status: 'active', provisioned_by: 'directory_sync', group_sync_enabled: null, scim_synced_at: null },
+      { id: 'm-it', organization_id: ORG, user_id: 'u-it', role: 'it_admin', license_status: 'active', provisioned_by: 'invite', group_sync_enabled: false, scim_synced_at: null },
+    ];
+    t.users = t.users.map((u) => ({ ...u, oauth_id: null, scim_external_id: null }));
+    const db = makeDb(t);
+    const { d, fetch } = deps();
+    const idp = { id: 'idp-1', organization_id: ORG, provider_type: 'azure_ad', client_id: null, client_secret_encrypted: null,
+      service_account_key_encrypted: null, issuer_url: null, is_active: true, attribute_mapping: MAPPING };
+    const providerUser = { externalId: 'ext-ad', email: 'admin@example.test', firstName: null, lastName: null, displayName: null, groups: ['idp-group-agents'] };
+    const r = await sync.syncOrganization(db.client, ORG, { id: ORG, default_member_role: 'agent' }, idp, { fetchUsers: async () => [providerUser], notifyDeps: d });
+    expect(member(t, 'u-ad')?.role).toBe('admin');
+    expect(r).toMatchObject({ skipped_last_admin: 1, error: null });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String((fetch.mock.calls[0] as [string, RequestInit])[1].body))).toMatchObject({ kind: 'demote', source: 'directory_sync' });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // SCIM create: userName, then emails[] (founder 2026-10-21)
 // ---------------------------------------------------------------------------
 
