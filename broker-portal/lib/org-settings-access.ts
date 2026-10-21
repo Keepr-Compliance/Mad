@@ -16,6 +16,7 @@
  */
 
 import { getPortalAccess } from '@/lib/auth/portalAccess';
+import { PEOPLE_ROLES } from '@/lib/people-roles';
 import { isFeatureEnabledFailClosed } from '@/lib/feature-gate';
 import { SCIM_FEATURE_KEY } from '@/lib/scim-access';
 import { JIT_FEATURE_KEY } from '@/lib/jit-access';
@@ -31,8 +32,20 @@ import {
 /** feature_definitions.key gating the org-wide email retention policy. */
 export const RETENTION_FEATURE_KEY = 'custom_retention';
 
-/** Roles that may see or change organization policy. */
+/** Roles that may see or change organization policy (SSO, SCIM, JIT, retention). */
 export const ORG_SETTINGS_ROLES = ['admin', 'it_admin'] as const;
+
+/**
+ * Roles that may open /dashboard/settings at all — BACKLOG-4007 (founder decision): People is a
+ * card on this page again, so a broker may open it. A broker sees ONLY the People card; the
+ * policy cards, and the actions behind them, stay ORG_SETTINGS_ROLES.
+ */
+export const ORG_SETTINGS_PAGE_ROLES = PEOPLE_ROLES;
+
+/** Does this role see the org-policy cards (everything but People)? */
+export function seesOrgPolicy(role: string): boolean {
+  return (ORG_SETTINGS_ROLES as readonly string[]).includes(role);
+}
 
 export interface OrgSettingsAccessGranted {
   allowed: true;
@@ -49,7 +62,8 @@ export interface OrgSettingsAccessDenied {
 export type OrgSettingsAccess = OrgSettingsAccessGranted | OrgSettingsAccessDenied;
 
 /**
- * May the signed-in caller see organization policy?
+ * May the signed-in caller open Org Settings? (Admin and IT admin see the policy cards; a broker
+ * sees People only: check `seesOrgPolicy(role)`.)
  *
  * Returns rather than throws because the page turns the answer into a redirect.
  * Does NOT consider impersonation — a support session has no authenticated
@@ -63,7 +77,7 @@ export async function checkOrgSettingsAccess(): Promise<OrgSettingsAccess> {
 
   if (
     access.kind !== 'full' ||
-    !(ORG_SETTINGS_ROLES as readonly string[]).includes(access.role) ||
+    !(ORG_SETTINGS_PAGE_ROLES as readonly string[]).includes(access.role) ||
     // BACKLOG-3878: a suspended account keeps My Account and Support only.
     portal.suspended === true ||
     // BACKLOG-3853 PR-2B: so does a suspended brokerage (Billing too).

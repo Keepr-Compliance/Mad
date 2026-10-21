@@ -58,7 +58,6 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardCheck,
-  Contact,
   CreditCard,
   FileText,
   Files,
@@ -85,13 +84,16 @@ const memberNavItems: NavItem[] = [
   { label: 'Support', href: '/dashboard/support', icon: Headphones },
 ];
 
+// Founder, 2026-09-04: the tab named setting should say Org Settings.
+// Since BACKLOG-3078 this route holds org policy — a person's own
+// settings live at /dashboard/account — so the bare word named the wrong
+// half of the split. Label only; the href is unchanged.
+// BACKLOG-4007: People is a card here, so a broker gets this entry too (and sees only People).
+const settingsNavItem: NavItem = { label: 'Org Settings', href: '/dashboard/settings', icon: Settings };
+
 const adminNavItems: NavItem[] = [
   { label: 'Users', href: '/dashboard/users', icon: Users },
-  // Founder, 2026-09-04: the tab named setting should say Org Settings.
-  // Since BACKLOG-3078 this route holds ONLY org policy — a person's own
-  // settings live at /dashboard/account — so the bare word named the wrong
-  // half of the split. Label only; the href is unchanged.
-  { label: 'Org Settings', href: '/dashboard/settings', icon: Settings },
+  settingsNavItem,
 ];
 
 /** BACKLOG-3878: the one entry a suspended account keeps besides Billing and My Account. */
@@ -123,12 +125,6 @@ export function insertAfter(items: NavItem[], href: string, item: NavItem): NavI
   const i = items.findIndex((x) => x.href === href);
   return i < 0 ? [...items, item] : [...items.slice(0, i + 1), item, ...items.slice(i + 1)];
 }
-
-/**
- * BACKLOG-4007 PR-4 (founder e8571c1f): People, for admin, IT admin and broker
- * (lib/people-roles.ts). After the role's own entries, before Billing.
- */
-const peopleNavItem: NavItem = { label: 'People', href: '/dashboard/people', icon: Contact };
 
 /** BACKLOG-3844: right before My Account, when the layout says so. */
 const billingNavItem: NavItem = { label: 'Billing', href: '/dashboard/billing', icon: CreditCard };
@@ -219,7 +215,9 @@ export function Sidebar({
   const showMemberNav = !showFloorNav && (isImpersonating || role !== 'it_admin');
   const showAdminNav =
     !showFloorNav && !isImpersonating && (role === 'admin' || role === 'it_admin');
-  const showPeople = !showFloorNav && !isImpersonating && mayUsePeople(role);
+  // BACKLOG-4007: a broker (not admin / IT admin, who have it in adminNavItems) opens Org Settings
+  // for the People card. Same role set as the page gate (lib/people-roles.ts).
+  const showBrokerSettings = !showFloorNav && !isImpersonating && !showAdminNav && mayUsePeople(role);
   const showChecklistsEntry = showChecklists && !isImpersonating;
   const showChecklistsGrayed =
     !showChecklistsEntry && !!checklistsUnavailableLabel && !isImpersonating && !showFloorNav;
@@ -317,7 +315,7 @@ export function Sidebar({
         {showMemberNav && memberNavItems.map(r)}
         {!showAdminNav && checklistsSlot && r(checklistsNavItem)}
         {showAdminNav && adminItems.map(r)}
-        {showPeople && r(peopleNavItem)}
+        {showBrokerSettings && r(settingsNavItem)}
         {showBilling && !isImpersonating && r(billingNavItem)}
         {personalNavItems.map(r)}
       </>

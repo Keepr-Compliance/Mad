@@ -379,11 +379,6 @@ const REFUSED_PAGES: Record<string, PageEntry> = {
     invoke: async () => (await import('@/app/dashboard/settings/scim/page')).default(),
     refused: { notFound: true },
   },
-  // BACKLOG-4007 PR-4: People is for a brokerage's admin, IT admin or broker (lib/people-roles.ts).
-  'app/dashboard/people/page.tsx': {
-    invoke: async () => (await import('@/app/dashboard/people/page')).default(),
-    refused: { redirect: '/dashboard' },
-  },
   // BACKLOG-4007 PR-3: the setup guide is for a brokerage's broker/admin only.
   'app/dashboard/setup/page.tsx': {
     invoke: async () => (await import('@/app/dashboard/setup/page')).default({ searchParams: Promise.resolve({}) }),
@@ -964,7 +959,7 @@ describe('discovery can see what it claims to see', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
     expect(pages).toContain('app/dashboard/users/[id]/page.tsx');
-    expect(pages.length).toBe(19); // BACKLOG-4007 PR-4: + people; BACKLOG-4007 PR-3: + setup
+    expect(pages.length).toBe(18); // BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
   });
 
   it('finds route handlers, keyed POSIX on any OS (R8)', () => {
