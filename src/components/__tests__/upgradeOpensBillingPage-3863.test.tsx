@@ -13,7 +13,7 @@
  */
 
 import React from "react";
-import { render, screen, within, waitFor } from "@testing-library/react";
+import { act, render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import { TransactionLimitModal } from "../common/TransactionLimitModal";
@@ -156,5 +156,54 @@ describe("BACKLOG-3863 — Upgrade actions open the portal Billing page", () => 
     expect(upgrade).toBeDefined();
     await userEvent.click(upgrade as HTMLElement);
     expectBillingPageOnly();
+  });
+
+  // SR R3: the return-from-billing one-shot is armed by billingService, so
+  // every caller refreshes main's entitlement memo on return, not only the card.
+  describe("return from billing", () => {
+    const refresh = () => jest.mocked(window.api.billing.refresh);
+    const focusWindow = async () => {
+      await act(async () => {
+        window.dispatchEvent(new Event("focus"));
+      });
+    };
+
+    beforeEach(() => {
+      openPortal().mockResolvedValue({ success: true });
+      refresh().mockResolvedValue({ unavailable: true });
+    });
+
+    it("an Upgrade click (not the card), then window focus -> billing:refresh once; second focus -> not again", async () => {
+      render(<TransactionLimitModal transactionCount={5} transactionLimit={5} onClose={jest.fn()} />);
+      await userEvent.click(screen.getByRole("button", { name: "Upgrade Plan" }));
+      expect(refresh()).not.toHaveBeenCalled(); // opening alone does not refresh
+      await focusWindow();
+      expect(refresh()).toHaveBeenCalledTimes(1);
+      await focusWindow();
+      expect(refresh()).toHaveBeenCalledTimes(1);
+    });
+
+    it("UpgradeScreen click, then focus -> billing:refresh once", async () => {
+      render(<UpgradeScreen reason="transaction_limit" onLogout={jest.fn()} />);
+      const upgrade = screen.getAllByRole("button").find((b) => /upgrade/i.test(b.textContent ?? ""));
+      await userEvent.click(upgrade as HTMLElement);
+      await focusWindow();
+      expect(refresh()).toHaveBeenCalledTimes(1);
+    });
+
+    it("no click, then focus -> billing:refresh not called", async () => {
+      render(<TransactionLimitModal transactionCount={5} transactionLimit={5} onClose={jest.fn()} />);
+      await focusWindow();
+      await focusWindow();
+      expect(refresh()).not.toHaveBeenCalled();
+    });
+
+    it("a click whose page did not open does not arm", async () => {
+      openPortal().mockResolvedValue({ success: false });
+      render(<TransactionLimitModal transactionCount={5} transactionLimit={5} onClose={jest.fn()} />);
+      await userEvent.click(screen.getByRole("button", { name: "Upgrade Plan" }));
+      await focusWindow();
+      expect(refresh()).not.toHaveBeenCalled();
+    });
   });
 });
