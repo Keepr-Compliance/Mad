@@ -11,27 +11,14 @@ import {
 } from "./appCore/state/machine";
 import { clearCorruptedSession } from "./utils/clearCorruptedSession";
 import { installRendererStallLogger } from "./utils/rendererStallLogger";
+import { buildRendererSentryOptions } from "./utils/sentryRendererBreadcrumbs";
 import "./index.css";
 
 // Initialize Sentry in the renderer process (TASK-1967)
-// Renderer inherits DSN and configuration from the main process via IPC
-Sentry.init({
-  // Scrub PII from events before sending to Sentry (BACKLOG-1119)
-  beforeSend(event) {
-    // Scrub email addresses from breadcrumb messages
-    if (event.breadcrumbs) {
-      for (const breadcrumb of event.breadcrumbs) {
-        if (breadcrumb.message && typeof breadcrumb.message === 'string') {
-          breadcrumb.message = breadcrumb.message.replace(
-            /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
-            '[REDACTED_EMAIL]'
-          );
-        }
-      }
-    }
-    return event;
-  },
-});
+// Renderer inherits DSN and configuration from the main process via IPC.
+// BACKLOG-4049: breadcrumbs and scope data are allow-listed before they are
+// forwarded to the main process; see src/utils/sentryRendererBreadcrumbs.ts.
+Sentry.init(buildRendererSentryOptions(Sentry));
 
 // BACKLOG-3884: log every renderer main-thread stall of >= 1 s to main.log.
 installRendererStallLogger();
