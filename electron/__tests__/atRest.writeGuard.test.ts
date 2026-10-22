@@ -142,7 +142,7 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
 const THIRD_PARTY_WRITERS: Record<string, { status: "sealed" | "redacted-plaintext" | "plaintext-gated" | "deleted"; reason: string }> = {
   "userData/sentry/sealed-queue/*": { status: "sealed", reason: "@sentry/core offline queue through the public createStore option -> atRest/sentrySealedQueue.ts (KEPRENC); held in memory until the data key opens" },
   "userData/sentry/queue/*": { status: "deleted", reason: "the stock @sentry/electron offline store (plaintext bodies + queue-v2.json) written by 2.41/2.42; removed by installSentry.ts before Sentry.init" },
-  "userData/sentry/scope_v3.json": { status: "redacted-plaintext", reason: "@sentry/electron minidump integration, hard-coded Store (no hook): user id only, main-process breadcrumbs scrubbed (sentryBreadcrumbScrub.ts); renderer breadcrumbs arrive over IPC unscrubbed" },
+  "userData/sentry/scope_v3.json": { status: "redacted-plaintext", reason: "@sentry/electron minidump integration, hard-coded Store (no hook): user id only, main-process breadcrumbs scrubbed (sentryBreadcrumbScrub.ts)" },
   "userData/sentry/session.json": { status: "redacted-plaintext", reason: "@sentry/electron sessions, hard-coded Store (no hook): session id, status and the user id" },
   "userData/Crashpad/*.dmp": { status: "plaintext-gated", reason: "native crash memory dumps: cannot be sealed or redacted; produced only while Send crash reports is on" },
 };

@@ -79,9 +79,7 @@
  *   sentry/session.json     integration and sessions through a hard-coded store
  *                           with no hook, so they cannot be sealed. The user is
  *                           set as an id only, and every main-process breadcrumb
- *                           is scrubbed (sentryBreadcrumbScrub.ts). Renderer
- *                           breadcrumbs reach the scope over IPC without
- *                           `beforeBreadcrumb` and are NOT scrubbed here.
+ *                           is scrubbed (sentryBreadcrumbScrub.ts).
  *   Crashpad/*.dmp          memory dumps: neither sealed nor redacted; only
  *                           produced when "Send crash reports" is on.
  *

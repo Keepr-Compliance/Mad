@@ -36,7 +36,7 @@
  * wrote) is deleted. A file whose key is not held on this computer is kept: it
  * expires by age (its name carries the date), never by a failed read.
  *
- * ## What this does NOT cover (stated, not hidden)
+ * ## Other files under sentry/
  *
  * `sentry/scope_v3.json` (minidump integration) and `sentry/session.json`
  * (sessions) are written by the library through a hard-coded `Store` with no

@@ -8,9 +8,6 @@
  * emails and phone numbers out of that file. Before this, only HTTP breadcrumbs
  * were touched (their query string, BACKLOG-3768).
  *
- * Not covered: breadcrumbs the RENDERER sends over IPC. `@sentry/electron/main`
- * `ipc.js` adds them to the scope directly, without `beforeBreadcrumb`.
- *
  * Pure: no Sentry or Electron import. Never throws.
  */
 import { redactLogText } from "../utils/redactSensitive";
