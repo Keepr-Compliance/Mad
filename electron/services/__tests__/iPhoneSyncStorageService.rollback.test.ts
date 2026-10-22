@@ -56,6 +56,13 @@ jest.mock("../atRest/attachmentWriter", () => ({
   sealFileFrom: jest.fn().mockResolvedValue({ sha256: "abc123", plaintextSize: 1024 }),
 }));
 jest.mock("../databaseService");
+// BACKLOG-4040: the rollback deletes files through the shared check (real-file
+// behaviour: attachmentFileRefs.paths-4040.test.ts). Here: what it is handed.
+const mockFakeDb = { fake: "db" };
+jest.mock("../db/core/dbConnection", () => ({ ensureDb: jest.fn(() => mockFakeDb) }));
+jest.mock("../attachmentFileRefs", () => ({
+  removeUnreferencedAttachmentFiles: jest.fn().mockResolvedValue({ removed: 0, stillReferenced: 0, refused: 0, failed: 0 }),
+}));
 jest.mock("../db/externalContactDbService");
 jest.mock("../iosMessagesParser", () => ({
   iOSMessagesParser: {
@@ -72,6 +79,7 @@ jest.mock("../../utils/preferenceHelper", () => ({
 
 import fs from "fs";
 import databaseService from "../databaseService";
+import { removeUnreferencedAttachmentFiles } from "../attachmentFileRefs";
 import * as externalContactDb from "../db/externalContactDbService";
 import { iPhoneSyncStorageService } from "../iPhoneSyncStorageService";
 import type { SyncResult } from "../deviceSyncOrchestrator";
@@ -96,6 +104,8 @@ function stubRecords(db: { getExistingAttachmentRecordsForMessages: jest.Mock },
 }
 const mockExternalContactDb = externalContactDb as jest.Mocked<typeof externalContactDb>;
 const mockFsPromises = fs.promises as jest.Mocked<typeof fs.promises>;
+const mockRemoveFiles = removeUnreferencedAttachmentFiles as jest.Mock;
+const FILE_SCOPE = { userData: "/mock/userData", scopes: ["message-attachments"] };
 
 // ============================================
 // Test Fixtures
@@ -250,11 +260,14 @@ describe("rollbackSession (via persistSyncResult)", () => {
       cancelSignal
     );
 
-    // Verify each orphaned file was deleted
-    expect(mockFsPromises.unlink).toHaveBeenCalledTimes(3);
-    expect(mockFsPromises.unlink).toHaveBeenCalledWith("/mock/path/file1.jpg");
-    expect(mockFsPromises.unlink).toHaveBeenCalledWith("/mock/path/file2.png");
-    expect(mockFsPromises.unlink).toHaveBeenCalledWith("/mock/path/file3.pdf");
+    // BACKLOG-4040: every candidate goes to the shared check, scoped to message-attachments
+    expect(mockRemoveFiles).toHaveBeenCalledTimes(1);
+    expect(mockRemoveFiles).toHaveBeenCalledWith(
+      mockFakeDb,
+      ["/mock/path/file1.jpg", "/mock/path/file2.png", "/mock/path/file3.pdf"],
+      FILE_SCOPE,
+    );
+    expect(mockFsPromises.unlink).not.toHaveBeenCalled();
   });
 
   it("should skip rollback when no sessionId is provided", async () => {
@@ -452,9 +465,8 @@ describe("content-addressed file safety", () => {
       cancelSignal
     );
 
-    // Only the orphaned file should be unlinked
-    expect(mockFsPromises.unlink).toHaveBeenCalledTimes(1);
-    expect(mockFsPromises.unlink).toHaveBeenCalledWith("/mock/path/orphan1.jpg");
+    // Only the orphaned file is a candidate
+    expect(mockRemoveFiles).toHaveBeenCalledWith(mockFakeDb, ["/mock/path/orphan1.jpg"], FILE_SCOPE);
   });
 
   it("should handle file deletion errors gracefully (file already deleted)", async () => {
@@ -472,10 +484,8 @@ describe("content-addressed file safety", () => {
       orphanedFiles: ["/mock/path/already-gone.jpg", "/mock/path/exists.jpg"],
     });
 
-    // First file fails (already deleted), second succeeds
-    (mockFsPromises.unlink as jest.Mock)
-      .mockRejectedValueOnce(new Error("ENOENT: no such file"))
-      .mockResolvedValueOnce(undefined);
+    // BACKLOG-4040: the file clean-up throws; the rest of the rollback still runs
+    mockRemoveFiles.mockRejectedValueOnce(new Error("ENOENT: no such file"));
 
     // Should NOT throw
     const result = await iPhoneSyncStorageService.persistSyncResult(
@@ -488,8 +498,9 @@ describe("content-addressed file safety", () => {
     );
 
     expect(result.success).toBe(false);
-    // Both unlink calls should have been attempted
-    expect(mockFsPromises.unlink).toHaveBeenCalledTimes(2);
+    expect(mockRemoveFiles).toHaveBeenCalledTimes(1);
+    expect(mockDbService.deleteMessagesBySessionId).toHaveBeenCalledWith("user-1", "session-enoent");
+    expect(mockExternalContactDb.deleteBySessionId).toHaveBeenCalledWith("user-1", "session-enoent");
   });
 });
 
@@ -981,7 +992,7 @@ describe("cancel during attachments phase", () => {
     expect(mockExternalContactDb.deleteBySessionId).toHaveBeenCalledWith("user-1", "session-att-cancel");
 
     // Orphaned files should be cleaned up
-    expect(mockFsPromises.unlink).toHaveBeenCalledWith("/mock/userData/message-attachments/abc123.jpg");
+    expect(mockRemoveFiles).toHaveBeenCalledWith(mockFakeDb, ["/mock/userData/message-attachments/abc123.jpg"], FILE_SCOPE);
 
     // BACKLOG-3789: rejected attachment paths are summarized once, even on cancel
     expect(iOSMessagesParser.flushRejectedPathSummary).toHaveBeenCalledTimes(1);

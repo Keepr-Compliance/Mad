@@ -141,8 +141,8 @@ afterEach(() => {
 });
 
 describe("clearGoogleMessagesWebData on the real schema (BACKLOG-3657)", () => {
-  it("deletes the user's gmweb texts, reactions, links and attachments; leaves Android alone", () => {
-    const result = clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
+  it("deletes the user's gmweb texts, reactions, links and attachments; leaves Android alone", async () => {
+    const result = await clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
     // BACKLOG-3630: legacy gmweb: AND stable gmweb2: rows.
     expect(result).toMatchObject({ messagesDeleted: 4, attachmentsDeleted: 2, transactionsUpdated: 1 });
     expect(count("SELECT COUNT(*) AS n FROM messages WHERE user_id = ? AND (external_id LIKE 'gmweb:%' OR external_id LIKE 'gmweb2:%')", USER)).toBe(0);
@@ -150,8 +150,8 @@ describe("clearGoogleMessagesWebData on the real schema (BACKLOG-3657)", () => {
     expect(count("SELECT COUNT(*) AS n FROM communications WHERE id = 'c-android'")).toBe(1);
   });
 
-  it("every gmweb link is gone — per message and thread-level (C6)", () => {
-    clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
+  it("every gmweb link is gone — per message and thread-level (C6)", async () => {
+    await clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
     expect(count("SELECT COUNT(*) AS n FROM communications WHERE user_id = ? AND id != 'c-android'", USER)).toBe(0);
   });
 
@@ -160,11 +160,11 @@ describe("clearGoogleMessagesWebData on the real schema (BACKLOG-3657)", () => {
   // text_thread_count, not message_count. Mutations (C9): deleteThreadLinks
   // not counted into linksDeleted; the thread-count refresh dropped; the
   // linked-transactions read missing thread-level links.
-  it("thread-level auto-links are counted and the thread count refreshed (C9)", () => {
+  it("thread-level auto-links are counted and the thread count refreshed (C9)", async () => {
     db.prepare("UPDATE transactions SET text_thread_count = 9 WHERE id = 'tx-a'").run();
     db.prepare("INSERT INTO transactions (id, user_id, property_address, message_count, text_thread_count) VALUES ('tx-c', ?, '3 Test Street', 0, 1)").run(USER);
     link("c-auto", USER, "tx-c", null, "gmweb2-abc3657");
-    const result = clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
+    const result = await clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
     // tx-a: c-m1, c-m2, c-r1, c-m3 (message) + c-thread2, c-thread (thread); tx-c: c-auto (thread).
     expect(result).toMatchObject({ linksDeleted: 7, threadLinksDeleted: 3 });
     // Only the Android link is left on tx-a; nothing on tx-c.
@@ -175,25 +175,25 @@ describe("clearGoogleMessagesWebData on the real schema (BACKLOG-3657)", () => {
     expect(count("SELECT COUNT(*) AS n FROM communications WHERE user_id = ?", OTHER)).toBe(2);
   });
 
-  it("message_count drops by the counted links only — reactions were never counted (C2)", () => {
-    clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
+  it("message_count drops by the counted links only — reactions were never counted (C2)", async () => {
+    await clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
     expect(count("SELECT message_count AS n FROM transactions WHERE id = 'tx-a'")).toBe(7);
   });
 
-  it("another user's rows are untouched (C1)", () => {
-    clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
+  it("another user's rows are untouched (C1)", async () => {
+    await clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
     expect(count("SELECT COUNT(*) AS n FROM messages WHERE user_id = ?", OTHER)).toBe(1);
     expect(count("SELECT COUNT(*) AS n FROM communications WHERE user_id = ?", OTHER)).toBe(2);
     expect(count("SELECT message_count AS n FROM transactions WHERE id = 'tx-b'")).toBe(4);
   });
 
-  it("ignored_communications are kept — the user's removals stay (C5)", () => {
-    clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
+  it("ignored_communications are kept — the user's removals stay (C5)", async () => {
+    await clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
     expect(count("SELECT COUNT(*) AS n FROM ignored_communications WHERE id = 'ic-1'")).toBe(1);
   });
 
-  it("files are deleted after the commit, and never outside message-attachments (C4)", () => {
-    const result = clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
+  it("files are deleted after the commit, and never outside message-attachments (C4)", async () => {
+    const result = await clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
     expect(fs.existsSync(inside)).toBe(false);
     expect(fs.existsSync(outside)).toBe(true);
     expect(result.filesDeleted).toBe(1);
@@ -206,20 +206,20 @@ describe("clearGoogleMessagesWebData on the real schema (BACKLOG-3657)", () => {
     ["relative, /", (name: string) => `message-attachments/${name}`],
     ["relative, \\", (name: string) => `message-attachments\\${name}`],
     ["the same absolute path", () => inside],
-  ])("a file shared by content hash is kept while another attachments row uses it — %s (C10)", (_label, stored) => {
+  ])("a file shared by content hash is kept while another attachments row uses it — %s (C10)", async (_label, stored) => {
     // The Android/iPhone message keeps an attachment on the same file.
     db.prepare("INSERT INTO attachments (id, message_id, filename, storage_path) VALUES ('a-iphone', 'android', 'IMG_0001.png', ?)")
       .run(stored(nodePath.basename(inside)));
-    const result = clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
+    const result = await clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
     expect(fs.existsSync(inside)).toBe(true);
     expect(result.filesDeleted).toBe(0);
     expect(count("SELECT COUNT(*) AS n FROM attachments WHERE id = 'a-iphone'")).toBe(1);
   });
 
-  it("an unshared file is still deleted (C10 control)", () => {
+  it("an unshared file is still deleted (C10 control)", async () => {
     db.prepare("INSERT INTO attachments (id, message_id, filename, storage_path) VALUES ('a-other', 'android', 'IMG_0002.png', ?)")
       .run(nodePath.join(attachmentsRoot, "someotherhash.png"));
-    const result = clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
+    const result = await clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps());
     expect(fs.existsSync(inside)).toBe(false);
     expect(result.filesDeleted).toBe(1);
   });
@@ -227,18 +227,18 @@ describe("clearGoogleMessagesWebData on the real schema (BACKLOG-3657)", () => {
   // SR (G1): the cache's records are cleared in the same transaction; a
   // failure there leaves the texts too. Mutation: the hook called after the
   // transaction → red.
-  it("a failure while clearing the cache records rolls the texts back too", () => {
-    expect(() =>
+  it("a failure while clearing the cache records rolls the texts back too", async () => {
+    await expect(
       clearGoogleMessagesWebData(USER, rcsClearDbOps(), fsOps(), () => {}, () => {
         throw new Error("disk I/O error");
       }),
-    ).toThrow("disk I/O error");
+    ).rejects.toThrow("disk I/O error");
     expect(fs.existsSync(inside)).toBe(true);
     expect(count("SELECT COUNT(*) AS n FROM messages WHERE user_id = ?", USER)).toBe(5);
     expect(count("SELECT COUNT(*) AS n FROM attachments")).toBe(2);
   });
 
-  it("a failing statement rolls back: no file deleted, rows and counts unchanged (C3)", () => {
+  it("a failing statement rolls back: no file deleted, rows and counts unchanged (C3)", async () => {
     const real = rcsClearDbOps();
     const failing: RcsClearDbOps = {
       ...real,
@@ -246,7 +246,7 @@ describe("clearGoogleMessagesWebData on the real schema (BACKLOG-3657)", () => {
         throw new Error("disk I/O error");
       },
     };
-    expect(() => clearGoogleMessagesWebData(USER, failing, fsOps())).toThrow("disk I/O error");
+    await expect(clearGoogleMessagesWebData(USER, failing, fsOps())).rejects.toThrow("disk I/O error");
     expect(fs.existsSync(inside)).toBe(true);
     expect(count("SELECT COUNT(*) AS n FROM attachments")).toBe(2);
     expect(count("SELECT COUNT(*) AS n FROM communications WHERE user_id = ?", USER)).toBe(7);
@@ -256,7 +256,7 @@ describe("clearGoogleMessagesWebData on the real schema (BACKLOG-3657)", () => {
 });
 
 describe("order and the write gate (fakes)", () => {
-  it("the reviewed order: read, attachments, links (message, thread), messages, then counts; files last (C7)", () => {
+  it("the reviewed order: read, attachments, links (message, thread), messages, then counts; files last (C7)", async () => {
     const order: string[] = [];
     const ops: RcsClearDbOps = {
       transaction: (fn) => {
@@ -265,7 +265,7 @@ describe("order and the write gate (fakes)", () => {
         order.push("commit");
         return r;
       },
-      attachmentPaths: () => (order.push("read paths"), ["message-attachments/x.png"]),
+      attachmentPaths: () => (order.push("read paths"), [inside]),
       countedLinks: () => (order.push("read counts"), [{ transactionId: "tx-a", counted: 2 }]),
       linkedTransactions: () => (order.push("read linked"), ["tx-a"]),
       messageCount: () => 3,
@@ -279,16 +279,16 @@ describe("order and the write gate (fakes)", () => {
       refreshTextThreadCount: (t) => {
         order.push(`threads ${t}`);
       },
-      fileStillReferenced: () => false,
+      unreferencedFiles: (paths) => (order.push("check files"), new Set(paths)),
     };
-    clearGoogleMessagesWebData(USER, ops, {
-      attachmentsRoot: "/data/message-attachments",
-      resolve: (p) => nodePath.join("/data", p),
+    // BACKLOG-4040: a real file in the real folder (the containment check resolves it).
+    await clearGoogleMessagesWebData(USER, ops, {
+      ...fsOps(),
       deleteFile: () => (order.push("file"), true),
     });
     expect(order).toEqual([
       "begin", "read paths", "read counts", "read linked", "attachments", "message links", "thread links", "messages", "count=1",
-      "threads tx-a", "commit", "file",
+      "threads tx-a", "commit", "check files", "file",
     ]);
   });
 
