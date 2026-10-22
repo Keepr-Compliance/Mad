@@ -287,6 +287,7 @@ import {
 } from "./services/windowResponsivenessTracker";
 import { createWindowFreezeReporter, currentScreenName } from "./services/rendererFreezeProfiler";
 import { syncTimeline } from "./services/syncTimeline";
+import { licenseBlockedPayload } from "./utils/deepLinkLicenseBlockedPayload";
 
 // BACKLOG-3432: which installer this build came from, as a derived value only.
 // The Windows one-click installer migrates a prior per-machine install to
@@ -729,13 +730,13 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         Sentry.captureException(new Error("Deep link auth: license blocked"), {
           tags: { component: "deep-link", action: "auth-callback", error_code: "LICENSE_BLOCKED", block_reason: licenseStatus.blockReason || "unknown" },
         });
-        sendToRenderer("auth:deep-link-license-blocked", {
-          accessToken,
-          refreshToken,
-          userId: user.id,
-          blockReason: licenseStatus.blockReason,
-          licenseStatus,
-        });
+        // BACKLOG-4041: user id and block reason only. The Supabase client
+        // keeps the session set above (setSession), which the blocked
+        // screen's contact lookup (sessionHandlers handleGetUserContact) reads.
+        sendToRenderer(
+          "auth:deep-link-license-blocked",
+          licenseBlockedPayload(user.id, licenseStatus.blockReason),
+        );
         focusMainWindow();
         return;
       }
