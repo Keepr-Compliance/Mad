@@ -32,7 +32,6 @@ import {
 } from "../utils/validation";
 import { wrapHandler } from "../utils/wrapHandler";
 import { normalizeOAuthProvider } from "../utils/normalizeOAuthProvider";
-import { redactEmail } from "../utils/redactSensitive";
 
 // Import constants
 import {
@@ -1076,7 +1075,8 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
     const user = freshUser || session.user;
 
     setSyncUserId(user.id);
-    Sentry.setUser({ id: user.id, email: session.user.email ? redactEmail(session.user.email) : undefined });
+    // BACKLOG-4040 S3: id only — the scope is persisted to sentry/scope_v3.json in plaintext.
+    Sentry.setUser({ id: user.id });
 
     // BACKLOG-1831: start the additive-only SHADOW-mode delta poller on a
     // RESTORED-session boot too (returning user — the deep-link OAuth callback in

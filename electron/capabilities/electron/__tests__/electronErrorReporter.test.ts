@@ -106,15 +106,16 @@ describe("ElectronErrorReporter (BACKLOG-2962)", () => {
     expect(mockSentry.addBreadcrumb.mock.calls[0][0]).toBe(breadcrumb);
   });
 
-  it("setUser reaches Sentry.setUser, null included", () => {
-    // Transcribed from databaseService.ts:1058.
+  it("setUser reaches Sentry.setUser with the id only, null included (BACKLOG-4040 S3)", () => {
     const reporter = new ElectronErrorReporter();
-    const user = { id: "user-1", email: undefined };
+    // An untyped caller that still sends an email: it is dropped, because the
+    // scope is persisted to sentry/scope_v3.json in plaintext.
+    const user = { id: "user-1", email: "j***@example.com" } as unknown as { id: string };
 
     reporter.setUser(user);
     reporter.setUser(null);
 
-    expect(mockSentry.setUser.mock.calls[0][0]).toBe(user);
+    expect(mockSentry.setUser.mock.calls[0][0]).toEqual({ id: "user-1" });
     expect(mockSentry.setUser.mock.calls[1][0]).toBeNull();
   });
 

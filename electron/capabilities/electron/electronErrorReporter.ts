@@ -51,6 +51,6 @@ export class ElectronErrorReporter implements ErrorReporter {
   }
 
   setUser(user: ReportedUser | null): void {
-    Sentry.setUser(user);
+    Sentry.setUser(user ? { id: user.id } : null);
   }
 }

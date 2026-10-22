@@ -216,7 +216,8 @@ describe("K3 — a missing store next to existing ciphertext is refused, not rec
     return { ss, target };
   }
 
-  it.each(["message-attachments", "attachments", "rcs-cache-staging", "logs"])(
+  // BACKLOG-4040 S3: "sentry" = the sealed offline queue (sentry/sealed-queue).
+  it.each(["message-attachments", "attachments", "rcs-cache-staging", "logs", "sentry"])(
     "an encrypted file under %s → DataKeyUnavailableError, no new key",
     async (scope) => {
       const { ss } = await sealedFileThenLoseStore(scope);
