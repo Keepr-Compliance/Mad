@@ -465,6 +465,44 @@ describe('Dropdown placement inside a kit Dialog', () => {
     expect(panel.className).toContain('mt-1');
   });
 
+  it('reopening re-measures: up near the bottom, then down once the trigger has moved up', () => {
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 768 });
+    render(
+      <Dialog open>
+        <DialogContent aria-describedby={undefined}>
+          <DialogTitle>Edit</DialogTitle>
+          <Dropdown label="User" options={ROLES} value={null} onChange={() => undefined} />
+        </DialogContent>
+      </Dialog>
+    );
+    const trig = screen.getByRole('button', { name: /^User/ });
+    const stub = (top: number) =>
+      jest.spyOn(trig, 'getBoundingClientRect').mockReturnValue({ top, bottom: top + 36, left: 0, right: 300, width: 300, height: 36, x: 0, y: top, toJSON: () => ({}) } as DOMRect);
+    const panel = () => document.querySelector('[data-slot="dropdown-panel"]');
+
+    stub(700);
+    fireEvent.click(trig);
+    expect(panel()).toHaveAttribute('data-side', 'top');
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(panel()).toBeNull();
+
+    stub(200);
+    fireEvent.click(trig);
+    expect(panel()).toHaveAttribute('data-side', 'bottom');
+  });
+
+  it('the panel is positioned against a wrapper holding the trigger, not the label', () => {
+    const panel = openAt(200, 768);
+    const trig = screen.getByRole('button', { name: /^User/ });
+    const label = screen.getByText('User', { selector: 'label' });
+    const offsetParent = panel.parentElement as HTMLElement;
+    expect(offsetParent.className).toContain('relative');
+    expect(offsetParent.contains(trig)).toBe(true);
+    expect(offsetParent.contains(label)).toBe(false);
+    expect(offsetParent).not.toBe(panel.closest('[data-slot="dropdown"]'));
+  });
+
   it('the Dialog content sets no overflow that would clip the panel', () => {
     const panel = openAt(200, 768);
     const content = screen.getByRole('dialog');
