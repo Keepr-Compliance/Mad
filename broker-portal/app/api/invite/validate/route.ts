@@ -12,13 +12,7 @@
 
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
-
-const ROLE_LABELS: Record<string, string> = {
-  agent: 'Agent',
-  broker: 'Broker',
-  admin: 'Admin',
-  it_admin: 'IT Admin',
-};
+import { mapValidInvitation, type ValidateInvitationRpcResult } from '@/lib/invite/validateResult';
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
@@ -39,23 +33,12 @@ export async function GET(request: Request) {
     return NextResponse.json({ valid: false, error: 'Invitation not found' });
   }
 
-  // The RPC returns JSONB with { valid, error?, email?, org_name?, role? }
-  const result = data as {
-    valid: boolean;
-    error?: string;
-    email?: string;
-    org_name?: string;
-    role?: string;
-  };
+  // The RPC returns JSONB with { valid, error?, email?, org_name?, role?, licensed?, first_name? }
+  const result = data as ValidateInvitationRpcResult;
 
   if (!result.valid) {
     return NextResponse.json({ valid: false, error: result.error });
   }
 
-  return NextResponse.json({
-    valid: true,
-    email: result.email,
-    orgName: result.org_name,
-    role: ROLE_LABELS[result.role ?? ''] || result.role,
-  });
+  return NextResponse.json(mapValidInvitation(result));
 }

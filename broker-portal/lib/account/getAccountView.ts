@@ -38,6 +38,8 @@ export type { AccountIdentity, AccountView } from './accountView';
 export { providerDisplayName } from './accountView';
 
 import type { AccountView } from './accountView';
+import { routedMembership } from '@/lib/auth/routedMembership';
+import { PORTAL_MEMBERSHIP_SELECT, type PortalMembershipRow } from '@/lib/auth/membership';
 
 /**
  * feature_definitions.key. Enterprise and Team enabled, Individual disabled —
@@ -154,11 +156,16 @@ export async function getAccountView(): Promise<AccountView | null> {
       .select('id, email, display_name, first_name, last_name, oauth_provider, created_at')
       .eq('id', userId)
       .maybeSingle(),
+    // BACKLOG-3851: every row, ordered, and the classifier picks. A deactivated
+    // member who reverted to pay-as-you-go holds TWO rows (the brokerage one and
+    // their personal one); `.maybeSingle()` returned PGRST116 with data null for
+    // them, i.e. no organization at all.
     client
       .from('organization_members')
-      .select('role, organization_id')
+      .select(PORTAL_MEMBERSHIP_SELECT)
       .eq('user_id', userId)
-      .maybeSingle(),
+      .order('created_at', { ascending: true })
+      .order('id', { ascending: true }),
     client
       .from('user_preferences')
       .select('preferences, updated_at')
@@ -167,9 +174,10 @@ export async function getAccountView(): Promise<AccountView | null> {
   ]);
 
   const userRow = (userResult.data as UserRow | null) ?? null;
-  const membership = (membershipResult.data as
-    | { role: string | null; organization_id: string | null }
-    | null) ?? null;
+  const membership = routedMembership(
+    membershipResult.data as PortalMembershipRow[] | null,
+    userId
+  );
 
   let organizationName: string | null = null;
   let orgRetentionYears: number | null = null;

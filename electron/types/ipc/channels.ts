@@ -47,6 +47,10 @@ export interface IpcChannels {
     request: void;
     response: User | null;
   };
+  "auth:get-user-contact": {
+    request: { userId?: string };
+    response: { success: boolean; name: string; email: string };
+  };
   "auth:refresh-token": {
     request: { provider: OAuthProvider };
     response: { success: boolean; error?: string };

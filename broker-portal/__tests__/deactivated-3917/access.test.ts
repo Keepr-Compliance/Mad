@@ -14,11 +14,13 @@
 
 import {
   FIXTURE_BROKERAGE_ORG_ID,
+  FIXTURE_PERSONAL_ORG_ID,
   FIXTURE_USER_ID,
   brokerageMembership,
   createPostgrestEmulator,
   pendingInvite,
   personalMembership,
+  personalMembershipOwnedBy,
   type Row,
 } from '../helpers/postgrestEmulator';
 
@@ -32,6 +34,8 @@ jest.mock('@supabase/ssr', () => ({
   createServerClient: jest.fn(() => ({
     auth: { getUser: mockGetUser },
     from: (table: string) => mockEmulator.from(table),
+    // BACKLOG-3853 PR-2B: the brokerage is never suspended in this file.
+    rpc: async () => ({ data: false, error: null }),
   })),
 }));
 jest.mock('@/lib/supabase/server', () => ({
@@ -167,11 +171,58 @@ describe('classifyPortalAccess', () => {
     });
   });
 
-  it.each([
-    ['personal row first', () => [personalMembership(), suspendedAdmin()]],
-    ['personal row last', () => [suspendedAdmin(), personalMembership()]],
-  ])('never falls through to the personal organization (%s)', (_label, rows) => {
-    expect(classify(rows(), FIXTURE_USER_ID)).toEqual({
+  // BACKLOG-3851 (C1). Founder ruling: a DEACTIVATED member (suspended /
+  // expired) who owns a personal row is back on individual pay-as-you-go.
+  // Every other non-granting status never falls through. Whole objects, both
+  // row orders: a classifier that says personal_owner but scopes to the
+  // brokerage org must fail here.
+  const ORDERS = [
+    ['personal row first', (b: Row) => [personalMembership(), b]],
+    ['personal row last', (b: Row) => [b, personalMembership()]],
+  ] as const;
+
+  it.each(
+    ['suspended', 'expired'].flatMap((status) => ORDERS.map(([order, rows]) => [status, order, rows] as const))
+  )('C1: %s admin who owns a personal row (%s) -> floor/personal_owner on the personal org', (status, _order, rows) => {
+    expect(classify(rows(withStatus(brokerageMembership('admin'), status)), FIXTURE_USER_ID)).toEqual({
+      kind: 'floor',
+      via: 'personal_owner',
+      role: 'agent',
+      organizationId: FIXTURE_PERSONAL_ORG_ID,
+    });
+  });
+
+  it.each(ORDERS)('C1: unassigned admin who owns a personal row (%s) -> floor/unlicensed, never personal', (_o, rows) => {
+    expect(classify(rows(withStatus(brokerageMembership('admin'), 'unassigned')), FIXTURE_USER_ID)).toEqual({
+      kind: 'floor',
+      via: 'unlicensed',
+      role: 'admin',
+      organizationId: FIXTURE_BROKERAGE_ORG_ID,
+    });
+  });
+
+  it.each(
+    ['pending', 'bogus', null].flatMap((status) => ORDERS.map(([order, rows]) => [status, order, rows] as const))
+  )('C1: %p admin who owns a personal row (%s) -> floor/deactivated, never personal', (status, _order, rows) => {
+    expect(classify(rows(withStatus(brokerageMembership('admin'), status)), FIXTURE_USER_ID)).toEqual({
+      kind: 'floor',
+      via: 'deactivated',
+      role: 'admin',
+      organizationId: FIXTURE_BROKERAGE_ORG_ID,
+    });
+  });
+
+  it.each(['admin', 'agent'])('C1: unassigned %s alone -> floor/unlicensed', (role) => {
+    expect(classify([withStatus(brokerageMembership(role), 'unassigned')], FIXTURE_USER_ID)).toEqual({
+      kind: 'floor',
+      via: 'unlicensed',
+      role,
+      organizationId: FIXTURE_BROKERAGE_ORG_ID,
+    });
+  });
+
+  it("C1: suspended admin in somebody ELSE's personal org -> floor/deactivated (owner equality)", () => {
+    expect(classify([suspendedAdmin(), personalMembershipOwnedBy()], FIXTURE_USER_ID)).toEqual({
       kind: 'floor',
       via: 'deactivated',
       role: 'admin',
@@ -184,8 +235,11 @@ describe('classifyPortalAccess', () => {
   });
 });
 
-describe('mayOpenDashboardPath for a deactivated member', () => {
-  const access = classify([suspendedAdmin()], FIXTURE_USER_ID);
+describe.each([
+  ['a deactivated member', () => classify([suspendedAdmin()], FIXTURE_USER_ID)],
+  ['a member with no license assigned (BACKLOG-3851)', () => classify([withStatus(brokerageMembership('admin'), 'unassigned'), personalMembership()], FIXTURE_USER_ID)],
+])('mayOpenDashboardPath for %s', (_label, make) => {
+  const access = make();
   it.each(['/dashboard', '/dashboard/account', '/dashboard/support', '/dashboard/support/new', '/dashboard/support/t-1'])(
     'opens %s',
     (path) => expect(mayOpenDashboardPath(access, path)).toBe(true)
@@ -224,9 +278,31 @@ describe('middleware', () => {
     expect(await land(path)).toEqual({ at: '/dashboard', hops: 1 });
   });
 
-  it.each(REFUSED)('deactivated admin who owns a personal org GET %s -> /dashboard', async (path) => {
+  // BACKLOG-3851: back on pay-as-you-go, they open what a solo user opens
+  // (Billing, their own Checklists page; each page keeps its own gate) and
+  // nothing of the brokerage.
+  const SOLO_OPEN = ['/dashboard/billing', '/dashboard/checklists'];
+  it.each(REFUSED.filter((p) => !SOLO_OPEN.includes(p)))(
+    'deactivated admin who owns a personal org GET %s -> /dashboard',
+    async (path) => {
+      process.env.BILLING_ENABLED = 'true';
+      given([personalMembership(), suspendedAdmin()]);
+      expect(await land(path)).toEqual({ at: '/dashboard', hops: 1 });
+      delete process.env.BILLING_ENABLED;
+    }
+  );
+  it.each(SOLO_OPEN)('deactivated admin who owns a personal org GET %s is admitted (BACKLOG-3851)', async (path) => {
     process.env.BILLING_ENABLED = 'true';
-    given([personalMembership(), suspendedAdmin()]);
+    for (const rows of [[personalMembership(), suspendedAdmin()], [suspendedAdmin(), personalMembership()]]) {
+      given(rows);
+      expect(await hop(path)).toBeNull();
+    }
+    delete process.env.BILLING_ENABLED;
+  });
+
+  it.each(REFUSED)('unassigned admin who owns a personal org GET %s -> /dashboard (BACKLOG-3851)', async (path) => {
+    process.env.BILLING_ENABLED = 'true';
+    given([withStatus(brokerageMembership('admin'), 'unassigned'), personalMembership()]);
     expect(await land(path)).toEqual({ at: '/dashboard', hops: 1 });
     delete process.env.BILLING_ENABLED;
   });
@@ -273,6 +349,28 @@ describe('OAuth callback', () => {
     expect(response.headers.get('location')).toBe(`${ORIGIN}/dashboard`);
     expect(mockEmulator.state.writes).toEqual([]);
     expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockSignOut).not.toHaveBeenCalled();
+  });
+
+  // BACKLOG-3851 (C2): the classifier now routes a reverted member as
+  // personal_owner; the callback still treats the brokerage row as a placement.
+  // With an invite link cookie and an Azure tenant: no accept_invitation, no
+  // JIT, no pending-invite probe, no write.
+  it.each([
+    ['suspended admin who owns a personal org', () => [personalMembership(), suspendedAdmin()]],
+    ['expired agent who owns a personal org', () => [withStatus(brokerageMembership('agent'), 'expired'), personalMembership()]],
+    ['unassigned agent who owns a personal org', () => [withStatus(brokerageMembership('agent'), 'unassigned'), personalMembership()]],
+  ])('C2: %s with an invite link cookie -> /dashboard, no RPC at all', async (_label, rows) => {
+    mockExchangeCodeForSession.mockResolvedValue({ error: null });
+    given(rows());
+    const response = await callback(
+      new Request(`${ORIGIN}/auth/callback?code=fixture-code-3851`, {
+        headers: { cookie: 'keepr_invite=invite.fixture0token0for0backlog03851' },
+      })
+    );
+    expect(response.headers.get('location')).toBe(`${ORIGIN}/dashboard`);
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockEmulator.state.writes).toEqual([]);
     expect(mockSignOut).not.toHaveBeenCalled();
   });
 });

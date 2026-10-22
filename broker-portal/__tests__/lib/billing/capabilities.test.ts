@@ -162,7 +162,7 @@ const P_PLAN_SUSPENDED: BillingCapabilities = {
 // Row 8: broker, billing set up.
 const BROKER_SET_UP: BillingCapabilities = {
   kind: 'organization',
-  blocks: ['plan', 'seats', 'payment', 'invoices'],
+  blocks: ['plan', 'seats', 'manage_billing'], // BACKLOG-3854: payment + invoices are Stripe's page
   showPrice: true,
   canPay: true,
   canUpdateCard: false,
@@ -176,7 +176,7 @@ const BROKER_SET_UP: BillingCapabilities = {
 };
 const BROKER_SET_UP_SUSPENDED: BillingCapabilities = {
   kind: 'organization',
-  blocks: ['plan', 'seats', 'payment', 'invoices'],
+  blocks: ['plan', 'seats', 'manage_billing'], // BACKLOG-3854: payment + invoices are Stripe's page
   showPrice: true,
   canPay: true,
   canUpdateCard: false,
@@ -206,7 +206,7 @@ const BROKER_NOT_SET_UP: BillingCapabilities = {
 // Row 9: admin, billing set up.
 const ADMIN_SET_UP: BillingCapabilities = {
   kind: 'organization',
-  blocks: ['plan', 'seats', 'payment', 'invoices'],
+  blocks: ['plan', 'seats', 'manage_billing'], // BACKLOG-3854: payment + invoices are Stripe's page
   showPrice: true,
   canPay: true,
   canUpdateCard: false,
@@ -220,7 +220,7 @@ const ADMIN_SET_UP: BillingCapabilities = {
 };
 const ADMIN_SET_UP_SUSPENDED: BillingCapabilities = {
   kind: 'organization',
-  blocks: ['plan', 'seats', 'payment', 'invoices'],
+  blocks: ['plan', 'seats', 'manage_billing'], // BACKLOG-3854: payment + invoices are Stripe's page
   showPrice: true,
   canPay: true,
   canUpdateCard: false,

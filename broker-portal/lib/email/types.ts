@@ -8,8 +8,34 @@
 // Core send types
 // ---------------------------------------------------------------------------
 
+/**
+ * Email types written to email_delivery_log.email_type.
+ *
+ * BACKLOG-4001: the table's check constraint must allow exactly these values
+ * (supabase/migrations/20261020120000_backlog_4001_email_log_type_status_checks.sql).
+ * Adding a type here needs a migration; __tests__/migrations/email-log-checks-4001.test.ts
+ * fails until both lists match.
+ */
+export const EMAIL_TYPES = [
+  'invite',
+  'ticket_notification',
+  'ticket_confirmation',
+  'ticket_reply',
+  'ticket_resolved',
+  'receipt',
+  'other',
+] as const;
+
 /** Email type for delivery logging */
-export type EmailType = 'invite' | 'ticket_notification' | 'ticket_confirmation' | 'ticket_reply' | 'ticket_resolved' | 'receipt' | 'other';
+export type EmailType = (typeof EMAIL_TYPES)[number];
+
+/**
+ * Statuses written to email_delivery_log.status (send-email.ts logEmailDelivery).
+ * The check constraint also allows the legacy 'attempted', which nothing writes.
+ */
+export const EMAIL_LOG_STATUSES = ['sent', 'failed', 'skipped', 'queued'] as const;
+
+export type EmailLogStatus = (typeof EMAIL_LOG_STATUSES)[number];
 
 export interface SendEmailParams {
   /** Recipient email address or array of addresses */
@@ -122,6 +148,12 @@ export interface InviteEmailParams {
   expiresInDays: number;
   /** Whether this is a resend of an existing invite (changes subject/heading) */
   isResend?: boolean;
+  /** BACKLOG-3851 PR-2f: the invitation carries no license. */
+  withoutLicense?: boolean;
+  /** BACKLOG-4007 PR-4: the brokerage's billing-only login (Billing and Support only, no seat). */
+  billingOnly?: boolean;
+  /** BACKLOG-3851 PR-2f: first name typed on the invite; greets "Hi <first>,". */
+  recipientFirstName?: string;
 }
 
 export interface DownloadInviteEmailParams {
@@ -229,4 +261,129 @@ export interface TicketResolvedParams {
   ticketLink: string;
   /** The new status: 'resolved' or 'closed' */
   newStatus: 'resolved' | 'closed';
+}
+
+// ---------------------------------------------------------------------------
+// Seat-limit email (BACKLOG-3851 PR-2c)
+// ---------------------------------------------------------------------------
+
+export interface SeatLimitReachedParams {
+  /** Recipient (an IT admin, admin or broker of the brokerage) */
+  recipientEmail: string;
+  /** Name or email of the person who was not added / re-activated */
+  personLabel: string;
+  brokerageName: string;
+  /** Seats in use */
+  used: number;
+  /** The brokerage's seat count; null when unknown */
+  maxSeats: number | null;
+  kind: 'add' | 'reactivate';
+}
+
+// ---------------------------------------------------------------------------
+// Brokerage billing emails (BACKLOG-3853 PR-2)
+// ---------------------------------------------------------------------------
+
+export interface AccountSuspendedParams {
+  /** The brokerage's billing contact */
+  recipientEmail: string;
+  brokerageName: string;
+  /** Why the account manager suspended the account */
+  reason: 'non_payment' | 'other';
+  /**
+   * BACKLOG-3853 PR-2B: how a non-payment suspension is paid. Ignored for 'other'
+   * (no button: paying does not lift an Other suspension, founder 1e164f56 Q1).
+   */
+  payment: AccountSuspendedPayment;
+  /** Kept in the delivery log so a second run can see this email was sent */
+  outboxKey: string;
+  organizationId: string;
+}
+
+/**
+ * - invoice: the "Pay overdue invoice" button opens `url` (Stripe's hosted invoice
+ *   page of the oldest overdue invoice); `overdueCount` open invoices are past due.
+ * - stripe_email: the invoice lookup could not be made (last try, or the Stripe
+ *   customer is gone); no button, pay from Stripe's invoice email.
+ * - none: no open invoice / no Stripe customer on record; contact the account manager.
+ */
+export type AccountSuspendedPayment =
+  | { kind: 'invoice'; url: string; overdueCount: number }
+  | { kind: 'stripe_email' }
+  | { kind: 'none' };
+
+export type AccountManagerAlertReason =
+  | 'overdue'
+  | 'payment_failed'
+  | 'refund'
+  | 'dispute'
+  // BACKLOG-4007 PR-3: onboarding (billing setup) alerts.
+  | 'setup_not_completed'
+  | 'setup_no_recipient'
+  | 'price_question'
+  // BACKLOG-4007 People v2: the billing contact was deprovisioned and the brokerage has no active admin.
+  | 'billing_contact_removed'
+  // BACKLOG-4019: auto-renew turned off by the brokerage; the subscription ended while not canceling.
+  | 'auto_renew_off'
+  | 'subscription_ended_unexpectedly'
+  // BACKLOG-3854: a Broker or Admin added seats (enqueued by broker_add_seats).
+  | 'seats_added';
+
+export interface AccountManagerAlertParams {
+  /** The account manager's sign-in email */
+  recipientEmail: string;
+  brokerageName: string;
+  reason: AccountManagerAlertReason;
+  /** Stripe object the alert is about (an invoice, charge or dispute id) */
+  stripeObjectId: string | null;
+  /** BACKLOG-4007 PR-3: one extra line (e.g. who asked a price question). */
+  detail?: string | null;
+  outboxKey: string;
+  organizationId: string;
+}
+
+/** BACKLOG-4007 PR-3: "finish your setup" reminder (outbox kind notify_setup_reminder). */
+/** BACKLOG-3854: seats added, to the deal's billing contact (founder d0c22cef #2). */
+export interface SeatsAddedParams {
+  recipientEmail: string;
+  brokerageName: string;
+  seatsFrom: number;
+  seatsTo: number;
+  /** The brokerage is in its trial: no prorated charge now. */
+  trialing: boolean;
+  addedBy: string;
+  outboxKey: string;
+  organizationId: string;
+}
+
+/** BACKLOG-4007 People v2: "You are now the billing contact" (founder R9 refinement). */
+export interface BillingContactReassignedParams {
+  recipientEmail: string;
+  brokerageName: string;
+  /** Org Settings, where People lives. */
+  url: string;
+  outboxKey: string;
+  organizationId: string;
+}
+
+export interface SetupReminderParams {
+  recipientEmail: string;
+  brokerageName: string;
+  /** finish = has an account (opens the setup guide); accept = invitation not accepted yet. */
+  variant: 'finish' | 'accept';
+  url: string;
+  outboxKey: string;
+  organizationId: string;
+  day: number;
+}
+
+/** BACKLOG-4027: the identity provider tried to demote or deactivate the brokerage's last active admin. */
+export interface LastAdminKeptParams {
+  /** Recipient: Keepr support, or the brokerage's IT contact */
+  recipientEmail: string;
+  /** Name or email of the admin who was kept */
+  personLabel: string;
+  brokerageName: string;
+  kind: 'deactivate' | 'demote';
+  source: 'scim' | 'directory_sync';
 }

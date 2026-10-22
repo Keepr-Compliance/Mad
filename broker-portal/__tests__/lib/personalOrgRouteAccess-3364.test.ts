@@ -53,7 +53,7 @@ jest.mock('@/lib/feature-gate', () => ({
   isFeatureEnabledFailClosed: jest.fn(async () => true),
 }));
 
-import { ORG_SETTINGS_ROLES, checkOrgSettingsAccess } from '@/lib/org-settings-access';
+import { ORG_SETTINGS_ROLES, checkOrgSettingsAccess, seesOrgPolicy } from '@/lib/org-settings-access';
 import { JIT_ADMIN_ROLES, requireJitAccess } from '@/lib/jit-access';
 import { SCIM_ADMIN_ROLES, requireScimAccess } from '@/lib/scim-access';
 
@@ -105,12 +105,10 @@ describe('organization settings', () => {
     expect(await checkOrgSettingsAccess()).toMatchObject({ allowed: true, role: 'admin' });
   });
 
-  it('still refuses a brokerage broker — this gate is admin-only, not portal-wide', async () => {
+  it('lets a brokerage broker open the page, but the policy cards stay admin-only (BACKLOG-4007)', async () => {
     given([brokerageMembership('broker')]);
-    expect(await checkOrgSettingsAccess()).toEqual({
-      allowed: false,
-      reason: 'unauthorized',
-    });
+    expect(await checkOrgSettingsAccess()).toMatchObject({ allowed: true, role: 'broker' });
+    expect(seesOrgPolicy('broker')).toBe(false);
   });
 });
 

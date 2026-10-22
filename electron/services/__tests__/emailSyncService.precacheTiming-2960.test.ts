@@ -225,6 +225,13 @@ const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * BACKLOG-4035: `elapsedMs` is a `Date.now()` difference, truncated to whole ms,
+ * and a timer can fire up to ~1 ms early, so an 80 ms sleep can read 79 (seen on
+ * CI). Lower bounds on a planted sleep allow this much; nothing else does.
+ */
+const TIMER_SLOP_MS = 2;
+
+/**
  * Milliseconds the next `db.prepare` should block for. Set by a test, consumed
  * once. Blocking rather than awaiting because a database call is synchronous —
  * an `await` would move the delay out of the region being measured, which is the
@@ -496,7 +503,7 @@ describe("BACKLOG-2960 — the timer spans the whole run", () => {
     expect(mockGmailInit).toHaveBeenCalledTimes(1);
 
     expect(Number(field(theTimingLine(), "elapsedMs"))).toBeGreaterThanOrEqual(
-      PROVIDER_DELAY_MS * 2,
+      PROVIDER_DELAY_MS * 2 - TIMER_SLOP_MS,
     );
   });
 
@@ -525,7 +532,9 @@ describe("BACKLOG-2960 — the timer spans the whole run", () => {
     await emailSyncService.precacheEmails(USER, undefined, { force: false });
 
     expect(mockReprocess).toHaveBeenCalledTimes(1);
-    expect(Number(field(theTimingLine(), "elapsedMs"))).toBeGreaterThanOrEqual(REPAIR_DELAY_MS);
+    expect(Number(field(theTimingLine(), "elapsedMs"))).toBeGreaterThanOrEqual(
+      REPAIR_DELAY_MS - TIMER_SLOP_MS,
+    );
   });
 });
 
@@ -776,15 +785,17 @@ describe("BACKLOG-2960 — database time is reported separately from total elaps
     expect(plantedDbDelayMs).toBe(0); // the plant actually fired
 
     const dbRise = delayed.dbMs - baseline.dbMs;
-    const elapsedRise = delayed.elapsedMs - baseline.elapsedMs;
 
     expect(dbRise).toBeGreaterThanOrEqual(ROSE);
-    expect(elapsedRise).toBeGreaterThanOrEqual(ROSE);
-    // And by the SAME amount — a blocking wait inside the database stalls the
-    // event loop too, so the whole delay lands in both figures. Asserting only
-    // that each rose would also pass an instrument that charged some unrelated
-    // extra work to `dbMs`.
-    expect(Math.abs(elapsedRise - dbRise)).toBeLessThan(DID_NOT_RISE);
+    // BACKLOG-4035: the wall clock is checked within the delayed run only. The
+    // old `delayed.elapsedMs - baseline.elapsedMs` compared two noisy runs, and a
+    // slow baseline absorbed the margin. A blocking wait stalls the event loop,
+    // so the delayed run's total holds the whole delay and all of its db time.
+    expect(delayed.elapsedMs).toBeGreaterThanOrEqual(PLANTED_MS - TIMER_SLOP_MS);
+    expect(delayed.dbMs).toBeLessThanOrEqual(delayed.elapsedMs + 1);
+    // And the delay lands in `dbMs` once — an instrument that charged some
+    // unrelated extra work to `dbMs` rises by more than the plant.
+    expect(dbRise).toBeLessThan(PLANTED_MS + DID_NOT_RISE);
   });
 
   /**
@@ -808,7 +819,9 @@ describe("BACKLOG-2960 — database time is reported separately from total elaps
     });
 
     expect(mockOutlookInit).toHaveBeenCalledTimes(1); // the delay actually ran
-    expect(delayed.elapsedMs - baseline.elapsedMs).toBeGreaterThanOrEqual(ROSE);
+    // BACKLOG-4035: an absolute lower bound — the sleep guarantees it. The old
+    // two-run difference failed at 154 and 195 when the baseline ran slow.
+    expect(delayed.elapsedMs).toBeGreaterThanOrEqual(PLANTED_MS - TIMER_SLOP_MS);
     expect(delayed.dbMs - baseline.dbMs).toBeLessThan(DID_NOT_RISE);
   });
 });

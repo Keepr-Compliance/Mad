@@ -14,6 +14,7 @@ import { PageHeader } from '@keepr/design-system';
 import { AlertBanner, Button } from '@keepr/ui';
 import { TicketList } from '@/app/support/components/TicketList';
 import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
+import { openSupportRequest } from '@/lib/support/openSupportRequest';
 
 function SuccessBanner() {
   const searchParams = useSearchParams();
@@ -37,7 +38,7 @@ export default function DashboardSupportPage() {
         title={PAGE_TITLES.support}
         subtitle="View and track your support requests"
         actions={
-          <Button onClick={() => window.dispatchEvent(new Event('open-support-widget'))}>
+          <Button onClick={() => openSupportRequest()}>
             <Plus className="h-4 w-4" />
             New Ticket
           </Button>

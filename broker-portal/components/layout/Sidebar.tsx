@@ -70,6 +70,7 @@ import {
 } from 'lucide-react';
 import { AppMark, Drawer, Wordmark } from '@keepr/ui';
 import { resolveViewerName } from '@/lib/utils/userDisplay';
+import { mayUsePeople } from '@/lib/people-roles';
 
 interface NavItem {
   label: string;
@@ -83,13 +84,16 @@ const memberNavItems: NavItem[] = [
   { label: 'Support', href: '/dashboard/support', icon: Headphones },
 ];
 
+// Founder, 2026-09-04: the tab named setting should say Org Settings.
+// Since BACKLOG-3078 this route holds org policy — a person's own
+// settings live at /dashboard/account — so the bare word named the wrong
+// half of the split. Label only; the href is unchanged.
+// BACKLOG-4007: People is a card here, so a broker gets this entry too (and sees only People).
+const settingsNavItem: NavItem = { label: 'Org Settings', href: '/dashboard/settings', icon: Settings };
+
 const adminNavItems: NavItem[] = [
   { label: 'Users', href: '/dashboard/users', icon: Users },
-  // Founder, 2026-09-04: the tab named setting should say Org Settings.
-  // Since BACKLOG-3078 this route holds ONLY org policy — a person's own
-  // settings live at /dashboard/account — so the bare word named the wrong
-  // half of the split. Label only; the href is unchanged.
-  { label: 'Org Settings', href: '/dashboard/settings', icon: Settings },
+  settingsNavItem,
 ];
 
 /** BACKLOG-3878: the one entry a suspended account keeps besides Billing and My Account. */
@@ -110,6 +114,13 @@ const myTransactionsNavItem: NavItem = {
 const checklistsNavItem: NavItem = { label: 'Checklists', href: '/dashboard/checklists', icon: ClipboardCheck };
 
 /** A copy of `items` with `item` placed right after the entry with `href`. */
+/** BACKLOG-3853 PR-2B: the note under a suspended brokerage's navigation (mockup v35). */
+export function orgSuspendedNavNote(showBilling: boolean): string {
+  return showBilling
+    ? 'Only Billing, Support and My Account are available while your brokerage is suspended.'
+    : 'Only Support and My Account are available while your brokerage is suspended.';
+}
+
 export function insertAfter(items: NavItem[], href: string, item: NavItem): NavItem[] {
   const i = items.findIndex((x) => x.href === href);
   return i < 0 ? [...items, item] : [...items.slice(0, i + 1), item, ...items.slice(i + 1)];
@@ -161,6 +172,14 @@ export interface SidebarProps {
    * page refuse the rest.
    */
   suspended?: boolean;
+  /**
+   * BACKLOG-3853 PR-2B: the BROKERAGE is suspended and this is a full-portal
+   * user (broker, admin, it_admin). Only Billing (when showBilling), Support and
+   * My Account are listed, with a one-line note. Presentation only: middleware
+   * and each page refuse the rest. The layout never sets it for an agent (their
+   * floor stays, minus Checklists) or while impersonating.
+   */
+  orgSuspended?: boolean;
   /** BACKLOG-3798: the phone drawer is open (below md). Not rendered when false. */
   mobileOpen?: boolean;
   /** BACKLOG-3798: close the phone drawer (link tap, backdrop, Escape, close button). */
@@ -183,6 +202,7 @@ export function Sidebar({
   floorOnly = false,
   showBilling = false,
   suspended = false,
+  orgSuspended = false,
   mobileOpen = false,
   onMobileClose,
   mobileReturnFocusRef,
@@ -195,6 +215,9 @@ export function Sidebar({
   const showMemberNav = !showFloorNav && (isImpersonating || role !== 'it_admin');
   const showAdminNav =
     !showFloorNav && !isImpersonating && (role === 'admin' || role === 'it_admin');
+  // BACKLOG-4007: a broker (not admin / IT admin, who have it in adminNavItems) opens Org Settings
+  // for the People card. Same role set as the page gate (lib/people-roles.ts).
+  const showBrokerSettings = !showFloorNav && !isImpersonating && !showAdminNav && mayUsePeople(role);
   const showChecklistsEntry = showChecklists && !isImpersonating;
   const showChecklistsGrayed =
     !showChecklistsEntry && !!checklistsUnavailableLabel && !isImpersonating && !showFloorNav;
@@ -272,12 +295,27 @@ export function Sidebar({
         </>
       );
     }
+    if (orgSuspended && !isImpersonating) {
+      return (
+        <>
+          {showBilling && r(billingNavItem)}
+          {r(supportNavItem)}
+          {personalNavItems.map(r)}
+          {!isCollapsed && (
+            <p data-testid="org-suspended-nav-note" className="px-3 pt-3 text-xs leading-snug text-gray-400">
+              {orgSuspendedNavNote(showBilling)}
+            </p>
+          )}
+        </>
+      );
+    }
     return (
       <>
         {showFloorNav && floorItems.map(r)}
         {showMemberNav && memberNavItems.map(r)}
         {!showAdminNav && checklistsSlot && r(checklistsNavItem)}
         {showAdminNav && adminItems.map(r)}
+        {showBrokerSettings && r(settingsNavItem)}
         {showBilling && !isImpersonating && r(billingNavItem)}
         {personalNavItems.map(r)}
       </>

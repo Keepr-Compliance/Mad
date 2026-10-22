@@ -68,6 +68,16 @@ const BEFORE = {
 
 const FLOOR = ['/dashboard', '/dashboard/support', '/dashboard/account'];
 
+/**
+ * BACKLOG-4007 (founder decision): a broker also gets Org Settings (it holds only the People card),
+ * right before Billing (or My Account). Admin and IT admin already had it. Inserted by hand into
+ * the transcribed broker lists above.
+ */
+function withSettings(list: readonly string[]): string[] {
+  const at = list.includes('/dashboard/billing') ? list.indexOf('/dashboard/billing') : list.indexOf('/dashboard/account');
+  return [...list.slice(0, at), '/dashboard/settings', ...list.slice(at)];
+}
+
 describe('Sidebar — the floor', () => {
   it.each(['agent', 'viewer', undefined])('role %s with floorOnly shows exactly the floor', (role) => {
     expect(hrefs({ role, floorOnly: true })).toEqual(FLOOR);
@@ -101,12 +111,12 @@ describe('Sidebar — the floor', () => {
 
 describe('Sidebar — full-portal and support buckets are unchanged', () => {
   it.each([
-    ['broker', { role: 'broker' }, BEFORE.broker],
+    ['broker', { role: 'broker' }, withSettings(BEFORE.broker)],
     ['admin', { role: 'admin' }, BEFORE.admin],
     ['it_admin', { role: 'it_admin' }, BEFORE.it_admin],
     ['impersonation', { isImpersonating: true }, BEFORE.impersonation],
     ['impersonation even if floorOnly were set', { isImpersonating: true, floorOnly: true }, BEFORE.impersonation],
-    ['broker + checklists', { role: 'broker', showChecklists: true }, BEFORE.brokerWithChecklists],
+    ['broker + checklists', { role: 'broker', showChecklists: true }, withSettings(BEFORE.brokerWithChecklists)],
     ['admin + checklists', { role: 'admin', showChecklists: true }, BEFORE.adminWithChecklists],
     ['it_admin + checklists', { role: 'it_admin', showChecklists: true }, BEFORE.itAdminWithChecklists],
   ] as [string, Partial<SidebarProps>, string[]][])('%s', (_name, props, expected) => {
@@ -150,7 +160,7 @@ describe('Sidebar — Billing (BACKLOG-3844)', () => {
       ],
     ],
   ] as [string, Partial<SidebarProps>, string[]][])('%s with showBilling', (_name, props, expected) => {
-    expect(hrefs({ ...props, showBilling: true })).toEqual(expected);
+    expect(hrefs({ ...props, showBilling: true })).toEqual(props.floorOnly || props.role !== 'broker' ? expected : withSettings(expected));
   });
 
   it('impersonation never shows Billing, even if showBilling were set', () => {
@@ -159,7 +169,7 @@ describe('Sidebar — Billing (BACKLOG-3844)', () => {
 
   it.each([
     ['floor', { role: 'agent', floorOnly: true }, FLOOR],
-    ['broker', { role: 'broker' }, BEFORE.broker],
+    ['broker', { role: 'broker' }, withSettings(BEFORE.broker)],
     ['admin', { role: 'admin' }, BEFORE.admin],
     ['it_admin', { role: 'it_admin' }, BEFORE.it_admin],
   ] as [string, Partial<SidebarProps>, string[]][])('%s without showBilling is unchanged', (_name, props, expected) => {

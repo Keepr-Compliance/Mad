@@ -4,7 +4,10 @@
  */
 
 import { ipcRenderer, IpcRendererEvent } from "electron";
-import type { FolderExportProgress } from "../types/ipc";
+import type {
+  DeepLinkLicenseBlockedPayload,
+  FolderExportProgress,
+} from "../types/ipc";
 
 export const eventBridge = {
   /**
@@ -321,24 +324,13 @@ export const eventBridge = {
    * @returns Cleanup function to remove listener
    */
   onDeepLinkLicenseBlocked: (
-    callback: (data: {
-      accessToken: string;
-      refreshToken: string;
-      userId: string;
-      blockReason: string;
-      licenseStatus: unknown;
-    }) => void,
+    callback: (data: DeepLinkLicenseBlockedPayload) => void,
   ) => {
+    // BACKLOG-4041: forward only the two declared fields, whatever main sent.
     const listener = (
       _: IpcRendererEvent,
-      data: {
-        accessToken: string;
-        refreshToken: string;
-        userId: string;
-        blockReason: string;
-        licenseStatus: unknown;
-      },
-    ) => callback(data);
+      data: DeepLinkLicenseBlockedPayload,
+    ) => callback({ userId: data.userId, blockReason: data.blockReason });
     ipcRenderer.on("auth:deep-link-license-blocked", listener);
     return () =>
       ipcRenderer.removeListener("auth:deep-link-license-blocked", listener);

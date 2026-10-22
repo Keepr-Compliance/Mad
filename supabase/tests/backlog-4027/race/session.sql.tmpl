@@ -1,0 +1,5 @@
+-- one session: demote the member as the service role (no sync marker), hold the transaction open, commit.
+SET LOCAL ROLE service_role;
+UPDATE public.organization_members SET role = 'agent', updated_at = now() WHERE id = '__MEMBER__';
+RESET ROLE;
+SELECT pg_sleep(__SLEEP__);

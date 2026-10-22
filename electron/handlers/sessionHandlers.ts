@@ -684,6 +684,74 @@ async function migrateUserToSupabaseId(
   return migratedUser;
 }
 
+/** BACKLOG-4038: the support form's prefill. Name and email only, never tokens. */
+export interface UserContactResponse {
+  success: boolean;
+  name: string;
+  email: string;
+}
+
+/**
+ * BACKLOG-4038: name and email of the signed-in or just-blocked user, for the
+ * support form on the license-blocked screen.
+ *
+ * `auth:get-current-user` cannot serve the sign-in block: on the deep-link path
+ * main sets the Supabase session (main.ts setSession), finds the license
+ * blocked and returns BEFORE sessionService.saveSession (main.ts:843), so
+ * loadSession() is null and that handler answers "No active session".
+ *
+ * Two sources, each checked against `userId` when one is given:
+ *   - the Supabase client's in-memory session (set by the deep-link sign-in);
+ *   - the saved local session (a returning user blocked at startup).
+ * With a `userId` the in-memory session is tried first, so a stale saved
+ * session for a different user is never used. Returns empty strings when
+ * neither matches. Never throws: the form opens with empty fields instead.
+ */
+export async function handleGetUserContact(
+  _event: IpcMainInvokeEvent | null,
+  rawUserId?: unknown,
+): Promise<UserContactResponse> {
+  const empty: UserContactResponse = { success: false, name: "", email: "" };
+  const userId = typeof rawUserId === "string" && rawUserId ? rawUserId : undefined;
+  const matches = (id: string | undefined) => !userId || id === userId;
+
+  const fromSupabase = async (): Promise<UserContactResponse | null> => {
+    try {
+      const { data } = await supabaseService.getClient().auth.getSession();
+      const u = data?.session?.user;
+      if (!u || !matches(u.id)) return null;
+      const meta = (u.user_metadata || {}) as Record<string, unknown>;
+      const email = u.email || (typeof meta.email === "string" ? meta.email : "") || "";
+      const metaName =
+        (typeof meta.full_name === "string" && meta.full_name) ||
+        (typeof meta.name === "string" && meta.name) ||
+        "";
+      return { success: true, name: metaName || email, email };
+    } catch {
+      return null;
+    }
+  };
+
+  const fromLocalSession = async (): Promise<UserContactResponse | null> => {
+    try {
+      const session = await sessionService.loadSession();
+      const u = session?.user;
+      if (!u || !matches(u.id)) return null;
+      const email = u.email || "";
+      return { success: true, name: u.display_name || email, email };
+    } catch {
+      return null;
+    }
+  };
+
+  const order = userId ? [fromSupabase, fromLocalSession] : [fromLocalSession, fromSupabase];
+  for (const source of order) {
+    const found = await source();
+    if (found && (found.email || found.name)) return found;
+  }
+  return empty;
+}
+
 /**
  * Get current user from saved session
  */
@@ -1480,6 +1548,8 @@ export function registerSessionHandlers(): void {
   ipcMain.handle("auth:complete-email-onboarding", wrapHandler(handleCompleteEmailOnboarding, { module: "SessionHandlers" }));
   ipcMain.handle("auth:validate-session", wrapHandler(handleValidateSession, { module: "SessionHandlers" }));
   ipcMain.handle("auth:get-current-user", wrapHandler(handleGetCurrentUser, { module: "SessionHandlers" }));
+  // BACKLOG-4038: name + email only, for the license-blocked screen's support form.
+  ipcMain.handle("auth:get-user-contact", handleGetUserContact);
   // BACKLOG-3833: renderer input heartbeat (no arguments; main loads the session itself).
   ipcMain.handle("session:user-activity", handleUserActivity);
   // TASK-1507: Open browser for Supabase OAuth with deep-link callback

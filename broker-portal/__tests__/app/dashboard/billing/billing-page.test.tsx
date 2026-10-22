@@ -15,6 +15,7 @@
 import {
   FIXTURE_PERSONAL_ORG_ID,
   FIXTURE_USER_ID,
+  FIXTURE_BROKERAGE_ORG_ID,
   brokerageMembership,
   createPostgrestEmulator,
   personalMembership,
@@ -91,6 +92,7 @@ const mockStripe = {
   customersUpdate: jest.fn(),
   subscriptionsRetrieve: jest.fn(),
   invoicesList: jest.fn(),
+  clockRetrieve: jest.fn(),
   chargesList: jest.fn(),
   paymentMethodsRetrieve: jest.fn(),
 };
@@ -105,6 +107,7 @@ jest.mock('stripe', () => ({
     },
     subscriptions: { retrieve: (...a: unknown[]) => mockStripe.subscriptionsRetrieve(...a) },
     invoices: { list: (...a: unknown[]) => mockStripe.invoicesList(...a) },
+    testHelpers: { testClocks: { retrieve: (...a: unknown[]) => mockStripe.clockRetrieve(...a) } },
     charges: { list: (...a: unknown[]) => mockStripe.chargesList(...a) },
     paymentMethods: { retrieve: (...a: unknown[]) => mockStripe.paymentMethodsRetrieve(...a) },
   })),
@@ -147,6 +150,7 @@ jest.mock('next/navigation', () => ({
 
 import fs from 'fs';
 import path from 'path';
+import { OrgSuspendedBanner } from '@/components/billing/OrgSuspendedBanner';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { confirmAgentCheckout, startAgentCheckout } from '@/lib/actions/agentPlan';
 import { BillingDb, eqValue } from '../../../helpers/billingDb';
@@ -374,7 +378,9 @@ describe('R2: a support session never sees billing', () => {
     given(rows);
     mockCookie = JSON.stringify({ session_id: SESSION_ID, target_user_id: TARGET_USER_ID });
     expect(await run()).toEqual(outcome);
-    expect(mockServiceTables).toEqual([]);
+    // No impersonation read. BACKLOG-3854: an admitted organization page reads whether billing is
+    // set up (org_deals + org_billing_stripe, service) after admission; nothing else.
+    expect(mockServiceTables).toEqual('notFound' in outcome ? [] : ['org_deals', 'org_billing_stripe']);
   });
 });
 
@@ -725,7 +731,15 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
     async (_n, row) => {
       seedCustomer();
       const r = await page([row]);
-      expect(mockSessionRpc).not.toHaveBeenCalled();
+      // BACKLOG-3853 PR-2B: the portal's own brokerage-suspension read is not a billing read.
+      // BACKLOG-4019: a broker or admin reads the plan's auto-renew state (broker_get_plan_end,
+      // own session); an IT admin reads nothing.
+      const role = (row as { role?: string }).role;
+      // BACKLOG-3854: everyone on the organization page reads the seat counts (broker_get_seats, own
+      // session; the database gives IT admin no price).
+      const allowed = role === 'it_admin' ? ['org_billing_suspended', 'broker_get_seats'] : ['org_billing_suspended', 'broker_get_plan_end', 'broker_get_seats'];
+      expect(mockSessionRpc.mock.calls.filter((c) => !allowed.includes(c[0] as string))).toEqual([]);
+      if (role === 'it_admin') expect(mockSessionRpc.mock.calls.some((c) => c[0] === 'broker_get_plan_end')).toBe(false);
       expect(mockServiceRpc).not.toHaveBeenCalled();
       expect(stripeCalls()).toBe(0);
       expect(mockBillingDb.callsTo('stripe_customers', 'select')).toEqual([]);
@@ -977,4 +991,286 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
     expect(r.credits).toContain('Credits cannot be used or bought while your account is suspended. They are kept.');
     expect(r.payment).toContain('Card on file');
   });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3853 PR-2B (C-B1): a suspended BROKERAGE. Every member's licence is
+// active (_billing_suspend_org touches no licence); only org_billing_suspended
+// answers true. The page is where the broker, admin and IT admin land, so it
+// must NOT copy the licence-suspended redirect to /dashboard/account (W9).
+// ---------------------------------------------------------------------------
+
+describe('C-B1: a suspended brokerage (BACKLOG-3853)', () => {
+  const ORG = FIXTURE_BROKERAGE_ORG_ID;
+  function suspend(reason: 'non_payment' | 'other' | null, suspended = true): void {
+    mockSessionRpc.mockImplementation(async (fn: string) =>
+      fn === 'org_billing_suspended' ? { data: suspended, error: null } : { data: 0, error: null }
+    );
+    mockBillingDb = new BillingDb({
+      org_deals: [{ organization_id: ORG, status: suspended ? 'suspended' : 'active', suspended_reason: reason }],
+      organizations: [{ id: ORG, name: 'Fixture Realty' }],
+    });
+  }
+  async function banner(): Promise<string | null> {
+    const { container, unmount } = render(await BillingRoute({}));
+    const el = container.querySelector('[data-billing-banner="org_suspended"]');
+    const text = el ? (el.textContent ?? '') : null;
+    unmount();
+    return text;
+  }
+
+  it.each(['broker', 'admin'])('%s, non-payment: the page renders with the pay-from-the-email banner', async (role) => {
+    given([brokerageMembership(role)]);
+    suspend('non_payment');
+    expect(await run()).toEqual({ element: 'BillingPage' });
+    given([brokerageMembership(role)]);
+    const text = await banner();
+    expect(text).toContain('Your brokerage is suspended for an unpaid invoice.');
+    expect(text).toBe(
+      'Your brokerage is suspended for an unpaid invoice. Submissions, approvals and invites are paused. Agents can still view their own past submissions. Pay from the link in the suspension email; access returns once every overdue invoice is paid.Contact support'
+    );
+    expect(text).not.toContain('Pay overdue invoice');
+  });
+
+  it('it_admin, non-payment: same text as the Broker/Admin (they can pay too)', async () => {
+    given([brokerageMembership('it_admin')]);
+    suspend('non_payment');
+    const text = await banner();
+    expect(text).toContain('Pay from the link in the suspension email; access returns once every overdue invoice is paid.');
+    expect(text).not.toContain('A Broker or Admin can pay it');
+  });
+
+  it('reason other: contact Keepr, no pay sentence', async () => {
+    given([brokerageMembership('admin')]);
+    suspend('other');
+    const text = await banner();
+    expect(text).toBe(
+      'Your brokerage account is suspended. Submissions, approvals and invites are paused. Agents can still view their own past submissions. Contact Keepr to restore it.Contact support'
+    );
+    expect(text).not.toContain('unpaid invoice');
+    expect(text).not.toContain('Pay from the link');
+  });
+
+  // "Pay overdue invoice" (BACKLOG-3853): the oldest overdue invoice on the customer's test clock.
+  // Fixtures: __tests__/fixtures/stripe/p3853 (TEST captures; see its README). Five open invoices;
+  // due dates oldest first 1794754800 (in_1URdzA...), 1797346800, 1800025200, 1802703600, 1805122800.
+  const FX_P3853 = path.join(__dirname, '../../../fixtures/stripe/p3853');
+  const p3853 = (n: string) => JSON.parse(fs.readFileSync(path.join(FX_P3853, `${n}.json`), 'utf8'));
+  const OLDEST_PAY_URL = 'https://invoice.stripe.test/REDACTED/in_1URdzABg3cyTef3dyKhMzjZn';
+  const NEWEST_PAY_URL = 'https://invoice.stripe.test/REDACTED/in_1URe2FBg3cyTef3dddMb2Oqn';
+  function seedPay(frozen: number, invoices: unknown = p3853('inv-list-open')): void {
+    mockBillingDb.rows('org_billing_stripe').push({ organization_id: ORG, stripe_mode: 'test', stripe_customer_id: 'cus_VSZ7P8iqRvHlbC' });
+    mockStripe.customersRetrieve.mockResolvedValue(p3853('customer'));
+    mockStripe.clockRetrieve.mockResolvedValue({ ...p3853('clock'), frozen_time: frozen }); // [EDITED] frozen_time
+    mockStripe.invoicesList.mockResolvedValue(invoices);
+  }
+  async function payButton(role: string): Promise<{ href: string | null; target: string | null } | null> {
+    given([brokerageMembership(role)]);
+    const { container, unmount } = render(await BillingRoute({}));
+    const el = container.querySelector('[data-billing-action="pay_overdue_invoice"]');
+    const out = el ? { href: el.getAttribute('href'), target: el.getAttribute('target') } : null;
+    unmount();
+    return out;
+  }
+
+  it.each(['broker', 'admin', 'it_admin'])('%s, non-payment: Pay overdue invoice opens the OLDEST overdue invoice', async (role) => {
+    suspend('non_payment');
+    seedPay(1805122801); // every one of the five is overdue
+    expect(await payButton(role)).toEqual({ href: OLDEST_PAY_URL, target: '_blank' });
+    expect(mockStripe.clockRetrieve).toHaveBeenCalledWith(p3853('customer').test_clock);
+  });
+
+  it('only invoices past due ON THE CLOCK count: two overdue -> the older of the two', async () => {
+    suspend('non_payment');
+    seedPay(1797346801);
+    expect((await payButton('broker'))?.href).toBe(OLDEST_PAY_URL);
+    expect(NEWEST_PAY_URL).not.toBe(OLDEST_PAY_URL);
+  });
+
+  it('reason other: no Pay button', async () => {
+    suspend('other');
+    seedPay(1805122801);
+    expect(await payButton('broker')).toBeNull();
+  });
+
+  it('no overdue invoice yet (clock before the first due date): no Pay button, page still renders', async () => {
+    suspend('non_payment');
+    seedPay(1794754799);
+    expect(await payButton('admin')).toBeNull();
+  });
+
+  it('Stripe fails: no Pay button, the banner and Contact support still render', async () => {
+    suspend('non_payment');
+    seedPay(1805122801);
+    mockStripe.invoicesList.mockRejectedValue(new Error('stripe down'));
+    given([brokerageMembership('broker')]);
+    const { container, unmount } = render(await BillingRoute({}));
+    expect(container.querySelector('[data-billing-action="pay_overdue_invoice"]')).toBeNull();
+    expect(container.querySelector('[data-billing-action="contact_support"]')).not.toBeNull();
+    unmount();
+  });
+
+  it('copy follows the button: with Pay shown the banner says "below"; without it, the email wording', async () => {
+    suspend('non_payment');
+    seedPay(1805122801);
+    given([brokerageMembership('broker')]);
+    const withBtn = await banner();
+    expect(withBtn).toContain('Pay the overdue invoice below; access returns once every overdue invoice is paid.');
+    expect(withBtn).not.toContain('suspension email');
+    suspend('non_payment');
+    seedPay(1794754799); // nothing overdue -> no button
+    given([brokerageMembership('broker')]);
+    const withoutBtn = await banner();
+    expect(withoutBtn).toContain('Pay from the link in the suspension email; access returns once every overdue invoice is paid.');
+    expect(withoutBtn).not.toContain('Pay the overdue invoice below');
+  });
+
+  it('Stripe hangs: the page renders without the button inside the time limit', async () => {
+    suspend('non_payment');
+    seedPay(1805122801);
+    mockStripe.invoicesList.mockReturnValue(new Promise(() => {})); // never settles
+    given([brokerageMembership('broker')]);
+    const started = Date.now();
+    const { container, unmount } = render(await BillingRoute({}));
+    const elapsed = Date.now() - started;
+    expect(container.querySelector('[data-billing-action="pay_overdue_invoice"]')).toBeNull();
+    expect(container.querySelector('[data-billing-action="contact_support"]')).not.toBeNull();
+    expect(container.textContent).toContain('Pay from the link in the suspension email');
+    unmount();
+    expect(elapsed).toBeGreaterThanOrEqual(2900);
+    expect(elapsed).toBeLessThan(4500);
+  }, 15000);
+
+  it('an agent never sees it (the component refuses the role even when handed a URL)', () => {
+    const { container, unmount } = render(<OrgSuspendedBanner reason="non_payment" role="agent" payUrl={OLDEST_PAY_URL} />);
+    expect(container.querySelector('[data-billing-action="pay_overdue_invoice"]')).toBeNull();
+    unmount();
+  });
+
+  it('layout: Pay is first, Contact support second, in one bottom-right row', async () => {
+    suspend('non_payment');
+    seedPay(1805122801);
+    given([brokerageMembership('broker')]);
+    const { container, unmount } = render(await BillingRoute({}));
+    const row = container.querySelector('[data-billing-action="pay_overdue_invoice"]')?.parentElement as HTMLElement;
+    expect(Array.from(row.children).map((c) => c.getAttribute('data-billing-action'))).toEqual(['pay_overdue_invoice', 'contact_support']);
+    expect(row.className).toContain('sm:justify-end');
+    expect(row.className).toContain('flex-col');
+    unmount();
+  });
+
+  it('Contact support opens the support form preset: Invoice/payment issue, Urgent, with the brokerage name', async () => {
+    given([brokerageMembership('broker')]);
+    suspend('non_payment');
+    const { container, unmount } = render(await BillingRoute({}));
+    const seen: unknown[] = [];
+    const listener = (e: Event) => seen.push((e as CustomEvent).detail);
+    window.addEventListener('open-support-widget', listener);
+    fireEvent.click(container.querySelector('[data-billing-action="contact_support"]') as HTMLElement);
+    window.removeEventListener('open-support-widget', listener);
+    unmount();
+    expect(seen).toEqual([
+      {
+        categorySlug: 'billing-subscription',
+        subcategorySlug: 'invoice-payment-issue',
+        subject: 'Our brokerage account is suspended',
+        description: 'Our brokerage account (Fixture Realty) is suspended. Please help us get it reinstated.',
+        priority: 'urgent',
+      },
+    ]);
+  });
+
+  it('control: the same broker with the brokerage active gets no banner', async () => {
+    given([brokerageMembership('broker')]);
+    suspend(null, false);
+    expect(await banner()).toBeNull();
+  });
+
+  it('the licence rule still wins: licence suspended -> /dashboard/account', async () => {
+    given([brokerageMembership('broker')]);
+    mockEmulator.set({
+      columnPresent: true,
+      rows: { organization_members: [brokerageMembership('broker')], licenses: [{ user_id: FIXTURE_USER_ID, status: 'suspended' }] },
+    });
+    suspend('non_payment');
+    expect(await run()).toEqual({ redirect: '/dashboard/account' });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3854: billing set up for real (a non-draft deal + a Stripe customer in this mode) turns
+// on the money blocks: seats with counts and "Manage billing". IT admin never gets the money block.
+// The seats payload is broker_get_seats' output as read on keepr-test (QA Brokerage 1 Admin,
+// 2026-10-21), see __tests__/seats-3854/seatsUi.test.tsx.
+// ---------------------------------------------------------------------------
+describe('BACKLOG-3854: set-up brokerage -> seats + Manage billing', () => {
+  const ORG = FIXTURE_BROKERAGE_ORG_ID;
+  const SEATS = { free: 2, bought: 3, in_use: 1, can_add: true, version: 2, trialing: true, unlimited: false, unit_price_cents: 2499, cannot_add_reason: null, account_manager_email: null };
+  function setUp(status: string, mode: 'test' | 'live' = 'test', suspended = false): void {
+    mockSessionRpc.mockImplementation(async (fn: string) =>
+      // a suspended deal: what broker_get_seats returns then (S2_suspended) [EDITED can_add, reason, version]
+      fn === 'broker_get_seats' ? { data: suspended ? { ...SEATS, can_add: false, cannot_add_reason: 'deal_suspended', version: null } : SEATS, error: null } : fn === 'org_billing_suspended' ? { data: suspended, error: null } : { data: null, error: null }
+    );
+    mockBillingDb = new BillingDb({
+      org_deals: [{ organization_id: ORG, status, suspended_reason: suspended ? 'other' : null }],
+      org_billing_stripe: [{ organization_id: ORG, stripe_mode: mode, stripe_customer_id: 'cus_EDITED_3854' }],
+      organizations: [{ id: ORG, name: 'Fixture Realty' }],
+    });
+  }
+
+  it.each([
+    ['broker', ['Your plan', 'Seats & licenses', 'Invoices & payment method']],
+    ['admin', ['Your plan', 'Seats & licenses', 'Invoices & payment method']],
+    ['it_admin', ['Your plan', 'Seats & licenses']],
+  ] as [string, string[]][])('%s, active deal with a customer -> exactly these blocks', async (role, blocks) => {
+    given([brokerageMembership(role)]);
+    setUp('active');
+    expect(await renderedBlocks()).toEqual(blocks);
+    given([brokerageMembership(role)]);
+    setUp('active');
+    const { container, unmount } = render(await BillingRoute({}));
+    expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Available2');
+    expect(container.textContent).toContain('Organization plan');
+    expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(role === 'it_admin' ? 0 : 1);
+    expect(stripeCalls()).toBe(0);
+    unmount();
+  });
+
+  it.each([
+    ['a draft deal', 'draft', 'test'],
+    ['a customer in the other mode only', 'active', 'live'],
+  ] as [string, string, 'test' | 'live'][])('%s -> not set up: Managed by Keepr, no Manage billing', async (_n, status, mode) => {
+    given([brokerageMembership('admin')]);
+    setUp(status, mode);
+    expect(await renderedBlocks()).toEqual(['Your plan', 'Seats & licenses']);
+  });
+
+  // A deal saved but not yet synced (no Stripe customer): broker_get_seats says can_add (its refusals
+  // read no customer), the page is not set up, and the action would refuse -> no button.
+  it('active deal, no Stripe customer yet -> no Add seats, no Manage billing', async () => {
+    given([brokerageMembership('admin')]);
+    setUp('active');
+    mockBillingDb = new BillingDb({
+      org_deals: [{ organization_id: ORG, status: 'active', suspended_reason: null }],
+      organizations: [{ id: ORG, name: 'Fixture Realty' }],
+    });
+    const { container, unmount } = render(await BillingRoute({}));
+    expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Available2');
+    expect(within(container).queryAllByRole('button', { name: 'Add seats' })).toHaveLength(0);
+    expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(0);
+    unmount();
+  });
+
+  it.each([['broker', 1], ['admin', 1], ['it_admin', 0]] as [string, number][])(
+    'suspended + set up, %s -> Manage billing under the banner: %i',
+    async (role, n) => {
+      given([brokerageMembership(role)]);
+      setUp('suspended', 'test', true);
+      const { container, unmount } = render(await BillingRoute({}));
+      expect(container.querySelector('[data-billing-banner="org_suspended"]')).not.toBeNull();
+      expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(n);
+      expect(within(container).queryAllByRole('button', { name: 'Add seats' })).toHaveLength(0);
+      unmount();
+    }
+  );
 });

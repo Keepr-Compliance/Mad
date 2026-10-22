@@ -12,6 +12,7 @@
 import { createClient, createServiceClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
+import { safeNextPath } from '@/lib/auth/safeNextPath';
 
 /**
  * Log an authentication event to admin_audit_logs.
@@ -50,8 +51,7 @@ async function logAuthEvent(
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
-  const rawNext = searchParams.get('next') ?? '/dashboard';
-  const next = /^\/[a-zA-Z0-9\-_\/\?\&\=\#\.]+$/.test(rawNext) ? rawNext : '/dashboard';
+  const next = safeNextPath(searchParams.get('next'));
 
   // Early return when no code is provided (CodeQL alert #232).
   // Ensures the auth flow is not wrapped inside a user-controlled condition.

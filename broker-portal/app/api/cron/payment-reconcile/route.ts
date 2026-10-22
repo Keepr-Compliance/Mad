@@ -22,6 +22,7 @@ import { fulfillPaidUnlock, emitPaymentSucceeded } from '@/lib/payments/fulfillm
 import { isAuthorizedCronRequest } from '@/lib/auth/cronAuth';
 import { billingEnabled } from '@/lib/billing/flag';
 import { reconcileAgentSubscriptions, reportOutboxHealth } from '@/lib/billing/reconcile';
+import { endLapsedBrokerageDeals } from '@/lib/billing/brokerageEndBackstop';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -119,6 +120,13 @@ async function runBillingChecks(
   } catch (err) {
     console.error('[cron/payment-reconcile] subscription reconcile failed:', (err as Error).message);
     out.subscriptions = { error: true };
+  }
+  // BACKLOG-4019: a canceling brokerage deal whose subscription ended without a webhook.
+  try {
+    out.brokerageEnds = await endLapsedBrokerageDeals({ service, stripe, mode });
+  } catch (err) {
+    console.error('[cron/payment-reconcile] brokerage end backstop failed:', (err as Error).message);
+    out.brokerageEnds = { error: true };
   }
   try {
     out.outbox = await reportOutboxHealth({ service, stripe, mode });

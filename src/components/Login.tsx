@@ -324,7 +324,6 @@ const Login = ({
   const handleLicenseBlocked = useCallback((data: {
     userId: string;
     blockReason: string;
-    licenseStatus: unknown;
   }) => {
     logger.warn("[Login] License blocked:", data.blockReason);
     clearRetryTimers();

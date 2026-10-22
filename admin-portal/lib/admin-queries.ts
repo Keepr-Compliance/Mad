@@ -5,6 +5,7 @@
  */
 
 import { createClient } from '@/lib/supabase/client';
+import { withoutPlanEditorHiddenFeatures } from '@/lib/plan-constants';
 
 export interface AdminSearchUser {
   id: string;
@@ -250,7 +251,7 @@ export async function getPlanWithFeatures(
     data: {
       plan: planResult.data as Plan,
       features: (featuresResult.data ?? []) as unknown as PlanFeature[],
-      allFeatures: (allFeaturesResult.data ?? []) as FeatureDefinition[],
+      allFeatures: withoutPlanEditorHiddenFeatures((allFeaturesResult.data ?? []) as FeatureDefinition[]),
     },
     error: null,
   };
@@ -508,18 +509,22 @@ export async function updatePlanTier(
 /**
  * Create a new organization via admin_create_organization RPC.
  *
+ * BACKLOG-4007: maxSeats is sent only when given (Create Organization gives it while
+ * brokerage billing is off). Without it the RPC default (p_max_seats DEFAULT 5) applies and
+ * the deal sets seats (_billing_save_deal writes organizations.max_seats).
+ *
  * @param name - Organization name
- * @param maxSeats - Maximum seats (default 5)
+ * @param maxSeats - Maximum seats (omitted while billing is live)
  */
 export async function createOrganization(
   name: string,
-  maxSeats: number = 5
+  maxSeats?: number
 ): Promise<RpcResult<{ success: boolean; id: string; slug: string }>> {
   const supabase = createClient();
 
   const { data, error } = await supabase.rpc('admin_create_organization', {
     p_name: name,
-    p_max_seats: maxSeats,
+    ...(maxSeats !== undefined ? { p_max_seats: maxSeats } : {}),
   });
 
   if (error) {

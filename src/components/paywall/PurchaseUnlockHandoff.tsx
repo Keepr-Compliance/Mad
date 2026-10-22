@@ -25,7 +25,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import type { UnlockQuote } from "../../services/entitlementService";
 import { paymentService } from "../../services/paymentService";
-import { TierProgressBar } from "./TierProgressBar";
 import logger from "../../utils/logger";
 
 export interface PurchaseUnlockHandoffProps {
@@ -283,16 +282,6 @@ export function PurchaseUnlockHandoff({
           Back
         </button>
       </div>
-      {quote !== null && (
-        <p className="mt-1 text-xs text-gray-600">
-          Your {ordinal(quote.nextUnitIndex)} paid deal this year.
-        </p>
-      )}
-
-      {/* Tier-progress incentive bar (discount-forward, BACKLOG-2086). */}
-      {/* This is the PAID card path — the tier bar is always on-moment here. */}
-      <TierProgressBar quote={quote} data-testid="purchase-tier-progress" />
-
       {/* Consent / mandate copy for the saved-card off-session charge (founder
           hard requirement: informed consent, per-unlock, no silent charging). */}
       {hasSavedCard && (
@@ -363,13 +352,6 @@ function primaryLabel(
   if (phase === "error") return "Try again";
   if (hasSavedCard) return `Confirm — ${priceLabel ?? "unlock"}`;
   return `Continue to checkout — ${priceLabel ?? "unlock"}`;
-}
-
-/** Small ordinal helper for "your Nth paid deal this year". */
-function ordinal(n: number): string {
-  const s = ["th", "st", "nd", "rd"];
-  const v = n % 100;
-  return `${n}${s[(v - 20) % 10] ?? s[v] ?? s[0]}`;
 }
 
 export default PurchaseUnlockHandoff;
