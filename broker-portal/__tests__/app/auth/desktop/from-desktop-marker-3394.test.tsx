@@ -88,6 +88,11 @@ jest.mock('@/lib/actions/createTokenClaim', () => ({
     .mockResolvedValue({ success: true, claimId: 'claim-uuid' }),
 }));
 
+// BACKLOG-3991: the name sync runs before the mint; it is a server action, mocked.
+jest.mock('@/lib/actions/syncDesktopIdpNames', () => ({
+  syncDesktopIdpNames: jest.fn().mockResolvedValue(undefined),
+}));
+
 jest.mock('@/lib/actions/enforceSingleDesktopSession', () => ({
   enforceSingleDesktopSession: jest.fn().mockResolvedValue(undefined),
 }));

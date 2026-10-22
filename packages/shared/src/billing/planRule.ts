@@ -142,6 +142,40 @@ export function memberStatusGrantsAccess(status: string | null | undefined): boo
   return typeof status === 'string' && (PORTAL_GRANTING_LICENSE_STATUSES as readonly string[]).includes(status);
 }
 
+/**
+ * BACKLOG-3851: the database's other membership predicates (M1,
+ * 20261015152446), as TS twins. Each set is the IN-list of the SQL helper named
+ * beside it, and the parity test (broker-portal
+ * __tests__/license-model-3851/parity.test.ts) reads the migration and compares.
+ */
+/** member_status_is_deactivated(text): suspended or expired. A deactivated member reverts to pay-as-you-go. */
+export const MEMBER_DEACTIVATED_STATUSES = ['suspended', 'expired'] as const;
+/** member_status_holds_seat(text). */
+export const MEMBER_SEAT_STATUSES = ['active', 'pending'] as const;
+/** member_origin_is_idp(text): rows the identity provider owns. */
+export const MEMBER_IDP_ORIGINS = ['jit', 'scim', 'directory_sync'] as const;
+/** A member placed in the brokerage with no license assigned (BACKLOG-3851). */
+export const MEMBER_UNASSIGNED_STATUS = 'unassigned';
+
+function inList(list: readonly string[], value: string | null | undefined): boolean {
+  return typeof value === 'string' && list.includes(value);
+}
+
+/** member_status_is_deactivated: missing / null / unknown = no. */
+export function memberStatusIsDeactivated(status: string | null | undefined): boolean {
+  return inList(MEMBER_DEACTIVATED_STATUSES, status);
+}
+
+/** member_status_holds_seat: missing / null / unknown = no. */
+export function memberStatusHoldsSeat(status: string | null | undefined): boolean {
+  return inList(MEMBER_SEAT_STATUSES, status);
+}
+
+/** member_origin_is_idp: missing / null / unknown = no. */
+export function memberOriginIsIdp(provisionedBy: string | null | undefined): boolean {
+  return inList(MEMBER_IDP_ORIGINS, provisionedBy);
+}
+
 /** The embedded organization record, of which only one key is read here. */
 export interface EmbeddedOrganization {
   /** Present only once BACKLOG-3364's migration has been applied. */
@@ -246,9 +280,16 @@ export type PortalAccess =
       kind: 'floor';
       /**
        * deactivated (BACKLOG-3917): the first brokerage row's `license_status`
-       * does not grant access. Never falls through to a personal organization.
+       * does not grant access, and the member does not own a personal
+       * organization row to revert to.
+       * unlicensed (BACKLOG-3851): the first brokerage row is 'unassigned' —
+       * placed in the brokerage, no license yet. Same floor as deactivated.
+       * personal_owner is also returned for a DEACTIVATED (suspended/expired)
+       * brokerage member who holds their own personal row (BACKLOG-3851: back
+       * to individual pay-as-you-go). Any other non-granting status never
+       * falls through.
        */
-      via: 'brokerage' | 'personal_owner' | 'deactivated';
+      via: 'brokerage' | 'personal_owner' | 'deactivated' | 'unlicensed';
       role: string;
       organizationId: string;
     }
@@ -260,10 +301,14 @@ export type PortalAccess =
  *
  * In order:
  *   1. Not an array (an error result) -> unknown.
- *   2. The first brokerage row decides: a status that does not grant access
- *      -> floor/deactivated (BACKLOG-3917; no fall-through to step 3); else a
- *      full role -> full; ANY other role -> floor. An unrecognised role or
- *      status therefore fails closed.
+ *   2. The first brokerage row decides. A status that does not grant access:
+ *      - deactivated (suspended / expired) AND the user owns a personal row ->
+ *        floor/personal_owner on that row (BACKLOG-3851: pay-as-you-go);
+ *      - 'unassigned' -> floor/unlicensed (BACKLOG-3851);
+ *      - anything else (pending, null, unknown), or deactivated with no
+ *        personal row -> floor/deactivated (BACKLOG-3917). No fall-through.
+ *      A granting status: a full role -> full; ANY other role -> floor. An
+ *      unrecognised role or status therefore fails closed.
  *   3. Otherwise a personal organization whose owner IS this user -> floor.
  *      Equality with the session user, never mere presence of the owner key:
  *      a member of somebody else's personal organization is not its owner.
@@ -278,6 +323,20 @@ export function classifyPortalAccess(
   const brokerage = pickBrokerageMembership(rows);
   if (brokerage) {
     if (!memberStatusGrantsAccess(brokerage.license_status)) {
+      if (memberStatusIsDeactivated(brokerage.license_status)) {
+        const own = ownPersonalRow(rows, userId);
+        if (own) {
+          return { kind: 'floor', via: 'personal_owner', role: own.role, organizationId: own.organization_id };
+        }
+      }
+      if (brokerage.license_status === MEMBER_UNASSIGNED_STATUS) {
+        return {
+          kind: 'floor',
+          via: 'unlicensed',
+          role: brokerage.role,
+          organizationId: brokerage.organization_id,
+        };
+      }
       return {
         kind: 'floor',
         via: 'deactivated',
@@ -296,19 +355,30 @@ export function classifyPortalAccess(
     };
   }
 
-  for (const row of rows) {
-    const owner = embeddedOrganization(row)?.personal_owner_user_id;
-    if (owner && owner === userId) {
-      return {
-        kind: 'floor',
-        via: 'personal_owner',
-        role: row.role,
-        organizationId: row.organization_id,
-      };
-    }
+  const own = ownPersonalRow(rows, userId);
+  if (own) {
+    return {
+      kind: 'floor',
+      via: 'personal_owner',
+      role: own.role,
+      organizationId: own.organization_id,
+    };
   }
 
   return { kind: 'none' };
+}
+
+/**
+ * The row of the personal organization `userId` OWNS, or null. Equality with
+ * the session user, never mere presence of the owner key: a member of somebody
+ * else's personal organization is not its owner.
+ */
+function ownPersonalRow(rows: readonly PortalMembershipRow[], userId: string): PortalMembershipRow | null {
+  for (const row of rows) {
+    const owner = embeddedOrganization(row)?.personal_owner_user_id;
+    if (owner && owner === userId) return row;
+  }
+  return null;
 }
 
 // ===========================================================================
@@ -341,8 +411,18 @@ export interface PlanLine {
 }
 
 export interface PlanLineInput {
-  /** pickBrokerageMembership's row with its organization name, or null. */
+  /**
+   * pickBrokerageMembership's row with its organization name, or null. Null
+   * also for a deactivated member routed on their own personal row (pass the
+   * brokerage name in `deactivatedFrom` instead) — the classifier's answer.
+   */
   brokerage: { orgName: string | null; licenseStatus: string | null | undefined } | null;
+  /**
+   * BACKLOG-3851: the brokerage a member was deactivated from, when
+   * classifyPortalAccess routes them on their own personal organization.
+   * Shown as the line's warning.
+   */
+  deactivatedFrom?: string | null;
   /** organizations.personal_owner_user_id = user (getPersonalOrganization's read). */
   hasPersonalOrganization: boolean;
   /** The user's Stripe mode: modeAllowsTestFlag on the personal organization's is_test. */
@@ -383,11 +463,15 @@ function overrideTurnsUnlimitedOn(override: UnlimitedOverride | undefined, now: 
 
 export function planLine(input: PlanLineInput): PlanLine {
   const prefix = input.suspended ? 'Suspended — ' : '';
+  const deactivated =
+    input.brokerage === null && typeof input.deactivatedFrom === 'string'
+      ? `Deactivated from ${input.deactivatedFrom || 'unnamed organization'}`
+      : null;
   const line = (kind: PlanLineKind, text: string, test = false, warning: string | null = null): PlanLine => ({
     kind,
     text: prefix + text,
     test,
-    warning,
+    warning: deactivated && warning ? `${deactivated}; ${warning}` : (deactivated ?? warning),
   });
 
   if (input.brokerage) {
@@ -395,6 +479,7 @@ export function planLine(input: PlanLineInput): PlanLine {
     const status = input.brokerage.licenseStatus ?? 'unknown';
     if (memberStatusGrantsAccess(status)) return line('brokerage', `Brokerage ${org}, license assigned`);
     if (status === 'pending') return line('brokerage', `Brokerage ${org}, invite pending`);
+    if (status === MEMBER_UNASSIGNED_STATUS) return line('brokerage', `Brokerage ${org}, no license assigned`);
     return line('brokerage', `Brokerage ${org}, no license (${status})`);
   }
 

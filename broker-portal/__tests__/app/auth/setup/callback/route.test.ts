@@ -82,12 +82,13 @@ jest.mock('@supabase/ssr', () => ({
   createServerClient: jest.fn(() => ({
     auth: { getUser: mockGetUser },
     from: (table: string) => mockEmulator.from(table),
+    // BACKLOG-3853 PR-2B: the brokerage is never suspended in this file.
+    rpc: async () => ({ data: false, error: null }),
   })),
 }));
 
 jest.mock('@/lib/auth/helpers', () => ({
   extractEmail: () => 'setup-caller@fixture-3096.example.test',
-  orgNameFromEmail: () => 'Fixture Org 3096',
 }));
 
 // ---------------------------------------------------------------------------
@@ -128,6 +129,11 @@ function brokerageRow(role: string): Record<string, unknown> {
     user_id: USER_ID,
     role,
     organization_id: ORG_ID,
+    // BACKLOG-3917: always present in a PORTAL_MEMBERSHIP_SELECT response.
+    // BACKLOG-3851: the setup callback now reads it (a row that does not grant
+    // access goes to /dashboard), so a fixture without it describes a member
+    // the database cannot return.
+    license_status: 'active',
     // BACKLOG-3364: the embedded organization record the query now asks for,
     // transcribed from a real PostgREST response. `personal_owner_user_id` is
     // null here — this is a brokerage.
@@ -329,5 +335,166 @@ describe('/auth/setup/callback — existing members are unaffected', () => {
     });
 
     expect(await callbackRedirect()).toContain('/setup/consent');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-3851 PR-2 piece 1: /setup completes an invitation; it never creates
+// a brokerage. license_status values transcribed from
+// supabase/tests/backlog-3851/lib/fixtures-3851.sql ('active', 'suspended');
+// NULL because organization_members.license_status is nullable in production.
+// ---------------------------------------------------------------------------
+
+/** A placed member row with an explicit license_status, and its organization. */
+function placedMember(role: string, licenseStatus: string | null, tenant: string | null, consent = false): void {
+  mockEmulator.set({
+    rows: {
+      organization_members: [{ ...brokerageRow(role), license_status: licenseStatus }],
+      organizations: [{ id: ORG_ID, graph_admin_consent_granted: consent, microsoft_tenant_id: tenant }],
+    },
+  });
+}
+
+function rpcRefuses(error: string): void {
+  mockRpc.mockResolvedValue({ data: { success: false, error }, error: null });
+}
+
+describe('BACKLOG-3851 — /setup completes an invitation', () => {
+  it('J1 no_invite gets its own /setup code and signs the browser out', async () => {
+    signedInAzureUser();
+    noExistingMembership();
+    rpcRefuses('no_invite');
+
+    expect(await callbackRedirect()).toBe(`${ORIGIN}/setup?error=no_invite`);
+    expect(mockSignOut).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['tenant_in_use', 'tenant_mismatch'])('J4 %s gets its own /setup code', async (code) => {
+    signedInAzureUser();
+    noExistingMembership();
+    rpcRefuses(code);
+
+    expect(await callbackRedirect()).toBe(`${ORIGIN}/setup?error=${code}`);
+    expect(mockSignOut).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['membership_inactive', 'Not authenticated', 'something new', undefined])(
+    'J4c any other refusal (%s) is provision_failed',
+    async (code) => {
+      signedInAzureUser();
+      noExistingMembership();
+      mockRpc.mockResolvedValue({ data: { success: false, error: code }, error: null });
+
+      expect(await callbackRedirect()).toBe(`${ORIGIN}/setup?error=provision_failed`);
+    }
+  );
+
+  it('J7 passes empty org name and slug (nothing is derived from the email)', async () => {
+    signedInAzureUser();
+    noExistingMembership();
+    provisionedAs('admin');
+
+    await callbackRedirect();
+
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+    expect(mockRpc).toHaveBeenCalledWith('auto_provision_it_admin', {
+      p_tenant_id: TENANT_ID,
+      p_org_name: '',
+      p_org_slug: '',
+    });
+  });
+
+  it('J2 an active admin whose brokerage has no tenant links it, then goes to consent', async () => {
+    signedInAzureUser();
+    placedMember('admin', 'active', null);
+    provisionedAs('admin');
+
+    const location = await callbackRedirect();
+
+    expect(mockRpc).toHaveBeenCalledWith('auto_provision_it_admin', {
+      p_tenant_id: TENANT_ID,
+      p_org_name: '',
+      p_org_slug: '',
+    });
+    expect(location).toBe(
+      `${ORIGIN}/setup/consent?tenant=${encodeURIComponent(TENANT_ID)}&org=${encodeURIComponent(ORG_ID)}`
+    );
+    expect(mockSignOut).not.toHaveBeenCalled();
+  });
+
+  it('J2b same, consent already granted -> /dashboard', async () => {
+    signedInAzureUser();
+    placedMember('it_admin', 'active', null, true);
+    provisionedAs('it_admin');
+
+    expect(await callbackRedirect()).toBe(`${ORIGIN}/dashboard`);
+    expect(mockRpc).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['tenant_in_use', 'tenant_mismatch'])(
+    'J8 an active admin whose link is refused (%s) gets that code and is signed out',
+    async (code) => {
+      signedInAzureUser();
+      placedMember('admin', 'active', null);
+      rpcRefuses(code);
+
+      expect(await callbackRedirect()).toBe(`${ORIGIN}/setup?error=${code}`);
+      expect(mockSignOut).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('J3 an admin whose brokerage already has a tenant: no RPC, consent as before', async () => {
+    signedInAzureUser();
+    placedMember('admin', 'active', TENANT_ID);
+
+    expect(await callbackRedirect()).toContain('/setup/consent');
+    // No provisioning call. BACKLOG-4007 PR-3 adds only the read-only setup-state read.
+    expect(mockRpc.mock.calls.filter(([fn]) => fn !== 'broker_get_billing_setup')).toEqual([]);
+  });
+
+  it.each([
+    ['suspended', 'suspended'],
+    ['unassigned', 'unassigned'],
+    ['NULL', null],
+  ])('J6 a %s admin of a brokerage with no tenant: no RPC, /dashboard (BACKLOG-3851 PR-2a)', async (_label, status) => {
+    signedInAzureUser();
+    placedMember('admin', status, null);
+
+    const location = await callbackRedirect();
+
+    expect(mockRpc).not.toHaveBeenCalled();
+    expect(location).toBe(`${ORIGIN}/dashboard`);
+  });
+
+  // C5 (BACKLOG-3851 PR-2a): a brokerage row that does not grant access is
+  // routed to /dashboard, never to the consent page, whatever the tenant and
+  // consent state. Middleware then floors them (or, deactivated with a
+  // personal row, gives them the pay-as-you-go portal).
+  it.each(
+    ['suspended', 'expired', 'unassigned', 'pending', null].flatMap((status) =>
+      ['it_admin', 'admin'].map((role) => [role, status] as const)
+    )
+  )('C5 a %s with status %p, tenant linked, consent NOT granted: /dashboard, no RPC', async (role, status) => {
+    signedInAzureUser();
+    placedMember(role, status, TENANT_ID, false);
+
+    expect(await callbackRedirect()).toBe(`${ORIGIN}/dashboard`);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('C5 twin: an ACTIVE it_admin, tenant linked, consent not granted: the consent page', async () => {
+    signedInAzureUser();
+    placedMember('it_admin', 'active', TENANT_ID, false);
+
+    expect(await callbackRedirect()).toContain('/setup/consent');
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it('J6b an active agent of a brokerage with no tenant: no RPC, /dashboard', async () => {
+    signedInAzureUser();
+    placedMember('agent', 'active', null);
+
+    expect(await callbackRedirect()).toBe(`${ORIGIN}/dashboard`);
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 });

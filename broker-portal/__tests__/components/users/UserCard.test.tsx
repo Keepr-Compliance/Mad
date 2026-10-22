@@ -233,10 +233,11 @@ describe('UserCard Logic', () => {
       pending: 'bg-yellow-100 text-yellow-800',
       suspended: 'bg-red-100 text-red-800',
       expired: 'bg-gray-100 text-gray-800',
+      unassigned: 'bg-blue-100 text-blue-800',
     };
 
     it('should have colors for all statuses', () => {
-      const statuses: MemberLicenseStatus[] = ['active', 'pending', 'suspended', 'expired'];
+      const statuses: MemberLicenseStatus[] = ['active', 'pending', 'suspended', 'expired', 'unassigned'];
       statuses.forEach((status) => {
         expect(STATUS_COLORS[status]).toBeDefined();
         expect(STATUS_COLORS[status].length).toBeGreaterThan(0);

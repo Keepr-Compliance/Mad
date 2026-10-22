@@ -1,16 +1,24 @@
 /**
  * Setup Callback Route
  *
- * Dedicated callback for IT admin organization setup flow.
- * Validates Azure provider, blocks consumer accounts,
- * extracts email with fallback chain, and provisions org + IT admin.
+ * Callback for /setup: a person their brokerage invited (admin, IT admin or
+ * any other role) signs in with Microsoft to accept the invitation, and an
+ * admin's sign-in links the brokerage to their Microsoft organization.
+ * Validates Azure provider, blocks consumer accounts, extracts email with the
+ * fallback chain. With the keepr_invite cookie that /setup?token= set
+ * (BACKLOG-3684), accepts exactly that invitation through accept_invitation and
+ * links the tenant; without it, calls auto_provision_it_admin, which only links
+ * the tenant for an admin already in a brokerage. /setup never creates a
+ * brokerage and never accepts an invitation by email alone (no_invite).
  */
 
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
-import { extractEmail, orgNameFromEmail } from '@/lib/auth/helpers';
-import { PORTAL_MEMBERSHIP_SELECT, pickBrokerageMembership } from '@/lib/auth/membership';
+import { extractEmail } from '@/lib/auth/helpers';
+import { PORTAL_MEMBERSHIP_SELECT, memberStatusGrantsAccess, pickBrokerageMembership } from '@/lib/auth/membership';
 import { clearAuthCookies, signOutLocal } from '@/lib/auth/signOutLocal';
+import { clearInviteCookie, readInviteToken } from '@/lib/auth/inviteCookie';
+import { setupLanding } from '@/lib/billing/setupState';
 
 // Microsoft consumer tenant ID (personal Outlook/Hotmail accounts)
 const CONSUMER_TENANT_ID = '9188040d-6c67-4c5b-b112-36a304b66dad';
@@ -35,7 +43,33 @@ type SetupRejection =
   | 'no_tenant'
   | 'consumer_account'
   | 'no_email'
+  | 'no_invite'
+  | 'tenant_in_use'
+  | 'tenant_mismatch'
+  | 'invalid_invite'
+  | 'email_mismatch'
+  | 'expired'
+  | 'already_placed'
   | 'provision_failed';
+
+/**
+ * auto_provision_it_admin and accept_invitation refusals that have their own
+ * /setup message.
+ */
+const RPC_REJECTIONS: readonly SetupRejection[] = [
+  'no_invite',
+  'tenant_in_use',
+  'tenant_mismatch',
+  'invalid_invite',
+  'email_mismatch',
+  'expired',
+  'already_placed',
+];
+
+/** The /setup code for an RPC refusal; anything unrecognised is provision_failed. */
+function rejectionFor(error: unknown): SetupRejection {
+  return RPC_REJECTIONS.find((code) => code === error) ?? 'provision_failed';
+}
 
 /**
  * BACKLOG-3601: signs this browser out (local scope only), then sends the
@@ -49,17 +83,25 @@ async function rejectSetup(
   code: SetupRejection
 ): Promise<NextResponse> {
   await signOutLocal(supabase);
-  const response = NextResponse.redirect(`${origin}/setup?error=${code}`);
+  const response = finish(`${origin}/setup?error=${code}`);
   clearAuthCookies(request, response);
+  return response;
+}
+
+/** Every exit of this route: a redirect that also deletes the invite cookie. */
+function finish(location: string): NextResponse {
+  const response = NextResponse.redirect(location);
+  clearInviteCookie(response);
   return response;
 }
 
 export async function GET(request: Request) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get('code');
+  const inviteToken = readInviteToken(request, 'setup');
 
   if (!code) {
-    return NextResponse.redirect(`${origin}/setup?error=auth_failed`);
+    return finish(`${origin}/setup?error=auth_failed`);
   }
 
   const supabase = await createClient();
@@ -67,7 +109,7 @@ export async function GET(request: Request) {
 
   if (error) {
     console.error('Setup auth exchange error:', error.message);
-    return NextResponse.redirect(`${origin}/setup?error=auth_failed`);
+    return finish(`${origin}/setup?error=auth_failed`);
   }
 
   const {
@@ -75,7 +117,7 @@ export async function GET(request: Request) {
   } = await supabase.auth.getUser();
 
   if (!user) {
-    return NextResponse.redirect(`${origin}/setup?error=auth_failed`);
+    return finish(`${origin}/setup?error=auth_failed`);
   }
 
   // Validate Azure provider (reject Google or other providers)
@@ -121,6 +163,23 @@ export async function GET(request: Request) {
   const membership = pickBrokerageMembership(memberships);
 
   if (membership) {
+    // BACKLOG-3851: a brokerage row that does not grant access (deactivated,
+    // no license assigned, pending) links no tenant and is sent to no consent
+    // page. /dashboard; middleware decides what it opens.
+    if (!memberStatusGrantsAccess(membership.license_status)) {
+      return finish(`${origin}/dashboard`);
+    }
+
+    // BACKLOG-4007 PR-3: Billing comes before connecting Microsoft (founder 88a1f065). While the
+    // brokerage waits for the Billing step, a broker/admin goes to the setup guide and no tenant
+    // is linked here.
+    const guide = await setupLanding(supabase, {
+      organizationId: membership.organization_id,
+      role: membership.role,
+      licenseStatus: membership.license_status,
+    });
+    if (guide) return finish(`${origin}${guide}`);
+
     // If IT admin and consent not yet granted, redirect to consent page
     if (canGrantAdminConsent(membership.role)) {
       const { data: org } = await supabase
@@ -129,29 +188,58 @@ export async function GET(request: Request) {
         .eq('id', membership.organization_id)
         .single();
 
+      // BACKLOG-3851: an active admin whose brokerage has no Microsoft
+      // organization linked yet (e.g. they accepted the emailed invitation
+      // through /login) links it here. The RPC checks the tenant; a refusal
+      // gets its own /setup message. Members who are not active, and
+      // brokerages that already have a tenant, keep the routing below.
+      if (org && !org.microsoft_tenant_id && membership.license_status === 'active') {
+        const { data: linked, error: linkError } = await supabase.rpc('auto_provision_it_admin', {
+          p_tenant_id: tenantId,
+          p_org_name: '',
+          p_org_slug: '',
+        });
+        if (linkError) {
+          console.error('Setup tenant link RPC failed:', linkError.message);
+          return rejectSetup(request, supabase, origin, 'provision_failed');
+        }
+        if (!linked?.success) {
+          console.error('Setup tenant link failed:', linked?.error);
+          return rejectSetup(request, supabase, origin, rejectionFor(linked?.error));
+        }
+        if (!org.graph_admin_consent_granted) {
+          return finish(
+            `${origin}/setup/consent?tenant=${encodeURIComponent(tenantId)}&org=${encodeURIComponent(membership.organization_id)}`
+          );
+        }
+        return finish(`${origin}/dashboard`);
+      }
+
       if (org && !org.graph_admin_consent_granted) {
-        return NextResponse.redirect(
+        return finish(
           `${origin}/setup/consent?tenant=${encodeURIComponent(org.microsoft_tenant_id || tenantId)}&org=${encodeURIComponent(membership.organization_id)}`
         );
       }
     }
 
-    return NextResponse.redirect(`${origin}/dashboard`);
+    return finish(`${origin}/dashboard`);
   }
 
-  // Provision organization and IT admin
-  const orgName = orgNameFromEmail(email);
-  const slug = orgName.toLowerCase().replace(/\s+/g, '-');
-
+  // BACKLOG-3684: accept the invitation whose link (/setup?token=) the caller
+  // started from, and link the tenant, in one call. The bind is checked before
+  // the claim, so a tenant refusal leaves the invitation pending. Without the
+  // link the RPC below accepts nothing for an unplaced caller (no_invite).
   if (process.env.NODE_ENV === 'development') {
-    console.log(`Setup provisioning: ${email}, tenant: ${tenantId}, org: ${orgName}`);
+    console.log(`Setup: completing invitation for ${email}, tenant: ${tenantId}`);
   }
 
-  const { data, error: rpcError } = await supabase.rpc('auto_provision_it_admin', {
-    p_tenant_id: tenantId,
-    p_org_name: orgName,
-    p_org_slug: slug,
-  });
+  const { data, error: rpcError } = inviteToken
+    ? await supabase.rpc('accept_invitation', { p_token: inviteToken, p_tenant_id: tenantId })
+    : await supabase.rpc('auto_provision_it_admin', {
+        p_tenant_id: tenantId,
+        p_org_name: '',
+        p_org_slug: '',
+      });
 
   if (rpcError) {
     console.error('Setup provision RPC failed:', rpcError.message);
@@ -160,7 +248,7 @@ export async function GET(request: Request) {
 
   if (!data?.success) {
     console.error('Setup provision failed:', data?.error);
-    return rejectSetup(request, supabase, origin, 'provision_failed');
+    return rejectSetup(request, supabase, origin, rejectionFor(data?.error));
   }
 
   if (process.env.NODE_ENV === 'development') {
@@ -169,11 +257,22 @@ export async function GET(request: Request) {
     );
   }
 
-  // BACKLOG-3096. Until first-user-wins landed, auto_provision_it_admin made
-  // EVERY caller an admin, so sending every fresh provision to the consent page
-  // was always right. It is not any more: the second employee through /setup
-  // now joins as the org's default role, and a plain agent cannot complete a
-  // tenant-wide Microsoft admin-consent grant. Sending them there is a dead end.
+  // BACKLOG-4007 PR-3: an invited broker/admin of a brokerage that waits for the Billing step
+  // finishes billing before the consent page (founder 88a1f065).
+  // Only an accepted invitation places anyone here (auto_provision_it_admin places nobody).
+  const guide = inviteToken
+    ? await setupLanding(supabase, {
+        organizationId: data.organization_id,
+        role: data.role,
+        licenseStatus: data.license_status ?? null,
+      })
+    : null;
+  if (guide) return finish(`${origin}${guide}`);
+
+  // The role is the invitation's role (BACKLOG-3851; first-user-wins, 3096,
+  // is gone). Only an admin can complete a tenant-wide Microsoft admin-consent
+  // grant, so anyone else goes to /dashboard; the consent page is a dead end
+  // for them.
   //
   // Branch on the role the RPC actually wrote — not a re-query — so the
   // callback and the database cannot disagree about which branch was taken.
@@ -189,11 +288,11 @@ export async function GET(request: Request) {
     // sent every non-admin to /download, which was wrong for a broker.
     //
     // So there is ONE destination here and ONE routing authority.
-    return NextResponse.redirect(`${origin}/dashboard`);
+    return finish(`${origin}/dashboard`);
   }
 
   // An admin can pre-approve Graph API permissions for all tenant users.
-  return NextResponse.redirect(
+  return finish(
     `${origin}/setup/consent?tenant=${encodeURIComponent(tenantId)}&org=${encodeURIComponent(data.organization_id)}`
   );
 }

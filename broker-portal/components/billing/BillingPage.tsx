@@ -8,14 +8,20 @@
 
 import type { AgentPlanState, BillingBlock, BillingCapabilities } from '@/lib/billing/capabilities';
 import { PlanBlock } from './PlanBlock';
+import { Alert } from '@keepr/design-system';
+import { AutoRenewBlock } from './AutoRenewBlock';
+import { planEndLine, type PlanEnd } from '@/lib/billing/planEnd';
 import { ChoosePlanBlock } from './ChoosePlanBlock';
-import { SeatsBlock } from './SeatsBlock';
+import { SeatsBlock, type SeatsViewer } from './SeatsBlock';
+import { ManageBillingBlock } from './ManageBillingBlock';
+import type { SeatsView } from '@/lib/billing/seats';
 import { CreditsBlock } from './CreditsBlock';
 import { PaymentContactBlock } from './PaymentContactBlock';
 import { InvoicesBlock } from './InvoicesBlock';
 import { PaymentFailedBanner } from './PaymentFailedBanner';
 import { CardUpdateReturn } from './BillingCardControls';
 import { SuspendedBanner } from './SuspendedBanner';
+import { OrgSuspendedBanner, type OrgSuspensionReason } from './OrgSuspendedBanner';
 import type { PersonalBillingData } from '@/lib/billing/personalBilling';
 
 export interface PlanPrice {
@@ -56,6 +62,14 @@ export interface BillingPageProps {
   orgBillingSetUp: boolean;
   /** Personal page only. */
   personal?: PersonalPlanData;
+  /** BACKLOG-3853 PR-2B: the brokerage is suspended. Organization page only. */
+  orgSuspension?: { reason: OrgSuspensionReason; role: string; organizationName?: string | null; payUrl?: string | null } | null;
+  /** BACKLOG-4019: the brokerage plan's auto-renew state. Organization page only, not while suspended. */
+  autoRenew?: { organizationId: string; planEnd: PlanEnd } | null;
+  /** BACKLOG-3854: seat counts (null view = the read failed). Organization page only. */
+  seats?: { view: SeatsView | null; viewer: SeatsViewer | null } | null;
+  /** BACKLOG-3854: back from a failed "Manage billing" (`?portal=unavailable`). */
+  portalUnavailable?: boolean;
 }
 
 function planLine(caps: BillingCapabilities, orgBillingSetUp: boolean): string {
@@ -64,7 +78,7 @@ function planLine(caps: BillingCapabilities, orgBillingSetUp: boolean): string {
   return orgBillingSetUp ? 'Organization plan' : 'Managed by Keepr';
 }
 
-export function BillingPage({ caps, orgBillingSetUp, personal }: BillingPageProps) {
+export function BillingPage({ caps, orgBillingSetUp, personal, orgSuspension, autoRenew, seats, portalUnavailable }: BillingPageProps) {
   // Blocks 4–6 are filled for a personal page only; organization pages keep the frame (3855).
   const b = caps.kind === 'personal' ? personal?.billing : undefined;
   const suspended = personal?.suspended === true;
@@ -75,7 +89,17 @@ export function BillingPage({ caps, orgBillingSetUp, personal }: BillingPageProp
       case 'choose_plan':
         return <ChoosePlanBlock key={block} prices={personal?.prices} suspended={suspended} />;
       case 'seats':
-        return <SeatsBlock key={block} />;
+        // The button follows the database (can_add); caps.canAddSeats (the action's own gate) can only
+        // take it away, never add it.
+        return (
+          <SeatsBlock
+            key={block}
+            view={seats?.view ? { ...seats.view, canAdd: seats.view.canAdd && caps.canAddSeats } : null}
+            viewer={seats?.viewer ?? null}
+          />
+        );
+      case 'manage_billing':
+        return <ManageBillingBlock key={block} unavailable={portalUnavailable === true} />;
       case 'credits':
         return <CreditsBlock key={block} data={b && personal ? { balance: b.credits, state: personal.state, suspended } : undefined} />;
       case 'payment':
@@ -103,12 +127,20 @@ export function BillingPage({ caps, orgBillingSetUp, personal }: BillingPageProp
         <p role="status" className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-700">Your card was not changed.</p>
       ) : null}
       {/* BACKLOG-3878: one banner; a suspension outranks a failed payment. */}
-      {caps.kind === 'personal' && suspended ? (
+      {caps.kind === 'organization' && orgSuspension ? (
+        <OrgSuspendedBanner reason={orgSuspension.reason} role={orgSuspension.role} organizationName={orgSuspension.organizationName} payUrl={orgSuspension.payUrl} />
+      ) : caps.kind === 'personal' && suspended ? (
         <SuspendedBanner dispute={personal?.suspendedForDispute === true} />
       ) : b && personal?.state === 'payment_failed' ? (
         <PaymentFailedBanner card={b.card} invoice={b.failedInvoice} canUpdateCard={caps.canUpdateCard && b.customer === 'present'} />
       ) : null}
+      {caps.kind === 'organization' && !orgSuspension && autoRenew && planEndLine(autoRenew.planEnd) ? (
+        <Alert variant="info">{planEndLine(autoRenew.planEnd)}</Alert>
+      ) : null}
       {caps.blocks.map(render)}
+      {caps.kind === 'organization' && !orgSuspension && autoRenew && autoRenew.planEnd.state !== 'none' ? (
+        <AutoRenewBlock organizationId={autoRenew.organizationId} planEnd={autoRenew.planEnd} />
+      ) : null}
     </div>
   );
 }

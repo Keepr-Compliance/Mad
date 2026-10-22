@@ -39,6 +39,8 @@ if (typeof window !== 'undefined') {
       loginWithMicrosoft: jest.fn().mockResolvedValue({ success: true }),
       logout: jest.fn().mockResolvedValue({ success: true }),
       getCurrentUser: jest.fn().mockResolvedValue({ success: false }),
+      // BACKLOG-4038: name + email for the blocked screen's support form.
+      getUserContact: jest.fn().mockResolvedValue({ success: false, name: "", email: "" }),
       acceptTerms: jest.fn().mockResolvedValue({ success: true }),
       googleLogin: jest.fn().mockResolvedValue({ success: true }),
       googleCompleteLogin: jest.fn().mockResolvedValue({ success: true }),
@@ -280,6 +282,14 @@ if (typeof window !== 'undefined') {
       // Default "not-dismissed" keeps the dashboard tour starting as before.
       getTourState: jest.fn().mockResolvedValue({ success: true, tour: "not-dismissed" }),
       dismissTour: jest.fn().mockResolvedValue({ success: true }),
+    },
+    // BACKLOG-3863: plan summary defaults to UNAVAILABLE (the card's fallback
+    // row), never a paid state, so a test that forgets to override is not
+    // shown a subscription it does not have.
+    billing: {
+      openPortal: jest.fn().mockResolvedValue({ success: true }),
+      getPlanSummary: jest.fn().mockResolvedValue({ unavailable: true }),
+      refresh: jest.fn().mockResolvedValue({ unavailable: true }),
     },
     shell: {
       openExternal: jest.fn(),

@@ -271,7 +271,7 @@ describe('EditRoleModal error handling', () => {
       'Cannot change your own role',
       'Only IT Admins can assign IT Admin role',
       'Only IT Admins can change IT Admin roles',
-      'Cannot demote the last admin. Assign another admin first.',
+      'Cannot demote the last admin. Make another user an admin first, then try again.',
       'Failed to update role',
       'An unexpected error occurred',
     ];

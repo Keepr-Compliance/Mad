@@ -112,6 +112,10 @@ export interface WindowApiAuth {
     transient?: boolean;
     retryable?: boolean;
   }>;
+  /** BACKLOG-4038: name + email only (no tokens) for the blocked screen's support form. */
+  getUserContact: (
+    userId?: string,
+  ) => Promise<{ success: boolean; name: string; email: string }>;
   acceptTerms: (
     userId: string,
   ) => Promise<{ success: boolean; error?: string }>;

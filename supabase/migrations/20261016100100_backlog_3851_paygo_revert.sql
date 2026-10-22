@@ -1,9 +1,13 @@
 -- BACKLOG-3851 M2: a deactivated brokerage member reverts to individual pay-as-you-go.
 --
 -- APPLY ORDER: only after M1 (20261015152446) AND only after the production broker portal
--- reads a user with two membership rows (PR-2a deployed on main). Before that, the
--- portal's single-row readers fail for a user holding a deactivated brokerage row and a
--- personal row. The precondition below refuses to run without M1.
+-- AND admin portal read a user with two membership rows (PR-2a deployed on main). Before
+-- that, the portals' single-row readers fail for a user holding a deactivated brokerage row
+-- and a personal row. The precondition below refuses to run without M1.
+--   1. keepr-test (xiaobikzagpyubjcrcpb) first, ledger version 20261016100100.
+--   2. Production only once both production deployments contain PR-2a's merge commit.
+--      An MCP apply_migration stamps its own version: restamp this file to that version
+--      in a follow-up commit and rename keepr-test's ledger row to match.
 --
 -- 1. _ensure_personal_organization_for(uuid): refuses a personal organization only while
 --    the user has a non-personal membership that is NOT deactivated (suspended/expired).
@@ -13,7 +17,10 @@
 --    revert_deactivated_member: on a move into a deactivated status, attaches the user's
 --    personal organization. A failure there raises a WARNING and never blocks the
 --    deactivation.
+-- 4. organizations.jit_provisioning_enabled defaults to false (a new organization starts
+--    with JIT off). Existing rows are not rewritten.
 --
+-- Rollback of M2 alone: supabase/tests/backlog-3851/rollback-3851-m2.sql (read its header).
 -- Replaced functions are CREATE OR REPLACE (ACL, SECURITY DEFINER, search_path unchanged).
 -- Apply as one transaction. No BEGIN/COMMIT here.
 
@@ -35,6 +42,34 @@ BEGIN
    WHERE md5(p.prosrc) IS NULL OR md5(p.prosrc) NOT IN (v.old_md5, v.new_md5);
   IF bad IS NOT NULL THEN
     RAISE EXCEPTION 'BACKLOG-3851 M2: a replaced function differs from the expected body: %', bad;
+  END IF;
+  -- M1's helper, as production and keepr-test hold it.
+  IF (SELECT md5(prosrc) FROM pg_proc
+       WHERE oid = 'public.member_status_is_deactivated(text)'::regprocedure)
+     IS DISTINCT FROM 'f1cc92b7dd9b6c84778c86dbb89aafcf' THEN
+    RAISE EXCEPTION 'BACKLOG-3851 M2: member_status_is_deactivated differs from M1''s body';
+  END IF;
+  -- Column default: production's (true) or this file's (false, a second apply).
+  SELECT coalesce(column_default, '<none>') INTO bad
+    FROM information_schema.columns
+   WHERE table_schema = 'public' AND table_name = 'organizations'
+     AND column_name = 'jit_provisioning_enabled';
+  IF bad IS NULL OR bad NOT IN ('true', 'false') THEN
+    RAISE EXCEPTION 'BACKLOG-3851 M2: organizations.jit_provisioning_enabled default is %', coalesce(bad, '<no column>');
+  END IF;
+  -- Retire trigger: production's column list (user_id, organization_id) or this file's
+  -- (+ license_status), AFTER INSERT OR UPDATE, row level, on _retire_personal_membership.
+  SELECT coalesce(string_agg(a.attname, ',' ORDER BY a.attname), '<none>')
+    INTO bad
+    FROM pg_trigger t
+    JOIN pg_proc f ON f.oid = t.tgfoid AND f.proname = '_retire_personal_membership'
+    LEFT JOIN LATERAL unnest(t.tgattr::int2[]) AS c(n) ON true
+    LEFT JOIN pg_attribute a ON a.attrelid = t.tgrelid AND a.attnum = c.n
+   WHERE t.tgrelid = 'public.organization_members'::regclass
+     AND t.tgname = 'retire_personal_membership'
+     AND t.tgtype = 21;  -- ROW (1) + INSERT (4) + UPDATE (16), AFTER
+  IF bad IS NULL OR bad NOT IN ('organization_id,user_id', 'license_status,organization_id,user_id') THEN
+    RAISE EXCEPTION 'BACKLOG-3851 M2: retire_personal_membership trigger differs from the expected definition: %', coalesce(bad, '<missing>');
   END IF;
 END
 $pre$;
@@ -248,3 +283,8 @@ CREATE TRIGGER revert_deactivated_member
   AFTER UPDATE OF license_status ON public.organization_members
   FOR EACH ROW
   EXECUTE FUNCTION public._revert_deactivated_member_to_paygo();
+
+-- ---------------------------------------------------------------------------
+-- 4. JIT off by default for a new organization (founder decision, BACKLOG-3851)
+-- ---------------------------------------------------------------------------
+ALTER TABLE public.organizations ALTER COLUMN jit_provisioning_enabled SET DEFAULT false;

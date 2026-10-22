@@ -31,7 +31,16 @@ export type BillingAlertName =
   | 'suspended_subscription_unpaused'
   | 'paused_subscription_licence_active'
   // BACKLOG-3934 (a paying Agent who is also a brokerage member; support cancels + refunds)
-  | 'agent_subscription_brokerage_member';
+  | 'agent_subscription_brokerage_member'
+  // BACKLOG-3853 PR-2 (brokerage subscription)
+  | 'brokerage_orphan_object'
+  // BACKLOG-4019: the stored brokerage subscription ended while the deal was not canceling.
+  | 'brokerage_subscription_ended_unexpectedly'
+  | 'brokerage_refund_or_dispute'
+  | 'brokerage_no_account_manager'
+  // BACKLOG-3853 PR-2B ("account suspended" email: the Pay button could not be built)
+  | 'brokerage_suspended_no_invoice'
+  | 'brokerage_suspended_invoice_lookup_failed';
 
 export function billingAlert(
   name: BillingAlertName,

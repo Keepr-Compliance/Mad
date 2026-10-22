@@ -17,8 +17,11 @@ import {
 } from '@/lib/utils/userDisplay';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
-import { suspendedLanding } from '@/lib/auth/membership';
+import { orgSuspendedLanding, suspendedLanding } from '@/lib/auth/membership';
 import { billingEnabled } from '@/lib/billing/flag';
+import { billingSetupPending, SETUP_GUIDE_PATH } from '@/lib/billing/setupState';
+import { planEndLine, readPlanEnd, type PlanEnd } from '@/lib/billing/planEnd';
+import { Alert } from '@keepr/design-system';
 import { FloorDashboard } from './components/FloorDashboard';
 import { DashboardStatCards } from '@/components/dashboard/DashboardStatCards';
 import { buildStatCards, type StatCardData } from '@/lib/dashboard/statCards';
@@ -89,6 +92,9 @@ export default async function DashboardPage() {
   // BACKLOG-3080: only a full-portal user gets the brokerage overview.
   // Everyone else gets the floor, decided BEFORE any submission is read.
   let isFullPortal = false;
+  // BACKLOG-4007 PR-3: "Finish setup" banner while the brokerage waits for the Billing step.
+  let setupPending = false;
+  let planEnd: PlanEnd | null = null;
 
   // IT admins only manage users — redirect to Users page (skip during impersonation)
   if (!impersonation) {
@@ -99,12 +105,22 @@ export default async function DashboardPage() {
     if (portal?.suspended === true) {
       redirect(suspendedLanding(portal.access, billingEnabled()));
     }
+    // BACKLOG-3853 PR-2B: a suspended brokerage's broker, admin and IT admin
+    // have no dashboard home either. An agent keeps it (Q7 a).
+    if (portal?.orgSuspended === true && portal.access.kind === 'full') {
+      redirect(orgSuspendedLanding(portal.access, billingEnabled()));
+    }
     if (portal) {
       authUser = portal.user;
       if (portal.access.kind === 'full') {
         isFullPortal = true;
         if (portal.access.role === 'it_admin') {
           redirect('/dashboard/users');
+        }
+        setupPending = await billingSetupPending(portal.supabase, portal.access);
+        // BACKLOG-4019: the plan is ending or has ended (Broker and Admin; IT admins left above).
+        if (billingEnabled()) {
+          planEnd = await readPlanEnd(portal.supabase, portal.access.organizationId);
         }
       }
     }
@@ -136,6 +152,18 @@ export default async function DashboardPage() {
       <PageHeader phoneHideTitle phoneHideSubtitle title={headerTitle} subtitle="Overview of transaction submissions" />
 
       <div className="space-y-6">
+        {setupPending ? (
+          <Alert variant="warning">
+            <p>
+              Finish your account setup. Confirm the billing details before you invite your team.{' '}
+              <Link href={SETUP_GUIDE_PATH} className="font-medium underline">
+                Finish setup
+              </Link>
+            </p>
+          </Alert>
+        ) : null}
+        {planEndLine(planEnd) ? <Alert variant="info">{planEndLine(planEnd)}</Alert> : null}
+
         {/* Stats Grid */}
         <DashboardStatCards
           cards={statCards}

@@ -148,7 +148,7 @@ export async function logScimOperation(
     scimTokenId: string;
   },
 ): Promise<void> {
-  await supabaseAdmin.from("scim_sync_log").insert({
+  const { error } = await supabaseAdmin.from("scim_sync_log").insert({
     organization_id: params.organizationId,
     operation: params.operation,
     resource_type: params.resourceType,
@@ -159,4 +159,8 @@ export async function logScimOperation(
     error_message: params.errorMessage || null,
     scim_token_id: params.scimTokenId,
   });
+  if (error) {
+    // The seat-email de-dupe reads these rows; a lost row can mean one extra email.
+    console.error("[scim] sync log insert failed:", error.message);
+  }
 }

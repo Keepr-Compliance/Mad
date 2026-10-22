@@ -16,6 +16,7 @@ import { useEffect, useState, useCallback, Suspense } from 'react';
 import { createTokenClaim } from '@/lib/actions/createTokenClaim';
 import { enforceSingleDesktopSession } from '@/lib/actions/enforceSingleDesktopSession';
 import { mintDesktopSession } from '@/lib/actions/mintDesktopSession';
+import { syncDesktopIdpNames } from '@/lib/actions/syncDesktopIdpNames';
 import { Spinner } from '@keepr/design-system';
 import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { arrivedFromDesktop } from '@/lib/desktop-handoff';
@@ -100,6 +101,11 @@ function DesktopCallbackContent() {
       // BACKLOG-1603: Store tokens in token_claims via server action (SOC 2)
       // The server action uses the service role client to call create_token_claim() RPC
       const provider = (user.app_metadata?.provider as string) || 'google';
+
+      // BACKLOG-3991: the names Microsoft or Google gave at this sign-in, BEFORE the
+      // desktop session is minted. The server action verifies the token itself and
+      // never throws; the catch is a second belt so a sign-in can never stop here.
+      await syncDesktopIdpNames(session.access_token, session.provider_token ?? null).catch(() => undefined);
 
       // SESSION-FIX #2 (BACKLOG-2332): mint a FRESH, independent session for the desktop instead
       // of handing it the browser tab's tokens. Sharing the browser's refresh-token family made

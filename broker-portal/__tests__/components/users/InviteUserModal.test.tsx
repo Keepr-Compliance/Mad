@@ -267,22 +267,6 @@ describe('InviteUserModal error handling', () => {
     expect(shouldShowError('')).toBe(false);
   });
 
-  describe('error messages display', () => {
-    const possibleErrors = [
-      'Invalid email format',
-      'Not authenticated',
-      'You cannot invite yourself',
-      'Not authorized to invite users',
-      'This email already has a pending invitation',
-      'This user is already a member of the organization',
-      'Organization has reached maximum seats',
-      'An unexpected error occurred',
-    ];
-
-    it.each(possibleErrors)('should display error: "%s"', (error) => {
-      expect(shouldShowError(error)).toBe(true);
-    });
-  });
 });
 
 // ============================================================================

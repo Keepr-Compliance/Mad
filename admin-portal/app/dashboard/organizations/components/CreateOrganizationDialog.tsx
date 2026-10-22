@@ -3,25 +3,29 @@
 /**
  * CreateOrganizationDialog - Modal dialog for creating a new organization.
  *
- * Collects name, max seats, and optional plan assignment.
+ * Collects name, optional plan and, while brokerage billing is off, max seats.
+ * BACKLOG-4007: no Default License Status. Once brokerage billing is live, Max Seats is
+ * hidden and not sent: seats are entered on the deal, and until a deal exists the database
+ * default (admin_create_organization p_max_seats DEFAULT 5) applies.
  * Uses admin_create_organization RPC, then optionally admin_assign_org_plan.
  * Does NOT set the legacy `plan` column on organizations.
  */
 
 import { useState, useEffect, useId } from 'react';
-import { Button, FieldError, FieldHelp, Input, Label, Modal, Select } from '@keepr/design-system';
+import { Button, FieldError, Input, Label, Modal, Select } from '@keepr/design-system';
 import { createOrganization, assignOrgPlan, getActivePlansForOrgs, type Plan } from '@/lib/admin-queries';
 
 interface CreateOrganizationDialogProps {
   onClose: () => void;
   onCreated: () => void;
+  /** Brokerage billing is live (billingLiveForNewOrg). Off: Max Seats is asked and sent. */
+  billingLive: boolean;
 }
 
-export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizationDialogProps) {
+export function CreateOrganizationDialog({ onClose, onCreated, billingLive }: CreateOrganizationDialogProps) {
   const [name, setName] = useState('');
   const [maxSeats, setMaxSeats] = useState(5);
   const [selectedPlanId, setSelectedPlanId] = useState('');
-  const [defaultLicenseStatus, setDefaultLicenseStatus] = useState<'trial' | 'active'>('trial');
   const [plans, setPlans] = useState<Plan[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingPlans, setIsLoadingPlans] = useState(true);
@@ -51,7 +55,9 @@ export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizat
     setError(null);
 
     // Step 1: Create the organization
-    const result = await createOrganization(name.trim(), maxSeats);
+    const result = billingLive
+      ? await createOrganization(name.trim())
+      : await createOrganization(name.trim(), maxSeats);
 
     if (result.error) {
       setError(result.error.message);
@@ -81,7 +87,9 @@ export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizat
         Create Organization
       </h3>
       <p className="mt-1 text-sm text-gray-500">
-        Set up a new organization with a name and seat limit.
+        {billingLive
+          ? 'Seats are set on the deal, after the organization exists.'
+          : 'Set up a new organization with a name and seat limit.'}
       </p>
 
       <form onSubmit={handleSubmit} className="mt-4 space-y-4">
@@ -99,19 +107,21 @@ export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizat
           />
         </div>
 
-        {/* Max Seats */}
-        <div>
-          <Label htmlFor="org-max-seats">Max Seats</Label>
-          <Input
-            id="org-max-seats"
-            type="number"
-            min={1}
-            max={1000}
-            value={maxSeats}
-            onChange={(e) => setMaxSeats(Math.max(1, parseInt(e.target.value) || 1))}
-            disabled={isLoading}
-          />
-        </div>
+        {/* Max Seats: only while brokerage billing is off (once live, the deal sets seats) */}
+        {!billingLive && (
+          <div>
+            <Label htmlFor="org-max-seats">Max Seats</Label>
+            <Input
+              id="org-max-seats"
+              type="number"
+              min={1}
+              max={1000}
+              value={maxSeats}
+              onChange={(e) => setMaxSeats(Math.max(1, parseInt(e.target.value) || 1))}
+              disabled={isLoading}
+            />
+          </div>
+        )}
 
         {/* Optional Plan */}
         <div>
@@ -129,23 +139,6 @@ export function CreateOrganizationDialog({ onClose, onCreated }: CreateOrganizat
               </option>
             ))}
           </Select>
-        </div>
-
-        {/* Default License Status */}
-        <div>
-          <Label htmlFor="org-license-status">Default License Status</Label>
-          <Select
-            id="org-license-status"
-            value={defaultLicenseStatus}
-            onChange={(e) => setDefaultLicenseStatus(e.target.value as 'trial' | 'active')}
-            disabled={isLoading}
-          >
-            <option value="trial">Trial</option>
-            <option value="active">Active</option>
-          </Select>
-          <FieldHelp>
-            License status applied to members who join this organization.
-          </FieldHelp>
         </div>
 
         {/* Error */}

@@ -114,6 +114,18 @@ function stableJson(v: unknown): string {
  *   - pause_agent_subscription / resume_agent_subscription
  *                            BACKLOG-3878, lib/billing/suspension.ts (enqueued by the
  *                            licences trigger and the nightly reconcile)
+ *   - sync_org_subscription  BACKLOG-3853, lib/billing/brokerageSync.ts (enqueued by the
+ *                            org_deals trigger, one row per deal version)
+ *   - notify_org_suspended / notify_account_manager
+ *                            BACKLOG-3853, lib/billing/brokerageNotify.ts (organization rows)
+ *   - notify_setup_reminder  BACKLOG-4007, lib/billing/setupReminder.ts (enqueued by the
+ *                            organization_members trigger, +3 d / +7 d after a broker/admin invite)
+ *   - notify_billing_contact_reassigned
+ *                            BACKLOG-4007 People v2, lib/billing/billingContactReassigned.ts
+ *                            (enqueued by the database when an IdP deprovision moved the billing
+ *                            contact to the account admin)
+ *   - notify_seats_added     BACKLOG-3854, lib/billing/seatsAddedNotify.ts (enqueued by
+ *                            broker_add_seats: the billing contact's "seats added" email)
  */
 export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.freeze({
   agent_receipt: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
@@ -124,4 +136,16 @@ export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.f
     (await import('./suspension')).handlePauseRow(row, ctx),
   resume_agent_subscription: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
     (await import('./suspension')).handleResumeRow(row, ctx),
+  sync_org_subscription: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./brokerageSync')).handleSyncOrgSubscriptionRow(row, ctx),
+  notify_org_suspended: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./brokerageNotify')).handleNotifyOrgSuspendedRow(row, ctx),
+  notify_account_manager: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./brokerageNotify')).handleNotifyAccountManagerRow(row, ctx),
+  notify_setup_reminder: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./setupReminder')).handleNotifySetupReminderRow(row, ctx),
+  notify_billing_contact_reassigned: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./billingContactReassigned')).handleNotifyBillingContactReassignedRow(row, ctx),
+  notify_seats_added: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./seatsAddedNotify')).handleNotifySeatsAddedRow(row, ctx),
 });

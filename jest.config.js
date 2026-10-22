@@ -65,6 +65,9 @@ module.exports = {
     '^@/(.*)$': '<rootDir>/src/$1',
     '^@electron/(.*)$': '<rootDir>/electron/$1',
     '^@types/(.*)$': '<rootDir>/types/$1',
+    // BACKLOG-3863 (SR R6): the kit and its tokens from this checkout.
+    '^@keepr/ui$': '<rootDir>/packages/ui/src/index.ts',
+    '^@keepr/design-system$': '<rootDir>/packages/design-system/src/index.ts',
   },
 
   // Coverage configuration

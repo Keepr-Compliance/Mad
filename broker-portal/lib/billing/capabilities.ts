@@ -8,6 +8,8 @@
  * Who (the access dimension, from classifyPortalAccess in lib/auth/membership.ts):
  *   - the OWNER of a personal organization  -> the personal page;
  *   - a full-portal user (broker, admin, it_admin) -> the organization page;
+ *   - the brokerage's billing-only login (BACKLOG-4007 PR-4) -> the organization
+ *     page, read-only: price, and payment/invoices once billing is set up;
  *   - everyone else -> null (the page answers 404): a brokerage agent (their
  *     brokerage pays; founder decision, no billing page at all), a failed
  *     membership read (fail closed), no membership, and any support /
@@ -19,8 +21,9 @@
  * 3853/3855):
  *   - personal, no Agent plan: plan, choose_plan, credits, payment, invoices;
  *     with an Agent plan (any state): plan, credits, payment, invoices.
- *   - organization, broker/admin with billing set up: plan, seats, payment,
- *     invoices. it_admin: plan, seats, and never a price or an invoice.
+ *   - organization, broker/admin with billing set up: plan, seats, manage_billing
+ *     (Stripe's page: invoices and payment method; BACKLOG-3854). it_admin: plan,
+ *     seats, and never a price or an invoice.
  *     Billing not set up yet ("Managed by Keepr"): plan, seats only.
  *   - account suspended: nothing can be bought; a purchasing primary action
  *     becomes "contact support".
@@ -29,7 +32,14 @@
 import type { PortalAccess } from '@/lib/auth/membership';
 import type { AgentPlanState } from '@keepr/shared';
 
-export type BillingBlock = 'plan' | 'choose_plan' | 'seats' | 'credits' | 'payment' | 'invoices';
+export type BillingBlock = 'plan' | 'choose_plan' | 'seats' | 'credits' | 'payment' | 'invoices' | 'manage_billing';
+
+/**
+ * BACKLOG-3854: an organization's money blocks once billing is set up. The payment method and the
+ * invoices are on Stripe's page ("Manage billing", founder 546c9af1); the empty org frames for
+ * `payment` and `invoices` are not shown.
+ */
+const ORG_MONEY_BLOCKS: BillingBlock[] = ['plan', 'seats', 'manage_billing'];
 
 /** The personal Agent plan as billing_subscriptions will report it (3847). Declared once, in packages/shared (BACKLOG-3859). */
 export type { AgentPlanState } from '@keepr/shared';
@@ -58,6 +68,19 @@ export interface BillingSituation {
   accountSuspended: boolean;
   /** The organization has a billing deal on record (org_deals, 3853). */
   orgBillingSetUp: boolean;
+  /**
+   * BACKLOG-3853 PR-2B: the organization's deal is suspended (org_billing_suspended).
+   * Not `accountSuspended` (the person's own licence, 3878): nothing can be
+   * bought, no seat or licence is managed, and there is no primary action (the
+   * Pay button is BACKLOG-3855's). Organization pages only.
+   */
+  orgSuspended?: boolean;
+  /**
+   * BACKLOG-4007 PR-4: the person is the brokerage's billing-only login (floor via 'unlicensed',
+   * linked from the live billing contact; lib/auth/billingContact.ts). Read by the server; never
+   * true while impersonating.
+   */
+  billingContact?: boolean;
 }
 
 export interface BillingCapabilities {
@@ -122,10 +145,11 @@ function organization(role: string, s: BillingSituation): BillingCapabilities {
   const payer = (ORG_PAYER_ROLES as readonly string[]).includes(role);
   // Money only for a payer whose organization has billing set up.
   const money = payer && s.orgBillingSetUp;
-  const canPurchase = money && !s.accountSuspended;
+  const orgSuspended = s.orgSuspended === true;
+  const canPurchase = money && !s.accountSuspended && !orgSuspended;
   return {
     kind: 'organization',
-    blocks: money ? ['plan', 'seats', 'payment', 'invoices'] : ['plan', 'seats'],
+    blocks: money ? ORG_MONEY_BLOCKS : ['plan', 'seats'],
     showPrice: payer,
     canPay: money,
     // Organization payment and plan changes are BACKLOG-3855's.
@@ -133,10 +157,34 @@ function organization(role: string, s: BillingSituation): BillingCapabilities {
     canEndPlanNow: false,
     canSeeInvoices: money,
     canPurchase,
-    canManageLicenses: true,
+    canManageLicenses: !orgSuspended,
     canAddSeats: canPurchase,
-    showManageUsersLink: role === 'admin' || role === 'it_admin',
-    primaryAction: money ? (s.accountSuspended ? 'contact_support' : 'add_seats') : null,
+    // The Users page is closed while the brokerage is suspended.
+    showManageUsersLink: !orgSuspended && (role === 'admin' || role === 'it_admin'),
+    primaryAction: orgSuspended ? null : money ? (s.accountSuspended ? 'contact_support' : 'add_seats') : null,
+  };
+}
+
+/**
+ * BACKLOG-4007 PR-4: the billing-only login. It pays (sees the price, and the payment and
+ * invoice blocks once the brokerage's billing is set up) and manages nothing: no seats, no
+ * licenses, no Users page, nothing to buy.
+ */
+function billingContact(s: BillingSituation): BillingCapabilities {
+  const money = s.orgBillingSetUp;
+  return {
+    kind: 'organization',
+    blocks: money ? ORG_MONEY_BLOCKS : ['plan', 'seats'],
+    showPrice: true,
+    canPay: money,
+    canUpdateCard: false,
+    canEndPlanNow: false,
+    canSeeInvoices: money,
+    canPurchase: false,
+    canManageLicenses: false,
+    canAddSeats: false,
+    showManageUsersLink: false,
+    primaryAction: null,
   };
 }
 
@@ -145,6 +193,7 @@ export function billingCapabilities(s: BillingSituation): BillingCapabilities | 
   if (!s.enabled || s.isImpersonating || !s.access) return null;
   const a = s.access;
   if (a.kind === 'floor' && a.via === 'personal_owner') return personal(s);
+  if (a.kind === 'floor' && a.via === 'unlicensed' && s.billingContact === true) return billingContact(s);
   if (a.kind === 'full' && (ORG_ROLES as readonly string[]).includes(a.role)) {
     return organization(a.role, s);
   }
@@ -156,7 +205,7 @@ export function billingCapabilities(s: BillingSituation): BillingCapabilities | 
  * dimension only: the situation changes WHICH blocks, never WHO.
  */
 export function billingNavVisible(
-  s: Pick<BillingSituation, 'access' | 'isImpersonating' | 'enabled'>
+  s: Pick<BillingSituation, 'access' | 'isImpersonating' | 'enabled' | 'billingContact'>
 ): boolean {
   return (
     billingCapabilities({

@@ -52,21 +52,3 @@ export function extractEmail(user: User): string | null {
 
   return null;
 }
-
-/**
- * Extract organization name from email domain.
- * e.g., "daniel@izzyrescue.org" -> "Izzy Rescue"
- */
-export function orgNameFromEmail(email: string): string {
-  const domain = email.split('@')[1];
-  if (!domain) return 'Unknown Organization';
-
-  const name = domain.split('.')[0];
-
-  return name
-    .replace(/[-_]/g, ' ')
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .split(' ')
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(' ');
-}
