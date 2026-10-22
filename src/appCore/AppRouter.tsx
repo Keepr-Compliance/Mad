@@ -47,12 +47,13 @@ export function AppRouter({ app }: AppRouterProps) {
   const [licenseBlocked, setLicenseBlocked] = useState<{
     blocked: boolean;
     reason: UpgradeReason;
+    userId?: string; // BACKLOG-4038: support form prefill for the blocked user
   }>({ blocked: false, reason: "unknown" });
 
   // Handle license blocked during login
   const handleLicenseBlocked = useCallback((data: { userId: string; blockReason: string }) => {
     // BACKLOG-4038: expired -> ended, suspended -> suspended, anything else -> fallback.
-    setLicenseBlocked({ blocked: true, reason: upgradeReasonFor(data.blockReason) });
+    setLicenseBlocked({ blocked: true, reason: upgradeReasonFor(data.blockReason), userId: data.userId });
   }, []);
 
   // Handle logout from UpgradeScreen - reset blocked state and call app logout
@@ -81,7 +82,7 @@ export function AppRouter({ app }: AppRouterProps) {
   if (currentStep === "login") {
     // Show UpgradeScreen if license was blocked during login
     if (licenseBlocked.blocked) {
-      return <UpgradeScreen reason={licenseBlocked.reason} onLogout={handleUpgradeScreenLogout} />;
+      return <UpgradeScreen reason={licenseBlocked.reason} userId={licenseBlocked.userId} onLogout={handleUpgradeScreenLogout} />;
     }
 
     if (!isOnline) {

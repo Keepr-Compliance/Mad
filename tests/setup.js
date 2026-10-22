@@ -39,6 +39,8 @@ if (typeof window !== 'undefined') {
       loginWithMicrosoft: jest.fn().mockResolvedValue({ success: true }),
       logout: jest.fn().mockResolvedValue({ success: true }),
       getCurrentUser: jest.fn().mockResolvedValue({ success: false }),
+      // BACKLOG-4038: name + email for the blocked screen's support form.
+      getUserContact: jest.fn().mockResolvedValue({ success: false, name: "", email: "" }),
       acceptTerms: jest.fn().mockResolvedValue({ success: true }),
       googleLogin: jest.fn().mockResolvedValue({ success: true }),
       googleCompleteLogin: jest.fn().mockResolvedValue({ success: true }),

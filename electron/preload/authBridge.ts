@@ -105,6 +105,16 @@ export const authBridge = {
   getCurrentUser: () => ipcRenderer.invoke("auth:get-current-user"),
 
   /**
+   * BACKLOG-4038: name and email of the signed-in or just-blocked user (no
+   * tokens), for the support form on the license-blocked screen.
+   * @param userId - The blocked user's id from the license-blocked event, if known
+   */
+  getUserContact: (
+    userId?: string,
+  ): Promise<{ success: boolean; name: string; email: string }> =>
+    ipcRenderer.invoke("auth:get-user-contact", userId),
+
+  /**
    * Records user's acceptance of terms and conditions
    * @param userId - User ID accepting terms
    * @returns Acceptance result
