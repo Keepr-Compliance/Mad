@@ -353,6 +353,9 @@ BEGIN
 END
 $function$;
 
+REVOKE EXECUTE ON FUNCTION public._billing_apply_org_entitlement(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public._billing_apply_org_entitlement(uuid) TO service_role;
+
 -- =====================================================================================
 -- 4. Who may switch auto-renew (SR change 2): one helper for every writer and reader.
 --    'staff' (billing.manage) | 'admin' (active Admin of this org) | 'billing_contact' (the live
