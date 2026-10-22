@@ -15,8 +15,10 @@
  *       passes `data: extra`; its keys are checked at its emit()/emitBoundary()
  *       call sites instead;
  *   (c) no stale entries: every listed category, string key and tag key is used;
- *   (d) exactly one Sentry.init in src/, in src/main.tsx, called with
- *       `buildRendererSentryOptions(Sentry)` imported from the module;
+ *   (d) exactly one Sentry.init in src/, in src/main.tsx, whose argument is an
+ *       object literal with exactly `beforeBreadcrumb` and `integrations`, each
+ *       read from a const set to `buildRendererSentryOptions(Sentry)` (imported
+ *       from the module). The literal is kept for the BACKLOG-3801 check;
  *   (e) the only Sentry members used are addBreadcrumb, captureException,
  *       captureMessage, setTag (literal key in RENDERER_SCOPE_TAG_KEYS) and init.
  *       Any scope API call (setUser, setTags, setExtra, setExtras, setContext,
@@ -144,6 +146,53 @@ function checkDataKeys(
       out.violations.push(`${at} data key "${key}" is not classified`);
     }
   }
+}
+
+const INIT_KEYS = ["beforeBreadcrumb", "integrations"];
+
+/** True when `const <name> = buildRendererSentryOptions(<sentry>)` is in the file. */
+function isBuilderConst(name: string, sf: ts.SourceFile, sentry: string): boolean {
+  let found = false;
+  const visit = (n: ts.Node): void => {
+    if (
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === name &&
+      ts.isVariableDeclarationList(n.parent) &&
+      (n.parent.flags & ts.NodeFlags.Const) !== 0 &&
+      n.initializer &&
+      ts.isCallExpression(n.initializer) &&
+      ts.isIdentifier(n.initializer.expression) &&
+      n.initializer.expression.text === "buildRendererSentryOptions" &&
+      n.initializer.arguments.length === 1 &&
+      ts.isIdentifier(n.initializer.arguments[0]) &&
+      n.initializer.arguments[0].text === sentry
+    ) {
+      found = true;
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+function isWiredInit(call: ts.CallExpression, sf: ts.SourceFile, sentry: string): boolean {
+  const a = call.arguments[0];
+  if (call.arguments.length !== 1 || !a || !ts.isObjectLiteralExpression(a)) return false;
+  if (a.properties.length !== INIT_KEYS.length) return false;
+  let source: string | null = null;
+  for (const p of a.properties) {
+    if (!ts.isPropertyAssignment(p) || !ts.isIdentifier(p.name)) return false;
+    const key = p.name.text;
+    const v = p.initializer;
+    if (!INIT_KEYS.includes(key)) return false;
+    if (!ts.isPropertyAccessExpression(v) || !ts.isIdentifier(v.expression) || v.name.text !== key) {
+      return false;
+    }
+    if (source !== null && source !== v.expression.text) return false;
+    source = v.expression.text;
+  }
+  return source !== null && isBuilderConst(source, sf, sentry);
 }
 
 export function scanSource(file: string, text: string, out: ScanResult = newResult()): ScanResult {
@@ -281,20 +330,10 @@ export function scanSource(file: string, text: string, out: ScanResult = newResu
 
       if (method === "init" && onSentry) {
         out.inits.push(at);
-        const a = n.arguments[0];
-        const wired =
-          file === MAIN_FILE &&
-          importsBuilder &&
-          n.arguments.length === 1 &&
-          a &&
-          ts.isCallExpression(a) &&
-          ts.isIdentifier(a.expression) &&
-          a.expression.text === "buildRendererSentryOptions" &&
-          a.arguments.length === 1 &&
-          ts.isIdentifier(a.arguments[0]) &&
-          a.arguments[0].text === sentryLocal;
-        if (!wired) {
-          out.violations.push(`${at} Sentry.init must be called as Sentry.init(buildRendererSentryOptions(Sentry)) in ${MAIN_FILE}`);
+        if (!(file === MAIN_FILE && importsBuilder && isWiredInit(n, sf, sentryLocal as string))) {
+          out.violations.push(
+            `${at} Sentry.init must be Sentry.init({ beforeBreadcrumb: o.beforeBreadcrumb, integrations: o.integrations }) with const o = buildRendererSentryOptions(Sentry), in ${MAIN_FILE}`,
+          );
         }
       }
     }

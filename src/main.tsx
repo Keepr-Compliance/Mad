@@ -18,7 +18,13 @@ import "./index.css";
 // Renderer inherits DSN and configuration from the main process via IPC.
 // BACKLOG-4049: breadcrumbs and scope data are allow-listed before they are
 // forwarded to the main process; see src/utils/sentryRendererBreadcrumbs.ts.
-Sentry.init(buildRendererSentryOptions(Sentry));
+// The init argument stays an object literal with named keys (BACKLOG-3801
+// checks it carries no dsn or transport).
+const rendererSentryOptions = buildRendererSentryOptions(Sentry);
+Sentry.init({
+  beforeBreadcrumb: rendererSentryOptions.beforeBreadcrumb,
+  integrations: rendererSentryOptions.integrations,
+});
 
 // BACKLOG-3884: log every renderer main-thread stall of >= 1 s to main.log.
 installRendererStallLogger();
