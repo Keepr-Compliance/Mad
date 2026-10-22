@@ -346,3 +346,53 @@ describe("G5: every breadcrumb category is scrubbed before the scope holds it (s
     }
   });
 });
+
+describe("G6: the at-rest startup job opens the queue (and only with a key)", () => {
+  type Job = { id: string; run: (ctx: { log: (l: string, m: string) => void }) => Promise<void> };
+
+  type KeyErr = new (m: string) => Error;
+  function loadJob(makeCurrentKey: (E: KeyErr) => () => Promise<unknown>): { job: Job; q: QueueModule } {
+    let job: Job | undefined;
+    let q!: QueueModule;
+    jest.isolateModules(() => {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const real = jest.requireActual("../dataKeyService");
+      const currentKey = makeCurrentKey(real.DataKeyUnavailableError);
+      jest.doMock("../dataKeyService", () => ({
+        ...real,
+        getDataKeyService: () => ({ currentKey }),
+        getAtRestFiles: () => files,
+      }));
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const startup = require("../startup");
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      q = require("../sentrySealedQueue");
+      const jobs: Job[] = [];
+      startup.registerDefaultJobs({ register: (j: Job) => jobs.push(j) });
+      job = jobs.find((j) => j.id === "sentry-queue");
+    });
+    jest.dontMock("../dataKeyService");
+    if (!job) throw new Error("no sentry-queue job");
+    q.configureSentrySealedQueue(userData);
+    return { job, q };
+  }
+
+  it("key opens -> the queue is sealed-on-disk from then on", async () => {
+    const { job, q } = loadJob(() => async () => ({ keyId: "a".repeat(32), key: KEY }));
+    expect(q.isSentrySealedQueueActive()).toBe(false);
+    await job.run({ log: () => undefined });
+    expect(q.isSentrySealedQueueActive()).toBe(true);
+    q.resetSentrySealedQueueForTests();
+  });
+
+  it("key unavailable -> the queue stays in memory, nothing on disk, the job does not fail", async () => {
+    const log = jest.fn();
+    const { job, q } = loadJob((E) => async () => {
+      throw new E("secure storage unavailable");
+    });
+    await job.run({ log });
+    expect(q.isSentrySealedQueueActive()).toBe(false);
+    expect(log).toHaveBeenCalledWith("warn", expect.stringContaining("sentry-queue: data key unavailable"));
+    q.resetSentrySealedQueueForTests();
+  });
+});
