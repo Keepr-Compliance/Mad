@@ -196,6 +196,40 @@ describe("ordering", () => {
     expect(files.map((f) => fs.existsSync(f))).toEqual([false, false, true, false]);
     expect(r).toMatchObject({ removed: 3, stillReferenced: 1 });
   });
+
+  it("C6c: a read of the names slower than the budget still leaves half a budget of unlinks per block", async () => {
+    // Fake clock, no files, no database. One read of the names takes 300 ms
+    // against a 200 ms budget (a windows-latest read measured 218 ms); an
+    // unlink takes 1 ms. The half-budget floor gives each block 100 ms of
+    // unlinks = 100 files, so 400 candidates take 4 blocks. Without the floor
+    // the unlink budget is negative, every block holds ONE file, and the names
+    // are read 400 times (about 9 minutes of main-thread work on Windows).
+    const CANDIDATES = 400;
+    const paths = Array.from({ length: CANDIDATES }, (_, n) => `message-attachments/${hash(n)}.png`);
+    let clock = 0;
+    let reads = 0;
+    let unlinks = 0;
+    const r = await removeUnreferencedFiles(paths, {
+      contain: async (p) => p,
+      unreferenced: (ps) => {
+        reads++;
+        clock += 300;
+        return new Set(ps);
+      },
+      deleteFile: () => {
+        unlinks++;
+        clock += 1;
+        return true;
+      },
+      now: () => clock,
+      blockBudgetMs: 200,
+      yieldToLoop: async () => {},
+    });
+    expect(r.removed).toBe(CANDIDATES);
+    expect(unlinks).toBe(CANDIDATES);
+    expect(r.blocks).toBe(reads);
+    expect(r.blocks).toBeLessThanOrEqual(4);
+  });
 });
 
 describe("cost (C7)", () => {
