@@ -46,9 +46,11 @@
  *   its seal, and inserts its row after this check read the names. Narrow and
  *   limited to concurrent jobs; S2's existsSync on the Mac/iPhone dedup repairs
  *   the row on the next import.
- * - Until S2: a Mac row whose name differs by MORE than case (`h.jpeg` written
- *   by the dedup branch for a file actually named `h.jpg`) cannot protect
- *   `h.jpg`. Same blind spot as before this module.
+ * - A row whose name differs by MORE than case (`h.jpeg` for a file actually
+ *   named `h.jpg`) cannot protect `h.jpg`. Since S2 the Mac and iPhone writers
+ *   no longer produce such rows: a new row links to the existing file's own
+ *   name (attachmentDedupIndex.ts). Rows written that way BEFORE S2 are not
+ *   repaired and remain this blind spot.
  *
  * Best-effort by contract: it never throws. A failure leaves a file behind.
  */

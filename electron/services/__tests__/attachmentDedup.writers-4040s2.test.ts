@@ -393,3 +393,28 @@ describe("E: existing rows from the pre-fix writers are never rewritten and keep
     },
   );
 });
+
+describe("E (iPhone): existing rows from the pre-fix writers keep their files; a post-fix sync links to one that exists", () => {
+  type IScenario = { existing: string[]; rows: Array<{ filename: string; storage_path: string }>; files: string[] };
+  const iScenarios = (prefixRows as unknown as { iphoneScenarios: Record<string, IScenario> }).iphoneScenarios;
+
+  it("the fixture holds the pre-fix iPhone shape (a row pointing at a missing h.jpg)", () => {
+    expect(nodePath.extname(iScenarios.i2.rows[0].storage_path)).toBe(".jpg");
+    expect(iScenarios.i2.files.map((f) => nodePath.extname(f))).toEqual([".jpeg"]);
+  });
+
+  it.each(Object.keys(iScenarios))("%s: no second copy, the new row's file exists, every existing file stays", async (name) => {
+    const sc = iScenarios[name];
+    const b = bytesFor(`fx-${name}`);
+    await fs.mkdir(msgDir, { recursive: true });
+    for (const f of sc.files) await sealBufferToFile(nodePath.join(msgDir, f), b);
+    const existing = [...sc.existing, ...sc.rows.map((r) => r.storage_path)].map((p) => nodePath.join(scratchDir, p));
+
+    const rows = await iphoneImport([{ id: 9, name: "NEW.JPG", bytes: b }], existing);
+
+    expect(rows).toHaveLength(1);
+    expect(sc.files).toContain(nodePath.basename(rows[0].storagePath));
+    expect(exists(rows[0].storagePath)).toBe(true);
+    expect((await fs.readdir(msgDir)).sort()).toEqual([...sc.files].sort());
+  });
+});

@@ -72,5 +72,36 @@
       ]
     }
   },
-  "source": "electron/services/__tests__/attachmentDedup.writers-4040s2.test.ts capture block (removed after the run), real macOSMessagesImportService.storeAttachments at int-portal/release-2.43 @ 2ae4eb35a, before the S2 fix. File contents are bytesFor(<label>) in that suite."
+  "source": "electron/services/__tests__/attachmentDedup.writers-4040s2.test.ts capture block (removed after the run), real macOSMessagesImportService.storeAttachments at int-portal/release-2.43 @ 2ae4eb35a, before the S2 fix. File contents are bytesFor(<label>) in that suite.",
+  "iphoneScenarios": {
+    "i2": {
+      "existing": [
+        "message-attachments/cb54609766f562bd8633dd574d0a171f73a690297d49df9604d02d478130c3a5.jpeg"
+      ],
+      "rows": [
+        {
+          "filename": "IMG_1.jpg",
+          "storage_path": "message-attachments/cb54609766f562bd8633dd574d0a171f73a690297d49df9604d02d478130c3a5.jpg"
+        }
+      ],
+      "files": [
+        "cb54609766f562bd8633dd574d0a171f73a690297d49df9604d02d478130c3a5.jpeg"
+      ]
+    },
+    "i3": {
+      "existing": [
+        "message-attachments/ba0464262bcdc814e1b37e8f21056019689a02429c0fe79c10db221b43c2869a.HEIC"
+      ],
+      "rows": [
+        {
+          "filename": "IMG_2.HEIC",
+          "storage_path": "message-attachments/ba0464262bcdc814e1b37e8f21056019689a02429c0fe79c10db221b43c2869a.heic"
+        }
+      ],
+      "files": [
+        "ba0464262bcdc814e1b37e8f21056019689a02429c0fe79c10db221b43c2869a.HEIC"
+      ]
+    }
+  },
+  "iphoneSource": "Same suite, capture-iphone block (removed after the run): real iPhoneSyncStorageService.storeAttachments at 2ae4eb35a. 'existing' = the Mac-stored row given to the writer; 'rows' = what the pre-fix iPhone writer inserted; 'files' = message-attachments after the run. Bytes are bytesFor(\"fx-<scenario>\")."
 }
