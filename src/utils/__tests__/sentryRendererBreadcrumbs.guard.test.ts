@@ -18,7 +18,9 @@
  *   (d) exactly one Sentry.init in src/, in src/main.tsx, whose argument is an
  *       object literal with exactly `beforeBreadcrumb` and `integrations`, each
  *       read from a const set to `buildRendererSentryOptions(Sentry)` (imported
- *       from the module). The literal is kept for the BACKLOG-3801 check;
+ *       from the module). The literal is kept for the BACKLOG-3801 check. The
+ *       required keys are read by calling the builder, so a key it gains and
+ *       main.tsx does not pass fails here;
  *   (e) the only Sentry members used are addBreadcrumb, captureException,
  *       captureMessage, setTag (literal key in RENDERER_SCOPE_TAG_KEYS) and init.
  *       Any scope API call (setUser, setTags, setExtra, setExtras, setContext,
@@ -37,6 +39,7 @@ import path from "path";
 import { execFileSync } from "child_process";
 import ts from "typescript";
 import {
+  buildRendererSentryOptions,
   RENDERER_BREADCRUMB_CATEGORIES,
   RENDERER_BREADCRUMB_STRING_KEYS,
   RENDERER_SCOPE_TAG_KEYS,
@@ -148,7 +151,18 @@ function checkDataKeys(
   }
 }
 
-const INIT_KEYS = ["beforeBreadcrumb", "integrations"];
+/**
+ * The keys main.tsx must pass: every key the builder returns, read by calling
+ * it. A key added to the builder (for example a beforeSend) and not passed by
+ * main.tsx would be dropped silently, so the guard requires all of them.
+ */
+const INIT_KEYS = Object.keys(
+  buildRendererSentryOptions({
+    getCurrentScope: () => undefined,
+    getIsolationScope: () => undefined,
+    getGlobalScope: () => undefined,
+  } as never),
+).sort();
 
 /** True when `const <name> = buildRendererSentryOptions(<sentry>)` is in the file. */
 function isBuilderConst(name: string, sf: ts.SourceFile, sentry: string): boolean {
@@ -394,6 +408,10 @@ describe("renderer Sentry call-site guard", () => {
     expect([...RENDERER_BREADCRUMB_CATEGORIES].filter((c) => !tree.categories.has(c))).toEqual([]);
     expect([...RENDERER_BREADCRUMB_STRING_KEYS].filter((k) => !tree.dataKeys.has(k))).toEqual([]);
     expect([...RENDERER_SCOPE_TAG_KEYS].filter((k) => !tree.tagKeys.has(k))).toEqual([]);
+  });
+
+  it("(d) main.tsx must pass every key the builder returns", () => {
+    expect(INIT_KEYS).toEqual(["beforeBreadcrumb", "integrations"]);
   });
 
   it("(d) exactly one Sentry.init, in src/main.tsx", () => {
