@@ -2509,6 +2509,14 @@ export function MacOSMessagesImportSettings({
           <p className="text-sm font-medium text-gray-800 -mt-4 mb-6" data-testid="force-window-line">
             {forceWindowLine(lookbackMonths, "texts")}
           </p>
+          {/* BACKLOG-4040 S2: with text only on, the re-import deletes Keepr's
+              copies of the Mac texts' attachment files. Founder-approved wording,
+              verbatim. */}
+          {skipAttachments && (
+            <p className="text-sm text-gray-600 -mt-4 mb-6" data-testid="force-text-only-files-line">
+              {"Text only is on, so Keepr deletes its copies of these texts' attachments. Your Messages app is not changed."}
+            </p>
+          )}
           {/* BACKLOG-2749 / founder `c2300351`: "switch the design of the
               cancel button and the Re-Import&Unlink so the cancel is red and
               the re import and unlink is gray." His INTENT — the safe way out

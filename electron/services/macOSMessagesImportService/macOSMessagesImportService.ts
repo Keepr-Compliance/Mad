@@ -153,6 +153,8 @@ import {
 import { readLocalSnapshotCount } from "../../utils/localSnapshots";
 import { DISK_SPACE_THRESHOLDS } from "../diagnostics/diskSpaceDiagnostics";
 import { isAtRestWriteRefused, sealFileFrom } from "../atRest/attachmentWriter";
+import { AttachmentDedupIndex, storedExtension } from "../attachmentDedupIndex";
+import { removeFilesLeftByForceSwap } from "./forceFileCleanup";
 import { readStoredAttachment } from "../atRest/attachmentReader";
 
 /**
@@ -1171,6 +1173,31 @@ class MacOSMessagesImportService {
               MacOSMessagesImportService.SERVICE_NAME
             );
           }
+
+          // BACKLOG-4040 S2 (3135): the swap has COMMITTED. Only now, remove the
+          // files of the deleted rows that no remaining row uses. Never fails the
+          // import: a failure here leaves files behind, never a row without its
+          // file. Counts go to the log only.
+          try {
+            const files = await removeFilesLeftByForceSwap(
+              appDb,
+              swapCounts.removedStoragePaths,
+              app.getPath("userData")
+            );
+            logService.info(
+              `Force reimport file cleanup: ${files.removed} removed, ${files.stillReferenced} still used, ` +
+                `${files.refused} skipped, ${files.failed} failed ` +
+                `(${swapCounts.removedStoragePaths.length} candidates, longest block ${Math.round(files.longestBlockMs)} ms)`,
+              MacOSMessagesImportService.SERVICE_NAME
+            );
+          } catch (cleanupError) {
+            logService.warn(
+              `Force reimport file cleanup failed; files left in place: ${
+                cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+              }`,
+              MacOSMessagesImportService.SERVICE_NAME
+            );
+          }
         }
 
         // BACKLOG-2814: name the threads. AFTER the swap and on the success
@@ -1995,14 +2022,12 @@ class MacOSMessagesImportService {
     const attachmentsDir = path.join(app.getPath("userData"), ATTACHMENTS_DIR);
     await fs.promises.mkdir(attachmentsDir, { recursive: true });
 
-    // Load existing attachment hashes for deduplication (file content)
-    const existingHashes = new Set<string>();
-    const existingHashRows = selectAttachmentStoragePaths(db, target);
-
-    // Extract hash from storage path (filename is the hash)
-    for (const row of existingHashRows) {
-      const filename = path.basename(row.storage_path, path.extname(row.storage_path));
-      existingHashes.add(filename);
+    // Load existing attachment hashes for deduplication (file content).
+    // BACKLOG-4040 S2: every stored SPELLING of each hash is kept, so a new row
+    // links to a file that exists (not one rebuilt with this file's extension).
+    const existingHashes = new AttachmentDedupIndex(attachmentsDir, app.getPath("userData"));
+    for (const row of selectAttachmentStoragePaths(db, target)) {
+      existingHashes.add(row.storage_path);
     }
 
     // Load existing attachment records for deduplication (message_id + filename)
@@ -2232,11 +2257,13 @@ class MacOSMessagesImportService {
           continue;
         }
 
-        // Skip if we already have this content
-        if (existingHashes.has(contentHash)) {
-          // File already exists - just link to existing file
-          const ext = path.extname(filename!);
-          const existingPath = path.join(attachmentsDir, `${contentHash}${ext}`);
+        // Skip if we already have this content AND its file is still there.
+        // BACKLOG-4040 S2: link to the stored file itself — its own spelling —
+        // never to a path rebuilt with this attachment's extension, which may
+        // not exist (`h.jpeg` for bytes stored as `h.jpg`). A known hash whose
+        // file is gone falls through and is written again.
+        const existingPath = existingHashes.existingFileFor(contentHash);
+        if (existingPath) {
 
           // Create attachment record linking to existing file
           // TASK-1110: Include external_message_id (macOS message GUID) for stable linking
@@ -2256,8 +2283,9 @@ class MacOSMessagesImportService {
           continue;
         }
 
-        // Copy file to app data directory with hash as filename (async)
-        const ext = path.extname(filename!);
+        // Copy file to app data directory with hash as filename (async).
+        // BACKLOG-4040 S2: lower-case extension, so one set of bytes has one name.
+        const ext = storedExtension(filename!);
         const destPath = path.join(attachmentsDir, `${contentHash}${ext}`);
         // BACKLOG-3816: store the KEPRENC ciphertext, never a plaintext copy.
         const sealed = await sealFileFrom(sourcePath, destPath);
@@ -2283,7 +2311,7 @@ class MacOSMessagesImportService {
         existingAttachmentRecords.add(attachmentKey);
         stored++;
         processed++;
-        existingHashes.add(contentHash);
+        existingHashes.add(destPath);
       } catch (error) {
         // BACKLOG-3816: a refused write (no file-data key) stops the import —
         // swallowing it here would report success with every attachment skipped.

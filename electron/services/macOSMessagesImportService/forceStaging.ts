@@ -62,6 +62,7 @@ import {
   deleteLiveForceSetSync,
   insertStagedRowsSync,
   macOSForceSetFor,
+  selectForceSetAttachmentPathsSync,
   selectYieldedMessageIdsSync,
 } from "../db/macosForceSetSql";
 import { UPDATE_ATTACHMENT_MESSAGE_ID_SQL } from "../db/messageImportSql";
@@ -136,6 +137,12 @@ export interface ForceSwapCounts {
   messagesYieldedToSurvivors: number;
   /** Staged attachments dropped with the messages that yielded above. */
   attachmentsYieldedToSurvivors: number;
+  /**
+   * BACKLOG-4040 S2: the stored file paths of the attachment rows the swap
+   * DELETED, read inside the swap transaction before the DELETE. Candidates
+   * for the post-commit file cleanup only; most stay (re-linked or shared).
+   */
+  removedStoragePaths: string[];
 }
 
 /**
@@ -260,8 +267,12 @@ export const forceSwapSteps = {
   deleteLiveForceSet(
     db: DatabaseType,
     staging: ForceStaging
-  ): { messagesDeleted: number; attachmentsDeleted: number } {
-    return deleteLiveForceSetSync(db, macOSForceSetFor(staging.userId));
+  ): { messagesDeleted: number; attachmentsDeleted: number; removedStoragePaths: string[] } {
+    const set = macOSForceSetFor(staging.userId);
+    // BACKLOG-4040 S2: read the paths BEFORE the rows go, with the delete's own
+    // predicates. The files themselves are only touched after the swap commits.
+    const removedStoragePaths = selectForceSetAttachmentPathsSync(db, set);
+    return { ...deleteLiveForceSetSync(db, set), removedStoragePaths };
   },
 
   /**
