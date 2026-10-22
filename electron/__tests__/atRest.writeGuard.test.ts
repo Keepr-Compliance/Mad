@@ -132,6 +132,21 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
 };
 
 
+/**
+ * BACKLOG-4040 S3: files written by a LIBRARY, which the AST scan above cannot
+ * see. Each states exactly what it is at rest. The runtime half of this guard is
+ * `services/atRest/__tests__/sentryQueue-4040.test.ts` (every file under
+ * userData/sentry is KEPRENC or one of the two redacted-plaintext files, and none
+ * holds a marker); the static half below pins how installSentry.ts wires it.
+ */
+const THIRD_PARTY_WRITERS: Record<string, { status: "sealed" | "redacted-plaintext" | "plaintext-gated" | "deleted"; reason: string }> = {
+  "userData/sentry/sealed-queue/*": { status: "sealed", reason: "@sentry/core offline queue through the public createStore option -> atRest/sentrySealedQueue.ts (KEPRENC); held in memory until the data key opens" },
+  "userData/sentry/queue/*": { status: "deleted", reason: "the stock @sentry/electron offline store (plaintext bodies + queue-v2.json) written by 2.41/2.42; removed by installSentry.ts before Sentry.init" },
+  "userData/sentry/scope_v3.json": { status: "redacted-plaintext", reason: "@sentry/electron minidump integration, hard-coded Store (no hook): user id only, main-process breadcrumbs scrubbed (sentryBreadcrumbScrub.ts); renderer breadcrumbs arrive over IPC unscrubbed" },
+  "userData/sentry/session.json": { status: "redacted-plaintext", reason: "@sentry/electron sessions, hard-coded Store (no hook): session id, status and the user id" },
+  "userData/Crashpad/*.dmp": { status: "plaintext-gated", reason: "native crash memory dumps: cannot be sealed or redacted; produced only while Send crash reports is on" },
+};
+
 /** Raw readers in files that name storage_path/storagePath. Count = read calls + file:// literals. */
 const READER_ALLOWLIST: Record<string, Entry> = {
   "electron/handlers/attachmentHandlers.ts": { count: 1, reason: "shell.openPath on the DECRYPTED per-run copy in userData/at-rest-open (S2 R3; removed on quit + next launch). get-data/get-buffer read through atRest/attachmentReader" },
@@ -235,6 +250,81 @@ describe("at-rest durability guard (BACKLOG-3816)", () => {
 
   it("no raw reader of a stored attachment path beyond the allowlist", () => {
     expect(diff(inv.readers, READER_ALLOWLIST)).toEqual([]);
+  });
+
+  describe("third-party writers (BACKLOG-4040 S3)", () => {
+    const INSTALL_SENTRY = path.join(REPO, "electron", "bootstrap", "installSentry.ts");
+    const sf = ts.createSourceFile(INSTALL_SENTRY, fs.readFileSync(INSTALL_SENTRY, "utf8"), ts.ScriptTarget.Latest, true);
+
+    function findCall(name: string): ts.CallExpression[] {
+      const out: ts.CallExpression[] = [];
+      const visit = (n: ts.Node): void => {
+        if (ts.isCallExpression(n) && n.expression.getText(sf) === name) out.push(n);
+        ts.forEachChild(n, visit);
+      };
+      visit(sf);
+      return out;
+    }
+
+    it("every entry states its status and why", () => {
+      for (const [file, e] of Object.entries(THIRD_PARTY_WRITERS)) {
+        expect({ file, ok: e.reason.length > 20 }).toEqual({ file, ok: true });
+      }
+      expect(Object.keys(THIRD_PARTY_WRITERS).filter((k) => k.startsWith("userData/sentry/")).length).toBe(4);
+    });
+
+    it("installSentry.ts passes the sealed store as transportOptions.createStore", () => {
+      const [init] = findCall("Sentry.init");
+      expect(init).toBeDefined();
+      const opts = init.arguments[0] as ts.ObjectLiteralExpression;
+      const to = opts.properties.find((p) => p.name?.getText(sf) === "transportOptions") as ts.PropertyAssignment | undefined;
+      expect(to).toBeDefined();
+      const obj = to!.initializer as ts.ObjectLiteralExpression;
+      const cs = obj.properties.find((p) => p.name?.getText(sf) === "createStore") as ts.PropertyAssignment | undefined;
+      expect(cs?.initializer.getText(sf)).toBe("createSealedOfflineStore");
+    });
+
+    it("installSentry.ts deletes the old plaintext queue before Sentry.init, unconditionally", () => {
+      const [removal] = findCall("removeLegacySentryQueue");
+      const [init] = findCall("Sentry.init");
+      expect(removal).toBeDefined();
+      expect(removal.getStart(sf)).toBeLessThan(init.getStart(sf));
+      // A top-level statement: not behind an if, a DSN check or the crash-reporting choice.
+      expect(ts.isSourceFile(removal.parent.parent)).toBe(true);
+    });
+
+    it("scope_v3.json redaction: every setUser call in electron/ sends an id and nothing else", () => {
+      const found: string[] = [];
+      for (const abs of listSources(SCAN_ROOT)) {
+        const src = ts.createSourceFile(abs, fs.readFileSync(abs, "utf8"), ts.ScriptTarget.Latest, true);
+        const relPath = path.relative(REPO, abs).split(path.sep).join("/");
+        const visit = (n: ts.Node): void => {
+          if (ts.isCallExpression(n) && calleeName(n.expression) === "setUser" && n.arguments.length === 1) {
+            const a = n.arguments[0];
+            const literals: ts.ObjectLiteralExpression[] = [];
+            const collect = (x: ts.Node): void => {
+              if (ts.isObjectLiteralExpression(x)) literals.push(x);
+              ts.forEachChild(x, collect);
+            };
+            collect(a);
+            const keys = literals.map((l) => l.properties.map((p) => p.name?.getText(src) ?? "?").join(","));
+            found.push(`${relPath}: ${keys.length ? keys.join("|") : a.getText(src)}`);
+          }
+          ts.forEachChild(n, visit);
+        };
+        visit(src);
+      }
+      // Object literals hold only `id`; pass-throughs are typed ReportedUser (id only).
+      expect(found.sort()).toEqual([
+        "electron/capabilities/electron/electronErrorReporter.ts: id",
+        "electron/capabilities/errorReporterProvider.ts: user",
+        "electron/handlers/sessionHandlers.ts: id",
+        "electron/handlers/sessionHandlers.ts: null",
+        "electron/handlers/sessionSignOut.ts: null",
+        "electron/main.ts: id",
+        "electron/services/databaseService.ts: id",
+      ]);
+    });
   });
 
   describe("the scanner can see what it claims to (positive controls)", () => {

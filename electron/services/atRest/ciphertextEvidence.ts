@@ -17,7 +17,8 @@
  *      full 60-byte header + a file size consistent with its chunk layout — NOT the
  *      7-byte magic, which any sender can put at the start of an attachment) on any
  *      file in the attachment scopes under userData: `message-attachments`,
- *      `attachments`, `rcs-cache-staging`, `logs`. A missing directory counts as
+ *      `attachments`, `rcs-cache-staging`, `logs`, `sentry` (BACKLOG-4040: the
+ *      sealed offline queue). A missing directory counts as
  *      empty. Nothing is created. No key is needed (there is no key store here).
  *
  * A state file or marker that exists but cannot be parsed counts as evidence: it
@@ -38,7 +39,8 @@ import path from "path";
 
 import { isStructurallyEncrypted } from "./fileCrypto";
 
-export const SCANNED_SCOPE_DIRS = ["message-attachments", "attachments", "rcs-cache-staging", "logs"] as const;
+// BACKLOG-4040 S3: "sentry" holds the sealed offline queue (sentry/sealed-queue).
+export const SCANNED_SCOPE_DIRS = ["message-attachments", "attachments", "rcs-cache-staging", "logs", "sentry"] as const;
 export const MAX_FILES_SCANNED = 200_000;
 
 const STATE_FILE_NAME = "at-rest-state.json";

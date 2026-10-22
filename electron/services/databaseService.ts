@@ -27,7 +27,6 @@ import { hostAppPaths } from "../capabilities/appPathsProvider";
 import { hostDialog } from "../capabilities/dialogProvider";
 import { hostErrorReporter } from "../capabilities/errorReporterProvider";
 import logService from "./logService";
-import { redactEmail } from "../utils/redactSensitive";
 import {
   setDb,
   setDbPath,
@@ -1534,8 +1533,9 @@ class DatabaseService implements IDatabaseService {
       if (tables.length > 0) {
         const user = currentDb.prepare(LOCAL_USER_ID_AND_EMAIL_SQL).get() as { id: string; email?: string } | undefined;
         if (user?.id) {
-          // BACKLOG-3819: redacted, matching main.ts's Sentry.setUser.
-          hostErrorReporter.setUser({ id: user.id, email: user.email ? redactEmail(user.email) : undefined });
+          // BACKLOG-4040 S3: id only, matching main.ts's Sentry.setUser (the scope is
+          // persisted to sentry/scope_v3.json in plaintext).
+          hostErrorReporter.setUser({ id: user.id });
           hostErrorReporter.addBreadcrumb({
             category: "database",
             message: "Pre-migration user context set",

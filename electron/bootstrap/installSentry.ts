@@ -53,6 +53,8 @@
  * also requires the user's "Send crash reports" choice, and `transport` wraps
  * the network transport in that switch. `installSentry.test.ts` pins the option
  * keys and their values on both `app.isPackaged` branches so the move cannot drift.
+ * BACKLOG-4040 S3 adds `transportOptions` (the sealed offline queue) and widens
+ * `beforeBreadcrumb` from HTTP-only to every category; both are pinned there too.
  * `Sentry.setContext("auto-updater", …)` stays in `main.ts`: it is not an init
  * input, it annotates later events, and nothing this early emits one that
  * needs it.
@@ -65,6 +67,24 @@
  * own error box is suppressed whenever another listener exists (Electron's
  * default is one; `main.ts` registers a second), so no dialog changes hands.
  *
+ * WHAT SENTRY KEEPS ON DISK (BACKLOG-4040 S3)
+ * -------------------------------------------
+ *   sentry/sealed-queue/*   reports that failed to send: SEALED (KEPRENC) through
+ *                           the public `createStore` option below
+ *                           (atRest/sentrySealedQueue.ts). Held in memory until
+ *                           the file-data key opens; never written as plaintext.
+ *   sentry/queue/*          the stock store's plaintext queue from 2.41 / 2.42:
+ *                           DELETED below, before init, unconditionally.
+ *   sentry/scope_v3.json    PLAINTEXT, REDACTED only. Written by the minidump
+ *   sentry/session.json     integration and sessions through a hard-coded store
+ *                           with no hook, so they cannot be sealed. The user is
+ *                           set as an id only, and every main-process breadcrumb
+ *                           is scrubbed (sentryBreadcrumbScrub.ts). Renderer
+ *                           breadcrumbs reach the scope over IPC without
+ *                           `beforeBreadcrumb` and are NOT scrubbed here.
+ *   Crashpad/*.dmp          memory dumps: neither sealed nor redacted; only
+ *                           produced when "Send crash reports" is on.
+ *
  * @module electron/bootstrap/installSentry
  */
 
@@ -75,7 +95,13 @@ import dotenv from "dotenv";
 import * as Sentry from "@sentry/electron/main";
 import { scrubUpdaterEventPII } from "../services/updateDiagnostics";
 import { scrubRcsEventPII } from "../services/rcsSentryScrub";
-import { scrubHttpBreadcrumb } from "../services/httpBreadcrumbScrub";
+import { scrubBreadcrumb } from "../services/sentryBreadcrumbScrub";
+import {
+  configureSentrySealedQueue,
+  createSealedOfflineStore,
+  onSentrySealedQueueActivated,
+  removeLegacySentryQueue,
+} from "../services/atRest/sentrySealedQueue";
 import {
   gateBaseTransport,
   isCrashReportingEnabled,
@@ -102,6 +128,15 @@ if (app.isPackaged) {
 // does not: the transport is built and flushed whenever a DSN is set.
 const crashReportingAtLaunch = loadCrashReportingPreference(app.getPath("userData"));
 
+// BACKLOG-4040 S3: the stock offline queue that 2.41 / 2.42 wrote in plaintext is
+// deleted, whatever the crash-reporting choice; new reports queue sealed. Once the
+// at-rest startup job opens the key, ask the transport to send what is queued.
+removeLegacySentryQueue(app.getPath("userData"), (level, message) => log[level]?.(message));
+configureSentrySealedQueue(app.getPath("userData"), (level, message) => log[level]?.(message));
+onSentrySealedQueueActivated(() => {
+  void Sentry.getClient()?.getTransport()?.flush();
+});
+
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
   environment: app.isPackaged ? "production" : "development",
@@ -111,6 +146,9 @@ Sentry.init({
   // BACKLOG-3801: the single network egress for main AND renderer envelopes
   // (renderer envelopes arrive over IPC and leave through this transport).
   transport: Sentry.makeElectronOfflineTransport(gateBaseTransport(Sentry.makeElectronTransport)),
+  // BACKLOG-4040 S3: the offline queue is sealed at rest (replaces the stock
+  // plaintext store; the wrapper spreads these options after its own default).
+  transportOptions: { createStore: createSealedOfflineStore },
   // BACKLOG-1903: scrub signed-URL tokens + local paths from the exception
   // VALUE (and top-level message) of auto-updater events before they leave
   // the process. Sentry derives the issue title/exception value from the
@@ -125,8 +163,10 @@ Sentry.init({
   // scrubRcsEventPII. The updater scrub runs first, unchanged; an RCS event
   // whose scrub throws is dropped (its text may hold a number or a message).
   // BACKLOG-3768: HTTP breadcrumbs keep origin + path only (no query string).
+  // BACKLOG-4040 S3: every category also has emails and phone numbers redacted,
+  // because breadcrumbs are persisted to sentry/scope_v3.json in plaintext.
   beforeBreadcrumb(breadcrumb) {
-    return scrubHttpBreadcrumb(breadcrumb);
+    return scrubBreadcrumb(breadcrumb);
   },
   beforeSend(event) {
     if (!isCrashReportingEnabled()) return null;

@@ -9,6 +9,7 @@
  *   ─────  ────────────────────  ─────
  *     0    data-key              S0  — open or create the file-data key
  *    10    logs                  S5  — retain/scrub/seal log files, then start sealing new lines
+ *    15    sentry-queue          BACKLOG-4040 S3 — open the sealed Sentry offline queue
  *    20    temp-sweep            S6  — remove stale app-owned temp files
  *    30    attachments           S3  — encrypt message attachments
  *    40    email-attachments     S3  — encrypt email attachments
@@ -38,13 +39,14 @@
  */
 import { hostLogger } from "../../capabilities/loggerProvider";
 import { getBackupAtRest } from "./backupAtRest";
-import { DataKeyUnavailableError, getDataKeyService } from "./dataKeyService";
+import { DataKeyUnavailableError, getAtRestFiles, getDataKeyService } from "./dataKeyService";
 import { getConfiguredLogDirectory, runConfiguredLogMaintenance, runDeferredLogRetention } from "../logScrub";
 import { getLogSink, isLogSealingEnabled } from "../sealedLogSink";
 import type { AtRestKey } from "./fileCrypto";
 import { runLegacySweep } from "./legacySweep";
 import { SCOPE_EMAIL_ATTACHMENTS, SCOPE_MESSAGE_ATTACHMENTS } from "./markers";
 import { getAtRestMigration } from "./migration";
+import { activateSentrySealedQueue } from "./sentrySealedQueue";
 import { runTempSweep } from "./tempSweep";
 
 export interface AtRestJobContext {
@@ -267,6 +269,22 @@ export function registerDefaultJobs(startup: AtRestStartup): void {
           `rewritten ${r.rewritten.length}, sealed ${r.sealed.length}, deleted ${r.deleted.length}, ` +
           `unreadable ${r.unreadable.length}, deferred ${r.deferred.length}, errors ${r.errors.length}`,
       );
+    },
+  });
+  startup.register({
+    id: "sentry-queue",
+    order: 15,
+    run: async (ctx) => {
+      // BACKLOG-4040 S3: until now, reports that failed to send were held in memory.
+      // An unavailable key keeps them there (never plaintext) and leaves sealed files alone.
+      try {
+        await getDataKeyService().currentKey();
+      } catch (error) {
+        if (!(error instanceof DataKeyUnavailableError)) throw error;
+        return ctx.log("warn", `[AtRest] sentry-queue: data key unavailable; reports stay in memory: ${error.message}`);
+      }
+      await activateSentrySealedQueue(getAtRestFiles());
+      ctx.log("info", "[AtRest] sentry-queue: sealed offline queue open");
     },
   });
   startup.register({ id: "temp-sweep", order: 20, run: async () => { await runTempSweep(); } });

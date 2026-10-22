@@ -170,11 +170,31 @@ function initOptions(loaded: Loaded): InitOptions {
 }
 
 describe("installSentry: the init call transcribed from main.ts (BACKLOG-2962)", () => {
-  it("passes exactly the five options main.ts passed, plus transport (BACKLOG-3801) and beforeBreadcrumb (BACKLOG-3768), in order", () => {
+  it("passes exactly the five options main.ts passed, plus transport (BACKLOG-3801), transportOptions (BACKLOG-4040) and beforeBreadcrumb (BACKLOG-3768), in order", () => {
     const options = initOptions(load({ isPackaged: false }));
     // `Object.keys` order is insertion order — a dropped, added or reordered
     // key reds here before any value is looked at.
-    expect(Object.keys(options)).toEqual(["dsn", "environment", "release", "enabled", "transport", "beforeBreadcrumb", "beforeSend"]);
+    expect(Object.keys(options)).toEqual(["dsn", "environment", "release", "enabled", "transport", "transportOptions", "beforeBreadcrumb", "beforeSend"]);
+  });
+
+  it("BACKLOG-4040 S3: transportOptions replaces the offline store with the sealed one", () => {
+    const options = initOptions(load({ isPackaged: false })) as InitOptions & { transportOptions: { createStore: unknown } };
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { createSealedOfflineStore } = require("../../services/atRest/sentrySealedQueue");
+    expect(Object.keys(options.transportOptions)).toEqual(["createStore"]);
+    expect(typeof options.transportOptions.createStore).toBe("function");
+    expect((options.transportOptions.createStore as () => object).name).toBe(createSealedOfflineStore.name);
+  });
+
+  it("BACKLOG-4040 S3: beforeBreadcrumb redacts emails and phone numbers in any category", () => {
+    const options = initOptions(load({ isPackaged: false }));
+    const out = options.beforeBreadcrumb({
+      category: "console",
+      message: "sync for jane@example.com at +1 (555) 555-0199",
+      data: { arguments: ["jane@example.com"] },
+    });
+    expect(JSON.stringify(out)).not.toContain("jane@");
+    expect(JSON.stringify(out)).not.toContain("555-0199");
   });
 
   it("BACKLOG-3768: beforeBreadcrumb drops the query from an electron.net breadcrumb", () => {

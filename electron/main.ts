@@ -709,7 +709,8 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       }
 
       const user = sessionData.user;
-      Sentry.setUser({ id: user.id, email: user.email ? redactEmail(user.email) : undefined });
+      // BACKLOG-4040 S3: id only — the scope is persisted to sentry/scope_v3.json in plaintext.
+      Sentry.setUser({ id: user.id });
       log.info("[DeepLink] Session established for user:", redactId(user.id));
 
       // TASK-1507: Step 2 - Validate license
