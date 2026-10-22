@@ -62,6 +62,28 @@ const files: FileCrypto = createFileCrypto(resolver);
 
 let userData: string;
 
+/*
+ * CI runs jest under plain node; locally it runs under Electron-as-node. The real
+ * @sentry/electron modules parse process.versions.electron at load, and the
+ * packaged branch of installSentry reads process.resourcesPath. Give both a value
+ * for every test and restore them after, so the suite behaves the same in both.
+ */
+const hadElectronVersion = Object.prototype.hasOwnProperty.call(process.versions, "electron");
+const hadResourcesPath = Object.prototype.hasOwnProperty.call(process, "resourcesPath");
+const previousResourcesPath = (process as unknown as { resourcesPath?: string }).resourcesPath;
+beforeAll(() => {
+  if (!hadElectronVersion) Object.defineProperty(process.versions, "electron", { value: "38.8.6", configurable: true });
+  Object.defineProperty(process, "resourcesPath", { value: "/unused-resources", configurable: true, writable: true });
+});
+afterAll(() => {
+  if (!hadElectronVersion) delete (process.versions as { electron?: string }).electron;
+  if (hadResourcesPath) {
+    Object.defineProperty(process, "resourcesPath", { value: previousResourcesPath, configurable: true, writable: true });
+  } else {
+    delete (process as unknown as { resourcesPath?: string }).resourcesPath;
+  }
+});
+
 beforeEach(() => {
   queue = null;
   userData = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-4040-s3-"));
