@@ -317,6 +317,15 @@ describe('OrgPeoplePanel popup: billing and IT contact', () => {
 });
 
 describe('OrgPeoplePanel popup: Invite new person', () => {
+  it('the Who switch fills the popup row (equal grid columns)', () => {
+    render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
+    openEdit('billing');
+    const list = within(dialog()).getByRole('tablist');
+    expect(list.className).toContain('grid');
+    expect(list.style.gridTemplateColumns).toBe('repeat(2, minmax(0, 1fr))');
+    for (const tab of within(list).getAllByRole('tab')) expect(tab.className).toContain('w-full');
+  });
+
   it('billing, IT (while empty) and MSP have the invite tab; office never; IT once set has none', () => {
     const r = render(<OrgPeoplePanel view={VIEW} actions={actions()} phone={PHONE} onChanged={jest.fn()} />);
     for (const role of ['billing', 'it', 'msp']) {

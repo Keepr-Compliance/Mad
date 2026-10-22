@@ -684,6 +684,7 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, userHref, read
     canInvite(s.role) ? (
       <SegmentedTabs
         ariaLabel="Who"
+        fill
         panelId="op-panel"
         value={s.tab}
         onValueChange={(v) => {
