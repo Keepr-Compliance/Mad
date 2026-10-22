@@ -14,10 +14,6 @@
  * while BROWSING — the final irreversible Confirm/Pay control (owned by
  * PurchaseUnlockHandoff / Checkout) still shows the exact amount before the tap.
  *
- * The tier/discount incentive bar (TierProgressBar) lives ONLY on the confirm
- * screen (PurchaseUnlockHandoff), NOT on this first prompt — founder call
- * (BACKLOG-2086 follow-up): the ladder is shown at the charge step, never here.
- *
  * Unlock logic is unchanged from the original:
  *   - grant credits held → "Unlock with 1 credit" → unlockWithCredit()
  *     (credits spend BEFORE card; online only).

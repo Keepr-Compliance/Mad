@@ -55,8 +55,9 @@ describe('Sidebar — My Account', () => {
   });
 });
 
-describe('Sidebar — Org Settings stays admin-only', () => {
-  it.each(['admin', 'it_admin'] as const)('is present for %s', (role) => {
+describe('Sidebar — Org Settings (admin, it_admin, broker; not agent)', () => {
+  // BACKLOG-4007 (founder 17ad88e3): a broker sees Org Settings too; the page shows the broker People only.
+  it.each(['admin', 'it_admin', 'broker'] as const)('is present for %s', (role) => {
     renderSidebar({ role, displayRole: role });
     expect(screen.getByRole('link', { name: ORG_SETTINGS })).toHaveAttribute(
       'href',
@@ -64,7 +65,7 @@ describe('Sidebar — Org Settings stays admin-only', () => {
     );
   });
 
-  it.each(['agent', 'broker'] as const)('is absent for %s', (role) => {
+  it.each(['agent'] as const)('is absent for %s', (role) => {
     renderSidebar({ role, displayRole: role });
     expect(screen.queryByRole('link', { name: ORG_SETTINGS })).not.toBeInTheDocument();
   });

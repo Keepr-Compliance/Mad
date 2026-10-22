@@ -11,6 +11,10 @@
  * BACKLOG-3846: every handler takes only ids from the payload (whose shape
  * follows the endpoint's API version) and re-fetches the object with the pinned
  * client (E0). Agent subscription events are handled in lib/billing/sync.ts.
+ *
+ * BACKLOG-3853: brokerage subscription events (a customer stored in org_billing_stripe) are
+ * handled first, by lib/billing/brokerage.ts, and never reach the switch below. Only the
+ * subscription / invoice / refund / dispute event types are checked there.
  */
 
 import { NextResponse } from 'next/server';
@@ -36,6 +40,7 @@ import {
   emitPaymentSucceeded,
 } from '@/lib/payments/fulfillment';
 import { applyCardUpdate } from '@/lib/billing/cardUpdate';
+import { dispatchBrokerageEvent } from '@/lib/billing/brokerage';
 
 export const runtime = 'nodejs';
 // Never cache; each webhook is a unique event.
@@ -93,6 +98,10 @@ export async function POST(req: Request): Promise<Response> {
   const objectId = (event.data.object as { id: string }).id;
 
   try {
+    // BACKLOG-3853: a brokerage event is handled here and skips the Agent / per-export path.
+    if (await dispatchBrokerageEvent(ctx, objectId)) {
+      return NextResponse.json({ received: true }, { status: 200 });
+    }
     switch (event.type) {
       case 'payment_intent.succeeded':
         await handlePaymentIntentSucceeded(ctx, objectId);

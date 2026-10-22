@@ -97,6 +97,7 @@ import {
 } from "../schemas/checklist";
 import { safeValidate } from "../schemas/validate";
 import { wrapHandler } from "../utils/wrapHandler";
+import { PORTAL_PATHS, portalUrl } from "../utils/portalUrl";
 import { ValidationError } from "../utils/validation";
 // The real fail-closed plan check. `checklists:get`, `checklists:remove` and
 // `checklists:invalidate-templates` deliberately do not call it — the header
@@ -209,39 +210,18 @@ export const CHECKLIST_TEMPLATE_NOT_FOUND_ERROR =
 // ---------------------------------------------------------------------------
 
 /** BACKLOG-3617: the portal page where checklist templates are created. */
-export const CHECKLISTS_PORTAL_PATH = "/dashboard/checklists";
-const DEFAULT_BROKER_PORTAL_URL = "https://app.keeprcompliance.com";
+export const CHECKLISTS_PORTAL_PATH = PORTAL_PATHS.checklists;
 
 /**
  * The portal Checklists URL, or null when the configured portal address is not
- * one this app will hand to the browser. The renderer never supplies a URL;
- * this is the only place one is built, and only these origins pass:
- *   https://keeprcompliance.com and its subdomains (production)
- *   http(s)://localhost or 127.0.0.1 (the dev portal, .env.example)
- * Anything else — another host, another scheme, credentials in the address, a
- * string that does not parse — is refused, so `BROKER_PORTAL_URL` cannot turn
- * this channel into "open any URL".
+ * one this app will hand to the browser. The allow-list lives in
+ * `electron/utils/portalUrl.ts` (BACKLOG-3863 extracted it so the billing page
+ * uses the same check); this name stays for its callers.
  */
 export function checklistsPortalUrl(
   configured: string | undefined = process.env.BROKER_PORTAL_URL,
 ): string | null {
-  const base = configured || DEFAULT_BROKER_PORTAL_URL;
-  let parsed: URL;
-  try {
-    parsed = new URL(base);
-  } catch {
-    return null;
-  }
-  if (parsed.username || parsed.password) return null;
-  const host = parsed.hostname.toLowerCase();
-  const isLocal = host === "localhost" || host === "127.0.0.1";
-  const isKeepr = host === "keeprcompliance.com" || host.endsWith(".keeprcompliance.com");
-  const schemeOk =
-    parsed.protocol === "https:" ? isKeepr || isLocal : parsed.protocol === "http:" && isLocal;
-  if (!schemeOk) return null;
-  // Built from the ORIGIN alone: a path, query or fragment in the configured
-  // address never reaches the browser.
-  return `${parsed.origin}${CHECKLISTS_PORTAL_PATH}`;
+  return portalUrl("checklists", configured);
 }
 
 /**

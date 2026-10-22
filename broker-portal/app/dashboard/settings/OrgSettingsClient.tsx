@@ -41,6 +41,7 @@ import {
 } from '@keepr/design-system';
 import { AlertBanner, Button } from '@keepr/ui';
 import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
+import { PeopleCard } from '@/components/settings/PeopleCard';
 
 interface ConsentInfo {
   organizationId: string;
@@ -48,6 +49,15 @@ interface ConsentInfo {
   consentGranted: boolean;
   consentGrantedAt: string | null;
 }
+
+/**
+ * BACKLOG-3851 PR-2d: the Desktop App Permissions card's link action and the
+ * line above it. Named for the company account, not the provider, so a Google
+ * Workspace path can use the same button later. Microsoft only today.
+ */
+const CONNECT_COMPANY_ACCOUNT_LABEL = 'Connect company account';
+const CONNECT_COMPANY_ACCOUNT_LINE =
+  "Connect your brokerage's Microsoft 365 account so team members can connect their Outlook in the desktop app. Google Workspace support is coming.";
 
 const RETENTION_OPTIONS = [
   { value: 1, label: '1 year' },
@@ -61,9 +71,11 @@ const RETENTION_OPTIONS = [
 export interface OrgSettingsClientProps {
   /** How each gated card renders, resolved server-side. */
   features: OrgSettingsFeatureView;
+  /** BACKLOG-4007: renders the People card at the bottom. Absent for a support session. */
+  peopleOrganizationId?: string;
 }
 
-export default function OrgSettingsClient({ features }: OrgSettingsClientProps) {
+export default function OrgSettingsClient({ features, peopleOrganizationId }: OrgSettingsClientProps) {
   const { isImpersonating } = useImpersonation();
   const [consent, setConsent] = useState<ConsentInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -71,7 +83,8 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
   const [savedRetention, setSavedRetention] = useState(7);
   const [savingRetention, setSavingRetention] = useState(false);
   const [retentionSaved, setRetentionSaved] = useState(false);
-  const [jitEnabled, setJitEnabled] = useState(true);
+  // BACKLOG-3851: starts off (the column default); getJitStatus sets the real value.
+  const [jitEnabled, setJitEnabled] = useState(false);
   const [savingJit, setSavingJit] = useState(false);
 
   const desktopClientId = process.env.NEXT_PUBLIC_DESKTOP_CLIENT_ID || '';
@@ -202,26 +215,48 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
                     Team members will be prompted to request admin approval when connecting Outlook
                   </span>
                 </div>
-                {consent.tenantId && desktopClientId ? (
-                  <Button
-                    onClick={() => {
-                      const redirectUri = `${window.location.origin}/setup/consent/callback`;
-                      const consentUrl = `https://login.microsoftonline.com/${consent.tenantId}/adminconsent?client_id=${desktopClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${consent.organizationId}`;
-                      window.location.href = consentUrl;
-                    }}
-                    disabled={isImpersonating}
-                  >
-                    <svg className="h-4 w-4" viewBox="0 0 23 23">
-                      <path fill="#f35325" d="M1 1h10v10H1z" />
-                      <path fill="#81bc06" d="M12 1h10v10H12z" />
-                      <path fill="#05a6f0" d="M1 12h10v10H1z" />
-                      <path fill="#ffba08" d="M12 12h10v10H12z" />
-                    </svg>
-                    Grant permissions with Microsoft
-                  </Button>
+                {!consent.tenantId ? (
+                  // BACKLOG-3851 PR-2d: an admin links the Microsoft organization
+                  // on /setup. Middleware sends a signed-in user away from /setup,
+                  // so this signs out first (/auth/logout clears the auth cookies)
+                  // and the logout route sends the browser on to /setup.
+                  <div className="space-y-3">
+                    <p className="text-sm text-gray-500">
+                      {CONNECT_COMPANY_ACCOUNT_LINE}
+                    </p>
+                    <div className="flex justify-end" data-testid="permissions-actions">
+                      <Button
+                        onClick={() => {
+                          window.location.href = '/auth/logout?next=setup';
+                        }}
+                        disabled={isImpersonating}
+                      >
+                        {CONNECT_COMPANY_ACCOUNT_LABEL}
+                      </Button>
+                    </div>
+                  </div>
+                ) : desktopClientId ? (
+                  <div className="flex justify-end" data-testid="permissions-actions">
+                    <Button
+                      onClick={() => {
+                        const redirectUri = `${window.location.origin}/setup/consent/callback`;
+                        const consentUrl = `https://login.microsoftonline.com/${consent.tenantId}/adminconsent?client_id=${desktopClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${consent.organizationId}`;
+                        window.location.href = consentUrl;
+                      }}
+                      disabled={isImpersonating}
+                    >
+                      <svg className="h-4 w-4" viewBox="0 0 23 23">
+                        <path fill="#f35325" d="M1 1h10v10H1z" />
+                        <path fill="#81bc06" d="M12 1h10v10H12z" />
+                        <path fill="#05a6f0" d="M1 12h10v10H1z" />
+                        <path fill="#ffba08" d="M12 12h10v10H12z" />
+                      </svg>
+                      Grant permissions with Microsoft
+                    </Button>
+                  </div>
                 ) : (
                   <p className="text-sm text-gray-400">
-                    Microsoft tenant not configured. Please contact support.
+                    Desktop app permissions are not configured for this portal. Please contact support.
                   </p>
                 )}
               </div>
@@ -370,6 +405,9 @@ export default function OrgSettingsClient({ features }: OrgSettingsClientProps) 
           </div>
         </Link>
       )}
+
+      {/* People — BACKLOG-4007. Admin and IT admin here; a broker gets a People-only page. */}
+      {peopleOrganizationId && <PeopleCard organizationId={peopleOrganizationId} linkUsers />}
     </div>
   );
 }

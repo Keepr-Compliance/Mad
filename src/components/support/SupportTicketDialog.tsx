@@ -37,6 +37,14 @@ interface SupportTicketDialogProps {
   prefilledSubject?: string;
   /** BACKLOG-1905: Pre-fill the description field (e.g. an auto-update failure summary) */
   prefilledDescription?: string;
+  /** BACKLOG-4038: starting priority (default "normal"); the user can change it */
+  initialPriority?: TicketPriority;
+  /**
+   * BACKLOG-4038: preselect the top-level category with this slug once the
+   * categories load. Looked up at runtime, never by id; a slug that is not in
+   * the loaded list leaves the category unset. The user can change it.
+   */
+  initialCategorySlug?: string;
 }
 
 const PRIORITY_OPTIONS: Array<{ value: TicketPriority; label: string }> = [
@@ -58,6 +66,8 @@ export function SupportTicketDialog({
   initialScreenshot = null,
   prefilledSubject = "",
   prefilledDescription = "",
+  initialPriority = "normal",
+  initialCategorySlug,
 }: SupportTicketDialogProps): React.ReactElement {
   const {
     diagnostics,
@@ -78,8 +88,17 @@ export function SupportTicketDialog({
 
   const [subject, setSubject] = useState(prefilledSubject);
   const [description, setDescription] = useState(prefilledDescription);
-  const [priority, setPriority] = useState<TicketPriority>("normal");
+  const [priority, setPriority] = useState<TicketPriority>(initialPriority);
   const [categoryId, setCategoryId] = useState<string | null>(null);
+  // BACKLOG-4038: once the user picks a category, a late slug match never overrides it.
+  const categoryEditedByUser = useRef(false);
+
+  // BACKLOG-4038: resolve the preset slug against the categories as they load.
+  useEffect(() => {
+    if (!initialCategorySlug || categoryEditedByUser.current) return;
+    const match = categories.find((c) => !c.parent_id && c.slug === initialCategorySlug);
+    if (match) setCategoryId(match.id);
+  }, [categories, initialCategorySlug]);
 
   // Name/email form fields — pre-filled when user info is available, always editable
   const [formName, setFormName] = useState(userName || "");
@@ -341,9 +360,10 @@ export function SupportTicketDialog({
               <select
                 id="support-category"
                 value={categoryId || ""}
-                onChange={(e) =>
-                  setCategoryId(e.target.value || null)
-                }
+                onChange={(e) => {
+                  categoryEditedByUser.current = true;
+                  setCategoryId(e.target.value || null);
+                }}
                 className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none min-h-[44px]"
               >
                 <option value="">Select category...</option>

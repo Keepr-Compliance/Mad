@@ -24,6 +24,8 @@ interface SendInviteRequest {
   inviteLink: string;
   expiresInDays: number;
   isResend?: boolean;
+  /** BACKLOG-4007 PR-4: the brokerage's billing-only login. */
+  billingOnly?: boolean;
 }
 
 export async function POST(request: NextRequest) {
@@ -56,6 +58,8 @@ export async function POST(request: NextRequest) {
       inviteLink: body.inviteLink,
       expiresInDays: body.expiresInDays || 7,
       isResend: body.isResend ?? false,
+      billingOnly: body.billingOnly === true,
+      withoutLicense: body.billingOnly === true,
     });
 
     if (!result.success) {

@@ -140,6 +140,16 @@ class EntitlementService {
   private refresherStarted = false;
 
   /**
+   * BACKLOG-3863: forget every memoized live answer, so the next export-path
+   * read goes to `get_org_features`. Called when the user comes back from the
+   * portal Billing page (a subscription may have just started or ended).
+   * Touches only the 60 s memo; the offline pass is not affected.
+   */
+  invalidateMemo(): void {
+    this.entitlementMemo.clear();
+  }
+
+  /**
    * Live read of the unlimited-transactions entitlement (BACKLOG-3675).
    * Membership → get_org_features. Bounded by a timeout; any failure is
    * "error", never "entitled". A definite "no" deletes the offline pass.

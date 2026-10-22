@@ -1,0 +1,1302 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "in_1URe2FBg3cyTef3dddMb2Oqn",
+      "object": "invoice",
+      "account_country": "US",
+      "account_name": "Keepr sandbox",
+      "account_tax_ids": null,
+      "amount_due": 12495,
+      "amount_overpaid": 0,
+      "amount_paid": 0,
+      "amount_remaining": 12495,
+      "amount_shipping": 0,
+      "application": null,
+      "application_fee_amount": null,
+      "attempt_count": 0,
+      "attempted": false,
+      "auto_advance": true,
+      "automatic_tax": {
+        "disabled_reason": null,
+        "enabled": false,
+        "liability": null,
+        "provider": null,
+        "status": null
+      },
+      "automatically_finalizes_at": null,
+      "billing_reason": "subscription_cycle",
+      "charge": null,
+      "collection_method": "send_invoice",
+      "created": 1803826800,
+      "currency": "usd",
+      "custom_fields": null,
+      "customer": "cus_VSZ7P8iqRvHlbC",
+      "customer_account": null,
+      "customer_address": null,
+      "customer_email": "spike-a1@example.test",
+      "customer_name": "Spike Brokerage A1",
+      "customer_phone": null,
+      "customer_shipping": null,
+      "customer_tax_exempt": "none",
+      "customer_tax_ids": [],
+      "default_payment_method": null,
+      "default_source": null,
+      "default_tax_rates": [],
+      "description": null,
+      "discount": null,
+      "discounts": [],
+      "due_date": 1805122800,
+      "effective_at": 1803830400,
+      "ending_balance": 0,
+      "footer": null,
+      "from_invoice": null,
+      "hosted_invoice_url": "https://invoice.stripe.test/REDACTED/in_1URe2FBg3cyTef3dddMb2Oqn",
+      "invoice_pdf": "[REDACTED hosted URL]",
+      "issuer": {
+        "type": "self"
+      },
+      "last_finalization_error": null,
+      "latest_revision": null,
+      "lines": {
+        "object": "list",
+        "data": [
+          {
+            "id": "il_1VE8x2Bg3cyTef3d9iQMUFUJ",
+            "object": "line_item",
+            "amount": 12495,
+            "amount_excluding_tax": 12495,
+            "currency": "usd",
+            "description": "5 \u00d7 Keepr Team seat (spike 3853 PR-0) (at $24.99 / month)",
+            "discount_amounts": [],
+            "discountable": true,
+            "discounts": [],
+            "invoice": "in_1URe2FBg3cyTef3dddMb2Oqn",
+            "livemode": false,
+            "metadata": {
+              "spike": "3853-pr0",
+              "spike_kind": "brokerage"
+            },
+            "parent": {
+              "invoice_item_details": null,
+              "license_fee_subscription_details": null,
+              "subscription_item_details": {
+                "invoice_item": null,
+                "proration": false,
+                "proration_details": {
+                  "credited_items": null
+                },
+                "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+                "subscription_item": "si_VSZ7mMq4yriMS1"
+              },
+              "type": "subscription_item_details"
+            },
+            "period": {
+              "end": 1806505200,
+              "start": 1803826800
+            },
+            "plan": {
+              "id": "price_1URdzABg3cyTef3diYACcXnU",
+              "object": "plan",
+              "active": false,
+              "aggregate_usage": null,
+              "amount": 2499,
+              "amount_decimal": "2499",
+              "billing_scheme": "per_unit",
+              "created": 1792268024,
+              "currency": "usd",
+              "interval": "month",
+              "interval_count": 1,
+              "livemode": false,
+              "metadata": {},
+              "meter": null,
+              "nickname": null,
+              "product": "prod_VSZ7s4JhRpHrrb",
+              "tiers_mode": null,
+              "transform_usage": null,
+              "trial_period_days": null,
+              "usage_type": "licensed"
+            },
+            "pretax_credit_amounts": [],
+            "price": {
+              "id": "price_1URdzABg3cyTef3diYACcXnU",
+              "object": "price",
+              "active": false,
+              "billing_scheme": "per_unit",
+              "created": 1792268024,
+              "currency": "usd",
+              "custom_unit_amount": null,
+              "livemode": false,
+              "lookup_key": null,
+              "metadata": {},
+              "nickname": null,
+              "product": "prod_VSZ7s4JhRpHrrb",
+              "recurring": {
+                "aggregate_usage": null,
+                "interval": "month",
+                "interval_count": 1,
+                "meter": null,
+                "trial_period_days": null,
+                "usage_type": "licensed"
+              },
+              "tax_behavior": "unspecified",
+              "tiers_mode": null,
+              "transform_quantity": null,
+              "type": "recurring",
+              "unit_amount": 2499,
+              "unit_amount_decimal": "2499"
+            },
+            "pricing": {
+              "price_details": {
+                "price": "price_1URdzABg3cyTef3diYACcXnU",
+                "product": "prod_VSZ7s4JhRpHrrb"
+              },
+              "type": "price_details",
+              "unit_amount_decimal": "2499"
+            },
+            "proration": false,
+            "proration_details": {
+              "credited_items": null
+            },
+            "quantity": 5,
+            "quantity_decimal": "5",
+            "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+            "subscription_item": "si_VSZ7mMq4yriMS1",
+            "subtotal": 12495,
+            "tax_amounts": [],
+            "tax_rates": [],
+            "taxes": [],
+            "type": "subscription",
+            "unit_amount_excluding_tax": "2499"
+          }
+        ],
+        "has_more": false,
+        "total_count": 1,
+        "url": "/v1/invoices/in_1URe2FBg3cyTef3dddMb2Oqn/lines"
+      },
+      "livemode": false,
+      "metadata": {},
+      "next_payment_attempt": null,
+      "number": "A9SLAZ3T-0005",
+      "on_behalf_of": null,
+      "paid": false,
+      "paid_out_of_band": false,
+      "parent": {
+        "quote_details": null,
+        "subscription_details": {
+          "metadata": {
+            "spike": "3853-pr0",
+            "kind": "brokerage",
+            "organization_id": "ORG-3853-A"
+          },
+          "subscription": "sub_1URdzABg3cyTef3dViU6FCKO"
+        },
+        "type": "subscription_details"
+      },
+      "payment_intent": "pi_3URe2IBg3cyTef3d10hscTjE",
+      "payment_settings": {
+        "default_mandate": null,
+        "payment_method_options": {
+          "acss_debit": null,
+          "bancontact": null,
+          "billie": null,
+          "blik": null,
+          "card": null,
+          "customer_balance": {
+            "bank_transfer": {
+              "type": "us_bank_transfer"
+            },
+            "funding_type": "bank_transfer"
+          },
+          "konbini": null,
+          "payto": null,
+          "pix": null,
+          "sepa_debit": null,
+          "upi": null,
+          "us_bank_account": null
+        },
+        "payment_method_types": [
+          "us_bank_account",
+          "card",
+          "customer_balance"
+        ]
+      },
+      "period_end": 1803826800,
+      "period_start": 1801407600,
+      "post_payment_credit_notes_amount": 0,
+      "pre_payment_credit_notes_amount": 0,
+      "quote": null,
+      "receipt_number": null,
+      "rendering": null,
+      "shipping_cost": null,
+      "shipping_details": null,
+      "starting_balance": 0,
+      "statement_descriptor": null,
+      "status": "open",
+      "status_transitions": {
+        "finalized_at": 1803830400,
+        "marked_uncollectible_at": null,
+        "paid_at": null,
+        "voided_at": null
+      },
+      "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+      "subscription_details": {
+        "metadata": {
+          "spike": "3853-pr0",
+          "kind": "brokerage",
+          "organization_id": "ORG-3853-A"
+        }
+      },
+      "subtotal": 12495,
+      "subtotal_excluding_tax": 12495,
+      "tax": null,
+      "test_clock": "clock_1URdz9Bg3cyTef3dxbWPNKds",
+      "total": 12495,
+      "total_discount_amounts": [],
+      "total_excluding_tax": 12495,
+      "total_pretax_credit_amounts": [],
+      "total_tax_amounts": [],
+      "total_taxes": [],
+      "transfer_data": null,
+      "webhooks_delivered_at": 1803826800
+    },
+    {
+      "id": "in_1URe1zBg3cyTef3d1IAHGbgz",
+      "object": "invoice",
+      "account_country": "US",
+      "account_name": "Keepr sandbox",
+      "account_tax_ids": null,
+      "amount_due": 12495,
+      "amount_overpaid": 0,
+      "amount_paid": 0,
+      "amount_remaining": 12495,
+      "amount_shipping": 0,
+      "application": null,
+      "application_fee_amount": null,
+      "attempt_count": 0,
+      "attempted": false,
+      "auto_advance": true,
+      "automatic_tax": {
+        "disabled_reason": null,
+        "enabled": false,
+        "liability": null,
+        "provider": null,
+        "status": null
+      },
+      "automatically_finalizes_at": null,
+      "billing_reason": "subscription_cycle",
+      "charge": null,
+      "collection_method": "send_invoice",
+      "created": 1801407600,
+      "currency": "usd",
+      "custom_fields": null,
+      "customer": "cus_VSZ7P8iqRvHlbC",
+      "customer_account": null,
+      "customer_address": null,
+      "customer_email": "spike-a1@example.test",
+      "customer_name": "Spike Brokerage A1",
+      "customer_phone": null,
+      "customer_shipping": null,
+      "customer_tax_exempt": "none",
+      "customer_tax_ids": [],
+      "default_payment_method": null,
+      "default_source": null,
+      "default_tax_rates": [],
+      "description": null,
+      "discount": null,
+      "discounts": [],
+      "due_date": 1802703600,
+      "effective_at": 1801411200,
+      "ending_balance": 0,
+      "footer": null,
+      "from_invoice": null,
+      "hosted_invoice_url": "https://invoice.stripe.test/REDACTED/in_1URe1zBg3cyTef3d1IAHGbgz",
+      "invoice_pdf": "[REDACTED hosted URL]",
+      "issuer": {
+        "type": "self"
+      },
+      "last_finalization_error": null,
+      "latest_revision": null,
+      "lines": {
+        "object": "list",
+        "data": [
+          {
+            "id": "il_1V3zbgBg3cyTef3dWAohfSME",
+            "object": "line_item",
+            "amount": 12495,
+            "amount_excluding_tax": 12495,
+            "currency": "usd",
+            "description": "5 \u00d7 Keepr Team seat (spike 3853 PR-0) (at $24.99 / month)",
+            "discount_amounts": [],
+            "discountable": true,
+            "discounts": [],
+            "invoice": "in_1URe1zBg3cyTef3d1IAHGbgz",
+            "livemode": false,
+            "metadata": {
+              "spike": "3853-pr0",
+              "spike_kind": "brokerage"
+            },
+            "parent": {
+              "invoice_item_details": null,
+              "license_fee_subscription_details": null,
+              "subscription_item_details": {
+                "invoice_item": null,
+                "proration": false,
+                "proration_details": {
+                  "credited_items": null
+                },
+                "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+                "subscription_item": "si_VSZ7mMq4yriMS1"
+              },
+              "type": "subscription_item_details"
+            },
+            "period": {
+              "end": 1803826800,
+              "start": 1801407600
+            },
+            "plan": {
+              "id": "price_1URdzABg3cyTef3diYACcXnU",
+              "object": "plan",
+              "active": false,
+              "aggregate_usage": null,
+              "amount": 2499,
+              "amount_decimal": "2499",
+              "billing_scheme": "per_unit",
+              "created": 1792268024,
+              "currency": "usd",
+              "interval": "month",
+              "interval_count": 1,
+              "livemode": false,
+              "metadata": {},
+              "meter": null,
+              "nickname": null,
+              "product": "prod_VSZ7s4JhRpHrrb",
+              "tiers_mode": null,
+              "transform_usage": null,
+              "trial_period_days": null,
+              "usage_type": "licensed"
+            },
+            "pretax_credit_amounts": [],
+            "price": {
+              "id": "price_1URdzABg3cyTef3diYACcXnU",
+              "object": "price",
+              "active": false,
+              "billing_scheme": "per_unit",
+              "created": 1792268024,
+              "currency": "usd",
+              "custom_unit_amount": null,
+              "livemode": false,
+              "lookup_key": null,
+              "metadata": {},
+              "nickname": null,
+              "product": "prod_VSZ7s4JhRpHrrb",
+              "recurring": {
+                "aggregate_usage": null,
+                "interval": "month",
+                "interval_count": 1,
+                "meter": null,
+                "trial_period_days": null,
+                "usage_type": "licensed"
+              },
+              "tax_behavior": "unspecified",
+              "tiers_mode": null,
+              "transform_quantity": null,
+              "type": "recurring",
+              "unit_amount": 2499,
+              "unit_amount_decimal": "2499"
+            },
+            "pricing": {
+              "price_details": {
+                "price": "price_1URdzABg3cyTef3diYACcXnU",
+                "product": "prod_VSZ7s4JhRpHrrb"
+              },
+              "type": "price_details",
+              "unit_amount_decimal": "2499"
+            },
+            "proration": false,
+            "proration_details": {
+              "credited_items": null
+            },
+            "quantity": 5,
+            "quantity_decimal": "5",
+            "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+            "subscription_item": "si_VSZ7mMq4yriMS1",
+            "subtotal": 12495,
+            "tax_amounts": [],
+            "tax_rates": [],
+            "taxes": [],
+            "type": "subscription",
+            "unit_amount_excluding_tax": "2499"
+          }
+        ],
+        "has_more": false,
+        "total_count": 1,
+        "url": "/v1/invoices/in_1URe1zBg3cyTef3d1IAHGbgz/lines"
+      },
+      "livemode": false,
+      "metadata": {},
+      "next_payment_attempt": null,
+      "number": "A9SLAZ3T-0004",
+      "on_behalf_of": null,
+      "paid": false,
+      "paid_out_of_band": false,
+      "parent": {
+        "quote_details": null,
+        "subscription_details": {
+          "metadata": {
+            "spike": "3853-pr0",
+            "kind": "brokerage",
+            "organization_id": "ORG-3853-A"
+          },
+          "subscription": "sub_1URdzABg3cyTef3dViU6FCKO"
+        },
+        "type": "subscription_details"
+      },
+      "payment_intent": "pi_3URe23Bg3cyTef3d1IiRcbZj",
+      "payment_settings": {
+        "default_mandate": null,
+        "payment_method_options": {
+          "acss_debit": null,
+          "bancontact": null,
+          "billie": null,
+          "blik": null,
+          "card": null,
+          "customer_balance": {
+            "bank_transfer": {
+              "type": "us_bank_transfer"
+            },
+            "funding_type": "bank_transfer"
+          },
+          "konbini": null,
+          "payto": null,
+          "pix": null,
+          "sepa_debit": null,
+          "upi": null,
+          "us_bank_account": null
+        },
+        "payment_method_types": [
+          "us_bank_account",
+          "card",
+          "customer_balance"
+        ]
+      },
+      "period_end": 1801407600,
+      "period_start": 1798729200,
+      "post_payment_credit_notes_amount": 0,
+      "pre_payment_credit_notes_amount": 0,
+      "quote": null,
+      "receipt_number": null,
+      "rendering": null,
+      "shipping_cost": null,
+      "shipping_details": null,
+      "starting_balance": 0,
+      "statement_descriptor": null,
+      "status": "open",
+      "status_transitions": {
+        "finalized_at": 1801411200,
+        "marked_uncollectible_at": null,
+        "paid_at": null,
+        "voided_at": null
+      },
+      "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+      "subscription_details": {
+        "metadata": {
+          "spike": "3853-pr0",
+          "kind": "brokerage",
+          "organization_id": "ORG-3853-A"
+        }
+      },
+      "subtotal": 12495,
+      "subtotal_excluding_tax": 12495,
+      "tax": null,
+      "test_clock": "clock_1URdz9Bg3cyTef3dxbWPNKds",
+      "total": 12495,
+      "total_discount_amounts": [],
+      "total_excluding_tax": 12495,
+      "total_pretax_credit_amounts": [],
+      "total_tax_amounts": [],
+      "total_taxes": [],
+      "transfer_data": null,
+      "webhooks_delivered_at": 1801407600
+    },
+    {
+      "id": "in_1URe1nBg3cyTef3dJCaNYVXj",
+      "object": "invoice",
+      "account_country": "US",
+      "account_name": "Keepr sandbox",
+      "account_tax_ids": null,
+      "amount_due": 12495,
+      "amount_overpaid": 0,
+      "amount_paid": 0,
+      "amount_remaining": 12495,
+      "amount_shipping": 0,
+      "application": null,
+      "application_fee_amount": null,
+      "attempt_count": 0,
+      "attempted": false,
+      "auto_advance": true,
+      "automatic_tax": {
+        "disabled_reason": null,
+        "enabled": false,
+        "liability": null,
+        "provider": null,
+        "status": null
+      },
+      "automatically_finalizes_at": null,
+      "billing_reason": "subscription_cycle",
+      "charge": null,
+      "collection_method": "send_invoice",
+      "created": 1798729200,
+      "currency": "usd",
+      "custom_fields": null,
+      "customer": "cus_VSZ7P8iqRvHlbC",
+      "customer_account": null,
+      "customer_address": null,
+      "customer_email": "spike-a1@example.test",
+      "customer_name": "Spike Brokerage A1",
+      "customer_phone": null,
+      "customer_shipping": null,
+      "customer_tax_exempt": "none",
+      "customer_tax_ids": [],
+      "default_payment_method": null,
+      "default_source": null,
+      "default_tax_rates": [],
+      "description": null,
+      "discount": null,
+      "discounts": [],
+      "due_date": 1800025200,
+      "effective_at": 1798732800,
+      "ending_balance": 0,
+      "footer": null,
+      "from_invoice": null,
+      "hosted_invoice_url": "https://invoice.stripe.test/REDACTED/in_1URe1nBg3cyTef3dJCaNYVXj",
+      "invoice_pdf": "[REDACTED hosted URL]",
+      "issuer": {
+        "type": "self"
+      },
+      "last_finalization_error": null,
+      "latest_revision": null,
+      "lines": {
+        "object": "list",
+        "data": [
+          {
+            "id": "il_1UskpgBg3cyTef3daEtULBjH",
+            "object": "line_item",
+            "amount": 12495,
+            "amount_excluding_tax": 12495,
+            "currency": "usd",
+            "description": "5 \u00d7 Keepr Team seat (spike 3853 PR-0) (at $24.99 / month)",
+            "discount_amounts": [],
+            "discountable": true,
+            "discounts": [],
+            "invoice": "in_1URe1nBg3cyTef3dJCaNYVXj",
+            "livemode": false,
+            "metadata": {
+              "spike": "3853-pr0",
+              "spike_kind": "brokerage"
+            },
+            "parent": {
+              "invoice_item_details": null,
+              "license_fee_subscription_details": null,
+              "subscription_item_details": {
+                "invoice_item": null,
+                "proration": false,
+                "proration_details": {
+                  "credited_items": null
+                },
+                "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+                "subscription_item": "si_VSZ7mMq4yriMS1"
+              },
+              "type": "subscription_item_details"
+            },
+            "period": {
+              "end": 1801407600,
+              "start": 1798729200
+            },
+            "plan": {
+              "id": "price_1URdzABg3cyTef3diYACcXnU",
+              "object": "plan",
+              "active": false,
+              "aggregate_usage": null,
+              "amount": 2499,
+              "amount_decimal": "2499",
+              "billing_scheme": "per_unit",
+              "created": 1792268024,
+              "currency": "usd",
+              "interval": "month",
+              "interval_count": 1,
+              "livemode": false,
+              "metadata": {},
+              "meter": null,
+              "nickname": null,
+              "product": "prod_VSZ7s4JhRpHrrb",
+              "tiers_mode": null,
+              "transform_usage": null,
+              "trial_period_days": null,
+              "usage_type": "licensed"
+            },
+            "pretax_credit_amounts": [],
+            "price": {
+              "id": "price_1URdzABg3cyTef3diYACcXnU",
+              "object": "price",
+              "active": false,
+              "billing_scheme": "per_unit",
+              "created": 1792268024,
+              "currency": "usd",
+              "custom_unit_amount": null,
+              "livemode": false,
+              "lookup_key": null,
+              "metadata": {},
+              "nickname": null,
+              "product": "prod_VSZ7s4JhRpHrrb",
+              "recurring": {
+                "aggregate_usage": null,
+                "interval": "month",
+                "interval_count": 1,
+                "meter": null,
+                "trial_period_days": null,
+                "usage_type": "licensed"
+              },
+              "tax_behavior": "unspecified",
+              "tiers_mode": null,
+              "transform_quantity": null,
+              "type": "recurring",
+              "unit_amount": 2499,
+              "unit_amount_decimal": "2499"
+            },
+            "pricing": {
+              "price_details": {
+                "price": "price_1URdzABg3cyTef3diYACcXnU",
+                "product": "prod_VSZ7s4JhRpHrrb"
+              },
+              "type": "price_details",
+              "unit_amount_decimal": "2499"
+            },
+            "proration": false,
+            "proration_details": {
+              "credited_items": null
+            },
+            "quantity": 5,
+            "quantity_decimal": "5",
+            "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+            "subscription_item": "si_VSZ7mMq4yriMS1",
+            "subtotal": 12495,
+            "tax_amounts": [],
+            "tax_rates": [],
+            "taxes": [],
+            "type": "subscription",
+            "unit_amount_excluding_tax": "2499"
+          }
+        ],
+        "has_more": false,
+        "total_count": 1,
+        "url": "/v1/invoices/in_1URe1nBg3cyTef3dJCaNYVXj/lines"
+      },
+      "livemode": false,
+      "metadata": {},
+      "next_payment_attempt": null,
+      "number": "A9SLAZ3T-0003",
+      "on_behalf_of": null,
+      "paid": false,
+      "paid_out_of_band": false,
+      "parent": {
+        "quote_details": null,
+        "subscription_details": {
+          "metadata": {
+            "spike": "3853-pr0",
+            "kind": "brokerage",
+            "organization_id": "ORG-3853-A"
+          },
+          "subscription": "sub_1URdzABg3cyTef3dViU6FCKO"
+        },
+        "type": "subscription_details"
+      },
+      "payment_intent": "pi_3URe1pBg3cyTef3d0NrIyMlD",
+      "payment_settings": {
+        "default_mandate": null,
+        "payment_method_options": {
+          "acss_debit": null,
+          "bancontact": null,
+          "billie": null,
+          "blik": null,
+          "card": null,
+          "customer_balance": {
+            "bank_transfer": {
+              "type": "us_bank_transfer"
+            },
+            "funding_type": "bank_transfer"
+          },
+          "konbini": null,
+          "payto": null,
+          "pix": null,
+          "sepa_debit": null,
+          "upi": null,
+          "us_bank_account": null
+        },
+        "payment_method_types": [
+          "us_bank_account",
+          "card",
+          "customer_balance"
+        ]
+      },
+      "period_end": 1798729200,
+      "period_start": 1796050800,
+      "post_payment_credit_notes_amount": 0,
+      "pre_payment_credit_notes_amount": 0,
+      "quote": null,
+      "receipt_number": null,
+      "rendering": null,
+      "shipping_cost": null,
+      "shipping_details": null,
+      "starting_balance": 0,
+      "statement_descriptor": null,
+      "status": "open",
+      "status_transitions": {
+        "finalized_at": 1798732800,
+        "marked_uncollectible_at": null,
+        "paid_at": null,
+        "voided_at": null
+      },
+      "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+      "subscription_details": {
+        "metadata": {
+          "spike": "3853-pr0",
+          "kind": "brokerage",
+          "organization_id": "ORG-3853-A"
+        }
+      },
+      "subtotal": 12495,
+      "subtotal_excluding_tax": 12495,
+      "tax": null,
+      "test_clock": "clock_1URdz9Bg3cyTef3dxbWPNKds",
+      "total": 12495,
+      "total_discount_amounts": [],
+      "total_excluding_tax": 12495,
+      "total_pretax_credit_amounts": [],
+      "total_tax_amounts": [],
+      "total_taxes": [],
+      "transfer_data": null,
+      "webhooks_delivered_at": 1798729200
+    },
+    {
+      "id": "in_1URe1bBg3cyTef3dTQ9Ghi7p",
+      "object": "invoice",
+      "account_country": "US",
+      "account_name": "Keepr sandbox",
+      "account_tax_ids": null,
+      "amount_due": 12495,
+      "amount_overpaid": 0,
+      "amount_paid": 0,
+      "amount_remaining": 12495,
+      "amount_shipping": 0,
+      "application": null,
+      "application_fee_amount": null,
+      "attempt_count": 0,
+      "attempted": false,
+      "auto_advance": true,
+      "automatic_tax": {
+        "disabled_reason": null,
+        "enabled": false,
+        "liability": null,
+        "provider": null,
+        "status": null
+      },
+      "automatically_finalizes_at": null,
+      "billing_reason": "subscription_cycle",
+      "charge": null,
+      "collection_method": "send_invoice",
+      "created": 1796050800,
+      "currency": "usd",
+      "custom_fields": null,
+      "customer": "cus_VSZ7P8iqRvHlbC",
+      "customer_account": null,
+      "customer_address": null,
+      "customer_email": "spike-a1@example.test",
+      "customer_name": "Spike Brokerage A1",
+      "customer_phone": null,
+      "customer_shipping": null,
+      "customer_tax_exempt": "none",
+      "customer_tax_ids": [],
+      "default_payment_method": null,
+      "default_source": null,
+      "default_tax_rates": [],
+      "description": null,
+      "discount": null,
+      "discounts": [],
+      "due_date": 1797346800,
+      "effective_at": 1796054400,
+      "ending_balance": 0,
+      "footer": null,
+      "from_invoice": null,
+      "hosted_invoice_url": "https://invoice.stripe.test/REDACTED/in_1URe1bBg3cyTef3dTQ9Ghi7p",
+      "invoice_pdf": "[REDACTED hosted URL]",
+      "issuer": {
+        "type": "self"
+      },
+      "last_finalization_error": null,
+      "latest_revision": null,
+      "lines": {
+        "object": "list",
+        "data": [
+          {
+            "id": "il_1UhW3gBg3cyTef3dhBTL0q4A",
+            "object": "line_item",
+            "amount": 12495,
+            "amount_excluding_tax": 12495,
+            "currency": "usd",
+            "description": "5 \u00d7 Keepr Team seat (spike 3853 PR-0) (at $24.99 / month)",
+            "discount_amounts": [],
+            "discountable": true,
+            "discounts": [],
+            "invoice": "in_1URe1bBg3cyTef3dTQ9Ghi7p",
+            "livemode": false,
+            "metadata": {
+              "spike": "3853-pr0",
+              "spike_kind": "brokerage"
+            },
+            "parent": {
+              "invoice_item_details": null,
+              "license_fee_subscription_details": null,
+              "subscription_item_details": {
+                "invoice_item": null,
+                "proration": false,
+                "proration_details": {
+                  "credited_items": null
+                },
+                "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+                "subscription_item": "si_VSZ7mMq4yriMS1"
+              },
+              "type": "subscription_item_details"
+            },
+            "period": {
+              "end": 1798729200,
+              "start": 1796050800
+            },
+            "plan": {
+              "id": "price_1URdzABg3cyTef3diYACcXnU",
+              "object": "plan",
+              "active": false,
+              "aggregate_usage": null,
+              "amount": 2499,
+              "amount_decimal": "2499",
+              "billing_scheme": "per_unit",
+              "created": 1792268024,
+              "currency": "usd",
+              "interval": "month",
+              "interval_count": 1,
+              "livemode": false,
+              "metadata": {},
+              "meter": null,
+              "nickname": null,
+              "product": "prod_VSZ7s4JhRpHrrb",
+              "tiers_mode": null,
+              "transform_usage": null,
+              "trial_period_days": null,
+              "usage_type": "licensed"
+            },
+            "pretax_credit_amounts": [],
+            "price": {
+              "id": "price_1URdzABg3cyTef3diYACcXnU",
+              "object": "price",
+              "active": false,
+              "billing_scheme": "per_unit",
+              "created": 1792268024,
+              "currency": "usd",
+              "custom_unit_amount": null,
+              "livemode": false,
+              "lookup_key": null,
+              "metadata": {},
+              "nickname": null,
+              "product": "prod_VSZ7s4JhRpHrrb",
+              "recurring": {
+                "aggregate_usage": null,
+                "interval": "month",
+                "interval_count": 1,
+                "meter": null,
+                "trial_period_days": null,
+                "usage_type": "licensed"
+              },
+              "tax_behavior": "unspecified",
+              "tiers_mode": null,
+              "transform_quantity": null,
+              "type": "recurring",
+              "unit_amount": 2499,
+              "unit_amount_decimal": "2499"
+            },
+            "pricing": {
+              "price_details": {
+                "price": "price_1URdzABg3cyTef3diYACcXnU",
+                "product": "prod_VSZ7s4JhRpHrrb"
+              },
+              "type": "price_details",
+              "unit_amount_decimal": "2499"
+            },
+            "proration": false,
+            "proration_details": {
+              "credited_items": null
+            },
+            "quantity": 5,
+            "quantity_decimal": "5",
+            "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+            "subscription_item": "si_VSZ7mMq4yriMS1",
+            "subtotal": 12495,
+            "tax_amounts": [],
+            "tax_rates": [],
+            "taxes": [],
+            "type": "subscription",
+            "unit_amount_excluding_tax": "2499"
+          }
+        ],
+        "has_more": false,
+        "total_count": 1,
+        "url": "/v1/invoices/in_1URe1bBg3cyTef3dTQ9Ghi7p/lines"
+      },
+      "livemode": false,
+      "metadata": {},
+      "next_payment_attempt": null,
+      "number": "A9SLAZ3T-0002",
+      "on_behalf_of": null,
+      "paid": false,
+      "paid_out_of_band": false,
+      "parent": {
+        "quote_details": null,
+        "subscription_details": {
+          "metadata": {
+            "spike": "3853-pr0",
+            "kind": "brokerage",
+            "organization_id": "ORG-3853-A"
+          },
+          "subscription": "sub_1URdzABg3cyTef3dViU6FCKO"
+        },
+        "type": "subscription_details"
+      },
+      "payment_intent": "pi_3URe1dBg3cyTef3d0hmlrcdV",
+      "payment_settings": {
+        "default_mandate": null,
+        "payment_method_options": {
+          "acss_debit": null,
+          "bancontact": null,
+          "billie": null,
+          "blik": null,
+          "card": null,
+          "customer_balance": {
+            "bank_transfer": {
+              "type": "us_bank_transfer"
+            },
+            "funding_type": "bank_transfer"
+          },
+          "konbini": null,
+          "payto": null,
+          "pix": null,
+          "sepa_debit": null,
+          "upi": null,
+          "us_bank_account": null
+        },
+        "payment_method_types": [
+          "us_bank_account",
+          "card",
+          "customer_balance"
+        ]
+      },
+      "period_end": 1796050800,
+      "period_start": 1793458800,
+      "post_payment_credit_notes_amount": 0,
+      "pre_payment_credit_notes_amount": 0,
+      "quote": null,
+      "receipt_number": null,
+      "rendering": null,
+      "shipping_cost": null,
+      "shipping_details": null,
+      "starting_balance": 0,
+      "statement_descriptor": null,
+      "status": "open",
+      "status_transitions": {
+        "finalized_at": 1796054400,
+        "marked_uncollectible_at": null,
+        "paid_at": null,
+        "voided_at": null
+      },
+      "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+      "subscription_details": {
+        "metadata": {
+          "spike": "3853-pr0",
+          "kind": "brokerage",
+          "organization_id": "ORG-3853-A"
+        }
+      },
+      "subtotal": 12495,
+      "subtotal_excluding_tax": 12495,
+      "tax": null,
+      "test_clock": "clock_1URdz9Bg3cyTef3dxbWPNKds",
+      "total": 12495,
+      "total_discount_amounts": [],
+      "total_excluding_tax": 12495,
+      "total_pretax_credit_amounts": [],
+      "total_tax_amounts": [],
+      "total_taxes": [],
+      "transfer_data": null,
+      "webhooks_delivered_at": 1796050800
+    },
+    {
+      "id": "in_1URdzABg3cyTef3dyKhMzjZn",
+      "object": "invoice",
+      "account_country": "US",
+      "account_name": "Keepr sandbox",
+      "account_tax_ids": null,
+      "amount_due": 12495,
+      "amount_overpaid": 0,
+      "amount_paid": 0,
+      "amount_remaining": 12495,
+      "amount_shipping": 0,
+      "application": null,
+      "application_fee_amount": null,
+      "attempt_count": 0,
+      "attempted": false,
+      "auto_advance": true,
+      "automatic_tax": {
+        "disabled_reason": null,
+        "enabled": false,
+        "liability": null,
+        "provider": null,
+        "status": null
+      },
+      "automatically_finalizes_at": null,
+      "billing_reason": "subscription_create",
+      "charge": null,
+      "collection_method": "send_invoice",
+      "created": 1793458800,
+      "currency": "usd",
+      "custom_fields": null,
+      "customer": "cus_VSZ7P8iqRvHlbC",
+      "customer_account": null,
+      "customer_address": null,
+      "customer_email": "spike-a1@example.test",
+      "customer_name": "Spike Brokerage A1",
+      "customer_phone": null,
+      "customer_shipping": null,
+      "customer_tax_exempt": "none",
+      "customer_tax_ids": [],
+      "default_payment_method": null,
+      "default_source": null,
+      "default_tax_rates": [],
+      "description": null,
+      "discount": null,
+      "discounts": [],
+      "due_date": 1794754800,
+      "effective_at": 1793462400,
+      "ending_balance": 0,
+      "footer": null,
+      "from_invoice": null,
+      "hosted_invoice_url": "https://invoice.stripe.test/REDACTED/in_1URdzABg3cyTef3dyKhMzjZn",
+      "invoice_pdf": "[REDACTED hosted URL]",
+      "issuer": {
+        "type": "self"
+      },
+      "last_finalization_error": null,
+      "latest_revision": null,
+      "lines": {
+        "object": "list",
+        "data": [
+          {
+            "id": "il_1UWdlEBg3cyTef3dmw2AEzzA",
+            "object": "line_item",
+            "amount": 12495,
+            "amount_excluding_tax": 12495,
+            "currency": "usd",
+            "description": "5 \u00d7 Keepr Team seat (spike 3853 PR-0) (at $24.99 / month)",
+            "discount_amounts": [],
+            "discountable": true,
+            "discounts": [],
+            "invoice": "in_1URdzABg3cyTef3dyKhMzjZn",
+            "livemode": false,
+            "metadata": {
+              "spike": "3853-pr0",
+              "spike_kind": "brokerage"
+            },
+            "parent": {
+              "invoice_item_details": null,
+              "license_fee_subscription_details": null,
+              "subscription_item_details": {
+                "invoice_item": null,
+                "proration": false,
+                "proration_details": {
+                  "credited_items": null
+                },
+                "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+                "subscription_item": "si_VSZ7mMq4yriMS1"
+              },
+              "type": "subscription_item_details"
+            },
+            "period": {
+              "end": 1796050800,
+              "start": 1793458800
+            },
+            "plan": {
+              "id": "price_1URdzABg3cyTef3diYACcXnU",
+              "object": "plan",
+              "active": false,
+              "aggregate_usage": null,
+              "amount": 2499,
+              "amount_decimal": "2499",
+              "billing_scheme": "per_unit",
+              "created": 1792268024,
+              "currency": "usd",
+              "interval": "month",
+              "interval_count": 1,
+              "livemode": false,
+              "metadata": {},
+              "meter": null,
+              "nickname": null,
+              "product": "prod_VSZ7s4JhRpHrrb",
+              "tiers_mode": null,
+              "transform_usage": null,
+              "trial_period_days": null,
+              "usage_type": "licensed"
+            },
+            "pretax_credit_amounts": [],
+            "price": {
+              "id": "price_1URdzABg3cyTef3diYACcXnU",
+              "object": "price",
+              "active": false,
+              "billing_scheme": "per_unit",
+              "created": 1792268024,
+              "currency": "usd",
+              "custom_unit_amount": null,
+              "livemode": false,
+              "lookup_key": null,
+              "metadata": {},
+              "nickname": null,
+              "product": "prod_VSZ7s4JhRpHrrb",
+              "recurring": {
+                "aggregate_usage": null,
+                "interval": "month",
+                "interval_count": 1,
+                "meter": null,
+                "trial_period_days": null,
+                "usage_type": "licensed"
+              },
+              "tax_behavior": "unspecified",
+              "tiers_mode": null,
+              "transform_quantity": null,
+              "type": "recurring",
+              "unit_amount": 2499,
+              "unit_amount_decimal": "2499"
+            },
+            "pricing": {
+              "price_details": {
+                "price": "price_1URdzABg3cyTef3diYACcXnU",
+                "product": "prod_VSZ7s4JhRpHrrb"
+              },
+              "type": "price_details",
+              "unit_amount_decimal": "2499"
+            },
+            "proration": false,
+            "proration_details": {
+              "credited_items": null
+            },
+            "quantity": 5,
+            "quantity_decimal": "5",
+            "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+            "subscription_item": "si_VSZ7mMq4yriMS1",
+            "subtotal": 12495,
+            "tax_amounts": [],
+            "tax_rates": [],
+            "taxes": [],
+            "type": "subscription",
+            "unit_amount_excluding_tax": "2499"
+          }
+        ],
+        "has_more": false,
+        "total_count": 1,
+        "url": "/v1/invoices/in_1URdzABg3cyTef3dyKhMzjZn/lines"
+      },
+      "livemode": false,
+      "metadata": {},
+      "next_payment_attempt": null,
+      "number": "A9SLAZ3T-0001",
+      "on_behalf_of": null,
+      "paid": false,
+      "paid_out_of_band": false,
+      "parent": {
+        "quote_details": null,
+        "subscription_details": {
+          "metadata": {
+            "spike": "3853-pr0",
+            "kind": "brokerage",
+            "organization_id": "ORG-3853-A"
+          },
+          "subscription": "sub_1URdzABg3cyTef3dViU6FCKO"
+        },
+        "type": "subscription_details"
+      },
+      "payment_intent": "pi_3URdzhBg3cyTef3d1tLxCBoq",
+      "payment_settings": {
+        "default_mandate": null,
+        "payment_method_options": {
+          "acss_debit": null,
+          "bancontact": null,
+          "billie": null,
+          "blik": null,
+          "card": null,
+          "customer_balance": {
+            "bank_transfer": {
+              "type": "us_bank_transfer"
+            },
+            "funding_type": "bank_transfer"
+          },
+          "konbini": null,
+          "payto": null,
+          "pix": null,
+          "sepa_debit": null,
+          "upi": null,
+          "us_bank_account": null
+        },
+        "payment_method_types": [
+          "us_bank_account",
+          "card",
+          "customer_balance"
+        ]
+      },
+      "period_end": 1793458800,
+      "period_start": 1793458800,
+      "post_payment_credit_notes_amount": 0,
+      "pre_payment_credit_notes_amount": 0,
+      "quote": null,
+      "receipt_number": null,
+      "rendering": null,
+      "shipping_cost": null,
+      "shipping_details": null,
+      "starting_balance": 0,
+      "statement_descriptor": null,
+      "status": "open",
+      "status_transitions": {
+        "finalized_at": 1793462400,
+        "marked_uncollectible_at": null,
+        "paid_at": null,
+        "voided_at": null
+      },
+      "subscription": "sub_1URdzABg3cyTef3dViU6FCKO",
+      "subscription_details": {
+        "metadata": {
+          "spike": "3853-pr0",
+          "kind": "brokerage",
+          "organization_id": "ORG-3853-A"
+        }
+      },
+      "subtotal": 12495,
+      "subtotal_excluding_tax": 12495,
+      "tax": null,
+      "test_clock": "clock_1URdz9Bg3cyTef3dxbWPNKds",
+      "total": 12495,
+      "total_discount_amounts": [],
+      "total_excluding_tax": 12495,
+      "total_pretax_credit_amounts": [],
+      "total_tax_amounts": [],
+      "total_taxes": [],
+      "transfer_data": null,
+      "webhooks_delivered_at": 1793458800
+    }
+  ],
+  "has_more": false,
+  "url": "/v1/invoices"
+}

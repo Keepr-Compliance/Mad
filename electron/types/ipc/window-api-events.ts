@@ -7,6 +7,17 @@ import type { User, Subscription } from "../models";
 import type { FolderExportProgress } from "./common";
 
 /**
+ * BACKLOG-4041: the payload of `auth:deep-link-license-blocked`. Exactly the
+ * user id and the block reason; the main process keeps everything else from
+ * the sign-in (the Supabase client still holds the session). Built in main by
+ * `licenseBlockedPayload()` and narrowed again by the preload bridge.
+ */
+export interface DeepLinkLicenseBlockedPayload {
+  userId: string;
+  blockReason: string;
+}
+
+/**
  * Top-level event listener methods on window.api
  * These are directly on the WindowApi interface (not nested under a sub-object)
  */
@@ -197,17 +208,7 @@ export interface WindowApiEvents {
    * Fired when user authenticates successfully but license is expired/suspended
    */
   onDeepLinkLicenseBlocked: (
-    callback: (data: {
-      accessToken: string;
-      refreshToken: string;
-      userId: string;
-      blockReason: string;
-      licenseStatus: {
-        isValid: boolean;
-        licenseType: "trial" | "individual" | "team";
-        blockReason?: string;
-      };
-    }) => void,
+    callback: (data: DeepLinkLicenseBlockedPayload) => void,
   ) => () => void;
 
   /**

@@ -213,6 +213,7 @@ import { registerLicenseHandlers } from "./handlers/licenseHandlers";
 import { registerFeatureGateHandlers } from "./handlers/featureGateHandlers";
 import { registerEntitlementHandlers } from "./handlers/entitlementHandlers";
 import { registerPaymentHandlers } from "./handlers/paymentHandlers";
+import { registerBillingHandlers } from "./handlers/billingHandlers";
 import { sanitizeSessionId } from "./services/paymentService";
 import { registerPreAuthValidationHandler } from "./handlers/preAuthValidationHandler";
 import { registerSupportTicketHandlers } from "./handlers/supportTicketHandlers";
@@ -286,6 +287,7 @@ import { createWindowFreezeReporter, currentScreenName } from "./services/render
 import { syncTimeline } from "./services/syncTimeline";
 import { normalizeOAuthProvider } from "./utils/normalizeOAuthProvider";
 import { buildDeepLinkAuthPayload } from "./utils/deepLinkAuthPayload";
+import { licenseBlockedPayload } from "./utils/deepLinkLicenseBlockedPayload";
 
 // BACKLOG-3432: which installer this build came from, as a derived value only.
 // The Windows one-click installer migrates a prior per-machine install to
@@ -728,13 +730,13 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         Sentry.captureException(new Error("Deep link auth: license blocked"), {
           tags: { component: "deep-link", action: "auth-callback", error_code: "LICENSE_BLOCKED", block_reason: licenseStatus.blockReason || "unknown" },
         });
-        sendToRenderer("auth:deep-link-license-blocked", {
-          accessToken,
-          refreshToken,
-          userId: user.id,
-          blockReason: licenseStatus.blockReason,
-          licenseStatus,
-        });
+        // BACKLOG-4041: user id and block reason only. The Supabase client
+        // keeps the session set above (setSession), which the blocked
+        // screen's contact lookup (sessionHandlers handleGetUserContact) reads.
+        sendToRenderer(
+          "auth:deep-link-license-blocked",
+          licenseBlockedPayload(user.id, licenseStatus.blockReason),
+        );
         focusMainWindow();
         return;
       }
@@ -1974,6 +1976,7 @@ app.whenReady().then(async () => {
 
   // Register PAYG card-purchase handlers (BACKLOG-2015)
   registerPaymentHandlers();
+  registerBillingHandlers(); // BACKLOG-3863
 
   // TASK-2086: Register pre-DB auth validation handler (SOC 2 CC6.1)
   registerPreAuthValidationHandler();

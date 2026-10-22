@@ -12,10 +12,11 @@ import Image from 'next/image';
 import { Badge, Checkbox } from '@keepr/design-system';
 import type { BadgeHue } from '@keepr/design-system';
 import UserActionsDropdown from './UserActionsDropdown';
-import { ROLE_LABELS, LICENSE_STATUS_LABELS } from '@/lib/types/users';
+import { ROLE_LABELS, memberStatusLabel } from '@/lib/types/users';
 import type { MemberLicenseStatus, OrganizationMember, Role } from '@/lib/types/users';
-import { formatUserDisplayName, getUserInitials } from '@/lib/utils/userDisplay';
+import { formatUserDisplayName, getUserInitials, memberNameFields } from '@/lib/utils/userDisplay';
 import { formatDate } from '@/lib/utils';
+import type { MemberLicenseAction } from '@/lib/users/memberLicenseActions';
 
 interface UserTableRowProps {
   member: OrganizationMember;
@@ -27,6 +28,8 @@ interface UserTableRowProps {
   onResendInvite: () => void;
   onDeactivate: () => void;
   onRemove: () => void;
+  callerRole?: string;
+  onLicenseAction?: (action: MemberLicenseAction) => void;
 }
 
 const ROLE_HUES: Record<Role, BadgeHue> = {
@@ -41,6 +44,7 @@ const STATUS_HUES: Record<MemberLicenseStatus, BadgeHue> = {
   pending: 'yellow',
   suspended: 'red',
   expired: 'gray',
+  unassigned: 'blue',
 };
 
 export default function UserTableRow({
@@ -53,10 +57,11 @@ export default function UserTableRow({
   onResendInvite,
   onDeactivate,
   onRemove,
+  callerRole,
+  onLicenseAction,
 }: UserTableRowProps) {
-  const userOrNull = member.user ?? null;
-  const displayName = formatUserDisplayName(userOrNull, member.invited_email);
-  const initials = getUserInitials(userOrNull, member.invited_email);
+  const displayName = formatUserDisplayName(memberNameFields(member), member.invited_email);
+  const initials = getUserInitials(memberNameFields(member), member.invited_email);
   const email = member.user?.email || member.invited_email || '';
   const isPending = !member.user_id;
 
@@ -99,7 +104,7 @@ export default function UserTableRow({
       </td>
       <td className="px-4 py-3">
         <Badge size="sm" hue={STATUS_HUES[member.license_status]}>
-          {isPending ? 'Invited' : LICENSE_STATUS_LABELS[member.license_status]}
+          {memberStatusLabel(member)}
         </Badge>
       </td>
       <td className="px-4 py-3 text-sm text-gray-500">
@@ -124,6 +129,10 @@ export default function UserTableRow({
               onResendInvite={onResendInvite}
               onDeactivate={onDeactivate}
               onRemove={onRemove}
+              memberLicenseStatus={member.license_status}
+              targetRole={member.role}
+              callerRole={callerRole}
+              onLicenseAction={onLicenseAction}
             />
           )}
         </td>

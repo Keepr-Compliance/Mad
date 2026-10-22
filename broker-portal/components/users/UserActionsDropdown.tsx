@@ -11,6 +11,11 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { MoreVertical } from 'lucide-react';
+import {
+  MEMBER_LICENSE_ACTION_LABELS,
+  memberRowActions,
+  type MemberLicenseAction,
+} from '@/lib/users/memberLicenseActions';
 
 interface UserActionsDropdownProps {
   memberId: string;
@@ -22,6 +27,11 @@ interface UserActionsDropdownProps {
   onResendInvite?: () => void;
   onDeactivate: () => void;
   onRemove: () => void;
+  /** BACKLOG-3851: the row's license_status, its role and the caller's role decide the licence item. */
+  memberLicenseStatus?: string | null;
+  targetRole?: string;
+  callerRole?: string;
+  onLicenseAction?: (action: MemberLicenseAction) => void;
 }
 
 export default function UserActionsDropdown({
@@ -34,7 +44,17 @@ export default function UserActionsDropdown({
   onResendInvite,
   onDeactivate,
   onRemove,
+  memberLicenseStatus,
+  targetRole,
+  callerRole,
+  onLicenseAction,
 }: UserActionsDropdownProps) {
+  const { licenseAction, showDeactivate } = memberRowActions({
+    licenseStatus: memberLicenseStatus,
+    isClaimed: !isPending,
+    targetRole: targetRole ?? '',
+    callerRole: callerRole ?? '',
+  });
   const [isOpen, setIsOpen] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -134,8 +154,21 @@ export default function UserActionsDropdown({
               Edit Role
             </button>
           )}
-          {/* Deactivate - only for active members, not pending invites */}
-          {!isPending && (
+          {/* BACKLOG-3851: Assign / Unassign / Reactivate, from memberRowActions */}
+          {licenseAction && onLicenseAction && (
+            <button
+              onClick={() => {
+                setIsOpen(false);
+                onLicenseAction(licenseAction);
+              }}
+              className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 focus:bg-gray-50 focus:outline-none"
+              role="menuitem"
+            >
+              {MEMBER_LICENSE_ACTION_LABELS[licenseAction]}
+            </button>
+          )}
+          {/* Deactivate - claimed members who are not already deactivated */}
+          {showDeactivate && (
             <button
               onClick={() => {
                 setIsOpen(false);

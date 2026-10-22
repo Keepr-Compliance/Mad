@@ -13,6 +13,7 @@ import { createClient } from '@/lib/supabase/server';
 import type { Role } from '@/lib/types/users';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
+import { LAST_ADMIN_DEMOTE_REFUSED, ROLE_MANAGED_BY_IDP } from '@/lib/users/roleRefusals';
 
 // ============================================================================
 // Types
@@ -113,7 +114,7 @@ export async function updateUserRole(input: UpdateRoleInput): Promise<UpdateRole
       .neq('id', input.memberId);
 
     if (count === 0) {
-      return { success: false, error: 'Cannot demote the last admin. Assign another admin first.' };
+      return { success: false, error: LAST_ADMIN_DEMOTE_REFUSED };
     }
   }
 
@@ -127,6 +128,13 @@ export async function updateUserRole(input: UpdateRoleInput): Promise<UpdateRole
     .eq('id', input.memberId);
 
   if (updateError) {
+    // BACKLOG-4027: the database refusals, worded for the Users page.
+    if (updateError.message?.includes('last_admin')) {
+      return { success: false, error: LAST_ADMIN_DEMOTE_REFUSED };
+    }
+    if (updateError.message?.includes('managed_by_idp')) {
+      return { success: false, error: ROLE_MANAGED_BY_IDP };
+    }
     console.error('Error updating role:', updateError);
     return { success: false, error: 'Failed to update role' };
   }

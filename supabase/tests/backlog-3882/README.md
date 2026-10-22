@@ -26,7 +26,7 @@ way PostgREST sets it.
 | c5 | an azure `provider_id` or a google `sub` passed as tenant: 42501, no org |
 | c6 | personal-Microsoft-account tenant with a matching identity: 42501 |
 | c7 | second apply succeeds; new body md5; PUBLIC/anon lose EXECUTE, authenticated/service_role keep it; anon call 42501; definer/config unchanged |
-| c8 | first-user-wins with matching identities: first caller admin, next colleague default role, unclaimed invites not counted, existing admin unchanged |
+| c8 | first-user-wins with matching identities: first caller admin, next colleague default role, unclaimed invites not counted, existing admin unchanged **SUPERSEDED** once 20261016054316 is applied: a caller with no invite gets `no_invite`. Superseded by BACKLOG-3851 PR-2 piece 1 (`supabase/migrations/20261016054316_backlog_3851_setup_completes_invite.sql`, harness `supabase/tests/backlog-3851-setup/`). |
 | c9 | `auto_provision_google_it_admin`: body unchanged, only service_role may execute; authenticated call 42501 |
 | c10 | `rollback-3882.sql` restores the production body and grants |
 | c11 | a body that is neither production's nor the migration's makes the migration abort |

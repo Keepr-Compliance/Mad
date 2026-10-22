@@ -12,6 +12,7 @@ import { createClient } from '@/lib/supabase/server';
 import { randomBytes } from 'crypto';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
+import { BROKERAGE_SUSPENDED_ERROR, isBrokerageSuspendedError } from '@/lib/auth/orgSuspension';
 import { sendInviteEmail } from '@/lib/email';
 
 interface ResendInviteInput {
@@ -22,6 +23,8 @@ interface ResendInviteInput {
 interface ResendInviteResult {
   success: boolean;
   error?: string;
+  /** BACKLOG-3851: the organization has no free licence; show the out-of-licenses prompt. */
+  outOfSeats?: boolean;
 }
 
 export async function resendInvite(input: ResendInviteInput): Promise<ResendInviteResult> {
@@ -46,7 +49,7 @@ export async function resendInvite(input: ResendInviteInput): Promise<ResendInvi
   // Get the pending invite
   const { data: pendingMember } = await supabase
     .from('organization_members')
-    .select('id, invited_email, role, organization_id, user_id')
+    .select('id, invited_email, role, organization_id, user_id, license_status, invited_first_name')
     .eq('id', input.memberId)
     .eq('organization_id', input.organizationId)
     .maybeSingle();
@@ -73,6 +76,14 @@ export async function resendInvite(input: ResendInviteInput): Promise<ResendInvi
     .eq('id', input.memberId);
 
   if (updateError) {
+    // BACKLOG-3851: an expired invite holds no seat, so renewing it in a full
+    // organization is refused by the seat trigger. Only that refusal is the
+    // out-of-licenses prompt; the insert guard does not count seats on update.
+    if (updateError.code === 'P0001' && updateError.message === 'seat_limit_reached') {
+      return { success: false, outOfSeats: true };
+    }
+    // BACKLOG-3853 PR-2B: the brokerage is suspended; the member trigger refused.
+    if (isBrokerageSuspendedError(updateError)) return { success: false, error: BROKERAGE_SUSPENDED_ERROR };
     Sentry.captureException(updateError, {
       tags: { action: 'resend_invite' },
       extra: { memberId: input.memberId, organizationId: input.organizationId },
@@ -115,6 +126,9 @@ export async function resendInvite(input: ResendInviteInput): Promise<ResendInvi
       role: pendingMember.role,
       inviteLink,
       expiresInDays: 7,
+      // BACKLOG-3851 PR-2f: the email follows the row (an unlicensed invitation says so).
+      withoutLicense: pendingMember.license_status === 'unassigned',
+      recipientFirstName: pendingMember.invited_first_name ?? undefined,
     });
 
     if (!emailResult.success) {

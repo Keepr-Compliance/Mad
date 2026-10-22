@@ -16,7 +16,10 @@ import { AlertTriangle, Check } from 'lucide-react';
 import { Input, Label, Modal, ModalFooter, Select } from '@keepr/design-system';
 import { AlertBanner, Button } from '@keepr/ui';
 import { inviteUser } from '@/lib/actions/inviteUser';
+import OutOfLicensesNotice from './OutOfLicensesNotice';
 import { ASSIGNABLE_ROLES_BY_ADMIN, ROLE_LABELS } from '@/lib/types/users';
+import { inviteWithoutLicenseAvailable } from '@/lib/users/memberLicenseActions';
+import { INVITE_NAME_MAX_LENGTH } from '@/lib/users/inviteNames';
 import type { Role } from '@/lib/types/users';
 
 // ============================================================================
@@ -27,6 +30,12 @@ interface InviteUserModalProps {
   isOpen: boolean;
   onClose: () => void;
   organizationId: string;
+  /** BACKLOG-3851: the caller's role picks the out-of-licenses wording. */
+  callerRole?: string;
+  /** BACKLOG-3851 PR-2f: for the prefilled "more licenses" support request. */
+  organizationName?: string | null;
+  /** BACKLOG-3851 PR-2f: "Invite without a license" offered (default: the release switches). */
+  allowInviteWithoutLicense?: boolean;
 }
 
 // Roles that can be assigned via invite (excludes it_admin)
@@ -40,29 +49,42 @@ export default function InviteUserModal({
   isOpen,
   onClose,
   organizationId,
+  callerRole = 'admin',
+  organizationName = null,
+  allowInviteWithoutLicense = inviteWithoutLicenseAvailable(),
 }: InviteUserModalProps) {
   const router = useRouter();
   const [email, setEmail] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [role, setRole] = useState<InvitableRole>('agent');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [inviteLink, setInviteLink] = useState<string | null>(null);
   const [emailSent, setEmailSent] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [outOfSeats, setOutOfSeats] = useState(false);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // BACKLOG-3851 PR-2f: withoutLicense re-sends the same form as an unlicensed invitation.
+  const sendInvite = async (withoutLicense: boolean) => {
     setIsSubmitting(true);
     setError(null);
+    setOutOfSeats(false);
 
     try {
       const result = await inviteUser({
         email,
         role,
         organizationId,
+        firstName,
+        lastName,
+        ...(withoutLicense ? { withoutLicense: true } : {}),
       });
 
-      if (result.error) {
+      if (result.outOfSeats) {
+        // BACKLOG-3851: the form stays open; no invite was created.
+        setOutOfSeats(true);
+      } else if (result.error) {
         setError(result.error);
       } else if (result.inviteLink) {
         setInviteLink(result.inviteLink);
@@ -76,10 +98,18 @@ export default function InviteUserModal({
     }
   };
 
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await sendInvite(false);
+  };
+
   const handleClose = () => {
     setEmail('');
+    setFirstName('');
+    setLastName('');
     setRole('agent');
     setError(null);
+    setOutOfSeats(false);
     setInviteLink(null);
     setEmailSent(false);
     setCopied(false);
@@ -168,6 +198,34 @@ export default function InviteUserModal({
       ) : (
         // Form state
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* BACKLOG-3851 PR-2f: optional names, used in the email and shown until they sign in */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor="invite-first-name">First name (optional)</Label>
+              <Input
+                className="!text-base md:!text-sm"
+                type="text"
+                id="invite-first-name"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                maxLength={INVITE_NAME_MAX_LENGTH}
+                autoComplete="off"
+              />
+            </div>
+            <div>
+              <Label htmlFor="invite-last-name">Last name (optional)</Label>
+              <Input
+                className="!text-base md:!text-sm"
+                type="text"
+                id="invite-last-name"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                maxLength={INVITE_NAME_MAX_LENGTH}
+                autoComplete="off"
+              />
+            </div>
+          </div>
+
           {/* Email input */}
           <div>
             <Label htmlFor="invite-email">Email Address</Label>
@@ -201,6 +259,14 @@ export default function InviteUserModal({
           </div>
 
           {/* Error message */}
+          {outOfSeats && (
+            <OutOfLicensesNotice
+              callerRole={callerRole}
+              organizationName={organizationName}
+              onInviteWithoutLicense={allowInviteWithoutLicense ? () => { void sendInvite(true); } : undefined}
+              inviteWithoutLicensePending={isSubmitting}
+            />
+          )}
           {error && <AlertBanner variant="destructive">{error}</AlertBanner>}
 
           {/* Buttons */}

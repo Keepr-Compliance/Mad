@@ -41,6 +41,8 @@ export interface SegmentedTabsProps {
   /** Link mode: render a router link (defaults to `<a>`). */
   renderLink?: (args: SegmentedTabsLinkArgs) => React.ReactNode;
   className?: string;
+  /** Fill the row: equal-width columns, one per item, labels centred. Default keeps the scrolling strip. */
+  fill?: boolean;
 }
 
 const ITEM =
@@ -67,14 +69,20 @@ export function SegmentedTabs({
   panelId,
   renderLink,
   className,
+  fill = false,
 }: SegmentedTabsProps) {
   const baseId = React.useId();
   const tabRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
   const linkMode = items.length > 0 && items.every((i) => typeof i.href === 'string');
   const container = cn(
-    'flex gap-1 overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 p-1',
+    fill ? 'grid gap-1' : 'flex gap-1',
+    'overflow-x-auto rounded-lg border border-gray-200 bg-gray-50 p-1',
     className
   );
+  const containerStyle: React.CSSProperties | undefined = fill
+    ? { gridTemplateColumns: `repeat(${Math.max(1, items.length)}, minmax(0, 1fr))` }
+    : undefined;
+  const itemClass = (selected: boolean) => cn(ITEM, selected ? SELECTED : IDLE, fill && 'w-full');
 
   if (linkMode) {
     const link =
@@ -85,12 +93,12 @@ export function SegmentedTabs({
         </a>
       ));
     return (
-      <nav aria-label={ariaLabel} className={container}>
+      <nav aria-label={ariaLabel} className={container} style={containerStyle}>
         {items.map((item) => (
           <React.Fragment key={item.value}>
             {link({
               href: item.href as string,
-              className: cn(ITEM, item.value === value ? SELECTED : IDLE),
+              className: itemClass(item.value === value),
               'aria-current': item.value === value ? 'page' : undefined,
               children: <Label item={item} />,
             })}
@@ -135,7 +143,13 @@ export function SegmentedTabs({
   };
 
   return (
-    <div role="tablist" aria-label={ariaLabel} aria-orientation="horizontal" className={container}>
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      aria-orientation="horizontal"
+      className={container}
+      style={containerStyle}
+    >
       {items.map((item, index) => {
         const selected = index === selectedIndex;
         return (
@@ -152,7 +166,7 @@ export function SegmentedTabs({
             tabIndex={selected ? 0 : -1}
             onClick={() => onValueChange?.(item.value)}
             onKeyDown={(e) => onKeyDown(e, index)}
-            className={cn(ITEM, selected ? SELECTED : IDLE)}
+            className={itemClass(selected)}
           >
             <Label item={item} />
           </button>

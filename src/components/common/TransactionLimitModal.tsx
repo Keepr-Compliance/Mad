@@ -7,6 +7,7 @@
 
 import React from "react";
 import { ResponsiveModal } from "./ResponsiveModal";
+import billingService from "../../services/billingService";
 
 interface TransactionLimitModalProps {
   transactionCount: number;
@@ -62,9 +63,7 @@ export function TransactionLimitModal({
         {/* Actions */}
         <div className="space-y-3">
           <button
-            onClick={() =>
-              window.api?.shell?.openExternal?.("https://www.keeprcompliance.com/beta")
-            }
+            onClick={() => void billingService.openPortal()}
             className="w-full py-2.5 px-4 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 transition-colors"
           >
             Upgrade Plan

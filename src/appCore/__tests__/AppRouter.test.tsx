@@ -9,18 +9,25 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
+import userEvent from "@testing-library/user-event";
 import { AppRouter } from "../AppRouter";
 import type { AppStateMachine } from "../state/types";
 
+// BACKLOG-4038: the last props Login received, so a test can fire onLicenseBlocked.
+let mockLoginProps: Record<string, unknown> = {};
+
 // Mock all child components to isolate routing logic
 jest.mock("../../components/Login", () => {
-  const MockLogin = (props: Record<string, unknown>) => (
-    <div data-testid="login-component" data-props={JSON.stringify(Object.keys(props))}>
-      Login Screen
-    </div>
-  );
+  const MockLogin = (props: Record<string, unknown>) => {
+    mockLoginProps = props;
+    return (
+      <div data-testid="login-component" data-props={JSON.stringify(Object.keys(props))}>
+        Login Screen
+      </div>
+    );
+  };
   MockLogin.displayName = "Login";
   return { __esModule: true, default: MockLogin };
 });
@@ -63,13 +70,23 @@ jest.mock("../../components/onboarding", () => ({
   OnboardingFlow: () => <div data-testid="onboarding-flow-component">Onboarding Flow</div>,
 }));
 
-jest.mock("../../components/license/UpgradeScreen", () => ({
-  UpgradeScreen: ({ reason }: { reason: string }) => (
-    <div data-testid="upgrade-screen-component" data-reason={reason}>
-      Upgrade Screen
-    </div>
-  ),
-}));
+// BACKLOG-4038 follow-up: one test renders the real screen (mockRealUpgradeScreen).
+let mockRealUpgradeScreen = false;
+jest.mock("../../components/license/UpgradeScreen", () => {
+  const actual = jest.requireActual("../../components/license/UpgradeScreen");
+  return {
+    // BACKLOG-4038: the real reason mapper; only the screen itself is stubbed.
+    upgradeReasonFor: actual.upgradeReasonFor,
+    UpgradeScreen: (props: { reason: string }) =>
+      mockRealUpgradeScreen ? (
+        <actual.UpgradeScreen {...props} />
+      ) : (
+        <div data-testid="upgrade-screen-component" data-reason={props.reason}>
+          Upgrade Screen
+        </div>
+      ),
+  };
+});
 
 // BACKLOG-1653: Mock useImportSource hook (extracted from AppRouter).
 // BACKLOG-2320: made controllable per-test so we can verify the iPhone vs
@@ -284,6 +301,96 @@ describe("AppRouter", () => {
       });
       render(<AppRouter app={app} />);
       expect(screen.getByTestId("login-component")).toBeInTheDocument();
+    });
+
+    // BACKLOG-4038: a license blocked at sign-in maps expired -> ended (never trial).
+    it.each([
+      ["expired", "ended"],
+      ["suspended", "suspended"],
+      ["transaction_limit", "unknown"],
+      ["load_error", "unknown"],
+    ])("license blocked at sign-in with %s shows the %s variant", (blockReason, expected) => {
+      const app = createAppStateMock({
+        currentStep: "login",
+        isOnline: true,
+        isAuthenticated: false,
+        currentUser: null,
+      });
+      render(<AppRouter app={app} />);
+      const onLicenseBlocked = mockLoginProps.onLicenseBlocked as (d: {
+        userId: string;
+        blockReason: string;
+      }) => void;
+      act(() => onLicenseBlocked({ userId: "u1", blockReason }));
+      expect(screen.getByTestId("upgrade-screen-component")).toHaveAttribute("data-reason", expected);
+    });
+
+    it("Contact support on the sign-in blocked screen opens the in-app support form", async () => {
+      (window.api as unknown as { support: Record<string, jest.Mock> }).support = {
+        getCategories: jest.fn().mockResolvedValue({ success: true, categories: [] }),
+        collectDiagnostics: jest.fn().mockResolvedValue({ success: true, diagnostics: null }),
+        captureScreenshot: jest.fn().mockResolvedValue({ success: true, screenshot: null }),
+        submitTicket: jest.fn(),
+      };
+      mockRealUpgradeScreen = true;
+      try {
+        const app = createAppStateMock({
+          currentStep: "login",
+          isOnline: true,
+          isAuthenticated: false,
+          currentUser: null,
+        });
+        render(<AppRouter app={app} />);
+        const onLicenseBlocked = mockLoginProps.onLicenseBlocked as (d: {
+          userId: string;
+          blockReason: string;
+        }) => void;
+        act(() => onLicenseBlocked({ userId: "u1", blockReason: "suspended" }));
+        await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
+        expect(await screen.findByRole("heading", { name: "Contact Support" })).toBeInTheDocument();
+        expect(window.api.shell.openExternal).not.toHaveBeenCalled();
+      } finally {
+        mockRealUpgradeScreen = false;
+      }
+    });
+
+    it("the sign-in blocked support form pre-fills name and email for the blocked user id (BACKLOG-4038)", async () => {
+      (window.api as unknown as { support: Record<string, jest.Mock> }).support = {
+        getCategories: jest.fn().mockResolvedValue({ success: true, categories: [] }),
+        collectDiagnostics: jest.fn().mockResolvedValue({ success: true, diagnostics: null }),
+        captureScreenshot: jest.fn().mockResolvedValue({ success: true, screenshot: null }),
+        submitTicket: jest.fn(),
+      };
+      // Main answers only for the id it is asked about (the handler's own userId check).
+      jest.mocked(window.api.auth.getUserContact).mockImplementation(async (id?: string) =>
+        id === "u1"
+          ? {
+            success: true,
+            name: "Agent Name",
+            email: "agent@example.com",
+          }
+          : { success: false, name: "", email: "" },
+      );
+      mockRealUpgradeScreen = true;
+      try {
+        const app = createAppStateMock({
+          currentStep: "login",
+          isOnline: true,
+          isAuthenticated: false,
+          currentUser: null,
+        });
+        render(<AppRouter app={app} />);
+        const onLicenseBlocked = mockLoginProps.onLicenseBlocked as (d: {
+          userId: string;
+          blockReason: string;
+        }) => void;
+        act(() => onLicenseBlocked({ userId: "u1", blockReason: "suspended" }));
+        await userEvent.click(screen.getByRole("button", { name: "Contact support" }));
+        expect(await screen.findByLabelText(/Your Email/)).toHaveValue("agent@example.com");
+        expect(screen.getByLabelText(/Your Name/)).toHaveValue("Agent Name");
+      } finally {
+        mockRealUpgradeScreen = false;
+      }
     });
 
     it("should render OfflineFallback when currentStep is login and offline", () => {

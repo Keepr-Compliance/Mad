@@ -10,10 +10,15 @@
  *      its place.
  *   3. Not signed in                             -> /login.
  *   4. billingCapabilities(...) is null          -> 404: a brokerage agent, a
- *      failed membership read, no membership.
+ *      failed membership read, no membership. BACKLOG-4007 PR-4: an unlicensed
+ *      member is admitted only when the database says they are the brokerage's
+ *      billing-only login (org_billing_contact_login, read by getPortalAccess).
  *   5. BACKLOG-3878: a suspended brokerage member (organization page)
  *      -> /dashboard/account. The brokerage's bill is not theirs. A suspended
  *      personal owner IS shown the page: it is where they land.
+ *   BACKLOG-3853 PR-2B: a suspended BROKERAGE (org_deals, not the licence) is
+ *   NOT refused: Billing is where its broker, admin and IT admin land. The page
+ *   shows the suspended banner and offers nothing to buy or manage.
  *
  * Each step runs before any billing data is read. BACKLOG-3847 reads the
  * personal owner's Agent plan (mirror row, support grant) and the Agent prices
@@ -36,6 +41,15 @@ import { formatPrice, getAgentPlanView, getAgentPrices, type AgentPrice } from '
 import { getPersonalBillingView } from '@/lib/billing/personalBilling';
 import { createClient } from '@/lib/supabase/server';
 import { suspendedForDispute } from '@/lib/billing/suspensionCause';
+import { oldestOverdueInvoiceUrl } from '@/lib/billing/orgPayLink';
+import { ORG_PAYER_ROLES } from '@/components/billing/orgPayerRoles';
+import type { OrgSuspensionReason } from '@/components/billing/OrgSuspendedBanner';
+import { BILLING_CONTACT_ROLE } from '@/lib/auth/billingContact';
+import { readOrgBillingSuspendedFor } from '@/lib/auth/orgSuspension';
+import { readPlanEnd } from '@/lib/billing/planEnd';
+import { readOrgBillingSetUp } from '@/lib/billing/orgBillingSetUp';
+import { readSeats } from '@/lib/billing/seats';
+import type { SeatsViewer } from '@/components/billing/SeatsBlock';
 
 const SITUATION_3844 = {
   agentPlan: 'none',
@@ -70,6 +84,32 @@ function stripeOrNull() {
   }
 }
 
+/** BACKLOG-3853 PR-2B: why the deal is suspended, or null when the read fails (the banner then says "contact Keepr"). */
+async function orgSuspensionReason(organizationId: string): Promise<OrgSuspensionReason> {
+  try {
+    const { data, error } = await createServiceClient()
+      .from('org_deals')
+      .select('suspended_reason')
+      .eq('organization_id', organizationId)
+      .maybeSingle();
+    if (error) return null;
+    const reason = (data as { suspended_reason?: string | null } | null)?.suspended_reason;
+    return reason === 'non_payment' || reason === 'other' ? reason : null;
+  } catch {
+    return null;
+  }
+}
+
+/** BACKLOG-3853: the brokerage's name for the prefilled support request; null when the read fails. */
+async function orgName(organizationId: string): Promise<string | null> {
+  try {
+    const { data } = await createServiceClient().from('organizations').select('name').eq('id', organizationId).maybeSingle();
+    return (data as { name?: string | null } | null)?.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export default async function BillingRoute({ searchParams }: { searchParams?: Promise<SearchParams> }) {
   if (!billingEnabled()) notFound();
   if (await getImpersonationSession()) notFound();
@@ -77,16 +117,90 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
   const portal = await getPortalAccess();
   if (!portal) redirect('/login');
 
+  // BACKLOG-4007 PR-4: the brokerage's billing-only login (an unlicensed member linked from the
+  // live billing contact). getPortalAccess asked the database; false for everyone else.
+  const billingContact = portal.billingContact === true;
   const caps = billingCapabilities({
     access: portal.access,
     isImpersonating: false,
     enabled: true,
     ...SITUATION_3844,
+    billingContact,
   });
   if (!caps) notFound();
   if (caps.kind !== 'personal' && portal.suspended === true) redirect('/dashboard/account');
-  if (caps.kind !== 'personal') {
-    return <BillingPage caps={caps} orgBillingSetUp={SITUATION_3844.orgBillingSetUp} />;
+  if (caps.kind !== 'personal' && portal.access.kind !== 'none' && portal.access.kind !== 'unknown') {
+    const organizationId = portal.access.organizationId;
+    // The billing-only login's access (floor via 'unlicensed') is never asked about the
+    // brokerage's suspension by getPortalAccess; ask here, after admission.
+    const orgSuspended = billingContact
+      ? await readOrgBillingSuspendedFor(portal.supabase, organizationId)
+      : portal.orgSuspended;
+    const role = billingContact ? BILLING_CONTACT_ROLE : portal.access.role;
+    // BACKLOG-3854: billing set up for real (a non-draft deal and a Stripe customer in this mode),
+    // read after admission with the service client. It decides the money blocks, never WHO.
+    const orgBillingSetUp = await readOrgBillingSetUp(createServiceClient(), organizationId, currentStripeMode());
+    const viewer: SeatsViewer | null =
+      role === BILLING_CONTACT_ROLE ? 'billing_contact' : role === 'broker' || role === 'admin' || role === 'it_admin' ? role : null;
+    // Seat counts with the person's own session (the database decides who may read and add).
+    const seatsView = viewer ? await readSeats(portal.supabase, organizationId) : null;
+    const portalUnavailable = one(((await searchParams) ?? {}).portal) === 'unavailable';
+    if (orgSuspended === true && (portal.access.kind === 'full' || billingContact)) {
+      // BACKLOG-3853 PR-2B: read after admission. The reason is service-side only.
+      const orgCaps = billingCapabilities({
+        access: portal.access,
+        isImpersonating: false,
+        enabled: true,
+        ...SITUATION_3844,
+        orgBillingSetUp,
+        orgSuspended: true,
+        billingContact,
+      });
+      if (!orgCaps) notFound();
+      const reason = await orgSuspensionReason(organizationId);
+      const organizationName = await orgName(organizationId);
+      // "Pay overdue invoice": non-payment only, for the roles that can pay; Stripe trouble hides it.
+      const stripe = reason === 'non_payment' && ORG_PAYER_ROLES.includes(role) ? stripeOrNull() : null;
+      const payUrl = stripe
+        ? await oldestOverdueInvoiceUrl({
+            service: createServiceClient(),
+            stripe,
+            mode: currentStripeMode(),
+            organizationId,
+          })
+        : null;
+      return (
+        <BillingPage
+          caps={orgCaps}
+          orgBillingSetUp={orgBillingSetUp}
+          orgSuspension={{ reason, role, organizationName, payUrl }}
+          seats={{ view: seatsView, viewer }}
+          portalUnavailable={portalUnavailable}
+        />
+      );
+    }
+    // BACKLOG-4019: auto-renew, read with the person's own session (the database decides who
+    // may see and switch it); a failed read shows nothing.
+    // IT admins never see billing details (3855): no read.
+    const planEnd = role === 'broker' || role === 'admin' || billingContact ? await readPlanEnd(portal.supabase, organizationId) : null;
+    const orgCaps = billingCapabilities({
+      access: portal.access,
+      isImpersonating: false,
+      enabled: true,
+      ...SITUATION_3844,
+      orgBillingSetUp,
+      billingContact,
+    });
+    if (!orgCaps) notFound();
+    return (
+      <BillingPage
+        caps={orgCaps}
+        orgBillingSetUp={orgBillingSetUp}
+        autoRenew={planEnd ? { organizationId, planEnd } : null}
+        seats={{ view: seatsView, viewer }}
+        portalUnavailable={portalUnavailable}
+      />
+    );
   }
 
   // BACKLOG-3847: the personal owner's Agent plan, read only now that the page is admitted.

@@ -4,7 +4,8 @@
  * My Account — BACKLOG-3078 (the page and Session Management) and
  * BACKLOG-3079 (the identity card and the saved settings).
  *
- * Everything here is READ-ONLY and says so. The desktop app is the source of
+ * Everything here is READ-ONLY and says so, except the phone (BACKLOG-4007 People v2,
+ * MyPhoneCard: the person owns it, one per person). The desktop app is the source of
  * truth for these values; a second writer would be a second source of truth,
  * and this page exists so a person — and Keepr support, through impersonation —
  * can SEE what is stored, which today is possible nowhere except the desktop.
@@ -21,6 +22,7 @@ import { providerDisplayName, type AccountView } from '@/lib/account/accountView
 import { Badge, Card, CardContent, CardHeader, PageHeader } from '@keepr/design-system';
 import { AlertBanner } from '@keepr/ui';
 import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
+import { MyPhoneCard } from '@/components/account/MyPhoneCard';
 
 export interface AccountClientProps {
   account: AccountView | null;
@@ -121,6 +123,9 @@ export default function AccountClient({ account }: AccountClientProps) {
           </div>
         </CardContent>
       </Card>
+
+      {/* BACKLOG-4007 People v2: the person's own phone (the only editable field here). */}
+      <MyPhoneCard readOnly={isImpersonating} />
 
       {/* Email retention policy set by the brokerage.
           Stated as a fact about the organization and NOTHING MORE. The org
