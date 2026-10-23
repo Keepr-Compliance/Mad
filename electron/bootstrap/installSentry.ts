@@ -105,6 +105,7 @@ import {
   isCrashReportingEnabled,
   loadCrashReportingPreference,
 } from "../services/crashReportingPreference";
+import { nodeCaDenylistFailure } from "./nodeCaDenylist";
 
 // Load environment files based on whether app is packaged or in development
 if (app.isPackaged) {
@@ -183,3 +184,10 @@ Sentry.init({
     }
   },
 });
+
+// BACKLOG-4052: installNodeCaDenylist runs before Sentry exists and fails open;
+// a failed install is reported here, once Sentry is up.
+const caDenylistFailure = nodeCaDenylistFailure();
+if (caDenylistFailure) {
+  Sentry.captureException(caDenylistFailure, { tags: { bootstrap: "node-ca-denylist" } });
+}

@@ -16,6 +16,8 @@
  * never crosses an IPC boundary).
  */
 
+// BACKLOG-4052: this thread's own Node CA store — MUST stay the first import.
+import "../bootstrap/workerNodeCaDenylist";
 import { parentPort } from "worker_threads";
 import Database from "better-sqlite3-multiple-ciphers";
 import type { Database as DatabaseType } from "better-sqlite3";

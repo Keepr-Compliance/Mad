@@ -4,6 +4,11 @@
 // a log path on first write. tsconfig.electron.json emits CommonJS, which
 // preserves statement order, so import position IS execution position here.
 import "./bootstrap/installAppDataPaths";
+// BACKLOG-4052: remove four CA roots from Node's default trust store before
+// anything can open a connection (the change only reaches later connections).
+// MUST stay directly after the import above (it writes to the log path that
+// one sets) and before installSentry. Pinned by nodeCaDenylist-4052.test.ts.
+import "./bootstrap/installNodeCaDenylist";
 // BACKLOG-2962: Sentry BEFORE the composition root, so a capability missing at
 // launch reaches Sentry before the app exits. It must stay AFTER the import
 // above (its offline queue path is read from `userData` at init) and BEFORE the
@@ -28,6 +33,8 @@ import "./bootstrap/installIpcReplySizeLog";
 // BACKLOG-3884: log when the main event loop is blocked for 1 s or more, naming
 // the last IPC channel started. Reads the activity the import above records.
 import "./bootstrap/installMainLagMonitor";
+// BACKLOG-4052: a client-certificate request from no window gets no certificate.
+import "./bootstrap/installClientCertPolicy";
 import {
   app,
   BrowserWindow,
@@ -580,7 +587,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
     if (isRcsLinkDeepLink(url)) {
       // Founder (2026-10-06): the code "Copy code and open Keepr" copied —
       // Windows only, while a link is waiting, exactly the code (never logged).
-      const code = rcsLinkCodeForDeepLink();
+      const code = await rcsLinkCodeForDeepLink();
       log.info("[DeepLink] Link screen requested", { codeFromClipboard: code !== null });
       sendToRenderer("rcs-import:open-link-screen", code ? { code } : {});
       focusMainWindow();

@@ -202,9 +202,34 @@ jobs:
       - name: Build preload
         run: npm run build:preload
 
+      # BACKLOG-4052 (R-6): ignore-scripts skips Electron's own install script,
+      # so the binary is absent unless fetched here. The checks below need it.
+      - name: Download Electron binary
+        run: node node_modules/electron/install.js
+
       - name: Rebuild native modules for Electron
         run: node scripts/rebuild-native.js
         continue-on-error: true
+
+      # BACKLOG-4052 (R-6): the step above may fail without failing the job;
+      # this asserts what it was for: the module loads under this Electron.
+      - name: Assert native module loads under Electron
+        run: node scripts/ci/check-native-under-electron.js
+
+      # BACKLOG-4052: the CA denylist, run under this Electron's own Node.
+      - name: Check Node CA denylist under Electron
+        run: node scripts/ci/check-node-ca-denylist.js
+
+      # BACKLOG-4052 (R-7): permanent. Skip prebuild-install and build with the
+      # electron-rebuild fallback (@electron/rebuild), so a broken fallback shows
+      # up here and not on the day a prebuild is missing.
+      - name: Rebuild native modules from source (forced fallback)
+        run: node scripts/rebuild-native.js
+        env:
+          KEEPR_REBUILD_FROM_SOURCE: '1'
+
+      - name: Assert native module loads under Electron (from-source build)
+        run: node scripts/ci/check-native-under-electron.js
 
       # BACKLOG-2505: NODE_OPTIONS on the next three steps.
       #
