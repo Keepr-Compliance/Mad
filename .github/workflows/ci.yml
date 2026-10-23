@@ -188,7 +188,8 @@ jobs:
 
       - name: Check Node.js version (BACKLOG-4053)
         shell: bash
-        run: node scripts/ci/check-node-version.mjs "$(node -v)"
+        run: |
+          node scripts/ci/check-node-version.mjs "$(node -v)"
           node scripts/__tests__/check-node-version.verify.js
       - name: Install Python setuptools
         run: pip install setuptools
