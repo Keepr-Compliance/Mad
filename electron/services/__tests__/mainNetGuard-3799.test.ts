@@ -78,10 +78,22 @@ describe("G1 certificate checking is never weakened", () => {
     ["NODE_TLS_REJECT_UNAUTHORIZED", /NODE_TLS_REJECT_UNAUTHORIZED/],
     ["NODE_EXTRA_CA_CERTS", /NODE_EXTRA_CA_CERTS/],
     ["setCertificateVerifyProc", /setCertificateVerifyProc/],
-    ["tls.setDefaultCACertificates", /setDefaultCACertificates/],
     ["checkServerIdentity override", /checkServerIdentity\s*:/],
   ])("no %s in electron/ production code", (_label, re) => {
     expect(offenders(re)).toEqual([]);
+  });
+
+  // BACKLOG-4052: the one allowed caller only REMOVES roots: it sets the store
+  // to the current default store minus denylisted entries. That it removes
+  // exactly those and nothing else is proven in nodeCaDenylist-4052.test.ts.
+  it("tls.setDefaultCACertificates only in bootstrap/nodeCaDenylist.ts, and only to a filtered copy of the default store", () => {
+    expect(offenders(/setDefaultCACertificates/, ["bootstrap/nodeCaDenylist.ts"])).toEqual([]);
+    const own = FILES.find((f) => f.rel === "bootstrap/nodeCaDenylist.ts");
+    expect(own).toBeDefined();
+    const text = code(own!.text);
+    expect(text.match(/setDefaultCACertificates\(/g)).toHaveLength(1);
+    expect(text).toContain("tls.setDefaultCACertificates(kept)");
+    expect(text).toMatch(/const base = tls\.getCACertificates\("default"\);\s*const \{ kept, removed \} = filterRoots\(base, deny\);/);
   });
 });
 
