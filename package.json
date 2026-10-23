@@ -133,7 +133,7 @@
     "cross-env": "^7.0.3",
     "depcheck": "^1.4.7",
     "dotenv-cli": "^7.4.2",
-    "electron": "^38.8.6",
+    "electron": "44.9.3",
     "electron-builder": "^26.15.6",
     "esbuild": "^0.28.0",
     "eslint": "^8.55.0",
