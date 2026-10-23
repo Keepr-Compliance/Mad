@@ -6,7 +6,7 @@
  * literal list written in that form. A filter that matches nothing (wrong
  * case, wrong separator, empty set) or removes too much fails the set checks.
  *
- * Fixture: the Electron 38.8.6 default store (Node 22.22.0), dumped with
+ * Fixture: the Electron 44.9.3 default store (Node 24.22.0, 121 roots), dumped with
  * tls.getCACertificates("default") under ELECTRON_RUN_AS_NODE. Re-dump it
  * when Electron's Node changes.
  */
@@ -30,7 +30,7 @@ const EXPECTED_REMOVED = new Set([
   "bc4d809b15189d78db3e1d8cf4f9726a795da1643ca5f1358e1ddb0edc0d7eb3",
 ]);
 
-const FIXTURE = path.join(__dirname, "fixtures", "node-ca-store-electron-38.8.6.pem");
+const FIXTURE = path.join(__dirname, "fixtures", "node-ca-store-electron-44.9.3.pem");
 const pems = (text: string): string[] =>
   text.match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g) ?? [];
 const fp = (pem: string): string =>
@@ -38,12 +38,12 @@ const fp = (pem: string): string =>
 const fps = (list: readonly string[]): Set<string> => new Set(list.map(fp));
 const minus = (a: Set<string>, b: Set<string>): Set<string> => new Set([...a].filter((x) => !b.has(x)));
 
-describe("filterRoots on the Electron 38.8.6 store (C-1)", () => {
+describe("filterRoots on the Electron 44.9.3 store (C-1)", () => {
   const base = pems(fs.readFileSync(FIXTURE, "utf8"));
   const before = fps(base);
 
   it("the fixture is the full store and holds exactly the 4 denylisted roots", () => {
-    expect(base).toHaveLength(146);
+    expect(base).toHaveLength(121);
     expect([...before].filter((f) => EXPECTED_REMOVED.has(f)).sort()).toEqual([...EXPECTED_REMOVED].sort());
   });
 
@@ -51,7 +51,7 @@ describe("filterRoots on the Electron 38.8.6 store (C-1)", () => {
     const { kept, removed } = filterRoots(base);
     expect(fps(kept)).toEqual(minus(before, EXPECTED_REMOVED));
     expect(fps(removed)).toEqual(EXPECTED_REMOVED);
-    expect(kept).toHaveLength(142);
+    expect(kept).toHaveLength(117);
   });
 
   it("the production list names the same 4 roots", () => {

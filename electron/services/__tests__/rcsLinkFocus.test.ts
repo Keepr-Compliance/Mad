@@ -242,6 +242,18 @@ describe("rcsLinkFocus with a Promise-returning clipboard (Electron 44)", () => 
     expect(await clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: asyncRead, clearClipboard: clear })).toBe(true);
     expect(clear).toHaveBeenCalledTimes(1);
   });
+  // SR N-1: the result must wait for the clear. Mutation: drop the
+  // `await` on clearClipboard() → both cases below go red.
+  it("does not report cleared until a late clear has finished", async () => {
+    let finished = false;
+    const lateClear = () => new Promise<void>((resolve) => setTimeout(() => { finished = true; resolve(); }, 20));
+    expect(await clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: asyncRead, clearClipboard: lateClear })).toBe(true);
+    expect(finished).toBe(true);
+  });
+  it("a rejected clear: false, never a throw or an unhandled rejection", async () => {
+    const rejectedClear = () => Promise.reject(new Error("clipboard busy"));
+    expect(await clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: asyncRead, clearClipboard: rejectedClear })).toBe(false);
+  });
   it("a rejected read: null / false, never a throw", async () => {
     const rejected = () => Promise.reject(new Error("busy"));
     expect(await linkCodeFromClipboard({ platform: "win32", linkState: () => ({ state: "waiting" }), readClipboard: rejected })).toBeNull();
