@@ -210,7 +210,10 @@ const FROM_SOURCE = process.env.KEEPR_REBUILD_FROM_SOURCE === '1';
 function tryElectronRebuild(moduleName) {
   console.log(`[rebuild-native] ${moduleName}: falling back to electron-rebuild (@electron/rebuild)...`);
 
-  const result = spawnSync('npx', ['electron-rebuild', '-f', '-w', moduleName], {
+  // --build-from-source: @electron/rebuild otherwise tries its own prebuild
+  // download first, and the forced CI step would not compile anything.
+  const args = ['electron-rebuild', '-f', '-o', moduleName, ...(FROM_SOURCE ? ['--build-from-source'] : [])];
+  const result = spawnSync('npx', args, {
     cwd: path.join(__dirname, '..'),
     stdio: 'inherit',
     shell: true
