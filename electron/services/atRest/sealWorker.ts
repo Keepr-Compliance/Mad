@@ -4,6 +4,8 @@
  * workerData = { key, keyId, chunkSize, stop }. `stop` is a shared flag the main thread
  * sets to pause the pass at the next file boundary.
  */
+// BACKLOG-4052: this thread's own Node CA store — MUST stay the first import.
+import "../../bootstrap/workerNodeCaDenylist";
 import { parentPort, workerData } from "worker_threads";
 
 import { createSealEngine, type SealMode } from "./sealEngine";

@@ -200,10 +200,17 @@ function findBinding(modulePath) {
   return null;
 }
 
-function tryElectronRebuild() {
-  console.log('[rebuild-native] Falling back to electron-rebuild...');
+/**
+ * KEEPR_REBUILD_FROM_SOURCE=1 skips prebuild-install for the Electron-ABI
+ * modules, so the electron-rebuild fallback (@electron/rebuild, BACKLOG-4052)
+ * is exercised in CI instead of only on the day a prebuild is missing.
+ */
+const FROM_SOURCE = process.env.KEEPR_REBUILD_FROM_SOURCE === '1';
 
-  const result = spawnSync('npx', ['electron-rebuild'], {
+function tryElectronRebuild(moduleName) {
+  console.log(`[rebuild-native] ${moduleName}: falling back to electron-rebuild (@electron/rebuild)...`);
+
+  const result = spawnSync('npx', ['electron-rebuild', '-f', '-w', moduleName], {
     cwd: path.join(__dirname, '..'),
     stdio: 'inherit',
     shell: true
@@ -236,13 +243,15 @@ function main() {
 
     for (const moduleName of ELECTRON_ABI_MODULES) {
       // Try prebuild-install first (faster, no build tools needed)
-      if (tryPrebuildInstall(moduleName, electronVersion)) {
+      if (FROM_SOURCE) {
+        console.log(`[rebuild-native] ${moduleName}: KEEPR_REBUILD_FROM_SOURCE=1, skipping prebuild-install`);
+      } else if (tryPrebuildInstall(moduleName, electronVersion)) {
         console.log(`[rebuild-native] ${moduleName}: installed prebuilt binary`);
         continue;
       }
 
       // Fall back to electron-rebuild
-      if (tryElectronRebuild()) {
+      if (tryElectronRebuild(moduleName)) {
         console.log(`[rebuild-native] ${moduleName}: rebuilt with electron-rebuild`);
         continue;
       }
