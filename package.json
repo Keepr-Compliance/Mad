@@ -65,6 +65,7 @@
     "deps:check": "depcheck",
     "deps:check-ci": "depcheck --json | node -e \"const d=JSON.parse(require('fs').readFileSync(0,'utf-8')); if(d.dependencies.length||d.missing&&Object.keys(d.missing).length){console.error('Unused or missing deps found'); process.exit(1)}\"",
     "lint:migrations": "bash scripts/lint-migrations.sh",
+    "verify:node-version": "node scripts/__tests__/check-node-version.verify.js",
     "check:pii": "node scripts/ci/check-fixture-pii.mjs",
     "verify:pii": "node scripts/__tests__/check-fixture-pii.verify.js",
     "check:msg-hygiene": "node scripts/ci/check-message-hygiene.mjs",

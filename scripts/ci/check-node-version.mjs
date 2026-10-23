@@ -9,7 +9,7 @@
 export const MINIMUM = "22.23.4";
 
 export function parse(v) {
-  const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(v).trim());
+  const m = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(String(v).trim());
   return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
 }
 

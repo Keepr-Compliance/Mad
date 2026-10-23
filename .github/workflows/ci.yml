@@ -151,7 +151,7 @@ jobs:
   # For docs-only changes, provide passing status checks without running heavy tests
   # Matrix must match the real test job to produce identical status check names
   docs-pass:
-    name: Test & Lint
+    name: Test & Lint (${{ matrix.os }})
     needs: check-changes
     if: needs.check-changes.outputs.docs-only == 'true'
     runs-on: ubuntu-latest
@@ -164,7 +164,7 @@ jobs:
         run: echo "Skipping tests for ${{ matrix.os }} / Node ${{ matrix.node-version }} - documentation-only changes detected"
 
   test:
-    name: Test & Lint
+    name: Test & Lint (${{ matrix.os }})
     needs: check-changes
     if: needs.check-changes.outputs.docs-only != 'true'
     runs-on: ${{ matrix.os }}
@@ -189,7 +189,7 @@ jobs:
       - name: Check Node.js version (BACKLOG-4053)
         shell: bash
         run: node scripts/ci/check-node-version.mjs "$(node -v)"
-
+          node scripts/__tests__/check-node-version.verify.js
       - name: Install Python setuptools
         run: pip install setuptools
 
