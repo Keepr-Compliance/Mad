@@ -52,9 +52,9 @@ import {
 // layer. `unlinkMessages` calls these from inside a `dbTransaction` body, where
 // a promise-returning wrapper would be an atomicity hole dressed as a fix: the
 // callback returns, the transaction commits, and the failure arrives later as
-// an unhandled rejection. `unlinkMessageFromTransaction` was always sync — only
-// the `databaseService` facade made it look otherwise.
-import { linkMessageToTransaction, unlinkMessageFromTransaction } from "../db/messageDbService";
+// an unhandled rejection. `repointMessageTransaction` (BACKLOG-3908) is sync
+// for the same reason.
+import { linkMessageToTransaction, repointMessageTransaction } from "../db/messageDbService";
 import {
   addIgnoredCommunicationSync,
   createCommunicationSync,
@@ -1106,38 +1106,6 @@ class TransactionService {
       communications: [],
       contact_assignments,
     };
-  }
-
-  /**
-   * Create manual transaction (user-entered)
-   */
-  async createManualTransaction(
-    userId: string,
-    transactionData: Partial<NewTransaction>,
-  ): Promise<Transaction> {
-    const transaction = await databaseService.createTransaction({
-      user_id: userId,
-      property_address: transactionData.property_address!,
-      property_street: transactionData.property_street,
-      property_city: transactionData.property_city,
-      property_state: transactionData.property_state,
-      property_zip: transactionData.property_zip,
-      transaction_type: transactionData.transaction_type,
-      status: transactionData.status || "active",
-      started_at: transactionData.started_at,
-      closed_at: transactionData.closed_at,
-      closing_date_verified: false,
-      representation_start_confidence: undefined,
-      closing_date_confidence: undefined,
-      export_status: "not_exported",
-      export_count: 0,
-      communications_scanned: 0,
-      total_communications_count: 0,
-      offer_count: 0,
-      failed_offers_count: 0,
-    } as NewTransaction);
-
-    return transaction;
   }
 
   /**
@@ -2193,13 +2161,29 @@ class TransactionService {
   }
 
   /**
-   * Get unlinked messages for a specific contact
+   * Get unlinked messages for a specific contact, as offered to `transactionId`'s
+   * attach picker (BACKLOG-4017: chats linked to that deal are left out).
    */
   async getMessagesByContact(
     userId: string,
     contact: string,
+    transactionId: string,
   ): Promise<PickerMessage[]> {
-    const messages = await databaseService.getMessagesByContact(userId, contact);
+    return (await this.readPickerForContact(userId, contact, transactionId)).messages;
+  }
+
+  /**
+   * The attach picker's read for one contact (BACKLOG-4017): the messages offered
+   * to `transactionId`, plus how many of the contact's chats were left out because
+   * they are linked to that deal (one scan, no extra query).
+   */
+  async readPickerForContact(
+    userId: string,
+    contact: string,
+    transactionId: string,
+  ): Promise<{ messages: PickerMessage[]; linkedToDealThreadCount: number; hasTextsAttachedToDeal: boolean }> {
+    const result = await databaseService.readPickerForContact(userId, contact, transactionId);
+    const { messages } = result;
 
     await logService.info(
       "Retrieved messages for contact",
@@ -2207,12 +2191,15 @@ class TransactionService {
       {
         userId,
         contact,
+        transactionId,
         count: messages.length,
+        linkedToDealThreadCount: result.linkedToDealThreadCount,
       },
     );
 
-    return messages;
+    return result;
   }
+
 
   /**
    * Link messages to a transaction
@@ -2455,15 +2442,11 @@ class TransactionService {
         //
         // BACKLOG-2547: this iterates `messageIds` — the INPUT LIST — and not
         // one of the Maps above, because `deleteCommunicationByMessageIdSync`
-        // must run for every input id unconditionally. Only the detach is
-        // gated, and it is gated on the message's OWN `transaction_id`, which
-        // is a DIFFERENT predicate from phase 1's
+        // must run for every input id unconditionally. The column re-point
+        // below (BACKLOG-3908) is gated on the message's OWN `transaction_id`,
+        // which is a DIFFERENT predicate from phase 1's
         // `passedTransactionId || message?.transaction_id`. Both are preserved.
         for (const messageId of messageIds) {
-          const message = messagesById.get(messageId) ?? null;
-          if (message?.transaction_id) {
-            unlinkMessageFromTransaction(messageId);
-          }
           // BACKLOG-3890: scoped to the deal being edited, so the same
           // message's links in other deals survive. No deal named -> all-deal
           // delete, as before.
@@ -2474,6 +2457,18 @@ class TransactionService {
         for (const [transactionId, threadIds] of transactionThreads) {
           for (const threadId of threadIds) {
             deleteCommunicationByThreadSync(threadId, transactionId);
+          }
+        }
+
+        // BACKLOG-3908: re-point the message's column at its most recent
+        // REMAINING link instead of clearing it, so a text still held by
+        // another deal does not reappear in that deal's picker and auto-link.
+        // AFTER both delete loops, so the deal being removed is no longer a
+        // candidate; gated on the message's own column, as the NULL write was.
+        for (const messageId of messageIds) {
+          const message = messagesById.get(messageId) ?? null;
+          if (message?.transaction_id) {
+            repointMessageTransaction(messageId);
           }
         }
 

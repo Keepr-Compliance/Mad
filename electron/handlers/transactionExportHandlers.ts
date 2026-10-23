@@ -50,7 +50,7 @@ import {
 
 import { sendToMainWindow } from "../windowRegistry";
 import { handleBusy } from "../utils/busyIpc";
-import { completeExport } from "../services/exportCompletion";
+import { completeExport, EXPORT_NOT_RECORDED_MESSAGE } from "../services/exportCompletion";
 
 interface ExportOptions {
   exportFormat?: string;
@@ -402,10 +402,9 @@ export function registerTransactionExportHandlers(
       );
 
       // BACKLOG-3303: record, audit, funnel and openable-path in one place.
-      await completeExport({
+      const completion = await completeExport({
         transactionId: validatedTransactionId,
         userId: details.user_id,
-        exportCount: details.export_count,
         propertyAddress: details.property_address,
         recordedFormat: sanitizedOptions.exportFormat || "pdf",
         auditFormat: sanitizedOptions.exportFormat || "pdf",
@@ -413,6 +412,12 @@ export function registerTransactionExportHandlers(
         mode: enhancedPrep.decision.mode,
         path: exportPath,
       });
+      // BACKLOG-3339: the file was saved but the export was not recorded.
+      // `success: false`, so a caller that does not know `notRecorded` shows
+      // an error instead of counting it as a finished export.
+      if (!completion.recorded) {
+        return { success: false, notRecorded: true, path: exportPath, error: EXPORT_NOT_RECORDED_MESSAGE };
+      }
 
       logService.info("Enhanced export successful", "Transactions", {
         transactionId: validatedTransactionId,
@@ -575,16 +580,19 @@ export function registerTransactionExportHandlers(
       // this path has never written the column, so whatever a previous export
       // recorded survives. Recording "folder" would change what that column
       // means to every reader of it (BACKLOG-2549 ruling).
-      await completeExport({
+      const completion = await completeExport({
         transactionId: validatedTransactionId,
         userId: details.user_id,
-        exportCount: details.export_count,
         propertyAddress: details.property_address,
         auditFormat: "folder",
         hiddenTextCount: folderPlan.hiddenTextCount,
         mode: folderPrep.decision.mode,
         path: exportPath,
       });
+      // BACKLOG-3339: saved but not recorded (see export-enhanced).
+      if (!completion.recorded) {
+        return { success: false, notRecorded: true, path: exportPath, error: EXPORT_NOT_RECORDED_MESSAGE };
+      }
 
       logService.info("Folder export successful", "Transactions", {
         transactionId: validatedTransactionId,

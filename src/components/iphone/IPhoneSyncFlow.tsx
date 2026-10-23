@@ -60,6 +60,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     appleEncryptedBackup,
     lastSyncTime,
     isWaitingForPasscode,
+    toolSuspendedNotice,
     syncLocked,
     lockReason,
     // BACKLOG-1919: Apple-driver recovery state + action
@@ -202,6 +203,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
           // ConnectionStatus view, as if freshly opened.
           onCancel={() => { logger.info("[IPhoneSyncFlow] Cancel clicked"); void cancelSync("progress-cancel"); }}
           isWaitingForPasscode={isWaitingForPasscode}
+          toolSuspendedNotice={toolSuspendedNotice}
         />
       )}
 

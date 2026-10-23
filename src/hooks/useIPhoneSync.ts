@@ -207,6 +207,9 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   const [appleEncryptedBackup, setAppleEncryptedBackup] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [isWaitingForPasscode, setIsWaitingForPasscode] = useState(false);
+  // BACKLOG-4002 (Windows): the backup tool is suspended. Shown in place of the
+  // "please don't cancel" panel; cleared on resume, error, complete, start, cancel, dismiss.
+  const [toolSuspendedNotice, setToolSuspendedNotice] = useState<UserFacingError | null>(null);
   // TASK-910: Sync lock state
   const [syncLocked, setSyncLocked] = useState(false);
   const [lockReason, setLockReason] = useState<string | null>(null);
@@ -573,10 +576,24 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
         cleanups.push(unsub);
       }
 
+      // BACKLOG-4002 (Windows): the backup tool is suspended / running again.
+      if (syncApi.onToolSuspended) {
+        const unsub = syncApi.onToolSuspended((payload) => {
+          if (payload.suspended && payload.userError && syncStateRef.isActive) {
+            logger.warn("[useIPhoneSync] Backup tool is suspended; showing the notice");
+            setToolSuspendedNotice(payload.userError);
+          } else {
+            setToolSuspendedNotice(null);
+          }
+        });
+        cleanups.push(unsub);
+      }
+
       // Sync error events
       // TASK-2276: Handle enriched error payload with optional userError field
       if (syncApi.onError) {
         const unsub = syncApi.onError((err) => {
+          setToolSuspendedNotice(null); // BACKLOG-4002
           // Ignore errors from a cancelled sync — cancelSync already reset state
           if (err.message?.toLowerCase().includes("cancelled") || err.message?.toLowerCase().includes("canceled")) {
             logger.info("[useIPhoneSync] Ignoring error from cancelled sync:", err.message);
@@ -611,6 +628,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           error?: string;
         }
         const unsub = syncApi.onComplete((data: unknown) => {
+          setToolSuspendedNotice(null); // BACKLOG-4002
           // BACKLOG-2328/2333: Ignore completion events after cancel — otherwise
           // a late in-flight "complete" event flips the clean idle reset (that
           // cancelSync applied) to the success ("Sync Complete!") screen.
@@ -1212,6 +1230,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     setIsStarting(false); // BACKLOG-3816: handed to main; the progress screen takes over.
     setError(null);
     setUserError(null); // TASK-2276: Clear structured error on new sync
+    setToolSuspendedNotice(null); // BACKLOG-4002
     setAppleEncryptedBackup(false);
     setProgress({
       phase: "preparing",
@@ -1335,6 +1354,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     setAppleEncryptedBackup(false);
     setError(null);
     setUserError(null); // TASK-2276: Clear structured error on cancel
+    setToolSuspendedNotice(null); // BACKLOG-4002
     setSyncLocked(false);
     setLockReason(null);
 
@@ -1349,6 +1369,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     setProgress(null);
     setError(null);
     setUserError(null); // TASK-2276: Clear structured error on dismiss
+    setToolSuspendedNotice(null); // BACKLOG-4002
   }, []);
 
   /** BACKLOG-1582: Manually request trust/pairing with the detected device */
@@ -1489,6 +1510,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     appleEncryptedBackup,
     lastSyncTime,
     isWaitingForPasscode,
+    toolSuspendedNotice, // BACKLOG-4002
     // TASK-910: Sync lock state
     syncLocked,
     lockReason,

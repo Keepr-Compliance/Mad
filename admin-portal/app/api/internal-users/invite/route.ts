@@ -2,8 +2,8 @@
  * API Route: Add Internal User
  *
  * Handles two cases:
- *   1. User exists in public.users -> call RPC to assign role directly
- *   2. User NOT in public.users -> create a pending invitation
+ *   1. An account with this sign-in email exists -> the RPC assigns the role
+ *   2. No such account (RPC SQLSTATE P0002) -> create a pending invitation
  *      (role is auto-assigned on first SSO login via /auth/callback)
  *
  * POST /api/internal-users/invite
@@ -69,41 +69,15 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // ── 4. Check if user exists in public.users ───────────────────────
-  const { data: existingUser, error: userLookupError } = await supabase
-    .from('users')
-    .select('id, email')
-    .eq('email', email)
-    .maybeSingle();
+  // ── 4. Assign the role to the account whose sign-in email matches ──
+  // admin_add_internal_user finds the account by its auth.users email
+  // (BACKLOG-3998); SQLSTATE P0002 means no account has this email yet.
+  const { data, error } = await supabase.rpc('admin_add_internal_user', {
+    p_email: email,
+    p_role: roleSlug,
+  });
 
-  if (userLookupError) {
-    console.error('[invite-internal-user] users lookup error:', userLookupError.message);
-    return NextResponse.json({ error: 'Failed to look up user' }, { status: 500 });
-  }
-
-  if (existingUser) {
-    // ── Case A: User exists → assign role directly via RPC ────────
-    const { data, error } = await supabase.rpc('admin_add_internal_user', {
-      p_email: email,
-      p_role: roleSlug,
-    });
-
-    if (error) {
-      console.error('[invite-internal-user] RPC error:', error.message);
-
-      if (error.message?.includes('already has') || error.message?.includes('already an internal')) {
-        return NextResponse.json(
-          { error: `${email} already has an internal role assigned.` },
-          { status: 409 }
-        );
-      }
-
-      return NextResponse.json(
-        { error: error.message || 'Failed to assign role' },
-        { status: 500 }
-      );
-    }
-
+  if (!error) {
     const result = data as { success: boolean; user_id: string; role: string } | null;
 
     // Fire-and-forget: send notification email
@@ -114,6 +88,22 @@ export async function POST(request: NextRequest) {
       user_id: result?.user_id,
       role: result?.role ?? roleSlug,
     });
+  }
+
+  if (error.code !== 'P0002') {
+    console.error('[invite-internal-user] RPC error:', error.message);
+
+    if (error.message?.includes('already has') || error.message?.includes('already an internal')) {
+      return NextResponse.json(
+        { error: `${email} already has an internal role assigned.` },
+        { status: 409 }
+      );
+    }
+
+    return NextResponse.json(
+      { error: error.message || 'Failed to assign role' },
+      { status: 500 }
+    );
   }
 
   // ── Case B: User not in system → create pending invitation ──────

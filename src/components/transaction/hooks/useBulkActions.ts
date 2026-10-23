@@ -8,6 +8,10 @@ import {
   describeBlockedExport,
   evaluateExportGate,
 } from "../../../services/exportReviewGate";
+import {
+  bulkExportNotRecordedMessage,
+  bulkExportOtherFailuresSentence,
+} from "../../../utils/exportAuditCopy";
 
 /**
  * Return type for useBulkActions hook
@@ -197,6 +201,9 @@ export function useBulkActions(
         // were skipped because they need unlocking.
         let lockedCount = 0;
         const errors: string[] = [];
+        // BACKLOG-3339: saved but not recorded. Kept apart from `errors`: the
+        // file exists, and the user must be told by name to export it again.
+        const notRecorded: string[] = [];
 
         for (const transactionId of selectedTransactionIds) {
           try {
@@ -206,6 +213,8 @@ export function useBulkActions(
             );
             if (result.success) {
               successCount++;
+            } else if (result.notRecorded) {
+              notRecorded.push(labelForTransaction?.(transactionId) || "a deal with no address");
             } else if (isPaywallLockedError(result.error)) {
               lockedCount++;
             } else {
@@ -238,6 +247,16 @@ export function useBulkActions(
           setBulkExportNotice(true);
           exitSelectionMode();
           await onComplete();
+          // Set after the reload, which only writes the error on a failure.
+          if (notRecorded.length > 0) showError(bulkExportNotRecordedMessage(notRecorded));
+        } else if (notRecorded.length > 0) {
+          // Nothing was recorded, but files were saved: say so, by name, even
+          // when other deals failed outright; those are counted after it.
+          // Selection is kept for the retry.
+          setBulkExportNotice(true);
+          const failedNote =
+            errors.length > 0 ? ` ${bulkExportOtherFailuresSentence(errors.length)}` : "";
+          showError(`${bulkExportNotRecordedMessage(notRecorded)}${failedNote}`);
         } else if (lockedCount > 0 && errors.length === 0) {
           // Nothing exported solely because every selected deal is locked.
           showError(

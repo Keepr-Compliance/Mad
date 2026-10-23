@@ -14,6 +14,10 @@ import { app } from "electron";
 import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
+import { removeUnreferencedAttachmentFiles } from "./attachmentFileRefs";
+import { AttachmentDedupIndex } from "./attachmentDedupIndex";
+import { SCOPE_MESSAGE_ATTACHMENTS } from "./atRest/markers";
+import { ensureDb } from "./db/core/dbConnection";
 import * as externalContactDb from "./db/externalContactDbService";
 import {
   holdContactLinking,
@@ -512,18 +516,24 @@ class IPhoneSyncStorageService {
     });
 
     try {
-      // 1. Delete attachments and get orphaned file paths
+      // 1. Delete attachments and get the candidate file paths
       const attachmentResult = databaseService.deleteAttachmentsBySessionId(sessionId);
 
-      // 2. Delete orphaned attachment files from disk
-      for (const filePath of attachmentResult.orphanedFiles) {
-        try {
-          await fs.promises.unlink(filePath);
-          log.debug(`[${IPhoneSyncStorageService.SERVICE_NAME}] Deleted orphaned file: ${filePath}`);
-        } catch (err) {
-          // File may already be deleted or inaccessible
-          log.debug(`[${IPhoneSyncStorageService.SERVICE_NAME}] Could not delete file: ${filePath}`);
-        }
+      // 2. BACKLOG-4040: delete the candidates through the shared check — only
+      // inside message-attachments, and only files no remaining row uses (any
+      // case, any directory), re-checked after the containment awaits. Never
+      // fails the rollback: a failure leaves files behind.
+      let filesRemoved = 0;
+      try {
+        const files = await removeUnreferencedAttachmentFiles(ensureDb(), attachmentResult.orphanedFiles, {
+          userData: app.getPath("userData"),
+          scopes: [SCOPE_MESSAGE_ATTACHMENTS],
+        });
+        filesRemoved = files.removed;
+      } catch (err) {
+        log.warn(`[${IPhoneSyncStorageService.SERVICE_NAME}] Rollback could not clean up attachment files`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
 
       // 3. Delete messages
@@ -535,7 +545,7 @@ class IPhoneSyncStorageService {
       log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Rollback complete for session ${sessionId}`, {
         messagesDeleted,
         attachmentsDeleted: attachmentResult.deleted,
-        orphanedFilesDeleted: attachmentResult.orphanedFiles.length,
+        orphanedFilesDeleted: filesRemoved,
         contactsDeleted,
       });
     } catch (error) {
@@ -949,12 +959,13 @@ class IPhoneSyncStorageService {
       await yieldToEventLoop();
     }
 
-    // Load existing attachment hashes for deduplication
-    const existingHashes = new Set<string>();
+    // Load existing attachment hashes for deduplication.
+    // BACKLOG-4040 S2: every stored SPELLING of each hash is kept, so a new row
+    // links to a file that exists (not one rebuilt with this file's extension).
+    const existingHashes = new AttachmentDedupIndex(attachmentsDir, app.getPath("userData"));
     const hashRows = databaseService.getAttachmentStoragePaths();
     for (const row of hashRows) {
-      const filename = path.basename(row.storage_path, path.extname(row.storage_path));
-      existingHashes.add(filename);
+      existingHashes.add(row.storage_path);
     }
     await yieldToEventLoop();
 
@@ -1036,18 +1047,21 @@ class IPhoneSyncStorageService {
         // stored file name are the SHA-256 of the plaintext (BACKLOG-3816).
         const contentHash = (await hashSourceFile(sourcePath)).sha256;
 
-        // Determine destination path
-        const destPath = path.join(attachmentsDir, `${contentHash}${ext}`);
+        // Determine destination path. BACKLOG-4040 S2: an existing file with
+        // these bytes is linked by its own stored name (`h.jpeg` stored by the
+        // Mac stays `h.jpeg`); a known hash whose file is gone is written again.
+        let destPath = existingHashes.existingFileFor(contentHash);
 
         // BACKLOG-3816: store the KEPRENC ciphertext, never a plaintext copy.
-        if (!existingHashes.has(contentHash)) {
+        if (!destPath) {
+          destPath = path.join(attachmentsDir, `${contentHash}${ext}`);
           const sealed = await sealFileFrom(sourcePath, destPath);
           if (sealed.sha256 !== contentHash) {
             // The source changed between the hash and the copy: the name would lie.
             await fs.promises.unlink(destPath).catch(() => undefined);
             throw new Error("attachment source changed while it was being stored");
           }
-          existingHashes.add(contentHash);
+          existingHashes.add(destPath);
         }
 
         // Create attachment record

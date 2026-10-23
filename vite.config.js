@@ -53,6 +53,10 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
       '@electron': path.resolve(__dirname, './electron'),
       '@types': path.resolve(__dirname, './types'),
+      // BACKLOG-3863 (SR R6): the kit and its tokens from THIS checkout, not
+      // through node_modules (a worktree's node_modules points at another one).
+      '@keepr/ui': path.resolve(__dirname, './packages/ui/src/index.ts'),
+      '@keepr/design-system': path.resolve(__dirname, './packages/design-system/src/index.ts'),
     },
   },
   build: {

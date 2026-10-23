@@ -25,19 +25,9 @@ import path from "path";
 import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
 
-/**
- * The time limit on every short iPhone query (A-F in the BACKLOG-3996 plan).
- *
- * Measured, not chosen: a storage query that stalled for 60.0 s and then answered
- * (exit 0, empty) stays under the line, and a first-run security scan of about 60 s
- * is not cut off at the moment it lets the tool go. Nothing that ran past 90 s has
- * ever returned usable data. Its own constant on purpose — not shared with any other
- * 90 s budget in the app.
- *
- * idevicebackup2 is NOT covered by this: it runs for hours, and its 30-minute
- * no-progress watchdog (BackupService) already covers a held start.
- */
-export const IPHONE_QUERY_TIMEOUT_MS = 90_000;
+/** The time limit on every short iPhone query. Defined in iphoneToolLimits.ts (BACKLOG-4002). */
+import { IPHONE_QUERY_TIMEOUT_MS } from "./iphoneToolLimits";
+export { IPHONE_QUERY_TIMEOUT_MS };
 
 /** How long taskkill gets before `child.kill()` is used as well (taskkill can be held too). */
 export const TASKKILL_FALLBACK_MS = 3_000;

@@ -220,6 +220,47 @@ describe("MacOSMessagesImportSettings — Force Re-import confirm dialog (BACKLO
     );
   });
 
+  // BACKLOG-4040 S2: the founder-approved line, shown ONLY with text only on.
+  const TEXT_ONLY_FILES_LINE =
+    "Text only is on, so Keepr deletes its copies of these texts' attachments. Your Messages app is not changed.";
+
+  it("with 'Import message text only' ON, says Keepr deletes its copies of the attachments", async () => {
+    const { settingsService } = jest.requireMock("../../../services");
+    // Every preference read in this render sees the stored text-only choice.
+    (settingsService.getPreferences as jest.Mock).mockResolvedValue({
+      success: true,
+      data: { messageImport: { filters: { skipAttachments: true } } },
+    });
+    try {
+      renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+      await waitFor(() =>
+        expect(screen.getByTestId("skip-attachments-toggle")).toHaveAttribute("aria-checked", "true"),
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: /force re-import/i }));
+      await screen.findByTestId("force-reimport-confirm-modal");
+
+      const line = screen.getByTestId("force-text-only-files-line");
+      expect(line.textContent).toBe(TEXT_ONLY_FILES_LINE);
+      // After the window line, inside the same dialog.
+      const windowLine = screen.getByTestId("force-window-line");
+      expect(windowLine.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    } finally {
+      (settingsService.getPreferences as jest.Mock).mockResolvedValue({ success: true, data: {} });
+    }
+  });
+
+  it("with 'Import message text only' OFF, shows no attachment-deletion line", async () => {
+    renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+    await awaitEstimateSettled();
+
+    fireEvent.click(screen.getByRole("button", { name: /force re-import/i }));
+    const modal = await screen.findByTestId("force-reimport-confirm-modal");
+
+    expect(screen.queryByTestId("force-text-only-files-line")).not.toBeInTheDocument();
+    expect(modal.textContent).not.toContain("deletes its copies");
+  });
+
   it("starts a FORCE import once the destructive confirm is clicked", async () => {
     renderStrict(<MacOSMessagesImportSettings userId={userId} />);
     await awaitEstimateSettled();

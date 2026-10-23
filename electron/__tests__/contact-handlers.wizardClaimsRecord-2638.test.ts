@@ -141,6 +141,13 @@ jest.mock("../services/databaseService", () => {
         (contactDb.backfillContactEmails as any)(id, emails, source),
       backfillContactPhones: (id: string, phones: string[], source?: any) =>
         (contactDb.backfillContactPhones as any)(id, phones, source),
+      // BACKLOG-3339: contacts:create writes through the sync cores in one transaction.
+      createContactSync: (data: any, origin: any) =>
+        (contactDb.createContactSync as any)(data, origin),
+      backfillContactEmailsSync: (id: string, emails: string[], source?: any) =>
+        (contactDb.backfillContactEmailsSync as any)(id, emails, source),
+      backfillContactPhonesSync: (id: string, phones: string[], source?: any) =>
+        (contactDb.backfillContactPhonesSync as any)(id, phones, source),
       getUserById: (id: string) => Promise.resolve({ id }),
       isInitialized: () => true,
       getRemovedContactIdentifiers: () => Promise.resolve([]),
@@ -199,7 +206,14 @@ jest.mock("../services/contactsService", () => ({
 
 jest.mock("../services/auditService", () => ({
   __esModule: true,
-  default: { log: jest.fn(), logContactAction: jest.fn() },
+  default: {
+    log: jest.fn(),
+    logContactAction: jest.fn(),
+    // BACKLOG-3339: contact changes write their entry inside the transaction.
+    recordInTransaction: jest.fn(),
+    recordFailure: jest.fn(),
+  },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
 }));
 
 jest.mock("../services/logService", () => {

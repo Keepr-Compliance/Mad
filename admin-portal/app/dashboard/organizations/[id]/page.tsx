@@ -1,12 +1,19 @@
 import { getAuthenticatedUser } from '@/lib/supabase/server';
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Building2, Shield } from 'lucide-react';
+import { ArrowLeft, Building2, Shield, Users } from 'lucide-react';
 import { Card } from '@keepr/design-system';
 import { MembersTable, type MemberRow } from './components/MembersTable';
 import { PendingInvitationsTable, type PendingInvitationRow } from './components/PendingInvitationsTable';
 import { PlanAssignment } from './components/PlanAssignment';
+import { BrokerageBillingCard } from './components/BrokerageBillingCard';
+import { OrgInviteButton } from './components/OrgInviteButton';
+import { OrgPeopleCard } from './components/OrgPeopleCard';
+import { OrgActivityCard } from './components/OrgActivityCard';
+import type { ActivityRow } from '@/lib/activity/describeActivity';
+import { shouldShowBillingCard, type OrgBilling } from '@/lib/billing/dealRules';
 import { formatDate } from '@/lib/format';
+import { pickOrgPlanRow, type OrgPlanEmbed } from '@/lib/orgPlanEmbed';
 
 export const dynamic = 'force-dynamic';
 
@@ -53,8 +60,27 @@ export default async function OrganizationDetailPage({
     required_permission: 'plans.manage',
   });
 
-  // Fetch org details, members, and pending invitations in parallel
-  const [orgResult, membersResult, pendingResult] = await Promise.all([
+  // BACKLOG-4007: Invite on this page needs the same permission as the Users page invite.
+  const { data: canInvite } = await supabase.rpc('has_permission', {
+    check_user_id: adminUser.id,
+    required_permission: 'users.edit',
+  });
+
+  // BACKLOG-3853 PR-2A: the brokerage Billing card. billing.view gates the read
+  // (admin_get_org_billing refuses without it); the card renders only while
+  // brokerage billing is switched on or the organization is a test organization.
+  const { data: canViewBilling } = await supabase.rpc('has_permission', {
+    check_user_id: adminUser.id,
+    required_permission: 'billing.view',
+  });
+  let billing: OrgBilling | null = null;
+  if (canViewBilling) {
+    const { data: billingData } = await supabase.rpc('admin_get_org_billing', { p_org: id });
+    billing = (billingData as OrgBilling | null) ?? null;
+  }
+
+  // Fetch org details, members, pending invitations and activity (BACKLOG-4036) in parallel
+  const [orgResult, membersResult, pendingResult, activityResult] = await Promise.all([
     supabase
       .from('organizations')
       .select('id, name, slug, max_seats, created_at, organization_plans(plan_id, plans(id, name, tier))')
@@ -73,7 +99,11 @@ export default async function OrganizationDetailPage({
       .is('user_id', null)
       .not('invited_email', 'is', null)
       .order('invited_at', { ascending: false }),
+    supabase.rpc('admin_get_org_activity', { p_org: id }),
   ]);
+  const activityFailed = Boolean(activityResult.error) || !Array.isArray(activityResult.data);
+  if (activityFailed) console.error('admin_get_org_activity failed:', activityResult.error?.message ?? 'no rows array');
+  const activity: ActivityRow[] = Array.isArray(activityResult.data) ? (activityResult.data as ActivityRow[]) : [];
 
   if (!orgResult.data) {
     notFound();
@@ -81,9 +111,8 @@ export default async function OrganizationDetailPage({
 
   const org = orgResult.data;
 
-  // Extract plan from organization_plans join (same pattern as user detail page)
-  const orgPlans = org.organization_plans as unknown as { plan_id: string; plans: { id: string; name: string; tier: string } | null }[] | null;
-  const activePlan = orgPlans?.[0]?.plans ?? null;
+  // Extract plan from the organization_plans embed (object or array, see lib/orgPlanEmbed.ts)
+  const activePlan = pickOrgPlanRow(org.organization_plans as unknown as OrgPlanEmbed)?.plans ?? null;
   const planName = activePlan?.name ?? 'None';
 
   // Transform members to include user info
@@ -109,6 +138,20 @@ export default async function OrganizationDetailPage({
     invitation_expires_at: p.invitation_expires_at,
   }));
 
+  // BACKLOG-4022: one Invite button, rendered in the header, the Members heading row and the
+  // empty state. Same props everywhere, so the same rules (billing card, deal, users.edit) hold.
+  const inviteButton = (
+    <OrgInviteButton
+      organizationId={org.id}
+      organizationName={org.name}
+      canInvite={!!canInvite}
+      canViewBilling={!!canViewBilling}
+      hasDeal={!!billing?.deal}
+      showBillingCard={shouldShowBillingCard(billing)}
+      isFirstInvite={members.length === 0 && pendingInvitations.length === 0}
+    />
+  );
+
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       {/* Back navigation */}
@@ -130,6 +173,7 @@ export default async function OrganizationDetailPage({
             <h1 className="text-2xl font-bold text-gray-900">{org.name}</h1>
             <p className="text-sm text-gray-500 mt-0.5">{org.slug}</p>
           </div>
+          {inviteButton}
         </div>
 
         <div className="mt-6 grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -166,6 +210,17 @@ export default async function OrganizationDetailPage({
       {/* Plan assignment */}
       <PlanAssignment organizationId={org.id} canManage={!!canManagePlans} />
 
+      {/* Brokerage billing (BACKLOG-3853) */}
+      {shouldShowBillingCard(billing) && (
+        <BrokerageBillingCard organizationId={org.id} organizationName={org.name} planName={planName} billing={billing} />
+      )}
+
+      {/* Brokerage people (BACKLOG-4007 PR-4): next to the Billing card, same gate */}
+      {shouldShowBillingCard(billing) && <OrgPeopleCard organizationId={org.id} />}
+
+      {/* Activity (BACKLOG-4036): every organization, organizations.view */}
+      <OrgActivityCard rows={activity} failed={activityFailed} />
+
       {/* Pending invitations */}
       {pendingInvitations.length > 0 && (
         <div>
@@ -178,10 +233,21 @@ export default async function OrganizationDetailPage({
 
       {/* Members table (includes license summary filter cards) */}
       <div>
-        <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider mb-4">
-          Members ({members.length})
-        </h2>
-        <MembersTable members={members} />
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">
+            Members ({members.length})
+          </h2>
+          {members.length > 0 && inviteButton}
+        </div>
+        {members.length === 0 ? (
+          <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-12">
+            <Users className="mx-auto block h-12 w-12 text-gray-300" />
+            <p className="mt-4 text-center text-sm text-gray-500">No members yet.</p>
+            <div className="mt-4 flex justify-center">{inviteButton}</div>
+          </div>
+        ) : (
+          <MembersTable members={members} />
+        )}
       </div>
     </div>
   );

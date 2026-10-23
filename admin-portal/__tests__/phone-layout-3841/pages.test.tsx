@@ -214,6 +214,7 @@ describe('C10 wide tables scroll inside their card instead of clipping', () => {
     const { container } = render(
       <OrganizationsTable
         canEdit
+        billingLive={false}
         organizations={[
           { id: 'org-1', name: 'Invented Brokerage Group', slug: 'invented-brokerage', plan_name: 'Pro', plan_tier: 'professional', created_at: '2025-01-01T00:00:00Z', member_count: 3 },
         ]}
@@ -313,6 +314,7 @@ describe('C11 page restores: phone token present, desktop tokens kept', () => {
     let r = render(
       <OrganizationsTable
         canEdit
+        billingLive={false}
         organizations={[{ id: 'org-1', name: 'Invented Brokerage Group', slug: 'invented', plan_name: null, plan_tier: null, created_at: null, member_count: 1 }]}
       />
     );

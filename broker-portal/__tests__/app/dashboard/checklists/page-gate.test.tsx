@@ -70,7 +70,10 @@ const canEditAnswer = (role: string, features: unknown, personal: boolean): bool
 const canOwnAnswer = (features: unknown): boolean => features !== FEATURE_OFF;
 const canEditRpc = (role: string, features: unknown, personal = false) =>
   jest.fn(async (fn: string) =>
-    fn === 'can_edit_checklist_templates'
+    // BACKLOG-3853 PR-2B: the brokerage is not suspended in this file.
+    fn === 'org_billing_suspended'
+      ? { data: false, error: null }
+      : fn === 'can_edit_checklist_templates'
       ? { data: canEditAnswer(role, features, personal), error: null }
       : fn === 'can_create_own_checklist_templates'
         ? { data: canOwnAnswer(features), error: null }

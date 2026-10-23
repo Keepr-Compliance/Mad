@@ -13,7 +13,7 @@ import { REPORTS, reportHref } from '../registry';
 
 const ROOT = path.resolve(__dirname, '../../..');
 const FILES = [
-  'app/dashboard/analytics/reports/submissions/page.tsx',
+  'app/dashboard/reports/submissions/page.tsx',
   'lib/reports/submissions-queries.ts',
   'lib/reports/submissions.ts',
 ];
@@ -38,6 +38,6 @@ describe('registered in the report registry (C9)', () => {
     expect(entry).toBeDefined();
     expect(entry!.permission).toBe(PERMISSIONS.ANALYTICS_VIEW);
     expect(entry!.source).toBe('submission_attempts');
-    expect(reportHref('submissions')).toBe('/dashboard/analytics/reports/submissions');
+    expect(reportHref('submissions')).toBe('/dashboard/reports/submissions');
   });
 });

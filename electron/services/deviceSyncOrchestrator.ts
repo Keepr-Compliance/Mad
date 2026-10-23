@@ -70,6 +70,8 @@ import {
   formatMsiServiceStoppedNeutralError,
   formatToolBlockedError,
   formatIphoneToolTimeoutError,
+  formatBackupWatchdogError,
+  type UserFacingError,
 } from "./diagnostics/userFacingErrors";
 import { checkToolFilesForBlock, keeprInstallFolder } from "./iphoneToolBlock";
 import { checkAppleDrivers } from "./appleDriverService";
@@ -931,6 +933,17 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // for a cause. Root-causing the wait is explicitly not this branch's job.
       this.enterBackupPhase("backup:waiting-for-device");
       this.emit("waiting-for-passcode");
+    });
+
+    // BACKLOG-4002 (Windows): the backup tool is suspended / running again. Forwarded as
+    // one event with a flag so the renderer has a single channel to clear on.
+    this.backupService.on("tool-suspended", (payload: { userError: UserFacingError }) => {
+      log.warn("[DeviceSyncOrchestrator] Backup tool is suspended; showing the notice");
+      this.emit("tool-suspended", { suspended: true, userError: payload.userError });
+    });
+    this.backupService.on("tool-resumed", () => {
+      log.info("[DeviceSyncOrchestrator] Backup tool is running again; notice cleared");
+      this.emit("tool-suspended", { suspended: false });
     });
 
     this.backupService.on("passcode-entered", () => {
@@ -2123,7 +2136,17 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           }
           // BACKLOG-3996: startBackup's own encryption check timed out.
           if (backupResult.errorCode === "IPHONE_TOOL_TIMEOUT") {
-            const userError = formatIphoneToolTimeoutError();
+            const userError = formatIphoneToolTimeoutError(keeprInstallFolder());
+            this.emit("error", { message: userError.description, userError });
+          }
+          // BACKLOG-4002: the watchdog stopped a backup that made no progress. Its own
+          // message, never the IPHONE_TOOL_TIMEOUT one (BACKLOG-3996 SR R7).
+          if (backupResult.errorCode === "BACKUP_TIMEOUT") {
+            const userError = formatBackupWatchdogError({
+              toolSuspendedAtTimeout: backupResult.toolSuspendedAtTimeout === true,
+              keeprFolder: process.platform === "win32" ? keeprInstallFolder() : null,
+              platform: process.platform,
+            });
             this.emit("error", { message: userError.description, userError });
           }
           return this.errorResult(error, backupResult.errorCode);
@@ -3742,7 +3765,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * unanswered query at pre-flight means the backup tool would be held the same way.
    */
   private failForToolTimeout(step: "storage-query" | "encryption-check"): SyncResult {
-    const userError = formatIphoneToolTimeoutError();
+    const userError = formatIphoneToolTimeoutError(keeprInstallFolder());
     log.warn("[DeviceSyncOrchestrator] iPhone query timed out during pre-flight; stopping", { step });
     syncTimeline.setContext({ endedBy: "tool-timeout", reasonCode: "IPHONE_TOOL_TIMEOUT" });
     this.isRunning = false;

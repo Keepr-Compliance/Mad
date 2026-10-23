@@ -8,6 +8,10 @@
 // the conversation view; only the export drops it (BACKLOG-3367). These
 // handlers write nothing but `transaction_hidden_texts` and an audit entry.
 //
+// BACKLOG-3339 slice T: the change and its entry are written in ONE
+// `dbTransaction` (`auditService.recordInTransaction`), so a failed entry
+// cancels the change and the user is told it was not made.
+//
 // TWO CHANNELS, ON PURPOSE. Hiding is an entitlement; unhiding is not. With
 // one channel and a direction flag, "gate only one direction" is a condition
 // someone can get wrong; with two, the hide channel calls the check and the
@@ -18,11 +22,14 @@ import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import auditService from "../services/auditService";
 import databaseService from "../services/databaseService";
+import { dbTransaction } from "../services/db/core/dbConnection";
 import {
-  hideTextFromExport,
+  hideTextFromExportSync,
   isTextHiddenFromExport,
-  unhideTextFromExport,
+  unhideTextFromExportSync,
 } from "../services/db/hiddenTextDbService";
+import { dealChangeFailureCode } from "../services/dealChangeAudit";
+import { dealToggleUserError } from "../services/dealToggleAudit";
 import logService from "../services/logService";
 import { refuseIfDealLocked } from "../services/dealLockState";
 import { wrapHandler } from "../utils/wrapHandler";
@@ -91,28 +98,34 @@ export function registerHiddenTextHandlers(): void {
           return { success: false, error: "Transaction not found" };
         }
 
-        const added = await hideTextFromExport({
-          transactionId: validatedTransactionId,
-          messageId: validatedMessageId,
-          userId: transaction.user_id,
-        });
-
         // Audit only a real change. `TRANSACTION_UPDATE` is inside the
         // audit_logs CHECK; `metadata.reason` names the act, the same idiom as
         // contact restore (transactionCrudHandlers).
-        if (added) {
-          await auditService.log({
-            userId: transaction.user_id,
-            action: "TRANSACTION_UPDATE",
-            resourceType: "TRANSACTION",
-            resourceId: validatedTransactionId,
-            metadata: {
-              reason: "text_hidden_from_export",
+        const hideEntry = {
+          userId: transaction.user_id,
+          action: "TRANSACTION_UPDATE" as const,
+          resourceType: "TRANSACTION" as const,
+          resourceId: validatedTransactionId,
+          metadata: {
+            reason: "text_hidden_from_export",
+            transactionId: validatedTransactionId,
+            messageId: validatedMessageId,
+          },
+        };
+        let added: boolean;
+        try {
+          added = dbTransaction(() => {
+            const changed = hideTextFromExportSync({
               transactionId: validatedTransactionId,
               messageId: validatedMessageId,
-            },
-            success: true,
+              userId: transaction.user_id,
+            });
+            if (changed) auditService.recordInTransaction(hideEntry);
+            return changed;
           });
+        } catch (error) {
+          auditService.recordFailure({ ...hideEntry, errorMessage: dealChangeFailureCode(error) });
+          throw dealToggleUserError("hide", error);
         }
 
         // Observe the outcome instead of inferring it from `added`: false covers
@@ -160,24 +173,30 @@ export function registerHiddenTextHandlers(): void {
           return { success: false, error: "Transaction not found" };
         }
 
-        const removed = await unhideTextFromExport({
-          transactionId: validatedTransactionId,
-          messageId: validatedMessageId,
-        });
-
-        if (removed > 0) {
-          await auditService.log({
-            userId: transaction.user_id,
-            action: "TRANSACTION_UPDATE",
-            resourceType: "TRANSACTION",
-            resourceId: validatedTransactionId,
-            metadata: {
-              reason: "text_unhidden_from_export",
+        const unhideEntry = {
+          userId: transaction.user_id,
+          action: "TRANSACTION_UPDATE" as const,
+          resourceType: "TRANSACTION" as const,
+          resourceId: validatedTransactionId,
+          metadata: {
+            reason: "text_unhidden_from_export",
+            transactionId: validatedTransactionId,
+            messageId: validatedMessageId,
+          },
+        };
+        let removed: number;
+        try {
+          removed = dbTransaction(() => {
+            const count = unhideTextFromExportSync({
               transactionId: validatedTransactionId,
               messageId: validatedMessageId,
-            },
-            success: true,
+            });
+            if (count > 0) auditService.recordInTransaction(unhideEntry);
+            return count;
           });
+        } catch (error) {
+          auditService.recordFailure({ ...unhideEntry, errorMessage: dealChangeFailureCode(error) });
+          throw dealToggleUserError("unhide", error);
         }
 
         const hidden = await isTextHiddenFromExport({

@@ -5,7 +5,7 @@ name|part|controls, where controls is the control-file fragment run.sh runs agai
 mutant ('race:<scenario>' = race.sh). `apply <name> <src> <dst>` writes the mutant and
 prints MUTATION APPLIED plus the changed line count.
 
-Usage: mutants.py list [fragment] | apply <name> <src> <dst>
+Usage: mutants.py list [fragment] | apply <name> <src> <dst> | carry <name> <m3src> <dst>
 """
 import sys
 
@@ -49,6 +49,15 @@ REVERT_GUARDED = """  BEGIN
       NEW.id, SQLSTATE, SQLERRM;
   END;"""
 
+M3_R4_THEN_REWRITE = R4_BLOCK + """
+  IF TG_OP = 'INSERT' AND public.member_origin_joins_unlicensed(NEW.provisioned_by) THEN"""
+# Likely wrong build: the refusal for non-rewritten INSERTs placed ahead of the R4 rule.
+M3_REFUSE_FIRST = """  IF TG_OP = 'INSERT' AND NOT public.member_origin_joins_unlicensed(NEW.provisioned_by) THEN
+    RAISE EXCEPTION 'seat_limit_reached' USING ERRCODE = 'P0001';
+  END IF;
+""" + R4_BLOCK + """
+  IF TG_OP = 'INSERT' AND public.member_origin_joins_unlicensed(NEW.provisioned_by) THEN"""
+
 # name: (part, controls, [(old, new), ...])
 MUTANTS = {
   # --- seat trigger: locking and counting (two-session) ---
@@ -69,7 +78,10 @@ MUTANTS = {
   # --- seat trigger: rules ---
   "R3_rewrite_on_update":  ("M1", "c11",
                             [("  IF TG_OP = 'INSERT' AND public.member_origin_is_idp(NEW.provisioned_by) THEN",
-                              "  IF public.member_origin_is_idp(NEW.provisioned_by) THEN")]),
+                              "  IF public.member_origin_is_idp(NEW.provisioned_by) THEN")],
+                            # carried into M3 (which rewrote this line):
+                            [("  IF TG_OP = 'INSERT' AND public.member_origin_joins_unlicensed(NEW.provisioned_by) THEN",
+                              "  IF public.member_origin_joins_unlicensed(NEW.provisioned_by) THEN")]),
   "W3_current_user_exempt":("M1", "c02",
                             [("BEGIN\n  -- Timestamp first, before any early return",
                               "BEGIN\n  IF current_user NOT IN ('authenticated', 'anon') THEN RETURN NEW; END IF;\n  -- Timestamp first, before any early return")]),
@@ -80,7 +92,9 @@ MUTANTS = {
   "R4_any_member":         ("M1", "c12",
                             [("       AND m.user_id IS NOT NULL\n       AND public.member_status_grants_access(m.license_status)\n  ) THEN\n    RAISE NOTICE",
                               "       AND m.user_id IS NOT NULL\n  ) THEN\n    RAISE NOTICE")]),
-  "IDP_origin_any":        ("M1", "c03",
+  # Under M3 the seat trigger reads member_origin_joins_unlicensed, not member_origin_is_idp,
+  # so this mutant is seen by c07's corpus (M3_helper_any is its trigger-level twin).
+  "IDP_origin_any":        ("M1", "c07",
                             [("  SELECT COALESCE(p_provisioned_by IN ('jit', 'scim', 'directory_sync'), false);",
                               "  SELECT COALESCE(p_provisioned_by IN ('jit', 'scim', 'directory_sync', 'manual', 'invite'), false);")]),
   "W13_no_expires_col":    ("M1", "c16",
@@ -165,14 +179,35 @@ MUTANTS = {
   "REVERT_trigger_dropped":("M2", "m06",
                             [("CREATE TRIGGER revert_deactivated_member\n  AFTER UPDATE OF license_status ON public.organization_members\n  FOR EACH ROW\n  EXECUTE FUNCTION public._revert_deactivated_member_to_paygo();",
                               "")]),
+  "JIT_default_dropped":   ("M2", "m14",
+                            [("ALTER TABLE public.organizations ALTER COLUMN jit_provisioning_enabled SET DEFAULT false;", "")]),
   "R8_no_exception_guard": ("M2", "m13",
                             [(REVERT_GUARDED, "  PERFORM public._ensure_personal_organization_for(NEW.user_id);")]),
+  # --- M3 (PR-2c): SCIM INSERT into a full organization is refused ---
+  "M3_helper_true_for_scim": ("M3", "c19",
+                            [("  SELECT COALESCE(p_provisioned_by IN ('jit', 'directory_sync'), false);",
+                              "  SELECT COALESCE(p_provisioned_by IN ('jit', 'scim', 'directory_sync'), false);")]),
+  "M3_old_condition_kept":  ("M3", "c19",
+                            [("  IF TG_OP = 'INSERT' AND public.member_origin_joins_unlicensed(NEW.provisioned_by) THEN",
+                              "  IF TG_OP = 'INSERT' AND public.member_origin_is_idp(NEW.provisioned_by) THEN")]),
+  "M3_refuse_before_R4":    ("M3", "c19",
+                            [(M3_R4_THEN_REWRITE, M3_REFUSE_FIRST)]),
+  "M3_helper_any":          ("M3", "c03",
+                            [("  SELECT COALESCE(p_provisioned_by IN ('jit', 'directory_sync'), false);",
+                              "  SELECT COALESCE(p_provisioned_by IN ('jit', 'directory_sync', 'manual', 'invite'), false);")]),
+  "M3_rewrite_on_update":   ("M3", "c11",
+                            [("  IF TG_OP = 'INSERT' AND public.member_origin_joins_unlicensed(NEW.provisioned_by) THEN",
+                              "  IF public.member_origin_joins_unlicensed(NEW.provisioned_by) THEN")]),
+  # c19 p7 traps the refusal as a check; c03's /setup leg would stop psql instead.
+  "M3_jit_also_refused":    ("M3", "c19",
+                            [("  SELECT COALESCE(p_provisioned_by IN ('jit', 'directory_sync'), false);",
+                              "  SELECT COALESCE(p_provisioned_by IN ('directory_sync'), false);")]),
 }
 
 def main():
     if len(sys.argv) >= 2 and sys.argv[1] == "list":
         frag = sys.argv[2] if len(sys.argv) > 2 else ""
-        for name, (part, ctl, _) in MUTANTS.items():
+        for name, (part, ctl, *_) in MUTANTS.items():
             if frag and frag not in name:
                 continue
             print(f"{name}|{part}|{ctl}")
@@ -189,6 +224,32 @@ def main():
             s = s.replace(old, new)
         open(dst, "w").write(s)
         print(f"MUTATION APPLIED|{name}|{len(MUTANTS[name][2])} edit(s)")
+        return 0
+    if len(sys.argv) == 5 and sys.argv[1] == "carry":
+        # An M1 mutant seen through M3 (BACKLOG-3851 PR-2c). M3 replaces the seat-trigger
+        # body, and its pre-check refuses any body but M1's, so an M1 trigger mutant would
+        # otherwise be "killed" by the pre-check, not by a control. Write M3 as if it had
+        # been written against the mutated M1: drop its pre-check block and apply each
+        # edit of the mutant that matches M3 exactly once (0 matches = that edit is not in
+        # M3's text; 2+ = INVALID). Prints CARRIED with the edit count.
+        name, src, dst = sys.argv[2:5]
+        if name not in MUTANTS:
+            print(f"unknown mutant {name}", file=sys.stderr); return 2
+        s = open(src).read()
+        a = s.find("DO $pre$"); b = s.find("END $pre$;")
+        if a < 0 or b < 0 or s.count("DO $pre$") != 1:
+            print(f"INVALID|{name}|M3 pre-check block not found once", file=sys.stderr); return 1
+        s = s[:a] + s[b + len("END $pre$;"):]
+        n = 0
+        edits = MUTANTS[name][2] + (MUTANTS[name][3] if len(MUTANTS[name]) > 3 else [])
+        for old, new in edits:
+            c = s.count(old)
+            if c > 1:
+                print(f"INVALID|{name}|carry pattern matched {c} times: {old[:60]!r}", file=sys.stderr); return 1
+            if c == 1:
+                s = s.replace(old, new); n += 1
+        open(dst, "w").write(s)
+        print(f"CARRIED|{name}|{n} of {len(edits)} edit(s) into M3")
         return 0
     print(__doc__, file=sys.stderr); return 2
 

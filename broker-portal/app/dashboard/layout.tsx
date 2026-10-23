@@ -63,7 +63,18 @@ export default async function DashboardLayout({
   const suspended = portal?.suspended === true;
   const personalOwner = access?.kind === 'floor' && access.via === 'personal_owner';
   const showBilling =
-    billingNavVisible({ access, isImpersonating, enabled: billingEnabled() }) && (!suspended || personalOwner);
+    billingNavVisible({
+      access,
+      isImpersonating,
+      enabled: billingEnabled(),
+      // BACKLOG-4007 PR-4: the billing-only login.
+      billingContact: portal?.billingContact === true,
+    }) && (!suspended || personalOwner);
+  // BACKLOG-3853 PR-2B: a suspended BROKERAGE (org_deals), not the licence above.
+  // A broker, admin or IT admin sees Billing, Support and My Account; an agent
+  // keeps the floor (Checklists is already hidden by the checklist gate). A
+  // failed read (null) shows the normal navigation; the pages refuse on their own.
+  const orgSuspended = !suspended && portal?.orgSuspended === true && access?.kind === 'full';
 
   return (
     <DashboardShell
@@ -78,6 +89,7 @@ export default async function DashboardLayout({
       showMyTransactions={showMyTransactions}
       showBilling={showBilling}
       suspended={suspended}
+      orgSuspended={orgSuspended}
     >
       {children}
     </DashboardShell>

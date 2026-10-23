@@ -17,6 +17,8 @@ export interface ExportDataResult {
   filePath?: string;
   /** Error message on failure */
   error?: string;
+  /** BACKLOG-3339: the file at `filePath` was saved but the export was not recorded. */
+  notRecorded?: boolean;
 }
 
 /**

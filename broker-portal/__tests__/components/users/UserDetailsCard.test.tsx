@@ -399,25 +399,6 @@ describe('UserDetailsCard Logic', () => {
     });
   });
 
-  describe('suspended user handling', () => {
-    it('should detect suspended users', () => {
-      const member = createMockMemberDetails({ license_status: 'suspended' });
-
-      const isSuspended = member.license_status === 'suspended';
-      expect(isSuspended).toBe(true);
-    });
-
-    it('should not show deactivate button for already suspended users', () => {
-      const member = createMockMemberDetails({ license_status: 'suspended' });
-
-      const isSuspended = member.license_status === 'suspended';
-      const isPending = !member.user_id;
-      const showDeactivate = !isPending && !isSuspended;
-
-      expect(showDeactivate).toBe(false);
-    });
-  });
-
   describe('role colors mapping', () => {
     const ROLE_COLORS: Record<Role, string> = {
       admin: 'bg-purple-100 text-purple-800',
@@ -440,13 +421,14 @@ describe('UserDetailsCard Logic', () => {
       pending: 'bg-yellow-100 text-yellow-800',
       suspended: 'bg-red-100 text-red-800',
       expired: 'bg-gray-100 text-gray-800',
+      unassigned: 'bg-blue-100 text-blue-800',
     };
 
     it('should have distinct colors for all statuses', () => {
-      const statuses: MemberLicenseStatus[] = ['active', 'pending', 'suspended', 'expired'];
+      const statuses: MemberLicenseStatus[] = ['active', 'pending', 'suspended', 'expired', 'unassigned'];
       const colors = new Set(statuses.map((status) => STATUS_COLORS[status]));
 
-      expect(colors.size).toBe(4); // All colors are unique
+      expect(colors.size).toBe(5); // All colors are unique
     });
   });
 });

@@ -331,15 +331,18 @@ const EXEMPT: Record<string, string> = {
  *     here. 56 functions have the shape, 4 are multi-write, at `0dca6beb1`.
  *     Tracked by BACKLOG-3225.
  *   - Call-token counting is scoped OUT of `db/`. That is a floor with a
- *     measured size, not a proof of absence: turning it on surfaces EIGHT more,
- *     all real (a raw write plus a non-exported local helper that writes), of
- *     which six had no filed item until BACKLOG-3226. Tracked there.
+ *     measured size, not a proof of absence: turning it on surfaced EIGHT more
+ *     at `0dca6beb1`, all real (a raw write plus a non-exported local helper
+ *     that writes). After BACKLOG-3226 it surfaces SEVEN, a different seven —
+ *     see the BACKLOG-3226 paragraph at `isDbWriterCall` below.
  *
  *   - A write inside a NESTED PROMISE-RETURNING LITERAL is attributed to the
  *     unit that encloses it, so the headline can name a function that issues no
  *     writes. Two of this round's entries — `gmailFetchService::initialize` and
- *     `googleContactProvider::fetchContacts` — are exactly that: both only
- *     REGISTER the `oauth2Client.on("tokens", ...)` callback holding the writes.
+ *     `googleContactProvider::fetchContacts` — were exactly that: both only
+ *     REGISTERED the `oauth2Client.on("tokens", ...)` callback holding the
+ *     writes. BACKLOG-3306 moved those writes into one UPDATE and the entries
+ *     left the list.
  *     Pre-existing (`captureBody` does the same for an `export function`); the
  *     class widening only put it on more units. Population unmeasured. Tracked
  *     by BACKLOG-3311, which also names the in-tree fix shape.
@@ -397,11 +400,15 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // itself, so it cannot see the pointer/junction pair either. The proof of
   // that fix is `expandAttachedThreads.linkAtomicity-2550.test.ts`.
 
-  // --- BACKLOG-2845 (open): review queue approve/reject -------------------
-  "electron/services/reviewStateService.ts::approveReviewItems":
-    "BACKLOG-2845 @0dca6beb1 (:1018, confirmEmailLinksByEmailIds + resolveLegacyTwins + createThreadCommunicationReference, in a for loop over itemIds): a crash part-way through approving a selection leaves some emails promoted and the rest still queued, with the pending_review row deleted for only some of them",
-  "electron/services/reviewStateService.ts::rejectReviewItems":
-    "BACKLOG-2845 @0dca6beb1 (:1071, addIgnoredCommunication + resolveLegacyTwins): a failure after the suppression row is written leaves the legacy address_missing link alive — the email is hidden from future discovery but still counted by getReviewState(), so the Complete gate never clears",
+  // `reviewStateService.ts::approveReviewItems` / `::rejectReviewItems`
+  // (BACKLOG-2845) were removed when every write of one approve or reject call
+  // moved into one `dbTransaction` (`approveReviewItemsSync` /
+  // `rejectReviewItemsSync`). READ THIS BEFORE TRUSTING THE DELETION: this guard
+  // cannot prove it. The async wrappers now hold one call each, so the guard
+  // stops seeing them whether or not the writes are inside the transaction (an
+  // empty `dbTransaction(() => {})`, or the link written before it, also clears
+  // both entries: measured). The proof of that fix is
+  // `reviewStateService.approveRejectAtomicity-2845.test.ts`.
 
   // --- Filed by BACKLOG-2584 itself, before being listed here -------------
   // `electron/handlers/contactHandlers.ts::ipc:contacts:import` (BACKLOG-3220)
@@ -410,14 +417,19 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // prove it — a no-op `dbTransaction(() => {})` anywhere in the handler also
   // clears the unit (measured, filed as BACKLOG-3352). The proof is the crash
   // and error sweeps in `contact-handlers.importAtomic-3220.test.ts`.
-
-  // --- BACKLOG-3259 (open): surfaced BY BACKLOG-3235's own fix ------------
-  // Listed, never fixed: the widening PR must list what it surfaces or CI is
-  // red and it cannot land; fixing a surfaced defect belongs to its own item.
-  "electron/handlers/contactHandlers.ts::ipc:contacts:create":
-    "BACKLOG-3259 @1cd39acd0 (:2547, createContact :2717 + backfillContactEmails :2774 + backfillContactPhones :2778, zero dbTransaction in the handler): reachable WITHOUT a crash — the catch arm at :2801-2815 returns { success: false } with no compensating delete, so an ordinary throw from either backfill (a malformed email or phone is enough) leaves the contact row committed and visible in Clients & Contacts holding the name and only some of the addresses the user typed, while the UI tells them it was not created; the user retries and gets a SECOND contact",
-  "electron/handlers/messageImportHandlers.ts::ipc:messages:import-macos":
-    "BACKLOG-3222 @0dca6beb1 (:148, backfillContactCommunicationDates :278 + backfillPhoneLastMessageTable :302): contacts showing a refreshed last-communication date while phone_last_message still holds the pre-import value, so the contact list and the phone-keyed views disagree until the next successful import",
+  //
+  // `electron/handlers/contactHandlers.ts::ipc:contacts:create` (BACKLOG-3259)
+  // was DELETED when BACKLOG-3339 put the contact, both address backfills and
+  // the audit entry in one `dbTransaction`. Same caveat; the proof is the
+  // crash sweep in `contactAuditInTransaction-3339.test.ts`.
+  //
+  // `electron/handlers/messageImportHandlers.ts::ipc:messages:import-macos`
+  // (BACKLOG-3222) was DELETED when the contact dates, phone_last_message and
+  // external_contacts.last_message_at moved into one `dbTransaction`
+  // (electron/services/messageRecencyRefresh.ts). Same caveat: a no-op
+  // `dbTransaction(() => {})` in the handler also clears the unit (measured).
+  // The proof is the crash and error sweeps in
+  // `messageImport.recencyAtomic-3222.test.ts`.
 
   // ORIGINAL NOTE, kept because it records why this list was empty and why the
   // nine-entry version of it was discarded rather than merged:
@@ -436,20 +448,9 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // paraphrased from the code — a reader following the citation must find the
   // same sentence. Measured at `abaa1ff20`; line numbers drift, the keys do not.
   //
-  // TWO SITES SHARE ONE ITEM. BACKLOG-3306 is one duplicated defect at two
-  // call sites, so it takes two entries. Deleting only one of them when 3306
-  // ships leaves the other as `fixedButStillListed` and reddens the shrink
-  // test — which is the intended behaviour, not a trap.
-  //
-  // NEITHER OF THESE TWO UNITS ACTUALLY WRITES. BACKLOG-3311: the reported
-  // function only REGISTERS the callback that holds the writes. The entries are
-  // keyed on what this guard reports, so they will need re-keying when 3311
-  // lands. Written down because an entry pointing at the wrong unit survives
-  // the fix and then blocks the "may only SHRINK" assertion.
-  "electron/services/gmailFetchService.ts::initialize":
-    "BACKLOG-3306 — one token column updated and the other stale: a stored new refresh_token beside an expired access_token. Self-healing, which is why it is low: the next API call 401s, the refresh fires again and both are written.",
-  "electron/services/providers/googleContactProvider.ts::fetchContacts":
-    "BACKLOG-3306 — the same duplicated token-refresh callback as gmailFetchService above, writing the two UPDATEs in the opposite order; a crash leaves one token column updated and the other stale.",
+  // BACKLOG-3306 had two entries here, `gmailFetchService.ts::initialize` and
+  // `googleContactProvider.ts::fetchContacts`. Both now save a refresh through
+  // one UPDATE in googleTokenRefreshWriter.ts, so neither is listed.
   "electron/services/transactionService/transactionService.ts::_saveCommunications":
     "BACKLOG-3308 — an emails row with no communications row: the email is stored but not attached to the transaction, so it does not appear on it. Partially self-healing, but only if a scan re-runs and nothing schedules one on this condition.",
 
@@ -487,24 +488,18 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // ==========================================================================
   // BACKLOG-3312 — SURFACED BY CONSTANT RESOLUTION
   // ==========================================================================
-  // Both ran HOISTED SQL CONSTANTS, so every previous version of this guard
-  // counted them as ZERO-write and reported them clean. Neither is new code and
-  // neither is fixed here; what is new is that the guard can see them.
+  // The units listed here ran HOISTED SQL CONSTANTS, so every previous version
+  // of this guard counted them as ZERO-write and reported them clean. None was
+  // new code and none was fixed by 3312; what was new is that the guard could
+  // see them.
   //
-  // Measured at `8f17c1e16`: these two are the ENTIRE pipeline-surviving
+  // Measured at `8f17c1e16`: two units were the ENTIRE pipeline-surviving
   // population of the widening — 21 units count more, 5 cross the threshold,
   // and the other three were each opened and read (two are genuinely atomic,
-  // one was a false positive of a naive resolver). The unwrapped set goes
-  // 18 -> 20 and loses nothing.
+  // one was a false positive of a naive resolver). The unwrapped set went
+  // 18 -> 20 and lost nothing. Neither entry remains listed here.
   //
-  // Damage strings TRANSCRIBED from each item's "Crash leaves" section. Note
-  // that `pruneOldEntries` cites 3319 and NOT its parent BACKLOG-2554, which
-  // names the same site: an entry citing a nine-bullet batch survives until the
-  // batch closes, so if 2554 shipped with this bullet unfixed the entry would
-  // cite a completed item while preserving a live defect — the BACKLOG-3053
-  // shape. The bullet was split out of 2554's scope for exactly that reason.
-  "electron/services/failureLogService.ts::pruneOldEntries":
-    "BACKLOG-3319 — the age DELETE commits and the cap DELETE does not, so the failure log keeps rows above the 500-row cap until the next startup prunes again. Diagnostics only — no user-visible record is lost. That is why this is low despite inheriting from a critical batch.",
+  // --- BACKLOG-3319: DISCHARGED — failureLogService.ts::pruneOldEntries now one dbTransaction; proof: failureLogService.pruneAtomicity-3319.test.ts
 
   // ==========================================================================
   // BACKLOG-3239 — SURFACED BY THE BRANCH-EXCLUSIVITY FIX
@@ -1073,6 +1068,23 @@ function unitsInFile(rel: string, lines: string[], dbWriters: Set<string>): Fn[]
   // holding its own UPDATE. Two are filed in BACKLOG-2554; the six are filed as
   // BACKLOG-3226, which also carries the rule change. Do not read the scoped-out
   // decision as "nothing is there".
+  //
+  // UPDATED BY BACKLOG-3226 — measured with call tokens ON in `db/` (the one-line
+  // flip of `inDbLayer` below), real driver. At `205144a0b`, before the fix, the
+  // set was eight units, a different eight from the list above:
+  // communicationDbService.ts createCommunicationReference (:808) and
+  // createThreadCommunicationReferenceSync (:1102); emailSyncStateService.ts
+  // (:158, :173); externalContactDbService.ts (:896, :930, :1262);
+  // rcsChatPeopleDbService.ts (:115). After the fix, seven: the
+  // createThreadCommunicationReferenceSync unit drops out. The other twins never
+  // appear because their callers wrap them by name.
+  //
+  // The flip would NOT have guarded BACKLOG-3226. Measured on the plan probe:
+  // with call tokens ON, three wrong fixes (a transaction around the INSERT only;
+  // an empty transaction in the seam; the fix plus a swallowed count error) ALSO
+  // clear that unit. What guards the two seams instead is the real-driver suite
+  // `communicationDbService.threadCountAtomicity-3226.test.ts`. So BACKLOG-3226
+  // does NOT carry the rule change; it is its own item, for its own SR ruling.
   const isDbWriterCall = inDbLayer
     ? null
     : (name: string) => dbWriters.has(name) || localWriters.has(name);

@@ -75,7 +75,7 @@ describe("startup queue", () => {
     const q = new AtRestStartup({ log: quiet });
     registerDefaultJobs(q);
     expect(q.listJobs().map((j) => j.id)).toEqual([
-      "data-key", "logs", "temp-sweep", "attachments", "email-attachments", "backups", "legacy-sweep",
+      "data-key", "logs", "sentry-queue", "temp-sweep", "attachments", "email-attachments", "backups", "legacy-sweep",
     ]);
     // Every default job is real: "logs" (3819), "temp-sweep"/"attachments"/"email-attachments" (S3),
     // "backups" (S4-C, the kept-iPhone-backup seal), "legacy-sweep". None is a placeholder any more.
@@ -90,7 +90,8 @@ describe("startup queue", () => {
     const q = new AtRestStartup({ log: quiet });
     registerDefaultJobs(q);
     const jobs = q.listJobs();
-    expect(jobs.map((j) => j.id).slice(0, 3)).toEqual(["data-key", "logs", "temp-sweep"]);
+    // BACKLOG-4040 S3: the sealed Sentry queue opens between logs and the temp sweep.
+    expect(jobs.map((j) => j.id).slice(0, 4)).toEqual(["data-key", "logs", "sentry-queue", "temp-sweep"]);
     expect(jobs.find((j) => j.id === "temp-sweep")).toEqual({ id: "temp-sweep", order: 20, placeholder: false });
     expect(jobs[jobs.length - 1]).toEqual({ id: "legacy-sweep", order: 60, placeholder: false });
   });

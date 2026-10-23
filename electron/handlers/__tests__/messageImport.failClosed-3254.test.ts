@@ -61,7 +61,6 @@ jest.mock("../../services/databaseService", () => ({
     getUserById: async (id: string) =>
       (db.prepare(LOCAL_USER_BY_ID_SQL).get(id) as { id: string } | undefined) ?? null,
     getRawDatabase: () => db,
-    backfillContactCommunicationDates: jest.fn().mockResolvedValue(0),
   },
 }));
 
@@ -71,7 +70,11 @@ jest.mock("../../services/macOSMessagesImportService", () => ({
   default: { importMessages: (...a: unknown[]) => mockImportMessages(...a) },
 }));
 
-jest.mock("../../services/db/externalContactDbService", () => ({}));
+// BACKLOG-3222: the three post-import recency writes live in one owner now.
+const mockRefreshRecency = jest.fn(async (_userId: string) => ({ contacts: 0, phones: 0, external: 0 }));
+jest.mock("../../services/messageRecencyRefresh", () => ({
+  refreshMessageRecencyAfterImport: (userId: string) => mockRefreshRecency(userId),
+}));
 
 jest.mock("../../services/autoLinkService", () => ({
   autoLinkNewMessagesForUser: jest.fn().mockResolvedValue(undefined),
@@ -176,6 +179,7 @@ describe("messages:import-macos", () => {
     // The half that makes this a control rather than a shape assertion.
     expect(mockResolveImportPlanForUser).not.toHaveBeenCalled();
     expect(mockImportMessages).not.toHaveBeenCalled();
+    expect(mockRefreshRecency).not.toHaveBeenCalled();
   });
 
   it("plans the import under the supplied id when it is a local user", async () => {
@@ -189,6 +193,8 @@ describe("messages:import-macos", () => {
     expect(mockResolveImportPlanForUser).toHaveBeenCalledWith(
       expect.objectContaining({ userId: USER_B }),
     );
+    // BACKLOG-3222 R3: the stub is wired (a successful import refreshes recency once, for this user).
+    expect(mockRefreshRecency.mock.calls).toEqual([[USER_B]]);
   });
 
   it("BACKLOG-3892 W1: a completed import records the Mac last sync; a cancelled one does not", async () => {

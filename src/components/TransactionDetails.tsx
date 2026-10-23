@@ -1121,13 +1121,19 @@ function TransactionDetails({
   const undoRemoveTransactionContacts = useCallback(
     async (removed: RemovedTransactionContactSummary[]) => {
       const failed: string[] = [];
+      // BACKLOG-3339 slice T: main's reason for the first failure (e.g. the
+      // restore was cancelled because its audit record could not be saved).
+      let firstError: string | undefined;
       for (const party of removed) {
         try {
           const result = await window.api.transactions.restoreContact(
             transaction.id,
             party.contactId
           );
-          if (!result.success) failed.push(party.displayName);
+          if (!result.success) {
+            failed.push(party.displayName);
+            if (firstError === undefined && result.error) firstError = result.error;
+          }
         } catch (err) {
           logger.error("Failed to restore transaction contact:", err);
           failed.push(party.displayName);
@@ -1145,7 +1151,7 @@ function TransactionDetails({
         showError(
           failed.length > 1
             ? `Failed to restore ${failed.length} contacts`
-            : `Failed to restore ${failed[0]}`
+            : (firstError ?? `Failed to restore ${failed[0]}`)
         );
       }
     },

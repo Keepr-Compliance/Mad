@@ -98,6 +98,10 @@ jest.mock("../services/databaseService", () => {
     __esModule: true,
     default: {
       createContact: (data: any, origin: any) => contactDb.createContact(data, origin),
+      backfillContactEmailsSync: (id: string, emails: string[], source?: any) => contactDb.backfillContactEmailsSync(id, emails, source),
+      backfillContactPhonesSync: (id: string, phones: string[], source?: any) => contactDb.backfillContactPhonesSync(id, phones, source),
+      getContactById: (id: string) => contactDb.getContactById(id),
+      createContactSync: (data: any, origin: any) => contactDb.createContactSync(data, origin),
       backfillContactEmails: (id: string, emails: string[], source?: any) =>
         contactDb.backfillContactEmails(id, emails, source),
       backfillContactPhones: (id: string, phones: string[], source?: any) =>
@@ -125,7 +129,14 @@ jest.mock("../services/contactsService", () => ({
 
 jest.mock("../services/auditService", () => ({
   __esModule: true,
-  default: { log: jest.fn(), logContactAction: jest.fn() },
+  default: {
+    log: jest.fn(),
+    logContactAction: jest.fn(),
+    // BACKLOG-3339: contact changes write their entry inside the transaction.
+    recordInTransaction: jest.fn(),
+    recordFailure: jest.fn(),
+  },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
 }));
 
 jest.mock("../services/logService", () => {

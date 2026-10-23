@@ -169,8 +169,13 @@ const DETECTED = {
 } as unknown as NewTransaction;
 
 /**
- * TRANSCRIBED from the MANUAL path,
- * `transactionService.ts:1103-1123` (`createManualTransaction`).
+ * TRANSCRIBED from the MANUAL path. First taken from `createManualTransaction`,
+ * which BACKLOG-3339 removed (it had no caller). The live manual path is
+ * `createAuditedTransaction` (`transactionService.ts:1152-1183`), which reaches
+ * the same writer (`createTransactionWithContactsSync` -> `createTransactionSync`)
+ * with the same value for every fixed field below; the extra fields it sends
+ * (street/city/state/zip, coordinates, closed_at, closing_deadline,
+ * listing_price) are undefined when the user leaves them empty.
  *
  * BACKLOG-2737's correction comment established that every field this path
  * drops happens to equal its schema default, so the drop is currently

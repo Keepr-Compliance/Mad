@@ -27,61 +27,6 @@ describe('UserActionsDropdown visibility', () => {
 });
 
 // ============================================================================
-// Menu Options Tests
-// ============================================================================
-
-describe('UserActionsDropdown menu options', () => {
-  interface MenuOptions {
-    showDeactivate: boolean;
-    showRemove: boolean;
-    removeLabel: string;
-  }
-
-  function getMenuOptions(isPending: boolean): MenuOptions {
-    return {
-      // Deactivate is only available for active members (not pending invites)
-      showDeactivate: !isPending,
-      // Remove is always available
-      showRemove: true,
-      // Label changes based on pending status
-      removeLabel: isPending ? 'Revoke Invitation' : 'Remove from Organization',
-    };
-  }
-
-  describe('for active member', () => {
-    const options = getMenuOptions(false);
-
-    it('should show deactivate option', () => {
-      expect(options.showDeactivate).toBe(true);
-    });
-
-    it('should show remove option', () => {
-      expect(options.showRemove).toBe(true);
-    });
-
-    it('should have "Remove from Organization" label', () => {
-      expect(options.removeLabel).toBe('Remove from Organization');
-    });
-  });
-
-  describe('for pending invite', () => {
-    const options = getMenuOptions(true);
-
-    it('should not show deactivate option', () => {
-      expect(options.showDeactivate).toBe(false);
-    });
-
-    it('should show remove option', () => {
-      expect(options.showRemove).toBe(true);
-    });
-
-    it('should have "Revoke Invitation" label', () => {
-      expect(options.removeLabel).toBe('Revoke Invitation');
-    });
-  });
-});
-
-// ============================================================================
 // Dropdown State Tests
 // ============================================================================
 

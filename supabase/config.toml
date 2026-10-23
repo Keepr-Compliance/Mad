@@ -377,6 +377,11 @@ verify_jwt = false
 [functions.send-ticket-confirmation]
 verify_jwt = false
 
+# BACKLOG-3851 PR-2c: Entra calls with a SCIM bearer token, not a Supabase JWT; the
+# function authenticates the token itself (shared/auth.ts) before any other read.
+[functions.scim]
+verify_jwt = false
+
 [analytics]
 enabled = false
 port = 54327

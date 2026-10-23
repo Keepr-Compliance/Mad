@@ -4,41 +4,22 @@ Edge Functions run on Deno Deploy and provide secure server-side functionality f
 
 ## Available Functions
 
-### `validate-address`
-Validates property addresses using Google Maps Geocoding API.
+### `send-ticket-confirmation`
+Sends a confirmation email when a new support ticket is created. Triggered automatically by a database webhook (pg_net) on `support_tickets` INSERT.
 
 **Features:**
-- Secure API key storage (Google Maps API key never exposed to client)
-- Address validation and parsing
-- Washington state enforcement
-- Rate limiting per subscription tier
-- API usage tracking
+- Server-side trigger ensures ALL ticket sources receive confirmation emails
+- Calls the broker portal's existing `/api/email/ticket-confirmation` endpoint
+- Fire-and-forget: never blocks the ticket insert
+- Authenticated via `INTERNAL_API_SECRET` header
 
-**Request:**
-```json
-{
-  "address": "123 Main St, Seattle, WA 98101",
-  "userId": "uuid-here"
-}
+**Required Secrets:**
+```bash
+supabase secrets set BROKER_PORTAL_URL=https://app.keeprcompliance.com
+supabase secrets set INTERNAL_API_SECRET=your-internal-api-secret
 ```
 
-**Response:**
-```json
-{
-  "valid": true,
-  "formatted": "123 Main St, Seattle, WA 98101, USA",
-  "components": {
-    "street": "123 Main St",
-    "city": "Seattle",
-    "state": "WA",
-    "zip": "98101"
-  },
-  "coordinates": {
-    "lat": 47.6062,
-    "lng": -122.3321
-  }
-}
-```
+**Task:** BACKLOG-1573
 
 ## Deployment
 
@@ -66,10 +47,10 @@ Validates property addresses using Google Maps Geocoding API.
 
 ### Set Secrets
 
-Before deploying, set the Google Maps API key as a secret:
+Before deploying, set the secrets the function needs:
 
 ```bash
-supabase secrets set GOOGLE_MAPS_API_KEY=your-google-maps-api-key-here
+supabase secrets set NAME=value
 ```
 
 Verify secrets are set:
@@ -86,12 +67,12 @@ supabase functions deploy
 
 #### Deploy Specific Function
 ```bash
-supabase functions deploy validate-address
+supabase functions deploy <function-name>
 ```
 
 #### Deploy with Debug Output
 ```bash
-supabase functions deploy validate-address --debug
+supabase functions deploy <function-name> --debug
 ```
 
 ## Local Development
@@ -105,22 +86,22 @@ supabase functions deploy validate-address --debug
 
 2. **Serve a specific function:**
    ```bash
-   supabase functions serve validate-address
+   supabase functions serve <function-name>
    ```
 
 3. **Set local secrets:**
    Create a `.env` file in the function directory:
    ```bash
-   echo "GOOGLE_MAPS_API_KEY=your-key" > supabase/functions/.env
+   echo "NAME=value" > supabase/functions/.env
    ```
 
 ### Test Function Locally
 
 ```bash
-curl -i --location --request POST 'http://localhost:54321/functions/v1/validate-address' \
+curl -i --location --request POST 'http://localhost:54321/functions/v1/<function-name>' \
   --header 'Authorization: Bearer YOUR_ANON_KEY' \
   --header 'Content-Type: application/json' \
-  --data '{"address":"123 Main St, Seattle, WA","userId":"test-user-id"}'
+  --data '{}'
 ```
 
 ## Monitoring
@@ -129,10 +110,10 @@ curl -i --location --request POST 'http://localhost:54321/functions/v1/validate-
 
 ```bash
 # Real-time logs
-supabase functions logs validate-address --tail
+supabase functions logs <function-name> --tail
 
 # Historical logs
-supabase functions logs validate-address
+supabase functions logs <function-name>
 ```
 
 ### Check Function Status
@@ -141,21 +122,6 @@ In Supabase Dashboard:
 1. Go to "Edge Functions"
 2. Click on function name
 3. View metrics, logs, and invocations
-
-## Rate Limits
-
-| Tier | Address Validations/Month |
-|------|---------------------------|
-| Free | 10 |
-| Pro | 100 |
-| Enterprise | 1,000 |
-
-Limits are enforced per user per calendar month.
-
-## Cost Estimates
-
-- **Google Maps Geocoding API**: $5 per 1,000 requests (first $200/month free)
-- **Supabase Edge Functions**: 500K invocations/month free, then $2 per 1M
 
 ## Troubleshooting
 
@@ -168,30 +134,8 @@ Limits are enforced per user per calendar month.
 - Verify RLS policies allow access
 
 ### 500 Internal Server Error
-- Check function logs: `supabase functions logs validate-address`
+- Check function logs: `supabase functions logs <function-name>`
 - Verify secrets are set: `supabase secrets list`
-
-### Google Maps API Errors
-- Verify API key is set correctly
-- Check API is enabled in Google Cloud Console
-- Ensure billing is enabled (required even for free tier)
-
-### `send-ticket-confirmation`
-Sends a confirmation email when a new support ticket is created. Triggered automatically by a database webhook (pg_net) on `support_tickets` INSERT.
-
-**Features:**
-- Server-side trigger ensures ALL ticket sources receive confirmation emails
-- Calls the broker portal's existing `/api/email/ticket-confirmation` endpoint
-- Fire-and-forget: never blocks the ticket insert
-- Authenticated via `INTERNAL_API_SECRET` header
-
-**Required Secrets:**
-```bash
-supabase secrets set BROKER_PORTAL_URL=https://app.keeprcompliance.com
-supabase secrets set INTERNAL_API_SECRET=your-internal-api-secret
-```
-
-**Task:** BACKLOG-1573
 
 ## Future Functions
 

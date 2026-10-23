@@ -20,6 +20,7 @@ import {
   getStripeCustomer,
   isModeAllowedForUser,
 } from '@/lib/billing/customers';
+import { BROKERAGE_BLOCK_READ_FAILED, readBrokeragePurchaseBlocked } from '@/lib/billing/purchaseBlocked';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -62,6 +63,16 @@ export async function POST(req: Request): Promise<Response> {
     return NextResponse.json({ error: 'payments unavailable right now' }, { status: 503 });
   }
   if (suspended) {
+    return NextResponse.json({ error: 'account_suspended' }, { status: 403 });
+  }
+
+  // BACKLOG-3853: a member of a suspended brokerage buys nothing either. Fails closed.
+  const brokerageBlocked = await readBrokeragePurchaseBlocked(service, user.userId);
+  if (brokerageBlocked === null) {
+    console.error('[payments] brokerage suspension check failed', { code: BROKERAGE_BLOCK_READ_FAILED });
+    return NextResponse.json({ error: 'payments unavailable right now' }, { status: 503 });
+  }
+  if (brokerageBlocked) {
     return NextResponse.json({ error: 'account_suspended' }, { status: 403 });
   }
 

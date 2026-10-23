@@ -1322,6 +1322,24 @@ describe('SyncOrchestratorService', () => {
       const syncFn = (syncOrchestrator as any).syncFunctions.get('ccpa-export');
       await expect(syncFn('test-user', jest.fn())).rejects.toThrow('Disk full');
     });
+
+    it('BACKLOG-3339: a saved-but-not-recorded CCPA export fails with the fixed copy', async () => {
+      (window as any).api.privacy.exportData.mockResolvedValue({
+        success: false,
+        notRecorded: true,
+        filePath: '/tmp/x.json',
+        error: 'anything the main process sent',
+      });
+      (window as any).api.privacy.onExportProgress.mockReturnValue(jest.fn());
+
+      syncOrchestrator.initializeSyncFunctions();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const syncFn = (syncOrchestrator as any).syncFunctions.get('ccpa-export');
+      await expect(syncFn('test-user', jest.fn())).rejects.toThrow(
+        'Your data file was saved, but this export could not be recorded in the audit log. If this keeps happening, contact support.',
+      );
+    });
   });
 
   describe('contacts forceReimport option (TASK-2150)', () => {

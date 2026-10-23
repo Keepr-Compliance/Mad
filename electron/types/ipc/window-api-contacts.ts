@@ -118,9 +118,6 @@ export interface WindowApiContacts {
     source_types?: ContactSource[];
     error?: string;
   }>;
-  delete: (
-    contactId: string,
-  ) => Promise<{ success: boolean; error?: string }>;
   remove: (
     contactId: string,
   ) => Promise<{ success: boolean; error?: string }>;

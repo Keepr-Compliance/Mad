@@ -16,8 +16,14 @@ export function isToolBlockedError(userError: UserFacingError | null | undefined
  */
 export const IPHONE_TOOL_TIMEOUT_CODE = "IPHONE_TOOL_TIMEOUT";
 
+/**
+ * BACKLOG-4002: the code main sends when the watchdog stopped a backup that made no
+ * progress. Mirrored from electron/services/diagnostics/userFacingErrors.ts.
+ */
+export const BACKUP_TIMEOUT_CODE = "BACKUP_TIMEOUT";
+
 /** BACKLOG-3996: the sync error codes whose message is a title, numbered steps and a closing line. */
-const STEPS_NOTICE_CODES: ReadonlySet<string> = new Set([TOOL_BLOCKED_CODE, IPHONE_TOOL_TIMEOUT_CODE]);
+const STEPS_NOTICE_CODES: ReadonlySet<string> = new Set([TOOL_BLOCKED_CODE, IPHONE_TOOL_TIMEOUT_CODE, BACKUP_TIMEOUT_CODE]);
 
 /**
  * BACKLOG-3996: true for an error the sync screen shows as title + steps + closing line

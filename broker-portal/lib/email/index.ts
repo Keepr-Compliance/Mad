@@ -25,6 +25,10 @@ export { buildTicketConfirmationEmail } from './templates/ticket-confirmation';
 export { buildTicketReplyNotification } from './templates/ticket-reply-notification';
 export { buildTicketAssignmentNotification } from './templates/ticket-assignment-notification';
 export { buildTicketResolvedEmail } from './templates/ticket-resolved';
+export { buildSeatLimitReachedEmail } from './templates/seat-limit-reached';
+export { buildLastAdminKeptEmail } from './templates/last-admin-kept';
+export { buildAccountSuspendedEmail } from './templates/account-suspended';
+export { buildAccountManagerAlertEmail } from './templates/account-manager-alert';
 
 // Types
 export type {
@@ -40,6 +44,13 @@ export type {
   TicketReplyNotificationParams,
   TicketAssignmentNotificationParams,
   TicketResolvedParams,
+  SeatLimitReachedParams,
+  LastAdminKeptParams,
+  AccountSuspendedParams,
+  AccountManagerAlertParams,
+  SetupReminderParams,
+  BillingContactReassignedParams,
+  SeatsAddedParams,
 } from './types';
 
 // Queue (BACKLOG-2009)
@@ -58,7 +69,14 @@ import { buildInternalInviteEmail } from './templates/internal-invite';
 import { buildTicketConfirmationEmail } from './templates/ticket-confirmation';
 import { buildTicketReplyNotification } from './templates/ticket-reply-notification';
 import { buildTicketAssignmentNotification } from './templates/ticket-assignment-notification';
+import { buildSeatLimitReachedEmail } from './templates/seat-limit-reached';
+import { buildLastAdminKeptEmail } from './templates/last-admin-kept';
 import { buildTicketResolvedEmail } from './templates/ticket-resolved';
+import { buildAccountSuspendedEmail } from './templates/account-suspended';
+import { buildAccountManagerAlertEmail } from './templates/account-manager-alert';
+import { buildSetupReminderEmail } from './templates/setup-reminder';
+import { buildBillingContactReassignedEmail } from './templates/billing-contact-reassigned';
+import { buildSeatsAddedEmail } from './templates/seats-added';
 import type {
   InviteEmailParams,
   DownloadInviteEmailParams,
@@ -68,6 +86,13 @@ import type {
   TicketReplyNotificationParams,
   TicketAssignmentNotificationParams,
   TicketResolvedParams,
+  SeatLimitReachedParams,
+  LastAdminKeptParams,
+  AccountSuspendedParams,
+  AccountManagerAlertParams,
+  SetupReminderParams,
+  BillingContactReassignedParams,
+  SeatsAddedParams,
   SendEmailResult,
 } from './types';
 
@@ -225,5 +250,140 @@ export async function sendTicketResolvedEmail(
     text,
     emailType: 'ticket_resolved',
     logMetadata: { ticketNumber: params.ticketNumber, newStatus: params.newStatus },
+  });
+}
+
+/**
+ * Send the seat-limit email to one recipient (BACKLOG-3851 PR-2c).
+ */
+export async function sendSeatLimitReachedEmail(
+  params: SeatLimitReachedParams,
+): Promise<SendEmailResult> {
+  const { subject, html, text } = buildSeatLimitReachedEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: { kind: 'seat_limit_reached', seatKind: params.kind },
+  });
+}
+
+/**
+ * The brokerage's last active admin was kept (BACKLOG-4027). Logged as email_type 'other'.
+ */
+export async function sendLastAdminKeptEmail(params: LastAdminKeptParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildLastAdminKeptEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: { kind: 'last_admin_kept', lastAdminKind: params.kind, source: params.source },
+  });
+}
+
+/**
+ * "Account suspended" email to a brokerage's billing contact (BACKLOG-3853 PR-2).
+ * Logged as email_type 'other' (the delivery log's type check allows no new value);
+ * metadata.kind + outboxKey let the outbox handler see a send it already made.
+ */
+export async function sendAccountSuspendedEmail(
+  params: AccountSuspendedParams,
+): Promise<SendEmailResult> {
+  const { subject, html, text } = buildAccountSuspendedEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'account_suspended',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+      reason: params.reason,
+      payment: params.reason === 'non_payment' ? params.payment.kind : null,
+    },
+  });
+}
+
+/**
+ * Billing alert to a brokerage's Keepr account manager (BACKLOG-3853 PR-2).
+ */
+export async function sendAccountManagerAlertEmail(
+  params: AccountManagerAlertParams,
+): Promise<SendEmailResult> {
+  const { subject, html, text } = buildAccountManagerAlertEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'brokerage_account_manager_alert',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+      reason: params.reason,
+    },
+  });
+}
+
+/**
+ * "Finish your Keepr setup" reminder (BACKLOG-4007 PR-3), sent by the billing outbox
+ * (kind notify_setup_reminder). metadata.kind + outboxKey let the handler see a send it already made.
+ */
+/** BACKLOG-4007 People v2: the account admin is now the billing contact. Log type 'other'. */
+export async function sendBillingContactReassignedEmail(params: BillingContactReassignedParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildBillingContactReassignedEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'billing_contact_reassigned',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+    },
+  });
+}
+
+/** BACKLOG-3854: seats added, to the billing contact. Log type 'other' (the 4001 type check). */
+export async function sendSeatsAddedEmail(params: SeatsAddedParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildSeatsAddedEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'seats_added',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+    },
+  });
+}
+
+export async function sendSetupReminderEmail(params: SetupReminderParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildSetupReminderEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'setup_reminder',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+      variant: params.variant,
+      day: params.day,
+    },
   });
 }

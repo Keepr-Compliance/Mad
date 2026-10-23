@@ -1,0 +1,11 @@
+{
+  "id": "clock_1URdz9Bg3cyTef3dxbWPNKds",
+  "object": "test_helpers.test_clock",
+  "created": 1792268023,
+  "deletes_after": 1794860023,
+  "frozen_time": 1793458800,
+  "livemode": false,
+  "name": "spike-3853-pr0-A",
+  "status": "ready",
+  "status_details": {}
+}

@@ -49,15 +49,23 @@ type Provider = 'email' | 'azure' | 'google';
 
 function signedIn(provider: Provider = 'email'): void {
   mockExchangeCodeForSession.mockResolvedValue({ error: null });
-  const user_metadata =
+  // BACKLOG-4012: the callback reads the identity this sign-in used (user.identities,
+  // newest updated_at), not app_metadata.provider / user_metadata.
+  const identity_data =
     provider === 'azure'
       ? { custom_claims: { tid: TENANT } }
       : provider === 'google'
-        ? { hd: 'fixture-workspace.example.test' }
+        ? { custom_claims: { hd: 'fixture-workspace.example.test' } }
         : {};
   mockGetUser.mockResolvedValue({
     data: {
-      user: { id: FIXTURE_USER_ID, email: EMAIL, app_metadata: { provider }, user_metadata },
+      user: {
+        id: FIXTURE_USER_ID,
+        email: EMAIL,
+        app_metadata: { provider },
+        user_metadata: identity_data,
+        identities: [{ provider, updated_at: '2026-10-20T12:00:00Z', identity_data }],
+      },
     },
   });
 }
@@ -151,18 +159,20 @@ describe('(b) no membership', () => {
 
 // (c) The invite branch runs BEFORE the owner is admitted.
 describe('(c) personal-org owner with a pending invite', () => {
-  it('claims the invite for the session user, lands on /dashboard, never calls JIT', async () => {
+  // BACKLOG-3684: without the invitation link the invite is no longer accepted
+  // by email. The owner keeps their floor (founder question open; option a),
+  // the invite stays pending, and nothing is written.
+  it('without the link: accepts nothing, writes nothing, keeps the floor', async () => {
     signedIn('azure');
     given([personalMembership(), pendingInvite(EMAIL, 'agent')]);
+    mockRpc.mockImplementation(async (name: string) =>
+      name === 'caller_has_pending_invite' ? { data: true, error: null } : { data: null, error: null }
+    );
 
     expect(await callbackRedirect()).toBe(DASHBOARD);
-    const writes = mockEmulator.state.writes;
-    expect(writes.map((w) => `${w.table}:${w.op}`)).toEqual([
-      'users:upsert',
-      'organization_members:update',
-    ]);
-    expect(writes[1].values).toMatchObject({ user_id: FIXTURE_USER_ID, license_status: 'active' });
-    expect(mockRpc).not.toHaveBeenCalled();
+    expect(mockEmulator.state.writes).toHaveLength(0);
+    expect(mockRpc).not.toHaveBeenCalledWith('accept_invitation', expect.anything());
+    expect(mockRpc).not.toHaveBeenCalledWith('caller_has_pending_invite');
     expect(mockSignOut).not.toHaveBeenCalled();
   });
 });
