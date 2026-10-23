@@ -27,7 +27,6 @@ import { hostAppPaths } from "../capabilities/appPathsProvider";
 import { hostDialog } from "../capabilities/dialogProvider";
 import { hostErrorReporter } from "../capabilities/errorReporterProvider";
 import logService from "./logService";
-import { redactEmail } from "../utils/redactSensitive";
 import {
   setDb,
   setDbPath,
@@ -79,6 +78,12 @@ import {
   V75_ADD_INCLUDE_OUTSIDE_DATES_SQL,
   V75_CHECKLIST_LINKS_TABLE_INFO_SQL,
 } from "./db/migrationV75Sql";
+import {
+  V76_BROKEN_TEXT_IDS_SQL,
+  V76_CLEAR_DANGLING_SQL,
+  V76_REPOINT_SQL,
+} from "./db/migrationV76Sql";
+import { V77_ORPHAN_TEXT_IDS_SQL, V77_REPOINT_SQL, V77_TEXT_DEAL_COLUMN_SQL } from "./db/migrationV77Sql";
 import {
   SCHEMA_VERSION_UPDATE_SQL,
   SCHEMA_VERSION_TABLE_EXISTS_SQL,
@@ -1528,8 +1533,9 @@ class DatabaseService implements IDatabaseService {
       if (tables.length > 0) {
         const user = currentDb.prepare(LOCAL_USER_ID_AND_EMAIL_SQL).get() as { id: string; email?: string } | undefined;
         if (user?.id) {
-          // BACKLOG-3819: redacted, matching main.ts's Sentry.setUser.
-          hostErrorReporter.setUser({ id: user.id, email: user.email ? redactEmail(user.email) : undefined });
+          // BACKLOG-4040 S3: id only, matching main.ts's Sentry.setUser (the scope is
+          // persisted to sentry/scope_v3.json in plaintext).
+          hostErrorReporter.setUser({ id: user.id });
           hostErrorReporter.addBreadcrumb({
             category: "database",
             message: "Pre-migration user context set",
@@ -1896,6 +1902,53 @@ class DatabaseService implements IDatabaseService {
         }
       },
     },
+    {
+      version: 76,
+      description:
+        "BACKLOG-4018 re-point texts whose deal column is empty but which still " +
+        "have a per-message link (left by pre-3908 remove-conversation)",
+      // Data only: no schema change. A fresh install (BASELINE 70) runs it too and
+      // finds nothing to repair. Idempotent: every repaired row now has a non-NULL
+      // column and stops qualifying; a row put back to NULL by the dangling-id
+      // guard qualifies again and gets the same answer. See migrationV76Sql.ts.
+      migrate: (d) => {
+        const repoint = d.prepare(V76_REPOINT_SQL);
+        const clearDangling = d.prepare(V76_CLEAR_DANGLING_SQL);
+        const ids = d.prepare(V76_BROKEN_TEXT_IDS_SQL).all() as Array<{ id: string }>;
+        let repointed = 0;
+        let leftEmpty = 0;
+        for (const { id } of ids) {
+          repointed += repoint.run(id).changes;
+          leftEmpty += clearDangling.run(id).changes;
+        }
+        hostLogger.info(
+          `[v76] re-pointed ${repointed - leftEmpty} text(s); ${leftEmpty} left empty (newest link names a missing deal)`,
+        );
+      },
+    },
+    {
+      version: 77,
+      description:
+        "BACKLOG-3983 repair texts whose deal column names a deal they hold no " +
+        "link to (left by pre-2550 expansion when the deal locked mid-write)",
+      // Data only: no schema change. A fresh install (BASELINE 70) runs it too and
+      // finds nothing to repair. Idempotent: every written row now names a deal it
+      // is linked to, or is NULL; neither qualifies. See migrationV77Sql.ts.
+      migrate: (d) => {
+        const repoint = d.prepare(V77_REPOINT_SQL);
+        const readColumn = d.prepare(V77_TEXT_DEAL_COLUMN_SQL);
+        const ids = d.prepare(V77_ORPHAN_TEXT_IDS_SQL).all() as Array<{ id: string }>;
+        let repointed = 0;
+        let cleared = 0;
+        for (const { id } of ids) {
+          repoint.run(id);
+          const row = readColumn.get(id) as { transaction_id: string | null } | undefined;
+          if (row?.transaction_id) repointed++;
+          else cleared++;
+        }
+        hostLogger.info(`[v77] re-pointed ${repointed} text(s), cleared ${cleared}`);
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
@@ -2076,6 +2129,11 @@ class DatabaseService implements IDatabaseService {
     return userDb.updateUser(userId, updates);
   }
 
+  /** Synchronous update, for callers inside a `dbTransaction` (BACKLOG-3339). */
+  updateUserSync(userId: string, updates: Partial<User>): void {
+    return userDb.updateUserSync(userId, updates);
+  }
+
   async deleteUser(userId: string): Promise<void> {
     return userDb.deleteUser(userId);
   }
@@ -2148,6 +2206,17 @@ class DatabaseService implements IDatabaseService {
     origin: Parameters<typeof contactDb.createContact>[1],
   ): Promise<Contact> {
     return contactDb.createContact(contactData, origin);
+  }
+
+  /**
+   * Synchronous create, for callers inside a `dbTransaction` (BACKLOG-3339).
+   * Returns the new contact's id; read the contact after the commit.
+   */
+  createContactSync(
+    contactData: NewContact,
+    origin: Parameters<typeof contactDb.createContact>[1],
+  ): string {
+    return contactDb.createContactSync(contactData, origin);
   }
 
   createContactsBatch(
@@ -2248,10 +2317,6 @@ class DatabaseService implements IDatabaseService {
     return contactDb.getContactsSortedByActivityWithStatus(userId, propertyAddress, opts);
   }
 
-  async backfillContactCommunicationDates(userId: string): Promise<number> {
-    return contactDb.backfillContactCommunicationDates(userId);
-  }
-
   async searchContacts(query: string, userId: string): Promise<Contact[]> {
     return contactDb.searchContacts(query, userId);
   }
@@ -2313,6 +2378,11 @@ class DatabaseService implements IDatabaseService {
     return contactDb.restoreContact(contactId);
   }
 
+  /** Synchronous restore, for callers inside a `dbTransaction` (BACKLOG-3339). */
+  restoreContactSync(contactId: string): boolean {
+    return contactDb.restoreContactSync(contactId);
+  }
+
   /**
    * Synchronous phone lookup scoped by user_id (BACKLOG-1469).
    * Used by Android contact promotion to check for duplicates.
@@ -2329,16 +2399,17 @@ class DatabaseService implements IDatabaseService {
     return messageDb.getLastMessageDatesForPhones(userId, phones);
   }
 
-  async backfillPhoneLastMessageTable(userId: string): Promise<number> {
-    return messageDb.backfillPhoneLastMessageTable(userId);
-  }
-
   async getContactNamesByPhones(phones: string[]): Promise<Map<string, string>> {
     return contactDb.getContactNamesByPhones(phones);
   }
 
   async removeContact(contactId: string): Promise<void> {
     return contactDb.removeContact(contactId);
+  }
+
+  /** Synchronous removal, for callers inside a `dbTransaction` (BACKLOG-3339). */
+  removeContactSync(contactId: string): void {
+    return contactDb.removeContactSync(contactId);
   }
 
   // ============================================
@@ -2570,9 +2641,14 @@ class DatabaseService implements IDatabaseService {
     return transactionContactDb.getRemovedTransactionContacts(transactionId);
   }
 
-  /** BACKLOG-2367: clear a junction tombstone. False when there was nothing to restore. */
-  async restoreContactToTransaction(transactionId: string, contactId: string): Promise<boolean> {
-    return transactionContactDb.restoreContactToTransaction(transactionId, contactId);
+  /**
+   * BACKLOG-2367: clear a junction tombstone. False when there was nothing to
+   * restore. BACKLOG-3339 slice T: synchronous, called inside the
+   * `transactions:restore-contact` handler's `dbTransaction` with its audit
+   * entry. The async delegate was removed: nothing called it.
+   */
+  restoreContactToTransactionSync(transactionId: string, contactId: string): boolean {
+    return transactionContactDb.restoreContactToTransactionSync(transactionId, contactId);
   }
 
   async batchUpdateContactAssignments(transactionId: string, operations: transactionContactDb.ContactAssignmentOperation[]): Promise<void> {
@@ -2657,16 +2733,25 @@ class DatabaseService implements IDatabaseService {
     return messageDb.getMessageContacts(userId);
   }
 
-  async getMessagesByContact(userId: string, contact: string): Promise<messageDb.PickerMessage[]> {
-    return messageDb.getMessagesByContact(userId, contact);
+  async getMessagesByContact(
+    userId: string,
+    contact: string,
+    transactionId: string,
+  ): Promise<messageDb.PickerMessage[]> {
+    return messageDb.getMessagesByContact(userId, contact, transactionId);
+  }
+
+  /** BACKLOG-4017: the picker read plus the count of this contact's chats linked to `transactionId`. */
+  async readPickerForContact(
+    userId: string,
+    contact: string,
+    transactionId: string,
+  ): Promise<messageDb.PickerReadForContact> {
+    return messageDb.readPickerForContact(userId, contact, transactionId);
   }
 
   async linkMessageToTransaction(messageId: string, transactionId: string): Promise<void> {
     return messageDb.linkMessageToTransaction(messageId, transactionId);
-  }
-
-  async unlinkMessageFromTransaction(messageId: string): Promise<void> {
-    return messageDb.unlinkMessageFromTransaction(messageId);
   }
 
   async getMessagesByTransaction(transactionId: string): Promise<Message[]> {

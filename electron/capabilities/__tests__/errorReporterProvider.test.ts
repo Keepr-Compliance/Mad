@@ -74,7 +74,7 @@ describe("errorReporterProvider (BACKLOG-2962)", () => {
     });
     hostErrorReporter.addBreadcrumb({ category: "validation", level: "warning" });
     await hostErrorReporter.flush(2000);
-    hostErrorReporter.setUser({ id: "user-1", email: undefined });
+    hostErrorReporter.setUser({ id: "user-1" });
 
     expect(recorder.calls.map((c) => c[0])).toEqual([
       "captureException",

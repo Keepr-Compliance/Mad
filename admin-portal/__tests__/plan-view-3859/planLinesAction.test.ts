@@ -237,6 +237,63 @@ describe('the lines (shared rule, batched facts)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// BACKLOG-3851 (C7): a member deactivated by their brokerage who owns a
+// personal row is back on pay-as-you-go; support sees the personal plan and the
+// brokerage they were deactivated from. 'unassigned' stays a brokerage line.
+// The rows are BASE_TABLES with U_AGENT's brokerage row (m-2) re-statused.
+// ---------------------------------------------------------------------------
+describe('C7: deactivated / unassigned brokerage members', () => {
+  function withAgentStatus(status: string) {
+    state.tables = {
+      ...BASE_TABLES,
+      organization_members: (BASE_TABLES.organization_members as Row[]).map((r) =>
+        r.id === 'm-2' ? { ...r, license_status: status } : r
+      ),
+    };
+  }
+  async function agentLine() {
+    const res = await getPlanLines([U_AGENT]);
+    if (!res.ok) throw new Error(`refused: ${res.error}`);
+    return res.lines[U_AGENT];
+  }
+
+  it.each(['suspended', 'expired'])('%s + own personal row -> the personal plan, warned "Deactivated from"', async (status) => {
+    withAgentStatus(status);
+    expect(await agentLine()).toEqual({
+      kind: 'agent_unlimited',
+      text: 'Agent Unlimited, paid by Stripe, renews Nov 12, 2026',
+      test: true,
+      warning: 'Deactivated from Demo Realty',
+    });
+  });
+
+  it('unassigned -> "Brokerage Demo Realty, no license assigned", never the personal plan', async () => {
+    withAgentStatus('unassigned');
+    expect(await agentLine()).toEqual({
+      kind: 'brokerage',
+      text: 'Brokerage Demo Realty, no license assigned',
+      test: false,
+      warning: null,
+    });
+  });
+
+  it('pending + own personal row -> the brokerage line, never the personal plan', async () => {
+    withAgentStatus('pending');
+    expect(await agentLine()).toMatchObject({ kind: 'brokerage', text: 'Brokerage Demo Realty, invite pending', warning: null });
+  });
+
+  it('suspended WITHOUT a personal row -> brokerage, no license (suspended)', async () => {
+    state.tables = {
+      ...BASE_TABLES,
+      organization_members: (BASE_TABLES.organization_members as Row[])
+        .filter((r) => r.id !== 'm-0')
+        .map((r) => (r.id === 'm-2' ? { ...r, license_status: 'suspended' } : r)),
+    };
+    expect(await agentLine()).toMatchObject({ kind: 'brokerage', text: 'Brokerage Demo Realty, no license (suspended)', warning: null });
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('C3: nothing price-like leaves the server', () => {
   const PRICE_KEY = /price|amount|cents|currency|charge/i;
 

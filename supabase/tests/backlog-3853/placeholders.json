@@ -1,0 +1,9 @@
+{
+  "__INSERT_FROM__": "$p$ AND (NOT org_billing_suspended(organization_id))$p$",
+  "__SUBMITTER_FROM__": "$p$ AND (((status)::text = 'uploading'::text) OR (NOT org_billing_suspended(organization_id)))$p$",
+  "__STORAGE_FROM__": "$p$ AND (NOT org_billing_suspended(uploader.organization_id))$p$",
+  "__COMMENT_FROM__": "$p$ AND (NOT org_billing_suspended(transaction_submissions.organization_id))$p$",
+  "__REVIEWER_USING_FROM__": "$p$ AND (NOT org_billing_suspended(organization_id))$p$",
+  "__REVIEWER_CHECK_FROM__": "$p$ AND (NOT org_billing_suspended(organization_id))$p$",
+  "__REVIEWER_CARVEOUT__": "$p$ AND ((submitted_by = ( SELECT auth.uid() AS uid)) OR (NOT org_billing_suspended(organization_id)))$p$"
+}

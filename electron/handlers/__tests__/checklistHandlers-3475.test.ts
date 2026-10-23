@@ -178,7 +178,14 @@ jest.mock("../../services/supabaseService", () => ({
 const mockAudit = jest.fn().mockResolvedValue(undefined);
 jest.mock("../../services/auditService", () => ({
   __esModule: true,
-  default: { log: (...args: unknown[]) => mockAudit(...args) },
+  // BACKLOG-3339 slice T: add / remove write their entry inside the change's
+  // transaction (`recordInTransaction`); `mockAudit` sees that entry.
+  default: {
+    log: (...args: unknown[]) => mockAudit(...args),
+    recordInTransaction: (...args: unknown[]) => mockAudit(...args),
+    recordFailure: jest.fn(),
+  },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
 }));
 
 const mockGate = jest.fn();

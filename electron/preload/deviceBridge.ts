@@ -5,6 +5,9 @@
 
 import { ipcRenderer, IpcRendererEvent } from "electron";
 
+/** BACKLOG-4002: the structured message main sends with a sync event. */
+type UserFacingErrorPayload = { code: string; title: string; description: string; actionSuggestion: string };
+
 export const deviceBridge = {
   /**
    * Lists all currently connected iOS devices
@@ -379,6 +382,23 @@ export const syncBridge = {
     ipcRenderer.on("sync:waiting-for-passcode", listener);
     return () =>
       ipcRenderer.removeListener("sync:waiting-for-passcode", listener);
+  },
+
+  /**
+   * BACKLOG-4002 (Windows): the backup tool is suspended (`suspended: true`, with the
+   * notice to show) or running again (`suspended: false`).
+   * @param callback - Callback with the suspended state
+   * @returns Cleanup function to remove listener
+   */
+  onToolSuspended: (
+    callback: (payload: { suspended: boolean; userError?: UserFacingErrorPayload }) => void,
+  ) => {
+    const listener = (
+      _event: IpcRendererEvent,
+      payload: { suspended: boolean; userError?: UserFacingErrorPayload },
+    ) => callback(payload);
+    ipcRenderer.on("sync:tool-suspended", listener);
+    return () => ipcRenderer.removeListener("sync:tool-suspended", listener);
   },
 
   /**

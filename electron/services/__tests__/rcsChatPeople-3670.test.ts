@@ -152,15 +152,15 @@ describe("people found in texts (BACKLOG-3670)", () => {
     expect(ids()).toEqual(["msg_tel_+15555550102"]);
   });
 
-  it("cleared with the texts: Force re-import and auto-delete (P6)", () => {
+  it("cleared with the texts: Force re-import and auto-delete (P6)", async () => {
     record(USER, "h1", [{ number: NUM_A, name: null }], "2026-09-01T00:00:00.000Z");
     record(USER, "h2", [{ number: NUM_B, name: null }], "2026-09-01T00:00:00.000Z");
     const ops = rcsAutoDeleteDbOps();
-    clearUnlinkedOldChats(USER, "2026-10-01T00:00:00.000Z", { ...ops, unlinkedOldThreads: () => ["gmweb2-h1"] }, {
+    await clearUnlinkedOldChats(USER, "2026-10-01T00:00:00.000Z", { ...ops, unlinkedOldThreads: () => ["gmweb2-h1"] }, {
       attachmentsRoot: "/nowhere", resolve: (p) => p, deleteFile: () => false,
     });
     expect(ids()).toEqual(["msg_tel_+15555550102"]);
-    clearGoogleMessagesWebData(USER, rcsClearDbOps(), { attachmentsRoot: "/nowhere", resolve: (p) => p, deleteFile: () => false });
+    await clearGoogleMessagesWebData(USER, rcsClearDbOps(), { attachmentsRoot: "/nowhere", resolve: (p) => p, deleteFile: () => false });
     expect(ids()).toEqual([]);
   });
 

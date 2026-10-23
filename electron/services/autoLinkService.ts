@@ -28,6 +28,7 @@ import {
   candidateMessageThreadsSql,
   unlinkedMessagesInThreadsSql,
 } from "./db/autoLinkSql";
+import crypto from "crypto";
 import logService from "./logService";
 import { exclusionAutolinkThreads, RCS_EXCLUSION_STOPS_AUTOLINK } from "./rcsExclusions";
 import { rcsExclusionHashes } from "./db/syncDbService";
@@ -710,6 +711,22 @@ export async function linkEmailToTransaction(
     }
   }
 
+  const written = writeEmailLinkSync(emailId, transactionId, linkSource, linkConfidence, matchReason);
+  if (written === "error") {
+    await logService.warn(
+      `Email ${emailId} not found when trying to link`,
+      "AutoLinkService"
+    );
+  }
+  return written;
+}
+
+/**
+ * The email-row read and the link INSERT, synchronous so it can sit inside a
+ * caller's `dbTransaction` (BACKLOG-2845). No await, no log: the caller logs.
+ * The id comes from `crypto.randomUUID()` (v4, as the `uuid` import it replaces).
+ */
+function writeEmailLinkSync(emailId: string, transactionId: string, linkSource: "auto" | "manual" | "scan", linkConfidence: number, matchReason: MatchReason): "linked" | "error" {
   // Get the email's user_id and thread_id to create a proper communication record.
   // BACKLOG-1718 (R3): thread_id must be propagated so unlinkCommunication can
   // expand the deletion to all sibling emails sharing the same thread.
@@ -717,21 +734,13 @@ export async function linkEmailToTransaction(
     EMAIL_USER_AND_THREAD_SQL,
     [emailId]
   );
-
-  if (!emailRow) {
-    await logService.warn(
-      `Email ${emailId} not found when trying to link`,
-      "AutoLinkService"
-    );
-    return "error";
-  }
+  if (!emailRow) return "error";
 
   // Create a new communication record linking this email to the transaction.
   // BACKLOG-2319: persist match_reason so the Emails tab can split Needs-review
   // (address_missing) from Linked (address_found / manual / user_confirmed).
-  const { v4: uuidv4 } = await import("uuid");
   dbRun(INSERT_EMAIL_COMMUNICATION_SQL, [
-    uuidv4(),
+    crypto.randomUUID(),
     emailRow.user_id,
     transactionId,
     emailId,
@@ -740,8 +749,21 @@ export async function linkEmailToTransaction(
     linkConfidence,
     matchReason,
   ]);
-
   return "linked";
+}
+
+/**
+ * BACKLOG-2845: a MANUAL link (the user approving a review item), synchronous so
+ * approve can hold it in one transaction with the pending-row delete. Manual by
+ * construction: the lock gate and the BACKLOG-2880 gate in
+ * `linkEmailToTransaction` apply to automatic links only, so nothing is skipped.
+ * Returns "error" when the email row is missing, exactly as the async path does
+ * (without its warn log, since no log may run inside the caller's transaction).
+ */
+export function linkEmailManuallySync(emailId: string, transactionId: string, linkConfidence: number, matchReason: MatchReason): "linked" | "already_linked" | "error" {
+  const existing = dbGet<{ id: string; transaction_id: string }>(EXISTING_EMAIL_COMMUNICATION_SQL, [emailId, transactionId]);
+  if (existing) return "already_linked";
+  return writeEmailLinkSync(emailId, transactionId, "manual", linkConfidence, matchReason);
 }
 
 // ============================================

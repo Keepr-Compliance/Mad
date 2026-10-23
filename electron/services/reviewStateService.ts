@@ -97,11 +97,11 @@ import {
   TRANSACTION_SCAN_WINDOW_SQL,
 } from "./db/reviewStateSql";
 import {
-  createThreadCommunicationReference,
-  addIgnoredCommunication,
-  confirmEmailLinksByEmailIds,
+  createThreadCommunicationReferenceSync,
+  addIgnoredCommunicationSync,
+  confirmEmailLinksByEmailIdsSync,
 } from "./db/communicationDbService";
-import { linkEmailToTransaction } from "./autoLinkService";
+import { linkEmailManuallySync } from "./autoLinkService";
 import logService from "./logService";
 import { getDealLockReason } from "./dealLockState";
 import { runFullSweepOnce, yieldToEventLoop } from "./autoLinkSweepGuard";
@@ -1507,14 +1507,10 @@ function loadItem(id: string): ReviewItem | undefined {
  *    Removed section renders these and a duplicate would be a second card with
  *    a second Restore for one email.
  */
-async function resolveLegacyTwins(
-  emailId: string | null,
-  transactionId: string,
-  verb: "approve" | "reject",
-): Promise<void> {
+function resolveLegacyTwinsSync(emailId: string | null, transactionId: string, verb: "approve" | "reject"): void {
   if (!emailId) return;
   if (verb === "approve") {
-    await confirmEmailLinksByEmailIds([emailId], transactionId);
+    confirmEmailLinksByEmailIdsSync([emailId], transactionId);
     return;
   }
   dbRun(
@@ -1542,50 +1538,73 @@ export function getReviewItemTransactionIds(itemIds: readonly string[]): string[
   return out;
 }
 
+/**
+ * BACKLOG-2845: approve and reject are ALL-OR-NOTHING PER CALL. One click (one
+ * card, or "Approve all" / "Reject all") is one IPC call, and every write it
+ * makes for every item sits in ONE `dbTransaction`. A failure part-way through
+ * rolls back every item in the call, the call throws, and the renderer's
+ * "Could not link / Could not remove" toast is then true: nothing changed.
+ *
+ * Per item would let a crash split a two-email card (the BACKLOG-2791 split),
+ * and the service cannot tell a card from "Approve all", so the call is the
+ * unit. Do NOT reintroduce per-item success with a per-item savepoint plus a
+ * catch: control P2c in reviewStateService.approveRejectAtomicity-2845.test.ts
+ * goes red on exactly that. Partial success needs its own item and a UX that
+ * says which items failed.
+ *
+ * The bodies are synchronous: only `*Sync` writers and dbGet/dbAll/dbRun, no
+ * await, no try/catch, no log, no broadcast. `dbTransaction`'s type rejects an
+ * async body, so an await cannot later slip in between the reads and the
+ * writes. The async names (`linkEmailToTransaction`, `addIgnoredCommunication`,
+ * `confirmEmailLinksByEmailIds`, `createThreadCommunicationReference`) are
+ * deliberately NOT imported into this file. The review broadcast fires in the
+ * async wrapper, after the commit.
+ */
 export async function approveReviewItems(itemIds: string[]): Promise<{ approved: number }> {
-  let approved = 0;
-  let touched: string | null = null;
-  for (const itemId of itemIds) {
-    const item = loadItem(itemId);
-    if (!item) continue;
-    touched = item.transaction_id;
-
-    if (item.origin === "legacy") {
-      if (!item.email_id) continue;
-      await confirmEmailLinksByEmailIds([item.email_id], item.transaction_id);
-      approved++;
-      continue;
-    }
-
-    if (item.email_id) {
-      await linkEmailToTransaction(
-        item.email_id,
-        item.transaction_id,
-        "manual",
-        0.95,
-        "user_confirmed",
-      );
-      // BACKLOG-2831: and settle the legacy twin, if this email has one. When it
-      // does, the call above returned "already_linked" without promoting the
-      // existing row, so without this the approved email stays address_missing —
-      // i.e. still in review, still gating Complete.
-      await resolveLegacyTwins(item.email_id, item.transaction_id, "approve");
-    } else if (item.thread_id) {
-      const txn = getTransactionRow(item.transaction_id);
-      if (!txn) continue;
-      await createThreadCommunicationReference(
-        item.thread_id,
-        item.transaction_id,
-        txn.user_id,
-        "manual",
-        0.95,
-      );
-    }
-    dbRun(DELETE_PENDING_REVIEW_SQL, [item.rowId]);
-    approved++;
-  }
+  const { approved, touched } = approveReviewItemsSync(itemIds);
   if (approved > 0 && touched) notifyReviewStateChanged(touched);
   return { approved };
+}
+
+export function approveReviewItemsSync(itemIds: string[]): { approved: number; touched: string | null } {
+  return dbTransaction(() => {
+    let approved = 0;
+    let touched: string | null = null;
+    for (const itemId of itemIds) {
+      const result = approveOneReviewItem(itemId);
+      if (result.transactionId) touched = result.transactionId;
+      if (result.approved) approved++;
+    }
+    return { approved, touched };
+  });
+}
+
+/** One item of an approve call. Opens no transaction of its own: the caller's holds it. */
+function approveOneReviewItem(itemId: string): { approved: boolean; transactionId: string | null } {
+  const item = loadItem(itemId);
+  if (!item) return { approved: false, transactionId: null };
+  const transactionId = item.transaction_id;
+
+  if (item.origin === "legacy") {
+    if (!item.email_id) return { approved: false, transactionId };
+    confirmEmailLinksByEmailIdsSync([item.email_id], transactionId);
+    return { approved: true, transactionId };
+  }
+
+  if (item.email_id) {
+    linkEmailManuallySync(item.email_id, transactionId, 0.95, "user_confirmed");
+    // BACKLOG-2831: and settle the legacy twin, if this email has one. When it
+    // does, the call above returned "already_linked" without promoting the
+    // existing row, so without this the approved email stays address_missing —
+    // i.e. still in review, still gating Complete.
+    resolveLegacyTwinsSync(item.email_id, transactionId, "approve");
+  } else if (item.thread_id) {
+    const txn = getTransactionRow(transactionId);
+    if (!txn) return { approved: false, transactionId };
+    createThreadCommunicationReferenceSync(item.thread_id, transactionId, txn.user_id, "manual", 0.95);
+  }
+  dbRun(DELETE_PENDING_REVIEW_SQL, [item.rowId]);
+  return { approved: true, transactionId };
 }
 
 /**
@@ -1594,51 +1613,67 @@ export async function approveReviewItems(itemIds: string[]): Promise<{ approved:
  * (this service AND autoLinkService) already filters on, so a rejected item
  * cannot be resurrected by a later sync. A LEGACY item additionally has its
  * existing link row deleted, exactly as unlinking it from the tab would.
+ *
+ * BACKLOG-2845: one transaction per call, exactly as approve (see above).
  */
 export async function rejectReviewItems(itemIds: string[]): Promise<{ rejected: number }> {
-  let rejected = 0;
-  let touched: string | null = null;
-  for (const itemId of itemIds) {
-    const item = loadItem(itemId);
-    if (!item) continue;
-    touched = item.transaction_id;
-
-    const txn = getTransactionRow(item.transaction_id);
-    if (!txn) continue;
-
-    await addIgnoredCommunication({
-      user_id: txn.user_id,
-      transaction_id: item.transaction_id,
-      email_id: item.email_id ?? undefined,
-      thread_id: item.thread_id ?? undefined,
-      original_communication_id: item.origin === "legacy" ? item.rowId : undefined,
-      reason: REVIEW_REJECTION_REASON,
-      // ALWAYS address_missing, including for a never-linked pending item.
-      //
-      // The suppression row is also what the Removed section renders and what
-      // RESTORE reads back, and restore recreates the link with the stored
-      // classification — where NULL means "legacy, treat as address_found", i.e.
-      // LINKED. A pending rejection stored as NULL would therefore have given a
-      // one-click path from "rejected, never linked" to "silently linked with no
-      // approval", straight through the existing Removed UI and around the whole
-      // point of this feature. Storing address_missing sends a restored item
-      // back into the review queue instead, which getReviewState counts.
-      match_reason: "address_missing",
-    });
-
-    if (item.origin === "legacy") {
-      dbRun(DELETE_COMMUNICATION_SQL, [item.rowId]);
-    } else {
-      dbRun(DELETE_PENDING_REVIEW_SQL, [item.rowId]);
-      // BACKLOG-2831: a rejected pending email may ALSO hold an address_missing
-      // link row, written by a sweep that linked instead of queueing. Rejecting
-      // means "not part of this deal", so that link goes too — otherwise the
-      // rejected email came straight back as its legacy self, still in review
-      // and still in the audit.
-      await resolveLegacyTwins(item.email_id, item.transaction_id, "reject");
-    }
-    rejected++;
-  }
+  const { rejected, touched } = rejectReviewItemsSync(itemIds);
   if (rejected > 0 && touched) notifyReviewStateChanged(touched);
   return { rejected };
+}
+
+export function rejectReviewItemsSync(itemIds: string[]): { rejected: number; touched: string | null } {
+  return dbTransaction(() => {
+    let rejected = 0;
+    let touched: string | null = null;
+    for (const itemId of itemIds) {
+      const result = rejectOneReviewItem(itemId);
+      if (result.transactionId) touched = result.transactionId;
+      if (result.rejected) rejected++;
+    }
+    return { rejected, touched };
+  });
+}
+
+/** One item of a reject call. Opens no transaction of its own: the caller's holds it. */
+function rejectOneReviewItem(itemId: string): { rejected: boolean; transactionId: string | null } {
+  const item = loadItem(itemId);
+  if (!item) return { rejected: false, transactionId: null };
+  const transactionId = item.transaction_id;
+
+  const txn = getTransactionRow(transactionId);
+  if (!txn) return { rejected: false, transactionId };
+
+  addIgnoredCommunicationSync({
+    user_id: txn.user_id,
+    transaction_id: transactionId,
+    email_id: item.email_id ?? undefined,
+    thread_id: item.thread_id ?? undefined,
+    original_communication_id: item.origin === "legacy" ? item.rowId : undefined,
+    reason: REVIEW_REJECTION_REASON,
+    // ALWAYS address_missing, including for a never-linked pending item.
+    //
+    // The suppression row is also what the Removed section renders and what
+    // RESTORE reads back, and restore recreates the link with the stored
+    // classification — where NULL means "legacy, treat as address_found", i.e.
+    // LINKED. A pending rejection stored as NULL would therefore have given a
+    // one-click path from "rejected, never linked" to "silently linked with no
+    // approval", straight through the existing Removed UI and around the whole
+    // point of this feature. Storing address_missing sends a restored item
+    // back into the review queue instead, which getReviewState counts.
+    match_reason: "address_missing",
+  });
+
+  if (item.origin === "legacy") {
+    dbRun(DELETE_COMMUNICATION_SQL, [item.rowId]);
+  } else {
+    dbRun(DELETE_PENDING_REVIEW_SQL, [item.rowId]);
+    // BACKLOG-2831: a rejected pending email may ALSO hold an address_missing
+    // link row, written by a sweep that linked instead of queueing. Rejecting
+    // means "not part of this deal", so that link goes too — otherwise the
+    // rejected email came straight back as its legacy self, still in review
+    // and still in the audit.
+    resolveLegacyTwinsSync(item.email_id, transactionId, "reject");
+  }
+  return { rejected: true, transactionId };
 }

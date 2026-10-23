@@ -32,8 +32,22 @@
  * take it.
  *
  * They are deliberately NOT named `*Sync`. That suffix belongs to a twin a
- * transaction body calls, and this file contains no transaction body — neither
- * core is a twin, and the name would say it was.
+ * transaction body calls — neither core is a twin, and the name would say it was.
+ *
+ * BACKLOG-3226 — TWO SEAMS OWN THEIR TRANSACTION. `createCommunication` and
+ * `createThreadCommunicationReference` each run their `*Sync` twin inside
+ * `dbTransaction`, so the junction write and the deal's `text_thread_count`
+ * recount commit or roll back together. These are the file's only two
+ * transaction bodies. The twins are unchanged: a caller that already holds a
+ * transaction keeps calling the twin, and a seam called inside an outer
+ * transaction runs as a SAVEPOINT and still throws synchronously. Asserted on
+ * the real driver in
+ * `db/__tests__/communicationDbService.threadCountAtomicity-3226.test.ts`.
+ *
+ * NOT wrapped, deliberately: `createCommunicationReference` and the three async
+ * delete seams (`deleteCommunication`, `deleteCommunicationByMessageId`,
+ * `deleteCommunicationByThread`) have no production caller; what to do with
+ * them is an open decision on BACKLOG-3226.
  */
 
 import crypto from "crypto";
@@ -52,7 +66,7 @@ import type {
   CommunicationRow,
   TransactionId,
 } from "../../types/ids";
-import { dbGet, dbAll, dbRun } from "./core/dbConnection";
+import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
 import { validateFields, type ColumnOf } from "../../utils/sqlFieldWhitelist";
 import { isTextMessage } from "../../utils/channelHelpers";
@@ -182,7 +196,7 @@ export function createCommunicationSync(
 export function createCommunication(
   communicationData: NewCommunication,
 ): Promise<CommunicationRow> {
-  return Promise.resolve(createCommunicationSync(communicationData));
+  return Promise.resolve(dbTransaction(() => createCommunicationSync(communicationData)));
 }
 
 /**
@@ -331,8 +345,12 @@ export function confirmEmailLinksByEmailIds(
   emailIds: string[],
   transactionId: string,
 ): Promise<number> {
+  return Promise.resolve(confirmEmailLinksByEmailIdsSync(emailIds, transactionId));
+}
+
+export function confirmEmailLinksByEmailIdsSync(emailIds: string[], transactionId: string): number {
   const ids = emailIds.filter((id): id is string => typeof id === "string" && id.length > 0);
-  if (ids.length === 0) return Promise.resolve(0);
+  if (ids.length === 0) return 0;
 
   const placeholders = placeholderList(ids.length);
   const statement = sql`
@@ -341,7 +359,7 @@ export function confirmEmailLinksByEmailIds(
      WHERE transaction_id = ?
        AND email_id IN (${placeholders})
   `;
-  return Promise.resolve(dbRun(statement, [transactionId, ...ids]).changes ?? 0);
+  return dbRun(statement, [transactionId, ...ids]).changes ?? 0;
 }
 
 /**
@@ -1085,13 +1103,21 @@ export async function getTransactionsForMessage(
  * @returns The created communication ID, or null when refused because the deal is
  *   locked and the link is automatic (BACKLOG-3910)
  */
-export async function createThreadCommunicationReference(
+export function createThreadCommunicationReference(
   threadId: string,
   transactionId: string,
   userId: string,
   linkSource: 'auto' | 'manual' | 'scan' = 'auto',
   linkConfidence: number = 0.9,
 ): Promise<string | null> {
+  return Promise.resolve(
+    dbTransaction(() =>
+      createThreadCommunicationReferenceSync(threadId, transactionId, userId, linkSource, linkConfidence),
+    ),
+  );
+}
+
+export function createThreadCommunicationReferenceSync(threadId: string, transactionId: string, userId: string, linkSource: 'auto' | 'manual' | 'scan' = 'auto', linkConfidence: number = 0.9): string | null {
   // BACKLOG-3910: backstop. An AUTOMATIC text link never lands on a locked deal
   // (with the broker, or sealed). "manual" is the user's own act and is allowed.
   if (linkSource !== "manual") {
@@ -1288,6 +1314,14 @@ function countTextThreadsForTransactionInternal(transactionId: string): number {
   //     (the old LEFT JOIN found no row: thread_id NULL, participants NULL)
   //   - a thread link whose thread has only non-text messages -> no row (filtered)
   //   - a message link -> unchanged: its one message, or the link when it is gone
+  //
+  // BACKLOG-4013: an email link also has message_id NULL and carries the email's thread_id,
+  // which no message shares, so the "no message at all" arm counted every linked email row
+  // as its own text thread. `email_id IS NULL` is the exact discriminator (schema CHECK:
+  // a row with message_id NULL is an email link iff email_id is set). Do not drop the
+  // "no message at all" arm instead: a text thread link whose texts are not on this Mac
+  // yet must still count (threadCountPerLink-3883 and textThreadCountExcludesEmails-4013 R6
+  // both go red if it is removed).
   const statement = sql`
     SELECT
       c.id AS id,
@@ -1299,6 +1333,7 @@ function countTextThreadsForTransactionInternal(transactionId: string): number {
     FROM communications c
     WHERE c.transaction_id = ?
       AND c.message_id IS NULL
+      AND c.email_id IS NULL
       AND c.thread_id IS NOT NULL
       AND (
         EXISTS (

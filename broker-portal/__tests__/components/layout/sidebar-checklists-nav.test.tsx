@@ -118,11 +118,12 @@ describe('Sidebar — Checklists placement', () => {
 
   it('full order for broker, which has no Users entry: after Support, before My Account', () => {
     renderSidebar({ role: 'broker', displayRole: 'broker', showChecklists: true });
-    expect(navLabels()).toEqual(['Dashboard', 'Submissions', 'Support', CHECKLISTS, 'My Account', 'Sign Out']);
+    expect(navLabels()).toEqual(['Dashboard', 'Submissions', 'Support', CHECKLISTS, 'Org Settings', 'My Account', 'Sign Out']);
   });
 
   it.each([
-    ['broker', ['Dashboard', 'Submissions', 'Support', 'My Account', 'Sign Out']],
+    // BACKLOG-4007: Org Settings for all three (founder 17ad88e3); People sidebar item removed.
+    ['broker', ['Dashboard', 'Submissions', 'Support', 'Org Settings', 'My Account', 'Sign Out']],
     ['admin', ['Dashboard', 'Submissions', 'Support', 'Users', 'Org Settings', 'My Account', 'Sign Out']],
     ['it_admin', ['Users', 'Org Settings', 'My Account', 'Sign Out']],
   ] as const)('leaves the %s nav untouched when off', (role, expected) => {

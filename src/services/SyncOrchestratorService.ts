@@ -18,6 +18,7 @@ import * as Sentry from "@sentry/electron/renderer";
 import { isMacOS } from '../utils/platform';
 import type { ImportSource, UserPreferences } from './settingsService';
 import logger from '../utils/logger';
+import { DATA_EXPORT_NOT_RECORDED_MESSAGE } from '../utils/exportAuditCopy';
 // BACKLOG-2743: type-only import of the shared refusal shape (one definition,
 // re-exported by the IPC contract). Type-only is the only safe direction across
 // the renderer-main boundary.
@@ -1000,6 +1001,9 @@ class SyncOrchestratorServiceClass {
       try {
         const result = await window.api.privacy.exportData(userId);
         if (result.error === 'Export cancelled by user') return 'cancelled';
+        // BACKLOG-3339: the file was saved but not recorded. Still an error,
+        // with fixed text the Settings screen recognises.
+        if (result.notRecorded) throw new Error(DATA_EXPORT_NOT_RECORDED_MESSAGE);
         if (!result.success) {
           throw new Error(result.error || 'CCPA export failed');
         }

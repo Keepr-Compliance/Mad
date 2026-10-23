@@ -44,6 +44,8 @@ jest.mock('@supabase/ssr', () => ({
   createServerClient: jest.fn(() => ({
     auth: { getUser: mockGetUser },
     from: (table: string) => mockEmulator.from(table),
+    // BACKLOG-3853 PR-2B: the brokerage is never suspended in this file.
+    rpc: async () => ({ data: false, error: null }),
   })),
 }));
 

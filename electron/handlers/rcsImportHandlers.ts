@@ -453,7 +453,7 @@ async function afterCacheLinked(jobId: string, userId: string): Promise<void> {
   cacheOptionsByJob.delete(jobId);
   const cutoff = autoDeleteCutoff(options?.autoDeleteDays, Date.now());
   if (!cutoff) return;
-  clearUnlinkedOldChats(userId, cutoff, databaseService.rcsAutoDeleteDbOps(), clearFiles(), (m) => void logService.info(m, LOG_TAG));
+  await clearUnlinkedOldChats(userId, cutoff, databaseService.rcsAutoDeleteDbOps(), clearFiles(), (m) => void logService.info(m, LOG_TAG));
 }
 
 /**
@@ -1212,9 +1212,10 @@ function argsObject(args: unknown): Record<string, unknown> {
 export async function clearGoogleMessagesWebTexts(userId: string): Promise<RcsClearResult> {
   // SR B1: never while a cache Sync is being saved (it is moving files in).
   if (cacheSaveInFlight()) throw new Error(RCS_SAVING_MESSAGE);
-  return runWithWritesPaused(bridge, () => {
+  return runWithWritesPaused(bridge, async () => {
     // SR (G1): the texts and every cache record go in ONE transaction.
-    const result = clearGoogleMessagesWebData(
+    // BACKLOG-4040: the file clean-up after it awaits; writes stay paused.
+    const result = await clearGoogleMessagesWebData(
       userId,
       databaseService.rcsClearDbOps(),
       clearFiles(),

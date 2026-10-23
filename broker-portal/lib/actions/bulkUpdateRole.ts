@@ -10,6 +10,7 @@ import { createClient } from '@/lib/supabase/server';
 import type { Role } from '@/lib/types/users';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
+import { LAST_ADMIN_DEMOTE_REFUSED, ROLE_MANAGED_BY_IDP } from '@/lib/users/roleRefusals';
 
 interface BulkUpdateRoleInput {
   /** BACKLOG-3917: the organization the caller acts in; the caller's row there decides. */
@@ -77,6 +78,13 @@ export async function bulkUpdateRole(
     .select('id');
 
   if (error) {
+    // BACKLOG-4027: the database refusals (one statement, so nothing was changed).
+    if (error.message?.includes('last_admin')) {
+      return { success: false, error: LAST_ADMIN_DEMOTE_REFUSED };
+    }
+    if (error.message?.includes('managed_by_idp')) {
+      return { success: false, error: ROLE_MANAGED_BY_IDP };
+    }
     console.error('Error bulk updating roles:', error);
     return { success: false, error: 'Failed to update roles' };
   }

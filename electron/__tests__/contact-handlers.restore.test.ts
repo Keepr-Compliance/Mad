@@ -45,6 +45,8 @@ jest.mock("../services/db/core/dbConnection", () => ({
   dbAll: (sql: string, params: unknown[] = []) => db.prepare(sql).all(...params),
   dbGet: (sql: string, params: unknown[] = []) => db.prepare(sql).get(...params),
   dbRun: (sql: string, params: unknown[] = []) => db.prepare(sql).run(...params),
+  // BACKLOG-3339: the restore and its audit entry share one transaction.
+  dbTransaction: <T>(fn: () => T): T => db.transaction(fn)(),
 }));
 
 const mockIpcHandle = jest.fn();
@@ -57,7 +59,14 @@ jest.mock("electron", () => ({
 const mockAuditLog = jest.fn().mockResolvedValue(undefined);
 jest.mock("../services/auditService", () => ({
   __esModule: true,
-  default: { log: (...args: unknown[]) => mockAuditLog(...args) },
+  // BACKLOG-3339: the entry is written with recordInTransaction (in the
+  // restore's transaction); the assertions read it from the same mock.
+  default: {
+    log: (...args: unknown[]) => mockAuditLog(...args),
+    recordInTransaction: (...args: unknown[]) => mockAuditLog(...args),
+    recordFailure: jest.fn(),
+  },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
 }));
 
 jest.mock("../services/logService", () => {
@@ -82,6 +91,7 @@ jest.mock("../services/databaseService", () => {
     default: {
       getContactById: (id: string) => real.getContactById(id),
       restoreContact: (id: string) => real.restoreContact(id),
+      restoreContactSync: (id: string) => real.restoreContactSync(id),
       getRemovedContacts: (userId: string) => real.getRemovedContacts(userId),
       getUserById: (id: string) => Promise.resolve(id === USER ? { id } : null),
       // Pointed at the real test database so `getValidUserId` runs its real

@@ -36,12 +36,23 @@ import {
   resolveRole,
   extractGroupRoleMapping,
 } from "../_shared/groupRoleMapper.ts";
+import { placeDirectoryUser } from "./placement.ts";
+import {
+  defaultLastAdminNotifyDeps,
+  notifyLastAdminKept,
+  type LastAdminNotifyDeps,
+} from "../_shared/lastAdminNotify.ts";
+import {
+  billingSkipMessage,
+  isBillingSetupIncompleteError,
+  readJoinsBlocked,
+} from "../_shared/billingSetup.ts";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-interface IdpConfig {
+export interface IdpConfig {
   id: string;
   organization_id: string;
   provider_type: string;
@@ -65,7 +76,7 @@ interface IdpConfig {
   attribute_mapping: Record<string, unknown> | null;
 }
 
-interface ProviderUser {
+export interface ProviderUser {
   /** Provider-side unique ID (Azure objectId / Google user id) */
   externalId: string;
   email: string;
@@ -92,7 +103,20 @@ interface SyncResult {
   added: number;
   suspended: number;
   reactivated: number;
+  /** BACKLOG-4012: people not added or re-activated because billing setup is pending. */
+  skipped_billing_setup: number;
+  /** BACKLOG-4027: changes the database kept back because the person is the last active admin. */
+  skipped_last_admin: number;
   error: string | null;
+}
+
+/** BACKLOG-4012: what the handler passes in; fetchUsers is injectable for tests. */
+export interface SyncOptions {
+  /** Billing setup is pending (_billing_org_join_blocked): add and re-activate no one. */
+  joinsBlocked?: boolean;
+  fetchUsers?: (idp: IdpConfig, org: Record<string, unknown>) => Promise<ProviderUser[]>;
+  /** BACKLOG-4027: the last-admin email (fetch / env injectable for tests). */
+  notifyDeps?: LastAdminNotifyDeps;
 }
 
 // ---------------------------------------------------------------------------
@@ -588,23 +612,29 @@ async function fetchProviderUsers(
  *   6. Reactivate previously-suspended members who reappear
  *   7. Update sync timestamp
  */
-async function syncOrganization(
+export async function syncOrganization(
   supabaseAdmin: SupabaseClient,
   orgId: string,
   org: Record<string, unknown>,
   idp: IdpConfig,
+  options: SyncOptions = {},
 ): Promise<SyncResult> {
   const result: SyncResult = {
     orgId,
     added: 0,
     suspended: 0,
     reactivated: 0,
+    skipped_billing_setup: 0,
+    skipped_last_admin: 0,
     error: null,
   };
+  const joinsBlocked = options.joinsBlocked === true;
+  // BACKLOG-4027: one last-admin email per brokerage per run, whatever the count.
+  let lastAdminKept: { label: string; kind: "deactivate" | "demote" } | null = null;
 
   try {
     // 1. Fetch provider users
-    const providerUsers = await fetchProviderUsers(idp, org);
+    const providerUsers = await (options.fetchUsers ?? fetchProviderUsers)(idp, org);
     console.log(
       `[directory-sync] Org ${orgId}: fetched ${providerUsers.length} users from ${idp.provider_type}`,
     );
@@ -760,8 +790,15 @@ async function syncOrganization(
           scim_synced_at: new Date().toISOString(),
         };
 
-        // If member was suspended (by directory_sync), reactivate
+        // If member was suspended (by directory_sync), reactivate. BACKLOG-4012: not while
+        // the brokerage's billing setup is pending; they stay suspended until a later sync.
         if (
+          existingMember.license_status === "suspended" &&
+          existingMember.provisioned_by === "directory_sync" &&
+          joinsBlocked
+        ) {
+          result.skipped_billing_setup++;
+        } else if (
           existingMember.license_status === "suspended" &&
           existingMember.provisioned_by === "directory_sync"
         ) {
@@ -800,11 +837,31 @@ async function syncOrganization(
           }
         }
 
-        await supabaseAdmin
+        // BACKLOG-4027: read the error and the stored row. The last-admin guard keeps a
+        // demotion of the brokerage's last active admin in-row (no error), so compare.
+        const { data: storedRows, error: memberUpdateError } = await supabaseAdmin
           .from("organization_members")
           .update(memberUpdate)
           .eq("organization_id", orgId)
-          .eq("user_id", existingMember.user_id);
+          .eq("user_id", existingMember.user_id)
+          .select("role, license_status");
+        if (memberUpdateError) {
+          console.error(
+            `[directory-sync] Org ${orgId}: could not update ${providerUser.email}: ${memberUpdateError.message}`,
+          );
+        } else if (memberUpdate.role !== undefined) {
+          const stored = (Array.isArray(storedRows) ? storedRows[0] : storedRows) as
+            | { role?: string | null }
+            | null
+            | undefined;
+          if (stored && stored.role !== memberUpdate.role) {
+            result.skipped_last_admin++;
+            lastAdminKept ??= { label: providerUser.email, kind: "demote" };
+            console.log(
+              `[directory-sync] Org ${orgId}: kept ${providerUser.email} as ${stored.role}: last active admin`,
+            );
+          }
+        }
 
         // Update external ID / sync timestamp on user record
         await supabaseAdmin
@@ -821,12 +878,22 @@ async function syncOrganization(
         continue;
       }
 
-      // New user -- check if they exist in the users table by email
-      const { data: existingUser } = await supabaseAdmin
-        .from("users")
-        .select("id")
-        .eq("email", providerUser.email)
-        .maybeSingle();
+      // BACKLOG-4012: no one is added while billing setup is pending (checked before any
+      // users row is created or updated).
+      if (joinsBlocked) {
+        result.skipped_billing_setup++;
+        continue;
+      }
+
+      // New member -- is this an existing Keepr person (by sign-in email)?
+      const placement = await placeDirectoryUser(supabaseAdmin, orgId, providerUser.email);
+      if (placement.kind === "skip") {
+        console.log(
+          `[directory-sync] Org ${orgId}: not adding ${providerUser.email}: ${placement.reason}`,
+        );
+        continue;
+      }
+      const existingUser = placement.kind === "add" ? { id: placement.userId } : null;
 
       if (existingUser) {
         // User exists but not in this org -- add membership
@@ -854,7 +921,7 @@ async function syncOrganization(
           }
         }
 
-        await supabaseAdmin.from("organization_members").insert({
+        const { error: addError } = await supabaseAdmin.from("organization_members").insert({
           organization_id: orgId,
           user_id: existingUser.id,
           role: memberRole,
@@ -866,6 +933,18 @@ async function syncOrganization(
           idp_groups: providerUser.groups.length > 0 ? providerUser.groups : null,
           group_sync_enabled: groupSyncEnabled,
         });
+
+        // BACKLOG-4012: every insert reads its error; only a written row counts as added.
+        if (addError) {
+          if (isBillingSetupIncompleteError(addError)) {
+            result.skipped_billing_setup++;
+          } else {
+            console.error(
+              `[directory-sync] Org ${orgId}: could not add ${providerUser.email}: ${addError.message}`,
+            );
+          }
+          continue;
+        }
 
         seenMemberIds.add(existingUser.id);
         result.added++;
@@ -910,7 +989,7 @@ async function syncOrganization(
           }
         }
 
-        await supabaseAdmin.from("organization_members").insert({
+        const { error: newMemberError } = await supabaseAdmin.from("organization_members").insert({
           organization_id: orgId,
           user_id: newUser.id,
           role: newMemberRole,
@@ -922,6 +1001,19 @@ async function syncOrganization(
           idp_groups: providerUser.groups.length > 0 ? providerUser.groups : null,
           group_sync_enabled: groupSyncEnabled,
         });
+
+        if (newMemberError) {
+          if (isBillingSetupIncompleteError(newMemberError)) {
+            // Remove the fresh users row so the next sync after setup adds this person cleanly.
+            await supabaseAdmin.from("users").delete().eq("id", newUser.id);
+            result.skipped_billing_setup++;
+          } else {
+            console.error(
+              `[directory-sync] Org ${orgId}: could not add ${providerUser.email}: ${newMemberError.message}`,
+            );
+          }
+          continue;
+        }
 
         seenMemberIds.add(newUser.id);
         result.added++;
@@ -936,14 +1028,31 @@ async function syncOrganization(
         member.license_status === "active" &&
         !seenMemberIds.has(member.user_id)
       ) {
-        await supabaseAdmin
+        const { data: storedRows, error: suspendError } = await supabaseAdmin
           .from("organization_members")
           .update({
             license_status: "suspended",
             scim_synced_at: new Date().toISOString(),
           })
           .eq("organization_id", orgId)
-          .eq("user_id", member.user_id);
+          .eq("user_id", member.user_id)
+          .select("license_status");
+        const stored = (Array.isArray(storedRows) ? storedRows[0] : storedRows) as
+          | { license_status?: string | null }
+          | null
+          | undefined;
+        if (suspendError) {
+          console.error(
+            `[directory-sync] Org ${orgId}: could not suspend ${member.email}: ${suspendError.message}`,
+          );
+          continue;
+        }
+        // BACKLOG-4027 (founder B): the last active admin was kept; their account stays active.
+        if (stored && stored.license_status !== "suspended") {
+          result.skipped_last_admin++;
+          lastAdminKept = { label: member.email, kind: "deactivate" };
+          continue;
+        }
 
         await supabaseAdmin
           .from("users")
@@ -958,17 +1067,28 @@ async function syncOrganization(
       }
     }
 
-    // 6. Update sync timestamp and clear error
+    // 6. Update sync timestamp; the error says who is waiting for billing setup, else clear
     await supabaseAdmin
       .from("organizations")
       .update({
         directory_sync_last_at: new Date().toISOString(),
-        directory_sync_error: null,
+        directory_sync_error: result.skipped_billing_setup > 0
+          ? billingSkipMessage(result.skipped_billing_setup)
+          : null,
       })
       .eq("id", orgId);
 
+    if (lastAdminKept) {
+      await notifyLastAdminKept(supabaseAdmin, options.notifyDeps ?? defaultLastAdminNotifyDeps(), {
+        orgId,
+        personLabel: lastAdminKept.label,
+        kind: lastAdminKept.kind,
+        source: "directory_sync",
+      });
+    }
+
     console.log(
-      `[directory-sync] Org ${orgId}: added=${result.added}, suspended=${result.suspended}, reactivated=${result.reactivated}`,
+      `[directory-sync] Org ${orgId}: added=${result.added}, suspended=${result.suspended}, reactivated=${result.reactivated}, skipped_billing_setup=${result.skipped_billing_setup}, skipped_last_admin=${result.skipped_last_admin}`,
     );
   } catch (err) {
     const errorMessage =
@@ -1108,7 +1228,7 @@ Deno.serve(async (req: Request) => {
           ? `Failed to fetch IdP config: ${idpError.message}`
           : "No active identity provider configured";
 
-        results.push({ orgId, added: 0, suspended: 0, reactivated: 0, error: errorMsg });
+        results.push({ orgId, added: 0, suspended: 0, reactivated: 0, skipped_billing_setup: 0, skipped_last_admin: 0, error: errorMsg });
 
         await supabaseAdmin
           .from("organizations")
@@ -1127,11 +1247,13 @@ Deno.serve(async (req: Request) => {
         idp.provider_type !== "google_workspace"
       ) {
         const errorMsg = `Unsupported provider type for directory sync: ${idp.provider_type}`;
-        results.push({ orgId, added: 0, suspended: 0, reactivated: 0, error: errorMsg });
+        results.push({ orgId, added: 0, suspended: 0, reactivated: 0, skipped_billing_setup: 0, skipped_last_admin: 0, error: errorMsg });
         continue;
       }
 
-      const result = await syncOrganization(supabaseAdmin, orgId, org, idp);
+      // BACKLOG-4012: read once per org; the member trigger is the enforcement.
+      const joinsBlocked = await readJoinsBlocked(supabaseAdmin, orgId);
+      const result = await syncOrganization(supabaseAdmin, orgId, org, idp, { joinsBlocked });
       results.push(result);
     }
 
@@ -1144,6 +1266,8 @@ Deno.serve(async (req: Request) => {
         added: r.added,
         suspended: r.suspended,
         reactivated: r.reactivated,
+        skipped_billing_setup: r.skipped_billing_setup,
+        skipped_last_admin: r.skipped_last_admin,
         error: r.error,
       })),
     };

@@ -16,7 +16,8 @@ module.exports = {
   // Override root paths for broker-portal
   rootDir: __dirname,
   roots: ['<rootDir>'],
-  setupFiles: [],
+  // BACKLOG-4061: jsdom lacks TextEncoder/TextDecoder; see jest.polyfills.js.
+  setupFiles: ['<rootDir>/jest.polyfills.js'],
   setupFilesAfterEnv: [],
   // BACKLOG-3284: the root config's network guard is scoped to the desktop app's
   // jest tiers. This portal spreads the root config, so its `<rootDir>`-relative

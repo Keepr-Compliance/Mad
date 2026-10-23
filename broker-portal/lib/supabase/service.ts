@@ -12,7 +12,16 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-export function createServiceClient() {
+export interface ServiceClientOptions {
+  /**
+   * BACKLOG-4036: the signed-in user this service-role write is done for. Sent as the
+   * x-keepr-actor header; the database trusts it only under the service role and records it as
+   * the actor in the organization activity log.
+   */
+  actorId?: string;
+}
+
+export function createServiceClient(options: ServiceClientOptions = {}) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
@@ -27,5 +36,6 @@ export function createServiceClient() {
       autoRefreshToken: false,
       persistSession: false,
     },
+    ...(options.actorId ? { global: { headers: { 'x-keepr-actor': options.actorId } } } : {}),
   });
 }

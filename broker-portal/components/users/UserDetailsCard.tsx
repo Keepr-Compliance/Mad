@@ -18,10 +18,17 @@ import { Card } from '@/components/ui/Card';
 import EditRoleModal from './EditRoleModal';
 import DeactivateUserModal from './DeactivateUserModal';
 import RemoveUserModal from './RemoveUserModal';
+import ReactivateUserModal from './ReactivateUserModal';
+import UnassignLicenseModal from './UnassignLicenseModal';
+import EditNameModal from './EditNameModal';
+import OutOfLicensesNotice from './OutOfLicensesNotice';
+import { setMemberLicense } from '@/lib/actions/memberLicense';
+import { MEMBER_LICENSE_ACTION_LABELS, memberRowActions } from '@/lib/users/memberLicenseActions';
 import type { Role, MemberLicenseStatus, ProvisioningSource } from '@/lib/types/users';
-import { ROLE_LABELS, LICENSE_STATUS_LABELS, PROVISIONING_SOURCE_LABELS } from '@/lib/types/users';
-import { formatUserDisplayName, getUserInitials } from '@/lib/utils/userDisplay';
+import { ROLE_LABELS, PROVISIONING_SOURCE_LABELS, memberStatusLabel } from '@/lib/types/users';
+import { formatUserDisplayName, getUserInitials, memberNameFields } from '@/lib/utils/userDisplay';
 import { formatDate } from '@/lib/utils';
+import { canShowEditName } from '@/lib/users/memberName';
 
 // ============================================================================
 // Types
@@ -63,6 +70,9 @@ export interface MemberDetailsData {
   role: Role;
   license_status: MemberLicenseStatus;
   invited_email: string | null;
+  /** BACKLOG-3851 PR-2f (S1) */
+  invited_first_name?: string | null;
+  invited_last_name?: string | null;
   invited_at: string | null;
   joined_at: string | null;
   provisioned_by: ProvisioningSource | null;
@@ -82,6 +92,15 @@ interface UserDetailsCardProps {
   member: MemberDetailsData;
   currentUserId: string;
   currentUserRole: Role;
+  /** BACKLOG-3851 PR-2f: for the prefilled "more licenses" support request. */
+  organizationName?: string | null;
+  /** BACKLOG-3851 PR-2g: the organization has a free licence (null = not known). */
+  orgHasFreeSeat?: boolean | null;
+  /**
+   * BACKLOG-3991: the database says this brokerage manages names by hand
+   * (org_names_directory_managed = false). False hides "Edit name".
+   */
+  namesEditable?: boolean;
 }
 
 // ============================================================================
@@ -100,6 +119,7 @@ const STATUS_HUES: Record<MemberLicenseStatus, BadgeHue> = {
   pending: 'yellow',
   suspended: 'red',
   expired: 'gray',
+  unassigned: 'blue',
 };
 
 // ============================================================================
@@ -128,21 +148,57 @@ export default function UserDetailsCard({
   member,
   currentUserId,
   currentUserRole,
+  organizationName,
+  orgHasFreeSeat = null,
+  namesEditable = false,
 }: UserDetailsCardProps) {
   const router = useRouter();
   const [showEditRole, setShowEditRole] = useState(false);
   const [showDeactivate, setShowDeactivate] = useState(false);
   const [showRemove, setShowRemove] = useState(false);
+  const [showReactivate, setShowReactivate] = useState(false);
+  const [showUnassign, setShowUnassign] = useState(false);
+  const [showEditName, setShowEditName] = useState(false);
+  const [assignOutOfSeats, setAssignOutOfSeats] = useState(false);
+  const [assignError, setAssignError] = useState<string | null>(null);
 
   const isCurrentUser = member.user_id === currentUserId;
   const isPending = !member.user_id;
   const canManage = ['admin', 'it_admin'].includes(currentUserRole) && !isCurrentUser;
-  const isSuspended = member.license_status === 'suspended';
+  // BACKLOG-3851: the same rule as the list menu (lib/users/memberLicenseActions.ts).
+  const { licenseAction, showDeactivate: deactivateAllowed } = memberRowActions({
+    licenseStatus: member.license_status,
+    isClaimed: !isPending,
+    targetRole: member.role,
+    callerRole: currentUserRole,
+  });
+
+  const showEditNameButton = canShowEditName({
+    namesEditable,
+    callerRole: currentUserRole,
+    targetRole: member.role,
+    isCurrentUser,
+    licenseStatus: member.license_status,
+  });
+
+  const handleAssign = async () => {
+    setAssignOutOfSeats(false);
+    setAssignError(null);
+    const result = await setMemberLicense({ memberId: member.id, action: 'assign' });
+    if (result.success) router.refresh();
+    else if (result.outOfSeats) setAssignOutOfSeats(true);
+    else setAssignError(result.error ?? 'An unexpected error occurred');
+  };
+
+  const handleLicenseAction = () => {
+    if (licenseAction === 'assign') void handleAssign();
+    else if (licenseAction === 'unassign') setShowUnassign(true);
+    else if (licenseAction === 'reactivate') setShowReactivate(true);
+  };
 
   // Format display values
-  const userOrNull = member.user ?? null;
-  const displayName = formatUserDisplayName(userOrNull, member.invited_email);
-  const initials = getUserInitials(userOrNull, member.invited_email);
+  const displayName = formatUserDisplayName(memberNameFields(member), member.invited_email);
+  const initials = getUserInitials(memberNameFields(member), member.invited_email);
   const email = member.user?.email || member.invited_email || '';
 
   // Handle modal close with refresh
@@ -150,6 +206,9 @@ export default function UserDetailsCard({
     setShowEditRole(false);
     setShowDeactivate(false);
     setShowRemove(false);
+    setShowReactivate(false);
+    setShowUnassign(false);
+    setShowEditName(false);
     if (shouldRefresh) {
       router.refresh();
     }
@@ -193,7 +252,7 @@ export default function UserDetailsCard({
               <div className="flex flex-wrap gap-2 mt-2">
                 <Badge hue={ROLE_HUES[member.role]}>{ROLE_LABELS[member.role]}</Badge>
                 <Badge hue={STATUS_HUES[member.license_status]}>
-                  {isPending ? 'Invited' : LICENSE_STATUS_LABELS[member.license_status]}
+                  {memberStatusLabel(member)}
                 </Badge>
                 {member.user?.is_managed && (
                   <Badge hue="primary">IdP Managed</Badge>
@@ -208,7 +267,17 @@ export default function UserDetailsCard({
               <Button onClick={() => setShowEditRole(true)}>
                 Change Role
               </Button>
-              {!isPending && !isSuspended && (
+              {showEditNameButton && (
+                <Button variant="secondary" onClick={() => setShowEditName(true)}>
+                  Edit name
+                </Button>
+              )}
+              {licenseAction && (
+                <Button variant="secondary" onClick={handleLicenseAction}>
+                  {MEMBER_LICENSE_ACTION_LABELS[licenseAction]}
+                </Button>
+              )}
+              {deactivateAllowed && (
                 <Button variant="warning" onClick={() => setShowDeactivate(true)}>
                   Deactivate
                 </Button>
@@ -219,6 +288,17 @@ export default function UserDetailsCard({
             </div>
           )}
         </div>
+
+        {assignOutOfSeats && (
+          <div className="mb-6">
+            <OutOfLicensesNotice callerRole={currentUserRole} organizationName={organizationName} />
+          </div>
+        )}
+        {assignError && (
+          <p className="mb-6 text-sm text-red-600" role="alert">
+            {assignError}
+          </p>
+        )}
 
         {/* Details Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -351,6 +431,28 @@ export default function UserDetailsCard({
         onClose={() => handleModalClose()}
         memberId={member.id}
         memberName={displayName}
+      />
+      <ReactivateUserModal
+        isOpen={showReactivate}
+        onClose={() => handleModalClose()}
+        memberId={member.id}
+        memberName={displayName}
+        callerRole={currentUserRole}
+        organizationName={organizationName}
+        orgHasFreeSeat={orgHasFreeSeat}
+      />
+      <UnassignLicenseModal
+        isOpen={showUnassign}
+        onClose={() => handleModalClose()}
+        memberId={member.id}
+        memberName={displayName}
+      />
+      <EditNameModal
+        isOpen={showEditName}
+        onClose={() => handleModalClose()}
+        memberId={member.id}
+        initialFirstName={isPending ? member.invited_first_name ?? null : member.user?.first_name ?? null}
+        initialLastName={isPending ? member.invited_last_name ?? null : member.user?.last_name ?? null}
       />
       <RemoveUserModal
         isOpen={showRemove}

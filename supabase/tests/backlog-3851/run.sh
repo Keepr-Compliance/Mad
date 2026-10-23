@@ -8,11 +8,12 @@
 # Nothing is ever committed. Two-session controls are in race.sh (a cloned database).
 #
 #   SSH_HOST=<ssh alias|local> PG_CONTAINER=<container> bash run.sh precheck
-#   ... run.sh controls [fragment]   # M1 (+ M2 for the m-controls)
-#   ... run.sh twice    [fragment]   # M1 and M2 each applied twice
+#   ... run.sh controls [fragment]   # M1 + M3 (M1 + M2 + M3 for the m-controls)
+#   ... run.sh twice    [fragment]   # M1, M2 and M3 each applied twice
 #   ... run.sh base     [fragment]   # neither applied (reds expected)
 #   ... run.sh mutants  [fragment]   # lib/mutants.py (each must go red)
-#   ... run.sh rollback              # rollback-3851.sql after M1 + M2, then the pins again
+#   ... run.sh rollback              # rollback-3851.sql after M1 + M2, then the pins again;
+#                                    # rollback-3851-m2.sql (r03) and its cleanup (r04)
 #   ... run.sh one <control> <stack files...>
 #
 # Output: PASS|label|detail / FAIL|label|detail per check, CHECKS|<control>|<n>.
@@ -36,7 +37,9 @@ MIG3946=("$M/20261014152722_backlog_3946_staff_helpers_caller_only.sql"
          "$M/20261014152904_backlog_3946_support_links_table_grants.sql")
 M1="${M1_OVERRIDE:-$M/20261015152446_backlog_3851_license_model.sql}"
 M2="${M2_OVERRIDE:-$M/20261016100100_backlog_3851_paygo_revert.sql}"
-RB="$HERE/rollback-3851.sql"
+M3="${M3_OVERRIDE:-$M/20261016200000_backlog_3851_scim_seat_refusal.sql}"
+RB="$HERE/rollback-3851.sql"; RB3="$HERE/rollback-3851-m3.sql"
+RB2="$HERE/rollback-3851-m2.sql"; RBC="$HERE/rollback-3851-m2-paygo-cleanup.sql"
 SSH_HOST="${SSH_HOST:?set SSH_HOST}"; CONTAINER="${PG_CONTAINER:?set PG_CONTAINER}"
 PGDB="${PGDB:-postgres}"
 psql_in() {
@@ -90,11 +93,11 @@ run_one() { # $1 control, rest: stack
   if echo "$out" | grep -q '^FAIL|'; then return 1; fi
   return 0
 }
-stack_for() { # control file -> stack. c*: M1. m*: M1 + M2. $2 = twice?
+stack_for() { # control file -> stack. c*: M1 + M3. m*: M1 + M2 + M3. $2 = twice?
   local c; c="$(basename "$1")"
   case "$c" in
-    m*) if [ "${2:-}" = twice ]; then echo "$M1 $M1 $M2 $M2"; else echo "$M1 $M2"; fi ;;
-    *)  if [ "${2:-}" = twice ]; then echo "$M1 $M1"; else echo "$M1"; fi ;;
+    m*) if [ "${2:-}" = twice ]; then echo "$M1 $M1 $M2 $M2 $M3 $M3"; else echo "$M1 $M2 $M3"; fi ;;
+    *)  if [ "${2:-}" = twice ]; then echo "$M1 $M1 $M3 $M3"; else echo "$M1 $M3"; fi ;;
   esac
 }
 run_set() { # $1 fragment, $2 quiet(0/1), $3 mode (normal|twice|base)
@@ -131,17 +134,22 @@ case "$mode" in
       [ -n "${MUTANT:-}" ] && [ "$name" != "$MUTANT" ] && continue
       case "$want" in race:*) continue;; esac   # two-session mutants: run.sh race-mutants
       if ! ls "$HERE"/controls/*"$want"*.sql >/dev/null 2>&1; then echo "INVALID|$name|no control matches $want"; invalid=$((invalid+1)); continue; fi
-      case "$part" in M1) src="$M1";; M2) src="$M2";; *) echo "INVALID|$name|part $part"; invalid=$((invalid+1)); continue;; esac
+      case "$part" in M1) src="$M1";; M2) src="$M2";; M3) src="$M3";; *) echo "INVALID|$name|part $part"; invalid=$((invalid+1)); continue;; esac
       if ! python3 "$HERE/lib/mutants.py" apply "$name" "$src" "$tmp/m.sql"; then
         echo "INVALID|$name|mutant did not apply"; invalid=$((invalid+1)); continue; fi
       changed="$(diff "$src" "$tmp/m.sql" | grep '^[<>]' | head -4 | tr '\n' ' ' | cut -c1-240 || true)"
       if [ -z "$changed" ]; then echo "INVALID|$name|mutant changed nothing"; invalid=$((invalid+1)); continue; fi
       echo "== $name  MUTATION APPLIED: $changed"
-      if [ "$part" = M1 ]; then export M1_OVERRIDE="$tmp/m.sql"; else export M2_OVERRIDE="$tmp/m.sql"; fi
-      M1="${M1_OVERRIDE:-$M/20261015152446_backlog_3851_license_model.sql}"; M2="${M2_OVERRIDE:-$M/20261016100100_backlog_3851_paygo_revert.sql}"
+      case "$part" in M1) export M1_OVERRIDE="$tmp/m.sql";; M2) export M2_OVERRIDE="$tmp/m.sql";; M3) export M3_OVERRIDE="$tmp/m.sql";; esac
+      if [ "$part" = M1 ]; then  # M3 as written against the mutated M1 (see mutants.py carry)
+        if ! carried="$(python3 "$HERE/lib/mutants.py" carry "$name" "$M3" "$tmp/m3.sql")"; then
+          echo "INVALID|$name|carry into M3 failed"; invalid=$((invalid+1)); unset M1_OVERRIDE; continue; fi
+        echo "   $carried"; export M3_OVERRIDE="$tmp/m3.sql"
+      fi
+      M1="${M1_OVERRIDE:-$M/20261015152446_backlog_3851_license_model.sql}"; M2="${M2_OVERRIDE:-$M/20261016100100_backlog_3851_paygo_revert.sql}"; M3="${M3_OVERRIDE:-$M/20261016200000_backlog_3851_scim_seat_refusal.sql}"
       if run_set "$want" 1 normal; then echo "SURVIVED|$name|controls $want"; survived=$((survived+1)); else echo "KILLED|$name|controls $want"; killed=$((killed+1)); fi
-      unset M1_OVERRIDE M2_OVERRIDE
-      M1="$M/20261015152446_backlog_3851_license_model.sql"; M2="$M/20261016100100_backlog_3851_paygo_revert.sql"
+      unset M1_OVERRIDE M2_OVERRIDE M3_OVERRIDE
+      M1="$M/20261015152446_backlog_3851_license_model.sql"; M2="$M/20261016100100_backlog_3851_paygo_revert.sql"; M3="$M/20261016200000_backlog_3851_scim_seat_refusal.sql"
     done < <(python3 "$HERE/lib/mutants.py" list "$frag")
     echo "MUTANTS: killed=$killed survived=$survived invalid=$invalid"
     [ "$survived" = 0 ] && [ "$invalid" = 0 ] && [ "$killed" -gt 0 ] ;;
@@ -153,6 +161,22 @@ case "$mode" in
     run_one "$HERE/controls/r02-rollback-m1-only.sql" "$M1" "$HERE/lib/seed-rollback-3851.sql" "$RB" || rc_all=1
     echo "== negative: r01 with NO rollback applied (must go red)"
     if run_one "$HERE/controls/r01-rollback.sql" "$M1" "$M2" "$HERE/lib/seed-rollback-3851.sql" >/dev/null; then echo "FAIL|negative r01 stayed green without the rollback"; rc_all=1; else echo "PASS|negative r01 red without the rollback"; fi
+    SNAP="$HERE/lib/snapshot-m1-3851.sql"; CNT="$HERE/lib/count-before-cleanup-3851.sql"
+    echo "== r03-rollback-m2 (M1, snapshot, M2, seed, rollback-3851-m2.sql)"
+    run_one "$HERE/controls/r03-rollback-m2.sql" "$M1" "$SNAP" "$M2" "$HERE/lib/seed-rollback-3851.sql" "$RB2" || rc_all=1
+    echo "== negative: r03 with NO rollback applied (must go red)"
+    if run_one "$HERE/controls/r03-rollback-m2.sql" "$M1" "$SNAP" "$M2" "$HERE/lib/seed-rollback-3851.sql" >/dev/null; then echo "FAIL|negative r03 stayed green without the rollback"; rc_all=1; else echo "PASS|negative r03 red without the rollback"; fi
+    echo "== r04-rollback-m2-cleanup (r03 stack + count + rollback-3851-m2-paygo-cleanup.sql)"
+    run_one "$HERE/controls/r04-rollback-m2-cleanup.sql" "$M1" "$SNAP" "$M2" "$HERE/lib/seed-rollback-3851.sql" "$RB2" "$CNT" "$RBC" || rc_all=1
+    echo "== negative: r04 without the cleanup (must go red)"
+    if run_one "$HERE/controls/r04-rollback-m2-cleanup.sql" "$M1" "$SNAP" "$M2" "$HERE/lib/seed-rollback-3851.sql" "$RB2" "$CNT" >/dev/null; then echo "FAIL|negative r04 stayed green without the cleanup"; rc_all=1; else echo "PASS|negative r04 red without the cleanup"; fi
+    echo "== r05-rollback-m3 (M1, M3, rollback-3851-m3.sql)"
+    run_one "$HERE/controls/r05-rollback-m3.sql" "$M1" "$M3" "$RB3" || rc_all=1
+    echo "== negative: r05 with NO rollback applied (must go red)"
+    if run_one "$HERE/controls/r05-rollback-m3.sql" "$M1" "$M3" >/dev/null; then echo "FAIL|negative r05 stayed green without the rollback"; rc_all=1; else echo "PASS|negative r05 red without the rollback"; fi
+    echo "== negative: M3 against a drifted seat-trigger body (pre-check must refuse it)"
+    if out="$(run_one "$HERE/controls/c19-scim-seat-refusal.sql" "$M1" "$HERE/lib/drift-seat-trigger-3851.sql" "$M3" 2>&1)"; then echo "FAIL|negative M3 applied over a drifted body"; rc_all=1
+    elif echo "$out" | grep -q 'M3 pre-check'; then echo "PASS|negative M3 pre-check refused the drifted body"; else echo "FAIL|negative M3 failed for another reason: $(echo "$out" | head -2 | tr '\n' ' ')"; rc_all=1; fi
     echo "ROLLBACK: $([ $rc_all = 0 ] && echo OK || echo FAILED)"; exit $rc_all ;;
   race) shift; bash "$HERE/race.sh" "${1:-all}" ;;
   race-mutants)  # each two-session mutant against its scenario in race.sh; each must go red

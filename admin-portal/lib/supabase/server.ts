@@ -48,8 +48,12 @@ export async function createClient() {
 /**
  * Create a Supabase client using the service role key.
  * Bypasses RLS — use only in trusted server-side contexts.
+ *
+ * BACKLOG-4036: pass actorId (the signed-in staff user) on a write that the organization activity
+ * log should attribute to them; it is sent as the x-keepr-actor header, which the database trusts
+ * only under the service role.
  */
-export function createServiceClient() {
+export function createServiceClient(options: { actorId?: string } = {}) {
   return createSupabaseClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
@@ -58,6 +62,7 @@ export function createServiceClient() {
         persistSession: false,
         autoRefreshToken: false,
       },
+      ...(options.actorId ? { global: { headers: { 'x-keepr-actor': options.actorId } } } : {}),
     }
   );
 }

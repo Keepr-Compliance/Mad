@@ -8,7 +8,8 @@
 --   4. 'unassigned' rows -> 'suspended' (ids printed first);
 --   5. the status CHECK re-created under the same name without 'unassigned';
 --   6. the seven new functions dropped;
---   7. license_assigned_at KEPT (data; harmless to every production reader).
+--   7. license_assigned_at KEPT (data; harmless to every production reader);
+--   7b. organizations.jit_provisioning_enabled default back to true (M2 section 4).
 --
 -- NOT undone (R7d): personal organizations attached by the M2 revert trigger (or by the
 -- desktop self-heal after M2) stay. After the rollback those users hold a suspended
@@ -647,6 +648,8 @@ DROP FUNCTION IF EXISTS public.member_status_is_deactivated(text);
 DROP FUNCTION IF EXISTS public.member_status_holds_seat(text);
 
 -- 7. license_assigned_at kept.
+-- 7b.
+ALTER TABLE public.organizations ALTER COLUMN jit_provisioning_enabled SET DEFAULT true;
 
 -- 8. ONLY if the production portal does not read two membership rows (see header):
 -- SELECT m.id, m.user_id FROM public.organization_members m

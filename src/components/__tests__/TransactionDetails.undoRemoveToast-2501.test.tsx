@@ -281,4 +281,52 @@ describe("TransactionDetails — undo toast on removal (BACKLOG-2501)", () => {
     expect(screen.queryByTestId("notification-action")).not.toBeInTheDocument();
     expect(screen.queryByText(/ removed$/)).not.toBeInTheDocument();
   });
+
+  // BACKLOG-3339 slice T: when main cancels the restore (its audit record could
+  // not be saved), the Undo toast shows main's reason, not a generic line.
+  const RESTORE_CANCELLED =
+    "The contact was not restored to this deal because its audit record could not be saved. Please try again. If this keeps happening, contact support.";
+
+  async function undoAfter(testId: string, removedText: string): Promise<void> {
+    render(
+      <TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />,
+    );
+    await waitFor(() => expect(window.api.transactions.getDetails as jest.Mock).toHaveBeenCalled());
+    await saveVia(testId);
+    await waitFor(() => {
+      expect(screen.getByText(removedText)).toBeInTheDocument();
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByTestId("notification-action"));
+    });
+  }
+
+  it("shows main's error when the one restore on Undo is refused (BACKLOG-3339)", async () => {
+    restoreContact.mockResolvedValue({ success: false, error: RESTORE_CANCELLED });
+    await undoAfter("save-removing-one", `${DANA.displayName} removed`);
+
+    await waitFor(() => {
+      expect(screen.getByText(RESTORE_CANCELLED)).toBeInTheDocument();
+    });
+    expect(screen.queryByText(`Failed to restore ${DANA.displayName}`)).not.toBeInTheDocument();
+  });
+
+  it("keeps the named message when the refusal carries no error (BACKLOG-3339)", async () => {
+    restoreContact.mockResolvedValue({ success: false });
+    await undoAfter("save-removing-one", `${DANA.displayName} removed`);
+
+    await waitFor(() => {
+      expect(screen.getByText(`Failed to restore ${DANA.displayName}`)).toBeInTheDocument();
+    });
+  });
+
+  it("keeps the count message when more than one restore is refused (BACKLOG-3339)", async () => {
+    restoreContact.mockResolvedValue({ success: false, error: RESTORE_CANCELLED });
+    await undoAfter("save-removing-two", "2 contacts removed");
+
+    await waitFor(() => {
+      expect(screen.getByText("Failed to restore 2 contacts")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(RESTORE_CANCELLED)).not.toBeInTheDocument();
+  });
 });

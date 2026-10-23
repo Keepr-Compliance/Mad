@@ -1,0 +1,31 @@
+MUTATION APPLIED J1 confirm step packages/ui/src/components/org-people.tsx 567584ba->db98f33f
+{"mutation": "J1 confirm step", "file": "packages/ui/src/components/org-people.tsx", "suite": "__tests__/billing-login-4007/orgPeople.test.tsx", "failed": 1, "total": 19, "red": true}
+MUTATION APPLIED J2 IdP-managed pickable packages/ui/src/components/org-people.tsx 567584ba->6a96224a
+{"mutation": "J2 IdP-managed pickable", "file": "packages/ui/src/components/org-people.tsx", "suite": "__tests__/billing-login-4007/orgPeople.test.tsx", "failed": 1, "total": 19, "red": true}
+MUTATION APPLIED J3 broker edits IT row packages/ui/src/components/org-people.tsx 567584ba->ee11d8a0
+{"mutation": "J3 broker edits IT row", "file": "packages/ui/src/components/org-people.tsx", "suite": "__tests__/billing-login-4007/orgPeople.test.tsx", "failed": 1, "total": 19, "red": true}
+MUTATION APPLIED J4 phone field for IT admin packages/ui/src/components/org-people.tsx 567584ba->061b3340
+{"mutation": "J4 phone field for IT admin", "file": "packages/ui/src/components/org-people.tsx", "suite": "__tests__/billing-login-4007/orgPeople.test.tsx", "failed": 1, "total": 19, "red": true}
+MUTATION APPLIED J5 modal People submit -> inviteUser broker-portal/components/users/InviteUserModal.tsx a2e13b09->8fa2a09b
+{"mutation": "J5 modal People submit -> inviteUser", "file": "broker-portal/components/users/InviteUserModal.tsx", "suite": "__tests__/people-v2-4007/peopleV2.test.tsx", "failed": 3, "total": 9, "red": true}
+MUTATION APPLIED J6 IT action gate = People list broker-portal/lib/actions/orgContacts.ts 23d30413->eca19310
+{"mutation": "J6 IT action gate = People list", "file": "broker-portal/lib/actions/orgContacts.ts", "suite": "__tests__/billing-login-4007", "failed": 3, "total": 98, "red": true}
+MUTATION APPLIED J7 Stripe phone not read broker-portal/lib/billing/brokerageSync.ts b52678eb->cbec9198
+{"mutation": "J7 Stripe phone not read", "file": "broker-portal/lib/billing/brokerageSync.ts", "suite": "__tests__/lib/billing/outboxKinds/sync_org_subscription.convergence.test.ts", "failed": 1, "total": 20, "red": true}
+MUTATION APPLIED J8 removal refusal unworded broker-portal/lib/actions/removeUser.ts e48bfb78->febface7
+{"mutation": "J8 removal refusal unworded", "file": "broker-portal/lib/actions/removeUser.ts", "suite": "__tests__/people-v2-4007/peopleV2.test.tsx", "failed": 1, "total": 9, "red": true}
+MUTATION APPLIED J9 My Account phone not saved broker-portal/lib/actions/myPhone.ts 8c763e6b->9b10b7eb
+{"mutation": "J9 My Account phone not saved", "file": "broker-portal/lib/actions/myPhone.ts", "suite": "__tests__/people-v2-4007/peopleV2.test.tsx", "failed": 2, "total": 9, "red": true}
+MUTATION APPLIED J10 setup login email not sent broker-portal/lib/actions/billingSetup.ts d0363103->a429659a
+{"mutation": "J10 setup login email not sent", "file": "broker-portal/lib/actions/billingSetup.ts", "suite": "__tests__/billing-login-4007/setupBillingLogin.test.tsx", "failed": 2, "total": 12, "red": true}
+MUTATION APPLIED J11 reassigned email ignores a later change broker-portal/lib/billing/billingContactReassigned.ts 285e1fa0->8a5f0a32
+{"mutation": "J11 reassigned email ignores a later change", "file": "broker-portal/lib/billing/billingContactReassigned.ts", "suite": "__tests__/lib/billing/outboxKinds/notify_billing_contact_reassigned.convergence.test.ts", "failed": 1, "total": 5, "red": true}
+MUTATION APPLIED J12 admin dialog People submit -> inviteUser admin-portal/app/dashboard/users/components/InviteUserDialog.tsx f5292f68->48e9fda5
+{"mutation": "J12 admin dialog People submit -> inviteUser", "file": "admin-portal/app/dashboard/users/components/InviteUserDialog.tsx", "suite": "__tests__/people-v2-4007", "failed": 2, "total": 4, "red": true}
+MUTATION APPLIED J13 admin IT invite emailed as billing-only admin-portal/lib/actions/orgContacts.ts 2eab0fef->837fc83b
+{"mutation": "J13 admin IT invite emailed as billing-only", "file": "admin-portal/lib/actions/orgContacts.ts", "suite": "__tests__/people-4007-pr4", "failed": 1, "total": 8, "red": true}
+MUTATION APPLIED J14 deal save carries the contact admin-portal/lib/actions/brokerageBilling.ts 5654db48->e3437df5
+{"mutation": "J14 deal save carries the contact", "file": "admin-portal/lib/actions/brokerageBilling.ts", "suite": "__tests__/onboarding-4007/dealEditor.test.tsx", "failed": 2, "total": 6, "red": true}
+MUTATION APPLIED J15 broker in the IT list broker-portal/lib/people-roles.ts 289629da->fecc9384
+{"mutation": "J15 broker in the IT list", "file": "broker-portal/lib/people-roles.ts", "suite": "__tests__/billing-login-4007/peopleRoles.test.tsx", "failed": 4, "total": 28, "red": true}
+SUMMARY 15 of 15 red

@@ -37,6 +37,12 @@ const nextConfig = {
         destination: 'https://keeprcompliance.com/terms',
         permanent: true,
       },
+      // BACKLOG-4007: People is a card on Org Settings again; the separate page is gone.
+      {
+        source: '/dashboard/people',
+        destination: '/dashboard/settings',
+        permanent: false,
+      },
     ];
   },
 

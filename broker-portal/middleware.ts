@@ -15,12 +15,18 @@ import {
   PORTAL_MEMBERSHIP_SELECT,
   classifyPortalAccess,
   mayOpenDashboardPath,
+  BILLING_PATHS,
   maySuspendedOpenPath,
   suspendedLanding,
+  mayOrgSuspendedOpenPath,
+  orgSuspendedLanding,
   type PortalMembershipRow,
 } from '@/lib/auth/membership';
 import { LICENCE_READ_FAILED, readOwnLicenceSuspended } from '@/lib/auth/suspension';
 import { billingEnabled } from '@/lib/billing/flag';
+import { ORG_SUSPENSION_READ_FAILED, readOrgBillingSuspended } from '@/lib/auth/orgSuspension';
+import { readBillingContactLogin } from '@/lib/auth/billingContact';
+import { safeNextPath, setNextPathCookie } from '@/lib/auth/safeNextPath';
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
@@ -121,7 +127,11 @@ export async function middleware(request: NextRequest) {
     if (isProtectedRoute && !user) {
       const loginUrl = new URL('/login', request.url);
       loginUrl.searchParams.set('redirectTo', pathname);
-      return NextResponse.redirect(loginUrl);
+      const bounce = NextResponse.redirect(loginUrl);
+      // BACKLOG-3863 R7: /auth/callback reads this to land on the same page
+      // after OAuth. Only a path safeNextPath() accepts is stored.
+      setNextPathCookie(bounce, pathname);
+      return bounce;
     }
 
     // BACKLOG-3080: what this person may open, from the one shared classifier
@@ -162,16 +172,39 @@ export async function middleware(request: NextRequest) {
         }
       }
 
+      // BACKLOG-3853 PR-2B: a suspended BROKERAGE (org_deals), read only for a
+      // person routed on one and only when the licence rule above let them
+      // through (the licence rule wins). Sequential: it needs the organization
+      // from the memberships. A failed read lets this request through (every
+      // data path is refused in the database) and logs a static code only.
+      if (suspended !== true) {
+        const orgSuspended = await readOrgBillingSuspended(supabase, access);
+        if (orgSuspended === null) {
+          console.warn('[middleware] brokerage suspension check skipped', { code: ORG_SUSPENSION_READ_FAILED });
+        } else if (orgSuspended) {
+          const billingOn = billingEnabled();
+          if (!mayOrgSuspendedOpenPath(access, pathname, billingOn)) {
+            return NextResponse.redirect(new URL(orgSuspendedLanding(access, billingOn), request.url));
+          }
+        }
+      }
+
+      // BACKLOG-4007 PR-4: the billing-only login may also open Billing. Asked only for an
+      // unlicensed member on a Billing path; a failed read is false (the floor stays).
+      const billingContact =
+        BILLING_PATHS.some((base) => pathname === base || pathname.startsWith(`${base}/`)) &&
+        (await readBillingContactLogin(supabase, access));
+
       // A path above this person's access goes back to the dashboard.
-      if (!mayOpenDashboardPath(access, pathname)) {
+      if (!mayOpenDashboardPath(access, pathname, { billingContact })) {
         return NextResponse.redirect(new URL('/dashboard', request.url));
       }
     }
 
     // Redirect authenticated users from login page
     if (isAuthRoute && user) {
-      const rawRedirect = request.nextUrl.searchParams.get('redirectTo') ?? '/dashboard';
-      const redirectTo = /^\/[a-zA-Z0-9\-_\/\?\&\=\#\.]+$/.test(rawRedirect) ? rawRedirect : '/dashboard';
+      // BACKLOG-3705 / 3863 R7: the shared validator, never a local pattern.
+      const redirectTo = safeNextPath(request.nextUrl.searchParams.get('redirectTo'));
       return NextResponse.redirect(new URL(redirectTo, request.url));
     }
   } catch (error) {

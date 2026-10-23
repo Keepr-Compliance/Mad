@@ -19,6 +19,7 @@ import { FileUpload } from '@/app/support/components/FileUpload';
 import type { PendingFile } from '@/app/support/components/FileUpload';
 import { useBrowserDiagnostics, BrowserDiagnostics } from '@/app/support/components/BrowserDiagnostics';
 import html2canvas from 'html2canvas';
+import { SUPPORT_WIDGET_EVENT, type SupportRequestPreset } from '@/lib/support/openSupportRequest';
 
 // iOS Safari zooms on focus when a field's font-size is under 16px: 16px below md, 14px from md up.
 const fieldClasses = `${inputClasses} !text-base md:!text-sm`;
@@ -50,10 +51,29 @@ export function SupportWidget() {
 
   const validFiles = files.filter((f) => !f.error);
 
+  // BACKLOG-3851 PR-2f: a category preset from openSupportRequest(), applied by slug once
+  // the categories for this open have loaded.
+  const presetRef = useRef<SupportRequestPreset | null>(null);
+  // True while a preset set the priority, so closing the form puts it back to normal.
+  const presetPriorityRef = useRef(false);
+
   // Load categories and auth on first open
   useEffect(() => {
     if (!open) return;
-    getCategories().then((cats) => setCategories(buildCategoryTree(cats)));
+    getCategories().then((cats) => {
+      const tree = buildCategoryTree(cats);
+      setCategories(tree);
+      const preset = presetRef.current;
+      if (preset?.categorySlug) {
+        const parent = tree.find((c) => c.slug === preset.categorySlug);
+        const child = parent?.children?.find((c) => c.slug === preset.subcategorySlug);
+        if (parent) {
+          setCategoryId(parent.id);
+          setSubcategoryId(child?.id ?? '');
+        }
+      }
+      presetRef.current = null;
+    });
 
     const supabase = createClient();
     supabase.auth.getUser().then(({ data: { user } }) => {
@@ -106,14 +126,33 @@ export function SupportWidget() {
     }
   }, []);
 
-  // Listen for external "open-support-widget" events so other components can trigger the dialog
+  // Listen for external "open-support-widget" events so other components can trigger the dialog.
+  // A CustomEvent may carry a preset (lib/support/openSupportRequest.ts); a plain Event opens
+  // the form as it is.
   useEffect(() => {
-    const handler = () => { handleOpen(); };
-    window.addEventListener('open-support-widget', handler);
-    return () => window.removeEventListener('open-support-widget', handler);
+    const handler = (event: Event) => {
+      const preset = (event as CustomEvent<SupportRequestPreset | undefined>).detail;
+      if (preset) {
+        presetRef.current = preset;
+        if (preset.subject !== undefined) setSubject(preset.subject);
+        if (preset.description !== undefined) setDescription(preset.description);
+        if (preset.priority !== undefined) {
+          setPriority(preset.priority);
+          presetPriorityRef.current = true;
+        }
+      }
+      handleOpen();
+    };
+    window.addEventListener(SUPPORT_WIDGET_EVENT, handler);
+    return () => window.removeEventListener(SUPPORT_WIDGET_EVENT, handler);
   }, [handleOpen]);
 
   const handleClose = useCallback(() => {
+    presetRef.current = null;
+    if (presetPriorityRef.current) {
+      presetPriorityRef.current = false;
+      setPriority('normal');
+    }
     setOpen(false);
     setError(null);
     setSuccess(false);

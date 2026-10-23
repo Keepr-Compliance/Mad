@@ -4,11 +4,13 @@
  */
 
 import type { Message, Communication } from "../../types";
-import { ensureDb } from "./core/dbConnection";
+import { ensureDb, dbRun } from "./core/dbConnection";
+import { sql } from "./core/sqlText";
 import logService from "../logService";
 import { toLookupKey } from "../../utils/phoneNormalization";
 import { LOCAL_REACTION_EXCLUSION, reactionExclusion } from "./reactionExclusion";
 import { isReactionRow } from "../../utils/reactionUtils";
+import { notInDealTextThread } from "./textThreadLinkExclusion";
 
 // ============================================
 // LLM ANALYSIS OPERATIONS
@@ -196,13 +198,76 @@ export type PickerMessage = Pick<
  * Strategy: First find all thread_ids where the contact appears, then fetch
  * ALL messages from those threads. This ensures group chats are fully captured
  * even when individual messages have different handles.
+ *
+ * BACKLOG-4017: `transactionId` is the deal the picker is open on. A chat linked
+ * to THAT deal at thread level (auto-link) is not offered; a chat linked to another
+ * deal still is. Step 1 flags each thread with the shared predicate and keeps the
+ * unflagged ones; the fallback filters with it; step 2 reads only thread ids step 1
+ * kept. See `readPickerForContact` for the count the empty state uses.
  */
-export function getMessagesByContact(userId: string, contact: string): PickerMessage[] {
+export function getMessagesByContact(
+  userId: string,
+  contact: string,
+  transactionId: string,
+): PickerMessage[] {
+  return readPickerForContact(userId, contact, transactionId).messages;
+}
+
+/** BACKLOG-4017: the picker read plus how many of the contact's chats it left out. */
+export interface PickerReadForContact {
+  messages: PickerMessage[];
+  /** Chats of this contact left out because they are linked to `transactionId` (thread level). */
+  linkedToDealThreadCount: number;
+  /**
+   * True only when `messages` is empty AND this contact has texts attached to
+   * `transactionId` one by one (messages.transaction_id = the deal). Checked on the
+   * empty path only; the picker's "already attached" line also covers this case.
+   */
+  hasTextsAttachedToDeal: boolean;
+}
+
+/**
+ * Empty-path check (BACKLOG-4017): does this contact have texts attached to this deal
+ * one by one? `+user_id` pins the planner to idx_messages_transaction_id (the deal's
+ * own texts) instead of a per-user scan.
+ */
+function contactHasTextsInDeal(
+  db: ReturnType<typeof ensureDb>,
+  userId: string,
+  contact: string,
+  transactionId: string,
+): boolean {
+  const row = db
+    .prepare(
+      `SELECT EXISTS (
+         SELECT 1 FROM messages
+         WHERE transaction_id = ?
+           AND +user_id = ?
+           AND channel IN ('sms', 'imessage')
+           AND (json_extract(participants, '$.from') = ? OR json_extract(participants, '$.to[0]') = ?)
+       ) AS found`,
+    )
+    .get(transactionId, userId, contact, contact) as { found: number };
+  return row.found === 1;
+}
+
+/**
+ * `getMessagesByContact`, also returning `linkedToDealThreadCount` from the SAME
+ * step-1 scan (no second query), so the picker can tell "every chat is already in
+ * this deal" apart from "no texts at all".
+ */
+export function readPickerForContact(
+  userId: string,
+  contact: string,
+  transactionId: string,
+): PickerReadForContact {
   const db = ensureDb();
 
-  // Step 1: Find all thread_ids where the contact appears in any message
+  // Step 1: Find all thread_ids where the contact appears in any message, each
+  // flagged 1 when the chat is linked to this deal (BACKLOG-4017).
   const threadIdsSql = `
-    SELECT DISTINCT thread_id FROM messages
+    SELECT DISTINCT thread_id, CASE WHEN ${notInDealTextThread("messages")} THEN 0 ELSE 1 END AS linked_to_deal
+    FROM messages
     WHERE user_id = ?
       AND transaction_id IS NULL
       AND channel IN ('sms', 'imessage')
@@ -212,8 +277,12 @@ export function getMessagesByContact(userId: string, contact: string): PickerMes
         OR json_extract(participants, '$.to[0]') = ?
       )
   `;
-  const threadRows = db.prepare(threadIdsSql).all(userId, contact, contact) as { thread_id: string }[];
-  const threadIds = threadRows.map(r => r.thread_id);
+  const threadRows = db.prepare(threadIdsSql).all(transactionId, userId, contact, contact) as {
+    thread_id: string;
+    linked_to_deal: number;
+  }[];
+  const threadIds = threadRows.filter((r) => r.linked_to_deal === 0).map((r) => r.thread_id);
+  const linkedToDealThreadCount = threadRows.length - threadIds.length;
 
   // BACKLOG-2280: reaction rows live in the same threads and ride along on
   // SELECT *. Partition them out of the returned bubble list so they never render
@@ -233,10 +302,17 @@ export function getMessagesByContact(userId: string, contact: string): PickerMes
           json_extract(m.participants, '$.from') = ?
           OR json_extract(m.participants, '$.to[0]') = ?
         )
+        AND ${notInDealTextThread("m")}
       ORDER BY m.sent_at DESC
     `;
-    const rows = db.prepare(fallbackSql).all(userId, contact, contact) as PickerMessage[];
-    return rows.filter((m) => !isReactionRow(m));
+    const rows = db.prepare(fallbackSql).all(userId, contact, contact, transactionId) as PickerMessage[];
+    const messages = rows.filter((m) => !isReactionRow(m));
+    return {
+      messages,
+      linkedToDealThreadCount,
+      hasTextsAttachedToDeal:
+        messages.length === 0 && linkedToDealThreadCount === 0 && contactHasTextsInDeal(db, userId, contact, transactionId),
+    };
   }
 
   const placeholders = threadIds.map(() => '?').join(', ');
@@ -250,7 +326,7 @@ export function getMessagesByContact(userId: string, contact: string): PickerMes
     ORDER BY m.sent_at DESC
   `;
   const rows = db.prepare(messagesSql).all(userId, ...threadIds) as PickerMessage[];
-  return rows.filter((m) => !isReactionRow(m));
+  return { messages: rows.filter((m) => !isReactionRow(m)), linkedToDealThreadCount, hasTextsAttachedToDeal: false };
 }
 
 // ============================================
@@ -269,11 +345,59 @@ export function linkMessageToTransaction(messageId: string, transactionId: strin
 }
 
 /**
- * Unlink a message from a transaction
+ * BACKLOG-3908: point `messages.transaction_id` at the message's MOST RECENT
+ * remaining link, or NULL when no link remains. Called by `unlinkMessages`
+ * inside its transaction, after both delete loops, in place of the old
+ * unconditional NULL write.
+ *
+ * A text can be linked to several deals (one per-message row per deal, plus
+ * thread rows), but the column names one. Clearing it while another deal still
+ * holds the text put the text back in that deal's attach picker, roster and
+ * auto-link candidates.
+ *
+ * Remaining links are this message's own rows, or TEXT thread rows for its
+ * thread and user (`email_id IS NULL`: an email link row also carries a
+ * `thread_id`). "Most recent" is `linked_at`, then `rowid` (`linked_at` has
+ * second resolution). The deal-lock check reads this column when no deal is
+ * named (`dealLockState.ts`, `MESSAGE_TRANSACTION_ID_SQL`).
+ *
+ * The unary `+` on `c.user_id` keeps the planner off `idx_communications_user_id`:
+ * without it the thread arm scans every link row the user has, once per
+ * message (measured: a 5,040-text bulk remove on a 671k-message store took
+ * ~22 s without it, ~9 s with it, the same as the old NULL write). With it the
+ * arm probes `idx_communications_thread_id`. Pinned by the 3908 controls (C9).
+ *
+ * Links whose deal has no `transactions` row are skipped (the `EXISTS` line):
+ * with foreign keys ON, choosing one would fail the messages -> transactions
+ * foreign key and roll back the whole unlink, so one such text blocked removal
+ * of every text in the batch. The text falls back to its newest link to a deal
+ * that exists, or NULL. Migration v76 keeps its frozen copy of this statement
+ * without that line (`V76_REPOINT_SQL`, migrationV76Sql.ts) and clears such a
+ * pick afterwards, so at upgrade an orphan-newest text stays NULL; here it
+ * re-points to the older real link. Pinned by the 3908 orphan controls.
+ *
+ * Synchronous and through `dbRun`: it runs inside a `dbTransaction` body.
  */
-export function unlinkMessageFromTransaction(messageId: string): void {
-  const db = ensureDb();
-  db.prepare(`UPDATE messages SET transaction_id = NULL WHERE id = ?`).run(messageId);
+export const REPOINT_MESSAGE_TRANSACTION_SQL = sql`UPDATE messages SET transaction_id = (
+      SELECT c.transaction_id FROM communications c
+      WHERE c.transaction_id IS NOT NULL
+        AND EXISTS (SELECT 1 FROM transactions t WHERE t.id = c.transaction_id)
+        AND (
+          c.message_id = messages.id
+          OR (
+            c.message_id IS NULL
+            AND c.email_id IS NULL
+            AND c.thread_id IS NOT NULL
+            AND c.thread_id = messages.thread_id
+            AND +c.user_id = messages.user_id
+          )
+        )
+      ORDER BY c.linked_at DESC, c.rowid DESC
+      LIMIT 1
+    ) WHERE id = ?`;
+
+export function repointMessageTransaction(messageId: string): void {
+  dbRun(REPOINT_MESSAGE_TRANSACTION_SQL, [messageId]);
 }
 
 /**
@@ -347,12 +471,29 @@ export function getLastMessageDatesForPhones(userId: string, phones: string[]): 
 
 /**
  * Populate phone_last_message lookup table from messages (BACKLOG-567)
- * This aggregates all SMS/iMessage into a phone->lastDate lookup for O(1) queries
+ * This aggregates all SMS/iMessage into a phone->lastDate lookup for O(1) queries.
+ *
+ * Promise sibling of backfillPhoneLastMessageTableSync. BACKLOG-3222: the
+ * import path calls the Sync form inside its own transaction; this wrapper
+ * stays because syncTwin.guard rule (i) requires a sibling for every *Sync
+ * writer. Do not delete it without changing that rule.
  */
 export async function backfillPhoneLastMessageTable(userId: string): Promise<number> {
-  const db = ensureDb();
+  const count = ensureDb().transaction(() => backfillPhoneLastMessageTableSync(userId))();
+  await logService.info("Phone last message backfill complete", "messageDbService", {
+    userId,
+    phonesUpdated: count,
+  });
+  return count;
+}
 
-  await logService.info("Backfilling phone_last_message table", "messageDbService", { userId });
+/**
+ * BACKLOG-3222: the phone_last_message recompute with NO transaction of its
+ * own and no awaited logs, so a caller can run it inside one transaction with
+ * the other post-import writes.
+ */
+export function backfillPhoneLastMessageTableSync(userId: string): number {
+  const db = ensureDb();
 
   const messages = db.prepare(`
     SELECT participants_flat, MAX(sent_at) as last_date
@@ -389,22 +530,11 @@ export async function backfillPhoneLastMessageTable(userId: string): Promise<num
     VALUES (?, ?, ?)
   `);
 
-  const runInserts = db.transaction(() => {
-    let count = 0;
-    for (const [phone, lastDate] of phoneLastDates) {
-      insertStmt.run(phone, userId, lastDate);
-      count++;
-    }
-    return count;
-  });
-
-  const count = runInserts();
-
-  await logService.info("Phone last message backfill complete", "messageDbService", {
-    userId,
-    phonesUpdated: count,
-  });
-
+  let count = 0;
+  for (const [phone, lastDate] of phoneLastDates) {
+    insertStmt.run(phone, userId, lastDate);
+    count++;
+  }
   return count;
 }
 

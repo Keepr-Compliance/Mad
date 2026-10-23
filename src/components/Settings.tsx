@@ -19,8 +19,10 @@ import { TroubleshootingSettings } from "./settings/TroubleshootingSettings";
 import { SupportAccessSettings } from "./settings/SupportAccessSettings";
 import { AboutSettings } from "./settings/AboutSettings";
 import { SyncToolsSettings } from "./settings/SyncToolsSettings";
+import { PlanBillingCard } from "./settings/billing/PlanBillingCard";
 import { useScrollSpy } from "@/hooks/useScrollSpy";
 import { useFeatureGate } from "@/hooks/useFeatureGate";
+import { useLicense } from "@/contexts/LicenseContext";
 import { usePlatform } from "@/contexts/PlatformContext";
 import { useIPhoneSyncEnabled } from "@/contexts/IPhoneSyncContext";
 import { OfflineNotice } from './common/OfflineNotice';
@@ -33,6 +35,8 @@ import type { PreferencesResult } from './settings/types';
 
 const SETTINGS_TABS = [
   { id: "settings-general", label: "General" },
+  // BACKLOG-3863: the plan and a link to the website's Billing page.
+  { id: "settings-plan-billing", label: "Plan & Billing" },
   { id: "settings-email", label: "Email" },
   { id: "settings-messages", label: "Messages" },
   // BACKLOG-3423: no "iPhone Sync" nav entry, for any user on any platform.
@@ -67,6 +71,7 @@ interface SettingsComponentProps {
 function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconnected, onLinkGoogleMessages, onImportIphone }: SettingsComponentProps) {
   const { isAllowed } = useFeatureGate();
   const hasAIAddon = isAllowed("ai_detection");
+  const { organizationId } = useLicense();
   // BACKLOG-3423: lets a source change re-gate iPhone USB detection live.
   const { applyImportSource } = useIPhoneSyncEnabled();
   // BACKLOG-1937: renderer-safe platform detection (contextIsolation=true → no process.platform)
@@ -219,6 +224,11 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             </div>
 
             <GeneralSettings userId={userId} initialPreferences={preferences} />
+
+            <section id="settings-plan-billing" className="mb-8">
+              <h3 className="text-lg font-semibold text-gray-900 mb-4">Plan &amp; Billing</h3>
+              <PlanBillingCard organizationId={organizationId} userId={userId} />
+            </section>
 
             <EmailSettings
               userId={userId}

@@ -1,0 +1,25 @@
+# keepr-test 2026-10-20, migration 20261020160000 applied (md5 2f80cf6a282331208dfba2c850a60b7c). One mode per line.
+base: none | pass 36 fail 0 | reds: none
+no_zero_bypass: MUTATION APPLIED public._billing_org_join_blocked(uuid) 44e9bc9f->272635c6 | pass 33 fail 3 | reds: C7_zero_dollar_draft_allowed, J2_zero_dollar_joins_active_agent, C11a_4007_helper_zero_dollar_false
+ignores_deal_status: MUTATION APPLIED public._billing_org_join_blocked(uuid) 44e9bc9f->c26c0b93 | pass 34 fail 2 | reds: J8_active_deal_joins, C9_active_deal_allowed
+helper_4007_old_body: MUTATION APPLIED public._billing_org_setup_pending(uuid) dc20ab10->a969f524 | pass 35 fail 1 | reds: C11a_4007_helper_zero_dollar_false
+any_zero_line_is_free: MUTATION APPLIED public._billing_org_join_blocked(uuid) 44e9bc9f->a1d95854 | pass 35 fail 1 | reds: C10b_free_seat_plus_paid_line_refused
+no_lines_counts_as_free: MUTATION APPLIED public._billing_org_join_blocked(uuid) 44e9bc9f->50b36076 | pass 35 fail 1 | reds: C10_draft_without_lines_refused
+guard_uses_member_origin_is_idp: MUTATION APPLIED public._billing_guard_idp_join_while_setup_pending() 778479da->6140379b | pass 36 fail 0 | reds: none
+guard_uses_member_origin_joins_unlicensed: MUTATION APPLIED public._billing_guard_idp_join_while_setup_pending() 778479da->de93419e | pass 34 fail 2 | reds: C2_scim_insert_paid_draft_refused, C4_scim_reactivation_service_role_refused
+copy_3853_verbatim: MUTATION APPLIED public._billing_guard_idp_join_while_setup_pending() 778479da->96b514a4 + MUTATION APPLIED public._billing_guard_idp_join_while_setup_pending() 96b514a4->1582351f | pass 31 fail 5 | reds: C13_manual_insert_allowed, C5_invite_acceptance_allowed, C6_scim_invite_claim_allowed, C12_staff_invite_insert_allowed, C5b_real_accept_invitation_allowed
+jit_no_column_check: MUTATION APPLIED public.jit_join_organization(text,text) 03a46601->4b7835f7 | pass 35 fail 1 | reds: J5_column_off_refused
+jit_no_feature_check: MUTATION APPLIED public.jit_join_organization(text,text) 03a46601->f09ae869 | pass 35 fail 1 | reds: J4_feature_off_refused
+jit_no_identity_binding: MUTATION APPLIED public.jit_join_organization(text,text) 03a46601->2e1c1bd5 | pass 35 fail 1 | reds: J3_foreign_tenant_refused_metadata_ignored
+reactivation_any_writer: MUTATION APPLIED public._billing_guard_idp_join_while_setup_pending() 778479da->30556ec2 | pass 34 fail 2 | reds: C4b_definer_reactivation_allowed, C4c_real_set_member_license_reactivates
+guard_copies_3853_claim_rule: MUTATION APPLIED public._billing_guard_idp_join_while_setup_pending() 778479da->d341b307 | pass 35 fail 1 | reds: C6_scim_invite_claim_allowed
+guard_without_provisioned_by_filter: MUTATION APPLIED public._billing_guard_idp_join_while_setup_pending() 778479da->96b514a4 | pass 34 fail 2 | reds: C13_manual_insert_allowed, C12_staff_invite_insert_allowed
+f1_drop_override: MUTATION APPLIED public._org_feature_allowed(uuid,text) 695875db->8c90f570 | pass 29 fail 7 | reds: J7_no_deal_joins, F1_feature_parity, J9_google_hd_joins, J8_active_deal_joins, J6_default_admin_joins_as_agent, J2_zero_dollar_joins_active_agent, J1_paid_draft_clean_refusal_no_row
+jit_no_freshness: MUTATION APPLIED public.jit_join_organization(text,text) 03a46601->662f1a58 | pass 31 fail 5 | reds: J11d_no_session_refused, J11_password_session_stale_identity_refused, J11b_oauth_signin_older_than_15_min_refused, J11e_password_session_fresh_identity_refused, J11c_fresh_signin_but_stale_tenant_identity_refused
+jit_role_unclamped: MUTATION APPLIED public.jit_join_organization(text,text) 03a46601->c45059ef | pass 35 fail 1 | reds: J6_default_admin_joins_as_agent
+jit_no_pending_return: MUTATION APPLIED public.jit_join_organization(text,text) 03a46601->2486d4de | pass 35 fail 1 | reds: J1_paid_draft_clean_refusal_no_row
+jit_freshness_no_window: MUTATION APPLIED public.jit_join_organization(text,text) 03a46601->8366efcf | pass 35 fail 1 | reds: J11b_oauth_signin_older_than_15_min_refused
+jit_freshness_any_method: MUTATION APPLIED public.jit_join_organization(text,text) 03a46601->6537844f | pass 35 fail 1 | reds: J11e_password_session_fresh_identity_refused
+jit_freshness_no_identity_clause: MUTATION APPLIED public.jit_join_organization(text,text) 03a46601->abc1d231 | pass 35 fail 1 | reds: J11c_fresh_signin_but_stale_tenant_identity_refused
+c14.sql (fresh transaction): ERR 42501 permission denied for function _billing_org_join_blocked
+backlog-4007 base on the applied DB: 53/53 pass

@@ -88,7 +88,7 @@ export {
 } from './components/select';
 
 // Dropdown (BACKLOG-4032) — searchable single-choice picker; see README "Dropdown".
-export { Dropdown, DropdownOptions, filterDropdownOptions } from './components/dropdown';
+export { Dropdown, DropdownOptions, filterDropdownOptions, dropdownSide } from './components/dropdown';
 export type {
   DropdownOption,
   DropdownProps,
@@ -99,3 +99,23 @@ export type {
 
 // Phone kit (BACKLOG-3895) — phone-width components; see DESIGN-SYSTEM.md "Phone".
 export * from './components/phone';
+
+// Report kit (BACKLOG-3502a) — desktop report tables, filters, cards, URL state; see README "Report kit".
+export * from './components/report';
+// BACKLOG-4007 PR-4: a brokerage's people (billing / IT / office / MSP), shared by both portals.
+export { OrgPeoplePanel, orgPeopleErrorMessage } from './components/org-people';
+export type {
+  OrgContactRole,
+  OrgPeopleContact,
+  OrgPeopleMember,
+  OrgPeopleView,
+  OrgPeopleInviteSlot,
+  OrgPeopleSaveInput,
+  OrgPeopleResult,
+  OrgPeopleActions,
+  OrgPeoplePhoneRule,
+  OrgPeoplePanelProps,
+  OrgPeopleInviteInput,
+  OrgPeopleInviteResult,
+  OrgPeopleUserRef,
+} from './components/org-people';

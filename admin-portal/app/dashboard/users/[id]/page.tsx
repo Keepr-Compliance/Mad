@@ -13,9 +13,12 @@ import { SentryErrorsCard } from './components/SentryErrorsCard';
 import { createServiceClient } from '@/lib/supabase/server';
 import { getBillingData } from '@/lib/billing-queries';
 import { getSuspensionStatus } from '@/lib/suspension-queries';
-import { readPlanLines, validPlanLineIds } from '@/lib/planLines';
+import { readPlanLinesWithOrgs, validPlanLineIds } from '@/lib/planLines';
+import { planAmountLine } from '@/lib/billing/planAmount';
+import type { OrgBilling } from '@/lib/billing/dealRules';
 import type { PlanLine } from '@keepr/shared';
 import * as Sentry from '@sentry/nextjs';
+import { pickOrgPlanRow, type OrgPlanEmbed } from '@/lib/orgPlanEmbed';
 
 export const dynamic = 'force-dynamic';
 
@@ -111,11 +114,31 @@ export default async function UserDetailPage({
   // failed (creditBalance then defaults to 0) the count is left out, not shown as 0.
   const balanceFailed = billingData.errorMessages.some((m) => m.startsWith('Credit balance:'));
   let planLineForUser: PlanLine | null = null;
+  let planAmount: string | null = null;
   const planIds = validPlanLineIds([id]);
   if (planIds) {
     try {
-      const lines = await readPlanLines(serviceSupabase, planIds, new Date(), balanceFailed ? undefined : { [id]: billingData.creditBalance });
+      const { lines, brokerageOrgIds } = await readPlanLinesWithOrgs(
+        serviceSupabase,
+        planIds,
+        new Date(),
+        balanceFailed ? undefined : { [id]: billingData.creditBalance }
+      );
       planLineForUser = lines[id] ?? null;
+      // BACKLOG-3852: seat price and next invoice, brokerage members only, for billing.view holders.
+      // Read through the SESSION client: admin_get_org_billing refuses a caller without billing.view,
+      // so the database checks it too.
+      const orgId = brokerageOrgIds[id];
+      if (orgId && planLineForUser?.kind === 'brokerage') {
+        const { data: canViewBilling } = await supabase.rpc('has_permission', {
+          check_user_id: adminUser.id,
+          required_permission: 'billing.view',
+        });
+        if (canViewBilling === true) {
+          const read = await supabase.rpc('admin_get_org_billing', { p_org: orgId });
+          if (!read.error) planAmount = planAmountLine(read.data as OrgBilling | null);
+        }
+      }
     } catch (err) {
       Sentry.captureException(err, { tags: { area: 'admin-plan-lines' } });
     }
@@ -125,12 +148,9 @@ export default async function UserDetailPage({
   const orgMemberships = (orgsResult.data ?? []).map((m) => {
     const org = m.organizations as unknown as {
       name: string;
-      organization_plans: Array<{
-        plan_id: string;
-        plans: { id: string; name: string; tier: string };
-      }>;
+      organization_plans: OrgPlanEmbed;
     } | null;
-    const orgPlan = org?.organization_plans?.[0] ?? null;
+    const orgPlan = pickOrgPlanRow(org?.organization_plans);
     return {
       organization_id: m.organization_id,
       org_name: org?.name ?? null,
@@ -161,7 +181,7 @@ export default async function UserDetailPage({
       />
 
       {/* Plan (BACKLOG-3859) */}
-      <PlanCard line={planLineForUser} />
+      <PlanCard line={planLineForUser} amount={planAmount} />
 
       {/* Two-column grid for org + account */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

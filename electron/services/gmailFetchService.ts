@@ -1,5 +1,6 @@
 import { google, gmail_v1, Auth } from "googleapis";
 import { gaxiosNetFetch } from "./mainNetFetch";
+import { persistRefreshedGoogleTokens } from "./googleTokenRefreshWriter";
 import {
   FetchCancelledError,
   isFetchCancelledError,
@@ -284,24 +285,8 @@ class GmailFetchService {
 
       // Handle token refresh (session-only, no encryption needed)
       oauth2Client.on("tokens", (tokens) => {
-        void (async () => {
-          logService.info("Tokens refreshed", "GmailFetch");
-          if (tokens.refresh_token) {
-            // Update refresh token in database (no encryption)
-            await databaseService.updateOAuthToken(tokenRecord.id, {
-              refresh_token: tokens.refresh_token,
-            });
-          }
-          if (tokens.access_token) {
-            // Update access token (no encryption)
-            await databaseService.updateOAuthToken(tokenRecord.id, {
-              access_token: tokens.access_token,
-              token_expires_at: new Date(
-                Date.now() + (tokens.expiry_date || 3600000),
-              ).toISOString(),
-            });
-          }
-        })();
+        void logService.info("Tokens refreshed", "GmailFetch");
+        void persistRefreshedGoogleTokens(tokenRecord.id, tokens, "GmailFetch");
       });
 
       // Store client and initialize Gmail API

@@ -10,6 +10,9 @@ import databaseService from "../services/databaseService";
 import supabaseService from "../services/supabaseService";
 import logService from "../services/logService";
 import auditService from "../services/auditService";
+import { dbTransaction } from "../services/db/core/dbConnection";
+import { dealChangeFailureCode } from "../services/dealChangeAudit";
+import { contactChangeUserError } from "../services/contactChangeAudit";
 import { initializationBroadcaster } from "../services/initializationBroadcaster";
 import { wrapHandler } from "../utils/wrapHandler";
 import {
@@ -129,28 +132,31 @@ export function registerUserSettingsHandlers(): void {
         };
       }
 
+      // BACKLOG-3339: the setting and its audit entry commit together or not
+      // at all. A failed entry cancels the change.
       // validateUserId throws when required (default), so validatedUserId is never null here
-      await databaseService.updateUser(validatedUserId!, {
-        mobile_phone_type: phoneType,
-      });
+      const entry = {
+        userId: validatedUserId!,
+        action: "SETTINGS_CHANGE" as const,
+        resourceType: "SETTINGS" as const,
+        resourceId: validatedUserId!,
+        metadata: { setting: "mobile_phone_type", value: phoneType },
+      };
+      try {
+        dbTransaction(() => {
+          databaseService.updateUserSync(validatedUserId!, {
+            mobile_phone_type: phoneType,
+          });
+          auditService.recordInTransaction(entry);
+        });
+      } catch (error) {
+        auditService.recordFailure({ ...entry, errorMessage: dealChangeFailureCode(error) });
+        throw contactChangeUserError("phoneType", error);
+      }
       logService.info(
         `Updated phone type for user ${validatedUserId} to ${phoneType}`,
         "Settings",
       );
-
-      // Audit log settings change
-      try {
-        await auditService.log({
-          userId: validatedUserId!,
-          action: "SETTINGS_CHANGE",
-          resourceType: "SETTINGS",
-          resourceId: validatedUserId!,
-          success: true,
-          metadata: { setting: "mobile_phone_type", value: phoneType },
-        });
-      } catch (auditError) {
-        logService.warn("[Audit] Failed to log settings change", "Settings", { auditError });
-      }
 
       return { success: true };
     }, { module: "Settings" }),

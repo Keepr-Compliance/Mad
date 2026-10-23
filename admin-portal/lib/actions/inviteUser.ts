@@ -26,6 +26,8 @@
  * BACKLOG-1492: Admin invite users
  * BACKLOG-1534: Fix RLS-blocked INSERT via SECURITY DEFINER RPC
  * BACKLOG-1914: Remove dead individual-invite path; download-CTA email instead
+ * BACKLOG-4007: no license status input. The member's license comes from the brokerage's
+ *   deal; admin_invite_user's p_license_status default applies (metadata only).
  */
 
 import * as Sentry from '@sentry/nextjs';
@@ -42,7 +44,6 @@ interface InviteUserInput {
   lastName: string;
   role: 'agent' | 'broker' | 'admin';
   organizationId: string | null;
-  licenseStatus?: 'trial' | 'active';
   planId?: string | null;
 }
 
@@ -73,7 +74,6 @@ const RPC_ERROR_MAP: Record<string, string> = {
   already_member: 'This user is already a member of the organization',
   organization_not_found: 'Organization not found',
   seat_limit_reached: 'Organization has reached maximum seats',
-  invalid_license_status: 'Invalid license status (must be trial or active)',
   organization_required: 'An organization is required for org invites',
 };
 
@@ -138,7 +138,6 @@ async function sendOrgInvite(
     p_email: input.email,
     p_role: input.role,
     p_invited_by: user.id,
-    p_license_status: input.licenseStatus || 'trial',
     p_plan_id: input.planId || null,
   });
 
