@@ -1,23 +1,21 @@
--- BACKLOG-3547 stub: widens transaction_submissions with the nine commission
--- and split columns the BACKLOG-3519 migration (PR #2721, unapplied) adds, with
--- the same names and types, so c04 can prove the insert rule leaves them
--- unconstrained. No foreign key (split_agreement_id's target table is not part
--- of this prelude) and no CHECKs: the rule under test is the policy, not them.
+-- BACKLOG-3547 stub: widens transaction_submissions with the four commission
+-- columns the BACKLOG-3519 migration adds
+-- (supabase/migrations/20260925070000_backlog_3519_commission_figures.sql,
+-- PR #2721), with the same names and types, so c04 can prove the insert rule
+-- leaves them unconstrained. 3519 adds no split columns. No CHECKs and no lock
+-- trigger (the trigger fires on UPDATE only): the rule under test is the
+-- policy. The real file is not loaded here because it carries its own
+-- BEGIN/COMMIT, which would end the control's rolled-back transaction.
 -- Loaded inside the control's transaction; rolled back with it.
 ALTER TABLE public.transaction_submissions
   ADD COLUMN IF NOT EXISTS commission_offered_rate      numeric(6,3),
   ADD COLUMN IF NOT EXISTS commission_actual_rate       numeric(6,3),
   ADD COLUMN IF NOT EXISTS commission_gross_amount      numeric(12,2),
-  ADD COLUMN IF NOT EXISTS commission_adjustment_reason text,
-  ADD COLUMN IF NOT EXISTS split_agreement_id           uuid,
-  ADD COLUMN IF NOT EXISTS split_agent_pct              numeric(5,2),
-  ADD COLUMN IF NOT EXISTS split_brokerage_pct          numeric(5,2),
-  ADD COLUMN IF NOT EXISTS split_effective_from         date,
-  ADD COLUMN IF NOT EXISTS split_resolved_on            date;
+  ADD COLUMN IF NOT EXISTS commission_adjustment_reason text;
 
 -- desk(id, org, uid, local_txn, status_sql, extra_cols, extra_vals): the
 -- desktop's insert, transcribed from electron/services/submissionService.ts
--- mapToSubmission (:1381-1409) with the status override at :745. Every key the
+-- mapToSubmission (:1533-1596) with the status override at :886. Every key the
 -- desktop sends is present; undefined keys (property_city etc. when blank) are
 -- omitted by supabase-js, so the transcription sends them populated.
 -- status_sql is a SQL literal ('uploading', NULL, ...) or '' to omit status.

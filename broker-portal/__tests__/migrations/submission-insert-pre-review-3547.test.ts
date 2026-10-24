@@ -89,14 +89,13 @@ describe('BACKLOG-3547 — submission INSERT rule migration', () => {
     expect(p).not.toMatch(/\bOR\b/);
   });
 
-  it('leaves the commission and split columns unconstrained', () => {
+  it('leaves the four commission columns unconstrained', () => {
     const p = insertPolicy(migrationSql());
     for (const col of [
       'commission_offered_rate',
       'commission_actual_rate',
       'commission_gross_amount',
       'commission_adjustment_reason',
-      'split_agreement_id',
     ]) {
       expect(p).not.toContain(col);
     }
