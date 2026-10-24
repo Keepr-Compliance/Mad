@@ -26,7 +26,7 @@ These agents are **built-in Task tool types** (invoked via `subagent_type`), not
 | Agent (`subagent_type`) | Config Docs | When to Use |
 |-------------------------|-------------|-------------|
 | **`engineer`** | `.claude/docs/ENGINEER-WORKFLOW.md` + `.claude/skills/agent-handoff/SKILL.md` | Task implementation, branch creation, PR submission |
-| **`senior-engineer-pr-lead`** | `.claude/docs/PR-SOP.md` + `.claude/skills/agent-handoff/SKILL.md` | PR review, architecture decisions, merge approval |
+| **`senior-engineer-pr-lead`** | `.claude/docs/PR-SOP.md` + `.claude/skills/sr-review/SKILL.md` + `.claude/skills/agent-handoff/SKILL.md` | PR review, architecture decisions, merge approval |
 | **`agentic-pm`** | `.claude/skills/agentic-pm/SKILL.md` + `.claude/skills/agent-handoff/SKILL.md` | Sprint planning, backlog management, task assignment |
 
 ---
@@ -36,6 +36,7 @@ These agents are **built-in Task tool types** (invoked via `subagent_type`), not
 | Document | Location | Purpose |
 |----------|----------|---------|
 | **PR-SOP** | `.claude/docs/PR-SOP.md` | Complete 9-phase PR checklist |
+| **SR Review Lenses** | `.claude/skills/sr-review/SKILL.md` | Path-triggered review lenses: latency, load control, failure handling, data correctness, async systems, performance, operability |
 | **Engineer Workflow** | `.claude/docs/ENGINEER-WORKFLOW.md` | 6-step task implementation checklist (within the 15-step handoff lifecycle) |
 | **LLM Integration Testing** | `.claude/docs/LLM-INTEGRATION-TESTING.md` | AI feature testing checklist |
 
