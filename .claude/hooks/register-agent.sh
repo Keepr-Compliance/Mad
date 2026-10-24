@@ -84,6 +84,47 @@ if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then
 fi
 [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ] && exit 0
 
+# --- BACKLOG-3778: let the COORDINATOR's own Stop hook learn its sprint -----
+# track-main-session.sh cannot safely read .claude/.current-task for sprint
+# attribution: that file is shared across every session in this project
+# directory, not scoped to one coordinator. A session-keyed marker, refreshed
+# each time THIS session spawns an agent whose brief names a BACKLOG item, is
+# free of that race -- "the sprint of the last item this coordinator
+# dispatched" is already what the sidecar above encodes for the agent itself.
+#
+# Best-effort: failure here must never block agent registration (the
+# pm_agent_activity POST below). `set -uo pipefail` + `trap exit_ok ERR` means
+# a non-zero exit ANYWHERE in a plain assignment trips the trap, so the lookup
+# below is written to never produce one: `|| true` absorbs curl's own exit
+# code (timeout, DNS failure, connection refused), and the response body is
+# inspected with `jq -e 'type == "array"'` BEFORE trusting it, because a
+# PostgREST error comes back as `{"message":...}` -- a non-array that `.[0]`
+# would silently read as "no row" if trusted, not as "the lookup failed."
+if [ -n "$LEGACY_ID" ] && [ -n "$SESSION_ID" ]; then
+  ITEM_SPRINT_RAW=$(curl -s -m 5 \
+    "${SUPABASE_URL}/rest/v1/pm_backlog_items?legacy_id=eq.${LEGACY_ID}&deleted_at=is.null&select=sprint_id&limit=1" \
+    -H "apikey: ${SUPABASE_KEY}" -H "Authorization: Bearer ${SUPABASE_KEY}" 2>/dev/null || true)
+  if jq -e 'type == "array"' >/dev/null 2>&1 <<<"$ITEM_SPRINT_RAW"; then
+    ITEM_SPRINT=$(jq -r '.[0].sprint_id // empty' 2>/dev/null <<<"$ITEM_SPRINT_RAW" || true)
+    MAIN_SPRINT_DIR="${HOME}/.claude/metrics/main-sprint"
+    MAIN_SPRINT_MARKER="${MAIN_SPRINT_DIR}/${SESSION_ID}"
+    if mkdir -p "$MAIN_SPRINT_DIR" 2>/dev/null; then
+      if [ -n "$ITEM_SPRINT" ]; then
+        printf '%s' "$ITEM_SPRINT" > "$MAIN_SPRINT_MARKER" 2>/dev/null || true
+      else
+        # The lookup succeeded and the dispatched item carries no sprint right
+        # now -- clear any marker from an earlier, different item, so this
+        # session's later turns stop crediting that old sprint.
+        rm -f "$MAIN_SPRINT_MARKER" 2>/dev/null || true
+      fi
+      find "$MAIN_SPRINT_DIR" -type f -mtime +7 -delete 2>/dev/null || true
+    fi
+  fi
+  # else: the lookup failed or PostgREST returned an error object -- leave
+  # any existing marker untouched rather than guess, and fall through to
+  # registration below unconditionally.
+fi
+
 PAYLOAD=$(jq -n \
   --arg agent_id "$AGENT_ID" \
   --arg agent_type "$AGENT_TYPE" \

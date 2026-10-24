@@ -25,6 +25,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   fetchAllPages,
+  fetchAllRows,
   SERVER_MAX_PAGE_SIZE,
   type PagedResponse,
 } from '../pm-paging';
@@ -258,5 +259,94 @@ describe('fetchAllPages when the server ordering is not a total order', () => {
     expect(server.requestedSizes).toHaveLength(5);
     expect(result.complete).toBe(false);
     expect(result.items).toHaveLength(SERVER_MAX_PAGE_SIZE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// fetchAllRows -- plain PostgREST table queries (BACKLOG-3778)
+// ---------------------------------------------------------------------------
+
+describe('fetchAllRows against a plain .range() query', () => {
+  /** Shaped after SPRINT-174: 1,064 pm_token_metrics rows, past PostgREST's own 1000-row cap. */
+  const SPRINT_174_ROW_COUNT = 1064;
+
+  interface MetricRow {
+    id: string;
+    recorded_at: string;
+  }
+
+  function buildRows(count: number): MetricRow[] {
+    return Array.from({ length: count }, (_, i) => ({
+      id: `m-${String(i).padStart(5, '0')}`,
+      recorded_at: new Date(Date.UTC(2026, 9, 1) + i * 1000).toISOString(),
+    }));
+  }
+
+  /** A fake PostgREST `.range()` responder, capped like the real server at `hardCap`. */
+  function makeRangeServer(rows: MetricRow[], hardCap = 1000) {
+    const requestedRanges: Array<[number, number]> = [];
+    const fetchPage = async (from: number, to: number) => {
+      requestedRanges.push([from, to]);
+      // PostgREST enforces its own cap independent of the requested range --
+      // asking for rows 0-999 when more exist still returns at most hardCap.
+      const clampedTo = Math.min(to, from + hardCap - 1);
+      return { data: rows.slice(from, clampedTo + 1), error: null as unknown };
+    };
+    return { fetchPage, requestedRanges };
+  }
+
+  it('reaches all 1,064 rows of a sprint past the 1000-row provider cap', async () => {
+    const rows = buildRows(SPRINT_174_ROW_COUNT);
+    const server = makeRangeServer(rows);
+
+    const result = await fetchAllRows(server.fetchPage, { pageSize: SERVER_MAX_PAGE_SIZE });
+
+    expect(result).toHaveLength(SPRINT_174_ROW_COUNT);
+    expect(result.map((r) => r.id)).toEqual(rows.map((r) => r.id));
+  });
+
+  it('a single un-paged request (no fetchAllRows) proves the cap is real: only 1000 of 1064 come back', async () => {
+    // Guards the fixture: calls the fake server directly, the way the old
+    // unpaged `getSprintMetrics` effectively did, and shows it returns a
+    // short, silently-truncated set -- so the test above is not vacuous.
+    const rows = buildRows(SPRINT_174_ROW_COUNT);
+    const server = makeRangeServer(rows);
+    const { data } = await server.fetchPage(0, SPRINT_174_ROW_COUNT - 1);
+    expect(data).toHaveLength(1000);
+    expect(data).not.toHaveLength(SPRINT_174_ROW_COUNT);
+  });
+
+  it('stops after one short page when the sprint has fewer rows than the page size', async () => {
+    const rows = buildRows(119);
+    const server = makeRangeServer(rows);
+
+    const result = await fetchAllRows(server.fetchPage, { pageSize: SERVER_MAX_PAGE_SIZE });
+
+    expect(server.requestedRanges).toHaveLength(1);
+    expect(result).toHaveLength(119);
+  });
+
+  it('stops exactly at a page-size multiple without an extra empty request', async () => {
+    const rows = buildRows(SERVER_MAX_PAGE_SIZE * 2);
+    const server = makeRangeServer(rows, /* hardCap */ 10_000);
+
+    const result = await fetchAllRows(server.fetchPage, { pageSize: SERVER_MAX_PAGE_SIZE });
+
+    expect(result).toHaveLength(SERVER_MAX_PAGE_SIZE * 2);
+    expect(server.requestedRanges).toHaveLength(3); // 2 full pages + 1 short (empty) page
+  });
+
+  it('propagates a query error instead of returning a partial result silently', async () => {
+    const failingFetch = async () => ({ data: null, error: { message: 'boom' } });
+    await expect(fetchAllRows(failingFetch)).rejects.toEqual({ message: 'boom' });
+  });
+
+  it('respects maxPages as a hard safety bound against a server that never shortens', async () => {
+    const rows = buildRows(10_000);
+    const server = makeRangeServer(rows, /* hardCap */ 10_000);
+
+    const result = await fetchAllRows(server.fetchPage, { pageSize: 200, maxPages: 3 });
+
+    expect(result).toHaveLength(600);
   });
 });

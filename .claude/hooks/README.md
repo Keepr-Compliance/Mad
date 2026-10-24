@@ -55,6 +55,15 @@ session in `~/.claude/metrics/main-offsets/` and reads only what is new. `agent_
 `main:<session_id>:<line offset>`, which makes a repeat fire a no-op under the RPC's
 `ON CONFLICT (agent_id, session_id) DO NOTHING`.
 
+**Main-session `sprint_id` (BACKLOG-3778)** has its own, looser fallback, independent of
+the "no sibling subagent" gate above that guards `backlog_item_id`: siblings dispatched from
+one PM session are normally all working the SAME sprint, so crediting the sprint is not made
+wrong by concurrency the way crediting one specific item would be. `register-agent.sh`
+resolves the sprint of the first `BACKLOG-nnnn` in each spawned agent's brief and writes it to
+`~/.claude/metrics/main-sprint/<session_id>` — keyed by the COORDINATOR's own session id, so
+(unlike `.current-task`) one session can never overwrite another's marker. `track-main-session.sh`
+reads it only when the per-task resolution above left `sprint_id` empty.
+
 ## Columns worth knowing
 
 - **`billable_tokens`** = input + output + cache_create. Use this. `total_tokens` includes
