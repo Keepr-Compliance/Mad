@@ -906,6 +906,8 @@ npx prebuild-install --runtime=electron --target=35.7.5 --arch=x64 --platform=wi
 - After pulling changes with dependency updates
 - After switching branches with different dependencies
 
+**Electron 44 does not download its binary at install.** `npm install` leaves `node_modules/electron/dist` absent; the first `npm run dev` or `npx electron` downloads it (prints "Downloading Electron binary..."), or run `node node_modules/electron/install.js` up front. A job or script that packages or reads `dist/` without running either must fetch it first: `node scripts/ci/ensure-electron-dist.js` (CI does this before packaging macOS). Pre-push's `require('electron')` probe falls back to plain node on the one run that triggers the download.
+
 ## Key Documentation
 
 | Document | Location | Purpose |
