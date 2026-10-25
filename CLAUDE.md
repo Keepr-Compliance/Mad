@@ -834,7 +834,7 @@ ELECTRON_RUN_AS_NODE=1 npx electron -e "try{process.dlopen({exports:{}},'/Users/
 ```
 
 Repair: `node node_modules/@electron/rebuild/lib/cli.js -f -o better-sqlite3-multiple-ciphers` in `~/Developer/Mad`,
-then re-run check 2. (Source build, ~25 s; no Electron 44 prebuild exists. On Electron 44 `npx electron-rebuild` no longer works: npx resolves a stale cached 3.2.9 that fails to build (BACKLOG-4052).)
+then re-run check 2. (Source build, ~25 s; no Electron 44 prebuild exists.)
 
 The older node-only check below distinguishes the two ABIs but **cannot see an architecture
 mismatch** — keep it only as a secondary signal:
