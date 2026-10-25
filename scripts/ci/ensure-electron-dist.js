@@ -10,7 +10,7 @@
  * Usage: node scripts/ci/ensure-electron-dist.js [--check-only]
  *   (default)     run electron's own install.js (a no-op when already installed),
  *                 then assert.
- *   --check-only  assert only; used by the control in scripts/__tests__.
+ *   --check-only  assert only; used by scripts/__tests__/ensure-electron-dist.verify.js.
  * Env: ELECTRON_PKG_DIR overrides the package directory (control/test use).
  */
 const { spawnSync } = require('child_process');

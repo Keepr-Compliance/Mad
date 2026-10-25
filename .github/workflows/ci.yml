@@ -191,6 +191,7 @@ jobs:
         run: |
           node scripts/ci/check-node-version.mjs "$(node -v)"
           node scripts/__tests__/check-node-version.verify.js
+          node scripts/__tests__/ensure-electron-dist.verify.js
       - name: Install Python setuptools
         run: pip install setuptools
 
