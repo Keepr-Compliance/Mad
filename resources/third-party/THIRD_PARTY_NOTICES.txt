@@ -323,7 +323,7 @@ Where the iPhone tools folder is on your computer:
 - Copyright: Copyright (c) Electron contributors; Copyright (c) 2013-2020 GitHub Inc.
 - Project: https://www.electronjs.org
 - Licence text: Electron licence (MIT) (Windows: LICENSE.electron.txt in the Keepr installation folder; macOS: Keepr.app/Contents/Resources/third-party/LICENSE.electron.txt); Chromium and its dependencies: licence notices (LICENSES.chromium.html) (Windows: LICENSES.chromium.html in the Keepr installation folder; macOS: Keepr.app/Contents/Resources/third-party/LICENSES.chromium.html)
-- Note: Keepr is built on Electron, which includes Chromium, Node.js, FFmpeg and other components. Their licences are in LICENSES.chromium.html. On Windows this also covers the graphics libraries Electron installs beside Keepr.exe (d3dcompiler_47.dll, dxcompiler.dll, dxil.dll, libEGL.dll, libGLESv2.dll, vk_swiftshader.dll, vulkan-1.dll, ffmpeg.dll).
+- Note: Keepr is built on Electron, which includes Chromium, Node.js, FFmpeg and other components. Their licences are in LICENSES.chromium.html. On Windows this also covers the graphics libraries Electron installs beside Keepr.exe (d3dcompiler_47.dll, dxcompiler.dll, dxil.dll, vk_swiftshader.dll, vulkan-1.dll, ffmpeg.dll).
 
 ### @noble/curves (vendored in the Keepr Chrome extension)
 

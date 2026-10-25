@@ -804,8 +804,10 @@ npm run lint             # ESLint check
 
 # Native modules (REQUIRED after npm install or Node.js update)
 npm rebuild better-sqlite3-multiple-ciphers
-npx electron-rebuild
+node node_modules/@electron/rebuild/lib/cli.js -f -o better-sqlite3-multiple-ciphers
 ```
+
+On Electron 44 `npx electron-rebuild` no longer works: npx resolves a stale cached 3.2.9 that fails to build (BACKLOG-4052).
 
 ### Native Module Errors
 
@@ -831,8 +833,8 @@ file /Users/daniel/Developer/Mad/node_modules/better-sqlite3-multiple-ciphers/bu
 ELECTRON_RUN_AS_NODE=1 npx electron -e "try{process.dlopen({exports:{}},'/Users/daniel/Developer/Mad/node_modules/better-sqlite3-multiple-ciphers/build/Release/better_sqlite3.node');console.log('dev OK')}catch(e){console.log('BROKEN: '+e.message)}"
 ```
 
-Repair: `npx electron-rebuild -f -w better-sqlite3-multiple-ciphers` in `~/Developer/Mad`,
-then re-run check 2.
+Repair: `node node_modules/@electron/rebuild/lib/cli.js -f -o better-sqlite3-multiple-ciphers` in `~/Developer/Mad`,
+then re-run check 2. (Source build, ~25 s; no Electron 44 prebuild exists.)
 
 The older node-only check below distinguishes the two ABIs but **cannot see an architecture
 mismatch** — keep it only as a secondary signal:
@@ -884,10 +886,11 @@ it prints.
 1. Standard rebuild:
 ```bash
 npm rebuild better-sqlite3-multiple-ciphers
-npx electron-rebuild
+node node_modules/@electron/rebuild/lib/cli.js -f -o better-sqlite3-multiple-ciphers
 ```
+On Electron 44 `npx electron-rebuild` no longer works: npx resolves a stale cached 3.2.9 that fails to build (BACKLOG-4052).
 
-2. If that doesn't work (common on Windows without Python), use prebuild-install:
+2. **Electron 38 and earlier only** (no prebuild exists for Electron 44; use the from-source command in step 1, which needs VS Build Tools + Python on Windows). If that doesn't work (common on Windows without Python), use prebuild-install:
 ```powershell
 # Clear prebuild cache and download correct Electron binary
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\npm-cache\_prebuilds"
