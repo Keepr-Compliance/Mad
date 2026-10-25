@@ -46,6 +46,13 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # BACKLOG-4052: Electron 44 has no postinstall, so npm install no longer
+      # fetches node_modules/electron/dist. build.mac.extraResources copies the
+      # Electron and Chromium licence files out of it, and electron-builder skips
+      # a missing source without failing. Fetch it, then assert the two files.
+      - name: Download Electron binary and assert licence files
+        run: node scripts/ci/ensure-electron-dist.js
+
       # BACKLOG-3675: refuse to release with the placeholder (empty) offline pass key map.
       - name: Verify offline pass public key is set
         run: node scripts/ci/check-offline-pass-keys.mjs

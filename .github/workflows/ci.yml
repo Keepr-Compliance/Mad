@@ -191,6 +191,7 @@ jobs:
         run: |
           node scripts/ci/check-node-version.mjs "$(node -v)"
           node scripts/__tests__/check-node-version.verify.js
+          node scripts/__tests__/ensure-electron-dist.verify.js
       - name: Install Python setuptools
         run: pip install setuptools
 
@@ -1037,6 +1038,13 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+
+      # BACKLOG-4052: Electron 44 has no postinstall; the macOS build.mac.extraResources
+      # read node_modules/electron/dist, which is absent until the binary is fetched.
+      # (Windows takes its licence files from electron-builder's own Electron download.)
+      - name: Download Electron binary and assert licence files
+        if: matrix.os == 'macos-latest'
+        run: node scripts/ci/ensure-electron-dist.js
 
       - name: Build application
         run: npm run build
