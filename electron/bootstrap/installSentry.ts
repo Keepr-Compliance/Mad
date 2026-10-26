@@ -87,6 +87,7 @@
  */
 
 import { app } from "electron";
+import os from "os";
 import path from "path";
 import log from "electron-log";
 import dotenv from "dotenv";
@@ -94,6 +95,8 @@ import * as Sentry from "@sentry/electron/main";
 import { scrubUpdaterEventPII } from "../services/updateDiagnostics";
 import { scrubRcsEventPII } from "../services/rcsSentryScrub";
 import { scrubBreadcrumb } from "../services/sentryBreadcrumbScrub";
+import { scrubMainEvent } from "../services/sentryEventScrub";
+import type { CrashReportScrubOptions } from "../utils/redactSensitive";
 import {
   configureSentrySealedQueue,
   createSealedOfflineStore,
@@ -136,6 +139,27 @@ onSentrySealedQueueActivated(() => {
   void Sentry.getClient()?.getTransport()?.flush();
 });
 
+// BACKLOG-4050: host inputs for the crash-report scrub, read once. Each root is
+// read on its own so one that throws cannot stop init; file names under these
+// directories are the app's own and are kept.
+function readRoot(read: () => string): string | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+const crashReportScrubOptions: CrashReportScrubOptions = {
+  homeDir: readRoot(() => os.homedir()),
+  appRoots: [
+    readRoot(() => process.resourcesPath),
+    readRoot(() => app.getAppPath()),
+    readRoot(() => app.getPath("userData")),
+    readRoot(() => app.getPath("logs")),
+    readRoot(() => os.tmpdir()),
+  ].filter((root): root is string => typeof root === "string" && root.length > 0),
+};
+
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
   environment: app.isPackaged ? "production" : "development",
@@ -164,22 +188,33 @@ Sentry.init({
   // BACKLOG-3768: HTTP breadcrumbs keep origin + path only (no query string).
   // BACKLOG-4040 S3: every category also has emails and phone numbers redacted,
   // because breadcrumbs are persisted to sentry/scope_v3.json in plaintext.
+  // BACKLOG-4050: every breadcrumb and every event also loses the profile
+  // folder name, export-name addresses and user-chosen file names
+  // (crashReportScrubOptions below). scrubMainEvent is the single final gate:
+  // nothing leaves beforeSend without it, and an event whose final scrub
+  // throws is dropped. An updater-scrub throw no longer sends the event raw;
+  // it continues to the final scrub (BACKLOG-1903 kept: not dropped).
   beforeBreadcrumb(breadcrumb) {
-    return scrubBreadcrumb(breadcrumb);
+    return scrubBreadcrumb(breadcrumb, crashReportScrubOptions);
   },
   beforeSend(event) {
     if (!isCrashReportingEnabled()) return null;
-    let scrubbed: typeof event;
+    let scrubbed = event;
     try {
       scrubbed = scrubUpdaterEventPII(event);
     } catch (scrubError) {
-      log.error("[Sentry] beforeSend PII scrub failed, sending event unscrubbed:", scrubError);
-      return event;
+      log.error("[Sentry] beforeSend PII scrub failed, continuing with the main scrub:", scrubError);
     }
     try {
-      return scrubRcsEventPII(scrubbed);
+      scrubbed = scrubRcsEventPII(scrubbed);
     } catch (scrubError) {
       log.error("[Sentry] beforeSend RCS scrub failed, event dropped:", scrubError);
+      return null;
+    }
+    try {
+      return scrubMainEvent(scrubbed, crashReportScrubOptions);
+    } catch (scrubError) {
+      log.error("[Sentry] beforeSend main scrub failed, event dropped:", scrubError);
       return null;
     }
   },
