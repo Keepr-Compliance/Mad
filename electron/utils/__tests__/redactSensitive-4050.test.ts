@@ -139,6 +139,13 @@ describe("BACKLOG-4050 C9 / C9s: user-chosen file names", () => {
     expect(redactCrashReportText(db)).toBe(String.raw`open 'C:\Users\[user]\AppData\Roaming\keepr\[file]'`);
   });
 
+  it("C9s: a redirected profile (homeDir outside Users) still matches its app root", () => {
+    const home = String.raw`D:\Profiles\Jane Doe`;
+    const root = String.raw`D:\Profiles\Jane Doe\AppData\Local\Programs\keepr-x\resources`;
+    const out = redactCrashReportText(String.raw`spawn ${root}\win\tool.exe ENOENT`, { homeDir: home, appRoots: [root] });
+    expect(out).toBe(String.raw`spawn D:\Profiles\[user]\AppData\Local\Programs\keepr-x\resources\win\tool.exe ENOENT`);
+  });
+
   it("C9s: URL paths and placeholders are left alone", () => {
     expect(redactUserFileNames("GET /rest/v1/transactions failed")).toBe("GET /rest/v1/transactions failed");
     expect(redactUserFileNames("https://host.example.com/a/b.pdf")).toBe("https://host.example.com/a/b.pdf");

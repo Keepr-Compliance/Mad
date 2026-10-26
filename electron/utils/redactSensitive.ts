@@ -623,6 +623,11 @@ export interface CrashReportScrubOptions {
 export function redactCrashReportText(input: string, options: CrashReportScrubOptions = {}): string {
   if (!input) return input;
   return redactLogText(
-    redactUserFileNames(redactExportFileNames(redactUserProfile(input, options.homeDir)), options.appRoots ?? []),
+    redactUserFileNames(
+      redactExportFileNames(redactUserProfile(input, options.homeDir)),
+      // Roots get the same profile rule as the text (homeDir included), so a
+      // redirected profile still matches its own install and data folders.
+      (options.appRoots ?? []).map((root) => redactUserProfile(root, options.homeDir)),
+    ),
   );
 }
