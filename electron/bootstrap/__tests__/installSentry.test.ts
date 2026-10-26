@@ -106,6 +106,7 @@ function load(options: {
           isPackaged: options.isPackaged,
           getVersion: () => PINNED_VERSION,
           getPath: (name: string) => (name === "userData" ? userData : `/unused-${name}`),
+          getAppPath: () => "/unused-app-path",
         },
       }));
       jest.doMock("dotenv", () => {
@@ -247,17 +248,69 @@ describe("installSentry: the init call transcribed from main.ts (BACKLOG-2962)",
     expect(loaded.logError).not.toHaveBeenCalled();
   });
 
-  it("beforeSend returns the event UNSCRUBBED and logs when the scrub throws — never drops it", () => {
+  // BACKLOG-4050 A1: rewritten. Before, an updater-scrub throw returned the
+  // event raw (`toBe(event)`). Now it continues to the final scrub: not
+  // dropped (BACKLOG-1903 kept), and not sent unscrubbed.
+  it("beforeSend: when the updater scrub throws, the event is NOT dropped and NOT sent raw — the final scrub still runs", () => {
     const loaded = load({ isPackaged: false, scrubThrows: true });
     const { beforeSend } = initOptions(loaded);
-    const event = { message: "raw" };
+    const event = { message: String.raw`spawn C:\Users\Jane Doe\AppData\x.exe ENOENT for jane.doe@example.com` };
 
-    const result = beforeSend(event);
+    const result = beforeSend(event) as { message: string } | null;
 
-    expect(result).toBe(event);
+    expect(result).not.toBeNull();
+    expect(result).not.toBe(event);
+    expect(result!.message).not.toMatch(/Jane|Doe|jane\.doe@/);
+    expect(result!.message).toContain("ENOENT");
     expect(loaded.logError).toHaveBeenCalledTimes(1);
-    expect(loaded.logError.mock.calls[0][0]).toContain("[Sentry] beforeSend PII scrub failed");
+    expect(loaded.logError.mock.calls[0][0]).toContain("[Sentry] beforeSend PII scrub failed, continuing with the main scrub");
     expect(loaded.logError.mock.calls[0][1]).toBeInstanceOf(Error);
+  });
+
+  // BACKLOG-4050 C7. Mutation: restore `return event` in the updater catch -> red.
+  it("C7: updater scrub throws + spaced profile + email in exception.values[0].value -> scrubbed, not null", () => {
+    const loaded = load({ isPackaged: false, scrubThrows: true });
+    const { beforeSend } = initOptions(loaded);
+    const event = {
+      exception: { values: [{ type: "Error", value: "EPERM: open '/Users/Jane Doe/Desktop/Smith deal.pdf' jane.doe@example.com" }] },
+    };
+    const result = beforeSend(event) as { exception: { values: Array<{ type: string; value: string }> } } | null;
+    expect(result).not.toBeNull();
+    expect(result!.exception.values[0].value).toBe("EPERM: open '/Users/[user]/Desktop/[file]' j***@example.com");
+    expect(result!.exception.values[0].type).toBe("Error");
+  });
+
+  // BACKLOG-4050 C3 at the hook (W3: a tag-gated scrub). No tags at all.
+  it("an untagged event passes the final scrub (no tag gate)", () => {
+    const loaded = load({ isPackaged: false, scrubPassThrough: true });
+    const { beforeSend } = initOptions(loaded);
+    const result = beforeSend({ message: String.raw`spawn C:\Users\Jane Doe\x.exe ENOENT` }) as { message: string };
+    expect(result.message).toBe(String.raw`spawn C:\Users\[user]\[file] ENOENT`);
+  });
+
+  // BACKLOG-4050 C6 at the hook: fail-closed. Mutation: `return scrubbed` in the final catch -> red.
+  it("C6: when the final scrub throws, the event is dropped and the failure logged", () => {
+    const loaded = load({ isPackaged: false, scrubPassThrough: true });
+    const { beforeSend } = initOptions(loaded);
+    const hostile = {
+      get message(): string {
+        throw new Error("getter throws");
+      },
+    };
+    expect(beforeSend({ message: "x", breadcrumbs: [hostile] })).toBeNull();
+    expect(loaded.logError).toHaveBeenCalledTimes(1);
+    expect(loaded.logError.mock.calls[0][0]).toContain("[Sentry] beforeSend main scrub failed, event dropped");
+  });
+
+  it("BACKLOG-4050: beforeBreadcrumb removes a spaced profile name from a child_process breadcrumb", () => {
+    const options = initOptions(load({ isPackaged: false }));
+    const out = options.beforeBreadcrumb({
+      category: "child_process",
+      message: String.raw`Child process errored with 'spawn C:\Users\Jane Doe\AppData\Local\Programs\keepr\resources\win\libimobiledevice\idevice_id.exe ENOENT'`,
+    }) as { message: string };
+    expect(out.message).toBe(
+      String.raw`Child process errored with 'spawn C:\Users\[user]\AppData\Local\Programs\keepr\resources\win\libimobiledevice\idevice_id.exe ENOENT'`,
+    );
   });
 });
 
@@ -271,8 +324,11 @@ describe("installSentry: RCS events are scrubbed after the updater scrub", () =>
     expect(loaded.scrub).toHaveBeenCalledTimes(1);
     expect(rcs.message).not.toContain("555");
     expect(rcs.message).not.toContain("sam@");
-    const other = { tags: { component: "sync" }, message: "chat with +1 (555) 555-0199 failed" };
-    expect(beforeSend(other)).toBe(other);
+    // BACKLOG-4050: every event now gets the final scrub (phones included), so
+    // the untagged fixture carries an RCS-only marker instead: quoted text,
+    // which the RCS scrub turns into "<text>" and the final scrub leaves alone.
+    const other = { tags: { component: "sync" }, message: 'parse failed on "hello there"' };
+    expect(beforeSend(other)).toEqual(other);
   });
 });
 
@@ -383,7 +439,8 @@ describe("installSentry: the crash reporting switch (BACKLOG-3801)", () => {
     const options = initOptions(loaded);
     const net = networkTransport(loaded);
     const event = { message: "boom" };
-    expect(options.beforeSend(event)).toBe(event);
+    // BACKLOG-4050: the final scrub returns a copy, so equality, not identity.
+    expect(options.beforeSend(event)).toEqual(event);
 
     loaded.pref.setCrashReportingEnabled(false);
 
