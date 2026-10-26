@@ -63,6 +63,10 @@ function load(options: {
   scrubPassThrough?: boolean;
   /** BACKLOG-3801: contents of userData/crash-reporting.json; undefined = no file. */
   crashReportingFile?: string;
+  /** BACKLOG-4050 M-1: what os.homedir() returns while the module loads. */
+  homeDir?: string;
+  /** BACKLOG-4050 M-1: a concrete app.getPath("userData") (no temp dir is created). */
+  userDataPath?: string;
 }): Loaded {
   const init = jest.fn();
   const dotenvConfig = jest.fn();
@@ -77,8 +81,9 @@ function load(options: {
   // Identity: hands back the (gated) base factory it was given, so a test can
   // build the network transport exactly as the offline wrapper would.
   const makeOffline = jest.fn((base: unknown) => base);
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-3801-is-"));
-  tempDirs.push(userData);
+  const userData = options.userDataPath ?? fs.mkdtempSync(path.join(os.tmpdir(), "keepr-3801-is-"));
+  if (options.userDataPath === undefined) tempDirs.push(userData);
+  const homedirSpy = options.homeDir === undefined ? undefined : jest.spyOn(os, "homedir").mockReturnValue(options.homeDir);
   if (options.crashReportingFile !== undefined) {
     fs.writeFileSync(path.join(userData, "crash-reporting.json"), options.crashReportingFile);
   }
@@ -131,6 +136,7 @@ function load(options: {
       pref = require("../../services/crashReportingPreference");
     });
   } finally {
+    homedirSpy?.mockRestore();
     if (previousDsn === undefined) {
       delete process.env.SENTRY_DSN;
     } else {
@@ -475,5 +481,52 @@ describe("renderer Sentry.init cannot send around the switch (BACKLOG-3801)", ()
     expect(keys).toHaveLength(1);
     expect(keys[0]).not.toContain("dsn");
     expect(keys[0]).not.toContain("transport");
+  });
+});
+
+// BACKLOG-4050 M-1: the host inputs (os.homedir(), userData) reach BOTH hooks.
+// Mutations: drop `crashReportScrubOptions` from scrubBreadcrumb (beforeBreadcrumb)
+// or from scrubMainEvent (beforeSend) -> the matching rows go red.
+describe("BACKLOG-4050 M-1: host inputs reach beforeBreadcrumb and beforeSend", () => {
+  const REDIRECTED_HOME = String.raw`D:\Profiles\Zed Quux`;
+  const profileText = String.raw`open 'D:\Profiles\Zed Quux\Contracts\Smith.pdf' failed`;
+  const USER_DATA = "/Volumes/Data/keepr-ud";
+  const dataText = `SQLITE_CANTOPEN '${USER_DATA}/mad.db' log '${USER_DATA}/logs/main.log'`;
+
+  it("beforeSend: a profile outside Users becomes [user] and the file name becomes [file]", () => {
+    const { beforeSend } = initOptions(load({ isPackaged: false, scrubPassThrough: true, homeDir: REDIRECTED_HOME }));
+    const out = beforeSend({ message: profileText }) as { message: string };
+    expect(out.message).toBe(String.raw`open 'D:\Profiles\[user]\Contracts\[file]' failed`);
+    expect(out.message).not.toContain("Zed");
+  });
+
+  it("beforeBreadcrumb: a profile outside Users becomes [user]", () => {
+    const { beforeBreadcrumb } = initOptions(load({ isPackaged: false, homeDir: REDIRECTED_HOME }));
+    const out = beforeBreadcrumb({ category: "console", message: profileText }) as { message: string };
+    expect(out.message).toBe(String.raw`open 'D:\Profiles\[user]\Contracts\[file]' failed`);
+  });
+
+  it("beforeSend: the app's own data files under userData are kept", () => {
+    const { beforeSend } = initOptions(load({ isPackaged: false, scrubPassThrough: true, userDataPath: USER_DATA }));
+    expect((beforeSend({ message: dataText }) as { message: string }).message).toBe(dataText);
+  });
+
+  it("beforeBreadcrumb: the app's own data files under userData are kept", () => {
+    const { beforeBreadcrumb } = initOptions(load({ isPackaged: false, userDataPath: USER_DATA }));
+    expect((beforeBreadcrumb({ category: "console", message: dataText }) as { message: string }).message).toBe(dataText);
+  });
+
+  it("macOS: mad.db and logs under ~/Library/Application Support/keepr are kept, the profile name is not", () => {
+    const loaded = load({
+      isPackaged: false,
+      scrubPassThrough: true,
+      homeDir: "/Users/jane",
+      userDataPath: "/Users/jane/Library/Application Support/keepr",
+    });
+    const { beforeSend, beforeBreadcrumb } = initOptions(loaded);
+    const text = "open '/Users/jane/Library/Application Support/keepr/mad.db' log '/Users/jane/Library/Application Support/keepr/logs/main.log'";
+    const want = "open '/Users/[user]/Library/Application Support/keepr/mad.db' log '/Users/[user]/Library/Application Support/keepr/logs/main.log'";
+    expect((beforeSend({ message: text }) as { message: string }).message).toBe(want);
+    expect((beforeBreadcrumb({ category: "console", message: text }) as { message: string }).message).toBe(want);
   });
 });

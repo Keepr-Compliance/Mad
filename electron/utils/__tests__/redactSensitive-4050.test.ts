@@ -160,3 +160,27 @@ describe("BACKLOG-4050 C8 (text half): record ids pass every rule unchanged", ()
     expect(redactCrashReportText(text, { homeDir: "/Users/Jane Doe", appRoots: WIN_APP_ROOTS })).toBe(text);
   });
 });
+
+// BACKLOG-4050 S-1: system and app-support paths stay visible; Library folders
+// that hold user files do not.
+describe("BACKLOG-4050 S-1: /Library paths", () => {
+  it("support survives: Messages/chat.db and Application Support names are kept", () => {
+    expect(redactUserFileNames("SQLITE_CANTOPEN '/Users/[user]/Library/Messages/chat.db'")).toBe("SQLITE_CANTOPEN '/Users/[user]/Library/Messages/chat.db'");
+    expect(redactUserFileNames("open /Users/[user]/Library/Application Support/keepr/mad.db")).toContain("/Users/[user]/Library/Application");
+    expect(redactUserFileNames("EACCES /Library/Preferences/x.plist")).toBe("EACCES /Library/Preferences/x.plist");
+  });
+
+  it("leak control: a file under Mobile Documents or CloudStorage still becomes [file]", () => {
+    expect(redactUserFileNames("open '/Users/[user]/Library/Mobile Documents/com~apple~CloudDocs/Smith deal.pdf'")).toBe(
+      "open '/Users/[user]/Library/Mobile Documents/com~apple~CloudDocs/[file]'",
+    );
+    expect(redactUserFileNames("open '/Users/[user]/Library/CloudStorage/Dropbox/Smith deal.pdf'")).toBe(
+      "open '/Users/[user]/Library/CloudStorage/Dropbox/[file]'",
+    );
+    expect(redactUserFileNames("open '/Library/CloudStorage/Box/Smith deal.pdf'")).toBe("open '/Library/CloudStorage/Box/[file]'");
+  });
+
+  it("a folder merely named Library elsewhere is not exempt", () => {
+    expect(redactUserFileNames("open '/Users/[user]/Documents/Library/Smith deal.pdf'")).toBe("open '/Users/[user]/Documents/Library/[file]'");
+  });
+});
