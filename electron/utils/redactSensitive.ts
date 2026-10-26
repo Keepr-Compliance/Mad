@@ -546,17 +546,21 @@ function normalizePathForCompare(p: string): string {
 }
 
 /**
- * `/Library/...` and `/Users/<name>/Library/...`: system and app-support data
- * (`Messages/chat.db`, `Application Support/...`). Support needs these names.
+ * Allowlist under `Library` (user and system): only Application Support, Logs,
+ * Preferences and Caches, plus the Messages database files, keep their file
+ * names. Everything else under Library (Messages/Attachments, Mail, Containers,
+ * Group Containers, Mobile Documents, CloudStorage, files directly in Library)
+ * can hold user files and becomes `[file]`. (`application$`: an unquoted
+ * `Application Support` path is cut at the space, leaving `.../Library/Application`.)
  */
-const LIBRARY_PATH_RE = /^\/(?:users\/[^/]+\/)?library\//;
-/** Under `Library`, but user files: iCloud Drive and cloud-provider folders. */
-const LIBRARY_USER_FILES_RE = /^\/(?:users\/[^/]+\/)?library\/(?:mobile documents|cloudstorage)(?:\/|$)/;
+const LIBRARY_APP_DATA_RE =
+  /^\/(?:users\/[^/]+\/)?library\/(?:(?:application support|logs|preferences|caches)\/|application$)/;
+const LIBRARY_MESSAGES_DB_RE = /^\/users\/[^/]+\/library\/messages\/chat\.db(?:-wal|-shm)?$/;
 
 function isAppOwnedPath(p: string, appRoots: readonly string[]): boolean {
   const norm = normalizePathForCompare(p);
   if (SYSTEM_PREFIX_RE.test(norm)) return true;
-  if (LIBRARY_PATH_RE.test(norm) && !LIBRARY_USER_FILES_RE.test(norm)) return true;
+  if (LIBRARY_APP_DATA_RE.test(norm) || LIBRARY_MESSAGES_DB_RE.test(norm)) return true;
   if (APP_OWNED_MARKERS.some((marker) => norm.includes(marker))) return true;
   return appRoots.some((root) => {
     if (!root) return false;
@@ -602,7 +606,7 @@ function redactFinalSegment(p: string, appRoots: readonly string[], unquoted: bo
  * 2026-10-25). Exempt: paths under `appRoots` (pass `process.resourcesPath`,
  * `app.getAppPath()`, userData, logs, temp), under the app's install or
  * bundle (`app.asar`, `node_modules`, `/Applications/`, `\Program Files`,
- * `\Programs\keepr\`), system locations, `/Library` data (except Mobile Documents and CloudStorage), and names already reduced to a
+ * `\Programs\keepr\`), system locations, `Library` app data (allowlist: Application Support, Logs, Preferences, Caches, Messages chat.db), and names already reduced to a
  * placeholder (`Transaction_[address]_<ms>.pdf`).
  *
  * Quoted paths end at the closing quote; unquoted ones at whitespace, so an

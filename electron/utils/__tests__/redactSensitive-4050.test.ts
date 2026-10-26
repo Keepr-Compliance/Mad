@@ -179,6 +179,32 @@ describe("BACKLOG-4050 S-1: /Library paths", () => {
     );
   });
 
+  it("D-1: Messages/Attachments file becomes [file]", () => {
+    expect(redactUserFileNames("open '/Users/[user]/Library/Messages/Attachments/ab/12/AB12-GUID/742 Elm St purchase agreement.pdf'")).toBe(
+      "open '/Users/[user]/Library/Messages/Attachments/ab/12/AB12-GUID/[file]'",
+    );
+  });
+
+  it("D-1: a bare file directly under Library becomes [file]", () => {
+    expect(redactUserFileNames("save failed '/Users/[user]/Library/Smith audit export.pdf'")).toBe("save failed '/Users/[user]/Library/[file]'");
+  });
+
+  it("D-1: Mail and Group Containers files become [file]", () => {
+    expect(redactUserFileNames("open '/Users/[user]/Library/Mail/V10/ABC/Attachments/Smith deal.pdf'")).toBe(
+      "open '/Users/[user]/Library/Mail/V10/ABC/Attachments/[file]'",
+    );
+    expect(redactUserFileNames("open '/Users/[user]/Library/Group Containers/UBF8T346G9.Office/Outlook/Smith deal.pdf'")).toBe(
+      "open '/Users/[user]/Library/Group Containers/UBF8T346G9.Office/Outlook/[file]'",
+    );
+  });
+
+  it("D-1: chat.db (and -wal/-shm) and an Application Support path are kept", () => {
+    expect(redactUserFileNames("open '/Users/[user]/Library/Messages/chat.db-wal'")).toBe("open '/Users/[user]/Library/Messages/chat.db-wal'");
+    expect(redactUserFileNames("open '/Users/[user]/Library/Application Support/keepr/mad.db'")).toBe(
+      "open '/Users/[user]/Library/Application Support/keepr/mad.db'",
+    );
+  });
+
   it("a folder merely named Library elsewhere is not exempt", () => {
     expect(redactUserFileNames("open '/Users/[user]/Documents/Library/Smith deal.pdf'")).toBe("open '/Users/[user]/Documents/Library/[file]'");
   });
