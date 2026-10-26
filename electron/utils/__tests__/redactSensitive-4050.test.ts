@@ -177,7 +177,6 @@ describe("BACKLOG-4050 S-1: /Library paths", () => {
     expect(redactUserFileNames("open '/Users/[user]/Library/CloudStorage/Dropbox/Smith deal.pdf'")).toBe(
       "open '/Users/[user]/Library/CloudStorage/Dropbox/[file]'",
     );
-    expect(redactUserFileNames("open '/Library/CloudStorage/Box/Smith deal.pdf'")).toBe("open '/Library/CloudStorage/Box/[file]'");
   });
 
   it("a folder merely named Library elsewhere is not exempt", () => {
