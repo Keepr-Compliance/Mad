@@ -10,7 +10,7 @@
     "dotenv-cli",
     "electron",
     "electron-builder",
-    "electron-rebuild",
+    "@electron/rebuild",
     "eslint",
     "eslint-plugin-react",
     "identity-obj-proxy",

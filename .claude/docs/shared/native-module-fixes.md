@@ -28,10 +28,14 @@ using NODE_MODULE_VERSION X. This version of Node.js requires NODE_MODULE_VERSIO
 
 ```bash
 npm rebuild better-sqlite3-multiple-ciphers
-npx electron-rebuild
+node node_modules/@electron/rebuild/lib/cli.js -f -o better-sqlite3-multiple-ciphers
 ```
 
-### If Standard Rebuild Fails (Windows without Python)
+On Electron 44 `npx electron-rebuild` no longer works: npx resolves a stale cached 3.2.9 that fails to build (BACKLOG-4052).
+
+### If Standard Rebuild Fails (Windows without Python; Electron 38 and earlier only)
+
+No prebuild exists for Electron 44. On 44, use the from-source command above (needs VS Build Tools + Python on Windows).
 
 ```powershell
 # 1. Clear the prebuild cache
@@ -57,7 +61,7 @@ Replace `<VERSION>` with your Electron version from: `npx electron --version`
 | After upgrading Node.js | Run both rebuild commands |
 | After pulling changes with dependency updates | Run both rebuild commands |
 | After switching branches with different dependencies | Run both rebuild commands |
-| After updating Electron version | Run `npx electron-rebuild` |
+| After updating Electron version | Run `node node_modules/@electron/rebuild/lib/cli.js -f -o better-sqlite3-multiple-ciphers` |
 | If only tests fail | Run `npm rebuild better-sqlite3-multiple-ciphers` |
 
 ---
@@ -88,14 +92,14 @@ The Electron app gets stuck (e.g., infinite loop on "Secure Storage Setup" scree
 
 **Fix:**
 ```bash
-npx electron-rebuild
+node node_modules/@electron/rebuild/lib/cli.js -f -o better-sqlite3-multiple-ciphers
 ```
 
 ### Scenario 3: Both Tests and App Fail
 
 **Fix (run both):**
 ```bash
-npm rebuild better-sqlite3-multiple-ciphers && npx electron-rebuild
+npm rebuild better-sqlite3-multiple-ciphers && node node_modules/@electron/rebuild/lib/cli.js -f -o better-sqlite3-multiple-ciphers
 ```
 
 ---

@@ -927,7 +927,7 @@ export async function autoLinkCommunicationsForContact(
         transactionId,
         contactEmailCount: contactInfo.emails.length,
         contactPhoneCount: contactInfo.phoneNumbers.length,
-        normalizedAddress: txnNormalizedAddress?.full ?? "(none)",
+        normalizedAddress: txnNormalizedAddress ? "[address]" : "(none)", // BACKLOG-4050: never the address
         skipAddressFilter,
         dateRangeStart: dateRange.start.toISOString(),
         dateRangeEnd: dateRange.end.toISOString(),
@@ -1010,7 +1010,7 @@ export async function autoLinkCommunicationsForContact(
         singleCandidate,
         contactEmailCount: contactInfo.emails.length,
         hasAddress: !!txnNormalizedAddress,
-        normalizedAddress: txnNormalizedAddress?.full ?? "(none)",
+        normalizedAddress: txnNormalizedAddress ? "[address]" : "(none)", // BACKLOG-4050: never the address
       },
     });
 
@@ -1314,7 +1314,7 @@ export async function autoLinkCommunicationsForContact(
             transactionId,
             contactEmailCount: contactInfo.emails.length,
             contactPhoneCount: contactInfo.phoneNumbers.length,
-            normalizedAddress: txnNormalizedAddress?.full ?? "(none)",
+            normalizedAddress: txnNormalizedAddress ? "[address]" : "(none)", // BACKLOG-4050: never the address
             dateRangeStart: dateRange.start.toISOString(),
             dateRangeEnd: dateRange.end.toISOString(),
             durationMs: duration,
