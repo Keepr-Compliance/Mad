@@ -715,7 +715,7 @@
         "win",
         "mac"
       ],
-      "notes": "Keepr is built on Electron, which includes Chromium, Node.js, FFmpeg and other components. Their licences are in LICENSES.chromium.html. On Windows this also covers the graphics libraries Electron installs beside Keepr.exe (d3dcompiler_47.dll, dxcompiler.dll, dxil.dll, libEGL.dll, libGLESv2.dll, vk_swiftshader.dll, vulkan-1.dll, ffmpeg.dll)."
+      "notes": "Keepr is built on Electron, which includes Chromium, Node.js, FFmpeg and other components. Their licences are in LICENSES.chromium.html. On Windows this also covers the graphics libraries Electron installs beside Keepr.exe (d3dcompiler_47.dll, dxcompiler.dll, dxil.dll, vk_swiftshader.dll, vulkan-1.dll, ffmpeg.dll)."
     },
     {
       "id": "noble-curves",

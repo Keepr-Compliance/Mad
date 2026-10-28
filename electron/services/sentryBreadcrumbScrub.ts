@@ -8,9 +8,16 @@
  * emails and phone numbers out of that file. Before this, only HTTP breadcrumbs
  * were touched (their query string, BACKLOG-3768).
  *
- * Pure: no Sentry or Electron import. Never throws.
+ * BACKLOG-4050: every string also loses the profile folder name (`[user]`),
+ * the address in app-generated export names (`[address]`) and user-chosen file
+ * names (`[file]`); see `redactCrashReportText`. Ids, error codes and the app's
+ * own paths (a child_process `spawnfile` under the install dir) are kept.
+ *
+ * Pure: no Sentry or Electron import; the host passes `homeDir` / `appRoots`.
+ * `scrubBreadcrumb` never throws; `scrubBreadcrumbOrThrow` (used inside an
+ * event, where a raw breadcrumb must not be sent) does.
  */
-import { redactLogText } from "../utils/redactSensitive";
+import { redactCrashReportText, type CrashReportScrubOptions } from "../utils/redactSensitive";
 import { scrubHttpBreadcrumb } from "./httpBreadcrumbScrub";
 
 interface BreadcrumbLike {
@@ -22,23 +29,34 @@ interface BreadcrumbLike {
 
 const MAX_DEPTH = 6;
 
-function scrubValue(value: unknown, depth: number): unknown {
-  if (typeof value === "string") return redactLogText(value);
+/**
+ * Deep copy with every string redacted. Below MAX_DEPTH a non-string value is
+ * returned as is.
+ */
+export function scrubCrashReportValue(value: unknown, options: CrashReportScrubOptions, depth = 0): unknown {
+  if (typeof value === "string") return redactCrashReportText(value, options);
   if (depth >= MAX_DEPTH || value === null || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.map((v) => scrubValue(v, depth + 1));
+  if (Array.isArray(value)) return value.map((v) => scrubCrashReportValue(v, options, depth + 1));
   const out: { [key: string]: unknown } = {};
-  for (const [k, v] of Object.entries(value as { [key: string]: unknown })) out[k] = scrubValue(v, depth + 1);
+  for (const [k, v] of Object.entries(value as { [key: string]: unknown })) {
+    out[k] = scrubCrashReportValue(v, options, depth + 1);
+  }
   return out;
 }
 
-export function scrubBreadcrumb<T extends BreadcrumbLike>(breadcrumb: T): T {
-  let next: T = breadcrumb;
-  try {
-    next = { ...breadcrumb };
-    if (typeof next.message === "string") next.message = redactLogText(next.message);
-    if (next.data && typeof next.data === "object") next.data = scrubValue(next.data, 0) as T["data"];
-  } catch {
-    next = breadcrumb;
-  }
+/** Scrub one breadcrumb; THROWS if a rule throws. Returns a copy. */
+export function scrubBreadcrumbOrThrow<T extends BreadcrumbLike>(breadcrumb: T, options: CrashReportScrubOptions = {}): T {
+  const next: T = { ...breadcrumb };
+  if (typeof next.message === "string") next.message = redactCrashReportText(next.message, options);
+  if (next.data && typeof next.data === "object") next.data = scrubCrashReportValue(next.data, options) as T["data"];
   return scrubHttpBreadcrumb(next);
+}
+
+/** `beforeBreadcrumb`: scrub one breadcrumb; on a throw keep today's behaviour (the original, HTTP-scrubbed). */
+export function scrubBreadcrumb<T extends BreadcrumbLike>(breadcrumb: T, options: CrashReportScrubOptions = {}): T {
+  try {
+    return scrubBreadcrumbOrThrow(breadcrumb, options);
+  } catch {
+    return scrubHttpBreadcrumb(breadcrumb);
+  }
 }

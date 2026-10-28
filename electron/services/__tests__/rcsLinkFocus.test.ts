@@ -145,34 +145,34 @@ describe("linkCodeFromClipboard (keepr://link, Windows)", () => {
   const waiting = () => ({ state: "waiting" });
   beforeEach(() => read.mockClear());
 
-  it("Windows + a link waiting + exactly the code → the 6 digits (spaced as shown, too)", () => {
-    expect(linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: read })).toBe("123456");
+  it("Windows + a link waiting + exactly the code → the 6 digits (spaced as shown, too)", async () => {
+    expect(await linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: read })).toBe("123456");
     read.mockReturnValueOnce("123 456");
-    expect(linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: read })).toBe("123456");
+    expect(await linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: read })).toBe("123456");
     read.mockReturnValueOnce(" 042137\r\n");
-    expect(linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: read })).toBe("042137");
+    expect(await linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: read })).toBe("042137");
   });
 
-  it("anything but the code is ignored", () => {
+  it("anything but the code is ignored", async () => {
     for (const text of ["12345", "1234567", "12 3456", "123  456", "abcdef", "123-456", "code 123456", ""]) {
       read.mockReturnValueOnce(text);
-      expect(linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: read })).toBeNull();
+      expect(await linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: read })).toBeNull();
     }
   });
 
-  it("Mac / Linux, or no link waiting (stale): the clipboard is never read", () => {
+  it("Mac / Linux, or no link waiting (stale): the clipboard is never read", async () => {
     for (const platform of ["darwin", "linux"]) {
-      expect(linkCodeFromClipboard({ platform, linkState: waiting, readClipboard: read })).toBeNull();
+      expect(await linkCodeFromClipboard({ platform, linkState: waiting, readClipboard: read })).toBeNull();
     }
     for (const state of ["none", "answered", "locked"]) {
-      expect(linkCodeFromClipboard({ platform: "win32", linkState: () => ({ state }), readClipboard: read })).toBeNull();
+      expect(await linkCodeFromClipboard({ platform: "win32", linkState: () => ({ state }), readClipboard: read })).toBeNull();
     }
-    expect(linkCodeFromClipboard({ platform: "win32", linkState: () => { throw new Error("x"); }, readClipboard: read })).toBeNull();
+    expect(await linkCodeFromClipboard({ platform: "win32", linkState: () => { throw new Error("x"); }, readClipboard: read })).toBeNull();
     expect(read).not.toHaveBeenCalled();
   });
 
-  it("a clipboard that cannot be read: null, never a throw", () => {
-    expect(linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: () => { throw new Error("busy"); } })).toBeNull();
+  it("a clipboard that cannot be read: null, never a throw", async () => {
+    expect(await linkCodeFromClipboard({ platform: "win32", linkState: waiting, readClipboard: () => { throw new Error("busy"); } })).toBeNull();
   });
 
   it("the deep link logs whether a code came, never the code itself", () => {
@@ -194,25 +194,25 @@ describe("clearLinkCodeFromClipboard (after the code is accepted)", () => {
   const clear = jest.fn();
   beforeEach(() => clear.mockClear());
 
-  it("Windows, the same code still there (as shown, too): cleared", () => {
-    expect(clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: () => "123456", clearClipboard: clear })).toBe(true);
-    expect(clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: () => "123 456", clearClipboard: clear })).toBe(true);
+  it("Windows, the same code still there (as shown, too): cleared", async () => {
+    expect(await clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: () => "123456", clearClipboard: clear })).toBe(true);
+    expect(await clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: () => "123 456", clearClipboard: clear })).toBe(true);
     expect(clear).toHaveBeenCalledTimes(2);
   });
 
-  it("the user copied something else since (another code, text): left as it is", () => {
+  it("the user copied something else since (another code, text): left as it is", async () => {
     for (const text of ["654321", "an address", "", "1234567"]) {
-      expect(clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: () => text, clearClipboard: clear })).toBe(false);
+      expect(await clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: () => text, clearClipboard: clear })).toBe(false);
     }
     expect(clear).not.toHaveBeenCalled();
   });
 
-  it("not Windows, or no valid code: never touched; a read that fails: nothing", () => {
+  it("not Windows, or no valid code: never touched; a read that fails: nothing", async () => {
     for (const platform of ["darwin", "linux"]) {
-      expect(clearLinkCodeFromClipboard({ platform, code: "123456", readClipboard: () => "123456", clearClipboard: clear })).toBe(false);
+      expect(await clearLinkCodeFromClipboard({ platform, code: "123456", readClipboard: () => "123456", clearClipboard: clear })).toBe(false);
     }
-    expect(clearLinkCodeFromClipboard({ platform: "win32", code: "", readClipboard: () => "", clearClipboard: clear })).toBe(false);
-    expect(clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: () => { throw new Error("busy"); }, clearClipboard: clear })).toBe(false);
+    expect(await clearLinkCodeFromClipboard({ platform: "win32", code: "", readClipboard: () => "", clearClipboard: clear })).toBe(false);
+    expect(await clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: () => { throw new Error("busy"); }, clearClipboard: clear })).toBe(false);
     expect(clear).not.toHaveBeenCalled();
   });
 
@@ -226,6 +226,47 @@ describe("clearLinkCodeFromClipboard (after the code is accepted)", () => {
     expect(handler.indexOf("clearLinkCodeFromClipboard(")).toBeGreaterThan(ok);
     expect(handler.indexOf("clearLinkCodeFromClipboard(")).toBeLessThan(handler.indexOf("return { success: true };"));
     expect(handler.match(/clearLinkCodeFromClipboard\(/g)).toHaveLength(1);
+  });
+});
+
+// BACKLOG-4052: on Electron 44 clipboard.readText()/clear() return Promises.
+// The helpers await the read, so the code is found and cleared either way.
+// Mutation (each red): drop the await on the read in either helper.
+describe("rcsLinkFocus with a Promise-returning clipboard (Electron 44)", () => {
+  const asyncRead = () => Promise.resolve("123 456");
+  it("finds the code when readClipboard resolves to it", async () => {
+    expect(await linkCodeFromClipboard({ platform: "win32", linkState: () => ({ state: "waiting" }), readClipboard: asyncRead })).toBe("123456");
+  });
+  it("clears when the clipboard still holds the accepted code", async () => {
+    const clear = jest.fn(() => Promise.resolve());
+    expect(await clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: asyncRead, clearClipboard: clear })).toBe(true);
+    expect(clear).toHaveBeenCalledTimes(1);
+  });
+  // SR N-1: the result must wait for the clear. Mutation: drop the
+  // `await` on clearClipboard() → both cases below go red.
+  it("does not report cleared until a late clear has finished", async () => {
+    let finished = false;
+    const lateClear = () => new Promise<void>((resolve) => setTimeout(() => { finished = true; resolve(); }, 20));
+    expect(await clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: asyncRead, clearClipboard: lateClear })).toBe(true);
+    expect(finished).toBe(true);
+  });
+  it("a rejected clear: false, never a throw or an unhandled rejection", async () => {
+    const rejectedClear = () => Promise.reject(new Error("clipboard busy"));
+    expect(await clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: asyncRead, clearClipboard: rejectedClear })).toBe(false);
+  });
+  it("a rejected read: null / false, never a throw", async () => {
+    const rejected = () => Promise.reject(new Error("busy"));
+    expect(await linkCodeFromClipboard({ platform: "win32", linkState: () => ({ state: "waiting" }), readClipboard: rejected })).toBeNull();
+    expect(await clearLinkCodeFromClipboard({ platform: "win32", code: "123456", readClipboard: rejected, clearClipboard: jest.fn() })).toBe(false);
+  });
+  it("every caller awaits: main.ts deep link, the clear, the chrome:// copy", () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const rd = (f: string) => (require("fs") as typeof import("fs")).readFileSync(require("path").join(__dirname, "..", "..", f), "utf8");
+    expect(rd("main.ts")).toContain("const code = await rcsLinkCodeForDeepLink();");
+    const h = rd("handlers/rcsImportHandlers.ts");
+    expect(h).toContain("await clearLinkCodeFromClipboard({");
+    expect(h).toContain("await clipboard.writeText(CHROME_EXTENSIONS_ADDRESS);");
+    expect(h).toContain("export async function rcsLinkCodeForDeepLink(): Promise<string | null>");
   });
 });
 
