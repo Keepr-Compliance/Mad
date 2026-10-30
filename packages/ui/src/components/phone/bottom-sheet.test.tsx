@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BottomSheet } from './bottom-sheet';
 
@@ -136,6 +136,7 @@ describe('BottomSheet drag to close', () => {
         </button>
         <BottomSheet open={open} onOpenChange={setOpen} title="Pick" returnFocusRef={ref} fixedHeight={fixedHeight}>
           <input aria-label="Search" autoFocus />
+          <div data-testid="list-row">Row</div>
         </BottomSheet>
       </>
     );
@@ -206,6 +207,39 @@ describe('BottomSheet drag to close', () => {
     const { dialog } = await openSheet();
     drag(screen.getByRole('button', { name: 'Close' }), 150);
     expect(dialog.style.transform).toBe('');
+  });
+
+  it('a drag that starts inside the scrolling list does not move or close the sheet', async () => {
+    const { dialog } = await openSheet();
+    const release = drag(screen.getByTestId('list-row'), 150);
+    expect(dialog.style.transform).toBe('');
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 400));
+    });
+    release();
+    await settle();
+    expect(screen.getByRole('dialog', { name: 'Pick' })).toBe(dialog);
+    expect(dialog.style.transform).toBe('');
+  });
+
+  it('close boundary at a 400px sheet: 99px slow drag snaps back, 100px closes (25%)', async () => {
+    // Slow (400ms) so the flick rule (>= 0.5px/ms) cannot be what decides it.
+    const slowRelease = async (handle: HTMLElement, dy: number) => {
+      const release = drag(handle, dy);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 400));
+      });
+      release();
+      await settle();
+    };
+    const first = await openSheet();
+    await slowRelease(first.handle, 99);
+    expect(screen.getByRole('dialog', { name: 'Pick' })).toBe(first.dialog);
+    expect(first.dialog.style.transform).toBe('');
+    cleanup();
+    const second = await openSheet();
+    await slowRelease(second.handle, 100);
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 
   it('fixedHeight sets a constant height class; default sheets size to content', async () => {
