@@ -54,6 +54,30 @@ describe('per-user period counts (C9)', () => {
   });
 });
 
+describe('transactions created are DISTINCT transactions, not rows (F1)', () => {
+  it('two TRANSACTION_CREATE rows for one transaction count as 1', () => {
+    // pii-allow-uuid: invented, not from any live row
+    const tx = '10000000-0000-4000-8000-000000000777';
+    const dup = (id: string, at: string) => ({
+      id,
+      user_id: ALICE,
+      action: 'TRANSACTION_CREATE',
+      resource_type: 'TRANSACTION',
+      resource_id: tx,
+      created_at: at,
+    });
+    const events = [
+      // pii-allow-uuid: invented, not from any live row
+      dup('00000000-0000-4000-8000-000000000801', '2026-10-20T09:00:00.000Z'),
+      // pii-allow-uuid: invented, not from any live row
+      dup('00000000-0000-4000-8000-000000000802', '2026-10-20T09:00:05.000Z'),
+    ];
+    const a = row(ALICE, { events });
+    expect(a.eventCount).toBe(2);
+    expect(a.transactionsCreated).toBe(1);
+  });
+});
+
 describe('transactions edited are DISTINCT transactions, not rows (C21)', () => {
   it('three edits of one transaction plus one of another is 2', () => {
     expect(row(ALICE).transactionsEdited).toBe(2);
