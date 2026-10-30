@@ -229,6 +229,8 @@ function checklists(): ChecklistDetail[] {
           lnk("it-2", "email", "Other deal subject", [{ id: "e-stale", inTransaction: false }]),
           lnk("it-2", "attachment", "secret-photo.jpg", [{ id: "att-th" }]),
           lnk("it-2", "attachment", "hidden-first.jpg", [{ id: "att-th2" }, { id: "att-t1" }]),
+          // Hidden AND no longer in the transaction: must not be counted.
+          lnk("it-2", "attachment", "hidden-unlinked.jpg", [{ id: "att-hu", inTransaction: false }]),
         ],
       },
       requiredDone: 1,
@@ -295,6 +297,7 @@ function data(contentType: ExportContentType = "both"): ChecklistExportData {
       "att-e1": target("att-e1", "e1-contract.pdf", { emailId: "e1" }),
       "att-th": target("att-th", "secret-photo.jpg", { messageId: "th", externalMessageId: "guid-th" }, true),
       "att-th2": target("att-th2", "hidden-first.jpg", { messageId: "th", externalMessageId: "guid-th" }, true),
+      "att-hu": target("att-hu", "hidden-unlinked.jpg", { messageId: "th", externalMessageId: "guid-th" }, true),
       "att-t1": target("att-t1", "t1-photo.jpg", { messageId: "t1", externalMessageId: "guid-t1" }),
     },
     emailSubjects: { e3: "Beta topic", e9: "Old thread", "e-stale": "Other deal subject" },
@@ -453,7 +456,7 @@ describe("BACKLOG-3767 combined PDF checklist block", () => {
     expect(evidenceLine(emailsOnly, "Beta topic")).toContain('href="#email-thread-1"');
   });
 
-  it("C6: the Summary PDF lists the checklist with no links, anchors or reasons", async () => {
+  it("C6: the Summary PDF lists the checklist with no links or anchors, and prints the reasons as plain text", async () => {
     const doc = await render("both", true, data());
     expect(doc).toContain("Checklist: Purchase file");
     expect(itemRow(doc, "Offer")).toContain(">Complete</span>");
@@ -461,8 +464,18 @@ describe("BACKLOG-3767 combined PDF checklist block", () => {
     expect(hrefSet(doc).size).toBe(0);
     expect(doc).not.toContain("View &rarr;");
     expect(doc).not.toContain("View Full");
-    expect(doc).not.toContain(OUTSIDE_DATES_TEXT);
+    expect(evidenceLine(doc, "Old thread")).toContain(OUTSIDE_DATES_TEXT);
     expect(doc).not.toContain('id="email-thread-0"');
+  });
+
+  it("C10: a hidden attachment that is also unlinked is not counted, in full and Summary", async () => {
+    for (const summaryOnly of [false, true]) {
+      const doc = await render("both", summaryOnly, data());
+      const row = itemRow(doc, "Inspection");
+      expect(row).toContain(staleCountText(1));
+      expect(row).not.toContain(staleCountText(2));
+      expect(doc).not.toContain("hidden-unlinked.jpg");
+    }
   });
 
   it("C9: a hidden text's attachment prints nothing, in full and Summary, even outside the window", async () => {

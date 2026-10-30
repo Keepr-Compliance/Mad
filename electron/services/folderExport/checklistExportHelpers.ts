@@ -169,10 +169,9 @@ function reasonHtml(text: string): string {
 function memberLine(name: string, status: MemberStatus[], linksAllowed: boolean): string {
   const targets = status.flatMap((s) => (s.kind === "included" ? [s.target] : []));
   const reasons: string[] = [];
-  if (linksAllowed) {
-    if (status.some((s) => s.kind === "excluded")) reasons.push(NOT_IN_EXPORT_TEXT);
-    if (status.some((s) => s.kind === "outside")) reasons.push(OUTSIDE_DATES_TEXT);
-  }
+  // Reasons print in both modes; only the links are full-mode-only.
+  if (status.some((s) => s.kind === "excluded")) reasons.push(NOT_IN_EXPORT_TEXT);
+  if (status.some((s) => s.kind === "outside")) reasons.push(OUTSIDE_DATES_TEXT);
   return (
     `<div class="cl-evidence" style="font-size:12px;color:#374151;margin-top:4px;">` +
     `<span>${escapeHtml(name)}</span>` +
