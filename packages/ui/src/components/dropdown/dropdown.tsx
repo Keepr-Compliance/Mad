@@ -43,10 +43,23 @@ import type { DropdownProps } from './types';
 /** Search field + `max-h-60` listbox + borders: the most the panel can need. */
 const PANEL_MAX = 300;
 
-/** 'top' when there is less than PANEL_MAX below the trigger and more room above. */
-export function dropdownSide(rect: { top: number; bottom: number }, viewportHeight: number): 'top' | 'bottom' {
+/**
+ * 'top' when there is less than `panelMax` below the trigger and more room
+ * above. `panelMax` defaults to the Dropdown panel's height; a taller popover
+ * (the DateRangePicker calendar) passes its own.
+ */
+export function dropdownSide(
+  rect: { top: number; bottom: number },
+  viewportHeight: number,
+  panelMax: number = PANEL_MAX
+): 'top' | 'bottom' {
   const below = viewportHeight - rect.bottom;
-  return below < PANEL_MAX && rect.top > below ? 'top' : 'bottom';
+  return below < panelMax && rect.top > below ? 'top' : 'bottom';
+}
+
+function assignRef<T>(ref: React.Ref<T> | undefined, node: T | null) {
+  if (typeof ref === 'function') ref(node);
+  else if (ref) (ref as React.MutableRefObject<T | null>).current = node;
 }
 
 export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
@@ -57,7 +70,7 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
     label,
     ariaLabel,
     id,
-    placeholder = 'Select…',
+    placeholder: placeholderProp,
     searchable = true,
     searchPlaceholder,
     emptyText,
@@ -65,9 +78,16 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
     error,
     disabled = false,
     presentation = 'popover',
+    variant = 'field',
+    triggerIcon,
+    triggerRef: externalTriggerRef,
+    onClear,
     className,
   } = props;
   const sheet = presentation === 'sheet';
+  const filter = variant === 'filter';
+  // A filter pill with nothing chosen reads as its name ("Period"), not "Select…".
+  const placeholder = placeholderProp ?? (filter ? (label ?? ariaLabel) : 'Select…');
 
   const baseId = React.useId();
   const triggerId = id ?? `${baseId}-trigger`;
@@ -79,7 +99,14 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
   const [query, setQuery] = React.useState('');
   const [side, setSide] = React.useState<'top' | 'bottom'>('bottom');
   const wrapperRef = React.useRef<HTMLDivElement>(null);
-  const triggerRef = React.useRef<HTMLButtonElement>(null);
+  const triggerRef = React.useRef<HTMLButtonElement | null>(null);
+  const setTriggerRef = React.useCallback(
+    (node: HTMLButtonElement | null) => {
+      triggerRef.current = node;
+      assignRef(externalTriggerRef, node);
+    },
+    [externalTriggerRef]
+  );
 
   const selected = value === null ? undefined : options.find((o) => o.value === value);
   const nameText = label ?? ariaLabel;
@@ -126,21 +153,29 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
   }
 
   const showError = invalid && Boolean(error);
+  // A removable filter (value + onClear) reads blue, like MultiSelect with a selection.
+  const filterActive = filter && selected !== undefined && onClear !== undefined;
 
   return (
-    <div ref={wrapperRef} data-slot="dropdown" data-presentation={presentation} className={cn('relative', className)}>
-      {label ? (
+    <div
+      ref={wrapperRef}
+      data-slot="dropdown"
+      data-presentation={presentation}
+      data-variant={variant}
+      className={cn('relative', filter && 'inline-block', className)}
+    >
+      {label && !filter ? (
         <label id={labelId} htmlFor={triggerId} className="mb-1 block text-sm font-medium text-gray-700">
           {label}
         </label>
       ) : (
         <span id={labelId} className="sr-only">
-          {ariaLabel}
+          {label ?? ariaLabel}
         </span>
       )}
       <div className="relative">
         <button
-          ref={triggerRef}
+          ref={setTriggerRef}
           id={triggerId}
           type="button"
           disabled={disabled}
@@ -151,27 +186,48 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
           aria-describedby={showError ? errorId : undefined}
           onClick={() => (open ? close(false) : openPanel())}
           onKeyDown={onTriggerKeyDown}
-          className={cn(
-            'flex min-h-9 w-full items-center gap-2 rounded-md border bg-white px-3 py-1.5 text-left text-sm text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
-            invalid ? 'border-danger-600 ring-1 ring-danger-600' : 'border-gray-300',
-            open && !invalid && 'border-primary-500 ring-2 ring-primary-500',
-            disabled && 'cursor-not-allowed bg-gray-100 text-gray-400'
-          )}
+          className={
+            filter
+              ? cn(
+                  'inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
+                  filterActive ? 'border-primary-300 bg-primary-50 text-primary-700' : 'border-gray-300 bg-white text-gray-700',
+                  invalid && 'border-danger-600 ring-1 ring-danger-600',
+                  disabled && 'cursor-not-allowed bg-gray-100 text-gray-400'
+                )
+              : cn(
+                  'flex min-h-9 w-full items-center gap-2 rounded-md border bg-white px-3 py-1.5 text-left text-sm text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
+                  invalid ? 'border-danger-600 ring-1 ring-danger-600' : 'border-gray-300',
+                  open && !invalid && 'border-primary-500 ring-2 ring-primary-500',
+                  disabled && 'cursor-not-allowed bg-gray-100 text-gray-400'
+                )
+          }
         >
+          {triggerIcon ? (
+            <span className="inline-flex flex-shrink-0 text-gray-500" aria-hidden="true">
+              {triggerIcon}
+            </span>
+          ) : null}
           <span
             id={valueId}
             data-placeholder={selected ? undefined : ''}
-            className={cn('min-w-0 flex-1 truncate', !selected && 'text-muted-foreground')}
+            className={cn(filter ? 'truncate' : 'min-w-0 flex-1 truncate', !selected && 'text-muted-foreground')}
           >
             {selected ? selected.label : placeholder}
           </span>
-          <ChevronDown className="h-4 w-4 flex-shrink-0 text-gray-500" aria-hidden="true" />
+          <ChevronDown
+            className={cn('flex-shrink-0', filter ? 'h-3.5 w-3.5' : 'h-4 w-4 text-gray-500')}
+            aria-hidden="true"
+          />
         </button>
         {open && !sheet ? (
           <div
             data-slot="dropdown-panel"
             data-side={side}
-            className={cn('absolute z-50 w-full rounded-lg bg-white shadow-lg', side === 'top' ? 'bottom-full mb-1' : 'mt-1')}
+            className={cn(
+              'absolute z-50 rounded-lg bg-white shadow-lg',
+              filter ? 'w-max min-w-56' : 'w-full',
+              side === 'top' ? 'bottom-full mb-1' : 'mt-1'
+            )}
           >
             <DropdownOptions<V>
               options={options}
