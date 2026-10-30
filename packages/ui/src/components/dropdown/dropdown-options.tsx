@@ -8,8 +8,9 @@ import type { DropdownOptionsProps, DropdownRow } from './types';
 
 /**
  * DropdownOptions (BACKLOG-4032): the search field + listbox, with no trigger
- * and no popover. `Dropdown` wraps it in a popover; a phone parent puts it in
- * a BottomSheet (slice 2).
+ * and no popover. `Dropdown` wraps it in a popover, or in a BottomSheet with
+ * `presentation="sheet"`; a phone filter bar puts it in a BottomSheet itself
+ * (README "Phone").
  *
  * a11y: ARIA 1.2 combobox. Focus stays in the search field (role=combobox)
  * and the active row is announced through aria-activedescendant, so typing
@@ -41,6 +42,7 @@ export function DropdownOptions<V extends string = string>({
   autoFocus = false,
   onTabOut,
   size = 'default',
+  fill = false,
   className,
 }: DropdownOptionsProps<V>) {
   const baseId = React.useId();
@@ -167,7 +169,7 @@ export function DropdownOptions<V extends string = string>({
   return (
     <div
       data-slot="dropdown-options"
-      className={cn('overflow-hidden rounded-lg border border-gray-200', className)}
+      className={cn('overflow-hidden rounded-lg border border-gray-200', fill && 'flex h-full min-h-0 flex-col', className)}
     >
       {searchable ? (
         <div
@@ -182,6 +184,7 @@ export function DropdownOptions<V extends string = string>({
               hostRef.current = el;
             }}
             type="text"
+            data-autofocus={autoFocus ? '' : undefined}
             role="combobox"
             aria-label={searchLabel}
             aria-expanded="true"
@@ -210,13 +213,17 @@ export function DropdownOptions<V extends string = string>({
               }
         }
         id={listboxId}
+        data-autofocus={autoFocus && !searchable ? '' : undefined}
         role="listbox"
         aria-label={labelledBy ? undefined : ariaLabel}
         aria-labelledby={labelledBy}
         tabIndex={searchable ? -1 : 0}
         aria-activedescendant={searchable ? undefined : activeId}
         onKeyDown={searchable ? undefined : onKeyDown}
-        className="max-h-60 divide-y divide-gray-100 overflow-y-auto focus:outline-none"
+        className={cn(
+          'divide-y divide-gray-100 overflow-y-auto focus:outline-none',
+          fill ? (rows.length > 0 ? 'min-h-0 flex-1' : 'flex-none') : 'max-h-60'
+        )}
       >
         {rows.map((row) => {
           if (row.kind !== 'option') return null;
@@ -261,7 +268,7 @@ export function DropdownOptions<V extends string = string>({
                 {option.description ? (
                   <span
                     id={descId}
-                    className={cn('block text-xs', option.disabled ? 'text-gray-400' : 'text-gray-600')}
+                    className={cn('block', comfortable ? 'text-sm' : 'text-xs', option.disabled ? 'text-gray-400' : 'text-gray-600')}
                   >
                     {option.description}
                   </span>
@@ -286,6 +293,7 @@ export function DropdownOptions<V extends string = string>({
           data-slot="dropdown-empty"
           className={cn(
             'flex items-center justify-center px-3 text-gray-500',
+            fill && 'flex-1',
             comfortable ? 'min-h-12 text-base' : 'min-h-9 text-sm'
           )}
         >

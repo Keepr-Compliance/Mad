@@ -12,7 +12,7 @@ import type { ReactNode } from 'react';
 export interface DropdownOption<V extends string = string> {
   value: V;
   label: string;
-  /** Second line under the label (text-xs). Searched by the filter. */
+  /** Second line under the label (text-xs; text-sm in comfortable rows). Searched by the filter. */
   description?: string;
   /** Shown greyed out; cannot be picked; skipped by the arrow keys. */
   disabled?: boolean;
@@ -55,6 +55,15 @@ interface DropdownBaseProps<V extends string> {
   disabled?: boolean;
   /** Trigger look. Only 'field' is built; 'filter' is RESERVED. */
   variant?: 'field';
+  /**
+   * Where the options open. 'popover' (default): the inline panel under the
+   * trigger. 'sheet': a BottomSheet titled by the label, comfortable rows, a
+   * pick commits and closes (no footer). The parent chooses, e.g.
+   * `presentation={isPhone ? 'sheet' : 'popover'}`; the component does no
+   * matchMedia. Commit-on-pick is single mode only: a later multi mode in a
+   * sheet needs a footer button.
+   */
+  presentation?: 'popover' | 'sheet';
   className?: string;
 }
 
@@ -96,6 +105,8 @@ export interface DropdownOptionsProps<V extends string = string> {
   onTabOut?: () => void;
   /** 'default' = desktop popover rows (min-h-9 text-sm); 'comfortable' = phone sheet rows (min-h-12 text-base). */
   size?: 'default' | 'comfortable';
+  /** Fill the parent's height: the list takes the remaining space and scrolls inside it (fixed-height phone sheet). */
+  fill?: boolean;
   className?: string;
 }
 

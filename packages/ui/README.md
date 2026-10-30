@@ -137,8 +137,10 @@ navigation arrives as callbacks.
 a `BottomSheet` holding `<MultiSelectOptions bulkActions={false} />`. The sheet
 header (`headerAction`) carries "Select all" / "Clear" text buttons
 (`min-h-11 px-2 text-sm font-semibold text-primary-700`); the parent holds a
-*pending* selection and the footer button (`primaryAction`) applies it. The
-recipe is exercised in `report/multi-select.test.tsx`.
+*pending* selection and the footer button (`primaryAction`) applies it. Pass
+the button's ref as the sheet's `returnFocusRef` (`FilterSelectButton` forwards
+it) so focus goes back to it on close. The recipe is exercised in
+`report/multi-select.test.tsx`.
 
 ### Not yet at parity with @keepr/design-system
 
@@ -205,12 +207,47 @@ The panel is not portalled, so an ancestor with `overflow: hidden` clips it:
   pages in `overflow-auto` `main`. That scrolls, it does not clip: a tall panel
   near the bottom extends the page and the active row is scrolled into view.
 
-### Phone (slice 2)
+### Phone
 
-`DropdownOptions` is the search field + listbox with no trigger and no
-popover. The phone recipe is `FilterSelectButton` (or a field trigger) +
-`BottomSheet` + `<DropdownOptions size="comfortable" />`, where a pick closes
-the sheet. The component does no `matchMedia`; the parent chooses phone or wide.
+**Field (forms): `presentation="sheet"`.** The same field trigger opens a
+`BottomSheet` titled by the label instead of the popover. Rows are comfortable
+(`min-h-12 text-base`, descriptions `text-sm`), the search sits above them, a
+pick (tap or Enter) commits and closes, and there is no footer. The component
+does no `matchMedia`; the parent chooses:
+
+```tsx
+const narrow = useMediaQuery('(max-width: 767px)'); // the portal's own hook
+<Dropdown label="Role" presentation={narrow ? 'sheet' : 'popover'} ... />
+```
+
+`OrgPeoplePanel` passes it through as `pickerPresentation` (broker
+`PeopleCard` sets it from that query). Commit-on-pick is single mode only.
+
+**Filter bar: a recipe, not a component.** `FilterSelectButton` (value = the
+picked label) + `BottomSheet` + `<DropdownOptions size="comfortable" autoFocus />`,
+where `onSelect` sets the value and closes:
+
+```tsx
+const ref = React.useRef<HTMLButtonElement>(null);
+<FilterSelectButton ref={ref} label="Role" value={label} expanded={open} onClick={() => setOpen(true)} />
+<BottomSheet open={open} onOpenChange={setOpen} title="Role" returnFocusRef={ref}>
+  <DropdownOptions options={options} value={value} ariaLabel="Role" size="comfortable" autoFocus
+    onSelect={(v) => { setValue(v); setOpen(false); }} />
+</BottomSheet>
+```
+
+Exercised in `dropdown/dropdown-sheet.test.tsx`. `FilterSelectButton` stays
+the phone filter trigger (two lines, sized for the `PhoneFilterBar` grid).
+
+Focus and keys in a sheet:
+- Open: the search field (or the listbox when not searchable) has focus; it is
+  marked `data-autofocus`, which `BottomSheet` honours even inside a `Dialog`.
+- Close: focus returns to the trigger (`returnFocusRef`). Pass it in the
+  recipe; a tapped button on iOS may not hold focus, so the sheet's fallback
+  (the element focused at open) is not enough there.
+- Escape: one press closes the sheet, even with search text (Radix closes only
+  the top layer, so an enclosing `Dialog` stays open). The desktop popover
+  keeps its two-stage Escape.
 
 ### Reserved for later modes (typed now, not rendered)
 
