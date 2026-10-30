@@ -5,7 +5,7 @@
  * BACKLOG-4073 (founder D1, 2026-10-29) switched the desktop primary from
  * #007AFF to the kit's sky blue, so desktop and kit pieces share one blue.
  *
- * Compiles the real src/index.css (theme import included) with the real
+ * Compiles the real src/index.css (theme import inlined) with the real
  * tailwind.config.js and asserts on the emitted CSS:
  *   - bg-primary / text-primary read the kit variable, hsl(var(--primary));
  *   - the LAST `:root` --primary is the kit's 200 98% 39% (#0284c7), so no
@@ -22,19 +22,25 @@
 import fs from "fs";
 import path from "path";
 import postcss from "postcss";
-import postcssImport from "postcss-import";
 import tailwindcss from "tailwindcss";
 
 const ROOT = path.resolve(__dirname, "..");
 const INDEX_CSS = path.join(ROOT, "src/index.css");
+const THEME_IMPORT = '@import "../packages/ui/src/styles/theme.css";';
+const THEME_CSS = path.join(ROOT, "packages/ui/src/styles/theme.css");
 
 let css = "";
 
 beforeAll(async () => {
+  // Inline the theme import the way the bundler does, so the kit's :root
+  // variables come first and anything index.css sets later wins.
+  const index = fs.readFileSync(INDEX_CSS, "utf8");
+  expect(index.indexOf(THEME_IMPORT)).toBeGreaterThanOrEqual(0);
+  expect(index.indexOf(THEME_IMPORT)).toBeLessThan(index.indexOf("@tailwind base;"));
+  const source = index.replace(THEME_IMPORT, fs.readFileSync(THEME_CSS, "utf8"));
   const result = await postcss([
-    postcssImport(),
     tailwindcss({ config: path.join(ROOT, "tailwind.config.js") }),
-  ]).process(fs.readFileSync(INDEX_CSS, "utf8"), { from: INDEX_CSS });
+  ]).process(source, { from: INDEX_CSS });
   css = result.css;
 }, 60_000);
 
