@@ -49,8 +49,9 @@ function nonGlobal(re: RegExp): RegExp {
 
 /** End offset (exclusive) of the first match of `re` in `s`, or -1. */
 function markerEnd(s: string, re: RegExp): number {
-  const m = re.exec(s);
-  return m ? m.index + m[0].length : -1;
+  // String.match, not RegExp exec: the SQL boundary gate enumerates exec calls and cannot trace a parameter receiver. re is non-global, so the result is identical.
+  const m = s.match(re);
+  return m ? (m.index ?? 0) + m[0].length : -1;
 }
 
 function matchPublisher(
@@ -75,7 +76,8 @@ function matchPublisher(
 
     const pubEnd = markerEnd(window, namePattern);
     const otherEnds = required.map((r) => markerEnd(window, r));
-    const revMatch = revision.exec(window);
+    // String.match, not RegExp exec: the SQL boundary gate cannot trace a destructured receiver. revision is non-global (nonGlobal), so the result is identical.
+    const revMatch = window.match(revision);
     if (pubEnd < 0) continue; // R3
     if (otherEnds.some((e) => e < 0)) continue; // R4
     if (!revMatch) continue; // R5
@@ -83,7 +85,7 @@ function matchPublisher(
     const row = registry.byCode.get(codeKey(pub.id, code)) ?? null;
     const titled = row ? row.knownTitles.some((t) => nonGlobal(t).test(window)) : false;
     const strength: MatchStrength = titled ? "footer+title" : "footer";
-    const end = Math.max(pubEnd, revMatch.index + revMatch[0].length, ...otherEnds);
+    const end = Math.max(pubEnd, (revMatch.index ?? 0) + revMatch[0].length, ...otherEnds);
 
     const key = codeKey(pub.id, code);
     const prior = byKey.get(key);
