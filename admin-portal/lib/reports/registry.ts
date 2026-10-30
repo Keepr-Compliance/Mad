@@ -49,7 +49,7 @@ export const REPORTS: ReportEntry[] = [
     slug: 'exports',
     title: 'Exports',
     description:
-      'How many exports each user ran in the period, how many were unique deals, in which formats, and when.',
+      'How many exports each user ran in the period, how many were unique exports (each user and deal counted once), in which formats, and when.',
     source: 'analytics_events (export-completed)',
     permission: PERMISSIONS.ANALYTICS_VIEW,
   },

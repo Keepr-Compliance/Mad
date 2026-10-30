@@ -77,8 +77,8 @@ export default async function ExportsReportPage({
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Exports</h1>
             <p className="text-sm text-gray-500">
-              How many exports each user ran in the selected period, how many were unique deals, in
-              which formats, and when.
+              How many exports each user ran in the selected period, how many were unique exports
+              (each user and deal counted once), in which formats, and when.
             </p>
           </div>
         </div>
