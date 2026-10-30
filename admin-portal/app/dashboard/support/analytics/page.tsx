@@ -1,21 +1,29 @@
 'use client';
 
 /**
- * Support Analytics Page
+ * Support Analytics Page (BACKLOG-3651)
  *
- * Displays aggregate support metrics:
- * - Summary cards: Total Open, Closed (period), Avg Response Time, Avg Resolution Time
- * - Period selector: Last 7 / 30 / 90 days
+ * Numbers are computed in app code from support_tickets (lib/reports/support-sla.ts):
+ * - Summary cards: Open now, Created / Resolved in period, Avg first response, Avg resolution
+ * - Period selector: Last 7 / 30 / 90 days (applies to every number except "Open now")
  * - Agent performance table: sortable columns
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Inbox, CheckCircle2, Clock, Timer, ArrowUpDown } from 'lucide-react';
+import { Inbox, CheckCircle2, Clock, Timer, PlusCircle, ArrowUpDown } from 'lucide-react';
 import { PageHeader, StatCard } from '@keepr/design-system';
-import { getAgentAnalytics } from '@/lib/support-queries';
-import type { AgentAnalyticsResponse, AgentAnalytics } from '@/lib/support-types';
+import { createClient } from '@/lib/supabase/client';
+import {
+  buildSupportSlaReport,
+  formatDuration,
+  READ_FAILED_MESSAGE,
+  lastDays,
+  type SupportSlaAgentRow,
+  type SupportSlaReport,
+} from '@/lib/reports/support-sla';
+import { getAgentUsers, getOpenTicketCount, getSupportTickets } from '@/lib/reports/support-sla-queries';
 
-type SortField = 'agent_name' | 'open_tickets' | 'closed_tickets' | 'avg_first_response_minutes' | 'avg_resolution_minutes';
+type SortField = 'name' | 'openNow' | 'resolvedInPeriod' | 'avgFirstResponseMinutes' | 'avgResolutionMinutes';
 type SortDir = 'asc' | 'desc';
 
 const PERIOD_OPTIONS = [
@@ -24,32 +32,36 @@ const PERIOD_OPTIONS = [
   { label: 'Last 90 days', value: 90 },
 ];
 
-function formatDuration(minutes: number | null): string {
-  if (minutes === null || minutes === 0) return '-';
-  if (minutes < 60) return `${Math.round(minutes)}m`;
-  const hours = Math.floor(minutes / 60);
-  const mins = Math.round(minutes % 60);
-  if (hours < 24) return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
-  const days = Math.floor(hours / 24);
-  const remainHours = hours % 24;
-  return remainHours > 0 ? `${days}d ${remainHours}h` : `${days}d`;
-}
-
 export default function SupportAnalyticsPage() {
-  const [data, setData] = useState<AgentAnalyticsResponse | null>(null);
+  const [data, setData] = useState<SupportSlaReport | null>(null);
+  const [truncated, setTruncated] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [periodDays, setPeriodDays] = useState(30);
-  const [sortField, setSortField] = useState<SortField>('closed_tickets');
+  const [sortField, setSortField] = useState<SortField>('resolvedInPeriod');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
 
   const loadAnalytics = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const result = await getAgentAnalytics(periodDays);
-      setData(result);
+      const supabase = createClient();
+      const period = lastDays(periodDays, new Date());
+      const [tickets, openCount] = await Promise.all([
+        getSupportTickets(supabase, period),
+        getOpenTicketCount(supabase),
+      ]);
+      if (tickets.failed) {
+        setData(null);
+        setTruncated(false);
+        setError(READ_FAILED_MESSAGE);
+        return;
+      }
+      const users = await getAgentUsers(supabase, tickets.rows);
+      setData(buildSupportSlaReport(tickets.rows, users, period, openCount));
+      setTruncated(tickets.truncated);
     } catch (err) {
+      setData(null);
       setError(err instanceof Error ? err.message : 'Failed to load analytics');
     } finally {
       setLoading(false);
@@ -69,7 +81,7 @@ export default function SupportAnalyticsPage() {
     }
   }
 
-  const sortedAgents = data?.agents
+  const sortedAgents: SupportSlaAgentRow[] = data?.agents
     ? [...data.agents].sort((a, b) => {
         const aVal = a[sortField] ?? 0;
         const bVal = b[sortField] ?? 0;
@@ -80,31 +92,40 @@ export default function SupportAnalyticsPage() {
       })
     : [];
 
+  const blank = !data;
   const summaryCards = [
     {
-      label: 'Total Open',
-      value: data?.summary.total_open ?? 0,
+      label: 'Open now',
+      value: data?.summary.openNow ?? null,
       format: 'number' as const,
       icon: Inbox,
       hue: 'blue' as const,
     },
     {
-      label: `Closed (${periodDays}d)`,
-      value: data?.summary.closed_in_period ?? 0,
+      label: `Created (${periodDays}d)`,
+      value: data?.summary.createdInPeriod ?? null,
+      format: 'number' as const,
+      icon: PlusCircle,
+      hue: null,
+      color: 'text-gray-600 bg-gray-100',
+    },
+    {
+      label: `Resolved (${periodDays}d)`,
+      value: data?.summary.resolvedInPeriod ?? null,
       format: 'number' as const,
       icon: CheckCircle2,
       hue: 'green' as const,
     },
     {
-      label: 'Avg Response Time',
-      value: data?.summary.avg_first_response_minutes ?? null,
+      label: `Avg first response (${periodDays}d)`,
+      value: data?.summary.avgFirstResponseMinutes ?? null,
       format: 'duration' as const,
       icon: Clock,
       hue: 'yellow' as const,
     },
     {
-      label: 'Avg Resolution Time',
-      value: data?.summary.avg_resolution_minutes ?? null,
+      label: `Avg resolution (${periodDays}d)`,
+      value: data?.summary.avgResolutionMinutes ?? null,
       format: 'duration' as const,
       icon: Timer,
       hue: null,
@@ -117,7 +138,7 @@ export default function SupportAnalyticsPage() {
       {/* Header */}
       <PageHeader
         title="Support Analytics"
-        subtitle="Team performance and ticket metrics"
+        subtitle="Open now counts new, assigned, in progress and pending tickets. Deleted tickets are never counted."
         actions={
           <select
             value={periodDays}
@@ -142,15 +163,21 @@ export default function SupportAnalyticsPage() {
         </div>
       )}
 
+      {truncated && (
+        <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
+          More tickets match this period than could be read. Every number except Open now may be too low.
+        </div>
+      )}
+
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-6">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5 mb-6">
         {summaryCards.map((card) => {
           const Icon = card.icon;
-          const display = loading
+          const display = loading || blank
             ? '-'
             : card.format === 'duration'
               ? formatDuration(card.value as number | null)
-              : card.value;
+              : (card.value ?? 0);
           if (card.hue) {
             return (
               <StatCard
@@ -203,11 +230,11 @@ export default function SupportAnalyticsPage() {
               <thead className="bg-gray-50">
                 <tr>
                   {([
-                    ['agent_name', 'Agent'],
-                    ['open_tickets', 'Open'],
-                    ['closed_tickets', 'Closed'],
-                    ['avg_first_response_minutes', 'Avg First Response'],
-                    ['avg_resolution_minutes', 'Avg Resolution'],
+                    ['name', 'Agent'],
+                    ['openNow', 'Open now'],
+                    ['resolvedInPeriod', `Resolved (${periodDays}d)`],
+                    ['avgFirstResponseMinutes', 'Avg First Response'],
+                    ['avgResolutionMinutes', 'Avg Resolution'],
                   ] as [SortField, string][]).map(([field, label]) => (
                     <th
                       key={field}
@@ -224,18 +251,20 @@ export default function SupportAnalyticsPage() {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {sortedAgents.map((agent) => (
-                  <tr key={agent.agent_id} className="hover:bg-gray-50">
+                  <tr key={agent.agentId} className="hover:bg-gray-50">
                     <td className="px-4 py-3 text-sm text-gray-900 font-medium">
-                      <div>{agent.agent_name}</div>
-                      <div className="text-xs text-gray-500">{agent.agent_email}</div>
+                      <div>{agent.name}</div>
+                      {agent.email && agent.email !== agent.name && (
+                        <div className="text-xs text-gray-500">{agent.email}</div>
+                      )}
                     </td>
-                    <td className="px-4 py-3 text-sm text-gray-900">{agent.open_tickets}</td>
-                    <td className="px-4 py-3 text-sm text-gray-900">{agent.closed_tickets}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900">{agent.openNow}</td>
+                    <td className="px-4 py-3 text-sm text-gray-900">{agent.resolvedInPeriod}</td>
                     <td className="px-4 py-3 text-sm text-gray-900">
-                      {formatDuration(agent.avg_first_response_minutes)}
+                      {formatDuration(agent.avgFirstResponseMinutes)}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-900">
-                      {formatDuration(agent.avg_resolution_minutes)}
+                      {formatDuration(agent.avgResolutionMinutes)}
                     </td>
                   </tr>
                 ))}

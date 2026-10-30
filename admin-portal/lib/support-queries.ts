@@ -23,7 +23,6 @@ import type {
   SupportTicketParticipant,
   SupportResponseTemplate,
   ParticipantRole,
-  AgentAnalyticsResponse,
   RelatedTicketsResponse,
   TicketLinkSearchResult,
   RequesterSearchResult,
@@ -453,17 +452,6 @@ export async function getRequesterRecentTickets(email: string): Promise<RecentTi
   });
   if (error) throw error;
   return (data ?? []) as unknown as RecentTicket[];
-}
-
-// --- Analytics functions ---
-
-export async function getAgentAnalytics(periodDays: number = 30): Promise<AgentAnalyticsResponse> {
-  const supabase = createClient();
-  const { data, error } = await supabase.rpc('support_agent_analytics', {
-    p_period_days: periodDays,
-  });
-  if (error) throw error;
-  return data as unknown as AgentAnalyticsResponse;
 }
 
 // --- Bulk update functions (TASK-2292) ---
