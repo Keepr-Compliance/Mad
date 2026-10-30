@@ -105,6 +105,8 @@ export interface DropdownOptionsProps<V extends string = string> {
   onTabOut?: () => void;
   /** 'default' = desktop popover rows (min-h-9 text-sm); 'comfortable' = phone sheet rows (min-h-12 text-base). */
   size?: 'default' | 'comfortable';
+  /** Fill the parent's height: the list takes the remaining space and scrolls inside it (fixed-height phone sheet). */
+  fill?: boolean;
   className?: string;
 }
 

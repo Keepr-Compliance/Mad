@@ -42,6 +42,7 @@ export function DropdownOptions<V extends string = string>({
   autoFocus = false,
   onTabOut,
   size = 'default',
+  fill = false,
   className,
 }: DropdownOptionsProps<V>) {
   const baseId = React.useId();
@@ -168,7 +169,7 @@ export function DropdownOptions<V extends string = string>({
   return (
     <div
       data-slot="dropdown-options"
-      className={cn('overflow-hidden rounded-lg border border-gray-200', className)}
+      className={cn('overflow-hidden rounded-lg border border-gray-200', fill && 'flex h-full min-h-0 flex-col', className)}
     >
       {searchable ? (
         <div
@@ -219,7 +220,10 @@ export function DropdownOptions<V extends string = string>({
         tabIndex={searchable ? -1 : 0}
         aria-activedescendant={searchable ? undefined : activeId}
         onKeyDown={searchable ? undefined : onKeyDown}
-        className="max-h-60 divide-y divide-gray-100 overflow-y-auto focus:outline-none"
+        className={cn(
+          'divide-y divide-gray-100 overflow-y-auto focus:outline-none',
+          fill ? (rows.length > 0 ? 'min-h-0 flex-1' : 'flex-none') : 'max-h-60'
+        )}
       >
         {rows.map((row) => {
           if (row.kind !== 'option') return null;
@@ -289,6 +293,7 @@ export function DropdownOptions<V extends string = string>({
           data-slot="dropdown-empty"
           className={cn(
             'flex items-center justify-center px-3 text-gray-500',
+            fill && 'flex-1',
             comfortable ? 'min-h-12 text-base' : 'min-h-9 text-sm'
           )}
         >

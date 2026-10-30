@@ -199,6 +199,7 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
           onOpenChange={(next) => (next ? openPanel() : close(false))}
           title={nameText ?? ''}
           returnFocusRef={triggerRef}
+          fixedHeight
         >
           <DropdownOptions<V>
             options={options}
@@ -214,6 +215,7 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
             query={query}
             onQueryChange={setQuery}
             size="comfortable"
+            fill
             autoFocus
           />
         </BottomSheet>

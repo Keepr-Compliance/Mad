@@ -212,3 +212,36 @@ describe('Filter-bar recipe (README "Phone")', () => {
     expect(document.activeElement).toBe(button);
   });
 });
+
+/** BACKLOG-4032 fix-up: the sheet keeps one height while the search filters. */
+describe('Dropdown sheet keeps a fixed height while searching', () => {
+  const sig = (el: HTMLElement) => `${el.className}|${el.getAttribute('style') ?? ''}`;
+
+  it('H1 sheet class and style are identical unfiltered, with 1 result and with no match', async () => {
+    render(<SheetField onChange={jest.fn()} />);
+    await userEvent.click(trigger());
+    await settle();
+    const dialog = sheet()!;
+    const before = sig(dialog);
+    expect(dialog.className).toContain('h-[min(80vh,40rem)]');
+    const search = screen.getByRole('combobox', { name: 'Search Role' });
+    await userEvent.type(search, 'view');
+    expect(screen.getAllByRole('option', { hidden: true })).toHaveLength(1);
+    expect(sig(sheet()!)).toBe(before);
+    await userEvent.clear(search);
+    await userEvent.type(search, 'zzz');
+    expect(screen.queryAllByRole('option', { hidden: true })).toHaveLength(0);
+    expect(sig(sheet()!)).toBe(before);
+  });
+
+  it('H2 the no-match text renders inside the same sheet; the list scrolls inside it (no max-h-60 cap)', async () => {
+    render(<SheetField onChange={jest.fn()} />);
+    await userEvent.click(trigger());
+    await settle();
+    const list = screen.getByRole('listbox', { hidden: true });
+    expect(list.className).not.toContain('max-h-60');
+    expect(list.className).toContain('flex-1');
+    await userEvent.type(screen.getByRole('combobox', { name: 'Search Role' }), 'zzz');
+    expect(within(sheet()!).getByText(/no/i, { selector: '[data-slot="dropdown-empty"]' })).toBeInTheDocument();
+  });
+});
