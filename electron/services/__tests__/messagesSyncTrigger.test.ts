@@ -37,7 +37,12 @@ jest.mock("../messagesBackgroundImportSignal", () => ({
   emitBackgroundImportFinished: jest.fn(),
 }));
 // BACKLOG-3892 W1: the Mac end-of-sync marker, written only by a COMPLETED import.
-jest.mock("../macImportMarker", () => ({ recordMacImportRun: jest.fn() }));
+// BACKLOG-4066: the READER is the real one, so the marker the trigger sees is the
+// row in message_source_coverage below.
+jest.mock("../macImportMarker", () => ({
+  ...jest.requireActual<typeof import("../macImportMarker")>("../macImportMarker"),
+  recordMacImportRun: jest.fn(),
+}));
 jest.mock("../autoLinkService", () => ({
   __esModule: true,
   expandAttachedThreadsForUser: jest.fn().mockResolvedValue({ messagesLinked: 0, errors: 0 }),
@@ -53,6 +58,7 @@ jest.mock("../auditCoverageService", () => {
 });
 
 import { setDb } from "../db/core/dbConnection";
+import { SOURCE_COVERAGE_UPSERT_SQL } from "../db/auditCoverageSql";
 import { recordMacImportRun } from "../macImportMarker";
 import macOSMessagesImportService from "../macOSMessagesImportService";
 import { expandAttachedThreadsForUser } from "../autoLinkService";
@@ -98,6 +104,10 @@ function makeDb(): DatabaseType {
     CREATE TABLE message_import_state (
       user_id TEXT PRIMARY KEY, last_import_at DATETIME, last_expansion_at DATETIME,
       deepest_import_start DATETIME, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE message_source_coverage (
+      user_id TEXT NOT NULL, source TEXT NOT NULL, covered_since DATETIME,
+      last_sync_at DATETIME, PRIMARY KEY (user_id, source)
     );
   `);
   return d;
@@ -479,5 +489,52 @@ describe("BACKLOG-2772: a main-initiated import announces itself", () => {
     expect(importMessages).not.toHaveBeenCalled();
     expect(startedMock).not.toHaveBeenCalled();
     expect(finishedMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("BACKLOG-4066: an Update click fetches newer texts (real marker row)", () => {
+  /** The marker as the real import writes it: SOURCE_COVERAGE_UPSERT_SQL, Mac row. */
+  function writeMacMarker(lastSyncISO: string) {
+    db.prepare(SOURCE_COVERAGE_UPSERT_SQL).run(USER, "mac", null, lastSyncISO);
+  }
+  const daysAgo = (n: number) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
+
+  it("'update', start covered, marker 20 days old -> ONE delta import, skipped undefined", async () => {
+    insMsg("m1", "2026-01-01T00:00:00.000Z"); // floor, before the start
+    writeMacMarker(daysAgo(20));
+    const result = await ensureTransactionMessagesSynced({
+      userId: USER,
+      reason: "update",
+      proposedStartISO: "2026-06-01T00:00:00.000Z",
+    });
+    expect(importMessages).toHaveBeenCalledTimes(1);
+    expect(planOf(0).mode).toBe("delta");
+    expect(recordMacImportRun).toHaveBeenCalledTimes(1);
+    expect(result.importRan).toBe(true);
+    expect(result.skipped).toBeUndefined();
+  });
+
+  it("CONTROL: 'date-change' with the same stale marker -> NO import", async () => {
+    insMsg("m1", "2026-01-01T00:00:00.000Z");
+    writeMacMarker(daysAgo(20));
+    const result = await ensureTransactionMessagesSynced({
+      userId: USER,
+      reason: "date-change",
+      proposedStartISO: "2026-06-01T00:00:00.000Z",
+    });
+    expect(importMessages).not.toHaveBeenCalled();
+    expect(result.skipped).toBe("covered");
+  });
+
+  it("CONTROL: 'update' with a marker 2 hours old -> NO import", async () => {
+    insMsg("m1", "2026-01-01T00:00:00.000Z");
+    writeMacMarker(new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString());
+    const result = await ensureTransactionMessagesSynced({
+      userId: USER,
+      reason: "update",
+      proposedStartISO: "2026-06-01T00:00:00.000Z",
+    });
+    expect(importMessages).not.toHaveBeenCalled();
+    expect(result.skipped).toBe("covered");
   });
 });
