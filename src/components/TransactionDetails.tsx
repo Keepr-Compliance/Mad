@@ -12,6 +12,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { logAfterNextPaint, logOpenPath, nowMs } from "../utils/openPathTiming";
 import { getRendererStallPhase, setRendererStallPhase } from "../utils/rendererStallLogger";
+import { registerOpenTransaction } from "../utils/openTransactionRegistry";
 import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import type { Transaction } from "@/types";
 import { transactionService } from '../services';
@@ -134,6 +135,10 @@ function TransactionDetails({
   useEffect(() => {
     setTransaction(transactionProp);
   }, [transactionProp]);
+
+  // BACKLOG-4065: support tickets carry the id of the open transaction.
+  // Id only; the returned cleanup removes this mount's own entry.
+  useEffect(() => registerOpenTransaction(transaction.id), [transaction.id]);
 
   // BACKLOG-3884: open-path timing in main.log — mount -> first paint, and
   // mount -> the Overview contacts painted. A renderer stall in between is

@@ -27,6 +27,39 @@ interface CreateTicketParams {
   category_id: string | null;
   requester_email: string;
   requester_name: string;
+  /** BACKLOG-4065: id of the transaction open when the ticket was sent. */
+  open_transaction_id?: string | null;
+}
+
+/** Whole-string UUID match (same pattern as utils/validation.ts). */
+const OPEN_TRANSACTION_ID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * BACKLOG-4065: append the open transaction's id to the ticket description.
+ * The value comes from the renderer, so only a strict UUID string is used.
+ * Anything else is dropped quietly (never throws: the ticket must still be
+ * sent), and only the value's type is logged.
+ */
+function appendOpenTransactionToDescription(
+  description: string,
+  openTransactionId: unknown
+): string {
+  if (openTransactionId === undefined || openTransactionId === null) {
+    return description;
+  }
+  if (
+    typeof openTransactionId !== "string" ||
+    !OPEN_TRANSACTION_ID_PATTERN.test(openTransactionId)
+  ) {
+    logService.warn(
+      "[Support] Invalid open_transaction_id ignored",
+      "SupportTicketHandlers",
+      { type: typeof openTransactionId }
+    );
+    return description;
+  }
+  return `${description}\n\nOpen transaction: ${openTransactionId}`;
 }
 
 /**
@@ -119,9 +152,11 @@ export function registerSupportTicketHandlers(): void {
       // sanitized by the collector; the composer only reads status/versions/
       // counts (never raw errors, UDID/serial, or tokens). The diagnostics.json
       // attachment path below is unchanged (belt-and-suspenders).
-      const descriptionWithDiagnostics = appendDiagnosticsToDescription(
-        params.description,
-        diagnosticsData
+      // BACKLOG-4065: composed after the diagnostics block so the line is kept
+      // when diagnostics are null.
+      const descriptionWithDiagnostics = appendOpenTransactionToDescription(
+        appendDiagnosticsToDescription(params.description, diagnosticsData),
+        params.open_transaction_id
       );
 
       // Step 1: Create the ticket
