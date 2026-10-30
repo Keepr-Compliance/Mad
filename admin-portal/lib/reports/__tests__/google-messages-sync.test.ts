@@ -208,7 +208,7 @@ describe('the query (R5–R7)', () => {
 
 describe('registry and saved views (R8)', () => {
   it('both reports are listed, each with its own slug; the iPhone saved views keep their key', () => {
-    expect(REPORTS.map((r) => r.slug)).toEqual(['iphone-sync', 'google-messages-sync', 'submissions', 'exports']);
+    expect(REPORTS.map((r) => r.slug)).toEqual(['iphone-sync', 'google-messages-sync', 'submissions', 'exports', 'user-activity']);
     expect(REPORT_KEY).toBe('iphone-sync');
   });
 });
