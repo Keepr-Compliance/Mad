@@ -20,9 +20,12 @@
  *       of the real wait samples -> no notice
  *  N3   unknown is never suspended; 3 unknowns stop the check with one log line
  *  N4   the streak: a running sample or a byte resets it
- *  N5   the notice comes down on a byte or a running sample, and comes back on a second
- *       suspension without a second Sentry event; a late answer after Cancel is ignored;
- *       a probe that never answers is not doubled
+ *  N5   the notice comes down on a byte (NOT on a running sample: BACKLOG-4060), and
+ *       comes back on a second suspension without a second Sentry event; a late answer
+ *       after Cancel is ignored; a probe that never answers is not doubled
+ *  F1   BACKLOG-4060, the founder's P2: frozen once, S<T samples in between -> one
+ *       notice, never cleared, no probe after it, held to the watchdog
+ *  R4   the run's probe count is logged once, including on the cap and the unknown limit
  *  N8   gates: before the first byte, with idle chatter, with handling off (the macOS
  *       path), and after close / Cancel / the watchdog -> the probe is never called
  *  N9   a 1,140 s silent wait that then delivers is not stopped and gets no notice
@@ -105,6 +108,12 @@ const SUSPENDED = parseThreadStateOutput("T=6 S=6" + CRLF);
 const RUNNING = parseThreadStateOutput("T=6 S=0" + CRLF);
 const WAIT_SAMPLES = ["T=5 S=0", "T=3 S=0", "T=4 S=0", "T=2 S=0"].map((l) => parseThreadStateOutput(l + CRLF));
 const UNKNOWN = parseThreadStateOutput("Get-Process : Access is denied" + CRLF);
+// BACKLOG-4060: "T=3 S=3" is the founder's P2 shape (pm_comments 4779e55c). The two break
+// samples are shapes the real parser accepts; what Windows returns for a frozen process
+// between all-suspended samples is UNTRACED (the per-probe line was debug-level then).
+const FROZEN3 = parseThreadStateOutput("T=3 S=3" + CRLF);
+const EXTRA_THREAD = parseThreadStateOutput("T=4 S=3" + CRLF);
+const EMPTY = parseThreadStateOutput("T=0 S=0" + CRLF);
 
 const IDLE_LINE = "idevice_connection_receive_timeout(): ret -7\n";
 const PROGRESS_BAR = "[=====                ] 25% (1.0 MB/4.0 MB)\n";
@@ -171,6 +180,12 @@ const suspendedSentry = () => mockCaptureMessage.mock.calls.filter((c) => c[0] =
 /** Killed by either path: proc.kill (macOS) or taskkill /T, which goes first on Windows (BACKLOG-3996). */
 const killed = (run: Run) =>
   run.proc.kill.mock.calls.length > 0 || mockSpawn.mock.calls.some((c) => String(c[0]).toLowerCase().includes("taskkill"));
+const runEndLines = () => logLines.filter((l) => /thread-state probe: \d+ probe\(s\) this run; stopped/.test(l));
+/** Frozen throughout; probe numbers (1-based) in `breaks` answer `brk` instead. */
+function frozenWithBreaks(breaks: number[], brk: ThreadStateSample = EXTRA_THREAD): jest.Mock {
+  let n = 0;
+  return jest.fn(async () => (breaks.includes(++n) ? brk : FROZEN3));
+}
 const backupSpawns = () => mockSpawn.mock.calls.filter((c) => String(c[0]).includes("idevicebackup2"));
 
 async function finish(run: Run, code: number | null = 1): Promise<BackupResult> {
@@ -258,6 +273,8 @@ describe("N3: unknown is never suspended", () => {
     expect(run.probe).toHaveBeenCalledTimes(3);
     expect(logLines.filter((l) => l.includes("thread-state probe unavailable") && l.includes("not checking again this run"))).toHaveLength(1);
     await finish(run);
+    // BACKLOG-4060: the limit ends through stopSuspendWatch, so the count line is written once.
+    expect(runEndLines()).toEqual(["[BackupService] thread-state probe: 3 probe(s) this run; stopped (probe unavailable)"]);
   });
 
   it("unknowns between suspended samples break the streak", async () => {
@@ -313,12 +330,15 @@ describe("N5: the notice comes down, and comes back", () => {
     await finish(run);
   });
 
-  it("a running sample takes it down", async () => {
+  it("BACKLOG-4060: a running sample does NOT take it down, and no probe runs after the notice", async () => {
     const run = await start({ probe: sequence(SUSPENDED, SUSPENDED, SUSPENDED, RUNNING) });
     byte(run);
-    await advance(155_000);
-    expect(run.suspended).toHaveLength(1);
-    expect(run.resumed).toEqual([150_000]);
+    await advance(10 * 60_000);
+    expect(run.suspended.map((s) => s.at)).toEqual([120_000]);
+    expect(run.resumed).toEqual([]);
+    expect(logLines.some((l) => l.includes("idevicebackup2 is running again"))).toBe(false);
+    // The 4th (running) sample is never asked for.
+    expect(run.probe).toHaveBeenCalledTimes(3);
     await finish(run);
   });
 
@@ -348,6 +368,46 @@ describe("N5: the notice comes down, and comes back", () => {
     byte(run);
     await advance(5 * 60_000);
     expect(run.probe).toHaveBeenCalledTimes(1);
+    await finish(run);
+  });
+});
+
+describe("F1 (BACKLOG-4060): frozen once, never resumed, S<T samples in between", () => {
+  it("founder P2 shape (breaks at probes 5-8, 15, 17, 32, 35): one notice, never cleared, held to the watchdog", async () => {
+    const run = await start({ probe: frozenWithBreaks([5, 6, 7, 8, 15, 17, 32, 35]) });
+    byte(run);
+    await advance(30 * 60_000 + 1_000);
+    expect(run.suspended.map((s) => s.at)).toEqual([120_000]);
+    expect(run.resumed).toEqual([]);
+    // Probing stops at the notice: 3 probes, not 40, and the cap is never reached.
+    expect(run.probe).toHaveBeenCalledTimes(3);
+    expect(logLines.some((l) => l.includes("probe-cap") || l.includes("reached"))).toBe(false);
+    run.proc.emit("close", null);
+    const r = await run.result;
+    expect(r.errorCode).toBe("BACKUP_TIMEOUT");
+    expect(r.toolSuspendedAtTimeout).toBe(true);
+  });
+
+  it("T=0 S=0 breaks: held to the watchdog", async () => {
+    const run = await start({ probe: frozenWithBreaks([5, 15, 32], EMPTY) });
+    byte(run);
+    await advance(30 * 60_000 + 1_000);
+    expect(run.suspended).toHaveLength(1);
+    expect(run.resumed).toEqual([]);
+    expect(run.probe).toHaveBeenCalledTimes(3);
+    run.proc.emit("close", null);
+    expect((await run.result).toolSuspendedAtTimeout).toBe(true);
+  });
+
+  it("a real resume still clears: a byte after the notice clears at once; a refreeze shows it again", async () => {
+    const run = await start({ probe: jest.fn(async () => FROZEN3) });
+    byte(run);
+    await advance(125_000);
+    expect(run.suspended).toHaveLength(1);
+    byte(run);
+    expect(run.resumed).toEqual([125_000]);
+    await advance(180_000);
+    expect(run.suspended.map((s) => s.at)).toEqual([120_000, 270_000]);
     await finish(run);
   });
 });
@@ -475,5 +535,21 @@ describe("R4: the run's probe count is logged", () => {
     await finish(run);
     expect(logLines).toContain("[BackupService] thread-state probe: 3 probe(s) this run; stopped (closed)");
     expect(logLines.filter((l) => /thread-state probe \d: T=6 S=0 in \d+ ms/.test(l))).toHaveLength(3);
+  });
+
+  it("BACKLOG-4060: the 40-probe cap ends through stopSuspendWatch: one count line, then no probe", async () => {
+    // Alternating samples keep the interval at 30 s and never make a streak of 3.
+    let n = 0;
+    const run = await start({ probe: jest.fn(async () => (++n % 2 === 1 ? SUSPENDED : RUNNING)) });
+    byte(run);
+    await advance(25 * 60_000); // probe 40 at 1,230 s; the cap at 1,260 s; the watchdog not yet
+    expect(run.probe).toHaveBeenCalledTimes(BackupService.SUSPEND_PROBE_MAX_PER_RUN);
+    expect(run.suspended).toEqual([]);
+    expect(runEndLines()).toEqual([
+      "[BackupService] thread-state probe: 40 probe(s) this run; stopped (reached the 40-probe cap)",
+    ]);
+    await finish(run);
+    expect(runEndLines()).toHaveLength(1);
+    expect(run.probe).toHaveBeenCalledTimes(40);
   });
 });
