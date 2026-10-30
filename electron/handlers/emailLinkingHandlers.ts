@@ -9,7 +9,7 @@ import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import transactionService from "../services/transactionService";
 import logService from "../services/logService";
-import { createEmailSync, getEmailById, getEmailByExternalId, getCachedEmails } from "../services/db/emailDbService";
+import { createEmailSync, getEmailById, getEmailByExternalIdSync, getCachedEmails } from "../services/db/emailDbService";
 import { createCommunicationSync, confirmEmailLinksByEmailIds } from "../services/db/communicationDbService";
 import { dbAll, dbTransaction } from "../services/db/core/dbConnection";
 import {
@@ -320,15 +320,17 @@ export function registerEmailLinkingHandlers(): void {
               try {
                 const email = await gmailFetchService.getEmailById(messageId);
 
-                // BACKLOG-506: Check if email already exists (dedup by external_id).
-                // BACKLOG-3221: the lookup stays outside the transaction (SR ruling).
-                const existing = await getEmailByExternalId(transaction.user_id, messageId);
-
                 // BACKLOG-3221: the email row (+ participants), the junction row
                 // and the thread-count update commit together or not at all.
                 // Only *Sync writers inside; createEmailSync's own transaction
                 // nests as a savepoint.
                 dbTransaction(() => {
+                  // BACKLOG-506: reuse the email if it already exists (dedup by
+                  // external_id, scoped to this user).
+                  // BACKLOG-2554: the lookup runs INSIDE the transaction, next to
+                  // the create, so two overlapping attaches of the same message
+                  // cannot both read "absent" and both create.
+                  const existing = getEmailByExternalIdSync(transaction.user_id, messageId);
                   // Create email in emails table (content store)
                   // BACKLOG-1722: pass `participants` so the junction is
                   // populated atomically (fetchService now builds them).
@@ -389,15 +391,17 @@ export function registerEmailLinkingHandlers(): void {
               try {
                 const email = await outlookFetchService.getEmailById(messageId);
 
-                // BACKLOG-506: Check if email already exists (dedup by external_id).
-                // BACKLOG-3221: the lookup stays outside the transaction (SR ruling).
-                const existing = await getEmailByExternalId(transaction.user_id, messageId);
-
                 // BACKLOG-3221: the email row (+ participants), the junction row
                 // and the thread-count update commit together or not at all.
                 // Only *Sync writers inside; createEmailSync's own transaction
                 // nests as a savepoint.
                 dbTransaction(() => {
+                  // BACKLOG-506: reuse the email if it already exists (dedup by
+                  // external_id, scoped to this user).
+                  // BACKLOG-2554: the lookup runs INSIDE the transaction, next to
+                  // the create, so two overlapping attaches of the same message
+                  // cannot both read "absent" and both create.
+                  const existing = getEmailByExternalIdSync(transaction.user_id, messageId);
                   // Create email in emails table (content store)
                   // BACKLOG-1722: pass `participants` so the junction is
                   // populated atomically (fetchService now builds them).
