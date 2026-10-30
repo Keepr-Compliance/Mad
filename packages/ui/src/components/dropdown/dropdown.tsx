@@ -4,11 +4,22 @@ import * as React from 'react';
 import { AlertCircle, ChevronDown } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { useClickOutside } from '../../lib/use-click-outside';
+import { BottomSheet } from '../phone/bottom-sheet';
 import { DropdownOptions } from './dropdown-options';
 import type { DropdownProps } from './types';
 
 /**
- * Dropdown (BACKLOG-4032 slice 1): searchable single-choice picker.
+ * Dropdown (BACKLOG-4032): searchable single-choice picker.
+ *
+ * `presentation="sheet"` (slice 2): the same field trigger opens a
+ * BottomSheet instead of the panel. The sheet is titled by the label, its rows
+ * are comfortable, a pick commits and closes, and focus returns to the trigger
+ * (BottomSheet `returnFocusRef`). Radix owns Escape and outside presses in
+ * sheet mode: the click-outside hook and the window Escape listener below run
+ * for the popover only, so one Escape closes the sheet (even with search
+ * text) and a tap on a row inside the portal is not an "outside" press.
+ *
+ * Popover:
  *
  * Inline popover (no portal, no new dependency): a `relative` wrapper and an
  * `absolute z-50` panel under the trigger. An `overflow-hidden` ancestor
@@ -53,8 +64,10 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
     invalid = false,
     error,
     disabled = false,
+    presentation = 'popover',
     className,
   } = props;
+  const sheet = presentation === 'sheet';
 
   const baseId = React.useId();
   const triggerId = id ?? `${baseId}-trigger`;
@@ -86,13 +99,13 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
   }, []);
 
   const closeFromOutside = React.useCallback(() => close(false), [close]);
-  useClickOutside(wrapperRef, closeFromOutside, open);
+  useClickOutside(wrapperRef, closeFromOutside, open && !sheet);
 
   // Escape: window capture, only while open (see header comment).
   const queryRef = React.useRef(query);
   queryRef.current = query;
   React.useEffect(() => {
-    if (!open) return;
+    if (!open || sheet) return;
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'Escape') return;
       e.stopPropagation();
@@ -102,7 +115,7 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
     }
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
-  }, [open, close]);
+  }, [open, sheet, close]);
 
   function onTriggerKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
     if (open) return;
@@ -115,7 +128,7 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
   const showError = invalid && Boolean(error);
 
   return (
-    <div ref={wrapperRef} data-slot="dropdown" className={cn('relative', className)}>
+    <div ref={wrapperRef} data-slot="dropdown" data-presentation={presentation} className={cn('relative', className)}>
       {label ? (
         <label id={labelId} htmlFor={triggerId} className="mb-1 block text-sm font-medium text-gray-700">
           {label}
@@ -131,7 +144,7 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
           id={triggerId}
           type="button"
           disabled={disabled}
-          aria-haspopup="listbox"
+          aria-haspopup={sheet ? 'dialog' : 'listbox'}
           aria-expanded={open}
           aria-labelledby={`${labelId} ${valueId}`}
           aria-invalid={invalid ? true : undefined}
@@ -154,7 +167,7 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
           </span>
           <ChevronDown className="h-4 w-4 flex-shrink-0 text-gray-500" aria-hidden="true" />
         </button>
-        {open ? (
+        {open && !sheet ? (
           <div
             data-slot="dropdown-panel"
             data-side={side}
@@ -180,6 +193,33 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
           </div>
         ) : null}
       </div>
+      {sheet ? (
+        <BottomSheet
+          open={open}
+          onOpenChange={(next) => (next ? openPanel() : close(false))}
+          title={nameText ?? ''}
+          returnFocusRef={triggerRef}
+          fixedHeight
+        >
+          <DropdownOptions<V>
+            options={options}
+            value={value}
+            onSelect={(v) => {
+              onChange(v);
+              close(false);
+            }}
+            ariaLabel={nameText ?? ''}
+            searchable={searchable}
+            searchPlaceholder={searchPlaceholder}
+            emptyText={emptyText}
+            query={query}
+            onQueryChange={setQuery}
+            size="comfortable"
+            fill
+            autoFocus
+          />
+        </BottomSheet>
+      ) : null}
       {showError ? (
         <p id={errorId} role="alert" className="mt-1 flex items-center gap-1.5 text-xs text-danger-600">
           <AlertCircle className="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
