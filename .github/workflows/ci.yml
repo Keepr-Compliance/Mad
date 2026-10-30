@@ -757,7 +757,7 @@ jobs:
   #
   # admin-portal resolves a DIFFERENT eslint than broker-portal: it pins
   # eslint ^9 + eslint.config.mjs (flat config) in its own nested node_modules,
-  # while the root tree carries eslint 8 + .eslintrc.js. `npm install` here
+  # while the root tree carries eslint 8 (broker-portal/.eslintrc.json). `npm install` here
   # honours the lockfile and creates that nested install, so this job gets
   # eslint 9. A git worktree that symlinks only the ROOT node_modules does not,
   # and `next lint` there fails with "Invalid Options: Unknown options:
