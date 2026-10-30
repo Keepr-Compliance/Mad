@@ -40,6 +40,7 @@ import {
   ORG_WITHOUT_PLAN_FEATURES,
   withFeature,
 } from '../../../fixtures/orgFeatures';
+import { BROKERAGE_ORG_POST } from '../../../helpers/postgrestEmulator';
 
 /** DERIVED from the transcribed no-plan base: the same org, able to submit. */
 const CAN_SUBMIT_FEATURES = withFeature(
@@ -85,7 +86,16 @@ function sessionClientStub(
 const TARGET_ORG_ID = '00000000-3079-4000-8000-000000000009';
 
 const ROWS: Record<string, unknown> = {
-  organization_members: { role: 'agent', organization_id: TARGET_ORG_ID },
+  // BACKLOG-3851: every membership row, ordered, in the PORTAL_MEMBERSHIP_SELECT
+  // shape (embed transcribed in helpers/postgrestEmulator.ts).
+  organization_members: [
+    {
+      role: 'agent',
+      organization_id: TARGET_ORG_ID,
+      license_status: 'active',
+      organizations: { ...BROKERAGE_ORG_POST, id: TARGET_ORG_ID },
+    },
+  ],
   users: {
     id: OTHER_USER_ID,
     email: 'jordan.lee@example.test',
@@ -110,6 +120,9 @@ function serviceClientStub() {
     for (const m of ['select', 'eq', 'in', 'order', 'limit']) q[m] = jest.fn(chain);
     q.maybeSingle = jest.fn(async () => ({ data: ROWS[table] ?? null, error: null }));
     q.single = q.maybeSingle;
+    // A list read (no maybeSingle): awaited directly.
+    q.then = (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>
+      Promise.resolve({ data: ROWS[table] ?? null, error: null }).then(res, rej);
     return q;
   });
   return { client: { from, auth: {} }, seen };

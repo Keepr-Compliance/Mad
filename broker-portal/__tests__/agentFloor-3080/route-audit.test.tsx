@@ -92,7 +92,10 @@ function canReviewSubmission(orgId: unknown): boolean {
   );
 }
 const mockRpc = jest.fn(async (name: string, args?: Record<string, unknown>) =>
-  name === 'can_edit_checklist_templates'
+  // BACKLOG-3853 PR-2B: no brokerage in this file is suspended.
+  name === 'org_billing_suspended'
+    ? { data: false, error: null }
+    : name === 'can_edit_checklist_templates'
     ? { data: canEditChecklistTemplates(args?.p_org_id), error: null }
     : name === 'can_create_own_checklist_templates'
       ? { data: canCreateOwnChecklistTemplates(args?.p_org_id), error: null }
@@ -135,6 +138,15 @@ jest.mock('@sentry/nextjs', () => ({
   addBreadcrumb: jest.fn(),
 }));
 jest.mock('next/cache', () => ({ revalidatePath: jest.fn() }));
+// BACKLOG-3851: a pass-through spy on the plan view every billing action acts
+// on, so a case can assert WHICH organization it resolved (the real function
+// runs; nothing is stubbed).
+const mockGetAgentPlanView = jest.fn();
+jest.mock('@/lib/billing/agentPlan', () => {
+  const actual = jest.requireActual('@/lib/billing/agentPlan');
+  mockGetAgentPlanView.mockImplementation(actual.getAgentPlanView);
+  return { ...actual, getAgentPlanView: (...a: unknown[]) => mockGetAgentPlanView(...a) };
+});
 // BACKLOG-3847: the billing page and actions read Agent prices from Stripe; no network.
 jest.mock('stripe', () => ({
   __esModule: true,
@@ -367,6 +379,11 @@ const REFUSED_PAGES: Record<string, PageEntry> = {
     invoke: async () => (await import('@/app/dashboard/settings/scim/page')).default(),
     refused: { notFound: true },
   },
+  // BACKLOG-4007 PR-3: the setup guide is for a brokerage's broker/admin only.
+  'app/dashboard/setup/page.tsx': {
+    invoke: async () => (await import('@/app/dashboard/setup/page')).default({ searchParams: Promise.resolve({}) }),
+    refused: { redirect: '/dashboard' },
+  },
 };
 
 /** The floor: open to every portal user. Scoping of their data is covered elsewhere. */
@@ -504,6 +521,17 @@ const REFUSED_ACTIONS: Record<string, ActionEntry> = {
     memberId: FIXTURE_INVITE_ID,
     organizationId: FIXTURE_BROKERAGE_ORG_ID,
   }),
+  // BACKLOG-3851: refused before set_member_license is called.
+  'lib/actions/memberLicense.ts#setMemberLicense': act(() => import('@/lib/actions/memberLicense'), 'setMemberLicense', {
+    memberId: TARGET_MEMBER_ID,
+    action: 'assign',
+  }),
+  // BACKLOG-3991: refused before set_member_name is called.
+  'lib/actions/memberName.ts#setMemberName': act(() => import('@/lib/actions/memberName'), 'setMemberName', {
+    memberId: TARGET_MEMBER_ID,
+    firstName: 'Audit',
+    lastName: 'Name',
+  }),
   'lib/actions/scim.ts#getScimFeatureStatus': act(scim, 'getScimFeatureStatus'),
   'lib/actions/scim.ts#generateScimToken': act(scim, 'generateScimToken', 'fixture'),
   'lib/actions/scim.ts#revokeScimToken': act(scim, 'revokeScimToken', 'token-3080'),
@@ -515,6 +543,30 @@ const REFUSED_ACTIONS: Record<string, ActionEntry> = {
   'lib/actions/scim.ts#getJitStatus': act(scim, 'getJitStatus'),
   'lib/actions/scim.ts#updateJitStatus': act(scim, 'updateJitStatus', true),
   'lib/actions/scim.ts#listScimSyncLogs': act(scim, 'listScimSyncLogs'),
+  // BACKLOG-4007 PR-3: the Billing step; broker/admin of the organization only.
+  'lib/actions/billingSetup.ts#completeBillingSetup': act(() => import('@/lib/actions/billingSetup'), 'completeBillingSetup', {
+    organizationId: FIXTURE_BROKERAGE_ORG_ID,
+    expectedVersion: 1,
+    acceptTerms: true,
+    contact: { who: 'me', phone: '2065550100' },
+    company: { legal_name: 'Audit LLC', address_line1: '1 Main', city: 'Seattle', region: 'WA', postal_code: '98101', country: 'US' },
+  }),
+  'lib/actions/billingSetup.ts#askAboutPrice': act(() => import('@/lib/actions/billingSetup'), 'askAboutPrice', FIXTURE_BROKERAGE_ORG_ID),
+  // BACKLOG-4007 PR-4: Org Settings > People; broker/admin of the organization only.
+  'lib/actions/orgContacts.ts#listOrgContacts': act(() => import('@/lib/actions/orgContacts'), 'listOrgContacts', FIXTURE_BROKERAGE_ORG_ID),
+  'lib/actions/orgContacts.ts#saveOrgContact': act(() => import('@/lib/actions/orgContacts'), 'saveOrgContact', FIXTURE_BROKERAGE_ORG_ID, {
+    role: 'office',
+    member_id: TARGET_MEMBER_ID,
+  }),
+  'lib/actions/orgContacts.ts#removeOrgContact': act(() => import('@/lib/actions/orgContacts'), 'removeOrgContact', FIXTURE_BROKERAGE_ORG_ID, TARGET_MEMBER_ID),
+  // BACKLOG-4007 People v2: "Invite new person" from People (admin / IT admin for an IT admin invite).
+  'lib/actions/orgContacts.ts#invitePerson': act(() => import('@/lib/actions/orgContacts'), 'invitePerson', FIXTURE_BROKERAGE_ORG_ID, {
+    slot: 'it',
+    email: 'it-3080@fixture.example.test',
+    firstName: '',
+    lastName: '',
+    phone: '',
+  }),
 };
 
 /**
@@ -613,6 +665,21 @@ const REFUSALS: Record<string, Outcome | Record<Persona, Outcome>> = {
   ),
   'lib/actions/inviteUser.ts#inviteUser': failed('Not authorized to invite users'),
   'lib/actions/resendInvite.ts#resendInvite': { returned: { success: false, error: 'Not authorized' } },
+  'lib/actions/memberLicense.ts#setMemberLicense': failed('Not authorized'),
+  'lib/actions/memberName.ts#setMemberName': failed('Not authorized'),
+  'lib/actions/billingSetup.ts#completeBillingSetup': {
+    returned: {
+      success: false,
+      code: 'not_authorized',
+      error: 'Only a broker or admin of this brokerage can finish billing setup.',
+      reload: false,
+    },
+  },
+  'lib/actions/billingSetup.ts#askAboutPrice': failed('Only a broker or admin of this brokerage can finish billing setup.'),
+  'lib/actions/orgContacts.ts#listOrgContacts': { returned: { ok: false, error: 'not_authorized' } },
+  'lib/actions/orgContacts.ts#saveOrgContact': { returned: { ok: false, error: 'not_authorized' } },
+  'lib/actions/orgContacts.ts#removeOrgContact': { returned: { ok: false, error: 'not_authorized' } },
+  'lib/actions/orgContacts.ts#invitePerson': { returned: { ok: false, error: 'not_authorized' } },
   'lib/actions/scim.ts#getScimFeatureStatus': { returned: { enabled: false } },
   'lib/actions/scim.ts#generateScimToken': NOT_AUTHORIZED_THROW,
   'lib/actions/scim.ts#revokeScimToken': NOT_AUTHORIZED_THROW,
@@ -667,6 +734,19 @@ const FLOOR_ACTIONS = [
   'lib/actions/mintDesktopSession.ts#mintDesktopSession',
   // BACKLOG-3543: verifies the access token it stores and binds the claim to its owner.
   'lib/actions/createTokenClaim.ts#createTokenClaim',
+  // BACKLOG-3991: verifies the access token and writes only that user's own names.
+  'lib/actions/syncDesktopIdpNames.ts#syncDesktopIdpNames',
+  // BACKLOG-4007 People v2: My Account phone; my_phone_get / my_phone_set touch only auth.uid()'s row.
+  'lib/actions/myPhone.ts#getMyPhone',
+  'lib/actions/myPhone.ts#setMyPhone',
+  // BACKLOG-4019: set_org_auto_renew with the user's session; the database admits only the
+  // brokerage's Admin and billing contact (42501 for everyone else), refused while suspended.
+  'lib/actions/autoRenew.ts#setAutoRenew',
+  // BACKLOG-3854: their own gate (lib/billing/orgActionContext.ts: flag, session, billingCapabilities
+  // with the real set-up), then broker_add_seats with the user's session (42501 unless an active
+  // Broker/Admin). An agent is refused before any Stripe call (__tests__/seats-3854).
+  'lib/actions/seats.ts#addSeats',
+  'lib/actions/billingPortal.ts#openBrokerageBillingPortal',
 ];
 
 /**
@@ -717,10 +797,19 @@ const RLS_GUARDED_HANDLERS = ['app/setup/consent/callback/route.ts'];
  * added here on purpose, where review sees it.
  */
 const KNOWN_ROUTE_HANDLERS = [
+  // BACKLOG-3863 PR-2: GET only, Bearer JWT (verifyBearerUser); reads the
+  // verified caller's own plan, no request-supplied ids. Display only.
+  'app/api/billing/plan-summary/route.ts',
   'app/api/cron/email-retry/route.ts',
   'app/api/cron/payment-reconcile/route.ts',
   'app/api/download/route.ts',
   'app/api/email/internal-invite/route.ts',
+  // BACKLOG-3851 PR-2c: POST only, x-api-secret callers only (the scim Edge
+  // Function); no session path, no request-supplied ids.
+  'app/api/email/seat-limit-reached/route.ts',
+  // BACKLOG-4027: POST only, x-api-secret callers only (the scim and directory-sync Edge
+  // Functions); no session path, no request-supplied ids.
+  'app/api/email/last-admin-kept/route.ts',
   'app/api/email/send-download-invite/route.ts',
   'app/api/email/send-invite/route.ts',
   'app/api/email/ticket-confirmation/route.ts',
@@ -730,6 +819,9 @@ const KNOWN_ROUTE_HANDLERS = [
   // BACKLOG-3849: billing outbox drain, called by a database cron job with a
   // secret header; no user session, no request-supplied ids.
   'app/api/internal/billing/drain/route.ts',
+  // BACKLOG-3684: POST only, same-origin; validates the token read-only and sets
+  // the keepr_invite cookie. No session, no write.
+  'app/api/invite/start/route.ts',
   'app/api/invite/validate/route.ts',
   'app/api/payments/charge/route.ts',
   'app/api/payments/checkout-session/route.ts',
@@ -890,7 +982,7 @@ describe('discovery can see what it claims to see', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
     expect(pages).toContain('app/dashboard/users/[id]/page.tsx');
-    expect(pages.length).toBe(17);
+    expect(pages.length).toBe(18); // BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
   });
 
   it('finds route handlers, keyed POSIX on any OS (R8)', () => {
@@ -909,7 +1001,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(22);
+    expect(handlers.length).toBe(26); // BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {
@@ -929,7 +1021,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(44); // BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
+    expect(actions.length).toBe(58); // BACKLOG-3854: + addSeats, openBrokerageBillingPortal; BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
   });
 });
 
@@ -1329,6 +1421,14 @@ const DEACTIVATED_PERSONAS = {
 } as const;
 type DeactivatedPersona = keyof typeof DEACTIVATED_PERSONAS;
 const deactivatedNames = Object.keys(DEACTIVATED_PERSONAS) as DeactivatedPersona[];
+/**
+ * BACKLOG-3851: the reverted persona (deactivated AND owns a personal row) is
+ * back on individual pay-as-you-go, so Billing and their OWN checklists open
+ * for them exactly as for a solo user; the BACKLOG-3851 block below pins that.
+ * Every brokerage surface keeps refusing them (the loops above still include it).
+ */
+const REVERTED_PERSONA: DeactivatedPersona = '[personal-org owner, suspended brokerage admin]';
+const notReverted = deactivatedNames.filter((p) => p !== REVERTED_PERSONA);
 
 /** An ACTIVE brokerage admin whose own licence is suspended (BACKLOG-3878 scope add). */
 function givenLicenceSuspendedAdmin(): void {
@@ -1350,8 +1450,8 @@ describe('BACKLOG-3917: deactivated brokerage member', () => {
     else process.env.STRIPE_SECRET_KEY = OLD_KEY;
   });
 
-  const pageCases = (pages: Record<string, PageEntry>) =>
-    Object.entries(pages).flatMap(([page, entry]) => deactivatedNames.map((p) => [page, p, entry] as const));
+  const pageCases = (pages: Record<string, PageEntry>, names: DeactivatedPersona[] = deactivatedNames) =>
+    Object.entries(pages).flatMap(([page, entry]) => names.map((p) => [page, p, entry] as const));
 
   it.each(pageCases(REFUSED_PAGES))('%s refuses the %s', async (_page, persona, entry) => {
     given(DEACTIVATED_PERSONAS[persona]);
@@ -1359,7 +1459,7 @@ describe('BACKLOG-3917: deactivated brokerage member', () => {
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
-  it.each(pageCases(OWN_GATE_PAGES))('checklists: %s refuses the %s', async (_page, persona, entry) => {
+  it.each(pageCases(OWN_GATE_PAGES, notReverted))('checklists: %s refuses the %s', async (_page, persona, entry) => {
     given(DEACTIVATED_PERSONAS[persona]);
     expect(await run(entry.invoke)).toEqual(entry.refused);
     if (entry.invokeAsOwner) expect(await run(entry.invokeAsOwner)).toEqual(entry.refused);
@@ -1372,7 +1472,7 @@ describe('BACKLOG-3917: deactivated brokerage member', () => {
     expect(tablesRead().filter((t) => t !== 'licenses')).toEqual(['organization_members']);
   });
 
-  it.each(pageCases(BILLING_PAGES))('billing: %s refuses the %s', async (_page, persona, entry) => {
+  it.each(pageCases(BILLING_PAGES, notReverted))('billing: %s refuses the %s', async (_page, persona, entry) => {
     given(DEACTIVATED_PERSONAS[persona]);
     expect(await run(entry.invoke)).toEqual(entry.refused);
   });
@@ -1390,7 +1490,8 @@ describe('BACKLOG-3917: deactivated brokerage member', () => {
     }
   );
 
-  const actionCases = (names: string[]) => names.flatMap((name) => deactivatedNames.map((p) => [name, p] as const));
+  const actionCases = (names: string[], personas: DeactivatedPersona[] = deactivatedNames) =>
+    names.flatMap((name) => personas.map((p) => [name, p] as const));
 
   it.each(actionCases(Object.keys(REFUSED_ACTIONS)))('%s refuses the %s, and writes nothing', async (name, persona) => {
     given(DEACTIVATED_PERSONAS[persona]);
@@ -1404,7 +1505,7 @@ describe('BACKLOG-3917: deactivated brokerage member', () => {
     expect(mockEmulator.state.writes).toEqual([]);
   });
 
-  it.each(actionCases(Object.keys(OWN_GATE_ACTIONS)))('checklists: %s refuses the %s', async (name, persona) => {
+  it.each(actionCases(Object.keys(OWN_GATE_ACTIONS), notReverted))('checklists: %s refuses the %s', async (name, persona) => {
     given(DEACTIVATED_PERSONAS[persona]);
     expect(await run(OWN_GATE_ACTIONS[name])).toEqual(OWN_GATE_REFUSALS[name]);
     expect(mockEmulator.state.writes).toEqual([]);
@@ -1426,15 +1527,12 @@ describe('BACKLOG-3917: deactivated brokerage member', () => {
     expect(mockRpc.mock.calls.map((c) => c[0]).filter((n) => n !== 'can_review_submission')).toEqual([]);
   });
 
-  it.each(Object.keys(BILLING_ACTIONS))(
-    'billing: %s refuses a suspended brokerage admin who also owns a personal organization',
-    async (name) => {
-      given(DEACTIVATED_PERSONAS['[personal-org owner, suspended brokerage admin]']);
-      expect(await run(BILLING_ACTIONS[name])).toEqual(BILLING_ACTION_REFUSED);
-      expect(tablesRead()).toEqual(['licenses', 'organization_members']);
-      expect(mockEmulator.state.writes).toEqual([]);
-    }
-  );
+  it.each(Object.keys(BILLING_ACTIONS))('billing: %s refuses a suspended brokerage admin (no personal row)', async (name) => {
+    given(DEACTIVATED_PERSONAS['suspended brokerage admin']);
+    expect(await run(BILLING_ACTIONS[name])).toEqual(BILLING_ACTION_REFUSED);
+    expect(tablesRead()).toEqual(['licenses', 'organization_members']);
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
 
   // Positive twins: the same rows with license_status 'active' are admitted, so
   // the refusals above are about the status and nothing else.
@@ -1445,5 +1543,114 @@ describe('BACKLOG-3917: deactivated brokerage member', () => {
   it.each(Object.keys(REVIEWER_ACTIONS))('review: %s still admits an ACTIVE brokerage admin (twin)', async (name) => {
     given([deactivated('admin', 'active')]);
     expect(await run(REVIEWER_ACTIONS[name])).not.toEqual(REVIEWER_REFUSED);
+  });
+});
+
+// ===========================================================================
+// BACKLOG-3851: a deactivated member back on individual pay-as-you-go.
+// ===========================================================================
+//
+// Founder ruling (BACKLOG-3851 PR-2a, QA-2 a): a member deactivated by their
+// brokerage (suspended / expired) who holds their own personal row — the M2
+// revert trigger attaches it — gets exactly what a solo user gets: Billing and
+// their own Checklists page. The rows are the persona BACKLOG-3917 refused;
+// each case below compares against the plain personal-org owner on the same
+// entry, so "admitted" means "treated as the solo user", not merely "not
+// refused". Brokerage surfaces keep refusing them (BACKLOG-3917 block above).
+
+const REVERTED_ROWS = {
+  'suspended, personal row first': [personalMembership(), deactivated('admin', 'suspended')],
+  'suspended, personal row last': [deactivated('admin', 'suspended'), personalMembership()],
+  'expired agent, personal row last': [deactivated('agent', 'expired'), personalMembership()],
+} as const;
+const revertedNames = Object.keys(REVERTED_ROWS) as (keyof typeof REVERTED_ROWS)[];
+/** getPersonalOrganization's row (lib/billing/customers.ts reads id, is_test by personal_owner_user_id). */
+const PERSONAL_ORG_ROW: Row = { id: FIXTURE_PERSONAL_ORG_ID, personal_owner_user_id: FIXTURE_USER_ID, is_test: true };
+
+function givenWithPersonalOrg(rows: readonly Row[]): void {
+  given(rows);
+  mockEmulator.state.rows.organizations = [...(mockEmulator.state.rows.organizations ?? []), PERSONAL_ORG_ROW];
+}
+
+describe('BACKLOG-3851: deactivated member back on pay-as-you-go', () => {
+  const OLD = process.env.BILLING_ENABLED;
+  const OLD_KEY = process.env.STRIPE_SECRET_KEY;
+  beforeAll(() => {
+    process.env.BILLING_ENABLED = 'true';
+    process.env.STRIPE_SECRET_KEY = 'sk_test_route_audit';
+  });
+  afterAll(() => {
+    if (OLD === undefined) delete process.env.BILLING_ENABLED;
+    else process.env.BILLING_ENABLED = OLD;
+    if (OLD_KEY === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = OLD_KEY;
+  });
+
+  /** The same entry run as the plain personal-org owner: outcome, tables read, writes. */
+  async function asSoloOwner(entry: () => Promise<unknown>) {
+    givenWithPersonalOrg(PERSONAS['personal-org owner']);
+    mockGetAgentPlanView.mockClear();
+    const outcome = await run(entry);
+    return { outcome, tables: tablesRead(), writes: writesNoClock() };
+  }
+
+  /** The writes with clock values (e.g. archived_at = now) masked, so two runs compare. */
+  function writesNoClock() {
+    return JSON.parse(
+      JSON.stringify(mockEmulator.state.writes).replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z/g, '<now>')
+    );
+  }
+
+  const pageCases = (pages: Record<string, PageEntry>) =>
+    Object.entries(pages).flatMap(([page, entry]) => revertedNames.map((p) => [page, p, entry] as const));
+
+  it.each(pageCases(BILLING_PAGES))('billing: %s treats the %s member as the solo owner', async (_page, persona, entry) => {
+    const solo = await asSoloOwner(entry.invoke);
+    expect(solo.outcome).not.toEqual(entry.refused);
+    givenWithPersonalOrg(REVERTED_ROWS[persona]);
+    expect(await run(entry.invoke)).toEqual(solo.outcome);
+  });
+
+  const actionCases = Object.keys(BILLING_ACTIONS).flatMap((name) => revertedNames.map((p) => [name, p] as const));
+  it.each(actionCases)('billing: %s acts on the personal organization of the %s member', async (name, persona) => {
+    const solo = await asSoloOwner(BILLING_ACTIONS[name]);
+    givenWithPersonalOrg(REVERTED_ROWS[persona]);
+    mockGetAgentPlanView.mockClear();
+    const outcome = await run(BILLING_ACTIONS[name]);
+    expect(outcome).not.toEqual(BILLING_ACTION_REFUSED);
+    // No 'threw' check here: with the personal organization seeded, two card
+    // actions reach Stripe calls this file's Stripe stub does not provide, and
+    // throw there — past the gate, identically for the solo owner (toEqual below).
+    // The plan view the action acts on is the caller's personal organization.
+    expect(mockGetAgentPlanView).toHaveBeenCalledTimes(1);
+    expect(mockGetAgentPlanView.mock.calls[0][1]).toBe(FIXTURE_USER_ID);
+    const view = (await mockGetAgentPlanView.mock.results[0].value) as { personalOrganizationId: string | null };
+    expect(view.personalOrganizationId).toBe(FIXTURE_PERSONAL_ORG_ID);
+    // Deliberately changed from ['licenses', 'organization_members']: the same
+    // reads and writes as the solo owner.
+    expect(outcome).toEqual(solo.outcome);
+    expect(tablesRead()).toEqual(solo.tables);
+    expect(writesNoClock()).toEqual(solo.writes);
+  });
+
+  it.each(pageCases(OWN_GATE_PAGES))('checklists: %s treats the %s member as the solo owner', async (_page, persona, entry) => {
+    const solo = await asSoloOwner(entry.invokeAsOwner ?? entry.invoke);
+    expect(solo.outcome).not.toEqual(entry.refused);
+    givenWithPersonalOrg(REVERTED_ROWS[persona]);
+    expect(await run(entry.invokeAsOwner ?? entry.invoke)).toEqual(solo.outcome);
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+
+  it.each(revertedNames)('checklists: the brokerage template editor still refuses the %s member', async (persona) => {
+    givenWithPersonalOrg(REVERTED_ROWS[persona]);
+    expect(await run(OWN_GATE_PAGES['app/dashboard/checklists/[id]/page.tsx'].invoke)).toEqual({ notFound: true });
+  });
+
+  const ownActionCases = Object.keys(OWN_GATE_ACTIONS).flatMap((name) => revertedNames.map((p) => [name, p] as const));
+  it.each(ownActionCases)('checklists: %s treats the %s member as the solo owner', async (name, persona) => {
+    const solo = await asSoloOwner(OWN_GATE_ACTIONS[name]);
+    givenWithPersonalOrg(REVERTED_ROWS[persona]);
+    expect(await run(OWN_GATE_ACTIONS[name])).toEqual(solo.outcome);
+    expect(writesNoClock()).toEqual(solo.writes);
   });
 });

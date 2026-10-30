@@ -63,6 +63,10 @@ function load(options: {
   scrubPassThrough?: boolean;
   /** BACKLOG-3801: contents of userData/crash-reporting.json; undefined = no file. */
   crashReportingFile?: string;
+  /** BACKLOG-4050 M-1: what os.homedir() returns while the module loads. */
+  homeDir?: string;
+  /** BACKLOG-4050 M-1: a concrete app.getPath("userData") (no temp dir is created). */
+  userDataPath?: string;
 }): Loaded {
   const init = jest.fn();
   const dotenvConfig = jest.fn();
@@ -77,8 +81,9 @@ function load(options: {
   // Identity: hands back the (gated) base factory it was given, so a test can
   // build the network transport exactly as the offline wrapper would.
   const makeOffline = jest.fn((base: unknown) => base);
-  const userData = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-3801-is-"));
-  tempDirs.push(userData);
+  const userData = options.userDataPath ?? fs.mkdtempSync(path.join(os.tmpdir(), "keepr-3801-is-"));
+  if (options.userDataPath === undefined) tempDirs.push(userData);
+  const homedirSpy = options.homeDir === undefined ? undefined : jest.spyOn(os, "homedir").mockReturnValue(options.homeDir);
   if (options.crashReportingFile !== undefined) {
     fs.writeFileSync(path.join(userData, "crash-reporting.json"), options.crashReportingFile);
   }
@@ -106,6 +111,7 @@ function load(options: {
           isPackaged: options.isPackaged,
           getVersion: () => PINNED_VERSION,
           getPath: (name: string) => (name === "userData" ? userData : `/unused-${name}`),
+          getAppPath: () => "/unused-app-path",
         },
       }));
       jest.doMock("dotenv", () => {
@@ -130,6 +136,7 @@ function load(options: {
       pref = require("../../services/crashReportingPreference");
     });
   } finally {
+    homedirSpy?.mockRestore();
     if (previousDsn === undefined) {
       delete process.env.SENTRY_DSN;
     } else {
@@ -170,11 +177,31 @@ function initOptions(loaded: Loaded): InitOptions {
 }
 
 describe("installSentry: the init call transcribed from main.ts (BACKLOG-2962)", () => {
-  it("passes exactly the five options main.ts passed, plus transport (BACKLOG-3801) and beforeBreadcrumb (BACKLOG-3768), in order", () => {
+  it("passes exactly the five options main.ts passed, plus transport (BACKLOG-3801), transportOptions (BACKLOG-4040) and beforeBreadcrumb (BACKLOG-3768), in order", () => {
     const options = initOptions(load({ isPackaged: false }));
     // `Object.keys` order is insertion order — a dropped, added or reordered
     // key reds here before any value is looked at.
-    expect(Object.keys(options)).toEqual(["dsn", "environment", "release", "enabled", "transport", "beforeBreadcrumb", "beforeSend"]);
+    expect(Object.keys(options)).toEqual(["dsn", "environment", "release", "enabled", "transport", "transportOptions", "beforeBreadcrumb", "beforeSend"]);
+  });
+
+  it("BACKLOG-4040 S3: transportOptions replaces the offline store with the sealed one", () => {
+    const options = initOptions(load({ isPackaged: false })) as InitOptions & { transportOptions: { createStore: unknown } };
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { createSealedOfflineStore } = require("../../services/atRest/sentrySealedQueue");
+    expect(Object.keys(options.transportOptions)).toEqual(["createStore"]);
+    expect(typeof options.transportOptions.createStore).toBe("function");
+    expect((options.transportOptions.createStore as () => object).name).toBe(createSealedOfflineStore.name);
+  });
+
+  it("BACKLOG-4040 S3: beforeBreadcrumb redacts emails and phone numbers in any category", () => {
+    const options = initOptions(load({ isPackaged: false }));
+    const out = options.beforeBreadcrumb({
+      category: "console",
+      message: "sync for jane@example.com at +1 (555) 555-0199",
+      data: { arguments: ["jane@example.com"] },
+    });
+    expect(JSON.stringify(out)).not.toContain("jane@");
+    expect(JSON.stringify(out)).not.toContain("555-0199");
   });
 
   it("BACKLOG-3768: beforeBreadcrumb drops the query from an electron.net breadcrumb", () => {
@@ -227,17 +254,69 @@ describe("installSentry: the init call transcribed from main.ts (BACKLOG-2962)",
     expect(loaded.logError).not.toHaveBeenCalled();
   });
 
-  it("beforeSend returns the event UNSCRUBBED and logs when the scrub throws — never drops it", () => {
+  // BACKLOG-4050 A1: rewritten. Before, an updater-scrub throw returned the
+  // event raw (`toBe(event)`). Now it continues to the final scrub: not
+  // dropped (BACKLOG-1903 kept), and not sent unscrubbed.
+  it("beforeSend: when the updater scrub throws, the event is NOT dropped and NOT sent raw — the final scrub still runs", () => {
     const loaded = load({ isPackaged: false, scrubThrows: true });
     const { beforeSend } = initOptions(loaded);
-    const event = { message: "raw" };
+    const event = { message: String.raw`spawn C:\Users\Jane Doe\AppData\x.exe ENOENT for jane.doe@example.com` };
 
-    const result = beforeSend(event);
+    const result = beforeSend(event) as { message: string } | null;
 
-    expect(result).toBe(event);
+    expect(result).not.toBeNull();
+    expect(result).not.toBe(event);
+    expect(result!.message).not.toMatch(/Jane|Doe|jane\.doe@/);
+    expect(result!.message).toContain("ENOENT");
     expect(loaded.logError).toHaveBeenCalledTimes(1);
-    expect(loaded.logError.mock.calls[0][0]).toContain("[Sentry] beforeSend PII scrub failed");
+    expect(loaded.logError.mock.calls[0][0]).toContain("[Sentry] beforeSend PII scrub failed, continuing with the main scrub");
     expect(loaded.logError.mock.calls[0][1]).toBeInstanceOf(Error);
+  });
+
+  // BACKLOG-4050 C7. Mutation: restore `return event` in the updater catch -> red.
+  it("C7: updater scrub throws + spaced profile + email in exception.values[0].value -> scrubbed, not null", () => {
+    const loaded = load({ isPackaged: false, scrubThrows: true });
+    const { beforeSend } = initOptions(loaded);
+    const event = {
+      exception: { values: [{ type: "Error", value: "EPERM: open '/Users/Jane Doe/Desktop/Smith deal.pdf' jane.doe@example.com" }] },
+    };
+    const result = beforeSend(event) as { exception: { values: Array<{ type: string; value: string }> } } | null;
+    expect(result).not.toBeNull();
+    expect(result!.exception.values[0].value).toBe("EPERM: open '/Users/[user]/Desktop/[file]' j***@example.com");
+    expect(result!.exception.values[0].type).toBe("Error");
+  });
+
+  // BACKLOG-4050 C3 at the hook (W3: a tag-gated scrub). No tags at all.
+  it("an untagged event passes the final scrub (no tag gate)", () => {
+    const loaded = load({ isPackaged: false, scrubPassThrough: true });
+    const { beforeSend } = initOptions(loaded);
+    const result = beforeSend({ message: String.raw`spawn C:\Users\Jane Doe\x.exe ENOENT` }) as { message: string };
+    expect(result.message).toBe(String.raw`spawn C:\Users\[user]\[file] ENOENT`);
+  });
+
+  // BACKLOG-4050 C6 at the hook: fail-closed. Mutation: `return scrubbed` in the final catch -> red.
+  it("C6: when the final scrub throws, the event is dropped and the failure logged", () => {
+    const loaded = load({ isPackaged: false, scrubPassThrough: true });
+    const { beforeSend } = initOptions(loaded);
+    const hostile = {
+      get message(): string {
+        throw new Error("getter throws");
+      },
+    };
+    expect(beforeSend({ message: "x", breadcrumbs: [hostile] })).toBeNull();
+    expect(loaded.logError).toHaveBeenCalledTimes(1);
+    expect(loaded.logError.mock.calls[0][0]).toContain("[Sentry] beforeSend main scrub failed, event dropped");
+  });
+
+  it("BACKLOG-4050: beforeBreadcrumb removes a spaced profile name from a child_process breadcrumb", () => {
+    const options = initOptions(load({ isPackaged: false }));
+    const out = options.beforeBreadcrumb({
+      category: "child_process",
+      message: String.raw`Child process errored with 'spawn C:\Users\Jane Doe\AppData\Local\Programs\keepr\resources\win\libimobiledevice\idevice_id.exe ENOENT'`,
+    }) as { message: string };
+    expect(out.message).toBe(
+      String.raw`Child process errored with 'spawn C:\Users\[user]\AppData\Local\Programs\keepr\resources\win\libimobiledevice\idevice_id.exe ENOENT'`,
+    );
   });
 });
 
@@ -251,8 +330,11 @@ describe("installSentry: RCS events are scrubbed after the updater scrub", () =>
     expect(loaded.scrub).toHaveBeenCalledTimes(1);
     expect(rcs.message).not.toContain("555");
     expect(rcs.message).not.toContain("sam@");
-    const other = { tags: { component: "sync" }, message: "chat with +1 (555) 555-0199 failed" };
-    expect(beforeSend(other)).toBe(other);
+    // BACKLOG-4050: every event now gets the final scrub (phones included), so
+    // the untagged fixture carries an RCS-only marker instead: quoted text,
+    // which the RCS scrub turns into "<text>" and the final scrub leaves alone.
+    const other = { tags: { component: "sync" }, message: 'parse failed on "hello there"' };
+    expect(beforeSend(other)).toEqual(other);
   });
 });
 
@@ -363,7 +445,8 @@ describe("installSentry: the crash reporting switch (BACKLOG-3801)", () => {
     const options = initOptions(loaded);
     const net = networkTransport(loaded);
     const event = { message: "boom" };
-    expect(options.beforeSend(event)).toBe(event);
+    // BACKLOG-4050: the final scrub returns a copy, so equality, not identity.
+    expect(options.beforeSend(event)).toEqual(event);
 
     loaded.pref.setCrashReportingEnabled(false);
 
@@ -398,5 +481,52 @@ describe("renderer Sentry.init cannot send around the switch (BACKLOG-3801)", ()
     expect(keys).toHaveLength(1);
     expect(keys[0]).not.toContain("dsn");
     expect(keys[0]).not.toContain("transport");
+  });
+});
+
+// BACKLOG-4050 M-1: the host inputs (os.homedir(), userData) reach BOTH hooks.
+// Mutations: drop `crashReportScrubOptions` from scrubBreadcrumb (beforeBreadcrumb)
+// or from scrubMainEvent (beforeSend) -> the matching rows go red.
+describe("BACKLOG-4050 M-1: host inputs reach beforeBreadcrumb and beforeSend", () => {
+  const REDIRECTED_HOME = String.raw`D:\Profiles\Zed Quux`;
+  const profileText = String.raw`open 'D:\Profiles\Zed Quux\Contracts\Smith.pdf' failed`;
+  const USER_DATA = "/Volumes/Data/keepr-ud";
+  const dataText = `SQLITE_CANTOPEN '${USER_DATA}/mad.db' log '${USER_DATA}/logs/main.log'`;
+
+  it("beforeSend: a profile outside Users becomes [user] and the file name becomes [file]", () => {
+    const { beforeSend } = initOptions(load({ isPackaged: false, scrubPassThrough: true, homeDir: REDIRECTED_HOME }));
+    const out = beforeSend({ message: profileText }) as { message: string };
+    expect(out.message).toBe(String.raw`open 'D:\Profiles\[user]\Contracts\[file]' failed`);
+    expect(out.message).not.toContain("Zed");
+  });
+
+  it("beforeBreadcrumb: a profile outside Users becomes [user]", () => {
+    const { beforeBreadcrumb } = initOptions(load({ isPackaged: false, homeDir: REDIRECTED_HOME }));
+    const out = beforeBreadcrumb({ category: "console", message: profileText }) as { message: string };
+    expect(out.message).toBe(String.raw`open 'D:\Profiles\[user]\Contracts\[file]' failed`);
+  });
+
+  it("beforeSend: the app's own data files under userData are kept", () => {
+    const { beforeSend } = initOptions(load({ isPackaged: false, scrubPassThrough: true, userDataPath: USER_DATA }));
+    expect((beforeSend({ message: dataText }) as { message: string }).message).toBe(dataText);
+  });
+
+  it("beforeBreadcrumb: the app's own data files under userData are kept", () => {
+    const { beforeBreadcrumb } = initOptions(load({ isPackaged: false, userDataPath: USER_DATA }));
+    expect((beforeBreadcrumb({ category: "console", message: dataText }) as { message: string }).message).toBe(dataText);
+  });
+
+  it("macOS: mad.db and logs under ~/Library/Application Support/keepr are kept, the profile name is not", () => {
+    const loaded = load({
+      isPackaged: false,
+      scrubPassThrough: true,
+      homeDir: "/Users/jane",
+      userDataPath: "/Users/jane/Library/Application Support/keepr",
+    });
+    const { beforeSend, beforeBreadcrumb } = initOptions(loaded);
+    const text = "open '/Users/jane/Library/Application Support/keepr/mad.db' log '/Users/jane/Library/Application Support/keepr/logs/main.log'";
+    const want = "open '/Users/[user]/Library/Application Support/keepr/mad.db' log '/Users/[user]/Library/Application Support/keepr/logs/main.log'";
+    expect((beforeSend({ message: text }) as { message: string }).message).toBe(want);
+    expect((beforeBreadcrumb({ category: "console", message: text }) as { message: string }).message).toBe(want);
   });
 });

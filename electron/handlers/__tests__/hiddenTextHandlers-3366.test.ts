@@ -53,6 +53,9 @@ const OTHER_TRANSACTION: string = randomUUID();
 const THREAD = "macos-chat-3366";
 
 let mockDb: TestDb | null = null;
+// BACKLOG-3339 slice T: open-transaction depth, for the audit stub's
+// `isInTransaction` (the TestDb handle does not expose `inTransaction`).
+let mockTxDepth = 0;
 const registeredHandlers = new Map<string, any>();
 
 jest.mock("electron", () => ({
@@ -92,7 +95,14 @@ jest.mock("../../services/db/core/dbConnection", () => ({
     return { lastInsertRowid: r.lastInsertRowid, changes: r.changes };
   },
   dbExec: (sql: string) => mockDb!.exec(sql),
-  dbTransaction: <T,>(fn: () => T): T => mockDb!.transaction(fn)(),
+  dbTransaction: <T,>(fn: () => T): T => {
+    mockTxDepth++;
+    try {
+      return mockDb!.transaction(fn)();
+    } finally {
+      mockTxDepth--;
+    }
+  },
   getDbPath: () => "/fake/path/mad.db",
   getEncryptionKey: () => "fake-key",
   isInitialized: () => true,
@@ -210,6 +220,10 @@ beforeAll(() => {
     {
       isInitialized: () => true,
       insertAuditLog: (entry: any) => auditLogDb.insertAuditLog(entry),
+      // BACKLOG-3339 slice T: hide / unhide write their entry inside the
+      // change's transaction. Production's own delegation.
+      insertAuditLogSync: (entry: any) => auditLogDb.insertAuditLogSync(entry),
+      isInTransaction: () => mockTxDepth > 0,
       getUnsyncedAuditLogs: async () => [],
       markAuditLogsSynced: async () => undefined,
     } as any,

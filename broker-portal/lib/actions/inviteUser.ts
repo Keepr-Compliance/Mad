@@ -14,7 +14,15 @@ import { createClient } from '@/lib/supabase/server';
 import { randomBytes } from 'crypto';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
+import { BROKERAGE_SUSPENDED_ERROR, isBrokerageSuspendedError } from '@/lib/auth/orgSuspension';
+import { isBillingSetupIncompleteError } from '@/lib/auth/jitIdentity';
+import { BILLING_SETUP_INCOMPLETE_ERROR } from '@/lib/billing/setupCopy';
 import { sendInviteEmail } from '@/lib/email';
+import { inviteNameTooLong, normalizeInviteName } from '@/lib/users/inviteNames';
+import {
+  INVITE_WITHOUT_LICENSE_UNAVAILABLE,
+  inviteWithoutLicenseAvailable,
+} from '@/lib/users/memberLicenseActions';
 
 // ============================================================================
 // Types
@@ -24,6 +32,11 @@ interface InviteUserInput {
   email: string;
   role: 'agent' | 'broker' | 'admin';
   organizationId: string;
+  /** BACKLOG-3851 PR-2f (I2): invite as 'unassigned' (no license, holds no seat). */
+  withoutLicense?: boolean;
+  /** BACKLOG-3851 PR-2f (S1): optional names; trimmed, empty -> null, <= 100 characters. */
+  firstName?: string;
+  lastName?: string;
 }
 
 interface InviteUserResult {
@@ -39,6 +52,8 @@ interface InviteUserResult {
    */
   emailOutcome?: 'sent' | 'queued' | 'skipped' | 'failed';
   error?: string;
+  /** BACKLOG-3851: the organization has no free licence; show the out-of-licenses prompt. */
+  outOfSeats?: boolean;
 }
 
 // ============================================================================
@@ -46,8 +61,34 @@ interface InviteUserResult {
 // ============================================================================
 
 /**
+ * BACKLOG-3851: the two database refusals that mean "no free licence" on an
+ * invite insert. Matched on code AND message: 42501 is also used for other
+ * refusals (a malformed row, row-level security), which stay errors.
+ *   - insert guard (guard_invite_acceptance): 42501 'Organization has reached maximum seats'
+ *   - seat trigger, a race loser under the lock: P0001 'seat_limit_reached'
+ */
+function isInviteSeatRefusal(error: { code?: string; message?: string }): boolean {
+  return (
+    (error.code === '42501' && error.message === 'Organization has reached maximum seats') ||
+    (error.code === 'P0001' && error.message === 'seat_limit_reached')
+  );
+}
+
+/**
  * Basic email format validation
  */
+/**
+ * BACKLOG-3851 PR-2f: an unlicensed insert refused by the insert guard's SHAPE check
+ * means the database does not accept unlicensed invitations yet (M4 not applied).
+ * Matched on code AND message, and only for an unlicensed insert.
+ */
+function isUnlicensedInviteUnsupported(error: { code?: string; message?: string }): boolean {
+  return (
+    error.code === '42501' &&
+    error.message === 'Only a pending invitation can be added from a client session'
+  );
+}
+
 function isValidEmail(email: string): boolean {
   const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return emailRegex.test(email);
@@ -77,6 +118,17 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
 
   // Normalize email
   const normalizedEmail = input.email.toLowerCase().trim();
+
+  const withoutLicense = input.withoutLicense === true;
+  if (withoutLicense && !inviteWithoutLicenseAvailable()) {
+    return { success: false, error: INVITE_WITHOUT_LICENSE_UNAVAILABLE };
+  }
+
+  const firstName = normalizeInviteName(input.firstName);
+  const lastName = normalizeInviteName(input.lastName);
+  if (inviteNameTooLong(firstName) || inviteNameTooLong(lastName)) {
+    return { success: false, error: 'Names must be 100 characters or fewer' };
+  }
 
   // Verify current user is admin/it_admin
   const { data: { user } } = await supabase.auth.getUser();
@@ -134,25 +186,15 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
     }
   }
 
-  // Check organization seat limits (optional - get org info)
+  // Organization name, for the invite email.
+  // BACKLOG-3851: no portal seat count here. The database decides, with its own
+  // rule (an expired, unclaimed invite holds no seat): the insert guard refuses
+  // a full organization, and the seat trigger refuses again under the lock.
   const { data: organization } = await supabase
     .from('organizations')
-    .select('name, max_seats')
+    .select('name')
     .eq('id', input.organizationId)
     .maybeSingle();
-
-  if (organization?.max_seats) {
-    // Count current members (active + pending)
-    const { count: memberCount } = await supabase
-      .from('organization_members')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', input.organizationId)
-      .in('license_status', ['active', 'pending']);
-
-    if (memberCount && memberCount >= organization.max_seats) {
-      return { success: false, error: 'Organization has reached maximum seats' };
-    }
-  }
 
   // Generate secure invitation token
   const invitationToken = randomBytes(32).toString('hex');
@@ -166,15 +208,28 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
       organization_id: input.organizationId,
       invited_email: normalizedEmail,
       role: input.role,
-      license_status: 'pending',
+      // BACKLOG-3851 PR-2f: an unlicensed invitation is 'unassigned' and holds no seat.
+      license_status: withoutLicense ? 'unassigned' : 'pending',
       invitation_token: invitationToken,
       invitation_expires_at: expiresAt.toISOString(),
       invited_by: user.id,
       invited_at: new Date().toISOString(),
       provisioned_by: 'invite',
+      invited_first_name: firstName,
+      invited_last_name: lastName,
     });
 
   if (insertError) {
+    if (isInviteSeatRefusal(insertError)) {
+      return { success: false, outOfSeats: true };
+    }
+    if (withoutLicense && isUnlicensedInviteUnsupported(insertError)) {
+      return { success: false, error: INVITE_WITHOUT_LICENSE_UNAVAILABLE };
+    }
+    // BACKLOG-3853 PR-2B: the brokerage is suspended; the member trigger refused.
+    if (isBrokerageSuspendedError(insertError)) return { success: false, error: BROKERAGE_SUSPENDED_ERROR };
+    // BACKLOG-4007: the brokerage has not finished the Billing step of setup (founder e4d40740 Q3).
+    if (isBillingSetupIncompleteError(insertError)) return { success: false, error: BILLING_SETUP_INCOMPLETE_ERROR };
     Sentry.captureException(insertError, {
       tags: { action: 'invite_user' },
       extra: { email: normalizedEmail, organizationId: input.organizationId },
@@ -207,6 +262,8 @@ export async function inviteUser(input: InviteUserInput): Promise<InviteUserResu
       role: input.role,
       inviteLink,
       expiresInDays: 7,
+      withoutLicense,
+      recipientFirstName: firstName ?? undefined,
     });
 
     emailSent = emailResult.success;

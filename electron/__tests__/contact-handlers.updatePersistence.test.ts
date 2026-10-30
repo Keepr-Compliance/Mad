@@ -148,6 +148,7 @@ jest.mock("../services/databaseService", () => {
     updateContactSync: (id: string, updates: any) => contactDb.updateContactSync(id, updates),
       getContactById: (id: string) => contactDb.getContactById(id),
       createContact: (data: any, origin: any) => contactDb.createContact(data, origin),
+      createContactSync: (data: any, origin: any) => contactDb.createContactSync(data, origin),
       // BACKLOG-2617: `findContactByName` is deleted from production. This stub
       // returned null to keep the duplicate-by-name branch out of the way — a
       // fixture that made the create path look unconditional when it was not.
@@ -168,7 +169,14 @@ jest.mock("../services/contactsService", () => ({
 
 jest.mock("../services/auditService", () => ({
   __esModule: true,
-  default: { log: jest.fn(), logContactAction: jest.fn() },
+  default: {
+    log: jest.fn(),
+    logContactAction: jest.fn(),
+    // BACKLOG-3339: contact changes write their entry inside the transaction.
+    recordInTransaction: jest.fn(),
+    recordFailure: jest.fn(),
+  },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
 }));
 
 jest.mock("../services/logService", () => {
@@ -333,14 +341,16 @@ describe("renaming a contact writes the new name", () => {
     // rather than one that only reached a stub.
     await saveFromEditForm();
 
-    expect(auditService.log).toHaveBeenCalledWith(
+    // BACKLOG-3339: written inside the edit's transaction (a success entry by
+    // definition), so it is recordInTransaction, not log.
+    expect(auditService.recordInTransaction).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "CONTACT_UPDATE",
         resourceType: "CONTACT",
         resourceId: CONTACT,
-        success: true,
       }),
     );
+    expect(auditService.log).not.toHaveBeenCalled();
   });
 
   it("leaves company and title exactly as they were", async () => {

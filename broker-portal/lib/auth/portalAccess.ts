@@ -19,6 +19,8 @@ import {
   type PortalMembershipRow,
 } from '@/lib/auth/membership';
 import { LICENCE_READ_FAILED, readOwnLicenceSuspended } from '@/lib/auth/suspension';
+import { ORG_SUSPENSION_READ_FAILED, readOrgBillingSuspended } from '@/lib/auth/orgSuspension';
+import { readBillingContactLogin } from '@/lib/auth/billingContact';
 
 type ServerClient = Awaited<ReturnType<typeof createClient>>;
 
@@ -32,6 +34,18 @@ export interface PortalAccessResult {
    * read this field.
    */
   suspended: boolean | null;
+  /**
+   * BACKLOG-3853 PR-2B: the BROKERAGE this access routes on is suspended
+   * (org_deals). Asked only for kind 'full' and floor via 'brokerage', and only
+   * when the licence is not suspended (that rule wins); false for everyone else.
+   * null = the read failed; pages treat it as not suspended (fail open, logged).
+   */
+  orgSuspended: boolean | null;
+  /**
+   * BACKLOG-4007 PR-4: this person is the brokerage's billing-only login (lib/auth/billingContact.ts).
+   * Asked only for floor via 'unlicensed'; false for everyone else and when the read fails.
+   */
+  billingContact: boolean;
 }
 
 /**
@@ -59,12 +73,14 @@ export async function getPortalAccess(): Promise<PortalAccessResult | null> {
   ]);
   if (suspended === null) console.warn('[portalAccess] suspended check skipped', { code: LICENCE_READ_FAILED });
 
-  return {
-    supabase,
-    user,
-    access: classifyPortalAccess(memberships as PortalMembershipRow[] | null, user.id),
-    suspended,
-  };
+  const access = classifyPortalAccess(memberships as PortalMembershipRow[] | null, user.id);
+  // Sequential: needs the organization. Not asked when the licence rule applies.
+  const orgSuspended = suspended === true ? false : await readOrgBillingSuspended(supabase, access);
+  if (orgSuspended === null) console.warn('[portalAccess] brokerage suspension check skipped', { code: ORG_SUSPENSION_READ_FAILED });
+
+  const billingContact = await readBillingContactLogin(supabase, access);
+
+  return { supabase, user, access, suspended, orgSuspended, billingContact };
 }
 
 /** Full-portal access with its role and organization, or null. */
@@ -75,12 +91,14 @@ export interface FullPortalAccess extends PortalAccessResult {
 /**
  * The caller's full-portal access, or null for everyone the portal floors,
  * does not know, or does not admit — and, BACKLOG-3878, for a suspended
- * account, so every full-portal page refuses it on its own.
+ * account, so every full-portal page refuses it on its own. BACKLOG-3853 PR-2B:
+ * also null while the brokerage is suspended (orgSuspended === true); a failed
+ * brokerage read (null) does not refuse.
  *
  * Pages call this BEFORE any data read and redirect on null.
  */
 export async function requireFullPortalAccess(): Promise<FullPortalAccess | null> {
   const result = await getPortalAccess();
-  if (!result || result.access.kind !== 'full' || result.suspended === true) return null;
+  if (!result || result.access.kind !== 'full' || result.suspended === true || result.orgSuspended === true) return null;
   return result as FullPortalAccess;
 }

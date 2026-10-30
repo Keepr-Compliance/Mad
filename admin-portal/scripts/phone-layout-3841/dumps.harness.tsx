@@ -447,7 +447,7 @@ it('orgs-list / org-detail', async () => {
     created_at: '2025-01-01T00:00:00Z',
     member_count: 10 + i,
   }));
-  let r = render(<OrganizationsTable organizations={orgs} canEdit />);
+  let r = render(<OrganizationsTable organizations={orgs} canEdit billingLive={false} />);
   dump('orgs-list', r.container.innerHTML);
   r.unmount();
 

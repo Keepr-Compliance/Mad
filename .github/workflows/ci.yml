@@ -151,20 +151,20 @@ jobs:
   # For docs-only changes, provide passing status checks without running heavy tests
   # Matrix must match the real test job to produce identical status check names
   docs-pass:
-    name: Test & Lint
+    name: Test & Lint (${{ matrix.os }})
     needs: check-changes
     if: needs.check-changes.outputs.docs-only == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
         os: ${{ fromJson(needs.check-changes.outputs.os-matrix) }}
-        node-version: [20.x]
+        node-version: [22.23.4]
     steps:
       - name: Skip tests (docs-only change)
         run: echo "Skipping tests for ${{ matrix.os }} / Node ${{ matrix.node-version }} - documentation-only changes detected"
 
   test:
-    name: Test & Lint
+    name: Test & Lint (${{ matrix.os }})
     needs: check-changes
     if: needs.check-changes.outputs.docs-only != 'true'
     runs-on: ${{ matrix.os }}
@@ -174,7 +174,7 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJson(needs.check-changes.outputs.os-matrix) }}
-        node-version: [20.x]  # Node 18 dropped - better-sqlite3-multiple-ciphers requires Node 20+
+        node-version: [22.23.4]  # exact pin: Node 20 is end-of-life (BACKLOG-4053)
 
     steps:
       - name: Checkout code
@@ -186,6 +186,12 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
+      - name: Check Node.js version (BACKLOG-4053)
+        shell: bash
+        run: |
+          node scripts/ci/check-node-version.mjs "$(node -v)"
+          node scripts/__tests__/check-node-version.verify.js
+          node scripts/__tests__/ensure-electron-dist.verify.js
       - name: Install Python setuptools
         run: pip install setuptools
 
@@ -197,9 +203,34 @@ jobs:
       - name: Build preload
         run: npm run build:preload
 
+      # BACKLOG-4052 (R-6): ignore-scripts skips Electron's own install script,
+      # so the binary is absent unless fetched here. The checks below need it.
+      - name: Download Electron binary
+        run: node node_modules/electron/install.js
+
       - name: Rebuild native modules for Electron
         run: node scripts/rebuild-native.js
         continue-on-error: true
+
+      # BACKLOG-4052 (R-6): the step above may fail without failing the job;
+      # this asserts what it was for: the module loads under this Electron.
+      - name: Assert native module loads under Electron
+        run: node scripts/ci/check-native-under-electron.js
+
+      # BACKLOG-4052: the CA denylist, run under this Electron's own Node.
+      - name: Check Node CA denylist under Electron
+        run: node scripts/ci/check-node-ca-denylist.js
+
+      # BACKLOG-4052 (R-7): permanent. Skip prebuild-install and build with the
+      # electron-rebuild fallback (@electron/rebuild), so a broken fallback shows
+      # up here and not on the day a prebuild is missing.
+      - name: Rebuild native modules from source (forced fallback)
+        run: node scripts/rebuild-native.js
+        env:
+          KEEPR_REBUILD_FROM_SOURCE: '1'
+
+      - name: Assert native module loads under Electron (from-source build)
+        run: node scripts/ci/check-native-under-electron.js
 
       # BACKLOG-2505: NODE_OPTIONS on the next three steps.
       #
@@ -297,10 +328,10 @@ jobs:
           # nothing.
           fetch-depth: 0
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20.x
+          node-version: 22.23.4
 
       # The tree rules (email / phone / name) always run. The bare-uuid rule needs
       # a commit range, which is derived here.
@@ -373,10 +404,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20.x
+          node-version: 22.23.4
           cache: 'npm'
 
       # The gate asks each runner to list its own tests rather than reimplementing glob matching,
@@ -414,10 +445,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20.x
+          node-version: 22.23.4
 
       - name: Assert nothing under .husky/_ is tracked
         run: npm run check:hooks
@@ -441,10 +472,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20.x
+          node-version: 22.23.4
 
       - name: Assert the packager cannot pack its own output
         run: node scripts/ci/check-package-sanity.mjs --config package.json
@@ -465,10 +496,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20.x
+          node-version: 22.23.4
 
       - name: Verify the pinned iPhone tools match the manifest
         run: node scripts/release/pinnedIphoneTools.js --repo
@@ -520,10 +551,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20.x
+          node-version: 22.23.4
           cache: 'npm'
 
       # The gate parses TypeScript with the compiler API, so `typescript` must be
@@ -561,10 +592,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20.x
+          node-version: 22.23.4
           cache: 'npm'
 
       # The gate parses TypeScript with the compiler API, so `typescript` must be
@@ -612,10 +643,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20.x
+          node-version: 22.23.4
 
       - name: Assert every tracked TS/JS file is searchable
         run: npm run check:text-sources
@@ -635,10 +666,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20.x
+          node-version: 22.23.4
           cache: 'npm'
 
       - name: Install dependencies
@@ -694,10 +725,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20.x
+          node-version: 22.23.4
           cache: 'npm'
 
       - name: Install dependencies
@@ -726,7 +757,7 @@ jobs:
   #
   # admin-portal resolves a DIFFERENT eslint than broker-portal: it pins
   # eslint ^9 + eslint.config.mjs (flat config) in its own nested node_modules,
-  # while the root tree carries eslint 8 + .eslintrc.js. `npm install` here
+  # while the root tree carries eslint 8 (broker-portal/.eslintrc.json). `npm install` here
   # honours the lockfile and creates that nested install, so this job gets
   # eslint 9. A git worktree that symlinks only the ROOT node_modules does not,
   # and `next lint` there fails with "Invalid Options: Unknown options:
@@ -741,10 +772,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20.x
+          node-version: 22.23.4
           cache: 'npm'
 
       - name: Install dependencies
@@ -784,10 +815,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20.x
+          node-version: 22.23.4
           cache: 'npm'
           cache-dependency-path: android-companion/package-lock.json
 
@@ -850,10 +881,10 @@ jobs:
             git fetch origin develop || true
           fi
 
-      - name: Setup Node.js 20.x
+      - name: Setup Node.js 22.23.4
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: 20.x
+          node-version: 22.23.4
 
       # No npm install: the check reads git and two JSON files only.
       - name: Assert expo.android.versionCode was bumped
@@ -897,7 +928,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '20.x'
+          node-version: '22.23.4'
           cache: 'npm'
 
       - name: Install Python setuptools
@@ -951,7 +982,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '20.x'
+          node-version: '22.23.4'
 
       - name: Run npm audit
         # audit-level=critical: 72 known high/moderate vulnerabilities from transitive
@@ -999,7 +1030,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '20.x'
+          node-version: '22.23.4'
           cache: 'npm'
 
       - name: Install Python setuptools
@@ -1007,6 +1038,13 @@ jobs:
 
       - name: Install dependencies
         run: npm install
+
+      # BACKLOG-4052: Electron 44 has no postinstall; the macOS build.mac.extraResources
+      # read node_modules/electron/dist, which is absent until the binary is fetched.
+      # (Windows takes its licence files from electron-builder's own Electron download.)
+      - name: Download Electron binary and assert licence files
+        if: matrix.os == 'macos-latest'
+        run: node scripts/ci/ensure-electron-dist.js
 
       - name: Build application
         run: npm run build

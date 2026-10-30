@@ -32,6 +32,13 @@ afterEach(() => uninstallPairing());
 const SOURCE = fs.readFileSync(path.join(__dirname, "..", "..", "chrome-extension", "background.js"), "utf8");
 const EXTENSION_ID = "nlfohmjehedijceeelokclkglmjnlonj";
 
+// BACKLOG-4035: the worker's startup hello, returned so loadWorker can await it.
+// Test-side only; background.js is unchanged. Throws if the line ever changes.
+const STARTUP_LINE = "void sayHello(false).catch(() => {});";
+if (SOURCE.split(STARTUP_LINE).length !== 2) throw new Error("background.js startup hello line not found exactly once");
+const STARTUP_SOURCE =
+  SOURCE.replace(STARTUP_LINE, "const __keeprStartup = sayHello(false).catch(() => {});") + "\nreturn __keeprStartup;";
+
 async function loadWorker(opts: { storage?: Record<string, unknown>; paired?: boolean } = {}) {
   // BACKLOG-3666: job calls need a pairing (paired: replies are signed as Keepr signs them).
   await installPairing(!!opts.paired);
@@ -62,7 +69,7 @@ async function loadWorker(opts: { storage?: Record<string, unknown>; paired?: bo
       signedReply(url, init, 404, { error: "no_job" }) as any,
   );
   // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  new Function("chrome", "fetch", SOURCE)(chromeStub, fetchStub);
+  const startup: Promise<unknown> = new Function("chrome", "fetch", STARTUP_SOURCE)(chromeStub, fetchStub);
   if (!listener) throw new Error("background.js registered no message listener");
   const registered: Listener = listener;
 
@@ -78,8 +85,9 @@ async function loadWorker(opts: { storage?: Record<string, unknown>; paired?: bo
     });
   }
   // BACKLOG-3658: the worker says hello on start; tests below see only their own calls.
-  await new Promise((r) => setTimeout(r, 0));
-  await new Promise((r) => setTimeout(r, 0));
+  // BACKLOG-4035: wait for that hello to finish (sent, or throttled), not a fixed
+  // number of ticks. Paired, it is signed with crypto.subtle and can land late.
+  await startup;
   const startupCalls = fetchStub.mock.calls.slice();
   fetchStub.mockClear();
   return { send, fetchStub, startupCalls, chromeStub };

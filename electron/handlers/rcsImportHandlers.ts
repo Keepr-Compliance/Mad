@@ -453,7 +453,7 @@ async function afterCacheLinked(jobId: string, userId: string): Promise<void> {
   cacheOptionsByJob.delete(jobId);
   const cutoff = autoDeleteCutoff(options?.autoDeleteDays, Date.now());
   if (!cutoff) return;
-  clearUnlinkedOldChats(userId, cutoff, databaseService.rcsAutoDeleteDbOps(), clearFiles(), (m) => void logService.info(m, LOG_TAG));
+  await clearUnlinkedOldChats(userId, cutoff, databaseService.rcsAutoDeleteDbOps(), clearFiles(), (m) => void logService.info(m, LOG_TAG));
 }
 
 /**
@@ -1212,9 +1212,10 @@ function argsObject(args: unknown): Record<string, unknown> {
 export async function clearGoogleMessagesWebTexts(userId: string): Promise<RcsClearResult> {
   // SR B1: never while a cache Sync is being saved (it is moving files in).
   if (cacheSaveInFlight()) throw new Error(RCS_SAVING_MESSAGE);
-  return runWithWritesPaused(bridge, () => {
+  return runWithWritesPaused(bridge, async () => {
     // SR (G1): the texts and every cache record go in ONE transaction.
-    const result = clearGoogleMessagesWebData(
+    // BACKLOG-4040: the file clean-up after it awaits; writes stay paused.
+    const result = await clearGoogleMessagesWebData(
       userId,
       databaseService.rcsClearDbOps(),
       clearFiles(),
@@ -1290,7 +1291,7 @@ export async function clearAllAndroidTexts(userId: string): Promise<SharedForceC
  * taskbar button flashes as the fallback, until Keepr gets focus.
  */
 /** keepr://link: the link code from the clipboard (Windows, link waiting, exactly the code) — see linkCodeFromClipboard. */
-export function rcsLinkCodeForDeepLink(): string | null {
+export async function rcsLinkCodeForDeepLink(): Promise<string | null> {
   return linkCodeFromClipboard({
     platform: process.platform,
     linkState: () => pairingAuth.linkState(),
@@ -1457,7 +1458,7 @@ export function registerRcsImportHandlers(): void {
       if (r.ok) {
         // Founder (Windows): the accepted code leaves the clipboard — only if
         // it still holds that same code (never logged).
-        clearLinkCodeFromClipboard({
+        await clearLinkCodeFromClipboard({
           platform: process.platform,
           code: typeof code === "string" ? code : "",
           readClipboard: () => clipboard.readText(),
@@ -1620,7 +1621,8 @@ export function registerRcsImportHandlers(): void {
   ipcMain.handle(
     "rcs-import:open-chrome-for-extension",
     wrapHandler(async (): Promise<{ success: true; copied: boolean; opened: boolean }> => {
-      clipboard.writeText(CHROME_EXTENSIONS_ADDRESS);
+      // BACKLOG-4052: awaited — a Promise on Electron 44, a no-op await on 38.
+      await clipboard.writeText(CHROME_EXTENSIONS_ADDRESS);
       const opened = await launchChrome(
         chromeCandidates(process.platform, process.env),
         (p) => fs.promises.access(p).then(() => true, () => false),

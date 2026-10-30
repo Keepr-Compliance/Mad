@@ -6,13 +6,13 @@
 import { ipcMain, BrowserWindow } from "electron";
 import { MESSAGE_IMPORT_SUMMARY_SQL } from "../services/db/messageImportStatsSql";
 import type { MessageSourceStats } from "../services/db/messageSourceStatsDb";
-import { queryContacts } from "../workers/contactWorkerPool";
+import { queryContacts, DedicatedWorkerError } from "../workers/contactWorkerPool";
 import type { IpcMainInvokeEvent } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import logService from "../services/logService";
 import databaseService from "../services/databaseService";
 import macOSMessagesImportService from "../services/macOSMessagesImportService";
-import * as externalContactDb from "../services/db/externalContactDbService";
+import { refreshMessageRecencyAfterImport } from "../services/messageRecencyRefresh";
 import { autoLinkNewMessagesForUser, expandAttachedThreadsForUser } from "../services/autoLinkService";
 import {
   resolveLookbackMonths,
@@ -282,75 +282,32 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
             }
           );
 
-          // Update contact communication dates from imported messages
-          // This enables sorting contacts by recent communication
+          // BACKLOG-3222: contact dates, phone_last_message and
+          // external_contacts.last_message_at in ONE transaction (all or
+          // nothing). A failure leaves all three as they were; the import
+          // result itself is unchanged, and the next import retries.
           try {
-            const backfillCount = await databaseService.backfillContactCommunicationDates(validUserId);
-            logService.info(
-              `Contact communication dates updated`,
-              "MessageImportHandlers",
-              { updatedContacts: backfillCount }
-            );
-          } catch (backfillError) {
+            await refreshMessageRecencyAfterImport(validUserId);
+          } catch (recencyError) {
+            const workerFailure =
+              recencyError instanceof DedicatedWorkerError ? recencyError.code : undefined;
+            const errorMessage =
+              recencyError instanceof Error ? recencyError.message : String(recencyError);
             logService.warn(
-              `Failed to update contact communication dates: ${backfillError}`,
-              "MessageImportHandlers"
+              `Failed to refresh message recency after import (nothing written): ${errorMessage}`,
+              "MessageImportHandlers",
+              { workerFailure: workerFailure ?? null }
             );
-            Sentry.captureException(backfillError, {
-              tags: { sync_type: "message_import" },
-              level: "warning",
-              extra: {
-                handler: "messages:import-macos",
-                operation: "backfill-contact-dates",
-                error_message: backfillError instanceof Error ? backfillError.message : String(backfillError),
+            Sentry.captureException(recencyError, {
+              tags: {
+                sync_type: "message_import",
+                operation: "message-recency-refresh",
+                ...(workerFailure ? { worker_failure: workerFailure } : {}),
               },
-            });
-          }
-
-          // Update phone_last_message lookup table for fast external contact sorting (BACKLOG-567)
-          try {
-            const phoneCount = await databaseService.backfillPhoneLastMessageTable(validUserId);
-            logService.info(
-              `Phone last message lookup table updated`,
-              "MessageImportHandlers",
-              { phonesUpdated: phoneCount }
-            );
-          } catch (phoneBackfillError) {
-            logService.warn(
-              `Failed to update phone last message table: ${phoneBackfillError}`,
-              "MessageImportHandlers"
-            );
-            Sentry.captureException(phoneBackfillError, {
-              tags: { sync_type: "message_import" },
               level: "warning",
               extra: {
                 handler: "messages:import-macos",
-                operation: "backfill-phone-last-message",
-                error_message: phoneBackfillError instanceof Error ? phoneBackfillError.message : String(phoneBackfillError),
-              },
-            });
-          }
-
-          // TASK-1773: Update external_contacts last_message_at from phone_last_message lookup
-          try {
-            const externalUpdatedCount = externalContactDb.updateLastMessageAtFromLookupTable(validUserId);
-            logService.info(
-              `External contacts last_message_at updated`,
-              "MessageImportHandlers",
-              { updatedContacts: externalUpdatedCount }
-            );
-          } catch (externalUpdateError) {
-            logService.warn(
-              `Failed to update external contacts dates: ${externalUpdateError}`,
-              "MessageImportHandlers"
-            );
-            Sentry.captureException(externalUpdateError, {
-              tags: { sync_type: "message_import" },
-              level: "warning",
-              extra: {
-                handler: "messages:import-macos",
-                operation: "update-external-contacts-dates",
-                error_message: externalUpdateError instanceof Error ? externalUpdateError.message : String(externalUpdateError),
+                error_message: errorMessage,
               },
             });
           }

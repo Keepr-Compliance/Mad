@@ -15,6 +15,7 @@ import { DatabaseError } from "../../types";
 // BACKLOG-3067: a successful read mints the brand — see electron/types/ids.ts.
 import type { TransactionRow } from "../../types/ids";
 import { dbGet, dbAll, dbRun, dbTransaction } from "./core/dbConnection";
+import { repointMessageTransaction } from "./messageDbService";
 import { sql, type SafeSql } from "./core/sqlText";
 import {
   countLinkedEmailsByTransaction,
@@ -1256,8 +1257,6 @@ export interface ExportCompletionParams {
   exportFormat?: string | null;
   /** ISO timestamp -> `last_exported_on`. */
   exportedAt: string;
-  /** Caller-computed, unchanged from the pre-BACKLOG-2549 handlers. */
-  exportCount: number;
   /** ISO timestamp -> `first_exported_at`, applied only when it is still NULL. */
   firstExportedAt: string;
 }
@@ -1292,12 +1291,8 @@ export function recordExportCompletion(
   transactionId: string,
   params: ExportCompletionParams,
 ): void {
-  const columns: TransactionColumn[] = [
-    "export_status",
-    "last_exported_on",
-    "export_count",
-  ];
-  const values: unknown[] = ["exported", params.exportedAt, params.exportCount];
+  const columns: TransactionColumn[] = ["export_status", "last_exported_on"];
+  const values: unknown[] = ["exported", params.exportedAt];
 
   if (params.exportFormat !== undefined && params.exportFormat !== null) {
     columns.push("export_format");
@@ -1306,7 +1301,12 @@ export function recordExportCompletion(
 
   values.push(params.firstExportedAt, transactionId);
 
+  // BACKLOG-3236: the count is incremented HERE, in SQL, never bound from a
+  // value the caller read earlier. Two exports of one deal used to read the
+  // same count before their slow export ran, and both wrote count + 1.
   const statement = sql`UPDATE transactions SET ${assignmentList(columns)}, ${columnList([
+    "export_count",
+  ])} = COALESCE(${columnList(["export_count"])}, 0) + 1, ${columnList([
     "first_exported_at",
   ])} = COALESCE(${columnList(["first_exported_at"])}, ?) WHERE id = ?`;
   const result = dbRun(statement, values);
@@ -1326,12 +1326,33 @@ export function recordExportCompletion(
 }
 
 /**
+ * Texts whose deal column names this deal. Read before the delete: the
+ * `messages.transaction_id` foreign key is `ON DELETE SET NULL`, so the
+ * DELETE itself clears the column and these ids can no longer be found after it.
+ * Uses `idx_messages_transaction_id`.
+ */
+export const MESSAGES_NAMING_DEAL_SQL = sql`SELECT id FROM messages WHERE transaction_id = ?`;
+
+/**
  * Delete transaction. Synchronous, so it can run inside the caller's
  * transaction together with the audit entry that records it (BACKLOG-3339).
+ *
+ * A text can be linked to several deals while its column names only one. The
+ * DELETE clears the column (foreign key) and removes this deal's link rows
+ * (`communications` cascade); each text it named is then re-pointed to its
+ * most recent remaining link, or NULL when none is left (BACKLOG-4020,
+ * reusing BACKLOG-3908's `repointMessageTransaction`). All of it runs in one
+ * `dbTransaction`, a savepoint inside the handler's transaction, so a failure
+ * anywhere leaves the deal, its links and the column unchanged.
  */
 export function deleteTransactionSync(transactionId: string): void {
-  const statement = sql`DELETE FROM transactions WHERE id = ?`;
-  dbRun(statement, [transactionId]);
+  dbTransaction(() => {
+    const named = dbAll<{ id: string }>(MESSAGES_NAMING_DEAL_SQL, [transactionId]);
+    dbRun(sql`DELETE FROM transactions WHERE id = ?`, [transactionId]);
+    for (const { id } of named) {
+      repointMessageTransaction(id);
+    }
+  });
 }
 
 /**

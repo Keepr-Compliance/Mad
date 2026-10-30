@@ -17,6 +17,7 @@ import {
   dealChangeUserError,
   isAuditNotRecorded,
 } from "../services/dealChangeAudit";
+import { dealToggleUserError } from "../services/dealToggleAudit";
 import { dbTransaction } from "../services/db/core/dbConnection";
 import logService from "../services/logService";
 import emailSyncService from "../services/emailSyncService";
@@ -101,7 +102,6 @@ import databaseService from "../services/databaseService";
 import { wrapHandler } from "../utils/wrapHandler";
 import type {
   Transaction,
-  NewTransaction,
   UpdateTransaction,
 } from "../types/models";
 import type { TransactionResponse } from "../types/handlerTypes";
@@ -231,60 +231,6 @@ export function registerTransactionCrudHandlers(
       return {
         success: true,
         count,
-      };
-    }, { module: "Transactions" }),
-  );
-
-  // Create manual transaction
-  ipcMain.handle(
-    "transactions:create",
-    wrapHandler(async (
-      event: IpcMainInvokeEvent,
-      userId: string,
-      transactionData: unknown,
-    ): Promise<TransactionResponse> => {
-      // Validate inputs
-      const validatedUserId = validateUserId(userId);
-      if (!validatedUserId) {
-        throw new ValidationError("User ID validation failed", "userId");
-      }
-      const validatedData = validateTransactionData(transactionData, false);
-
-      const transaction = await transactionService.createManualTransaction(
-        validatedUserId,
-        validatedData as unknown as Partial<NewTransaction>,
-      );
-
-      // Audit log transaction creation
-      await auditService.log({
-        userId: validatedUserId,
-        action: "TRANSACTION_CREATE",
-        resourceType: "TRANSACTION",
-        resourceId: transaction.id,
-        metadata: { propertyAddress: transaction.property_address },
-        success: true,
-      });
-
-      logService.info("Transaction created", "Transactions", {
-        userId: validatedUserId,
-        transactionId: transaction.id,
-      });
-
-      // BACKLOG-1802 (founder policy): auto-sync this transaction's full audit
-      // window in the background the moment it's created — the user never clicks
-      // "Sync". Fire-and-forget; failures are non-fatal to the create response.
-      // BACKLOG-1832: pass lifecycle callbacks so the renderer can show a
-      // "fetching emails…" indicator and auto-refresh when the sync completes.
-      triggerTransactionSyncInBackground({
-        transactionId: transaction.id,
-        userId: validatedUserId,
-        reason: "create",
-        ...makeCreateSyncCallbacks(transaction.id, "create"),
-      });
-
-      return {
-        success: true,
-        transaction,
       };
     }, { module: "Transactions" }),
   );
@@ -935,7 +881,8 @@ export function registerTransactionCrudHandlers(
       const result = await ensureTransactionMessagesSynced({
         transactionId: validatedTransactionId || undefined,
         userId: validatedUserId as string,
-        reason: "date-change",
+        // BACKLOG-4066: every caller of this channel is an Update button.
+        reason: "update",
         proposedStartISO,
         onProgress,
       });
@@ -1169,10 +1116,14 @@ export function registerTransactionCrudHandlers(
       const lockedRefusal = refuseIfDealLocked(validatedTransactionId as string, "add-contact");
       if (lockedRefusal) return lockedRefusal;
 
-      const restored = await databaseService.restoreContactToTransaction(
+      // BACKLOG-3339 slice T: the owner is read BEFORE the change, and a missing
+      // deal is refused (no "unknown" owner: the entry's user is a foreign key).
+      const transaction = await databaseService.getTransactionById(
         validatedTransactionId as string,
-        validatedContactId as string,
       );
+      if (!transaction) {
+        return { success: false, error: "Transaction not found" };
+      }
 
       // Audit the restore. Removal writes a trail entry; a compliance product
       // that records who took a party off a deal but not who put them back has
@@ -1193,18 +1144,29 @@ export function registerTransactionCrudHandlers(
       // the specific act — exactly the idiom BACKLOG-2365 used for removal,
       // where both delete and un-import log CONTACT_DELETE and are told apart
       // by `metadata.reason`.
-      if (restored) {
-        const transaction = await databaseService.getTransactionById(
-          validatedTransactionId as string,
-        );
-        await auditService.log({
-          userId: transaction?.user_id || "unknown",
-          action: "TRANSACTION_UPDATE",
-          resourceType: "TRANSACTION",
-          resourceId: validatedTransactionId as string,
-          metadata: { contactId: validatedContactId, reason: "contact_restore" },
-          success: true,
+      //
+      // BACKLOG-3339 slice T: the restore and its entry commit together or not
+      // at all. A failed entry cancels the restore.
+      const restoreEntry = {
+        userId: transaction.user_id,
+        action: "TRANSACTION_UPDATE" as const,
+        resourceType: "TRANSACTION" as const,
+        resourceId: validatedTransactionId as string,
+        metadata: { contactId: validatedContactId, reason: "contact_restore" },
+      };
+      let restored: boolean;
+      try {
+        restored = dbTransaction(() => {
+          const changed = databaseService.restoreContactToTransactionSync(
+            validatedTransactionId as string,
+            validatedContactId as string,
+          );
+          if (changed) auditService.recordInTransaction(restoreEntry);
+          return changed;
         });
+      } catch (error) {
+        auditService.recordFailure({ ...restoreEntry, errorMessage: dealChangeFailureCode(error) });
+        throw dealToggleUserError("restoreContact", error);
       }
 
       logService.info("Restored contact to transaction", "Transactions", {

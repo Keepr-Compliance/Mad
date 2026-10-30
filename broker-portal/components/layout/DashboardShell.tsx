@@ -35,6 +35,8 @@ export interface DashboardShellProps {
   showBilling?: boolean;
   /** BACKLOG-3878: the account is suspended; the Sidebar shows Billing / Support / My Account only. */
   suspended?: boolean;
+  /** BACKLOG-3853 PR-2B: the brokerage is suspended (full-portal users only); see Sidebar. */
+  orgSuspended?: boolean;
 }
 
 export function DashboardShell({
@@ -50,6 +52,7 @@ export function DashboardShell({
   floorOnly,
   showBilling,
   suspended,
+  orgSuspended,
 }: DashboardShellProps) {
   const [collapsed, setCollapsed] = useState(false);
   // BACKLOG-3798: the phone drawer (below md). Separate from `collapsed`, which
@@ -94,6 +97,7 @@ export function DashboardShell({
         floorOnly={floorOnly}
         showBilling={showBilling}
         suspended={suspended}
+        orgSuspended={orgSuspended}
         mobileOpen={menuOpen}
         // BACKLOG-3896: the kit Drawer returns focus to this ref on close. No
         // focus() here: a second restore would mask a missing ref.

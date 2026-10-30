@@ -54,6 +54,8 @@ interface CreateTicketParams {
   category_id: string | null;
   requester_email: string;
   requester_name: string;
+  /** BACKLOG-4065: id of the transaction open when the ticket was sent. */
+  open_transaction_id?: string | null;
 }
 
 /** Diagnostics data shape (must match main process type) */

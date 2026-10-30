@@ -1,11 +1,17 @@
 'use client';
 
 /**
- * IT Admin Setup Page
+ * Brokerage setup page (BACKLOG-3851)
  *
- * Dedicated page for first-time IT admin onboarding.
- * Microsoft-only (enterprise feature), uses consent prompt
- * to ensure email/profile scopes are granted.
+ * A person their brokerage invited signs in with Microsoft to accept the
+ * invitation; an admin's sign-in also links the brokerage to their Microsoft
+ * organization. It never creates a brokerage. Microsoft-only, uses the consent
+ * prompt to ensure email/profile scopes are granted.
+ *
+ * BACKLOG-3684: an invitation is accepted only through its link. /setup?token=
+ * (a link given by support) stores the token through POST /api/invite/start
+ * before the sign-in; /setup without a token only links the Microsoft
+ * organization for an admin already in a brokerage.
  */
 
 import { useState, useEffect, Suspense } from 'react';
@@ -20,7 +26,20 @@ const ERROR_MESSAGES: Record<string, string> = {
   no_tenant: 'Could not verify your Microsoft organization. Please contact support.',
   no_email:
     'Microsoft did not return your email address. Check your Azure AD app permissions (email claim must be enabled).',
-  provision_failed: 'Failed to create your organization. Please try again or contact support.',
+  no_invite:
+    "We couldn't find a Keepr invitation for this Microsoft account. Open the invitation link in the email Keepr sent you and sign in from there. No email? Ask your brokerage admin or Keepr support to send a new one. If you use Keepr on your own, sign in instead.",
+  invalid_invite:
+    'This invitation link is no longer valid. It may have been used already or replaced by a newer one. Ask your brokerage admin to send a new invitation.',
+  email_mismatch:
+    'This invitation was sent to a different email address. Sign in with the account that received the invitation.',
+  expired: 'This invitation has expired. Ask your brokerage admin to send a new one.',
+  already_placed:
+    "You're already a member of a Keepr brokerage, so this invitation was not accepted. To join a different brokerage, ask your current brokerage admin to remove you first, then open the invitation link again.",
+  tenant_in_use:
+    "This Microsoft organization is already connected to a different brokerage in Keepr. Contact Keepr support and we'll sort it out.",
+  tenant_mismatch:
+    'Your brokerage is connected to a different Microsoft organization than the account you signed in with. Sign in with your work account for that brokerage, or contact Keepr support.',
+  provision_failed: "We couldn't finish setting up your account. Please try again or contact support.",
   consumer_account: 'Personal Microsoft accounts are not supported. Please use your work account.',
 };
 
@@ -58,12 +77,32 @@ function SetupForm() {
 
   const urlError = searchParams.get('error');
   const displayError = error || hashError || (urlError ? ERROR_MESSAGES[urlError] : null);
+  const inviteToken = searchParams.get('token');
 
   const handleSetup = async () => {
     const { createClient } = await import('@/lib/supabase/client');
     const supabase = createClient();
     setLoading(true);
     setError(null);
+
+    if (inviteToken) {
+      let started = false;
+      try {
+        const res = await fetch('/api/invite/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: inviteToken, purpose: 'setup' }),
+        });
+        started = res.ok;
+      } catch {
+        started = false;
+      }
+      if (!started) {
+        setError(ERROR_MESSAGES.invalid_invite);
+        setLoading(false);
+        return;
+      }
+    }
 
     const { error: authError } = await supabase.auth.signInWithOAuth({
       provider: 'azure',
@@ -87,9 +126,11 @@ function SetupForm() {
       <div className="max-w-md w-full space-y-8">
         <div className="text-center">
           <h1 className="text-3xl font-bold text-gray-900"><Wordmark /></h1>
-          <h2 className="mt-2 text-xl text-gray-600">Set Up Your Organization</h2>
+          <h2 className="mt-2 text-xl text-gray-600">Connect your brokerage</h2>
           <p className="mt-4 text-gray-500">
-            Sign in with a Microsoft work account from the organization you want to set up.
+            Use this page if your brokerage invited you to Keepr as an admin or IT admin. Sign in
+            with your Microsoft work account to accept the invitation and connect your
+            brokerage&apos;s Microsoft account.
           </p>
         </div>
 
@@ -120,17 +161,24 @@ function SetupForm() {
             )}
             <span>{loading ? 'Setting up...' : 'Set up with Microsoft'}</span>
           </button>
+          {!inviteToken && (
+            <p className="text-center text-sm text-gray-500">
+              Setting up your brokerage for the first time? Start from the invitation link in the
+              email Keepr sent you.
+            </p>
+          )}
         </div>
 
         <div className="text-center space-y-2">
           <p className="text-sm text-gray-500">
-            This creates your organization and sets you up as IT administrator.
+            Setup completes an invitation from your brokerage. It does not create a new brokerage.
           </p>
           <p className="text-sm text-gray-400">
-            Already have an account?{' '}
+            Working on your own? You don&apos;t need setup -{' '}
             <a href="/login" className="text-primary-600 hover:text-primary-700">
-              Sign in
+              sign in instead
             </a>
+            .
           </p>
         </div>
       </div>

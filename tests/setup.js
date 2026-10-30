@@ -25,6 +25,24 @@ if (typeof global.ResizeObserver === 'undefined') {
   };
 }
 
+// BACKLOG-4073: jsdom lacks the Element methods Radix (the @keepr/ui kit's
+// Select, Dialog, Dropdown) calls. Same four stubs as packages/ui/test/setup.ts.
+if (typeof global.Element !== 'undefined') {
+  const proto = global.Element.prototype;
+  if (!proto.hasPointerCapture) {
+    proto.hasPointerCapture = () => false;
+  }
+  if (!proto.setPointerCapture) {
+    proto.setPointerCapture = () => {};
+  }
+  if (!proto.releasePointerCapture) {
+    proto.releasePointerCapture = () => {};
+  }
+  if (!proto.scrollIntoView) {
+    proto.scrollIntoView = () => {};
+  }
+}
+
 // Limit stack trace depth in CI/CD for cleaner error output
 if (process.env.CI) {
   Error.stackTraceLimit = 3; // Only show 3 stack frames in CI
@@ -39,6 +57,8 @@ if (typeof window !== 'undefined') {
       loginWithMicrosoft: jest.fn().mockResolvedValue({ success: true }),
       logout: jest.fn().mockResolvedValue({ success: true }),
       getCurrentUser: jest.fn().mockResolvedValue({ success: false }),
+      // BACKLOG-4038: name + email for the blocked screen's support form.
+      getUserContact: jest.fn().mockResolvedValue({ success: false, name: "", email: "" }),
       acceptTerms: jest.fn().mockResolvedValue({ success: true }),
       googleLogin: jest.fn().mockResolvedValue({ success: true }),
       googleCompleteLogin: jest.fn().mockResolvedValue({ success: true }),
@@ -59,7 +79,6 @@ if (typeof window !== 'undefined') {
     transactions: {
       getAll: jest.fn(),
       getPendingCount: jest.fn(),
-      create: jest.fn(),
       createAudited: jest.fn(),
       update: jest.fn(),
       delete: jest.fn(),
@@ -164,7 +183,6 @@ if (typeof window !== 'undefined') {
       update: jest.fn(),
       import: jest.fn(),
       checkCanDelete: jest.fn(),
-      delete: jest.fn(),
       remove: jest.fn(),
       // TASK-1995: email/phone entries with row IDs for multi-entry editing
       getEditData: jest.fn().mockResolvedValue({ success: true, emails: [], phones: [] }),
@@ -282,6 +300,14 @@ if (typeof window !== 'undefined') {
       // Default "not-dismissed" keeps the dashboard tour starting as before.
       getTourState: jest.fn().mockResolvedValue({ success: true, tour: "not-dismissed" }),
       dismissTour: jest.fn().mockResolvedValue({ success: true }),
+    },
+    // BACKLOG-3863: plan summary defaults to UNAVAILABLE (the card's fallback
+    // row), never a paid state, so a test that forgets to override is not
+    // shown a subscription it does not have.
+    billing: {
+      openPortal: jest.fn().mockResolvedValue({ success: true }),
+      getPlanSummary: jest.fn().mockResolvedValue({ unavailable: true }),
+      refresh: jest.fn().mockResolvedValue({ unavailable: true }),
     },
     shell: {
       openExternal: jest.fn(),

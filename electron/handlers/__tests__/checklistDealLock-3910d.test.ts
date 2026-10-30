@@ -79,7 +79,12 @@ jest.mock("../../services/db/core/dbConnection", () => ({
 
 jest.mock("../../services/databaseService", () => ({
   __esModule: true,
-  default: { getTransactionById: jest.fn(() => Promise.resolve(null)) },
+  // BACKLOG-3339 slice T: add / remove read the deal's owner (the audit
+  // entry's user) before their transaction. The real read, over this database.
+  default: {
+    getTransactionById: (id: string) =>
+      jest.requireActual("../../services/db/transactionDbService").getTransactionById(id),
+  },
 }));
 
 jest.mock("../../services/supabaseService", () => ({
@@ -93,7 +98,12 @@ jest.mock("../../services/supabaseService", () => ({
 
 jest.mock("../../services/auditService", () => ({
   __esModule: true,
-  default: { log: jest.fn().mockResolvedValue(undefined) },
+  default: {
+    log: jest.fn().mockResolvedValue(undefined),
+    recordInTransaction: jest.fn(),
+    recordFailure: jest.fn(),
+  },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
 }));
 
 // The plan allows checklists here: the only refusal under test is the lock.

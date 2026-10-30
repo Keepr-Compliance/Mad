@@ -68,7 +68,7 @@ async function handleOrgResend(
   user: { id: string; email?: string; user_metadata?: Record<string, string> }
 ) {
   // Use service role client to bypass RLS — admin portal users are not org members
-  const adminClient = createServiceClient();
+  const adminClient = createServiceClient({ actorId: user.id });
 
   // Debug: verify service client can query at all
   const { data: testData, error: testError } = await adminClient

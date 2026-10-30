@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withSentryConfig } from '@sentry/nextjs';
+import { LEGACY_REDIRECTS } from './lib/legacy-redirects.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -25,6 +26,11 @@ const nextConfig = {
       path.resolve(__dirname, 'node_modules'),
     ];
     return config;
+  },
+
+  // BACKLOG-4005: old Analytics / Funnel / reports URLs.
+  async redirects() {
+    return LEGACY_REDIRECTS;
   },
 
   async headers() {

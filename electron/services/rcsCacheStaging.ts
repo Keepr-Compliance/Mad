@@ -40,6 +40,8 @@ import * as path from "path";
 import { lookupMessageIds, RCS_LOOKUP_CHUNK, type RcsChatPeople, type RcsImportResult, type RcsIncomingChat, type RcsIncomingMessage } from "./rcsImportStore";
 import { RCS_ALLOWED_IMAGE_MIME, RCS_MAX_IMAGE_BYTES, rcsImageExt, type RcsImageResult, type RcsIncomingImage } from "./rcsImportMedia";
 import { scrubRcsText } from "../utils/redactSensitive";
+import { containedIn, removeUnreferencedFiles } from "./attachmentFileRefs";
+import { SCOPE_MESSAGE_ATTACHMENTS } from "./atRest/markers";
 
 /** Staged image bytes per job. Over it, an image is refused as too large (counted, never silent). */
 export const RCS_CACHE_STAGING_MAX_BYTES = 2 * 1024 * 1024 * 1024;
@@ -101,8 +103,11 @@ export interface RcsStagingDbOps {
   journalClear(jobId: string): void;
   journalRows(): Array<{ jobId: string; path: string }>;
   journalDelete(filePath: string): void;
-  /** Does any attachments row (any user, any source) still point to this file? */
-  fileStillReferenced(filePath: string): boolean;
+  /**
+   * BACKLOG-4040: of `paths`, the files NO attachments row (any user, any
+   * source) points at — the shared check (attachmentFileRefs.ts). Synchronous.
+   */
+  unreferencedFiles(paths: readonly string[]): Set<string>;
 }
 
 export interface RcsStagingFs {
@@ -597,10 +602,8 @@ export class RcsCacheStaging {
           out.imagesNoMessage = (out.imagesNoMessage ?? 0) + one.imagesNoMessage;
         } catch (err) {
           // This chat only: its rows rolled back; its files go unless another row uses them.
-          for (const p of placed) {
-            if (!this.db.fileStillReferenced(p)) await this.files.unlink(p);
-            this.db.journalDelete(p);
-          }
+          await this.removeUnreferenced(placed);
+          for (const p of placed) this.db.journalDelete(p);
           if (out.stopped) break;
           out.chatsFailed = (out.chatsFailed ?? 0) + 1;
           h.log?.(`[RcsCache] A chat could not be saved (the others are kept): ${scrubRcsText(err)}`);
@@ -673,16 +676,23 @@ export class RcsCacheStaging {
 
   /** SR S2: files a crashed commit moved into place but never recorded. */
   async recoverPlacedFiles(): Promise<number> {
-    let removed = 0;
-    for (const row of this.db.journalRows()) {
-      if (this.committing.has(row.jobId)) continue;
-      if (!this.db.fileStillReferenced(row.path)) {
-        await this.files.unlink(row.path);
-        removed += 1;
-      }
-      this.db.journalDelete(row.path);
-    }
+    const rows = this.db.journalRows().filter((row) => !this.committing.has(row.jobId));
+    if (rows.length === 0) return 0;
+    const { removed } = await this.removeUnreferenced(rows.map((row) => row.path));
+    for (const row of rows) this.db.journalDelete(row.path);
     return removed;
+  }
+
+  /**
+   * BACKLOG-4040: the shared check — inside message-attachments only, and only
+   * files no attachments row uses (any case, any directory). One read of the
+   * names for the whole set, not one query per file.
+   */
+  private removeUnreferenced(paths: readonly string[]) {
+    return removeUnreferencedFiles(paths, {
+      contain: containedIn(path.dirname(path.resolve(this.files.attachmentsDir)), [SCOPE_MESSAGE_ATTACHMENTS]),
+      unreferenced: (ps) => this.db.unreferencedFiles(ps),
+    });
   }
 
   private async dropStaging(jobId: string): Promise<number> {

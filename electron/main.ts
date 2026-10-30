@@ -4,6 +4,11 @@
 // a log path on first write. tsconfig.electron.json emits CommonJS, which
 // preserves statement order, so import position IS execution position here.
 import "./bootstrap/installAppDataPaths";
+// BACKLOG-4052: remove four CA roots from Node's default trust store before
+// anything can open a connection (the change only reaches later connections).
+// MUST stay directly after the import above (it writes to the log path that
+// one sets) and before installSentry. Pinned by nodeCaDenylist-4052.test.ts.
+import "./bootstrap/installNodeCaDenylist";
 // BACKLOG-2962: Sentry BEFORE the composition root, so a capability missing at
 // launch reaches Sentry before the app exits. It must stay AFTER the import
 // above (its offline queue path is read from `userData` at init) and BEFORE the
@@ -28,6 +33,8 @@ import "./bootstrap/installIpcReplySizeLog";
 // BACKLOG-3884: log when the main event loop is blocked for 1 s or more, naming
 // the last IPC channel started. Reads the activity the import above records.
 import "./bootstrap/installMainLagMonitor";
+// BACKLOG-4052: a client-certificate request from no window gets no certificate.
+import "./bootstrap/installClientCertPolicy";
 import {
   app,
   BrowserWindow,
@@ -213,6 +220,7 @@ import { registerLicenseHandlers } from "./handlers/licenseHandlers";
 import { registerFeatureGateHandlers } from "./handlers/featureGateHandlers";
 import { registerEntitlementHandlers } from "./handlers/entitlementHandlers";
 import { registerPaymentHandlers } from "./handlers/paymentHandlers";
+import { registerBillingHandlers } from "./handlers/billingHandlers";
 import { sanitizeSessionId } from "./services/paymentService";
 import { registerPreAuthValidationHandler } from "./handlers/preAuthValidationHandler";
 import { registerSupportTicketHandlers } from "./handlers/supportTicketHandlers";
@@ -286,6 +294,7 @@ import { createWindowFreezeReporter, currentScreenName } from "./services/render
 import { syncTimeline } from "./services/syncTimeline";
 import { normalizeOAuthProvider } from "./utils/normalizeOAuthProvider";
 import { buildDeepLinkAuthPayload } from "./utils/deepLinkAuthPayload";
+import { licenseBlockedPayload } from "./utils/deepLinkLicenseBlockedPayload";
 
 // BACKLOG-3432: which installer this build came from, as a derived value only.
 // The Windows one-click installer migrates a prior per-machine install to
@@ -578,7 +587,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
     if (isRcsLinkDeepLink(url)) {
       // Founder (2026-10-06): the code "Copy code and open Keepr" copied —
       // Windows only, while a link is waiting, exactly the code (never logged).
-      const code = rcsLinkCodeForDeepLink();
+      const code = await rcsLinkCodeForDeepLink();
       log.info("[DeepLink] Link screen requested", { codeFromClipboard: code !== null });
       sendToRenderer("rcs-import:open-link-screen", code ? { code } : {});
       focusMainWindow();
@@ -709,7 +718,8 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       }
 
       const user = sessionData.user;
-      Sentry.setUser({ id: user.id, email: user.email ? redactEmail(user.email) : undefined });
+      // BACKLOG-4040 S3: id only — the scope is persisted to sentry/scope_v3.json in plaintext.
+      Sentry.setUser({ id: user.id });
       log.info("[DeepLink] Session established for user:", redactId(user.id));
 
       // TASK-1507: Step 2 - Validate license
@@ -728,13 +738,13 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         Sentry.captureException(new Error("Deep link auth: license blocked"), {
           tags: { component: "deep-link", action: "auth-callback", error_code: "LICENSE_BLOCKED", block_reason: licenseStatus.blockReason || "unknown" },
         });
-        sendToRenderer("auth:deep-link-license-blocked", {
-          accessToken,
-          refreshToken,
-          userId: user.id,
-          blockReason: licenseStatus.blockReason,
-          licenseStatus,
-        });
+        // BACKLOG-4041: user id and block reason only. The Supabase client
+        // keeps the session set above (setSession), which the blocked
+        // screen's contact lookup (sessionHandlers handleGetUserContact) reads.
+        sendToRenderer(
+          "auth:deep-link-license-blocked",
+          licenseBlockedPayload(user.id, licenseStatus.blockReason),
+        );
         focusMainWindow();
         return;
       }
@@ -1974,6 +1984,7 @@ app.whenReady().then(async () => {
 
   // Register PAYG card-purchase handlers (BACKLOG-2015)
   registerPaymentHandlers();
+  registerBillingHandlers(); // BACKLOG-3863
 
   // TASK-2086: Register pre-DB auth validation handler (SOC 2 CC6.1)
   registerPreAuthValidationHandler();

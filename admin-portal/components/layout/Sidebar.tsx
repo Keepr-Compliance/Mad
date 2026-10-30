@@ -16,7 +16,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { LayoutDashboard, BarChart3, Users, Building2, CreditCard, Headphones, Inbox, UserCheck, Settings, LogOut, ChevronLeft, FileText, ChevronDown, ChevronRight, Shield, KanbanSquare, ListChecks, FolderKanban, Calendar, Filter, FileBarChart2, X } from 'lucide-react';
+import { LayoutDashboard, Users, Building2, CreditCard, Headphones, Inbox, UserCheck, Settings, LogOut, ChevronLeft, FileText, ChevronDown, ChevronRight, Shield, KanbanSquare, ListChecks, FolderKanban, Calendar, FileBarChart2, X } from 'lucide-react';
 import { AppMark, Wordmark } from '@keepr/ui';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
@@ -34,9 +34,9 @@ interface NavItem {
 /** Top-level nav items (not grouped) */
 const mainNavItems: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, permission: PERMISSIONS.DASHBOARD_VIEW },
-  { label: 'Analytics', href: '/dashboard/analytics', icon: BarChart3, permission: PERMISSIONS.ANALYTICS_VIEW },
-  { label: 'Reports', href: '/dashboard/analytics/reports', icon: FileBarChart2, permission: PERMISSIONS.ANALYTICS_VIEW },
-  { label: 'Funnel', href: '/dashboard/funnel', icon: Filter, permission: PERMISSIONS.ANALYTICS_VIEW },
+  // BACKLOG-4005: one entry. Analytics and Funnel are cards on the Reports page.
+  // Prefix-matched, so it stays lit on every /dashboard/reports/* page.
+  { label: 'Reports', href: '/dashboard/reports', icon: FileBarChart2, permission: PERMISSIONS.ANALYTICS_VIEW },
   { label: 'Users', href: '/dashboard/users', icon: Users, permission: PERMISSIONS.USERS_VIEW },
   { label: 'Organizations', href: '/dashboard/organizations', icon: Building2, permission: PERMISSIONS.ORGANIZATIONS_VIEW },
   { label: 'Plans', href: '/dashboard/plans', icon: CreditCard, permission: PERMISSIONS.PLANS_VIEW },
@@ -46,7 +46,6 @@ const mainNavItems: NavItem[] = [
 const supportSubItems: NavItem[] = [
   { label: 'Queue', href: '/dashboard/support', icon: Inbox, permission: PERMISSIONS.SUPPORT_VIEW },
   { label: 'My Tickets', href: '/dashboard/support/my-tickets', icon: UserCheck, permission: PERMISSIONS.SUPPORT_VIEW },
-  { label: 'Analytics', href: '/dashboard/support/analytics', icon: BarChart3, permission: PERMISSIONS.SUPPORT_MANAGE },
   { label: 'Settings', href: '/dashboard/support/settings', icon: Settings, permission: PERMISSIONS.SUPPORT_MANAGE },
 ];
 
@@ -188,7 +187,7 @@ export function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose
   }, [mobileOpen]);
 
   /** Paths that should use exact-match only (prefix of other routes) */
-  const exactMatchPaths = new Set(['/dashboard', '/dashboard/analytics', '/dashboard/support', '/dashboard/pm']);
+  const exactMatchPaths = new Set(['/dashboard', '/dashboard/support', '/dashboard/pm']);
 
   /**
    * One nav link. `isCollapsed` is the aside's collapsed state, or false in the

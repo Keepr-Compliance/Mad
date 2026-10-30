@@ -54,6 +54,8 @@ jest.mock("../core/dbConnection", () => ({
   dbAll: (sql: string, params: unknown[] = []) => db.prepare(sql).all(...params),
   dbGet: (sql: string, params: unknown[] = []) => db.prepare(sql).get(...params),
   dbRun: (sql: string, params: unknown[] = []) => db.prepare(sql).run(...params),
+  // BACKLOG-3339 slice T: the async restore runs its sync twin in a transaction.
+  dbTransaction: <T,>(fn: () => T): T => db.transaction(fn)(),
 }));
 
 import {

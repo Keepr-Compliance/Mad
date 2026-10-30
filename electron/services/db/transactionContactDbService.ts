@@ -607,10 +607,10 @@ export async function getRemovedTransactionContacts(
  * who is removed globally can still have a role restored here, and will still
  * not appear in Clients & Contacts until she is restored there too.
  */
-export async function restoreContactToTransaction(
+export function restoreContactToTransactionSync(
   transactionId: string,
   contactId: string,
-): Promise<boolean> {
+): boolean {
   const statement = sql`
     UPDATE transaction_contacts
     SET removed_at = NULL, removed_reason = NULL, updated_at = CURRENT_TIMESTAMP
@@ -618,6 +618,22 @@ export async function restoreContactToTransaction(
   `;
   const { changes } = dbRun(statement, [transactionId, contactId]);
   return changes > 0;
+}
+
+/**
+ * No production caller (BACKLOG-3339 slice T): the promise half that
+ * syncTwin.guard requires for `restoreContactToTransactionSync`, which the
+ * `transactions:restore-contact` handler calls inside its `dbTransaction`
+ * together with the audit entry. A fixture producer for
+ * transactionContactRestore.test.ts.
+ */
+export function restoreContactToTransaction(
+  transactionId: string,
+  contactId: string,
+): Promise<boolean> {
+  return Promise.resolve(
+    dbTransaction(() => restoreContactToTransactionSync(transactionId, contactId)),
+  );
 }
 
 /**

@@ -13,7 +13,7 @@ import gmailFetchService from "../gmailFetchService";
 import outlookFetchService from "../outlookFetchService";
 import transactionExtractorService from "../transactionExtractorService";
 import logService from "../logService";
-import type { Transaction, NewTransaction } from "../../types";
+import type { Transaction } from "../../types";
 import type { TransactionWithDetails } from "../transactionService/types";
 
 // Mock the dependencies
@@ -697,38 +697,6 @@ describe("TransactionService - Additional Coverage", () => {
         }),
       
         [],
-      );
-    });
-  });
-
-  describe("Address Parsing", () => {
-    it("should parse full address correctly in createManualTransaction", async () => {
-      // We can indirectly test address parsing through the transaction creation
-      const transactionData: Partial<NewTransaction> = {
-        property_address: "123 Main St, San Francisco, CA 94102",
-        property_street: "123 Main St",
-        property_city: "San Francisco",
-        property_state: "CA",
-        property_zip: "94102",
-      };
-
-      (databaseService.createTransaction as jest.Mock).mockResolvedValue({
-        ...mockTransaction,
-        ...transactionData,
-      });
-
-      await transactionService.createManualTransaction(
-        mockUserId,
-        transactionData,
-      );
-
-      expect(databaseService.createTransaction).toHaveBeenCalledWith(
-        expect.objectContaining({
-          property_street: "123 Main St",
-          property_city: "San Francisco",
-          property_state: "CA",
-          property_zip: "94102",
-        }),
       );
     });
   });

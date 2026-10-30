@@ -1,0 +1,43 @@
+BACKLOG-4007 PR-4 fix-up JS mutants (scratch run.py: exact-once replace, git diff --numstat printed, git checkout restore). Broker: billing-login-4007, agentFloor-3080, components/layout, phone-layout-3798, phone-title-3896 (1067 tests). Root: tests/edge-functions/scimSeats.test.ts (33). Plus SQL-text mutant for the parity test: role list + it_admin -> 1 red (peopleRoles parity).
+J1_people_roles_admit_agent MUTATION APPLIED 1	1	broker-portal/lib/people-roles.ts | export const PEOPLE_ROLES = ['admin', 'it_admin', 'broker', 'agent'] a
+   9 failed, 1058 passed, 1067 total | restored
+    red: /dashboard/people gate (checkPeopleAccess) › agent with full access
+    red: People actions: the two role lists › agent
+    red: Sidebar: People › agent
+    red: broker People actions › refused before any RPC for anyone the gate refuses (lists: peopleRoles.test.tsx)
+    red: lib/people-roles.ts › agent
+    red: refused server actions › lib/actions/orgContacts.ts#listOrgContacts refuses the brokerage agent, and writes nothing
+    red: refused server actions › lib/actions/orgContacts.ts#removeOrgContact refuses the brokerage agent, and writes nothing
+    red: refused server actions › lib/actions/orgContacts.ts#saveOrgContact refuses the brokerage agent, and writes nothing
+    red: the database rule is the same set (migration 20261020180000) › the 'broker' kind is PEOPLE_BILLING_ROLES; 'broker' + 'it_admin' is PEOPLE_RO
+J2_billing_save_uses_people_roles MUTATION APPLIED 1	1	broker-portal/lib/actions/orgContacts.ts | PEOPLE_ROLES
+   2 failed, 1065 passed, 1067 total | restored
+    red: People actions: the two role lists › an IT admin cannot set the billing contact or the billing-only login: no RPC
+    red: People actions: the two role lists › it_admin
+J3_login_set_uses_people_roles MUTATION APPLIED 1	1	broker-portal/lib/actions/orgContacts.ts | const g = await gate(organizationId, PEOPLE_ROLES);
+   3 failed, 1064 passed, 1067 total | restored
+    red: People actions: the two role lists › an IT admin cannot set the billing contact or the billing-only login: no RPC
+    red: People actions: the two role lists › it_admin
+    red: broker People actions › refused before any RPC for anyone the gate refuses (lists: peopleRoles.test.tsx)
+J4_page_gate_any_full_role MUTATION APPLIED 0	1	broker-portal/lib/people-access.ts | 
+   1 failed, 1066 passed, 1067 total | restored
+    red: /dashboard/people gate (checkPeopleAccess) › agent with full access
+J5_sidebar_people_any_role MUTATION APPLIED 1	1	broker-portal/components/layout/Sidebar.tsx | !isImpersonating && true;
+   1 failed, 1066 passed, 1067 total | restored
+    red: Sidebar: People › agent
+J6_panel_ignores_can_edit_billing MUTATION APPLIED 1	1	packages/ui/src/components/org-people.tsx | const editableBilling = editable;
+   1 failed, 1066 passed, 1067 total | restored
+    red: OrgPeoplePanel for an IT admin (can_edit_billing false) › the billing row has no buttons and says who can change it; IT, office and MSP can 
+J7_scim_claims_billing_only MUTATION APPLIED 1	1	supabase/functions/scim/handlers/users.ts | .filter(() => true)
+   1 failed, 32 passed, 33 total | restored
+    red: POST existing person › F2 free seat: the billing-only invitation is not claimed, it stays unassigned and unclaimed
+J8_billing_roles_admit_it_admin MUTATION APPLIED 1	1	broker-portal/lib/people-roles.ts | export const PEOPLE_BILLING_ROLES = ['admin', 'broker', 'it_admin'] as
+   5 failed, 1062 passed, 1067 total | restored
+    red: People actions: the two role lists › an IT admin cannot set the billing contact or the billing-only login: no RPC
+    red: People actions: the two role lists › it_admin
+    red: broker People actions › refused before any RPC for anyone the gate refuses (lists: peopleRoles.test.tsx)
+    red: lib/people-roles.ts › it_admin
+    red: the database rule is the same set (migration 20261020180000) › the 'broker' kind is PEOPLE_BILLING_ROLES; 'broker' + 'it_admin' is PEOPLE_RO
+J9_list_says_can_edit_billing MUTATION APPLIED 1	1	broker-portal/lib/actions/orgContacts.ts | can_edit_billing: true,
+   1 failed, 1066 passed, 1067 total | restored
+    red: People actions: the two role lists › can_edit_billing from the database reaches the view

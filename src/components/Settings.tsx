@@ -179,6 +179,7 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
 
             <GeneralSettings userId={userId} initialPreferences={preferences} />
 
+
             <EmailSettings
               userId={userId}
               initialPreferences={preferences}

@@ -612,14 +612,6 @@ export interface WindowApiTransactions {
     contacts?: Array<Record<string, unknown>>;
     error?: string;
   }>;
-  create: (
-    userId: string,
-    transactionData: Record<string, unknown>,
-  ) => Promise<{
-    success: boolean;
-    transaction?: Transaction;
-    error?: string;
-  }>;
   createAudited: (
     userId: string,
     transactionData: Record<string, unknown>,
@@ -655,7 +647,13 @@ export interface WindowApiTransactions {
       attachmentType?: ExportAttachmentType;
       emailExportMode?: ExportEmailMode;
     },
-  ) => Promise<{ success: boolean; path?: string; error?: string }>;
+  ) => Promise<{
+    success: boolean;
+    path?: string;
+    error?: string;
+    /** BACKLOG-3339: the file at `path` was saved but the export was not recorded. */
+    notRecorded?: boolean;
+  }>;
   assignContact: (
     transactionId: string,
     contactId: string,
@@ -809,10 +807,14 @@ export interface WindowApiTransactions {
     /** BACKLOG-3837: `rosterPending` = the roster itself is not read yet; `contacts` is empty. */
     contactsStatus?: { messageDerivedPending?: boolean; rosterPending?: boolean };
   }>;
-  /** Gets unlinked messages for a specific contact */
-  getMessagesByContact: (userId: string, contact: string) => Promise<{
+  /** Gets unlinked messages for a specific contact, minus chats linked to `transactionId` (BACKLOG-4017) */
+  getMessagesByContact: (userId: string, contact: string, transactionId: string) => Promise<{
     success: boolean;
     messages?: PickerMessage[];
+    /** BACKLOG-4017: how many of the contact's chats were left out because they are linked to this deal. */
+    linkedToDealThreadCount?: number;
+    /** BACKLOG-4017: no chats offered, and this contact's texts were attached to this deal one by one. */
+    hasTextsAttachedToDeal?: boolean;
     error?: string;
   }>;
   /** Links messages to a transaction */
@@ -1054,6 +1056,8 @@ export interface WindowApiTransactions {
     success: boolean;
     path?: string;
     error?: string;
+    /** BACKLOG-3339: the folder at `path` was saved but the export was not recorded. */
+    notRecorded?: boolean;
   }>;
   /** Get earliest communication date for contacts (TASK-1974) */
   getEarliestCommunicationDate: (contactIds: string[], userId: string) => Promise<{

@@ -25,7 +25,9 @@
       "@electron/*": ["electron/*"],
       "@types/*": ["types/*"],
       "@keepr/shared": ["packages/shared/src"],
-      "@keepr/shared/*": ["packages/shared/src/*"]
+      "@keepr/shared/*": ["packages/shared/src/*"],
+      "@keepr/ui": ["packages/ui/src/index.ts"],
+      "@keepr/design-system": ["packages/design-system/src/index.ts"]
     },
 
     // Type checking (strict mode enabled - Sprint 3)

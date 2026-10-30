@@ -958,8 +958,8 @@ When verifying CI status, you MUST:
 **Example verification response:**
 ```
 CI Status for PR #114:
-✓ Test & Lint (macos-latest, 20.x)  pass
-✓ Test & Lint (windows-latest, 20.x)  pass
+✓ Test & Lint (macos-latest)  pass
+✓ Test & Lint (windows-latest)  pass
 ✓ Build Application (macos-latest)  pass
 ✓ Build Application (windows-latest)  pass
 ✓ Security Audit  pass

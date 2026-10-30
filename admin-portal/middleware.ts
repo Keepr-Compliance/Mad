@@ -12,16 +12,8 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { isBareAuthTokenCookie, safeAuthErrorInfo } from '@/lib/supabase/cookie-guard';
-
-/** Maps route prefixes to required permission keys (any one grants access) */
-const ROUTE_PERMISSIONS: Record<string, string[]> = {
-  '/dashboard/analytics': ['analytics.view'],
-  '/dashboard/users': ['users.view'],
-  '/dashboard/organizations': ['organizations.view'],
-  '/dashboard/audit-log': ['audit.view'],
-  '/dashboard/settings': ['internal_users.view', 'roles.view', 'audit.view'],
-  '/dashboard/support': ['support.view'],
-};
+import { requiredPermissionsFor } from '@/lib/route-permissions';
+import { safeNextPath } from '@/lib/auth/safeNextPath';
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
@@ -122,17 +114,15 @@ export async function middleware(request: NextRequest) {
       }
 
       // Check route-level permissions (skip for /dashboard root — always allowed for internal users)
-      for (const [routePrefix, requiredPermissions] of Object.entries(ROUTE_PERMISSIONS)) {
-        if (pathname.startsWith(routePrefix)) {
-          const { data: hasAnyPerm } = await supabase.rpc('has_any_permission', {
-            check_user_id: user.id,
-            permission_keys: requiredPermissions,
-          });
+      const requiredPermissions = requiredPermissionsFor(pathname);
+      if (requiredPermissions) {
+        const { data: hasAnyPerm } = await supabase.rpc('has_any_permission', {
+          check_user_id: user.id,
+          permission_keys: requiredPermissions,
+        });
 
-          if (!hasAnyPerm) {
-            return NextResponse.redirect(new URL('/dashboard?error=insufficient_permissions', request.url));
-          }
-          break;
+        if (!hasAnyPerm) {
+          return NextResponse.redirect(new URL('/dashboard?error=insufficient_permissions', request.url));
         }
       }
     }
@@ -146,8 +136,7 @@ export async function middleware(request: NextRequest) {
         .single();
 
       if (internalRole) {
-        const rawRedirect = request.nextUrl.searchParams.get('redirectTo') ?? '/dashboard';
-        const redirectTo = /^\/[a-zA-Z0-9\-_\/\?\&\=\#\.]+$/.test(rawRedirect) ? rawRedirect : '/dashboard';
+        const redirectTo = safeNextPath(request.nextUrl.searchParams.get('redirectTo'));
         return NextResponse.redirect(new URL(redirectTo, request.url));
       }
     }

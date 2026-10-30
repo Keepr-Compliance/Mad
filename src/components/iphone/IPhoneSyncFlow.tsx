@@ -8,7 +8,7 @@ import { isStoreBuild, isWindowsArm64 } from "../../utils/platform";
 import { SyncStepChangeLog } from "../../utils/syncStepLog";
 import { useRetryCountdown } from "../../utils/syncRetryCooldown";
 import { RetryCooldownNotice, SyncStartButtonContent } from "./SyncStartButtonContent";
-import { ToolBlockedNotice, isToolBlockedError } from "./ToolBlockedNotice";
+import { ToolBlockedNotice, isToolBlockedError, isStepsNoticeError } from "./ToolBlockedNotice";
 
 /**
  * BACKLOG-3816: the error screen never shows "Sync Failed" alone. The hook keeps a failed
@@ -60,6 +60,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     appleEncryptedBackup,
     lastSyncTime,
     isWaitingForPasscode,
+    toolSuspendedNotice,
     syncLocked,
     lockReason,
     // BACKLOG-1919: Apple-driver recovery state + action
@@ -202,6 +203,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
           // ConnectionStatus view, as if freshly opened.
           onCancel={() => { logger.info("[IPhoneSyncFlow] Cancel clicked"); void cancelSync("progress-cancel"); }}
           isWaitingForPasscode={isWaitingForPasscode}
+          toolSuspendedNotice={toolSuspendedNotice}
         />
       )}
 
@@ -338,9 +340,10 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
               />
             </svg>
           </div>
-          {/* BACKLOG-3953: a blocked iPhone tool shows its restore steps; every other
-              failure keeps the one-line message. */}
-          {isToolBlockedError(userError) ? (
+          {/* BACKLOG-3953: a blocked iPhone tool shows its restore steps. BACKLOG-3996: so
+              does an iPhone query that timed out. Every other failure keeps the one-line
+              message. */}
+          {isStepsNoticeError(userError) ? (
             <ToolBlockedNotice userError={userError} />
           ) : (
             <>

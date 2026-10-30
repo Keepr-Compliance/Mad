@@ -37,6 +37,7 @@ import { reportBackupProblem } from "../services/atRest/backupProblemReport";
 import { iOSMessagesParser } from "../services/iosMessagesParser";
 import { macOSMessagesImportService } from "../services/macOSMessagesImportService/macOSMessagesImportService";
 import { validateTransactionId } from "../utils/validation";
+import { killAllIphoneTools } from "../services/iphoneToolProcess";
 import type { BackfillAvailability, BackfillResult } from "../types/iphoneBackfill";
 
 /**
@@ -583,6 +584,14 @@ function setupEventForwarding(): void {
     sendToMainWindow("sync:waiting-for-passcode", {});
   });
 
+  // BACKLOG-4002 (Windows): the backup tool is suspended ({ suspended: true, userError })
+  // or running again ({ suspended: false }). The renderer shows the notice in place of
+  // the "please don't cancel" panel.
+  orchestrator.on("tool-suspended", (payload: { suspended: boolean; userError?: unknown }) => {
+    log.info("[SyncHandlers] Backup tool suspended state", { suspended: payload.suspended });
+    sendToMainWindow("sync:tool-suspended", payload);
+  });
+
   orchestrator.on("passcode-entered", () => {
     log.info("[SyncHandlers] Device started sending files; transfer beginning");
     sendToMainWindow("sync:passcode-entered", {});
@@ -730,6 +739,17 @@ function setupEventForwarding(): void {
           log.error("[SyncHandlers] Attachments not saved: file-data key unavailable");
           syncTimeline.endSync("error");
           sendToMainWindow("sync:storage-error", { error: persistResult.error });
+          return false;
+        }
+
+        // BACKLOG-3343: any other failure — the storage service rolled it back (or the
+        // next launch will). Never report it as "storage complete".
+        if (!persistResult.success) {
+          log.error("[SyncHandlers] Database persistence failed", { error: persistResult.error });
+          syncTimeline.endSync("error");
+          sendToMainWindow("sync:storage-error", {
+            error: "Saving the sync failed. Run the sync again.",
+          });
           return false;
         }
 
@@ -884,6 +904,12 @@ export function setSyncUserId(userId: string | null): void {
  * delayed. Must be called before `cleanupSyncHandlers()`, which drops the orchestrator.
  */
 export function stopBackupForQuit(): Promise<unknown> | null {
+  // BACKLOG-3996: every short iPhone query still alive (device polling, pre-flight).
+  // An undetached child outlives the app otherwise. Not waited on.
+  const stoppedQueries = killAllIphoneTools("app-quit");
+  if (stoppedQueries > 0) {
+    log.info("[SyncHandlers] App quitting; stopped iPhone queries", { count: stoppedQueries });
+  }
   return orchestrator ? orchestrator.stopBackupForQuit() : null;
 }
 

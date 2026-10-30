@@ -13,6 +13,7 @@
  * IMPORTANT: Messages must NEVER include technical details (stack traces, error codes).
  * Technical details go to Sentry via Phase 1 diagnostic tasks.
  */
+import { BACKUP_WATCHDOG_NO_PROGRESS_TIMEOUT_MS, IPHONE_QUERY_TIMEOUT_MS } from "../iphoneToolLimits";
 
 export interface UserFacingError {
   title: string;
@@ -36,6 +37,12 @@ export type UserErrorCode =
   | "DEVICE_NOT_DETECTED"
   /** BACKLOG-3953: an iPhone tool never started (Windows). See iphoneToolBlock.ts. */
   | "SECURITY_SOFTWARE_BLOCKED"
+  /** BACKLOG-3996: a short iPhone query did not answer within its time limit. */
+  | "IPHONE_TOOL_TIMEOUT"
+  /** BACKLOG-4002: every thread of the running backup tool is suspended (Windows). A live notice, not an error. */
+  | "IPHONE_TOOL_SUSPENDED"
+  /** BACKLOG-4002: the backup made no progress for the watchdog's limit and was stopped. */
+  | "BACKUP_TIMEOUT"
   | "SYNC_FAILED";
 
 /**
@@ -238,5 +245,125 @@ export function formatToolBlockedError(keeprFolder?: string | null): UserFacingE
       "Security software on this computer blocked one of the tools Keepr uses to connect to your iPhone.",
     actionSuggestion: [...steps.map((step, i) => `${i + 1}. ${step}`), SUPPORT_CLOSING_LINE].join("\n"),
     code: "SECURITY_SOFTWARE_BLOCKED",
+  };
+}
+
+/** BACKLOG-4002: "1. step" lines, then the support line (SR R5: one join for every steps message). */
+function numberedSteps(steps: string[]): string {
+  return [...steps.map((step, i) => `${i + 1}. ${step}`), SUPPORT_CLOSING_LINE].join("\n");
+}
+
+/** BACKLOG-3953 / 4002: the folder step, with the folder when it is known. */
+function folderExceptionStep(keeprFolder?: string | null): string {
+  return keeprFolder
+    ? `Add an exception for the Keepr folder: ${keeprFolder}`
+    : "Add an exception for the Keepr folder.";
+}
+
+/**
+ * BACKLOG-4002: the step for an antivirus alert. Never "allow it": in the founder's
+ * security software the alert's own exception button quarantined the installer (PC
+ * test on BACKLOG-3996). A folder exception added by hand was the safe route.
+ */
+function antivirusAlertStep(keeprFolder?: string | null): string {
+  return keeprFolder
+    ? `If your antivirus is showing an alert about Keepr, open your antivirus program and add an exception for the Keepr folder: ${keeprFolder}`
+    : "If your antivirus is showing an alert about Keepr, open your antivirus program and add an exception for the Keepr folder.";
+}
+
+const WATCHDOG_MINUTES = Math.round(BACKUP_WATCHDOG_NO_PROGRESS_TIMEOUT_MS / 60_000);
+const QUERY_TIMEOUT_SECONDS = Math.round(IPHONE_QUERY_TIMEOUT_MS / 1000);
+
+/**
+ * BACKLOG-3996: a short iPhone query (the storage query or the backup-encryption check
+ * before a sync) did not answer within its time limit and was stopped.
+ *
+ * Shown ONLY on that query's timed-out marker. Never for a watchdog stop
+ * (BACKUP_TIMEOUT, which has its own message below), a device that would not start its
+ * backup service (SERVICE_UNAVAILABLE), a passcode cancel, or a tool that never started
+ * (SECURITY_SOFTWARE_BLOCKED). Security software is offered as one possible cause, not
+ * a verdict.
+ *
+ * BACKLOG-4002: the description no longer says Keepr "stopped waiting for your iPhone"
+ * (it blamed the phone), and step 2 no longer says "choose to allow it" (see
+ * antivirusAlertStep). The seconds come from IPHONE_QUERY_TIMEOUT_MS.
+ *
+ * "Wait a moment" is deliberate: a sync started again at once is refused for 5 seconds.
+ *
+ * @param keeprFolder - the install folder to add as an exception (Windows), when known
+ */
+export function formatIphoneToolTimeoutError(keeprFolder?: string | null): UserFacingError {
+  return {
+    title: "This is taking longer than expected",
+    description: `Keepr's iPhone check did not finish within ${QUERY_TIMEOUT_SECONDS} seconds, so Keepr stopped it. Sometimes security software pauses Keepr's iPhone tools while it checks them.`,
+    actionSuggestion: numberedSteps([
+      "Make sure your iPhone is unlocked and still connected.",
+      antivirusAlertStep(keeprFolder),
+      "Wait a moment, then select Try Again.",
+    ]),
+    code: "IPHONE_TOOL_TIMEOUT",
+  };
+}
+
+/**
+ * BACKLOG-4002: every thread of the running backup tool is suspended, and it has printed
+ * nothing for over a minute. Shown on the sync screen IN PLACE OF the "please don't
+ * cancel" panel while that lasts, and taken down as soon as the tool runs again. The
+ * backup is not stopped: the user may release it in the antivirus, and Cancel ends a
+ * suspended tool at once.
+ *
+ * @param keeprFolder - the install folder to add as an exception (Windows), when known
+ */
+export function formatToolSuspendedNotice(keeprFolder?: string | null): UserFacingError {
+  return {
+    title: "Your antivirus may have paused the backup",
+    description:
+      "Something on this computer, usually antivirus software, has paused the tool Keepr uses to back up your iPhone. The backup cannot continue while it is paused.",
+    actionSuggestion: numberedSteps([
+      "Open your antivirus program.",
+      "If any Keepr files are in its Quarantine list, restore them.",
+      folderExceptionStep(keeprFolder),
+      "If the backup does not continue within a minute, select Cancel, then Try Again.",
+    ]),
+    code: "IPHONE_TOOL_SUSPENDED",
+  };
+}
+
+/**
+ * BACKLOG-4002: the backup made no progress for the watchdog's limit and was stopped
+ * (BACKUP_TIMEOUT). Never the IPHONE_TOOL_TIMEOUT message (BACKLOG-3996 SR R7).
+ *
+ * Two variants. `toolSuspendedAtTimeout` means the suspended notice was SHOWING when the
+ * watchdog fired (SR R7) — not that a suspension happened at some point in the run, so a
+ * short scan at minute 3 followed by a device that never sends does not get the
+ * antivirus copy. `platform` is a parameter, never read here, so the text is the same
+ * on every CI runner.
+ */
+export function formatBackupWatchdogError(opts: {
+  toolSuspendedAtTimeout: boolean;
+  keeprFolder?: string | null;
+  platform: string;
+}): UserFacingError {
+  if (opts.toolSuspendedAtTimeout) {
+    return {
+      title: "Your antivirus may have paused the backup",
+      description: `Something on this computer, usually antivirus software, paused the tool Keepr uses to back up your iPhone. The backup made no progress for ${WATCHDOG_MINUTES} minutes, so Keepr stopped it.`,
+      actionSuggestion: numberedSteps([
+        "Open your antivirus program.",
+        "If any Keepr files are in its Quarantine list, restore them.",
+        folderExceptionStep(opts.keeprFolder),
+        "Select Try Again.",
+      ]),
+      code: "BACKUP_TIMEOUT",
+    };
+  }
+  const steps = ["Unlock your iPhone and keep it unlocked and connected until the sync finishes."];
+  if (opts.platform === "win32") steps.push(antivirusAlertStep(opts.keeprFolder));
+  steps.push("Select Try Again.");
+  return {
+    title: "The backup stopped making progress",
+    description: `The backup made no progress for ${WATCHDOG_MINUTES} minutes, so Keepr stopped it.`,
+    actionSuggestion: numberedSteps(steps),
+    code: "BACKUP_TIMEOUT",
   };
 }

@@ -15,6 +15,7 @@ import type { Role } from '@/lib/types/users';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
 import { PORTAL_GRANTING_LICENSE_STATUSES } from '@/lib/auth/membership';
+import { LAST_ADMIN_DEACTIVATE_REFUSED } from '@/lib/users/roleRefusals';
 
 // ============================================================================
 // Types
@@ -28,6 +29,9 @@ interface DeactivateResult {
   success: boolean;
   error?: string;
 }
+
+/** Founder R9 (BACKLOG-4007): the exact sentence, the same as the Users-page removal. */
+const BILLING_CONTACT_DEACTIVATE_REFUSED = 'Pick another billing contact first.';
 
 // ============================================================================
 // Main Action
@@ -96,18 +100,20 @@ export async function deactivateUser(input: DeactivateInput): Promise<Deactivate
     return { success: false, error: 'Only IT Admins can deactivate IT Admin users' };
   }
 
-  // Check if this would remove the last active admin/it_admin
-  if (['admin', 'it_admin'].includes(targetMember.role)) {
+  // BACKLOG-4027 (founder B): "last admin" is the admin role only, the same rule as the
+  // database guard (_guard_last_admin), which refuses this write anyway.
+  if (targetMember.role === 'admin') {
     const { count } = await supabase
       .from('organization_members')
       .select('id', { count: 'exact', head: true })
       .eq('organization_id', targetMember.organization_id)
-      .in('role', ['admin', 'it_admin'])
+      .eq('role', 'admin')
       .in('license_status', [...PORTAL_GRANTING_LICENSE_STATUSES])
+      .not('user_id', 'is', null)
       .neq('id', input.memberId);
 
     if (count === 0) {
-      return { success: false, error: 'Cannot deactivate the last admin' };
+      return { success: false, error: LAST_ADMIN_DEACTIVATE_REFUSED };
     }
   }
 
@@ -116,7 +122,7 @@ export async function deactivateUser(input: DeactivateInput): Promise<Deactivate
   // check above has passed on the user's own session. The service client
   // bypasses RLS, so the write is scoped explicitly to the member AND the
   // organization the caller was just verified to administer.
-  const service = createServiceClient();
+  const service = createServiceClient({ actorId: user.id });
   const { error: updateError } = await service
     .from('organization_members')
     .update({
@@ -127,6 +133,14 @@ export async function deactivateUser(input: DeactivateInput): Promise<Deactivate
     .eq('organization_id', targetMember.organization_id);
 
   if (updateError) {
+    // BACKLOG-4007 People v2 (PM 6a68d0a2): the live billing contact's member row cannot be
+    // deactivated from the Users page (the database refuses it: billing_contact_member).
+    if (updateError.message?.includes('billing_contact_member')) {
+      return { success: false, error: BILLING_CONTACT_DEACTIVATE_REFUSED };
+    }
+    if (updateError.message?.includes('last_admin')) {
+      return { success: false, error: LAST_ADMIN_DEACTIVATE_REFUSED };
+    }
     console.error('Error deactivating user:', updateError);
     return { success: false, error: 'Failed to deactivate user' };
   }

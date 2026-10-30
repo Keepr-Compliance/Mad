@@ -2,7 +2,7 @@
  * Report registry (BACKLOG-3441)
  *
  * The one place a new report is registered. Adding a report means adding a row
- * here and a folder under `app/dashboard/analytics/reports/<slug>/` — the
+ * here and a folder under `app/dashboard/reports/<slug>/` — the
  * sidebar never changes again.
  */
 
@@ -18,7 +18,7 @@ export interface ReportEntry {
   permission: PermissionKey;
 }
 
-export const REPORTS_BASE_PATH = '/dashboard/analytics/reports';
+export const REPORTS_BASE_PATH = '/dashboard/reports';
 
 export const REPORTS: ReportEntry[] = [
   {
@@ -43,6 +43,30 @@ export const REPORTS: ReportEntry[] = [
     description:
       'Every submit attempt: which committed, which failed and where, and which are still open or stalled.',
     source: 'submission_attempts',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
+  {
+    slug: 'exports',
+    title: 'Exports',
+    description:
+      'How many exports each user ran in the period, how many were unique deals, in which formats, and when.',
+    source: 'analytics_events (export-completed)',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
+  {
+    slug: 'support-sla',
+    title: 'Support SLA',
+    description:
+      'How quickly support tickets got a first response and were resolved in the period, overall and per agent, and how many are open now.',
+    source: 'support_tickets',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
+  {
+    slug: 'user-activity',
+    title: 'User Activity',
+    description:
+      'Who signed in and was last seen when, on how many devices, and how many transactions, submissions and exports each user ran in the period.',
+    source: 'users, devices, audit_logs',
     permission: PERMISSIONS.ANALYTICS_VIEW,
   },
 ];

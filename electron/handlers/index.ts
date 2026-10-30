@@ -7,7 +7,7 @@
 export { registerPermissionHandlers } from "./permissionHandlers";
 export { registerConversationHandlers } from "./conversationHandlers";
 export { registerMessageImportHandlers } from "./messageImportHandlers";
-export { registerOutlookHandlers, getOutlookService } from "./outlookHandlers";
+export { registerOutlookHandlers } from "./outlookHandlers";
 export { registerUpdaterHandlers } from "./updaterHandlers";
 
 // Google OAuth handlers

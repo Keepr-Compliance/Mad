@@ -11,25 +11,8 @@ import { useEffect, useState } from 'react';
 import { ChevronRight, Download } from 'lucide-react';
 import { buttonClasses } from '@keepr/design-system';
 import { Wordmark } from '@keepr/ui';
-
-type Platform = 'mac-arm' | 'mac-intel' | 'windows' | 'unknown';
-
-function detectPlatform(): Platform {
-  if (typeof navigator === 'undefined') return 'unknown';
-  const ua = navigator.userAgent.toLowerCase();
-  if (ua.includes('mac')) {
-    if (
-      navigator.platform === 'MacIntel' &&
-      typeof (navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints === 'number' &&
-      (navigator as Navigator & { maxTouchPoints?: number }).maxTouchPoints! > 0
-    ) {
-      return 'mac-arm';
-    }
-    return 'mac-arm';
-  }
-  if (ua.includes('win')) return 'windows';
-  return 'unknown';
-}
+import { detectPlatform, type Platform } from '@/lib/download/platform';
+import { MicrosoftStoreBadge } from '@/components/download/MicrosoftStoreBadge';
 
 const DOWNLOADS: Record<string, string> = {
   'mac-arm': 'Download for macOS (Apple Silicon)',
@@ -94,6 +77,9 @@ export default function DownloadPage() {
               <span>{primaryLabel}</span>
             </a>
           )}
+
+          {/* BACKLOG-4067: Store badge, outside the autoStarted ternary so it stays after the auto-download starts. */}
+          <MicrosoftStoreBadge show={platform === 'windows'} label="Or get it from the Microsoft Store" />
 
           {/* Other platforms */}
           <div className="pt-2 border-t border-gray-100 space-y-2">

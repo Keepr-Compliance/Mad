@@ -3,7 +3,7 @@
  *
  * The read-only account details the Account popup (Profile) shows: who is
  * signed in and with what, which mailboxes are connected, plan, trial,
- * transactions, ids and dates. Plus the reserved Billing block.
+ * transactions, ids and dates. Plus the Plan & Billing card (BACKLOG-3863).
  *
  * Founder decision 10: no Sign out here. It lives in the account side panel
  * (slice 3); Security keeps "Sign Out All Devices".
@@ -14,7 +14,7 @@ import { formatDbDate } from "@/utils/dateFormatters";
 import logger from "@/utils/logger";
 import { getAccountInitials } from "../../../appCore/shell/AccountButton";
 import { formatPlanLabel } from "./formatPlanLabel";
-import { AccountBillingBlock } from "./AccountBillingBlock";
+import { PlanBillingCard } from "../billing/PlanBillingCard";
 
 export interface AccountUser {
   id: string;
@@ -160,7 +160,7 @@ export function AccountSettings({ user, provider, mailboxes = { google: false, m
           {user.last_login_at && <Row label="Last login">{formatDbDate(user.last_login_at, {}) ?? ""}</Row>}
         </div>
 
-        <AccountBillingBlock planLabel={planLabel} organizationId={organizationId ?? null} userId={user.id} />
+        <PlanBillingCard planLabel={planLabel} organizationId={organizationId ?? null} userId={user.id} />
       </div>
     </div>
   );

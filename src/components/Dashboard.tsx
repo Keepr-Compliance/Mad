@@ -19,6 +19,7 @@ import {
 import type { Transaction } from "../types";
 import { useReconnectionSummary } from "../hooks/useReconnectionSummary";
 import AuthContext from "../contexts/AuthContext";
+import billingService from "../services/billingService";
 
 interface DashboardActionProps {
   onAuditNew: () => void;
@@ -233,7 +234,7 @@ function Dashboard({
             title="Transaction Limit Reached"
             description={`You've used ${transactionCount} of ${transactionLimit} transactions. Upgrade to create more.`}
             actionText="Upgrade"
-            onAction={() => window.open("https://www.keeprcompliance.com/beta", "_blank")}
+            onAction={() => void billingService.openPortal()}
             testId="transaction-limit-banner"
           />
         )}

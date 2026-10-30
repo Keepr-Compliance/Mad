@@ -99,6 +99,18 @@ describe('planLine: literal table', () => {
     expect(b('active')).toMatchObject({ kind: 'brokerage', text: 'Brokerage Demo Realty, license assigned', test: false });
     expect(b('pending').text).toBe('Brokerage Demo Realty, invite pending');
     expect(b('expired').text).toBe('Brokerage Demo Realty, no license (expired)');
+    // BACKLOG-3851
+    expect(b('unassigned').text).toBe('Brokerage Demo Realty, no license assigned');
+  });
+
+  it('BACKLOG-3851: deactivatedFrom warns on the personal line, and combines with the Q4 warning', () => {
+    expect(planLine(input({ deactivatedFrom: 'Demo Realty', rows: [row('active')] })).warning).toBe('Deactivated from Demo Realty');
+    expect(planLine(input({ deactivatedFrom: '' })).warning).toBe('Deactivated from unnamed organization');
+    const stripeOn = { source: 'stripe', enabled: true, paid_through: '2026-11-13T00:13:44+00:00' };
+    expect(planLine(input({ deactivatedFrom: 'Demo Realty', override: stripeOn })).warning).toBe(
+      'Deactivated from Demo Realty; Unlimited is on, but no open subscription was found'
+    );
+    expect(planLine(input({ deactivatedFrom: null })).warning).toBeNull();
   });
 
   it('Pay as you go with credits', () => {

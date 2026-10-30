@@ -1,0 +1,28 @@
+base {
+ "fail": 0,
+ "pass": 39,
+ "reds": {},
+ "mutation": "none"
+}
+m3_no_dedupe {"fail": 2, "pass": 37, "reds": ["C3a_people_role_change", "C3d_rekey_old_member_hidden"], "mutation": "MUTATION APPLIED public.admin_get_org_activity(uuid,integer) 817e849a->fd311797 [AND NOT (false AND EXISTS (]"}
+m3c_aal_twin {"fail": 1, "pass": 38, "reds": ["C3b_staff_twin_once"], "mutation": "MUTATION APPLIED public.admin_get_org_activity(uuid,integer) 817e849a->33748dfc [a.action IN ('organization.created', 'org_plan.assigned', 'billing.deal_saved')]"}
+m1b_no_role_branch {"fail": 9, "pass": 30, "reds": ["C1c_update_role", "C1d_bulk_role", "C1m_scim_role", "C3a_people_role_change", "C3c_bulk_rows_visible", "C4a_spoof_header_ignored", "C4b_bad_header_null", "C4c_garbage_headers_null", "C5b_no_billing_view_no_billing_rows"], "mutation": "MUTATION APPLIED public._org_member_change_log() 00dcf0ff->458224b0 [IF false THEN]"}
+m2_phone_same_value {"fail": 1, "pass": 38, "reds": ["C2e_phone_same_value"], "mutation": "MUTATION APPLIED public._user_phone_change_log() f9379937->5413a62b [IF false THEN]"}
+m1_role_every_update {"fail": 12, "pass": 27, "reds": ["C1b_resend", "C1e_deactivate_service_actor", "C1f_reactivate", "C1g_unassign", "C1h_assign", "C1l_admin_resend", "C2b_updated_at_only", "C2c_scim_synced_only", "C2d_sync_same_values", "C2f_last_admin_refusal", "C3c_bulk_rows_visible", "C5b_no_billing_view_no_billing_rows"], "mutation": "MUTATION APPLIED public._org_member_change_log() 00dcf0ff->36fef899 [IF true THEN]"}
+m3b_no_old_member_id {"fail": 1, "pass": 38, "reds": ["C3d_rekey_old_member_hidden"], "mutation": "MUTATION APPLIED public.admin_get_org_activity(uuid,integer) 817e849a->eb01a9df [IN (e.detail ->> 'member_id')]"}
+m2b_log_pending_removal {"fail": 1, "pass": 38, "reds": ["C2g_claim_removal"], "mutation": "MUTATION APPLIED public._user_phone_change_log() f9379937->d1365e6c [IF false THEN]"}
+m1c_license_every_update {"fail": 12, "pass": 27, "reds": ["C1b_resend", "C1c_update_role", "C1d_bulk_role", "C1l_admin_resend", "C1m_scim_role", "C2b_updated_at_only", "C2c_scim_synced_only", "C2d_sync_same_values", "C2f_last_admin_refusal", "C4a_spoof_header_ignored", "C4b_bad_header_null", "C4c_garbage_headers_null"], "mutation": "MUTATION APPLIED public._org_member_change_log() 00dcf0ff->49cf450c [IF true THEN]"}
+m1d_accept_not_exclusive {"fail": 3, "pass": 36, "reds": ["C1n_accept", "C2g_claim_removal", "C2h_claim_update"], "mutation": "MUTATION APPLIED public._org_member_change_log() 00dcf0ff->3c7efc50 [ELSIF false THEN]"}
+m5c_no_gate {"fail": 1, "pass": 38, "reds": ["C5a_non_staff_refused"], "mutation": "MUTATION APPLIED public.admin_get_org_activity(uuid,integer) 817e849a->38b8dbd5 [IF false THEN]"}
+m4_header_first {"fail": 1, "pass": 38, "reds": ["C4a_spoof_header_ignored"], "mutation": "MUTATION APPLIED public._activity_actor() 67fa88df->4b881b38 [IF v_role IS DISTINCT FROM 'service_role' AND coalesce(current_setting('request.headers', ]"}
+m5b_no_whitelist {"fail": 1, "pass": 38, "reds": ["C5c_billing_view_no_price"], "mutation": "MUTATION APPLIED public.admin_get_org_activity(uuid,integer) 817e849a->0043c1fc [WHERE true OR k.key IN ('from', 'to',]"}
+m6_no_org_gone_skip {"fail": 1, "pass": 38, "reds": ["C6d_org_removed_silent"], "mutation": "MUTATION APPLIED public._org_member_change_log() 00dcf0ff->a55d46dd [IF v_personal IS NOT NULL THEN]"}
+m5_no_billing_filter {"fail": 1, "pass": 38, "reds": ["C5b_no_billing_view_no_billing_rows"], "mutation": "MUTATION APPLIED public.admin_get_org_activity(uuid,integer) 817e849a->2fd84b52 [AND (true OR c.action NOT IN]"}
+m6b_no_personal_skip {"fail": 1, "pass": 38, "reds": ["C6a_personal_org_silent"], "mutation": "MUTATION APPLIED public._org_member_change_log() 00dcf0ff->9fac3ee6 [IF NOT FOUND THEN]"}
+m6c_phone_raises_no_org "ERROR P0001 no org"
+m6c_phone_raises_no_org {"fail": 2, "pass": 37, "reds": ["C2g_claim_removal", "C6c_cancel_invite_with_phone"], "mutation": "MUTATION APPLIED public._user_phone_change_log() f9379937->d1365e6c [IF false THEN] + MUTATION APPLIED public._user_phone_change_log() d1365e6c->bc3caaa7 [      OR (r.pending_member_id IS NULL AND r.user_id IS NOT NULL AND m.user_id = r.user_id)]"}
+
+# Re-run after the txid index and the anon case (migration md5 c8550f0b): base 40/40;
+m4b_anon_trusts_header {"fail": 1, "pass": 39, "reds": ["C4d_anon_header_ignored"], "mutation": "MUTATION APPLIED public._activity_actor() 67fa88df->bb20150f [IF v_role = 'authenticated' THEN]"}
+m4_header_first {"fail": 2, "reds": ["C4a_spoof_header_ignored", "C4d_anon_header_ignored"]}
+# every other mode red exactly as listed above.

@@ -1,0 +1,47 @@
+BACKLOG-4019 SQL controls, keepr-test after apply (ledger top 20261020220000, file md5 e38f7c6d), one call ending in RAISE (rolled back).
+base: pass=40 fail=0 reds={}
+   none
+c1c_widen_suspended: pass=36 fail=4 reds=['C1c_suspended_not_widened', 'G3_finalize_plan_ended', 'G5_unlock_allowed', 'W8_canceled_features_off']
+   MUTATION APPLIED public.org_billing_suspended(uuid) 59f53cb8->76ad9a4d [d.status IN ('suspended', 'canceled')]
+c2_admin_widened: pass=37 fail=3 reds=['C2_caller_matrix', 'C2_rpc_cells', 'R_reader_renewing']
+   MUTATION APPLIED public._org_auto_renew_caller(uuid) 75333090->829b4d0f [AND m.role IN ('admin', 'broker') AND m.license_status = 'active') THE]
+c2_no_contact_branch: pass=35 fail=5 reds=['C2_billing_only_login', 'C2_caller_matrix', 'C2_rpc_cells', 'DB6_brokerage_refused_while_suspended', 'R_reader_renewing']
+   MUTATION APPLIED public._org_auto_renew_caller(uuid) 75333090->a8138e90 [                    AND false) THEN 'billing_contact']
+c2_removed_contact_counts: pass=39 fail=1 reds=['C2_removed_contact_refused']
+   MUTATION APPLIED public._org_auto_renew_caller(uuid) 75333090->151f55da [c.role = 'billing']
+c3_no_suspended_refusal: pass=39 fail=1 reds=['DB6_brokerage_refused_while_suspended']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer) 1e5a198c->fdb1addb [  IF false THEN]
+grant_end_to_authenticated: pass=39 fail=1 reds=['C7_grants']
+   MUTATION APPLIED GRANT EXECUTE _billing_end_org_deal TO authenticated
+grant_switch_to_authenticated: pass=39 fail=1 reds=['C7_grants']
+   MUTATION APPLIED GRANT EXECUTE _billing_set_auto_renew TO authenticated
+w11_reader_broker_admin_only: pass=39 fail=1 reds=['R_reader_renewing']
+   MUTATION APPLIED public.broker_get_plan_end(uuid) 681043f8->3700fa87 [  IF NOT EXISTS (]
+w12_alert_for_staff: pass=36 fail=4 reds=['D4_off_again_noop', 'W12_alert_for_admin', 'W12_dedupe', 'W12_no_alert_for_staff']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer) 1e5a198c->5c14b0e0 [  IF NOT p_on THEN]
+w1_no_version_bump: pass=33 fail=7 reds=['D4_off_again_noop', 'D4_on_by_admin', 'DB6_brokerage_refused_while_suspended', 'DB6_staff_allowed_while_suspended', 'W1_off_one_sync_row', 'W12_alert_for_admin', 'W6_resume_after_end_refused']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer) 1e5a198c->554b0955 [    updated_at = now(),     updated_by = p_actor]
+w4_end_any_deal: pass=39 fail=1 reds=['W4_end_active_untouched']
+   MUTATION APPLIED public._billing_end_org_deal(uuid,text,text) 302d2f52->57cea9a8 [  IF false THEN]
+w4_end_any_subscription: pass=35 fail=5 reds=['DB2_canceled_refused', 'E4_restart_opens', 'G0_open_while_canceling', 'W4_end_canceling', 'W4_end_other_sub_untouched']
+   MUTATION APPLIED public._billing_end_org_deal(uuid,text,text) 302d2f52->e16b08fb [  IF false THEN]
+w6_resume_after_end: pass=39 fail=1 reds=['W6_resume_after_end_refused']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer) 1e5a198c->984179d2 [    IF false THEN]
+w7_view_is_enough: pass=38 fail=2 reds=['C2_caller_matrix', 'C2_rpc_cells']
+   MUTATION APPLIED public._org_auto_renew_caller(uuid) 75333090->b3a9a65c ['billing.view']
+w8_no_canceled_branch: pass=39 fail=1 reds=['W8_canceled_features_off']
+   MUTATION APPLIED public._billing_apply_org_entitlement(uuid) 79893162->0dbbe309 []
+w9_comment_suspended_only: pass=39 fail=1 reds=['G3_comment_refused']
+   MUTATION APPLIED users_can_create_comments.check ef7eb183->622e6086
+w9_finalize_no_plan_ended: pass=39 fail=1 reds=['G3_finalize_plan_ended']
+   MUTATION APPLIED public.finalize_submission(uuid,jsonb) 9871f157->c1f93882 []
+w9_insert_suspended_only: pass=39 fail=1 reds=['G3_agent_insert_refused']
+   MUTATION APPLIED agents_can_create_submissions.check 5bd4fca4->f6ae9fb2
+w9_review_suspended_only: pass=38 fail=2 reds=['G1_review_refused', 'G4_sight']
+   MUTATION APPLIED public.can_review_submission(uuid) 551ff42a->278a8ef2 [public.org_billing_suspended(p_org_id)]
+w9_storage_suspended_only: pass=39 fail=1 reds=['G3_storage_refused']
+   MUTATION APPLIED Members can upload submission attachments.check 7077bb05->000b9376
+w9_update_both_layers: pass=39 fail=1 reds=['G2_reviewer_update_own_refused']
+   MUTATION APPLIED transaction_submissions_update_public.qual 4ff376e6->030ef0a2 + MUTATION APPLIED transaction_submissions_update_public.check (2 occurrences)
+w9_update_using_suspended_only: pass=39 fail=1 reds=['G2_reviewer_update_own_refused']
+   MUTATION APPLIED transaction_submissions_update_public.qual 4ff376e6->030ef0a2

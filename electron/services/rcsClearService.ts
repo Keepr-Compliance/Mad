@@ -24,7 +24,9 @@
  *   message-attachments folder, and only when NO attachments row (any
  *   source, any user) still points to the file — files are content-addressed
  *   (<sha256><ext>), so iPhone sync or another user can share one
- *   (BACKLOG-3667). A failed transaction deletes no file.
+ *   (BACKLOG-3667). The check is the shared one (attachmentFileRefs.ts,
+ *   BACKLOG-4040): same file name in any case, absolute or relative, links
+ *   resolved before the folder test. A failed transaction deletes no file.
  *
  * The user's removals (`ignored_communications`) are kept, as Android keeps
  * them: a removed chat stays removed and can be restored from "Show removed".
@@ -34,6 +36,9 @@
  */
 
 import * as path from "path";
+
+import { containedIn, removeUnreferencedFiles } from "./attachmentFileRefs";
+import { SCOPE_MESSAGE_ATTACHMENTS } from "./atRest/markers";
 
 export interface RcsClearDbOps {
   /** Run `fn` in one database transaction; a throw rolls everything back. */
@@ -52,11 +57,11 @@ export interface RcsClearDbOps {
   deletePeople?(userId: string): number;
   setMessageCount(userId: string, transactionId: string, count: number): void;
   /**
-   * BACKLOG-3667: does any remaining attachments row (any user, any source)
-   * point to this file? Matched on the stored path or its file name, since a
-   * path may be stored absolute or relative.
+   * BACKLOG-3667 / 4040: of `paths`, the files NO remaining attachments row
+   * (any user, any source) points at — the shared check (attachmentFileRefs.ts).
+   * Synchronous: one read of every stored path.
    */
-  fileStillReferenced(storagePath: string): boolean;
+  unreferencedFiles(paths: readonly string[]): Set<string>;
   /** Recompute transactions.text_thread_count from the links that remain. */
   refreshTextThreadCount(transactionId: string): void;
 }
@@ -66,6 +71,7 @@ export interface RcsClearFs {
   attachmentsRoot: string;
   /** Resolve a stored path (absolute, or relative to userData). */
   resolve(storagePath: string): string;
+  /** Synchronous unlink of a resolved real path. */
   deleteFile(absPath: string): boolean;
 }
 
@@ -86,19 +92,33 @@ export interface RcsClearResult {
  */
 export async function runWithWritesPaused<T>(
   gate: { pauseWrites(): Promise<void>; resumeWrites(): void },
-  fn: () => T,
+  fn: () => T | Promise<T>,
 ): Promise<T> {
   // pauseWrites can throw (the drain timed out): writes are resumed and `fn`
-  // never runs — nothing is deleted.
+  // never runs — nothing is deleted. BACKLOG-4040: `fn` may be async (the file
+  // clean-up awaits); writes stay paused until it has finished.
   try {
     await gate.pauseWrites();
-    return fn();
+    return await fn();
   } finally {
     gate.resumeWrites();
   }
 }
 
-export function clearGoogleMessagesWebData(
+/** BACKLOG-4040: delete, after the commit, the files of `paths` nothing else uses. */
+function removeFiles(
+  paths: readonly string[],
+  unreferenced: (paths: readonly string[]) => Set<string>,
+  files: RcsClearFs,
+) {
+  return removeUnreferencedFiles(paths, {
+    contain: containedIn(path.dirname(path.resolve(files.attachmentsRoot)), [SCOPE_MESSAGE_ATTACHMENTS], files.resolve),
+    unreferenced,
+    deleteFile: (real) => files.deleteFile(real),
+  });
+}
+
+export async function clearGoogleMessagesWebData(
   userId: string,
   db: RcsClearDbOps,
   files: RcsClearFs,
@@ -108,9 +128,7 @@ export function clearGoogleMessagesWebData(
    * coverage and run records): a failure leaves everything as it was.
    */
   insideTransaction?: () => void,
-): RcsClearResult {
-  const root = path.resolve(files.attachmentsRoot) + path.sep;
-
+): Promise<RcsClearResult> {
   const done = db.transaction(() => {
     const paths = db.attachmentPaths(userId);
     const counted = db.countedLinks(userId);
@@ -142,18 +160,9 @@ export function clearGoogleMessagesWebData(
 
   // Files only after the commit, only inside the attachments folder, and
   // only when nothing else points to them (BACKLOG-3667: shared by hash).
-  let filesDeleted = 0;
-  let filesKept = 0;
-  for (const p of new Set(done.paths)) {
-    if (!p) continue;
-    const abs = path.resolve(files.resolve(p));
-    if (!abs.startsWith(root)) continue;
-    if (db.fileStillReferenced(p)) {
-      filesKept += 1;
-      continue;
-    }
-    if (files.deleteFile(abs)) filesDeleted += 1;
-  }
+  const removal = await removeFiles(done.paths, (ps) => db.unreferencedFiles(ps), files);
+  const filesDeleted = removal.removed;
+  const filesKept = removal.stillReferenced;
 
   const result: RcsClearResult = {
     messagesDeleted: done.messagesDeleted,
@@ -166,7 +175,7 @@ export function clearGoogleMessagesWebData(
   log(
     `[RcsClear] Cleared Google Messages for Web texts: ${result.messagesDeleted} messages, ` +
       `${result.linksDeleted} links (${result.threadLinksDeleted} thread-level), ${result.attachmentsDeleted} attachments ` +
-      `(${result.filesDeleted} files deleted, ${filesKept} kept: still used), message_count updated on ${result.transactionsUpdated} transactions, ` +
+      `(${result.filesDeleted} files deleted, ${filesKept} kept: still used; check ${Math.round(removal.lookupMs)} ms, unlink ${Math.round(removal.unlinkMs)} ms), message_count updated on ${result.transactionsUpdated} transactions, ` +
       `thread count refreshed on ${done.threadCountsUpdated}`,
   );
   return result;
@@ -192,17 +201,17 @@ export interface RcsAutoDeleteDbOps {
   deleteMessages(userId: string, threadIds: string[]): number;
   /** BACKLOG-3670: the people found in the deleted chats (gmweb2 thread ids). */
   deletePeople?(userId: string, threadIds: string[]): number;
-  fileStillReferenced(storagePath: string): boolean;
+  /** BACKLOG-4040: the shared check, as in RcsClearDbOps. */
+  unreferencedFiles(paths: readonly string[]): Set<string>;
 }
 
-export function clearUnlinkedOldChats(
+export async function clearUnlinkedOldChats(
   userId: string,
   cutoffIso: string,
   db: RcsAutoDeleteDbOps,
   files: RcsClearFs,
   log: (message: string) => void = () => {},
-): { chats: number; messages: number; filesDeleted: number } {
-  const root = path.resolve(files.attachmentsRoot) + path.sep;
+): Promise<{ chats: number; messages: number; filesDeleted: number }> {
   const done = db.transaction(() => {
     const threads = db.unlinkedOldThreads(userId, cutoffIso);
     if (threads.length === 0) return { threads, paths: [] as string[], messages: 0 };
@@ -212,12 +221,9 @@ export function clearUnlinkedOldChats(
     db.deletePeople?.(userId, threads);
     return { threads, paths, messages };
   });
-  let filesDeleted = 0;
-  for (const p of new Set(done.paths)) {
-    const abs = path.resolve(files.resolve(p));
-    if (!abs.startsWith(root) || db.fileStillReferenced(p)) continue;
-    if (files.deleteFile(abs)) filesDeleted += 1;
-  }
+  const filesDeleted = done.paths.length > 0
+    ? (await removeFiles(done.paths, (ps) => db.unreferencedFiles(ps), files)).removed
+    : 0;
   if (done.threads.length > 0) {
     log(`[RcsClear] Auto-delete: ${done.threads.length} chats linked to nothing, ${done.messages} messages, ${filesDeleted} files`);
   }

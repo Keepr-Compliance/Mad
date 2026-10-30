@@ -226,30 +226,6 @@ export interface RecentTicket {
   created_at: string;
 }
 
-// --- Analytics types ---
-
-export interface AgentAnalytics {
-  agent_id: string;
-  agent_email: string;
-  agent_name: string;
-  open_tickets: number;
-  closed_tickets: number;
-  avg_first_response_minutes: number | null;
-  avg_resolution_minutes: number | null;
-}
-
-export interface SupportSummary {
-  total_open: number;
-  closed_in_period: number;
-  avg_first_response_minutes: number | null;
-  avg_resolution_minutes: number | null;
-}
-
-export interface AgentAnalyticsResponse {
-  summary: SupportSummary;
-  agents: AgentAnalytics[];
-}
-
 // Status transition map for UI validation
 export const ALLOWED_TRANSITIONS: Record<TicketStatus, TicketStatus[]> = {
   new: ['assigned', 'in_progress'],

@@ -84,6 +84,8 @@ export class OpenAIService extends BaseLLMService {
     const testClient = new OpenAI({
       apiKey,
       timeout: 10000, // 10 second timeout for validation
+      // BACKLOG-4052: validation goes over Chromium too, like the main client.
+      fetch: mainNetFetch as unknown as typeof fetch,
     });
 
     try {

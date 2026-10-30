@@ -740,6 +740,21 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
       "its own oldest text. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch (the S2 precedent). Additive only: no existing table changes.",
     ref: "BACKLOG-3892",
   },
+  {
+    key: "TABLE:iphone_sync_open_sessions",
+    what: "New table: iPhone sync sessions that started saving and have not finished or rolled back.",
+    why:
+      "BACKLOG-3343: a sync interrupted by a crash, force-quit or power loss leaves rows that the next " +
+      "launch must remove; this durable marker is the only way to tell them from a finished sync's rows. " +
+      "IF NOT EXISTS, created by schema.sql's exec on every open; no migration entry is needed.",
+    ref: "BACKLOG-3343",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_iphone_sync_open_sessions_1",
+    what: "SQLite's automatic index for iphone_sync_open_sessions' primary key.",
+    why: "BACKLOG-3343: produced by the session_id PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-3343",
+  },
 ];
 
 const ALLOWED_KEYS = new Set(ALLOWED_EVOLUTION.map((d) => d.key));

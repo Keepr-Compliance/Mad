@@ -227,7 +227,8 @@ export async function getJitStatus() {
     .single();
 
   return {
-    enabled: org?.jit_provisioning_enabled ?? true,
+    // BACKLOG-3851: the column default is false (JIT off unless switched on).
+    enabled: org?.jit_provisioning_enabled ?? false,
   };
 }
 

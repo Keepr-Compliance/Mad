@@ -1,0 +1,38 @@
+base {
+ "fail": 0,
+ "pass": 10,
+ "reds": [],
+ "fx_view": {
+  "seats": 5,
+  "state": "waiting_for_setup",
+  "company": null,
+  "success": true,
+  "version": 1,
+  "plan_name": "Team",
+  "start_date": "2026-10-20",
+  "unit_price_cents": 2499,
+  "billing_starts_on": "2026-10-20",
+  "monthly_total_cents": 12495
+ },
+ "mutation": "none"
+}
+complete_no_bump {
+ "fail": 1,
+ "pass": 9,
+ "reds": [
+  "E4_complete_activates_and_one_sync_row: FAIL OK {\"success\": true, \"deal_version\": 1, \"acceptance_id": "<acceptance id>"} | OK {\"success\": true,  st=active rows+0"
+ ],
+ "fx_view": null,
+ "mutation": "MUTATION APPLIED public.broker_complete_billing_setup(uuid,integer,jsonb,jsonb,boolean) aeb580b5->4d1de1d0"
+}
+complete_keeps_draft {
+ "fail": 3,
+ "pass": 7,
+ "reds": [
+  "E5_same_user_joins_after_setup: FAIL OK {\"error\": \"billing_setup_pending\", \"success\": false}",
+  "E6_client_invite_allowed_after_setup: FAIL ERR P0001 billing_setup_incomplete",
+  "E4_complete_activates_and_one_sync_row: FAIL OK {\"success\": true, \"deal_version\": 1, \"acceptance_id": "<acceptance id>"} | OK {\"success\": true,  st=draft rows+0"
+ ],
+ "fx_view": null,
+ "mutation": "MUTATION APPLIED public.broker_complete_billing_setup(uuid,integer,jsonb,jsonb,boolean) aeb580b5->f3923921"
+}

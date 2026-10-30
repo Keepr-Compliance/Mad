@@ -140,7 +140,9 @@ export function scrubServerErrorText(
  */
 export function redactLocalPaths(input: string): string {
   return (
-    input
+    // BACKLOG-4050: the profile segment first, so a username with a space
+    // ("C:\Users\Jane Doe\...") cannot survive the space-delimited rules below.
+    redactUserProfile(input)
       // file:// URLs (with or without host) up to the next whitespace/quote.
       .replace(/file:\/\/\/?[^\s"')]+/gi, "<path>")
       // UNC paths: \\server\share\...
@@ -149,7 +151,7 @@ export function redactLocalPaths(input: string): string {
       .replace(/\b[A-Za-z]:[\\/][^\s"')]*/g, "<path>")
       // POSIX absolute paths: /Users/..., /home/..., /private/var/...
       // Require at least one more segment so a bare "/" or a URL path isn't hit.
-      .replace(/(?<![\w:/])\/(?:[\w.@~+-]+\/)+[\w.@~+-]*/g, "<path>")
+      .replace(/(?<![\w:/])\/(?:[\w.@~+[\]-]+\/)+[\w.@~+[\]-]*/g, "<path>")
   );
 }
 
@@ -433,4 +435,212 @@ export function redactLogText(input: string): string {
   return redactKeyContexts(input.replace(EMAIL_RE, (match) => redactEmail(match)))
     .replace(INTL_PHONE_RE, (match) => redactPhone(match))
     .replace(NANP_PHONE_RE, (match) => redactPhone(match));
+}
+
+// ---------------------------------------------------------------------------
+// Crash-report text redaction [SECURITY — BACKLOG-4050]
+//
+// Applied by the main-process Sentry hooks (sentryBreadcrumbScrub.ts,
+// sentryEventScrub.ts) to every string of every breadcrumb and event, in this
+// order: profile segment -> app-generated export names -> user-chosen file
+// names -> emails and phone numbers (redactLogText).
+//
+// Support requirement (founder, 2026-10-25): strip only the private part and
+// keep the rest. A Windows or macOS path loses its profile folder name
+// (`C:\Users\[user]\...`, the same token Sentry's server-side `userpath`
+// rule uses) and, when the user chose it, its file name (`[file]`); the
+// directories, error codes and the app's own paths are kept.
+// ---------------------------------------------------------------------------
+
+/**
+ * One profile-folder character: anything but a separator, newline or quote; a
+ * quote counts only when a letter follows it (`O'Brien`), so a closing quote
+ * (`'C:\Users\Jane Doe'`) ends the segment.
+ */
+const PROFILE_SEG = String.raw`(?:[^\\/\r\n'"]|['"](?=\p{L}))`;
+/** Where a profile segment ends: a separator, a quote, a newline or end of text. */
+const PROFILE_END = String.raw`(?=[\\/]|['"]|\r|\n|$)`;
+
+/** `C:\Users\<segment>`, any drive, either separator, doubled (JSON-escaped) or not. */
+const WIN_PROFILE_RE = new RegExp(String.raw`(\b[A-Za-z]:[\\/]+Users[\\/]+)(${PROFILE_SEG}{1,64})${PROFILE_END}`, "giu");
+/** `/Users/<segment>` and `/home/<segment>`, not inside a URL (`host/home/x`). */
+const POSIX_PROFILE_RE = new RegExp(String.raw`((?<![\w.:-])\/+(?:Users|home)\/+)(${PROFILE_SEG}{1,64})${PROFILE_END}`, "giu");
+/** Fallback when no boundary follows within 64 characters: redact those 64. */
+const WIN_PROFILE_LONG_RE = new RegExp(String.raw`(\b[A-Za-z]:[\\/]+Users[\\/]+)(?!\[user\])${PROFILE_SEG}{1,64}`, "giu");
+const POSIX_PROFILE_LONG_RE = new RegExp(String.raw`((?<![\w.:-])\/+(?:Users|home)\/+)(?!\[user\])${PROFILE_SEG}{1,64}`, "giu");
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Replace the user's profile folder name in every path with `[user]`, keeping
+ * everything before and after it.
+ *
+ * `homeDir` (pass `os.homedir()`) catches a profile that does not sit under
+ * `Users` or `home` (a redirected or domain profile); the pattern rules then
+ * cover `X:\Users\<name>`, `/Users/<name>` and `/home/<name>`. A name may
+ * contain spaces, apostrophes and non-ASCII letters.
+ *
+ * Residue: an unquoted `C:\Users\<name>` followed by text and no separator is
+ * redacted to the end of the line (at most 64 characters).
+ *
+ * @example
+ *   redactUserProfile("spawn C:\\Users\\Jane Doe\\AppData\\x.exe ENOENT")
+ *   // "spawn C:\\Users\\[user]\\AppData\\x.exe ENOENT"
+ */
+export function redactUserProfile(input: string, homeDir?: string): string {
+  if (!input) return input;
+  let out = input;
+  if (homeDir && /[\\/]/.test(homeDir) && homeDir.replace(/[\\/]+$/, "").length > 3) {
+    const home = homeDir.replace(/[\\/]+$/, "");
+    const cut = Math.max(home.lastIndexOf("\\"), home.lastIndexOf("/"));
+    const parent = home.slice(0, cut);
+    const name = home.slice(cut + 1);
+    // Native, forward-slash and JSON-escaped spellings; the parent keeps the
+    // case it has in the text, only the profile name becomes [user].
+    for (const [p, sep] of [
+      [parent, home.charAt(cut)],
+      [parent.replace(/\\/g, "/"), "/"],
+      [parent.replace(/\\/g, "\\\\"), "\\\\"],
+    ] as const) {
+      const re = new RegExp(`(${escapeRegExp(p + sep)})${escapeRegExp(name)}${PROFILE_END}`, "giu");
+      out = out.replace(re, "$1[user]");
+    }
+  }
+  return out
+    .replace(WIN_PROFILE_RE, "$1[user]")
+    .replace(POSIX_PROFILE_RE, "$1[user]")
+    .replace(WIN_PROFILE_LONG_RE, "$1[user]")
+    .replace(POSIX_PROFILE_LONG_RE, "$1[user]");
+}
+
+/** `Transaction_[Summary_|Full_]<address>_<ms>` (folder, .pdf, .csv, .xlsx, .json). */
+const EXPORT_TXN_RE = /\bTransaction_((?:Summary|Full)_)?[A-Za-z0-9_.-]+?_(\d{10,})(?!\d)/g;
+/** `<address>_Combined_Report.pdf` (inside an export folder). */
+const EXPORT_COMBINED_RE = /(^|[\\/'"\s])[A-Za-z0-9_.-]+?_Combined_Report\.pdf/g;
+/** `<address>_Export_<ms>` (the multi-format export folder). */
+const EXPORT_FOLDER_RE = /(^|[\\/'"\s])[A-Za-z0-9_.-]+?_Export_(\d{10,})(?!\d)/g;
+
+/**
+ * Replace the property address inside the file and folder names the app
+ * generates for exports (enhancedExportService, folderExportService,
+ * pdfExportService) with `[address]`, keeping the prefix, timestamp and
+ * extension: `Transaction_[address]_1729800000000.pdf`.
+ */
+export function redactExportFileNames(input: string): string {
+  if (!input) return input;
+  return input
+    .replace(EXPORT_TXN_RE, (_m, kind: string | undefined, ts: string) => `Transaction_${kind ?? ""}[address]_${ts}`)
+    .replace(EXPORT_COMBINED_RE, "$1[address]_Combined_Report.pdf")
+    .replace(EXPORT_FOLDER_RE, "$1[address]_Export_$2");
+}
+
+/** Paths the app owns whatever root it is installed or running under. */
+const APP_OWNED_MARKERS = ["/app.asar", "/node_modules/", "/applications/", "/program files", "/programs/keepr/", "/keepr.app/"];
+/** System locations: never a name the user chose. */
+const SYSTEM_PREFIX_RE = /^(?:\/(?:usr|bin|sbin|system|dev|proc|etc)\/|[a-z]:\/windows\/)/;
+
+function normalizePathForCompare(p: string): string {
+  return p.toLowerCase().replace(/[\\/]+/g, "/");
+}
+
+/**
+ * Allowlist under `Library` (user and system): only Application Support, Logs,
+ * Preferences and Caches, plus the Messages database files, keep their file
+ * names. Everything else under Library (Messages/Attachments, Mail, Containers,
+ * Group Containers, Mobile Documents, CloudStorage, files directly in Library)
+ * can hold user files and becomes `[file]`. (`application$`: an unquoted
+ * `Application Support` path is cut at the space, leaving `.../Library/Application`.)
+ */
+const LIBRARY_APP_DATA_RE =
+  /^\/(?:users\/[^/]+\/)?library\/(?:(?:application support|logs|preferences|caches)\/|application$)/;
+const LIBRARY_MESSAGES_DB_RE = /^\/users\/[^/]+\/library\/messages\/chat\.db(?:-wal|-shm)?$/;
+
+function isAppOwnedPath(p: string, appRoots: readonly string[]): boolean {
+  const norm = normalizePathForCompare(p);
+  if (SYSTEM_PREFIX_RE.test(norm)) return true;
+  if (LIBRARY_APP_DATA_RE.test(norm) || LIBRARY_MESSAGES_DB_RE.test(norm)) return true;
+  if (APP_OWNED_MARKERS.some((marker) => norm.includes(marker))) return true;
+  return appRoots.some((root) => {
+    if (!root) return false;
+    const r = normalizePathForCompare(redactUserProfile(root)).replace(/\/+$/, "");
+    return r.length > 1 && (norm === r || norm.startsWith(r + "/"));
+  });
+}
+
+/** Absolute paths that can hold a name the user chose. POSIX is limited to these roots so URL paths (`/rest/v1/x`) are left alone. */
+const PATH_START = String.raw`(?:\\\\\?\\)?(?:[A-Za-z]:[\\/]|[\\/]{2}(?=[^\\/\s'"])|\/+(?:Users|home|Volumes|private|var|tmp|mnt|media|root|opt|srv)\/)`;
+const QUOTED_PATH_RE = new RegExp(String.raw`(['"])(${PATH_START}[^'"\r\n]*)\1`, "g");
+const UNQUOTED_PATH_RE = new RegExp(String.raw`(?<![\w:/\\.'"\]\[-])(${PATH_START}[^\s'"]*)`, "g");
+
+/** Standard folder names are not names the user chose: a path ending in one is kept. */
+const STANDARD_FOLDER_NAMES = new Set([
+  "desktop", "downloads", "documents", "pictures", "music", "movies", "videos", "library",
+  "appdata", "local", "roaming", "locallow", "temp", "tmp", "application support", "caches",
+]);
+
+function redactFinalSegment(p: string, appRoots: readonly string[], unquoted: boolean): string {
+  let path = p;
+  let suffix = "";
+  if (unquoted) {
+    // Keep a trailing `:line:col` and closing punctuation outside the name.
+    const tail = /((?::\d+){1,2})?([),;]*)$/.exec(path);
+    if (tail && tail[0]) {
+      suffix = tail[0];
+      path = path.slice(0, path.length - suffix.length);
+    }
+  }
+  const m = /^([\s\S]*[\\/]+)([^\\/]*)$/.exec(path);
+  if (!m) return p;
+  const [, dir, last] = m;
+  if (!last || last === "[user]" || last === "[file]" || last.includes("[address]")) return p;
+  if (STANDARD_FOLDER_NAMES.has(last.toLowerCase())) return p;
+  if (isAppOwnedPath(path, appRoots)) return p;
+  return `${dir}[file]${suffix}`;
+}
+
+/**
+ * Replace the final segment of every absolute path — the file (or folder) name
+ * the user chose — with `[file]`, keeping the directories (founder ruling,
+ * 2026-10-25). Exempt: paths under `appRoots` (pass `process.resourcesPath`,
+ * `app.getAppPath()`, userData, logs, temp), under the app's install or
+ * bundle (`app.asar`, `node_modules`, `/Applications/`, `\Program Files`,
+ * `\Programs\keepr\`), system locations, `Library` app data (allowlist: Application Support, Logs, Preferences, Caches, Messages chat.db), and names already reduced to a
+ * placeholder (`Transaction_[address]_<ms>.pdf`).
+ *
+ * Quoted paths end at the closing quote; unquoted ones at whitespace, so an
+ * unquoted path with a space in a folder name is cut at the space (residue).
+ * Run after {@link redactUserProfile} and {@link redactExportFileNames}.
+ */
+export function redactUserFileNames(input: string, appRoots: readonly string[] = []): string {
+  if (!input) return input;
+  return input
+    .replace(QUOTED_PATH_RE, (_m, quote: string, p: string) => `${quote}${redactFinalSegment(p, appRoots, false)}${quote}`)
+    .replace(UNQUOTED_PATH_RE, (_m, p: string) => redactFinalSegment(p, appRoots, true));
+}
+
+/** Inputs the crash-report scrub needs from the host; kept out so the scrub stays pure. */
+export interface CrashReportScrubOptions {
+  /** `os.homedir()`. */
+  homeDir?: string;
+  /** App-owned directories whose file names are kept (see {@link redactUserFileNames}). */
+  appRoots?: readonly string[];
+}
+
+/**
+ * Every rule a crash-report string goes through: profile segment, export
+ * names, user-chosen file names, then emails and phone numbers. Ids (UUIDs),
+ * error codes and the app's own paths are untouched.
+ */
+export function redactCrashReportText(input: string, options: CrashReportScrubOptions = {}): string {
+  if (!input) return input;
+  return redactLogText(
+    redactUserFileNames(
+      redactExportFileNames(redactUserProfile(input, options.homeDir)),
+      // Roots get the same profile rule as the text (homeDir included), so a
+      // redirected profile still matches its own install and data folders.
+      (options.appRoots ?? []).map((root) => redactUserProfile(root, options.homeDir)),
+    ),
+  );
 }

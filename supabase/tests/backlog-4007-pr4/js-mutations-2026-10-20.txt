@@ -1,0 +1,55 @@
+# BACKLOG-4007 PR-4 JS mutation controls (fix committed 770424916 before any revert; exact-once replace; restored with git checkout; jest --bail=0)
+J4 reader fails open: MUTATION APPLIED [1	1	broker-portal/lib/auth/billingContact.ts]
+   tests 138 failed 2  reds: ['a failed or thrown read is false', 'unlicensed member, the read fails: floor only (fail closed)'] []
+   restored (file back to HEAD; "clean: False" = the uncommitted harness edits in supabase/tests at the time, not the mutated file)
+J1 billing path for any unlicensed: MUTATION APPLIED [1	1	broker-portal/lib/auth/membership.ts]
+   tests 138 failed 4  reds: ['unlicensed member, not the billing contact: floor only (fail closed)', 'unlicensed member, the read fails: floor only (fail closed)', 'unlicensed member, the read throws: floor only (fail closed)', 'unlicensed without the flag: Billing stays closed'] []
+   restored, tree clean: True
+J2 middleware never asks: MUTATION APPLIED [1	1	broker-portal/middleware.ts]
+   tests 138 failed 2  reds: ['asks the database only on a Billing path, for this brokerage', 'opens the floor plus Billing, and nothing else'] []
+   restored, tree clean: True
+J3 reader asks every access: MUTATION APPLIED [1	1	broker-portal/lib/auth/billingContact.ts]
+   tests 138 failed 7  reds: ['a deactivated member is never asked', 'a full-portal admin opens Billing without the question', 'admin: never asked, false', 'agent: never asked, false'] []
+   restored, tree clean: True
+J5 billing contact manages licenses: MUTATION APPLIED [1	1	broker-portal/lib/billing/capabilities.ts]
+   tests 138 failed 2  reds: ['organization page: sees the price, manages nothing, buys nothing', 'the billing-only login: the organization page, read-only'] []
+   restored, tree clean: True
+J6 page: no payer role: MUTATION APPLIED [1	1	broker-portal/app/dashboard/billing/page.tsx]
+   tests 138 failed 1  reds: ['the billing-only login of a suspended brokerage: banner with the Pay link'] []
+   restored, tree clean: True
+J7 page: suspension not asked: MUTATION APPLIED [1	1	broker-portal/app/dashboard/billing/page.tsx]
+   tests 138 failed 1  reds: ['the billing-only login of a suspended brokerage: banner with the Pay link'] []
+   restored, tree clean: True
+J8 action: login for Me: MUTATION APPLIED [1	1	broker-portal/lib/actions/billingSetup.ts]
+   tests 138 failed 1  reds: ['"Me", or the box unticked: the login is never asked for'] []
+   restored, tree clean: True
+J9 action: no email: MUTATION APPLIED [1	1	broker-portal/lib/actions/billingSetup.ts]
+   tests 138 failed 1  reds: ['"Someone else" + box: asks for the login, emails the invitation, reports sent'] []
+   restored, tree clean: True
+J10 email: billing-only line ignored: MUTATION APPLIED [1	1	broker-portal/lib/email/templates/invite.ts]
+   tests 138 failed 1  reds: ['says what the login opens, not "until your admin assigns one"'] []
+   restored, tree clean: True
+J11 checkbox for Me too: MUTATION APPLIED [1	1	broker-portal/components/setup/BillingStep.tsx]
+   tests 138 failed 10  reds: ['Confirm is disabled until the Terms box is ticked; then sends the version shown and no price', 'Confirm is disabled while the phone is invalid, enabled when valid (also in Someone else)', 'a new order version clears the Terms box and disables Confirm; the price-changed message stays', 'a pasted +1 (206) 555-0123 is accepted'] []
+   restored, tree clean: True
+J12 F3 identities ignored: MUTATION APPLIED [1	1	broker-portal/lib/billing/setupSteps.ts]
+   tests 138 failed 1  reds: ['Google-first account with a Microsoft identity reads azure and is offered Connect'] []
+   restored, tree clean: True
+J13 actions: no app gate: MUTATION APPLIED [1	1	broker-portal/lib/actions/orgContacts.ts]
+   tests 138 failed 1  reds: ['refused before any RPC for anyone but a broker/admin of the brokerage'] []
+   restored, tree clean: True
+J14 actions: keys pass through: MUTATION APPLIED [1	1	broker-portal/lib/actions/orgContacts.ts]
+   tests 138 failed 1  reds: ['only the documented keys travel'] []
+   restored, tree clean: True
+J15 panel: no Show more: MUTATION APPLIED [1	1	packages/ui/src/components/org-people.tsx]
+   tests 138 failed 1  reds: ['one IT contact: Change, no Add; office lists 5 then Show more'] []
+   restored, tree clean: True
+J16 panel: other brokerage pickable: MUTATION APPLIED [1	1	packages/ui/src/components/org-people.tsx]
+   tests 138 failed 1  reds: ['Select existing user (staff): search; a user in another brokerage cannot be picked'] []
+   restored, tree clean: True
+J17 admin: email not billing-only: MUTATION APPLIED [0	1	admin-portal/lib/actions/orgContacts.ts]
+   tests 6 failed 1  reds: ['a created billing-only login is emailed as billing-only through the broker portal'] []
+   restored, tree clean: True
+J18 admin: card without billing gate: MUTATION APPLIED [1	1	admin-portal/app/dashboard/organizations/[id]/page.tsx]
+   tests 6 failed 2  reds: ['hidden with the Billing card: billing off and not a test organization', 'hidden with the Billing card: no billing.view'] []
+   restored, tree clean: True
