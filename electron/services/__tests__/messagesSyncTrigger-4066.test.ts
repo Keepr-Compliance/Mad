@@ -228,6 +228,27 @@ describe("C8 — a click during an in-flight automatic run", () => {
     expect(importMessages).toHaveBeenCalledTimes(1);
   });
 
+  it("a click chained after a run that ALREADY refreshed the marker does not rescan -> ONE import", async () => {
+    // The first run has a start gap (start before the floor), imports, and the
+    // marker it writes is fresh by the time the chained click runs.
+    importMessages.mockImplementation(async () => {
+      markerMock.mockReturnValue(ago(60 * 1000));
+      return { success: true, messagesImported: 1 };
+    });
+    // As the real recordImport does: the scan's reach becomes deepest_import_start.
+    recordImportMock.mockImplementation((_u: string, iso: string | null) => {
+      (getDeepestImportStart as jest.Mock).mockReturnValue(iso);
+    });
+    const first = click("date-change", "2025-06-01T00:00:00.000Z");
+    const second = click("update", "2025-06-01T00:00:00.000Z");
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(a.importRan).toBe(true);
+    expect(importMessages).toHaveBeenCalledTimes(1);
+    expect(b.importRan).toBe(false);
+    expect(b.skipped).toBe("covered");
+  });
+
   it("a second click joins an in-flight click run -> ONE import, same result", async () => {
     const first = click("update");
     const second = click("update");
