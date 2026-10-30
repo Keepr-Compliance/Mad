@@ -16,7 +16,8 @@ import path from "path";
 
 /** The body of a top-level function: from its declaration to the first line that is exactly "}". */
 function functionBody(file: string, declaration: string): string {
-  const text = readFileSync(path.join(__dirname, "..", file), "utf8");
+  // Windows checkouts use CRLF; the function-end search below is LF-only.
+  const text = readFileSync(path.join(__dirname, "..", file), "utf8").replace(/\r\n/g, "\n");
   const start = text.indexOf(declaration);
   expect(start).toBeGreaterThanOrEqual(0);
   const end = text.indexOf("\n}\n", start);
