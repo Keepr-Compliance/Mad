@@ -215,6 +215,8 @@ describe('MultiSelect (desktop)', () => {
     }
     render(<InDialog />);
     fireEvent.click(trigger()[0]);
+    box('Failed').focus();
+    expect(document.activeElement).toBe(box('Failed'));
     fireEvent.keyDown(box('Failed'), { key: 'Escape' });
     expect(screen.queryByRole('checkbox')).toBeNull();
     expect(screen.getByTestId('dlg')).toHaveTextContent('dlg-open');
