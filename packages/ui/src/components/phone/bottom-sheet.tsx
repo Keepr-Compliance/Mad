@@ -12,6 +12,18 @@ import { cn } from '../../lib/cn';
  * bottom safe-area padding. Height caps at 90dvh, with a 90vh fallback for
  * browsers without dynamic viewport units.
  *
+ * Focus on close (BACKLOG-4032): the sheet has no Radix Trigger, so Radix
+ * would send focus to <body>. It returns to `returnFocusRef` when given, else
+ * to the element that had focus when the sheet opened (ignored when that was
+ * <body>, e.g. a tapped button on iOS Safari). Pass `returnFocusRef` = the
+ * opener so a tap, which may not focus the button, still gets focus back.
+ *
+ * Focus on open: an element in the body marked `data-autofocus` (DropdownOptions
+ * with autoFocus marks its search field) gets focus; otherwise Radix's default
+ * (the first focusable, the Close button). Needed when the sheet opens inside
+ * another dialog: that dialog's focus trap pulls a focus() made during mount
+ * back out, before this sheet's trap takes over.
+ *
  * Consumers: BACKLOG-3898 (support queue filters), BACKLOG-3900 (projects),
  * BACKLOG-3902 (broker users).
  */
@@ -25,6 +37,8 @@ export interface BottomSheetProps {
   /** Pinned footer content (usually one full-width button). */
   primaryAction?: React.ReactNode;
   className?: string;
+  /** Element that gets focus when the sheet closes (usually the button that opened it). */
+  returnFocusRef?: React.RefObject<HTMLElement | null>;
 }
 
 export function BottomSheet({
@@ -35,7 +49,16 @@ export function BottomSheet({
   children,
   primaryAction,
   className,
+  returnFocusRef,
 }: BottomSheetProps) {
+  // The element focused when the sheet opened: the fallback focus target on close.
+  const openerRef = React.useRef<HTMLElement | null>(null);
+  React.useLayoutEffect(() => {
+    if (!open || typeof document === 'undefined') return;
+    const active = document.activeElement as HTMLElement | null;
+    openerRef.current = active && active !== document.body ? active : null;
+  }, [open]);
+
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <DialogPrimitive.Portal>
@@ -45,6 +68,20 @@ export function BottomSheet({
         />
         <DialogPrimitive.Content
           aria-describedby={undefined}
+          onOpenAutoFocus={(e) => {
+            const target = (e.currentTarget as HTMLElement | null)?.querySelector<HTMLElement>('[data-autofocus]');
+            if (target) {
+              e.preventDefault();
+              target.focus();
+            }
+          }}
+          onCloseAutoFocus={(e) => {
+            const el = returnFocusRef?.current ?? openerRef.current;
+            if (el?.isConnected) {
+              e.preventDefault();
+              el.focus();
+            }
+          }}
           className={cn(
             'fixed inset-x-0 bottom-0 z-[60] flex max-h-[90vh] flex-col rounded-t-xl bg-white shadow-xl focus:outline-none supports-[height:100dvh]:max-h-[90dvh]',
             className

@@ -8,8 +8,9 @@ import type { DropdownOptionsProps, DropdownRow } from './types';
 
 /**
  * DropdownOptions (BACKLOG-4032): the search field + listbox, with no trigger
- * and no popover. `Dropdown` wraps it in a popover; a phone parent puts it in
- * a BottomSheet (slice 2).
+ * and no popover. `Dropdown` wraps it in a popover, or in a BottomSheet with
+ * `presentation="sheet"`; a phone filter bar puts it in a BottomSheet itself
+ * (README "Phone").
  *
  * a11y: ARIA 1.2 combobox. Focus stays in the search field (role=combobox)
  * and the active row is announced through aria-activedescendant, so typing
@@ -182,6 +183,7 @@ export function DropdownOptions<V extends string = string>({
               hostRef.current = el;
             }}
             type="text"
+            data-autofocus={autoFocus ? '' : undefined}
             role="combobox"
             aria-label={searchLabel}
             aria-expanded="true"
@@ -210,6 +212,7 @@ export function DropdownOptions<V extends string = string>({
               }
         }
         id={listboxId}
+        data-autofocus={autoFocus && !searchable ? '' : undefined}
         role="listbox"
         aria-label={labelledBy ? undefined : ariaLabel}
         aria-labelledby={labelledBy}
@@ -261,7 +264,7 @@ export function DropdownOptions<V extends string = string>({
                 {option.description ? (
                   <span
                     id={descId}
-                    className={cn('block text-xs', option.disabled ? 'text-gray-400' : 'text-gray-600')}
+                    className={cn('block', comfortable ? 'text-sm' : 'text-xs', option.disabled ? 'text-gray-400' : 'text-gray-600')}
                   >
                     {option.description}
                   </span>

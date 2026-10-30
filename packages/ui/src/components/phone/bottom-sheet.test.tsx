@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BottomSheet } from './bottom-sheet';
 
@@ -49,5 +49,55 @@ describe('BottomSheet', () => {
     const cls = screen.getByRole('dialog').className;
     expect(cls).toContain('max-h-[90vh]');
     expect(cls).toContain('supports-[height:100dvh]:max-h-[90dvh]');
+  });
+});
+
+/**
+ * BACKLOG-4032 B1: focus on close. Radix restores focus in a setTimeout(0),
+ * so each case flushes timers before reading activeElement.
+ */
+describe('BottomSheet focus on close', () => {
+  async function settle() {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+  }
+
+  function Opener({ withRef }: { withRef: boolean }) {
+    const [open, setOpen] = React.useState(false);
+    const ref = React.useRef<HTMLButtonElement>(null);
+    return (
+      <>
+        <button ref={ref} type="button" onClick={() => setOpen(true)}>
+          Open sheet
+        </button>
+        <BottomSheet open={open} onOpenChange={setOpen} title="Pick" returnFocusRef={withRef ? ref : undefined}>
+          {/* Like the live sheets, the body focuses something itself on open. */}
+          <input aria-label="Search" autoFocus />
+        </BottomSheet>
+      </>
+    );
+  }
+
+  it('returns focus to returnFocusRef even when the opener was never focused (fireEvent click)', async () => {
+    render(<Opener withRef />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open sheet' }));
+    await settle();
+    expect(document.activeElement).not.toBe(screen.getByRole('button', { name: 'Open sheet', hidden: true }));
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' });
+    await settle();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open sheet' }));
+  });
+
+  it('without returnFocusRef, returns focus to the element focused at open (userEvent click)', async () => {
+    render(<Opener withRef={false} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Open sheet' }));
+    await settle();
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Search' }));
+    await userEvent.keyboard('{Escape}');
+    await settle();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open sheet' }));
   });
 });

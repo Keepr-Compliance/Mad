@@ -19,6 +19,7 @@
  * - An agent or broker picked as the IT contact / MSP becomes an IT admin after a confirm.
  * - Phone: shown and editable only for callers who may write phones (can_edit_phone).
  * - userHref: the portal's link to a person's user page (null = plain text).
+ * - pickerPresentation: 'sheet' opens the user pickers in a BottomSheet (phone width, 4032).
  *
  * Copy rule (founder): short sentences; lists show 5 and "Show more".
  */
@@ -130,6 +131,11 @@ export interface OrgPeoplePanelProps {
   userHref?: (person: OrgPeopleUserRef) => string | null;
   /** Read-only (support session): no buttons. */
   readOnly?: boolean;
+  /**
+   * How the user pickers open (BACKLOG-4032): 'popover' (default) or 'sheet' (a BottomSheet,
+   * for phone width). The portal decides from its own media query.
+   */
+  pickerPresentation?: 'popover' | 'sheet';
 }
 
 const ROLES: Array<{ key: OrgContactRole; label: string; sub: string }> = [
@@ -264,7 +270,15 @@ interface Op {
   run: (confirm: boolean) => Promise<OrgPeopleResult>;
 }
 
-export function OrgPeoplePanel({ view, actions, phone, onChanged, userHref, readOnly = false }: OrgPeoplePanelProps) {
+export function OrgPeoplePanel({
+  view,
+  actions,
+  phone,
+  onChanged,
+  userHref,
+  readOnly = false,
+  pickerPresentation = 'popover',
+}: OrgPeoplePanelProps) {
   const [ed, setEd] = useState<EditorState | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -705,6 +719,7 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, userHref, read
         id="op-user"
         options={optionsFor(s.role, s.memberId)}
         value={s.memberId || null}
+        presentation={pickerPresentation}
         placeholder="Choose a user"
         searchPlaceholder="Search name or email"
         onChange={(v) => {
@@ -772,6 +787,7 @@ export function OrgPeoplePanel({ view, actions, phone, onChanged, userHref, read
           id="op-add"
           options={optionsFor(s.role, '', s.rows.map((r) => r.memberId))}
           value={null}
+          presentation={pickerPresentation}
           placeholder="Search by name or email"
           searchPlaceholder="Search name or email"
           onChange={(v) => {
