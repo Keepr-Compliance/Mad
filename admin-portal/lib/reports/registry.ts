@@ -61,6 +61,14 @@ export const REPORTS: ReportEntry[] = [
     source: 'support_tickets',
     permission: PERMISSIONS.ANALYTICS_VIEW,
   },
+  {
+    slug: 'user-activity',
+    title: 'User Activity',
+    description:
+      'Who signed in and was last seen when, on how many devices, and how many transactions, submissions and exports each user ran in the period.',
+    source: 'users, devices, audit_logs',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
 ];
 
 export function reportHref(slug: string): string {

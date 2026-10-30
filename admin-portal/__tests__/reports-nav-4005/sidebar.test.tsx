@@ -170,6 +170,7 @@ describe('C6 Reports page shows Analytics and Funnel cards beside the reports', 
       '/dashboard/reports/submissions',
       '/dashboard/reports/exports',
       '/dashboard/reports/support-sla',
+      '/dashboard/reports/user-activity',
     ]);
     expect(screen.getByRole('heading', { name: 'Analytics' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Paywall Funnel' })).toBeTruthy();
