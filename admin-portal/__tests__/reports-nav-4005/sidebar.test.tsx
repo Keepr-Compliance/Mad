@@ -100,6 +100,20 @@ describe('C4a one Reports entry, no Analytics or Funnel entry', () => {
   });
 });
 
+describe('C4d Support has no Analytics sub-link (BACKLOG-3721)', () => {
+  it('with the Support group open, My Tickets is listed and Support -> Analytics is not', () => {
+    nav.pathname = '/dashboard/support/my-tickets';
+    render(<Sidebar collapsed={false} onToggle={vi.fn()} mobileOpen onMobileClose={vi.fn()} />);
+    for (const scope of [aside(), drawer()]) {
+      const hrefs = within(scope).getAllByRole('link').map((a) => a.getAttribute('href') ?? '');
+      // Positive control: the group is expanded, so its sub-links render.
+      expect(hrefs).toContain('/dashboard/support/my-tickets');
+      expect(hrefs).not.toContain('/dashboard/support/analytics');
+      expect(within(scope).queryByRole('link', { name: 'Analytics' })).toBeNull();
+    }
+  });
+});
+
 describe('C4b Reports is lit on every /dashboard/reports page', () => {
   it.each([
     '/dashboard/reports',
