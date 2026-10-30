@@ -111,7 +111,8 @@ e.g. `hover:bg-primary/90` → `hsl(var(--primary) / 0.9)`.
 | `Input`, `Textarea` | native | Keepr control recipe (border-input, primary focus ring). |
 | `Checkbox` | Radix `Checkbox` | `role="checkbox"`, keyboard + `aria-checked`, indeterminate. |
 | `Select` set | Radix `Select` | `Trigger` (`role="combobox"`) / `Content` / `Item` / `Value` / `Group` / `Label` / `Separator`. |
-| `Dropdown` (+ `DropdownOptions`, `filterDropdownOptions`) | inline popover (no Radix) | Single choice, searchable, option description, disabled + hint, invalid + error. See **Dropdown** below. |
+| `Dropdown` (+ `DropdownOptions`, `filterDropdownOptions`) | inline popover (no Radix) | Single choice, searchable, option description, disabled + hint, invalid + error; `variant="filter"` pill. See **Dropdown** below. |
+| `DateRangePicker` | inline popover (no Radix) | Two-month calendar pill; commits on Apply. See **DateRangePicker** below. |
 
 ## Report kit (BACKLOG-3502a)
 
@@ -127,7 +128,7 @@ navigation arrives as callbacks.
 | `useClickOutside` | `mousedown` outside a ref, only while `enabled`. |
 | `MultiSelect`, `MultiSelectOptions` | Desktop trigger ("Label" / "Label (n)") + popover; a sibling "Clear <Label> filter" button. `MultiSelectOptions` is the one list (optional Select all / Clear all rows via `bulkActions`, optional `count` per option), purely controlled. |
 | `FilterBar`, `FilterCaption` | Filter row shell (Clear shown only while filtered); the "<lead>: <period> · <filters>" caption. |
-| `PeriodPicker` | Period select; From / To only for `customKey`; dates commit when complete or on blur. |
+| `PeriodPicker` | Period pill (Dropdown `variant="filter"`) + a range pill (DateRangePicker) only for `customKey`. A preset reports at once; picking the custom option opens the calendar and reports once, on Apply. Props unchanged since 3502a. |
 | `StatCard` | Superset of the design-system `StatCard`: `subtitle`, `footer`, `tone="critical"` (red only for a number above 0), `onClick` + `pressed` toggle, `valueProps`, `purple` hue. |
 | `ShowMoreFooter` | "Showing n of N …" + "Show k more" (k = min(step, remaining)) + "Show all". |
 | `TruncationNotice` | The row-cap notice: names the cap, the period, and "a floor, not a total". |
@@ -253,9 +254,45 @@ Focus and keys in a sheet:
 
 So later varieties are additive, these are already in the types and do nothing
 in slice 1: `mode` (`'single'` today; `'multi'` joins the `DropdownProps`
-union), `variant` (`'field'` today; `'filter'` later), `onClear`, option
-`leading` / `count` / `group`, and an internal `header` row kind that the
-keyboard already skips. Value types are generic (`Dropdown<V extends string>`).
+union), the clear X for `onClear`, option `leading` / `count` / `group`, and an
+internal `header` row kind that the keyboard already skips. Value types are
+generic (`Dropdown<V extends string>`).
+
+### Filter variant (slice 3)
+
+`variant="filter"` is the report-filter pill: MultiSelect's trigger classes,
+`triggerIcon` before the text, no visible label (`label` / `ariaLabel` still
+name it), and a panel at least `min-w-56` wide. It stays neutral unless it has a
+value AND `onClear` is passed (a removable filter reads blue). `triggerRef`
+exposes the trigger button. Single mode only. `PeriodPicker` is the consumer.
+
+## DateRangePicker (BACKLOG-4032 slice 3)
+
+```tsx
+<DateRangePicker
+  value={{ from: '2026-10-01', to: '2026-10-20' }}   // YYYY-MM-DD calendar days
+  onChange={({ from, to }) => ...}                   // Apply only; always complete, from <= to
+  ariaLabel="Custom range"
+/>
+```
+
+- Two months, Monday-first (matching the reports' "This week"). Nothing
+  applies until Apply; Cancel, Escape, an outside press or tabbing out discard
+  the draft. A second pick before the start becomes the new start, so a
+  reversed range can never be emitted. Same day twice = a one-day range.
+- Days are calendar-day labels, read by the reports as UTC days. All
+  arithmetic runs on y/m/d with `Date.UTC` (`calendar.ts`); "today" is the
+  local day. The kit's jest config runs the date suites under both an east
+  (`Pacific/Auckland`) and a west (`Pacific/Honolulu`) zone.
+- Keyboard: WAI-ARIA APG date-picker grid. Arrows = day / week, Home / End =
+  week start / end, PageUp / PageDown = month, Shift+PageUp / PageDown = year,
+  Enter / Space pick. Escape is a window capture listener, so inside a kit
+  `Dialog` only the picker closes.
+- Optional `open` / `onOpenChange` / `returnFocusRef` (PeriodPicker opens it
+  on Custom and sends focus back to its Period pill on Cancel).
+- RESERVED (typed, ignored): `mode`, `presets`, `presentation` (popover only;
+  a phone sheet waits for a phone consumer), `min`, `max`, `weekStartsOn`,
+  `placeholder`.
 
 ## Testing
 
