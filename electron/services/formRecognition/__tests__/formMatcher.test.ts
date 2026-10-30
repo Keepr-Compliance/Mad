@@ -261,4 +261,27 @@ describe("BACKLOG-3941 normalisation — length-preserving, newlines untouched",
     // The S4 41C title is printed with a curly apostrophe; the known title uses a straight one.
     expect(matchForms(fixtureText(S4_FORM_41C))[0].strength).toBe("footer+title");
   });
+
+  it("evidence is a slice of the ORIGINAL text, not of the normalised copy (SYNTHETIC: S1 with NBSP and a curly apostrophe inside the header block)", () => {
+    const text = fixtureText(S1_FORM_41)
+      .replace("Form 41 \u00a9", "Form\u00a041\u00a0\u00a9")
+      .replace("Buyer Brokerage", "Buyer\u2019 Brokerage")
+      .replace("Northwest Multiple", "Northwest\u00a0Multiple");
+    expect(text).toContain("\u00a0");
+    expect(text).toContain("\u2019");
+    const [m] = matchForms(text);
+    expect(m.formId).toBe("nwmls-41");
+    expect(m.evidence).toContain("\u00a0");
+    expect(m.evidence).toContain("\u2019");
+    expect(text.slice(m.firstOffset, m.firstOffset + m.evidence.length)).toBe(m.evidence);
+  });
+
+  it("firstOffset skips leading spaces before the code line (SYNTHETIC: S1 code line indented by two spaces)", () => {
+    const text = fixtureText(S1_FORM_41).replace("Form 41 \u00a9", "  Form 41 \u00a9");
+    const [m] = matchForms(text);
+    expect(m.formId).toBe("nwmls-41");
+    expect(text[m.firstOffset]).toBe("F");
+    expect(text.slice(m.firstOffset).startsWith("Form 41 \u00a9Copyright 2024")).toBe(true);
+    expect(m.evidence.startsWith("Form 41")).toBe(true);
+  });
 });
