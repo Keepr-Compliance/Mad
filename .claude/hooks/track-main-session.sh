@@ -157,7 +157,14 @@ if [ "$STATUS" = "200" ] || [ "$STATUS" = "201" ]; then
   echo "$CURRENT_LINES" > "$OFFSET_FILE" 2>/dev/null
   echo "[MAIN] OK ($STATUS): $BILLABLE billable over $((CURRENT_LINES - PREV_LINES)) lines, task=${LEGACY_ID:-unlabelled} model=${MODEL:-null} agent=$AGENT_ID" >> "$DEBUG_LOG"
 
+  # tokens.csv is untracked (BACKLOG-4069): a fresh clone has neither the file
+  # nor .claude/metrics/, so create both, with the same header as
+  # track-agent-tokens.sh, before appending.
   METRICS_FILE="${CLAUDE_PROJECT_DIR:-.}/.claude/metrics/tokens.csv"
+  mkdir -p "$(dirname "$METRICS_FILE")" 2>/dev/null
+  if [ ! -f "$METRICS_FILE" ]; then
+    echo "timestamp,session_id,agent_id,agent_type,task_id,description,input_tokens,output_tokens,cache_read,cache_create,billable_tokens,total_tokens,api_calls,duration_secs,started_at,ended_at" > "$METRICS_FILE"
+  fi
   if [ -f "$METRICS_FILE" ]; then
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ),${SESSION_ID},${AGENT_ID},main,${LEGACY_ID},,${IN},${OUT},${CR},${CC},${BILLABLE},${TOTAL},${API_CALLS},${DURATION_SECS},${START_TS},${END_TS}" >> "$METRICS_FILE"
   fi

@@ -46,7 +46,7 @@ The Mad application uses:
 
 1. In Supabase dashboard, click "SQL Editor" in the left sidebar
 2. Click "New query"
-3. Open the file `/supabase_schema.sql` from this project
+3. Open the file `docs/sql/supabase_schema.sql` from this project
 4. Copy the entire contents
 5. Paste into the Supabase SQL Editor
 6. Click "Run" (or press Ctrl/Cmd + Enter)
@@ -349,7 +349,7 @@ Before deploying to production:
 
 ### Database Tables Not Created
 
-- Re-run the `supabase_schema.sql` in Supabase SQL Editor
+- Re-run the `docs/sql/supabase_schema.sql` in Supabase SQL Editor
 - Check for error messages in the SQL editor
 - Verify you have CREATE TABLE permissions
 
