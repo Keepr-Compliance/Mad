@@ -54,6 +54,14 @@ export const REPORTS: ReportEntry[] = [
     permission: PERMISSIONS.ANALYTICS_VIEW,
   },
   {
+    slug: 'support-sla',
+    title: 'Support SLA',
+    description:
+      'How quickly support tickets got a first response and were resolved in the period, overall and per agent, and how many are open now.',
+    source: 'support_tickets',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
+  {
     slug: 'user-activity',
     title: 'User Activity',
     description:

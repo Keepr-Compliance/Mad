@@ -4,7 +4,8 @@
  * are the desktop ones. Member shape follows app/dashboard/users/page.tsx.
  */
 import React from 'react';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import '@testing-library/jest-dom';
 
 jest.mock('next/navigation', () => ({ useRouter: () => ({ refresh: jest.fn(), push: jest.fn() }) }));
@@ -147,5 +148,19 @@ describe('Users stays without a sort control (BACKLOG-3904 sort)', () => {
     const grid = bar.querySelector('.grid') as HTMLElement;
     expect(grid.className).toBe('mt-2 grid grid-cols-2 gap-2');
     expect(grid.children).toHaveLength(2);
+  });
+
+  it('BACKLOG-4032: closing a filter sheet returns focus to the button that opened it', async () => {
+    renderList();
+    await userEvent.click(screen.getByRole('button', { name: 'Role: All Roles' }));
+    const sheet = screen.getByRole('dialog', { name: 'Role' });
+    await userEvent.click(within(sheet).getByLabelText('Agent'));
+    await userEvent.click(within(sheet).getByRole('button', { name: /^Show/ }));
+    // Radix restores focus in a setTimeout(0).
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(screen.queryByRole('dialog', { name: 'Role' })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Role: Agent' }));
   });
 });

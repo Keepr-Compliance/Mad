@@ -16,12 +16,6 @@ export default {
   ],
   theme: {
     extend: {
-      colors: {
-        // Founder D2 (BACKLOG-3863, 2026-10-21): desktop primary stays #007AFF.
-        // OBJECT form on purpose: a bare string would REPLACE the preset's
-        // primary object and silently remove primary-foreground and the scale.
-        primary: { DEFAULT: '#007AFF' },
-      },
       borderRadius: {
         // The preset maps `sm` to calc(var(--radius) - 4px) = 4px. Desktop's
         // rounded-*-sm corners stay Tailwind's 2px, so nothing existing moves.
