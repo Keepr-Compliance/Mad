@@ -114,6 +114,31 @@ export interface ChecklistsForTransaction {
   requiredTotal: number;
 }
 
+/**
+ * BACKLOG-3767 — the evidence row behind one attachment member, read for the
+ * PDF export's checklist block.
+ */
+export interface ChecklistAttachmentTarget {
+  attachmentId: string;
+  filename: string | null;
+  emailId: string | null;
+  messageId: string | null;
+  /** `attachments.external_message_id` (the Apple guid fallback). */
+  externalMessageId: string | null;
+  /** `messages.external_id` of `messageId`'s row, when it exists. */
+  messageExternalId: string | null;
+  /** The owning text is hidden from THIS transaction's export (whole set, any date). */
+  hidden: boolean;
+}
+
+/** BACKLOG-3767 — the rows the PDF export's checklist block names members by. */
+export interface ChecklistExportTargets {
+  /** Keyed by attachment id. */
+  attachmentTargets: Record<string, ChecklistAttachmentTarget>;
+  /** Keyed by email id. */
+  emailSubjects: Record<string, string | null>;
+}
+
 // ---------------------------------------------------------------------------
 // Broker templates, as read from the cloud — BACKLOG-3475 PR-B
 // ---------------------------------------------------------------------------

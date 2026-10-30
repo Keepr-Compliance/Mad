@@ -55,6 +55,8 @@ import {
   GET_CHECKLIST_ITEMS_SQL,
   GET_CHECKLIST_LINK_MEMBERS_SQL,
   GET_CHECKLIST_LINKS_SQL,
+  GET_CHECKLIST_EXPORT_ATTACHMENTS_SQL,
+  GET_CHECKLIST_EXPORT_EMAIL_SUBJECTS_SQL,
   GET_CHECKLISTS_BY_TRANSACTION_SQL,
   GET_ITEM_CONTEXT_SQL,
   GET_TRANSACTION_AUDIT_DATES_SQL,
@@ -76,6 +78,7 @@ import type {
   AddChecklistLinkInput,
   AddChecklistLinkResult,
   ChecklistDetail,
+  ChecklistExportTargets,
   ChecklistItem,
   ChecklistLink,
   ChecklistLinkMember,
@@ -549,4 +552,63 @@ export function setChecklistLinkIncludeOutsideDates(
 export function removeChecklistLink(linkId: string): Promise<boolean> {
   const result = dbRun(DELETE_CHECKLIST_LINK_SQL, [linkId]);
   return Promise.resolve(result.changes > 0);
+}
+
+/**
+ * BACKLOG-3767 — the evidence rows the PDF export's checklist block names its
+ * members by: for each attachment member, its owner ids and whether the text it
+ * belongs to is hidden from this transaction's export; for each email member,
+ * its subject. Read once per export, after the export's own sync and load.
+ */
+export function getChecklistExportTargets(
+  transactionId: string,
+  checklists: ChecklistDetail[],
+): Promise<ChecklistExportTargets> {
+  const attachmentIds = new Set<string>();
+  const emailIds = new Set<string>();
+  for (const detail of checklists) {
+    for (const links of Object.values(detail.linksByItemId)) {
+      for (const link of links) {
+        for (const member of link.members) {
+          if (member.attachmentId) attachmentIds.add(member.attachmentId);
+          if (member.emailId) emailIds.add(member.emailId);
+        }
+      }
+    }
+  }
+
+  const attachmentTargets: ChecklistExportTargets["attachmentTargets"] = {};
+  if (attachmentIds.size > 0) {
+    const rows = dbAll<{
+      id: string;
+      filename: string | null;
+      email_id: string | null;
+      message_id: string | null;
+      external_message_id: string | null;
+      message_external_id: string | null;
+      hidden: number;
+    }>(GET_CHECKLIST_EXPORT_ATTACHMENTS_SQL, [transactionId, JSON.stringify([...attachmentIds])]);
+    for (const row of rows) {
+      attachmentTargets[row.id] = {
+        attachmentId: row.id,
+        filename: row.filename,
+        emailId: row.email_id,
+        messageId: row.message_id,
+        externalMessageId: row.external_message_id,
+        messageExternalId: row.message_external_id,
+        hidden: row.hidden === 1,
+      };
+    }
+  }
+
+  const emailSubjects: ChecklistExportTargets["emailSubjects"] = {};
+  if (emailIds.size > 0) {
+    const rows = dbAll<{ id: string; subject: string | null }>(
+      GET_CHECKLIST_EXPORT_EMAIL_SUBJECTS_SQL,
+      [JSON.stringify([...emailIds])],
+    );
+    for (const row of rows) emailSubjects[row.id] = row.subject;
+  }
+
+  return Promise.resolve({ attachmentTargets, emailSubjects });
 }
