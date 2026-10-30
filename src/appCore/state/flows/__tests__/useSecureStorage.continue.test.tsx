@@ -37,9 +37,9 @@ function step(s: AppState, a: unknown): AppState {
   return appStateReducer(s, a as never);
 }
 
-function closedOnboarding(): AppState {
+function closedOnboarding(database: "not-initialized" | "unknown" = "not-initialized"): AppState {
   let s = step(INITIAL_APP_STATE, { type: "STORAGE_CHECKED", hasKeyStore: true });
-  s = step(s, { type: "AUTH_PRE_VALIDATED", valid: false, reason: "offline_grace_expired", database: "not-initialized" });
+  s = step(s, { type: "AUTH_PRE_VALIDATED", valid: false, reason: "offline_grace_expired", database });
   s = step(s, { type: "LOGIN_SUCCESS", user, platform: mac, isNewUser: false });
   s = step(s, {
     type: "USER_DATA_LOADED",
@@ -98,6 +98,23 @@ describe("BACKLOG-3321 C4: secure-storage Continue on the closed route", () => {
     });
 
     // Call count first: a missing open is the defect this control exists for.
+    expect(mockInit).toHaveBeenCalledTimes(1);
+    expect(ok).toBe(true);
+    expect(result.current.isDatabaseInitialized).toBe(true);
+  });
+
+  it("C4u: opens once and records open when onboarding was reached with database unknown (probe failed)", async () => {
+    const start = closedOnboarding("unknown");
+    expect(start.status).toBe("onboarding");
+    expect(start).toMatchObject({ database: "unknown" });
+    const { result } = renderHook(() => useSecureStorage(options), { wrapper: wrapper(start) });
+    expect(result.current.isDatabaseInitialized).toBe(false);
+
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.initializeSecureStorage();
+    });
+
     expect(mockInit).toHaveBeenCalledTimes(1);
     expect(ok).toBe(true);
     expect(result.current.isDatabaseInitialized).toBe(true);
