@@ -175,17 +175,24 @@ describe("emailSyncStateService", () => {
   describe("recordSyncSuccess / recordSyncFailure", () => {
     it("success clears last_error and resets failure_count", () => {
       recordSyncSuccess(USER, ACCT, "microsoft");
-      // First call ensures the row; the UPDATE is the last dbRun call.
-      const last = mockDbRun.mock.calls[mockDbRun.mock.calls.length - 1] as [string];
-      expect(last[0]).toContain("last_error = NULL");
-      expect(last[0]).toContain("failure_count = 0");
+      // BACKLOG-2554: one UPSERT creates or clears the row in a single statement.
+      // Row-level behavior (phase/cursor kept) is proven against the real driver
+      // in emailSyncStateService.atomicity-2554.test.ts.
+      expect(mockDbRun).toHaveBeenCalledTimes(1);
+      const [sqlText, params] = mockDbRun.mock.calls[0] as [string, unknown[]];
+      expect(sqlText).toContain("ON CONFLICT(user_id, account_id) DO UPDATE SET");
+      expect(sqlText).toContain("last_error = NULL");
+      expect(sqlText).toContain("failure_count = 0");
+      expect(params).toEqual([USER, ACCT, "microsoft"]);
     });
 
     it("failure stores the message and increments failure_count", () => {
       recordSyncFailure(USER, ACCT, "microsoft", new Error("boom"));
-      const last = mockDbRun.mock.calls[mockDbRun.mock.calls.length - 1] as [string, unknown[]];
-      expect(last[0]).toContain("failure_count = failure_count + 1");
-      expect(last[1][0]).toBe("boom");
+      expect(mockDbRun).toHaveBeenCalledTimes(1);
+      const [sqlText, params] = mockDbRun.mock.calls[0] as [string, unknown[]];
+      expect(sqlText).toContain("ON CONFLICT(user_id, account_id) DO UPDATE SET");
+      expect(sqlText).toContain("failure_count = email_sync_state.failure_count + 1");
+      expect(params).toEqual([USER, ACCT, "microsoft", "boom"]);
     });
   });
 });
