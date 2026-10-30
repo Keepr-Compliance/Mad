@@ -3,7 +3,7 @@ import { ExportUnencryptedNotice } from "./common/ExportUnencryptedNotice";
 import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import { InfoTooltip } from "./common/InfoTooltip";
 import type { Transaction } from "../../electron/types/models";
-import { settingsService, transactionService } from '../services';
+import { checklistService, settingsService, transactionService } from '../services';
 import logger from '../utils/logger';
 import { useFeatureGate } from "../hooks/useFeatureGate";
 import { UpgradePrompt } from "./common/UpgradePrompt";
@@ -103,6 +103,12 @@ function ExportModal({
   // then shows the warning form, and Done skips the "mark as closed?" prompt.
   const [notRecorded, setNotRecorded] = useState(false);
   const [saveAsDefault, setSaveAsDefault] = useState(false);
+  // BACKLOG-3767: add the deal's checklists to the PDF. ON by default; a saved
+  // "every export" choice overrides it. A saved record with no such key (every
+  // record written before this option existed) keeps the default.
+  const [includeChecklist, setIncludeChecklist] = useState(true);
+  // Whether this deal has at least one checklist. The option is shown only then.
+  const [hasChecklist, setHasChecklist] = useState(false);
 
   // BACKLOG-334: TRUE once the saved export preferences have loaded AND carry a
   // usable format. Only then does step 1 show the "Export format" button in its
@@ -180,6 +186,7 @@ function ExportModal({
                 emailExportMode?: string;
                 contentType?: string;
                 attachmentType?: string;
+                includeChecklist?: boolean;
               };
             };
             // Only use saved preference if it's an implemented format
@@ -201,6 +208,10 @@ function ExportModal({
             if (prefs.export?.attachmentType === "all" || prefs.export?.attachmentType === "email" || prefs.export?.attachmentType === "text" || prefs.export?.attachmentType === "none") {
               setAttachmentType(prefs.export.attachmentType);
             }
+            // BACKLOG-3767: only a saved boolean overrides the ON default.
+            if (typeof prefs.export?.includeChecklist === "boolean") {
+              setIncludeChecklist(prefs.export.includeChecklist);
+            }
           }
         } catch (error) {
           logger.error("Failed to load export preferences:", error);
@@ -211,6 +222,22 @@ function ExportModal({
 
     loadDefaults();
   }, [userId]);
+
+  // BACKLOG-3767: does this deal have a checklist? Read once per open.
+  useEffect(() => {
+    let cancelled = false;
+    checklistService
+      .get(transaction.id)
+      .then((result) => {
+        if (!cancelled) setHasChecklist(!!result.success && (result.data?.checklists.length ?? 0) > 0);
+      })
+      .catch(() => {
+        if (!cancelled) setHasChecklist(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transaction.id]);
 
   // Adjust attachmentType default when feature gates finish loading
   useEffect(() => {
@@ -274,6 +301,10 @@ function ExportModal({
     setStep(2);
   };
 
+  // BACKLOG-3767: the checklist option applies to One PDF and Summary PDF only.
+  const checklistOptionShown =
+    hasChecklist && (exportFormat === "combined-pdf" || exportFormat === "pdf");
+
   /**
    * Fire the actual export IPC for the current format. Returns the raw result so
    * the caller can branch on success / PAYWALL_LOCKED (BACKLOG-2075) / other error.
@@ -305,6 +336,8 @@ function ExportModal({
       summaryOnly,
       attachmentType,
       emailExportMode,
+      // BACKLOG-3767: only the two PDF formats render it.
+      includeChecklist: checklistOptionShown && includeChecklist,
     });
   };
 
@@ -398,7 +431,7 @@ function ExportModal({
     if (saveAsDefault && userId) {
       try {
         await settingsService.updatePreferences(userId, {
-          export: { defaultFormat: exportFormat, emailExportMode, contentType, attachmentType },
+          export: { defaultFormat: exportFormat, emailExportMode, contentType, attachmentType, includeChecklist },
         });
       } catch (err) {
         logger.error("Failed to save export defaults:", err);
@@ -963,6 +996,27 @@ function ExportModal({
                 )}
 
               </div>
+
+              {/* CHECKLIST section (BACKLOG-3767) - One PDF and Summary PDF, deals with a checklist */}
+              {checklistOptionShown && (
+                <div>
+                  <label className="flex items-center text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                    Checklist
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={includeChecklist}
+                      onChange={(e) => setIncludeChecklist(e.target.checked)}
+                      className="w-4 h-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                    />
+                    <span className="flex items-center gap-1.5 text-sm text-gray-600">
+                      Include checklist items
+                      <InfoTooltip text="Each item, complete or not, its note, and links to the emails and texts in this PDF" />
+                    </span>
+                  </label>
+                </div>
+              )}
 
               {/* Save as default checkbox (BACKLOG-1551) */}
               <div className="pt-2 border-t border-gray-200">

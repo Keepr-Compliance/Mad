@@ -646,6 +646,8 @@ export interface WindowApiTransactions {
       summaryOnly?: boolean;
       attachmentType?: ExportAttachmentType;
       emailExportMode?: ExportEmailMode;
+      /** BACKLOG-3767: add the transaction's checklists to the PDF. */
+      includeChecklist?: boolean;
     },
   ) => Promise<{
     success: boolean;
