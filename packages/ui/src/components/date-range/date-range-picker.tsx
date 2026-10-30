@@ -165,7 +165,7 @@ export function DateRangePicker({
   );
 
   // Placement, measured each time it opens.
-  React.useLayoutEffect(() => {
+  React.useEffect(() => {
     if (!isOpen || typeof window === 'undefined') return;
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
