@@ -9,6 +9,7 @@
  */
 
 import { fdaBlocksOnboarding, unknownFdaFor, wasFdaAnswered } from "./fdaState";
+import { recordedDatabase } from "./databaseState";
 import { routeAccount } from "./routing/routeAccount";
 import type {
   AppState,
@@ -31,7 +32,7 @@ import { INITIAL_APP_STATE } from "./types";
  * deleted session.json (preAuthValidationHandler.ts returns these only when
  * clearSession() succeeded). Only these may proceed to open the DB.
  */
-const PRE_AUTH_REJECTIONS_WITH_SESSION_CLEARED: ReadonlySet<string> = new Set([
+export const PRE_AUTH_REJECTIONS_WITH_SESSION_CLEARED: ReadonlySet<string> = new Set([
   "token_invalid",
   "session_revoked",
 ]);
@@ -165,6 +166,7 @@ export function appStateReducer(
       return {
         status: "loading",
         phase: "validating-auth",
+        database: state.database,
       };
     }
 
@@ -192,30 +194,36 @@ export function appStateReducer(
           return {
             status: "loading",
             phase: "initializing-db",
+            database: state.database,
           };
         }
-        // Auth failed pre-DB -- go to unauthenticated WITHOUT ever opening DB
-        return {
+        // Auth failed pre-DB -- go to unauthenticated WITHOUT ever opening DB.
+        // BACKLOG-3321: record what main says about the database (the
+        // orchestrator asks before dispatching). Nobody asked -> "unknown".
+        // Never assumed open: on this route the user can sign in and reach
+        // onboarding or the dashboard without the DB ever being opened.
+        const closed: import("./types").UnauthenticatedState & { reason: string } = {
           status: "unauthenticated",
           reason: action.reason || "session_revoked",
-        } as import("./types").UnauthenticatedState;
+          database: action.database ?? "unknown",
+        };
+        return closed;
       }
 
       // Auth passed or no session exists -- proceed to DB initialization
       return {
         status: "loading",
         phase: "initializing-db",
+        database: state.database,
       };
     }
 
     case "DB_INIT_STARTED": {
-      // Progress indicator - valid during initializing-db phase or onboarding with deferred init
+      // Progress indicator - valid during initializing-db phase. During
+      // onboarding (secure-storage Continue on the closed route) there is no
+      // visible change; the action is accepted and ignored.
       if (state.status === "loading" && state.phase === "initializing-db") {
         return { ...state, progress: 0 };
-      }
-      // Also allow during onboarding for first-time macOS users (deferred DB init)
-      if (state.status === "onboarding" && state.deferredDbInit) {
-        return state; // No visible change needed, but action is valid
       }
       return state;
     }
@@ -236,15 +244,19 @@ export function appStateReducer(
           };
         }
 
-        // Success - proceed to load auth
+        // Success - proceed to load auth. BACKLOG-3321: the ONE place the
+        // loading flow records the database as open.
         return {
           status: "loading",
           phase: "loading-auth",
+          database: "initialized",
         };
       }
 
-      // Handle during onboarding for first-time macOS users (deferred DB init)
-      if (state.status === "onboarding" && state.deferredDbInit) {
+      // BACKLOG-3321: onboarding with the database not yet open -- the
+      // secure-storage Continue (useSecureStorage) opens it on the closed
+      // pre-auth route. An already-open database ignores the action.
+      if (state.status === "onboarding" && state.database !== "initialized") {
         if (!action.success) {
           // DB initialization failed - transition to error state
           return {
@@ -258,10 +270,10 @@ export function appStateReducer(
           };
         }
 
-        // Success - clear deferred flag, DB is now initialized
+        // Success - record the open
         return {
           ...state,
-          deferredDbInit: false,
+          database: "initialized",
         };
       }
 
@@ -273,15 +285,11 @@ export function appStateReducer(
         return state;
       }
 
-      // Preserve deferredDbInit flag from loading state
-      const loadingState = state as LoadingState;
-      const deferredDbInit = loadingState.deferredDbInit;
-
       if (!action.user) {
-        // No authenticated user - preserve deferredDbInit for after login
+        // No authenticated user - carry the database fact to Login
         return {
           status: "unauthenticated",
-          deferredDbInit,
+          database: state.database,
         };
       }
 
@@ -292,7 +300,7 @@ export function appStateReducer(
       return {
         status: "loading",
         phase: "loading-user-data",
-        deferredDbInit,
+        database: state.database,
       };
     }
 
@@ -306,19 +314,16 @@ export function appStateReducer(
         return state; // Invalid transition
       }
 
-      // Preserve deferredDbInit flag from unauthenticated state
-      const deferredDbInit = state.deferredDbInit;
-
       // BACKLOG-3673: every signed-in account loads its data (see AUTH_LOADED).
-      // Store user/platform in loading state for Phase 4 to use
-      // Preserve deferredDbInit for returning users on fresh macOS installs
+      // Store user/platform in loading state for Phase 4 to use.
+      // BACKLOG-3321: carry the database fact recorded on Login.
       return {
         status: "loading",
         phase: "loading-user-data",
         progress: 75, // Skip phases 1-3, go directly to user data loading
         user: action.user,
         platform: action.platform,
-        deferredDbInit,
+        database: state.database,
       };
     }
 
@@ -377,6 +382,7 @@ export function appStateReducer(
           user,
           platform,
           userData: data,
+          database: loadingState.database,
         };
       }
 
@@ -417,11 +423,6 @@ export function appStateReducer(
 
       const nextStep = getNextOnboardingStep(completedSteps, platform, data);
 
-      // Preserve deferredDbInit for returning users on fresh installs
-      // This handles the case where a user exists in Supabase but the local
-      // app data was deleted - DB still needs to be initialized
-      const deferredDbInit = loadingState.deferredDbInit;
-
       return {
         status: "onboarding",
         step: nextStep,
@@ -455,8 +456,9 @@ export function appStateReducer(
           contactSource: data.contactSourceAnswered === true,
           emailStep: data.hasCompletedEmailOnboarding === true,
         },
-        // Preserve deferredDbInit for first-time macOS installs (even for returning users)
-        deferredDbInit,
+        // BACKLOG-3321: carry the database fact. On the closed pre-auth route
+        // this is not "initialized", and secure-storage Continue opens it.
+        database: loadingState.database,
       };
     }
 
@@ -595,6 +597,7 @@ export function appStateReducer(
         user: state.user,
         platform: state.platform,
         userData,
+        database: state.database,
       };
     }
 
@@ -713,6 +716,7 @@ export function appStateReducer(
           contactSource: state.userData.contactSourceAnswered === true,
           emailStep: false,
         },
+        database: state.database,
       };
     }
 
@@ -721,8 +725,12 @@ export function appStateReducer(
     // ============================================
 
     case "LOGOUT": {
-      // Logout works from any state
-      return { status: "unauthenticated" };
+      // Logout works from any state.
+      // BACKLOG-3321: logout closes nothing, so the database fact is CARRIED
+      // (through previousState when signing out of an error screen). Resetting
+      // it would make the next sign-in read closed after a normal session, or
+      // open after the closed pre-auth route.
+      return { status: "unauthenticated", database: recordedDatabase(state) };
     }
 
     // ============================================

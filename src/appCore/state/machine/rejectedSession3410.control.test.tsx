@@ -50,7 +50,9 @@ const SESSION_REVOKED = { valid: false, reason: "session_revoked" } as const;
 type Rejected = typeof TOKEN_INVALID | typeof SESSION_REVOKED;
 
 function run(actions: AppAction[]): AppState[] {
-  let s: AppState = { status: "loading", phase: "validating-auth" } as AppState;
+  // BACKLOG-3321: validating-auth is reached from INITIAL_APP_STATE via
+  // STORAGE_CHECKED, which carries database "unknown".
+  let s: AppState = { status: "loading", phase: "validating-auth", database: "unknown" };
   const seen: AppState[] = [];
   for (const a of actions) {
     s = appStateReducer(s, a as never);
@@ -191,6 +193,6 @@ describe("BACKLOG-3410 control 3 (reducer): only rejections with the session cle
 
   it.each([[TOKEN_INVALID], [SESSION_REVOKED]])("%o proceeds to initializing-db", (rejected) => {
     const [s1] = run([{ type: "AUTH_PRE_VALIDATED", ...rejected } as AppAction]);
-    expect(s1).toEqual({ status: "loading", phase: "initializing-db" });
+    expect(s1).toEqual({ status: "loading", phase: "initializing-db", database: "unknown" });
   });
 });
