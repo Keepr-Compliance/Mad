@@ -4,6 +4,7 @@ import { MultiSelect, MultiSelectOptions, type MultiSelectOption } from './multi
 import { selectAllValues } from './select-all';
 import { BottomSheet } from '../phone/bottom-sheet';
 import { FilterSelectButton } from '../phone/filter-select-button';
+import { Dialog, DialogContent, DialogTitle } from '../dialog';
 
 const OPTIONS: MultiSelectOption[] = [
   { value: 'failed', label: 'Failed', count: 12 },
@@ -195,6 +196,32 @@ describe('MultiSelect (desktop)', () => {
     fireEvent.click(trigger()[0]);
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('checkbox')).toBeNull();
+  });
+
+  it('C7 Escape inside a kit Dialog closes the panel, not the dialog, and returns focus to the trigger (BACKLOG-4032)', () => {
+    function InDialog() {
+      const [dlg, setDlg] = React.useState(true);
+      return (
+        <>
+          <span data-testid="dlg">{dlg ? 'dlg-open' : 'dlg-closed'}</span>
+          <Dialog open={dlg} onOpenChange={setDlg}>
+            <DialogContent aria-describedby={undefined}>
+              <DialogTitle>Edit</DialogTitle>
+              <MultiSelect label="Outcome" options={OPTIONS} selected={[]} onChange={() => {}} />
+            </DialogContent>
+          </Dialog>
+        </>
+      );
+    }
+    render(<InDialog />);
+    fireEvent.click(trigger()[0]);
+    fireEvent.keyDown(box('Failed'), { key: 'Escape' });
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.getByTestId('dlg')).toHaveTextContent('dlg-open');
+    expect(document.activeElement).toBe(trigger()[0]);
+    // Closed: Escape is the dialog's again (no leaked listener).
+    fireEvent.keyDown(trigger()[0], { key: 'Escape' });
+    expect(screen.getByTestId('dlg')).toHaveTextContent('dlg-closed');
   });
 });
 
