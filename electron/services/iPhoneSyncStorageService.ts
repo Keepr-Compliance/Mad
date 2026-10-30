@@ -17,7 +17,7 @@ import databaseService from "./databaseService";
 import { removeUnreferencedAttachmentFiles } from "./attachmentFileRefs";
 import { AttachmentDedupIndex } from "./attachmentDedupIndex";
 import { SCOPE_MESSAGE_ATTACHMENTS } from "./atRest/markers";
-import { ensureDb } from "./db/core/dbConnection";
+import { dbTransaction, ensureDb } from "./db/core/dbConnection";
 import * as externalContactDb from "./db/externalContactDbService";
 import {
   holdContactLinking,
@@ -516,16 +516,26 @@ class IPhoneSyncStorageService {
     });
 
     try {
-      // 1. Delete attachments and get the candidate file paths
-      const attachmentResult = databaseService.deleteAttachmentsBySessionId(sessionId);
+      // BACKLOG-2552: the three deletes are ONE transaction, so a failure (or a
+      // process death) at any point leaves the session fully present or fully
+      // gone — never attachment rows gone while their messages remain, or
+      // messages gone while their contacts survive. Order is unchanged:
+      // attachments first, so their file paths are read before the FK cascade
+      // from messages removes the rows. Contacts nest as a savepoint.
+      const deleted = dbTransaction(() => {
+        const attachmentResult = databaseService.deleteAttachmentsBySessionId(sessionId);
+        const messagesDeleted = databaseService.deleteMessagesBySessionId(userId, sessionId);
+        const contactsDeleted = externalContactDb.deleteBySessionId(userId, sessionId);
+        return { attachmentResult, messagesDeleted, contactsDeleted };
+      });
 
-      // 2. BACKLOG-4040: delete the candidates through the shared check — only
-      // inside message-attachments, and only files no remaining row uses (any
-      // case, any directory), re-checked after the containment awaits. Never
-      // fails the rollback: a failure leaves files behind.
+      // BACKLOG-4040 / 2552: files are removed only AFTER the commit, through the
+      // shared check — only inside message-attachments, and only files no
+      // remaining row uses, re-checked after the containment awaits. Never fails
+      // the rollback: a failure leaves unreferenced files behind.
       let filesRemoved = 0;
       try {
-        const files = await removeUnreferencedAttachmentFiles(ensureDb(), attachmentResult.orphanedFiles, {
+        const files = await removeUnreferencedAttachmentFiles(ensureDb(), deleted.attachmentResult.orphanedFiles, {
           userData: app.getPath("userData"),
           scopes: [SCOPE_MESSAGE_ATTACHMENTS],
         });
@@ -536,19 +546,20 @@ class IPhoneSyncStorageService {
         });
       }
 
-      // 3. Delete messages
-      const messagesDeleted = databaseService.deleteMessagesBySessionId(userId, sessionId);
-
-      // 4. Delete new contacts (only those newly inserted, not updated ones)
-      const contactsDeleted = externalContactDb.deleteBySessionId(userId, sessionId);
-
       log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Rollback complete for session ${sessionId}`, {
-        messagesDeleted,
-        attachmentsDeleted: attachmentResult.deleted,
+        messagesDeleted: deleted.messagesDeleted,
+        attachmentsDeleted: deleted.attachmentResult.deleted,
         orphanedFilesDeleted: filesRemoved,
-        contactsDeleted,
+        contactsDeleted: deleted.contactsDeleted,
       });
     } catch (error) {
+      // BACKLOG-2552: the transaction rolled back, so the session is left whole
+      // and consistent. Report it; never re-throw — the caller still returns the
+      // normal "cancelled" result.
+      Sentry.captureException(error, {
+        level: "error",
+        tags: { area: "iphone-sync-rollback" },
+      });
       log.error(`[${IPhoneSyncStorageService.SERVICE_NAME}] Rollback failed for session ${sessionId}`, {
         error: error instanceof Error ? error.message : String(error),
       });
