@@ -134,7 +134,8 @@ export function DateRangePicker({
 
   // Reset the draft, the focused day and the visible months each time the panel opens
   // (state-from-props pattern, so a controlled `open` gets the same reset in the same render).
-  const [wasOpen, setWasOpen] = React.useState(isOpen);
+  // Starts false so a picker MOUNTED open (PeriodPicker on picking Custom) is reset too.
+  const [wasOpen, setWasOpen] = React.useState(false);
   if (isOpen !== wasOpen) {
     setWasOpen(isOpen);
     if (isOpen) {

@@ -329,6 +329,16 @@ describe('DateRangePicker controlled open + returnFocusRef', () => {
   });
 });
 
+describe('DateRangePicker mounted open', () => {
+  it('a picker mounted with open={true} starts from the committed range and focuses its start day', () => {
+    render(<DateRangePicker value={OCT} onChange={() => {}} open onOpenChange={() => {}} />);
+    expect(dialog()).not.toBeNull();
+    expect(active()).toHaveAccessibleName('Thursday, October 1, 2026');
+    expect(cell('Tuesday, October 20, 2026')).toHaveAttribute('aria-selected', 'true');
+    expect(apply()).toBeEnabled();
+  });
+});
+
 describe('DateRangePicker inside a kit Dialog (C6)', () => {
   it('one Escape closes the picker, not the dialog; the next Escape closes the dialog', () => {
     function InDialog() {
