@@ -25,6 +25,24 @@ if (typeof global.ResizeObserver === 'undefined') {
   };
 }
 
+// BACKLOG-4073: jsdom lacks the Element methods Radix (the @keepr/ui kit's
+// Select, Dialog, Dropdown) calls. Same four stubs as packages/ui/test/setup.ts.
+if (typeof global.Element !== 'undefined') {
+  const proto = global.Element.prototype;
+  if (!proto.hasPointerCapture) {
+    proto.hasPointerCapture = () => false;
+  }
+  if (!proto.setPointerCapture) {
+    proto.setPointerCapture = () => {};
+  }
+  if (!proto.releasePointerCapture) {
+    proto.releasePointerCapture = () => {};
+  }
+  if (!proto.scrollIntoView) {
+    proto.scrollIntoView = () => {};
+  }
+}
+
 // Limit stack trace depth in CI/CD for cleaner error output
 if (process.env.CI) {
   Error.stackTraceLimit = 3; // Only show 3 stack frames in CI
