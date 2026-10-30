@@ -88,10 +88,10 @@ describe('C4a one Reports entry, no Analytics or Funnel entry', () => {
       expect(within(scope).queryByRole('link', { name: 'Funnel' })).toBeNull();
       const hrefs = within(scope).getAllByRole('link').map((a) => a.getAttribute('href') ?? '');
       expect(hrefs.filter((h) => h.startsWith('/dashboard/reports/'))).toEqual([]);
-      // The only Analytics link left is Support's own analytics page.
-      expect(hrefs.filter((h) => /analytics/.test(h))).toEqual(
-        hrefs.filter((h) => h === '/dashboard/support/analytics')
-      );
+      // BACKLOG-3721: no Analytics link is left at all. Support -> Analytics
+      // moved under Reports as the Support SLA report.
+      expect(hrefs.filter((h) => /analytics/.test(h))).toEqual([]);
+      expect(hrefs).not.toContain('/dashboard/support/analytics');
     }
     for (const h of allHrefs()) {
       expect(h.startsWith('/dashboard/analytics')).toBe(false);
@@ -107,6 +107,7 @@ describe('C4b Reports is lit on every /dashboard/reports page', () => {
     '/dashboard/reports/funnel',
     '/dashboard/reports/iphone-sync',
     '/dashboard/reports/submissions',
+    '/dashboard/reports/support-sla',
   ])('%s: lit in the aside and the drawer; Dashboard is not', (p) => {
     nav.pathname = p;
     render(<Sidebar collapsed={false} onToggle={vi.fn()} mobileOpen onMobileClose={vi.fn()} />);
@@ -154,6 +155,7 @@ describe('C6 Reports page shows Analytics and Funnel cards beside the reports', 
       '/dashboard/reports/google-messages-sync',
       '/dashboard/reports/submissions',
       '/dashboard/reports/exports',
+      '/dashboard/reports/support-sla',
     ]);
     expect(screen.getByRole('heading', { name: 'Analytics' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Paywall Funnel' })).toBeTruthy();
