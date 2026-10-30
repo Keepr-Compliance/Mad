@@ -114,6 +114,7 @@ afterEach(() => {
 /** Windows, iPhone with drivers (above the texts floor), chose email, connected. */
 const readyConnected: ReadyState = {
   status: "ready",
+  database: "initialized",
   user: { id: "u", email: "u@example.com" },
   platform: { isMacOS: false, isWindows: true, hasIPhone: false },
   userData: {

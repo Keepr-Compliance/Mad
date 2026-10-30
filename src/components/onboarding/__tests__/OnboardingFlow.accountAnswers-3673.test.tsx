@@ -83,7 +83,7 @@ function setApi(completeAccountSetup: jest.Mock) {
 
 function onboarding(accountAnswers?: OnboardingState["accountAnswers"]): OnboardingState {
   return {
-    status: "onboarding", step: "email-connect", user: USER,
+    status: "onboarding", database: "initialized", step: "email-connect", user: USER,
     platform: { isMacOS: false, isWindows: true, hasIPhone: false },
     completedSteps: ["phone-type"], fda: "not-applicable",
     hasEmailConnected: false, selectedPhoneType: "android",

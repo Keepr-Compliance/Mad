@@ -48,26 +48,31 @@ const defaultOptions = {
 // Test states
 const loadingCheckingStorage: LoadingState = {
   status: "loading",
+  database: "unknown",
   phase: "checking-storage",
 };
 
 const loadingInitializingDb: LoadingState = {
   status: "loading",
+  database: "unknown",
   phase: "initializing-db",
 };
 
 const loadingAuth: LoadingState = {
   status: "loading",
+  database: "initialized",
   phase: "loading-auth",
 };
 
 const loadingUserData: LoadingState = {
   status: "loading",
+  database: "initialized",
   phase: "loading-user-data",
 };
 
 const readyStateEmailConnected: ReadyState = {
   status: "ready",
+  database: "initialized",
   user: { id: "test-user", email: "test@example.com" },
   platform: { isMacOS: true, isWindows: false, hasIPhone: true },
   userData: {
@@ -82,6 +87,7 @@ const readyStateEmailConnected: ReadyState = {
 
 const readyStateEmailNotConnected: ReadyState = {
   status: "ready",
+  database: "initialized",
   user: { id: "test-user", email: "test@example.com" },
   platform: { isMacOS: true, isWindows: false, hasIPhone: true },
   userData: {
@@ -96,6 +102,7 @@ const readyStateEmailNotConnected: ReadyState = {
 
 const onboardingStatePhoneType: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "phone-type",
   user: { id: "test-user", email: "test@example.com" },
   platform: { isMacOS: true, isWindows: false, hasIPhone: false },
@@ -104,6 +111,7 @@ const onboardingStatePhoneType: OnboardingState = {
 
 const onboardingStateEmailConnect: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "email-connect",
   user: { id: "test-user", email: "test@example.com" },
   platform: { isMacOS: true, isWindows: false, hasIPhone: true },
@@ -112,6 +120,7 @@ const onboardingStateEmailConnect: OnboardingState = {
 
 const onboardingStatePermissions: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "permissions",
   user: { id: "test-user", email: "test@example.com" },
   platform: { isMacOS: true, isWindows: false, hasIPhone: true },
