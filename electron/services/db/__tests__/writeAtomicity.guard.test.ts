@@ -475,8 +475,12 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // as fixed-but-still-listed; with only the `dbTransaction` wrap removed, the
   // unit is reported as an unwrapped multi-write again. The behavioural control
   // is the forced-crash suite `transactionService.unlinkAtomicity-2547.test.ts`.
-  "electron/services/iPhoneSyncStorageService.ts::rollbackSession":
-    "BACKLOG-2552 — a half-rolled-back sync session: attachment rows deleted while their parent message rows remain, or messages gone while contacts survive. The rollback that exists to guarantee an atomic cancel is itself non-atomic.",
+  // --- BACKLOG-2552: DISCHARGED — `iPhoneSyncStorageService.ts::rollbackSession` ---
+  // The entry that was here is deleted: the three session deletes now run in one
+  // `dbTransaction`, files removed after the commit. This guard CANNOT tell the
+  // fix from a two-transaction wrong fix (any unit containing `dbTransaction`
+  // clears it); the behavioural control is the forced-crash suite
+  // `iPhoneSyncStorageService.rollbackAtomicity-2552.test.ts`.
   // --- BACKLOG-2550: DISCHARGED by BACKLOG-3785 — `transactionService.ts::linkMessages` ---
   // The entry that was here is deleted: linkMessages now writes in chunks, each
   // chunk ONE `dbTransaction`, so a message's pointer and its junction row

@@ -59,7 +59,12 @@ jest.mock("../databaseService");
 // BACKLOG-4040: the rollback deletes files through the shared check (real-file
 // behaviour: attachmentFileRefs.paths-4040.test.ts). Here: what it is handed.
 const mockFakeDb = { fake: "db" };
-jest.mock("../db/core/dbConnection", () => ({ ensureDb: jest.fn(() => mockFakeDb) }));
+// BACKLOG-2552: a passthrough — this suite checks order and shape only; it cannot
+// observe atomicity by design (that is rollbackAtomicity-2552.test.ts).
+jest.mock("../db/core/dbConnection", () => ({
+  ensureDb: jest.fn(() => mockFakeDb),
+  dbTransaction: (fn: () => unknown) => fn(),
+}));
 jest.mock("../attachmentFileRefs", () => ({
   removeUnreferencedAttachmentFiles: jest.fn().mockResolvedValue({ removed: 0, stillReferenced: 0, refused: 0, failed: 0 }),
 }));
