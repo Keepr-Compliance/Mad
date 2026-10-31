@@ -31,7 +31,7 @@
  * The SPLIT itself is asserted too, by execution rather than by prose: "the
  * gated and ungated sets, by execution" enumerates every registered
  * `checklists:` channel, invokes each one with the plan unreadable, and
- * partitions them by what they answer. Seven refuse, four work. A twelfth channel
+ * partitions them by what they answer. Nine refuse, four work. A fourteenth channel
  * nobody classified, a gate dropped, or a gate added to `get` all red it —
  * which is what makes the module header's count something other than a
  * sentence to be trusted.
@@ -522,7 +522,7 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
    * this list does not classify fails the first assertion instead of quietly
    * escaping the sweep.
    */
-  it("exactly eight channels refuse when the plan cannot be read, and four answer", async () => {
+  it("exactly nine channels refuse when the plan cannot be read, and four answer", async () => {
     const checklistId = await seedChecklist();
     const itemId = itemIds()[0];
     const added = await invoke("checklists:add-link", {
@@ -552,6 +552,8 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
       ["checklists:include-link-outside-dates", { transactionId: TRANSACTION, linkId }],
       // BACKLOG-3617: asks the cloud about the organization, so gated.
       ["checklists:can-edit-templates", undefined],
+      // BACKLOG-3965: the Dashboard's cross-deal Todo read is a feature surface, so gated.
+      ["checklists:list-open-required", { userId: USER }],
       // The ungated ones last, and `remove` after `get`: it clears the rows
       // `get` is asked to return.
       ["checklists:get", { transactionId: TRANSACTION }],
@@ -589,6 +591,7 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
       "checklists:remove-link",
       "checklists:include-link-outside-dates",
       "checklists:can-edit-templates",
+      "checklists:list-open-required",
     ]);
     expect(answered).toEqual([
       "checklists:get",
