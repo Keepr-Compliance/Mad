@@ -8,6 +8,7 @@
 
 import type { ReactNode } from 'react';
 import { Filter, Search, X } from 'lucide-react';
+import { Dropdown } from '@keepr/ui';
 import { MultiSelectDropdown } from '@/components/shared/MultiSelectDropdown';
 import { PERIOD_OPTIONS, type PeriodRange } from '@/lib/reports/period';
 import type { ExportFilters } from '@/lib/reports/exports';
@@ -90,11 +91,14 @@ export function ExportFilterBar({
         </span>
       ) : null}
 
-      <MultiSelectDropdown
-        label="Organization"
+      <Dropdown
+        mode="multi"
+        variant="filter"
+        ariaLabel="Organization"
         options={orgOptions}
-        selected={filters.orgs}
+        value={filters.orgs}
         onChange={(orgs) => onFiltersChange({ ...filters, orgs })}
+        onClear={() => onFiltersChange({ ...filters, orgs: [] })}
       />
       <MultiSelectDropdown
         label="User"
