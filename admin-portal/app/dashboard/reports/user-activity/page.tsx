@@ -66,7 +66,11 @@ export default async function UserActivityReportPage({
     const { data, error } = await supabase.rpc('report_list_saved_views', {
       p_report_key: USER_ACTIVITY_REPORT_KEY,
     });
-    if (error) throw error;
+    if (error) {
+      // The message names the stage only; the error text can carry user data.
+      console.error('[user-activity] saved views read failed; opening without a default view');
+      throw error;
+    }
     return data;
   });
   const period = resolvePeriod(periodInput, now);
