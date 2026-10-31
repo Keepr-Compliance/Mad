@@ -2,6 +2,12 @@ import { getAuthenticatedUser } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@keepr/design-system';
 import { PlansPageClient } from './components/PlansPageClient';
+import { FreeTrialCard } from './components/FreeTrialCard';
+import {
+  TRIAL_AUDIT_ACTION,
+  type SoloTrialAuditEntry,
+  type SoloTrialSetting,
+} from '@/lib/billing/trialSettingRules';
 
 export const dynamic = 'force-dynamic';
 
@@ -80,9 +86,30 @@ export default async function PlansPage() {
     };
   });
 
+  // BACKLOG-3860: the solo free trial setting and its last change. Any internal role may read
+  // both; can_edit (billing.pricebook, Super Admin) decides whether the card offers Edit.
+  const { data: trialData, error: trialError } = await supabase.rpc('admin_get_solo_trial_setting');
+  const trialSetting = trialError || !trialData ? null : (trialData as SoloTrialSetting);
+  const { data: trialLog, error: trialLogError } = await supabase.rpc('admin_get_audit_logs', {
+    p_limit: 1,
+    p_offset: 0,
+    p_action: TRIAL_AUDIT_ACTION,
+    p_target_id: null,
+    p_date_from: null,
+    p_date_to: null,
+  });
+  const lastTrialChange =
+    ((trialLog as { logs?: SoloTrialAuditEntry[] } | null)?.logs ?? [])[0] ?? null;
+
   return (
     <div className="max-w-7xl mx-auto">
       <PlansPageClient plans={plansData} canManage={!!canManage} />
+      <FreeTrialCard
+        setting={trialSetting}
+        lastChange={lastTrialChange}
+        canEdit={trialSetting?.can_edit === true}
+        historyUnavailable={!!trialLogError}
+      />
     </div>
   );
 }
