@@ -24,8 +24,10 @@
  *   the business time since creation already exceeds the target. awaiting:
  *   absent and still inside the target (excluded from the rate).
  * - First response = `first_response_at` only (an agent reply). A ticket
- *   resolved or closed with no reply has no first response: it is missed
- *   once past target (strict).
+ *   resolved or closed (per resolvedAt) with no reply is MISSED immediately,
+ *   whatever its age (strict); a later reply sets `first_response_at` and the
+ *   ticket is then judged on time. Awaiting applies only to tickets still
+ *   open with no reply and inside the target.
  * - `options.settings === null` (the settings read failed): every duration
  *   and both attainments are null; counts are still computed. No code default
  *   stands in for the stored targets.
@@ -236,12 +238,13 @@ function tallyTarget(
   doneIso: string | null,
   target: number,
   nowIso: string,
-  cal: DayCalendar
+  cal: DayCalendar,
+  missedIfUnanswered = false
 ): void {
   if (doneIso) {
     if (businessMinutes(createdIso, doneIso, cal) <= target) t.met += 1;
     else t.missed += 1;
-  } else if (businessMinutes(createdIso, nowIso, cal) > target) {
+  } else if (missedIfUnanswered || businessMinutes(createdIso, nowIso, cal) > target) {
     t.missed += 1;
   } else {
     t.awaiting += 1;
@@ -295,7 +298,16 @@ export function buildSupportSlaReport(
     if (addRow(total, row, from, to, clock).created) {
       createdInPeriod += 1;
       if (cal) {
-        tallyTarget(fr, row.created_at, row.first_response_at, frTarget, nowIso, cal);
+        tallyTarget(
+          fr,
+          row.created_at,
+          row.first_response_at,
+          frTarget,
+          nowIso,
+          cal,
+          // Resolved or closed with no reply: missed regardless of age.
+          resolvedAt(row) !== null
+        );
         tallyTarget(res, row.created_at, resolvedAt(row), resTarget, nowIso, cal);
       }
     }

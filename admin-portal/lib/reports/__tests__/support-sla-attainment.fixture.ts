@@ -73,3 +73,15 @@ export const A22_NOW = new Date('2026-11-06T12:00:00-08:00');
 export const R8_ROWS = [synthetic(66, 'in_progress', '2026-10-23T16:30:00-07:00', '2026-10-26T09:30:00-07:00')];
 export const R8_PERIOD = { fromIso: '2026-10-19T00:00:00.000Z', toIso: '2026-10-24T00:00:00.000Z' };
 export const R8_NOW = new Date('2026-10-28T12:00:00-07:00');
+
+/**
+ * C1: closed with no reply at 30 business minutes (inside the 480 target) is
+ * missed at once; a reopened ticket (stale resolved_at, status in_progress)
+ * with no reply at 60 business minutes stays awaiting.
+ */
+export const C1_ROWS = [
+  synthetic(67, 'closed', '2026-10-26T09:00:00-07:00', null, null, '2026-10-26T09:30:00-07:00'),
+  synthetic(68, 'resolved', '2026-10-26T09:00:00-07:00', null, '2026-10-26T09:30:00-07:00'),
+  synthetic(69, 'in_progress', '2026-10-26T09:00:00-07:00', null, '2026-10-26T09:30:00-07:00'),
+];
+export const C1_NOW = new Date('2026-10-26T10:00:00-07:00');

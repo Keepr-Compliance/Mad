@@ -32,6 +32,8 @@ import {
   A13_NOW,
   A13_ROWS,
   A21_NOW,
+  C1_NOW,
+  C1_ROWS,
   A21_ROWS,
   A22_NOW,
   A22_ROWS,
@@ -292,6 +294,14 @@ describe('attainment (BACKLOG-4086)', () => {
     const fr = build(A21_ROWS, A21_NOW).firstResponseSla!;
     expect(fr.awaiting).toBe(1);
     expect(fr.missed).toBe(0);
+  });
+
+  it('C1 resolved/closed with no reply is missed at once (30 business min); reopened under target stays awaiting', () => {
+    const [closed, resolved, reopened] = C1_ROWS;
+    const fr = (rows: SupportTicketRow[]) => build(rows, C1_NOW).firstResponseSla;
+    expect(fr([closed])).toEqual({ met: 0, missed: 1, awaiting: 0, ratePct: 0, targetMinutes: 480 });
+    expect(fr([resolved])).toEqual({ met: 0, missed: 1, awaiting: 0, ratePct: 0, targetMinutes: 480 });
+    expect(fr([reopened])).toEqual({ met: 0, missed: 0, awaiting: 1, ratePct: null, targetMinutes: 480 });
   });
 
   it('A22 (SR R4) resolution at 1441 business min is missed; at exactly 1440 it is met', () => {
