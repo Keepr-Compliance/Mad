@@ -22,6 +22,8 @@ import { SupportWidget } from "../../../components/support/SupportWidget";
 import { SETTINGS_TABS, visibleSettingsTabs } from "../../../components/settings/settingsTabs";
 import { SETTINGS_TAB_ICONS, accountPanelRowTestId } from "../AccountPanel";
 import { Z_CLASS, zValue } from "../../../constants/zLayers";
+import * as Sentry from "@sentry/electron/renderer";
+import logger from "../../../utils/logger";
 import { SUPPORT_DIALOG_SELECTOR } from "../../../components/support/supportDialogSelector";
 
 let mockElectron = true;
@@ -465,5 +467,21 @@ describe("C14 Sign out", () => {
       fireEvent.click(signOut);
     });
     expect(handleLogout).toHaveBeenCalledTimes(2);
+  });
+
+  it("a failed sign-out is logged with its message and reported to Sentry (slice 3c)", async () => {
+    const failure = new Error("offline");
+    handleLogout.mockRejectedValueOnce(failure);
+    const logSpy = jest.spyOn(logger, "error").mockImplementation(() => undefined);
+    (Sentry.captureException as jest.Mock).mockClear();
+    render(<Harness />);
+    openFromInitials();
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("account-panel-signout"));
+    });
+    expect(logSpy).toHaveBeenCalledWith("[AccountPanel] Sign out failed", "offline");
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    expect((Sentry.captureException as jest.Mock).mock.calls[0][0]).toBe(failure);
+    logSpy.mockRestore();
   });
 });

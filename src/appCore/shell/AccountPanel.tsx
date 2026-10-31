@@ -47,6 +47,7 @@ import { useEscapeToClose } from "../../hooks/useEscapeToClose";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
 import { useCopyText } from "../../hooks/useCopyText";
 import { Z_CLASS } from "../../constants/zLayers";
+import * as Sentry from "@sentry/electron/renderer";
 import logger from "../../utils/logger";
 // The support form is mounted at the app root and sits above the panel; Esc and Tab belong to it.
 import { isSupportFormOpen } from "../../components/support/supportDialogSelector";
@@ -108,7 +109,12 @@ export function AccountPanel({ app, runningInElectron }: AccountPanelProps) {
       await handleLogout();
     } catch (err) {
       // The button comes back so the user can try again.
-      logger.error("[AccountPanel] Sign out failed", err);
+      // The logger serialises an Error to {}, so log the message; and report it, since the catch hides it from Sentry.
+      logger.error("[AccountPanel] Sign out failed", err instanceof Error ? err.message : String(err));
+      Sentry.captureException(err, {
+        tags: { component: "AccountPanel" },
+        extra: { operation: "sign-out", error_message: err instanceof Error ? err.message : String(err) },
+      });
     } finally {
       signingOutRef.current = false;
       setSigningOut(false);

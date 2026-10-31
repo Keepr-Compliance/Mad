@@ -2065,6 +2065,11 @@ describe("Settings", () => {
       // Kit Card recipe (packages/ui card.tsx), not the old rounded-xl frame.
       for (const c of ["rounded-lg", "border", "bg-card", "shadow-sm"]) expect(account).toHaveClass(c);
       expect(account).not.toHaveClass("rounded-xl");
+      // The card carries its own header/body padding; `!p-0` stops Settings' per-section padding doubling it.
+      expect(account).toHaveClass("!p-0");
+      // Name and email sizes (mock v14).
+      expect(within(account).getByText("Avery Example")).toHaveClass("text-sm", "font-medium", "leading-tight", "text-gray-900");
+      expect(within(account).getByText("avery@example.com")).toHaveClass("text-xs", "leading-tight", "text-gray-500");
       // Header row: the title sits in a bordered row of its own.
       const title = within(account).getByRole("heading", { name: "Account" });
       expect(title.parentElement).toHaveClass("border-b", "px-6", "py-4");
