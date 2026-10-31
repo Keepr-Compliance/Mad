@@ -12,7 +12,7 @@
  * the "No funnel events" text.
  */
 
-import { FilterBar, FilterCaption, PeriodPicker, StatCard, TruncationNotice } from '@keepr/ui';
+import { FilterBar, FilterCaption, PeriodPicker, SavedViews, StatCard, TruncationNotice } from '@keepr/ui';
 import { AlertTriangle } from 'lucide-react';
 import type { FunnelResult } from '@/lib/funnel-analytics';
 import {
@@ -21,6 +21,9 @@ import {
   type FunnelPeriod,
   type FunnelPeriodKey,
 } from '@/lib/reports/funnel-period';
+import { funnelViews, type PeriodOnlySavedView } from '@/lib/reports/period-only-views';
+import type { PeriodOnlyViewsApi } from '@/lib/reports/period-only-views-api';
+import { usePeriodOnlySavedViews } from '@/lib/reports/use-period-only-saved-views';
 
 export const FAILED_TEXT =
   'The funnel events could not be read. This is a query failure, not an empty funnel — no count on this page can be trusted.';
@@ -41,6 +44,8 @@ export interface FunnelReportProps {
   truncated?: boolean;
   rowCap: number;
   onNavigate?: (url: string) => void;
+  /** Saved-view storage (BACKLOG-4084). Absent = saved views unavailable (fails closed). */
+  viewsApi?: PeriodOnlyViewsApi;
 }
 
 export function FunnelReport({
@@ -50,6 +55,7 @@ export function FunnelReport({
   truncated = false,
   rowCap,
   onNavigate,
+  viewsApi,
 }: FunnelReportProps) {
   const { steps, topCount } = funnel;
   const hasData = topCount > 0 || steps.some((s) => s.userCount > 0);
@@ -58,6 +64,8 @@ export function FunnelReport({
     const search = typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, '');
     onNavigate?.(buildFunnelPeriodUrl(search, nextPeriod, from, to));
   }
+
+  const savedViews = usePeriodOnlySavedViews(viewsApi, funnelViews, period, navigateToPeriod);
 
   return (
     <div className="space-y-6">
@@ -70,7 +78,11 @@ export function FunnelReport({
         </div>
       ) : null}
 
-      <FilterBar hasFilters={false} onClear={() => undefined}>
+      <FilterBar
+        hasFilters={false}
+        onClear={() => undefined}
+        trailing={<SavedViews<PeriodOnlySavedView> {...savedViews} />}
+      >
         <PeriodPicker<FunnelPeriodKey>
           options={FUNNEL_PERIOD_OPTIONS}
           value={period.key}

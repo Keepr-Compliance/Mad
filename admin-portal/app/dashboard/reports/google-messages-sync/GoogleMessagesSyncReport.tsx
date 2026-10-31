@@ -14,6 +14,7 @@
  */
 
 import { useMemo, useState } from 'react';
+import { SavedViews } from '@keepr/ui';
 import type { PeriodRange } from '@/lib/reports/period';
 import { bucketByDay } from '@/lib/reports/iphone-sync-charts';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
@@ -33,6 +34,17 @@ import {
   type GmSyncRun,
   recordedMsLabel,
 } from '@/lib/reports/google-messages-sync';
+import { useReportSavedViews } from '@/lib/reports/use-report-saved-views';
+import type { GmViewsApi } from '@/lib/reports/google-messages-sync-views-api';
+import {
+  GM_SAVE_HINT,
+  GM_SYNC_REPORT_KEY,
+  GM_VIEW_METRIC,
+  gmViewMatchesState,
+  serializeGmView,
+  type GmSavedView,
+} from '@/lib/reports/google-messages-sync-views';
+import { viewPeriodMatches } from '@/lib/reports/view-period';
 import { SyncCharts } from '../iphone-sync/SyncCharts';
 import { SyncFilterBar } from '../iphone-sync/SyncFilterBar';
 import { RunTable, type RunTableColumn } from '../iphone-sync/SyncRunTable';
@@ -170,10 +182,28 @@ export interface GoogleMessagesSyncReportProps {
   truncated?: boolean;
   rowCap: number;
   onNavigate?: (url: string) => void;
+  /**
+   * The default view the SERVER resolved for a bare URL (BACKLOG-4084), or
+   * null. Seeds the filters once; never re-applied on later renders.
+   */
+  initialView?: GmSavedView | null;
+  /** Saved-view storage. Absent = saved views unavailable (fails closed). */
+  viewsApi?: GmViewsApi;
 }
 
-export function GoogleMessagesSyncReport({ report, period, truncated = false, rowCap, onNavigate }: GoogleMessagesSyncReportProps) {
-  const [filters, setFilters] = useState<GmFilters>(GM_EMPTY_FILTERS);
+export function GoogleMessagesSyncReport({
+  report,
+  period,
+  truncated = false,
+  rowCap,
+  onNavigate,
+  initialView = null,
+  viewsApi,
+}: GoogleMessagesSyncReportProps) {
+  // useState's initial value only: the default view seeds the first render and
+  // is never synced again, so a later navigation cannot re-apply it.
+  const [filters, setFilters] = useState<GmFilters>(() => initialView?.filters ?? GM_EMPTY_FILTERS);
+  const savedViews = useReportSavedViews(viewsApi, GM_SYNC_REPORT_KEY);
   const [sortKey, setSortKey] = useState<GmSortKey>('when');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [visibleCount, setVisibleCount] = useState(5);
@@ -200,6 +230,33 @@ export function GoogleMessagesSyncReport({ report, period, truncated = false, ro
     setOpenRunId(null);
   }
 
+  function navigateToPeriod(nextPeriod: string, from?: string, to?: string) {
+    const search = typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, '');
+    onNavigate?.(buildPeriodUrl(search, nextPeriod, from, to));
+  }
+
+  const activeViewId = useMemo(
+    () => (savedViews.views ?? []).find((v) => gmViewMatchesState(v, filters, period))?.id ?? null,
+    [savedViews.views, filters, period]
+  );
+
+  /** Filters at once; the period, only if it differs, in ONE navigation. */
+  function applyView(view: GmSavedView) {
+    updateFilters(view.filters);
+    if (view.period && !viewPeriodMatches(view.period, period)) {
+      navigateToPeriod(view.period.key, view.period.from, view.period.to);
+    }
+  }
+
+  function saveView(name: string) {
+    savedViews.save({
+      name,
+      filters: serializeGmView(filters, period),
+      metric: GM_VIEW_METRIC,
+      pinned: false,
+    });
+  }
+
   return (
     <div className="space-y-6">
       <SyncFilterBar<GmFilters>
@@ -209,12 +266,23 @@ export function GoogleMessagesSyncReport({ report, period, truncated = false, ro
         outcomeOptions={outcomeOptions}
         platformOptions={platformOptions}
         hasFilters={hasFilters}
-        onPeriodChange={(p, from, to) => {
-          const search = typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, '');
-          onNavigate?.(buildPeriodUrl(search, p, from, to));
-        }}
+        onPeriodChange={navigateToPeriod}
         onFiltersChange={updateFilters}
         onClear={() => updateFilters(GM_EMPTY_FILTERS)}
+        viewsSlot={
+          <SavedViews<GmSavedView>
+            views={savedViews.views}
+            loading={savedViews.loading}
+            activeViewId={activeViewId}
+            writeError={savedViews.writeError}
+            onApply={applyView}
+            onDelete={savedViews.remove}
+            onSave={saveView}
+            saveHint={GM_SAVE_HINT}
+            defaultViewId={savedViews.defaultViewId}
+            onSetDefault={savedViews.setDefault}
+          />
+        }
       />
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">

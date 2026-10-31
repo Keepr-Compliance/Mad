@@ -12,6 +12,7 @@ import {
 import { REPORTS_BASE_PATH } from '@/lib/reports/registry';
 import { resolvePeriod } from '@/lib/reports/period';
 import type { ParamRecord } from '@/lib/reports/report-url';
+import { GM_SYNC_REPORT_KEY, resolveGmInitial } from '@/lib/reports/google-messages-sync-views';
 import { GoogleMessagesSyncReportClient } from './GoogleMessagesSyncReportClient';
 
 export const dynamic = 'force-dynamic';
@@ -41,14 +42,20 @@ export default async function GoogleMessagesSyncReportPage({
   if (!hasPerm) redirect('/dashboard?error=insufficient_permissions');
 
   const params = await searchParams;
-  const period = resolvePeriod(
-    {
-      period: typeof params.period === 'string' ? params.period : undefined,
-      from: typeof params.from === 'string' ? params.from : undefined,
-      to: typeof params.to === 'string' ? params.to : undefined,
-    },
-    new Date()
-  );
+  // A bare URL opens the user's default view (filters + time range); any period
+  // param in the URL wins and the views are not read here at all (BACKLOG-4084).
+  const { initialView, periodInput } = await resolveGmInitial(params, async () => {
+    const { data, error } = await supabase.rpc('report_list_saved_views', {
+      p_report_key: GM_SYNC_REPORT_KEY,
+    });
+    if (error) {
+      // The message names the stage only; the error text can carry user data.
+      console.error('[google-messages-sync] saved views read failed; opening without a default view');
+      throw error;
+    }
+    return data;
+  });
+  const period = resolvePeriod(periodInput, new Date());
 
   const { rows, users, failed, truncated } = await getSyncRuns<GmSyncOutcomeRow>(supabase, period, {
     source: GM_SOURCE,
@@ -82,7 +89,13 @@ export default async function GoogleMessagesSyncReportPage({
         </div>
       ) : null}
 
-      <GoogleMessagesSyncReportClient report={report} period={period} truncated={truncated} rowCap={RUN_LIMIT} />
+      <GoogleMessagesSyncReportClient
+        report={report}
+        period={period}
+        truncated={truncated}
+        rowCap={RUN_LIMIT}
+        initialView={initialView}
+      />
     </div>
   );
 }
