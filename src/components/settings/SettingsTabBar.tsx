@@ -79,7 +79,7 @@ export function SettingsTabBar({ tabs, activeTabId, onTabClick }: SettingsTabBar
             onClick={() => onTabClick(tab.id)}
             className={`px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
               activeTabId === tab.id
-                ? "text-blue-600 border-blue-600"
+                ? "text-primary-600 border-primary-600"
                 : "text-gray-500 border-transparent hover:text-gray-700"
             }`}
           >
