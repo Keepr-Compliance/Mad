@@ -12,9 +12,11 @@ import { AppShell } from "../AppShell";
 import type { AppStateMachine } from "../state/types";
 
 let mockElectron = true;
+var mockMac = false; // eslint-disable-line no-var -- read during import, before a let would initialise
 jest.mock("../../utils/platform", () => ({
   ...jest.requireActual("../../utils/platform"),
   isElectron: () => mockElectron,
+  isMacOS: () => mockMac,
 }));
 jest.mock("../../hooks/useSessionValidator", () => ({
   useSessionValidator: jest.fn(),
@@ -66,6 +68,26 @@ const renderShell = (app: AppStateMachine) =>
 
 beforeEach(() => {
   mockElectron = true;
+  mockMac = false;
+});
+
+describe("Electron title bar platform offset (AppShell -> TitleBar wiring)", () => {
+  it("Windows/Linux: pl-4, not the macOS pl-20, initials in the left slot", () => {
+    mockMac = false;
+    renderShell(makeApp());
+    const bar = screen.getByTestId("title-bar");
+    expect(bar).toHaveClass("pl-4");
+    expect(bar).not.toHaveClass("pl-20");
+    expect(screen.getByTestId("title-bar-left")).toContainElement(screen.getByTestId("nav-profile"));
+  });
+
+  it("macOS: pl-20 to clear the traffic lights", () => {
+    mockMac = true;
+    renderShell(makeApp());
+    const bar = screen.getByTestId("title-bar");
+    expect(bar).toHaveClass("pl-20");
+    expect(bar).not.toHaveClass("pl-4");
+  });
 });
 
 describe("Electron title bar", () => {
