@@ -2,9 +2,12 @@
  * BACKLOG-3321 control C4: the secure-storage Continue opens the database when
  * the machine has not recorded it open during onboarding.
  *
- * The onboarding state is PRODUCED by the reducer from the closed pre-auth
- * route (AUTH_PRE_VALIDATED offline_grace_expired with main reporting the DB
- * closed -> LOGIN_SUCCESS -> USER_DATA_LOADED not-finished), not hand-written.
+ * The closed onboarding state is a literal: no producer after BACKLOG-3555;
+ * defence only. A closed-route sign-in now opens the database before user
+ * data loads, so the reducer can no longer reach onboarding with it closed.
+ * The literal is the exact state the reducer produced before BACKLOG-3555
+ * (AUTH_PRE_VALIDATED offline_grace_expired -> LOGIN_SUCCESS ->
+ * USER_DATA_LOADED not-finished, measured at 06133aa03).
  * LOGIN_SUCCESS is transcribed from useLoginHandlers.ts dispatchLoginSuccess
  * (hasIPhone always false, isNewUser present). The IPC result shape is
  * `system:initialize-secure-storage` -> `{ success, available, platform }`.
@@ -15,7 +18,7 @@ import { useSecureStorage } from "../useSecureStorage";
 import { AppStateProvider } from "../../machine/AppStateContext";
 import { appStateReducer } from "../../machine/reducer";
 import { INITIAL_APP_STATE } from "../../machine/types";
-import type { AppState, PlatformInfo, User } from "../../machine/types";
+import type { AppState, OnboardingState, PlatformInfo, User } from "../../machine/types";
 
 const mockInit = jest.fn();
 jest.mock("@/services", () => ({
@@ -37,25 +40,20 @@ function step(s: AppState, a: unknown): AppState {
   return appStateReducer(s, a as never);
 }
 
+// No producer after BACKLOG-3555; defence only. Transcribed from the reducer
+// output at 06133aa03 (closed pre-auth route -> sign-in -> not-finished).
 function closedOnboarding(database: "not-initialized" | "unknown" = "not-initialized"): AppState {
-  let s = step(INITIAL_APP_STATE, { type: "STORAGE_CHECKED", hasKeyStore: true });
-  s = step(s, { type: "AUTH_PRE_VALIDATED", valid: false, reason: "offline_grace_expired", database });
-  s = step(s, { type: "LOGIN_SUCCESS", user, platform: mac, isNewUser: false });
-  s = step(s, {
-    type: "USER_DATA_LOADED",
+  const s: OnboardingState = {
+    status: "onboarding",
+    step: "phone-type",
     user,
     platform: mac,
-    data: {
-      phoneType: null,
-      hasCompletedEmailOnboarding: false,
-      hasEmailConnected: false,
-      hasRecordedEmailProvider: false,
-      needsDriverSetup: false,
-      fda: "not-asked",
-      setup: "not-finished",
-      contactSourceAnswered: false,
-    },
-  });
+    completedSteps: [],
+    fda: "not-asked",
+    hasEmailConnected: false,
+    accountAnswers: { contactSource: false, emailStep: false },
+    database,
+  };
   return s;
 }
 

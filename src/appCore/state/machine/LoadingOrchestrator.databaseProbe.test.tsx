@@ -2,7 +2,8 @@
  * BACKLOG-3321 control C7: on a pre-auth rejection that keeps the database
  * closed, the orchestrator asks main whether the database is open
  * (`system:is-database-initialized`) and records the answer. It never opens
- * the database on that route.
+ * the database before a fresh sign-in on that route; BACKLOG-3555: the sign-in
+ * then opens it exactly once.
  *
  * Harness copied from rejectedSession3410.control.test.tsx control 2.
  * Fixture provenance:
@@ -106,8 +107,12 @@ function Probe({ onUnauth }: { onUnauth: (d: (a: AppAction) => void) => void }) 
   return null;
 }
 
+// initializeSecureStorage calls counted at the moment of sign-in (BACKLOG-3555).
+let opensAtSignIn = -1;
+
 async function signInAfterRejection(): Promise<void> {
   latest = null;
+  opensAtSignIn = -1;
   let signedIn = false;
   render(
     <AuthProvider>
@@ -116,6 +121,7 @@ async function signInAfterRejection(): Promise<void> {
           onUnauth={(dispatch) => {
             if (signedIn) return;
             signedIn = true;
+            opensAtSignIn = mockApi.system.initializeSecureStorage.mock.calls.length;
             dispatch({ type: "LOGIN_SUCCESS", user, platform: mac, isNewUser: false } as AppAction);
           }}
         />
@@ -141,18 +147,19 @@ const CLOSED = [
 ] as const;
 
 describe("BACKLOG-3321 C7: closed pre-auth route records main's database answer", () => {
-  it.each(CLOSED)("$reason, main reports closed -> reads closed after sign-in", async (rejected) => {
+  it.each(CLOSED)("$reason, main reports closed -> not opened before sign-in, opened once after", async (rejected) => {
     mockApi.auth.preValidateSession.mockResolvedValue(rejected);
     mockApi.system.isDatabaseInitialized.mockResolvedValue({ success: true, initialized: false });
 
     await signInAfterRejection();
 
     expect(mockApi.system.isDatabaseInitialized).toHaveBeenCalledTimes(1);
-    expect(mockApi.system.initializeSecureStorage).toHaveBeenCalledTimes(0);
+    expect(opensAtSignIn).toBe(0);
+    expect(mockApi.system.initializeSecureStorage).toHaveBeenCalledTimes(1);
     expect(preValidatedActions()).toHaveLength(1);
     expect(preValidatedActions()[0].database).toBe("not-initialized");
-    expect(latest).toMatchObject({ status: "loading", phase: "loading-user-data" });
-    expect(latest && selectIsDatabaseInitialized(latest)).toBe(false);
+    expect(latest).toMatchObject({ status: "loading", phase: "loading-user-data", user });
+    expect(latest && selectIsDatabaseInitialized(latest)).toBe(true);
   });
 
   it.each(CLOSED)("$reason, main reports open (renderer reload) -> reads open", async (rejected) => {
@@ -168,7 +175,7 @@ describe("BACKLOG-3321 C7: closed pre-auth route records main's database answer"
 
   // R6: a failing probe must still dispatch exactly once (never leave the
   // LoadingScreen up) and must never fall through to an optimistic open.
-  it.each(CLOSED)("$reason, the probe itself rejects -> unknown, dispatched once, never opened", async (rejected) => {
+  it.each(CLOSED)("$reason, the probe itself rejects -> unknown, dispatched once, opened only after sign-in", async (rejected) => {
     mockApi.auth.preValidateSession.mockResolvedValue(rejected);
     mockApi.system.isDatabaseInitialized.mockRejectedValue(new Error("ipc down"));
 
@@ -177,9 +184,10 @@ describe("BACKLOG-3321 C7: closed pre-auth route records main's database answer"
     expect(mockApi.system.isDatabaseInitialized).toHaveBeenCalledTimes(1);
     expect(preValidatedActions()).toHaveLength(1);
     expect(preValidatedActions()[0]).toMatchObject({ valid: false, database: "unknown" });
-    expect(mockApi.system.initializeSecureStorage).toHaveBeenCalledTimes(0);
-    expect(latest).toMatchObject({ status: "loading", phase: "loading-user-data" });
-    expect(latest && selectIsDatabaseInitialized(latest)).toBe(false);
+    expect(opensAtSignIn).toBe(0);
+    expect(mockApi.system.initializeSecureStorage).toHaveBeenCalledTimes(1);
+    expect(latest).toMatchObject({ status: "loading", phase: "loading-user-data", user });
+    expect(latest && selectIsDatabaseInitialized(latest)).toBe(true);
   });
 
   it("a rejection that cleared the session (token_invalid) does not probe; it opens the DB", async () => {
