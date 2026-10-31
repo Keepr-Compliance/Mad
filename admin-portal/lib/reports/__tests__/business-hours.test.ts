@@ -108,6 +108,7 @@ describe('performance (shared day calendar)', () => {
       sum += businessMinutes(a, a + 365 * 86400000, c);
     }
     const elapsed = performance.now() - t0;
+    console.info(`business-hours perf: ${elapsed.toFixed(0)} ms`);
     expect(sum).toBeGreaterThan(0);
     expect(elapsed).toBeLessThan(500);
   });

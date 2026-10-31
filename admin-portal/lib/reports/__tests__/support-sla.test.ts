@@ -326,6 +326,18 @@ describe('attainment (BACKLOG-4086)', () => {
     });
   });
 
+  it('the zone and weekdays come from settings (New York hours; a Saturday-only window)', () => {
+    // created Mon 16:00 PDT = 19:00 EDT (after a New York close), answered Tue 09:30 PDT = 12:30 EDT
+    const rows = [synthetic(69, 'in_progress', '2026-10-26T16:00:00-07:00', '2026-10-27T09:30:00-07:00')];
+    const now = new Date('2026-10-28T12:00:00-07:00');
+    const ny = build(rows, now, { ...TEST_SETTINGS, firstResponseTargetMinutes: 200, timeZone: 'America/New_York' });
+    expect(ny.medianFirstResponseMinutes).toBe(210); // 09:00-12:30 EDT
+    expect(ny.firstResponseSla).toMatchObject({ met: 0, missed: 1 });
+    const sat = build(rows, now, { ...TEST_SETTINGS, businessDays: [6] });
+    expect(sat.medianFirstResponseMinutes).toBe(0); // no Saturday between Mon and Tue
+    expect(sat.firstResponseSla).toMatchObject({ met: 1, missed: 0 });
+  });
+
   it('deleted tickets are not in the cohort', () => {
     const rows = [synthetic(68, 'deleted', '2026-10-20T10:00:00-07:00', null)];
     expect(build(rows, A12_NOW).firstResponseSla).toMatchObject({ met: 0, missed: 0, awaiting: 0, ratePct: null });
