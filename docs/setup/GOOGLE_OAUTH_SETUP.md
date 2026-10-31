@@ -22,7 +22,7 @@ This error occurs when your Google OAuth app is in **Testing mode** and the user
 3. Click **+ ADD USERS**
 4. Enter email addresses (one per line):
    ```
-   danielxhaim@gmail.com
+   <your-google-account>
    support@keeprcompliance.com
    [add other users here]
    ```
@@ -318,7 +318,7 @@ GOOGLE_CLIENT_SECRET=xxxxx
 ## Next Steps
 
 ### Immediate Actions (To Fix Current Error):
-1. ✅ Add `danielxhaim@gmail.com` to test users
+1. ✅ Add `<your-google-account>` to test users
 2. ✅ Verify OAuth credential is **Desktop app** type
 3. ✅ Test login flow again
 
