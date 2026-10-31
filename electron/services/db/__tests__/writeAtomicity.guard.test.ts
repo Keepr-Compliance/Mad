@@ -212,7 +212,7 @@ const EXEMPT: Record<string, string> = {
   // recordSyncFailure pair "try/catch-exclusive". Measured, it is not. The
   // exemption stands; only that stated reason was wrong, and it is corrected here.
   "electron/services/shadowDeltaSyncService.ts::runOnce":
-    "a per-folder delta loop that persists each folder's cursor only AFTER that folder is fully stored, which its own comment calls crash-safe per folder; the writes belong to different logical units by design and are separated by awaited Graph calls. NOT try/catch-exclusive (BACKLOG-3314 @0285e214c): four unseparated pairs, two of them plain sequences, so no try/catch rule would recover this slot; ensureSyncStateRow at :112 commits before the :115 throw that lands in the catch writing recordSyncFailure, and recordSyncSuccess is itself two statements (emailSyncStateService.ts:163-164). Harmless — an idempotent INSERT OR IGNORE and a failure counter — so the exemption stands",
+    "a per-folder delta loop that persists each folder's cursor only AFTER that folder is fully stored, which its own comment calls crash-safe per folder; the writes belong to different logical units by design and are separated by awaited Graph calls. NOT try/catch-exclusive (BACKLOG-3314 @0285e214c): four unseparated pairs, two of them plain sequences, so no try/catch rule would recover this slot; ensureSyncStateRow at :112 commits before the :115 throw that lands in the catch writing recordSyncFailure, and recordSyncSuccess was itself two statements until BACKLOG-2554 made it one UPSERT. Harmless — an idempotent INSERT OR IGNORE and a failure counter — so the exemption stands",
   "electron/services/db/contactValueProvenanceBackfill.ts::relabelTypedContactValues":
     "called only from a migration — inside migration v60's migrate() at databaseService.ts:3276 — and EVERY migration is run by `const runInTransaction = currentDb.transaction(...)` at databaseService.ts:3513, verified by reading the caller, not inferred (BACKLOG-2569 re-checked these; they had drifted from :3231/:3468)",
   // SR (G1, BACKLOG-3658 S2): the Google Messages cache commit. Every message,
@@ -1083,6 +1083,12 @@ function unitsInFile(rel: string, lines: string[], dbWriters: Set<string>): Fn[]
   // createThreadCommunicationReferenceSync unit drops out. The other twins never
   // appear because their callers wrap them by name.
   //
+  // CLOSED BY BACKLOG-2554 — `recordSyncSuccess` and `recordSyncFailure` are now
+  // ONE UPSERT each (no `ensureSyncStateRow` call). Measured with the same flip,
+  // real driver: before the 2554 fix both units are listed `(2 writes)`; after
+  // it the set is five and neither appears. Their real-driver proof is
+  // `emailSyncStateService.atomicity-2554.test.ts`.
+  //
   // The flip would NOT have guarded BACKLOG-3226. Measured on the plan probe:
   // with call tokens ON, three wrong fixes (a transaction around the INSERT only;
   // an empty transaction in the seam; the fix plus a swallowed count error) ALSO
@@ -1595,7 +1601,7 @@ function wrapsItself(body: string): boolean {
  *   (iii) A WRITER CALL COUNTS AS ONE WRITE. A two-statement writer that commits
  *        its first statement and throws on its second still sends control to
  *        the catch, so W2 runs beside a half-done W1. `recordSyncSuccess`
- *        (`emailSyncStateService.ts:163-164`) is exactly that.
+ *        was exactly that until BACKLOG-2554 made it one UPSERT.
  * (i) and (ii) need a statement-level parse this offset machinery does not
  * have. (iii) cannot be seen from the caller at all. Any rule built from the
  * four conditions opens holes in the CLEARING direction. Leaving it out costs a

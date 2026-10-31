@@ -22,6 +22,15 @@ export const REPORTS_BASE_PATH = '/dashboard/reports';
 
 export const REPORTS: ReportEntry[] = [
   {
+    // BACKLOG-3723: was the one overview card; first, so the Reports page order is unchanged.
+    slug: 'analytics',
+    title: 'Analytics',
+    description:
+      'System-wide metrics and adoption data: active users, app versions, platforms, phone types and licence seats.',
+    source: 'devices, users, organizations, organization_members, user_preferences',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
+  {
     slug: 'iphone-sync',
     title: 'iPhone Sync Performance',
     description:
@@ -49,7 +58,7 @@ export const REPORTS: ReportEntry[] = [
     slug: 'exports',
     title: 'Exports',
     description:
-      'How many exports each user ran in the period, how many were unique deals, in which formats, and when.',
+      'How many exports each user ran in the period, how many were unique exports (each user and deal counted once), in which formats, and when.',
     source: 'analytics_events (export-completed)',
     permission: PERMISSIONS.ANALYTICS_VIEW,
   },
@@ -67,6 +76,14 @@ export const REPORTS: ReportEntry[] = [
     description:
       'Who signed in and was last seen when, on how many devices, and how many transactions, submissions and exports each user ran in the period.',
     source: 'users, devices, audit_logs',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
+  {
+    slug: 'funnel',
+    title: 'Paywall Funnel',
+    description:
+      'Paywall viewed, unlock clicked, payment succeeded, export completed. Where do users drop off?',
+    source: 'analytics_events (paywall-viewed, unlock-clicked, payment-succeeded, export-completed)',
     permission: PERMISSIONS.ANALYTICS_VIEW,
   },
 ];

@@ -308,6 +308,9 @@ if (typeof window !== 'undefined') {
       openPortal: jest.fn().mockResolvedValue({ success: true }),
       getPlanSummary: jest.fn().mockResolvedValue({ unavailable: true }),
       refresh: jest.fn().mockResolvedValue({ unavailable: true }),
+      // BACKLOG-3676: no price unless a test says so; nothing opens.
+      getAgentPrices: jest.fn().mockResolvedValue({ unavailable: true }),
+      openBookCall: jest.fn().mockResolvedValue({ success: false }),
     },
     shell: {
       openExternal: jest.fn(),
@@ -455,6 +458,10 @@ if (typeof window !== 'undefined') {
       chargeSavedCard: jest.fn().mockResolvedValue({ outcome: 'error' }),
       confirm: jest.fn().mockResolvedValue({ unlocked: false, reason: 'error' }),
       hasSavedCard: jest.fn().mockResolvedValue({ hasSavedCard: false }),
+      // BACKLOG-3676: fail-closed defaults (nothing starts, nothing unlocks).
+      beginSubscription: jest.fn().mockResolvedValue({ started: false, code: 'try_again' }),
+      confirmSubscription: jest.fn().mockResolvedValue({ unlocked: false, reason: 'error' }),
+      refreshGate: jest.fn().mockResolvedValue({ unlocked: false }),
     },
     // Payment deep-link callback listener (returns a no-op cleanup by default).
     onPaymentDeepLinkCallback: jest.fn(() => jest.fn()),

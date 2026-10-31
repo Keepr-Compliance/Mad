@@ -424,3 +424,38 @@ export function targetsInTransactionSql(kind: ChecklistLinkKind, count: number):
       )
   `;
 }
+
+/**
+ * BACKLOG-3767 — the rows behind a checklist's attachment members, for the PDF
+ * export's checklist block. One row per attachment id in the JSON array `?2`.
+ *
+ * `hidden` is tested against the transaction's WHOLE hide list (`?1`), not the
+ * export's in-window subset, matched on the message id and on the Apple guid
+ * (either the attachment's own `external_message_id` or the owning message's
+ * `external_id`) — the same two arms as the `hidden_from_export` marker in
+ * communicationDbService. Email attachments are never hidden.
+ */
+export const GET_CHECKLIST_EXPORT_ATTACHMENTS_SQL = sql`
+  SELECT a.id, a.filename, a.email_id, a.message_id, a.external_message_id,
+         msg.external_id AS message_external_id,
+         CASE WHEN a.email_id IS NULL AND EXISTS (
+           SELECT 1 FROM transaction_hidden_texts h
+           WHERE h.transaction_id = ?
+             AND (
+               (a.message_id IS NOT NULL AND h.message_id = a.message_id)
+               OR (h.message_external_id IS NOT NULL
+                   AND (h.message_external_id = a.external_message_id
+                        OR h.message_external_id = msg.external_id))
+             )
+         ) THEN 1 ELSE 0 END AS hidden
+  FROM json_each(?) j
+  JOIN attachments a ON a.id = j.value
+  LEFT JOIN messages msg ON msg.id = a.message_id
+`;
+
+/** BACKLOG-3767 — subjects for a checklist's email members (JSON array of ids). */
+export const GET_CHECKLIST_EXPORT_EMAIL_SUBJECTS_SQL = sql`
+  SELECT e.id, e.subject
+  FROM json_each(?) j
+  JOIN emails e ON e.id = j.value
+`;

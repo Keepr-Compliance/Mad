@@ -1,36 +1,48 @@
 /**
- * ExportUnlockPrompt — BACKLOG-2075 (Option A: gate export only).
+ * ExportUnlockPrompt — BACKLOG-2075 (gate export only), rebuilt as the three
+ * plan cards by BACKLOG-3676 (tab A2, founder approval 2026-10-09; buying in the
+ * app happens at this paywall only, through Stripe's hosted page, 2026-10-10).
  *
- * Shown when an export attempt on a LOCKED transaction returns PAYWALL_LOCKED.
- * Converts the block into a DELIVERABLE-FORWARD purchase moment (Option B design):
- * a preview of the audit PDF you get, then a single clear unlock action — NOT an
- * error.
+ * Shown when an export of a LOCKED transaction returns PAYWALL_LOCKED.
  *
- * CREDIT-FIRST FRAMING (BACKLOG-2086): the browsing CTA leads with the CREDIT
- * requirement, not the raw dollar amount ("Unlock this deal — 1 credit").
- * Credits are the easier-to-digest alternate currency; the exact dollar price
- * surfaces at the CONFIRM/CHARGE step (Stripe Checkout for new cards; the
- * saved-card confirm for repeat buyers). GUARDRAIL: the price is abstracted only
- * while BROWSING — the final irreversible Confirm/Pay control (owned by
- * PurchaseUnlockHandoff / Checkout) still shows the exact amount before the tap.
+ *   Solo      "Unlock with 1 credit" (credits held) or "Pay $X for this deal"
+ *             (no credits; X from the live quote) → the existing
+ *             PurchaseUnlockHandoff (saved card / Checkout, exact amount shown).
+ *   Agent     "Subscribe — $X/month" (X from the portal on every open, never a
+ *             constant) → main opens the Agent plan Stripe Checkout →
+ *             AgentSubscribeFlow waits for the browser return.
+ *   Brokerage "Book a call" → main opens the portal's booking URL.
  *
- * Unlock logic is unchanged from the original:
- *   - grant credits held → "Unlock with 1 credit" → unlockWithCredit()
- *     (credits spend BEFORE card; online only).
- *   - zero/unknown balance + a live quote → "Unlock this deal — 1 credit" → hands
- *     to the purchase component (PurchaseUnlockHandoff), which shows the exact $.
- *   - offline / no quote → disabled "online required" (fail-closed: never a free export).
+ * The highlighted card follows credits: credits held → Solo, none → Agent.
  *
- * On a successful unlock (grant or purchase), `onUnlocked` fires and the caller
- * re-runs the export (now UNLOCKED ⇒ the main gate returns the full record).
+ * State D (founder 2026-10-09): a user licensed by a brokerage sees "Your team
+ * license covers this account. Contact your broker admin." and NO billing
+ * buttons — no Subscribe, no per-deal Pay, no Book a call. The class is read
+ * from the license context (the same test useCompleteTransaction uses); while
+ * it is unknown, Subscribe is disabled. The portal's brokerage_managed refusal
+ * is the server-side backstop and leads to the same screen.
  *
- * Consumes the 2006a entitlement hook; makes NO gate decision itself. Rendered
- * inline inside the already-open ExportModal (not a modal-over-modal).
+ * Every refusal code the portal answers maps to its own short message on the
+ * Agent card (none says "Refresh the page"). "Try again" is always ONE fresh
+ * gate read in main (memo cleared first), never a cached answer.
+ *
+ * On a confirmed unlock (credit, purchase or plan) `onUnlocked` fires and the
+ * caller re-runs the export. Makes NO gate decision itself.
  */
 
-import React, { useState } from "react";
+import React, { useCallback, useContext, useEffect, useState } from "react";
+import { Button } from "@keepr/ui";
 import { useTransactionEntitlement } from "../../hooks/useTransactionEntitlement";
+import LicenseContext from "../../contexts/LicenseContext";
+import { paymentService, type SubscriptionRefusalCode } from "../../services/paymentService";
+import {
+  billingService,
+  type AgentPricesResult,
+  type PlanSummaryResult,
+} from "../../services/billingService";
 import { PurchaseUnlockHandoff } from "./PurchaseUnlockHandoff";
+import { PlanCards, type AgentAction, type SoloAction } from "./PlanCards";
+import { AgentSubscribeFlow } from "./AgentSubscribeFlow";
 import logger from "../../utils/logger";
 
 export interface ExportUnlockPromptProps {
@@ -38,10 +50,34 @@ export interface ExportUnlockPromptProps {
   transactionId: string;
   /** Human label for the deal (e.g. property address). Falls back to "this deal". */
   transactionLabel?: string | null;
-  /** Called after a confirmed unlock (grant or purchase). Caller re-runs the export. */
+  /** Called after a confirmed unlock (grant, purchase or plan). Caller re-runs the export. */
   onUnlocked: () => void;
   /** Called when the user dismisses the prompt without unlocking. */
   onCancel: () => void;
+}
+
+/** C7 wording, decided 2026-10-10 (BACKLOG-3648). */
+export const NO_LICENSE_MESSAGE = "Your brokerage hasn't assigned you a license. Contact your admin.";
+/** State D wording, decided 2026-10-09 (BACKLOG-3648). */
+export const STATE_D_MESSAGE = "Your team license covers this account. Contact your broker admin.";
+
+/** Agent-card message per refusal code (R6). None tells the user to refresh a page. */
+export const REFUSAL_MESSAGES: Record<Exclude<SubscriptionRefusalCode, "brokerage_managed">, string> = {
+  unauthorized: "Please sign in again to subscribe.",
+  not_available: "Not available for this account.",
+  no_license: NO_LICENSE_MESSAGE,
+  suspended: "Your account is suspended. Contact support.",
+  mode_refused: "Subscriptions are not available for this account.",
+  already_have_plan: "You already have Unlimited.",
+  price_unavailable: "Not available right now.",
+  try_again: "Something went wrong. Try again.",
+};
+
+type LicenseClass = "brokerage" | "individual" | "unknown";
+
+function formatCents(cents: number, currency: string): string {
+  const usd = currency.toUpperCase() === "USD";
+  return `$${(cents / 100).toFixed(2)}${usd ? "" : ` ${currency.toUpperCase()}`}`;
 }
 
 export function ExportUnlockPrompt({
@@ -52,25 +88,46 @@ export function ExportUnlockPrompt({
 }: ExportUnlockPromptProps): React.ReactElement {
   const { quote, creditBalance, unlockWithCredit, isLoading, lockReason, refresh } =
     useTransactionEntitlement(transactionId);
+  const license = useContext(LicenseContext);
 
-  // Whether to show the card-purchase handoff (zero-balance PAYG path).
   const [showPurchase, setShowPurchase] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
   const [unlockError, setUnlockError] = useState<string | null>(null);
-  // BACKLOG-2346: local feedback while a manual retry re-fetches the snapshot.
   const [retrying, setRetrying] = useState(false);
 
-  const hasGrantCredits = (creditBalance ?? 0) > 0;
-  // Fail-closed: no live quote (offline/error) ⇒ the paid path is unavailable.
-  const canPurchase = quote !== null;
+  // BACKLOG-3676 state.
+  const [prices, setPrices] = useState<AgentPricesResult | null>(null);
+  const [planSummary, setPlanSummary] = useState<PlanSummaryResult | null>(null);
+  const [refusal, setRefusal] = useState<SubscriptionRefusalCode | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [gateBusy, setGateBusy] = useState(false);
+  const [flow, setFlow] = useState<"plans" | "subscribe" | "plan_on">("plans");
+  const [cancelledNotice, setCancelledNotice] = useState(false);
 
-  // BACKLOG-2346: on every (re)mount — including back→forward through the export
-  // steps — the entitlement snapshot starts as "loading" with a null quote. The
-  // old CTA collapsed loading, a transient read failure, AND genuine-offline into
-  // the SAME disabled "requires internet" button, so navigating back to the format
-  // step and forward again flashed (or stuck on) a false "no internet" state. We
-  // now separate them: neutral "Checking…" while loading, and a recoverable
-  // "Try again" for a resolved-but-unavailable quote (offline OR transient error).
+  // Price and plan summary: read once per prompt mount (S1/S6: no cache).
+  useEffect(() => {
+    let cancelled = false;
+    void billingService.getAgentPrices().then((r) => {
+      if (!cancelled) setPrices(r);
+    });
+    void billingService.getPlanSummary().then((r) => {
+      if (!cancelled) setPlanSummary(r);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [transactionId]);
+
+  const licenseClass: LicenseClass =
+    !license || !license.isLicenseResolved
+      ? "unknown"
+      : license.canSubmit && !!license.organizationId
+        ? "brokerage"
+        : "individual";
+
+  const hasGrantCredits = (creditBalance ?? 0) > 0;
+  const creditCount = creditBalance ?? 0;
+  const canPurchase = quote !== null;
   const isOffline =
     lockReason === "offline_uncached" ||
     (typeof navigator !== "undefined" && navigator.onLine === false);
@@ -107,7 +164,57 @@ export function ExportUnlockPrompt({
     }
   };
 
-  // The card-purchase handoff owns its own confirm/cancel; BACKLOG-2015 fills it.
+  /** One fresh gate read in main (R1/R6). Unlocked → the plan-on screen. */
+  const readGateFresh = useCallback(async (): Promise<boolean> => {
+    setGateBusy(true);
+    try {
+      const { unlocked } = await paymentService.refreshGate(transactionId);
+      if (unlocked) setFlow("plan_on");
+      return unlocked;
+    } finally {
+      setGateBusy(false);
+    }
+  }, [transactionId]);
+
+  /** Open the Agent plan Checkout. True when main opened it. */
+  const startCheckout = useCallback(async (): Promise<boolean> => {
+    setStarting(true);
+    setCancelledNotice(false);
+    try {
+      const result = await paymentService.beginSubscription();
+      if (result.started) {
+        setRefusal(null);
+        return true;
+      }
+      if (result.code === "offline") {
+        setRefusal("try_again");
+        return false;
+      }
+      setRefusal(result.code);
+      if (result.code === "already_have_plan") void readGateFresh();
+      return false;
+    } finally {
+      setStarting(false);
+    }
+  }, [readGateFresh]);
+
+  const handleSubscribe = async (): Promise<void> => {
+    if (await startCheckout()) setFlow("subscribe");
+  };
+
+  const handleTryAgain = async (): Promise<void> => {
+    const unlocked = await readGateFresh();
+    if (!unlocked && refusal === "try_again") setRefusal(null);
+  };
+
+  const backToPlans = useCallback((notice?: "cancelled") => {
+    setFlow("plans");
+    setCancelledNotice(notice === "cancelled");
+    // The plan state may have changed while the browser was open.
+    void billingService.getPlanSummary().then(setPlanSummary);
+  }, []);
+
+  // ── Purchase hand-off (Solo "Pay $X") ───────────────────────────────────
   if (showPurchase) {
     return (
       <div className="p-4" data-testid="export-unlock-prompt">
@@ -121,125 +228,72 @@ export function ExportUnlockPrompt({
     );
   }
 
+  const monthPrice = prices && !prices.unavailable ? prices.month : null;
+  const priceDisplay = monthPrice?.display ?? null;
+
+  // ── After Subscribe ─────────────────────────────────────────────────────
+  if (flow === "subscribe") {
+    return (
+      <div data-testid="export-unlock-prompt">
+        <AgentSubscribeFlow
+          transactionId={transactionId}
+          priceDisplay={priceDisplay}
+          creditCount={creditCount}
+          onContinue={onUnlocked}
+          onBack={backToPlans}
+          onKeepWorking={onCancel}
+          onReopen={startCheckout}
+        />
+      </div>
+    );
+  }
+
+  if (flow === "plan_on") {
+    return (
+      <div data-testid="export-unlock-prompt">
+        <div
+          className="mx-auto max-w-xl rounded-lg border border-primary/30 bg-primary/5 p-5 text-center"
+          data-testid="agent-plan-on"
+        >
+          <p className="text-sm font-semibold text-gray-900">Unlimited exports are on</p>
+          <Button className="mt-4" size="lg" onClick={onUnlocked} data-testid="agent-plan-on-continue">
+            Continue export
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   const dealLabel =
     transactionLabel && transactionLabel.trim() !== "" ? transactionLabel.trim() : "this deal";
 
-  const creditCount = creditBalance ?? 0;
-
-  // BACKLOG-2086: the browsing CTA leads with the CREDIT requirement, never the
-  // raw dollar amount. The exact price surfaces at the confirm/charge step
-  // (PurchaseUnlockHandoff / Checkout) — see the module guardrail.
-
-  return (
-    // Frameless (BACKLOG-2086, founder): NO card border/shadow of our own — the
-    // parent ExportModal already supplies the panel chrome (header + X + p-6
-    // body padding). We render FLAT in that content section so there is no
-    // card-in-a-card / modal-in-modal look.
-    <div data-testid="export-unlock-prompt">
-      {/* 1. Deliverable preview — a self-contained rounded tile (NOT a full-bleed
-          card top), so it reads as a preview inside the flat modal body. */}
-      <AuditPreviewHeader />
-
-      <div className="mt-4">
-        {/* 2. Headline */}
-        <h3 className="text-lg font-semibold text-gray-900">
-          Your full audit is ready to export
-        </h3>
-
-        {/* 3. Sub — credit-first: lead with the 1-credit requirement, not the
-            dollar amount. The tier/discount bar is on the confirm screen, not here. */}
-        <p className="mt-1.5 text-sm leading-relaxed text-gray-600">
-          Every email and text on{" "}
-          <span className="font-medium text-gray-800">{dealLabel}</span>, in one
-          hyperlinked PDF.{" "}
-          {hasGrantCredits ? (
-            <>Spend 1 credit to unlock — it&apos;s yours to export forever.</>
-          ) : (
-            <>
-              <span className="font-medium text-gray-800">
-                You need 1 credit to unlock
-              </span>{" "}
-              — it&apos;s yours to export forever.
-            </>
-          )}
-        </p>
-
-        {/* Genuine unlock-failure message (the ONLY place red is used). */}
-        {unlockError && (
-          <p className="mt-3 text-sm text-red-600" role="alert">
-            {unlockError}
-          </p>
-        )}
-
-        {/* 4. Primary action — credit-first framing. The dollar price is NEVER
-            on the browsing CTA; it surfaces at the confirm/charge step. */}
-        <div className="mt-5">
-          {isLoading ? (
-            // Still resolving the entitlement snapshot — neutral, NOT an error.
-            // (BACKLOG-2346: prevents the false "no internet" flash on remount.)
-            <button
-              type="button"
-              disabled
-              data-testid="unlock-loading"
-              className="w-full cursor-progress rounded-lg bg-gray-100 px-4 py-3 text-sm font-semibold text-gray-500"
-            >
-              Checking…
-            </button>
-          ) : hasGrantCredits ? (
-            <button
-              type="button"
-              onClick={handleUseCredit}
-              disabled={unlocking}
-              data-testid="unlock-with-credit"
-              className="w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-60"
-            >
-              {unlocking ? "Unlocking…" : "Unlock with 1 credit"}
-            </button>
-          ) : canPurchase ? (
-            <button
-              type="button"
-              onClick={() => setShowPurchase(true)}
-              data-testid="unlock-purchase"
-              className="w-full rounded-lg bg-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 disabled:opacity-60"
-            >
-              Unlock this deal — 1 credit
-            </button>
-          ) : (
-            // Resolved with no quote: offline OR a transient read failure. Keep the
-            // fail-closed disabled primary (never a free export) but ALWAYS offer a
-            // recovery path so a passing hiccup — or being briefly offline — no
-            // longer strands the user on a dead gray button (BACKLOG-2346).
-            <div className="space-y-2">
-              <button
-                type="button"
-                disabled
-                data-testid="unlock-offline"
-                className="w-full cursor-not-allowed rounded-lg bg-gray-200 px-4 py-3 text-sm font-semibold text-gray-500"
+  // ── State D: licensed by a brokerage — no billing buttons at all ────────
+  if (licenseClass === "brokerage" || refusal === "brokerage_managed") {
+    return (
+      <div data-testid="export-unlock-prompt">
+        <div className="rounded-lg border border-gray-200 bg-gray-50 p-5" data-testid="paywall-state-d">
+          <p className="text-sm font-semibold text-gray-900">Team license</p>
+          <p className="mt-1 text-sm text-gray-600">{STATE_D_MESSAGE}</p>
+          {hasGrantCredits && (
+            <div className="mt-4">
+              <Button
+                size="lg"
+                className="w-full"
+                onClick={() => void handleUseCredit()}
+                disabled={unlocking}
+                data-testid="unlock-with-credit"
               >
-                {isOffline
-                  ? "Unlocking requires an internet connection"
-                  : "Couldn’t load pricing — please try again"}
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleRetry()}
-                disabled={retrying}
-                data-testid="unlock-retry"
-                className="w-full rounded-lg border border-indigo-200 bg-white px-4 py-2.5 text-sm font-semibold text-indigo-700 transition-colors hover:bg-indigo-50 disabled:opacity-60"
-              >
-                {retrying ? "Retrying…" : "Try again"}
-              </button>
+                {unlocking ? "Unlocking…" : "Unlock with 1 credit"}
+              </Button>
             </div>
           )}
+          {unlockError && (
+            <p className="mt-3 text-sm text-red-600" role="alert">
+              {unlockError}
+            </p>
+          )}
         </div>
-
-        {/* 5. Footnote + quiet dismiss */}
-        <div className="mt-3 flex items-center justify-between">
-          <p className="text-xs text-gray-400">
-            {hasGrantCredits
-              ? `You have ${creditCount} credit${creditCount === 1 ? "" : "s"} · Reading is always free`
-              : "New credit added at checkout · Reading is always free"}
-          </p>
+        <div className="mt-3 flex justify-end">
           <button
             type="button"
             onClick={onCancel}
@@ -250,39 +304,163 @@ export function ExportUnlockPrompt({
           </button>
         </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
-/**
- * Decorative, CSS-only mock of the exported audit PDF. Signals "here's the audit
- * you get" — purely presentational: aria-hidden, no images, no real data.
- *
- * Frameless layout (BACKLOG-2086): the prompt no longer wraps this in a bordered
- * card, so the tile owns its own rounding/hairline border and clips its contents
- * (the parent card's overflow-hidden used to do that).
- */
-function AuditPreviewHeader(): React.ReactElement {
+  // ── Solo card action ────────────────────────────────────────────────────
+  const solo: SoloAction = isLoading
+    ? { kind: "loading" }
+    : hasGrantCredits
+      ? { kind: "credit", unlocking, onUseCredit: () => void handleUseCredit() }
+      : canPurchase && quote
+        ? {
+            kind: "pay",
+            priceLabel: formatCents(quote.unitPriceCents, quote.currency),
+            onPay: () => setShowPurchase(true),
+          }
+        : { kind: "unavailable", isOffline, retrying, onRetry: () => void handleRetry() };
+
+  // ── Agent card action ───────────────────────────────────────────────────
+  const planState = planSummary && !planSummary.unavailable ? planSummary.summary.state : null;
+  const paymentFailed = planState === "payment_failed";
+  const tryAgainAction = {
+    label: gateBusy ? "Checking…" : "Try again",
+    testId: "agent-try-again",
+    busy: gateBusy,
+    onClick: () => void handleTryAgain(),
+  };
+
+  let agent: AgentAction;
+  if (paymentFailed) {
+    agent = {
+      kind: "message",
+      testId: "agent-payment-failed",
+      text: "Update your card on the website to turn Unlimited exports back on.",
+      action: {
+        label: "Update card ↗",
+        testId: "agent-update-card",
+        onClick: () => void billingService.openPortal(),
+      },
+    };
+  } else if (
+    refusal === "already_have_plan" ||
+    planState === "active" ||
+    planState === "cancel_pending" ||
+    planState === "support_grant"
+  ) {
+    agent = {
+      kind: "message",
+      testId:
+        refusal === "already_have_plan" ? "agent-refusal-already_have_plan" : "agent-plan-checking",
+      text:
+        refusal === "already_have_plan"
+          ? `${REFUSAL_MESSAGES.already_have_plan} Checking your plan…`
+          : "Checking your plan…",
+      action: tryAgainAction,
+    };
+  } else if (refusal === "try_again") {
+    agent = {
+      kind: "message",
+      testId: "agent-refusal-try_again",
+      text: REFUSAL_MESSAGES.try_again,
+      tone: "error",
+      action: tryAgainAction,
+    };
+  } else if (refusal && refusal !== "unauthorized") {
+    agent = {
+      kind: "message",
+      testId: `agent-refusal-${refusal}`,
+      text: REFUSAL_MESSAGES[refusal],
+    };
+  } else if (prices === null) {
+    agent = { kind: "price_loading" };
+  } else if (!monthPrice) {
+    agent = {
+      kind: "message",
+      testId: "agent-refusal-price_unavailable",
+      text: REFUSAL_MESSAGES.price_unavailable,
+    };
+  } else {
+    agent = {
+      kind: "subscribe",
+      priceDisplay: monthPrice.display,
+      starting,
+      disabled: licenseClass !== "individual" || isOffline,
+      onSubscribe: () => void handleSubscribe(),
+    };
+  }
+
+  const bookCall =
+    prices && !prices.unavailable && prices.hasBookCall
+      ? () => void billingService.openBookCall()
+      : null;
+
   return (
-    <div
-      aria-hidden="true"
-      className="relative flex h-32 items-center justify-center overflow-hidden rounded-xl border border-gray-100 bg-gradient-to-br from-indigo-50 via-indigo-100 to-white"
-    >
-      {/* The audit document card (slightly rotated). */}
-      <div className="relative w-40 -rotate-3 rounded-md border border-gray-200 bg-white p-3 shadow-md">
-        {/* "PDF" badge tab. */}
-        <div className="absolute -right-2 -top-2 rounded bg-indigo-600 px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-white shadow">
-          PDF
+    <div data-testid="export-unlock-prompt">
+      {paymentFailed && (
+        <div
+          role="alert"
+          className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-4"
+          data-testid="agent-payment-failed-banner"
+        >
+          <p className="min-w-0 text-sm text-red-900">
+            <span className="font-semibold">Your Agent plan payment failed.</span> Unlimited exports
+            are off until it&apos;s paid.
+          </p>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => void billingService.openPortal()}
+            data-testid="agent-update-card-banner"
+          >
+            Update card on the website ↗
+          </Button>
         </div>
-        {/* Index lines: one indigo "title" + a few grey lines. */}
-        <div className="mb-2 h-1.5 w-2/3 rounded-full bg-indigo-400" />
-        <div className="mb-1.5 h-1 w-full rounded-full bg-gray-200" />
-        <div className="mb-1.5 h-1 w-5/6 rounded-full bg-gray-200" />
-        <div className="mb-2.5 h-1 w-4/6 rounded-full bg-gray-200" />
-        {/* Thread "bubbles": two left, one right-aligned. */}
-        <div className="mb-1 h-2.5 w-3/5 rounded-md rounded-bl-none bg-gray-100" />
-        <div className="mb-1 ml-auto h-2.5 w-2/5 rounded-md rounded-br-none bg-indigo-200" />
-        <div className="h-2.5 w-1/2 rounded-md rounded-bl-none bg-gray-100" />
+      )}
+
+      <h3 className="text-lg font-semibold text-gray-900">Your full audit is ready to export</h3>
+      <p className="mt-1.5 text-sm leading-relaxed text-gray-600">
+        Every email and text on <span className="font-medium text-gray-800">{dealLabel}</span>, in
+        one hyperlinked PDF. Pick how you&apos;d like to unlock it.
+      </p>
+
+      {cancelledNotice && (
+        <p className="mt-3 text-sm text-gray-600" role="status" data-testid="agent-checkout-cancelled">
+          Checkout cancelled. Nothing was charged.
+        </p>
+      )}
+      {refusal === "unauthorized" && (
+        <p className="mt-3 text-sm text-red-700" role="alert" data-testid="agent-refusal-unauthorized">
+          {REFUSAL_MESSAGES.unauthorized}
+        </p>
+      )}
+      {unlockError && (
+        <p className="mt-3 text-sm text-red-600" role="alert">
+          {unlockError}
+        </p>
+      )}
+
+      <PlanCards
+        soloHighlighted={hasGrantCredits}
+        soloPriceLabel={quote ? formatCents(quote.unitPriceCents, quote.currency) : null}
+        creditCount={creditCount}
+        solo={solo}
+        agentPriceDisplay={priceDisplay}
+        agent={agent}
+        agentPaymentFailed={paymentFailed}
+        onBookCall={bookCall}
+      />
+
+      <div className="mt-3 flex items-center justify-between">
+        <p className="text-xs text-gray-400">Reading is always free · Payments by Stripe</p>
+        <button
+          type="button"
+          onClick={onCancel}
+          data-testid="unlock-cancel"
+          className="text-xs font-medium text-gray-500 hover:text-gray-700"
+        >
+          Not now
+        </button>
       </div>
     </div>
   );

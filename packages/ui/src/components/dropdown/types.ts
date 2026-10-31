@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, Ref } from 'react';
 
 /**
  * Dropdown types (BACKLOG-4032 slice 1).
@@ -53,8 +53,18 @@ interface DropdownBaseProps<V extends string> {
   /** Error message under the field (role=alert, linked by aria-describedby). */
   error?: string;
   disabled?: boolean;
-  /** Trigger look. Only 'field' is built; 'filter' is RESERVED. */
-  variant?: 'field';
+  /**
+   * Trigger look. 'field' (default): full-width form field. 'filter': the
+   * compact report-filter pill (same classes as MultiSelect's trigger), no
+   * visible label (the label / ariaLabel still names it), panel at least
+   * `min-w-56` wide. The pill turns blue only when it has a value AND
+   * `onClear` is given (a removable filter).
+   */
+  variant?: 'field' | 'filter';
+  /** Leading icon inside the trigger (decorative; mark it aria-hidden). */
+  triggerIcon?: ReactNode;
+  /** Ref to the trigger button, e.g. to return focus to it from another popover. */
+  triggerRef?: Ref<HTMLButtonElement>;
   /**
    * Where the options open. 'popover' (default): the inline panel under the
    * trigger. 'sheet': a BottomSheet titled by the label, comfortable rows, a
@@ -73,7 +83,11 @@ export type DropdownSingleProps<V extends string = string> = DropdownBaseProps<V
     mode?: 'single';
     value: V | null;
     onChange: (value: V) => void;
-    /** RESERVED (not rendered in slice 1): clear back to no value, for the filter trigger. */
+    /**
+     * Clear back to no value, for the filter trigger. Slice 3: only marks the
+     * filter pill as removable (blue while it has a value); the clear X is
+     * still RESERVED (not rendered).
+     */
     onClear?: () => void;
   };
 

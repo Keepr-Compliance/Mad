@@ -51,9 +51,16 @@ import {
 import { sendToMainWindow } from "../windowRegistry";
 import { handleBusy } from "../utils/busyIpc";
 import { completeExport, EXPORT_NOT_RECORDED_MESSAGE } from "../services/exportCompletion";
+import {
+  getChecklistExportTargets,
+  getChecklistsForTransaction,
+} from "../services/db/checklistDbService";
+import type { ChecklistExportInput } from "../services/enhancedExportService";
 
 interface ExportOptions {
   exportFormat?: string;
+  /** BACKLOG-3767: add the transaction's checklists to the PDF. Only `true` counts. */
+  includeChecklist?: boolean;
   [key: string]: unknown;
 }
 
@@ -385,6 +392,21 @@ export function registerTransactionExportHandlers(
       details = enhancedPrep.details;
       const enhancedPlan = enhancedPrep.plan;
 
+      // BACKLOG-3767: the transaction's LOCAL checklists, read AFTER the sync
+      // backstops and the prep above — membership is computed against
+      // `communications` at read time, so an earlier read would report a
+      // freshly linked email as no longer part of the transaction. Strict
+      // `=== true`: bulk export and every older caller send nothing here.
+      let checklist: ChecklistExportInput | undefined;
+      const pdfFormat = enhancedFormat === undefined || enhancedFormat === "pdf";
+      if (sanitizedOptions.includeChecklist === true && pdfFormat) {
+        const { checklists } = await getChecklistsForTransaction(validatedTransactionId);
+        if (checklists.length > 0) {
+          const targets = await getChecklistExportTargets(validatedTransactionId, checklists);
+          checklist = { checklists, ...targets };
+        }
+      }
+
       // Export with options (full record — no sample reduction under Option A)
       const exportPath = await enhancedExportService.exportTransaction(
         details,
@@ -398,6 +420,7 @@ export function registerTransactionExportHandlers(
             | "txt_eml"
             | undefined,
           summaryOnly: sanitizedOptions.summaryOnly === true,
+          checklist,
         },
       );
 

@@ -9,11 +9,15 @@
 
 import { Smartphone } from 'lucide-react';
 import { Card } from '@keepr/design-system';
-import type { PhoneTypeBreakdown as PhoneTypeData } from '@/lib/analytics-queries';
+import type { PhoneTypeBreakdown as PhoneTypeData } from '@/lib/reports/analytics';
+import { SectionFailed } from './SectionFailed';
 
 interface Props {
   data: PhoneTypeData[];
+  failed?: boolean;
 }
+
+export const PHONE_EMPTY_TEXT = 'No phone type data available.';
 
 const TYPE_COLORS: Record<string, string> = {
   iphone: '#3b82f6',   // blue-500
@@ -27,15 +31,19 @@ const TYPE_LABELS: Record<string, string> = {
   'Not set': 'Not set',
 };
 
-export function PhoneTypeBreakdown({ data }: Props) {
-  if (data.length === 0) {
+export function PhoneTypeBreakdown({ data, failed = false }: Props) {
+  if (failed || data.length === 0) {
     return (
       <Card>
         <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
           <Smartphone className="h-5 w-5 text-gray-400" />
           Phone Type
         </h3>
-        <p className="text-sm text-gray-500">No phone type data available.</p>
+        {failed ? (
+          <SectionFailed section="phone" />
+        ) : (
+          <p className="text-sm text-gray-500">{PHONE_EMPTY_TEXT}</p>
+        )}
       </Card>
     );
   }
@@ -78,7 +86,7 @@ export function PhoneTypeBreakdown({ data }: Props) {
             TYPE_LABELS[entry.phone_type] ?? entry.phone_type;
 
           return (
-            <div key={entry.phone_type} className="flex items-center justify-between">
+            <div key={entry.phone_type} data-phone-row={entry.phone_type} className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span
                   className="w-3 h-3 rounded-full"
