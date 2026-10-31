@@ -5,10 +5,15 @@ import { ChevronLeft, LifeBuoy } from 'lucide-react';
 import {
   getAgentUsers,
   getOpenTicketCount,
+  getSupportSlaSettings,
   getSupportTickets,
   SUPPORT_TICKET_LIMIT,
 } from '@/lib/reports/support-sla-queries';
-import { buildSupportSlaReport, READ_FAILED_MESSAGE } from '@/lib/reports/support-sla';
+import {
+  buildSupportSlaReport,
+  READ_FAILED_MESSAGE,
+  SLA_SETTINGS_READ_FAILED_MESSAGE,
+} from '@/lib/reports/support-sla';
 import { REPORTS_BASE_PATH } from '@/lib/reports/registry';
 import { resolvePeriod } from '@/lib/reports/period';
 import type { ParamRecord } from '@/lib/reports/report-url';
@@ -25,6 +30,11 @@ export const dynamic = 'force-dynamic';
  * names through the authenticated client, and hands the built report to the
  * client shell. Every number comes from lib/reports/support-sla.ts
  * (BACKLOG-3651).
+ *
+ * BACKLOG-4086: the SLA targets and business window are read from
+ * `support_sla_settings` with the tickets. Every duration is business time.
+ * When the settings cannot be read, the durations and target rates show "-"
+ * with a notice; no code default stands in for them.
  */
 export default async function SupportSlaReportPage({
   searchParams,
@@ -65,12 +75,15 @@ export default async function SupportSlaReportPage({
     new Date()
   );
 
-  const [tickets, openCount] = await Promise.all([
+  const [tickets, openCount, settings] = await Promise.all([
     getSupportTickets(supabase, period),
     getOpenTicketCount(supabase),
+    getSupportSlaSettings(supabase),
   ]);
   const users = tickets.failed ? [] : await getAgentUsers(supabase, tickets.rows);
-  const report = tickets.failed ? null : buildSupportSlaReport(tickets.rows, users, period, openCount);
+  const report = tickets.failed
+    ? null
+    : buildSupportSlaReport(tickets.rows, users, period, openCount, { settings, now: new Date() });
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
@@ -103,8 +116,18 @@ export default async function SupportSlaReportPage({
         </div>
       ) : null}
 
+      {settings === null ? (
+        <div
+          data-notice="settings-read-failed"
+          className="rounded-lg border border-amber-300 bg-amber-50 p-5 text-sm text-amber-900"
+        >
+          {SLA_SETTINGS_READ_FAILED_MESSAGE}
+        </div>
+      ) : null}
+
       <SupportSlaReportClient
         report={report}
+        settings={settings}
         period={period}
         truncated={tickets.truncated}
         rowCap={SUPPORT_TICKET_LIMIT}

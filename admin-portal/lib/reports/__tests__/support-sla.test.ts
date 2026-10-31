@@ -65,11 +65,11 @@ describe('open now (C1)', () => {
   });
 
   it('the summary falls back to the open rows read when no exact count is given', () => {
-    expect(buildSupportSlaReport(TICKETS, USERS, D30).summary.openNow).toBe(13);
+    expect(buildSupportSlaReport(TICKETS, USERS, D30, null, OPTS).summary.openNow).toBe(13);
   });
 
   it('the exact count wins when given', () => {
-    expect(buildSupportSlaReport(TICKETS, USERS, D30, 76).summary.openNow).toBe(76);
+    expect(buildSupportSlaReport(TICKETS, USERS, D30, 76, OPTS).summary.openNow).toBe(76);
   });
 });
 
@@ -140,13 +140,13 @@ describe('period is half-open [from, to) (C3)', () => {
     ['to + 1ms', 1, 'to', 0],
   ] as const)('resolved at %s counts %#', (_label, offset, bound, expected) => {
     const t = (bound === 'from' ? from : to) + offset;
-    const s = buildSupportSlaReport([resolvedAtTime(51, t)], [], D30).summary;
+    const s = buildSupportSlaReport([resolvedAtTime(51, t)], [], D30, null, OPTS).summary;
     expect(s.resolvedInPeriod).toBe(expected);
   });
 
   it('a ticket resolved 31 days ago is outside the 30-day period', () => {
     const rows = [resolvedAtTime(56, to - 31 * 86400000)];
-    const s = buildSupportSlaReport(rows, [], D30).summary;
+    const s = buildSupportSlaReport(rows, [], D30, null, OPTS).summary;
     expect(s.resolvedInPeriod).toBe(0);
     expect(s.avgResolutionMinutes).toBeNull();
   });
@@ -178,7 +178,7 @@ describe('agent rows (C4, SR change 5)', () => {
   });
 
   it('an assignee missing from users is "Unknown agent"', () => {
-    const r = buildSupportSlaReport(TICKETS, [], D30);
+    const r = buildSupportSlaReport(TICKETS, [], D30, null, OPTS);
     expect(r.agents.map((a) => a.name)).toEqual(['Unknown agent', 'Unknown agent']);
   });
 
@@ -200,14 +200,14 @@ describe('duration (C2)', () => {
     expect(formatBusinessDuration(24)).toBe('24m');
   });
 
-  it('TRANSITIONAL: options omitted keeps the pre-4086 calendar output (page unchanged until it passes settings)', () => {
-    const r = buildSupportSlaReport(TICKETS, USERS, D30);
-    const b = r.agents.find((a) => a.agentId === AGENT_B)!;
-    expect(b.avgFirstResponseMinutes).toBe(4446);
-    expect(formatDuration(b.avgFirstResponseMinutes)).toBe('3d 2h');
-    expect(r.summary.avgResolutionMinutes).toBeCloseTo((194.95044336666666 + 1578.9982327833334) / 2, 4);
-    expect(r.summary.firstResponseSla).toBeNull();
-    expect(r.summary.resolutionSla).toBeNull();
+  it('options are REQUIRED: a call without them does not compile (no calendar-minute path is left)', () => {
+    // Compile-time control, checked by tsc over this file. If the signature
+    // is ever widened back to optional options, this directive becomes an
+    // unused @ts-expect-error and tsc fails.
+    // @ts-expect-error options (settings + now) is required
+    const call = () => buildSupportSlaReport(TICKETS, USERS, D30, null);
+    // At run time the missing options throws instead of silently falling back.
+    expect(call).toThrow();
   });
 
   it('formats under an hour and under a day', () => {
