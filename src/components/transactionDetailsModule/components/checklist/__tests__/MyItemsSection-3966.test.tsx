@@ -155,6 +155,57 @@ describe("the section, its place and its numbers", () => {
   });
 });
 
+describe("one primary button per view, and the section collapses", () => {
+  const isPrimary = (el: HTMLElement) => el.className.includes("bg-primary");
+
+  it("the template chooser is showing -> My items Add is the kit secondary button", async () => {
+    api().get.mockResolvedValue(answer([mine]));
+    render(<Harness gate="allowed" />);
+    await screen.findByTestId("checklist-chooser");
+    const add = screen.getByTestId("my-items-add");
+    expect(isPrimary(add)).toBe(false);
+    expect(add.className).toContain("border-input");
+  });
+
+  it("no chooser -> My items Add stays primary", async () => {
+    render(<Harness gate="allowed" />);
+    await screen.findByTestId("my-items-section");
+    expect(screen.queryByTestId("checklist-chooser")).not.toBeInTheDocument();
+    expect(isPrimary(screen.getByTestId("my-items-add"))).toBe(true);
+  });
+
+  it("collapse: open by default, the header toggles rows and the add input, Tab reaches it, Enter operates it", async () => {
+    const user = userEvent.setup();
+    render(<Harness gate="allowed" />);
+    await screen.findByTestId("my-items-section");
+    const toggle = screen.getByTestId("my-items-toggle");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(rowTitles()).toEqual([callLender.title, sendHoa.title]);
+    toggle.focus();
+    expect(toggle).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(within(section()).queryAllByTestId(/^checklist-item-/)).toHaveLength(0);
+    expect(screen.queryByTestId("my-items-add-input")).not.toBeInTheDocument();
+    // Header, Private pill and count stay.
+    expect(within(section()).getByTestId("my-items-private-pill")).toBeInTheDocument();
+    expect(within(section()).getByTestId("my-items-count")).toHaveTextContent("1 of 2 done");
+    await user.keyboard("{Enter}");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(rowTitles()).toEqual([callLender.title, sendHoa.title]);
+  });
+
+  it("collapse: a real Tab from the page start lands on the header toggle", async () => {
+    const user = userEvent.setup();
+    render(<Harness gate="allowed" />);
+    await screen.findByTestId("my-items-section");
+    for (let i = 0; i < 20 && document.activeElement !== screen.getByTestId("my-items-toggle"); i++) {
+      await user.tab();
+    }
+    expect(screen.getByTestId("my-items-toggle")).toHaveFocus();
+  });
+});
+
 describe("every write goes through its own channel, for this deal", () => {
   it("add: add-my-item with the deal id and the trimmed title, then one re-read", async () => {
     api().get.mockResolvedValue(answer([fixtureChecklist(0)]));
@@ -193,6 +244,23 @@ describe("every write goes through its own channel, for this deal", () => {
       title: "Call lender today",
     });
     expect(calledWrites()).toEqual(["renameMyItem"]);
+  });
+
+  it.each([
+    ["an empty title", ""],
+    ["a whitespace-only title", "   \t  "],
+  ])("rename to %s writes nothing and keeps the old title", async (_name, value) => {
+    render(<Harness gate="allowed" />);
+    await screen.findByTestId("my-items-section");
+    openMenu(callLender.id);
+    fireEvent.click(screen.getByTestId(`my-item-rename-${callLender.id}`));
+    const input = screen.getByTestId(`my-item-rename-input-${callLender.id}`);
+    fireEvent.change(input, { target: { value } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.queryByTestId(`my-item-rename-input-${callLender.id}`)).not.toBeInTheDocument();
+    expect(api().renameMyItem).not.toHaveBeenCalled();
+    expect(calledWrites()).toEqual([]);
+    expect(rowTitles()).toEqual([callLender.title, sendHoa.title]);
   });
 
   it("rename: Escape cancels and writes nothing", async () => {
@@ -388,10 +456,12 @@ describe("a plan without checklists (carry-forward A)", () => {
 });
 
 describe("a locked deal (SR ruling 4: every My-items write refused)", () => {
-  it("locked from the start: rows read-only, one short line, no add", async () => {
+  it("locked from the start: rows read-only, the tab notice is the one lock line, no add", async () => {
     render(<Harness gate="allowed" overrides={{ lockedTooltip: "With your broker for review." }} />);
     await screen.findByTestId("my-items-section");
-    expect(screen.getByTestId("my-items-locked")).toHaveTextContent(MY_ITEMS_LOCKED_LINE);
+    // One lock line: the tab's notice says it; the section adds no second one.
+    expect(screen.getByTestId("checklist-locked-notice")).toBeInTheDocument();
+    expect(screen.queryByTestId("my-items-locked")).not.toBeInTheDocument();
     expect(screen.queryByTestId("my-items-add-input")).not.toBeInTheDocument();
     expect(screen.getByTestId(`checklist-check-${callLender.id}`)).toBeDisabled();
     expect(screen.queryByTestId(`my-item-menu-toggle-${callLender.id}`)).not.toBeInTheDocument();

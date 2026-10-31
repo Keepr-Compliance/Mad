@@ -433,6 +433,7 @@ export function TransactionChecklistTab({
           detail={privateDetail}
           locked={locked}
           lockedTooltip={lockedTooltip}
+          chooserShowing={showChooser}
           pendingItemIds={checklist.pendingItemIds}
           attachmentsById={attachmentsById}
           threads={threads}

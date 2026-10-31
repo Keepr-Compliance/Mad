@@ -53,6 +53,11 @@ export interface MyItemsSectionProps {
   /** The deal is locked (BACKLOG-3910): every My-items write is off. */
   locked: boolean;
   lockedTooltip?: string;
+  /**
+   * The template chooser is on screen (its Add is that view's one primary
+   * button), so this section's Add draws as the kit secondary button.
+   */
+  chooserShowing?: boolean;
   pendingItemIds: ReadonlySet<string>;
   attachmentsById: ReadonlyMap<string, UnifiedAttachment>;
   threads: EmailThread[];
@@ -90,6 +95,7 @@ export function MyItemsSection({
   detail,
   locked,
   lockedTooltip,
+  chooserShowing = false,
   pendingItemIds,
   attachmentsById,
   threads,
@@ -114,6 +120,8 @@ export function MyItemsSection({
   const [menuId, setMenuId] = useState<string | null>(null);
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(true);
+  const bodyId = "my-items-body";
   const addInputRef = useRef<HTMLInputElement>(null);
 
   const items = useMemo(() => {
@@ -246,15 +254,33 @@ export function MyItemsSection({
       data-testid="my-items-section"
     >
       <div className="flex items-start gap-3 flex-wrap px-4 py-3 bg-violet-50 rounded-t-lg">
-        <div className="min-w-0 flex-1 basis-48">
-          <h5 className="text-base font-semibold text-gray-900">My items</h5>
-          <p className="text-xs text-gray-500" data-testid="my-items-subtitle">
-            {MY_ITEMS_PRIVACY_LINE}
-            {total > 0 && (
-              <span data-testid="my-items-count">{` ${done} of ${total} done`}</span>
-            )}
-          </p>
-        </div>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          aria-controls={bodyId}
+          className="flex items-start gap-2 text-left min-w-0 flex-1 basis-48"
+          data-testid="my-items-toggle"
+        >
+          <svg
+            className={`w-4 h-4 mt-1 text-gray-500 flex-shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+          <span className="min-w-0">
+            <span className="block text-base font-semibold text-gray-900">My items</span>
+            <span className="block text-xs text-gray-500" data-testid="my-items-subtitle">
+              {MY_ITEMS_PRIVACY_LINE}
+              {total > 0 && (
+                <span data-testid="my-items-count">{` ${done} of ${total} done`}</span>
+              )}
+            </span>
+          </span>
+        </button>
         <span
           className="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2 py-0.5 text-xs font-semibold text-violet-700"
           data-testid="my-items-private-pill"
@@ -271,7 +297,7 @@ export function MyItemsSection({
         </span>
       </div>
 
-      {(error || readOnly) && (
+      {(error || (readOnly && !locked)) && (
         <p
           role={error ? "alert" : undefined}
           className={`mx-4 mt-3 text-sm ${error ? "text-red-700" : "text-gray-600"}`}
@@ -281,7 +307,8 @@ export function MyItemsSection({
         </p>
       )}
 
-      <div className="flex flex-col gap-3 p-4">
+      {expanded && (
+      <div id={bodyId} className="flex flex-col gap-3 p-4">
         {items.length === 0 && overlay.adding === null && (
           <p className="text-sm text-gray-500" data-testid="my-items-empty">
             {readOnly ? "No items." : MY_ITEMS_EMPTY_LINE}
@@ -474,6 +501,7 @@ export function MyItemsSection({
             <Button
               type="submit"
               size="sm"
+              variant={chooserShowing ? "secondary" : "primary"}
               disabled={draft.trim().length === 0 || overlay.adding !== null}
               data-testid="my-items-add"
             >
@@ -482,6 +510,7 @@ export function MyItemsSection({
           </form>
         )}
       </div>
+      )}
     </Card>
   );
 }
