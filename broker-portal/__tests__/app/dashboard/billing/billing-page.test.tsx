@@ -607,6 +607,19 @@ describe('3847: personal plan blocks', () => {
     expect(r.text).not.toContain('Contact support');
   });
 
+  it('T11 page: suspended account on a live trial -> the suspended plan reads "Free trial", purchases paused (as for pay as you go)', async () => {
+    seedOverride({ enabled: true, source: 'trial', paid_through: '2099-11-14T05:51:51.123973+00:00' });
+    mockBillingDb.rows('licenses').push({ id: 'lic-SEEDED', user_id: FIXTURE_USER_ID, status: 'suspended' });
+    given([personalMembership()]);
+    const { container, unmount } = render(await BillingRoute({}));
+    const plan = container.querySelector('[data-billing-plan="suspended_solo"]')?.textContent ?? '';
+    const all = container.textContent ?? '';
+    unmount();
+    expect(plan).toContain('Free trial');
+    expect(plan).not.toContain('Solo, pay as you go');
+    expect(all).toContain('Purchases are paused until support reinstates your account.');
+  });
+
   it('T11 page control: plain pay as you go shows no trial line', async () => {
     const r = await text();
     expect(r.text).not.toMatch(/Free trial/);
