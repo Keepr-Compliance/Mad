@@ -17,6 +17,8 @@
  *   present.
  * - USER_DATA_LOADED: the object LoadingOrchestrator loadUserData() returns,
  *   dispatched with `user` and `platform`.
+ * - DB_INIT_COMPLETE(success): LoadingOrchestrator Phase 2 after the open
+ *   that BACKLOG-3555 routes a closed-route sign-in through.
  * - Normal route: INITIAL_APP_STATE -> STORAGE_CHECKED -> AUTH_PRE_VALIDATED
  *   (valid) -> DB_INIT_COMPLETE(success) -> AUTH_LOADED(no user) = Login.
  */
@@ -101,7 +103,11 @@ const CLOSED_REASONS = ["offline_grace_expired", "session_clear_failed"] as cons
 const PLATFORMS: Array<[string, PlatformInfo]> = [["mac", macLogin], ["win", winLogin]];
 const SETUPS: Array<[AccountSetup, "onboarding" | "ready"]> = [["not-finished", "onboarding"], ["finished", "ready"]];
 
-describe("BACKLOG-3321 C1: closed pre-auth route never reads open", () => {
+const dbOpened = { type: "DB_INIT_COMPLETE", success: true } as AppAction;
+
+// BACKLOG-3555: a sign-in on the closed route opens the database before user
+// data loads, so the account reaches onboarding / ready with it open.
+describe("BACKLOG-3321 C1 (rewritten for BACKLOG-3555): closed pre-auth route reads closed until the sign-in opens it", () => {
   const cases: Array<[string, (typeof CLOSED_REASONS)[number], PlatformInfo, AccountSetup, string]> = [];
   for (const reason of CLOSED_REASONS) {
     for (const [pName, platform] of PLATFORMS) {
@@ -113,10 +119,12 @@ describe("BACKLOG-3321 C1: closed pre-auth route never reads open", () => {
   it.each(cases)("%s", (_label, reason, platform, setup, dest) => {
     const states = [
       closedLogin(reason),
-      ...run(closedLogin(reason), [loginSuccess(platform, false), userDataLoaded(setup, platform)]),
+      ...run(closedLogin(reason), [loginSuccess(platform, false), dbOpened, userDataLoaded(setup, platform)]),
     ];
-    expect(states.map((s) => s.status)).toEqual(["unauthenticated", "loading", dest]);
-    expect(states.map((s) => selectIsDatabaseInitialized(s))).toEqual([false, false, false]);
+    expect(states.map((s) => s.status)).toEqual(["unauthenticated", "loading", "loading", dest]);
+    expect(states[1]).toMatchObject({ phase: "initializing-db", user, platform });
+    expect(states[2]).toMatchObject({ phase: "loading-user-data", user, platform });
+    expect(states.map((s) => selectIsDatabaseInitialized(s))).toEqual([false, false, true, true]);
   });
 
   it("no probe answer (database omitted) is recorded as unknown, read as closed", () => {
@@ -171,18 +179,26 @@ describe("BACKLOG-3321 C2: normal route reads open from DB_INIT_COMPLETE on", ()
 });
 
 describe("BACKLOG-3321 C3: LOGOUT carries the recorded database state", () => {
-  it("C3a: closed onboarding -> LOGOUT -> sign in -> onboarding reads closed", () => {
+  // BACKLOG-3555: the closed-route sign-in opened the database, so LOGOUT
+  // carries "initialized" and the next sign-in does not open again.
+  it("C3a: closed route -> sign in (opens) -> onboarding -> LOGOUT -> sign in -> onboarding reads open", () => {
     const onboarding = last(
-      run(closedLogin("offline_grace_expired"), [loginSuccess(macLogin, false), userDataLoaded("not-finished", macLogin)])
+      run(closedLogin("offline_grace_expired"), [
+        loginSuccess(macLogin, false),
+        dbOpened,
+        userDataLoaded("not-finished", macLogin),
+      ])
     );
     expect(onboarding.status).toBe("onboarding");
+    expect(selectIsDatabaseInitialized(onboarding)).toBe(true);
     const states = run(onboarding, [
       { type: "LOGOUT" } as AppAction,
       loginSuccess(macLogin, false),
       userDataLoaded("not-finished", macLogin),
     ]);
     expect(states.map((s) => s.status)).toEqual(["unauthenticated", "loading", "onboarding"]);
-    expect(states.map((s) => selectIsDatabaseInitialized(s))).toEqual([false, false, false]);
+    expect(states[1]).toMatchObject({ phase: "loading-user-data" });
+    expect(states.map((s) => selectIsDatabaseInitialized(s))).toEqual([true, true, true]);
   });
 
   it("C3b: normal onboarding -> LOGOUT -> sign in -> onboarding reads open", () => {
@@ -214,9 +230,13 @@ describe("BACKLOG-3321 C3: LOGOUT carries the recorded database state", () => {
     expect(states.map((s) => selectIsDatabaseInitialized(s))).toEqual([true, true, true]);
   });
 
-  it("C3c mirror: closed route -> account setup unreadable -> Sign out -> sign in -> ready reads closed", () => {
+  it("C3c mirror: closed route -> sign in (opens) -> account setup unreadable -> Sign out -> sign in -> ready reads open", () => {
     const err = last(
-      run(closedLogin("session_clear_failed"), [loginSuccess(winLogin, false), userDataLoaded("unknown", winLogin)])
+      run(closedLogin("session_clear_failed"), [
+        loginSuccess(winLogin, false),
+        dbOpened,
+        userDataLoaded("unknown", winLogin),
+      ])
     );
     expect(err.status).toBe("error");
     const states = run(err, [
@@ -225,7 +245,8 @@ describe("BACKLOG-3321 C3: LOGOUT carries the recorded database state", () => {
       userDataLoaded("finished", winLogin),
     ]);
     expect(states.map((s) => s.status)).toEqual(["unauthenticated", "loading", "ready"]);
-    expect(states.map((s) => selectIsDatabaseInitialized(s))).toEqual([false, false, false]);
+    expect(states[1]).toMatchObject({ phase: "loading-user-data" });
+    expect(states.map((s) => selectIsDatabaseInitialized(s))).toEqual([true, true, true]);
   });
 
   it("C3c nested: an error raised from an error still answers with the original state", () => {

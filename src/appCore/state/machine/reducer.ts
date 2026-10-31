@@ -9,7 +9,7 @@
  */
 
 import { fdaBlocksOnboarding, unknownFdaFor, wasFdaAnswered } from "./fdaState";
-import { recordedDatabase } from "./databaseState";
+import { isDatabaseInitialized, recordedDatabase } from "./databaseState";
 import { routeAccount } from "./routing/routeAccount";
 import type {
   AppState,
@@ -200,8 +200,8 @@ export function appStateReducer(
         // Auth failed pre-DB -- go to unauthenticated WITHOUT ever opening DB.
         // BACKLOG-3321: record what main says about the database (the
         // orchestrator asks before dispatching). Nobody asked -> "unknown".
-        // Never assumed open: on this route the user can sign in and reach
-        // onboarding or the dashboard without the DB ever being opened.
+        // Never assumed open. BACKLOG-3555: a sign-in from here opens the DB
+        // first (LOGIN_SUCCESS -> initializing-db) before any user data loads.
         const closed: import("./types").UnauthenticatedState & { reason: string } = {
           status: "unauthenticated",
           reason: action.reason || "session_revoked",
@@ -244,8 +244,22 @@ export function appStateReducer(
           };
         }
 
-        // Success - proceed to load auth. BACKLOG-3321: the ONE place the
-        // loading flow records the database as open.
+        // Success. BACKLOG-3321: the ONE place the loading flow records the
+        // database as open.
+        // BACKLOG-3555: a fresh sign-in on the closed route carries its user
+        // and platform through the open, straight to user data. Never back
+        // to loading-auth, which would re-read the session file on disk.
+        if (state.user && state.platform) {
+          return {
+            status: "loading",
+            phase: "loading-user-data",
+            progress: 75,
+            user: state.user,
+            platform: state.platform,
+            database: "initialized",
+          };
+        }
+        // Startup open (no user yet) -> load auth.
         return {
           status: "loading",
           phase: "loading-auth",
@@ -317,6 +331,17 @@ export function appStateReducer(
       // BACKLOG-3673: every signed-in account loads its data (see AUTH_LOADED).
       // Store user/platform in loading state for Phase 4 to use.
       // BACKLOG-3321: carry the database fact recorded on Login.
+      // BACKLOG-3555: the database is not open ("not-initialized" or
+      // "unknown") -> open it first, as the user who just signed in.
+      if (!isDatabaseInitialized(state.database)) {
+        return {
+          status: "loading",
+          phase: "initializing-db",
+          user: action.user,
+          platform: action.platform,
+          database: state.database,
+        };
+      }
       return {
         status: "loading",
         phase: "loading-user-data",

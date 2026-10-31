@@ -193,8 +193,8 @@ function tree(initial: AppState, withSignIn = false) {
 }
 
 const loadingUserData = (): AppState =>
-  ({ status: "loading", phase: "loading-user-data", user: USER, platform: PLATFORM }) as AppState;
-const relaunch = (): AppState => ({ status: "loading", phase: "checking-storage" }) as AppState;
+  ({ status: "loading", phase: "loading-user-data", user: USER, platform: PLATFORM, database: "initialized" }) as AppState;
+const relaunch = (): AppState => ({ status: "loading", phase: "checking-storage", database: "unknown" }) as AppState;
 
 const TITLE = "Couldn't load your account settings";
 const findTitle = () => screen.findByText(TITLE, undefined, { timeout: 3000 });
@@ -282,7 +282,7 @@ describe("BACKLOG-3673 — the record could not be read: Retry / Sign out, never
 
   it("R6 Sign out with a session token -> auth.logout(token), then the sign-in screen", async () => {
     mockApi.user.getAccountSetup!.mockResolvedValue(ok("unknown"));
-    render(tree({ status: "unauthenticated" } as AppState, true));
+    render(tree({ status: "unauthenticated", database: "initialized" } as AppState, true));
     await act(async () => {
       signIn!({
         accessToken: "tok-3673",
@@ -334,7 +334,7 @@ describe("BACKLOG-3673 — the record could not be read: Retry / Sign out, never
         status: "error",
         error: { code: "DB_INIT_FAILED", message: "db init failed" },
         recoverable: true,
-        previousState: { status: "loading", phase: "checking-storage" },
+        previousState: { status: "loading", phase: "checking-storage", database: "unknown" },
       } as AppState),
     );
     expect(await screen.findByText("Something went wrong")).toBeInTheDocument();
