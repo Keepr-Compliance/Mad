@@ -19,6 +19,7 @@ import {
   parseOpenedAt,
   requiredProgressText,
 } from "../panelFormat";
+import * as dateFormatters from "../../../../utils/dateFormatters";
 import { normalizeDbTimestamp } from "../../../../utils/dateFormatters";
 
 describe("daysUntilClosing / closingBadge (C15)", () => {
@@ -60,6 +61,20 @@ describe("daysUntilClosing / closingBadge (C15)", () => {
     expect(closingBadge(daysUntilClosing("2026-10-31", localDay(justAfterMidnight)))?.label).toBe("Overdue");
     expect(closingBadge(daysUntilClosing("2026-11-01", localDay(lateEvening)))?.label).toBe("1 d");
   });
+
+  it("'today' reads the local calendar fields, not the UTC ones (any runner)", () => {
+    // 23:30 on Oct 31 at UTC-6 is 05:30 UTC on Nov 1. A stub keeps the two
+    // apart even on a UTC runner, where a real Date cannot.
+    const stub = {
+      getFullYear: () => 2026,
+      getMonth: () => 9,
+      getDate: () => 31,
+      getUTCFullYear: () => 2026,
+      getUTCMonth: () => 10,
+      getUTCDate: () => 1,
+    } as unknown as Date;
+    expect(localDay(stub)).toBe("2026-10-31");
+  });
 });
 
 describe("opened_at is ISO UTC, never local time", () => {
@@ -82,6 +97,13 @@ describe("opened_at is ISO UTC, never local time", () => {
     ["2026-10-28T10:00:00.000Z", "3d ago"],
   ])("%s -> %s at 10:00:59Z", (openedAt, expected) => {
     expect(openedAgo(openedAt, new Date("2026-10-31T10:00:59.000Z"))).toBe(expected);
+  });
+
+  it("goes through parseDbTimestamp, the UTC-safe parser (reds on any runner)", () => {
+    const spy = jest.spyOn(dateFormatters, "parseDbTimestamp");
+    parseOpenedAt(producerShape);
+    expect(spy).toHaveBeenCalledWith(producerShape);
+    spy.mockRestore();
   });
 
   it("unparseable -> empty text, never 'NaN'", () => {
