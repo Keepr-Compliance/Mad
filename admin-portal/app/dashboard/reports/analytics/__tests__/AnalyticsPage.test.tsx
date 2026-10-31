@@ -106,6 +106,7 @@ describe('T6 page wiring', () => {
     cleanup();
     m = await renderPage({ period: 'custom', from: '2026-01-01', to: '2026-01-02' });
     expect(m).toContain('Last 30 days');
+    expect(tile(m, 'active_users')).toBe('6');
     cleanup();
     await renderPage({ period: 'all' });
     expect(db.calls.filter((c) => c.method === 'gte')).toEqual([]);
