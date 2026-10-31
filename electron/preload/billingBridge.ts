@@ -6,7 +6,12 @@
  */
 
 import { ipcRenderer } from "electron";
-import type { OpenBillingPortalResult, PlanSummaryResult } from "../types/billing";
+import type {
+  AgentPricesResult,
+  OpenBillingPortalResult,
+  OpenBookCallResult,
+  PlanSummaryResult,
+} from "../types/billing";
 
 export const billingBridge = {
   /** Open the portal Billing page in the browser. */
@@ -17,4 +22,10 @@ export const billingBridge = {
 
   /** After a return from the portal: drop cached plan answers, re-read the summary. */
   refresh: (): Promise<PlanSummaryResult> => ipcRenderer.invoke("billing:refresh"),
+
+  /** BACKLOG-3676: the Agent plan monthly price for the export paywall. */
+  getAgentPrices: (): Promise<AgentPricesResult> => ipcRenderer.invoke("billing:agent-prices"),
+
+  /** BACKLOG-3676: open the booking page. Sends no arguments: main reads the URL. */
+  openBookCall: (): Promise<OpenBookCallResult> => ipcRenderer.invoke("billing:open-book-call"),
 };
