@@ -106,7 +106,7 @@ The Mad application uses:
    - Click "+ ADD USERS"
    - Add your email address and any testers
    - **IMPORTANT**: While your app is in "Testing" mode, ONLY users added here can sign in
-   - Add all users who will test the app (e.g., danielxhaim@gmail.com, support@keeprcompliance.com)
+   - Add all users who will test the app (e.g., <your-google-account>, support@keeprcompliance.com)
    - Click "SAVE AND CONTINUE"
 7. Click "BACK TO DASHBOARD"
 
