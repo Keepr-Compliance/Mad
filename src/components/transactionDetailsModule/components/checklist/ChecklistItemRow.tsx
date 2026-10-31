@@ -186,6 +186,8 @@ export function ChecklistItemRow({
                 onViewAttachment={viewer.onViewAttachment}
                 downloadingAttachmentId={viewer.downloadingAttachmentId}
                 onViewThread={viewer.onViewThread}
+                onViewText={viewer.onViewText}
+                textContactNames={viewer.textContactNames}
                 onRemove={onRemoveLink}
               />
             ))}

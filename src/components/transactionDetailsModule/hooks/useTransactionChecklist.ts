@@ -86,6 +86,11 @@ export interface UseTransactionChecklistResult {
   addChecklist: (templateId: string) => Promise<ApiResult<SelectChecklistTemplateResult>>;
   /** Link each request as its own group, in order, then reload once. */
   addLinks: (itemId: string, requests: ChecklistLinkRequest[]) => Promise<ChecklistLinkOutcome[]>;
+  /**
+   * BACKLOG-3968 U2: link these texts (`messages.id`) as ONE group, then
+   * reload once. Main's refusal (a locked deal: `dealLocked`) is passed through.
+   */
+  linkTexts: (itemId: string, messageIds: readonly string[]) => Promise<ChecklistWriteApiResult<AddChecklistLinkResult>>;
   removeLink: (linkId: string) => Promise<ApiResult<boolean>>;
   /** Take one checklist off the transaction. Never gated in main. */
   removeChecklist: (checklistId: string) => Promise<ApiResult<boolean>>;
@@ -254,6 +259,12 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
     [afterWrite],
   );
 
+  const linkTexts = useCallback(
+    (itemId: string, messageIds: readonly string[]) =>
+      afterWrite(currentIdRef.current, () => checklistService.linkText(itemId, messageIds)),
+    [afterWrite],
+  );
+
   const removeLink = useCallback(
     (linkId: string) => afterWrite(currentIdRef.current, () => checklistService.removeLink(linkId)),
     [afterWrite],
@@ -316,6 +327,7 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
     setItemNote,
     addChecklist,
     addLinks,
+    linkTexts,
     removeLink,
     removeChecklist,
     addMyItem,
