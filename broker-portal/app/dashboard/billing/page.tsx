@@ -239,6 +239,8 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
     interval: view.row?.interval ?? null,
     currentPeriodEnd: view.row?.current_period_end ?? null,
     supportGrantEffective: view.supportGrantEffective,
+    trialEndsOn: view.trialEndsOn,
+    trialEndedOn: view.trialEndedOn,
     prices,
     checkout: checkout === 'success' || checkout === 'cancelled' ? checkout : null,
     sessionId: one(sp.session_id),

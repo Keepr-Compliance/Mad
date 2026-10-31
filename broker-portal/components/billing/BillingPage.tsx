@@ -36,6 +36,10 @@ export interface PersonalPlanData {
   interval: string | null;
   currentPeriodEnd: string | null;
   supportGrantEffective: boolean;
+  /** BACKLOG-3860: state 'trial' only, when the free trial ends (ISO). */
+  trialEndsOn?: string | null;
+  /** BACKLOG-3860: state 'none' only, when an ended free trial ended (ISO). */
+  trialEndedOn?: string | null;
   prices: { month?: PlanPrice; year?: PlanPrice };
   checkout: 'success' | 'cancelled' | null;
   sessionId: string | null;
