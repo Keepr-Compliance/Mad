@@ -93,6 +93,19 @@ describe('O3 clearing Organization keeps the other filters', () => {
   });
 });
 
+describe('O7 picking Organization keeps a filter set before it', () => {
+  it('search alice first, then Acme Realty: both apply (Acme alone is Alice and Bob)', () => {
+    mount();
+    fireEvent.change(screen.getByLabelText('Search by name or email'), { target: { value: 'alice' } });
+    expect(rowIds()).toEqual([ALICE]);
+
+    pickOrg('Acme Realty');
+    expect(orgTrigger().textContent).toContain('Organization (1)');
+    expect((screen.getByLabelText('Search by name or email') as HTMLInputElement).value).toBe('alice');
+    expect(rowIds()).toEqual([ALICE]);
+  });
+});
+
 describe('O6 the pill follows the report filters, not a local copy', () => {
   it('the bar-level Clear filters empties the Organization pill and its rows', () => {
     mount();

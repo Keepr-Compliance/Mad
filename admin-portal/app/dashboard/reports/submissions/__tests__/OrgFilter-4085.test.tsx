@@ -99,6 +99,23 @@ describe('O3 clearing Organization keeps the Outcome filter', () => {
   });
 });
 
+describe('O7 picking Organization keeps a filter set before it', () => {
+  it('Outcome Failed first, then Office A: both apply (the intersection, 3 rows)', () => {
+    const { container } = mount();
+    fireEvent.click(screen.getAllByRole('button', { name: /^Outcome/ })[0]);
+    fireEvent.click(screen.getByText('Failed', { selector: 'label span' }));
+    // FAILED, REFUSED, UNKNOWN_CODES carry status "failed", all in Office A.
+    expect(rowIds(container)).toHaveLength(3);
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    pickOrg('Office A');
+    expect(orgTrigger().textContent).toContain('Organization (1)');
+    // Outcome still applied: Office A alone would be 9 rows.
+    expect(screen.getAllByRole('button', { name: /^Outcome/ })[0].textContent).toContain('Outcome (1)');
+    expect(rowIds(container)).toHaveLength(3);
+  });
+});
+
 describe('O6 the pill follows the report filters, not a local copy', () => {
   it('the bar-level Clear filters empties the Organization pill and its rows', () => {
     const { container } = mount();
