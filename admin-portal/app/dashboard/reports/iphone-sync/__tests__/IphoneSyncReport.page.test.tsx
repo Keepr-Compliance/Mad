@@ -74,6 +74,7 @@ const DEFAULT_ROW = {
 
 const LAST_MONTH_LABEL = resolvePeriod({ period: 'last-month' }, NOW).label;
 const WEEK_LABEL = resolvePeriod({ period: 'week' }, NOW).label;
+const CUSTOM_LABEL = resolvePeriod({ period: 'custom', from: '2026-09-01', to: '2026-09-15' }, NOW).label;
 
 async function renderPage(params: Record<string, string> = {}) {
   render(await Page({ searchParams: Promise.resolve(params) }));
@@ -99,6 +100,8 @@ afterEach(() => {
 describe('iPhone Sync page opens the default view', () => {
   it('guards: the two period labels differ', () => {
     expect(LAST_MONTH_LABEL).not.toBe(WEEK_LABEL);
+    expect(CUSTOM_LABEL).not.toBe(WEEK_LABEL);
+    expect(CUSTOM_LABEL).not.toBe(LAST_MONTH_LABEL);
   });
 
   it('a) bare URL: the default view sets the period and the filters', async () => {
@@ -133,5 +136,14 @@ describe('iPhone Sync page opens the default view', () => {
     const pageLogs = spy.mock.calls.filter((c) => String(c[0]).includes('saved views read failed'));
     expect(pageLogs).toHaveLength(1);
     expect(spy.mock.calls.map((c) => c.join(' ')).join('\n')).not.toContain('secret-user@example.com');
+  });
+
+  it('d) bare URL: a default view with a custom date range keeps both dates and the filter', async () => {
+    state.views = [{ ...DEFAULT_ROW, filters: { ...DEFAULT_ROW.filters, period: { key: 'custom', from: '2026-09-01', to: '2026-09-15' } } }];
+    await renderPage();
+    expect(state.listCalls).toBe(1);
+    expect(caption()).toContain(CUSTOM_LABEL);
+    expect(caption()).not.toContain(WEEK_LABEL);
+    expect(caption()).toContain('outcome: error');
   });
 });
