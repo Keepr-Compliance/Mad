@@ -26,6 +26,7 @@ import type {
   ListChecklistTemplatesResult,
   OpenChecklistsPortalResult,
 } from "../types/ipc/window-api-checklists";
+import type { ListOpenRequiredChecklistItemsResult } from "../types/checklistTodo";
 
 export const checklistBridge = {
   /**
@@ -116,4 +117,14 @@ export const checklistBridge = {
   /** BACKLOG-3617: open the portal Checklists page. No URL crosses the bridge. */
   openTemplatesPortal: (): Promise<OpenChecklistsPortalResult> =>
     ipcRenderer.invoke("checklists:open-templates-portal"),
+
+  /**
+   * BACKLOG-3965 PR-3: the Dashboard's Todo list — required, unticked items on
+   * this user's active, unlocked deals. Gated in main.
+   */
+  listOpenRequired: (args: {
+    userId: string;
+    limit?: number;
+  }): Promise<ListOpenRequiredChecklistItemsResult> =>
+    ipcRenderer.invoke("checklists:list-open-required", args),
 };

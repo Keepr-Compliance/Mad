@@ -26,6 +26,7 @@ import type {
   ChecklistTemplateSource,
   SelectChecklistTemplateResult,
 } from "../checklist";
+import type { ListOpenRequiredChecklistItemsResult } from "../checklistTodo";
 
 /**
  * The one declaration of the `checklists:list-templates` answer (BACKLOG-3476).
@@ -117,4 +118,13 @@ export interface WindowApiChecklists {
    * URL — main builds it and refuses anything that is not the portal origin.
    */
   openTemplatesPortal: () => Promise<OpenChecklistsPortalResult>;
+  /**
+   * BACKLOG-3965 PR-3: the Dashboard's Todo list. Gated: a plan without
+   * checklists is `success: false`. An empty list is `success: true` with
+   * `items: []` and `totalCount: 0`.
+   */
+  listOpenRequired: (args: {
+    userId: string;
+    limit?: number;
+  }) => Promise<ListOpenRequiredChecklistItemsResult>;
 }

@@ -186,6 +186,15 @@ export const RemoveChecklistLinkArgsSchema = z.object({
   linkId: UuidSchema,
 });
 
+/**
+ * BACKLOG-3965 PR-3: the Dashboard's Todo list. `limit` is 1..50 (the db
+ * service's cap); absent means the handler's default.
+ */
+export const ListOpenRequiredChecklistItemsArgsSchema = z.object({
+  userId: UuidSchema,
+  limit: z.number().int().min(1).max(50).optional(),
+});
+
 export type SelectChecklistTemplateArgs = z.infer<typeof SelectChecklistTemplateArgsSchema>;
 export type GetChecklistArgs = z.infer<typeof GetChecklistArgsSchema>;
 export type RemoveChecklistArgs = z.infer<typeof RemoveChecklistArgsSchema>;
@@ -195,4 +204,7 @@ export type AddChecklistLinkArgs = z.infer<typeof AddChecklistLinkArgsSchema>;
 export type RemoveChecklistLinkArgs = z.infer<typeof RemoveChecklistLinkArgsSchema>;
 export type IncludeChecklistLinkOutsideDatesArgs = z.infer<
   typeof IncludeChecklistLinkOutsideDatesArgsSchema
+>;
+export type ListOpenRequiredChecklistItemsArgs = z.infer<
+  typeof ListOpenRequiredChecklistItemsArgsSchema
 >;
