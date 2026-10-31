@@ -30,7 +30,7 @@ interface HarnessProps {
 function setup({ initial = ['b'], withClear = true }: HarnessProps = {}) {
   const onChange = jest.fn();
   const onClear = jest.fn();
-  function Harness() {
+  function Harness({ options = ORGS }: { options?: DropdownOption[] }) {
     const [value, setValue] = React.useState<string[]>(initial);
     return (
       <>
@@ -38,7 +38,7 @@ function setup({ initial = ['b'], withClear = true }: HarnessProps = {}) {
           mode="multi"
           variant="filter"
           ariaLabel="Organization"
-          options={ORGS}
+          options={options}
           value={value}
           onChange={(next) => {
             onChange(next);
@@ -57,8 +57,9 @@ function setup({ initial = ['b'], withClear = true }: HarnessProps = {}) {
       </>
     );
   }
-  render(<Harness />);
-  return { onChange, onClear };
+  const utils = render(<Harness />);
+  const setOptions = (options: DropdownOption[]) => utils.rerender(<Harness options={options} />);
+  return { onChange, onClear, setOptions };
 }
 
 const pill = () => screen.getAllByRole('button', { name: /^Organization/ })[0];
@@ -203,6 +204,18 @@ describe('Dropdown mode="multi"', () => {
     expect(input).not.toHaveAttribute('aria-activedescendant');
     key(input, 'Enter');
     expect(onChange).toHaveBeenCalledTimes(0);
+  });
+
+  it('M7b options shrink while open: Enter toggles a PRESENT row, never the removed active one', () => {
+    const { onChange, setOptions } = setup();
+    const input = openIt();
+    key(input, 'ArrowDown');
+    expect(activeLabel()).toBe('Cedar');
+    setOptions(ORGS.filter((o) => o.value !== 'c'));
+    expect(activeLabel()).toBe('Acme');
+    key(search(), 'Enter');
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenLastCalledWith(['b', 'a']);
   });
 
   it('M8 listbox is aria-multiselectable; every option has aria-selected true or false; single has neither flag', () => {
