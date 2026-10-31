@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { BarChart3, ChevronLeft } from 'lucide-react';
 import { getAnalyticsData } from '@/lib/reports/analytics-queries';
 import { resolveAnalyticsPeriod } from '@/lib/reports/analytics-period';
+import { ANALYTICS_REPORT_KEY, analyticsViews } from '@/lib/reports/period-only-views';
+import type { ParamRecord } from '@/lib/reports/report-url';
 import { MAX_PAGES, PAGE_SIZE } from '@/lib/reports/fetch-all-pages';
 import { REPORTS_BASE_PATH } from '@/lib/reports/registry';
 import { AnalyticsReportClient } from './AnalyticsReportClient';
@@ -22,7 +24,7 @@ export const dynamic = 'force-dynamic';
 export default async function AnalyticsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ period?: string }>;
+  searchParams: Promise<ParamRecord>;
 }) {
   const { supabase, user } = await getAuthenticatedUser();
 
@@ -51,10 +53,18 @@ export default async function AnalyticsPage({
   }
 
   const params = await searchParams;
-  const period = resolveAnalyticsPeriod(
-    { period: typeof params.period === 'string' ? params.period : undefined },
-    new Date()
-  );
+  // A bare URL opens the user's default view (its time range); any period
+  // param in the URL wins and the views are not read here at all (BACKLOG-4084).
+  const { periodInput } = await analyticsViews.resolveInitial(params, async () => {
+    const { data, error } = await supabase.rpc('report_list_saved_views', { p_report_key: ANALYTICS_REPORT_KEY });
+    if (error) {
+      // The message names the stage only; the error text can carry user data.
+      console.error('[analytics] saved views read failed; opening without a default view');
+      throw error;
+    }
+    return data;
+  });
+  const period = resolveAnalyticsPeriod({ period: periodInput.period }, new Date());
   const data = await getAnalyticsData(supabase, period.fromIso);
 
   return (

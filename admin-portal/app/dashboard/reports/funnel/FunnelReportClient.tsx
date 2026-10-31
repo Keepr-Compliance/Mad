@@ -6,9 +6,12 @@
  */
 
 import { useRouter } from 'next/navigation';
+import { funnelViewsApi } from '@/lib/reports/period-only-views-api';
 import { FunnelReport, type FunnelReportProps } from './FunnelReport';
 
-export function FunnelReportClient(props: Omit<FunnelReportProps, 'onNavigate'>) {
+export function FunnelReportClient(props: Omit<FunnelReportProps, 'onNavigate' | 'viewsApi'>) {
   const router = useRouter();
-  return <FunnelReport {...props} onNavigate={(url) => router.push(url, { scroll: false })} />;
+  return (
+    <FunnelReport {...props} onNavigate={(url) => router.push(url, { scroll: false })} viewsApi={funnelViewsApi} />
+  );
 }
