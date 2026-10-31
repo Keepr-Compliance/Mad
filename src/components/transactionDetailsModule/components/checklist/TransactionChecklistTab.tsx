@@ -65,6 +65,8 @@ import { ChecklistTemplateChooser } from "./ChecklistTemplateChooser";
 import { ChecklistProgress } from "./ChecklistProgress";
 import { ChecklistSection } from "./ChecklistSection";
 import { ChecklistLinkPicker } from "./ChecklistLinkPicker";
+import { ChecklistTextConversation } from "./ChecklistTextConversation";
+import { textChipMessageId, useChecklistTextNames } from "../../hooks/useChecklistTexts";
 import { linkableThreads, threadForLink } from "../../utils/checklistLinks";
 
 export interface TransactionChecklistTabProps {
@@ -111,6 +113,7 @@ export function TransactionChecklistTab({
   // The Emails tab's source for "You" in a thread (TransactionEmailsTab).
   const { currentUser } = useAuth();
   const userEmail = currentUser?.email;
+  const userId = currentUser?.id;
   // The plan's read-only (gate) and the deal's (lock) are separate: the plan's
   // keeps Remove (the unhide rule), the lock refuses every write.
   const planReadOnly = gate !== "allowed";
@@ -174,6 +177,14 @@ export function TransactionChecklistTab({
     () => (viewingLink ? threadForLink(viewingLink, emailCommunications) : null),
     [viewingLink, emailCommunications],
   );
+  // BACKLOG-3968 U2: a text chip's View opens its conversation; its name is looked up.
+  const transactionId = details[0]?.checklist.transactionId;
+  const [viewingTextId, setViewingTextId] = useState<string | null>(null);
+  const allLinks = useMemo(
+    () => details.flatMap((d) => Object.values(d.linksByItemId).flat()),
+    [details],
+  );
+  const textContactNames = useChecklistTextNames(transactionId, userId, allLinks);
   const viewer = useMemo<ChecklistLinkViewer>(
     () => ({
       onViewAttachment: (attachment) => void openAttachment(attachment),
@@ -182,9 +193,12 @@ export function TransactionChecklistTab({
         await ensureEmailsLoaded();
         setViewingLink(link);
       },
+      onViewText: (link) => setViewingTextId(textChipMessageId(link)),
+      textContactNames,
     }),
-    [openAttachment, downloadingId, ensureEmailsLoaded],
+    [openAttachment, downloadingId, ensureEmailsLoaded, textContactNames],
   );
+  const closeTextView = useCallback(() => setViewingTextId(null), []);
 
   const attachmentsById = useMemo(() => new Map(attachments.map((a) => [a.id, a])), [attachments]);
   const threads = useMemo(() => linkableThreads(emailCommunications), [emailCommunications]);
@@ -443,6 +457,16 @@ export function TransactionChecklistTab({
         />
       )}
 
+      {viewingTextId && transactionId && (
+        <ChecklistTextConversation
+          transactionId={transactionId}
+          userId={userId}
+          messageId={viewingTextId}
+          onClose={closeTextView}
+          onShowError={onShowError}
+        />
+      )}
+
       {pickerItem && pickerDetail && !readOnly && (
         <ChecklistLinkPicker
           item={pickerItem}
@@ -453,6 +477,11 @@ export function TransactionChecklistTab({
           emailCommunications={emailCommunications}
           ensureEmailsLoaded={ensureEmailsLoaded}
           onLink={(requests) => checklist.addLinks(pickerItem.id, requests)}
+          texts={{
+            transactionId: pickerDetail.checklist.transactionId,
+            userId,
+            onLink: (messageIds) => checklist.linkTexts(pickerItem.id, messageIds),
+          }}
           onRefreshTargets={onRefreshLinkTargets}
           onClose={() => setPickerItem(null)}
           onShowSuccess={onShowSuccess}
