@@ -28,6 +28,12 @@ export interface DashboardActionCardProps {
   highlighted?: boolean;
   /** Data attribute for tour targeting */
   dataTour?: string;
+  /** data-testid on the button (e2e driver markers such as nav-transactions) */
+  dataTestId?: string;
+  /** Disables the card (e.g. while a sync runs) */
+  disabled?: boolean;
+  /** Extra classes for the title (e.g. whitespace-nowrap) */
+  titleClassName?: string;
   /** Whether this is a primary (large) or secondary (smaller) card */
   variant?: "primary" | "secondary";
   /** Children to render (e.g., wrapped in LicenseGate) */
@@ -50,6 +56,9 @@ export function DashboardActionCard({
   badge,
   highlighted = false,
   dataTour,
+  dataTestId,
+  disabled = false,
+  titleClassName,
   variant = "primary",
   children,
 }: DashboardActionCardProps): React.ReactElement {
@@ -57,14 +66,20 @@ export function DashboardActionCard({
 
   // Base classes shared by both variants
   const baseClasses = [
-    "group bg-white rounded-2xl transition-all duration-300 text-left border-2 transform",
+    "group w-full bg-white rounded-2xl transition-all duration-300 text-left border-2 transform",
     isPrimary
-      ? "shadow-xl hover:shadow-2xl p-6 hover:scale-105"
-      : "bg-opacity-70 backdrop-blur shadow-lg hover:shadow-xl p-6 hover:scale-[1.02]",
-    highlighted
-      ? `border-${accentColor}-500 ring-2 ring-${accentColor}-300 ring-offset-2 hover:border-${accentColor}-600`
-      : `border-transparent hover:border-${accentColor}-${isPrimary ? "500" : "400"}`,
+      ? "shadow-xl p-6"
+      : "relative bg-opacity-70 backdrop-blur shadow-lg p-6",
+    disabled
+      ? "opacity-50 cursor-not-allowed border-transparent"
+      : [
+          isPrimary ? "hover:shadow-2xl hover:scale-105" : "hover:shadow-xl hover:scale-[1.02]",
+          highlighted
+            ? `border-${accentColor}-500 ring-2 ring-${accentColor}-300 ring-offset-2 hover:border-${accentColor}-600`
+            : `border-transparent hover:border-${accentColor}-${isPrimary ? "500" : "400"}`,
+        ].join(" "),
   ].join(" ");
+  const Heading = isPrimary ? "h2" : "h3";
 
   // Icon container size varies by variant
   const iconContainerSize = isPrimary ? "w-14 h-14" : "w-12 h-12";
@@ -73,8 +88,10 @@ export function DashboardActionCard({
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       className={baseClasses}
       data-tour={dataTour}
+      data-testid={dataTestId}
     >
       <div className="flex items-center gap-4">
         {/* Icon */}
@@ -86,11 +103,11 @@ export function DashboardActionCard({
 
         {/* Title and description */}
         <div className="flex-1">
-          <h2
-            className={`font-bold text-gray-900 ${isPrimary ? "text-xl" : "text-lg mb-1"}`}
+          <Heading
+            className={`font-bold text-gray-900 ${isPrimary ? "text-xl" : "text-lg mb-1"}${titleClassName ? ` ${titleClassName}` : ""}`}
           >
             {title}
-          </h2>
+          </Heading>
           {description && (
             <p className="text-sm text-gray-500">{description}</p>
           )}
