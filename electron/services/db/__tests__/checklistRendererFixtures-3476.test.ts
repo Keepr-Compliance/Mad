@@ -37,7 +37,9 @@
  *
  * BACKLOG-3476: the transaction carries THREE checklists, added in this order:
  *   "Probe template"        the four items above (1 of 2 required)
- *   "Other probe template"  three required items, the first ticked (1 of 3)
+ *   "Other probe template"  three required items, the first ticked (1 of 3);
+ *                           the second carries a TEXT group of the text m-1
+ *                           (BACKLOG-3968 PR-4b, written by the real writer)
  *   "Done probe template"   one required and one optional, BOTH ticked, so
  *                           `allItemsChecked` is true (it opens collapsed)
  * The envelope therefore sums to 3 of 6 required; counting optional ticks
@@ -242,6 +244,11 @@ async function produce(): Promise<unknown> {
   expect((await addChecklistLink({ itemId: i2.id, kind: "email", targetIds: ["e-thread-1", "e-thread-2"] })).status).toBe("added");
   expect((await addChecklistLink({ itemId: i3.id, kind: "email", targetIds: ["e-solo-1", "e-solo-2"] })).status).toBe("added");
   expect((await addChecklistLink({ itemId: i4.id, kind: "email", targetIds: ["e-gone"] })).status).toBe("added");
+  // BACKLOG-3968 PR-4b: a text group (the text thread above), written through
+  // the real writer, on the second checklist so the first's items keep their links.
+  expect((await addChecklistLink({ itemId: second.items[1].id, kind: "text", targetIds: ["m-1"] })).status).toBe(
+    "added",
+  );
 
   // Unlinked from the transaction AFTER being linked to the checklist: the
   // evidence survives, so the members go stale rather than vanishing.

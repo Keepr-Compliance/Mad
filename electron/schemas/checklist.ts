@@ -47,8 +47,13 @@ export const ChecklistDocumentTypeSchema = z.enum([
   'other',
 ]);
 
-/** `attachment` or `email`. Mirrors the CHECK on both sides. */
-export const ChecklistLinkKindSchema = z.enum(['attachment', 'email']);
+/**
+ * `attachment`, `email` or (BACKLOG-3968 PR-4b) `text`. Mirrors the local
+ * CHECK (migration v78). The cloud CHECK takes 'text' only after PR-5; until
+ * then a text group is withheld from the submission
+ * (`electron/services/checklistTextLinkHold.ts`), not refused here.
+ */
+export const ChecklistLinkKindSchema = z.enum(['attachment', 'email', 'text']);
 
 // ============================================
 // CLOUD ROW SCHEMAS (PostgREST -> desktop)
@@ -168,13 +173,20 @@ export const SetChecklistItemNoteArgsSchema = z.object({
  * 200 is the same bound the plan set for one group. It is a bound on a single
  * request, not on how much evidence an item may carry.
  */
-export const AddChecklistLinkArgsSchema = z.object({
-  itemId: UuidSchema,
-  kind: ChecklistLinkKindSchema,
-  targetIds: z.array(UuidSchema).min(1).max(200),
-  /** BACKLOG-3764: the agent's "Include it" to the outside-the-dates question. */
-  includeOutsideDates: z.boolean().optional(),
-});
+export const AddChecklistLinkArgsSchema = z
+  .object({
+    itemId: UuidSchema,
+    kind: ChecklistLinkKindSchema,
+    targetIds: z.array(UuidSchema).min(1).max(200),
+    /** BACKLOG-3764: the agent's "Include it" to the outside-the-dates question. */
+    includeOutsideDates: z.boolean().optional(),
+  })
+  // BACKLOG-3968: a text is never asked the outside-the-dates question (the
+  // message upload has no such arm), so an "Include it" for one is refused.
+  .refine((args) => !(args.kind === 'text' && args.includeOutsideDates === true), {
+    message: 'includeOutsideDates is not accepted for a text link',
+    path: ['includeOutsideDates'],
+  });
 
 /** BACKLOG-3764: "Include it" for an existing group, from the submit pre-flight. */
 export const IncludeChecklistLinkOutsideDatesArgsSchema = z.object({

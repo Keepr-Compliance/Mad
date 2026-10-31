@@ -41,7 +41,7 @@ import { sql } from "./core/sqlText";
 import { placeholderList } from "./core/sqlFragments";
 import { NOT_PRIVATE_CHECKLIST_SQL } from "./checklistPrivacy";
 import type { SafeSql } from "./core/sqlText";
-import type { ChecklistLinkWriteKind } from "../../types/checklist";
+import type { ChecklistLinkKind, ChecklistLinkWriteKind } from "../../types/checklist";
 
 /** Does this transaction exist? One bound parameter. */
 export const TRANSACTION_EXISTS_SQL = sql`
@@ -443,6 +443,15 @@ export const INSERT_EMAIL_MEMBER_SQL = sql`
   VALUES (?, ?, 'email', ?)
 `;
 
+/**
+ * Insert one text member (BACKLOG-3968 PR-4b). Three bound parameters: id,
+ * link id, `messages.id`.
+ */
+export const INSERT_TEXT_MEMBER_SQL = sql`
+  INSERT INTO transaction_checklist_link_members (id, link_id, kind, message_id)
+  VALUES (?, ?, 'text', ?)
+`;
+
 /** Delete one evidence group; its members follow by cascade. One bound parameter. */
 export const DELETE_CHECKLIST_LINK_SQL = sql`
   DELETE FROM transaction_checklist_links WHERE id = ?
@@ -455,6 +464,20 @@ export const DELETE_CHECKLIST_LINK_SQL = sql`
 export function emailLabelSql(count: number): SafeSql {
   return sql`
     SELECT subject FROM emails
+    WHERE id IN (${placeholderList(count)})
+    ORDER BY COALESCE(sent_at, received_at), id
+    LIMIT 1
+  `;
+}
+
+/**
+ * BACKLOG-3968 PR-4b — the date for a text group's label: the EARLIEST
+ * member's, as the email label takes the earliest member's subject. A text has
+ * no subject; the label is "Text · <date>" (the PDF export's own wording).
+ */
+export function textLabelSql(count: number): SafeSql {
+  return sql`
+    SELECT COALESCE(sent_at, received_at) AS sent_at FROM messages
     WHERE id IN (${placeholderList(count)})
     ORDER BY COALESCE(sent_at, received_at), id
     LIMIT 1
@@ -483,7 +506,15 @@ export function attachmentLabelSql(count: number): SafeSql {
  * query failed to synthesise would silently read as accepted.
  *
  * Bound parameters, in order: the N target ids, then the transaction id — once
- * for `email`, twice for `attachment` (its two arms are independent EXISTS).
+ * for `email` and `text`, twice for `attachment` (its two arms are independent
+ * EXISTS).
+ *
+ * The text arm (BACKLOG-3968 PR-4b) accepts a `messages` row when
+ * `communications` links it to THIS transaction by its id, or links its
+ * thread for the message's own user — the same two arms the submit reads texts
+ * by (`submissionDbService.getTransactionMessages`) — AND the message belongs
+ * to the deal's own user. A text on another deal, another user's copy of a
+ * linked thread, or an email-channel row is refused.
  *
  * The email arm is an email attachment's own email linked to the transaction.
  * The text arm accepts an attachment when a message linked to the transaction
@@ -499,8 +530,24 @@ export function attachmentLabelSql(count: number): SafeSql {
  * narrow an EXPORT to what can be uploaded, while this asks only whether the
  * attachment belongs to this transaction at all.
  */
-export function targetsInTransactionSql(kind: ChecklistLinkWriteKind, count: number): SafeSql {
+export function targetsInTransactionSql(kind: ChecklistLinkKind, count: number): SafeSql {
   const ids = placeholderList(count);
+  if (kind === "text") {
+    return sql`
+      SELECT DISTINCT tm.id AS id
+      FROM messages tm
+      JOIN communications c ON (
+        (c.message_id IS NOT NULL AND c.message_id = tm.id)
+        OR (c.message_id IS NULL AND c.email_id IS NULL AND c.thread_id IS NOT NULL
+            AND c.thread_id = tm.thread_id AND tm.user_id = c.user_id)
+      )
+      JOIN transactions t ON t.id = c.transaction_id
+      WHERE tm.id IN (${ids})
+        AND c.transaction_id = ?
+        AND tm.user_id = t.user_id
+        AND COALESCE(tm.channel, '') <> 'email'
+    `;
+  }
   if (kind === "email") {
     return sql`
       SELECT DISTINCT c.email_id AS id

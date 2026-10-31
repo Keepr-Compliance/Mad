@@ -1,8 +1,13 @@
 /**
  * ChecklistLinkChip — BACKLOG-3476.
  *
- * One evidence group under a checklist item: an attachment, or an email
- * thread. The label comes from main (`link.label`); nothing here derives it.
+ * One evidence group under a checklist item: an attachment, an email
+ * thread, or (BACKLOG-3968) one or more texts. The label comes from main
+ * (`link.label`, "Text · <date>" for texts); nothing here derives it.
+ *
+ * A text chip has no View yet: no text viewer is wired to the checklist. The
+ * picker's Texts tab (U2) brings one; until then the chip names the texts and
+ * can be removed.
  *
  * Staleness (SR condition 7): a group is stale only when NO member is still on
  * the transaction. A thread with some emails unlinked keeps its View, which
@@ -41,6 +46,19 @@ interface ChecklistLinkChipProps {
   /** Open this email link's live members as one thread. Resolves when it opened. */
   onViewThread: (link: ChecklistLink) => Promise<void>;
   onRemove: (linkId: string) => Promise<void>;
+  /**
+   * BACKLOG-3968: the contact name of a text member's conversation, keyed by
+   * `messages.id`, when the tab knows it. Absent or no entry: no name shown.
+   */
+  textContactNames?: ReadonlyMap<string, string>;
+}
+
+const TEXT_ICON =
+  "M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z";
+
+/** The noun a group's members are counted in (unchanged "email" for the other kinds). */
+function memberNoun(kind: ChecklistLink["kind"]): string {
+  return kind === "text" ? "text" : "email";
 }
 
 const FILE_ICON =
@@ -55,6 +73,7 @@ export function ChecklistLinkChip({
   downloadingAttachmentId,
   onViewThread,
   onRemove,
+  textContactNames,
 }: ChecklistLinkChipProps): React.ReactElement {
   const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -72,6 +91,9 @@ export function ChecklistLinkChip({
     sub = attachment
       ? `${formatFileSize(attachment.file_size_bytes)} · ${formatDate(attachment.source_date)}`
       : "";
+  } else if (link.kind === "text") {
+    const name = viewTarget?.messageId ? textContactNames?.get(viewTarget.messageId) : undefined;
+    sub = [name, plural(link.members.length, "text")].filter(Boolean).join(" · ");
   } else {
     const thread = threads.find((t) => t.emails.some((e) => e.id === viewTarget?.emailId));
     const who = thread ? thread.participants.slice(0, 2).join(", ") : "";
@@ -81,6 +103,8 @@ export function ChecklistLinkChip({
   const downloading = !!attachment && downloadingAttachmentId === attachment.id;
   const busy = downloading || openingThread;
   // An attachment chip can only open a row this transaction's list holds.
+  // A text chip has no viewer yet (U2), so it offers no View at all.
+  const hasView = link.kind !== "text";
   const canView = !stale && (link.kind === "email" || !!attachment);
 
   const view = async () => {
@@ -120,6 +144,15 @@ export function ChecklistLinkChip({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={FILE_ICON} />
           </svg>
         </span>
+      ) : link.kind === "text" ? (
+        <span
+          className="w-8 h-8 rounded-lg inline-flex items-center justify-center flex-shrink-0 text-blue-600 bg-blue-50"
+          data-testid="checklist-link-text-icon"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={TEXT_ICON} />
+          </svg>
+        </span>
       ) : (
         <span className="w-8 h-8 rounded-full inline-flex items-center justify-center flex-shrink-0 text-white font-semibold text-sm bg-gradient-to-br from-blue-500 to-indigo-600">
           {(link.label.trim()[0] ?? "?").toUpperCase()}
@@ -130,7 +163,7 @@ export function ChecklistLinkChip({
         {sub && <span className="block text-xs text-gray-400 truncate">{sub}</span>}
         {!stale && staleCount > 0 && (
           <span className="block text-xs text-gray-400 truncate" data-testid="checklist-link-partly-stale">
-            {staleCount} of {plural(link.members.length, "email")} no longer on this transaction
+            {staleCount} of {plural(link.members.length, memberNoun(link.kind))} no longer on this transaction
           </span>
         )}
       </span>
@@ -139,7 +172,7 @@ export function ChecklistLinkChip({
           Thread
         </span>
       )}
-      {!stale && (
+      {!stale && hasView && (
         <button
           type="button"
           onClick={() => void view()}

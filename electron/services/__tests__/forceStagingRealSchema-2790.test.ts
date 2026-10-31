@@ -67,6 +67,12 @@ function loadSchema(db: DatabaseType, sqlPath: string): void {
   // migration runner does.
   db.pragma("foreign_keys = OFF");
   db.exec(fs.readFileSync(sqlPath, "utf8"));
+  // BACKLOG-3968 PR-4b: the force set spares checklist text members, so it
+  // reads this table. Every database the importer runs on has passed the
+  // checklist migrations; the 2026-01-26 shape predates them.
+  db.exec(
+    "CREATE TABLE IF NOT EXISTS transaction_checklist_link_members (id TEXT PRIMARY KEY, message_id TEXT)",
+  );
   db.pragma("foreign_keys = ON");
 }
 
