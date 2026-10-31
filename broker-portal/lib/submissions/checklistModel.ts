@@ -15,14 +15,14 @@
 export type ChecklistViewer = 'reviewer' | 'agent';
 
 export interface ChecklistLinkMember {
-  kind: 'attachment' | 'email' | string;
+  kind: 'attachment' | 'email' | 'text' | string;
   submissionAttachmentId: string | null;
   submissionMessageId: string | null;
 }
 
 export interface ChecklistLink {
   id: string;
-  kind: 'attachment' | 'email' | string;
+  kind: 'attachment' | 'email' | 'text' | string;
   label: string;
   members: ChecklistLinkMember[];
 }
@@ -177,10 +177,12 @@ export interface TemplateOption {
   name: string;
 }
 
-/** Documents and emails linked to one checklist on this version (BACKLOG-3607). */
+/** Documents, emails and texts linked to one checklist on this version (BACKLOG-3607, texts BACKLOG-3968). */
 export interface LinkedCounts {
   documents: number;
   emails: number;
+  /** BACKLOG-3968: absent on counts read from before texts could be linked. */
+  texts?: number;
 }
 
 /**
@@ -198,6 +200,7 @@ export function linkedEvidenceCounts(
 ): LinkedCounts {
   const documents = new Set<string>();
   const emails = new Set<string>();
+  const texts = new Set<string>();
   for (const item of section.items) {
     for (const link of item.links) {
       for (const m of link.members) {
@@ -208,10 +211,11 @@ export function linkedEvidenceCounts(
         if (!key) continue;
         if (m.kind === 'attachment') documents.add(key);
         else if (m.kind === 'email') emails.add(key);
+        else if (m.kind === 'text') texts.add(key);
       }
     }
   }
-  return { documents: documents.size, emails: emails.size };
+  return { documents: documents.size, emails: emails.size, texts: texts.size };
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

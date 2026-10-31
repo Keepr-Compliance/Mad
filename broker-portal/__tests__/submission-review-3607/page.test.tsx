@@ -269,8 +269,8 @@ describe('review page wiring (BACKLOG-3607)', () => {
   it('confirm counts per checklist: distinct local ids, none without one, emails apart', async () => {
     const props = findProps<ChecklistReviewProps>(await renderPage(), ChecklistReview)!;
     expect(props.linkedCounts).toEqual({
-      [HDR_LIVE]: { documents: 1, emails: 1 },
-      [HDR_REMOVED]: { documents: 1, emails: 0 },
+      [HDR_LIVE]: { documents: 1, emails: 1, texts: 0 },
+      [HDR_REMOVED]: { documents: 1, emails: 0, texts: 0 },
     });
   });
 
@@ -291,8 +291,8 @@ describe('review page wiring (BACKLOG-3607)', () => {
     const el = await renderPage();
     const props = findProps<ChecklistReviewProps>(el, ChecklistReview)!;
     expect(props.linkedCounts).toEqual({
-      [HDR_LIVE]: { documents: 1, emails: 4 },
-      [HDR_REMOVED]: { documents: 1, emails: 0 },
+      [HDR_LIVE]: { documents: 1, emails: 4, texts: 0 },
+      [HDR_REMOVED]: { documents: 1, emails: 0, texts: 0 },
     });
     // The page shows every message, not the first block.
     expect(props.messages.map((m) => m.id).sort()).toEqual(['msg-1', 'msg-2', 'msg-3', 'msg-4']);

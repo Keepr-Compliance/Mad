@@ -1,0 +1,30 @@
+# BACKLOG-4084 keepr-test controls, 2026-10-31, migration md5 249392fe
+# 1) before the apply: ./run.sh base,no_owner,no_report_check,no_clear,oracle,no_guard,list_no_flag,list_no_isolation,save_clears_default,no_unique_index,grant_anon,grant_public,no_definer --with-migration
+#    one transaction ending in RAISE; afterwards is_default column absent, report_set_default_view absent,
+#    0 p4084 fixtures, report_list_saved_views md5 eecb332c (unchanged, equal to production)
+#    base 18/18 PASS; mutation reds identical to the run below
+# 2) migration applied on keepr-test (file + schema_migrations row 20261031180000);
+#    report_set_default_view + report_list_saved_views definitions md5 7936c54b
+# ./run.sh <same modes>
+base {
+ "fail": 0,
+ "pass": 18,
+ "reds": {},
+ "mutation": "none"
+}
+oracle {"fail": 4, "pass": 14, "reds": ["C12_reapply_idempotent", "C4a_cross_user_set_refused", "C5_other_report_refused", "C6_no_existence_oracle"], "mutation": "MUTATION APPLIED RAISE EXCEPTION 'Saved view not found'; -> RAISE EXCEPTION 'Saved view not found: %', (SELECT CASE WHEN EXISTS (S"}
+no_clear {"fail": 8, "pass": 10, "reds": ["C12_reapply_idempotent", "C2_second_set_moves", "C3_save_keeps_default", "C4a_cross_user_set_refused", "C4c_clear_scoped_to_caller", "C5_other_report_refused", "C7_two_defaults_impossible", "C8_clear"], "mutation": "MUTATION APPLIED AND v.is_default AND (p_id IS NULL OR v.id <> p_id); -> AND v.is_default AND false;"}
+no_guard {"fail": 2, "pass": 16, "reds": ["C12_reapply_idempotent", "C9_non_internal_refused"], "mutation": "MUTATION APPLIED IF v_caller_id IS NULL OR NOT EXISTS ( SELECT 1 FROM internal_roles ir -> IF false THEN"}
+no_owner {"fail": 4, "pass": 14, "reds": ["C12_reapply_idempotent", "C4a_cross_user_set_refused", "C6_no_existence_oracle", "C7_two_defaults_impossible"], "mutation": "MUTATION APPLIED WHERE v.id = p_id AND v.user_id = v_caller_id AND v.report_key = p_rep -> WHERE v.id = p_id AND v.report_key = p_report_key ) THEN | MUTATION APPLIED WHERE v.id = p_id AND v.user_id = v_caller_id AND v.report_key = p_rep -> WHERE v.id = p_id AND v.report_key = p_report_key AND NOT v.is_default"}
+grant_anon {"fail": 3, "pass": 15, "reds": ["C10a_anon_set_denied", "C11_catalog", "C12_reapply_idempotent"], "mutation": "MUTATION APPLIED GRANT EXECUTE TO anon [{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres,anon=X/postgres} definer=true cfg={search_path=public}]"}
+no_definer {"fail": 11, "pass": 7, "reds": ["C11_catalog", "C12_reapply_idempotent", "C1a_set_ok", "C1b_list_flags", "C2_second_set_moves", "C3_save_keeps_default", "C4a_cross_user_set_refused", "C4c_clear_scoped_to_caller", "C5_other_report_refused", "C7_two_defaults_impossible", "C8_clear"], "mutation": "MUTATION APPLIED SECURITY INVOKER [{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres} definer=false cfg={search_path=public}]"}
+grant_public {"fail": 3, "pass": 15, "reds": ["C10b_anon_list_denied", "C11_catalog", "C12_reapply_idempotent"], "mutation": "MUTATION APPLIED GRANT EXECUTE TO PUBLIC [{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres,=X/postgres} definer=true cfg={search_path=public}]"}
+list_no_flag {"fail": 3, "pass": 15, "reds": ["C12_reapply_idempotent", "C1b_list_flags", "C4b_cross_user_list_isolated"], "mutation": "MUTATION APPLIED 'is_default', v.is_default,  -> "}
+no_report_check {"fail": 4, "pass": 14, "reds": ["C12_reapply_idempotent", "C5_other_report_refused", "C6_no_existence_oracle", "C7_two_defaults_impossible"], "mutation": "MUTATION APPLIED AND v.user_id = v_caller_id AND v.report_key = p_report_key ) THEN -> AND v.user_id = v_caller_id ) THEN"}
+no_unique_index {"fail": 1, "pass": 17, "reds": ["C7_two_defaults_impossible"], "mutation": "MUTATION APPLIED index report_saved_views_one_default removed"}
+list_no_isolation {"fail": 3, "pass": 15, "reds": ["C12_reapply_idempotent", "C1b_list_flags", "C4b_cross_user_list_isolated"], "mutation": "MUTATION APPLIED WHERE v.user_id = v_caller_id AND v.report_key -> WHERE v.report_key"}
+save_clears_default {"fail": 5, "pass": 13, "reds": ["C3_save_keeps_default", "C4a_cross_user_set_refused", "C4c_clear_scoped_to_caller", "C5_other_report_refused", "C7_two_defaults_impossible"], "mutation": "MUTATION APPLIED pinned = p_pinned, updated_at = now() -> pinned = p_pinned, is_default = false, updated_at = now()"}
+# C12 reds in every function mutation mode by design: re-applying the migration replaces the mutated function.
+# save_clears_default mutates report_save_view, which the migration does not replace, so C12 stays green there.
+# no_unique_index: C7 is the only control that sees the index; the RPC itself clears before it sets.
+# no_definer: authenticated has no UPDATE on the table, so every write through the RPC fails; C11 is the catalog check.

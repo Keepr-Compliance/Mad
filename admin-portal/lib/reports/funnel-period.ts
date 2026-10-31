@@ -105,7 +105,8 @@ export function resolveFunnelPeriod(
 
 /**
  * The URL a period change navigates to. It COPIES the current params and
- * drops `period` at the funnel default (`30`), not the shared report default.
+ * always writes `period`, the funnel default (`30`) included: a URL with no
+ * period opens with the user's default saved view (BACKLOG-4084).
  */
 export function buildFunnelPeriodUrl(
   current: URLSearchParams | string,
@@ -115,8 +116,7 @@ export function buildFunnelPeriodUrl(
 ): string {
   const params = new URLSearchParams(typeof current === 'string' ? current : current.toString());
 
-  if (period === DEFAULT_FUNNEL_PERIOD) params.delete('period');
-  else params.set('period', period);
+  params.set('period', period);
 
   if (period === 'custom') {
     if (from) params.set('from', from);

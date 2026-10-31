@@ -8,7 +8,7 @@
  */
 
 import { Search } from 'lucide-react';
-import { FilterBar, MultiSelect, PeriodPicker } from '@keepr/ui';
+import { Dropdown, FilterBar, MultiSelect, PeriodPicker } from '@keepr/ui';
 import { PERIOD_OPTIONS, type PeriodKey, type PeriodRange } from '@/lib/reports/period';
 import type { SubmissionFilters } from '@/lib/reports/submissions';
 
@@ -64,11 +64,14 @@ export function SubmissionFilterBar({
         selected={filters.statuses}
         onChange={(statuses) => onFiltersChange({ ...filters, statuses })}
       />
-      <MultiSelect
-        label="Organization"
+      <Dropdown
+        mode="multi"
+        variant="filter"
+        ariaLabel="Organization"
         options={orgOptions}
-        selected={filters.orgs}
+        value={filters.orgs}
         onChange={(orgs) => onFiltersChange({ ...filters, orgs })}
+        onClear={() => onFiltersChange({ ...filters, orgs: [] })}
       />
       <MultiSelect
         label="Agent"
