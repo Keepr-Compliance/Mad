@@ -277,5 +277,43 @@ describe("Texts tab — keyboard", () => {
     await openTexts();
     expect(screen.getByTestId("checklist-picker-texts")).toBeVisible();
     expect(screen.getByTestId("checklist-picker-threads")).not.toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "Attachments" }));
+    expect(screen.getByTestId("checklist-picker-attachments")).toBeVisible();
+    expect(screen.getByTestId("checklist-picker-texts")).not.toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: "Emails" }));
+    expect(screen.getByTestId("checklist-picker-threads")).toBeVisible();
+  });
+
+  it("P1: newest page entirely hidden from the export, more pages exist -> Show more is offered, no empty message", async () => {
+    mockGetTextThreadPage.mockResolvedValueOnce({
+      success: true,
+      rows: [{ ...ROW_A, hidden_from_export: 1 }, { ...ROW_B, hidden_from_export: 1 }],
+      nextCursor: captured.next,
+    });
+    renderPicker();
+    fireEvent.click(screen.getByTestId("checklist-picker-tab-texts"));
+    await waitFor(() => expect(screen.getByTestId("checklist-picker-texts-more")).toBeInTheDocument());
+    expect(screen.getByTestId("checklist-picker-texts")).not.toHaveTextContent("No texts on this transaction.");
+  });
+
+  it("P2: search matches nothing loaded, more pages exist -> Show more is offered, no empty message", async () => {
+    mockGetTextThreadPage.mockResolvedValueOnce({ success: true, rows: [ROW_A], nextCursor: captured.next });
+    renderPicker();
+    await openTexts();
+    fireEvent.change(screen.getByTestId("checklist-picker-search"), { target: { value: "zzzz-nothing" } });
+    expect(screen.getByTestId("checklist-picker-texts-more")).toBeInTheDocument();
+    expect(screen.getByTestId("checklist-picker-texts")).not.toHaveTextContent("No texts on this transaction.");
+  });
+
+  it("no search and no more pages and nothing visible -> says there are no texts, no Show more", async () => {
+    mockGetTextThreadPage.mockResolvedValueOnce({
+      success: true,
+      rows: [{ ...ROW_A, hidden_from_export: 1 }],
+      nextCursor: null,
+    });
+    renderPicker();
+    fireEvent.click(screen.getByTestId("checklist-picker-tab-texts"));
+    await waitFor(() => expect(screen.getByTestId("checklist-picker-texts")).toHaveTextContent("No texts on this transaction."));
+    expect(screen.queryByTestId("checklist-picker-texts-more")).not.toBeInTheDocument();
   });
 });

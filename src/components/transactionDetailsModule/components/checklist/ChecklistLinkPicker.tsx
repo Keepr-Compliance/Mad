@@ -764,10 +764,16 @@ export function ChecklistLinkPicker({
                 <p className="text-sm text-gray-500" data-testid="checklist-picker-texts-error">{pickerTexts.error}</p>
               ) : pickerTexts.loading && pickerTexts.texts.length === 0 ? (
                 <p className="text-sm text-gray-500" data-testid="checklist-picker-texts-loading">Loading texts&hellip;</p>
-              ) : visibleTexts.length === 0 ? (
-                <p className="text-sm text-gray-500">No texts on this transaction.</p>
               ) : (
                 <div className="space-y-2">
+                  {visibleTexts.length === 0 && !search.trim() && !pickerTexts.hasMore && (
+                    <p className="text-sm text-gray-500">No texts on this transaction.</p>
+                  )}
+                  {visibleTexts.length === 0 && (search.trim() || pickerTexts.hasMore) && (
+                    <p className="text-sm text-gray-500" data-testid="checklist-picker-texts-none-loaded">
+                      {search.trim() ? "No loaded texts match." : "No texts to show yet."}
+                    </p>
+                  )}
                   {visibleTexts.map((t) => {
                     const key = textKey(t.id);
                     const linked = textLinked(t.id);
