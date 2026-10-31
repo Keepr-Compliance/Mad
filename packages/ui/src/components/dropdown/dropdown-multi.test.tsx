@@ -99,6 +99,8 @@ describe('Dropdown mode="multi"', () => {
     fireEvent.click(option('Cedar'));
     expect(listbox()).toBeInTheDocument();
     expect(document.activeElement).toBe(input);
+    // A click (no mousemove first) makes the toggled row the active one.
+    expect(activeLabel()).toBe('Cedar');
     key(input, 'Home');
     expect(activeLabel()).toBe('Acme');
     key(input, 'Enter');
@@ -157,11 +159,11 @@ describe('Dropdown mode="multi"', () => {
   });
 
   it('M4 Select all covers every ENABLED option of the whole set (not the search view), keeps picks first', () => {
-    const { onChange } = setup({ initial: ['a'] });
+    const { onChange } = setup({ initial: ['c'] });
     const input = openIt();
     fireEvent.change(input, { target: { value: 'ced' } });
     fireEvent.click(selectAll());
-    expect(onChange).toHaveBeenLastCalledWith(['a', 'b', 'c', 'e']);
+    expect(onChange).toHaveBeenLastCalledWith(['c', 'a', 'b', 'e']);
     expect(selectAll()).toBeDisabled();
     expect(search()).toHaveValue('ced');
     fireEvent.click(clearAll());
