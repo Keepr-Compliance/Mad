@@ -61,3 +61,37 @@ export function useOpenTransactionRequest(): OpenTransactionRequest | null {
     getOpenTransactionRequest,
   );
 }
+
+/**
+ * BACKLOG-3965 PR-4b: the ONE helper a Dashboard row calls. It writes the
+ * request and opens the Transactions view together, so a request can never be
+ * left in the store without the view that reads it (SR d8e39054: "PR-4b must
+ * keep the two calls together"). AppRouter builds it once and passes it down.
+ */
+export function makeOpenTransactionAt(
+  openTransactions: () => void,
+): (id: string, tab: TransactionTab) => void {
+  return (id, tab) => {
+    requestOpenTransaction(id, tab);
+    openTransactions();
+  };
+}
+
+/**
+ * BACKLOG-3965 PR-4b: "the Transactions view closed". The Dashboard stays
+ * mounted under the view (AppModals renders it as a fixed overlay), so its
+ * panels listen for this to re-read what changed while the view was open — a
+ * deal opened (Recent), an item ticked on a deal's Checklist tab (Todo).
+ */
+const viewClosedListeners = new Set<() => void>();
+
+export function notifyTransactionsViewClosed(): void {
+  viewClosedListeners.forEach((listener) => listener());
+}
+
+export function subscribeTransactionsViewClosed(listener: () => void): () => void {
+  viewClosedListeners.add(listener);
+  return () => {
+    viewClosedListeners.delete(listener);
+  };
+}

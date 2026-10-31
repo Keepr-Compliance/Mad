@@ -5,7 +5,7 @@
  * This is a pure extraction of the routing logic from App.tsx.
  */
 
-import { useState, useCallback, lazy, Suspense } from "react";
+import { useState, useCallback, useMemo, lazy, Suspense } from "react";
 import Login from "../components/Login";
 import Dashboard from "../components/Dashboard";
 import OfflineFallback from "../components/OfflineFallback";
@@ -14,6 +14,7 @@ import type { AppStateMachine } from "./state/types";
 import { useImportSource } from "../hooks/useImportSource";
 import { useOpenLinkScreen } from "../hooks/useOpenLinkScreen";
 import { useReportCurrentScreenName } from "../utils/currentScreenName";
+import { makeOpenTransactionAt } from "./openTransactionRequest";
 import {
   USE_NEW_ONBOARDING,
   isOnboardingStep,
@@ -41,6 +42,9 @@ export function AppRouter({ app }: AppRouterProps) {
     setIsTourActive, openIPhoneSync, openAndroidSync, openSettings,
     handleLogout,
   } = app;
+
+  // BACKLOG-3965 PR-4b: the ONE helper Dashboard rows call (store write + open view).
+  const openTransactionAt = useMemo(() => makeOpenTransactionAt(openTransactions), [openTransactions]);
 
   // Track license blocked state for login screen
   const [licenseBlocked, setLicenseBlocked] = useState<{
@@ -129,6 +133,7 @@ export function AppRouter({ app }: AppRouterProps) {
         onTourStateChange={setIsTourActive}
         onTriggerRefresh={app.triggerRefresh}
         onOpenSettings={openSettings}
+        onOpenTransaction={openTransactionAt}
         user={currentUser ?? undefined}
       />
     );
