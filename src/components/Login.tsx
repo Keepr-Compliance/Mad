@@ -346,10 +346,8 @@ const Login = ({
    */
   const handleDeviceLimit = useCallback((data: {
     userId: string;
-    licenseStatus: {
-      deviceCount: number;
-      deviceLimit: number;
-    };
+    deviceCount: number;
+    deviceLimit: number;
   }) => {
     logger.warn("[Login] Device limit reached");
     clearRetryTimers();
@@ -361,12 +359,12 @@ const Login = ({
     if (onDeviceLimitReached) {
       onDeviceLimitReached({
         userId: data.userId,
-        deviceCount: data.licenseStatus.deviceCount,
-        deviceLimit: data.licenseStatus.deviceLimit,
+        deviceCount: data.deviceCount,
+        deviceLimit: data.deviceLimit,
       });
     } else {
       // Default handling if no callback provided
-      setError(`Device limit reached (${data.licenseStatus.deviceCount}/${data.licenseStatus.deviceLimit}). Please deactivate a device first.`);
+      setError(`Device limit reached (${data.deviceCount}/${data.deviceLimit}). Please deactivate a device first.`);
     }
   }, [onDeviceLimitReached, clearRetryTimers, resetRetryState]);
 
