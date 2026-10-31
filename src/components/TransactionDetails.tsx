@@ -205,29 +205,16 @@ function TransactionDetails({
   // Tab state hook - use initialTab prop
   const { activeTab, setActiveTab } = useTransactionTabs(initialTab);
 
-  // BACKLOG-3476: the Checklist tab shows when the plan allows checklists, or
-  // when this transaction already has at least one (read-only then — `get` and `remove`
-  // are ungated in main). Never while the plan is still being read.
-  // Resolved once per session above this modal (StrictFeatureProvider), so the
-  // tab renders on the first frame with the others; each open re-asks main in
-  // the background.
+  // BACKLOG-3966 PR-3: the Checklist tab shows on every plan (My items need no
+  // plan); the plan decides only the template-checklist actions inside it.
+  // Never while the plan is still being read. Resolved once per session above
+  // this modal (StrictFeatureProvider), so the tab renders on the first frame
+  // with the others; each open re-asks main in the background. Once shown it
+  // stays (a background re-ask never returns to "pending"), so there is no
+  // fall-back-to-Overview case left.
   const checklistGate = useSessionStrictFeatureState("transaction_checklists");
   const checklist = useTransactionChecklist(transaction.id);
-  const showChecklist =
-    checklistGate === "allowed" ||
-    (checklistGate !== "pending" && (checklist.data?.checklists.length ?? 0) > 0);
-  // The tab can disappear under the user (checklist removed, plan changed):
-  // fall back to Overview rather than render an empty panel.
-  useEffect(() => {
-    if (
-      activeTab === "checklist" &&
-      !showChecklist &&
-      checklistGate !== "pending" &&
-      checklist.state.status !== "loading"
-    ) {
-      setActiveTab("overview");
-    }
-  }, [activeTab, showChecklist, checklistGate, checklist.state.status, setActiveTab]);
+  const showChecklist = checklistGate !== "pending";
 
   // BACKLOG-1869: highlight target produced by the linked-content search; consumed
   // by the Emails or Messages tab to scroll+highlight the matching conversation card.

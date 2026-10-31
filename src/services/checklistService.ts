@@ -57,6 +57,28 @@ function reportTodoReadFailure(err: unknown): void {
   });
 }
 
+/**
+ * BACKLOG-3966: main's lock refusal (`refuseIfDealLocked`,
+ * electron/services/dealLockState.ts) carries `dealLocked` and `refusedEdit`
+ * next to its message. Each lock-gated write below keeps them, so a caller can
+ * tell "the deal is locked" from "the save failed" (the same rule as
+ * transactionService, BACKLOG-3910d). Read and checked here, not cast: the
+ * bridge's `ipcRenderer.invoke` is `any`.
+ */
+export interface ChecklistLockRefusal {
+  dealLocked?: "submitted" | "sealed";
+  refusedEdit?: string;
+}
+
+export type ChecklistWriteApiResult<T> = ApiResult<T> & ChecklistLockRefusal;
+
+export function lockRefusalOf(result: object): ChecklistLockRefusal {
+  const dealLocked = "dealLocked" in result ? result.dealLocked : undefined;
+  if (dealLocked !== "submitted" && dealLocked !== "sealed") return {};
+  const refusedEdit = "refusedEdit" in result ? result.refusedEdit : undefined;
+  return typeof refusedEdit === "string" ? { dealLocked, refusedEdit } : { dealLocked };
+}
+
 export interface ChecklistTemplateListing {
   templates: ChecklistTemplate[];
   source: ChecklistTemplateSource;
@@ -141,7 +163,7 @@ export const checklistService = {
   async selectTemplate(
     transactionId: string,
     templateId: string,
-  ): Promise<ApiResult<SelectChecklistTemplateResult>> {
+  ): Promise<ChecklistWriteApiResult<SelectChecklistTemplateResult>> {
     try {
       const result = await window.api.checklists.selectTemplate({
         transactionId,
@@ -150,7 +172,7 @@ export const checklistService = {
       if (result.success && result.result) {
         return { success: true, data: result.result };
       }
-      return { success: false, error: result.error };
+      return { success: false, error: result.error, ...lockRefusalOf(result) };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }
@@ -173,26 +195,26 @@ export const checklistService = {
   },
 
   /** Tick or untick one item. `data` is whether a row actually changed. */
-  async setItemChecked(itemId: string, checked: boolean): Promise<ApiResult<boolean>> {
+  async setItemChecked(itemId: string, checked: boolean): Promise<ChecklistWriteApiResult<boolean>> {
     try {
       const result = await window.api.checklists.setItemChecked({ itemId, checked });
       if (result.success) {
         return { success: true, data: !!result.changed };
       }
-      return { success: false, error: result.error };
+      return { success: false, error: result.error, ...lockRefusalOf(result) };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }
   },
 
   /** Set or clear one item's note. Empty and whitespace-only both clear it. */
-  async setItemNote(itemId: string, note: string | null): Promise<ApiResult<boolean>> {
+  async setItemNote(itemId: string, note: string | null): Promise<ChecklistWriteApiResult<boolean>> {
     try {
       const result = await window.api.checklists.setItemNote({ itemId, note });
       if (result.success) {
         return { success: true, data: !!result.changed };
       }
-      return { success: false, error: result.error };
+      return { success: false, error: result.error, ...lockRefusalOf(result) };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }
@@ -207,7 +229,7 @@ export const checklistService = {
     kind: ChecklistLinkWriteKind,
     targetIds: string[],
     includeOutsideDates?: boolean,
-  ): Promise<ApiResult<AddChecklistLinkResult>> {
+  ): Promise<ChecklistWriteApiResult<AddChecklistLinkResult>> {
     try {
       const result = await window.api.checklists.addLink(
         includeOutsideDates ? { itemId, kind, targetIds, includeOutsideDates } : { itemId, kind, targetIds },
@@ -215,7 +237,7 @@ export const checklistService = {
       if (result.success && result.result) {
         return { success: true, data: result.result };
       }
-      return { success: false, error: result.error };
+      return { success: false, error: result.error, ...lockRefusalOf(result) };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }
@@ -252,26 +274,26 @@ export const checklistService = {
   },
 
   /** BACKLOG-3764: "Include it" for an existing group, from the submit pre-flight. */
-  async includeLinkOutsideDates(transactionId: string, linkId: string): Promise<ApiResult<boolean>> {
+  async includeLinkOutsideDates(transactionId: string, linkId: string): Promise<ChecklistWriteApiResult<boolean>> {
     try {
       const result = await window.api.checklists.includeLinkOutsideDates({ transactionId, linkId });
       if (result.success) {
         return { success: true, data: !!result.changed };
       }
-      return { success: false, error: result.error };
+      return { success: false, error: result.error, ...lockRefusalOf(result) };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }
   },
 
   /** Remove one evidence group. Its members follow by cascade. */
-  async removeLink(linkId: string): Promise<ApiResult<boolean>> {
+  async removeLink(linkId: string): Promise<ChecklistWriteApiResult<boolean>> {
     try {
       const result = await window.api.checklists.removeLink({ linkId });
       if (result.success) {
         return { success: true, data: !!result.changed };
       }
-      return { success: false, error: result.error };
+      return { success: false, error: result.error, ...lockRefusalOf(result) };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }
@@ -281,13 +303,13 @@ export const checklistService = {
    * BACKLOG-3966: add one of the agent's own items ("My items") to a deal.
    * Never throws: a refused or failed call is `success: false`.
    */
-  async addMyItem(transactionId: string, title: string): Promise<ApiResult<AddMyItemResult>> {
+  async addMyItem(transactionId: string, title: string): Promise<ChecklistWriteApiResult<AddMyItemResult>> {
     try {
       const result = await window.api.checklists.addMyItem({ transactionId, title });
       if (result.success && result.result) {
         return { success: true, data: result.result };
       }
-      return { success: false, error: result.error };
+      return { success: false, error: result.error, ...lockRefusalOf(result) };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }
@@ -298,13 +320,13 @@ export const checklistService = {
     transactionId: string,
     itemId: string,
     title: string,
-  ): Promise<ApiResult<boolean>> {
+  ): Promise<ChecklistWriteApiResult<boolean>> {
     try {
       const result = await window.api.checklists.renameMyItem({ transactionId, itemId, title });
       if (result.success) {
         return { success: true, data: !!result.changed };
       }
-      return { success: false, error: result.error };
+      return { success: false, error: result.error, ...lockRefusalOf(result) };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }
@@ -314,39 +336,39 @@ export const checklistService = {
   async reorderMyItems(
     transactionId: string,
     itemIds: string[],
-  ): Promise<ApiResult<ReorderMyItemsResult>> {
+  ): Promise<ChecklistWriteApiResult<ReorderMyItemsResult>> {
     try {
       const result = await window.api.checklists.reorderMyItems({ transactionId, itemIds });
       if (result.success && result.result) {
         return { success: true, data: result.result };
       }
-      return { success: false, error: result.error };
+      return { success: false, error: result.error, ...lockRefusalOf(result) };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }
   },
 
   /** BACKLOG-3966: remove one of the agent's own items. `data`: whether a row was removed. */
-  async removeMyItem(transactionId: string, itemId: string): Promise<ApiResult<boolean>> {
+  async removeMyItem(transactionId: string, itemId: string): Promise<ChecklistWriteApiResult<boolean>> {
     try {
       const result = await window.api.checklists.removeMyItem({ transactionId, itemId });
       if (result.success) {
         return { success: true, data: !!result.changed };
       }
-      return { success: false, error: result.error };
+      return { success: false, error: result.error, ...lockRefusalOf(result) };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }
   },
 
   /** Take one checklist off a transaction. Never gated. */
-  async remove(transactionId: string, checklistId: string): Promise<ApiResult<boolean>> {
+  async remove(transactionId: string, checklistId: string): Promise<ChecklistWriteApiResult<boolean>> {
     try {
       const result = await window.api.checklists.remove({ transactionId, checklistId });
       if (result.success) {
         return { success: true, data: !!result.changed };
       }
-      return { success: false, error: result.error };
+      return { success: false, error: result.error, ...lockRefusalOf(result) };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }

@@ -246,6 +246,14 @@ import {
   CURRENT_PRIVACY_POLICY_VERSION,
 } from "./constants/legalVersions";
 import type { OAuthProvider, SubscriptionTier, SubscriptionStatus, User } from "./types";
+import {
+  noteSignIn,
+  saveSignInSession,
+  setPendingDeepLinkUser,
+  type PendingDeepLinkUser,
+} from "./services/signInState";
+
+export { getAndClearPendingDeepLinkUser } from "./services/signInState";
 
 import { applyLogFileConfig } from "./config/logFileConfig";
 
@@ -351,44 +359,6 @@ process.on("unhandledRejection", (reason: unknown) => {
 });
 
 let mainWindow: BrowserWindow | null = null;
-
-// ==========================================
-// PENDING DEEP LINK USER (TASK-1507D)
-// ==========================================
-// When deep link auth completes before database is initialized,
-// we store the user data here and create the local user after DB init.
-
-interface PendingDeepLinkUser {
-  supabaseId: string;
-  email: string;
-  displayName?: string;
-  avatarUrl?: string;
-  provider: OAuthProvider;
-  subscriptionTier?: SubscriptionTier;
-  subscriptionStatus?: SubscriptionStatus;
-  trialEndsAt?: string;
-}
-
-let pendingDeepLinkUser: PendingDeepLinkUser | null = null;
-
-/**
- * Store pending deep link user data for later creation
- * Used when deep link auth completes before database is initialized
- */
-export function setPendingDeepLinkUser(data: PendingDeepLinkUser): void {
-  pendingDeepLinkUser = data;
-  log.info("[DeepLink] Stored pending user for later creation:", redactId(data.supabaseId));
-}
-
-/**
- * Get and clear pending deep link user data
- * Called after database initialization to create the user
- */
-export function getAndClearPendingDeepLinkUser(): PendingDeepLinkUser | null {
-  const user = pendingDeepLinkUser;
-  pendingDeepLinkUser = null;
-  return user;
-}
 
 /**
  * Create or update local SQLite user from deep link auth data (TASK-1507D)
@@ -694,6 +664,8 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       // TASK-1507: Step 1 - Verify tokens and establish session using setSession()
       // Per SR Engineer review: Use setSession() instead of getUser() for proper session establishment
       log.info("[DeepLink] Setting session with tokens...");
+      // BACKLOG-3555: before main's identity changes (see signInState.ts).
+      noteSignIn();
       const { data: sessionData, error: sessionError } = await supabaseService
         .getClient()
         .auth.setSession({
@@ -850,7 +822,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
               trialDaysRemaining: licenseStatus.trialDaysRemaining ?? 0,
             };
 
-            await sessionService.saveSession({
+            await saveSignInSession({
               user: localUser,
               sessionToken,
               provider,
@@ -876,6 +848,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         // User will be created after DB initialization in system-handlers.ts
         log.info("[DeepLink] Database not initialized, storing pending user");
         setPendingDeepLinkUser(deepLinkUserData);
+        log.info("[DeepLink] Stored pending user for later creation:", redactId(deepLinkUserData.supabaseId));
         // Note: localUserId remains as Supabase UUID since we can't query local DB yet
         // The renderer will need to handle this case (existing flow before TASK-1507F)
       }

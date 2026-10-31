@@ -234,7 +234,7 @@ function tree(initial: AppState, plat: Plat = "mac", withSignIn = false) {
 }
 
 const loadingUserData = (plat: Plat): AppState =>
-  ({ status: "loading", phase: "loading-user-data", user: USER, platform: PLATFORM_INFO[plat] }) as AppState;
+  ({ status: "loading", phase: "loading-user-data", user: USER, platform: PLATFORM_INFO[plat], database: "initialized" }) as AppState;
 
 async function settle(expected?: string) {
   await waitFor(
@@ -351,7 +351,7 @@ describe("C6 / C7 — outdated terms: terms screen only, never setup, never skip
         isNewUser: true,
       });
       mockApi.user.getAccountSetup!.mockResolvedValue(accountSetup("finished", true, true));
-      render(tree({ status: "loading", phase: "checking-storage" } as AppState, plat));
+      render(tree({ status: "loading", phase: "checking-storage", database: "unknown" } as AppState, plat));
       expect(await settle("ready")).toBe("ready");
       expect(screen.getByTestId("welcome-terms")).toBeInTheDocument();
     },
@@ -362,7 +362,7 @@ describe("C6 / C7 — outdated terms: terms screen only, never setup, never skip
     async (plat) => {
       setPlatform(plat);
       mockApi.user.getAccountSetup!.mockResolvedValue(accountSetup("finished", true, true));
-      render(tree({ status: "unauthenticated" } as AppState, plat, true));
+      render(tree({ status: "unauthenticated", database: "initialized" } as AppState, plat, true));
       await settle("unauthenticated");
       // main.ts auth:deep-link-callback payload, isNewUser: needsTermsAcceptance
       await act(async () => {
@@ -384,7 +384,7 @@ describe("C6 / C7 — outdated terms: terms screen only, never setup, never skip
 
   it("CONTROL: terms current -> ready WITHOUT the terms screen", async () => {
     mockApi.user.getAccountSetup!.mockResolvedValue(accountSetup("finished", true, true));
-    render(tree({ status: "unauthenticated" } as AppState, "mac", true));
+    render(tree({ status: "unauthenticated", database: "initialized" } as AppState, "mac", true));
     await settle("unauthenticated");
     await act(async () => {
       signIn!({
@@ -402,7 +402,7 @@ describe("C6 / C7 — outdated terms: terms screen only, never setup, never skip
 
   it("row 17: unfinished + outdated terms -> setup WITH the terms screen", async () => {
     mockApi.user.getAccountSetup!.mockResolvedValue(accountSetup("not-finished", false, true));
-    render(tree({ status: "unauthenticated" } as AppState, "mac", true));
+    render(tree({ status: "unauthenticated", database: "initialized" } as AppState, "mac", true));
     await settle("unauthenticated");
     await act(async () => {
       signIn!({

@@ -67,7 +67,7 @@ describe("C17c — the queue end is the way out, and it writes the record exactl
       contacts: { syncExternal: jest.fn().mockResolvedValue({ success: true }) },
     };
     const initial: OnboardingState = {
-      status: "onboarding", step: "email-connect", user: USER,
+      status: "onboarding", database: "initialized", step: "email-connect", user: USER,
       platform: { isMacOS: false, isWindows: true, hasIPhone: false },
       completedSteps: ["phone-type", "email-connect"], fda: "not-applicable",
       hasEmailConnected: true, selectedPhoneType: "android",
@@ -95,7 +95,7 @@ describe("C17c — the queue end is the way out, and it writes the record exactl
       contacts: { syncExternal: jest.fn().mockResolvedValue({ success: true }) },
     };
     const initial: OnboardingState = {
-      status: "onboarding", step: "permissions", user: USER,
+      status: "onboarding", database: "initialized", step: "permissions", user: USER,
       platform: { isMacOS: true, isWindows: false, hasIPhone: false },
       completedSteps: ["phone-type", "secure-storage", "email-connect"], fda: "not-asked",
       hasEmailConnected: true, selectedPhoneType: "iphone",
