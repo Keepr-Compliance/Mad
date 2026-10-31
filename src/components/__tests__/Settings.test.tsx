@@ -2211,6 +2211,23 @@ describe("Settings", () => {
         expect(tab("About")).toHaveAttribute("aria-selected", "false");
       });
 
+      it("a programmatic scroll after a tab click keeps the clicked tab", async () => {
+        installQuietObserver();
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+        expect(tab("Account")).toHaveAttribute("aria-selected", "true");
+        await userEvent.click(tab("Support Access"));
+        scrollToBottom(scroller());
+        expect(tab("Support Access")).toHaveAttribute("aria-selected", "true");
+      });
+
+      it("a programmatic scroll after open-at-section keeps the opened tab", async () => {
+        installQuietObserver();
+        renderPage({ initialSection: "settings-support-access" });
+        await waitFor(() => expect(scrolledIds()).toEqual(["settings-support-access"]));
+        scrollToBottom(scroller());
+        expect(tab("Support Access")).toHaveAttribute("aria-selected", "true");
+      });
+
       it("after the user scrolls by hand, the spy takes over again", async () => {
         installQuietObserver();
         await renderSettings({ userId: mockUserId, onClose: mockOnClose });
