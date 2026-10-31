@@ -1,9 +1,10 @@
 /**
  * Overview cards on the Reports page (BACKLOG-4005)
  *
- * Analytics and Funnel are dashboards, not registry reports: they have no
- * saved views and no report key. They show as cards beside the reports and
- * nowhere else in the nav. Keep this list separate from REPORTS.
+ * Analytics is a dashboard, not a registry report: it has no saved views and
+ * no report key. It shows as a card beside the reports and nowhere else in
+ * the nav. Keep this list separate from REPORTS. (Paywall Funnel was a card
+ * here until BACKLOG-3722 moved it onto the report kit and into REPORTS.)
  */
 
 import { PERMISSIONS, type PermissionKey } from '@/lib/permissions';
@@ -23,13 +24,6 @@ export const OVERVIEW_CARDS: OverviewCard[] = [
     title: 'Analytics',
     description: 'System-wide metrics and adoption data.',
     href: `${REPORTS_BASE_PATH}/analytics`,
-    permission: PERMISSIONS.ANALYTICS_VIEW,
-  },
-  {
-    key: 'funnel',
-    title: 'Paywall Funnel',
-    description: 'Paywall viewed, unlock clicked, payment succeeded, export completed. Where do users drop off?',
-    href: `${REPORTS_BASE_PATH}/funnel`,
     permission: PERMISSIONS.ANALYTICS_VIEW,
   },
 ];

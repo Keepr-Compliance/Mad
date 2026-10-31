@@ -64,17 +64,18 @@ describe('C3 middleware route permissions', () => {
   });
 });
 
-describe('C5 registry stays reports-only; overview cards are separate', () => {
+describe('C5 registry holds the reports (Paywall Funnel included, BACKLOG-3722); the Analytics overview card is separate', () => {
   it('report links live under /dashboard/reports', () => {
     for (const r of REPORTS) expect(reportHref(r.slug)).toBe(`/dashboard/reports/${r.slug}`);
   });
 
-  it('no registry slug collides with the analytics or funnel routes', () => {
+  it('no registry slug collides with the analytics route; the funnel IS a registry report', () => {
     expect(REPORTS.map((r) => r.slug)).not.toContain('analytics');
-    expect(REPORTS.map((r) => r.slug)).not.toContain('funnel');
+    expect(REPORTS.map((r) => r.slug)).toContain('funnel');
+    expect(reportHref('funnel')).toBe('/dashboard/reports/funnel');
   });
 
-  it('overview cards point at the moved Analytics and Funnel pages', () => {
-    expect(OVERVIEW_CARDS.map((c) => c.href)).toEqual(['/dashboard/reports/analytics', '/dashboard/reports/funnel']);
+  it('the one overview card points at the moved Analytics page', () => {
+    expect(OVERVIEW_CARDS.map((c) => c.href)).toEqual(['/dashboard/reports/analytics']);
   });
 });
