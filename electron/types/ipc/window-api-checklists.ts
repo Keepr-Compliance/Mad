@@ -20,10 +20,12 @@
 
 import type {
   AddChecklistLinkResult,
+  AddMyItemResult,
   ChecklistLinkWriteKind,
   ChecklistsForTransaction,
   ChecklistTemplate,
   ChecklistTemplateSource,
+  ReorderMyItemsResult,
   SelectChecklistTemplateResult,
 } from "../checklist";
 import type { ListOpenRequiredChecklistItemsResult } from "../checklistTodo";
@@ -127,4 +129,23 @@ export interface WindowApiChecklists {
     userId: string;
     limit?: number;
   }) => Promise<ListOpenRequiredChecklistItemsResult>;
+  /**
+   * BACKLOG-3966: the agent's own items ("My items"). Never plan-gated; every
+   * one is refused on a locked deal. Each names the deal, and main scopes the
+   * write to that deal's private checklist.
+   */
+  addMyItem: (args: {
+    transactionId: string;
+    title: string;
+  }) => Promise<{ success: boolean; result?: AddMyItemResult; error?: string }>;
+  renameMyItem: (args: {
+    transactionId: string;
+    itemId: string;
+    title: string;
+  }) => Promise<ChecklistWriteResult>;
+  reorderMyItems: (args: {
+    transactionId: string;
+    itemIds: string[];
+  }) => Promise<{ success: boolean; result?: ReorderMyItemsResult; error?: string }>;
+  removeMyItem: (args: { transactionId: string; itemId: string }) => Promise<ChecklistWriteResult>;
 }

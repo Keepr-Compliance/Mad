@@ -17,14 +17,17 @@
  * `NOT_PRIVATE_CHECKLIST_SQL` (raw SQL). Matching is EXACT: a template id that
  * merely starts with `keepr:` is not private.
  *
- * Nothing writes the row yet (the write path is a later slice), so today every
- * exclusion here is inert.
+ * The row is written by `checklistDbService.addMyItem` (BACKLOG-3966 PR-2),
+ * created on the agent's first item and never deleted except with its deal.
  */
 
 import { sql } from "./core/sqlText";
 
 /** The reserved `transaction_checklists.template_id` of the private checklist. */
 export const MY_ITEMS_TEMPLATE_ID = "keepr:my-items";
+
+/** BACKLOG-3966 PR-2: the private checklist's stored name (the section title is the renderer's). */
+export const MY_ITEMS_TEMPLATE_NAME = "My items";
 
 /** True only for the reserved id, compared exactly. */
 export function isPrivateChecklist(templateId: string | null | undefined): boolean {

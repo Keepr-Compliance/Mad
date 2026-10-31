@@ -26,10 +26,12 @@ import logger from "../utils/logger";
 
 import type {
   AddChecklistLinkResult,
+  AddMyItemResult,
   ChecklistLinkWriteKind,
   ChecklistsForTransaction,
   ChecklistTemplate,
   ChecklistTemplateSource,
+  ReorderMyItemsResult,
   SelectChecklistTemplateResult,
 } from "../../electron/types/checklist";
 import type { OpenRequiredChecklistItems } from "../../electron/types/checklistTodo";
@@ -236,6 +238,68 @@ export const checklistService = {
   async removeLink(linkId: string): Promise<ApiResult<boolean>> {
     try {
       const result = await window.api.checklists.removeLink({ linkId });
+      if (result.success) {
+        return { success: true, data: !!result.changed };
+      }
+      return { success: false, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /**
+   * BACKLOG-3966: add one of the agent's own items ("My items") to a deal.
+   * Never throws: a refused or failed call is `success: false`.
+   */
+  async addMyItem(transactionId: string, title: string): Promise<ApiResult<AddMyItemResult>> {
+    try {
+      const result = await window.api.checklists.addMyItem({ transactionId, title });
+      if (result.success && result.result) {
+        return { success: true, data: result.result };
+      }
+      return { success: false, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /** BACKLOG-3966: rename one of the agent's own items. `data`: whether a row changed. */
+  async renameMyItem(
+    transactionId: string,
+    itemId: string,
+    title: string,
+  ): Promise<ApiResult<boolean>> {
+    try {
+      const result = await window.api.checklists.renameMyItem({ transactionId, itemId, title });
+      if (result.success) {
+        return { success: true, data: !!result.changed };
+      }
+      return { success: false, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /** BACKLOG-3966: put the agent's own items in this order (every one, once). */
+  async reorderMyItems(
+    transactionId: string,
+    itemIds: string[],
+  ): Promise<ApiResult<ReorderMyItemsResult>> {
+    try {
+      const result = await window.api.checklists.reorderMyItems({ transactionId, itemIds });
+      if (result.success && result.result) {
+        return { success: true, data: result.result };
+      }
+      return { success: false, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /** BACKLOG-3966: remove one of the agent's own items. `data`: whether a row was removed. */
+  async removeMyItem(transactionId: string, itemId: string): Promise<ApiResult<boolean>> {
+    try {
+      const result = await window.api.checklists.removeMyItem({ transactionId, itemId });
       if (result.success) {
         return { success: true, data: !!result.changed };
       }

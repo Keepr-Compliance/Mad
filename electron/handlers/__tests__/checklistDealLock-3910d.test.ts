@@ -15,6 +15,12 @@
  * The locked set is written out as a literal on purpose; the mapping itself is
  * pinned by `src/utils/__tests__/dealLock.parity.test.ts`.
  *
+ * BACKLOG-3966 (SR plan review ruling 4 / R12): the agent's own checklist
+ * ("My items") is no exception. Its four channels (add, rename, reorder,
+ * remove a My item) and the shared item channels aimed at a private item
+ * (tick, note, link, unlink) are swept here too, over a private row with the
+ * schema.sql columns.
+ *
  * needs_changes is in the open set: the broker-checklist pull
  * (submissionChecklistPull.ts) runs at that status and must keep working. It
  * never goes through these handlers (it imports `applyReviewChecklistPull`
@@ -147,6 +153,7 @@ jest.mock("../../services/checklistTemplateService", () => ({
 }));
 
 import { registerChecklistHandlers } from "../checklistHandlers";
+import { MY_ITEMS_TEMPLATE_ID } from "../../services/db/checklistPrivacy";
 
 const SCHEMA_PATH = path.join(__dirname, "..", "..", "database", "schema.sql");
 
@@ -170,6 +177,11 @@ const ITEM = randomUUID();
 const LINK = randomUUID();
 const EMAIL_LINKED = randomUUID();
 const EMAIL_FREE = randomUUID();
+// BACKLOG-3966: the deal's private checklist, two of the agent's items, one group.
+const MY_CHECKLIST = randomUUID();
+const MY_ITEM = randomUUID();
+const MY_ITEM_2 = randomUUID();
+const MY_LINK = randomUUID();
 
 function buildDb(status: string): TestDb {
   const db = openTestDb();
@@ -204,6 +216,24 @@ function buildDb(status: string): TestDb {
   db.prepare(
     "INSERT INTO transaction_checklist_link_members (id, link_id, kind, email_id) VALUES (?, ?, 'email', ?)",
   ).run(randomUUID(), LINK, EMAIL_LINKED);
+  // BACKLOG-3966: the private checklist, with the schema.sql columns.
+  db.prepare(
+    "INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name, sort_order) VALUES (?, ?, ?, 'My items', 1)",
+  ).run(MY_CHECKLIST, DEAL, MY_ITEMS_TEMPLATE_ID);
+  for (const [id, title, order] of [
+    [MY_ITEM, "Call the lender", 0],
+    [MY_ITEM_2, "Ask for the HOA binder", 1],
+  ] as const) {
+    db.prepare(
+      "INSERT INTO transaction_checklist_items (id, checklist_id, title, is_required, sort_order) VALUES (?, ?, ?, 1, ?)",
+    ).run(id, MY_CHECKLIST, title, order);
+  }
+  db.prepare(
+    "INSERT INTO transaction_checklist_links (id, item_id, kind, label) VALUES (?, ?, 'email', 'Offer')",
+  ).run(MY_LINK, MY_ITEM);
+  db.prepare(
+    "INSERT INTO transaction_checklist_link_members (id, link_id, kind, email_id) VALUES (?, ?, 'email', ?)",
+  ).run(randomUUID(), MY_LINK, EMAIL_LINKED);
   return db;
 }
 
@@ -211,6 +241,10 @@ const one = (q: string, ...p: unknown[]) =>
   mockDb!.prepare(q).get(...(p as never[])) as Record<string, unknown>;
 const count = (table: string): number =>
   (mockDb!.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
+const linksOn = (itemId: string): number =>
+  (one("SELECT COUNT(*) AS n FROM transaction_checklist_links WHERE item_id = ?", itemId).n as number);
+const itemsOn = (checklistId: string): number =>
+  (one("SELECT COUNT(*) AS n FROM transaction_checklist_items WHERE checklist_id = ?", checklistId).n as number);
 
 const evt = {} as IpcMainInvokeEvent;
 async function invoke(channel: string, payload: unknown): Promise<any> {
@@ -236,9 +270,10 @@ const EDITS: Edit[] = [
     channel: "checklists:select-template",
     payload: () => ({ transactionId: DEAL, templateId: mockTemplateNew }),
     refusedEdit: "add-checklist",
+    // Two rows to start: the template checklist and the private one (3966).
     observe: () => count("transaction_checklists"),
-    before: 1,
-    after: 2,
+    before: 2,
+    after: 3,
   },
   {
     name: "tick an item (set-item-checked)",
@@ -263,7 +298,7 @@ const EDITS: Edit[] = [
     channel: "checklists:add-link",
     payload: () => ({ itemId: ITEM, kind: "email", targetIds: [EMAIL_FREE] }),
     refusedEdit: "link-checklist-item",
-    observe: () => count("transaction_checklist_links"),
+    observe: () => linksOn(ITEM),
     before: 1,
     after: 2,
   },
@@ -283,7 +318,7 @@ const EDITS: Edit[] = [
     channel: "checklists:remove-link",
     payload: () => ({ linkId: LINK }),
     refusedEdit: "unlink-checklist-item",
-    observe: () => count("transaction_checklist_links"),
+    observe: () => linksOn(ITEM),
     before: 1,
     after: 0,
   },
@@ -293,6 +328,80 @@ const EDITS: Edit[] = [
     payload: () => ({ transactionId: DEAL, checklistId: CHECKLIST }),
     refusedEdit: "take-off-checklist",
     observe: () => count("transaction_checklists"),
+    // The template checklist comes off; the private one never does (3966).
+    before: 2,
+    after: 1,
+  },
+  // BACKLOG-3966: the agent's own items. Locked means locked (SR ruling 4).
+  {
+    name: "add a My item (add-my-item)",
+    channel: "checklists:add-my-item",
+    payload: () => ({ transactionId: DEAL, title: "Book the walkthrough" }),
+    refusedEdit: "add-my-item",
+    observe: () => itemsOn(MY_CHECKLIST),
+    before: 2,
+    after: 3,
+  },
+  {
+    name: "rename a My item (rename-my-item)",
+    channel: "checklists:rename-my-item",
+    payload: () => ({ transactionId: DEAL, itemId: MY_ITEM, title: "Call the lender again" }),
+    refusedEdit: "rename-my-item",
+    observe: () => one("SELECT title FROM transaction_checklist_items WHERE id = ?", MY_ITEM).title,
+    before: "Call the lender",
+    after: "Call the lender again",
+  },
+  {
+    name: "reorder My items (reorder-my-items)",
+    channel: "checklists:reorder-my-items",
+    payload: () => ({ transactionId: DEAL, itemIds: [MY_ITEM_2, MY_ITEM] }),
+    refusedEdit: "reorder-my-items",
+    observe: () => one("SELECT sort_order FROM transaction_checklist_items WHERE id = ?", MY_ITEM).sort_order,
+    before: 0,
+    after: 1,
+  },
+  {
+    name: "remove a My item (remove-my-item)",
+    channel: "checklists:remove-my-item",
+    payload: () => ({ transactionId: DEAL, itemId: MY_ITEM_2 }),
+    refusedEdit: "remove-my-item",
+    observe: () => itemsOn(MY_CHECKLIST),
+    before: 2,
+    after: 1,
+  },
+  {
+    name: "tick a My item (set-item-checked)",
+    channel: "checklists:set-item-checked",
+    payload: () => ({ itemId: MY_ITEM, checked: true }),
+    refusedEdit: "tick-checklist-item",
+    observe: () => one("SELECT is_checked FROM transaction_checklist_items WHERE id = ?", MY_ITEM).is_checked,
+    before: 0,
+    after: 1,
+  },
+  {
+    name: "write a note on a My item (set-item-note)",
+    channel: "checklists:set-item-note",
+    payload: () => ({ itemId: MY_ITEM, note: "Rate locked" }),
+    refusedEdit: "edit-checklist-note",
+    observe: () => one("SELECT note FROM transaction_checklist_items WHERE id = ?", MY_ITEM).note,
+    before: null,
+    after: "Rate locked",
+  },
+  {
+    name: "link evidence to a My item (add-link)",
+    channel: "checklists:add-link",
+    payload: () => ({ itemId: MY_ITEM, kind: "email", targetIds: [EMAIL_FREE] }),
+    refusedEdit: "link-checklist-item",
+    observe: () => linksOn(MY_ITEM),
+    before: 1,
+    after: 2,
+  },
+  {
+    name: "unlink a group from a My item (the take-off-link channel)",
+    channel: "checklists:remove-link",
+    payload: () => ({ linkId: MY_LINK }),
+    refusedEdit: "unlink-checklist-item",
+    observe: () => linksOn(MY_ITEM),
     before: 1,
     after: 0,
   },
@@ -331,7 +440,8 @@ describe("BACKLOG-3910 slice d: a locked deal refuses every checklist write", ()
     const writers = [...registeredHandlers.keys()]
       .filter((c) => c.startsWith("checklists:") && !readOnlyChannels.has(c))
       .sort();
-    expect(writers).toEqual(EDITS.map((e) => e.channel).sort());
+    // A channel may be swept more than once (template and private targets).
+    expect(writers).toEqual([...new Set(EDITS.map((e) => e.channel))].sort());
   });
 
   for (const edit of EDITS) {
@@ -368,6 +478,6 @@ describe("BACKLOG-3910 slice d: a locked deal refuses every checklist write", ()
     expect(tick).toEqual({ success: true, changed: false });
     const unlink = await invoke("checklists:remove-link", { linkId: randomUUID() });
     expect(unlink).toEqual({ success: true, changed: false });
-    expect(count("transaction_checklist_links")).toBe(1);
+    expect(count("transaction_checklist_links")).toBe(2);
   });
 });

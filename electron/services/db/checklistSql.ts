@@ -124,6 +124,11 @@ export const INSERT_CHECKLIST_ITEM_SQL = sql`
 /**
  * Delete ONE checklist of one transaction; its items, links and members follow
  * by cascade. Two bound parameters, in order: checklist id, transaction id.
+ *
+ * BACKLOG-3966: never the private checklist ("My items"). The agent takes his
+ * own items off one at a time; neither `checklists:remove` nor a review pull
+ * may delete the row. Its only other way out is the deal itself being deleted
+ * (the transactions FK cascade).
  * There is deliberately no statement that deletes by transaction alone: every
  * other checklist on the transaction must survive a remove. This is the ONLY
  * statement in this file that deletes a `transaction_checklists` row
@@ -131,7 +136,82 @@ export const INSERT_CHECKLIST_ITEM_SQL = sql`
  * deletes).
  */
 export const DELETE_CHECKLIST_IN_TRANSACTION_SQL = sql`
-  DELETE FROM transaction_checklists WHERE id = ? AND transaction_id = ?
+  DELETE FROM transaction_checklists AS cl
+  WHERE cl.id = ? AND cl.transaction_id = ? AND ${NOT_PRIVATE_CHECKLIST_SQL}
+`;
+
+// ---------------------------------------------------------------------------
+// The private checklist ("My items") — BACKLOG-3966 PR-2
+// ---------------------------------------------------------------------------
+//
+// The reserved template id is BOUND as a parameter in every statement below
+// (the caller passes MY_ITEMS_TEMPLATE_ID), so `checklistPrivacy.ts` stays the
+// only file that spells it.
+
+/**
+ * Create the private checklist of one deal unless it already has one. Five
+ * bound parameters: id, transaction id, reserved template id, template name,
+ * sort_order. UNIQUE (transaction_id, template_id) makes a second call change
+ * nothing; the caller then reads the existing row's id.
+ */
+export const INSERT_PRIVATE_CHECKLIST_SQL = sql`
+  INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name, sort_order)
+  VALUES (?, ?, ?, ?, ?)
+  ON CONFLICT (transaction_id, template_id) DO NOTHING
+`;
+
+/** Next free sort_order among one checklist's items. One bound parameter: checklist id. */
+export const NEXT_ITEM_SORT_ORDER_SQL = sql`
+  SELECT COALESCE(MAX(sort_order) + 1, 0) AS next_sort_order
+  FROM transaction_checklist_items
+  WHERE checklist_id = ?
+`;
+
+/**
+ * Rename one item, only if it is on THIS deal's private checklist. Four bound
+ * parameters, in order: title, item id, transaction id, reserved template id.
+ * Aimed at a template item, it changes nothing.
+ */
+export const RENAME_PRIVATE_ITEM_SQL = sql`
+  UPDATE transaction_checklist_items SET title = ?
+  WHERE id = ?
+    AND checklist_id IN (
+      SELECT id FROM transaction_checklists WHERE transaction_id = ? AND template_id = ?
+    )
+`;
+
+/**
+ * Delete one item, only if it is on THIS deal's private checklist; its links
+ * and members follow by cascade. Three bound parameters, in order: item id,
+ * transaction id, reserved template id. Aimed at a template item, it deletes
+ * nothing.
+ */
+export const DELETE_PRIVATE_ITEM_SQL = sql`
+  DELETE FROM transaction_checklist_items
+  WHERE id = ?
+    AND checklist_id IN (
+      SELECT id FROM transaction_checklists WHERE transaction_id = ? AND template_id = ?
+    )
+`;
+
+/**
+ * The items of THIS deal's private checklist, in display order. Two bound
+ * parameters, in order: transaction id, reserved template id.
+ */
+export const GET_PRIVATE_ITEM_IDS_SQL = sql`
+  SELECT i.id, i.checklist_id
+  FROM transaction_checklist_items i
+  JOIN transaction_checklists c ON c.id = i.checklist_id
+  WHERE c.transaction_id = ? AND c.template_id = ?
+  ORDER BY i.sort_order, i.id
+`;
+
+/**
+ * Move one item of a checklist. Three bound parameters, in order: sort_order,
+ * item id, checklist id.
+ */
+export const SET_ITEM_SORT_ORDER_SQL = sql`
+  UPDATE transaction_checklist_items SET sort_order = ? WHERE id = ? AND checklist_id = ?
 `;
 
 /** Every item of one checklist, in display order. One bound parameter. */
@@ -250,9 +330,13 @@ export const SET_CHECKLIST_ITEM_NOTE_SQL = sql`
   UPDATE transaction_checklist_items SET note = ? WHERE id = ?
 `;
 
-/** The item's checklist and that checklist's transaction. One bound parameter. */
+/**
+ * The item's checklist and that checklist's transaction (and, BACKLOG-3966,
+ * that checklist's template id, which says whether it is the private one).
+ * One bound parameter.
+ */
 export const GET_ITEM_CONTEXT_SQL = sql`
-  SELECT i.id AS item_id, c.id AS checklist_id, c.transaction_id
+  SELECT i.id AS item_id, c.id AS checklist_id, c.transaction_id, c.template_id
   FROM transaction_checklist_items i
   JOIN transaction_checklists c ON c.id = i.checklist_id
   WHERE i.id = ?
@@ -533,7 +617,17 @@ export const GET_CHECKLIST_EXPORT_EMAIL_SUBJECTS_SQL = sql`
  * Never the map's keys: every submission status is a key, so that filter
  * excludes every deal (BACKLOG-3965 SR plan review, change 1).
  */
-function openRequiredItemsFrom(lockedStatusCount: number): SafeSql {
+/**
+ * BACKLOG-3966: which checklists the Todo list may draw from. `all` when the
+ * plan includes checklists; `private` (the agent's own items only) when it
+ * does not. A `private` read takes ONE extra bound parameter after the locked
+ * statuses: the reserved template id.
+ */
+export type OpenRequiredItemsScope = "all" | "private";
+
+function openRequiredItemsFrom(lockedStatusCount: number, scope: OpenRequiredItemsScope): SafeSql {
+  const scopeFilter = scope === "private" ? sql`
+    AND c.template_id = ?` : sql``;
   return sql`
   FROM transaction_checklist_items i
   JOIN transaction_checklists c ON c.id = i.checklist_id
@@ -543,17 +637,20 @@ function openRequiredItemsFrom(lockedStatusCount: number): SafeSql {
     AND (t.detection_status IS NULL OR t.detection_status NOT IN ('pending', 'rejected'))
     AND (t.submission_status IS NULL OR t.submission_status NOT IN (${placeholderList(lockedStatusCount)}))
     AND i.is_required = 1
-    AND i.is_checked = 0`;
+    AND i.is_checked = 0${scopeFilter}`;
 }
 
 /**
  * How many Todo items exist in all (the "N required" header — not capped by
  * the row limit). Bound parameters: user id, each locked status.
  */
-export function countOpenRequiredItemsSql(lockedStatusCount: number): SafeSql {
+export function countOpenRequiredItemsSql(
+  lockedStatusCount: number,
+  scope: OpenRequiredItemsScope,
+): SafeSql {
   return sql`
   SELECT COUNT(*) AS total
-  ${openRequiredItemsFrom(lockedStatusCount)}
+  ${openRequiredItemsFrom(lockedStatusCount, scope)}
 `;
 }
 
@@ -572,7 +669,10 @@ export function countOpenRequiredItemsSql(lockedStatusCount: number): SafeSql {
  * (transactionOpenSql.ts), so the ring a deal shows here is the one its
  * Checklist tab shows.
  */
-export function listOpenRequiredItemsSql(lockedStatusCount: number): SafeSql {
+export function listOpenRequiredItemsSql(
+  lockedStatusCount: number,
+  scope: OpenRequiredItemsScope,
+): SafeSql {
   return sql`
   SELECT
     i.id AS itemId,
@@ -591,7 +691,7 @@ export function listOpenRequiredItemsSql(lockedStatusCount: number): SafeSql {
        JOIN transaction_checklist_items di ON di.checklist_id = dc.id
       WHERE dc.transaction_id = t.id AND di.is_required = 1
     ) AS dealRequiredTotal
-  ${openRequiredItemsFrom(lockedStatusCount)}
+  ${openRequiredItemsFrom(lockedStatusCount, scope)}
   ORDER BY
     (NULLIF(t.closing_deadline, '') IS NULL),
     substr(t.closing_deadline, 1, 10),

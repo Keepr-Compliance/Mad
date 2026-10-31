@@ -31,7 +31,11 @@
  * The SPLIT itself is asserted too, by execution rather than by prose: "the
  * gated and ungated sets, by execution" enumerates every registered
  * `checklists:` channel, invokes each one with the plan unreadable, and
- * partitions them by what they answer. Nine refuse, four work. A fourteenth channel
+ * partitions them by what they answer. Eight refuse, nine work (BACKLOG-3966:
+ * `list-open-required` now answers on every plan, scoped, and the four
+ * My-items channels are never plan-gated; every item/link payload here names a
+ * TEMPLATE checklist, so the per-checklist rule still refuses them — the
+ * private side is `checklistMyItems-3966.test.ts`). A channel
  * nobody classified, a gate dropped, or a gate added to `get` all red it —
  * which is what makes the module header's count something other than a
  * sentence to be trusted.
@@ -522,7 +526,7 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
    * this list does not classify fails the first assertion instead of quietly
    * escaping the sweep.
    */
-  it("exactly nine channels refuse when the plan cannot be read, and four answer", async () => {
+  it("exactly eight channels refuse when the plan cannot be read, and nine answer (BACKLOG-3966)", async () => {
     const checklistId = await seedChecklist();
     const itemId = itemIds()[0];
     const added = await invoke("checklists:add-link", {
@@ -552,10 +556,18 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
       ["checklists:include-link-outside-dates", { transactionId: TRANSACTION, linkId }],
       // BACKLOG-3617: asks the cloud about the organization, so gated.
       ["checklists:can-edit-templates", undefined],
-      // BACKLOG-3965: the Dashboard's cross-deal Todo read is a feature surface, so gated.
-      ["checklists:list-open-required", { userId: USER }],
       // The ungated ones last, and `remove` after `get`: it clears the rows
       // `get` is asked to return.
+      // BACKLOG-3966: the Todo read answers on every plan, scoped to the
+      // agent's own items when the plan has no checklists.
+      ["checklists:list-open-required", { userId: USER }],
+      // BACKLOG-3966: the agent's own items, never plan-gated. Aimed at the
+      // TEMPLATE item, rename / reorder / remove answer and change nothing
+      // (their SQL is scoped to the private checklist).
+      ["checklists:add-my-item", { transactionId: TRANSACTION, title: "Call the lender" }],
+      ["checklists:rename-my-item", { transactionId: TRANSACTION, itemId, title: "Renamed" }],
+      ["checklists:reorder-my-items", { transactionId: TRANSACTION, itemIds: [itemId] }],
+      ["checklists:remove-my-item", { transactionId: TRANSACTION, itemId }],
       ["checklists:get", { transactionId: TRANSACTION }],
       ["checklists:remove", { transactionId: TRANSACTION, checklistId }],
       ["checklists:invalidate-templates", undefined],
@@ -591,9 +603,13 @@ describe("BACKLOG-3475 C9 — the gated and ungated sets, by execution", () => {
       "checklists:remove-link",
       "checklists:include-link-outside-dates",
       "checklists:can-edit-templates",
-      "checklists:list-open-required",
     ]);
     expect(answered).toEqual([
+      "checklists:list-open-required",
+      "checklists:add-my-item",
+      "checklists:rename-my-item",
+      "checklists:reorder-my-items",
+      "checklists:remove-my-item",
       "checklists:get",
       "checklists:remove",
       "checklists:invalidate-templates",
