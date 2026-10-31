@@ -118,6 +118,9 @@ export interface ChecklistLinkGapItem {
   auditEnd: string | null;
 }
 
+/** BACKLOG-3968 U2: why a text linked to a checklist item is not sent yet. */
+export const TEXT_LINK_NOT_SENT_REASON = "texts will be included after the next update.";
+
 /** BACKLOG-3764: shown on success when evidence was dropped that was never listed. */
 export const CHECKLIST_LINKS_NOT_ATTACHED_COPY =
   "Submitted, but some files or emails linked to checklist items were not attached to them.";
@@ -129,7 +132,13 @@ export const CHECKLIST_LINKS_NOT_ATTACHED_COPY =
  */
 export function checklistLinkGapLine(gap: ChecklistLinkGapItem): string {
   const why =
-    gap.detail === "not_on_transaction"
+    // BACKLOG-3968 U2: a text the submission does not send. While text links
+    // are held (electron/services/checklistTextLinkHold.ts), every text gap
+    // arrives as not_included / not_sent; the renderer reads that pair, never
+    // the hold itself. The PR that lifts the hold changes this sentence too.
+    gap.kind === "text" && gap.detail === "not_sent"
+      ? TEXT_LINK_NOT_SENT_REASON
+      : gap.detail === "not_on_transaction"
       ? "it is no longer on this transaction."
       : gap.detail === "cannot_be_sent"
         ? "it can't be sent (listed above)."
