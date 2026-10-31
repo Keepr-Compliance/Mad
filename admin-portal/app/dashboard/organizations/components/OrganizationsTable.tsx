@@ -3,12 +3,14 @@
 /**
  * OrganizationsTable - Client component for filtering and displaying organizations
  *
- * Receives server-fetched data and provides client-side search filtering.
+ * Receives server-fetched data. BACKLOG-4098: Type (brokerages by default),
+ * Plan, "Show test organizations", search and column sort, all mirrored into
+ * the URL (lib/organizations/org-list.ts holds the rules).
  * Each row links to the organization detail page.
  * Includes "Create Organization" button gated on canEdit prop.
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Building2, Plus } from 'lucide-react';
 import {
@@ -23,9 +25,23 @@ import {
   Th,
   Tr,
 } from '@keepr/design-system';
+import { Checkbox, Dropdown, SortableTh, useReportUrlState } from '@keepr/ui';
 import { formatDate } from '@/lib/format';
 import { startNavigationProgress } from '@/components/pwa/NavigationProgress';
 import { CreateOrganizationDialog } from './CreateOrganizationDialog';
+import {
+  DEFAULT_ORG_LIST_STATE,
+  ORG_LIST_CODEC,
+  filterOrgs,
+  flagsAvailable,
+  planOptions,
+  showAllState,
+  sortAfterClick,
+  sortOrgs,
+  type OrgListState,
+  type OrgSortKey,
+  type OrgTypeFilter,
+} from '@/lib/organizations/org-list';
 
 export interface OrganizationRow {
   id: string;
@@ -46,7 +62,20 @@ interface OrganizationsTableProps {
   canEdit: boolean;
   /** Brokerage billing is live: Create Organization does not ask for Max Seats. */
   billingLive: boolean;
+  /** Filters, search and sort parsed from the URL by the page. Defaults when absent. */
+  initialState?: OrgListState;
 }
+
+const TYPE_OPTIONS: Array<{ value: OrgTypeFilter; label: string }> = [
+  { value: 'brokerages', label: 'Brokerages' },
+  { value: 'personal', label: 'Personal' },
+  { value: 'all', label: 'All' },
+];
+
+/** Same look as the design-system Th, so sortable and plain headers match in one row. */
+const SORTABLE_TH_CLASS = 'px-6 py-3 text-xs uppercase tracking-wider';
+
+const SHOW_TEST_ID = 'org-list-show-test';
 
 function PlanBadge({ name, tier }: { name: string | null; tier: string | null }) {
   const displayText = name || 'none';
@@ -67,19 +96,17 @@ function PlanBadge({ name, tier }: { name: string | null; tier: string | null })
   );
 }
 
-export function OrganizationsTable({ organizations, canEdit, billingLive }: OrganizationsTableProps) {
+export function OrganizationsTable({ organizations, canEdit, billingLive, initialState }: OrganizationsTableProps) {
   const router = useRouter();
-  const [searchQuery, setSearchQuery] = useState('');
+  const [state, setState] = useReportUrlState(ORG_LIST_CODEC, initialState ?? DEFAULT_ORG_LIST_STATE);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
 
-  const filtered = organizations.filter((org) => {
-    if (!searchQuery) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      org.name.toLowerCase().includes(q) ||
-      org.slug.toLowerCase().includes(q)
-    );
-  });
+  const haveFlags = useMemo(() => flagsAvailable(organizations), [organizations]);
+  const plans = useMemo(() => planOptions(organizations), [organizations]);
+  const visible = useMemo(
+    () => sortOrgs(filterOrgs(organizations, state, haveFlags), state.sort),
+    [organizations, state, haveFlags]
+  );
 
   // Empty state - no organizations at all
   if (organizations.length === 0) {
@@ -98,16 +125,51 @@ export function OrganizationsTable({ organizations, canEdit, billingLive }: Orga
     router.refresh();
   };
 
+  const onSort = (key: OrgSortKey) => setState((s) => sortAfterClick(s, key));
+  const sortProps = { activeKey: state.sort.key, direction: state.sort.direction, onSort, className: SORTABLE_TH_CLASS };
+  const total = organizations.length;
+  const query = state.q.trim();
+
   return (
     <div className="space-y-4">
-      {/* Search bar + Create button */}
+      {/* Search, filters + Create button */}
       <div className="flex items-center gap-3 max-md:flex-wrap">
         <SearchInput
-          containerClassName="flex-1"
+          containerClassName="flex-1 min-w-[12rem]"
           placeholder="Filter by name or slug..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
+          value={state.q}
+          onChange={(e) => {
+            const q = e.target.value;
+            setState((s) => ({ ...s, q }));
+          }}
         />
+        <Dropdown
+          variant="filter"
+          ariaLabel="Type"
+          searchable={false}
+          options={TYPE_OPTIONS}
+          value={state.type}
+          disabled={!haveFlags}
+          onChange={(type) => setState((s) => ({ ...s, type }))}
+        />
+        <Dropdown
+          mode="multi"
+          variant="filter"
+          ariaLabel="Plan"
+          options={plans}
+          value={state.plan}
+          onChange={(plan) => setState((s) => ({ ...s, plan }))}
+          onClear={() => setState((s) => ({ ...s, plan: [] }))}
+        />
+        <label htmlFor={SHOW_TEST_ID} className="flex items-center gap-2 text-sm text-gray-700 whitespace-nowrap">
+          <Checkbox
+            id={SHOW_TEST_ID}
+            checked={state.showTest}
+            disabled={!haveFlags}
+            onCheckedChange={(checked) => setState((s) => ({ ...s, showTest: checked === true }))}
+          />
+          Show test organizations
+        </label>
         {canEdit && (
           <Button
             onClick={() => setShowCreateDialog(true)}
@@ -119,22 +181,33 @@ export function OrganizationsTable({ organizations, canEdit, billingLive }: Orga
         )}
       </div>
 
+      <div className="space-y-1">
+        <p className="text-sm text-gray-500" data-testid="org-list-count">
+          {visible.length} of {total} organization{total !== 1 ? 's' : ''}
+        </p>
+        {!haveFlags && (
+          <p className="text-sm text-amber-700" role="note">
+            Type and test filters are unavailable: this list did not include the personal and test flags.
+          </p>
+        )}
+      </div>
+
       {/* Table */}
       <TableContainer scrollX>
         <Table>
           <TableHead>
             <tr>
-              <Th>Name</Th>
+              <SortableTh sortKey="name" {...sortProps}>Name</SortableTh>
               <Th>Slug</Th>
-              <Th>Plan</Th>
-              <Th>Members</Th>
-              <Th>Created</Th>
+              <SortableTh sortKey="plan" {...sortProps}>Plan</SortableTh>
+              <SortableTh sortKey="members" {...sortProps}>Members</SortableTh>
+              <SortableTh sortKey="created" {...sortProps}>Created</SortableTh>
               <Th>Actions</Th>
             </tr>
           </TableHead>
           <TableBody>
-            {filtered.length > 0 ? (
-              filtered.map((org) => (
+            {visible.length > 0 ? (
+              visible.map((org) => (
                 <Tr
                   key={org.id}
                   clickable
@@ -168,7 +241,20 @@ export function OrganizationsTable({ organizations, canEdit, billingLive }: Orga
               ))
             ) : (
               <TableEmptyRow colSpan={6}>
-                No organizations match &apos;{searchQuery}&apos;
+                <div className="space-y-2">
+                  <p>
+                    {query
+                      ? <>No organizations match &apos;{query}&apos;</>
+                      : 'No organizations match these filters.'}
+                  </p>
+                  <button
+                    type="button"
+                    className="text-sm font-medium text-primary-600 hover:text-primary-800"
+                    onClick={() => setState((s) => showAllState(s))}
+                  >
+                    Show all organizations
+                  </button>
+                </div>
               </TableEmptyRow>
             )}
           </TableBody>

@@ -115,3 +115,39 @@ describe('organizations page: is_personal / is_test mapping', () => {
     });
   });
 });
+
+/**
+ * BACKLOG-4098 PR2: the page parses searchParams into the table's initialState
+ * (filters, search and sort survive a reload or a shared link).
+ */
+describe('organizations page: initialState from searchParams', () => {
+  beforeEach(() => {
+    state.rows = [{ ...BASE_ROW, is_personal: false, is_test: false }];
+    state.listCalls = 0;
+  });
+
+  async function initialState(searchParams?: Record<string, string | string[] | undefined>) {
+    const { default: Page } = await import('@/app/dashboard/organizations/page');
+    const tree = (await (searchParams === undefined ? Page() : Page({ searchParams: Promise.resolve(searchParams) }))) as ReactNode;
+    const props = findProps(tree, OrganizationsTableStub);
+    expect(props, 'OrganizationsTable is rendered').not.toBeNull();
+    return props!.initialState;
+  }
+
+  const DEFAULTS = { type: 'brokerages', showTest: false, plan: [], q: '', sort: { key: 'name', direction: 'asc' } };
+
+  it('no argument and empty params -> defaults (brokerages, test hidden)', async () => {
+    expect(await initialState()).toEqual(DEFAULTS);
+    expect(await initialState({})).toEqual(DEFAULTS);
+  });
+
+  it('every param reaches the table', async () => {
+    expect(await initialState({ type: 'personal', test: '1', plan: 'team,individual', q: 'acme', sort: 'members', dir: 'asc', foo: 'x' })).toEqual({
+      type: 'personal', showTest: true, plan: ['team', 'individual'], q: 'acme', sort: { key: 'members', direction: 'asc' },
+    });
+  });
+
+  it('unknown type / sort fall back to the defaults', async () => {
+    expect(await initialState({ type: 'everything', sort: 'owner' })).toEqual(DEFAULTS);
+  });
+});
