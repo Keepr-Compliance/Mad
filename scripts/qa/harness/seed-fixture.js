@@ -11,30 +11,36 @@
  *   - >=1 transaction (a real property the driver's clickFirstTransaction() opens)
  *   - a few emails + communications links (so the transaction has attached content)
  *
- * SAFETY — ISOLATED PROFILE ONLY:
- *   - Requires --user-data-dir <isolated profile>. It REFUSES to run against the real
- *     ~/Library/Application Support/keepr profile (guard below). It NEVER touches real data.
- *   - The isolated profile's DB + key are created by launching the app once on that profile
- *     first (DB init runs at boot, before login) — see e2e/driver/seed/seedProfile.ts.
+ * SAFETY — ISOLATED PROFILE ONLY (BACKLOG-4093, scripts/qa/harness/seederGuard.js):
+ *   - Before app.whenReady, before any safeStorage call and before any DB work, main() exits 3
+ *     unless: --use-mock-keychain is present; --user-data-dir=<dir> (Chromium `=` form) is given
+ *     and the bare space form is NOT; app.getPath('userData') resolves to that dir; and that dir
+ *     is not under <appData>/{keepr,Keepr,keepr-dev,Electron}.
+ *   - The seeder does NOT call app.setName: with the `=` switch present the name moves neither
+ *     userData nor the (mock) safeStorage key, and without the mock it would select the installed
+ *     app's real "keepr Safe Storage" keychain item.
  *
  * WHY ELECTRON: the DB key is only reachable via Electron `safeStorage`, and
  * better-sqlite3-multiple-ciphers is built against Electron's ABI (Homebrew sqlcipher can't
  * read this DB). Mirrors scripts/qa/harness/db-assert.js (H3 cipher-open).
  *
- * USAGE (via the app electron binary, NOT node):
- *   node_modules/.bin/electron scripts/qa/harness/seed-fixture.js \
- *     --user-data-dir <isolatedProfile> [--fixture <path.json>] [--out <resultPath>]
+ * USAGE (via the sandbox wrapper, NOT node and NOT the bare electron binary):
+ *   scripts/qa/harness/electron-sandboxed.sh --use-mock-keychain \
+ *     --user-data-dir=<isolatedProfile> scripts/qa/harness/seed-fixture.js \
+ *     [--fixture <path.json>] [--out <resultPath>]
  *
  * The seeded IDENTITY (user id, session token, first transaction id/address) is emitted as a
  * single sentinel-prefixed JSON line on stdout AND written to --out, so the TS wrapper can wire
  * the session.json token + assert the driver lands on the seeded transaction.
  *
- * EXIT CODES: 0 = seeded · 2 = usage / IO / decrypt / uncaught error.
+ * EXIT CODES: 0 = seeded · 2 = usage / IO / decrypt / uncaught error · 3 = isolation guard refused.
  */
 
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+
+const guard = require('./seederGuard');
 
 const SENTINEL = '__QA_SEED_JSON__ ';
 
@@ -52,26 +58,19 @@ function participantHash(emailId, role, position, emailAddress) {
 // Arg parsing
 // ---------------------------------------------------------------------------
 
-function parseArgs(argv) {
-  const opts = {};
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === '--user-data-dir') opts.userDataDir = argv[++i];
-    else if (a === '--fixture') opts.fixture = argv[++i];
-    else if (a === '--out') opts.out = argv[++i];
-    else if (a === '--help' || a === '-h') opts.help = true;
-    // ignore Electron's own flags
-  }
-  return opts;
-}
+// `--user-data-dir=<dir>` → opts.userDataDir; the bare space form → opts.userDataDirSpaceForm
+// (refused by the guard). See seederGuard.js.
+const parseArgs = guard.parseArgs;
 
 // ---------------------------------------------------------------------------
 // Safety: never seed the real profile
 // ---------------------------------------------------------------------------
 
+// Second, string-only check inside run(). The process-level guard in main() (seederGuard.js) is the
+// one that compares against the directory Electron is actually using.
 function assertIsolatedProfile(userDataDir) {
   if (!userDataDir) {
-    throw new Error('seed-fixture requires --user-data-dir <isolated profile>.');
+    throw new Error('seed-fixture requires --user-data-dir=<isolated profile>.');
   }
   const resolved = path.resolve(userDataDir);
   const home = require('os').homedir();
@@ -112,36 +111,18 @@ function getEncryptionKey(userDataPath) {
 // We avoid the app's renderer/onboarding flow, which DEFERS first-time-macOS DB init to the
 // secure-storage onboarding step (so a fresh profile never auto-creates the DB).
 //
-// BACKLOG-1977/1987 (HEAD-SCHEMA SEED — load-bearing): electron/database/schema.sql is the CURRENT
-// head schema structure (its contacts.source CHECK already carries the v48 per-origin values
-// 'iphone'/'outlook'/'google_contacts'; every column/table added by migrations 30→49 is present),
-// but it STAMPS schema_version = 32 (schema.sql: `INSERT OR IGNORE INTO schema_version ... VALUES (1, 32)`).
-// A real HEAD install is already at the head version and NEVER replays migrations. Our seeded DB, left
-// at 32, made the app REPLAY migrations 33→49 on its next launch — and v36's contacts-table rebuild
-// ('CREATE TABLE contacts_new ... source CHECK IN (manual,email,sms,contacts_app,inferred,android_sync)'
-// then 'INSERT OR IGNORE INTO contacts_new SELECT * FROM contacts') SILENTLY DROPS every seeded
-// provider-source row (outlook/google_contacts/iphone), which the head CHECK allows but the v36 CHECK
-// rejects. That data loss is why the contacts category-filter cell under-rendered and was BLOCKED
-// (test.skip) on BACKLOG-1987. THE FIX: because schema.sql is already head structure, stamp the seeded
-// DB at the HEAD migration version so the app treats it as an up-to-date install and replays NOTHING.
-// schema.sql stays fully IF NOT EXISTS (idempotent) and the seeded rows survive verbatim.
-//
-// HEAD_SCHEMA_VERSION MUST equal the highest DatabaseService.MIGRATIONS[].version (databaseService.ts).
-// It is mirrored here (not imported) to keep this seeder self-contained (it runs even with NO app build,
-// so the compiled service is not requireable). A qa:test cross-check (headSchemaVersion.test.ts) parses
-// databaseService.ts and asserts these agree, so adding a v50 migration without bumping this constant
-// FAILS loudly rather than silently re-introducing the replay/data-loss regression.
+// SCHEMA VERSION (BACKLOG-4093, closes BACKLOG-2687): the seeded DB keeps the schema_version that
+// electron/database/schema.sql writes (the post-reset baseline, DatabaseService.BASELINE_VERSION),
+// exactly like a real fresh install (databaseService.ts seeds BASELINE and then replays every
+// migration above it on launch). The seeder must NOT stamp a different version:
+//   - below BASELINE, the app's schema-baseline fence refuses the DB ("Database from an older version");
+//   - above BASELINE (e.g. the highest migration), the app skips migrations whose objects schema.sql
+//     does not create (v71's idx_attachments_email_provider is migration-only).
+// The old reason for stamping head — v36's destructive contacts rebuild replaying over seeded rows —
+// no longer exists: the v30..v69 chain was deleted in the BACKLOG-2993 reset. The current migrations
+// select nothing from the seeded rows (no messages/attachments are seeded) or are guarded no-ops.
+// scripts/qa/harness/__tests__/headSchemaVersion.test.ts pins this.
 // ---------------------------------------------------------------------------
-
-/**
- * The head schema version — the highest DatabaseService.MIGRATIONS[].version in
- * electron/services/databaseService.ts. Kept in sync by scripts/qa/harness/__tests__/headSchemaVersion.test.ts.
- */
-// BACKLOG-2473: bumped 50 -> 61. This constant was ALREADY STALE BY TEN
-// MIGRATIONS before v61 existed — headSchemaVersion.test.ts was red on the base
-// branch, reporting exactly this. Corrected here because v61 is the migration
-// that moves head again, and a drift guard left red is a guard nobody reads.
-const HEAD_SCHEMA_VERSION = 61;
 
 /**
  * Provision the DB key + db-key-store.json (app format).
@@ -210,13 +191,9 @@ function ensureDbInitialized(userDataPath) {
     db.pragma(`key = "x'${key}'"`);
     db.pragma('cipher_compatibility = 4');
     db.pragma('foreign_keys = ON');
-    db.exec(schemaSql); // creates the full HEAD schema (all IF NOT EXISTS)
-    // BACKLOG-1977/1987: schema.sql stamps schema_version = 32 but is ALREADY head structure, so the app
-    // would replay migrations 33→49 on launch — including v36's contacts rebuild, which drops seeded
-    // provider-source contacts (outlook/google_contacts/iphone). Stamp the DB at the HEAD version so the
-    // app sees an up-to-date install and replays NOTHING, exactly like a real head install. schema.sql
-    // created the schema_version row (INSERT OR IGNORE ... VALUES (1, 32)), so we UPDATE it up to head.
-    db.prepare('UPDATE schema_version SET version = ? WHERE id = 1').run(HEAD_SCHEMA_VERSION);
+    // Creates the baseline schema AND its schema_version row (BASELINE_VERSION). No version stamp
+    // here: the app replays the migrations above BASELINE on its first launch, as for a fresh install.
+    db.exec(schemaSql);
   } finally {
     db.close();
   }
@@ -1025,10 +1002,25 @@ function run(opts) {
 }
 
 function main() {
-  const opts = parseArgs(process.argv.slice(2));
+  const opts = parseArgs(process.argv.slice(1));
   if (opts.help) {
     process.stdout.write('seed-fixture: seed an isolated QA profile DB. See file header.\n');
     process.exit(0);
+    return;
+  }
+
+  // BACKLOG-4093 isolation guard — synchronous, before whenReady, safeStorage or any DB work.
+  const { app } = require('electron');
+  const refusal = guard.isolationFailure({
+    hasMockKeychain: app.commandLine.hasSwitch('use-mock-keychain'),
+    opts,
+    actualUserData: app.getPath('userData'),
+    appData: app.getPath('appData'),
+  });
+  if (refusal) {
+    try { emit(opts, { seeded: false, error: refusal }); } catch (_) { /* last resort */ }
+    process.stderr.write(`seed-fixture guard: ${refusal}\n`);
+    process.exit(guard.GUARD_EXIT_CODE);
     return;
   }
 
@@ -1043,8 +1035,7 @@ function main() {
 
   // Seeding provisions the encrypted DB (schema.sql exec) and reads/writes the key via safeStorage,
   // both of which require a ready Electron app. Always run under Electron's app lifecycle.
-  const { app } = require('electron');
-  app.setName('keepr'); // match the app's lowercase name so safeStorage resolves the profile key
+  // No app.setName (BACKLOG-4093): see the SAFETY note in the file header.
   app.whenReady().then(() => {
     try {
       const result = run(opts);
@@ -1058,9 +1049,10 @@ function main() {
 }
 
 // Entry detection: under Electron, `require.main === module` is FALSE (require.main.filename is
-// undefined), so we instead check whether THIS file is the launched entry script (argv[1]). When
-// required by jest (unit tests), argv[1] is jest's runner, so main() is NOT invoked.
-const isEntryScript = process.argv[1] && path.resolve(process.argv[1]) === path.resolve(__filename);
+// undefined), so we instead check whether THIS file is among the launched argv entries. It is NOT
+// always argv[1]: the sandbox wrapper puts Electron switches (--no-sandbox, ...) in front of it
+// (BACKLOG-4093). When required by jest (unit tests), this file is not in argv, so main() is NOT invoked.
+const isEntryScript = guard.isEntryScript(process.argv, __filename);
 if (isEntryScript || require.main === module) {
   main();
 }
@@ -1070,7 +1062,6 @@ module.exports = {
   assertIsolatedProfile,
   defaultFixture,
   participantHash,
-  HEAD_SCHEMA_VERSION,
   SENTINEL,
   FIXTURE_ADDRESS,
   FIXTURE_WINDOW_START,

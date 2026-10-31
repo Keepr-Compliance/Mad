@@ -36,16 +36,52 @@ export interface SeededIdentity {
 
 const SEED_SENTINEL = '__QA_SEED_JSON__ ';
 
+/** How the seeder process is launched — exported so the argv contract is unit-testable. */
+export interface SeedSpawn {
+  command: string;
+  args: string[];
+}
+
+/**
+ * BACKLOG-4093: the seeder runs through the in-repo sandbox wrapper (macOS), with the mock keychain
+ * and the Chromium `=` form of --user-data-dir ONLY. Never add the bare `--user-data-dir <dir>`
+ * form: Chromium ignores it, and passing both forms sends userData to `<appData>/Electron`.
+ * The seeder's own guard (seederGuard.js) refuses every launch that breaks this contract.
+ */
+export function buildSeedSpawn(
+  repoRoot: string,
+  profileDir: string,
+  platform: NodeJS.Platform = process.platform,
+): SeedSpawn {
+  const script = join(repoRoot, 'scripts', 'qa', 'harness', 'seed-fixture.js');
+  const args = ['--use-mock-keychain', `--user-data-dir=${profileDir}`, script];
+  if (platform !== 'darwin') {
+    return { command: resolveElectronBinary(repoRoot), args };
+  }
+  const wrapper = join(repoRoot, 'scripts', 'qa', 'harness', 'electron-sandboxed.sh');
+  if (!existsSync(wrapper)) {
+    throw new Error(`[keepr-e2e] seed sandbox wrapper not found at ${wrapper}. Refusing to run the seeder unsandboxed.`);
+  }
+  return { command: wrapper, args };
+}
+
 /** Spawn the Electron-main seed script (self-provisions the DB) and parse the emitted identity. */
 function runSeedScript(repoRoot: string, profileDir: string): SeededIdentity {
-  const electronBin = resolveElectronBinary(repoRoot);
-  const script = join(repoRoot, 'scripts', 'qa', 'harness', 'seed-fixture.js');
-  const res = spawnSync(electronBin, [script, '--user-data-dir', profileDir], {
+  const { command, args } = buildSeedSpawn(repoRoot, profileDir);
+  const res = spawnSync(command, args, {
     cwd: repoRoot,
     encoding: 'utf8',
     env: { ...process.env, ELECTRON_ENABLE_LOGGING: '0' },
-    timeout: 120_000,
+    // A seed takes well under a second; a long wait means a blocked prompt or a missed entry check.
+    timeout: 30_000,
   });
+  if (res.error || res.status === null) {
+    const why = res.error ? res.error.message : `killed by ${res.signal ?? 'signal'}`;
+    throw new Error(
+      `[keepr-e2e] seed-fixture did not finish (${why}). A hang here has meant a keychain prompt or an entry ` +
+        `check that never matched — see BACKLOG-4093. Output:\n${res.stdout ?? ''}${res.stderr ?? ''}`,
+    );
+  }
   const out = `${res.stdout ?? ''}${res.stderr ?? ''}`;
   const line = (res.stdout ?? '').split('\n').find((l) => l.startsWith(SEED_SENTINEL));
   if (!line) {

@@ -129,6 +129,7 @@ const newAccountData = (platform: PlatformInfo): UserData => ({
 // Initial loading state
 const initialLoadingState: LoadingState = {
   status: "loading",
+  database: "unknown",
   phase: "checking-storage",
 };
 
@@ -958,6 +959,7 @@ describe("Full App Flow Integration Tests", () => {
     it("transitions to unauthenticated from ready state", () => {
       const readyState: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: testUser,
         platform: macOSPlatform,
         userData: returningUserDataMacOS,
@@ -992,6 +994,7 @@ describe("Full App Flow Integration Tests", () => {
     it("transitions to unauthenticated from onboarding state", () => {
       const onboardingState: OnboardingState = {
         status: "onboarding",
+        database: "initialized",
         step: "phone-type",
         user: testUser,
         platform: macOSPlatform,
@@ -1014,6 +1017,7 @@ describe("Full App Flow Integration Tests", () => {
     it("clears user and platform data on logout", () => {
       const readyState: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: testUser,
         platform: macOSPlatform,
         userData: returningUserDataMacOS,
@@ -1101,6 +1105,7 @@ describe("Full App Flow Integration Tests", () => {
     it("ignores invalid transitions gracefully", () => {
       const readyState: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: testUser,
         platform: macOSPlatform,
         userData: returningUserDataMacOS,
@@ -1125,6 +1130,7 @@ describe("Full App Flow Integration Tests", () => {
     it("APP_READY action is no-op when already ready", () => {
       const readyState: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: testUser,
         platform: macOSPlatform,
         userData: returningUserDataMacOS,
