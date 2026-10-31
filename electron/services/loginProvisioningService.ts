@@ -267,7 +267,9 @@ export async function provisionDeepLinkSignIn(
     getUserByEmailSync(u.email) ??
     getUserByOAuthIdSync(u.provider, u.supabaseId);
   if (existing && existing.id !== u.supabaseId) {
-    await logService.info(
+    // Logging is never awaited here: `logService` rejects when its file append
+    // fails, and that must not stop a sign-in from being provisioned.
+    void logService.info(
       "[DeepLink] Migrating local user ID to match Supabase",
       "LoginProvisioning",
       { oldId: redactId(existing.id), newId: redactId(u.supabaseId) },
@@ -276,7 +278,7 @@ export async function provisionDeepLinkSignIn(
       await migrateUserIdForUnification(existing.id, u.supabaseId);
     } catch (migrationError) {
       // Sign-in continues on the old id; Supabase operations may fail for it.
-      await logService.error(
+      void logService.error(
         "[DeepLink] Failed to migrate local user ID",
         "LoginProvisioning",
         { error: migrationError instanceof Error ? migrationError.message : String(migrationError) },
@@ -284,8 +286,7 @@ export async function provisionDeepLinkSignIn(
     }
   }
   const result = provisionDeepLinkLogin(u);
-  // Not awaited: the rows are committed, and a logging failure must not turn
-  // a provisioned sign-in into a thrown one at the caller.
+  // Not awaited, for the same reason (the rows are already committed here).
   void logService.info(
     result.isNewUser
       ? "[DeepLink] Created local user and session"
