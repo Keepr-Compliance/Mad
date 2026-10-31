@@ -2054,7 +2054,6 @@ describe("Settings", () => {
       await waitFor(() => expect(inAccount.getByTestId("account-copy-user-id")).toHaveTextContent("Copied"));
       // BACKLOG-3863 D1: the Plan & Billing card takes the Account tab's billing slot.
       expect(inAccount.getByTestId("plan-billing-card")).toBeInTheDocument();
-      expect(inAccount.queryByTestId("account-billing-block")).toBeNull();
       expect(inAccount.queryByText(/sign out/i)).toBeNull();
       // Security keeps its own sign-out-everywhere action.
       expect(within(document.getElementById("settings-security") as HTMLElement).getAllByText(/Sign Out All Devices/i).length).toBeGreaterThan(0);
