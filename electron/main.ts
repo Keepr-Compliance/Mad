@@ -64,7 +64,7 @@ import {
   SEAL_QUIT_QUIT_ANYWAY,
   sealQuitPromptHeading,
 } from "./utils/sealQuitPrompt";
-import { redactEmail, redactId } from "./utils/redactSensitive";
+import { redactId } from "./utils/redactSensitive";
 
 // ==========================================
 // DEEP LINK PROTOCOL REGISTRATION (TASK-1500)
@@ -246,6 +246,10 @@ import {
 } from "./constants/legalVersions";
 import type { OAuthProvider, SubscriptionTier, SubscriptionStatus, User } from "./types";
 import {
+  provisionDeepLinkSignIn,
+  type DeepLinkProvisionResult,
+} from "./services/loginProvisioningService";
+import {
   noteSignIn,
   saveSignInSession,
   setPendingDeepLinkUser,
@@ -358,71 +362,6 @@ process.on("unhandledRejection", (reason: unknown) => {
 });
 
 let mainWindow: BrowserWindow | null = null;
-
-/**
- * Create or update local SQLite user from deep link auth data (TASK-1507D)
- *
- * This ensures the local database has a user record after deep link auth,
- * which is required for FK constraints (mailbox connection, audit logs, etc.)
- *
- * @param userData - User data from Supabase session
- * @returns Promise<void>
- */
-async function syncDeepLinkUserToLocalDb(userData: PendingDeepLinkUser): Promise<void> {
-  try {
-    // Check if user already exists by email (deep link users use Supabase ID as oauth_id)
-    // We check by email first since that's the unique identifier
-    let localUser = await databaseService.getUserByEmail(userData.email);
-
-    if (!localUser) {
-      // Also check by OAuth ID in case the user was created via a different flow
-      // Map 'azure' to 'microsoft' for lookup (Azure AD is Microsoft's provider)
-      const lookupProvider = userData.provider === "azure" ? "microsoft" : userData.provider;
-      localUser = await databaseService.getUserByOAuthId(lookupProvider, userData.supabaseId);
-    }
-
-    if (!localUser) {
-      // TASK-1507G: Use Supabase Auth UUID as local user ID for unified IDs
-      // Map 'azure' to 'microsoft' - Azure AD is Microsoft's auth provider
-      const normalizedProvider = userData.provider === "azure" ? "microsoft" : userData.provider;
-      await databaseService.createUser({
-        id: userData.supabaseId,
-        email: userData.email,
-        display_name: userData.displayName || userData.email.split("@")[0],
-        avatar_url: userData.avatarUrl,
-        oauth_provider: normalizedProvider,
-        oauth_id: userData.supabaseId,
-        subscription_tier: userData.subscriptionTier || "free",
-        subscription_status: userData.subscriptionStatus || "trial",
-        trial_ends_at: userData.trialEndsAt,
-        is_active: true,
-      });
-      log.info("[DeepLink] Created local SQLite user for:", redactId(userData.supabaseId));
-    } else if (localUser.id !== userData.supabaseId) {
-      // BACKLOG-600: Local user exists with different ID than Supabase auth.uid()
-      // This happens for users created before TASK-1507G (user ID unification)
-      // Migrate the local user to use the Supabase ID for FK constraint compatibility
-      log.info("[DeepLink] Migrating local user ID to match Supabase", {
-        oldId: redactId(localUser.id),
-        newId: redactId(userData.supabaseId),
-        email: redactEmail(userData.email),
-      });
-      try {
-        await databaseService.migrateUserIdForUnification(localUser.id, userData.supabaseId);
-        log.info("[DeepLink] Local user ID migrated successfully to:", redactId(userData.supabaseId));
-      } catch (migrationError) {
-        log.error("[DeepLink] Failed to migrate local user ID:", migrationError);
-        // Don't throw - auth should continue, but Supabase operations may fail
-      }
-    } else {
-      log.info("[DeepLink] Local user already exists with correct ID for:", redactEmail(userData.email));
-    }
-  } catch (error) {
-    log.error("[DeepLink] Failed to create local user:", error);
-    // Don't rethrow - auth should still succeed even if local user creation fails
-    // The user will be created on next database operation that requires it
-  }
-}
 
 // ==========================================
 // DEEP LINK URL REDACTION (TASK-1939)
@@ -792,19 +731,25 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       let localUser: User | null = null; // Hoisted for session save logic
 
       if (databaseService.isInitialized()) {
-        // Database is ready - create user now
+        // Database is ready - provision the user row and session row now, in
+        // one transaction (BACKLOG-3322; the same call the deferred-DB drain makes).
         log.info("[DeepLink] Database initialized, creating local user");
-        await syncDeepLinkUserToLocalDb(deepLinkUserData);
-
-        // TASK-1507F: Get the local user ID after creation/sync
-        localUser = await databaseService.getUserByEmail(userEmail);
-        if (localUser) {
+        let provisioned: DeepLinkProvisionResult | null = null;
+        try {
+          provisioned = await provisionDeepLinkSignIn(deepLinkUserData);
+        } catch (provisionError) {
+          // Auth still succeeds. The provisioning transaction rolled back, so no
+          // user row is left without its session row; the next sign-in retries.
+          log.error("[DeepLink] Failed to create local user and session:", provisionError);
+        }
+        if (provisioned) {
+          localUser = provisioned.user;
           localUserId = localUser.id;
           log.info("[DeepLink] Using local user ID:", redactId(localUserId));
 
           // Save session to disk for persistence across app restarts
           try {
-            const sessionToken = await databaseService.createSession(localUserId);
+            const sessionToken = provisioned.sessionToken;
 
             // Build full Subscription object from license status
             const subscriptionTier = deepLinkUserData.subscriptionTier || "free";
@@ -847,7 +792,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
             log.error("[DeepLink] Failed to save session:", sessionError);
           }
         } else {
-          log.warn("[DeepLink] Local user not found after sync, using Supabase ID");
+          log.warn("[DeepLink] Local user not provisioned, using Supabase ID");
         }
       } else {
         // Database not ready yet - store for later

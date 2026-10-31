@@ -28,6 +28,8 @@
 // BACKLOG-3555 S1-S3: unlike the session and license 3555 suites, this harness MOCKS the
 // initializationBroadcaster (whenDbReady -> ready). The persist path under test never calls
 // whenDbReady; the store and saveSignInSession here are the real signInState module.
+// BACKLOG-3322: user + session rows come from provisionDeepLinkSignIn (mocked here; real-driver
+// controls in deepLinkProvisioningAtomicity-3322). The facade's createUser/createSession throw.
 // Makes this file a module: the 2173b harness it is built from declares the same top-level names as a global script.
 export {};
 
@@ -46,13 +48,18 @@ function setup(options: {
 }) {
   const registered: RegisteredHandlers = {};
 
-  const mockCreateSession = jest.fn().mockResolvedValue("sqlite-session-token-abc");
+  const mockCreateSession = jest.fn().mockRejectedValue(new Error("facade createSession must not be called"));
   const mockSaveSession = jest.fn().mockResolvedValue(true);
   const mockGetSessionExpirationMs = jest.fn(() => 24 * 60 * 60 * 1000);
 
   const mockGetUserByEmail = jest.fn().mockResolvedValue(options.existingLocalUser ?? null);
   const mockGetUserByOAuthId = jest.fn().mockResolvedValue(options.existingLocalUser ?? null);
-  const mockCreateUser = jest.fn().mockResolvedValue(undefined);
+  const mockCreateUser = jest.fn().mockRejectedValue(new Error("facade createUser must not be called"));
+  const mockProvisionDeepLinkSignIn = jest.fn().mockResolvedValue({
+    user: options.existingLocalUser ?? options.createdLocalUser ?? null,
+    sessionToken: "sqlite-session-token-abc",
+    isNewUser: !options.existingLocalUser,
+  });
   const mockGetUserById = jest
     .fn()
     .mockResolvedValue(options.createdLocalUser ?? options.existingLocalUser ?? null);
@@ -132,6 +139,10 @@ function setup(options: {
     },
   }));
 
+  jest.doMock("../../services/loginProvisioningService", () => ({
+    provisionDeepLinkSignIn: mockProvisionDeepLinkSignIn,
+  }));
+
   jest.doMock("../../services/supabaseService", () => ({
     __esModule: true,
     default: {
@@ -167,6 +178,7 @@ function setup(options: {
     mockCreateUser,
     mockGetUserById,
     mockGetAuthSession,
+    mockProvisionDeepLinkSignIn,
   };
 }
 

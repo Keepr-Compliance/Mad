@@ -501,26 +501,16 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   //
   // --- BACKLOG-3319: DISCHARGED — failureLogService.ts::pruneOldEntries now one dbTransaction; proof: failureLogService.pruneAtomicity-3319.test.ts
 
-  // ==========================================================================
-  // BACKLOG-3239 — SURFACED BY THE BRANCH-EXCLUSIVITY FIX
-  // ==========================================================================
-  // The branch rule cleared a pair whenever a `} else` closed the arm holding
-  // the EARLIER write, without ever checking where the LATER write was. This
-  // handler is the one live site that rode on it, and it is the deep-link login
-  // the founder actually uses.
-  //
-  // Measured at `73d3e3fbe`: of the nine units cleared only by this predicate,
-  // four were cleared by a `} else` and five by a `return` (BACKLOG-3224's arm,
-  // untouched). Of those four, THREE are genuinely exclusive and stay cleared —
-  // each was opened and read, not inferred: `contactHandlers::ipc:contacts:get-available`
-  // (a `} else if` arm), `contactDbService::markContactAsImported` and
-  // `emailAttachmentService::processAttachment` (both one write per arm). This
-  // entry is the ENTIRE surfaced population, and it is not empty, which is the
-  // bar BACKLOG-3248 sets for a widening.
-  //
-  // NOT FIXED HERE. Damage transcribed from BACKLOG-3322, which owns the path.
-  "electron/handlers/systemHandlers.ts::ipc:system:initialize-secure-storage":
-    "BACKLOG-3322 — the macOS deep-link login provisions the user, token and session as separate writes, so a crash between them leaves a local users row with no durable session: no session.json on disk, and the relaunch that grants Full Disk Access lands the founder back on a failed-login screen while `ensureUserInLocalDb` reports 'already exists -> success' over it. The counted pair is `createUser` at systemHandlers.ts:562 and `createLocalUserFromCloud` at :651. BACKLOG-3253 removes the DB-init deferral this catch-up path exists to compensate for, and BACKLOG-3322 carries the open Fork D question of what this path should do when tokens are absent.",
+  // --- BACKLOG-3322: DISCHARGED — systemHandlers.ts::ipc:system:initialize-secure-storage ---
+  // The one entry BACKLOG-3239's branch-exclusivity fix surfaced is deleted
+  // because its bug is fixed: both deep-link sign-in branches (main.ts with the
+  // DB open, this handler's pending-user drain with the DB opened later) now
+  // provision the user row and the session row through
+  // `loginProvisioningService.ts::provisionDeepLinkSignIn`, which commits both
+  // in one `dbTransaction` (`provisionDeepLinkLogin`, a unit this guard sees).
+  // Evidenced by the forced-crash suite `deepLinkProvisioningAtomicity-3322.test.ts`
+  // and the source pin `deepLinkProvisioning-source-3322.test.ts` (main.ts is
+  // invisible to this guard; the pin is what reds if either branch writes inline).
 
   // MERGE NOTE: the incoming side of this conflict was the original nine-entry
   // list. It is deliberately discarded, not merged — every entry in it was
@@ -1726,7 +1716,7 @@ function unitWrites(unit: Fn): { at: number; label: string }[] {
  *
  * The machinery below could verify the earlier write by offset too. ZERO live
  * offenders have the shape at `73d3e3fbe` — the fix's whole surfaced population
- * is the ONE unit listed in `KNOWN_UNWRAPPED` above, and it is not this shape.
+ * was ONE unit (since discharged by BACKLOG-3322), and it was not this shape.
  * Widening it here was ruled out of scope for that reason, the same
  * measured-need bar BACKLOG-3312 was held to.
  *

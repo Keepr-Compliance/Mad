@@ -56,16 +56,21 @@ import type {
   OAuthPurpose,
   OAuthToken,
 } from "../types";
+import type { PendingDeepLinkUser } from "./signInState";
 import { dbTransaction } from "./db/core/dbConnection";
 import {
   createUserSync,
+  getUserByEmailSync,
   getUserByIdSync,
   getUserByOAuthIdSync,
+  migrateUserIdForUnification,
   updateLastLoginSync,
   updateUserSync,
 } from "./db/userDbService";
 import { saveOAuthTokenSync } from "./db/oauthTokenDbService";
 import { createSessionSync } from "./db/sessionDbService";
+import logService from "./logService";
+import { redactId } from "../utils/redactSensitive";
 
 /** The token write, when the calling path saves one. */
 export interface LoginTokenWrite {
@@ -174,4 +179,119 @@ export function provisionLogin(
 
     return { user, sessionToken, isNewUser, existingBefore };
   });
+}
+
+// ===========================================================================
+// DEEP-LINK SIGN-IN — BACKLOG-3322
+// ===========================================================================
+
+/** What a deep-link sign-in provisioned: a committed user and its session row. */
+export interface DeepLinkProvisionResult {
+  user: User;
+  sessionToken: string;
+  isNewUser: boolean;
+}
+
+/**
+ * Provision a deep-link (browser) sign-in atomically: resolve or create the local
+ * user and open its session row in ONE transaction. Throws on any failure,
+ * leaving neither row behind.
+ *
+ * The sibling of `provisionLogin`, not a copy of it. The lookup order differs:
+ * email FIRST (`users_local.email` is NOT NULL UNIQUE, so a row under another id
+ * with the same email must be found, not collided with), then
+ * `(provider, supabaseId)` as the OAuth id. `provider` arrives already
+ * normalized by the caller (`normalizeOAuthProvider`).
+ *
+ * Same body rule as `provisionLogin`: `*Sync` primitives and pure computation
+ * only. The lookup and the insert have no `await` between them, so
+ * check-then-insert is atomic on the single connection.
+ *
+ * Callers use `provisionDeepLinkSignIn`, which runs the legacy-id migration
+ * first. This function is exported for that wrapper and for its controls.
+ */
+export function provisionDeepLinkLogin(
+  u: PendingDeepLinkUser,
+): DeepLinkProvisionResult {
+  return dbTransaction(() => {
+    const existing =
+      getUserByEmailSync(u.email) ??
+      getUserByOAuthIdSync(u.provider, u.supabaseId);
+    const user =
+      existing ??
+      createUserSync({
+        // TASK-1507G: the Supabase Auth UUID is the local user id.
+        id: u.supabaseId,
+        email: u.email,
+        display_name: u.displayName || u.email.split("@")[0],
+        avatar_url: u.avatarUrl,
+        oauth_provider: u.provider,
+        oauth_id: u.supabaseId,
+        subscription_tier: u.subscriptionTier || "free",
+        subscription_status: u.subscriptionStatus || "trial",
+        trial_ends_at: u.trialEndsAt,
+        is_active: true,
+      });
+    const sessionToken = createSessionSync(user.id);
+    return { user, sessionToken, isNewUser: existing === null };
+  });
+}
+
+/**
+ * The one entry point both deep-link branches call: `handleDeepLinkCallback`
+ * in main.ts (database open) and the pending-user drain in systemHandlers.ts
+ * (database opened later).
+ *
+ * Step 1 — legacy id (BACKLOG-600). A local user created before TASK-1507G has
+ * an id other than the Supabase id; it is migrated to the Supabase id first.
+ * That migration runs OUTSIDE the provisioning transaction, deliberately: it
+ * sets `PRAGMA foreign_keys = OFF` and opens its own transaction, and that
+ * pragma is a no-op inside an open transaction, so moving it in makes the
+ * parent-id update fail its foreign keys. A migration failure is logged and
+ * the sign-in continues on the old id, as before.
+ *
+ * Non-atomic across the two steps, stated: a crash after the migration commits
+ * and before step 2 leaves the migrated user with no session row. The next
+ * sign-in finds it by email with the matching id, skips the migration and adds
+ * the session.
+ *
+ * Step 2 — `provisionDeepLinkLogin`, one transaction.
+ *
+ * Writing `session.json` stays with the caller, after this resolves
+ * (`saveSignInSession`): a file write cannot sit inside `dbTransaction`.
+ */
+export async function provisionDeepLinkSignIn(
+  u: PendingDeepLinkUser,
+): Promise<DeepLinkProvisionResult> {
+  const existing =
+    getUserByEmailSync(u.email) ??
+    getUserByOAuthIdSync(u.provider, u.supabaseId);
+  if (existing && existing.id !== u.supabaseId) {
+    await logService.info(
+      "[DeepLink] Migrating local user ID to match Supabase",
+      "LoginProvisioning",
+      { oldId: redactId(existing.id), newId: redactId(u.supabaseId) },
+    );
+    try {
+      await migrateUserIdForUnification(existing.id, u.supabaseId);
+    } catch (migrationError) {
+      // Sign-in continues on the old id; Supabase operations may fail for it.
+      await logService.error(
+        "[DeepLink] Failed to migrate local user ID",
+        "LoginProvisioning",
+        { error: migrationError instanceof Error ? migrationError.message : String(migrationError) },
+      );
+    }
+  }
+  const result = provisionDeepLinkLogin(u);
+  // Not awaited: the rows are committed, and a logging failure must not turn
+  // a provisioned sign-in into a thrown one at the caller.
+  void logService.info(
+    result.isNewUser
+      ? "[DeepLink] Created local user and session"
+      : "[DeepLink] Opened session for existing local user",
+    "LoginProvisioning",
+    { userId: redactId(result.user.id) },
+  );
+  return result;
 }
