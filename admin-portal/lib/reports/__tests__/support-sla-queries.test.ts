@@ -10,11 +10,15 @@ import { describe, expect, it } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import {
   getOpenTicketCount,
+  getSupportSlaSettings,
   getSupportTickets,
+  parseSupportSlaSettings,
   periodOrFilter,
   POSTGREST_MAX_ROWS,
+  SLA_SETTINGS_COLUMNS,
   SUPPORT_TICKET_LIMIT,
 } from '../support-sla-queries';
+import { TEST_SETTINGS } from './support-sla-attainment.fixture';
 import { lastDays } from '../support-sla';
 import { NOW } from './support-sla.fixture';
 
@@ -32,17 +36,21 @@ function stubClient(opts: { pool?: unknown[]; serverMaxRows?: number; error?: bo
   const tables: string[] = [];
   let requested = Infinity;
   let head = false;
+  let single = false;
   const builder: Record<string, unknown> = {
     then(resolve: (value: unknown) => unknown) {
       if (error) return Promise.resolve({ data: null, count: null, error: { message: 'boom' } }).then(resolve);
       if (head) return Promise.resolve({ data: null, count, error: null }).then(resolve);
+      // maybeSingle(): one row or null, never an array (PostgREST behaviour).
+      if (single) return Promise.resolve({ data: pool[0] ?? null, error: null }).then(resolve);
       const n = Math.min(requested, serverMaxRows, pool.length);
       return Promise.resolve({ data: pool.slice(0, n), error: null }).then(resolve);
     },
   };
-  for (const method of ['select', 'eq', 'neq', 'gte', 'gt', 'lt', 'lte', 'order', 'limit', 'in', 'not', 'is', 'filter', 'or']) {
+  for (const method of ['select', 'eq', 'neq', 'gte', 'gt', 'lt', 'lte', 'order', 'limit', 'in', 'not', 'is', 'filter', 'or', 'maybeSingle']) {
     builder[method] = (...args: unknown[]) => {
       calls.push({ method, args });
+      if (method === 'maybeSingle') single = true;
       if (method === 'limit') requested = args[0] as number;
       if (method === 'select' && (args[1] as { head?: boolean } | undefined)?.head) head = true;
       return builder;
@@ -115,5 +123,59 @@ describe('getOpenTicketCount', () => {
   it('a failed count returns null', async () => {
     const { client } = stubClient({ error: true });
     expect(await getOpenTicketCount(client)).toBeNull();
+  });
+});
+
+describe('getSupportSlaSettings (BACKLOG-4086)', () => {
+  const DB_ROW = {
+    first_response_target_minutes: 480,
+    resolution_target_business_days: 3,
+    business_day_start_minute: 540,
+    business_day_end_minute: 1020,
+    business_days: [1, 2, 3, 4, 5],
+    time_zone: 'America/Los_Angeles',
+  };
+
+  it('reads one row of support_sla_settings with the six columns and maps it', async () => {
+    const { client, calls, tables } = stubClient({ pool: [DB_ROW] });
+    expect(await getSupportSlaSettings(client)).toEqual(TEST_SETTINGS);
+    expect(tables).toEqual(['support_sla_settings']);
+    expect(argsFor(calls, 'select')).toEqual([[SLA_SETTINGS_COLUMNS]]);
+    expect(SLA_SETTINGS_COLUMNS.split(', ').sort()).toEqual(Object.keys(DB_ROW).sort());
+    expect(argsFor(calls, 'maybeSingle')).toEqual([[]]);
+  });
+
+  it('non-default values pass through (a 60-minute target)', async () => {
+    const { client } = stubClient({ pool: [{ ...DB_ROW, first_response_target_minutes: 60 }] });
+    expect((await getSupportSlaSettings(client))?.firstResponseTargetMinutes).toBe(60);
+  });
+
+  it('a failed read is null, never code defaults', async () => {
+    const { client } = stubClient({ error: true });
+    expect(await getSupportSlaSettings(client)).toBeNull();
+  });
+
+  it('no row is null', async () => {
+    const { client } = stubClient({ pool: [] });
+    expect(await getSupportSlaSettings(client)).toBeNull();
+  });
+
+  it('an unknown time zone is null', async () => {
+    const { client } = stubClient({ pool: [{ ...DB_ROW, time_zone: 'Mars/Olympus_Mons' }] });
+    expect(await getSupportSlaSettings(client)).toBeNull();
+  });
+
+  it.each([
+    ['target 0', { first_response_target_minutes: 0 }],
+    ['days 0', { resolution_target_business_days: 0 }],
+    ['end <= start', { business_day_end_minute: 540 }],
+    ['start out of range', { business_day_start_minute: -1 }],
+    ['end out of range', { business_day_end_minute: 1441 }],
+    ['weekday 7', { business_days: [1, 7] }],
+    ['no weekdays', { business_days: [] }],
+    ['non-integer target', { first_response_target_minutes: 1.5 }],
+    ['string target', { first_response_target_minutes: '480' }],
+  ])('a value outside the table CHECKs is null: %s', (_label, patch) => {
+    expect(parseSupportSlaSettings({ ...DB_ROW, ...patch })).toBeNull();
   });
 });
