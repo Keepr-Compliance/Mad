@@ -1921,7 +1921,9 @@ CREATE INDEX IF NOT EXISTS idx_hidden_texts_txn_external
 --                                 stable key. UNIQUE (id, kind) exists so a
 --                                 member can carry a composite FK and cannot
 --                                 disagree with its group's kind.
---   ..._link_members              the emails or attachments in that group. An
+--   ..._link_members              the emails, attachments or texts in that
+--                                 group (texts: BACKLOG-3968, migration v78,
+--                                 `message_id` -> messages.id). An
 --                                 email link is the SET of member email_ids; a
 --                                 single email is a group of one. There is no
 --                                 thread_id column anywhere — thread_id is
@@ -1936,7 +1938,7 @@ CREATE INDEX IF NOT EXISTS idx_hidden_texts_txn_external
 -- wiped. Ownership comes through transactions.user_id. Same reasoning as
 -- transaction_hidden_texts.hidden_by above.
 --
--- Members cascade from `emails` and `attachments` BY DECISION: an email Force
+-- Members cascade from `emails`, `attachments` and `messages` BY DECISION: an email Force
 -- Re-cache and a macOS/Android message re-import delete those rows and
 -- re-insert them under new ids, and a checklist link dies with them exactly as
 -- a transaction link does — one force button, one behaviour. The AFTER DELETE
@@ -1981,7 +1983,7 @@ CREATE INDEX IF NOT EXISTS idx_checklist_items_checklist
 CREATE TABLE IF NOT EXISTS transaction_checklist_links (
   id         TEXT PRIMARY KEY,
   item_id    TEXT NOT NULL,
-  kind       TEXT NOT NULL CHECK (kind IN ('attachment', 'email')),
+  kind       TEXT NOT NULL CHECK (kind IN ('attachment', 'email', 'text')),
   label      TEXT NOT NULL CHECK (length(trim(label)) >= 1),
   sort_order INTEGER NOT NULL DEFAULT 0,
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -2001,18 +2003,27 @@ CREATE TABLE IF NOT EXISTS transaction_checklist_link_members (
   kind          TEXT NOT NULL,
   attachment_id TEXT,
   email_id      TEXT,
-  CHECK ((kind = 'attachment' AND attachment_id IS NOT NULL AND email_id IS NULL)
-      OR (kind = 'email' AND email_id IS NOT NULL AND attachment_id IS NULL)),
+  message_id    TEXT,
+  CHECK ((kind = 'attachment' AND attachment_id IS NOT NULL AND email_id IS NULL AND message_id IS NULL)
+      OR (kind = 'email' AND email_id IS NOT NULL AND attachment_id IS NULL AND message_id IS NULL)
+      OR (kind = 'text' AND message_id IS NOT NULL AND attachment_id IS NULL AND email_id IS NULL)),
   UNIQUE (link_id, attachment_id),
   UNIQUE (link_id, email_id),
+  UNIQUE (link_id, message_id),
   FOREIGN KEY (link_id, kind) REFERENCES transaction_checklist_links(id, kind) ON DELETE CASCADE,
   FOREIGN KEY (attachment_id) REFERENCES attachments(id) ON DELETE CASCADE,
-  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_checklist_members_attachment
   ON transaction_checklist_link_members(attachment_id) WHERE attachment_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_checklist_members_email
   ON transaction_checklist_link_members(email_id) WHERE email_id IS NOT NULL;
+-- BACKLOG-3968: the partial index on message_id is NOT created here. This file
+-- runs BEFORE the versioned migrations, against a pre-v78 members table that
+-- has no message_id column, so the statement would throw and stop every
+-- upgraded open. Migration v78 creates idx_checklist_members_message on every
+-- database, fresh installs included (they run v78 too).
 
 CREATE TRIGGER IF NOT EXISTS trg_checklist_link_members_drop_empty_link
 AFTER DELETE ON transaction_checklist_link_members

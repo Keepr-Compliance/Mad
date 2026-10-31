@@ -766,6 +766,7 @@ class SubmissionService {
     checklistLinkGaps: ChecklistLinkGap[];
     sentEmailIds: Set<string>;
     sentAttachmentIds: Set<string>;
+    sentTextIds: Set<string>;
   }> {
     const transaction = await this.loadTransaction(transactionId);
     // BACKLOG-3683: the same reader the scope preview uses.
@@ -849,6 +850,11 @@ class SubmissionService {
     // (SubmitForReviewModal `proceed` awaits the save, then submits).
     const sentEmailIds = new Set(emailIds);
     const sentAttachmentIds = new Set(preflight.sendable.map((a) => a.id));
+    // BACKLOG-3968 (SR R2): the texts actually uploaded — `messages` is the
+    // selection AND the audit window, each mapped to a submission row below.
+    // Never `selected`: a text in the selection but outside the dates is not
+    // uploaded.
+    const sentTextIds = new Set(messages.map((m) => m.id));
     // A failed local read fails the submit the same way a failed checklist
     // copy does (BACKLOG-3600): nothing is sent, and the agent is told why.
     let localChecklists: Awaited<ReturnType<typeof getChecklistsForTransaction>>;
@@ -866,6 +872,7 @@ class SubmissionService {
       checklists: localChecklists,
       sentEmailIds,
       sentAttachmentIds,
+      sentTextIds,
       notIncluded: preflight.notIncluded,
       startedAt: transaction.started_at ?? null,
       closedAt: transaction.closed_at ?? null,
@@ -892,6 +899,7 @@ class SubmissionService {
       checklistLinkGaps,
       sentEmailIds,
       sentAttachmentIds,
+      sentTextIds,
     };
   }
 
@@ -1030,6 +1038,7 @@ class SubmissionService {
       const snapshotSent = {
         emailIds: gathered.sentEmailIds,
         attachmentIds: gathered.sentAttachmentIds,
+        textIds: gathered.sentTextIds,
         acceptedMembers: gapMemberKeys(checklistLinkGaps),
       };
       throwIfCancelled(signal);

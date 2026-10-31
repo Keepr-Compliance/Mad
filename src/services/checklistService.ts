@@ -26,7 +26,7 @@ import logger from "../utils/logger";
 
 import type {
   AddChecklistLinkResult,
-  ChecklistLinkKind,
+  ChecklistLinkWriteKind,
   ChecklistsForTransaction,
   ChecklistTemplate,
   ChecklistTemplateSource,
@@ -202,7 +202,7 @@ export const checklistService = {
    */
   async addLink(
     itemId: string,
-    kind: ChecklistLinkKind,
+    kind: ChecklistLinkWriteKind,
     targetIds: string[],
     includeOutsideDates?: boolean,
   ): Promise<ApiResult<AddChecklistLinkResult>> {

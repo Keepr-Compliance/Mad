@@ -17,7 +17,7 @@ import { ipcRenderer } from "electron";
 
 import type {
   AddChecklistLinkResult,
-  ChecklistLinkKind,
+  ChecklistLinkWriteKind,
   ChecklistsForTransaction,
   SelectChecklistTemplateResult,
 } from "../types/checklist";
@@ -76,7 +76,7 @@ export const checklistBridge = {
    */
   addLink: (args: {
     itemId: string;
-    kind: ChecklistLinkKind;
+    kind: ChecklistLinkWriteKind;
     targetIds: string[];
     /** BACKLOG-3764: the agent's "Include it" to the outside-the-dates question. */
     includeOutsideDates?: boolean;

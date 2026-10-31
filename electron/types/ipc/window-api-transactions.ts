@@ -92,7 +92,7 @@ export interface SubmitChecklistLinkGap {
   linkId: string;
   itemTitle: string;
   label: string;
-  kind: "attachment" | "email";
+  kind: "attachment" | "email" | "text";
   reason: "outside_audit_dates" | "not_included";
   detail: "not_on_transaction" | "cannot_be_sent" | "message_not_sent" | "not_sent" | null;
   missingIds: string[];

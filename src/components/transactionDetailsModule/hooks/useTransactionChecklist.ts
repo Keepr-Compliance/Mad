@@ -34,7 +34,7 @@ import logger from "../../../utils/logger";
 import { logOpenPath, nowMs } from "../../../utils/openPathTiming";
 import type {
   AddChecklistLinkResult,
-  ChecklistLinkKind,
+  ChecklistLinkWriteKind,
   ChecklistsForTransaction,
   SelectChecklistTemplateResult,
 } from "../../../../electron/types/checklist";
@@ -46,7 +46,7 @@ export type ChecklistLoadState =
 
 /** One group of evidence the picker asks main to link. */
 export interface ChecklistLinkRequest {
-  kind: ChecklistLinkKind;
+  kind: ChecklistLinkWriteKind;
   targetIds: string[];
   /** BACKLOG-3764: the agent answered "Include it" to the outside-the-dates question. */
   includeOutsideDates?: boolean;

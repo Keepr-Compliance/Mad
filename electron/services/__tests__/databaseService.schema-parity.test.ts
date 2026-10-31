@@ -363,6 +363,14 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     ref: "BACKLOG-3475",
   },
   {
+    key: "INDEX:sqlite_autoindex_transaction_checklist_link_members_4",
+    what: "SQLite's automatic index for UNIQUE (link_id, message_id).",
+    why:
+      "BACKLOG-3968 (migration v78): the text half of the same rule — one " +
+      "text at most once in a group.",
+    ref: "BACKLOG-3968",
+  },
+  {
     key: "TRIGGER:trg_checklist_link_members_drop_empty_link",
     what: "AFTER DELETE on members: removes a group whose last member is gone.",
     why:
