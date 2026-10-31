@@ -156,7 +156,7 @@ describe("TodoPanel", () => {
 });
 
 describe("the template-checklists hint (BACKLOG-3966 PR-3)", () => {
-  const HINT = "Template checklists aren't on your plan.";
+  const HINT = "Template checklists aren’t on your plan.";
   it.each([
     ["rows", ready([item(1)])],
     ["nothing left", ready([])],
@@ -164,7 +164,7 @@ describe("the template-checklists hint (BACKLOG-3966 PR-3)", () => {
     ["loading", { status: "loading" } as TodoState],
   ])("templateHint + %s -> the hint shows", (_name, state) => {
     render(
-      <TodoPanel state={state} templateHint onOpenTransaction={jest.fn()} onRetry={jest.fn()} onTick={jest.fn()} now={NOW} />,
+      <TodoPanel state={state} templateHint={HINT} onOpenTransaction={jest.fn()} onRetry={jest.fn()} onTick={jest.fn()} now={NOW} />,
     );
     expect(screen.getByTestId("dashboard-todo-template-hint")).toHaveTextContent(HINT);
   });
@@ -176,7 +176,7 @@ describe("the template-checklists hint (BACKLOG-3966 PR-3)", () => {
 
   it("signed out ('off') -> no hint", () => {
     render(
-      <TodoPanel state={{ status: "off" }} templateHint onOpenTransaction={jest.fn()} onRetry={jest.fn()} onTick={jest.fn()} now={NOW} />,
+      <TodoPanel state={{ status: "off" }} templateHint={HINT} onOpenTransaction={jest.fn()} onRetry={jest.fn()} onTick={jest.fn()} now={NOW} />,
     );
     expect(screen.queryByText(HINT)).not.toBeInTheDocument();
   });

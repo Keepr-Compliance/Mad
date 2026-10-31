@@ -35,6 +35,8 @@ import {
   fixtureDetail,
   fixtureDetailWithoutLinks,
   fixtureEmailCommunications,
+  fixtureChecklistsWithMyItems,
+  fixtureMyItems,
 } from "../transactionDetailsModule/components/checklist/__tests__/checklistFixture";
 
 const render = (ui: React.ReactElement) => rtlRender(ui, { wrapper: NotificationProvider });
@@ -424,5 +426,27 @@ describe("C-9 — the TTL re-ask never unmounts the open Checklist panel", () =>
     });
     expect(screen.getByTestId("checklist-panel")).toBeInTheDocument();
     expect(draft()?.value).toBe("half-typed note");
+  });
+});
+
+describe("BACKLOG-3966 U1 — My items count on the Overview", () => {
+  it("allowed + templates and My items -> the Overview line is main's sum, My items included", async () => {
+    strictState().mockResolvedValue("allowed");
+    checklists().get.mockResolvedValue({ success: true, checklists: fixtureChecklistsWithMyItems() });
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    const section = await screen.findByTestId("overview-checklist");
+    // 3 of 6 from the templates + 1 of 2 of the agent's own.
+    expect(section).toHaveTextContent("4 of 8 required done");
+  });
+
+  it("blocked + only My items -> the Overview line shows them, and the tab opens editable", async () => {
+    strictState().mockResolvedValue("blocked");
+    checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([fixtureMyItems()]) });
+    render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
+    const section = await screen.findByTestId("overview-checklist");
+    expect(section).toHaveTextContent("1 of 2 required done");
+    fireEvent.click(screen.getByTestId("overview-open-checklist"));
+    expect(await screen.findByTestId("my-items-add-input")).toBeInTheDocument();
+    expect(screen.getByTestId("checklist-template-hint")).toBeInTheDocument();
   });
 });

@@ -8,6 +8,8 @@
  * checklists), so the renderer no longer asks the plan gate before reading.
  * The gate decides one thing here: on a plan main said has no checklists
  * ("blocked"), Todo says template checklists aren't on the plan.
+ * BACKLOG-3966 U1: and on a plan that could not be read ("unknown"), it says
+ * so — the same sentence as the Checklist tab (`templateChecklistHint`).
  */
 import React from "react";
 import { useSessionStrictFeatureState } from "../../../contexts/StrictFeatureContext";
@@ -15,6 +17,7 @@ import type { TransactionTab } from "../../transactionDetailsModule/types";
 import { useDashboardPanels } from "./useDashboardPanels";
 import { RecentPanel } from "./RecentPanel";
 import { TodoPanel } from "./TodoPanel";
+import { templateChecklistHint } from "../../../utils/checklistPlanHint";
 
 /** The grid with both panels: one column under 768 px, two from 768 px. */
 export const PANELS_GRID_TWO = "grid grid-cols-1 md:grid-cols-2 gap-4";
@@ -40,7 +43,6 @@ export function DashboardPanels({
     <div className={`mt-6 ${PANELS_GRID_TWO}`} data-testid="dashboard-panels">
       <RecentPanel
         state={recent}
-        showProgress
         disabled={disabled}
         onOpenTransaction={(id) => onOpenTransaction(id, "overview")}
         onViewAll={onViewTransactions}
@@ -48,7 +50,7 @@ export function DashboardPanels({
       <TodoPanel
         state={todo}
         disabled={disabled}
-        templateHint={gate === "blocked"}
+        templateHint={templateChecklistHint(gate)}
         onOpenTransaction={(id) => onOpenTransaction(id, "checklist")}
         onRetry={reload}
         onTick={(itemId) => void tickItem(itemId)}

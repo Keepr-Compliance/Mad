@@ -43,9 +43,11 @@ export interface TodoPanelProps {
   tickError?: TickError | null;
   /**
    * BACKLOG-3966 PR-3: the plan has no checklists, so Todo holds My items only.
-   * Says so where the template items would have been.
+   * Says so where the template items would have been. U1: the sentence comes
+   * from `templateChecklistHint` (src/utils/checklistPlanHint.ts), the same one
+   * the Checklist tab shows; null shows nothing.
    */
-  templateHint?: boolean;
+  templateHint?: string | null;
   /** Injected in tests; defaults to the current time. */
   now?: Date;
 }
@@ -189,7 +191,7 @@ export function TodoPanel({
   onTick,
   tickingItemId = null,
   tickError = null,
-  templateHint = false,
+  templateHint = null,
   now,
 }: TodoPanelProps): React.ReactElement {
   const actions: RowActions = {
@@ -250,7 +252,7 @@ export function TodoPanel({
           className="px-4 py-2 text-xs text-gray-500 border-t border-gray-100"
           data-testid="dashboard-todo-template-hint"
         >
-          Template checklists aren&apos;t on your plan.
+          {templateHint}
         </p>
       )}
     </PanelCard>

@@ -14,6 +14,7 @@ import React from "react";
 import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { DashboardPanels, PANELS_GRID_TWO } from "../DashboardPanels";
+import { templateChecklistHint } from "../../../../utils/checklistPlanHint";
 import { notifyTransactionsViewClosed } from "../../../../appCore/openTransactionRequest";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -121,15 +122,20 @@ describe("DashboardPanels layout (C5, C6)", () => {
 });
 
 describe("the template-checklists hint (BACKLOG-3966 PR-3)", () => {
-  it("blocked plan -> the hint shows in Todo, under the rows", async () => {
-    setGate("blocked");
+  it.each([
+    ["blocked", "Template checklists aren’t on your plan."],
+    // BACKLOG-3966 U1 (C): the Checklist tab's sentence on an unknown plan.
+    ["unknown", "We couldn’t confirm your plan just now."],
+  ] as const)("%s plan -> the hint shows in Todo, under the rows", async (state, text) => {
+    setGate(state);
     renderPanels();
     const hint = await screen.findByTestId("dashboard-todo-template-hint");
-    expect(hint).toHaveTextContent("Template checklists aren't on your plan.");
+    expect(hint).toHaveTextContent(text);
+    expect(hint.textContent).toBe(templateChecklistHint(state));
     expect(within(screen.getByTestId("dashboard-todo")).getByTestId("dashboard-todo-template-hint")).toBe(hint);
   });
 
-  it.each(["allowed", "unknown", "pending"] as const)("gate %s -> no hint", async (state) => {
+  it.each(["allowed", "pending"] as const)("gate %s -> no hint", async (state) => {
     setGate(state);
     renderPanels();
     await screen.findByText("Signed disclosure");
