@@ -12,6 +12,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { logAfterNextPaint, logOpenPath, nowMs } from "../utils/openPathTiming";
 import { getRendererStallPhase, setRendererStallPhase } from "../utils/rendererStallLogger";
+import { registerOpenTransaction } from "../utils/openTransactionRegistry";
 import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import type { Transaction } from "@/types";
 import { transactionService } from '../services';
@@ -134,6 +135,10 @@ function TransactionDetails({
   useEffect(() => {
     setTransaction(transactionProp);
   }, [transactionProp]);
+
+  // BACKLOG-4065: support tickets carry the id of the open transaction.
+  // Id only; the returned cleanup removes this mount's own entry.
+  useEffect(() => registerOpenTransaction(transaction.id), [transaction.id]);
 
   // BACKLOG-3884: open-path timing in main.log — mount -> first paint, and
   // mount -> the Overview contacts painted. A renderer stall in between is
@@ -1121,13 +1126,19 @@ function TransactionDetails({
   const undoRemoveTransactionContacts = useCallback(
     async (removed: RemovedTransactionContactSummary[]) => {
       const failed: string[] = [];
+      // BACKLOG-3339 slice T: main's reason for the first failure (e.g. the
+      // restore was cancelled because its audit record could not be saved).
+      let firstError: string | undefined;
       for (const party of removed) {
         try {
           const result = await window.api.transactions.restoreContact(
             transaction.id,
             party.contactId
           );
-          if (!result.success) failed.push(party.displayName);
+          if (!result.success) {
+            failed.push(party.displayName);
+            if (firstError === undefined && result.error) firstError = result.error;
+          }
         } catch (err) {
           logger.error("Failed to restore transaction contact:", err);
           failed.push(party.displayName);
@@ -1145,7 +1156,7 @@ function TransactionDetails({
         showError(
           failed.length > 1
             ? `Failed to restore ${failed.length} contacts`
-            : `Failed to restore ${failed[0]}`
+            : (firstError ?? `Failed to restore ${failed[0]}`)
         );
       }
     },

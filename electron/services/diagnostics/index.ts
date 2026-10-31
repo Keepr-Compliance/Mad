@@ -32,6 +32,9 @@ export {
   formatDeviceNotDetectedError,
   formatSyncFailedError,
   formatToolBlockedError,
+  formatIphoneToolTimeoutError,
+  formatToolSuspendedNotice,
+  formatBackupWatchdogError,
   SUPPORT_CLOSING_LINE,
 } from "./userFacingErrors";
 export type { UserFacingError, UserErrorCode } from "./userFacingErrors";

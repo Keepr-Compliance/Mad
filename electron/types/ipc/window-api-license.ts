@@ -180,6 +180,8 @@ export interface WindowApiPrivacy {
     success: boolean;
     filePath?: string;
     error?: string;
+    /** BACKLOG-3339: the file at `filePath` was saved but the export was not recorded. */
+    notRecorded?: boolean;
   }>;
   /** BACKLOG-3801: read the "Send crash reports" switch */
   getCrashReporting?: () => Promise<CrashReportingResult>;
@@ -307,6 +309,8 @@ export interface WindowApiSupport {
       category_id: string | null;
       requester_email: string;
       requester_name: string;
+      /** BACKLOG-4065: id of the transaction open when the ticket was sent. */
+      open_transaction_id?: string | null;
     },
     screenshotBase64: string | null,
     diagnosticsData: Record<string, unknown> | null

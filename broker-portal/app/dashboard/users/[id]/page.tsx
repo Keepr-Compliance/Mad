@@ -14,6 +14,7 @@ import { ArrowLeft } from 'lucide-react';
 import UserDetailsCard, { type MemberDetailsData } from '@/components/users/UserDetailsCard';
 import type { Role } from '@/lib/types/users';
 import { getImpersonationSession } from '@/lib/impersonation';
+import { loadOrgHasFreeSeat } from '@/lib/users/seatAvailability';
 
 // ============================================================================
 // Types
@@ -28,6 +29,12 @@ interface UserDetailsResult {
   currentUserId: string;
   currentUserRole: Role;
   organizationId: string;
+  /** BACKLOG-3851 PR-2f: for the prefilled "more licenses" support request. */
+  organizationName: string | null;
+  /** BACKLOG-3851 PR-2g: seat state for the Reactivate dialog (null = not known). */
+  orgHasFreeSeat: boolean | null;
+  /** BACKLOG-3991: the target's brokerage manages names by hand (false on any error). */
+  namesEditable: boolean;
 }
 
 interface NotFoundResult {
@@ -52,7 +59,13 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
 
   // Not a full-portal admin or it_admin
   // BACKLOG-3878: a suspended account keeps My Account and Support only.
-  if (access.kind !== 'full' || !['admin', 'it_admin'].includes(access.role) || portal.suspended === true) {
+  // BACKLOG-3853 PR-2B: and so does a suspended brokerage (Billing too).
+  if (
+    access.kind !== 'full' ||
+    !['admin', 'it_admin'].includes(access.role) ||
+    portal.suspended === true ||
+    portal.orgSuspended === true
+  ) {
     return null;
   }
   const currentMembership = { role: access.role, organization_id: access.organizationId };
@@ -63,10 +76,13 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
     .from('organization_members')
     .select(`
       id,
+      organization_id,
       user_id,
       role,
       license_status,
       invited_email,
+      invited_first_name,
+      invited_last_name,
       invited_at,
       joined_at,
       provisioned_by,
@@ -129,6 +145,22 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
   // Supabase returns joined relations as arrays, extract first element
   const userData = Array.isArray(member.user) ? member.user[0] : member.user;
 
+  const { data: organization } = await supabase
+    .from('organizations')
+    .select('name')
+    .eq('id', currentMembership.organization_id)
+    .maybeSingle();
+
+  const orgHasFreeSeat = await loadOrgHasFreeSeat(supabase, currentMembership.organization_id);
+
+  // BACKLOG-3991: the same database answer set_member_name uses, for the TARGET's
+  // organization. Only an explicit false shows "Edit name"; an error hides it.
+  const { data: directoryManaged, error: directoryManagedError } = await supabase.rpc(
+    'org_names_directory_managed',
+    { p_org: member.organization_id }
+  );
+  const namesEditable = !directoryManagedError && directoryManaged === false;
+
   return {
     member: {
       ...member,
@@ -138,6 +170,9 @@ async function getUserDetails(memberId: string): Promise<UserDetailsResult | Not
     currentUserId: user.id,
     currentUserRole: currentMembership.role as Role,
     organizationId: currentMembership.organization_id,
+    organizationName: organization?.name ?? null,
+    orgHasFreeSeat,
+    namesEditable,
   };
 }
 
@@ -235,6 +270,9 @@ export default async function UserDetailsPage({ params }: PageProps) {
         member={data.member}
         currentUserId={data.currentUserId}
         currentUserRole={data.currentUserRole}
+        organizationName={data.organizationName}
+        orgHasFreeSeat={data.orgHasFreeSeat}
+        namesEditable={data.namesEditable}
       />
     </div>
   );

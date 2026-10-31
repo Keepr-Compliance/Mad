@@ -38,8 +38,20 @@ import {
   ToolBlock,
 } from "../types/backup";
 import { validateDeviceUdid, ValidationError } from "../utils/validation";
-import { detectToolBlock } from "./iphoneToolBlock";
-import { formatToolBlockedError } from "./diagnostics/userFacingErrors";
+import { detectToolBlock, keeprInstallFolder } from "./iphoneToolBlock";
+import {
+  formatToolBlockedError,
+  formatIphoneToolTimeoutError,
+  formatToolSuspendedNotice,
+} from "./diagnostics/userFacingErrors";
+import {
+  probeToolThreadState,
+  isAllSuspended,
+  type ThreadStateProbe,
+  type ThreadStateSample,
+} from "./toolSuspendProbe";
+import { superviseIphoneTool, killIphoneToolTree, hasExited, IPHONE_QUERY_TIMEOUT_MS } from "./iphoneToolProcess";
+import { BACKUP_WATCHDOG_NO_PROGRESS_TIMEOUT_MS } from "./iphoneToolLimits";
 
 /**
  * BACKLOG-2917: a short, log-safe description of a caught value.
@@ -808,6 +820,63 @@ export function classifyBackupFailure(
 }
 
 /**
+ * BACKLOG-4002: per-run state of the suspended-tool check. A new object per run, with
+ * its own generation number, so a probe that answers after its run ended is ignored.
+ */
+interface SuspendWatch {
+  generation: number;
+  /** When idevicebackup2 was about to be spawned (for the Sentry `sinceSpawnMs`). */
+  spawnedAt: number;
+  /** The last byte on EITHER stream, idle chatter included. A suspended tool writes none. */
+  lastRawByteAt: number;
+  /** No more probes this run (closed, cancelled, quit, watchdog, gone, unavailable, cap). */
+  stopped: boolean;
+  /** A probe is running; the tick never starts a second one. */
+  inFlight: boolean;
+  probeCount: number;
+  nextProbeAt: number;
+  /** Suspended samples in a row, and when the first of them was taken. */
+  streak: number;
+  streakStartedAt: number;
+  /** Not-suspended samples in a row (sets the back-off). */
+  notSuspendedRun: number;
+  /** Unknown samples in a row. */
+  unknownRun: number;
+  /** The suspended notice is on the sync screen. */
+  noticeShowing: boolean;
+  /** At most one Sentry event per run. */
+  sentrySent: boolean;
+  /** SR R7: the notice was showing at the moment the watchdog fired. */
+  suspendedAtWatchdog: boolean;
+}
+
+function newSuspendWatch(generation: number, now: number): SuspendWatch {
+  return {
+    generation,
+    spawnedAt: now,
+    lastRawByteAt: now,
+    stopped: false,
+    inFlight: false,
+    probeCount: 0,
+    nextProbeAt: 0,
+    streak: 0,
+    streakStartedAt: 0,
+    notSuspendedRun: 0,
+    unknownRun: 0,
+    noticeShowing: false,
+    sentrySent: false,
+    suspendedAtWatchdog: false,
+  };
+}
+
+/** BACKLOG-4002: a log-safe description of one probe sample. */
+function describeSample(sample: ThreadStateSample): string {
+  if (sample.kind === "sampled") return `T=${sample.threads} S=${sample.suspended}`;
+  if (sample.kind === "gone") return "gone";
+  return `unknown (${sample.reason})`;
+}
+
+/**
  * Service for managing iPhone backups via idevicebackup2
  *
  * Emits events:
@@ -821,9 +890,14 @@ export function classifyBackupFailure(
  *   them apart. Do not phrase user-facing copy as though it could.
  * - 'passcode-entered': void - The first file started transferring. Again historical:
  *   it marks the END of the wait, not the entry of a passcode.
+ * - 'tool-suspended': { userError } - BACKLOG-4002 (Windows): every thread of the running
+ *   idevicebackup2 is suspended and it has printed nothing for over a minute.
+ * - 'tool-resumed': void - BACKLOG-4002: it is running again; the notice comes down.
  */
 export class BackupService extends EventEmitter {
   private currentProcess: ChildProcess | null = null;
+  /** BACKLOG-3996: aborts the encryption check startBackup runs before spawning. */
+  private preSpawnAbort: AbortController | null = null;
   /** BACKLOG-3816: the size walk of the last finished backup, when deferred. */
   private deferredSize: { udid: string; size: DeferredBackupSize } | null = null;
   private isRunning: boolean = false;
@@ -850,6 +924,42 @@ export class BackupService extends EventEmitter {
   toolHoldHandling: boolean = process.platform === "win32";
   /** BACKLOG-3814: shows the "may be checking" status when no byte has arrived. */
   private toolStartNoticeTimer: NodeJS.Timeout | null = null;
+  /**
+   * BACKLOG-3814 / 4002 (SR R3): the first byte of this run on either stream, or null.
+   * A field (reset per run) rather than a closure variable, so the watchdog tick can
+   * read it.
+   */
+  private firstOutputAt: number | null = null;
+  /**
+   * BACKLOG-4002: reads idevicebackup2's thread states (toolSuspendProbe.ts). Used only
+   * when toolHoldHandling is on (Windows). null turns the check off. A test seam: jest
+   * stubs the module for every suite (tests/toolSuspendProbe-guard.js).
+   */
+  threadStateProbe: ThreadStateProbe | null = probeToolThreadState;
+  private suspendWatchGeneration = 0;
+  private suspendWatch: SuspendWatch = newSuspendWatch(0, 0);
+
+  /**
+   * BACKLOG-4002: the suspended-tool check. The numbers and why:
+   *
+   * - Probe only after SUSPEND_PROBE_SILENCE_MS with no byte at all, and only after the
+   *   first byte (before it, a held start is BACKLOG-3814's: a first-run scan that
+   *   clears itself in 27-60 s).
+   * - Probe every 30 s (the watchdog tick; no new timer). After 10 samples in a row that
+   *   are not suspended, every 60 s; after 20, every 120 s. At most 40 per run.
+   * - Act on 3 suspended samples in a row spanning at least 60 s.
+   * - BACKLOG-4060: once the notice shows, stop probing. Only a byte (a real resume),
+   *   Cancel, the tool closing or the watchdog ends it. A sample with a running thread
+   *   does NOT take it down: on Windows a frozen tool can report S<T (founder P2 log).
+   * - 3 unknown samples in a row stop the check for the run.
+   * - The cap and the unknown limit both end through stopSuspendWatch, which logs the
+   *   run's probe count once.
+   */
+  static readonly SUSPEND_PROBE_SILENCE_MS = 60_000;
+  static readonly SUSPEND_PROBE_MAX_PER_RUN = 40;
+  static readonly SUSPEND_STREAK_SAMPLES = 3;
+  static readonly SUSPEND_STREAK_SPAN_MS = 60_000;
+  static readonly SUSPEND_UNKNOWN_LIMIT = 3;
   /**
    * BACKLOG-2911 (FIX 3): how long with no file progress before the UI is told the
    * device has not started sending yet.
@@ -941,7 +1051,9 @@ export class BackupService extends EventEmitter {
    * explicitly out of scope — see BACKLOG-2911. This constant accommodates it; it does
    * not explain it.
    */
-  private static readonly WATCHDOG_NO_PROGRESS_TIMEOUT_MS = 1_800_000;
+  // BACKLOG-4002 (SR R6): the value lives in iphoneToolLimits.ts so the user-facing
+  // BACKUP_TIMEOUT message derives "30 minutes" from it.
+  static readonly WATCHDOG_NO_PROGRESS_TIMEOUT_MS = BACKUP_WATCHDOG_NO_PROGRESS_TIMEOUT_MS;
 
   /**
    * BACKLOG-2911 (FIX 2): stderr lines that mean WORK IS HAPPENING, as opposed to
@@ -1070,8 +1182,14 @@ export class BackupService extends EventEmitter {
    * SECURITY (TASK-601): UDID is validated before use in spawn() to prevent
    * command injection. The UDID flows from IPC (renderer process) and must be
    * treated as untrusted input.
+   *
+   * BACKLOG-3996: the query has a time limit and stops when `options.signal` aborts
+   * (Cancel). A time-out resolves "unknown" with `timedOut`; a cancel with `cancelled`.
    */
-  async checkEncryptionStatus(udid: string): Promise<BackupEncryptionInfo> {
+  async checkEncryptionStatus(
+    udid: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<BackupEncryptionInfo> {
     const unknown: BackupEncryptionInfo = { isEncrypted: false, needsPassword: false, status: "unknown" };
     try {
       // SECURITY: Validate UDID before spawning process
@@ -1109,6 +1227,25 @@ export class BackupService extends EventEmitter {
         }
         let output = "";
         let errorOutput = "";
+        // BACKLOG-3996: time limit + Cancel. Before this a held WillEncrypt query held the
+        // sync with no way out: Cancel did not reach it.
+        let settled = false;
+        const supervision = superviseIphoneTool(proc, {
+          tool: "ideviceinfo",
+          signal: options.signal,
+          onTimeout: () => {
+            settled = true;
+            log.warn(
+              `[BackupService] Encryption check did not answer within ${IPHONE_QUERY_TIMEOUT_MS / 1000}s; stopped it`,
+            );
+            resolve({ ...unknown, timedOut: true });
+          },
+          onAbort: () => {
+            settled = true;
+            log.info("[BackupService] Encryption check cancelled; stopped it");
+            resolve({ ...unknown, cancelled: true });
+          },
+        });
 
         proc.stdout?.on("data", (data) => {
           output += data.toString();
@@ -1120,6 +1257,11 @@ export class BackupService extends EventEmitter {
 
         let encryptionSpawnError: Error | null = null;
         proc.on("close", (code) => {
+          supervision.done();
+          // BACKLOG-3996: settled by the time limit or Cancel; the killed process's exit
+          // (exit 1 on Windows) must not be read as a blocked tool or a reading.
+          if (settled) return;
+          settled = true;
           const ranMs = Date.now() - spawnRequestedAt;
           if (ranMs >= TOOL_START_DELAYED_MS) logToolStartDelay("ideviceinfo", ranMs);
           // BACKLOG-3953: the tool never started (file gone / launch refused).
@@ -1153,6 +1295,9 @@ export class BackupService extends EventEmitter {
         });
 
         proc.on("error", (error) => {
+          supervision.done();
+          if (settled) return;
+          settled = true;
           log.error("[BackupService] Error checking encryption status:", error);
           encryptionSpawnError = error;
           const toolBlock = detectToolBlock("ideviceinfo", { error });
@@ -1225,7 +1370,31 @@ export class BackupService extends EventEmitter {
 
     // Check encryption status (TASK-007)
     // Note: checkEncryptionStatus also validates UDID, but we already validated above
-    const encryptionInfo = await this.checkEncryptionStatus(validatedUdid);
+    // BACKLOG-3996: Cancel (cancelBackup) and quit (stopForQuit) reach this query too.
+    const preSpawn = new AbortController();
+    this.preSpawnAbort = preSpawn;
+    let encryptionInfo: BackupEncryptionInfo;
+    try {
+      encryptionInfo = await this.checkEncryptionStatus(validatedUdid, { signal: preSpawn.signal });
+    } finally {
+      if (this.preSpawnAbort === preSpawn) this.preSpawnAbort = null;
+    }
+
+    // BACKLOG-3996: cancelled while the check ran. Nothing was spawned after it.
+    if (encryptionInfo.cancelled || preSpawn.signal.aborted) {
+      return this.preSpawnStopResult(options.udid, "BACKUP_CANCELLED", "Backup cancelled");
+    }
+
+    // BACKLOG-3996: the check did not answer. An unanswered ideviceinfo means
+    // idevicebackup2 (same device, same tools) would be held the same way, so the backup
+    // is NOT started on an "unknown" reading after a time-out.
+    if (encryptionInfo.timedOut) {
+      return this.preSpawnStopResult(
+        options.udid,
+        "IPHONE_TOOL_TIMEOUT",
+        formatIphoneToolTimeoutError(keeprInstallFolder()).description,
+      );
+    }
 
     // BACKLOG-3953: ideviceinfo never started, so idevicebackup2 (same folder, same
     // DLLs) would not either. Stop here with the cause instead of an unnamed failure.
@@ -1340,7 +1509,9 @@ export class BackupService extends EventEmitter {
       // BACKLOG-3814: taken BEFORE spawn(). On the held Windows run spawn() itself did
       // not return for ~16.6 s; measured from its return, that hold is invisible.
       const spawnRequestedAt = Date.now();
-      let firstOutputAt: number | null = null;
+      this.firstOutputAt = null;
+      // BACKLOG-4002: a fresh suspended-tool check for this run.
+      this.suspendWatch = newSuspendWatch(++this.suspendWatchGeneration, spawnRequestedAt);
       // The 5 s device-wait prompt was held because nothing at all had arrived yet.
       let passcodePromptHeld = false;
       if (this.toolStartNoticeTimer) {
@@ -1385,7 +1556,7 @@ export class BackupService extends EventEmitter {
         // BACKLOG-3814: not one byte from the tool yet means the tool is not running
         // yet, so nothing is being asked of the phone. Hold the prompt; the first byte
         // re-arms it (see noteToolOutput).
-        if (toolHoldHandling && firstOutputAt === null) {
+        if (toolHoldHandling && this.firstOutputAt === null) {
           passcodePromptHeld = true;
           return;
         }
@@ -1408,7 +1579,7 @@ export class BackupService extends EventEmitter {
       if (toolHoldHandling) {
         this.toolStartNoticeTimer = setTimeout(() => {
           this.toolStartNoticeTimer = null;
-          if (firstOutputAt !== null || !this.isRunning) return;
+          if (this.firstOutputAt !== null || !this.isRunning) return;
           this.lastProgress = {
             ...(this.lastProgress ?? {
               percentComplete: 0,
@@ -1428,18 +1599,18 @@ export class BackupService extends EventEmitter {
 
       /** BACKLOG-3814: the first byte on either stream ends the start measurement. */
       const noteToolOutput = () => {
-        if (firstOutputAt !== null) return;
-        firstOutputAt = Date.now();
+        if (this.firstOutputAt !== null) return;
+        this.firstOutputAt = Date.now();
         if (this.toolStartNoticeTimer) {
           clearTimeout(this.toolStartNoticeTimer);
           this.toolStartNoticeTimer = null;
         }
-        const delayMs = firstOutputAt - spawnRequestedAt;
+        const delayMs = this.firstOutputAt - spawnRequestedAt;
         if (delayMs >= TOOL_START_DELAYED_MS) logToolStartDelay("idevicebackup2", delayMs);
         if (passcodePromptHeld && !this.hasReceivedFileProgress) {
           // The device-wait clock starts now that the tool is actually running.
           passcodePromptHeld = false;
-          this.backupCommandStartTime = firstOutputAt;
+          this.backupCommandStartTime = this.firstOutputAt;
           armPasscodeWaitingTimer();
         }
       };
@@ -1452,6 +1623,7 @@ export class BackupService extends EventEmitter {
       let diskFullDetected = false;
 
       this.currentProcess.stdout?.on("data", (data: Buffer) => {
+        this.noteRawByte();
         noteToolOutput();
         const output = data.toString();
         stdoutBuffer += output;
@@ -1517,6 +1689,7 @@ export class BackupService extends EventEmitter {
       });
 
       this.currentProcess.stderr?.on("data", (data: Buffer) => {
+        this.noteRawByte();
         noteToolOutput();
         const output = data.toString();
         stderrBuffer += output;
@@ -1607,8 +1780,8 @@ export class BackupService extends EventEmitter {
         // BACKLOG-3814: how the tool started. No byte at all: measured to the exit.
         let toolStart: ToolStartObservation | undefined;
         if (toolHoldHandling) {
-          const startDelayMs = (firstOutputAt ?? Date.now()) - spawnRequestedAt;
-          if (firstOutputAt === null && startDelayMs >= TOOL_START_DELAYED_MS) {
+          const startDelayMs = (this.firstOutputAt ?? Date.now()) - spawnRequestedAt;
+          if (this.firstOutputAt === null && startDelayMs >= TOOL_START_DELAYED_MS) {
             logToolStartDelay("idevicebackup2", startDelayMs);
           }
           toolStart = {
@@ -1617,13 +1790,15 @@ export class BackupService extends EventEmitter {
             firstRunThisVersion,
           };
           // The tool ran (it printed something), so its first run under this version is over.
-          if (firstOutputAt !== null && appVersion !== null && firstRunThisVersion) {
+          if (this.firstOutputAt !== null && appVersion !== null && firstRunThisVersion) {
             void recordToolRunForVersion(this.toolRunsRecordFile(), "idevicebackup2", appVersion);
           }
         }
 
         // BACKLOG-1582: Clear watchdog
         this.clearWatchdog();
+        // BACKLOG-4002: no probe after the tool has exited; R4: how many this run took.
+        this.stopSuspendWatch("closed");
 
         // BACKLOG-1582: If watchdog killed this process, emit timeout result
         if (this.watchdogFired) {
@@ -1638,6 +1813,8 @@ export class BackupService extends EventEmitter {
             deviceReportedBackupMode: this.deviceReportedBackupMode,
             backupSize: 0,
             errorCode: "BACKUP_TIMEOUT",
+            // BACKLOG-4002 (SR R7): the suspended notice was showing when the watchdog fired.
+            toolSuspendedAtTimeout: this.suspendWatch.suspendedAtWatchdog,
           };
           this.emit("complete", result);
           resolve(result);
@@ -1857,6 +2034,25 @@ export class BackupService extends EventEmitter {
     });
   }
 
+  /** BACKLOG-3996: the result for a backup stopped before idevicebackup2 was spawned. */
+  private preSpawnStopResult(
+    udid: string,
+    errorCode: "BACKUP_CANCELLED" | "IPHONE_TOOL_TIMEOUT",
+    error: string,
+  ): BackupResult {
+    return {
+      success: false,
+      backupPath: null,
+      error,
+      errorCode,
+      duration: 0,
+      deviceUdid: udid,
+      isIncremental: false,
+      backupSize: 0,
+      isEncrypted: false,
+    };
+  }
+
   /** BACKLOG-3953: the result for a backup whose tool never started. */
   private toolBlockedResult(udid: string, toolBlock: ToolBlock, duration: number): BackupResult {
     return {
@@ -1881,20 +2077,19 @@ export class BackupService extends EventEmitter {
 
     // BACKLOG-1582: Clear watchdog on cancel
     this.clearWatchdog();
+    // BACKLOG-4002: no probe, and no notice from a probe still running, after Cancel.
+    this.stopSuspendWatch("cancelled");
+
+    // BACKLOG-3996: Cancel also stops the encryption check that runs before spawn.
+    this.preSpawnAbort?.abort();
 
     const proc = this.currentProcess;
     if (proc) {
-      proc.kill("SIGTERM");
-
-      // Give it a moment, then force kill if needed. BACKLOG-3598: only the process
-      // this cancel was for. `currentProcess` is cleared when that process closes, and
-      // after a disconnect the user can start a new backup within 5 s — the timer must
-      // not kill that one.
-      setTimeout(() => {
-        if (this.currentProcess === proc) {
-          proc.kill("SIGKILL");
-        }
-      }, 5000);
+      // BACKLOG-3996: the whole tree (taskkill /T first on Windows). On POSIX SIGTERM,
+      // then SIGKILL at 5 s if THIS process has not exited — decided on exitCode /
+      // signalCode, never `.killed`. BACKLOG-3598: only the process this cancel was for;
+      // a new backup started within 5 s is a different object and is not touched.
+      killIphoneToolTree(proc, { tool: "idevicebackup2", reason: "cancel", graceMs: 5000 });
     }
 
     // Always reset state — even if process is null (race between spawn and cancel)
@@ -1928,8 +2123,155 @@ export class BackupService extends EventEmitter {
           `[BackupService] Watchdog: no progress for ${Math.round(elapsed / 1000)}s — killing zombie process`,
         );
         this.killZombieProcess();
+        return;
       }
+
+      // BACKLOG-4002: the same tick asks whether the tool is suspended (Windows).
+      this.maybeProbeThreadState();
     }, BackupService.WATCHDOG_CHECK_INTERVAL_MS);
+  }
+
+  /** BACKLOG-4002: a byte arrived on either stream. The tool is not suspended. */
+  private noteRawByte(): void {
+    const w = this.suspendWatch;
+    w.lastRawByteAt = Date.now();
+    w.streak = 0;
+    // Not after Cancel / quit: a dying tool's last bytes are not a resume.
+    if (w.noticeShowing && this.isRunning) this.clearSuspendedNotice("output");
+  }
+
+  /** BACKLOG-4002: how long until the next probe, from the not-suspended run length. */
+  private suspendProbeIntervalMs(w: SuspendWatch): number {
+    if (w.notSuspendedRun >= 20) return 120_000;
+    if (w.notSuspendedRun >= 10) return 60_000;
+    return BackupService.WATCHDOG_CHECK_INTERVAL_MS;
+  }
+
+  /** BACKLOG-4002: no more probes this run. */
+  private stopSuspendWatch(reason: string): void {
+    const w = this.suspendWatch;
+    if (w.stopped) return;
+    w.stopped = true;
+    if (w.probeCount > 0) {
+      log.info(`[BackupService] thread-state probe: ${w.probeCount} probe(s) this run; stopped (${reason})`);
+    }
+  }
+
+  /**
+   * BACKLOG-4002: called from the watchdog tick. Starts one probe when every gate holds:
+   * Windows handling on, a probe present, the first byte seen, the run alive, the notice
+   * not showing (BACKLOG-4060), a minute with no byte at all, the back-off interval
+   * passed, no probe running, under the cap.
+   */
+  private maybeProbeThreadState(): void {
+    const w = this.suspendWatch;
+    const probe = this.threadStateProbe;
+    if (!this.toolHoldHandling || probe === null) return;
+    if (w.stopped || w.inFlight || !this.isRunning || !this.currentProcess) return;
+    // BACKLOG-4060: once the notice shows, no more samples; only a byte clears it.
+    if (w.noticeShowing) return;
+    if (this.firstOutputAt === null) return;
+    const now = Date.now();
+    if (now - w.lastRawByteAt < BackupService.SUSPEND_PROBE_SILENCE_MS) return;
+    if (now < w.nextProbeAt) return;
+    if (w.probeCount >= BackupService.SUSPEND_PROBE_MAX_PER_RUN) {
+      this.stopSuspendWatch(`reached the ${BackupService.SUSPEND_PROBE_MAX_PER_RUN}-probe cap`);
+      return;
+    }
+    const pid = this.currentProcess.pid;
+    if (typeof pid !== "number") return;
+    w.inFlight = true;
+    w.probeCount++;
+    const startedAt = now;
+    let pending: Promise<ThreadStateSample>;
+    try {
+      pending = probe(pid);
+    } catch (error) {
+      pending = Promise.resolve({ kind: "unknown", reason: describeError(error) });
+    }
+    void pending
+      .catch((error: unknown): ThreadStateSample => ({ kind: "unknown", reason: describeError(error) }))
+      .then((sample) => this.onThreadStateSample(w, startedAt, sample));
+  }
+
+  /** BACKLOG-4002: one probe answered. Ignored if its run ended or was stopped meanwhile. */
+  private onThreadStateSample(w: SuspendWatch, startedAt: number, sample: ThreadStateSample): void {
+    w.inFlight = false;
+    if (w !== this.suspendWatch || w.generation !== this.suspendWatchGeneration) return;
+    if (w.stopped || !this.isRunning || !this.currentProcess) return;
+    // R4: each probe's outcome and wall time, so a PC log shows the cost and frequency.
+    log.info(
+      `[BackupService] thread-state probe ${w.probeCount}: ${describeSample(sample)} in ${Date.now() - startedAt} ms`,
+    );
+
+    if (sample.kind === "gone") {
+      this.stopSuspendWatch("tool not found");
+      return;
+    }
+    if (sample.kind === "unknown") {
+      w.streak = 0;
+      w.unknownRun++;
+      if (w.unknownRun >= BackupService.SUSPEND_UNKNOWN_LIMIT) {
+        log.warn(`[BackupService] thread-state probe unavailable (${sample.reason}); not checking again this run`);
+        this.stopSuspendWatch("probe unavailable");
+        return;
+      }
+      w.nextProbeAt = startedAt + this.suspendProbeIntervalMs(w);
+      return;
+    }
+
+    w.unknownRun = 0;
+    if (isAllSuspended(sample)) {
+      if (w.streak === 0) w.streakStartedAt = startedAt;
+      w.streak++;
+      w.notSuspendedRun = 0;
+      if (
+        !w.noticeShowing &&
+        w.streak >= BackupService.SUSPEND_STREAK_SAMPLES &&
+        startedAt - w.streakStartedAt >= BackupService.SUSPEND_STREAK_SPAN_MS
+      ) {
+        this.showSuspendedNotice(w, sample.threads, startedAt);
+      }
+    } else {
+      w.streak = 0;
+      w.notSuspendedRun++;
+      // BACKLOG-4060: no clear here. A frozen Windows tool can report S<T; the notice
+      // is shown only after this probe's inFlight is cleared and no probe starts while
+      // it shows, so a running sample never meets a showing notice.
+    }
+    w.nextProbeAt = startedAt + this.suspendProbeIntervalMs(w);
+  }
+
+  /** BACKLOG-4002: tell the sync screen; the process is KEPT (Cancel ends it at once). */
+  private showSuspendedNotice(w: SuspendWatch, threads: number, sampledAt: number): void {
+    w.noticeShowing = true;
+    const silentMs = sampledAt - w.lastRawByteAt;
+    const spanS = Math.round((sampledAt - w.streakStartedAt) / 1000);
+    log.warn(
+      `[BackupService] idevicebackup2: all ${threads} threads suspended in ${w.streak} samples over ${spanS}s; showing the antivirus notice`,
+    );
+    if (!w.sentrySent) {
+      w.sentrySent = true;
+      Sentry.captureMessage("iPhone backup tool suspended", {
+        level: "warning",
+        tags: { component: "backup_service", platform: process.platform },
+        extra: {
+          tool: "idevicebackup2",
+          threads,
+          samples: w.streak,
+          silentMs,
+          sinceSpawnMs: sampledAt - w.spawnedAt,
+        },
+      });
+    }
+    this.emit("tool-suspended", { userError: formatToolSuspendedNotice(keeprInstallFolder()) });
+  }
+
+  /** BACKLOG-4002: the tool is running again. */
+  private clearSuspendedNotice(why: string): void {
+    this.suspendWatch.noticeShowing = false;
+    log.info(`[BackupService] idevicebackup2 is running again (${why}); notice cleared`);
+    this.emit("tool-resumed");
   }
 
   /**
@@ -1992,10 +2334,15 @@ export class BackupService extends EventEmitter {
    * Sets watchdogFired flag so the close handler emits a BACKUP_TIMEOUT result.
    */
   private killZombieProcess(): void {
-    if (!this.currentProcess || this.currentProcess.killed) return;
+    // BACKLOG-3996: `.killed` is true once a signal was SENT, alive or not, so it is not
+    // a test for "already gone".
+    if (!this.currentProcess || hasExited(this.currentProcess)) return;
 
     this.watchdogFired = true;
     this.clearWatchdog();
+    // BACKLOG-4002 (SR R7): record whether the notice is showing NOW, then stop probing.
+    this.suspendWatch.suspendedAtWatchdog = this.suspendWatch.noticeShowing;
+    this.stopSuspendWatch("watchdog");
 
     const pid = this.currentProcess.pid;
     log.warn(`[BackupService] Watchdog: killing unresponsive process (PID: ${pid})`);
@@ -2009,25 +2356,14 @@ export class BackupService extends EventEmitter {
         lastProgress: this.lastProgress?.phase,
         hasReceivedFileProgress: this.hasReceivedFileProgress,
         hasEmittedPasscodeWaiting: this.hasEmittedPasscodeWaiting,
+        toolSuspendedAtTimeout: this.suspendWatch.suspendedAtWatchdog,
       },
     });
 
-    try {
-      this.currentProcess.kill("SIGTERM");
-    } catch (err) {
-      log.error(`[BackupService] Watchdog: kill failed, pid=${pid}`, err);
-    }
-
-    // On macOS, give it 5s then SIGKILL. On Windows, SIGTERM already hard-kills.
-    if (process.platform !== "win32") {
-      setTimeout(() => {
-        try {
-          if (this.currentProcess && !this.currentProcess.killed) {
-            this.currentProcess.kill("SIGKILL");
-          }
-        } catch { /* process already dead */ }
-      }, 5000);
-    }
+    // BACKLOG-3996: the whole tree. On macOS SIGTERM, then SIGKILL at 5 s if the process
+    // has not exited. The SIGKILL used to be guarded by `!killed`, which the SIGTERM had
+    // already set, so a stopped idevicebackup2 was never SIGKILLed.
+    killIphoneToolTree(this.currentProcess, { tool: "idevicebackup2", reason: "watchdog", graceMs: 5000 });
 
     // Safety net: if close event never fires after kill, force-reset state
     setTimeout(() => {
@@ -2057,13 +2393,16 @@ export class BackupService extends EventEmitter {
   stopForQuit(
     timeoutMs: number = BackupService.QUIT_STOP_TIMEOUT_MS,
   ): Promise<"exited" | "killed"> | null {
+    // BACKLOG-3996: a quit during the encryption check stops it, and no backup follows.
+    this.preSpawnAbort?.abort();
     const proc = this.currentProcess;
-    if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
+    if (!proc || hasExited(proc)) {
       // Nothing to stop: return synchronously so the quit is not deferred at all.
       return null;
     }
 
     this.clearWatchdog();
+    this.stopSuspendWatch("app quitting");
     this.quitRequested = true;
     this.isRunning = false;
     log.info(`[BackupService] App quitting; stopping backup process (PID: ${proc.pid})`);
@@ -2086,22 +2425,18 @@ export class BackupService extends EventEmitter {
           `[BackupService] Backup process did not exit within ${timeoutMs} ms of quit; force-killing`,
         );
         finish("killed");
-        try {
-          if (process.platform === "win32" && proc.pid !== undefined) {
-            spawn("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
-              stdio: "ignore",
-              windowsHide: true,
-            }).on("error", () => {
-              /* best effort: the app is exiting */
-            });
-          } else {
-            proc.kill("SIGKILL");
-          }
-        } catch {
-          /* already gone */
+        if (process.platform !== "win32") {
+          killIphoneToolTree(proc, { tool: "idevicebackup2", reason: "app-quit" });
         }
       }, timeoutMs);
 
+      // BACKLOG-3996: on Windows the tree kill goes FIRST. A SIGTERM there is
+      // TerminateProcess of the parent, after which taskkill /T finds no tree to walk.
+      // There is no graceful stop on Windows either way.
+      if (process.platform === "win32") {
+        killIphoneToolTree(proc, { tool: "idevicebackup2", reason: "app-quit" });
+        return;
+      }
       try {
         proc.kill("SIGTERM");
       } catch {

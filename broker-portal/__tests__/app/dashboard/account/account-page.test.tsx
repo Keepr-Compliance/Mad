@@ -15,6 +15,8 @@ import '@testing-library/jest-dom';
 const mockCreateClient = jest.fn();
 const mockGetImpersonationSession = jest.fn();
 
+// BACKLOG-4007 People v2: My Account's phone card reads through a server action.
+jest.mock('@/lib/actions/myPhone', () => ({ getMyPhone: async () => ({ ok: true, phone: null }), setMyPhone: jest.fn() }));
 jest.mock('@/lib/supabase/server', () => ({
   createClient: (...args: unknown[]) => mockCreateClient(...args),
 }));

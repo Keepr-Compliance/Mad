@@ -4,7 +4,9 @@
  * Invite Accept Page
  *
  * Validates an invitation token and prompts the user to sign in.
- * On sign-in, the OAuth callback will claim the pending invite.
+ * BACKLOG-3684: before the OAuth redirect, POST /api/invite/start stores this
+ * link's token in a short-lived cookie; the OAuth callback accepts exactly that
+ * invitation, and only for the account it was sent to.
  */
 
 import { useState, useEffect, useCallback } from 'react';
@@ -12,6 +14,7 @@ import { useParams } from 'next/navigation';
 import { Spinner } from '@keepr/design-system';
 import { Wordmark } from '@keepr/ui';
 import { AlertCircle, Loader2 } from 'lucide-react';
+import { UNLICENSED_INVITE_LINE } from '@/lib/invite/validateResult';
 
 interface InviteInfo {
   valid: boolean;
@@ -19,6 +22,9 @@ interface InviteInfo {
   orgName?: string;
   role?: string;
   error?: string;
+  /** BACKLOG-3851 PR-2f: false for an invitation without a license. */
+  licensed?: boolean;
+  firstName?: string | null;
 }
 
 export default function InviteAcceptPage() {
@@ -26,6 +32,7 @@ export default function InviteAcceptPage() {
   const token = params.token as string;
   const [invite, setInvite] = useState<InviteInfo | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
 
   const validateToken = useCallback(async () => {
     try {
@@ -45,6 +52,24 @@ export default function InviteAcceptPage() {
     const { createClient } = await import('@/lib/supabase/client');
     const supabase = createClient();
     setLoading(provider);
+    setStartError(null);
+
+    let started = false;
+    try {
+      const res = await fetch('/api/invite/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, purpose: 'invite' }),
+      });
+      started = res.ok;
+    } catch {
+      started = false;
+    }
+    if (!started) {
+      setStartError('We could not start accepting this invitation. Reload the page and try again.');
+      setLoading(null);
+      return;
+    }
 
     await supabase.auth.signInWithOAuth({
       provider,
@@ -94,6 +119,7 @@ export default function InviteAcceptPage() {
           <h1 className="text-3xl font-bold text-gray-900"><Wordmark /></h1>
           <h2 className="mt-2 text-xl text-gray-600">You&apos;re Invited</h2>
           <div className="mt-6 bg-white rounded-lg shadow-sm border border-gray-200 p-6 space-y-2">
+            {invite.firstName && <p className="text-gray-700">Hi {invite.firstName},</p>}
             <p className="text-gray-700">
               You&apos;ve been invited to join <span className="font-semibold">{invite.orgName}</span>
             </p>
@@ -103,6 +129,9 @@ export default function InviteAcceptPage() {
             <p className="text-sm text-gray-500">
               for <span className="font-medium text-gray-700">{invite.email}</span>
             </p>
+            {invite.licensed === false && (
+              <p data-testid="invite-unlicensed" className="text-sm text-gray-700">{UNLICENSED_INVITE_LINE}</p>
+            )}
           </div>
         </div>
 
@@ -110,6 +139,12 @@ export default function InviteAcceptPage() {
           <p className="text-center text-sm text-gray-600">
             Sign in to accept your invitation
           </p>
+
+          {startError && (
+            <p role="alert" className="text-center text-sm text-red-600">
+              {startError}
+            </p>
+          )}
 
           <button
             onClick={() => handleSignIn('google')}

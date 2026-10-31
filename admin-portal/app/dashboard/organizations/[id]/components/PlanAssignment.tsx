@@ -27,6 +27,7 @@ export function PlanAssignment({ organizationId, canManage }: PlanAssignmentProp
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -78,6 +79,13 @@ export function PlanAssignment({ organizationId, canManage }: PlanAssignmentProp
     }
 
     setSaving(false);
+    setEditing(false);
+  };
+
+  const handleCancel = () => {
+    setSelectedPlanId(currentPlan?.plan_id ?? '');
+    setError(null);
+    setEditing(false);
   };
 
   if (loading) {
@@ -93,13 +101,20 @@ export function PlanAssignment({ organizationId, canManage }: PlanAssignmentProp
 
   return (
     <Card>
-      <div className="flex items-center gap-3 mb-4">
-        <div className="h-8 w-8 rounded-lg bg-primary-100 text-primary-700 flex items-center justify-center">
-          <CreditCard className="h-4 w-4" />
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="flex items-center gap-3">
+          <div className="h-8 w-8 rounded-lg bg-primary-100 text-primary-700 flex items-center justify-center">
+            <CreditCard className="h-4 w-4" />
+          </div>
+          <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">
+            Plan Assignment
+          </h3>
         </div>
-        <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">
-          Plan Assignment
-        </h3>
+        {canManage && !editing && (
+          <Button variant="secondary" size="sm" onClick={() => setEditing(true)}>
+            {currentPlan ? 'Change plan' : 'Assign plan'}
+          </Button>
+        )}
       </div>
 
       {/* Current plan info */}
@@ -129,7 +144,7 @@ export function PlanAssignment({ organizationId, canManage }: PlanAssignmentProp
       )}
 
       {/* Plan selection */}
-      {canManage && (
+      {canManage && editing && (
         <div className="space-y-3">
           <div>
             <Label htmlFor="plan-select">
@@ -157,13 +172,18 @@ export function PlanAssignment({ organizationId, canManage }: PlanAssignmentProp
             <FieldError>{error}</FieldError>
           )}
 
-          <Button
-            size="sm"
-            onClick={() => setShowConfirm(true)}
-            disabled={!hasChanged || !selectedPlanId || saving}
-          >
-            {saving ? 'Saving...' : currentPlan ? 'Update Plan' : 'Assign Plan'}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => setShowConfirm(true)}
+              disabled={!hasChanged || !selectedPlanId || saving}
+            >
+              {saving ? 'Saving...' : currentPlan ? 'Update Plan' : 'Assign Plan'}
+            </Button>
+            <Button variant="secondary" size="sm" onClick={handleCancel} disabled={saving}>
+              Cancel
+            </Button>
+          </div>
         </div>
       )}
 

@@ -170,6 +170,12 @@ export interface SyncProgressProps {
   onCancel?: () => void;
   /** Whether the sync is waiting for the user to enter their iPhone passcode */
   isWaitingForPasscode?: boolean;
+  /**
+   * BACKLOG-4002 (Windows): the backup tool is suspended. When set, this notice is shown
+   * IN PLACE OF both the amber "please don't disconnect or cancel" panel and the gray
+   * "keep your iPhone connected" panel. Cancel stays.
+   */
+  toolSuspendedNotice?: UserFacingError | null;
 }
 
 // ============================================
@@ -207,6 +213,8 @@ export interface UseIPhoneSyncReturn {
   lastSyncTime: Date | null;
   /** Whether the sync is waiting for the user to enter their iPhone passcode */
   isWaitingForPasscode: boolean;
+  /** BACKLOG-4002 (Windows): the backup tool is suspended. See SyncProgressProps. */
+  toolSuspendedNotice?: UserFacingError | null;
   /** Whether another sync operation is running (TASK-910) */
   syncLocked: boolean;
   /** Human-readable description of the blocking operation (TASK-910) */

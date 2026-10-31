@@ -1,7 +1,8 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-2960 — THE WRAPPER SHAPE: PLAIN, NOT `async`. All seven exports.
+ * BACKLOG-2960 — THE WRAPPER SHAPE: PLAIN, NOT `async`. All seven exports,
+ * plus the two seams BACKLOG-3226 wrapped in `dbTransaction`.
  *
  * ===========================================================================
  * WHY THIS SUITE EXISTS
@@ -53,7 +54,10 @@ import {
   countTextThreadsForTransaction,
   updateTransactionThreadCount,
   backfillAllTransactionThreadCounts,
+  createCommunication,
+  createThreadCommunicationReference,
 } from "../communicationDbService";
+import type { NewCommunication } from "../../../types";
 
 /** The message `ensureDb()` raises when no handle has been published. */
 const NOT_INITIALIZED = "Database is not initialized. Call initialize() first.";
@@ -88,10 +92,27 @@ const wrappers: Array<[string, () => unknown]> = [
   ["countTextThreadsForTransaction", () => countTextThreadsForTransaction(TXN)],
   ["updateTransactionThreadCount", () => updateTransactionThreadCount(TXN)],
   ["backfillAllTransactionThreadCounts", () => backfillAllTransactionThreadCounts()],
+  // BACKLOG-3226: these two now open a transaction. `dbTransaction` calls
+  // `ensureDb()` first, so with no handle the throw is the same one, raised
+  // before the promise exists. An `async` seam would turn it into a rejection.
+  [
+    "createCommunication",
+    () =>
+      createCommunication({
+        user_id: "user-2960",
+        transaction_id: TXN,
+        email_id: "email-2960",
+        thread_id: "thread-2960",
+      } as unknown as NewCommunication),
+  ],
+  [
+    "createThreadCommunicationReference",
+    () => createThreadCommunicationReference("thread-2960", TXN, "user-2960", "auto", 0.9),
+  ],
 ];
 
-describe("the wrapper shape: PLAIN, not async — all seven exports (BACKLOG-2960)", () => {
-  it("the pinned set is exactly these seven names — editing the list is a red", () => {
+describe("the wrapper shape: PLAIN, not async — the seven exports and the two BACKLOG-3226 seams", () => {
+  it("the pinned set is exactly these nine names — editing the list is a red", () => {
     // WHAT THIS DOES AND DOES NOT DO. It compares the list above to a literal,
     // so deleting, renaming or reordering a pin reds here. It does NOT read the
     // module: it cannot see an eighth export, and an export added later is
@@ -104,6 +125,8 @@ describe("the wrapper shape: PLAIN, not async — all seven exports (BACKLOG-296
         "backfillAllTransactionThreadCounts",
         "confirmEmailLinksByEmailIds",
         "countTextThreadsForTransaction",
+        "createCommunication",
+        "createThreadCommunicationReference",
         "getIgnoredCommunicationIdsForTransaction",
         "getIgnoredEmailIdsForTransaction",
         "getIgnoredThreadIdsForTransaction",

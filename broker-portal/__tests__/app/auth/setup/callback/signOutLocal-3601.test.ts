@@ -32,7 +32,6 @@ jest.mock('@/lib/supabase/server', () => ({
 
 jest.mock('@/lib/auth/helpers', () => ({
   extractEmail: (...args: unknown[]) => mockExtractEmail(...args),
-  orgNameFromEmail: () => 'Fixture Org 3601',
 }));
 
 import { GET } from '@/app/auth/setup/callback/route';
@@ -120,7 +119,8 @@ describe('/auth/setup/callback — rejecting exits sign out this browser only', 
 
     expect(location).toBe(`${ORIGIN}/setup?error=${code}`);
     expect(mockSignOut.mock.calls).toEqual([[{ scope: 'local' }]]);
-    expect(cleared).toEqual(['sb-fixture-auth-token', 'sb-fixture-auth-token-code-verifier']);
+    // BACKLOG-3684: every exit also deletes the invite cookie (keepr_invite).
+    expect(cleared).toEqual(['keepr_invite', 'sb-fixture-auth-token', 'sb-fixture-auth-token-code-verifier']);
   });
 
   it('still redirects when the sign-out itself fails', async () => {

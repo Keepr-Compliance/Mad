@@ -64,6 +64,8 @@ export const PORTAL_MEMBERSHIP_SELECT = 'role, organization_id, license_status, 
 export {
   PORTAL_GRANTING_LICENSE_STATUSES,
   memberStatusGrantsAccess,
+  MEMBER_DEACTIVATED_STATUSES,
+  memberStatusIsDeactivated,
   isPersonalMembership,
   pickBrokerageMembership,
   FULL_PORTAL_ROLES,
@@ -92,7 +94,7 @@ export const MY_TRANSACTIONS_PATHS = ['/dashboard/my-transactions'] as const;
 
 /**
  * Billing (BACKLOG-3844): passed through for the OWNER of a personal
- * organization only. A brokerage agent never gets it (their brokerage pays).
+ * organization, and (BACKLOG-4007 PR-4) for the brokerage's billing-only login. A brokerage agent never gets it (their brokerage pays).
  * Full-portal users are admitted above. The flag and the rest of the rule are
  * NOT read here; app/dashboard/billing/page.tsx refuses on its own, and that
  * refusal is the gate.
@@ -110,7 +112,11 @@ function isUnder(path: string, base: string): boolean {
  * `/dashboard` itself is matched exactly: every dashboard route starts with it,
  * so treating it as a prefix would open everything.
  */
-export function mayOpenDashboardPath(access: PortalAccess, pathname: string): boolean {
+export function mayOpenDashboardPath(
+  access: PortalAccess,
+  pathname: string,
+  opts: { billingContact?: boolean } = {}
+): boolean {
   if (access.kind === 'full') return true;
   if (access.kind === 'none') return false;
 
@@ -118,8 +124,18 @@ export function mayOpenDashboardPath(access: PortalAccess, pathname: string): bo
   for (const base of FLOOR_PATHS) {
     if (base !== '/dashboard' && isUnder(pathname, base)) return true;
   }
-  // BACKLOG-3917: a deactivated member opens the floor paths only.
-  if (access.kind === 'floor' && access.via === 'deactivated') return false;
+  // BACKLOG-4007 PR-4: the brokerage's billing-only login (an unlicensed member linked from the
+  // live billing contact; lib/auth/billingContact.ts asks the database) also opens Billing.
+  // Nothing else: the page refuses on its own as well.
+  if (access.kind === 'floor' && access.via === 'unlicensed' && opts.billingContact === true) {
+    for (const base of BILLING_PATHS) {
+      if (isUnder(pathname, base)) return true;
+    }
+  }
+  // BACKLOG-3917: a deactivated member opens the floor paths only. So does a
+  // member with no license assigned (BACKLOG-3851). A deactivated member who
+  // reverted to pay-as-you-go is personal_owner, not this.
+  if (access.kind === 'floor' && (access.via === 'deactivated' || access.via === 'unlicensed')) return false;
   for (const base of OWN_GATE_PATHS) {
     if (isUnder(pathname, base)) return true;
   }
@@ -176,4 +192,49 @@ export function maySuspendedOpenPath(access: PortalAccess, pathname: string, bil
  */
 export function suspendedLanding(access: PortalAccess, billingOn: boolean): string {
   return suspendedSeesBilling(access, billingOn) ? '/dashboard/billing' : '/dashboard/account';
+}
+
+// ===========================================================================
+// Suspended BROKERAGE — BACKLOG-3853 PR-2B.
+// ===========================================================================
+//
+// The brokerage's deal is suspended (lib/auth/orgSuspension.ts reads it). Not
+// the 3878 rule above: nobody's licence changed. Middleware applies the 3878
+// rule first; a person whose own licence is suspended never reaches these.
+//
+//   - broker, admin, it_admin (full): Billing (while billing is on), Support and
+//     My Account (founder 1e164f56: the IT admin keeps Support too).
+//   - an agent (floor via brokerage): what the floor gives them, minus Checklists
+//     (ruling a43c3e85). They keep /dashboard and My Transactions (Q7 a).
+//   - anyone else: never asked (no brokerage read), so never here.
+
+/** Paths every person in a suspended brokerage may open (agents add their floor). */
+export const ORG_SUSPENDED_PATHS = ['/dashboard/account', '/dashboard/support'] as const;
+
+/** May this access open this path while its brokerage is suspended? */
+export function mayOrgSuspendedOpenPath(access: PortalAccess, pathname: string, billingOn: boolean): boolean {
+  if (access.kind === 'floor') {
+    for (const base of OWN_GATE_PATHS) {
+      if (isUnder(pathname, base)) return false;
+    }
+    return mayOpenDashboardPath(access, pathname);
+  }
+  for (const base of ORG_SUSPENDED_PATHS) {
+    if (isUnder(pathname, base)) return true;
+  }
+  if (billingOn && access.kind === 'full') {
+    for (const base of BILLING_PATHS) {
+      if (isUnder(pathname, base)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Where a person in a suspended brokerage lands. Always a path
+ * {@link mayOrgSuspendedOpenPath} admits for the same arguments.
+ */
+export function orgSuspendedLanding(access: PortalAccess, billingOn: boolean): string {
+  if (access.kind === 'floor') return '/dashboard';
+  return billingOn && access.kind === 'full' ? '/dashboard/billing' : '/dashboard/account';
 }

@@ -25,6 +25,7 @@ import {
   ROW_PRIORITY,
   modeAllowsTestFlag,
   pickBrokerageMembership,
+  classifyPortalAccess,
   planLine,
   type AgentSubscriptionRow,
   type PlanLine,
@@ -83,6 +84,19 @@ export async function readPlanLines(
   now: Date = new Date(),
   credits?: Record<string, number>
 ): Promise<Record<string, PlanLine>> {
+  return (await readPlanLinesWithOrgs(service, ids, now, credits)).lines;
+}
+
+/**
+ * readPlanLines plus, per user, the brokerage organization the line was decided from
+ * (BACKLOG-3852). A user with no brokerage line has no entry. `PlanLine` is unchanged.
+ */
+export async function readPlanLinesWithOrgs(
+  service: ServiceClient,
+  ids: string[],
+  now: Date = new Date(),
+  credits?: Record<string, number>
+): Promise<{ lines: Record<string, PlanLine>; brokerageOrgIds: Record<string, string> }> {
   const [membersRes, personalRes, subsRes, suspendedRes] = await Promise.all([
     // Same order as broker-portal's portal-access read (created_at, then id):
     // pickBrokerageMembership takes the FIRST brokerage row.
@@ -136,13 +150,23 @@ export async function readPlanLines(
   const suspended = new Set(((suspendedRes.data ?? []) as { user_id: string }[]).map((r) => r.user_id));
 
   const out: Record<string, PlanLine> = {};
+  const brokerageOrgIds: Record<string, string> = {};
   for (const id of ids) {
-    const brokerage = pickBrokerageMembership(membersByUser.get(id) ?? []) as MemberRow | null;
+    const memberRows = membersByUser.get(id) ?? [];
+    const brokerageRow = pickBrokerageMembership(memberRows) as MemberRow | null;
+    // BACKLOG-3851: a deactivated member the broker portal routes on their own
+    // personal organization (pay-as-you-go) gets the personal line, with the
+    // brokerage named in the warning. Same classifier as the broker portal.
+    const access = classifyPortalAccess(memberRows, id);
+    const reverted = brokerageRow !== null && access.kind === 'floor' && access.via === 'personal_owner';
+    const brokerage = reverted ? null : brokerageRow;
+    if (brokerage) brokerageOrgIds[id] = brokerage.organization_id;
     const personal = personalByUser.get(id) ?? null;
     // isModeAllowedForUser's rule: a test-org user's rows are test mode, everyone else's live.
     const mode: StripeMode = modeAllowsTestFlag('test', personal?.is_test === true) ? 'test' : 'live';
     out[id] = planLine({
       brokerage: brokerage ? { orgName: orgName(brokerage), licenseStatus: brokerage.license_status } : null,
+      deactivatedFrom: reverted && brokerageRow ? (orgName(brokerageRow) ?? '') : null,
       hasPersonalOrganization: personal !== null,
       mode,
       rows: (subsByUser.get(id) ?? []).filter((r) => r.stripe_mode === mode),
@@ -152,5 +176,5 @@ export async function readPlanLines(
       now,
     });
   }
-  return out;
+  return { lines: out, brokerageOrgIds };
 }

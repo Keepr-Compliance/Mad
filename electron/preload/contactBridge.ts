@@ -106,14 +106,6 @@ export const contactBridge = {
     ipcRenderer.invoke("contacts:checkCanDelete", contactId),
 
   /**
-   * Deletes a contact (only if not assigned to transactions)
-   * @param contactId - Contact ID to delete
-   * @returns Deletion result
-   */
-  delete: (contactId: string) =>
-    ipcRenderer.invoke("contacts:delete", contactId),
-
-  /**
    * Removes a contact (soft delete/archive)
    * @param contactId - Contact ID to remove
    * @returns Removal result

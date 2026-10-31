@@ -150,7 +150,7 @@ describe("Attach Messages reply sizes at 100k scale (BACKLOG-3785)", () => {
   });
 
   it("the picker rows carry only the columns the renderer reads", () => {
-    const rows = getMessagesByContact(USER, CONTACT) as unknown as Array<Record<string, unknown>>;
+    const rows = getMessagesByContact(USER, CONTACT, "tx-no-thread-link") as unknown as Array<Record<string, unknown>>;
     expect(rows).toHaveLength(PICKER_ROWS);
     for (const dropped of ["metadata", "llm_analysis", "classification_method", "content_hash", "sync_session_id"]) {
       expect(rows[0]).not.toHaveProperty(dropped);

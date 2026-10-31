@@ -1,0 +1,85 @@
+{
+  "id": "pi_3URe4IBg3cyTef3d1F5sNR9e",
+  "object": "payment_intent",
+  "allowed_payment_method_types": null,
+  "amount": 12495,
+  "amount_capturable": 0,
+  "amount_details": {
+    "tip": {}
+  },
+  "amount_received": 0,
+  "application": null,
+  "application_fee_amount": null,
+  "automatic_payment_methods": null,
+  "canceled_at": null,
+  "cancellation_reason": null,
+  "capture_method": "automatic",
+  "client_secret": "pi_FIXTURE_secret_REDACTED",
+  "confirmation_method": "automatic",
+  "created": 1792268343,
+  "currency": "usd",
+  "customer": "cus_VSZBJXvPX99hjF",
+  "customer_account": null,
+  "description": "Subscription creation",
+  "excluded_payment_method_types": null,
+  "invoice": "in_1URe3WBg3cyTef3dxVYJKBak",
+  "last_payment_error": null,
+  "latest_charge": null,
+  "livemode": false,
+  "managed_payments": {
+    "enabled": false
+  },
+  "metadata": {},
+  "next_action": {
+    "type": "verify_with_microdeposits",
+    "verify_with_microdeposits": {
+      "arrival_date": 1792393200,
+      "hosted_verification_url": "[REDACTED hosted URL]",
+      "microdeposit_type": "descriptor_code"
+    }
+  },
+  "on_behalf_of": null,
+  "payment_details": {
+    "customer_reference": null,
+    "order_reference": "in_1URe3WBg3cyTef3dxVYJKBak"
+  },
+  "payment_method": "pm_1URe54Bg3cyTef3dki24YgBZ",
+  "payment_method_configuration_details": null,
+  "payment_method_options": {
+    "card": {
+      "installments": null,
+      "mandate_options": null,
+      "network": null,
+      "request_three_d_secure": "automatic"
+    },
+    "customer_balance": {
+      "bank_transfer": {
+        "type": "us_bank_transfer"
+      },
+      "funding_type": "bank_transfer"
+    },
+    "us_bank_account": {
+      "mandate_options": {},
+      "transaction_purpose": "unspecified",
+      "verification_method": "automatic"
+    }
+  },
+  "payment_method_types": [
+    "card",
+    "customer_balance",
+    "us_bank_account"
+  ],
+  "payment_record": null,
+  "processing": null,
+  "receipt_email": null,
+  "review": null,
+  "setup_future_usage": null,
+  "shared_payment_granted_token": null,
+  "shipping": null,
+  "source": null,
+  "statement_descriptor": null,
+  "statement_descriptor_suffix": null,
+  "status": "requires_action",
+  "transfer_data": null,
+  "transfer_group": null
+}

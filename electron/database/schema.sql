@@ -706,6 +706,14 @@ CREATE TABLE IF NOT EXISTS llm_settings (
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
 
+-- BACKLOG-3343: iPhone sync sessions that started and have not finished (or rolled back).
+CREATE TABLE IF NOT EXISTS iphone_sync_open_sessions (
+  session_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS message_import_state (
   user_id TEXT PRIMARY KEY,
   last_import_at DATETIME,

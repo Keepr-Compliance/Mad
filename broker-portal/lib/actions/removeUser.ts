@@ -13,6 +13,7 @@ import { createClient } from '@/lib/supabase/server';
 import type { Role } from '@/lib/types/users';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { requireActiveOrgRole } from '@/lib/auth/memberAccess';
+import { LAST_ADMIN_REMOVE_REFUSED } from '@/lib/users/roleRefusals';
 
 // ============================================================================
 // Types
@@ -26,6 +27,9 @@ interface RemoveResult {
   success: boolean;
   error?: string;
 }
+
+/** Founder R9 (BACKLOG-4007): the exact sentence. */
+const BILLING_CONTACT_REMOVE_REFUSED = 'Pick another billing contact first.';
 
 // ============================================================================
 // Main Action
@@ -100,7 +104,7 @@ export async function removeUser(input: RemoveInput): Promise<RemoveResult> {
       .neq('id', input.memberId);
 
     if (count === 0) {
-      return { success: false, error: 'Cannot remove the last admin' };
+      return { success: false, error: LAST_ADMIN_REMOVE_REFUSED };
     }
   }
 
@@ -111,6 +115,15 @@ export async function removeUser(input: RemoveInput): Promise<RemoveResult> {
     .eq('id', input.memberId);
 
   if (deleteError) {
+    // BACKLOG-4007 People v2 (founder R9): the live billing contact's member row cannot be
+    // removed from the Users page (the database refuses it: billing_contact_member).
+    if (deleteError.message?.includes('billing_contact_member')) {
+      return { success: false, error: BILLING_CONTACT_REMOVE_REFUSED };
+    }
+    // BACKLOG-4027 (founder B): the database keeps the brokerage's last active admin.
+    if (deleteError.message?.includes('last_admin')) {
+      return { success: false, error: LAST_ADMIN_REMOVE_REFUSED };
+    }
     console.error('Error removing user:', deleteError);
     return { success: false, error: 'Failed to remove user' };
   }

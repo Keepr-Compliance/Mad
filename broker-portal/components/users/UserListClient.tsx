@@ -26,10 +26,16 @@ import EditRoleModal from './EditRoleModal';
 import BulkEditRoleModal from './BulkEditRoleModal';
 import DeactivateUserModal from './DeactivateUserModal';
 import RemoveUserModal from './RemoveUserModal';
+import ReactivateUserModal from './ReactivateUserModal';
+import UnassignLicenseModal from './UnassignLicenseModal';
+import OutOfLicensesNotice from './OutOfLicensesNotice';
 import { EmptyState, SearchIcon } from '@/components/ui/EmptyState';
 import { formatUserDisplayName } from '@/lib/utils/userDisplay';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { resendInvite } from '@/lib/actions/resendInvite';
+import { setMemberLicense } from '@/lib/actions/memberLicense';
+import type { MemberLicenseAction } from '@/lib/users/memberLicenseActions';
+import { useRouter } from 'next/navigation';
 import type { OrganizationMember, Role } from '@/lib/types/users';
 
 type ViewMode = 'cards' | 'list';
@@ -39,6 +45,10 @@ interface UserListClientProps {
   currentUserId: string;
   currentUserRole: Role;
   organizationId: string;
+  /** BACKLOG-3851 PR-2f: for the prefilled "more licenses" support request. */
+  organizationName?: string | null;
+  /** BACKLOG-3851 PR-2g: the organization has a free licence (null = not known). */
+  orgHasFreeSeat?: boolean | null;
   readOnly?: boolean;
 }
 
@@ -47,6 +57,8 @@ export default function UserListClient({
   currentUserId,
   currentUserRole,
   organizationId,
+  organizationName = null,
+  orgHasFreeSeat = null,
   readOnly = false,
 }: UserListClientProps) {
   const [searchQuery, setSearchQuery] = useState('');
@@ -61,18 +73,51 @@ export default function UserListClient({
   const [removeMember, setRemoveMember] = useState<OrganizationMember | null>(null);
   const [, setResendingId] = useState<string | null>(null);
   const [resendResult, setResendResult] = useState<{ memberId: string; success: boolean; error?: string } | null>(null);
+  // BACKLOG-3851: licence actions and the out-of-licenses prompt.
+  const router = useRouter();
+  const [reactivateMember, setReactivateMember] = useState<OrganizationMember | null>(null);
+  const [unassignMember, setUnassignMember] = useState<OrganizationMember | null>(null);
+  const [outOfLicenses, setOutOfLicenses] = useState(false);
+  const [assignResult, setAssignResult] = useState<{ success: boolean; error?: string } | null>(null);
 
   const handleResendInvite = useCallback(async (member: OrganizationMember) => {
     setResendingId(member.id);
     setResendResult(null);
+    setOutOfLicenses(false);
     try {
       const result = await resendInvite({ memberId: member.id, organizationId });
+      if (result.outOfSeats) {
+        // Stays until the next action: the admin has to act on it.
+        setOutOfLicenses(true);
+        return;
+      }
       setResendResult({ memberId: member.id, success: result.success, error: result.error });
       setTimeout(() => setResendResult(null), 3000);
     } finally {
       setResendingId(null);
     }
   }, [organizationId]);
+
+  const handleAssign = useCallback(async (member: OrganizationMember) => {
+    setAssignResult(null);
+    setOutOfLicenses(false);
+    const result = await setMemberLicense({ memberId: member.id, action: 'assign' });
+    if (result.success) {
+      setAssignResult({ success: true });
+      setTimeout(() => setAssignResult(null), 3000);
+      router.refresh();
+    } else if (result.outOfSeats) {
+      setOutOfLicenses(true);
+    } else {
+      setAssignResult({ success: false, error: result.error });
+    }
+  }, [router]);
+
+  const handleLicenseAction = useCallback((member: OrganizationMember, action: MemberLicenseAction) => {
+    if (action === 'assign') void handleAssign(member);
+    else if (action === 'unassign') setUnassignMember(member);
+    else setReactivateMember(member);
+  }, [handleAssign]);
 
   // The one match rule, shared by the list and by the phone sheets' "Show N".
   const matchesMember = useCallback(
@@ -203,6 +248,15 @@ export default function UserListClient({
         </div>
       )}
 
+      {/* BACKLOG-3851: no free licence for a resend or an assign */}
+      {outOfLicenses && <OutOfLicensesNotice callerRole={currentUserRole} organizationName={organizationName} />}
+
+      {assignResult && (
+        <div className={`rounded-md px-4 py-3 text-sm border ${assignResult.success ? 'bg-success-50 text-success-800 border-success-200' : 'bg-danger-50 text-danger-800 border-danger-200'}`}>
+          {assignResult.success ? 'License assigned.' : `Failed to assign license: ${assignResult.error}`}
+        </div>
+      )}
+
       <UserPhoneFilters
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
@@ -265,6 +319,8 @@ export default function UserListClient({
                   onResendInvite={handleResendInvite}
                   onDeactivate={setDeactivateMember}
                   onRemove={setRemoveMember}
+                  callerRole={currentUserRole}
+                  onLicenseAction={handleLicenseAction}
                 />
               ))}
             </div>
@@ -299,6 +355,8 @@ export default function UserListClient({
                       onResendInvite={() => handleResendInvite(member)}
                       onDeactivate={() => setDeactivateMember(member)}
                       onRemove={() => setRemoveMember(member)}
+                      callerRole={currentUserRole}
+                      onLicenseAction={(action) => handleLicenseAction(member, action)}
                     />
                   ))}
                 </tbody>
@@ -313,6 +371,8 @@ export default function UserListClient({
         isOpen={isInviteModalOpen}
         onClose={() => setIsInviteModalOpen(false)}
         organizationId={organizationId}
+        organizationName={organizationName}
+        callerRole={currentUserRole}
       />
 
       {/* Edit Role Modal (single user) */}
@@ -344,6 +404,27 @@ export default function UserListClient({
           onClose={() => setDeactivateMember(null)}
           memberId={deactivateMember.id}
           memberName={formatUserDisplayName(deactivateMember.user ?? null, deactivateMember.invited_email)}
+        />
+      )}
+
+      {/* BACKLOG-3851: Reactivate / Unassign confirmations */}
+      {reactivateMember && (
+        <ReactivateUserModal
+          isOpen={!!reactivateMember}
+          onClose={() => setReactivateMember(null)}
+          memberId={reactivateMember.id}
+          memberName={formatUserDisplayName(reactivateMember.user ?? null, reactivateMember.invited_email)}
+          callerRole={currentUserRole}
+          organizationName={organizationName}
+          orgHasFreeSeat={orgHasFreeSeat}
+        />
+      )}
+      {unassignMember && (
+        <UnassignLicenseModal
+          isOpen={!!unassignMember}
+          onClose={() => setUnassignMember(null)}
+          memberId={unassignMember.id}
+          memberName={formatUserDisplayName(unassignMember.user ?? null, unassignMember.invited_email)}
         />
       )}
 

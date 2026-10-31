@@ -88,6 +88,7 @@ jest.mock("../services/databaseService", () => ({
   default: {
     getUserById: jest.fn(),
     updateUser: jest.fn(),
+    updateUserSync: jest.fn(),
     isInitialized: jest.fn().mockReturnValue(true),
     clearAllSessions: jest.fn(),
     clearAllOAuthTokens: jest.fn(),
@@ -155,6 +156,19 @@ jest.mock("../services/initializationBroadcaster", () => ({
 }));
 
 // Mock main module to prevent top-level side effects (deep link registration, etc.)
+// BACKLOG-3339: the phone-type save and its audit entry share one
+// transaction. No database here, so the transaction runs its body directly
+// and the entry is a stub.
+jest.mock("../services/db/core/dbConnection", () => ({
+  ...jest.requireActual("../services/db/core/dbConnection"),
+  dbTransaction: <T,>(fn: () => T): T => fn(),
+}));
+jest.mock("../services/auditService", () => ({
+  __esModule: true,
+  default: { log: jest.fn(), recordInTransaction: jest.fn(), recordFailure: jest.fn() },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
+}));
+
 jest.mock("../main", () => ({
   getAndClearPendingDeepLinkUser: jest.fn().mockReturnValue(null),
 }));
@@ -1138,26 +1152,22 @@ describe("System Handlers", () => {
 
     describe("user:set-phone-type", () => {
       it("should set phone type to iphone", async () => {
-        mockDatabaseService.updateUser.mockResolvedValue(undefined);
-
         const handler = registeredHandlers.get("user:set-phone-type");
         const result = await handler(mockEvent, TEST_USER_ID, "iphone");
 
         expect(result.success).toBe(true);
-        expect(mockDatabaseService.updateUser).toHaveBeenCalledWith(
+        expect(mockDatabaseService.updateUserSync).toHaveBeenCalledWith(
           TEST_USER_ID,
           { mobile_phone_type: "iphone" },
         );
       });
 
       it("should set phone type to android", async () => {
-        mockDatabaseService.updateUser.mockResolvedValue(undefined);
-
         const handler = registeredHandlers.get("user:set-phone-type");
         const result = await handler(mockEvent, TEST_USER_ID, "android");
 
         expect(result.success).toBe(true);
-        expect(mockDatabaseService.updateUser).toHaveBeenCalledWith(
+        expect(mockDatabaseService.updateUserSync).toHaveBeenCalledWith(
           TEST_USER_ID,
           { mobile_phone_type: "android" },
         );
@@ -1169,7 +1179,7 @@ describe("System Handlers", () => {
 
         expect(result.success).toBe(false);
         expect(result.error).toContain("Invalid phone type");
-        expect(mockDatabaseService.updateUser).not.toHaveBeenCalled();
+        expect(mockDatabaseService.updateUserSync).not.toHaveBeenCalled();
       });
 
       it("should handle invalid user ID", async () => {
@@ -1178,13 +1188,13 @@ describe("System Handlers", () => {
 
         expect(result.success).toBe(false);
         expect(result.error).toContain("Validation error");
-        expect(mockDatabaseService.updateUser).not.toHaveBeenCalled();
+        expect(mockDatabaseService.updateUserSync).not.toHaveBeenCalled();
       });
 
       it("should handle database errors", async () => {
-        mockDatabaseService.updateUser.mockRejectedValue(
-          new Error("Database update failed"),
-        );
+        mockDatabaseService.updateUserSync.mockImplementationOnce(() => {
+          throw new Error("Database update failed");
+        });
 
         const handler = registeredHandlers.get("user:set-phone-type");
         const result = await handler(mockEvent, TEST_USER_ID, "iphone");

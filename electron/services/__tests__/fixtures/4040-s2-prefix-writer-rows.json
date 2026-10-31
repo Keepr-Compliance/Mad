@@ -1,0 +1,107 @@
+{
+  "capturedAt": "2ae4eb35a (pre-fix head)",
+  "scenarios": {
+    "d2": {
+      "rows": [
+        {
+          "id": "rcs-fx-d2",
+          "external_message_id": "foreign-rcs-fx-d2",
+          "filename": "25989a7527f7c803273918b0fa6ba313445ccd73b8b422a8899ae403c47f88d7.jpg",
+          "storage_path": "message-attachments/25989a7527f7c803273918b0fa6ba313445ccd73b8b422a8899ae403c47f88d7.jpg"
+        },
+        {
+          "id": "d2-row-1",
+          "external_message_id": "fx-d2",
+          "filename": "IMG.jpeg",
+          "storage_path": "message-attachments/25989a7527f7c803273918b0fa6ba313445ccd73b8b422a8899ae403c47f88d7.jpeg"
+        }
+      ],
+      "files": [
+        "25989a7527f7c803273918b0fa6ba313445ccd73b8b422a8899ae403c47f88d7.jpg"
+      ]
+    },
+    "d3": {
+      "rows": [
+        {
+          "id": "d3-row-0",
+          "external_message_id": "fx-d3",
+          "filename": "SHOT.PNG",
+          "storage_path": "message-attachments/90dace55fd1d927c4a0135feb4416c371c1a046b508464d85fd9f0734f3986dc.PNG"
+        }
+      ],
+      "files": [
+        "90dace55fd1d927c4a0135feb4416c371c1a046b508464d85fd9f0734f3986dc.PNG"
+      ]
+    },
+    "d4": {
+      "rows": [
+        {
+          "id": "d4-row-0",
+          "external_message_id": "fx-d4a",
+          "filename": "a.png",
+          "storage_path": "message-attachments/36da7e90ab75268eb4f469b40db6c0e3764d73d3da9d821f93ab5b3596c0243b.png"
+        },
+        {
+          "id": "d4-row-1",
+          "external_message_id": "fx-d4b",
+          "filename": "B.PNG",
+          "storage_path": "message-attachments/36da7e90ab75268eb4f469b40db6c0e3764d73d3da9d821f93ab5b3596c0243b.PNG"
+        }
+      ],
+      "files": [
+        "36da7e90ab75268eb4f469b40db6c0e3764d73d3da9d821f93ab5b3596c0243b.png"
+      ]
+    },
+    "d4r": {
+      "rows": [
+        {
+          "id": "d4r-row-0",
+          "external_message_id": "fx-d4rb",
+          "filename": "B.PNG",
+          "storage_path": "message-attachments/15a853d1d1c5b9c76dfb7e7d1c791cbd0b4ef03f38d89fc9aa1732160bc4472a.PNG"
+        },
+        {
+          "id": "d4r-row-1",
+          "external_message_id": "fx-d4ra",
+          "filename": "a.png",
+          "storage_path": "message-attachments/15a853d1d1c5b9c76dfb7e7d1c791cbd0b4ef03f38d89fc9aa1732160bc4472a.png"
+        }
+      ],
+      "files": [
+        "15a853d1d1c5b9c76dfb7e7d1c791cbd0b4ef03f38d89fc9aa1732160bc4472a.PNG"
+      ]
+    }
+  },
+  "source": "electron/services/__tests__/attachmentDedup.writers-4040s2.test.ts capture block (removed after the run), real macOSMessagesImportService.storeAttachments at int-portal/release-2.43 @ 2ae4eb35a, before the S2 fix. File contents are bytesFor(<label>) in that suite.",
+  "iphoneScenarios": {
+    "i2": {
+      "existing": [
+        "message-attachments/cb54609766f562bd8633dd574d0a171f73a690297d49df9604d02d478130c3a5.jpeg"
+      ],
+      "rows": [
+        {
+          "filename": "IMG_1.jpg",
+          "storage_path": "message-attachments/cb54609766f562bd8633dd574d0a171f73a690297d49df9604d02d478130c3a5.jpg"
+        }
+      ],
+      "files": [
+        "cb54609766f562bd8633dd574d0a171f73a690297d49df9604d02d478130c3a5.jpeg"
+      ]
+    },
+    "i3": {
+      "existing": [
+        "message-attachments/ba0464262bcdc814e1b37e8f21056019689a02429c0fe79c10db221b43c2869a.HEIC"
+      ],
+      "rows": [
+        {
+          "filename": "IMG_2.HEIC",
+          "storage_path": "message-attachments/ba0464262bcdc814e1b37e8f21056019689a02429c0fe79c10db221b43c2869a.heic"
+        }
+      ],
+      "files": [
+        "ba0464262bcdc814e1b37e8f21056019689a02429c0fe79c10db221b43c2869a.HEIC"
+      ]
+    }
+  },
+  "iphoneSource": "Same suite, capture-iphone block (removed after the run): real iPhoneSyncStorageService.storeAttachments at 2ae4eb35a. 'existing' = the Mac-stored row given to the writer; 'rows' = what the pre-fix iPhone writer inserted; 'files' = message-attachments after the run. Bytes are bytesFor(\"fx-<scenario>\")."
+}

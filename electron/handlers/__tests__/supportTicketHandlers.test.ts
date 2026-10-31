@@ -402,3 +402,98 @@ describe("supportTicketHandlers — support:submit-ticket diagnostics upload", (
     expect(result.error).not.toContain("jane.homebuyer@example.com");
   });
 });
+
+// BACKLOG-4065: the ticket description carries the id of the open transaction.
+describe("supportTicketHandlers — support:submit-ticket open transaction id", () => {
+  // pii-allow-uuid: invented, not from any live row
+  const TXN_ID = "00000000-0000-4000-8000-000000000001";
+  const LINE = `Open transaction: ${TXN_ID}`;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    Object.keys(registeredHandlers).forEach(
+      (key) => delete registeredHandlers[key]
+    );
+    stubRpcSuccess();
+    mockUpload.mockResolvedValue({ error: null });
+    registerSupportTicketHandlers();
+  });
+
+  async function submit(
+    openTransactionId: unknown,
+    diag: typeof diagnostics | null
+  ): Promise<{ result: { success: boolean }; description: string }> {
+    const handler = registeredHandlers[CHANNEL];
+    const result = await handler(
+      {},
+      { ...ticketParams, open_transaction_id: openTransactionId },
+      null,
+      diag
+    );
+    const createCall = mockRpc.mock.calls.find(
+      ([fnName]) => fnName === "support_create_ticket"
+    );
+    expect(createCall).toBeDefined();
+    const description = (createCall as [string, { p_description: string }])[1]
+      .p_description;
+    return { result, description };
+  }
+
+  function warnCallsText(): string {
+    const logService = jest.requireMock("../../services/logService").default;
+    return JSON.stringify(logService.warn.mock.calls);
+  }
+
+  it("C1: a valid id with diagnostics adds the line after the diagnostics block", async () => {
+    const { result, description } = await submit(TXN_ID, diagnostics);
+    expect(result.success).toBe(true);
+    expect(description.startsWith(ticketParams.description)).toBe(true);
+    expect(description).toContain("--- Keepr Diagnostics ---");
+    expect(description).toContain(LINE);
+    expect(description.indexOf(LINE)).toBeGreaterThan(
+      description.indexOf("--- Keepr Diagnostics ---")
+    );
+  });
+
+  it("C5: a valid id with no diagnostics still adds the line", async () => {
+    const { description } = await submit(TXN_ID, null);
+    expect(description).toBe(`${ticketParams.description}\n\n${LINE}`);
+  });
+
+  it("no id: description is unchanged", async () => {
+    const { description } = await submit(undefined, null);
+    expect(description).toBe(ticketParams.description);
+  });
+
+  it("C6: a non-UUID string is dropped and never logged", async () => {
+    const { result, description } = await submit("742 Evergreen Terrace", diagnostics);
+    expect(result.success).toBe(true);
+    expect(description).not.toContain("Evergreen");
+    expect(description).not.toContain("Open transaction");
+    expect(warnCallsText()).not.toContain("Evergreen");
+  });
+
+  it("C6b: a UUID embedded in a longer string is dropped (whole-string match)", async () => {
+    const { result, description } = await submit(
+      `742 Evergreen Terrace ${TXN_ID}`,
+      diagnostics
+    );
+    expect(result.success).toBe(true);
+    expect(description).not.toContain("Evergreen");
+    expect(description).not.toContain("Open transaction");
+    expect(warnCallsText()).not.toContain("Evergreen");
+  });
+
+  it("C8: a non-string value is dropped quietly and the ticket is still sent", async () => {
+    for (const value of [{ toString: () => TXN_ID }, 12345]) {
+      jest.clearAllMocks();
+      stubRpcSuccess();
+      const { result, description } = await submit(value, diagnostics);
+      expect(result.success).toBe(true);
+      expect(description).not.toContain("Open transaction");
+      expect(warnCallsText()).toContain(typeof value);
+      expect(warnCallsText()).not.toContain(TXN_ID);
+      expect(warnCallsText()).not.toContain("12345");
+    }
+  });
+});

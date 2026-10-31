@@ -62,6 +62,7 @@ import {
   deleteLiveForceSetSync,
   insertStagedRowsSync,
   macOSForceSetFor,
+  selectForceSetAttachmentPathsSync,
   selectYieldedMessageIdsSync,
 } from "../db/macosForceSetSql";
 import { UPDATE_ATTACHMENT_MESSAGE_ID_SQL } from "../db/messageImportSql";
@@ -136,6 +137,12 @@ export interface ForceSwapCounts {
   messagesYieldedToSurvivors: number;
   /** Staged attachments dropped with the messages that yielded above. */
   attachmentsYieldedToSurvivors: number;
+  /**
+   * BACKLOG-4040 S2: the stored file paths of the attachment rows the swap
+   * DELETED, read inside the swap transaction before the DELETE. Candidates
+   * for the post-commit file cleanup only; most stay (re-linked or shared).
+   */
+  removedStoragePaths: string[];
 }
 
 /**
@@ -146,24 +153,13 @@ export interface ForceSwapCounts {
  * precisely because the swap never ran) but not free. The next force run
  * reclaims them; no other code in the app knows these tables exist.
  *
- * THIS SWEEP IS NOT SCOPED, and the flag does not make it safe. An earlier
- * version of this comment claimed `forceReimportInProgress` guarantees at most
- * one force run per process. It does not. A second Force Re-import is not
- * refused — `importMessages` ABORTS the running import, waits 500 ms, clears
- * `isImporting`, and proceeds. The aborted run only notices at its next
- * cancellation check, so if that check is more than 500 ms away (a long text
- * extraction, a large batch) it is still writing to ITS staging tables when the
- * new run sweeps every `staging_msgimport_%` table in the database — including
- * the one still in use.
- *
- * The user's DATA is safe in every interleaving, which is why this is documented
- * rather than fixed here. The abandoned run writes only to staging and reads
- * live, so its next INSERT fails with "no such table" and reaches the outer
- * catch, which reports `rolledBack` — accurate, because it never swapped. Had
- * it reached the swap instead, `insertFromStaging` would throw INSIDE the
- * transaction and the DELETE would roll back with it. The cost is a confusing
- * error card on a run the user had already superseded, not a lost message.
- * Filed as BACKLOG-2797.
+ * THIS SWEEP IS NOT SCOPED. It drops every `staging_msgimport_%` table, so it is
+ * only safe while no other force run can be writing to one. `importMessages`
+ * guarantees that (BACKLOG-2797): a second Force Re-import aborts the running
+ * import and then WAITS for it to release the service before it reaches this
+ * sweep, and refuses if that takes longer than its bound. Before that fix it
+ * waited a fixed 500 ms and proceeded, so a run still writing to its staging
+ * tables could have them dropped underneath it.
  *
  * BACKLOG-2768 (retention cleanup) is the durable reclaimer for a user who never
  * runs another force re-import.
@@ -260,8 +256,12 @@ export const forceSwapSteps = {
   deleteLiveForceSet(
     db: DatabaseType,
     staging: ForceStaging
-  ): { messagesDeleted: number; attachmentsDeleted: number } {
-    return deleteLiveForceSetSync(db, macOSForceSetFor(staging.userId));
+  ): { messagesDeleted: number; attachmentsDeleted: number; removedStoragePaths: string[] } {
+    const set = macOSForceSetFor(staging.userId);
+    // BACKLOG-4040 S2: read the paths BEFORE the rows go, with the delete's own
+    // predicates. The files themselves are only touched after the swap commits.
+    const removedStoragePaths = selectForceSetAttachmentPathsSync(db, set);
+    return { ...deleteLiveForceSetSync(db, set), removedStoragePaths };
   },
 
   /**

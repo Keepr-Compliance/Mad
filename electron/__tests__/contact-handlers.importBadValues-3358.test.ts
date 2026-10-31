@@ -161,6 +161,16 @@ jest.mock("../services/databaseService", () => {
         return ids;
       }),
       createContact: jest.fn((data: any, origin: any) => real.createContact(data, origin)),
+      // BACKLOG-3339: contacts:create writes through the sync cores in one transaction.
+      createContactSync: jest.fn((data: any, origin: any) => real.createContactSync(data, origin)),
+      backfillContactEmailsSync: jest.fn((id: string, emails: string[], source: any) =>
+        real.backfillContactEmailsSync(id, emails, source),
+      ),
+      backfillContactPhonesSync: jest.fn((id: string, phones: string[], source: any) => {
+        const n = real.backfillContactPhonesSync(id, phones, source);
+        mockSwitches.afterBackfillPhones?.();
+        return n;
+      }),
       updateContactSync: jest.fn((id: string, updates: any) =>
         real.updateContactSync(id, updates),
       ),
@@ -191,7 +201,8 @@ jest.mock("../services/contactsService", () => ({
 
 jest.mock("../services/auditService", () => ({
   __esModule: true,
-  default: { log: jest.fn(), logContactAction: jest.fn() },
+  default: { log: jest.fn(), logContactAction: jest.fn(), recordInTransaction: jest.fn(), recordFailure: jest.fn() },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
 }));
 
 jest.mock("../services/logService", () => {

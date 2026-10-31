@@ -104,7 +104,8 @@ function setup(options: {
   jest.doMock("../../services/macOSPermissionHelper", () => ({ default: {} }));
   jest.doMock("../../services/failureLogService", () => ({
     __esModule: true,
-    default: { log: jest.fn() },
+    // BACKLOG-3319: a successful init now schedules initialize() via setImmediate.
+    default: { log: jest.fn(), initialize: jest.fn().mockResolvedValue(undefined) },
   }));
 
   jest.doMock("../../services/databaseService", () => ({

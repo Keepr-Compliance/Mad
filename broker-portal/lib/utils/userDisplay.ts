@@ -225,3 +225,20 @@ export function getDashboardHeading(identity: ViewerIdentity): string {
   const firstName = resolveViewerName(identity).split(/\s+/)[0] ?? '';
   return firstName ? `Welcome back, ${firstName}` : 'Dashboard';
 }
+
+/**
+ * BACKLOG-3851 PR-2f (S1): the name fields to show for a member row. A claimed row
+ * shows its user; an unclaimed invitation shows the first/last name typed on the
+ * invite, when any (else null, and callers fall back to the invited email).
+ */
+export function memberNameFields(member: {
+  user_id: string | null;
+  user?: { display_name?: string | null; first_name?: string | null; last_name?: string | null } | null;
+  invited_first_name?: string | null;
+  invited_last_name?: string | null;
+}): { display_name?: string | null; first_name?: string | null; last_name?: string | null } | null {
+  if (member.user_id) return member.user ?? null;
+  const first = member.invited_first_name?.trim() || null;
+  const last = member.invited_last_name?.trim() || null;
+  return first || last ? { display_name: null, first_name: first, last_name: last } : null;
+}

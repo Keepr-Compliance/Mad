@@ -1,0 +1,97 @@
+BACKLOG-3853 PR-2 DB controls, keepr-test, 2026-10-19.
+
+Dry run first: migration (inline EXECUTE) + pr2-controls.sql base in one rolled-back call:
+base 39/39 controls true.
+
+Migration 20261019090000_backlog_3853_subscription_engine.sql applied: file + ledger row in one
+call (DO block: EXECUTE the file text, INSERT the same text into schema_migrations).
+Ledger md5(statements[1]) bc235c4ecd1dcb83083e70fd2dd0918d, length 19543 = md5 -q / wc -c of the file.
+After apply (md5 of pg_get_functiondef):
+  _billing_apply_org_subscription 3b5f4ae4 (was 77ae57bd)
+  _billing_auto_reinstate         ea14b070 (was a6f4f1c2)
+  admin_update_plan_feature       8df064d4 (was 4dd46d36); EXECUTE grants unchanged
+  _billing_enqueue_org_work 11182fa5, _billing_org_sync_lease 3e2a57b8,
+  _billing_org_sync_release 33a24f04, _billing_record_invoice_paid cf64d1a4
+
+Runs after apply (compose_pr2.py, two rolled-back calls; each mode: exact-once replace that raises
+on 0 or 2+ matches, or the prior body; md5 must change; MUTATION APPLIED printed):
+base 39/39 PASS. Cleanup verified: 0 P3853P2C orgs, 0 p3853p2c users, 0 outbox rows of the new
+kinds, 0 org_deals.
+
+| mode (likely wrong build)                       | md5 change         | red controls |
+| enqueue_insert_only (enqueue in the save path only) | trigger 11182fa5->1ecdf29e | C-E2, C-E4, C-E5, C-E6 |
+| enqueue_any_update (enqueue on every UPDATE OF)  | ->04aff797 | NONE: equivalent mutant. The sync dedupe key is per deal version, so an extra insert for an unchanged version is absorbed by ON CONFLICT DO NOTHING. The version check stays (SR 7c) as the stated intent. |
+| enqueue_any_status (draft / canceled deals sync) | ->917039ad | C-E6 |
+| no_notify (no suspended email row)               | ->d4337409 | C-E3, C-E3b, C-E5 |
+| pr1_apply (today's mirror writer, PR-1 body)     | apply 3b5f4ae4->77ae57bd | C-9n cursor, C-9n older event, C-9s, C-9s2, C-9c, C-9c2 |
+| cancel_unconditional                             | ->58f408d1 | C-9c2 |
+| null_branch_no_coalesce                          | ->f597cee8 | C-9i |
+| pr1_auto (today's auto-reinstate, PR-1 body)     | auto ea14b070->a6f4f1c2 | C-12e no payment, C-12e paid+active, C-R4 |
+| paid_boundary_lt (< instead of <=)               | ->063f16d1 | C-12e boundary, C-12e paid+active, C-R4 |
+| auto_no_reason_check                             | ->a342815b | C-12c |
+| auto_no_status_check                             | ->188370cd | C-12e paid+active, C-R4 |
+| paid_no_greatest                                 | paid cf64d1a4->3e7c9efd | C-RP, C-12e paid+active |
+| lease_no_guard                                   | lease 3e2a57b8->7de77ca5 | C-L1 B refused while A holds |
+| lease_short_ok (lease under 90 s allowed)        | ->00d6ac5b | C-L2 |
+| pf_before (today's plan-feature body)            | planfeat 8df064d4->4dd46d36 | C-P1, C-P2, C-P3 |
+| pf_enable_only (refuse only when enabling)       | ->bf4eeffe | C-P2, C-P3 |
+
+17 mutants: 16 red, 1 equivalent (explained above).
+The three prior-body mutants restored exactly the pre-migration md5s (77ae57bd, a6f4f1c2,
+4dd46d36), so the bodies in rollback-3853-pr2.sql are byte-exact.
+
+JEST CONTROLS (broker-portal), 2026-10-19. Fix committed first (87ba69577 and e8d75fc94 before the rebase onto int-portal/billing e600092fb; now 1c53460b8 and 47a6b5d6a).
+Runner: supabase/tests/backlog-3853/jest_mutants_pr2.py. Each mutant: exact-once replace (raises on 0 or 2+
+matches), git diff --numstat printed, jest --bail=0 --json, non-zero test count asserted, file restored with
+git checkout -- and the tree checked clean.
+Base: npx jest --config broker-portal/jest.config.js broker-portal/__tests__ -> 203 suites, 4966 tests, 0 failed
+(before the ids-only assertion; the sync suite is 11/11 after it).
+
+M-C5 dispatch skipped before the switch (brokerage events reach the Agent / dispute path) | numstat 1	1	broker-portal/app/api/payments/webhook/route.ts | tests 18, failed 11 | reds: ['C-5: subscription.updated on a brokerage customer -> mirrored, no Agent refusal, no Agent lookups', 'C-5b: kind=brokerage with no stored customer row -> 200 + orphan alert, Agent path never runs', 'C-5d: a lookup failure is not "no row": 500 so Stripe retries, Agent path not reached', 'C-D: dispute on a brokerage payment -> alert + account-manager row, never suspend_account_for_dispute', 'C-D2: refund on a brokerage payment -> alert + account-manager row, per-export refund path not run', 'C-1: past_due -> mirror past_due + one overdue row for the oldest overdue invoice; nothing suspends', 'C-OD2: "now" is the test clock: wall time is before every due date, the clock is past the first', 'C-OD: redelivery and a second past_due event for the same invoice -> still one row', 'C-OD3: once the oldest is paid, the next overdue invoice gets its own row', 'C-PF2: a real failure (requires_payment_method) -> one payment_failed row', 'C-12b: invoice.paid while the re-fetch still reads past_due -> stays suspended; then ->active reinstates']
+M-C5b orphan falls through to the Agent path | numstat 1	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 1 | reds: ['C-5b: kind=brokerage with no stored customer row -> 200 + orphan alert, Agent path never runs']
+M-C5c-gate type gate removed only (resolveTarget still knows 7 types) | numstat 0	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 0 | reds: NONE
+M-C5c unrestricted dispatch (gate removed + PaymentIntent events resolved) | numstat 5	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 1 | reds: ['C-5c: payment_intent.succeeded / checkout.session.completed make no brokerage lookup and no extra Stripe read']
+M-C1 suspend on past_due | numstat 1	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 1 | reds: ['C-1: past_due -> mirror past_due + one overdue row for the oldest overdue invoice; nothing suspends']
+M-OD pending-payment skip removed | numstat 1	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 2 | reds: ['C-OD: the oldest overdue invoice has a payment processing -> no email', 'C-OD: the oldest overdue invoice has a payment requires_action -> no email']
+M-OD dedupe per subscription, not per invoice | numstat 1	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 2 | reds: ['C-1: past_due -> mirror past_due + one overdue row for the oldest overdue invoice; nothing suspends', 'C-OD3: once the oldest is paid, the next overdue invoice gets its own row']
+M-OD2 wall clock instead of the test clock | numstat 1	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 5 | reds: ['C-1: past_due -> mirror past_due + one overdue row for the oldest overdue invoice; nothing suspends', 'C-OD2: "now" is the test clock: wall time is before every due date, the clock is past the first', 'C-OD: redelivery and a second past_due event for the same invoice -> still one row', 'C-OD3: once the oldest is paid, the next overdue invoice gets its own row', 'C-12: an open invoice still past due -> not reinstated']
+M-12 reinstate while an invoice is still past due | numstat 1	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 1 | reds: ['C-12: an open invoice still past due -> not reinstated']
+M-12b reinstate from invoice.paid only | numstat 0	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 1 | reds: ['C-12b: invoice.paid while the re-fetch still reads past_due -> stays suspended; then ->active reinstates']
+M-12c TS reason check removed (SQL still holds it) | numstat 1	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 1 | reds: ['C-12c: a suspension for "other" never lifts on payment']
+M-PF email on every payment_failed | numstat 1	1	broker-portal/lib/billing/brokerage.ts | tests 18, failed 1 | reds: ['C-PF: PaymentIntent requires_action (ACH verification) -> no email']
+M-ENQ organization rows written as user rows | numstat 1	1	broker-portal/lib/billing/outboxEnqueue.ts | tests 18, failed 1 | reds: ['C-D: dispute on a brokerage payment -> alert + account-manager row, never suspend_account_for_dispute']
+M-6 lease not enforced | numstat 0	1	broker-portal/lib/billing/brokerageSync.ts | tests 11, failed 1 | reds: ['C-6: two runs for one organization at once -> one customer, one subscription (lease)']
+M-6c find by stored id only (no list adopt) | numstat 1	2	broker-portal/lib/billing/brokerageSync.ts | tests 11, failed 1 | reds: ['C-6c: crash after create, before the id is saved -> the next version adopts it from the list']
+M-K no superseded check, key from the payload version | numstat 2	2	broker-portal/lib/billing/brokerageSync.ts | tests 11, failed 1 | reds: ['C-K: a v1 row drained after a v2 save -> superseded, zero Stripe calls; the v2 row creates once']
+M-M billing_not_live check removed | numstat 1	1	broker-portal/lib/billing/brokerageSync.ts | tests 11, failed 1 | reds: ['C-M: a live deal while brokerage billing is not live -> billing_not_live, zero Stripe calls']
+M-S create_prorations on a seat change | numstat 1	1	broker-portal/lib/billing/brokerageSync.ts | tests 11, failed 1 | reds: ['C-S: a seat change updates quantity with proration none, keeps the price, creates nothing']
+M-7a customer created with the (changeable) name | numstat 1	1	broker-portal/lib/billing/brokerageSync.ts | tests 11, failed 1 | reds: ['first run: product, customer (metadata only), contact, then one send_invoice net-15 subscription; ids persisted']
+M-9s drain writes status to the mirror | numstat 1	1	broker-portal/lib/billing/brokerageSync.ts | tests 11, failed 1 | reds: ['first run: product, customer (metadata only), contact, then one send_invoice net-15 subscription; ids persisted']
+M-N email after a reinstate | numstat 1	1	broker-portal/lib/billing/brokerageNotify.ts | tests 7, failed 0 | reds: NONE
+M-N2 old suspension row sends for a newer suspension | numstat 1	1	broker-portal/lib/billing/brokerageNotify.ts | tests 7, failed 1 | reds: ['C-N2: suspended again later -> the old row sends nothing (the new suspension has its own row)']
+M-N3 no already-sent check (account manager) | numstat 1	1	broker-portal/lib/billing/brokerageNotify.ts | tests 4, failed 1 | reds: ['convergence: the same row run twice sends once']
+M-3 checkout-session ignores the brokerage block | numstat 1	1	broker-portal/app/api/payments/checkout-session/route.ts | tests 54, failed 1 | reds: ['C-3 checkout-session: brokerage suspended -> 403 account_suspended, nothing bought']
+M-3c charge ignores the brokerage block | numstat 1	1	broker-portal/app/api/payments/charge/route.ts | tests 54, failed 1 | reds: ['C-3 charge: brokerage suspended -> 403 account_suspended, nothing bought']
+M-3b charge fails open on a check error | numstat 1	1	broker-portal/app/api/payments/charge/route.ts | tests 54, failed 1 | reds: ['C-3b charge: the check fails -> 503, nothing bought']
+
+26 mutants: 24 red, 2 survive. The 2 are equivalent mutants:
+- M-C5c-gate: resolveTarget resolves only the seven brokerage types, so removing the type set alone changes
+  nothing. The realistic wrong build (M-C5c: dispatch resolves PaymentIntent events too) is red.
+- M-12c (formerly listed here): C-12c now also asserts _billing_auto_reinstate is never called; the mutant is red (tests 18, failed 1).
+- M-N: a reinstate always clears suspended_at (_billing_reinstate_org), so the epoch check also stops the
+  email; a deal that is not suspended but keeps suspended_at has no writer, so no fixture can show it.
+C-12f (no invoice.paid since the suspension -> not reinstated) has no TypeScript mutant: the rule lives in
+SQL (SQL mutant pr1_auto is red above).
+
+Note: after these runs the three lease holder ids in pr2-controls.sql changed from fixed literals to
+gen_random_uuid() (the public-repo PII guard refuses bare UUID literals). Only distinctness matters to
+C-L1, so the runs above stand for the committed text.
+Rebased onto int-portal/billing e600092fb (BACKLOG-3991 merged there; no shared files or functions):
+broker-portal jest 209 suites, 5061 tests, 0 failed.
+
+SR review round (7b7f886c2 -> fix-up), keepr-test, 2026-10-19, one rolled-back call (prior-body modes omitted):
+New control SR-EQ same-second event applied (apply {"status":"active"} at cursor 200 after C-9s2 -> status active).
+base 40/40 PASS (apply md5 3b5f4ae4).
+| mode (likely wrong build)                      | md5 change             | red controls |
+| sr_apply_strict_gt (>= swapped for > in the mirror writer) | apply 3b5f4ae4->eec6df26 (MUTATION APPLIED) | SR-EQ only (39 pass, 1 fail) |
+Fixtures: pi-open.json, pi-requires-action.json client_secret replaced with a placeholder (README edit list).

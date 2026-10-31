@@ -22,7 +22,7 @@
  *   | `addBreadcrumb`    |    13 | `category`, `message`, `level`, `data`    |
  *   | `flush`            |     3 | (a millisecond timeout)                   |
  *   | `captureMessage`   |     2 | `level`, `tags`, `extra`                  |
- *   | `setUser`          |     1 | `id`, `email`                             |
+ *   | `setUser`          |     1 | `id` (BACKLOG-4040: no email)             |
  *
  * `withScope`, `setTag`, `setContext`, `startTransaction` and the rest of the
  * SDK are absent because no core module calls them. `init()` is absent for a
@@ -71,8 +71,11 @@ export interface Breadcrumb {
 
 /** Who the events belong to. */
 export interface ReportedUser {
+  /**
+   * BACKLOG-4040 S3: the id only. Sentry persists the scope (user included) to
+   * `sentry/scope_v3.json` in plaintext, so no email — not even a redacted one.
+   */
   id: string;
-  email?: string;
 }
 
 /**

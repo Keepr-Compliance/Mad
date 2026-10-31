@@ -81,7 +81,9 @@ function brokerageRow(role: string, phase: 'pre' | 'post' = 'post'): Record<stri
           const { [PERSONAL_COLUMN]: _omitted, ...rest } = BROKERAGE_ORG_POST;
           return { ...rest, id: ORG_ID };
         })();
-  return { id: `${ORG_ID}-${role}`, user_id: USER_ID, role, organization_id: ORG_ID, organizations };
+  // license_status: always present in a PORTAL_MEMBERSHIP_SELECT response
+  // (BACKLOG-3917); the setup callback reads it since BACKLOG-3851 PR-2a.
+  return { id: `${ORG_ID}-${role}`, user_id: USER_ID, role, organization_id: ORG_ID, license_status: 'active', organizations };
 }
 
 /** The row BACKLOG-3364 creates for a solo user: their own organization. */
@@ -161,7 +163,8 @@ describe('a brokerage membership still means already placed', () => {
     given([brokerageRow(role)]);
 
     expect(await callbackRedirect()).toBe(`${ORIGIN}/dashboard`);
-    expect(mockRpc).not.toHaveBeenCalled();
+    // No provisioning call. BACKLOG-4007 PR-3 adds only the read-only setup-state read.
+    expect(mockRpc.mock.calls.filter(([fn]) => fn !== 'broker_get_billing_setup')).toEqual([]);
   });
 
   it('prefers the brokerage row when a personal row is returned first', async () => {
@@ -169,7 +172,8 @@ describe('a brokerage membership still means already placed', () => {
     given([personalRow(), brokerageRow('broker')]);
 
     expect(await callbackRedirect()).toBe(`${ORIGIN}/dashboard`);
-    expect(mockRpc).not.toHaveBeenCalled();
+    // No provisioning call. BACKLOG-4007 PR-3 adds only the read-only setup-state read.
+    expect(mockRpc.mock.calls.filter(([fn]) => fn !== 'broker_get_billing_setup')).toEqual([]);
   });
 });
 

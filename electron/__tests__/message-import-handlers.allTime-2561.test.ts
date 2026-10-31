@@ -86,8 +86,6 @@ jest.mock("../services/databaseService", () => ({
     isInitialized: jest.fn(() => true),
     getUserById: jest.fn().mockResolvedValue({ id: "11111111-2222-4333-8444-555555555555" }),
     getRawDatabase: jest.fn(() => ({ prepare: mockPrepare })),
-    backfillContactCommunicationDates: jest.fn().mockResolvedValue(0),
-    backfillPhoneLastMessageTable: jest.fn().mockResolvedValue(0),
   },
 }));
 
@@ -124,8 +122,10 @@ jest.mock("../services/macOSMessagesImportService", () => ({
   },
 }));
 
-jest.mock("../services/db/externalContactDbService", () => ({
-  updateLastMessageAtFromLookupTable: jest.fn(() => 0),
+// BACKLOG-3222: the three post-import recency writes live in one owner now.
+const mockRefreshRecency = jest.fn(async (_userId: string) => ({ contacts: 0, phones: 0, external: 0 }));
+jest.mock("../services/messageRecencyRefresh", () => ({
+  refreshMessageRecencyAfterImport: (userId: string) => mockRefreshRecency(userId),
 }));
 
 jest.mock("../services/autoLinkService", () => ({
@@ -223,7 +223,10 @@ describe("BACKLOG-2561 · messages:import-macos honours an explicit All time", (
       messageImport: { filters: { lookbackMonths: null, maxMessages: 50000 } },
     });
 
+    mockRefreshRecency.mockClear();
     await handlers.get("messages:import-macos")(mockEvent, TEST_USER_ID, false);
+    // BACKLOG-3222 R3: the recency stub is wired (one refresh, for this user).
+    expect(mockRefreshRecency.mock.calls).toEqual([[TEST_USER_ID]]);
 
     // An explicit All time is unbounded: no cutoff at all.
     expect(capturedPlan?.cutoffNano).toBeNull();

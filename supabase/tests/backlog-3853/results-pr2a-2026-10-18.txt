@@ -1,0 +1,114 @@
+BACKLOG-3853 PR-2A controls, keepr-test, 2026-10-18.
+
+Migration 20261019030000_backlog_3853_admin_save_deal.sql applied: file + ledger row in one call.
+Ledger md5(statements[1]) 36b07f4ff1d2ffacb69611c3337dc34f, length 10924 = md5 -q / wc -c of the file.
+After apply: admin_save_deal d270b908, admin_get_org_billing 90abe742; PR-1 bodies unchanged
+(_billing_save_deal 4471a965, admin_suspend_org 7e29986a, admin_reinstate_org 2ed6e29d).
+EXECUTE on both new functions: authenticated + service_role only (no anon, no PUBLIC).
+
+Dry run first (migration + controls in one rolled-back call): base 26/26; 12 mutants red;
+mode_hardcoded_test did not apply (2 matches) -> mutant string widened to include the next line.
+
+Run after apply (pr2a-controls.sql, one rolled-back call, 14 modes, exact-once replace + md5 change):
+base 26/26 PASS, 0 fixture rows left (orgs P3853A*, users p3853a-*, org_deals all 0).
+
+| mutant (likely wrong build)                  | md5 change            | red |
+| no_manage_check (no billing.manage check)    | admin_save_deal d270b908->b537a7ea | nonstaff, support, exec saves; no-deal checks |
+| no_cap (cap not enforced)                    | ->d311a4ef | Sales 1999 refused; Sales deeper than approved; super over_cap flag |
+| cap_floor (floor(pct) > cap)                 | ->29537d89 | same three |
+| no_approve_path (Super Admin refused too)    | ->9b2e2da4 | Super Admin 1999; Sales keeps approved; Sales deeper |
+| keep_current_any (any price on an existing deal) | ->c9553bf4 | Sales cannot go deeper than approved |
+| no_keep_current (approved price blocks Sales edits) | ->e3fa133a | Sales keeps approved price |
+| no_reason_check                              | ->d183279e | reason null, reason blank, no-deal after input refusals |
+| mode_hardcoded_test (caller mode ignored)    | ->aeaed631 | live deal refused while dark |
+| live_unguarded (PR-1 live check removed)     | _billing_save_deal 4471a965->0ed634d5 | live deal refused while dark |
+| no_audit (no admin_audit_logs row)           | ->f041b04e | audit row with reason; super over_cap |
+| get_no_perm (read without billing.view)      | admin_get_org_billing 90abe742->ebf9977a | support view refused |
+| suspend_no_perm                              | admin_suspend_org 7e29986a->b394284f | exec/support suspend refused (+ Sales suspend: exec already suspended it) |
+| reinstate_no_perm                            | admin_reinstate_org 2ed6e29d->6ba81c2c | exec reinstate refused |
+
+vitest (admin-portal/__tests__/billing-card-3853, 12 tests), each mutation exact-once, git numstat 1 1, restored with git checkout after a commit:
+| page_gate_removed (card for any billing.view user) | 1 failed: hidden while off and not test |
+| visibility_live_only (is_test ignored)       | 1 failed: shown for a test org |
+| mode_defaults_test (missing STRIPE_MODE -> test) | 1 failed: refuses when STRIPE_MODE is missing |
+| action_mode_hardcoded ('test' always sent)   | 1 failed: passes STRIPE_MODE=live |
+| readout_cap_floor                            | 1 failed: sweeps the boundary |
+Restored: 12 passed.
+
+FIX AFTER THE RUN ABOVE (not yet applied on keepr-test):
+has_permission(uuid,text) answers only when check_user_id = auth.uid() (BACKLOG-3946), so the
+account-manager check refused every manager except the caller and the manager list held only the
+caller. Both now read internal_roles -> admin_role_permissions -> admin_permissions directly.
+New file md5 801b5cfb8dc6a8c820ff883d00711c1a, length 11551. Controls updated: the Sales save names
+the Super Admin as manager (a non-caller) and the payload must list the Super Admin; new mutants
+am_check_caller_only and am_list_caller_only. The re-apply on keepr-test was refused by the MCP
+session ("Invalid or expired requestState"); keepr-test still holds the earlier body
+(ledger md5 36b07f4f, admin_save_deal d270b908). These controls are NOT RUN against the fix.
+
+RE-RUN AFTER THE FIX (founder "try again", same day):
+Re-applied the fixed file on keepr-test and set the 20261019030000 ledger statements to it in one call:
+ledger md5 801b5cfb8dc6a8c820ff883d00711c1a, length 11551 = file. admin_save_deal 1670cad5,
+admin_get_org_billing 99888431; _billing_save_deal 4471a965, admin_suspend_org 7e29986a,
+admin_reinstate_org 2ed6e29d unchanged.
+pr2a-controls.sql, 16 modes, one rolled-back call: base 26/26 PASS. Every mutant red:
+| am_check_caller_only | admin_save_deal 1670cad5->c0c228c7 | Sales save naming Super Admin as manager (+ audit, change log, payload, suspend/reinstate that depend on that deal) |
+| am_list_caller_only  | admin_get_org_billing 99888431->79a1d7e5 | view payload (Super Admin missing from the manager list) |
+| no_manage_check | ->8355af95 | nonstaff, support, exec saves; 2 no-deal checks |
+| no_cap | ->a99a62ff | Sales 1999; Sales deeper than approved; super over_cap |
+| cap_floor | ->0af58e82 | same three |
+| no_approve_path | ->d30409f2 | super 1999; Sales keeps approved; Sales deeper |
+| keep_current_any | ->b17b43a7 | Sales cannot go deeper than approved |
+| no_keep_current | ->0b15897b | Sales keeps approved price |
+| no_reason_check | ->ff7a8987 | reason null, blank, no-deal |
+| mode_hardcoded_test | ->c6ae4ab4 | live deal refused while dark |
+| live_unguarded | _billing_save_deal 4471a965->0ed634d5 | live deal refused while dark |
+| no_audit | ->2cf3cacb | audit row; super over_cap |
+| get_no_perm | admin_get_org_billing 99888431->bbfc66e3 | support view refused |
+| suspend_no_perm | admin_suspend_org 7e29986a->b394284f | exec/support suspend (+ Sales suspend, cascade) |
+| reinstate_no_perm | admin_reinstate_org 2ed6e29d->6ba81c2c | exec reinstate |
+
+FIX-UP ROUND (SR review + founder ruling: Sales keeps an approved deep price only at the same price
+and the same or fewer seats, and only on a deal that is not canceled):
+Re-applied on keepr-test with the ledger statements set to the file in one call: ledger md5
+656596838be0ad33f31ce904c6723fe2, length 12077 = file. admin_save_deal fe991d06, admin_get_org_billing
+99888431, _billing_save_deal 4471a965 (precondition and rollback md5 unchanged: PR-1 body not touched).
+pr2a-controls.sql, 19 modes, one rolled-back call: base 33/33 PASS. Every mutant red:
+| no_seats_check (seat increase allowed on a kept price) | fe991d06->968caa94 | Sales raises seats refused; Super raises seats (fixture moves) |
+| no_active_filter (canceled deal's price kept)  | ->285454c3 | canceled deal price not kept |
+| sr_int_division (100 instead of 100.0)         | ->d37db9c7 | 7 incl. Sales deeper than cap refused |
+| keep_current_any (price may drop on a kept deal) | ->85f5331f | Sales cannot go deeper; SR raise-then-lower; Super raises seats |
+| no_keep_current                                 | ->802e7f6e | 6 incl. keeps price + contact, keeps price + fewer seats |
+| no_cap / cap_floor                              | ->760e56b0 / ->be3358ec | 7 each |
+| no_approve_path                                 | ->a47f3124 | 10 |
+| no_manage_check                                 | ->41b68bac | 5 |
+| no_reason_check                                 | ->75f4c177 | 3 |
+| mode_hardcoded_test                             | ->2d1e3553 | live deal refused while dark |
+| live_unguarded                                  | _billing_save_deal 4471a965->0ed634d5 | live deal refused while dark |
+| no_audit                                        | ->56a6257c | audit row; super over_cap |
+| am_check_caller_only                            | ->bf17c19f | 7 |
+| am_list_caller_only                             | admin_get_org_billing 99888431->79a1d7e5 | view payload |
+| get_no_perm                                     | ->bbfc66e3 | support view refused |
+| suspend_no_perm / reinstate_no_perm             | 7e29986a->b394284f / 2ed6e29d->6ba81c2c | exec/support suspend; exec reinstate |
+vitest: 13 tests (kept-price rule now needs same price and seats <= current; message names Sales or Super Admin).
+
+SR DELTA FIX-UP (test-only): added C_SR3_sales_raise_still_deep_refused (Super saves 1500c, Sales re-saves 1800c, refused, price stays 1500) and mode sr_price_ge (= -> >=).
+keepr-test, one rolled-back call, trimmed subset of pr2a-controls.sql (5 checks incl. the new control and 2 neighbours; the full file was not re-run):
+base 5/5 PASS. sr_price_ge fe991d06->da1e0482 (MUTATION APPLIED): 1 red, C_SR3_sales_raise_still_deep_refused only.
+keep_current_any ->85f5331f: 3 red (cannot_go_deeper, keeps_price_changes_contact, SR3 raise). no_keep_current ->802e7f6e: 1 red (keeps_price_changes_contact).
+vitest saveDeal: added c(1800,false,1500,4,4) -> needs_approval. 13 tests base green; checkPrice === -> >= (MUTATION APPLIED, numstat 1/1): 1 failed, 12 passed; restored, numstat 0.
+
+SCOPE CHANGE (supersedes the test-only fix-up above): Sales may keep an approved deep price OR RAISE it toward list;
+lowering it, or raising the seats, still needs billing.approve. Keep-price match is now "new price >= approved price".
+Re-applied on keepr-test as CREATE OR REPLACE with the ledger statements set to the file in one call:
+ledger md5 131786ed52abc4d1825cd0627964b698, length 12133 = md5 -q / wc -c of the file; read back live. admin_save_deal f3ae35f5.
+New controls: C_SR3_sales_raise_still_deep_saved (1500c -> 1800c saved), C_SR3_sales_lower_deep_refused (1500c -> 1400c refused, price stays 1500).
+pr2a-controls.sql, 21 modes, one rolled-back call: base 37/37 PASS. Mutants (MUTATION APPLIED, md5 changed):
+| price_eq (>= -> =)            | f3ae35f5->405b1167 | C_SR3_sales_raise_still_deep_saved only |
+| price_le (>= -> <=)           | ->546887d9         | cannot_go_deeper, SR_raise_then_lower, SR3 lower, SR3 raise, super_raises_seats |
+| keep_current_any (check gone) | ->d4195536         | cannot_go_deeper, SR_raise_then_lower, SR3 lower, super_raises_seats |
+| no_keep_current               | ->8bc5d98e         | 7 |
+| no_seats_check                | ->671cd9d3         | raises_seats_refused, super_raises_seats |
+| no_active_filter              | ->88d04e38         | canceled_deal_price_not_kept |
+All other modes red as before (no_cap 8, cap_floor 7, sr_int_division 7, no_approve_path 14, no_manage_check 5, no_reason_check 3, no_audit 2,
+mode_hardcoded_test 1, live_unguarded 1, am_check_caller_only 7, am_list_caller_only 1, get_no_perm 1, suspend_no_perm 3, reinstate_no_perm 1).
+vitest billing-card-3853: 13/13 at the new code; checkPrice >= -> === : 1 failed (raise expects kept); >= -> <= : 1 failed (lower expects needs_approval); each restored, numstat 0.

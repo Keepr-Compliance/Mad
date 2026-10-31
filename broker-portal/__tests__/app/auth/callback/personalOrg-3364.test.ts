@@ -98,61 +98,56 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('a solo user holding only a personal organization', () => {
-  it('reaches the pending-invite branch and the invite is claimed', async () => {
+  // BACKLOG-3684: an invitation is accepted only through its link. These two
+  // replaced the BACKLOG-3364 pair that asserted an email-only claim (a users
+  // upsert plus an organization_members update with no token).
+  it('without the invitation link: keeps their floor, accepts nothing, writes nothing', async () => {
     signedIn();
     given([personalMembership(), pendingInvite(EMAIL, 'agent')]);
+    // The database reports the pending invite (measured on keepr-test, XPP);
+    // the route must still not act on it for a personal-org owner.
+    mockRpc.mockImplementation(async (name: string) =>
+      name === 'caller_has_pending_invite' ? { data: true, error: null } : { data: null, error: null }
+    );
 
     const location = await callbackRedirect();
 
-    // THE WRITES BELOW ARE EMULATOR-ONLY, and deliberately so.
-    //
-    // What this test proves is REACHABILITY, which is all BACKLOG-3364 owes
-    // here: before this change the route returned /download on the personal
-    // membership row and never got as far as looking for an invite. It now
-    // gets there.
-    //
-    // What it does NOT prove is that the link happens on production. The
-    // emulator has no row-level security; the real database does, and its
-    // rules hide a pending invite row from the very person invited — so the
-    // lookup this test feeds returns zero rows there, the branch finds
-    // nothing, and the user continues to JIT and then to signOut. Claiming the
-    // invite for real is BACKLOG-3359, which replaces this select/update pair
-    // with a single privileged call. Expect these two assertions to change
-    // when it lands.
-    //
-    // So: the invite was linked HERE — the users row was upserted and the
-    // membership row updated to carry this user.
-    const writes = mockEmulator.state.writes;
-    expect(writes.map((w) => `${w.table}:${w.op}`)).toEqual([
-      'users:upsert',
-      'organization_members:update',
-    ]);
-    expect(writes[1].values).toMatchObject({
-      user_id: FIXTURE_USER_ID,
-      license_status: 'active',
-      invitation_token: null,
-    });
-    // BACKLOG-3080 (fb4699c8, D2): every linked member lands on the
-    // dashboard; middleware gives an agent the floor. Only AFTER the invite
-    // was claimed, which is the whole difference.
+    // Founder question open; option (a) built: the personal-org owner keeps
+    // their floor, the invite stays pending, no message.
     expect(location).toBe(`${ORIGIN}/dashboard`);
+    expect(mockEmulator.state.writes).toHaveLength(0);
+    expect(mockRpc).not.toHaveBeenCalledWith('accept_invitation', expect.anything());
     expect(mockSignOut).not.toHaveBeenCalled();
   });
 
-  it('sends an invited broker on to the dashboard once linked', async () => {
+  it('from the invitation link: accepts exactly that invitation and lands on the dashboard', async () => {
     signedIn();
     given([personalMembership(), pendingInvite(EMAIL, 'broker')]);
+    mockRpc.mockImplementation(async (name: string) =>
+      name === 'accept_invitation'
+        ? { data: { success: true, organization_id: FIXTURE_BROKERAGE_ORG_ID, role: 'broker' }, error: null }
+        : { data: null, error: null }
+    );
 
-    expect(await callbackRedirect()).toBe(`${ORIGIN}/dashboard`);
-    // Emulator-side writes again — see the note above: reachability, not
-    // production linking, which waits on BACKLOG-3359.
-    expect(mockEmulator.state.writes).toHaveLength(2);
+    const response = await GET(
+      new Request(`${ORIGIN}/auth/callback?code=fixture-code-3364`, {
+        headers: { cookie: 'keepr_invite=invite.fixture-token-3364' },
+      })
+    );
+
+    expect(response.headers.get('location')).toBe(`${ORIGIN}/dashboard`);
+    expect(mockRpc).toHaveBeenCalledWith('accept_invitation', { p_token: 'fixture-token-3364' });
+    // No client-side membership write: the database accepted it.
+    expect(mockEmulator.state.writes.map((w) => `${w.table}:${w.op}`)).toEqual(['users:upsert']);
+    expect(mockSignOut).not.toHaveBeenCalled();
   });
 
   it('reaches the JIT branch when the account carries a Microsoft tenant', async () => {
     signedIn({
       app_metadata: { provider: 'azure' },
       user_metadata: { custom_claims: { tid: 'fixture-tenant-3364' } },
+      // BACKLOG-4012: JIT reads the identity this sign-in used.
+      identities: [{ provider: 'azure', updated_at: '2026-10-20T12:00:00Z', identity_data: { custom_claims: { tid: 'fixture-tenant-3364' } } }],
     });
     given([personalMembership()]);
     mockRpc.mockResolvedValue({

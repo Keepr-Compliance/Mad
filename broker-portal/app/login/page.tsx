@@ -12,6 +12,7 @@ import { useSearchParams } from 'next/navigation';
 import { Alert, Spinner } from '@keepr/design-system';
 import { AppMark } from '@keepr/ui';
 import { Loader2, XCircle } from 'lucide-react';
+import { BROKERAGE_SUSPENDED_ERROR } from '@/lib/auth/orgSuspension';
 
 // Error messages for auth failure states
 const ERROR_MESSAGES: Record<string, string> = {
@@ -20,6 +21,22 @@ const ERROR_MESSAGES: Record<string, string> = {
     'Your account is not authorized to access the broker portal. Contact your administrator.',
   org_not_setup: 'org_not_setup', // Special case: rendered with links below
   jit_disabled: 'jit_disabled', // Special case: rendered with links below
+  // BACKLOG-3684: invitations are accepted only through the invitation link.
+  invite_link_required:
+    "You have a Keepr invitation waiting. Open the invitation link in the email Keepr sent you and sign in from there. Can't find it? Ask your brokerage admin to send it again.",
+  invalid_invite:
+    'This invitation link is no longer valid. It may have been used already or replaced by a newer one. Ask your brokerage admin to send a new invitation.',
+  email_mismatch:
+    'This invitation was sent to a different email address. Sign in with the account that received the invitation.',
+  expired: 'This invitation has expired. Ask your brokerage admin to send a new one.',
+  already_placed:
+    "You're already a member of a Keepr brokerage, so this invitation was not accepted. To join a different brokerage, ask your current brokerage admin to remove you first, then open the invitation link again.",
+  invite_failed: "We couldn't accept your invitation. Open the invitation link again and try once more.",
+  // BACKLOG-3853 PR-2B: the brokerage's account is suspended (plan v2 G5 text).
+  brokerage_suspended: BROKERAGE_SUSPENDED_ERROR,
+  // BACKLOG-4012: auto-join waits until the brokerage has finished billing setup.
+  billing_setup_pending:
+    'Your brokerage is still finishing its Keepr setup. Try signing in again once your brokerage admin has completed it.',
 };
 
 // Option A brand palette (matches the app mark + landing; not in the sky-blue
@@ -168,9 +185,7 @@ function LoginForm() {
           >
             {displayError === 'org_not_setup' ? (
               <p>
-                Your organization hasn&apos;t been set up yet. Ask your IT administrator to visit the{' '}
-                <a href="/setup" className="font-medium underline hover:text-red-600">setup page</a>
-                , or{' '}
+                Your brokerage hasn&apos;t added you to Keepr yet. Ask your brokerage admin to invite you, or{' '}
                 <a href="/download" className="font-medium underline hover:text-red-600">sign up for an individual account</a>.
                 {' '}If you have an agent license,{' '}
                 <a href="/auth/desktop" className="font-medium underline hover:text-red-600">sign in to the desktop app here</a>.
@@ -258,9 +273,10 @@ function LoginForm() {
           Only authorized brokers can access this portal.
         </p>
         <p className="text-xs" style={{ color: '#9297A6' }}>
-          Need to set up a new organization?{' '}
+          Invited as a brokerage admin or IT admin? Start from the link in your invitation email.
+          Already set up?{' '}
           <a href="/setup" className="text-primary-600 hover:text-primary-700">
-            Get started here
+            Connect your brokerage
           </a>
         </p>
       </div>

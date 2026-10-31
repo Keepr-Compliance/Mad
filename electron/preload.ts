@@ -63,6 +63,7 @@ import {
   entitlementBridge,
   paymentBridge,
   paymentEventBridge,
+  billingBridge,
   supportBridge,
   logBridge,
   atRestBridge,
@@ -166,6 +167,9 @@ contextBridge.exposeInMainWorld("api", {
 
   // PAYG card-purchase flow (BACKLOG-2015)
   payment: paymentBridge,
+
+  // Plan & Billing: portal Billing page + plan summary (BACKLOG-3863)
+  billing: billingBridge,
 
   // Support ticket diagnostics + screenshot (TASK-2180)
   support: supportBridge,

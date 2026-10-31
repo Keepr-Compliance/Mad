@@ -39,7 +39,6 @@ jest.mock("../services/transactionService", () => ({
   default: {
     scanAndExtractTransactions: jest.fn(),
     getTransactions: jest.fn(),
-    createManualTransaction: jest.fn(),
     getTransactionDetails: jest.fn(),
     updateTransaction: jest.fn(),
     deleteTransaction: jest.fn(),
@@ -358,75 +357,6 @@ describe("Transaction Handlers", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("Database error");
-    });
-  });
-
-  describe("transactions:create", () => {
-    const validTransactionData = {
-      property_address: "123 Main St",
-      transaction_type: "purchase",
-      status: "pending",
-    };
-
-    it("should create transaction successfully", async () => {
-      // toEqual() below compares this exact object, so it is asserted, not padded.
-      const createdTransaction = {
-        id: "txn-new",
-        ...validTransactionData,
-      } as unknown as Transaction;
-      mockTransactionService.createManualTransaction.mockResolvedValue(
-        createdTransaction,
-      );
-
-      const handler = registeredHandlers.get("transactions:create");
-      const result = await handler(
-        mockEvent,
-        TEST_USER_ID,
-        validTransactionData,
-      );
-
-      expect(result.success).toBe(true);
-      expect(result.transaction).toEqual(createdTransaction);
-      expect(mockAuditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "TRANSACTION_CREATE",
-          success: true,
-        }),
-      );
-    });
-
-    it("should handle invalid user ID", async () => {
-      const handler = registeredHandlers.get("transactions:create");
-      const result = await handler(mockEvent, "", validTransactionData);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("Validation error");
-    });
-
-    it("should validate transaction data", async () => {
-      const handler = registeredHandlers.get("transactions:create");
-      const result = await handler(mockEvent, TEST_USER_ID, {
-        // Missing required fields
-      });
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("Validation error");
-    });
-
-    it("should handle creation failure", async () => {
-      mockTransactionService.createManualTransaction.mockRejectedValue(
-        new Error("Creation failed"),
-      );
-
-      const handler = registeredHandlers.get("transactions:create");
-      const result = await handler(
-        mockEvent,
-        TEST_USER_ID,
-        validTransactionData,
-      );
-
-      expect(result.success).toBe(false);
-      expect(mockLogService.error).toHaveBeenCalled();
     });
   });
 
@@ -927,7 +857,10 @@ describe("Transaction Handlers", () => {
 
       expect(result.success).toBe(true);
       expect(result.path).toBe("/path/to/export.pdf");
-      expect(mockAuditService.log).toHaveBeenCalled();
+      // BACKLOG-3339: written inside the export's transaction.
+      expect(mockAuditService.recordInTransaction).toHaveBeenCalledWith(
+        expect.objectContaining({ action: "DATA_EXPORT" }),
+      );
     });
 
     it("should handle transaction not found", async () => {

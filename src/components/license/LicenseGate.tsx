@@ -12,7 +12,7 @@
 
 import React from "react";
 import { useLicense } from "../../contexts/LicenseContext";
-import { UpgradeScreen } from "./UpgradeScreen";
+import { UpgradeScreen, upgradeReasonFor } from "./UpgradeScreen";
 import { DeviceLimitScreen } from "./DeviceLimitScreen";
 
 interface LicenseGateProps {
@@ -58,19 +58,14 @@ export function LicenseGate({ children }: LicenseGateProps): React.ReactElement 
   }
 
   // License is blocked - show appropriate screen based on reason
+  // BACKLOG-4038: expired (admin-set expired/cancelled) -> ended, suspended ->
+  // suspended, every other reason -> the fallback variant.
   switch (blockReason) {
     case "expired":
-      return <UpgradeScreen reason="trial_expired" />;
-
-    case "limit_reached":
-      return <UpgradeScreen reason="transaction_limit" />;
-
-    case "no_license":
-      // This shouldn't happen since we auto-create licenses, but handle it
-      return <UpgradeScreen reason="unknown" />;
-
     case "suspended":
-      return <UpgradeScreen reason="suspended" />;
+    case "limit_reached":
+    case "no_license":
+      return <UpgradeScreen reason={upgradeReasonFor(blockReason)} />;
 
     default:
       // Check if it's a device limit issue by looking at the validation status

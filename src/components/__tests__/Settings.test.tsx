@@ -2038,7 +2038,7 @@ describe("Settings", () => {
       expect(scrolledIds()).toEqual(["settings-security"]);
     });
 
-    it("Account tab: name, email, plan, full User ID with Copy; Billing reserved; no Sign out", async () => {
+    it("Account tab: name, email, plan, full User ID with Copy; Plan & Billing card; no Sign out", async () => {
       const writeText = jest.fn().mockResolvedValue(undefined);
       Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
@@ -2052,7 +2052,9 @@ describe("Settings", () => {
       await userEvent.click(inAccount.getByTestId("account-copy-user-id"));
       expect(writeText).toHaveBeenCalledWith("user-123");
       await waitFor(() => expect(inAccount.getByTestId("account-copy-user-id")).toHaveTextContent("Copied"));
-      expect(inAccount.getByRole("button", { name: "Manage billing" })).toBeDisabled();
+      // BACKLOG-3863 D1: the Plan & Billing card takes the Account tab's billing slot.
+      expect(inAccount.getByTestId("plan-billing-card")).toBeInTheDocument();
+      expect(inAccount.queryByTestId("account-billing-block")).toBeNull();
       expect(inAccount.queryByText(/sign out/i)).toBeNull();
       // Security keeps its own sign-out-everywhere action.
       expect(within(document.getElementById("settings-security") as HTMLElement).getAllByText(/Sign Out All Devices/i).length).toBeGreaterThan(0);

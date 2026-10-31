@@ -353,6 +353,29 @@ export async function createContact(
   contactData: NewContact,
   origin: ContactOrigin,
 ): Promise<Contact> {
+  const id = createContactSync(contactData, origin);
+
+  // Read back AFTER the commit: the row is now durable, and this is a read, so
+  // it has no business holding the write transaction open.
+  const contact = await getContactById(id);
+  if (!contact) {
+    throw new DatabaseError("Failed to create contact");
+  }
+  return contact;
+}
+
+/**
+ * The synchronous core of `createContact` (BACKLOG-3339): the contact, its
+ * addresses and its origin row in one transaction, returning the new id.
+ *
+ * `contacts:create` calls this from inside its own `dbTransaction` so the
+ * contact and its audit entry commit together; the transaction here then runs
+ * as a savepoint. Read the contact back after the outer commit.
+ */
+export function createContactSync(
+  contactData: NewContact,
+  origin: ContactOrigin,
+): string {
   const id = crypto.randomUUID();
   const contactSource = contactData.source || "manual";
 
@@ -488,13 +511,7 @@ export async function createContact(
     writeContactOriginInTransaction(contactData.user_id, id, contactSource, origin);
   });
 
-  // Read back AFTER the commit: the row is now durable, and this is a read, so
-  // it has no business holding the write transaction open.
-  const contact = await getContactById(id);
-  if (!contact) {
-    throw new DatabaseError("Failed to create contact");
-  }
-  return contact;
+  return id;
 }
 
 /**
@@ -1248,8 +1265,35 @@ function startCommunicationDatesBackfill(userId: string): void {
  * BACKLOG-3837 follow-up: no main-thread fallback — a worker that cannot start
  * fails the run (logged by the caller); the next list open retries it.
  */
-async function planCommunicationDates(userId: string): Promise<CommunicationDatePlanRow[]> {
+export async function planCommunicationDates(userId: string): Promise<CommunicationDatePlanRow[]> {
   return (await queryOnDedicatedWorker("commDatesPlan", userId, COMM_DATES_PLAN_TIMEOUT_MS)) as CommunicationDatePlanRow[];
+}
+
+/**
+ * BACKLOG-3222: apply a communication-dates plan with NO transaction of its
+ * own, so a caller can put it in the same transaction as other writes (the
+ * post-import refresh in messageRecencyRefresh.ts). Dates only move forward.
+ */
+export function applyCommunicationDatesPlanSync(plan: CommunicationDatePlanRow[]): number {
+  const updateSql = sql`
+      UPDATE contacts
+      SET last_inbound_at = ?
+      WHERE id = ? AND (last_inbound_at IS NULL OR last_inbound_at < ?)
+    `;
+  let changed = 0;
+  for (const match of plan) {
+    changed += dbRun(updateSql, [match.last_msg_date, match.contact_id, match.last_msg_date]).changes;
+  }
+  return changed;
+}
+
+/**
+ * Promise sibling of applyCommunicationDatesPlanSync. It has no caller: it
+ * exists because syncTwin.guard rule (i) requires every *Sync writer to have
+ * one. Do not delete it without changing that rule.
+ */
+export function applyCommunicationDatesPlan(plan: CommunicationDatePlanRow[]): Promise<number> {
+  return Promise.resolve(dbTransaction(() => applyCommunicationDatesPlanSync(plan)));
 }
 
 /**
@@ -1287,22 +1331,11 @@ async function runCommunicationDatesBackfill(userId: string): Promise<number> {
 
   // Step 2: Update each contact with their most recent message date, a slice
   // per transaction with a yield between slices.
-  const updateSql = sql`
-      UPDATE contacts
-      SET last_inbound_at = ?
-      WHERE id = ? AND (last_inbound_at IS NULL OR last_inbound_at < ?)
-    `;
   let updatedCount = 0;
   for (let start = 0; start < phoneMessages.length; start += COMM_DATES_APPLY_SLICE) {
     if (start > 0) await new Promise<void>((resolve) => setImmediate(resolve));
     const slice = phoneMessages.slice(start, start + COMM_DATES_APPLY_SLICE);
-    updatedCount += dbTransaction(() => {
-      let changed = 0;
-      for (const match of slice) {
-        changed += dbRun(updateSql, [match.last_msg_date, match.contact_id, match.last_msg_date]).changes;
-      }
-      return changed;
-    });
+    updatedCount += dbTransaction(() => applyCommunicationDatesPlanSync(slice));
   }
 
   // Debug: Show final state
@@ -2388,6 +2421,14 @@ export async function deleteContact(
  * resurrection is closed from both ends rather than relying on this alone.
  */
 export async function removeContact(contactId: string): Promise<void> {
+  return Promise.resolve(removeContactSync(contactId));
+}
+
+/**
+ * The synchronous core of `removeContact` (BACKLOG-3339), for a caller that
+ * writes the removal and its audit entry in one `dbTransaction`.
+ */
+export function removeContactSync(contactId: string): void {
   dbRun(
     sql`UPDATE contacts
         SET removed_at = datetime('now'),
@@ -2430,6 +2471,14 @@ export async function removeContact(contactId: string): Promise<void> {
  * user from the row for its audit entry.
  */
 export async function restoreContact(contactId: string): Promise<boolean> {
+  return Promise.resolve(restoreContactSync(contactId));
+}
+
+/**
+ * The synchronous core of `restoreContact` (BACKLOG-3339), for a caller that
+ * writes the restore and its audit entry in one `dbTransaction`.
+ */
+export function restoreContactSync(contactId: string): boolean {
   const { changes } = dbRun(
     sql`UPDATE contacts
         SET removed_at = NULL,

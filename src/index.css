@@ -1,3 +1,6 @@
+/* BACKLOG-3863: the @keepr/ui theme variables (must precede @tailwind). */
+@import "../packages/ui/src/styles/theme.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;

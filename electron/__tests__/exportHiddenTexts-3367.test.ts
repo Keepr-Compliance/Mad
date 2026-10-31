@@ -60,7 +60,14 @@ const mockAuditLog = jest.fn().mockResolvedValue(undefined);
 
 jest.mock("../services/auditService", () => ({
   __esModule: true,
-  default: { log: (...a: unknown[]) => mockAuditLog(...a) },
+  // BACKLOG-3339: the export entry is written with recordInTransaction, inside
+  // the export's transaction; both are captured here.
+  default: {
+    log: (...a: unknown[]) => mockAuditLog(...a),
+    recordInTransaction: (...a: unknown[]) => mockAuditLog(...a),
+    recordFailure: jest.fn(),
+  },
+  AuditNotRecordedError: class AuditNotRecordedError extends Error {},
 }));
 
 jest.mock("../services/logService", () => ({
@@ -85,6 +92,13 @@ const mockEnhancedExport = jest.fn().mockResolvedValue("/exports/report.json");
 jest.mock("../services/enhancedExportService", () => ({
   __esModule: true,
   default: { exportTransaction: (...a: unknown[]) => mockEnhancedExport(...a) },
+}));
+
+// BACKLOG-3339: the export record and its entry share one transaction. The
+// database is mocked here, so the transaction just runs its body.
+jest.mock("../services/db/core/dbConnection", () => ({
+  ...jest.requireActual("../services/db/core/dbConnection"),
+  dbTransaction: (fn: () => unknown) => fn(),
 }));
 
 jest.mock("../services/databaseService", () => ({

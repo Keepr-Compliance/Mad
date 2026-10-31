@@ -27,11 +27,12 @@ export function linkCodeAutoFillOn(platform: string): boolean {
   return platform === "win32";
 }
 
-export function linkCodeFromClipboard(deps: {
+export async function linkCodeFromClipboard(deps: {
   platform: string;
   linkState: () => { state: string };
-  readClipboard: () => string;
-}): string | null {
+  /** BACKLOG-4052: may return a Promise (Electron 44 clipboard is async); awaited either way. */
+  readClipboard: () => string | Promise<string>;
+}): Promise<string | null> {
   if (!linkCodeAutoFillOn(deps.platform)) return null;
   let waiting = false;
   try {
@@ -42,7 +43,7 @@ export function linkCodeFromClipboard(deps: {
   if (!waiting) return null;
   let text = "";
   try {
-    text = String(deps.readClipboard() ?? "");
+    text = String((await deps.readClipboard()) ?? "");
   } catch {
     return null;
   }
@@ -61,18 +62,19 @@ function clipboardLinkCode(text: string): string | null {
  * user may have copied something else since: then it is left as it is).
  * One fresh read; the value is never logged. Returns whether it cleared.
  */
-export function clearLinkCodeFromClipboard(deps: {
+export async function clearLinkCodeFromClipboard(deps: {
   platform: string;
   code: string;
-  readClipboard: () => string;
-  clearClipboard: () => void;
-}): boolean {
+  /** BACKLOG-4052: may return a Promise (Electron 44 clipboard is async); awaited either way. */
+  readClipboard: () => string | Promise<string>;
+  clearClipboard: () => void | Promise<void>;
+}): Promise<boolean> {
   if (!linkCodeAutoFillOn(deps.platform)) return false;
   const accepted = /^\d{6}$/.test(deps.code) ? deps.code : clipboardLinkCode(deps.code);
   if (!accepted) return false;
   try {
-    if (clipboardLinkCode(String(deps.readClipboard() ?? "")) !== accepted) return false;
-    deps.clearClipboard();
+    if (clipboardLinkCode(String((await deps.readClipboard()) ?? "")) !== accepted) return false;
+    await deps.clearClipboard();
     return true;
   } catch {
     return false;

@@ -27,7 +27,6 @@ import type { Contact, NewContact } from "@/types";
 // Mock functions for window.api.contacts methods
 const mockCreate = jest.fn();
 const mockUpdate = jest.fn();
-const mockDelete = jest.fn();
 const mockRemove = jest.fn();
 const mockCheckCanDelete = jest.fn();
 const mockImport = jest.fn();
@@ -39,7 +38,6 @@ beforeAll(() => {
       contacts: {
         create: mockCreate,
         update: mockUpdate,
-        delete: mockDelete,
         remove: mockRemove,
         checkCanDelete: mockCheckCanDelete,
         import: mockImport,
@@ -179,40 +177,7 @@ describe("contactService", () => {
   });
 
   // ============================================
-  // DELETE METHOD TESTS
-  // ============================================
-
-  describe("delete", () => {
-    it("should delete contact successfully", async () => {
-      mockDelete.mockResolvedValue({ success: true });
-
-      const result = await contactService.delete(mockContactId);
-
-      expect(result.success).toBe(true);
-      expect(mockDelete).toHaveBeenCalledWith(mockContactId);
-    });
-
-    it("should return error when API returns failure", async () => {
-      mockDelete.mockResolvedValue({ success: false, error: "Contact has dependencies" });
-
-      const result = await contactService.delete(mockContactId);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Contact has dependencies");
-    });
-
-    it("should catch and return error when API throws exception", async () => {
-      mockDelete.mockRejectedValue(new Error("Database error"));
-
-      const result = await contactService.delete(mockContactId);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Database error");
-    });
-  });
-
-  // ============================================
-  // REMOVE METHOD TESTS (alias for delete)
+  // REMOVE METHOD TESTS
   // ============================================
 
   describe("remove", () => {

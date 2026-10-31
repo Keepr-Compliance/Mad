@@ -21,6 +21,9 @@ jest.mock("../core/dbConnection", () => ({
   dbGet: (...args: unknown[]) => mockDbGet(...args),
   dbRun: (...args: unknown[]) => mockDbRun(...args),
   dbAll: (...args: unknown[]) => mockDbAll(...args),
+  // BACKLOG-3226: createCommunication now runs its twin inside dbTransaction.
+  // This suite asserts on SQL and params, not atomicity, so run the body inline.
+  dbTransaction: <T>(fn: () => T): T => fn(),
 }));
 
 // Import after mocking

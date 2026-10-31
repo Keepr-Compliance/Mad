@@ -1,0 +1,64 @@
+BACKLOG-4007 PR-4 final fix-up (SR d0be3b9c S1/S4, founder F6 = REFUSE), keepr-test, 2026-10-20.
+Migration 20261020180000 amended in place: file md5 c5ba3409... -> b7dc0cbd72f4d1d7c56bed799a26e53d
+
+base: 101 / 101 pass (94 earlier + C_S1 x2, C_S4b x2, C_F6 x3)
+  - composed with the migration; on the applied database; file applied twice then harness;
+    from scratch (rollback with its transaction lines stripped -> PR-4 objects gone,
+    _org_billing_contact_set 767b797c and set_member_license 39e4d29c asserted -> file -> harness).
+  - PR-1 harness (../backlog-4007) on top: 53 / 53. 0 P4007C organizations left afterwards.
+
+New SQL mutants (each MUTATION APPLIED, each red only on its own controls):
+sr_it_unlicensed {'fail': 1, 'pass': 100, 'reds': ['C_S1_unlicensed_it_admin_refused'], 'mutation': "MUTATION APPLIED public._org_contact_caller(uuid,boolean) 45e954ab->423cbd0b [AND m.role = 'it_admin')]"}
+sr_broker_unlicensed {'fail': 1, 'pass': 100, 'reds': ['C_S1_unlicensed_admin_refused'], 'mutation': "MUTATION APPLIED public._org_contact_caller(uuid,boolean) 45e954ab->986fe810 [AND m.role IN ('broker', 'admin'))]"}
+assign_keeps_billing_only {'fail': 2, 'pass': 99, 'reds': ['C_S4b_assign_clears_billing_only', 'C_S4b_assign_unassign_change_keeps_member'], 'mutation': 'MUTATION APPLIED public.set_member_license(uuid,text) a9efbcc2->dd2c8236 [THEN provisioning_metadata]'}
+personal_accept_unguarded {'fail': 1, 'pass': 100, 'reds': ['C_F6_accept_refused_personal_kept'], 'mutation': 'MUTATION APPLIED public._guard_billing_login_personal_account() a04d1860->9d1c5426 [AND false THEN]'}
+personal_create_unguarded {'fail': 1, 'pass': 100, 'reds': ['C_F6_create_refused_personal_account'], 'mutation': 'MUTATION APPLIED public._org_billing_login_create(uuid,uuid) 102f8675->6c6a95da [IF false THEN]'}
+
+Earlier 26 mutants re-run (each MUTATION APPLIED, fail count):
+login_for_me 26 MUTATION APPLIED pub
+caller_any_org 4 MUTATION APPLIED pub
+cross_org_link 2 MUTATION APPLIED pub
+login_licensed 14 MUTATION APPLIED pub
+remove_billing 1 MUTATION APPLIED pub
+caller_any_role 19 MUTATION APPLIED pub
+caller_any_org_it 4 MUTATION APPLIED pub
+login_while_draft 1 MUTATION APPLIED pub
+no_duplicate_check 1 MUTATION APPLIED pub
+billing_via_generic 13 MUTATION APPLIED pub
+login_failure_aborts 1 MUTATION APPLIED pub
+access_ignores_license 1 MUTATION APPLIED pub
+access_ignores_removed 1 MUTATION APPLIED pub
+disable_deletes_licensed 1 MUTATION APPLIED pub
+many_it 1 MUTATION APPLIED pub
+agent_admitted 6 MUTATION APPLIED pub
+broker_refused 8 MUTATION APPLIED pub
+it_admin_as_broker 10 MUTATION APPLIED pub
+login_set_any_kind 2 MUTATION APPLIED pub
+broker_picks_any_user 2 MUTATION APPLIED pub
+grant_contacts_select 2 MUTATION APPLIED GRA
+jit_upgrades_existing 4 MUTATION APPLIED pub
+save_billing_any_kind 7 MUTATION APPLIED pub
+grant_anon_access_check 1 MUTATION APPLIED GRA
+contact_change_keeps_login 2 MUTATION APPLIED pub
+it_admin_sees_billing_email 1 MUTATION APPLIED pub
+
+Function md5s on keepr-test after apply (first 8):
+_org_contact_caller 45e954ab, org_contacts_list 7886071e, org_contact_save c41e604d, org_billing_login_set 5a273f1e,
+_org_billing_contact_set 3002254b, org_contact_remove dd40abd7, _org_billing_login_create 102f8675,
+org_billing_contact_login 4a1cad5f, broker_complete_billing_setup 7e7e1c7e, admin_search_users_for_contact f74cdc2f,
+_org_user_in_other_brokerage b087c5a9, _user_has_personal_account 4d5df6c2,
+_guard_billing_login_personal_account a04d1860, set_member_license a9efbcc2 (was 39e4d29c, same on production).
+
+JS mutants (exact-once replace, numstat, git checkout restore, 0 dirty after; jest bail stops early, counts understate):
+JF1_ui_map_missing MUTATION APPLIED 1	1	packages/ui/src/components/org-people.tsx
+Tests:       2 failed, 32 passed, 34 total
+restored dirty=0
+JF2_setup_map_missing MUTATION APPLIED 1	1	broker-portal/lib/billing/billingLoginErrors.ts
+Tests:       2 failed, 32 passed, 34 total
+restored dirty=0
+JF3_setup_suffix_added MUTATION APPLIED 1	1	broker-portal/components/setup/SetupGuide.tsx
+Tests:       1 failed, 48 passed, 49 total
+restored dirty=0
+JF4_ui_text_reworded MUTATION APPLIED 1	1	packages/ui/src/components/org-people.tsx
+Tests:       1 failed, 33 passed, 34 total
+restored dirty=0

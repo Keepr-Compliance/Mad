@@ -34,6 +34,11 @@ import permissionService from "../services/permissionService";
 import type { ContactInfo, LoadStatus, PhoneToContactInfo } from "../services/contactsService";
 import { resolveHandles } from "../services/contactResolutionService";
 import auditService from "../services/auditService";
+import { dealChangeFailureCode } from "../services/dealChangeAudit";
+import {
+  CONTACT_NO_LONGER_EXISTS_MESSAGE,
+  contactChangeUserError,
+} from "../services/contactChangeAudit";
 import logService from "../services/logService";
 import * as externalContactDb from "../services/db/externalContactDbService";
 import type { ExternalContactSource } from "../services/db/externalContactDbService";
@@ -3126,8 +3131,7 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         const inputSource = (contactData as { source?: string })?.source;
         const source: ContactSource =
           toStorableContactSource(inputSource, "manual") ?? "manual";
-        const contact = await databaseService.createContact(
-          {
+        const newContact = {
             user_id: validatedUserId,
             // BACKLOG-2707 — `?? ""`, not `|| "Unknown"`. Same reason as the
             // import loop above; one substitution site left behind is how this
@@ -3139,15 +3143,14 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
             title: validatedData.title ?? undefined,
             source,
             is_imported: true,
-          },
+          };
           // BACKLOG-2496 — "derived": this contact was typed into the Add
           // Contact form (or arrived from a message thread), so there is no
           // address-book record to point at and its origin row is synthetic,
           // keyed on its own id. The row is now written INSIDE the create
           // transaction, so the separate `recordContactOrigin` call that used
           // to sit below is gone: it could not fail to happen any more.
-          { kind: "derived" },
-        );
+        const origin: ContactOrigin = { kind: "derived" };
 
         /**
          * WHERE THIS CONTACT CAME FROM IS NO LONGER WRITTEN HERE (BACKLOG-2496).
@@ -3182,24 +3185,51 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         const valueSource = contactInfoSourceFor(source);
         const inputAllEmails = (contactData as { allEmails?: string[] })?.allEmails || [];
         const inputAllPhones = (contactData as { allPhones?: string[] })?.allPhones || [];
+
+        // BACKLOG-3339: the contact, its addresses and its audit entry commit
+        // together or not at all. A failed entry cancels the create.
+        const auditMetadata = { name: validatedData.name ?? "" };
+        let contactId: string;
+        try {
+          contactId = dbTransaction(() => {
+            const id = databaseService.createContactSync(newContact, origin);
+            if (inputAllEmails.length > 0) {
+              databaseService.backfillContactEmailsSync(id, inputAllEmails, valueSource);
+            }
+            if (inputAllPhones.length > 0) {
+              databaseService.backfillContactPhonesSync(id, inputAllPhones, valueSource);
+            }
+            auditService.recordInTransaction({
+              userId: validatedUserId,
+              action: "CONTACT_CREATE",
+              resourceType: "CONTACT",
+              resourceId: id,
+              metadata: auditMetadata,
+            });
+            return id;
+          });
+        } catch (error) {
+          auditService.recordFailure({
+            userId: validatedUserId,
+            action: "CONTACT_CREATE",
+            resourceType: "CONTACT",
+            metadata: auditMetadata,
+            errorMessage: dealChangeFailureCode(error),
+          });
+          throw contactChangeUserError("save", error);
+        }
         if (inputAllEmails.length > 0) {
-          await databaseService.backfillContactEmails(contact.id, inputAllEmails, valueSource);
-          logService.info(`[Contacts] Stored ${inputAllEmails.length} emails for new contact ${contact.id}`, "Contacts");
+          logService.info(`[Contacts] Stored ${inputAllEmails.length} emails for new contact ${contactId}`, "Contacts");
         }
         if (inputAllPhones.length > 0) {
-          await databaseService.backfillContactPhones(contact.id, inputAllPhones, valueSource);
-          logService.info(`[Contacts] Stored ${inputAllPhones.length} phones for new contact ${contact.id}`, "Contacts");
+          logService.info(`[Contacts] Stored ${inputAllPhones.length} phones for new contact ${contactId}`, "Contacts");
         }
 
-        // Audit log contact creation
-        await auditService.log({
-          userId: validatedUserId,
-          action: "CONTACT_CREATE",
-          resourceType: "CONTACT",
-          resourceId: contact.id,
-          metadata: { name: contact.name },
-          success: true,
-        });
+        // Read back AFTER the commit.
+        const contact = await databaseService.getContactById(contactId);
+        if (!contact) {
+          throw new Error("Failed to create contact");
+        }
 
         logService.info("Contact created", "Contacts", {
           userId: validatedUserId,
@@ -3322,7 +3352,12 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         // Get contact before update for audit logging
         const existingContact =
           await databaseService.getContactById(validatedContactId);
-        const userId = existingContact?.user_id || "unknown";
+        // BACKLOG-3339: no "unknown" owner. The audit entry needs the contact's
+        // owner (a foreign key), and with no contact there is nothing to change.
+        if (!existingContact) {
+          return { success: false, error: CONTACT_NO_LONGER_EXISTS_MESSAGE };
+        }
+        const userId = existingContact.user_id;
 
         /**
          * ===================================================================
@@ -3388,43 +3423,57 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
          * transaction would have seen the callback return normally and
          * COMMITTED, with the failure arriving later as an unhandled rejection.
          * That would have been an atomicity hole dressed as a fix.
+         *
+         * BACKLOG-3339: the audit entry is the last write in the same
+         * transaction. A failed entry cancels the whole edit.
          */
-        dbTransaction(() => {
-          databaseService.updateContactSync(validatedContactId, updatesData);
+        const updatedFields = Object.keys(validatedUpdates);
+        try {
+          dbTransaction(() => {
+            databaseService.updateContactSync(validatedContactId, updatesData);
 
-          if (Array.isArray(rawUpdates.emails)) {
-            syncContactEmails(validatedContactId, rawUpdates.emails);
-            logService.info("Contact emails synced (multi)", "Contacts", {
-              contactId: validatedContactId,
-              count: rawUpdates.emails.length,
-            });
-          } else if (validatedUpdates.email !== undefined) {
-            setContactPrimaryEmail(validatedContactId, validatedUpdates.email as string);
-          }
+            if (Array.isArray(rawUpdates.emails)) {
+              syncContactEmails(validatedContactId, rawUpdates.emails);
+              logService.info("Contact emails synced (multi)", "Contacts", {
+                contactId: validatedContactId,
+                count: rawUpdates.emails.length,
+              });
+            } else if (validatedUpdates.email !== undefined) {
+              setContactPrimaryEmail(validatedContactId, validatedUpdates.email as string);
+            }
 
-          if (Array.isArray(rawUpdates.phones)) {
-            syncContactPhones(validatedContactId, rawUpdates.phones);
-            logService.info("Contact phones synced (multi)", "Contacts", {
-              contactId: validatedContactId,
-              count: rawUpdates.phones.length,
+            if (Array.isArray(rawUpdates.phones)) {
+              syncContactPhones(validatedContactId, rawUpdates.phones);
+              logService.info("Contact phones synced (multi)", "Contacts", {
+                contactId: validatedContactId,
+                count: rawUpdates.phones.length,
+              });
+            } else if (validatedUpdates.phone !== undefined) {
+              setContactPrimaryPhone(validatedContactId, validatedUpdates.phone as string);
+            }
+
+            auditService.recordInTransaction({
+              userId,
+              action: "CONTACT_UPDATE",
+              resourceType: "CONTACT",
+              resourceId: validatedContactId,
+              metadata: { updatedFields },
             });
-          } else if (validatedUpdates.phone !== undefined) {
-            setContactPrimaryPhone(validatedContactId, validatedUpdates.phone as string);
-          }
-        });
+          });
+        } catch (error) {
+          auditService.recordFailure({
+            userId,
+            action: "CONTACT_UPDATE",
+            resourceType: "CONTACT",
+            resourceId: validatedContactId,
+            metadata: { updatedFields },
+            errorMessage: dealChangeFailureCode(error),
+          });
+          throw contactChangeUserError("save", error);
+        }
 
         const contact =
           await databaseService.getContactById(validatedContactId);
-
-        // Audit log contact update
-        await auditService.log({
-          userId,
-          action: "CONTACT_UPDATE",
-          resourceType: "CONTACT",
-          resourceId: validatedContactId,
-          metadata: { updatedFields: Object.keys(validatedUpdates) },
-          success: true,
-        });
 
         logService.info("Contact updated", "Contacts", {
           userId,
@@ -3562,80 +3611,6 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
     },
   );
 
-  // Delete contact
-  ipcMain.handle(
-    "contacts:delete",
-    async (
-      event: IpcMainInvokeEvent,
-      contactId: string,
-    ): Promise<ContactResponse> => {
-      try {
-        // Validate input
-        const validatedContactId = validateContactId(contactId); // Validated, will throw if invalid
-        if (!validatedContactId) {
-          throw new ValidationError(
-            "Contact ID validation failed",
-            "contactId",
-          );
-        }
-
-        // Get contact before delete for audit logging
-        const existingContact =
-          await databaseService.getContactById(validatedContactId);
-        const userId = existingContact?.user_id || "unknown";
-        const contactName = existingContact?.name || "unknown";
-
-        // BACKLOG-2365: the "cannot delete a contact with associated
-        // transactions" guard is GONE, deliberately and with founder approval.
-        //
-        // It never expressed a policy about who may be removed. It existed
-        // because removal used to be a hard DELETE whose cascade destroyed the
-        // contact's roles on those very transactions — a barrier standing in
-        // front of an unrecoverable operation. Removal now writes a tombstone
-        // and every transaction_contacts row survives, so the operation it was
-        // guarding no longer exists. Keeping it would mean the one contact a
-        // user most needs to correct — the one already attached to a live deal
-        // — is the one contact they still cannot touch.
-        await databaseService.deleteContact(validatedContactId, "user_deleted");
-
-        // Audit log contact removal. Carries the reason alongside the name so
-        // the trail distinguishes a deliberate delete from an un-import.
-        await auditService.log({
-          userId,
-          action: "CONTACT_DELETE",
-          resourceType: "CONTACT",
-          resourceId: validatedContactId,
-          metadata: { name: contactName, reason: "user_deleted" },
-          success: true,
-        });
-
-        logService.info("Contact deleted", "Contacts", {
-          userId,
-          contactId: validatedContactId,
-        });
-
-        return {
-          success: true,
-        };
-      } catch (error) {
-        logService.error("Delete contact failed", "Contacts", {
-          contactId,
-          error: error instanceof Error ? error.message : "Unknown error",
-        });
-        if (error instanceof ValidationError) {
-          return {
-            success: false,
-            error: `Validation error: ${error.message}`,
-          };
-        }
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : "Unknown error",
-        };
-      }
-    },
-  );
-
   // Remove contact from local database (un-import)
   ipcMain.handle(
     "contacts:remove",
@@ -3659,34 +3634,44 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
           );
         }
 
-        // BACKLOG-2365: same guard, same removal, same reason as contacts:delete
-        // above. This is the path the Clients & Contacts remove button actually
-        // takes, so leaving the guard here would have left the founder-facing
-        // flow behaving exactly as before no matter what the delete path did.
+        // BACKLOG-2365: this is the path the Clients & Contacts remove button
+        // takes (the old `contacts:delete` channel was removed, BACKLOG-3339).
         //
         // Read the contact BEFORE the removal so the audit entry can name who
         // was removed — after it, the row is tombstoned but the name is still
         // readable, so ordering is belt-and-braces rather than strictly needed.
         const removedContact =
           await databaseService.getContactById(validatedContactId);
+        // BACKLOG-3339: no "unknown" owner (the entry's user is a foreign key).
+        if (!removedContact) {
+          return { success: false, error: CONTACT_NO_LONGER_EXISTS_MESSAGE };
+        }
 
-        await databaseService.removeContact(validatedContactId);
-
-        // BACKLOG-2365: this path had NO audit entry, while contacts:delete did
-        // — and this is the one a user actually presses. A compliance product
-        // that keeps the data but loses the record of who removed it, and when,
-        // has kept the wrong half.
-        await auditService.log({
-          userId: removedContact?.user_id || "unknown",
-          action: "CONTACT_DELETE",
-          resourceType: "CONTACT",
+        // BACKLOG-2365: this path once had NO audit entry, and it is the one a
+        // user actually presses. A compliance product that keeps the data but
+        // loses the record of who removed it, and when, has kept the wrong half.
+        //
+        // BACKLOG-3339: the removal and its entry commit together or not at
+        // all. A failed entry cancels the removal.
+        const removeEntry = {
+          userId: removedContact.user_id,
+          action: "CONTACT_DELETE" as const,
+          resourceType: "CONTACT" as const,
           resourceId: validatedContactId,
           metadata: {
-            name: removedContact?.name || "unknown",
+            name: removedContact.name || "unknown",
             reason: "user_unimported",
           },
-          success: true,
-        });
+        };
+        try {
+          dbTransaction(() => {
+            databaseService.removeContactSync(validatedContactId);
+            auditService.recordInTransaction(removeEntry);
+          });
+        } catch (error) {
+          auditService.recordFailure({ ...removeEntry, errorMessage: dealChangeFailureCode(error) });
+          throw contactChangeUserError("remove", error);
+        }
 
         return {
           success: true,
@@ -3746,9 +3731,8 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
 
   // BACKLOG-2367: undo a contact removal.
   //
-  // The counterpart to `contacts:delete` / `contacts:remove` above. Both of
-  // those log CONTACT_DELETE and distinguish themselves through
-  // `metadata.reason`; this one logs CONTACT_UPDATE with `reason: "restore"`.
+  // The counterpart to `contacts:remove` above, which logs CONTACT_DELETE;
+  // this one logs CONTACT_UPDATE with `reason: "restore"`.
   //
   // The verb has to come from the permitted set: `audit_logs.action` carries a
   // CHECK constraint (schema.sql) and contains no RESTORE verb, while
@@ -3776,24 +3760,36 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         // `removed_reason`, so afterwards it is gone.
         const contact =
           await databaseService.getContactById(validatedContactId);
+        // BACKLOG-3339: no "unknown" owner (the entry's user is a foreign key).
+        if (!contact) {
+          return { success: false, error: CONTACT_NO_LONGER_EXISTS_MESSAGE };
+        }
 
-        const restored = await databaseService.restoreContact(validatedContactId);
-
-        if (restored) {
-          await auditService.log({
-            userId: contact?.user_id || "unknown",
-            action: "CONTACT_UPDATE",
-            resourceType: "CONTACT",
-            resourceId: validatedContactId,
-            metadata: {
-              name: contact?.name || "unknown",
-              reason: "restore",
-              // What the contact was removed FOR, preserved in the trail before
-              // the column is cleared.
-              restored_from: contact?.removed_reason ?? null,
-            },
-            success: true,
+        // BACKLOG-3339: the restore and its entry commit together or not at
+        // all. A failed entry cancels the restore.
+        const restoreEntry = {
+          userId: contact.user_id,
+          action: "CONTACT_UPDATE" as const,
+          resourceType: "CONTACT" as const,
+          resourceId: validatedContactId,
+          metadata: {
+            name: contact.name || "unknown",
+            reason: "restore",
+            // What the contact was removed FOR, preserved in the trail before
+            // the column is cleared.
+            restored_from: contact.removed_reason ?? null,
+          },
+        };
+        let restored: boolean;
+        try {
+          restored = dbTransaction(() => {
+            const changed = databaseService.restoreContactSync(validatedContactId);
+            if (changed) auditService.recordInTransaction(restoreEntry);
+            return changed;
           });
+        } catch (error) {
+          auditService.recordFailure({ ...restoreEntry, errorMessage: dealChangeFailureCode(error) });
+          throw contactChangeUserError("restore", error);
         }
 
         logService.info("Contact restore", "Contacts", {

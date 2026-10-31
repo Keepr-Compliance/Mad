@@ -275,6 +275,41 @@ export function deleteLiveForceSetSync(
 }
 
 /**
+ * The stored file paths of the attachment rows {@link deleteLiveForceSetSync}
+ * is about to delete — BACKLOG-4040 S2.
+ *
+ * Built from the SAME two fragments with the SAME params as the DELETEs (SR
+ * C-5), so the list cannot drift from what the swap removes. Read inside the
+ * swap's transaction, before the DELETEs. These are CANDIDATES only: after the
+ * swap commits, the shared check (attachmentFileRefs.ts) keeps every file some
+ * remaining row still uses — re-imported rows, survivors, iPhone, Google
+ * Messages, email, other users. Reading too many is safe (they are kept);
+ * reading too few would leave orphans.
+ *
+ * Read-only; the synchronous primitive, called from the transaction body.
+ */
+export function selectForceSetAttachmentPathsSync(db: DatabaseType, set: MacOSForceSet): string[] {
+  const byMessage = forceSetAttachmentsByMessageId(set);
+  const byExternal = forceSetAttachmentsByExternalId(set);
+  const rows = db
+    .prepare(
+      `SELECT storage_path FROM attachments WHERE storage_path IS NOT NULL AND (${byMessage.sql}) ` +
+        `UNION SELECT storage_path FROM attachments WHERE storage_path IS NOT NULL AND (${byExternal.sql})`,
+    )
+    .pluck()
+    .all(...byMessage.params, ...byExternal.params) as string[];
+  return rows;
+}
+
+/**
+ * The seam wrapper over {@link selectForceSetAttachmentPathsSync}. See "THE
+ * EXPORT SEAM" in the file header. Plain, not `async`.
+ */
+export function selectForceSetAttachmentPaths(db: DatabaseType, set: MacOSForceSet): Promise<string[]> {
+  return Promise.resolve(selectForceSetAttachmentPathsSync(db, set));
+}
+
+/**
  * The seam wrapper over {@link deleteLiveForceSetSync}. See "THE EXPORT SEAM" in
  * the file header for what this shape does and does not protect.
  *
