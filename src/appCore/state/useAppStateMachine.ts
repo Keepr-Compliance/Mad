@@ -103,14 +103,6 @@ export function useAppStateMachine(): AppStateMachine {
   // ============================================
   // AUTH FLOW
   // ============================================
-  // Derive isDatabaseInitialized from state machine (before useSecureStorage to avoid circular dep)
-  // DB is initialized if we're not in loading state with deferredDbInit flag
-  const isDatabaseInitializedFromMachine = machineState?.state
-    ? !(machineState.state.status === "loading" && (machineState.state as { deferredDbInit?: boolean }).deferredDbInit) &&
-      !(machineState.state.status === "unauthenticated" && (machineState.state as { deferredDbInit?: boolean }).deferredDbInit) &&
-      !(machineState.state.status === "onboarding" && (machineState.state as { deferredDbInit?: boolean }).deferredDbInit)
-    : true; // Default to true if no state machine
-
   const auth = useAuthFlow({
     login,
     logout,
@@ -118,7 +110,6 @@ export function useAppStateMachine(): AppStateMachine {
     declineTerms,
     clearTermsRequirement,
     isAuthenticated,
-    isDatabaseInitialized: isDatabaseInitializedFromMachine,
     currentUserId: currentUser?.id ?? null,
     onCloseProfile: modal.closeProfile,
     onSetHasSelectedPhoneType: phoneTypeApi.setHasSelectedPhoneType,

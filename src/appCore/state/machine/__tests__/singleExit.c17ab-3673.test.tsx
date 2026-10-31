@@ -156,11 +156,11 @@ describe("C17b — real provider + real hooks: finishing the email or FDA step n
 
   const cases: Array<[string, OnboardingState]> = [
     ["Windows + Android, phone-type done", {
-      status: "onboarding", step: "email-connect", user: USER, platform: WIN,
+      status: "onboarding", database: "initialized", step: "email-connect", user: USER, platform: WIN,
       completedSteps: ["phone-type"], fda: "not-applicable", hasEmailConnected: false, selectedPhoneType: "android",
     }],
     ["macOS, FDA granted, phone-type + secure-storage done", {
-      status: "onboarding", step: "email-connect", user: USER, platform: MAC,
+      status: "onboarding", database: "initialized", step: "email-connect", user: USER, platform: MAC,
       completedSteps: ["phone-type", "secure-storage"], fda: "granted", hasEmailConnected: false, selectedPhoneType: "iphone",
     }],
   ];
@@ -203,7 +203,7 @@ describe("C17b — real provider + real hooks: finishing the email or FDA step n
 
   it("macOS: permissions granted in the FDA step keeps status onboarding (data-source floor still to run)", async () => {
     const initial: OnboardingState = {
-      status: "onboarding", step: "permissions", user: USER, platform: MAC,
+      status: "onboarding", database: "initialized", step: "permissions", user: USER, platform: MAC,
       completedSteps: ["phone-type", "secure-storage", "email-connect"], fda: "not-asked",
       hasEmailConnected: false, selectedPhoneType: "iphone",
     };
