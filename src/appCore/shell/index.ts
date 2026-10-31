@@ -12,3 +12,4 @@ export { TitleBar } from "./TitleBar";
 export { ShellContent } from "./ShellContent";
 export { SettingsLayer } from "./SettingsLayer";
 export { AccountButton, getAccountInitials } from "./AccountButton";
+export { AccountAvatar } from "./AccountAvatar";

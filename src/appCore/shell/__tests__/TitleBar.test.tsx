@@ -36,14 +36,28 @@ describe("TitleBar (Electron)", () => {
     expect(props.onOpenAccount).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps an empty left slot before the title and the initials on the right", () => {
+  it("puts the initials in the LEFT slot and keeps an empty right spacer (slice 3)", () => {
     renderBar();
     const btn = screen.getByTestId("nav-profile");
-    const bar = btn.parentElement as HTMLElement;
-    expect(bar.children[0]).toHaveClass("w-8");
-    expect(bar.children[0]).toBeEmptyDOMElement();
-    expect(bar.lastElementChild).toBe(btn);
+    const bar = screen.getByTestId("title-bar");
+    expect(bar.children[0]).toContainElement(btn);
+    expect(bar.lastElementChild).toHaveClass("w-8");
+    expect(bar.lastElementChild).toBeEmptyDOMElement();
     expect(btn).toHaveClass("no-drag-region");
+    expect(bar).toHaveClass("pl-4");
+  });
+
+  it("on macOS starts the left slot past the traffic lights", () => {
+    renderBar({ isMacOS: true });
+    expect(screen.getByTestId("title-bar")).toHaveClass("pl-20");
+    expect(screen.getByTestId("title-bar")).not.toHaveClass("pl-4");
+  });
+
+  it("marks the initials expanded while the account panel is open", () => {
+    renderBar({ accountOpen: true });
+    const btn = screen.getByTestId("nav-profile");
+    expect(btn).toHaveAttribute("aria-expanded", "true");
+    expect(btn).toHaveAttribute("aria-haspopup", "dialog");
   });
 
   it("renders nothing on the login step", () => {
@@ -64,6 +78,7 @@ describe("TitleBar (mobile)", () => {
     const btn = screen.getByTestId("nav-profile");
     expect(btn).not.toHaveClass("no-drag-region");
     expect(btn.parentElement).toHaveClass("lg:hidden");
+    expect(btn.parentElement?.firstElementChild).toBe(btn); // initials left
     fireEvent.click(btn);
     expect(props.onOpenAccount).toHaveBeenCalledTimes(1);
   });
@@ -74,9 +89,12 @@ describe("TitleBar (mobile)", () => {
   });
 });
 
-describe("getAccountInitials (one letter today)", () => {
+describe("getAccountInitials (two letters, SR R3b)", () => {
   it.each([
-    [{ display_name: "avery example", email: "x@y.z" }, "A"],
+    [{ display_name: "avery example", email: "x@y.z" }, "AE"],
+    [{ display_name: "Ann Lee", email: "x@y.z" }, "AL"],
+    [{ display_name: "  Ann   Mary Lee ", email: "x@y.z" }, "AM"],
+    [{ display_name: "ann", email: "x@y.z" }, "A"],
     [{ display_name: undefined, email: "mia@x.io" }, "M"],
     [{ display_name: "", email: "" }, "?"],
   ])("%o -> %s", (u, expected) => {
