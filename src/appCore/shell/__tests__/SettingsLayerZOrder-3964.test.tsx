@@ -9,7 +9,7 @@
  * The toast is raised by the real NotificationProvider from inside the stub
  * Settings page, as General's "test notification" does.
  */
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { AppShell } from "../../AppShell";
 import { useModalFlow } from "../../state/flows/useModalFlow";
@@ -151,6 +151,31 @@ describe("support form while Settings shows (BACKLOG-3964 slice 2 fix-up 2)", ()
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Open support dialog" }));
     });
+    expectFormAboveEverything();
+  });
+
+  // BACKLOG-3964 follow-up (row a560b1d6): the success view after submit is a
+  // second ResponsiveModal with its own zIndex. Mutation: that value taken off
+  // (falls back to ResponsiveModal's z-50, under the Settings layer) -> red.
+  it("the success view after submit keeps the support layer above Settings", async () => {
+    render(<Harness />);
+    act(() => modal.openSettings());
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open support dialog" }));
+    });
+    fireEvent.change(screen.getByPlaceholderText("Brief summary of your issue"), {
+      target: { value: "Export stalls" },
+    });
+    fireEvent.change(screen.getByPlaceholderText(/describe the issue in detail/i), {
+      target: { value: "The export never finishes." },
+    });
+    const submit = await screen.findByRole("button", { name: "Submit Ticket" });
+    await waitFor(() => expect(submit).not.toBeDisabled());
+    await act(async () => {
+      fireEvent.click(submit);
+    });
+    expect(await screen.findByText("Ticket Submitted")).toBeInTheDocument();
+    expect(zOf(screen.getByTestId("support-ticket-dialog"))).toBe(zValue(Z_CLASS.supportDialog));
     expectFormAboveEverything();
   });
 
