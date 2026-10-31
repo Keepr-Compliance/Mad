@@ -345,15 +345,15 @@ describe('SavedViews', () => {
   });
 
   it('K4 a pointerdown outside closes WITHOUT moving focus to the trigger', () => {
-    render(<button type="button">Elsewhere</button>);
+    // A plain (non-focusable) target, and no follow-up focus() call: the test
+    // must not move focus itself, or it hides a close that focuses the trigger.
+    render(<div data-testid="elsewhere">Elsewhere</div>);
     setup();
     openByClick();
-    const elsewhere = screen.getByRole('button', { name: 'Elsewhere' });
-    fireEvent.pointerDown(elsewhere);
-    elsewhere.focus();
+    expect(rows()[0]).toHaveFocus();
+    fireEvent.pointerDown(screen.getByTestId('elsewhere'));
     expect(panel()).toBeNull();
     expect(trigger()).not.toHaveFocus();
-    expect(elsewhere).toHaveFocus();
   });
 
   it('K4b a pointerdown inside the panel does not close it', () => {
