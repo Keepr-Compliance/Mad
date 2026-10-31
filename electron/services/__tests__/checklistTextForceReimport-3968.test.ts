@@ -106,6 +106,28 @@ describe("BACKLOG-3968 PR-4b — macOS force re-import and checklist texts", () 
     expect(pluck("SELECT id FROM attachments WHERE message_id = 'm-linked'")).toEqual(["a-linked"]);
   });
 
+  it("an attachment member (message_id NULL) beside the text member does not empty the force set", () => {
+    // Every attachment and email member carries message_id NULL. A predicate
+    // written as `id NOT IN (SELECT message_id ...)` is NULL for every row once
+    // such a member exists, so nothing would be replaced. NOT EXISTS is not.
+    db.prepare(
+      "INSERT INTO transaction_checklist_links (id, item_id, kind, label) VALUES ('L-file', 'i1', 'attachment', 'photo.jpg')",
+    ).run();
+    db.prepare(
+      "INSERT INTO transaction_checklist_link_members (id, link_id, kind, attachment_id) VALUES ('mm-file', 'L-file', 'attachment', 'a-linked')",
+    ).run();
+    const staging = forceStagingLifecycle.create(db, USER);
+    insertMsg(staging.messagesTable, "n-linked", "guid-linked");
+    insertMsg(staging.messagesTable, "n-plain", "guid-plain");
+    try {
+      swapStagingIntoLive(db, staging);
+    } finally {
+      staging.drop();
+    }
+    expect(pluck("SELECT id FROM messages ORDER BY id")).toEqual(["m-linked", "n-plain"]);
+    expect(pluck("SELECT id FROM transaction_checklist_link_members ORDER BY id")).toEqual(["mm-file", "mm-text"]);
+  });
+
   it("once the group is removed, the next force re-import replaces that text like any other", () => {
     db.prepare("DELETE FROM transaction_checklist_links WHERE id = 'L-text'").run();
     const staging = forceStagingLifecycle.create(db, USER);
