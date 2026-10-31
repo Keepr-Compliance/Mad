@@ -62,7 +62,7 @@ function findProps(node: ReactNode, type: unknown): Record<string, unknown> | nu
 
 async function tableRows(): Promise<Array<Record<string, unknown>>> {
   const { default: Page } = await import('@/app/dashboard/organizations/page');
-  const tree = (await Page()) as ReactNode;
+  const tree = (await Page({})) as ReactNode;
   const props = findProps(tree, OrganizationsTableStub);
   expect(props, 'OrganizationsTable is rendered').not.toBeNull();
   expect(state.listCalls, 'the list RPC was called (non-vacuous)').toBeGreaterThan(0);
@@ -113,5 +113,43 @@ describe('organizations page: is_personal / is_test mapping', () => {
       id: 'org-1', name: 'Alpha', slug: 'alpha', plan_name: 'Team', plan_tier: 'team',
       created_at: '2026-01-01T00:00:00Z', member_count: 1, is_personal: true, is_test: false,
     });
+  });
+});
+
+/**
+ * BACKLOG-4098 PR2: the page parses searchParams into the table's initialState
+ * (filters, search and sort survive a reload or a shared link).
+ */
+describe('organizations page: initialState from searchParams', () => {
+  beforeEach(() => {
+    state.rows = [{ ...BASE_ROW, is_personal: false, is_test: false }];
+    state.listCalls = 0;
+  });
+
+  async function initialState(searchParams?: Record<string, string | string[] | undefined>) {
+    const { default: Page } = await import('@/app/dashboard/organizations/page');
+    // undefined = a bare call with no props object at all (must not throw).
+    const bare = Page as unknown as () => Promise<ReactNode>;
+    const tree = (await (searchParams === undefined ? bare() : Page({ searchParams: Promise.resolve(searchParams) }))) as ReactNode;
+    const props = findProps(tree, OrganizationsTableStub);
+    expect(props, 'OrganizationsTable is rendered').not.toBeNull();
+    return props!.initialState;
+  }
+
+  const DEFAULTS = { type: 'brokerages', showTest: false, plan: [], q: '', sort: { key: 'name', direction: 'asc' } };
+
+  it('no props object, and empty params -> defaults (brokerages, test hidden)', async () => {
+    expect(await initialState()).toEqual(DEFAULTS);
+    expect(await initialState({})).toEqual(DEFAULTS);
+  });
+
+  it('every param reaches the table', async () => {
+    expect(await initialState({ type: 'personal', test: '1', plan: 'team,individual', q: 'acme', sort: 'members', dir: 'asc', foo: 'x' })).toEqual({
+      type: 'personal', showTest: true, plan: ['team', 'individual'], q: 'acme', sort: { key: 'members', direction: 'asc' },
+    });
+  });
+
+  it('unknown type / sort fall back to the defaults', async () => {
+    expect(await initialState({ type: 'everything', sort: 'owner' })).toEqual(DEFAULTS);
   });
 });
