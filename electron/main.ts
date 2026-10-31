@@ -821,7 +821,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
               trialDaysRemaining: licenseStatus.trialDaysRemaining ?? 0,
             };
 
-            await saveSignInSession({
+            const saved = await saveSignInSession({
               user: localUser,
               sessionToken,
               provider,
@@ -835,7 +835,14 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
                 refresh_token: refreshToken,
               },
             });
-            log.info("[DeepLink] Session saved successfully with Supabase tokens");
+            if (saved) {
+              log.info("[DeepLink] Session saved successfully with Supabase tokens");
+            } else {
+              // The writer has already logged and reported why (sessionService).
+              log.error(
+                "[DeepLink] Session NOT saved: the session file was not written. Reads stay refused until a write succeeds or the app relaunches",
+              );
+            }
           } catch (sessionError) {
             log.error("[DeepLink] Failed to save session:", sessionError);
           }

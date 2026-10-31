@@ -25,6 +25,8 @@
  * guards, so each test isolates the module fresh via jest.isolateModules().
  */
 
+const mockDeferredDbLog = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
+
 interface RegisteredHandlers {
   [channel: string]: (...args: unknown[]) => unknown;
 }
@@ -36,11 +38,12 @@ function setup(options: {
   existingLocalUser?: unknown; // returned by getUserByEmail/getUserByOAuthId (pre-creation)
   createdLocalUser?: unknown; // returned by getUserById after createUser
   authSession?: unknown;
+  saveResult?: boolean;
 }) {
   const registered: RegisteredHandlers = {};
 
   const mockCreateSession = jest.fn().mockResolvedValue("sqlite-session-token-abc");
-  const mockSaveSession = jest.fn().mockResolvedValue(true);
+  const mockSaveSession = jest.fn().mockResolvedValue((options as { saveResult?: boolean }).saveResult ?? true);
   const mockGetSessionExpirationMs = jest.fn(() => 24 * 60 * 60 * 1000);
 
   const mockGetUserByEmail = jest.fn().mockResolvedValue(options.existingLocalUser ?? null);
@@ -65,7 +68,7 @@ function setup(options: {
 
   jest.doMock("../../services/logService", () => ({
     __esModule: true,
-    default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+    default: mockDeferredDbLog,
   }));
 
   jest.doMock("../../services/databaseEncryptionService", () => ({
@@ -267,5 +270,29 @@ describe("systemHandlers — deferred-DB deep-link session persistence (BACKLOG-
 
     expect(mockCreateUser).not.toHaveBeenCalled();
     expect(mockSaveSession).not.toHaveBeenCalled();
+  });
+});
+
+describe("BACKLOG-3299: persistSessionForUser honours saveSession's boolean", () => {
+  const pendingUser = { supabaseId: TEST_USER_ID, email: "p@example.com", provider: "google", subscriptionTier: "free", subscriptionStatus: "trial" };
+  const createdLocalUser = { id: TEST_USER_ID, email: "p@example.com", oauth_provider: "google", subscription_tier: "free", subscription_status: "trial" };
+  const authSession = { userId: TEST_USER_ID, accessToken: "a", refreshToken: "r" };
+  beforeEach(() => { jest.resetModules(); Object.values(mockDeferredDbLog).forEach((f) => f.mockClear()); });
+  const msgs = (f: jest.Mock) => f.mock.calls.map((c) => String(c[0]));
+
+  it("P1: write returns false -> no 'Session persisted' line, one error line, IPC still answers", async () => {
+    const { initHandler, mockSaveSession } = setup({ pendingUser, existingLocalUser: null, createdLocalUser, authSession, saveResult: false });
+    const res = await initHandler();
+    expect(mockSaveSession).toHaveBeenCalledTimes(1);
+    expect(msgs(mockDeferredDbLog.info).filter((m) => m.includes("Session persisted"))).toEqual([]);
+    expect(msgs(mockDeferredDbLog.error).filter((m) => /session/i.test(m) && /deferred-DB/.test(m))).toHaveLength(1);
+    expect(res).toEqual(expect.objectContaining({ success: true }));
+  });
+
+  it("K1: write returns true -> 'Session persisted' once, no persist error", async () => {
+    const { initHandler } = setup({ pendingUser, existingLocalUser: null, createdLocalUser, authSession, saveResult: true });
+    await initHandler();
+    expect(msgs(mockDeferredDbLog.info).filter((m) => m.includes("Session persisted"))).toHaveLength(1);
+    expect(msgs(mockDeferredDbLog.error).filter((m) => /deferred-DB/.test(m))).toEqual([]);
   });
 });
