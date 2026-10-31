@@ -20,7 +20,7 @@
  * State: `modalState.showProfile` is "account panel open"; the flow keeps its
  * openProfile / closeProfile names (useModalFlow).
  */
-import React, { useCallback, useRef } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import {
   Database,
   Info,
@@ -47,10 +47,9 @@ import { useEscapeToClose } from "../../hooks/useEscapeToClose";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
 import { useCopyText } from "../../hooks/useCopyText";
 import { Z_CLASS } from "../../constants/zLayers";
-
-/** The support form is mounted at the app root and sits above the panel; Esc and Tab belong to it. */
-const SUPPORT_DIALOG = '[data-testid="support-ticket-dialog"]';
-const supportFormOpen = (): boolean => !!document.querySelector(SUPPORT_DIALOG);
+import logger from "../../utils/logger";
+// The support form is mounted at the app root and sits above the panel; Esc and Tab belong to it.
+import { isSupportFormOpen } from "../../components/support/supportDialogSelector";
 
 /** One icon per Settings tab id. A tab without an icon fails AccountPanel-3964 C5b. */
 export const SETTINGS_TAB_ICONS: Record<string, LucideIcon> = {
@@ -79,8 +78,8 @@ function shortId(id: string): string {
 
 const ROW =
   "flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500";
+// No row looks selected: the panel only opens with Settings closed (useModalFlow openProfile).
 const ROW_IDLE = "text-gray-300 hover:bg-gray-800 hover:text-white";
-const ROW_ACTIVE = "bg-gray-800 text-white";
 
 interface AccountPanelProps {
   app: AppStateMachine;
@@ -89,12 +88,32 @@ interface AccountPanelProps {
 
 export function AccountPanel({ app, runningInElectron }: AccountPanelProps) {
   const { modalState, currentUser, closeProfile, openSettings, handleLogout } = app;
-  const open = modalState.showProfile && !!currentUser;
+  const user = modalState.showProfile ? currentUser : null;
+  const open = !!user;
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Both hooks are attached only while the panel is open.
-  useEscapeToClose(open, closeProfile, supportFormOpen);
-  const focusRedirect = useFocusTrap(panelRef, open, supportFormOpen);
+  useEscapeToClose(open, closeProfile, isSupportFormOpen);
+  const focusRedirect = useFocusTrap(panelRef, open, isSupportFormOpen);
+
+  // One sign-out at a time: a double click must not call logout twice. The ref
+  // blocks a second click before React re-renders; the state disables the button.
+  const signingOutRef = useRef(false);
+  const [signingOut, setSigningOut] = useState(false);
+  const signOut = useCallback(async () => {
+    if (signingOutRef.current) return;
+    signingOutRef.current = true;
+    setSigningOut(true);
+    try {
+      await handleLogout();
+    } catch (err) {
+      // The button comes back so the user can try again.
+      logger.error("[AccountPanel] Sign out failed", err);
+    } finally {
+      signingOutRef.current = false;
+      setSigningOut(false);
+    }
+  }, [handleLogout]);
 
   const openTab = useCallback(
     (tabId: string) => {
@@ -105,7 +124,7 @@ export function AccountPanel({ app, runningInElectron }: AccountPanelProps) {
     [closeProfile, openSettings, focusRedirect],
   );
 
-  if (!open || !currentUser) return null;
+  if (!user) return null;
   const top = runningInElectron ? "top-9" : "top-0";
   return (
     <>
@@ -117,11 +136,12 @@ export function AccountPanel({ app, runningInElectron }: AccountPanelProps) {
       />
       <OpenAccountPanel
         ref={panelRef}
-        user={currentUser}
+        user={user}
         top={top}
         onClose={closeProfile}
         onOpenTab={openTab}
-        onSignOut={handleLogout}
+        onSignOut={signOut}
+        signingOut={signingOut}
       />
     </>
   );
@@ -133,10 +153,11 @@ interface OpenAccountPanelProps {
   onClose: () => void;
   onOpenTab: (tabId: string) => void;
   onSignOut: () => void;
+  signingOut: boolean;
 }
 
 const OpenAccountPanel = React.forwardRef<HTMLDivElement, OpenAccountPanelProps>(function OpenAccountPanel(
-  { user, top, onClose, onOpenTab, onSignOut },
+  { user, top, onClose, onOpenTab, onSignOut, signingOut },
   ref,
 ) {
   const { licenseType } = useLicense();
@@ -204,7 +225,7 @@ const OpenAccountPanel = React.forwardRef<HTMLDivElement, OpenAccountPanelProps>
 
       <nav className="px-3 py-4" aria-label="Settings">
         <div className="px-3 pb-2 text-xs font-medium uppercase tracking-wider text-gray-400">Settings</div>
-        {tabs.map((tab, i) => {
+        {tabs.map((tab) => {
           const Icon = SETTINGS_TAB_ICONS[tab.id];
           return (
             <button
@@ -212,7 +233,7 @@ const OpenAccountPanel = React.forwardRef<HTMLDivElement, OpenAccountPanelProps>
               type="button"
               data-testid={accountPanelRowTestId(tab.id)}
               onClick={() => onOpenTab(tab.id)}
-              className={`${ROW} ${i === 0 ? ROW_ACTIVE : ROW_IDLE}`}
+              className={`${ROW} ${ROW_IDLE}`}
             >
               {Icon && <Icon className="h-5 w-5 shrink-0" aria-hidden="true" />}
               <span className="truncate">{tab.label}</span>
@@ -222,7 +243,14 @@ const OpenAccountPanel = React.forwardRef<HTMLDivElement, OpenAccountPanelProps>
       </nav>
 
       <div className="border-t border-gray-800 px-3 py-4">
-        <button type="button" onClick={onSignOut} data-testid="account-panel-signout" className={`${ROW} ${ROW_IDLE}`}>
+        <button
+          type="button"
+          onClick={onSignOut}
+          disabled={signingOut}
+          aria-busy={signingOut || undefined}
+          data-testid="account-panel-signout"
+          className={`${ROW} ${ROW_IDLE} disabled:opacity-50`}
+        >
           <LogOut className="h-5 w-5 shrink-0" aria-hidden="true" />
           <span>Sign out</span>
         </button>

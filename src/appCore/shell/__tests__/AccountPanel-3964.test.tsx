@@ -22,6 +22,7 @@ import { SupportWidget } from "../../../components/support/SupportWidget";
 import { SETTINGS_TABS, visibleSettingsTabs } from "../../../components/settings/settingsTabs";
 import { SETTINGS_TAB_ICONS, accountPanelRowTestId } from "../AccountPanel";
 import { Z_CLASS, zValue } from "../../../constants/zLayers";
+import { SUPPORT_DIALOG_SELECTOR } from "../../../components/support/supportDialogSelector";
 
 let mockElectron = true;
 jest.mock("../../../utils/platform", () => ({
@@ -221,6 +222,8 @@ describe('C1 stacking bands: "?" above the panel, panel above its scrim, scrim a
       fireEvent.click(help());
     });
     const form = screen.getByTestId("support-ticket-dialog");
+    // One selector: the form renders the id the panel and Settings look for (slice 3b dedupe).
+    expect(document.querySelector(SUPPORT_DIALOG_SELECTOR)).toBe(form);
     expect(zOf(form)).toBeGreaterThan(zOf(screen.getByTestId("account-panel")));
     expect(screen.getByTestId("account-panel")).toBeInTheDocument();
   });
@@ -287,6 +290,19 @@ describe("C5 rows = visibleSettingsTabs()", () => {
     expect(rowIds()).toEqual(expected.map((t) => accountPanelRowTestId(t.id)));
     expect(new Set(rowIds()).size).toBe(rows.length);
     expect(rowIds().slice(1).every((id) => id.startsWith("account-panel-row-settings-"))).toBe(true);
+  });
+
+  it("no row looks selected: the panel only opens with Settings closed (slice 3b)", () => {
+    render(<Harness />);
+    openFromInitials();
+    expect(screen.queryByTestId("settings-page")).toBeNull();
+    const rows = within(screen.getByRole("navigation", { name: "Settings" })).getAllByRole("button");
+    for (const row of rows) {
+      expect(row).not.toHaveClass("bg-gray-800");
+      expect(row).not.toHaveClass("text-white");
+      expect(row).not.toHaveAttribute("aria-current");
+      expect(row).toHaveClass("text-gray-300");
+    }
   });
 
   it("C5b every Settings tab has an icon, and every row draws it", () => {
@@ -414,5 +430,40 @@ describe("C14 Sign out", () => {
     fireEvent.click(signOut);
     expect(handleLogout).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: /confirm/i })).toBeNull();
+  });
+
+  it("a double click while sign-out is pending signs out once; the button is disabled until it settles (slice 3b)", async () => {
+    let finish: () => void = () => {};
+    handleLogout.mockImplementation(() => new Promise<void>((r) => (finish = r)));
+    render(<Harness />);
+    openFromInitials();
+    const signOut = screen.getByTestId("account-panel-signout");
+    // Both clicks in one batch: no re-render between them, so only the guard can stop the second.
+    act(() => {
+      signOut.click();
+      signOut.click();
+    });
+    expect(handleLogout).toHaveBeenCalledTimes(1);
+    expect(signOut).toBeDisabled();
+    // A later click while still pending is also ignored.
+    fireEvent.click(signOut);
+    expect(handleLogout).toHaveBeenCalledTimes(1);
+    await act(async () => finish());
+    expect(signOut).not.toBeDisabled();
+  });
+
+  it("a failed sign-out can be tried again (slice 3b)", async () => {
+    handleLogout.mockRejectedValueOnce(new Error("offline"));
+    render(<Harness />);
+    openFromInitials();
+    const signOut = screen.getByTestId("account-panel-signout");
+    await act(async () => {
+      fireEvent.click(signOut);
+    });
+    expect(signOut).not.toBeDisabled();
+    await act(async () => {
+      fireEvent.click(signOut);
+    });
+    expect(handleLogout).toHaveBeenCalledTimes(2);
   });
 });
