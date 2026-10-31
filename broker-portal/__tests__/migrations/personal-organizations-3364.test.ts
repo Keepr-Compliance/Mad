@@ -150,6 +150,7 @@ describe(MIGRATION_NAME, () => {
 // Matched by suffix: the version prefix is whatever apply_migration records.
 const BACKFILL_3858_SUFFIX = '_backlog_3858_personal_orgs_for_licensed_users.sql';
 const PAYGO_REVERT_3851_SUFFIX = '_backlog_3851_paygo_revert.sql';
+const SOLO_TRIAL_3860_SUFFIX = '_backlog_3860_solo_trial.sql';
 
 describe('BACKLOG-3364 backfill stays parked', () => {
   it('exists under supabase/parked/backlog-3364/', () => {
@@ -177,6 +178,15 @@ describe('BACKLOG-3364 backfill stays parked', () => {
         // set-based `SELECT _ensure...(u.id) FROM users u` would add a third.
         expect(sql.match(/_ensure_personal_organization_for\(/g)).toHaveLength(2);
         expect(sql).toMatch(/AFTER UPDATE OF license_status ON public\.organization_members\s+FOR EACH ROW/);
+        continue;
+      }
+      // BACKLOG-3860 PR-1: pins the function body and calls it once from a per-user wrapper.
+      // It must not loop over users. Tested by supabase/tests/backlog-3860/.
+      if (f.endsWith(SOLO_TRIAL_3860_SUFFIX)) {
+        expect(sql).not.toMatch(/\bFOR\s+\w+\s+IN\b/i);
+        // Exactly two mentions: the pin read and the wrapper's single call.
+        expect(sql.match(/_ensure_personal_organization_for\(/g)).toHaveLength(2);
+        expect(sql).toContain('v_res := public._ensure_personal_organization_for(v_uid);');
         continue;
       }
       expect(sql).not.toMatch(/_ensure_personal_organization_for/);

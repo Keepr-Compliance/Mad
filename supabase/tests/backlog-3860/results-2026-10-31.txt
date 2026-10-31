@@ -1,0 +1,51 @@
+# BACKLOG-3860 PR-1 harness run, 2026-10-31, keepr-test via kt-sql (each call one transaction, rolled back)
+# migration md5 334410abcfc8a127c7fc19eb107f4bd6, rollback md5 0a72b855da32be53b785e4de600738bf, commit 1fe078ffc
+base controls: pass=34 fail=0
+SCENARIO PASS S1_apply_once | P0001: SCN_OK
+SCENARIO PASS S2_apply_twice | P0001: SCN_OK
+SCENARIO PASS S3_drift_wrapper | P0001: BACKLOG-3860: ensure_personal_organization body changed (md5 7783bcd26a34d8566113f6e24706bf5d); re-review before applying
+SCENARIO PASS S4_drift_grant | P0001: BACKLOG-3860: grant_unlimited_from_subscription body changed (md5 11ae4aa259be21f37dd0b54371ecb465); re-review before applying
+SCENARIO PASS S5_drift_internal | P0001: BACKLOG-3860: _ensure_personal_organization_for body changed (md5 e711f55b645389276884b5e5749497a6); re-review before applying
+SCENARIO PASS S6_drift_constraint | P0001: BACKLOG-3860: billing_settings_key_ck differs from the expected definition: CHECK ((key = ANY (ARRAY['brokerage_billing_live'::text, 'x_other'::text])))
+SCENARIO PASS S7_rollback_clean | P0001: RB_OK 0
+SCENARIO PASS S8_rollback_stops_on_trial | P0001: rollback-3860: 1 trial override(s) exist; the old grant body would lock those users out of subscribing. Stopped. See the header for the flag.
+SCENARIO PASS S9_rollback_flag_removes | P0001: RB_OK 0
+KILLED|m01_no_ledger_check|MUTATION APPLIED public._start_solo_trial_for(uuid) 65592ead->2c966f5a [IF false THEN]|reds=['T1_second_start_refused_already_used']
+KILLED|m02_no_paid_through|MUTATION APPLIED public._start_solo_trial_for(uuid) 65592ead->1c1c3d33 [jsonb_build_object('enabled', true,                                    'source', 'trial')]|reds=['T2b_override_shape', 'T3c_new_trial_gets_7_days']
+KILLED|m03_setter_rewrites_running|MUTATION APPLIED public.admin_set_solo_trial_setting(boolean,integer) 8852b6d6->f9f6ef75 [  UPDATE public.organization_plans op SET feature_overrides = jsonb_set(op.feature_overrides, '{unlimited_tran]|reds=['T3b_running_trial_unchanged']
+KILLED|m04_start_in_internal|MUTATION APPLIED public._ensure_personal_organization_for(uuid) d893c6f2->f0d1dd32 [  GET DIAGNOSTICS v_rows = ROW_COUNT;   PERFORM public._start_solo_trial_for(p_user_id);]|reds=['T13_trial_error_org_still_created', 'T14_bad_length_refused', 'T14_detail_NULL', 'T4b_deactivated_personal_org_no_trial', 'T4c_ex_member_later_sign_in_no_trial', 'T4d_direct_start_member_refused', 'T4e_suspended_licence_refused', 'T6_existing_user_exists_no_trial', 'T8z_trial_never_replaces_support']
+KILLED|m05_exec_authenticated|MUTATION APPLIED grant execute on _start_solo_trial_for to authenticated (false->true)|reds=['T5f_catalog']
+KILLED|m05b_ledger_select_authenticated|MUTATION APPLIED grant select on solo_trials to authenticated (false->true)|reds=['T5e_ledger_refused_to_signed_in_user', 'T5f_catalog']
+KILLED|m05c_setter_no_permission|MUTATION APPLIED public.admin_set_solo_trial_setting(boolean,integer) 8852b6d6->4fad4b5f [IF false THEN]|reds=['T5a_setter_refuses_sales_and_non_staff', 'T5c_reader_staff_only_can_edit_flag']
+KILLED|m06_start_any_status|MUTATION APPLIED public.ensure_personal_organization() 199ea47f->cfb1835b [IF true THEN]|reds=['T4c_ex_member_later_sign_in_no_trial', 'T6_existing_user_exists_no_trial']
+KILLED|m07_no_switch_check|MUTATION APPLIED public._start_solo_trial_for(uuid) 65592ead->b01d2a7a [IF false THEN]|reds=['T7a_off_ensure_created_no_trial', 'T7b_off_direct_refused_off', 'T7c_row_absent_refused_off']
+KILLED|m07b_switch_not_null_safe|MUTATION APPLIED public._start_solo_trial_for(uuid) 65592ead->e1933608 [IF v_enabled = false THEN]|reds=['T7c_row_absent_refused_off']
+KILLED|m08_grant_refuses_trial|MUTATION APPLIED public.grant_unlimited_from_subscription(uuid,timestamptz,text) 7cf0ca24->5cf81923 [ THEN]|reds=['T8a_live_trial_replaced_by_stripe', 'T8b_ended_trial_replaced_by_stripe']
+KILLED|m08b_only_sourceless_protected|MUTATION APPLIED public.grant_unlimited_from_subscription(uuid,timestamptz,text) 7cf0ca24->87d34d83 [  IF v_existing IS NOT NULL AND (v_existing ->> 'source') IS NULL THEN]|reds=['T8d_support_refused', 'T8e_other_source_refused']
+KILLED|m08c_not_in_null_trap|MUTATION APPLIED public.grant_unlimited_from_subscription(uuid,timestamptz,text) 7cf0ca24->5fa6dc5b [  IF v_existing IS NOT NULL AND (v_existing ->> 'source') NOT IN ('stripe', 'trial') THEN]|reds=['T8c_sourceless_refused']
+KILLED|m09_trial_replaces_override|MUTATION APPLIED public._start_solo_trial_for(uuid) 65592ead->bdb7f6b3 [  IF false THEN]|reds=['T8z_trial_never_replaces_support']
+KILLED|m10_no_membership_check|MUTATION APPLIED public._start_solo_trial_for(uuid) 65592ead->cefc2b1a [       AND false   ) THEN]|reds=['T4d_direct_start_member_refused']
+KILLED|m11_no_suspended_check|MUTATION APPLIED public._start_solo_trial_for(uuid) 65592ead->4c74f6bd [IF false THEN]|reds=['T4e_suspended_licence_refused']
+KILLED|m13_no_exception_block|MUTATION APPLIED public.ensure_personal_organization() 199ea47f->1784db98 [    PERFORM public._start_solo_trial_for(v_uid);]|reds=['T13_trial_error_org_still_created']
+KILLED|m14_no_length_check|MUTATION APPLIED public._start_solo_trial_for(uuid) 65592ead->83044a06 [IF false THEN]|reds=['T14_bad_length_refused', 'T14_detail_-1', 'T14_detail_0', 'T14_detail_91', 'T14_detail_NULL']
+== t12a_no_wrapper_pin MUTATION APPLIED (mig): '  IF false THEN'
+KILLED|t12a_no_wrapper_pin|S3_drift_wrapper: P0001: SCN_OK
+== t12a_no_grant_pin MUTATION APPLIED (mig): '  IF false THEN'
+KILLED|t12a_no_grant_pin|S4_drift_grant: P0001: SCN_OK
+== t12a_no_internal_pin MUTATION APPLIED (mig): '  IF false THEN'
+KILLED|t12a_no_internal_pin|S5_drift_internal: P0001: SCN_OK
+== t12a_no_constraint_pin MUTATION APPLIED (mig): '  IF false\n     AND v_def'
+KILLED|t12a_no_constraint_pin|S6_drift_constraint: 23514: new row for relation "billing_settings" violates check constraint "billing_settings_key_ck"
+== t12b_key_not_widened MUTATION APPLIED (mig): '    NULL;\n'
+KILLED|t12b_key_not_widened|S1_apply_once: 23514: new row for relation "billing_settings" violates check constraint "billing_settings_key_ck"
+== t12c_days_null_allowed MUTATION APPLIED (mig): '(days BETWEEN 1 AND 90)'
+KILLED|t12c_days_null_allowed|controls:{"T12c_days_null_0_91_refused": "FAIL days null/0/91 or an unknown key accepted"}
+== rb_no_count_stop MUTATION APPLIED (rb): '  IF false THEN\n    IF coalesce'
+KILLED|rb_no_count_stop|S8_rollback_stops_on_trial: P0001: RB_OK 1
+== rb_through_setter MUTATION APPLIED (rb): '    PERFORM public.admin_set_solo_trial_setting(false, 14);'
+KILLED|rb_through_setter|S7_rollback_clean: 42501: Not authenticated
+== rb_check_restored_before_row_removed MUTATION APPLIED (rb): '' / "  CHECK (key IN ('brokerage_billing_live'));\nDELETE FROM public.billin"
+KILLED|rb_check_restored_before_row_removed|S7_rollback_clean: 23514: check constraint "billing_settings_key_ck" of relation "billing_settings" is violated by some row
+== rb_flag_ignored MUTATION APPLIED (rb): '    IF false THEN'
+KILLED|rb_flag_ignored|S9_rollback_flag_removes: P0001: rollback-3860: 1 trial override(s) exist; the old grant body would lock those users out of subscribing. Stopped. See the header for the flag.
+MUTANTS: killed=28 survived=0 invalid=0
