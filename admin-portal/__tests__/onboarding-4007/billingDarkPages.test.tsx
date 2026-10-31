@@ -115,7 +115,7 @@ describe('org page: Invite follows the Billing card', () => {
 
 async function listPage() {
   const { default: Page } = await import('@/app/dashboard/organizations/page');
-  const tree = (await Page()) as ReactNode;
+  const tree = (await Page({})) as ReactNode;
   return findProps(tree, OrganizationsTableStub);
 }
 

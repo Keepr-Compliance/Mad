@@ -22,8 +22,9 @@ function rowFlag(value: unknown): boolean | null {
   return typeof value === 'boolean' ? value : null;
 }
 
-// The whole props object defaults to {} so the page can be called with no argument.
-export default async function OrganizationsPage(props: OrganizationsPageProps = {}) {
+// Props are required by Next's page type check (an optional first argument fails it once
+// .next/types exists). `props?.` keeps a bare Page() call (tests) from throwing.
+export default async function OrganizationsPage(props: OrganizationsPageProps) {
   const { supabase, user: adminUser } = await getAuthenticatedUser();
 
   if (!adminUser) {
@@ -89,7 +90,7 @@ export default async function OrganizationsPage(props: OrganizationsPageProps = 
 
   // BACKLOG-4098: filters, search and sort come from the URL so a reload or a shared link
   // shows the same list. The "shown of total" count lives in the table (client state).
-  const initialState = parseOrgListState((await props.searchParams) ?? {});
+  const initialState = parseOrgListState((await props?.searchParams) ?? {});
 
   return (
     <div className="max-w-7xl mx-auto">

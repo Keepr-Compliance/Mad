@@ -62,7 +62,7 @@ function findProps(node: ReactNode, type: unknown): Record<string, unknown> | nu
 
 async function tableRows(): Promise<Array<Record<string, unknown>>> {
   const { default: Page } = await import('@/app/dashboard/organizations/page');
-  const tree = (await Page()) as ReactNode;
+  const tree = (await Page({})) as ReactNode;
   const props = findProps(tree, OrganizationsTableStub);
   expect(props, 'OrganizationsTable is rendered').not.toBeNull();
   expect(state.listCalls, 'the list RPC was called (non-vacuous)').toBeGreaterThan(0);
@@ -128,7 +128,9 @@ describe('organizations page: initialState from searchParams', () => {
 
   async function initialState(searchParams?: Record<string, string | string[] | undefined>) {
     const { default: Page } = await import('@/app/dashboard/organizations/page');
-    const tree = (await (searchParams === undefined ? Page() : Page({ searchParams: Promise.resolve(searchParams) }))) as ReactNode;
+    // undefined = a bare call with no props object at all (must not throw).
+    const bare = Page as unknown as () => Promise<ReactNode>;
+    const tree = (await (searchParams === undefined ? bare() : Page({ searchParams: Promise.resolve(searchParams) }))) as ReactNode;
     const props = findProps(tree, OrganizationsTableStub);
     expect(props, 'OrganizationsTable is rendered').not.toBeNull();
     return props!.initialState;
@@ -136,7 +138,7 @@ describe('organizations page: initialState from searchParams', () => {
 
   const DEFAULTS = { type: 'brokerages', showTest: false, plan: [], q: '', sort: { key: 'name', direction: 'asc' } };
 
-  it('no argument and empty params -> defaults (brokerages, test hidden)', async () => {
+  it('no props object, and empty params -> defaults (brokerages, test hidden)', async () => {
     expect(await initialState()).toEqual(DEFAULTS);
     expect(await initialState({})).toEqual(DEFAULTS);
   });
