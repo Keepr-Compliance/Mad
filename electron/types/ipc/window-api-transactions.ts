@@ -18,6 +18,10 @@ import type { TransactionContactResult } from "../../services/db/transactionCont
 import type { PickerMessage } from "../../services/db/messageDbService";
 // The one definition of the pre-cache fetch rounds. TYPE-ONLY, same ruling.
 import type { EmailPrecacheStage } from "./emailPrecacheStage";
+import type {
+  RecentlyOpenedTransactionsResponse,
+  RecordTransactionOpenResponse,
+} from "../transactionOpen";
 
 
 /** BACKLOG-2791: which store a review item came from. */
@@ -870,6 +874,10 @@ export interface WindowApiTransactions {
     hidden?: boolean;
     error?: string;
   }>;
+  /** BACKLOG-3965: record that this deal was opened (local only, never synced). */
+  recordOpen: (transactionId: string) => Promise<RecordTransactionOpenResponse>;
+  /** BACKLOG-3965: the deals this user opened most recently, newest first. */
+  getRecentlyOpened: (userId: string, limit?: number) => Promise<RecentlyOpenedTransactionsResponse>;
   /** BACKLOG-1578: Get removed/unlinked emails for a transaction */
   getRemovedEmails: (transactionId: string) => Promise<{
     success: boolean;
