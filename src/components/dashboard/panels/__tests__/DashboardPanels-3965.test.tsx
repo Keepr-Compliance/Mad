@@ -3,18 +3,17 @@
  * and the real plan-gate hook; only `window.api` (tests/setup.js) is mocked.
  *
  * C5  side by side from 768 px, one column below, Recent first.
- * C6  Todo only when the gate answered "allowed"; Recent spans the row otherwise.
+ * C6  BACKLOG-3966 PR-3 (rewritten from "Todo only when allowed"): Todo, the
+ *     rings and two columns on EVERY plan answer; Todo is read whatever the
+ *     gate says. Only a "blocked" plan adds the template-checklists hint.
  * C11 a Todo row opens its deal on the Checklist tab; a Recent row on Overview.
- *     The two empty states come from main's two different answers.
- *     A tick main refuses (locked deal) leaves the row and says why.
+ *     A failed Todo read says so; a tick main refuses (locked deal) leaves the
+ *     row and says why.
  */
-import fs from "fs";
-import path from "path";
 import React from "react";
 import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import { DashboardPanels, PANELS_GRID_ONE, PANELS_GRID_TWO } from "../DashboardPanels";
-import { CHECKLISTS_NOT_ALLOWED_MESSAGE } from "../useDashboardPanels";
+import { DashboardPanels, PANELS_GRID_TWO } from "../DashboardPanels";
 import { notifyTransactionsViewClosed } from "../../../../appCore/openTransactionRequest";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -101,23 +100,41 @@ describe("DashboardPanels layout (C5, C6)", () => {
     expect(grid.children[1]).toBe(screen.getByTestId("dashboard-todo"));
   });
 
-  it.each(["blocked", "unknown", "pending"] as const)(
-    "gate %s -> no Todo, no rings, Recent spans the row",
+  it.each(["allowed", "blocked", "unknown", "pending"] as const)(
+    "gate %s -> Todo read once and shown, the ring shown, two columns from 768 px",
     async (state) => {
       setGate(state);
       renderPanels();
-      await screen.findByText("1 Recent St");
-      expect(screen.queryByTestId("dashboard-todo")).not.toBeInTheDocument();
-      expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+      expect(await screen.findByText("Signed disclosure")).toBeInTheDocument();
+      expect(screen.getByTestId("dashboard-todo")).toBeInTheDocument();
+      expect(screen.getByRole("progressbar")).toBeInTheDocument();
       const grid = screen.getByTestId("dashboard-panels");
-      for (const width of [400, 768, 1280]) expect(columnsAt(grid.className, width)).toBe(1);
-      expect(api().checklists.listOpenRequired).not.toHaveBeenCalled();
+      expect([400, 768, 1280].map((width) => columnsAt(grid.className, width))).toEqual([1, 2, 2]);
+      expect(api().checklists.listOpenRequired).toHaveBeenCalledTimes(1);
+      expect(api().checklists.listOpenRequired).toHaveBeenCalledWith({ userId: "user-1", limit: 50 });
     },
   );
 
-  it("the grid constants are the ones measured above", () => {
+  it("the grid constant is the one measured above", () => {
     expect(PANELS_GRID_TWO.split(" ")).toEqual(expect.arrayContaining(["grid-cols-1", "md:grid-cols-2"]));
-    expect(PANELS_GRID_ONE.split(" ")).not.toContain("md:grid-cols-2");
+  });
+});
+
+describe("the template-checklists hint (BACKLOG-3966 PR-3)", () => {
+  it("blocked plan -> the hint shows in Todo, under the rows", async () => {
+    setGate("blocked");
+    renderPanels();
+    const hint = await screen.findByTestId("dashboard-todo-template-hint");
+    expect(hint).toHaveTextContent("Template checklists aren't on your plan.");
+    expect(within(screen.getByTestId("dashboard-todo")).getByTestId("dashboard-todo-template-hint")).toBe(hint);
+  });
+
+  it.each(["allowed", "unknown", "pending"] as const)("gate %s -> no hint", async (state) => {
+    setGate(state);
+    renderPanels();
+    await screen.findByText("Signed disclosure");
+    await act(async () => {});
+    expect(screen.queryByTestId("dashboard-todo-template-hint")).not.toBeInTheDocument();
   });
 });
 
@@ -152,12 +169,17 @@ describe("DashboardPanels rows (C11, SR 5d)", () => {
   });
 });
 
-describe("Todo empty states come from main's two different answers", () => {
-  it("plan refusal -> 'not on your plan'", async () => {
-    api().checklists.listOpenRequired.mockResolvedValue({ success: false, error: CHECKLISTS_NOT_ALLOWED_MESSAGE });
+describe("Todo failure states", () => {
+  // BACKLOG-3966 PR-2 stopped main refusing this read on the plan, so a plan
+  // refusal is no longer its own state; any refusal reads as a failed load.
+  it("a refusal carrying the old plan message -> 'couldn't load'", async () => {
+    api().checklists.listOpenRequired.mockResolvedValue({
+      success: false,
+      error: "Transaction checklists are not available.",
+    });
     renderPanels();
-    expect(await screen.findByText("Checklists aren't on your plan.")).toBeInTheDocument();
-    expect(screen.queryByText("Couldn't load your checklist items.")).not.toBeInTheDocument();
+    expect(await screen.findByText("Couldn't load your checklist items.")).toBeInTheDocument();
+    expect(screen.queryByText("Checklists aren't on your plan.")).not.toBeInTheDocument();
   });
 
   it("any other failure -> 'couldn't load'", async () => {
@@ -176,15 +198,6 @@ describe("Todo empty states come from main's two different answers", () => {
     renderPanels();
     expect(await screen.findByText("Couldn't load your checklist items.")).toBeInTheDocument();
     expect(await screen.findByText("Couldn't load recent deals.")).toBeInTheDocument();
-  });
-
-  it("the renderer copy of main's plan refusal matches the handler's constant", () => {
-    const src = fs.readFileSync(
-      path.join(__dirname, "../../../../../electron/handlers/checklistHandlers.ts"),
-      "utf8",
-    );
-    const m = /export const CHECKLISTS_NOT_ALLOWED_ERROR =\s*"([^"]+)";/.exec(src);
-    expect(m?.[1]).toBe(CHECKLISTS_NOT_ALLOWED_MESSAGE);
   });
 });
 

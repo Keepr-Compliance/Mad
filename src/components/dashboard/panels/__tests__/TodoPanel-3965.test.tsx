@@ -87,12 +87,14 @@ describe("TodoPanel", () => {
     expect(within(rows[3]).queryByTestId("closing-badge")).not.toBeInTheDocument();
   });
 
-  describe("empty states — three different messages", () => {
-    const MESSAGES = ["Nothing required left.", "Checklists aren't on your plan.", "Couldn't load your checklist items."];
+  // BACKLOG-3966 PR-3: main no longer refuses the read on the plan, so the
+  // "not on your plan" state is gone; a plan without checklists shows the
+  // template hint instead (below).
+  describe("empty states — two different messages", () => {
+    const MESSAGES = ["Nothing required left.", "Couldn't load your checklist items."];
     it.each([
       ["nothing left", ready([]), MESSAGES[0]],
-      ["not on the plan", { status: "not-on-plan" } as TodoState, MESSAGES[1]],
-      ["read failed", { status: "error" } as TodoState, MESSAGES[2]],
+      ["read failed", { status: "error" } as TodoState, MESSAGES[1]],
     ])("%s", (_name, state, message) => {
       renderTodo(state);
       expect(screen.getByText(message)).toBeInTheDocument();
@@ -119,7 +121,6 @@ describe("TodoPanel", () => {
       ready([item(1)]),
       ready([]),
       { status: "loading" },
-      { status: "not-on-plan" },
       { status: "error" },
     ];
     for (const state of states) {
@@ -151,5 +152,32 @@ describe("TodoPanel", () => {
       renderTodo(ready([item(3)]), { tickingItemId: "item-3" });
       expect(screen.getByRole("checkbox", { name: "Mark done: Item 3" })).toBeDisabled();
     });
+  });
+});
+
+describe("the template-checklists hint (BACKLOG-3966 PR-3)", () => {
+  const HINT = "Template checklists aren't on your plan.";
+  it.each([
+    ["rows", ready([item(1)])],
+    ["nothing left", ready([])],
+    ["read failed", { status: "error" } as TodoState],
+    ["loading", { status: "loading" } as TodoState],
+  ])("templateHint + %s -> the hint shows", (_name, state) => {
+    render(
+      <TodoPanel state={state} templateHint onOpenTransaction={jest.fn()} onRetry={jest.fn()} onTick={jest.fn()} now={NOW} />,
+    );
+    expect(screen.getByTestId("dashboard-todo-template-hint")).toHaveTextContent(HINT);
+  });
+
+  it("no templateHint -> no hint", () => {
+    render(<TodoPanel state={ready([item(1)])} onOpenTransaction={jest.fn()} onRetry={jest.fn()} onTick={jest.fn()} now={NOW} />);
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument();
+  });
+
+  it("signed out ('off') -> no hint", () => {
+    render(
+      <TodoPanel state={{ status: "off" }} templateHint onOpenTransaction={jest.fn()} onRetry={jest.fn()} onTick={jest.fn()} now={NOW} />,
+    );
+    expect(screen.queryByText(HINT)).not.toBeInTheDocument();
   });
 });
