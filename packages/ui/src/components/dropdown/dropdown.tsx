@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { AlertCircle, ChevronDown } from 'lucide-react';
+import { AlertCircle, ChevronDown, X } from 'lucide-react';
 import { cn } from '../../lib/cn';
 import { useClickOutside } from '../../lib/use-click-outside';
 import { BottomSheet } from '../phone/bottom-sheet';
@@ -9,7 +9,15 @@ import { DropdownOptions } from './dropdown-options';
 import type { DropdownProps } from './types';
 
 /**
- * Dropdown (BACKLOG-4032): searchable single-choice picker.
+ * Dropdown (BACKLOG-4032): searchable single- or multi-choice picker.
+ *
+ * `mode="multi"` (slice 4a, popover only): the trigger reads "Label" or
+ * "Label (n)" (n = value.length, never the filtered rows) and is named by that
+ * text alone. With `onClear` and a non-empty value, a sibling button
+ * "Clear <Label> filter" sits at the right of the pill (outside the trigger,
+ * inside the wrapper so a press on it is not an outside press) and the
+ * chevron hides. A toggle calls onChange and keeps the panel open; Escape and
+ * outside presses behave as in single mode and never change the value.
  *
  * `presentation="sheet"` (slice 2): the same field trigger opens a
  * BottomSheet instead of the panel. The sheet is titled by the label, its rows
@@ -65,8 +73,6 @@ function assignRef<T>(ref: React.Ref<T> | undefined, node: T | null) {
 export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
   const {
     options,
-    value,
-    onChange,
     label,
     ariaLabel,
     id,
@@ -84,7 +90,9 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
     onClear,
     className,
   } = props;
-  const sheet = presentation === 'sheet';
+  const multi = props.mode === 'multi';
+  // Multi is popover only (its type has no 'sheet'); guard plain-JS callers too.
+  const sheet = !multi && presentation === 'sheet';
   const filter = variant === 'filter';
   // A filter pill with nothing chosen reads as its name ("Period"), not "Select…".
   const placeholder = placeholderProp ?? (filter ? (label ?? ariaLabel) : 'Select…');
@@ -108,8 +116,19 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
     [externalTriggerRef]
   );
 
-  const selected = value === null ? undefined : options.find((o) => o.value === value);
+  const selected =
+    props.mode === 'multi' || props.value === null ? undefined : options.find((o) => o.value === props.value);
+  const multiCount = props.mode === 'multi' ? props.value.length : 0;
+  const hasValue = multi ? multiCount > 0 : selected !== undefined;
   const nameText = label ?? ariaLabel;
+  const triggerText = multi
+    ? multiCount > 0
+      ? `${nameText} (${multiCount})`
+      : placeholder
+    : selected
+      ? selected.label
+      : placeholder;
+  const showClear = multi && onClear !== undefined && multiCount > 0;
 
   const openPanel = React.useCallback(() => {
     if (disabled) return;
@@ -154,7 +173,7 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
 
   const showError = invalid && Boolean(error);
   // A removable filter (value + onClear) reads blue, like MultiSelect with a selection.
-  const filterActive = filter && selected !== undefined && onClear !== undefined;
+  const filterActive = filter && hasValue && onClear !== undefined;
 
   return (
     <div
@@ -181,7 +200,8 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
           disabled={disabled}
           aria-haspopup={sheet ? 'dialog' : 'listbox'}
           aria-expanded={open}
-          aria-labelledby={`${labelId} ${valueId}`}
+          // Multi: named by the pill text alone ("Organization (2)"); single keeps "Label Value".
+          aria-labelledby={multi ? valueId : `${labelId} ${valueId}`}
           aria-invalid={invalid ? true : undefined}
           aria-describedby={showError ? errorId : undefined}
           onClick={() => (open ? close(false) : openPanel())}
@@ -189,13 +209,15 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
           className={
             filter
               ? cn(
-                  'inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
+                  'inline-flex items-center gap-1.5 rounded-md border py-1.5 text-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
+                  showClear ? 'pl-3 pr-7' : 'px-3',
                   filterActive ? 'border-primary-300 bg-primary-50 text-primary-700' : 'border-gray-300 bg-white text-gray-700',
                   invalid && 'border-danger-600 ring-1 ring-danger-600',
                   disabled && 'cursor-not-allowed bg-gray-100 text-gray-400'
                 )
               : cn(
-                  'flex min-h-9 w-full items-center gap-2 rounded-md border bg-white px-3 py-1.5 text-left text-sm text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
+                  'flex min-h-9 w-full items-center gap-2 rounded-md border bg-white py-1.5 text-left text-sm text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
+                  showClear ? 'pl-3 pr-8' : 'px-3',
                   invalid ? 'border-danger-600 ring-1 ring-danger-600' : 'border-gray-300',
                   open && !invalid && 'border-primary-500 ring-2 ring-primary-500',
                   disabled && 'cursor-not-allowed bg-gray-100 text-gray-400'
@@ -209,16 +231,33 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
           ) : null}
           <span
             id={valueId}
-            data-placeholder={selected ? undefined : ''}
-            className={cn(filter ? 'truncate' : 'min-w-0 flex-1 truncate', !selected && 'text-muted-foreground')}
+            data-placeholder={hasValue ? undefined : ''}
+            className={cn(filter ? 'truncate' : 'min-w-0 flex-1 truncate', !hasValue && 'text-muted-foreground')}
           >
-            {selected ? selected.label : placeholder}
+            {triggerText}
           </span>
-          <ChevronDown
-            className={cn('flex-shrink-0', filter ? 'h-3.5 w-3.5' : 'h-4 w-4 text-gray-500')}
-            aria-hidden="true"
-          />
+          {showClear ? null : (
+            <ChevronDown
+              className={cn('flex-shrink-0', filter ? 'h-3.5 w-3.5' : 'h-4 w-4 text-gray-500')}
+              aria-hidden="true"
+            />
+          )}
         </button>
+        {showClear ? (
+          <button
+            type="button"
+            data-slot="dropdown-clear"
+            aria-label={`Clear ${nameText} filter`}
+            disabled={disabled}
+            onClick={() => onClear?.()}
+            className={cn(
+              'absolute top-1/2 inline-flex -translate-y-1/2 items-center rounded p-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
+              filter ? 'right-2 text-primary-700' : 'right-2.5 text-gray-500'
+            )}
+          >
+            <X className={filter ? 'h-3.5 w-3.5' : 'h-4 w-4'} aria-hidden="true" />
+          </button>
+        ) : null}
         {open && !sheet ? (
           <div
             data-slot="dropdown-panel"
@@ -230,12 +269,16 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
             )}
           >
             <DropdownOptions<V>
+              {...(props.mode === 'multi'
+                ? { mode: 'multi' as const, value: props.value, onChange: props.onChange }
+                : {
+                    value: props.value,
+                    onSelect: (v: V) => {
+                      props.onChange(v);
+                      close(true);
+                    },
+                  })}
               options={options}
-              value={value}
-              onSelect={(v) => {
-                onChange(v);
-                close(true);
-              }}
               ariaLabel={nameText ?? ''}
               labelledBy={labelId}
               searchable={searchable}
@@ -259,9 +302,9 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
         >
           <DropdownOptions<V>
             options={options}
-            value={value}
+            value={props.value}
             onSelect={(v) => {
-              onChange(v);
+              props.onChange(v);
               close(false);
             }}
             ariaLabel={nameText ?? ''}
