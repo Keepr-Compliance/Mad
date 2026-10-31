@@ -37,7 +37,7 @@ import { ensureStripeCustomer, isModeAllowedForUser } from '@/lib/billing/custom
 import { readBrokeragePurchaseBlocked } from '@/lib/billing/purchaseBlocked';
 import { readBearerPortalAccess } from '@/lib/billing/bearerPortalAccess';
 import { agentContextForUser } from '@/lib/billing/agentContextCore';
-import { getAgentPrices, isNonStripeOverride } from '@/lib/billing/agentPlan';
+import { getAgentPrices } from '@/lib/billing/agentPlan';
 import { ALREADY_HAVE_PLAN, prepareAgentCheckout } from '@/lib/billing/agentCheckout';
 import { chooseReturnBase } from '@/lib/billing/agentCheckoutParams';
 
@@ -98,10 +98,10 @@ export async function POST(req: Request): Promise<Response> {
   }
   const { view, caps } = ctx;
 
-  if (view.suspended) return refuse('suspended', 403);
-  // A support grant already gives Unlimited; a payment would buy nothing.
-  if (isNonStripeOverride(view.override)) return refuse('already_have_plan', 409);
+  // active / cancel_pending / payment_failed, or support_grant (agentPlanState returns it for any
+  // non-Stripe Unlimited override): a payment would buy nothing.
   if (view.state !== 'none') return refuse('already_have_plan', 409);
+  // The website's rule (startAgentCheckout). Suspension was answered above; this is its backstop.
   if (!caps.blocks.includes('choose_plan') || !caps.canPurchase) return refuse('not_available', 403);
 
   try {
