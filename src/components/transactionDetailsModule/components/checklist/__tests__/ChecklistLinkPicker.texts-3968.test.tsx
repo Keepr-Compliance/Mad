@@ -229,9 +229,11 @@ describe("Texts tab — keyboard", () => {
     const user = userEvent.setup();
     const { onLinkTexts } = renderPicker();
     const tabs = screen.getByTestId("checklist-picker-tabs");
-    // The selected tab is the one stop in the tab list.
+    // From the Close button, Tab lands on the selected tab: the one stop in the tab list.
+    screen.getByLabelText("Close link picker").focus();
+    await user.tab();
     const emails = within(tabs).getByRole("tab", { name: "Emails" });
-    emails.focus();
+    expect(emails).toHaveFocus();
     await user.keyboard("{ArrowRight}");
     const textsTab = within(tabs).getByRole("tab", { name: "Texts" });
     expect(textsTab).toHaveFocus();
