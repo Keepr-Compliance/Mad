@@ -36,6 +36,7 @@ jest.mock("../core/dbConnection", () => ({
 import { getRecentlyOpenedTransactions, recordTransactionOpen } from "../transactionOpenDbService";
 import { GET_RECENTLY_OPENED_TRANSACTIONS_SQL } from "../transactionOpenSql";
 import { getChecklistsForTransaction } from "../checklistDbService";
+import { MY_ITEMS_TEMPLATE_ID } from "../checklistPrivacy";
 import { deleteTransaction } from "../transactionDbService";
 
 const SCHEMA = nodePath.join(__dirname, "..", "..", "..", "database", "schema.sql");
@@ -199,6 +200,26 @@ describe("BACKLOG-3965 getRecentlyOpenedTransactions", () => {
       requiredTotal: truth.requiredTotal,
     });
     expect(rows[1]).toMatchObject({ transactionId: "none", requiredDone: 0, requiredTotal: 0 });
+  });
+
+  it("BACKLOG-3966: the private checklist counts in the Recent ring, as in the agent read", async () => {
+    seedDeal("mine");
+    seedChecklist("mine", "c1", "tpl-1", [
+      { required: true, checked: true },
+      { required: true, checked: false },
+    ]);
+    seedChecklist("mine", "c-private", MY_ITEMS_TEMPLATE_ID, [
+      { required: true, checked: true },
+      { required: true, checked: false },
+    ]);
+    recordTransactionOpen("mine", "2026-10-31T10:00:00.000Z");
+    const truth = await getChecklistsForTransaction("mine", "agent");
+    expect([truth.requiredDone, truth.requiredTotal]).toEqual([2, 4]);
+    expect(getRecentlyOpenedTransactions(USER, 5)[0]).toMatchObject({
+      transactionId: "mine",
+      requiredDone: 2,
+      requiredTotal: 4,
+    });
   });
 
   it("the read uses the opened_at index and searches, never scans, the checklist tables (SR §11)", () => {

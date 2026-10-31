@@ -124,6 +124,7 @@ import { retryOwedReviewChecklistPull } from "../submissionChecklistPull";
 import { getOwedReviewChecklistPullsFor, markReviewChecklistPullOwed } from "../db/submissionDbService";
 import * as Sentry from "@sentry/electron/main";
 import { getChecklistsForTransaction } from "../db/checklistDbService";
+import { MY_ITEMS_TEMPLATE_ID } from "../db/checklistPrivacy";
 import * as checklistDbModule from "../db/checklistDbService";
 import { sendToMainWindow } from "../../windowRegistry";
 
@@ -1684,5 +1685,123 @@ describe("BACKLOG-3764 — out-of-dates checklist evidence is asked about, never
       expect.objectContaining({ message: "Checklist evidence was not attached at submission" }),
       expect.objectContaining({ tags: expect.objectContaining({ code: "links_not_attached" }) }),
     );
+  });
+});
+
+describe("BACKLOG-3966 — the private checklist never reaches the broker", () => {
+  const transactionDb = jest.requireActual("../db/transactionDbService") as typeof import("../db/transactionDbService");
+  const PRIVATE_TITLE = "Call the lender";
+  const uploadedEmails = () =>
+    fake.tables.submission_messages.filter((m) => m.channel === "email").map((m) => m.local_message_id as string).sort();
+  const uploadedAttachments = () =>
+    fake.tables.submission_attachments.map((a) => a.local_attachment_id as string).sort();
+
+  /**
+   * Nothing writes the private row yet (BACKLOG-3966 PR-2), so it is INSERTed
+   * with the schema.sql columns: one checklist with the reserved template id,
+   * one required unticked item, and the given evidence groups.
+   */
+  function seedPrivate(links: Array<{ kind: "email" | "attachment"; target: string; includeOutsideDates?: boolean }>): void {
+    run(
+      `INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name, sort_order)
+       VALUES ('cl-private', ?, ?, 'My items', 2)`,
+      TX, MY_ITEMS_TEMPLATE_ID,
+    );
+    run(
+      `INSERT INTO transaction_checklist_items (id, checklist_id, title, is_required, is_checked, sort_order)
+       VALUES ('it-private', 'cl-private', ?, 1, 0, 0)`,
+      PRIVATE_TITLE,
+    );
+    links.forEach((l, n) => {
+      run(
+        `INSERT INTO transaction_checklist_links (id, item_id, kind, label, sort_order, include_outside_dates)
+         VALUES (?, 'it-private', ?, ?, ?, ?)`,
+        `lk-private-${n}`, l.kind, `Private ${n}`, n, l.includeOutsideDates ? 1 : 0,
+      );
+      run(
+        `INSERT INTO transaction_checklist_link_members (id, link_id, kind, attachment_id, email_id) VALUES (?, ?, ?, ?, ?)`,
+        `lm-private-${n}`, `lk-private-${n}`, l.kind,
+        l.kind === "attachment" ? l.target : null, l.kind === "email" ? l.target : null,
+      );
+    });
+  }
+
+  async function submitAcceptingPreflight() {
+    const preflight = await submissionService.preflightSubmission(TX);
+    const result = await submissionService.submitTransaction(TX, undefined, {
+      acceptedExclusionKeys: [
+        ...preflight.notIncluded.map((i) => i.key),
+        ...(preflight.checklistLinkGaps ?? []).map((g) => g.key),
+      ],
+    });
+    return { preflight, result };
+  }
+
+  beforeEach(async () => {
+    // e-late: after the closing date, with two files, on the same deal.
+    run(
+      `INSERT INTO emails (id, user_id, external_id, source, account_id, subject, sender, recipients, sent_at, has_attachments)
+       VALUES ('e-late', ?, 'ext-e-late', 'gmail', 'acct', 'Late repair invoice', 'l@example.com', 'a@example.test', '2026-04-10T15:00:00.000Z', 1)`,
+      USER,
+    );
+    run(`INSERT INTO communications (id, user_id, transaction_id, email_id, link_source) VALUES ('c-late', ?, ?, 'e-late', 'manual')`, USER, TX);
+    run(
+      `INSERT INTO attachments (id, email_id, filename, mime_type, storage_path, created_at) VALUES
+         ('att-late', 'e-late', 'invoice.pdf', 'application/pdf', '/attachments/aa01.pdf', '2026-04-10T15:00:00Z')`,
+    );
+    await seedChecklists();
+    await transactionDb.updateTransaction(TX, { started_at: "2026-03-01", closed_at: "2026-03-31", closing_date_verified: 1 } as never);
+  });
+
+  it("C1: the snapshot payload sent to the cloud holds the template checklists only", async () => {
+    seedPrivate([{ kind: "attachment", target: "att-offer" }]);
+    // The agent's own read still has it: the fixture is real.
+    expect((await getChecklistsForTransaction(TX, "agent")).checklists.map((d) => d.checklist.templateName)).toContain("My items");
+    const { result } = await submitAcceptingPreflight();
+    expect(result.success).toBe(true);
+    expect(fake.rpcCalls).toHaveLength(1);
+    const sent = fake.rpcCalls[0].args.p_checklists as SnapshotChecklistPayload[];
+    expect(sent.map((c) => c.template_id)).toEqual([TPL_PURCHASE, TPL_DISCLOSURE]);
+    expect(sent.flatMap((c) => c.items.map((i) => i.title))).not.toContain(PRIVATE_TITLE);
+    expect("checklistsNotSent" in result).toBe(false);
+  });
+
+  it("C1b: the cloud copy, on the submission and on the resubmitted version, has no private checklist", async () => {
+    seedPrivate([{ kind: "attachment", target: "att-offer" }]);
+    const first = (await submitAcceptingPreflight()).result;
+    expect(first.success).toBe(true);
+    fake.tables.transaction_submissions.find((s) => s.id === first.submissionId)!.status = "needs_changes";
+    const again = await resubmitConfirmed();
+    expect(again.success).toBe(true);
+    const versions = new Set(fake.tables.submission_checklists.map((h) => h.submission_id));
+    expect(versions.size).toBe(2);
+    for (const v of versions) {
+      expect(
+        fake.tables.submission_checklists.filter((h) => h.submission_id === v).map((h) => h.template_name),
+      ).toEqual(["Residential Purchase", "Seller Disclosures"]);
+    }
+    expect(fake.tables.submission_checklist_items.map((i) => i.title)).not.toContain(PRIVATE_TITLE);
+  });
+
+  it("C3: a private link outside the dates is not a pre-flight gap", async () => {
+    seedPrivate([{ kind: "email", target: "e-late" }]);
+    const preflight = await submissionService.preflightSubmission(TX);
+    expect((preflight.checklistLinkGaps ?? []).map((g) => g.itemTitle)).not.toContain(PRIVATE_TITLE);
+  });
+
+  it("C5: a flagged private EMAIL link outside the dates is not sent", async () => {
+    seedPrivate([{ kind: "email", target: "e-late", includeOutsideDates: true }]);
+    const { result } = await submitAcceptingPreflight();
+    expect(result.success).toBe(true);
+    expect(uploadedEmails()).toEqual(["e-fwd", "e-inspection", "e-offer"]);
+    expect(uploadedAttachments()).not.toContain("att-late");
+  });
+
+  it("C5b: a flagged private ATTACHMENT link outside the dates is not sent", async () => {
+    seedPrivate([{ kind: "attachment", target: "att-late", includeOutsideDates: true }]);
+    const { result } = await submitAcceptingPreflight();
+    expect(result.success).toBe(true);
+    expect(uploadedAttachments()).toEqual(["att-fwd", "att-offer"]);
+    expect(uploadedEmails()).not.toContain("e-late");
   });
 });
