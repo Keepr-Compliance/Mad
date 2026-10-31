@@ -7,11 +7,15 @@
 
 import { Shield } from 'lucide-react';
 import { Card } from '@keepr/design-system';
-import type { LicenseUtilization as LicenseUtilizationData } from '@/lib/analytics-queries';
+import type { LicenseUtilization as LicenseUtilizationData } from '@/lib/reports/analytics';
+import { SectionFailed } from './SectionFailed';
 
 interface Props {
   data: LicenseUtilizationData[];
+  failed?: boolean;
 }
+
+export const LICENSE_EMPTY_TEXT = 'No organization data available.';
 
 const PLAN_STYLES: Record<string, { badge: string; bar: string }> = {
   trial: {
@@ -34,8 +38,8 @@ function getBarColor(pct: number): string {
   return '';
 }
 
-export function LicenseUtilization({ data }: Props) {
-  if (data.length === 0) {
+export function LicenseUtilization({ data, failed = false }: Props) {
+  if (failed || data.length === 0) {
     return (
       <Card>
         <div className="flex items-center gap-2 mb-4">
@@ -44,9 +48,11 @@ export function LicenseUtilization({ data }: Props) {
             License Utilization
           </h3>
         </div>
-        <p className="text-sm text-gray-500">
-          No organization data available.
-        </p>
+        {failed ? (
+          <SectionFailed section="license" />
+        ) : (
+          <p className="text-sm text-gray-500">{LICENSE_EMPTY_TEXT}</p>
+        )}
       </Card>
     );
   }
@@ -107,6 +113,7 @@ export function LicenseUtilization({ data }: Props) {
           return (
             <div
               key={row.plan}
+              data-plan-row={row.plan}
               className="border border-gray-100 rounded-lg p-4"
             >
               <div className="flex items-center justify-between mb-2">
