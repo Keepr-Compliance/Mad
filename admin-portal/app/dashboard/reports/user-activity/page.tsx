@@ -16,6 +16,7 @@ import { buildUserActivityReport } from '@/lib/reports/user-activity';
 import { REPORTS_BASE_PATH } from '@/lib/reports/registry';
 import { resolvePeriod } from '@/lib/reports/period';
 import type { ParamRecord } from '@/lib/reports/report-url';
+import { resolveUserActivityInitial, USER_ACTIVITY_REPORT_KEY } from '@/lib/reports/user-activity-views';
 import { UserActivityReportClient } from './UserActivityReportClient';
 
 export const dynamic = 'force-dynamic';
@@ -59,14 +60,20 @@ export default async function UserActivityReportPage({
 
   const params = await searchParams;
   const now = new Date();
-  const period = resolvePeriod(
-    {
-      period: typeof params.period === 'string' ? params.period : undefined,
-      from: typeof params.from === 'string' ? params.from : undefined,
-      to: typeof params.to === 'string' ? params.to : undefined,
-    },
-    now
-  );
+  // A bare URL opens the user's default view (filters + time range); any period
+  // param in the URL wins and the views are not read here at all (BACKLOG-4084).
+  const { initialView, periodInput } = await resolveUserActivityInitial(params, async () => {
+    const { data, error } = await supabase.rpc('report_list_saved_views', {
+      p_report_key: USER_ACTIVITY_REPORT_KEY,
+    });
+    if (error) {
+      // The message names the stage only; the error text can carry user data.
+      console.error('[user-activity] saved views read failed; opening without a default view');
+      throw error;
+    }
+    return data;
+  });
+  const period = resolvePeriod(periodInput, now);
 
   const [events, users, devices, memberships, orgs, staff] = await Promise.all([
     getActivityEvents(supabase, period),
@@ -116,6 +123,7 @@ export default async function UserActivityReportPage({
         truncated={events.truncated}
         rowCap={PAGE_SIZE * MAX_PAGES}
         staffExclusionIncomplete={!staff.complete}
+        initialView={initialView}
       />
     </div>
   );
