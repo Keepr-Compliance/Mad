@@ -76,6 +76,7 @@ jest.mock("../../logService", () => ({
 
 import {
   addChecklistLink,
+  addMyItem,
   getChecklistsForTransaction,
   selectChecklistTemplate,
   setChecklistItemChecked,
@@ -258,10 +259,26 @@ async function produce(): Promise<unknown> {
   // att-1 hangs off e-solo-2 so it stays on the transaction.
   run(`DELETE FROM communications WHERE id IN ('cm-3', 'cm-5')`);
 
+  const checklists = stableEnvelope(await getChecklistsForTransaction("txn-1", "agent"));
+  const attachments = getTransactionAllAttachments("txn-1");
+  const emailCommunications = await getCommunicationsWithMessages("txn-1", "email");
+
+  // BACKLOG-3966 U1: the same deal after the agent adds two of their own items
+  // (the private "My items" checklist, created by the first add). The first
+  // has a note and an attachment link, the second is ticked. Read AFTER the
+  // keys above so their normalized ids do not move.
+  const first3966 = await addMyItem("txn-1", "Call lender about rate lock");
+  const second3966 = await addMyItem("txn-1", "Send buyer the HOA docs summary");
+  if (first3966.status !== "added" || second3966.status !== "added") throw new Error("addMyItem refused");
+  await setChecklistItemNote(first3966.itemId, "Ask about the extension cost.");
+  expect((await addChecklistLink({ itemId: first3966.itemId, kind: "attachment", targetIds: ["att-1"] })).status).toBe("added");
+  await setChecklistItemChecked(second3966.itemId, true);
+
   return normalize({
-    checklists: stableEnvelope(await getChecklistsForTransaction("txn-1", "agent")),
-    attachments: getTransactionAllAttachments("txn-1"),
-    emailCommunications: await getCommunicationsWithMessages("txn-1", "email"),
+    checklists,
+    attachments,
+    emailCommunications,
+    checklistsWithMyItems: stableEnvelope(await getChecklistsForTransaction("txn-1", "agent")),
   });
 }
 

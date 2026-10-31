@@ -28,14 +28,16 @@
  *   checklist's ticks, notes or links.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { checklistService } from "../../../services/checklistService";
+import { checklistService, type ChecklistWriteApiResult } from "../../../services/checklistService";
 import type { ApiResult } from "../../../services";
 import logger from "../../../utils/logger";
 import { logOpenPath, nowMs } from "../../../utils/openPathTiming";
 import type {
   AddChecklistLinkResult,
+  AddMyItemResult,
   ChecklistLinkWriteKind,
   ChecklistsForTransaction,
+  ReorderMyItemsResult,
   SelectChecklistTemplateResult,
 } from "../../../../electron/types/checklist";
 
@@ -74,9 +76,12 @@ export interface UseTransactionChecklistResult {
   refresh: () => Promise<void>;
   /** Items whose tick is being written right now. */
   pendingItemIds: ReadonlySet<string>;
-  /** `null` when refused because the item already has a write in flight. */
-  setItemChecked: (itemId: string, checked: boolean) => Promise<ApiResult<boolean> | null>;
-  setItemNote: (itemId: string, note: string | null) => Promise<ApiResult<boolean>>;
+  /**
+   * `null` when refused because the item already has a write in flight.
+   * BACKLOG-3966: a lock refusal keeps main's `dealLocked` / `refusedEdit`.
+   */
+  setItemChecked: (itemId: string, checked: boolean) => Promise<ChecklistWriteApiResult<boolean> | null>;
+  setItemNote: (itemId: string, note: string | null) => Promise<ChecklistWriteApiResult<boolean>>;
   /** Add a checklist. Never replaces or removes one already there. */
   addChecklist: (templateId: string) => Promise<ApiResult<SelectChecklistTemplateResult>>;
   /** Link each request as its own group, in order, then reload once. */
@@ -84,6 +89,15 @@ export interface UseTransactionChecklistResult {
   removeLink: (linkId: string) => Promise<ApiResult<boolean>>;
   /** Take one checklist off the transaction. Never gated in main. */
   removeChecklist: (checklistId: string) => Promise<ApiResult<boolean>>;
+  /**
+   * BACKLOG-3966 U1: the agent's own items ("My items") on THIS deal. Never
+   * plan-gated; main refuses each on a locked deal. The first add creates the
+   * private checklist. Each is one write, then one `get`.
+   */
+  addMyItem: (title: string) => Promise<ChecklistWriteApiResult<AddMyItemResult>>;
+  renameMyItem: (itemId: string, title: string) => Promise<ChecklistWriteApiResult<boolean>>;
+  reorderMyItems: (itemIds: string[]) => Promise<ChecklistWriteApiResult<ReorderMyItemsResult>>;
+  removeMyItem: (itemId: string) => Promise<ChecklistWriteApiResult<boolean>>;
 }
 
 interface StoredState {
@@ -189,7 +203,7 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
   );
 
   const setItemChecked = useCallback(
-    async (itemId: string, checked: boolean): Promise<ApiResult<boolean> | null> => {
+    async (itemId: string, checked: boolean): Promise<ChecklistWriteApiResult<boolean> | null> => {
       if (pendingRef.current.has(itemId)) return null;
       pendingRef.current.add(itemId);
       setPendingItemIds(new Set(pendingRef.current));
@@ -253,6 +267,40 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
     [afterWrite],
   );
 
+  // BACKLOG-3966 U1: each names the deal the screen shows NOW; main scopes the
+  // write to that deal's private checklist.
+  const addMyItem = useCallback(
+    (title: string) => {
+      const forId = currentIdRef.current;
+      return afterWrite(forId, () => checklistService.addMyItem(forId, title));
+    },
+    [afterWrite],
+  );
+
+  const renameMyItem = useCallback(
+    (itemId: string, title: string) => {
+      const forId = currentIdRef.current;
+      return afterWrite(forId, () => checklistService.renameMyItem(forId, itemId, title));
+    },
+    [afterWrite],
+  );
+
+  const reorderMyItems = useCallback(
+    (itemIds: string[]) => {
+      const forId = currentIdRef.current;
+      return afterWrite(forId, () => checklistService.reorderMyItems(forId, itemIds));
+    },
+    [afterWrite],
+  );
+
+  const removeMyItem = useCallback(
+    (itemId: string) => {
+      const forId = currentIdRef.current;
+      return afterWrite(forId, () => checklistService.removeMyItem(forId, itemId));
+    },
+    [afterWrite],
+  );
+
   // An answer stored for a different transaction is not an answer for this one.
   // Covers the render between the new id arriving and the effect resetting the
   // store — without it that frame paints A's checklist under B's header.
@@ -270,6 +318,10 @@ export function useTransactionChecklist(transactionId: string): UseTransactionCh
     addLinks,
     removeLink,
     removeChecklist,
+    addMyItem,
+    renameMyItem,
+    reorderMyItems,
+    removeMyItem,
   };
 }
 

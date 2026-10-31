@@ -21,6 +21,13 @@
  * (chooser, Add checklist, ticks and links on template items); the empty panel
  * is where U1 puts the My items section.
  *
+ * BACKLOG-3966 U1: the agent's private checklist (`isPrivate`, "My items") is
+ * taken out of the list and drawn first, by `MyItemsSection`, on every plan —
+ * editable unless the deal is locked. Every row of the table above is about
+ * the TEMPLATE checklists only ("none" = no template checklist, whatever My
+ * items holds); the chooser now sits under My items instead of filling the
+ * tab. The summed progress is main's and includes My items.
+ *
  * BACKLOG-3476 round 2: there is no Change. A checklist already on the
  * transaction can only be taken off with Remove; Add and Remove together do
  * what Change did.
@@ -65,6 +72,8 @@ import { ChecklistTemplateChooser } from "./ChecklistTemplateChooser";
 import { ChecklistProgress } from "./ChecklistProgress";
 import { ChecklistSection } from "./ChecklistSection";
 import { ChecklistLinkPicker } from "./ChecklistLinkPicker";
+import { MyItemsSection } from "./MyItemsSection";
+import { templateChecklistHint } from "../../../../utils/checklistPlanHint";
 import { linkableThreads, threadForLink } from "../../utils/checklistLinks";
 
 export interface TransactionChecklistTabProps {
@@ -122,14 +131,18 @@ export function TransactionChecklistTab({
   const [pickerItem, setPickerItem] = useState<ChecklistItem | null>(null);
 
   const details = useMemo(() => data?.checklists ?? [], [data]);
+  // BACKLOG-3966 U1: My items apart from the template checklists. Every plan
+  // and lock decision below about "checklists" is about `templateDetails`.
+  const privateDetail = useMemo(() => details.find((d) => d.checklist.isPrivate) ?? null, [details]);
+  const templateDetails = useMemo(() => details.filter((d) => !d.checklist.isPrivate), [details]);
 
   // Q2: each section's first state, decided ONCE per checklist id when its
   // data first arrives, then only the user's toggle changes it.
   const [initialExpanded, setInitialExpanded] = useState<Record<string, boolean>>({});
   const [toggledExpanded, setToggledExpanded] = useState<Record<string, boolean>>({});
   const unseen = useMemo(
-    () => details.filter((d) => !(d.checklist.id in initialExpanded)),
-    [details, initialExpanded],
+    () => templateDetails.filter((d) => !(d.checklist.id in initialExpanded)),
+    [templateDetails, initialExpanded],
   );
   useEffect(() => {
     if (unseen.length === 0) return;
@@ -189,8 +202,8 @@ export function TransactionChecklistTab({
   const attachmentsById = useMemo(() => new Map(attachments.map((a) => [a.id, a])), [attachments]);
   const threads = useMemo(() => linkableThreads(emailCommunications), [emailCommunications]);
   const templateIdsOnTransaction = useMemo(
-    () => new Set(details.map((d) => d.checklist.templateId)),
-    [details],
+    () => new Set(templateDetails.map((d) => d.checklist.templateId)),
+    [templateDetails],
   );
 
   // A thread chip names its participants from the Emails list. Load it
@@ -330,27 +343,30 @@ export function TransactionChecklistTab({
     );
   }
 
-  if (!readOnly && (chooser || details.length === 0)) {
-    // ONE render site, so the chooser is never remounted mid-batch when the
-    // first add turns "pick" into "add". Templates already on this
-    // transaction cannot be added again.
-    return (
-      <ChecklistTemplateChooser
-        mode={details.length === 0 ? "pick" : "add"}
-        disabledTemplateIds={templateIdsOnTransaction}
-        onAdd={handleAddOne}
-        onAllAdded={() => setChooser(null)}
-        onSomeNotAdded={handleSomeNotAdded}
-        onCancel={details.length > 0 ? () => setChooser(null) : undefined}
-        busy={busy}
-        refreshKey={templatesRefreshKey}
-      />
-    );
-  }
+  // ONE render site, so the chooser is never remounted mid-batch when the
+  // first add turns "pick" into "add". Templates already on this transaction
+  // cannot be added again. BACKLOG-3966 U1: it sits under My items.
+  const showChooser = !readOnly && (chooser !== null || templateDetails.length === 0);
+  const chooserElement = showChooser ? (
+    <ChecklistTemplateChooser
+      mode={templateDetails.length === 0 ? "pick" : "add"}
+      disabledTemplateIds={templateIdsOnTransaction}
+      onAdd={handleAddOne}
+      onAllAdded={() => setChooser(null)}
+      onSomeNotAdded={handleSomeNotAdded}
+      onCancel={templateDetails.length > 0 ? () => setChooser(null) : undefined}
+      busy={busy}
+      refreshKey={templatesRefreshKey}
+    />
+  ) : null;
 
   const pickerDetail = pickerItem
     ? details.find((d) => d.checklist.id === pickerItem.checklistId) ?? null
     : null;
+  // BACKLOG-3966 U1 (A): a My item links on every plan; a template item only
+  // when the plan allows checklists. No item links on a locked deal.
+  const pickerAllowed = !!pickerDetail && !locked && (!planReadOnly || pickerDetail.checklist.isPrivate);
+  const hint = templateChecklistHint(gate);
 
   return (
     <div data-testid="checklist-panel">
@@ -361,14 +377,12 @@ export function TransactionChecklistTab({
         >
           {lockedTooltip} Checklists can&rsquo;t be changed.
         </div>
-      ) : planReadOnly && details.length === 0 ? (
+      ) : planReadOnly && templateDetails.length === 0 ? (
         <div
           className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-600"
           data-testid="checklist-template-hint"
         >
-          {gate === "blocked"
-            ? "Template checklists aren’t on your plan."
-            : "We couldn’t confirm your plan just now."}
+          {hint}
         </div>
       ) : readOnly && (
         <div
@@ -383,7 +397,7 @@ export function TransactionChecklistTab({
 
       <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
         <h4 className="text-lg font-semibold text-gray-900">Checklists</h4>
-        {!planReadOnly && (
+        {!planReadOnly && !showChooser && (
           <button
             type="button"
             onClick={() => setChooser({ mode: "add" })}
@@ -406,11 +420,35 @@ export function TransactionChecklistTab({
           data-testid="checklist-total-progress"
         >
           <ChecklistProgress requiredDone={data.requiredDone} requiredTotal={data.requiredTotal} />
+          {privateDetail && privateDetail.requiredTotal > 0 && (
+            <p className="mt-1 text-xs text-gray-500" data-testid="checklist-total-my-items">
+              {`includes ${privateDetail.requiredDone} of ${privateDetail.requiredTotal} of your items`}
+            </p>
+          )}
         </div>
       )}
 
       <div className="flex flex-col gap-4">
-        {details.map((detail) => (
+        <MyItemsSection
+          detail={privateDetail}
+          locked={locked}
+          lockedTooltip={lockedTooltip}
+          chooserShowing={showChooser}
+          pendingItemIds={checklist.pendingItemIds}
+          attachmentsById={attachmentsById}
+          threads={threads}
+          viewer={viewer}
+          onAdd={checklist.addMyItem}
+          onRename={checklist.renameMyItem}
+          onReorder={checklist.reorderMyItems}
+          onRemove={checklist.removeMyItem}
+          onSetChecked={checklist.setItemChecked}
+          onSaveNote={handleSaveNote}
+          onOpenPicker={setPickerItem}
+          onRemoveLink={handleRemoveLink}
+        />
+        {chooserElement}
+        {!showChooser && templateDetails.map((detail) => (
           <ChecklistSection
             key={detail.checklist.id}
             detail={detail}
@@ -443,7 +481,7 @@ export function TransactionChecklistTab({
         />
       )}
 
-      {pickerItem && pickerDetail && !readOnly && (
+      {pickerItem && pickerDetail && pickerAllowed && (
         <ChecklistLinkPicker
           item={pickerItem}
           templateName={pickerDetail.checklist.templateName}
