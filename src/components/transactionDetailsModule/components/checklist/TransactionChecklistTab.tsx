@@ -10,9 +10,16 @@
  * |-----------|------------|-------------------------------------------------------|
  * | allowed   | none       | template chooser                                     |
  * | allowed   | 1+         | summed progress, Add checklist; each section: Remove |
+ * | blocked   | none       | empty panel + template-checklists hint               |
  * | blocked   | 1+         | read-only + notice; each section: Remove only        |
+ * | unknown   | none       | empty panel + "couldn't confirm your plan" notice    |
  * | unknown   | 1+         | read-only + notice                                   |
- * | pending / blocked / unknown with none: the tab is not shown at all                  |
+ * | pending: the tab is not shown at all                                              |
+ *
+ * BACKLOG-3966 PR-3: the tab shows on every plan, because My items (U1) need
+ * no plan. Without the plan, only the template-checklist actions are withheld
+ * (chooser, Add checklist, ticks and links on template items); the empty panel
+ * is where U1 puts the My items section.
  *
  * BACKLOG-3476 round 2: there is no Change. A checklist already on the
  * transaction can only be taken off with Remove; Add and Remove together do
@@ -323,11 +330,6 @@ export function TransactionChecklistTab({
     );
   }
 
-  // Without the plan there is nothing to start; with none on the transaction
-  // the tab is hidden in that case, so this only guards a render between two
-  // answers.
-  if (details.length === 0 && planReadOnly) return null;
-
   if (!readOnly && (chooser || details.length === 0)) {
     // ONE render site, so the chooser is never remounted mid-batch when the
     // first add turns "pick" into "add". Templates already on this
@@ -359,6 +361,15 @@ export function TransactionChecklistTab({
         >
           {lockedTooltip} Checklists can&rsquo;t be changed.
         </div>
+      ) : planReadOnly && details.length === 0 ? (
+        <div
+          className="mb-4 p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-600"
+          data-testid="checklist-template-hint"
+        >
+          {gate === "blocked"
+            ? "Template checklists aren’t on your plan."
+            : "We couldn’t confirm your plan just now."}
+        </div>
       ) : readOnly && (
         <div
           className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800"
@@ -389,7 +400,7 @@ export function TransactionChecklistTab({
         )}
       </div>
 
-      {data && (
+      {data && details.length > 0 && (
         <div
           className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 mb-6"
           data-testid="checklist-total-progress"
