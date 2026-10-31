@@ -127,7 +127,7 @@ function dealWithOneOpenItem(dealId: string, opts: DealOpts = {}): string {
 }
 
 const read = (userId = USER, limit = OPEN_REQUIRED_ITEMS_MAX_LIMIT) =>
-  listOpenRequiredChecklistItems(userId, LOCKED_SUBMISSION_STATUSES, limit);
+  listOpenRequiredChecklistItems(userId, LOCKED_SUBMISSION_STATUSES, limit, "all");
 const dealIds = async (userId = USER) => (await read(userId)).items.map((r) => r.transactionId);
 
 beforeEach(() => {
@@ -312,13 +312,13 @@ describe("BACKLOG-3965 Todo read — order, count and the empty answer", () => {
   });
 
   it("refuses to read with no locked status rather than treat every deal as open", () => {
-    expect(() => listOpenRequiredChecklistItems(USER, [], 5)).toThrow(/no locked status/);
+    expect(() => listOpenRequiredChecklistItems(USER, [], 5, "all")).toThrow(/no locked status/);
   });
 
   it("the plan reaches deals through the user and items through their checklist — no full scan of items or checklists", () => {
     const plan = (
       db
-        .prepare(`EXPLAIN QUERY PLAN ${listOpenRequiredItemsSql(LOCKED_SUBMISSION_STATUSES.length)}`)
+        .prepare(`EXPLAIN QUERY PLAN ${listOpenRequiredItemsSql(LOCKED_SUBMISSION_STATUSES.length, "all")}`)
         .all(USER, ...LOCKED_SUBMISSION_STATUSES, 5) as Array<{ detail: string }>
     ).map((r) => r.detail);
     const text = plan.join("\n");

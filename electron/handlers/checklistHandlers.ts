@@ -1,26 +1,40 @@
 /**
  * Transaction checklist IPC — BACKLOG-3475.
  *
- * Thirteen channels over the local tables PR-A created and the broker templates
+ * Seventeen channels over the local tables PR-A created and the broker templates
  * `checklistTemplateService` reads from the cloud (nine from BACKLOG-3475, two
  * from BACKLOG-3617: `can-edit-templates`, `open-templates-portal`; one from
  * BACKLOG-3764: `include-link-outside-dates`; one from BACKLOG-3965:
- * `list-open-required`).
+ * `list-open-required`; four from BACKLOG-3966, registered from
+ * `checklistMyItemsHandlers.ts`: `add-my-item`, `rename-my-item`,
+ * `reorder-my-items`, `remove-my-item`).
  *
- * ## Which channels are gated, and why the other four are not
+ * ## The plan gate is per checklist (BACKLOG-3966)
  *
- * NINE of the thirteen call {@link isChecklistsAllowed} before any read or write:
- * `list-templates`, `select-template`, `set-item-checked`, `set-item-note`,
- * `add-link`, `remove-link`, `include-link-outside-dates`,
- * `can-edit-templates`, `list-open-required`.
+ * The agent's own checklist ("My items", `checklistPrivacy.ts`) works on EVERY
+ * plan (founder decision on 3966); template checklists keep the
+ * `transaction_checklists` feature gate. So:
  *
- * `list-open-required` (the Dashboard's Todo list, BACKLOG-3965) is a read and
- * is gated anyway: the unhide rule below protects a user's view of HIS OWN
- * transaction, which `checklists:get` still serves ungated. A cross-deal
- * list of work still to do is a feature surface, hidden when the plan does not
- * include checklists, so main refuses it too rather than trusting the panel.
+ * - Always gated (they are about broker templates): `list-templates`,
+ *   `select-template`, `can-edit-templates`.
+ * - Gated per checklist through {@link planAllowsChecklistTarget}: an item or
+ *   group on the private checklist passes on any plan; one on a template
+ *   checklist needs the plan. `set-item-checked`, `set-item-note`, `add-link`,
+ *   `remove-link`.
+ * - `include-link-outside-dates`: a template group needs the plan; a private
+ *   group is refused on every plan (nothing private is sent, so the flag would
+ *   mean nothing — {@link MY_ITEMS_NOT_SENT_ERROR}).
+ * - `list-open-required` (the Dashboard's Todo list, BACKLOG-3965) answers on
+ *   every plan, scoped: the agent's own items always, template items only when
+ *   the plan allows. Before 3966 it was refused outright on a plan without
+ *   checklists.
+ * - The four My-items channels are never plan-gated: SQL scopes every one of
+ *   them to the deal's private checklist.
  *
- * FOUR do not. `checklists:open-templates-portal` (BACKLOG-3617) reads and
+ * Every write, private or not, is still refused on a LOCKED deal
+ * (BACKLOG-3910 slice d; SR plan review ruling 4 for My items).
+ *
+ * Of the rest, FOUR were never gated. `checklists:open-templates-portal` (BACKLOG-3617) reads and
  * writes nothing; the portal gates its own page. The other three:
  * `checklists:get` and `checklists:remove` are the unhide rule spelled out
  * in `electron/types/featureGate.ts`: a user whose plan later loses
@@ -32,7 +46,8 @@
  * Do not take that split from this paragraph. It is asserted by execution in
  * `checklistHandlers-3475.test.ts` ("the gated and ungated sets, by
  * execution"), which invokes every registered `checklists:` channel with the
- * plan unreadable and partitions them by what each one answers — so a twelfth
+ * plan unreadable and partitions them by what each one answers (template
+ * targets there; the private side is `checklistMyItems-3966.test.ts`) — so a new
  * channel, or a gate added or dropped, reds a test rather than leaving a
  * sentence to be trusted.
  *
@@ -91,9 +106,10 @@ import {
 } from "../services/db/checklistDbService";
 import logService from "../services/logService";
 import {
-  getChecklistItemTransactionId,
-  getChecklistLinkTransactionId,
+  getChecklistItemScope,
+  getChecklistLinkScope,
   refuseIfDealLocked,
+  type ChecklistTargetScope,
 } from "../services/dealLockState";
 import supabaseService from "../services/supabaseService";
 import {
@@ -116,6 +132,7 @@ import { ValidationError } from "../utils/validation";
 // says why, and `checklistHandlers-3475.test.ts` ("the gated and ungated sets,
 // by execution") asserts the split. Nothing here may name the feature key.
 import { isChecklistsAllowed, resolveOrgIdOrRefusal } from "./featureGateHandlers";
+import { registerChecklistMyItemsHandlers } from "./checklistMyItemsHandlers";
 import type {
   AddChecklistLinkResult,
   ChecklistsForTransaction,
@@ -214,6 +231,13 @@ export const CHECKLISTS_PORTAL_URL_REFUSED_ERROR =
 /** BACKLOG-3617: the address was allowed, but the browser could not be opened. */
 export const CHECKLISTS_PORTAL_OPEN_FAILED_ERROR =
   "The browser couldn't be opened.";
+
+/**
+ * BACKLOG-3966: "Include it" asked of a group on the agent's own checklist.
+ * Nothing private is ever sent, so there is nothing to include.
+ */
+export const MY_ITEMS_NOT_SENT_ERROR =
+  "Your own items are never sent to your broker, so there is nothing to include.";
 
 /** The requested template is not in the listing (archived, deleted, or renamed away). */
 export const CHECKLIST_TEMPLATE_NOT_FOUND_ERROR =
@@ -348,10 +372,20 @@ function recordChecklistActFailure(
  * write that follows matches no row either, so nothing is written.
  */
 function refuseIfChecklistDealLocked(
-  transactionId: string | null,
+  scope: ChecklistTargetScope | null,
   edit: Parameters<typeof refuseIfDealLocked>[1],
 ): ReturnType<typeof refuseIfDealLocked> {
-  return transactionId ? refuseIfDealLocked(transactionId, edit) : null;
+  return scope ? refuseIfDealLocked(scope.transactionId, edit) : null;
+}
+
+/**
+ * BACKLOG-3966: the per-checklist plan rule — the ONE place it is decided. An
+ * item or group on the agent's own checklist passes on every plan; anything
+ * else (a template checklist, or an id with no row) needs the plan.
+ */
+async function planAllowsChecklistTarget(scope: ChecklistTargetScope | null): Promise<boolean> {
+  if (scope?.isPrivate === true) return true;
+  return isChecklistsAllowed();
 }
 
 // ---------------------------------------------------------------------------
@@ -486,7 +520,8 @@ export function registerChecklistHandlers(): void {
    *
    * **Not gated.** A local read of the user's own rows, and 3476 has to be able
    * to render a checklist in order to explain why it is stale to someone whose
-   * plan no longer carries the feature.
+   * plan no longer carries the feature. BACKLOG-3966: it therefore also serves
+   * the agent's own checklist on every plan (`isPrivate` set in `toChecklist`).
    */
   ipcMain.handle(
     "checklists:get",
@@ -505,11 +540,12 @@ export function registerChecklistHandlers(): void {
    * item on this user's active, unlocked deals, with each deal's required
    * done/total summed across all its checklists.
    *
-   * Gated (the header says why). Ticking a row is `checklists:set-item-checked`
-   * below, which refuses a locked deal and checks the plan; there is no
-   * second write path.
-   *
-   * No renderer caller until BACKLOG-3965 PR-4b (the Dashboard Todo panel).
+   * BACKLOG-3966: scoped per checklist, never refused for the plan. On a plan
+   * with checklists every checklist counts; on one without, only the agent's
+   * own items are listed (template items are not). The deal ring on each row
+   * stays the deal's whole total — the number its Checklist tab shows. Ticking
+   * a row is `checklists:set-item-checked` below, which refuses a locked deal
+   * and applies the same per-checklist rule; there is no second write path.
    */
   ipcMain.handle(
     "checklists:list-open-required",
@@ -519,14 +555,13 @@ export function registerChecklistHandlers(): void {
         payload: unknown,
       ): Promise<ListOpenRequiredChecklistItemsResult> => {
         const args = parseArgs(ListOpenRequiredChecklistItemsArgsSchema, payload, "payload");
-        if (!(await isChecklistsAllowed())) {
-          return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
-        }
+        const scope = (await isChecklistsAllowed()) ? "all" : "private";
         const lockedStatuses = LOCKED_SUBMISSION_STATUSES;
         const result = await listOpenRequiredChecklistItems(
           args.userId,
           lockedStatuses,
           args.limit ?? OPEN_REQUIRED_ITEMS_MAX_LIMIT,
+          scope,
         );
         return { success: true, result };
       },
@@ -539,9 +574,10 @@ export function registerChecklistHandlers(): void {
     wrapHandler(
       async (_event: IpcMainInvokeEvent, payload: unknown): Promise<ChecklistWriteResponse> => {
         const args = parseArgs(SetChecklistItemCheckedArgsSchema, payload, "payload");
-        const lockedRefusal = refuseIfChecklistDealLocked(getChecklistItemTransactionId(args.itemId), "tick-checklist-item");
+        const scope = getChecklistItemScope(args.itemId);
+        const lockedRefusal = refuseIfChecklistDealLocked(scope, "tick-checklist-item");
         if (lockedRefusal) return lockedRefusal;
-        if (!(await isChecklistsAllowed())) {
+        if (!(await planAllowsChecklistTarget(scope))) {
           return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
         }
         const changed = await setChecklistItemChecked(args.itemId, args.checked);
@@ -556,9 +592,10 @@ export function registerChecklistHandlers(): void {
     wrapHandler(
       async (_event: IpcMainInvokeEvent, payload: unknown): Promise<ChecklistWriteResponse> => {
         const args = parseArgs(SetChecklistItemNoteArgsSchema, payload, "payload");
-        const lockedRefusal = refuseIfChecklistDealLocked(getChecklistItemTransactionId(args.itemId), "edit-checklist-note");
+        const scope = getChecklistItemScope(args.itemId);
+        const lockedRefusal = refuseIfChecklistDealLocked(scope, "edit-checklist-note");
         if (lockedRefusal) return lockedRefusal;
-        if (!(await isChecklistsAllowed())) {
+        if (!(await planAllowsChecklistTarget(scope))) {
           return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
         }
         const changed = await setChecklistItemNote(args.itemId, args.note);
@@ -580,9 +617,10 @@ export function registerChecklistHandlers(): void {
     wrapHandler(
       async (_event: IpcMainInvokeEvent, payload: unknown): Promise<AddChecklistLinkResponse> => {
         const args = parseArgs(AddChecklistLinkArgsSchema, payload, "payload");
-        const lockedRefusal = refuseIfChecklistDealLocked(getChecklistItemTransactionId(args.itemId), "link-checklist-item");
+        const scope = getChecklistItemScope(args.itemId);
+        const lockedRefusal = refuseIfChecklistDealLocked(scope, "link-checklist-item");
         if (lockedRefusal) return lockedRefusal;
-        if (!(await isChecklistsAllowed())) {
+        if (!(await planAllowsChecklistTarget(scope))) {
           return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
         }
         const result = await addChecklistLink({
@@ -609,6 +647,10 @@ export function registerChecklistHandlers(): void {
         const args = parseArgs(IncludeChecklistLinkOutsideDatesArgsSchema, payload, "payload");
         const lockedRefusal = refuseIfDealLocked(args.transactionId, "include-outside-dates");
         if (lockedRefusal) return lockedRefusal;
+        // BACKLOG-3966: never on the agent's own checklist, on any plan.
+        if (getChecklistLinkScope(args.linkId)?.isPrivate === true) {
+          return { success: false, error: MY_ITEMS_NOT_SENT_ERROR };
+        }
         if (!(await isChecklistsAllowed())) {
           return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
         }
@@ -624,9 +666,10 @@ export function registerChecklistHandlers(): void {
     wrapHandler(
       async (_event: IpcMainInvokeEvent, payload: unknown): Promise<ChecklistWriteResponse> => {
         const args = parseArgs(RemoveChecklistLinkArgsSchema, payload, "payload");
-        const lockedRefusal = refuseIfChecklistDealLocked(getChecklistLinkTransactionId(args.linkId), "unlink-checklist-item");
+        const scope = getChecklistLinkScope(args.linkId);
+        const lockedRefusal = refuseIfChecklistDealLocked(scope, "unlink-checklist-item");
         if (lockedRefusal) return lockedRefusal;
-        if (!(await isChecklistsAllowed())) {
+        if (!(await planAllowsChecklistTarget(scope))) {
           return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
         }
         const changed = await removeChecklistLink(args.linkId);
@@ -642,6 +685,10 @@ export function registerChecklistHandlers(): void {
    *
    * **Not gated, on the unhide rule.** A user whose plan stops including
    * checklists must still be able to clear one off his own transaction.
+   *
+   * BACKLOG-3966: never the agent's own checklist. The delete statement does
+   * not match it, so this answers `changed: false` and writes no audit entry;
+   * its items are taken off one at a time through `remove-my-item`.
    */
   ipcMain.handle(
     "checklists:remove",
@@ -756,4 +803,8 @@ export function registerChecklistHandlers(): void {
       { module: "Checklists" },
     ),
   );
+
+  // BACKLOG-3966: the agent's own items. Registered from here so every sweep
+  // over this module's channels sees them.
+  registerChecklistMyItemsHandlers();
 }

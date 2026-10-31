@@ -44,13 +44,19 @@ import { randomUUID } from "crypto";
 
 import { dbAll, dbGet, dbRun, dbTransaction } from "./core/dbConnection";
 import { auditPeriodFromRow } from "../submissionAuditPeriod";
-import { isPrivateChecklist, type ChecklistAudience } from "./checklistPrivacy";
+import {
+  isPrivateChecklist,
+  MY_ITEMS_TEMPLATE_ID,
+  MY_ITEMS_TEMPLATE_NAME,
+  type ChecklistAudience,
+} from "./checklistPrivacy";
 import { auditWindowEnd } from "../exportPlan";
 import {
   attachmentLabelSql,
   countOpenRequiredItemsSql,
   DELETE_CHECKLIST_IN_TRANSACTION_SQL,
   DELETE_CHECKLIST_LINK_SQL,
+  DELETE_PRIVATE_ITEM_SQL,
   emailLabelSql,
   GET_CHECKLIST_BY_TEMPLATE_SQL,
   GET_CHECKLIST_IN_TRANSACTION_SQL,
@@ -63,25 +69,32 @@ import {
   GET_CHECKLISTS_BY_TRANSACTION_SQL,
   GET_BROKER_CHECKLISTS_BY_TRANSACTION_SQL,
   GET_ITEM_CONTEXT_SQL,
+  GET_PRIVATE_ITEM_IDS_SQL,
   GET_TRANSACTION_AUDIT_DATES_SQL,
   INSERT_ATTACHMENT_MEMBER_SQL,
   INSERT_CHECKLIST_ITEM_SQL,
   INSERT_CHECKLIST_LINK_SQL,
   INSERT_CHECKLIST_SQL,
   INSERT_EMAIL_MEMBER_SQL,
+  INSERT_PRIVATE_CHECKLIST_SQL,
   listOpenRequiredItemsSql,
   NEXT_CHECKLIST_SORT_ORDER_SQL,
+  NEXT_ITEM_SORT_ORDER_SQL,
   NEXT_LINK_SORT_ORDER_SQL,
   outsideAuditDatesSql,
+  RENAME_PRIVATE_ITEM_SQL,
   SET_LINK_INCLUDE_OUTSIDE_DATES_SQL,
   SET_CHECKLIST_ITEM_CHECKED_SQL,
   SET_CHECKLIST_ITEM_NOTE_SQL,
+  SET_ITEM_SORT_ORDER_SQL,
   targetsInTransactionSql,
   TRANSACTION_EXISTS_SQL,
+  type OpenRequiredItemsScope,
 } from "./checklistSql";
 import type {
   AddChecklistLinkInput,
   AddChecklistLinkResult,
+  AddMyItemResult,
   ChecklistDetail,
   ChecklistExportTargets,
   ChecklistItem,
@@ -90,6 +103,7 @@ import type {
   ChecklistLinkMember,
   ChecklistsForTransaction,
   OutsideAuditDatesTarget,
+  ReorderMyItemsResult,
   SelectChecklistTemplateInput,
   SelectChecklistTemplateResult,
   TransactionChecklist,
@@ -263,8 +277,10 @@ export function removeChecklistSync(
 ): TransactionChecklist | null {
   const row = dbGet<ChecklistRow>(GET_CHECKLIST_IN_TRANSACTION_SQL, [checklistId, transactionId]);
   if (!row) return null;
-  dbRun(DELETE_CHECKLIST_IN_TRANSACTION_SQL, [row.id, transactionId]);
-  return toChecklist(row);
+  // BACKLOG-3966: the delete statement never matches the private checklist
+  // ("My items"), so it reports nothing removed and no audit entry follows.
+  const deleted = dbRun(DELETE_CHECKLIST_IN_TRANSACTION_SQL, [row.id, transactionId]);
+  return deleted.changes > 0 ? toChecklist(row) : null;
 }
 
 /**
@@ -324,10 +340,15 @@ export function applyReviewChecklistPull(
     for (const templateId of removeTemplateIds) {
       const existing = dbGet<{ id: string }>(GET_CHECKLIST_BY_TEMPLATE_SQL, [transactionId, templateId]);
       if (!existing) continue;
-      dbRun(DELETE_CHECKLIST_IN_TRANSACTION_SQL, [existing.id, transactionId]);
-      applied.removedTemplateIds.push(templateId);
+      // BACKLOG-3966: the delete statement never matches the private checklist.
+      const deleted = dbRun(DELETE_CHECKLIST_IN_TRANSACTION_SQL, [existing.id, transactionId]);
+      if (deleted.changes > 0) applied.removedTemplateIds.push(templateId);
     }
     for (const add of adds) {
+      // BACKLOG-3966: a pull never writes into the private checklist. The cloud
+      // never holds the reserved id (it is never sent), so this is a guard,
+      // not a path expected to run.
+      if (isPrivateChecklist(add.templateId)) continue;
       const outcome = insertTemplateChecklist({ ...add, transactionId });
       if (outcome.status === "added") applied.addedTemplateIds.push(add.templateId);
       else if (outcome.status === "exists") applied.existing++;
@@ -444,11 +465,17 @@ export function setChecklistItemNote(itemId: string, note: string | null): Promi
  */
 export function addChecklistLink(input: AddChecklistLinkInput): Promise<AddChecklistLinkResult> {
   const result = dbTransaction<AddChecklistLinkResult>(() => {
-    const context = dbGet<{ item_id: string; checklist_id: string; transaction_id: string }>(
-      GET_ITEM_CONTEXT_SQL,
-      [input.itemId],
-    );
+    const context = dbGet<{
+      item_id: string;
+      checklist_id: string;
+      transaction_id: string;
+      template_id: string;
+    }>(GET_ITEM_CONTEXT_SQL, [input.itemId]);
     if (!context) return { status: "no_item" };
+    // BACKLOG-3966: the private checklist is never sent, so its evidence is
+    // never asked "outside the audit dates?" and never flagged to be sent
+    // anyway: `include_outside_dates` stays 0 on every private link.
+    const privateItem = isPrivateChecklist(context.template_id);
 
     const targetIds = [...new Set(input.targetIds)];
     if (targetIds.length === 0) {
@@ -473,7 +500,9 @@ export function addChecklistLink(input: AddChecklistLinkInput): Promise<AddCheck
       GET_TRANSACTION_AUDIT_DATES_SQL,
       [context.transaction_id],
     );
-    const outside = outsideAuditDates(input.kind, targetIds, dates?.started_at, dates?.closed_at);
+    const outside = privateItem
+      ? []
+      : outsideAuditDates(input.kind, targetIds, dates?.started_at, dates?.closed_at);
     if (outside.length > 0 && input.includeOutsideDates !== true) {
       return {
         status: "outside_dates",
@@ -662,6 +691,120 @@ export function getChecklistExportTargets(
 }
 
 // ---------------------------------------------------------------------------
+// The private checklist ("My items") — BACKLOG-3966 PR-2
+// ---------------------------------------------------------------------------
+//
+// Every write below names the deal AND is scoped in SQL to that deal's private
+// checklist, so an id that belongs to a template checklist (or to another
+// deal) matches no row and nothing changes. Every item is written
+// `is_required = 1`: the agent-side counts (Checklist tab total, Recent ring,
+// Todo) are required counts, and every one of the agent's own items counts
+// (SR plan review ruling 2). No write here records an audit entry: the private
+// checklist is never reviewed and never leaves the machine, and an entry would
+// (SR R4: audit rows upload).
+
+/**
+ * The deal's private checklist id, creating the row on first use. UNIQUE
+ * (transaction_id, template_id) is what keeps it to one row per deal: the
+ * insert is `ON CONFLICT DO NOTHING`, and the id is then read back, so a second
+ * call (or a second add) finds the first row. Raw statements: callers run it
+ * inside their own `dbTransaction`.
+ */
+function ensureMyItemsChecklist(transactionId: string): string {
+  const sortOrder =
+    dbGet<{ next_sort_order: number }>(NEXT_CHECKLIST_SORT_ORDER_SQL, [transactionId])
+      ?.next_sort_order ?? 0;
+  dbRun(INSERT_PRIVATE_CHECKLIST_SQL, [
+    randomUUID(),
+    transactionId,
+    MY_ITEMS_TEMPLATE_ID,
+    MY_ITEMS_TEMPLATE_NAME,
+    sortOrder,
+  ]);
+  const row = dbGet<{ id: string }>(GET_CHECKLIST_BY_TEMPLATE_SQL, [
+    transactionId,
+    MY_ITEMS_TEMPLATE_ID,
+  ]);
+  if (!row) throw new Error("The private checklist could not be created");
+  return row.id;
+}
+
+/**
+ * Add one of the agent's own items to a deal, creating the private checklist
+ * on the first one. The row and the item are ONE `dbTransaction`. The item
+ * goes last in the section.
+ */
+export function addMyItem(transactionId: string, title: string): Promise<AddMyItemResult> {
+  const result = dbTransaction<AddMyItemResult>(() => {
+    const transaction = dbGet<{ id: string }>(TRANSACTION_EXISTS_SQL, [transactionId]);
+    if (!transaction) return { status: "no_transaction" };
+    const checklistId = ensureMyItemsChecklist(transactionId);
+    const sortOrder =
+      dbGet<{ next_sort_order: number }>(NEXT_ITEM_SORT_ORDER_SQL, [checklistId])
+        ?.next_sort_order ?? 0;
+    const itemId = randomUUID();
+    dbRun(INSERT_CHECKLIST_ITEM_SQL, [
+      itemId,
+      checklistId,
+      title,
+      null, // description: the agent's own items have none
+      1, // is_required: every private item counts (SR ruling 2)
+      null, // expected_document_type
+      sortOrder,
+    ]);
+    return { status: "added", checklistId, itemId };
+  });
+  return Promise.resolve(result);
+}
+
+/** Rename one of the agent's own items. Resolves true when a row changed. */
+export function renameMyItem(transactionId: string, itemId: string, title: string): Promise<boolean> {
+  const result = dbRun(RENAME_PRIVATE_ITEM_SQL, [title, itemId, transactionId, MY_ITEMS_TEMPLATE_ID]);
+  return Promise.resolve(result.changes > 0);
+}
+
+/**
+ * Put the agent's own items in this order. `itemIds` must be EXACTLY the
+ * section's items — every one, once, and nothing else — or nothing moves
+ * (`not_the_items`): a partial list would leave two items on one position.
+ * All the moves are ONE `dbTransaction`.
+ */
+export function reorderMyItems(
+  transactionId: string,
+  itemIds: readonly string[],
+): Promise<ReorderMyItemsResult> {
+  const result = dbTransaction<ReorderMyItemsResult>(() => {
+    const current = dbAll<{ id: string; checklist_id: string }>(GET_PRIVATE_ITEM_IDS_SQL, [
+      transactionId,
+      MY_ITEMS_TEMPLATE_ID,
+    ]);
+    const wanted = new Set(itemIds);
+    const isPermutation =
+      current.length > 0 &&
+      wanted.size === itemIds.length &&
+      wanted.size === current.length &&
+      current.every((row) => wanted.has(row.id));
+    if (!isPermutation) return { status: "not_the_items" };
+    const checklistId = current[0].checklist_id;
+    itemIds.forEach((id, index) => {
+      dbRun(SET_ITEM_SORT_ORDER_SQL, [index, id, checklistId]);
+    });
+    return { status: "reordered" };
+  });
+  return Promise.resolve(result);
+}
+
+/**
+ * Remove one of the agent's own items; its links and members follow by
+ * cascade. Resolves true when a row was removed. The private checklist row
+ * itself stays, even when it is left empty.
+ */
+export function removeMyItem(transactionId: string, itemId: string): Promise<boolean> {
+  const result = dbRun(DELETE_PRIVATE_ITEM_SQL, [itemId, transactionId, MY_ITEMS_TEMPLATE_ID]);
+  return Promise.resolve(result.changes > 0);
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard "Todo" — BACKLOG-3965 PR-3
 // ---------------------------------------------------------------------------
 
@@ -681,17 +824,22 @@ export function listOpenRequiredChecklistItems(
   userId: string,
   lockedStatuses: readonly string[],
   limit: number,
+  scope: OpenRequiredItemsScope,
 ): Promise<OpenRequiredChecklistItems> {
   if (lockedStatuses.length === 0) {
     throw new Error("Refusing to read the Todo list with no locked status");
   }
   const bounded = Math.max(1, Math.min(OPEN_REQUIRED_ITEMS_MAX_LIMIT, Math.floor(limit)));
-  const filterParams = [userId, ...lockedStatuses];
+  // BACKLOG-3966: a `private` read binds the reserved id after the statuses.
+  const filterParams =
+    scope === "private"
+      ? [userId, ...lockedStatuses, MY_ITEMS_TEMPLATE_ID]
+      : [userId, ...lockedStatuses];
   const counted = dbGet<{ total: number }>(
-    countOpenRequiredItemsSql(lockedStatuses.length),
+    countOpenRequiredItemsSql(lockedStatuses.length, scope),
     filterParams,
   );
-  const items = dbAll<OpenRequiredChecklistItem>(listOpenRequiredItemsSql(lockedStatuses.length), [
+  const items = dbAll<OpenRequiredChecklistItem>(listOpenRequiredItemsSql(lockedStatuses.length, scope), [
     ...filterParams,
     bounded,
   ]);

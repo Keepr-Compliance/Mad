@@ -270,6 +270,18 @@ export type SelectChecklistTemplateResult =
   | { status: "exists"; checklistId: string }
   | { status: "no_transaction" };
 
+/** BACKLOG-3966: what adding one of the agent's own items did. */
+export type AddMyItemResult =
+  | { status: "added"; checklistId: string; itemId: string }
+  /** The deal does not exist. Nothing written. */
+  | { status: "no_transaction" };
+
+/**
+ * BACKLOG-3966: what reordering the agent's own items did. `not_the_items`:
+ * the ids sent were not exactly the section's items, so nothing moved.
+ */
+export type ReorderMyItemsResult = { status: "reordered" } | { status: "not_the_items" };
+
 export interface AddChecklistLinkInput {
   itemId: string;
   kind: ChecklistLinkWriteKind;

@@ -195,6 +195,44 @@ export const ListOpenRequiredChecklistItemsArgsSchema = z.object({
   limit: z.number().int().min(1).max(50).optional(),
 });
 
+// ============================================
+// BACKLOG-3966: the private checklist ("My items")
+// ============================================
+
+/**
+ * One of the agent's own item titles: trimmed, 1..300 characters — the same
+ * bound the `title` CHECK in schema.sql applies to every checklist item.
+ */
+export const MyItemTitleSchema = z.string().trim().min(1).max(300);
+
+/** Every My-items write names the deal: the SQL is scoped to its private checklist. */
+export const AddMyItemArgsSchema = z.object({
+  transactionId: UuidSchema,
+  title: MyItemTitleSchema,
+});
+
+export const RenameMyItemArgsSchema = z.object({
+  transactionId: UuidSchema,
+  itemId: UuidSchema,
+  title: MyItemTitleSchema,
+});
+
+/** The section's items in their new order: every one of them, once. */
+export const ReorderMyItemsArgsSchema = z.object({
+  transactionId: UuidSchema,
+  itemIds: z.array(UuidSchema).min(1).max(500),
+});
+
+export const RemoveMyItemArgsSchema = z.object({
+  transactionId: UuidSchema,
+  itemId: UuidSchema,
+});
+
+export type AddMyItemArgs = z.infer<typeof AddMyItemArgsSchema>;
+export type RenameMyItemArgs = z.infer<typeof RenameMyItemArgsSchema>;
+export type ReorderMyItemsArgs = z.infer<typeof ReorderMyItemsArgsSchema>;
+export type RemoveMyItemArgs = z.infer<typeof RemoveMyItemArgsSchema>;
+
 export type SelectChecklistTemplateArgs = z.infer<typeof SelectChecklistTemplateArgsSchema>;
 export type GetChecklistArgs = z.infer<typeof GetChecklistArgsSchema>;
 export type RemoveChecklistArgs = z.infer<typeof RemoveChecklistArgsSchema>;
