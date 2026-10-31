@@ -29,12 +29,12 @@ const USER = { id: "u-3673", email: "user@example.com" };
 const WIN = { isMacOS: false, isWindows: true, hasIPhone: false };
 
 const inSetup: OnboardingState = {
-  status: "onboarding", step: "email-connect", user: USER, platform: WIN,
+  status: "onboarding", database: "initialized", step: "email-connect", user: USER, platform: WIN,
   completedSteps: ["phone-type"], fda: "not-applicable", hasEmailConnected: false,
   selectedPhoneType: "android",
 };
 const onDashboard: ReadyState = {
-  status: "ready", user: USER, platform: WIN,
+  status: "ready", database: "initialized", user: USER, platform: WIN,
   userData: {
     phoneType: "android", hasCompletedEmailOnboarding: true, hasEmailConnected: false,
     needsDriverSetup: false, fda: "not-applicable", setup: "finished",

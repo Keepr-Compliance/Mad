@@ -81,7 +81,14 @@ returns valid on the no-`supabaseTokens` path.
   (`cipher_compatibility = 4`), and raw-INSERTs the fixture.
 - `seedProfile.ts` then writes `session.json` with the seeded `sessionToken`.
 
-The seeder **refuses** to run against the real keepr profile.
+The seeder **refuses** to run against the real keepr profile. Since BACKLOG-4093 `seedProfile.ts` launches it
+through `scripts/qa/harness/electron-sandboxed.sh` (a `sandbox-exec` profile that denies the real keepr,
+keepr-dev and Electron profile directories, Messages and AddressBook) with `--use-mock-keychain` and
+`--user-data-dir=<profile>` (the `=` form only; the bare space form is ignored by Chromium). Before any other
+work the seeder exits 3 unless the mock keychain switch is present and `app.getPath('userData')` is the
+requested isolated directory. The seeded DB keeps the schema.sql baseline version; the app replays the newer
+migrations on its first launch, as for a fresh install. Isolated app launches (`launch.ts`) also pass
+`--use-mock-keychain` so the app reads the seeder's key without touching the macOS keychain.
 
 ## Trust classification (unchanged from #1910)
 
