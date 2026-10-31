@@ -231,7 +231,7 @@ describe("A-10 / A-9 — adding a checklist", () => {
     render(<Harness gate="allowed" />);
     fireEvent.click(await screen.findByTestId("checklist-add"));
     await tickAndAdd("tpl-other");
-    expect(await screen.findByTestId("checklist-panel")).toBeInTheDocument();
+    expect((await screen.findAllByTestId(/^checklist-section-toggle-/)).length).toBeGreaterThan(0);
     expect(screen.queryByTestId("checklist-chooser")).not.toBeInTheDocument();
     expect(onShowError).not.toHaveBeenCalled();
   });
