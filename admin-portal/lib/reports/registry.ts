@@ -91,3 +91,14 @@ export const REPORTS: ReportEntry[] = [
 export function reportHref(slug: string): string {
   return `${REPORTS_BASE_PATH}/${slug}`;
 }
+
+/**
+ * The saved-view key for a registered report (BACKLOG-3728, BACKLOG-4084):
+ * its registry slug, so every report keeps its views under its own key.
+ * Throws on a slug that is not registered, so a typo fails at import.
+ */
+export function reportViewKey(slug: string): string {
+  const entry = REPORTS.find((r) => r.slug === slug);
+  if (!entry) throw new Error(`Unknown report: ${slug}`);
+  return entry.slug;
+}
