@@ -23,6 +23,7 @@ import { CardUpdateReturn } from './BillingCardControls';
 import { SuspendedBanner } from './SuspendedBanner';
 import { OrgSuspendedBanner, type OrgSuspensionReason } from './OrgSuspendedBanner';
 import type { PersonalBillingData } from '@/lib/billing/personalBilling';
+import type { OrgInvoiceRow } from '@/lib/billing/orgInvoices';
 
 export interface PlanPrice {
   id: string;
@@ -74,6 +75,8 @@ export interface BillingPageProps {
   seats?: { view: SeatsView | null; viewer: SeatsViewer | null } | null;
   /** BACKLOG-3854: back from a failed "Manage billing" (`?portal=unavailable`). */
   portalUnavailable?: boolean;
+  /** BACKLOG-3855: the brokerage's recent invoices (null = the read failed or timed out). Organization page only. */
+  orgInvoices?: OrgInvoiceRow[] | null;
 }
 
 function planLine(caps: BillingCapabilities, orgBillingSetUp: boolean): string {
@@ -82,7 +85,7 @@ function planLine(caps: BillingCapabilities, orgBillingSetUp: boolean): string {
   return orgBillingSetUp ? 'Organization plan' : 'Managed by Keepr';
 }
 
-export function BillingPage({ caps, orgBillingSetUp, personal, orgSuspension, autoRenew, seats, portalUnavailable }: BillingPageProps) {
+export function BillingPage({ caps, orgBillingSetUp, personal, orgSuspension, autoRenew, seats, portalUnavailable, orgInvoices }: BillingPageProps) {
   // Blocks 4–6 are filled for a personal page only; organization pages keep the frame (3855).
   const b = caps.kind === 'personal' ? personal?.billing : undefined;
   const suspended = personal?.suspended === true;
@@ -103,7 +106,13 @@ export function BillingPage({ caps, orgBillingSetUp, personal, orgSuspension, au
           />
         );
       case 'manage_billing':
-        return <ManageBillingBlock key={block} unavailable={portalUnavailable === true} />;
+        return (
+          <ManageBillingBlock
+            key={block}
+            unavailable={portalUnavailable === true}
+            invoices={caps.kind === 'organization' && caps.canSeeInvoices ? (orgInvoices ?? null) : undefined}
+          />
+        );
       case 'credits':
         return <CreditsBlock key={block} data={b && personal ? { balance: b.credits, state: personal.state, suspended } : undefined} />;
       case 'payment':

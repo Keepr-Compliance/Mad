@@ -49,6 +49,8 @@ import { readOrgBillingSuspendedFor } from '@/lib/auth/orgSuspension';
 import { readPlanEnd } from '@/lib/billing/planEnd';
 import { readOrgBillingSetUp } from '@/lib/billing/orgBillingSetUp';
 import { readSeats } from '@/lib/billing/seats';
+import { recentOrgInvoices, type OrgInvoiceRow } from '@/lib/billing/orgInvoices';
+import type { BillingCapabilities } from '@/lib/billing/capabilities';
 import type { SeatsViewer } from '@/components/billing/SeatsBlock';
 
 const SITUATION_3844 = {
@@ -110,6 +112,17 @@ async function orgName(organizationId: string): Promise<string | null> {
   }
 }
 
+/**
+ * BACKLOG-3855: the brokerage's recent invoices, only when the capabilities allow invoices (never
+ * the 3853 payer list). Stripe unavailable -> null ("unavailable"); the read has its own time limit.
+ */
+function orgInvoicesRead(orgCaps: BillingCapabilities, organizationId: string): Promise<OrgInvoiceRow[] | null> {
+  if (!orgCaps.canSeeInvoices) return Promise.resolve(null);
+  const stripe = stripeOrNull();
+  if (!stripe) return Promise.resolve(null);
+  return recentOrgInvoices({ service: createServiceClient(), stripe, mode: currentStripeMode(), organizationId });
+}
+
 export default async function BillingRoute({ searchParams }: { searchParams?: Promise<SearchParams> }) {
   if (!billingEnabled()) notFound();
   if (await getImpersonationSession()) notFound();
@@ -161,19 +174,24 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
       const organizationName = await orgName(organizationId);
       // "Pay overdue invoice": non-payment only, for the roles that can pay; Stripe trouble hides it.
       const stripe = reason === 'non_payment' && ORG_PAYER_ROLES.includes(role) ? stripeOrNull() : null;
-      const payUrl = stripe
-        ? await oldestOverdueInvoiceUrl({
-            service: createServiceClient(),
-            stripe,
-            mode: currentStripeMode(),
-            organizationId,
-          })
-        : null;
+      // BACKLOG-3855: the invoice list runs alongside the Pay link, so a hung Stripe costs one time limit.
+      const [payUrl, orgInvoices] = await Promise.all([
+        stripe
+          ? oldestOverdueInvoiceUrl({
+              service: createServiceClient(),
+              stripe,
+              mode: currentStripeMode(),
+              organizationId,
+            })
+          : null,
+        orgInvoicesRead(orgCaps, organizationId),
+      ]);
       return (
         <BillingPage
           caps={orgCaps}
           orgBillingSetUp={orgBillingSetUp}
           orgSuspension={{ reason, role, organizationName, payUrl }}
+          orgInvoices={orgInvoices}
           seats={{ view: seatsView, viewer }}
           portalUnavailable={portalUnavailable}
         />
@@ -182,7 +200,6 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
     // BACKLOG-4019: auto-renew, read with the person's own session (the database decides who
     // may see and switch it); a failed read shows nothing.
     // IT admins never see billing details (3855): no read.
-    const planEnd = role === 'broker' || role === 'admin' || billingContact ? await readPlanEnd(portal.supabase, organizationId) : null;
     const orgCaps = billingCapabilities({
       access: portal.access,
       isImpersonating: false,
@@ -192,11 +209,17 @@ export default async function BillingRoute({ searchParams }: { searchParams?: Pr
       billingContact,
     });
     if (!orgCaps) notFound();
+    // BACKLOG-3855: the invoice list runs alongside the plan-end read.
+    const [planEnd, orgInvoices] = await Promise.all([
+      role === 'broker' || role === 'admin' || billingContact ? readPlanEnd(portal.supabase, organizationId) : null,
+      orgInvoicesRead(orgCaps, organizationId),
+    ]);
     return (
       <BillingPage
         caps={orgCaps}
         orgBillingSetUp={orgBillingSetUp}
         autoRenew={planEnd ? { organizationId, planEnd } : null}
+        orgInvoices={orgInvoices}
         seats={{ view: seatsView, viewer }}
         portalUnavailable={portalUnavailable}
       />
