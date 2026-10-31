@@ -33,7 +33,10 @@ export function DashboardPanels({
 }: DashboardPanelsProps): React.ReactElement {
   const gate = useSessionStrictFeatureState("transaction_checklists");
   const checklistsAllowed = gate === "allowed";
-  const { recent, todo, reload } = useDashboardPanels(userId, checklistsAllowed);
+  const { recent, todo, reload, tickItem, tickingItemId, tickError } = useDashboardPanels(
+    userId,
+    checklistsAllowed,
+  );
 
   return (
     <div className={`mt-6 ${checklistsAllowed ? PANELS_GRID_TWO : PANELS_GRID_ONE}`} data-testid="dashboard-panels">
@@ -50,6 +53,9 @@ export function DashboardPanels({
           disabled={disabled}
           onOpenTransaction={(id) => onOpenTransaction(id, "checklist")}
           onRetry={reload}
+          onTick={(itemId) => void tickItem(itemId)}
+          tickingItemId={tickingItemId}
+          tickError={tickError}
         />
       )}
     </div>

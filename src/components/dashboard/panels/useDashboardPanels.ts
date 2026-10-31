@@ -8,7 +8,7 @@
  * Both services never throw; a failure comes back as `success: false`.
  *
  * Both are read again when the Transactions view closes (the Dashboard stays
- * mounted under it). Todo is read only when the plan
+ * mounted under it) and after a Todo tick. Todo is read only when the plan
  * gate answered "allowed".
  */
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -45,10 +45,19 @@ export type TodoState =
   /** The read failed for any other reason. */
   | { status: "error" };
 
+export interface TickError {
+  itemId: string;
+  message: string;
+}
+
 export interface DashboardPanels {
   recent: RecentState;
   todo: TodoState;
   reload: () => void;
+  /** Tick one Todo item. Main refuses it on a locked deal or a plan without checklists. */
+  tickItem: (itemId: string) => Promise<void>;
+  tickingItemId: string | null;
+  tickError: TickError | null;
 }
 
 export function useDashboardPanels(
@@ -58,6 +67,8 @@ export function useDashboardPanels(
   const [recent, setRecent] = useState<RecentState>({ status: "loading" });
   const [todo, setTodo] = useState<TodoState>({ status: todoEnabled ? "loading" : "off" });
   const [reloadKey, setReloadKey] = useState(0);
+  const [tickingItemId, setTickingItemId] = useState<string | null>(null);
+  const [tickError, setTickError] = useState<TickError | null>(null);
   const readId = useRef(0);
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
@@ -90,5 +101,20 @@ export function useDashboardPanels(
     });
   }, [userId, todoEnabled, reloadKey]);
 
-  return { recent, todo, reload };
+  const tickItem = useCallback(
+    async (itemId: string) => {
+      setTickingItemId(itemId);
+      setTickError(null);
+      const result = await checklistService.setItemChecked(itemId, true);
+      setTickingItemId(null);
+      if (result.success) {
+        reload();
+      } else {
+        setTickError({ itemId, message: result.error || "That item couldn't be updated." });
+      }
+    },
+    [reload],
+  );
+
+  return { recent, todo, reload, tickItem, tickingItemId, tickError };
 }
