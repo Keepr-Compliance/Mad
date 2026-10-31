@@ -89,6 +89,8 @@ export interface ExportSavedView {
   filters: ExportFilters;
   metric: ExportViewMetric;
   pinned: boolean;
+  /** BACKLOG-4084. False when the row has no `is_default` (migration not applied). */
+  isDefault: boolean;
 }
 
 export function parseExportSavedView(raw: unknown): ExportSavedView | null {
@@ -101,6 +103,7 @@ export function parseExportSavedView(raw: unknown): ExportSavedView | null {
     filters: parseExportFilters(row.filters),
     metric: parseExportMetric(row.metric),
     pinned: row.pinned === true,
+    isDefault: row.is_default === true,
   };
 }
 

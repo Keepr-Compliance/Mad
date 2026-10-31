@@ -78,12 +78,14 @@ function fakeApi(rows: unknown[] = [row()]): ReportViewsApi & {
         stalledOnly: f.stalledOnly === true,
         metric: r.metric as ReportSavedView['metric'],
         pinned: r.pinned === true,
+        isDefault: r.is_default === true,
       };
     });
   return {
     list: vi.fn().mockResolvedValue(parse(rows)),
     save: vi.fn().mockResolvedValue({ id: 'new-id' }),
     remove: vi.fn().mockResolvedValue(undefined),
+    setDefault: vi.fn().mockResolvedValue(undefined),
   } as never;
 }
 
@@ -353,6 +355,18 @@ describe('the views dropdown', () => {
     expect(payload.filters.outcomes).toEqual(['error']);
   });
 
+  it('allows an UNPIN when five are already pinned (the cap only stops a sixth pin)', async () => {
+    const rows = Array.from({ length: 5 }, (_, i) => row({ id: `v${i}`, name: `View ${i}`, pinned: true }));
+    const api = fakeApi(rows);
+    mount({ api });
+    openViews();
+    fireEvent.click(await screen.findByRole('button', { name: 'Unpin View 0' }));
+
+    await waitFor(() => expect(api.save).toHaveBeenCalledTimes(1));
+    expect(api.save.mock.calls[0][0]).toMatchObject({ id: 'v0', pinned: false });
+    expect(screen.queryByText(/At most 5 pinned cards/)).toBeNull();
+  });
+
   it('deletes by id', async () => {
     const api = fakeApi();
     mount({ api });
@@ -567,6 +581,25 @@ describe('when the DATABASE refuses the write', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Delete Errors' }));
 
     expect(await screen.findByText('Only the view owner can delete it')).toBeTruthy();
+  });
+
+  it('a local refusal REPLACES a standing database message, it is not hidden behind it', async () => {
+    const api = fakeApi();
+    api.remove.mockRejectedValue(
+      Object.assign(new Error('Only the view owner can delete it'), { code: 'P0001' })
+    );
+    mount({ api });
+    openViews();
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete Errors' }));
+    expect(await screen.findByText('Only the view owner can delete it')).toBeTruthy();
+
+    // The database message is still standing; now this tab refuses an unnamed save.
+    fireEvent.click(screen.getByRole('button', { name: /Save current view as a card/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Save and pin/ }));
+
+    expect(screen.getByText('Give the view a name.')).toBeTruthy();
+    expect(screen.queryByText('Only the view owner can delete it')).toBeNull();
+    expect(api.save).not.toHaveBeenCalled();
   });
 
   it('keeps the CLIENT cap sentence when this tab is the one refusing', async () => {

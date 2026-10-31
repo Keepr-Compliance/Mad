@@ -25,6 +25,7 @@ function fakeApi(rows: unknown[] = []) {
     list: vi.fn().mockResolvedValue(parseExportSavedViews(rows)),
     save: vi.fn().mockResolvedValue({ id: 'new-id' }),
     remove: vi.fn().mockResolvedValue(undefined),
+    setDefault: vi.fn().mockResolvedValue(undefined),
   } satisfies ExportViewsApi;
 }
 
