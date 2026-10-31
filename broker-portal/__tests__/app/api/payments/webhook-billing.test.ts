@@ -1008,7 +1008,7 @@ describe('C-GRANT-ONLY (BACKLOG-3676)', () => {
     const cs = { ...base, subscription: sub.id, customer: sub.customer };
     useDb({ stripe_customers: [customerRow(sub.customer)], billing_subscriptions: [] });
     serve(cs, sub);
-    const ev = { id: 'evt_GO_cs', type: 'checkout.session.completed', livemode: false, created: 1791700000, data: { object: { id: cs.id } } };
+    const ev = { id: 'evt_GO_cs', type: 'checkout.session.completed', livemode: false, created: 1791700000, data: { object: { id: base.id } } };
     expect((await deliver(ev)).status).toBe(200);
     // Positive control: the handler got past the user lookup (the mirror row is written).
     expect(db.rows('billing_subscriptions').map((r) => r.stripe_subscription_id)).toEqual([sub.id]);
