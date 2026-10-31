@@ -2019,6 +2019,20 @@ END;
 -- BACKLOG-3475 END
 -- ===========================================================================
 
+-- BACKLOG-3965: when each deal was last opened on THIS device (the Dashboard's
+-- Recent panel). One row per deal. Local only: not synced, not exported.
+-- A table, not a column on transactions: the AFTER UPDATE trigger
+-- update_transactions_timestamp would bump transactions.updated_at on every
+-- open. IF NOT EXISTS on both: this file runs on every open, so existing
+-- databases gain the table with no migration version.
+CREATE TABLE IF NOT EXISTS transaction_opens (
+  transaction_id TEXT PRIMARY KEY,
+  opened_at      TEXT NOT NULL,
+  FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_transaction_opens_opened_at
+  ON transaction_opens(opened_at);
+
 -- Initialize schema version if not exists.
 -- Version 70: the post-reset baseline (BACKLOG-2993). This file IS the
 -- v69-chain shape, declared as version 70 so that the baseline fence in

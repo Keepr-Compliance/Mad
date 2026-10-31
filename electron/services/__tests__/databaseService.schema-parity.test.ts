@@ -755,6 +755,28 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     why: "BACKLOG-3343: produced by the session_id PRIMARY KEY; not declared separately.",
     ref: "BACKLOG-3343",
   },
+  {
+    key: "TABLE:transaction_opens",
+    what: "New table transaction_opens.",
+    why:
+      "BACKLOG-3965: when each deal was last opened on this device (the Dashboard's Recent panel). A table, not a column on " +
+      "transactions, so an open never bumps transactions.updated_at through update_transactions_timestamp. `IF NOT EXISTS`; " +
+      "schema.sql is re-exec'd on every open, so existing databases gain it with no migration version (the BACKLOG-3343 precedent). " +
+      "Additive only: no existing table changes.",
+    ref: "BACKLOG-3965",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_transaction_opens_1",
+    what: "SQLite's automatic index for transaction_opens' primary key.",
+    why: "BACKLOG-3965: produced by the transaction_id PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-3965",
+  },
+  {
+    key: "INDEX:idx_transaction_opens_opened_at",
+    what: "Index on transaction_opens(opened_at).",
+    why: "BACKLOG-3965: the Recent read orders by opened_at and stops at its limit; this index keeps that read off a full scan.",
+    ref: "BACKLOG-3965",
+  },
 ];
 
 const ALLOWED_KEYS = new Set(ALLOWED_EVOLUTION.map((d) => d.key));
