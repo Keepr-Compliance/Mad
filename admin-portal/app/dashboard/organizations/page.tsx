@@ -12,7 +12,17 @@ export const dynamic = 'force-dynamic';
  * Server component that fetches all organizations with member counts.
  * Uses existing admin RLS policies for cross-org read access.
  */
-export default async function OrganizationsPage() {
+type OrganizationsPageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+/** A boolean flag from the RPC row, or null when the key is missing or not a boolean. */
+function rowFlag(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+// The whole props object defaults to {} so the page can be called with no argument.
+export default async function OrganizationsPage(_props: OrganizationsPageProps = {}) {
   const { supabase, user: adminUser } = await getAuthenticatedUser();
 
   if (!adminUser) {
@@ -72,6 +82,8 @@ export default async function OrganizationsPage() {
     plan_tier: (org.plan_tier as string) ?? null,
     created_at: org.created_at as string,
     member_count: (org.member_count as number) ?? 0,
+    is_personal: rowFlag(org.is_personal),
+    is_test: rowFlag(org.is_test),
   }));
 
   return (
