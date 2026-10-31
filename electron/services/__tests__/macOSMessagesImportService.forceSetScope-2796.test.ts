@@ -194,6 +194,9 @@ function createStoreSchema(db: DatabaseType): void {
     -- on "the swap would collide" would pass against code that collides.
     CREATE UNIQUE INDEX idx_messages_user_external_id
       ON messages(user_id, external_id) WHERE external_id IS NOT NULL;
+    -- BACKLOG-3968 PR-4b: the force set spares checklist text members, so it
+    -- reads this table (present on every migrated database).
+    CREATE TABLE transaction_checklist_link_members (id TEXT PRIMARY KEY, message_id TEXT);
     CREATE TABLE attachments (
       id TEXT PRIMARY KEY, message_id TEXT, external_message_id TEXT, filename TEXT,
       mime_type TEXT, file_size_bytes INTEGER, storage_path TEXT,
