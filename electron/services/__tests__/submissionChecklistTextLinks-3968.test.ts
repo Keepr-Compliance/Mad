@@ -318,11 +318,15 @@ describe("BACKLOG-3968 — the hold (TEXT_LINKS_HELD_UNTIL_CLOUD_MIGRATION)", ()
     ]);
   });
 
-  it("R3: 'Include it' is refused on a text link (the flag stays 0)", async () => {
-    expect(await setChecklistLinkIncludeOutsideDates("L-texts", TXN)).toBe(false);
+  it("R3: 'Include it' is refused on a text link (the flag stays 0); an email link on the same item takes it", async () => {
+    expect(await setChecklistLinkIncludeOutsideDates(TXN, "L-texts")).toBe(false);
     expect(
       db.prepare("SELECT include_outside_dates AS f FROM transaction_checklist_links WHERE id = 'L-texts'").get(),
     ).toEqual({ f: 0 });
+    // Positive control: the same call, same item and deal, on an email link.
+    const itemId = (db.prepare("SELECT item_id FROM transaction_checklist_links WHERE id = 'L-texts'").get() as { item_id: string }).item_id;
+    db.prepare("INSERT INTO transaction_checklist_links (id, item_id, kind, label, sort_order) VALUES ('L-mail', ?, 'email', 'Offer', 9)").run(itemId);
+    expect(await setChecklistLinkIncludeOutsideDates(TXN, "L-mail")).toBe(true);
   });
 });
 
