@@ -35,6 +35,10 @@ export interface OrganizationRow {
   plan_tier: string | null;
   created_at: string | null;
   member_count: number;
+  /** Personal organization. null or absent when the list RPC did not return the flag. */
+  is_personal?: boolean | null;
+  /** Test organization. null or absent when the list RPC did not return the flag. */
+  is_test?: boolean | null;
 }
 
 interface OrganizationsTableProps {
