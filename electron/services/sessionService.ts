@@ -9,6 +9,7 @@ import logService from "./logService";
 import { emitSessionChanged } from "./authEvents";
 import { renameWithRetry } from "./atRest/fileCrypto";
 import { lastIpcChannelStarted } from "./ipcReplySize";
+import { isSessionFileAwaitingWrite, setSessionFileAwaitingWrite } from "./sessionFileState";
 
 // ============================================
 // TYPES & INTERFACES
@@ -291,8 +292,18 @@ export class SessionService {
    *   express and therefore cannot enforce: a caller that needs to tell them
    *   apart must read the log, not the return value.
    */
-  async saveSession(sessionData: SessionData): Promise<boolean> {
-    return this.runSerialized(() => this._writeSession(sessionData));
+  async saveSession(
+    sessionData: SessionData,
+    opts?: { endsSignInWait?: boolean },
+  ): Promise<boolean> {
+    return this.runSerialized(async () => {
+      const ok = await this._writeSession(sessionData);
+      // BACKLOG-4076: the sign-in write ends the "previous session on disk"
+      // window inside this critical section, so the next queued op (a token
+      // write-back) already reads the new file. Only a write that succeeded.
+      if (ok && opts?.endsSignInWait) setSessionFileAwaitingWrite(false);
+      return ok;
+    });
   }
 
   /** Internal, NON-serialized write. Only call from inside a runSerialized() critical section. */
@@ -343,8 +354,14 @@ export class SessionService {
   /**
    * Load session data from disk (decrypts if encrypted, migrates plaintext)
    * @returns Session data or null if not found/expired/corrupted
+   *
+   * BACKLOG-4076: returns null without touching the file while a deep-link
+   * sign-in is waiting for its session write (the file still holds the
+   * previous user). No expiry clear, migration or corrupt-file cleanup runs on
+   * that file.
    */
   async loadSession(): Promise<SessionData | null> {
+    if (isSessionFileAwaitingWrite()) return null;
     const loadStartedAt = Date.now();
     try {
       const fileContent = await fs.readFile(this.getSessionFilePath(), "utf8");
@@ -431,6 +448,9 @@ export class SessionService {
     | { status: "unreadable" }
   > {
     return this.runSerialized(async () => {
+      // BACKLOG-4076: the file holds the previous user while a sign-in waits
+      // for its session write; the caller tries again on its next tick.
+      if (isSessionFileAwaitingWrite()) return { status: "unreadable" as const };
       try {
         const fileContent = await fs.readFile(this.getSessionFilePath(), "utf8");
         const result = this.decryptSessionData(fileContent);

@@ -60,7 +60,7 @@ describe("signInState (BACKLOG-3555)", () => {
     mockSaveSession.mockResolvedValueOnce(true);
     setPendingDeepLinkUser(USER);
     await expect(saveSignInSession(DATA)).resolves.toBe(true);
-    expect(mockSaveSession).toHaveBeenCalledWith(DATA);
+    expect(mockSaveSession).toHaveBeenCalledWith(DATA, { endsSignInWait: true });
     expect(isSignInAwaitingSessionWrite()).toBe(false);
   });
 
