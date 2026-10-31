@@ -1,9 +1,10 @@
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { KeeprAppDriver } from '../driver/appDriver';
 import { resolveBuiltMainEntry } from '../driver/paths';
 import { seedIsolatedProfile } from '../driver/seed/seedProfile';
+import { isTopmostAtCentre, runAccountPanelCells } from './accountPanelCells';
 
 /**
  * BACKLOG-3964 slice 2 fix-up — Settings page stacking, in the BUILT app.
@@ -12,11 +13,14 @@ import { seedIsolatedProfile } from '../driver/seed/seedProfile';
  * real pixels: with Settings open, Settings › General › "Test Notification" must put a toast on
  * screen that is the topmost element at its own centre, the "?" support button must be the
  * topmost element at ITS centre (and clickable), and the title-bar initials must bring up
- * Profile (Settings closes) instead of opening it hidden underneath.
+ * the account side panel (Settings closes) instead of opening it hidden underneath.
  *
- * NOT YET RUN: written off-desktop for CI / a later off-desktop run. No app was launched when
- * this was authored (BACKLOG-3964, 2026-10-18). Requires the app BUILT (`npm run build`); SKIPPED
- * with an actionable message otherwise. Lives in e2e/tests/ (Playwright config), not the jest run.
+ * Slice 3a extends it with the account side panel cells H1-H8 (./accountPanelCells, shared with
+ * the safeguarded walkthrough runner).
+ *
+ * Requires the app BUILT (`npm run build`); SKIPPED with an actionable message otherwise. Lives in
+ * e2e/tests/ (Playwright config), not the jest run. Launch it only with --user-data-dir isolation
+ * and the walkthrough safeguards (log redirect, Messages/AddressBook unreadable), never a fake HOME.
  */
 
 const REPO_ROOT = join(__dirname, '..', '..');
@@ -29,17 +33,6 @@ try {
   if (!existsSync(join(REPO_ROOT, 'dist', 'index.html'))) isBuilt = false;
 } catch {
   isBuilt = false;
-}
-
-/** True when the element matching `selector` is the topmost element at its own centre point. */
-async function isTopmostAtCentre(page: Page, selector: string): Promise<boolean> {
-  return page.evaluate((sel) => {
-    const el = document.querySelector(sel);
-    if (!el) return false;
-    const r = el.getBoundingClientRect();
-    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    return !!hit && (hit === el || el.contains(hit));
-  }, selector);
 }
 
 test.describe('Settings page stacking (BACKLOG-3964 S2 fix-up)', () => {
@@ -58,7 +51,7 @@ test.describe('Settings page stacking (BACKLOG-3964 S2 fix-up)', () => {
     await driver?.close().catch(() => undefined);
   });
 
-  test('toast and "?" are above Settings; initials close Settings and open Profile', async () => {
+  test('toast and "?" are above Settings; initials close Settings and open the account panel', async () => {
     driver = await KeeprAppDriver.launch(REPO_ROOT, {
       strategy: 'unpackaged',
       reuseProfile: false,
@@ -101,14 +94,23 @@ test.describe('Settings page stacking (BACKLOG-3964 S2 fix-up)', () => {
     ).toBe(true);
     await driver.screenshot('settings-support-form');
     await page.keyboard.press('Escape');
-    await page.mouse.click(2, 2); // overlay click closes the form if Escape does not
     await expect(form).toBeHidden({ timeout: 5_000 });
     // Esc closed only the form: Settings must still be open, or the check below proves nothing.
     await expect(page.getByTestId('settings-page')).toBeVisible();
 
-    // Title-bar initials while Settings shows: Settings closes, Profile is what the user sees.
+    // Title-bar initials while Settings shows: Settings closes, the account panel is what shows.
     await page.getByTestId('nav-profile').click();
     await expect(page.getByTestId('settings-page')).toBeHidden();
-    await expect(page.getByTestId('nav-settings')).toBeVisible(); // Profile's Settings button
+    await expect(page.getByTestId('account-panel')).toBeVisible();
+    await expect(page.getByTestId('nav-settings')).toBeVisible(); // the panel's Account row
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('account-panel')).toBeHidden();
+
+    // BACKLOG-3964 slice 3a: the account side panel cells.
+    const results = await runAccountPanelCells(page, {
+      app: driver.app!,
+      shot: (name) => driver!.screenshot(`panel-${name}`),
+    });
+    for (const r of results) expect(r.ok, `${r.id}: ${r.detail}`).toBe(true);
   });
 });
