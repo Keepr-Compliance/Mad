@@ -2059,6 +2059,50 @@ describe("Settings", () => {
       expect(within(document.getElementById("settings-security") as HTMLElement).getAllByText(/Sign Out All Devices/i).length).toBeGreaterThan(0);
     });
 
+    it("Account tab look (slice 3b): kit Card with a header row, primary avatar without a gradient, kit colours", async () => {
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const account = document.getElementById("settings-account") as HTMLElement;
+      // Kit Card recipe (packages/ui card.tsx), not the old rounded-xl frame.
+      for (const c of ["rounded-lg", "border", "bg-card", "shadow-sm"]) expect(account).toHaveClass(c);
+      expect(account).not.toHaveClass("rounded-xl");
+      // Header row: the title sits in a bordered row of its own.
+      const title = within(account).getByRole("heading", { name: "Account" });
+      expect(title.parentElement).toHaveClass("border-b", "px-6", "py-4");
+      // The shared AccountAvatar: primary-600 initials, no gradient anywhere in the section.
+      const avatar = within(account).getByTestId("account-avatar");
+      expect(avatar).toHaveClass("bg-primary-600", "shrink-0", "aspect-square", "h-10", "w-10");
+      expect(avatar).toHaveTextContent("AE");
+      expect(account.querySelector('[class*="gradient"]')).toBeNull();
+      // Plan pill and chips on kit colours; no blue-* left in the Account card's own markup.
+      expect(within(account).getByTestId("account-plan-pill")).toHaveClass("bg-primary-100", "text-primary-800");
+      const chips = within(within(account).getByTestId("account-chips")).getAllByText(/Google/);
+      expect(chips.length).toBeGreaterThan(0);
+      for (const chip of within(account).getByTestId("account-chips").children) {
+        expect(chip).toHaveClass("bg-gray-100", "text-gray-800");
+      }
+      const billing = within(account).getByTestId("plan-billing-card");
+      const ownBlue = Array.from(account.querySelectorAll("[class]")).filter(
+        (el) => !billing.contains(el) && /\bblue-/.test(el.getAttribute("class") ?? ""),
+      );
+      expect(ownBlue).toEqual([]);
+      // Billing appears once on the page, inside the Account card.
+      expect(screen.getAllByTestId("plan-billing-card")).toHaveLength(1);
+    });
+
+    it("every section frame uses the kit Card recipe (slice 3b)", async () => {
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const column = (document.getElementById("settings-account") as HTMLElement).parentElement as HTMLElement;
+      const frame = column.className.split(/\s+/).filter((c) => c.startsWith("[&>[id^=settings-]]:"));
+      for (const c of ["rounded-lg", "border", "bg-card", "shadow-sm"]) {
+        expect(frame).toContain(`[&>[id^=settings-]]:${c}`);
+      }
+      expect(frame).not.toContain("[&>[id^=settings-]]:rounded-xl");
+      // The frame applies to the real sections, not just the Account card.
+      for (const id of ["settings-general", "settings-email", "settings-security", "settings-about"]) {
+        expect(document.getElementById(id)?.parentElement).toBe(column);
+      }
+    });
+
     it("deep link: waits for preferences (no scroll during the spinner, even past 500 ms), then lands once", async () => {
       const release = holdPreferences();
       const onSectionReached = jest.fn();

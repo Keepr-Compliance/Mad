@@ -5,14 +5,18 @@
  * signed in and with what, which mailboxes are connected, plan, trial,
  * transactions, ids and dates. Plus the Plan & Billing card (BACKLOG-3863).
  *
+ * Look (mock v14, design system): a kit Card with a header row, the shared
+ * AccountAvatar (primary-600, no gradient), gray chips, a primary plan pill.
+ *
  * Founder decision 10: no Sign out here. It lives in the account side panel
  * (slice 3); Security keeps "Sign Out All Devices".
  */
 import React from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@keepr/ui";
 import { useLicense } from "@/contexts/LicenseContext";
 import { formatDbDate } from "@/utils/dateFormatters";
 import { useCopyText } from "@/hooks/useCopyText";
-import { getAccountInitials } from "../../../appCore/shell/AccountButton";
+import { AccountAvatar } from "../../../appCore/shell/AccountAvatar";
 import { formatPlanLabel } from "./formatPlanLabel";
 import { PlanBillingCard } from "../billing/PlanBillingCard";
 
@@ -63,23 +67,20 @@ export function AccountSettings({ user, provider, mailboxes = { google: false, m
   const planLabel = licenseType ? formatPlanLabel(licenseType) : "";
   const providerName = provider ? PROVIDER_NAMES[provider] ?? provider : null;
   const onTrial = validationStatus?.trialStatus === "active" && typeof trialDaysRemaining === "number";
-  const chip = "rounded-full border border-gray-200 px-2.5 py-0.5 text-xs text-gray-600";
+  const chip = "inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-800";
 
   return (
-    <div id="settings-account" className="mb-8">
-      <h3 className="mb-4 text-lg font-semibold text-gray-900">Account</h3>
-      <div className="flex flex-col gap-4">
+    // `!p-0`: the header row and body carry their own padding, over Settings' per-section p-4/p-5.
+    <Card id="settings-account" className="!p-0">
+      <CardHeader className="border-b px-6 py-4">
+        <CardTitle>Account</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4 px-6 py-4">
         <div className="flex min-w-0 items-center gap-3">
-          {user.avatar_url ? (
-            <img src={user.avatar_url} alt="" className="h-12 w-12 flex-none rounded-full object-cover" />
-          ) : (
-            <div className="flex h-12 w-12 flex-none items-center justify-center rounded-full bg-gradient-to-br from-blue-400 to-purple-500 text-lg font-bold text-white">
-              {getAccountInitials(user)}
-            </div>
-          )}
+          <AccountAvatar size={40} name={user.display_name} email={user.email} imageUrl={user.avatar_url} />
           <div className="min-w-0">
-            <p className="font-semibold text-gray-900">{user.display_name || "User"}</p>
-            <p className="truncate text-sm text-gray-500">{user.email}</p>
+            <p className="truncate text-sm font-medium leading-tight text-gray-900">{user.display_name || "User"}</p>
+            <p className="truncate text-xs leading-tight text-gray-500">{user.email}</p>
           </div>
         </div>
 
@@ -107,7 +108,12 @@ export function AccountSettings({ user, provider, mailboxes = { google: false, m
             {licenseLoading ? (
               <span className="text-xs text-gray-400">Loading...</span>
             ) : (
-              <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">{planLabel}</span>
+              <span
+                data-testid="account-plan-pill"
+                className="inline-flex items-center rounded-full bg-primary-100 px-2.5 py-0.5 text-xs font-medium text-primary-800"
+              >
+                {planLabel}
+              </span>
             )}
           </Row>
           {typeof transactionCount === "number" && (
@@ -146,7 +152,7 @@ export function AccountSettings({ user, provider, mailboxes = { google: false, m
         </div>
 
         <PlanBillingCard planLabel={planLabel} organizationId={organizationId ?? null} userId={user.id} />
-      </div>
-    </div>
+      </CardContent>
+    </Card>
   );
 }

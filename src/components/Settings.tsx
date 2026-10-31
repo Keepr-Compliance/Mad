@@ -164,10 +164,11 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
         </div>
 
         {/* One column of section cards (mock: max 760px). Each direct section
-            child is styled as a white card here, so the section components keep
+            child gets the kit Card recipe here (rounded-lg border bg-card
+            shadow-sm, packages/ui card.tsx), so the section components keep
             their own markup. */}
         <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto scroll-smooth scroll-pt-2 px-3 py-4 sm:px-6 sm:py-6">
-          <div className="mx-auto w-full max-w-[760px] [&>[id^=settings-]]:!mt-0 [&>[id^=settings-]]:!mb-4 [&>[id^=settings-]]:rounded-xl [&>[id^=settings-]]:border [&>[id^=settings-]]:border-gray-200 [&>[id^=settings-]]:bg-white [&>[id^=settings-]]:p-4 sm:[&>[id^=settings-]]:p-5">
+          <div className="mx-auto w-full max-w-[760px] [&>[id^=settings-]]:!mt-0 [&>[id^=settings-]]:!mb-4 [&>[id^=settings-]]:rounded-lg [&>[id^=settings-]]:border [&>[id^=settings-]]:bg-card [&>[id^=settings-]]:shadow-sm [&>[id^=settings-]]:p-4 sm:[&>[id^=settings-]]:p-5">
           {loadingPreferences ? (
             <div className="flex flex-col items-center justify-center pt-24 pb-20">
               <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-3" />
@@ -178,7 +179,6 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
             <AccountSettings {...account} mailboxes={{ google: isGoogleConnected, microsoft: isMicrosoftConnected }} />
 
             <GeneralSettings userId={userId} initialPreferences={preferences} />
-
 
             <EmailSettings
               userId={userId}
