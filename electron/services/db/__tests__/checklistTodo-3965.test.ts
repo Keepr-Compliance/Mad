@@ -243,24 +243,27 @@ describe("BACKLOG-3965 Todo read — which items", () => {
 
 describe("BACKLOG-3965 Todo read — order, count and the empty answer", () => {
   it("Closing Date soonest first by calendar day (date and ISO forms mixed), no date last, then deal, checklist, item", async () => {
+    // Same calendar day in both stored forms; the ISO one has the EARLIER address,
+    // so a plain text compare of the column (date-only sorts first) reds.
     seedDeal("d-late", { address: "A Late", closing: "2026-12-01" });
-    seedDeal("d-iso", { address: "B Same Day ISO", closing: "2026-11-10T00:00:00.000Z" });
-    seedDeal("d-date", { address: "A Same Day Date", closing: "2026-11-10" });
+    seedDeal("d-iso", { address: "A Same Day ISO", closing: "2026-11-10T00:00:00.000Z" });
+    seedDeal("d-date", { address: "B Same Day Date", closing: "2026-11-10" });
     seedDeal("d-none", { address: "A No Date", closing: null });
     seedDeal("d-empty", { address: "B Empty Date", closing: "" });
     seedChecklist("d-late", "c-late", [{ id: "late-1" }]);
     seedChecklist("d-iso", "c-iso", [{ id: "iso-1" }]);
-    // Two checklists on one deal, the SECOND listed first by sort_order; items out of sort order.
-    seedChecklist("d-date", "c-date-b", [{ id: "date-b2", sort: 2 }, { id: "date-b1", sort: 1 }], 1);
-    seedChecklist("d-date", "c-date-a", [{ id: "date-a1", sort: 5 }], 0);
+    // Two checklists on one deal: ids run AGAINST sort_order, and item ids run
+    // against item sort_order, so dropping either sort key reds.
+    seedChecklist("d-date", "c-date-a", [{ id: "date-a1", sort: 2 }, { id: "date-a2", sort: 1 }], 1);
+    seedChecklist("d-date", "c-date-z", [{ id: "date-z1", sort: 5 }], 0);
     seedChecklist("d-none", "c-none", [{ id: "none-1" }]);
     seedChecklist("d-empty", "c-empty", [{ id: "empty-1" }]);
     const { items } = await read();
     expect(items.map((i) => i.itemId)).toEqual([
-      "date-a1",
-      "date-b1",
-      "date-b2",
       "iso-1",
+      "date-z1",
+      "date-a2",
+      "date-a1",
       "late-1",
       "none-1",
       "empty-1",
