@@ -8,7 +8,7 @@
  *
  * Read-only: no hide-from-export here (that stays on the Texts tab).
  */
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ConversationViewModal } from "../modals";
 import { useTextThreadPages } from "../../hooks/useTextThreads";
 import { otherParties, textName } from "../../hooks/useChecklistTexts";
@@ -38,6 +38,12 @@ export function ChecklistTextConversation({
 }: ChecklistTextConversationProps): React.ReactElement | null {
   const [threadKey, setThreadKey] = useState<string | null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
+  // Read through refs: a parent that passes new callbacks each render must not
+  // look the conversation up again.
+  const onCloseRef = useRef(onClose);
+  const onShowErrorRef = useRef(onShowError);
+  onCloseRef.current = onClose;
+  onShowErrorRef.current = onShowError;
 
   useEffect(() => {
     let cancelled = false;
@@ -47,20 +53,20 @@ export function ChecklistTextConversation({
         if (cancelled) return;
         if (key) setThreadKey(key);
         else {
-          onShowError("This text is no longer on this transaction.");
-          onClose();
+          onShowErrorRef.current("This text is no longer on this transaction.");
+          onCloseRef.current();
         }
       })
       .catch((err) => {
         if (cancelled) return;
         logger.error("Opening a checklist text failed:", err);
-        onShowError("Couldn't open this conversation.");
-        onClose();
+        onShowErrorRef.current("Couldn't open this conversation.");
+        onCloseRef.current();
       });
     return () => {
       cancelled = true;
     };
-  }, [transactionId, messageId, onClose, onShowError]);
+  }, [transactionId, messageId]);
 
   const keys = useMemo(() => (threadKey ? [threadKey] : NO_KEYS), [threadKey]);
   const pages = useTextThreadPages(transactionId, keys, null, !!threadKey);

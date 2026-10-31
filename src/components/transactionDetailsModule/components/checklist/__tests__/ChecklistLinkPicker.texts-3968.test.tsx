@@ -116,6 +116,18 @@ describe("Texts tab — data path", () => {
     expect(row).toHaveTextContent(new Date(ROW_A.sent_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }));
   });
 
+  it("a text hidden from the export is not offered (it would never be sent)", async () => {
+    // The captured row with the reader's own flag set, as the reader reports a hidden text.
+    mockGetTextThreadPage.mockResolvedValue({
+      success: true,
+      rows: [ROW_A, { ...ROW_B, hidden_from_export: 1 }],
+      nextCursor: null,
+    });
+    renderPicker();
+    await openTexts();
+    expect(screen.queryByTestId(`checklist-picker-text-${ROW_B.id}`)).not.toBeInTheDocument();
+  });
+
   it("Show more reads the next page with the cursor main gave", async () => {
     mockGetTextThreadPage.mockResolvedValueOnce({ success: true, rows: [ROW_A], nextCursor: captured.next });
     mockGetTextThreadPage.mockResolvedValueOnce({ success: true, rows: [ROW_B], nextCursor: null });

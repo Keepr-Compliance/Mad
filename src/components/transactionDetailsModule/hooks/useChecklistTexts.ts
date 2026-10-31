@@ -14,6 +14,10 @@
  * window: the writer accepts any text on the deal, and the submit pre-flight
  * says when one is not sent.
  *
+ * Texts hidden from the export (BACKLOG-3227/3366, `hidden_from_export` on the
+ * reader's row) are not offered: a hidden text is never sent, so a link to it
+ * would only show up later as "not included".
+ *
  * The contact name and the snippet stay in the renderer. Linking sends the
  * item id and the message ids only.
  */
@@ -151,7 +155,7 @@ export function usePickerTexts(
       const names = { ...namesRef.current, ...(await resolveNames(rows, userId, transactionId)) };
       if (seq !== seqRef.current) return;
       namesRef.current = names;
-      const page = rows.map((row) => ({
+      const page = rows.filter((row) => !row.hidden_from_export).map((row) => ({
         id: row.id,
         name: textName(row, names),
         sentAt: row.sent_at ? String(row.sent_at) : null,
