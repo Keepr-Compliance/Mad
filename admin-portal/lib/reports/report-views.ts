@@ -239,6 +239,8 @@ export interface ReportSavedView {
   stalledOnly: boolean;
   metric: ViewMetric;
   pinned: boolean;
+  /** BACKLOG-4084. False when the row has no `is_default` (migration not applied). */
+  isDefault: boolean;
 }
 
 /** Turn one RPC row into a view, or null when it is not one. */
@@ -254,6 +256,7 @@ export function parseSavedView(raw: unknown): ReportSavedView | null {
     stalledOnly,
     metric: parseMetric(row.metric),
     pinned: row.pinned === true,
+    isDefault: row.is_default === true,
   };
 }
 

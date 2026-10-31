@@ -48,8 +48,8 @@ describe('picker options', () => {
 });
 
 describe('buildAnalyticsPeriodUrl', () => {
-  it('drops the default, sets others, keeps unrelated params, never writes from/to', () => {
-    expect(buildAnalyticsPeriodUrl('period=7', '30')).toBe('?');
+  it('writes the default too, sets others, keeps unrelated params, never writes from/to', () => {
+    expect(buildAnalyticsPeriodUrl('period=7', '30')).toBe('?period=30');
     expect(buildAnalyticsPeriodUrl('', '7')).toBe('?period=7');
     expect(buildAnalyticsPeriodUrl('x=1', 'all')).toBe('?x=1&period=all');
     expect(buildAnalyticsPeriodUrl('period=custom&from=2026-10-01&to=2026-10-15', '90')).toBe('?period=90');

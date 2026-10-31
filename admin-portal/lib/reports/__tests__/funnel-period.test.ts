@@ -74,8 +74,8 @@ describe('resolveFunnelPeriod', () => {
 });
 
 describe('buildFunnelPeriodUrl', () => {
-  it('drops period at the funnel default 30', () => {
-    expect(buildFunnelPeriodUrl('period=7', '30')).toBe('?');
+  it('writes period at the funnel default 30 too (BACKLOG-4084)', () => {
+    expect(buildFunnelPeriodUrl('period=7', '30')).toBe('?period=30');
   });
 
   it('writes every other value, keeping unrelated params', () => {
