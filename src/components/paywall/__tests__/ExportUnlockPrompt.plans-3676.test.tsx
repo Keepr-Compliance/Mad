@@ -196,6 +196,18 @@ describe("C-STATE-D — licensed by a brokerage: no billing buttons (founder 202
     expect(screen.queryByText(/Subscribe|Pay \$|Book a call/)).toBeNull();
   });
 
+  // Spending a credit the user already holds is not a purchase, so state D keeps
+  // "Unlock with 1 credit" when credits > 0 (named for the founder in the handoff).
+  it("brokerage class with credits → state D still offers the credit unlock, and no billing buttons", async () => {
+    getStatusMock.mockResolvedValue(locked(2));
+    renderPrompt("brokerage");
+    const d = await screen.findByTestId("paywall-state-d");
+    expect(await within(d).findByTestId("unlock-with-credit")).toHaveTextContent("Unlock with 1 credit");
+    expect(screen.queryByTestId("agent-subscribe")).toBeNull();
+    expect(screen.queryByTestId("unlock-purchase")).toBeNull();
+    expect(screen.queryByTestId("book-call")).toBeNull();
+  });
+
   it("server backstop: a brokerage_managed refusal shows the same state D", async () => {
     getStatusMock.mockResolvedValue(locked(0));
     beginSubscriptionMock.mockResolvedValue({ started: false, code: "brokerage_managed" });
