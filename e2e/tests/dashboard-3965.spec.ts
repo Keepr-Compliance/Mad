@@ -30,6 +30,21 @@ try {
   isBuilt = false;
 }
 
+/**
+ * Back to the Dashboard the way the app allows it. Escape closes neither view: Transaction
+ * Details (ResponsiveModal has no key handler) is closed by its close control, and the
+ * Transactions view only by "Back to Dashboard" (TransactionToolbar.tsx).
+ */
+async function backToDashboard(d: KeeprAppDriver): Promise<void> {
+  const page = d.page;
+  await d.dismissTransactionDetailsIfOpen();
+  const list = page.getByTestId('tx-list');
+  if (await list.isVisible().catch(() => false)) {
+    await page.getByRole('button', { name: /Back to Dashboard|^Back$/ }).first().click();
+    await list.waitFor({ state: 'hidden', timeout: 10_000 });
+  }
+}
+
 async function box(page: Page, testId: string) {
   const b = await page.getByTestId(testId).boundingBox();
   if (!b) throw new Error(`${testId} has no box`);
@@ -109,13 +124,15 @@ test.describe('Dashboard Recent | Todo (BACKLOG-3965)', () => {
   test('H4 open a deal, close the view: it is first in Recent, "Just now"', async () => {
     const page = driver!.page;
     await page.getByTestId('nav-transactions').click();
-    // The list cards carry no testid; the fixture deal is found by its seeded address.
+    // The list cards carry no testid; the fixture deal is found by its street inside the list
+    // (a page-wide match also hits the Dashboard copy hidden behind the Transactions view).
+    // Cards and Recent rows show the full "street, city, state zip"; QA_DEAL_ADDRESS is that string.
     const address = process.env.QA_DEAL_ADDRESS ?? '1 Fixture St';
-    const deal = page.getByText(address, { exact: true }).first();
+    const street = address.split(',')[0].trim();
+    const deal = page.getByTestId('tx-list').getByText(street, { exact: false }).first();
     test.skip((await deal.count()) === 0, 'Fixture deal not seeded (BACKLOG-4054 seeder).');
     await deal.click();
-    await page.keyboard.press('Escape');
-    await page.keyboard.press('Escape');
+    await backToDashboard(driver!);
     const top = page.getByTestId('dashboard-recent-row').first();
     await expect(top).toContainText(address);
     await expect(top).toContainText('Just now');
@@ -128,9 +145,12 @@ test.describe('Dashboard Recent | Todo (BACKLOG-3965)', () => {
     const row = page.getByTestId('dashboard-todo-row').first();
     test.skip((await row.count()) === 0, 'No open required items in the fixture (BACKLOG-4054 seeder).');
     await row.locator('button').first().click();
-    await expect(page.getByRole('tab', { name: /checklist/i, selected: true })).toBeVisible({ timeout: 15_000 });
-    await page.keyboard.press('Escape');
-    await page.keyboard.press('Escape');
+    // The transaction tabs are plain buttons (no role="tab" / aria-selected); the selected one
+    // carries the active border class (TransactionTabs.tsx).
+    const checklistTab = page.getByTestId('tab-checklist');
+    await expect(checklistTab).toBeVisible({ timeout: 15_000 });
+    await expect(checklistTab).toHaveClass(/\bborder-green-500\b/);
+    await backToDashboard(driver!);
   });
 
   // H6 — BACKLOG-3966 PR-3 (rewritten): Todo and the rings show on every plan.
@@ -153,7 +173,7 @@ test.describe('Dashboard Recent | Todo (BACKLOG-3965)', () => {
     const page = driver!.page;
     const started = Date.now();
     await page.getByTestId('nav-transactions').click();
-    await page.keyboard.press('Escape');
+    await backToDashboard(driver!);
     await expect(page.getByTestId('dashboard-recent-row').first()).toBeVisible({ timeout: 10_000 });
     expect(Date.now() - started).toBeLessThan(5_000);
   });
