@@ -77,6 +77,7 @@ import {
   INSERT_CHECKLIST_SQL,
   INSERT_EMAIL_MEMBER_SQL,
   INSERT_PRIVATE_CHECKLIST_SQL,
+  INSERT_TEXT_MEMBER_SQL,
   listOpenRequiredItemsSql,
   NEXT_CHECKLIST_SORT_ORDER_SQL,
   NEXT_ITEM_SORT_ORDER_SQL,
@@ -88,6 +89,7 @@ import {
   SET_CHECKLIST_ITEM_NOTE_SQL,
   SET_ITEM_SORT_ORDER_SQL,
   targetsInTransactionSql,
+  textLabelSql,
   TRANSACTION_EXISTS_SQL,
   type OpenRequiredItemsScope,
 } from "./checklistSql";
@@ -100,6 +102,7 @@ import type {
   ChecklistItem,
   ChecklistLink,
   ChecklistLinkKind,
+  ChecklistLinkWriteKind,
   ChecklistLinkMember,
   ChecklistsForTransaction,
   OutsideAuditDatesTarget,
@@ -117,6 +120,8 @@ import type { DocumentType } from "../../types/models";
 /** Fallback labels. The `label` column CHECKs `length(trim(label)) >= 1`. */
 const NO_SUBJECT_LABEL = "(no subject)";
 const UNNAMED_FILE_LABEL = "(unnamed file)";
+/** BACKLOG-3968: a text has no subject; its group is named "Text · <date>". */
+const TEXT_LABEL = "Text";
 
 interface ChecklistRow {
   id: string;
@@ -482,7 +487,8 @@ export function addChecklistLink(input: AddChecklistLinkInput): Promise<AddCheck
       return { status: "no_targets" };
     }
 
-    const transactionIdRepeats = input.kind === "email" ? 1 : 2;
+    // Attachment checks two independent arms; email and text one each.
+    const transactionIdRepeats = input.kind === "attachment" ? 2 : 1;
     const found = new Set(
       dbAll<{ id: string }>(targetsInTransactionSql(input.kind, targetIds.length), [
         ...targetIds,
@@ -500,9 +506,12 @@ export function addChecklistLink(input: AddChecklistLinkInput): Promise<AddCheck
       GET_TRANSACTION_AUDIT_DATES_SQL,
       [context.transaction_id],
     );
-    const outside = privateItem
-      ? []
-      : outsideAuditDates(input.kind, targetIds, dates?.started_at, dates?.closed_at);
+    // BACKLOG-3968: a text is never asked (the message upload has no
+    // outside-the-dates arm), so a text group is never flagged either.
+    const outside =
+      privateItem || input.kind === "text"
+        ? []
+        : outsideAuditDates(input.kind, targetIds, dates?.started_at, dates?.closed_at);
     if (outside.length > 0 && input.includeOutsideDates !== true) {
       return {
         status: "outside_dates",
@@ -515,21 +524,8 @@ export function addChecklistLink(input: AddChecklistLinkInput): Promise<AddCheck
     // the dates is asked like any other if the dates later move.
     const includeOutsideDates = outside.length > 0 ? 1 : 0;
 
-    const labelSql =
-      input.kind === "email"
-        ? emailLabelSql(targetIds.length)
-        : attachmentLabelSql(targetIds.length);
-    const labelRow = dbGet<{ subject?: string | null; filename?: string | null }>(
-      labelSql,
-      targetIds,
-    );
-    const rawLabel = input.kind === "email" ? labelRow?.subject : labelRow?.filename;
     const label =
-      rawLabel && rawLabel.trim().length > 0
-        ? rawLabel
-        : input.kind === "email"
-          ? NO_SUBJECT_LABEL
-          : UNNAMED_FILE_LABEL;
+      input.kind === "text" ? textGroupLabel(targetIds) : fileOrEmailLabel(input.kind, targetIds);
 
     const sortOrder =
       dbGet<{ next_sort_order: number }>(NEXT_LINK_SORT_ORDER_SQL, [input.itemId])
@@ -544,16 +540,43 @@ export function addChecklistLink(input: AddChecklistLinkInput): Promise<AddCheck
       sortOrder,
       includeOutsideDates,
     ]);
+    const memberSql =
+      input.kind === "text"
+        ? INSERT_TEXT_MEMBER_SQL
+        : input.kind === "email"
+          ? INSERT_EMAIL_MEMBER_SQL
+          : INSERT_ATTACHMENT_MEMBER_SQL;
     for (const targetId of targetIds) {
-      dbRun(
-        input.kind === "email" ? INSERT_EMAIL_MEMBER_SQL : INSERT_ATTACHMENT_MEMBER_SQL,
-        [randomUUID(), linkId, targetId],
-      );
+      dbRun(memberSql, [randomUUID(), linkId, targetId]);
     }
 
     return { status: "added", linkId, memberCount: targetIds.length };
   });
   return Promise.resolve(result);
+}
+
+/** An email group's label is its earliest subject; a file group's, its first filename. */
+function fileOrEmailLabel(kind: "attachment" | "email", targetIds: string[]): string {
+  const labelSql =
+    kind === "email" ? emailLabelSql(targetIds.length) : attachmentLabelSql(targetIds.length);
+  const labelRow = dbGet<{ subject?: string | null; filename?: string | null }>(labelSql, targetIds);
+  const rawLabel = kind === "email" ? labelRow?.subject : labelRow?.filename;
+  if (rawLabel && rawLabel.trim().length > 0) return rawLabel;
+  return kind === "email" ? NO_SUBJECT_LABEL : UNNAMED_FILE_LABEL;
+}
+
+/**
+ * BACKLOG-3968 PR-4b — a text group's label: "Text · <date>" from its earliest
+ * member, in the wording and date format the PDF export names a text by
+ * (`checklistExportHelpers.ts`, `formatLocalDate`). "Text" when no member has
+ * a date.
+ */
+function textGroupLabel(targetIds: string[]): string {
+  const row = dbGet<{ sent_at: string | null }>(textLabelSql(targetIds.length), targetIds);
+  const date = row?.sent_at ? new Date(row.sent_at) : null;
+  if (!date || isNaN(date.getTime())) return TEXT_LABEL;
+  const day = date.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+  return `${TEXT_LABEL} · ${day}`;
 }
 
 /**
@@ -563,7 +586,8 @@ export function addChecklistLink(input: AddChecklistLinkInput): Promise<AddCheck
  * disagree on a boundary. No dates at all: nothing is outside.
  */
 export function outsideAuditDates(
-  kind: AddChecklistLinkInput["kind"],
+  // BACKLOG-3968: never a text — asking about one is a compile error.
+  kind: ChecklistLinkWriteKind,
   targetIds: string[],
   startedAt: string | null | undefined,
   closedAt: string | null | undefined,

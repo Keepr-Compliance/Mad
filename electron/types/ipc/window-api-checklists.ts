@@ -21,7 +21,7 @@
 import type {
   AddChecklistLinkResult,
   AddMyItemResult,
-  ChecklistLinkWriteKind,
+  ChecklistLinkKind,
   ChecklistsForTransaction,
   ChecklistTemplate,
   ChecklistTemplateSource,
@@ -97,7 +97,7 @@ export interface WindowApiChecklists {
   /** Attach evidence to an item as one group; all-or-nothing. */
   addLink: (args: {
     itemId: string;
-    kind: ChecklistLinkWriteKind;
+    kind: ChecklistLinkKind;
     targetIds: string[];
     /** BACKLOG-3764: the agent's "Include it" to the outside-the-dates question. */
     includeOutsideDates?: boolean;
