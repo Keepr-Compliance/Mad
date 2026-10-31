@@ -2930,6 +2930,20 @@ class DatabaseService implements IDatabaseService {
     return attachmentDb.getAttachmentTextExtractionRow(id);
   }
 
+  // BACKLOG-3943: OCR second pass — read the row, then a compare-and-set write.
+  getAttachmentOcrRow(id: string) {
+    return attachmentDb.getAttachmentOcrRow(id);
+  }
+
+  compareAndSetAttachmentOcrResult(
+    id: string,
+    text: string,
+    metadataJson: string,
+    expectedMetadata: string | null
+  ) {
+    return attachmentDb.compareAndSetAttachmentOcrResult(id, text, metadataJson, expectedMetadata);
+  }
+
   getAttachmentsByEmailId(emailId: string) {
     return attachmentDb.getAttachmentsByEmailId(emailId);
   }
