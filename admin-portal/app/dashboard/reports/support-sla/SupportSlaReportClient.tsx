@@ -6,9 +6,16 @@
  */
 
 import { useRouter } from 'next/navigation';
+import { supportSlaViewsApi } from '@/lib/reports/period-only-views-api';
 import { SupportSlaReport, type SupportSlaReportProps } from './SupportSlaReport';
 
-export function SupportSlaReportClient(props: Omit<SupportSlaReportProps, 'onNavigate'>) {
+export function SupportSlaReportClient(props: Omit<SupportSlaReportProps, 'onNavigate' | 'viewsApi'>) {
   const router = useRouter();
-  return <SupportSlaReport {...props} onNavigate={(url) => router.push(url, { scroll: false })} />;
+  return (
+    <SupportSlaReport
+      {...props}
+      onNavigate={(url) => router.push(url, { scroll: false })}
+      viewsApi={supportSlaViewsApi}
+    />
+  );
 }

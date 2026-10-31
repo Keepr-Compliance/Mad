@@ -9,11 +9,13 @@
  * own saved filters instead, the same rule as iPhone Sync.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { SavedViews } from '@keepr/ui';
 import type { PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
-import { writeFailureMessage } from '@/lib/reports/report-views';
 import type { ReportViewsApi } from '@/lib/reports/report-views-api';
+import { useReportSavedViews } from '@/lib/reports/use-report-saved-views';
+import { serializeViewPeriod, viewPeriodMatches } from '@/lib/reports/view-period';
 import {
   activeFilterNames,
   applyExportFilters,
@@ -44,6 +46,7 @@ import {
   EXPORT_METRIC_FUNCTIONS,
   exportCardValue,
   exportFunctionsFor,
+  exportViewMatchesPage,
   exportViewMatchesState,
   EXPORTS_REPORT_KEY,
   formatExportMetricValue,
@@ -53,8 +56,8 @@ import {
   type StoredExportFilters,
 } from '@/lib/reports/exports-views';
 import { MAX_PINNED } from '@/lib/reports/report-views';
+import { MetricSaveFields } from '../iphone-sync/MetricSaveFields';
 import { PinnedViewCards } from '../iphone-sync/PinnedViewCards';
-import { ReportViewSelector } from '../iphone-sync/ReportViewSelector';
 import { ExportCharts } from './ExportCharts';
 import { ExportFilterBar, type FilterOption } from './ExportFilterBar';
 import { ExportOrgTable, ExportUserTable } from './ExportTables';
@@ -63,7 +66,7 @@ import { ExportsHowToUse } from './ExportsHowToUse';
 export type ExportViewsApi = ReportViewsApi<ExportSavedView, StoredExportFilters, ExportViewMetric>;
 
 export const EXPORTS_SAVE_HINT =
-  'Saves the Organization, User, Format and search filters you have now — not the period. The card follows whichever period is selected.';
+  'Saves the Organization, User, Format and search filters and the time range. A pinned card follows whichever period is selected.';
 
 function Tile({ label, value, sub, testId }: { label: string; value: number; sub?: string; testId: string }) {
   return (
@@ -88,6 +91,11 @@ export interface ExportsReportProps {
   rowCap: number;
   onNavigate?: (url: string) => void;
   viewsApi?: ExportViewsApi;
+  /**
+   * The default saved view the server opened the page with (bare URL only),
+   * or null. Read ONCE, as the filters' initial state; never synced after.
+   */
+  initialView?: ExportSavedView | null;
 }
 
 function sortedOptions(map: Map<string, string>): FilterOption[] {
@@ -103,8 +111,9 @@ export function ExportsReport({
   rowCap,
   onNavigate,
   viewsApi,
+  initialView = null,
 }: ExportsReportProps) {
-  const [filters, setFilters] = useState<ExportFilters>(EMPTY_EXPORT_FILTERS);
+  const [filters, setFilters] = useState<ExportFilters>(() => initialView?.filters ?? EMPTY_EXPORT_FILTERS);
   const [userSortKey, setUserSortKey] = useState<ExportUserSortKey>('exports');
   const [userSortDirection, setUserSortDirection] = useState<SortDirection>('desc');
   const [orgSortKey, setOrgSortKey] = useState<ExportOrgSortKey>('exports');
@@ -112,10 +121,12 @@ export function ExportsReport({
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS);
   const [openUserKey, setOpenUserKey] = useState<string | null>(null);
 
-  const [views, setViews] = useState<ExportSavedView[] | null>(null);
-  const [viewsLoading, setViewsLoading] = useState(Boolean(viewsApi));
-  const [viewsReloadToken, setViewsReloadToken] = useState(0);
-  const [writeError, setWriteError] = useState<string | null>(null);
+  const savedViews = useReportSavedViews<ExportSavedView, StoredExportFilters, ExportViewMetric>(
+    viewsApi,
+    EXPORTS_REPORT_KEY
+  );
+  const views = savedViews.views;
+  const [metric, setMetric] = useState<ExportViewMetric>(EXPORT_FALLBACK_METRIC);
   const [restoreFilters, setRestoreFilters] = useState<ExportFilters | null>(null);
 
   // THE shared set.
@@ -147,40 +158,15 @@ export function ExportsReport({
   const formatOptions = sortedOptions(new Map(all.map((e) => [e.format, formatLabel(e.format)] as const)));
 
   // ─── Saved views ───────────────────────────────────────────────
-  useEffect(() => {
-    if (!viewsApi) {
-      setViews(null);
-      setViewsLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setViewsLoading(true);
-    viewsApi
-      .list(EXPORTS_REPORT_KEY)
-      .then((rows) => {
-        if (!cancelled) setViews(rows);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          console.error('Saved views are unavailable:', err);
-          setViews(null);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setViewsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [viewsApi, viewsReloadToken]);
-
   const pinned = useMemo(() => (views ?? []).filter((v) => v.pinned).slice(0, MAX_PINNED), [views]);
+  // A card applies its filters only and follows the page's period (SR ruling,
+  // BACKLOG-4084); the Views list applies filters and time range.
   const cards = pinned.map((view) => ({
     view,
     value: exportCardValue(report.events, view),
     active: exportViewMatchesState(view, filters),
   }));
-  const activeViewId = (views ?? []).find((v) => exportViewMatchesState(v, filters))?.id ?? null;
+  const activeViewId = (views ?? []).find((v) => exportViewMatchesPage(v, filters, period))?.id ?? null;
 
   function updateFilters(next: ExportFilters) {
     setFilters(next);
@@ -188,14 +174,23 @@ export function ExportsReport({
     setOpenUserKey(null);
   }
 
-  function applyView(view: ExportSavedView) {
+  function applyViewFilters(view: ExportSavedView) {
     setRestoreFilters(filters);
     updateFilters(view.filters);
   }
 
+  /** From the Views list: filters, and at most ONE navigation when the stored period differs. */
+  function applyView(view: ExportSavedView) {
+    applyViewFilters(view);
+    const stored = view.period ?? null;
+    if (stored === null || viewPeriodMatches(stored, period)) return;
+    navigateToPeriod(stored.key, stored.from, stored.to);
+  }
+
+  /** As a card: its filters only; the period stays the page's. */
   function toggleCard(view: ExportSavedView) {
     if (!exportViewMatchesState(view, filters)) {
-      applyView(view);
+      applyViewFilters(view);
       return;
     }
     const back = restoreFilters ?? EMPTY_EXPORT_FILTERS;
@@ -203,47 +198,25 @@ export function ExportsReport({
     updateFilters(back);
   }
 
-  function runViewMutation(op: () => Promise<unknown>) {
-    setWriteError(null);
-    void op()
-      .then(() => setViewsReloadToken((t) => t + 1))
-      .catch((err) => {
-        console.error('Saved view change failed:', err);
-        setWriteError(writeFailureMessage(err));
-        setViewsReloadToken((t) => t + 1);
-      });
+  // Every save pins, as before; the kit refuses a sixth pin before calling.
+  function saveCurrentView(name: string) {
+    savedViews.save({
+      name,
+      filters: serializeExportFilters(filters, serializeViewPeriod(period)),
+      metric,
+      pinned: true,
+    });
   }
 
-  function saveCurrentView(name: string, metric: ExportViewMetric, pinnedFlag: boolean) {
-    if (!viewsApi) return;
-    runViewMutation(() =>
-      viewsApi.save({
-        reportKey: EXPORTS_REPORT_KEY,
-        name,
-        filters: serializeExportFilters(filters),
-        metric,
-        pinned: pinnedFlag,
-      })
-    );
-  }
-
+  // Re-saves the view as stored, period included: only `pinned` changes.
   function togglePin(view: ExportSavedView) {
-    if (!viewsApi) return;
-    runViewMutation(() =>
-      viewsApi.save({
-        id: view.id,
-        reportKey: EXPORTS_REPORT_KEY,
-        name: view.name,
-        filters: serializeExportFilters(view.filters),
-        metric: view.metric,
-        pinned: !view.pinned,
-      })
-    );
-  }
-
-  function deleteView(view: ExportSavedView) {
-    if (!viewsApi) return;
-    runViewMutation(() => viewsApi.remove(view.id));
+    savedViews.save({
+      id: view.id,
+      name: view.name,
+      filters: serializeExportFilters(view.filters, view.period ?? null),
+      metric: view.metric,
+      pinned: !view.pinned,
+    });
   }
 
   function handleUserSort(key: ExportUserSortKey) {
@@ -285,20 +258,27 @@ export function ExportsReport({
         onFiltersChange={updateFilters}
         onClear={() => updateFilters(EMPTY_EXPORT_FILTERS)}
         views={
-          <ReportViewSelector<ExportSavedView, ExportViewMetric>
+          <SavedViews<ExportSavedView>
             views={views}
-            loading={viewsLoading}
+            loading={savedViews.loading}
             activeViewId={activeViewId}
-            writeError={writeError}
+            writeError={savedViews.writeError}
             onApply={applyView}
-            onTogglePin={togglePin}
-            onDelete={deleteView}
+            onDelete={savedViews.remove}
             onSave={saveCurrentView}
-            columns={EXPORT_METRIC_COLUMNS}
-            functions={EXPORT_METRIC_FUNCTIONS}
-            functionsForColumn={exportFunctionsFor}
-            defaultMetric={EXPORT_FALLBACK_METRIC}
             saveHint={EXPORTS_SAVE_HINT}
+            defaultViewId={savedViews.defaultViewId}
+            onSetDefault={savedViews.setDefault}
+            pinning={{ max: MAX_PINNED, onTogglePin: togglePin }}
+            saveFields={
+              <MetricSaveFields
+                value={metric}
+                onChange={(next) => setMetric({ col: next.col as ExportViewMetric['col'], fn: 'count' })}
+                columns={EXPORT_METRIC_COLUMNS}
+                functions={EXPORT_METRIC_FUNCTIONS}
+                functionsForColumn={exportFunctionsFor}
+              />
+            }
           />
         }
       />
