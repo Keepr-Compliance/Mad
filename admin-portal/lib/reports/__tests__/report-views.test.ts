@@ -52,6 +52,7 @@ function view(over: Partial<ReportSavedView> = {}): ReportSavedView {
     metric: { col: 'runs', fn: 'count' },
     pinned: true,
     isDefault: false,
+    period: null,
     ...over,
   };
 }
