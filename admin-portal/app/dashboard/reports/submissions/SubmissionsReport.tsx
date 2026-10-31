@@ -15,7 +15,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { FilterCaption, StatCard, useSortState } from '@keepr/ui';
+import { FilterCaption, SavedViews, StatCard, useSortState } from '@keepr/ui';
 import type { PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
 import {
@@ -38,6 +38,17 @@ import {
   type SubmissionSortKey,
   type SubmissionsReportModel,
 } from '@/lib/reports/submissions';
+import { useReportSavedViews } from '@/lib/reports/use-report-saved-views';
+import type { SubmissionsViewsApi } from '@/lib/reports/submissions-views-api';
+import {
+  serializeSubmissionsView,
+  SUBMISSIONS_REPORT_KEY,
+  SUBMISSIONS_SAVE_HINT,
+  SUBMISSIONS_VIEW_METRIC,
+  submissionsViewMatchesState,
+  type SubmissionsSavedView,
+} from '@/lib/reports/submissions-views';
+import { viewPeriodMatches } from '@/lib/reports/view-period';
 import { OpenAttemptsPanel } from './OpenAttemptsPanel';
 import { SubmissionCharts } from './SubmissionCharts';
 import { SubmissionFilterBar, type FilterOption } from './SubmissionFilterBar';
@@ -78,6 +89,13 @@ export interface SubmissionsReportProps {
   truncated?: boolean;
   rowCap: number;
   onNavigate?: (url: string) => void;
+  /**
+   * The default view the SERVER resolved for a bare URL (BACKLOG-4084), or
+   * null. Seeds the filters once; never re-applied on later renders.
+   */
+  initialView?: SubmissionsSavedView | null;
+  /** Saved-view storage. Absent = saved views unavailable (fails closed). */
+  viewsApi?: SubmissionsViewsApi;
 }
 
 function uniqueOptions(subs: Submission[], pick: (s: Submission) => FilterOption | null): FilterOption[] {
@@ -101,8 +119,15 @@ export function SubmissionsReport({
   truncated = false,
   rowCap,
   onNavigate,
+  initialView = null,
+  viewsApi,
 }: SubmissionsReportProps) {
-  const [filters, setFilters] = useState<SubmissionFilters>(EMPTY_SUBMISSION_FILTERS);
+  // useState's initial value only: the default view seeds the first render and
+  // is never synced again, so a later navigation cannot re-apply it.
+  const [filters, setFilters] = useState<SubmissionFilters>(
+    () => initialView?.filters ?? EMPTY_SUBMISSION_FILTERS
+  );
+  const savedViews = useReportSavedViews(viewsApi, SUBMISSIONS_REPORT_KEY);
   const { sortKey, sortDirection, onSort } = useSortState<SubmissionSortKey>({
     initialKey: 'started',
     initialDirection: 'desc',
@@ -145,6 +170,28 @@ export function SubmissionsReport({
     onNavigate?.(buildPeriodUrl(search, nextPeriod, from, to));
   }
 
+  const activeViewId = useMemo(
+    () => (savedViews.views ?? []).find((v) => submissionsViewMatchesState(v, filters, period))?.id ?? null,
+    [savedViews.views, filters, period]
+  );
+
+  /** Filters at once; the period, only if it differs, in ONE navigation. */
+  function applyView(view: SubmissionsSavedView) {
+    updateFilters(view.filters);
+    if (view.period && !viewPeriodMatches(view.period, period)) {
+      navigateToPeriod(view.period.key, view.period.from, view.period.to);
+    }
+  }
+
+  function saveView(name: string) {
+    savedViews.save({
+      name,
+      filters: serializeSubmissionsView(filters, period),
+      metric: SUBMISSIONS_VIEW_METRIC,
+      pinned: false,
+    });
+  }
+
   const filterNames = activeFilterNames(filters);
 
   return (
@@ -161,6 +208,20 @@ export function SubmissionsReport({
         onPeriodChange={navigateToPeriod}
         onFiltersChange={updateFilters}
         onClear={() => updateFilters(EMPTY_SUBMISSION_FILTERS)}
+        viewsSlot={
+          <SavedViews<SubmissionsSavedView>
+            views={savedViews.views}
+            loading={savedViews.loading}
+            activeViewId={activeViewId}
+            writeError={savedViews.writeError}
+            onApply={applyView}
+            onDelete={savedViews.remove}
+            onSave={saveView}
+            saveHint={SUBMISSIONS_SAVE_HINT}
+            defaultViewId={savedViews.defaultViewId}
+            onSetDefault={savedViews.setDefault}
+          />
+        }
       />
 
       <div>
