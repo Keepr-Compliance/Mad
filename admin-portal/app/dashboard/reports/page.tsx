@@ -12,8 +12,9 @@ export const dynamic = 'force-dynamic';
  *
  * Lists every registered report. New reports are added to
  * `lib/reports/registry.ts`; the sidebar does not change.
- * BACKLOG-4005: Analytics and Funnel show here as cards (OVERVIEW_CARDS),
- * ahead of the registry reports. They have no sidebar entry of their own.
+ * BACKLOG-4005: Analytics shows here as a card (OVERVIEW_CARDS), ahead of the
+ * registry reports, with no sidebar entry of its own. Paywall Funnel is a
+ * registry report since BACKLOG-3722.
  */
 export default async function ReportsIndexPage() {
   const { supabase, user } = await getAuthenticatedUser();
