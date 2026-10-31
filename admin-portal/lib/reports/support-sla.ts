@@ -28,12 +28,10 @@
  *   whatever its age (strict); a later reply sets `first_response_at` and the
  *   ticket is then judged on time. Awaiting applies only to tickets still
  *   open with no reply and inside the target.
- * - `options.settings === null` (the settings read failed): every duration
- *   and both attainments are null; counts are still computed. No code default
- *   stands in for the stored targets.
- * - `options` omitted: the pre-4086 calendar-minute averages, no attainment.
- *   TRANSITIONAL so the page compiles unchanged; the page change makes
- *   `options` required and removes this branch.
+ * - `options` is REQUIRED. `options.settings === null` (the settings read
+ *   failed): every duration and both attainments are null; counts are still
+ *   computed. No code default stands in for the stored targets, and there is
+ *   no calendar-minute path.
  */
 
 import { businessMinutes, createDayCalendar, type BusinessWindow, type DayCalendar } from './business-hours';
@@ -43,8 +41,6 @@ import { median, percentileNearestRank } from './percentiles';
 export const OPEN_EXCLUDES = ['resolved', 'closed', 'deleted'] as const;
 export const RESOLVED_STATUSES = ['resolved', 'closed'] as const;
 export const DELETED_STATUS = 'deleted';
-
-const MS_PER_MINUTE = 60000;
 
 export const READ_FAILED_MESSAGE = 'Support tickets could not be read. The numbers below are not shown.';
 
@@ -180,10 +176,6 @@ function inPeriod(iso: string | null, from: number, to: number): boolean {
   return t >= from && t < to;
 }
 
-function minutesBetween(startIso: string, endIso: string): number {
-  return (Date.parse(endIso) - Date.parse(startIso)) / MS_PER_MINUTE;
-}
-
 type Clock = (startIso: string, endIso: string) => number;
 
 function average(values: number[]): number | null {
@@ -268,24 +260,23 @@ export function buildSupportSlaReport(
   rows: SupportTicketRow[],
   users: SupportAgentUser[],
   period: SlaPeriod,
-  openNowCount: number | null = null,
-  options?: SupportSlaOptions
+  openNowCount: number | null,
+  options: SupportSlaOptions
 ): SupportSlaReport {
   const from = Date.parse(period.fromIso);
   const to = Date.parse(period.toIso);
   const usersById = new Map(users.map((u) => [u.id, u]));
 
-  const settings = options ? options.settings : undefined;
+  const { settings } = options;
   // One day calendar per build, shared by every ticket.
   const cal = settings ? createDayCalendar(slaWindow(settings)) : null;
-  const clock: Clock = cal ? (a, b) => businessMinutes(a, b, cal) : minutesBetween;
-  // settings === null: the read failed, so no duration is shown.
-  const show = settings !== null;
-  const dur = (v: number | null) => (show ? v : null);
+  // settings === null: the read failed, so no duration is measured or shown.
+  const clock: Clock = cal ? (a, b) => businessMinutes(a, b, cal) : () => 0;
+  const dur = (v: number | null) => (cal ? v : null);
 
   const frTarget = settings ? settings.firstResponseTargetMinutes : 0;
   const resTarget = settings ? resolutionTargetMinutes(settings) : 0;
-  const nowIso = options ? options.now.toISOString() : '';
+  const nowIso = options.now.toISOString();
   const fr: Tally = { met: 0, missed: 0, awaiting: 0 };
   const res: Tally = { met: 0, missed: 0, awaiting: 0 };
 
