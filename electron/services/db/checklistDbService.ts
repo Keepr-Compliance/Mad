@@ -59,6 +59,7 @@ import {
   GET_CHECKLIST_LINKS_SQL,
   GET_CHECKLIST_EXPORT_ATTACHMENTS_SQL,
   GET_CHECKLIST_EXPORT_EMAIL_SUBJECTS_SQL,
+  GET_CHECKLIST_EXPORT_TEXTS_SQL,
   GET_CHECKLISTS_BY_TRANSACTION_SQL,
   GET_BROKER_CHECKLISTS_BY_TRANSACTION_SQL,
   GET_ITEM_CONTEXT_SQL,
@@ -85,6 +86,7 @@ import type {
   ChecklistExportTargets,
   ChecklistItem,
   ChecklistLink,
+  ChecklistLinkKind,
   ChecklistLinkMember,
   ChecklistsForTransaction,
   OutsideAuditDatesTarget,
@@ -139,7 +141,16 @@ interface MemberRow {
   kind: string;
   attachment_id: string | null;
   email_id: string | null;
+  message_id: string | null;
   in_transaction: number;
+}
+
+/**
+ * The stored kind, read back. An unknown value cannot be stored (the CHECK),
+ * so the fallback only types the row; it is never taken.
+ */
+function toLinkKind(kind: string): ChecklistLinkKind {
+  return kind === "email" || kind === "text" ? kind : "attachment";
 }
 
 function toChecklist(row: ChecklistRow): TransactionChecklist {
@@ -340,9 +351,10 @@ function loadChecklistDetail(checklistRow: ChecklistRow): ChecklistDetail {
     const member: ChecklistLinkMember = {
       id: row.id,
       linkId: row.link_id,
-      kind: row.kind === "email" ? "email" : "attachment",
+      kind: toLinkKind(row.kind),
       attachmentId: row.attachment_id,
       emailId: row.email_id,
+      messageId: row.message_id,
       inTransaction: row.in_transaction === 1,
     };
     const bucket = membersByLinkId.get(row.link_id);
@@ -355,7 +367,7 @@ function loadChecklistDetail(checklistRow: ChecklistRow): ChecklistDetail {
     const link: ChecklistLink = {
       id: row.id,
       itemId: row.item_id,
-      kind: row.kind === "email" ? "email" : "attachment",
+      kind: toLinkKind(row.kind),
       label: row.label,
       sortOrder: row.sort_order,
       includeOutsideDates: row.include_outside_dates === 1,
@@ -581,12 +593,14 @@ export function getChecklistExportTargets(
 ): Promise<ChecklistExportTargets> {
   const attachmentIds = new Set<string>();
   const emailIds = new Set<string>();
+  const messageIds = new Set<string>();
   for (const detail of checklists) {
     for (const links of Object.values(detail.linksByItemId)) {
       for (const link of links) {
         for (const member of link.members) {
           if (member.attachmentId) attachmentIds.add(member.attachmentId);
           if (member.emailId) emailIds.add(member.emailId);
+          if (member.messageId) messageIds.add(member.messageId);
         }
       }
     }
@@ -625,7 +639,26 @@ export function getChecklistExportTargets(
     for (const row of rows) emailSubjects[row.id] = row.subject;
   }
 
-  return Promise.resolve({ attachmentTargets, emailSubjects });
+  // BACKLOG-3968: the texts behind text members, with the same hidden test.
+  const textTargets: ChecklistExportTargets["textTargets"] = {};
+  if (messageIds.size > 0) {
+    const rows = dbAll<{
+      id: string;
+      external_id: string | null;
+      sent_at: string | null;
+      hidden: number;
+    }>(GET_CHECKLIST_EXPORT_TEXTS_SQL, [transactionId, JSON.stringify([...messageIds])]);
+    for (const row of rows) {
+      textTargets[row.id] = {
+        messageId: row.id,
+        externalId: row.external_id,
+        sentAt: row.sent_at,
+        hidden: row.hidden === 1,
+      };
+    }
+  }
+
+  return Promise.resolve({ attachmentTargets, emailSubjects, textTargets });
 }
 
 // ---------------------------------------------------------------------------

@@ -15,8 +15,20 @@
 
 import type { DocumentType } from "./models";
 
-/** What kind of evidence a link group holds. Mirrors the local CHECK and the cloud one. */
-export type ChecklistLinkKind = "attachment" | "email";
+/**
+ * The kinds of evidence a link group can be MADE with (the add-link channel,
+ * its Zod schema and the picker). BACKLOG-3968 PR-4a stores texts but adds no
+ * writer for them yet — that is PR-4b — so 'text' is not here.
+ */
+export type ChecklistLinkWriteKind = "attachment" | "email";
+
+/**
+ * What kind of evidence a stored link group holds. Mirrors the local CHECK
+ * (migration v78 added 'text', BACKLOG-3968). The cloud CHECK accepts 'text'
+ * only after the PR-5 migration, which is why a text link is withheld from the
+ * submission until then (`electron/services/checklistTextLinkHold.ts`).
+ */
+export type ChecklistLinkKind = ChecklistLinkWriteKind | "text";
 
 /** One checklist, as stored. */
 export interface TransactionChecklist {
@@ -58,14 +70,16 @@ export interface ChecklistItem {
   sortOrder: number;
 }
 
-/** One email or attachment inside a group. */
+/** One email, attachment or text inside a group. */
 export interface ChecklistLinkMember {
   id: string;
   linkId: string;
   kind: ChecklistLinkKind;
-  /** Exactly one of these two is set, matching `kind`. */
+  /** Exactly one of these three is set, matching `kind`. */
   attachmentId: string | null;
   emailId: string | null;
+  /** `messages.id` of a text member (BACKLOG-3968). */
+  messageId: string | null;
   /**
    * Whether the target is STILL linked to this checklist's transaction.
    *
@@ -140,12 +154,27 @@ export interface ChecklistAttachmentTarget {
   hidden: boolean;
 }
 
+/**
+ * BACKLOG-3968 — the text row behind one text member, read for the PDF
+ * export's checklist block.
+ */
+export interface ChecklistTextTarget {
+  messageId: string;
+  /** `messages.external_id` (the Apple guid), for matching another copy. */
+  externalId: string | null;
+  sentAt: string | null;
+  /** The text is hidden from THIS transaction's export (whole set, any date). */
+  hidden: boolean;
+}
+
 /** BACKLOG-3767 — the rows the PDF export's checklist block names members by. */
 export interface ChecklistExportTargets {
   /** Keyed by attachment id. */
   attachmentTargets: Record<string, ChecklistAttachmentTarget>;
   /** Keyed by email id. */
   emailSubjects: Record<string, string | null>;
+  /** Keyed by message id (BACKLOG-3968). */
+  textTargets: Record<string, ChecklistTextTarget>;
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +272,7 @@ export type SelectChecklistTemplateResult =
 
 export interface AddChecklistLinkInput {
   itemId: string;
-  kind: ChecklistLinkKind;
+  kind: ChecklistLinkWriteKind;
   /** `attachments.id` or `emails.id`, depending on `kind`. At least one. */
   targetIds: string[];
   /**

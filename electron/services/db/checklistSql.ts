@@ -41,7 +41,7 @@ import { sql } from "./core/sqlText";
 import { placeholderList } from "./core/sqlFragments";
 import { NOT_PRIVATE_CHECKLIST_SQL } from "./checklistPrivacy";
 import type { SafeSql } from "./core/sqlText";
-import type { ChecklistLinkKind } from "../../types/checklist";
+import type { ChecklistLinkWriteKind } from "../../types/checklist";
 
 /** Does this transaction exist? One bound parameter. */
 export const TRANSACTION_EXISTS_SQL = sql`
@@ -166,7 +166,11 @@ export const GET_CHECKLIST_LINKS_SQL = sql`
  * away with the row, which is the force-re-cache behaviour this schema chose
  * deliberately.
  *
- * The text arm's second EXISTS carries the same Apple-id fallback as
+ * A text member (BACKLOG-3968) is in the transaction when `communications`
+ * names its message by id, or names its thread for the message's own user —
+ * the two arms `getTransactionMessages` reads texts by.
+ *
+ * The attachment arm's second EXISTS carries the same Apple-id fallback as
  * `targetsInTransactionSql` below (BACKLOG-3733): a photo attachment can live
  * on one signed-in user's message copy while the thread link scopes to
  * another user's copy of the same provider thread. `msg.external_id =
@@ -174,11 +178,19 @@ export const GET_CHECKLIST_LINKS_SQL = sql`
  * guid when `msg` itself owns no direct attachment row.
  */
 export const GET_CHECKLIST_LINK_MEMBERS_SQL = sql`
-  SELECT m.id, m.link_id, m.kind, m.attachment_id, m.email_id,
+  SELECT m.id, m.link_id, m.kind, m.attachment_id, m.email_id, m.message_id,
          CASE
            WHEN m.email_id IS NOT NULL THEN EXISTS (
              SELECT 1 FROM communications c
              WHERE c.transaction_id = cl.transaction_id AND c.email_id = m.email_id
+           )
+           WHEN m.message_id IS NOT NULL THEN EXISTS (
+             SELECT 1 FROM messages tm
+             JOIN communications c4 ON (
+               (c4.message_id IS NOT NULL AND c4.message_id = tm.id)
+               OR (c4.message_id IS NULL AND c4.thread_id IS NOT NULL AND c4.thread_id = tm.thread_id AND tm.user_id = c4.user_id)
+             )
+             WHERE tm.id = m.message_id AND c4.transaction_id = cl.transaction_id
            )
            ELSE EXISTS (
              SELECT 1 FROM attachments a
@@ -271,10 +283,15 @@ export const GET_TRANSACTION_AUDIT_DATES_SQL = sql`
  * BACKLOG-3764: the agent answered "Include it" at the submit pre-flight. Sets
  * the flag on ONE group, only if it belongs to this transaction. Two bound
  * parameters, in order: link id, transaction id.
+ *
+ * BACKLOG-3968: never on a text link. The message upload has no
+ * outside-the-dates arm, so the flag could not bring a text in; the pre-flight
+ * never asks about one.
  */
 export const SET_LINK_INCLUDE_OUTSIDE_DATES_SQL = sql`
   UPDATE transaction_checklist_links SET include_outside_dates = 1
   WHERE id = ?
+    AND kind <> 'text'
     AND item_id IN (
       SELECT i.id FROM transaction_checklist_items i
       JOIN transaction_checklists c ON c.id = i.checklist_id
@@ -299,7 +316,7 @@ export const SET_LINK_INCLUDE_OUTSIDE_DATES_SQL = sql`
  * Bound parameters, in order: the N target ids, then start, start, end, end
  * (each NULL when the deal has no such date).
  */
-export function outsideAuditDatesSql(kind: ChecklistLinkKind, count: number): SafeSql {
+export function outsideAuditDatesSql(kind: ChecklistLinkWriteKind, count: number): SafeSql {
   const ids = placeholderList(count);
   if (kind === "email") {
     return sql`
@@ -398,7 +415,7 @@ export function attachmentLabelSql(count: number): SafeSql {
  * narrow an EXPORT to what can be uploaded, while this asks only whether the
  * attachment belongs to this transaction at all.
  */
-export function targetsInTransactionSql(kind: ChecklistLinkKind, count: number): SafeSql {
+export function targetsInTransactionSql(kind: ChecklistLinkWriteKind, count: number): SafeSql {
   const ids = placeholderList(count);
   if (kind === "email") {
     return sql`
@@ -464,6 +481,29 @@ export const GET_CHECKLIST_EXPORT_ATTACHMENTS_SQL = sql`
   FROM json_each(?) j
   JOIN attachments a ON a.id = j.value
   LEFT JOIN messages msg ON msg.id = a.message_id
+`;
+
+/**
+ * BACKLOG-3968 — the texts behind a checklist's text members, for the PDF
+ * export's checklist block. One row per message id in the JSON array `?2`.
+ *
+ * `hidden` is tested against the transaction's WHOLE hide list (`?1`), on the
+ * message id and on the Apple guid (`messages.external_id`) — the same two
+ * arms as GET_CHECKLIST_EXPORT_ATTACHMENTS_SQL, so a text re-imported under a
+ * new id stays hidden.
+ */
+export const GET_CHECKLIST_EXPORT_TEXTS_SQL = sql`
+  SELECT msg.id, msg.external_id, msg.sent_at,
+         CASE WHEN EXISTS (
+           SELECT 1 FROM transaction_hidden_texts h
+           WHERE h.transaction_id = ?
+             AND (
+               h.message_id = msg.id
+               OR (h.message_external_id IS NOT NULL AND h.message_external_id = msg.external_id)
+             )
+         ) THEN 1 ELSE 0 END AS hidden
+  FROM json_each(?) j
+  JOIN messages msg ON msg.id = j.value
 `;
 
 /** BACKLOG-3767 — subjects for a checklist's email members (JSON array of ids). */

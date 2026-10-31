@@ -17,6 +17,12 @@
  *   5. otherwise it is in the export → a "View →" link to its section (full
  *      mode only; the Summary PDF carries no links at all)
  *
+ * A text member (BACKLOG-3968) follows the same steps as a text attachment:
+ * hidden from this export → nothing; stale → counted; texts not selected →
+ * "Not in this export"; not among the included texts (by message id, then the
+ * Apple guid) → outside the dates; otherwise "View →" to the text's section.
+ * Named on its own as "Text · <date>".
+ *
  * A link's stored label is the FIRST member's subject or filename. It is
  * printed only when every member of the link passed steps 1 and 2; otherwise
  * each surviving member is named on its own, so the label can never name a
@@ -29,10 +35,11 @@ import type {
   ChecklistDetail,
   ChecklistLink,
   ChecklistLinkMember,
+  ChecklistTextTarget,
 } from "../../types/checklist";
 
-export type { ChecklistAttachmentTarget };
-import { escapeHtml } from "../../utils/exportUtils";
+export type { ChecklistAttachmentTarget, ChecklistTextTarget };
+import { escapeHtml, formatLocalDate } from "../../utils/exportUtils";
 import { isEmailMessage, isTextMessage } from "../../utils/channelHelpers";
 
 /** Everything the block needs that the main process reads. Absent = toggle off. */
@@ -42,6 +49,8 @@ export interface ChecklistExportData {
   attachmentTargets: Record<string, ChecklistAttachmentTarget>;
   /** Keyed by email id: the email's subject, for naming one member on its own. */
   emailSubjects: Record<string, string | null>;
+  /** Keyed by message id: the text behind a text member (BACKLOG-3968). */
+  textTargets: Record<string, ChecklistTextTarget>;
   /** The plan's content selection. */
   includeEmails: boolean;
   includeTexts: boolean;
@@ -111,6 +120,27 @@ function classifyMember(
     if (!data.includeEmails) return { kind: "excluded", name };
     if (!included.emailIds.has(member.emailId)) return { kind: "outside", name };
     return { kind: "included", name, target: sections?.emailSection.get(member.emailId) ?? null };
+  }
+
+  if (member.messageId) {
+    const text = data.textTargets[member.messageId];
+    // No row to judge it by: say nothing rather than guess.
+    if (!text) return { kind: "omit" };
+    if (text.hidden) return { kind: "omit" };
+    if (!member.inTransaction) return { kind: "stale" };
+    const name = text.sentAt ? `Text · ${formatLocalDate(text.sentAt)}` : "Text";
+    if (!data.includeTexts) return { kind: "excluded", name };
+    if (included.textIds.has(text.messageId)) {
+      return { kind: "included", name, target: sections?.textSectionById.get(text.messageId) ?? null };
+    }
+    if (text.externalId && included.textExternalIds.has(text.externalId)) {
+      return {
+        kind: "included",
+        name,
+        target: sections?.textSectionByExternalId.get(text.externalId) ?? null,
+      };
+    }
+    return { kind: "outside", name };
   }
 
   const target = member.attachmentId ? data.attachmentTargets[member.attachmentId] : undefined;
