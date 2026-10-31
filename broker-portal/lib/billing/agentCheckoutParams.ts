@@ -22,6 +22,14 @@ export type AgentInterval = 'month' | 'year';
 
 export const AGENT_KIND = 'agent';
 
+/**
+ * Where Subscribe was clicked. Omitted = the website. 'desktop' = the Keepr app's
+ * export paywall (BACKLOG-3676): the browser returns through /payments/complete,
+ * which bounces back into the app, and the session carries `origin: 'desktop'`
+ * so a website click never reuses a desktop session (or the reverse).
+ */
+export type AgentCheckoutOrigin = 'desktop';
+
 /** Stripe Price lookup keys (PM decision on 3847: no price-book table yet). */
 export const AGENT_LOOKUP_KEYS: Record<AgentInterval, string> = {
   month: 'agent_month_usd',
@@ -36,21 +44,28 @@ export interface AgentCheckoutInput {
   interval: AgentInterval;
   /** Origin the browser returns to, e.g. https://app.keeprcompliance.com (no trailing slash). */
   returnBase: string;
+  /** Omitted for the website: its params stay exactly as captured in the TEST fixtures. */
+  origin?: AgentCheckoutOrigin;
 }
 
 export function buildSubscriptionCheckoutParams(i: AgentCheckoutInput): Stripe.Checkout.SessionCreateParams {
   const subscriptionMetadata: Record<string, string> = { kind: AGENT_KIND, user_id: i.userId };
   if (i.organizationId) subscriptionMetadata.organization_id = i.organizationId;
+  const desktop = i.origin === 'desktop';
   return {
     mode: 'subscription',
     customer: i.customerId,
     line_items: [{ price: i.priceId, quantity: 1 }],
     payment_method_types: ['card'],
     // interval / price_id: which open session may be reused for which choice.
-    metadata: { ...subscriptionMetadata, interval: i.interval, price_id: i.priceId },
+    // origin rides the session metadata only (BACKLOG-3676); the subscription's metadata is the same for both.
+    metadata: { ...subscriptionMetadata, interval: i.interval, price_id: i.priceId, ...(desktop ? { origin: 'desktop' } : {}) },
     subscription_data: { metadata: subscriptionMetadata },
-    success_url: `${i.returnBase}/dashboard/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${i.returnBase}/dashboard/billing?checkout=cancelled`,
+    // The desktop returns through the deep-link bounce page, which wakes the app.
+    success_url: desktop
+      ? `${i.returnBase}/payments/complete?session={CHECKOUT_SESSION_ID}&kind=agent`
+      : `${i.returnBase}/dashboard/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: desktop ? `${i.returnBase}/payments/cancelled?kind=agent` : `${i.returnBase}/dashboard/billing?checkout=cancelled`,
   };
 }
 
@@ -60,8 +75,11 @@ export function agentIdempotencyKey(k: {
   interval: AgentInterval;
   /** Newest Agent session of the customer, any status; null when there is none. */
   anchorSessionId: string | null;
+  /** Omitted for the website, whose key is pinned by the TEST fixtures. */
+  origin?: AgentCheckoutOrigin;
 }): string {
-  return `agent-co:${k.userId}:${k.mode}:${k.interval}:${k.anchorSessionId ?? 'none'}`;
+  const key = `agent-co:${k.userId}:${k.mode}:${k.interval}:${k.anchorSessionId ?? 'none'}`;
+  return k.origin === 'desktop' ? `${key}:desktop` : key;
 }
 
 /**

@@ -797,6 +797,9 @@ const RLS_GUARDED_HANDLERS = ['app/setup/consent/callback/route.ts'];
  * added here on purpose, where review sees it.
  */
 const KNOWN_ROUTE_HANDLERS = [
+  // BACKLOG-3676: GET only, Bearer JWT (verifyBearerUser); returns the Agent
+  // price from Stripe and the booking URL. No request-supplied ids, no write.
+  'app/api/billing/agent-prices/route.ts',
   // BACKLOG-3863 PR-2: GET only, Bearer JWT (verifyBearerUser); reads the
   // verified caller's own plan, no request-supplied ids. Display only.
   'app/api/billing/plan-summary/route.ts',
@@ -826,6 +829,9 @@ const KNOWN_ROUTE_HANDLERS = [
   'app/api/payments/charge/route.ts',
   'app/api/payments/checkout-session/route.ts',
   'app/api/payments/status/route.ts',
+  // BACKLOG-3676: POST only, Bearer JWT (verifyBearerUserWithToken); the body is
+  // never read. Membership read as the verified caller, own rows only.
+  'app/api/payments/subscription-session/route.ts',
   'app/api/payments/webhook/route.ts',
   'app/api/send-download-link/route.ts',
   'app/auth/callback/route.ts',
@@ -1001,7 +1007,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(26); // BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary
+    expect(handlers.length).toBe(28); // BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {
