@@ -13,6 +13,7 @@
  */
 import React from "react";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import Dashboard from "../Dashboard";
 import { getDashboardTourSteps } from "../../config/tourSteps";
@@ -35,7 +36,10 @@ jest.mock("../../hooks/useReconnectionSummary", () => ({ useReconnectionSummary:
 jest.mock("../dashboard/index", () => ({
   SyncStatusIndicator: () => <div data-testid="sync-status-indicator" />,
 }));
-jest.mock("../StartNewAuditModal", () => ({ __esModule: true, default: () => null }));
+jest.mock("../StartNewAuditModal", () => ({
+  __esModule: true,
+  default: () => <div data-testid="start-new-audit-modal" />,
+}));
 
 let mockAiAddon = true;
 jest.mock("../common/FeatureGate", () => ({
@@ -164,5 +168,88 @@ describe("Dashboard tiles on kit tokens (BACKLOG-3965 C4)", () => {
     // The tiles rendered, so an empty result is about them, not an empty page.
     expect(screen.getAllByRole("button").length).toBeGreaterThanOrEqual(5);
     expect(offTokenClasses(container)).toEqual([]);
+  });
+});
+
+describe("Dashboard tiles: clicks, sync lock, highlight, focus ring (BACKLOG-3965 SR round 1)", () => {
+  const props = () => ({
+    onAuditNew: jest.fn(),
+    onViewTransactions: jest.fn(),
+    onManageContacts: jest.fn(),
+    onSyncPhone: jest.fn(),
+    onSyncAndroid: jest.fn(),
+  });
+  const TILES = [
+    "new-audit-card",
+    "transactions-card",
+    "contacts-card",
+    "sync-phone-card",
+    "sync-android-card",
+  ] as const;
+  // New Transaction opens the start-audit modal (AI add-on on, as today).
+  const tile = (container: HTMLElement, tour: string) =>
+    container.querySelector(`[data-tour="${tour}"], [data-testid="${tour}"]`) as HTMLElement;
+
+  it.each([
+    ["transactions-card", "onViewTransactions"],
+    ["contacts-card", "onManageContacts"],
+    ["sync-phone-card", "onSyncPhone"],
+    ["sync-android-card", "onSyncAndroid"],
+  ] as const)("clicking %s calls %s once and no other handler", async (target, handler) => {
+    const p = props();
+    const { container } = render(<Dashboard {...p} />);
+    await userEvent.click(tile(container, target));
+    for (const [name, fn] of Object.entries(p)) {
+      expect(fn).toHaveBeenCalledTimes(name === handler ? 1 : 0);
+    }
+  });
+
+  it("clicking New Transaction opens the start-audit modal", async () => {
+    const p = props();
+    const { container } = render(<Dashboard {...p} />);
+    expect(screen.queryByTestId("start-new-audit-modal")).toBeNull();
+    await userEvent.click(tile(container, "new-audit-card"));
+    expect(screen.getByTestId("start-new-audit-modal")).toBeInTheDocument();
+  });
+
+  it.each(TILES)("%s is disabled (attribute) while a sync runs and enabled otherwise", (target) => {
+    mockSyncing = true;
+    const { container, unmount } = render(<Dashboard {...props()} />);
+    expect(tile(container, target)).toBeDisabled();
+    unmount();
+    mockSyncing = false;
+    const again = render(<Dashboard {...props()} />);
+    expect(tile(again.container, target)).toBeEnabled();
+  });
+
+  it("New Transaction carries the highlight classes only with pending transactions", () => {
+    mockPendingCount = 3;
+    const on = render(<Dashboard {...props()} />);
+    const hi = tile(on.container, "new-audit-card").classList;
+    expect(hi.contains("border-primary-500")).toBe(true);
+    expect(hi.contains("ring-primary-200")).toBe(true);
+    expect(hi.contains("border-gray-200")).toBe(false);
+    on.unmount();
+
+    mockPendingCount = 0;
+    const off = render(<Dashboard {...props()} />);
+    const lo = tile(off.container, "new-audit-card").classList;
+    expect(lo.contains("border-primary-500")).toBe(false);
+    expect(lo.contains("ring-primary-200")).toBe(false);
+    expect(lo.contains("border-gray-200")).toBe(true);
+  });
+
+  it("a highlighted tile has no gray hover border; an unhighlighted one has it", () => {
+    mockPendingCount = 3;
+    const { container } = render(<Dashboard {...props()} />);
+    expect(tile(container, "new-audit-card").classList.contains("hover:border-gray-300")).toBe(false);
+    expect(tile(container, "transactions-card").classList.contains("hover:border-gray-300")).toBe(true);
+  });
+
+  it.each(TILES)("%s keeps the keyboard focus ring", (target) => {
+    const { container } = render(<Dashboard {...props()} />);
+    const cls = tile(container, target).classList;
+    expect(cls.contains("focus-visible:ring-2")).toBe(true);
+    expect(cls.contains("focus-visible:ring-primary-500")).toBe(true);
   });
 });
