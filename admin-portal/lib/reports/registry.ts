@@ -69,6 +69,14 @@ export const REPORTS: ReportEntry[] = [
     source: 'users, devices, audit_logs',
     permission: PERMISSIONS.ANALYTICS_VIEW,
   },
+  {
+    slug: 'funnel',
+    title: 'Paywall Funnel',
+    description:
+      'Paywall viewed, unlock clicked, payment succeeded, export completed. Where do users drop off?',
+    source: 'analytics_events (paywall-viewed, unlock-clicked, payment-succeeded, export-completed)',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
 ];
 
 export function reportHref(slug: string): string {

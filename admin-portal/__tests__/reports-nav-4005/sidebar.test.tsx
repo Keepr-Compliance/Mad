@@ -4,8 +4,8 @@
  * BACKLOG-4005 C4 — the sidebar has ONE Reports entry (no Analytics, no
  * Funnel), it is lit on every /dashboard/reports/* page in the desktop aside,
  * the collapsed aside and the phone drawer, and it is hidden without
- * analytics.view. C6 — the Reports page shows the Analytics and Funnel cards
- * beside the report cards.
+ * analytics.view. C6 — the Reports page shows the Analytics card beside the
+ * report cards; Paywall Funnel is a registry report (BACKLOG-3722), listed last.
  */
 
 import React from 'react';
@@ -158,19 +158,19 @@ describe('C4c hidden without analytics.view', () => {
   });
 });
 
-describe('C6 Reports page shows Analytics and Funnel cards beside the reports', () => {
-  it('renders the two overview cards and every registry report', async () => {
+describe('C6 Reports page shows the Analytics card beside the reports, Paywall Funnel among them', () => {
+  it('renders the overview card and every registry report', async () => {
     render(await ReportsIndexPage());
     const hrefs = allHrefs();
     expect(hrefs).toEqual([
       '/dashboard/reports/analytics',
-      '/dashboard/reports/funnel',
       '/dashboard/reports/iphone-sync',
       '/dashboard/reports/google-messages-sync',
       '/dashboard/reports/submissions',
       '/dashboard/reports/exports',
       '/dashboard/reports/support-sla',
       '/dashboard/reports/user-activity',
+      '/dashboard/reports/funnel',
     ]);
     expect(screen.getByRole('heading', { name: 'Analytics' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Paywall Funnel' })).toBeTruthy();
