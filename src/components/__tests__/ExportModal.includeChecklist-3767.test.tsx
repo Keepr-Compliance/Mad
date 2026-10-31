@@ -49,9 +49,30 @@ const SAVED = {
 const ONE_CHECKLIST = {
   success: true,
   checklists: {
-    checklists: [{ checklist: { id: "cl-1" }, items: [], linksByItemId: {} }],
+    checklists: [{ checklist: { id: "cl-1", isPrivate: false }, items: [], linksByItemId: {} }],
     requiredDone: 0,
     requiredTotal: 0,
+  },
+};
+/** BACKLOG-3966: the deal's only checklist is the agent's private My items. */
+const ONLY_PRIVATE = {
+  success: true,
+  checklists: {
+    checklists: [{ checklist: { id: "cl-mine", isPrivate: true }, items: [], linksByItemId: {} }],
+    requiredDone: 0,
+    requiredTotal: 1,
+  },
+};
+/** A template checklist next to the private one. */
+const PRIVATE_AND_TEMPLATE = {
+  success: true,
+  checklists: {
+    checklists: [
+      { checklist: { id: "cl-mine", isPrivate: true }, items: [], linksByItemId: {} },
+      { checklist: { id: "cl-1", isPrivate: false }, items: [], linksByItemId: {} },
+    ],
+    requiredDone: 0,
+    requiredTotal: 1,
   },
 };
 const NO_CHECKLIST = {
@@ -152,4 +173,19 @@ it("C8e: unticked and saved as the default, the choice is stored", async () => {
     export: expect.objectContaining({ includeChecklist: false }),
   });
   expect(exportEnhancedMock).toHaveBeenCalledWith(TX, expect.objectContaining({ includeChecklist: false }));
+});
+
+it("C8f (BACKLOG-3966): hidden, and sent as false, when the deal's only checklist is private", async () => {
+  checklistsGetMock.mockResolvedValue(ONLY_PRIVATE);
+  await openOptions();
+  expect(checklistBox()).toBeNull();
+  await exportNow();
+  await waitFor(() => expect(exportEnhancedMock).toHaveBeenCalledTimes(1));
+  expect(exportEnhancedMock).toHaveBeenCalledWith(TX, expect.objectContaining({ includeChecklist: false }));
+});
+
+it("C8g (BACKLOG-3966): shown when a template checklist sits next to the private one", async () => {
+  checklistsGetMock.mockResolvedValue(PRIVATE_AND_TEMPLATE);
+  await openOptions();
+  expect(await screen.findByRole("checkbox", { name: /Include checklist items/ })).toBeChecked();
 });

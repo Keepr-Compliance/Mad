@@ -2,10 +2,14 @@
  * BACKLOG-3476 — the Checklist tab inside TransactionDetails.
  *
  * Wrong implementations this suite is here to catch:
- *   C-I  the gate read fail-open: the tab shows while the plan is `pending` or
- *        `unknown` with no checklist.
- *   C-J  the Overview line shown while the tab is hidden (SR condition 5).
- *   C-R  the tab left active after it stops being shown — a blank panel.
+ *   C-I  the gate read fail-open: the tab shows while the plan is `pending`.
+ *        BACKLOG-3966 PR-3 rewrote the rest of C-I: once main answers, the tab
+ *        shows on EVERY plan (My items need none), and on a plan without
+ *        checklists it opens to an empty panel with no template actions.
+ *   C-J  the Overview line shown with no checklist on the deal (SR condition 5).
+ *   C-R  (rewritten by BACKLOG-3966 PR-3) the tab no longer goes away on a
+ *        plan without checklists, so a Checklist open stays on the Checklist
+ *        tab and a Remove leaves the empty panel, never a blank one.
  *   SR B1  the link picker says "No email threads on this transaction." while
  *        the emails are still loading: a second caller of the email load
  *        returned early instead of awaiting the load already in flight.
@@ -110,13 +114,20 @@ describe("C-I — the tab follows the plan, never fail-open", () => {
     expect(await screen.findByTestId("tab-checklist")).toBeInTheDocument();
   });
 
-  it("unknown + no checklist → no tab and no Overview line", async () => {
-    strictState().mockResolvedValue("unknown");
+  it.each([
+    ["blocked", "Template checklists aren’t on your plan."],
+    ["unknown", "We couldn’t confirm your plan just now."],
+  ] as const)("%s + no checklist → tab shown, empty panel, no template actions", async (gate, hint) => {
+    strictState().mockResolvedValue(gate);
     render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
-    await waitFor(() => expect(strictState()).toHaveBeenCalled());
-    await waitFor(() => expect(checklists().get).toHaveBeenCalled());
-    await act(async () => {});
-    expect(screen.queryByTestId("tab-checklist")).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByTestId("tab-checklist"));
+    const panel = await screen.findByTestId("checklist-panel");
+    expect(screen.getByTestId("checklist-template-hint")).toHaveTextContent(hint);
+    expect(screen.queryByTestId("checklist-add")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("checklist-total-progress")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("checklist-readonly-notice")).not.toBeInTheDocument();
+    expect(panel).not.toHaveTextContent("Choose");
+    expect(checklists().listTemplates).not.toHaveBeenCalled();
     expect(screen.queryByTestId("overview-checklist")).not.toBeInTheDocument();
   });
 
@@ -170,28 +181,26 @@ describe("C-J — the Overview line appears exactly when the tab does", () => {
     expect(await screen.findByTestId("overview-checklist-caption")).toHaveTextContent("Probe template · 4 items");
   });
 
-  it("blocked + no checklist → neither", async () => {
+  it("blocked + no checklist → the tab, but no Overview line", async () => {
     strictState().mockResolvedValue("blocked");
     render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} />);
     await waitFor(() => expect(checklists().get).toHaveBeenCalled());
     await act(async () => {});
-    expect(screen.queryByTestId("tab-checklist")).not.toBeInTheDocument();
+    expect(screen.getByTestId("tab-checklist")).toBeInTheDocument();
     expect(screen.queryByTestId("overview-checklist")).not.toBeInTheDocument();
   });
 });
 
-describe("C-R — the active tab falls back to Overview when the Checklist tab goes", () => {
-  it("opened on the Checklist tab, and the plan answers blocked with no checklist", async () => {
+describe("C-R — the Checklist tab stays on a plan without checklists (BACKLOG-3966 PR-3)", () => {
+  it("opened on the Checklist tab, and the plan answers blocked with no checklist: the empty panel", async () => {
     strictState().mockResolvedValue("blocked");
     render(<TransactionDetails transaction={baseTransaction} onClose={jest.fn()} initialTab="checklist" />);
-    // Overview content (the search box it opens with) is back.
-    await waitFor(() => expect(screen.queryByTestId("checklist-panel")).not.toBeInTheDocument());
-    await waitFor(() =>
-      expect(screen.getByText("Overview").className).toContain("border-green-500"),
-    );
+    expect(await screen.findByTestId("checklist-template-hint")).toBeInTheDocument();
+    expect(screen.getByTestId("checklist-panel")).toBeInTheDocument();
+    expect(screen.getByText("Overview").className).not.toContain("border-green-500");
   });
 
-  it("Remove (read-only) takes the tab away and lands on Overview", async () => {
+  it("Remove (read-only) leaves the tab open on the empty panel", async () => {
     strictState().mockResolvedValue("blocked");
     checklists().get.mockResolvedValue({ success: true, checklists: envelopeOf([fixtureDetail()]) });
     checklists().remove.mockImplementation(async () => {
@@ -203,8 +212,9 @@ describe("C-R — the active tab falls back to Overview when the Checklist tab g
     const id = fixtureDetail().checklist.id;
     fireEvent.click(await screen.findByTestId(`checklist-remove-${id}`));
     fireEvent.click(await screen.findByTestId(`checklist-remove-confirm-${id}`));
-    await waitFor(() => expect(screen.queryByTestId("tab-checklist")).not.toBeInTheDocument());
-    await waitFor(() => expect(screen.getByText("Overview").className).toContain("border-green-500"));
+    expect(await screen.findByTestId("checklist-template-hint")).toBeInTheDocument();
+    expect(screen.getByTestId("tab-checklist")).toBeInTheDocument();
+    expect(screen.queryByTestId(`checklist-section-${id}`)).not.toBeInTheDocument();
     expect(screen.queryByTestId("overview-checklist")).not.toBeInTheDocument();
   });
 });

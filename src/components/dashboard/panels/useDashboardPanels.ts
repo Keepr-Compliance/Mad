@@ -8,8 +8,9 @@
  * Both services never throw; a failure comes back as `success: false`.
  *
  * Both are read again when the Transactions view closes (the Dashboard stays
- * mounted under it) and after a Todo tick. Todo is read only when the plan
- * gate answered "allowed".
+ * mounted under it) and after a Todo tick. BACKLOG-3966 PR-3: Todo is read on
+ * every plan; main decides what it holds (My items always, template items
+ * only when the plan has checklists) and never refuses the read.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { transactionOpenService } from "../../../services/transactionOpenService";
@@ -23,26 +24,17 @@ export const RECENT_LIMIT = 5;
 /** How many Todo rows are read; "Show more" expands within these. */
 export const TODO_READ_LIMIT = 50;
 
-/**
- * Main's refusal when the plan does not carry checklists
- * (CHECKLISTS_NOT_ALLOWED_ERROR, electron/handlers/checklistHandlers.ts).
- * Copied, not imported: the renderer may not value-import main-process code.
- * A parity test reads the handler source and pins the two together.
- */
-export const CHECKLISTS_NOT_ALLOWED_MESSAGE = "Transaction checklists are not available.";
-
 export type RecentState =
   | { status: "loading" }
   | { status: "ready"; rows: RecentlyOpenedTransaction[] }
   | { status: "error" };
 
 export type TodoState =
+  /** No signed-in user: nothing is read. */
   | { status: "off" }
   | { status: "loading" }
   | { status: "ready"; data: OpenRequiredChecklistItems }
-  /** Main said the plan does not include checklists. */
-  | { status: "not-on-plan" }
-  /** The read failed for any other reason. */
+  /** The read failed. */
   | { status: "error" };
 
 export interface TickError {
@@ -60,12 +52,9 @@ export interface DashboardPanels {
   tickError: TickError | null;
 }
 
-export function useDashboardPanels(
-  userId: string | undefined,
-  todoEnabled: boolean,
-): DashboardPanels {
+export function useDashboardPanels(userId: string | undefined): DashboardPanels {
   const [recent, setRecent] = useState<RecentState>({ status: "loading" });
-  const [todo, setTodo] = useState<TodoState>({ status: todoEnabled ? "loading" : "off" });
+  const [todo, setTodo] = useState<TodoState>({ status: userId ? "loading" : "off" });
   const [reloadKey, setReloadKey] = useState(0);
   const [tickingItemId, setTickingItemId] = useState<string | null>(null);
   const [tickError, setTickError] = useState<TickError | null>(null);
@@ -89,7 +78,7 @@ export function useDashboardPanels(
 
   useEffect(() => {
     const id = ++todoReadId.current;
-    if (!userId || !todoEnabled) {
+    if (!userId) {
       setTodo({ status: "off" });
       return;
     }
@@ -97,15 +86,9 @@ export function useDashboardPanels(
     setTodo((prev) => (prev.status === "off" ? { status: "loading" } : prev));
     void checklistService.listOpenRequired(userId, TODO_READ_LIMIT).then((result) => {
       if (todoReadId.current !== id) return;
-      if (result.success && result.data) {
-        setTodo({ status: "ready", data: result.data });
-      } else if (result.error === CHECKLISTS_NOT_ALLOWED_MESSAGE) {
-        setTodo({ status: "not-on-plan" });
-      } else {
-        setTodo({ status: "error" });
-      }
+      setTodo(result.success && result.data ? { status: "ready", data: result.data } : { status: "error" });
     });
-  }, [userId, todoEnabled, reloadKey]);
+  }, [userId, reloadKey]);
 
   const tickItem = useCallback(
     async (itemId: string) => {

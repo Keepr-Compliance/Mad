@@ -133,15 +133,13 @@ test.describe('Dashboard Recent | Todo (BACKLOG-3965)', () => {
     await page.keyboard.press('Escape');
   });
 
-  // H6 — stand-ins: DashboardPanels-3965 "gate blocked/unknown/pending -> no Todo, no rings".
-  test('H6 plan without checklists: no Todo, no rings, Recent full width', async () => {
+  // H6 — BACKLOG-3966 PR-3 (rewritten): Todo and the rings show on every plan.
+  // Stand-ins: DashboardPanels-3965 "gate %s -> Todo read once and shown" and the hint cases.
+  test('H6 plan without checklists: Todo shown with the template hint', async () => {
     test.skip(process.env.QA_PLAN_WITHOUT_CHECKLISTS !== '1', 'Needs a keepr-test plan with checklists off.');
     const page = driver!.page;
-    await expect(page.getByTestId('dashboard-todo')).toHaveCount(0);
-    await expect(page.getByTestId('dashboard-recent').getByRole('progressbar')).toHaveCount(0);
-    const panels = await box(page, 'dashboard-panels');
-    const recent = await box(page, 'dashboard-recent');
-    expect(Math.abs(panels.width - recent.width)).toBeLessThan(2);
+    await expect(page.getByTestId('dashboard-todo')).toBeVisible();
+    await expect(page.getByTestId('dashboard-todo-template-hint')).toBeVisible();
   });
 
   // H7 — stand-in: Dashboard.tourTargets-3965 C3.

@@ -325,7 +325,11 @@ describe("BACKLOG-3966 — every My-items write is scoped to the deal's private 
     expect(
       await invoke("checklists:rename-my-item", { transactionId: DEAL, itemId: a.itemId, title: "Renamed" }),
     ).toEqual({ success: true, changed: true });
-    expect(one("SELECT title FROM transaction_checklist_items WHERE id = ?", a.itemId)!.title).toBe("Renamed");
+    // A rename changes the title only: the item still counts as required.
+    expect(one("SELECT title, is_required FROM transaction_checklist_items WHERE id = ?", a.itemId)).toEqual({
+      title: "Renamed",
+      is_required: 1,
+    });
     expect(await invoke("checklists:remove-my-item", { transactionId: DEAL, itemId: b.itemId })).toEqual({
       success: true,
       changed: true,
