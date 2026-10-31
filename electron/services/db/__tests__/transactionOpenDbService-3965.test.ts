@@ -112,13 +112,16 @@ describe("BACKLOG-3965 recordTransactionOpen", () => {
   });
 
   it("never touches the transactions row: updated_at is unchanged by an open (C10)", () => {
-    seedDeal("d1");
-    run(`UPDATE transactions SET updated_at = '2020-01-01 00:00:00' WHERE id = 'd1'`);
-    // The trigger fires on that UPDATE too; pin the value we compare against.
-    const before = get(`SELECT updated_at FROM transactions WHERE id = 'd1'`)?.updated_at;
+    // Set at INSERT, not by an UPDATE: update_transactions_timestamp fires on any
+    // UPDATE and would move the value to "now" first, and an open in the same
+    // second would then compare equal and hide the bump (measured: it did).
+    run(
+      `INSERT INTO transactions (id, user_id, property_address, updated_at) VALUES ('d1', ?, 'd1 Road', '2020-01-01 00:00:00')`,
+      USER,
+    );
     recordTransactionOpen("d1", "2026-10-31T10:00:00.000Z");
     recordTransactionOpen("d1", "2026-10-31T11:00:00.000Z");
-    expect(get(`SELECT updated_at FROM transactions WHERE id = 'd1'`)?.updated_at).toBe(before);
+    expect(get(`SELECT updated_at FROM transactions WHERE id = 'd1'`)?.updated_at).toBe("2020-01-01 00:00:00");
   });
 
   it("deleting a deal deletes its row and leaves the other deal's row (cascade)", async () => {
