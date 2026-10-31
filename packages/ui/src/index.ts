@@ -107,6 +107,7 @@ export * from './components/phone';
 
 // Report kit (BACKLOG-3502a) — desktop report tables, filters, cards, URL state; see README "Report kit".
 export * from './components/report';
+export * from './components/saved-views';
 // BACKLOG-4007 PR-4: a brokerage's people (billing / IT / office / MSP), shared by both portals.
 export { OrgPeoplePanel, orgPeopleErrorMessage } from './components/org-people';
 export type {

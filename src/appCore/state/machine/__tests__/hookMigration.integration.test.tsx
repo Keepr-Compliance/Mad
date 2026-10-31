@@ -106,30 +106,36 @@ const completeUserData = {
 // Test states
 const loadingCheckingStorage: LoadingState = {
   status: "loading",
+  database: "unknown",
   phase: "checking-storage",
 };
 
 const loadingInitializingDb: LoadingState = {
   status: "loading",
+  database: "unknown",
   phase: "initializing-db",
 };
 
 const loadingAuth: LoadingState = {
   status: "loading",
+  database: "initialized",
   phase: "loading-auth",
 };
 
 const loadingUserData: LoadingState = {
   status: "loading",
+  database: "initialized",
   phase: "loading-user-data",
 };
 
 const unauthenticatedState: UnauthenticatedState = {
   status: "unauthenticated",
+  database: "initialized",
 };
 
 const onboardingPhoneType: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "phone-type",
   user: testUser,
   platform: macOSPlatform,
@@ -138,6 +144,7 @@ const onboardingPhoneType: OnboardingState = {
 
 const onboardingSecureStorage: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "secure-storage",
   user: testUser,
   platform: macOSPlatform,
@@ -146,6 +153,7 @@ const onboardingSecureStorage: OnboardingState = {
 
 const onboardingEmailConnect: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "email-connect",
   user: testUser,
   platform: macOSPlatform,
@@ -154,6 +162,7 @@ const onboardingEmailConnect: OnboardingState = {
 
 const onboardingPermissions: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "permissions",
   user: testUser,
   platform: macOSPlatform,
@@ -162,6 +171,7 @@ const onboardingPermissions: OnboardingState = {
 
 const readyStateMacOS: ReadyState = {
   status: "ready",
+  database: "initialized",
   user: testUser,
   platform: macOSPlatform,
   userData: completeUserData,
