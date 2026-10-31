@@ -37,11 +37,17 @@ interface TransactionListComponentProps {
    * BACKLOG-1898 T5: id of a transaction to auto-open once the list has loaded.
    * Used when opening a transaction from the Contacts detail card (which only
    * has the id, not the full row). Resolved against the loaded transactions and
-   * opened on the overview tab (same open behaviour as openTransactionFromSearch,
-   * including the BACKLOG-1888 remount bump). The open is latched per-id so a
-   * later transactions refetch does not re-open a detail the user has closed.
+   * opened on `initialTransactionTab` (same open behaviour as
+   * openTransactionFromSearch, including the BACKLOG-1888 remount bump). The
+   * open is latched per-id so a later transactions refetch does not re-open a
+   * detail the user has closed.
    */
   initialTransactionId?: string | null;
+  /**
+   * BACKLOG-3965: the tab `initialTransactionId` opens on. Defaults to the
+   * overview tab; the Dashboard's Todo rows pass "checklist".
+   */
+  initialTransactionTab?: TransactionTab;
 }
 
 /**
@@ -55,6 +61,7 @@ function TransactionList({
   onClose,
   initialTransaction,
   initialTransactionId,
+  initialTransactionTab,
 }: TransactionListComponentProps) {
   // Database initialization guard (belt-and-suspenders defense)
   const { isDatabaseInitialized } = useAppStateMachine();
@@ -134,8 +141,9 @@ function TransactionList({
   }, [initialTransaction]);
 
   // BACKLOG-1898 T5: auto-open a transaction by id (from the Contacts detail
-  // card). We only have the id, so resolve it against the loaded rows once they
-  // are available, then open the detail on the overview tab.
+  // card, or the Dashboard). We only have the id, so resolve it against the
+  // loaded rows once they are available, then open the detail on the requested
+  // tab (overview unless the caller names one — BACKLOG-3965).
   //
   // Latch which id we've already auto-opened so a later `transactions` refetch
   // (scan complete / transaction update / bulk action) does NOT re-open the
@@ -154,11 +162,11 @@ function TransactionList({
     const txn = transactions.find((t) => t.id === initialTransactionId);
     if (!txn) return;
     openedTransactionIdRef.current = initialTransactionId;
-    setInitialTab("overview");
+    setInitialTab(initialTransactionTab ?? "overview");
     setInitialHighlight(null);
     setSearchOpenKey((k) => k + 1);
     setSelectedTransaction(txn);
-  }, [initialTransactionId, transactions]);
+  }, [initialTransactionId, initialTransactionTab, transactions]);
 
   // Selection state for bulk operations
   const {

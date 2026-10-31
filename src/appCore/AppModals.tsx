@@ -18,6 +18,11 @@ import type { Transaction } from "@/types";
 import { useGoogleMessagesSyncStatus } from "../hooks/useGoogleMessagesSyncStatus";
 import { useExtensionFolderRefresh } from "../hooks/useExtensionFolderRefresh";
 import { useSubmissionStatusNotice } from "./hooks/useSubmissionStatusNotice";
+import {
+  clearOpenTransactionRequest,
+  requestOpenTransaction,
+  useOpenTransactionRequest,
+} from "./openTransactionRequest";
 
 interface AppModalsProps {
   app: AppStateMachine;
@@ -54,11 +59,11 @@ export function AppModals({ app }: AppModalsProps) {
   // Track newly created transaction so TransactionList can auto-open its details
   const [auditCreatedTransaction, setAuditCreatedTransaction] = useState<Transaction | null>(null);
 
-  // BACKLOG-1898 T5: id of a transaction to auto-open in TransactionList, set
-  // when the user clicks a transaction row in the Contacts detail card. Kept
-  // local to AppModals (like auditCreatedTransaction) so no state-machine change
-  // is needed.
-  const [pendingTransactionId, setPendingTransactionId] = useState<string | null>(null);
+  // BACKLOG-1898 T5 / BACKLOG-3965: the deal (id + tab) to auto-open in
+  // TransactionList. Held in a small store (openTransactionRequest.ts) rather
+  // than local state so callers outside AppModals can write it; still no
+  // state-machine change.
+  const openRequest = useOpenTransactionRequest();
 
   // Compound action: close audit transaction modal and open transactions with the new transaction selected
   const handleAuditTransactionSuccess = useCallback((transaction: Transaction) => {
@@ -72,7 +77,7 @@ export function AppModals({ app }: AppModalsProps) {
   // resolves + opens the transaction detail by id).
   const handleOpenTransactionFromContact = useCallback((transactionId: string) => {
     closeContacts();
-    setPendingTransactionId(transactionId);
+    requestOpenTransaction(transactionId, "overview");
     openTransactions();
   }, [closeContacts, openTransactions]);
 
@@ -103,11 +108,12 @@ export function AppModals({ app }: AppModalsProps) {
             provider={authProvider as "google" | "microsoft"}
             onClose={() => {
               setAuditCreatedTransaction(null);
-              setPendingTransactionId(null);
+              clearOpenTransactionRequest();
               closeTransactions();
             }}
             initialTransaction={auditCreatedTransaction}
-            initialTransactionId={pendingTransactionId}
+            initialTransactionId={openRequest?.id ?? null}
+            initialTransactionTab={openRequest?.tab}
           />
         </div>
       )}
