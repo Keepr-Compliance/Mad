@@ -10,10 +10,15 @@
  *
  * `report === null` means the ticket read failed: every value renders "-",
  * never "0".
+ *
+ * BACKLOG-4086: every duration is business time and renders through
+ * `formatBusinessDuration` (hours never roll into days). `settings === null`
+ * (the settings read failed) leaves the counts and blanks every duration and
+ * target rate.
  */
 
 import { useMemo } from 'react';
-import { CheckCircle2, Clock, Inbox, PlusCircle, Timer } from 'lucide-react';
+import { CheckCircle2, Clock, Inbox, PlusCircle, Target, Timer } from 'lucide-react';
 import {
   FilterBar,
   FilterCaption,
@@ -26,7 +31,15 @@ import {
 } from '@keepr/ui';
 import { PERIOD_OPTIONS, type PeriodKey, type PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
-import { formatDuration, type SupportSlaAgentRow, type SupportSlaReport as SupportSlaReportModel } from '@/lib/reports/support-sla';
+import {
+  firstResponseTargetLabel,
+  formatBusinessDuration,
+  resolutionTargetLabel,
+  type SlaAttainment,
+  type SupportSlaAgentRow,
+  type SupportSlaReport as SupportSlaReportModel,
+  type SupportSlaSettings,
+} from '@/lib/reports/support-sla';
 import { SupportSlaHowToUse } from './SupportSlaHowToUse';
 
 export type SupportSlaSortKey =
@@ -58,8 +71,19 @@ export function sortAgentRows(
   });
 }
 
+/** "1 of 4 met · 1 awaiting · target 8 business hours (one working day)". */
+export function attainmentSubtitle(sla: SlaAttainment | null, targetLabel: string | null): string | null {
+  if (!sla || !targetLabel) return null;
+  return `${sla.met} of ${sla.met + sla.missed} met · ${sla.awaiting} awaiting · target ${targetLabel}`;
+}
+
+const pct = (sla: SlaAttainment | null | undefined) =>
+  sla && sla.ratePct !== null ? `${sla.ratePct}%` : '-';
+
 export interface SupportSlaReportProps {
   report: SupportSlaReportModel | null;
+  /** null = the SLA settings could not be read. */
+  settings: SupportSlaSettings | null;
   period: PeriodRange;
   truncated?: boolean;
   rowCap: number;
@@ -76,6 +100,7 @@ const COLUMNS: [SupportSlaSortKey, string][] = [
 
 export function SupportSlaReport({
   report,
+  settings,
   period,
   truncated = false,
   rowCap,
@@ -97,7 +122,17 @@ export function SupportSlaReport({
 
   const s = report?.summary ?? null;
   const num = (v: number | undefined) => (s ? (v ?? 0) : '-');
-  const dur = (v: number | null | undefined) => (s ? formatDuration(v ?? null) : '-');
+  const dur = (v: number | null | undefined) => (s ? formatBusinessDuration(v ?? null) : '-');
+  const frSla = s?.firstResponseSla ?? null;
+  const resSla = s?.resolutionSla ?? null;
+  const frLabel = settings ? firstResponseTargetLabel(settings) : null;
+  const resLabel = settings ? resolutionTargetLabel(settings) : null;
+  const medianP90 = (prefix: 'fr' | 'res', median: number | null | undefined, p90: number | null | undefined) => (
+    <p className="text-xs text-gray-500">
+      Median <span data-tile-value={`${prefix}-median`}>{dur(median)}</span> · p90{' '}
+      <span data-tile-value={`${prefix}-p90`}>{dur(p90)}</span>
+    </p>
+  );
 
   return (
     <div className="space-y-6">
@@ -112,7 +147,7 @@ export function SupportSlaReport({
         />
       </FilterBar>
 
-      <SupportSlaHowToUse />
+      <SupportSlaHowToUse settings={settings} />
 
       {truncated ? (
         <TruncationNotice
@@ -130,7 +165,7 @@ export function SupportSlaReport({
           periodLabel={period.label}
           filterNames={[]}
         />
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           <StatCard
             data-tile="open-now"
             label="Open now"
@@ -156,6 +191,8 @@ export function SupportSlaReport({
             hue="green"
             valueProps={{ 'data-tile-value': 'resolved' }}
           />
+        </div>
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             data-tile="avg-first-response"
             label="Avg first response"
@@ -163,6 +200,16 @@ export function SupportSlaReport({
             icon={<Clock className="h-5 w-5" />}
             hue="yellow"
             valueProps={{ 'data-tile-value': 'avg-first-response' }}
+            footer={medianP90('fr', s?.medianFirstResponseMinutes, s?.p90FirstResponseMinutes)}
+          />
+          <StatCard
+            data-tile="fr-within-target"
+            label="First response within target"
+            value={pct(frSla)}
+            subtitle={attainmentSubtitle(frSla, frLabel)}
+            icon={<Target className="h-5 w-5" />}
+            hue="yellow"
+            valueProps={{ 'data-tile-value': 'fr-within-target' }}
           />
           <StatCard
             data-tile="avg-resolution"
@@ -171,6 +218,16 @@ export function SupportSlaReport({
             icon={<Timer className="h-5 w-5" />}
             hue="purple"
             valueProps={{ 'data-tile-value': 'avg-resolution' }}
+            footer={medianP90('res', s?.medianResolutionMinutes, s?.p90ResolutionMinutes)}
+          />
+          <StatCard
+            data-tile="res-within-target"
+            label="Resolved within target"
+            value={pct(resSla)}
+            subtitle={attainmentSubtitle(resSla, resLabel)}
+            icon={<Target className="h-5 w-5" />}
+            hue="purple"
+            valueProps={{ 'data-tile-value': 'res-within-target' }}
           />
         </div>
       </div>
@@ -216,10 +273,10 @@ export function SupportSlaReport({
                     <td className="px-3 py-2 text-right tabular-nums text-gray-900">{agent.openNow}</td>
                     <td className="px-3 py-2 text-right tabular-nums text-gray-900">{agent.resolvedInPeriod}</td>
                     <td className="px-3 py-2 text-right tabular-nums text-gray-900">
-                      {formatDuration(agent.avgFirstResponseMinutes)}
+                      {formatBusinessDuration(agent.avgFirstResponseMinutes)}
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums text-gray-900">
-                      {formatDuration(agent.avgResolutionMinutes)}
+                      {formatBusinessDuration(agent.avgResolutionMinutes)}
                     </td>
                   </tr>
                 ))}

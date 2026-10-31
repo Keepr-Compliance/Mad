@@ -87,12 +87,13 @@ export {
   SelectScrollDownButton,
 } from './components/select';
 
-// Dropdown (BACKLOG-4032) — searchable single-choice picker; see README "Dropdown".
+// Dropdown (BACKLOG-4032) — searchable single- or multi-choice picker; see README "Dropdown".
 export { Dropdown, DropdownOptions, filterDropdownOptions, dropdownSide } from './components/dropdown';
 export type {
   DropdownOption,
   DropdownProps,
   DropdownSingleProps,
+  DropdownMultiProps,
   DropdownLabelling,
   DropdownOptionsProps,
 } from './components/dropdown';

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { Dropdown, dropdownSide } from './dropdown';
 import { DropdownOptions } from './dropdown-options';
-import type { DropdownOption, DropdownProps } from './types';
+import type { DropdownOption, DropdownSingleProps } from './types';
 import { Dialog, DialogContent, DialogTitle } from '../dialog';
 
 /**
@@ -28,7 +28,7 @@ const EDGE: DropdownOption[] = [
   { value: 'd', label: 'Delta', disabled: true },
 ];
 
-type Overrides = Partial<Omit<DropdownProps, 'label' | 'ariaLabel'>>;
+type Overrides = Partial<Omit<DropdownSingleProps, 'label' | 'ariaLabel'>>;
 
 function renderDropdown(overrides: Overrides = {}) {
   const onChange = jest.fn();
