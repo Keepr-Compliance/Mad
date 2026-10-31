@@ -118,11 +118,14 @@ const PERSONAL_PRIMARY: Record<AgentPlanState, BillingPrimaryAction | null> = {
   cancel_pending: 'keep_plan',
   payment_failed: 'update_card',
   support_grant: null,
+  // BACKLOG-3860: a live trial subscribes from block 2, as pay as you go does.
+  trial: null,
 };
 
 function personal(s: BillingSituation): BillingCapabilities {
+  // BACKLOG-3860: a live trial may subscribe (a Stripe grant replaces the trial override).
   const blocks: BillingBlock[] =
-    s.agentPlan === 'none'
+    s.agentPlan === 'none' || s.agentPlan === 'trial'
       ? ['plan', 'choose_plan', 'credits', 'payment', 'invoices']
       : ['plan', 'credits', 'payment', 'invoices'];
   return {

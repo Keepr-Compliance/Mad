@@ -107,3 +107,38 @@ describe('C-URL (R5): return base by exact-host allowlist', () => {
     expect(chooseReturnBase('evil.vercel.app', {})).toEqual({ base: 'https://app.keeprcompliance.com', source: 'fallback' });
   });
 });
+
+// BACKLOG-3860 T11. Override shape: migration 20261031140000:235-238 with a
+// to_jsonb(timestamptz) paid_through as keepr-test renders it
+// ("2026-11-14T05:51:51.123973+00:00"). [EDITED: dates around a fixed now.]
+describe('BACKLOG-3860 T11: a trial override', () => {
+  const NOW = new Date('2026-11-14T05:51:51.123Z');
+  const trial = (paidThrough: string) => ({ enabled: true, source: 'trial', paid_through: paidThrough });
+  const C = fx('sub-C-keep');
+
+  it.each([
+    ['live (one day ahead)', trial('2026-11-15T05:51:51.123973+00:00'), 'trial'],
+    ['1 ms ahead', trial('2026-11-14T05:51:51.124+00:00'), 'trial'],
+    ['exactly now (paid_through > now is false)', trial('2026-11-14T05:51:51.123+00:00'), 'none'],
+    ['ended (one day ago)', trial('2026-11-13T05:51:51.123973+00:00'), 'none'],
+  ])('no row, %s -> %s', (_n, o, state) => {
+    expect(agentPlanState(null, o, NOW)).toBe(state);
+  });
+
+  it('an open subscription row wins over a live trial', () => {
+    expect(agentPlanState(row(C), trial('2026-11-15T05:51:51.123973+00:00'), NOW)).toBe('active');
+  });
+
+  it('control: a live support grant with the same dates is still support_grant', () => {
+    expect(agentPlanState(null, { enabled: true, source: 'support', paid_through: '2026-11-15T05:51:51.123973+00:00' }, NOW)).toBe('support_grant');
+  });
+
+  it.each([
+    ['live trial', trial('2026-11-15T05:51:51.123973+00:00'), false],
+    ['ended trial', trial('2026-11-13T05:51:51.123973+00:00'), false],
+    ['source support', { enabled: true, source: 'support' }, true],
+    ['sourceless', { enabled: true }, true],
+  ])('isNonStripeOverride: %s -> %s (a Stripe grant may replace a trial)', (_n, o, expected) => {
+    expect(isNonStripeOverride(o as never)).toBe(expected);
+  });
+});

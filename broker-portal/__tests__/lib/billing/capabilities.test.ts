@@ -47,7 +47,8 @@ const PERSONAS = {
 } as const;
 type Persona = keyof typeof PERSONAS;
 
-const PLANS: AgentPlanState[] = ['none', 'active', 'cancel_pending', 'payment_failed', 'support_grant'];
+// BACKLOG-3860: 'trial' added, so every persona row below is swept for it too.
+const PLANS: AgentPlanState[] = ['none', 'active', 'cancel_pending', 'payment_failed', 'support_grant', 'trial'];
 const BOOLS = [true, false];
 
 // ---------------------------------------------------------------------------
@@ -309,6 +310,9 @@ const TABLE: ExpectedRow[] = [
   row(true, false, 'personal-org owner', 'cancel_pending', true, '*', P_PLAN_SUSPENDED),
   row(true, false, 'personal-org owner', 'payment_failed', true, '*', P_PLAN_SUSPENDED),
   row(true, false, 'personal-org owner', 'support_grant', true, '*', P_PLAN_SUSPENDED),
+  // BACKLOG-3860 T9b: a live trial reads exactly like pay as you go (Choose a plan, can purchase).
+  row(true, false, 'personal-org owner', 'trial', false, '*', P_PAYG),
+  row(true, false, 'personal-org owner', 'trial', true, '*', P_PAYG_SUSPENDED),
   // Rows 8-11: the organization. The personal Agent plan does not apply.
   row(true, false, 'brokerage broker', '*', false, true, BROKER_SET_UP),
   row(true, false, 'brokerage broker', '*', true, true, BROKER_SET_UP_SUSPENDED),
@@ -356,7 +360,7 @@ const label = (c: Case) =>
 
 describe('billingCapabilities — the whole table', () => {
   it('sweeps every case, and every case matches exactly one hand-written row', () => {
-    expect(CASES.length).toBe(8 * 2 * 2 * 5 * 2 * 2);
+    expect(CASES.length).toBe(8 * 2 * 2 * 6 * 2 * 2); // 6 plans since BACKLOG-3860 (trial)
     for (const c of CASES) expectedFor(c);
   });
 
@@ -418,5 +422,22 @@ describe('billingNavVisible — the sidebar asks the same question as the page (
     ['impersonation (layout reads no access)', false],
   ] as [Persona, boolean][])('%s -> %s', (persona, visible) => {
     expect(billingNavVisible({ access: PERSONAS[persona], isImpersonating: false, enabled: true })).toBe(visible);
+  });
+});
+
+describe('BACKLOG-3860 T9b: a live free trial may subscribe', () => {
+  const owner = { access: PERSONAS['personal-org owner'], isImpersonating: false, enabled: true, accountSuspended: false, orgBillingSetUp: false };
+  it('trial -> Choose a plan present, canPurchase true, no primary action on Your plan', () => {
+    const caps = billingCapabilities({ ...owner, agentPlan: 'trial' })!;
+    expect(caps.blocks).toContain('choose_plan');
+    expect(caps.canPurchase).toBe(true);
+    expect(caps.primaryAction).toBeNull();
+  });
+  it.each([
+    ['none', P_PAYG],
+    ['active', P_ACTIVE],
+    ['support_grant', P_SUPPORT_GRANT],
+  ] as [AgentPlanState, BillingCapabilities][])('control: %s unchanged', (plan, expected) => {
+    expect(billingCapabilities({ ...owner, agentPlan: plan })).toEqual(expected);
   });
 });

@@ -9,6 +9,11 @@ import { SuspendedSupportLink } from './SuspendedBanner';
 /** BACKLOG-3848 (SR RC4): shown instead of End plan now for an `unpaid` subscription. */
 export const RENEWAL_UNPAID_NOTE = 'To end this plan or settle the unpaid bill, please contact support.';
 
+/** BACKLOG-3860: the solo free trial. Subscribe stays on the Agent card of "Choose a plan". */
+export const TRIAL_TITLE = 'Free trial';
+export const TRIAL_NOTE = 'Unlimited exports until then. To keep them, choose a plan below.';
+export const TRIAL_ENDED_PREFIX = 'Free trial ended on';
+
 /** BACKLOG-3878, mockup v17 "Suspended". */
 export const SUSPENDED_AGENT_LINE = 'Unlimited exports · renewal paused';
 export const SUSPENDED_EXPORTS = 'Off while suspended';
@@ -50,7 +55,9 @@ function SuspendedPlan({ p }: { p: PersonalPlanData }) {
   return (
     <div className="mt-2 space-y-3" data-billing-plan="suspended_solo">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="font-medium text-gray-900">{p.state === 'support_grant' ? 'Unlimited exports, provided by Keepr' : 'Solo, pay as you go'}</p>
+        <p className="font-medium text-gray-900">
+          {p.state === 'support_grant' ? 'Unlimited exports, provided by Keepr' : p.state === 'trial' ? TRIAL_TITLE : 'Solo, pay as you go'}
+        </p>
         <SuspendedBadge />
       </div>
       <dl>
@@ -150,9 +157,26 @@ function PersonalPlan({ p }: { p: PersonalPlanData }) {
           to change your plan.
         </p>
       );
+    case 'trial':
+      return (
+        <div className="mt-2 space-y-3" data-billing-plan="trial">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <p className="font-medium text-gray-900">
+              {TRIAL_TITLE}, ends {formatDay(p.trialEndsOn ?? null)}
+            </p>
+            <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-800">Active</span>
+          </div>
+          <p className="text-sm text-gray-600">{TRIAL_NOTE}</p>
+        </div>
+      );
     case 'none':
       return (
         <div className="mt-2 space-y-3">
+          {p.trialEndedOn ? (
+            <p className="text-sm text-gray-600" data-billing-note="trial_ended">
+              {TRIAL_ENDED_PREFIX} {formatDay(p.trialEndedOn)}.
+            </p>
+          ) : null}
           <p className="font-medium text-gray-900">Solo, pay as you go</p>
           <p className="text-sm text-gray-600">No subscription. Each export uses a credit or is bought in the Keepr app.</p>
           {p.checkout === 'success' && p.sessionId ? (

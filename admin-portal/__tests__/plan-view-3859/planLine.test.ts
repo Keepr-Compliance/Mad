@@ -132,3 +132,42 @@ describe('planLine: literal table', () => {
     expect(planLine(input({ hasPersonalOrganization: false }))).toMatchObject({ kind: 'no_organization', text: 'No plan (no organization)' });
   });
 });
+
+// BACKLOG-3860 T11b (SR C7). Override shape: migration 20261031140000:235-238, with
+// paid_through as keepr-test renders to_jsonb(timestamptz). [EDITED: dates around NOW.]
+describe('BACKLOG-3860 T11b: the free trial on the admin plan line', () => {
+  const trial = (offsetDays: number) => ({
+    enabled: true,
+    source: 'trial',
+    paid_through: new Date(NOW.getTime() + offsetDays * 86_400_000).toISOString().replace('Z', '973+00:00'), // e.g. 2026-10-28T12:00:00.000973+00:00
+  });
+
+  it('live trial -> kind trial, "Free trial until <date>", no warning', () => {
+    const o = trial(14);
+    const out = planLine(input({ override: o }));
+    expect(out.kind).toBe('trial');
+    expect(out.text).toMatch(/^Free trial until [A-Z][a-z]{2} \d{1,2}, \d{4}$/);
+    expect(out.warning).toBeNull();
+    expect(out.text).not.toMatch(/Pay as you go/);
+  });
+
+  it('ended trial -> kind trial_ended, "Free trial (ended)", no "Unlimited is on" warning', () => {
+    const out = planLine(input({ override: trial(-1), credits: 2 }));
+    expect(out).toMatchObject({ kind: 'trial_ended', text: 'Free trial (ended), Solo Pay as you go, 2 credits', warning: null });
+  });
+
+  it('the line follows input.now, not the wall clock', () => {
+    const o = trial(1);
+    expect(planLine(input({ override: o })).kind).toBe('trial');
+    expect(planLine(input({ override: o, now: new Date(NOW.getTime() + 2 * 86_400_000) })).kind).toBe('trial_ended');
+  });
+
+  it('control: an ended support grant is still "support grant (expired)", not a trial', () => {
+    const out = planLine(input({ override: { ...trial(-1), source: 'support' } }));
+    expect(out.kind).toBe('support_grant_expired');
+  });
+
+  it('an open subscription beats a live trial', () => {
+    expect(planLine(input({ rows: [row('active')], override: trial(14) })).kind).toBe('agent_unlimited');
+  });
+});
