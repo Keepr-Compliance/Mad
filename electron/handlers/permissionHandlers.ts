@@ -32,7 +32,9 @@ let handlersRegistered = false;
  * only does work if that earlier persistence somehow didn't happen.
  *
  * Best-effort: any failure here is logged and swallowed -- we must never
- * block the relaunch (and thus the FDA fix) on this safety net.
+ * block the relaunch (and thus the FDA fix) on this safety net. A write that
+ * returns false is logged as an error and the relaunch still goes ahead
+ * (BACKLOG-3299).
  */
 async function ensureSessionPersistedBeforeRelaunch(): Promise<void> {
   try {
@@ -70,7 +72,7 @@ async function ensureSessionPersistedBeforeRelaunch(): Promise<void> {
     const isTrial = subscriptionStatus === "trial";
     const isActive = subscriptionStatus === "active" || subscriptionStatus === "trial";
 
-    await sessionService.saveSession({
+    const saved = await sessionService.saveSession({
       user: localUser,
       sessionToken,
       provider: localUser.oauth_provider,
@@ -94,6 +96,15 @@ async function ensureSessionPersistedBeforeRelaunch(): Promise<void> {
         ? { accountSetupFinishedAt: existing.accountSetupFinishedAt }
         : {}),
     });
+    if (!saved) {
+      // Still relaunch: blocking it would show the "still not detected" copy.
+      // The writer has already logged and reported why (sessionService).
+      logService.error(
+        "[Relaunch] Last-resort session flush FAILED: relaunching without a saved session, so the relaunched app will ask for sign-in",
+        "PermissionHandlers"
+      );
+      return;
+    }
     logService.info(
       "[Relaunch] Last-resort session flush succeeded before FDA relaunch",
       "PermissionHandlers"

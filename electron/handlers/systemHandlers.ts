@@ -203,7 +203,8 @@ async function createLocalUserFromCloud(cloudUser: User): Promise<void> {
  *
  * Best-effort: errors are logged (with tokens redacted, never logged in
  * plaintext) and swallowed -- a failure here must not block onboarding, same
- * posture as the main.ts equivalent.
+ * posture as the main.ts equivalent. A write that returns false is logged as
+ * an error and the success line is not written (BACKLOG-3299).
  */
 async function persistSessionForUser(
   localUser: User,
@@ -217,7 +218,7 @@ async function persistSessionForUser(
     const isTrial = subscriptionStatus === "trial";
     const isActive = subscriptionStatus === "active" || subscriptionStatus === "trial";
 
-    await saveSignInSession({
+    const saved = await saveSignInSession({
       user: localUser,
       sessionToken,
       provider,
@@ -237,11 +238,20 @@ async function persistSessionForUser(
         refresh_token: tokens.refreshToken,
       },
     });
-    logService.info(
-      "[DeepLink] Session persisted for deferred-DB user (BACKLOG-2173b)",
-      "System",
-      { userId: redactId(localUser.id) },
-    );
+    if (saved) {
+      logService.info(
+        "[DeepLink] Session persisted for deferred-DB user (BACKLOG-2173b)",
+        "System",
+        { userId: redactId(localUser.id) },
+      );
+    } else {
+      // The writer has already logged and reported why (sessionService).
+      logService.error(
+        "[DeepLink] Session NOT persisted for deferred-DB user: the session file was not written. Reads stay refused until a write succeeds or the app relaunches",
+        "System",
+        { userId: redactId(localUser.id) },
+      );
+    }
   } catch (sessionError) {
     logService.error(
       "[DeepLink] Failed to persist session for deferred-DB user",
