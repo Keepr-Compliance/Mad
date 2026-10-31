@@ -11,14 +11,20 @@
  *   the builder applies coalesce(resolved_at, closed_at) and the status rule.
  * - PostgREST returns at most 1000 rows per request (supabase/config.toml
  *   max_rows), so the cap must not exceed that or truncation goes unreported.
+ * - BACKLOG-4086: the SLA targets and business window are one row of
+ *   `public.support_sla_settings`. Any failure (error, no row, a value outside
+ *   the table's CHECKs, an unknown time zone) returns null, and the report
+ *   shows "-" for every duration rather than falling back to code defaults.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { isValidTimeZone } from './business-hours';
 import {
   DELETED_STATUS,
   OPEN_EXCLUDES,
   type SlaPeriod,
   type SupportAgentUser,
+  type SupportSlaSettings,
   type SupportTicketRow,
 } from './support-sla';
 
@@ -101,4 +107,55 @@ export async function getAgentUsers(
     return [];
   }
   return (data ?? []) as SupportAgentUser[];
+}
+
+export const SLA_SETTINGS_COLUMNS =
+  'first_response_target_minutes, resolution_target_business_days, business_day_start_minute, business_day_end_minute, business_days, time_zone';
+
+const isInt = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v);
+
+/**
+ * Validates one `support_sla_settings` row with the same rules as the table's
+ * CHECK constraints. Anything else -> null.
+ */
+export function parseSupportSlaSettings(row: unknown): SupportSlaSettings | null {
+  if (!row || typeof row !== 'object') return null;
+  const r = row as Record<string, unknown>;
+  const fr = r.first_response_target_minutes;
+  const days = r.resolution_target_business_days;
+  const start = r.business_day_start_minute;
+  const end = r.business_day_end_minute;
+  const weekdays = r.business_days;
+  const tz = r.time_zone;
+  if (!isInt(fr) || fr <= 0) return null;
+  if (!isInt(days) || days <= 0) return null;
+  if (!isInt(start) || start < 0 || start > 1439) return null;
+  if (!isInt(end) || end < 1 || end > 1440 || end <= start) return null;
+  if (!Array.isArray(weekdays) || weekdays.length < 1 || weekdays.length > 7) return null;
+  if (!weekdays.every((d) => isInt(d) && d >= 0 && d <= 6)) return null;
+  if (!isValidTimeZone(tz)) return null;
+  return {
+    firstResponseTargetMinutes: fr,
+    resolutionTargetBusinessDays: days,
+    businessDayStartMinute: start,
+    businessDayEndMinute: end,
+    businessDays: [...new Set(weekdays as number[])].sort((a, b) => a - b),
+    timeZone: tz,
+  };
+}
+
+/** The SLA settings row, or null when it could not be read or is invalid. */
+export async function getSupportSlaSettings(supabase: SupabaseClient): Promise<SupportSlaSettings | null> {
+  const { data, error } = await supabase
+    .from('support_sla_settings')
+    .select(SLA_SETTINGS_COLUMNS)
+    .limit(1)
+    .maybeSingle();
+  if (error || !data) {
+    console.error('getSupportSlaSettings error:', error?.message ?? 'no row');
+    return null;
+  }
+  const settings = parseSupportSlaSettings(data);
+  if (!settings) console.error('getSupportSlaSettings error: invalid settings row');
+  return settings;
 }
