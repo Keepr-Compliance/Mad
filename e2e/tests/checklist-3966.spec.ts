@@ -48,7 +48,14 @@ try {
 }
 
 async function openChecklistTab(page: Page, address: string): Promise<void> {
-  await page.getByText(address, { exact: false }).first().click();
+  // Recent shows five deals; a deal not on the Dashboard is opened from the Transactions list.
+  const onDashboard = page.getByText(address, { exact: false }).first();
+  if (await onDashboard.isVisible().catch(() => false)) {
+    await onDashboard.click();
+  } else {
+    await page.getByTestId('nav-transactions').click();
+    await page.getByTestId('tx-list').getByText(address, { exact: false }).first().click();
+  }
   await page.getByTestId('tab-checklist').click();
   await expect(page.getByTestId('my-items-section')).toBeVisible();
 }
@@ -137,13 +144,26 @@ test.describe('Checklist tab: My items (BACKLOG-3966 U1)', () => {
     await driver!.screenshot('u1-h2-writes');
   });
 
-  test('U1-H3 locked deal: rows read-only, the short line, no add', async () => {
+  test('U1-H3 locked deal: the tab lock notice, rows read-only, no add', async () => {
     test.skip(!LOCKED, 'Needs QA_LOCKED_ADDRESS (a deal with the broker).');
     const page = driver!.page;
     await openChecklistTab(page, LOCKED);
+    // One lock line: the tab's notice. My items' own line is not shown on a locked deal
+    // (MyItemsSection.tsx renders `my-items-locked` only for a refusal, not `locked`).
     await expect(page.getByTestId('checklist-locked-notice')).toBeVisible();
-    await expect(page.getByTestId('my-items-locked')).toBeVisible();
-    await expect(page.getByTestId('my-items-add-input')).toHaveCount(0);
+    const section = page.getByTestId('my-items-section');
+    await expect(section.getByTestId('my-items-locked')).toHaveCount(0);
+    // No Add, no ⋯ menu (Rename / Move / Delete), no drag handle, no Link… or note on a row.
+    await expect(section.getByTestId('my-items-add-input')).toHaveCount(0);
+    await expect(section.getByTestId('my-items-add')).toHaveCount(0);
+    await expect(section.locator('[data-testid^="my-item-menu-toggle-"]')).toHaveCount(0);
+    await expect(section.locator('[data-testid^="my-item-drag-"]')).toHaveCount(0);
+    await expect(section.locator('[data-testid^="checklist-open-picker-"]')).toHaveCount(0);
+    await expect(section.locator('[data-testid^="checklist-add-note-"]')).toHaveCount(0);
+    // Every row's checkbox is disabled (ChecklistItemRow `disabled={readOnly || pending}`).
+    for (const check of await section.locator('[data-testid^="checklist-check-"]').all()) {
+      await expect(check).toBeDisabled();
+    }
     await driver!.screenshot('u1-h3-locked');
   });
 
