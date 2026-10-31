@@ -292,8 +292,8 @@ export class KeeprAppDriver implements AppDriver {
   }
 
   async gotoSettings(): Promise<void> {
-    // profile avatar (nav-profile) → Profile modal → Settings button (nav-settings) → settings-page.
-    await this.clickTestidOrThrow(Testids.navProfile, 'gotoSettings: open profile menu');
+    // initials (nav-profile) → account side panel → its Account row (nav-settings) → settings-page.
+    await this.clickTestidOrThrow(Testids.navProfile, 'gotoSettings: open account panel');
     await this.clickTestidOrThrow(Testids.navSettings, 'gotoSettings: click Settings');
     await this.waitTestidOrThrow(Testids.settingsPage, 'gotoSettings: settings page did not render');
   }

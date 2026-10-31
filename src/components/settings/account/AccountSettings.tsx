@@ -8,10 +8,10 @@
  * Founder decision 10: no Sign out here. It lives in the account side panel
  * (slice 3); Security keeps "Sign Out All Devices".
  */
-import React, { useEffect, useRef, useState } from "react";
+import React from "react";
 import { useLicense } from "@/contexts/LicenseContext";
 import { formatDbDate } from "@/utils/dateFormatters";
-import logger from "@/utils/logger";
+import { useCopyText } from "@/hooks/useCopyText";
 import { getAccountInitials } from "../../../appCore/shell/AccountButton";
 import { formatPlanLabel } from "./formatPlanLabel";
 import { PlanBillingCard } from "../billing/PlanBillingCard";
@@ -57,23 +57,8 @@ export function AccountSettings({ user, provider, mailboxes = { google: false, m
     transactionCount,
     transactionLimit,
   } = useLicense();
-  const [copied, setCopied] = useState(false);
-  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => () => {
-    if (copiedTimer.current) clearTimeout(copiedTimer.current);
-  }, []);
-
-  const handleCopy = (): void => {
-    void navigator.clipboard?.writeText(user.id).then(
-      () => {
-        setCopied(true);
-        if (copiedTimer.current) clearTimeout(copiedTimer.current);
-        copiedTimer.current = setTimeout(() => setCopied(false), 1200);
-      },
-      (error: unknown) => logger.error("[AccountSettings] copy failed:", error),
-    );
-  };
+  const { copied, copy } = useCopyText("AccountSettings");
+  const handleCopy = (): void => copy(user.id);
 
   const planLabel = licenseType ? formatPlanLabel(licenseType) : "";
   const providerName = provider ? PROVIDER_NAMES[provider] ?? provider : null;

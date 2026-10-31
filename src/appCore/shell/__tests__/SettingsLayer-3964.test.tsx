@@ -21,7 +21,7 @@ import { AppShell } from "../../AppShell";
 import { useModalFlow } from "../../state/flows/useModalFlow";
 import type { AppStateMachine } from "../../state/types";
 
-jest.mock("../../../utils/platform", () => ({ isElectron: () => true }));
+jest.mock("../../../utils/platform", () => ({ isElectron: () => true, isMacOS: () => true }));
 jest.mock("../../../hooks/useSessionValidator", () => ({ useSessionValidator: jest.fn() }));
 jest.mock("../../../hooks/useIdleSessionExpiry", () => ({ useSessionIdleTimeout: jest.fn() }));
 jest.mock("../../../components/SystemHealthMonitor", () => ({ __esModule: true, default: () => null }));

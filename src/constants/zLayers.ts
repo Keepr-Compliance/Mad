@@ -5,8 +5,9 @@
  *
  *   popups / modals ........ z-50 .. z-[100]   (ResponsiveModal callers)
  *   Settings page layer .... z-[105]
- *   slice-3 account scrim .. z-[110]
- *   support "?" button ..... z-[115]   above Settings and the scrim
+ *   account panel scrim .... z-[110]   (shell/AccountPanel; never open with Settings)
+ *   account side panel ..... z-[111]
+ *   support "?" button ..... z-[115]   above Settings, the scrim and the panel
  *   support-access banner .. z-[106]   visible over Settings (z-[105]); under scrim and dialogs
  *   support dialog ......... z-[118]   covers the "?" button and Settings; under toasts
  *   toasts ................. z-[120]   fired from inside Settings (General test notification)
@@ -15,6 +16,8 @@
 export const Z_CLASS = {
   settings: "z-[105]",
   supportAccess: "z-[106]",
+  accountScrim: "z-[110]",
+  accountPanel: "z-[111]",
   support: "z-[115]",
   supportDialog: "z-[118]",
   toast: "z-[120]",

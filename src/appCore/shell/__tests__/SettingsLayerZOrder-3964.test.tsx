@@ -31,6 +31,13 @@ jest.mock("../ShellBanners", () => ({ ShellBanners: () => null }));
 jest.mock("../../../contexts/PlatformContext", () => ({
   usePlatform: () => ({ isMacOS: true, isWindows: false, isLinux: false, platform: "macos" }),
 }));
+// The account panel (slice 3) reads the plan label and the AI gate.
+jest.mock("../../../contexts/LicenseContext", () => ({
+  useLicense: () => ({ licenseType: "individual" }),
+}));
+jest.mock("../../../hooks/useFeatureGate", () => ({
+  useFeatureGate: () => ({ isAllowed: () => true }),
+}));
 jest.mock("../../hooks/useEmailSettingsCallbacks", () => ({
   useEmailSettingsCallbacks: () => ({
     handleEmailConnectedFromSettings: jest.fn(),
@@ -82,7 +89,6 @@ function Harness() {
     <NotificationProvider>
       <AppShell app={app}>
         <div data-testid="dashboard" />
-        {modal.modalState.showProfile && <div data-testid="profile-popup" />}
       </AppShell>
       <SupportWidget />
     </NotificationProvider>
@@ -189,13 +195,14 @@ describe("Esc with the support form over Settings (BACKLOG-3964 slice 2 fix-up 3
 });
 
 describe("title-bar initials while Settings shows", () => {
-  it("opens Profile and closes Settings, so Profile is not hidden underneath", () => {
+  it("opens the account panel and closes Settings, so the two never stack (C2)", () => {
     render(<Harness />);
     act(() => modal.openSettings("settings-security"));
     expect(screen.getByTestId("settings-page")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("nav-profile"));
     expect(screen.queryByTestId("settings-page")).toBeNull();
-    expect(screen.getByTestId("profile-popup")).toBeInTheDocument();
+    expect(screen.queryByTestId("settings-layer")).toBeNull();
+    expect(screen.getByTestId("account-panel")).toBeInTheDocument();
     expect(modal.modalState.settingsTarget).toBeNull();
   });
 });

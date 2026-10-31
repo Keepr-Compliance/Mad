@@ -41,8 +41,13 @@ silent miss or a false failure.
 | `onboarding-email-connect-secondary` | `onboarding/steps/EmailConnectStep.tsx` | Connect secondary provider |
 | `onboarding-email-continue-primary` | `onboarding/steps/EmailConnectStep.tsx` | Continue after primary connected |
 | `onboarding-email-continue-secondary` | `onboarding/steps/EmailConnectStep.tsx` | Continue after secondary connected |
-| `nav-profile` | `appCore/AppShell.tsx` | Profile avatar (opens Profile modal) |
-| `nav-settings` | `components/Profile.tsx` | Settings button inside Profile modal |
+| `nav-profile` | `appCore/shell/AccountButton.tsx` | Title-bar initials (opens the account side panel) |
+| `nav-settings` | `appCore/shell/AccountPanel.tsx` | Account row in the account side panel (opens Settings at Account) |
+| `account-panel` | `appCore/shell/AccountPanel.tsx` | The account side panel (role dialog) |
+| `account-panel-scrim` | `appCore/shell/AccountPanel.tsx` | Scrim behind the panel; click closes it |
+| `account-panel-close` | `appCore/shell/AccountPanel.tsx` | Panel X button |
+| `account-panel-row-<tab id>` | `appCore/shell/AccountPanel.tsx` | Panel row per Settings tab other than Account (e.g. `account-panel-row-settings-security`) |
+| `account-panel-signout` | `appCore/shell/AccountPanel.tsx` | Sign out (the only one in the app) |
 | `nav-new-audit` | `components/Dashboard.tsx` | "New Audit" tile |
 | `nav-transactions` | `components/Dashboard.tsx` | "All Audits" / transactions tile |
 | `nav-clients-contacts` | `components/Dashboard.tsx` | "Clients & Contacts" tile |

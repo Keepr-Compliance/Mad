@@ -10,12 +10,12 @@
 
 import React from "react";
 import type { AppStateMachine } from "./state/types";
-import { ShellBanners, ShellContent, TitleBar } from "./shell";
+import { AccountPanel, ShellBanners, ShellContent, TitleBar } from "./shell";
 import SystemHealthMonitor from "../components/SystemHealthMonitor";
 import { isOnboardingStep } from "./routing";
 import { useSessionValidator } from "../hooks/useSessionValidator";
 import { useSessionIdleTimeout } from "../hooks/useIdleSessionExpiry";
-import { isElectron } from "../utils/platform";
+import { isElectron, isMacOS } from "../utils/platform";
 // TASK-2282: SupportWidget moved to App.tsx (outside auth routes)
 
 // OAuthProvider type to match SystemHealthMonitor expectations
@@ -77,11 +77,13 @@ export function AppShell({ app, children }: AppShellProps) {
       {/* Title bar (Electron) / mobile header — BACKLOG-3964: see shell/TitleBar */}
       <TitleBar
         runningInElectron={runningInElectron}
+        isMacOS={runningInElectron && isMacOS()}
         currentStep={currentStep}
         isAuthenticated={isAuthenticated}
         currentUser={currentUser}
         title={modalState.showSettings ? "Settings" : getPageTitle()}
         onOpenAccount={openProfile}
+        accountOpen={modalState.showProfile}
       />
 
       <ShellBanners app={app} />
@@ -135,6 +137,7 @@ export function AppShell({ app, children }: AppShellProps) {
 
       {/* Scrollable content area + the Settings page layer (BACKLOG-3964) */}
       <ShellContent app={app}>{children}</ShellContent>
+      <AccountPanel app={app} runningInElectron={runningInElectron} />{/* BACKLOG-3964 slice 3 */}
 
       {/* TASK-2282: SupportWidget moved to App.tsx to be visible on ALL screens */}
     </div>

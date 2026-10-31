@@ -45,6 +45,7 @@ export interface AppUser {
 
 // Modal visibility state
 export interface ModalState {
+  /** BACKLOG-3964 slice 3: the account side panel is open (shell/AccountPanel). */
   showProfile: boolean;
   showSettings: boolean;
   /**
@@ -150,7 +151,7 @@ export interface AppStateMachine {
   // SEMANTIC MODAL TRANSITIONS
   // ============================================
 
-  // Profile modal
+  // Account side panel (BACKLOG-3964; was the Profile modal)
   openProfile(): void;
   closeProfile(): void;
 

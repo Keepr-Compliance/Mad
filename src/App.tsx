@@ -57,7 +57,7 @@ function App() {
       {/* TASK-2282: SupportWidget outside LicenseGate so it's visible on ALL screens
           including login, onboarding, error states, and license-blocked states.
           Widget detects auth state internally via IPC. */}
-      <SupportWidget />
+      <SupportWidget accountPanelOpen={app.modalState.showProfile} />
       {/* BACKLOG-2393: support access is a bounded window, and the user must be
           able to see that it is open — and when it closes — from any screen. */}
       <SupportAccessIndicator />

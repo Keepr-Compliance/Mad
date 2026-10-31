@@ -66,7 +66,6 @@ jest.mock("../../../components/WelcomeTerms", () => ({
   __esModule: true,
   default: () => <div data-testid="welcome-terms" />,
 }));
-jest.mock("../../../components/Profile", () => ({ __esModule: true, default: () => null }));
 jest.mock("../../../components/Settings", () => ({ __esModule: true, default: () => null }));
 jest.mock("../../../components/TransactionList", () => ({ __esModule: true, default: () => null }));
 jest.mock("../../../components/Contacts", () => ({ __esModule: true, default: () => null }));
