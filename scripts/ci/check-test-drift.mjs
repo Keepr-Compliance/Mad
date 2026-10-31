@@ -128,16 +128,6 @@ const ALLOW_LIST = [
     pattern: /^supabase\/functions\/.*\/__tests__\/.*\.test\.ts$/,
     reason: 'Deno tests (deno.land imports / Deno.test) — no deno CI job yet, see BACKLOG-2690',
   },
-  {
-    // QUARANTINE, not an exemption on the merits. This guard is RED and the red
-    // is CORRECT — it reports that the QA seeder stamps HEAD_SCHEMA_VERSION = 50
-    // while the head migration is 57 — but satisfying it by bumping the constant
-    // would BREAK the fixture, because schema.sql lacks what migrations v56/v57
-    // add. See the long note beside the matching testPathIgnorePatterns entry in
-    // jest.config.js. Un-quarantining is part of closing BACKLOG-2687.
-    pattern: /^scripts\/qa\/harness\/__tests__\/headSchemaVersion\.test\.ts$/,
-    reason: 'QUARANTINED RED — correct failure, wrong fix is to bump the constant; see BACKLOG-2687',
-  },
 ];
 
 // ---------------------------------------------------------------------------
