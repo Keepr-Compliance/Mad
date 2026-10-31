@@ -700,14 +700,36 @@
             "sortOrder": 2
           }
         ],
-        "linksByItemId": {},
+        "linksByItemId": {
+          "id-18": [
+            {
+              "id": "id-20",
+              "itemId": "id-18",
+              "kind": "text",
+              "label": "Text · March 6, 2026",
+              "sortOrder": 0,
+              "includeOutsideDates": false,
+              "members": [
+                {
+                  "id": "id-21",
+                  "linkId": "id-20",
+                  "kind": "text",
+                  "attachmentId": null,
+                  "emailId": null,
+                  "messageId": "m-1",
+                  "inTransaction": true
+                }
+              ]
+            }
+          ]
+        },
         "requiredDone": 1,
         "requiredTotal": 3,
         "allItemsChecked": false
       },
       {
         "checklist": {
-          "id": "id-20",
+          "id": "id-22",
           "transactionId": "txn-1",
           "templateId": "tpl-done",
           "templateName": "Done probe template",
@@ -717,8 +739,8 @@
         },
         "items": [
           {
-            "id": "id-21",
-            "checklistId": "id-20",
+            "id": "id-23",
+            "checklistId": "id-22",
             "title": "Done item 1",
             "description": null,
             "isRequired": true,
@@ -729,8 +751,8 @@
             "sortOrder": 0
           },
           {
-            "id": "id-22",
-            "checklistId": "id-20",
+            "id": "id-24",
+            "checklistId": "id-22",
             "title": "Done item 2",
             "description": null,
             "isRequired": false,
@@ -748,7 +770,7 @@
       },
       {
         "checklist": {
-          "id": "id-23",
+          "id": "id-25",
           "transactionId": "txn-1",
           "templateId": "keepr:my-items",
           "templateName": "My items",
@@ -758,8 +780,8 @@
         },
         "items": [
           {
-            "id": "id-24",
-            "checklistId": "id-23",
+            "id": "id-26",
+            "checklistId": "id-25",
             "title": "Call lender about rate lock",
             "description": null,
             "isRequired": true,
@@ -770,8 +792,8 @@
             "sortOrder": 0
           },
           {
-            "id": "id-25",
-            "checklistId": "id-23",
+            "id": "id-27",
+            "checklistId": "id-25",
             "title": "Send buyer the HOA docs summary",
             "description": null,
             "isRequired": true,
@@ -783,18 +805,18 @@
           }
         ],
         "linksByItemId": {
-          "id-24": [
+          "id-26": [
             {
-              "id": "id-26",
-              "itemId": "id-24",
+              "id": "id-28",
+              "itemId": "id-26",
               "kind": "attachment",
               "label": "probe-document.pdf",
               "sortOrder": 0,
               "includeOutsideDates": false,
               "members": [
                 {
-                  "id": "id-27",
-                  "linkId": "id-26",
+                  "id": "id-29",
+                  "linkId": "id-28",
                   "kind": "attachment",
                   "attachmentId": "att-1",
                   "emailId": null,
