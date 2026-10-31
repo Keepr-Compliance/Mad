@@ -8,7 +8,7 @@
  *
  * Now the target is state (openSettings(target) stores it). Nothing happens
  * until `ready` (preferences loaded); then the target is scrolled to and
- * ringed, and `onReached` clears it, so asking for the same section again
+ * ringed, and `onReached` (given the landed element) clears it, so asking for the same section again
  * fires again. A target rendered later than the sections themselves (an inner
  * element such as the texts look-back picker) is waited for with a
  * MutationObserver, never a timer; after GIVE_UP_MS without it the request is
@@ -29,7 +29,8 @@ export function useSettingsSectionRouting(
   target: string | null | undefined,
   ready: boolean,
   containerRef: RefObject<HTMLElement | null>,
-  onReached?: () => void,
+  /** Called with the element landed on, or with nothing when the target never appeared. */
+  onReached?: (landed?: HTMLElement) => void,
 ): void {
   useEffect(() => {
     const root = containerRef.current;
@@ -37,7 +38,7 @@ export function useSettingsSectionRouting(
 
     const land = (el: HTMLElement) => {
       highlightSettingsTarget(el);
-      onReached?.();
+      onReached?.(el);
     };
     const found = findTarget(root, target);
     if (found) {

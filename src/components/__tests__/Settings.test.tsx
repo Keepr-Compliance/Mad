@@ -2157,5 +2157,124 @@ describe("Settings", () => {
       await act(async () => releaseConnections());
       await waitFor(() => expect(scrolledIds()).toEqual(["email-connection-microsoft-connect"]));
     });
+
+    // BACKLOG-3963 pre-gate (3964 H5): the tab bar follows navigation, not only the scroll-spy.
+    describe("active tab follows navigation (pre-gate H5)", () => {
+      const tab = (name: string) => screen.getByRole("tab", { name });
+      const realIO = (window as unknown as { IntersectionObserver?: unknown }).IntersectionObserver;
+      afterEach(() => {
+        (window as unknown as { IntersectionObserver?: unknown }).IntersectionObserver = realIO;
+      });
+      /** A live spy: an IntersectionObserver that never reports, so only the spy's at-bottom rule moves it. */
+      const installQuietObserver = () => {
+        (window as unknown as { IntersectionObserver: unknown }).IntersectionObserver = class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        };
+      };
+      /** The scroller at its bottom: what Support Access and About produce, as neither can reach the top. */
+      const scrollToBottom = (scroller: HTMLElement) => {
+        Object.defineProperty(scroller, "scrollHeight", { value: 3000, configurable: true });
+        Object.defineProperty(scroller, "clientHeight", { value: 800, configurable: true });
+        Object.defineProperty(scroller, "scrollTop", { value: 2200, configurable: true, writable: true });
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+        });
+      };
+      const scroller = () => (document.getElementById("settings-account") as HTMLElement).parentElement!.parentElement as HTMLElement;
+
+      it("opening at Security selects the Security tab", async () => {
+        renderPage({ initialSection: "settings-security" });
+        await waitFor(() => expect(scrolledIds()).toEqual(["settings-security"]));
+        expect(tab("Security")).toHaveAttribute("aria-selected", "true");
+        expect(tab("Account")).toHaveAttribute("aria-selected", "false");
+      });
+
+      it("opening at an element inside a section selects that section's tab", async () => {
+        renderPage({ initialSection: "email-connection-microsoft-connect" });
+        await waitFor(() => expect(scrolledIds()).toEqual(["email-connection-microsoft-connect"]));
+        expect(tab("Email")).toHaveAttribute("aria-selected", "true");
+      });
+
+      it("Support Access click selects Support Access although the page stops at the bottom (spy says About)", async () => {
+        installQuietObserver();
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+        // Baseline: the spy is live and, at the bottom, picks the last tab.
+        scrollToBottom(scroller());
+        expect(tab("About")).toHaveAttribute("aria-selected", "true");
+        await userEvent.click(tab("Support Access"));
+        expect(scrolledIds()).toEqual(["settings-support-access"]);
+        // The smooth scroll lands at the bottom again; the spy re-reports About.
+        scrollToBottom(scroller());
+        expect(tab("Support Access")).toHaveAttribute("aria-selected", "true");
+        expect(tab("About")).toHaveAttribute("aria-selected", "false");
+      });
+
+      it("a programmatic scroll after a tab click keeps the clicked tab", async () => {
+        installQuietObserver();
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+        expect(tab("Account")).toHaveAttribute("aria-selected", "true");
+        await userEvent.click(tab("Support Access"));
+        scrollToBottom(scroller());
+        expect(tab("Support Access")).toHaveAttribute("aria-selected", "true");
+      });
+
+      it("a programmatic scroll after open-at-section keeps the opened tab", async () => {
+        installQuietObserver();
+        renderPage({ initialSection: "settings-support-access" });
+        await waitFor(() => expect(scrolledIds()).toEqual(["settings-support-access"]));
+        scrollToBottom(scroller());
+        expect(tab("Support Access")).toHaveAttribute("aria-selected", "true");
+      });
+
+      it("after the user scrolls by hand, the spy takes over again", async () => {
+        installQuietObserver();
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+        await userEvent.click(tab("Support Access"));
+        expect(tab("Support Access")).toHaveAttribute("aria-selected", "true");
+        // A wheel, then the scroll it causes moves the spy: the pin lets go.
+        act(() => {
+          scroller().dispatchEvent(new Event("wheel"));
+        });
+        scrollToBottom(scroller());
+        expect(tab("About")).toHaveAttribute("aria-selected", "true");
+      });
+    });
+
+    it("Outlook chip reads \"Outlook connected\" with a space that survives the inline-flex chip", async () => {
+      jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
+        success: true,
+        google: { connected: false, email: "user@example.com" },
+        microsoft: { connected: true, email: "user@example.com" },
+      } as Awaited<ReturnType<typeof window.api.system.checkAllConnections>>);
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const chips = within(document.getElementById("settings-account") as HTMLElement).getByTestId("account-chips");
+      const chip = await within(chips).findByText(/^Outlook/);
+      // A plain space collapses at the end of the hidden-below-sm span; it must be U+00A0.
+      expect(chip.textContent).toBe("Outlook\u00a0connected");
+    });
+
+    it("Gmail chip reads \"Gmail connected\" with a space that survives the inline-flex chip", async () => {
+      jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
+        success: true,
+        google: { connected: true, email: "user@example.com" },
+        microsoft: { connected: false, email: "user@example.com" },
+      } as Awaited<ReturnType<typeof window.api.system.checkAllConnections>>);
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const chips = within(document.getElementById("settings-account") as HTMLElement).getByTestId("account-chips");
+      const chip = await within(chips).findByText(/^Gmail/);
+      // A plain space collapses at the end of the hidden-below-sm span; it must be U+00A0.
+      expect(chip.textContent).toBe("Gmail\u00a0connected");
+    });
+
+    it("Account chip reads \"Signed in with Google\" with a space that survives the inline-flex chip", async () => {
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const chips = within(document.getElementById("settings-account") as HTMLElement).getByTestId("account-chips");
+      const chip = within(chips).getByText(/Signed in with/).parentElement as HTMLElement;
+      // jsdom has no layout: a plain trailing space reads the same here but collapses on screen
+      // at the end of a flex item. The space must be U+00A0.
+      expect(chip.textContent).toBe("Signed in with\u00a0Google");
+    });
   });
 });

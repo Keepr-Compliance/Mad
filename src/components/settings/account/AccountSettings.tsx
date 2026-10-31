@@ -87,18 +87,20 @@ export function AccountSettings({ user, provider, mailboxes = { google: false, m
         <div className="flex flex-wrap gap-2" data-testid="account-chips">
           {providerName && (
             <span className={chip}>
-              <span className="hidden sm:inline">Signed in with </span>
+              {/* A non-breaking space: the chip is inline-flex, so a plain trailing
+                  space at the end of this span collapses ("Signed in withGoogle"). */}
+              <span className="hidden sm:inline">Signed in with&nbsp;</span>
               {providerName}
             </span>
           )}
           {mailboxes.microsoft && (
             <span className={chip}>
-              Outlook<span className="hidden sm:inline"> connected</span>
+              Outlook<span className="hidden sm:inline">&nbsp;connected</span>
             </span>
           )}
           {mailboxes.google && (
             <span className={chip}>
-              Gmail<span className="hidden sm:inline"> connected</span>
+              Gmail<span className="hidden sm:inline">&nbsp;connected</span>
             </span>
           )}
         </div>

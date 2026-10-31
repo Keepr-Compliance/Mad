@@ -95,15 +95,52 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
 
   // BACKLOG-3964: the tab strip is outside the scroller now, so only a small
   // offset (was 48 for the sticky strip inside it).
-  const activeTabId = useScrollSpy(visibleTabIds, scrollContainerRef, 8, !loadingPreferences);
-  useSettingsSectionRouting(initialSection, !loadingPreferences, scrollContainerRef, onSectionReached);
+  const spyTabId = useScrollSpy(visibleTabIds, scrollContainerRef, 8, !loadingPreferences);
+  // BACKLOG-3964 (pre-gate H5): a tab click or an open-at-section sets the
+  // active tab. The scroll-spy alone could not: during the smooth scroll it
+  // picks the section above the target, and a last section that cannot reach
+  // the top of the scroller loses to the spy's "at the bottom -> last tab"
+  // rule. The pin holds until the user scrolls by hand and the spy then moves.
+  const [pinnedTabId, setPinnedTabId] = useState<string | null>(null);
+  const userScrolledRef = useRef(false);
+  const pinTab = useCallback((id: string) => {
+    userScrolledRef.current = false;
+    setPinnedTabId(id);
+  }, []);
+  useEffect(() => {
+    if (userScrolledRef.current) setPinnedTabId(null);
+  }, [spyTabId]);
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (loadingPreferences || !container) return;
+    const byHand = () => {
+      userScrolledRef.current = true;
+    };
+    const events = ["wheel", "touchmove", "keydown", "pointerdown"] as const;
+    for (const e of events) container.addEventListener(e, byHand, { passive: true });
+    return () => {
+      for (const e of events) container.removeEventListener(e, byHand);
+    };
+  }, [loadingPreferences]);
+  const activeTabId = pinnedTabId ?? spyTabId;
+
+  const handleSectionReached = useCallback(
+    (landed?: HTMLElement) => {
+      const tab = landed && visibleTabIds.find((id) => document.getElementById(id)?.contains(landed));
+      if (tab) pinTab(tab);
+      onSectionReached?.();
+    },
+    [visibleTabIds, pinTab, onSectionReached],
+  );
+  useSettingsSectionRouting(initialSection, !loadingPreferences, scrollContainerRef, handleSectionReached);
 
   const handleTabClick = useCallback((id: string) => {
     const el = document.getElementById(id);
     if (el) {
+      pinTab(id);
       el.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  }, []);
+  }, [pinTab]);
 
   const handleConnectionStatusChange = useCallback((google: boolean, microsoft: boolean) => {
     setIsGoogleConnected(google);

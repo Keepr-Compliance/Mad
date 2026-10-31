@@ -77,7 +77,7 @@ export async function cellTextChip(page: Page, seed: ChecklistTextsSeed): Promis
   const chip = item.locator('[data-testid^="checklist-link-"][data-stale]').filter({ has: icon }).first();
   const text = (await chip.textContent()) ?? '';
   await chip.getByTestId('checklist-link-view').click();
-  const opened = await page.getByText(/Messages|Conversation/).first().isVisible({ timeout: 10_000 }).catch(() => false);
+  const opened = await page.getByTestId('conversation-count').first().isVisible({ timeout: 10_000 }).catch(() => false);
   return { id: 'T3', ok: (await icon.textContent())?.trim() === 'TXT' && /^Text · /.test(text) && opened, detail: `chip "${text}", conversation opened ${opened}` };
 }
 
@@ -87,10 +87,12 @@ export async function cellTextChip(page: Page, seed: ChecklistTextsSeed): Promis
  * picker is open is the jsdom control (ChecklistLinkPicker.texts-3968, "a locked deal").
  */
 export async function cellLockedDealRefuses(page: Page, lockedItemId: string): Promise<CellResult> {
+  // Absence alone would also pass on a page that never reached the deal: require the lock notice.
+  const notice = await page.getByTestId('checklist-locked-notice').isVisible().catch(() => false);
   const button = page.getByTestId(`checklist-open-picker-${lockedItemId}`);
   const present = await button.count();
   const disabled = present > 0 ? await button.isDisabled() : true;
-  return { id: 'T4', ok: disabled, detail: `Link… present ${present}, disabled ${disabled}` };
+  return { id: 'T4', ok: notice && disabled, detail: `lock notice ${notice}, Link… present ${present}, disabled ${disabled}` };
 }
 
 /** T5: Submit for review lists the text link with the short reason it is not sent. */
