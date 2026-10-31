@@ -70,8 +70,8 @@ interface DropdownBaseProps<V extends string> {
    * trigger. 'sheet': a BottomSheet titled by the label, comfortable rows, a
    * pick commits and closes (no footer). The parent chooses, e.g.
    * `presentation={isPhone ? 'sheet' : 'popover'}`; the component does no
-   * matchMedia. Commit-on-pick is single mode only: a later multi mode in a
-   * sheet needs a footer button.
+   * matchMedia. Commit-on-pick is single mode only: multi mode is popover
+   * only (its sheet needs a pending selection + Apply footer, RESERVED).
    */
   presentation?: 'popover' | 'sheet';
   className?: string;
@@ -79,30 +79,67 @@ interface DropdownBaseProps<V extends string> {
 
 export type DropdownSingleProps<V extends string = string> = DropdownBaseProps<V> &
   DropdownLabelling & {
-    /** Only 'single' is built. 'multi' is RESERVED and will join this union as its own member. */
+    /** Omitted or 'single': one value. `mode: 'multi'` is DropdownMultiProps. */
     mode?: 'single';
     value: V | null;
     onChange: (value: V) => void;
     /**
-     * Clear back to no value, for the filter trigger. Slice 3: only marks the
-     * filter pill as removable (blue while it has a value); the clear X is
-     * still RESERVED (not rendered).
+     * Clear back to no value, for the filter trigger. Single mode: only marks
+     * the filter pill as removable (blue while it has a value); the clear X is
+     * RESERVED in single mode (not rendered).
      */
     onClear?: () => void;
   };
 
 /**
- * Discriminated on `mode`. Today the union has one member; a later
- * `DropdownMultiProps` (`mode: 'multi'`, `value: V[]`, `onChange(v: V[])`) is
- * added alongside it without changing the single signature.
+ * Multi choice (BACKLOG-4032 slice 4a), popover only. A toggle (click or
+ * Enter) commits at once and keeps the panel open. The panel always shows a
+ * "Select all" / "Clear all" strip; both act on the whole option set (enabled
+ * options only), not on the search results.
+ *
+ * RESERVED in multi: `presentation="sheet"` (needs a pending selection and an
+ * Apply footer), option `count`, `group` headers, chips in the trigger, and a
+ * prop to hide the bulk strip (no caller turns it off).
  */
-export type DropdownProps<V extends string = string> = DropdownSingleProps<V>;
+export type DropdownMultiProps<V extends string = string> = Omit<DropdownBaseProps<V>, 'presentation'> &
+  DropdownLabelling & {
+    mode: 'multi';
+    /** Fully controlled; the component keeps no copy. The pill reads "Label (n)" with n = value.length. */
+    value: readonly V[];
+    /** Called once per toggle, Select all or Clear all. Never on a search keystroke or Escape. */
+    onChange: (value: V[]) => void;
+    /**
+     * Renders the sibling "Clear <Label> filter" X while value is non-empty
+     * (the pill is blue then). Called alone: the parent sets the value to [].
+     */
+    onClear?: () => void;
+    /** Popover only in multi. */
+    presentation?: 'popover';
+  };
 
-export interface DropdownOptionsProps<V extends string = string> {
-  options: readonly DropdownOption<V>[];
+/** Discriminated on `mode`: omitted / 'single' = DropdownSingleProps, 'multi' = DropdownMultiProps. */
+export type DropdownProps<V extends string = string> = DropdownSingleProps<V> | DropdownMultiProps<V>;
+
+/** Single: one value, `onSelect` on a pick (the parent closes). */
+export interface DropdownOptionsSingleProps<V extends string = string> extends DropdownOptionsBaseProps<V> {
+  mode?: 'single';
   value: V | null;
   /** Called when an enabled row is picked (click or Enter). */
   onSelect: (value: V) => void;
+}
+
+/** Multi: a toggle calls `onChange(next)`; the parent keeps the panel open. */
+export interface DropdownOptionsMultiProps<V extends string = string> extends DropdownOptionsBaseProps<V> {
+  mode: 'multi';
+  value: readonly V[];
+  /** Called with the next selection on a toggle, Select all or Clear all. */
+  onChange: (value: V[]) => void;
+}
+
+export type DropdownOptionsProps<V extends string = string> = DropdownOptionsSingleProps<V> | DropdownOptionsMultiProps<V>;
+
+interface DropdownOptionsBaseProps<V extends string = string> {
+  options: readonly DropdownOption<V>[];
   /** Accessible name of the listbox (and, by default, of the search field). */
   ariaLabel: string;
   /** id of an element that labels the listbox. Takes precedence over ariaLabel for the listbox. */
@@ -115,7 +152,11 @@ export interface DropdownOptionsProps<V extends string = string> {
   onQueryChange?: (query: string) => void;
   /** Focus the search field (or the listbox when not searchable) on mount. */
   autoFocus?: boolean;
-  /** Called when Tab is pressed in the focus host (the parent closes its popover). */
+  /**
+   * Called when Tab leaves the panel (the parent closes its popover): Tab or
+   * Shift+Tab in the focus host. In multi, Tab first visits the enabled bulk
+   * buttons and onTabOut fires on Tab from the last enabled one.
+   */
   onTabOut?: () => void;
   /** 'default' = desktop popover rows (min-h-9 text-sm); 'comfortable' = phone sheet rows (min-h-12 text-base). */
   size?: 'default' | 'comfortable';
