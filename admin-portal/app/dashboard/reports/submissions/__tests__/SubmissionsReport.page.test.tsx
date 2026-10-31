@@ -83,6 +83,7 @@ const DEFAULT_ROW = {
 
 const LAST_MONTH_LABEL = resolvePeriod({ period: 'last-month' }, NOW).label;
 const WEEK_LABEL = resolvePeriod({ period: 'week' }, NOW).label;
+const CUSTOM_LABEL = resolvePeriod({ period: 'custom', from: '2026-09-01', to: '2026-09-15' }, NOW).label;
 
 async function renderPage(params: Record<string, string> = {}) {
   render(await SubmissionsReportPage({ searchParams: Promise.resolve(params) }));
@@ -117,6 +118,16 @@ describe('Submissions page opens the default view', () => {
     expect(pageText()).toContain(LAST_MONTH_LABEL);
     expect(pageText()).not.toContain(WEEK_LABEL);
     expect(searchBox().value).toBe('x');
+  });
+
+  it('a2) bare URL: a default saved with a custom range opens on that range', async () => {
+    state.views = [
+      { ...DEFAULT_ROW, filters: { ...DEFAULT_ROW.filters, period: { key: 'custom', from: '2026-09-01', to: '2026-09-15' } } },
+    ];
+    await renderPage();
+    expect(CUSTOM_LABEL).not.toBe(WEEK_LABEL);
+    expect(pageText()).toContain(CUSTOM_LABEL);
+    expect(pageText()).not.toContain(WEEK_LABEL);
   });
 
   it('b) ?period=week wins: week, empty search, views not read', async () => {
