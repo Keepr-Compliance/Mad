@@ -255,19 +255,14 @@ export const checklistService = {
   async linkText(
     itemId: string,
     messageIds: string | readonly string[],
-  ): Promise<ApiResult<AddChecklistLinkResult> & { dealLocked?: string }> {
+  ): Promise<ChecklistWriteApiResult<AddChecklistLinkResult>> {
     try {
       const targetIds = typeof messageIds === "string" ? [messageIds] : [...messageIds];
       const result = await window.api.checklists.addLink({ itemId, kind: "text", targetIds });
       if (result.success && result.result) {
         return { success: true, data: result.result };
       }
-      // A locked deal's refusal carries its reason (`dealLockState.ts`); the
-      // bridge type does not declare it, so it is read defensively.
-      const dealLocked = (result as { dealLocked?: unknown }).dealLocked;
-      return typeof dealLocked === "string"
-        ? { success: false, error: result.error, dealLocked }
-        : { success: false, error: result.error };
+      return { success: false, error: result.error, ...lockRefusalOf(result) };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }

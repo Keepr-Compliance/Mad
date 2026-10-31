@@ -44,6 +44,7 @@ describe("BACKLOG-3968 checklistService.linkText", () => {
       success: false,
       error: "This deal is with the brokerage.",
       dealLocked: "submitted",
+      refusedEdit: "link-checklist-item",
     });
   });
 
