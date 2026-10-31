@@ -6,7 +6,6 @@
  */
 
 import React, { useCallback, useState } from "react";
-import Profile from "../components/Profile";
 import TransactionList from "../components/TransactionList";
 import Contacts from "../components/Contacts";
 import WelcomeTerms from "../components/WelcomeTerms";
@@ -29,20 +28,17 @@ export function AppModals({ app }: AppModalsProps) {
     modalState,
     currentUser,
     authProvider,
-    subscription,
     isDatabaseInitialized,
     pendingOAuthData,
     needsTermsAcceptance,
     appPath,
     // Modal transitions
-    closeProfile,
     closeTransactions,
     closeContacts,
     closeAuditTransaction,
     openSettings,
     openTransactions,
     // Handlers
-    handleLogout,
     handleAcceptTerms,
     handleDeclineTerms,
     handleDismissMovePrompt,
@@ -95,18 +91,7 @@ export function AppModals({ app }: AppModalsProps) {
         />
       )}
 
-      {/* Profile Modal */}
-      {modalState.showProfile && currentUser && authProvider && (
-        <Profile
-          user={currentUser}
-          provider={authProvider}
-          subscription={subscription}
-          onLogout={handleLogout}
-          onClose={closeProfile}
-          onViewTransactions={openTransactions}
-          onOpenSettings={openSettings}
-        />
-      )}
+      {/* The account popup is gone: the initials open shell/AccountPanel (BACKLOG-3964 slice 3). */}
 
       {/* Settings is a page, not a modal: shell/SettingsLayer (BACKLOG-3964). */}
 

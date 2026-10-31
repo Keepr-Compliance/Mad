@@ -15,6 +15,7 @@ let mockElectron = true;
 jest.mock("../../utils/platform", () => ({
   ...jest.requireActual("../../utils/platform"),
   isElectron: () => mockElectron,
+  isMacOS: jest.fn(() => false),
 }));
 jest.mock("../../hooks/useSessionValidator", () => ({
   useSessionValidator: jest.fn(),
@@ -66,6 +67,26 @@ const renderShell = (app: AppStateMachine) =>
 
 beforeEach(() => {
   mockElectron = true;
+  require("../../utils/platform").isMacOS.mockReturnValue(false);
+});
+
+describe("Electron title bar platform offset (AppShell -> TitleBar wiring)", () => {
+  it("Windows/Linux: pl-4, not the macOS pl-20, initials in the left slot", () => {
+    require("../../utils/platform").isMacOS.mockReturnValue(false);
+    renderShell(makeApp());
+    const bar = screen.getByTestId("title-bar");
+    expect(bar).toHaveClass("pl-4");
+    expect(bar).not.toHaveClass("pl-20");
+    expect(screen.getByTestId("title-bar-left")).toContainElement(screen.getByTestId("nav-profile"));
+  });
+
+  it("macOS: pl-20 to clear the traffic lights", () => {
+    require("../../utils/platform").isMacOS.mockReturnValue(true);
+    renderShell(makeApp());
+    const bar = screen.getByTestId("title-bar");
+    expect(bar).toHaveClass("pl-20");
+    expect(bar).not.toHaveClass("pl-4");
+  });
 });
 
 describe("Electron title bar", () => {
@@ -83,20 +104,21 @@ describe("Electron title bar", () => {
     expect(openProfile).toHaveBeenCalledTimes(1);
   });
 
-  it("initials button keeps its tour hook, title, drag opt-out and right-hand position", () => {
+  it("initials button keeps its tour hook, title, drag opt-out and sits on the LEFT (slice 3)", () => {
     renderShell(makeApp());
     const btn = screen.getByTestId("nav-profile");
     expect(btn).toHaveAttribute("data-tour", "profile-button");
     expect(btn).toHaveAttribute("title", "Test User - Click for account settings");
-    expect(btn).toHaveClass("no-drag-region", "w-8", "h-8", "rounded-full");
-    // Bar order today: spacer, title, initials (initials on the RIGHT).
-    const bar = btn.parentElement as HTMLElement;
+    expect(btn).toHaveClass("no-drag-region", "w-8", "h-8", "shrink-0", "rounded-full");
+    // Bar order: initials slot, title, empty right spacer.
+    const bar = screen.getByTestId("title-bar");
     expect(bar.children).toHaveLength(3);
-    expect(bar.children[0]).toHaveClass("w-8");
-    expect(bar.children[0]).toBeEmptyDOMElement();
+    expect(bar.children[0]).toContainElement(btn);
     expect(bar.children[1].tagName).toBe("H1");
-    expect(bar.children[2]).toBe(btn);
-    expect(bar).toHaveClass("flex-shrink-0", "justify-between", "select-none", "px-4", "py-3");
+    expect(bar.children[2]).toHaveClass("w-8");
+    expect(bar.children[2]).toBeEmptyDOMElement();
+    expect(bar).toHaveClass("flex-shrink-0", "justify-between", "select-none", "bg-white", "py-3");
+    expect(bar.className).not.toMatch(/gradient/);
   });
 
   it("title attr falls back to the email when there is no display name", () => {
@@ -108,10 +130,11 @@ describe("Electron title bar", () => {
   });
 
   it.each([
-    ["display name first letter, upper-cased", { display_name: "zed", email: "a@b.c" }, "Z"],
+    ["two words -> two letters", { display_name: "Ann Lee", email: "a@b.c" }, "AL"],
+    ["one word -> its first letter, upper-cased", { display_name: "zed", email: "a@b.c" }, "Z"],
     ["email first letter when no display name", { display_name: undefined, email: "mia@x.io" }, "M"],
     ["'?' when neither is set", { display_name: "", email: "" }, "?"],
-  ])("shows ONE initial: %s", (_label, fields, expected) => {
+  ])("shows the initials: %s", (_label, fields, expected) => {
     renderShell(makeApp({ currentUser: { ...baseUser, ...fields } }));
     expect(screen.getByTestId("nav-profile").textContent).toBe(expected);
   });
@@ -121,8 +144,8 @@ describe("Electron title bar", () => {
     const btn = screen.getByTestId("nav-profile");
     const img = btn.querySelector("img") as HTMLImageElement;
     expect(img).toHaveAttribute("src", "https://x/a.png");
-    expect(img).toHaveAttribute("alt", "Profile");
-    expect(img).toHaveClass("w-8", "h-8", "rounded-full");
+    expect(img).toHaveAttribute("alt", "");
+    expect(img).toHaveClass("h-full", "w-full", "object-cover");
     expect(btn.textContent).toBe("");
   });
 
@@ -178,13 +201,13 @@ describe("Mobile (non-Electron) header", () => {
     expect(btn).not.toHaveClass("no-drag-region");
     expect(btn).toHaveAttribute("data-tour", "profile-button");
     expect(btn).toHaveAttribute("title", "Test User - Click for account settings");
-    expect(btn.textContent).toBe("T");
+    expect(btn.textContent).toBe("TU");
     const bar = btn.parentElement as HTMLElement;
     expect(bar).toHaveClass("lg:hidden", "bg-white");
-    // Order: title left, initials right; no spacer.
+    // Order: initials left, then the title (slice 3); no spacer.
     expect(bar.children).toHaveLength(2);
-    expect(bar.children[0]).toBe(heading);
-    expect(bar.children[1]).toBe(btn);
+    expect(bar.children[0]).toBe(btn);
+    expect(bar.children[1]).toBe(heading);
     fireEvent.click(btn);
     expect(openProfile).toHaveBeenCalledTimes(1);
   });

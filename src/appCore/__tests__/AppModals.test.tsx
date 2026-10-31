@@ -15,11 +15,6 @@ import { AppModals } from "../AppModals";
 import type { AppStateMachine } from "../state/types";
 
 // Mock all modal child components
-jest.mock("../../components/Profile", () => {
-  const MockProfile = () => <div data-testid="profile-modal">Profile Modal</div>;
-  MockProfile.displayName = "Profile";
-  return { __esModule: true, default: MockProfile };
-});
 
 jest.mock("../../components/Settings", () => {
   const MockSettings = () => <div data-testid="settings-modal">Settings Modal</div>;
@@ -270,7 +265,6 @@ describe("AppModals", () => {
       const app = createAppStateMock();
       const { container } = render(<AppModals app={app} />);
 
-      expect(screen.queryByTestId("profile-modal")).not.toBeInTheDocument();
       expect(screen.queryByTestId("settings-modal")).not.toBeInTheDocument();
       expect(screen.queryByTestId("transactions-modal")).not.toBeInTheDocument();
       expect(screen.queryByTestId("contacts-modal")).not.toBeInTheDocument();
@@ -302,45 +296,17 @@ describe("AppModals", () => {
     });
   });
 
-  describe("Profile Modal", () => {
-    it("should render Profile when showProfile is true and user + authProvider exist", () => {
+  describe("Account (BACKLOG-3964 slice 3: the side panel, rendered by AppShell)", () => {
+    it("renders no account surface, even when showProfile is true", () => {
       const app = createAppStateMock({
         modalState: createModalState({ showProfile: true }),
         currentUser: mockUser,
         authProvider: "google",
       });
-      render(<AppModals app={app} />);
-      expect(screen.getByTestId("profile-modal")).toBeInTheDocument();
-    });
-
-    it("should not render Profile when showProfile is true but no currentUser", () => {
-      const app = createAppStateMock({
-        modalState: createModalState({ showProfile: true }),
-        currentUser: null,
-        authProvider: "google",
-      });
-      render(<AppModals app={app} />);
-      expect(screen.queryByTestId("profile-modal")).not.toBeInTheDocument();
-    });
-
-    it("should not render Profile when showProfile is true but no authProvider", () => {
-      const app = createAppStateMock({
-        modalState: createModalState({ showProfile: true }),
-        currentUser: mockUser,
-        authProvider: null,
-      });
-      render(<AppModals app={app} />);
-      expect(screen.queryByTestId("profile-modal")).not.toBeInTheDocument();
-    });
-
-    it("should not render Profile when showProfile is false", () => {
-      const app = createAppStateMock({
-        modalState: createModalState({ showProfile: false }),
-        currentUser: mockUser,
-        authProvider: "google",
-      });
-      render(<AppModals app={app} />);
-      expect(screen.queryByTestId("profile-modal")).not.toBeInTheDocument();
+      const { container } = render(<AppModals app={app} />);
+      expect(screen.queryByTestId("account-panel")).not.toBeInTheDocument();
+      expect(screen.queryByRole("dialog", { name: /account/i })).not.toBeInTheDocument();
+      expect(container).not.toHaveTextContent(mockUser.email);
     });
   });
 
