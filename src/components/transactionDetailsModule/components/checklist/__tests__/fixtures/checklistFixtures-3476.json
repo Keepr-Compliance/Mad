@@ -217,14 +217,36 @@
             "sortOrder": 2
           }
         ],
-        "linksByItemId": {},
+        "linksByItemId": {
+          "id-18": [
+            {
+              "id": "id-20",
+              "itemId": "id-18",
+              "kind": "text",
+              "label": "Text · March 6, 2026",
+              "sortOrder": 0,
+              "includeOutsideDates": false,
+              "members": [
+                {
+                  "id": "id-21",
+                  "linkId": "id-20",
+                  "kind": "text",
+                  "attachmentId": null,
+                  "emailId": null,
+                  "messageId": "m-1",
+                  "inTransaction": true
+                }
+              ]
+            }
+          ]
+        },
         "requiredDone": 1,
         "requiredTotal": 3,
         "allItemsChecked": false
       },
       {
         "checklist": {
-          "id": "id-20",
+          "id": "id-22",
           "transactionId": "txn-1",
           "templateId": "tpl-done",
           "templateName": "Done probe template",
@@ -234,8 +256,8 @@
         },
         "items": [
           {
-            "id": "id-21",
-            "checklistId": "id-20",
+            "id": "id-23",
+            "checklistId": "id-22",
             "title": "Done item 1",
             "description": null,
             "isRequired": true,
@@ -246,8 +268,8 @@
             "sortOrder": 0
           },
           {
-            "id": "id-22",
-            "checklistId": "id-20",
+            "id": "id-24",
+            "checklistId": "id-22",
             "title": "Done item 2",
             "description": null,
             "isRequired": false,

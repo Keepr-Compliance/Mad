@@ -274,7 +274,8 @@ describe("A-8 — each section acts on itself", () => {
     render(<Harness gate="allowed" />);
     fireEvent.click(await screen.findByTestId(`checklist-remove-${idOf(1)}`));
     expect(screen.getByTestId(`checklist-remove-prompt-${idOf(1)}`)).toHaveTextContent(
-      "Remove “Other probe template”? Its 1 ticked item, 0 notes and 0 links are removed.",
+      // BACKLOG-3968 PR-4b: the fixture's second checklist now carries one text group.
+      "Remove “Other probe template”? Its 1 ticked item, 0 notes and 1 link are removed.",
     );
     expect(api().remove).not.toHaveBeenCalled();
     fireEvent.click(screen.getByTestId(`checklist-remove-confirm-${idOf(1)}`));

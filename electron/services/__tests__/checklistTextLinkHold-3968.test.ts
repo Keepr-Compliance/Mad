@@ -47,6 +47,18 @@ describe("BACKLOG-3968 — the text-link hold is defined once", () => {
     expect(defining).toEqual([HOLD_MODULE]);
   });
 
+  // BACKLOG-3968 PR-4b: the hold is about SENDING (SR R6). Creating a text
+  // link is allowed while held, so the writer (checklistDbService, the add-link
+  // handler) must never read it: the readers stay exactly these two.
+  it("exactly two readers — the gap finder and the snapshot; never the link writer", () => {
+    const mention = new RegExp(`\\b${NAME}\\b`);
+    const readers = productionSources()
+      .filter((f) => f !== HOLD_MODULE)
+      .filter((f) => mention.test(fs.readFileSync(path.join(ROOT, f), "utf8")))
+      .sort();
+    expect(readers).toEqual([...READERS].sort());
+  });
+
   it.each(READERS)("%s imports the constant from the hold module", (file) => {
     const text = fs.readFileSync(path.join(ROOT, file), "utf8");
     expect(text).toMatch(new RegExp(`import \\{ ${NAME} \\} from "\\./checklistTextLinkHold";`));
