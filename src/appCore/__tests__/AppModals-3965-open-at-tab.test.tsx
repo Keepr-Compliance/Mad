@@ -18,7 +18,9 @@ import type { AppStateMachine } from "../state/types";
 import {
   clearOpenTransactionRequest,
   getOpenTransactionRequest,
+  makeOpenTransactionAt,
   requestOpenTransaction,
+  subscribeTransactionsViewClosed,
 } from "../openTransactionRequest";
 
 jest.mock("../../components/TransactionList", () => {
@@ -96,10 +98,8 @@ function Host() {
     <>
       <button
         data-testid="dashboard-open-checklist"
-        onClick={() => {
-          requestOpenTransaction("txn-todo", "checklist");
-          openTransactions();
-        }}
+        // BACKLOG-3965 PR-4b: the real helper AppRouter passes to Dashboard.
+        onClick={() => makeOpenTransactionAt(openTransactions)("txn-todo", "checklist")}
       >
         todo row
       </button>
@@ -147,6 +147,17 @@ describe("BACKLOG-3965 open a deal on a named tab (host: AppModals)", () => {
     fireEvent.click(screen.getByTestId("transactions-close"));
     expect(screen.queryByTestId("transactions-modal")).not.toBeInTheDocument();
     expect(getOpenTransactionRequest()).toBeNull();
+  });
+
+  it("closing the Transactions view tells the Dashboard panels to read again (PR-4b)", () => {
+    const listener = jest.fn();
+    const unsubscribe = subscribeTransactionsViewClosed(listener);
+    renderHost();
+    fireEvent.click(screen.getByTestId("dashboard-open-checklist"));
+    expect(listener).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId("transactions-close"));
+    expect(listener).toHaveBeenCalledTimes(1);
+    unsubscribe();
   });
 
   it("a checklist request does not carry over to the next Contacts-card open", () => {
