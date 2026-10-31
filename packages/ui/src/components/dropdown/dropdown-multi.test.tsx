@@ -134,11 +134,23 @@ describe('Dropdown mode="multi"', () => {
 
   it.each([
     [['d'], 'Acme'],
+    [['d', 'e'], 'Alder'],
     [[], 'Acme'],
   ])('R3 value %p opens on %p', (initial, expected) => {
     setup({ initial });
     openIt();
     expect(activeLabel()).toBe(expected);
+  });
+
+  it('C1 keyboard activation of the sibling clear X returns focus to the pill', () => {
+    const { onClear } = setup();
+    const x = clearX()!;
+    x.focus();
+    expect(document.activeElement).toBe(x);
+    fireEvent.click(x); // Enter/Space on a native button dispatch click
+    expect(onClear).toHaveBeenCalledTimes(1);
+    expect(clearX()).toBeNull();
+    expect(document.activeElement).toBe(pill());
   });
 
   it('M3 the pill counts value.length, not the filtered rows; selection survives a search', () => {

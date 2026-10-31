@@ -249,7 +249,10 @@ export function Dropdown<V extends string = string>(props: DropdownProps<V>) {
             data-slot="dropdown-clear"
             aria-label={`Clear ${nameText} filter`}
             disabled={disabled}
-            onClick={() => onClear?.()}
+            onClick={() => {
+              onClear?.();
+              triggerRef.current?.focus();
+            }}
             className={cn(
               'absolute top-1/2 inline-flex -translate-y-1/2 items-center rounded p-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
               filter ? 'right-2 text-primary-700' : 'right-2.5 text-gray-500'
