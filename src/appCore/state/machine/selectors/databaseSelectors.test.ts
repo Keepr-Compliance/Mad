@@ -11,33 +11,37 @@ import {
   selectIsInitializingDatabase,
   selectIsLoadingAuth,
   selectIsLoadingUserData,
-  selectIsDeferredDbInit,
 } from "./databaseSelectors";
 
 describe("databaseSelectors", () => {
   // Test states
   const loadingCheckingStorage: LoadingState = {
     status: "loading",
+    database: "unknown",
     phase: "checking-storage",
   };
 
   const loadingInitializingDb: LoadingState = {
     status: "loading",
+    database: "unknown",
     phase: "initializing-db",
   };
 
   const loadingAuth: LoadingState = {
     status: "loading",
+    database: "initialized",
     phase: "loading-auth",
   };
 
   const loadingUserData: LoadingState = {
     status: "loading",
+    database: "initialized",
     phase: "loading-user-data",
   };
 
   const readyState: ReadyState = {
     status: "ready",
+    database: "initialized",
     user: { id: "test", email: "test@example.com" },
     platform: { isMacOS: true, isWindows: false, hasIPhone: true },
     userData: {
@@ -52,6 +56,7 @@ describe("databaseSelectors", () => {
 
   const onboardingState: OnboardingState = {
     status: "onboarding",
+    database: "initialized",
     step: "phone-type",
     user: { id: "test", email: "test@example.com" },
     platform: { isMacOS: true, isWindows: false, hasIPhone: false },
@@ -66,6 +71,7 @@ describe("databaseSelectors", () => {
 
   const unauthenticatedState: UnauthenticatedState = {
     status: "unauthenticated",
+    database: "initialized",
   };
 
   describe("selectIsDatabaseInitialized", () => {
@@ -81,11 +87,12 @@ describe("databaseSelectors", () => {
       expect(selectIsDatabaseInitialized(loadingAuth)).toBe(true);
     });
 
-    it("returns false when loading auth with deferredDbInit", () => {
+    // BACKLOG-3321: the answer is the recorded fact, not the phase.
+    it("returns false when loading user data on the closed pre-auth route", () => {
       const state: LoadingState = {
         status: "loading",
-        phase: "loading-auth",
-        deferredDbInit: true,
+        phase: "loading-user-data",
+        database: "not-initialized",
       };
       expect(selectIsDatabaseInitialized(state)).toBe(false);
     });
@@ -102,75 +109,43 @@ describe("databaseSelectors", () => {
       expect(selectIsDatabaseInitialized(onboardingState)).toBe(true);
     });
 
-    it("returns false when onboarding with deferredDbInit", () => {
+    it("returns false when onboarding with the database not opened", () => {
       const state: OnboardingState = {
         ...onboardingState,
-        deferredDbInit: true,
+        database: "not-initialized",
       };
       expect(selectIsDatabaseInitialized(state)).toBe(false);
     });
 
-    it("returns false when error", () => {
+    it("returns false when onboarding with the database unknown", () => {
+      const state: OnboardingState = {
+        ...onboardingState,
+        database: "unknown",
+      };
+      expect(selectIsDatabaseInitialized(state)).toBe(false);
+    });
+
+    it("returns false when error with no previous state", () => {
       expect(selectIsDatabaseInitialized(errorState)).toBe(false);
     });
 
-    it("returns false when unauthenticated", () => {
-      expect(selectIsDatabaseInitialized(unauthenticatedState)).toBe(false);
+    it("answers an error with the state it was raised from (nested)", () => {
+      const nested: ErrorState = {
+        ...errorState,
+        previousState: { ...errorState, previousState: readyState },
+      };
+      expect(selectIsDatabaseInitialized(nested)).toBe(true);
     });
 
-    it("returns false when unauthenticated with deferredDbInit", () => {
-      const state: UnauthenticatedState = {
+    // BACKLOG-3321: Login after a normal start has the database open; Login on
+    // the closed pre-auth route does not.
+    it("returns the recorded fact when unauthenticated", () => {
+      expect(selectIsDatabaseInitialized(unauthenticatedState)).toBe(true);
+      const closed: UnauthenticatedState = {
         status: "unauthenticated",
-        deferredDbInit: true,
+        database: "not-initialized",
       };
-      expect(selectIsDatabaseInitialized(state)).toBe(false);
-    });
-  });
-
-  describe("selectIsDeferredDbInit", () => {
-    it("returns true when loading with deferredDbInit", () => {
-      const state: LoadingState = {
-        status: "loading",
-        phase: "loading-auth",
-        deferredDbInit: true,
-      };
-      expect(selectIsDeferredDbInit(state)).toBe(true);
-    });
-
-    it("returns false when loading without deferredDbInit", () => {
-      expect(selectIsDeferredDbInit(loadingAuth)).toBe(false);
-    });
-
-    it("returns true when unauthenticated with deferredDbInit", () => {
-      const state: UnauthenticatedState = {
-        status: "unauthenticated",
-        deferredDbInit: true,
-      };
-      expect(selectIsDeferredDbInit(state)).toBe(true);
-    });
-
-    it("returns false when unauthenticated without deferredDbInit", () => {
-      expect(selectIsDeferredDbInit(unauthenticatedState)).toBe(false);
-    });
-
-    it("returns true when onboarding with deferredDbInit", () => {
-      const state: OnboardingState = {
-        ...onboardingState,
-        deferredDbInit: true,
-      };
-      expect(selectIsDeferredDbInit(state)).toBe(true);
-    });
-
-    it("returns false when onboarding without deferredDbInit", () => {
-      expect(selectIsDeferredDbInit(onboardingState)).toBe(false);
-    });
-
-    it("returns false when ready", () => {
-      expect(selectIsDeferredDbInit(readyState)).toBe(false);
-    });
-
-    it("returns false when error", () => {
-      expect(selectIsDeferredDbInit(errorState)).toBe(false);
+      expect(selectIsDatabaseInitialized(closed)).toBe(false);
     });
   });
 

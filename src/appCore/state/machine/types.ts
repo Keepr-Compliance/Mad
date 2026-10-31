@@ -9,6 +9,7 @@
  */
 
 import type { FdaState } from "./fdaState";
+import type { DatabaseState } from "./databaseState";
 import type { AccountSetup } from "./routing/routeAccount";
 
 export type { FdaState, AccountSetup };
@@ -198,12 +199,8 @@ export interface LoadingState {
    * Only present when entering loading-user-data from fresh login.
    */
   platform?: PlatformInfo;
-  /**
-   * True when DB initialization is deferred for first-time macOS users.
-   * DB will be initialized during onboarding secure-storage step instead.
-   * This prevents the Keychain prompt from appearing before the login screen.
-   */
-  deferredDbInit?: boolean;
+  /** BACKLOG-3321: what the renderer knows about the local database. */
+  database: DatabaseState;
 
   // ---- Init stage metadata (BACKLOG-1379: event-driven init protocol) ----
 
@@ -222,10 +219,11 @@ export interface LoadingState {
 export interface UnauthenticatedState {
   status: "unauthenticated";
   /**
-   * True when DB initialization is deferred for first-time macOS users.
-   * Preserved from loading state to be passed to onboarding after login.
+   * BACKLOG-3321: what the renderer knows about the local database. On the
+   * pre-auth route that keeps the database closed this is the probe's answer;
+   * after LOGOUT it is carried from the state signed out of.
    */
-  deferredDbInit?: boolean;
+  database: DatabaseState;
 }
 
 /**
@@ -269,10 +267,11 @@ export interface OnboardingState {
     emailStep: boolean;
   };
   /**
-   * True when DB initialization is deferred for first-time macOS users.
-   * DB will be initialized during the secure-storage onboarding step.
+   * BACKLOG-3321: what the renderer knows about the local database.
+   * `"initialized"` unless the account signed in on the closed pre-auth route,
+   * in which case the secure-storage step opens it.
    */
-  deferredDbInit?: boolean;
+  database: DatabaseState;
 }
 
 /**
@@ -287,6 +286,8 @@ export interface ReadyState {
   platform: PlatformInfo;
   /** User preferences and completion state */
   userData: UserData;
+  /** BACKLOG-3321: what the renderer knows about the local database. */
+  database: DatabaseState;
 }
 
 /**
@@ -381,6 +382,12 @@ export interface AuthPreValidatedAction {
   noSession?: boolean;
   /** Reason for auth failure (when valid is false) */
   reason?: string;
+  /**
+   * BACKLOG-3321: main's answer to `system:is-database-initialized`, read by
+   * the orchestrator when the rejection keeps the database closed. Absent
+   * means nobody asked, recorded as `"unknown"`.
+   */
+  database?: DatabaseState;
 }
 
 /**
@@ -620,4 +627,5 @@ export interface AppStateContextValue {
 export const INITIAL_APP_STATE: LoadingState = {
   status: "loading",
   phase: "checking-storage",
+  database: "unknown",
 };

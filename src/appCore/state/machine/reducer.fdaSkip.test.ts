@@ -65,7 +65,7 @@ const declinedFdaWithMailbox: UserData = {
   setup: "not-finished",
 };
 
-const loadingUserData: LoadingState = { status: "loading", phase: "loading-user-data" };
+const loadingUserData: LoadingState = { status: "loading", database: "initialized", phase: "loading-user-data" };
 
 function loadUserData(data: UserData, platform: PlatformInfo = mockMacOSPlatform): AppState {
   return appStateReducer(loadingUserData, {
@@ -281,6 +281,7 @@ describe("BACKLOG-3212 — a persisted FDA skip survives a relaunch", () => {
   it("carries the skip through START_EMAIL_SETUP so a ready user is not re-asked", () => {
     const ready: ReadyState = {
       status: "ready",
+      database: "initialized",
       user: mockUser,
       platform: mockMacOSPlatform,
       userData: declinedFdaWithMailbox,

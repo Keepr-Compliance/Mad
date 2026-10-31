@@ -42,16 +42,19 @@ const createLoadingState = (
   progress?: number
 ): LoadingState => ({
   status: "loading",
+  database: "initialized",
   phase,
   progress,
 });
 
 const createUnauthenticatedState = (): UnauthenticatedState => ({
   status: "unauthenticated",
+  database: "initialized",
 });
 
 const createOnboardingState = (): OnboardingState => ({
   status: "onboarding",
+  database: "initialized",
   step: "phone-type",
   user: { id: "user-1", email: "test@example.com" },
   platform: createPlatform(),
@@ -60,6 +63,7 @@ const createOnboardingState = (): OnboardingState => ({
 
 const createReadyState = (): ReadyState => ({
   status: "ready",
+  database: "initialized",
   user: { id: "user-1", email: "test@example.com" },
   platform: createPlatform(),
   userData: {
