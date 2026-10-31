@@ -26,21 +26,31 @@
  *        all free of the address; the attachment's `text_content` contains it.
  *   E2 — positive control. Address in the BODY, no attachment.
  *   E3 — filename control (BACKLOG-1870). Address only in the attachment
- *        FILENAME; `text_content` is ''.
+ *        FILENAME; `text_content` is NULL (never extracted). NULL, not '', so
+ *        a build that drops the COALESCE (`filename || NULL` is NULL) goes red
+ *        here (SR R5).
+ *   E6 — filename control with `text_content` = '' (extracted, no text). Both
+ *        states exist in production, so both are covered.
  *   E4 — negative control. Nothing matches anywhere.
  *
  * The E1 assertion encodes the CLAIM (E1 is found): RED means the gap is real,
  * GREEN means there is no gap. The two fixture self-checks guard against
  * reading a seed bug as a gap.
  *
+ * SCOPE A (founder ruling): only the DEAL-SCOPED email search reads
+ * text_content. The global Emails group and the Unattached bucket stay
+ * filename-only until the FTS5 follow-up, so there E1 / E5 are asserted NOT
+ * found.
+ *
  * ===========================================================================
  * MUTATION (run and recorded in the pm_comment)
  * ===========================================================================
- * `EMAIL_ATTACHMENT_MATCH` (transactionSearchDbService.ts) is the one shared
- * EXISTS predicate behind the scoped, global and unattached email builders.
- * Widening its LIKE target from `a.filename` to
+ * Step 1 showed that widening the LIKE target from `a.filename` to
  * `(a.filename || char(10) || COALESCE(a.text_content,''))` flips E1 to found
- * on all three surfaces with no change to the bound-parameter count.
+ * with no change to the bound-parameter count. Step 2 applies it to the
+ * deal-scoped builder only (EMAIL_ATTACHMENT_TEXT_MATCH /
+ * EMAIL_MATCHED_ATTACHMENTS_TEXT_SELECT); the shared EMAIL_ATTACHMENT_MATCH
+ * behind the global and unattached builders is unchanged.
  */
 
 // The default Jest moduleNameMapper rewrites "better-sqlite3-multiple-ciphers"
@@ -84,6 +94,7 @@ const E1 = "e-3942-text-only";
 const E2 = "e-3942-body";
 const E3 = "e-3942-filename";
 const E4 = "e-3942-none";
+const E6 = "e-3942-filename-empty-text";
 /** Unlinked twin of E1 — drives buildUnattachedEmailQuery via the same predicate. */
 const E5 = "e-3942-text-only-unattached";
 
@@ -127,13 +138,17 @@ function seed(db: DatabaseType): void {
 
   // E3 — filename control (BACKLOG-1870): address only in the filename.
   addEmail(E3, NEUTRAL_BODY);
-  insertAttachment.run(`a-${E3}`, E3, `${ADDRESS} - disclosure.pdf`, "");
+  insertAttachment.run(`a-${E3}`, E3, `${ADDRESS} - disclosure.pdf`, null);
+
+  // E6 — filename control with text_content '' (extracted, no text).
+  addEmail(E6, NEUTRAL_BODY);
+  insertAttachment.run(`a-${E6}`, E6, `${ADDRESS} - survey.pdf`, "");
 
   // E4 — negative control: nothing matches anywhere.
   addEmail(E4, NEUTRAL_BODY);
   insertAttachment.run(`a-${E4}`, E4, NEUTRAL_FILENAME, "Nothing of note on this page.");
 
-  for (const id of [E1, E2, E3, E4]) link.run(`c-${id}`, USER, TXN, id);
+  for (const id of [E1, E2, E3, E4, E6]) link.run(`c-${id}`, USER, TXN, id);
 
   // E5 — E1's shape with NO communications row (Unattached bucket).
   addEmail(E5, NEUTRAL_BODY);
@@ -221,32 +236,38 @@ describe("BACKLOG-3942 — attachment text_content as a deal email search target
     });
 
     it("E3 (observation, BACKLOG-1870): the attachment FILENAME is a match target", () => {
-      // Recorded, not load-bearing for the 3942 verdict.
+      // E3's text_content is NULL: load-bearing against a build without COALESCE.
       expect(scopedEmailIds(QUERY)).toContain(E3);
     });
 
+    it("E6 (BACKLOG-1870): FILENAME still matches when text_content is ''", () => {
+      expect(scopedEmailIds(QUERY)).toContain(E6);
+    });
+
     it("E1 (THE CLAIM): finds the email whose address appears ONLY in attachment text_content", () => {
-      // RED  → the gap is real: text_content is not a match target.
-      // GREEN → no gap; close BACKLOG-3942 as not-a-gap.
       expect(scopedEmailIds(QUERY)).toContain(E1);
     });
   });
 
-  describe("global search, Emails group (buildGlobalEmailQuery) — same predicate", () => {
+  describe("global search, Emails group (buildGlobalEmailQuery) — scope A: filename-only", () => {
     it("controls hold: E2 found, E4 not", () => {
       const ids = globalEmailIds(QUERY);
       expect(ids).toContain(E2);
       expect(ids).not.toContain(E4);
     });
 
-    it("E1 (THE CLAIM, global): found by attachment text_content", () => {
-      expect(globalEmailIds(QUERY)).toContain(E1);
+    it("E1 NOT found — scope A — filename-only until the FTS5 follow-up", () => {
+      expect(globalEmailIds(QUERY)).not.toContain(E1);
+    });
+
+    it("E3 (filename hit) still found", () => {
+      expect(globalEmailIds(QUERY)).toContain(E3);
     });
   });
 
-  describe("global search, Unattached bucket (buildUnattachedEmailQuery) — same predicate", () => {
-    it("E5 (THE CLAIM, unattached): found by attachment text_content", () => {
-      expect(unattachedEmailIds(QUERY)).toContain(E5);
+  describe("global search, Unattached bucket (buildUnattachedEmailQuery) — scope A: filename-only", () => {
+    it("E5 NOT found — scope A — filename-only until the FTS5 follow-up", () => {
+      expect(unattachedEmailIds(QUERY)).not.toContain(E5);
     });
   });
 });
