@@ -63,6 +63,8 @@ export interface StatusHistoryEntry {
   ticks_restored?: unknown;
   linked_documents?: unknown;
   linked_emails?: unknown;
+  /** BACKLOG-3968 */
+  linked_texts?: unknown;
 }
 
 /** The fallback for an actor who no longer resolves (ruling bf8c39b4, Q4). */
@@ -137,12 +139,18 @@ function plural(n: number, one: string, many: string): string {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-/** "3 documents and 2 emails", "1 document", "2 emails", or null for none. */
-export function linkedPhrase(documents: number, emails: number): string | null {
+/**
+ * "3 documents and 2 emails", "1 document", "2 emails",
+ * "1 document, 2 emails and 1 text" (BACKLOG-3968), or null for none.
+ */
+export function linkedPhrase(documents: number, emails: number, texts = 0): string | null {
   const parts: string[] = [];
   if (documents > 0) parts.push(plural(documents, 'document', 'documents'));
   if (emails > 0) parts.push(plural(emails, 'email', 'emails'));
-  return parts.length > 0 ? parts.join(' and ') : null;
+  if (texts > 0) parts.push(plural(texts, 'text', 'texts'));
+  if (parts.length === 0) return null;
+  if (parts.length === 1) return parts[0];
+  return `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 }
 
 /**
@@ -195,7 +203,11 @@ function describeChecklistRemoved(entry: StatusHistoryEntry): string {
     if (entry.replaced === true) return `Checklist removed in ${onNew}, then added again with different items: ${name}`;
     return `Checklist removed in ${onNew}: ${name}`;
   }
-  const linked = linkedPhrase(countField(entry.linked_documents) ?? 0, countField(entry.linked_emails) ?? 0);
+  const linked = linkedPhrase(
+    countField(entry.linked_documents) ?? 0,
+    countField(entry.linked_emails) ?? 0,
+    countField(entry.linked_texts) ?? 0
+  );
   return linked ? `Checklist removed: ${name} (${linked} linked)` : `Checklist removed: ${name}`;
 }
 
