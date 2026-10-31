@@ -279,7 +279,9 @@ describe("keyboard", () => {
     render(<Harness gate="allowed" />);
     await screen.findByTestId("my-items-section");
     const toggle = screen.getByRole("button", { name: `More actions for ${callLender.title}` });
-    toggle.focus();
+    // From the row's Link… button, Tab lands on its ⋯ (this row has a note, so no Add note).
+    screen.getByTestId(`checklist-open-picker-${callLender.id}`).focus();
+    await user.tab();
     expect(toggle).toHaveFocus();
     await user.keyboard("{Enter}");
     expect(toggle).toHaveAttribute("aria-expanded", "true");
