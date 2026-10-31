@@ -90,3 +90,11 @@ it("locked deal: Link… is off on a My item and on a template item, on an allow
     unmount();
   }
 });
+
+it("the deal locks while the picker is open on a My item: the picker goes away (the lock gate on the picker itself)", async () => {
+  const { rerender } = render(<Harness gate="blocked" />);
+  fireEvent.click(await screen.findByTestId(`checklist-open-picker-${myItem.id}`));
+  expect(await screen.findByTestId("checklist-picker-tab-texts")).toBeInTheDocument();
+  rerender(<Harness gate="blocked" lockedTooltip="This deal is locked" />);
+  expect(screen.queryByTestId("checklist-picker-tab-texts")).not.toBeInTheDocument();
+});
