@@ -38,6 +38,8 @@ jest.mock("../../databaseService", () => {
   };
 });
 
+import fsPromises from "fs/promises";
+import logService from "../../logService";
 import { setDb, setDbPath, setEncryptionKey } from "../../db/core/dbConnection";
 import { prepareOcrPendingPage, type TextExtractionQueryable } from "../../db/attachmentTextExtractionSql";
 import { ocrAttachmentText, type OcrRunOptions } from "../attachmentOcrService";
@@ -278,6 +280,53 @@ describe("R1 — compare-and-set: a row changed while OCR ran is not overwritten
     release();
     await expect(running).resolves.toBe("row-changed");
     expect(row()).toEqual({ text_content: "written by another pass", meta: null });
+  });
+});
+
+describe("R1 — compare-and-set, metadata half", () => {
+  it("analysis_metadata rewritten mid-OCR survives; outcome row-changed, logged", async () => {
+    const retryMeta = JSON.stringify({
+      textSource: "none", reason: "error", retryable: true, attempts: 1, lastFailure: "signal", at: "2026-01-01T00:00:00.000Z",
+    });
+    db.prepare(`UPDATE attachments SET analysis_metadata = ? WHERE id = 'a'`).run(retryMeta);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const { calls } = useFake((p) => ({ kind: "gated", release: gate, pagesTotal: 1, lines: pageLines(p) }));
+    const running = run();
+    await waitFor(() => calls.length === 1);
+    const rewritten = JSON.stringify({
+      textSource: "none", reason: "error", retryable: true, attempts: 2, lastFailure: "exit", at: "2026-01-02T00:00:00.000Z",
+    });
+    db.prepare(`UPDATE attachments SET analysis_metadata = ? WHERE id = 'a'`).run(rewritten);
+    release();
+    await expect(running).resolves.toBe("row-changed");
+    expect(row()).toEqual({ text_content: "", meta: JSON.parse(rewritten) });
+    expect(logService.info).toHaveBeenCalledWith(
+      "OCR result not written: the row changed while OCR ran",
+      "AttachmentOcr",
+      { id: "a" },
+    );
+  });
+});
+
+describe("R7 — no write once quit has started", () => {
+  it("a file-open failure that settles after stop writes nothing; result stopped", async () => {
+    let stopped = false;
+    let fail!: () => void;
+    const gate = new Promise<never>((_, rej) => (fail = () => rej(new Error("EIO"))));
+    const openSpy = jest.spyOn(fsPromises, "open").mockImplementation(() => gate);
+    try {
+      useFake(() => ({ kind: "page", pagesTotal: 1, lines: ["x"] }));
+      const running = run({ isStopped: () => stopped });
+      await waitFor(() => openSpy.mock.calls.length === 1);
+      stopped = true;
+      fail();
+      await expect(running).resolves.toBe("stopped");
+      expect(row()).toEqual({ text_content: "", meta: null });
+      expect(pending()).toEqual(["a"]);
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 });
 
