@@ -30,7 +30,13 @@ describe('resolveInitialView', () => {
     expect(resolveInitialView({ params: { error: 'x', utm_source: 'y' }, views: VIEWS })?.id).toBe('v-b');
   });
 
-  for (const key of PERIOD_URL_KEYS) {
+  // Written out, not read from PERIOD_URL_KEYS: a sweep generated from the
+  // constant loses its own case when a key is removed from it.
+  it('PERIOD_URL_KEYS is exactly period, from, to', () => {
+    expect([...PERIOD_URL_KEYS].sort()).toEqual(['from', 'period', 'to']);
+  });
+
+  for (const key of ['period', 'from', 'to']) {
     it(`does not apply when the URL names "${key}"`, () => {
       expect(resolveInitialView({ params: { [key]: 'x' }, views: VIEWS })).toBeNull();
     });
