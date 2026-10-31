@@ -2242,6 +2242,32 @@ describe("Settings", () => {
       });
     });
 
+    it("Outlook chip reads \"Outlook connected\" with a space that survives the inline-flex chip", async () => {
+      jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
+        success: true,
+        google: { connected: false, email: "user@example.com" },
+        microsoft: { connected: true, email: "user@example.com" },
+      } as Awaited<ReturnType<typeof window.api.system.checkAllConnections>>);
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const chips = within(document.getElementById("settings-account") as HTMLElement).getByTestId("account-chips");
+      const chip = await within(chips).findByText(/^Outlook/);
+      // A plain space collapses at the end of the hidden-below-sm span; it must be U+00A0.
+      expect(chip.textContent).toBe("Outlook\u00a0connected");
+    });
+
+    it("Gmail chip reads \"Gmail connected\" with a space that survives the inline-flex chip", async () => {
+      jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
+        success: true,
+        google: { connected: true, email: "user@example.com" },
+        microsoft: { connected: false, email: "user@example.com" },
+      } as Awaited<ReturnType<typeof window.api.system.checkAllConnections>>);
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const chips = within(document.getElementById("settings-account") as HTMLElement).getByTestId("account-chips");
+      const chip = await within(chips).findByText(/^Gmail/);
+      // A plain space collapses at the end of the hidden-below-sm span; it must be U+00A0.
+      expect(chip.textContent).toBe("Gmail\u00a0connected");
+    });
+
     it("Account chip reads \"Signed in with Google\" with a space that survives the inline-flex chip", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
       const chips = within(document.getElementById("settings-account") as HTMLElement).getByTestId("account-chips");

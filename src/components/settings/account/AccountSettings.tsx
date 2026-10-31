@@ -95,12 +95,12 @@ export function AccountSettings({ user, provider, mailboxes = { google: false, m
           )}
           {mailboxes.microsoft && (
             <span className={chip}>
-              Outlook<span className="hidden sm:inline"> connected</span>
+              Outlook<span className="hidden sm:inline">&nbsp;connected</span>
             </span>
           )}
           {mailboxes.google && (
             <span className={chip}>
-              Gmail<span className="hidden sm:inline"> connected</span>
+              Gmail<span className="hidden sm:inline">&nbsp;connected</span>
             </span>
           )}
         </div>
