@@ -100,3 +100,24 @@ it("after a grant unlock, the export re-runs and reaches the success path", asyn
     expect(screen.queryByTestId("export-unlock-prompt")).toBeNull(),
   );
 });
+
+// C-NOTNOW (BACKLOG-3676): "Not now" on the plan cards returns the modal to
+// step 2 (the export options with the Export button). Before 3676 nothing
+// pinned this: taking out the setStep(2) left every paywall test green.
+it("'Not now' on the plan cards returns to step 2 (the Export button is back)", async () => {
+  exportEnhancedMock.mockResolvedValue({ success: false, error: PAYWALL });
+  render(
+    <ExportModal transaction={transaction} userId="user-1" onClose={jest.fn()} onExportComplete={jest.fn()} />,
+  );
+  await driveToExport();
+  expect(await screen.findByTestId("export-unlock-prompt")).toBeInTheDocument();
+  expect(screen.queryAllByRole("button", { name: /^export$/i })).toHaveLength(0);
+
+  await act(async () => {
+    fireEvent.click(screen.getByTestId("unlock-cancel"));
+  });
+
+  expect(screen.queryByTestId("export-unlock-prompt")).toBeNull();
+  expect((await screen.findAllByRole("button", { name: /^export$/i })).length).toBeGreaterThan(0);
+  expect(exportEnhancedMock).toHaveBeenCalledTimes(1);
+});

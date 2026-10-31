@@ -111,7 +111,7 @@ e.g. `hover:bg-primary/90` → `hsl(var(--primary) / 0.9)`.
 | `Input`, `Textarea` | native | Keepr control recipe (border-input, primary focus ring). |
 | `Checkbox` | Radix `Checkbox` | `role="checkbox"`, keyboard + `aria-checked`, indeterminate. |
 | `Select` set | Radix `Select` | `Trigger` (`role="combobox"`) / `Content` / `Item` / `Value` / `Group` / `Label` / `Separator`. |
-| `Dropdown` (+ `DropdownOptions`, `filterDropdownOptions`) | inline popover (no Radix) | Single choice, searchable, option description, disabled + hint, invalid + error; `variant="filter"` pill. See **Dropdown** below. |
+| `Dropdown` (+ `DropdownOptions`, `filterDropdownOptions`) | inline popover (no Radix) | Single or multi choice (`mode="multi"`), searchable, option description, disabled + hint, invalid + error; `variant="filter"` pill. See **Dropdown** below. |
 | `DateRangePicker` | inline popover (no Radix) | Two-month calendar pill; commits on Apply. See **DateRangePicker** below. |
 
 ## Report kit (BACKLOG-3502a)
@@ -126,7 +126,7 @@ navigation arrives as callbacks.
 | `SortableTh` | `<th scope="col">` with `aria-sort` (`ascending` / `descending` / `none`) and a button. |
 | `useSortState`, `nextSort` | Same column flips; a new column opens at `defaultDirectionFor(key)`. |
 | `useClickOutside` | `mousedown` outside a ref, only while `enabled`. |
-| `MultiSelect`, `MultiSelectOptions` | Desktop trigger ("Label" / "Label (n)") + popover; a sibling "Clear <Label> filter" button. `MultiSelectOptions` is the one list (optional Select all / Clear all rows via `bulkActions`, optional `count` per option), purely controlled. |
+| `MultiSelect`, `MultiSelectOptions` | Desktop trigger ("Label" / "Label (n)") + popover; a sibling "Clear <Label> filter" button. `MultiSelectOptions` is the one list (optional Select all / Clear all rows via `bulkActions`, optional `count` per option), purely controlled. Folds into Dropdown `mode="multi"` after BACKLOG-4085 moves the Organization filters; then deleted (slice 4b). |
 | `FilterBar`, `FilterCaption` | Filter row shell (Clear shown only while filtered); the "<lead>: <period> · <filters>" caption. |
 | `PeriodPicker` | Period pill (Dropdown `variant="filter"`) + a range pill (DateRangePicker) only for `customKey`. A preset reports at once; picking the custom option opens the calendar and reports once, on Apply. Props unchanged since 3502a. |
 | `StatCard` | Superset of the design-system `StatCard`: `subtitle`, `footer`, `tone="critical"` (red only for a number above 0), `onClick` + `pressed` toggle, `valueProps`, `purple` hue. |
@@ -222,7 +222,8 @@ const narrow = useMediaQuery('(max-width: 767px)'); // the portal's own hook
 ```
 
 `OrgPeoplePanel` passes it through as `pickerPresentation` (broker
-`PeopleCard` sets it from that query). Commit-on-pick is single mode only.
+`PeopleCard` sets it from that query). Commit-on-pick is single mode only;
+multi mode is popover only.
 
 **Filter bar: a recipe, not a component.** `FilterSelectButton` (value = the
 picked label) + `BottomSheet` + `<DropdownOptions size="comfortable" autoFocus />`,
@@ -252,11 +253,72 @@ Focus and keys in a sheet:
 
 ### Reserved for later modes (typed now, not rendered)
 
-So later varieties are additive, these are already in the types and do nothing
-in slice 1: `mode` (`'single'` today; `'multi'` joins the `DropdownProps`
-union), the clear X for `onClear`, option `leading` / `count` / `group`, and an
-internal `header` row kind that the keyboard already skips. Value types are
-generic (`Dropdown<V extends string>`).
+So later varieties are additive, these are already in the types and do
+nothing yet: the clear X in SINGLE mode (`onClear` only turns the pill blue),
+option `leading` / `count` / `group`, and an internal `header` row kind that
+the keyboard already skips. In multi mode also: `presentation="sheet"` (the
+design card's phone recipe needs a pending selection and an Apply footer; no
+phone caller yet), chips in the trigger, grouped / tri-state headers, and a
+prop to hide the Select all / Clear all strip (no caller turns it off). Value
+types are generic (`Dropdown<V extends string>`).
+
+### Multi (slice 4a)
+
+`mode="multi"`: `value: V[]`, `onChange(next: V[])`, popover only. The
+recipe for a report filter (BACKLOG-4085, the Organization filters):
+
+```tsx
+import { Dropdown } from '@keepr/ui';
+<Dropdown
+  mode="multi"
+  variant="filter"
+  ariaLabel="Organization"                 // or label="Organization" (sr-only in the filter variant)
+  options={orgOptions}                     // the same { value, label }[] the bars build today
+  value={filters.orgs}                     // string[]
+  onChange={(orgs) => onFiltersChange({ ...filters, orgs })}
+  onClear={() => onFiltersChange({ ...filters, orgs: [] })}
+/>
+```
+
+- Pill: "Organization" / "Organization (n)", n = `value.length` (never the
+  search results; a value missing from `options` still counts). Its
+  accessible name is exactly that text. Blue while n > 0 and `onClear` is
+  passed. With `onClear` and n > 0 a sibling button "Clear Organization
+  filter" replaces the chevron; it calls `onClear` only and does not open the
+  list.
+- Panel: search field ("Search Organization", "No results"), then the
+  "Select all" / "Clear all" rows (always shown), then the options with a
+  decorative check square at the left. Select all adds every ENABLED option
+  of the whole set (not just the search results), keeping existing picks
+  first; it is disabled when every enabled option is selected. Clear all sets
+  `[]`; disabled when nothing is selected.
+- Commit: instant. A click or Enter toggles the active row and calls
+  `onChange` once; the panel stays open, the search text and the active row
+  are kept. Typing never calls `onChange`. Escape (first clears the search,
+  then closes) and an outside press never call `onChange` or `onClear`.
+- Opens on the first enabled selected option in option order, else the first
+  enabled row.
+- a11y: ARIA 1.2 combobox (the search) controlling a listbox with
+  `aria-multiselectable="true"`; every option has `aria-selected`
+  true/false. Two deliberate differences from the APG multi-select listbox:
+  Space types into the search instead of toggling (it toggles only with
+  `searchable={false}`), and the panel has Tab stops (the bulk buttons, as on
+  the MultiSelect card). Tab from the search goes to the first ENABLED bulk
+  button, or closes when none is enabled; Tab from the last enabled bulk
+  button closes; Shift+Tab is native. A bulk action (keyboard or mouse)
+  leaves focus in the search, because the pressed button may have just become
+  disabled. Ctrl/Cmd+A stays text selection in the search. Tab-out lands one
+  stop past the trigger, which is the sibling clear X when it shows.
+
+DOM contract for tests: trigger `getAllByRole('button', { name: /^Organization/ })[0]`;
+open -> `getByRole('listbox', { name: 'Organization' })`; rows
+`getByRole('option', { name: 'Acme Realty' })` with `aria-selected`; toggle with
+`fireEvent.click(option)`; search `getByRole('combobox', { name: 'Search Organization' })`;
+bulk `getByRole('button', { name: 'Select all' })` / `'Clear all'`; clear
+`getByRole('button', { name: 'Clear Organization filter' })`. MultiSelect's
+`role=group` + `role=checkbox` rows do not exist here: tests that query those
+change when a bar moves (admin `SubmissionsReport.gates.test.tsx`,
+`SubmissionsReport.interaction.test.tsx`, `ExportsReport.interaction.test.tsx`).
 
 ### Filter variant (slice 3)
 
@@ -264,7 +326,8 @@ generic (`Dropdown<V extends string>`).
 `triggerIcon` before the text, no visible label (`label` / `ariaLabel` still
 name it), and a panel at least `min-w-56` wide. It stays neutral unless it has a
 value AND `onClear` is passed (a removable filter reads blue). `triggerRef`
-exposes the trigger button. Single mode only. `PeriodPicker` is the consumer.
+exposes the trigger button. `PeriodPicker` (single) is the consumer; multi
+mode uses the same pill (see **Multi** above).
 
 ## DateRangePicker (BACKLOG-4032 slice 3)
 
