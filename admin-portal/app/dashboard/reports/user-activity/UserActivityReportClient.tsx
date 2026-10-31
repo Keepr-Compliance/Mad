@@ -6,9 +6,16 @@
  */
 
 import { useRouter } from 'next/navigation';
+import { userActivityViewsApi } from '@/lib/reports/user-activity-views-api';
 import { UserActivityReport, type UserActivityReportProps } from './UserActivityReport';
 
-export function UserActivityReportClient(props: Omit<UserActivityReportProps, 'onNavigate'>) {
+export function UserActivityReportClient(props: Omit<UserActivityReportProps, 'onNavigate' | 'viewsApi'>) {
   const router = useRouter();
-  return <UserActivityReport {...props} onNavigate={(url) => router.push(url, { scroll: false })} />;
+  return (
+    <UserActivityReport
+      {...props}
+      onNavigate={(url) => router.push(url, { scroll: false })}
+      viewsApi={userActivityViewsApi}
+    />
+  );
 }
