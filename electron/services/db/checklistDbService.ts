@@ -47,6 +47,7 @@ import { auditPeriodFromRow } from "../submissionAuditPeriod";
 import { auditWindowEnd } from "../exportPlan";
 import {
   attachmentLabelSql,
+  countOpenRequiredItemsSql,
   DELETE_CHECKLIST_IN_TRANSACTION_SQL,
   DELETE_CHECKLIST_LINK_SQL,
   emailLabelSql,
@@ -65,6 +66,7 @@ import {
   INSERT_CHECKLIST_LINK_SQL,
   INSERT_CHECKLIST_SQL,
   INSERT_EMAIL_MEMBER_SQL,
+  listOpenRequiredItemsSql,
   NEXT_CHECKLIST_SORT_ORDER_SQL,
   NEXT_LINK_SORT_ORDER_SQL,
   outsideAuditDatesSql,
@@ -88,6 +90,10 @@ import type {
   SelectChecklistTemplateResult,
   TransactionChecklist,
 } from "../../types/checklist";
+import type {
+  OpenRequiredChecklistItem,
+  OpenRequiredChecklistItems,
+} from "../../types/checklistTodo";
 import type { DocumentType } from "../../types/models";
 
 /** Fallback labels. The `label` column CHECKs `length(trim(label)) >= 1`. */
@@ -611,4 +617,41 @@ export function getChecklistExportTargets(
   }
 
   return Promise.resolve({ attachmentTargets, emailSubjects });
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard "Todo" — BACKLOG-3965 PR-3
+// ---------------------------------------------------------------------------
+
+/** The most Todo rows one read returns ("Show more" stops here). */
+export const OPEN_REQUIRED_ITEMS_MAX_LIMIT = 50;
+
+/**
+ * Every required, unticked checklist item on this user's active, unlocked
+ * deals: how many there are in all, and the first `limit` of them in display
+ * order. See `listOpenRequiredItemsSql` for the filters and the order.
+ *
+ * `lockedStatuses` is the caller's `LOCKED_SUBMISSION_STATUSES`. An empty list
+ * is refused rather than read: `NOT IN ()` would treat every deal as open,
+ * including submitted and approved ones.
+ */
+export function listOpenRequiredChecklistItems(
+  userId: string,
+  lockedStatuses: readonly string[],
+  limit: number,
+): Promise<OpenRequiredChecklistItems> {
+  if (lockedStatuses.length === 0) {
+    throw new Error("Refusing to read the Todo list with no locked status");
+  }
+  const bounded = Math.max(1, Math.min(OPEN_REQUIRED_ITEMS_MAX_LIMIT, Math.floor(limit)));
+  const filterParams = [userId, ...lockedStatuses];
+  const counted = dbGet<{ total: number }>(
+    countOpenRequiredItemsSql(lockedStatuses.length),
+    filterParams,
+  );
+  const items = dbAll<OpenRequiredChecklistItem>(listOpenRequiredItemsSql(lockedStatuses.length), [
+    ...filterParams,
+    bounded,
+  ]);
+  return Promise.resolve({ totalCount: counted?.total ?? 0, items });
 }
