@@ -1301,7 +1301,18 @@ describe('BACKLOG-3854: set-up brokerage -> seats + Manage billing', () => {
     expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Available2');
     expect(container.textContent).toContain('Organization plan');
     expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(role === 'it_admin' ? 0 : 1);
-    expect(stripeCalls()).toBe(0);
+    // BACKLOG-3855: Broker/Admin now read the recent invoices (one customer read for the clock, one
+    // invoice list without a status filter, per render; two renders above); IT admin reads nothing
+    // from Stripe.
+    if (role === 'it_admin') {
+      expect(stripeCalls()).toBe(0);
+    } else {
+      const call = [{ customer: 'cus_EDITED_3854', limit: 10 }];
+      expect(mockStripe.invoicesList.mock.calls).toEqual([call, call]);
+      expect(mockStripe.customersRetrieve).toHaveBeenCalledTimes(2);
+      expect(mockStripe.clockRetrieve).toHaveBeenCalledTimes(2); // the p3848 customer is on a test clock
+      expect(stripeCalls()).toBe(6);
+    }
     unmount();
   });
 

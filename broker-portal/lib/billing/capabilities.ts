@@ -37,7 +37,8 @@ export type BillingBlock = 'plan' | 'choose_plan' | 'seats' | 'credits' | 'payme
 /**
  * BACKLOG-3854: an organization's money blocks once billing is set up. The payment method and the
  * invoices are on Stripe's page ("Manage billing", founder 546c9af1); the empty org frames for
- * `payment` and `invoices` are not shown.
+ * `payment` and `invoices` are not shown. BACKLOG-3855: the last invoices are listed inside
+ * `manage_billing`, gated on canSeeInvoices (no rule change here).
  */
 const ORG_MONEY_BLOCKS: BillingBlock[] = ['plan', 'seats', 'manage_billing'];
 

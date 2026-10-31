@@ -20,6 +20,7 @@ import type { PendingFile } from '@/app/support/components/FileUpload';
 import { useBrowserDiagnostics, BrowserDiagnostics } from '@/app/support/components/BrowserDiagnostics';
 import html2canvas from 'html2canvas';
 import { SUPPORT_WIDGET_EVENT, type SupportRequestPreset } from '@/lib/support/openSupportRequest';
+import { InvoicesHelpHint } from '@/components/support/InvoicesHelpHint';
 
 // iOS Safari zooms on focus when a field's font-size is under 16px: 16px below md, 14px from md up.
 const fieldClasses = `${inputClasses} !text-base md:!text-sm`;
@@ -392,6 +393,9 @@ export function SupportWidget() {
                     <p className="text-xs text-amber-800">{disclaimer}</p>
                   </div>
                 )}
+
+                {/* BACKLOG-3855: Billing & Subscription -> the invoices article */}
+                <InvoicesHelpHint categorySlug={selectedCategory?.slug} />
 
                 {/* Subject */}
                 <div>

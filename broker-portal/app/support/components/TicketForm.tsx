@@ -21,6 +21,7 @@ import { FileUpload } from './FileUpload';
 import type { PendingFile } from './FileUpload';
 import { useBrowserDiagnostics, BrowserDiagnostics } from './BrowserDiagnostics';
 import { presetCategoryIds, type TicketPreset } from '@/lib/support/ticketPresets';
+import { InvoicesHelpHint } from '@/components/support/InvoicesHelpHint';
 
 export interface TicketFormProps {
   /**
@@ -258,6 +259,9 @@ export function TicketForm({ preset = null }: TicketFormProps = {}) {
 
       {/* Compliance disclaimer */}
       {disclaimer && <AlertBanner variant="warning">{disclaimer}</AlertBanner>}
+
+      {/* BACKLOG-3855: Billing & Subscription -> the invoices article */}
+      <InvoicesHelpHint categorySlug={selectedCategory?.slug} />
 
       {/* Subject */}
       <div>
