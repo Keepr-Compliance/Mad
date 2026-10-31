@@ -139,6 +139,24 @@ describe("TransactionList — open by id from Contacts (BACKLOG-1898 T5)", () =>
     expect(details).toHaveAttribute("data-initial-tab", "overview");
   });
 
+  // BACKLOG-3965 PR-4a: a caller can name the tab (the Dashboard's Todo rows
+  // open the deal on its Checklist tab). The test above pins the default.
+  it("opens on the tab the caller names (checklist)", async () => {
+    render(
+      <TransactionList
+        userId={USER_ID}
+        provider="google"
+        onClose={jest.fn()}
+        initialTransactionId="txn-1"
+        initialTransactionTab="checklist"
+      />,
+    );
+
+    const details = await screen.findByTestId("txn-details-mock");
+    expect(details).toHaveAttribute("data-txn-id", "txn-1");
+    expect(details).toHaveAttribute("data-initial-tab", "checklist");
+  });
+
   it("is a no-op when the id does not match any loaded transaction", async () => {
     render(
       <TransactionList
