@@ -283,8 +283,9 @@ function containsPattern(rawTerm: string): string {
 //
 // BACKLOG-3942: the DEAL-SCOPED email search (buildEmailQuery) matches the
 // attachment's filename AND its extracted text — see EMAIL_ATTACHMENT_TEXT_MATCH
-// below. The global and unattached email builders and every text-message builder
-// stay FILENAME-ONLY (these constants) until the FTS5 follow-up.
+// below. The global and unattached email builders stay FILENAME-ONLY (these
+// constants) until the FTS5 follow-up. The text-message builders stay
+// filename-only until a writer of message-attachment text exists.
 const EMAIL_ATTACHMENT_MATCH = `EXISTS (
         SELECT 1 FROM attachments a
         WHERE a.email_id = e.id AND a.filename LIKE ? ESCAPE '\\'
