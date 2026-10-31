@@ -22,6 +22,15 @@ export const REPORTS_BASE_PATH = '/dashboard/reports';
 
 export const REPORTS: ReportEntry[] = [
   {
+    // BACKLOG-3723: was the one overview card; first, so the Reports page order is unchanged.
+    slug: 'analytics',
+    title: 'Analytics',
+    description:
+      'System-wide metrics and adoption data: active users, app versions, platforms, phone types and licence seats.',
+    source: 'devices, users, organizations, organization_members, user_preferences',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
+  {
     slug: 'iphone-sync',
     title: 'iPhone Sync Performance',
     description:
