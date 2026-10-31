@@ -6,7 +6,7 @@
  *
  * EVERY READ IS PAGED, never capped. The API returns at most 1000 rows per
  * request, so a single read would silently drop rows past that.
- * `fetchAllPages` reads `.range(from, to)` pages until a short page, in a
+ * `fetchAllPages` (./fetch-all-pages) reads `.range(from, to)` pages until a short page, in a
  * stable ASCENDING order with `id` as the tiebreak, and drops any id it has
  * already seen. Ascending matters: `audit_logs.created_at` is the arrival
  * time, so a row that arrives mid-read lands past the cursor instead of
@@ -27,56 +27,14 @@ import type {
   ActivityUserRow,
 } from './user-activity';
 import type { PeriodRange } from './period';
+import { fetchAllPages, MAX_PAGES, PAGE_SIZE, type PageResponse, type PagedResult } from './fetch-all-pages';
 
-export const PAGE_SIZE = 1000;
-/** 20 pages = 20,000 rows. Only reaching it sets `truncated`. */
-export const MAX_PAGES = 20;
+export { fetchAllPages, MAX_PAGES, PAGE_SIZE };
+export type { PagedResult };
 
 export const EVENT_COLUMNS = 'id, user_id, action, resource_type, resource_id, created_at';
 export const USER_COLUMNS = 'id, email, display_name, first_name, last_name, last_login_at';
 export const DEVICE_COLUMNS = 'id, user_id, platform, app_version, is_active, last_seen_at';
-
-export interface PagedResult<T> {
-  rows: T[];
-  /** A page failed — not the same as "no rows". `rows` is empty. */
-  failed: boolean;
-  /** The page ceiling was reached with a full page, so there may be more. */
-  truncated: boolean;
-}
-
-interface PageResponse {
-  data: unknown[] | null;
-  error: { message: string } | null;
-}
-
-/**
- * Read every page `makePage(from, to)` returns. `to` is inclusive, as in
- * PostgREST `.range()`. Rows are deduplicated by `id`.
- */
-export async function fetchAllPages<T extends { id: string }>(
-  makePage: (from: number, to: number) => PromiseLike<PageResponse>,
-  label: string,
-  pageSize = PAGE_SIZE,
-  maxPages = MAX_PAGES
-): Promise<PagedResult<T>> {
-  const seen = new Set<string>();
-  const rows: T[] = [];
-  for (let page = 0; page < maxPages; page += 1) {
-    const from = page * pageSize;
-    const { data, error } = await makePage(from, from + pageSize - 1);
-    if (error || !data) {
-      console.error(`user-activity ${label} error:`, error?.message);
-      return { rows: [], failed: true, truncated: false };
-    }
-    for (const row of data as T[]) {
-      if (seen.has(row.id)) continue;
-      seen.add(row.id);
-      rows.push(row);
-    }
-    if (data.length < pageSize) return { rows, failed: false, truncated: false };
-  }
-  return { rows, failed: false, truncated: true };
-}
 
 export function getActivityEvents(
   supabase: SupabaseClient,
@@ -94,7 +52,7 @@ export function getActivityEvents(
         .order('created_at', { ascending: true })
         .order('id', { ascending: true })
         .range(from, to) as unknown as PromiseLike<PageResponse>,
-    'audit_logs',
+    'user-activity audit_logs',
     pageSize,
     maxPages
   );
@@ -112,7 +70,7 @@ function readWhole<T extends { id: string }>(
         .select(columns)
         .order('id', { ascending: true })
         .range(from, to) as unknown as PromiseLike<PageResponse>,
-    table
+    `user-activity ${table}`
   );
 }
 

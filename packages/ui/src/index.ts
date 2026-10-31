@@ -97,6 +97,10 @@ export type {
   DropdownOptionsProps,
 } from './components/dropdown';
 
+// DateRangePicker (BACKLOG-4032 slice 3) — two-month calendar pill, commits on Apply; see README "DateRangePicker".
+export { DateRangePicker } from './components/date-range';
+export type { DateRangePickerProps, DateRangeValue } from './components/date-range';
+
 // Phone kit (BACKLOG-3895) — phone-width components; see DESIGN-SYSTEM.md "Phone".
 export * from './components/phone';
 

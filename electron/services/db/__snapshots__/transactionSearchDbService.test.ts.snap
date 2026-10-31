@@ -48,7 +48,8 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildE
            (
       SELECT group_concat(a.filename, char(10))
       FROM attachments a
-      WHERE a.email_id = e.id AND a.filename LIKE ? ESCAPE '\\'
+      WHERE a.email_id = e.id
+        AND (a.filename || char(10) || COALESCE(a.text_content, '')) LIKE ? ESCAPE '\\'
     ) AS matchedAttachments
     
     FROM emails e
@@ -62,7 +63,8 @@ exports[`scoped builders are byte-unchanged (BACKLOG-1866 non-regression) buildE
         OR e.recipients LIKE ? ESCAPE '\\'
         OR EXISTS (
         SELECT 1 FROM attachments a
-        WHERE a.email_id = e.id AND a.filename LIKE ? ESCAPE '\\'
+        WHERE a.email_id = e.id
+          AND (a.filename || char(10) || COALESCE(a.text_content, '')) LIKE ? ESCAPE '\\'
       )
       )
     ORDER BY e.sent_at DESC

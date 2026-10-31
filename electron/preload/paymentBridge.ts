@@ -11,7 +11,9 @@
 import { ipcRenderer, IpcRendererEvent } from "electron";
 import type {
   BeginCheckoutResult,
+  BeginSubscriptionResult,
   ChargeResult,
+  GateReadResult,
   PaymentConfirmResult,
   SavedCardStatus,
 } from "../types/payment";
@@ -38,6 +40,18 @@ export const paymentBridge = {
   /** Saved-card eligibility (optimization; the /charge 409 is authoritative). */
   hasSavedCard: (): Promise<SavedCardStatus> =>
     ipcRenderer.invoke("payment:has-saved-card"),
+
+  /** BACKLOG-3676: open the Agent plan Stripe Checkout (no arguments). */
+  beginSubscription: (): Promise<BeginSubscriptionResult> =>
+    ipcRenderer.invoke("payment:begin-subscription"),
+
+  /** BACKLOG-3676: confirm the Agent plan after the browser return (fresh gate reads). */
+  confirmSubscription: (localTransactionId: string): Promise<PaymentConfirmResult> =>
+    ipcRenderer.invoke("payment:confirm-subscription", localTransactionId),
+
+  /** BACKLOG-3676: one fresh gate read ("Try again"). */
+  refreshGate: (localTransactionId: string): Promise<GateReadResult> =>
+    ipcRenderer.invoke("payment:refresh-gate", localTransactionId),
 };
 
 /**

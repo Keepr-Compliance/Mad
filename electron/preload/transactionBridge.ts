@@ -38,6 +38,8 @@ export interface ExportEnhancedOptions {
   contentType?: ExportContentType;
   includeContacts?: boolean;
   includeSummary?: boolean;
+  /** BACKLOG-3767: add the transaction's checklists to the PDF. */
+  includeChecklist?: boolean;
   startDate?: string;
   endDate?: string;
   summaryOnly?: boolean; // If true, only export summary + indexes (no full content)

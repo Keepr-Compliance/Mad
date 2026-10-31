@@ -12,48 +12,33 @@ import { headers } from 'next/headers';
 import { getPortalAccess } from '@/lib/auth/portalAccess';
 import { createServiceClient } from '@/lib/supabase/service';
 import { billingEnabled } from './flag';
-import { billingCapabilities, type BillingCapabilities } from './capabilities';
-import { currentStripeMode, type StripeMode } from './mode';
-import { getAgentPlanView, type AgentPlanView } from './agentPlan';
+import { currentStripeMode } from './mode';
 import { chooseReturnBase } from './agentCheckoutParams';
+import { agentAccessRefusal, agentContextForUser, type AgentContext } from './agentContextCore';
+
+export type { AgentContext } from './agentContextCore';
 
 export const NOT_AVAILABLE = 'Billing is not available for this account.';
 export const NOT_NOW = 'That change is not available for your plan right now. Refresh the page.';
 export const MODE_REFUSED = 'Payments are not available for this account.';
 export const BILLING_PATH = '/dashboard/billing';
 
-export interface AgentContext {
-  userId: string;
-  email: string | null;
-  service: ReturnType<typeof createServiceClient>;
-  mode: StripeMode;
-  view: AgentPlanView;
-  caps: BillingCapabilities;
-}
-
 export async function agentContext(): Promise<AgentContext | { error: string }> {
   if (!billingEnabled()) return { error: NOT_AVAILABLE };
   const portal = await getPortalAccess();
   if (!portal) return { error: 'Please sign in again.' };
-  const access = portal.access;
   // Only a personal owner has an Agent plan; refuse before any billing read.
-  if (!(access.kind === 'floor' && access.via === 'personal_owner')) return { error: NOT_AVAILABLE };
-  const service = createServiceClient();
-  const mode = currentStripeMode();
-  const view = await getAgentPlanView(service, portal.user.id, mode);
-  const caps = billingCapabilities({
-    access,
-    isImpersonating: false,
-    enabled: true,
-    agentPlan: view.state,
-    renewalUnpaid: view.row?.status === 'unpaid',
-    // BACKLOG-3878: the licence (view.suspended). A suspended account cannot
-    // cancel, keep or end its plan, or buy one; it may still replace its card.
-    accountSuspended: view.suspended,
-    orgBillingSetUp: false,
+  // The website shows one message for every refusal code.
+  if (agentAccessRefusal(portal.access)) return { error: NOT_AVAILABLE };
+  const ctx = await agentContextForUser({
+    userId: portal.user.id,
+    email: portal.user.email ?? null,
+    access: portal.access,
+    service: createServiceClient(),
+    mode: currentStripeMode(),
   });
-  if (!caps || caps.kind !== 'personal') return { error: NOT_AVAILABLE };
-  return { userId: portal.user.id, email: portal.user.email ?? null, service, mode, view, caps };
+  if ('refusal' in ctx) return { error: NOT_AVAILABLE };
+  return ctx;
 }
 
 export async function returnBase(): Promise<string> {

@@ -9,7 +9,13 @@
 
 import { Wordmark } from '@keepr/ui';
 
-export default function PaymentCancelledPage() {
+export default async function PaymentCancelledPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  // BACKLOG-3676: the Agent plan Checkout started from the app cancels here with kind=agent.
+  const agent = (await searchParams).kind === 'agent';
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4">
       <div className="max-w-md w-full text-center space-y-6">
@@ -17,9 +23,9 @@ export default function PaymentCancelledPage() {
         <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-4">
           <p className="text-lg font-semibold text-gray-900">Checkout cancelled</p>
           <p className="text-sm text-gray-600">
-            No payment was taken. You can close this tab and return to the Keepr
-            app — the deal is still locked, and you can unlock it whenever you’re
-            ready.
+            {agent
+              ? 'Nothing was charged. You can close this tab and return to the Keepr app.'
+              : 'No payment was taken. You can close this tab and return to the Keepr app — the deal is still locked, and you can unlock it whenever you’re ready.'}
           </p>
           <a
             href="keepr://payment-callback"

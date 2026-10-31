@@ -1,57 +1,34 @@
 /**
- * Analytics Query Helpers
+ * Analytics report — move parity (BACKLOG-3723, PLAN v1 parity check (b))
  *
- * Server-side Supabase queries for the admin analytics dashboard.
- * All queries use the authenticated server client — cross-org read
- * access is granted by TASK-2110 RLS policies for internal_roles users.
+ * Below the marker is a VERBATIM copy of the query functions from the deleted
+ * `lib/analytics-queries.ts` (at c54b39cef; only `export` removed). The old
+ * copy and the new paged path run through the SAME behaving stub
+ * (./postgrest-stub: projects, filters, sorts, slices, caps unpaged reads at
+ * 1000) over the same fixture, and must agree on every section.
  *
- * Where possible, queries use count-only or minimal-select patterns
- * to avoid fetching full row sets into memory.
+ * Then the 2,500-device variant: the old copy returns 1000-capped numbers,
+ * the new path the exact ones — the fix.
  */
 
+process.env.TZ = 'UTC';
+
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SupabaseClient } from '@supabase/supabase-js';
+import type {
+  LicenseUtilization,
+  PhoneTypeBreakdown,
+  PlatformBreakdown,
+  SystemCounts,
+  VersionDistribution,
+  VersionUser,
+} from '../analytics';
+import { getAnalyticsData, type AnalyticsData } from '../analytics-queries';
+import { resolveAnalyticsPeriod } from '../analytics-period';
+import { stubClient, uuid } from './postgrest-stub';
+import { bigTables, NOW, TABLES } from './analytics.fixture';
 
-// ─── Types ───────────────────────────────────────────────────────
-
-export interface VersionUser {
-  id: string;
-  email: string | null;
-  display_name: string | null;
-}
-
-export interface VersionDistribution {
-  app_version: string;
-  user_count: number;
-  adoption_pct: number;
-  users: VersionUser[];
-}
-
-export interface SystemCounts {
-  active_users: number;
-  total_orgs: number;
-  active_devices: number;
-  total_users: number;
-}
-
-export interface PlatformBreakdown {
-  platform: string;
-  user_count: number;
-  pct: number;
-}
-
-export interface LicenseUtilization {
-  plan: string;
-  org_count: number;
-  total_seats: number;
-  active_seats: number;
-  utilization_pct: number;
-}
-
-export interface PhoneTypeBreakdown {
-  phone_type: string;
-  user_count: number;
-  pct: number;
-}
+// ─── VERBATIM OLD COPY (lib/analytics-queries.ts @ c54b39cef) ────
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
@@ -89,7 +66,7 @@ function compareSemver(a: string, b: string): number {
   return 0;
 }
 
-export async function getVersionDistribution(
+async function getVersionDistribution(
   supabase: SupabaseClient,
   days = 30
 ): Promise<VersionDistribution[]> {
@@ -148,7 +125,7 @@ export async function getVersionDistribution(
 /**
  * System-wide counts using count-only queries (no row data transferred).
  */
-export async function getSystemCounts(
+async function getSystemCounts(
   supabase: SupabaseClient
 ): Promise<SystemCounts> {
   const cutoff = daysAgo(30);
@@ -192,7 +169,7 @@ export async function getSystemCounts(
 /**
  * Platform breakdown using minimal select (two columns only).
  */
-export async function getPlatformBreakdown(
+async function getPlatformBreakdown(
   supabase: SupabaseClient
 ): Promise<PlatformBreakdown[]> {
   const { data: devices, error } = await supabase
@@ -230,7 +207,7 @@ export async function getPlatformBreakdown(
 /**
  * License utilization — uses count-only for members, minimal select for orgs.
  */
-export async function getLicenseUtilization(
+async function getLicenseUtilization(
   supabase: SupabaseClient
 ): Promise<LicenseUtilization[]> {
   const { data: orgs, error: orgsError } = await supabase
@@ -306,7 +283,7 @@ export async function getLicenseUtilization(
 /**
  * Phone type breakdown — fetches preferences JSONB (unavoidable for JSONB field extraction).
  */
-export async function getPhoneTypeBreakdown(
+async function getPhoneTypeBreakdown(
   supabase: SupabaseClient
 ): Promise<PhoneTypeBreakdown[]> {
   const { data: prefs, error } = await supabase
@@ -341,3 +318,148 @@ export async function getPhoneTypeBreakdown(
   results.sort((a, b) => b.user_count - a.user_count);
   return results;
 }
+
+// ─── END VERBATIM OLD COPY ───────────────────────────────────────
+
+beforeAll(() => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(NOW);
+});
+afterAll(() => {
+  vi.useRealTimers();
+});
+
+async function oldPage(client: SupabaseClient, days: number) {
+  const [versions, counts, platform, license, phone] = await Promise.all([
+    getVersionDistribution(client, days),
+    getSystemCounts(client),
+    getPlatformBreakdown(client),
+    getLicenseUtilization(client),
+    getPhoneTypeBreakdown(client),
+  ]);
+  return { versions, counts, platform, license, phone };
+}
+
+function newCounts(d: AnalyticsData): SystemCounts {
+  return {
+    active_users: d.counts.active_users.value as number,
+    total_orgs: d.counts.total_orgs.value as number,
+    active_devices: d.counts.active_devices.value as number,
+    total_users: d.counts.total_users.value as number,
+  };
+}
+
+const THIRTY = resolveAnalyticsPeriod({}, NOW);
+
+describe('parity (b): old and new agree on the same data', () => {
+  it('30 days: every section deep-equals the old code', async () => {
+    const old = await oldPage(stubClient(TABLES).client, 30);
+    const now = await getAnalyticsData(stubClient(TABLES).client, THIRTY.fromIso);
+    expect(now.versions.data).toEqual(old.versions);
+    expect(newCounts(now)).toEqual(old.counts);
+    expect(now.platform.data).toEqual(old.platform);
+    expect(now.license.data).toEqual(old.license);
+    expect(now.phone.data).toEqual(old.phone);
+    expect([now.versions.failed, now.platform.failed, now.phone.failed, now.license.failed]).toEqual([
+      false, false, false, false,
+    ]);
+  });
+
+  it.each(['1', '7', '90'] as const)('period %s: the version section deep-equals the old code', async (key) => {
+    const old = await getVersionDistribution(stubClient(TABLES).client, Number(key));
+    const now = await getAnalyticsData(stubClient(TABLES).client, resolveAnalyticsPeriod({ period: key }, NOW).fromIso);
+    expect(now.versions.data).toEqual(old);
+  });
+
+  it('maths pin: the 30-day numbers on the fixture', async () => {
+    const d = await getAnalyticsData(stubClient(TABLES).client, THIRTY.fromIso);
+    // Active, seen in 30d: D1,D2,D3,D4,D5,D6,D7,D12,D14 -> users 1-6; D10 inactive, D11 NULL, D8/D9 old, D13 never seen.
+    expect(newCounts(d)).toEqual({ active_users: 6, active_devices: 9, total_users: 9, total_orgs: 5 });
+    expect(d.versions.data.map((v) => [v.app_version, v.user_count, v.adoption_pct])).toEqual([
+      ['2.41.0', 3, 50],
+      ['2.44.0', 2, 33],
+      ['2.40.0-beta.3', 1, 17],
+      ['2.44.0-pre.2', 1, 17],
+      ['Unknown', 1, 17],
+    ]);
+    expect(d.versions.data.find((v) => v.app_version === 'Unknown')?.users).toEqual([
+      { id: uuid(6), email: null, display_name: null },
+    ]);
+    // Platform: every ACTIVE device, no window. 8 distinct users; U5 and U1 on two platforms; D13 platform NULL -> Unknown.
+    // The per-platform counts sum to 11 > 8, so the pcts sum past 100 (the pinned bar/legend oddity).
+    expect(d.platform.data).toEqual([
+      { platform: 'windows', user_count: 6, pct: 75 },
+      { platform: 'macos', user_count: 3, pct: 38 },
+      { platform: 'Unknown', user_count: 1, pct: 13 },
+      { platform: 'linux', user_count: 1, pct: 13 },
+    ]);
+    // License: inactive / NULL-status members not counted; NULL plan -> trial with 0 seats; missing-org member ignored.
+    expect(d.license.data).toEqual([
+      { plan: 'trial', org_count: 3, total_seats: 8, active_seats: 3, utilization_pct: 38 },
+      { plan: 'pro', org_count: 1, total_seats: 10, active_seats: 1, utilization_pct: 10 },
+      { plan: 'enterprise', org_count: 1, total_seats: 50, active_seats: 3, utilization_pct: 6 },
+    ]);
+    // Phone: a pref without phone_type and an empty phone_type are both "Not set".
+    expect(d.phone.data).toEqual([
+      { phone_type: 'iphone', user_count: 3, pct: 50 },
+      { phone_type: 'Not set', user_count: 2, pct: 33 },
+      { phone_type: 'android', user_count: 1, pct: 17 },
+    ]);
+  });
+
+  it('All time: the version section and tiles cover every active device seen at any time', async () => {
+    const d = await getAnalyticsData(stubClient(TABLES).client, null);
+    // + D8, D9, D13 (never seen: NULL last_seen_at is included when there is no window).
+    expect(d.counts.active_devices.value).toBe(12);
+    expect(d.counts.active_users.value).toBe(8);
+    expect(d.versions.data.map((v) => v.app_version)).toEqual([
+      '2.9.1', '2.10.1', '2.39.0', '2.41.0', '2.44.0', '2.40.0-beta.3', '2.44.0-pre.2', 'Unknown',
+    ]);
+  });
+});
+
+describe('parity (b): past the 1000-row cap the old code undercounts, the new path does not', () => {
+  it('2,500 devices / 2,500 users / 1,100 orgs / 1,200 members / 1,300 prefs', async () => {
+    const big = bigTables();
+    const old = await oldPage(stubClient(big).client, 30);
+    const now = await getAnalyticsData(stubClient(big).client, THIRTY.fromIso);
+
+    // Old: every row read capped at 1000; the head counts were always exact.
+    expect(old.counts.active_users).toBe(1000);
+    expect(old.counts.active_devices).toBe(2500);
+    expect(old.platform.reduce((s, p) => s + p.user_count, 0)).toBe(1000);
+    expect(old.phone.reduce((s, p) => s + p.user_count, 0)).toBe(1000);
+
+    // New: exact.
+    expect(newCounts(now)).toEqual({ active_users: 2500, active_devices: 2500, total_users: 2500, total_orgs: 1100 });
+    expect(now.versions.data.reduce((s, v) => s + v.user_count, 0)).toBe(2500);
+    expect(now.versions.data.map((v) => [v.app_version, v.user_count])).toEqual([
+      ['2.41.0', 500],
+      ['2.43.0', 500],
+      ['2.44.0', 500],
+      ['2.44.0-pre.2', 500],
+      ['Unknown', 500],
+    ]);
+    expect(now.platform.data).toEqual([
+      { platform: 'windows', user_count: 1666, pct: 67 },
+      { platform: 'macos', user_count: 834, pct: 33 },
+    ]);
+    expect(now.phone.data).toEqual([
+      { phone_type: 'iphone', user_count: 975, pct: 75 },
+      { phone_type: 'android', user_count: 325, pct: 25 },
+    ]);
+    expect(now.license.data).toEqual([
+      { plan: 'trial', org_count: 550, total_seats: 1100, active_seats: 600, utilization_pct: 55 },
+      { plan: 'pro', org_count: 550, total_seats: 1100, active_seats: 600, utilization_pct: 55 },
+    ]);
+    // Every user name resolved through the chunked lookup.
+    expect(now.versions.namesFailed).toBe(false);
+    expect(now.versions.data.flatMap((v) => v.users).every((u) => u.email !== null)).toBe(true);
+    expect([now.counts.truncated, now.versions.truncated, now.platform.truncated, now.phone.truncated, now.license.truncated]).toEqual([
+      false, false, false, false, false,
+    ]);
+  });
+});
+
+// Type-only use keeps the old copy's referenced types in scope.
+export type _OldTypes = [VersionUser, VersionDistribution, PlatformBreakdown, LicenseUtilization, PhoneTypeBreakdown];
