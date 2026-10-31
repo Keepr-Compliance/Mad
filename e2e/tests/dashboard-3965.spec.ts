@@ -150,6 +150,7 @@ test.describe('Dashboard Recent | Todo (BACKLOG-3965)', () => {
     const checklistTab = page.getByTestId('tab-checklist');
     await expect(checklistTab).toBeVisible({ timeout: 15_000 });
     await expect(checklistTab).toHaveClass(/\bborder-green-500\b/);
+    await expect(page.getByTestId('my-items-section')).toBeVisible();
     await backToDashboard(driver!);
   });
 

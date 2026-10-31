@@ -47,15 +47,14 @@ try {
   isBuilt = false;
 }
 
-async function openChecklistTab(page: Page, address: string): Promise<void> {
-  // Recent shows five deals; a deal not on the Dashboard is opened from the Transactions list.
-  const onDashboard = page.getByText(address, { exact: false }).first();
-  if (await onDashboard.isVisible().catch(() => false)) {
-    await onDashboard.click();
-  } else {
-    await page.getByTestId('nav-transactions').click();
-    await page.getByTestId('tx-list').getByText(address, { exact: false }).first().click();
-  }
+async function openChecklistTab(d: KeeprAppDriver, address: string): Promise<void> {
+  const page = d.page;
+  // From the Transactions list: Recent shows only five deals, and a page-wide match can hit the
+  // Dashboard copy hidden behind the list. A Details view left open by the previous cell blocks
+  // both, so it is closed first.
+  await d.dismissTransactionDetailsIfOpen();
+  await d.gotoTransactions();
+  await page.getByTestId('tx-list').getByText(address, { exact: false }).first().click();
   await page.getByTestId('tab-checklist').click();
   await expect(page.getByTestId('my-items-section')).toBeVisible();
 }
@@ -97,7 +96,7 @@ test.describe('Checklist tab: My items (BACKLOG-3966 U1)', () => {
   test('U1-H1a gated plan: My items first, Private, then the template checklist', async () => {
     test.skip(PLAN !== 'allowed' || !DEAL, 'Needs QA_PLAN=allowed and QA_DEAL_ADDRESS.');
     const page = driver!.page;
-    await openChecklistTab(page, DEAL);
+    await openChecklistTab(driver!, DEAL);
     await expect(page.getByTestId('my-items-private-pill')).toHaveText(/Private/);
     await expect(page.getByTestId('my-items-empty')).toBeVisible();
     const mine = await page.getByTestId('my-items-section').boundingBox();
@@ -109,7 +108,7 @@ test.describe('Checklist tab: My items (BACKLOG-3966 U1)', () => {
   test('U1-H1b ungated plan: My items editable, template hint, no Add checklist', async () => {
     test.skip(PLAN !== 'blocked' || !DEAL, 'Needs QA_PLAN=blocked (keepr-test plan without checklists).');
     const page = driver!.page;
-    await openChecklistTab(page, DEAL);
+    await openChecklistTab(driver!, DEAL);
     await expect(page.getByTestId('checklist-template-hint')).toHaveText('Template checklists aren’t on your plan.');
     await expect(page.getByTestId('checklist-add')).toHaveCount(0);
     await addMyItem(page, 'QA ungated item');
@@ -119,7 +118,7 @@ test.describe('Checklist tab: My items (BACKLOG-3966 U1)', () => {
   test('U1-H2 add, rename, reorder, tick, delete', async () => {
     test.skip(!PLAN || !DEAL, 'Needs QA_PLAN and QA_DEAL_ADDRESS.');
     const page = driver!.page;
-    await openChecklistTab(page, DEAL);
+    await openChecklistTab(driver!, DEAL);
     await addMyItem(page, 'QA first');
     await addMyItem(page, 'QA second');
     const section = page.getByTestId('my-items-section');
@@ -147,7 +146,7 @@ test.describe('Checklist tab: My items (BACKLOG-3966 U1)', () => {
   test('U1-H3 locked deal: the tab lock notice, rows read-only, no add', async () => {
     test.skip(!LOCKED, 'Needs QA_LOCKED_ADDRESS (a deal with the broker).');
     const page = driver!.page;
-    await openChecklistTab(page, LOCKED);
+    await openChecklistTab(driver!, LOCKED);
     // One lock line: the tab's notice. My items' own line is not shown on a locked deal
     // (MyItemsSection.tsx renders `my-items-locked` only for a refusal, not `locked`).
     await expect(page.getByTestId('checklist-locked-notice')).toBeVisible();
@@ -170,7 +169,7 @@ test.describe('Checklist tab: My items (BACKLOG-3966 U1)', () => {
   test('U1-H4 a ticked My item counts on the tab, the Overview and the Dashboard', async () => {
     test.skip(PLAN !== 'allowed' || !DEAL, 'Needs QA_PLAN=allowed and QA_DEAL_ADDRESS (7 of 12 required).');
     const page = driver!.page;
-    await openChecklistTab(page, DEAL);
+    await openChecklistTab(driver!, DEAL);
     await addMyItem(page, 'QA counted');
     await page.getByTestId('my-items-section').getByRole('checkbox', { name: 'QA counted' }).click();
     const total = page.getByTestId('checklist-total-progress');
