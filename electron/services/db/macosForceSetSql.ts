@@ -120,6 +120,30 @@ interface Fragment {
 const widthOf = (values: readonly unknown[]): string => values.map(() => "?").join(", ");
 
 /**
+ * INTERNAL — BACKLOG-3968 PR-4b. "This text is not a member of any checklist
+ * text group", correlated on the unaliased `messages` row every consumer of
+ * {@link forceSetMessages} reads (`DELETE FROM messages`, `SELECT … FROM
+ * messages`).
+ *
+ * A checklist text member is PROTECTED, the macOS twin of the email force
+ * set's protection (`emailForceSetSql.ts`, `protectedPredicate`): the row is
+ * never removed, so its member — which cascades on the message's removal —
+ * survives the re-import. Because the predicate sits inside the force set, it
+ * flows to every statement built from it: the row and the attachments it owns
+ * (by id and by Apple guid) survive the clear, the survivor read sees it, and
+ * the run's fresh copy of the same guid is YIELDED rather than inserted
+ * (`selectYieldedMessageIdsSync`), so the UNIQUE (user_id, external_id) index
+ * is never hit.
+ *
+ * NOT EXISTS, never `id NOT IN (SELECT message_id …)`: `message_id` is NULL on
+ * every attachment and email member, and `NOT IN` over a list holding a NULL
+ * is NULL for every row — the force set would silently become empty.
+ */
+const NOT_A_CHECKLIST_TEXT =
+  `NOT EXISTS (SELECT 1 FROM transaction_checklist_link_members clm ` +
+  `WHERE clm.message_id = messages.id)`;
+
+/**
  * Rows of `messages` a force re-import REPLACES.
  *
  * `json_valid` is a guard, not decoration. `json_extract` THROWS `malformed
@@ -137,7 +161,8 @@ export function forceSetMessages(set: MacOSForceSet): Fragment {
       `user_id = ? AND external_id IS NOT NULL ` +
       `AND channel IN (${widthOf(set.channels)}) ` +
       `AND json_valid(metadata) ` +
-      `AND json_extract(metadata, '$.source') = ?`,
+      `AND json_extract(metadata, '$.source') = ? ` +
+      `AND ${NOT_A_CHECKLIST_TEXT}`,
     params: [set.userId, ...set.channels, set.source],
   };
 }
