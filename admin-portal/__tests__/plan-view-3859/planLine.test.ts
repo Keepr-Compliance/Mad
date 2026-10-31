@@ -167,6 +167,11 @@ describe('BACKLOG-3860 T11b: the free trial on the admin plan line', () => {
     expect(out.kind).toBe('support_grant_expired');
   });
 
+  it('control: an EXPIRED Stripe override with no open row stays plain pay as you go (the ended-trial line needs source trial)', () => {
+    const out = planLine(input({ override: { enabled: true, source: 'stripe', paid_through: '2026-10-01T00:00:00+00:00' } }));
+    expect(out).toMatchObject({ kind: 'pay_as_you_go', text: 'Solo Pay as you go', warning: null });
+  });
+
   it('an open subscription beats a live trial', () => {
     expect(planLine(input({ rows: [row('active')], override: trial(14) })).kind).toBe('agent_unlimited');
   });
