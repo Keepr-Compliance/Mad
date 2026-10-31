@@ -39,7 +39,7 @@ describe('pausing clock — the founder example and its boundaries', () => {
     ['X4 spring-forward Sunday 01:00 PST -> Mon 09:30', '2026-03-08T01:00:00-08:00', '2026-03-09T09:30:00-07:00', 30],
     ['X5 fall-back Sunday 00:30 PDT -> Mon 09:30 PST', '2026-11-01T00:30:00-07:00', '2026-11-02T09:30:00-08:00', 30],
     ['X6 exactly one window', '2026-10-26T09:00:00-07:00', '2026-10-26T17:00:00-07:00', 480],
-  ] as const)('%s = %d', (_label, a, b, expected) => {
+  ] as const)('%s (%s -> %s) = %d', (_label, a, b, expected) => {
     expect(bm(a, b)).toBe(expected);
   });
 
