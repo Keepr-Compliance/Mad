@@ -11,7 +11,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { FilterBar, FilterCaption, MultiSelect, PeriodPicker, StatCard, useSortState } from '@keepr/ui';
+import { Dropdown, FilterBar, FilterCaption, PeriodPicker, StatCard, useSortState } from '@keepr/ui';
 import { Search } from 'lucide-react';
 import { PERIOD_OPTIONS, type PeriodKey, type PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
@@ -126,11 +126,14 @@ export function UserActivityReport({
           to={period.customTo ?? undefined}
           onChange={navigateToPeriod}
         />
-        <MultiSelect
-          label="Organization"
+        <Dropdown
+          mode="multi"
+          variant="filter"
+          ariaLabel="Organization"
           options={orgOptions}
-          selected={filters.orgs}
+          value={filters.orgs}
           onChange={(orgs) => updateFilters({ ...filters, orgs })}
+          onClear={() => updateFilters({ ...filters, orgs: [] })}
         />
         <label className="inline-flex items-center gap-2 text-sm text-gray-700">
           <input
