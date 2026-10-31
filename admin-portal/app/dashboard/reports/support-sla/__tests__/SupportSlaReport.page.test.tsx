@@ -185,6 +185,13 @@ describe('Support SLA report page', () => {
       time_zone: 'America/New_York',
     };
     await renderPage();
+    // Business minutes on the New York 08:00-18:00 Mon-Sat clock, from an
+    // independent minute-by-minute walk (not from the builder): t22 FR 53.06,
+    // t24 FR 1800, t03 RES 194.95, t22 RES 739.00.
+    expect(tile('avg-first-response')).toBe('15h 27m');
+    expect(tile('fr-p90')).toBe('30h');
+    expect(tile('avg-resolution')).toBe('7h 47m');
+    expect(tile('res-p90')).toBe('12h 19m');
     expect(subtitle('fr-within-target')).toMatch(/ · target 1 business hour$/);
     expect(subtitle('res-within-target')).toMatch(/ · target 2 business days$/);
     expect(howTo('targets')).toContain('first response within 1 business hour, resolution within 2 business days');
