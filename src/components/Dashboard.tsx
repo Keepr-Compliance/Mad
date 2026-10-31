@@ -4,6 +4,7 @@ import { useTour } from "../hooks/useTour";
 import { usePendingTransactionCount } from "../hooks/usePendingTransactionCount";
 import { useSyncOrchestrator } from "../hooks/useSyncOrchestrator";
 import { SyncStatusIndicator } from "./dashboard/index";
+import { DashboardActionCard } from "./dashboard/DashboardActionCard";
 import StartNewAuditModal from "./StartNewAuditModal";
 import { FeatureGate } from "./common/FeatureGate";
 import { AlertBanner, AlertIcons } from "./common/AlertBanner";
@@ -20,6 +21,25 @@ import type { Transaction } from "../types";
 import { useReconnectionSummary } from "../hooks/useReconnectionSummary";
 import AuthContext from "../contexts/AuthContext";
 import billingService from "../services/billingService";
+
+/** Tile icons (24px outline paths, unchanged from the inline tiles). */
+function TileIcon({ d }: { d: string }) {
+  return (
+    <svg className="w-full h-full" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={d} />
+    </svg>
+  );
+}
+const CheckCircleIcon = () => <TileIcon d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />;
+const DocumentIcon = () => (
+  <TileIcon d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+);
+const PeopleIcon = () => (
+  <TileIcon d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+);
+const PhoneIcon = () => (
+  <TileIcon d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+);
 
 interface DashboardActionProps {
   onAuditNew: () => void;
@@ -195,7 +215,7 @@ function Dashboard({
   }, [runTour, onTourStateChange]);
 
   return (
-    <div className="min-h-full bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center p-4 sm:p-8">
+    <div className="min-h-full bg-gray-50 flex items-center justify-center p-4 sm:p-8">
       {/* Onboarding Tour */}
       {/* BACKLOG-3674: the tooltip carries the "Don't show this again" box. */}
       <TourTooltipContext.Provider value={tourTooltipContext}>
@@ -212,7 +232,7 @@ function Dashboard({
           tooltipComponent={TourTooltip}
         />
       </TourTooltipContext.Provider>
-      <div className="max-w-5xl w-full">
+      <div className="max-w-4xl w-full">
         {/* Continue Setup Banner */}
         {showSetupPrompt && onContinueSetup && (
           <AlertBanner
@@ -260,284 +280,81 @@ function Dashboard({
         </div>
 
         {/* Header */}
-        <div className="text-center mb-8 sm:mb-12">
-          <h1 className="text-2xl sm:text-4xl font-bold text-gray-900 mb-2 sm:mb-3">
+        <div className="text-center mb-6">
+          <h1 className="text-2xl font-bold text-gray-900">
             {greeting}
           </h1>
-          <p className="text-base sm:text-lg text-gray-600">
-            Transaction compliance made simple
-          </p>
         </div>
 
         {/* Action Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-8">
-          {/* Start New Audit Card */}
-          <button
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <DashboardActionCard
+            title="New Transaction"
+            titleClassName="whitespace-nowrap"
             onClick={handleStartNewAuditClick}
             disabled={isAnySyncing}
-            className={`group bg-white rounded-2xl shadow-xl transition-all duration-300 p-6 text-left border-2 transform ${
-              isAnySyncing
-                ? "opacity-50 cursor-not-allowed"
-                : `hover:shadow-2xl hover:scale-105 ${
-                    pendingCount > 0
-                      ? "border-indigo-500 ring-2 ring-indigo-300 ring-offset-2 hover:border-indigo-600"
-                      : "border-transparent hover:border-blue-500"
-                  }`
-            }`}
-            data-tour="new-audit-card"
-            data-testid="nav-new-audit"
+            icon={<CheckCircleIcon />}
+            highlighted={pendingCount > 0}
+            dataTour="new-audit-card"
+            dataTestId="nav-new-audit"
           >
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center shadow-lg group-hover:shadow-xl transition-all">
-                <svg
-                  className="w-7 h-7 text-white"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-                  />
-                </svg>
-              </div>
-              <div className="flex-1">
-                <h2 className="text-xl font-bold text-gray-900 whitespace-nowrap">
-                  New Transaction
-                </h2>
-              </div>
-              {/* Pending count badge - AI add-on only */}
-              <FeatureGate requires="ai_addon">
-                {pendingCount > 0 && (
-                  <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-sm font-semibold bg-indigo-100 text-indigo-800 animate-pulse">
-                    {pendingCount} new
-                  </span>
-                )}
-              </FeatureGate>
-              <svg
-                className="w-5 h-5 text-blue-600 group-hover:translate-x-1 transition-transform"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9 5l7 7-7 7"
-                />
-              </svg>
-            </div>
-          </button>
+            {/* Pending count badge - AI add-on only */}
+            <FeatureGate requires="ai_addon">
+              {pendingCount > 0 && (
+                <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800 animate-pulse">
+                  {pendingCount} new
+                </span>
+              )}
+            </FeatureGate>
+          </DashboardActionCard>
 
-          {/* Browse Transactions Card */}
-          <button
+          <DashboardActionCard
+            title="All audits"
             onClick={onViewTransactions}
             disabled={isAnySyncing}
-            className={`group bg-white rounded-2xl shadow-xl transition-all duration-300 p-6 text-left border-2 transform ${
-              isAnySyncing
-                ? "opacity-50 cursor-not-allowed border-transparent"
-                : "hover:shadow-2xl hover:scale-105 border-transparent hover:border-green-500"
-            }`}
-            data-tour="transactions-card"
-            data-testid="nav-transactions"
-          >
-            <div className="flex items-center gap-4">
-              <div className="w-14 h-14 bg-gradient-to-br from-green-500 to-teal-600 rounded-xl flex items-center justify-center shadow-lg group-hover:shadow-xl transition-all">
-                <svg
-                  className="w-7 h-7 text-white"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                  />
-                </svg>
-              </div>
-              <div className="flex-1">
-                <h2 className="text-xl font-bold text-gray-900">
-                  All Audits
-                </h2>
-              </div>
-              <svg
-                className="w-5 h-5 text-green-600 group-hover:translate-x-1 transition-transform"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9 5l7 7-7 7"
-                />
-              </svg>
-            </div>
-          </button>
+            icon={<DocumentIcon />}
+            dataTour="transactions-card"
+            dataTestId="nav-transactions"
+          />
         </div>
 
         {/* Secondary Actions Row */}
-        <div className={`mt-4 sm:mt-8 grid gap-4 ${onSyncPhone || onSyncAndroid ? 'sm:grid-cols-2' : 'grid-cols-1'}`}>
-          {/* Manage Contacts Card */}
-          <button
+        <div className={`mt-4 grid gap-3 ${onSyncPhone || onSyncAndroid ? 'sm:grid-cols-2' : 'grid-cols-1'}`}>
+          <DashboardActionCard
+            variant="secondary"
+            title="Clients & Contacts"
             onClick={onManageContacts}
             disabled={isAnySyncing}
-            className={`group w-full relative bg-white bg-opacity-70 backdrop-blur rounded-2xl shadow-lg transition-all duration-300 p-6 text-left border-2 transform ${
-              isAnySyncing
-                ? "opacity-50 cursor-not-allowed border-transparent"
-                : "hover:shadow-xl hover:scale-[1.02] border-transparent hover:border-purple-400"
-            }`}
-            data-tour="contacts-card"
-            data-testid="nav-clients-contacts"
-          >
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-600 rounded-xl flex items-center justify-center shadow-lg">
-                <svg
-                  className="w-6 h-6 text-white"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
-                  />
-                </svg>
-              </div>
-              <div className="flex-1">
-                <h3 className="text-lg font-bold text-gray-900 mb-1">
-                  Clients &amp; Contacts
-                </h3>
-              </div>
-              <svg
-                className="w-5 h-5 text-purple-600 group-hover:translate-x-2 transition-transform"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M9 5l7 7-7 7"
-                />
-              </svg>
-            </div>
-          </button>
+            icon={<PeopleIcon />}
+            dataTour="contacts-card"
+            dataTestId="nav-clients-contacts"
+          />
 
           {/* Sync iPhone Card (Windows + iPhone users only) */}
           {onSyncPhone && (
-            <button
+            <DashboardActionCard
+              variant="secondary"
+              title="Sync iPhone Messages"
+              description="Import texts via USB cable"
               onClick={onSyncPhone}
               disabled={isAnySyncing}
-              className={`group w-full relative bg-white bg-opacity-70 backdrop-blur rounded-2xl shadow-lg transition-all duration-300 p-6 text-left border-2 transform ${
-                isAnySyncing
-                  ? "opacity-50 cursor-not-allowed border-transparent"
-                  : "hover:shadow-xl hover:scale-[1.02] border-transparent hover:border-indigo-400"
-              }`}
-              data-tour="sync-phone-card"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-blue-600 rounded-xl flex items-center justify-center shadow-lg">
-                  <svg
-                    className="w-6 h-6 text-white"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
-                    />
-                  </svg>
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-bold text-gray-900 mb-1">
-                    Sync iPhone Messages
-                  </h3>
-                  <p className="text-sm text-gray-500">
-                    Import texts via USB cable
-                  </p>
-                </div>
-                <svg
-                  className="w-5 h-5 text-indigo-600 group-hover:translate-x-2 transition-transform"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 5l7 7-7 7"
-                  />
-                </svg>
-              </div>
-            </button>
+              icon={<PhoneIcon />}
+              dataTour="sync-phone-card"
+            />
           )}
 
           {/* Sync Android Card (Android companion users only) — BACKLOG-2320.
               Mirrors the iPhone sync card; opens the guided Android wizard. */}
           {onSyncAndroid && (
-            <button
+            <DashboardActionCard
+              variant="secondary"
+              title="Sync Android Messages"
+              description="Copy texts from Google Messages"
               onClick={onSyncAndroid}
               disabled={isAnySyncing}
-              className={`group w-full relative bg-white bg-opacity-70 backdrop-blur rounded-2xl shadow-lg transition-all duration-300 p-6 text-left border-2 transform ${
-                isAnySyncing
-                  ? "opacity-50 cursor-not-allowed border-transparent"
-                  : "hover:shadow-xl hover:scale-[1.02] border-transparent hover:border-indigo-400"
-              }`}
-              data-testid="sync-android-card"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 bg-gradient-to-br from-indigo-500 to-blue-600 rounded-xl flex items-center justify-center shadow-lg">
-                  <svg
-                    className="w-6 h-6 text-white"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"
-                    />
-                  </svg>
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-lg font-bold text-gray-900 mb-1">
-                    Sync Android Messages
-                  </h3>
-                  <p className="text-sm text-gray-500">
-                    Copy texts from Google Messages
-                  </p>
-                </div>
-                <svg
-                  className="w-5 h-5 text-indigo-600 group-hover:translate-x-2 transition-transform"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 5l7 7-7 7"
-                  />
-                </svg>
-              </div>
-            </button>
+              icon={<PhoneIcon />}
+              dataTestId="sync-android-card"
+            />
           )}
         </div>
 

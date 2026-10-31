@@ -49,7 +49,7 @@ silent miss or a false failure.
 | `account-panel-row-<tab id>` | `appCore/shell/AccountPanel.tsx` | Panel row per Settings tab other than Account (e.g. `account-panel-row-settings-security`) |
 | `account-panel-signout` | `appCore/shell/AccountPanel.tsx` | Sign out (the only one in the app) |
 | `nav-new-audit` | `components/Dashboard.tsx` | "New Audit" tile |
-| `nav-transactions` | `components/Dashboard.tsx` | "All Audits" / transactions tile |
+| `nav-transactions` | `components/Dashboard.tsx` | "All audits" / transactions tile |
 | `nav-clients-contacts` | `components/Dashboard.tsx` | "Clients & Contacts" tile |
 | `settings-page` | `components/Settings.tsx` | Settings page is open (page root; BACKLOG-3964: a page, not a modal) |
 | `settings-close` | `components/settings/SettingsPageHeader.tsx` | The page's single "← Back" button (Esc does the same) |
