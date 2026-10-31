@@ -2031,7 +2031,7 @@ CREATE TABLE IF NOT EXISTS transaction_opens (
   FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_transaction_opens_opened_at
-  ON transaction_opens(opened_at);
+  ON transaction_opens(opened_at, transaction_id);
 
 -- Initialize schema version if not exists.
 -- Version 70: the post-reset baseline (BACKLOG-2993). This file IS the

@@ -37,7 +37,9 @@ export const RECORD_TRANSACTION_OPEN_SQL = sql`
  * rule as `getChecklistsForTransaction` (checklistDbService.ts), so the number
  * shown for a deal on the Dashboard is the number its Checklist tab shows.
  *
- * Reads `idx_transaction_opens_opened_at` in order and stops at the limit; the
+ * CROSS JOIN fixes the loop order in SQLite: walk `idx_transaction_opens_opened_at`
+ * newest first, look each deal up by its key, and stop at the limit — no sort,
+ * however many deals the user has. The
  * counts use the `transaction_checklists` (transaction_id, template_id) and
  * `idx_checklist_items_checklist` indexes.
  */
@@ -58,10 +60,11 @@ export const GET_RECENTLY_OPENED_TRANSACTIONS_SQL = sql`
       WHERE c.transaction_id = o.transaction_id AND i.is_required = 1
     ) AS requiredTotal
   FROM transaction_opens o
-  JOIN transactions t ON t.id = o.transaction_id
-  WHERE t.user_id = ?
+  CROSS JOIN transactions t
+  WHERE t.id = o.transaction_id
+    AND t.user_id = ?
     AND (t.status IS NULL OR t.status <> 'rejected')
     AND (t.detection_status IS NULL OR t.detection_status NOT IN ('pending', 'rejected'))
-  ORDER BY o.opened_at DESC, o.transaction_id
+  ORDER BY o.opened_at DESC, o.transaction_id DESC
   LIMIT ?
 `;

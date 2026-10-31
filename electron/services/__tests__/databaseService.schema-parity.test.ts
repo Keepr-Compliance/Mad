@@ -773,7 +773,7 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
   },
   {
     key: "INDEX:idx_transaction_opens_opened_at",
-    what: "Index on transaction_opens(opened_at).",
+    what: "Index on transaction_opens(opened_at, transaction_id).",
     why: "BACKLOG-3965: the Recent read orders by opened_at and stops at its limit; this index keeps that read off a full scan.",
     ref: "BACKLOG-3965",
   },
