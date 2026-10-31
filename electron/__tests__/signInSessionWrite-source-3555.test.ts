@@ -35,5 +35,6 @@ describe("BACKLOG-3555: sign-in session writes go through saveSignInSession", ()
     const body = functionBody(file, declaration);
     expect(count(body, "saveSignInSession(")).toBeGreaterThanOrEqual(1);
     expect(count(body, "sessionService.saveSession(")).toBe(0);
+    if (file === "main.ts") expect(count(body, "noteSignIn(")).toBeGreaterThanOrEqual(1);
   });
 });

@@ -120,5 +120,21 @@ describe("signInState (BACKLOG-3555)", () => {
       jest.advanceTimersByTime(SIGN_IN_WRITE_OVERDUE_MS);
       expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
     });
+
+    it("M6d: a successful write disarms its own alarm; the next sign-in is reported at its own deadline, not early", () => {
+      setPendingDeepLinkUser(USER); // sign-in 1
+      jest.advanceTimersByTime(SIGN_IN_WRITE_OVERDUE_MS / 2);
+      markSignInSessionWritten(); // sign-in 1 written
+      setPendingDeepLinkUser(USER); // sign-in 2
+      jest.advanceTimersByTime(SIGN_IN_WRITE_OVERDUE_MS / 2); // sign-in 1's old deadline passes
+      expect(mockLogWarn).not.toHaveBeenCalled();
+      expect(mockCaptureMessage).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(SIGN_IN_WRITE_OVERDUE_MS / 2); // sign-in 2's deadline
+      expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+      expect(mockCaptureMessage).toHaveBeenCalledWith(
+        "Sign-in session write overdue",
+        expect.objectContaining({ extra: { waitedMs: SIGN_IN_WRITE_OVERDUE_MS } }),
+      );
+    });
   });
 });
