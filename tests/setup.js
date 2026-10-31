@@ -426,6 +426,11 @@ if (typeof window !== 'undefined') {
       }),
       // Never gated in the main process, so the default is the working answer.
       remove: jest.fn().mockResolvedValue({ success: true, changed: false }),
+      // BACKLOG-3965 PR-3: gated like listTemplates, so the default is the refusal.
+      listOpenRequired: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
       invalidateTemplates: jest.fn().mockResolvedValue({ success: true }),
       // BACKLOG-3617: gated like listTemplates, so the default is the refusal
       // — which the chooser reads as "unknown", never as a creator.

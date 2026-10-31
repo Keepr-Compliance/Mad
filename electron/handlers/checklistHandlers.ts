@@ -1,15 +1,24 @@
 /**
  * Transaction checklist IPC — BACKLOG-3475.
  *
- * Eleven channels over the local tables PR-A created and the broker templates
+ * Thirteen channels over the local tables PR-A created and the broker templates
  * `checklistTemplateService` reads from the cloud (nine from BACKLOG-3475, two
- * from BACKLOG-3617: `can-edit-templates`, `open-templates-portal`).
+ * from BACKLOG-3617: `can-edit-templates`, `open-templates-portal`; one from
+ * BACKLOG-3764: `include-link-outside-dates`; one from BACKLOG-3965:
+ * `list-open-required`).
  *
  * ## Which channels are gated, and why the other four are not
  *
- * SEVEN of the eleven call {@link isChecklistsAllowed} before any read or write:
+ * NINE of the thirteen call {@link isChecklistsAllowed} before any read or write:
  * `list-templates`, `select-template`, `set-item-checked`, `set-item-note`,
- * `add-link`, `remove-link`, `can-edit-templates`.
+ * `add-link`, `remove-link`, `include-link-outside-dates`,
+ * `can-edit-templates`, `list-open-required`.
+ *
+ * `list-open-required` (the Dashboard's Todo list, BACKLOG-3965) is a read and
+ * is gated anyway: the unhide rule below protects a user's view of HIS OWN
+ * transaction, which `checklists:get` still serves ungated. A cross-deal
+ * list of work still to do is a feature surface, hidden when the plan does not
+ * include checklists, so main refuses it too rather than trusting the panel.
  *
  * FOUR do not. `checklists:open-templates-portal` (BACKLOG-3617) reads and
  * writes nothing; the portal gates its own page. The other three:
@@ -71,6 +80,8 @@ import { dealToggleUserError } from "../services/dealToggleAudit";
 import {
   addChecklistLink,
   getChecklistsForTransaction,
+  listOpenRequiredChecklistItems,
+  OPEN_REQUIRED_ITEMS_MAX_LIMIT,
   removeChecklistLink,
   removeChecklistSync,
   selectChecklistTemplateSync,
@@ -89,6 +100,7 @@ import {
   AddChecklistLinkArgsSchema,
   GetChecklistArgsSchema,
   IncludeChecklistLinkOutsideDatesArgsSchema,
+  ListOpenRequiredChecklistItemsArgsSchema,
   RemoveChecklistArgsSchema,
   RemoveChecklistLinkArgsSchema,
   SelectChecklistTemplateArgsSchema,
@@ -114,6 +126,8 @@ import type {
   ListChecklistTemplatesResult,
   OpenChecklistsPortalResult,
 } from "../types/ipc/window-api-checklists";
+import type { ListOpenRequiredChecklistItemsResult } from "../types/checklistTodo";
+import { LOCKED_SUBMISSION_STATUSES } from "../services/transactionEligibility";
 
 // ---------------------------------------------------------------------------
 // Responses
@@ -481,6 +495,40 @@ export function registerChecklistHandlers(): void {
         const args = parseArgs(GetChecklistArgsSchema, payload, "payload");
         const checklists = await getChecklistsForTransaction(args.transactionId);
         return { success: true, checklists };
+      },
+      { module: "Checklists" },
+    ),
+  );
+
+  /**
+   * BACKLOG-3965 PR-3: the Dashboard's Todo list — every required, unticked
+   * item on this user's active, unlocked deals, with each deal's required
+   * done/total summed across all its checklists.
+   *
+   * Gated (the header says why). Ticking a row is `checklists:set-item-checked`
+   * below, which refuses a locked deal and checks the plan; there is no
+   * second write path.
+   *
+   * No renderer caller until BACKLOG-3965 PR-4b (the Dashboard Todo panel).
+   */
+  ipcMain.handle(
+    "checklists:list-open-required",
+    wrapHandler(
+      async (
+        _event: IpcMainInvokeEvent,
+        payload: unknown,
+      ): Promise<ListOpenRequiredChecklistItemsResult> => {
+        const args = parseArgs(ListOpenRequiredChecklistItemsArgsSchema, payload, "payload");
+        if (!(await isChecklistsAllowed())) {
+          return { success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR };
+        }
+        const lockedStatuses = LOCKED_SUBMISSION_STATUSES;
+        const result = await listOpenRequiredChecklistItems(
+          args.userId,
+          lockedStatuses,
+          args.limit ?? OPEN_REQUIRED_ITEMS_MAX_LIMIT,
+        );
+        return { success: true, result };
       },
       { module: "Checklists" },
     ),

@@ -325,6 +325,8 @@ describe("BACKLOG-3910 slice d: a locked deal refuses every checklist write", ()
       "checklists:can-edit-templates",
       "checklists:open-templates-portal",
       "checklists:invalidate-templates",
+      // BACKLOG-3965: the Todo read writes nothing; ticking goes through set-item-checked.
+      "checklists:list-open-required",
     ]);
     const writers = [...registeredHandlers.keys()]
       .filter((c) => c.startsWith("checklists:") && !readOnlyChannels.has(c))

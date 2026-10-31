@@ -19,7 +19,10 @@
  * the distinction the whole main-process path preserves.
  */
 
+import * as Sentry from "@sentry/electron/renderer";
+
 import { type ApiResult, getErrorMessage } from "./index";
+import logger from "../utils/logger";
 
 import type {
   AddChecklistLinkResult,
@@ -29,6 +32,7 @@ import type {
   ChecklistTemplateSource,
   SelectChecklistTemplateResult,
 } from "../../electron/types/checklist";
+import type { OpenRequiredChecklistItems } from "../../electron/types/checklistTodo";
 
 /**
  * Said when main answered "success" with no listing. Written here rather than
@@ -38,12 +42,66 @@ import type {
 const TEMPLATES_UNREADABLE_ERROR =
   "Checklist templates couldn't be loaded right now.";
 
+/** BACKLOG-3965 PR-3: said when the Todo list could not be read. */
+const TODO_UNREADABLE_ERROR = "Your checklist items couldn't be loaded right now.";
+
+function reportTodoReadFailure(err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  // The logger serialises an Error to {}, so log the message.
+  logger.error("[checklistService] Reading the Todo list failed", message);
+  Sentry.captureException(err, {
+    tags: { component: "checklistService" },
+    extra: { operation: "list-open-required", error_message: message },
+  });
+}
+
 export interface ChecklistTemplateListing {
   templates: ChecklistTemplate[];
   source: ChecklistTemplateSource;
 }
 
 export const checklistService = {
+  /**
+   * BACKLOG-3965 PR-3: the Dashboard's Todo list — required, unticked items on
+   * this user's active, unlocked deals, and how many there are in all.
+   *
+   * NEVER throws and never rejects (the Dashboard mounts it):
+   *   - bridge missing (an older preload, a test without the mock): `success: false`;
+   *   - main refused (plan, or a failure main already reported): `success: false`
+   *     with main's message;
+   *   - the call threw or rejected: logged with its message, reported to
+   *     Sentry, `success: false`.
+   * A user with nothing left is `success: true` with `items: []` — never a
+   * missing list.
+   */
+  async listOpenRequired(
+    userId: string,
+    limit?: number,
+  ): Promise<ApiResult<OpenRequiredChecklistItems>> {
+    try {
+      const listOpenRequired = window.api?.checklists?.listOpenRequired;
+      if (typeof listOpenRequired !== "function") {
+        return { success: false, error: TODO_UNREADABLE_ERROR };
+      }
+      const result = await listOpenRequired(limit === undefined ? { userId } : { userId, limit });
+      if (!result || !result.success) {
+        return { success: false, error: result?.error || TODO_UNREADABLE_ERROR };
+      }
+      const { totalCount, items } = result.result ?? {};
+      if (!Array.isArray(items) || typeof totalCount !== "number") {
+        return { success: false, error: TODO_UNREADABLE_ERROR };
+      }
+      return { success: true, data: { totalCount, items } };
+    } catch (err) {
+      try {
+        reportTodoReadFailure(err);
+      } catch {
+        // Reporting must not throw either.
+      }
+      return { success: false, error: TODO_UNREADABLE_ERROR };
+    }
+  },
+
   /**
    * The broker templates this organization may pick from.
    *

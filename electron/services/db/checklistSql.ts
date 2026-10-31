@@ -459,3 +459,96 @@ export const GET_CHECKLIST_EXPORT_EMAIL_SUBJECTS_SQL = sql`
   FROM json_each(?) j
   JOIN emails e ON e.id = j.value
 `;
+
+// ---------------------------------------------------------------------------
+// Dashboard "Todo" — BACKLOG-3965 PR-3
+// ---------------------------------------------------------------------------
+
+/**
+ * INTERNAL. The rows the Todo list is made of: every REQUIRED item not yet
+ * ticked, on a checklist of one of this user's deals that is
+ *   - active: `status = 'active'` and `detection_status` neither 'pending' nor
+ *     'rejected' — the transaction list's own "Active" filter
+ *     (useTransactionList.ts:199-203). `detection_status` has a default but no
+ *     NOT NULL, so NULL counts as confirmed, as it does there;
+ *   - not locked: `submission_status` not one of the LOCKING statuses. NULL is
+ *     open (`dealLockReason` reads it so), and a bare `NOT IN` would drop it.
+ *
+ * Bound parameters, in order: user id, then each locked status. The locked
+ * statuses are passed in (`db/` does not import from `services/`); the caller
+ * passes `LOCKED_SUBMISSION_STATUSES`, the list DERIVED from the lock map.
+ * Never the map's keys: every submission status is a key, so that filter
+ * excludes every deal (BACKLOG-3965 SR plan review, change 1).
+ */
+function openRequiredItemsFrom(lockedStatusCount: number): SafeSql {
+  return sql`
+  FROM transaction_checklist_items i
+  JOIN transaction_checklists c ON c.id = i.checklist_id
+  JOIN transactions t ON t.id = c.transaction_id
+  WHERE t.user_id = ?
+    AND t.status = 'active'
+    AND (t.detection_status IS NULL OR t.detection_status NOT IN ('pending', 'rejected'))
+    AND (t.submission_status IS NULL OR t.submission_status NOT IN (${placeholderList(lockedStatusCount)}))
+    AND i.is_required = 1
+    AND i.is_checked = 0`;
+}
+
+/**
+ * How many Todo items exist in all (the "N required" header — not capped by
+ * the row limit). Bound parameters: user id, each locked status.
+ */
+export function countOpenRequiredItemsSql(lockedStatusCount: number): SafeSql {
+  return sql`
+  SELECT COUNT(*) AS total
+  ${openRequiredItemsFrom(lockedStatusCount)}
+`;
+}
+
+/**
+ * The Todo items in display order. Bound parameters: user id, each locked
+ * status, row limit.
+ *
+ * Order: Closing Date soonest first (by its calendar-date part, since the
+ * column admits both `YYYY-MM-DD` and an ISO timestamp), deals with no Closing
+ * Date last; then the deal (address, then id); then the checklist in the
+ * deal's own display order (as GET_CHECKLISTS_BY_TRANSACTION_SQL); then the
+ * item's `sort_order`, then id. Every tie ends on a key, so the order is total.
+ *
+ * The deal's required done / total are summed across EVERY checklist on it,
+ * the same rule as `getChecklistsForTransaction` and the Recent read
+ * (transactionOpenSql.ts), so the ring a deal shows here is the one its
+ * Checklist tab shows.
+ */
+export function listOpenRequiredItemsSql(lockedStatusCount: number): SafeSql {
+  return sql`
+  SELECT
+    i.id AS itemId,
+    i.checklist_id AS checklistId,
+    i.title AS title,
+    t.id AS transactionId,
+    t.property_address AS propertyAddress,
+    NULLIF(t.closing_deadline, '') AS closingDeadline,
+    (SELECT COUNT(*)
+       FROM transaction_checklists dc
+       JOIN transaction_checklist_items di ON di.checklist_id = dc.id
+      WHERE dc.transaction_id = t.id AND di.is_required = 1 AND di.is_checked = 1
+    ) AS dealRequiredDone,
+    (SELECT COUNT(*)
+       FROM transaction_checklists dc
+       JOIN transaction_checklist_items di ON di.checklist_id = dc.id
+      WHERE dc.transaction_id = t.id AND di.is_required = 1
+    ) AS dealRequiredTotal
+  ${openRequiredItemsFrom(lockedStatusCount)}
+  ORDER BY
+    (NULLIF(t.closing_deadline, '') IS NULL),
+    substr(t.closing_deadline, 1, 10),
+    t.property_address,
+    t.id,
+    c.sort_order,
+    c.selected_at,
+    c.id,
+    i.sort_order,
+    i.id
+  LIMIT ?
+`;
+}
