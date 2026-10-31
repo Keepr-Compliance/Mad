@@ -264,9 +264,6 @@ function Dashboard({
           <h1 className="text-2xl sm:text-4xl font-bold text-gray-900 mb-2 sm:mb-3">
             {greeting}
           </h1>
-          <p className="text-base sm:text-lg text-gray-600">
-            Transaction compliance made simple
-          </p>
         </div>
 
         {/* Action Cards */}
@@ -362,7 +359,7 @@ function Dashboard({
               </div>
               <div className="flex-1">
                 <h2 className="text-xl font-bold text-gray-900">
-                  All Audits
+                  All audits
                 </h2>
               </div>
               <svg
