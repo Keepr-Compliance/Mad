@@ -63,6 +63,7 @@ import { ReportsIndex } from '@/app/dashboard/reports/ReportsIndex';
 import {
   REPORTS_INDEX_PANEL_ID,
   REPORTS_VIEW_COOKIE,
+  reportsViewCookie,
   resolveReportsIndexView,
 } from '@/app/dashboard/reports/reportsIndexView';
 import { REPORTS, reportHref } from '@/lib/reports/registry';
@@ -293,5 +294,13 @@ describe('T9 the gate stays in page.tsx', () => {
     const gate = src.indexOf("redirect('/dashboard?error=insufficient_permissions')");
     expect(gate).toBeGreaterThan(-1);
     expect(src.indexOf('await searchParams')).toBeGreaterThan(gate);
+  });
+});
+
+describe('T10 cookie attributes', () => {
+  it('reportsViewCookie writes name, value, path, max-age and SameSite exactly', () => {
+    expect(reportsViewCookie('list')).toBe(
+      `${REPORTS_VIEW_COOKIE}=list; path=/dashboard/reports; max-age=31536000; SameSite=Lax`,
+    );
   });
 });
