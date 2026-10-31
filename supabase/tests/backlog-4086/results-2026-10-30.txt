@@ -1,0 +1,18 @@
+# BACKLOG-4086 keepr-test controls, 2026-10-31T04:23Z, migration md5 1ba2ec14
+# ./run.sh base,m_no_admin_filter,m_select_open,m_no_seed,m_no_trigger,m_grant_insert,m_no_window_check --with-migration
+# one transaction ending in RAISE; to_regclass('public.support_sla_settings') NULL before and after
+base {
+ "fail": 0,
+ "pass": 28,
+ "reds": {},
+ "mutation": "none"
+}
+m_no_seed {"fail": 13, "pass": 15, "reds": ["S1_seed_defaults", "S2a_agent_reads_1", "S2b_marketing_reads_1", "S2c_supervisor_reads_1", "S3f_denied_updates_left_no_trace", "S3g_supervisor_updates_1", "S3h_trigger_sets_audit_columns", "S4a_end_le_start", "S4b_target_zero", "S4c_days_zero", "S4e_weekday_7", "S4f_no_weekdays", "S5a_applied_twice_one_row"], "mutation": "MUTATION APPLIED seed row deleted (1)"}
+m_no_trigger {"fail": 2, "pass": 26, "reds": ["S3h_trigger_sets_audit_columns", "S5a_applied_twice_one_row"], "mutation": "MUTATION APPLIED trigger dropped"}
+m_select_open {"fail": 1, "pass": 27, "reds": ["S2d_non_internal_reads_0"], "mutation": "MUTATION APPLIED select policy USING (true)"}
+m_grant_insert {"fail": 1, "pass": 27, "reds": ["S3e_delete_denied"], "mutation": "MUTATION APPLIED GRANT INSERT, DELETE TO authenticated"}
+m_no_admin_filter {"fail": 3, "pass": 25, "reds": ["S3a_agent_updates_0", "S3b_marketing_updates_0", "S3f_denied_updates_left_no_trace"], "mutation": "MUTATION APPLIED update policy without support.admin [support_sla_settings_select_internal:(EXISTS ( SELECT 1\n   FROM internal_roles ir\n  WHERE (ir.user_id = ( SELECT auth.uid() AS uid))))| ; support_sla_settings_u]"}
+m_no_window_check {"fail": 1, "pass": 27, "reds": ["S4a_end_le_start"], "mutation": "MUTATION APPLIED window CHECK dropped"}
+# m_grant_insert: INSERT stays denied with the grant (no INSERT policy, RLS 42501); DELETE goes ok:0 -> S3e_delete_denied red.
+# migration mutant, applied twice WITHOUT the two DROP POLICY IF EXISTS lines (MUTATION APPLIED: removed 2 lines):
+#   ERROR 42710: policy "support_sla_settings_select_internal" for table "support_sla_settings" already exists (S5a red: apply-twice fails)
