@@ -1,0 +1,94 @@
+/**
+ * The Dashboard's two panel reads — BACKLOG-3965 PR-4b.
+ *
+ * Recent  = `transactions:get-recently-opened` (PR-2) through
+ *           transactionOpenService.getRecentlyOpened.
+ * Todo    = `checklists:list-open-required` (PR-3) through
+ *           checklistService.listOpenRequired.
+ * Both services never throw; a failure comes back as `success: false`.
+ *
+ * Both are read again when the Transactions view closes (the Dashboard stays
+ * mounted under it). Todo is read only when the plan
+ * gate answered "allowed".
+ */
+import { useCallback, useEffect, useRef, useState } from "react";
+import { transactionOpenService } from "../../../services/transactionOpenService";
+import { checklistService } from "../../../services/checklistService";
+import { subscribeTransactionsViewClosed } from "../../../appCore/openTransactionRequest";
+import type { RecentlyOpenedTransaction } from "../../../../electron/types/transactionOpen";
+import type { OpenRequiredChecklistItems } from "../../../../electron/types/checklistTodo";
+
+/** How many recently opened deals the panel shows (UI rule: lists of 3-5). */
+export const RECENT_LIMIT = 5;
+/** How many Todo rows are read; "Show more" expands within these. */
+export const TODO_READ_LIMIT = 50;
+
+/**
+ * Main's refusal when the plan does not carry checklists
+ * (CHECKLISTS_NOT_ALLOWED_ERROR, electron/handlers/checklistHandlers.ts).
+ * Copied, not imported: the renderer may not value-import main-process code.
+ * A parity test reads the handler source and pins the two together.
+ */
+export const CHECKLISTS_NOT_ALLOWED_MESSAGE = "Transaction checklists are not available.";
+
+export type RecentState =
+  | { status: "loading" }
+  | { status: "ready"; rows: RecentlyOpenedTransaction[] }
+  | { status: "error" };
+
+export type TodoState =
+  | { status: "off" }
+  | { status: "loading" }
+  | { status: "ready"; data: OpenRequiredChecklistItems }
+  /** Main said the plan does not include checklists. */
+  | { status: "not-on-plan" }
+  /** The read failed for any other reason. */
+  | { status: "error" };
+
+export interface DashboardPanels {
+  recent: RecentState;
+  todo: TodoState;
+  reload: () => void;
+}
+
+export function useDashboardPanels(
+  userId: string | undefined,
+  todoEnabled: boolean,
+): DashboardPanels {
+  const [recent, setRecent] = useState<RecentState>({ status: "loading" });
+  const [todo, setTodo] = useState<TodoState>({ status: todoEnabled ? "loading" : "off" });
+  const [reloadKey, setReloadKey] = useState(0);
+  const readId = useRef(0);
+
+  const reload = useCallback(() => setReloadKey((k) => k + 1), []);
+
+  useEffect(() => subscribeTransactionsViewClosed(reload), [reload]);
+
+  useEffect(() => {
+    if (!userId) return;
+    const id = ++readId.current;
+    const current = () => readId.current === id;
+
+    void transactionOpenService.getRecentlyOpened(userId, RECENT_LIMIT).then((result) => {
+      if (!current()) return;
+      setRecent(result.success && result.data ? { status: "ready", rows: result.data } : { status: "error" });
+    });
+
+    if (!todoEnabled) {
+      setTodo({ status: "off" });
+      return;
+    }
+    void checklistService.listOpenRequired(userId, TODO_READ_LIMIT).then((result) => {
+      if (!current()) return;
+      if (result.success && result.data) {
+        setTodo({ status: "ready", data: result.data });
+      } else if (result.error === CHECKLISTS_NOT_ALLOWED_MESSAGE) {
+        setTodo({ status: "not-on-plan" });
+      } else {
+        setTodo({ status: "error" });
+      }
+    });
+  }, [userId, todoEnabled, reloadKey]);
+
+  return { recent, todo, reload };
+}

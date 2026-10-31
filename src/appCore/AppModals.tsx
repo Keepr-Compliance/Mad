@@ -20,6 +20,7 @@ import { useExtensionFolderRefresh } from "../hooks/useExtensionFolderRefresh";
 import { useSubmissionStatusNotice } from "./hooks/useSubmissionStatusNotice";
 import {
   clearOpenTransactionRequest,
+  notifyTransactionsViewClosed,
   requestOpenTransaction,
   useOpenTransactionRequest,
 } from "./openTransactionRequest";
@@ -110,6 +111,7 @@ export function AppModals({ app }: AppModalsProps) {
               setAuditCreatedTransaction(null);
               clearOpenTransactionRequest();
               closeTransactions();
+              notifyTransactionsViewClosed();
             }}
             initialTransaction={auditCreatedTransaction}
             initialTransactionId={openRequest?.id ?? null}
