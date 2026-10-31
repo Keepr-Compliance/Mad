@@ -158,7 +158,7 @@ describe('saved views', () => {
     expect(container.querySelector('[data-card-value="v-unique-folder"]')?.textContent).toBe('2');
   });
 
-  it('saving without touching Column saves count of Exports with only the four filter keys', async () => {
+  it('saving without touching Column saves count of Exports with only the four filter keys and the period', async () => {
     const api = fakeApi([]);
     mount(api);
     pick('Format', 'PDF');
@@ -172,7 +172,7 @@ describe('saved views', () => {
     expect(api.save.mock.calls[0][0]).toEqual({
       reportKey: 'exports',
       name: 'PDF',
-      filters: { orgs: [], users: [], formats: ['pdf'], search: '' },
+      filters: { orgs: [], users: [], formats: ['pdf'], search: '', period: { key: 'custom', from: '2026-10-12', to: '2026-10-18' } },
       metric: { col: 'exports', fn: 'count' },
       pinned: true,
     });
