@@ -61,7 +61,7 @@ describe("C17f — queue already complete (floor dropped / resume) -> effect pat
       contacts: { syncExternal: jest.fn().mockResolvedValue({ success: true }) },
     };
     const initial: OnboardingState = {
-      status: "onboarding", step: "email-connect", user: USER,
+      status: "onboarding", database: "initialized", step: "email-connect", user: USER,
       platform: { isMacOS: false, isWindows: true, hasIPhone: false },
       completedSteps: ["phone-type", "email-connect"], fda: "not-applicable",
       hasEmailConnected: true, selectedPhoneType: "android",

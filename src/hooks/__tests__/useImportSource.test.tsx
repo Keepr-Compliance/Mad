@@ -105,6 +105,7 @@ const USER_ID = "test-user";
 
 const onboardingPhoneTypeMac: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "phone-type",
   user: { id: USER_ID, email: "test@example.com" },
   platform: { isMacOS: true, isWindows: false, hasIPhone: false },

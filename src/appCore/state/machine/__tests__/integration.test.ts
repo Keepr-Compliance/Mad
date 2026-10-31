@@ -364,6 +364,7 @@ describe("AppState Integration Tests", () => {
         recoverable: true,
         previousState: {
           status: "loading",
+          database: "unknown",
           phase: "initializing-db",
         },
       };
@@ -409,6 +410,7 @@ describe("AppState Integration Tests", () => {
         recoverable: true,
         previousState: {
           status: "loading",
+          database: "unknown",
           phase: "initializing-db",
         },
       };
@@ -490,6 +492,7 @@ describe("AppState Integration Tests", () => {
       // Start with a ready state
       const readyState: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: testFixtures.users.basic,
         platform: testFixtures.platforms.macOS,
         userData: testFixtures.userData.completedMacOS,
@@ -532,6 +535,7 @@ describe("AppState Integration Tests", () => {
     it("clears user data on logout", async () => {
       const readyState: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: testFixtures.users.returning,
         platform: testFixtures.platforms.macOS,
         userData: testFixtures.userData.completedMacOS,
@@ -686,6 +690,7 @@ describe("AppState Integration Tests", () => {
       // Use initialState to start in loading without triggering orchestrator effects
       const loadingState: AppState = {
         status: "loading",
+        database: "unknown",
         phase: "checking-storage",
       };
 
@@ -711,6 +716,7 @@ describe("AppState Integration Tests", () => {
     it("isReady is true only when ready", async () => {
       const readyState: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: testFixtures.users.basic,
         platform: testFixtures.platforms.macOS,
         userData: testFixtures.userData.completedMacOS,
@@ -732,6 +738,7 @@ describe("AppState Integration Tests", () => {
       // Start in loading state without orchestrator
       const loadingState: AppState = {
         status: "loading",
+        database: "unknown",
         phase: "checking-storage",
       };
 
@@ -770,6 +777,7 @@ describe("AppState Integration Tests", () => {
     it("loadingPhase tracks current phase during loading", async () => {
       const loadingState: AppState = {
         status: "loading",
+        database: "unknown",
         phase: "initializing-db",
       };
 
@@ -834,6 +842,7 @@ describe("AppState Integration Tests", () => {
     it("ignores invalid transitions gracefully", async () => {
       const readyState: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: testFixtures.users.basic,
         platform: testFixtures.platforms.macOS,
         userData: testFixtures.userData.completedMacOS,
@@ -902,6 +911,7 @@ describe("AppState Integration Tests", () => {
     it("APP_READY action is no-op when already ready", () => {
       const readyState: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: testFixtures.users.basic,
         platform: testFixtures.platforms.macOS,
         userData: testFixtures.userData.completedMacOS,
