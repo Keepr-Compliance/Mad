@@ -95,4 +95,14 @@ describe('Plans page Free trial card', () => {
   it('(d) no audit row gives lastChange null', async () => {
     expect((await render())?.lastChange).toBeNull();
   });
+  it('a failed audit read tells the card the history is unavailable, and still passes the setting', async () => {
+    state.logs = { data: null, error: { code: 'XX000', message: 'raw' } };
+    const p = await render();
+    expect(p?.historyUnavailable).toBe(true);
+    expect(p?.lastChange).toBeNull();
+    expect(p?.setting).toEqual(PRESENT_OFF);
+  });
+  it('a good audit read does not flag the history', async () => {
+    expect((await render())?.historyUnavailable).toBe(false);
+  });
 });

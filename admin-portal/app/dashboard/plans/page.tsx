@@ -90,7 +90,7 @@ export default async function PlansPage() {
   // both; can_edit (billing.pricebook, Super Admin) decides whether the card offers Edit.
   const { data: trialData, error: trialError } = await supabase.rpc('admin_get_solo_trial_setting');
   const trialSetting = trialError || !trialData ? null : (trialData as SoloTrialSetting);
-  const { data: trialLog } = await supabase.rpc('admin_get_audit_logs', {
+  const { data: trialLog, error: trialLogError } = await supabase.rpc('admin_get_audit_logs', {
     p_limit: 1,
     p_offset: 0,
     p_action: TRIAL_AUDIT_ACTION,
@@ -108,6 +108,7 @@ export default async function PlansPage() {
         setting={trialSetting}
         lastChange={lastTrialChange}
         canEdit={trialSetting?.can_edit === true}
+        historyUnavailable={!!trialLogError}
       />
     </div>
   );

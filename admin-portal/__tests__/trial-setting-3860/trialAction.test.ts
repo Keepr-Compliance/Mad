@@ -5,8 +5,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const calls: Array<{ fn: string; args: Record<string, unknown> }> = [];
-const state: { canEdit: boolean; user: { id: string } | null; setReply: { data: unknown; error: unknown } } = {
-  canEdit: true, user: { id: 'u1' }, setReply: { data: { enabled: true, days: 14 }, error: null },
+const state: { permError: unknown; canEdit: boolean; user: { id: string } | null; setReply: { data: unknown; error: unknown } } = {
+  permError: null, canEdit: true, user: { id: 'u1' }, setReply: { data: { enabled: true, days: 14 }, error: null },
 };
 
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
@@ -17,6 +17,7 @@ vi.mock('@/lib/supabase/server', () => ({
       rpc: async (fn: string, args: Record<string, unknown>) => {
         calls.push({ fn, args });
         if (fn === 'has_permission') {
+          if (state.permError) return { data: null, error: state.permError };
           return { data: args.required_permission === 'billing.pricebook' ? state.canEdit : false, error: null };
         }
         if (fn === 'admin_set_solo_trial_setting') return state.setReply;
@@ -31,6 +32,7 @@ const writes = () => calls.filter((c) => c.fn === 'admin_set_solo_trial_setting'
 describe('setSoloTrialAction', () => {
   beforeEach(() => {
     calls.length = 0;
+    state.permError = null;
     state.canEdit = true;
     state.user = { id: 'u1' };
     state.setReply = { data: { enabled: true, days: 14 }, error: null };
@@ -43,6 +45,14 @@ describe('setSoloTrialAction', () => {
     expect(res).toEqual({ ok: false, error: 'Only a Super Admin can change the free trial.' });
     expect(writes()).toHaveLength(0);
     expect(calls.find((c) => c.fn === 'has_permission')?.args).toEqual({ check_user_id: 'u1', required_permission: 'billing.pricebook' });
+  });
+
+  it('(a) refuses and makes no write when the permission check itself fails', async () => {
+    state.permError = { code: 'XX000', message: 'raw' };
+    state.canEdit = true;
+    const { setSoloTrialAction } = await import('@/lib/actions/trialSetting');
+    expect(await setSoloTrialAction(true, '14')).toEqual({ ok: false, error: 'Only a Super Admin can change the free trial.' });
+    expect(writes()).toHaveLength(0);
   });
 
   it('(a) refuses a signed-out caller and makes no call', async () => {

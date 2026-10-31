@@ -53,4 +53,11 @@ describe('FreeTrialCard', () => {
       'A change applies to new trials only; running trials keep their end date.'
     );
   });
+
+  it('shows the could-not-be-loaded line, not "No changes recorded", when the history read failed', () => {
+    const h = html({ setting: PRESENT_OFF, lastChange: null, canEdit: false, historyUnavailable: true });
+    expect(h).toContain('The change history could not be loaded.');
+    expect(h).not.toContain('No changes recorded.');
+    expect(stateText(h)).toBe('Off');
+  });
 });

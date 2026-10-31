@@ -46,9 +46,11 @@ export interface FreeTrialCardProps {
   setting: SoloTrialSetting | null;
   lastChange: SoloTrialAuditEntry | null;
   canEdit: boolean;
+  /** true when the audit-log read failed, so the history line must not claim there are no changes. */
+  historyUnavailable?: boolean;
 }
 
-export function FreeTrialCard({ setting, lastChange, canEdit }: FreeTrialCardProps) {
+export function FreeTrialCard({ setting, lastChange, canEdit, historyUnavailable }: FreeTrialCardProps) {
   const [open, setOpen] = useState(false);
   const changeLabel = lastChange ? trialChangeLabel(lastChange.metadata) : null;
 
@@ -75,7 +77,11 @@ export function FreeTrialCard({ setting, lastChange, canEdit }: FreeTrialCardPro
             The free trial setting could not be loaded.
           </p>
         )}
-        {lastChange ? (
+        {historyUnavailable ? (
+          <p className="text-destructive" data-testid="free-trial-last-change">
+            The change history could not be loaded.
+          </p>
+        ) : lastChange ? (
           <p className="text-muted-foreground" data-testid="free-trial-last-change">
             Last changed by {auditActorLabel(lastChange)} on {formatDate(lastChange.created_at)}
             {changeLabel ? ` (${changeLabel})` : ''}
