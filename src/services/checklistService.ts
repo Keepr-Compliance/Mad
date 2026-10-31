@@ -221,6 +221,36 @@ export const checklistService = {
     }
   },
 
+  /**
+   * BACKLOG-3968 PR-4b: attach one or more texts (`messages.id`, as the paged
+   * text reader projects them) to an item as ONE group. Never throws. Main
+   * checks each text is on the item's deal and the deal owner's, refuses a
+   * locked deal (`dealLocked`, passed through), and never asks the
+   * outside-the-dates question about a text. Removing a text group is
+   * `removeLink`, as for every kind. No caller until the picker's Texts tab
+   * (U2).
+   */
+  async linkText(
+    itemId: string,
+    messageIds: string | readonly string[],
+  ): Promise<ApiResult<AddChecklistLinkResult> & { dealLocked?: string }> {
+    try {
+      const targetIds = typeof messageIds === "string" ? [messageIds] : [...messageIds];
+      const result = await window.api.checklists.addLink({ itemId, kind: "text", targetIds });
+      if (result.success && result.result) {
+        return { success: true, data: result.result };
+      }
+      // A locked deal's refusal carries its reason (`dealLockState.ts`); the
+      // bridge type does not declare it, so it is read defensively.
+      const dealLocked = (result as { dealLocked?: unknown }).dealLocked;
+      return typeof dealLocked === "string"
+        ? { success: false, error: result.error, dealLocked }
+        : { success: false, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
   /** BACKLOG-3764: "Include it" for an existing group, from the submit pre-flight. */
   async includeLinkOutsideDates(transactionId: string, linkId: string): Promise<ApiResult<boolean>> {
     try {
