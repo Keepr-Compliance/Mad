@@ -69,28 +69,34 @@ export function useDashboardPanels(
   const [reloadKey, setReloadKey] = useState(0);
   const [tickingItemId, setTickingItemId] = useState<string | null>(null);
   const [tickError, setTickError] = useState<TickError | null>(null);
-  const readId = useRef(0);
+  const todoReadId = useRef(0);
 
   const reload = useCallback(() => setReloadKey((k) => k + 1), []);
 
   useEffect(() => subscribeTransactionsViewClosed(reload), [reload]);
 
+  // Recent does not wait for the plan gate: it is read once per mount and
+  // per reload, whatever the gate answers.
+  const recentReadId = useRef(0);
   useEffect(() => {
     if (!userId) return;
-    const id = ++readId.current;
-    const current = () => readId.current === id;
-
+    const id = ++recentReadId.current;
     void transactionOpenService.getRecentlyOpened(userId, RECENT_LIMIT).then((result) => {
-      if (!current()) return;
+      if (recentReadId.current !== id) return;
       setRecent(result.success && result.data ? { status: "ready", rows: result.data } : { status: "error" });
     });
+  }, [userId, reloadKey]);
 
-    if (!todoEnabled) {
+  useEffect(() => {
+    const id = ++todoReadId.current;
+    if (!userId || !todoEnabled) {
       setTodo({ status: "off" });
       return;
     }
+    // Keep the last answer on screen during a re-read; only a first read shows "loading".
+    setTodo((prev) => (prev.status === "off" ? { status: "loading" } : prev));
     void checklistService.listOpenRequired(userId, TODO_READ_LIMIT).then((result) => {
-      if (!current()) return;
+      if (todoReadId.current !== id) return;
       if (result.success && result.data) {
         setTodo({ status: "ready", data: result.data });
       } else if (result.error === CHECKLISTS_NOT_ALLOWED_MESSAGE) {
