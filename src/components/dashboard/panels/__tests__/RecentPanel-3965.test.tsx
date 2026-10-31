@@ -20,11 +20,10 @@ const row = (over: Partial<RecentlyOpenedTransaction>): RecentlyOpenedTransactio
   ...over,
 });
 
-function renderRecent(rows: RecentlyOpenedTransaction[], showProgress = true, onOpen = jest.fn()) {
+function renderRecent(rows: RecentlyOpenedTransaction[], onOpen = jest.fn()) {
   render(
     <RecentPanel
       state={{ status: "ready", rows }}
-      showProgress={showProgress}
       onOpenTransaction={onOpen}
       onViewAll={jest.fn()}
       now={NOW}
@@ -59,19 +58,13 @@ describe("RecentPanel", () => {
     expect(screen.getByText("No required items · 2h ago")).toBeInTheDocument();
   });
 
-  it("without checklists on the plan: no ring, no counts", () => {
-    renderRecent([row({})], false);
-    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
-    expect(screen.getByText("2h ago")).toBeInTheDocument();
-  });
-
   it("empty and failed reads say different things", () => {
     const { unmount } = render(
-      <RecentPanel state={{ status: "ready", rows: [] }} showProgress onOpenTransaction={jest.fn()} onViewAll={jest.fn()} />,
+      <RecentPanel state={{ status: "ready", rows: [] }} onOpenTransaction={jest.fn()} onViewAll={jest.fn()} />,
     );
     expect(screen.getByText("Deals you open show here.")).toBeInTheDocument();
     unmount();
-    render(<RecentPanel state={{ status: "error" }} showProgress onOpenTransaction={jest.fn()} onViewAll={jest.fn()} />);
+    render(<RecentPanel state={{ status: "error" }} onOpenTransaction={jest.fn()} onViewAll={jest.fn()} />);
     expect(screen.getByText("Couldn't load recent deals.")).toBeInTheDocument();
     expect(screen.queryByText("Deals you open show here.")).not.toBeInTheDocument();
   });
@@ -80,7 +73,6 @@ describe("RecentPanel", () => {
     render(
       <RecentPanel
         state={{ status: "ready", rows: [row({})] }}
-        showProgress
         disabled
         onOpenTransaction={jest.fn()}
         onViewAll={jest.fn()}

@@ -14,8 +14,6 @@ import { PanelCard, PanelMessage } from "./PanelCard";
 
 export interface RecentPanelProps {
   state: RecentState;
-  /** The plan includes checklists: show the ring and "N of M". */
-  showProgress: boolean;
   /** Rows and the link are disabled while a sync runs. */
   disabled?: boolean;
   onOpenTransaction: (transactionId: string) => void;
@@ -26,7 +24,6 @@ export interface RecentPanelProps {
 
 export function RecentPanel({
   state,
-  showProgress,
   disabled = false,
   onOpenTransaction,
   onViewAll,
@@ -56,9 +53,11 @@ export function RecentPanel({
         <ul className="divide-y divide-gray-100">
           {state.rows.map((row) => {
             const ago = openedAgo(row.openedAt, at);
-            const detail = showProgress
-              ? [requiredProgressText(row.requiredDone, row.requiredTotal), ago].filter(Boolean).join(" · ")
-              : ago;
+            // BACKLOG-3966 U1: every plan shows the ring (My items count on
+            // every plan), so the old showProgress switch is gone.
+            const detail = [requiredProgressText(row.requiredDone, row.requiredTotal), ago]
+              .filter(Boolean)
+              .join(" · ");
             return (
               <li key={row.transactionId}>
                 <button
@@ -68,7 +67,7 @@ export function RecentPanel({
                   data-testid="dashboard-recent-row"
                   className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 min-w-0 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {showProgress && <ProgressRing done={row.requiredDone} total={row.requiredTotal} />}
+                  <ProgressRing done={row.requiredDone} total={row.requiredTotal} />
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm font-semibold text-gray-900 truncate">
                       {row.propertyAddress || "No address"}
