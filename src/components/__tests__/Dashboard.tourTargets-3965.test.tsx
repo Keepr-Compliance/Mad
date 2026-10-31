@@ -5,6 +5,9 @@
  *     The tour steps come from the real getDashboardTourSteps with every flag
  *     on, so a tile rebuilt without its data-tour breaks this test, not the
  *     tour in the field.
+ * C4: no Dashboard-owned element keeps a gradient or a per-tile colour
+ *     (blue/indigo/purple/green/teal/pink); the sync status subtree is out of
+ *     scope (SR ruling: SyncStatusIndicator waits for the S8 sweep).
  * C7: the "N new" badge on New Transaction shows only with the AI add-on and
  *     a pending count, and no "Suggested" region renders in any state.
  */
@@ -128,5 +131,38 @@ describe('"N new" badge on New Transaction (BACKLOG-3965 C7)', () => {
     mockPendingCount = count;
     render(<Dashboard {...baseProps} />);
     expect(screen.queryByText(/suggested/i)).toBeNull();
+  });
+});
+
+describe("Dashboard tiles on kit tokens (BACKLOG-3965 C4)", () => {
+  const OFF_TOKEN =
+    /(?:^|:)(?:bg-gradient-|from-|via-|to-)|(?:^|[:-])(?:blue|indigo|purple|green|teal|pink)-\d/;
+
+  function offTokenClasses(root: HTMLElement): string[] {
+    const found: string[] = [];
+    const visit = (el: Element) => {
+      if (el.getAttribute("data-tour") === "sync-status") return; // S8 sweep
+      el.classList.forEach((c) => {
+        if (OFF_TOKEN.test(c)) found.push(c);
+      });
+      Array.from(el.children).forEach(visit);
+    };
+    visit(root);
+    return found;
+  }
+
+  it.each([
+    ["idle, no pending", false, 0],
+    ["pending transactions (highlighted tile + badge)", false, 3],
+    ["sync running (disabled tiles)", true, 0],
+  ])("%s: no gradient or per-tile colour class", (_label, syncing, count) => {
+    mockSyncing = syncing;
+    mockPendingCount = count;
+    const { container } = render(
+      <Dashboard {...baseProps} onSyncPhone={jest.fn()} onSyncAndroid={jest.fn()} />,
+    );
+    // The tiles rendered, so an empty result is about them, not an empty page.
+    expect(screen.getAllByRole("button").length).toBeGreaterThanOrEqual(5);
+    expect(offTokenClasses(container)).toEqual([]);
   });
 });

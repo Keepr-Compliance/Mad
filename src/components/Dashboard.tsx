@@ -215,7 +215,7 @@ function Dashboard({
   }, [runTour, onTourStateChange]);
 
   return (
-    <div className="min-h-full bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center p-4 sm:p-8">
+    <div className="min-h-full bg-gray-50 flex items-center justify-center p-4 sm:p-8">
       {/* Onboarding Tour */}
       {/* BACKLOG-3674: the tooltip carries the "Don't show this again" box. */}
       <TourTooltipContext.Provider value={tourTooltipContext}>
@@ -232,7 +232,7 @@ function Dashboard({
           tooltipComponent={TourTooltip}
         />
       </TourTooltipContext.Provider>
-      <div className="max-w-5xl w-full">
+      <div className="max-w-4xl w-full">
         {/* Continue Setup Banner */}
         {showSetupPrompt && onContinueSetup && (
           <AlertBanner
@@ -280,22 +280,20 @@ function Dashboard({
         </div>
 
         {/* Header */}
-        <div className="text-center mb-8 sm:mb-12">
-          <h1 className="text-2xl sm:text-4xl font-bold text-gray-900 mb-2 sm:mb-3">
+        <div className="text-center mb-6">
+          <h1 className="text-2xl font-bold text-gray-900">
             {greeting}
           </h1>
         </div>
 
         {/* Action Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <DashboardActionCard
             title="New Transaction"
             titleClassName="whitespace-nowrap"
             onClick={handleStartNewAuditClick}
             disabled={isAnySyncing}
             icon={<CheckCircleIcon />}
-            iconGradient="bg-gradient-to-br from-blue-500 to-purple-600"
-            accentColor={pendingCount > 0 ? "indigo" : "blue"}
             highlighted={pendingCount > 0}
             dataTour="new-audit-card"
             dataTestId="nav-new-audit"
@@ -303,7 +301,7 @@ function Dashboard({
             {/* Pending count badge - AI add-on only */}
             <FeatureGate requires="ai_addon">
               {pendingCount > 0 && (
-                <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-sm font-semibold bg-indigo-100 text-indigo-800 animate-pulse">
+                <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800 animate-pulse">
                   {pendingCount} new
                 </span>
               )}
@@ -315,23 +313,19 @@ function Dashboard({
             onClick={onViewTransactions}
             disabled={isAnySyncing}
             icon={<DocumentIcon />}
-            iconGradient="bg-gradient-to-br from-green-500 to-teal-600"
-            accentColor="green"
             dataTour="transactions-card"
             dataTestId="nav-transactions"
           />
         </div>
 
         {/* Secondary Actions Row */}
-        <div className={`mt-4 sm:mt-8 grid gap-4 ${onSyncPhone || onSyncAndroid ? 'sm:grid-cols-2' : 'grid-cols-1'}`}>
+        <div className={`mt-4 grid gap-3 ${onSyncPhone || onSyncAndroid ? 'sm:grid-cols-2' : 'grid-cols-1'}`}>
           <DashboardActionCard
             variant="secondary"
             title="Clients & Contacts"
             onClick={onManageContacts}
             disabled={isAnySyncing}
             icon={<PeopleIcon />}
-            iconGradient="bg-gradient-to-br from-purple-500 to-pink-600"
-            accentColor="purple"
             dataTour="contacts-card"
             dataTestId="nav-clients-contacts"
           />
@@ -345,8 +339,6 @@ function Dashboard({
               onClick={onSyncPhone}
               disabled={isAnySyncing}
               icon={<PhoneIcon />}
-              iconGradient="bg-gradient-to-br from-indigo-500 to-blue-600"
-              accentColor="indigo"
               dataTour="sync-phone-card"
             />
           )}
@@ -361,8 +353,6 @@ function Dashboard({
               onClick={onSyncAndroid}
               disabled={isAnySyncing}
               icon={<PhoneIcon />}
-              iconGradient="bg-gradient-to-br from-indigo-500 to-blue-600"
-              accentColor="indigo"
               dataTestId="sync-android-card"
             />
           )}
