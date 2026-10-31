@@ -157,6 +157,7 @@ export async function ocrAttachmentText(
 
   /** The single write path. Returns the outcome to report. */
   const write = (text: string, metadata: OcrMetadata, outcome: OcrOutcome): OcrOutcome => {
+    if (isStopped()) return "stopped"; // quit has started: no write after it
     const changes = databaseService.compareAndSetAttachmentOcrResult(
       id,
       text,
