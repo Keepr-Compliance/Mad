@@ -11,7 +11,9 @@
  * Wrong builds this suite catches:
  *   - the handler binding the lock map's KEYS instead of the derived locked
  *     list -> every deal drops -> "lists open deals, leaves out locked" red.
- *   - the gate dropped -> "plan does not include checklists" red.
+ *   - BACKLOG-3966: the plan rule is per checklist. Template items listed on
+ *     a plan without checklists, or the agent's own items left out there, or
+ *     the read refused outright -> "plan does not include checklists" red.
  *   - a second write path, or the tick channel not refusing a locked deal ->
  *     "ticking ... through set-item-checked" red.
  */
@@ -111,7 +113,8 @@ jest.mock("../../services/checklistTemplateService", () => ({
   default: { listTemplates: jest.fn(), invalidate: jest.fn() },
 }));
 
-import { CHECKLISTS_NOT_ALLOWED_ERROR, registerChecklistHandlers } from "../checklistHandlers";
+import { registerChecklistHandlers } from "../checklistHandlers";
+import { MY_ITEMS_TEMPLATE_ID } from "../../services/db/checklistPrivacy";
 
 const SCHEMA_PATH = path.join(__dirname, "..", "..", "database", "schema.sql");
 const USER = randomUUID();
@@ -194,10 +197,32 @@ describe("BACKLOG-3965 checklists:list-open-required", () => {
     }
   });
 
-  it("refuses when the plan does not include checklists, and reads nothing", async () => {
+  it("BACKLOG-3966: on a plan without checklists, answers with the agent's own items only", async () => {
+    // One of the agent's own items on the first open deal, through the writer.
+    const added = await invoke("checklists:add-my-item", {
+      transactionId: openDeals[0],
+      title: "Call the lender",
+    });
+    expect(added.result.status).toBe("added");
+    const mine = added.result.itemId;
+    expect(
+      mockDb!
+        .prepare("SELECT c.template_id FROM transaction_checklist_items i JOIN transaction_checklists c ON c.id = i.checklist_id WHERE i.id = ?")
+        .get(mine),
+    ).toEqual({ template_id: MY_ITEMS_TEMPLATE_ID });
+
     mockGate.mockImplementation(() => Promise.resolve(false));
     const res = await invoke("checklists:list-open-required", { userId: USER });
-    expect(res).toEqual({ success: false, error: CHECKLISTS_NOT_ALLOWED_ERROR });
+    expect(res.success).toBe(true);
+    // Every template item (one on each open deal) is left out; the private one stays.
+    expect(res.result.items.map((i: any) => i.itemId)).toEqual([mine]);
+    expect(res.result.totalCount).toBe(1);
+
+    // The same read with the plan allowed lists both kinds.
+    mockGate.mockImplementation(() => Promise.resolve(true));
+    const all = await invoke("checklists:list-open-required", { userId: USER });
+    expect(all.result.totalCount).toBe(OPEN.length + 1);
+    expect(all.result.items.map((i: any) => i.itemId)).toContain(mine);
   });
 
   it("a payload without a user id is refused, not read", async () => {
