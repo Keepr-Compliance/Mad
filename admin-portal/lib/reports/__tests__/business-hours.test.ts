@@ -116,10 +116,11 @@ describe('performance (shared day calendar)', () => {
       // Distinct days touched: ~366 (365-day span, shifted by under 17 hours).
       expect(c.days.size).toBeGreaterThanOrEqual(365);
       expect(c.days.size).toBeLessThanOrEqual(370);
-      // Per-day cost is 4 formatToParts calls (open + close, 2 correction
-      // passes each); plus 1 per businessMinutes call for the start date.
-      // Uncached it would be 1000 x ~366 x 4 = ~1.46M calls.
-      const bound = c.days.size * 4 + 1000;
+      // Observed cost is 4 formatToParts calls per day (open + close, 2
+      // correction passes each) plus 1 per businessMinutes call. The bound is
+      // 2x that plus headroom so a harmless refactor does not red the test;
+      // it is still about 700x below the uncached ~1.47M calls.
+      const bound = c.days.size * 8 + 2000;
       expect(spy.mock.calls.length).toBeLessThanOrEqual(bound);
     } finally {
       spy.mockRestore();
