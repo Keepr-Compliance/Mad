@@ -8,7 +8,8 @@
           "templateId": "tpl-probe",
           "templateName": "Probe template",
           "sortOrder": 0,
-          "selectedAt": "2026-03-10T12:00:00.000Z"
+          "selectedAt": "2026-03-10T12:00:00.000Z",
+          "isPrivate": false
         },
         "items": [
           {
@@ -169,7 +170,8 @@
           "templateId": "tpl-other",
           "templateName": "Other probe template",
           "sortOrder": 1,
-          "selectedAt": "2026-03-10T12:00:00.000Z"
+          "selectedAt": "2026-03-10T12:00:00.000Z",
+          "isPrivate": false
         },
         "items": [
           {
@@ -221,7 +223,8 @@
           "templateId": "tpl-done",
           "templateName": "Done probe template",
           "sortOrder": 2,
-          "selectedAt": "2026-03-10T12:00:00.000Z"
+          "selectedAt": "2026-03-10T12:00:00.000Z",
+          "isPrivate": false
         },
         "items": [
           {

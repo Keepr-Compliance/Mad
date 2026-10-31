@@ -230,7 +230,7 @@ async function produce(): Promise<unknown> {
   await add("tpl-probe", "Probe template", TEMPLATE_ITEMS);
   await add("tpl-other", "Other probe template", OTHER_ITEMS);
   await add("tpl-done", "Done probe template", DONE_ITEMS);
-  const [first, second, third] = (await getChecklistsForTransaction("txn-1")).checklists;
+  const [first, second, third] = (await getChecklistsForTransaction("txn-1", "agent")).checklists;
   const [i1, i2, i3, i4] = first.items;
   await setChecklistItemChecked(second.items[0].id, true);
   for (const item of third.items) await setChecklistItemChecked(item.id, true);
@@ -252,7 +252,7 @@ async function produce(): Promise<unknown> {
   run(`DELETE FROM communications WHERE id IN ('cm-3', 'cm-5')`);
 
   return normalize({
-    checklists: stableEnvelope(await getChecklistsForTransaction("txn-1")),
+    checklists: stableEnvelope(await getChecklistsForTransaction("txn-1", "agent")),
     attachments: getTransactionAllAttachments("txn-1"),
     emailCommunications: await getCommunicationsWithMessages("txn-1", "email"),
   });

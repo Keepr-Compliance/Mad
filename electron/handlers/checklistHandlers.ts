@@ -493,7 +493,7 @@ export function registerChecklistHandlers(): void {
     wrapHandler(
       async (_event: IpcMainInvokeEvent, payload: unknown): Promise<GetChecklistResponse> => {
         const args = parseArgs(GetChecklistArgsSchema, payload, "payload");
-        const checklists = await getChecklistsForTransaction(args.transactionId);
+        const checklists = await getChecklistsForTransaction(args.transactionId, "agent");
         return { success: true, checklists };
       },
       { module: "Checklists" },

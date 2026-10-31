@@ -270,7 +270,7 @@ export async function snapshotSubmissionChecklists(
   let payload: SnapshotChecklistPayload[];
   const withheld: string[] = [];
   try {
-    const local = await getChecklistsForTransaction(transactionId);
+    const local = await getChecklistsForTransaction(transactionId, "broker");
     // BACKLOG-3607: a transaction with no checklist still sends [] - the
     // snapshot is the agent's whole set, and the server records a checklist
     // the agent removed since the previous version only when it is told.

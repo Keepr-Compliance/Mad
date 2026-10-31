@@ -44,6 +44,7 @@ import { randomUUID } from "crypto";
 
 import { dbAll, dbGet, dbRun, dbTransaction } from "./core/dbConnection";
 import { auditPeriodFromRow } from "../submissionAuditPeriod";
+import { isPrivateChecklist, type ChecklistAudience } from "./checklistPrivacy";
 import { auditWindowEnd } from "../exportPlan";
 import {
   attachmentLabelSql,
@@ -59,6 +60,7 @@ import {
   GET_CHECKLIST_EXPORT_ATTACHMENTS_SQL,
   GET_CHECKLIST_EXPORT_EMAIL_SUBJECTS_SQL,
   GET_CHECKLISTS_BY_TRANSACTION_SQL,
+  GET_BROKER_CHECKLISTS_BY_TRANSACTION_SQL,
   GET_ITEM_CONTEXT_SQL,
   GET_TRANSACTION_AUDIT_DATES_SQL,
   INSERT_ATTACHMENT_MEMBER_SQL,
@@ -148,6 +150,7 @@ function toChecklist(row: ChecklistRow): TransactionChecklist {
     templateName: row.template_name,
     sortOrder: row.sort_order,
     selectedAt: row.selected_at,
+    isPrivate: isPrivateChecklist(row.template_id),
   };
 }
 
@@ -381,10 +384,16 @@ function loadChecklistDetail(checklistRow: ChecklistRow): ChecklistDetail {
  */
 export function getChecklistsForTransaction(
   transactionId: string,
+  audience: ChecklistAudience,
 ): Promise<ChecklistsForTransaction> {
-  const checklists = dbAll<ChecklistRow>(GET_CHECKLISTS_BY_TRANSACTION_SQL, [transactionId]).map(
-    loadChecklistDetail,
-  );
+  // BACKLOG-3966: `audience` is required, with no default — a new caller
+  // must say which side it is on. `broker` leaves the private checklist out
+  // in SQL, so none of its items, links or members are even loaded.
+  const statement =
+    audience === "broker"
+      ? GET_BROKER_CHECKLISTS_BY_TRANSACTION_SQL
+      : GET_CHECKLISTS_BY_TRANSACTION_SQL;
+  const checklists = dbAll<ChecklistRow>(statement, [transactionId]).map(loadChecklistDetail);
   return Promise.resolve({
     checklists,
     requiredDone: checklists.reduce((sum, detail) => sum + detail.requiredDone, 0),

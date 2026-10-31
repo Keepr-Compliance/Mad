@@ -48,6 +48,7 @@ import {
   OPEN_REQUIRED_ITEMS_MAX_LIMIT,
 } from "../checklistDbService";
 import { listOpenRequiredItemsSql } from "../checklistSql";
+import { MY_ITEMS_TEMPLATE_ID } from "../checklistPrivacy";
 import { LOCKED_SUBMISSION_STATUSES } from "../../transactionEligibility";
 
 const SCHEMA = nodePath.join(__dirname, "..", "..", "..", "database", "schema.sql");
@@ -212,7 +213,7 @@ describe("BACKLOG-3965 Todo read — which items", () => {
       { id: "b4", required: false, checked: false },
     ], 1);
     const { items } = await read();
-    const deal = await getChecklistsForTransaction("d1");
+    const deal = await getChecklistsForTransaction("d1", "agent");
     expect(deal).toMatchObject({ requiredDone: 3, requiredTotal: 5 });
     expect(items.map((i) => i.itemId)).toEqual(["a2", "b3"]);
     for (const item of items) {
@@ -221,6 +222,23 @@ describe("BACKLOG-3965 Todo read — which items", () => {
         deal.requiredTotal,
       ]);
     }
+  });
+
+  it("BACKLOG-3966: an unticked private item is listed, and the ring counts the private checklist", async () => {
+    seedDeal("d1");
+    seedChecklist("d1", "c1", [{ id: "a1", required: true, checked: true }], 0);
+    run(
+      `INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name, sort_order)
+       VALUES ('c-private', 'd1', ?, 'My items', 1)`,
+      MY_ITEMS_TEMPLATE_ID,
+    );
+    run(
+      `INSERT INTO transaction_checklist_items (id, checklist_id, title, is_required, is_checked, sort_order)
+       VALUES ('p1', 'c-private', 'Call the lender', 1, 0, 0)`,
+    );
+    const { items } = await read();
+    expect(items.map((i) => i.itemId)).toEqual(["p1"]);
+    expect([items[0].dealRequiredDone, items[0].dealRequiredTotal]).toEqual([1, 2]);
   });
 
   it("each row carries the deal, the checklist, the title and the Closing Date", async () => {

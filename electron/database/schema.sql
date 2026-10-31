@@ -1904,7 +1904,12 @@ CREATE INDEX IF NOT EXISTS idx_hidden_texts_txn_external
 --                                 order the user built. `template_id` is the
 --                                 source template's cloud id and is
 --                                 PROVENANCE ONLY — no read joins
---                                 through it. The titles, required flags and
+--                                 through it — with ONE reserved value:
+--                                 'keepr:my-items' marks the agent's private
+--                                 per-deal checklist (BACKLOG-3966), which
+--                                 every broker-facing reader leaves out
+--                                 (electron/services/db/checklistPrivacy.ts).
+--                                 The titles, required flags and
 --                                 document types below are COPIES, so editing
 --                                 or deleting the broker template never
 --                                 rewrites a checklist already in use.
