@@ -16,9 +16,12 @@
 import type { DocumentType } from "./models";
 
 /**
- * The kinds of evidence a link group can be MADE with (the add-link channel,
- * its Zod schema and the picker). BACKLOG-3968 PR-4a stores texts but adds no
- * writer for them yet — that is PR-4b — so 'text' is not here.
+ * The kinds of evidence the outside-the-audit-dates question is asked about
+ * (`outsideAuditDates`, `outsideAuditDatesSql`) and the attachment/email
+ * picker writes. Texts are written through the same add-link channel since
+ * BACKLOG-3968 PR-4b, but are never asked about dates — the message upload has
+ * no outside-the-dates arm — so 'text' is deliberately not here, and asking
+ * the date question about a text is a compile error.
  */
 export type ChecklistLinkWriteKind = "attachment" | "email";
 
@@ -284,13 +287,19 @@ export type ReorderMyItemsResult = { status: "reordered" } | { status: "not_the_
 
 export interface AddChecklistLinkInput {
   itemId: string;
-  kind: ChecklistLinkWriteKind;
-  /** `attachments.id` or `emails.id`, depending on `kind`. At least one. */
+  kind: ChecklistLinkKind;
+  /**
+   * `attachments.id`, `emails.id` or (BACKLOG-3968, kind `text`) `messages.id`,
+   * depending on `kind`. At least one.
+   */
   targetIds: string[];
   /**
    * BACKLOG-3764: the agent answered "Include it" to the outside-the-dates
    * question. Without it, a group with any target dated outside the deal's
    * audit dates is refused as `outside_dates` and nothing is written.
+   *
+   * BACKLOG-3968: never for a text. The IPC schema refuses it, and the writer
+   * stores 0 on every text group whatever the caller passed.
    */
   includeOutsideDates?: boolean;
 }
