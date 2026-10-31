@@ -13,6 +13,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffe
 import { logAfterNextPaint, logOpenPath, nowMs } from "../utils/openPathTiming";
 import { getRendererStallPhase, setRendererStallPhase } from "../utils/rendererStallLogger";
 import { registerOpenTransaction } from "../utils/openTransactionRegistry";
+import { transactionOpenService } from "../services/transactionOpenService";
 import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import type { Transaction } from "@/types";
 import { transactionService } from '../services';
@@ -139,6 +140,17 @@ function TransactionDetails({
   // BACKLOG-4065: support tickets carry the id of the open transaction.
   // Id only; the returned cleanup removes this mount's own entry.
   useEffect(() => registerOpenTransaction(transaction.id), [transaction.id]);
+
+  // BACKLOG-3965: record that this deal was opened (the Dashboard's Recent
+  // panel). Once per open: the ref holds the id already written, so StrictMode's
+  // second effect run writes nothing. A deal still pending review is not
+  // opened yet. The service never throws; a failed write leaves the deal open.
+  const recordedOpenIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (isPendingReview || recordedOpenIdRef.current === transaction.id) return;
+    recordedOpenIdRef.current = transaction.id;
+    void transactionOpenService.recordOpen(transaction.id);
+  }, [transaction.id, isPendingReview]);
 
   // BACKLOG-3884: open-path timing in main.log — mount -> first paint, and
   // mount -> the Overview contacts painted. A renderer stall in between is

@@ -113,6 +113,9 @@ if (typeof window !== 'undefined') {
       // BACKLOG-322: unified transaction Attachments tab query + on-demand download.
       // Default empty so the tab/hook loads cleanly in every test environment.
       getAllAttachments: jest.fn().mockResolvedValue({ success: true, data: [] }),
+      // BACKLOG-3965: TransactionDetails records each open; the Dashboard reads them.
+      recordOpen: jest.fn().mockResolvedValue({ success: true, recorded: true }),
+      getRecentlyOpened: jest.fn().mockResolvedValue({ success: true, transactions: [] }),
       ensureEmailAttachmentDownloaded: jest.fn().mockResolvedValue({ success: true, data: [] }),
       // BACKLOG-1780/1781: RemovedEmailsSection refreshKey effect — needed in all test environments.
       getRemovedEmails: jest.fn().mockResolvedValue({ success: true, removedEmails: [] }),
