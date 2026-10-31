@@ -72,7 +72,7 @@ describe('R6 Funnel: Custom range survives the URL round trip', () => {
     expect(screen.getByRole('button', { name: 'Custom range Oct 1 – Oct 20, 2026' })).toBeTruthy();
   });
 
-  it('presets navigate at once on the legacy values; 30d drops the param', () => {
+  it('presets navigate at once on the legacy values; 30d is written too (BACKLOG-4084)', () => {
     const onNavigate = vi.fn();
     render(<RoutedPage onNavigate={onNavigate} initial="7" />);
     fireEvent.click(periodPill());
@@ -82,7 +82,7 @@ describe('R6 Funnel: Custom range survives the URL round trip', () => {
 
     fireEvent.click(periodPill());
     fireEvent.click(screen.getByRole('option', { name: '30d' }));
-    expect(onNavigate).toHaveBeenLastCalledWith('?');
+    expect(onNavigate).toHaveBeenLastCalledWith('?period=30');
     expect(screen.getByRole('button', { name: 'Period 30d' })).toBeTruthy();
     expect(onNavigate).toHaveBeenCalledTimes(2);
   });

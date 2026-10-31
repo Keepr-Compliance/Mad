@@ -11,7 +11,8 @@
  *
  * The URL values are the ones the page has always used (`1`, `7`, `30`, `90`),
  * plus `all`, so old links (including those through the /dashboard/analytics
- * redirect) keep working. The default `30` is dropped from the URL.
+ * redirect) keep working. A period change always writes `period`, the default
+ * `30` included (BACKLOG-4084: a URL with no period opens the default view).
  *
  * Presets are ROLLING: `now - N x 24h`. Like the old query, the window has a
  * lower bound only (`last_seen_at >= from`); All time has none.
@@ -67,7 +68,7 @@ export function resolveAnalyticsPeriod(params: { period?: string }, now: Date): 
   };
 }
 
-/** The URL a period change navigates to: keeps other params, drops `30`, never sets from/to. */
+/** The URL a period change navigates to: keeps other params, always writes period, never sets from/to. */
 export function buildAnalyticsPeriodUrl(current: URLSearchParams | string, period: AnalyticsPeriodKey): string {
   return buildFunnelPeriodUrl(current, period);
 }

@@ -11,7 +11,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { FilterBar, FilterCaption, MultiSelect, PeriodPicker, StatCard, useSortState } from '@keepr/ui';
+import { Dropdown, FilterBar, FilterCaption, PeriodPicker, SavedViews, StatCard, useSortState } from '@keepr/ui';
 import { Search } from 'lucide-react';
 import { PERIOD_OPTIONS, type PeriodKey, type PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
@@ -33,6 +33,17 @@ import {
   type UserActivityReportModel,
   type UserActivitySortKey,
 } from '@/lib/reports/user-activity';
+import { useReportSavedViews } from '@/lib/reports/use-report-saved-views';
+import type { UserActivityViewsApi } from '@/lib/reports/user-activity-views-api';
+import {
+  serializeUserActivityView,
+  USER_ACTIVITY_REPORT_KEY,
+  USER_ACTIVITY_SAVE_HINT,
+  USER_ACTIVITY_VIEW_METRIC,
+  userActivityViewMatchesState,
+  type UserActivitySavedView,
+} from '@/lib/reports/user-activity-views';
+import { viewPeriodMatches } from '@/lib/reports/view-period';
 import { UserActivityTable } from './UserActivityTable';
 
 export const EVENTS_FAILED_TEXT =
@@ -54,6 +65,13 @@ export interface UserActivityReportProps {
   rowCap: number;
   staffExclusionIncomplete?: boolean;
   onNavigate?: (url: string) => void;
+  /**
+   * The default view the SERVER resolved for a bare URL (BACKLOG-4084), or
+   * null. Seeds the filters once; never re-applied on later renders.
+   */
+  initialView?: UserActivitySavedView | null;
+  /** Saved-view storage. Absent = saved views unavailable (fails closed). */
+  viewsApi?: UserActivityViewsApi;
 }
 
 function Banner({ testId, children }: { testId: string; children: string }) {
@@ -76,8 +94,15 @@ export function UserActivityReport({
   rowCap,
   staffExclusionIncomplete = false,
   onNavigate,
+  initialView = null,
+  viewsApi,
 }: UserActivityReportProps) {
-  const [filters, setFilters] = useState<UserActivityFilters>(EMPTY_USER_ACTIVITY_FILTERS);
+  // useState's initial value only: the default view seeds the first render and
+  // is never synced again, so a later navigation cannot re-apply it.
+  const [filters, setFilters] = useState<UserActivityFilters>(
+    () => initialView?.filters ?? EMPTY_USER_ACTIVITY_FILTERS
+  );
+  const savedViews = useReportSavedViews(viewsApi, USER_ACTIVITY_REPORT_KEY);
   const { sortKey, sortDirection, onSort } = useSortState<UserActivitySortKey>({
     initialKey: 'lastSeen',
     initialDirection: 'desc',
@@ -108,6 +133,28 @@ export function UserActivityReport({
     onNavigate?.(buildPeriodUrl(search, nextPeriod, from, to));
   }
 
+  const activeViewId = useMemo(
+    () => (savedViews.views ?? []).find((v) => userActivityViewMatchesState(v, filters, period))?.id ?? null,
+    [savedViews.views, filters, period]
+  );
+
+  /** Filters at once; the period, only if it differs, in ONE navigation. */
+  function applyView(view: UserActivitySavedView) {
+    updateFilters(view.filters);
+    if (view.period && !viewPeriodMatches(view.period, period)) {
+      navigateToPeriod(view.period.key, view.period.from, view.period.to);
+    }
+  }
+
+  function saveView(name: string) {
+    savedViews.save({
+      name,
+      filters: serializeUserActivityView(filters, period),
+      metric: USER_ACTIVITY_VIEW_METRIC,
+      pinned: false,
+    });
+  }
+
   return (
     <div className="space-y-6">
       {eventsFailed ? <Banner testId="events-failed">{EVENTS_FAILED_TEXT}</Banner> : null}
@@ -117,6 +164,20 @@ export function UserActivityReport({
       <FilterBar
         hasFilters={hasActiveUserActivityFilters(filters)}
         onClear={() => updateFilters(EMPTY_USER_ACTIVITY_FILTERS)}
+        trailing={
+          <SavedViews<UserActivitySavedView>
+            views={savedViews.views}
+            loading={savedViews.loading}
+            activeViewId={activeViewId}
+            writeError={savedViews.writeError}
+            onApply={applyView}
+            onDelete={savedViews.remove}
+            onSave={saveView}
+            saveHint={USER_ACTIVITY_SAVE_HINT}
+            defaultViewId={savedViews.defaultViewId}
+            onSetDefault={savedViews.setDefault}
+          />
+        }
       >
         <PeriodPicker<PeriodKey>
           options={PERIOD_OPTIONS}
@@ -126,11 +187,14 @@ export function UserActivityReport({
           to={period.customTo ?? undefined}
           onChange={navigateToPeriod}
         />
-        <MultiSelect
-          label="Organization"
+        <Dropdown
+          mode="multi"
+          variant="filter"
+          ariaLabel="Organization"
           options={orgOptions}
-          selected={filters.orgs}
+          value={filters.orgs}
           onChange={(orgs) => updateFilters({ ...filters, orgs })}
+          onClear={() => updateFilters({ ...filters, orgs: [] })}
         />
         <label className="inline-flex items-center gap-2 text-sm text-gray-700">
           <input
