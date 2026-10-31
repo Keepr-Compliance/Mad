@@ -5,6 +5,9 @@ import { usePendingTransactionCount } from "../hooks/usePendingTransactionCount"
 import { useSyncOrchestrator } from "../hooks/useSyncOrchestrator";
 import { SyncStatusIndicator } from "./dashboard/index";
 import { DashboardActionCard } from "./dashboard/DashboardActionCard";
+import { DashboardSecondaryRow } from "./dashboard/DashboardSecondaryRow";
+import { DashboardPanels } from "./dashboard/panels/DashboardPanels";
+import type { TransactionTab } from "./transactionDetailsModule/types";
 import StartNewAuditModal from "./StartNewAuditModal";
 import { FeatureGate } from "./common/FeatureGate";
 import { AlertBanner, AlertIcons } from "./common/AlertBanner";
@@ -34,13 +37,6 @@ const CheckCircleIcon = () => <TileIcon d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0
 const DocumentIcon = () => (
   <TileIcon d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
 );
-const PeopleIcon = () => (
-  <TileIcon d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-);
-const PhoneIcon = () => (
-  <TileIcon d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
-);
-
 interface DashboardActionProps {
   onAuditNew: () => void;
   onViewTransactions: () => void;
@@ -59,8 +55,15 @@ interface DashboardActionProps {
   onSelectPendingTransaction?: (transaction: Transaction) => void;
   /** Callback to open Settings modal. Pass a scrollTarget to scroll to a specific section. */
   onOpenSettings?: (scrollTarget?: string) => void;
-  /** Current user info for personalized greeting */
+  /**
+   * BACKLOG-3965 PR-4b: open a deal on a tab from a Recent or Todo row. The
+   * ONE helper AppRouter builds (makeOpenTransactionAt): it writes the open
+   * request and opens the Transactions view together.
+   */
+  onOpenTransaction?: (transactionId: string, tab: TransactionTab) => void;
+  /** Current user info for personalized greeting (and the panels' reads) */
   user?: {
+    id?: string;
     display_name?: string;
     email?: string;
   };
@@ -84,6 +87,7 @@ function Dashboard({
   onTriggerRefresh,
   onSelectPendingTransaction,
   onOpenSettings,
+  onOpenTransaction,
   user,
 }: DashboardActionProps) {
   // TASK-2058: Show reconnection summary when coming back online with failures
@@ -318,46 +322,23 @@ function Dashboard({
           />
         </div>
 
-        {/* Secondary Actions Row */}
-        <div className={`mt-4 grid gap-3 ${onSyncPhone || onSyncAndroid ? 'sm:grid-cols-2' : 'grid-cols-1'}`}>
-          <DashboardActionCard
-            variant="secondary"
-            title="Clients & Contacts"
-            onClick={onManageContacts}
+        {/* Small row: Clients & Contacts (+ phone sync). Placement is an ASSUMPTION, see DashboardSecondaryRow. */}
+        <DashboardSecondaryRow
+          onManageContacts={onManageContacts}
+          onSyncPhone={onSyncPhone}
+          onSyncAndroid={onSyncAndroid}
+          disabled={isAnySyncing}
+        />
+
+        {/* BACKLOG-3965 PR-4b: Recent | Todo */}
+        {user?.id && onOpenTransaction && (
+          <DashboardPanels
+            userId={user.id}
+            onOpenTransaction={onOpenTransaction}
+            onViewTransactions={onViewTransactions}
             disabled={isAnySyncing}
-            icon={<PeopleIcon />}
-            dataTour="contacts-card"
-            dataTestId="nav-clients-contacts"
           />
-
-          {/* Sync iPhone Card (Windows + iPhone users only) */}
-          {onSyncPhone && (
-            <DashboardActionCard
-              variant="secondary"
-              title="Sync iPhone Messages"
-              description="Import texts via USB cable"
-              onClick={onSyncPhone}
-              disabled={isAnySyncing}
-              icon={<PhoneIcon />}
-              dataTour="sync-phone-card"
-            />
-          )}
-
-          {/* Sync Android Card (Android companion users only) — BACKLOG-2320.
-              Mirrors the iPhone sync card; opens the guided Android wizard. */}
-          {onSyncAndroid && (
-            <DashboardActionCard
-              variant="secondary"
-              title="Sync Android Messages"
-              description="Copy texts from Google Messages"
-              onClick={onSyncAndroid}
-              disabled={isAnySyncing}
-              icon={<PhoneIcon />}
-              dataTestId="sync-android-card"
-            />
-          )}
-        </div>
-
+        )}
       </div>
 
       {/* Start New Audit Modal */}

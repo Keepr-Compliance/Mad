@@ -37,8 +37,10 @@
  * bounded by main's 5 minutes, as before. Any write in that window is still
  * refused by main.
  *
- * Only `TransactionDetails` reads this (`useSessionStrictFeatureState`). The
- * other strict consumers keep `useStrictFeatureState`, unchanged.
+ * `TransactionDetails` and the Dashboard's Recent | Todo panels
+ * (BACKLOG-3965, `dashboard/panels/DashboardPanels.tsx`) read this
+ * (`useSessionStrictFeatureState`). The other strict consumers keep
+ * `useStrictFeatureState`, unchanged.
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type {
