@@ -12,7 +12,6 @@ import path from 'path';
 import { describe, expect, it } from 'vitest';
 import { requiredPermissionsFor } from '@/lib/route-permissions';
 import { REPORTS, reportHref } from '@/lib/reports/registry';
-import { OVERVIEW_CARDS } from '@/lib/reports/overview-cards';
 
 const ROOT = path.resolve(__dirname, '../..');
 const PAGES = [
@@ -64,18 +63,19 @@ describe('C3 middleware route permissions', () => {
   });
 });
 
-describe('C5 registry holds the reports (Paywall Funnel included, BACKLOG-3722); the Analytics overview card is separate', () => {
+describe('C5 registry holds every report, Paywall Funnel (BACKLOG-3722) and Analytics (BACKLOG-3723) included', () => {
   it('report links live under /dashboard/reports', () => {
     for (const r of REPORTS) expect(reportHref(r.slug)).toBe(`/dashboard/reports/${r.slug}`);
   });
 
-  it('no registry slug collides with the analytics route; the funnel IS a registry report', () => {
-    expect(REPORTS.map((r) => r.slug)).not.toContain('analytics');
+  it('Analytics and the funnel ARE registry reports', () => {
+    expect(REPORTS.map((r) => r.slug)).toContain('analytics');
+    expect(reportHref('analytics')).toBe('/dashboard/reports/analytics');
     expect(REPORTS.map((r) => r.slug)).toContain('funnel');
     expect(reportHref('funnel')).toBe('/dashboard/reports/funnel');
   });
 
-  it('the one overview card points at the moved Analytics page', () => {
-    expect(OVERVIEW_CARDS.map((c) => c.href)).toEqual(['/dashboard/reports/analytics']);
+  it('Analytics is listed first, where its overview card was', () => {
+    expect(REPORTS[0].slug).toBe('analytics');
   });
 });

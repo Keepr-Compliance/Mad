@@ -158,8 +158,8 @@ describe('C4c hidden without analytics.view', () => {
   });
 });
 
-describe('C6 Reports page shows the Analytics card beside the reports, Paywall Funnel among them', () => {
-  it('renders the overview card and every registry report', async () => {
+describe('C6 Reports page lists every registry report, Analytics first (BACKLOG-3723), Paywall Funnel among them', () => {
+  it('renders every registry report once, in registry order', async () => {
     render(await ReportsIndexPage());
     const hrefs = allHrefs();
     expect(hrefs).toEqual([

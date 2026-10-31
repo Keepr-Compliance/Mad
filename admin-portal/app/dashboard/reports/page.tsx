@@ -3,7 +3,6 @@ import { redirect } from 'next/navigation';
 import Link from 'next/link';
 import { ChevronRight, FileBarChart2 } from 'lucide-react';
 import { REPORTS, reportHref } from '@/lib/reports/registry';
-import { OVERVIEW_CARDS } from '@/lib/reports/overview-cards';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,9 +11,8 @@ export const dynamic = 'force-dynamic';
  *
  * Lists every registered report. New reports are added to
  * `lib/reports/registry.ts`; the sidebar does not change.
- * BACKLOG-4005: Analytics shows here as a card (OVERVIEW_CARDS), ahead of the
- * registry reports, with no sidebar entry of its own. Paywall Funnel is a
- * registry report since BACKLOG-3722.
+ * Analytics (BACKLOG-3723) and Paywall Funnel (BACKLOG-3722) are registry
+ * reports; neither has a sidebar entry of its own (BACKLOG-4005).
  */
 export default async function ReportsIndexPage() {
   const { supabase, user } = await getAuthenticatedUser();
@@ -56,19 +54,6 @@ export default async function ReportsIndexPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {OVERVIEW_CARDS.map((card) => (
-          <Link
-            key={card.key}
-            href={card.href}
-            className="group rounded-lg border border-gray-200 bg-white p-6 shadow-sm transition-all hover:border-gray-300 hover:shadow-md"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <h2 className="text-lg font-semibold text-gray-900">{card.title}</h2>
-              <ChevronRight className="h-5 w-5 shrink-0 text-gray-400 group-hover:text-gray-900" />
-            </div>
-            <p className="mt-2 text-sm text-gray-600">{card.description}</p>
-          </Link>
-        ))}
         {REPORTS.map((report) => (
           <Link
             key={report.slug}
