@@ -920,7 +920,7 @@ describe("BACKLOG-3596 — the snapshot sends each item's local id", () => {
   it("an older-app payload without local_item_id is still accepted, stored as NULL", async () => {
     await seedChecklists();
     // Premise: today's builder sends a non-empty id on every item.
-    const built = buildChecklistSnapshotPayload(await getChecklistsForTransaction(TX));
+    const built = buildChecklistSnapshotPayload(await getChecklistsForTransaction(TX, "broker"));
     const builtItems = built.flatMap((c) => c.items);
     expect(builtItems).toHaveLength(4);
     for (const it of builtItems) expect(typeof it.local_item_id === "string" && it.local_item_id.length > 0).toBe(true);

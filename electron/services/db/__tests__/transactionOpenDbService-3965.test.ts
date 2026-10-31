@@ -187,7 +187,7 @@ describe("BACKLOG-3965 getRecentlyOpenedTransactions", () => {
     recordTransactionOpen("none", "2026-10-31T09:00:00.000Z");
 
     const rows = getRecentlyOpenedTransactions(USER, 5);
-    const truth = await getChecklistsForTransaction("two");
+    const truth = await getChecklistsForTransaction("two", "agent");
     expect(truth.requiredDone).toBe(3);
     expect(truth.requiredTotal).toBe(4);
     expect(rows[0]).toEqual({

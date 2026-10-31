@@ -212,7 +212,7 @@ describe("BACKLOG-3965 Todo read — which items", () => {
       { id: "b4", required: false, checked: false },
     ], 1);
     const { items } = await read();
-    const deal = await getChecklistsForTransaction("d1");
+    const deal = await getChecklistsForTransaction("d1", "agent");
     expect(deal).toMatchObject({ requiredDone: 3, requiredTotal: 5 });
     expect(items.map((i) => i.itemId)).toEqual(["a2", "b3"]);
     for (const item of items) {

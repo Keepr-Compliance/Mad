@@ -39,6 +39,7 @@
 
 import { sql } from "./core/sqlText";
 import { placeholderList } from "./core/sqlFragments";
+import { NOT_PRIVATE_CHECKLIST_SQL } from "./checklistPrivacy";
 import type { SafeSql } from "./core/sqlText";
 import type { ChecklistLinkKind } from "../../types/checklist";
 
@@ -56,6 +57,18 @@ export const GET_CHECKLISTS_BY_TRANSACTION_SQL = sql`
   FROM transaction_checklists
   WHERE transaction_id = ?
   ORDER BY sort_order, selected_at, id
+`;
+
+/**
+ * BACKLOG-3966: as {@link GET_CHECKLISTS_BY_TRANSACTION_SQL}, without the
+ * private checklist — what a broker-facing reader may see. One bound
+ * parameter: the transaction id.
+ */
+export const GET_BROKER_CHECKLISTS_BY_TRANSACTION_SQL = sql`
+  SELECT cl.id, cl.transaction_id, cl.template_id, cl.template_name, cl.sort_order, cl.selected_at
+  FROM transaction_checklists cl
+  WHERE cl.transaction_id = ? AND ${NOT_PRIVATE_CHECKLIST_SQL}
+  ORDER BY cl.sort_order, cl.selected_at, cl.id
 `;
 
 /**

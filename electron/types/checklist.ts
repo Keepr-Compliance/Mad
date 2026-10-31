@@ -22,12 +22,21 @@ export type ChecklistLinkKind = "attachment" | "email";
 export interface TransactionChecklist {
   id: string;
   transactionId: string;
-  /** The source template's cloud id. Provenance only — no read joins through it. */
+  /**
+   * The source template's cloud id — or, for the private per-deal checklist,
+   * the reserved id in `electron/services/db/checklistPrivacy.ts`
+   * (BACKLOG-3966). No read joins through it.
+   */
   templateId: string;
   templateName: string;
   /** Display position among this transaction's checklists (BACKLOG-3476). */
   sortOrder: number;
   selectedAt: string | null;
+  /**
+   * BACKLOG-3966: the agent's private checklist ("My items"). Derived in main
+   * from `templateId`; never sent to a broker-facing reader.
+   */
+  isPrivate: boolean;
 }
 
 /** One copied checklist row. */

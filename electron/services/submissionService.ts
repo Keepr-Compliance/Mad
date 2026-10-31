@@ -853,7 +853,7 @@ class SubmissionService {
     // copy does (BACKLOG-3600): nothing is sent, and the agent is told why.
     let localChecklists: Awaited<ReturnType<typeof getChecklistsForTransaction>>;
     try {
-      localChecklists = await getChecklistsForTransaction(transactionId);
+      localChecklists = await getChecklistsForTransaction(transactionId, "broker");
     } catch (error) {
       logService.warn(
         `[Submission] Checklists could not be read before submit: ${error instanceof Error ? error.message : "Unknown error"}`,

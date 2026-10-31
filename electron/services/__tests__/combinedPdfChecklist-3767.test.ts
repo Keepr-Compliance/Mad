@@ -190,6 +190,7 @@ function checklists(): ChecklistDetail[] {
         templateName: "Purchase file",
         sortOrder: 0,
         selectedAt: null,
+        isPrivate: false,
       },
       items: [
         {
@@ -245,6 +246,7 @@ function checklists(): ChecklistDetail[] {
         templateName: "Disclosures",
         sortOrder: 1,
         selectedAt: null,
+        isPrivate: false,
       },
       items: [
         {
