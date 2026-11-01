@@ -14,6 +14,8 @@ export interface CellResult {
   id: string;
   ok: boolean;
   detail: string;
+  /** Set when the cell could not reach its precondition; the runner records SKIP with this reason. */
+  skip?: string;
 }
 
 export interface ChecklistTextsSeed {
@@ -73,12 +75,36 @@ export async function cellLinkTwoTexts(page: Page, seed: ChecklistTextsSeed): Pr
 /** T3: the text chip — TXT mark, "Text · <name>", View opens the conversation. */
 export async function cellTextChip(page: Page, seed: ChecklistTextsSeed): Promise<CellResult> {
   const item = page.getByTestId(`checklist-item-${seed.itemId}`);
-  const icon = item.getByTestId('checklist-link-text-icon').first();
-  const chip = item.locator('[data-testid^="checklist-link-"][data-stale]').filter({ has: icon }).first();
+  // `has` is resolved inside each candidate chip, so the inner locator is rooted at the page
+  // (as the jest chip test uses within(chip)), not at the item.
+  const chip = item
+    .locator('[data-testid^="checklist-link-"][data-stale]')
+    .filter({ has: page.getByTestId('checklist-link-text-icon') })
+    .first();
+  // Awaiting waits (no runner-only expect: the cells also run outside Playwright Test).
+  await chip.waitFor({ state: 'visible', timeout: 10_000 });
+  const iconText = (await chip.getByTestId('checklist-link-text-icon').textContent())?.trim();
+  // The chip's text starts with the TXT mark, then the title "Text · <name>".
   const text = (await chip.textContent()) ?? '';
   await chip.getByTestId('checklist-link-view').click();
-  const opened = await page.getByTestId('conversation-count').first().isVisible({ timeout: 10_000 }).catch(() => false);
-  return { id: 'T3', ok: (await icon.textContent())?.trim() === 'TXT' && /^Text · /.test(text) && opened, detail: `chip "${text}", conversation opened ${opened}` };
+  const opened = await page
+    .getByTestId('conversation-count')
+    .first()
+    .waitFor({ state: 'visible', timeout: 10_000 })
+    .then(() => true, () => false);
+  // Close the conversation again so the next cell starts from the deal: the header's close
+  // button is the header's own button (ConversationViewModal, no testid; no Escape handler).
+  let closed = !opened;
+  if (opened) {
+    const count = page.getByTestId('conversation-count').first();
+    await count.locator('xpath=../..').locator(':scope > button').first().click();
+    closed = await count.waitFor({ state: 'detached', timeout: 10_000 }).then(() => true, () => false);
+  }
+  return {
+    id: 'T3',
+    ok: iconText === 'TXT' && /^TXT\s*Text · /.test(text) && opened,
+    detail: `icon "${iconText}", chip "${text}", conversation opened ${opened}, closed ${closed}`,
+  };
 }
 
 /**
@@ -95,8 +121,24 @@ export async function cellLockedDealRefuses(page: Page, lockedItemId: string): P
   return { id: 'T4', ok: notice && disabled, detail: `lock notice ${notice}, Link… present ${present}, disabled ${disabled}` };
 }
 
-/** T5: Submit for review lists the text link with the short reason it is not sent. */
+/**
+ * T5: Submit for review lists the text link with the short reason it is not sent.
+ * Submit for Review is reached through Complete (`complete-button`) and opens only when the
+ * license has an organization (useCompleteTransaction.ts:128-131). When it is not open, the
+ * cell SKIPs with that reason; the pre-flight sentence itself is covered by jest
+ * SubmitForReviewModal.textLinkGap-3968.
+ */
 export async function cellPreflightSentence(page: Page): Promise<CellResult> {
+  const submit = page.locator('[data-testid^="submit-review-"]').first();
+  const reachable = await submit.waitFor({ state: 'visible', timeout: 5_000 }).then(() => true, () => false);
+  if (!reachable) {
+    return {
+      id: 'T5',
+      ok: false,
+      skip: 'Submit for Review not reachable (Complete needs a license with an organization, useCompleteTransaction.ts:128-131); pre-flight sentence covered by jest SubmitForReviewModal.textLinkGap-3968.',
+      detail: 'submit-review-* not visible',
+    };
+  }
   const line = page.getByTestId('submit-review-link-gap-not-included').filter({ hasText: 'Text · ' }).first();
   await line.waitFor({ state: 'visible', timeout: 20_000 });
   const text = (await line.textContent()) ?? '';
