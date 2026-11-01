@@ -70,13 +70,6 @@ async function handleOrgResend(
   // Use service role client to bypass RLS — admin portal users are not org members
   const adminClient = createServiceClient({ actorId: user.id });
 
-  // Debug: verify service client can query at all
-  const { data: testData, error: testError } = await adminClient
-    .from('organization_members')
-    .select('id')
-    .limit(1);
-  console.log('[resend-invite] Service client test:', { hasData: !!testData?.length, testError: testError?.message, membershipId });
-
   // Look up the pending invitation
   const { data: membership, error: lookupError } = await adminClient
     .from('organization_members')
@@ -90,17 +83,8 @@ async function handleOrgResend(
   }
 
   if (!membership) {
-    return NextResponse.json({
-      error: 'Invitation not found',
-      debug: {
-        membershipId,
-        testHasData: !!testData?.length,
-        testError: testError?.message || null,
-        lookupError: lookupError?.message || null,
-        hasServiceKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
-        serviceKeyPrefix: process.env.SUPABASE_SERVICE_ROLE_KEY?.substring(0, 10),
-      }
-    }, { status: 404 });
+    console.warn('[resend-invite] Invitation not found:', { membershipId });
+    return NextResponse.json({ error: 'Invitation not found' }, { status: 404 });
   }
 
   // Fetch org name separately for the email
