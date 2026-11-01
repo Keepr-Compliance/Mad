@@ -156,7 +156,7 @@ const TX_COMMS: Communication[] = [
 let seq = 0;
 function lnk(
   itemId: string,
-  kind: "email" | "attachment",
+  kind: "email" | "attachment" | "text",
   label: string,
   members: Array<{ id: string; inTransaction?: boolean }>,
 ): ChecklistLink {
@@ -174,6 +174,7 @@ function lnk(
       kind,
       attachmentId: kind === "attachment" ? m.id : null,
       emailId: kind === "email" ? m.id : null,
+      messageId: kind === "text" ? m.id : null,
       inTransaction: m.inTransaction ?? true,
     })),
   };
@@ -190,6 +191,7 @@ function checklists(): ChecklistDetail[] {
         templateName: "Purchase file",
         sortOrder: 0,
         selectedAt: null,
+        isPrivate: false,
       },
       items: [
         {
@@ -245,6 +247,7 @@ function checklists(): ChecklistDetail[] {
         templateName: "Disclosures",
         sortOrder: 1,
         selectedAt: null,
+        isPrivate: false,
       },
       items: [
         {
@@ -301,6 +304,7 @@ function data(contentType: ExportContentType = "both"): ChecklistExportData {
       "att-t1": target("att-t1", "t1-photo.jpg", { messageId: "t1", externalMessageId: "guid-t1" }),
     },
     emailSubjects: { e3: "Beta topic", e9: "Old thread", "e-stale": "Other deal subject" },
+    textTargets: {},
     includeEmails: contentType !== "texts",
     includeTexts: contentType !== "emails",
   };
@@ -489,3 +493,79 @@ describe("BACKLOG-3767 combined PDF checklist block", () => {
     }
   });
 });
+
+/**
+ * BACKLOG-3968 PR-4a, C17 — a text link prints like an email link. Text
+ * targets follow `getChecklistExportTargets`' `textTargets`, whose real-driver
+ * read (hidden by message id and by guid) is pinned in
+ * submissionChecklistTextLinks-3968.test.ts.
+ */
+describe("BACKLOG-3968 combined PDF checklist block — text links", () => {
+  let service: typeof import("../folderExportService").default;
+
+  beforeEach(async () => {
+    jest.resetModules();
+    lastLoadedHtmlContent = null;
+    service = (await import("../folderExportService")).default;
+  });
+
+  const textTarget = (messageId: string, sentAt: string, opts: { externalId?: string; hidden?: boolean } = {}) => ({
+    messageId,
+    externalId: opts.externalId ?? `guid-${messageId}`,
+    sentAt,
+    hidden: opts.hidden ?? false,
+  });
+
+  function textData(contentType: ExportContentType = "both"): ChecklistExportData {
+    const d = data(contentType);
+    d.checklists[1].linksByItemId = {
+      "it-3": [
+        lnk("it-3", "text", "Text with the seller", [{ id: "t1" }]),
+        lnk("it-3", "text", "Old text", [{ id: "t-old" }]),
+        lnk("it-3", "text", "Secret text", [{ id: "th" }]),
+        // Another copy of t2 (a re-import): only the guid reaches the section.
+        lnk("it-3", "text", "Copy of t2", [{ id: "t2-copy" }]),
+        lnk("it-3", "text", "Unlinked text", [{ id: "t-gone", inTransaction: false }]),
+      ],
+    };
+    d.textTargets = {
+      t1: textTarget("t1", "2024-01-13T08:00:00Z"),
+      "t-old": textTarget("t-old", "2023-10-01T08:00:00Z"),
+      th: textTarget("th", "2023-11-01T08:00:00Z", { hidden: true }),
+      "t2-copy": textTarget("t2-copy", "2024-01-14T08:00:00Z", { externalId: "guid-t2" }),
+      "t-gone": textTarget("t-gone", "2024-01-15T08:00:00Z"),
+    };
+    return d;
+  }
+
+  async function render(contentType: ExportContentType, summaryOnly: boolean, checklist: ChecklistExportData) {
+    const p = plan(contentType, summaryOnly);
+    await service.exportTransactionToCombinedPDF(tx, p.communications, "/mock/out.pdf", NO_OMISSIONS, summaryOnly, "thread", {
+      checklist,
+    });
+    return lastLoadedHtmlContent as string;
+  }
+
+  it("C17: an included text links to its conversation; one outside the dates says so; a copy is found by guid", async () => {
+    const doc = await render("both", false, textData());
+    const row = itemRow(doc, "Seller disclosure");
+    expect(evidenceLine(row, "Text with the seller")).toContain('href="#text-thread-0"');
+    expect(evidenceLine(row, "Old text")).toContain(OUTSIDE_DATES_TEXT);
+    expect(evidenceLine(row, "Old text")).not.toContain("href=");
+    expect(evidenceLine(row, "Copy of t2")).toContain('href="#text-thread-1"');
+  });
+
+  it("C17: a hidden text prints nothing; an unlinked one is counted, never named", async () => {
+    const doc = await render("both", false, textData());
+    const row = itemRow(doc, "Seller disclosure");
+    expect(row).not.toContain("Secret text");
+    expect(row).not.toContain("Unlinked text");
+    expect(row).toContain(staleCountText(1));
+  });
+
+  it("C17: with texts left out of the export, each text link says 'Not in this export'", async () => {
+    const doc = await render("emails", false, textData("emails"));
+    expect(evidenceLine(itemRow(doc, "Seller disclosure"), "Text with the seller")).toContain(NOT_IN_EXPORT_TEXT);
+  });
+});
+

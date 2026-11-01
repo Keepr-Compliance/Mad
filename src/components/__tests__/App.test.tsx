@@ -440,7 +440,7 @@ describe("App", () => {
 
   describe("Logout", () => {
     beforeEach(() => {
-      // Mock system API calls used by Profile component
+      // Mailbox checks (kept from the Profile era; harmless for the panel)
       // BACKLOG-2414: the contract declares `email?: string`, but the real
       // handlers return `null` for a disconnected account and that is what these
       // fixtures pin. Cast rather than switched to `undefined`, which would change
@@ -499,20 +499,12 @@ describe("App", () => {
         </PlatformProvider>,
       );
 
-      // Find Sign Out button in profile
-      const signOutButton = await screen.findByRole("button", {
-        name: /Sign Out/i,
-      });
+      // BACKLOG-3964 slice 3: Sign out lives in the account panel, no confirm step.
+      const signOutButton = await screen.findByTestId("account-panel-signout");
+      expect(signOutButton).toHaveTextContent("Sign out");
       await userEvent.click(signOutButton);
 
-      // Click confirmation
-      const confirmSignOutButton = await screen.findByRole("button", {
-        name: /Sign Out/i,
-      });
-      await userEvent.click(confirmSignOutButton);
-
-      // Should call handleLogout
-      expect(handleLogoutMock).toHaveBeenCalled();
+      expect(handleLogoutMock).toHaveBeenCalledTimes(1);
     });
 
     it("should handle logout API failure gracefully", async () => {
@@ -554,17 +546,8 @@ describe("App", () => {
         </PlatformProvider>,
       );
 
-      // Find and click Sign Out
-      const signOutButton = await screen.findByRole("button", {
-        name: /Sign Out/i,
-      });
-      await userEvent.click(signOutButton);
-
-      // Click confirmation
-      const confirmSignOutButton = await screen.findByRole("button", {
-        name: /Sign Out/i,
-      });
-      await userEvent.click(confirmSignOutButton);
+      // BACKLOG-3964 slice 3: the panel's Sign out, no confirm step.
+      await userEvent.click(await screen.findByTestId("account-panel-signout"));
 
       // handleLogout should be called - the actual error handling happens
       // inside useAppStateMachine, which we've mocked
@@ -685,106 +668,50 @@ describe("App", () => {
         </PlatformProvider>,
       );
 
-      // Profile modal should be visible
-      await waitFor(() => {
-        expect(screen.getByText(/test@example.com/i)).toBeInTheDocument();
-      });
+      // BACKLOG-3964 slice 3: the account side panel shows, with the user's email.
+      const panel = await screen.findByTestId("account-panel");
+      expect(panel).toHaveTextContent("test@example.com");
+      expect(screen.getByTestId("nav-profile")).toHaveAttribute("aria-expanded", "true");
     });
 
-    it("should open settings when settings button is clicked in profile modal", async () => {
-      // Mock preferences API
-      jest.mocked(window.api.preferences.get).mockResolvedValue({
-        success: true,
-        preferences: { theme: "light", notifications: true },
-      });
-
-      let currentMockState = createAppStateMock({
+    it('moves the "?" beside the account panel while it is open (C12)', async () => {
+      mockUseAppStateMachine.mockReturnValue(createAppStateMock({
         currentStep: "dashboard",
         modalState: createModalState({ showProfile: true }),
-      });
-
-      mockUseAppStateMachine.mockImplementation(() => currentMockState);
-
-      const { rerender } = renderApp();
-
-      // Wait for profile modal to appear
-      await waitFor(() => {
-        expect(screen.getByText(/test@example.com/i)).toBeInTheDocument();
-      });
-
-      // Click Settings button
-      const settingsButton = await screen.findByRole("button", {
-        name: /Settings/i,
-      });
-      await userEvent.click(settingsButton);
-
-      // Update mock to show settings modal (profile closes)
-      currentMockState = {
-        ...currentMockState,
-        modalState: createModalState({ showProfile: false, showSettings: true }),
-      };
-      rerender(
-        <PlatformProvider>
-          <NetworkProvider>
-            <AuthProvider>
-              <App />
-            </AuthProvider>
-          </NetworkProvider>
-        </PlatformProvider>,
-      );
-
-      // Settings modal should be visible
-      await waitFor(() => {
-        const settingsHeaders = screen.getAllByText(/Settings/i);
-        expect(settingsHeaders.length).toBeGreaterThanOrEqual(1);
-      });
+      }));
+      renderApp();
+      await screen.findByTestId("account-panel");
+      const help = screen.getByRole("button", { name: "Open support dialog" });
+      expect(help.className).toMatch(/sm:left-\[(272|288)px\]/);
+      expect(help.className).toContain("left-[calc(82%_+_10px)]");
     });
 
-    it("should close profile modal when close button is clicked", async () => {
+    it("a panel row closes the panel and opens Settings at that tab", async () => {
       const closeProfileMock = jest.fn();
-      let currentMockState = createAppStateMock({
+      const openSettingsMock = jest.fn();
+      mockUseAppStateMachine.mockReturnValue(createAppStateMock({
         currentStep: "dashboard",
         modalState: createModalState({ showProfile: true }),
         closeProfile: closeProfileMock,
-      });
+        openSettings: openSettingsMock,
+      }));
+      renderApp();
+      await userEvent.click(await screen.findByTestId("account-panel-row-settings-security"));
+      expect(closeProfileMock).toHaveBeenCalledTimes(1);
+      expect(openSettingsMock).toHaveBeenCalledTimes(1);
+      expect(openSettingsMock).toHaveBeenCalledWith("settings-security");
+    });
 
-      mockUseAppStateMachine.mockImplementation(() => currentMockState);
-
-      const { rerender } = renderApp();
-
-      // Wait for profile modal
-      await waitFor(() => {
-        expect(screen.getByText(/test@example.com/i)).toBeInTheDocument();
-      });
-
-      // Find and click close button (the X button in the header)
-      const closeButtons = screen.getAllByRole("button");
-      const closeButton = closeButtons.find((btn) =>
-        btn.querySelector('svg path[d*="M6 18L18 6"]'),
-      );
-      if (closeButton) {
-        await userEvent.click(closeButton);
-      }
-
-      // Update mock to hide profile modal
-      currentMockState = {
-        ...currentMockState,
-        modalState: createModalState({ showProfile: false }),
-      };
-      rerender(
-        <PlatformProvider>
-          <NetworkProvider>
-            <AuthProvider>
-              <App />
-            </AuthProvider>
-          </NetworkProvider>
-        </PlatformProvider>,
-      );
-
-      // Profile modal should be closed (email should not be visible)
-      await waitFor(() => {
-        expect(screen.queryByText(/Account/i)).not.toBeInTheDocument();
-      });
+    it("closes the account panel from its X button", async () => {
+      const closeProfileMock = jest.fn();
+      mockUseAppStateMachine.mockReturnValue(createAppStateMock({
+        currentStep: "dashboard",
+        modalState: createModalState({ showProfile: true }),
+        closeProfile: closeProfileMock,
+      }));
+      renderApp();
+      await userEvent.click(await screen.findByRole("button", { name: "Close menu" }));
+      expect(closeProfileMock).toHaveBeenCalledTimes(1);
     });
   });
 

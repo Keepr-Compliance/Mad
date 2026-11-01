@@ -27,7 +27,6 @@ jest.mock("../../components/TransactionList", () => {
   );
   return { __esModule: true, default: MockTransactionList };
 });
-jest.mock("../../components/Profile", () => ({ __esModule: true, default: () => null }));
 jest.mock("../../components/Settings", () => ({ __esModule: true, default: () => null }));
 jest.mock("../../components/Contacts", () => ({ __esModule: true, default: () => null }));
 jest.mock("../../components/WelcomeTerms", () => ({ __esModule: true, default: () => null }));

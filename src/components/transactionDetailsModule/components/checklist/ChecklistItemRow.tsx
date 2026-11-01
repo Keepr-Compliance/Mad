@@ -7,8 +7,14 @@
  * Read-only (the plan no longer includes checklists): everything renders, the
  * checkbox is disabled, and no action that writes is offered. Main refuses
  * those writes anyway — this only keeps the screen from offering them.
+ *
+ * BACKLOG-3966 U1: a row of the agent's own items ("My items") passes
+ * `isPrivate` — no Required/Optional pill (every My item counts, and none is
+ * the broker's requirement) — plus `title` (the inline rename editor),
+ * `controls` (its ⋯ menu) and `leading` (the drag handle). Template rows pass
+ * none of them and render exactly as before.
  */
-import React, { useState } from "react";
+import React, { useState, type ReactNode } from "react";
 import type { ChecklistItem, ChecklistLink } from "../../../../../electron/types/checklist";
 import { InfoTooltip } from "../../../common/InfoTooltip";
 import { ChecklistLinkChip } from "./ChecklistLinkChip";
@@ -40,6 +46,18 @@ interface ChecklistItemRowProps {
   viewer: ChecklistLinkViewer;
   /** BACKLOG-3910 (slice d): set on a locked deal; the tick's tooltip. */
   lockedTooltip?: string;
+  /** BACKLOG-3966 U1: one of the agent's own items. No Required/Optional pill. */
+  isPrivate?: boolean;
+  /** BACKLOG-3966 U1: replaces the title (the inline rename editor). */
+  title?: ReactNode;
+  /** BACKLOG-3966 U1: extra actions after Link… and Add note (the ⋯ menu). */
+  controls?: ReactNode;
+  /** BACKLOG-3966 U1: before the checkbox (the drag handle). */
+  leading?: ReactNode;
+  /** BACKLOG-3966 U1: shows the tick as this value while its write is in flight. */
+  displayChecked?: boolean;
+  /** BACKLOG-3966 U1: drag-and-drop handlers for the row's outer element. */
+  rowProps?: React.HTMLAttributes<HTMLDivElement>;
 }
 
 export function ChecklistItemRow({
@@ -55,7 +73,14 @@ export function ChecklistItemRow({
   onRemoveLink,
   viewer,
   lockedTooltip,
+  isPrivate = false,
+  title,
+  controls,
+  leading,
+  displayChecked,
+  rowProps,
 }: ChecklistItemRowProps): React.ReactElement {
+  const checked = displayChecked ?? item.isChecked;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
@@ -79,13 +104,15 @@ export function ChecklistItemRow({
 
   return (
     <div
+      {...rowProps}
       className={`border border-gray-200 rounded-lg p-4 flex items-start gap-3 sm:gap-4 hover:border-gray-300 hover:shadow-md transition-all ${
-        item.isChecked ? "bg-gray-50" : "bg-white"
+        checked ? "bg-gray-50" : "bg-white"
       }`}
       data-testid={`checklist-item-${item.id}`}
     >
+      {leading}
       <ChecklistCheckbox
-        checked={item.isChecked}
+        checked={checked}
         label={item.title}
         disabled={readOnly || pending}
         dimmed={pending}
@@ -97,19 +124,24 @@ export function ChecklistItemRow({
       <div className="flex-1 min-w-0">
         <div className="flex items-center flex-wrap gap-x-3 gap-y-1.5">
           <div className="flex items-center flex-wrap gap-2 min-w-0 flex-auto">
-            <h5 className={`text-base font-medium ${item.isChecked ? "text-gray-600" : "text-gray-900"}`}>
-              {item.title}
-            </h5>
+            {title ?? (
+              <h5 className={`text-base font-medium ${checked ? "text-gray-600" : "text-gray-900"}`}>
+                {item.title}
+              </h5>
+            )}
             {item.description && item.description.trim().length > 0 && (
               <InfoTooltip text={item.description} />
             )}
-            <span
-              className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium uppercase tracking-wide flex-shrink-0 ${
-                item.isRequired ? "bg-indigo-50 text-indigo-600" : "bg-gray-100 text-gray-500"
-              }`}
-            >
-              {item.isRequired ? "Required" : "Optional"}
-            </span>
+            {!isPrivate && (
+              <span
+                className={`inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium uppercase tracking-wide flex-shrink-0 ${
+                  item.isRequired ? "bg-indigo-50 text-indigo-600" : "bg-gray-100 text-gray-500"
+                }`}
+                data-testid={`checklist-required-${item.id}`}
+              >
+                {item.isRequired ? "Required" : "Optional"}
+              </span>
+            )}
           </div>
           {!readOnly && (
             <div className="flex items-center flex-wrap gap-3 justify-end ml-auto flex-shrink-0 max-sm:w-full max-sm:justify-start">
@@ -137,6 +169,7 @@ export function ChecklistItemRow({
                   Add note
                 </button>
               )}
+              {controls}
             </div>
           )}
         </div>
@@ -153,6 +186,8 @@ export function ChecklistItemRow({
                 onViewAttachment={viewer.onViewAttachment}
                 downloadingAttachmentId={viewer.downloadingAttachmentId}
                 onViewThread={viewer.onViewThread}
+                onViewText={viewer.onViewText}
+                textContactNames={viewer.textContactNames}
                 onRemove={onRemoveLink}
               />
             ))}

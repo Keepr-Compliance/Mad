@@ -210,6 +210,25 @@ export const contactService = {
       return { success: false, error: getErrorMessage(error) };
     }
   },
+
+  /**
+   * BACKLOG-3968 U2: names for text handles (phones, emails, Apple IDs),
+   * scoped to one deal the way the Texts tab asks (BACKLOG-2758). Never throws;
+   * an empty map when nothing resolved.
+   */
+  async resolveHandles(
+    handles: string[],
+    userId: string | undefined,
+    transactionId: string,
+  ): Promise<Record<string, string>> {
+    if (handles.length === 0) return {};
+    try {
+      const result = await window.api.contacts.resolveHandles(handles, userId, { transactionId });
+      return result.success && result.names ? result.names : {};
+    } catch {
+      return {};
+    }
+  },
 };
 
 export default contactService;

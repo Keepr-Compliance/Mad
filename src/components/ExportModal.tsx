@@ -107,7 +107,9 @@ function ExportModal({
   // "every export" choice overrides it. A saved record with no such key (every
   // record written before this option existed) keeps the default.
   const [includeChecklist, setIncludeChecklist] = useState(true);
-  // Whether this deal has at least one checklist. The option is shown only then.
+  // Whether this deal has at least one checklist the export can print. The option
+  // is shown only then. BACKLOG-3966: the private My items checklist is never
+  // exported, so a deal whose only checklist is private does not count.
   const [hasChecklist, setHasChecklist] = useState(false);
 
   // BACKLOG-334: TRUE once the saved export preferences have loaded AND carry a
@@ -229,7 +231,9 @@ function ExportModal({
     checklistService
       .get(transaction.id)
       .then((result) => {
-        if (!cancelled) setHasChecklist(!!result.success && (result.data?.checklists.length ?? 0) > 0);
+        if (!cancelled) {
+          setHasChecklist(!!result.success && (result.data?.checklists ?? []).some((d) => !d.checklist.isPrivate));
+        }
       })
       .catch(() => {
         if (!cancelled) setHasChecklist(false);

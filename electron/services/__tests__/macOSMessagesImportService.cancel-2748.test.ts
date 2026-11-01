@@ -232,6 +232,9 @@ function createSchema(db: DatabaseType): void {
       message_type TEXT, metadata TEXT, associated_message_type INTEGER,
       associated_message_guid TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    -- BACKLOG-3968 PR-4b: the force set spares checklist text members, so it
+    -- reads this table (present on every migrated database).
+    CREATE TABLE transaction_checklist_link_members (id TEXT PRIMARY KEY, message_id TEXT);
     CREATE TABLE attachments (
       id TEXT PRIMARY KEY, message_id TEXT, external_message_id TEXT, filename TEXT,
       mime_type TEXT, file_size_bytes INTEGER, storage_path TEXT,

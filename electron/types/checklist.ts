@@ -15,19 +15,43 @@
 
 import type { DocumentType } from "./models";
 
-/** What kind of evidence a link group holds. Mirrors the local CHECK and the cloud one. */
-export type ChecklistLinkKind = "attachment" | "email";
+/**
+ * The kinds of evidence the outside-the-audit-dates question is asked about
+ * (`outsideAuditDates`, `outsideAuditDatesSql`) and the attachment/email
+ * picker writes. Texts are written through the same add-link channel since
+ * BACKLOG-3968 PR-4b, but are never asked about dates — the message upload has
+ * no outside-the-dates arm — so 'text' is deliberately not here, and asking
+ * the date question about a text is a compile error.
+ */
+export type ChecklistLinkWriteKind = "attachment" | "email";
+
+/**
+ * What kind of evidence a stored link group holds. Mirrors the local CHECK
+ * (migration v78 added 'text', BACKLOG-3968). The cloud CHECK accepts 'text'
+ * only after the PR-5 migration, which is why a text link is withheld from the
+ * submission until then (`electron/services/checklistTextLinkHold.ts`).
+ */
+export type ChecklistLinkKind = ChecklistLinkWriteKind | "text";
 
 /** One checklist, as stored. */
 export interface TransactionChecklist {
   id: string;
   transactionId: string;
-  /** The source template's cloud id. Provenance only — no read joins through it. */
+  /**
+   * The source template's cloud id — or, for the private per-deal checklist,
+   * the reserved id in `electron/services/db/checklistPrivacy.ts`
+   * (BACKLOG-3966). No read joins through it.
+   */
   templateId: string;
   templateName: string;
   /** Display position among this transaction's checklists (BACKLOG-3476). */
   sortOrder: number;
   selectedAt: string | null;
+  /**
+   * BACKLOG-3966: the agent's private checklist ("My items"). Derived in main
+   * from `templateId`; never sent to a broker-facing reader.
+   */
+  isPrivate: boolean;
 }
 
 /** One copied checklist row. */
@@ -49,14 +73,16 @@ export interface ChecklistItem {
   sortOrder: number;
 }
 
-/** One email or attachment inside a group. */
+/** One email, attachment or text inside a group. */
 export interface ChecklistLinkMember {
   id: string;
   linkId: string;
   kind: ChecklistLinkKind;
-  /** Exactly one of these two is set, matching `kind`. */
+  /** Exactly one of these three is set, matching `kind`. */
   attachmentId: string | null;
   emailId: string | null;
+  /** `messages.id` of a text member (BACKLOG-3968). */
+  messageId: string | null;
   /**
    * Whether the target is STILL linked to this checklist's transaction.
    *
@@ -131,12 +157,27 @@ export interface ChecklistAttachmentTarget {
   hidden: boolean;
 }
 
+/**
+ * BACKLOG-3968 — the text row behind one text member, read for the PDF
+ * export's checklist block.
+ */
+export interface ChecklistTextTarget {
+  messageId: string;
+  /** `messages.external_id` (the Apple guid), for matching another copy. */
+  externalId: string | null;
+  sentAt: string | null;
+  /** The text is hidden from THIS transaction's export (whole set, any date). */
+  hidden: boolean;
+}
+
 /** BACKLOG-3767 — the rows the PDF export's checklist block names members by. */
 export interface ChecklistExportTargets {
   /** Keyed by attachment id. */
   attachmentTargets: Record<string, ChecklistAttachmentTarget>;
   /** Keyed by email id. */
   emailSubjects: Record<string, string | null>;
+  /** Keyed by message id (BACKLOG-3968). */
+  textTargets: Record<string, ChecklistTextTarget>;
 }
 
 // ---------------------------------------------------------------------------
@@ -232,15 +273,33 @@ export type SelectChecklistTemplateResult =
   | { status: "exists"; checklistId: string }
   | { status: "no_transaction" };
 
+/** BACKLOG-3966: what adding one of the agent's own items did. */
+export type AddMyItemResult =
+  | { status: "added"; checklistId: string; itemId: string }
+  /** The deal does not exist. Nothing written. */
+  | { status: "no_transaction" };
+
+/**
+ * BACKLOG-3966: what reordering the agent's own items did. `not_the_items`:
+ * the ids sent were not exactly the section's items, so nothing moved.
+ */
+export type ReorderMyItemsResult = { status: "reordered" } | { status: "not_the_items" };
+
 export interface AddChecklistLinkInput {
   itemId: string;
   kind: ChecklistLinkKind;
-  /** `attachments.id` or `emails.id`, depending on `kind`. At least one. */
+  /**
+   * `attachments.id`, `emails.id` or (BACKLOG-3968, kind `text`) `messages.id`,
+   * depending on `kind`. At least one.
+   */
   targetIds: string[];
   /**
    * BACKLOG-3764: the agent answered "Include it" to the outside-the-dates
    * question. Without it, a group with any target dated outside the deal's
    * audit dates is refused as `outside_dates` and nothing is written.
+   *
+   * BACKLOG-3968: never for a text. The IPC schema refuses it, and the writer
+   * stores 0 on every text group whatever the caller passed.
    */
   includeOutsideDates?: boolean;
 }
