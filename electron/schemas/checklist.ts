@@ -49,9 +49,9 @@ export const ChecklistDocumentTypeSchema = z.enum([
 
 /**
  * `attachment`, `email` or (BACKLOG-3968 PR-4b) `text`. Mirrors the local
- * CHECK (migration v78). The cloud CHECK takes 'text' only after PR-5; until
- * then a text group is withheld from the submission
- * (`electron/services/checklistTextLinkHold.ts`), not refused here.
+ * CHECK (migration v78). The cloud takes 'text' only after PR-5; a submission
+ * whose cloud does not withholds text groups
+ * (`electron/services/checklistTextLinksCapability.ts`), not refused here.
  */
 export const ChecklistLinkKindSchema = z.enum(['attachment', 'email', 'text']);
 
