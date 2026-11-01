@@ -113,6 +113,9 @@ if (typeof window !== 'undefined') {
       // BACKLOG-322: unified transaction Attachments tab query + on-demand download.
       // Default empty so the tab/hook loads cleanly in every test environment.
       getAllAttachments: jest.fn().mockResolvedValue({ success: true, data: [] }),
+      // BACKLOG-3965: TransactionDetails records each open; the Dashboard reads them.
+      recordOpen: jest.fn().mockResolvedValue({ success: true, recorded: true }),
+      getRecentlyOpened: jest.fn().mockResolvedValue({ success: true, transactions: [] }),
       ensureEmailAttachmentDownloaded: jest.fn().mockResolvedValue({ success: true, data: [] }),
       // BACKLOG-1780/1781: RemovedEmailsSection refreshKey effect — needed in all test environments.
       getRemovedEmails: jest.fn().mockResolvedValue({ success: true, removedEmails: [] }),
@@ -423,6 +426,20 @@ if (typeof window !== 'undefined') {
       }),
       // Never gated in the main process, so the default is the working answer.
       remove: jest.fn().mockResolvedValue({ success: true, changed: false }),
+      // BACKLOG-3965 PR-3. BACKLOG-3966: main no longer refuses this for the
+      // plan (it scopes it), but the default stays a non-answer so a test that
+      // forgets to override is not handed a working Todo list.
+      listOpenRequired: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      // BACKLOG-3966: the agent's own items. Not plan-gated in main, but the
+      // default is still "nothing written" so a forgotten override cannot
+      // pass as a working write.
+      addMyItem: jest.fn().mockResolvedValue({ success: false, error: 'Not available in tests.' }),
+      renameMyItem: jest.fn().mockResolvedValue({ success: true, changed: false }),
+      reorderMyItems: jest.fn().mockResolvedValue({ success: false, error: 'Not available in tests.' }),
+      removeMyItem: jest.fn().mockResolvedValue({ success: true, changed: false }),
       invalidateTemplates: jest.fn().mockResolvedValue({ success: true }),
       // BACKLOG-3617: gated like listTemplates, so the default is the refusal
       // — which the chooser reads as "unknown", never as a creator.

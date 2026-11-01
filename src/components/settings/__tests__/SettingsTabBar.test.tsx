@@ -123,15 +123,17 @@ describe("SettingsTabBar", () => {
 
     const active = screen.getByRole("tab", { selected: true });
     expect(active).toHaveTextContent("General");
-    // Active underline/highlight style.
-    expect(active.className).toMatch(/border-blue-600/);
-    expect(active.className).toMatch(/text-blue-600/);
+    // Active underline and text on the design-system primary-600 (BACKLOG-3964, founder 2026-10-30).
+    expect(active.className).toMatch(/\bborder-primary-600\b/);
+    expect(active.className).toMatch(/\btext-primary-600\b/);
+    expect(active.className).not.toMatch(/blue-/);
 
-    // Non-active tabs are not selected.
-    expect(screen.getByRole("tab", { name: "Email" })).toHaveAttribute(
-      "aria-selected",
-      "false"
-    );
+    // Non-active tabs are not selected and carry no primary colour: gray text, transparent underline.
+    const idle = screen.getByRole("tab", { name: "Email" });
+    expect(idle).toHaveAttribute("aria-selected", "false");
+    expect(idle.className).toMatch(/\btext-gray-500\b/);
+    expect(idle.className).toMatch(/\bborder-transparent\b/);
+    expect(idle.className).not.toMatch(/primary-|blue-/);
   });
 
   it("does not call scrollIntoView on mount (BACKLOG-2160, BACKLOG-2322)", () => {

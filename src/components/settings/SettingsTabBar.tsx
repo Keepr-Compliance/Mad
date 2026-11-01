@@ -1,9 +1,6 @@
 import React, { useRef, useEffect } from "react";
 
-interface SettingsTab {
-  id: string;
-  label: string;
-}
+import type { SettingsTab } from "./settingsTabs";
 
 interface SettingsTabBarProps {
   tabs: SettingsTab[];
@@ -34,6 +31,10 @@ export function SettingsTabBar({ tabs, activeTabId, onTabClick }: SettingsTabBar
   // tab strip. `block: "nearest"` is NOT a vertical no-op when the target is
   // inside a sticky ancestor.
   //
+  // BACKLOG-3964: the strip now sits in the Settings page's header row, outside
+  // the vertical scroller, so the sticky trap above cannot recur — but
+  // scrollIntoView would still scroll the page's ancestors. Keep scrollLeft.
+  //
   // Fix: scroll ONLY the strip's own `scrollLeft`, computed manually from
   // bounding rects, so this effect can never reach outside the horizontal
   // strip to touch a vertical ancestor's scroll position.
@@ -61,7 +62,7 @@ export function SettingsTabBar({ tabs, activeTabId, onTabClick }: SettingsTabBar
     <div
       ref={stripRef}
       data-testid="settings-tab-strip"
-      className="sticky top-0 z-10 bg-white border-b border-gray-200 -mx-6 px-6 overflow-x-auto scrollbar-hide"
+      className="flex-1 min-w-0 bg-white overflow-x-auto scrollbar-hide"
       style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
     >
       {/* BACKLOG-2160 / BACKLOG-1450: left-align the tab strip. `justify-center`
@@ -78,7 +79,7 @@ export function SettingsTabBar({ tabs, activeTabId, onTabClick }: SettingsTabBar
             onClick={() => onTabClick(tab.id)}
             className={`px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors border-b-2 ${
               activeTabId === tab.id
-                ? "text-blue-600 border-blue-600"
+                ? "text-primary-600 border-primary-600"
                 : "text-gray-500 border-transparent hover:text-gray-700"
             }`}
           >

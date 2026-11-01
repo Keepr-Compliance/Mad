@@ -37,7 +37,9 @@
  *
  * BACKLOG-3476: the transaction carries THREE checklists, added in this order:
  *   "Probe template"        the four items above (1 of 2 required)
- *   "Other probe template"  three required items, the first ticked (1 of 3)
+ *   "Other probe template"  three required items, the first ticked (1 of 3);
+ *                           the second carries a TEXT group of the text m-1
+ *                           (BACKLOG-3968 PR-4b, written by the real writer)
  *   "Done probe template"   one required and one optional, BOTH ticked, so
  *                           `allItemsChecked` is true (it opens collapsed)
  * The envelope therefore sums to 3 of 6 required; counting optional ticks
@@ -74,6 +76,7 @@ jest.mock("../../logService", () => ({
 
 import {
   addChecklistLink,
+  addMyItem,
   getChecklistsForTransaction,
   selectChecklistTemplate,
   setChecklistItemChecked,
@@ -230,7 +233,7 @@ async function produce(): Promise<unknown> {
   await add("tpl-probe", "Probe template", TEMPLATE_ITEMS);
   await add("tpl-other", "Other probe template", OTHER_ITEMS);
   await add("tpl-done", "Done probe template", DONE_ITEMS);
-  const [first, second, third] = (await getChecklistsForTransaction("txn-1")).checklists;
+  const [first, second, third] = (await getChecklistsForTransaction("txn-1", "agent")).checklists;
   const [i1, i2, i3, i4] = first.items;
   await setChecklistItemChecked(second.items[0].id, true);
   for (const item of third.items) await setChecklistItemChecked(item.id, true);
@@ -242,6 +245,11 @@ async function produce(): Promise<unknown> {
   expect((await addChecklistLink({ itemId: i2.id, kind: "email", targetIds: ["e-thread-1", "e-thread-2"] })).status).toBe("added");
   expect((await addChecklistLink({ itemId: i3.id, kind: "email", targetIds: ["e-solo-1", "e-solo-2"] })).status).toBe("added");
   expect((await addChecklistLink({ itemId: i4.id, kind: "email", targetIds: ["e-gone"] })).status).toBe("added");
+  // BACKLOG-3968 PR-4b: a text group (the text thread above), written through
+  // the real writer, on the second checklist so the first's items keep their links.
+  expect((await addChecklistLink({ itemId: second.items[1].id, kind: "text", targetIds: ["m-1"] })).status).toBe(
+    "added",
+  );
 
   // Unlinked from the transaction AFTER being linked to the checklist: the
   // evidence survives, so the members go stale rather than vanishing.
@@ -251,10 +259,26 @@ async function produce(): Promise<unknown> {
   // att-1 hangs off e-solo-2 so it stays on the transaction.
   run(`DELETE FROM communications WHERE id IN ('cm-3', 'cm-5')`);
 
+  const checklists = stableEnvelope(await getChecklistsForTransaction("txn-1", "agent"));
+  const attachments = getTransactionAllAttachments("txn-1");
+  const emailCommunications = await getCommunicationsWithMessages("txn-1", "email");
+
+  // BACKLOG-3966 U1: the same deal after the agent adds two of their own items
+  // (the private "My items" checklist, created by the first add). The first
+  // has a note and an attachment link, the second is ticked. Read AFTER the
+  // keys above so their normalized ids do not move.
+  const first3966 = await addMyItem("txn-1", "Call lender about rate lock");
+  const second3966 = await addMyItem("txn-1", "Send buyer the HOA docs summary");
+  if (first3966.status !== "added" || second3966.status !== "added") throw new Error("addMyItem refused");
+  await setChecklistItemNote(first3966.itemId, "Ask about the extension cost.");
+  expect((await addChecklistLink({ itemId: first3966.itemId, kind: "attachment", targetIds: ["att-1"] })).status).toBe("added");
+  await setChecklistItemChecked(second3966.itemId, true);
+
   return normalize({
-    checklists: stableEnvelope(await getChecklistsForTransaction("txn-1")),
-    attachments: getTransactionAllAttachments("txn-1"),
-    emailCommunications: await getCommunicationsWithMessages("txn-1", "email"),
+    checklists,
+    attachments,
+    emailCommunications,
+    checklistsWithMyItems: stableEnvelope(await getChecklistsForTransaction("txn-1", "agent")),
   });
 }
 

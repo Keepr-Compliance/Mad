@@ -187,6 +187,7 @@ import { registerEmailLinkingHandlers } from "./handlers/emailLinkingHandlers";
 import { registerEmailAutoLinkHandlers } from "./handlers/emailAutoLinkHandlers";
 import { registerReviewQueueHandlers } from "./handlers/reviewQueueHandlers";
 import { registerHiddenTextHandlers } from "./handlers/hiddenTextHandlers";
+import { registerTransactionOpenHandlers } from "./handlers/transactionOpenHandlers";
 import { registerChecklistHandlers } from "./handlers/checklistHandlers";
 import {
   registerRcsImportHandlers,
@@ -1927,6 +1928,8 @@ app.whenReady().then(async () => {
   registerReviewQueueHandlers();
   // BACKLOG-3366: hide / unhide individual texts from a transaction's export.
   registerHiddenTextHandlers();
+  // BACKLOG-3965: when each deal was last opened (the Dashboard's Recent panel).
+  registerTransactionOpenHandlers();
   // BACKLOG-3475: transaction checklists — broker templates, items, evidence links.
   registerChecklistHandlers();
   // BACKLOG-3619: RCS import from the Chrome extension. The loopback bridge

@@ -240,7 +240,7 @@ describe("adding several", () => {
     fireEvent.click(check("tpl-probe"));
     fireEvent.click(check("tpl-other"));
     fireEvent.click(addButton());
-    expect(await screen.findByTestId("checklist-panel")).toBeInTheDocument();
+    expect((await screen.findAllByTestId(/^checklist-section-toggle-/)).length).toBeGreaterThan(0);
     expect(screen.queryByTestId("checklist-chooser")).not.toBeInTheDocument();
     expect(sentTemplateIds()).toEqual(["tpl-probe", "tpl-other"]);
   });
@@ -359,7 +359,7 @@ describe("EXI — an `exists` answer in a batch counts as added (D1)", () => {
     fireEvent.click(check("tpl-probe"));
     fireEvent.click(check("tpl-other"));
     fireEvent.click(addButton());
-    expect(await screen.findByTestId("checklist-panel")).toBeInTheDocument();
+    expect((await screen.findAllByTestId(/^checklist-section-toggle-/)).length).toBeGreaterThan(0);
     expect(screen.queryByTestId("checklist-chooser")).not.toBeInTheDocument();
     expect(screen.queryByTestId("checklist-add-result")).not.toBeInTheDocument();
     expect(sentTemplateIds()).toEqual(["tpl-probe", "tpl-other"]);
@@ -415,7 +415,7 @@ describe("RRD — a batch with a failure reads the templates again", () => {
     await screen.findByTestId("checklist-template-tpl-probe");
     fireEvent.click(check("tpl-probe"));
     fireEvent.click(addButton());
-    await screen.findByTestId("checklist-panel");
+    await screen.findAllByTestId(/^checklist-section-toggle-/);
     expect(api().listTemplates).toHaveBeenCalledTimes(1);
   });
 });
@@ -457,7 +457,7 @@ describe("STK — every add fails on a transaction with no checklist", () => {
     // A checklist lands from elsewhere (another window), then the tab re-reads.
     api().get.mockResolvedValue(answer([fixtureChecklist(0)]));
     fireEvent.click(screen.getByTestId("test-reload"));
-    expect(await screen.findByTestId("checklist-panel")).toBeInTheDocument();
+    expect((await screen.findAllByTestId(/^checklist-section-toggle-/)).length).toBeGreaterThan(0);
     expect(screen.queryByTestId("checklist-chooser")).not.toBeInTheDocument();
   });
 });
@@ -475,7 +475,7 @@ describe("STK — every add fails from Add checklist (the user opened the choose
     );
     await waitFor(() => expect(api().listTemplates).toHaveBeenCalledTimes(2));
     expect(screen.getByTestId("checklist-chooser")).toBeInTheDocument();
-    expect(screen.queryByTestId("checklist-panel")).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId(/^checklist-section-toggle-/)).toHaveLength(0);
   });
 });
 

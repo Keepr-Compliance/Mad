@@ -45,6 +45,10 @@
  *                 `mapToSubmissionAttachment`; every match is linked, the
  *                 column is not unique)
  *   email      -> submission_messages.local_message_id with channel 'email'
+ *   text       -> (BACKLOG-3968) the uploaded text's submission_messages row,
+ *                 once the cloud function accepts 'text' (PR-5). Until then
+ *                 `TEXT_LINKS_HELD_UNTIL_CLOUD_MIGRATION` keeps every text
+ *                 link out of the payload, and the pre-flight lists it.
  * A local id with no uploaded counterpart is dropped by the function, and the
  * dropped counts come back in the result.
  *
@@ -58,8 +62,10 @@
 
 import * as Sentry from "@sentry/electron/main";
 import { getChecklistsForTransaction } from "./db/checklistDbService";
+import { TEXT_LINKS_HELD_UNTIL_CLOUD_MIGRATION } from "./checklistTextLinkHold";
+import { memberLocalId } from "./submissionChecklistLinkGaps";
 import logService from "./logService";
-import type { ChecklistsForTransaction } from "../types/checklist";
+import type { ChecklistLinkKind, ChecklistsForTransaction } from "../types/checklist";
 
 const LOG_CONTEXT = "SubmissionChecklistSnapshot";
 
@@ -68,7 +74,7 @@ export const SNAPSHOT_RPC = "snapshot_submission_checklists";
 
 /** One evidence group, as the function reads it (migration §6). */
 export interface SnapshotLinkPayload {
-  kind: "attachment" | "email";
+  kind: ChecklistLinkKind;
   label: string;
   sort_order: number;
   local_ids: string[];
@@ -126,6 +132,8 @@ export type SnapshotFailureKind = "transient" | "not_in_plan" | "refused";
 export interface SnapshotSentSets {
   emailIds: ReadonlySet<string>;
   attachmentIds: ReadonlySet<string>;
+  /** BACKLOG-3968: ids of the texts this submission uploads (the gathered messages). */
+  textIds: ReadonlySet<string>;
   acceptedMembers: ReadonlySet<string>;
 }
 
@@ -220,8 +228,14 @@ export function buildChecklistSnapshotPayload(
   /** Filled with `linkId:localId` of every member held back. */
   withheld?: string[]
 ): SnapshotChecklistPayload[] {
-  const isSent = (kind: "attachment" | "email", id: string): boolean =>
-    !sent || (kind === "attachment" ? sent.attachmentIds.has(id) : sent.emailIds.has(id));
+  const isSent = (kind: ChecklistLinkKind, id: string): boolean => {
+    // BACKLOG-3968: held texts are never sent, with or without `sent`.
+    if (kind === "text" && TEXT_LINKS_HELD_UNTIL_CLOUD_MIGRATION) return false;
+    if (!sent) return true;
+    if (kind === "attachment") return sent.attachmentIds.has(id);
+    if (kind === "text") return sent.textIds.has(id);
+    return sent.emailIds.has(id);
+  };
   return local.checklists.map((detail) => ({
     template_id: detail.checklist.templateId || null,
     template_name: detail.checklist.templateName,
@@ -238,7 +252,7 @@ export function buildChecklistSnapshotPayload(
       links: (detail.linksByItemId[item.id] ?? [])
         .map((link) => {
           const ids = link.members
-            .map((member) => (link.kind === "attachment" ? member.attachmentId : member.emailId))
+            .map((member) => memberLocalId(link.kind, member))
             .filter((id): id is string => typeof id === "string" && id.length > 0);
           for (const id of ids) if (!isSent(link.kind, id)) withheld?.push(`${link.id}:${id}`);
           return {
@@ -250,7 +264,13 @@ export function buildChecklistSnapshotPayload(
         })
         // BACKLOG-3764: a group with nothing uploaded is not sent (the cloud
         // would drop it anyway); the pre-flight listed it.
-        .filter((link) => !sent || link.local_ids.length > 0),
+        .filter(
+          (link) =>
+            (!sent || link.local_ids.length > 0) &&
+            // BACKLOG-3968: the cloud function raises on kind 'text' until
+            // PR-5 — a held text link is never in the payload, even empty.
+            !(link.kind === "text" && TEXT_LINKS_HELD_UNTIL_CLOUD_MIGRATION),
+        ),
     })),
   }));
 }
@@ -270,7 +290,7 @@ export async function snapshotSubmissionChecklists(
   let payload: SnapshotChecklistPayload[];
   const withheld: string[] = [];
   try {
-    const local = await getChecklistsForTransaction(transactionId);
+    const local = await getChecklistsForTransaction(transactionId, "broker");
     // BACKLOG-3607: a transaction with no checklist still sends [] - the
     // snapshot is the agent's whole set, and the server records a checklist
     // the agent removed since the previous version only when it is told.

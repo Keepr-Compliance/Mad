@@ -490,6 +490,24 @@ export const transactionBridge = {
     ipcRenderer.invoke("transactions:unhide-text-from-export", transactionId, messageId),
 
   /**
+   * BACKLOG-3965: record that this deal was opened (local only). Called through
+   * src/services/transactionOpenService.ts, which never throws.
+   * @param transactionId - The deal that opened
+   * @returns { success, recorded } — recorded is false when no deal has that id
+   */
+  recordOpen: (transactionId: string) =>
+    ipcRenderer.invoke("transactions:record-open", transactionId),
+
+  /**
+   * BACKLOG-3965: the deals this user opened most recently, newest first, with
+   * required checklist counts summed across each deal's checklists.
+   * @param userId - The signed-in user
+   * @param limit - How many deals (default 5)
+   */
+  getRecentlyOpened: (userId: string, limit?: number) =>
+    ipcRenderer.invoke("transactions:get-recently-opened", userId, limit),
+
+  /**
    * BACKLOG-1578: Get removed/unlinked emails for a transaction.
    * Returns emails that were manually unlinked (from ignored_communications).
    * @param transactionId - Transaction ID to get removed emails for

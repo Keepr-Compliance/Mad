@@ -6,8 +6,6 @@
  */
 
 import React, { useCallback, useState } from "react";
-import Profile from "../components/Profile";
-import Settings from "../components/Settings";
 import TransactionList from "../components/TransactionList";
 import Contacts from "../components/Contacts";
 import WelcomeTerms from "../components/WelcomeTerms";
@@ -17,11 +15,15 @@ import { IPhoneSyncModal } from "./modals/IPhoneSyncModal";
 import { AndroidSyncModal } from "./modals/AndroidSyncModal";
 import type { AppStateMachine } from "./state/types";
 import type { Transaction } from "@/types";
-import { useEmailSettingsCallbacks } from "./hooks/useEmailSettingsCallbacks";
-import { scrollToSettingsSection } from "../utils/scrollToSettingsSection";
 import { useGoogleMessagesSyncStatus } from "../hooks/useGoogleMessagesSyncStatus";
 import { useExtensionFolderRefresh } from "../hooks/useExtensionFolderRefresh";
 import { useSubmissionStatusNotice } from "./hooks/useSubmissionStatusNotice";
+import {
+  clearOpenTransactionRequest,
+  notifyTransactionsViewClosed,
+  requestOpenTransaction,
+  useOpenTransactionRequest,
+} from "./openTransactionRequest";
 
 interface AppModalsProps {
   app: AppStateMachine;
@@ -32,23 +34,17 @@ export function AppModals({ app }: AppModalsProps) {
     modalState,
     currentUser,
     authProvider,
-    subscription,
     isDatabaseInitialized,
     pendingOAuthData,
     needsTermsAcceptance,
     appPath,
     // Modal transitions
-    closeProfile,
-    closeSettings,
     closeTransactions,
     closeContacts,
     closeAuditTransaction,
     openSettings,
     openTransactions,
-    openAndroidSync,
-    openIPhoneSync,
     // Handlers
-    handleLogout,
     handleAcceptTerms,
     handleDeclineTerms,
     handleDismissMovePrompt,
@@ -64,11 +60,11 @@ export function AppModals({ app }: AppModalsProps) {
   // Track newly created transaction so TransactionList can auto-open its details
   const [auditCreatedTransaction, setAuditCreatedTransaction] = useState<Transaction | null>(null);
 
-  // BACKLOG-1898 T5: id of a transaction to auto-open in TransactionList, set
-  // when the user clicks a transaction row in the Contacts detail card. Kept
-  // local to AppModals (like auditCreatedTransaction) so no state-machine change
-  // is needed.
-  const [pendingTransactionId, setPendingTransactionId] = useState<string | null>(null);
+  // BACKLOG-1898 T5 / BACKLOG-3965: the deal (id + tab) to auto-open in
+  // TransactionList. Held in a small store (openTransactionRequest.ts) rather
+  // than local state so callers outside AppModals can write it; still no
+  // state-machine change.
+  const openRequest = useOpenTransactionRequest();
 
   // Compound action: close audit transaction modal and open transactions with the new transaction selected
   const handleAuditTransactionSuccess = useCallback((transaction: Transaction) => {
@@ -82,30 +78,13 @@ export function AppModals({ app }: AppModalsProps) {
   // resolves + opens the transaction detail by id).
   const handleOpenTransactionFromContact = useCallback((transactionId: string) => {
     closeContacts();
-    setPendingTransactionId(transactionId);
+    requestOpenTransaction(transactionId, "overview");
     openTransactions();
   }, [closeContacts, openTransactions]);
 
   // BACKLOG-3594: tell the agent when a submission comes back from the broker;
   // its "Open" action reuses the open-by-id path above.
   useSubmissionStatusNotice({ onOpenTransaction: handleOpenTransactionFromContact });
-
-  // Email connect/disconnect callbacks for Settings modal
-  const { handleEmailConnectedFromSettings, handleEmailDisconnectedFromSettings } =
-    useEmailSettingsCallbacks({ userId: currentUser?.id });
-
-  // Founder: Settings › Google Messages' Link / Relink — the same modal, at its link step.
-  const handleLinkGoogleMessagesFromSettings = useCallback(() => {
-    closeSettings();
-    openAndroidSync("link");
-  }, [closeSettings, openAndroidSync]);
-
-  // BACKLOG-3156 stage G: Settings › Messages › iPhone "Import from iPhone" — the
-  // same iPhone sync the dashboard's Sync iPhone card opens.
-  const handleImportIphoneFromSettings = useCallback(() => {
-    closeSettings();
-    openIPhoneSync();
-  }, [closeSettings, openIPhoneSync]);
 
   return (
     <>
@@ -118,31 +97,9 @@ export function AppModals({ app }: AppModalsProps) {
         />
       )}
 
-      {/* Profile Modal */}
-      {modalState.showProfile && currentUser && authProvider && (
-        <Profile
-          user={currentUser}
-          provider={authProvider}
-          subscription={subscription}
-          onLogout={handleLogout}
-          onClose={closeProfile}
-          onViewTransactions={openTransactions}
-          onOpenSettings={openSettings}
-        />
-      )}
+      {/* The account popup is gone: the initials open shell/AccountPanel (BACKLOG-3964 slice 3). */}
 
-      {/* Settings Modal */}
-      {modalState.showSettings && currentUser && (
-        <Settings
-          userId={currentUser.id}
-          onClose={closeSettings}
-          onLogout={handleLogout}
-          onEmailConnected={handleEmailConnectedFromSettings}
-          onEmailDisconnected={handleEmailDisconnectedFromSettings}
-          onLinkGoogleMessages={handleLinkGoogleMessagesFromSettings}
-          onImportIphone={handleImportIphoneFromSettings}
-        />
-      )}
+      {/* Settings is a page, not a modal: shell/SettingsLayer (BACKLOG-3964). */}
 
       {/* Transactions View */}
       {modalState.showTransactions && currentUser && authProvider && isDatabaseInitialized && (
@@ -152,11 +109,13 @@ export function AppModals({ app }: AppModalsProps) {
             provider={authProvider as "google" | "microsoft"}
             onClose={() => {
               setAuditCreatedTransaction(null);
-              setPendingTransactionId(null);
+              clearOpenTransactionRequest();
               closeTransactions();
+              notifyTransactionsViewClosed();
             }}
             initialTransaction={auditCreatedTransaction}
-            initialTransactionId={pendingTransactionId}
+            initialTransactionId={openRequest?.id ?? null}
+            initialTransactionTab={openRequest?.tab}
           />
         </div>
       )}
@@ -211,10 +170,7 @@ export function AppModals({ app }: AppModalsProps) {
           userId={currentUser.id}
           onClose={closeAndroidSync}
           startAtLink={modalState.androidSyncStart === "link"}
-          onOpenSettings={(target) => {
-            openSettings();
-            scrollToSettingsSection(target);
-          }}
+          onOpenSettings={openSettings}
         />
       )}
     </>
