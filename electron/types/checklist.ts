@@ -28,8 +28,8 @@ export type ChecklistLinkWriteKind = "attachment" | "email";
 /**
  * What kind of evidence a stored link group holds. Mirrors the local CHECK
  * (migration v78 added 'text', BACKLOG-3968). The cloud CHECK accepts 'text'
- * only after the PR-5 migration, which is why a text link is withheld from the
- * submission until then (`electron/services/checklistTextLinkHold.ts`).
+ * only after the PR-5 migration, so a text link is withheld from a submission
+ * whose cloud does not take it (`electron/services/checklistTextLinksCapability.ts`).
  */
 export type ChecklistLinkKind = ChecklistLinkWriteKind | "text";
 

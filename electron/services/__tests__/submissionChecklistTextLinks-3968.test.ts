@@ -22,8 +22,8 @@
  * Links on "Signed offer":
  *   L-texts  [t-in, o-before]   L-hid [t-hid]   L-off [t-off]   L-re [t-re]
  *
- * The hold constant is read through a getter so one file can run both states;
- * a separate test pins the REAL value (held) — R6 / C14.
+ * The capability check (checklistTextLinksCapability.ts) is mocked so one file
+ * runs both answers; its own behaviour is in checklistTextLinksCapability-3968.test.ts.
  *
  * Runner (real sqlite -> Electron ABI):
  *   ELECTRON_RUN_AS_NODE=1 npx electron ./node_modules/jest/bin/jest.js \
@@ -43,12 +43,12 @@ const RealDatabase = require(
 ) as typeof import("better-sqlite3-multiple-ciphers");
 
 let db: DatabaseType;
-let mockTextLinksHeld = true;
+let mockTextLinksSupported = false;
 
-jest.mock("../checklistTextLinkHold", () => ({
-  get TEXT_LINKS_HELD_UNTIL_CLOUD_MIGRATION() {
-    return mockTextLinksHeld;
-  },
+jest.mock("../checklistTextLinksCapability", () => ({
+  textLinksCapability: jest.fn(async () =>
+    mockTextLinksSupported ? { textLinks: true } : { textLinks: false, reason: "error" },
+  ),
 }));
 
 jest.mock("../db/core/dbConnection", () => ({
@@ -195,7 +195,8 @@ async function seed(): Promise<void> {
 }
 
 type Gathered = {
-  messages: Array<{ id: string }>;
+  messages: Array<{ id: string; external_id?: string }>;
+  textLinksSupported: boolean;
   checklistLinkGaps: ChecklistLinkGap[];
   sentEmailIds: Set<string>;
   sentAttachmentIds: Set<string>;
@@ -208,6 +209,8 @@ const sentSets = (g: Gathered): SnapshotSentSets => ({
   emailIds: g.sentEmailIds,
   attachmentIds: g.sentAttachmentIds,
   textIds: g.sentTextIds,
+  textLinksSupported: g.textLinksSupported,
+  textExternalIds: new Map(g.messages.map((m) => [m.id, m.external_id ?? null])),
   acceptedMembers: gapMemberKeys(g.checklistLinkGaps),
 });
 
@@ -233,7 +236,7 @@ afterAll(() => {
 
 beforeEach(async () => {
   jest.clearAllMocks();
-  mockTextLinksHeld = true;
+  mockTextLinksSupported = false;
   await seed();
 });
 
@@ -264,10 +267,16 @@ describe("BACKLOG-3968 — the stored text link, read back", () => {
   });
 });
 
-describe("BACKLOG-3968 — the hold (TEXT_LINKS_HELD_UNTIL_CLOUD_MIGRATION)", () => {
-  it("C14 pin: the shipped value is HELD", () => {
-    const real = jest.requireActual("../checklistTextLinkHold") as typeof import("../checklistTextLinkHold");
-    expect(real.TEXT_LINKS_HELD_UNTIL_CLOUD_MIGRATION).toBe(true);
+describe("BACKLOG-3968 — texts follow the capability check", () => {
+  it("the gather asks the capability check once and returns its answer", async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { textLinksCapability } = require("../checklistTextLinksCapability");
+    const held = await gather();
+    expect(held.textLinksSupported).toBe(false);
+    mockTextLinksSupported = true;
+    const live = await gather();
+    expect(live.textLinksSupported).toBe(true);
+    expect(textLinksCapability).toHaveBeenCalledTimes(2);
   });
 
   it("R2: the uploaded texts are the gathered messages (selection AND window), not the selection", async () => {
@@ -280,10 +289,10 @@ describe("BACKLOG-3968 — the hold (TEXT_LINKS_HELD_UNTIL_CLOUD_MIGRATION)", ()
   it("C14a (held): every text link is a pre-flight line — not included, never asked about the dates", async () => {
     const g = await gather();
     expect(gapSummary(g.checklistLinkGaps)).toEqual([
-      { linkId: "L-hid", kind: "text", reason: "not_included", detail: "not_sent", missingIds: ["t-hid"] },
+      { linkId: "L-hid", kind: "text", reason: "not_included", detail: "texts_not_supported", missingIds: ["t-hid"] },
       { linkId: "L-off", kind: "text", reason: "not_included", detail: "not_on_transaction", missingIds: ["t-off"] },
-      { linkId: "L-re", kind: "text", reason: "not_included", detail: "not_sent", missingIds: ["t-re"] },
-      { linkId: "L-texts", kind: "text", reason: "not_included", detail: "not_sent", missingIds: ["o-before", "t-in"] },
+      { linkId: "L-re", kind: "text", reason: "not_included", detail: "texts_not_supported", missingIds: ["t-re"] },
+      { linkId: "L-texts", kind: "text", reason: "not_included", detail: "texts_not_supported", missingIds: ["o-before", "t-in"] },
     ]);
   });
 
@@ -302,8 +311,8 @@ describe("BACKLOG-3968 — the hold (TEXT_LINKS_HELD_UNTIL_CLOUD_MIGRATION)", ()
     expect(payloadLinks(buildChecklistSnapshotPayload(local))).toEqual([]);
   });
 
-  it("C14c (released): a text in the window is sent; the one outside the dates and the hidden one are listed", async () => {
-    mockTextLinksHeld = false;
+  it("C14c (supported): a text in the window is sent with its external id; the one outside the dates and the hidden one are listed", async () => {
+    mockTextLinksSupported = true;
     const g = await gather();
     expect(gapSummary(g.checklistLinkGaps)).toEqual([
       { linkId: "L-hid", kind: "text", reason: "not_included", detail: "not_sent", missingIds: ["t-hid"] },
@@ -314,8 +323,35 @@ describe("BACKLOG-3968 — the hold (TEXT_LINKS_HELD_UNTIL_CLOUD_MIGRATION)", ()
     const local = await getChecklistsForTransaction(TXN, "broker");
     const payload = buildChecklistSnapshotPayload(local, sentSets(g));
     expect(payloadLinks(payload)).toEqual([
-      { kind: "text", label: "Texts with seller", sort_order: 0, local_ids: ["t-in"] },
+      { kind: "text", label: "Texts with seller", sort_order: 0, local_ids: ["t-in"], external_ids: ["guid-t-in"] },
     ]);
+  });
+
+  it("external_ids line up with local_ids; a text with no external id sends ''", async () => {
+    mockTextLinksSupported = true;
+    db.prepare("UPDATE messages SET external_id = NULL WHERE id = 't-in'").run();
+    const g = await gather();
+    const local = await getChecklistsForTransaction(TXN, "broker");
+    expect(payloadLinks(buildChecklistSnapshotPayload(local, sentSets(g)))).toEqual([
+      { kind: "text", label: "Texts with seller", sort_order: 0, local_ids: ["t-in"], external_ids: [""] },
+    ]);
+  });
+
+  it("text rows: external_id only when supported; a NULL channel goes up as 'sms', others unchanged", async () => {
+    const map = (m: Record<string, unknown>, withExternalId: boolean) =>
+      (submissionService as unknown as {
+        mapToSubmissionMessage(m: unknown, s: string, p: unknown, w: boolean): Record<string, unknown>;
+      }).mapToSubmissionMessage(m, "sub-3968", { names: {}, matches: {} }, withExternalId);
+    const row = (id: string) => db.prepare("SELECT * FROM messages WHERE id = ?").get(id) as Record<string, unknown>;
+    db.prepare("UPDATE messages SET channel = NULL WHERE id = 't-off'").run();
+    expect(row("t-off").channel).toBeNull();
+
+    const live = map(row("t-in"), true);
+    expect(live.external_id).toBe("guid-t-in");
+    expect(live.channel).toBe("imessage");
+    expect(map(row("t-in"), false)).not.toHaveProperty("external_id");
+    expect(map(row("t-off"), true).channel).toBe("sms");
+    expect(map(row("t-off"), true).message_type).toBe("text");
   });
 
   it("R3: 'Include it' is refused on a text link (the flag stays 0); an email link on the same item takes it", async () => {
