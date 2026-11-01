@@ -92,10 +92,18 @@ export async function cellTextChip(page: Page, seed: ChecklistTextsSeed): Promis
     .first()
     .waitFor({ state: 'visible', timeout: 10_000 })
     .then(() => true, () => false);
+  // Close the conversation again so the next cell starts from the deal: the header's close
+  // button is the header's own button (ConversationViewModal, no testid; no Escape handler).
+  let closed = !opened;
+  if (opened) {
+    const count = page.getByTestId('conversation-count').first();
+    await count.locator('xpath=../..').locator(':scope > button').first().click();
+    closed = await count.waitFor({ state: 'detached', timeout: 10_000 }).then(() => true, () => false);
+  }
   return {
     id: 'T3',
     ok: iconText === 'TXT' && /^TXT\s*Text · /.test(text) && opened,
-    detail: `icon "${iconText}", chip "${text}", conversation opened ${opened}`,
+    detail: `icon "${iconText}", chip "${text}", conversation opened ${opened}, closed ${closed}`,
   };
 }
 
