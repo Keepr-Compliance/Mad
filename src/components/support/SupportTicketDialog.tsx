@@ -14,6 +14,8 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { ResponsiveModal } from "../common/ResponsiveModal";
+import { Z_CLASS } from "../../constants/zLayers";
+import { useEscapeToClose } from "../../hooks/useEscapeToClose";
 import {
   useSupportTicket,
   type TicketPriority,
@@ -21,6 +23,7 @@ import {
 } from "../../hooks/useSupportTicket";
 import { DiagnosticsPreview } from "./DiagnosticsPreview";
 import { ScreenshotCapture } from "./ScreenshotCapture";
+import { SUPPORT_DIALOG_TEST_ID } from "./supportDialogSelector";
 
 interface SupportTicketDialogProps {
   /** Close the dialog */
@@ -155,10 +158,13 @@ export function SupportTicketDialog({
     onClose();
   };
 
+  // Esc closes this form only; the Settings layer defers to it (BACKLOG-3964).
+  useEscapeToClose(true, handleClose);
+
   // Success state
   if (success) {
     return (
-      <ResponsiveModal onClose={handleClose} zIndex="z-[70]" panelClassName="max-w-lg">
+      <ResponsiveModal onClose={handleClose} zIndex={Z_CLASS.supportDialog} testId={SUPPORT_DIALOG_TEST_ID} panelClassName="max-w-lg">
           <div className="p-8 text-center">
             <div className="mx-auto w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mb-4">
               <svg
@@ -205,7 +211,7 @@ export function SupportTicketDialog({
   const topCategories = categories.filter((c) => !c.parent_id);
 
   return (
-    <ResponsiveModal onClose={handleClose} zIndex="z-[70]" panelClassName="max-w-lg sm:max-h-[90vh]">
+    <ResponsiveModal onClose={handleClose} zIndex={Z_CLASS.supportDialog} testId={SUPPORT_DIALOG_TEST_ID} panelClassName="max-w-lg sm:max-h-[90vh]">
         {/* Header */}
         <div className="flex-shrink-0 bg-gradient-to-r from-blue-500 to-indigo-600 px-3 sm:px-6 pt-6 sm:pt-4 pb-3 sm:pb-4 sm:rounded-t-xl shadow-lg">
           {/* Mobile */}

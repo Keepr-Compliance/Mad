@@ -67,6 +67,7 @@ import databaseService from "./databaseService";
 import logService from "./logService";
 import { downloadMissingEmailAttachments as downloadMissingEmailAttachmentsShared } from "./emailAttachmentDownload";
 import { snapshotSubmissionChecklists } from "./submissionChecklistSnapshot";
+import { textLinksCapability } from "./checklistTextLinksCapability";
 import {
   findChecklistLinkGaps,
   gapMemberKeys,
@@ -358,6 +359,12 @@ interface SubmissionMessageRecord {
   attachment_count: number;
   /** Message type: text, voice_message, location, attachment_only, system, unknown */
   message_type?: string;
+  /**
+   * BACKLOG-3968: the text's `messages.external_id`, for the checklist
+   * snapshot's fallback match. Texts only, and only when the cloud takes text
+   * links (the column ships with the same migration).
+   */
+  external_id?: string;
 }
 
 /** Record structure for submission_attachments table */
@@ -766,6 +773,8 @@ class SubmissionService {
     checklistLinkGaps: ChecklistLinkGap[];
     sentEmailIds: Set<string>;
     sentAttachmentIds: Set<string>;
+    sentTextIds: Set<string>;
+    textLinksSupported: boolean;
   }> {
     const transaction = await this.loadTransaction(transactionId);
     // BACKLOG-3683: the same reader the scope preview uses.
@@ -849,11 +858,16 @@ class SubmissionService {
     // (SubmitForReviewModal `proceed` awaits the save, then submits).
     const sentEmailIds = new Set(emailIds);
     const sentAttachmentIds = new Set(preflight.sendable.map((a) => a.id));
+    // BACKLOG-3968 (SR R2): the texts actually uploaded — `messages` is the
+    // selection AND the audit window, each mapped to a submission row below.
+    // Never `selected`: a text in the selection but outside the dates is not
+    // uploaded.
+    const sentTextIds = new Set(messages.map((m) => m.id));
     // A failed local read fails the submit the same way a failed checklist
     // copy does (BACKLOG-3600): nothing is sent, and the agent is told why.
     let localChecklists: Awaited<ReturnType<typeof getChecklistsForTransaction>>;
     try {
-      localChecklists = await getChecklistsForTransaction(transactionId);
+      localChecklists = await getChecklistsForTransaction(transactionId, "broker");
     } catch (error) {
       logService.warn(
         `[Submission] Checklists could not be read before submit: ${error instanceof Error ? error.message : "Unknown error"}`,
@@ -862,10 +876,15 @@ class SubmissionService {
       );
       throw new ChecklistsNotSentError();
     }
+    // BACKLOG-3968: asked once per gather; this answer decides both the
+    // pre-flight list and (on submit) the snapshot payload and text rows.
+    const textLinksSupported = (await textLinksCapability(() => supabaseService.getClient())).textLinks;
     const checklistLinkGaps = findChecklistLinkGaps({
       checklists: localChecklists,
       sentEmailIds,
       sentAttachmentIds,
+      sentTextIds,
+      textLinksSupported,
       notIncluded: preflight.notIncluded,
       startedAt: transaction.started_at ?? null,
       closedAt: transaction.closed_at ?? null,
@@ -892,6 +911,8 @@ class SubmissionService {
       checklistLinkGaps,
       sentEmailIds,
       sentAttachmentIds,
+      sentTextIds,
+      textLinksSupported,
     };
   }
 
@@ -1030,6 +1051,9 @@ class SubmissionService {
       const snapshotSent = {
         emailIds: gathered.sentEmailIds,
         attachmentIds: gathered.sentAttachmentIds,
+        textIds: gathered.sentTextIds,
+        textLinksSupported: gathered.textLinksSupported,
+        textExternalIds: new Map(messages.map((m) => [m.id, m.external_id ?? null])),
         acceptedMembers: gapMemberKeys(checklistLinkGaps),
       };
       throwIfCancelled(signal);
@@ -1046,7 +1070,12 @@ class SubmissionService {
       const cloudIdByLocal = new Map<string, string>();
       cloudIdByLocalOuter = cloudIdByLocal;
       const textRecords = messages.map((m) => {
-        const record = this.mapToSubmissionMessage(m, submissionId, partyNames);
+        const record = this.mapToSubmissionMessage(
+          m,
+          submissionId,
+          partyNames,
+          gathered.textLinksSupported
+        );
         cloudIdByLocal.set(`text:${m.id}`, record.id);
         return record;
       });
@@ -2259,7 +2288,9 @@ class SubmissionService {
   private mapToSubmissionMessage(
     message: Message,
     submissionId: string,
-    partyNames: HandleNameResolution = { names: {}, matches: {} }
+    partyNames: HandleNameResolution = { names: {}, matches: {} },
+    /** BACKLOG-3968: the capability check said yes, so `external_id` is sent. */
+    withExternalId = false
   ): SubmissionMessageRecord {
     // Parse participants JSON
     let participants: Record<string, unknown> = {};
@@ -2319,7 +2350,10 @@ class SubmissionService {
       id: crypto.randomUUID(),
       submission_id: submissionId,
       local_message_id: message.id,
-      channel: message.channel || "email",
+      // BACKLOG-3968: this maps TEXTS (emails use mapEmailToSubmissionMessage).
+      // A NULL channel (the local column allows it) is a text, so 'sms' — one
+      // of the cloud's accepted values (20260122_b2b_broker_portal.sql:171).
+      channel: message.channel || "sms",
       direction: message.direction || "inbound",
       subject: message.subject || undefined,
       body_text: message.body_text || undefined,
@@ -2332,6 +2366,7 @@ class SubmissionService {
       attachment_count: 0, // Would need to count from attachments table
       // TASK-1803: Include message_type for broker portal special message display
       message_type: message.message_type || "text",
+      ...(withExternalId && message.external_id ? { external_id: message.external_id } : {}),
     };
   }
 

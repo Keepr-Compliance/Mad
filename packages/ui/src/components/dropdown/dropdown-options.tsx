@@ -3,13 +3,15 @@
 import * as React from 'react';
 import { Check, Search } from 'lucide-react';
 import { cn } from '../../lib/cn';
+import { selectAllValues } from '../report/select-all';
 import { filterDropdownOptions } from './filter-options';
 import type { DropdownOptionsProps, DropdownRow } from './types';
 
 /**
  * DropdownOptions (BACKLOG-4032): the search field + listbox, with no trigger
- * and no popover. `Dropdown` wraps it in a popover; a phone parent puts it in
- * a BottomSheet (slice 2).
+ * and no popover. `Dropdown` wraps it in a popover, or in a BottomSheet with
+ * `presentation="sheet"`; a phone filter bar puts it in a BottomSheet itself
+ * (README "Phone").
  *
  * a11y: ARIA 1.2 combobox. Focus stays in the search field (role=combobox)
  * and the active row is announced through aria-activedescendant, so typing
@@ -22,27 +24,48 @@ import type { DropdownOptionsProps, DropdownRow } from './types';
  *
  * Disabled rows are skipped by the arrow keys (founder decision 2026-10-21);
  * they are announced by browse mode and their hint is their description.
+ *
+ * `mode="multi"` (slice 4a): the listbox is aria-multiselectable and every
+ * option carries aria-selected true/false. Enter or a click TOGGLES the active
+ * row and calls onChange(next); the query and the active row are kept. Space
+ * types into the search (it toggles only when there is no search field). A
+ * "Select all" / "Clear all" strip sits between the search and the list; both
+ * act on every enabled option, not the search results. Tab from the search
+ * goes to the first ENABLED bulk button (a disabled one is skipped), Tab from
+ * the last enabled one calls onTabOut; with none enabled, Tab calls onTabOut.
+ * A bulk action returns focus to the search. The check square at the left is
+ * decorative (aria-hidden): an interactive checkbox inside role=option would
+ * be invalid ARIA.
  */
+/** Bulk rows: the same look as MultiSelectOptions' "Select all" / "Clear all" rows. */
+const bulkButton =
+  'flex w-full items-center px-3 text-left hover:bg-gray-50 focus:outline-none focus-visible:bg-gray-50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500 disabled:cursor-not-allowed disabled:text-gray-400 disabled:hover:bg-transparent';
+
 function isNavigable<V extends string>(row: DropdownRow<V>): boolean {
   return row.kind === 'option' && !row.option.disabled;
 }
 
-export function DropdownOptions<V extends string = string>({
-  options,
-  value,
-  onSelect,
-  ariaLabel,
-  labelledBy,
-  searchable = true,
-  searchPlaceholder,
-  emptyText = 'No results',
-  query: queryProp,
-  onQueryChange,
-  autoFocus = false,
-  onTabOut,
-  size = 'default',
-  className,
-}: DropdownOptionsProps<V>) {
+export function DropdownOptions<V extends string = string>(props: DropdownOptionsProps<V>) {
+  const {
+    options,
+    ariaLabel,
+    labelledBy,
+    searchable = true,
+    searchPlaceholder,
+    emptyText = 'No results',
+    query: queryProp,
+    onQueryChange,
+    autoFocus = false,
+    onTabOut,
+    size = 'default',
+    fill = false,
+    className,
+  } = props;
+  const multi = props.mode === 'multi';
+  const selectedValues: readonly V[] =
+    props.mode === 'multi' ? props.value : props.value === null ? [] : [props.value];
+  const isSelected = (v: V) => selectedValues.includes(v);
+
   const baseId = React.useId();
   const listboxId = `${baseId}-listbox`;
 
@@ -51,7 +74,13 @@ export function DropdownOptions<V extends string = string>({
 
   // The active row is tracked by VALUE and re-derived against the current
   // rows on every render, so a filtered or shrunk list never leaves a stale id.
-  const [activeValue, setActiveValue] = React.useState<V | null>(value);
+  // Multi opens on the first ENABLED selected option in option order, else
+  // the first enabled row (null falls back to it below).
+  const [activeValue, setActiveValue] = React.useState<V | null>(() =>
+    props.mode === 'multi'
+      ? (options.find((o) => !o.disabled && props.value.includes(o.value))?.value ?? null)
+      : props.value
+  );
 
   const indexByValue = React.useMemo(() => {
     const m = new Map<V, number>();
@@ -128,7 +157,35 @@ export function DropdownOptions<V extends string = string>({
 
   function pick(row: DropdownRow<V> | undefined) {
     if (!row || row.kind !== 'option' || row.option.disabled) return;
-    onSelect(row.option.value);
+    const v = row.option.value;
+    if (props.mode === 'multi') {
+      const current = props.value;
+      props.onChange(current.includes(v) ? current.filter((x) => x !== v) : [...current, v]);
+      // The toggled row stays active, so Enter again toggles it back.
+      setActiveValue(v);
+    } else {
+      props.onSelect(v);
+    }
+  }
+
+  // Bulk strip (multi only).
+  const enabledOptions = options.filter((o) => !o.disabled);
+  const canSelectAll = multi && enabledOptions.some((o) => !isSelected(o.value));
+  const canClearAll = multi && selectedValues.length > 0;
+  const selectAllRef = React.useRef<HTMLButtonElement>(null);
+  const clearAllRef = React.useRef<HTMLButtonElement>(null);
+  const firstBulk = canSelectAll ? selectAllRef : canClearAll ? clearAllRef : null;
+  const lastBulk = canClearAll ? clearAllRef : canSelectAll ? selectAllRef : null;
+
+  function bulk(next: V[]) {
+    if (props.mode !== 'multi') return;
+    props.onChange(next);
+    // A keyboard press would leave focus on a button that may now be disabled.
+    hostRef.current?.focus();
+  }
+
+  function onBulkKeyDown(e: React.KeyboardEvent<HTMLButtonElement>) {
+    if (e.key === 'Tab' && !e.shiftKey && lastBulk?.current === e.currentTarget) onTabOut?.();
   }
 
   function onKeyDown(e: React.KeyboardEvent) {
@@ -153,7 +210,19 @@ export function DropdownOptions<V extends string = string>({
         e.preventDefault();
         pick(activeRow);
         break;
+      case ' ':
+        // Space types into the search; with no search field it toggles in multi.
+        if (multi && !searchable) {
+          e.preventDefault();
+          pick(activeRow);
+        }
+        break;
       case 'Tab':
+        if (multi && !e.shiftKey && firstBulk?.current) {
+          e.preventDefault();
+          firstBulk.current.focus();
+          break;
+        }
         onTabOut?.();
         break;
       default:
@@ -162,12 +231,13 @@ export function DropdownOptions<V extends string = string>({
   }
 
   const comfortable = size === 'comfortable';
+  const rowSize = comfortable ? 'min-h-12 text-base' : 'min-h-9 text-sm';
   const searchLabel = searchPlaceholder ?? `Search ${ariaLabel}`;
 
   return (
     <div
       data-slot="dropdown-options"
-      className={cn('overflow-hidden rounded-lg border border-gray-200', className)}
+      className={cn('overflow-hidden rounded-lg border border-gray-200', fill && 'flex h-full min-h-0 flex-col', className)}
     >
       {searchable ? (
         <div
@@ -182,6 +252,7 @@ export function DropdownOptions<V extends string = string>({
               hostRef.current = el;
             }}
             type="text"
+            data-autofocus={autoFocus ? '' : undefined}
             role="combobox"
             aria-label={searchLabel}
             aria-expanded="true"
@@ -201,6 +272,32 @@ export function DropdownOptions<V extends string = string>({
           />
         </div>
       ) : null}
+      {multi ? (
+        <div data-slot="dropdown-bulk" className="divide-y divide-gray-100 border-b border-gray-100">
+          <button
+            ref={selectAllRef}
+            type="button"
+            disabled={!canSelectAll}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => bulk(selectAllValues(enabledOptions, selectedValues))}
+            onKeyDown={onBulkKeyDown}
+            className={cn(bulkButton, rowSize, 'font-medium text-primary-700')}
+          >
+            Select all
+          </button>
+          <button
+            ref={clearAllRef}
+            type="button"
+            disabled={!canClearAll}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => bulk([])}
+            onKeyDown={onBulkKeyDown}
+            className={cn(bulkButton, rowSize, 'text-gray-500')}
+          >
+            Clear all
+          </button>
+        </div>
+      ) : null}
       <div
         ref={
           searchable
@@ -210,18 +307,23 @@ export function DropdownOptions<V extends string = string>({
               }
         }
         id={listboxId}
+        data-autofocus={autoFocus && !searchable ? '' : undefined}
         role="listbox"
+        aria-multiselectable={multi ? true : undefined}
         aria-label={labelledBy ? undefined : ariaLabel}
         aria-labelledby={labelledBy}
         tabIndex={searchable ? -1 : 0}
         aria-activedescendant={searchable ? undefined : activeId}
         onKeyDown={searchable ? undefined : onKeyDown}
-        className="max-h-60 divide-y divide-gray-100 overflow-y-auto focus:outline-none"
+        className={cn(
+          'divide-y divide-gray-100 overflow-y-auto focus:outline-none',
+          fill ? (rows.length > 0 ? 'min-h-0 flex-1' : 'flex-none') : 'max-h-60'
+        )}
       >
         {rows.map((row) => {
           if (row.kind !== 'option') return null;
           const { option } = row;
-          const selected = option.value === value;
+          const selected = isSelected(option.value);
           const active = row.id === activeId;
           const descId = option.description ? `${row.id}-desc` : undefined;
           const hintId = option.hint ? `${row.id}-hint` : undefined;
@@ -254,6 +356,19 @@ export function DropdownOptions<V extends string = string>({
                 selected ? (active ? 'bg-primary-100' : 'bg-primary-50') : active && 'bg-gray-50'
               )}
             >
+              {multi ? (
+                <span
+                  data-slot="dropdown-check"
+                  aria-hidden="true"
+                  className={cn(
+                    'inline-flex h-4 w-4 flex-none items-center justify-center rounded-sm border shadow-sm',
+                    selected ? 'border-primary bg-primary text-primary-foreground' : 'border-input bg-white',
+                    option.disabled && 'opacity-50'
+                  )}
+                >
+                  {selected ? <Check className="h-3.5 w-3.5" /> : null}
+                </span>
+              ) : null}
               <span className="min-w-0 flex-1">
                 <span id={row.labelId} className={cn('block', selected && 'font-medium')}>
                   {option.label}
@@ -261,7 +376,7 @@ export function DropdownOptions<V extends string = string>({
                 {option.description ? (
                   <span
                     id={descId}
-                    className={cn('block text-xs', option.disabled ? 'text-gray-400' : 'text-gray-600')}
+                    className={cn('block', comfortable ? 'text-sm' : 'text-xs', option.disabled ? 'text-gray-400' : 'text-gray-600')}
                   >
                     {option.description}
                   </span>
@@ -272,7 +387,7 @@ export function DropdownOptions<V extends string = string>({
                   </span>
                 ) : null}
               </span>
-              {selected ? (
+              {multi ? null : selected ? (
                 <Check className="h-4 w-4 flex-none text-primary-600" aria-hidden="true" />
               ) : (
                 <span className="w-4 flex-none" aria-hidden="true" />
@@ -286,6 +401,7 @@ export function DropdownOptions<V extends string = string>({
           data-slot="dropdown-empty"
           className={cn(
             'flex items-center justify-center px-3 text-gray-500',
+            fill && 'flex-1',
             comfortable ? 'min-h-12 text-base' : 'min-h-9 text-sm'
           )}
         >

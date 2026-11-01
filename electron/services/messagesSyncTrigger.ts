@@ -10,6 +10,9 @@
 //   - DATE-CHANGE : audit dates moved earlier → import older texts + expand.
 //   - EXPORT      : awaited completeness backstop before an audit artifact.
 //   - OPEN / SCAN : top-up (throttled).
+//   - UPDATE      : the user clicked an "Update" button (Texts-tab notice, export
+//                   gate). Also fetches NEWER texts when the Mac marker is stale
+//                   (BACKLOG-4066) — the one click-only reason.
 //
 // ARCHITECTURE (SR-correction a — the biggest): the macOS Messages import is
 // GLOBAL / USER-SCOPED, not per-transaction / per-account. There is NO
@@ -54,7 +57,11 @@ import {
   autoLinkNewMessagesForUser,
 } from "./autoLinkService";
 import { computeEarliestAuditStart } from "../utils/emailDateRange";
-import { getMessagesFloorISO, isMessagesImporterAvailable } from "./auditCoverageService";
+import {
+  COVERAGE_TOLERANCE_MS,
+  getMessagesFloorISO,
+  isMessagesImporterAvailable,
+} from "./auditCoverageService";
 // BACKLOG-2393: scoped support-access tracing. A no-op unless a user has
 // granted a support window covering the message-import scope.
 import { supportTrace } from "./supportAccess/trace";
@@ -73,9 +80,13 @@ import {
   emitBackgroundImportFinished,
 } from "./messagesBackgroundImportSignal";
 import logService from "./logService";
-import { recordMacImportRun } from "./macImportMarker";
+import { readMacLastImportISO, recordMacImportRun } from "./macImportMarker";
 
-export type MessagesSyncReason = "create" | "open" | "export" | "date-change" | "scan";
+/**
+ * "update" = the user clicked an Update button (BACKLOG-4066). Only it may run a
+ * device import for NEWER texts; every automatic reason checks the start side only.
+ */
+export type MessagesSyncReason = "create" | "open" | "export" | "date-change" | "scan" | "update";
 
 export interface EnsureMessagesResult {
   /** Whether any work (import and/or expansion) ran. */
@@ -115,6 +126,8 @@ interface InflightEntry {
   promise: Promise<EnsureMessagesResult>;
   /** requiredStart epoch-ms this scan reaches back to; null = no lower bound. */
   requiredStartMs: number | null;
+  /** BACKLOG-4066: this run was started by a click that also fetches newer texts. */
+  importsNewer: boolean;
 }
 const inflightByUser = new Map<string, InflightEntry>();
 
@@ -122,10 +135,27 @@ const inflightByUser = new Map<string, InflightEntry>();
 const BYPASS_THROTTLE: ReadonlySet<MessagesSyncReason> = new Set([
   "export",
   "date-change",
+  "update",
 ]);
 
 /** Freshness window for the throttled reasons (create/open/scan). */
 const MESSAGES_SYNC_FRESHNESS_MS = 5 * 60 * 1000;
+
+/**
+ * BACKLOG-4066: does an "update" click need a device import for NEWER texts?
+ *
+ * Mirrors the "newer" rule in `sourceCoverageGaps` (auditCoverageService) with
+ * requiredEnd = now — the Texts-tab notice's async path passes no audit end — and the
+ * SAME constant, so "the newer line is shown" implies "the click imports". The export
+ * gate uses min(end, now) <= now, so a line it shows also passes here. A marker
+ * that was never written (null) or is younger than a day runs nothing — no
+ * redundant rescan on a click (BACKLOG-2305's rule).
+ */
+function macMarkerIsStale(lastSyncISO: string | null): boolean {
+  if (!lastSyncISO) return false;
+  const last = Date.parse(lastSyncISO);
+  return Number.isFinite(last) && last < Date.now() - COVERAGE_TOLERANCE_MS;
+}
 
 /** True while a global messages sync is in progress for the user. */
 export function isMessagesSyncInFlight(userId: string): boolean {
@@ -194,12 +224,22 @@ export function ensureTransactionMessagesSynced(params: {
     //    a deeper caller is never handed back a shallower in-flight scan.
     const requiredStart = resolveRequiredStart(userId, params.proposedStartISO);
     const requiredStartMs = requiredStart ? requiredStart.getTime() : null;
+    // BACKLOG-4066: a click that needs newer texts. Synchronous on purpose (no
+    // await before the registry set below). The importer check stays in runEnsure.
+    const wantsNewer = reason === "update" && macMarkerIsStale(readMacLastImportISO(userId));
 
     // 2. Coalesce onto the in-flight scan ONLY when it reaches at least as far
     //    back as this caller needs (no await between this read and the set below,
     //    so no interleave is possible).
+    //    BACKLOG-4066 — a click that wants newer texts JOINS an in-flight run only
+    //    when that run is itself fetching newer texts; otherwise it CHAINS after
+    //    it, so a click during an automatic (start-only) run is not swallowed.
     const existing = inflightByUser.get(userId);
-    if (existing && inflightCoversRequirement(existing.requiredStartMs, requiredStartMs)) {
+    if (
+      existing &&
+      inflightCoversRequirement(existing.requiredStartMs, requiredStartMs) &&
+      (!wantsNewer || existing.importsNewer)
+    ) {
       return existing.promise;
     }
 
@@ -226,9 +266,9 @@ export function ensureTransactionMessagesSynced(params: {
     //    is honored instead of rejected with "already in progress".
     const prior = existing?.promise;
     const run = (): Promise<EnsureMessagesResult> =>
-      runEnsure({ ...params, requiredStart });
+      runEnsure({ ...params, requiredStart, wantsNewer });
     const chained = prior ? prior.then(run, run) : run();
-    const entry: InflightEntry = { promise: chained, requiredStartMs };
+    const entry: InflightEntry = { promise: chained, requiredStartMs, importsNewer: wantsNewer };
     inflightByUser.set(userId, entry);
     // Clear the registry only if WE are still the current entry (a deeper caller
     // may have replaced us while we were queued). The trailing .catch(() => {})
@@ -276,6 +316,8 @@ async function runEnsure(params: {
   onProgress?: ImportProgressCallback;
   /** Pre-resolved lower bound (SR D1) — computed by the caller for coalescing. */
   requiredStart: Date | null;
+  /** BACKLOG-4066: decided in the prologue (an "update" click with a stale marker). */
+  wantsNewer: boolean;
 }): Promise<EnsureMessagesResult> {
   const { userId, reason, onProgress, requiredStart } = params;
   let importRan = false;
@@ -323,11 +365,18 @@ async function runEnsure(params: {
     // `requestedStartISO` is how this entry point states its one legitimate
     // difference: the deal being created may not be in the database yet, so its
     // start has to be passed in rather than derived.
-    if (gap && importerAvailable && !alreadyScannedDeep) {
+    // BACKLOG-4066: an "update" click whose Mac marker is stale. Re-read at run
+    // time: a run this click chained after may already have refreshed the marker,
+    // and then there is nothing newer to fetch.
+    const wantsNewer = params.wantsNewer && macMarkerIsStale(readMacLastImportISO(userId));
+    const wantsImport = (gap && !alreadyScannedDeep) || wantsNewer;
+    if (wantsImport && importerAvailable) {
+      // A delta plan has no upper bound (importPlan.ts), so one run fetches the
+      // older AND the newer texts.
       const plan = await resolveImportPlanForUser({
         userId,
         mode: "delta",
-        requestedStartISO: (requiredStart as Date).toISOString(),
+        requestedStartISO: requiredStart?.toISOString() ?? null,
       });
 
       // BACKLOG-2772: announce the run so the renderer can mirror it into the
@@ -356,7 +405,9 @@ async function runEnsure(params: {
         imported = result.messagesImported;
         // Record how far back this import actually scanned (SR D2) so the export
         // gate can require deepest_import_start <= the audit start.
-        recordImport(userId, (requiredStart as Date).toISOString());
+        // recordImport keeps the EARLIER of the stored and given value, and a null
+        // reach leaves it unchanged — a newer-only run cannot make it later.
+        recordImport(userId, requiredStart?.toISOString() ?? null);
         // Link brand-new older threads too (mirrors the Settings import handler);
         // expansion below then heals already-attached threads' older siblings.
         if (result.messagesImported > 0) {
@@ -402,13 +453,15 @@ async function runEnsure(params: {
     const floorAfter = getMessagesFloorISO(userId);
     const ran = importRan || expansionRan;
     let skipped: EnsureMessagesResult["skipped"];
-    if (requiredStart === null) skipped = "no_required_start";
-    else if (!gap) skipped = "covered";
-    // BACKLOG-2305: a prior import already scanned at least this deep → covered
+    // BACKLOG-4066: "an import ran" is checked first — a newer-only import has no
+    // start gap and would otherwise be labelled no_required_start / covered.
+    if (importRan) skipped = undefined;
+    else if (!wantsImport && requiredStart === null) skipped = "no_required_start";
+    // !gap, or BACKLOG-2305: a prior import already scanned at least this deep
     // (the redundant device import was intentionally suppressed above).
-    else if (alreadyScannedDeep) skipped = "covered";
+    else if (!wantsImport) skipped = "covered";
     else if (!importerAvailable) skipped = "no_importer";
-    else if (!importRan) skipped = "import_failed";
+    else skipped = "import_failed";
 
     logService.info("[BACKLOG-2292] messages sync completed", "MessagesSyncTrigger", {
       reason,
@@ -430,6 +483,7 @@ async function runEnsure(params: {
       floor_after: floorAfter,
       gap,
       already_scanned_deep: alreadyScannedDeep,
+      wants_newer: wantsNewer,
       importer_available: importerAvailable,
       import_ran: importRan,
       imported,

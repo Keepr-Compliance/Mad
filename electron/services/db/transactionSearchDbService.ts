@@ -280,6 +280,12 @@ function containsPattern(rawTerm: string): string {
 // already by the iMessage import. These are EXISTS predicates (scalar — no row
 // fan-out, so no DISTINCT is required) and each adds exactly ONE bound `?` (the
 // filename LIKE pattern) at its call site, appended after the body/sender params.
+//
+// BACKLOG-3942: the DEAL-SCOPED email search (buildEmailQuery) matches the
+// attachment's filename AND its extracted text — see EMAIL_ATTACHMENT_TEXT_MATCH
+// below. The global and unattached email builders stay FILENAME-ONLY (these
+// constants) until the FTS5 follow-up. The text-message builders stay
+// filename-only until a writer of message-attachment text exists.
 const EMAIL_ATTACHMENT_MATCH = `EXISTS (
         SELECT 1 FROM attachments a
         WHERE a.email_id = e.id AND a.filename LIKE ? ESCAPE '\\'
@@ -290,6 +296,25 @@ const TEXT_ATTACHMENT_MATCH = `EXISTS (
         SELECT 1 FROM attachments a
         WHERE (a.message_id = m.id OR a.external_message_id = m.external_id)
           AND a.filename LIKE ? ESCAPE '\\'
+      )`;
+
+// BACKLOG-3942: DEAL-SCOPED email attachment match — used by buildEmailQuery ONLY.
+// The LIKE subject is `filename || char(10) || COALESCE(text_content, '')`, so a
+// term found in either the attachment's name or its extracted text matches, with
+// the SAME single bound `?` as EMAIL_ATTACHMENT_MATCH (the bound-param protocol
+// above is unchanged).
+// - NULL text_content (never extracted) and '' (extracted, no text) both reduce the
+//   subject to `filename || char(10)`: exactly the filename-only behaviour. The
+//   COALESCE is load-bearing — `filename || NULL` is NULL, and NULL LIKE ? never
+//   matches, so dropping it would stop every never-extracted attachment matching
+//   on its filename.
+// - char(10) separates the two parts so a term cannot match across the boundary
+//   (filenames never contain a newline; see parseMatchedAttachments).
+// - The pattern and ESCAPE are unchanged (containsPattern / escapeLike).
+const EMAIL_ATTACHMENT_TEXT_MATCH = `EXISTS (
+        SELECT 1 FROM attachments a
+        WHERE a.email_id = e.id
+          AND (a.filename || char(10) || COALESCE(a.text_content, '')) LIKE ? ESCAPE '\\'
       )`;
 
 // ---------------------------------------------------------------------------
@@ -331,11 +356,24 @@ const GROUP_THREAD_PREDICATE = `json_valid(m.participants)
 // contain newlines), split + de-duped + capped in `parseMatchedAttachments`. Each
 // SELECT adds exactly ONE bound `?` at the FRONT of the statement (the SELECT list
 // precedes WHERE), so callers prepend the pattern to `params`.
+//
+// BACKLOG-3942: EMAIL_MATCHED_ATTACHMENTS_TEXT_SELECT is the deal-scoped
+// (buildEmailQuery) projection — same filename + char(10) + COALESCE(text_content,
+// '') subject as EMAIL_ATTACHMENT_TEXT_MATCH, so the filter and the projection
+// cannot drift apart. It still PROJECTS only `a.filename`: a text hit surfaces as
+// the attachment's name, never its text. The global builder keeps the
+// filename-only projection until the FTS5 follow-up.
 const MATCHED_ATTACHMENT_CAP = 5;
 const EMAIL_MATCHED_ATTACHMENTS_SELECT = `(
       SELECT group_concat(a.filename, char(10))
       FROM attachments a
       WHERE a.email_id = e.id AND a.filename LIKE ? ESCAPE '\\'
+    ) AS matchedAttachments`;
+const EMAIL_MATCHED_ATTACHMENTS_TEXT_SELECT = `(
+      SELECT group_concat(a.filename, char(10))
+      FROM attachments a
+      WHERE a.email_id = e.id
+        AND (a.filename || char(10) || COALESCE(a.text_content, '')) LIKE ? ESCAPE '\\'
     ) AS matchedAttachments`;
 const TEXT_MATCHED_ATTACHMENTS_SELECT = `(
       SELECT group_concat(a.filename, char(10))
@@ -500,7 +538,7 @@ export function buildEmailQuery(
         OR e.body_plain LIKE ? ESCAPE '\\'
         OR e.sender LIKE ? ESCAPE '\\'
         OR e.recipients LIKE ? ESCAPE '\\'
-        OR ${EMAIL_ATTACHMENT_MATCH}
+        OR ${EMAIL_ATTACHMENT_TEXT_MATCH}
       )`;
   const whereParams = [transactionId, pat, pat, pat, pat, pat];
 
@@ -508,7 +546,7 @@ export function buildEmailQuery(
     sql: `${MARK.emails}
     SELECT e.id AS id, e.subject AS subject, e.sender AS sender, e.sent_at AS sentAt,
            substr(e.body_plain, 1, ${SNIPPET_LEN}) AS snippet,
-           ${EMAIL_MATCHED_ATTACHMENTS_SELECT}
+           ${EMAIL_MATCHED_ATTACHMENTS_TEXT_SELECT}
     ${from}
     ${where}
     ORDER BY e.sent_at DESC

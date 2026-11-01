@@ -881,7 +881,8 @@ export function registerTransactionCrudHandlers(
       const result = await ensureTransactionMessagesSynced({
         transactionId: validatedTransactionId || undefined,
         userId: validatedUserId as string,
-        reason: "date-change",
+        // BACKLOG-4066: every caller of this channel is an Update button.
+        reason: "update",
         proposedStartISO,
         onProgress,
       });

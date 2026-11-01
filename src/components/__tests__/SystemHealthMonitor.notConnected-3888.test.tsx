@@ -151,27 +151,31 @@ describe("BACKLOG-3888 — amber 'connect' strip", () => {
     expect(targets["settings-email"].scrollIntoView).not.toHaveBeenCalled();
   });
 
+  // BACKLOG-3964: the section is the Settings page's own target now
+  // (openSettings("settings-email"); the page scrolls once loaded), so these
+  // assert the target handed over, not a scroll done by a timer here.
   it("falls back to the section if the button never appears", async () => {
     const targets = mountSettingsTargets();
     targets["email-connection-microsoft-connect"].remove();
     mockHealthCheck.mockResolvedValue(healthResult([OUTLOOK_ROW]));
-    await renderAndCheck();
+    const onOpenSettings = await renderAndCheck();
     fireEvent.click(screen.getByRole("button", { name: "Connect" }));
     act(() => {
       jest.advanceTimersByTime(5000);
     });
-    expect(targets["settings-email"].scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(onOpenSettings).toHaveBeenCalledWith("settings-email");
+    for (const el of Object.values(targets)) expect(el.scrollIntoView).not.toHaveBeenCalled();
   });
 
   it("the expired-token Reconnect row still lands on the section, not a Connect button", async () => {
     const targets = mountSettingsTargets();
     mockHealthCheck.mockResolvedValue(healthResult([EXPIRED_ROW]));
-    await renderAndCheck();
+    const onOpenSettings = await renderAndCheck();
     fireEvent.click(screen.getByRole("button", { name: "Reconnect" }));
     act(() => {
-      jest.advanceTimersByTime(150);
+      jest.advanceTimersByTime(5000);
     });
-    expect(targets["settings-email"].scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(onOpenSettings).toHaveBeenCalledWith("settings-email");
     expect(targets["email-connection-microsoft-connect"].scrollIntoView).not.toHaveBeenCalled();
   });
 

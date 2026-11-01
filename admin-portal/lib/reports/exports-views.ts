@@ -4,8 +4,12 @@
  * PURE. The same `report_saved_views` table and RPCs as iPhone Sync, under
  * its own report key, with its own filters blob and metric columns.
  *
- * The stored blob holds organization ids, user ids, formats and the search
- * text. No names, no emails.
+ * The stored blob holds organization ids, user ids, formats, the search text
+ * and the time range (BACKLOG-4084, `period`). No names, no emails.
+ *
+ * As on iPhone Sync, a pinned card follows the page's period and applies its
+ * filters only; the Views list applies filters and time range. Hence two
+ * matchers: {@link exportViewMatchesState} and {@link exportViewMatchesPage}.
  */
 
 import {
@@ -17,6 +21,13 @@ import {
   type ExportEvent,
   type ExportFilters,
 } from './exports';
+import {
+  parseViewPeriod,
+  SHARED_VIEW_PERIODS,
+  viewPeriodMatches,
+  type ResolvedPeriodLike,
+  type StoredViewPeriod,
+} from './view-period';
 
 export const EXPORTS_REPORT_KEY = 'exports';
 
@@ -49,15 +60,22 @@ export interface StoredExportFilters {
   users: string[];
   formats: string[];
   search: string;
+  /** The time range the view was saved with (BACKLOG-4084). Absent on a view saved before it. */
+  period?: StoredViewPeriod;
 }
 
-export function serializeExportFilters(f: ExportFilters): StoredExportFilters {
-  return {
+export function serializeExportFilters(
+  f: ExportFilters,
+  period?: StoredViewPeriod | null
+): StoredExportFilters {
+  const stored: StoredExportFilters = {
     orgs: [...f.orgs],
     users: [...f.users],
     formats: [...f.formats],
     search: f.search.trim().slice(0, SEARCH_MAX),
   };
+  if (period) stored.period = { ...period };
+  return stored;
 }
 
 function stringList(value: unknown): string[] {
@@ -89,6 +107,10 @@ export interface ExportSavedView {
   filters: ExportFilters;
   metric: ExportViewMetric;
   pinned: boolean;
+  /** BACKLOG-4084. False when the row has no `is_default` (migration not applied). */
+  isDefault: boolean;
+  /** BACKLOG-4084. The stored time range, or null. */
+  period: StoredViewPeriod | null;
 }
 
 export function parseExportSavedView(raw: unknown): ExportSavedView | null {
@@ -101,6 +123,13 @@ export function parseExportSavedView(raw: unknown): ExportSavedView | null {
     filters: parseExportFilters(row.filters),
     metric: parseExportMetric(row.metric),
     pinned: row.pinned === true,
+    isDefault: row.is_default === true,
+    period: parseViewPeriod(
+      row.filters != null && typeof row.filters === 'object'
+        ? (row.filters as Record<string, unknown>).period
+        : undefined,
+      SHARED_VIEW_PERIODS
+    ),
   };
 }
 
@@ -146,4 +175,13 @@ export function exportViewMatchesState(view: ExportSavedView, f: ExportFilters):
     sameSet(view.filters.formats, f.formats) &&
     view.filters.search.trim() === f.search.trim()
   );
+}
+
+/** Filters AND time range: the Views list's active row. A view with no stored period matches any. */
+export function exportViewMatchesPage(
+  view: ExportSavedView,
+  f: ExportFilters,
+  period: ResolvedPeriodLike
+): boolean {
+  return exportViewMatchesState(view, f) && viewPeriodMatches(view.period ?? null, period);
 }

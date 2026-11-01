@@ -27,6 +27,7 @@ import {
   agentIdempotencyKey,
   buildSubscriptionCheckoutParams,
   isAgentSession,
+  type AgentCheckoutOrigin,
   type AgentInterval,
 } from './agentCheckoutParams';
 
@@ -52,6 +53,8 @@ export async function prepareAgentCheckout(a: {
   organizationId: string | null;
   interval: AgentInterval;
   returnBase: string;
+  /** BACKLOG-3676: omitted for the website. */
+  origin?: AgentCheckoutOrigin;
 }): Promise<AgentCheckoutResult> {
   const { stripe, customerId } = a;
 
@@ -82,7 +85,14 @@ export async function prepareAgentCheckout(a: {
   const open = sessions.filter((s) => s.status === 'open');
   const reuse = endedIncomplete
     ? undefined
-    : open.find((s) => s.metadata?.interval === a.interval && s.metadata?.price_id === a.priceId && !!s.url);
+    : open.find(
+        (s) =>
+          s.metadata?.interval === a.interval &&
+          s.metadata?.price_id === a.priceId &&
+          // BACKLOG-3676: a session returns to where it was started; never reuse across website and desktop.
+          (s.metadata?.origin ?? 'web') === (a.origin ?? 'web') &&
+          !!s.url
+      );
   for (const s of open) {
     if (s !== reuse) await stripe.checkout.sessions.expire(s.id);
   }
@@ -97,8 +107,17 @@ export async function prepareAgentCheckout(a: {
       organizationId: a.organizationId,
       interval: a.interval,
       returnBase: a.returnBase,
+      ...(a.origin ? { origin: a.origin } : {}),
     }),
-    { idempotencyKey: agentIdempotencyKey({ userId: a.userId, mode: a.mode, interval: a.interval, anchorSessionId: anchor }) }
+    {
+      idempotencyKey: agentIdempotencyKey({
+        userId: a.userId,
+        mode: a.mode,
+        interval: a.interval,
+        anchorSessionId: anchor,
+        ...(a.origin ? { origin: a.origin } : {}),
+      }),
+    }
   );
   if (!session.url) throw new Error(`checkout session ${session.id} has no url`);
   return { url: session.url };

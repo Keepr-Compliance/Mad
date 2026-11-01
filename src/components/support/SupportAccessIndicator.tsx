@@ -16,6 +16,7 @@
 
 import React, { useCallback, useEffect, useState } from "react";
 import logger from "../../utils/logger";
+import { Z_CLASS } from "../../constants/zLayers";
 import {
   formatExpiry,
   formatRemaining,
@@ -82,7 +83,7 @@ export function SupportAccessIndicator(): React.ReactElement | null {
       role="status"
       aria-live="polite"
       data-testid="support-access-indicator"
-      className="fixed bottom-4 left-4 z-40 max-w-xs rounded-lg border border-blue-300 bg-blue-50 shadow-sm px-3 py-2"
+      className={`fixed bottom-4 left-4 ${Z_CLASS.supportAccess} max-w-xs rounded-lg border border-blue-300 bg-blue-50 shadow-sm px-3 py-2`}
     >
       <div className="flex items-start gap-2">
         <span

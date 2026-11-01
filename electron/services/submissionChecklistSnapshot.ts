@@ -45,6 +45,13 @@
  *                 `mapToSubmissionAttachment`; every match is linked, the
  *                 column is not unique)
  *   email      -> submission_messages.local_message_id with channel 'email'
+ *   text       -> (BACKLOG-3968) the uploaded text's submission_messages row
+ *                 by local_message_id, else by `external_ids` (same order as
+ *                 local_ids; '' where a text has none) against
+ *                 submission_messages.external_id (migration 20261031230000
+ *                 §4). Sent only when `sent.textLinksSupported` is true (the
+ *                 capability check); otherwise every text link is left out
+ *                 of the payload, and the pre-flight lists it.
  * A local id with no uploaded counterpart is dropped by the function, and the
  * dropped counts come back in the result.
  *
@@ -58,8 +65,9 @@
 
 import * as Sentry from "@sentry/electron/main";
 import { getChecklistsForTransaction } from "./db/checklistDbService";
+import { memberLocalId } from "./submissionChecklistLinkGaps";
 import logService from "./logService";
-import type { ChecklistsForTransaction } from "../types/checklist";
+import type { ChecklistLinkKind, ChecklistsForTransaction } from "../types/checklist";
 
 const LOG_CONTEXT = "SubmissionChecklistSnapshot";
 
@@ -68,10 +76,12 @@ export const SNAPSHOT_RPC = "snapshot_submission_checklists";
 
 /** One evidence group, as the function reads it (migration §6). */
 export interface SnapshotLinkPayload {
-  kind: "attachment" | "email";
+  kind: ChecklistLinkKind;
   label: string;
   sort_order: number;
   local_ids: string[];
+  /** BACKLOG-3968: text links only — `messages.external_id` per local id, '' when none. */
+  external_ids?: string[];
 }
 
 /** One checklist row, as the function reads it (migration §6). */
@@ -126,6 +136,12 @@ export type SnapshotFailureKind = "transient" | "not_in_plan" | "refused";
 export interface SnapshotSentSets {
   emailIds: ReadonlySet<string>;
   attachmentIds: ReadonlySet<string>;
+  /** BACKLOG-3968: ids of the texts this submission uploads (the gathered messages). */
+  textIds: ReadonlySet<string>;
+  /** BACKLOG-3968: the capability check's answer for this submission. False holds every text. */
+  textLinksSupported: boolean;
+  /** BACKLOG-3968: `messages.external_id` of each uploaded text, by local id. */
+  textExternalIds: ReadonlyMap<string, string | null>;
   acceptedMembers: ReadonlySet<string>;
 }
 
@@ -220,8 +236,16 @@ export function buildChecklistSnapshotPayload(
   /** Filled with `linkId:localId` of every member held back. */
   withheld?: string[]
 ): SnapshotChecklistPayload[] {
-  const isSent = (kind: "attachment" | "email", id: string): boolean =>
-    !sent || (kind === "attachment" ? sent.attachmentIds.has(id) : sent.emailIds.has(id));
+  // BACKLOG-3968: texts are sent only on the capability check's yes; with no
+  // `sent` there is no answer, so they are held.
+  const textsHeld = sent?.textLinksSupported !== true;
+  const isSent = (kind: ChecklistLinkKind, id: string): boolean => {
+    if (kind === "text" && textsHeld) return false;
+    if (!sent) return true;
+    if (kind === "attachment") return sent.attachmentIds.has(id);
+    if (kind === "text") return sent.textIds.has(id);
+    return sent.emailIds.has(id);
+  };
   return local.checklists.map((detail) => ({
     template_id: detail.checklist.templateId || null,
     template_name: detail.checklist.templateName,
@@ -238,19 +262,30 @@ export function buildChecklistSnapshotPayload(
       links: (detail.linksByItemId[item.id] ?? [])
         .map((link) => {
           const ids = link.members
-            .map((member) => (link.kind === "attachment" ? member.attachmentId : member.emailId))
+            .map((member) => memberLocalId(link.kind, member))
             .filter((id): id is string => typeof id === "string" && id.length > 0);
           for (const id of ids) if (!isSent(link.kind, id)) withheld?.push(`${link.id}:${id}`);
-          return {
+          const localIds = ids.filter((id) => isSent(link.kind, id));
+          const payloadLink: SnapshotLinkPayload = {
             kind: link.kind,
             label: link.label,
             sort_order: link.sortOrder,
-            local_ids: ids.filter((id) => isSent(link.kind, id)),
+            local_ids: localIds,
           };
+          if (link.kind === "text") {
+            payloadLink.external_ids = localIds.map((id) => sent?.textExternalIds.get(id) ?? "");
+          }
+          return payloadLink;
         })
         // BACKLOG-3764: a group with nothing uploaded is not sent (the cloud
         // would drop it anyway); the pre-flight listed it.
-        .filter((link) => !sent || link.local_ids.length > 0),
+        .filter(
+          (link) =>
+            (!sent || link.local_ids.length > 0) &&
+            // BACKLOG-3968: a cloud without text links raises on kind
+            // 'text' — a held text link is never in the payload, even empty.
+            !(link.kind === "text" && textsHeld),
+        ),
     })),
   }));
 }
@@ -270,7 +305,7 @@ export async function snapshotSubmissionChecklists(
   let payload: SnapshotChecklistPayload[];
   const withheld: string[] = [];
   try {
-    const local = await getChecklistsForTransaction(transactionId);
+    const local = await getChecklistsForTransaction(transactionId, "broker");
     // BACKLOG-3607: a transaction with no checklist still sends [] - the
     // snapshot is the agent's whole set, and the server records a checklist
     // the agent removed since the previous version only when it is told.

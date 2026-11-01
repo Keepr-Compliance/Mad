@@ -270,8 +270,10 @@ describe("BACKLOG-3222: the post-import recency writes commit together or not at
     const r = await run("none", 0);
     totalWrites = r.writes;
     expect(r.res.success).toBe(true);
-    // 101 contact UPDATEs + 101 phone_last_message INSERTs + 1 external UPDATE.
-    expect(r.writes).toBe(2 * N_CONTACTS + 1);
+    // 101 contact UPDATEs + 1 phone_last_message DELETE (BACKLOG-2554 eviction)
+    // + 101 phone_last_message INSERTs + 1 external UPDATE. The sweeps below
+    // therefore also crash/throw AT the delete.
+    expect(r.writes).toBe(2 * N_CONTACTS + 2);
     expect(r.phoneAggReads).toBe(1);
     expect(shape(r.after)).toBe(ALL_NEW);
     expect(mockCaptureException).not.toHaveBeenCalled();

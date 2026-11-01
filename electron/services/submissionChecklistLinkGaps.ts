@@ -26,12 +26,25 @@
  *
  * The same `sent` sets decide which local ids the snapshot sends, so the
  * pre-flight list and what the broker is missing cannot disagree.
+ *
+ * BACKLOG-3968 — texts. A text member is sent when its message is among the
+ * texts this submission uploads (`sentTextIds` = the gathered, date-filtered
+ * messages — not the wider export selection). There is no "Include it" for a
+ * text: the message upload has no outside-the-dates arm, so a text outside the
+ * dates is `not_included` and the dates question is never asked for it. When
+ * the cloud does not take text links for this submission
+ * (`textLinksSupported` false — `checklistTextLinksCapability.ts`), EVERY text
+ * member is `not_included` with detail `texts_not_supported`.
  */
 
 import { createHash } from "crypto";
 
 import { outsideAuditDates } from "./db/checklistDbService";
-import type { ChecklistsForTransaction, ChecklistLinkKind } from "../types/checklist";
+import type {
+  ChecklistsForTransaction,
+  ChecklistLinkKind,
+  ChecklistLinkMember,
+} from "../types/checklist";
 import type { NotIncludedItem } from "./submissionPreflight";
 
 export type ChecklistLinkGapReason = "outside_audit_dates" | "not_included";
@@ -44,8 +57,10 @@ export type ChecklistLinkGapDetail =
   | "cannot_be_sent"
   /** A file whose message is not part of this submission. */
   | "message_not_sent"
-  /** An email that is not part of this submission. */
-  | "not_sent";
+  /** An email, or a text (BACKLOG-3968), that is not part of this submission. */
+  | "not_sent"
+  /** BACKLOG-3968: a text, held because the cloud does not take text links now. */
+  | "texts_not_supported";
 
 export interface ChecklistLinkGap {
   /**
@@ -72,10 +87,24 @@ export interface ChecklistLinkGapInput {
   checklists: ChecklistsForTransaction;
   sentEmailIds: ReadonlySet<string>;
   sentAttachmentIds: ReadonlySet<string>;
+  /** BACKLOG-3968: ids of the texts this submission uploads (the gathered messages). */
+  sentTextIds: ReadonlySet<string>;
+  /**
+   * BACKLOG-3968: the cloud takes text links for this submission (the
+   * capability check's answer for this gather). False holds every text.
+   */
+  textLinksSupported: boolean;
   /** The pre-flight's own list, to say which files are in it. */
   notIncluded: readonly NotIncludedItem[];
   startedAt: string | null;
   closedAt: string | null;
+}
+
+/** The local id a member is matched by, for its link's kind. */
+export function memberLocalId(kind: ChecklistLinkKind, member: ChecklistLinkMember): string | null {
+  if (kind === "email") return member.emailId;
+  if (kind === "text") return member.messageId;
+  return member.attachmentId;
 }
 
 export function findChecklistLinkGaps(input: ChecklistLinkGapInput): ChecklistLinkGap[] {
@@ -88,33 +117,43 @@ export function findChecklistLinkGaps(input: ChecklistLinkGapInput): ChecklistLi
   for (const detail of input.checklists.checklists) {
     for (const item of detail.items) {
       for (const link of detail.linksByItemId[item.id] ?? []) {
+        const kind = link.kind;
+        const sent =
+          kind === "email"
+            ? input.sentEmailIds
+            : kind === "text"
+              ? input.sentTextIds
+              : input.sentAttachmentIds;
+        const held = kind === "text" && !input.textLinksSupported;
         const missing = link.members.filter((member) => {
-          const id = link.kind === "email" ? member.emailId : member.attachmentId;
+          const id = memberLocalId(kind, member);
           if (!id) return false;
-          return link.kind === "email" ? !input.sentEmailIds.has(id) : !input.sentAttachmentIds.has(id);
+          return held || !sent.has(id);
         });
         if (missing.length === 0) continue;
-        const missingIds = missing
-          .map((member) => (link.kind === "email" ? member.emailId : member.attachmentId) as string)
-          .sort();
+        const missingIds = missing.map((member) => memberLocalId(kind, member) as string).sort();
 
-        const outside = link.includeOutsideDates
-          ? []
-          : outsideAuditDates(
-              link.kind,
-              missing.filter((member) => member.inTransaction).map((member) =>
-                (link.kind === "email" ? member.emailId : member.attachmentId) as string
-              ),
-              input.startedAt,
-              input.closedAt
-            );
+        // A text is never asked about the dates (no "Include it" arm exists
+        // for messages), so it is not_included whatever its date.
+        const outside =
+          kind === "text" || link.includeOutsideDates
+            ? []
+            : outsideAuditDates(
+                kind,
+                missing
+                  .filter((member) => member.inTransaction)
+                  .map((member) => memberLocalId(kind, member) as string),
+                input.startedAt,
+                input.closedAt
+              );
         const reason: ChecklistLinkGapReason =
           outside.length > 0 ? "outside_audit_dates" : "not_included";
 
         let gapDetail: ChecklistLinkGapDetail | null = null;
         if (reason === "not_included") {
           if (missing.some((member) => !member.inTransaction)) gapDetail = "not_on_transaction";
-          else if (link.kind === "email") gapDetail = "not_sent";
+          else if (held) gapDetail = "texts_not_supported";
+          else if (kind === "email" || kind === "text") gapDetail = "not_sent";
           else if (missingIds.some((id) => cannotBeSent.has(id))) gapDetail = "cannot_be_sent";
           else gapDetail = "message_not_sent";
         }

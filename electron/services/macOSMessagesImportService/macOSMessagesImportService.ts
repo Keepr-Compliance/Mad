@@ -174,6 +174,20 @@ class MacOSMessagesImportService {
   private forceReimportInProgress = false;
   /** Max import duration before auto-reset (10 minutes) */
   private static readonly MAX_IMPORT_DURATION_MS = 10 * 60 * 1000;
+  /**
+   * BACKLOG-2797: settles once the in-flight run has fully released the service
+   * (AFTER `importMessages`' finally), so a superseding force run can wait for it.
+   * It never rejects. Null when no run is in flight.
+   */
+  private currentRun: Promise<void> | null = null;
+  /** BACKLOG-2797: how long a superseding force run waits for the previous run to stop. */
+  private forceSupersedeWaitMs = 30_000;
+  /**
+   * BACKLOG-2797: one waker per force run waiting for the previous run to stop.
+   * `requestCancellation()` calls them, so a Cancel pressed during that wait
+   * cancels the WAITING run — not only the previous run, which is already aborted.
+   */
+  private readonly supersedeWaiters = new Set<() => void>();
 
   /** BACKLOG-3892 S5: a texts force re-import is running (the iPhone backfill waits for it). */
   isForceReimportInProgress(): boolean {
@@ -300,10 +314,43 @@ class MacOSMessagesImportService {
         MacOSMessagesImportService.SERVICE_NAME
       );
       this.abortController?.abort();
-      // Wait a bit for the current import to notice the cancellation
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      this.isImporting = false;
-      this.importStartedAt = null;
+      // BACKLOG-2797: wait until the aborted run has actually stopped, instead of
+      // a fixed 500 ms. Proceeding while it still runs let this run sweep its
+      // live staging tables, hand it this run's AbortController, and let its
+      // finally clear this run's lock.
+      const outcome = await this.waitForPreviousRun();
+      // NO `await` between here and `this.isImporting = true` below: the hand-off
+      // to exactly one waiter depends on this run claiming the lock in the same
+      // synchronous turn it wakes in. A second waiter wakes after this one and is
+      // refused by the `isImporting` check.
+      if (outcome === "cancelled") {
+        logService.info(
+          "Force reimport cancelled while waiting for the previous import to stop",
+          MacOSMessagesImportService.SERVICE_NAME
+        );
+        return this.cancelledUnchangedResult(startTime);
+      }
+      if (outcome === "timeout") {
+        logService.warn(
+          "Force reimport refused: the previous import did not stop in time",
+          MacOSMessagesImportService.SERVICE_NAME,
+          { waitedMs: this.forceSupersedeWaitMs }
+        );
+        // A plain failure, like `reprocessBlockedResult`: nothing was re-imported,
+        // so it must not carry `alreadyInProgress` (the orchestrator would show it
+        // as complete).
+        return {
+          success: false,
+          messagesImported: 0,
+          messagesSkipped: 0,
+          attachmentsImported: 0,
+          attachmentsUpdated: 0,
+          attachmentsSkipped: 0,
+          duration: Date.now() - startTime,
+          error:
+            "The previous import is still stopping. Try the re-import again in a minute.",
+        };
+      }
     }
 
     // Check if import flag is stuck (been true for too long)
@@ -378,6 +425,14 @@ class MacOSMessagesImportService {
       this.forceReimportInProgress = true;
     }
 
+    // BACKLOG-2797: `currentRun` settles only after the finally below has
+    // released every flag, so a waiter never wakes into a half-released service.
+    let releaseRun!: () => void;
+    const run = new Promise<void>((resolve) => {
+      releaseRun = resolve;
+    });
+    this.currentRun = run;
+
     try {
       return await this.doImport(userId, onProgress, startTime, plan);
     } finally {
@@ -387,6 +442,36 @@ class MacOSMessagesImportService {
       if (forceReimport) {
         this.forceReimportInProgress = false;
       }
+      if (this.currentRun === run) this.currentRun = null;
+      releaseRun();
+    }
+  }
+
+  /**
+   * BACKLOG-2797: wait for the in-flight run to release the service, at most
+   * `forceSupersedeWaitMs`. Resolves "cancelled" as soon as `requestCancellation()`
+   * is called during the wait.
+   */
+  private async waitForPreviousRun(): Promise<"settled" | "timeout" | "cancelled"> {
+    const prior = this.currentRun;
+    if (!prior) return "settled";
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let wake: (() => void) | undefined;
+    try {
+      return await Promise.race([
+        prior.then(() => "settled" as const),
+        new Promise<"timeout">((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), this.forceSupersedeWaitMs);
+        }),
+        new Promise<"cancelled">((resolve) => {
+          wake = () => resolve("cancelled");
+          this.supersedeWaiters.add(wake);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      if (wake) this.supersedeWaiters.delete(wake);
     }
   }
 
@@ -416,6 +501,10 @@ class MacOSMessagesImportService {
    * again — which is what the founder did.
    */
   requestCancellation(): void {
+    // BACKLOG-2797: a force run waiting for the previous run to stop is the run
+    // the user is cancelling. Wake it so it returns cancelled.
+    for (const wake of this.supersedeWaiters) wake();
+
     if (this.isImporting) {
       logService.info(
         "Import cancellation requested",
@@ -624,11 +713,9 @@ class MacOSMessagesImportService {
         }
 
         // Reclaim the staging tables of any run that died before its swap.
-        // The sweep is unscoped and a second Force Re-import aborts the first
-        // rather than being refused, so it can drop an abandoned run's tables
-        // while that run is still writing to them — data-safe in every
-        // interleaving, but see the note at `sweepStaleStaging` for why, and
-        // BACKLOG-2797 for the fix.
+        // The sweep is unscoped. That is safe because no other run can be in
+        // flight here: a second Force Re-import waits for the previous run to
+        // release the service before it gets this far (BACKLOG-2797).
         const swept = sweepStaleStaging(appDb);
         if (swept.length > 0) {
           logService.info(

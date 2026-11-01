@@ -17,8 +17,9 @@ import databaseService from "./databaseService";
 import { removeUnreferencedAttachmentFiles } from "./attachmentFileRefs";
 import { AttachmentDedupIndex } from "./attachmentDedupIndex";
 import { SCOPE_MESSAGE_ATTACHMENTS } from "./atRest/markers";
-import { ensureDb } from "./db/core/dbConnection";
+import { dbTransaction, ensureDb } from "./db/core/dbConnection";
 import * as externalContactDb from "./db/externalContactDbService";
+import * as openSessions from "./db/iphoneSyncOpenSessionDbService";
 import {
   holdContactLinking,
   releaseContactLinking,
@@ -229,6 +230,8 @@ function isValidGuid(guid: string | null | undefined): boolean {
  * Handles persistence of iPhone sync data to the local database
  */
 class IPhoneSyncStorageService {
+  /** BACKLOG-3343: sessions persisting in THIS process; the launch sweep never touches them. */
+  private readonly liveSessions = new Set<string>();
   private static readonly SERVICE_NAME = "IPhoneSyncStorageService";
   // Smaller batch size for better responsiveness
   /**
@@ -277,6 +280,17 @@ class IPhoneSyncStorageService {
     const holdsLinking = sessionId !== undefined;
     if (holdsLinking) holdContactLinking(userId);
 
+    // BACKLOG-3343: hoisted so the catch can report a committed sync's real counts.
+    let messageResult: { stored: number; skipped: number } = { stored: 0, skipped: 0 };
+    let contactResult: { stored: number; skipped: number; sourceOff?: boolean } = { stored: 0, skipped: 0 };
+    let attachmentResult: { stored: number; skipped: number; skippedByReason?: AttachmentSkipCounts } = {
+      stored: 0,
+      skipped: 0,
+    };
+    // BACKLOG-3343: true once the "finished" marker is written. After that point the
+    // rows are permanent; a later throw must never roll them back.
+    let committed = false;
+
     try {
       // Count total attachments for progress tracking
       const totalAttachments = result.messages.reduce(
@@ -306,6 +320,13 @@ class IPhoneSyncStorageService {
         return this.cancelledResult(Date.now() - startTime);
       }
 
+      // BACKLOG-3343: durable "started" marker, written before the first write. If the
+      // process dies before "finished", the next launch's sweep removes this session.
+      if (sessionId) {
+        this.liveSessions.add(sessionId);
+        openSessions.markStarted(userId, sessionId);
+      }
+
       // BACKLOG-3892 S2 (SR D4): the upgrader seed is the stored iPhone texts as they
       // were BEFORE this run's inserts. Read only when coverage can be recorded.
       let coverageSeed: CoverageInterval | null = null;
@@ -320,7 +341,7 @@ class IPhoneSyncStorageService {
       }
 
       // Store messages first (larger dataset)
-      const messageResult = await this.storeMessages(
+      messageResult = await this.storeMessages(
         userId,
         result.messages,
         result.conversations,
@@ -344,7 +365,7 @@ class IPhoneSyncStorageService {
       }
 
       // Store contacts
-      const contactResult = await this.storeContacts(
+      contactResult = await this.storeContacts(
         userId,
         result.contacts,
         (current, total) => {
@@ -366,10 +387,6 @@ class IPhoneSyncStorageService {
       }
 
       // SPRINT-068: Store attachments (if backupPath available)
-      let attachmentResult: { stored: number; skipped: number; skippedByReason?: AttachmentSkipCounts } = {
-        stored: 0,
-        skipped: 0,
-      };
       if (backupPath && totalAttachments > 0) {
         attachmentResult = await this.storeAttachments(
           userId,
@@ -405,6 +422,12 @@ class IPhoneSyncStorageService {
       // pointing at records `deleteBySessionId` is about to remove. Past this
       // point every cancel and failure branch has already returned, so the rows
       // are permanent and Phase 2 may safely consider them.
+      // BACKLOG-3343: durable "finished" — written HERE, at the commit point, not at the
+      // handler's endSync: a death between this return and endSync must not make the next
+      // launch remove a sync that saved.
+      if (sessionId) openSessions.markFinished(sessionId);
+      committed = true;
+
       if (contactResult.stored > 0) {
         requestContactLinking(userId);
       }
@@ -449,22 +472,20 @@ class IPhoneSyncStorageService {
         },
       });
 
-      return {
-        success: true,
-        messagesStored: messageResult.stored,
-        messagesSkipped: messageResult.skipped,
-        contactsStored: contactResult.stored,
-        contactsSkipped: contactResult.skipped,
-        contactsSourceOff: contactResult.sourceOff === true,
-        attachmentsStored: attachmentResult.stored,
-        attachmentsSkipped: attachmentResult.skipped,
-        ...(attachmentResult.skippedByReason
-          ? { attachmentsSkippedByReason: attachmentResult.skippedByReason }
-          : {}),
-        duration,
-      };
+      return this.savedResult(messageResult, contactResult, attachmentResult, duration);
     } catch (error) {
       const duration = Date.now() - startTime;
+
+      // BACKLOG-3343: past the commit point the sync is saved. Report the throw, keep the
+      // rows and return success — telling the user to re-run a saved sync would be false.
+      if (committed) {
+        log.error(`[${IPhoneSyncStorageService.SERVICE_NAME}] Error after the sync was saved (kept)`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        Sentry.captureException(error, { level: "error", tags: { area: "iphone-sync-post-commit" } });
+        return this.savedResult(messageResult, contactResult, attachmentResult, duration);
+      }
+
       const refused = isAtRestWriteRefused(error);
       const errorMessage = refused
         ? error.userMessage
@@ -476,6 +497,11 @@ class IPhoneSyncStorageService {
         error: errorMessage,
         duration,
       });
+
+      // BACKLOG-3343: an error (including the at-rest refusal) leaves nothing half-saved —
+      // the same cleanup as cancel. If the rollback itself fails, the marker stays and the
+      // next launch's sweep retries it.
+      if (sessionId) await this.rollbackSession(userId, sessionId, "error");
 
       return {
         success: false,
@@ -494,38 +520,94 @@ class IPhoneSyncStorageService {
       // A hold that is never lifted silently disables contact matching for this
       // user until the app restarts, which would be a worse bug than the one
       // the hold prevents.
+      if (sessionId) this.liveSessions.delete(sessionId);
       if (holdsLinking) releaseContactLinking(userId);
     }
+  }
+
+  /**
+   * BACKLOG-3343: at launch, remove every iPhone sync session that started saving and
+   * never finished (crash, force-quit, power loss, or an error-path rollback that itself
+   * failed). Sessions persisting in THIS process are never touched.
+   *
+   * Contact matching is held for every affected user until the sweep ends:
+   * `databaseService.initialize` broadcasts `db-ready` BEFORE this runs, so a renderer
+   * read or a linking pass can arrive mid-sweep and must not link rows about to go.
+   */
+  async recoverInterruptedSessions(): Promise<{ found: number; recovered: number; durationMs: number }> {
+    const startedAt = Date.now();
+    const open = openSessions.listOpen().filter((s) => !this.liveSessions.has(s.sessionId));
+    if (open.length === 0) return { found: 0, recovered: 0, durationMs: Date.now() - startedAt };
+
+    const users = [...new Set(open.map((s) => s.userId))];
+    for (const u of users) holdContactLinking(u);
+    let recovered = 0;
+    try {
+      for (const s of open) {
+        if (await this.rollbackSession(s.userId, s.sessionId, "interrupted")) recovered++;
+      }
+    } finally {
+      for (const u of users) releaseContactLinking(u);
+    }
+
+    const durationMs = Date.now() - startedAt;
+    log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Interrupted iPhone sync cleanup`, {
+      found: open.length,
+      recovered,
+      durationMs,
+    });
+    Sentry.captureMessage("iPhone sync interrupted - cleaned up at launch", {
+      level: "warning",
+      tags: { area: "iphone-sync-recovery" },
+      extra: { found: open.length, recovered },
+    });
+    return { found: open.length, recovered, durationMs };
   }
 
   /**
    * TASK-2110: Roll back all data inserted during a sync session.
    * Deletes messages, attachments (with orphaned file cleanup), and new contacts.
    */
-  private async rollbackSession(userId: string, sessionId?: string): Promise<void> {
+  private async rollbackSession(
+    userId: string,
+    sessionId?: string,
+    reason: "cancelled" | "error" | "interrupted" = "cancelled",
+  ): Promise<boolean> {
     if (!sessionId) {
       log.warn(`[${IPhoneSyncStorageService.SERVICE_NAME}] No session ID for rollback, skipping`);
-      return;
+      return false;
     }
 
     log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Rolling back session ${sessionId}`);
 
-    // BACKLOG-1631: Alert Sentry when sync is cancelled and rolling back
-    Sentry.captureMessage("iPhone sync cancelled - rolling back", {
+    // BACKLOG-1631 / 3343: alert Sentry with the real reason (cancelled | error | interrupted)
+    Sentry.captureMessage(`iPhone sync ${reason} - rolling back`, {
       level: "warning",
     });
 
     try {
-      // 1. Delete attachments and get the candidate file paths
-      const attachmentResult = databaseService.deleteAttachmentsBySessionId(sessionId);
+      // BACKLOG-2552: the three deletes are ONE transaction, so a failure (or a
+      // process death) at any point leaves the session fully present or fully
+      // gone — never attachment rows gone while their messages remain, or
+      // messages gone while their contacts survive. Order is unchanged:
+      // attachments first, so their file paths are read before the FK cascade
+      // from messages removes the rows. Contacts nest as a savepoint.
+      const deleted = dbTransaction(() => {
+        const attachmentResult = databaseService.deleteAttachmentsBySessionId(sessionId);
+        const messagesDeleted = databaseService.deleteMessagesBySessionId(userId, sessionId);
+        const contactsDeleted = externalContactDb.deleteBySessionId(userId, sessionId);
+        // BACKLOG-3343: the "unfinished" marker goes in the SAME transaction.
+        openSessions.markFinished(sessionId);
+        return { attachmentResult, messagesDeleted, contactsDeleted };
+      });
 
-      // 2. BACKLOG-4040: delete the candidates through the shared check — only
-      // inside message-attachments, and only files no remaining row uses (any
-      // case, any directory), re-checked after the containment awaits. Never
-      // fails the rollback: a failure leaves files behind.
+      // BACKLOG-4040 / 2552: files are removed only AFTER the commit, through the
+      // shared check — only inside message-attachments, and only files no
+      // remaining row uses, re-checked after the containment awaits. Never fails
+      // the rollback: a failure leaves unreferenced files behind.
       let filesRemoved = 0;
       try {
-        const files = await removeUnreferencedAttachmentFiles(ensureDb(), attachmentResult.orphanedFiles, {
+        const files = await removeUnreferencedAttachmentFiles(ensureDb(), deleted.attachmentResult.orphanedFiles, {
           userData: app.getPath("userData"),
           scopes: [SCOPE_MESSAGE_ATTACHMENTS],
         });
@@ -536,23 +618,47 @@ class IPhoneSyncStorageService {
         });
       }
 
-      // 3. Delete messages
-      const messagesDeleted = databaseService.deleteMessagesBySessionId(userId, sessionId);
-
-      // 4. Delete new contacts (only those newly inserted, not updated ones)
-      const contactsDeleted = externalContactDb.deleteBySessionId(userId, sessionId);
-
       log.info(`[${IPhoneSyncStorageService.SERVICE_NAME}] Rollback complete for session ${sessionId}`, {
-        messagesDeleted,
-        attachmentsDeleted: attachmentResult.deleted,
+        messagesDeleted: deleted.messagesDeleted,
+        attachmentsDeleted: deleted.attachmentResult.deleted,
         orphanedFilesDeleted: filesRemoved,
-        contactsDeleted,
+        contactsDeleted: deleted.contactsDeleted,
       });
+      return true;
     } catch (error) {
+      // BACKLOG-2552: the transaction rolled back, so the session is left whole
+      // and consistent. Report it; never re-throw — the caller still returns the
+      // normal "cancelled" result.
+      Sentry.captureException(error, {
+        level: "error",
+        tags: { area: "iphone-sync-rollback" },
+      });
       log.error(`[${IPhoneSyncStorageService.SERVICE_NAME}] Rollback failed for session ${sessionId}`, {
         error: error instanceof Error ? error.message : String(error),
       });
+      return false;
     }
+  }
+
+  /** BACKLOG-3343: the PersistResult of a saved sync. */
+  private savedResult(
+    messageResult: { stored: number; skipped: number },
+    contactResult: { stored: number; skipped: number; sourceOff?: boolean },
+    attachmentResult: { stored: number; skipped: number; skippedByReason?: AttachmentSkipCounts },
+    duration: number,
+  ): PersistResult {
+    return {
+      success: true,
+      messagesStored: messageResult.stored,
+      messagesSkipped: messageResult.skipped,
+      contactsStored: contactResult.stored,
+      contactsSkipped: contactResult.skipped,
+      contactsSourceOff: contactResult.sourceOff === true,
+      attachmentsStored: attachmentResult.stored,
+      attachmentsSkipped: attachmentResult.skipped,
+      ...(attachmentResult.skippedByReason ? { attachmentsSkippedByReason: attachmentResult.skippedByReason } : {}),
+      duration,
+    };
   }
 
   /**

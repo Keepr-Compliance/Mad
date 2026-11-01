@@ -38,6 +38,8 @@ export interface ExportEnhancedOptions {
   contentType?: ExportContentType;
   includeContacts?: boolean;
   includeSummary?: boolean;
+  /** BACKLOG-3767: add the transaction's checklists to the PDF. */
+  includeChecklist?: boolean;
   startDate?: string;
   endDate?: string;
   summaryOnly?: boolean; // If true, only export summary + indexes (no full content)
@@ -486,6 +488,24 @@ export const transactionBridge = {
    */
   unhideTextFromExport: (transactionId: string, messageId: string) =>
     ipcRenderer.invoke("transactions:unhide-text-from-export", transactionId, messageId),
+
+  /**
+   * BACKLOG-3965: record that this deal was opened (local only). Called through
+   * src/services/transactionOpenService.ts, which never throws.
+   * @param transactionId - The deal that opened
+   * @returns { success, recorded } — recorded is false when no deal has that id
+   */
+  recordOpen: (transactionId: string) =>
+    ipcRenderer.invoke("transactions:record-open", transactionId),
+
+  /**
+   * BACKLOG-3965: the deals this user opened most recently, newest first, with
+   * required checklist counts summed across each deal's checklists.
+   * @param userId - The signed-in user
+   * @param limit - How many deals (default 5)
+   */
+  getRecentlyOpened: (userId: string, limit?: number) =>
+    ipcRenderer.invoke("transactions:get-recently-opened", userId, limit),
 
   /**
    * BACKLOG-1578: Get removed/unlinked emails for a transaction.

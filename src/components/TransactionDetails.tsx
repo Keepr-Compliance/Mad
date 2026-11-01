@@ -12,6 +12,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { logAfterNextPaint, logOpenPath, nowMs } from "../utils/openPathTiming";
 import { getRendererStallPhase, setRendererStallPhase } from "../utils/rendererStallLogger";
+import { registerOpenTransaction } from "../utils/openTransactionRegistry";
+import { transactionOpenService } from "../services/transactionOpenService";
 import { ResponsiveModal, MODAL_PANEL } from "./common/ResponsiveModal";
 import type { Transaction } from "@/types";
 import { transactionService } from '../services';
@@ -135,6 +137,21 @@ function TransactionDetails({
     setTransaction(transactionProp);
   }, [transactionProp]);
 
+  // BACKLOG-4065: support tickets carry the id of the open transaction.
+  // Id only; the returned cleanup removes this mount's own entry.
+  useEffect(() => registerOpenTransaction(transaction.id), [transaction.id]);
+
+  // BACKLOG-3965: record that this deal was opened (the Dashboard's Recent
+  // panel). Once per open: the ref holds the id already written, so StrictMode's
+  // second effect run writes nothing. A deal still pending review is not
+  // opened yet. The service never throws; a failed write leaves the deal open.
+  const recordedOpenIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (isPendingReview || recordedOpenIdRef.current === transaction.id) return;
+    recordedOpenIdRef.current = transaction.id;
+    void transactionOpenService.recordOpen(transaction.id);
+  }, [transaction.id, isPendingReview]);
+
   // BACKLOG-3884: open-path timing in main.log — mount -> first paint, and
   // mount -> the Overview contacts painted. A renderer stall in between is
   // attributed to phase "transaction-open".
@@ -188,29 +205,16 @@ function TransactionDetails({
   // Tab state hook - use initialTab prop
   const { activeTab, setActiveTab } = useTransactionTabs(initialTab);
 
-  // BACKLOG-3476: the Checklist tab shows when the plan allows checklists, or
-  // when this transaction already has at least one (read-only then — `get` and `remove`
-  // are ungated in main). Never while the plan is still being read.
-  // Resolved once per session above this modal (StrictFeatureProvider), so the
-  // tab renders on the first frame with the others; each open re-asks main in
-  // the background.
+  // BACKLOG-3966 PR-3: the Checklist tab shows on every plan (My items need no
+  // plan); the plan decides only the template-checklist actions inside it.
+  // Never while the plan is still being read. Resolved once per session above
+  // this modal (StrictFeatureProvider), so the tab renders on the first frame
+  // with the others; each open re-asks main in the background. Once shown it
+  // stays (a background re-ask never returns to "pending"), so there is no
+  // fall-back-to-Overview case left.
   const checklistGate = useSessionStrictFeatureState("transaction_checklists");
   const checklist = useTransactionChecklist(transaction.id);
-  const showChecklist =
-    checklistGate === "allowed" ||
-    (checklistGate !== "pending" && (checklist.data?.checklists.length ?? 0) > 0);
-  // The tab can disappear under the user (checklist removed, plan changed):
-  // fall back to Overview rather than render an empty panel.
-  useEffect(() => {
-    if (
-      activeTab === "checklist" &&
-      !showChecklist &&
-      checklistGate !== "pending" &&
-      checklist.state.status !== "loading"
-    ) {
-      setActiveTab("overview");
-    }
-  }, [activeTab, showChecklist, checklistGate, checklist.state.status, setActiveTab]);
+  const showChecklist = checklistGate !== "pending";
 
   // BACKLOG-1869: highlight target produced by the linked-content search; consumed
   // by the Emails or Messages tab to scroll+highlight the matching conversation card.

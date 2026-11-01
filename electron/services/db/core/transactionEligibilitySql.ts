@@ -86,16 +86,23 @@ export const COMMUNICATION_TRANSACTION_ID_SQL = sql`SELECT transaction_id FROM c
 /** BACKLOG-3910: the deal a text message is linked to. One parameter: message id. */
 export const MESSAGE_TRANSACTION_ID_SQL = sql`SELECT transaction_id FROM messages WHERE id = ?`;
 
-/** BACKLOG-3910 (slice d): the deal a checklist item belongs to. One parameter: item id. */
+/**
+ * BACKLOG-3910 (slice d): the deal a checklist item belongs to. One parameter: item id.
+ * BACKLOG-3966: also the checklist's `template_id`, so the per-checklist plan
+ * gate can tell the private checklist from a template one in the same read.
+ */
 export const CHECKLIST_ITEM_TRANSACTION_ID_SQL = sql`
-  SELECT c.transaction_id FROM transaction_checklist_items i
+  SELECT c.transaction_id, c.template_id FROM transaction_checklist_items i
   JOIN transaction_checklists c ON c.id = i.checklist_id
   WHERE i.id = ?
 `;
 
-/** BACKLOG-3910 (slice d): the deal a checklist evidence group belongs to. One parameter: link id. */
+/**
+ * BACKLOG-3910 (slice d): the deal a checklist evidence group belongs to. One parameter: link id.
+ * BACKLOG-3966: also the checklist's `template_id` (see the item statement above).
+ */
 export const CHECKLIST_LINK_TRANSACTION_ID_SQL = sql`
-  SELECT c.transaction_id FROM transaction_checklist_links l
+  SELECT c.transaction_id, c.template_id FROM transaction_checklist_links l
   JOIN transaction_checklist_items i ON i.id = l.item_id
   JOIN transaction_checklists c ON c.id = i.checklist_id
   WHERE l.id = ?

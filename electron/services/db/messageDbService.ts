@@ -490,7 +490,8 @@ export async function backfillPhoneLastMessageTable(userId: string): Promise<num
 /**
  * BACKLOG-3222: the phone_last_message recompute with NO transaction of its
  * own and no awaited logs, so a caller can run it inside one transaction with
- * the other post-import writes.
+ * the other post-import writes. Callers MUST run it inside a transaction: it
+ * deletes the user's rows before rewriting them (BACKLOG-2554).
  */
 export function backfillPhoneLastMessageTableSync(userId: string): number {
   const db = ensureDb();
@@ -524,6 +525,13 @@ export function backfillPhoneLastMessageTableSync(userId: string): number {
       }
     }
   }
+
+  // BACKLOG-2554: this is a full recompute, so drop the user's rows first. A
+  // phone with no texts left (e.g. removed by a Force Re-import swap) would
+  // otherwise keep its old date forever. Both callers run this inside one
+  // transaction, so readers never see the table empty and a failure below
+  // rolls the delete back.
+  db.prepare(`DELETE FROM phone_last_message WHERE user_id = ?`).run(userId);
 
   const insertStmt = db.prepare(`
     INSERT OR REPLACE INTO phone_last_message (phone_normalized, user_id, last_message_at)

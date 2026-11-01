@@ -20,12 +20,15 @@
 
 import type {
   AddChecklistLinkResult,
+  AddMyItemResult,
   ChecklistLinkKind,
   ChecklistsForTransaction,
   ChecklistTemplate,
   ChecklistTemplateSource,
+  ReorderMyItemsResult,
   SelectChecklistTemplateResult,
 } from "../checklist";
+import type { ListOpenRequiredChecklistItemsResult } from "../checklistTodo";
 
 /**
  * The one declaration of the `checklists:list-templates` answer (BACKLOG-3476).
@@ -65,8 +68,18 @@ export type OpenChecklistsPortalResult =
   | { success: true }
   | { success: false; error: string; portalAddress?: string };
 
+/**
+ * BACKLOG-3966: what main's lock refusal (`refuseIfDealLocked`,
+ * electron/services/dealLockState.ts) adds next to `error` on a locked deal.
+ * Absent on every other answer.
+ */
+export interface ChecklistDealLockFields {
+  dealLocked?: "submitted" | "sealed";
+  refusedEdit?: string;
+}
+
 /** Every write that either changed a row or did not. */
-export interface ChecklistWriteResult {
+export interface ChecklistWriteResult extends ChecklistDealLockFields {
   success: boolean;
   changed?: boolean;
   error?: string;
@@ -82,7 +95,9 @@ export interface WindowApiChecklists {
   selectTemplate: (args: {
     transactionId: string;
     templateId: string;
-  }) => Promise<{ success: boolean; result?: SelectChecklistTemplateResult; error?: string }>;
+  }) => Promise<
+    { success: boolean; result?: SelectChecklistTemplateResult; error?: string } & ChecklistDealLockFields
+  >;
   /** Every checklist on this transaction. Never gated. */
   get: (args: {
     transactionId: string;
@@ -98,7 +113,9 @@ export interface WindowApiChecklists {
     targetIds: string[];
     /** BACKLOG-3764: the agent's "Include it" to the outside-the-dates question. */
     includeOutsideDates?: boolean;
-  }) => Promise<{ success: boolean; result?: AddChecklistLinkResult; error?: string }>;
+  }) => Promise<
+    { success: boolean; result?: AddChecklistLinkResult; error?: string } & ChecklistDealLockFields
+  >;
   /** BACKLOG-3764: "Include it" for an existing group, from the submit pre-flight. */
   includeLinkOutsideDates: (args: {
     transactionId: string;
@@ -117,4 +134,34 @@ export interface WindowApiChecklists {
    * URL — main builds it and refuses anything that is not the portal origin.
    */
   openTemplatesPortal: () => Promise<OpenChecklistsPortalResult>;
+  /**
+   * BACKLOG-3965 PR-3: the Dashboard's Todo list. Gated: a plan without
+   * checklists is `success: false`. An empty list is `success: true` with
+   * `items: []` and `totalCount: 0`.
+   */
+  listOpenRequired: (args: {
+    userId: string;
+    limit?: number;
+  }) => Promise<ListOpenRequiredChecklistItemsResult>;
+  /**
+   * BACKLOG-3966: the agent's own items ("My items"). Never plan-gated; every
+   * one is refused on a locked deal. Each names the deal, and main scopes the
+   * write to that deal's private checklist.
+   */
+  addMyItem: (args: {
+    transactionId: string;
+    title: string;
+  }) => Promise<{ success: boolean; result?: AddMyItemResult; error?: string } & ChecklistDealLockFields>;
+  renameMyItem: (args: {
+    transactionId: string;
+    itemId: string;
+    title: string;
+  }) => Promise<ChecklistWriteResult>;
+  reorderMyItems: (args: {
+    transactionId: string;
+    itemIds: string[];
+  }) => Promise<
+    { success: boolean; result?: ReorderMyItemsResult; error?: string } & ChecklistDealLockFields
+  >;
+  removeMyItem: (args: { transactionId: string; itemId: string }) => Promise<ChecklistWriteResult>;
 }

@@ -7,8 +7,9 @@
  * picker and multi-selects come from the @keepr/ui report kit (BACKLOG-3502a).
  */
 
+import type { ReactNode } from 'react';
 import { Search } from 'lucide-react';
-import { FilterBar, MultiSelect, PeriodPicker } from '@keepr/ui';
+import { Dropdown, FilterBar, MultiSelect, PeriodPicker } from '@keepr/ui';
 import { PERIOD_OPTIONS, type PeriodKey, type PeriodRange } from '@/lib/reports/period';
 import type { SubmissionFilters } from '@/lib/reports/submissions';
 
@@ -32,6 +33,8 @@ export interface SubmissionFilterBarProps {
   onPeriodChange: (period: string, from?: string, to?: string) => void;
   onFiltersChange: (filters: SubmissionFilters) => void;
   onClear: () => void;
+  /** The saved-views control, right of the filters (BACKLOG-4084). */
+  viewsSlot?: ReactNode;
 }
 
 export function SubmissionFilterBar({
@@ -46,9 +49,10 @@ export function SubmissionFilterBar({
   onPeriodChange,
   onFiltersChange,
   onClear,
+  viewsSlot,
 }: SubmissionFilterBarProps) {
   return (
-    <FilterBar hasFilters={hasFilters} onClear={onClear}>
+    <FilterBar hasFilters={hasFilters} onClear={onClear} trailing={viewsSlot}>
       <PeriodPicker<PeriodKey>
         options={PERIOD_OPTIONS}
         value={period.key}
@@ -64,11 +68,14 @@ export function SubmissionFilterBar({
         selected={filters.statuses}
         onChange={(statuses) => onFiltersChange({ ...filters, statuses })}
       />
-      <MultiSelect
-        label="Organization"
+      <Dropdown
+        mode="multi"
+        variant="filter"
+        ariaLabel="Organization"
         options={orgOptions}
-        selected={filters.orgs}
+        value={filters.orgs}
         onChange={(orgs) => onFiltersChange({ ...filters, orgs })}
+        onClear={() => onFiltersChange({ ...filters, orgs: [] })}
       />
       <MultiSelect
         label="Agent"

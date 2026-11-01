@@ -187,6 +187,7 @@ import { registerEmailLinkingHandlers } from "./handlers/emailLinkingHandlers";
 import { registerEmailAutoLinkHandlers } from "./handlers/emailAutoLinkHandlers";
 import { registerReviewQueueHandlers } from "./handlers/reviewQueueHandlers";
 import { registerHiddenTextHandlers } from "./handlers/hiddenTextHandlers";
+import { registerTransactionOpenHandlers } from "./handlers/transactionOpenHandlers";
 import { registerChecklistHandlers } from "./handlers/checklistHandlers";
 import {
   registerRcsImportHandlers,
@@ -300,6 +301,7 @@ import {
 } from "./services/windowResponsivenessTracker";
 import { createWindowFreezeReporter, currentScreenName } from "./services/rendererFreezeProfiler";
 import { syncTimeline } from "./services/syncTimeline";
+import { startAttachmentOcr, stopAttachmentOcr } from "./services/ocr/attachmentOcrQueue";
 import { normalizeOAuthProvider } from "./utils/normalizeOAuthProvider";
 import { buildDeepLinkAuthPayload } from "./utils/deepLinkAuthPayload";
 import { licenseBlockedPayload } from "./utils/deepLinkLicenseBlockedPayload";
@@ -1579,6 +1581,10 @@ app.whenReady().then(async () => {
   // quit — the "securing your iPhone backup" quit prompt is not shown for it.
   powerMonitor.on("shutdown", () => noteSystemQuit("os-shutdown"));
 
+  // BACKLOG-3943: let the OCR queue run (image-only PDF attachments). The post-sync
+  // drain is skipped while the machine is on battery power.
+  startAttachmentOcr({ isOnBatteryPower: () => powerMonitor.isOnBatteryPower() });
+
   // BACKLOG-2709: on the FIRST launch against a new development directory, say
   // so before the window appears. The app is about to open an empty database on
   // a machine where the real one still exists, and a silently blank contact
@@ -1922,6 +1928,8 @@ app.whenReady().then(async () => {
   registerReviewQueueHandlers();
   // BACKLOG-3366: hide / unhide individual texts from a transaction's export.
   registerHiddenTextHandlers();
+  // BACKLOG-3965: when each deal was last opened (the Dashboard's Recent panel).
+  registerTransactionOpenHandlers();
   // BACKLOG-3475: transaction checklists — broker templates, items, evidence links.
   registerChecklistHandlers();
   // BACKLOG-3619: RCS import from the Chrome extension. The loopback bridge
@@ -2112,6 +2120,9 @@ app.on("before-quit", (event) => {
   if (deferQuitForBackupStop(event)) return;
   if (deferQuitForLink(event)) return;
   if (deferQuitForBackupSeal(event)) return;
+  // BACKLOG-3943: clear the OCR queue and stop the running OCR child; the job in
+  // flight writes nothing, so its row is picked up again after the next sync.
+  stopAttachmentOcr();
   // TASK-1956: Shutdown persistent contact worker pool
   try {
     const { shutdownPool } = require("./workers/contactWorkerPool");

@@ -18,6 +18,10 @@ import type { TransactionContactResult } from "../../services/db/transactionCont
 import type { PickerMessage } from "../../services/db/messageDbService";
 // The one definition of the pre-cache fetch rounds. TYPE-ONLY, same ruling.
 import type { EmailPrecacheStage } from "./emailPrecacheStage";
+import type {
+  RecentlyOpenedTransactionsResponse,
+  RecordTransactionOpenResponse,
+} from "../transactionOpen";
 
 
 /** BACKLOG-2791: which store a review item came from. */
@@ -88,9 +92,9 @@ export interface SubmitChecklistLinkGap {
   linkId: string;
   itemTitle: string;
   label: string;
-  kind: "attachment" | "email";
+  kind: "attachment" | "email" | "text";
   reason: "outside_audit_dates" | "not_included";
-  detail: "not_on_transaction" | "cannot_be_sent" | "message_not_sent" | "not_sent" | null;
+  detail: "not_on_transaction" | "cannot_be_sent" | "message_not_sent" | "not_sent" | "texts_not_supported" | null;
   missingIds: string[];
   sentAt: string | null;
   auditStart: string | null;
@@ -646,6 +650,8 @@ export interface WindowApiTransactions {
       summaryOnly?: boolean;
       attachmentType?: ExportAttachmentType;
       emailExportMode?: ExportEmailMode;
+      /** BACKLOG-3767: add the transaction's checklists to the PDF. */
+      includeChecklist?: boolean;
     },
   ) => Promise<{
     success: boolean;
@@ -868,6 +874,10 @@ export interface WindowApiTransactions {
     hidden?: boolean;
     error?: string;
   }>;
+  /** BACKLOG-3965: record that this deal was opened (local only, never synced). */
+  recordOpen: (transactionId: string) => Promise<RecordTransactionOpenResponse>;
+  /** BACKLOG-3965: the deals this user opened most recently, newest first. */
+  getRecentlyOpened: (userId: string, limit?: number) => Promise<RecentlyOpenedTransactionsResponse>;
   /** BACKLOG-1578: Get removed/unlinked emails for a transaction */
   getRemovedEmails: (transactionId: string) => Promise<{
     success: boolean;

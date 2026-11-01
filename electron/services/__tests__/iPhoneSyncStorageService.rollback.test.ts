@@ -19,6 +19,13 @@ if (typeof globalThis.setImmediate === "undefined") {
 }
 
 // Mock electron before any imports
+// BACKLOG-3343: the open-session marker is real-SQLite-tested in
+// iPhoneSyncStorageService.interruptedSession-3343.test.ts; here it is inert.
+jest.mock("../db/iphoneSyncOpenSessionDbService", () => ({
+  markStarted: jest.fn(),
+  markFinished: jest.fn(),
+  listOpen: jest.fn(() => []),
+}));
 jest.mock("electron", () => ({
   app: {
     getPath: jest.fn().mockReturnValue("/mock/userData"),
@@ -59,7 +66,12 @@ jest.mock("../databaseService");
 // BACKLOG-4040: the rollback deletes files through the shared check (real-file
 // behaviour: attachmentFileRefs.paths-4040.test.ts). Here: what it is handed.
 const mockFakeDb = { fake: "db" };
-jest.mock("../db/core/dbConnection", () => ({ ensureDb: jest.fn(() => mockFakeDb) }));
+// BACKLOG-2552: a passthrough — this suite checks order and shape only; it cannot
+// observe atomicity by design (that is rollbackAtomicity-2552.test.ts).
+jest.mock("../db/core/dbConnection", () => ({
+  ensureDb: jest.fn(() => mockFakeDb),
+  dbTransaction: (fn: () => unknown) => fn(),
+}));
 jest.mock("../attachmentFileRefs", () => ({
   removeUnreferencedAttachmentFiles: jest.fn().mockResolvedValue({ removed: 0, stillReferenced: 0, refused: 0, failed: 0 }),
 }));
@@ -661,7 +673,8 @@ describe("persistSyncResult without cancel", () => {
 // ============================================
 
 describe("error-path behavior (exception handling)", () => {
-  it("should return error result when storeMessages throws (no rollback on error)", async () => {
+  // BACKLOG-3343: an error now rolls the session back, exactly as a cancel does.
+  it("should return error result when storeMessages throws, and roll the session back", async () => {
     const messages = [makeMessage(1, "guid-1")];
     const conversations = [makeConversation(1, messages)];
 
@@ -678,17 +691,15 @@ describe("error-path behavior (exception handling)", () => {
       "session-err-msg"
     );
 
-    // Error path: returns failure but does NOT trigger rollback
     expect(result.success).toBe(false);
     expect(result.error).toBe("Database corruption");
     expect(result.messagesStored).toBe(0);
     expect(result.contactsStored).toBe(0);
     expect(result.attachmentsStored).toBe(0);
 
-    // Rollback should NOT be called on exceptions (only on cancel)
-    expect(mockDbService.deleteAttachmentsBySessionId).not.toHaveBeenCalled();
-    expect(mockDbService.deleteMessagesBySessionId).not.toHaveBeenCalled();
-    expect(mockExternalContactDb.deleteBySessionId).not.toHaveBeenCalled();
+    expect(mockDbService.deleteAttachmentsBySessionId).toHaveBeenCalledWith("session-err-msg");
+    expect(mockDbService.deleteMessagesBySessionId).toHaveBeenCalledWith("user-1", "session-err-msg");
+    expect(mockExternalContactDb.deleteBySessionId).toHaveBeenCalledWith("user-1", "session-err-msg");
   });
 
   it("should return error result when batchInsertMessages throws", async () => {
@@ -711,8 +722,7 @@ describe("error-path behavior (exception handling)", () => {
     expect(result.error).toBe("Disk full");
     expect(result.messagesStored).toBe(0);
 
-    // No rollback on exception
-    expect(mockDbService.deleteMessagesBySessionId).not.toHaveBeenCalled();
+    expect(mockDbService.deleteMessagesBySessionId).toHaveBeenCalledWith("user-1", "session-err-batch");
   });
 
   it("should return error result when storeContacts throws after messages succeed", async () => {
@@ -742,8 +752,9 @@ describe("error-path behavior (exception handling)", () => {
     expect(result.messagesStored).toBe(0);
     expect(result.contactsStored).toBe(0);
 
-    // No rollback on exception (rollback only for cancel)
-    expect(mockDbService.deleteMessagesBySessionId).not.toHaveBeenCalled();
+    // BACKLOG-3343: the messages already written are rolled back.
+    expect(mockDbService.deleteMessagesBySessionId).toHaveBeenCalledWith("user-1", "session-err-contacts");
+    expect(mockExternalContactDb.deleteBySessionId).toHaveBeenCalledWith("user-1", "session-err-contacts");
   });
 
   it("should not throw when unknown error type is caught", async () => {

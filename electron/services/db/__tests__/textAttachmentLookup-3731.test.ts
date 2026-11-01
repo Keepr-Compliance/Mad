@@ -92,8 +92,11 @@ function createSchema(db: DatabaseType): void {
     );
     -- BACKLOG-3764: the readers send a checklist group's evidence the agent
     -- chose to include regardless of the dates. The columns that query reads,
-    -- as in schema.sql.
-    CREATE TABLE transaction_checklists (id TEXT PRIMARY KEY, transaction_id TEXT NOT NULL);
+    -- as in schema.sql (BACKLOG-3966: template_id, read by the private-checklist
+    -- exclusion).
+    CREATE TABLE transaction_checklists (
+      id TEXT PRIMARY KEY, transaction_id TEXT NOT NULL, template_id TEXT NOT NULL
+    );
     CREATE TABLE transaction_checklist_items (id TEXT PRIMARY KEY, checklist_id TEXT NOT NULL);
     CREATE TABLE transaction_checklist_links (
       id TEXT PRIMARY KEY, item_id TEXT NOT NULL, include_outside_dates INTEGER NOT NULL DEFAULT 0

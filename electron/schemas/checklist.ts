@@ -47,8 +47,13 @@ export const ChecklistDocumentTypeSchema = z.enum([
   'other',
 ]);
 
-/** `attachment` or `email`. Mirrors the CHECK on both sides. */
-export const ChecklistLinkKindSchema = z.enum(['attachment', 'email']);
+/**
+ * `attachment`, `email` or (BACKLOG-3968 PR-4b) `text`. Mirrors the local
+ * CHECK (migration v78). The cloud takes 'text' only after PR-5; a submission
+ * whose cloud does not withholds text groups
+ * (`electron/services/checklistTextLinksCapability.ts`), not refused here.
+ */
+export const ChecklistLinkKindSchema = z.enum(['attachment', 'email', 'text']);
 
 // ============================================
 // CLOUD ROW SCHEMAS (PostgREST -> desktop)
@@ -168,13 +173,20 @@ export const SetChecklistItemNoteArgsSchema = z.object({
  * 200 is the same bound the plan set for one group. It is a bound on a single
  * request, not on how much evidence an item may carry.
  */
-export const AddChecklistLinkArgsSchema = z.object({
-  itemId: UuidSchema,
-  kind: ChecklistLinkKindSchema,
-  targetIds: z.array(UuidSchema).min(1).max(200),
-  /** BACKLOG-3764: the agent's "Include it" to the outside-the-dates question. */
-  includeOutsideDates: z.boolean().optional(),
-});
+export const AddChecklistLinkArgsSchema = z
+  .object({
+    itemId: UuidSchema,
+    kind: ChecklistLinkKindSchema,
+    targetIds: z.array(UuidSchema).min(1).max(200),
+    /** BACKLOG-3764: the agent's "Include it" to the outside-the-dates question. */
+    includeOutsideDates: z.boolean().optional(),
+  })
+  // BACKLOG-3968: a text is never asked the outside-the-dates question (the
+  // message upload has no such arm), so an "Include it" for one is refused.
+  .refine((args) => !(args.kind === 'text' && args.includeOutsideDates === true), {
+    message: 'includeOutsideDates is not accepted for a text link',
+    path: ['includeOutsideDates'],
+  });
 
 /** BACKLOG-3764: "Include it" for an existing group, from the submit pre-flight. */
 export const IncludeChecklistLinkOutsideDatesArgsSchema = z.object({
@@ -186,6 +198,53 @@ export const RemoveChecklistLinkArgsSchema = z.object({
   linkId: UuidSchema,
 });
 
+/**
+ * BACKLOG-3965 PR-3: the Dashboard's Todo list. `limit` is 1..50 (the db
+ * service's cap); absent means the handler's default.
+ */
+export const ListOpenRequiredChecklistItemsArgsSchema = z.object({
+  userId: UuidSchema,
+  limit: z.number().int().min(1).max(50).optional(),
+});
+
+// ============================================
+// BACKLOG-3966: the private checklist ("My items")
+// ============================================
+
+/**
+ * One of the agent's own item titles: trimmed, 1..300 characters — the same
+ * bound the `title` CHECK in schema.sql applies to every checklist item.
+ */
+export const MyItemTitleSchema = z.string().trim().min(1).max(300);
+
+/** Every My-items write names the deal: the SQL is scoped to its private checklist. */
+export const AddMyItemArgsSchema = z.object({
+  transactionId: UuidSchema,
+  title: MyItemTitleSchema,
+});
+
+export const RenameMyItemArgsSchema = z.object({
+  transactionId: UuidSchema,
+  itemId: UuidSchema,
+  title: MyItemTitleSchema,
+});
+
+/** The section's items in their new order: every one of them, once. */
+export const ReorderMyItemsArgsSchema = z.object({
+  transactionId: UuidSchema,
+  itemIds: z.array(UuidSchema).min(1).max(500),
+});
+
+export const RemoveMyItemArgsSchema = z.object({
+  transactionId: UuidSchema,
+  itemId: UuidSchema,
+});
+
+export type AddMyItemArgs = z.infer<typeof AddMyItemArgsSchema>;
+export type RenameMyItemArgs = z.infer<typeof RenameMyItemArgsSchema>;
+export type ReorderMyItemsArgs = z.infer<typeof ReorderMyItemsArgsSchema>;
+export type RemoveMyItemArgs = z.infer<typeof RemoveMyItemArgsSchema>;
+
 export type SelectChecklistTemplateArgs = z.infer<typeof SelectChecklistTemplateArgsSchema>;
 export type GetChecklistArgs = z.infer<typeof GetChecklistArgsSchema>;
 export type RemoveChecklistArgs = z.infer<typeof RemoveChecklistArgsSchema>;
@@ -195,4 +254,7 @@ export type AddChecklistLinkArgs = z.infer<typeof AddChecklistLinkArgsSchema>;
 export type RemoveChecklistLinkArgs = z.infer<typeof RemoveChecklistLinkArgsSchema>;
 export type IncludeChecklistLinkOutsideDatesArgs = z.infer<
   typeof IncludeChecklistLinkOutsideDatesArgsSchema
+>;
+export type ListOpenRequiredChecklistItemsArgs = z.infer<
+  typeof ListOpenRequiredChecklistItemsArgsSchema
 >;

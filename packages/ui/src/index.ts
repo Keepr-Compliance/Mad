@@ -87,21 +87,27 @@ export {
   SelectScrollDownButton,
 } from './components/select';
 
-// Dropdown (BACKLOG-4032) — searchable single-choice picker; see README "Dropdown".
+// Dropdown (BACKLOG-4032) — searchable single- or multi-choice picker; see README "Dropdown".
 export { Dropdown, DropdownOptions, filterDropdownOptions, dropdownSide } from './components/dropdown';
 export type {
   DropdownOption,
   DropdownProps,
   DropdownSingleProps,
+  DropdownMultiProps,
   DropdownLabelling,
   DropdownOptionsProps,
 } from './components/dropdown';
+
+// DateRangePicker (BACKLOG-4032 slice 3) — two-month calendar pill, commits on Apply; see README "DateRangePicker".
+export { DateRangePicker } from './components/date-range';
+export type { DateRangePickerProps, DateRangeValue } from './components/date-range';
 
 // Phone kit (BACKLOG-3895) — phone-width components; see DESIGN-SYSTEM.md "Phone".
 export * from './components/phone';
 
 // Report kit (BACKLOG-3502a) — desktop report tables, filters, cards, URL state; see README "Report kit".
 export * from './components/report';
+export * from './components/saved-views';
 // BACKLOG-4007 PR-4: a brokerage's people (billing / IT / office / MSP), shared by both portals.
 export { OrgPeoplePanel, orgPeopleErrorMessage } from './components/org-people';
 export type {

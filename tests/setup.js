@@ -25,6 +25,24 @@ if (typeof global.ResizeObserver === 'undefined') {
   };
 }
 
+// BACKLOG-4073: jsdom lacks the Element methods Radix (the @keepr/ui kit's
+// Select, Dialog, Dropdown) calls. Same four stubs as packages/ui/test/setup.ts.
+if (typeof global.Element !== 'undefined') {
+  const proto = global.Element.prototype;
+  if (!proto.hasPointerCapture) {
+    proto.hasPointerCapture = () => false;
+  }
+  if (!proto.setPointerCapture) {
+    proto.setPointerCapture = () => {};
+  }
+  if (!proto.releasePointerCapture) {
+    proto.releasePointerCapture = () => {};
+  }
+  if (!proto.scrollIntoView) {
+    proto.scrollIntoView = () => {};
+  }
+}
+
 // Limit stack trace depth in CI/CD for cleaner error output
 if (process.env.CI) {
   Error.stackTraceLimit = 3; // Only show 3 stack frames in CI
@@ -95,6 +113,9 @@ if (typeof window !== 'undefined') {
       // BACKLOG-322: unified transaction Attachments tab query + on-demand download.
       // Default empty so the tab/hook loads cleanly in every test environment.
       getAllAttachments: jest.fn().mockResolvedValue({ success: true, data: [] }),
+      // BACKLOG-3965: TransactionDetails records each open; the Dashboard reads them.
+      recordOpen: jest.fn().mockResolvedValue({ success: true, recorded: true }),
+      getRecentlyOpened: jest.fn().mockResolvedValue({ success: true, transactions: [] }),
       ensureEmailAttachmentDownloaded: jest.fn().mockResolvedValue({ success: true, data: [] }),
       // BACKLOG-1780/1781: RemovedEmailsSection refreshKey effect — needed in all test environments.
       getRemovedEmails: jest.fn().mockResolvedValue({ success: true, removedEmails: [] }),
@@ -290,6 +311,9 @@ if (typeof window !== 'undefined') {
       openPortal: jest.fn().mockResolvedValue({ success: true }),
       getPlanSummary: jest.fn().mockResolvedValue({ unavailable: true }),
       refresh: jest.fn().mockResolvedValue({ unavailable: true }),
+      // BACKLOG-3676: no price unless a test says so; nothing opens.
+      getAgentPrices: jest.fn().mockResolvedValue({ unavailable: true }),
+      openBookCall: jest.fn().mockResolvedValue({ success: false }),
     },
     shell: {
       openExternal: jest.fn(),
@@ -402,6 +426,20 @@ if (typeof window !== 'undefined') {
       }),
       // Never gated in the main process, so the default is the working answer.
       remove: jest.fn().mockResolvedValue({ success: true, changed: false }),
+      // BACKLOG-3965 PR-3. BACKLOG-3966: main no longer refuses this for the
+      // plan (it scopes it), but the default stays a non-answer so a test that
+      // forgets to override is not handed a working Todo list.
+      listOpenRequired: jest.fn().mockResolvedValue({
+        success: false,
+        error: 'Transaction checklists are not available.',
+      }),
+      // BACKLOG-3966: the agent's own items. Not plan-gated in main, but the
+      // default is still "nothing written" so a forgotten override cannot
+      // pass as a working write.
+      addMyItem: jest.fn().mockResolvedValue({ success: false, error: 'Not available in tests.' }),
+      renameMyItem: jest.fn().mockResolvedValue({ success: true, changed: false }),
+      reorderMyItems: jest.fn().mockResolvedValue({ success: false, error: 'Not available in tests.' }),
+      removeMyItem: jest.fn().mockResolvedValue({ success: true, changed: false }),
       invalidateTemplates: jest.fn().mockResolvedValue({ success: true }),
       // BACKLOG-3617: gated like listTemplates, so the default is the refusal
       // — which the chooser reads as "unknown", never as a creator.
@@ -437,6 +475,10 @@ if (typeof window !== 'undefined') {
       chargeSavedCard: jest.fn().mockResolvedValue({ outcome: 'error' }),
       confirm: jest.fn().mockResolvedValue({ unlocked: false, reason: 'error' }),
       hasSavedCard: jest.fn().mockResolvedValue({ hasSavedCard: false }),
+      // BACKLOG-3676: fail-closed defaults (nothing starts, nothing unlocks).
+      beginSubscription: jest.fn().mockResolvedValue({ started: false, code: 'try_again' }),
+      confirmSubscription: jest.fn().mockResolvedValue({ unlocked: false, reason: 'error' }),
+      refreshGate: jest.fn().mockResolvedValue({ unlocked: false }),
     },
     // Payment deep-link callback listener (returns a no-op cleanup by default).
     onPaymentDeepLinkCallback: jest.fn(() => jest.fn()),
