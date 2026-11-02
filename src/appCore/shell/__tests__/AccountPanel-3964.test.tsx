@@ -122,7 +122,7 @@ function Harness() {
       <AppShell app={app}>
         <PopupWithEscHandlers />
       </AppShell>
-      <SupportWidget accountPanelOpen={app.modalState.showProfile} />
+      <SupportWidget />
     </>
   );
 }
@@ -181,9 +181,25 @@ describe("opening", () => {
     openFromInitials();
     const panel = screen.getByTestId("account-panel");
     const scrim = screen.getByTestId("account-panel-scrim");
-    expect(panel).toHaveClass("bg-gray-900", "text-white", "fixed", "left-0", "bottom-0", "top-9");
-    expect(panel).toHaveClass("w-[82%]", "sm:w-64", "overflow-y-auto");
+    expect(panel).toHaveClass("bg-gray-900", "text-white", "fixed", "bottom-0", "top-9");
+    expect(panel).toHaveClass("w-[82%]", "sm:w-64");
     expect(scrim).toHaveClass("fixed", "top-9", "bg-gray-900/55", "sm:bg-gray-900/35");
+  });
+
+  it("is anchored to the RIGHT edge, under the initials; the scrim covers the rest to its left (BACKLOG-4112)", () => {
+    render(<Harness />);
+    openFromInitials();
+    const panel = screen.getByTestId("account-panel");
+    const scrim = screen.getByTestId("account-panel-scrim");
+    expect(panel).toHaveClass("right-0", "border-l");
+    expect(panel).not.toHaveClass("left-0");
+    expect(panel).not.toHaveClass("border-r");
+    // The scrim ends where the panel starts: 82% on phones, 256px (w-64) from sm.
+    expect(scrim).toHaveClass("left-0", "right-[82%]", "sm:right-64", "bottom-0");
+    expect(scrim).not.toHaveClass("right-0");
+    expect(scrim).not.toHaveClass("inset-x-0");
+    // The X sits on the panel's inner (left) edge.
+    expect(screen.getByTestId("account-panel-close")).toHaveClass("left-2.5");
   });
 
   it("starts at the very top outside Electron (no drag strip)", () => {
@@ -207,11 +223,12 @@ describe('C1 stacking bands: "?" above the panel, panel above its scrim, scrim a
     expect(zOf(help())).toBeLessThan(zValue(Z_CLASS.supportDialog));
   });
 
-  it('keeps the "?" reachable and moves it beside the panel', () => {
+  it('keeps the "?" reachable in its bottom-left corner, clear of the right-hand panel (BACKLOG-4112)', () => {
     render(<Harness />);
-    expect(help()).toHaveClass("left-4");
+    expect(help()).toHaveClass("left-4", "bottom-4");
     openFromInitials();
-    expect(help()).toHaveClass("left-[calc(82%_+_10px)]", "sm:left-[272px]", "bg-primary-600");
+    expect(help()).toHaveClass("left-4", "bottom-4", "bg-primary-600");
+    expect(help().className).not.toMatch(/left-\[/);
     expect(help()).not.toHaveAttribute("aria-hidden");
     expect(help().closest("[inert]")).toBeNull();
     expect(screen.getByTestId("account-panel")).not.toContainElement(help());
@@ -432,6 +449,27 @@ describe("C14 Sign out", () => {
     fireEvent.click(signOut);
     expect(handleLogout).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: /confirm/i })).toBeNull();
+  });
+
+  it("is pinned below the scrolling rows, separated by a divider, and never scrolls away (BACKLOG-3964 founder note)", () => {
+    render(<Harness />);
+    openFromInitials();
+    const panel = screen.getByTestId("account-panel");
+    const scroll = screen.getByTestId("account-panel-scroll");
+    const footer = screen.getByTestId("account-panel-footer");
+    const signOut = screen.getByTestId("account-panel-signout");
+    // Two children: the scrolling region (header + rows), then the pinned footer.
+    expect(Array.from(panel.children)).toEqual([scroll, footer]);
+    expect(panel).toHaveClass("flex", "flex-col");
+    expect(panel).not.toHaveClass("overflow-y-auto");
+    expect(scroll).toHaveClass("flex-1", "min-h-0", "overflow-y-auto");
+    expect(scroll).toContainElement(screen.getByTestId("nav-settings"));
+    expect(scroll).toContainElement(screen.getByTestId("account-panel-close"));
+    // Sign out is outside every scrolling box, in a footer that does not shrink.
+    expect(scroll).not.toContainElement(signOut);
+    expect(footer).toContainElement(signOut);
+    expect(signOut.closest(".overflow-y-auto")).toBeNull();
+    expect(footer).toHaveClass("flex-none", "border-t", "border-gray-800", "pb-5");
   });
 
   it("a double click while sign-out is pending signs out once; the button is disabled until it settles (slice 3b)", async () => {

@@ -1,12 +1,13 @@
 /**
  * TitleBar — the app's top bar, extracted from AppShell (BACKLOG-3964 slice 1).
  *
- * Electron: full-width white bar on every step except login. Initials on the
- * LEFT (slice 3, founder decision 1), centred page title, an empty w-8 slot on
- * the right that keeps the title centred. BACKLOG-1790: this bar is NOT a drag
- * region — the global WindowDragStrip (App.tsx) overlays its top 36px, so the
- * initials carry .no-drag-region. On macOS the left slot clears the traffic
- * lights (titleBarStyle "hiddenInset", electron/constants.ts).
+ * Electron: full-width white bar on every step except login. An empty w-8
+ * spacer on the left, centred page title, initials on the RIGHT (BACKLOG-4112,
+ * the macOS convention; nothing else sits on the right: "hiddenInset" puts the
+ * traffic lights on the left and there is no titleBarOverlay). BACKLOG-1790:
+ * this bar is NOT a drag region — the global WindowDragStrip (App.tsx) overlays
+ * its top 36px, so the initials carry .no-drag-region. On macOS the left
+ * padding clears the traffic lights (electron/constants.ts).
  *
  * Non-Electron: mobile header, only when signed in, hidden at lg and up.
  * Initials left, then the title.
@@ -18,7 +19,7 @@ import { AccountButton } from "./AccountButton";
 
 interface TitleBarProps {
   runningInElectron: boolean;
-  /** macOS: the left slot starts past the traffic lights. */
+  /** macOS: the left padding clears the traffic lights. */
   isMacOS?: boolean;
   currentStep: AppStep;
   isAuthenticated: boolean;
@@ -48,11 +49,12 @@ export function TitleBar({
         data-testid="title-bar"
         className={`flex-shrink-0 bg-white border-b border-gray-200 pr-4 py-3 flex items-center justify-between select-none ${isMacOS ? "pl-20" : "pl-4"}`}
       >
-        <div className="flex w-8 shrink-0 items-center" data-testid="title-bar-left">
+        {/* Left spacer keeps the title centred */}
+        <div className="w-8 shrink-0" />
+        <h1 className="min-w-0 truncate px-2 text-sm font-semibold text-gray-700">{title}</h1>
+        <div className="flex w-8 shrink-0 items-center justify-end" data-testid="title-bar-right">
           {user && <AccountButton user={user} onClick={onOpenAccount} inDragBand expanded={accountOpen} />}
         </div>
-        <h1 className="min-w-0 truncate px-2 text-sm font-semibold text-gray-700">{title}</h1>
-        <div className="w-8 shrink-0" /> {/* Right spacer keeps the title centred */}
       </div>
     );
   }
