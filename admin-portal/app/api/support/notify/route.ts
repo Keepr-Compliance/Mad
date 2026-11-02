@@ -9,7 +9,7 @@
  * /dashboard/support pages require). The outgoing email is built here from
  * the ticket row: recipient, subject, ticket number and link are never taken
  * from the request body. The body supplies only the ticket id, the type, and
- * staff-written text (reply preview, resolution summary).
+ * staff-written text (the full reply, resolution summary).
  *
  * TASK-2199, BACKLOG-1574, BACKLOG-3703
  */
@@ -19,7 +19,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getAuthenticatedUser } from '@/lib/supabase/server';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const REPLY_PREVIEW_MAX = 203; // 200 chars + '...', as built by the client
+// The whole reply goes in the email (BACKLOG-3702). The composer has no length
+// limit, so this is only a sanity bound on the request (BACKLOG-4109).
+const REPLY_BODY_MAX = 50_000;
 const RESOLUTION_SUMMARY_MAX = 300;
 
 const TARGET_PATHS = {
@@ -109,7 +111,7 @@ async function buildOutgoing(
       ...base,
       customerEmail: ticket.requester_email,
       agentName: ctx.agentName,
-      replyPreview: optionalText(body.replyPreview, REPLY_PREVIEW_MAX) ?? '',
+      replyPreview: optionalText(body.replyPreview, REPLY_BODY_MAX) ?? '',
       ticketUrl: `${broker}/dashboard/support/${ticket.id}`,
     };
   }
