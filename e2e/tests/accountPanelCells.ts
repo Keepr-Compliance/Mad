@@ -2,6 +2,7 @@ import type { ElectronApplication, Page } from '@playwright/test';
 
 /**
  * BACKLOG-3964 slice 3a — account side panel cells for the BUILT app (H1-H8).
+ * BACKLOG-4112: the initials and the panel are on the RIGHT; the "?" stays bottom-left.
  *
  * Shared by e2e/tests/settings-stacking.spec.ts and the safeguarded walkthrough runner, so both
  * run the same checks. Each cell returns { id, ok, detail }; the spec asserts every ok.
@@ -86,13 +87,14 @@ export async function runAccountPanelCells(page: Page, opts: PanelCellOptions): 
   const vp = async () => page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
 
   out.push(
-    await cell('H8 initials on the LEFT, clear of the macOS traffic lights', async () => {
+    await cell('H8 initials on the RIGHT, clear of the window edge, topmost at their centre', async () => {
       const b = await rect(page, '[data-testid="nav-profile"]');
       const { w } = await vp();
       await shot('h8-title-bar');
       if (!b) return 'no initials';
-      if (b.x > w / 2) return `initials on the right half (x=${b.x}, width=${w})`;
-      if (process.platform === 'darwin' && b.x < 72) return `left edge ${b.x}px sits under the traffic lights (< 72)`;
+      if (b.x < w / 2) return `initials on the left half (x=${b.x}, width=${w})`;
+      if (b.x + b.w > w - 8) return `right edge ${b.x + b.w}px is within 8px of the window edge ${w}`;
+      if (!(await isTopmostAtCentre(page, '[data-testid="nav-profile"]'))) return 'initials covered at their centre';
       return true;
     }),
   );
@@ -126,10 +128,14 @@ export async function runAccountPanelCells(page: Page, opts: PanelCellOptions): 
       if (!p) return 'no panel';
       if (Math.abs(p.w - 256) > 2) return `panel width ${p.w} (want 256)`;
       if (Math.abs(p.y - 36) > 1) return `panel top ${p.y} (want 36, below the drag strip)`;
+      if (Math.abs(p.x + p.w - w) > 1) return `panel right edge ${p.x + p.w} (want the window edge ${w})`;
       const inPanel = await testidAt(page, p.x + p.w / 2, p.y + p.h / 2);
-      const onScrim = await testidAt(page, Math.min(w - 20, p.w + 200), Math.min(h - 20, 50));
+      const onScrim = await testidAt(page, Math.max(20, p.x - 200), Math.min(h - 20, 50));
       if (!['account-panel', 'nav-settings'].includes(inPanel) && !inPanel.startsWith('account-panel')) return `panel centre hit ${inPanel}`;
-      if (onScrim !== 'account-panel-scrim') return `point right of the panel at y=50 hit ${onScrim}`;
+      if (onScrim !== 'account-panel-scrim') return `point left of the panel at y=50 hit ${onScrim}`;
+      // Sign out is pinned to the panel's bottom (BACKLOG-3964 founder note).
+      const so = await rect(page, '[data-testid="account-panel-signout"]');
+      if (!so || so.y + so.h > p.y + p.h || p.y + p.h - (so.y + so.h) > 40) return `Sign out ${JSON.stringify(so)} is not at the panel bottom ${p.y + p.h}`;
       return true;
     }),
   );
@@ -142,7 +148,7 @@ export async function runAccountPanelCells(page: Page, opts: PanelCellOptions): 
       if (!(await isTopmostAtCentre(page, '[data-testid="account-panel-signout"]'))) return 'Sign out covered at its centre (by the "?")';
       const hb = await rect(page, HELP);
       const pb = await rect(page, PANEL);
-      if (!hb || !pb || hb.x < pb.x + pb.w) return `"?" left ${hb?.x} is not past the panel edge ${pb ? pb.x + pb.w : '?'}`;
+      if (!hb || !pb || hb.x + hb.w > pb.x) return `"?" right ${hb ? hb.x + hb.w : '?'} is not left of the panel edge ${pb?.x}`;
       await shot('h2-panel-and-help');
       await page.locator(HELP).click();
       const form = page.getByTestId('support-ticket-dialog');
@@ -179,8 +185,8 @@ export async function runAccountPanelCells(page: Page, opts: PanelCellOptions): 
   out.push(
     await cell('H4 a click on the scrim closes the panel', async () => {
       await openPanel(page);
-      const { w, h } = await vp();
-      await page.mouse.click(w - 40, Math.round(h / 2));
+      const { h } = await vp();
+      await page.mouse.click(120, Math.round(h / 2));
       await page.locator(PANEL).waitFor({ state: 'hidden', timeout: 5_000 });
       return true;
     }),
@@ -213,7 +219,7 @@ export async function runAccountPanelCells(page: Page, opts: PanelCellOptions): 
   );
 
   out.push(
-    await cell('H6 phone width: 82% drawer + scrim, "?" beside it, X clickable', async () => {
+    await cell('H6 phone width: 82% drawer from the right + scrim, "?" clear of it, X clickable', async () => {
       const before = await opts.app.evaluate(({ BrowserWindow }) => {
         const win = BrowserWindow.getAllWindows()[0];
         const b = win.getBounds();
@@ -231,8 +237,10 @@ export async function runAccountPanelCells(page: Page, opts: PanelCellOptions): 
         await shot('h6-phone-width');
         if (!p) return 'no panel';
         if (Math.abs(p.w - 0.82 * w) > 2) return `panel ${p.w}px at window ${w}px (want ${0.82 * w})`;
+        if (Math.abs(p.x - 0.18 * w) > 2) return `panel left ${p.x}px at window ${w}px (want ${0.18 * w})`;
         if (!scrimVisible) return 'no scrim';
-        if (!hb || Math.abs(hb.x - (0.82 * w + 10)) > 2) return `"?" left ${hb?.x} (want ${0.82 * w + 10})`;
+        if (!hb || hb.x + hb.w > p.x) return `"?" right ${hb ? hb.x + hb.w : '?'} overlaps the panel at ${p.x}`;
+        if (!(await isTopmostAtCentre(page, HELP))) return '"?" covered at its centre';
         if (!xTop) return 'X not topmost at its centre';
         await page.getByTestId('account-panel-close').click();
         await page.locator(PANEL).waitFor({ state: 'hidden', timeout: 5_000 });

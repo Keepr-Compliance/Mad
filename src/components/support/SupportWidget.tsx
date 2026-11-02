@@ -33,17 +33,6 @@ interface SupportWidgetProps {
   userEmail?: string;
   /** Optional user display name (provided when rendered inside auth context) */
   userName?: string;
-  /**
-   * BACKLOG-3964: the account side panel is open. The "?" moves to the
-   * panel's right edge so it stays visible and clickable above the scrim.
-   */
-  accountPanelOpen?: boolean;
-}
-
-/** Left offset of the "?" button (BACKLOG-1554 Windows corner, BACKLOG-3964 panel). */
-export function supportButtonLeft(accountPanelOpen: boolean, isWindows: boolean): string {
-  if (!accountPanelOpen) return isWindows ? "left-8" : "left-4";
-  return isWindows ? "left-[calc(82%_+_10px)] sm:left-[288px]" : "left-[calc(82%_+_10px)] sm:left-[272px]";
 }
 
 /**
@@ -56,7 +45,6 @@ export function supportButtonLeft(accountPanelOpen: boolean, isWindows: boolean)
 export function SupportWidget({
   userEmail: propEmail,
   userName: propName,
-  accountPanelOpen = false,
 }: SupportWidgetProps = {}): React.ReactElement {
   const { isWindows } = usePlatform();
   const [isOpen, setIsOpen] = useState(false);
@@ -167,14 +155,14 @@ export function SupportWidget({
       {/* BACKLOG-1554: Windows frameless windows have 20px resize zones at corners
            that intercept clicks. Use bottom-8 left-8 (32px) on Windows to clear the
            resize zone; keep bottom-4 left-4 (16px) on macOS/Linux.
-           BACKLOG-3964: with the account panel open it sits 10px past the panel's
-           right edge (panel = 82% on phones, 256px from sm). */}
+           BACKLOG-4112: the account panel opens on the right, so the "?" stays in
+           this corner, above the scrim and clear of the panel. */}
       <button
         onClick={handleOpen}
         data-support-widget
         className={`fixed ${Z_CLASS.support} w-10 h-10 rounded-full bg-primary-600 hover:bg-primary-700 text-white font-bold text-lg shadow-lg hover:shadow-xl transition-all flex items-center justify-center no-drag-region ${
-          isWindows ? "bottom-8" : "bottom-4"
-        } ${supportButtonLeft(accountPanelOpen, isWindows)}`}
+          isWindows ? "bottom-8 left-8" : "bottom-4 left-4"
+        }`}
         title="Contact Support"
         aria-label="Open support dialog"
       >
