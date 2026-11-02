@@ -451,6 +451,27 @@ describe("C14 Sign out", () => {
     expect(screen.queryByRole("button", { name: /confirm/i })).toBeNull();
   });
 
+  it("is pinned below the scrolling rows, separated by a divider, and never scrolls away (BACKLOG-3964 founder note)", () => {
+    render(<Harness />);
+    openFromInitials();
+    const panel = screen.getByTestId("account-panel");
+    const scroll = screen.getByTestId("account-panel-scroll");
+    const footer = screen.getByTestId("account-panel-footer");
+    const signOut = screen.getByTestId("account-panel-signout");
+    // Two children: the scrolling region (header + rows), then the pinned footer.
+    expect(Array.from(panel.children)).toEqual([scroll, footer]);
+    expect(panel).toHaveClass("flex", "flex-col");
+    expect(panel).not.toHaveClass("overflow-y-auto");
+    expect(scroll).toHaveClass("flex-1", "min-h-0", "overflow-y-auto");
+    expect(scroll).toContainElement(screen.getByTestId("nav-settings"));
+    expect(scroll).toContainElement(screen.getByTestId("account-panel-close"));
+    // Sign out is outside every scrolling box, in a footer that does not shrink.
+    expect(scroll).not.toContainElement(signOut);
+    expect(footer).toContainElement(signOut);
+    expect(signOut.closest(".overflow-y-auto")).toBeNull();
+    expect(footer).toHaveClass("flex-none", "border-t", "border-gray-800", "pb-5");
+  });
+
   it("a double click while sign-out is pending signs out once; the button is disabled until it settles (slice 3b)", async () => {
     let finish: () => void = () => {};
     handleLogout.mockImplementation(() => new Promise<void>((r) => (finish = r)));

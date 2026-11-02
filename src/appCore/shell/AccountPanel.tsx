@@ -5,7 +5,8 @@
  * Right edge, under the initials (BACKLOG-4112), below the window drag strip
  * in Electron (mock v14: the panel and scrim start under the chrome). ~256 px
  * wide on desktop, 82% with a darker scrim on phones; the scrim covers the rest
- * of the window to the left. The whole panel scrolls as one.
+ * of the window to the left. The header and the rows scroll together; Sign out
+ * is pinned below them and always visible (BACKLOG-3964 founder note).
  *
  * Contents: who is signed in, plan, User ID with Copy, one row per Settings
  * tab (the same `visibleSettingsTabs()` list the Settings page uses), and
@@ -180,76 +181,82 @@ const OpenAccountPanel = React.forwardRef<HTMLDivElement, OpenAccountPanelProps>
       aria-modal="true"
       aria-label="Account"
       data-testid="account-panel"
-      className={`fixed bottom-0 right-0 ${top} ${Z_CLASS.accountPanel} flex w-[82%] flex-col overflow-y-auto overscroll-contain border-l border-gray-800 bg-gray-900 text-white shadow-xl [scrollbar-width:none] sm:w-64 sm:[scrollbar-width:thin] [&>*]:flex-none`}
+      className={`fixed bottom-0 right-0 ${top} ${Z_CLASS.accountPanel} flex w-[82%] flex-col border-l border-gray-800 bg-gray-900 text-white shadow-xl sm:w-64`}
     >
-      <div className="relative flex flex-col gap-3 border-b border-gray-800 px-6 py-4">
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close menu"
-          title="Close"
-          data-testid="account-panel-close"
-          className="no-drag-region absolute left-2.5 top-2.5 flex h-7 w-7 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
-        >
-          <X className="h-5 w-5" aria-hidden="true" />
-        </button>
-        <div className="flex min-w-0 items-center gap-2.5 pl-8">
-          <AccountAvatar size={32} name={user.display_name} email={user.email} imageUrl={user.avatar_url} />
-          <div className="min-w-0">
-            {user.display_name && <p className="truncate text-sm leading-tight text-white">{user.display_name}</p>}
-            <p className="truncate text-xs leading-tight text-gray-400">{user.email}</p>
-          </div>
-        </div>
-        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-1.5 text-xs text-gray-300">
-          {planLabel && (
-            <>
-              <span className="text-gray-400">Plan</span>
-              <span>
-                <span
-                  data-testid="account-panel-plan"
-                  className="inline-flex items-center rounded-full bg-gray-800 px-2.5 py-0.5 text-xs font-medium text-gray-200"
-                >
-                  {planLabel}
-                </span>
-              </span>
-              <span />
-            </>
-          )}
-          <span className="text-gray-400">User ID</span>
-          <span className="truncate font-mono" title={user.id}>
-            {shortId(user.id)}
-          </span>
+      {/* Header and rows scroll together; Sign out below stays pinned (BACKLOG-3964). */}
+      <div
+        data-testid="account-panel-scroll"
+        className="min-h-0 flex-1 overflow-y-auto overscroll-contain [scrollbar-width:none] sm:[scrollbar-width:thin]"
+      >
+        <div className="relative flex flex-col gap-3 border-b border-gray-800 px-6 py-4">
           <button
             type="button"
-            onClick={() => copy(user.id)}
-            data-testid="account-panel-copy-id"
-            className="inline-flex items-center justify-center rounded-md bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+            onClick={onClose}
+            aria-label="Close menu"
+            title="Close"
+            data-testid="account-panel-close"
+            className="no-drag-region absolute left-2.5 top-2.5 flex h-7 w-7 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
           >
-            {copied ? "Copied" : "Copy"}
+            <X className="h-5 w-5" aria-hidden="true" />
           </button>
+          <div className="flex min-w-0 items-center gap-2.5 pl-8">
+            <AccountAvatar size={32} name={user.display_name} email={user.email} imageUrl={user.avatar_url} />
+            <div className="min-w-0">
+              {user.display_name && <p className="truncate text-sm leading-tight text-white">{user.display_name}</p>}
+              <p className="truncate text-xs leading-tight text-gray-400">{user.email}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-2.5 gap-y-1.5 text-xs text-gray-300">
+            {planLabel && (
+              <>
+                <span className="text-gray-400">Plan</span>
+                <span>
+                  <span
+                    data-testid="account-panel-plan"
+                    className="inline-flex items-center rounded-full bg-gray-800 px-2.5 py-0.5 text-xs font-medium text-gray-200"
+                  >
+                    {planLabel}
+                  </span>
+                </span>
+                <span />
+              </>
+            )}
+            <span className="text-gray-400">User ID</span>
+            <span className="truncate font-mono" title={user.id}>
+              {shortId(user.id)}
+            </span>
+            <button
+              type="button"
+              onClick={() => copy(user.id)}
+              data-testid="account-panel-copy-id"
+              className="inline-flex items-center justify-center rounded-md bg-gray-800 px-3 py-1.5 text-xs font-medium text-gray-300 transition-colors hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
         </div>
+
+        <nav className="px-3 py-4" aria-label="Settings">
+          <div className="px-3 pb-2 text-xs font-medium uppercase tracking-wider text-gray-400">Settings</div>
+          {tabs.map((tab) => {
+            const Icon = SETTINGS_TAB_ICONS[tab.id];
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                data-testid={accountPanelRowTestId(tab.id)}
+                onClick={() => onOpenTab(tab.id)}
+                className={`${ROW} ${ROW_IDLE}`}
+              >
+                {Icon && <Icon className="h-5 w-5 shrink-0" aria-hidden="true" />}
+                <span className="truncate">{tab.label}</span>
+              </button>
+            );
+          })}
+        </nav>
       </div>
 
-      <nav className="px-3 py-4" aria-label="Settings">
-        <div className="px-3 pb-2 text-xs font-medium uppercase tracking-wider text-gray-400">Settings</div>
-        {tabs.map((tab) => {
-          const Icon = SETTINGS_TAB_ICONS[tab.id];
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              data-testid={accountPanelRowTestId(tab.id)}
-              onClick={() => onOpenTab(tab.id)}
-              className={`${ROW} ${ROW_IDLE}`}
-            >
-              {Icon && <Icon className="h-5 w-5 shrink-0" aria-hidden="true" />}
-              <span className="truncate">{tab.label}</span>
-            </button>
-          );
-        })}
-      </nav>
-
-      <div className="border-t border-gray-800 px-3 py-4">
+      <div data-testid="account-panel-footer" className="flex-none border-t border-gray-800 px-3 pb-5 pt-3">
         <button
           type="button"
           onClick={onSignOut}
