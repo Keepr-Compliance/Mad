@@ -171,7 +171,7 @@ export const getDashboardTourSteps = (
     target: '[data-tour="profile-button"]',
     content:
       "Click your initials for your account and Settings.",
-    placement: "bottom-start",
+    placement: "bottom-end",
     disableBeacon: true,
   },
   {

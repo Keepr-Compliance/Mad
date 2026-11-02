@@ -10,6 +10,7 @@ import "@testing-library/jest-dom";
 import App from "../../App";
 import { AuthProvider, NetworkProvider } from "../../contexts";
 import { PlatformProvider } from "../../contexts/PlatformContext";
+import { SUPPORT_DIALOG_TEST_ID } from "../support/supportDialogSelector";
 import type {
   AppStateMachine,
   AppUser,
@@ -674,16 +675,24 @@ describe("App", () => {
       expect(screen.getByTestId("nav-profile")).toHaveAttribute("aria-expanded", "true");
     });
 
-    it('moves the "?" beside the account panel while it is open (C12)', async () => {
+    it('keeps the "?" in its bottom-left corner and clickable while the account panel is open (C12)', async () => {
       mockUseAppStateMachine.mockReturnValue(createAppStateMock({
         currentStep: "dashboard",
         modalState: createModalState({ showProfile: true }),
       }));
+      (window.api as unknown as { support: { captureScreenshot: jest.Mock } }).support = {
+        captureScreenshot: jest.fn().mockResolvedValue({ success: false }),
+      };
       renderApp();
       await screen.findByTestId("account-panel");
       const help = screen.getByRole("button", { name: "Open support dialog" });
-      expect(help.className).toMatch(/sm:left-\[(272|288)px\]/);
-      expect(help.className).toContain("left-[calc(82%_+_10px)]");
+      // BACKLOG-4112: the panel is on the right; the "?" does not move.
+      expect(help.className).toContain("bottom-4 left-4");
+      expect(help.className).not.toMatch(/(^|\s)(sm:)?left-\[/);
+      expect(help.getAttribute("style") ?? "").not.toMatch(/left/);
+      await userEvent.click(help);
+      expect(await screen.findByTestId(SUPPORT_DIALOG_TEST_ID)).toBeInTheDocument();
+      expect(screen.getByTestId("account-panel")).toBeInTheDocument();
     });
 
     it("a panel row closes the panel and opens Settings at that tab", async () => {

@@ -36,15 +36,19 @@ describe("TitleBar (Electron)", () => {
     expect(props.onOpenAccount).toHaveBeenCalledTimes(1);
   });
 
-  it("puts the initials in the LEFT slot and keeps an empty right spacer (slice 3)", () => {
+  it("puts the initials in the RIGHT slot and keeps an empty left spacer (BACKLOG-4112)", () => {
     renderBar();
     const btn = screen.getByTestId("nav-profile");
     const bar = screen.getByTestId("title-bar");
-    expect(bar.children[0]).toContainElement(btn);
-    expect(bar.lastElementChild).toHaveClass("w-8");
-    expect(bar.lastElementChild).toBeEmptyDOMElement();
+    expect(bar.children).toHaveLength(3);
+    expect(bar.firstElementChild).toHaveClass("w-8");
+    expect(bar.firstElementChild).toBeEmptyDOMElement();
+    expect(bar.children[1].tagName).toBe("H1");
+    expect(bar.lastElementChild).toBe(screen.getByTestId("title-bar-right"));
+    expect(bar.lastElementChild).toContainElement(btn);
+    expect(bar.lastElementChild).toHaveClass("justify-end");
     expect(btn).toHaveClass("no-drag-region");
-    expect(bar).toHaveClass("pl-4");
+    expect(bar).toHaveClass("pl-4", "pr-4");
   });
 
   it("on macOS starts the left slot past the traffic lights", () => {
