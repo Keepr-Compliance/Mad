@@ -71,13 +71,13 @@ beforeEach(() => {
 });
 
 describe("Electron title bar platform offset (AppShell -> TitleBar wiring)", () => {
-  it("Windows/Linux: pl-4, not the macOS pl-20, initials in the left slot", () => {
+  it("Windows/Linux: pl-4, not the macOS pl-20, initials in the right slot", () => {
     require("../../utils/platform").isMacOS.mockReturnValue(false);
     renderShell(makeApp());
     const bar = screen.getByTestId("title-bar");
     expect(bar).toHaveClass("pl-4");
     expect(bar).not.toHaveClass("pl-20");
-    expect(screen.getByTestId("title-bar-left")).toContainElement(screen.getByTestId("nav-profile"));
+    expect(screen.getByTestId("title-bar-right")).toContainElement(screen.getByTestId("nav-profile"));
   });
 
   it("macOS: pl-20 to clear the traffic lights", () => {
@@ -104,19 +104,19 @@ describe("Electron title bar", () => {
     expect(openProfile).toHaveBeenCalledTimes(1);
   });
 
-  it("initials button keeps its tour hook, title, drag opt-out and sits on the LEFT (slice 3)", () => {
+  it("initials button keeps its tour hook, title, drag opt-out and sits on the RIGHT (BACKLOG-4112)", () => {
     renderShell(makeApp());
     const btn = screen.getByTestId("nav-profile");
     expect(btn).toHaveAttribute("data-tour", "profile-button");
     expect(btn).toHaveAttribute("title", "Test User - Click for account settings");
     expect(btn).toHaveClass("no-drag-region", "w-8", "h-8", "shrink-0", "rounded-full");
-    // Bar order: initials slot, title, empty right spacer.
+    // Bar order: empty left spacer, title, initials slot.
     const bar = screen.getByTestId("title-bar");
     expect(bar.children).toHaveLength(3);
-    expect(bar.children[0]).toContainElement(btn);
+    expect(bar.children[0]).toHaveClass("w-8");
+    expect(bar.children[0]).toBeEmptyDOMElement();
     expect(bar.children[1].tagName).toBe("H1");
-    expect(bar.children[2]).toHaveClass("w-8");
-    expect(bar.children[2]).toBeEmptyDOMElement();
+    expect(bar.children[2]).toContainElement(btn);
     expect(bar).toHaveClass("flex-shrink-0", "justify-between", "select-none", "bg-white", "py-3");
     expect(bar.className).not.toMatch(/gradient/);
   });

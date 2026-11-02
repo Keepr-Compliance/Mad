@@ -2,9 +2,10 @@
  * AccountPanel — the dark account side panel the title-bar initials open
  * (BACKLOG-3964 slice 3; replaces the Account popup, components/Profile).
  *
- * Left edge, below the window drag strip in Electron (mock v14: the panel and
- * scrim start under the chrome). ~256 px wide on desktop, 82% with a darker
- * scrim on phones. The whole panel scrolls as one.
+ * Right edge, under the initials (BACKLOG-4112), below the window drag strip
+ * in Electron (mock v14: the panel and scrim start under the chrome). ~256 px
+ * wide on desktop, 82% with a darker scrim on phones; the scrim covers the rest
+ * of the window to the left. The whole panel scrolls as one.
  *
  * Contents: who is signed in, plan, User ID with Copy, one row per Settings
  * tab (the same `visibleSettingsTabs()` list the Settings page uses), and
@@ -14,8 +15,8 @@
  * Closes on X, Esc and a click on the scrim; a click inside never closes it.
  * Esc and Tab defer to the support form when it is open above the panel. Focus
  * is trapped inside while open and goes back to the opener on close (to the
- * Settings Back button after a row). The "?" support button sits above the
- * scrim and moves beside the panel (SupportWidget `accountPanelOpen`).
+ * Settings Back button after a row). The "?" support button stays in its
+ * bottom-left corner above the scrim, clear of the panel.
  *
  * State: `modalState.showProfile` is "account panel open"; the flow keeps its
  * openProfile / closeProfile names (useModalFlow).
@@ -138,7 +139,7 @@ export function AccountPanel({ app, runningInElectron }: AccountPanelProps) {
         data-testid="account-panel-scrim"
         aria-hidden="true"
         onClick={closeProfile}
-        className={`fixed inset-x-0 bottom-0 ${top} ${Z_CLASS.accountScrim} bg-gray-900/55 sm:bg-gray-900/35`}
+        className={`fixed bottom-0 left-0 right-[82%] sm:right-64 ${top} ${Z_CLASS.accountScrim} bg-gray-900/55 sm:bg-gray-900/35`}
       />
       <OpenAccountPanel
         ref={panelRef}
@@ -179,7 +180,7 @@ const OpenAccountPanel = React.forwardRef<HTMLDivElement, OpenAccountPanelProps>
       aria-modal="true"
       aria-label="Account"
       data-testid="account-panel"
-      className={`fixed bottom-0 left-0 ${top} ${Z_CLASS.accountPanel} flex w-[82%] flex-col overflow-y-auto overscroll-contain border-r border-gray-800 bg-gray-900 text-white shadow-xl [scrollbar-width:none] sm:w-64 sm:[scrollbar-width:thin] [&>*]:flex-none`}
+      className={`fixed bottom-0 right-0 ${top} ${Z_CLASS.accountPanel} flex w-[82%] flex-col overflow-y-auto overscroll-contain border-l border-gray-800 bg-gray-900 text-white shadow-xl [scrollbar-width:none] sm:w-64 sm:[scrollbar-width:thin] [&>*]:flex-none`}
     >
       <div className="relative flex flex-col gap-3 border-b border-gray-800 px-6 py-4">
         <button
@@ -188,11 +189,11 @@ const OpenAccountPanel = React.forwardRef<HTMLDivElement, OpenAccountPanelProps>
           aria-label="Close menu"
           title="Close"
           data-testid="account-panel-close"
-          className="no-drag-region absolute right-2.5 top-2.5 flex h-7 w-7 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+          className="no-drag-region absolute left-2.5 top-2.5 flex h-7 w-7 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-800 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
         >
           <X className="h-5 w-5" aria-hidden="true" />
         </button>
-        <div className="flex min-w-0 items-center gap-2.5 pr-8">
+        <div className="flex min-w-0 items-center gap-2.5 pl-8">
           <AccountAvatar size={32} name={user.display_name} email={user.email} imageUrl={user.avatar_url} />
           <div className="min-w-0">
             {user.display_name && <p className="truncate text-sm leading-tight text-white">{user.display_name}</p>}
