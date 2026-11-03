@@ -28,11 +28,13 @@ describe("userDataSelectors", () => {
   // Test states
   const loadingState: LoadingState = {
     status: "loading",
+    database: "unknown",
     phase: "checking-storage",
   };
 
   const readyState: ReadyState = {
     status: "ready",
+    database: "initialized",
     user: { id: "test", email: "test@example.com" },
     platform: { isMacOS: true, isWindows: false, hasIPhone: true },
     userData: {
@@ -47,6 +49,7 @@ describe("userDataSelectors", () => {
 
   const onboardingPhoneType: OnboardingState = {
     status: "onboarding",
+    database: "initialized",
     step: "phone-type",
     user: { id: "test", email: "test@example.com" },
     platform: { isMacOS: true, isWindows: false, hasIPhone: false },
@@ -55,6 +58,7 @@ describe("userDataSelectors", () => {
 
   const onboardingSecureStorage: OnboardingState = {
     status: "onboarding",
+    database: "initialized",
     step: "secure-storage",
     user: { id: "test", email: "test@example.com" },
     platform: { isMacOS: true, isWindows: false, hasIPhone: true },
@@ -63,6 +67,7 @@ describe("userDataSelectors", () => {
 
   const onboardingEmail: OnboardingState = {
     status: "onboarding",
+    database: "initialized",
     step: "email-connect",
     user: { id: "test", email: "test@example.com" },
     platform: { isMacOS: true, isWindows: false, hasIPhone: true },
@@ -71,6 +76,7 @@ describe("userDataSelectors", () => {
 
   const onboardingPermissions: OnboardingState = {
     status: "onboarding",
+    database: "initialized",
     step: "permissions",
     user: { id: "test", email: "test@example.com" },
     platform: { isMacOS: true, isWindows: false, hasIPhone: true },
@@ -85,6 +91,7 @@ describe("userDataSelectors", () => {
 
   const unauthenticatedState: UnauthenticatedState = {
     status: "unauthenticated",
+    database: "initialized",
   };
 
   describe("selectCurrentOnboardingStep", () => {
@@ -338,6 +345,7 @@ describe("userDataSelectors", () => {
     ): ReadyState {
       return {
         status: "ready",
+        database: "initialized",
         user: { id: "u", email: "u@example.com" },
         platform,
         userData: {

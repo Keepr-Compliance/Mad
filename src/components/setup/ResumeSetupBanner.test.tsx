@@ -46,6 +46,7 @@ function makeApp(overrides: Partial<AppStateMachine> = {}): AppStateMachine {
 /** Ready state below the floor: no email, no FDA, no phone selected. */
 const zeroSourceReady: ReadyState = {
   status: "ready",
+  database: "initialized",
   user: { id: "u", email: "u@example.com" },
   platform: { isMacOS: true, isWindows: false, hasIPhone: true },
   userData: {
@@ -86,6 +87,7 @@ describe("ResumeSetupBanner / useResumeSetup", () => {
   it("does NOT appear in a non-ready state (onboarding renders its own flow)", () => {
     mockState = {
       status: "onboarding",
+      database: "initialized",
       step: "email-connect",
       user: { id: "u", email: "u@example.com" },
       platform: { isMacOS: true, isWindows: false, hasIPhone: true },

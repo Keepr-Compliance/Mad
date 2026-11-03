@@ -3,6 +3,7 @@ import { redirect } from 'next/navigation';
 import { PageHeader } from '@keepr/design-system';
 import { OrganizationsTable, type OrganizationRow } from './components/OrganizationsTable';
 import { billingLiveForNewOrg } from '@/lib/billing/dealRules';
+import { parseOrgListState } from '@/lib/organizations/org-list';
 
 export const dynamic = 'force-dynamic';
 
@@ -12,7 +13,18 @@ export const dynamic = 'force-dynamic';
  * Server component that fetches all organizations with member counts.
  * Uses existing admin RLS policies for cross-org read access.
  */
-export default async function OrganizationsPage() {
+type OrganizationsPageProps = {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+};
+
+/** A boolean flag from the RPC row, or null when the key is missing or not a boolean. */
+function rowFlag(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
+// Props are required by Next's page type check (an optional first argument fails it once
+// .next/types exists). `props?.` keeps a bare Page() call (tests) from throwing.
+export default async function OrganizationsPage(props: OrganizationsPageProps) {
   const { supabase, user: adminUser } = await getAuthenticatedUser();
 
   if (!adminUser) {
@@ -72,16 +84,24 @@ export default async function OrganizationsPage() {
     plan_tier: (org.plan_tier as string) ?? null,
     created_at: org.created_at as string,
     member_count: (org.member_count as number) ?? 0,
+    is_personal: rowFlag(org.is_personal),
+    is_test: rowFlag(org.is_test),
   }));
+
+  // BACKLOG-4098: filters, search and sort come from the URL so a reload or a shared link
+  // shows the same list. The "shown of total" count lives in the table (client state).
+  const initialState = parseOrgListState((await props?.searchParams) ?? {});
 
   return (
     <div className="max-w-7xl mx-auto">
-      <PageHeader
-        title="Organizations"
-        subtitle={<>{organizations.length} organization{organizations.length !== 1 ? 's' : ''} total</>}
-      />
+      <PageHeader title="Organizations" />
 
-      <OrganizationsTable organizations={organizations} canEdit={!!canEdit} billingLive={billingLive} />
+      <OrganizationsTable
+        organizations={organizations}
+        canEdit={!!canEdit}
+        billingLive={billingLive}
+        initialState={initialState}
+      />
     </div>
   );
 }

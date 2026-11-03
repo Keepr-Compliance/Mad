@@ -1,76 +1,51 @@
 'use client';
 
 /**
- * Version Distribution — Analytics Dashboard
+ * Version Distribution — Analytics report
  *
  * Shows active users by app version with a bar chart
  * and a data table with counts and adoption percentages.
  * Clicking a version reveals the users on that version.
+ *
+ * BACKLOG-3723: the period buttons moved to the report's PeriodPicker; this
+ * section only reads the resolved period's label. A failed read shows a
+ * banner, never the empty text.
  */
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Cell,
-} from 'recharts';
 import { ChevronDown, ChevronRight, User } from 'lucide-react';
 import { Card, Badge } from '@keepr/design-system';
-import type { VersionDistribution as VersionDistributionData } from '@/lib/analytics-queries';
+import type { VersionDistribution as VersionDistributionData } from '@/lib/reports/analytics';
+import { VersionChart } from './VersionChart';
+import { SectionFailed } from './SectionFailed';
+
+export const VERSIONS_EMPTY_TEXT =
+  'No device data available. Version distribution will appear once devices report their app version.';
+export const NAMES_FAILED_TEXT = 'User names could not be loaded.';
 
 interface Props {
   data: VersionDistributionData[];
-  activePeriod: number;
+  /** The resolved period, e.g. "Last 7 days" or "All time". */
+  periodLabel: string;
+  failed?: boolean;
+  namesFailed?: boolean;
 }
 
-const PERIODS = [
-  { days: 1, label: '24h' },
-  { days: 7, label: '7d' },
-  { days: 30, label: '30d' },
-  { days: 90, label: '90d' },
-] as const;
-
-const COLORS = [
-  '#0ea5e9', // primary-500
-  '#0284c7', // primary-600
-  '#0369a1', // primary-700
-  '#075985', // primary-800
-  '#38bdf8', // primary-400
-  '#7dd3fc', // primary-300
-];
-
-export function VersionDistribution({ data, activePeriod }: Props) {
+export function VersionDistribution({ data, periodLabel, failed = false, namesFailed = false }: Props) {
   const [expandedVersion, setExpandedVersion] = useState<string | null>(null);
-  const router = useRouter();
-  const searchParams = useSearchParams();
 
-  const setPeriod = (days: number) => {
-    const params = new URLSearchParams(searchParams.toString());
-    if (days === 30) {
-      params.delete('period');
-    } else {
-      params.set('period', String(days));
-    }
-    router.push(`?${params.toString()}`, { scroll: false });
-  };
-
-  if (data.length === 0) {
+  if (failed || data.length === 0) {
     return (
       <Card>
         <h3 className="text-lg font-semibold text-gray-900 mb-4">
           Active Users by App Version
         </h3>
-        <p className="text-sm text-gray-500">
-          No device data available. Version distribution will appear once
-          devices report their app version.
-        </p>
+        {failed ? (
+          <SectionFailed section="versions" />
+        ) : (
+          <p className="text-sm text-gray-500">{VERSIONS_EMPTY_TEXT}</p>
+        )}
       </Card>
     );
   }
@@ -83,70 +58,15 @@ export function VersionDistribution({ data, activePeriod }: Props) {
 
   return (
     <Card>
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-semibold text-gray-900">
-          Active Users by App Version
-        </h3>
-        <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-          {PERIODS.map((p) => (
-            <button
-              key={p.days}
-              type="button"
-              onClick={() => setPeriod(p.days)}
-              className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-                activePeriod === p.days
-                  ? 'bg-white text-gray-900 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-      </div>
+      <h3 className="text-lg font-semibold text-gray-900 mb-4">
+        Active Users by App Version
+      </h3>
       <p className="text-sm text-gray-500 mb-6">
-        Based on active devices seen in the last {activePeriod === 1 ? '24 hours' : `${activePeriod} days`}. Click a bar or row to see users.
+        Based on active devices seen {periodLabel === 'All time' ? 'at any time' : `in the ${periodLabel.toLowerCase()}`}. Click a bar or row to see users.
       </p>
 
       {/* Bar Chart */}
-      <div className="h-64 mb-6">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-            <XAxis
-              dataKey="app_version"
-              tick={{ fontSize: 12, fill: '#6b7280' }}
-            />
-            <YAxis tick={{ fontSize: 12, fill: '#6b7280' }} allowDecimals={false} />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: '#fff',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                fontSize: '13px',
-              }}
-              formatter={(value) => [Number(value) || 0, 'Users']}
-            />
-            <Bar
-              dataKey="user_count"
-              radius={[4, 4, 0, 0]}
-              cursor="pointer"
-              onClick={(_data, index) => {
-                if (typeof index === 'number') handleBarClick(data[index]);
-              }}
-            >
-              {data.map((entry, index) => (
-                <Cell
-                  key={`cell-${index}`}
-                  fill={expandedVersion === entry.app_version
-                    ? '#1d4ed8'
-                    : COLORS[index % COLORS.length]}
-                />
-              ))}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+      <VersionChart data={data} expandedVersion={expandedVersion} onBarClick={handleBarClick} />
 
       {/* Data Table */}
       <div className="overflow-x-auto">
@@ -198,6 +118,11 @@ export function VersionDistribution({ data, activePeriod }: Props) {
                         <p className="text-xs font-medium text-gray-500 mb-2">
                           Users on {row.app_version}
                         </p>
+                        {namesFailed ? (
+                          <p data-notice="names-failed" className="text-xs text-amber-700 mb-2">
+                            {NAMES_FAILED_TEXT}
+                          </p>
+                        ) : null}
                         {row.users.length === 0 ? (
                           <p className="text-xs text-gray-400">No user details available</p>
                         ) : (

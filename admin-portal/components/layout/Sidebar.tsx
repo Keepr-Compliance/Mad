@@ -16,7 +16,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { LayoutDashboard, BarChart3, Users, Building2, CreditCard, Headphones, Inbox, UserCheck, Settings, LogOut, ChevronLeft, FileText, ChevronDown, ChevronRight, Shield, KanbanSquare, ListChecks, FolderKanban, Calendar, FileBarChart2, X } from 'lucide-react';
+import { LayoutDashboard, Users, Building2, CreditCard, Headphones, Inbox, UserCheck, Settings, LogOut, ChevronLeft, FileText, ChevronDown, ChevronRight, Shield, KanbanSquare, ListChecks, FolderKanban, Calendar, FileBarChart2, X } from 'lucide-react';
 import { AppMark, Wordmark } from '@keepr/ui';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
@@ -46,7 +46,6 @@ const mainNavItems: NavItem[] = [
 const supportSubItems: NavItem[] = [
   { label: 'Queue', href: '/dashboard/support', icon: Inbox, permission: PERMISSIONS.SUPPORT_VIEW },
   { label: 'My Tickets', href: '/dashboard/support/my-tickets', icon: UserCheck, permission: PERMISSIONS.SUPPORT_VIEW },
-  { label: 'Analytics', href: '/dashboard/support/analytics', icon: BarChart3, permission: PERMISSIONS.SUPPORT_MANAGE },
   { label: 'Settings', href: '/dashboard/support/settings', icon: Settings, permission: PERMISSIONS.SUPPORT_MANAGE },
 ];
 

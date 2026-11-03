@@ -20,8 +20,8 @@
  *      Never `isAllowed()`: that key is fail-open, so every user would read
  *      "Unlimited" while features load or after an error.
  *
- * Props are 3964's AccountBillingBlockProps (planLabel optional), so the
- * redesign's Account tab can mount this card in place of its placeholder.
+ * Mounted on the Account tab (BACKLOG-3964), which passes its plan label,
+ * organization id and user id (planLabel optional).
  *
  * Kit components (@keepr/ui), no hand-styled controls:
  *   Card/CardHeader/CardTitle/CardDescription/CardContent  packages/ui/src/components/card.tsx:13,28,40,55,67

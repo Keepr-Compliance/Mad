@@ -114,8 +114,8 @@ describe('seed-fixture default fixture shape (BACKLOG-1940 / enriched BACKLOG-19
 });
 
 describe('seed-fixture arg parsing', () => {
-  it('parses --user-data-dir, --fixture, --out', () => {
-    const opts = seed.parseArgs(['--user-data-dir', '/tmp/p', '--fixture', '/tmp/f.json', '--out', '/tmp/o.json']);
+  it('parses --user-data-dir= (Chromium form), --fixture, --out', () => {
+    const opts = seed.parseArgs(['--user-data-dir=/tmp/p', '--fixture', '/tmp/f.json', '--out', '/tmp/o.json']);
     expect(opts.userDataDir).toBe('/tmp/p');
     expect(opts.fixture).toBe('/tmp/f.json');
     expect(opts.out).toBe('/tmp/o.json');

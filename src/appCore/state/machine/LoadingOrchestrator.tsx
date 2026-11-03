@@ -26,6 +26,8 @@ import { waitForApi } from "./utils/waitForApi";
 import { useAuth } from "../../../contexts";
 import { authService } from "@/services";
 import { fdaFromProbe, unknownFdaFor } from "./fdaState";
+import { databaseFromProbe, type DatabaseState } from "./databaseState";
+import { PRE_AUTH_REJECTIONS_WITH_SESSION_CLEARED } from "./reducer";
 import { readAccountSetup } from "./routing/readAccountSetup";
 import type { PlatformInfo, User, UserData } from "./types";
 import logger from "../../../utils/logger";
@@ -62,6 +64,21 @@ async function recoverPhoneTypeFromCloud(
     return asRecordedPhoneType(await window.api.user.getPhoneType(userId));
   } catch {
     return null;
+  }
+}
+
+/**
+ * BACKLOG-3321: ask main whether the local database is open. Never throws and
+ * never blocks the pre-auth dispatch: a missing bridge or a rejected call is
+ * `"unknown"`, which the selector reads as not open.
+ */
+async function probeDatabase(): Promise<DatabaseState> {
+  try {
+    const probe = window.api?.system?.isDatabaseInitialized;
+    if (typeof probe !== "function") return "unknown";
+    return databaseFromProbe(await probe());
+  } catch {
+    return "unknown";
   }
 }
 
@@ -227,19 +244,29 @@ export function LoadingOrchestrator({
 
       // console.log("[PRE-AUTH][renderer] Phase 1.5: Calling preValidateSession (DB is NOT decrypted yet)");
       auth.preValidateSession()
-        .then((result: { valid: boolean; noSession?: boolean; reason?: string }) => {
+        .then(async (result: { valid: boolean; noSession?: boolean; reason?: string }) => {
           if (cancelled) return;
-          // console.log("[PRE-AUTH][renderer] Result:", JSON.stringify(result));
-          if (result.valid) {
-            // console.log("[PRE-AUTH][renderer] ✅ Auth passed — now proceeding to DB decryption");
-          } else {
-            // console.log("[PRE-AUTH][renderer] ❌ Auth FAILED — DB will NOT be decrypted. Reason:", result.reason);
+          // BACKLOG-3321: a rejection that keeps the database closed lands on
+          // Login without opening it. Ask main whether it is open (a renderer
+          // reload leaves it open) so the machine records a fact instead of
+          // inferring one. This reads a flag; it decrypts nothing.
+          let database: DatabaseState | undefined;
+          const keepsDatabaseClosed =
+            !result.valid &&
+            !(
+              result.reason !== undefined &&
+              PRE_AUTH_REJECTIONS_WITH_SESSION_CLEARED.has(result.reason)
+            );
+          if (keepsDatabaseClosed) {
+            database = await probeDatabase();
+            if (cancelled) return;
           }
           dispatch({
             type: "AUTH_PRE_VALIDATED",
             valid: result.valid,
             noSession: result.noSession,
             reason: result.reason,
+            ...(database !== undefined ? { database } : {}),
           });
         })
         .catch((error: Error) => {
@@ -278,14 +305,6 @@ export function LoadingOrchestrator({
 
     // console.log("[LoadingOrchestrator] PHASE 2: Starting database initialization...");
 
-    // Guard: respect deferredDbInit flag - let onboarding SecureStorageStep handle DB init.
-    // BACKLOG-3253 deleted the only producer of this flag, so this branch is
-    // now unreachable. Kept inert rather than deleted, to keep that PR to one
-    // hunk on a contended file; removal is a tracked follow-up.
-    const loadingState = state as import("./types").LoadingState;
-    if (loadingState.deferredDbInit) {
-      return;
-    }
     const platform = platformRef.current;
 
     // Windows: Auto-initialize (DPAPI is silent, no user interaction needed)

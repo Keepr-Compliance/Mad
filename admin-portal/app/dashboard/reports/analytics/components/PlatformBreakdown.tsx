@@ -8,36 +8,48 @@
  */
 
 import { Card } from '@keepr/design-system';
-import type { PlatformBreakdown as PlatformBreakdownData } from '@/lib/analytics-queries';
+import type { PlatformBreakdown as PlatformBreakdownData } from '@/lib/reports/analytics';
+import { SectionFailed } from './SectionFailed';
 
 interface Props {
   data: PlatformBreakdownData[];
+  failed?: boolean;
 }
 
-const PLATFORM_COLORS: Record<string, string> = {
+export const PLATFORM_EMPTY_TEXT = 'No device data available.';
+
+// BACKLOG-3723: production stores `macos` / `windows`; `darwin` / `win32`
+// are kept for older rows.
+export const PLATFORM_COLORS: Record<string, string> = {
+  macos: '#0ea5e9',   // primary-500 (macOS)
+  windows: '#8b5cf6', // purple-500 (Windows)
   darwin: '#0ea5e9',  // primary-500 (macOS)
   win32: '#8b5cf6',   // purple-500 (Windows)
   linux: '#f59e0b',   // amber-500
   Unknown: '#9ca3af', // gray-400
 };
 
-const PLATFORM_LABELS: Record<string, string> = {
+export const PLATFORM_LABELS: Record<string, string> = {
+  macos: 'macOS',
+  windows: 'Windows',
   darwin: 'macOS',
   win32: 'Windows',
   linux: 'Linux',
   Unknown: 'Unknown',
 };
 
-export function PlatformBreakdown({ data }: Props) {
-  if (data.length === 0) {
+export function PlatformBreakdown({ data, failed = false }: Props) {
+  if (failed || data.length === 0) {
     return (
       <Card>
         <h3 className="text-lg font-semibold text-gray-900 mb-4">
           Platform Breakdown
         </h3>
-        <p className="text-sm text-gray-500">
-          No device data available.
-        </p>
+        {failed ? (
+          <SectionFailed section="platform" />
+        ) : (
+          <p className="text-sm text-gray-500">{PLATFORM_EMPTY_TEXT}</p>
+        )}
       </Card>
     );
   }
@@ -58,6 +70,7 @@ export function PlatformBreakdown({ data }: Props) {
         {data.map((entry) => (
           <div
             key={entry.platform}
+            data-platform-bar={entry.platform}
             className="h-full transition-all duration-300"
             style={{
               width: `${entry.pct}%`,
@@ -79,7 +92,7 @@ export function PlatformBreakdown({ data }: Props) {
             PLATFORM_LABELS[entry.platform] ?? entry.platform;
 
           return (
-            <div key={entry.platform} className="flex items-center justify-between">
+            <div key={entry.platform} data-platform-row={entry.platform} className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span
                   className="w-3 h-3 rounded-full"

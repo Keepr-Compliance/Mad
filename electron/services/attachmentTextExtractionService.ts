@@ -21,9 +21,12 @@
  * Node/Electron executes a real ESM import. pdfjs runs headless on the main thread
  * (fake worker) — no DOM, no browser globals. This was verified end-to-end in Node.
  *
- * NO OCR: a scanned / image-only PDF has no text layer → yields empty text. Trivial
- * text types (text/plain, text/csv) are read verbatim. docx/xlsx etc. are OUT OF
- * SCOPE (they would need another parser).
+ * NO OCR IN THIS PASS: a scanned / image-only PDF has no text layer → this pass stores
+ * "". BACKLOG-3943: such a row (an OCR-eligible type that came back "empty") is then
+ * handed to the OCR queue (ocr/attachmentOcrQueue.ts), a SECOND pass on the same row
+ * that runs the OS text recogniser in a child process, one page per child, queued one
+ * file at a time — never inline here. Trivial text types (text/plain, text/csv) are read
+ * verbatim. docx/xlsx etc. are OUT OF SCOPE (they would need another parser).
  *
  * ─── Empty-text vs NULL semantics (IMPORTANT) ────────────────────────────────────
  *   - `text_content IS NULL`  → extraction was NEVER attempted (the pending guard).
@@ -45,14 +48,13 @@ import * as Sentry from "@sentry/electron/main";
 import databaseService from "./databaseService";
 import logService from "./logService";
 import { readOpenAttachment, statOpenAttachment } from "./atRest/attachmentReader";
+import { MAX_EXTRACT_SIZE_BYTES, MAX_TEXT_LENGTH } from "./attachmentTextLimits";
+import { enqueueAttachmentOcr, isOcrEligibleMime } from "./ocr/attachmentOcrQueue";
 
 const SERVICE_NAME = "AttachmentTextExtraction";
 
-/** Skip files larger than this (bytes) — extraction cost guard. Default 20MB. */
-export const MAX_EXTRACT_SIZE_BYTES = 20 * 1024 * 1024;
-
-/** Truncate stored text to this many characters so the DB does not bloat. ~1MB. */
-export const MAX_TEXT_LENGTH = 1_000_000;
+// The size and text caps live in attachmentTextLimits.ts so the OCR pass shares them.
+export { MAX_EXTRACT_SIZE_BYTES, MAX_TEXT_LENGTH } from "./attachmentTextLimits";
 
 /** MIME types we can extract locally with no extra parser and no OCR. */
 export const EXTRACTABLE_MIME_TYPES: readonly string[] = [
@@ -188,6 +190,20 @@ async function extractPdfTextViaPdfjs(buffer: Buffer): Promise<string> {
 }
 
 /**
+ * BACKLOG-3943: hand a row that came back "empty" to the OCR queue when its type is one
+ * the OCR pass reads (application/pdf only in this build). Never throws: OCR is a best-
+ * effort second pass and must not change this pass's outcome.
+ */
+function queueOcrIfEligible(id: string, mime: string): void {
+  if (!isOcrEligibleMime(mime)) return;
+  try {
+    enqueueAttachmentOcr(id);
+  } catch {
+    /* the queue logs its own failures; the row stays OCR-pending for the next drain */
+  }
+}
+
+/**
  * Extract text for ONE attachment row and persist it (LOCAL, no network, no OCR).
  * Never throws: a per-file failure is logged, reported to Sentry, and returned as
  * the "error" outcome so a batch keeps going. See the module doc for empty-vs-NULL
@@ -245,6 +261,10 @@ export async function extractTextForAttachment(
         { id: row.id, sizeBytes, maxSizeBytes }
       );
       databaseService.setAttachmentTextContent(row.id, "");
+      // BACKLOG-3943: queued anyway — the OCR pass re-checks the size and records the
+      // row as over-cap, so it leaves the OCR pending set instead of being re-checked
+      // after every sync.
+      queueOcrIfEligible(row.id, mime);
       return "empty";
     }
 
@@ -261,6 +281,8 @@ export async function extractTextForAttachment(
     if (trimmed.length === 0) {
       // No text layer (e.g. scanned PDF) / empty file → attempted-no-text marker.
       databaseService.setAttachmentTextContent(row.id, "");
+      // BACKLOG-3943: an image-only PDF → OCR second pass (queued, never inline).
+      queueOcrIfEligible(row.id, mime);
       return "empty";
     }
 

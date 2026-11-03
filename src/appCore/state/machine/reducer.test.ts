@@ -220,6 +220,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
       expect(result).toEqual({
         status: "loading",
+        database: "unknown",
         phase: "validating-auth",
       });
     });
@@ -232,6 +233,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
       expect(result).toEqual({
         status: "loading",
+        database: "unknown",
         phase: "validating-auth",
       });
     });
@@ -248,6 +250,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
       expect(result).toEqual({
         status: "loading",
+        database: "unknown",
         phase: "validating-auth",
       });
       expect(result).not.toHaveProperty("deferredDbInit");
@@ -261,12 +264,13 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
       expect(result).toEqual({
         status: "loading",
+        database: "unknown",
         phase: "validating-auth",
       });
     });
 
     it("returns current state if not in checking-storage phase", () => {
-      const state: LoadingState = { status: "loading", phase: "initializing-db" };
+      const state: LoadingState = { status: "loading", database: "unknown", phase: "initializing-db" };
       const action: AppAction = { type: "STORAGE_CHECKED", hasKeyStore: true };
 
       const result = appStateReducer(state, action);
@@ -275,7 +279,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
     });
 
     it("returns current state if not in loading status", () => {
-      const state: AppState = { status: "unauthenticated" };
+      const state: AppState = { status: "unauthenticated", database: "initialized" };
       const action: AppAction = { type: "STORAGE_CHECKED", hasKeyStore: true };
 
       const result = appStateReducer(state, action);
@@ -290,41 +294,43 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
   describe("AUTH_PRE_VALIDATED (TASK-2086)", () => {
     it("transitions from validating-auth to initializing-db when valid is true", () => {
-      const state: LoadingState = { status: "loading", phase: "validating-auth" };
+      const state: LoadingState = { status: "loading", database: "unknown", phase: "validating-auth" };
       const action: AppAction = { type: "AUTH_PRE_VALIDATED", valid: true };
 
       const result = appStateReducer(state, action);
 
       expect(result).toEqual({
         status: "loading",
+        database: "unknown",
         phase: "initializing-db",
       });
     });
 
     it("transitions from validating-auth to initializing-db when noSession is true", () => {
-      const state: LoadingState = { status: "loading", phase: "validating-auth" };
+      const state: LoadingState = { status: "loading", database: "unknown", phase: "validating-auth" };
       const action: AppAction = { type: "AUTH_PRE_VALIDATED", valid: true, noSession: true };
 
       const result = appStateReducer(state, action);
 
       expect(result).toEqual({
         status: "loading",
+        database: "unknown",
         phase: "initializing-db",
       });
     });
 
     it("transitions to initializing-db when the server rejected the session and main cleared it (BACKLOG-3410)", () => {
-      const state: LoadingState = { status: "loading", phase: "validating-auth" };
+      const state: LoadingState = { status: "loading", database: "unknown", phase: "validating-auth" };
       const action: AppAction = { type: "AUTH_PRE_VALIDATED", valid: false, reason: "session_revoked" };
 
       const result = appStateReducer(state, action);
 
       // Session already deleted by main -> same as a no-session start.
-      expect(result).toEqual({ status: "loading", phase: "initializing-db" });
+      expect(result).toEqual({ status: "loading", database: "unknown", phase: "initializing-db" });
     });
 
     it("transitions to unauthenticated when offline past the grace period (session still on disk)", () => {
-      const state: LoadingState = { status: "loading", phase: "validating-auth" };
+      const state: LoadingState = { status: "loading", database: "unknown", phase: "validating-auth" };
       const action: AppAction = { type: "AUTH_PRE_VALIDATED", valid: false, reason: "offline_grace_expired" };
 
       const result = appStateReducer(state, action);
@@ -333,7 +339,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
     });
 
     it("transitions to unauthenticated with default reason when reason is omitted", () => {
-      const state: LoadingState = { status: "loading", phase: "validating-auth" };
+      const state: LoadingState = { status: "loading", database: "unknown", phase: "validating-auth" };
       const action: AppAction = { type: "AUTH_PRE_VALIDATED", valid: false };
 
       const result = appStateReducer(state, action);
@@ -342,7 +348,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
     });
 
     it("returns current state if not in validating-auth phase", () => {
-      const state: LoadingState = { status: "loading", phase: "initializing-db" };
+      const state: LoadingState = { status: "loading", database: "unknown", phase: "initializing-db" };
       const action: AppAction = { type: "AUTH_PRE_VALIDATED", valid: true };
 
       const result = appStateReducer(state, action);
@@ -351,7 +357,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
     });
 
     it("returns current state if not in loading status", () => {
-      const state: AppState = { status: "unauthenticated" };
+      const state: AppState = { status: "unauthenticated", database: "initialized" };
       const action: AppAction = { type: "AUTH_PRE_VALIDATED", valid: true };
 
       const result = appStateReducer(state, action);
@@ -362,20 +368,21 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
   describe("DB_INIT_STARTED", () => {
     it("sets progress to 0 in initializing-db phase", () => {
-      const state: LoadingState = { status: "loading", phase: "initializing-db" };
+      const state: LoadingState = { status: "loading", database: "unknown", phase: "initializing-db" };
       const action: AppAction = { type: "DB_INIT_STARTED" };
 
       const result = appStateReducer(state, action);
 
       expect(result).toEqual({
         status: "loading",
+        database: "unknown",
         phase: "initializing-db",
         progress: 0,
       });
     });
 
     it("returns current state if not in initializing-db phase", () => {
-      const state: LoadingState = { status: "loading", phase: "loading-auth" };
+      const state: LoadingState = { status: "loading", database: "initialized", phase: "loading-auth" };
       const action: AppAction = { type: "DB_INIT_STARTED" };
 
       const result = appStateReducer(state, action);
@@ -386,19 +393,20 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
   describe("DB_INIT_COMPLETE", () => {
     it("transitions to loading-auth on success", () => {
-      const state: LoadingState = { status: "loading", phase: "initializing-db" };
+      const state: LoadingState = { status: "loading", database: "unknown", phase: "initializing-db" };
       const action: AppAction = { type: "DB_INIT_COMPLETE", success: true };
 
       const result = appStateReducer(state, action);
 
       expect(result).toEqual({
         status: "loading",
+        database: "initialized",
         phase: "loading-auth",
       });
     });
 
     it("transitions to error state on failure", () => {
-      const state: LoadingState = { status: "loading", phase: "initializing-db" };
+      const state: LoadingState = { status: "loading", database: "unknown", phase: "initializing-db" };
       const action: AppAction = {
         type: "DB_INIT_COMPLETE",
         success: false,
@@ -417,7 +425,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
     });
 
     it("uses default error message when none provided", () => {
-      const state: LoadingState = { status: "loading", phase: "initializing-db" };
+      const state: LoadingState = { status: "loading", database: "unknown", phase: "initializing-db" };
       const action: AppAction = { type: "DB_INIT_COMPLETE", success: false };
 
       const result = appStateReducer(state, action);
@@ -429,7 +437,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
     });
 
     it("returns current state if not in initializing-db phase", () => {
-      const state: LoadingState = { status: "loading", phase: "loading-auth" };
+      const state: LoadingState = { status: "loading", database: "initialized", phase: "loading-auth" };
       const action: AppAction = { type: "DB_INIT_COMPLETE", success: true };
 
       const result = appStateReducer(state, action);
@@ -437,14 +445,16 @@ describe("appStateReducer - Loading Phase Transitions", () => {
       expect(result).toBe(state);
     });
 
-    it("clears deferredDbInit during onboarding on success", () => {
+    // BACKLOG-3321: onboarding with the database not open (closed pre-auth
+    // route) -- the secure-storage Continue's success is recorded.
+    it("records the database open during onboarding on success", () => {
       const state: OnboardingState = {
         status: "onboarding",
         step: "secure-storage",
         user: mockUser,
         platform: mockMacOSPlatform,
         completedSteps: ["phone-type"],
-        deferredDbInit: true,
+        database: "not-initialized",
       };
       const action: AppAction = { type: "DB_INIT_COMPLETE", success: true };
 
@@ -452,7 +462,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
       expect(result.status).toBe("onboarding");
       if (result.status === "onboarding") {
-        expect(result.deferredDbInit).toBe(false);
+        expect(result.database).toBe("initialized");
       }
     });
 
@@ -463,7 +473,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
         user: mockUser,
         platform: mockMacOSPlatform,
         completedSteps: ["phone-type"],
-        deferredDbInit: true,
+        database: "not-initialized",
       };
       const action: AppAction = {
         type: "DB_INIT_COMPLETE",
@@ -480,14 +490,14 @@ describe("appStateReducer - Loading Phase Transitions", () => {
       }
     });
 
-    it("ignores during onboarding if deferredDbInit is not set", () => {
+    it("ignores during onboarding when the database is already open", () => {
       const state: OnboardingState = {
         status: "onboarding",
+        database: "initialized",
         step: "secure-storage",
         user: mockUser,
         platform: mockMacOSPlatform,
         completedSteps: ["phone-type"],
-        // deferredDbInit not set
       };
       const action: AppAction = { type: "DB_INIT_COMPLETE", success: true };
 
@@ -499,7 +509,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
   describe("AUTH_LOADED", () => {
     it("transitions to unauthenticated when no user", () => {
-      const state: LoadingState = { status: "loading", phase: "loading-auth" };
+      const state: LoadingState = { status: "loading", database: "initialized", phase: "loading-auth" };
       const action: AppAction = {
         type: "AUTH_LOADED",
         user: null,
@@ -512,11 +522,11 @@ describe("appStateReducer - Loading Phase Transitions", () => {
       expect(result.status).toBe("unauthenticated");
     });
 
-    it("preserves deferredDbInit when transitioning to unauthenticated", () => {
+    it("carries the database fact when transitioning to unauthenticated", () => {
       const state: LoadingState = {
         status: "loading",
         phase: "loading-auth",
-        deferredDbInit: true,
+        database: "initialized",
       };
       const action: AppAction = {
         type: "AUTH_LOADED",
@@ -529,14 +539,14 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
       expect(result.status).toBe("unauthenticated");
       if (result.status === "unauthenticated") {
-        expect(result.deferredDbInit).toBe(true);
+        expect(result.database).toBe("initialized");
       }
     });
 
     // BACKLOG-3673: `isNewUser` (terms not current) no longer routes. Every
     // signed-in account loads its data; routeAccount decides in USER_DATA_LOADED.
     it("sends an account with outdated terms (isNewUser) to loading-user-data, not onboarding", () => {
-      const state: LoadingState = { status: "loading", phase: "loading-auth" };
+      const state: LoadingState = { status: "loading", database: "initialized", phase: "loading-auth" };
       const action: AppAction = {
         type: "AUTH_LOADED",
         user: mockUser,
@@ -546,14 +556,14 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
       const result = appStateReducer(state, action);
 
-      expect(result).toEqual({ status: "loading", phase: "loading-user-data" });
+      expect(result).toEqual({ status: "loading", database: "initialized", phase: "loading-user-data" });
     });
 
-    it("preserves deferredDbInit for an account with outdated terms (isNewUser)", () => {
+    it("carries the database fact for an account with outdated terms (isNewUser)", () => {
       const state: LoadingState = {
         status: "loading",
         phase: "loading-auth",
-        deferredDbInit: true,
+        database: "initialized",
       };
       const action: AppAction = {
         type: "AUTH_LOADED",
@@ -567,12 +577,12 @@ describe("appStateReducer - Loading Phase Transitions", () => {
       expect(result.status).toBe("loading");
       if (result.status === "loading") {
         expect(result.phase).toBe("loading-user-data");
-        expect(result.deferredDbInit).toBe(true);
+        expect(result.database).toBe("initialized");
       }
     });
 
     it("transitions returning user to loading-user-data", () => {
-      const state: LoadingState = { status: "loading", phase: "loading-auth" };
+      const state: LoadingState = { status: "loading", database: "initialized", phase: "loading-auth" };
       const action: AppAction = {
         type: "AUTH_LOADED",
         user: mockUser,
@@ -584,12 +594,13 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
       expect(result).toEqual({
         status: "loading",
+        database: "initialized",
         phase: "loading-user-data",
       });
     });
 
     it("returns current state if not in loading-auth phase", () => {
-      const state: LoadingState = { status: "loading", phase: "checking-storage" };
+      const state: LoadingState = { status: "loading", database: "unknown", phase: "checking-storage" };
       const action: AppAction = {
         type: "AUTH_LOADED",
         user: mockUser,
@@ -605,7 +616,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
 
   describe("USER_DATA_LOADED", () => {
     it("transitions to ready state when onboarding complete", () => {
-      const state: LoadingState = { status: "loading", phase: "loading-user-data" };
+      const state: LoadingState = { status: "loading", database: "initialized", phase: "loading-user-data" };
       // Extended action with user and platform context
       const action = {
         type: "USER_DATA_LOADED" as const,
@@ -625,7 +636,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
     });
 
     it("transitions to onboarding when onboarding incomplete", () => {
-      const state: LoadingState = { status: "loading", phase: "loading-user-data" };
+      const state: LoadingState = { status: "loading", database: "initialized", phase: "loading-user-data" };
       const action = {
         type: "USER_DATA_LOADED" as const,
         data: mockIncompleteUserData,
@@ -644,7 +655,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
     });
 
     it("correctly determines completed steps from userData", () => {
-      const state: LoadingState = { status: "loading", phase: "loading-user-data" };
+      const state: LoadingState = { status: "loading", database: "initialized", phase: "loading-user-data" };
       const partialUserData: UserData = {
         phoneType: "iphone",
         hasCompletedEmailOnboarding: true,
@@ -671,7 +682,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
     });
 
     it("transitions to error when user context missing", () => {
-      const state: LoadingState = { status: "loading", phase: "loading-user-data" };
+      const state: LoadingState = { status: "loading", database: "initialized", phase: "loading-user-data" };
       // Missing user and platform - simulating incorrect orchestrator usage
       const action = {
         type: "USER_DATA_LOADED" as const,
@@ -690,7 +701,7 @@ describe("appStateReducer - Loading Phase Transitions", () => {
     });
 
     it("returns current state if not in loading-user-data phase", () => {
-      const state: LoadingState = { status: "loading", phase: "loading-auth" };
+      const state: LoadingState = { status: "loading", database: "initialized", phase: "loading-auth" };
       const action = {
         type: "USER_DATA_LOADED" as const,
         data: mockCompleteUserData,
@@ -714,7 +725,7 @@ describe("appStateReducer - LOGIN_SUCCESS Transitions", () => {
     // BACKLOG-3673 (BACKLOG-3324's defect): a sign-in with outdated terms used
     // to restart all of setup. It now loads the account like any other sign-in.
     it("sends a sign-in with outdated terms (isNewUser) to loading-user-data, not onboarding", () => {
-      const state: AppState = { status: "unauthenticated" };
+      const state: AppState = { status: "unauthenticated", database: "initialized" };
       const action = {
         type: "LOGIN_SUCCESS" as const,
         user: mockUser,
@@ -733,7 +744,7 @@ describe("appStateReducer - LOGIN_SUCCESS Transitions", () => {
     });
 
     it("transitions returning user to loading-user-data with user/platform stored in state", () => {
-      const state: AppState = { status: "unauthenticated" };
+      const state: AppState = { status: "unauthenticated", database: "initialized" };
       const action = {
         type: "LOGIN_SUCCESS" as const,
         user: mockUser,
@@ -755,6 +766,7 @@ describe("appStateReducer - LOGIN_SUCCESS Transitions", () => {
     it("returns current state if not in unauthenticated status", () => {
       const state: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: mockUser,
         platform: mockMacOSPlatform,
         userData: mockCompleteUserData,
@@ -772,7 +784,7 @@ describe("appStateReducer - LOGIN_SUCCESS Transitions", () => {
     });
 
     it("returns current state if already in loading status", () => {
-      const state: LoadingState = { status: "loading", phase: "loading-auth" };
+      const state: LoadingState = { status: "loading", database: "initialized", phase: "loading-auth" };
       const action = {
         type: "LOGIN_SUCCESS" as const,
         user: mockUser,
@@ -791,6 +803,7 @@ describe("appStateReducer - LOGIN_SUCCESS Transitions", () => {
       // After LOGIN_SUCCESS, state has user/platform but action might not
       const state: LoadingState = {
         status: "loading",
+        database: "initialized",
         phase: "loading-user-data",
         user: mockUser,
         platform: mockMacOSPlatform,
@@ -817,6 +830,7 @@ describe("appStateReducer - LOGIN_SUCCESS Transitions", () => {
     it("transitions to onboarding when user data is incomplete (LOGIN_SUCCESS flow)", () => {
       const state: LoadingState = {
         status: "loading",
+        database: "initialized",
         phase: "loading-user-data",
         user: mockUser,
         platform: mockMacOSPlatform,
@@ -846,6 +860,7 @@ describe("appStateReducer - LOGIN_SUCCESS Transitions", () => {
 describe("appStateReducer - Onboarding Transitions", () => {
   const baseOnboardingState: OnboardingState = {
     status: "onboarding",
+    database: "initialized",
     step: "phone-type",
     user: mockUser,
     platform: mockMacOSPlatform,
@@ -874,6 +889,7 @@ describe("appStateReducer - Onboarding Transitions", () => {
     it("stays in onboarding when all steps complete", () => {
       const state: OnboardingState = {
         status: "onboarding",
+        database: "initialized",
         step: "permissions",
         user: mockUser,
         platform: mockMacOSPlatform,
@@ -917,7 +933,7 @@ describe("appStateReducer - Onboarding Transitions", () => {
     });
 
     it("returns current state if not in onboarding status", () => {
-      const state: AppState = { status: "unauthenticated" };
+      const state: AppState = { status: "unauthenticated", database: "initialized" };
       const action: AppAction = {
         type: "ONBOARDING_STEP_COMPLETE",
         step: "phone-type",
@@ -931,6 +947,7 @@ describe("appStateReducer - Onboarding Transitions", () => {
     it("Windows+iPhone apple-driver completion stays in onboarding (BACKLOG-3673)", () => {
       const windowsState: OnboardingState = {
         status: "onboarding",
+        database: "initialized",
         step: "apple-driver",
         user: mockUser,
         platform: mockWindowsPlatform,
@@ -955,6 +972,7 @@ describe("appStateReducer - Onboarding Transitions", () => {
     it("uses phoneType from action when completing phone-type step", () => {
       const state: OnboardingState = {
         status: "onboarding",
+        database: "initialized",
         step: "phone-type",
         user: mockUser,
         platform: mockMacOSPlatform,
@@ -979,6 +997,7 @@ describe("appStateReducer - Onboarding Transitions", () => {
     it("preserves selectedPhoneType in state after phone-type step is complete", () => {
       const state: OnboardingState = {
         status: "onboarding",
+        database: "initialized",
         step: "secure-storage",
         user: mockUser,
         platform: mockMacOSPlatform,
@@ -1002,6 +1021,7 @@ describe("appStateReducer - Onboarding Transitions", () => {
     it("uses selectedPhoneType in userData when the queue completes setup", () => {
       const state: OnboardingState = {
         status: "onboarding",
+        database: "initialized",
         step: "permissions",
         user: mockUser,
         platform: mockMacOSPlatform,
@@ -1086,7 +1106,7 @@ describe("appStateReducer - Onboarding Transitions", () => {
     });
 
     it("returns current state if not in onboarding status", () => {
-      const state: AppState = { status: "unauthenticated" };
+      const state: AppState = { status: "unauthenticated", database: "initialized" };
       const action: AppAction = {
         type: "RESUME_MARKER_APPLIED",
         phoneType: "iphone",
@@ -1108,6 +1128,7 @@ describe("appStateReducer - Ready State Transitions", () => {
     it("returns same state if already ready", () => {
       const state: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: mockUser,
         platform: mockMacOSPlatform,
         userData: mockCompleteUserData,
@@ -1120,7 +1141,7 @@ describe("appStateReducer - Ready State Transitions", () => {
     });
 
     it("does not transition from other states", () => {
-      const state: AppState = { status: "unauthenticated" };
+      const state: AppState = { status: "unauthenticated", database: "initialized" };
       const action: AppAction = { type: "APP_READY" };
 
       const result = appStateReducer(state, action);
@@ -1133,6 +1154,7 @@ describe("appStateReducer - Ready State Transitions", () => {
     it("transitions from ready to onboarding with email-connect step", () => {
       const state: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: mockUser,
         platform: mockMacOSPlatform,
         userData: mockCompleteUserData,
@@ -1154,6 +1176,7 @@ describe("appStateReducer - Ready State Transitions", () => {
     it("includes secure-storage in completed steps for macOS", () => {
       const state: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: mockUser,
         platform: mockMacOSPlatform,
         userData: mockCompleteUserData,
@@ -1171,6 +1194,7 @@ describe("appStateReducer - Ready State Transitions", () => {
     it("does not include secure-storage in completed steps for Windows", () => {
       const state: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: mockUser,
         platform: mockWindowsPlatform,
         userData: mockCompleteUserData,
@@ -1189,6 +1213,7 @@ describe("appStateReducer - Ready State Transitions", () => {
       const userDataWithEmail = { ...mockCompleteUserData, hasEmailConnected: true };
       const state: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: mockUser,
         platform: mockMacOSPlatform,
         userData: userDataWithEmail,
@@ -1204,7 +1229,7 @@ describe("appStateReducer - Ready State Transitions", () => {
     });
 
     it("does not transition from non-ready states", () => {
-      const state: AppState = { status: "unauthenticated" };
+      const state: AppState = { status: "unauthenticated", database: "initialized" };
       const action: AppAction = { type: "START_EMAIL_SETUP" };
 
       const result = appStateReducer(state, action);
@@ -1219,6 +1244,7 @@ describe("appStateReducer - Ready State Transitions", () => {
       const userDataNoEmail = { ...mockCompleteUserData, hasEmailConnected: false };
       const state: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: mockUser,
         platform: mockMacOSPlatform,
         userData: userDataNoEmail,
@@ -1248,6 +1274,7 @@ describe("appStateReducer - Ready State Transitions", () => {
       const userDataNoEmail = { ...mockCompleteUserData, hasEmailConnected: false };
       const state: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: mockUser,
         platform: mockWindowsPlatform,
         userData: userDataNoEmail,
@@ -1273,6 +1300,7 @@ describe("appStateReducer - Ready State Transitions", () => {
     it("updates hasEmailConnected in onboarding state", () => {
       const state: OnboardingState = {
         status: "onboarding",
+        database: "initialized",
         step: "email-connect",
         user: mockUser,
         platform: mockMacOSPlatform,
@@ -1296,7 +1324,7 @@ describe("appStateReducer - Ready State Transitions", () => {
     });
 
     it("returns current state for invalid states", () => {
-      const state: AppState = { status: "unauthenticated" };
+      const state: AppState = { status: "unauthenticated", database: "initialized" };
       // email/provider are required by EmailConnectedAction. The reducer's
       // EMAIL_CONNECTED case reads neither (it only flips hasEmailConnected), so
       // they are structural filler here and no assertion below touches them.
@@ -1319,6 +1347,7 @@ describe("appStateReducer - Ready State Transitions", () => {
       const userDataWithEmail = { ...mockCompleteUserData, hasEmailConnected: true };
       const state: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: mockUser,
         platform: mockMacOSPlatform,
         userData: userDataWithEmail,
@@ -1341,6 +1370,7 @@ describe("appStateReducer - Ready State Transitions", () => {
       const userDataWithEmail = { ...mockCompleteUserData, hasEmailConnected: true };
       const state: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: mockUser,
         platform: mockWindowsPlatform,
         userData: userDataWithEmail,
@@ -1360,6 +1390,7 @@ describe("appStateReducer - Ready State Transitions", () => {
     it("returns current state for onboarding state (disconnect unexpected)", () => {
       const state: OnboardingState = {
         status: "onboarding",
+        database: "initialized",
         step: "email-connect",
         user: mockUser,
         platform: mockMacOSPlatform,
@@ -1375,7 +1406,7 @@ describe("appStateReducer - Ready State Transitions", () => {
     });
 
     it("returns current state for unauthenticated state", () => {
-      const state: AppState = { status: "unauthenticated" };
+      const state: AppState = { status: "unauthenticated", database: "initialized" };
       const action: AppAction = { type: "EMAIL_DISCONNECTED", provider: "google" };
 
       const result = appStateReducer(state, action);
@@ -1393,6 +1424,7 @@ describe("appStateReducer - Logout", () => {
   it("transitions from ready to unauthenticated", () => {
     const state: ReadyState = {
       status: "ready",
+      database: "initialized",
       user: mockUser,
       platform: mockMacOSPlatform,
       userData: mockCompleteUserData,
@@ -1401,12 +1433,13 @@ describe("appStateReducer - Logout", () => {
 
     const result = appStateReducer(state, action);
 
-    expect(result).toEqual({ status: "unauthenticated" });
+    expect(result).toEqual({ status: "unauthenticated", database: "initialized" });
   });
 
   it("transitions from onboarding to unauthenticated", () => {
     const state: OnboardingState = {
       status: "onboarding",
+      database: "initialized",
       step: "phone-type",
       user: mockUser,
       platform: mockMacOSPlatform,
@@ -1416,16 +1449,16 @@ describe("appStateReducer - Logout", () => {
 
     const result = appStateReducer(state, action);
 
-    expect(result).toEqual({ status: "unauthenticated" });
+    expect(result).toEqual({ status: "unauthenticated", database: "initialized" });
   });
 
   it("transitions from loading to unauthenticated", () => {
-    const state: LoadingState = { status: "loading", phase: "initializing-db" };
+    const state: LoadingState = { status: "loading", database: "unknown", phase: "initializing-db" };
     const action: AppAction = { type: "LOGOUT" };
 
     const result = appStateReducer(state, action);
 
-    expect(result).toEqual({ status: "unauthenticated" });
+    expect(result).toEqual({ status: "unauthenticated", database: "unknown" });
   });
 
   it("transitions from error to unauthenticated", () => {
@@ -1438,7 +1471,7 @@ describe("appStateReducer - Logout", () => {
 
     const result = appStateReducer(state, action);
 
-    expect(result).toEqual({ status: "unauthenticated" });
+    expect(result).toEqual({ status: "unauthenticated", database: "unknown" });
   });
 });
 
@@ -1451,6 +1484,7 @@ describe("appStateReducer - Error Handling", () => {
     it("transitions any state to error", () => {
       const state: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: mockUser,
         platform: mockMacOSPlatform,
         userData: mockCompleteUserData,
@@ -1473,7 +1507,7 @@ describe("appStateReducer - Error Handling", () => {
     });
 
     it("defaults recoverable to false", () => {
-      const state: AppState = { status: "unauthenticated" };
+      const state: AppState = { status: "unauthenticated", database: "initialized" };
       const action: AppAction = {
         type: "ERROR",
         error: { code: "UNKNOWN_ERROR", message: "Something went wrong" },
@@ -1488,7 +1522,7 @@ describe("appStateReducer - Error Handling", () => {
     });
 
     it("preserves previous state for recovery", () => {
-      const state: LoadingState = { status: "loading", phase: "initializing-db" };
+      const state: LoadingState = { status: "loading", database: "unknown", phase: "initializing-db" };
       const action: AppAction = {
         type: "ERROR",
         error: { code: "DB_INIT_FAILED", message: "Test error" },
@@ -1508,6 +1542,7 @@ describe("appStateReducer - Error Handling", () => {
     it("returns to previous state if recoverable", () => {
       const previousState: LoadingState = {
         status: "loading",
+        database: "unknown",
         phase: "initializing-db",
       };
       const state: ErrorState = {
@@ -1552,6 +1587,7 @@ describe("appStateReducer - Error Handling", () => {
     it("returns current state if not in error status", () => {
       const state: ReadyState = {
         status: "ready",
+        database: "initialized",
         user: mockUser,
         platform: mockMacOSPlatform,
         userData: mockCompleteUserData,
@@ -1571,7 +1607,7 @@ describe("appStateReducer - Error Handling", () => {
 
 describe("appStateReducer - Invalid Transitions", () => {
   it("returns current state for action in wrong status", () => {
-    const state: AppState = { status: "unauthenticated" };
+    const state: AppState = { status: "unauthenticated", database: "initialized" };
     const action: AppAction = { type: "DB_INIT_COMPLETE", success: true };
 
     const result = appStateReducer(state, action);
@@ -1580,7 +1616,7 @@ describe("appStateReducer - Invalid Transitions", () => {
   });
 
   it("returns current state for action in wrong phase", () => {
-    const state: LoadingState = { status: "loading", phase: "checking-storage" };
+    const state: LoadingState = { status: "loading", database: "unknown", phase: "checking-storage" };
     const action: AppAction = { type: "DB_INIT_COMPLETE", success: true };
 
     const result = appStateReducer(state, action);
@@ -1608,6 +1644,7 @@ describe("appStateReducer - Immutability", () => {
   it("does not mutate input state", () => {
     const state: OnboardingState = {
       status: "onboarding",
+      database: "initialized",
       step: "phone-type",
       user: mockUser,
       platform: mockMacOSPlatform,
@@ -1625,7 +1662,7 @@ describe("appStateReducer - Immutability", () => {
   });
 
   it("returns same reference for no-op transitions", () => {
-    const state: AppState = { status: "unauthenticated" };
+    const state: AppState = { status: "unauthenticated", database: "initialized" };
     const action: AppAction = { type: "DB_INIT_COMPLETE", success: true };
 
     const result = appStateReducer(state, action);
@@ -1642,6 +1679,7 @@ describe("INIT_STAGE_RECEIVED", () => {
   it("updates initStage on loading state", () => {
     const state: LoadingState = {
       status: "loading",
+      database: "unknown",
       phase: "initializing-db",
     };
 
@@ -1652,6 +1690,7 @@ describe("INIT_STAGE_RECEIVED", () => {
 
     expect(result).toEqual({
       status: "loading",
+      database: "unknown",
       phase: "initializing-db",
       initStage: "db-opening",
       initMessage: "Opening database...",
@@ -1662,6 +1701,7 @@ describe("INIT_STAGE_RECEIVED", () => {
   it("updates migrationProgress when stage is migrating", () => {
     const state: LoadingState = {
       status: "loading",
+      database: "unknown",
       phase: "initializing-db",
     };
 
@@ -1672,6 +1712,7 @@ describe("INIT_STAGE_RECEIVED", () => {
 
     expect(result).toEqual({
       status: "loading",
+      database: "unknown",
       phase: "initializing-db",
       initStage: "migrating",
       migrationProgress: 50,
@@ -1684,7 +1725,7 @@ describe("INIT_STAGE_RECEIVED", () => {
       status: "loading",
       phase: "initializing-db",
       progress: 25,
-      deferredDbInit: false,
+      database: "unknown",
     };
 
     const result = appStateReducer(state, {
@@ -1696,13 +1737,14 @@ describe("INIT_STAGE_RECEIVED", () => {
     expect(resultLoading.status).toBe("loading");
     expect(resultLoading.phase).toBe("initializing-db");
     expect(resultLoading.progress).toBe(25);
-    expect(resultLoading.deferredDbInit).toBe(false);
+    expect(resultLoading.database).toBe("unknown");
     expect(resultLoading.initStage).toBe("db-ready");
   });
 
   it("is ignored when not in loading state (onboarding)", () => {
     const state: AppState = {
       status: "onboarding",
+      database: "initialized",
       step: "phone-type",
       user: mockUser,
       platform: mockMacOSPlatform,
@@ -1718,7 +1760,7 @@ describe("INIT_STAGE_RECEIVED", () => {
   });
 
   it("is ignored when in unauthenticated state", () => {
-    const state: AppState = { status: "unauthenticated" };
+    const state: AppState = { status: "unauthenticated", database: "initialized" };
 
     const result = appStateReducer(state, {
       type: "INIT_STAGE_RECEIVED",
@@ -1731,6 +1773,7 @@ describe("INIT_STAGE_RECEIVED", () => {
   it("is ignored when in ready state", () => {
     const state: ReadyState = {
       status: "ready",
+      database: "initialized",
       user: mockUser,
       platform: mockMacOSPlatform,
       userData: mockCompleteUserData,
@@ -1747,6 +1790,7 @@ describe("INIT_STAGE_RECEIVED", () => {
   it("handles error payload without affecting state transitions", () => {
     const state: LoadingState = {
       status: "loading",
+      database: "unknown",
       phase: "initializing-db",
     };
 
@@ -1768,6 +1812,7 @@ describe("INIT_STAGE_RECEIVED", () => {
   it("works during any loading phase, not just initializing-db", () => {
     const state: LoadingState = {
       status: "loading",
+      database: "unknown",
       phase: "checking-storage",
     };
 

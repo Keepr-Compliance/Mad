@@ -198,22 +198,6 @@ module.exports = {
     '/packages/', // Workspace packages (e.g. @keepr/ui) run their own jest config
     '/worktrees/',
     '/tests/integration/', // Runs separately via jest.integration.config.js
-    // BACKLOG-2687 (QUARANTINE — NOT a silent skip; scripts/ci/check-test-drift.mjs prints this
-    // file in its allow-list on every run, and fails if the entry ever stops matching a real file).
-    //
-    // headSchemaVersion.test.ts is RED and the red is CORRECT: it reports that the seeder stamps
-    // HEAD_SCHEMA_VERSION = 50 while the head migration is 57. But satisfying it by bumping the
-    // constant would BREAK the fixture. The guard's premise — "schema.sql is already head
-    // structure, so stamp head and replay nothing" — is false: removed_at/removed_reason (v56) and
-    // contact_source_links (v57) are absent from electron/database/schema.sql, so a DB stamped 57
-    // would skip the migrations that create them. Stamp 50 is functionally correct today (every
-    // migration 51-57 is replay-safe behind PRAGMA table_info / IF NOT EXISTS, and 50 > 36 so v36's
-    // destructive contacts rebuild never replays).
-    //
-    // Deciding the right stamp needs a real Electron launch against a freshly seeded fixture.
-    // Tracked in BACKLOG-2687; un-quarantining is part of closing it. Do NOT "fix" this by bumping
-    // HEAD_SCHEMA_VERSION.
-    'scripts/qa/harness/__tests__/headSchemaVersion.test.ts',
     // TASK-2254: Re-enabled tests that now pass:
     // - iosMessagesParser.test.ts (NODE_MODULE_VERSION issue resolved)
     // - autoLinkService.test.ts (test expectations updated to match current code)

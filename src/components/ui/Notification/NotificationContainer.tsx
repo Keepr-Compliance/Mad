@@ -18,6 +18,7 @@
  * prevent. See BACKLOG-2454.)
  */
 import React from "react";
+import { Z_CLASS } from "../../../constants/zLayers";
 import { NotificationToast } from "./NotificationToast";
 import type { Notification } from "./types";
 
@@ -44,7 +45,7 @@ export function NotificationContainer({
 
   return (
     <div
-      className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 max-w-md"
+      className={`fixed bottom-4 right-4 ${Z_CLASS.toast} flex flex-col gap-2 max-w-md`}
       role="region"
       aria-live="polite"
       aria-label="Notifications"

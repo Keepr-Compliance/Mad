@@ -187,6 +187,7 @@ import { registerEmailLinkingHandlers } from "./handlers/emailLinkingHandlers";
 import { registerEmailAutoLinkHandlers } from "./handlers/emailAutoLinkHandlers";
 import { registerReviewQueueHandlers } from "./handlers/reviewQueueHandlers";
 import { registerHiddenTextHandlers } from "./handlers/hiddenTextHandlers";
+import { registerTransactionOpenHandlers } from "./handlers/transactionOpenHandlers";
 import { registerChecklistHandlers } from "./handlers/checklistHandlers";
 import {
   registerRcsImportHandlers,
@@ -245,6 +246,14 @@ import {
   CURRENT_PRIVACY_POLICY_VERSION,
 } from "./constants/legalVersions";
 import type { OAuthProvider, SubscriptionTier, SubscriptionStatus, User } from "./types";
+import {
+  noteSignIn,
+  saveSignInSession,
+  setPendingDeepLinkUser,
+  type PendingDeepLinkUser,
+} from "./services/signInState";
+
+export { getAndClearPendingDeepLinkUser } from "./services/signInState";
 
 import { applyLogFileConfig } from "./config/logFileConfig";
 
@@ -292,6 +301,7 @@ import {
 } from "./services/windowResponsivenessTracker";
 import { createWindowFreezeReporter, currentScreenName } from "./services/rendererFreezeProfiler";
 import { syncTimeline } from "./services/syncTimeline";
+import { startAttachmentOcr, stopAttachmentOcr } from "./services/ocr/attachmentOcrQueue";
 import { normalizeOAuthProvider } from "./utils/normalizeOAuthProvider";
 import { buildDeepLinkAuthPayload } from "./utils/deepLinkAuthPayload";
 import { licenseBlockedPayload } from "./utils/deepLinkLicenseBlockedPayload";
@@ -350,44 +360,6 @@ process.on("unhandledRejection", (reason: unknown) => {
 });
 
 let mainWindow: BrowserWindow | null = null;
-
-// ==========================================
-// PENDING DEEP LINK USER (TASK-1507D)
-// ==========================================
-// When deep link auth completes before database is initialized,
-// we store the user data here and create the local user after DB init.
-
-interface PendingDeepLinkUser {
-  supabaseId: string;
-  email: string;
-  displayName?: string;
-  avatarUrl?: string;
-  provider: OAuthProvider;
-  subscriptionTier?: SubscriptionTier;
-  subscriptionStatus?: SubscriptionStatus;
-  trialEndsAt?: string;
-}
-
-let pendingDeepLinkUser: PendingDeepLinkUser | null = null;
-
-/**
- * Store pending deep link user data for later creation
- * Used when deep link auth completes before database is initialized
- */
-export function setPendingDeepLinkUser(data: PendingDeepLinkUser): void {
-  pendingDeepLinkUser = data;
-  log.info("[DeepLink] Stored pending user for later creation:", redactId(data.supabaseId));
-}
-
-/**
- * Get and clear pending deep link user data
- * Called after database initialization to create the user
- */
-export function getAndClearPendingDeepLinkUser(): PendingDeepLinkUser | null {
-  const user = pendingDeepLinkUser;
-  pendingDeepLinkUser = null;
-  return user;
-}
 
 /**
  * Create or update local SQLite user from deep link auth data (TASK-1507D)
@@ -693,6 +665,8 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       // TASK-1507: Step 1 - Verify tokens and establish session using setSession()
       // Per SR Engineer review: Use setSession() instead of getUser() for proper session establishment
       log.info("[DeepLink] Setting session with tokens...");
+      // BACKLOG-3555: before main's identity changes (see signInState.ts).
+      noteSignIn();
       const { data: sessionData, error: sessionError } = await supabaseService
         .getClient()
         .auth.setSession({
@@ -849,7 +823,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
               trialDaysRemaining: licenseStatus.trialDaysRemaining ?? 0,
             };
 
-            await sessionService.saveSession({
+            await saveSignInSession({
               user: localUser,
               sessionToken,
               provider,
@@ -875,6 +849,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         // User will be created after DB initialization in system-handlers.ts
         log.info("[DeepLink] Database not initialized, storing pending user");
         setPendingDeepLinkUser(deepLinkUserData);
+        log.info("[DeepLink] Stored pending user for later creation:", redactId(deepLinkUserData.supabaseId));
         // Note: localUserId remains as Supabase UUID since we can't query local DB yet
         // The renderer will need to handle this case (existing flow before TASK-1507F)
       }
@@ -1606,6 +1581,10 @@ app.whenReady().then(async () => {
   // quit — the "securing your iPhone backup" quit prompt is not shown for it.
   powerMonitor.on("shutdown", () => noteSystemQuit("os-shutdown"));
 
+  // BACKLOG-3943: let the OCR queue run (image-only PDF attachments). The post-sync
+  // drain is skipped while the machine is on battery power.
+  startAttachmentOcr({ isOnBatteryPower: () => powerMonitor.isOnBatteryPower() });
+
   // BACKLOG-2709: on the FIRST launch against a new development directory, say
   // so before the window appears. The app is about to open an empty database on
   // a machine where the real one still exists, and a silently blank contact
@@ -1949,6 +1928,8 @@ app.whenReady().then(async () => {
   registerReviewQueueHandlers();
   // BACKLOG-3366: hide / unhide individual texts from a transaction's export.
   registerHiddenTextHandlers();
+  // BACKLOG-3965: when each deal was last opened (the Dashboard's Recent panel).
+  registerTransactionOpenHandlers();
   // BACKLOG-3475: transaction checklists — broker templates, items, evidence links.
   registerChecklistHandlers();
   // BACKLOG-3619: RCS import from the Chrome extension. The loopback bridge
@@ -2139,6 +2120,9 @@ app.on("before-quit", (event) => {
   if (deferQuitForBackupStop(event)) return;
   if (deferQuitForLink(event)) return;
   if (deferQuitForBackupSeal(event)) return;
+  // BACKLOG-3943: clear the OCR queue and stop the running OCR child; the job in
+  // flight writes nothing, so its row is picked up again after the next sync.
+  stopAttachmentOcr();
   // TASK-1956: Shutdown persistent contact worker pool
   try {
     const { shutdownPool } = require("./workers/contactWorkerPool");

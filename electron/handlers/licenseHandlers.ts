@@ -18,6 +18,7 @@ import databaseService from "../services/databaseService";
 import { initializationBroadcaster } from "../services/initializationBroadcaster";
 import featureGateService from "../services/featureGateService";
 import type { LicenseType, UserLicense } from "../types/models";
+import { getSignInGeneration, isSignInAwaitingSessionWrite } from "../services/signInState";
 
 // SPRINT-062: License validation service imports
 import {
@@ -104,6 +105,7 @@ async function getLicenseData(): Promise<LicenseResponse> {
 
 async function readLicenseData(timing: LicenseTiming): Promise<LicenseResponse> {
   try {
+    const signInGenerationAtEntry = getSignInGeneration();
     // BACKLOG-3792: the renderer can ask for the license on first launch after
     // an upgrade, before migrations finish; the session and user reads below
     // then throw DatabaseError. Await the shared db-ready signal (BACKLOG-2149
@@ -119,9 +121,24 @@ async function readLicenseData(timing: LicenseTiming): Promise<LicenseResponse> 
       }
     }
 
+    // BACKLOG-3555: session.json still describes a PREVIOUS session while a
+    // deep-link sign-in's session is not written yet (see signInState.ts).
+    // Reading it would stamp the old user's license and organization on the
+    // new user, so answer with the no-session placeholder below; the renderer
+    // already re-asks on sessionBacked:false (BACKLOG-2885).
+    // That re-ask is BOUNDED: LicenseContext.tsx SESSION_WAIT_MAX_RETRIES (20)
+    // x SESSION_WAIT_RETRY_MS (300 ms), about 6 s of answers. If the session is
+    // still not written by then, the placeholder (individual, no AI, no
+    // organization) is accepted until the next focus refetch (throttled to
+    // 60 s) or an explicit refresh. It errs toward less entitlement, never
+    // toward the previous user's.
+    const sessionFileIsStale =
+      getSignInGeneration() !== signInGenerationAtEntry ||
+      isSignInAwaitingSessionWrite();
+
     // First try to get license from session
     let stepAt = Date.now();
-    const session = await sessionService.loadSession();
+    const session = sessionFileIsStale ? null : await sessionService.loadSession();
     timing.loadSessionMs = Date.now() - stepAt;
 
     if (!session || !session.user) {

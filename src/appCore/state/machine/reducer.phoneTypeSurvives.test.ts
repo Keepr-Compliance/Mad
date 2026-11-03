@@ -35,7 +35,7 @@ const windows: PlatformInfo = { isMacOS: false, isWindows: true, hasIPhone: fals
 const PLATFORMS: Array<[string, PlatformInfo]> = [["macOS", macOS], ["Windows", windows]];
 const PHONES: Phone[] = ["iphone", "android"];
 
-const loadingUserData: LoadingState = { status: "loading", phase: "loading-user-data" };
+const loadingUserData: LoadingState = { status: "loading", database: "initialized", phase: "loading-user-data" };
 
 function load(data: UserData, platform: PlatformInfo): AppState {
   return appStateReducer(loadingUserData, { type: "USER_DATA_LOADED", data, user, platform });
@@ -78,7 +78,7 @@ function readyWith(phoneType: Phone, platform: PlatformInfo): AppState {
 function newAccountInSetup(platform: PlatformInfo): AppState {
   // BACKLOG-3673: a sign-in loads the account (LOGIN_SUCCESS -> loading-user-data);
   // a brand-new account's record is not finished, so USER_DATA_LOADED -> setup.
-  let s = appStateReducer({ status: "unauthenticated" }, {
+  let s = appStateReducer({ status: "unauthenticated", database: "initialized" }, {
     type: "LOGIN_SUCCESS", user, platform, isNewUser: true,
   });
   s = appStateReducer(s, {

@@ -948,8 +948,12 @@ export class BackupService extends EventEmitter {
    * - Probe every 30 s (the watchdog tick; no new timer). After 10 samples in a row that
    *   are not suspended, every 60 s; after 20, every 120 s. At most 40 per run.
    * - Act on 3 suspended samples in a row spanning at least 60 s.
-   * - Any byte, or any sample with a running thread, takes the notice down again.
+   * - BACKLOG-4060: once the notice shows, stop probing. Only a byte (a real resume),
+   *   Cancel, the tool closing or the watchdog ends it. A sample with a running thread
+   *   does NOT take it down: on Windows a frozen tool can report S<T (founder P2 log).
    * - 3 unknown samples in a row stop the check for the run.
+   * - The cap and the unknown limit both end through stopSuspendWatch, which logs the
+   *   run's probe count once.
    */
   static readonly SUSPEND_PROBE_SILENCE_MS = 60_000;
   static readonly SUSPEND_PROBE_MAX_PER_RUN = 40;
@@ -2155,21 +2159,23 @@ export class BackupService extends EventEmitter {
 
   /**
    * BACKLOG-4002: called from the watchdog tick. Starts one probe when every gate holds:
-   * Windows handling on, a probe present, the first byte seen, the run alive, a minute
-   * with no byte at all, the back-off interval passed, no probe running, under the cap.
+   * Windows handling on, a probe present, the first byte seen, the run alive, the notice
+   * not showing (BACKLOG-4060), a minute with no byte at all, the back-off interval
+   * passed, no probe running, under the cap.
    */
   private maybeProbeThreadState(): void {
     const w = this.suspendWatch;
     const probe = this.threadStateProbe;
     if (!this.toolHoldHandling || probe === null) return;
     if (w.stopped || w.inFlight || !this.isRunning || !this.currentProcess) return;
+    // BACKLOG-4060: once the notice shows, no more samples; only a byte clears it.
+    if (w.noticeShowing) return;
     if (this.firstOutputAt === null) return;
     const now = Date.now();
     if (now - w.lastRawByteAt < BackupService.SUSPEND_PROBE_SILENCE_MS) return;
     if (now < w.nextProbeAt) return;
     if (w.probeCount >= BackupService.SUSPEND_PROBE_MAX_PER_RUN) {
-      log.info(`[BackupService] thread-state probe: reached ${w.probeCount} probes; not checking again this run`);
-      w.stopped = true;
+      this.stopSuspendWatch(`reached the ${BackupService.SUSPEND_PROBE_MAX_PER_RUN}-probe cap`);
       return;
     }
     const pid = this.currentProcess.pid;
@@ -2194,7 +2200,7 @@ export class BackupService extends EventEmitter {
     if (w !== this.suspendWatch || w.generation !== this.suspendWatchGeneration) return;
     if (w.stopped || !this.isRunning || !this.currentProcess) return;
     // R4: each probe's outcome and wall time, so a PC log shows the cost and frequency.
-    log.debug(
+    log.info(
       `[BackupService] thread-state probe ${w.probeCount}: ${describeSample(sample)} in ${Date.now() - startedAt} ms`,
     );
 
@@ -2207,7 +2213,7 @@ export class BackupService extends EventEmitter {
       w.unknownRun++;
       if (w.unknownRun >= BackupService.SUSPEND_UNKNOWN_LIMIT) {
         log.warn(`[BackupService] thread-state probe unavailable (${sample.reason}); not checking again this run`);
-        w.stopped = true;
+        this.stopSuspendWatch("probe unavailable");
         return;
       }
       w.nextProbeAt = startedAt + this.suspendProbeIntervalMs(w);
@@ -2229,7 +2235,9 @@ export class BackupService extends EventEmitter {
     } else {
       w.streak = 0;
       w.notSuspendedRun++;
-      if (w.noticeShowing) this.clearSuspendedNotice("threads running");
+      // BACKLOG-4060: no clear here. A frozen Windows tool can report S<T; the notice
+      // is shown only after this probe's inFlight is cleared and no probe starts while
+      // it shows, so a running sample never meets a showing notice.
     }
     w.nextProbeAt = startedAt + this.suspendProbeIntervalMs(w);
   }

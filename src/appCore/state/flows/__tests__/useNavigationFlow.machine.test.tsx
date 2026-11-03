@@ -62,30 +62,36 @@ const defaultOptions = {
 // Test states
 const loadingCheckingStorage: LoadingState = {
   status: "loading",
+  database: "unknown",
   phase: "checking-storage",
 };
 
 const loadingInitializingDb: LoadingState = {
   status: "loading",
+  database: "unknown",
   phase: "initializing-db",
 };
 
 const loadingAuth: LoadingState = {
   status: "loading",
+  database: "initialized",
   phase: "loading-auth",
 };
 
 const loadingUserData: LoadingState = {
   status: "loading",
+  database: "initialized",
   phase: "loading-user-data",
 };
 
 const unauthenticatedState: UnauthenticatedState = {
   status: "unauthenticated",
+  database: "initialized",
 };
 
 const readyState: ReadyState = {
   status: "ready",
+  database: "initialized",
   user: { id: "test-user", email: "test@example.com" },
   platform: { isMacOS: true, isWindows: false, hasIPhone: true },
   userData: {
@@ -100,6 +106,7 @@ const readyState: ReadyState = {
 
 const onboardingStatePhoneType: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "phone-type",
   user: { id: "test-user", email: "test@example.com" },
   platform: { isMacOS: true, isWindows: false, hasIPhone: false },
@@ -108,6 +115,7 @@ const onboardingStatePhoneType: OnboardingState = {
 
 const onboardingStateSecureStorage: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "secure-storage",
   user: { id: "test-user", email: "test@example.com" },
   platform: { isMacOS: true, isWindows: false, hasIPhone: true },
@@ -116,6 +124,7 @@ const onboardingStateSecureStorage: OnboardingState = {
 
 const onboardingStateEmailConnect: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "email-connect",
   user: { id: "test-user", email: "test@example.com" },
   platform: { isMacOS: true, isWindows: false, hasIPhone: true },
@@ -124,6 +133,7 @@ const onboardingStateEmailConnect: OnboardingState = {
 
 const onboardingStatePermissions: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "permissions",
   user: { id: "test-user", email: "test@example.com" },
   platform: { isMacOS: true, isWindows: false, hasIPhone: true },
@@ -132,6 +142,7 @@ const onboardingStatePermissions: OnboardingState = {
 
 const onboardingStateAppleDriver: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "apple-driver",
   user: { id: "test-user", email: "test@example.com" },
   platform: { isMacOS: false, isWindows: true, hasIPhone: true },
@@ -457,6 +468,7 @@ describe("deriveAppStep mapping completeness", () => {
     stepMappings.forEach(({ onboardingStep, expectedAppStep }) => {
       const state: OnboardingState = {
         status: "onboarding",
+        database: "initialized",
         step: onboardingStep,
         user: { id: "test-user", email: "test@example.com" },
         platform: { isMacOS: true, isWindows: false, hasIPhone: true },

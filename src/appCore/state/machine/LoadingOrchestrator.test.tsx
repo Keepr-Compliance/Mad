@@ -154,6 +154,7 @@ describe("LoadingOrchestrator", () => {
     it("shows children when in ready state", () => {
       const readyState: AppState = {
         status: "ready",
+        database: "initialized",
         user: { id: "1", email: "test@test.com" },
         platform: { isMacOS: true, isWindows: false, hasIPhone: false },
         userData: {
@@ -177,7 +178,7 @@ describe("LoadingOrchestrator", () => {
 
     it("shows children when in unauthenticated state", () => {
       render(
-        <TestWrapper initialState={{ status: "unauthenticated" }}>
+        <TestWrapper initialState={{ status: "unauthenticated", database: "initialized" }}>
           <div data-testid="children">Login Screen</div>
         </TestWrapper>
       );
@@ -264,6 +265,7 @@ describe("LoadingOrchestrator", () => {
         recoverable: true,
         previousState: {
           status: "loading",
+          database: "unknown",
           phase: "initializing-db",
         },
       };
@@ -305,7 +307,7 @@ describe("LoadingScreen phases", () => {
   it("displays correct message for validating-auth phase (TASK-2086)", () => {
     render(
       <TestWrapper
-        initialState={{ status: "loading", phase: "validating-auth" }}
+        initialState={{ status: "loading", database: "unknown", phase: "validating-auth" }}
       >
         <div>Children</div>
       </TestWrapper>
@@ -320,7 +322,7 @@ describe("LoadingScreen phases", () => {
     // Default mock is MacIntel (set in beforeEach)
     render(
       <TestWrapper
-        initialState={{ status: "loading", phase: "initializing-db" }}
+        initialState={{ status: "loading", database: "unknown", phase: "initializing-db" }}
       >
         <div>Children</div>
       </TestWrapper>
@@ -339,7 +341,7 @@ describe("LoadingScreen phases", () => {
     });
 
     render(
-      <TestWrapper initialState={{ status: "loading", phase: "initializing-db" }}>
+      <TestWrapper initialState={{ status: "loading", database: "unknown", phase: "initializing-db" }}>
         <div>Children</div>
       </TestWrapper>
     );
@@ -352,7 +354,7 @@ describe("LoadingScreen phases", () => {
 
   it("displays correct message for loading-auth phase", () => {
     render(
-      <TestWrapper initialState={{ status: "loading", phase: "loading-auth" }}>
+      <TestWrapper initialState={{ status: "loading", database: "initialized", phase: "loading-auth" }}>
         <div>Children</div>
       </TestWrapper>
     );
@@ -367,7 +369,7 @@ describe("LoadingScreen phases", () => {
     // For integration testing of this phase, see the full flow tests.
     render(
       <AppStateProvider
-        initialState={{ status: "loading", phase: "loading-user-data" }}
+        initialState={{ status: "loading", database: "initialized", phase: "loading-user-data" }}
       >
         <LoadingScreen phase="loading-user-data" />
       </AppStateProvider>
@@ -872,6 +874,7 @@ describe("LoadingOrchestrator preload bridge race condition", () => {
       // Start in initializing-db phase
       const initDbState: AppState = {
         status: "loading",
+        database: "unknown",
         phase: "initializing-db",
       };
 
@@ -893,6 +896,7 @@ describe("LoadingOrchestrator preload bridge race condition", () => {
       // Start in checking-storage phase
       const checkingState: AppState = {
         status: "loading",
+        database: "unknown",
         phase: "checking-storage",
       };
 
@@ -912,6 +916,7 @@ describe("LoadingOrchestrator preload bridge race condition", () => {
 
       const initDbState: AppState = {
         status: "loading",
+        database: "unknown",
         phase: "initializing-db",
       };
 
@@ -939,6 +944,7 @@ describe("LoadingOrchestrator preload bridge race condition", () => {
 
       const initDbState: AppState = {
         status: "loading",
+        database: "unknown",
         phase: "initializing-db",
       };
 
@@ -970,6 +976,7 @@ describe("LoadingOrchestrator preload bridge race condition", () => {
 
       const initDbState: AppState = {
         status: "loading",
+        database: "unknown",
         phase: "initializing-db",
       };
 

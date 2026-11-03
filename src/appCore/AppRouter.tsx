@@ -5,8 +5,7 @@
  * This is a pure extraction of the routing logic from App.tsx.
  */
 
-import { useState, useCallback, lazy, Suspense } from "react";
-import { scrollToSettingsSection } from "../utils/scrollToSettingsSection";
+import { useState, useCallback, useMemo, lazy, Suspense } from "react";
 import Login from "../components/Login";
 import Dashboard from "../components/Dashboard";
 import OfflineFallback from "../components/OfflineFallback";
@@ -15,6 +14,7 @@ import type { AppStateMachine } from "./state/types";
 import { useImportSource } from "../hooks/useImportSource";
 import { useOpenLinkScreen } from "../hooks/useOpenLinkScreen";
 import { useReportCurrentScreenName } from "../utils/currentScreenName";
+import { makeOpenTransactionAt } from "./openTransactionRequest";
 import {
   USE_NEW_ONBOARDING,
   isOnboardingStep,
@@ -42,6 +42,9 @@ export function AppRouter({ app }: AppRouterProps) {
     setIsTourActive, openIPhoneSync, openAndroidSync, openSettings,
     handleLogout,
   } = app;
+
+  // BACKLOG-3965 PR-4b: the ONE helper Dashboard rows call (store write + open view).
+  const openTransactionAt = useMemo(() => makeOpenTransactionAt(openTransactions), [openTransactions]);
 
   // Track license blocked state for login screen
   const [licenseBlocked, setLicenseBlocked] = useState<{
@@ -120,14 +123,6 @@ export function AppRouter({ app }: AppRouterProps) {
     // BACKLOG-3659: also for Android with Google Messages (Keepr's extension).
     const showAndroidSyncButton = importSource === "android-companion" || importSource === "android-messages-web";
 
-    // Handler to open Settings, optionally scrolling to a specific section
-    const handleOpenSettings = (scrollTarget?: string) => {
-      openSettings();
-      if (scrollTarget) {
-        scrollToSettingsSection(scrollTarget);
-      }
-    };
-
     return (
       <Dashboard
         onAuditNew={openAuditTransaction}
@@ -137,7 +132,8 @@ export function AppRouter({ app }: AppRouterProps) {
         onSyncAndroid={showAndroidSyncButton ? openAndroidSync : undefined}
         onTourStateChange={setIsTourActive}
         onTriggerRefresh={app.triggerRefresh}
-        onOpenSettings={handleOpenSettings}
+        onOpenSettings={openSettings}
+        onOpenTransaction={openTransactionAt}
         user={currentUser ?? undefined}
       />
     );

@@ -32,7 +32,7 @@ jest.mock("../../services/outlookFetchService", () => ({ __esModule: true, defau
 jest.mock("../../services/emailSyncService", () => ({ __esModule: true, default: {} }));
 jest.mock("../../services/db/emailDbService", () => ({
   createEmail: jest.fn(), getEmailById: jest.fn(),
-  getEmailByExternalId: jest.fn(), getCachedEmails: jest.fn(),
+  getEmailByExternalIdSync: jest.fn(), getCachedEmails: jest.fn(),
 }));
 jest.mock("../../services/db/communicationDbService", () => ({
   createCommunication: jest.fn(), removeIgnoredCommunication: jest.fn(),

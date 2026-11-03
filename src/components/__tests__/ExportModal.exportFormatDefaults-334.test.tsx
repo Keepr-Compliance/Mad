@@ -232,6 +232,8 @@ it("C5: ticking the box saves the options as the new defaults", async () => {
       emailExportMode: "individual",
       contentType: "texts",
       attachmentType: "none",
+      // BACKLOG-3767: saved with the other options (ON by default).
+      includeChecklist: true,
     },
   });
 });

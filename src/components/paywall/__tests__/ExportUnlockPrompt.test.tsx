@@ -75,20 +75,21 @@ beforeEach(() => {
 });
 
 describe("ExportUnlockPrompt — CTA per state", () => {
-  it("PAYG path: zero balance + quote ⇒ CREDIT-FIRST CTA (no dollar amount while browsing)", async () => {
+  // REWRITTEN ON PURPOSE (BACKLOG-3676). This test used to pin BACKLOG-2086's
+  // "no dollar amount on the browsing CTA". The founder approved tab A2 of the
+  // plans mockup on 2026-10-09 (BACKLOG-3648), which shows the no-credit Solo
+  // card as "Pay $X for this deal". The exact amount now shows here, and the
+  // confirm/charge step (PurchaseUnlockHandoff) still shows it again before the tap.
+  it("PAYG path: zero balance + quote ⇒ 'Pay $X for this deal' with the quote's price (A2, 2026-10-09)", async () => {
     getStatusMock.mockResolvedValue(lockedWithQuote(0));
     render(
       <ExportUnlockPrompt transactionId={TX} onUnlocked={jest.fn()} onCancel={jest.fn()} />,
       { wrapper: strictWrapper },
     );
     const btn = await screen.findByTestId("unlock-purchase");
-    // BACKLOG-2086: lead with the CREDIT requirement, not the raw price.
-    expect(btn).toHaveTextContent("Unlock this deal — 1 credit");
-    // GUARDRAIL (browsing side): the dollar amount is NOT on the browsing CTA —
-    // it surfaces only at the confirm/charge step (PurchaseUnlockHandoff).
-    expect(btn).not.toHaveTextContent("$");
-    // Credit-first sub-copy tells the user what they need.
-    expect(screen.getByText(/You need 1 credit to unlock/i)).toBeInTheDocument();
+    expect(btn).toHaveTextContent("Pay $13.00 for this deal");
+    // The old credit-first wording is gone.
+    expect(screen.queryByText(/Unlock this deal — 1 credit/)).toBeNull();
   });
 
   // The tier/discount bar moved to the CONFIRM screen only (BACKLOG-2086 follow-up,
@@ -129,7 +130,7 @@ describe("ExportUnlockPrompt — CTA per state", () => {
     const btn = await screen.findByTestId("unlock-with-credit");
     expect(btn).toHaveTextContent("Unlock with 1 credit");
     // The credit balance is surfaced in the footnote, not the button.
-    expect(screen.getByText(/You have 2 credits · Reading is always free/)).toBeInTheDocument();
+    expect(screen.getByTestId("solo-credit-count")).toHaveTextContent("You have 2 credits");
     // The PAYG purchase button is NOT shown when credits are available.
     expect(screen.queryByTestId("unlock-purchase")).toBeNull();
   });
@@ -146,7 +147,7 @@ describe("ExportUnlockPrompt — CTA per state", () => {
     await screen.findByTestId("unlock-with-credit");
     expect(screen.queryByTestId("unlock-tier-progress")).toBeNull();
     // The credit-holder just sees the "You have N credits" footnote.
-    expect(screen.getByText(/You have 2 credits · Reading is always free/)).toBeInTheDocument();
+    expect(screen.getByTestId("solo-credit-count")).toHaveTextContent("You have 2 credits");
   });
 
   it("offline / no quote ⇒ disabled 'online required' (fail-closed, never a free export)", async () => {

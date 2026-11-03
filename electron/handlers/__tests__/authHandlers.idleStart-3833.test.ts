@@ -17,6 +17,9 @@ jest.mock("../../services/supabaseService", () => ({ __esModule: true, default: 
 jest.mock("../../services/auditService", () => ({ __esModule: true, default: {} }));
 jest.mock("../../services/logService", () => ({ __esModule: true, default: {} }));
 jest.mock("../../services/supportAccess", () => ({ getSupportAccess: jest.fn() }));
+jest.mock("../../services/iPhoneSyncStorageService", () => ({
+  iPhoneSyncStorageService: { recoverInterruptedSessions: jest.fn() },
+}));
 
 import fs from "fs";
 import path from "path";

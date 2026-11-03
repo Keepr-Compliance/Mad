@@ -7,6 +7,9 @@ import { buildIphoneSyncReport } from '@/lib/reports/iphone-sync';
 import { REPORTS_BASE_PATH } from '@/lib/reports/registry';
 import { resolvePeriod } from '@/lib/reports/period';
 import { parseClientState, type ParamRecord } from '@/lib/reports/report-url';
+import { IPHONE_SYNC_URL_KEYS } from '@/lib/reports/default-view';
+import { resolveInitialSavedView } from '@/lib/reports/initial-saved-view';
+import { parseSavedViews, REPORT_KEY } from '@/lib/reports/report-views';
 import { IphoneSyncReportClient } from './IphoneSyncReportClient';
 
 export const dynamic = 'force-dynamic';
@@ -54,15 +57,30 @@ export default async function IphoneSyncReportPage({
   }
 
   const params = await searchParams;
-  const period = resolvePeriod(
-    {
-      period: typeof params.period === 'string' ? params.period : undefined,
-      from: typeof params.from === 'string' ? params.from : undefined,
-      to: typeof params.to === 'string' ? params.to : undefined,
+  // A bare URL opens the user's default view: its filters and its time range.
+  // Any period or filter key in the URL wins, and the views are not read here
+  // at all (BACKLOG-4084).
+  const { initialView, periodInput } = await resolveInitialSavedView({
+    params,
+    reportKeys: IPHONE_SYNC_URL_KEYS,
+    parse: parseSavedViews,
+    listViews: async () => {
+      const { data, error } = await supabase.rpc('report_list_saved_views', {
+        p_report_key: REPORT_KEY,
+      });
+      if (error) {
+        // The message names the stage only; the error text can carry user data.
+        console.error('[iphone-sync] saved views read failed; opening without a default view');
+        throw error;
+      }
+      return data;
     },
-    new Date()
-  );
-  const initialState = parseClientState(params);
+  });
+  const period = resolvePeriod(periodInput, new Date());
+  const fromUrl = parseClientState(params);
+  const initialState = initialView
+    ? { ...fromUrl, filters: initialView.filters, stalledOnly: initialView.stalledOnly }
+    : fromUrl;
 
   const { rows, users, failed, truncated } = await getIphoneSyncRuns(supabase, period);
   const report = buildIphoneSyncReport(rows, users);

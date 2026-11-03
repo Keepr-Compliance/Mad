@@ -33,9 +33,9 @@ describe('buildPeriodUrl', () => {
     expect(params.get('stalled')).toBe('1');
   });
 
-  it('omits the param entirely for the default period', () => {
+  it('writes the default period too, so a bare URL can open the default view (BACKLOG-4084)', () => {
     const params = new URLSearchParams(buildPeriodUrl(current, 'week').slice(1));
-    expect(params.has('period')).toBe(false);
+    expect(params.get('period')).toBe('week');
     expect(params.get('type')).toBe('first');
   });
 

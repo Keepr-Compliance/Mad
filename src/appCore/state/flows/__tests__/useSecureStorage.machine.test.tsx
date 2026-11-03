@@ -65,26 +65,31 @@ const defaultOptions = {
 // Test states
 const loadingCheckingStorage: LoadingState = {
   status: "loading",
+  database: "unknown",
   phase: "checking-storage",
 };
 
 const loadingInitializingDb: LoadingState = {
   status: "loading",
+  database: "unknown",
   phase: "initializing-db",
 };
 
 const loadingAuth: LoadingState = {
   status: "loading",
+  database: "initialized",
   phase: "loading-auth",
 };
 
 const loadingUserData: LoadingState = {
   status: "loading",
+  database: "initialized",
   phase: "loading-user-data",
 };
 
 const readyState: ReadyState = {
   status: "ready",
+  database: "initialized",
   user: { id: "test", email: "test@example.com" },
   platform: { isMacOS: true, isWindows: false, hasIPhone: true },
   userData: {
@@ -99,6 +104,7 @@ const readyState: ReadyState = {
 
 const onboardingState: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "phone-type",
   user: { id: "test", email: "test@example.com" },
   platform: { isMacOS: true, isWindows: false, hasIPhone: false },

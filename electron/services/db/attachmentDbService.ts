@@ -13,6 +13,11 @@ import { ensureDb, dbTransaction } from "./core/dbConnection";
 // (BACKLOG-3730). That windowed fetch uses this bound.
 import { auditWindowEnd } from "../exportPlan";
 import { selectTextAttachmentsForTransaction } from "./textAttachmentLookupSql";
+import {
+  CAS_ATTACHMENT_OCR_RESULT_SQL,
+  SELECT_ATTACHMENT_OCR_ROW_SQL,
+  SET_ATTACHMENT_TEXT_IF_NULL_SQL,
+} from "./attachmentTextExtractionSql";
 
 // ============================================
 // ATTACHMENT CRUD OPERATIONS
@@ -331,9 +336,44 @@ export function setEmailAttachmentStorage(
  * is what the backfill/eligibility guards key on — so writing "" removes a no-text
  * row from the pending set and keeps re-runs idempotent.
  */
-export function setAttachmentTextContent(id: string, text: string): void {
+export function setAttachmentTextContent(id: string, text: string): number {
   const db = ensureDb();
-  db.prepare(`UPDATE attachments SET text_content = ? WHERE id = ?`).run(text, id);
+  // BACKLOG-3943 (SR plan review R2): fill-only. Every caller intends NULL -> value;
+  // the predicate stops a stale backfill pass (which selected the row while it was
+  // NULL) from overwriting text a later pass stored in the meantime. Returns the
+  // number of rows written (0 = the row already had a value).
+  return db.prepare(SET_ATTACHMENT_TEXT_IF_NULL_SQL).run(text, id).changes;
+}
+
+/** BACKLOG-3943: the fields the OCR pass reads before it starts. */
+export interface AttachmentOcrRow {
+  storage_path: string | null;
+  mime_type: string | null;
+  text_content: string | null;
+  analysis_metadata: string | null;
+}
+
+/** BACKLOG-3943: read one attachment's OCR-relevant fields by id. */
+export function getAttachmentOcrRow(id: string): AttachmentOcrRow | undefined {
+  const db = ensureDb();
+  return db.prepare(SELECT_ATTACHMENT_OCR_ROW_SQL).get(id) as AttachmentOcrRow | undefined;
+}
+
+/**
+ * BACKLOG-3943 (SR plan review R1): write the OCR result only if the row is still as
+ * the OCR pass read it (text_content "" and the same analysis_metadata). Returns the
+ * number of rows written; 0 means the row changed while OCR ran and nothing was written.
+ */
+export function compareAndSetAttachmentOcrResult(
+  id: string,
+  text: string,
+  metadataJson: string,
+  expectedMetadata: string | null
+): number {
+  const db = ensureDb();
+  return db
+    .prepare(CAS_ATTACHMENT_OCR_RESULT_SQL)
+    .run(text, metadataJson, id, expectedMetadata).changes;
 }
 
 /**

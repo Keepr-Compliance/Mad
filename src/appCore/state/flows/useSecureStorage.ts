@@ -18,10 +18,10 @@
  * This hook derives all state from the state machine.
  * The LoadingOrchestrator handles actual initialization.
  *
- * BACKLOG-3253 deleted the first-run-macOS deferral, so `deferredDbInit` is no
- * longer produced anywhere and `initializeSecureStorage()` always takes its
- * "already initialized" return. The deferred branch is kept, inert, until the
- * flag itself is removed (see the follow-up noted on BACKLOG-3253).
+ * BACKLOG-3321: `initializeSecureStorage()` opens the database when the
+ * machine is in onboarding and has not recorded the database open -- an
+ * account that signed in on the pre-auth route that keeps it closed. In every
+ * other state it returns true without calling main.
  *
  * Requires the state machine feature flag to be enabled.
  * If disabled, throws an error - legacy code paths have been removed.
@@ -39,7 +39,6 @@ import {
   selectIsDatabaseInitialized,
   selectIsCheckingSecureStorage,
   selectIsInitializingDatabase,
-  selectIsDeferredDbInit,
 } from "../machine";
 import logger from '../../../utils/logger';
 
@@ -105,17 +104,18 @@ export function useSecureStorage(
 
   const { dispatch } = machineState;
 
-  // Check if DB init was deferred (first-time macOS users)
-  // Use the dedicated selector for accurate detection
-  const isDeferredDbInit = selectIsDeferredDbInit(state);
+  // BACKLOG-3321: the secure-storage Continue opens the database when the
+  // machine has NOT recorded it open during onboarding -- the account signed in
+  // on the pre-auth route that keeps the database closed. The status guard
+  // matters: in `loading/initializing-db` the LoadingOrchestrator owns the open.
+  const needsDatabaseOpen =
+    state.status === "onboarding" && !isDatabaseInitialized;
 
-  // initializeSecureStorage: triggers DB init for first-time macOS users
+  // initializeSecureStorage: opens the database when it is not yet open.
   // After DB init succeeds, syncs any queued data (like phone type) to the database
   const initializeSecureStorage = useCallback(
     async (): Promise<boolean> => {
-      // For first-time macOS users with deferred DB init, trigger it now
-      // This is the point where the user has been informed about the Keychain prompt
-      if (isDeferredDbInit) {
+      if (needsDatabaseOpen) {
         try {
           dispatch({ type: "DB_INIT_STARTED" });
 
@@ -155,10 +155,10 @@ export function useSecureStorage(
         }
       }
 
-      // For returning users or Windows, DB is already initialized
+      // The database is already open (or the orchestrator is opening it)
       return true;
     },
-    [dispatch, isDeferredDbInit, state]
+    [dispatch, needsDatabaseOpen, state]
   );
 
   return {

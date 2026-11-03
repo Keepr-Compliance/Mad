@@ -14,6 +14,7 @@ import { cn } from '../../lib/cn';
  * when each filter needs its current value visible.
  *
  * Consumer: BACKLOG-3904 (broker submissions).
+ * Forwards its ref to the button, so a BottomSheet can take it as `returnFocusRef`.
  */
 export interface FilterSelectButtonProps {
   /** Top line, e.g. "Status". */
@@ -28,16 +29,13 @@ export interface FilterSelectButtonProps {
   className?: string;
 }
 
-export function FilterSelectButton({
-  label,
-  value,
-  onClick,
-  expanded = false,
-  active = false,
-  className,
-}: FilterSelectButtonProps) {
+export const FilterSelectButton = React.forwardRef<HTMLButtonElement, FilterSelectButtonProps>(function FilterSelectButton(
+  { label, value, onClick, expanded = false, active = false, className },
+  ref
+) {
   return (
     <button
+      ref={ref}
       type="button"
       onClick={onClick}
       aria-haspopup="dialog"
@@ -59,4 +57,4 @@ export function FilterSelectButton({
       <ChevronDown className="h-4 w-4 shrink-0 text-gray-500" aria-hidden="true" />
     </button>
   );
-}
+});

@@ -463,7 +463,9 @@ describe("BACKLOG-3403 — a complete submission", () => {
     const order = cloud.calls
       .filter((c) => (c.kind === "from" && c.op === "insert") || c.kind === "upload" || (c.kind === "rpc" && c.fn !== "record_submission_attempt"))
       .map((c) => c.table ?? c.fn ?? c.kind);
+    // BACKLOG-3968: the text-link capability is asked during the gather, before anything is written.
     expect(order).toEqual([
+      "submission_checklist_capabilities",
       "transaction_submissions", "submission_messages", "submission_attachments",
       "upload", "upload", "snapshot_submission_checklists", "finalize_submission",
     ]);

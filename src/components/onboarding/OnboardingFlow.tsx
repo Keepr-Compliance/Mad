@@ -25,7 +25,6 @@ import { logAllFlags, logStateChange } from "../../appCore/state/machine/debug";
 import type { AppStateMachine } from "../../appCore/state/types";
 import type { StepAction } from "./types";
 import logger from '../../utils/logger';
-import * as Sentry from '@sentry/electron/renderer';
 import { reportDriverStillMissingAtCompletion } from './sentryOnboarding';
 import { usePlatform } from '../../contexts/PlatformContext';
 import { useIPhoneSyncEnabled } from '../../contexts/IPhoneSyncContext';
@@ -195,12 +194,10 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
   // cannot reach it — so the re-gate is issued here, where the answer arrives.
   const { applyImportSource } = useIPhoneSyncEnabled();
 
-  // Track if we're waiting for DB init to complete after clicking Continue on secure-storage.
-  // Event-driven: subscribes to onInitStage events instead of polling.
+  // Set when Continue on secure-storage starts opening the database. Drives the
+  // step's spinner only; the spinner also ends once the machine records the
+  // database open (BACKLOG-3321), so nothing else needs to clear this flag.
   const [waitingForDbInit, setWaitingForDbInit] = useState(false);
-
-  // Tracks the actual DB init status confirmed by init stage events.
-  const [dbInitConfirmed, setDbInitConfirmed] = useState(false);
 
   // Track if user has been verified in local DB (set by account-verification step).
   // BACKLOG-1842: seeded true when resuming from the cloud marker — the user
@@ -214,9 +211,6 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
   // Track if user explicitly skipped email connection or driver setup
   const [emailSkipped, setEmailSkipped] = useState(false);
   const [driverSkipped, setDriverSkipped] = useState(false);
-
-  // Ref guard to prevent duplicate init stage subscriptions (per LoadingOrchestrator pattern)
-  const initStageSubscribedRef = useRef(false);
 
   // BACKLOG-1842 (resume-at-step fix round): seed the reducer's
   // selectedPhoneType from the resume bundle so phone-type's context-driven
@@ -240,11 +234,9 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
   const appState: OnboardingAppState = useMemo(() => {
     if (machineState) {
       const { state } = machineState;
-      const selectorSaysDbInit = selectIsDatabaseInitialized(state);
-      // Simplified: the state machine now receives init stage events and only sets
-      // isDatabaseInitialized after 'db-ready' or 'complete'. For deferred-DB-init
-      // (first-time macOS), we gate on dbInitConfirmed from event subscription.
-      const isDatabaseInitialized = selectorSaysDbInit && (!waitingForDbInit || dbInitConfirmed);
+      // BACKLOG-3321: the machine records whether the database is open
+      // (DB_INIT_COMPLETE); that recorded fact is the only source.
+      const isDatabaseInitialized = selectIsDatabaseInitialized(state);
       const emailConnected = selectHasEmailConnectedNullable(state);
       const hasPermissions = selectHasPermissionsNullable(state);
 
@@ -314,7 +306,7 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
       driverSkipped,
       isResumedFromFdaRelaunch: resumeBundle.isResuming,
     };
-  }, [machineState, app, isUserVerifiedInLocalDb, emailSkipped, driverSkipped, waitingForDbInit, dbInitConfirmed, resumeBundle]);
+  }, [machineState, app, isUserVerifiedInLocalDb, emailSkipped, driverSkipped, resumeBundle]);
 
   // Action handler that maps StepActions to existing app handlers
   const handleAction = useCallback(
@@ -603,91 +595,6 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
     isViewingPastStep,
   } = queue;
 
-  // Event-driven DB init confirmation (BACKLOG-1383).
-  // Subscribes to onInitStage events instead of polling system:is-database-initialized.
-  // When 'complete' event arrives, confirms DB is ready and unblocks the queue.
-  useEffect(() => {
-    if (!waitingForDbInit) return;
-
-    // Guard against duplicate subscriptions
-    if (initStageSubscribedRef.current) return;
-
-    // First, check current stage in case init already completed
-    const checkCurrentStage = async () => {
-      try {
-        const currentStage = await window.api?.system?.getInitStage?.();
-        if (currentStage && (currentStage.stage === 'complete' || currentStage.stage === 'db-ready')) {
-          logStateChange('OnboardingFlow', 'DB_INIT_CONFIRMED by current init stage', { stage: currentStage.stage });
-          Sentry.addBreadcrumb({
-            category: 'onboarding.init',
-            message: `DB init already complete on check: ${currentStage.stage}`,
-            level: 'info',
-          });
-          setDbInitConfirmed(true);
-          setWaitingForDbInit(false);
-          return true; // Already complete, no need to subscribe
-        }
-      } catch {
-        // getInitStage may not be available — fall through to subscription
-      }
-      return false;
-    };
-
-    let cancelled = false;
-
-    checkCurrentStage().then((alreadyComplete) => {
-      if (cancelled || alreadyComplete) return;
-
-      // Subscribe to init stage events
-      if (!window.api?.system?.onInitStage) {
-        // Fallback: if onInitStage not available, use legacy polling once
-        logger.warn('[OnboardingFlow] onInitStage not available, falling back to isDatabaseInitialized check');
-        window.api?.system?.isDatabaseInitialized?.().then((ready) => {
-          if (ready && !cancelled) {
-            logStateChange('OnboardingFlow', 'DB_INIT_CONFIRMED by legacy check', {});
-            setDbInitConfirmed(true);
-            setWaitingForDbInit(false);
-          }
-        }).catch(() => { /* ignore */ });
-        return;
-      }
-
-      initStageSubscribedRef.current = true;
-
-      const unsubscribe = window.api.system.onInitStage((event) => {
-        if (cancelled) return;
-
-        Sentry.addBreadcrumb({
-          category: 'onboarding.init',
-          message: `Init stage received during onboarding: ${event.stage}`,
-          level: 'info',
-          data: { stage: event.stage, message: event.message },
-        });
-
-        if (event.stage === 'complete' || event.stage === 'db-ready') {
-          logStateChange('OnboardingFlow', 'DB_INIT_CONFIRMED by init stage event', { stage: event.stage });
-          setDbInitConfirmed(true);
-          setWaitingForDbInit(false);
-        }
-      });
-
-      // Store cleanup for the effect's return
-      cleanupRef.current = () => {
-        unsubscribe();
-        initStageSubscribedRef.current = false;
-      };
-    });
-
-    // Mutable ref to hold the event unsubscribe cleanup
-    const cleanupRef = { current: () => {} };
-
-    return () => {
-      cancelled = true;
-      cleanupRef.current();
-      initStageSubscribedRef.current = false;
-    };
-  }, [waitingForDbInit]);
-
   // When queue reports complete but state machine is still in onboarding,
   // trigger completion. BACKLOG-3673: this path is load-bearing -- a queue that
   // is already complete at mount (every answer seeded) or whose last step
@@ -739,7 +646,11 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
         key={activeStep.meta.id}
         context={context}
         onAction={queueHandleAction}
-        isLoading={activeStep.meta.id === 'secure-storage' && waitingForDbInit}
+        isLoading={
+          activeStep.meta.id === 'secure-storage' &&
+          waitingForDbInit &&
+          !appState.isDatabaseInitialized
+        }
       />
     </OnboardingShell>
   );

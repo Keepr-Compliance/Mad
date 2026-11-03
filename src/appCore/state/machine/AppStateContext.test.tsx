@@ -57,6 +57,7 @@ const mockUserData: UserData = {
 
 const mockReadyState: ReadyState = {
   status: "ready",
+  database: "initialized",
   user: mockUser,
   platform: mockPlatform,
   userData: mockUserData,
@@ -64,6 +65,7 @@ const mockReadyState: ReadyState = {
 
 const mockOnboardingState: OnboardingState = {
   status: "onboarding",
+  database: "initialized",
   step: "phone-type",
   user: mockUser,
   platform: mockPlatform,
@@ -78,6 +80,7 @@ const mockErrorState: ErrorState = {
 
 const mockLoadingState: LoadingState = {
   status: "loading",
+  database: "unknown",
   phase: "initializing-db",
 };
 
@@ -206,7 +209,7 @@ describe("AppStateProvider", () => {
 
     it("derives null currentUser for unauthenticated state", () => {
       render(
-        <AppStateProvider initialState={{ status: "unauthenticated" }}>
+        <AppStateProvider initialState={{ status: "unauthenticated", database: "initialized" }}>
           <StateDisplay />
         </AppStateProvider>
       );
@@ -449,7 +452,7 @@ describe("selector hooks", () => {
 
     it("returns null when no user", () => {
       render(
-        <AppStateProvider initialState={{ status: "unauthenticated" }}>
+        <AppStateProvider initialState={{ status: "unauthenticated", database: "initialized" }}>
           <UserDisplay />
         </AppStateProvider>
       );

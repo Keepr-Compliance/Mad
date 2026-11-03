@@ -6,6 +6,7 @@
 import { ipcMain, IpcMainInvokeEvent, shell } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import type { User } from "../types/models";
+import { getSignInGeneration, isSignInAwaitingSessionWrite } from "../services/signInState";
 
 // Import services
 import databaseService from "../services/databaseService";
@@ -783,6 +784,7 @@ export function buildSupabaseFallbackUserResponse(supaUser: {
 
 async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
   try {
+    const signInGenerationAtEntry = getSignInGeneration();
     // Check if database is initialized first.
     // BACKLOG-2149: Under memory pressure the OAuth callback can outrun
     // DatabaseService.initialize(). Rather than immediately falling back /
@@ -810,6 +812,22 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
       }
       // else: DB became ready during the wait — fall through to the normal
       // local-session validation path below.
+    }
+
+    // BACKLOG-3555: session.json still describes a PREVIOUS session when a
+    // deep-link sign-in landed during the wait, or its session is not written
+    // yet (the window runs from the database being set to the deferred
+    // persist, so a call that never parked is covered too). Touch nothing: no
+    // restore, no clear, no user-id migration.
+    if (
+      getSignInGeneration() !== signInGenerationAtEntry ||
+      isSignInAwaitingSessionWrite()
+    ) {
+      await logService.info(
+        "Sign-in session not written yet; skipping the saved-session check",
+        "SessionHandlers"
+      );
+      return { success: false, error: "Superseded by a new sign-in" };
     }
 
     const session = await sessionService.loadSession();

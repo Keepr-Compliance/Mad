@@ -397,7 +397,8 @@ describe("renderer Sentry call-site guard", () => {
 
   it("scans a non-trivial tree (positive control)", () => {
     expect(sourceFiles().length).toBeGreaterThan(500);
-    expect(tree.breadcrumbSites).toBeGreaterThanOrEqual(28);
+    // 26 since BACKLOG-3321 PR-B took out OnboardingFlow's two init-stage breadcrumbs.
+    expect(tree.breadcrumbSites).toBeGreaterThanOrEqual(26);
   });
 
   it("(a, b, d, e) finds no call site outside the allow-list", () => {

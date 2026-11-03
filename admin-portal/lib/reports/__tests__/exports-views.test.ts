@@ -78,3 +78,18 @@ describe('card value', () => {
     expect(exportCardValue(events, view('users'))).toBe(4);
   });
 });
+
+describe('is_default on an Exports view (BACKLOG-4084)', () => {
+  it('true only for a row that says true; missing or non-boolean is false', () => {
+    const views = parseExportSavedViews([
+      { id: 'a', name: 'A', filters: {}, metric: { col: 'exports', fn: 'count' }, pinned: false, is_default: true },
+      { id: 'b', name: 'B', filters: {}, metric: { col: 'exports', fn: 'count' }, pinned: false },
+      { id: 'c', name: 'C', filters: {}, metric: { col: 'exports', fn: 'count' }, pinned: false, is_default: 1 },
+    ]);
+    expect(views.map((v) => [v.id, v.isDefault])).toEqual([
+      ['a', true],
+      ['b', false],
+      ['c', false],
+    ]);
+  });
+});

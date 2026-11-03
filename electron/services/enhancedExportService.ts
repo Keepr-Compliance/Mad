@@ -35,6 +35,13 @@ function auditClosingDayLabel(closedAt: string): string {
 }
 // BACKLOG-3367: every format states what the export left out.
 import { exportNoticeLines, type ExportOmissionDetail } from "./exportNotices";
+import type { ChecklistExportData } from "./folderExport/checklistExportHelpers";
+import type { ChecklistDetail, ChecklistExportTargets } from "../types/checklist";
+
+/** BACKLOG-3767: what the handler reads; the content selection comes from the plan. */
+export interface ChecklistExportInput extends ChecklistExportTargets {
+  checklists: ChecklistDetail[];
+}
 // BACKLOG-2805: mirrors src/constants/transactionTypes.ts (electron cannot
 // import from src/). Keep the two in step.
 import { getTransactionTypeLabel } from "../constants/transactionTypeLabels";
@@ -61,6 +68,11 @@ interface ExportRenderOptions {
   exportFormat?: "pdf" | "excel" | "csv" | "json" | "txt_eml";
   /** If true, only export summary + indexes (no full content, no attachments). */
   summaryOnly?: boolean;
+  /**
+   * BACKLOG-3767: the transaction's local checklists, read by the handler.
+   * Absent = no checklist block. Only the PDF formats render it.
+   */
+  checklist?: ChecklistExportInput;
 }
 
 class EnhancedExportService {
@@ -78,7 +90,7 @@ class EnhancedExportService {
     plan: ExportPlan,
     options: ExportRenderOptions = {},
   ): Promise<string> {
-    const { exportFormat = "pdf", summaryOnly = false } = options;
+    const { exportFormat = "pdf", summaryOnly = false, checklist } = options;
 
     try {
       logService.info("[Enhanced Export] Starting export:", "EnhancedExport", {
@@ -125,6 +137,13 @@ class EnhancedExportService {
             filteredComms,
             omissions,
             summaryOnly,
+            checklist
+              ? {
+                  ...checklist,
+                  includeEmails: plan.includeEmails,
+                  includeTexts: plan.includeTexts,
+                }
+              : undefined,
           );
           break;
         case "excel":
@@ -169,6 +188,7 @@ class EnhancedExportService {
     // omits the omissions from either (SR required change 2).
     omissions: ExportOmissionDetail,
     summaryOnly: boolean = false,
+    checklist?: ChecklistExportData,
   ): Promise<string> {
     const downloadsPath = app.getPath("downloads");
     // BACKLOG-2771: one flag, resolved once. It already folds in `summaryOnly`
@@ -227,6 +247,8 @@ class EnhancedExportService {
         pdfPath,
         { ...omissions, filesNotIncluded },
         summaryOnly,
+        "thread",
+        { checklist },
       );
 
       return folderPath;
@@ -244,6 +266,8 @@ class EnhancedExportService {
         outputPath,
         omissions,
         summaryOnly,
+        "thread",
+        { checklist },
       );
     }
   }

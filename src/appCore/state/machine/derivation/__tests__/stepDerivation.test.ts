@@ -45,11 +45,13 @@ const createWindowsPlatform = (): PlatformInfo => ({
 
 const createLoadingState = (): LoadingState => ({
   status: "loading",
+  database: "unknown",
   phase: "checking-storage",
 });
 
 const createUnauthenticatedState = (): UnauthenticatedState => ({
   status: "unauthenticated",
+  database: "initialized",
 });
 
 const createOnboardingState = (
@@ -58,6 +60,7 @@ const createOnboardingState = (
   completedSteps: OnboardingStep[] = []
 ): OnboardingState => ({
   status: "onboarding",
+  database: "initialized",
   step,
   user: { id: "user-1", email: "test@example.com" },
   platform,
@@ -68,6 +71,7 @@ const createReadyState = (
   platform: PlatformInfo = createMacOSPlatform()
 ): ReadyState => ({
   status: "ready",
+  database: "initialized",
   user: { id: "user-1", email: "test@example.com" },
   platform,
   userData: {

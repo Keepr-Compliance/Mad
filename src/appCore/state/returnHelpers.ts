@@ -92,6 +92,7 @@ interface ModalFlowReturn {
   closeProfile: () => void;
   openSettings: (scrollTarget?: string) => void;
   closeSettings: () => void;
+  clearSettingsTarget: () => void;
   openTransactions: () => void;
   closeTransactions: () => void;
   openContacts: () => void;
@@ -274,6 +275,7 @@ export function constructModalTransitions(
   | "closeProfile"
   | "openSettings"
   | "closeSettings"
+  | "clearSettingsTarget"
   | "openTransactions"
   | "closeTransactions"
   | "openContacts"
@@ -296,6 +298,7 @@ export function constructModalTransitions(
     closeProfile: modal.closeProfile,
     openSettings: modal.openSettings,
     closeSettings: modal.closeSettings,
+    clearSettingsTarget: modal.clearSettingsTarget,
     openTransactions: modal.openTransactions,
     closeTransactions: modal.closeTransactions,
     openContacts: modal.openContacts,

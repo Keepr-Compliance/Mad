@@ -76,6 +76,9 @@ function createSchema(database: DatabaseType): void {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
     );
+    -- BACKLOG-3968 PR-4b: the force set spares checklist text members, so it
+    -- reads this table (present on every migrated database).
+    CREATE TABLE transaction_checklist_link_members (id TEXT PRIMARY KEY, message_id TEXT);
     CREATE TABLE attachments (
       id TEXT PRIMARY KEY,
       message_id TEXT,

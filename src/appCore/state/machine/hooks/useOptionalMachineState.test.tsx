@@ -74,6 +74,7 @@ describe("useOptionalMachineState", () => {
     it("returns correct state from provider", () => {
       const initialState: AppState = {
         status: "ready",
+        database: "initialized",
         user: { id: "test-id", email: "test@example.com" },
         platform: { isMacOS: true, isWindows: false, hasIPhone: true },
         userData: {

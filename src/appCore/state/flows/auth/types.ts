@@ -41,11 +41,6 @@ export interface UseAuthFlowOptions {
   clearTermsRequirement: () => void;
   isAuthenticated: boolean;
   /**
-   * Whether the local database is initialized.
-   * When false, terms acceptance uses Supabase directly (no local DB write).
-   */
-  isDatabaseInitialized: boolean;
-  /**
    * Current user ID (from AuthContext).
    * Used for terms acceptance when DB is not initialized.
    */

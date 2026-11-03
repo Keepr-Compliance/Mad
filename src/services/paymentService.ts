@@ -12,17 +12,22 @@
 
 import type {
   BeginCheckoutResult,
+  BeginSubscriptionResult,
   ChargeResult,
+  GateReadResult,
   PaymentConfirmResult,
   SavedCardStatus,
 } from "../../electron/types/payment";
 
 export type {
   BeginCheckoutResult,
+  BeginSubscriptionResult,
   ChargeResult,
   ChargeOutcome,
+  GateReadResult,
   PaymentConfirmResult,
   SavedCardStatus,
+  SubscriptionRefusalCode,
 } from "../../electron/types/payment";
 
 export const paymentService = {
@@ -76,6 +81,39 @@ export const paymentService = {
       return await window.api.payment.hasSavedCard();
     } catch {
       return { hasSavedCard: false };
+    }
+  },
+
+  /**
+   * BACKLOG-3676: open the Agent plan Stripe Checkout. A thrown/absent bridge
+   * reads as "try_again", never as started.
+   */
+  async beginSubscription(): Promise<BeginSubscriptionResult> {
+    try {
+      if (!window.api?.payment?.beginSubscription) return { started: false, code: "try_again" };
+      return await window.api.payment.beginSubscription();
+    } catch {
+      return { started: false, code: "try_again" };
+    }
+  },
+
+  /** BACKLOG-3676: confirm the Agent plan after the browser return (fail-closed). */
+  async confirmSubscription(localTransactionId: string): Promise<PaymentConfirmResult> {
+    try {
+      if (!window.api?.payment?.confirmSubscription) return { unlocked: false, reason: "error" };
+      return await window.api.payment.confirmSubscription(localTransactionId);
+    } catch {
+      return { unlocked: false, reason: "error" };
+    }
+  },
+
+  /** BACKLOG-3676: one fresh gate read ("Try again"). Fail-closed. */
+  async refreshGate(localTransactionId: string): Promise<GateReadResult> {
+    try {
+      if (!window.api?.payment?.refreshGate) return { unlocked: false };
+      return await window.api.payment.refreshGate(localTransactionId);
+    } catch {
+      return { unlocked: false };
     }
   },
 

@@ -15,7 +15,12 @@ import React from "react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { ChecklistLinkChip } from "../ChecklistLinkChip";
-import { fixtureAttachments, fixtureDetail, fixtureEmailCommunications } from "./checklistFixture";
+import {
+  fixtureAttachments,
+  fixtureChecklist,
+  fixtureDetail,
+  fixtureEmailCommunications,
+} from "./checklistFixture";
 import { linkableThreads } from "../../../utils/checklistLinks";
 
 const detail = fixtureDetail();
@@ -121,5 +126,105 @@ describe("ChecklistLinkChip (BACKLOG-3476)", () => {
     renderChip(1, { readOnly: true });
     expect(screen.queryByTestId("checklist-link-remove")).not.toBeInTheDocument();
     expect(screen.getByTestId("checklist-link-view")).toBeInTheDocument();
+  });
+});
+
+describe("ChecklistLinkChip — a text group (BACKLOG-3968 PR-4b)", () => {
+  // The producer-written text group: the fixture's second checklist, second item.
+  const second = fixtureChecklist(1);
+  const textLink = second.linksByItemId[second.items[1].id][0];
+
+  function renderText(
+    link = textLink,
+    {
+      textContactNames,
+      onViewText,
+    }: { textContactNames?: ReadonlyMap<string, string>; onViewText?: (l: typeof textLink) => void } = {},
+  ) {
+    const onViewThread = jest.fn().mockResolvedValue(undefined);
+    const onRemove = jest.fn().mockResolvedValue(undefined);
+    render(
+      <ChecklistLinkChip
+        link={link}
+        attachmentsById={allAttachmentsById}
+        threads={threads}
+        readOnly={false}
+        onViewAttachment={jest.fn()}
+        downloadingAttachmentId={null}
+        onViewThread={onViewThread}
+        onRemove={onRemove}
+        textContactNames={textContactNames}
+        onViewText={onViewText}
+      />,
+    );
+    return { onViewThread, onRemove, chip: screen.getByTestId(`checklist-link-${link.id}`) };
+  }
+
+  it("the fixture really holds a live text group of one text (precondition)", () => {
+    expect(textLink.kind).toBe("text");
+    expect(textLink.members.map((m) => [m.kind, m.messageId, m.emailId, m.inTransaction])).toEqual([
+      ["text", "m-1", null, true],
+    ]);
+  });
+
+  it("reads as texts, not as an email thread: text icon, main's label, a text count, no Thread badge, no View", () => {
+    const { chip, onViewThread } = renderText();
+    expect(screen.getByTestId("checklist-link-text-icon")).toBeInTheDocument();
+    expect(chip).toHaveTextContent(textLink.label);
+    expect(textLink.label).toMatch(/^Text · /);
+    expect(chip).toHaveTextContent("1 text");
+    expect(chip).not.toHaveTextContent(/email/i);
+    expect(chip).not.toHaveTextContent("Thread");
+    // No text viewer is wired yet (U2): no View to press, and never the email thread.
+    expect(screen.queryByTestId("checklist-link-view")).not.toBeInTheDocument();
+    expect(onViewThread).not.toHaveBeenCalled();
+  });
+
+  it("names the conversation's contact when the tab knows it (U2: the mock's 'Text · <name>' over '<date> · N texts')", () => {
+    const { chip } = renderText(textLink, { textContactNames: new Map([["m-1", "Probe Seller"]]) });
+    const date = textLink.label.replace(/^Text · /, "");
+    expect(date).not.toBe(textLink.label);
+    expect(chip).toHaveTextContent(`Text · Probe Seller`);
+    expect(chip).toHaveTextContent(`${date} · 1 text`);
+    // The persisted label is not repeated as the title once the name is known.
+    expect(chip).not.toHaveTextContent(textLink.label);
+  });
+
+  it("U2: the text icon is the green TXT mark (kit success token), not the email avatar", () => {
+    renderText();
+    const icon = screen.getByTestId("checklist-link-text-icon");
+    expect(icon).toHaveTextContent("TXT");
+    expect(icon.className).toMatch(/\bbg-success-50\b/);
+    expect(icon.className).toMatch(/\btext-success-700\b/);
+  });
+
+  it("U2: View opens the text group's conversation, never the email thread", () => {
+    const onViewText = jest.fn();
+    const { onViewThread } = renderText(textLink, { onViewText });
+    fireEvent.click(screen.getByTestId("checklist-link-view"));
+    expect(onViewText).toHaveBeenCalledWith(textLink);
+    expect(onViewThread).not.toHaveBeenCalled();
+  });
+
+  it("U2: a stale text group offers no View", () => {
+    const stale = { ...textLink, members: textLink.members.map((m) => ({ ...m, inTransaction: false })) };
+    renderText(stale, { onViewText: jest.fn() });
+    expect(screen.queryByTestId("checklist-link-view")).not.toBeInTheDocument();
+  });
+
+  it("a text no longer on the deal reads stale", () => {
+    const stale = { ...textLink, members: textLink.members.map((m) => ({ ...m, inTransaction: false })) };
+    const { chip } = renderText(stale);
+    expect(chip).toHaveAttribute("data-stale", "true");
+    expect(chip).toHaveTextContent("No longer on this transaction");
+  });
+
+  it("can be removed like any group", async () => {
+    const { onRemove } = renderText();
+    fireEvent.click(screen.getByTestId("checklist-link-remove"));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("checklist-link-remove-confirm"));
+    });
+    expect(onRemove).toHaveBeenCalledWith(textLink.id);
   });
 });

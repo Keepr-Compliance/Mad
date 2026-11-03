@@ -69,7 +69,7 @@ const declinedFdaMidOnboarding: UserData = {
   setup: "not-finished",
 };
 
-const loading: LoadingState = { status: "loading", phase: "loading-user-data" };
+const loading: LoadingState = { status: "loading", database: "initialized", phase: "loading-user-data" };
 
 function load(data: UserData, platform: PlatformInfo = macOS): AppState {
   return appStateReducer(loading, { type: "USER_DATA_LOADED", data, user: mockUser, platform });
@@ -204,6 +204,7 @@ describe("BACKLOG-3275 — a declined permission is never reported as granted", 
 describe("BACKLOG-3275 — only an observed capability may report `granted`", () => {
   const onboardingMacOS: OnboardingState = {
     status: "onboarding",
+    database: "initialized",
     step: "permissions",
     user: mockUser,
     platform: macOS,

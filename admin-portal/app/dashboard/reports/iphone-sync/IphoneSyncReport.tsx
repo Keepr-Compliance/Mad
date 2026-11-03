@@ -18,6 +18,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
+import { SavedViews } from '@keepr/ui';
 import type { IphoneSyncReportModel } from '@/lib/reports/iphone-sync';
 import type { PeriodRange } from '@/lib/reports/period';
 import {
@@ -42,18 +43,27 @@ import {
 } from '@/lib/reports/report-url';
 import {
   cardValue,
+  FALLBACK_METRIC,
+  functionsFor,
+  MAX_PINNED,
+  METRIC_COLUMNS,
+  METRIC_FUNCTIONS,
   pinnedViews,
   REPORT_KEY,
   serializeFilters,
+  viewMatchesPage,
   viewMatchesState,
-  writeFailureMessage,
+  type MetricColumn,
+  type MetricFunction,
   type ReportSavedView,
   type ViewMetric,
 } from '@/lib/reports/report-views';
 import type { ReportViewsApi } from '@/lib/reports/report-views-api';
+import { useReportSavedViews } from '@/lib/reports/use-report-saved-views';
+import { serializeViewPeriod, viewPeriodMatches } from '@/lib/reports/view-period';
 import { HowToUse } from './HowToUse';
+import { MetricSaveFields } from './MetricSaveFields';
 import { PinnedViewCards } from './PinnedViewCards';
-import { ReportViewSelector } from './ReportViewSelector';
 import { SyncCharts } from './SyncCharts';
 import { SyncFilterBar } from './SyncFilterBar';
 import { SyncRunTable } from './SyncRunTable';
@@ -106,6 +116,12 @@ function Tile({
   );
 }
 
+/** What a saved view keeps (BACKLOG-4084: the time range too). */
+export const IPHONE_SAVE_HINT =
+  'Saves the Type, Outcome, Platform, search and Stalled filters and the time range. A pinned card follows whichever period is selected.';
+
+const iphoneFunctionsFor = (col: string) => functionsFor(col as MetricColumn);
+
 export interface IphoneSyncReportProps {
   report: IphoneSyncReportModel;
   period: PeriodRange;
@@ -140,15 +156,15 @@ export function IphoneSyncReport({
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE_ROWS);
   const [openRunId, setOpenRunId] = useState<string | null>(null);
 
-  // null = the list could not be read. [] = there are none. Two different
-  // states with two different sentences, never collapsed into one.
-  const [views, setViews] = useState<ReportSavedView[] | null>(null);
-  const [viewsLoading, setViewsLoading] = useState(Boolean(viewsApi));
-  const [viewsReloadToken, setViewsReloadToken] = useState(0);
-  // What the DATABASE said when it refused a save, a rename, a pin or a delete.
-  // The client cap has its own message inside the dropdown; this is the one the
-  // client cannot predict — a second tab's pin, or any other rejection.
-  const [writeError, setWriteError] = useState<string | null>(null);
+  // Load, write, refusal message and default: one hook (BACKLOG-4084).
+  // `views` null = the list could not be read; [] = there are none.
+  const savedViews = useReportSavedViews<ReportSavedView, ReturnType<typeof serializeFilters>, ViewMetric>(
+    viewsApi,
+    REPORT_KEY
+  );
+  const views = savedViews.views;
+  // The card metric the save form's Column and Function selects hold.
+  const [metric, setMetric] = useState<ViewMetric>(FALLBACK_METRIC);
   // What the page was showing before a card was clicked, so clicking the same
   // card again puts it back rather than merely clearing.
   const [restoreState, setRestoreState] = useState<{
@@ -159,6 +175,14 @@ export function IphoneSyncReport({
   // Mirror the client state into the URL WITHOUT a navigation. With
   // `force-dynamic` a router.push here would be a database round trip per
   // checkbox; replaceState keeps the URL the one source of truth for free.
+  //
+  // The URL ALWAYS carries the period the server rendered (BACKLOG-4084). A
+  // bare URL opens the user's default view, and any client key makes the URL
+  // explicit; without the period, a type toggle after a default view applied
+  // would reload into the built-in period instead of the default's.
+  const periodKey = period.key;
+  const periodFrom = period.customFrom ?? undefined;
+  const periodTo = period.customTo ?? undefined;
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = applyClientState(new URLSearchParams(window.location.search), {
@@ -167,9 +191,8 @@ export function IphoneSyncReport({
       sortDirection,
       stalledOnly,
     });
-    const query = params.toString();
-    window.history.replaceState(null, '', query.length > 0 ? `?${query}` : window.location.pathname);
-  }, [filters, sortKey, sortDirection, stalledOnly]);
+    window.history.replaceState(null, '', buildPeriodUrl(params, periodKey, periodFrom, periodTo));
+  }, [filters, sortKey, sortDirection, stalledOnly, periodKey, periodFrom, periodTo]);
 
   // THE shared set. Everything below reads this and nothing else.
   const filteredRuns = useMemo(() => applyFilters(report.runs, filters), [report.runs, filters]);
@@ -184,35 +207,6 @@ export function IphoneSyncReport({
   }, [filteredRuns, stalledOnly, sortKey, sortDirection]);
 
   // ─── Saved views ───────────────────────────────────────────────
-  // Any failure — no api, a migration not yet applied, a network error —
-  // leaves `views` null and logs. The report below keeps rendering.
-  useEffect(() => {
-    if (!viewsApi) {
-      setViews(null);
-      setViewsLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setViewsLoading(true);
-    viewsApi
-      .list(REPORT_KEY)
-      .then((rows) => {
-        if (!cancelled) setViews(rows);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          console.error('Saved views are unavailable:', err);
-          setViews(null);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setViewsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [viewsApi, viewsReloadToken]);
-
   const pinned = useMemo(() => pinnedViews(views ?? []), [views]);
 
   // Card values read `report.runs` — EVERY row of the selected period — with
@@ -223,23 +217,48 @@ export function IphoneSyncReport({
     [pinned, report.runs]
   );
 
+  // A card applies its FILTERS only and its value follows the page's period
+  // (SR ruling, BACKLOG-4084), so its active state compares filters only.
   const cards = pinned.map((view) => ({
     view,
     value: cardValues.get(view.id) ?? null,
     active: viewMatchesState(view, filters, stalledOnly),
   }));
 
-  const activeViewId = (views ?? []).find((v) => viewMatchesState(v, filters, stalledOnly))?.id ?? null;
+  // The Views list applies filters AND the time range, so its active row
+  // compares both.
+  const activeViewId =
+    (views ?? []).find((v) => viewMatchesPage(v, filters, stalledOnly, period))?.id ?? null;
 
-  function applyView(view: ReportSavedView) {
+  function applyViewFilters(view: ReportSavedView) {
     setRestoreState({ filters, stalledOnly });
     updateFilters(view.filters);
     setStalledOnly(view.stalledOnly);
   }
 
+  /**
+   * Picked from the Views list: the filters, and the stored time range with AT
+   * MOST ONE navigation, only when it differs from the page's. The URL is
+   * built from the VIEW's filters, not the current search string, which still
+   * holds the filters being replaced.
+   */
+  function applyView(view: ReportSavedView) {
+    applyViewFilters(view);
+    const stored = view.period ?? null;
+    if (stored === null || viewPeriodMatches(stored, period)) return;
+    const params = applyClientState(new URLSearchParams(), {
+      filters: view.filters,
+      sortKey,
+      sortDirection,
+      stalledOnly: view.stalledOnly,
+    });
+    onNavigate?.(buildPeriodUrl(params, stored.key, stored.from, stored.to));
+  }
+
+  /** Clicked as a card: its filters only; the period stays the page's. */
   function toggleCard(view: ReportSavedView) {
     if (!viewMatchesState(view, filters, stalledOnly)) {
-      applyView(view);
+      applyViewFilters(view);
       return;
     }
     const back = restoreState ?? { filters: EMPTY_FILTERS, stalledOnly: false };
@@ -248,61 +267,28 @@ export function IphoneSyncReport({
     setStalledOnly(back.stalledOnly);
   }
 
-  /**
-   * A refused write must SAY SO and must RE-READ.
-   *
-   * Say so: the server-side pin cap guards the two-tab race the client cap
-   * cannot see, so its sentence is the only explanation the user gets for a
-   * card that did not appear.
-   *
-   * Re-read: after a rejection the page's idea of the list is unproven — the
-   * write may have been refused for a reason that also changed what is stored
-   * (the other tab's sixth pin is exactly that). Reloading on the failure path
-   * as well as the success one makes the cards show what the database holds
-   * rather than what this tab hoped for.
-   */
-  function runViewMutation(op: () => Promise<unknown>) {
-    setWriteError(null);
-    void op()
-      .then(() => setViewsReloadToken((t) => t + 1))
-      .catch((err) => {
-        console.error('Saved view change failed:', err);
-        setWriteError(writeFailureMessage(err));
-        setViewsReloadToken((t) => t + 1);
-      });
+  // A refused write says so and re-reads the list (useReportSavedViews).
+  // Every save pins, as before; the kit refuses a sixth pin before calling.
+  function saveCurrentView(name: string) {
+    savedViews.save({
+      name,
+      // The five filter keys and the period KEY (dates for a custom range).
+      // No run data, no user labels, no ids.
+      filters: serializeFilters(filters, stalledOnly, serializeViewPeriod(period)),
+      metric,
+      pinned: true,
+    });
   }
 
-  function saveCurrentView(name: string, metric: ViewMetric, pinnedFlag: boolean) {
-    if (!viewsApi) return;
-    runViewMutation(() =>
-      viewsApi.save({
-        reportKey: REPORT_KEY,
-        name,
-        // ONLY the five filter keys. No run data, no user labels, no ids.
-        filters: serializeFilters(filters, stalledOnly),
-        metric,
-        pinned: pinnedFlag,
-      })
-    );
-  }
-
+  // Re-saves the view as stored, period included: only `pinned` changes.
   function togglePin(view: ReportSavedView) {
-    if (!viewsApi) return;
-    runViewMutation(() =>
-      viewsApi.save({
-        id: view.id,
-        reportKey: REPORT_KEY,
-        name: view.name,
-        filters: serializeFilters(view.filters, view.stalledOnly),
-        metric: view.metric,
-        pinned: !view.pinned,
-      })
-    );
-  }
-
-  function deleteView(view: ReportSavedView) {
-    if (!viewsApi) return;
-    runViewMutation(() => viewsApi.remove(view.id));
+    savedViews.save({
+      id: view.id,
+      name: view.name,
+      filters: serializeFilters(view.filters, view.stalledOnly, view.period ?? null),
+      metric: view.metric,
+      pinned: !view.pinned,
+    });
   }
 
   const outcomeOptions = useMemo(
@@ -358,15 +344,27 @@ export function IphoneSyncReport({
         onFiltersChange={updateFilters}
         onClear={clearFilters}
         viewsSlot={
-          <ReportViewSelector
+          <SavedViews<ReportSavedView>
             views={views}
-            loading={viewsLoading}
+            loading={savedViews.loading}
             activeViewId={activeViewId}
-            writeError={writeError}
+            writeError={savedViews.writeError}
             onApply={applyView}
-            onTogglePin={togglePin}
-            onDelete={deleteView}
+            onDelete={savedViews.remove}
             onSave={saveCurrentView}
+            saveHint={IPHONE_SAVE_HINT}
+            defaultViewId={savedViews.defaultViewId}
+            onSetDefault={savedViews.setDefault}
+            pinning={{ max: MAX_PINNED, onTogglePin: togglePin }}
+            saveFields={
+              <MetricSaveFields
+                value={metric}
+                onChange={(next) => setMetric({ col: next.col as MetricColumn, fn: next.fn as MetricFunction })}
+                columns={METRIC_COLUMNS}
+                functions={METRIC_FUNCTIONS}
+                functionsForColumn={iphoneFunctionsFor}
+              />
+            }
           />
         }
       />

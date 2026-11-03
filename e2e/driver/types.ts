@@ -201,7 +201,7 @@ export interface AppDriver {
    */
   gotoSettings(): Promise<void>;
   /**
-   * Close the Settings modal via the settings-close testid and wait for it to disappear, so the
+   * Close the Settings page via the settings-close testid (its Back button) and wait for it to disappear, so the
    * dashboard nav is reachable again. Best-effort — resolves even if Settings was already closed.
    */
   closeSettings(): Promise<void>;

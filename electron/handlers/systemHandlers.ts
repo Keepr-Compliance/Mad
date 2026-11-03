@@ -26,6 +26,7 @@ import sessionService from "../services/sessionService";
 import { initializationBroadcaster } from "../services/initializationBroadcaster";
 import { initializeDatabase } from "./authHandlers";
 import { getAndClearPendingDeepLinkUser } from "../main";
+import { saveSignInSession } from "../services/signInState";
 import { initializePool } from "../workers/contactWorkerPool";
 import { getDbPath, getEncryptionKey } from "../services/db/core/dbConnection";
 import log from "electron-log";
@@ -216,7 +217,7 @@ async function persistSessionForUser(
     const isTrial = subscriptionStatus === "trial";
     const isActive = subscriptionStatus === "active" || subscriptionStatus === "trial";
 
-    await sessionService.saveSession({
+    await saveSignInSession({
       user: localUser,
       sessionToken,
       provider,

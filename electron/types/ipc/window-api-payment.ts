@@ -10,7 +10,9 @@
 
 import type {
   BeginCheckoutResult,
+  BeginSubscriptionResult,
   ChargeResult,
+  GateReadResult,
   PaymentConfirmResult,
   SavedCardStatus,
 } from "../payment";
@@ -44,4 +46,16 @@ export interface WindowApiPayment {
    * the /charge 409 remains authoritative. Re-check per purchase intent.
    */
   hasSavedCard: () => Promise<SavedCardStatus>;
+  /**
+   * BACKLOG-3676: open the Agent plan Stripe Checkout in the browser. Answers a
+   * refusal code when the portal refuses; nothing is charged by this call.
+   */
+  beginSubscription: () => Promise<BeginSubscriptionResult>;
+  /**
+   * BACKLOG-3676: after the Agent plan Checkout returns, poll fresh gate reads
+   * (up to 15 x 2 s). Unlocked ONLY when the gate says so.
+   */
+  confirmSubscription: (localTransactionId: string) => Promise<PaymentConfirmResult>;
+  /** BACKLOG-3676: one fresh read of the export gate ("Try again"). */
+  refreshGate: (localTransactionId: string) => Promise<GateReadResult>;
 }

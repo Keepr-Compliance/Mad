@@ -187,6 +187,9 @@ function createStoreSchema(db: DatabaseType): void {
       mime_type TEXT, file_size_bytes INTEGER, storage_path TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+    -- BACKLOG-3968 PR-4b: the force set spares checklist text members, so it
+    -- reads this table (present on every migrated database).
+    CREATE TABLE transaction_checklist_link_members (id TEXT PRIMARY KEY, message_id TEXT);
   `);
 }
 

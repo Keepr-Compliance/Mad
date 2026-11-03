@@ -11,8 +11,8 @@
  * so the Mac start rule (deepest_import_start, else the oldest Mac text) is untouched.
  * Never throws: a marker that cannot be written must not fail the import it follows.
  */
-import { dbRun } from "./db/core/dbConnection";
-import { SOURCE_COVERAGE_UPSERT_SQL } from "./db/auditCoverageSql";
+import { dbAll, dbRun } from "./db/core/dbConnection";
+import { SOURCE_COVERAGE_ROWS_SQL, SOURCE_COVERAGE_UPSERT_SQL } from "./db/auditCoverageSql";
 import logService from "./logService";
 
 export function recordMacImportRun(userId: string, startedAtMs: number): void {
@@ -23,5 +23,23 @@ export function recordMacImportRun(userId: string, startedAtMs: number): void {
     logService.warn("[BACKLOG-3892] Mac import marker not written (non-fatal)", "MacImportMarker", {
       error: error instanceof Error ? error.message : String(error),
     });
+  }
+}
+
+/**
+ * BACKLOG-4066 — the Mac source's last_sync_at (the marker written above), or null
+ * when it was never written. Reads the same rows the coverage notice reads
+ * (SOURCE_COVERAGE_ROWS_SQL), so the trigger and the notice see one value.
+ * Never throws: an unreadable marker reads as "unknown" (null), which runs no import.
+ */
+export function readMacLastImportISO(userId: string): string | null {
+  try {
+    const rows = dbAll<{ source: string; lastSyncAt: string | null }>(SOURCE_COVERAGE_ROWS_SQL, [userId]);
+    return rows.find((r) => r.source === "mac")?.lastSyncAt ?? null;
+  } catch (error) {
+    logService.warn("[BACKLOG-4066] Mac import marker not readable (non-fatal)", "MacImportMarker", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return null;
   }
 }

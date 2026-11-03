@@ -1,9 +1,7 @@
 import { _electron, chromium } from '@playwright/test';
 import type { Browser, ElectronApplication, Page } from '@playwright/test';
 import { type ChildProcess, spawn } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { buildArgs, isDefaultProfile } from './launchArgs';
 import { resolveBuiltMainEntry, resolveElectronBinary } from './paths';
 import { resolveCdpPort, terminateChildTree, waitForChildPort } from './process';
 import type { AppDriverOptions, LaunchStrategy } from './types';
@@ -25,22 +23,6 @@ export interface LaunchHandle {
 }
 
 const DEFAULT_TIMEOUT = 30_000;
-
-function isDefaultProfile(opts: AppDriverOptions): boolean {
-  return opts.reuseProfile !== false && !opts.userDataDir;
-}
-
-/** Build the app args, adding --user-data-dir only when an isolated profile is requested. */
-function buildArgs(opts: AppDriverOptions): { args: string[]; userDataDir: string } {
-  const extra = opts.extraArgs ?? [];
-  if (isDefaultProfile(opts)) {
-    // Reuse the persisted profile: do NOT pass --user-data-dir; the app uses its default.
-    return { args: [...extra], userDataDir: '<default persisted profile>' };
-  }
-  const userDataDir = opts.userDataDir ?? mkdtempSync(join(tmpdir(), 'keepr-e2e-'));
-  // Electron maps the Chromium --user-data-dir switch onto app userData.
-  return { args: [`--user-data-dir=${userDataDir}`, ...extra], userDataDir };
-}
 
 /**
  * Launch via Playwright `_electron.launch`. Requires a build with the inspect fuse enabled

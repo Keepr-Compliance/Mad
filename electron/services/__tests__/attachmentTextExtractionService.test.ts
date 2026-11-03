@@ -27,6 +27,16 @@ jest.mock("../databaseService", () => ({
   },
 }));
 
+// BACKLOG-3943: the OCR queue is a spy here — this suite proves WHEN a row is handed to
+// OCR (C12), never runs OCR. isOcrEligibleMime stays real.
+const mockEnqueueAttachmentOcr = jest.fn();
+jest.mock("../ocr/attachmentOcrQueue", () => ({
+  __esModule: true,
+  enqueueAttachmentOcr: (...a: unknown[]) => mockEnqueueAttachmentOcr(...a),
+  isOcrEligibleMime: (m: string | null | undefined) =>
+    jest.requireActual("../ocr/ocrConfig").isOcrEligibleMime(m),
+}));
+
 jest.mock("../logService", () => ({
   __esModule: true,
   default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
@@ -65,6 +75,52 @@ function writeTmp(content: string | Buffer, ext = ".bin"): string {
   fs.writeFileSync(p, content);
   return p;
 }
+
+describe("BACKLOG-3943 C12 — which rows are handed to OCR", () => {
+  const run = (id: string, mime: string, content: string | Buffer, opts = {}) =>
+    extractTextForAttachment(
+      { id, storage_path: writeTmp(content, ".bin"), mime_type: mime, text_content: null },
+      opts
+    );
+
+  it("PDF with no text layer ('empty') -> queued for OCR", async () => {
+    __setPdfTextExtractorForTests(async () => "  \n ");
+    await expect(run("o-scan", "application/pdf", "scanned")).resolves.toBe("empty");
+    expect(mockEnqueueAttachmentOcr).toHaveBeenCalledWith("o-scan");
+  });
+
+  it("over-cap PDF -> queued too (the OCR pass parks it as over-cap)", async () => {
+    await expect(run("o-big", "application/pdf", "x".repeat(500), { maxSizeBytes: 100 })).resolves.toBe("empty");
+    expect(mockEnqueueAttachmentOcr).toHaveBeenCalledWith("o-big");
+  });
+
+  it("PDF whose text layer has text -> never queued", async () => {
+    __setPdfTextExtractorForTests(async () => "REAL TEXT");
+    await expect(run("o-text", "application/pdf", "pdf")).resolves.toBe("extracted");
+    expect(mockEnqueueAttachmentOcr).not.toHaveBeenCalled();
+  });
+
+  it("empty text/plain -> never queued (not an OCR type)", async () => {
+    await expect(run("o-plain", "text/plain", "   ")).resolves.toBe("empty");
+    expect(mockEnqueueAttachmentOcr).not.toHaveBeenCalled();
+  });
+
+  it("extraction error -> never queued", async () => {
+    __setPdfTextExtractorForTests(async () => {
+      throw new Error("bad pdf");
+    });
+    await expect(run("o-err", "application/pdf", "pdf")).resolves.toBe("error");
+    expect(mockEnqueueAttachmentOcr).not.toHaveBeenCalled();
+  });
+
+  it("a throwing queue never changes the extraction outcome", async () => {
+    __setPdfTextExtractorForTests(async () => "");
+    mockEnqueueAttachmentOcr.mockImplementationOnce(() => {
+      throw new Error("queue down");
+    });
+    await expect(run("o-q", "application/pdf", "scanned")).resolves.toBe("empty");
+  });
+});
 
 describe("BACKLOG-2257 extractTextForAttachment — orchestration", () => {
   it("text/plain: stores trimmed verbatim text", async () => {
