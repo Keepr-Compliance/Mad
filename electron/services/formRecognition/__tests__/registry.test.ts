@@ -3,7 +3,7 @@
  * fixture transcribed from a blank copy, and that fixture must match exactly that row.
  */
 import { buildRegistry, DEFAULT_REGISTRY } from "../registry";
-import { matchForms } from "../formMatcher";
+import { EVIDENCE_CAP, matchForms } from "../formMatcher";
 import { NWMLS_FORMS } from "../nwmlsForms";
 import { NWMLS_PUBLISHER } from "../publishers";
 import type { FormRow, PublisherRow } from "../formRegistryTypes";
@@ -13,6 +13,41 @@ import { CA_FORMS, CAR_PUBLISHER, DRE_PUBLISHER } from "../caForms";
 import { OR_FIXTURES } from "./fixtures/orHeaders";
 import { CA_FIXTURES } from "./fixtures/caHeaders";
 import type { CodePageHeader, MidLineHeader, TitleKeyedHeader } from "../formRegistryTypes";
+import { NV_FORMS } from "../nvForms";
+import { NV_FIXTURES } from "./fixtures/nvHeaders";
+import { AZ_FORMS } from "../azForms";
+import { AZ_FIXTURES } from "./fixtures/azHeaders";
+import { RI_FORMS } from "../riForms";
+import { RI_FIXTURES } from "./fixtures/riHeaders";
+import { MO_FORMS } from "../moForms";
+import { MO_FIXTURES } from "./fixtures/moHeaders";
+
+// BACKLOG-4106 PR 2: NV, AZ, RI and MO publishers and rows, in registry order.
+const PR2_PUBLISHERS = ["glvar", "snr", "nred", "aar", "par", "riar", "mrec", "mr", "kcrar"];
+const PR2_TITLE_PUBLISHERS = ["glvar", "snr", "nred", "aar", "par", "riar", "mrec", "kcrar"];
+const PR2_ROWS = [...NV_FORMS, ...AZ_FORMS, ...RI_FORMS, ...MO_FORMS];
+const PR2_FORMS = [
+  "glvar-rpa",
+  "glvar-bba",
+  "glvar-er",
+  "snr-oaa",
+  "nred-524",
+  "nred-525",
+  "nred-525A",
+  "nred-547",
+  "nred-551",
+  "nred-676",
+  "aar-rpc",
+  "aar-bbeea",
+  "par-rpc",
+  "riar-sales-disclosure",
+  "riar-sf-ps",
+  "mrec-broker-disclosure",
+  "mr-RES-1010",
+  "mr-DSC-8000",
+  "kcrar-sale-contract",
+];
+const PR2_FIXTURES = [...NV_FIXTURES, ...AZ_FIXTURES, ...RI_FIXTURES, ...MO_FIXTURES];
 
 describe("BACKLOG-3941 default registry", () => {
   it("ships eight NWMLS rows in priority order (main transaction forms first)", () => {
@@ -102,8 +137,8 @@ describe("BACKLOG-3941 buildRegistry validation", () => {
 // ---------------------------------------------------------------------------------------------
 
 describe("BACKLOG-4106 default registry v2", () => {
-  it("ships NWMLS, then OR (8 OREF + 6 Oregon REALTORS), then CA (3 C.A.R. + 1 DRE)", () => {
-    expect(DEFAULT_REGISTRY.publishers.map((p) => p.id)).toEqual(["nwmls", "oref", "orr", "car", "dre"]);
+  it("ships NWMLS, then OR (8 OREF + 6 Oregon REALTORS), then CA (3 C.A.R. + 1 DRE), then the PR 2 states", () => {
+    expect(DEFAULT_REGISTRY.publishers.map((p) => p.id)).toEqual(["nwmls", "oref", "orr", "car", "dre", ...PR2_PUBLISHERS]);
     expect(DEFAULT_REGISTRY.forms.filter((f) => f.publisherId !== "nwmls").map((f) => f.id)).toEqual([
       "oref-001",
       "oref-003",
@@ -123,6 +158,7 @@ describe("BACKLOG-4106 default registry v2", () => {
       "car-BRBC",
       "car-AD",
       "dre-RE882",
+      ...PR2_FORMS,
     ]);
   });
 
@@ -132,11 +168,35 @@ describe("BACKLOG-4106 default registry v2", () => {
     const pubs = DEFAULT_REGISTRY.publishers.map((p) => p.id);
     expect(pubs).not.toContain("sfar");
     expect(pubs).not.toContain("orea");
-    expect(DEFAULT_REGISTRY.byTitle.size).toBe(0);
+    // PR 2: the AZ regulator's title-only rows; RES-2000 (no revision printed, ruling F4).
+    expect(pubs).not.toContain("adre");
+    expect(codes).not.toContain("RES-2000");
+    // PR 2: the RI Commission's two disclosure rows (no publisher or © line printed; founder ruling).
+    expect(pubs).not.toContain("ri-commission");
+    expect(DEFAULT_REGISTRY.forms.map((f) => f.id)).not.toContain("ri-mred");
+    expect(DEFAULT_REGISTRY.forms.map((f) => f.id)).not.toContain("ri-mred-team");
   });
 
-  const v2Fixtures = [...OR_FIXTURES, ...CA_FIXTURES];
-  describe.each([...OR_FORMS, ...CA_FORMS].map((f) => [f.id, f] as const))("%s", (_id, row) => {
+  it("F1: every title-keyed publisher's rows are indexed by title (the matcher handles the kind)", () => {
+    const tkPubs = DEFAULT_REGISTRY.publishers.filter((p) => p.header.kind === "title-keyed").map((p) => p.id);
+    expect([...DEFAULT_REGISTRY.byTitle.keys()]).toEqual(tkPubs);
+    expect(tkPubs).toEqual(PR2_TITLE_PUBLISHERS);
+  });
+
+  const v2Fixtures = [...OR_FIXTURES, ...CA_FIXTURES, ...PR2_FIXTURES];
+
+  it.each(PR2_FIXTURES.map((f) => [f.id, f] as const))(
+    "%s: every match's evidence is a verbatim slice at firstOffset, at most EVIDENCE_CAP",
+    (_id, fx) => {
+      const text = fixtureText(fx);
+      for (const m of matchForms(text)) {
+        expect(m.evidence.length).toBeGreaterThan(0);
+        expect(m.evidence.length).toBeLessThanOrEqual(EVIDENCE_CAP);
+        expect(text.slice(m.firstOffset, m.firstOffset + m.evidence.length)).toBe(m.evidence);
+      }
+    }
+  );
+  describe.each([...OR_FORMS, ...CA_FORMS, ...PR2_ROWS].map((f) => [f.id, f] as const))("%s", (_id, row) => {
     it.each(row.sampleProvenance.map((p) => [p]))("is proven by fixture %s", (fixtureId) => {
       const fx = v2Fixtures.find((f) => f.id === fixtureId);
       expect(fx).toBeDefined();
@@ -162,7 +222,8 @@ describe("BACKLOG-4106 buildRegistry v2 checks", () => {
     kind: "title-keyed",
     placement: "line",
     requiredMarkers: [],
-    revisionRequired: false,
+    revision: /Rev\. (\d{2}\/\d{2})/,
+    revisionRequired: true,
     windowBefore: 0,
     windowAfter: 400,
   };
@@ -217,24 +278,39 @@ describe("BACKLOG-4106 buildRegistry v2 checks", () => {
     ["4: an adjacent header without an anchorTemplate", [tk({ placement: "adjacent" })], []],
     ["5: a mid-line marker anchored with ^", [ml({ marker: /^OREF (\d{3}) \| Released (\d{2}\/\d{4})/g })], []],
     ["5: a mid-line marker anchored with $", [ml({ marker: /OREF (\d{3}) \| Released (\d{2}\/\d{4})$/g })], []],
-    [
-      "6: a single-line title with no required marker and no revision gate",
-      [tk()],
-      [form({ publisherId: "tk", code: undefined, titleKey: [/ONE TITLE LINE/] })],
-    ],
     ["7: windowAfter 0", [cp({ windowAfter: 0 })], []],
     ["7: windowBefore negative", [cp({ windowBefore: -1 })], []],
     ["8: a codePage without the m flag", [cp({ codePage: /^(RPA) (\d{1,2}\/\d{2})/g })], []],
     ["9: a code-page publisher with no publisher proof", [cp({ pairedToken: undefined })], []],
     ["9: a mid-line publisher with no publisher proof", [ml({ requiredMarkers: [] })], []],
+    ["10 (F4): a code-page header with revisionRequired false", [cp({ revisionRequired: false })], []],
+    ["10 (F4): a mid-line header with revisionRequired false", [ml({ revisionRequired: false })], []],
+    ["10 (F4): a title-keyed header with revisionRequired false", [tk({ revisionRequired: false })], []],
+    ["11: a title-line header without a revision marker", [tk({ revision: undefined })], []],
+    [
+      "11: an adjacent anchorTemplate without (?<rev>…)",
+      [tk({ placement: "adjacent", anchorTemplate: "{title} Rev\\. (\\d{2})" })],
+      [],
+    ],
   ])("rejects %s", (_name, pubs, forms) => {
     expect(() => buildRegistry(pubs, forms)).toThrow(/form registry/);
   });
 
-  it("6 holds only for title-line publishers with no other guard", () => {
+  it("a single-line title is accepted (every header gates on its revision; check 6 is out)", () => {
     const single = [form({ publisherId: "tk", code: undefined, titleKey: [/ONE TITLE LINE/] })];
-    expect(() => buildRegistry([tk({ revisionRequired: true })], single)).not.toThrow();
-    expect(() => buildRegistry([tk({ requiredMarkers: [/Synthetic/] })], single)).not.toThrow();
+    expect(() => buildRegistry([tk()], single)).not.toThrow();
+  });
+
+  it("an adjacent header with {title} and (?<rev>…) is accepted", () => {
+    expect(() =>
+      buildRegistry([tk({ placement: "adjacent", anchorTemplate: "{title} Rev\\. (?<rev>\\d{2})" })], [])
+    ).not.toThrow();
+  });
+
+  it("10 (F4): every shipped windowed publisher requires its revision", () => {
+    const windowed = DEFAULT_REGISTRY.publishers.filter((p) => p.header.kind !== undefined && p.header.kind !== "code-line");
+    expect(windowed.length).toBeGreaterThan(0);
+    for (const p of windowed) expect((p.header as { revisionRequired: boolean }).revisionRequired).toBe(true);
   });
 
   it("windowBefore 0 is allowed", () => {

@@ -25,7 +25,9 @@
  *               `leadingNoise`), e.g. C.A.R. `RPA REVISED 12/22 (PAGE 1 OF 16)`.
  *   mid-line    `matchWindowed`: a marker anywhere in a line, publisher token inside the match,
  *               e.g. `OREF 001 | Released 01/2026`.
- *   title-keyed no matcher path yet (BACKLOG-4106 PR 2); no such rows ship, so nothing is skipped.
+ *   title-keyed `matchTitleKeyed` (BACKLOG-4106 PR 2): a registered printed title at the start of a
+ *               line is the anchor (TK-L whole line(s); TK-A title + revision on the same line).
+ *               Longest title span wins where spans overlap (TK-W), per place, not per text.
  * Windowed kinds: the window is [anchorStart - windowBefore, anchorStart + windowAfter]; every
  * required marker and the paired token must lie wholly inside it; document markers must occur
  * anywhere in the text. Declared revision: anchor group 2 if it matched, else `header.revision`
@@ -35,12 +37,14 @@
  */
 import type {
   CodePageHeader,
+  FormRow,
   FormMatch,
   MatchStrength,
   MidLineHeader,
   PublisherHeader,
   PublisherRow,
   Registry,
+  TitleKeyedHeader,
 } from "./formRegistryTypes";
 import { DEFAULT_REGISTRY, codeKey, isCodeLineHeader } from "./registry";
 
@@ -184,11 +188,11 @@ function matchWindowed(
     let rev: string | null = m[2] ?? null;
     if (rev === null && revision) {
       if (h.revisionScope === "document") {
-        rev = docRevision ? docRevision[1] : null;
+        rev = docRevision ? (docRevision[1] ?? null) : null;
       } else {
         // String.match, not RegExp exec (SQL boundary gate); revision is non-global.
         const rm = window.match(revision);
-        if (rm) {
+        if (rm && rm[1] !== undefined) {
           rev = rm[1];
           ends.push(wStart + (rm.index ?? 0) + rm[0].length);
         }
@@ -223,6 +227,111 @@ function matchWindowed(
   }
 }
 
+/** Title anchors start a line (after line-start spaces): a title inside body prose never anchors. */
+const LINE_START = "(?<=^|\\n)[ \\t]*";
+
+/** Dedupe key of a title-keyed row; never collides with codeKey (a title row may carry a code). */
+function titleRowKey(pub: PublisherRow, row: FormRow): string {
+  return `${pub.id}\u0000#${row.id}`;
+}
+
+interface TitleHit {
+  row: FormRow;
+  /** Start of the title (after line-start spaces). */
+  start: number;
+  /** End of the anchor match. */
+  end: number;
+  /** Revision from the anchor (adjacent), else null. */
+  rev: string | null;
+}
+
+/** The compiled anchor of one title source (TK-L / TK-A), global, always at line start. */
+function titleAnchor(h: TitleKeyedHeader, title: RegExp): RegExp {
+  if (h.placement === "line") {
+    return new RegExp(`${LINE_START}(?:${title.source})[ \\t]*(?=\\n|$)`, "g");
+  }
+  const body = (h.anchorTemplate ?? "").split("{title}").join(`(?:${title.source})`);
+  return new RegExp(`${LINE_START}(?:${body})`, "g");
+}
+
+/** title-keyed publishers (BACKLOG-4106 PR 2). */
+function matchTitleKeyed(
+  original: string,
+  norm: string,
+  pub: PublisherRow,
+  h: TitleKeyedHeader,
+  registry: Registry,
+  byKey: Map<string, FormMatch>
+): void {
+  const rows = registry.byTitle.get(pub.id);
+  if (!rows || rows.length === 0) return;
+  if (h.documentMarkers && !h.documentMarkers.every((r) => nonGlobal(r).test(norm))) return;
+  const required = h.requiredMarkers.map(nonGlobal);
+  const revision = h.revision ? nonGlobal(h.revision) : null;
+  // String.match, not RegExp exec (SQL boundary gate); revision is non-global.
+  const docRevision = revision && h.revisionScope === "document" ? norm.match(revision) : null;
+
+  const hits: TitleHit[] = [];
+  for (const row of rows) {
+    for (const t of row.titleKey ?? []) {
+      for (const m of norm.matchAll(titleAnchor(h, t))) {
+        const at = m.index ?? 0;
+        const start = at + (m[0].length - m[0].trimStart().length);
+        hits.push({ row, start, end: at + m[0].length, rev: m.groups?.rev ?? null });
+      }
+    }
+  }
+  // TK-W: where two title spans overlap, the longer one wins at that place only.
+  const kept = hits.filter(
+    (a) => !hits.some((b) => b !== a && b.start < a.end && a.start < b.end && b.end - b.start > a.end - a.start)
+  );
+  kept.sort((a, b) => a.start - b.start);
+
+  for (const hit of kept) {
+    const { row, start } = hit;
+    const wStart = Math.max(0, start - h.windowBefore);
+    const window = norm.slice(wStart, start + h.windowAfter);
+    const ends = [hit.end];
+    const requiredEnds = required.map((r) => windowMarkerEnd(window, wStart, r));
+    if (requiredEnds.some((e) => e < 0)) continue;
+    ends.push(...requiredEnds);
+
+    let rev = hit.rev;
+    if (rev === null && revision) {
+      if (h.revisionScope === "document") {
+        rev = docRevision ? (docRevision[1] ?? null) : null;
+      } else {
+        // String.match, not RegExp exec (SQL boundary gate); revision is non-global.
+        const rm = window.match(revision);
+        if (rm && rm[1] !== undefined) {
+          rev = rm[1];
+          ends.push(wStart + (rm.index ?? 0) + rm[0].length);
+        }
+      }
+    }
+    if (h.revisionRequired && rev === null) continue;
+
+    const key = titleRowKey(pub, row);
+    const prior = byKey.get(key);
+    if (prior) {
+      prior.occurrences += 1;
+      continue;
+    }
+    const end = Math.min(start + EVIDENCE_CAP, Math.max(...ends));
+    byKey.set(key, {
+      formId: row.id,
+      publisherId: pub.id,
+      code: row.code ?? null,
+      kind: row.kind,
+      strength: "footer+title",
+      occurrences: 1,
+      firstOffset: start,
+      evidence: original.slice(start, end),
+      revisionSeen: rev,
+    });
+  }
+}
+
 /** Every recognised form in `text` (a bundle yields several), ordered by first offset. */
 export function matchForms(text: string, registry: Registry = DEFAULT_REGISTRY): FormMatch[] {
   if (!text || text.trim().length === 0) return [];
@@ -234,8 +343,9 @@ export function matchForms(text: string, registry: Registry = DEFAULT_REGISTRY):
       matchPublisher(text, norm, pub as CodeLinePublisher, registry, byKey);
     } else if (h.kind === "code-page" || h.kind === "mid-line") {
       matchWindowed(text, norm, pub, h, registry, byKey);
+    } else if (h.kind === "title-keyed") {
+      matchTitleKeyed(text, norm, pub, h, registry, byKey);
     }
-    // title-keyed: see the file header.
   }
   return [...byKey.values()].sort((a, b) => a.firstOffset - b.firstOffset);
 }

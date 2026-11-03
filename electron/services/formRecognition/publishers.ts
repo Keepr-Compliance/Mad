@@ -13,6 +13,10 @@
 import type { PublisherHeader, PublisherRow } from "./formRegistryTypes";
 import { OR_PUBLISHERS } from "./orForms";
 import { CA_PUBLISHERS } from "./caForms";
+import { NV_PUBLISHERS } from "./nvForms";
+import { AZ_PUBLISHERS } from "./azForms";
+import { RI_PUBLISHERS } from "./riForms";
+import { MO_PUBLISHERS } from "./moForms";
 
 // Typed with its code-line header so v1 callers can read header.windowChars (BACKLOG-4106).
 export const NWMLS_PUBLISHER: PublisherRow & { header: PublisherHeader } = {
@@ -33,9 +37,13 @@ export const NWMLS_PUBLISHER: PublisherRow & { header: PublisherHeader } = {
   },
 };
 
-/** BACKLOG-4106: OR and CA publishers live beside their rows (orForms.ts, caForms.ts). */
+/** BACKLOG-4106: other states' publishers live beside their rows (orForms.ts, caForms.ts, …). */
 export const DEFAULT_PUBLISHERS: readonly PublisherRow[] = [
   NWMLS_PUBLISHER,
   ...OR_PUBLISHERS,
   ...CA_PUBLISHERS,
+  ...NV_PUBLISHERS,
+  ...AZ_PUBLISHERS,
+  ...RI_PUBLISHERS,
+  ...MO_PUBLISHERS,
 ];

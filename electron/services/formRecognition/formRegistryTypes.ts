@@ -14,7 +14,10 @@
  *   code-line    v1 (`PublisherHeader`, `kind` absent or "code-line"). Unchanged.
  *   code-page    a page line that starts with the code (C.A.R., Oregon REALTORS, DRE).
  *   mid-line     a marker anywhere in a line, publisher token inside the match (OREF).
- *   title-keyed  types and registry checks only; no title-keyed matcher path or row ships yet.
+ *   title-keyed  a printed title is the anchor (BACKLOG-4106 PR 2). Placement "line": the title is
+ *                one whole line or several consecutive whole lines. Placement "adjacent": the title
+ *                starts a line and is followed on that line by the publisher's revision
+ *                (`anchorTemplate`). Rows report registered titles only (formId never null).
  *
  * Publisher name, per kind:
  *   code-line    `PublisherRow.namePattern` is the R3 gate (inside the window).
@@ -25,9 +28,16 @@
  *
  * Declared revision (windowed kinds): the revision is capture group 2 of the anchor match when the
  * anchor has one and it matched; otherwise the first match of `header.revision` (group 1) in the
- * window, or in the whole text when `revisionScope` is "document". `revisionRequired: true` makes
- * that revision a GATE (no revision found -> no match); `false` makes it capture-only
- * (`revisionSeen: null` when none is found). Revision is never part of a key.
+ * window, or in the whole text when `revisionScope` is "document". Title-keyed adjacent: the
+ * anchor's named group `rev`. The revision is a GATE: no revision found -> no match. Every
+ * windowed header must set `revisionRequired: true` (founder ruling F4 on BACKLOG-4106: every match
+ * carries its revision); buildRegistry rejects `false`, and rejects a header with no revision
+ * source. A row whose blank source prints no reliable revision is held. Revision is never part of a
+ * key.
+ *
+ * Known titles (`FormRow.knownTitles`, strength only) are tested against the WHOLE window,
+ * including the part before the anchor (`windowBefore`). Harmless for the shipped rows: their
+ * titles print next to the anchor.
  */
 
 export type FormKind =
@@ -70,7 +80,7 @@ export interface WindowedHeader {
   revision?: RegExp;
   /** Where `revision` is looked for. Default "window". */
   revisionScope?: "window" | "document";
-  /** true = the revision is a gate; false = capture-only. */
+  /** Must be true (F4): the revision is a gate. `boolean` only so a false row fails at load. */
   revisionRequired: boolean;
   /** May be 0 (no marker before the anchor). */
   windowBefore: number;
@@ -109,7 +119,16 @@ export interface MidLineHeader extends WindowedHeader {
   reportUnregistered: boolean;
 }
 
-/** Types and registry checks only (BACKLOG-4106 PR 2 adds the matcher path and rows). */
+/**
+ * Title-keyed (BACKLOG-4106 PR 2). The anchor is a row's `titleKey`, matched case-sensitively on
+ * normalised text and always at the START of a line (after line-start spaces):
+ *   line      the title is one whole line, or consecutive whole lines joined by \n.
+ *   adjacent  `anchorTemplate` with "{title}" replaced by the title source; it must carry the
+ *             named group (?<rev>…), which is the revision.
+ * firstOffset is the start of the title. Where two rows' title spans overlap in one place, the
+ * longer span wins there (a 2-line title that contains another row's 1-line title); elsewhere in
+ * the same text the shorter row still matches.
+ */
 export interface TitleKeyedHeader extends WindowedHeader {
   kind: "title-keyed";
   placement: "adjacent" | "line";
@@ -164,13 +183,14 @@ export interface Registry {
   byTitle: ReadonlyMap<string, readonly FormRow[]>;
 }
 
+/** Title-keyed matches are always "footer+title": the title is the anchor. */
 export type MatchStrength = "footer" | "footer+title";
 
 export interface FormMatch {
   /** null = the header grammar matched a code that is not in the registry. */
   formId: string | null;
   publisherId: string;
-  /** null only for a future title-keyed publisher. */
+  /** Title-keyed rows: the row's printed number when it has one (display only), else null. */
   code: string | null;
   kind: FormKind | null;
   strength: MatchStrength;
