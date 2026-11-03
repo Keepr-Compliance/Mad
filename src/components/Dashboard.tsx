@@ -5,8 +5,8 @@ import { usePendingTransactionCount } from "../hooks/usePendingTransactionCount"
 import { useSyncOrchestrator } from "../hooks/useSyncOrchestrator";
 import { SyncStatusIndicator } from "./dashboard/index";
 import { DashboardActionCard } from "./dashboard/DashboardActionCard";
-import { DashboardSecondaryRow } from "./dashboard/DashboardSecondaryRow";
-import { DashboardPanels } from "./dashboard/panels/DashboardPanels";
+import { ClientsContactsCard, DashboardSecondaryRow } from "./dashboard/DashboardSecondaryRow";
+import { DashboardPanels, PANELS_GRID_TWO } from "./dashboard/panels/DashboardPanels";
 import type { TransactionTab } from "./transactionDetailsModule/types";
 import StartNewAuditModal from "./StartNewAuditModal";
 import { FeatureGate } from "./common/FeatureGate";
@@ -34,9 +34,6 @@ function TileIcon({ d }: { d: string }) {
   );
 }
 const CheckCircleIcon = () => <TileIcon d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />;
-const DocumentIcon = () => (
-  <TileIcon d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-);
 interface DashboardActionProps {
   onAuditNew: () => void;
   onViewTransactions: () => void;
@@ -290,8 +287,10 @@ function Dashboard({
           </h1>
         </div>
 
-        {/* Action Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Action row (BACKLOG-4115): New Transaction | Clients & Contacts, on the
+            panels' grid so the tiles line up with Recent | Todo. All audits is
+            reached from the Recent panel's "All →". */}
+        <div className={PANELS_GRID_TWO} data-testid="dashboard-action-row">
           <DashboardActionCard
             title="New Transaction"
             titleClassName="whitespace-nowrap"
@@ -313,19 +312,15 @@ function Dashboard({
             </FeatureGate>
           </DashboardActionCard>
 
-          <DashboardActionCard
-            title="All audits"
-            onClick={onViewTransactions}
+          <ClientsContactsCard
+            variant="primary"
+            onClick={onManageContacts}
             disabled={isAnySyncing}
-            icon={<DocumentIcon />}
-            dataTour="transactions-card"
-            dataTestId="nav-transactions"
           />
         </div>
 
-        {/* Small row: Clients & Contacts (+ phone sync). Placement is an ASSUMPTION, see DashboardSecondaryRow. */}
+        {/* Small row: the phone sync tile, when the import source needs one. */}
         <DashboardSecondaryRow
-          onManageContacts={onManageContacts}
           onSyncPhone={onSyncPhone}
           onSyncAndroid={onSyncAndroid}
           disabled={isAnySyncing}

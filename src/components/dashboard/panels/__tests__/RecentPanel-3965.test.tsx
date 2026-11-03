@@ -81,4 +81,24 @@ describe("RecentPanel", () => {
     );
     expect(screen.getByTestId("dashboard-recent-row")).toBeDisabled();
   });
+
+  // BACKLOG-4115 N5: "All →" replaces the All audits tile, so it carries the
+  // e2e driver's nav-transactions marker and the tour's transactions-card target.
+  it('"All →" carries nav-transactions and the tour target, inside the panel, and opens the list', () => {
+    const onViewAll = jest.fn();
+    render(
+      <RecentPanel
+        state={{ status: "ready", rows: [row({})] }}
+        onOpenTransaction={jest.fn()}
+        onViewAll={onViewAll}
+        now={NOW}
+      />,
+    );
+    const link = screen.getByTestId("nav-transactions");
+    expect(screen.getByTestId("dashboard-recent")).toContainElement(link);
+    expect(link).toHaveTextContent("All →");
+    expect(link).toHaveAttribute("data-tour", "transactions-card");
+    fireEvent.click(link);
+    expect(onViewAll).toHaveBeenCalledTimes(1);
+  });
 });

@@ -2,13 +2,14 @@
  * BACKLOG-3965 PR-4b: the Dashboard composes Recent | Todo under the small row.
  *
  * - The panels render for a signed-in user with the open-at-tab helper.
- * - Clients & Contacts stays in the small row (ASSUMPTION, OPEN QUESTION
- *   35835347: option 1), not in the top row.
+ * - BACKLOG-4115 (founder rows 87ef0a99, 7e6d8917): Clients & Contacts is in
+ *   the top row next to New Transaction; the small row holds the sync tiles
+ *   only.
  * - C4 extended: no gradient or per-tile colour inside the panels either.
  * - Rows are disabled while a sync runs.
  */
 import React from "react";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import Dashboard from "../Dashboard";
 
@@ -88,13 +89,14 @@ beforeEach(() => {
 });
 
 describe("Dashboard + panels (BACKLOG-3965 PR-4b)", () => {
-  it("renders Recent and Todo after the small row", async () => {
-    render(<Dashboard {...props()} />);
+  it("renders Recent and Todo after the small row of sync tiles", async () => {
+    render(<Dashboard {...props({ onSyncPhone: jest.fn() })} />);
     await screen.findByText("Signed disclosure");
     const panels = screen.getByTestId("dashboard-panels");
-    const contacts = screen.getByTestId("nav-clients-contacts");
+    const smallRow = screen.getByTestId("dashboard-small-row");
     // DOCUMENT_POSITION_FOLLOWING: the panels come after the small row.
-    expect(contacts.compareDocumentPosition(panels) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(smallRow.compareDocumentPosition(panels) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(smallRow).queryByTestId("nav-clients-contacts")).toBeNull();
     expect(within(panels).getByRole("heading", { name: "Recent" })).toBeInTheDocument();
     expect(within(panels).getByRole("heading", { name: "Todo" })).toBeInTheDocument();
   });
@@ -107,14 +109,30 @@ describe("Dashboard + panels (BACKLOG-3965 PR-4b)", () => {
     expect(screen.queryByTestId("dashboard-panels")).toBeNull();
   });
 
-  it("Clients & Contacts stays in the small row, not the top row (option 1)", async () => {
+  it("Clients & Contacts is in the top row, right of New Transaction, not in the small row (BACKLOG-4115)", async () => {
     render(<Dashboard {...props({ onSyncPhone: jest.fn() })} />);
     await screen.findByText("1 Recent St");
     const topRow = screen.getByTestId("nav-new-audit").parentElement as HTMLElement;
     const contacts = screen.getByTestId("nav-clients-contacts");
-    expect(topRow.contains(contacts)).toBe(false);
-    expect(contacts.parentElement).toHaveTextContent("Sync iPhone Messages");
+    expect(topRow).toBe(screen.getByTestId("dashboard-action-row"));
+    expect(topRow.contains(contacts)).toBe(true);
+    // New Transaction first (left), Clients & Contacts second (right).
+    expect(Array.from(topRow.children)).toEqual([screen.getByTestId("nav-new-audit"), contacts]);
+    expect(contacts.parentElement).not.toHaveTextContent("Sync iPhone Messages");
+    expect(screen.getByTestId("dashboard-small-row")).toHaveTextContent("Sync iPhone Messages");
     expect(within(contacts).getByText("Clients & Contacts")).toBeInTheDocument();
+  });
+
+  it('nav-transactions is the Recent panel\'s "All →" and opens the transactions list (BACKLOG-4115 N5)', async () => {
+    const p = props();
+    render(<Dashboard {...p} />);
+    await screen.findByText("1 Recent St");
+    const link = screen.getAllByTestId("nav-transactions");
+    expect(link).toHaveLength(1);
+    expect(screen.getByTestId("dashboard-recent")).toContainElement(link[0]);
+    fireEvent.click(link[0]);
+    expect(p.onViewTransactions).toHaveBeenCalledTimes(1);
+    expect(p.onManageContacts).not.toHaveBeenCalled();
   });
 
   it("panel rows are disabled while a sync runs", async () => {

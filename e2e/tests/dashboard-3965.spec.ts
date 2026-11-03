@@ -79,19 +79,34 @@ test.describe('Dashboard Recent | Todo (BACKLOG-3965)', () => {
     await driver?.close().catch(() => undefined);
   });
 
-  // H1 — stand-ins: Dashboard.panels-3965 "after the small row"; DashboardPanels-3965 C5 sweep.
-  test('H1 1280x800: Recent and Todo side by side, "All audits" shown, no tagline', async () => {
+  // H1 — stand-ins: Dashboard.panels-3965 "after the small row"; DashboardPanels-3965 C5 sweep;
+  // BACKLOG-4115: Dashboard.colours-4110 "the action row", Dashboard.grid-4115 N1.
+  test('H1 1280x800: one row of two tiles over Recent | Todo, edges aligned, no All audits, no tagline', async () => {
     const page = driver!.page;
     await page.setViewportSize({ width: 1280, height: 800 });
     await expect(page.getByTestId('dashboard-recent')).toBeVisible();
     await expect(page.getByTestId('dashboard-todo')).toBeVisible();
+    await expect(page.getByTestId('nav-new-audit')).toBeVisible();
+    await expect(page.getByTestId('nav-clients-contacts')).toBeVisible();
     const recent = await box(page, 'dashboard-recent');
     const todo = await box(page, 'dashboard-todo');
     expect(Math.abs(recent.y - todo.y)).toBeLessThan(2);
     expect(todo.x).toBeGreaterThan(recent.x);
-    await expect(page.getByRole('heading', { name: 'All audits' })).toBeVisible();
+    // BACKLOG-4115: exactly two tiles in the action row, New Transaction left, same line.
+    await expect(page.getByTestId('dashboard-action-row').getByRole('button')).toHaveCount(2);
+    const newTx = await box(page, 'nav-new-audit');
+    const contacts = await box(page, 'nav-clients-contacts');
+    expect(Math.abs(newTx.y - contacts.y)).toBeLessThan(2);
+    expect(newTx.x).toBeLessThan(contacts.x);
+    // Founder rule (7e6d8917): tile edges = the Recent / Todo panel edges, within 1 px.
+    expect(Math.abs(newTx.x - recent.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(newTx.x + newTx.width - (recent.x + recent.width))).toBeLessThanOrEqual(1);
+    expect(Math.abs(contacts.x - todo.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(contacts.x + contacts.width - (todo.x + todo.width))).toBeLessThanOrEqual(1);
+    await expect(page.getByRole('heading', { name: 'All audits' })).toHaveCount(0);
     await expect(page.getByText('Transaction compliance made simple')).toHaveCount(0);
     await driver!.screenshot('h1-1280');
+    await driver!.screenshot('dashboard-one-row-1280');
   });
 
   // H2 — stand-in: DashboardPanels-3965 C5 sweep (400-767 -> 1 column, Recent first).
@@ -102,7 +117,14 @@ test.describe('Dashboard Recent | Todo (BACKLOG-3965)', () => {
     const todo = await box(page, 'dashboard-todo');
     expect(todo.y).toBeGreaterThanOrEqual(recent.y + recent.height - 1);
     expect(Math.abs(recent.x - todo.x)).toBeLessThan(2);
+    // BACKLOG-4115: the two tiles stack too, New Transaction first, on the panels' left edge.
+    const newTx = await box(page, 'nav-new-audit');
+    const contacts = await box(page, 'nav-clients-contacts');
+    expect(contacts.y).toBeGreaterThanOrEqual(newTx.y + newTx.height - 1);
+    expect(Math.abs(newTx.x - recent.x)).toBeLessThanOrEqual(1);
+    expect(Math.abs(contacts.x - recent.x)).toBeLessThanOrEqual(1);
     await driver!.screenshot('h2-700');
+    await driver!.screenshot('dashboard-one-row-700');
     await page.setViewportSize({ width: 1280, height: 800 });
   });
 

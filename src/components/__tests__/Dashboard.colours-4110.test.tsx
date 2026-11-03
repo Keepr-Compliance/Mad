@@ -2,8 +2,10 @@
  * BACKLOG-4110 (mock v9) — Dashboard colours.
  *
  * - Chip tone per tile: New Transaction and Clients & Contacts carry the blue
- *   chip; All audits and both sync tiles carry the muted chip. The default
- *   tone is "muted", so a tile that forgets its prop reds here.
+ *   chip; both sync tiles carry the muted chip. The default tone is "muted",
+ *   so a tile that forgets its prop reds here.
+ * - BACKLOG-4115: the action row is exactly New Transaction then Clients &
+ *   Contacts, both blue (All audits is gone; it is reached from Recent).
  * - Tiles: warm hairline, no resting shadow, ink title.
  * - The Dashboard root paints the warm page (the shell stays gray: see
  *   appCore/__tests__/AppShell.titleBar.test.tsx).
@@ -73,7 +75,7 @@ const chip = (container: HTMLElement, target: string) => {
 };
 
 const BLUE = ["new-audit-card", "contacts-card"] as const;
-const MUTED = ["transactions-card", "sync-phone-card", "sync-android-card"] as const;
+const MUTED = ["sync-phone-card", "sync-android-card"] as const;
 const ALL = [...BLUE, ...MUTED];
 
 describe("BACKLOG-4110 — tile chips", () => {
@@ -91,6 +93,27 @@ describe("BACKLOG-4110 — tile chips", () => {
     expect(c).toHaveClass("bg-warm-chip", "text-ink-muted");
     expect(c).not.toHaveClass("bg-primary-50");
     expect(c).not.toHaveClass("text-primary-600");
+  });
+});
+
+describe("BACKLOG-4115 — the action row", () => {
+  it("holds exactly New Transaction then Clients & Contacts, both with the blue chip", () => {
+    render(<Dashboard {...props()} />);
+    const row = screen.getByTestId("dashboard-action-row");
+    const buttons = Array.from(row.querySelectorAll("button"));
+    expect(buttons.map((b) => b.getAttribute("data-testid"))).toEqual([
+      "nav-new-audit",
+      "nav-clients-contacts",
+    ]);
+    for (const b of buttons) {
+      const c = b.querySelector('[data-part="chip"]') as HTMLElement;
+      expect(c).toHaveClass("bg-primary-50", "text-primary-600");
+      expect(c).not.toHaveClass("bg-warm-chip");
+      // Same tile size as New Transaction: primary variant (h2, 12 px top/bottom).
+      expect(b).toHaveClass("px-5", "py-3");
+      expect(b).not.toHaveClass("p-5");
+      expect(b.querySelector("h2")).not.toBeNull();
+    }
   });
 });
 

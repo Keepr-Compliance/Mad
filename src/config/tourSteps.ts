@@ -131,7 +131,7 @@ export const getDashboardTourSteps = (
   {
     target: '[data-tour="transactions-card"]',
     content:
-      "Browse all your transaction audits here. Track communications, documents, and milestones for each property transaction.",
+      "Browse all your transaction audits here.",
     placement: "bottom",
     spotlightClicks: true,
     disableBeacon: true,
