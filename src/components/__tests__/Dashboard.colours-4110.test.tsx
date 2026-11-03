@@ -2,8 +2,8 @@
  * BACKLOG-4110 (mock v9) — Dashboard colours.
  *
  * - Chip tone per tile: New Transaction and Clients & Contacts carry the blue
- *   chip; both sync tiles carry the muted chip. The default tone is "muted",
- *   so a tile that forgets its prop reds here.
+ *   chip. The default tone is "muted", so a tile that forgets its prop reds
+ *   here. (BACKLOG-4115: the muted sync tiles became the title-bar pill.)
  * - BACKLOG-4115: the action row is exactly New Transaction then Clients &
  *   Contacts, both blue (All audits is gone; it is reached from Recent).
  * - Tiles: warm hairline, no resting shadow, ink title.
@@ -75,8 +75,10 @@ const chip = (container: HTMLElement, target: string) => {
 };
 
 const BLUE = ["new-audit-card", "contacts-card"] as const;
-const MUTED = ["sync-phone-card", "sync-android-card"] as const;
-const ALL = [...BLUE, ...MUTED];
+// BACKLOG-4115: the two muted sync tiles became the title-bar pill; every
+// Dashboard tile left is blue-chipped (the muted chip stays in
+// DashboardActionCard, covered by its own test).
+const ALL = [...BLUE];
 
 describe("BACKLOG-4110 — tile chips", () => {
   it.each(BLUE)("%s has the blue chip and not the muted one", (target) => {
@@ -85,14 +87,6 @@ describe("BACKLOG-4110 — tile chips", () => {
     expect(c).toHaveClass("bg-primary-50", "text-primary-600");
     expect(c).not.toHaveClass("bg-warm-chip");
     expect(c).not.toHaveClass("text-ink-muted");
-  });
-
-  it.each(MUTED)("%s has the muted chip and not the blue one", (target) => {
-    const { container } = render(<Dashboard {...props()} />);
-    const c = chip(container, target);
-    expect(c).toHaveClass("bg-warm-chip", "text-ink-muted");
-    expect(c).not.toHaveClass("bg-primary-50");
-    expect(c).not.toHaveClass("text-primary-600");
   });
 });
 

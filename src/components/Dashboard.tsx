@@ -5,7 +5,7 @@ import { usePendingTransactionCount } from "../hooks/usePendingTransactionCount"
 import { useSyncOrchestrator } from "../hooks/useSyncOrchestrator";
 import { SyncStatusIndicator } from "./dashboard/index";
 import { DashboardActionCard } from "./dashboard/DashboardActionCard";
-import { ClientsContactsCard, DashboardSecondaryRow } from "./dashboard/DashboardSecondaryRow";
+import { ClientsContactsCard } from "./dashboard/ClientsContactsCard";
 import { DashboardPanels, PANELS_GRID_TWO } from "./dashboard/panels/DashboardPanels";
 import type { TransactionTab } from "./transactionDetailsModule/types";
 import StartNewAuditModal from "./StartNewAuditModal";
@@ -38,9 +38,12 @@ interface DashboardActionProps {
   onAuditNew: () => void;
   onViewTransactions: () => void;
   onManageContacts: () => void;
-  onSyncPhone?: () => void; // Only available for Windows + iPhone users
-  /** Opens the Android companion sync wizard. Only set when the user's import
-   *  source is the Android companion (BACKLOG-2320). Mirrors onSyncPhone. */
+  /** Set when the import source is iPhone Sync. BACKLOG-4115: the tile moved to the
+   *  title-bar pill; this still reopens the flow from SyncStatusIndicator and turns
+   *  on the tour's sync step (whose target is the pill). */
+  onSyncPhone?: () => void;
+  /** Set when the import source is Android (BACKLOG-2320 / 3659). BACKLOG-4115: used
+   *  by SyncStatusIndicator only; the tile moved to the title-bar pill. */
   onSyncAndroid?: () => void;
   onTourStateChange?: (isActive: boolean) => void;
   showSetupPrompt?: boolean;
@@ -318,13 +321,6 @@ function Dashboard({
             disabled={isAnySyncing}
           />
         </div>
-
-        {/* Small row: the phone sync tile, when the import source needs one. */}
-        <DashboardSecondaryRow
-          onSyncPhone={onSyncPhone}
-          onSyncAndroid={onSyncAndroid}
-          disabled={isAnySyncing}
-        />
 
         {/* BACKLOG-3965 PR-4b: Recent | Todo */}
         {user?.id && onOpenTransaction && (

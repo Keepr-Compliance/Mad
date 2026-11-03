@@ -9,6 +9,7 @@ import { SyncStepChangeLog } from "../../utils/syncStepLog";
 import { useRetryCountdown } from "../../utils/syncRetryCooldown";
 import { RetryCooldownNotice, SyncStartButtonContent } from "./SyncStartButtonContent";
 import { ToolBlockedNotice, isToolBlockedError, isStepsNoticeError } from "./ToolBlockedNotice";
+import { resolveIPhoneSyncView, type IPhoneSyncView } from "./iphoneSyncView";
 
 /**
  * BACKLOG-3816: the error screen never shows "Sync Failed" alone. The hook keeps a failed
@@ -81,11 +82,6 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
   } = useIPhoneSyncContext();
   const retrySecondsLeft = useRetryCountdown(retryAvailableAt);
 
-  // Determine if we're actively syncing
-  const isSyncing = syncStatus === "syncing";
-  const isComplete = syncStatus === "complete";
-  const isError = syncStatus === "error";
-
   // BACKLOG-2333: Single source of truth for which primary view renders. A
   // switch-style resolution with a `connection` DEFAULT makes the render
   // provably total — no (syncStatus, progress, syncLocked) combination can fall
@@ -95,13 +91,8 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
   // double-render. Cancel now resets to "idle", so it resolves to `connection`.
   // BACKLOG-3881: an Apple-encrypted backup is its own view (the turn-it-off steps),
   // never the generic "Sync Failed" and never a password box.
-  const view: "lockBanner" | "progress" | "success" | "appleEncrypted" | "error" | "connection" =
-    (syncLocked && !isSyncing && !progress) ? "lockBanner" :
-    ((isSyncing || (syncLocked && progress)) && !isError) ? "progress" :
-    (isComplete && progress) ? "success" :
-    (isError && appleEncryptedBackup) ? "appleEncrypted" :
-    isError ? "error" :
-    "connection";
+  // BACKLOG-4115 (D4): the rule lives in iphoneSyncView.ts, shared with the title-bar pill.
+  const view: IPhoneSyncView = resolveIPhoneSyncView({ syncStatus, progress, syncLocked, appleEncryptedBackup });
 
   // BACKLOG-3927: tell the app-wide hook when the Connect screen is shown, so the
   // Store build's Apple Devices re-check runs only then. `?.` because several

@@ -122,4 +122,16 @@ describe("DashboardActionCard", () => {
       expect(button).toHaveClass("ring-2");
     });
   });
+
+  // BACKLOG-4115: no Dashboard tile uses the muted chip any more (the sync
+  // tiles became the title-bar pill), so the default tone is pinned here.
+  it("defaults to the muted chip; chipTone primary gives the blue one", () => {
+    const { container, rerender } = render(<DashboardActionCard {...defaultProps} />);
+    const chip = () => container.querySelector('[data-part="chip"]') as HTMLElement;
+    expect(chip()).toHaveClass("bg-warm-chip", "text-ink-muted");
+    expect(chip()).not.toHaveClass("bg-primary-50");
+    rerender(<DashboardActionCard {...defaultProps} chipTone="primary" />);
+    expect(chip()).toHaveClass("bg-primary-50", "text-primary-600");
+    expect(chip()).not.toHaveClass("bg-warm-chip");
+  });
 });

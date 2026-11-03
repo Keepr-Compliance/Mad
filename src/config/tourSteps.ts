@@ -128,6 +128,16 @@ export const getDashboardTourSteps = (
     spotlightClicks: true,
     disableBeacon: true,
   },
+  // BACKLOG-4115: Clients & Contacts is in the top row next to New Transaction, so
+  // its step comes before the Recent panel's "All →" (the tour reads top to bottom).
+  {
+    target: '[data-tour="contacts-card"]',
+    content:
+      "Manage your real estate contacts database here. Add, edit, or organize your client contacts.",
+    placement: "bottom",
+    spotlightClicks: true,
+    disableBeacon: true,
+  },
   {
     target: '[data-tour="transactions-card"]',
     content:
@@ -147,21 +157,14 @@ export const getDashboardTourSteps = (
         },
       ]
     : []),
-  {
-    target: '[data-tour="contacts-card"]',
-    content:
-      "Manage your real estate contacts database here. Add, edit, or organize your client contacts.",
-    placement: "top",
-    spotlightClicks: true,
-    disableBeacon: true,
-  },
   ...(hasIPhoneSync
     ? [
         {
+          // BACKLOG-4115 (N6): the title-bar sync pill — no room above it.
           target: '[data-tour="sync-phone-card"]',
           content:
             "Connect your iPhone to sync text messages directly. Plug in your phone via USB and click here to import your iMessage conversations for auditing.",
-          placement: "top" as const,
+          placement: "bottom" as const,
           spotlightClicks: true,
           disableBeacon: true,
         },
