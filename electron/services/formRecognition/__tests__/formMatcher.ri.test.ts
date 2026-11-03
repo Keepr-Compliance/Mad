@@ -15,7 +15,6 @@ import {
   RI3_RIAR_SALES_DISCLOSURE,
   RI4_RIAR_SF_PS,
   RI5_HANDOUT,
-  RI_FIXTURES,
 } from "./fixtures/riHeaders";
 
 const ids = (ms: FormMatch[]) => ms.map((m) => m.formId ?? `?${m.code}`);
