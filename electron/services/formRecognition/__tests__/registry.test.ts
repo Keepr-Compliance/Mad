@@ -23,8 +23,8 @@ import { MO_FORMS } from "../moForms";
 import { MO_FIXTURES } from "./fixtures/moHeaders";
 
 // BACKLOG-4106 PR 2: NV, AZ, RI and MO publishers and rows, in registry order.
-const PR2_PUBLISHERS = ["glvar", "snr", "nred", "aar", "par", "ri-commission", "riar", "mrec", "mr", "kcrar"];
-const PR2_TITLE_PUBLISHERS = ["glvar", "snr", "nred", "aar", "par", "ri-commission", "riar", "mrec", "kcrar"];
+const PR2_PUBLISHERS = ["glvar", "snr", "nred", "aar", "par", "riar", "mrec", "mr", "kcrar"];
+const PR2_TITLE_PUBLISHERS = ["glvar", "snr", "nred", "aar", "par", "riar", "mrec", "kcrar"];
 const PR2_ROWS = [...NV_FORMS, ...AZ_FORMS, ...RI_FORMS, ...MO_FORMS];
 const PR2_FORMS = [
   "glvar-rpa",
@@ -40,8 +40,6 @@ const PR2_FORMS = [
   "aar-rpc",
   "aar-bbeea",
   "par-rpc",
-  "ri-mred",
-  "ri-mred-team",
   "riar-sales-disclosure",
   "riar-sf-ps",
   "mrec-broker-disclosure",
@@ -173,6 +171,10 @@ describe("BACKLOG-4106 default registry v2", () => {
     // PR 2: the AZ regulator's title-only rows; RES-2000 (no revision printed, ruling F4).
     expect(pubs).not.toContain("adre");
     expect(codes).not.toContain("RES-2000");
+    // PR 2: the RI Commission's two disclosure rows (no publisher or © line printed; founder ruling).
+    expect(pubs).not.toContain("ri-commission");
+    expect(DEFAULT_REGISTRY.forms.map((f) => f.id)).not.toContain("ri-mred");
+    expect(DEFAULT_REGISTRY.forms.map((f) => f.id)).not.toContain("ri-mred-team");
   });
 
   it("F1: every title-keyed publisher's rows are indexed by title (the matcher handles the kind)", () => {
