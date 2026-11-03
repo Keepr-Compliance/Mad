@@ -96,95 +96,42 @@ const baseProps = {
   onManageContacts: jest.fn(),
 };
 
-/** The small row (BACKLOG-4115: sync tiles only). */
-const secondaryRow = () => screen.getByTestId("dashboard-small-row");
-
-describe("Dashboard sync cards", () => {
+describe("Dashboard sync props (BACKLOG-4115: the sync tiles became the title-bar pill)", () => {
   beforeEach(() => {
     jest.clearAllMocks();
   });
 
-  describe("Android sync card (BACKLOG-2320)", () => {
-    it("renders the Android card with founder-specified copy when onSyncAndroid is provided", () => {
-      render(<Dashboard {...baseProps} onSyncAndroid={jest.fn()} />);
-
-      expect(screen.getByTestId("sync-android-card")).toBeInTheDocument();
-      expect(screen.getByText("Sync Android Messages")).toBeInTheDocument();
-      // Founder-specified: Wi-Fi, NOT "via USB cable".
-      expect(screen.getByText("Copy texts from Google Messages")).toBeInTheDocument();
-    });
-
-    it("does NOT render the Android card when onSyncAndroid is omitted", () => {
-      render(<Dashboard {...baseProps} />);
-
-      expect(screen.queryByTestId("sync-android-card")).not.toBeInTheDocument();
-      expect(screen.queryByText("Sync Android Messages")).not.toBeInTheDocument();
-    });
-
-    // BACKLOG-3658: the indicator's Details for a Google Messages Sync reopens
-    // the Sync Android window. Mutation: the mapping missing → red.
-    it("the sync indicator's Details for Google Messages reopens Sync Android", () => {
-      const onSyncAndroid = jest.fn();
-      render(<Dashboard {...baseProps} onSyncAndroid={onSyncAndroid} />);
-      mockIndicatorProps.onViewSyncDetails?.("google-messages");
-      expect(onSyncAndroid).toHaveBeenCalledTimes(1);
-    });
-
-    it("invokes onSyncAndroid when the Android card is clicked (opens the wizard modal)", async () => {
-      const onSyncAndroid = jest.fn();
-      render(<Dashboard {...baseProps} onSyncAndroid={onSyncAndroid} />);
-
-      await userEvent.click(screen.getByTestId("sync-android-card"));
-
-      expect(onSyncAndroid).toHaveBeenCalledTimes(1);
-    });
-
-    it("does NOT render the iPhone card when only onSyncAndroid is set", () => {
-      render(<Dashboard {...baseProps} onSyncAndroid={jest.fn()} />);
-
-      expect(screen.queryByText("Sync iPhone Messages")).not.toBeInTheDocument();
-    });
+  it.each([
+    ["neither", {}],
+    ["onSyncPhone", { onSyncPhone: jest.fn() }],
+    ["onSyncAndroid", { onSyncAndroid: jest.fn() }],
+    ["both", { onSyncPhone: jest.fn(), onSyncAndroid: jest.fn() }],
+  ])("%s: no sync tile, no small row; the action row holds only its two tiles", (_n, extra) => {
+    render(<Dashboard {...baseProps} {...extra} />);
+    expect(screen.queryByTestId("dashboard-small-row")).toBeNull();
+    expect(screen.queryByTestId("sync-android-card")).toBeNull();
+    expect(screen.queryByText("Sync iPhone Messages")).toBeNull();
+    expect(screen.queryByText("Sync Android Messages")).toBeNull();
+    expect(document.querySelector('[data-tour="sync-phone-card"]')).toBeNull();
+    const row = screen.getByTestId("dashboard-action-row");
+    expect(row.querySelectorAll("button")).toHaveLength(2);
+    expect(row).toContainElement(screen.getByTestId("nav-clients-contacts"));
   });
 
-  describe("iPhone sync card (unchanged — BACKLOG-1653)", () => {
-    it("renders the iPhone card with its USB copy when onSyncPhone is provided", () => {
-      render(<Dashboard {...baseProps} onSyncPhone={jest.fn()} />);
-
-      expect(screen.getByText("Sync iPhone Messages")).toBeInTheDocument();
-      expect(screen.getByText("Import texts via USB cable")).toBeInTheDocument();
-      // The Android card must not appear on the iPhone path.
-      expect(screen.queryByTestId("sync-android-card")).not.toBeInTheDocument();
-    });
-
-    it("invokes onSyncPhone when the iPhone card is clicked", async () => {
-      const onSyncPhone = jest.fn();
-      render(<Dashboard {...baseProps} onSyncPhone={onSyncPhone} />);
-
-      await userEvent.click(screen.getByText("Sync iPhone Messages"));
-
-      expect(onSyncPhone).toHaveBeenCalledTimes(1);
-    });
+  // BACKLOG-3658: the indicator's Details for a Google Messages Sync reopens
+  // the Sync Android window. Mutation: the mapping missing → red.
+  it("the sync indicator's Details for Google Messages reopens Sync Android", () => {
+    const onSyncAndroid = jest.fn();
+    render(<Dashboard {...baseProps} onSyncAndroid={onSyncAndroid} />);
+    mockIndicatorProps.onViewSyncDetails?.("google-messages");
+    expect(onSyncAndroid).toHaveBeenCalledTimes(1);
   });
 
-  describe("secondary-row grid column logic", () => {
-    it("uses two columns when the Android sync card shows", () => {
-      render(<Dashboard {...baseProps} onSyncAndroid={jest.fn()} />);
-      expect(secondaryRow().className).toContain("sm:grid-cols-2");
-    });
-
-    it("uses two columns when the iPhone sync card shows", () => {
-      render(<Dashboard {...baseProps} onSyncPhone={jest.fn()} />);
-      expect(secondaryRow().className).toContain("sm:grid-cols-2");
-    });
-
-    it("renders no small row when no sync card shows (BACKLOG-4115)", () => {
-      render(<Dashboard {...baseProps} />);
-      expect(screen.queryByTestId("dashboard-small-row")).toBeNull();
-      // Clients & Contacts is not in the small row any more; it is in the action row.
-      expect(screen.getByTestId("dashboard-action-row")).toContainElement(
-        screen.getByTestId("nav-clients-contacts"),
-      );
-    });
+  it("the sync indicator's Details for iPhone reopens iPhone Sync", () => {
+    const onSyncPhone = jest.fn();
+    render(<Dashboard {...baseProps} onSyncPhone={onSyncPhone} />);
+    mockIndicatorProps.onViewSyncDetails?.("iphone");
+    expect(onSyncPhone).toHaveBeenCalledTimes(1);
   });
 });
 

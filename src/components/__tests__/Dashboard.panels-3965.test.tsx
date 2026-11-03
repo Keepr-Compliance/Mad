@@ -89,14 +89,15 @@ beforeEach(() => {
 });
 
 describe("Dashboard + panels (BACKLOG-3965 PR-4b)", () => {
-  it("renders Recent and Todo after the small row of sync tiles", async () => {
+  it("renders Recent and Todo right after the action row; no small row (BACKLOG-4115)", async () => {
     render(<Dashboard {...props({ onSyncPhone: jest.fn() })} />);
     await screen.findByText("Signed disclosure");
     const panels = screen.getByTestId("dashboard-panels");
-    const smallRow = screen.getByTestId("dashboard-small-row");
-    // DOCUMENT_POSITION_FOLLOWING: the panels come after the small row.
-    expect(smallRow.compareDocumentPosition(panels) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(smallRow).queryByTestId("nav-clients-contacts")).toBeNull();
+    const row = screen.getByTestId("dashboard-action-row");
+    // DOCUMENT_POSITION_FOLLOWING: the panels come after the action row.
+    expect(row.compareDocumentPosition(panels) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row.nextElementSibling).toBe(panels);
+    expect(screen.queryByTestId("dashboard-small-row")).toBeNull();
     expect(within(panels).getByRole("heading", { name: "Recent" })).toBeInTheDocument();
     expect(within(panels).getByRole("heading", { name: "Todo" })).toBeInTheDocument();
   });
@@ -109,7 +110,7 @@ describe("Dashboard + panels (BACKLOG-3965 PR-4b)", () => {
     expect(screen.queryByTestId("dashboard-panels")).toBeNull();
   });
 
-  it("Clients & Contacts is in the top row, right of New Transaction, not in the small row (BACKLOG-4115)", async () => {
+  it("Clients & Contacts is in the top row, right of New Transaction (BACKLOG-4115)", async () => {
     render(<Dashboard {...props({ onSyncPhone: jest.fn() })} />);
     await screen.findByText("1 Recent St");
     const topRow = screen.getByTestId("nav-new-audit").parentElement as HTMLElement;
@@ -118,8 +119,7 @@ describe("Dashboard + panels (BACKLOG-3965 PR-4b)", () => {
     expect(topRow.contains(contacts)).toBe(true);
     // New Transaction first (left), Clients & Contacts second (right).
     expect(Array.from(topRow.children)).toEqual([screen.getByTestId("nav-new-audit"), contacts]);
-    expect(contacts.parentElement).not.toHaveTextContent("Sync iPhone Messages");
-    expect(screen.getByTestId("dashboard-small-row")).toHaveTextContent("Sync iPhone Messages");
+    expect(screen.queryByText("Sync iPhone Messages")).toBeNull();
     expect(within(contacts).getByText("Clients & Contacts")).toBeInTheDocument();
   });
 
