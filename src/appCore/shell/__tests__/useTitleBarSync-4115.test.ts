@@ -33,6 +33,7 @@ const makeApp = (step: AppStep = "dashboard", showSettings = false): AppStateMac
     modalState: { showSettings },
     openIPhoneSync: jest.fn(),
     openAndroidSync: jest.fn(),
+    closeSettings: jest.fn(),
   }) as unknown as AppStateMachine;
 
 beforeEach(() => {
@@ -108,11 +109,29 @@ describe("Q2: where the pill lives (founder ruling: every signed-in screen with 
     expect(result.current.pill?.device).toBe("iphone");
     result.current.onClick();
     expect(app.openIPhoneSync).toHaveBeenCalledTimes(1);
+    // The flow is a popup under the Settings layer: Settings closes first.
+    expect(app.closeSettings).toHaveBeenCalledTimes(1);
+    expect((app.closeSettings as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      (app.openIPhoneSync as jest.Mock).mock.invocationCallOrder[0],
+    );
   });
-  it("default: the Settings page shows the Android pill too", () => {
-    mockSource = "android-companion";
-    const { result } = renderHook(() => useTitleBarSync(makeApp("dashboard", true)));
+  it.each(["android-companion", "android-messages-web"] as const)("default: the Settings page shows the %s pill; a click closes Settings, then opens Android sync", (source) => {
+    mockSource = source;
+    const app = makeApp("dashboard", true);
+    const { result } = renderHook(() => useTitleBarSync(app));
     expect(result.current.pill?.device).toBe("android");
+    result.current.onClick();
+    expect(app.closeSettings).toHaveBeenCalledTimes(1);
+    expect(app.openAndroidSync).toHaveBeenCalledTimes(1);
+    expect((app.openAndroidSync as jest.Mock).mock.calls[0]).toEqual([]);
+  });
+  it("on the dashboard a click does not touch Settings", () => {
+    mockSource = "iphone-sync";
+    const app = makeApp();
+    const { result } = renderHook(() => useTitleBarSync(app));
+    result.current.onClick();
+    expect(app.closeSettings).not.toHaveBeenCalled();
+    expect(app.openIPhoneSync).toHaveBeenCalledTimes(1);
   });
   // "error" = AppStep, src/appCore/state/types.ts:16 (TASK-2278 error screen)
   it('default: the error screen (step "error") shows the pill', () => {

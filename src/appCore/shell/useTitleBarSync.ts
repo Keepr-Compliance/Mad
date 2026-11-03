@@ -69,15 +69,29 @@ export function useTitleBarSync(app: AppStateMachine, everyScreen: boolean = PIL
   const now = useClock(30_000, visible && source !== null);
 
   if (!visible) return { pill: null, onClick: NOOP };
+  // The sync flows are popups (z-50..z-[100]) and the Settings page sits above
+  // them (z-[105], zLayers.ts), so a click on Settings closes it first — the
+  // same order as Settings' own "Import from iPhone" (SettingsLayer.tsx).
+  const leaveSettings = () => {
+    if (app.modalState.showSettings) app.closeSettings();
+  };
+  const openIPhone = () => {
+    leaveSettings();
+    app.openIPhoneSync();
+  };
+  const openAndroid = () => {
+    leaveSettings();
+    app.openAndroidSync();
+  };
   if (source === "iphone-sync" && iphone) {
-    return { pill: deriveIPhonePill(iphone, iphoneEnabled, now, { isMacOS }), onClick: app.openIPhoneSync };
+    return { pill: deriveIPhonePill(iphone, iphoneEnabled, now, { isMacOS }), onClick: openIPhone };
   }
   if (source === "android-messages-web") {
     return {
       pill: deriveAndroidPill(android.ext, android.status, android.jobStep, android.linkView, now),
-      onClick: () => app.openAndroidSync(),
+      onClick: openAndroid,
     };
   }
-  if (source === "android-companion") return { pill: deriveCompanionPill(), onClick: () => app.openAndroidSync() };
+  if (source === "android-companion") return { pill: deriveCompanionPill(), onClick: openAndroid };
   return { pill: null, onClick: NOOP };
 }
