@@ -8,6 +8,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import Settings from "../Settings";
+import { SETTINGS_TABS } from "../settings/settingsTabs";
 import { PlatformProvider } from "../../contexts/PlatformContext";
 import { NotificationProvider } from "../../contexts/NotificationContext";
 import { IPhoneSyncProvider } from "../../contexts/IPhoneSyncContext";
@@ -2032,10 +2033,67 @@ describe("Settings", () => {
       expect(tabLabels().slice(0, 6)).toEqual(["Account", "General", "Email", "Messages", "Contacts", "AI"]);
     });
 
-    it("clicking a tab scrolls to that section", async () => {
-      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
-      await userEvent.click(screen.getByRole("tab", { name: "Security" }));
-      expect(scrolledIds()).toEqual(["settings-security"]);
+    // BACKLOG-3964 (founder, 2.45.0-pre.3: "when I click About it doesn't scroll
+    // to the right section"): every entry, from the real list, scrolls ITS
+    // section to the top and the tab bar highlights it.
+    it.each(SETTINGS_TABS.map((t) => [t.label, t.id] as const))(
+      "clicking %s scrolls to its section (block start) and highlights it",
+      async (label, id) => {
+        mockIsAllowed.mockReturnValue(true); // AI included: all entries
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+        await userEvent.click(screen.getByRole("tab", { name: label }));
+        expect(scrolledIds()).toEqual([id]);
+        expect(scrollSpy.mock.calls[0][0]).toMatchObject({ block: "start" });
+        expect(screen.getByRole("tab", { name: label })).toHaveAttribute("aria-selected", "true");
+        for (const other of SETTINGS_TABS.filter((t) => t.id !== id)) {
+          expect(screen.getByRole("tab", { name: other.label })).toHaveAttribute("aria-selected", "false");
+        }
+      },
+    );
+
+    describe("the last section can reach the top of the page (BACKLOG-3964 About)", () => {
+      const scrollerOf = () => (document.getElementById("settings-account") as HTMLElement).parentElement!.parentElement as HTMLElement;
+      const setGeometry = (clientHeight: number, aboutHeight: number) => {
+        Object.defineProperty(scrollerOf(), "clientHeight", { value: clientHeight, configurable: true });
+        Object.defineProperty(document.getElementById("settings-about") as HTMLElement, "offsetHeight", {
+          value: aboutHeight,
+          configurable: true,
+        });
+        act(() => {
+          window.dispatchEvent(new Event("resize"));
+        });
+      };
+      const spacer = () => screen.getByTestId("settings-bottom-spacer");
+
+      it("About is the last entry and the last section on the page", async () => {
+        mockIsAllowed.mockReturnValue(true);
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+        expect(SETTINGS_TABS[SETTINGS_TABS.length - 1].id).toBe("settings-about");
+        const ids = Array.from(document.querySelectorAll('[id^="settings-"]'))
+          .map((el) => el.id)
+          .filter((id) => SETTINGS_TABS.some((t) => t.id === id));
+        expect(ids[ids.length - 1]).toBe("settings-about");
+      });
+
+      it("a spacer after About, inside the scroller, is the scroller height minus About's height", async () => {
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+        setGeometry(700, 180);
+        expect(scrollerOf().contains(spacer())).toBe(true);
+        expect(spacer()).toHaveAttribute("aria-hidden", "true");
+        expect(spacer().style.height).toBe("520px");
+        expect(
+          (document.getElementById("settings-about") as HTMLElement).compareDocumentPosition(spacer()) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      });
+
+      it("re-measures on window resize, and never goes negative", async () => {
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+        setGeometry(900, 200);
+        expect(spacer().style.height).toBe("700px");
+        setGeometry(150, 200);
+        expect(spacer().style.height).toBe("0px");
+      });
     });
 
     it("Account tab: name, email, plan, full User ID with Copy; Plan & Billing card; no Sign out", async () => {
