@@ -195,6 +195,24 @@ describe("Dashboard primary action label (BACKLOG-3614)", () => {
   });
 });
 
+describe("Dashboard face copy (BACKLOG-3965 PR-1)", () => {
+  // C1: the audits tile reads "All audits" (sentence case). Mutation: the old
+  // "All Audits" restored in Dashboard.tsx -> red.
+  it('the audits tile reads "All audits", not "All Audits"', () => {
+    render(<Dashboard {...baseProps} />);
+    expect(screen.getByRole("heading", { name: "All audits" })).toBeInTheDocument();
+    expect(screen.queryByText("All Audits")).toBeNull();
+  });
+
+  // C2: the tagline under the greeting is gone; the greeting stays.
+  // Mutation: the tagline paragraph restored -> red.
+  it("shows the greeting and no tagline", () => {
+    render(<Dashboard {...baseProps} user={{ display_name: "Avery Example" }} />);
+    expect(screen.getByRole("heading", { name: "Welcome back, Avery!" })).toBeInTheDocument();
+    expect(screen.queryByText(/compliance made simple/i)).toBeNull();
+  });
+});
+
 describe("Dashboard primary cards: New Transaction stays on one line (BACKLOG-3614 QA)", () => {
   // jsdom does no layout. These tests resolve the grid's Tailwind classes at
   // each window width (sm: = 640px, md: = 768px, lg: = 1024px) and pin the
@@ -249,7 +267,7 @@ describe("Dashboard primary cards: New Transaction stays on one line (BACKLOG-36
     expect(title.className.split(/\s+/)).toContain("whitespace-nowrap");
   });
 
-  it("the title keeps the same type style as the All Audits card", () => {
+  it("the title keeps the same type style as the All audits card", () => {
     render(<Dashboard {...baseProps} />);
     const style = (name: string) =>
       screen
@@ -257,6 +275,6 @@ describe("Dashboard primary cards: New Transaction stays on one line (BACKLOG-36
         .className.split(/\s+/)
         .filter((c) => c !== "whitespace-nowrap")
         .sort();
-    expect(style("New Transaction")).toEqual(style("All Audits"));
+    expect(style("New Transaction")).toEqual(style("All audits"));
   });
 });

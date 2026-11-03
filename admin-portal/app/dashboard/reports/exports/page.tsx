@@ -7,6 +7,8 @@ import { buildExportsReport } from '@/lib/reports/exports';
 import { REPORTS_BASE_PATH } from '@/lib/reports/registry';
 import { resolvePeriod } from '@/lib/reports/period';
 import type { ParamRecord } from '@/lib/reports/report-url';
+import { resolveInitialSavedView } from '@/lib/reports/initial-saved-view';
+import { EXPORTS_REPORT_KEY, parseExportSavedViews } from '@/lib/reports/exports-views';
 import { ExportsReportClient } from './ExportsReportClient';
 
 export const dynamic = 'force-dynamic';
@@ -49,14 +51,25 @@ export default async function ExportsReportPage({
   }
 
   const params = await searchParams;
-  const period = resolvePeriod(
-    {
-      period: typeof params.period === 'string' ? params.period : undefined,
-      from: typeof params.from === 'string' ? params.from : undefined,
-      to: typeof params.to === 'string' ? params.to : undefined,
+  // A bare URL opens the user's default view: its filters and its time range.
+  // Any period key in the URL wins, and the views are not read here at all
+  // (BACKLOG-4084). Exports keeps its filters out of the URL.
+  const { initialView, periodInput } = await resolveInitialSavedView({
+    params,
+    parse: parseExportSavedViews,
+    listViews: async () => {
+      const { data, error } = await supabase.rpc('report_list_saved_views', {
+        p_report_key: EXPORTS_REPORT_KEY,
+      });
+      if (error) {
+        // The message names the stage only; the error text can carry user data.
+        console.error('[exports] saved views read failed; opening without a default view');
+        throw error;
+      }
+      return data;
     },
-    new Date()
-  );
+  });
+  const period = resolvePeriod(periodInput, new Date());
 
   const result = await getExportEvents(supabase, period);
   const lookups = await getExportLookups(supabase, result.rows);
@@ -96,6 +109,7 @@ export default async function ExportsReportPage({
         period={period}
         truncated={result.truncated}
         rowCap={EXPORT_LIMIT}
+        initialView={initialView}
       />
     </div>
   );

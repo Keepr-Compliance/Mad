@@ -4,7 +4,7 @@
  */
 
 import React from "react";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import "@testing-library/jest-dom";
 import Settings from "../Settings";
@@ -64,11 +64,14 @@ jest.mock("../../contexts/NetworkContext", () => ({
 }));
 
 // Wrap Settings in PlatformProvider for tests
+// BACKLOG-3964: the Account tab's user (fictional fixture values).
+const ACCOUNT = { user: { id: "user-123", email: "avery@example.com", display_name: "Avery Example" }, provider: "google" };
+
 const renderSettings = async (props: { onClose: () => void; userId: string; onImportIphone?: () => void }) => {
   const result = render(
     <NotificationProvider>
       <PlatformProvider>
-        <Settings {...props} />
+        <Settings account={ACCOUNT} {...props} />
       </PlatformProvider>
     </NotificationProvider>
   );
@@ -172,11 +175,12 @@ describe("Settings", () => {
   });
 
   describe("Rendering", () => {
-    it("should render settings modal with title", async () => {
+    it("renders the Settings page (BACKLOG-3964: a page, one Back control, title in the app title bar)", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      // Responsive layout renders both mobile and desktop headers
-      expect(screen.getAllByText("Settings").length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByTestId("settings-page")).toBeInTheDocument();
+      expect(screen.getAllByTestId("settings-close")).toHaveLength(1);
+      expect(screen.queryByRole("button", { name: /done/i })).toBeNull();
     });
 
     it("should show all settings sections", async () => {
@@ -833,7 +837,7 @@ describe("Settings", () => {
       render(
         <NotificationProvider>
           <PlatformProvider>
-            <Settings userId={mockUserId} onClose={mockOnClose} />
+            <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} />
           </PlatformProvider>
         </NotificationProvider>
       );
@@ -1044,7 +1048,7 @@ describe("Settings", () => {
       render(
         <NotificationProvider>
           <PlatformProvider>
-            <Settings userId={mockUserId} onClose={mockOnClose} />
+            <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} />
           </PlatformProvider>
         </NotificationProvider>
       );
@@ -1174,13 +1178,12 @@ describe("Settings", () => {
       }
     });
 
-    it("should call onClose when done button is clicked", async () => {
+    it("should call onClose when Back is clicked (BACKLOG-3964: replaces the Done footer)", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      const doneButton = screen.getByRole("button", { name: /done/i });
-      await userEvent.click(doneButton);
+      await userEvent.click(screen.getByRole("button", { name: "Back" }));
 
-      expect(mockOnClose).toHaveBeenCalled();
+      expect(mockOnClose).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1231,9 +1234,9 @@ describe("Settings", () => {
 
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      // Should still render without crashing (responsive layout has mobile + desktop headers)
+      // Should still render without crashing
       await waitFor(() => {
-        expect(screen.getAllByText("Settings").length).toBeGreaterThanOrEqual(1);
+        expect(screen.getByTestId("settings-page")).toBeInTheDocument();
       });
     });
 
@@ -1293,7 +1296,7 @@ describe("Settings", () => {
     it("should have accessible buttons", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
-      expect(screen.getByRole("button", { name: /done/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
     });
   });
 
@@ -1612,7 +1615,7 @@ describe("Settings", () => {
         <NotificationProvider>
           <PlatformProvider>
             <IPhoneSyncProvider userId={mockUserId}>
-              <Settings userId={mockUserId} onClose={mockOnClose} />
+              <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} />
             </IPhoneSyncProvider>
           </PlatformProvider>
         </NotificationProvider>,
@@ -1770,7 +1773,7 @@ describe("Settings", () => {
       rerender(
         <NotificationProvider>
           <PlatformProvider>
-            <Settings userId={mockUserId} onClose={mockOnClose} />
+            <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} />
           </PlatformProvider>
         </NotificationProvider>
       );
@@ -1791,9 +1794,8 @@ describe("Settings", () => {
         expect(reindexButton).not.toBeDisabled();
       });
 
-      // Done button should remain enabled
-      const doneButton = screen.getByRole("button", { name: /done/i });
-      expect(doneButton).not.toBeDisabled();
+      // BACKLOG-3964: the "Done" footer is gone; Back closes the page and stays enabled offline.
+      expect(screen.getByTestId("settings-close")).not.toBeDisabled();
     });
   });
 
@@ -1972,6 +1974,307 @@ describe("Settings", () => {
         }),
       );
       expect(select.value).toBe("3");
+    });
+  });
+
+  /**
+   * BACKLOG-3964 slice 2: the Settings page — tabs, the Account tab, and
+   * opening at a section without a timer.
+   */
+  describe("Settings page (BACKLOG-3964)", () => {
+    const tabLabels = () =>
+      within(screen.getByTestId("settings-tabs")).getAllByRole("tab").map((t) => t.textContent);
+    let scrollSpy: jest.Mock;
+    const scrolledIds = () =>
+      (scrollSpy.mock.contexts as Element[]).map((el) => el.id || el.getAttribute("data-testid"));
+
+    beforeEach(() => {
+      scrollSpy = jest.fn();
+      Element.prototype.scrollIntoView = scrollSpy;
+    });
+
+    const renderPage = (extra: Partial<React.ComponentProps<typeof Settings>> = {}) => {
+      const ui = (props: Partial<React.ComponentProps<typeof Settings>>) => (
+        <NotificationProvider>
+          <PlatformProvider>
+            <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} {...props} />
+          </PlatformProvider>
+        </NotificationProvider>
+      );
+      const result = render(ui(extra));
+      return { ...result, rerenderWith: (props: Partial<React.ComponentProps<typeof Settings>>) => result.rerender(ui(props)) };
+    };
+
+    const holdPreferences = () => {
+      let release: () => void = () => {};
+      jest.mocked(window.api.preferences.get).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            release = () => resolve({ success: true, preferences: { export: { defaultFormat: "combined-pdf" } } });
+          }) as ReturnType<typeof window.api.preferences.get>,
+      );
+      return () => act(async () => release());
+    };
+
+    it("tabs: Account first and selected on open; AI only with the add-on", async () => {
+      mockIsAllowed.mockReturnValue(false);
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      expect(tabLabels()).toEqual([
+        "Account", "General", "Email", "Messages", "Contacts", "Security",
+        "Data & Privacy", "Troubleshooting", "Support Access", "About",
+      ]);
+      expect(screen.getByRole("tab", { name: "Account" })).toHaveAttribute("aria-selected", "true");
+    });
+
+    it("tabs: with the AI add-on the AI tab is listed after Contacts", async () => {
+      mockIsAllowed.mockReturnValue(true);
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      expect(tabLabels().slice(0, 6)).toEqual(["Account", "General", "Email", "Messages", "Contacts", "AI"]);
+    });
+
+    it("clicking a tab scrolls to that section", async () => {
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      await userEvent.click(screen.getByRole("tab", { name: "Security" }));
+      expect(scrolledIds()).toEqual(["settings-security"]);
+    });
+
+    it("Account tab: name, email, plan, full User ID with Copy; Plan & Billing card; no Sign out", async () => {
+      const writeText = jest.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const account = document.getElementById("settings-account") as HTMLElement;
+      expect(account).toBeInTheDocument();
+      const inAccount = within(account);
+      expect(inAccount.getByText("Avery Example")).toBeInTheDocument();
+      expect(inAccount.getByText("avery@example.com")).toBeInTheDocument();
+      expect(inAccount.getByText("Individual")).toBeInTheDocument();
+      expect(inAccount.getByTestId("account-user-id")).toHaveTextContent("user-123");
+      await userEvent.click(inAccount.getByTestId("account-copy-user-id"));
+      expect(writeText).toHaveBeenCalledWith("user-123");
+      await waitFor(() => expect(inAccount.getByTestId("account-copy-user-id")).toHaveTextContent("Copied"));
+      // BACKLOG-3863 D1: the Plan & Billing card takes the Account tab's billing slot.
+      expect(inAccount.getByTestId("plan-billing-card")).toBeInTheDocument();
+      expect(inAccount.queryByText(/sign out/i)).toBeNull();
+      // Security keeps its own sign-out-everywhere action.
+      expect(within(document.getElementById("settings-security") as HTMLElement).getAllByText(/Sign Out All Devices/i).length).toBeGreaterThan(0);
+    });
+
+    it("Account tab look (slice 3b): kit Card with a header row, primary avatar without a gradient, kit colours", async () => {
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const account = document.getElementById("settings-account") as HTMLElement;
+      // Kit Card recipe (packages/ui card.tsx), not the old rounded-xl frame.
+      for (const c of ["rounded-lg", "border", "bg-card", "shadow-sm"]) expect(account).toHaveClass(c);
+      expect(account).not.toHaveClass("rounded-xl");
+      // The card carries its own header/body padding; `!p-0` stops Settings' per-section padding doubling it.
+      expect(account).toHaveClass("!p-0");
+      // Name and email sizes (mock v14).
+      expect(within(account).getByText("Avery Example")).toHaveClass("text-sm", "font-medium", "leading-tight", "text-gray-900");
+      expect(within(account).getByText("avery@example.com")).toHaveClass("text-xs", "leading-tight", "text-gray-500");
+      // Header row: the title sits in a bordered row of its own.
+      const title = within(account).getByRole("heading", { name: "Account" });
+      expect(title.parentElement).toHaveClass("border-b", "px-6", "py-4");
+      // The shared AccountAvatar: primary-600 initials, no gradient anywhere in the section.
+      const avatar = within(account).getByTestId("account-avatar");
+      expect(avatar).toHaveClass("bg-primary-600", "shrink-0", "aspect-square", "h-10", "w-10");
+      expect(avatar).toHaveTextContent("AE");
+      expect(account.querySelector('[class*="gradient"]')).toBeNull();
+      // Plan pill and chips on kit colours; no blue-* left in the Account card's own markup.
+      expect(within(account).getByTestId("account-plan-pill")).toHaveClass("bg-primary-100", "text-primary-800");
+      const chips = within(within(account).getByTestId("account-chips")).getAllByText(/Google/);
+      expect(chips.length).toBeGreaterThan(0);
+      for (const chip of within(account).getByTestId("account-chips").children) {
+        expect(chip).toHaveClass("bg-gray-100", "text-gray-800");
+      }
+      const billing = within(account).getByTestId("plan-billing-card");
+      const ownBlue = Array.from(account.querySelectorAll("[class]")).filter(
+        (el) => !billing.contains(el) && /\bblue-/.test(el.getAttribute("class") ?? ""),
+      );
+      expect(ownBlue).toEqual([]);
+      // Billing appears once on the page, inside the Account card.
+      expect(screen.getAllByTestId("plan-billing-card")).toHaveLength(1);
+    });
+
+    it("every section frame uses the kit Card recipe (slice 3b)", async () => {
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const column = (document.getElementById("settings-account") as HTMLElement).parentElement as HTMLElement;
+      const frame = column.className.split(/\s+/).filter((c) => c.startsWith("[&>[id^=settings-]]:"));
+      for (const c of ["rounded-lg", "border", "bg-card", "shadow-sm"]) {
+        expect(frame).toContain(`[&>[id^=settings-]]:${c}`);
+      }
+      expect(frame).not.toContain("[&>[id^=settings-]]:rounded-xl");
+      // The frame applies to the real sections, not just the Account card.
+      for (const id of ["settings-general", "settings-email", "settings-security", "settings-about"]) {
+        expect(document.getElementById(id)?.parentElement).toBe(column);
+      }
+    });
+
+    it("deep link: waits for preferences (no scroll during the spinner, even past 500 ms), then lands once", async () => {
+      const release = holdPreferences();
+      const onSectionReached = jest.fn();
+      renderPage({ initialSection: "settings-security", onSectionReached });
+      expect(screen.getByText("Loading settings...")).toBeInTheDocument();
+      await act(() => new Promise((r) => setTimeout(r, 600)));
+      expect(scrollSpy).not.toHaveBeenCalled();
+      await release();
+      await waitFor(() => expect(scrolledIds()).toEqual(["settings-security"]));
+      expect(onSectionReached).toHaveBeenCalledTimes(1);
+    });
+
+    it("deep link while the page is already open and loaded lands at once; the same target again lands again", async () => {
+      const onSectionReached = jest.fn();
+      const { rerenderWith } = renderPage({ onSectionReached });
+      await waitFor(() => expect(screen.queryByText("Loading settings...")).toBeNull());
+      expect(scrollSpy).not.toHaveBeenCalled();
+      rerenderWith({ onSectionReached, initialSection: "settings-about" });
+      expect(scrolledIds()).toEqual(["settings-about"]);
+      rerenderWith({ onSectionReached, initialSection: null });
+      rerenderWith({ onSectionReached, initialSection: "settings-about" });
+      expect(scrolledIds()).toEqual(["settings-about", "settings-about"]);
+      expect(onSectionReached).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(["settings-account", "settings-email", "settings-contacts", "settings-data", "settings-support-access"])(
+      "deep link to %s lands on it",
+      async (id) => {
+        renderPage({ initialSection: id });
+        await waitFor(() => expect(scrolledIds()).toEqual([id]));
+      },
+    );
+
+    it("deep link to an element rendered after load (by data-testid) lands when it appears", async () => {
+      let releaseConnections: () => void = () => {};
+      jest.mocked(window.api.system.checkAllConnections).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            releaseConnections = () =>
+              resolve({ success: true, google: { connected: false }, microsoft: { connected: false } });
+          }) as ReturnType<typeof window.api.system.checkAllConnections>,
+      );
+      renderPage({ initialSection: "email-connection-microsoft-connect" });
+      await waitFor(() => expect(screen.queryByText("Loading settings...")).toBeNull());
+      expect(screen.queryByTestId("email-connection-microsoft-connect")).toBeNull();
+      expect(scrollSpy).not.toHaveBeenCalled();
+      await act(async () => releaseConnections());
+      await waitFor(() => expect(scrolledIds()).toEqual(["email-connection-microsoft-connect"]));
+    });
+
+    // BACKLOG-3963 pre-gate (3964 H5): the tab bar follows navigation, not only the scroll-spy.
+    describe("active tab follows navigation (pre-gate H5)", () => {
+      const tab = (name: string) => screen.getByRole("tab", { name });
+      const realIO = (window as unknown as { IntersectionObserver?: unknown }).IntersectionObserver;
+      afterEach(() => {
+        (window as unknown as { IntersectionObserver?: unknown }).IntersectionObserver = realIO;
+      });
+      /** A live spy: an IntersectionObserver that never reports, so only the spy's at-bottom rule moves it. */
+      const installQuietObserver = () => {
+        (window as unknown as { IntersectionObserver: unknown }).IntersectionObserver = class {
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        };
+      };
+      /** The scroller at its bottom: what Support Access and About produce, as neither can reach the top. */
+      const scrollToBottom = (scroller: HTMLElement) => {
+        Object.defineProperty(scroller, "scrollHeight", { value: 3000, configurable: true });
+        Object.defineProperty(scroller, "clientHeight", { value: 800, configurable: true });
+        Object.defineProperty(scroller, "scrollTop", { value: 2200, configurable: true, writable: true });
+        act(() => {
+          scroller.dispatchEvent(new Event("scroll"));
+        });
+      };
+      const scroller = () => (document.getElementById("settings-account") as HTMLElement).parentElement!.parentElement as HTMLElement;
+
+      it("opening at Security selects the Security tab", async () => {
+        renderPage({ initialSection: "settings-security" });
+        await waitFor(() => expect(scrolledIds()).toEqual(["settings-security"]));
+        expect(tab("Security")).toHaveAttribute("aria-selected", "true");
+        expect(tab("Account")).toHaveAttribute("aria-selected", "false");
+      });
+
+      it("opening at an element inside a section selects that section's tab", async () => {
+        renderPage({ initialSection: "email-connection-microsoft-connect" });
+        await waitFor(() => expect(scrolledIds()).toEqual(["email-connection-microsoft-connect"]));
+        expect(tab("Email")).toHaveAttribute("aria-selected", "true");
+      });
+
+      it("Support Access click selects Support Access although the page stops at the bottom (spy says About)", async () => {
+        installQuietObserver();
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+        // Baseline: the spy is live and, at the bottom, picks the last tab.
+        scrollToBottom(scroller());
+        expect(tab("About")).toHaveAttribute("aria-selected", "true");
+        await userEvent.click(tab("Support Access"));
+        expect(scrolledIds()).toEqual(["settings-support-access"]);
+        // The smooth scroll lands at the bottom again; the spy re-reports About.
+        scrollToBottom(scroller());
+        expect(tab("Support Access")).toHaveAttribute("aria-selected", "true");
+        expect(tab("About")).toHaveAttribute("aria-selected", "false");
+      });
+
+      it("a programmatic scroll after a tab click keeps the clicked tab", async () => {
+        installQuietObserver();
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+        expect(tab("Account")).toHaveAttribute("aria-selected", "true");
+        await userEvent.click(tab("Support Access"));
+        scrollToBottom(scroller());
+        expect(tab("Support Access")).toHaveAttribute("aria-selected", "true");
+      });
+
+      it("a programmatic scroll after open-at-section keeps the opened tab", async () => {
+        installQuietObserver();
+        renderPage({ initialSection: "settings-support-access" });
+        await waitFor(() => expect(scrolledIds()).toEqual(["settings-support-access"]));
+        scrollToBottom(scroller());
+        expect(tab("Support Access")).toHaveAttribute("aria-selected", "true");
+      });
+
+      it("after the user scrolls by hand, the spy takes over again", async () => {
+        installQuietObserver();
+        await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+        await userEvent.click(tab("Support Access"));
+        expect(tab("Support Access")).toHaveAttribute("aria-selected", "true");
+        // A wheel, then the scroll it causes moves the spy: the pin lets go.
+        act(() => {
+          scroller().dispatchEvent(new Event("wheel"));
+        });
+        scrollToBottom(scroller());
+        expect(tab("About")).toHaveAttribute("aria-selected", "true");
+      });
+    });
+
+    it("Outlook chip reads \"Outlook connected\" with a space that survives the inline-flex chip", async () => {
+      jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
+        success: true,
+        google: { connected: false, email: "user@example.com" },
+        microsoft: { connected: true, email: "user@example.com" },
+      } as Awaited<ReturnType<typeof window.api.system.checkAllConnections>>);
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const chips = within(document.getElementById("settings-account") as HTMLElement).getByTestId("account-chips");
+      const chip = await within(chips).findByText(/^Outlook/);
+      // A plain space collapses at the end of the hidden-below-sm span; it must be U+00A0.
+      expect(chip.textContent).toBe("Outlook\u00a0connected");
+    });
+
+    it("Gmail chip reads \"Gmail connected\" with a space that survives the inline-flex chip", async () => {
+      jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
+        success: true,
+        google: { connected: true, email: "user@example.com" },
+        microsoft: { connected: false, email: "user@example.com" },
+      } as Awaited<ReturnType<typeof window.api.system.checkAllConnections>>);
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const chips = within(document.getElementById("settings-account") as HTMLElement).getByTestId("account-chips");
+      const chip = await within(chips).findByText(/^Gmail/);
+      // A plain space collapses at the end of the hidden-below-sm span; it must be U+00A0.
+      expect(chip.textContent).toBe("Gmail\u00a0connected");
+    });
+
+    it("Account chip reads \"Signed in with Google\" with a space that survives the inline-flex chip", async () => {
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const chips = within(document.getElementById("settings-account") as HTMLElement).getByTestId("account-chips");
+      const chip = within(chips).getByText(/Signed in with/).parentElement as HTMLElement;
+      // jsdom has no layout: a plain trailing space reads the same here but collapses on screen
+      // at the end of a flex item. The space must be U+00A0.
+      expect(chip.textContent).toBe("Signed in with\u00a0Google");
     });
   });
 });

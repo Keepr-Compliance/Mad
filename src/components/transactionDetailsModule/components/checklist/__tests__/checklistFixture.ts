@@ -54,6 +54,20 @@ export const fixtureAttachments = (): UnifiedAttachment[] => clone<UnifiedAttach
 export const fixtureEmailCommunications = (): Communication[] =>
   clone<Communication[]>(raw.emailCommunications);
 
+/**
+ * BACKLOG-3966 U1: `txn-1` after the agent added two of their own items —
+ * every template checklist above plus the private "My items" checklist last
+ * (main appends it; the tab draws it first). Summed: 4 of 8 (3 of 6 + 1 of 2).
+ *   item 0  "Call lender about rate lock"      not ticked, a note, one attachment link
+ *   item 1  "Send buyer the HOA docs summary"  ticked
+ */
+export const fixtureChecklistsWithMyItems = (): ChecklistsForTransaction =>
+  clone<ChecklistsForTransaction>(raw.checklistsWithMyItems);
+
+/** The private "My items" checklist alone (from {@link fixtureChecklistsWithMyItems}). */
+export const fixtureMyItems = (): ChecklistDetail =>
+  fixtureChecklistsWithMyItems().checklists.find((d) => d.checklist.isPrivate)!;
+
 /** A detail with no links at all, derived from the fixture by deleting them. */
 export const fixtureDetailWithoutLinks = (): ChecklistDetail => ({ ...fixtureDetail(), linksByItemId: {} });
 

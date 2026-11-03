@@ -2,8 +2,8 @@
  * openEmailSettings (BACKLOG-2127)
  *
  * Single source of truth for the "take the user to reconnect their mailbox"
- * navigation. Opens the Settings modal and scrolls to + briefly highlights the
- * Email Connections section (`#settings-email`).
+ * navigation. Opens Settings at the Email Connections section
+ * (`#settings-email`).
  *
  * Extracted so the SystemHealthMonitor reconnect banner and the
  * SyncStatusIndicator reconnect CTA drive the EXACT same navigation instead of
@@ -12,47 +12,39 @@
  *
  * @module utils/openEmailSettings
  */
+import { highlightSettingsTarget } from "./highlightSettingsTarget";
 
 /**
- * Open Settings and highlight the email-connections section.
+ * Open Settings at the email-connections section.
+ *
+ * BACKLOG-3964: the section is the Settings page's own target (`openSettings`
+ * stores it; the page scrolls once its preferences have loaded), so landing on
+ * it no longer depends on a timer beating the load.
  *
  * BACKLOG-3888: `targetTestId` names a more precise element inside it (e.g. the
- * "Connect Outlook" button, `email-connection-microsoft-connect`). When that
- * element is present it is scrolled to and highlighted instead; otherwise the
- * section is, exactly as before.
+ * "Connect Outlook" button, `email-connection-microsoft-connect`). It only
+ * exists once Settings has loaded the connection status, and only when that
+ * mailbox is disconnected, so it is looked for a few times; when found it is
+ * scrolled to and highlighted on top of the section landing.
  *
- * @param onOpenSettings Callback that opens the Settings modal.
+ * @param onOpenSettings Callback that opens Settings at a section.
  * @param targetTestId Optional data-testid of the element to land on.
  */
 export function openEmailSettings(
   onOpenSettings: (scrollTarget?: string) => void,
   targetTestId?: string,
 ): void {
-  onOpenSettings();
-  // Scroll to + highlight after the modal mounts. A precise target (e.g. a
-  // Connect button) only exists once Settings has loaded the connection
-  // status, so it is looked for a few times before falling back to the section.
-  const highlight = (target: HTMLElement, block: ScrollLogicalPosition) => {
-    target.scrollIntoView({ behavior: "smooth", block });
-    target.classList.add("ring-2", "ring-amber-400", "ring-offset-2", "rounded-lg");
-    setTimeout(() => {
-      target.classList.remove("ring-2", "ring-amber-400", "ring-offset-2", "rounded-lg");
-    }, 3000);
-  };
+  onOpenSettings("settings-email");
+  if (!targetTestId) return;
   const attempt = (triesLeft: number) => {
-    const precise = targetTestId
-      ? document.querySelector<HTMLElement>(`[data-testid="${targetTestId}"]`)
-      : null;
+    const precise = document.querySelector<HTMLElement>(`[data-testid="${targetTestId}"]`);
     if (precise) {
-      highlight(precise, "center");
+      highlightSettingsTarget(precise, "center");
       return;
     }
-    if (targetTestId && triesLeft > 0) {
+    if (triesLeft > 0) {
       setTimeout(() => attempt(triesLeft - 1), OPEN_EMAIL_SETTINGS_RETRY_MS);
-      return;
     }
-    const emailSection = document.getElementById("settings-email");
-    if (emailSection) highlight(emailSection, "start");
   };
   setTimeout(() => attempt(OPEN_EMAIL_SETTINGS_RETRIES), 150);
 }

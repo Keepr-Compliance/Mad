@@ -200,9 +200,19 @@ describe('POST /api/support/notify — staff caller, forged fields ignored', () 
     });
   });
 
-  it('reply: caps the preview length', async () => {
-    await POST(req({ type: 'reply', ticketId: TICKET_ID, replyPreview: 'x'.repeat(5000) }));
-    expect((sent().body.replyPreview as string).length).toBe(203);
+  // BACKLOG-4109: the email carries the whole reply, not a 200-character preview.
+  it('reply: a long reply is forwarded whole', async () => {
+    const longReply = Array.from({ length: 30 }, (_, i) => `Step ${i + 1}: do the thing.`).join('\n') + '\nBook here: https://example.com/book';
+    expect(longReply.length).toBeGreaterThan(500);
+    const reply1500 = longReply + 'y'.repeat(1500 - longReply.length);
+    expect(reply1500.length).toBe(1500);
+    await POST(req({ type: 'reply', ticketId: TICKET_ID, replyPreview: reply1500 }));
+    expect(sent().body.replyPreview).toBe(reply1500);
+  });
+
+  it('reply: a reply over the bound is capped at 50,000 characters', async () => {
+    await POST(req({ type: 'reply', ticketId: TICKET_ID, replyPreview: 'x'.repeat(60_000) }));
+    expect((sent().body.replyPreview as string).length).toBe(50_000);
   });
 
   it('assignment: agent email is the stored assignee, not the body', async () => {

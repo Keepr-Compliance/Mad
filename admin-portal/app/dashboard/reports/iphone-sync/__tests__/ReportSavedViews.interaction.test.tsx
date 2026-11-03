@@ -79,6 +79,7 @@ function fakeApi(rows: unknown[] = [row()]): ReportViewsApi & {
         metric: r.metric as ReportSavedView['metric'],
         pinned: r.pinned === true,
         isDefault: r.is_default === true,
+        period: null,
       };
     });
   return {
@@ -389,7 +390,8 @@ describe('the views dropdown', () => {
     mount({ api });
     openViews();
     expect(await screen.findByText('Saved views')).toBeTruthy();
-    fireEvent.mouseDown(document.body);
+    // The kit SavedViews closes on pointerdown outside (BACKLOG-4084), not mousedown.
+    fireEvent.pointerDown(document.body);
     await waitFor(() => expect(screen.queryByText('Saved views')).toBeNull());
   });
 });
@@ -426,14 +428,16 @@ describe('saving the current view', () => {
     expect(payload.pinned).toBe(true);
     expect(payload.id ?? null).toBeNull();
     expect(payload.filters.stalledOnly).toBe(true);
-    // Five keys, no sixth. And no period: the card follows the selector.
+    // Five filter keys plus the time range as a KEY (BACKLOG-4084), no other.
     expect(Object.keys(payload.filters).sort()).toEqual([
       'outcomes',
+      'period',
       'platforms',
       'search',
       'stalledOnly',
       'types',
     ]);
+    expect(payload.filters.period).toEqual({ key: 'week' });
     // No user reaches the row, under any key. The `@` check alone is not
     // enough: a leak that picks a user WITH a display name carries no `@`, and
     // which user it picks is not something a control should depend on.

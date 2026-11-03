@@ -8,7 +8,7 @@
  * depend on the process time zone.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   businessMinutes,
   createDayCalendar,
@@ -98,18 +98,32 @@ describe('zone handling', () => {
 });
 
 describe('performance (shared day calendar)', () => {
-  it('1000 tickets each spanning 365 days stay under 500 ms on one calendar', () => {
+  // BACKLOG-4086: this used to assert a 500 ms wall-clock budget, which flaked
+  // under load. It now asserts the property that makes the clock cheap: each
+  // local day's bounds are computed once and reused, so the work is bounded by
+  // the number of distinct days touched, not by tickets x days.
+  it('1000 tickets each spanning 365 days compute each calendar day once', () => {
     const c = cal();
     const start = Date.parse('2025-10-01T10:00:00-07:00');
-    const t0 = performance.now();
+    const spy = vi.spyOn(Intl.DateTimeFormat.prototype, 'formatToParts');
     let sum = 0;
-    for (let i = 0; i < 1000; i += 1) {
-      const a = start + i * 60000;
-      sum += businessMinutes(a, a + 365 * 86400000, c);
+    try {
+      for (let i = 0; i < 1000; i += 1) {
+        const a = start + i * 60000;
+        sum += businessMinutes(a, a + 365 * 86400000, c);
+      }
+      expect(sum).toBeGreaterThan(0);
+      // Distinct days touched: ~366 (365-day span, shifted by under 17 hours).
+      expect(c.days.size).toBeGreaterThanOrEqual(365);
+      expect(c.days.size).toBeLessThanOrEqual(370);
+      // Observed cost is 4 formatToParts calls per day (open + close, 2
+      // correction passes each) plus 1 per businessMinutes call. The bound is
+      // 2x that plus headroom so a harmless refactor does not red the test;
+      // it is still about 300x below the uncached ~1.47M calls.
+      const bound = c.days.size * 8 + 2000;
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(bound);
+    } finally {
+      spy.mockRestore();
     }
-    const elapsed = performance.now() - t0;
-    console.info(`business-hours perf: ${elapsed.toFixed(0)} ms`);
-    expect(sum).toBeGreaterThan(0);
-    expect(elapsed).toBeLessThan(500);
   });
 });

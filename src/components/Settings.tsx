@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { ResponsiveModal } from "./common/ResponsiveModal";
 import { LLMSettings } from "./settings/LLMSettings";
 import { MacOSMessagesImportSettings } from "./settings/MacOSMessagesImportSettings";
 import { GoogleMessagesSettings } from "./settings/GoogleMessagesSettings";
@@ -9,7 +8,10 @@ import { TextsLookbackSettings } from "./settings/TextsLookbackSettings";
 import { TextsLookbackProvider } from "./settings/textsLookback";
 import { IphoneSyncSettings } from "./settings/IphoneSyncSettings";
 import { FeatureGate } from "./common/FeatureGate";
-import { SettingsTabBar } from "./settings/SettingsTabBar";
+import { SettingsPageHeader } from "./settings/SettingsPageHeader";
+import { visibleSettingsTabs } from "./settings/settingsTabs";
+import { useSettingsSectionRouting } from "./settings/useSettingsSectionRouting";
+import { AccountSettings, type AccountSettingsProps } from "./settings/account/AccountSettings";
 import { GeneralSettings } from "./settings/GeneralSettings";
 import { EmailSettings } from "./settings/EmailSettings";
 import { ContactsSettings } from "./settings/ContactsSettings";
@@ -19,10 +21,8 @@ import { TroubleshootingSettings } from "./settings/TroubleshootingSettings";
 import { SupportAccessSettings } from "./settings/SupportAccessSettings";
 import { AboutSettings } from "./settings/AboutSettings";
 import { SyncToolsSettings } from "./settings/SyncToolsSettings";
-import { PlanBillingCard } from "./settings/billing/PlanBillingCard";
 import { useScrollSpy } from "@/hooks/useScrollSpy";
 import { useFeatureGate } from "@/hooks/useFeatureGate";
-import { useLicense } from "@/contexts/LicenseContext";
 import { usePlatform } from "@/contexts/PlatformContext";
 import { useIPhoneSyncEnabled } from "@/contexts/IPhoneSyncContext";
 import { OfflineNotice } from './common/OfflineNotice';
@@ -33,31 +33,16 @@ import { shownImportSource } from './settings/importSourceLabels';
 import { loadChosenImportSource } from '../services/importSourcePolicy';
 import type { PreferencesResult } from './settings/types';
 
-const SETTINGS_TABS = [
-  { id: "settings-general", label: "General" },
-  // BACKLOG-3863: the plan and a link to the website's Billing page.
-  { id: "settings-plan-billing", label: "Plan & Billing" },
-  { id: "settings-email", label: "Email" },
-  { id: "settings-messages", label: "Messages" },
-  // BACKLOG-3423: no "iPhone Sync" nav entry, for any user on any platform.
-  // BACKLOG-3156 stage G: the iPhone USB toggle now sits in the Messages
-  // section's iPhone pane (shown when iPhone is the selected source); the
-  // iPhone Sync SECTION below (#settings-iphone-sync) remains on Windows only,
-  // for the Apple driver tools, grayed out unless the import source is iPhone.
-  { id: "settings-contacts", label: "Contacts" },
-  { id: "settings-ai", label: "AI" },
-  { id: "settings-security", label: "Security" },
-  { id: "settings-data", label: "Data & Privacy" },
-  { id: "settings-troubleshooting", label: "Troubleshooting" },
-  // BACKLOG-2393: time-boxed support access, its consent record, and the
-  // list of diagnostic reports captured under it.
-  { id: "settings-support-access", label: "Support Access" },
-  { id: "settings-about", label: "About" },
-];
 
 interface SettingsComponentProps {
   onClose: () => void;
   userId: string;
+  /** BACKLOG-3964: the Account tab's user and sign-in provider. */
+  account: AccountSettingsProps;
+  /** BACKLOG-3964: section id (or data-testid) to open at; scrolled to once loaded. */
+  initialSection?: string | null;
+  /** Called once `initialSection` has been reached (the caller clears it). */
+  onSectionReached?: () => void;
   onLogout?: () => Promise<void>;
   onEmailConnected?: (email: string, provider: "google" | "microsoft") => void;
   onEmailDisconnected?: (provider: "google" | "microsoft", anyStillConnected?: boolean) => void;
@@ -67,26 +52,21 @@ interface SettingsComponentProps {
   onImportIphone?: () => void;
 }
 
-/** Settings — tab container that delegates to focused sub-components. */
-function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconnected, onLinkGoogleMessages, onImportIphone }: SettingsComponentProps) {
+/**
+ * Settings — the full Settings page (BACKLOG-3964: no longer a popup). One
+ * header row (Back + tabs), one column of section cards.
+ */
+function Settings({ onClose, userId, account, initialSection, onSectionReached, onLogout, onEmailConnected, onEmailDisconnected, onLinkGoogleMessages, onImportIphone }: SettingsComponentProps) {
   const { isAllowed } = useFeatureGate();
   const hasAIAddon = isAllowed("ai_detection");
-  const { organizationId } = useLicense();
   // BACKLOG-3423: lets a source change re-gate iPhone USB detection live.
   const { applyImportSource } = useIPhoneSyncEnabled();
   // BACKLOG-1937: renderer-safe platform detection (contextIsolation=true → no process.platform)
   const { isWindows, isMacOS } = usePlatform();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  const visibleTabs = useMemo(
-    () =>
-      SETTINGS_TABS.filter((t) => {
-        if (t.id === "settings-ai" && !hasAIAddon) return false;
-        // BACKLOG-1937: iPhone Sync category shows on all platforms (grayed, not hidden)
-        return true;
-      }),
-    [hasAIAddon]
-  );
+  // BACKLOG-3964: one tab list, shared with the account side panel.
+  const visibleTabs = useMemo(() => visibleSettingsTabs(hasAIAddon), [hasAIAddon]);
   const visibleTabIds = useMemo(() => visibleTabs.map((t) => t.id), [visibleTabs]);
 
   // Preferences loaded once and distributed to sub-components as initial values
@@ -113,14 +93,54 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
           ? 'iphone'
           : 'standalone';
 
-  const activeTabId = useScrollSpy(visibleTabIds, scrollContainerRef, 48, !loadingPreferences);
+  // BACKLOG-3964: the tab strip is outside the scroller now, so only a small
+  // offset (was 48 for the sticky strip inside it).
+  const spyTabId = useScrollSpy(visibleTabIds, scrollContainerRef, 8, !loadingPreferences);
+  // BACKLOG-3964 (pre-gate H5): a tab click or an open-at-section sets the
+  // active tab. The scroll-spy alone could not: during the smooth scroll it
+  // picks the section above the target, and a last section that cannot reach
+  // the top of the scroller loses to the spy's "at the bottom -> last tab"
+  // rule. The pin holds until the user scrolls by hand and the spy then moves.
+  const [pinnedTabId, setPinnedTabId] = useState<string | null>(null);
+  const userScrolledRef = useRef(false);
+  const pinTab = useCallback((id: string) => {
+    userScrolledRef.current = false;
+    setPinnedTabId(id);
+  }, []);
+  useEffect(() => {
+    if (userScrolledRef.current) setPinnedTabId(null);
+  }, [spyTabId]);
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (loadingPreferences || !container) return;
+    const byHand = () => {
+      userScrolledRef.current = true;
+    };
+    const events = ["wheel", "touchmove", "keydown", "pointerdown"] as const;
+    for (const e of events) container.addEventListener(e, byHand, { passive: true });
+    return () => {
+      for (const e of events) container.removeEventListener(e, byHand);
+    };
+  }, [loadingPreferences]);
+  const activeTabId = pinnedTabId ?? spyTabId;
+
+  const handleSectionReached = useCallback(
+    (landed?: HTMLElement) => {
+      const tab = landed && visibleTabIds.find((id) => document.getElementById(id)?.contains(landed));
+      if (tab) pinTab(tab);
+      onSectionReached?.();
+    },
+    [visibleTabIds, pinTab, onSectionReached],
+  );
+  useSettingsSectionRouting(initialSection, !loadingPreferences, scrollContainerRef, handleSectionReached);
 
   const handleTabClick = useCallback((id: string) => {
     const el = document.getElementById(id);
     if (el) {
+      pinTab(id);
       el.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  }, []);
+  }, [pinTab]);
 
   const handleConnectionStatusChange = useCallback((google: boolean, microsoft: boolean) => {
     setIsGoogleConnected(google);
@@ -174,43 +194,18 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
   }, [applyImportSource]);
 
   return (
-    <ResponsiveModal onClose={onClose} overlayClassName="bg-black bg-opacity-50" panelClassName="max-w-3xl sm:max-h-[90vh]">
-        {/* Header */}
-        <div
-          className="flex-shrink-0 bg-gradient-to-r from-blue-500 to-purple-600 px-3 sm:px-6 pt-6 sm:pt-4 pb-3 sm:pb-4 sm:rounded-t-xl shadow-lg"
-          data-testid="settings-page"
-        >
-          {/* Mobile */}
-          <div className="sm:hidden flex items-center justify-between">
-            <button
-              onClick={onClose}
-              data-testid="settings-close"
-              className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg px-2 py-2 transition-all flex items-center gap-1 font-medium text-sm"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-              </svg>
-              Back
-            </button>
-            <h2 className="text-lg font-bold text-white">Settings</h2>
-          </div>
-          {/* Desktop */}
-          <div className="hidden sm:flex items-center justify-between">
-            <h2 className="text-xl font-bold text-white">Settings</h2>
-            <button
-              onClick={onClose}
-              data-testid="settings-close"
-              className="text-white hover:bg-white hover:bg-opacity-20 rounded-full p-1 transition-all"
-            >
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
+    <div className="flex h-full min-h-0 flex-col bg-gray-50" data-testid="settings-page">
+        <SettingsPageHeader onBack={onClose} tabs={visibleTabs} activeTabId={activeTabId} onTabClick={handleTabClick} />
+        <div className="flex-none bg-white">
+          <OfflineNotice />
         </div>
 
-        {/* Settings Content - Scrollable area */}
-        <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto scroll-smooth scroll-pt-12 px-6 pb-6">
+        {/* One column of section cards (mock: max 760px). Each direct section
+            child gets the kit Card recipe here (rounded-lg border bg-card
+            shadow-sm, packages/ui card.tsx), so the section components keep
+            their own markup. */}
+        <div ref={scrollContainerRef} className="flex-1 min-h-0 overflow-y-auto scroll-smooth scroll-pt-2 px-3 py-4 sm:px-6 sm:py-6">
+          <div className="mx-auto w-full max-w-[760px] [&>[id^=settings-]]:!mt-0 [&>[id^=settings-]]:!mb-4 [&>[id^=settings-]]:rounded-lg [&>[id^=settings-]]:border [&>[id^=settings-]]:bg-card [&>[id^=settings-]]:shadow-sm [&>[id^=settings-]]:p-4 sm:[&>[id^=settings-]]:p-5">
           {loadingPreferences ? (
             <div className="flex flex-col items-center justify-center pt-24 pb-20">
               <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-3" />
@@ -218,17 +213,9 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             </div>
           ) : (
           <>
-            <SettingsTabBar tabs={visibleTabs} activeTabId={activeTabId} onTabClick={handleTabClick} />
-            <div className="sticky top-10 z-10 -mx-6 bg-white">
-              <OfflineNotice />
-            </div>
+            <AccountSettings {...account} mailboxes={{ google: isGoogleConnected, microsoft: isMicrosoftConnected }} />
 
             <GeneralSettings userId={userId} initialPreferences={preferences} />
-
-            <section id="settings-plan-billing" className="mb-8">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Plan &amp; Billing</h3>
-              <PlanBillingCard organizationId={organizationId} userId={userId} />
-            </section>
 
             <EmailSettings
               userId={userId}
@@ -364,18 +351,9 @@ function Settings({ onClose, userId, onLogout, onEmailConnected, onEmailDisconne
             <AboutSettings />
           </>
           )}
+          </div>
         </div>
-
-        {/* Footer — hidden on mobile (back button in header handles close) */}
-        <div className="hidden sm:block flex-shrink-0 bg-gray-50 px-6 py-4 border-t border-gray-200 rounded-b-xl">
-          <button
-            onClick={onClose}
-            className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2.5 px-4 rounded-lg transition-all"
-          >
-            Done
-          </button>
-        </div>
-    </ResponsiveModal>
+    </div>
   );
 }
 

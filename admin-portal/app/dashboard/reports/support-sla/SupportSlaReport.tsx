@@ -23,6 +23,7 @@ import {
   FilterBar,
   FilterCaption,
   PeriodPicker,
+  SavedViews,
   SortableTh,
   StatCard,
   TruncationNotice,
@@ -40,6 +41,9 @@ import {
   type SupportSlaReport as SupportSlaReportModel,
   type SupportSlaSettings,
 } from '@/lib/reports/support-sla';
+import { supportSlaViews, type PeriodOnlySavedView } from '@/lib/reports/period-only-views';
+import type { PeriodOnlyViewsApi } from '@/lib/reports/period-only-views-api';
+import { usePeriodOnlySavedViews } from '@/lib/reports/use-period-only-saved-views';
 import { SupportSlaHowToUse } from './SupportSlaHowToUse';
 
 export type SupportSlaSortKey =
@@ -88,6 +92,8 @@ export interface SupportSlaReportProps {
   truncated?: boolean;
   rowCap: number;
   onNavigate?: (url: string) => void;
+  /** Saved-view storage (BACKLOG-4084). Absent = saved views unavailable (fails closed). */
+  viewsApi?: PeriodOnlyViewsApi;
 }
 
 const COLUMNS: [SupportSlaSortKey, string][] = [
@@ -105,6 +111,7 @@ export function SupportSlaReport({
   truncated = false,
   rowCap,
   onNavigate,
+  viewsApi,
 }: SupportSlaReportProps) {
   const { sortKey, sortDirection, onSort } = useSortState<SupportSlaSortKey>({
     initialKey: 'resolvedInPeriod',
@@ -119,6 +126,8 @@ export function SupportSlaReport({
     const search = typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, '');
     onNavigate?.(buildPeriodUrl(search, nextPeriod, from, to));
   }
+
+  const savedViews = usePeriodOnlySavedViews(viewsApi, supportSlaViews, period, navigateToPeriod);
 
   const s = report?.summary ?? null;
   const num = (v: number | undefined) => (s ? (v ?? 0) : '-');
@@ -136,7 +145,11 @@ export function SupportSlaReport({
 
   return (
     <div className="space-y-6">
-      <FilterBar hasFilters={false} onClear={() => undefined}>
+      <FilterBar
+        hasFilters={false}
+        onClear={() => undefined}
+        trailing={<SavedViews<PeriodOnlySavedView> {...savedViews} />}
+      >
         <PeriodPicker<PeriodKey>
           options={PERIOD_OPTIONS}
           value={period.key}

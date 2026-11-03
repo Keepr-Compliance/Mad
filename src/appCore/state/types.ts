@@ -45,8 +45,15 @@ export interface AppUser {
 
 // Modal visibility state
 export interface ModalState {
+  /** BACKLOG-3964 slice 3: the account side panel is open (shell/AccountPanel). */
   showProfile: boolean;
   showSettings: boolean;
+  /**
+   * BACKLOG-3964: the section id (or data-testid) the Settings page opens at.
+   * Set by openSettings(target), cleared once the page has scrolled to it and
+   * on close. Not a `show*` flag: screen-name telemetry reads those.
+   */
+  settingsTarget?: string | null;
   showTransactions: boolean;
   showContacts: boolean;
   showAuditTransaction: boolean;
@@ -144,13 +151,15 @@ export interface AppStateMachine {
   // SEMANTIC MODAL TRANSITIONS
   // ============================================
 
-  // Profile modal
+  // Account side panel (BACKLOG-3964; was the Profile modal)
   openProfile(): void;
   closeProfile(): void;
 
   // Settings modal
   openSettings(scrollTarget?: string): void;
   closeSettings(): void;
+  /** BACKLOG-3964: the Settings page has scrolled to its target. */
+  clearSettingsTarget(): void;
 
   // Transactions modal
   openTransactions(): void;

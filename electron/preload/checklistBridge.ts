@@ -17,8 +17,10 @@ import { ipcRenderer } from "electron";
 
 import type {
   AddChecklistLinkResult,
+  AddMyItemResult,
   ChecklistLinkKind,
   ChecklistsForTransaction,
+  ReorderMyItemsResult,
   SelectChecklistTemplateResult,
 } from "../types/checklist";
 import type {
@@ -26,6 +28,7 @@ import type {
   ListChecklistTemplatesResult,
   OpenChecklistsPortalResult,
 } from "../types/ipc/window-api-checklists";
+import type { ListOpenRequiredChecklistItemsResult } from "../types/checklistTodo";
 
 export const checklistBridge = {
   /**
@@ -116,4 +119,47 @@ export const checklistBridge = {
   /** BACKLOG-3617: open the portal Checklists page. No URL crosses the bridge. */
   openTemplatesPortal: (): Promise<OpenChecklistsPortalResult> =>
     ipcRenderer.invoke("checklists:open-templates-portal"),
+
+  /**
+   * BACKLOG-3965 PR-3: the Dashboard's Todo list — required, unticked items on
+   * this user's active, unlocked deals. Gated in main.
+   */
+  listOpenRequired: (args: {
+    userId: string;
+    limit?: number;
+  }): Promise<ListOpenRequiredChecklistItemsResult> =>
+    ipcRenderer.invoke("checklists:list-open-required", args),
+
+  /**
+   * BACKLOG-3966: add one of the agent's own items to a deal ("My items"). The
+   * private checklist is made on the first one. Works on every plan; refused
+   * on a locked deal.
+   */
+  addMyItem: (args: {
+    transactionId: string;
+    title: string;
+  }): Promise<{ success: boolean; result?: AddMyItemResult; error?: string }> =>
+    ipcRenderer.invoke("checklists:add-my-item", args),
+
+  /** BACKLOG-3966: rename one of the agent's own items. */
+  renameMyItem: (args: {
+    transactionId: string;
+    itemId: string;
+    title: string;
+  }): Promise<{ success: boolean; changed?: boolean; error?: string }> =>
+    ipcRenderer.invoke("checklists:rename-my-item", args),
+
+  /** BACKLOG-3966: put the agent's own items in this order (every one, once). */
+  reorderMyItems: (args: {
+    transactionId: string;
+    itemIds: string[];
+  }): Promise<{ success: boolean; result?: ReorderMyItemsResult; error?: string }> =>
+    ipcRenderer.invoke("checklists:reorder-my-items", args),
+
+  /** BACKLOG-3966: remove one of the agent's own items. */
+  removeMyItem: (args: {
+    transactionId: string;
+    itemId: string;
+  }): Promise<{ success: boolean; changed?: boolean; error?: string }> =>
+    ipcRenderer.invoke("checklists:remove-my-item", args),
 };

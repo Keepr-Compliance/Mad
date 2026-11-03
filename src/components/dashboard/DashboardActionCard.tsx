@@ -16,111 +16,93 @@ export interface DashboardActionCardProps {
   description?: string;
   /** Click handler */
   onClick: () => void;
-  /** Icon to display (SVG path) */
+  /** Icon to display (an SVG that fills its box) */
   icon: React.ReactNode;
-  /** Gradient colors for icon background */
-  iconGradient: string;
-  /** Border/accent color class (e.g., "blue", "green", "purple") */
-  accentColor: string;
   /** Optional badge text (e.g., "3 new") */
   badge?: string | null;
   /** Whether the card is highlighted (e.g., has pending items) */
   highlighted?: boolean;
   /** Data attribute for tour targeting */
   dataTour?: string;
+  /** data-testid on the button (e2e driver markers such as nav-transactions) */
+  dataTestId?: string;
+  /** Disables the card (e.g. while a sync runs) */
+  disabled?: boolean;
+  /** Extra classes for the title (e.g. whitespace-nowrap) */
+  titleClassName?: string;
   /** Whether this is a primary (large) or secondary (smaller) card */
   variant?: "primary" | "secondary";
-  /** Children to render (e.g., wrapped in LicenseGate) */
+  /** Children to render after the title (e.g. a FeatureGate-wrapped badge) */
   children?: React.ReactNode;
 }
 
 /**
  * DashboardActionCard
  *
- * Renders a styled action card with icon, title, optional badge, and arrow.
- * Supports primary (large) and secondary (smaller) variants.
+ * One white tile on kit tokens (Dashboard mock v6, BACKLOG-3965): gray border,
+ * small shadow, primary icon chip, small semibold title. Every tile is the same
+ * colour. No scale on hover (a transform would also add a stacking context).
  */
 export function DashboardActionCard({
   title,
   description,
   onClick,
   icon,
-  iconGradient,
-  accentColor,
   badge,
   highlighted = false,
   dataTour,
+  dataTestId,
+  disabled = false,
+  titleClassName,
   variant = "primary",
   children,
 }: DashboardActionCardProps): React.ReactElement {
   const isPrimary = variant === "primary";
 
-  // Base classes shared by both variants
-  const baseClasses = [
-    "group bg-white rounded-2xl transition-all duration-300 text-left border-2 transform",
-    isPrimary
-      ? "shadow-xl hover:shadow-2xl p-6 hover:scale-105"
-      : "bg-opacity-70 backdrop-blur shadow-lg hover:shadow-xl p-6 hover:scale-[1.02]",
-    highlighted
-      ? `border-${accentColor}-500 ring-2 ring-${accentColor}-300 ring-offset-2 hover:border-${accentColor}-600`
-      : `border-transparent hover:border-${accentColor}-${isPrimary ? "500" : "400"}`,
+  const className = [
+    "w-full flex items-center gap-4 bg-white rounded-lg border shadow-sm text-left transition-colors",
+    "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500",
+    isPrimary ? "p-5" : "p-3",
+    highlighted ? "border-primary-500 ring-2 ring-primary-200" : "border-gray-200",
+    // The gray hover border only on an unhighlighted tile: on a highlighted one
+    // it would out-rank the primary border and turn it gray on hover.
+    disabled
+      ? "opacity-50 cursor-not-allowed"
+      : `hover:shadow-md${highlighted ? "" : " hover:border-gray-300"}`,
   ].join(" ");
 
-  // Icon container size varies by variant
-  const iconContainerSize = isPrimary ? "w-14 h-14" : "w-12 h-12";
-  const iconSize = isPrimary ? "w-7 h-7" : "w-6 h-6";
+  const Heading = isPrimary ? "h2" : "h3";
 
   return (
     <button
       onClick={onClick}
-      className={baseClasses}
+      disabled={disabled}
+      className={className}
       data-tour={dataTour}
+      data-testid={dataTestId}
     >
-      <div className="flex items-center gap-4">
-        {/* Icon */}
-        <div
-          className={`${iconContainerSize} ${iconGradient} rounded-xl flex items-center justify-center shadow-lg group-hover:shadow-xl transition-all`}
-        >
-          <div className={`${iconSize} text-white`}>{icon}</div>
-        </div>
-
-        {/* Title and description */}
-        <div className="flex-1">
-          <h2
-            className={`font-bold text-gray-900 ${isPrimary ? "text-xl" : "text-lg mb-1"}`}
-          >
-            {title}
-          </h2>
-          {description && (
-            <p className="text-sm text-gray-500">{description}</p>
-          )}
-        </div>
-
-        {/* Badge (optional) */}
-        {badge && (
-          <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-sm font-semibold bg-indigo-100 text-indigo-800 animate-pulse">
-            {badge}
-          </span>
-        )}
-
-        {/* Additional children (e.g., LicenseGate-wrapped badge) */}
-        {children}
-
-        {/* Arrow */}
-        <svg
-          className={`w-5 h-5 text-${accentColor}-600 group-hover:translate-x-${isPrimary ? "1" : "2"} transition-transform`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M9 5l7 7-7 7"
-          />
-        </svg>
+      <div
+        className={`shrink-0 rounded-lg bg-primary-50 text-primary-600 ${isPrimary ? "p-3" : "p-2"}`}
+      >
+        <div className="h-5 w-5">{icon}</div>
       </div>
+
+      <div className="min-w-0 flex-1">
+        <Heading
+          className={`text-sm font-semibold text-gray-900${titleClassName ? ` ${titleClassName}` : ""}`}
+        >
+          {title}
+        </Heading>
+        {description && <p className="text-xs text-gray-500">{description}</p>}
+      </div>
+
+      {badge && (
+        <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary-100 text-primary-800 animate-pulse">
+          {badge}
+        </span>
+      )}
+
+      {children}
     </button>
   );
 }

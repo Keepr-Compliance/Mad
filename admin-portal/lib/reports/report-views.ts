@@ -5,14 +5,25 @@
  * `report-views-api.ts` so that every test touching {@link computeMetric} or
  * {@link parseStoredFilters} stays free of the browser client and its env.
  *
- * A saved view is a set of client-side filters plus a column and a function.
- * THE PERIOD IS NOT PART OF IT: a pinned card keeps its saved filters and
- * follows whichever period is selected on the page, so a stored period would
- * let a card contradict the selector above it.
+ * A saved view is a set of client-side filters, the time range it was saved
+ * with (BACKLOG-4084, `filters.period`), and a column and a function.
+ *
+ * A PINNED CARD STILL FOLLOWS THE PAGE'S PERIOD: its value is computed over
+ * the page's rows, and clicking it applies its filters only. Picking the view
+ * from the Views list applies its filters AND its time range. Two matchers
+ * follow from that: {@link viewMatchesState} (filters, for cards) and
+ * {@link viewMatchesPage} (filters and period, for the Views list).
  */
 
 import type { SyncRun, SyncType } from './iphone-sync';
 import { applyFilters, EMPTY_FILTERS, type RunFilters } from './iphone-sync-filters';
+import {
+  parseViewPeriod,
+  SHARED_VIEW_PERIODS,
+  viewPeriodMatches,
+  type ResolvedPeriodLike,
+  type StoredViewPeriod,
+} from './view-period';
 
 /** Which report a saved view belongs to. One table serves them all. */
 export const REPORT_KEY = 'iphone-sync';
@@ -150,6 +161,8 @@ export interface StoredFilters {
   platforms: string[];
   search: string;
   stalledOnly: boolean;
+  /** The time range the view was saved with (BACKLOG-4084). Absent on a view saved before it. */
+  period?: StoredViewPeriod;
 }
 
 export const STORED_FILTER_KEYS: readonly (keyof StoredFilters)[] = [
@@ -160,14 +173,20 @@ export const STORED_FILTER_KEYS: readonly (keyof StoredFilters)[] = [
   'stalledOnly',
 ];
 
-export function serializeFilters(filters: RunFilters, stalledOnly: boolean): StoredFilters {
-  return {
+export function serializeFilters(
+  filters: RunFilters,
+  stalledOnly: boolean,
+  period?: StoredViewPeriod | null
+): StoredFilters {
+  const stored: StoredFilters = {
     types: [...filters.types],
     outcomes: [...filters.outcomes],
     platforms: [...filters.platforms],
     search: filters.search.trim().slice(0, 120),
     stalledOnly,
   };
+  if (period) stored.period = { ...period };
+  return stored;
 }
 
 const SYNC_TYPES: readonly SyncType[] = ['first', 'incremental', 'unknown'];
@@ -241,6 +260,8 @@ export interface ReportSavedView {
   pinned: boolean;
   /** BACKLOG-4084. False when the row has no `is_default` (migration not applied). */
   isDefault: boolean;
+  /** BACKLOG-4084. The stored time range, or null (none stored, or not one of this report's). */
+  period: StoredViewPeriod | null;
 }
 
 /** Turn one RPC row into a view, or null when it is not one. */
@@ -257,6 +278,12 @@ export function parseSavedView(raw: unknown): ReportSavedView | null {
     metric: parseMetric(row.metric),
     pinned: row.pinned === true,
     isDefault: row.is_default === true,
+    period: parseViewPeriod(
+      row.filters != null && typeof row.filters === 'object'
+        ? (row.filters as Record<string, unknown>).period
+        : undefined,
+      SHARED_VIEW_PERIODS
+    ),
   };
 }
 
@@ -301,6 +328,19 @@ export function viewMatchesState(
     view.filters.search.trim() === filters.search.trim() &&
     view.stalledOnly === stalledOnly
   );
+}
+
+/**
+ * Is the page showing this view, time range included? The Views list's active
+ * row. A view with no stored period matches any period.
+ */
+export function viewMatchesPage(
+  view: ReportSavedView,
+  filters: RunFilters,
+  stalledOnly: boolean,
+  period: ResolvedPeriodLike
+): boolean {
+  return viewMatchesState(view, filters, stalledOnly) && viewPeriodMatches(view.period ?? null, period);
 }
 
 /**

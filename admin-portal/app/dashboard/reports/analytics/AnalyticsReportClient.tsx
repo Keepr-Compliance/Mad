@@ -6,9 +6,16 @@
  */
 
 import { useRouter } from 'next/navigation';
+import { analyticsViewsApi } from '@/lib/reports/period-only-views-api';
 import { AnalyticsReport, type AnalyticsReportProps } from './AnalyticsReport';
 
-export function AnalyticsReportClient(props: Omit<AnalyticsReportProps, 'onNavigate'>) {
+export function AnalyticsReportClient(props: Omit<AnalyticsReportProps, 'onNavigate' | 'viewsApi'>) {
   const router = useRouter();
-  return <AnalyticsReport {...props} onNavigate={(url) => router.push(url, { scroll: false })} />;
+  return (
+    <AnalyticsReport
+      {...props}
+      onNavigate={(url) => router.push(url, { scroll: false })}
+      viewsApi={analyticsViewsApi}
+    />
+  );
 }

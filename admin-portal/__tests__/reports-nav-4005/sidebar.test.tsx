@@ -48,6 +48,10 @@ vi.mock('@/components/providers/PermissionsProvider', () => ({
     loading: false,
   }),
 }));
+// BACKLOG-4091: the Reports page reads the layout cookie; no cookie = Cards.
+vi.mock('next/headers', () => ({
+  cookies: async () => ({ get: () => undefined }),
+}));
 vi.mock('@/lib/supabase/server', () => ({
   getAuthenticatedUser: async () => {
     const single = (data: unknown) => ({ select: () => ({ eq: () => ({ single: async () => ({ data, error: null }) }) }) });
@@ -160,7 +164,7 @@ describe('C4c hidden without analytics.view', () => {
 
 describe('C6 Reports page lists every registry report, Analytics first (BACKLOG-3723), Paywall Funnel among them', () => {
   it('renders every registry report once, in registry order', async () => {
-    render(await ReportsIndexPage());
+    render(await ReportsIndexPage({ searchParams: Promise.resolve({}) }));
     const hrefs = allHrefs();
     expect(hrefs).toEqual([
       '/dashboard/reports/analytics',

@@ -6,6 +6,7 @@ import { computeFunnel } from '@/lib/funnel-analytics';
 import { getFunnelEvents } from '@/lib/reports/funnel-queries';
 import { MAX_PAGES, PAGE_SIZE } from '@/lib/reports/fetch-all-pages';
 import { resolveFunnelPeriod } from '@/lib/reports/funnel-period';
+import { FUNNEL_REPORT_KEY, funnelViews } from '@/lib/reports/period-only-views';
 import { REPORTS_BASE_PATH } from '@/lib/reports/registry';
 import type { ParamRecord } from '@/lib/reports/report-url';
 import { FunnelReportClient } from './FunnelReportClient';
@@ -54,14 +55,18 @@ export default async function FunnelPage({
   }
 
   const params = await searchParams;
-  const period = resolveFunnelPeriod(
-    {
-      period: typeof params.period === 'string' ? params.period : undefined,
-      from: typeof params.from === 'string' ? params.from : undefined,
-      to: typeof params.to === 'string' ? params.to : undefined,
-    },
-    new Date()
-  );
+  // A bare URL opens the user's default view (its time range); any period
+  // param in the URL wins and the views are not read here at all (BACKLOG-4084).
+  const { periodInput } = await funnelViews.resolveInitial(params, async () => {
+    const { data, error } = await supabase.rpc('report_list_saved_views', { p_report_key: FUNNEL_REPORT_KEY });
+    if (error) {
+      // The message names the stage only; the error text can carry user data.
+      console.error('[funnel] saved views read failed; opening without a default view');
+      throw error;
+    }
+    return data;
+  });
+  const period = resolveFunnelPeriod(periodInput, new Date());
 
   const events = await getFunnelEvents(supabase, period);
   const funnel = computeFunnel(events.rows);

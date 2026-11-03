@@ -13,7 +13,7 @@
  * failed tile shows an em dash, never a 0.
  */
 
-import { FilterBar, FilterCaption, PeriodPicker, StatCard, TruncationNotice } from '@keepr/ui';
+import { FilterBar, FilterCaption, PeriodPicker, SavedViews, StatCard, TruncationNotice } from '@keepr/ui';
 import { Building2, Clock, Monitor, UserCheck, Users } from 'lucide-react';
 import { Card } from '@keepr/design-system';
 import type { AnalyticsData, CountResult } from '@/lib/reports/analytics-queries';
@@ -23,6 +23,9 @@ import {
   type AnalyticsPeriod,
   type AnalyticsPeriodKey,
 } from '@/lib/reports/analytics-period';
+import { analyticsViews, type PeriodOnlySavedView } from '@/lib/reports/period-only-views';
+import type { PeriodOnlyViewsApi } from '@/lib/reports/period-only-views-api';
+import { usePeriodOnlySavedViews } from '@/lib/reports/use-period-only-saved-views';
 import { VersionDistribution } from './components/VersionDistribution';
 import { PlatformBreakdown } from './components/PlatformBreakdown';
 import { PhoneTypeBreakdown } from './components/PhoneTypeBreakdown';
@@ -39,19 +42,26 @@ export interface AnalyticsReportProps {
   period: AnalyticsPeriod;
   rowCap: number;
   onNavigate?: (url: string) => void;
+  /** Saved-view storage (BACKLOG-4084). Absent = saved views unavailable (fails closed). */
+  viewsApi?: PeriodOnlyViewsApi;
 }
 
 function tileValue(c: CountResult): string {
   return c.failed || c.value === null ? FAILED_VALUE : c.value.toLocaleString();
 }
 
-export function AnalyticsReport({ data, period, rowCap, onNavigate }: AnalyticsReportProps) {
+export function AnalyticsReport({ data, period, rowCap, onNavigate, viewsApi }: AnalyticsReportProps) {
   const { counts, versions, platform, phone, license } = data;
 
   function navigateToPeriod(next: AnalyticsPeriodKey) {
     const search = typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, '');
     onNavigate?.(buildAnalyticsPeriodUrl(search, next));
   }
+
+  // A stored period is checked against ANALYTICS_VIEW_PERIODS, so its key is an Analytics key.
+  const savedViews = usePeriodOnlySavedViews(viewsApi, analyticsViews, period, (key) =>
+    navigateToPeriod(key as AnalyticsPeriodKey)
+  );
 
   const tiles = [
     { key: 'active_users', label: 'Active Users', subtitle: period.label, icon: UserCheck, hue: 'primary', c: counts.active_users },
@@ -68,7 +78,11 @@ export function AnalyticsReport({ data, period, rowCap, onNavigate }: AnalyticsR
   return (
     <div className="space-y-6">
       <div>
-        <FilterBar hasFilters={false} onClear={() => undefined}>
+        <FilterBar
+          hasFilters={false}
+          onClear={() => undefined}
+          trailing={<SavedViews<PeriodOnlySavedView> {...savedViews} />}
+        >
           <PeriodPicker<AnalyticsPeriodKey>
             options={ANALYTICS_PERIOD_OPTIONS}
             value={period.key}

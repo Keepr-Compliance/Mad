@@ -3,7 +3,12 @@
 /**
  * iPhone Sync saved views — pinning the shared defaults (BACKLOG-4004)
  *
- * BACKLOG-4004 makes `PinnedViewCards` and `ReportViewSelector` serve a second
+ * BACKLOG-4004 made `PinnedViewCards` and the Views selector serve a second
+ * report; BACKLOG-4084 replaced the selector with the kit `SavedViews`, the
+ * metric selects moving to `MetricSaveFields`. The iPhone defaults below are
+ * unchanged by that move.
+ *
+ * Originally: `PinnedViewCards` and the one-off selector serve a second
  * report. Each gains an optional prop whose DEFAULT must stay exactly what the
  * iPhone Sync report shows today. The existing suites could not see a change
  * to any of these defaults (measured at SR plan review): their pinned cards
@@ -89,7 +94,7 @@ describe('saving without touching Column or Function', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Save current view as a card/ }));
     expect(
       screen.getByText(
-        'Saves the Type, Outcome, Platform, search and Stalled filters you have now — not the period. The card follows whichever period is selected.'
+        'Saves the Type, Outcome, Platform, search and Stalled filters and the time range. A pinned card follows whichever period is selected.'
       )
     ).toBeTruthy();
     fireEvent.change(screen.getByLabelText('View name'), { target: { value: 'Everything' } });

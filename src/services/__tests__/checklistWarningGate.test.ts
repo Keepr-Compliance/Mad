@@ -191,3 +191,30 @@ describe("BACKLOG-3618 — the warning ignores own checklists that are not sent"
     expect(await readUncheckedRequiredItems("txn-3618")).toHaveLength(3);
   });
 });
+
+describe("BACKLOG-3966 — the private checklist is never warned about", () => {
+  /**
+   * The real "Other probe template" output, as main emits it for the private
+   * checklist: the reserved template id, and `isPrivate` derived from it
+   * (checklistDbService toChecklist).
+   */
+  const withPrivate = (): ChecklistsForTransaction => {
+    const base = only("Probe template").checklists[0];
+    const other = only("Other probe template").checklists[0];
+    const mine = { ...other, checklist: { ...other.checklist, templateId: "keepr:my-items", isPrivate: true } };
+    return { checklists: [base, mine], requiredDone: 0, requiredTotal: 0 };
+  };
+
+  it("unticked required private items are not listed", () => {
+    const items = listUncheckedRequiredItems(withPrivate());
+    expect(items.map((i) => i.title)).toEqual(["Probe item 2"]);
+  });
+
+  it("the private checklist does not count toward naming rows (one sent checklist -> no name)", () => {
+    expect(listUncheckedRequiredItems(withPrivate()).map((i) => i.checklistName)).toEqual([null]);
+  });
+
+  it("the fixture's own checklists are not private (the producer emits isPrivate: false)", () => {
+    expect(REAL.checklists.map((c) => c.checklist.isPrivate)).toEqual([false, false, false]);
+  });
+});

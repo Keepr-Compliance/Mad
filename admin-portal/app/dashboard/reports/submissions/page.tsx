@@ -13,6 +13,7 @@ import { buildOpenAttempts, buildSubmissionsReport } from '@/lib/reports/submiss
 import { REPORTS_BASE_PATH } from '@/lib/reports/registry';
 import { resolvePeriod } from '@/lib/reports/period';
 import type { ParamRecord } from '@/lib/reports/report-url';
+import { resolveSubmissionsInitial, SUBMISSIONS_REPORT_KEY } from '@/lib/reports/submissions-views';
 import { SubmissionsReportClient } from './SubmissionsReportClient';
 
 export const dynamic = 'force-dynamic';
@@ -57,14 +58,20 @@ export default async function SubmissionsReportPage({
 
   const params = await searchParams;
   const now = new Date();
-  const period = resolvePeriod(
-    {
-      period: typeof params.period === 'string' ? params.period : undefined,
-      from: typeof params.from === 'string' ? params.from : undefined,
-      to: typeof params.to === 'string' ? params.to : undefined,
-    },
-    now
-  );
+  // A bare URL opens the user's default view (filters + time range); any period
+  // param in the URL wins and the views are not read here at all (BACKLOG-4084).
+  const { initialView, periodInput } = await resolveSubmissionsInitial(params, async () => {
+    const { data, error } = await supabase.rpc('report_list_saved_views', {
+      p_report_key: SUBMISSIONS_REPORT_KEY,
+    });
+    if (error) {
+      // The message names the stage only; the error text can carry user data.
+      console.error('[submissions] saved views read failed; opening without a default view');
+      throw error;
+    }
+    return data;
+  });
+  const period = resolvePeriod(periodInput, now);
 
   const [periodResult, openResult] = await Promise.all([
     getSubmissionAttempts(supabase, period),
@@ -115,6 +122,7 @@ export default async function SubmissionsReportPage({
         period={period}
         truncated={periodResult.truncated}
         rowCap={SUBMISSION_LIMIT}
+        initialView={initialView}
       />
     </div>
   );

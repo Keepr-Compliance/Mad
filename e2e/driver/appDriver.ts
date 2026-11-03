@@ -109,7 +109,7 @@ export class KeeprAppDriver implements AppDriver {
   async detectState(): Promise<AppState> {
     // Strongest READY signal (BACKLOG-1940): a dashboard nav testid is present. Check this FIRST —
     // it is a stable, unambiguous marker of the ready main app (the old text markers could miss the
-    // dashboard, whose copy is "New Audit"/"All Audits", not "Transactions").
+    // dashboard, whose copy is "New Transaction"/"All audits", not "Transactions").
     if (await this.isTestidVisible(Testids.navTransactions)) return 'ready';
     if (await this.isTestidVisible(Testids.navNewAudit)) return 'ready';
     // Onboarding markers take priority over text-based ready markers: a "Connect"/"Get Started"
@@ -292,8 +292,8 @@ export class KeeprAppDriver implements AppDriver {
   }
 
   async gotoSettings(): Promise<void> {
-    // profile avatar (nav-profile) → Profile modal → Settings button (nav-settings) → settings-page.
-    await this.clickTestidOrThrow(Testids.navProfile, 'gotoSettings: open profile menu');
+    // initials (nav-profile) → account side panel → its Account row (nav-settings) → settings-page.
+    await this.clickTestidOrThrow(Testids.navProfile, 'gotoSettings: open account panel');
     await this.clickTestidOrThrow(Testids.navSettings, 'gotoSettings: click Settings');
     await this.waitTestidOrThrow(Testids.settingsPage, 'gotoSettings: settings page did not render');
   }
@@ -308,12 +308,12 @@ export class KeeprAppDriver implements AppDriver {
       await cancel.click().catch(() => undefined);
       await this.page.waitForTimeout(300);
     }
+    // BACKLOG-3964: Settings is a page; Escape is its Back (unless a dialog inside it is open).
     await this.page.keyboard.press('Escape').catch(() => undefined);
     await this.page.waitForTimeout(200);
 
-    // NOTE: there are TWO settings-close buttons (mobile `sm:hidden` + desktop `hidden sm:flex`);
-    // `.first()` would pick the HIDDEN mobile one at a desktop viewport, so click the VISIBLE one.
-    const close = this.page.getByTestId(Testids.settingsClose).locator('visible=true').first();
+    // BACKLOG-3964: ONE settings-close button now (the page's "← Back").
+    const close = this.page.getByTestId(Testids.settingsClose);
     if (await close.isVisible().catch(() => false)) {
       await close.click().catch(() => undefined);
     }

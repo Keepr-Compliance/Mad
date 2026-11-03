@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { Z_CLASS } from "../constants/zLayers";
 import type { UpdateErrorType } from "../../electron/types/ipc";
 
 interface UpdateInfo {
@@ -190,13 +191,13 @@ export default function UpdateNotification() {
     );
   };
 
-  // BACKLOG-610: Use z-[110] to ensure visibility above all modals and toasts (z-[100])
+  // BACKLOG-610: above all modals and toasts (src/constants/zLayers.ts)
 
   // macOS App Translocation warning — shown when app cannot auto-update
   // Takes precedence over the generic error UI because it's actionable.
   if (translocationDetected) {
     return (
-      <div className="fixed bottom-4 right-4 bg-amber-500 text-white p-4 rounded-lg shadow-lg max-w-sm z-[110]">
+      <div className={`fixed bottom-4 right-4 bg-amber-500 text-white p-4 rounded-lg shadow-lg max-w-sm ${Z_CLASS.update}`}>
         <h3 className="font-bold text-lg mb-2">Updates Unavailable</h3>
         <p className="text-sm mb-3">
           Please move Keepr to your Applications folder to enable automatic
@@ -225,7 +226,7 @@ export default function UpdateNotification() {
     // remaining self-service options rather than promising another auto-attempt.
     return (
       <div
-        className="fixed bottom-4 right-4 bg-red-500 text-white p-4 rounded-lg shadow-lg max-w-sm z-[110]"
+        className={`fixed bottom-4 right-4 bg-red-500 text-white p-4 rounded-lg shadow-lg max-w-sm ${Z_CLASS.update}`}
         role="alert"
       >
         <h3 className="font-bold text-lg mb-2">Update Failed</h3>
@@ -272,7 +273,7 @@ export default function UpdateNotification() {
 
   if (updateDownloaded) {
     return (
-      <div className="fixed bottom-4 right-4 bg-green-500 text-white p-4 rounded-lg shadow-lg max-w-sm z-[110]">
+      <div className={`fixed bottom-4 right-4 bg-green-500 text-white p-4 rounded-lg shadow-lg max-w-sm ${Z_CLASS.update}`}>
         <h3 className="font-bold text-lg mb-2">Update Ready!</h3>
         <p className="text-sm mb-3">
           Version {updateInfo?.version} has been downloaded and is ready to
@@ -298,7 +299,7 @@ export default function UpdateNotification() {
 
   if (updateAvailable) {
     return (
-      <div className="fixed bottom-4 right-4 bg-blue-500 text-white p-4 rounded-lg shadow-lg max-w-sm z-[110]">
+      <div className={`fixed bottom-4 right-4 bg-blue-500 text-white p-4 rounded-lg shadow-lg max-w-sm ${Z_CLASS.update}`}>
         <h3 className="font-bold text-lg mb-2">Downloading Update...</h3>
         <p className="text-sm mb-3">Version {updateInfo?.version}</p>
         <div className="w-full bg-white/30 rounded-full h-2 mb-2">

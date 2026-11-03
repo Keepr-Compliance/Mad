@@ -113,6 +113,7 @@ import { enforceExportGate } from "../../services/exportGate";
 import { ensureTransactionEmailsSynced } from "../../services/transactionSyncTrigger";
 import { registerTransactionExportHandlers } from "../transactionExportHandlers";
 import type { ChecklistExportInput } from "../../services/enhancedExportService";
+import { MY_ITEMS_TEMPLATE_ID } from "../../services/db/checklistPrivacy";
 
 const SCHEMA = fs.readFileSync(path.join(__dirname, "..", "..", "database", "schema.sql"), "utf8");
 
@@ -311,5 +312,39 @@ describe("BACKLOG-3767 export-enhanced: checklist read", () => {
       emailId: null,
       filename: "hx-photo.jpg",
     });
+  });
+});
+
+describe("BACKLOG-3966 export-enhanced: the private checklist is not exported", () => {
+  /** Nothing writes it yet; the schema.sql columns, with the reserved id. */
+  function seedPrivate(): void {
+    db.prepare(
+      `INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name, sort_order)
+       VALUES ('cl-private', ?, ?, 'My items', 1)`,
+    ).run(TXN, MY_ITEMS_TEMPLATE_ID);
+    db.prepare(
+      `INSERT INTO transaction_checklist_items (id, checklist_id, title, is_required, sort_order)
+       VALUES ('it-private', 'cl-private', 'Call the lender', 1, 0)`,
+    ).run();
+    link("it-private", "email", "Offer accepted", ["em-1"]);
+  }
+
+  it("runs on the real SQLite driver", () => {
+    expect(db.prepare("SELECT sqlite_version() AS v").get()).toEqual({ v: expect.stringMatching(/^3\.\d+\.\d+$/) });
+  });
+
+  it("the PDF checklist section holds the template checklist only", async () => {
+    seedPrivate();
+    expect(await invoke({ exportFormat: "pdf", includeChecklist: true })).toMatchObject({ success: true });
+    const checklist = capturedChecklist()!;
+    expect(checklist.checklists.map((c) => c.checklist.templateName)).toEqual(["Purchase file"]);
+    expect(checklist.checklists.flatMap((c) => c.items.map((i) => i.title))).not.toContain("Call the lender");
+  });
+
+  it("a deal whose only checklist is private exports no checklist section", async () => {
+    db.exec(`DELETE FROM transaction_checklists WHERE id = 'cl-1'`);
+    seedPrivate();
+    expect(await invoke({ exportFormat: "pdf", includeChecklist: true })).toMatchObject({ success: true });
+    expect(capturedChecklist()).toBeUndefined();
   });
 });

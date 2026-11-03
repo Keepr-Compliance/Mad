@@ -16,6 +16,7 @@ import {
 } from '@/lib/reports/support-sla';
 import { REPORTS_BASE_PATH } from '@/lib/reports/registry';
 import { resolvePeriod } from '@/lib/reports/period';
+import { SUPPORT_SLA_REPORT_KEY, supportSlaViews } from '@/lib/reports/period-only-views';
 import type { ParamRecord } from '@/lib/reports/report-url';
 import { SupportSlaReportClient } from './SupportSlaReportClient';
 
@@ -66,14 +67,18 @@ export default async function SupportSlaReportPage({
   }
 
   const params = await searchParams;
-  const period = resolvePeriod(
-    {
-      period: typeof params.period === 'string' ? params.period : undefined,
-      from: typeof params.from === 'string' ? params.from : undefined,
-      to: typeof params.to === 'string' ? params.to : undefined,
-    },
-    new Date()
-  );
+  // A bare URL opens the user's default view (its time range); any period
+  // param in the URL wins and the views are not read here at all (BACKLOG-4084).
+  const { periodInput } = await supportSlaViews.resolveInitial(params, async () => {
+    const { data, error } = await supabase.rpc('report_list_saved_views', { p_report_key: SUPPORT_SLA_REPORT_KEY });
+    if (error) {
+      // The message names the stage only; the error text can carry user data.
+      console.error('[support-sla] saved views read failed; opening without a default view');
+      throw error;
+    }
+    return data;
+  });
+  const period = resolvePeriod(periodInput, new Date());
 
   const [tickets, openCount, settings] = await Promise.all([
     getSupportTickets(supabase, period),

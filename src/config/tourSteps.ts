@@ -170,7 +170,7 @@ export const getDashboardTourSteps = (
   {
     target: '[data-tour="profile-button"]',
     content:
-      "Access your account settings, subscription status, and email connections from your profile.",
+      "Click your initials for your account and Settings.",
     placement: "bottom-end",
     disableBeacon: true,
   },

@@ -400,7 +400,7 @@ export function registerTransactionExportHandlers(
       let checklist: ChecklistExportInput | undefined;
       const pdfFormat = enhancedFormat === undefined || enhancedFormat === "pdf";
       if (sanitizedOptions.includeChecklist === true && pdfFormat) {
-        const { checklists } = await getChecklistsForTransaction(validatedTransactionId);
+        const { checklists } = await getChecklistsForTransaction(validatedTransactionId, "broker");
         if (checklists.length > 0) {
           const targets = await getChecklistExportTargets(validatedTransactionId, checklists);
           checklist = { checklists, ...targets };
