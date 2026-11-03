@@ -8,18 +8,23 @@
  *   3. two rows of one publisher share a `titleKey` source
  *   4. an adjacent title-keyed header has no `anchorTemplate` containing "{title}"
  *   5. a mid-line `marker` starts with `^` or ends with `$`
- *   6. a title-line publisher with no `requiredMarkers` and no revision gate has a row whose title
- *      is a single line (such rows need a title of at least 2 lines)
+ *   6. (taken out in PR 2: it guarded title-line rows with no revision gate; check 10 now rejects
+ *      every header without one, so it could no longer fire)
  *   7. a windowed header has `windowAfter <= 0` or `windowBefore < 0`
  *   8. a `codePage` lacks the `m` flag
  *   9. a code-page or mid-line header has no publisher proof (requiredMarkers, documentMarkers
  *      or pairedToken) — `namePattern` is not read for those kinds
+ *  10. a windowed header (code-page, mid-line, title-keyed) has `revisionRequired` other than true
+ *      (founder ruling F4: every match carries its revision)
+ *  11. a title-keyed header has no revision source: placement "line" without `revision`, or an
+ *      `anchorTemplate` without the named group (?<rev>…)
  */
 import type { FormRow, Header, PublisherHeader, PublisherRow, Registry } from "./formRegistryTypes";
 import { DEFAULT_PUBLISHERS } from "./publishers";
 import { NWMLS_FORMS } from "./nwmlsForms";
 import { OR_FORMS } from "./orForms";
 import { CA_FORMS } from "./caForms";
+import { NV_FORMS } from "./nvForms";
 
 export function codeKey(publisherId: string, code: string): string {
   return `${publisherId}\u0000${code}`;
@@ -46,6 +51,10 @@ function checkPublisher(p: PublisherRow): void {
       throw new Error(`form registry: publisher "${p.id}" codeLine must use the m flag`);
     }
     return;
+  }
+  // 10
+  if (h.revisionRequired !== true) {
+    throw new Error(`form registry: publisher "${p.id}" must require its revision`);
   }
   // 7
   if (!(h.windowAfter > 0) || !(h.windowBefore >= 0)) {
@@ -78,6 +87,14 @@ function checkPublisher(p: PublisherRow): void {
     if (!h.anchorTemplate || !h.anchorTemplate.includes("{title}")) {
       throw new Error(`form registry: publisher "${p.id}" anchorTemplate needs {title}`);
     }
+    // 11
+    if (!h.anchorTemplate.includes("(?<rev>")) {
+      throw new Error(`form registry: publisher "${p.id}" anchorTemplate needs (?<rev>…)`);
+    }
+  }
+  if (h.kind === "title-keyed" && h.placement === "line" && !h.revision) {
+    // 11
+    throw new Error(`form registry: publisher "${p.id}" needs a revision marker`);
   }
 }
 
@@ -121,15 +138,6 @@ export function buildRegistry(
         const k = `${f.publisherId}\u0000${t.source}`;
         if (titleSources.has(k)) throw new Error(`form registry: duplicate titleKey in "${f.id}"`);
         titleSources.add(k);
-        // 6
-        if (
-          h.placement === "line" &&
-          h.requiredMarkers.length === 0 &&
-          !h.revisionRequired &&
-          !t.source.includes("\\n")
-        ) {
-          throw new Error(`form registry: form "${f.id}" needs a title of at least 2 lines`);
-        }
       }
       const list = byTitle.get(f.publisherId) ?? [];
       list.push(f);
@@ -142,6 +150,11 @@ export function buildRegistry(
   return { publishers, forms, byCode, byTitle };
 }
 
-export const DEFAULT_FORMS: readonly FormRow[] = [...NWMLS_FORMS, ...OR_FORMS, ...CA_FORMS];
+export const DEFAULT_FORMS: readonly FormRow[] = [
+  ...NWMLS_FORMS,
+  ...OR_FORMS,
+  ...CA_FORMS,
+  ...NV_FORMS,
+];
 
 export const DEFAULT_REGISTRY: Registry = buildRegistry(DEFAULT_PUBLISHERS, DEFAULT_FORMS);

@@ -280,9 +280,8 @@ describe("BACKLOG-4106 declared revision (SYNTHETIC publisher with a separate re
     expect(matchForms("ZZ 101 Page 1 of 2\nZZ Publisher Edition 2024\n", reg)[0].revisionSeen).toBe("2024");
   });
 
-  it("capture-only: no revision -> match with revisionSeen null", () => {
-    const reg = buildRegistry([pub({ revisionRequired: false })], []);
-    expect(matchForms("ZZ 101 Page 1 of 2\nZZ Publisher\n", reg)[0].revisionSeen).toBeNull();
+  it("F4: capture-only (revisionRequired false) is rejected at load", () => {
+    expect(() => buildRegistry([pub({ revisionRequired: false })], [])).toThrow(/form registry/);
   });
 
   it("document scope: the revision may sit anywhere in the text", () => {
