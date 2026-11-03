@@ -10,9 +10,12 @@
  * Layout B puts each item on its own line (bare `Form 17`, title, `Rev. 8/21`, …).
  * The header repeats on every page.
  */
-import type { PublisherRow } from "./formRegistryTypes";
+import type { PublisherHeader, PublisherRow } from "./formRegistryTypes";
+import { OR_PUBLISHERS } from "./orForms";
+import { CA_PUBLISHERS } from "./caForms";
 
-export const NWMLS_PUBLISHER: PublisherRow = {
+// Typed with its code-line header so v1 callers can read header.windowChars (BACKLOG-4106).
+export const NWMLS_PUBLISHER: PublisherRow & { header: PublisherHeader } = {
   id: "nwmls",
   name: "Northwest Multiple Listing Service",
   namePattern: /Northwest\s+Multiple\s+Listing\s+Service/i,
@@ -30,4 +33,9 @@ export const NWMLS_PUBLISHER: PublisherRow = {
   },
 };
 
-export const DEFAULT_PUBLISHERS: readonly PublisherRow[] = [NWMLS_PUBLISHER];
+/** BACKLOG-4106: OR and CA publishers live beside their rows (orForms.ts, caForms.ts). */
+export const DEFAULT_PUBLISHERS: readonly PublisherRow[] = [
+  NWMLS_PUBLISHER,
+  ...OR_PUBLISHERS,
+  ...CA_PUBLISHERS,
+];

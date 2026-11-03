@@ -8,10 +8,16 @@ import { NWMLS_FORMS } from "../nwmlsForms";
 import { NWMLS_PUBLISHER } from "../publishers";
 import type { FormRow, PublisherRow } from "../formRegistryTypes";
 import { ALL_FIXTURES, fixtureText } from "./fixtures/nwmlsHeaders";
+import { OR_FORMS, OREF_PUBLISHER, ORR_PUBLISHER } from "../orForms";
+import { CA_FORMS, CAR_PUBLISHER, DRE_PUBLISHER } from "../caForms";
+import { OR_FIXTURES } from "./fixtures/orHeaders";
+import { CA_FIXTURES } from "./fixtures/caHeaders";
+import type { CodePageHeader, MidLineHeader, TitleKeyedHeader } from "../formRegistryTypes";
 
 describe("BACKLOG-3941 default registry", () => {
   it("ships eight NWMLS rows in priority order (main transaction forms first)", () => {
-    expect(DEFAULT_REGISTRY.forms.map((f) => f.id)).toEqual([
+    // BACKLOG-4106: the default registry now also holds OR and CA rows; this pin is the NWMLS slice.
+    expect(DEFAULT_REGISTRY.forms.filter((f) => f.publisherId === "nwmls").map((f) => f.id)).toEqual([
       "nwmls-21",
       "nwmls-41",
       "nwmls-1A",
@@ -88,5 +94,150 @@ describe("BACKLOG-3941 buildRegistry validation", () => {
       sampleProvenance: ["synthetic"],
     };
     expect(() => buildRegistry([pub], [form])).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// BACKLOG-4106 — registry v2 (marker kinds; OR and CA rows)
+// ---------------------------------------------------------------------------------------------
+
+describe("BACKLOG-4106 default registry v2", () => {
+  it("ships NWMLS, then OR (8 OREF + 6 Oregon REALTORS), then CA (3 C.A.R. + 1 DRE)", () => {
+    expect(DEFAULT_REGISTRY.publishers.map((p) => p.id)).toEqual(["nwmls", "oref", "orr", "car", "dre"]);
+    expect(DEFAULT_REGISTRY.forms.filter((f) => f.publisherId !== "nwmls").map((f) => f.id)).toEqual([
+      "oref-001",
+      "oref-003",
+      "oref-004",
+      "oref-015",
+      "oref-050",
+      "oref-052",
+      "oref-057",
+      "oref-009",
+      "orr-1.1",
+      "orr-2.1",
+      "orr-9.3",
+      "orr-9.4",
+      "orr-3.1",
+      "orr-10.4",
+      "car-RPA",
+      "car-BRBC",
+      "car-AD",
+      "dre-RE882",
+    ]);
+  });
+
+  it("holds the rows the founder held (demo-only CA sources, OCR-only SFAR, title-only rows)", () => {
+    const codes = DEFAULT_REGISTRY.forms.map((f) => f.code);
+    for (const held of ["RPA-CA", "RLA", "TDS", "SPQ", "SBSA"]) expect(codes).not.toContain(held);
+    const pubs = DEFAULT_REGISTRY.publishers.map((p) => p.id);
+    expect(pubs).not.toContain("sfar");
+    expect(pubs).not.toContain("orea");
+    expect(DEFAULT_REGISTRY.byTitle.size).toBe(0);
+  });
+
+  const v2Fixtures = [...OR_FIXTURES, ...CA_FIXTURES];
+  describe.each([...OR_FORMS, ...CA_FORMS].map((f) => [f.id, f] as const))("%s", (_id, row) => {
+    it.each(row.sampleProvenance.map((p) => [p]))("is proven by fixture %s", (fixtureId) => {
+      const fx = v2Fixtures.find((f) => f.id === fixtureId);
+      expect(fx).toBeDefined();
+      const ms = matchForms(fixtureText(fx!));
+      expect(ms.map((m) => m.formId)).toEqual([row.id]);
+      expect(ms[0].kind).toBe(row.kind);
+    });
+  });
+});
+
+describe("BACKLOG-4106 buildRegistry v2 checks", () => {
+  const cp = (over: Partial<CodePageHeader> = {}): PublisherRow => ({
+    ...CAR_PUBLISHER,
+    id: "cp",
+    header: { ...(CAR_PUBLISHER.header as CodePageHeader), ...over },
+  });
+  const ml = (over: Partial<MidLineHeader> = {}): PublisherRow => ({
+    ...OREF_PUBLISHER,
+    id: "ml",
+    header: { ...(OREF_PUBLISHER.header as MidLineHeader), ...over },
+  });
+  const tkHeader: TitleKeyedHeader = {
+    kind: "title-keyed",
+    placement: "line",
+    requiredMarkers: [],
+    revisionRequired: false,
+    windowBefore: 0,
+    windowAfter: 400,
+  };
+  const tk = (over: Partial<TitleKeyedHeader> = {}): PublisherRow => ({
+    id: "tk",
+    name: "Title-keyed (synthetic)",
+    namePattern: /Synthetic/,
+    region: { country: "US", state: "NV" },
+    header: { ...tkHeader, ...over },
+  });
+  const form = (over: Partial<FormRow>): FormRow => ({
+    id: "f",
+    publisherId: "cp",
+    code: "XX",
+    kind: "other",
+    knownTitles: [],
+    observedRevisions: [],
+    sampleProvenance: ["synthetic"],
+    ...over,
+  });
+  const twoLine = /FIRST TITLE LINE\nSECOND TITLE LINE/;
+
+  it("accepts the default v2 publishers and rows", () => {
+    expect(() =>
+      buildRegistry([NWMLS_PUBLISHER, OREF_PUBLISHER, ORR_PUBLISHER, CAR_PUBLISHER, DRE_PUBLISHER], [
+        ...NWMLS_FORMS,
+        ...OR_FORMS,
+        ...CA_FORMS,
+      ])
+    ).not.toThrow();
+  });
+
+  it("accepts a valid title-keyed publisher and indexes its rows by title", () => {
+    const reg = buildRegistry([tk()], [form({ publisherId: "tk", code: undefined, titleKey: [twoLine] })]);
+    expect(reg.byTitle.get("tk")?.map((f) => f.id)).toEqual(["f"]);
+    expect(reg.byCode.size).toBe(0);
+  });
+
+  it.each<[string, PublisherRow[], FormRow[]]>([
+    ["1: a code-page row without a code", [cp()], [form({ code: undefined })]],
+    ["1: a mid-line row without a code", [ml()], [form({ publisherId: "ml", code: undefined })]],
+    ["2: a title-keyed row without a titleKey", [tk()], [form({ publisherId: "tk", code: undefined })]],
+    [
+      "3: two rows of one publisher with the same titleKey",
+      [tk()],
+      [
+        form({ id: "a", publisherId: "tk", titleKey: [twoLine] }),
+        form({ id: "b", publisherId: "tk", titleKey: [twoLine] }),
+      ],
+    ],
+    ["4: an adjacent anchorTemplate without {title}", [tk({ placement: "adjacent", anchorTemplate: "Rev\\. (?<rev>\\d{2})" })], []],
+    ["4: an adjacent header without an anchorTemplate", [tk({ placement: "adjacent" })], []],
+    ["5: a mid-line marker anchored with ^", [ml({ marker: /^OREF (\d{3}) \| Released (\d{2}\/\d{4})/g })], []],
+    ["5: a mid-line marker anchored with $", [ml({ marker: /OREF (\d{3}) \| Released (\d{2}\/\d{4})$/g })], []],
+    [
+      "6: a single-line title with no required marker and no revision gate",
+      [tk()],
+      [form({ publisherId: "tk", code: undefined, titleKey: [/ONE TITLE LINE/] })],
+    ],
+    ["7: windowAfter 0", [cp({ windowAfter: 0 })], []],
+    ["7: windowBefore negative", [cp({ windowBefore: -1 })], []],
+    ["8: a codePage without the m flag", [cp({ codePage: /^(RPA) (\d{1,2}\/\d{2})/g })], []],
+    ["9: a code-page publisher with no publisher proof", [cp({ pairedToken: undefined })], []],
+    ["9: a mid-line publisher with no publisher proof", [ml({ requiredMarkers: [] })], []],
+  ])("rejects %s", (_name, pubs, forms) => {
+    expect(() => buildRegistry(pubs, forms)).toThrow(/form registry/);
+  });
+
+  it("6 holds only for title-line publishers with no other guard", () => {
+    const single = [form({ publisherId: "tk", code: undefined, titleKey: [/ONE TITLE LINE/] })];
+    expect(() => buildRegistry([tk({ revisionRequired: true })], single)).not.toThrow();
+    expect(() => buildRegistry([tk({ requiredMarkers: [/Synthetic/] })], single)).not.toThrow();
+  });
+
+  it("windowBefore 0 is allowed", () => {
+    expect(() => buildRegistry([cp({ windowBefore: 0 })], [])).not.toThrow();
   });
 });
