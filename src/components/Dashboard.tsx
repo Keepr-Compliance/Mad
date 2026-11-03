@@ -5,8 +5,8 @@ import { usePendingTransactionCount } from "../hooks/usePendingTransactionCount"
 import { useSyncOrchestrator } from "../hooks/useSyncOrchestrator";
 import { SyncStatusIndicator } from "./dashboard/index";
 import { DashboardActionCard } from "./dashboard/DashboardActionCard";
-import { DashboardSecondaryRow } from "./dashboard/DashboardSecondaryRow";
-import { DashboardPanels } from "./dashboard/panels/DashboardPanels";
+import { ClientsContactsCard } from "./dashboard/ClientsContactsCard";
+import { DashboardPanels, PANELS_GRID_TWO } from "./dashboard/panels/DashboardPanels";
 import type { TransactionTab } from "./transactionDetailsModule/types";
 import StartNewAuditModal from "./StartNewAuditModal";
 import { FeatureGate } from "./common/FeatureGate";
@@ -34,16 +34,16 @@ function TileIcon({ d }: { d: string }) {
   );
 }
 const CheckCircleIcon = () => <TileIcon d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />;
-const DocumentIcon = () => (
-  <TileIcon d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-);
 interface DashboardActionProps {
   onAuditNew: () => void;
   onViewTransactions: () => void;
   onManageContacts: () => void;
-  onSyncPhone?: () => void; // Only available for Windows + iPhone users
-  /** Opens the Android companion sync wizard. Only set when the user's import
-   *  source is the Android companion (BACKLOG-2320). Mirrors onSyncPhone. */
+  /** Set when the import source is iPhone Sync. BACKLOG-4115: the tile moved to the
+   *  title-bar pill; this still reopens the flow from SyncStatusIndicator and turns
+   *  on the tour's sync step (whose target is the pill). */
+  onSyncPhone?: () => void;
+  /** Set when the import source is Android (BACKLOG-2320 / 3659). BACKLOG-4115: used
+   *  by SyncStatusIndicator only; the tile moved to the title-bar pill. */
   onSyncAndroid?: () => void;
   onTourStateChange?: (isActive: boolean) => void;
   showSetupPrompt?: boolean;
@@ -219,7 +219,7 @@ function Dashboard({
   }, [runTour, onTourStateChange]);
 
   return (
-    <div className="min-h-full bg-gray-50 flex items-center justify-center p-4 sm:p-8">
+    <div className="min-h-full bg-warm-page flex items-center justify-center p-4 sm:p-8">
       {/* Onboarding Tour */}
       {/* BACKLOG-3674: the tooltip carries the "Don't show this again" box. */}
       <TourTooltipContext.Provider value={tourTooltipContext}>
@@ -285,13 +285,15 @@ function Dashboard({
 
         {/* Header */}
         <div className="text-center mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">
+          <h1 className="text-2xl font-semibold text-ink">
             {greeting}
           </h1>
         </div>
 
-        {/* Action Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* Action row (BACKLOG-4115): New Transaction | Clients & Contacts, on the
+            panels' grid so the tiles line up with Recent | Todo. All audits is
+            reached from the Recent panel's "All →". */}
+        <div className={PANELS_GRID_TWO} data-testid="dashboard-action-row">
           <DashboardActionCard
             title="New Transaction"
             titleClassName="whitespace-nowrap"
@@ -299,6 +301,7 @@ function Dashboard({
             disabled={isAnySyncing}
             icon={<CheckCircleIcon />}
             highlighted={pendingCount > 0}
+            chipTone="primary"
             dataTour="new-audit-card"
             dataTestId="nav-new-audit"
           >
@@ -312,23 +315,12 @@ function Dashboard({
             </FeatureGate>
           </DashboardActionCard>
 
-          <DashboardActionCard
-            title="All audits"
-            onClick={onViewTransactions}
+          <ClientsContactsCard
+            variant="primary"
+            onClick={onManageContacts}
             disabled={isAnySyncing}
-            icon={<DocumentIcon />}
-            dataTour="transactions-card"
-            dataTestId="nav-transactions"
           />
         </div>
-
-        {/* Small row: Clients & Contacts (+ phone sync). Placement is an ASSUMPTION, see DashboardSecondaryRow. */}
-        <DashboardSecondaryRow
-          onManageContacts={onManageContacts}
-          onSyncPhone={onSyncPhone}
-          onSyncAndroid={onSyncAndroid}
-          disabled={isAnySyncing}
-        />
 
         {/* BACKLOG-3965 PR-4b: Recent | Todo */}
         {user?.id && onOpenTransaction && (

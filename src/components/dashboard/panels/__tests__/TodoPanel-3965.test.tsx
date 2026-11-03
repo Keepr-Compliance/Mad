@@ -83,7 +83,7 @@ describe("TodoPanel", () => {
     const rows = screen.getAllByTestId("dashboard-todo-row");
     expect(within(rows[0]).getByTestId("closing-badge")).toHaveTextContent("Today");
     expect(within(rows[1]).getByTestId("closing-badge")).toHaveTextContent("1 d");
-    expect(within(rows[2]).getByTestId("closing-badge")).toHaveAttribute("data-tone", "warning");
+    expect(within(rows[2]).getByTestId("closing-badge")).toHaveAttribute("data-tone", "neutral");
     expect(within(rows[3]).queryByTestId("closing-badge")).not.toBeInTheDocument();
   });
 

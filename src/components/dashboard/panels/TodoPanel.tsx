@@ -31,6 +31,7 @@ export const TODO_VISIBLE_ROWS = 5;
 const BADGE_TONE_CLASS = {
   danger: "bg-danger-100 text-danger-800",
   warning: "bg-warning-100 text-warning-800",
+  neutral: "bg-warm-divider text-ink-muted",
 } as const;
 
 export interface TodoPanelProps {
@@ -76,7 +77,7 @@ function TodoRow({
     tickError && tickError.itemId === row.itemId ? tickError.message : null;
   return (
     <li
-      className="px-3 py-3 bg-white hover:bg-gray-50 min-w-0"
+      className="px-3 py-3 bg-white hover:bg-warm-header min-w-0"
       data-testid="dashboard-todo-row"
     >
       <div className="flex items-center gap-3 min-w-0">
@@ -86,7 +87,7 @@ function TodoRow({
           onChange={() => onTick(row.itemId)}
           disabled={disabled || tickingItemId === row.itemId}
           aria-label={`Mark done: ${row.title}`}
-          className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 shrink-0"
+          className="h-4 w-4 rounded border-warm-control text-primary-600 focus:ring-primary-500 shrink-0"
         />
         <button
           type="button"
@@ -95,10 +96,10 @@ function TodoRow({
           className="flex min-w-0 flex-1 items-center gap-3 text-left disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <span className="min-w-0 flex-1">
-            <span className="block text-sm font-medium text-gray-900 truncate">
+            <span className="block text-sm font-medium text-ink truncate">
               {row.title}
             </span>
-            <span className="block text-xs text-gray-500 truncate">
+            <span className="block text-xs text-ink-muted truncate">
               {row.propertyAddress || "No address"}
             </span>
           </span>
@@ -143,14 +144,14 @@ function TodoGroupView({
   return (
     <div data-testid="dashboard-todo-group" data-group-id={group.id}>
       {showHeader && (
-        <div className="flex items-center justify-between gap-3 px-3 py-2 bg-gray-50 border-y border-gray-200 text-xs font-semibold text-gray-600">
+        <div className="flex items-center justify-between gap-3 px-3 py-2 bg-warm-header border-y border-warm-line text-xs font-semibold text-ink-muted">
           <span className="truncate">{group.header}</span>
           <span className="tabular-nums">{group.count}</span>
         </div>
       )}
       {group.status !== null && <PanelMessage>{group.status}</PanelMessage>}
       {rows.length > 0 && (
-        <ul className="divide-y divide-gray-100">
+        <ul className="divide-y divide-warm-divider">
           {rows.map((row) => (
             <TodoRow
               key={row.itemId}
@@ -165,14 +166,14 @@ function TodoGroupView({
         <button
           type="button"
           onClick={() => setExpanded(true)}
-          className="w-full px-4 py-2 text-sm font-medium text-primary-700 hover:underline border-t border-gray-100"
+          className="w-full px-4 py-2 text-sm font-medium text-primary-700 hover:underline border-t border-warm-divider"
         >
           Show more
         </button>
       )}
       {expanded && group.count > group.rows.length && (
         <p
-          className="px-4 py-2 text-xs text-gray-500 border-t border-gray-100"
+          className="px-4 py-2 text-xs text-ink-muted border-t border-warm-divider"
           data-testid="dashboard-todo-partial"
         >
           Showing {group.rows.length} of {group.count}. Open a deal to see the
@@ -223,7 +224,7 @@ export function TodoPanel({
     >
       {state.status === "error" && (
         <div className="px-4 py-6 text-center">
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-ink-muted">
             Couldn&apos;t load your checklist items.
           </p>
           <button
@@ -249,7 +250,7 @@ export function TodoPanel({
       ))}
       {templateHint && state.status !== "off" && (
         <p
-          className="px-4 py-2 text-xs text-gray-500 border-t border-gray-100"
+          className="px-4 py-2 text-xs text-ink-muted border-t border-warm-divider"
           data-testid="dashboard-todo-template-hint"
         >
           {templateHint}

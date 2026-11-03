@@ -105,3 +105,23 @@ describe("getAccountInitials (two letters, SR R3b)", () => {
     expect(getAccountInitials(u)).toBe(expected);
   });
 });
+
+/**
+ * BACKLOG-4110: the hairline and title ink are app-wide, so the check renders
+ * NON-dashboard titles. A dashboard-only conditional would fail here.
+ */
+describe("TitleBar colours (BACKLOG-4110)", () => {
+  it.each(["Transactions", "Clients & Contacts", "Settings"])(
+    "%s: warm hairline, ink title, no gray border",
+    (title) => {
+      renderBar({ title, currentStep: "dashboard" as AppStep });
+      const bar = screen.getByTestId("title-bar");
+      expect(bar).toHaveClass("border-b", "border-warm-line");
+      expect(bar).not.toHaveClass("border-gray-200");
+      const h1 = screen.getByRole("heading", { level: 1 });
+      expect(h1).toHaveTextContent(title);
+      expect(h1).toHaveClass("text-ink");
+      expect(h1).not.toHaveClass("text-gray-700");
+    },
+  );
+});

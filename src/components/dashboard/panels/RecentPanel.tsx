@@ -39,6 +39,8 @@ export function RecentPanel({
           type="button"
           onClick={onViewAll}
           disabled={disabled}
+          data-testid="nav-transactions"
+          data-tour="transactions-card"
           className="text-sm font-medium text-primary-700 hover:underline whitespace-nowrap disabled:opacity-50"
         >
           All →
@@ -50,7 +52,7 @@ export function RecentPanel({
         <PanelMessage>Deals you open show here.</PanelMessage>
       )}
       {state.status === "ready" && state.rows.length > 0 && (
-        <ul className="divide-y divide-gray-100">
+        <ul className="divide-y divide-warm-divider">
           {state.rows.map((row) => {
             const ago = openedAgo(row.openedAt, at);
             // BACKLOG-3966 U1: every plan shows the ring (My items count on
@@ -65,14 +67,14 @@ export function RecentPanel({
                   onClick={() => onOpenTransaction(row.transactionId)}
                   disabled={disabled}
                   data-testid="dashboard-recent-row"
-                  className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 min-w-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-warm-header min-w-0 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <ProgressRing done={row.requiredDone} total={row.requiredTotal} />
                   <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-semibold text-gray-900 truncate">
+                    <span className="block text-sm font-semibold text-ink truncate">
                       {row.propertyAddress || "No address"}
                     </span>
-                    <span className="block text-xs text-gray-500">{detail}</span>
+                    <span className="block text-xs text-ink-muted">{detail}</span>
                   </span>
                 </button>
               </li>

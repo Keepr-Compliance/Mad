@@ -21,6 +21,24 @@ export default {
         // rounded-*-sm corners stay Tailwind's 2px, so nothing existing moves.
         sm: '0.125rem',
       },
+      // BACKLOG-4110 (dashboard mock v9): desktop-only warm neutrals + ink.
+      // Placement A for 2.45; promoted to the kit (tokens.json) in 2.46.
+      // `neutral` (Tailwind default) and `muted` (ui preset) are taken.
+      colors: {
+        warm: {
+          page: '#F6F5F2', // dashboard page
+          header: '#FAF9F7', // panel header strip, Todo group header, row hover
+          chip: '#F1F0EC', // muted icon chip
+          divider: '#EEECE7', // row dividers, neutral badge fill
+          line: '#E6E4DF', // card / tile / panel / title-bar hairline, ring rail
+          control: '#CBC8C1', // checkbox, tile hover border
+          dot: '#B5B2AB', // reserved for BACKLOG-4115 "off" dot
+        },
+        ink: {
+          DEFAULT: '#1C2430',
+          muted: '#5B6470',
+        },
+      },
       keyframes: {
         indeterminate: {
           '0%': { transform: 'translateX(-100%)' },

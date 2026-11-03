@@ -11,6 +11,7 @@
 import React from "react";
 import type { AppStateMachine } from "./state/types";
 import { AccountPanel, ShellBanners, ShellContent, TitleBar } from "./shell";
+import { useTitleBarSync } from "./shell/useTitleBarSync";
 import SystemHealthMonitor from "../components/SystemHealthMonitor";
 import { isOnboardingStep } from "./routing";
 import { useSessionValidator } from "../hooks/useSessionValidator";
@@ -53,6 +54,7 @@ export function AppShell({ app, children }: AppShellProps) {
 
   // Electron renders the full title bar; web/mobile renders the mobile header
   const runningInElectron = isElectron();
+  const sync = useTitleBarSync(app); // BACKLOG-4115: the title-bar device sync pill
 
   // PRIMARY DATABASE INITIALIZATION GATE
   // Block all content for authenticated users until database is ready
@@ -84,6 +86,7 @@ export function AppShell({ app, children }: AppShellProps) {
         title={modalState.showSettings ? "Settings" : getPageTitle()}
         onOpenAccount={openProfile}
         accountOpen={modalState.showProfile}
+        sync={sync}
       />
 
       <ShellBanners app={app} />
@@ -137,7 +140,7 @@ export function AppShell({ app, children }: AppShellProps) {
 
       {/* Scrollable content area + the Settings page layer (BACKLOG-3964) */}
       <ShellContent app={app}>{children}</ShellContent>
-      <AccountPanel app={app} runningInElectron={runningInElectron} />{/* BACKLOG-3964 slice 3 */}
+      <AccountPanel app={app} />{/* BACKLOG-3964 slice 3 */}
 
       {/* TASK-2282: SupportWidget moved to App.tsx to be visible on ALL screens */}
     </div>

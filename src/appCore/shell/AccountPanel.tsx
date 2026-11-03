@@ -2,18 +2,23 @@
  * AccountPanel — the dark account side panel the title-bar initials open
  * (BACKLOG-3964 slice 3; replaces the Account popup, components/Profile).
  *
- * Right edge, under the initials (BACKLOG-4112), below the window drag strip
- * in Electron (mock v14: the panel and scrim start under the chrome). ~256 px
- * wide on desktop, 82% with a darker scrim on phones; the scrim covers the rest
- * of the window to the left. The header and the rows scroll together; Sign out
- * is pinned below them and always visible (BACKLOG-3964 founder note).
+ * Right edge, full window height, top to bottom (BACKLOG-4112 founder ruling,
+ * 2.45.0-pre.3): in Electron it covers the title bar and the window drag strip
+ * on the right, so the panel root is `no-drag-region` — its top 36 px (the X,
+ * the header) takes clicks instead of dragging the window. The drag strip stays
+ * active everywhere the panel does not cover; the traffic lights (top-left) are
+ * untouched. ~256 px wide on desktop, 82% on phones. Nothing behind it is
+ * dimmed: the scrim is a transparent, full-height click-outside catcher over
+ * the rest of the window to the left. The header and the rows scroll together;
+ * Sign out is pinned below them and always visible (BACKLOG-3964 founder note).
  *
  * Contents: who is signed in, plan, User ID with Copy, one row per Settings
  * tab (the same `visibleSettingsTabs()` list the Settings page uses), and
  * Sign out at the bottom — the only Sign out in the app (founder decision 10).
  * A row closes the panel and opens Settings at that tab.
  *
- * Closes on X, Esc and a click on the scrim; a click inside never closes it.
+ * Closes on X, Esc and a click outside it (on the transparent scrim); a click
+ * inside never closes it.
  * Esc and Tab defer to the support form when it is open above the panel. Focus
  * is trapped inside while open and goes back to the opener on close (to the
  * Settings Back button after a row). The "?" support button stays in its
@@ -86,10 +91,9 @@ const ROW_IDLE = "text-gray-300 hover:bg-gray-800 hover:text-white";
 
 interface AccountPanelProps {
   app: AppStateMachine;
-  runningInElectron: boolean;
 }
 
-export function AccountPanel({ app, runningInElectron }: AccountPanelProps) {
+export function AccountPanel({ app }: AccountPanelProps) {
   const { modalState, currentUser, closeProfile, openSettings, handleLogout } = app;
   const user = modalState.showProfile ? currentUser : null;
   const open = !!user;
@@ -133,19 +137,17 @@ export function AccountPanel({ app, runningInElectron }: AccountPanelProps) {
   );
 
   if (!user) return null;
-  const top = runningInElectron ? "top-9" : "top-0";
   return (
     <>
       <div
         data-testid="account-panel-scrim"
         aria-hidden="true"
         onClick={closeProfile}
-        className={`fixed bottom-0 left-0 right-[82%] sm:right-64 ${top} ${Z_CLASS.accountScrim} bg-gray-900/55 sm:bg-gray-900/35`}
+        className={`fixed top-0 bottom-0 left-0 right-[82%] sm:right-64 ${Z_CLASS.accountScrim}`}
       />
       <OpenAccountPanel
         ref={panelRef}
         user={user}
-        top={top}
         onClose={closeProfile}
         onOpenTab={openTab}
         onSignOut={signOut}
@@ -157,7 +159,6 @@ export function AccountPanel({ app, runningInElectron }: AccountPanelProps) {
 
 interface OpenAccountPanelProps {
   user: NonNullable<AppStateMachine["currentUser"]>;
-  top: string;
   onClose: () => void;
   onOpenTab: (tabId: string) => void;
   onSignOut: () => void;
@@ -165,7 +166,7 @@ interface OpenAccountPanelProps {
 }
 
 const OpenAccountPanel = React.forwardRef<HTMLDivElement, OpenAccountPanelProps>(function OpenAccountPanel(
-  { user, top, onClose, onOpenTab, onSignOut, signingOut },
+  { user, onClose, onOpenTab, onSignOut, signingOut },
   ref,
 ) {
   const { licenseType } = useLicense();
@@ -181,7 +182,7 @@ const OpenAccountPanel = React.forwardRef<HTMLDivElement, OpenAccountPanelProps>
       aria-modal="true"
       aria-label="Account"
       data-testid="account-panel"
-      className={`fixed bottom-0 right-0 ${top} ${Z_CLASS.accountPanel} flex w-[82%] flex-col border-l border-gray-800 bg-gray-900 text-white shadow-xl sm:w-64`}
+      className={`no-drag-region fixed top-0 bottom-0 right-0 ${Z_CLASS.accountPanel} flex w-[82%] flex-col border-l border-gray-800 bg-gray-900 text-white shadow-xl sm:w-64`}
     >
       {/* Header and rows scroll together; Sign out below stays pinned (BACKLOG-3964). */}
       <div

@@ -11,6 +11,7 @@ import { FeatureGate } from "./common/FeatureGate";
 import { SettingsPageHeader } from "./settings/SettingsPageHeader";
 import { visibleSettingsTabs } from "./settings/settingsTabs";
 import { useSettingsSectionRouting } from "./settings/useSettingsSectionRouting";
+import { useLastSectionSpacer } from "./settings/useLastSectionSpacer";
 import { AccountSettings, type AccountSettingsProps } from "./settings/account/AccountSettings";
 import { GeneralSettings } from "./settings/GeneralSettings";
 import { EmailSettings } from "./settings/EmailSettings";
@@ -133,6 +134,9 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
     [visibleTabIds, pinTab, onSectionReached],
   );
   useSettingsSectionRouting(initialSection, !loadingPreferences, scrollContainerRef, handleSectionReached);
+  // BACKLOG-3964: room below the last section so every entry, About included,
+  // can scroll its section to the top (useLastSectionSpacer).
+  const bottomSpacer = useLastSectionSpacer(scrollContainerRef, visibleTabIds[visibleTabIds.length - 1], !loadingPreferences);
 
   const handleTabClick = useCallback((id: string) => {
     const el = document.getElementById(id);
@@ -352,6 +356,9 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
           </>
           )}
           </div>
+          {!loadingPreferences && (
+            <div aria-hidden="true" data-testid="settings-bottom-spacer" style={{ height: `${bottomSpacer}px` }} />
+          )}
         </div>
     </div>
   );
