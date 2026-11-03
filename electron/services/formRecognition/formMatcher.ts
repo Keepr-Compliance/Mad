@@ -18,9 +18,37 @@
  *
  * Known limits: two copies of the same form in one bundle read as one form with more pages
  * (dedupe per code); OCR layouts that merge the code line into another line fail R1 by design.
+ *
+ * BACKLOG-4106 — matchForms dispatches on the publisher's marker kind (`header.kind`):
+ *   code-line   the v1 path above (R1–R6), `matchPublisher`, moved verbatim.
+ *   code-page   `matchWindowed`: a page line that STARTS with the code (after line-start spaces and
+ *               `leadingNoise`), e.g. C.A.R. `RPA REVISED 12/22 (PAGE 1 OF 16)`.
+ *   mid-line    `matchWindowed`: a marker anywhere in a line, publisher token inside the match,
+ *               e.g. `OREF 001 | Released 01/2026`.
+ *   title-keyed no matcher path yet (BACKLOG-4106 PR 2); no such rows ship, so nothing is skipped.
+ * Windowed kinds: the window is [anchorStart - windowBefore, anchorStart + windowAfter]; every
+ * required marker and the paired token must lie wholly inside it; document markers must occur
+ * anywhere in the text. Declared revision: anchor group 2 if it matched, else `header.revision`
+ * (group 1) in the window or the document; it gates only when `revisionRequired` is true, and it
+ * is never part of a key. The page total is matched and discarded. Markers before the anchor gate
+ * but are not part of `evidence`, which starts at firstOffset and is capped at EVIDENCE_CAP.
  */
-import type { FormMatch, MatchStrength, PublisherRow, Registry } from "./formRegistryTypes";
-import { DEFAULT_REGISTRY, codeKey } from "./registry";
+import type {
+  CodePageHeader,
+  FormMatch,
+  MatchStrength,
+  MidLineHeader,
+  PublisherHeader,
+  PublisherRow,
+  Registry,
+} from "./formRegistryTypes";
+import { DEFAULT_REGISTRY, codeKey, isCodeLineHeader } from "./registry";
+
+/** A v1 publisher: its header is the code-line model. */
+type CodeLinePublisher = PublisherRow & { header: PublisherHeader };
+
+/** Windowed kinds: evidence is at most this many chars, starting at firstOffset (R7). */
+export const EVIDENCE_CAP = 400;
 
 const NORMALISE_RE = /[‘’“”   \t]/g;
 const NORMALISE_MAP: Record<string, string> = {
@@ -57,7 +85,7 @@ function markerEnd(s: string, re: RegExp): number {
 function matchPublisher(
   original: string,
   norm: string,
-  pub: PublisherRow,
+  pub: CodeLinePublisher,
   registry: Registry,
   byKey: Map<string, FormMatch>
 ): void {
@@ -108,13 +136,106 @@ function matchPublisher(
   }
 }
 
+/** Absolute end offset of the first match of `re` in `window` (which starts at `base`), or -1. */
+function windowMarkerEnd(window: string, base: number, re: RegExp): number {
+  const e = markerEnd(window, re);
+  return e < 0 ? -1 : base + e;
+}
+
+/** code-page and mid-line publishers (BACKLOG-4106). */
+function matchWindowed(
+  original: string,
+  norm: string,
+  pub: PublisherRow,
+  h: CodePageHeader | MidLineHeader,
+  registry: Registry,
+  byKey: Map<string, FormMatch>
+): void {
+  // Document markers: tested once per text.
+  if (h.documentMarkers && !h.documentMarkers.every((r) => nonGlobal(r).test(norm))) return;
+  const source = h.kind === "code-page" ? h.codePage : h.marker;
+  const anchor = new RegExp(source.source, source.flags.replace("g", "") + "g");
+  const lead = h.kind === "code-page" ? nonGlobal(h.leadingNoise ?? /^[ \t]*/) : null;
+  const required = h.requiredMarkers.map(nonGlobal);
+  const revision = h.revision ? nonGlobal(h.revision) : null;
+  // String.match, not RegExp exec (SQL boundary gate); revision is non-global.
+  const docRevision = revision && h.revisionScope === "document" ? norm.match(revision) : null;
+
+  for (const m of norm.matchAll(anchor)) {
+    const code = m[1];
+    if (!code) continue;
+    if (h.kind === "code-page" && h.codeUpperCase && code !== code.toUpperCase()) continue;
+    const at = m.index ?? 0;
+    const leadLen = lead ? (m[0].match(lead)?.[0].length ?? 0) : 0;
+    const start = at + leadLen;
+    const wStart = Math.max(0, start - h.windowBefore);
+    const window = norm.slice(wStart, start + h.windowAfter);
+
+    const ends = [at + m[0].length];
+    const requiredEnds = required.map((r) => windowMarkerEnd(window, wStart, r));
+    if (requiredEnds.some((e) => e < 0)) continue;
+    ends.push(...requiredEnds);
+    if (h.kind === "code-page" && h.pairedToken) {
+      const e = windowMarkerEnd(window, wStart, h.pairedToken(code));
+      if (e < 0) continue;
+      ends.push(e);
+    }
+
+    let rev: string | null = m[2] ?? null;
+    if (rev === null && revision) {
+      if (h.revisionScope === "document") {
+        rev = docRevision ? docRevision[1] : null;
+      } else {
+        // String.match, not RegExp exec (SQL boundary gate); revision is non-global.
+        const rm = window.match(revision);
+        if (rm) {
+          rev = rm[1];
+          ends.push(wStart + (rm.index ?? 0) + rm[0].length);
+        }
+      }
+    }
+    if (h.revisionRequired && rev === null) continue;
+
+    const key = codeKey(pub.id, code);
+    const row = registry.byCode.get(key) ?? null;
+    if (!row && !h.reportUnregistered) continue;
+    const titled = row ? row.knownTitles.some((t) => nonGlobal(t).test(window)) : false;
+    const strength: MatchStrength = titled ? "footer+title" : "footer";
+
+    const prior = byKey.get(key);
+    if (prior) {
+      prior.occurrences += 1;
+      if (strength === "footer+title") prior.strength = strength;
+      continue;
+    }
+    const end = Math.min(start + EVIDENCE_CAP, Math.max(...ends));
+    byKey.set(key, {
+      formId: row ? row.id : null,
+      publisherId: pub.id,
+      code,
+      kind: row ? row.kind : null,
+      strength,
+      occurrences: 1,
+      firstOffset: start,
+      evidence: original.slice(start, end),
+      revisionSeen: rev,
+    });
+  }
+}
+
 /** Every recognised form in `text` (a bundle yields several), ordered by first offset. */
 export function matchForms(text: string, registry: Registry = DEFAULT_REGISTRY): FormMatch[] {
   if (!text || text.trim().length === 0) return [];
   const norm = normalizeFormText(text);
   const byKey = new Map<string, FormMatch>();
   for (const pub of registry.publishers) {
-    matchPublisher(text, norm, pub, registry, byKey);
+    const h = pub.header;
+    if (isCodeLineHeader(h)) {
+      matchPublisher(text, norm, pub as CodeLinePublisher, registry, byKey);
+    } else if (h.kind === "code-page" || h.kind === "mid-line") {
+      matchWindowed(text, norm, pub, h, registry, byKey);
+    }
+    // title-keyed: see the file header.
   }
   return [...byKey.values()].sort((a, b) => a.firstOffset - b.firstOffset);
 }
