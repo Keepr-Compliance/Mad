@@ -214,7 +214,7 @@ No kit component imports `next`: apps pass router facts in (`open`/`onOpenChange
 |---|---|
 | `MobileTopBar` | Phone top bar: 44px menu button (ref forwards to it) + wordmark + qualifier. Optional `title` replaces the wordmark + qualifier (`leading` still wins); it renders in a `<span>`, not a heading. |
 | `Drawer` | Slide-out nav on Radix Dialog. App supplies nav items, footer (user + sign out) and `returnFocusRef`. |
-| `BottomSheet` | Modal sheet for filters and quick edits; scrolling body, pinned primary action. |
+| `BottomSheet` | Modal sheet for filters and quick edits; scrolling body, pinned primary action. On close, focus returns to `returnFocusRef` (the opener) or else to the element focused when it opened; on open, a body element marked `data-autofocus` gets focus. |
 | `SegmentedTabs` | Tab mode (`role=tablist`, roving tabindex, arrows/Home/End, `panelId`) or link mode (all items have `href`: `<nav>` + `aria-current="page"`). |
 | `ListCard` | One row of a phone list; the whole card is one link or button. `meta`/`secondary` must be non-interactive. |
 | `StatusPill`, `PriorityPill` | Pills from `badgeHueClasses`; always render the word. |

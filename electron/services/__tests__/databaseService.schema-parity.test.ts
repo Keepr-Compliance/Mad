@@ -363,6 +363,14 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     ref: "BACKLOG-3475",
   },
   {
+    key: "INDEX:sqlite_autoindex_transaction_checklist_link_members_4",
+    what: "SQLite's automatic index for UNIQUE (link_id, message_id).",
+    why:
+      "BACKLOG-3968 (migration v78): the text half of the same rule — one " +
+      "text at most once in a group.",
+    ref: "BACKLOG-3968",
+  },
+  {
     key: "TRIGGER:trg_checklist_link_members_drop_empty_link",
     what: "AFTER DELETE on members: removes a group whose last member is gone.",
     why:
@@ -739,6 +747,43 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
       "BACKLOG-3892 W3b: the oldest text each phone holds (sms.db MIN date), recorded at sync, so a new phone's coverage never starts before " +
       "its own oldest text. `IF NOT EXISTS`; schema.sql is re-exec'd on every launch (the S2 precedent). Additive only: no existing table changes.",
     ref: "BACKLOG-3892",
+  },
+  {
+    key: "TABLE:iphone_sync_open_sessions",
+    what: "New table: iPhone sync sessions that started saving and have not finished or rolled back.",
+    why:
+      "BACKLOG-3343: a sync interrupted by a crash, force-quit or power loss leaves rows that the next " +
+      "launch must remove; this durable marker is the only way to tell them from a finished sync's rows. " +
+      "IF NOT EXISTS, created by schema.sql's exec on every open; no migration entry is needed.",
+    ref: "BACKLOG-3343",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_iphone_sync_open_sessions_1",
+    what: "SQLite's automatic index for iphone_sync_open_sessions' primary key.",
+    why: "BACKLOG-3343: produced by the session_id PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-3343",
+  },
+  {
+    key: "TABLE:transaction_opens",
+    what: "New table transaction_opens.",
+    why:
+      "BACKLOG-3965: when each deal was last opened on this device (the Dashboard's Recent panel). A table, not a column on " +
+      "transactions, so an open never bumps transactions.updated_at through update_transactions_timestamp. `IF NOT EXISTS`; " +
+      "schema.sql is re-exec'd on every open, so existing databases gain it with no migration version (the BACKLOG-3343 precedent). " +
+      "Additive only: no existing table changes.",
+    ref: "BACKLOG-3965",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_transaction_opens_1",
+    what: "SQLite's automatic index for transaction_opens' primary key.",
+    why: "BACKLOG-3965: produced by the transaction_id PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-3965",
+  },
+  {
+    key: "INDEX:idx_transaction_opens_opened_at",
+    what: "Index on transaction_opens(opened_at, transaction_id).",
+    why: "BACKLOG-3965: the Recent read orders by opened_at and stops at its limit; this index keeps that read off a full scan.",
+    ref: "BACKLOG-3965",
   },
 ];
 

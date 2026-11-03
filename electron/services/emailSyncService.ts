@@ -58,6 +58,16 @@ import { getRawDatabase } from "./db/core/dbConnection";
 import { recordMailFoldersForFetchedEmails } from "./mailFolderCaptureService";
 import { selectForceRemovableAttachmentPaths } from "./db/emailForceSetSql";
 import { removeOrphanedAttachmentFiles } from "./emailForceOrphanFiles";
+import { requestOcrDrainAfterSync } from "./ocr/attachmentOcrQueue";
+
+/** BACKLOG-3943: queue the post-sync OCR drain; never lets OCR affect a sync's outcome. */
+function drainOcrAfterSync(): void {
+  try {
+    requestOcrDrainAfterSync();
+  } catch {
+    /* the queue logs its own failures */
+  }
+}
 // BACKLOG-2960 — imported from `dbTiming`, not `dbConnection`, on purpose: the
 // pre-cache suites `jest.mock` `dbConnection` with a hand-written partial, so a
 // new export there would arrive `undefined` and render `dbMs=NaN`. The pure
@@ -1447,6 +1457,10 @@ class EmailSyncService {
 
     // BACKLOG-1369: Attachment backfill removed from sync pipeline.
     // Attachments are now downloaded on-demand when user views email or during export.
+
+    // BACKLOG-3943: after a sync, OCR a bounded batch of older image-only PDFs
+    // (skipped on battery, a no-op while the OCR queue is busy). Never blocks the sync.
+    drainOcrAfterSync();
 
     logService.info("Sync and fetch emails complete", "Transactions", {
       transactionId,
@@ -3286,6 +3300,8 @@ class EmailSyncService {
     });
 
     this.lastPrecacheCompletedAt = Date.now();
+    // BACKLOG-3943: same post-sync OCR drain as the deal sync.
+    drainOcrAfterSync();
     return { fetched: totalFetched, stored: totalStored, providerError, forceSwap };
     } finally {
       this.precacheInProgress = false;

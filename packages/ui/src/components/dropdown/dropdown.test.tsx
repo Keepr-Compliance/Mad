@@ -2,7 +2,7 @@ import * as React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { Dropdown, dropdownSide } from './dropdown';
 import { DropdownOptions } from './dropdown-options';
-import type { DropdownOption, DropdownProps } from './types';
+import type { DropdownOption, DropdownSingleProps } from './types';
 import { Dialog, DialogContent, DialogTitle } from '../dialog';
 
 /**
@@ -28,7 +28,7 @@ const EDGE: DropdownOption[] = [
   { value: 'd', label: 'Delta', disabled: true },
 ];
 
-type Overrides = Partial<Omit<DropdownProps, 'label' | 'ariaLabel'>>;
+type Overrides = Partial<Omit<DropdownSingleProps, 'label' | 'ariaLabel'>>;
 
 function renderDropdown(overrides: Overrides = {}) {
   const onChange = jest.fn();
@@ -528,5 +528,71 @@ describe('dropdownSide', () => {
   ];
   it.each(rows)('%s (top %i, viewport %i) -> %s', (_n, top, vh, want) => {
     expect(dropdownSide(rect(top), vh)).toBe(want);
+  });
+});
+
+/**
+ * BACKLOG-4032 slice 3 (C13): the filter variant is the compact report pill.
+ * The field variant stays the default; every test above runs without `variant`.
+ */
+describe('Dropdown variant="filter"', () => {
+  const PERIODS: DropdownOption[] = [
+    { value: 'week', label: 'This week' },
+    { value: 'month', label: 'This month' },
+  ];
+
+  it('C13 is a compact pill named by ariaLabel + value, with a min-w-56 panel and no blue without onClear', () => {
+    render(<Dropdown variant="filter" ariaLabel="Period" options={PERIODS} value="week" onChange={() => {}} searchable={false} />);
+    const pill = screen.getByRole('button', { name: 'Period This week' });
+    expect(pill.className).toContain('inline-flex');
+    expect(pill.className).toContain('rounded-md');
+    expect(pill.className).not.toContain('w-full');
+    expect(pill.className).toContain('border-gray-300');
+    expect(pill.className).not.toContain('bg-primary-50');
+    expect(document.querySelector('label')).toBeNull();
+    fireEvent.click(pill);
+    const panel = document.querySelector('[data-slot="dropdown-panel"]') as HTMLElement;
+    expect(panel.className).toContain('min-w-56');
+    expect(panel.className).not.toContain('w-full');
+  });
+
+  it('C13 reads blue only with a value AND onClear; with a visible label prop the label is sr-only', () => {
+    const { rerender } = render(
+      <Dropdown variant="filter" label="Status" options={PERIODS} value="week" onChange={() => {}} onClear={() => {}} />
+    );
+    const pill = () => screen.getByRole('button', { name: 'Status This week' });
+    expect(pill().className).toContain('bg-primary-50');
+    expect(document.querySelector('label')).toBeNull();
+    rerender(<Dropdown variant="filter" label="Status" options={PERIODS} value={null} onChange={() => {}} onClear={() => {}} />);
+    expect(screen.getByRole('button', { name: 'Status Status' }).className).not.toContain('bg-primary-50');
+  });
+
+  it('C13 field is still the default: full-width trigger, visible label', () => {
+    render(<Dropdown label="Role" options={ROLES} value="agent" onChange={() => {}} />);
+    expect(trigger().className).toContain('w-full');
+    expect(screen.getByText('Role', { selector: 'label' })).toBeInTheDocument();
+  });
+
+  it('renders triggerIcon and forwards triggerRef to the trigger button', () => {
+    const ref = React.createRef<HTMLButtonElement>();
+    render(
+      <Dropdown
+        variant="filter"
+        ariaLabel="Period"
+        options={PERIODS}
+        value="week"
+        onChange={() => {}}
+        triggerIcon={<svg data-testid="icon" />}
+        triggerRef={ref}
+      />
+    );
+    expect(screen.getByTestId('icon')).toBeInTheDocument();
+    expect(ref.current).toBe(screen.getByRole('button', { name: 'Period This week' }));
+  });
+
+  it('dropdownSide takes an optional panel height; the default is unchanged', () => {
+    const rect = { top: 600, bottom: 640 };
+    expect(dropdownSide(rect, 1000)).toBe('bottom'); // 360 below >= 300
+    expect(dropdownSide(rect, 1000, 420)).toBe('top'); // 360 below < 420, 600 above
   });
 });

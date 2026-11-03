@@ -993,3 +993,27 @@ describe('3848: Agent receipt queued on invoice.paid (C-RCPT-DEDUPE, R9)', () =>
     expect(outbox()).toEqual([]);
   });
 });
+
+// ---- BACKLOG-3676: checkout.session.completed grants nothing -------------------------
+// The desktop Subscribe promise is "Unlimited only after the first invoice is paid".
+// The grant is invoice.paid's alone; this pins that the subscription-mode
+// checkout.session.completed path writes the mirror row and calls no entitlement RPC.
+describe('C-GRANT-ONLY (BACKLOG-3676)', () => {
+  it('subscription-mode checkout.session.completed with a REAL subscription writes the mirror row and grants nothing', async () => {
+    const sub = fx('sub-2a-renewal');
+    const base = fx('cs-W1-B');
+    // [COMPOSED] the captured session has subscription:null (it never reaches the grant
+    // code); a completed session carries its subscription id. Customer and subscription
+    // come from the captured sub-2a-renewal.
+    const cs = { ...base, subscription: sub.id, customer: sub.customer };
+    useDb({ stripe_customers: [customerRow(sub.customer)], billing_subscriptions: [] });
+    serve(cs, sub);
+    const ev = { id: 'evt_GO_cs', type: 'checkout.session.completed', livemode: false, created: 1791700000, data: { object: { id: base.id } } };
+    expect((await deliver(ev)).status).toBe(200);
+    // Positive control: the handler got past the user lookup (the mirror row is written).
+    expect(db.rows('billing_subscriptions').map((r) => r.stripe_subscription_id)).toEqual([sub.id]);
+    // The promise: no entitlement RPC from this event.
+    expect(grants()).toEqual([]);
+    expect(revokes()).toEqual([]);
+  });
+});

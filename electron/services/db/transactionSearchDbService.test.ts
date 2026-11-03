@@ -293,13 +293,17 @@ describe("searchLinkedContent", () => {
 // ===========================================================================
 // A filename token (e.g. "wire", "disclosure") must surface the containing
 // email/text even when the word appears ONLY in an attachment's name.
+// BACKLOG-3942: the deal-scoped email builder (buildEmailQuery) also matches
+// the attachment's extracted text — its LIKE subject is
+// `(a.filename || char(10) || COALESCE(a.text_content, ''))`; every other
+// builder stays filename-only. Bound-parameter counts are unchanged.
 
 describe("BACKLOG-1870: attachment filename matching (query builders)", () => {
   it("buildEmailQuery matches attachments.filename joined by email_id", () => {
     const q = buildEmailQuery(TXN, "wire", 20);
     expect(q.sql).toContain("FROM attachments a");
     expect(q.sql).toContain("a.email_id = e.id");
-    expect(q.sql).toContain("a.filename LIKE ? ESCAPE");
+    expect(q.sql).toContain("COALESCE(a.text_content, '')) LIKE ? ESCAPE");
     // 1 projection (Phase 1.5) + subject/body/sender/recipients/filename = six.
     expect(q.params.filter((p) => p === "%wire%")).toHaveLength(6);
   });
@@ -522,7 +526,7 @@ describe("BACKLOG-1870: attachment filename matching (integration)", () => {
     const emailSelect = preparedSql.find(
       (s) => s.includes("/* mad:search:emails */") && s.includes("SELECT e.id"),
     );
-    expect(emailSelect).toContain("a.filename LIKE ? ESCAPE");
+    expect(emailSelect).toContain("COALESCE(a.text_content, '')) LIKE ? ESCAPE");
     expect(emailSelect).toContain("a.email_id = e.id");
   });
 

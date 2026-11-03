@@ -22,6 +22,15 @@ export const REPORTS_BASE_PATH = '/dashboard/reports';
 
 export const REPORTS: ReportEntry[] = [
   {
+    // BACKLOG-3723: was the one overview card; first, so the Reports page order is unchanged.
+    slug: 'analytics',
+    title: 'Analytics',
+    description:
+      'System-wide metrics and adoption data: active users, app versions, platforms, phone types and licence seats.',
+    source: 'devices, users, organizations, organization_members, user_preferences',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
+  {
     slug: 'iphone-sync',
     title: 'iPhone Sync Performance',
     description:
@@ -49,12 +58,47 @@ export const REPORTS: ReportEntry[] = [
     slug: 'exports',
     title: 'Exports',
     description:
-      'How many exports each user ran in the period, how many were unique deals, in which formats, and when.',
+      'How many exports each user ran in the period, how many were unique exports (each user and deal counted once), in which formats, and when.',
     source: 'analytics_events (export-completed)',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
+  {
+    slug: 'support-sla',
+    title: 'Support SLA',
+    description:
+      'How quickly support tickets got a first response and were resolved in the period, overall and per agent, and how many are open now.',
+    source: 'support_tickets',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
+  {
+    slug: 'user-activity',
+    title: 'User Activity',
+    description:
+      'Who signed in and was last seen when, on how many devices, and how many transactions, submissions and exports each user ran in the period.',
+    source: 'users, devices, audit_logs',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
+  {
+    slug: 'funnel',
+    title: 'Paywall Funnel',
+    description:
+      'Paywall viewed, unlock clicked, payment succeeded, export completed. Where do users drop off?',
+    source: 'analytics_events (paywall-viewed, unlock-clicked, payment-succeeded, export-completed)',
     permission: PERMISSIONS.ANALYTICS_VIEW,
   },
 ];
 
 export function reportHref(slug: string): string {
   return `${REPORTS_BASE_PATH}/${slug}`;
+}
+
+/**
+ * The saved-view key for a registered report (BACKLOG-3728, BACKLOG-4084):
+ * its registry slug, so every report keeps its views under its own key.
+ * Throws on a slug that is not registered, so a typo fails at import.
+ */
+export function reportViewKey(slug: string): string {
+  const entry = REPORTS.find((r) => r.slug === slug);
+  if (!entry) throw new Error(`Unknown report: ${slug}`);
+  return entry.slug;
 }

@@ -11,6 +11,7 @@
  */
 
 import type { BrowserWindow } from "electron";
+import * as Sentry from "@sentry/electron/main";
 
 // Import services for initializeDatabase
 import databaseService from "../services/databaseService";
@@ -18,6 +19,7 @@ import supabaseService from "../services/supabaseService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
 import { getSupportAccess } from "../services/supportAccess";
+import { iPhoneSyncStorageService } from "../services/iPhoneSyncStorageService";
 
 // Import handler registrations
 import { registerGoogleAuthHandlers } from "./googleAuthHandlers";
@@ -41,6 +43,21 @@ export const initializeDatabase = async (): Promise<void> => {
     // flag only upgrades the outcome from "error screen" to "clean exit".
     await databaseService.initialize({ quitOnUnrecoverableFailure: true });
     await logService.debug("Database initialized", "AuthHandlers");
+
+    // BACKLOG-3343: remove any iPhone sync that a crash, force-quit or power loss left
+    // half-saved, awaited so it finishes before this resolves. Runs after initialize()
+    // (migrations done) and outside it (sqliteBackupService calls initialize() mid-restore).
+    // initialize() has already broadcast db-ready, so a read can arrive mid-sweep: the
+    // sweep holds contact matching for the affected users until it ends. A sweep failure
+    // never blocks startup; the markers stay and the next launch retries.
+    try {
+      await iPhoneSyncStorageService.recoverInterruptedSessions();
+    } catch (sweepError) {
+      Sentry.captureException(sweepError, { level: "warning", tags: { area: "iphone-sync-recovery" } });
+      await logService.warn("Interrupted iPhone sync cleanup failed", "AuthHandlers", {
+        error: sweepError instanceof Error ? sweepError.message : String(sweepError),
+      });
+    }
 
     // Initialize audit service with dependencies
     auditService.initialize(databaseService, supabaseService);

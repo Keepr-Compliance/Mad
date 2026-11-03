@@ -62,6 +62,10 @@ describe("authHandlers.initializeDatabase — startup opts into the terminal exi
     jest.doMock("../microsoftAuthHandlers", () => ({ registerMicrosoftAuthHandlers: jest.fn() }));
     jest.doMock("../sessionHandlers", () => ({ registerSessionHandlers: jest.fn() }));
     jest.doMock("../sharedAuthHandlers", () => ({ registerSharedAuthHandlers: jest.fn() }));
+    // BACKLOG-3343: initializeDatabase awaits the interrupted-sync sweep.
+    jest.doMock("../../services/iPhoneSyncStorageService", () => ({
+      iPhoneSyncStorageService: { recoverInterruptedSessions: jest.fn().mockResolvedValue({ found: 0, recovered: 0, durationMs: 0 }) },
+    }));
 
     let initializeDatabase!: () => Promise<void>;
     jest.isolateModules(() => {

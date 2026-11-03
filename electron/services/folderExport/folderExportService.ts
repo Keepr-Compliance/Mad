@@ -92,6 +92,18 @@ import {
   TEXT_INDEX_ANCHOR,
   type CombinedSection,
 } from "./combinedExportHelpers";
+import {
+  generateChecklistIndexHTML,
+  insertChecklistBlock,
+  type ChecklistExportData,
+  type ChecklistSectionIndex,
+} from "./checklistExportHelpers";
+
+/** BACKLOG-3767: optional extras for the combined PDF. */
+export interface CombinedRenderOptions {
+  /** The transaction's local checklists. Absent = no checklist block. */
+  checklist?: ChecklistExportData;
+}
 
 // DOMPurify instance for sanitizing rich HTML email bodies in the combined PDF
 // (BACKLOG-1584). Everything renders in one BrowserWindow, so bodies are
@@ -1115,7 +1127,10 @@ class FolderExportService {
     // it and still compile, which is the failure SR's required change 2 names.
     omissions: ExportOmissionDetail,
     summaryOnly: boolean = false,
-    _emailExportMode: "thread" | "individual" = "thread"
+    _emailExportMode: "thread" | "individual" = "thread",
+    // BACKLOG-3767: an options object, so the two booleans before it cannot be
+    // transposed by a caller. Absent `checklist` = the export is unchanged.
+    renderOptions: CombinedRenderOptions = {}
   ): Promise<string> {
     try {
       logService.info("[Folder Export] Starting combined PDF export", "FolderExport", {
@@ -1125,7 +1140,13 @@ class FolderExportService {
         hiddenTexts: omissions.hiddenTextCount,
       });
 
-      const html = await this.renderCombinedHTML(transaction, communications, summaryOnly, omissions);
+      const html = await this.renderCombinedHTML(
+        transaction,
+        communications,
+        summaryOnly,
+        omissions,
+        renderOptions
+      );
       const pdfBuffer = await this.combinedHtmlToPdf(html);
       await fs.writeFile(outputPath, pdfBuffer);
 
@@ -1155,7 +1176,8 @@ class FolderExportService {
     // BACKLOG-3367: required, no default. Reaches BOTH the index page (via
     // generateSummaryHTML, so the summary-only artifact states it too) and each
     // per-thread section below.
-    omissions: ExportOmissionDetail
+    omissions: ExportOmissionDetail,
+    renderOptions: CombinedRenderOptions = {}
   ): Promise<string> {
     const emails = communications.filter((c) => isEmailMessage(c));
     const texts = communications.filter((c) => isTextMessage(c));
@@ -1202,6 +1224,13 @@ class FolderExportService {
     // is the section id of the i-th rendered thread row (same order).
     const emailRowTargets: string[] = [];
     const textRowTargets: string[] = [];
+    // BACKLOG-3767: where each included email/text landed, filled by the SAME
+    // loops that push the sections — never a second grouping or ordering.
+    const checklistSections: ChecklistSectionIndex = {
+      emailSection: new Map(),
+      textSectionById: new Map(),
+      textSectionByExternalId: new Map(),
+    };
 
     if (!summaryOnly) {
       // --- Email threads (grouped like exportEmailThreads) ---
@@ -1227,6 +1256,10 @@ class FolderExportService {
           });
           // One target per rendered index row (per thread), in render order.
           emailRowTargets.push(sectionId);
+          for (const email of thread.emails) {
+            if (email.email_id) checklistSections.emailSection.set(email.email_id, sectionId);
+            if (email.id) checklistSections.emailSection.set(email.id, sectionId);
+          }
         });
       }
 
@@ -1309,6 +1342,12 @@ class FolderExportService {
             backLabel: "Back to Text Threads Index",
           });
           textRowTargets.push(sectionId);
+          for (const msg of msgs) {
+            if (msg.id) checklistSections.textSectionById.set(msg.id, sectionId);
+            if (msg.message_id) checklistSections.textSectionById.set(msg.message_id, sectionId);
+            const ext = (msg as { external_id?: string | null }).external_id;
+            if (ext) checklistSections.textSectionByExternalId.set(ext, sectionId);
+          }
           textIdx++;
         }
       }
@@ -1332,7 +1371,20 @@ class FolderExportService {
       });
     }
 
-    const indexHtml = injectIndexLinks(summaryHtml, emailRowTargets, textRowTargets, summaryOnly);
+    let indexHtml = injectIndexLinks(summaryHtml, emailRowTargets, textRowTargets, summaryOnly);
+    // BACKLOG-3767: the checklist block, after the indexes. Inserted AFTER link
+    // injection so the index-row rewriting never sees it.
+    if (renderOptions.checklist) {
+      indexHtml = insertChecklistBlock(
+        indexHtml,
+        generateChecklistIndexHTML(
+          renderOptions.checklist,
+          communications,
+          summaryOnly ? null : checklistSections,
+          summaryOnly
+        )
+      );
+    }
     return buildCombinedHTML(indexHtml, sections);
   }
 }

@@ -444,7 +444,8 @@ describe("BACKLOG-2855 — Outlook bodyPlain derivation", () => {
           message_id TEXT,
           email_id TEXT,
           external_message_id TEXT,
-          filename TEXT NOT NULL
+          filename TEXT NOT NULL,
+          text_content TEXT -- the scoped search reads it since BACKLOG-3942
         );
       `);
     }

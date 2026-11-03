@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Dict, List, Set, Optional
 from dataclasses import dataclass, field
 
-BASE_DIR = Path("/Users/daniel/Documents/Mad")
+# Repo root: .claude/skills/architecture/<this file> -> parents[3]
+BASE_DIR = Path(__file__).resolve().parents[3]
+assert (BASE_DIR / "package.json").exists(), f"repo root not found at {BASE_DIR}"
 
 @dataclass
 class ArchNode:
@@ -628,7 +630,9 @@ def main():
 
     html = scanner.generate_html()
 
-    output_path = BASE_DIR / "architecture-debug.html"
+    # Generated output; gitignored (BACKLOG-4069)
+    output_path = BASE_DIR / "docs" / "architecture" / "architecture-debug.html"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w') as f:
         f.write(html)
 

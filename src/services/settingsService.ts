@@ -67,6 +67,8 @@ export interface ExportPreferences {
   emailExportMode?: "thread" | "individual";
   contentType?: "both" | "emails" | "texts";
   attachmentType?: "all" | "email" | "text" | "none";
+  /** BACKLOG-3767: add the deal's checklists to the PDF. Absent = ON. */
+  includeChecklist?: boolean;
 }
 
 /**

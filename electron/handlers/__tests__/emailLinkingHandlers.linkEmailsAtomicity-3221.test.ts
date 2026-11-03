@@ -38,6 +38,9 @@
  *   - current code (no transaction): uuid crash 2, gmail/outlook crash 4 and 5 red
  *   - transaction around the link write only: gmail/outlook crash 4 and 5 red
  *   - `async` seam + un-awaited call inside the transaction: red
+ *
+ * BACKLOG-2554 adds the overlap cases at the end of this file (dedup lookup
+ * inside the transaction). Their controls are recorded in pm_comments.
  */
 
 import type { Database as DatabaseType, Statement } from "better-sqlite3";
@@ -350,4 +353,97 @@ describe("BACKLOG-3221 crash sweep — every write, every path, nothing persists
     expect(res).toEqual({ success: true, linkedCount: 0 });
     expect(snapshot()).toEqual(before);
   });
+});
+
+// ===========================================================================
+// BACKLOG-2554 — the provider-id dedup decision is taken INSIDE the transaction.
+//
+// Before the fix the gmail / outlook arms looked the email up with an awaited
+// call OUTSIDE `dbTransaction` and created it inside. Two attaches of the same
+// provider id that overlap both read "absent" across that await, and both
+// create: two `emails` rows for one message, and two junction rows for the
+// deal (no unique index catches it — the legacy create passes no account_id,
+// so `idx_emails_account_external` never applies).
+//
+// INTERLEAVE MECHANISM (SR plan review change 2): the two handler calls are
+// started together with `Promise.all`; every provider mock resolves
+// immediately, so both calls reach the same `await` with the same number of
+// hops and each one's lookup runs before the other's create. The fix-absent
+// run of C6/C7 is recorded as 2 emails / 2 links in pm_comments — a C6 run
+// sequentially would be vacuous (sequential dedup works on the old code; the
+// "sequential" case below proves that).
+// ===========================================================================
+describe("BACKLOG-2554 legacy attach — one email row per provider message", () => {
+  const ARMS = [
+    { name: "gmail", id: `gmail:${GMAIL_MSG}`, ext: GMAIL_MSG },
+    { name: "outlook", id: `outlook:${OUTLOOK_MSG}`, ext: OUTLOOK_MSG },
+  ] as const;
+
+  function emailIdsFor(ext: string): string[] {
+    return (
+      db.prepare("SELECT id FROM emails WHERE external_id = ? ORDER BY rowid").all(ext) as {
+        id: string;
+      }[]
+    ).map((r) => r.id);
+  }
+
+  function linksForDeal(): { email_id: string }[] {
+    return db
+      .prepare("SELECT email_id FROM communications WHERE transaction_id = ? ORDER BY rowid")
+      .all(TXN) as { email_id: string }[];
+  }
+
+  // C6 (gmail) / C7 (outlook)
+  it.each(ARMS)(
+    "$name: two overlapping attaches of the same id create ONE email and ONE link",
+    async ({ id, ext }) => {
+      const results = await Promise.all([link([id]), link([id])]);
+
+      expect(results.every((r) => r.success)).toBe(true);
+      const emails = emailIdsFor(ext);
+      const links = linksForDeal();
+      // Fix absent this reads { emails: 2, links: 2 }.
+      expect({ emails: emails.length, links: links.length }).toEqual({ emails: 1, links: 1 });
+      expect(links[0].email_id).toBe(emails[0]);
+    },
+  );
+
+  it.each(ARMS)(
+    "$name: sequential attaches already dedup (shows C6/C7 depend on the overlap)",
+    async ({ id, ext }) => {
+      await link([id]);
+      await link([id]);
+      expect(emailIdsFor(ext)).toHaveLength(1);
+      expect(linksForDeal()).toHaveLength(1);
+    },
+  );
+
+  // C8: the dedup lookup is scoped to the attaching user.
+  it.each(ARMS)(
+    "$name: another user's email with the same external id is NOT reused",
+    async ({ id, ext, name }) => {
+      const OTHER = crypto.randomUUID();
+      db.prepare(
+        "INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, 'other@example.com', 'google', 'o-other')",
+      ).run(OTHER);
+      const otherEmailId = createEmailSync({
+        user_id: OTHER,
+        external_id: ext,
+        source: name,
+        thread_id: "thread-other",
+        subject: "Someone else's mail",
+        body_plain: "not yours",
+      }).id;
+
+      const res = await link([id]);
+
+      expect(res).toEqual({ success: true, linkedCount: 1 });
+      const mine = db
+        .prepare("SELECT id FROM emails WHERE user_id = ? AND external_id = ?")
+        .all(USER, ext) as { id: string }[];
+      expect(mine).toHaveLength(1);
+      expect(mine[0].id).not.toBe(otherEmailId);
+      expect(linksForDeal()).toEqual([{ email_id: mine[0].id }]);
+    },
+  );
 });

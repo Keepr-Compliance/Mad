@@ -24,7 +24,10 @@ import logService from "./logService";
 import { portalOrigin, portalUrl } from "../utils/portalUrl";
 import {
   AGENT_PLAN_STATES,
+  type AgentMonthPrice,
   type AgentPlanState,
+  type AgentPricesResult,
+  type OpenBookCallResult,
   type OpenBillingPortalResult,
   type PlanSummary,
   type PlanSummaryResult,
@@ -50,6 +53,46 @@ export const BILLING_PORTAL_URL_REFUSED_ERROR =
 export const BILLING_PORTAL_OPEN_FAILED_ERROR = "The browser couldn't be opened.";
 
 const UNAVAILABLE: PlanSummaryResult = Object.freeze({ unavailable: true as const });
+
+/** BACKLOG-3676: the Agent plan price and the booking link, from the portal. */
+export const AGENT_PRICES_PATH = "/api/billing/agent-prices";
+/** The only host "Book a call" may open (the portal's onboarding booking page). */
+export const BOOK_CALL_HOST = "bookings.cloud.microsoft";
+
+/** True only for an https URL on the booking host. */
+export function isBookCallUrl(url: unknown): url is string {
+  if (typeof url !== "string") return false;
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && u.hostname === BOOK_CALL_HOST;
+  } catch {
+    return false;
+  }
+}
+
+/** The agent-prices body, field by field, or null when it is not the portal's shape. */
+export function parseAgentPrices(
+  body: unknown,
+): { month: AgentMonthPrice | null; bookCallUrl: string | null } | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null;
+  const r = body as Record<string, unknown>;
+  let month: AgentMonthPrice | null = null;
+  if (r.month !== null) {
+    const m = r.month as Record<string, unknown> | undefined;
+    if (
+      !m ||
+      typeof m !== "object" ||
+      typeof m.display !== "string" ||
+      m.display.trim() === "" ||
+      typeof m.unitAmount !== "number" ||
+      typeof m.currency !== "string"
+    ) {
+      return null;
+    }
+    month = { display: m.display, unitAmount: m.unitAmount, currency: m.currency };
+  }
+  return { month, bookCallUrl: isBookCallUrl(r.bookCallUrl) ? r.bookCallUrl : null };
+}
 
 function isOnline(): boolean {
   try {
@@ -198,6 +241,79 @@ class BillingService {
         error: error instanceof Error ? error.name : "Unknown error",
       });
       return UNAVAILABLE;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /**
+   * BACKLOG-3676: the Agent plan monthly price for the paywall card, read on
+   * every paywall open (S1, no cache). Bearer JWT, 5 s bound. Anything but a
+   * 200 with the portal's shape is { unavailable: true }.
+   */
+  async getAgentPrices(): Promise<AgentPricesResult> {
+    const prices = await this.readAgentPrices();
+    if (!prices) return { unavailable: true };
+    return { unavailable: false, month: prices.month, hasBookCall: prices.bookCallUrl !== null };
+  }
+
+  /**
+   * "Book a call": opens the booking URL the portal's agent-prices route
+   * answers, read now in main. Takes no argument; a URL that is not https on
+   * the booking host is never opened.
+   */
+  async openBookCall(): Promise<OpenBookCallResult> {
+    const prices = await this.readAgentPrices();
+    const url = prices?.bookCallUrl ?? null;
+    if (!isBookCallUrl(url)) return { success: false };
+    try {
+      await shell.openExternal(url);
+      return { success: true };
+    } catch (error) {
+      logService.warn("[Billing] Could not open the booking page", MODULE, {
+        error: error instanceof Error ? error.message : "Unknown error",
+      });
+      return { success: false };
+    }
+  }
+
+  private async readAgentPrices(): Promise<
+    { month: AgentMonthPrice | null; bookCallUrl: string | null } | null
+  > {
+    const origin = portalOrigin();
+    if (!origin || !isOnline()) return null;
+    let accessToken: string | null = null;
+    try {
+      accessToken = (await supabaseService.getAuthSession())?.accessToken ?? null;
+    } catch {
+      accessToken = null;
+    }
+    if (!accessToken) return null;
+
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new Error("agent prices read timed out"));
+        }, PLAN_SUMMARY_TIMEOUT_MS);
+      });
+      const read = (async () => {
+        const res = await net.fetch(`${origin}${AGENT_PRICES_PATH}`, {
+          method: "GET",
+          headers: { Authorization: `Bearer ${accessToken}` },
+          signal: controller.signal,
+        });
+        if (res.status !== 200) return null;
+        return parseAgentPrices(await res.json());
+      })();
+      return await Promise.race([read, timeout]);
+    } catch (error) {
+      logService.warn("[Billing] Agent prices unavailable", MODULE, {
+        error: error instanceof Error ? error.name : "Unknown error",
+      });
+      return null;
     } finally {
       if (timer) clearTimeout(timer);
     }

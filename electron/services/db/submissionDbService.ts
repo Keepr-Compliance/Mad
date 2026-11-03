@@ -12,6 +12,7 @@ import { ensureDb } from "./core/dbConnection";
 // own: they follow the texts `getTransactionMessages` returns (BACKLOG-3731).
 import { auditWindowEnd, type SelectedTextIds } from "../exportPlan";
 import { selectTextAttachmentsForMessages } from "./textAttachmentLookupSql";
+import { NOT_PRIVATE_CHECKLIST_SQL } from "./checklistPrivacy";
 
 /**
  * An attachment row as the submit sees it. Text rows carry
@@ -48,6 +49,8 @@ export type SubmissionTransactionRow = {
  * parameter: the transaction id. Scoped through items -> checklists to THIS
  * transaction, so a flagged group on another deal pulls nothing in.
  *
+ * BACKLOG-3966: never the private checklist's links — nothing on it is sent.
+ *
  * Used INSIDE the shared readers below, never by the gather alone: the scope
  * preview and the submit read through the same functions, so the summary
  * still counts exactly what is sent (BACKLOG-3683).
@@ -59,6 +62,7 @@ const FLAGGED_LINK_EMAIL_IDS_SQL = `
   JOIN transaction_checklist_items i ON i.id = l.item_id
   JOIN transaction_checklists cl ON cl.id = i.checklist_id
   WHERE cl.transaction_id = ? AND l.include_outside_dates = 1 AND lm.email_id IS NOT NULL
+    AND ${NOT_PRIVATE_CHECKLIST_SQL}
 `;
 
 /** As {@link FLAGGED_LINK_EMAIL_IDS_SQL}, for attachment members. One bound parameter. */
@@ -69,6 +73,7 @@ const FLAGGED_LINK_ATTACHMENT_IDS_SQL = `
   JOIN transaction_checklist_items i ON i.id = l.item_id
   JOIN transaction_checklists cl ON cl.id = i.checklist_id
   WHERE cl.transaction_id = ? AND l.include_outside_dates = 1 AND lm.attachment_id IS NOT NULL
+    AND ${NOT_PRIVATE_CHECKLIST_SQL}
 `;
 
 /**

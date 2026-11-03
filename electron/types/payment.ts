@@ -96,3 +96,50 @@ export interface PaymentConfirmResult {
 export interface SavedCardStatus {
   hasSavedCard: boolean;
 }
+
+// ============================================
+// AGENT PLAN SUBSCRIPTION (BACKLOG-3676)
+//
+// The export paywall's "Subscribe" opens the Agent plan Stripe Checkout through
+// the portal route POST /api/payments/subscription-session, which answers
+// { checkout_url } or { code }. Unlimited exports turn on only when the export
+// gate (entitlementService) says so, after the webhook's invoice.paid grant.
+// ============================================
+
+/** Every refusal code the subscription-session route answers. */
+export type SubscriptionRefusalCode =
+  | "unauthorized"
+  | "not_available"
+  | "brokerage_managed"
+  | "no_license"
+  | "suspended"
+  | "mode_refused"
+  | "already_have_plan"
+  | "price_unavailable"
+  | "try_again";
+
+export const SUBSCRIPTION_REFUSAL_CODES: readonly SubscriptionRefusalCode[] = [
+  "unauthorized",
+  "not_available",
+  "brokerage_managed",
+  "no_license",
+  "suspended",
+  "mode_refused",
+  "already_have_plan",
+  "price_unavailable",
+  "try_again",
+];
+
+/**
+ * Answer of `payment:begin-subscription`. started === true means main opened the
+ * Stripe hosted Checkout in the browser. Otherwise `code` is the route's refusal
+ * code, or "offline" when the app had no connection.
+ */
+export type BeginSubscriptionResult =
+  | { started: true }
+  | { started: false; code: SubscriptionRefusalCode | "offline" };
+
+/** Answer of `payment:refresh-gate`: one fresh read of the export gate. */
+export interface GateReadResult {
+  unlocked: boolean;
+}

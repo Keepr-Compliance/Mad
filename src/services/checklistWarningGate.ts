@@ -43,8 +43,11 @@ export function listUncheckedRequiredItems(
   const out: UncheckedRequiredItem[] = [];
   // Missing arrays read as empty: malformed data must never throw here, or the
   // Complete press would end with nothing on screen.
+  // BACKLOG-3966: the private checklist is never sent, so it is never
+  // "missing" from what the broker receives either.
   const checklists = (data.checklists ?? []).filter(
-    (detail) => !notSentTemplateIds.has(detail.checklist?.templateId),
+    (detail) =>
+      detail.checklist?.isPrivate !== true && !notSentTemplateIds.has(detail.checklist?.templateId),
   );
   const named = checklists.length >= 2;
   for (const detail of checklists) {

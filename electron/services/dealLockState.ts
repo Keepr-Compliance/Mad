@@ -13,6 +13,9 @@
  * Slice d (founder 2026-10-12): also every checklist edit (add or take off a
  * checklist, tick, note, link or unlink evidence, include outside the dates)
  * and every deal-detail edit through `transactions:update`.
+ * BACKLOG-3966: the private checklist ("My items") is no exception — adding,
+ * renaming, reordering or removing one of the agent's own items is refused on a
+ * locked deal too (SR plan review ruling 4: locked means locked).
  */
 import { dbGet } from "./db/core/dbConnection";
 import {
@@ -22,6 +25,7 @@ import {
   CHECKLIST_ITEM_TRANSACTION_ID_SQL,
   CHECKLIST_LINK_TRANSACTION_ID_SQL,
 } from "./db/core/transactionEligibilitySql";
+import { isPrivateChecklist } from "./db/checklistPrivacy";
 import { dealLockReason, type DealLockReason } from "./transactionEligibility";
 
 export function getDealLockReason(transactionId: string): DealLockReason | null {
@@ -52,6 +56,11 @@ export type DealLockedEdit =
   | "link-checklist-item"
   | "unlink-checklist-item"
   | "include-outside-dates"
+  // BACKLOG-3966: the private checklist's own item edits.
+  | "add-my-item"
+  | "rename-my-item"
+  | "reorder-my-items"
+  | "remove-my-item"
   | "edit-deal-details"
   | "change-status";
 
@@ -144,14 +153,39 @@ export function getMessageTransactionIds(messageIds: readonly string[]): string[
   return out;
 }
 
-/** BACKLOG-3910 (slice d): the deal a checklist item belongs to, or null. */
-export function getChecklistItemTransactionId(itemId: string): string | null {
-  const row = dbGet<{ transaction_id: string | null }>(CHECKLIST_ITEM_TRANSACTION_ID_SQL, [itemId]);
-  return row?.transaction_id ?? null;
+/**
+ * Where a checklist item or evidence group sits: its deal (for the lock) and
+ * whether its checklist is the private one (for the per-checklist plan gate,
+ * BACKLOG-3966). Null when the id names no row.
+ */
+export interface ChecklistTargetScope {
+  transactionId: string;
+  isPrivate: boolean;
 }
 
-/** BACKLOG-3910 (slice d): the deal a checklist evidence group belongs to, or null. */
-export function getChecklistLinkTransactionId(linkId: string): string | null {
-  const row = dbGet<{ transaction_id: string | null }>(CHECKLIST_LINK_TRANSACTION_ID_SQL, [linkId]);
-  return row?.transaction_id ?? null;
+function toScope(
+  row: { transaction_id: string | null; template_id: string | null } | undefined,
+): ChecklistTargetScope | null {
+  if (!row?.transaction_id) return null;
+  return { transactionId: row.transaction_id, isPrivate: isPrivateChecklist(row.template_id) };
+}
+
+/** BACKLOG-3910 (slice d) / BACKLOG-3966: a checklist item's deal and privacy, or null. */
+export function getChecklistItemScope(itemId: string): ChecklistTargetScope | null {
+  return toScope(
+    dbGet<{ transaction_id: string | null; template_id: string | null }>(
+      CHECKLIST_ITEM_TRANSACTION_ID_SQL,
+      [itemId],
+    ),
+  );
+}
+
+/** BACKLOG-3910 (slice d) / BACKLOG-3966: a checklist evidence group's deal and privacy, or null. */
+export function getChecklistLinkScope(linkId: string): ChecklistTargetScope | null {
+  return toScope(
+    dbGet<{ transaction_id: string | null; template_id: string | null }>(
+      CHECKLIST_LINK_TRANSACTION_ID_SQL,
+      [linkId],
+    ),
+  );
 }
