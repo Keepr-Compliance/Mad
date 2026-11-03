@@ -23,6 +23,8 @@ import type { AppStateMachine } from "../../state/types";
 
 jest.mock("../../../utils/platform", () => ({ isElectron: () => true, isMacOS: () => true }));
 jest.mock("../../../hooks/useSessionValidator", () => ({ useSessionValidator: jest.fn() }));
+// BACKLOG-4115: the title-bar sync pill wiring has its own suite (useTitleBarSync-4115).
+jest.mock("../useTitleBarSync", () => ({ useTitleBarSync: () => ({ pill: null, onClick: () => {} }) }));
 jest.mock("../../../hooks/useIdleSessionExpiry", () => ({ useSessionIdleTimeout: jest.fn() }));
 jest.mock("../../../components/SystemHealthMonitor", () => ({ __esModule: true, default: () => null }));
 jest.mock("../ShellBanners", () => ({ ShellBanners: () => null }));

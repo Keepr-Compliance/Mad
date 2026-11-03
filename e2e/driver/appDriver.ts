@@ -109,7 +109,9 @@ export class KeeprAppDriver implements AppDriver {
   async detectState(): Promise<AppState> {
     // Strongest READY signal (BACKLOG-1940): a dashboard nav testid is present. Check this FIRST —
     // it is a stable, unambiguous marker of the ready main app (the old text markers could miss the
-    // dashboard, whose copy is "New Transaction"/"All audits", not "Transactions").
+    // dashboard, whose copy is "New Transaction"/"Clients & Contacts", not "Transactions").
+    // BACKLOG-4115: navTransactions is now the Recent panel's "All →" link (only rendered for a
+    // signed-in user), so the navNewAudit fallback below is the probe that always exists.
     if (await this.isTestidVisible(Testids.navTransactions)) return 'ready';
     if (await this.isTestidVisible(Testids.navNewAudit)) return 'ready';
     // Onboarding markers take priority over text-based ready markers: a "Connect"/"Get Started"

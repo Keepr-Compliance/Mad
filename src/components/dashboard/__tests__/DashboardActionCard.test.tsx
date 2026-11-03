@@ -84,7 +84,9 @@ describe("DashboardActionCard", () => {
       render(<DashboardActionCard {...defaultProps} />);
 
       const button = screen.getByRole("button");
-      expect(button).toHaveClass("p-5");
+      // BACKLOG-4115: 12 px top/bottom, 20 px sides.
+      expect(button).toHaveClass("px-5", "py-3");
+      expect(button).not.toHaveClass("p-5");
       expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Test Action");
     });
 
@@ -119,5 +121,17 @@ describe("DashboardActionCard", () => {
       const button = screen.getByRole("button");
       expect(button).toHaveClass("ring-2");
     });
+  });
+
+  // BACKLOG-4115: no Dashboard tile uses the muted chip any more (the sync
+  // tiles became the title-bar pill), so the default tone is pinned here.
+  it("defaults to the muted chip; chipTone primary gives the blue one", () => {
+    const { container, rerender } = render(<DashboardActionCard {...defaultProps} />);
+    const chip = () => container.querySelector('[data-part="chip"]') as HTMLElement;
+    expect(chip()).toHaveClass("bg-warm-chip", "text-ink-muted");
+    expect(chip()).not.toHaveClass("bg-primary-50");
+    rerender(<DashboardActionCard {...defaultProps} chipTone="primary" />);
+    expect(chip()).toHaveClass("bg-primary-50", "text-primary-600");
+    expect(chip()).not.toHaveClass("bg-warm-chip");
   });
 });
