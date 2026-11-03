@@ -15,13 +15,15 @@ import { CA_FIXTURES } from "./fixtures/caHeaders";
 import type { CodePageHeader, MidLineHeader, TitleKeyedHeader } from "../formRegistryTypes";
 import { NV_FORMS } from "../nvForms";
 import { NV_FIXTURES } from "./fixtures/nvHeaders";
+import { AZ_FORMS } from "../azForms";
+import { AZ_FIXTURES } from "./fixtures/azHeaders";
 
 // BACKLOG-4106 PR 2: NV, AZ, RI and MO publishers and rows, in registry order.
-const PR2_PUBLISHERS = ["glvar", "snr", "nred"];
-const PR2_TITLE_PUBLISHERS = ["glvar", "snr", "nred"];
-const PR2_ROWS = [...NV_FORMS];
+const PR2_PUBLISHERS = ["glvar", "snr", "nred", "aar", "par"];
+const PR2_TITLE_PUBLISHERS = ["glvar", "snr", "nred", "aar", "par"];
+const PR2_ROWS = [...NV_FORMS, ...AZ_FORMS];
 const PR2_FORMS = PR2_ROWS.map((f) => f.id);
-const PR2_FIXTURES = [...NV_FIXTURES];
+const PR2_FIXTURES = [...NV_FIXTURES, ...AZ_FIXTURES];
 
 describe("BACKLOG-3941 default registry", () => {
   it("ships eight NWMLS rows in priority order (main transaction forms first)", () => {

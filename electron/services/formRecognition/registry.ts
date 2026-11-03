@@ -25,6 +25,7 @@ import { NWMLS_FORMS } from "./nwmlsForms";
 import { OR_FORMS } from "./orForms";
 import { CA_FORMS } from "./caForms";
 import { NV_FORMS } from "./nvForms";
+import { AZ_FORMS } from "./azForms";
 
 export function codeKey(publisherId: string, code: string): string {
   return `${publisherId}\u0000${code}`;
@@ -155,6 +156,7 @@ export const DEFAULT_FORMS: readonly FormRow[] = [
   ...OR_FORMS,
   ...CA_FORMS,
   ...NV_FORMS,
+  ...AZ_FORMS,
 ];
 
 export const DEFAULT_REGISTRY: Registry = buildRegistry(DEFAULT_PUBLISHERS, DEFAULT_FORMS);
