@@ -188,11 +188,11 @@ function matchWindowed(
     let rev: string | null = m[2] ?? null;
     if (rev === null && revision) {
       if (h.revisionScope === "document") {
-        rev = docRevision ? docRevision[1] : null;
+        rev = docRevision ? (docRevision[1] ?? null) : null;
       } else {
         // String.match, not RegExp exec (SQL boundary gate); revision is non-global.
         const rm = window.match(revision);
-        if (rm) {
+        if (rm && rm[1] !== undefined) {
           rev = rm[1];
           ends.push(wStart + (rm.index ?? 0) + rm[0].length);
         }

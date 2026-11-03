@@ -7,7 +7,7 @@ import { buildRegistry, DEFAULT_REGISTRY } from "../registry";
 import { EVIDENCE_CAP, inferRegion, matchForms } from "../formMatcher";
 import { CA_FORMS, CAR_PUBLISHER, DRE_PUBLISHER } from "../caForms";
 import { NWMLS_PUBLISHER } from "../publishers";
-import type { CodePageHeader, FormMatch, FormRow, PublisherRow } from "../formRegistryTypes";
+import type { CodePageHeader, FormMatch, FormRow, MidLineHeader, PublisherRow } from "../formRegistryTypes";
 import { BODY, fixtureText } from "./fixtures/nwmlsHeaders";
 import { CA1_RPA, CA2_AD, CA2_BRBC, CA2_PACKET, CA3_AD, CA3_BRBC, CA4_RE882, CA_FIXTURES } from "./fixtures/caHeaders";
 
@@ -326,5 +326,63 @@ describe("BACKLOG-4106 declared revision (SYNTHETIC publisher with a separate re
     const reg = buildRegistry([pub({ revisionScope: "document" })], []);
     const text = `Edition 2023\n${".".repeat(500)}\nZZ 101 Page 1 of 2\nZZ Publisher\n`;
     expect(matchForms(text, reg)[0].revisionSeen).toBe("2023");
+  });
+});
+
+describe("BACKLOG-4106 two-group revision regex where only group 2 matches (SYNTHETIC publishers)", () => {
+  // Group 1 = `Edition NNNN`, group 2 = `Ed. NNNN`. Text carries only the group-2 form, so
+  // match[1] is undefined: no usable revision, the revision gate must refuse the match.
+  const twoGroup = /Edition (\d{4})|Ed\. (\d{4})/;
+  const codePub = (h: Partial<CodePageHeader>): PublisherRow => ({
+    id: "zz",
+    name: "ZZ",
+    namePattern: /ZZ Publisher/,
+    region: { country: "US", state: "ZZ" },
+    header: {
+      kind: "code-page",
+      codePage: /^ZZ (\d{3}) Page \d+ of \d+/gm,
+      requiredMarkers: [/ZZ Publisher/],
+      revision: twoGroup,
+      revisionRequired: true,
+      windowBefore: 0,
+      windowAfter: 200,
+      reportUnregistered: true,
+      ...h,
+    },
+  });
+  const midPub: PublisherRow = {
+    id: "zm",
+    name: "ZM",
+    namePattern: /ZM Publisher/,
+    region: { country: "US", state: "ZZ" },
+    header: {
+      kind: "mid-line",
+      marker: /ZM (\d{3}) ZM Publisher/g,
+      requiredMarkers: [/ZM Publisher/],
+      revision: twoGroup,
+      revisionRequired: true,
+      windowBefore: 0,
+      windowAfter: 200,
+      reportUnregistered: true,
+    } as MidLineHeader,
+  };
+  const codeText = "ZZ 101 Page 1 of 2\nZZ Publisher Ed. 2024\n";
+
+  it("code-page, window scope: a group-2-only revision is no revision -> []", () => {
+    expect(matchForms(codeText, buildRegistry([codePub({})], []))).toEqual([]);
+  });
+
+  it("code-page, document scope: a group-2-only revision is no revision -> []", () => {
+    const reg = buildRegistry([codePub({ revisionScope: "document" })], []);
+    expect(matchForms(`Ed. 2023\n${".".repeat(300)}\n${codeText}`, reg)).toEqual([]);
+  });
+
+  it("mid-line, window scope: a group-2-only revision is no revision -> []", () => {
+    expect(matchForms("a ZM 101 ZM Publisher Ed. 2024\n", buildRegistry([midPub], []))).toEqual([]);
+  });
+
+  it("control: the group-1 form still matches with its revision", () => {
+    const hit = matchForms("ZZ 101 Page 1 of 2\nZZ Publisher Edition 2024\n", buildRegistry([codePub({})], []));
+    expect(hit[0].revisionSeen).toBe("2024");
   });
 });
