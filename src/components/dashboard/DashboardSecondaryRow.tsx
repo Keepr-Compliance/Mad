@@ -42,6 +42,7 @@ export function ClientsContactsCard({
       onClick={onClick}
       disabled={disabled}
       icon={<PeopleIcon />}
+      chipTone="primary"
       dataTour="contacts-card"
       dataTestId="nav-clients-contacts"
     />

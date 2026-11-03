@@ -2,8 +2,8 @@
  * ProgressRing — BACKLOG-3965 PR-4a.
  *
  * A small circular "N of M done" indicator for the Dashboard's Recent rows
- * (mock v6). App-local, plain SVG, kit tokens only: a gray-200 rail and a
- * primary-600 arc, no gradient. No Radix dependency — `role="progressbar"`
+ * (mock v6). App-local, plain SVG: a warm-line rail and a success-600 arc
+ * (mock v9, BACKLOG-4110), no gradient. No Radix dependency — `role="progressbar"`
  * with its aria values is the whole accessibility contract.
  *
  * It renders the counts it is given and decides nothing about which items
@@ -65,7 +65,7 @@ export function ProgressRing({
           r={RADIUS}
           fill="none"
           strokeWidth={STROKE_WIDTH}
-          className="stroke-gray-200"
+          className="stroke-warm-line"
           data-part="rail"
         />
         <circle
@@ -77,7 +77,7 @@ export function ProgressRing({
           // A round cap on a zero-length dash still draws a dot; butt at 0 %.
           strokeLinecap={pct > 0 ? "round" : "butt"}
           strokeDasharray={`${pct.toFixed(1)} 100`}
-          className="stroke-primary-600"
+          className="stroke-success-600"
           data-part="arc"
         />
       </svg>

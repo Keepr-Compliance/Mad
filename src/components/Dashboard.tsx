@@ -219,7 +219,7 @@ function Dashboard({
   }, [runTour, onTourStateChange]);
 
   return (
-    <div className="min-h-full bg-gray-50 flex items-center justify-center p-4 sm:p-8">
+    <div className="min-h-full bg-warm-page flex items-center justify-center p-4 sm:p-8">
       {/* Onboarding Tour */}
       {/* BACKLOG-3674: the tooltip carries the "Don't show this again" box. */}
       <TourTooltipContext.Provider value={tourTooltipContext}>
@@ -285,7 +285,7 @@ function Dashboard({
 
         {/* Header */}
         <div className="text-center mb-6">
-          <h1 className="text-2xl font-bold text-gray-900">
+          <h1 className="text-2xl font-semibold text-ink">
             {greeting}
           </h1>
         </div>
@@ -299,6 +299,7 @@ function Dashboard({
             disabled={isAnySyncing}
             icon={<CheckCircleIcon />}
             highlighted={pendingCount > 0}
+            chipTone="primary"
             dataTour="new-audit-card"
             dataTestId="nav-new-audit"
           >

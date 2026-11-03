@@ -228,7 +228,7 @@ describe("Dashboard tiles: clicks, sync lock, highlight, focus ring (BACKLOG-396
     const hi = tile(on.container, "new-audit-card").classList;
     expect(hi.contains("border-primary-500")).toBe(true);
     expect(hi.contains("ring-primary-200")).toBe(true);
-    expect(hi.contains("border-gray-200")).toBe(false);
+    expect(hi.contains("border-warm-line")).toBe(false);
     on.unmount();
 
     mockPendingCount = 0;
@@ -236,14 +236,16 @@ describe("Dashboard tiles: clicks, sync lock, highlight, focus ring (BACKLOG-396
     const lo = tile(off.container, "new-audit-card").classList;
     expect(lo.contains("border-primary-500")).toBe(false);
     expect(lo.contains("ring-primary-200")).toBe(false);
-    expect(lo.contains("border-gray-200")).toBe(true);
+    expect(lo.contains("border-warm-line")).toBe(true);
+    expect(lo.contains("border-gray-200")).toBe(false);
   });
 
-  it("a highlighted tile has no gray hover border; an unhighlighted one has it", () => {
+  it("a highlighted tile has no warm hover border; an unhighlighted one has it (BACKLOG-4110)", () => {
     mockPendingCount = 3;
     const { container } = render(<Dashboard {...props()} />);
-    expect(tile(container, "new-audit-card").classList.contains("hover:border-gray-300")).toBe(false);
-    expect(tile(container, "transactions-card").classList.contains("hover:border-gray-300")).toBe(true);
+    expect(tile(container, "new-audit-card").classList.contains("hover:border-warm-control")).toBe(false);
+    expect(tile(container, "transactions-card").classList.contains("hover:border-warm-control")).toBe(true);
+    expect(tile(container, "transactions-card").classList.contains("hover:border-gray-300")).toBe(false);
   });
 
   it.each(TILES)("%s keeps the keyboard focus ring", (target) => {

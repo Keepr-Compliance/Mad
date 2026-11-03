@@ -79,10 +79,14 @@ describe("ProgressRing (BACKLOG-3965)", () => {
     expect(container.querySelector("svg")).toHaveAttribute("aria-hidden", "true");
   });
 
-  it("uses kit token classes only: gray-200 rail, primary-600 arc, no gradient or inline colour", () => {
+  it("uses theme classes only (BACKLOG-4110): warm-line rail, success-600 arc, no gradient or inline colour", () => {
     const { container } = render(<ProgressRing done={3} total={5} />);
-    expect(rail(container).getAttribute("class")?.split(/\s+/)).toContain("stroke-gray-200");
-    expect(arc(container).getAttribute("class")?.split(/\s+/)).toContain("stroke-primary-600");
+    const railCls = rail(container).getAttribute("class")?.split(/\s+/);
+    const arcCls = arc(container).getAttribute("class")?.split(/\s+/);
+    expect(railCls).toContain("stroke-warm-line");
+    expect(railCls).not.toContain("stroke-gray-200");
+    expect(arcCls).toContain("stroke-success-600");
+    expect(arcCls).not.toContain("stroke-primary-600");
     expect(container.querySelector("linearGradient, radialGradient, defs")).toBeNull();
     container.querySelectorAll("*").forEach((el) => {
       expect(el.hasAttribute("stroke")).toBe(false);
