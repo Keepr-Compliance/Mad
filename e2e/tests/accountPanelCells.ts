@@ -120,14 +120,14 @@ export async function runAccountPanelCells(page: Page, opts: PanelCellOptions): 
   );
 
   out.push(
-    await cell('H1 panel opens over the app; scrim covers the rest below the drag strip', async () => {
+    await cell('H1 panel opens over the app at full window height (BACKLOG-4112); scrim covers the rest', async () => {
       await openPanel(page);
       const p = await rect(page, PANEL);
       const { w, h } = await vp();
       await shot('h1-panel-open');
       if (!p) return 'no panel';
       if (Math.abs(p.w - 256) > 2) return `panel width ${p.w} (want 256)`;
-      if (Math.abs(p.y - 36) > 1) return `panel top ${p.y} (want 36, below the drag strip)`;
+      if (Math.abs(p.y) > 1 || Math.abs(p.h - h) > 1) return `panel top ${p.y} height ${p.h} (want 0 and the window height ${h})`;
       if (Math.abs(p.x + p.w - w) > 1) return `panel right edge ${p.x + p.w} (want the window edge ${w})`;
       const inPanel = await testidAt(page, p.x + p.w / 2, p.y + p.h / 2);
       const onScrim = await testidAt(page, Math.max(20, p.x - 200), Math.min(h - 20, 50));
