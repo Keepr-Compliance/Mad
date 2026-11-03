@@ -179,7 +179,7 @@ describe("BACKLOG-4106 K25 — C.A.R. window boundary sweep (SYNTHETIC layouts)"
 });
 
 describe("BACKLOG-4106 DRE (code-page, document marker)", () => {
-  it("RE 882: all 3 pages; revision printed on page 1 only and captured, not required", () => {
+  it("RE 882: all 3 pages; revision printed on page 1 only, found document-wide and required", () => {
     const ms = matchForms(fixtureText(CA4_RE882));
     expect(ids(ms)).toEqual(["dre-RE882"]);
     expect(ms[0]).toMatchObject({ publisherId: "dre", code: "882", kind: "other", occurrences: 3, revisionSeen: "10/10" });
@@ -189,6 +189,16 @@ describe("BACKLOG-4106 DRE (code-page, document marker)", () => {
     const lines = CA4_RE882.lines.filter((l) => !/EPARTMENT OF REAL ESTATE/.test(l));
     expect(lines.length).toBe(CA4_RE882.lines.length - 1);
     expect(matchForms(lines.join("\n"))).toEqual([]);
+  });
+
+  it("inner pages plus a prose mention of the department, with no revision line, do not match (SYNTHETIC)", () => {
+    const text = [
+      "The Department of Real Estate publishes a mortgage loan disclosure statement for brokers.",
+      "RE 882 \u2014 Page 2 of 3",
+      "Page 3 of 3",
+      ...BODY,
+    ].join("\n");
+    expect(matchForms(text)).toEqual([]);
   });
 
   it("an unregistered DRE code is dropped, not reported (SYNTHETIC)", () => {

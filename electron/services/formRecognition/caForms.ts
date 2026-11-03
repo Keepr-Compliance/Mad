@@ -53,12 +53,15 @@ export const DRE_PUBLISHER: PublisherRow = {
   region: { country: "US", state: "CA" },
   header: {
     kind: "code-page",
-    // CP5. Group 2 (revision) is printed on page 1 only, so revision is capture-only here.
+    // CP5. The revision is printed on page 1 only. Inner pages carry none, so it is looked up in the
+    // whole text and is REQUIRED: inner pages plus a prose mention of the department do not match.
     codePage: /^RE (\d{3}[A-Z]?)(?: \(Rev\. (\d{2}\/\d{2})\)| — Page \d+ of \d+)/gm,
     // The text layer splits the letterhead's first letters ("D EPARTMENT OF REAL ESTATE").
     documentMarkers: [/D ?EPARTMENT OF REAL ESTATE|Department of Real Estate/],
     requiredMarkers: [],
-    revisionRequired: false,
+    revision: /\(Rev\. (\d{2}\/\d{2})\)/,
+    revisionScope: "document",
+    revisionRequired: true,
     windowBefore: 0,
     windowAfter: 120,
     reportUnregistered: false,
