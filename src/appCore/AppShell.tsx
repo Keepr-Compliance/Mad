@@ -140,7 +140,7 @@ export function AppShell({ app, children }: AppShellProps) {
 
       {/* Scrollable content area + the Settings page layer (BACKLOG-3964) */}
       <ShellContent app={app}>{children}</ShellContent>
-      <AccountPanel app={app} runningInElectron={runningInElectron} />{/* BACKLOG-3964 slice 3 */}
+      <AccountPanel app={app} />{/* BACKLOG-3964 slice 3 */}
 
       {/* TASK-2282: SupportWidget moved to App.tsx to be visible on ALL screens */}
     </div>

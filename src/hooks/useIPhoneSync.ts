@@ -1230,6 +1230,10 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     setIsStarting(false); // BACKLOG-3816: handed to main; the progress screen takes over.
     setError(null);
     setUserError(null); // TASK-2276: Clear structured error on new sync
+    // BACKLOG-4115: "the device has not started sending yet" belongs to ONE run.
+    // Its only other reset is passcode-entered (the first file), which a run that
+    // fails before transferring never reaches, so it carried into the next run.
+    setIsWaitingForPasscode(false);
     setToolSuspendedNotice(null); // BACKLOG-4002
     setAppleEncryptedBackup(false);
     setProgress({
@@ -1354,6 +1358,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     setAppleEncryptedBackup(false);
     setError(null);
     setUserError(null); // TASK-2276: Clear structured error on cancel
+    setIsWaitingForPasscode(false); // BACKLOG-4115
     setToolSuspendedNotice(null); // BACKLOG-4002
     setSyncLocked(false);
     setLockReason(null);
@@ -1369,6 +1374,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     setProgress(null);
     setError(null);
     setUserError(null); // TASK-2276: Clear structured error on dismiss
+    setIsWaitingForPasscode(false); // BACKLOG-4115
     setToolSuspendedNotice(null); // BACKLOG-4002
   }, []);
 

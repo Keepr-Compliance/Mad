@@ -176,14 +176,31 @@ describe("opening", () => {
     expect(screen.getByTestId("nav-profile")).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("is dark, starts below the drag strip in Electron, ~256px on desktop and 82% + scrim on phones", () => {
+  it("is dark, spans the full window height in Electron (over the drag strip), ~256px on desktop and 82% on phones (BACKLOG-4112)", () => {
     render(<Harness />);
     openFromInitials();
     const panel = screen.getByTestId("account-panel");
     const scrim = screen.getByTestId("account-panel-scrim");
-    expect(panel).toHaveClass("bg-gray-900", "text-white", "fixed", "bottom-0", "top-9");
+    expect(panel).toHaveClass("bg-gray-900", "text-white", "fixed", "top-0", "bottom-0");
+    expect(panel).not.toHaveClass("top-9");
     expect(panel).toHaveClass("w-[82%]", "sm:w-64");
-    expect(scrim).toHaveClass("fixed", "top-9", "bg-gray-900/55", "sm:bg-gray-900/35");
+    expect(scrim).toHaveClass("fixed", "top-0", "bottom-0");
+    expect(scrim).not.toHaveClass("top-9");
+  });
+
+  it("the panel root opts out of the window drag region, so its top 36 px takes clicks (BACKLOG-4112)", () => {
+    render(<Harness />);
+    openFromInitials();
+    expect(screen.getByTestId("account-panel")).toHaveClass("no-drag-region");
+  });
+
+  it("nothing behind the panel is dimmed: the scrim has no background colour at any width (BACKLOG-4112)", () => {
+    render(<Harness />);
+    openFromInitials();
+    const scrim = screen.getByTestId("account-panel-scrim");
+    const bg = Array.from(scrim.classList).filter((c) => /(^|:)bg-/.test(c));
+    expect(bg).toEqual([]);
+    expect(scrim).not.toHaveClass("opacity-0"); // still a real hit target, not hidden
   });
 
   it("is anchored to the RIGHT edge, under the initials; the scrim covers the rest to its left (BACKLOG-4112)", () => {
@@ -202,7 +219,7 @@ describe("opening", () => {
     expect(screen.getByTestId("account-panel-close")).toHaveClass("left-2.5");
   });
 
-  it("starts at the very top outside Electron (no drag strip)", () => {
+  it("starts at the very top outside Electron too", () => {
     mockElectron = false;
     render(<Harness />);
     openFromInitials();
@@ -348,6 +365,13 @@ describe("C6 what closes it", () => {
     render(<Harness />);
     openFromInitials();
     fireEvent.click(screen.getByRole("button", { name: "Close menu" }));
+    expect(screen.queryByTestId("account-panel")).toBeNull();
+  });
+
+  it("Esc closes it (BACKLOG-4112: still closes with no dimmed backdrop)", () => {
+    render(<Harness />);
+    openFromInitials();
+    fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByTestId("account-panel")).toBeNull();
   });
 });

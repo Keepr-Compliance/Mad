@@ -90,6 +90,9 @@ export type IPhonePillInput = Pick<
   | "lastSyncTime"
 >;
 
+/** The flow's title for this state is "Waiting for iPhone" (SyncProgress.tsx getPhaseTitle). */
+export const IPHONE_WAITING_TOOLTIP = "Waiting for iPhone · preparing the export";
+
 /** Mac wording transcribed from useIPhoneSync.ts onToolsMissing (userError.title). */
 export const IPHONE_TOOLS_MISSING_MAC = "iPhone sync tools not installed";
 export const IPHONE_INSTALL_APPLE_DEVICES = "Install Apple Devices to sync";
@@ -109,8 +112,13 @@ export function deriveIPhonePill(
     case "lockBanner":
       return pill("iphone", IPHONE, sync.lockReason || "Waiting for another sync to finish", "neutral");
     case "progress": {
-      // B1: passcode is a refinement of the syncing view, not a rank above it.
-      if (sync.isWaitingForPasscode) return pill("iphone", IPHONE, "Enter the passcode on your iPhone", "warning");
+      // A running sync is ALWAYS the arc, whatever progress.phase says
+      // (BACKLOG-4115 founder finding, 2.45.0-pre.3): red is syncStatus "error"
+      // only (the "error" view). `isWaitingForPasscode` means only "the iPhone
+      // has not started sending yet" (backupService waiting-for-passcode,
+      // BACKLOG-2911) — a running phase, so the arc too, worded like the flow's
+      // "Waiting for iPhone" title.
+      if (sync.isWaitingForPasscode) return pill("iphone", IPHONE, IPHONE_WAITING_TOOLTIP, "arc");
       const pct = sync.progress ? Math.round(sync.progress.percent) : undefined;
       return pct === undefined
         ? pill("iphone", "Syncing", "Backing up", "arc")

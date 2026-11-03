@@ -20,13 +20,14 @@ import { useRetryCountdown } from "../../utils/syncRetryCooldown";
 import { deriveAndroidPill, deriveCompanionPill, deriveIPhonePill, type SyncPillState } from "./syncPillState";
 
 /**
- * Q2 (founder OPEN QUESTION 78690484; PM D1 default = false): the pill shows
- * on the dashboard only, like the tile it replaces — not on the Settings page,
- * which keeps the dashboard step underneath. Flip to true to show it on every
- * signed-in screen. (Transactions and Contacts open as full-window overlays,
- * AppModals.tsx, that cover the title bar either way.)
+ * Q2 (founder ruling, 2.45.0-pre.3 test): the pill shows, and stays clickable,
+ * on every signed-in screen whose title bar is visible — the dashboard, the
+ * Settings page (dashboard step underneath) and the error screen. Never during
+ * onboarding, loading, or signed out. `false` is the dashboard-only
+ * alternative, kept for tests. (Transactions and Contacts open as full-window
+ * overlays, AppModals.tsx, that cover the title bar — BACKLOG-4123, 2.46.)
  */
-export const PILL_ON_EVERY_SCREEN = false;
+export const PILL_ON_EVERY_SCREEN = true;
 
 type VisibilityInput = Pick<AppStateMachine, "currentStep" | "isAuthenticated" | "currentUser"> & {
   modalState: Pick<AppStateMachine["modalState"], "showSettings">;
@@ -68,15 +69,29 @@ export function useTitleBarSync(app: AppStateMachine, everyScreen: boolean = PIL
   const now = useClock(30_000, visible && source !== null);
 
   if (!visible) return { pill: null, onClick: NOOP };
+  // The sync flows are popups (z-50..z-[100]) and the Settings page sits above
+  // them (z-[105], zLayers.ts), so a click on Settings closes it first — the
+  // same order as Settings' own "Import from iPhone" (SettingsLayer.tsx).
+  const leaveSettings = () => {
+    if (app.modalState.showSettings) app.closeSettings();
+  };
+  const openIPhone = () => {
+    leaveSettings();
+    app.openIPhoneSync();
+  };
+  const openAndroid = () => {
+    leaveSettings();
+    app.openAndroidSync();
+  };
   if (source === "iphone-sync" && iphone) {
-    return { pill: deriveIPhonePill(iphone, iphoneEnabled, now, { isMacOS }), onClick: app.openIPhoneSync };
+    return { pill: deriveIPhonePill(iphone, iphoneEnabled, now, { isMacOS }), onClick: openIPhone };
   }
   if (source === "android-messages-web") {
     return {
       pill: deriveAndroidPill(android.ext, android.status, android.jobStep, android.linkView, now),
-      onClick: () => app.openAndroidSync(),
+      onClick: openAndroid,
     };
   }
-  if (source === "android-companion") return { pill: deriveCompanionPill(), onClick: () => app.openAndroidSync() };
+  if (source === "android-companion") return { pill: deriveCompanionPill(), onClick: openAndroid };
   return { pill: null, onClick: NOOP };
 }

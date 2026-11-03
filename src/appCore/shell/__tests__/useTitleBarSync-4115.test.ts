@@ -33,6 +33,7 @@ const makeApp = (step: AppStep = "dashboard", showSettings = false): AppStateMac
     modalState: { showSettings },
     openIPhoneSync: jest.fn(),
     openAndroidSync: jest.fn(),
+    closeSettings: jest.fn(),
   }) as unknown as AppStateMachine;
 
 beforeEach(() => {
@@ -95,32 +96,68 @@ describe("clicks open the same flows as the old tiles", () => {
   });
 });
 
-describe("Q2: where the pill lives", () => {
-  it("defaults to dashboard only (PM D1)", () => {
-    expect(PILL_ON_EVERY_SCREEN).toBe(false);
+describe("Q2: where the pill lives (founder ruling: every signed-in screen with a title bar)", () => {
+  const user = {} as never;
+  const ms = { showSettings: false };
+  it("defaults to every screen", () => {
+    expect(PILL_ON_EVERY_SCREEN).toBe(true);
   });
-  it.each(["phone-type-selection", "permissions", "error"] as AppStep[])("default: step %s -> no pill", (step) => {
+  it("default: the Settings page (dashboard step underneath) shows the pill, and it is clickable", () => {
     mockSource = "iphone-sync";
-    const { result } = renderHook(() => useTitleBarSync(makeApp(step)));
-    expect(result.current.pill).toBeNull();
+    const app = makeApp("dashboard", true);
+    const { result } = renderHook(() => useTitleBarSync(app));
+    expect(result.current.pill?.device).toBe("iphone");
+    result.current.onClick();
+    expect(app.openIPhoneSync).toHaveBeenCalledTimes(1);
+    // The flow is a popup under the Settings layer: Settings closes first.
+    expect(app.closeSettings).toHaveBeenCalledTimes(1);
+    expect((app.closeSettings as jest.Mock).mock.invocationCallOrder[0]).toBeLessThan(
+      (app.openIPhoneSync as jest.Mock).mock.invocationCallOrder[0],
+    );
   });
-  it("default: the Settings page (dashboard step underneath) -> no pill", () => {
+  it.each(["android-companion", "android-messages-web"] as const)("default: the Settings page shows the %s pill; a click closes Settings, then opens Android sync", (source) => {
+    mockSource = source;
+    const app = makeApp("dashboard", true);
+    const { result } = renderHook(() => useTitleBarSync(app));
+    expect(result.current.pill?.device).toBe("android");
+    result.current.onClick();
+    expect(app.closeSettings).toHaveBeenCalledTimes(1);
+    expect(app.openAndroidSync).toHaveBeenCalledTimes(1);
+    expect((app.openAndroidSync as jest.Mock).mock.calls[0]).toEqual([]);
+  });
+  it("on the dashboard a click does not touch Settings", () => {
     mockSource = "iphone-sync";
-    const { result } = renderHook(() => useTitleBarSync(makeApp("dashboard", true)));
-    expect(result.current.pill).toBeNull();
+    const app = makeApp();
+    const { result } = renderHook(() => useTitleBarSync(app));
+    result.current.onClick();
+    expect(app.closeSettings).not.toHaveBeenCalled();
+    expect(app.openIPhoneSync).toHaveBeenCalledTimes(1);
   });
-  it("flipped: the Settings page and the error screen show the pill", () => {
+  // "error" = AppStep, src/appCore/state/types.ts:16 (TASK-2278 error screen)
+  it('default: the error screen (step "error") shows the pill', () => {
     mockSource = "iphone-sync";
-    expect(renderHook(() => useTitleBarSync(makeApp("dashboard", true), true)).result.current.pill?.device).toBe("iphone");
-    expect(renderHook(() => useTitleBarSync(makeApp("error"), true)).result.current.pill?.device).toBe("iphone");
+    const { result } = renderHook(() => useTitleBarSync(makeApp("error")));
+    expect(result.current.pill?.device).toBe("iphone");
   });
-  it("flipped: onboarding, loading and signed-out show none", () => {
-    const user = {} as never;
-    const ms = { showSettings: false };
-    expect(pillVisible({ currentStep: "phone-type-selection", isAuthenticated: true, currentUser: user, modalState: ms }, true)).toBe(false);
-    expect(pillVisible({ currentStep: "loading", isAuthenticated: true, currentUser: user, modalState: ms }, true)).toBe(false);
-    expect(pillVisible({ currentStep: "dashboard", isAuthenticated: false, currentUser: null, modalState: ms }, true)).toBe(false);
-    expect(pillVisible({ currentStep: "dashboard", isAuthenticated: true, currentUser: user, modalState: ms }, true)).toBe(true);
+  it.each(["phone-type-selection", "email-onboarding", "keychain-explanation", "permissions", "apple-driver-setup", "loading"] as AppStep[])(
+    "default: step %s -> no pill",
+    (step) => {
+      mockSource = "iphone-sync";
+      const { result } = renderHook(() => useTitleBarSync(makeApp(step)));
+      expect(result.current.pill).toBeNull();
+    },
+  );
+  it("default: signed out -> no pill", () => {
+    expect(pillVisible({ currentStep: "dashboard", isAuthenticated: false, currentUser: null, modalState: ms })).toBe(false);
+    expect(pillVisible({ currentStep: "dashboard", isAuthenticated: false, currentUser: user, modalState: ms })).toBe(false);
+    expect(pillVisible({ currentStep: "dashboard", isAuthenticated: true, currentUser: null, modalState: ms })).toBe(false);
+    expect(pillVisible({ currentStep: "dashboard", isAuthenticated: true, currentUser: user, modalState: ms })).toBe(true);
+  });
+  it("alternative (false): dashboard only — not Settings, not the error screen", () => {
+    mockSource = "iphone-sync";
+    expect(renderHook(() => useTitleBarSync(makeApp("dashboard", true), false)).result.current.pill).toBeNull();
+    expect(renderHook(() => useTitleBarSync(makeApp("error"), false)).result.current.pill).toBeNull();
+    expect(renderHook(() => useTitleBarSync(makeApp("dashboard"), false)).result.current.pill?.device).toBe("iphone");
   });
 });
 
@@ -141,6 +178,7 @@ describe("B6 through the wiring: the Android poll runs only for the visible Andr
     ["macos-native", "dashboard", 0],
     ["android-companion", "dashboard", 0],
     ["android-messages-web", "permissions", 0],
+    ["android-messages-web", "loading", 0],
   ] as const)("%s on %s -> %i reads", async (source, step, n) => {
     expect(await polls(source, step as AppStep)).toBe(n);
   });

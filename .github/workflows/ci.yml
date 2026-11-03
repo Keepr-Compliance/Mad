@@ -168,7 +168,7 @@ jobs:
     needs: check-changes
     if: needs.check-changes.outputs.docs-only != 'true'
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45  # Windows test runs take ~25-30 min; 30 cancelled them (BACKLOG-3794)
+    timeout-minutes: 60  # Windows test runs took 37-44 min in Nov 2026 and hit 45 (BACKLOG-4115 pre.3 PR); 30 cancelled them earlier (BACKLOG-3794)
 
     strategy:
       fail-fast: false

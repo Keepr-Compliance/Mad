@@ -23,7 +23,8 @@ const pick = (p: SyncPillState): Expect => ({ label: p.label, tooltip: p.tooltip
 
 const IPHONE_EXPECTED: Record<keyof typeof IPHONE_STATES, Expect> = {
   syncing: { label: "Syncing 42%", tooltip: "Backing up · 42%", tone: "arc", canStart: false },
-  passcode: { label: "iPhone", tooltip: "Enter the passcode on your iPhone", tone: "warning", canStart: false },
+  // BACKLOG-4115 (founder, pre.3): a running phase, so the arc — never amber or red.
+  passcode: { label: "iPhone", tooltip: "Waiting for iPhone · preparing the export", tone: "arc", canStart: false },
   complete: { label: "iPhone", tooltip: "Synced just now", tone: "success", canStart: false },
   appleEncrypted: { label: "iPhone", tooltip: "Turn off backup encryption to sync", tone: "warning", canStart: false },
   errorCooldown: { label: "Sync failed", tooltip: "Sync failed · Try again in 30 s", tone: "danger", canStart: false },
@@ -59,8 +60,8 @@ describe("iPhone precedence (SR B1, sweep ii)", () => {
   const P = { phase: "backing_up" as const, percent: 10 };
   it.each([
     ["syncing + error -> Sync failed", { syncStatus: "error" as const, progress: P, isConnected: true }, "Sync failed · Try again"],
-    ["trust + passcode while syncing -> passcode", { syncStatus: "syncing" as const, progress: P, isWaitingForPasscode: true, needsTrust: true }, "Enter the passcode on your iPhone"],
-    ["syncing + passcode -> passcode refinement", { syncStatus: "syncing" as const, progress: P, isWaitingForPasscode: true }, "Enter the passcode on your iPhone"],
+    ["trust + waiting while syncing -> waiting", { syncStatus: "syncing" as const, progress: P, isWaitingForPasscode: true, needsTrust: true }, "Waiting for iPhone · preparing the export"],
+    ["syncing + waiting -> waiting refinement", { syncStatus: "syncing" as const, progress: P, isWaitingForPasscode: true }, "Waiting for iPhone · preparing the export"],
     ["error + appleEncrypted -> encrypted", { syncStatus: "error" as const, appleEncryptedBackup: true }, "Turn off backup encryption to sync"],
     ["error + locked (no progress) -> lock", { syncStatus: "error" as const, syncLocked: true, lockReason: "Cleaning up the unfinished iPhone backup" }, "Cleaning up the unfinished iPhone backup"],
     ["locked + progress -> syncing", { syncLocked: true, progress: P, lockReason: "x" }, "Backing up · 10%"],
@@ -69,6 +70,30 @@ describe("iPhone precedence (SR B1, sweep ii)", () => {
   ])("%s", (_n, over, tooltip) => {
     const enabled = !_n.includes("detection off");
     expect(deriveIPhonePill({ ...IPHONE_BASE, ...over }, enabled, NOW).tooltip).toBe(tooltip);
+  });
+});
+
+// BACKLOG-4115 (founder, 2.45.0-pre.3): the pill showed a non-arc dot during a
+// running sync's "Waiting for iPhone" phase. Every BackupProgress.phase value
+// (src/types/iphone.ts:56) x waiting flag, with syncStatus "syncing": the arc.
+describe("a running sync is always the arc (BACKLOG-4115 sweep)", () => {
+  const PHASES = ["preparing", "backing_up", "extracting", "storing", "complete", "error"] as const;
+  const cases = PHASES.flatMap((phase) => [false, true].map((waiting) => [phase, waiting] as const));
+  it.each(cases)("syncing, progress.phase %s, waiting %s -> arc", (phase, waiting) => {
+    const p = deriveIPhonePill(
+      { ...IPHONE_BASE, isConnected: true, syncStatus: "syncing", progress: { phase, percent: 0 }, isWaitingForPasscode: waiting },
+      true,
+      NOW,
+    );
+    expect(p.tone).toBe("arc");
+  });
+  it("syncStatus error -> danger (red only for a failed sync)", () => {
+    for (const progress of [null, { phase: "error" as const, percent: 0 }, { phase: "backing_up" as const, percent: 10 }]) {
+      for (const waiting of [false, true]) {
+        const p = deriveIPhonePill({ ...IPHONE_BASE, isConnected: true, syncStatus: "error", progress, isWaitingForPasscode: waiting }, true, NOW);
+        expect(p.tone).toBe("danger");
+      }
+    }
   });
 });
 

@@ -6,6 +6,7 @@
 import { renderHook, act } from "@testing-library/react";
 import { useIPhoneSync, syncStateRef, UNSEAL_MESSAGE_PREFIX } from "../useIPhoneSync";
 import { syncOrchestrator } from "../../services/SyncOrchestratorService";
+import { deriveIPhonePill } from "../../appCore/shell/syncPillState";
 
 // BACKLOG-1919: useIPhoneSync now sources platform via usePlatform() (renderer-
 // safe, IPC-backed) instead of `process.platform` (undefined in the sandboxed
@@ -728,6 +729,70 @@ describe("useIPhoneSync", () => {
       });
 
       expect(result.current.isWaitingForPasscode).toBe(false);
+    });
+  });
+
+  // BACKLOG-4115 (founder, 2.45.0-pre.3): the "device has not started sending"
+  // flag from a FAILED run carried into the next run, so the new run opened on
+  // "Waiting for iPhone" and the title-bar pill went off the arc. Event shapes
+  // transcribed from electron/handlers/syncHandlers.ts:584 ("sync:waiting-for-passcode", {})
+  // and :609 ("sync:error", { message, userError }); userError = formatBackupSizeUnknownError
+  // (electron/services/diagnostics/userFacingErrors.ts:95-102).
+  describe("a new run starts clean after a failed one (BACKLOG-4115)", () => {
+    const failedRun = async () => {
+      const syncApi = setupSyncApiMock();
+      syncApi.start = jest.fn(() => new Promise(() => {})); // the new run stays running
+      (window as any).api = { sync: syncApi, backup: { checkStatus: jest.fn().mockResolvedValue({ success: true }) } };
+      const hook = renderHook(() => useIPhoneSync());
+      await act(async () => {
+        deviceConnectedCallback?.(mockDevice);
+        await Promise.resolve();
+      });
+      syncStateRef.isActive = true;
+      act(() => {
+        waitingForPasscodeCallback?.();
+      });
+      act(() => {
+        (syncErrorCallback as unknown as (e: unknown) => void)?.({
+          message: "Couldn't check there's room for this backup",
+          userError: { title: "Couldn't check there's room for this backup", description: "", actionSuggestion: "", code: "BACKUP_SIZE_UNKNOWN" },
+        });
+      });
+      return hook;
+    };
+
+    it("the failed run leaves syncStatus error with the waiting flag still set (the precondition)", async () => {
+      const hook = await failedRun();
+      expect(hook.result.current.syncStatus).toBe("error");
+      expect(hook.result.current.isWaitingForPasscode).toBe(true);
+      expect(deriveIPhonePill(hook.result.current, true, Date.now()).tone).toBe("danger");
+    });
+
+    it("startSync: syncing, waiting flag cleared, fresh progress, and the pill is the arc", async () => {
+      const hook = await failedRun();
+      act(() => {
+        jest.advanceTimersByTime(60_000); // the founder's 60 s gap (and any retry hold)
+      });
+      await act(async () => {
+        void hook.result.current.startSync();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(hook.result.current.syncStatus).toBe("syncing");
+      expect(hook.result.current.isWaitingForPasscode).toBe(false);
+      expect(hook.result.current.progress?.phase).toBe("preparing");
+      expect(hook.result.current.userError).toBeNull();
+      const pill = deriveIPhonePill(hook.result.current, true, Date.now());
+      expect(pill.tone).toBe("arc");
+      expect(pill.tooltip).toBe("Backing up · 0%");
+    });
+
+    it.each(["dismissSync", "cancelSync"] as const)("%s also clears the waiting flag", async (fn) => {
+      const hook = await failedRun();
+      await act(async () => {
+        await (fn === "cancelSync" ? hook.result.current.cancelSync("progress-cancel") : hook.result.current.dismissSync());
+      });
+      expect(hook.result.current.isWaitingForPasscode).toBe(false);
     });
   });
 
