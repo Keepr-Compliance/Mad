@@ -84,7 +84,9 @@ describe("DashboardActionCard", () => {
       render(<DashboardActionCard {...defaultProps} />);
 
       const button = screen.getByRole("button");
-      expect(button).toHaveClass("p-5");
+      // BACKLOG-4115: 12 px top/bottom, 20 px sides.
+      expect(button).toHaveClass("px-5", "py-3");
+      expect(button).not.toHaveClass("p-5");
       expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Test Action");
     });
 

@@ -39,6 +39,8 @@ export function RecentPanel({
           type="button"
           onClick={onViewAll}
           disabled={disabled}
+          data-testid="nav-transactions"
+          data-tour="transactions-card"
           className="text-sm font-medium text-primary-700 hover:underline whitespace-nowrap disabled:opacity-50"
         >
           All →

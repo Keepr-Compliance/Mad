@@ -73,7 +73,7 @@ export function DashboardActionCard({
   const className = [
     "w-full flex items-center gap-4 bg-white rounded-lg border text-left transition-colors",
     "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500",
-    isPrimary ? "p-5" : "p-3",
+    isPrimary ? "px-5 py-3" : "p-3",
     highlighted ? "border-primary-500 ring-2 ring-primary-200" : "border-warm-line",
     // The warm hover border only on an unhighlighted tile: on a highlighted one
     // it would out-rank the primary border and turn it warm on hover.

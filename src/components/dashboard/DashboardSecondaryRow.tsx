@@ -1,13 +1,12 @@
 /**
  * The Dashboard's small row — BACKLOG-3965 PR-4b.
  *
- * Clients & Contacts, plus the Sync iPhone / Sync Android card when the user's
- * import source needs one. Moved out of Dashboard.tsx unchanged.
+ * The Sync iPhone / Sync Android card when the user's import source needs one;
+ * nothing otherwise.
  *
- * ASSUMPTION (OPEN QUESTION 35835347, unanswered): Clients & Contacts keeps
- * today's place in this small row (option 1, BACKLOG-3614's measurement). The
- * card is its own component, `ClientsContactsCard`, so moving it to a third
- * top card (option 2) is a one-line move.
+ * BACKLOG-4115: Clients & Contacts moved up into the action row (Dashboard.tsx,
+ * next to New Transaction). `ClientsContactsCard` still lives here until the
+ * sync tiles leave the Dashboard.
  */
 import React from "react";
 import { DashboardActionCard } from "./DashboardActionCard";
@@ -50,22 +49,19 @@ export function ClientsContactsCard({
 }
 
 export interface DashboardSecondaryRowProps {
-  onManageContacts: () => void;
   onSyncPhone?: () => void;
   onSyncAndroid?: () => void;
   disabled: boolean;
 }
 
 export function DashboardSecondaryRow({
-  onManageContacts,
   onSyncPhone,
   onSyncAndroid,
   disabled,
-}: DashboardSecondaryRowProps): React.ReactElement {
+}: DashboardSecondaryRowProps): React.ReactElement | null {
+  if (!onSyncPhone && !onSyncAndroid) return null;
   return (
-    <div className={`mt-4 grid gap-3 ${onSyncPhone || onSyncAndroid ? "sm:grid-cols-2" : "grid-cols-1"}`}>
-      <ClientsContactsCard onClick={onManageContacts} disabled={disabled} />
-
+    <div className="mt-4 grid gap-3 sm:grid-cols-2" data-testid="dashboard-small-row">
       {/* Sync iPhone Card (Windows + iPhone users only) */}
       {onSyncPhone && (
         <DashboardActionCard

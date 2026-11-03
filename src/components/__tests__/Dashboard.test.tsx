@@ -8,7 +8,7 @@
  *     upstream in AppRouter),
  *   - the founder-specified label/subtitle copy,
  *   - clicking the card invokes the callback (opens the wizard modal),
- *   - the secondary-row grid switches between 1 and 2 columns correctly,
+ *   - the small row renders only when a sync card shows (BACKLOG-4115),
  *   - the iPhone card path is unchanged.
  *
  * Heavy Dashboard dependencies (Joyride, license, sync orchestrator, tour, etc.)
@@ -96,9 +96,8 @@ const baseProps = {
   onManageContacts: jest.fn(),
 };
 
-/** The secondary actions row is the grid that contains the Contacts card. */
-const secondaryRow = () =>
-  screen.getByTestId("nav-clients-contacts").parentElement as HTMLElement;
+/** The small row (BACKLOG-4115: sync tiles only). */
+const secondaryRow = () => screen.getByTestId("dashboard-small-row");
 
 describe("Dashboard sync cards", () => {
   beforeEach(() => {
@@ -178,11 +177,13 @@ describe("Dashboard sync cards", () => {
       expect(secondaryRow().className).toContain("sm:grid-cols-2");
     });
 
-    it("uses a single column when no sync card shows", () => {
+    it("renders no small row when no sync card shows (BACKLOG-4115)", () => {
       render(<Dashboard {...baseProps} />);
-      const cls = secondaryRow().className;
-      expect(cls).toContain("grid-cols-1");
-      expect(cls).not.toContain("sm:grid-cols-2");
+      expect(screen.queryByTestId("dashboard-small-row")).toBeNull();
+      // Clients & Contacts is not in the small row any more; it is in the action row.
+      expect(screen.getByTestId("dashboard-action-row")).toContainElement(
+        screen.getByTestId("nav-clients-contacts"),
+      );
     });
   });
 });
@@ -196,12 +197,14 @@ describe("Dashboard primary action label (BACKLOG-3614)", () => {
 });
 
 describe("Dashboard face copy (BACKLOG-3965 PR-1)", () => {
-  // C1: the audits tile reads "All audits" (sentence case). Mutation: the old
-  // "All Audits" restored in Dashboard.tsx -> red.
-  it('the audits tile reads "All audits", not "All Audits"', () => {
+  // C1 (BACKLOG-4115 M10): the All audits tile is gone, in either casing; the
+  // list is reached from the Recent panel's "All →" (RecentPanel-3965 N5).
+  // Mutation: the tile restored in Dashboard.tsx -> red.
+  it("has no All audits tile", () => {
     render(<Dashboard {...baseProps} />);
-    expect(screen.getByRole("heading", { name: "All audits" })).toBeInTheDocument();
-    expect(screen.queryByText("All Audits")).toBeNull();
+    expect(screen.queryByRole("heading", { name: /all audits/i })).toBeNull();
+    expect(screen.queryByText(/all audits/i)).toBeNull();
+    expect(screen.queryByTestId("nav-transactions")).toBeNull();
   });
 
   // C2: the tagline under the greeting is gone; the greeting stays.
@@ -238,8 +241,7 @@ describe("Dashboard primary cards: New Transaction stays on one line (BACKLOG-36
     return cols;
   };
 
-  const primaryGrid = () =>
-    screen.getByTestId("nav-new-audit").parentElement as HTMLElement;
+  const primaryGrid = () => screen.getByTestId("dashboard-action-row");
 
   it.each([
     [400, 1],
@@ -256,7 +258,8 @@ describe("Dashboard primary cards: New Transaction stays on one line (BACKLOG-36
   ])("%ipx: the primary cards sit %i per row", (width, expected) => {
     render(<Dashboard {...baseProps} />);
     const grid = primaryGrid();
-    expect(grid.contains(screen.getByTestId("nav-transactions"))).toBe(true);
+    expect(grid).toContainElement(screen.getByTestId("nav-new-audit"));
+    expect(grid).toContainElement(screen.getByTestId("nav-clients-contacts"));
     // Two per row from 640px squeezed each card to ~272px and wrapped the title.
     expect(columnsAt(grid.className, width)).toBe(expected);
   });
@@ -267,7 +270,7 @@ describe("Dashboard primary cards: New Transaction stays on one line (BACKLOG-36
     expect(title.className.split(/\s+/)).toContain("whitespace-nowrap");
   });
 
-  it("the title keeps the same type style as the All audits card", () => {
+  it("the title keeps the same type style as the Clients & Contacts card", () => {
     render(<Dashboard {...baseProps} />);
     const style = (name: string) =>
       screen
@@ -275,6 +278,6 @@ describe("Dashboard primary cards: New Transaction stays on one line (BACKLOG-36
         .className.split(/\s+/)
         .filter((c) => c !== "whitespace-nowrap")
         .sort();
-    expect(style("New Transaction")).toEqual(style("All audits"));
+    expect(style("New Transaction")).toEqual(style("Clients & Contacts"));
   });
 });
