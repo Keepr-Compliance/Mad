@@ -3,7 +3,7 @@
  * fixture transcribed from a blank copy, and that fixture must match exactly that row.
  */
 import { buildRegistry, DEFAULT_REGISTRY } from "../registry";
-import { matchForms } from "../formMatcher";
+import { EVIDENCE_CAP, matchForms } from "../formMatcher";
 import { NWMLS_FORMS } from "../nwmlsForms";
 import { NWMLS_PUBLISHER } from "../publishers";
 import type { FormRow, PublisherRow } from "../formRegistryTypes";
@@ -19,13 +19,37 @@ import { AZ_FORMS } from "../azForms";
 import { AZ_FIXTURES } from "./fixtures/azHeaders";
 import { RI_FORMS } from "../riForms";
 import { RI_FIXTURES } from "./fixtures/riHeaders";
+import { MO_FORMS } from "../moForms";
+import { MO_FIXTURES } from "./fixtures/moHeaders";
 
 // BACKLOG-4106 PR 2: NV, AZ, RI and MO publishers and rows, in registry order.
-const PR2_PUBLISHERS = ["glvar", "snr", "nred", "aar", "par", "ri-commission", "riar"];
-const PR2_TITLE_PUBLISHERS = ["glvar", "snr", "nred", "aar", "par", "ri-commission", "riar"];
-const PR2_ROWS = [...NV_FORMS, ...AZ_FORMS, ...RI_FORMS];
-const PR2_FORMS = PR2_ROWS.map((f) => f.id);
-const PR2_FIXTURES = [...NV_FIXTURES, ...AZ_FIXTURES, ...RI_FIXTURES];
+const PR2_PUBLISHERS = ["glvar", "snr", "nred", "aar", "par", "ri-commission", "riar", "mrec", "mr", "kcrar"];
+const PR2_TITLE_PUBLISHERS = ["glvar", "snr", "nred", "aar", "par", "ri-commission", "riar", "mrec", "kcrar"];
+const PR2_ROWS = [...NV_FORMS, ...AZ_FORMS, ...RI_FORMS, ...MO_FORMS];
+const PR2_FORMS = [
+  "glvar-rpa",
+  "glvar-bba",
+  "glvar-er",
+  "snr-oaa",
+  "nred-524",
+  "nred-525",
+  "nred-525A",
+  "nred-547",
+  "nred-551",
+  "nred-676",
+  "aar-rpc",
+  "aar-bbeea",
+  "par-rpc",
+  "ri-mred",
+  "ri-mred-team",
+  "riar-sales-disclosure",
+  "riar-sf-ps",
+  "mrec-broker-disclosure",
+  "mr-RES-1010",
+  "mr-DSC-8000",
+  "kcrar-sale-contract",
+];
+const PR2_FIXTURES = [...NV_FIXTURES, ...AZ_FIXTURES, ...RI_FIXTURES, ...MO_FIXTURES];
 
 describe("BACKLOG-3941 default registry", () => {
   it("ships eight NWMLS rows in priority order (main transaction forms first)", () => {
@@ -146,6 +170,9 @@ describe("BACKLOG-4106 default registry v2", () => {
     const pubs = DEFAULT_REGISTRY.publishers.map((p) => p.id);
     expect(pubs).not.toContain("sfar");
     expect(pubs).not.toContain("orea");
+    // PR 2: the AZ regulator's title-only rows; RES-2000 (no revision printed, ruling F4).
+    expect(pubs).not.toContain("adre");
+    expect(codes).not.toContain("RES-2000");
   });
 
   it("F1: every title-keyed publisher's rows are indexed by title (the matcher handles the kind)", () => {
@@ -155,6 +182,18 @@ describe("BACKLOG-4106 default registry v2", () => {
   });
 
   const v2Fixtures = [...OR_FIXTURES, ...CA_FIXTURES, ...PR2_FIXTURES];
+
+  it.each(PR2_FIXTURES.map((f) => [f.id, f] as const))(
+    "%s: every match's evidence is a verbatim slice at firstOffset, at most EVIDENCE_CAP",
+    (_id, fx) => {
+      const text = fixtureText(fx);
+      for (const m of matchForms(text)) {
+        expect(m.evidence.length).toBeGreaterThan(0);
+        expect(m.evidence.length).toBeLessThanOrEqual(EVIDENCE_CAP);
+        expect(text.slice(m.firstOffset, m.firstOffset + m.evidence.length)).toBe(m.evidence);
+      }
+    }
+  );
   describe.each([...OR_FORMS, ...CA_FORMS, ...PR2_ROWS].map((f) => [f.id, f] as const))("%s", (_id, row) => {
     it.each(row.sampleProvenance.map((p) => [p]))("is proven by fixture %s", (fixtureId) => {
       const fx = v2Fixtures.find((f) => f.id === fixtureId);

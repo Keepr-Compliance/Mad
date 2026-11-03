@@ -16,6 +16,7 @@ import { CA_PUBLISHERS } from "./caForms";
 import { NV_PUBLISHERS } from "./nvForms";
 import { AZ_PUBLISHERS } from "./azForms";
 import { RI_PUBLISHERS } from "./riForms";
+import { MO_PUBLISHERS } from "./moForms";
 
 // Typed with its code-line header so v1 callers can read header.windowChars (BACKLOG-4106).
 export const NWMLS_PUBLISHER: PublisherRow & { header: PublisherHeader } = {
@@ -44,4 +45,5 @@ export const DEFAULT_PUBLISHERS: readonly PublisherRow[] = [
   ...NV_PUBLISHERS,
   ...AZ_PUBLISHERS,
   ...RI_PUBLISHERS,
+  ...MO_PUBLISHERS,
 ];

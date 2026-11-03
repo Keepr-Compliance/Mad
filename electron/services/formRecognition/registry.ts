@@ -27,6 +27,7 @@ import { CA_FORMS } from "./caForms";
 import { NV_FORMS } from "./nvForms";
 import { AZ_FORMS } from "./azForms";
 import { RI_FORMS } from "./riForms";
+import { MO_FORMS } from "./moForms";
 
 export function codeKey(publisherId: string, code: string): string {
   return `${publisherId}\u0000${code}`;
@@ -159,6 +160,7 @@ export const DEFAULT_FORMS: readonly FormRow[] = [
   ...NV_FORMS,
   ...AZ_FORMS,
   ...RI_FORMS,
+  ...MO_FORMS,
 ];
 
 export const DEFAULT_REGISTRY: Registry = buildRegistry(DEFAULT_PUBLISHERS, DEFAULT_FORMS);

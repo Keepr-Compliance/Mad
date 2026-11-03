@@ -176,6 +176,16 @@ describe("BACKLOG-4106 K25 — C.A.R. window boundary sweep (SYNTHETIC layouts)"
     const text = `${TOKEN}\n${".".repeat(fill)}\n${CODE}\n`;
     expect(ids(matchForms(text, registry))).toEqual(start <= 200 ? ["car-AD"] : []);
   });
+
+  // F2: the window is measured from the CODE, not from the start of the line, so a SAMPLE watermark
+  // glued in front does not shrink it.
+  it.each([298, 299, 300, 301, 302])("SAMPLE glued to the code line: token ending at +%i from the code", (end) => {
+    const fill = end - CODE.length - 1 - TOKEN.length - 1;
+    const text = `SAMPLE${CODE}\n${".".repeat(fill)}\n${TOKEN}\n`;
+    const ms = matchForms(text, registry);
+    expect(ids(ms)).toEqual(end <= 300 ? ["car-AD"] : []);
+    if (end <= 300) expect(ms[0].firstOffset).toBe(6);
+  });
 });
 
 describe("BACKLOG-4106 DRE (code-page, document marker)", () => {
@@ -204,6 +214,18 @@ describe("BACKLOG-4106 DRE (code-page, document marker)", () => {
   it("an unregistered DRE code is dropped, not reported (SYNTHETIC)", () => {
     const text = [CA4_RE882.lines[1], "RE 851 (Rev. 10/10)", ...BODY].join("\n");
     expect(matchForms(text)).toEqual([]);
+  });
+
+  it("`Rev.` / `Revised` prose with no `(Rev. MM/YY)` line is not a revision (SYNTHETIC)", () => {
+    const text = [
+      "D EPARTMENT OF REAL ESTATE",
+      "Rev. procedures: the Revised disclosure must be reviewed by the broker.",
+      "RE 882 \u2014 Page 2 of 3",
+      ...BODY,
+    ].join("\n");
+    expect(matchForms(text)).toEqual([]);
+    // Control: the same text with the form's own revision line matches.
+    expect(ids(matchForms(`${text}\nRE 882 (Rev. 10/10)`))).toEqual(["dre-RE882"]);
   });
 
   it("a mid-line reference to RE 882 is not a code line (SYNTHETIC)", () => {
@@ -247,6 +269,22 @@ describe("BACKLOG-4106 CA — region, evidence, cap", () => {
     expect(m.code).toBe("AD");
     expect(m.evidence.length).toBe(EVIDENCE_CAP);
     expect(EVIDENCE_CAP).toBe(400);
+  });
+
+  // F3: the cap boundary, swept (SYNTHETIC publisher as above; marker ending at +396..+404).
+  it.each([396, 397, 398, 399, 400, 401, 402, 403, 404])("R7 sweep: marker ending at +%i -> evidence min(end, 400)", (end) => {
+    const wide: PublisherRow = {
+      ...CAR_PUBLISHER,
+      id: "wide",
+      header: { ...car, pairedToken: undefined, requiredMarkers: [/END MARKER/], windowAfter: 1000 },
+    };
+    const reg = buildRegistry([wide], []);
+    const code = "AD REVISED 12/24 (PAGE 1 OF 2)";
+    const text = `${code}\n${".".repeat(end - code.length - 2 - "END MARKER".length)}\nEND MARKER\nTAIL`;
+    const [m] = matchForms(text, reg);
+    expect(text.indexOf("END MARKER") + "END MARKER".length).toBe(end);
+    expect(m.evidence.length).toBe(Math.min(end, EVIDENCE_CAP));
+    expect(m.evidence).toBe(text.slice(0, m.evidence.length));
   });
 
   it("the NWMLS publisher is untouched by v2 (still the code-line model)", () => {
