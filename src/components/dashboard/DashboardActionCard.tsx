@@ -34,14 +34,24 @@ export interface DashboardActionCardProps {
   variant?: "primary" | "secondary";
   /** Children to render after the title (e.g. a FeatureGate-wrapped badge) */
   children?: React.ReactNode;
+  /**
+   * Icon chip colour (BACKLOG-4110): "primary" = blue chip, "muted" = muted
+   * ink on the warm fill. Default "muted"; only the lead tiles pass "primary".
+   */
+  chipTone?: "primary" | "muted";
 }
+
+const CHIP_TONE_CLASS = {
+  primary: "bg-primary-50 text-primary-600",
+  muted: "bg-warm-chip text-ink-muted",
+} as const;
 
 /**
  * DashboardActionCard
  *
- * One white tile on kit tokens (Dashboard mock v6, BACKLOG-3965): gray border,
- * small shadow, primary icon chip, small semibold title. Every tile is the same
- * colour. No scale on hover (a transform would also add a stacking context).
+ * One white tile (Dashboard mock v9, BACKLOG-4110): warm hairline, no resting
+ * shadow, a blue chip on the lead tiles and a muted chip on the rest, ink
+ * title. No scale on hover (a transform would also add a stacking context).
  */
 export function DashboardActionCard({
   title,
@@ -56,19 +66,20 @@ export function DashboardActionCard({
   titleClassName,
   variant = "primary",
   children,
+  chipTone = "muted",
 }: DashboardActionCardProps): React.ReactElement {
   const isPrimary = variant === "primary";
 
   const className = [
-    "w-full flex items-center gap-4 bg-white rounded-lg border shadow-sm text-left transition-colors",
+    "w-full flex items-center gap-4 bg-white rounded-lg border text-left transition-colors",
     "focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500",
     isPrimary ? "p-5" : "p-3",
-    highlighted ? "border-primary-500 ring-2 ring-primary-200" : "border-gray-200",
-    // The gray hover border only on an unhighlighted tile: on a highlighted one
-    // it would out-rank the primary border and turn it gray on hover.
+    highlighted ? "border-primary-500 ring-2 ring-primary-200" : "border-warm-line",
+    // The warm hover border only on an unhighlighted tile: on a highlighted one
+    // it would out-rank the primary border and turn it warm on hover.
     disabled
       ? "opacity-50 cursor-not-allowed"
-      : `hover:shadow-md${highlighted ? "" : " hover:border-gray-300"}`,
+      : `hover:shadow-md${highlighted ? "" : " hover:border-warm-control"}`,
   ].join(" ");
 
   const Heading = isPrimary ? "h2" : "h3";
@@ -82,18 +93,19 @@ export function DashboardActionCard({
       data-testid={dataTestId}
     >
       <div
-        className={`shrink-0 rounded-lg bg-primary-50 text-primary-600 ${isPrimary ? "p-3" : "p-2"}`}
+        className={`shrink-0 rounded-lg ${CHIP_TONE_CLASS[chipTone]} ${isPrimary ? "p-3" : "p-2"}`}
+        data-part="chip"
       >
         <div className="h-5 w-5">{icon}</div>
       </div>
 
       <div className="min-w-0 flex-1">
         <Heading
-          className={`text-sm font-semibold text-gray-900${titleClassName ? ` ${titleClassName}` : ""}`}
+          className={`text-sm font-semibold text-ink${titleClassName ? ` ${titleClassName}` : ""}`}
         >
           {title}
         </Heading>
-        {description && <p className="text-xs text-gray-500">{description}</p>}
+        {description && <p className="text-xs text-ink-muted">{description}</p>}
       </div>
 
       {badge && (

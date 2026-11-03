@@ -94,7 +94,8 @@ describe("Electron title bar", () => {
     renderShell(makeApp({ getPageTitle: jest.fn().mockReturnValue("Transactions") }));
     const heading = screen.getByRole("heading", { level: 1 });
     expect(heading).toHaveTextContent("Transactions");
-    expect(heading).toHaveClass("text-sm", "font-semibold", "text-gray-700");
+    expect(heading).toHaveClass("text-sm", "font-semibold", "text-ink");
+    expect(heading).not.toHaveClass("text-gray-700");
   });
 
   it("initials button opens the profile, once per click", () => {
@@ -221,5 +222,27 @@ describe("Mobile (non-Electron) header", () => {
   it("is hidden on the login step", () => {
     renderShell(makeApp({ currentStep: "login" }));
     expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * BACKLOG-4110 seam pin: the warm page is the Dashboard's own (Dashboard.tsx
+ * root), NOT the shell's. The shell keeps bg-gray-50 on every screen, and the
+ * title bar's warm hairline is app-wide (checked on a non-dashboard title).
+ */
+describe("BACKLOG-4110 — shell background stays gray; title bar hairline is app-wide", () => {
+  it("the shell root keeps bg-gray-50 and does not paint the warm page", () => {
+    const { container } = renderShell(makeApp({ getPageTitle: jest.fn().mockReturnValue("Transactions") }));
+    const root = container.firstElementChild as HTMLElement;
+    expect(root).toHaveClass("bg-gray-50");
+    expect(root).not.toHaveClass("bg-warm-page");
+  });
+
+  it("on the Transactions screen the bar has the warm hairline and ink title", () => {
+    renderShell(makeApp({ getPageTitle: jest.fn().mockReturnValue("Transactions") }));
+    const bar = screen.getByTestId("title-bar");
+    expect(bar).toHaveClass("border-warm-line");
+    expect(bar).not.toHaveClass("border-gray-200");
+    expect(screen.getByRole("heading", { level: 1 })).toHaveClass("text-ink");
   });
 });

@@ -39,14 +39,17 @@ export function daysUntilClosing(closingDeadline: string | null, today: string):
   return Math.round((toUtc(target) - toUtc(from)) / 86_400_000);
 }
 
-export type ClosingBadgeTone = "danger" | "warning";
+export type ClosingBadgeTone = "danger" | "warning" | "neutral";
 
 export interface ClosingBadge {
   label: string;
   tone: ClosingBadgeTone;
 }
 
-/** Red at 14 days or fewer (and today, and overdue), amber above. */
+/**
+ * BACKLOG-4110 (mock v9): red when overdue or today, amber at 1-14 days,
+ * neutral beyond 14 days.
+ */
 export const CLOSING_SOON_DAYS = 14;
 
 /** The closing-date badge for a row, or null when the deal has no date. */
@@ -54,7 +57,7 @@ export function closingBadge(days: number | null): ClosingBadge | null {
   if (days === null) return null;
   if (days < 0) return { label: "Overdue", tone: "danger" };
   if (days === 0) return { label: "Today", tone: "danger" };
-  return { label: `${days} d`, tone: days <= CLOSING_SOON_DAYS ? "danger" : "warning" };
+  return { label: `${days} d`, tone: days <= CLOSING_SOON_DAYS ? "warning" : "neutral" };
 }
 
 /**

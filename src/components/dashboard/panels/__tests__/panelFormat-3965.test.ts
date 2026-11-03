@@ -2,7 +2,8 @@
  * BACKLOG-3965 PR-4b: the Dashboard panels' date and count helpers.
  *
  * C15 (SR 5e): the closing-date badge at 0 days, 1 day, past, 14 / 15 days,
- * no date, and the local-midnight boundary. `daysUntilClosing` compares
+ * no date, and the local-midnight boundary. BACKLOG-4110 rule: overdue and
+ * today red, 1-14 d amber, beyond 14 d neutral. `daysUntilClosing` compares
  * calendar components only, so these assertions hold on any runner.
  *
  * opened_at: written as ISO 8601 UTC by `new Date().toISOString()`
@@ -27,11 +28,11 @@ describe("daysUntilClosing / closingBadge (C15)", () => {
 
   it.each([
     ["2026-10-31", 0, "Today", "danger"],
-    ["2026-11-01", 1, "1 d", "danger"],
+    ["2026-11-01", 1, "1 d", "warning"],
     ["2026-10-30", -1, "Overdue", "danger"],
-    ["2026-11-14", 14, "14 d", "danger"],
-    ["2026-11-15", 15, "15 d", "warning"],
-    ["2026-11-28", 28, "28 d", "warning"],
+    ["2026-11-14", 14, "14 d", "warning"],
+    ["2026-11-15", 15, "15 d", "neutral"],
+    ["2026-11-28", 28, "28 d", "neutral"],
   ])("closing %s -> %i days -> %s (%s)", (deadline, days, label, tone) => {
     expect(daysUntilClosing(deadline, today)).toBe(days);
     expect(closingBadge(daysUntilClosing(deadline, today))).toEqual({ label, tone });

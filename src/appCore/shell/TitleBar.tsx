@@ -47,11 +47,11 @@ export function TitleBar({
     return (
       <div
         data-testid="title-bar"
-        className={`flex-shrink-0 bg-white border-b border-gray-200 pr-4 py-3 flex items-center justify-between select-none ${isMacOS ? "pl-20" : "pl-4"}`}
+        className={`flex-shrink-0 bg-white border-b border-warm-line pr-4 py-3 flex items-center justify-between select-none ${isMacOS ? "pl-20" : "pl-4"}`}
       >
         {/* Left spacer keeps the title centred */}
         <div className="w-8 shrink-0" />
-        <h1 className="min-w-0 truncate px-2 text-sm font-semibold text-gray-700">{title}</h1>
+        <h1 className="min-w-0 truncate px-2 text-sm font-semibold text-ink">{title}</h1>
         <div className="flex w-8 shrink-0 items-center justify-end" data-testid="title-bar-right">
           {user && <AccountButton user={user} onClick={onOpenAccount} inDragBand expanded={accountOpen} />}
         </div>
