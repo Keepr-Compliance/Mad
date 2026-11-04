@@ -119,7 +119,6 @@ jest.mock("axios");
 jest.mock("../services/googleAuthService", () => ({
   __esModule: true,
   default: {
-    authenticateForLogin: jest.fn(),
     authenticateForMailbox: jest.fn(),
     exchangeCodeForTokens: jest.fn(),
     getUserInfo: jest.fn(),
@@ -133,7 +132,6 @@ jest.mock("../services/googleAuthService", () => ({
 jest.mock("../services/microsoftAuthService", () => ({
   __esModule: true,
   default: {
-    authenticateForLogin: jest.fn(),
     authenticateForMailbox: jest.fn(),
     exchangeCodeForTokens: jest.fn(),
     getUserInfo: jest.fn(),
@@ -358,188 +356,6 @@ describe("Auth Handlers", () => {
     });
   });
 
-  describe("auth:google:login", () => {
-    it("should return auth URL on successful login start and open popup", async () => {
-      // Mock codePromise that never resolves (we just test the initial response)
-      const codePromise = new Promise<string>(() => {});
-      mockGoogleAuthService.authenticateForLogin.mockResolvedValue(fixture({
-        authUrl: "https://accounts.google.com/oauth",
-        codePromise,
-        scopes: ["email", "profile"],
-      }));
-
-      const handler = registeredHandlers.get("auth:google:login");
-      const result = await handler(mockEvent);
-
-      expect(result.success).toBe(true);
-      expect(result.authUrl).toBe("https://accounts.google.com/oauth");
-      expect(result.scopes).toEqual(["email", "profile"]);
-      // Verify BrowserWindow was created for popup
-      expect(require("electron").BrowserWindow).toHaveBeenCalled();
-    });
-
-    it("should handle Google login failure", async () => {
-      mockGoogleAuthService.authenticateForLogin.mockRejectedValue(
-        new Error("Network error"),
-      );
-
-      const handler = registeredHandlers.get("auth:google:login");
-      const result = await handler(mockEvent);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("Network error");
-      expect(mockLogService.error).toHaveBeenCalled();
-    });
-
-    it("should call stopLocalServer when popup is closed before auth completes", async () => {
-      const codePromise = new Promise<string>(() => {});
-      mockGoogleAuthService.authenticateForLogin.mockResolvedValue(fixture({
-        authUrl: "https://accounts.google.com/oauth",
-        codePromise,
-        scopes: ["email", "profile"],
-      }));
-
-      const handler = registeredHandlers.get("auth:google:login");
-      await handler(mockEvent);
-
-      // Get the BrowserWindow mock instance
-      const BrowserWindow = require("electron").BrowserWindow;
-      const mockWindowInstance =
-        BrowserWindow.mock.results[BrowserWindow.mock.results.length - 1]
-          ?.value;
-
-      // Simulate window close by calling the 'closed' event handler
-      const closedHandler = mockWindowInstance?.on.mock.calls.find(
-        (call: [string, () => void]) => call[0] === "closed",
-      )?.[1];
-
-      if (closedHandler) {
-        closedHandler();
-        expect(mockGoogleAuthService.stopLocalServer).toHaveBeenCalled();
-      }
-    });
-  });
-
-  describe("auth:google:complete-login", () => {
-    const mockTokens = {
-      access_token: "access-token-123",
-      refresh_token: "refresh-token-456",
-      expires_at: "2025-12-31T23:59:59Z",
-      scopes: ["email", "profile"],
-    };
-
-    const mockUserInfo = {
-      id: "google-user-id",
-      email: "test@example.com",
-      given_name: "Test",
-      family_name: "User",
-      name: "Test User",
-      picture: "https://example.com/avatar.png",
-    };
-
-    const mockCloudUser = {
-      id: "cloud-user-id",
-      subscription_tier: "pro",
-      subscription_status: "active",
-      trial_ends_at: null,
-    };
-
-    const mockLocalUser = {
-      id: TEST_USER_ID,
-      email: "test@example.com",
-      terms_accepted_at: null,
-    };
-
-    beforeEach(() => {
-      mockGoogleAuthService.exchangeCodeForTokens.mockResolvedValue({
-        tokens: mockTokens,
-        userInfo: mockUserInfo,
-      });
-      mockSupabaseService.syncUser.mockResolvedValue(fixture(mockCloudUser));
-      mockProvisionLogin.mockReturnValue({
-        user: mockLocalUser,
-        sessionToken: "session-token-123",
-        isNewUser: true,
-        existingBefore: null,
-      });
-      mockSupabaseService.validateSubscription.mockResolvedValue(fixture({
-        tier: "pro",
-      }));
-    });
-
-    it("should complete Google login for new user", async () => {
-      const handler = registeredHandlers.get("auth:google:complete-login");
-      const result = await handler(mockEvent, "valid-auth-code");
-
-      expect(result.success).toBe(true);
-      expect(result.user).toBeDefined();
-      expect(result.sessionToken).toBe("session-token-123");
-      expect(result.isNewUser).toBe(true);
-      expect(mockAuditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "LOGIN",
-          success: true,
-        }),
-      );
-    });
-
-    it("should complete Google login for existing user", async () => {
-      const existingUser = {
-        ...mockLocalUser,
-        terms_accepted_at: new Date().toISOString(),
-      };
-      mockProvisionLogin.mockReturnValue({
-        user: existingUser,
-        sessionToken: "session-token-123",
-        isNewUser: false,
-        existingBefore: existingUser,
-      });
-
-      const handler = registeredHandlers.get("auth:google:complete-login");
-      const result = await handler(mockEvent, "valid-auth-code");
-
-      expect(result.success).toBe(true);
-      // The handler sends both the create payload and the update payload; the
-      // transaction picks by what is actually in the table. That the RETURNING
-      // path updates rather than inserts is asserted against the real driver
-      // (H2 in loginProvisioningAtomicity-2546).
-      expect(mockProvisionLogin).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "google",
-          updateExisting: expect.objectContaining({ email: expect.any(String) }),
-        }),
-      );
-    });
-
-    it("should handle invalid auth code", async () => {
-      const handler = registeredHandlers.get("auth:google:complete-login");
-      const result = await handler(mockEvent, "");
-
-      expect(result.success).toBe(false);
-      // handleGoogleCompleteLogin doesn't wrap ValidationError, returns error.message directly
-      expect(result.error).toContain("Authorization code");
-    });
-
-    it("should log audit event on failed login", async () => {
-      mockGoogleAuthService.exchangeCodeForTokens.mockRejectedValue(
-        new Error("Token exchange failed"),
-      );
-
-      const handler = registeredHandlers.get("auth:google:complete-login");
-      const result = await handler(mockEvent, "invalid-code");
-
-      expect(result.success).toBe(false);
-      // Google complete login logs error but doesn't audit LOGIN_FAILED
-      expect(mockLogService.error).toHaveBeenCalledWith(
-        "Google complete login failed",
-        "AuthHandlers",
-        expect.objectContaining({
-          error: "Token exchange failed",
-        }),
-      );
-    });
-  });
-
   describe("auth:google:connect-mailbox", () => {
     const mockUser = {
       id: TEST_USER_ID,
@@ -570,58 +386,6 @@ describe("Auth Handlers", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
-    });
-  });
-
-  describe("auth:microsoft:login", () => {
-    it("should return auth URL on successful login start", async () => {
-      mockMicrosoftAuthService.authenticateForLogin.mockResolvedValue({
-        authUrl: "https://login.microsoftonline.com/oauth",
-        codePromise: new Promise(() => {}),
-        codeVerifier: "verifier-123",
-        scopes: ["User.Read"],
-      });
-
-      const handler = registeredHandlers.get("auth:microsoft:login");
-      const result = await handler(mockEvent);
-
-      expect(result.success).toBe(true);
-      expect(result.authUrl).toContain("microsoftonline");
-      expect(result.scopes).toContain("User.Read");
-    });
-
-    it("should handle Microsoft login failure", async () => {
-      mockMicrosoftAuthService.authenticateForLogin.mockRejectedValue(
-        new Error("Auth initialization failed"),
-      );
-
-      const handler = registeredHandlers.get("auth:microsoft:login");
-      const result = await handler(mockEvent);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("Auth initialization failed");
-    });
-
-    it("should log each step of the authentication flow", async () => {
-      mockMicrosoftAuthService.authenticateForLogin.mockResolvedValue({
-        authUrl: "https://login.microsoftonline.com/oauth",
-        codePromise: new Promise(() => {}),
-        codeVerifier: "verifier-123",
-        scopes: ["User.Read"],
-      });
-
-      const handler = registeredHandlers.get("auth:microsoft:login");
-      await handler(mockEvent);
-
-      // Verify initial logging happens
-      expect(mockLogService.info).toHaveBeenCalledWith(
-        "Starting Microsoft login flow with redirect",
-        "AuthHandlers",
-      );
-      expect(mockLogService.info).toHaveBeenCalledWith(
-        "Opening Microsoft auth URL in popup window",
-        "AuthHandlers",
-      );
     });
   });
 
@@ -760,232 +524,6 @@ describe("Auth Handlers", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("Validation error");
-    });
-  });
-
-  describe("Bidirectional Terms Acceptance Sync", () => {
-    const mockCloudUser = {
-      id: "cloud-user-id",
-      email: "test@example.com",
-      subscription_tier: "free" as const,
-      subscription_status: "trial" as const,
-    };
-
-    const mockOAuthUserInfo = {
-      id: "oauth-123",
-      email: "test@example.com",
-      given_name: "Test",
-      family_name: "User",
-      name: "Test User",
-    };
-
-    const mockTokens = {
-      access_token: "access-token",
-      refresh_token: "refresh-token",
-      expires_at: new Date(Date.now() + 3600000).toISOString(),
-      scopes: ["email", "profile"],
-    };
-
-    beforeEach(() => {
-      // Reset mocks
-      mockProvisionLogin.mockReset();
-      mockSupabaseService.syncUser.mockReset();
-      mockSupabaseService.syncTermsAcceptance.mockReset();
-      mockGoogleAuthService.exchangeCodeForTokens.mockReset();
-      mockDatabaseService.updateLastLogin.mockResolvedValue(undefined);
-      mockDatabaseService.saveOAuthToken.mockResolvedValue(fixture(undefined));
-      mockDatabaseService.createSession.mockResolvedValue("test-session-token");
-      mockSupabaseService.registerDevice.mockResolvedValue(fixture(undefined));
-      mockSupabaseService.trackEvent.mockResolvedValue(undefined);
-      mockSupabaseService.validateSubscription.mockResolvedValue(fixture(undefined));
-      mockAuditService.log.mockResolvedValue(undefined);
-
-      // Set up Google auth service mock
-      mockGoogleAuthService.exchangeCodeForTokens.mockResolvedValue({
-        tokens: {
-          access_token: mockTokens.access_token,
-          refresh_token: mockTokens.refresh_token,
-          expires_at: mockTokens.expires_at,
-          scopes: mockTokens.scopes,
-        },
-        userInfo: mockOAuthUserInfo,
-      });
-    });
-
-    it("should preserve local terms acceptance when cloud has none", async () => {
-      const localUserWithTerms = {
-        id: TEST_USER_ID,
-        email: "test@example.com",
-        oauth_provider: "google",
-        oauth_id: "oauth-123",
-        terms_accepted_at: "2024-01-01T00:00:00.000Z",
-        privacy_policy_accepted_at: "2024-01-01T00:00:00.000Z",
-        terms_version_accepted: "1.0",
-        privacy_policy_version_accepted: "1.0",
-      };
-
-      const cloudUserNoTerms = {
-        ...mockCloudUser,
-        terms_accepted_at: null,
-        privacy_policy_accepted_at: null,
-      };
-
-      mockProvisionLogin.mockReturnValue({
-        user: localUserWithTerms,
-        sessionToken: "test-session-token",
-        isNewUser: false,
-        // The PRE-update snapshot is what drives the sync-up decision.
-        existingBefore: localUserWithTerms,
-      });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      mockSupabaseService.syncUser.mockResolvedValue(cloudUserNoTerms as any);
-      mockSupabaseService.syncTermsAcceptance.mockResolvedValue(fixture(undefined));
-
-      const handler = registeredHandlers.get("auth:google:complete-login");
-      await handler(mockEvent, "test-auth-code");
-
-      // Verify local terms were NOT overwritten (updateUser should not include terms fields)
-      expect(mockProvisionLogin).toHaveBeenCalledWith(
-        expect.objectContaining({
-          updateExisting: expect.not.objectContaining({
-            terms_accepted_at: null,
-            privacy_policy_accepted_at: null,
-          }),
-        }),
-      );
-
-      // Verify bidirectional sync was attempted
-      expect(mockSupabaseService.syncTermsAcceptance).toHaveBeenCalledWith(
-        cloudUserNoTerms.id,
-        "1.0",
-        "1.0",
-      );
-
-      expect(mockLogService.info).toHaveBeenCalledWith(
-        "Local user has accepted terms but cloud does not - syncing to cloud",
-        "AuthHandlers",
-      );
-    });
-
-    it("should update local terms when cloud has newer acceptance", async () => {
-      const localUserNoTerms = {
-        id: TEST_USER_ID,
-        email: "test@example.com",
-        oauth_provider: "google",
-        oauth_id: "oauth-123",
-        terms_accepted_at: null,
-        privacy_policy_accepted_at: null,
-      };
-
-      const cloudUserWithTerms = {
-        ...mockCloudUser,
-        terms_accepted_at: "2024-01-15T00:00:00.000Z",
-        privacy_policy_accepted_at: "2024-01-15T00:00:00.000Z",
-        terms_version_accepted: "1.0",
-        privacy_policy_version_accepted: "1.0",
-      };
-
-      mockProvisionLogin.mockReturnValue({
-        user: { ...localUserNoTerms, ...cloudUserWithTerms },
-        sessionToken: "test-session-token",
-        isNewUser: false,
-        // No local terms, so the sync-up must NOT fire.
-        existingBefore: localUserNoTerms,
-      });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      mockSupabaseService.syncUser.mockResolvedValue(cloudUserWithTerms as any);
-
-      const handler = registeredHandlers.get("auth:google:complete-login");
-      await handler(mockEvent, "test-auth-code");
-
-      // Verify cloud terms were synced to local
-      expect(mockProvisionLogin).toHaveBeenCalledWith(
-        expect.objectContaining({
-          updateExisting: expect.objectContaining({
-            terms_accepted_at: "2024-01-15T00:00:00.000Z",
-            privacy_policy_accepted_at: "2024-01-15T00:00:00.000Z",
-            terms_version_accepted: "1.0",
-            privacy_policy_version_accepted: "1.0",
-          }),
-        }),
-      );
-
-      // Should NOT attempt bidirectional sync since cloud has terms
-      expect(mockSupabaseService.syncTermsAcceptance).not.toHaveBeenCalled();
-    });
-
-    it("should handle bidirectional sync failure gracefully", async () => {
-      const localUserWithTerms = {
-        id: TEST_USER_ID,
-        email: "test@example.com",
-        oauth_provider: "google",
-        oauth_id: "oauth-123",
-        terms_accepted_at: "2024-01-01T00:00:00.000Z",
-        privacy_policy_accepted_at: "2024-01-01T00:00:00.000Z",
-        terms_version_accepted: "1.0",
-        privacy_policy_version_accepted: "1.0",
-      };
-
-      const cloudUserNoTerms = {
-        ...mockCloudUser,
-        terms_accepted_at: null,
-        privacy_policy_accepted_at: null,
-      };
-
-      mockProvisionLogin.mockReturnValue({
-        user: localUserWithTerms,
-        sessionToken: "test-session-token",
-        isNewUser: false,
-        existingBefore: localUserWithTerms,
-      });
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      mockSupabaseService.syncUser.mockResolvedValue(cloudUserNoTerms as any);
-      mockSupabaseService.syncTermsAcceptance.mockRejectedValue(
-        new Error("Network error"),
-      );
-
-      const handler = registeredHandlers.get("auth:google:complete-login");
-      const result = await handler(mockEvent, "test-auth-code");
-
-      // Login should still succeed even if bidirectional sync fails
-      expect(result.success).toBe(true);
-
-      // Error should be logged
-      expect(mockLogService.error).toHaveBeenCalledWith(
-        "Failed to sync local terms to cloud",
-        "AuthHandlers",
-        expect.objectContaining({
-          error: "Network error",
-        }),
-      );
-    });
-
-    it("should not sync when both local and cloud have no terms", async () => {
-      const localUserNoTerms = {
-        id: TEST_USER_ID,
-        email: "test@example.com",
-        oauth_provider: "google",
-        oauth_id: "oauth-123",
-        terms_accepted_at: null,
-        privacy_policy_accepted_at: null,
-      };
-
-      const cloudUserNoTerms = {
-        ...mockCloudUser,
-        terms_accepted_at: null,
-        privacy_policy_accepted_at: null,
-      };
-
-      mockDatabaseService.getUserByOAuthId.mockResolvedValue(fixture(localUserNoTerms));
-      mockDatabaseService.getUserById.mockResolvedValue(fixture(localUserNoTerms));
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      mockSupabaseService.syncUser.mockResolvedValue(cloudUserNoTerms as any);
-
-      const handler = registeredHandlers.get("auth:google:complete-login");
-      await handler(mockEvent, "test-auth-code");
-
-      // Should not attempt any terms sync
-      expect(mockSupabaseService.syncTermsAcceptance).not.toHaveBeenCalled();
     });
   });
 
@@ -1396,138 +934,6 @@ describe("Auth Handlers", () => {
     });
   });
 
-  describe("Login Cancelled Events", () => {
-    const { BrowserWindow } = require("electron");
-
-    beforeEach(() => {
-      jest.clearAllMocks();
-    });
-
-    it("should send google:login-cancelled when Google login window is closed before completion", async () => {
-      // Track the 'closed' event handler
-      // Assigned from inside the jest.fn callback below. TypeScript does not
-      // track writes made in nested functions, so without the assertion it
-      // narrows the declaration to `null` and the guarded call below becomes
-      // uncallable (`never`). Runtime behaviour is unchanged.
-      let closedHandler: (() => void) | null = null as (() => void) | null;
-      const mockAuthWindow = {
-        loadURL: jest.fn(),
-        close: jest.fn(),
-        show: jest.fn(),
-        focus: jest.fn(),
-        on: jest.fn((event: string, handler: () => void) => {
-          if (event === "closed") {
-            closedHandler = handler;
-          }
-        }),
-        isDestroyed: jest.fn().mockReturnValue(false),
-        webContents: {
-          on: jest.fn(),
-          send: jest.fn(),
-          session: {
-            webRequest: {
-              onHeadersReceived: jest.fn(),
-            },
-          },
-        },
-      };
-
-      BrowserWindow.mockImplementation(() => mockAuthWindow);
-
-      mockGoogleAuthService.authenticateForLogin.mockResolvedValue(fixture({
-        authUrl: "https://accounts.google.com/oauth",
-        codePromise: new Promise(() => {}),
-        scopes: ["email", "profile"],
-      }));
-
-      const handler = registeredHandlers.get("auth:google:login");
-      await handler(mockEvent);
-
-      // Verify the 'closed' event handler was registered
-      expect(mockAuthWindow.on).toHaveBeenCalledWith(
-        "closed",
-        expect.any(Function),
-      );
-
-      // Simulate window being closed before auth completes
-      if (closedHandler) {
-        closedHandler();
-      }
-
-      // Verify the cancelled event was sent to the main window
-      expect(mockMainWindow.webContents.send).toHaveBeenCalledWith(
-        "google:login-cancelled",
-      );
-      expect(mockLogService.info).toHaveBeenCalledWith(
-        "Sent google:login-cancelled event to renderer",
-        "AuthHandlers",
-      );
-    });
-
-    it("should send microsoft:login-cancelled when Microsoft login window is closed before completion", async () => {
-      // Track the 'closed' event handler
-      // Assigned from inside the jest.fn callback below. TypeScript does not
-      // track writes made in nested functions, so without the assertion it
-      // narrows the declaration to `null` and the guarded call below becomes
-      // uncallable (`never`). Runtime behaviour is unchanged.
-      let closedHandler: (() => void) | null = null as (() => void) | null;
-      const mockAuthWindow = {
-        loadURL: jest.fn(),
-        close: jest.fn(),
-        show: jest.fn(),
-        focus: jest.fn(),
-        on: jest.fn((event: string, handler: () => void) => {
-          if (event === "closed") {
-            closedHandler = handler;
-          }
-        }),
-        isDestroyed: jest.fn().mockReturnValue(false),
-        webContents: {
-          on: jest.fn(),
-          send: jest.fn(),
-          session: {
-            webRequest: {
-              onHeadersReceived: jest.fn(),
-            },
-          },
-        },
-      };
-
-      BrowserWindow.mockImplementation(() => mockAuthWindow);
-
-      mockMicrosoftAuthService.authenticateForLogin.mockResolvedValue({
-        authUrl: "https://login.microsoftonline.com/oauth",
-        codePromise: new Promise(() => {}),
-        codeVerifier: "verifier-123",
-        scopes: ["User.Read"],
-      });
-
-      const handler = registeredHandlers.get("auth:microsoft:login");
-      await handler(mockEvent);
-
-      // Verify the 'closed' event handler was registered
-      expect(mockAuthWindow.on).toHaveBeenCalledWith(
-        "closed",
-        expect.any(Function),
-      );
-
-      // Simulate window being closed before auth completes
-      if (closedHandler) {
-        closedHandler();
-      }
-
-      // Verify the cancelled event was sent to the main window
-      expect(mockMainWindow.webContents.send).toHaveBeenCalledWith(
-        "microsoft:login-cancelled",
-      );
-      // Microsoft handler logs window closed but doesn't log "Sent..." message
-      expect(mockLogService.info).toHaveBeenCalledWith(
-        "Microsoft login auth window closed by user",
-        "AuthHandlers",
-      );
-    });
-  });
-
   describe("Mailbox Connection via System Browser (BACKLOG-1570)", () => {
     beforeEach(() => {
       jest.clearAllMocks();
@@ -1571,6 +977,27 @@ describe("Auth Handlers", () => {
     });
   });
 
+  describe("Mailbox PKCE verifier hand-off (BACKLOG-4103 keep-control)", () => {
+    it("Google mailbox-pending passes the verifier from authenticateForMailbox to the code exchange", async () => {
+      mockGoogleAuthService.authenticateForMailbox.mockResolvedValue(fixture({
+        authUrl: "https://accounts.google.com/oauth",
+        codePromise: Promise.resolve("pending-code"),
+        codeVerifier: "pending-verifier",
+        scopes: ["gmail.readonly"],
+      }));
+      mockGoogleAuthService.exchangeCodeForTokens.mockResolvedValue(fixture({
+        tokens: { access_token: "a", refresh_token: "r", expires_at: "2030-01-01T00:00:00.000Z", scopes: ["gmail.readonly"] },
+      }));
+      mockGoogleAuthService.getUserInfo.mockResolvedValue(fixture({ id: "g1", email: "broker@example.com" }));
+
+      const handler = registeredHandlers.get("auth:google:connect-mailbox-pending");
+      const result = await handler(mockEvent, undefined);
+
+      expect(result.success).toBe(true);
+      expect(mockGoogleAuthService.exchangeCodeForTokens).toHaveBeenCalledWith("pending-code", "pending-verifier");
+    });
+  });
+
   describe("OAuth Popup Window Security Configuration", () => {
     const { BrowserWindow } = require("electron");
 
@@ -1580,15 +1007,18 @@ describe("Auth Handlers", () => {
       BrowserWindow.mockClear();
     });
 
-    it("should create Google login popup without webSecurity: false", async () => {
-      mockGoogleAuthService.authenticateForLogin.mockResolvedValue(fixture({
+    it("should create the Google mailbox-pending popup without webSecurity: false", async () => {
+      mockGoogleAuthService.authenticateForMailbox.mockResolvedValue(fixture({
         authUrl: "https://accounts.google.com/oauth",
         codePromise: new Promise<string>(() => {}),
         scopes: ["email", "profile"],
       }));
 
-      const handler = registeredHandlers.get("auth:google:login");
-      await handler(mockEvent);
+      // The pending handler waits for the redirect code after opening the
+      // popup, so do not await it: let the window be created, then assert.
+      const handler = registeredHandlers.get("auth:google:connect-mailbox-pending");
+      void handler(mockEvent, undefined);
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       // Verify BrowserWindow was called
       expect(BrowserWindow).toHaveBeenCalled();
@@ -1607,16 +1037,16 @@ describe("Auth Handlers", () => {
       expect(callArgs.webPreferences?.contextIsolation).toBe(true);
     });
 
-    it("should create Microsoft login popup without webSecurity: false", async () => {
-      mockMicrosoftAuthService.authenticateForLogin.mockResolvedValue({
+    it("should create the Microsoft mailbox-pending popup without webSecurity: false", async () => {
+      mockMicrosoftAuthService.authenticateForMailbox.mockResolvedValue({
         authUrl: "https://login.microsoftonline.com/oauth",
         codePromise: new Promise<string>(() => {}),
         codeVerifier: "verifier-123",
         scopes: ["User.Read"],
       });
 
-      const handler = registeredHandlers.get("auth:microsoft:login");
-      await handler(mockEvent);
+      const handler = registeredHandlers.get("auth:microsoft:connect-mailbox-pending");
+      await handler(mockEvent, undefined);
 
       // Verify BrowserWindow was called
       expect(BrowserWindow).toHaveBeenCalled();

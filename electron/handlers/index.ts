@@ -13,8 +13,6 @@ export { registerUpdaterHandlers } from "./updaterHandlers";
 // Google OAuth handlers
 export {
   registerGoogleAuthHandlers,
-  handleGoogleLogin,
-  handleGoogleCompleteLogin,
   handleGoogleConnectMailbox,
   handleGoogleConnectMailboxPending,
 } from "./googleAuthHandlers";
@@ -22,7 +20,6 @@ export {
 // Microsoft OAuth handlers
 export {
   registerMicrosoftAuthHandlers,
-  handleMicrosoftLogin,
   handleMicrosoftConnectMailbox,
   handleMicrosoftConnectMailboxPending,
 } from "./microsoftAuthHandlers";

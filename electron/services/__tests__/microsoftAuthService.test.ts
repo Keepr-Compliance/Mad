@@ -407,43 +407,6 @@ describe("MicrosoftAuthService - rejectCodeDirectly edge cases", () => {
   });
 });
 
-describe("MicrosoftAuthService - authenticateForLogin", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    microsoftAuthService.stopLocalServer();
-    // Provide test client ID so initialize() doesn't throw
-    process.env.MICROSOFT_CLIENT_ID = "test-client-id";
-    // Reset singleton initialized state to force re-initialization with test env
-    (microsoftAuthService as any).initialized = false;
-  });
-
-  afterEach(() => {
-    delete process.env.MICROSOFT_CLIENT_ID;
-    microsoftAuthService.stopLocalServer();
-  });
-
-  it("should return auth flow result with required fields", async () => {
-    const result = await microsoftAuthService.authenticateForLogin();
-
-    expect(result).toHaveProperty("authUrl");
-    expect(result).toHaveProperty("codePromise");
-    expect(result).toHaveProperty("codeVerifier");
-    expect(result).toHaveProperty("scopes");
-
-    // Verify scopes include expected values
-    expect(result.scopes).toContain("openid");
-    expect(result.scopes).toContain("offline_access");
-
-    // Verify auth URL structure
-    expect(result.authUrl).toContain("client_id=");
-    expect(result.authUrl).toContain("response_type=code");
-    expect(result.authUrl).toContain("code_challenge=");
-
-    // Clean up - resolve the promise to stop the server
-    microsoftAuthService.resolveCodeDirectly("cleanup");
-  });
-});
-
 describe("MicrosoftAuthService - authenticateForMailbox", () => {
   beforeEach(() => {
     jest.clearAllMocks();

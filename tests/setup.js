@@ -60,10 +60,6 @@ if (typeof window !== 'undefined') {
       // BACKLOG-4038: name + email for the blocked screen's support form.
       getUserContact: jest.fn().mockResolvedValue({ success: false, name: "", email: "" }),
       acceptTerms: jest.fn().mockResolvedValue({ success: true }),
-      googleLogin: jest.fn().mockResolvedValue({ success: true }),
-      googleCompleteLogin: jest.fn().mockResolvedValue({ success: true }),
-      microsoftLogin: jest.fn().mockResolvedValue({ success: true }),
-      microsoftCompleteLogin: jest.fn().mockResolvedValue({ success: true }),
       googleConnectMailbox: jest.fn().mockResolvedValue({ success: true }),
       microsoftConnectMailbox: jest.fn().mockResolvedValue({ success: true }),
       googleDisconnectMailbox: jest.fn().mockResolvedValue({ success: true }),
@@ -490,7 +486,6 @@ if (typeof window !== 'undefined') {
     onMicrosoftMailboxConnected: jest.fn(() => jest.fn()),
     onGoogleMailboxDisconnected: jest.fn(() => jest.fn()),
     onMicrosoftMailboxDisconnected: jest.fn(() => jest.fn()),
-    onMicrosoftLoginComplete: jest.fn(() => jest.fn()),
     onGoogleMailboxCancelled: jest.fn(() => jest.fn()),
     onMicrosoftMailboxCancelled: jest.fn(() => jest.fn()),
     // Pre-DB mailbox connection event listeners
@@ -498,11 +493,6 @@ if (typeof window !== 'undefined') {
     onMicrosoftMailboxPendingConnected: jest.fn(() => jest.fn()),
     onGoogleMailboxPendingCancelled: jest.fn(() => jest.fn()),
     onMicrosoftMailboxPendingCancelled: jest.fn(() => jest.fn()),
-    onGoogleLoginComplete: jest.fn(() => jest.fn()),
-    onGoogleLoginPending: jest.fn(() => jest.fn()),
-    onGoogleLoginCancelled: jest.fn(() => jest.fn()),
-    onMicrosoftLoginPending: jest.fn(() => jest.fn()),
-    onMicrosoftLoginCancelled: jest.fn(() => jest.fn()),
   };
 
   // Mock electron for tests
