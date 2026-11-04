@@ -33,6 +33,7 @@ const mockAuth = jest.fn();
 jest.mock("../supabaseService", () => ({ __esModule: true, default: { getAuthSession: (...a: unknown[]) => mockAuth(...a) } }));
 
 import sessionService from "../sessionService";
+import { getSessionClearRequests } from "../sessionFileState";
 import { getAndClearPendingDeepLinkUser, isSignInAwaitingSessionWrite, markSignInSessionWritten, noteSignIn, saveSignInSession } from "../signInState";
 
 // Session shape: systemHandlers.ts persistSessionForUser (:225-243).
@@ -103,4 +104,19 @@ it("SR-R1W a token write-back queued behind a SUCCESSFUL retry lands on the new 
   await expect(p).resolves.toBe(true);
   await expect(u).resolves.toBe(true);
   expect((await sessionService.loadSession())?.supabaseTokens?.refresh_token).toBe("r-rot");
+});
+
+it("SRP-FC a sign-out whose file removal FAILS (unlink EPERM) still stops the retry: a failed clear counts as a clear request", async () => {
+  const fsMock = require("fs");
+  noteSignIn(); mockWriteFail = true;
+  const p = saveSignInSession(sessionFor("new-user", "new"));
+  await jest.advanceTimersByTimeAsync(100); mockWriteFail = false;
+  const clearsBefore = getSessionClearRequests();
+  // Real shape: _clearSessionInternal catches the unlink error and RESOLVES false (never rejects).
+  fsMock.promises.unlink.mockImplementationOnce(async () => { const e = new Error("EPERM") as NodeJS.ErrnoException; e.code = "EPERM"; throw e; });
+  await expect(sessionService.clearSession()).resolves.toBe(false);
+  expect(getSessionClearRequests()).toBe(clearsBefore + 1);
+  await jest.advanceTimersByTimeAsync(10_000); await expect(p).resolves.toBe(false);
+  expect(mockWrites).toBe(0);
+  expect(diskUser()).toBe("old-user");
 });
