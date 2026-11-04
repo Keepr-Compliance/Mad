@@ -23,6 +23,7 @@ import {
   viewPeriodMatches,
   type StoredViewPeriod,
 } from './view-period';
+import { parseViewAccess, viewAccessFields, type SharedViewFields } from './saved-view-access';
 
 export const SUBMISSIONS_REPORT_KEY = reportViewKey('submissions');
 
@@ -50,7 +51,8 @@ export interface StoredSubmissionFilters {
   period: StoredViewPeriod;
 }
 
-export interface SubmissionsSavedView {
+/** BACKLOG-4087: `SharedViewFields` = the caller's access (saved-view-access.ts). */
+export interface SubmissionsSavedView extends SharedViewFields {
   id: string;
   name: string;
   filters: SubmissionFilters;
@@ -100,12 +102,14 @@ export function parseSubmissionsSavedView(raw: unknown): SubmissionsSavedView | 
   const row = raw as Record<string, unknown>;
   if (typeof row.id !== 'string' || row.id.length === 0) return null;
   const blob = row.filters != null && typeof row.filters === 'object' ? (row.filters as Record<string, unknown>) : null;
+  const access = parseViewAccess(row);
   return {
     id: row.id,
     name: typeof row.name === 'string' && row.name.length > 0 ? row.name : 'Untitled view',
     filters: parseSubmissionFilters(row.filters),
     period: parseViewPeriod(blob?.period, SHARED_VIEW_PERIODS),
-    isDefault: row.is_default === true,
+    isDefault: access.isDefault,
+    ...viewAccessFields(access),
   };
 }
 

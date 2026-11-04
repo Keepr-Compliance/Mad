@@ -14,7 +14,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { SavedViews } from '@keepr/ui';
+import { SavedViews, ShareDialog } from '@keepr/ui';
 import { DEFAULT_PERIOD, type PeriodRange } from '@/lib/reports/period';
 import { bucketByDay } from '@/lib/reports/iphone-sync-charts';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
@@ -34,7 +34,9 @@ import {
   type GmSyncRun,
   recordedMsLabel,
 } from '@/lib/reports/google-messages-sync';
+import type { ShareApi } from '@/lib/reports/report-share-api';
 import { useReportSavedViews } from '@/lib/reports/use-report-saved-views';
+import { useReportViewSharing } from '@/lib/reports/use-report-view-sharing';
 import type { GmViewsApi } from '@/lib/reports/google-messages-sync-views-api';
 import {
   GM_SAVE_HINT,
@@ -189,6 +191,8 @@ export interface GoogleMessagesSyncReportProps {
   initialView?: GmSavedView | null;
   /** Saved-view storage. Absent = saved views unavailable (fails closed). */
   viewsApi?: GmViewsApi;
+  /** Saved-view sharing (BACKLOG-4087). Absent = no Share, Update or Leave. */
+  shareApi?: ShareApi;
 }
 
 export function GoogleMessagesSyncReport({
@@ -199,6 +203,7 @@ export function GoogleMessagesSyncReport({
   onNavigate,
   initialView = null,
   viewsApi,
+  shareApi,
 }: GoogleMessagesSyncReportProps) {
   // useState's initial value only: the default view seeds the first render and
   // is never synced again, so a later navigation cannot re-apply it.
@@ -263,6 +268,12 @@ export function GoogleMessagesSyncReport({
       pinned: false,
     });
   }
+  // Sharing (BACKLOG-4087). Update stores the page's current state, exactly as Save would.
+  const { sharing, shareDialog } = useReportViewSharing(shareApi, savedViews, GM_SYNC_REPORT_KEY, () => ({
+    filters: serializeGmView(filters, period),
+    metric: GM_VIEW_METRIC,
+  }));
+
 
   return (
     <div className="space-y-6">
@@ -277,19 +288,23 @@ export function GoogleMessagesSyncReport({
         onFiltersChange={updateFilters}
         onClear={() => updateFilters(GM_EMPTY_FILTERS)}
         viewsSlot={
-          <SavedViews<GmSavedView>
-            views={savedViews.views}
-            loading={savedViews.loading}
-            activeViewId={activeViewId}
-            writeError={savedViews.writeError}
-            onApply={applyView}
-            onDelete={savedViews.remove}
-            onSave={saveView}
-            saveHint={GM_SAVE_HINT}
-            defaultViewId={savedViews.defaultViewId}
-            onSetDefault={savedViews.setDefault}
-            onClear={clearView}
-          />
+          <>
+            <SavedViews<GmSavedView>
+              views={savedViews.views}
+              loading={savedViews.loading}
+              activeViewId={activeViewId}
+              writeError={savedViews.writeError}
+              onApply={applyView}
+              onDelete={savedViews.remove}
+              onSave={saveView}
+              saveHint={GM_SAVE_HINT}
+              defaultViewId={savedViews.defaultViewId}
+              onSetDefault={savedViews.setDefault}
+              onClear={clearView}
+              sharing={sharing}
+            />
+            <ShareDialog {...shareDialog} />
+          </>
         }
       />
 

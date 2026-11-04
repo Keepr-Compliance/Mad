@@ -15,7 +15,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { FilterCaption, SavedViews, StatCard, useSortState } from '@keepr/ui';
+import { FilterCaption, SavedViews, ShareDialog, StatCard, useSortState } from '@keepr/ui';
 import { DEFAULT_PERIOD, type PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
 import {
@@ -38,7 +38,9 @@ import {
   type SubmissionSortKey,
   type SubmissionsReportModel,
 } from '@/lib/reports/submissions';
+import type { ShareApi } from '@/lib/reports/report-share-api';
 import { useReportSavedViews } from '@/lib/reports/use-report-saved-views';
+import { useReportViewSharing } from '@/lib/reports/use-report-view-sharing';
 import type { SubmissionsViewsApi } from '@/lib/reports/submissions-views-api';
 import {
   serializeSubmissionsView,
@@ -96,6 +98,8 @@ export interface SubmissionsReportProps {
   initialView?: SubmissionsSavedView | null;
   /** Saved-view storage. Absent = saved views unavailable (fails closed). */
   viewsApi?: SubmissionsViewsApi;
+  /** Saved-view sharing (BACKLOG-4087). Absent = no Share, Update or Leave. */
+  shareApi?: ShareApi;
 }
 
 function uniqueOptions(subs: Submission[], pick: (s: Submission) => FilterOption | null): FilterOption[] {
@@ -121,6 +125,7 @@ export function SubmissionsReport({
   onNavigate,
   initialView = null,
   viewsApi,
+  shareApi,
 }: SubmissionsReportProps) {
   // useState's initial value only: the default view seeds the first render and
   // is never synced again, so a later navigation cannot re-apply it.
@@ -198,6 +203,12 @@ export function SubmissionsReport({
       pinned: false,
     });
   }
+  // Sharing (BACKLOG-4087). Update stores the page's current state, exactly as Save would.
+  const { sharing, shareDialog } = useReportViewSharing(shareApi, savedViews, SUBMISSIONS_REPORT_KEY, () => ({
+    filters: serializeSubmissionsView(filters, period),
+    metric: SUBMISSIONS_VIEW_METRIC,
+  }));
+
 
   const filterNames = activeFilterNames(filters);
 
@@ -216,19 +227,23 @@ export function SubmissionsReport({
         onFiltersChange={updateFilters}
         onClear={() => updateFilters(EMPTY_SUBMISSION_FILTERS)}
         viewsSlot={
-          <SavedViews<SubmissionsSavedView>
-            views={savedViews.views}
-            loading={savedViews.loading}
-            activeViewId={activeViewId}
-            writeError={savedViews.writeError}
-            onApply={applyView}
-            onDelete={savedViews.remove}
-            onSave={saveView}
-            saveHint={SUBMISSIONS_SAVE_HINT}
-            defaultViewId={savedViews.defaultViewId}
-            onSetDefault={savedViews.setDefault}
-            onClear={clearView}
-          />
+          <>
+            <SavedViews<SubmissionsSavedView>
+              views={savedViews.views}
+              loading={savedViews.loading}
+              activeViewId={activeViewId}
+              writeError={savedViews.writeError}
+              onApply={applyView}
+              onDelete={savedViews.remove}
+              onSave={saveView}
+              saveHint={SUBMISSIONS_SAVE_HINT}
+              defaultViewId={savedViews.defaultViewId}
+              onSetDefault={savedViews.setDefault}
+              onClear={clearView}
+              sharing={sharing}
+            />
+            <ShareDialog {...shareDialog} />
+          </>
         }
       />
 
