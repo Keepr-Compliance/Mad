@@ -9,6 +9,7 @@ import supabaseService from "../services/supabaseService";
 import logService from "../services/logService";
 import updateService from "../services/updateService";
 import failureLogService from "../services/failureLogService";
+import { readPreferencesCopy } from "../services/preferencesMirror";
 
 // Import validation utilities
 import {
@@ -22,6 +23,13 @@ interface PreferenceResponse {
   success: boolean;
   error?: string;
   preferences?: Record<string, unknown>;
+  /**
+   * BACKLOG-2824, `preferences:get` only: "cloud" when read from Supabase,
+   * "copy" when the cloud read failed and the local copy was served.
+   */
+  source?: "cloud" | "copy";
+  /** BACKLOG-2824: when the served copy was taken from the cloud (source "copy" only). */
+  copiedAt?: string;
 }
 
 /**
@@ -35,11 +43,12 @@ export function registerPreferenceHandlers(): void {
       event: IpcMainInvokeEvent,
       userId: string,
     ): Promise<PreferenceResponse> => {
+      let validatedUserId: string | null = null;
       try {
         logService.debug("[Preferences] Getting preferences", "Preferences", { userId });
 
         // Validate input
-        const validatedUserId = validateUserId(userId)!;
+        validatedUserId = validateUserId(userId)!;
 
         const preferences =
           (await supabaseService.getPreferences(validatedUserId)) ?? {};
@@ -47,6 +56,7 @@ export function registerPreferenceHandlers(): void {
         return {
           success: true,
           preferences: preferences || {},
+          source: "cloud",
         };
       } catch (error) {
         logService.error("[Preferences] Failed to get preferences:", "Preferences", { error });
@@ -55,6 +65,25 @@ export function registerPreferenceHandlers(): void {
             success: false,
             error: `Validation error: ${error.message}`,
           };
+        }
+        // BACKLOG-2824: the cloud read failed (offline, most often). Serve the
+        // last bag the cloud gave this user. With no copy, fail as before:
+        // the BACKLOG-2890 / 2893 holds react to that failure.
+        if (validatedUserId) {
+          const copy = await readPreferencesCopy(validatedUserId);
+          if (copy) {
+            logService.warn(
+              "[Preferences] Cloud read failed; serving the local copy of the preferences",
+              "Preferences",
+              { copiedAt: copy.copiedAt },
+            );
+            return {
+              success: true,
+              preferences: copy.preferences,
+              source: "copy",
+              copiedAt: copy.copiedAt,
+            };
+          }
         }
         return {
           success: false,

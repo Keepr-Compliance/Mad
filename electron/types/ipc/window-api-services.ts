@@ -12,7 +12,15 @@ import type { LLMHandlerResponse, LLMUserConfig, LLMPreferences, LLMUsageStats, 
 export interface WindowApiPreferences {
   get: (
     userId: string,
-  ) => Promise<{ success: boolean; preferences?: Record<string, unknown> }>;
+  ) => Promise<{
+    success: boolean;
+    preferences?: Record<string, unknown>;
+    error?: string;
+    /** BACKLOG-2824: "copy" = the cloud read failed and the local copy was served. */
+    source?: "cloud" | "copy";
+    /** BACKLOG-2824: when the served copy was taken from the cloud. */
+    copiedAt?: string;
+  }>;
   save: (
     userId: string,
     preferences: Record<string, unknown>,

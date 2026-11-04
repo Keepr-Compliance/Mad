@@ -36,6 +36,20 @@ interface SessionData {
   // The server decides; this is read only when the server cannot be reached.
   // Deleted with the session file on sign-out / expiry.
   accountSetupFinishedAt?: string;
+  // BACKLOG-2824: the last preferences bag read from or saved to the cloud, so
+  // an offline launch can use it. Read and written only by preferencesMirror.ts.
+  // Cleared with the session file on sign-out / expiry.
+  preferencesCopy?: PreferencesCopy;
+}
+
+/**
+ * BACKLOG-2824: a copy of the user's cloud preferences bag, stored verbatim.
+ * `copiedAt` is when this exact bag was first copied from the cloud.
+ */
+export interface PreferencesCopy {
+  userId: string;
+  preferences: Record<string, unknown>;
+  copiedAt: string;
 }
 
 /**
@@ -94,6 +108,14 @@ export class SessionService {
   // resurrect a used refresh token and get the family reuse-revoked on the next restart. The
   // queue guarantees the latest rotated tokens always win and writes never interleave.
   private writeLock: Promise<void> = Promise.resolve();
+
+  /**
+   * BACKLOG-2824: changes whenever the session file is replaced (saveSession) or
+   * cleared. preferencesMirror keys its "already written" memo on it, so a full
+   * replace that does not carry the preferences copy is written again on the
+   * next successful cloud read. updateSession does not change it.
+   */
+  private generation = 0;
 
   /**
    * @param secrets - The host shell's secret store (BACKLOG-2962). Injected so
@@ -297,6 +319,7 @@ export class SessionService {
     opts?: { endsSignInWait?: boolean },
   ): Promise<boolean> {
     return this.runSerialized(async () => {
+      this.generation++;
       const ok = await this._writeSession(sessionData);
       // BACKLOG-4076: the sign-in write ends the "previous session on disk"
       // window inside this critical section, so the next queued op (a token
@@ -480,6 +503,7 @@ export class SessionService {
   /** Internal, NON-serialized clear. Only call from inside a runSerialized() critical section
    *  or from loadSession (which is itself read-only / not queued). */
   private async _clearSessionInternal(): Promise<boolean> {
+    this.generation++;
     try {
       await fs.unlink(this.getSessionFilePath());
       await this.removeSessionTemp();
@@ -551,6 +575,11 @@ export class SessionService {
         return false;
       }
     });
+  }
+
+  /** BACKLOG-2824: see `generation`. */
+  getGeneration(): number {
+    return this.generation;
   }
 
   /**

@@ -712,6 +712,35 @@ describe("useAutoRefresh", () => {
 
         expect(result.current.messagesSyncHeld).toBe(false);
       });
+
+      // BACKLOG-2824: a returning user offline. The cloud read failed, and the
+      // handler served the local copy. Fixture transcribed from the real
+      // handler's output in
+      // electron/handlers/__tests__/preferenceHandlers.localCopy-2824.test.ts (C2),
+      // with this user's Mac source. Messages are not held and do sync.
+      it("returning user offline: the handler serves the local copy, so Messages are not held (BACKLOG-2824)", async () => {
+        (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+        mockPreferencesGet.mockResolvedValue({
+          success: true,
+          preferences: { messages: { source: "macos-native" } },
+          source: "copy",
+          copiedAt: "2026-11-01T10:00:00.000Z",
+        });
+
+        const { result } = renderHook(() => useAutoRefresh(defaultOptions));
+        await settle();
+        await act(async () => {
+          jest.advanceTimersByTime(1500);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        await act(async () => {
+          await result.current.triggerRefresh();
+        });
+
+        expect(result.current.messagesSyncHeld).toBe(false);
+        expect(anyMessages()).toBe(true);
+      });
     });
 
     it("should NOT include messages when import source is iphone-sync on macOS", async () => {
