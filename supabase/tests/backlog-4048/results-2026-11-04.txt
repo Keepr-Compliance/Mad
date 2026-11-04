@@ -1,0 +1,34 @@
+BACKLOG-4048 controls, keepr-test, 2026-11-04, after 20261104210000 applied.
+Command: python3 compose.py c.sql "<modes>" && kt-sql c.sql  (one call, one transaction ending in RAISE).
+Each line: mode, mutation record, pass/fail/total, red cells.
+
+base: pass=20 fail=0 total=20 reds=[]
+   none
+current: pass=18 fail=2 total=20 reds=['C1a', 'C1b']
+   MUTATION APPLIED pre-4048 body: both (helper unused)
+M5_any_org: pass=18 fail=2 total=20 reds=['C1a', 'C1b']
+   MUTATION APPLIED public._org_billing_state_visible(uuid) d0dc647b->9f3becce
+M1_grant_only: pass=6 fail=14 total=20 reds=['C10', 'C11a', 'C12a', 'C12b', 'C14', 'C15', 'C1a', 'C1b', 'C2a', 'C2b', 'C3', 'C4', 'C5', 'C9']
+   MUTATION APPLIED pre-4048 body: both | MUTATION APPLIED authenticated EXECUTE taken from both
+M9_or_not_and: pass=12 fail=8 total=20 reds=['C10', 'C11a', 'C11b', 'C12a', 'C12b', 'C1a', 'C1b', 'C9']
+   MUTATION APPLIED public.org_billing_suspended(uuid) 348821cc->95cb48cf | MUTATION APPLIED public.org_billing_service_off(uuid) b4e517f2->3f1ee4a0
+M4_active_only: pass=18 fail=2 total=20 reds=['C3', 'C4']
+   MUTATION APPLIED public._org_billing_state_visible(uuid) d0dc647b->e55dee88
+M3_no_submitter: pass=18 fail=2 total=20 reds=['C15', 'C8']
+   MUTATION APPLIED public._org_billing_state_visible(uuid) d0dc647b->cf6b984f
+M8_no_null_role: pass=18 fail=2 total=20 reds=['C13a', 'C13b']
+   MUTATION APPLIED public._org_billing_state_visible(uuid) d0dc647b->e4052365
+M2_no_service_bypass: pass=19 fail=1 total=20 reds=['C6']
+   MUTATION APPLIED public._org_billing_state_visible(uuid) d0dc647b->1c14caec
+M6_raise_for_outsider: pass=18 fail=2 total=20 reds=['C1a', 'C1b']
+   MUTATION APPLIED public.org_billing_suspended(uuid) 348821cc->29a1d5f4 | MUTATION APPLIED public.org_billing_service_off(uuid) b4e517f2->7e11aee6
+M11_guard_org_unlocked: pass=19 fail=1 total=20 reds=['C15']
+   MUTATION APPLIED public.guard_status_history_append_only() 3e90d363->7b5c306b
+M7_only_suspended_fixed: pass=19 fail=1 total=20 reds=['C1b']
+   MUTATION APPLIED pre-4048 body: service_off
+M12_suspended_granted_anon: pass=18 fail=2 total=20 reds=['C14', 'C7']
+   MUTATION APPLIED org_billing_suspended EXECUTE granted to anon
+M10_helper_granted_authenticated: pass=19 fail=1 total=20 reds=['C14']
+   MUTATION APPLIED helper EXECUTE granted to authenticated
+
+base cells: {"C10": "1", "C11a": "false", "C11b": "false", "C12a": "false", "C12b": "false", "C13a": "true", "C13b": "true", "C14": "ok", "C15": "ERR 42501 submission_owner_fields_locked", "C1a": "false", "C1b": "false", "C2a": "true", "C2b": "true", "C3": "true", "C4": "true", "C5": "true", "C6": "true", "C7": "ERR 42501 permission denied for function org_billing_suspended", "C8": "account_suspended", "C9": "1"}
