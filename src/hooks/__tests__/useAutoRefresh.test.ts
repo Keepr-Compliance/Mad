@@ -562,24 +562,143 @@ describe("useAutoRefresh", () => {
       expect(mockRequestSync.mock.calls.some((c) => (c[0] as string[]).includes('messages'))).toBe(false);
     });
 
-    // SR (BACKLOG-3749 follow-up): a failed preferences read falls back to the
-    // Mac default — Mac Messages still runs once the read has settled.
-    // Mutation: the load flag not set on failure → red.
-    it("the preferences read throws: Mac Messages still runs (the Mac default)", async () => {
-      (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
-      mockPreferencesGet.mockRejectedValue(new Error("offline"));
+    // BACKLOG-2890 (founder, 2026-11-04): a failed or non-success preferences
+    // read holds Mac Messages until a later read succeeds. Contacts and emails
+    // still sync. This replaces the BACKLOG-3749 follow-up assertion that a
+    // failed read took the Mac default.
+    describe("a failed preferences read holds Mac Messages (BACKLOG-2890)", () => {
+      const settle = async () => {
+        await act(async () => {
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+      };
+      const anyMessages = () =>
+        mockRequestSync.mock.calls.some((c) => (c[0] as string[]).includes('messages'));
 
-      const { result } = renderHook(() => useAutoRefresh(defaultOptions));
-      await act(async () => {
-        await Promise.resolve();
-        await Promise.resolve();
-      });
-      mockRequestSync.mockClear();
-      await act(async () => {
-        await result.current.triggerRefresh();
+      it("the preferences read throws: contacts and emails sync, Mac Messages do not", async () => {
+        (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+        mockPreferencesGet.mockRejectedValue(new Error("offline"));
+
+        const { result } = renderHook(() => useAutoRefresh(defaultOptions));
+        await settle();
+        await act(async () => {
+          jest.advanceTimersByTime(1500);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        await act(async () => {
+          await result.current.triggerRefresh();
+        });
+
+        expect(mockRequestSync).toHaveBeenCalledWith(['contacts', 'emails'], 'test-user-123');
+        expect(mockRequestSync.mock.calls.length).toBeGreaterThanOrEqual(2);
+        expect(anyMessages()).toBe(false);
+        expect(result.current.messagesSyncHeld).toBe(true);
       });
 
-      expect(mockRequestSync).toHaveBeenCalledWith(['contacts', 'emails', 'messages'], 'test-user-123');
+      // Fixture: the non-success shape the IPC handler returns when its read
+      // fails (electron/handlers/preferenceHandlers.ts:59-62 @ 23530c192).
+      it("the preferences read returns success: false: contacts and emails sync, Mac Messages do not", async () => {
+        (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+        mockPreferencesGet.mockResolvedValue({ success: false, error: "fetch failed" });
+
+        const { result } = renderHook(() => useAutoRefresh(defaultOptions));
+        await settle();
+        await act(async () => {
+          jest.advanceTimersByTime(1500);
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+        await act(async () => {
+          await result.current.triggerRefresh();
+        });
+
+        expect(mockRequestSync).toHaveBeenCalledWith(['contacts', 'emails'], 'test-user-123');
+        expect(mockRequestSync.mock.calls.length).toBeGreaterThanOrEqual(2);
+        expect(anyMessages()).toBe(false);
+        expect(result.current.messagesSyncHeld).toBe(true);
+      });
+
+      // Success fixture: electron/handlers/preferenceHandlers.ts:47-50 @ 23530c192.
+      it("read throws, then the triggerRefresh whose re-read succeeds includes 'messages' in that same refresh", async () => {
+        (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+        mockPreferencesGet
+          .mockRejectedValueOnce(new Error("offline"))
+          .mockResolvedValue({ success: true, preferences: { messages: { source: 'macos-native' } } });
+
+        const { result } = renderHook(() => useAutoRefresh(defaultOptions));
+        await settle();
+        expect(result.current.messagesSyncHeld).toBe(true);
+        mockRequestSync.mockClear();
+
+        await act(async () => {
+          await result.current.triggerRefresh();
+        });
+
+        expect(mockPreferencesGet).toHaveBeenCalledTimes(2);
+        expect(mockRequestSync).toHaveBeenCalledTimes(1);
+        expect(mockRequestSync).toHaveBeenCalledWith(['contacts', 'emails', 'messages'], 'test-user-123');
+        expect(result.current.messagesSyncHeld).toBe(false);
+      });
+
+      it("read throws, then the re-read returns android-companion: Mac Messages never run, the hold clears", async () => {
+        (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+        mockPreferencesGet
+          .mockRejectedValueOnce(new Error("offline"))
+          .mockResolvedValue({
+            success: true,
+            preferences: { sync: { autoSyncOnLogin: true }, messages: { source: 'android-companion' } },
+          });
+
+        const { result } = renderHook(() => useAutoRefresh(defaultOptions));
+        await settle();
+        expect(result.current.messagesSyncHeld).toBe(true);
+
+        await act(async () => {
+          await result.current.triggerRefresh();
+        });
+        await act(async () => {
+          await result.current.triggerRefresh();
+        });
+
+        expect(mockPreferencesGet).toHaveBeenCalledTimes(2);
+        expect(mockRequestSync).toHaveBeenCalledWith(['contacts', 'emails'], 'test-user-123');
+        expect(anyMessages()).toBe(false);
+        expect(result.current.messagesSyncHeld).toBe(false);
+      });
+
+      // The dashboard auto-trigger does not re-read: a successful re-read there
+      // changes state, re-runs the auto-trigger effect and sets its abort flag,
+      // so that run would request nothing at all.
+      it("read throws at load: the dashboard auto-trigger still syncs contacts and emails", async () => {
+        (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
+        mockPreferencesGet
+          .mockRejectedValueOnce(new Error("offline"))
+          .mockResolvedValue({ success: true, preferences: { messages: { source: 'macos-native' } } });
+
+        renderHook(() => useAutoRefresh(defaultOptions));
+        await settle();
+        await act(async () => {
+          jest.advanceTimersByTime(1500);
+          await Promise.resolve();
+          await Promise.resolve();
+          await Promise.resolve();
+        });
+
+        expect(mockRequestSync).toHaveBeenCalledTimes(1);
+        expect(mockRequestSync).toHaveBeenCalledWith(['contacts', 'emails'], 'test-user-123');
+      });
+
+      it("not on macOS: a failed read never reports Messages as held", async () => {
+        (usePlatform as jest.Mock).mockReturnValue({ isMacOS: false });
+        mockPreferencesGet.mockRejectedValue(new Error("offline"));
+
+        const { result } = renderHook(() => useAutoRefresh(defaultOptions));
+        await settle();
+
+        expect(result.current.messagesSyncHeld).toBe(false);
+      });
     });
 
     it("should NOT include messages when import source is iphone-sync on macOS", async () => {
