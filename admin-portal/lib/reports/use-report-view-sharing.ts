@@ -22,7 +22,7 @@
  * Hiding these is presentation only. The server functions are the access guard.
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { SavedViewItem, SavedViewsSharing, SavedViewUpdate, ShareDialogProps } from '@keepr/ui';
 import { isMissingFunctionError, type ShareApi } from './report-share-api';
 import { writeFailureMessage } from './report-views';
@@ -63,16 +63,33 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
     setError(writeFailureMessage(err));
   }, []);
 
+  // The view the dialog is open for. A reply for any other view (the owner moved from A to B before
+  // A's read returned, or closed the dialog) is discarded, so B never shows A's people.
+  const openViewId = useRef<string | null>(null);
+  const isOpenFor = (viewId: string) => openViewId.current === viewId;
+
   const readDialog = useCallback(
     (api: ShareApi, viewId: string) => {
-      api.candidates(viewId).then(setCandidates, (err) => {
-        setCandidates(null);
-        noteFailure(err);
-      });
-      api.grants(viewId).then(setGrants, (err) => {
-        setGrants(null);
-        noteFailure(err);
-      });
+      api.candidates(viewId).then(
+        (rows) => {
+          if (isOpenFor(viewId)) setCandidates(rows);
+        },
+        (err) => {
+          if (!isOpenFor(viewId)) return;
+          setCandidates(null);
+          noteFailure(err);
+        }
+      );
+      api.grants(viewId).then(
+        (rows) => {
+          if (isOpenFor(viewId)) setGrants(rows);
+        },
+        (err) => {
+          if (!isOpenFor(viewId)) return;
+          setGrants(null);
+          noteFailure(err);
+        }
+      );
     },
     [noteFailure]
   );
@@ -83,6 +100,7 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
     available && shareApi
       ? {
           onShare: (view) => {
+            openViewId.current = view.id;
             setTarget(view);
             setCandidates(null);
             setGrants(null);
@@ -122,7 +140,7 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
     op.then(
       () => readDialog(shareApi, viewId),
       (err) => {
-        noteFailure(err);
+        if (isOpenFor(viewId)) noteFailure(err);
         readDialog(shareApi, viewId);
       }
     );
@@ -131,7 +149,10 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
   const shareDialog: ShareDialogProps = {
     open: target !== null,
     onOpenChange: (open) => {
-      if (!open) setTarget(null);
+      if (!open) {
+        openViewId.current = null;
+        setTarget(null);
+      }
     },
     viewName: target?.name ?? '',
     candidates,

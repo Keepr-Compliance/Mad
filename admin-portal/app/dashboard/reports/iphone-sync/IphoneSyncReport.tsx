@@ -285,10 +285,11 @@ export function IphoneSyncReport({
       pinned: options?.pin === true,
     });
   }
-  // Sharing (BACKLOG-4087). Update stores the page's current state, exactly as Save would.
+  // Sharing (BACKLOG-4087). An editor's Update changes the FILTERS only (founder rule): the hook
+  // sends the view's own card metric, never this one (use-report-view-sharing.ts).
   const { sharing, shareDialog } = useReportViewSharing(shareApi, savedViews, REPORT_KEY, () => ({
     filters: serializeFilters(filters, stalledOnly, serializeViewPeriod(period)),
-    // The card metric the save form's selects hold, as Save would store it.
+    // Required by the kit payload type; ignored for a view that has its own metric (every view here).
     metric,
   }));
 

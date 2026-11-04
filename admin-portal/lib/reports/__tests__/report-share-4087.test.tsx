@@ -201,6 +201,38 @@ describe('P6 the ShareDialog picker is fed by candidates only', () => {
   });
 });
 
+describe('R1 a late reply for another view is discarded', () => {
+  it('A is opened, then B; A resolves last; B shows only B people and Remove acts on B', async () => {
+    const OTHER: View = { ...OWN, id: vid(5), name: 'Mine too' };
+    const api = fakeShareApi();
+    let resolveA: (v: unknown) => void = () => undefined;
+    let resolveACand: (v: unknown) => void = () => undefined;
+    const A_GRANTS = [{ userId: vid(201), name: 'Avery Example', role: 'viewer' }];
+    const B_GRANTS = [{ userId: vid(202), name: 'Robin Marsh', role: 'editor' }];
+    api.grants.mockImplementation((id: string) =>
+      id === vid(1) ? new Promise((r) => (resolveA = r)) : Promise.resolve(B_GRANTS)
+    );
+    api.candidates.mockImplementation((id: string) =>
+      id === vid(1) ? new Promise((r) => (resolveACand = r)) : Promise.resolve([{ id: vid(102), name: 'Blake Builder' }])
+    );
+    const { hook } = mount([OWN, OTHER], api);
+    act(() => hook.result.current.sharing!.onShare(OWN));
+    act(() => hook.result.current.sharing!.onShare(OTHER));
+    await waitFor(() => expect(hook.result.current.shareDialog.grants).toEqual(B_GRANTS));
+    await act(async () => {
+      resolveA(A_GRANTS);
+      resolveACand([{ id: vid(101), name: 'Avery Example' }]);
+      await Promise.resolve();
+    });
+    expect(hook.result.current.shareDialog).toMatchObject({ viewName: 'Mine too', grants: B_GRANTS });
+    expect(hook.result.current.shareDialog.candidates).toEqual([{ id: vid(102), name: 'Blake Builder' }]);
+    act(() => hook.result.current.shareDialog.onRemove(B_GRANTS[0] as never));
+    act(() => hook.result.current.shareDialog.onGrant(vid(102), 'viewer'));
+    expect(api.removeGrant).toHaveBeenCalledWith(vid(5), vid(202));
+    expect(api.share).toHaveBeenCalledWith(vid(5), vid(102), 'viewer');
+  });
+});
+
 describe('P4 Update and Leave', () => {
   it('P4b Update sends the report key, the view id and the payload, through the write runner', async () => {
     const { hook, write, shareApi } = mount([OWN, EDITOR]);
