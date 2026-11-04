@@ -6,7 +6,7 @@
  * worked, keep the tab exactly as before.
  */
 import React from "react";
-import { render as rtlRender, screen, fireEvent } from "@testing-library/react";
+import { render as rtlRender, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { NotificationProvider } from "../../../../contexts/NotificationContext";
 import { TransactionMessagesTab } from "../TransactionMessagesTab";
@@ -82,6 +82,13 @@ describe("TransactionMessagesTab: text source not read (BACKLOG-2890)", () => {
     );
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Choose source" })).toBeInTheDocument();
+    // SR B1: the only zero-texts Attach Messages control stays reachable, third in
+    // the row, and Sync Messages (which would run the held sync) is not offered.
+    expect(
+      within(empty).getAllByRole("button").map((b) => b.textContent),
+    ).toEqual(["Retry", "Choose source", "Attach Messages"]);
+    expect(within(empty).getByTestId("attach-messages-button")).toBeEnabled();
+    expect(screen.queryByTestId("sync-messages-button")).toBeNull();
     expect(screen.queryByText("No text messages linked")).toBeNull();
 
     // The existing notice stays, above the empty state.
@@ -137,5 +144,59 @@ describe("TransactionMessagesTab: text source not read (BACKLOG-2890)", () => {
     expect(onChooseMessagesSource).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Choose source" }));
     expect(onChooseMessagesSource).toHaveBeenCalledTimes(1);
+  });
+
+  // Fixture shape: TransactionMessagesTab.test.tsx:1270-1288 (attach flow) for the
+  // open case; lockedLinkedLists-3910.test.tsx:111 (editLockedTooltip={LOCK}) for the lock.
+  it("E5 held + zero texts: Attach Messages opens the attach modal; Sync Messages is not shown", async () => {
+    render(
+      <TransactionMessagesTab
+        {...base}
+        messages={[]}
+        messagesSyncHeld
+        onRetryMessagesRead={jest.fn()}
+        onChooseMessagesSource={jest.fn()}
+        onSyncMessages={jest.fn()}
+        hasContacts
+      />,
+    );
+    expect(screen.queryByTestId("attach-messages-modal")).toBeNull();
+    fireEvent.click(screen.getByTestId("attach-messages-button"));
+    await waitFor(() => expect(screen.getByTestId("attach-messages-modal")).toBeInTheDocument());
+    expect(screen.queryByTestId("sync-messages-button")).toBeNull();
+  });
+
+  it("E6 held + zero texts + edit-locked deal: Attach Messages is disabled with the lock tooltip and opens nothing", () => {
+    const LOCK = "This deal is with your broker for review.";
+    render(
+      <TransactionMessagesTab
+        {...base}
+        messages={[]}
+        messagesSyncHeld
+        editLockedTooltip={LOCK}
+        onRetryMessagesRead={jest.fn()}
+        onChooseMessagesSource={jest.fn()}
+      />,
+    );
+    const attach = screen.getByTestId("attach-messages-button");
+    expect(attach).toBeDisabled();
+    expect(attach).toHaveAttribute("title", LOCK);
+    fireEvent.click(attach);
+    expect(screen.queryByTestId("attach-messages-modal")).toBeNull();
+  });
+
+  it("E7 held + zero texts without userId/transactionId: no Attach Messages button (same gate as the normal block)", () => {
+    render(
+      <TransactionMessagesTab
+        loading={false}
+        error={null}
+        messages={[]}
+        messagesSyncHeld
+        onRetryMessagesRead={jest.fn()}
+        onChooseMessagesSource={jest.fn()}
+      />,
+    );
+    expect(screen.getByTestId("text-source-not-read")).toBeInTheDocument();
+    expect(screen.queryByTestId("attach-messages-button")).toBeNull();
   });
 });

@@ -1064,6 +1064,22 @@ export function TransactionMessagesTab({
                 <Button size="sm" variant="secondary" onClick={() => onChooseMessagesSource?.()} data-testid="text-source-choose">
                   Choose source
                 </Button>
+                {/* Manual attach does not depend on the source preference, and it is
+                    the only zero-texts way to link texts already in the local DB.
+                    Same gate, handler and lock as the normal zero-texts block.
+                    Sync Messages stays out: it would run the held sync. */}
+                {userId && transactionId && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={handleAttachClick}
+                    disabled={!!editLockedTooltip}
+                    title={editLockedTooltip}
+                    data-testid="attach-messages-button"
+                  >
+                    Attach Messages
+                  </Button>
+                )}
               </div>
             }
           />
