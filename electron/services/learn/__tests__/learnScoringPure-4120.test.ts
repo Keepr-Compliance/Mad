@@ -261,17 +261,22 @@ describe("C2b manual rows created before 2.33.0 are reported separately", () => 
         property_address: "15 Canarytest Way, Testville, ZZ 00000",
         detection_source: "auto",
         detection_status: "rejected",
-        created_at: "2026-09-12 10:00:00",
+        created_at: "2026-09-11 10:00:00",
       }),
       keyRow({
         property_address: "16 Canarytest Way, Testville, ZZ 00000",
         detection_source: "hybrid",
-        created_at: "2026-09-11 10:00:00",
+        created_at: "2026-09-13 10:00:00",
       }),
     ];
     const k = buildAnswerKey(rows, win);
+    // the rejected auto row is the earliest proof
     expect(iso(k.legacyCutoffMs)).toBe("2026-09-11T10:00:00.000Z");
     expect(k.positives.map((p) => p.legacyManual)).toEqual([true]);
+    // hybrid alone also proves it
+    const h = buildAnswerKey([rows[0], rows[2]], win);
+    expect(iso(h.legacyCutoffMs)).toBe("2026-09-13T10:00:00.000Z");
+    expect(h.legacyCutoffIsMinimum).toBe(false);
   });
 
   it("per-user cutoff never moves before the global cutoff (an auto row dated earlier)", () => {
