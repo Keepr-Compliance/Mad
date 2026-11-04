@@ -14,7 +14,8 @@
  *
  * - Share (own rows): opens the dialog for that view and reads its candidates and grants. The
  *   picker options are `report_share_candidates` output and nothing else.
- * - Update (editor rows): the page's filters and metric, read from `current()` at click time.
+ * - Update (editor rows): the page's filters, read from `current()` at click time, and the view's
+ *   own metric when it has one (else the payload's fixed metric).
  * - Leave (shared rows): `report_share_remove` with the caller's own id.
  * Update and Leave go through the saved-views write runner, so a refusal shows and the list re-reads.
  *
@@ -97,8 +98,18 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
             );
           },
           onUpdate: (view, payload) => {
+            // The page's filters; the VIEW's own metric when it has one (a pinned card's column and
+            // function). `current()` cannot know which view is being updated, and on the pinning
+            // reports its metric is the save form's, which an editor never touched: sending it would
+            // reset the owner's card. Reports with no per-view metric send the payload's fixed one.
+            const own = (view as { metric?: unknown }).metric;
             saved.write(() =>
-              shareApi.update({ reportKey, id: view.id, filters: payload.filters, metric: payload.metric })
+              shareApi.update({
+                reportKey,
+                id: view.id,
+                filters: payload.filters,
+                metric: own !== undefined ? own : payload.metric,
+              })
             );
           },
           current,

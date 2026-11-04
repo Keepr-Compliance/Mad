@@ -211,6 +211,21 @@ describe('P4 Update and Leave', () => {
     expect(shareApi!.update).toHaveBeenCalledWith({ reportKey: 'user-activity', id: vid(3), ...payload });
   });
 
+  it('P4c a view with its own metric (a pinned card) keeps it; the page filters still go', async () => {
+    const card = { ...EDITOR, metric: { col: 'duration', fn: 'p90' } };
+    const { hook, shareApi } = mount([OWN, card]);
+    act(() =>
+      hook.result.current.sharing!.onUpdate(card, { filters: { types: ['backup'] }, metric: { col: 'runs', fn: 'count' } })
+    );
+    await waitFor(() => expect(shareApi!.update).toHaveBeenCalledTimes(1));
+    expect(shareApi!.update).toHaveBeenCalledWith({
+      reportKey: 'user-activity',
+      id: vid(3),
+      filters: { types: ['backup'] },
+      metric: { col: 'duration', fn: 'p90' },
+    });
+  });
+
   it('Leave removes the caller access through the write runner', async () => {
     const { hook, write, shareApi } = mount([OWN, VIEWER]);
     act(() => hook.result.current.sharing!.onLeave(VIEWER));

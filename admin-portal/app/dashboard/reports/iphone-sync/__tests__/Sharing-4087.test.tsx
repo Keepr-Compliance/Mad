@@ -6,7 +6,7 @@
  *
  * I1 sharing is wired; a shared view is never a pinned card and never counts toward the cap
  * I2 4132: both save rows still offered, and "Save current view as a card" still pins
- * I3 editor Update sends the page filters + the save form's metric; p_name null, no p_pinned
+ * I3 editor Update sends the page filters + the card's own metric; p_name null, no p_pinned
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,7 +32,9 @@ const blob = (outcomes: string[]) => ({ types: [], outcomes, platforms: [], sear
 const METRIC = { col: 'runs', fn: 'count' };
 const OWN_CARD = ownRow({ name: 'Errors', filters: blob(['error']), metric: METRIC, pinned: true });
 // Shared rows as the server sends them, plus one whose mask failed (pinned true): never a card.
-const SHARED_EDITOR = sharedRow('editor', { name: 'Team cancelled', filters: blob(['cancelled']), metric: METRIC });
+// The editor's card metric is NOT the save form's fallback (runs/count), so Update must keep it.
+const CARD_METRIC = { col: 'duration', fn: 'average' };
+const SHARED_EDITOR = sharedRow('editor', { name: 'Team cancelled', filters: blob(['cancelled']), metric: CARD_METRIC });
 const SHARED_UNMASKED = sharedRow('viewer', { name: 'Team complete', filters: blob(['complete']), metric: METRIC, pinned: true });
 
 afterEach(cleanup);
@@ -90,7 +92,7 @@ describe('I2 4132 save rows', () => {
 });
 
 describe('I3 editor Update', () => {
-  it('filters + the save form metric under the view id; never name or pin', async () => {
+  it('the page filters and the card own metric under the view id; never name or pin', async () => {
     mount([OWN_CARD, SHARED_EDITOR, SHARED_UNMASKED]);
     await openViews();
     fireEvent.click(within(panel()).getByRole('button', { name: 'Update Team cancelled with the current filters' }));
@@ -100,7 +102,7 @@ describe('I3 editor Update', () => {
       p_report_key: 'iphone-sync',
       p_name: null,
       p_filters: { types: [], outcomes: [], platforms: [], search: '', stalledOnly: false, period: { key: 'week' } },
-      p_metric: METRIC,
+      p_metric: CARD_METRIC,
       p_id: SHARED_EDITOR.id,
     });
     expect(Object.keys(args)).not.toContain('p_pinned');
