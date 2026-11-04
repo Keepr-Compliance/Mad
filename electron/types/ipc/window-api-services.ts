@@ -317,6 +317,11 @@ export interface WindowApiUpdate {
    */
   onError: (callback: (error: UpdateErrorPayload | string) => void) => () => void;
   install: () => void;
+  /**
+   * BACKLOG-3469: download an offered update when auto-download is off.
+   * Refused (success false) in the Store build.
+   */
+  download: () => Promise<{ success: boolean; error?: string }>;
   checkForUpdates: () => Promise<{
     updateAvailable: boolean;
     version?: string;
