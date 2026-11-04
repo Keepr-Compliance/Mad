@@ -1,0 +1,18 @@
+# BACKLOG-4087 PR 1 fix-up (H1 cross-report, H2 4084 C12, S1 owner eligibility), keepr-test, 2026-11-04
+# fix commit 62894f2fd before any mutation run; harness grows 24 -> 26 controls (K18, K19)
+# migration change: report_share_list owner path requires _report_share_eligible(caller); 'active' field removed
+# keepr-test: migration re-applied; ledger tip 20261104200000 unchanged; shares 0; fixtures 0
+# md5 (pg_get_functiondef, first 8) after re-apply; only report_share_list changed (eceddc00 -> 84777b8c):
+#   _report_share_eligible a9d7c11d  report_list_saved_views a31218b2  report_save_view 5a109e6a
+#   report_delete_saved_view 156e499f  report_share_candidates 50c4e961  report_share_list 84777b8c
+#   report_share_set bfe2f5e7  report_share_remove c3633c5a  report_set_default_view f96e460c
+# 4087: run.sh 26/26; run.sh --with-migration 26/26 (K16 idempotent, K17 rollback restores both pass)
+# 4084 base after the 4087 apply: 19/19 (18 checks + C12_list_half_superseded_by_4087_K16)
+# 4084 mutations (C12 compares set_default + one-default index when 4087 is present):
+#   no_guard reds C12 C9; grant_anon reds C10a C11 C12; no_owner reds C12 C4a C6 C7; no_unique_index reds C7
+# 4087 mutations (mutate.py: exact replace once, numstat, MUTATION APPLIED, restore, clean asserted):
+#   M12  shared branch loses report_key (0/1): total=26 reds K18
+#   M12b own branch loses report_key (0/1): reds K18 K9 P1
+#   S1a  owner path without eligibility (1/2): reds K19
+#   S1b  active field back (1/0): reds K19
+#   M1b  (0/2): reds K11 K12 | M7 (1/1): reds K5 K7 K9 K10 K15 K19 | M8 (1/1): reds K9 K18 P1
