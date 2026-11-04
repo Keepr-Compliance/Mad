@@ -207,6 +207,55 @@ describe("C2b manual rows created before 2.33.0 are reported separately", () => 
     expect(text).toContain("created before 2.33.0, possibly auto-detected: 1");
     expect(text).toContain("Recall without pre-2.33.0 manual deals: 1/2");
   });
+
+  it("recall with cleanup Yes is reported with and without the pre-2.33.0 manual rows", () => {
+    const rows = [
+      keyRow({ property_address: "10 Canarytest Way, Testville, ZZ 00000", created_at: "2026-08-01 10:00:00" }), // legacy, found
+      keyRow({ property_address: "20 Canarytest Way, Testville, ZZ 00000", created_at: "2026-10-01 10:00:00" }), // found
+      keyRow({ property_address: "30 Canarytest Way, Testville, ZZ 00000", created_at: "2026-10-02 10:00:00" }), // missed
+    ];
+    const addr40 = "40 canarytest way, testville, zz 00000";
+    const s = scoreRun(
+      run([
+        det("d1", "10 canarytest way, testville, zz 00000"),
+        det("d2", "20 canarytest way, testville, zz 00000"),
+        det("d3", addr40), // unmatched, user answered Yes
+      ]),
+      rows,
+      [{ address_key: addressKey(addr40) as string, answer: "yes" as const, rule_version: 1 }],
+      [],
+    );
+    expect(s.cleanupYes).toBe(1);
+    // full key: (2 + 1) / (3 + 1); without legacy: (1 + 1) / (2 + 1)
+    expect([s.recallWithCleanupYes.k, s.recallWithCleanupYes.n]).toEqual([3, 4]);
+    expect([s.recallWithCleanupYesExcludingLegacy.k, s.recallWithCleanupYesExcludingLegacy.n]).toEqual([2, 3]);
+    expect(formatCopyBlock(s)).toContain("Recall with cleanup Yes, without pre-2.33.0 manual deals: 2/3");
+  });
+
+  it("a hand-entered deal and a rejected auto deal at one address: the detection is a true detection", () => {
+    // Producible after 2.33.0: the user rejects a wrong auto deal, then enters the same address by hand.
+    const address = "60 Canarytest Way, Testville, ZZ 00000";
+    const rows = [
+      keyRow({ property_address: address, created_at: "2026-10-01 10:00:00" }), // manual, confirmed
+      keyRow({
+        property_address: address,
+        detection_source: "auto",
+        detection_status: "rejected",
+        created_at: "2026-10-02 10:00:00",
+      }),
+    ];
+    const addr70 = "70 canarytest way, testville, zz 00000";
+    const s = scoreRun(
+      run([det("d1", address.toLowerCase()), det("d2", addr70)]),
+      rows,
+      [{ address_key: addressKey(addr70) as string, answer: "no" as const, rule_version: 1 }],
+      [],
+    );
+    expect([s.positives, s.found]).toEqual([1, 1]);
+    expect([s.trueDetections, s.knownWrong]).toEqual([1, 0]);
+    expect([s.precisionBeforeCleanup.k, s.precisionBeforeCleanup.n]).toEqual([1, 2]);
+    expect([s.precisionAfterCleanup.k, s.precisionAfterCleanup.n]).toEqual([1, 2]);
+  });
 });
 
 // ---------------------------------------------------------------------------

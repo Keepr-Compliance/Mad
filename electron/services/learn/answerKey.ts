@@ -18,7 +18,8 @@ import { overlapsWindow } from "./dealMatcher";
  * BACKLOG-2737 (commit 8f235e22c, "writer declares an exhaustive column
  * policy"): before it, createTransactionSync wrote a fixed 13-column INSERT
  * with no detection_* columns, so the schema default 'manual' won. First
- * release containing the fix: tag v2.33.0, commit 61e0d4df8, committed
+ * DESKTOP release containing the fix (a companion tag, v1.1.0-companion,
+ * also contains it): tag v2.33.0, commit 61e0d4df8, committed
  * 2026-08-31T01:20:25-06:00 = 2026-08-31T07:20:25Z. A 'manual' row created
  * before this instant is not provably hand-entered. This is a lower bound: a
  * user who upgraded later keeps auto-detected 'manual' rows past it.
