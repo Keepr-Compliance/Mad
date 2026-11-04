@@ -41,6 +41,7 @@
  *   - drop the email lookup (OAuth id only)                            -> D3, D5
  *   - skip `migrateUserIdForUnification` in the wrapper                -> D5
  *   - move the migration inside the transaction                        -> D3, D5
+ *   - rethrow the migration error in the wrapper's catch               -> D8
  *
  * Run locally with (the shared native module is the Electron build):
  *   ELECTRON_RUN_AS_NODE=1 npx electron node_modules/.bin/jest \
@@ -72,6 +73,7 @@ jest.mock("../../logService", () => ({
 import { setDb } from "../core/dbConnection";
 import type { PendingDeepLinkUser } from "../../signInState";
 import { provisionDeepLinkLogin, provisionDeepLinkSignIn } from "../../loginProvisioningService";
+import logService from "../../logService";
 
 const SCHEMA_PATH = nodePath.join(__dirname, "..", "..", "..", "database", "schema.sql");
 
@@ -250,5 +252,33 @@ describe("BACKLOG-3322 deep-link provisioning is one transaction", () => {
     expect(real.prepare("SELECT user_id, session_token FROM sessions").all()).toEqual([
       { user_id: u.supabaseId, session_token: r.sessionToken },
     ]);
+  });
+
+  it("D8 the legacy-id migration fails (real driver, real UNIQUE conflict): the sign-in still completes on the OLD id, the error is logged not thrown", async () => {
+    const real = seedDb();
+    setDb(real);
+    const u = deepLinkUser();
+    const oldId = randomUUID();
+    // The legacy user, found by email under an id that is not the Supabase id.
+    insertUser(real, oldId, u.email, "legacy-subject");
+    // A different row already holds the Supabase id, so the migration's
+    // `UPDATE users_local SET id = <supabaseId>` hits the primary key and the
+    // real migrateUserIdForUnification throws (and rolls back). Not stubbed.
+    insertUser(real, u.supabaseId, `other-${randomUUID()}@example.test`, "other-subject");
+    (logService.error as jest.Mock).mockClear();
+
+    const r = await provisionDeepLinkSignIn(u);
+
+    expect(r.user.id).toBe(oldId);
+    expect(r.isNewUser).toBe(false);
+    expect(real.prepare("SELECT id FROM users_local WHERE email = ?").all(u.email)).toEqual([{ id: oldId }]);
+    expect(real.prepare("SELECT user_id, session_token FROM sessions").all()).toEqual([
+      { user_id: oldId, session_token: r.sessionToken },
+    ]);
+    expect(logService.error).toHaveBeenCalledWith(
+      "[DeepLink] Failed to migrate local user ID",
+      "LoginProvisioning",
+      expect.objectContaining({ error: expect.any(String) }),
+    );
   });
 });
