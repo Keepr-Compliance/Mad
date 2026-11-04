@@ -297,6 +297,32 @@ describe("BACKLOG-2893: a failed preferences read holds iPhone sync", () => {
     });
   });
 
+  describe("F7 a served local copy (BACKLOG-2824) is a normal read, not a failure", () => {
+    // Shape transcribed from electron/handlers/preferenceHandlers.ts:80-85:
+    // the cloud read failed and the handler served the user's last bag.
+    function serveCopy(preferences: Record<string, unknown>, phoneType: "iphone" | "android" | null) {
+      w().api.preferences.get.mockResolvedValue({
+        success: true,
+        preferences,
+        source: "copy",
+        copiedAt: "2026-11-04T09:00:00.000Z",
+      });
+      w().api.preferences.update.mockResolvedValue({ success: true });
+      w().api.user.getPhoneType.mockResolvedValue({ success: true, phoneType });
+      return drain;
+    }
+    it("chose on -> running, not held", async () => {
+      await mount(serveCopy(CHOSE_ON, "iphone"));
+      await waitFor(() => expect(running()).toBe(true));
+      expect(state()).toEqual({ enabled: true, readFailed: false, running: true });
+    });
+    it("chose off -> off, not held", async () => {
+      await mount(serveCopy(CHOSE_OFF, "iphone"));
+      expectNeverStarted();
+      expect(state()).toEqual({ enabled: false, readFailed: false, running: false });
+    });
+  });
+
   it("F8 signing out clears the hold", async () => {
     w().api.user.getPhoneType.mockResolvedValue({ success: true, phoneType: "iphone" });
     w().api.preferences.get.mockResolvedValue(FAILED);
