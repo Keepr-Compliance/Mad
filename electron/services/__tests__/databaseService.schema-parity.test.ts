@@ -785,6 +785,77 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     why: "BACKLOG-3965: the Recent read orders by opened_at and stops at its limit; this index keeps that read off a full scan.",
     ref: "BACKLOG-3965",
   },
+
+  // -------------------------------------------------------------------------
+  // BACKLOG-4120 — Learn mode ("Help Keepr learn") local answers. Three new
+  // tables, three partial unique indexes, three primary-key autoindexes: 9 keys,
+  // every spelling copied from this suite's own failure output. All IF NOT
+  // EXISTS, so schema.sql's unconditional exec on every open creates them on
+  // fresh and existing databases; no migration version. The CHECK constraints
+  // (enabled 0/1, answer values, source) produce NO key here: the fingerprint
+  // reads PRAGMA table_info, which cannot see CHECK. learnModeDb-4120.test.ts (C10)
+  // guards them.
+  // -------------------------------------------------------------------------
+  {
+    key: "TABLE:learn_mode_settings",
+    what: "New table: the per-user Learn mode switch (one live row per user; missing row = OFF).",
+    why:
+      "BACKLOG-4120: Learn mode is its own switch, separate from AI detection. Local to one computer by founder " +
+      "decision; not synced, not exported. Additive only.",
+    ref: "BACKLOG-4120",
+  },
+  {
+    key: "TABLE:learn_deal_answers",
+    what: "New table: cleanup-pass Yes/No answers keyed by user + normalized address.",
+    why:
+      "BACKLOG-4120: the cleanup pass labels detections that match no hand-entered deal. Never creates a " +
+      "transaction. Soft removal via deleted_at; local only.",
+    ref: "BACKLOG-4120",
+  },
+  {
+    key: "TABLE:learn_bulk_answers",
+    what: "New table: the persisted bulk sample and its answers, keyed by user + provider + provider message id.",
+    why:
+      "BACKLOG-4120: the sample is drawn once and kept stable across sessions and force re-caches (the key is " +
+      "the provider id, never emails.id). Soft removal via deleted_at; local only.",
+    ref: "BACKLOG-4120",
+  },
+  {
+    key: "INDEX:idx_learn_mode_settings_user_live",
+    what: "Partial unique index on learn_mode_settings(user_id) WHERE deleted_at IS NULL.",
+    why: "BACKLOG-4120: one live switch row per user; a soft-removed row does not block a new one.",
+    ref: "BACKLOG-4120",
+  },
+  {
+    key: "INDEX:idx_learn_deal_answers_user_key_live",
+    what: "Partial unique index on learn_deal_answers(user_id, address_key) WHERE deleted_at IS NULL.",
+    why: "BACKLOG-4120: one live answer per deal address; a re-answer after a soft removal is allowed.",
+    ref: "BACKLOG-4120",
+  },
+  {
+    key: "INDEX:idx_learn_bulk_answers_user_msg_live",
+    what: "Partial unique index on learn_bulk_answers(user_id, source, external_id) WHERE deleted_at IS NULL.",
+    why: "BACKLOG-4120: one live sample row per message; a re-draw after a soft removal is allowed.",
+    ref: "BACKLOG-4120",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_learn_mode_settings_1",
+    what: "SQLite's automatic index for learn_mode_settings' primary key.",
+    why: "BACKLOG-4120: produced by the id PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4120",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_learn_deal_answers_1",
+    what: "SQLite's automatic index for learn_deal_answers' primary key.",
+    why: "BACKLOG-4120: produced by the id PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4120",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_learn_bulk_answers_1",
+    what: "SQLite's automatic index for learn_bulk_answers' primary key.",
+    why: "BACKLOG-4120: produced by the id PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4120",
+  },
 ];
 
 const ALLOWED_KEYS = new Set(ALLOWED_EVOLUTION.map((d) => d.key));
