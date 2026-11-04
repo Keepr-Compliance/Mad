@@ -72,11 +72,12 @@ for mode in sys.argv[1].split(','):
     ns = sh('git', 'diff', '--numstat', '--', rel).stdout.strip()
     if not ns:
         sys.exit('%s MUTATION NOT APPLIED: git diff empty' % mode)
-    added = [l[1:] for l in sh('git', 'diff', '-U0', '--', rel).stdout.splitlines() if l.startswith('+') and not l.startswith('+++')]
+    changed = [l for l in sh('git', 'diff', '-U0', '--', rel).stdout.splitlines()
+               if l[:1] in '+-' and not l.startswith(('+++', '---'))]
     print('== %s' % mode)
     print('MUTATION APPLIED numstat=%s' % ns)
-    for l in added:
-        print('  + ' + l.strip()[:150])
+    for l in changed:
+        print('  %s %s' % (l[0], l[1:].strip()[:150]))
     try:
         out = subprocess.run([os.path.join(here, 'run.sh'), '--with-migration'], capture_output=True, text=True)
         o = out.stdout
