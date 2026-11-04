@@ -38,6 +38,9 @@ export function AppModals({ app }: AppModalsProps) {
     pendingOAuthData,
     needsTermsAcceptance,
     appPath,
+    // BACKLOG-2890: the Texts tab's "Text source not read" empty state
+    messagesSyncHeld,
+    triggerRefresh,
     // Modal transitions
     closeTransactions,
     closeContacts,
@@ -116,6 +119,9 @@ export function AppModals({ app }: AppModalsProps) {
             initialTransaction={auditCreatedTransaction}
             initialTransactionId={openRequest?.id ?? null}
             initialTransactionTab={openRequest?.tab}
+            messagesSyncHeld={messagesSyncHeld}
+            onRetryMessagesRead={triggerRefresh}
+            onChooseMessagesSource={() => openSettings("settings-messages")}
           />
         </div>
       )}
