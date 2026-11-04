@@ -31,8 +31,14 @@ import type { SavedViewItem, SavedViewsProps } from './types';
  * - Row actions (Default toggle, Pin, Delete) are native buttons reached by
  *   Tab after their row, each labelled with the view's name. The Delete KEY
  *   on a row is RESERVED (see types.ts).
+ * - Save rows: "Save current view". With `pinning` (BACKLOG-4132) a second
+ *   row follows it, "Save current view as a card"; both are plain Tab stops
+ *   in that order. The plain save never pins and is not capped; the card
+ *   save shows the hint and `saveFields`, says "Save and pin", and is
+ *   refused at the pin cap.
  * - Save form: Enter in the name field saves. An empty name shows
- *   "Give the view a name." and calls nothing.
+ *   "Give the view a name." and calls nothing. Cancel returns focus to the
+ *   row that opened the form.
  * - Escape: the first Escape while the save form is open cancels the form;
  *   the next closes the panel and returns focus to the trigger. Escape is
  *   caught by a window keydown listener in CAPTURE phase that exists ONLY
@@ -41,6 +47,8 @@ import type { SavedViewItem, SavedViewsProps } from './types';
  * - A pointerdown outside closes WITHOUT moving focus, so the user's click
  *   target keeps it. Tabbing out of the panel closes it.
  */
+type SaveMode = 'view' | 'card';
+
 export function SavedViews<V extends SavedViewItem>({
   views,
   loading,
@@ -56,7 +64,9 @@ export function SavedViews<V extends SavedViewItem>({
   saveFields,
 }: SavedViewsProps<V>) {
   const [open, setOpen] = React.useState(false);
-  const [saving, setSaving] = React.useState(false);
+  /** Which save form is open: the plain view save, the card save (pinning only), or none. */
+  const [saveMode, setSaveMode] = React.useState<SaveMode | null>(null);
+  const saving = saveMode !== null;
   const [name, setName] = React.useState('');
   const [error, setError] = React.useState<string | null>(null);
   const [rovingIndex, setRovingIndex] = React.useState(0);
@@ -69,10 +79,11 @@ export function SavedViews<V extends SavedViewItem>({
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const panelRef = React.useRef<HTMLDivElement>(null);
   const saveButtonRef = React.useRef<HTMLButtonElement>(null);
+  const saveCardButtonRef = React.useRef<HTMLButtonElement>(null);
   const nameRef = React.useRef<HTMLInputElement>(null);
   const rowRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
   /** What to focus after the next render: a row index, the save button, or the name field. */
-  const pendingFocus = React.useRef<number | 'save' | 'name' | null>(null);
+  const pendingFocus = React.useRef<number | 'save' | 'saveCard' | 'name' | null>(null);
 
   const unavailable = views === null;
   const list = views ?? [];
@@ -81,6 +92,9 @@ export function SavedViews<V extends SavedViewItem>({
   // One slot, two sources. The local refusal is raised synchronously and is
   // the more specific of the two, so it wins over the store's.
   const message = error ?? writeError;
+  // The hint and the extra fields describe a card when pinning is on, so they
+  // belong to the card form only; without pinning the one form keeps them.
+  const showCardDetails = !pinning || saveMode === 'card';
   const roving = Math.min(rovingIndex, Math.max(list.length - 1, 0));
 
   React.useEffect(() => {
@@ -91,6 +105,8 @@ export function SavedViews<V extends SavedViewItem>({
       nameRef.current?.focus();
     } else if (typeof target === 'number' && rowRefs.current[target]) {
       rowRefs.current[target]?.focus();
+    } else if (target === 'saveCard' && saveCardButtonRef.current) {
+      saveCardButtonRef.current.focus();
     } else if (saveButtonRef.current) {
       saveButtonRef.current.focus();
     } else {
@@ -100,7 +116,7 @@ export function SavedViews<V extends SavedViewItem>({
 
   const close = React.useCallback((restoreFocus: boolean) => {
     setOpen(false);
-    setSaving(false);
+    setSaveMode(null);
     setName('');
     setError(null);
     if (restoreFocus) triggerRef.current?.focus();
@@ -110,15 +126,23 @@ export function SavedViews<V extends SavedViewItem>({
   useClickOutside(wrapperRef, closeFromOutside, open);
 
   function cancelForm() {
-    setSaving(false);
+    pendingFocus.current = saveModeRef.current === 'card' ? 'saveCard' : 'save';
+    setSaveMode(null);
     setName('');
     setError(null);
-    pendingFocus.current = 'save';
+  }
+
+  function openForm(mode: SaveMode) {
+    setSaveMode(mode);
+    setError(null);
+    pendingFocus.current = 'name';
   }
 
   // Escape: window capture, only while open (see header comment).
   const savingRef = React.useRef(saving);
   savingRef.current = saving;
+  const saveModeRef = React.useRef(saveMode);
+  saveModeRef.current = saveMode;
   React.useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
@@ -193,15 +217,18 @@ export function SavedViews<V extends SavedViewItem>({
       setError('Give the view a name.');
       return;
     }
-    if (pinning && pinnedCount >= pinning.max) {
+    const asCard = saveMode === 'card';
+    if (asCard && pinning && pinnedCount >= pinning.max) {
       setError(capMessage(pinning.max));
       return;
     }
     setError(null);
-    onSave(trimmed);
+    // Without pinning the call is exactly as before 4132: onSave(name).
+    if (pinning) onSave(trimmed, { pin: asCard });
+    else onSave(trimmed);
     setName('');
-    setSaving(false);
-    pendingFocus.current = 'save';
+    setSaveMode(null);
+    pendingFocus.current = asCard ? 'saveCard' : 'save';
   }
 
   function onWrapperBlur(e: React.FocusEvent<HTMLDivElement>) {
@@ -344,7 +371,7 @@ export function SavedViews<V extends SavedViewItem>({
                     ref={nameRef}
                     type="text"
                     aria-label="View name"
-                    aria-describedby={hintId}
+                    aria-describedby={showCardDetails ? hintId : undefined}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     onKeyDown={(e) => {
@@ -353,13 +380,17 @@ export function SavedViews<V extends SavedViewItem>({
                         handleSave();
                       }
                     }}
-                    placeholder={pinning ? 'Card name…' : 'View name…'}
+                    placeholder={saveMode === 'card' ? 'Card name…' : 'View name…'}
                     className="w-full rounded border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-primary-500"
                   />
-                  {saveFields}
-                  <p id={hintId} className="px-0.5 text-xs text-gray-500">
-                    {saveHint}
-                  </p>
+                  {showCardDetails ? (
+                    <>
+                      {saveFields}
+                      <p id={hintId} className="px-0.5 text-xs text-gray-500">
+                        {saveHint}
+                      </p>
+                    </>
+                  ) : null}
                   <div className="flex justify-end gap-2">
                     <button
                       type="button"
@@ -374,24 +405,35 @@ export function SavedViews<V extends SavedViewItem>({
                       className="inline-flex items-center gap-1 rounded bg-primary-600 px-2 py-1 text-sm text-white hover:bg-primary-700"
                     >
                       <Save className="h-3.5 w-3.5" aria-hidden="true" />
-                      {pinning ? 'Save and pin' : 'Save view'}
+                      {saveMode === 'card' ? 'Save and pin' : 'Save view'}
                     </button>
                   </div>
                 </div>
               ) : (
-                <button
-                  ref={saveButtonRef}
-                  type="button"
-                  onClick={() => {
-                    setSaving(true);
-                    setError(null);
-                    pendingFocus.current = 'name';
-                  }}
-                  className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm text-primary-600 hover:bg-primary-50"
-                >
-                  <Save className="h-4 w-4" aria-hidden="true" />
-                  {pinning ? 'Save current view as a card' : 'Save current view'}
-                </button>
+                <>
+                  <button
+                    ref={saveButtonRef}
+                    type="button"
+                    data-slot="saved-views-save"
+                    onClick={() => openForm('view')}
+                    className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm text-primary-600 hover:bg-primary-50"
+                  >
+                    <Save className="h-4 w-4" aria-hidden="true" />
+                    Save current view
+                  </button>
+                  {pinning ? (
+                    <button
+                      ref={saveCardButtonRef}
+                      type="button"
+                      data-slot="saved-views-save-card"
+                      onClick={() => openForm('card')}
+                      className="flex w-full items-center gap-2 rounded px-3 py-2 text-sm text-primary-600 hover:bg-primary-50"
+                    >
+                      <Save className="h-4 w-4" aria-hidden="true" />
+                      Save current view as a card
+                    </button>
+                  ) : null}
+                </>
               )}
             </div>
           )}

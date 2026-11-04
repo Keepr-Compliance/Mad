@@ -17,9 +17,15 @@ export interface SavedViewItem {
   pinned?: boolean;
 }
 
+/** How a view was saved when `pinning` is given (BACKLOG-4132). */
+export interface SaveViewOptions {
+  /** True from "Save current view as a card" (save and pin); false from "Save current view". */
+  pin: boolean;
+}
+
 /** Pin-as-card support. Only the reports that render pinned cards pass it. */
 export interface SavedViewsPinning<V extends SavedViewItem> {
-  /** Most pinned views allowed. Pinning or saving past it shows a message and calls nothing. */
+  /** Most pinned views allowed. Pinning or saving as a card past it shows a message and calls nothing; a plain save is not capped. */
   max: number;
   /** Pin or unpin `view`. Unpinning is always allowed, even at the cap. */
   onTogglePin: (view: V) => void;
@@ -47,8 +53,13 @@ export interface SavedViewsProps<V extends SavedViewItem> {
   onApply: (view: V) => void;
   /** Delete `view`. No confirm (parity with the one-off selector). */
   onDelete: (view: V) => void;
-  /** Save the page's current state under `name` (trimmed, non-empty). The adopter builds the blob. */
-  onSave: (name: string) => void;
+  /**
+   * Save the page's current state under `name` (trimmed, non-empty). The adopter builds the blob.
+   * Without `pinning` it is called as `onSave(name)`. With `pinning` (BACKLOG-4132) the panel has
+   * two save rows and passes which one was used: `{ pin: false }` from "Save current view",
+   * `{ pin: true }` from "Save current view as a card". The adopter pins only on `pin: true`.
+   */
+  onSave: (name: string, options?: SaveViewOptions) => void;
   /** The sentence in the save form saying what a view keeps, e.g. "Saves the filters and the time range". */
   saveHint: string;
   /** The view that opens automatically with the report, or null. Compared by id. */

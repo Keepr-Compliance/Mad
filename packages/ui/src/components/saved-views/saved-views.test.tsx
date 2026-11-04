@@ -200,7 +200,116 @@ describe('SavedViews', () => {
     expect(screen.getByRole('status')).toHaveTextContent('At most 2 pinned cards. Unpin one first.');
     rerender(<SavedViews<View> {...props} pinning={{ max: 3, onTogglePin }} />);
     fireEvent.click(screen.getByRole('button', { name: 'Save and pin' }));
-    expect(props.onSave).toHaveBeenCalledWith('Third');
+    expect(props.onSave).toHaveBeenCalledWith('Third', { pin: true });
+  });
+
+  // ─── BACKLOG-4132: "Save current view" vs "Save current view as a card" ───
+  const saveRows = () =>
+    Array.from(document.querySelectorAll<HTMLButtonElement>('[data-slot="saved-views-save"], [data-slot="saved-views-save-card"]'));
+
+  it('4132-K1 with pinning both save rows show, plain first; without pinning exactly one row', () => {
+    const { unmount } = setup({ pinning: { max: 5, onTogglePin: jest.fn() } });
+    openByClick();
+    expect(saveRows().map((b) => b.textContent)).toEqual(['Save current view', 'Save current view as a card']);
+    unmount();
+    setup();
+    openByClick();
+    expect(saveRows().map((b) => b.textContent)).toEqual(['Save current view']);
+    expect(screen.queryByRole('button', { name: 'Save current view as a card' })).toBeNull();
+  });
+
+  it('4132-K2 plain save with pinning: "Save view", no hint or card fields, onSave(name, {pin:false}), never a pin', () => {
+    const onTogglePin = jest.fn();
+    const { props } = setup({
+      pinning: { max: 5, onTogglePin },
+      saveFields: <label>Column<select aria-label="Column" /></label>,
+    });
+    openByClick();
+    fireEvent.click(screen.getByRole('button', { name: 'Save current view' }));
+    const input = screen.getByRole('textbox', { name: 'View name' });
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute('placeholder', 'View name…');
+    expect(screen.queryByRole('button', { name: 'Save and pin' })).toBeNull();
+    expect(screen.queryByText('Saves the filters and the time range')).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Column' })).toBeNull();
+    fireEvent.change(input, { target: { value: 'Plain' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save view' }));
+    expect(props.onSave).toHaveBeenCalledTimes(1);
+    expect(props.onSave).toHaveBeenCalledWith('Plain', { pin: false });
+    expect(onTogglePin).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Save current view' })).toHaveFocus();
+  });
+
+  it('4132-K3 card save with pinning: hint, card fields, "Save and pin", onSave(name, {pin:true})', () => {
+    const onTogglePin = jest.fn();
+    const { props } = setup({
+      pinning: { max: 5, onTogglePin },
+      saveFields: <label>Column<select aria-label="Column" /></label>,
+    });
+    openByClick();
+    fireEvent.click(screen.getByRole('button', { name: 'Save current view as a card' }));
+    const input = screen.getByRole('textbox', { name: 'View name' });
+    expect(input).toHaveAttribute('placeholder', 'Card name…');
+    expect(screen.getByText('Saves the filters and the time range')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Column' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save view' })).toBeNull();
+    fireEvent.change(input, { target: { value: 'Card' } });
+    key(input, 'Enter');
+    expect(props.onSave).toHaveBeenCalledTimes(1);
+    expect(props.onSave).toHaveBeenCalledWith('Card', { pin: true });
+    expect(onTogglePin).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Save current view as a card' })).toHaveFocus();
+  });
+
+  it('4132-K4 at the pin cap the plain save still saves unpinned; the card save is refused', () => {
+    const onTogglePin = jest.fn();
+    const { props } = setup({ pinning: { max: 2, onTogglePin } });
+    openByClick();
+    fireEvent.click(screen.getByRole('button', { name: 'Save current view as a card' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'View name' }), { target: { value: 'Third' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save and pin' }));
+    expect(props.onSave).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent('At most 2 pinned cards. Unpin one first.');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Save current view as a card' })).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'Save current view' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'View name' }), { target: { value: 'Third' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save view' }));
+    expect(props.onSave).toHaveBeenCalledTimes(1);
+    expect(props.onSave).toHaveBeenCalledWith('Third', { pin: false });
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(onTogglePin).not.toHaveBeenCalled();
+  });
+
+  it('4132-K5 keyboard with pinning: no rows -> Enter focuses "Save current view"; Tab goes on to the card row; Escape from the card form returns to it', async () => {
+    const user = userEvent.setup();
+    setup({ views: [], pinning: { max: 5, onTogglePin: jest.fn() } });
+    trigger().focus();
+    await act(async () => { await user.keyboard('{Enter}'); });
+    expect(screen.getByRole('button', { name: 'Save current view' })).toHaveFocus();
+    await act(async () => { await user.tab(); });
+    expect(screen.getByRole('button', { name: 'Save current view as a card' })).toHaveFocus();
+    await act(async () => { await user.keyboard('{Enter}'); });
+    expect(screen.getByRole('textbox', { name: 'View name' })).toHaveFocus();
+    await act(async () => { await user.keyboard('{Escape}'); });
+    expect(screen.getByRole('button', { name: 'Save current view as a card' })).toHaveFocus();
+    expect(panel()).not.toBeNull();
+  });
+
+  it('4132-K5b keyboard with pinning and rows: Tab from the last row action reaches both save rows in order', async () => {
+    const user = userEvent.setup();
+    setup({ views: [VIEWS[1]], pinning: { max: 5, onTogglePin: jest.fn() } });
+    trigger().focus();
+    await act(async () => { await user.keyboard('{Enter}'); });
+    expect(rows()[0]).toHaveFocus();
+    await act(async () => { await user.tab(); }); // default toggle
+    await act(async () => { await user.tab(); }); // pin
+    await act(async () => { await user.tab(); }); // delete
+    expect(screen.getByRole('button', { name: 'Delete Stalled' })).toHaveFocus();
+    await act(async () => { await user.tab(); });
+    expect(screen.getByRole('button', { name: 'Save current view' })).toHaveFocus();
+    await act(async () => { await user.tab(); });
+    expect(screen.getByRole('button', { name: 'Save current view as a card' })).toHaveFocus();
   });
 
   it('T11 saveFields render inside the save form only while it is open', () => {
