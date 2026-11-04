@@ -34,6 +34,7 @@ import {
   type StoredViewPeriod,
   type ViewPeriodSpec,
 } from './view-period';
+import { parseViewAccess, viewAccessFields, type SharedViewFields } from './saved-view-access';
 
 /** Report keys = the reports' registry slugs (lib/reports/registry.ts). */
 export const FUNNEL_REPORT_KEY = 'funnel';
@@ -58,7 +59,8 @@ export interface StoredPeriodOnlyFilters {
   period: StoredViewPeriod;
 }
 
-export interface PeriodOnlySavedView {
+/** BACKLOG-4087: `SharedViewFields` = the caller's access (saved-view-access.ts). */
+export interface PeriodOnlySavedView extends SharedViewFields {
   id: string;
   name: string;
   /** Null when the row has no period this report accepts. */
@@ -112,11 +114,13 @@ export function createPeriodOnlyViews(reportKey: string, spec: ViewPeriodSpec, d
       row.filters != null && typeof row.filters === 'object' && !Array.isArray(row.filters)
         ? (row.filters as Record<string, unknown>)
         : null;
+    const access = parseViewAccess(row);
     return {
       id: row.id,
       name: typeof row.name === 'string' && row.name.length > 0 ? row.name : 'Untitled view',
       period: parseViewPeriod(blob?.period, spec),
-      isDefault: row.is_default === true,
+      isDefault: access.isDefault,
+      ...viewAccessFields(access),
     };
   }
 

@@ -18,7 +18,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { SavedViews, type SaveViewOptions } from '@keepr/ui';
+import { SavedViews, ShareDialog, type SaveViewOptions } from '@keepr/ui';
 import type { IphoneSyncReportModel } from '@/lib/reports/iphone-sync';
 import { DEFAULT_PERIOD, type PeriodRange } from '@/lib/reports/period';
 import {
@@ -59,7 +59,9 @@ import {
   type ViewMetric,
 } from '@/lib/reports/report-views';
 import type { ReportViewsApi } from '@/lib/reports/report-views-api';
+import type { ShareApi } from '@/lib/reports/report-share-api';
 import { useReportSavedViews } from '@/lib/reports/use-report-saved-views';
+import { useReportViewSharing } from '@/lib/reports/use-report-view-sharing';
 import { serializeViewPeriod, viewPeriodMatches } from '@/lib/reports/view-period';
 import { HowToUse } from './HowToUse';
 import { MetricSaveFields } from './MetricSaveFields';
@@ -138,6 +140,8 @@ export interface IphoneSyncReportProps {
    * founder applying its migration, and the rest of the page must not care.
    */
   viewsApi?: ReportViewsApi;
+  /** Saved-view sharing (BACKLOG-4087). Absent = no Share, Update or Leave. */
+  shareApi?: ShareApi;
 }
 
 export function IphoneSyncReport({
@@ -148,6 +152,7 @@ export function IphoneSyncReport({
   initialState = DEFAULT_CLIENT_STATE,
   onNavigate,
   viewsApi,
+  shareApi,
 }: IphoneSyncReportProps) {
   const [filters, setFilters] = useState<RunFilters>(initialState.filters);
   const [sortKey, setSortKey] = useState<SortKey>(initialState.sortKey);
@@ -280,6 +285,14 @@ export function IphoneSyncReport({
       pinned: options?.pin === true,
     });
   }
+  // Sharing (BACKLOG-4087). An editor's Update changes the FILTERS only (founder rule): the hook
+  // sends the view's own card metric, never this one (use-report-view-sharing.ts).
+  const { sharing, shareDialog } = useReportViewSharing(shareApi, savedViews, REPORT_KEY, () => ({
+    filters: serializeFilters(filters, stalledOnly, serializeViewPeriod(period)),
+    // Required by the kit payload type; ignored for a view that has its own metric (every view here).
+    metric,
+  }));
+
 
   // Re-saves the view as stored, period included: only `pinned` changes.
   function togglePin(view: ReportSavedView) {
@@ -362,29 +375,33 @@ export function IphoneSyncReport({
         onFiltersChange={updateFilters}
         onClear={clearFilters}
         viewsSlot={
-          <SavedViews<ReportSavedView>
-            views={views}
-            loading={savedViews.loading}
-            activeViewId={activeViewId}
-            writeError={savedViews.writeError}
-            onApply={applyView}
-            onDelete={savedViews.remove}
-            onSave={saveCurrentView}
-            saveHint={IPHONE_SAVE_HINT}
-            defaultViewId={savedViews.defaultViewId}
-            onSetDefault={savedViews.setDefault}
-            onClear={clearView}
-            pinning={{ max: MAX_PINNED, onTogglePin: togglePin }}
-            saveFields={
-              <MetricSaveFields
-                value={metric}
-                onChange={(next) => setMetric({ col: next.col as MetricColumn, fn: next.fn as MetricFunction })}
-                columns={METRIC_COLUMNS}
-                functions={METRIC_FUNCTIONS}
-                functionsForColumn={iphoneFunctionsFor}
-              />
-            }
-          />
+          <>
+            <SavedViews<ReportSavedView>
+              views={views}
+              loading={savedViews.loading}
+              activeViewId={activeViewId}
+              writeError={savedViews.writeError}
+              onApply={applyView}
+              onDelete={savedViews.remove}
+              onSave={saveCurrentView}
+              saveHint={IPHONE_SAVE_HINT}
+              defaultViewId={savedViews.defaultViewId}
+              onSetDefault={savedViews.setDefault}
+              onClear={clearView}
+              sharing={sharing}
+              pinning={{ max: MAX_PINNED, onTogglePin: togglePin }}
+              saveFields={
+                <MetricSaveFields
+                  value={metric}
+                  onChange={(next) => setMetric({ col: next.col as MetricColumn, fn: next.fn as MetricFunction })}
+                  columns={METRIC_COLUMNS}
+                  functions={METRIC_FUNCTIONS}
+                  functionsForColumn={iphoneFunctionsFor}
+                />
+              }
+            />
+            <ShareDialog {...shareDialog} />
+          </>
         }
       />
 

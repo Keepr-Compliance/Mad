@@ -59,6 +59,9 @@ describe('P2 parse', () => {
       filters: { orgs: ['Acme Realty'], activeOnly: true, search: 'x' },
       period: { key: 'last-month' },
       isDefault: true,
+      // BACKLOG-4087: a row with no `access` (a database before sharing) is the user's own.
+      access: 'owner',
+      accessFromServer: false,
     });
   });
 
@@ -71,6 +74,9 @@ describe('P2 parse', () => {
       filters: { orgs: [], activeOnly: false, search: '' },
       period: null,
       isDefault: false,
+      // BACKLOG-4087: a row with no `access` (a database before sharing) is the user's own.
+      access: 'owner',
+      accessFromServer: false,
     });
     expect(parseUserActivitySavedViews([null, { id: '' }, RAW_OTHER]).map((v) => v.id)).toEqual([vid(4104)]);
     expect(parseUserActivitySavedViews('nope')).toEqual([]);
