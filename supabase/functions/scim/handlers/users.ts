@@ -467,12 +467,46 @@ export async function handleCreateUser(
     }
   }
 
+  // BACKLOG-4034: externalId is the Entra object id. With a GUID-shaped tenant on the
+  // organization, the account whose azure identity has this (tenant, object id) is the person,
+  // before any email match. A failed read is a 500, never a fall-through to the email match.
+  let existingId: unknown = null;
+  if (externalId) {
+    const { data: orgTenant, error: tenantError } = await supabaseAdmin
+      .from("organizations")
+      .select("microsoft_tenant_id")
+      .eq("id", auth.orgId)
+      .maybeSingle();
+    const tenantId = (orgTenant as { microsoft_tenant_id?: string | null } | null)?.microsoft_tenant_id ?? null;
+    let idError: DbError = tenantError;
+    if (!idError && tenantId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tenantId)) {
+      const res = await supabaseAdmin.rpc("user_id_for_idp_object_id", {
+        p_tenant_id: tenantId,
+        p_object_id: externalId,
+      });
+      idError = res.error;
+      if (!idError && typeof res.data === "string") existingId = res.data;
+    }
+    if (idError) {
+      await logScimOperation(supabaseAdmin, {
+        organizationId: auth.orgId,
+        operation: "CREATE",
+        resourceType: "User",
+        externalId: externalId,
+        requestPayload: body,
+        responseStatus: 500,
+        errorMessage: "Failed to look up the person by object id",
+        scimTokenId: auth.tokenId,
+      });
+      return scimError(500, "Failed to create user");
+    }
+  }
+
   // BACKLOG-3998: the account whose sign-in (auth.users) email matches; an account not
   // yet signed in (provisioned row) by its stored email. NULL when ambiguous.
   // BACKLOG-4027: each candidate address in order; the first one that names an account wins.
-  let existingId: unknown = null;
   let lookupError: DbError = null;
-  for (const candidate of emailCandidates) {
+  for (const candidate of (typeof existingId === "string" ? [] : emailCandidates)) {
     const res = await supabaseAdmin.rpc("user_id_for_auth_email", { p_email: candidate });
     if (res.error) {
       lookupError = res.error;
