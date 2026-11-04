@@ -10,7 +10,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { SavedViews } from '@keepr/ui';
+import { SavedViews, type SaveViewOptions } from '@keepr/ui';
 import { DEFAULT_PERIOD, type PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
 import type { ReportViewsApi } from '@/lib/reports/report-views-api';
@@ -198,13 +198,14 @@ export function ExportsReport({
     updateFilters(back);
   }
 
-  // Every save pins, as before; the kit refuses a sixth pin before calling.
-  function saveCurrentView(name: string) {
+  // Only "Save current view as a card" pins (BACKLOG-4132); the kit refuses a
+  // sixth pin before calling. "Save current view" saves unpinned.
+  function saveCurrentView(name: string, options?: SaveViewOptions) {
     savedViews.save({
       name,
       filters: serializeExportFilters(filters, serializeViewPeriod(period)),
       metric,
-      pinned: true,
+      pinned: options?.pin === true,
     });
   }
 

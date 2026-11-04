@@ -18,7 +18,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { SavedViews } from '@keepr/ui';
+import { SavedViews, type SaveViewOptions } from '@keepr/ui';
 import type { IphoneSyncReportModel } from '@/lib/reports/iphone-sync';
 import { DEFAULT_PERIOD, type PeriodRange } from '@/lib/reports/period';
 import {
@@ -268,15 +268,16 @@ export function IphoneSyncReport({
   }
 
   // A refused write says so and re-reads the list (useReportSavedViews).
-  // Every save pins, as before; the kit refuses a sixth pin before calling.
-  function saveCurrentView(name: string) {
+  // Only "Save current view as a card" pins (BACKLOG-4132); the kit refuses a
+  // sixth pin before calling. "Save current view" saves unpinned.
+  function saveCurrentView(name: string, options?: SaveViewOptions) {
     savedViews.save({
       name,
       // The five filter keys and the period KEY (dates for a custom range).
       // No run data, no user labels, no ids.
       filters: serializeFilters(filters, stalledOnly, serializeViewPeriod(period)),
       metric,
-      pinned: true,
+      pinned: options?.pin === true,
     });
   }
 
