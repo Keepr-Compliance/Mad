@@ -16,9 +16,16 @@ jest.mock("../../../hooks/useImportSource", () => ({ useImportSource: () => mock
 jest.mock("../../../contexts/PlatformContext", () => ({ usePlatform: () => ({ isMacOS: true, isWindows: false }) }));
 let mockIPhone: unknown = null;
 let mockEnabled = true;
+let mockReadFailed = false;
 jest.mock("../../../contexts/IPhoneSyncContext", () => ({
   useOptionalIPhoneSyncContext: () => mockIPhone,
-  useIPhoneSyncEnabled: () => ({ enabled: mockEnabled, setIphoneSyncEnabled: async () => {}, applyImportSource: () => {} }),
+  useIPhoneSyncEnabled: () => ({
+    enabled: mockEnabled,
+    setIphoneSyncEnabled: async () => {},
+    applyImportSource: () => {},
+    readFailed: mockReadFailed,
+    retryRead: async () => {},
+  }),
 }));
 jest.mock("../../../services/rcsImportService", () => ({
   rcsImportService: { getExtensionState: jest.fn(), getStatus: jest.fn(), getJob: jest.fn(), onJobProgress: jest.fn() },
@@ -42,6 +49,7 @@ beforeEach(() => {
   mockSource = "macos-native";
   mockIPhone = { ...IPHONE_STATES.notConnected.sync };
   mockEnabled = true;
+  mockReadFailed = false;
   svc.getExtensionState.mockResolvedValue({ success: true, data: EXT_BASE });
   svc.getStatus.mockResolvedValue({ success: true, data: LISTENING });
   svc.getJob.mockResolvedValue({ success: true, data: null });
@@ -74,6 +82,14 @@ describe("pill by source on the dashboard (default visibility)", () => {
     mockEnabled = false;
     const { result } = renderHook(() => useTitleBarSync(makeApp()));
     expect(result.current.pill?.tooltip).toBe("iPhone sync is off in Settings");
+  });
+
+  it("BACKLOG-4135 L1: iphone-sync, detection off while the 2893 hold is on -> 'Messages sync paused'", () => {
+    mockSource = "iphone-sync";
+    mockEnabled = false;
+    mockReadFailed = true;
+    const { result } = renderHook(() => useTitleBarSync(makeApp()));
+    expect(result.current.pill?.tooltip).toBe("Messages sync paused");
   });
 });
 
