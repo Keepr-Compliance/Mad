@@ -9,7 +9,7 @@
 //
 // THE GATE. Every channel except `learn:get-state` and `learn:set-enabled`
 // calls `isLearnModeAllowed` first, before any read or write:
-//   the user's own toggle is ON (learn_mode_settings, missing row = OFF)
+//   the user's own toggle is ON (local switch row; missing row = OFF)
 //   AND the strict autodetect_eval read is allowed (isAutodetectEvalAllowed).
 // `learn:set-enabled` checks only the strict key (the toggle is what it sets);
 // `learn:get-state` reports both and acts on nothing.

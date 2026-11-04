@@ -174,6 +174,22 @@ describe("N3 Learn mode import boundary (transitive)", () => {
   });
 });
 
+describe("PR2 gate and renderer boundaries", () => {
+  it("the handlers never name the fail-open reader, the auto-detect gate, or the plan key itself", () => {
+    const text = fs.readFileSync(path.join(ELECTRON, "handlers", "learnModeHandlers.ts"), "utf8");
+    const code = text.replace(/\/\/.*$/gm, "").replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(code).toContain("isAutodetectEvalAllowed");
+    expect(code).not.toMatch(/checkFeature|isAutoDetectAllowed|isStrictFeatureAllowed|"autodetect_eval"|"ai_detection"/);
+  });
+
+  it("the renderer service carries no main-process code (type-only imports)", () => {
+    const files = closure([path.join(REPO, "src", "services", "learnModeService.ts")]);
+    expect(files.size).toBe(1);
+    const text = fs.readFileSync(path.join(REPO, "src", "services", "learnModeService.ts"), "utf8");
+    expect(text).toMatch(/import type \{[\s\S]*?\} from "\.\.\/\.\.\/electron\/types\/ipc\/window-api-learn";/);
+  });
+});
+
 describe("P4 learn tables appear in no sync / export / upload path", () => {
   const TABLES = /\blearn_(mode_settings|deal_answers|bulk_answers)\b/;
   const ALLOWED = new Set([
