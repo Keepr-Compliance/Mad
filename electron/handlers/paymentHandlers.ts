@@ -19,10 +19,20 @@ import paymentService from "../services/paymentService";
 import logService from "../services/logService";
 import type {
   BeginCheckoutResult,
+  BeginSubscriptionResult,
   ChargeResult,
+  GateReadResult,
   PaymentConfirmResult,
   SavedCardStatus,
 } from "../types/payment";
+
+/**
+ * BACKLOG-3676 (S4): input check for the new transaction-id channels. A
+ * non-empty string of at most 128 characters; anything else is refused.
+ */
+export function isValidTransactionIdArg(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 128;
+}
 
 const MODULE = "PaymentHandlers";
 
@@ -78,6 +88,36 @@ export function registerPaymentHandlers(): void {
     "payment:has-saved-card",
     async (): Promise<SavedCardStatus> => {
       return paymentService.hasSavedCard();
+    },
+  );
+
+  // BACKLOG-3676: open the Agent plan Stripe Checkout. Takes NO argument; the
+  // portal route reads only the Bearer JWT.
+  ipcMain.handle(
+    "payment:begin-subscription",
+    async (): Promise<BeginSubscriptionResult> => paymentService.beginSubscription(),
+  );
+
+  // BACKLOG-3676: after the Agent plan Checkout returns. Polls fresh gate reads
+  // (fail-closed); unlocked ONLY when the gate says so.
+  ipcMain.handle(
+    "payment:confirm-subscription",
+    async (_event: IpcMainInvokeEvent, localTransactionId: unknown): Promise<PaymentConfirmResult> => {
+      if (!isValidTransactionIdArg(localTransactionId)) {
+        return { unlocked: false, reason: "error" };
+      }
+      return paymentService.confirmSubscription(localTransactionId);
+    },
+  );
+
+  // BACKLOG-3676 (R6): "Try again" / "Check again" — one fresh gate read.
+  ipcMain.handle(
+    "payment:refresh-gate",
+    async (_event: IpcMainInvokeEvent, localTransactionId: unknown): Promise<GateReadResult> => {
+      if (!isValidTransactionIdArg(localTransactionId)) {
+        return { unlocked: false };
+      }
+      return paymentService.refreshGate(localTransactionId);
     },
   );
 

@@ -52,6 +52,12 @@ const articles = [
     ],
   },
   {
+    href: '/guides/invoices',
+    title: 'Where do I find my invoices?',
+    description: 'Where Keepr invoices and receipts are, who can see them, and how to pay or download one.',
+    tags: ['invoice', 'invoices', 'billing', 'receipt', 'receipts', 'pay', 'pdf'],
+  },
+  {
     href: '/download',
     title: 'Download the Desktop App',
     description: 'Get the Keepr desktop app for macOS or Windows.',

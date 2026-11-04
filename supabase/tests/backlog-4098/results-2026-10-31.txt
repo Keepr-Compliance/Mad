@@ -1,0 +1,21 @@
+# BACKLOG-4098 keepr-test controls, 2026-10-31T16:56Z, migration md5 432dbe74
+# 1) before the apply: ./run.sh base,flag_by_members,flag_by_tier,leak_id,no_guard,grant_anon,no_definer --with-migration
+#    one transaction ending in RAISE; function definition md5 unchanged and 0 p4098 fixtures left afterwards
+#    base 12/12 PASS; mutation reds identical to the run below
+# 2) migration applied on keepr-test (file + schema_migrations row 20261031160000); function definition md5 d0873ce6
+#    (the header comment changed after the apply; the function body, grants and COMMENT ON FUNCTION did not)
+# ./run.sh base,flag_by_members,flag_by_tier,leak_id,no_guard,grant_anon,no_definer
+base {
+ "fail": 0,
+ "pass": 12,
+ "reds": {},
+ "mutation": "none"
+}
+leak_id {"fail": 3, "pass": 9, "reds": ["C1c_key_set", "C2_no_owner_id", "C6a_reapply_idempotent"], "mutation": "MUTATION APPLIED 'is_test', o.is_test -> 'is_test', o.is_test, 'owner_ref', o.personal_owner_user_id"}
+no_guard {"fail": 2, "pass": 10, "reds": ["C3_non_internal_refused", "C6a_reapply_idempotent"], "mutation": "MUTATION APPLIED IF NOT has_internal_role(auth.uid()) THEN -> IF false THEN"}
+grant_anon {"fail": 3, "pass": 9, "reds": ["C4_anon_denied", "C5_catalog", "C6a_reapply_idempotent"], "mutation": "MUTATION APPLIED GRANT EXECUTE TO anon [{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres,anon=X/postgres} definer=true cfg={search_path=public}]"}
+no_definer {"fail": 3, "pass": 9, "reds": ["C5_catalog", "C6a_reapply_idempotent", "C6b_rollback_restores_old_body"], "mutation": "MUTATION APPLIED SECURITY INVOKER [{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres} definer=false cfg={search_path=public}]"}
+flag_by_tier {"fail": 3, "pass": 9, "reds": ["C1a_fixture_flags", "C1b_all_rows_match_table", "C6a_reapply_idempotent"], "mutation": "MUTATION APPLIED 'is_personal', (o.personal_owner_user_id IS NOT NULL) -> 'is_personal', coalesce(p.tier = 'individual', false)"}
+flag_by_members {"fail": 3, "pass": 9, "reds": ["C1a_fixture_flags", "C1b_all_rows_match_table", "C6a_reapply_idempotent"], "mutation": "MUTATION APPLIED 'is_personal', (o.personal_owner_user_id IS NOT NULL) -> 'is_personal', ((SELECT count(*) FROM organization_members om2 WHERE om2.organization_id = o.id) <= 1)"}
+# C6a reds in every mutation mode by design: re-applying the migration replaces the mutated function, so the definition or grants change.
+# no_definer: C1 still passes (the internal fixture user can read organizations under RLS); C5 is the control for SECURITY DEFINER.

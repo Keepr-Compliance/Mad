@@ -30,6 +30,9 @@ describe('C1 legacy redirects (temporary, query kept)', () => {
       '/dashboard/reports/iphone-sync?period=custom&from=2026-01-01&to=2026-02-01&q=a+b',
     ],
     ['/dashboard/analytics/reports/submissions?period=30', '/dashboard/reports/submissions?period=30'],
+    // BACKLOG-3721: Support -> Analytics is now the Support SLA report.
+    ['/dashboard/support/analytics', '/dashboard/reports/support-sla'],
+    ['/dashboard/support/analytics?period=month', '/dashboard/reports/support-sla?period=month'],
   ])('%s -> 307 %s', async (from, to) => {
     const r = await hit(from);
     expect(r.status).toBe(307);
@@ -59,7 +62,10 @@ describe('C1 legacy redirects (temporary, query kept)', () => {
     '/dashboard/reports/funnel',
     '/dashboard/reports/iphone-sync?period=7',
     '/dashboard/analyticsx',
-    '/dashboard/support/analytics',
+    '/dashboard/reports/support-sla',
+    '/dashboard/support',
+    '/dashboard/support/my-tickets',
+    '/dashboard/support/analyticsx',
   ])('%s is not redirected (no loop, no over-match)', async (path) => {
     const r = await hit(path);
     expect(r.location).toBeNull();

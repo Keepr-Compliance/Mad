@@ -31,6 +31,9 @@ jest.mock('@/lib/supabase/service', () => ({
 }));
 
 import { GET } from '@/app/api/billing/plan-summary/route';
+import { toPlanSummary } from '@/lib/billing/planSummary';
+import type { AgentPlanView } from '@/lib/billing/agentPlan';
+import { AGENT_PLAN_STATES } from '@keepr/shared';
 import { mirrorState } from '@/lib/billing/sync';
 
 const ORIGIN = 'http://localhost:3000';
@@ -195,5 +198,46 @@ describe('DTO', () => {
     spy.mockRestore();
     expect(status).toBe(503);
     expect(body).toEqual({ error: 'unavailable' });
+  });
+});
+
+// ---- BACKLOG-3860 T10: the desktop never receives a state it rejects --------------
+
+/** The desktop's own list, read from its source (electron cannot be imported here). */
+function desktopStates(): string[] {
+  const src = fs.readFileSync(path.join(__dirname, '../../../electron/types/billing.ts'), 'utf8');
+  const m = src.match(/export const AGENT_PLAN_STATES[^=]*=\s*\[([^\]]*)\]/);
+  if (!m) throw new Error('fixture: AGENT_PLAN_STATES not found in electron/types/billing.ts');
+  return [...m[1].matchAll(/"([a-z_]+)"/g)].map((x) => x[1]);
+}
+
+describe('BACKLOG-3860 T10: plan-summary maps every website state to a desktop state', () => {
+  it('the desktop list is the five known states (positive control on the parse)', () => {
+    expect(desktopStates()).toEqual(['none', 'active', 'cancel_pending', 'payment_failed', 'support_grant']);
+  });
+
+  it.each(AGENT_PLAN_STATES.map((s) => [s]))('state %s -> one of the desktop states', (state) => {
+    const view = { state, row: null, paymentIncomplete: false, supportGrantEffective: false } as unknown as AgentPlanView;
+    expect(desktopStates()).toContain(toPlanSummary(view).state);
+  });
+
+  const TRIAL = (paidThrough: string) => ({
+    organization_plans: [
+      { organization_id: FIXTURE_PERSONAL_ORG_ID, feature_overrides: { unlimited_transactions: { enabled: true, source: 'trial', paid_through: paidThrough } } },
+    ],
+  });
+
+  it('live trial (no subscription row) -> support_grant, effective (desktop: "Unlimited exports", Active)', async () => {
+    given([], TRIAL('2099-11-14T05:51:51.123973+00:00'));
+    const { status, body } = await call();
+    expect(status).toBe(200);
+    expect(Object.keys(body).sort()).toEqual(FIELDS);
+    expect([body.state, body.supportGrantEffective, body.interval, body.current_period_end]).toEqual(['support_grant', true, null, null]);
+  });
+
+  it('ended trial -> none, not effective', async () => {
+    given([], TRIAL('2025-11-14T05:51:51.123973+00:00'));
+    const { body } = await call();
+    expect([body.state, body.supportGrantEffective]).toEqual(['none', false]);
   });
 });

@@ -57,3 +57,26 @@ export interface OpenBillingPortalResult {
   /** Only when the address was allowed but the browser did not open. */
   portalAddress?: string;
 }
+
+/** The Agent plan monthly price as the portal formats it (BACKLOG-3676). */
+export interface AgentMonthPrice {
+  /** Display string from the portal's own formatter, e.g. "$19.99". */
+  display: string;
+  unitAmount: number;
+  currency: string;
+}
+
+/**
+ * Answer of `billing:agent-prices`. Read on every paywall open, never cached.
+ *   { unavailable: false, month, hasBookCall } — month null when nothing is on sale.
+ *   { unavailable: true } — billing off, signed out, offline, timeout, bad body.
+ * The booking URL stays in main; the renderer only learns whether one exists.
+ */
+export type AgentPricesResult =
+  | { unavailable: false; month: AgentMonthPrice | null; hasBookCall: boolean }
+  | { unavailable: true };
+
+/** Answer of `billing:open-book-call`. */
+export interface OpenBookCallResult {
+  success: boolean;
+}

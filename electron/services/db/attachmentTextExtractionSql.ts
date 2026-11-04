@@ -115,3 +115,87 @@ export function preparePendingPage(
          LIMIT ?`,
   );
 }
+
+// ─── BACKLOG-3943: OCR second pass ────────────────────────────────────────────
+//
+// OCR state lives in `attachments.analysis_metadata` (JSON, nullable, no other
+// writer or reader — founder ruling 1, 2026-10-31). `text_content` keeps its
+// meaning; a row becomes an OCR candidate only after the text-layer pass has
+// stored "" for it.
+//
+// A row is OCR-pending when:
+//   - its bytes are on disk, the text-layer pass stored "", its type is one
+//     the OCR child reads, AND
+//   - it has never been OCR'd (metadata NULL), OR the last OCR attempt failed
+//     in a way worth retrying (`retryable: true`) fewer than `maxAttempts`
+//     times.
+//
+// `json_extract` is reached only through `CASE WHEN json_valid(...)`: SQLite
+// raises "malformed JSON" from json_extract on a non-JSON value, and a CASE
+// guarantees the order where AND does not. A stray non-JSON value therefore
+// makes that one row ineligible (fails safe) instead of failing the query.
+
+const ocrPendingWhere = (placeholders: string): string => `
+  FROM attachments
+  WHERE storage_path IS NOT NULL
+    AND text_content = ''
+    AND mime_type IN (${placeholders})
+    AND (
+      analysis_metadata IS NULL
+      OR (CASE WHEN json_valid(analysis_metadata)
+               THEN json_extract(analysis_metadata, '$.retryable') = 1
+                    AND json_extract(analysis_metadata, '$.attempts') < ?
+               ELSE 0 END)
+    )
+`;
+
+/**
+ * How many attachments are waiting for OCR.
+ * Bind: one parameter per MIME type, then the max attempts.
+ */
+export function prepareOcrPendingCount(
+  db: TextExtractionQueryable,
+  mimeTypes: readonly string[],
+): ReturnType<TextExtractionQueryable["prepare"]> {
+  return db.prepare(`SELECT COUNT(*) AS n ${ocrPendingWhere(placeholdersFor(mimeTypes))}`);
+}
+
+/**
+ * One page of OCR-pending attachment ids, newest first.
+ * Bind: one parameter per MIME type, then the max attempts, then the page size.
+ */
+export function prepareOcrPendingPage(
+  db: TextExtractionQueryable,
+  mimeTypes: readonly string[],
+): ReturnType<TextExtractionQueryable["prepare"]> {
+  return db.prepare(
+    `SELECT id ${ocrPendingWhere(placeholdersFor(mimeTypes))}
+         ORDER BY created_at DESC
+         LIMIT ?`,
+  );
+}
+
+/** The fields the OCR pass reads before it starts. Bind: id. */
+export const SELECT_ATTACHMENT_OCR_ROW_SQL = `SELECT storage_path, mime_type, text_content, analysis_metadata
+       FROM attachments WHERE id = ? LIMIT 1`;
+
+/**
+ * The OCR write, compare-and-set (SR plan review R1). The row is written only
+ * if it is still exactly as the OCR pass read it: text_content "" and the same
+ * analysis_metadata value (`IS ?` matches NULL to NULL). If anything changed the
+ * row while the child ran, zero rows change and the result is dropped.
+ * Bind: text, metadata JSON, id, the metadata value read at the start (or NULL).
+ */
+export const CAS_ATTACHMENT_OCR_RESULT_SQL = `UPDATE attachments
+          SET text_content = ?, analysis_metadata = ?
+        WHERE id = ?
+          AND text_content = ''
+          AND analysis_metadata IS ?`;
+
+/**
+ * The text-layer write (BACKLOG-2257), now fill-only (SR plan review R2): it
+ * sets text_content only where it is still NULL, so a stale backfill pass can
+ * never overwrite text another pass (OCR, or the live download path) stored.
+ * Bind: text, id.
+ */
+export const SET_ATTACHMENT_TEXT_IF_NULL_SQL = `UPDATE attachments SET text_content = ? WHERE id = ? AND text_content IS NULL`;

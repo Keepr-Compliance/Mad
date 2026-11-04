@@ -241,6 +241,14 @@ export function useIPhoneSyncContext(): UseIPhoneSyncReturn {
 }
 
 /**
+ * BACKLOG-4115: the same value, or null outside the provider (the title-bar
+ * sync pill shows no iPhone pill then instead of throwing).
+ */
+export function useOptionalIPhoneSyncContext(): UseIPhoneSyncReturn | null {
+  return useContext(IPhoneSyncContext);
+}
+
+/**
  * BACKLOG-1706: Consumer hook for the iPhone-sync enablement + setter.
  * Returns a tolerant no-op default when used outside the provider so the
  * Settings toggle never crashes in isolation (persisting is a no-op there).

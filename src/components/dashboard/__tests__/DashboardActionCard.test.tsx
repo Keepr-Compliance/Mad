@@ -20,8 +20,6 @@ describe("DashboardActionCard", () => {
     title: "Test Action",
     onClick: jest.fn(),
     icon: <TestIcon />,
-    iconGradient: "bg-gradient-to-br from-blue-500 to-purple-600",
-    accentColor: "blue",
   };
 
   beforeEach(() => {
@@ -86,14 +84,33 @@ describe("DashboardActionCard", () => {
       render(<DashboardActionCard {...defaultProps} />);
 
       const button = screen.getByRole("button");
-      expect(button).toHaveClass("shadow-xl");
+      // BACKLOG-4115: 12 px top/bottom, 20 px sides.
+      expect(button).toHaveClass("px-5", "py-3");
+      expect(button).not.toHaveClass("p-5");
+      expect(screen.getByRole("heading", { level: 2 })).toHaveTextContent("Test Action");
     });
 
     it("should render secondary variant when specified", () => {
       render(<DashboardActionCard {...defaultProps} variant="secondary" />);
 
       const button = screen.getByRole("button");
-      expect(button).toHaveClass("bg-opacity-70");
+      expect(button).toHaveClass("p-3");
+      expect(screen.getByRole("heading", { level: 3 })).toHaveTextContent("Test Action");
+    });
+  });
+
+  describe("passthrough (BACKLOG-3965)", () => {
+    it("sets data-testid and disables the button", () => {
+      render(<DashboardActionCard {...defaultProps} dataTestId="nav-x" disabled />);
+      const button = screen.getByTestId("nav-x");
+      expect(button).toBeDisabled();
+      fireEvent.click(button);
+      expect(defaultProps.onClick).not.toHaveBeenCalled();
+    });
+
+    it("adds titleClassName to the title", () => {
+      render(<DashboardActionCard {...defaultProps} titleClassName="whitespace-nowrap" />);
+      expect(screen.getByRole("heading")).toHaveClass("whitespace-nowrap", "text-sm", "font-semibold");
     });
   });
 
@@ -104,5 +121,17 @@ describe("DashboardActionCard", () => {
       const button = screen.getByRole("button");
       expect(button).toHaveClass("ring-2");
     });
+  });
+
+  // BACKLOG-4115: no Dashboard tile uses the muted chip any more (the sync
+  // tiles became the title-bar pill), so the default tone is pinned here.
+  it("defaults to the muted chip; chipTone primary gives the blue one", () => {
+    const { container, rerender } = render(<DashboardActionCard {...defaultProps} />);
+    const chip = () => container.querySelector('[data-part="chip"]') as HTMLElement;
+    expect(chip()).toHaveClass("bg-warm-chip", "text-ink-muted");
+    expect(chip()).not.toHaveClass("bg-primary-50");
+    rerender(<DashboardActionCard {...defaultProps} chipTone="primary" />);
+    expect(chip()).toHaveClass("bg-primary-50", "text-primary-600");
+    expect(chip()).not.toHaveClass("bg-warm-chip");
   });
 });

@@ -41,6 +41,8 @@ function PaymentCompleteInner() {
     () => sanitizeSessionId(searchParams.get('session')),
     [searchParams],
   );
+  // BACKLOG-3676: the Agent plan Checkout started from the app returns here with kind=agent.
+  const agent = searchParams.get('kind') === 'agent';
   const [redirected, setRedirected] = useState(false);
 
   const deepLink = sessionId
@@ -61,10 +63,12 @@ function PaymentCompleteInner() {
       <div className="max-w-md w-full text-center space-y-6">
         <h1 className="text-3xl font-bold text-gray-900"><Wordmark /></h1>
         <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-4">
-          <p className="text-lg font-semibold text-gray-900">Payment received</p>
+          <p className="text-lg font-semibold text-gray-900">{agent ? 'Subscription started' : 'Payment received'}</p>
           <p className="text-sm text-gray-600">
             {redirected
-              ? 'Returning you to the Keepr app to finish unlocking your deal…'
+              ? agent
+                ? 'Returning you to Keepr to turn on Unlimited exports…'
+                : 'Returning you to the Keepr app to finish unlocking your deal…'
               : 'Taking you back to the Keepr app…'}
           </p>
           <a

@@ -6,9 +6,16 @@
  */
 
 import { useRouter } from 'next/navigation';
+import { submissionsViewsApi } from '@/lib/reports/submissions-views-api';
 import { SubmissionsReport, type SubmissionsReportProps } from './SubmissionsReport';
 
-export function SubmissionsReportClient(props: Omit<SubmissionsReportProps, 'onNavigate'>) {
+export function SubmissionsReportClient(props: Omit<SubmissionsReportProps, 'onNavigate' | 'viewsApi'>) {
   const router = useRouter();
-  return <SubmissionsReport {...props} onNavigate={(url) => router.push(url, { scroll: false })} />;
+  return (
+    <SubmissionsReport
+      {...props}
+      onNavigate={(url) => router.push(url, { scroll: false })}
+      viewsApi={submissionsViewsApi}
+    />
+  );
 }

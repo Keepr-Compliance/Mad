@@ -57,6 +57,7 @@ jest.mock("../../../utils/logger", () => ({
 }));
 
 import { SupportAccessIndicator } from "../SupportAccessIndicator";
+import { Z_CLASS, zValue } from "../../../constants/zLayers";
 
 // --- Fixtures ---------------------------------------------------------------
 
@@ -158,6 +159,12 @@ describe("BACKLOG-2431 — banner reflects the grant, not capture state", () => 
     await waitFor(() => {
       expect(screen.getByTestId("support-access-indicator")).toBeInTheDocument();
     });
+    // Sits above the Settings layer (105) and under the support dialog (118).
+    const z = zValue(
+      Array.from(screen.getByTestId("support-access-indicator").classList).find((c) => c.startsWith("z-")) ?? "",
+    );
+    expect(z).toBeGreaterThan(zValue(Z_CLASS.settings));
+    expect(z).toBeLessThan(zValue(Z_CLASS.supportDialog));
     expect(screen.getByText("Keepr support access is on")).toBeInTheDocument();
 
     // And it did so without re-reading state at all: the push carried it. This

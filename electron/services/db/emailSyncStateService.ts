@@ -140,8 +140,9 @@ export function getCursor(userId: string, accountId: string): string | null {
 /**
  * BACKLOG-1831: persist the per-account delta cursor. Plain UPDATE (no provider
  * needed) — the shadow orchestrator calls ensureSyncStateRow() once at run start
- * so the row is guaranteed to exist by the time a folder's cursor is written
- * (mirrors how recordSyncSuccess relies on the row already existing). If the row
+ * so the row is guaranteed to exist by the time a folder's cursor is written.
+ * (recordSyncSuccess/recordSyncFailure do not rely on that: each creates the
+ * row itself in one UPSERT, BACKLOG-2554.) If the row
  * does not exist this is a no-op, which is the audit-safe outcome (we never
  * resurrect a Clear'd row just to store a cursor).
  */
@@ -154,22 +155,38 @@ export function setCursor(userId: string, accountId: string, cursor: string): vo
   );
 }
 
-/** Record a successful sync: clear the error and reset the failure counter. */
+/**
+ * Record a successful sync: clear the error and reset the failure counter.
+ *
+ * BACKLOG-2554: one UPSERT, so creating the row and clearing it is a single
+ * statement. The DO UPDATE arm sets only the error/counter columns — phase,
+ * cursor and bounds are left as they are, so a Clear'd row stays Clear'd
+ * (same as the INSERT OR IGNORE + UPDATE pair it replaces). Never use
+ * INSERT OR REPLACE here: it would reset phase to 'active' and drop the cursor.
+ */
 export function recordSyncSuccess(
   userId: string,
   accountId: string,
   provider: MailboxProvider,
 ): void {
-  ensureSyncStateRow(userId, accountId, provider);
   dbRun(
-    sql`UPDATE email_sync_state
-       SET last_error = NULL, failure_count = 0, updated_at = CURRENT_TIMESTAMP
-     WHERE user_id = ? AND account_id = ?`,
-    [userId, accountId],
+    sql`INSERT INTO email_sync_state (user_id, account_id, provider, last_error, failure_count)
+     VALUES (?, ?, ?, NULL, 0)
+     ON CONFLICT(user_id, account_id) DO UPDATE SET
+       last_error = NULL,
+       failure_count = 0,
+       updated_at = CURRENT_TIMESTAMP`,
+    [userId, accountId, provider],
   );
 }
 
-/** Record a sync failure: store the message and increment the failure counter. */
+/**
+ * Record a sync failure: store the message and increment the failure counter.
+ *
+ * BACKLOG-2554: one UPSERT (see recordSyncSuccess). A new row starts at
+ * failure_count 1; an existing row adds 1 to its own count and keeps its
+ * phase, cursor and bounds.
+ */
 export function recordSyncFailure(
   userId: string,
   accountId: string,
@@ -177,12 +194,14 @@ export function recordSyncFailure(
   error: unknown,
 ): void {
   const message = error instanceof Error ? error.message : String(error);
-  ensureSyncStateRow(userId, accountId, provider);
   dbRun(
-    sql`UPDATE email_sync_state
-       SET last_error = ?, failure_count = failure_count + 1, updated_at = CURRENT_TIMESTAMP
-     WHERE user_id = ? AND account_id = ?`,
-    [message.slice(0, 500), userId, accountId],
+    sql`INSERT INTO email_sync_state (user_id, account_id, provider, last_error, failure_count)
+     VALUES (?, ?, ?, ?, 1)
+     ON CONFLICT(user_id, account_id) DO UPDATE SET
+       last_error = excluded.last_error,
+       failure_count = email_sync_state.failure_count + 1,
+       updated_at = CURRENT_TIMESTAMP`,
+    [userId, accountId, provider, message.slice(0, 500)],
   );
   void logService.warn("[BACKLOG-1802] email_sync_state failure recorded", "EmailSyncState", {
     accountId,

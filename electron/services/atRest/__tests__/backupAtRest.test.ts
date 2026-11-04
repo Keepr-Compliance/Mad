@@ -77,17 +77,29 @@ let chain: string;
  */
 let dataFsync = true;
 
+/**
+ * BACKLOG-4068: seal chunk size. 64 B (multi-chunk, short final chunk) everywhere,
+ * except the two describes that seal large volumes (a 5 MiB file, a 256 KiB
+ * Manifest.db per sync round), which use 4 KiB so their containers stay
+ * multi-chunk without one cipher call per 64 bytes. Guards there assert it.
+ */
+let sealChunk = 64;
+
 function service(overrides: Partial<ConstructorParameters<typeof BackupAtRest>[0]> = {}): BackupAtRest {
+  // BACKLOG-4068: pin this test's directories. A timed-out test's pass keeps running;
+  // reading the globals would point it at the NEXT test's chain.
+  const ownBackups = backups;
+  const ownUserData = userData;
   return new BackupAtRest({
-    backupsRoot: () => backups,
+    backupsRoot: () => ownBackups,
     files: () => files,
-    markers: () => createMarkerStore({ userData: () => userData }),
+    markers: () => createMarkerStore({ userData: () => ownUserData }),
     ensureKey: async () => undefined,
     freeBytes: async () => Number.MAX_SAFE_INTEGER,
     sleep: async () => undefined,
     log: () => undefined,
     concurrency: 4,
-    chunkSize: 64, // same as `files`: multi-chunk containers
+    chunkSize: sealChunk, // multi-chunk containers (see sealChunk)
     sealEngineOptions: dataFsync ? undefined : { skipDataFsyncForMeasurement: true },
     ...overrides,
   });
@@ -145,6 +157,18 @@ function headerOf(file: string): Buffer {
   }
 }
 
+/** A sealed container's chunk size (header bytes 44..47, as fileCrypto writes it). */
+function chunkSizeOf(file: string): number {
+  const fd = fs.openSync(file, "r");
+  try {
+    const b = Buffer.alloc(48);
+    fs.readSync(fd, b, 0, 48, 0);
+    return b.readUInt32BE(44);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 /** Files that hold bytes and do NOT start with the KEPRENC magic. */
 function plaintextLeft(): string[] {
   return allContentFiles().filter((f) => fs.statSync(f).size > 0 && !headerOf(f).equals(MAGIC));
@@ -171,7 +195,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   jest.restoreAllMocks();
-  fs.rmSync(userData, { recursive: true, force: true });
+  // Windows cannot remove a directory while a file in it is open: retry briefly, then throw.
+  fs.rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe("seal / scan", () => {
@@ -1223,15 +1248,28 @@ describe("founder must-fix 2026-10-09: reseal at once, on quit, and while idle",
   it("a stale pause flag (no pass holds the lock) does not hang a sync: it starts promptly", async () => {
     makeChain();
     const lines: string[] = [];
-    const s = service({ log: (_l, m) => lines.push(m) });
+    const s = service({ log: (_l, m) => lines.push(m), pauseWaitMs: 10 });
     await s.migrate(UDID);
     (s as unknown as { pausable: Map<string, Int32Array> }).pausable.set(UDID, new Int32Array(new SharedArrayBuffer(4)));
     expect(s.busyReason(UDID)).toBeNull();
-    const session = await s.beginSync(UDID);
+    // A hang shows as a "pausing" report (the sync waits for a release that never comes):
+    // abort on the first one, so the test reds at once, whatever the runner's speed.
+    const ctl = new AbortController();
+    const pausing: string[] = [];
+    const session = await s.beginSync(UDID, {
+      signal: ctl.signal,
+      onProgress: (p) => {
+        if (p.phase === "pausing") {
+          pausing.push(p.phase);
+          ctl.abort();
+        }
+      },
+    });
+    expect(pausing).toEqual([]);
     expect(session.udid).toBe(UDID);
     expect(lines).toContain("[BackupAtRest] cleared a stale pause flag; no pass holds the phone");
     (s as unknown as { release: (u: string) => void }).release(UDID);
-  }, 3000);
+  });
 
   it("a seal pass logs its start with the work to do (an interrupted run leaves a trace); counts only, no paths", async () => {
     makeChain();
@@ -1403,9 +1441,11 @@ describe("progress", () => {
   describe("seal progress measures this pass's work (BACKLOG-3816)", () => {
     beforeAll(() => {
       dataFsync = false;
+      sealChunk = 4096;
     });
     afterAll(() => {
       dataFsync = true;
+      sealChunk = 64;
     });
     const BIG = 5 * 1024 * 1024;
     const W = PROGRESS_FILE_WEIGHT_BYTES;
@@ -1465,6 +1505,8 @@ describe("progress", () => {
       expect(opensAtFirst).toBeLessThan(10); // fixed setup reads only (plists); a pre-pass would open all 300+ files
       expect(plaintextLeft()).toEqual([]);
       expect(extra.length).toBe(300);
+      // BACKLOG-4068: the big file is still a many-chunk container at this describe's chunk size.
+      expect(BIG / chunkSizeOf(path.join(chain, `ee/${"e".repeat(40)}`))).toBeGreaterThanOrEqual(100);
     });
 
     it("PC final check 2026-10-10: the line never reads 100% while the walk still checks the rest of the backup; 100% only when the pass ends, then the marker is encrypted", async () => {
@@ -1772,6 +1814,12 @@ describe("PC unplug retest 2026-10-09: the index files are sealed FIRST at every
   const INDEX = ["Manifest.db", "Info.plist", "Status.plist", "Manifest.plist"];
   const isIndex = (p: string) => INDEX.includes(path.basename(p)) && path.dirname(p) === chain;
   const manifest = () => path.join(chain, "Manifest.db");
+  beforeAll(() => {
+    sealChunk = 4096; // BACKLOG-4068: see sealChunk
+  });
+  afterAll(() => {
+    sealChunk = 64;
+  });
 
   /** The founder's state: a sealed chain, a C-DELTA sync unsealed the (large) index, the phone sent new files, then the cable came out. */
   async function unpluggedMidSync(s: BackupAtRest) {
@@ -1808,6 +1856,8 @@ describe("PC unplug retest 2026-10-09: the index files are sealed FIRST at every
     expect(order[0]).toBe(manifest());
     for (const f of sent) expect(headerOf(f).equals(MAGIC)).toBe(true);
     expect(headerOf(manifest()).equals(MAGIC)).toBe(true);
+    // BACKLOG-4068: Manifest.db is still a multi-chunk container at this describe's chunk size.
+    expect(fs.statSync(manifest()).size / chunkSizeOf(manifest())).toBeGreaterThanOrEqual(32);
     expect(plaintextLeft()).toEqual([]);
     expect(await readMarkerAt(backups, UDID)).toBe("encrypted");
   });

@@ -1,5 +1,5 @@
 /**
- * The three saved-view RPCs (BACKLOG-3450)
+ * The saved-view RPCs (BACKLOG-3450; set-default BACKLOG-4084)
  *
  * Separated from `report-views.ts` so that the pure half — metrics, parsing,
  * matching — can be tested without importing the browser Supabase client.
@@ -33,6 +33,12 @@ export interface ReportViewsApi<V = ReportSavedView, F = StoredFilters, M = View
   list(reportKey: string): Promise<V[]>;
   save(input: SaveViewInput<F, M>): Promise<{ id: string }>;
   remove(id: string): Promise<void>;
+  /**
+   * Make one of the caller's views the default for a report, or clear it
+   * (`id` null). BACKLOG-4084. Refused by the server for another user's view
+   * or a view of another report.
+   */
+  setDefault(reportKey: string, id: string | null): Promise<void>;
 }
 
 /**
@@ -69,6 +75,15 @@ export function createReportViewsApi<V, F, M>(
     async remove(id) {
       const supabase = createClient();
       const { error } = await supabase.rpc('report_delete_saved_view', { p_id: id });
+      if (error) throw error;
+    },
+
+    async setDefault(reportKey, id) {
+      const supabase = createClient();
+      const { error } = await supabase.rpc('report_set_default_view', {
+        p_report_key: reportKey,
+        p_id: id,
+      });
       if (error) throw error;
     },
   };

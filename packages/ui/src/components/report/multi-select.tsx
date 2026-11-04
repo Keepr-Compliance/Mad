@@ -17,7 +17,8 @@ import { selectAllValues } from './select-all';
  * from a footer button.
  *
  * Desktop: `MultiSelect` wraps it in a trigger ("Label" / "Label (n)") and a
- * popover that closes on a click outside or Escape.
+ * popover that closes on a click outside or Escape (window capture listener,
+ * so inside a kit Dialog only the popover closes; focus returns to the trigger).
  *
  * Phone recipe: `FilterSelectButton` + `BottomSheet` + `MultiSelectOptions`
  * with `bulkActions={false}`; the sheet header carries the Select all / Clear
@@ -140,16 +141,23 @@ export function MultiSelect({
 }: MultiSelectProps) {
   const [open, setOpen] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
   const close = React.useCallback(() => setOpen(false), []);
   useClickOutside(containerRef, close, open);
 
+  // Escape: window keydown in CAPTURE phase, only while open (same as Dropdown),
+  // so inside a kit Dialog it closes this panel and not the dialog (BACKLOG-4032).
   React.useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key !== 'Escape') return;
+      e.stopPropagation();
+      e.preventDefault();
+      setOpen(false);
+      triggerRef.current?.focus();
     }
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
   }, [open]);
 
   const hasSelection = selected.length > 0;
@@ -164,6 +172,7 @@ export function MultiSelect({
         )}
       >
         <button
+          ref={triggerRef}
           type="button"
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}

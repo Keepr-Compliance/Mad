@@ -1,0 +1,22 @@
+// BACKLOG-3943 fixture generator (macOS, JXA). Not run by tests.
+// Usage: osascript -l JavaScript make-image-only-page.jxa <source.pdf> <pageIndex0> <dpi> <out.png> <out.pdf>
+// Rasterises one page of a born-digital PDF with PDFKit at <dpi>, writes the PNG, then wraps
+// that PNG alone into a new single-page PDF (PDFPage initWithImage): the result has an
+// /Image and no /Font, i.e. an image-only PDF with no text layer.
+ObjC.import('Foundation'); ObjC.import('Quartz'); ObjC.import('AppKit');
+function run(argv) {
+  const src = $.PDFDocument.alloc.initWithURL($.NSURL.fileURLWithPath(argv[0]));
+  const page = src.pageAtIndex(parseInt(argv[1], 10));
+  const dpi = parseInt(argv[2], 10);
+  const b = page.boundsForBox($.kPDFDisplayBoxMediaBox);
+  const s = dpi / 72;
+  const thumb = page.thumbnailOfSizeForBox($.NSMakeSize(Math.round(b.size.width * s), Math.round(b.size.height * s)), $.kPDFDisplayBoxMediaBox);
+  const cg = thumb.CGImageForProposedRectContextHints($(), $(), $());
+  const rep = $.NSBitmapImageRep.alloc.initWithCGImage(cg);
+  rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $({})).writeToFileAtomically(argv[3], true);
+  const img = $.NSImage.alloc.initWithContentsOfFile(argv[3]);
+  const out = $.PDFDocument.alloc.init;
+  out.insertPageAtIndex($.PDFPage.alloc.initWithImage(img), 0);
+  out.writeToFile(argv[4]);
+  return 'ok ' + rep.pixelsWide + 'x' + rep.pixelsHigh;
+}

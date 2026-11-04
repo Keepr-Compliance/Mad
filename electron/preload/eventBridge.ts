@@ -5,6 +5,7 @@
 
 import { ipcRenderer, IpcRendererEvent } from "electron";
 import type {
+  DeepLinkDeviceLimitPayload,
   DeepLinkLicenseBlockedPayload,
   FolderExportProgress,
 } from "../types/ipc";
@@ -343,22 +344,18 @@ export const eventBridge = {
    * @returns Cleanup function to remove listener
    */
   onDeepLinkDeviceLimit: (
-    callback: (data: {
-      accessToken: string;
-      refreshToken: string;
-      userId: string;
-      licenseStatus: unknown;
-    }) => void,
+    callback: (data: DeepLinkDeviceLimitPayload) => void,
   ) => {
+    // BACKLOG-4046: forward only the three declared fields, whatever main sent.
     const listener = (
       _: IpcRendererEvent,
-      data: {
-        accessToken: string;
-        refreshToken: string;
-        userId: string;
-        licenseStatus: unknown;
-      },
-    ) => callback(data);
+      data: DeepLinkDeviceLimitPayload,
+    ) =>
+      callback({
+        userId: data.userId,
+        deviceCount: data.deviceCount,
+        deviceLimit: data.deviceLimit,
+      });
     ipcRenderer.on("auth:deep-link-device-limit", listener);
     return () =>
       ipcRenderer.removeListener("auth:deep-link-device-limit", listener);

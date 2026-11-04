@@ -14,6 +14,7 @@
 import Link from 'next/link';
 import { Headphones, Monitor, UserCircle } from 'lucide-react';
 import { Card, PageHeader } from '@keepr/design-system';
+import { MicrosoftStoreBadge } from '@/components/download/MicrosoftStoreBadge';
 
 /** Registered by the desktop app; opening it brings Keepr to the front. */
 export const OPEN_DESKTOP_APP_HREF = 'keepr://focus';
@@ -50,6 +51,8 @@ export function FloorDashboard({ headerTitle }: FloorDashboardProps) {
                   Don&apos;t have it yet? Download Keepr
                 </Link>
               </div>
+              {/* BACKLOG-4067: Windows only, once a Store ID is configured; its own line (taller than the row). */}
+              <MicrosoftStoreBadge />
             </div>
           </div>
         </Card>

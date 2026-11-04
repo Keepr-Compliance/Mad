@@ -40,6 +40,7 @@ import {
   FileText,
   Loader2,
   Mail,
+  MessageSquare,
   Plus,
   X,
 } from 'lucide-react';
@@ -142,10 +143,22 @@ export interface ChecklistReviewProps {
  */
 export function removeConfirmText(counts: LinkedCounts | undefined): string {
   if (!counts) return 'Documents and emails linked to it stay on the deal; the checklist and its links are removed.';
-  const linked = linkedPhrase(counts.documents, counts.emails);
+  const texts = counts.texts ?? 0;
+  const linked = linkedPhrase(counts.documents, counts.emails, texts);
   if (!linked) return 'No documents or emails are linked to it. The checklist is removed.';
-  const one = counts.documents + counts.emails === 1;
+  const one = counts.documents + counts.emails + texts === 1;
   return `${linked} ${one ? 'is' : 'are'} linked to it. ${one ? 'It stays' : 'They stay'} on the deal; the checklist and its links are removed.`;
+}
+
+/**
+ * The chip icon per link kind: an email, a text (BACKLOG-3968), else a file.
+ * A text opens the same conversation viewer as an email (chipTarget finds the
+ * thread by its message row).
+ */
+export function linkChipIcon(kind: string): { Icon: typeof FileText; iconClass: string } {
+  if (kind === 'email') return { Icon: Mail, iconClass: 'text-primary-600' };
+  if (kind === 'text') return { Icon: MessageSquare, iconClass: 'text-emerald-600' };
+  return { Icon: FileText, iconClass: 'text-red-600' };
 }
 
 /**
@@ -661,7 +674,7 @@ export function ChecklistReview({
                                 {item.links.map((link) => {
                                   const target = chipTarget(link);
                                   const viewable = !!(target.attachment || target.thread);
-                                  const Icon = link.kind === 'email' ? Mail : FileText;
+                                  const { Icon, iconClass } = linkChipIcon(link.kind);
                                   return (
                                     <button
                                       key={link.id}
@@ -672,7 +685,7 @@ export function ChecklistReview({
                                       className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 transition-colors hover:border-gray-300 hover:bg-gray-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 disabled:cursor-default disabled:hover:bg-white"
                                     >
                                       <Icon
-                                        className={`h-3.5 w-3.5 shrink-0 ${link.kind === 'email' ? 'text-primary-600' : 'text-red-600'}`}
+                                        className={`h-3.5 w-3.5 shrink-0 ${iconClass}`}
                                         aria-hidden
                                       />
                                       <span className="min-w-0 truncate">{link.label}</span>

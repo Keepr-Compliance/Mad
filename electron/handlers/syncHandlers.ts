@@ -742,6 +742,17 @@ function setupEventForwarding(): void {
           return false;
         }
 
+        // BACKLOG-3343: any other failure — the storage service rolled it back (or the
+        // next launch will). Never report it as "storage complete".
+        if (!persistResult.success) {
+          log.error("[SyncHandlers] Database persistence failed", { error: persistResult.error });
+          syncTimeline.endSync("error");
+          sendToMainWindow("sync:storage-error", {
+            error: "Saving the sync failed. Run the sync again.",
+          });
+          return false;
+        }
+
         log.info("[SyncHandlers] Database persistence complete", {
           messagesStored: persistResult.messagesStored,
           messagesSkipped: persistResult.messagesSkipped,

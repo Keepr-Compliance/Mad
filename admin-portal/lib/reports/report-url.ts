@@ -104,6 +104,10 @@ export function applyClientState(target: URLSearchParams, state: ClientState): U
  * It COPIES the current params. Building a fresh `URLSearchParams()` here is
  * the wrong implementation that looks right: the period would work perfectly
  * and every other filter would silently reset on each change.
+ *
+ * The period is ALWAYS written, the built-in default included (BACKLOG-4084).
+ * A page with no period in its URL opens with the user's default saved view,
+ * so a bare URL no longer means "this week".
  */
 export function buildPeriodUrl(
   current: URLSearchParams | string,
@@ -113,8 +117,7 @@ export function buildPeriodUrl(
 ): string {
   const params = new URLSearchParams(typeof current === 'string' ? current : current.toString());
 
-  if (period === 'week') params.delete('period');
-  else params.set('period', period);
+  params.set('period', period);
 
   if (period === 'custom') {
     if (from) params.set('from', from);

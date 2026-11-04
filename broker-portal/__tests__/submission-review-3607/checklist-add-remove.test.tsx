@@ -286,7 +286,7 @@ const LOCAL_MSG = new Map<string, string | null>([
 
 describe('linked counts (remove RPC rule, migration §6)', () => {
   it('one file uploaded twice is one document; no local id is not counted; emails separate', () => {
-    expect(linkedEvidenceCounts(CONTRACT, LOCAL_ATT, LOCAL_MSG)).toEqual({ documents: 3, emails: 2 });
+    expect(linkedEvidenceCounts(CONTRACT, LOCAL_ATT, LOCAL_MSG)).toEqual({ documents: 3, emails: 2, texts: 0 });
   });
 
   it.each([

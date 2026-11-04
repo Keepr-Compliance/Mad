@@ -310,16 +310,26 @@ export async function getEmailById(emailId: string): Promise<EmailRow | null> {
 }
 
 /**
- * Get an email by external ID (Gmail/Outlook message ID)
- * Used for deduplication during import
+ * Get an email by external ID (Gmail/Outlook message ID), scoped to the user.
+ * Used for deduplication during import.
+ *
+ * BACKLOG-2554: synchronous so a transaction body can take its dedup decision
+ * and its create in one step, with no `await` between them.
  */
-export async function getEmailByExternalId(
-  userId: string,
-  externalId: string
-): Promise<Email | null> {
+export function getEmailByExternalIdSync(userId: string, externalId: string): Email | null {
   const statement = sql`SELECT ${EMAIL_COLUMNS_LIGHT} FROM emails WHERE user_id = ? AND external_id = ?`;
   const email = dbGet<Email>(statement, [userId, externalId]);
   return email || null;
+}
+
+/**
+ * Promise half of `getEmailByExternalIdSync` (syncTwin.guard).
+ */
+export function getEmailByExternalId(
+  userId: string,
+  externalId: string
+): Promise<Email | null> {
+  return Promise.resolve(getEmailByExternalIdSync(userId, externalId));
 }
 
 /**

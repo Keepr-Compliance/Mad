@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader } from '@keepr/design-system';
 import { OrgPeoplePanel, type OrgPeopleView } from '@keepr/ui';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { PHONE_ERROR, formatBillingPhoneInput, isValidBillingPhone } from '@/lib/billing/phone';
 import { invitePerson, listOrgContacts, removeOrgContact, saveOrgContact } from '@/lib/actions/orgContacts';
 
@@ -33,6 +34,9 @@ export function brokerUserHref(person: { member_id: string }): string {
 export function PeopleCard({ organizationId, readOnly = false, linkUsers = false }: PeopleCardProps) {
   const [view, setView] = useState<OrgPeopleView | null>(null);
   const [failed, setFailed] = useState(false);
+  // BACKLOG-4032: below md (the breakpoint UserListClient uses) the user pickers open as a
+  // bottom sheet.
+  const narrow = useMediaQuery('(max-width: 767px)');
 
   const load = useCallback(async () => {
     const r = await listOrgContacts(organizationId);
@@ -55,6 +59,7 @@ export function PeopleCard({ organizationId, readOnly = false, linkUsers = false
           <OrgPeoplePanel
             view={view}
             readOnly={readOnly}
+            pickerPresentation={narrow ? 'sheet' : 'popover'}
             phone={PHONE_RULE}
             onChanged={() => void load()}
             userHref={linkUsers && !readOnly ? brokerUserHref : undefined}

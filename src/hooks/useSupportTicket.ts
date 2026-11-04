@@ -8,6 +8,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import logger from "../utils/logger";
+import { getOpenTransactionId } from "../utils/openTransactionRegistry";
 
 /** Priority values matching the support platform */
 export type TicketPriority = "low" | "normal" | "high" | "urgent";
@@ -220,6 +221,8 @@ export function useSupportTicket(initialScreenshot?: string | null): SupportTick
             category_id: form.category_id || null,
             requester_email: userEmail,
             requester_name: userName,
+            // BACKLOG-4065: read at submit time, not when the dialog opened.
+            open_transaction_id: getOpenTransactionId(),
           },
           screenshot,
           diagnostics as unknown as Record<string, unknown> | null

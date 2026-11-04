@@ -69,6 +69,25 @@ export async function verifyBearerUser(req: Request): Promise<VerifiedUser | nul
   return { userId: data.user.id, email: data.user.email ?? null };
 }
 
+export interface VerifiedUserWithToken extends VerifiedUser {
+  /** The verified access token, for a Supabase client that reads as this user (RLS applies). */
+  token: string;
+}
+
+/**
+ * verifyBearerUser, plus the token it verified — BACKLOG-3676. For a route that
+ * must read as the user (a Bearer-token Supabase client) rather than through the
+ * service role. The same verification; the user id still comes only from it.
+ */
+export async function verifyBearerUserWithToken(req: Request): Promise<VerifiedUserWithToken | null> {
+  const authHeader = req.headers.get('authorization') || '';
+  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  const token = match?.[1].trim();
+  if (!token) return null;
+  const user = await verifyBearerUser(req);
+  return user ? { ...user, token } : null;
+}
+
 /** Server-quoted price for the user's next PAID unlock. Never client-supplied. */
 export interface UnlockQuote {
   nextUnitIndex: number;

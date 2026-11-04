@@ -22,9 +22,9 @@ Options:
 When invoked, run:
 
 ```bash
-cd /Users/daniel/Documents/Mad && \
+cd "$(git rev-parse --show-toplevel)" && \
 python .claude/skills/architecture/generate_architecture.py && \
-open /Users/daniel/Documents/Mad/architecture-debug.html
+open docs/architecture/architecture-debug.html
 ```
 
 For focused views:

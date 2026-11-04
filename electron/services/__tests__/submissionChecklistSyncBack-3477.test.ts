@@ -1010,7 +1010,7 @@ describe("BACKLOG-3596 pulled items keep the cloud item id", () => {
     seedCloud("needs_changes");
     await submissionSyncService.manualSync();
 
-    const payload = buildChecklistSnapshotPayload(await getChecklistsForTransaction(TXN));
+    const payload = buildChecklistSnapshotPayload(await getChecklistsForTransaction(TXN, "broker"));
     const pulled = payload.find((c) => c.template_id === TEMPLATE);
     expect(pulled).toBeDefined();
     expect(new Map(pulled!.items.map((i) => [i.title, i.local_item_id]))).toEqual(cloudIdsByTitle());
@@ -1448,7 +1448,7 @@ describe("BACKLOG-3607 — broker removals and restores reach the desktop", () =
     );
     // The next version sends those ids as local_item_id, so the carry matches
     // the restored items and the restored ticks carry.
-    const payload = buildChecklistSnapshotPayload(await getChecklistsForTransaction(TXN));
+    const payload = buildChecklistSnapshotPayload(await getChecklistsForTransaction(TXN, "broker"));
     expect(payload[0].items.map((i) => i.local_item_id)).toEqual(
       cloud.submission_checklist_items.map((row) => row.id),
     );

@@ -11,6 +11,10 @@ Transcribed from the PR-0 spike captures (docs/billing/3853-stripe-spike.md, clo
 - BACKLOG-3853 PR-2B: in `inv-list-open.json` only, each `hosted_invoice_url` re-redacted to
   `https://invoice.stripe.test/REDACTED/<that invoice's id>`, so a test on the email's Pay link can tell
   which invoice was chosen (all five were the same string before).
+- BACKLOG-3855: the JSON files are unchanged; `__tests__/invoices-3855/fixtures.ts` re-redacts, in
+  memory, each `invoice_pdf` to `https://invoice.stripe.test/REDACTED/<that invoice's id>.pdf` and
+  `inv-paid.json`'s `hosted_invoice_url` to the PR-2B form, and labels its status / due_date /
+  amount_remaining flips [EDITED] and its http:// rows [SYNTHETIC].
 - `idempotency-error.json`: `request_log_url` removed (embeds the account id).
 - `pi-open.json`, `pi-requires-action.json`: `client_secret` replaced with `pi_FIXTURE_secret_REDACTED`.
 

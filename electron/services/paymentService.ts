@@ -31,13 +31,18 @@ import { net, shell } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import supabaseService from "./supabaseService";
 import entitlementService from "./entitlementService";
+import featureGateService from "./featureGateService";
 import logService from "./logService";
 import { PAYWALL_ANALYTICS_EVENTS } from "../types/entitlement";
-import type {
-  BeginCheckoutResult,
-  ChargeResult,
-  PaymentConfirmResult,
-  SavedCardStatus,
+import {
+  SUBSCRIPTION_REFUSAL_CODES,
+  type BeginCheckoutResult,
+  type BeginSubscriptionResult,
+  type ChargeResult,
+  type GateReadResult,
+  type PaymentConfirmResult,
+  type SavedCardStatus,
+  type SubscriptionRefusalCode,
 } from "../types/payment";
 
 const MODULE = "PaymentService";
@@ -61,7 +66,44 @@ function isOnline(): boolean {
 const sleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/** BACKLOG-3676: the Agent plan Checkout the app opens is Stripe's hosted page, nothing else. */
+const STRIPE_CHECKOUT_ORIGIN = "https://checkout.stripe.com";
+
+/** True only for an https URL on checkout.stripe.com (no other host, no other scheme). */
+export function isStripeCheckoutUrl(url: unknown): url is string {
+  if (typeof url !== "string") return false;
+  try {
+    return new URL(url).origin === STRIPE_CHECKOUT_ORIGIN;
+  } catch {
+    return false;
+  }
+}
+
+/** The refusal code in a subscription-session answer; anything unknown reads as try_again. */
+export function toRefusalCode(body: unknown, status: number): SubscriptionRefusalCode {
+  const code =
+    body && typeof body === "object" ? (body as Record<string, unknown>).code : undefined;
+  if (SUBSCRIPTION_REFUSAL_CODES.includes(code as SubscriptionRefusalCode)) {
+    return code as SubscriptionRefusalCode;
+  }
+  return status === 401 ? "unauthorized" : "try_again";
+}
+
+/** Options for confirmSubscription; tests pass a fake sleep. Never set from IPC. */
+export interface ConfirmSubscriptionOptions {
+  sleep?: (ms: number) => Promise<void>;
+}
+
 class PaymentService {
+  /**
+   * BACKLOG-3676 (S2): one confirm poll per transaction at a time. A second
+   * caller (a repeated deep link) joins the poll already running.
+   */
+  private readonly subscriptionConfirms = new Map<string, Promise<PaymentConfirmResult>>();
+
+  /** Single-flight guard for opening the Agent plan Checkout (S2). */
+  private subscriptionStart: Promise<BeginSubscriptionResult> | null = null;
+
   /** Resolve the current user's id + JWT from the live Supabase session. */
   private async getAuth(): Promise<{ userId: string; accessToken: string } | null> {
     try {
@@ -259,6 +301,126 @@ class PaymentService {
     }
 
     return { unlocked: false, reason: "timeout" };
+  }
+
+  // ── Agent plan subscription (BACKLOG-3676) ─────────────────────────────
+
+  /**
+   * Start the Agent plan Checkout: POST /api/payments/subscription-session with
+   * the user's Bearer JWT (the route reads nothing else, so no body is sent),
+   * then open the returned Stripe hosted page. A refusal answers its code; the
+   * renderer maps each code to its own screen. Only a checkout.stripe.com URL
+   * is ever opened.
+   */
+  async beginSubscription(): Promise<BeginSubscriptionResult> {
+    if (this.subscriptionStart) return this.subscriptionStart;
+    const run = this.beginSubscriptionOnce().finally(() => {
+      this.subscriptionStart = null;
+    });
+    this.subscriptionStart = run;
+    return run;
+  }
+
+  private async beginSubscriptionOnce(): Promise<BeginSubscriptionResult> {
+    if (!isOnline()) return { started: false, code: "offline" };
+    const auth = await this.getAuth();
+    if (!auth) return { started: false, code: "unauthorized" };
+
+    try {
+      const res = await net.fetch(`${portalBase()}/api/payments/subscription-session`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${auth.accessToken}` },
+      });
+      const body = (await res.json().catch(() => null)) as unknown;
+      if (!res.ok) {
+        const code = toRefusalCode(body, res.status);
+        logService.warn("[Payment] subscription-session refused", MODULE, {
+          status: res.status,
+          code,
+        });
+        return { started: false, code };
+      }
+      const url =
+        body && typeof body === "object"
+          ? (body as Record<string, unknown>).checkout_url
+          : undefined;
+      if (!isStripeCheckoutUrl(url)) {
+        logService.warn("[Payment] subscription-session gave no Stripe Checkout URL", MODULE);
+        return { started: false, code: "try_again" };
+      }
+      await shell.openExternal(url);
+      return { started: true };
+    } catch (error) {
+      logService.warn("[Payment] Unexpected error starting the Agent plan Checkout", MODULE, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      Sentry.captureException(error, {
+        tags: { service: "payment-service", operation: "beginSubscription" },
+      });
+      return { started: false, code: "try_again" };
+    }
+  }
+
+  /**
+   * One FRESH read of the export gate (R1). The entitlement memo keeps a
+   * definite "not entitled" for 60 s, so a read without clearing it would
+   * repeat the answer from before the payment. Every read here clears the
+   * memo and the feature cache first, then asks the gate.
+   */
+  private async readGateFresh(localTransactionId: string): Promise<boolean> {
+    entitlementService.invalidateMemo();
+    featureGateService.invalidateCache();
+    const gate = await entitlementService.getUnlockStatus(localTransactionId);
+    return gate.status === "unlocked";
+  }
+
+  /**
+   * After the Agent plan Checkout returns: poll the gate up to 15 x 2 s, each
+   * attempt a fresh read. Unlocked ONLY when the gate says so; the webhook's
+   * invoice.paid grant is what flips it. Never trusts the deep link.
+   */
+  async confirmSubscription(
+    localTransactionId: string,
+    options: ConfirmSubscriptionOptions = {},
+  ): Promise<PaymentConfirmResult> {
+    const running = this.subscriptionConfirms.get(localTransactionId);
+    if (running) return running;
+    const run = this.pollSubscription(localTransactionId, options.sleep ?? sleep).finally(() => {
+      this.subscriptionConfirms.delete(localTransactionId);
+    });
+    this.subscriptionConfirms.set(localTransactionId, run);
+    return run;
+  }
+
+  private async pollSubscription(
+    localTransactionId: string,
+    wait: (ms: number) => Promise<void>,
+  ): Promise<PaymentConfirmResult> {
+    if (!isOnline()) return { unlocked: false, reason: "offline" };
+    try {
+      for (let attempt = 0; attempt < CONFIRM_POLL_ATTEMPTS; attempt++) {
+        if (await this.readGateFresh(localTransactionId)) return { unlocked: true };
+        if (attempt < CONFIRM_POLL_ATTEMPTS - 1) await wait(CONFIRM_POLL_INTERVAL_MS);
+      }
+      return { unlocked: false, reason: "timeout" };
+    } catch (error) {
+      logService.warn("[Payment] Agent plan confirm failed", MODULE, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { unlocked: false, reason: "error" };
+    }
+  }
+
+  /** "Try again" / "Check again": ONE fresh gate read (R6). */
+  async refreshGate(localTransactionId: string): Promise<GateReadResult> {
+    try {
+      return { unlocked: await this.readGateFresh(localTransactionId) };
+    } catch (error) {
+      logService.warn("[Payment] Fresh gate read failed", MODULE, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return { unlocked: false };
+    }
   }
 
   /** Best-effort GET /status to trigger the portal's self-heal. Return ignored. */

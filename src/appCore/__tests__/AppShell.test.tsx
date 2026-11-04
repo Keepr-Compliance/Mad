@@ -14,6 +14,9 @@ import { AppShell } from "../AppShell";
 import type { AppStateMachine } from "../state/types";
 
 // Isolate from IPC-heavy children/hooks
+// BACKLOG-4115: the title-bar sync pill's wiring has its own suite (useTitleBarSync-4115).
+const mockTitleBarSync: { pill: unknown; onClick: () => void } = { pill: null, onClick: () => {} };
+jest.mock("../shell/useTitleBarSync", () => ({ useTitleBarSync: () => mockTitleBarSync }));
 jest.mock("../../hooks/useSessionValidator", () => ({
   useSessionValidator: jest.fn(),
 }));
@@ -57,6 +60,8 @@ const createShellAppMock = (
     handleRetryConnection: jest.fn(),
     handleLogout: jest.fn(),
     getPageTitle: jest.fn().mockReturnValue("Dashboard"),
+    // BACKLOG-3964: AppShell reads showSettings (title + Settings layer).
+    modalState: { showSettings: false },
     ...overrides,
   }) as unknown as AppStateMachine;
 

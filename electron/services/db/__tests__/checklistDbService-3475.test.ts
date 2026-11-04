@@ -73,7 +73,7 @@ const run = (q: string, ...p: unknown[]) => db.prepare(q).run(...(p as never[]))
 
 /** The first (by display order) checklist on a transaction, or undefined. */
 async function getChecklistForTransaction(transactionId: string) {
-  return (await getChecklistsForTransaction(transactionId)).checklists[0];
+  return (await getChecklistsForTransaction(transactionId, "agent")).checklists[0];
 }
 
 const TEMPLATE_ITEMS = [
@@ -442,7 +442,7 @@ describe("BACKLOG-3475 — ticks and notes are in the database, not in a cache",
     expect(ids("transaction_checklist_items")).toEqual([]);
     expect(ids("transaction_checklist_links")).toEqual([]);
     expect(ids("transaction_checklist_link_members")).toEqual([]);
-    expect(await getChecklistsForTransaction("txn-1")).toEqual({
+    expect(await getChecklistsForTransaction("txn-1", "agent")).toEqual({
       checklists: [],
       requiredDone: 0,
       requiredTotal: 0,
@@ -492,7 +492,7 @@ function rowsUnder(checklistId: string) {
 
 /** Tick, note and link the first item of a checklist, so it has something to lose. */
 async function dirty(checklistId: string): Promise<void> {
-  const detail = (await getChecklistsForTransaction("txn-1")).checklists.find(
+  const detail = (await getChecklistsForTransaction("txn-1", "agent")).checklists.find(
     (d) => d.checklist.id === checklistId,
   )!;
   const first = detail.items[0].id;
@@ -527,13 +527,13 @@ describe("BACKLOG-3476 — several checklists per transaction", () => {
   it("A-2: get returns every checklist, in sort_order", async () => {
     const a = await addTemplate("txn-1", TPL_A, "Listing");
     const b = await addTemplate("txn-1", TPL_B, "Buyer");
-    const got = await getChecklistsForTransaction("txn-1");
+    const got = await getChecklistsForTransaction("txn-1", "agent");
     expect(got.checklists.map((d) => d.checklist.id)).toEqual([a, b]);
     expect(got.checklists.map((d) => d.checklist.sortOrder)).toEqual([0, 1]);
 
     // Order is the stored position, not insertion order.
     run(`UPDATE transaction_checklists SET sort_order = 5 WHERE id = ?`, a);
-    const reordered = await getChecklistsForTransaction("txn-1");
+    const reordered = await getChecklistsForTransaction("txn-1", "agent");
     expect(reordered.checklists.map((d) => d.checklist.id)).toEqual([b, a]);
   });
 
@@ -577,7 +577,7 @@ describe("BACKLOG-3476 — several checklists per transaction", () => {
     await tick("A3 optional");
     await tick("B1");
 
-    const got = await getChecklistsForTransaction("txn-1");
+    const got = await getChecklistsForTransaction("txn-1", "agent");
     const byId = Object.fromEntries(got.checklists.map((d) => [d.checklist.id, d]));
     expect([byId[a].requiredDone, byId[a].requiredTotal]).toEqual([1, 2]);
     expect([byId[b].requiredDone, byId[b].requiredTotal]).toEqual([1, 3]);
@@ -605,7 +605,7 @@ describe("BACKLOG-3476 — several checklists per transaction", () => {
       await setChecklistItemChecked(item.id as string, true);
     }
     const flag = async (id: string) =>
-      (await getChecklistsForTransaction("txn-1")).checklists.find((d) => d.checklist.id === id)!
+      (await getChecklistsForTransaction("txn-1", "agent")).checklists.find((d) => d.checklist.id === id)!
         .allItemsChecked;
     // All required ticked, the optional one not.
     expect(await flag(a)).toBe(false);

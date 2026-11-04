@@ -1,12 +1,13 @@
 /**
  * iPhone Sync Performance — data access (BACKLOG-3441)
  *
- * Follows the pattern in `lib/analytics-queries.ts`: minimal select, then a
- * second lookup for user display fields. Cross-org read access to
+ * Follows the pattern of the old analytics queries (now
+ * `lib/reports/analytics-queries.ts`): minimal select, then a second lookup
+ * for user display fields. Cross-org read access to
  * `sync_outcomes` comes from the "Internal roles can read sync outcomes" RLS
  * policy, so this needs the authenticated server client, not the service role.
  *
- * Kept separate from `analytics-queries.ts` on purpose — that file has an open
+ * Kept separate from `lib/reports/analytics-queries.ts` on purpose — that file has an open
  * PR against it (#2572) and this change should not touch it.
  */
 

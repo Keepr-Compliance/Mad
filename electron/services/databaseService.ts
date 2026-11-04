@@ -85,6 +85,19 @@ import {
 } from "./db/migrationV76Sql";
 import { V77_ORPHAN_TEXT_IDS_SQL, V77_REPOINT_SQL, V77_TEXT_DEAL_COLUMN_SQL } from "./db/migrationV77Sql";
 import {
+  V78_COPY_LINKS_SQL,
+  V78_COPY_MEMBERS_SQL,
+  V78_CREATE_LINKS_NEW_SQL,
+  V78_CREATE_MEMBERS_NEW_SQL,
+  V78_DROP_EMPTY_LINK_TRIGGER_SQL,
+  V78_DROP_LINKS_SQL,
+  V78_DROP_MEMBERS_SQL,
+  V78_INDEXES_AND_TRIGGER_SQL,
+  V78_MEMBERS_TABLE_INFO_SQL,
+  V78_RENAME_LINKS_SQL,
+  V78_RENAME_MEMBERS_SQL,
+} from "./db/migrationV78Sql";
+import {
   SCHEMA_VERSION_UPDATE_SQL,
   SCHEMA_VERSION_TABLE_EXISTS_SQL,
   CONNECTIVITY_PROBE_SQL,
@@ -1949,6 +1962,37 @@ class DatabaseService implements IDatabaseService {
         hostLogger.info(`[v77] re-pointed ${repointed} text(s), cleared ${cleared}`);
       },
     },
+    {
+      version: 78,
+      description:
+        "BACKLOG-3968 checklist links to texts: links.kind CHECK gains 'text', " +
+        "link_members gains message_id (FK messages); both tables rebuilt",
+      // Same runner conditions as v72: synchronous, raw d.prepare / d.exec on the
+      // handle passed in, foreign_keys OFF for the whole body. Guarded: a FRESH
+      // install already has message_id from schema.sql (schema_version seeds at
+      // BASELINE 70, then this migration still runs), so the rebuild is skipped
+      // there and the migration is re-runnable. The indexes and the trigger are
+      // (re)created on EVERY database: the message_id index cannot live in
+      // schema.sql (see migrationV78Sql.ts).
+      migrate: (d) => {
+        const hasMessageId = (
+          d.prepare(V78_MEMBERS_TABLE_INFO_SQL).all() as Array<{ name: string }>
+        ).some((c) => c.name === "message_id");
+        if (!hasMessageId) {
+          d.exec(V78_DROP_EMPTY_LINK_TRIGGER_SQL);
+          d.exec(V78_CREATE_LINKS_NEW_SQL);
+          d.exec(V78_CREATE_MEMBERS_NEW_SQL);
+          const links = d.prepare(V78_COPY_LINKS_SQL).run().changes;
+          const members = d.prepare(V78_COPY_MEMBERS_SQL).run().changes;
+          d.exec(V78_DROP_MEMBERS_SQL);
+          d.exec(V78_DROP_LINKS_SQL);
+          d.exec(V78_RENAME_LINKS_SQL);
+          d.exec(V78_RENAME_MEMBERS_SQL);
+          hostLogger.info(`[v78] rebuilt checklist links, copied ${links} link(s) and ${members} member(s)`);
+        }
+        d.exec(V78_INDEXES_AND_TRIGGER_SQL);
+      },
+    },
   ];
 
   static validateNoDuplicateVersions(migrations: MigrationEntry[]): void {
@@ -2928,6 +2972,20 @@ class DatabaseService implements IDatabaseService {
 
   getAttachmentTextExtractionRow(id: string) {
     return attachmentDb.getAttachmentTextExtractionRow(id);
+  }
+
+  // BACKLOG-3943: OCR second pass — read the row, then a compare-and-set write.
+  getAttachmentOcrRow(id: string) {
+    return attachmentDb.getAttachmentOcrRow(id);
+  }
+
+  compareAndSetAttachmentOcrResult(
+    id: string,
+    text: string,
+    metadataJson: string,
+    expectedMetadata: string | null
+  ) {
+    return attachmentDb.compareAndSetAttachmentOcrResult(id, text, metadataJson, expectedMetadata);
   }
 
   getAttachmentsByEmailId(emailId: string) {

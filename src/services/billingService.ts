@@ -7,11 +7,19 @@
  */
 
 import type {
+  AgentPricesResult,
   OpenBillingPortalResult,
+  OpenBookCallResult,
   PlanSummaryResult,
 } from "@electron/types/billing";
 
-export type { PlanSummary, PlanSummaryResult, AgentPlanState } from "@electron/types/billing";
+export type {
+  AgentMonthPrice,
+  AgentPricesResult,
+  PlanSummary,
+  PlanSummaryResult,
+  AgentPlanState,
+} from "@electron/types/billing";
 
 const UNAVAILABLE: PlanSummaryResult = { unavailable: true };
 
@@ -65,6 +73,24 @@ export const billingService = {
       return await window.api.billing.getPlanSummary();
     } catch {
       return UNAVAILABLE;
+    }
+  },
+
+  /** BACKLOG-3676: the Agent plan monthly price (read fresh, never cached). */
+  async getAgentPrices(): Promise<AgentPricesResult> {
+    try {
+      return await window.api.billing.getAgentPrices();
+    } catch {
+      return { unavailable: true };
+    }
+  },
+
+  /** BACKLOG-3676: open the booking page (main supplies the URL). */
+  async openBookCall(): Promise<OpenBookCallResult> {
+    try {
+      return await window.api.billing.openBookCall();
+    } catch {
+      return { success: false };
     }
   },
 
