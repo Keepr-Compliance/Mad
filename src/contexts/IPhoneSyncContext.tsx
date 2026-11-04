@@ -37,6 +37,12 @@
  * — the macOS opt-in. The source comes from importSourcePolicy
  * `chosenImportSource`, the same rule Settings and the Dashboard use.
  *
+ * BACKLOG-2893 (founder, 2026-11-04): a failed preferences read is NOT "nothing
+ * stored". It changes nothing the user chose: the provider keeps the last known
+ * state (OFF when nothing is known yet), sets `readFailed`, and the Dashboard
+ * shows its "Messages sync paused" banner. `retryRead` re-reads; a later
+ * successful read applies the stored values and clears the flag.
+ *
  * @module contexts/IPhoneSyncContext
  */
 
@@ -83,6 +89,13 @@ export interface IPhoneSyncEnabledContextValue {
    * answer stands for, so an Android answer stops detection immediately.
    */
   applyImportSource: (source: ImportSource) => void;
+  /**
+   * BACKLOG-2893: the last preferences read failed. Nothing it would have
+   * changed was applied; detection stays in the last known state.
+   */
+  readFailed: boolean;
+  /** BACKLOG-2893: re-read the preferences when the last read failed (no-op otherwise). */
+  retryRead: () => Promise<void>;
 }
 
 const IPhoneSyncEnabledContext =
@@ -127,23 +140,39 @@ export function IPhoneSyncProvider({ userId = null, children }: IPhoneSyncProvid
     [prefEnabled, platform, importSource],
   );
 
-  // Read the user's stored preference + import source.
-  useEffect(() => {
-    if (!userId) {
-      // Logged out / pre-onboarding: the source is unknown, which is OFF on
-      // every platform (BACKLOG-3418).
-      applyPrefEnabled(undefined);
-      setImportSource(null);
-      return;
-    }
+  // BACKLOG-2893: whether the last preferences read failed. A ref mirrors it so
+  // `retryRead` can decide without re-creating its callback.
+  const [readFailed, setReadFailed] = useState(false);
+  const readFailedRef = useRef(false);
+  const applyReadFailed = useCallback((next: boolean) => {
+    readFailedRef.current = next;
+    setReadFailed(next);
+  }, []);
+  // BACKLOG-2893: each read takes a number; only the newest one may apply its
+  // result (an effect run and a retry can be in flight together).
+  const readSeqRef = useRef(0);
 
-    let cancelled = false;
-    const liveSourceChangesAtStart = liveSourceChangesRef.current;
-
-    (async () => {
+  /**
+   * Read the user's stored preference + import source and apply them. A failed
+   * read applies nothing (BACKLOG-2893) and sets `readFailed`.
+   */
+  const readPreferences = useCallback(
+    async (uid: string, isCancelled: () => boolean): Promise<void> => {
+      const seq = ++readSeqRef.current;
+      const stale = () => isCancelled() || seq !== readSeqRef.current;
+      const liveSourceChangesAtStart = liveSourceChangesRef.current;
       try {
-        const prefsRes = await settingsService.getPreferences(userId);
-        const prefs = prefsRes.success ? prefsRes.data : undefined;
+        const prefsRes = await settingsService.getPreferences(uid);
+        if (!prefsRes.success) {
+          if (stale()) return;
+          applyReadFailed(true);
+          logger.warn(
+            "[IPhoneSyncProvider] Preferences read failed; keeping the last known iPhone sync state",
+            prefsRes.error,
+          );
+          return;
+        }
+        const prefs = prefsRes.data;
 
         const storedPref =
           typeof prefs?.integrations?.iphoneSyncEnabled === "boolean"
@@ -160,29 +189,52 @@ export function IPhoneSyncProvider({ userId = null, children }: IPhoneSyncProvid
         const source = await loadChosenImportSource(
           prefs,
           platform === "macos",
-          () => settingsService.getPhoneType(userId),
+          () => settingsService.getPhoneType(uid),
         );
 
-        if (cancelled) return;
+        if (stale()) return;
         applyPrefEnabled(storedPref);
         // A live source change since this read began is newer than the read.
         if (liveSourceChangesRef.current === liveSourceChangesAtStart) {
           setImportSource(source);
         }
+        applyReadFailed(false);
       } catch (err) {
-        if (!cancelled) {
-          logger.warn(
-            "[IPhoneSyncProvider] Failed to resolve iPhone sync enablement; source stays unknown (detection off)",
-            err,
-          );
-        }
+        if (stale()) return;
+        applyReadFailed(true);
+        logger.warn(
+          "[IPhoneSyncProvider] Failed to resolve iPhone sync enablement; keeping the last known state",
+          err,
+        );
       }
-    })();
+    },
+    [platform, applyPrefEnabled, applyReadFailed],
+  );
 
+  // Read on sign-in (and on a platform change).
+  useEffect(() => {
+    if (!userId) {
+      // Logged out / pre-onboarding: the source is unknown, which is OFF on
+      // every platform (BACKLOG-3418). Any read still in flight is now stale.
+      readSeqRef.current += 1;
+      applyPrefEnabled(undefined);
+      setImportSource(null);
+      applyReadFailed(false);
+      return;
+    }
+
+    let cancelled = false;
+    void readPreferences(userId, () => cancelled);
     return () => {
       cancelled = true;
     };
-  }, [userId, platform, applyPrefEnabled]);
+  }, [userId, readPreferences, applyPrefEnabled, applyReadFailed]);
+
+  // BACKLOG-2893: the Dashboard banner's Retry (and its manual sync) call this.
+  const retryRead = useCallback(async (): Promise<void> => {
+    if (!userId || !readFailedRef.current) return;
+    await readPreferences(userId, () => false);
+  }, [userId, readPreferences]);
 
   // Live-toggle: optimistic state update (starts/stops detection immediately via
   // the hook's `enabled` dependency) then persist. Revert on persistence failure.
@@ -215,8 +267,8 @@ export function IPhoneSyncProvider({ userId = null, children }: IPhoneSyncProvid
   const sync = useIPhoneSync(enabled);
 
   const enabledValue = useMemo<IPhoneSyncEnabledContextValue>(
-    () => ({ enabled, setIphoneSyncEnabled, applyImportSource }),
-    [enabled, setIphoneSyncEnabled, applyImportSource],
+    () => ({ enabled, setIphoneSyncEnabled, applyImportSource, readFailed, retryRead }),
+    [enabled, setIphoneSyncEnabled, applyImportSource, readFailed, retryRead],
   );
 
   return (
@@ -260,6 +312,8 @@ export function useIPhoneSyncEnabled(): IPhoneSyncEnabledContextValue {
       enabled: false,
       setIphoneSyncEnabled: async () => {},
       applyImportSource: () => {},
+      readFailed: false,
+      retryRead: async () => {},
     };
   }
   return ctx;

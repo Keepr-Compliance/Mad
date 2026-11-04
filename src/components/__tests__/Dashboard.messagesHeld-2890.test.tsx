@@ -90,7 +90,8 @@ describe("Dashboard Messages-held banner (BACKLOG-2890)", () => {
     const banner = screen.getByTestId("messages-held-banner");
     expect(banner).toHaveTextContent("Messages sync paused");
     expect(banner).toHaveTextContent(
-      "Keepr couldn't read your messages settings, so Messages were not synced. It retries on the next sync.",
+      // BACKLOG-2893: platform-neutral copy (founder, 2026-11-04) replaced the 2890 text.
+      "Keepr couldn't read your messages settings, so syncing is paused. Check your connection, then Retry.",
     );
     // Not dismissible: the only button is Retry.
     expect(banner.querySelectorAll("button")).toHaveLength(1);
