@@ -44,16 +44,26 @@ export interface LearnScore {
   matchedNeutral: number;
   /** Detections matching no hand-entered or rejected deal. */
   unmatched: number;
+  /** Distinct unmatched deals (addressKey) the cleanup pass can ask about. */
+  unmatchedDeals: number;
+  /** Unmatched detections with no addressKey: never asked, own count. */
+  unaskable: number;
+  /** Cleanup answers, per distinct deal key (not per detection). */
   cleanupYes: number;
   cleanupNo: number;
   cleanupUnanswered: number;
 
   positives: number;
+  /** Positives that are 'manual' rows created before 2.33.0 (subset of positives). */
+  legacyManualPositives: number;
   found: number;
   missed: number;
 
   recall: Rate;
   recallWithCleanupYes: Rate;
+  /** Same two rates with the pre-2.33.0 'manual' rows left out of the answer key. */
+  recallExcludingLegacy: Rate;
+  recallWithCleanupYesExcludingLegacy: Rate;
   precisionBeforeCleanup: Rate;
   precisionAfterCleanup: Rate;
 
@@ -141,8 +151,12 @@ export function scoreRun(
   let knownWrong = 0;
   let unmatched = 0;
   let matchedNeutral = 0;
-  let cleanupYes = 0;
-  let cleanupNo = 0;
+  let yesDetections = 0;
+  let noDetections = 0;
+  let unaskable = 0;
+  const unmatchedKeys = new Set<string>();
+  const yesKeys = new Set<string>();
+  const noKeys = new Set<string>();
   const side = { correct: 0, wrong: 0, notPredicted: 0, skipped: 0 };
   const outcome = { scorable: 0, skipped: 0, predicted: 0 };
 
@@ -162,14 +176,29 @@ export function scoreRun(
     } else {
       unmatched += 1;
       if (c.neutral) matchedNeutral += 1;
-      const answer = c.detection.addressKey ? answerByKey.get(c.detection.addressKey) : undefined;
-      if (answer === "yes") cleanupYes += 1;
-      else if (answer === "no") cleanupNo += 1;
+      const k = c.detection.addressKey;
+      if (k) unmatchedKeys.add(k);
+      else unaskable += 1;
+      const answer = k ? answerByKey.get(k) : undefined;
+      if (answer === "yes") {
+        yesDetections += 1;
+        yesKeys.add(k as string);
+      } else if (answer === "no") {
+        noDetections += 1;
+        noKeys.add(k as string);
+      }
     }
   }
 
-  const found = key.positives.filter((p) => run.detections.some((d) => isSameDeal(d, p))).length;
+  const foundOf = (list: KeyedTransaction[]) =>
+    list.filter((p) => run.detections.some((d) => isSameDeal(d, p))).length;
+  const nonLegacy = key.positives.filter((p) => !p.legacyManual);
+  const found = foundOf(key.positives);
+  const foundNonLegacy = foundOf(nonLegacy);
   const positives = key.positives.length;
+  // Recall counts deals: one deal split into two keys by groupByProperty is one Yes.
+  const cleanupYes = yesKeys.size;
+  const cleanupNo = noKeys.size;
   const detections = run.detections.length;
 
   let realEstate = 0;
@@ -218,16 +247,24 @@ export function scoreRun(
     knownWrong,
     matchedNeutral,
     unmatched,
+    unmatchedDeals: unmatchedKeys.size,
+    unaskable,
     cleanupYes,
     cleanupNo,
-    cleanupUnanswered: unmatched - cleanupYes - cleanupNo,
+    cleanupUnanswered: unmatchedKeys.size - cleanupYes - cleanupNo,
     positives,
+    legacyManualPositives: key.legacyManualPositives,
     found,
     missed: positives - found,
     recall: rate(found, positives),
     recallWithCleanupYes: rate(found + cleanupYes, positives + cleanupYes),
+    recallExcludingLegacy: rate(foundNonLegacy, nonLegacy.length),
+    recallWithCleanupYesExcludingLegacy: rate(foundNonLegacy + cleanupYes, nonLegacy.length + cleanupYes),
     precisionBeforeCleanup: rate(trueDetections, detections),
-    precisionAfterCleanup: rate(trueDetections + cleanupYes, trueDetections + cleanupYes + cleanupNo + knownWrong),
+    precisionAfterCleanup: rate(
+      trueDetections + yesDetections,
+      trueDetections + yesDetections + noDetections + knownWrong,
+    ),
     side,
     outcome,
     bulk: {
@@ -253,11 +290,13 @@ export function formatCopyBlock(s: LearnScore): string {
     `Keepr Learn mode score (rules v${s.ruleVersion})`,
     `Window: ${s.windowMonths} months, ${s.earliestDay ?? "-"} to ${s.latestDay ?? "-"}`,
     `Emails scanned: ${s.rowsScanned}; without a sent date: ${s.nullSentAt}`,
-    `Deals in key: manual ${s.buckets.manual}, auto ${s.buckets.auto}, hybrid ${s.buckets.hybrid}, rejected ${s.buckets.rejected}; outside the mail window: ${s.labelsWithoutLocalMail}`,
-    `Detections: ${s.detections}; true ${s.trueDetections}; known wrong ${s.knownWrong}; unmatched ${s.unmatched} (cleanup yes ${s.cleanupYes}, no ${s.cleanupNo}, unanswered ${s.cleanupUnanswered})`,
+    `Deals in key: manual ${s.buckets.manual} (of which created before 2.33.0, possibly auto-detected: ${s.legacyManualPositives} in the mail window), auto ${s.buckets.auto}, hybrid ${s.buckets.hybrid}, rejected ${s.buckets.rejected}; outside the mail window: ${s.labelsWithoutLocalMail}`,
+    `Detections: ${s.detections}; true ${s.trueDetections}; known wrong ${s.knownWrong}; unmatched ${s.unmatched} = ${s.unmatchedDeals} deals + ${s.unaskable} without a key (cleanup yes ${s.cleanupYes}, no ${s.cleanupNo}, unanswered ${s.cleanupUnanswered})`,
     `Deals found: ${s.found}; missed: ${s.missed}`,
     `Recall: ${fmt(s.recall)}`,
     `Recall with cleanup Yes: ${fmt(s.recallWithCleanupYes)}`,
+    `Recall without pre-2.33.0 manual deals: ${fmt(s.recallExcludingLegacy)}`,
+    `Recall with cleanup Yes, without pre-2.33.0 manual deals: ${fmt(s.recallWithCleanupYesExcludingLegacy)}`,
     `Precision before cleanup: ${fmt(s.precisionBeforeCleanup)}`,
     `Precision after cleanup: ${fmt(s.precisionAfterCleanup)}`,
     `Side: correct ${s.side.correct}, wrong ${s.side.wrong}, not predicted ${s.side.notPredicted}, skipped ${s.side.skipped}`,

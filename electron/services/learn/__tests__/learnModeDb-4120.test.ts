@@ -88,6 +88,7 @@ jest.mock("../../transactionService", () => {
 import { getLastRun, runBaseline0, setLastRun, toPublicRunSummary, type LearnRunProgress } from "../baselineRunner";
 import { answerCleanupQuestion, nextCleanupQuestion } from "../cleanupPass";
 import { answerBulkQuestion, ensureBulkSample, nextBulkQuestion } from "../bulkSample";
+import { buildAnswerKey } from "../answerKey";
 import { scoreRun } from "../scoring";
 import {
   getLearnModeEnabled,
@@ -300,6 +301,30 @@ describe("C12 bulk sample key survives a force re-cache", () => {
     const q = nextBulkQuestion(USER)!;
     expect(answerBulkQuestion(USER, q.rowId, "person")).toBe(false);
     expect(answerBulkQuestion(OTHER, q.rowId, "skip")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("answer key reads one user's transactions, with created_at", () => {
+  it("another user's manual deal at the same address is not in the key or the positives", async () => {
+    seedDeal("t-mine", CANARY_ADDRESS);
+    run(`INSERT INTO transactions (id, user_id, property_address) VALUES (?, ?, ?)`, "t-theirs", OTHER, CANARY_ADDRESS);
+    run(`INSERT INTO transactions (id, user_id, property_address) VALUES (?, ?, ?)`, "t-theirs-2", OTHER, "77 Canarytest Way, Testville, ZZ 00000");
+    expect(all(`SELECT id FROM transactions`)).toHaveLength(3);
+    const rows = listAnswerKeyTransactions(USER);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].property_address).toBe(CANARY_ADDRESS);
+    expect(buildAnswerKey(rows, { firstMs: NOW - 1e9, lastMs: NOW }).positives).toHaveLength(1);
+    expect(listAnswerKeyTransactions(OTHER)).toHaveLength(2);
+  });
+
+  it("created_at is returned, and a pre-2.33.0 manual row is split out of the positives count", () => {
+    seedDeal("t-old", CANARY_ADDRESS, { created_at: "2026-08-01 10:00:00" });
+    seedDeal("t-new", "77 Canarytest Way, Testville, ZZ 00000");
+    const rows = listAnswerKeyTransactions(USER);
+    expect(rows.find((r) => r.property_address === CANARY_ADDRESS)?.created_at).toBe("2026-08-01 10:00:00");
+    const k = buildAnswerKey(rows, { firstMs: NOW - 1e9, lastMs: NOW });
+    expect([k.positives.length, k.legacyManualPositives]).toEqual([2, 1]);
   });
 });
 

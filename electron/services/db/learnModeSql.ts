@@ -184,7 +184,8 @@ export const ANSWER_KEY_TRANSACTIONS_SQL = sql`
          COALESCE(detection_source, 'manual') AS detection_source,
          COALESCE(detection_status, 'confirmed') AS detection_status,
          started_at,
-         closed_at
+         closed_at,
+         created_at
   FROM transactions
   WHERE user_id = ?
 `;

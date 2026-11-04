@@ -13,7 +13,7 @@
 import transactionExtractorService from "../../transactionExtractorService";
 import { wilsonInterval } from "../wilson";
 import { addressKey, isSameDeal, sameStreet, streetKey } from "../dealMatcher";
-import { buildAnswerKey, bucketOf, outcomeOf, sideOf } from "../answerKey";
+import { AUTO_DETECT_PROVENANCE_CUTOFF_MS, buildAnswerKey, bucketOf, createdAtMs, outcomeOf, sideOf } from "../answerKey";
 import { cleanupCandidates, formatCopyBlock, scoreRun } from "../scoring";
 import type { AnswerKeyRow } from "../../db/learnModeDbService";
 import type { LearnRunResult } from "../baselineRunner";
@@ -31,6 +31,7 @@ function keyRow(over: Partial<AnswerKeyRow> = {}): AnswerKeyRow {
     detection_status: "confirmed",
     started_at: null,
     closed_at: null,
+    created_at: null,
     ...over,
   };
 }
@@ -136,6 +137,75 @@ describe("C3 match rule on real analyzeEmail output", () => {
     const tx = { property_address: TX, property_zip: "00000", started_at: null, closed_at: null };
     expect(isSameDeal(d, tx)).toBe(true);
     expect(isSameDeal(d, { ...tx, started_at: "2025-01-01", closed_at: "2025-02-01" })).toBe(false);
+  });
+
+  it("partial overlap matches: mail starts before the deal was entered, or runs past its close", () => {
+    const address = extracted(shapes.withCommas);
+    const tx = { property_address: TX, property_zip: "00000", started_at: "2026-03-05", closed_at: "2026-04-30" };
+    // mail 2026-02-19 .. 2026-03-11 : starts before started_at, ends inside the window
+    expect(isSameDeal({ address, firstMs: T0 - 10 * DAY, lastMs: T0 + 10 * DAY }, tx)).toBe(true);
+    // mail 2026-04-20 .. 2026-05-20 : starts inside, ends after closed_at
+    const apr20 = Date.UTC(2026, 3, 20, 12);
+    expect(isSameDeal({ address, firstMs: apr20, lastMs: apr20 + 30 * DAY }, tx)).toBe(true);
+    // fully before the window -> no match
+    expect(isSameDeal({ address, firstMs: T0 - 20 * DAY, lastMs: T0 - 10 * DAY }, tx)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("C2b manual rows created before 2.33.0 are reported separately", () => {
+  const CUT = AUTO_DETECT_PROVENANCE_CUTOFF_MS;
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const win = { firstMs: T0, lastMs: T0 + DAY };
+
+  it("cutoff is the v2.33.0 commit instant, 2026-08-31T07:20:25Z", () => {
+    expect(iso(CUT)).toBe("2026-08-31T07:20:25.000Z");
+  });
+
+  it("created_at parses as SQLite CURRENT_TIMESTAMP (UTC) and as ISO; junk and NULL are unknown", () => {
+    expect(createdAtMs("2026-08-31 07:20:25")).toBe(CUT);
+    expect(createdAtMs("2026-08-31T07:20:25.000Z")).toBe(CUT);
+    expect(createdAtMs("2026-08-31T01:20:25-06:00")).toBe(CUT);
+    expect(createdAtMs(null)).toBeNull();
+    expect(createdAtMs("not a date")).toBeNull();
+  });
+
+  it("boundary: 1 s before the cutoff is legacy, the cutoff itself and after are not, NULL is not", () => {
+    const rows = [
+      keyRow({ property_address: "1 Canarytest Way, Testville, ZZ 00000", created_at: iso(CUT - 1000) }),
+      keyRow({ property_address: "2 Canarytest Way, Testville, ZZ 00000", created_at: iso(CUT) }),
+      keyRow({ property_address: "3 Canarytest Way, Testville, ZZ 00000", created_at: iso(CUT + 1000) }),
+      keyRow({ property_address: "4 Canarytest Way, Testville, ZZ 00000", created_at: null }),
+    ];
+    const k = buildAnswerKey(rows, win);
+    expect(k.positives.map((p) => p.legacyManual)).toEqual([true, false, false, false]);
+    expect(k.legacyManualPositives).toBe(1);
+  });
+
+  it("an auto row created before the cutoff is not a legacy-manual positive", () => {
+    const k = buildAnswerKey([keyRow({ detection_source: "auto", created_at: iso(CUT - 1000) })], win);
+    expect(k.positives).toHaveLength(0);
+    expect(k.legacyManualPositives).toBe(0);
+  });
+
+  it("recall is reported with and without the pre-2.33.0 manual rows", () => {
+    const rows = [
+      keyRow({ property_address: "10 Canarytest Way, Testville, ZZ 00000", created_at: "2026-08-01 10:00:00" }), // legacy, found
+      keyRow({ property_address: "20 Canarytest Way, Testville, ZZ 00000", created_at: "2026-10-01 10:00:00" }), // found
+      keyRow({ property_address: "30 Canarytest Way, Testville, ZZ 00000", created_at: "2026-10-02 10:00:00" }), // missed
+    ];
+    const s4 = scoreRun(
+      run([det("d1", "10 canarytest way, testville, zz 00000"), det("d2", "20 canarytest way, testville, zz 00000")]),
+      rows,
+      [],
+      [],
+    );
+    expect([s4.positives, s4.legacyManualPositives]).toEqual([3, 1]);
+    expect([s4.recall.k, s4.recall.n]).toEqual([2, 3]);
+    expect([s4.recallExcludingLegacy.k, s4.recallExcludingLegacy.n]).toEqual([1, 2]);
+    const text = formatCopyBlock(s4);
+    expect(text).toContain("created before 2.33.0, possibly auto-detected: 1");
+    expect(text).toContain("Recall without pre-2.33.0 manual deals: 1/2");
   });
 });
 
@@ -243,6 +313,25 @@ describe("scoring arithmetic", () => {
     expect([dup.trueDetections, dup.found, dup.missed]).toEqual([2, 1, 0]);
     expect([dup.recall.k, dup.recall.n]).toEqual([1, 1]);
     expect([dup.precisionBeforeCleanup.k, dup.precisionBeforeCleanup.n]).toEqual([2, 2]);
+  });
+
+  it("one deal split into two detections, one cleanup Yes: counts ONE deal in recall, per-detection in precision", () => {
+    // Both addresses are real analyzeEmail output (C3 shapes) and share one addressKey.
+    const withCommas = extracted("Offer accepted on 4120 Canarytest Lane, Testville, ZZ 00000. Escrow closing, buyer.");
+    const commaLess = extracted("Offer accepted on 4120 Canarytest Lane Testville ZZ 00000 closing escrow buyer");
+    expect(addressKey(withCommas)).toBe(addressKey(commaLess));
+    const yes = [{ address_key: addressKey(withCommas) as string, answer: "yes" as const, rule_version: 1 }];
+    const s2 = scoreRun(run([det("d1", withCommas), det("d2", commaLess)]), [], yes, []);
+    expect([s2.unmatched, s2.unmatchedDeals, s2.unaskable]).toEqual([2, 1, 0]);
+    expect([s2.cleanupYes, s2.cleanupNo, s2.cleanupUnanswered]).toEqual([1, 0, 0]);
+    expect([s2.recallWithCleanupYes.k, s2.recallWithCleanupYes.n]).toEqual([1, 1]);
+    expect([s2.precisionAfterCleanup.k, s2.precisionAfterCleanup.n]).toEqual([2, 2]);
+  });
+
+  it("an unmatched detection with no addressKey is its own count, not 'unanswered'", () => {
+    const noKey = { ...det("d1", "x"), addressKey: null };
+    const s3 = scoreRun(run([noKey]), [], [], []);
+    expect([s3.unmatched, s3.unmatchedDeals, s3.unaskable, s3.cleanupUnanswered]).toEqual([1, 0, 1, 0]);
   });
 
   it("cleanup candidates = unmatched detections only", () => {

@@ -45,6 +45,8 @@ export interface AnswerKeyRow {
   detection_status: string;
   started_at: string | null;
   closed_at: string | null;
+  /** transactions.created_at (CURRENT_TIMESTAMP default, or ISO from a writer). */
+  created_at: string | null;
 }
 
 export interface DealAnswerRow {
