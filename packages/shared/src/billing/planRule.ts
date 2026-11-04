@@ -50,8 +50,22 @@ export function modeAllowsTestFlag(mode: StripeMode, isTest: boolean): boolean {
 // "Ending" is read from cancel_at_period_end only: Stripe sets canceled_at as
 // soon as a period-end cancel is requested, while the plan is still active (F5).
 
-/** The personal Agent plan as billing_subscriptions reports it (3847). */
-export type AgentPlanState = 'none' | 'active' | 'cancel_pending' | 'payment_failed' | 'support_grant';
+/**
+ * The personal Agent plan as billing_subscriptions reports it (3847).
+ * 'trial' (BACKLOG-3860): a live solo free trial, an override with source 'trial'
+ * whose paid_through is still ahead. An ended trial reads as 'none'.
+ */
+export type AgentPlanState = 'none' | 'active' | 'cancel_pending' | 'payment_failed' | 'support_grant' | 'trial';
+
+/** Every AgentPlanState, for sweeps (BACKLOG-3860 T10). */
+export const AGENT_PLAN_STATES: readonly AgentPlanState[] = [
+  'none',
+  'active',
+  'cancel_pending',
+  'payment_failed',
+  'support_grant',
+  'trial',
+];
 
 export interface AgentSubscriptionRow {
   stripe_subscription_id: string;
@@ -76,10 +90,20 @@ export function pickAgentRow<R extends Pick<AgentSubscriptionRow, 'status'>>(row
   return ROW_PRIORITY.map((st) => rows.find((r) => r.status === st)).find((r): r is R => !!r) ?? null;
 }
 
-/** The grant RPC's non_stripe_override rule: key present and source is not 'stripe'. */
+/**
+ * The grant RPC's non_stripe_override rule: key present and source is neither
+ * 'stripe' nor 'trial' (BACKLOG-3860: a Stripe grant replaces a trial, live or
+ * ended). A missing source counts as null, so a sourceless override is refused.
+ */
 export function isNonStripeOverride(override: UnlimitedOverride | undefined): boolean {
   if (override === undefined) return false;
-  return (override?.source ?? null) !== 'stripe';
+  const source = override?.source ?? null;
+  return source !== 'stripe' && source !== 'trial';
+}
+
+/** BACKLOG-3860: the override was written by the solo free trial (live or ended). */
+export function isTrialOverride(override: UnlimitedOverride | undefined): boolean {
+  return override !== undefined && override !== null && override.source === 'trial';
 }
 
 /** _override_effective: absent/null paid_through -> effective; otherwise an ISO date-time in the future. */
@@ -97,12 +121,17 @@ export function overrideEffective(override: UnlimitedOverride, now: Date): boole
  *   active/trialing, cancel_at_period_end true  -> cancel_pending
  *   past_due / unpaid                           -> payment_failed
  *   none (incl. incomplete, incomplete_expired, canceled):
+ *     trial override, paid_through ahead        -> trial      (BACKLOG-3860)
+ *     trial override, paid_through passed       -> none       (BACKLOG-3860)
  *     non-stripe override present               -> support_grant
  *     otherwise                                 -> none
+ *
+ * `now` decides whether a trial has ended. Callers that hold a clock pass it.
  */
 export function agentPlanState(
   row: Pick<AgentSubscriptionRow, 'status' | 'cancel_at_period_end'> | null,
-  override: UnlimitedOverride | undefined
+  override: UnlimitedOverride | undefined,
+  now: Date = new Date()
 ): AgentPlanState {
   if (row) {
     if (row.status === 'active' || row.status === 'trialing') {
@@ -110,6 +139,7 @@ export function agentPlanState(
     }
     if (row.status === 'past_due' || row.status === 'unpaid') return 'payment_failed';
   }
+  if (isTrialOverride(override)) return overrideEffective(override ?? null, now) ? 'trial' : 'none';
   return isNonStripeOverride(override) ? 'support_grant' : 'none';
 }
 
@@ -398,6 +428,8 @@ export type PlanLineKind =
   | 'payment_failed'
   | 'support_grant'
   | 'support_grant_expired'
+  | 'trial'
+  | 'trial_ended'
   | 'pay_as_you_go'
   | 'no_organization';
 
@@ -484,7 +516,7 @@ export function planLine(input: PlanLineInput): PlanLine {
   }
 
   const row = pickAgentRow(input.rows);
-  const state = agentPlanState(row, input.override);
+  const state = agentPlanState(row, input.override, input.now);
   const fromTestRow = row !== null && input.mode === 'test';
 
   switch (state) {
@@ -505,12 +537,21 @@ export function planLine(input: PlanLineInput): PlanLine {
       const until = longDay(input.override?.paid_through);
       return line('support_grant', until ? `Unlimited support grant until ${until}` : 'Unlimited support grant');
     }
+    case 'trial': {
+      // BACKLOG-3860: a live trial always carries paid_through (the start function refuses without one).
+      const until = longDay(input.override?.paid_through);
+      return line('trial', until ? `Free trial until ${until}` : 'Free trial');
+    }
     case 'none':
     default: {
       if (!input.hasPersonalOrganization && input.rows.length === 0) {
         return line('no_organization', 'No plan (no organization)');
       }
       const credits = typeof input.credits === 'number' ? `, ${input.credits} credits` : '';
+      // BACKLOG-3860: an ended trial reads as none; say so, and never warn "Unlimited is on".
+      if (isTrialOverride(input.override) && !overrideEffective(input.override ?? null, input.now)) {
+        return line('trial_ended', `Free trial (ended), Solo Pay as you go${credits}`);
+      }
       const warning = overrideTurnsUnlimitedOn(input.override, input.now)
         ? 'Unlimited is on, but no open subscription was found'
         : null;

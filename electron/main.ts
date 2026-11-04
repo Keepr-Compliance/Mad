@@ -305,6 +305,7 @@ import { startAttachmentOcr, stopAttachmentOcr } from "./services/ocr/attachment
 import { normalizeOAuthProvider } from "./utils/normalizeOAuthProvider";
 import { buildDeepLinkAuthPayload } from "./utils/deepLinkAuthPayload";
 import { licenseBlockedPayload } from "./utils/deepLinkLicenseBlockedPayload";
+import { deviceLimitPayload } from "./utils/deepLinkDeviceLimitPayload";
 
 // BACKLOG-3432: which installer this build came from, as a derived value only.
 // The Windows one-click installer migrates a prior per-machine install to
@@ -743,12 +744,10 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         Sentry.captureException(new Error("Deep link auth: device limit exceeded"), {
           tags: { component: "deep-link", action: "auth-callback", error_code: "DEVICE_LIMIT" },
         });
-        sendToRenderer("auth:deep-link-device-limit", {
-          accessToken,
-          refreshToken,
-          userId: user.id,
-          licenseStatus,
-        });
+        sendToRenderer(
+          "auth:deep-link-device-limit",
+          deviceLimitPayload(user.id, licenseStatus),
+        );
         focusMainWindow();
         return;
       }

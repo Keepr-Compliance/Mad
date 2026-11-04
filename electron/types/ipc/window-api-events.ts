@@ -18,6 +18,17 @@ export interface DeepLinkLicenseBlockedPayload {
 }
 
 /**
+ * BACKLOG-4046: the payload of the deep-link device-limit event. Exactly the
+ * user id and the two device counts the sign-in screen shows. Built in main by
+ * `deviceLimitPayload()` and narrowed again by the preload bridge.
+ */
+export interface DeepLinkDeviceLimitPayload {
+  userId: string;
+  deviceCount: number;
+  deviceLimit: number;
+}
+
+/**
  * Top-level event listener methods on window.api
  * These are directly on the WindowApi interface (not nested under a sub-object)
  */
@@ -216,16 +227,6 @@ export interface WindowApiEvents {
    * Fired when user authenticates successfully but device registration fails due to limit
    */
   onDeepLinkDeviceLimit: (
-    callback: (data: {
-      accessToken: string;
-      refreshToken: string;
-      userId: string;
-      licenseStatus: {
-        isValid: boolean;
-        licenseType: "trial" | "individual" | "team";
-        deviceCount: number;
-        deviceLimit: number;
-      };
-    }) => void,
+    callback: (data: DeepLinkDeviceLimitPayload) => void,
   ) => () => void;
 }
