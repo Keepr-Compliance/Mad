@@ -16,3 +16,7 @@
 #   S1a  owner path without eligibility (1/2): reds K19
 #   S1b  active field back (1/0): reds K19
 #   M1b  (0/2): reds K11 K12 | M7 (1/1): reds K5 K7 K9 K10 K15 K19 | M8 (1/1): reds K9 K18 P1
+# --- round 2: K20 (viewer cannot remove the view or another grantee; can remove own share), harness only ---
+# fix commit d6d9a5038, migration unchanged. 4087 run.sh 27/27, --with-migration 27/27; 4084 base 19/19.
+#   V1a 3450 remove RPC admits a viewer (1/1): total=27 reds K15 K20 (26/26 green before)
+#   V1b share_remove admits a viewer (1/1):    total=27 reds K15 K20 (26/26 green before)
