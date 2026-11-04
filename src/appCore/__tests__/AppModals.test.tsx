@@ -178,6 +178,7 @@ const createAppStateMock = (
   isAnySyncing: false,
   currentSyncMessage: null,
   triggerRefresh: jest.fn().mockResolvedValue(undefined),
+  messagesSyncHeld: false,
 
   // Modal methods
   openProfile: jest.fn(),
