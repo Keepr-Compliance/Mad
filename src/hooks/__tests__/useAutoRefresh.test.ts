@@ -698,9 +698,9 @@ describe("useAutoRefresh", () => {
           await Promise.resolve();
         });
 
-        expect(mockPreferencesGet).toHaveBeenCalledTimes(1);
         expect(mockRequestSync).toHaveBeenCalledTimes(1);
         expect(mockRequestSync).toHaveBeenCalledWith(['contacts', 'emails'], 'test-user-123');
+        expect(mockPreferencesGet).toHaveBeenCalledTimes(1);
       });
 
       it("not on macOS: a failed read never reports Messages as held", async () => {
