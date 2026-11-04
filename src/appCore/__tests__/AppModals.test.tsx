@@ -9,7 +9,7 @@
  */
 
 import React from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { AppModals } from "../AppModals";
 import type { AppStateMachine } from "../state/types";
@@ -23,7 +23,18 @@ jest.mock("../../components/Settings", () => {
 });
 
 jest.mock("../../components/TransactionList", () => {
-  const MockTransactionList = () => <div data-testid="transactions-modal">Transactions Modal</div>;
+  // BACKLOG-2890: surface the Messages-held props the Transactions view gets.
+  const MockTransactionList = (p: {
+    messagesSyncHeld?: boolean;
+    onRetryMessagesRead?: () => void;
+    onChooseMessagesSource?: () => void;
+  }) => (
+    <div data-testid="transactions-modal" data-held={String(p.messagesSyncHeld)}>
+      Transactions Modal
+      <button data-testid="tl-retry" onClick={() => p.onRetryMessagesRead?.()} />
+      <button data-testid="tl-choose" onClick={() => p.onChooseMessagesSource?.()} />
+    </div>
+  );
   MockTransactionList.displayName = "TransactionList";
   return { __esModule: true, default: MockTransactionList };
 });
@@ -178,6 +189,7 @@ const createAppStateMock = (
   isAnySyncing: false,
   currentSyncMessage: null,
   triggerRefresh: jest.fn().mockResolvedValue(undefined),
+  messagesSyncHeld: false,
 
   // Modal methods
   openProfile: jest.fn(),
@@ -331,6 +343,22 @@ describe("AppModals", () => {
       });
       render(<AppModals app={app} />);
       expect(screen.getByTestId("transactions-modal")).toBeInTheDocument();
+    });
+
+    it("passes messagesSyncHeld, triggerRefresh (Retry) and Settings at Messages (Choose source) to TransactionList (BACKLOG-2890)", () => {
+      const app = createAppStateMock({
+        modalState: createModalState({ showTransactions: true }),
+        currentUser: mockUser,
+        authProvider: "google",
+        isDatabaseInitialized: true,
+        messagesSyncHeld: true,
+      });
+      render(<AppModals app={app} />);
+      expect(screen.getByTestId("transactions-modal")).toHaveAttribute("data-held", "true");
+      fireEvent.click(screen.getByTestId("tl-retry"));
+      expect(app.triggerRefresh).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByTestId("tl-choose"));
+      expect(app.openSettings).toHaveBeenCalledWith("settings-messages");
     });
 
     it("should not render TransactionList when showTransactions is true but no user", () => {

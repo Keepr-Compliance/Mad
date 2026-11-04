@@ -51,6 +51,8 @@ interface DashboardActionProps {
   onDismissSetupPrompt?: () => void;
   /** Callback to trigger a manual sync refresh */
   onTriggerRefresh?: () => void;
+  /** BACKLOG-2890: Mac Messages auto-sync is held after a failed preferences read */
+  messagesSyncHeld?: boolean;
   /** Callback when user selects a pending transaction to review */
   onSelectPendingTransaction?: (transaction: Transaction) => void;
   /** Callback to open Settings modal. Pass a scrollTarget to scroll to a specific section. */
@@ -85,6 +87,7 @@ function Dashboard({
   onContinueSetup,
   onDismissSetupPrompt,
   onTriggerRefresh,
+  messagesSyncHeld = false,
   onSelectPendingTransaction,
   onOpenSettings,
   onOpenTransaction,
@@ -260,6 +263,18 @@ function Dashboard({
             actionText="Upgrade"
             onAction={() => void billingService.openPortal()}
             testId="transaction-limit-banner"
+          />
+        )}
+
+        {/* BACKLOG-2890: Mac Messages held after a failed preferences read */}
+        {messagesSyncHeld && (
+          <AlertBanner
+            icon={AlertIcons.warning}
+            title="Messages sync paused"
+            description="Keepr couldn't read your messages settings, so Messages were not synced. It retries on the next sync."
+            actionText="Retry"
+            onAction={() => onTriggerRefresh?.()}
+            testId="messages-held-banner"
           />
         )}
 

@@ -38,11 +38,13 @@ jest.mock("../../components/Dashboard", () => {
     onSyncPhone,
     onSyncAndroid,
     onOpenSettings,
+    messagesSyncHeld,
   }: {
     showSetupPrompt?: boolean;
     onSyncPhone?: () => void;
     onSyncAndroid?: () => void;
     onOpenSettings?: (target?: string) => void;
+    messagesSyncHeld?: boolean;
   }) => (
     <div data-testid="dashboard-component">
       Dashboard
@@ -50,6 +52,8 @@ jest.mock("../../components/Dashboard", () => {
       {/* BACKLOG-2320: surface which sync entry points the router passed down */}
       {onSyncPhone && <div data-testid="dashboard-onSyncPhone" />}
       {onSyncAndroid && <div data-testid="dashboard-onSyncAndroid" />}
+      {/* BACKLOG-2890: the Messages-held flag the router passed down */}
+      {messagesSyncHeld && <div data-testid="dashboard-messagesSyncHeld" />}
       {/* BACKLOG-3964: the sync warning's "open Settings at the import filters" */}
       <button data-testid="dashboard-open-settings-at" onClick={() => onOpenSettings?.("settings-import-filters")} />
     </div>
@@ -204,6 +208,7 @@ const createAppStateMock = (
   isAnySyncing: false,
   currentSyncMessage: null,
   triggerRefresh: jest.fn().mockResolvedValue(undefined),
+  messagesSyncHeld: false,
 
   // Modal methods
   openProfile: jest.fn(),
@@ -427,6 +432,15 @@ describe("AppRouter", () => {
       expect(app.openSettings).toHaveBeenCalledTimes(1);
       expect(app.openSettings).toHaveBeenCalledWith("settings-import-filters");
     });
+
+    it.each([true, false])(
+      "passes messagesSyncHeld=%s through to the Dashboard (BACKLOG-2890)",
+      (held) => {
+        const app = createAppStateMock({ currentStep: "dashboard", messagesSyncHeld: held });
+        render(<AppRouter app={app} />);
+        expect(screen.queryByTestId("dashboard-messagesSyncHeld") !== null).toBe(held);
+      },
+    );
 
     it("should render Dashboard when step is dashboard", () => {
       const app = createAppStateMock({ currentStep: "dashboard" });

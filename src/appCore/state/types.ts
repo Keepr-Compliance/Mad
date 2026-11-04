@@ -146,6 +146,8 @@ export interface AppStateMachine {
   isAnySyncing: boolean;
   currentSyncMessage: string | null;
   triggerRefresh: () => Promise<void>;
+  /** BACKLOG-2890: Mac Messages auto-sync held after a failed preferences read. */
+  messagesSyncHeld: boolean;
 
   // ============================================
   // SEMANTIC MODAL TRANSITIONS
