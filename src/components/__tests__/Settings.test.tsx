@@ -992,23 +992,24 @@ describe("Settings", () => {
       ).toBeInTheDocument();
     });
 
-    it("should default to off (disabled)", async () => {
+    // BACKLOG-3469: unset means ON (the updater downloads automatically).
+    it("should default to on when never set", async () => {
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
 
       await waitFor(() => {
         const toggle = screen.getByRole("switch", {
           name: /auto-download updates/i,
         });
-        expect(toggle).toHaveAttribute("aria-checked", "false");
+        expect(toggle).toHaveAttribute("aria-checked", "true");
       });
     });
 
-    it("should load saved auto-download preference", async () => {
+    it("should load a saved OFF auto-download preference", async () => {
       jest.mocked(window.api.preferences.get).mockResolvedValue({
         success: true,
         preferences: {
           export: { defaultFormat: "combined-pdf" },
-          updates: { autoDownload: true },
+          updates: { autoDownload: false },
         },
       });
 
@@ -1018,7 +1019,7 @@ describe("Settings", () => {
         const toggle = screen.getByRole("switch", {
           name: /auto-download updates/i,
         });
-        expect(toggle).toHaveAttribute("aria-checked", "true");
+        expect(toggle).toHaveAttribute("aria-checked", "false");
       });
     });
 
@@ -1036,8 +1037,9 @@ describe("Settings", () => {
       });
       await userEvent.click(toggle);
 
+      // Default ON, so the first click turns it OFF.
       expect(window.api.preferences.update).toHaveBeenCalledWith(mockUserId, {
-        updates: { autoDownload: true },
+        updates: { autoDownload: false },
       });
     });
 
