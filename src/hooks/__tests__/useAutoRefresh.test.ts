@@ -668,14 +668,18 @@ describe("useAutoRefresh", () => {
         expect(result.current.messagesSyncHeld).toBe(false);
       });
 
-      // The dashboard auto-trigger does not re-read: a successful re-read there
-      // changes state, re-runs the auto-trigger effect and sets its abort flag,
-      // so that run would request nothing at all.
-      it("read throws at load: the dashboard auto-trigger still syncs contacts and emails", async () => {
+      // The dashboard auto-trigger does not re-read. A successful re-read there
+      // changes state; the render that follows re-runs the auto-trigger effect,
+      // whose cleanup sets the abort flag, and the run returns before
+      // requestSync. The live connection check is held open across a render
+      // here (as an IPC round-trip is in the app) so that order is reproduced.
+      it("read throws at load: the dashboard auto-trigger does not re-read and still syncs contacts and emails", async () => {
         (usePlatform as jest.Mock).mockReturnValue({ isMacOS: true });
         mockPreferencesGet
           .mockRejectedValueOnce(new Error("offline"))
           .mockResolvedValue({ success: true, preferences: { messages: { source: 'macos-native' } } });
+        let releaseCheck: (v: unknown) => void = () => undefined;
+        mockCheckAllConnections.mockImplementation(() => new Promise((r) => { releaseCheck = r; }));
 
         renderHook(() => useAutoRefresh(defaultOptions));
         await settle();
@@ -683,9 +687,18 @@ describe("useAutoRefresh", () => {
           jest.advanceTimersByTime(1500);
           await Promise.resolve();
           await Promise.resolve();
+        });
+        await act(async () => {
+          releaseCheck({
+            success: true,
+            google: { connected: true, error: null },
+            microsoft: { connected: true, error: null },
+          });
+          await Promise.resolve();
           await Promise.resolve();
         });
 
+        expect(mockPreferencesGet).toHaveBeenCalledTimes(1);
         expect(mockRequestSync).toHaveBeenCalledTimes(1);
         expect(mockRequestSync).toHaveBeenCalledWith(['contacts', 'emails'], 'test-user-123');
       });
