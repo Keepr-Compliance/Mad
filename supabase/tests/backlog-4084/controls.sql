@@ -177,7 +177,7 @@ BEGIN
       FROM generate_series(1, 3) x
     ON CONFLICT (id) DO NOTHING;
     INSERT INTO public.internal_roles (user_id, role_id)
-    SELECT u, (SELECT ar.id FROM public.admin_roles ar ORDER BY ar.slug LIMIT 1) FROM unnest(ARRAY[A, B]) u;
+    SELECT u, (SELECT ar.id FROM public.admin_roles ar WHERE ar.name = 'Support Supervisor') FROM unnest(ARRAY[A, B]) u;
 
     INSERT INTO public.report_saved_views (id, user_id, report_key, name, filters, metric, pinned) VALUES
       (pg_temp.fx(21), A, r1, 'A one', '{"period":{"key":"month"}}', '{"col":"rows","fn":"count"}', false),
