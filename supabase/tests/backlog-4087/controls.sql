@@ -316,6 +316,20 @@ BEGIN
       AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(s3::jsonb) x WHERE x ? 'active'),
       s || ' | rm=' || s2 || ' n=' || n || ' | ' || left(s3, 120)));
 
+    -- ===== K20: a VIEWER cannot remove the view or another grantee, and can still remove their own share =====
+    -- C is a viewer and B an editor on V. C's own share is put back at the end so later controls see the same state.
+    s := pg_temp.call_as(uC, format('SELECT public.report_delete_saved_view(%L::uuid)', V));
+    s2 := pg_temp.call_as(uC, format('SELECT public.report_share_remove(%L::uuid, %L::uuid)', V, uB));
+    ok := EXISTS (SELECT 1 FROM public.report_saved_views WHERE id = V)
+          AND EXISTS (SELECT 1 FROM public.report_saved_view_shares WHERE view_id = V AND user_id = uB AND role = 'editor');
+    s3 := pg_temp.call_as(uC, format('SELECT public.report_share_remove(%L::uuid, %L::uuid)', V, uC));
+    n := (SELECT count(*) FROM public.report_saved_view_shares WHERE view_id = V AND user_id = uC);
+    PERFORM pg_temp.call_as(uA, format('SELECT public.report_share_set(%L::uuid, %L::uuid, %L)', V, uC, 'viewer'));
+    r := r || jsonb_build_object('K20_viewer_cannot_remove_view_or_others', pg_temp.pass(
+      s = NF AND s2 = NF AND ok AND s3 NOT LIKE 'ERR%' AND n = 0
+      AND (SELECT role FROM public.report_saved_view_shares WHERE view_id = V AND user_id = uC) = 'viewer',
+      s || ' | ' || s2 || ' | kept=' || ok || ' | self=' || s3 || ' n=' || n));
+
     -- ===== K13: callers without an internal role, and anon =====
     SELECT array_agg(pg_temp.call_as(NULL, format('SELECT to_jsonb(%s)', q), 'anon')) INTO msgs FROM unnest(ARRAY[
       format('public.report_list_saved_views(%L)', 'p4087'),

@@ -58,6 +58,10 @@ MUT = {
   'S1a_owner_path_no_eligibility': [("  IF v_owner_id IS NOT NULL AND v_owner_id = v_caller_id\n     AND public._report_share_eligible(v_caller_id) THEN", "  IF v_owner_id IS NOT NULL AND v_owner_id = v_caller_id THEN")],
   # S1b: the active field returns on the owner path
   'S1b_active_field_back': [("      'role', s.role,\n      'created_at', s.created_at\n    ) ORDER BY u.display_name", "      'role', s.role,\n      'active', public._report_share_eligible(s.user_id),\n      'created_at', s.created_at\n    ) ORDER BY u.display_name")],
+  # V1a: the 3450 remove RPC also admits a caller holding a viewer share
+  'V1a_remove_view_admits_viewer': [("  WHERE v.id = p_id\n    AND v.user_id = v_caller_id\n  FOR UPDATE;", "  WHERE v.id = p_id\n    AND (v.user_id = v_caller_id OR EXISTS (SELECT 1 FROM report_saved_view_shares s9 WHERE s9.view_id = v.id AND s9.user_id = v_caller_id AND s9.role = 'viewer'))\n  FOR UPDATE;")],
+  # V1b: share_remove also admits a caller holding a viewer share
+  'V1b_share_remove_admits_viewer': [("    AND (v.user_id = v_caller_id OR s.user_id = v_caller_id);", "    AND (v.user_id = v_caller_id OR s.user_id = v_caller_id OR EXISTS (SELECT 1 FROM report_saved_view_shares s9 WHERE s9.view_id = v.id AND s9.user_id = v_caller_id AND s9.role = 'viewer'));")],
   # the shares table is readable by authenticated
   'M11_table_select_granted': [("ALTER TABLE public.report_saved_view_shares ENABLE ROW LEVEL SECURITY;",
                                 "ALTER TABLE public.report_saved_view_shares ENABLE ROW LEVEL SECURITY;\nGRANT SELECT ON public.report_saved_view_shares TO authenticated;")],
