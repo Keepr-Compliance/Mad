@@ -71,7 +71,9 @@ const APP_ALIASES: Array<[string, string]> = [
 
 class UnresolvedAppImport extends Error {}
 
-function resolveFile(base: string): string | null {
+function resolveFile(rawBase: string): string | null {
+  // Normalise: an alias target joined with a "/"-spec has mixed separators on Windows.
+  const base = path.normalize(rawBase);
   for (const c of [base, `${base}.ts`, `${base}.tsx`, `${base}.js`, path.join(base, "index.ts")]) {
     if (fs.existsSync(c) && fs.statSync(c).isFile()) return c;
   }
