@@ -18,7 +18,10 @@
  * requires one) and `pinned: false`.
  */
 
+import { DEFAULT_ANALYTICS_PERIOD } from './analytics-period';
 import { hasExplicitState, resolveInitialView, type SearchParamsLike } from './default-view';
+import { DEFAULT_FUNNEL_PERIOD } from './funnel-period';
+import { DEFAULT_PERIOD } from './period';
 import {
   ANALYTICS_VIEW_PERIODS,
   FUNNEL_VIEW_PERIODS,
@@ -73,6 +76,11 @@ export interface PeriodInput {
 export interface PeriodOnlyViews {
   reportKey: string;
   spec: ViewPeriodSpec;
+  /**
+   * The report's BUILT-IN period (BACKLOG-4121). Clearing a view navigates to
+   * it written out explicitly: a bare URL would re-open the default view.
+   */
+  defaultPeriodKey: string;
   serialize(period: ResolvedPeriodLike): StoredPeriodOnlyFilters;
   parseRows(raw: unknown): PeriodOnlySavedView[];
   /** Is the page showing this view? Never true for a view with no readable period. */
@@ -95,7 +103,7 @@ function paramString(params: SearchParamsLike, key: string): string | undefined 
   return typeof value === 'string' ? value : undefined;
 }
 
-export function createPeriodOnlyViews(reportKey: string, spec: ViewPeriodSpec): PeriodOnlyViews {
+export function createPeriodOnlyViews(reportKey: string, spec: ViewPeriodSpec, defaultPeriodKey: string): PeriodOnlyViews {
   function parseRow(raw: unknown): PeriodOnlySavedView | null {
     if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const row = raw as Record<string, unknown>;
@@ -120,6 +128,7 @@ export function createPeriodOnlyViews(reportKey: string, spec: ViewPeriodSpec): 
   return {
     reportKey,
     spec,
+    defaultPeriodKey,
     serialize: (period) => ({ period: serializeViewPeriod(period) }),
     parseRows,
     isActive: (view, period) => view.period !== null && viewPeriodMatches(view.period, period),
@@ -144,6 +153,6 @@ export function createPeriodOnlyViews(reportKey: string, spec: ViewPeriodSpec): 
   };
 }
 
-export const funnelViews = createPeriodOnlyViews(FUNNEL_REPORT_KEY, FUNNEL_VIEW_PERIODS);
-export const analyticsViews = createPeriodOnlyViews(ANALYTICS_REPORT_KEY, ANALYTICS_VIEW_PERIODS);
-export const supportSlaViews = createPeriodOnlyViews(SUPPORT_SLA_REPORT_KEY, SHARED_VIEW_PERIODS);
+export const funnelViews = createPeriodOnlyViews(FUNNEL_REPORT_KEY, FUNNEL_VIEW_PERIODS, DEFAULT_FUNNEL_PERIOD);
+export const analyticsViews = createPeriodOnlyViews(ANALYTICS_REPORT_KEY, ANALYTICS_VIEW_PERIODS, DEFAULT_ANALYTICS_PERIOD);
+export const supportSlaViews = createPeriodOnlyViews(SUPPORT_SLA_REPORT_KEY, SHARED_VIEW_PERIODS, DEFAULT_PERIOD);

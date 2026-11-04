@@ -13,7 +13,7 @@
 import { useMemo, useState } from 'react';
 import { Dropdown, FilterBar, FilterCaption, PeriodPicker, SavedViews, StatCard, useSortState } from '@keepr/ui';
 import { Search } from 'lucide-react';
-import { PERIOD_OPTIONS, type PeriodKey, type PeriodRange } from '@/lib/reports/period';
+import { DEFAULT_PERIOD, PERIOD_OPTIONS, type PeriodKey, type PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
 import {
   ACTIVE_DEFINITION,
@@ -128,6 +128,13 @@ export function UserActivityReport({
     setVisibleCount(INITIAL_VISIBLE_USERS);
   }
 
+  // Clear the applied view (BACKLOG-4121): empty filters and the built-in
+  // period, written into the URL. Never a bare URL: that re-opens the default view.
+  function clearView() {
+    updateFilters(EMPTY_USER_ACTIVITY_FILTERS);
+    navigateToPeriod(DEFAULT_PERIOD);
+  }
+
   function navigateToPeriod(nextPeriod: string, from?: string, to?: string) {
     const search = typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, '');
     onNavigate?.(buildPeriodUrl(search, nextPeriod, from, to));
@@ -176,6 +183,7 @@ export function UserActivityReport({
             saveHint={USER_ACTIVITY_SAVE_HINT}
             defaultViewId={savedViews.defaultViewId}
             onSetDefault={savedViews.setDefault}
+            onClear={clearView}
           />
         }
       >

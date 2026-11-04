@@ -279,3 +279,21 @@ describe('D1 the server-resolved default seeds the filters', () => {
     expect(viewRow('Agent two default').getAttribute('aria-pressed')).toBe('true');
   });
 });
+
+describe('V1 the applied-view X resets to the built-in state (BACKLOG-4121)', () => {
+  it('on the default view: the chip names it; X shows the unfiltered rows and writes period=week', async () => {
+    mount({ period: LAST_MONTH });
+    await waitFor(() => expect(rowIds().length).toBeGreaterThan(0));
+    const unfiltered = rowIds();
+    cleanup();
+    const { onNavigate } = mount({ period: LAST_MONTH, initialView: AGENT_TWO_DEFAULT });
+    const chip = await screen.findByRole('button', { name: 'Views: Agent two default' });
+    expect(rowIds()).not.toEqual(unfiltered);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear view Agent two default' }));
+    expect(rowIds()).toEqual(unfiltered);
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+    const url = new URLSearchParams((onNavigate.mock.calls[0][0] as string).replace(/^[^?]*\?/, ''));
+    expect(url.get('period')).toBe('week');
+    expect(document.activeElement).toBe(chip);
+  });
+});

@@ -11,7 +11,7 @@
 
 import { useMemo, useState } from 'react';
 import { SavedViews } from '@keepr/ui';
-import type { PeriodRange } from '@/lib/reports/period';
+import { DEFAULT_PERIOD, type PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
 import type { ReportViewsApi } from '@/lib/reports/report-views-api';
 import { useReportSavedViews } from '@/lib/reports/use-report-saved-views';
@@ -240,6 +240,14 @@ export function ExportsReport({
     onNavigate?.(buildPeriodUrl(search, nextPeriod, from, to));
   }
 
+  // Clear the applied view (BACKLOG-4121): empty filters and the built-in
+  // period, written into the URL. Never a bare URL: that re-opens the default view.
+  function clearView() {
+    setRestoreFilters(null);
+    updateFilters(EMPTY_EXPORT_FILTERS);
+    navigateToPeriod(DEFAULT_PERIOD);
+  }
+
   const filterNames = activeFilterNames(filters);
   const caption = `Cards, chart and tables follow the filters: ${period.label}${
     filterNames.length > 0 ? ` · ${filterNames.join(' · ')}` : ' · no other filters'
@@ -269,6 +277,7 @@ export function ExportsReport({
             saveHint={EXPORTS_SAVE_HINT}
             defaultViewId={savedViews.defaultViewId}
             onSetDefault={savedViews.setDefault}
+            onClear={clearView}
             pinning={{ max: MAX_PINNED, onTogglePin: togglePin }}
             saveFields={
               <MetricSaveFields
