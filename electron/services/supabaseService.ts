@@ -11,6 +11,7 @@ import { User, SubscriptionTier, Subscription } from "../types/models";
 import type { AuditLogEntry } from "./auditService";
 import logService from "./logService";
 import sessionService from "./sessionService";
+import { writePreferencesCopy } from "./preferencesMirror";
 import { supabaseNetFetch } from "./supabaseNetFetch";
 
 /**
@@ -1504,6 +1505,8 @@ class SupabaseService {
 
       if (error) throw error;
       logService.info("[Supabase] Preferences synced", "Supabase");
+      // BACKLOG-2824: the cloud accepted this bag; keep it as the local copy.
+      void writePreferencesCopy(userId, preferences, this.getAuthUserId());
     } catch (error) {
       logService.error("[Supabase] Failed to sync preferences:", "Supabase", { error });
       Sentry.captureException(error, {
@@ -1534,7 +1537,11 @@ class SupabaseService {
       throw error;
     }
 
-    return data?.preferences || {};
+    const preferences = data?.preferences || {};
+    // BACKLOG-2824: a successful read refreshes the local copy (an empty bag
+    // too). A failed read threw above and never reaches this line.
+    void writePreferencesCopy(userId, preferences, this.getAuthUserId());
+    return preferences;
   }
 
   // ============================================
