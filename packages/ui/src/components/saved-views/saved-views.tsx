@@ -46,6 +46,13 @@ import type { SavedViewItem, SavedViewsProps } from './types';
  *   meant for a parent (a kit Dialog, a page shortcut).
  * - A pointerdown outside closes WITHOUT moving focus, so the user's click
  *   target keeps it. Tabbing out of the panel closes it.
+ *
+ * Applied-view chip (BACKLOG-4121): with `onClear` set and `activeViewId`
+ * matching a listed view, the trigger shows that view's name (truncated) in
+ * the Dropdown filter-chip style, without the chevron, and its accessible
+ * name is "Views: <name>". A sibling X button ("Clear view <name>") calls
+ * `onClear`, leaves the panel closed and returns focus to the trigger.
+ * Without `onClear`, the trigger is the plain "Views" button.
  */
 type SaveMode = 'view' | 'card';
 
@@ -62,6 +69,7 @@ export function SavedViews<V extends SavedViewItem>({
   onSetDefault,
   pinning,
   saveFields,
+  onClear,
 }: SavedViewsProps<V>) {
   const [open, setOpen] = React.useState(false);
   /** Which save form is open: the plain view save, the card save (pinning only), or none. */
@@ -96,6 +104,10 @@ export function SavedViews<V extends SavedViewItem>({
   // belong to the card form only; without pinning the one form keeps them.
   const showCardDetails = !pinning || saveMode === 'card';
   const roving = Math.min(rovingIndex, Math.max(list.length - 1, 0));
+  // The applied-view chip (BACKLOG-4121): only for an adopter that can clear,
+  // and only while the page matches a listed view. Otherwise the plain
+  // "Views" button, unchanged.
+  const activeView = onClear ? (list.find((v) => v.id === activeViewId) ?? null) : null;
 
   React.useEffect(() => {
     const target = pendingFocus.current;
@@ -239,28 +251,62 @@ export function SavedViews<V extends SavedViewItem>({
 
   return (
     <div ref={wrapperRef} data-slot="saved-views" className="relative" onBlur={onWrapperBlur}>
-      <button
-        ref={triggerRef}
-        type="button"
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        aria-controls={open ? panelId : undefined}
-        onClick={() => (open ? close(false) : openPanel('initial'))}
-        onKeyDown={onTriggerKeyDown}
-        className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500"
-      >
-        <Bookmark className="h-4 w-4" aria-hidden="true" />
-        Views
-        {pinning && pinnedCount > 0 ? (
-          <span
-            data-slot="saved-views-badge"
-            className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-primary-100 px-1 text-xs font-medium text-primary-700"
+      <div className="relative inline-flex">
+        <button
+          ref={triggerRef}
+          type="button"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          aria-controls={open ? panelId : undefined}
+          onClick={() => (open ? close(false) : openPanel('initial'))}
+          onKeyDown={onTriggerKeyDown}
+          className={
+            activeView
+              ? // The Dropdown filter chip, active state (dropdown.tsx filter trigger).
+                'inline-flex items-center gap-1.5 rounded-md border border-primary-300 bg-primary-50 py-1.5 pl-3 pr-7 text-sm text-primary-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500'
+              : 'inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-primary-500'
+          }
+        >
+          <Bookmark className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+          {activeView ? (
+            <>
+              <span className="sr-only">Views: </span>
+              <span data-slot="saved-views-active-name" className="max-w-[12rem] truncate">
+                {activeView.name}
+              </span>
+            </>
+          ) : (
+            'Views'
+          )}
+          {pinning && pinnedCount > 0 ? (
+            <span
+              data-slot="saved-views-badge"
+              className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-primary-100 px-1 text-xs font-medium text-primary-700"
+            >
+              {pinnedCount}
+            </span>
+          ) : null}
+          {activeView ? null : (
+            <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', open && 'rotate-180')} aria-hidden="true" />
+          )}
+        </button>
+        {activeView && onClear ? (
+          // A SIBLING of the trigger, never inside it: a button may not hold another button.
+          <button
+            type="button"
+            data-slot="saved-views-clear"
+            aria-label={`Clear view ${activeView.name}`}
+            onClick={() => {
+              close(false);
+              onClear();
+              triggerRef.current?.focus();
+            }}
+            className="absolute right-2 top-1/2 inline-flex -translate-y-1/2 items-center rounded p-0.5 text-primary-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
           >
-            {pinnedCount}
-          </span>
+            <X className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
         ) : null}
-        <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', open && 'rotate-180')} aria-hidden="true" />
-      </button>
+      </div>
 
       {open ? (
         <div

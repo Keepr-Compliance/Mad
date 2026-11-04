@@ -20,7 +20,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { SavedViews, type SaveViewOptions } from '@keepr/ui';
 import type { IphoneSyncReportModel } from '@/lib/reports/iphone-sync';
-import type { PeriodRange } from '@/lib/reports/period';
+import { DEFAULT_PERIOD, type PeriodRange } from '@/lib/reports/period';
 import {
   activeFilterNames,
   applyFilters,
@@ -326,6 +326,23 @@ export function IphoneSyncReport({
     setStalledOnly(false);
   }
 
+  // Clear the applied view (BACKLOG-4121): empty filters and the built-in
+  // period. The URL is built from the CLEARED state, not the current search
+  // string (it still holds the filters being cleared), and always names the
+  // period: a bare URL re-opens the default view. The card restore point is
+  // forgotten too, or the next card click would bring the old filters back.
+  function clearView() {
+    clearFilters();
+    setRestoreState(null);
+    const params = applyClientState(new URLSearchParams(), {
+      filters: EMPTY_FILTERS,
+      sortKey,
+      sortDirection,
+      stalledOnly: false,
+    });
+    onNavigate?.(buildPeriodUrl(params, DEFAULT_PERIOD));
+  }
+
   const filterNames = activeFilterNames(filters);
   const caption = `Every card, chart and row below follows the filters: ${period.label}${
     filterNames.length > 0 ? ` · ${filterNames.join(' · ')}` : ' · no other filters'
@@ -356,6 +373,7 @@ export function IphoneSyncReport({
             saveHint={IPHONE_SAVE_HINT}
             defaultViewId={savedViews.defaultViewId}
             onSetDefault={savedViews.setDefault}
+            onClear={clearView}
             pinning={{ max: MAX_PINNED, onTogglePin: togglePin }}
             saveFields={
               <MetricSaveFields

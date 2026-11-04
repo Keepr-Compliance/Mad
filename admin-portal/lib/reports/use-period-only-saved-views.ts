@@ -33,6 +33,7 @@ export interface PeriodOnlySavedViewsProps {
   saveHint: string;
   defaultViewId: string | null;
   onSetDefault(view: PeriodOnlySavedView | null): void;
+  onClear(): void;
 }
 
 export function usePeriodOnlySavedViews(
@@ -63,6 +64,13 @@ export function usePeriodOnlySavedViews(
     });
   }
 
+  // Clear the applied view (BACKLOG-4121): the built-in period, written into
+  // the URL even when the page already shows it. A bare URL would re-open the
+  // default view (default-view.ts).
+  function onClear() {
+    navigateToPeriod(views.defaultPeriodKey);
+  }
+
   return {
     views: saved.views,
     loading: saved.loading,
@@ -74,5 +82,6 @@ export function usePeriodOnlySavedViews(
     saveHint: PERIOD_ONLY_SAVE_HINT,
     defaultViewId: saved.defaultViewId,
     onSetDefault: saved.setDefault,
+    onClear,
   };
 }
