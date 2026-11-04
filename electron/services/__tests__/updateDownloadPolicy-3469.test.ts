@@ -101,6 +101,7 @@ import { registerPreferenceHandlers } from "../../handlers/preferenceHandlers";
 import { registerUpdaterHandlers } from "../../handlers/updaterHandlers";
 import { STORE_UPDATES_MESSAGE } from "../selfUpdatePolicy";
 import supabaseService from "../supabaseService";
+import logService from "../logService";
 
 const cloud = supabaseService as jest.Mocked<typeof supabaseService>;
 
@@ -244,6 +245,11 @@ describe("C4 app:download-update", () => {
     const result = await mockHandles["app:download-update"]();
     expect(result).toEqual({ success: true });
     await new Promise((r) => setImmediate(r));
+    expect(logService.warn).toHaveBeenCalledWith(
+      "User-requested update download failed",
+      "UpdaterHandlers",
+      { error: "net" },
+    );
   });
 });
 
