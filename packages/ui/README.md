@@ -132,6 +132,7 @@ navigation arrives as callbacks.
 | `StatCard` | Superset of the design-system `StatCard`: `subtitle`, `footer`, `tone="critical"` (red only for a number above 0), `onClick` + `pressed` toggle, `valueProps`, `purple` hue. |
 | `ShowMoreFooter` | "Showing n of N …" + "Show k more" (k = min(step, remaining)) + "Show all". |
 | `TruncationNotice` | The row-cap notice: names the cap, the period, and "a floor, not a total". |
+| `SavedViews` | The report "Views" button and panel (BACKLOG-4083). Optional `onClear` (BACKLOG-4121): while `activeViewId` matches a listed view, the trigger shows that view's name in the Dropdown filter-chip style (accessible name "Views: <name>", no chevron) and a sibling "Clear view <name>" X calls `onClear` and returns focus to the trigger. Without `onClear` the trigger is the plain "Views" button. |
 | `useReportUrlState`, `readFirst`, `readList`, `readSort`, `writeSort`, `writeParam`, `buildParamUrl` | State mirrored to the query string with `history.replaceState` (never `pushState`); helpers that keep params they do not own. |
 
 **Phone multi-select recipe.** `FilterSelectButton` (value "n selected") opens

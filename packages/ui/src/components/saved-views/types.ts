@@ -63,6 +63,13 @@ export interface SavedViewsProps<V extends SavedViewItem> {
   pinning?: SavedViewsPinning<V>;
   /** Extra fields rendered inside the save form while it is open, e.g. a card's column and function selects. */
   saveFields?: ReactNode;
+  /**
+   * Reset the page to the report's built-in state (BACKLOG-4121). When given
+   * and `activeViewId` matches a listed view, the trigger shows that view's
+   * name and an X button beside it calls this. Absent: the plain "Views"
+   * trigger, no X.
+   */
+  onClear?: () => void;
 }
 
 /**
