@@ -14,6 +14,7 @@
  * same scan finds learnModeSql.ts.
  */
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { execFileSync } from "child_process";
 
@@ -42,13 +43,46 @@ const FORBIDDEN: Array<[string, RegExp]> = [
 const SPEC_RE =
   /(?:^|\n)\s*(?:import(?!\s+type\b)[^'"`;]*?from\s*|import\s*|export(?!\s+type\b)[^'"`;]*?from\s*)["']([^"']+)["']|require\(\s*["']([^"']+)["']\s*\)|import\(\s*["']([^"']+)["']\s*\)/g;
 
-function resolveSpec(fromFile: string, spec: string): string | null {
-  if (!spec.startsWith(".")) return null; // packages are not app modules
-  const base = path.resolve(path.dirname(fromFile), spec);
-  for (const c of [`${base}.ts`, `${base}.tsx`, `${base}.js`, path.join(base, "index.ts"), base]) {
+/**
+ * App path aliases, transcribed from tsconfig.json / tsconfig.electron.json
+ * "paths" (and jest.config.js moduleNameMapper). PR2 (SR 08267f11 should-fix
+ * 4): an alias import is resolved and walked like a relative one, and an
+ * alias-shaped spec that resolves to no file FAILS the walk instead of being
+ * skipped as a package — otherwise an `@electron/...` import of a forbidden
+ * module would be invisible to N3.
+ */
+const APP_ALIASES: Array<[string, string]> = [
+  ["@/", path.join(REPO, "src") + path.sep],
+  ["@electron/", path.join(REPO, "electron") + path.sep],
+  ["@types/", path.join(REPO, "types") + path.sep],
+  ["@keepr/shared/", path.join(REPO, "packages", "shared", "src") + path.sep],
+  ["@keepr/shared", path.join(REPO, "packages", "shared", "src")],
+  ["@keepr/ui", path.join(REPO, "packages", "ui", "src", "index.ts")],
+  ["@keepr/design-system", path.join(REPO, "packages", "design-system", "src", "index.ts")],
+];
+
+class UnresolvedAppImport extends Error {}
+
+function resolveFile(base: string): string | null {
+  for (const c of [base, `${base}.ts`, `${base}.tsx`, `${base}.js`, path.join(base, "index.ts")]) {
     if (fs.existsSync(c) && fs.statSync(c).isFile()) return c;
   }
   return null;
+}
+
+function resolveSpec(fromFile: string, spec: string): string | null {
+  if (spec.startsWith(".")) {
+    return resolveFile(path.resolve(path.dirname(fromFile), spec));
+  }
+  for (const [prefix, target] of APP_ALIASES) {
+    const exact = !prefix.endsWith("/");
+    if (exact ? spec === prefix : spec.startsWith(prefix)) {
+      const resolved = resolveFile(exact ? target : target + spec.slice(prefix.length));
+      if (!resolved) throw new UnresolvedAppImport(`${path.relative(REPO, fromFile)}: cannot resolve app import "${spec}"`);
+      return resolved;
+    }
+  }
+  return null; // a package, not an app module
 }
 
 function closure(entries: string[]): Set<string> {
@@ -84,6 +118,42 @@ describe("N3 Learn mode import boundary (transitive)", () => {
     expect(hits.some((h) => h.startsWith("gmailFetchService"))).toBe(true);
     expect(hits.some((h) => h.startsWith("outlookFetchService"))).toBe(true);
     expect(hits.some((h) => h.startsWith("hybridExtractorService"))).toBe(true);
+  });
+
+  describe("app aliases (SF4)", () => {
+    let dir: string;
+    beforeAll(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), "learn-n3-"));
+    });
+    afterAll(() => {
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("an @electron/ alias import is walked: it reaches the scan and the fetchers", () => {
+      const f = path.join(dir, "aliasForbidden.ts");
+      fs.writeFileSync(f, 'import { x } from "@electron/handlers/emailSyncHandlers";\n');
+      const hits = forbiddenHits(closure([f]));
+      expect(hits.some((h) => h.startsWith("emailSyncHandlers"))).toBe(true);
+      expect(hits.some((h) => h.startsWith("gmailFetchService"))).toBe(true);
+    });
+
+    it("an app-alias import that resolves to no file fails the walk", () => {
+      const f = path.join(dir, "aliasMissing.ts");
+      fs.writeFileSync(f, 'import { x } from "@electron/services/doesNotExist4120";\n');
+      expect(() => closure([f])).toThrow(/cannot resolve app import "@electron\/services\/doesNotExist4120"/);
+    });
+
+    it("an @/ alias resolves into src/", () => {
+      const f = path.join(dir, "aliasSrc.ts");
+      fs.writeFileSync(f, 'import { x } from "@/hooks/useFeatureGate";\n');
+      expect([...closure([f])].some((p) => p.endsWith(path.join("src", "hooks", "useFeatureGate.ts")))).toBe(true);
+    });
+
+    it("a package import is not an app module", () => {
+      const f = path.join(dir, "pkg.ts");
+      fs.writeFileSync(f, 'import { z } from "zod/v4";\nimport x from "electron";\n');
+      expect(closure([f]).size).toBe(1);
+    });
   });
 
   it("every Learn mode module's closure reaches none of them", () => {
