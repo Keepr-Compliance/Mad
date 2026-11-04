@@ -367,7 +367,7 @@ function run(detections: LearnRunResult["detections"]): LearnRunResult {
 }
 
 function det(id: string, address: string, side: "buyer" | "seller" | null = "buyer") {
-  return { id, address, addressKey: addressKey(address), firstMs: T0, lastMs: T0 + DAY, emailCount: 2, side };
+  return { id, address, addressKey: addressKey(address), firstMs: T0, lastMs: T0 + DAY, emailCount: 2, emailIds: [], side };
 }
 
 describe("scoring arithmetic", () => {

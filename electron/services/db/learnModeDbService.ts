@@ -19,6 +19,10 @@ import {
   INSERT_BULK_SAMPLE_SQL,
   LIST_DEAL_ANSWERS_SQL,
   NEXT_UNANSWERED_BULK_SQL,
+  IS_LIVE_BULK_ROW_SQL,
+  PREVIEW_ATTACHMENTS_SQL,
+  PREVIEW_EMAILS_BY_IDS_SQL,
+  PREVIEW_EMAIL_FOR_BULK_ROW_SQL,
   SOFT_CLEAR_BULK_SQL,
   SOFT_CLEAR_DEAL_ANSWERS_SQL,
   UPSERT_DEAL_ANSWER_SQL,
@@ -196,4 +200,43 @@ export function countNullSentAt(userId: string): number {
 
 export function listAnswerKeyTransactions(userId: string): AnswerKeyRow[] {
   return dbAll<AnswerKeyRow>(ANSWER_KEY_TRANSACTIONS_SQL, [userId]);
+}
+
+// ---- preview (read only) --------------------------------------------------
+
+export interface PreviewEmailRow {
+  id: string;
+  subject: string | null;
+  sender: string | null;
+  recipients: string | null;
+  sent_at: string | null;
+  body_html: string | null;
+  body_plain: string | null;
+}
+
+export interface PreviewAttachmentRow {
+  id: string;
+  email_id: string;
+  filename: string;
+  mime_type: string | null;
+  file_size_bytes: number | null;
+  storage_path: string | null;
+}
+
+export function previewEmailsByIds(userId: string, emailIds: string[], limit: number): PreviewEmailRow[] {
+  if (emailIds.length === 0) return [];
+  return dbAll<PreviewEmailRow>(PREVIEW_EMAILS_BY_IDS_SQL, [userId, JSON.stringify(emailIds), limit]);
+}
+
+export function previewEmailForBulkRow(userId: string, rowId: string): PreviewEmailRow | null {
+  return dbGet<PreviewEmailRow>(PREVIEW_EMAIL_FOR_BULK_ROW_SQL, [userId, rowId]) ?? null;
+}
+
+export function isLiveBulkRow(userId: string, rowId: string): boolean {
+  return dbGet<{ ok: number }>(IS_LIVE_BULK_ROW_SQL, [userId, rowId])?.ok === 1;
+}
+
+export function previewAttachments(userId: string, emailIds: string[]): PreviewAttachmentRow[] {
+  if (emailIds.length === 0) return [];
+  return dbAll<PreviewAttachmentRow>(PREVIEW_ATTACHMENTS_SQL, [userId, JSON.stringify(emailIds)]);
 }

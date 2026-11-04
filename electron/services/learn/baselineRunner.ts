@@ -38,6 +38,12 @@ export interface LearnDetection {
   firstMs: number;
   lastMs: number;
   emailCount: number;
+  /**
+   * Local `emails.id` of every message in the group, oldest first. Main
+   * memory only (for the preview channel's membership check); never in the
+   * public summary and never persisted (C12: nothing durable keys on emails.id).
+   */
+  emailIds: string[];
   /** From the group's first typed email, as generateTransactionSummary does. */
   side: "buyer" | "seller" | null;
 }
@@ -154,6 +160,9 @@ export async function runBaseline0(
   let firstMs: number | null = null;
   let lastMs: number | null = null;
   const realEstate: AnalysisResult[] = [];
+  // batchAnalyze maps 1:1 in order and groupByProperty keeps the same objects,
+  // so each analysis result can be traced back to its local row.
+  const emailIdOf = new Map<AnalysisResult, string>();
 
   for (;;) {
     const rows = emailKeysetPage(userId, sinceIso, cursor, pageSize);
@@ -169,6 +178,7 @@ export async function runBaseline0(
     rowsScanned += rows.length;
 
     const analyzed = transactionExtractorService.batchAnalyze(rows.map(toExtractorEmail));
+    analyzed.forEach((a, i) => emailIdOf.set(a, rows[i].id));
     for (const a of analyzed) {
       const ms = dateMs(a.date);
       if (Number.isFinite(ms)) {
@@ -193,6 +203,7 @@ export async function runBaseline0(
       firstMs: times.length ? Math.min(...times) : Number.NaN,
       lastMs: times.length ? Math.max(...times) : Number.NaN,
       emailCount: group.length,
+      emailIds: group.map((g) => emailIdOf.get(g)).filter((id): id is string => typeof id === "string"),
       side: type ? (LEARN_RULES.sideByDetectedType[type] ?? null) : null,
     };
   });

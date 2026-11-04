@@ -1,0 +1,113 @@
+/**
+ * WindowApi Learn sub-interface — BACKLOG-4120 PR2.
+ *
+ * The renderer's view of `window.api.learn` ("Help Keepr learn"). Every
+ * decision is made in main: whether Learn mode is available (the strict
+ * autodetect_eval read) and on (the user's own toggle), which detection or
+ * sample row may be previewed, and what is stored. Learn mode never creates a
+ * transaction, never reads or changes AI detection, and never sends mail to a
+ * cloud service.
+ *
+ * `success: false` means the request did not run (refused or failed). Type-only
+ * imports from main: nothing here carries code into the renderer.
+ */
+import type { PublicRunSummary } from "../../services/learn/baselineRunner";
+import type { SampleDrawResult } from "../../services/learn/bulkSample";
+import type { LearnScore } from "../../services/learn/scoring";
+import type { BulkAnswer, DealAnswer } from "../../services/learn/learnRules";
+
+export type { PublicRunSummary, SampleDrawResult, LearnScore, BulkAnswer, DealAnswer };
+
+export type LearnFailure = { success: false; error: string };
+
+export type LearnStateResult =
+  | { success: true; available: boolean; enabled: boolean }
+  | LearnFailure;
+
+export type LearnSetEnabledResult = { success: true; enabled: boolean } | LearnFailure;
+
+export type LearnRunResultResponse = { success: true; summary: PublicRunSummary } | LearnFailure;
+
+/** One `learn:run-progress` event: ids and counts only. */
+export interface LearnRunProgressEvent {
+  runId: string;
+  pagesDone: number;
+  rowsScanned: number;
+}
+
+/** A cleanup question. The address is shown on the card; it is never logged. */
+export interface LearnCleanupQuestion {
+  detectionId: string;
+  address: string;
+  emailCount: number;
+}
+
+export type LearnCleanupNextResult =
+  | { success: true; question: LearnCleanupQuestion | null }
+  | LearnFailure;
+
+export type LearnAnswerResult = { success: true } | LearnFailure;
+
+export type LearnSampleDrawResponse = { success: true; result: SampleDrawResult } | LearnFailure;
+
+export type LearnSampleNextResult =
+  | { success: true; question: { rowId: string } | null }
+  | LearnFailure;
+
+export type LearnScoreResult =
+  | { success: true; score: LearnScore; copyBlock: string }
+  | LearnFailure;
+
+export type LearnDeleteAnswersResult =
+  | { success: true; removed: { deal: number; bulk: number } }
+  | LearnFailure;
+
+export interface LearnPreviewAttachment {
+  id: string;
+  filename: string;
+  mimeType: string | null;
+  sizeBytes: number | null;
+  /** Already on disk. Learn mode never downloads an attachment. */
+  downloaded: boolean;
+  /** Set only when downloaded; opened through the existing attachment channels. */
+  storagePath: string | null;
+}
+
+/**
+ * One message in a preview. `bodyHtml` is the stored HTML, unsanitized: the
+ * renderer sanitizes it and blocks remote images by default (founder,
+ * 2026-11-04).
+ */
+export interface LearnPreviewEmail {
+  id: string;
+  subject: string | null;
+  sender: string | null;
+  recipients: string | null;
+  sentAt: string | null;
+  bodyHtml: string | null;
+  bodyPlain: string | null;
+  attachments: LearnPreviewAttachment[];
+}
+
+export type LearnPreviewResult =
+  | { success: true; emails: LearnPreviewEmail[]; totalEmails: number }
+  | LearnFailure;
+
+export type LearnPreviewArgs =
+  | { kind: "cleanup"; detectionId: string }
+  | { kind: "bulk"; rowId: string };
+
+export interface WindowApiLearn {
+  getState: () => Promise<LearnStateResult>;
+  setEnabled: (args: { enabled: boolean }) => Promise<LearnSetEnabledResult>;
+  run: (args: { windowMonths: number }) => Promise<LearnRunResultResponse>;
+  onRunProgress: (callback: (progress: LearnRunProgressEvent) => void) => () => void;
+  cleanupNext: () => Promise<LearnCleanupNextResult>;
+  cleanupAnswer: (args: { detectionId: string; answer: DealAnswer }) => Promise<LearnAnswerResult>;
+  sampleDraw: (args: { windowMonths: number }) => Promise<LearnSampleDrawResponse>;
+  sampleNext: () => Promise<LearnSampleNextResult>;
+  sampleAnswer: (args: { rowId: string; answer: BulkAnswer }) => Promise<LearnAnswerResult>;
+  score: () => Promise<LearnScoreResult>;
+  deleteAnswers: () => Promise<LearnDeleteAnswersResult>;
+  preview: (args: LearnPreviewArgs) => Promise<LearnPreviewResult>;
+}

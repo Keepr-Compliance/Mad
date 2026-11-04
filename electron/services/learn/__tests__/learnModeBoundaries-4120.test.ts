@@ -28,6 +28,10 @@ const LEARN_ENTRIES = [
     .map((f) => path.join(ELECTRON, "services", "learn", f)),
   path.join(ELECTRON, "services", "db", "learnModeDbService.ts"),
   path.join(ELECTRON, "services", "db", "learnModeSql.ts"),
+  // PR2: the IPC surface, its schemas and the preload bridge.
+  path.join(ELECTRON, "handlers", "learnModeHandlers.ts"),
+  path.join(ELECTRON, "schemas", "learnMode.ts"),
+  path.join(ELECTRON, "preload", "learnModeBridge.ts"),
 ];
 
 const FORBIDDEN: Array<[string, RegExp]> = [
@@ -37,6 +41,10 @@ const FORBIDDEN: Array<[string, RegExp]> = [
   ["gmailFetchService", /electron\/services\/gmailFetchService\.ts$/],
   ["outlookFetchService", /electron\/services\/outlookFetchService\.ts$/],
   ["emailSyncHandlers (isAutoDetectAllowed)", /electron\/handlers\/emailSyncHandlers\.ts$/],
+  // PR2: the on-demand attachment download path (it downloads every attachment
+  // of a message and pulls both fetchers).
+  ["attachmentHandlers (provider download)", /electron\/handlers\/attachmentHandlers\.ts$/],
+  ["emailAttachmentService (provider download)", /electron\/services\/emailAttachmentService\.ts$/],
 ];
 
 // Value imports only: `import type` / `export type` carry no code.
@@ -157,7 +165,7 @@ describe("N3 Learn mode import boundary (transitive)", () => {
   });
 
   it("every Learn mode module's closure reaches none of them", () => {
-    expect(LEARN_ENTRIES.length).toBeGreaterThanOrEqual(9);
+    expect(LEARN_ENTRIES.length).toBeGreaterThanOrEqual(12);
     const files = closure(LEARN_ENTRIES);
     // the walk really went somewhere (the extractor and the address helpers)
     expect([...files].some((f) => f.endsWith("transactionExtractorService.ts"))).toBe(true);

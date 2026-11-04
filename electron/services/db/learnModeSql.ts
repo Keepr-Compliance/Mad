@@ -189,3 +189,57 @@ export const ANSWER_KEY_TRANSACTIONS_SQL = sql`
   FROM transactions
   WHERE user_id = ?
 `;
+
+// ---------------------------------------------------------------------------
+// Preview (PR2): read only. The handler decides which ids may be asked for.
+// ---------------------------------------------------------------------------
+
+/**
+ * Messages of one detection, by local id, scoped to the user. Bound: user id,
+ * JSON array of email ids, limit. Newest first.
+ */
+export const PREVIEW_EMAILS_BY_IDS_SQL = sql`
+  SELECT id, subject, sender, recipients, sent_at, body_html, body_plain
+  FROM emails
+  WHERE user_id = ? AND id IN (SELECT value FROM json_each(?))
+  ORDER BY sent_at DESC, id DESC
+  LIMIT ?
+`;
+
+/**
+ * The message behind one LIVE bulk sample row, resolved through the provider
+ * key (never emails.id), scoped to the user. Bound: user id, sample row id.
+ * No row when the sample row is not the user's live row or the message is no
+ * longer cached.
+ */
+export const PREVIEW_EMAIL_FOR_BULK_ROW_SQL = sql`
+  SELECT e.id AS id, e.subject AS subject, e.sender AS sender, e.recipients AS recipients,
+         e.sent_at AS sent_at, e.body_html AS body_html, e.body_plain AS body_plain
+  FROM learn_bulk_answers b
+  JOIN emails e ON e.id = (
+    SELECT e2.id FROM emails e2
+    WHERE e2.user_id = b.user_id AND e2.source = b.source AND e2.external_id = b.external_id
+    ORDER BY e2.id LIMIT 1
+  )
+  WHERE b.user_id = ? AND b.id = ? AND b.deleted_at IS NULL
+`;
+
+/** Is this a live sample row of the user? Bound: user id, row id. */
+export const IS_LIVE_BULK_ROW_SQL = sql`
+  SELECT 1 AS ok FROM learn_bulk_answers
+  WHERE user_id = ? AND id = ? AND deleted_at IS NULL
+`;
+
+/**
+ * Attachment metadata for the given messages of the user. Bound: user id,
+ * JSON array of email ids. storage_path is set only when the file is already
+ * on disk; Learn mode never downloads one.
+ */
+export const PREVIEW_ATTACHMENTS_SQL = sql`
+  SELECT a.id AS id, a.email_id AS email_id, a.filename AS filename, a.mime_type AS mime_type,
+         a.file_size_bytes AS file_size_bytes, a.storage_path AS storage_path
+  FROM attachments a
+  JOIN emails e ON e.id = a.email_id
+  WHERE e.user_id = ? AND a.email_id IN (SELECT value FROM json_each(?))
+  ORDER BY a.email_id, a.filename, a.id
+`;
