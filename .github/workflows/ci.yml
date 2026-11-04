@@ -9,10 +9,11 @@ name: CI/CD
 
 on:
   push:
-    # The two negations keep int-portal/ and hotfix-portal/ pushes at today's
-    # int/ and hotfix/ behaviour (no push run); they must stay AFTER '*-portal/**'
-    # (BACKLOG-3205).
-    branches: [main, develop, 'feature/**', 'fix/**', 'claude/**', 'docs/**', 'portal/**', '*-portal/**', '!int-portal/**', '!hotfix-portal/**']
+    # The two negations keep int-portal/ and hotfix-portal/ pushes at no push
+    # run; they must stay AFTER '*-portal/**' (BACKLOG-3205).
+    # 'int/**' pushes (a PR merged into an integration branch) run CI on both
+    # macOS and Windows (BACKLOG-3177); int-portal/** stays excluded.
+    branches: [main, develop, 'int/**', 'feature/**', 'fix/**', 'claude/**', 'docs/**', 'portal/**', '*-portal/**', '!int-portal/**', '!hotfix-portal/**']
   pull_request:
     branches: [main, develop, 'int/**', 'int-portal/**']
 
@@ -37,15 +38,44 @@ jobs:
         if: github.event_name == 'pull_request'
         run: git fetch origin ${{ github.base_ref }}
 
+      # BACKLOG-2729: the changed-file list is computed ONCE here; the three
+      # filter steps below read it from $RUNNER_TEMP/changed-files.txt.
+      # - pull_request: the base ref's merge base (three-dot), as before.
+      # - push of a merge commit: from merge-base(HEAD^1, HEAD^2) to HEAD, so
+      #   BOTH sides count. HEAD~1..HEAD sees only what the second parent
+      #   brought in, which is empty when a base branch is merged into a branch.
+      #   github.event.before..HEAD is the same first-parent diff on a
+      #   one-commit push, and 0000000 on a new branch, so it is not used.
+      # - push of a single-parent commit: HEAD~1..HEAD, as before.
+      # fetch-depth: 0 above keeps both parents and their merge base reachable.
+      - name: Compute changed files
+        id: changed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          OUT="$RUNNER_TEMP/changed-files.txt"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            echo "Diff basis: origin/$BASE_REF...HEAD (pull_request)"
+            git diff --name-only "origin/$BASE_REF...HEAD" > "$OUT"
+          elif git rev-parse -q --verify 'HEAD^2' > /dev/null; then
+            MERGE_BASE=$(git merge-base 'HEAD^1' 'HEAD^2')
+            echo "Diff basis: $MERGE_BASE..HEAD (push, merge commit: merge-base of HEAD^1 and HEAD^2)"
+            git diff --name-only "$MERGE_BASE" HEAD > "$OUT"
+          else
+            echo "Diff basis: HEAD~1..HEAD (push, single-parent commit)"
+            git diff --name-only HEAD~1 HEAD > "$OUT" 2>/dev/null || git diff --name-only HEAD > "$OUT"
+          fi
+          echo "Changed files: $(grep -c . "$OUT" || true)"
+
       - name: Check for docs-only changes
         id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          # Get changed files
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
-          else
-            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD)
-          fi
+          # Changed files (computed once by the "Compute changed files" step)
+          CHANGED=$(cat "$RUNNER_TEMP/changed-files.txt")
 
           echo "Changed files:"
           echo "$CHANGED"
@@ -67,18 +97,32 @@ jobs:
             fi
           done <<< "$CHANGED"
 
+          # BACKLOG-2729: on push, an EMPTY list is not evidence of a docs-only
+          # change; run the full suite rather than pass it via docs-pass.
+          if [ "$EVENT_NAME" != "pull_request" ] && [ -z "$CHANGED" ]; then
+            DOCS_ONLY="false"
+            echo "Empty changed-file list on push: docs-only=false"
+          fi
+
+          # BACKLOG-2729: pushes to main, develop and int/* never take the
+          # docs-only shortcut; the full matrix runs whatever the list holds.
+          if [ "$EVENT_NAME" = "push" ]; then
+            case "$REF_NAME" in
+              main|develop|int/*)
+                DOCS_ONLY="false"
+                echo "Push to $REF_NAME: docs-only=false (full run on this branch)"
+                ;;
+            esac
+          fi
+
           echo "docs-only=$DOCS_ONLY" >> $GITHUB_OUTPUT
           echo "Result: docs-only=$DOCS_ONLY"
 
       - name: Check for android-companion changes
         id: android
         run: |
-          # Same diff basis as the docs-only filter above (base already fetched)
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
-          else
-            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD)
-          fi
+          # Same list as the docs-only filter above ("Compute changed files")
+          CHANGED=$(cat "$RUNNER_TEMP/changed-files.txt")
 
           # true if ANY changed file lives under android-companion/
           ANDROID_CHANGED="false"
@@ -103,12 +147,8 @@ jobs:
       - name: Check for portal changes
         id: portals
         run: |
-          # Same diff basis as the filters above (base already fetched)
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
-          else
-            CHANGED=$(git diff --name-only HEAD~1 HEAD 2>/dev/null || git diff --name-only HEAD)
-          fi
+          # Same list as the filters above ("Compute changed files")
+          CHANGED=$(cat "$RUNNER_TEMP/changed-files.txt")
 
           BROKER_CHANGED="false"
           ADMIN_CHANGED="false"
@@ -135,12 +175,12 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
-          # PRs (to develop/main/int/*/int-portal/*) and pushes to develop/main: run both macOS + Windows
+          # PRs (to develop/main/int/*/int-portal/*) and pushes to develop/main/int/*: run both macOS + Windows
           # Pushes to feature/fix/claude branches: macOS only (Windows runs on the PR)
           if [ "$EVENT_NAME" = "pull_request" ]; then
             echo 'os-matrix=["macos-latest","windows-latest"]' >> $GITHUB_OUTPUT
             echo "OS: both (pull_request)"
-          elif [[ "$GITHUB_REF_NAME" == "main" || "$GITHUB_REF_NAME" == "develop" ]]; then
+          elif [[ "$GITHUB_REF_NAME" == "main" || "$GITHUB_REF_NAME" == "develop" || "$GITHUB_REF_NAME" == int/* ]]; then
             echo 'os-matrix=["macos-latest","windows-latest"]' >> $GITHUB_OUTPUT
             echo "OS: both (push to $GITHUB_REF_NAME)"
           else
