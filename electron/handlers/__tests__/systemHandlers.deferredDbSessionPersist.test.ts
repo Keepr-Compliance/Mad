@@ -23,6 +23,12 @@
  *
  * systemHandlers.ts has module-level isInitializing/initializationComplete
  * guards, so each test isolates the module fresh via jest.isolateModules().
+ *
+ * BACKLOG-3322: the user row and the session row are now provisioned by
+ * `provisionDeepLinkSignIn` (one transaction; its own real-driver controls are
+ * deepLinkProvisioningAtomicity-3322). Here it is mocked to resolve the user
+ * and its session token, and the facade's createUser/createSession THROW, so a
+ * regression back to inline facade writes goes red rather than passing.
  */
 
 const mockDeferredDbLog = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
@@ -42,13 +48,20 @@ function setup(options: {
 }) {
   const registered: RegisteredHandlers = {};
 
-  const mockCreateSession = jest.fn().mockResolvedValue("sqlite-session-token-abc");
+  // BACKLOG-3322: the drain must not write through the facade any more.
+  const mockCreateSession = jest.fn().mockRejectedValue(new Error("facade createSession must not be called"));
   const mockSaveSession = jest.fn().mockResolvedValue((options as { saveResult?: boolean }).saveResult ?? true);
   const mockGetSessionExpirationMs = jest.fn(() => 24 * 60 * 60 * 1000);
 
   const mockGetUserByEmail = jest.fn().mockResolvedValue(options.existingLocalUser ?? null);
   const mockGetUserByOAuthId = jest.fn().mockResolvedValue(options.existingLocalUser ?? null);
-  const mockCreateUser = jest.fn().mockResolvedValue(undefined);
+  const mockCreateUser = jest.fn().mockRejectedValue(new Error("facade createUser must not be called"));
+  const provisionedUser = options.existingLocalUser ?? options.createdLocalUser ?? null;
+  const mockProvisionDeepLinkSignIn = jest.fn().mockResolvedValue({
+    user: provisionedUser,
+    sessionToken: "sqlite-session-token-abc",
+    isNewUser: !options.existingLocalUser,
+  });
   const mockGetUserById = jest
     .fn()
     .mockResolvedValue(options.createdLocalUser ?? options.existingLocalUser ?? null);
@@ -123,6 +136,10 @@ function setup(options: {
     },
   }));
 
+  jest.doMock("../../services/loginProvisioningService", () => ({
+    provisionDeepLinkSignIn: mockProvisionDeepLinkSignIn,
+  }));
+
   jest.doMock("../../services/supabaseService", () => ({
     __esModule: true,
     default: {
@@ -154,6 +171,7 @@ function setup(options: {
     mockCreateUser,
     mockGetUserById,
     mockGetAuthSession,
+    mockProvisionDeepLinkSignIn,
   };
 }
 
@@ -184,7 +202,7 @@ describe("systemHandlers — deferred-DB deep-link session persistence (BACKLOG-
       refreshToken: "supabase-refresh-token",
     };
 
-    const { initHandler, mockCreateUser, mockCreateSession, mockSaveSession } = setup({
+    const { initHandler, mockCreateUser, mockCreateSession, mockSaveSession, mockProvisionDeepLinkSignIn } = setup({
       pendingUser,
       existingLocalUser: null,
       createdLocalUser,
@@ -193,8 +211,11 @@ describe("systemHandlers — deferred-DB deep-link session persistence (BACKLOG-
 
     await initHandler();
 
-    expect(mockCreateUser).toHaveBeenCalledTimes(1);
-    expect(mockCreateSession).toHaveBeenCalledWith(TEST_USER_ID);
+    // BACKLOG-3322: user + session rows come from the one provisioning call.
+    expect(mockProvisionDeepLinkSignIn).toHaveBeenCalledTimes(1);
+    expect(mockProvisionDeepLinkSignIn).toHaveBeenCalledWith(pendingUser);
+    expect(mockCreateUser).not.toHaveBeenCalled();
+    expect(mockCreateSession).not.toHaveBeenCalled();
     expect(mockSaveSession).toHaveBeenCalledTimes(1);
     const savedSession = mockSaveSession.mock.calls[0][0];
     expect(savedSession.supabaseTokens).toEqual({
@@ -226,7 +247,7 @@ describe("systemHandlers — deferred-DB deep-link session persistence (BACKLOG-
       refreshToken: "rt-2",
     };
 
-    const { initHandler, mockCreateUser, mockSaveSession } = setup({
+    const { initHandler, mockCreateUser, mockSaveSession, mockProvisionDeepLinkSignIn } = setup({
       pendingUser,
       existingLocalUser,
       authSession,
@@ -234,6 +255,7 @@ describe("systemHandlers — deferred-DB deep-link session persistence (BACKLOG-
 
     await initHandler();
 
+    expect(mockProvisionDeepLinkSignIn).toHaveBeenCalledTimes(1);
     expect(mockCreateUser).not.toHaveBeenCalled();
     expect(mockSaveSession).toHaveBeenCalledTimes(1);
     expect(mockSaveSession.mock.calls[0][0].supabaseTokens).toEqual({
@@ -242,7 +264,7 @@ describe("systemHandlers — deferred-DB deep-link session persistence (BACKLOG-
     });
   });
 
-  it("no Supabase auth session available: does NOT throw, does NOT save a session (best-effort)", async () => {
+  it("no Supabase auth session available: does NOT throw, provisions nothing, does NOT save a session (BACKLOG-3322 Fork D)", async () => {
     const pendingUser = {
       supabaseId: TEST_USER_ID,
       email: "no-session@example.com",
@@ -250,7 +272,7 @@ describe("systemHandlers — deferred-DB deep-link session persistence (BACKLOG-
     };
     const createdLocalUser = { id: TEST_USER_ID, email: "no-session@example.com", oauth_provider: "google" };
 
-    const { initHandler, mockSaveSession } = setup({
+    const { initHandler, mockSaveSession, mockProvisionDeepLinkSignIn, mockCreateUser } = setup({
       pendingUser,
       existingLocalUser: null,
       createdLocalUser,
@@ -258,6 +280,9 @@ describe("systemHandlers — deferred-DB deep-link session persistence (BACKLOG-
     });
 
     await expect(initHandler()).resolves.toBeDefined();
+    // No tokens -> no durable session possible -> no user row written either.
+    expect(mockProvisionDeepLinkSignIn).not.toHaveBeenCalled();
+    expect(mockCreateUser).not.toHaveBeenCalled();
     expect(mockSaveSession).not.toHaveBeenCalled();
   });
 

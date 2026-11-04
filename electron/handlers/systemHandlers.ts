@@ -27,6 +27,7 @@ import { initializationBroadcaster } from "../services/initializationBroadcaster
 import { initializeDatabase } from "./authHandlers";
 import { getAndClearPendingDeepLinkUser } from "../main";
 import { saveSignInSession } from "../services/signInState";
+import { provisionDeepLinkSignIn } from "../services/loginProvisioningService";
 import { initializePool } from "../workers/contactWorkerPool";
 import { getDbPath, getEncryptionKey } from "../services/db/core/dbConnection";
 import log from "electron-log";
@@ -184,9 +185,13 @@ async function createLocalUserFromCloud(cloudUser: User): Promise<void> {
 }
 
 /**
- * BACKLOG-2173b: Persist a durable session (SQLite session row + encrypted
- * userData/session.json) for a local user, including the Supabase
- * access/refresh tokens needed to restore the SDK session after a restart.
+ * BACKLOG-2173b: Persist a durable session (encrypted userData/session.json)
+ * for a local user, including the Supabase access/refresh tokens needed to
+ * restore the SDK session after a restart.
+ *
+ * The SQLite session row is NOT written here: `provisionDeepLinkSignIn`
+ * already committed it in the same transaction as the user row (BACKLOG-3322),
+ * and `sessionToken` is that row's token.
  *
  * Mirrors the "DB already initialized" success path in main.ts's deep-link
  * callback (main.ts ~L693-726) so that both the fast path (DB ready at login)
@@ -210,10 +215,9 @@ async function persistSessionForUser(
   localUser: User,
   provider: OAuthProvider,
   tokens: { accessToken: string; refreshToken: string },
+  sessionToken: string,
 ): Promise<void> {
   try {
-    const sessionToken = await databaseService.createSession(localUser.id);
-
     const subscriptionStatus = localUser.subscription_status || "trial";
     const isTrial = subscriptionStatus === "trial";
     const isActive = subscriptionStatus === "active" || subscriptionStatus === "trial";
@@ -574,65 +578,35 @@ export function registerSystemHandlers(): void {
             { email: pendingUser.email },
           );
           try {
-            // Check if user already exists
-            let localUser = await databaseService.getUserByEmail(pendingUser.email);
-            if (!localUser) {
-              localUser = await databaseService.getUserByOAuthId(
+            // BACKLOG-3322: the user row and the session row are provisioned in
+            // one transaction by the same call main.ts makes when the DB is
+            // already open. The tokens are read FIRST: without them no durable
+            // session can be written, so nothing is provisioned at all rather
+            // than leaving a user row with no session behind it.
+            //
+            // BACKLOG-2173b: this is the deferred-DB path -- the DB was NOT
+            // initialized when the deep-link callback fired in main.ts, so the
+            // session file is written here, after the commit, or the session
+            // only lives in RAM and is lost when BACKLOG-2173's app.relaunch()
+            // restarts the process for the FDA grant.
+            const authSession = await supabaseService.getAuthSession();
+            if (authSession?.accessToken && authSession?.refreshToken) {
+              const provisioned = await provisionDeepLinkSignIn(pendingUser);
+              await persistSessionForUser(
+                provisioned.user,
                 pendingUser.provider,
-                pendingUser.supabaseId,
-              );
-            }
-
-            if (!localUser) {
-              // TASK-1507G: Use Supabase Auth UUID as local user ID for unified IDs
-              await databaseService.createUser({
-                id: pendingUser.supabaseId,
-                email: pendingUser.email,
-                display_name: pendingUser.displayName || pendingUser.email.split("@")[0],
-                avatar_url: pendingUser.avatarUrl,
-                oauth_provider: pendingUser.provider,
-                oauth_id: pendingUser.supabaseId,
-                subscription_tier: pendingUser.subscriptionTier || "free",
-                subscription_status: pendingUser.subscriptionStatus || "trial",
-                trial_ends_at: pendingUser.trialEndsAt,
-                is_active: true,
-              });
-              logService.info(
-                "Created local user from pending deep link data",
-                "System",
-                { supabaseId: pendingUser.supabaseId },
-              );
-              localUser = await databaseService.getUserById(pendingUser.supabaseId);
-            } else {
-              logService.info(
-                "Local user already exists for pending deep link",
-                "System",
-                { email: pendingUser.email },
-              );
-            }
-
-            // BACKLOG-2173b: This is the deferred-DB path -- the DB was NOT
-            // initialized when the deep-link callback fired in main.ts, so
-            // main.ts's session-save block (L693-726) was skipped and took
-            // the `else` branch (setPendingDeepLinkUser only, no save). The
-            // DB is initialized NOW, so persist the durable session here --
-            // otherwise the session only ever lives in RAM and is lost the
-            // moment BACKLOG-2173's app.relaunch() restarts the process for
-            // the FDA grant, dumping the user back to a failed login screen.
-            if (localUser) {
-              const authSession = await supabaseService.getAuthSession();
-              if (authSession?.accessToken && authSession?.refreshToken) {
-                await persistSessionForUser(localUser, pendingUser.provider, {
+                {
                   accessToken: authSession.accessToken,
                   refreshToken: authSession.refreshToken,
-                });
-              } else {
-                logService.warn(
-                  "[DeepLink] No Supabase auth session available to persist for deferred-DB user",
-                  "System",
-                  { userId: redactId(localUser.id) },
-                );
-              }
+                },
+                provisioned.sessionToken,
+              );
+            } else {
+              logService.error(
+                "[DeepLink] No Supabase auth session available for deferred-DB user; nothing written",
+                "System",
+                { supabaseId: redactId(pendingUser.supabaseId) },
+              );
             }
           } catch (userError) {
             // Log but don't fail initialization

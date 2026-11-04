@@ -101,10 +101,14 @@ export async function getUserById(userId: string): Promise<User | null> {
 /**
  * Get user by email
  */
-export async function getUserByEmail(email: string): Promise<User | null> {
+export function getUserByEmailSync(email: string): User | null {
   const statement = sql`SELECT * FROM users_local WHERE email = ?`;
   const user = dbGet<User>(statement, [email]);
   return user || null;
+}
+
+export async function getUserByEmail(email: string): Promise<User | null> {
+  return getUserByEmailSync(email);
 }
 
 /**
