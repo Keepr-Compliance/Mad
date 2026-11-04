@@ -192,6 +192,8 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
   saveModeRef.current = saveMode;
   const leaveRef = React.useRef(leaveView);
   leaveRef.current = leaveView;
+  const listRef = React.useRef(list);
+  listRef.current = list;
   React.useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
@@ -253,7 +255,7 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
   }
 
   function cancelLeave() {
-    const index = list.findIndex((v) => v.id === leaveRef.current?.id);
+    const index = listRef.current.findIndex((v) => v.id === leaveRef.current?.id);
     setLeaveId(null);
     pendingFocus.current = index >= 0 ? index : null;
   }

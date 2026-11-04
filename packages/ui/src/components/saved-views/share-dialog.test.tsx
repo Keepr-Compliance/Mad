@@ -113,6 +113,20 @@ describe('ShareDialog (BACKLOG-4087)', () => {
     confirmSpy.mockRestore();
   });
 
+  it('C6g Cancel on the Remove confirm, by button or Escape, returns focus to that person\'s Remove button', async () => {
+    setup();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Cyrus Vale' }));
+    await settle();
+    fireEvent.click(within(screen.getByRole('group', { name: 'Remove access for Cyrus Vale' })).getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Remove Cyrus Vale' })).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Bo Larkspur' }));
+    await settle();
+    await act(async () => {
+      await userEvent.keyboard('{Escape}');
+    });
+    expect(screen.getByRole('button', { name: 'Remove Bo Larkspur' })).toHaveFocus();
+  });
+
   it('C6d current grants are listed with their role and a Remove each; none says "Only you"', () => {
     const { rerender, props } = setup();
     const list = screen.getByRole('list', { name: 'People with access' });

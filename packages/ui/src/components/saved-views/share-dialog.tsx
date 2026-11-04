@@ -93,9 +93,23 @@ export function ShareDialog({
     setRemoveId(null);
   }, [open]);
 
+  const restoreRemoveFocus = React.useRef<string | null>(null);
+  const grantListRef = React.useRef<HTMLUListElement>(null);
   React.useEffect(() => {
-    if (removeId !== null) confirmCancelRef.current?.focus();
+    if (removeId !== null) {
+      confirmCancelRef.current?.focus();
+    } else if (restoreRemoveFocus.current !== null) {
+      const id = restoreRemoveFocus.current;
+      restoreRemoveFocus.current = null;
+      const buttons = grantListRef.current?.querySelectorAll<HTMLButtonElement>('[data-remove-for]') ?? [];
+      Array.from(buttons).find((b) => b.dataset.removeFor === id)?.focus();
+    }
   }, [removeId]);
+
+  function cancelRemove() {
+    restoreRemoveFocus.current = removeId;
+    setRemoveId(null);
+  }
 
   const granted = new Set((grants ?? []).map((g) => g.userId));
   const options: DropdownOption[] = (candidates ?? [])
@@ -122,7 +136,7 @@ export function ShareDialog({
         onEscapeKeyDown={(e) => {
           if (removeId !== null) {
             e.preventDefault();
-            setRemoveId(null);
+            cancelRemove();
           }
         }}
       >
@@ -173,7 +187,7 @@ export function ShareDialog({
           ) : grants.length === 0 ? (
             <p className="text-sm text-gray-500">Only you</p>
           ) : (
-            <ul aria-label="People with access" className="max-h-56 divide-y divide-gray-100 overflow-y-auto">
+            <ul ref={grantListRef} aria-label="People with access" className="max-h-56 divide-y divide-gray-100 overflow-y-auto">
               {grants.map((grant) => (
                 <li key={grant.userId} data-slot="share-grant" className="py-2 text-sm">
                   {removeId === grant.userId ? (
@@ -181,7 +195,7 @@ export function ShareDialog({
                       <span className="min-w-0 flex-1 truncate text-gray-700" title={grant.name}>
                         Remove access for {grant.name}?
                       </span>
-                      <Button ref={confirmCancelRef} type="button" variant="ghost" size="sm" onClick={() => setRemoveId(null)}>
+                      <Button ref={confirmCancelRef} type="button" variant="ghost" size="sm" onClick={cancelRemove}>
                         Cancel
                       </Button>
                       <Button type="button" variant="destructive" size="sm" onClick={() => confirmRemove(grant)}>
@@ -199,6 +213,7 @@ export function ShareDialog({
                         variant="ghost"
                         size="sm"
                         aria-label={`Remove ${grant.name}`}
+                        data-remove-for={grant.userId}
                         onClick={() => setRemoveId(grant.userId)}
                       >
                         Remove

@@ -265,6 +265,26 @@ describe('SavedViews sharing (BACKLOG-4087)', () => {
     expect(trigger()).toHaveFocus();
   });
 
+  it('C6f Escape on the Leave confirm after the list changed returns focus to the armed row', () => {
+    const ROWS: View[] = ['Alpha', 'Beta', 'Gamma'].map((name) => ({
+      id: `s-${name}`,
+      name,
+      pinned: false,
+      access: 'viewer' as const,
+      ownerName: 'Avery Quinn',
+    }));
+    const sharing = makeSharing();
+    const { rerender, props } = setup({ views: ROWS, sharing, defaultViewId: null });
+    open();
+    fireEvent.click(screen.getByRole('button', { name: 'Leave Alpha' }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Leave Alpha' })).getByRole('button', { name: 'Leave view' }));
+    rerender(<SavedViews<View, Filters, Metric> {...props} views={ROWS.slice(1)} sharing={sharing} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Leave Gamma' }));
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' });
+    expect(screen.queryByRole('group', { name: 'Leave Gamma' })).toBeNull();
+    expect(document.activeElement).toHaveAccessibleName(/^Gamma shared by/);
+  });
+
   it('C8a Share on an own row closes the panel, then calls onShare with that view', () => {
     const sharing = makeSharing();
     setup({ sharing });
