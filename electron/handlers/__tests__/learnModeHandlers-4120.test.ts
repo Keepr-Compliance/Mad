@@ -485,6 +485,17 @@ describe("C9 switch matrix", () => {
     expect(await invoke("learn:set-enabled", { enabled: true })).toEqual({ success: true, enabled: true });
     expect(await invoke("learn:get-state")).toEqual({ success: true, available: true, enabled: true });
   });
+
+  it("set-enabled false always succeeds, even when the key is off, and keeps the row off if the key returns", async () => {
+    setToggle(true);
+    planMap("disabled", true);
+    expect(await invoke("learn:set-enabled", { enabled: false })).toEqual({ success: true, enabled: false });
+    expect(db.prepare(`SELECT enabled FROM learn_mode_settings WHERE user_id = ?`).get(USER)).toEqual({ enabled: 0 });
+    expect(await invoke("learn:set-enabled", { enabled: true })).toEqual({
+      success: false,
+      error: handlers.LEARN_NOT_AVAILABLE_ERROR,
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

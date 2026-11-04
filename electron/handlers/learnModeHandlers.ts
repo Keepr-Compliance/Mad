@@ -227,7 +227,8 @@ export function registerLearnModeHandlers(): void {
       if (!args) return fail(LEARN_INVALID_ERROR);
       const userId = await sessionUserId();
       if (!userId) return fail(LEARN_NO_SESSION_ERROR);
-      if (!((await isAutodetectEvalAllowed()) === true)) return fail(LEARN_NOT_AVAILABLE_ERROR);
+      // Turning OFF is never refused (session only); only turning ON needs the key.
+      if (args.enabled && !((await isAutodetectEvalAllowed()) === true)) return fail(LEARN_NOT_AVAILABLE_ERROR);
       setLearnModeEnabled(userId, args.enabled);
       if (!args.enabled) clearLastRun(userId);
       logService.info("Learn mode toggled", MODULE, { enabled: args.enabled });
