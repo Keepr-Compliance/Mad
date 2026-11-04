@@ -199,11 +199,11 @@ describe("BACKLOG-3555: the deferred persist ends the stale-file window only whe
 
   it("S2: saveSession reports false (BACKLOG-3299) -> flag stays set", async () => {
     const s = setup({ pendingUser, existingLocalUser: null, createdLocalUser, authSession });
-    s.mockSaveSession.mockResolvedValueOnce(false);
+    s.mockSaveSession.mockResolvedValue(false);
     s.gen.setPendingDeepLinkUser(pendingUser);
     expect(s.gen.isSignInAwaitingSessionWrite()).toBe(true);
     await s.initHandler();
-    expect(s.mockSaveSession).toHaveBeenCalledTimes(1);
+    expect(s.mockSaveSession).toHaveBeenCalledTimes(4); // BACKLOG-3322: 1 + 3 silent retries
     expect(s.gen.isSignInAwaitingSessionWrite()).toBe(true);
   });
 
