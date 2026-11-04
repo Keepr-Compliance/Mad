@@ -15,6 +15,48 @@ export interface SavedViewItem {
   name: string;
   /** Read only when `pinning` is given (pin button state, badge count, cap). */
   pinned?: boolean;
+  /**
+   * The user's access to this view (BACKLOG-4087). Missing means 'owner', so an
+   * adopter that never sets it renders exactly as before sharing existed.
+   * 'editor' and 'viewer' rows are listed under "Shared with you", after the
+   * user's own rows, without Default, Pin or Delete. Hiding them is
+   * presentation only: the server functions refuse those writes on their own.
+   */
+  access?: SavedViewAccess;
+  /** Who shared the view. Shown on shared rows ("shared by <ownerName>"); ignored on own rows. */
+  ownerName?: string;
+}
+
+/** BACKLOG-4087. */
+export type SavedViewAccess = 'owner' | 'editor' | 'viewer';
+
+/**
+ * What an editor may change on a shared view (BACKLOG-4087): the filters and
+ * the metric, nothing else. A CLOSED type on purpose: an object literal that
+ * also carries `name`, `pinned` or a default flag is a type error
+ * (saved-views.contract.test-d.tsx), and the component builds the payload
+ * from these two fields only, so extra fields never reach `onUpdate` at
+ * runtime either.
+ */
+export interface SavedViewUpdate<F = unknown, M = unknown> {
+  filters: F;
+  metric: M;
+}
+
+/** Sharing support (BACKLOG-4087). Absent: no Share, Update or Leave buttons. */
+export interface SavedViewsSharing<V extends SavedViewItem, F = unknown, M = unknown> {
+  /** Open the adopter's ShareDialog for `view`. Offered on the user's own rows only. The panel closes first. */
+  onShare: (view: V) => void;
+  /** The user stops seeing a view shared with them. Called only after the in-panel confirm. */
+  onLeave: (view: V) => void;
+  /**
+   * Save the page's current filters and metric into a view shared with the
+   * user as an editor. Offered on 'editor' rows only. The payload holds
+   * exactly `filters` and `metric`, read from `current()` at click time.
+   */
+  onUpdate: (view: V, payload: SavedViewUpdate<F, M>) => void;
+  /** The page's current filters and metric. Read when an editor clicks Update. */
+  current: () => SavedViewUpdate<F, M>;
 }
 
 /** How a view was saved when `pinning` is given (BACKLOG-4132). */
@@ -31,7 +73,7 @@ export interface SavedViewsPinning<V extends SavedViewItem> {
   onTogglePin: (view: V) => void;
 }
 
-export interface SavedViewsProps<V extends SavedViewItem> {
+export interface SavedViewsProps<V extends SavedViewItem, F = unknown, M = unknown> {
   /**
    * The user's views for this report, or null when they could not be read.
    * Null FAILS CLOSED: the panel says saved views are not available yet and
@@ -81,14 +123,16 @@ export interface SavedViewsProps<V extends SavedViewItem> {
    * trigger, no X.
    */
   onClear?: () => void;
+  /** Sharing support (BACKLOG-4087). Absent: no Share, Update or Leave buttons; shared rows still list read-only. */
+  sharing?: SavedViewsSharing<V, F, M>;
 }
 
 /**
  * RESERVED — deliberately NOT in SavedViewsProps. Each needs a caller first.
  *
- * - Sharing / owner flags (`shared`, `owner`, per-user view / edit / owner
- *   rights): saved views are personal in 2.45 (founder decision). Sharing is
- *   its own item, BACKLOG-4087, merged with 3511 per-report access.
+ * - Sharing: BUILT in BACKLOG-4087 (`access`, `ownerName`, `sharing`, ShareDialog).
+ *   Still reserved: renaming a shared view, an editor changing the pin or the
+ *   default of a shared view, and re-sharing by a non-owner.
  * - `onRename`: no rename UI exists today and no 4084 caller renames.
  * - Delete key on a focused row: deleting has no confirm today, so a key that
  *   deletes the focused row would be easier to hit by accident than the
