@@ -2,6 +2,7 @@
 """BACKLOG-4048: build one SQL text for a single kt-sql call on keepr-test.
 
 Usage: compose.py <out.sql> <modes> [--with-migration]
+Mode names are defined in controls.sql (base, current, M1..M12, SR_M13_submitter_any_org).
 The controls end in RAISE, so the whole call rolls back (migration included when composed in).
 """
 import os, sys

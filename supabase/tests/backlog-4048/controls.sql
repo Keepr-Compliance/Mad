@@ -23,6 +23,8 @@
 --  C14      grants: helper not executable by PUBLIC/anon/authenticated; both functions
 --           executable by authenticated and service_role, not by anon or PUBLIC
 --  C15      ex-member submitter moves own row to another organization: submission_owner_fields_locked
+--  C16      user who submitted in another organization (C9 gave it a row there) asks about this
+--           organization: false (runs after C9)
 
 DO $drv$
 DECLARE
@@ -155,6 +157,8 @@ $function$$x$;
         'AND public._org_billing_state_visible(p_org);', 'OR public._org_billing_state_visible(p_org);')
       WHEN 'M10_helper_granted_authenticated' THEN 'grant'
       WHEN 'M12_suspended_granted_anon' THEN 'grant'
+      WHEN 'SR_M13_submitter_any_org' THEN pg_temp.mut_fn('public._org_billing_state_visible(uuid)',
+        'WHERE s.organization_id = p_org AND s.submitted_by', 'WHERE s.submitted_by')
       WHEN 'M11_guard_org_unlocked' THEN pg_temp.mut_fn('public.guard_status_history_append_only()',
         'OR NEW.organization_id      IS DISTINCT FROM OLD.organization_id', '')
       ELSE NULL END;
@@ -234,13 +238,14 @@ $function$$x$;
       'C13a', pg_temp.v('none', NULL, format('SELECT public.org_billing_suspended(%L)::text', o1)),
       'C13b', pg_temp.v('none', NULL, format('SELECT public.org_billing_service_off(%L)::text', o1)),
       'C14', pg_temp.grants(),
-      'C15', pg_temp.v('auth', u_ex, format($q$WITH u AS (UPDATE public.transaction_submissions SET organization_id = %L WHERE id = %L RETURNING 1) SELECT count(*)::text FROM u$q$, o2, s_ex)));
+      'C15', pg_temp.v('auth', u_ex, format($q$WITH u AS (UPDATE public.transaction_submissions SET organization_id = %L WHERE id = %L RETURNING 1) SELECT count(*)::text FROM u$q$, o2, s_ex)),
+      'C16', pg_temp.v('auth', u_x, format('SELECT public.org_billing_suspended(%L)::text', o1)));
 
     -- expected value per cell; a value starting with '^' is a prefix match
     exp := jsonb_build_object('C1a','false','C1b','false','C2a','true','C2b','true','C3','true','C4','true',
       'C5','true','C6','true','C7','^ERR 42501','C8','account_suspended','C9','1','C10','1',
       'C11a','false','C11b','false','C12a','false','C12b','false','C13a','true','C13b','true',
-      'C14','ok','C15','^ERR 42501 submission_owner_fields_locked');
+      'C14','ok','C15','^ERR 42501 submission_owner_fields_locked','C16','false');
     FOR k IN SELECT jsonb_object_keys(exp) ORDER BY 1 LOOP
       IF (CASE WHEN left(exp->>k, 1) = '^' THEN (c->>k) LIKE substr(exp->>k, 2) || '%' ELSE (c->>k) = (exp->>k) END) THEN
         npass := npass + 1;
