@@ -14,8 +14,9 @@
  *   G0  the scanner finds exactly the known calls (positive control).
  *   G1  each call's result is used in one of the ALLOWED shapes below;
  *       anything else fails.
- *   G2  the discard allow-list is exactly the three dead in-app OAuth sites,
- *       each tied to BACKLOG-4103, and each still matches a call.
+ *   G2  the discard allow-list is empty. BACKLOG-4103 removed the in-app
+ *       OAuth login path that held its last three entries; a new entry is a
+ *       deliberate review event, not a quiet exemption.
  *   G3  saveSignInSession is called only by the two deep-link sign-in
  *       writers (BACKLOG-4076).
  *   G4  main.ts logs "Session saved successfully" only inside the branch
@@ -40,18 +41,12 @@ const ROOT = path.join(__dirname, "..", "..");
 const NAMES = new Set(["saveSession", "saveSignInSession"]);
 
 /**
- * Calls allowed to discard the result. All three are the in-app OAuth login
- * path, which has no caller in src/; whether to wire it, remove it or keep it
- * is open on BACKLOG-4103. Keyed by file + top-level function.
+ * Calls allowed to discard the result: none. The three entries that were here
+ * (the in-app OAuth login path) were deleted with that code by BACKLOG-4103
+ * (founder: REMOVE). G2 keeps this list empty. Keyed by file + top-level
+ * function if one is ever added.
  */
-const ALLOW_DISCARD: ReadonlyArray<{ key: string; item: string }> = [
-  // BACKLOG-4103: dead in-app Google login
-  { key: "electron/handlers/googleAuthHandlers.ts#handleGoogleLogin", item: "BACKLOG-4103" },
-  // BACKLOG-4103: dead in-app Google complete-login
-  { key: "electron/handlers/googleAuthHandlers.ts#handleGoogleCompleteLogin", item: "BACKLOG-4103" },
-  // BACKLOG-4103: dead in-app Microsoft login
-  { key: "electron/handlers/microsoftAuthHandlers.ts#handleMicrosoftLogin", item: "BACKLOG-4103" },
-];
+const ALLOW_DISCARD: ReadonlyArray<{ key: string; item: string }> = [];
 const ALLOW_KEYS = new Set(ALLOW_DISCARD.map((a) => a.key));
 
 const SIGN_IN_WRITERS = new Set([
@@ -60,7 +55,7 @@ const SIGN_IN_WRITERS = new Set([
 ]);
 
 /** Known call counts. Change deliberately when a call is added or removed. */
-const EXPECTED_CALLS = { saveSession: 6, saveSignInSession: 2 };
+const EXPECTED_CALLS = { saveSession: 3, saveSignInSession: 2 };
 
 function read(rel: string): string {
   // Windows checkouts use CRLF (BACKLOG-3555).
@@ -198,17 +193,9 @@ describe("BACKLOG-3299: every production saveSession / saveSignInSession call us
     ).toEqual([]);
   });
 
-  it("G2 the allow-list is exactly the three BACKLOG-4103 sites, each still present", () => {
-    expect(ALLOW_DISCARD).toHaveLength(3);
-    expect(ALLOW_KEYS.size).toBe(3);
-    expect(ALLOW_DISCARD.filter((a) => a.item !== "BACKLOG-4103").map((a) => a.key)).toEqual([]);
-    // Each entry carries its "// BACKLOG-4103" comment in this file.
-    const self = readFileSync(__filename, "utf8").replace(/\r\n/g, "\n").split("\n");
-    for (const { key } of ALLOW_DISCARD) {
-      const i = self.findIndex((l) => l.includes(`key: "${key}"`));
-      expect([key, i >= 1 && /\/\/ BACKLOG-4103\b/.test(self[i - 1])]).toEqual([key, true]);
-    }
-    for (const { key } of ALLOW_DISCARD) expect([key, all.some((s) => s.key === key)]).toEqual([key, true]);
+  it("G2 the discard allow-list is empty (BACKLOG-4103 removed its last entries)", () => {
+    expect(ALLOW_DISCARD.map((a) => a.key)).toEqual([]);
+    expect(ALLOW_KEYS.size).toBe(0);
   });
 
   it("G3 saveSignInSession is called only by the two deep-link sign-in writers", () => {
