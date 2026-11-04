@@ -366,13 +366,14 @@ BEGIN
 
   SELECT v.user_id INTO v_owner_id FROM report_saved_views v WHERE v.id = p_view_id;
 
-  IF v_owner_id IS NOT NULL AND v_owner_id = v_caller_id THEN
-    -- Owner: every grantee, with whether the share is currently live.
+  IF v_owner_id IS NOT NULL AND v_owner_id = v_caller_id
+     AND public._report_share_eligible(v_caller_id) THEN
+    -- Owner (while eligible): every grantee. An ineligible owner falls through to the grantee path
+    -- below, owns no grantee row, and gets the single refusal.
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'user_id', s.user_id,
       'display_name', coalesce(nullif(btrim(u.display_name), ''), 'Unnamed user'),
       'role', s.role,
-      'active', public._report_share_eligible(s.user_id),
       'created_at', s.created_at
     ) ORDER BY u.display_name, s.user_id), '[]'::jsonb)
     INTO v_out

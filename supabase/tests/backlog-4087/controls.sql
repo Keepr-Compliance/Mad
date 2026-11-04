@@ -107,6 +107,7 @@ BEGIN
     r_ag uuid := (SELECT id FROM public.admin_roles WHERE name = 'Support Agent');
     m1 text := '{"col":"rows","fn":"count"}';
     m2 text := '{"col":"runs","fn":"sum"}';
+    YV uuid := pg_temp.fx(23);
     NF text := 'ERR P0001 Saved view not found';
     eh text := 'public._report_share_eligible(uuid)';
     msgs text[];
@@ -153,6 +154,22 @@ BEGIN
       AND pg_temp.elem(s, V)->>'owner_name' = 'P4087 user 1'
       AND pg_temp.elem(s, XV)->>'access' = 'owner',
       'B=' || pg_temp.ids(s) || ' C=' || pg_temp.ids(s2) || ' ' || coalesce(pg_temp.elem(s, V)::text, 'noV')));
+
+    -- ===== K18: cross-report. A view on a second report key never appears under the first (H1) =====
+    -- YV is A's view on report key p4087x, shared with B. Own branch (owner A) and shared branch (recipient B).
+    INSERT INTO public.report_saved_views (id, user_id, report_key, name, filters, metric)
+      VALUES (YV, uA, 'p4087x', 'A other report', '{}', m1::jsonb);
+    s := pg_temp.call_as(uA, format('SELECT public.report_share_set(%L::uuid, %L::uuid, %L)', YV, uB, 'viewer'));
+    r := r || jsonb_build_object('K18_cross_report_isolated', pg_temp.pass(
+      s NOT LIKE 'ERR%'
+      AND pg_temp.ids(pg_temp.list(uB, 'p4087x')) = '23'
+      AND pg_temp.ids(pg_temp.list(uA, 'p4087x')) = '23'
+      AND pg_temp.ids(pg_temp.list(uB, 'p4087')) = '21,31,32,33,34,35,41'
+      AND pg_temp.ids(pg_temp.list(uA, 'p4087')) = '21,22'
+      AND pg_temp.elem(pg_temp.list(uB, 'p4087x'), YV)->>'access' = 'viewer'
+      AND pg_temp.elem(pg_temp.list(uA, 'p4087x'), YV)->>'access' = 'owner',
+      s || ' B/x=' || pg_temp.ids(pg_temp.list(uB, 'p4087x')) || ' A/x=' || pg_temp.ids(pg_temp.list(uA, 'p4087x'))
+        || ' B/p=' || pg_temp.ids(pg_temp.list(uB)) || ' A/p=' || pg_temp.ids(pg_temp.list(uA))));
 
     -- ===== K2: mask. The owner's view is pinned AND default; the recipient sees both false =====
     ej := pg_temp.elem(pg_temp.list(uB), V);
@@ -284,6 +301,20 @@ BEGIN
     INSERT INTO public.internal_roles (user_id, role_id) VALUES (uA, r_sa);
     r := r || jsonb_build_object('K12b_share_returns_with_owner', pg_temp.pass(
       pg_temp.elem(pg_temp.list(uB), V)->>'access' = 'editor', pg_temp.ids(pg_temp.list(uB))));
+
+    -- ===== K19: an ineligible owner gets the single refusal on share_list, and no 'active' field exists (S1) =====
+    -- A moves to Support Agent (no analytics.view). share_remove stays open to A so A can clean up.
+    UPDATE public.internal_roles SET role_id = r_ag WHERE user_id = uA;
+    s := pg_temp.call_as(uA, format('SELECT public.report_share_list(%L::uuid)', V));
+    s2 := pg_temp.call_as(uA, format('SELECT public.report_share_remove(%L::uuid, %L::uuid)', YV, uB));
+    n := (SELECT count(*) FROM public.report_saved_view_shares WHERE view_id = YV);
+    UPDATE public.internal_roles SET role_id = r_sa WHERE user_id = uA;
+    s3 := pg_temp.call_as(uA, format('SELECT public.report_share_list(%L::uuid)', V));
+    r := r || jsonb_build_object('K19_ineligible_owner_share_list', pg_temp.pass(
+      s = NF AND s2 NOT LIKE 'ERR%' AND n = 0
+      AND s3 NOT LIKE 'ERR%' AND jsonb_array_length(s3::jsonb) = 2
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(s3::jsonb) x WHERE x ? 'active'),
+      s || ' | rm=' || s2 || ' n=' || n || ' | ' || left(s3, 120)));
 
     -- ===== K13: callers without an internal role, and anon =====
     SELECT array_agg(pg_temp.call_as(NULL, format('SELECT to_jsonb(%s)', q), 'anon')) INTO msgs FROM unnest(ARRAY[

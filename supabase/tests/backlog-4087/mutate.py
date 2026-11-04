@@ -50,6 +50,14 @@ MUT = {
   # the remove RPC tells a missing id from another user's view
   'M10_remove_oracle': [("  IF v_view_id IS NULL THEN\n    RAISE EXCEPTION 'Saved view not found';\n  END IF;\n\n  DELETE FROM report_saved_views",
                          "  IF v_view_id IS NULL AND EXISTS (SELECT 1 FROM report_saved_views x WHERE x.id = p_id) THEN\n    RAISE EXCEPTION 'Only the view owner can delete it';\n  END IF;\n  IF v_view_id IS NULL THEN\n    RAISE EXCEPTION 'Saved view not found';\n  END IF;\n\n  DELETE FROM report_saved_views")],
+  # SR-M12: the shared-rows branch of the list loses its report-key predicate
+  'M12_shared_branch_no_report_key': [("      AND v.user_id <> v_caller_id\n      AND v.report_key = p_report_key\n", "      AND v.user_id <> v_caller_id\n")],
+  # SR-M12b: the own-rows branch of the list loses its report-key predicate
+  'M12b_own_branch_no_report_key': [("    WHERE v.user_id = v_caller_id\n      AND v.report_key = p_report_key\n\n    UNION ALL", "    WHERE v.user_id = v_caller_id\n\n    UNION ALL")],
+  # S1: share_list owner path without the owner eligibility check
+  'S1a_owner_path_no_eligibility': [("  IF v_owner_id IS NOT NULL AND v_owner_id = v_caller_id\n     AND public._report_share_eligible(v_caller_id) THEN", "  IF v_owner_id IS NOT NULL AND v_owner_id = v_caller_id THEN")],
+  # S1b: the active field returns on the owner path
+  'S1b_active_field_back': [("      'role', s.role,\n      'created_at', s.created_at\n    ) ORDER BY u.display_name", "      'role', s.role,\n      'active', public._report_share_eligible(s.user_id),\n      'created_at', s.created_at\n    ) ORDER BY u.display_name")],
   # the shares table is readable by authenticated
   'M11_table_select_granted': [("ALTER TABLE public.report_saved_view_shares ENABLE ROW LEVEL SECURITY;",
                                 "ALTER TABLE public.report_saved_view_shares ENABLE ROW LEVEL SECURITY;\nGRANT SELECT ON public.report_saved_view_shares TO authenticated;")],
