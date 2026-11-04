@@ -308,7 +308,8 @@ describe("BACKLOG-3299: persistSessionForUser honours saveSession's boolean", ()
   it("P1: write returns false -> no 'Session persisted' line, one error line, IPC still answers", async () => {
     const { initHandler, mockSaveSession } = setup({ pendingUser, existingLocalUser: null, createdLocalUser, authSession, saveResult: false });
     const res = await initHandler();
-    expect(mockSaveSession).toHaveBeenCalledTimes(1);
+    // BACKLOG-3322: every write fails here, so 1 attempt + 3 silent retries.
+    expect(mockSaveSession).toHaveBeenCalledTimes(4);
     expect(msgs(mockDeferredDbLog.info).filter((m) => m.includes("Session persisted"))).toEqual([]);
     expect(msgs(mockDeferredDbLog.error).filter((m) => /session/i.test(m) && /deferred-DB/.test(m))).toHaveLength(1);
     expect(res).toEqual(expect.objectContaining({ success: true }));
