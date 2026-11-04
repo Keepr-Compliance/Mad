@@ -15,7 +15,7 @@
 
 import { useMemo, useState } from 'react';
 import { SavedViews } from '@keepr/ui';
-import type { PeriodRange } from '@/lib/reports/period';
+import { DEFAULT_PERIOD, type PeriodRange } from '@/lib/reports/period';
 import { bucketByDay } from '@/lib/reports/iphone-sync-charts';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
 import {
@@ -230,6 +230,13 @@ export function GoogleMessagesSyncReport({
     setOpenRunId(null);
   }
 
+  // Clear the applied view (BACKLOG-4121): empty filters and the built-in
+  // period, written into the URL. Never a bare URL: that re-opens the default view.
+  function clearView() {
+    updateFilters(GM_EMPTY_FILTERS);
+    navigateToPeriod(DEFAULT_PERIOD);
+  }
+
   function navigateToPeriod(nextPeriod: string, from?: string, to?: string) {
     const search = typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, '');
     onNavigate?.(buildPeriodUrl(search, nextPeriod, from, to));
@@ -281,6 +288,7 @@ export function GoogleMessagesSyncReport({
             saveHint={GM_SAVE_HINT}
             defaultViewId={savedViews.defaultViewId}
             onSetDefault={savedViews.setDefault}
+            onClear={clearView}
           />
         }
       />

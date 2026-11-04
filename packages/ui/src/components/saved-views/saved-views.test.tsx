@@ -426,3 +426,102 @@ describe('SavedViews', () => {
     expect(within(document.body).queryByRole('dialog')).toBeNull();
   });
 });
+
+/**
+ * BACKLOG-4121: the applied-view chip and its X. v2 ("Stalled") is the active
+ * view and is not the first row, so a lookup by position instead of by id
+ * shows the wrong name.
+ */
+describe('SavedViews applied-view chip (BACKLOG-4121)', () => {
+  const clearButton = () => document.querySelector<HTMLButtonElement>('[data-slot="saved-views-clear"]');
+
+  it('K-a with onClear and a matching activeViewId: trigger shows the name, is named "Views: <name>", no chevron, X beside it', () => {
+    setup({ activeViewId: 'v2', onClear: jest.fn() });
+    const t = screen.getByRole('button', { name: 'Views: Stalled' });
+    expect(t).toBe(trigger());
+    expect(within(t).getByText('Stalled')).toHaveClass('truncate');
+    expect(within(t).getByText('Views:')).toHaveClass('sr-only');
+    // Only the Bookmark icon is left; the chevron is gone.
+    expect(t.querySelectorAll('svg')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Clear view Stalled' })).toBe(clearButton());
+  });
+
+  it('K-a the pin badge stays on the chip', () => {
+    setup({ activeViewId: 'v2', onClear: jest.fn(), pinning: { max: 5, onTogglePin: jest.fn() } });
+    expect(trigger()).toHaveAccessibleName('Views: Stalled 2');
+    expect(within(trigger()).getByText('2')).toHaveAttribute('data-slot', 'saved-views-badge');
+  });
+
+  it('K-b the X is a sibling of the trigger; a click calls onClear once, focuses the trigger, panel stays closed', () => {
+    const onClear = jest.fn();
+    setup({ activeViewId: 'v2', onClear });
+    const x = clearButton() as HTMLButtonElement;
+    expect(trigger().contains(x)).toBe(false);
+    expect(x.closest('button')).toBe(x);
+    fireEvent.click(x);
+    expect(onClear).toHaveBeenCalledTimes(1);
+    expect(trigger()).toHaveFocus();
+    expect(panel()).toBeNull();
+    expect(trigger()).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('K-b the X closes an open panel instead of leaving it open', () => {
+    setup({ activeViewId: 'v2', onClear: jest.fn() });
+    openByClick();
+    expect(panel()).not.toBeNull();
+    fireEvent.click(clearButton() as HTMLButtonElement);
+    expect(panel()).toBeNull();
+  });
+
+  it('K-c activeViewId null with onClear: plain "Views", chevron, no X', () => {
+    setup({ activeViewId: null, onClear: jest.fn() });
+    expect(trigger()).toHaveAccessibleName('Views');
+    expect(trigger().querySelectorAll('svg')).toHaveLength(2);
+    expect(clearButton()).toBeNull();
+  });
+
+  it('K-c activeViewId names no listed view: plain "Views", no X', () => {
+    setup({ activeViewId: 'gone', onClear: jest.fn() });
+    expect(trigger()).toHaveAccessibleName('Views');
+    expect(clearButton()).toBeNull();
+  });
+
+  it('K-c no onClear: plain "Views" even when a view is active; classes, Escape and Tab order unchanged', async () => {
+    const user = userEvent.setup();
+    setup({ activeViewId: 'v2' });
+    expect(trigger()).toHaveAccessibleName('Views');
+    expect(trigger()).toHaveClass('border-gray-300', 'bg-white', 'text-gray-700');
+    expect(trigger()).not.toHaveClass('bg-primary-50');
+    expect(clearButton()).toBeNull();
+    // Tab from the trigger leaves the component: no extra stop was added.
+    const after = document.createElement('button');
+    after.textContent = 'after';
+    document.body.appendChild(after);
+    trigger().focus();
+    await user.tab();
+    expect(after).toHaveFocus();
+    after.remove();
+    // Escape while open still closes and returns focus.
+    openByClick();
+    key(window as unknown as Element, 'Escape');
+    expect(panel()).toBeNull();
+    expect(trigger()).toHaveFocus();
+  });
+
+  it('K-c with the chip: Tab goes trigger -> X -> out', async () => {
+    const user = userEvent.setup();
+    setup({ activeViewId: 'v2', onClear: jest.fn() });
+    trigger().focus();
+    await user.tab();
+    expect(clearButton()).toHaveFocus();
+  });
+
+  it('K-p chip colour tokens are the Dropdown filter chip active tokens', () => {
+    // Parity with the pill this chip copies (dropdown.tsx filter trigger, filterActive).
+    const CHIP = ['border-primary-300', 'bg-primary-50', 'text-primary-700', 'rounded-md', 'border', 'pr-7'];
+    setup({ activeViewId: 'v2', onClear: jest.fn() });
+    expect(trigger()).toHaveClass(...CHIP);
+    expect(trigger()).not.toHaveClass('bg-white', 'border-gray-300');
+    expect(clearButton()).toHaveClass('text-primary-700');
+  });
+});
