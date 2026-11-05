@@ -404,7 +404,18 @@ describe("BACKLOG-3322 deep-link provisioning is one transaction", () => {
     const real = seedDb();
     setDb(real);
     const u = { ...deepLinkUser(), provider: "email" as never };
-    await expect(provisionDeepLinkSignIn(u)).rejects.toThrow(/CHECK constraint/);
+    // The driver's SqliteError is built by a plain constructor function, so
+    // `rejects.toThrow` only recognises it when it shares jest's realm (true
+    // under ELECTRON_RUN_AS_NODE, false under CI's plain-node `npm test`, which
+    // reported "Received function did not throw"). Read the rejection directly.
+    const rejection = await provisionDeepLinkSignIn(u).then(
+      () => "resolved",
+      (e: unknown) => e as { message?: string; code?: string },
+    );
+    expect(rejection).toMatchObject({
+      code: "SQLITE_CONSTRAINT_CHECK",
+      message: expect.stringMatching(/^CHECK constraint failed: oauth_provider/),
+    });
     await settle();
     expect({ users: count(real, "users_local"), sessions: count(real, "sessions"), audit: count(real, "audit_logs") }).toEqual({
       users: 0,
