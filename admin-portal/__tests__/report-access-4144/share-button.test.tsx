@@ -76,7 +76,10 @@ describe('S1 only an owner sees report Share', () => {
     const { client } = fakeClient({ report_access_candidates: { code: 'PGRST202', message: 'Could not find the function' } });
     mount('owner', createReportAccessApi(() => client));
     fireEvent.click(shareButton()!);
-    await waitFor(() => expect(shareButton()).toBeNull());
+    // hidden: true — while the modal is open the page button is aria-hidden, so a plain role query
+    // would miss it even if it were still there.
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Share Paywall Funnel', hidden: true })).toBeNull());
+    expect(screen.queryByRole('dialog', { name: 'Share Paywall Funnel' })).toBeNull();
   });
 });
 
