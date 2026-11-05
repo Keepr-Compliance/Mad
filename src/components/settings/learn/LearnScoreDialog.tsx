@@ -37,7 +37,6 @@ export function LearnScoreDialog({
     <Dialog open={open} onOpenChange={(o) => (o ? undefined : onClose())}>
       <DialogContent
         hideClose
-        aria-label="Learn mode done"
         className="flex w-[560px] max-w-[calc(100vw-32px)] flex-col items-center gap-6 rounded-xl border-0 bg-white px-12 py-8 text-center text-[15px] leading-normal text-[#1C2430]"
       >
         <span className="inline-grid h-12 w-12 place-items-center rounded-full bg-green-100 text-green-700">

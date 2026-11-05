@@ -83,6 +83,19 @@ const renderSettings = async (props: { onClose: () => void; userId: string; onIm
   return result;
 };
 
+/** BACKLOG-4120: the strict autodetect_eval read answers `state`; Learn mode itself is off. */
+function allowLearn(state: "allowed" | "blocked" | "unknown" | "pending" = "allowed"): void {
+  jest.mocked(window.api.featureGate.strictState).mockImplementation(((key: string) =>
+    key === "autodetect_eval"
+      ? state === "pending"
+        ? new Promise(() => undefined)
+        : Promise.resolve(state)
+      : Promise.resolve("blocked")) as typeof window.api.featureGate.strictState);
+  (window.api as unknown as { learn: unknown }).learn = {
+    getState: jest.fn().mockResolvedValue({ success: true, available: state === "allowed", enabled: false, answers: { deal: 0, bulk: 0 } }),
+  };
+}
+
 describe("Settings", () => {
   const mockUserId = "user-123";
   const mockOnClose = jest.fn();
@@ -2040,6 +2053,7 @@ describe("Settings", () => {
       "clicking %s scrolls to its section (block start) and highlights it",
       async (label, id) => {
         mockIsAllowed.mockReturnValue(true); // AI included: all entries
+        allowLearn(); // BACKLOG-4120: "Help Keepr learn" included too
         await renderSettings({ userId: mockUserId, onClose: mockOnClose });
         await userEvent.click(screen.getByRole("tab", { name: label }));
         expect(scrolledIds()).toEqual([id]);
@@ -2333,6 +2347,35 @@ describe("Settings", () => {
       // jsdom has no layout: a plain trailing space reads the same here but collapses on screen
       // at the end of a flex item. The space must be U+00A0.
       expect(chip.textContent).toBe("Signed in with\u00a0Google");
+    });
+  });
+
+  // BACKLOG-4120 P5 (SR 426498b4 change 6): "Help Keepr learn" follows the
+  // STRICT autodetect_eval read only — shown with the AI add-on blocked, hidden
+  // on blocked / unknown / pending.
+  describe("P5 Help Keepr learn tab and section (BACKLOG-4120)", () => {
+    const noAI = (key: string) => key !== "ai_detection" && key !== "ai_addon";
+
+    it("visible with AI blocked and autodetect_eval allowed: tab after Contacts, section rendered", async () => {
+      mockIsAllowed.mockImplementation(noAI);
+      allowLearn("allowed");
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      const tab = await screen.findByRole("tab", { name: "Help Keepr learn" });
+      expect(tab).toBeInTheDocument();
+      expect(screen.queryByRole("tab", { name: "AI" })).toBeNull();
+      expect(document.getElementById("settings-learn")).not.toBeNull();
+      expect(screen.queryByText("AI Settings")).toBeNull();
+      const labels = screen.getAllByRole("tab").map((t) => t.textContent);
+      expect(labels.indexOf("Help Keepr learn")).toBe(labels.indexOf("Contacts") + 1);
+    });
+
+    it.each(["blocked", "unknown", "pending"] as const)("hidden when the strict read is %s (AI allowed)", async (state) => {
+      mockIsAllowed.mockReturnValue(true);
+      allowLearn(state);
+      await renderSettings({ userId: mockUserId, onClose: mockOnClose });
+      await waitFor(() => expect(window.api.featureGate.strictState).toHaveBeenCalledWith("autodetect_eval"));
+      expect(screen.queryByRole("tab", { name: "Help Keepr learn" })).toBeNull();
+      expect(document.getElementById("settings-learn")).toBeNull();
     });
   });
 });

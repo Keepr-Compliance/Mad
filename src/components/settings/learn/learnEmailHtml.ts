@@ -173,3 +173,21 @@ export function highlightPdfText(str: string, re: RegExp | null): string {
     .map((r) => (r.mark ? `<mark class="${HIGHLIGHT_CLASS}">${esc(r.text)}</mark>` : esc(r.text)))
     .join("");
 }
+
+/**
+ * The detection's address is stored normalised to lower case
+ * ("4120 canarytest lane, testville, zz 00000"). Shown with each word
+ * capitalised and a two-letter state in capitals.
+ */
+export function displayAddress(address: string): string {
+  return address
+    .split(",")
+    .map((part, i) =>
+      part.replace(/[A-Za-z][A-Za-z'’]*/g, (w) =>
+        i > 0 && /^[a-z]{2}$/i.test(w) && /\b[a-z]{2}\b\s*\d*\s*$/i.test(part.trim())
+          ? w.toUpperCase()
+          : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase(),
+      ),
+    )
+    .join(",");
+}

@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@keepr/ui
 import type { UseLearnSession } from "./useLearnSession";
 import { LearnEmailPane, formatLearnDate, splitSender } from "./LearnEmailPane";
 import { LearnPdfPane } from "./LearnPdfPane";
+import { displayAddress } from "./learnEmailHtml";
 
 const TOP_BUTTON =
   "inline-flex h-[30px] items-center gap-1.5 rounded-md bg-[#F6F5F2] px-2.5 text-[13px] font-medium text-gray-500 hover:bg-gray-200 disabled:opacity-40";
@@ -59,7 +60,7 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
       <>
         <h2 className="m-0 text-xl font-semibold leading-7">Is this one of your deals?</h2>
         <div className="flex flex-col items-center gap-1">
-          <span className="text-lg font-semibold leading-[26px]">{current.question.address}</span>
+          <span className="text-lg font-semibold leading-[26px]">{displayAddress(current.question.address)}</span>
           <span className="text-sm text-gray-500">Not in Keepr yet · {n === 1 ? "1 email" : `${n} emails`}</span>
         </div>
         <div className="grid grid-cols-2 gap-3">
@@ -123,7 +124,6 @@ export function LearnQuestionDialog({
     <Dialog open={open} onOpenChange={(o) => (o ? undefined : onClose())}>
       <DialogContent
         hideClose
-        aria-label="Learn mode question"
         className="flex h-[640px] max-h-[calc(100vh-32px)] w-[1120px] max-w-[calc(100vw-32px)] flex-col gap-0 overflow-hidden rounded-xl border-0 bg-white p-0 text-[15px] leading-normal text-[#1C2430]"
       >
         <DialogTitle className="sr-only">Learn mode question</DialogTitle>
