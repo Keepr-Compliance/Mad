@@ -14,6 +14,10 @@ import {
 } from "../services/db/localUserSql";
 import logService from "../services/logService";
 import supabaseService from "../services/supabaseService";
+import {
+  readMembershipStanding,
+  type MembershipStanding,
+} from "../services/membershipStanding";
 import databaseService from "../services/databaseService";
 import { initializationBroadcaster } from "../services/initializationBroadcaster";
 import featureGateService from "../services/featureGateService";
@@ -60,6 +64,29 @@ interface LicenseResponse {
    * no event announcing the persist.
    */
   sessionBacked?: boolean;
+  /**
+   * BACKLOG-3951 — the user's standing with their brokerage, from a separate
+   * bounded read of ALL their membership rows. Absent when there is no session
+   * or the read failed; never changes `license`.
+   */
+  membership?: { standing: MembershipStanding["standing"]; organization_name?: string };
+}
+
+/**
+ * BACKLOG-3951: the `membership` field for a license answer. A read that failed
+ * or timed out adds nothing, so the renderer shows no membership message.
+ */
+async function membershipField(
+  read: Promise<MembershipStanding>
+): Promise<Pick<LicenseResponse, "membership">> {
+  const { standing, organizationName } = await read;
+  if (standing === "error") return {};
+  return {
+    membership: {
+      standing,
+      ...(organizationName ? { organization_name: organizationName } : {}),
+    },
+  };
 }
 
 /**
@@ -103,6 +130,26 @@ async function getLicenseData(): Promise<LicenseResponse> {
   }
 }
 
+/**
+ * BACKLOG-2885 / BACKLOG-2888: the "not an answer about this user" placeholder.
+ *
+ * Returned whenever this handler could not find out who the user is or what
+ * organization they belong to. The renderer holds it as unknown and re-asks
+ * (LicenseContext, bounded wait) instead of recording "individual". One literal
+ * for every such path, so they cannot drift apart.
+ */
+function notYetKnownLicense(): LicenseResponse {
+  return {
+    success: true,
+    sessionBacked: false,
+    license: {
+      license_type: "individual" as LicenseType,
+      ai_detection_enabled: false,
+      organization_id: undefined,
+    },
+  };
+}
+
 async function readLicenseData(timing: LicenseTiming): Promise<LicenseResponse> {
   try {
     const signInGenerationAtEntry = getSignInGeneration();
@@ -143,30 +190,44 @@ async function readLicenseData(timing: LicenseTiming): Promise<LicenseResponse> 
 
     if (!session || !session.user) {
       logService.debug("[License] No active session", "License");
-      return {
-        success: true,
-        // BACKLOG-2885: a DEFAULT, not an answer about this user. Flagged so the
-        // renderer holds it as unknown rather than recording it as "individual".
-        sessionBacked: false,
-        license: {
-          license_type: "individual" as LicenseType,
-          ai_detection_enabled: false,
-          organization_id: undefined,
-        },
-      };
+      // BACKLOG-2885: a DEFAULT, not an answer about this user. Flagged so the
+      // renderer holds it as unknown rather than recording it as "individual".
+      return notYetKnownLicense();
     }
 
     const user = session.user;
 
+    // BACKLOG-2888: a session file without a signed-in Supabase client (the
+    // BACKLOG-3768 offline carry-on keeps the user signed in locally) would run
+    // the membership query with no user. Row-level security then returns zero
+    // rows, which reads as "no membership" and a brokerage user as individual.
+    if (!supabaseService.isAuthenticated()) return notYetKnownLicense();
+
+    // BACKLOG-3951: started here, alongside the active-membership read below,
+    // and bounded; it decides nothing about license_type.
+    const standingRead = readMembershipStanding(user.id);
+
     // Check Supabase for organization membership (source of truth for team license)
     // This takes precedence over local database
     stepAt = Date.now();
-    const orgMembership = await supabaseService.getActiveOrganizationMembership(user.id);
+    const membershipOutcome = await supabaseService.getActiveOrganizationMembershipOutcome(user.id);
     timing.membershipMs = Date.now() - stepAt;
+    const orgMembership =
+      membershipOutcome.status === "member"
+        ? {
+            organization_id: membershipOutcome.organization_id,
+            organization_name: membershipOutcome.organization_name,
+            is_personal: membershipOutcome.is_personal,
+          }
+        : null;
 
     // BACKLOG-3476: the strict feature reader caches this same lookup. If the
     // organization changed, this is where the app first sees it.
     featureGateService.noteMembership(user.id, orgMembership?.organization_id ?? null);
+
+    // BACKLOG-2888: a FAILED lookup is not "no membership". Answer "not yet
+    // known" so the renderer re-asks; only `none` falls through to the local row.
+    if (membershipOutcome.status === "error") return notYetKnownLicense();
 
     /**
      * BACKLOG-3364 — A PERSONAL ORGANIZATION IS NOT A TEAM.
@@ -209,6 +270,7 @@ async function readLicenseData(timing: LicenseTiming): Promise<LicenseResponse> 
           organization_id: orgMembership.organization_id,
           organization_name: orgMembership.organization_name,
         },
+        ...(await membershipField(standingRead)),
       };
     }
 
@@ -236,6 +298,7 @@ async function readLicenseData(timing: LicenseTiming): Promise<LicenseResponse> 
           ai_detection_enabled: dbUser.ai_detection_enabled || false,
           organization_id: dbUser.organization_id,
         },
+        ...(await membershipField(standingRead)),
       };
     }
 
@@ -255,6 +318,7 @@ async function readLicenseData(timing: LicenseTiming): Promise<LicenseResponse> 
         ai_detection_enabled: false,
         organization_id: undefined,
       },
+      ...(await membershipField(standingRead)),
     };
   } catch (error) {
     logService.error("[License] Failed to get license:", "License", { error });

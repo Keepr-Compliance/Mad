@@ -3,6 +3,7 @@
  * Device detection, backup, drivers, and sync (primarily Windows)
  */
 import type { BackfillAvailability, BackfillProgress, BackfillResult } from "../iphoneBackfill";
+import type { SyncPhase } from "../../services/deviceSyncOrchestrator";
 
 /**
  * BACKLOG-2907: what the host knows about a prior backup for this device.
@@ -15,9 +16,10 @@ import type { BackfillAvailability, BackfillProgress, BackfillResult } from "../
  * existence. The question this answers is "is a full transfer coming?", not
  * "is there a directory on disk?".
  *
- * - `"exists"`  a prior backup is on disk AND is usable — `isComplete &&
- *               !isInterrupted`, the one predicate, evaluated by
- *               `isUsablePriorBackup` in `deviceSyncOrchestrator.ts`. The next
+ * - `"exists"`  a prior backup is on disk AND is usable — `isComplete` (an
+ *               interrupted but complete backup is usable, BACKLOG-2911), the one
+ *               predicate, evaluated by `isUsablePriorBackup` and mapped by
+ *               `toPriorBackupState` in `deviceSyncOrchestrator.ts`. The next
  *               sync is incremental.
  * - `"none"`    no full transfer can be avoided. EITHER the host established
  *               there is no prior backup (a proven ENOENT — producible since
@@ -189,6 +191,25 @@ export interface WindowApiBackup {
     }) => void,
   ) => () => void;
   onError: (callback: (error: { message: string }) => void) => () => void;
+  /**
+   * `backup:check-status` (preload deviceBridge.ts). BACKLOG-2917: `state` is three-state;
+   * `sizeBytes: null` means "not measured", never "empty".
+   *
+   * BACKLOG-2931: `priorBackup` is the sync's own usability answer
+   * (`toPriorBackupState` in deviceSyncOrchestrator.ts), read before the sync for the
+   * connect screen. Missing (an older main process) means `"unknown"`.
+   */
+  checkStatus?: (udid: string) => Promise<{
+    success: boolean;
+    state?: "absent" | "unknown" | "present";
+    reason?: string;
+    isComplete?: boolean;
+    isInterrupted?: boolean;
+    lastSyncTime?: string | null;
+    sizeBytes?: number | null;
+    priorBackup?: PriorBackupState;
+    error?: string;
+  }>;
 }
 
 /**
@@ -259,6 +280,13 @@ export type SyncCancelTrigger =
   | "try-again-no-device";
 
 /**
+ * BACKLOG-2939: every phase sent on `sync:progress` — the orchestrator's `SyncPhase`
+ * (deviceSyncOrchestrator `emitProgress`, forwarded by syncHandlers) plus "storing",
+ * which syncHandlers sends itself while saving to the database.
+ */
+export type SyncProgressPhase = SyncPhase | "storing";
+
+/**
  * Sync methods (Windows)
  */
 export interface WindowApiSync {
@@ -282,7 +310,8 @@ export interface WindowApiSync {
   stopDetection: () => Promise<{ success: boolean }>;
   onProgress: (
     callback: (progress: {
-      phase: string;
+      /** BACKLOG-2939: the real phase set, so a misspelt comparison fails type-check. */
+      phase: SyncProgressPhase;
       phaseProgress: number;
       overallProgress: number;
       message: string;

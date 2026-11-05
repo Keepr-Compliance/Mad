@@ -453,7 +453,7 @@ Integration branches (`int/*`) collect all sprint work before merging to develop
 **Pattern:**
 1. PM creates `int/<sprint-name>` from develop at sprint start
 2. All engineer PRs target the `int/*` branch (NOT develop)
-3. The `int/*` branch has no `strict: true` — PRs merge fast
+3. The `int/*` branch has no `strict: true` — PRs merge fast. Every push to `int/*` (each merged PR) runs CI on macOS and Windows; `int-portal/*` pushes run none (BACKLOG-3177)
 4. After all sprint work is done and tested, one PR from `int/*` to develop
 5. One CI run, one merge to develop
 

@@ -114,6 +114,17 @@ interface LicenseContextValue {
   transactionLimit: number;
   /** Whether user can create a new transaction */
   canCreateTransaction: boolean;
+
+  /**
+   * BACKLOG-3951 — the user's standing with their brokerage, for the CURRENT
+   * user only. `undefined` = not known (loading, read failed, signed out):
+   * callers show no membership message. "unlicensed" = a brokerage member with
+   * no license assigned (no new unlocks); "left_brokerage" = removed.
+   * Optional so existing `useLicense` mocks stay valid.
+   */
+  membershipStanding?: "licensed" | "unlicensed" | "left_brokerage" | "unknown" | "none";
+  /** BACKLOG-3951 — the brokerage's name for "left_brokerage". */
+  membershipOrgName?: string;
 }
 
 // License state interface (internal)
@@ -169,6 +180,9 @@ interface LicenseState {
   validatedForUserId: string | null | undefined;
   // SPRINT-062: Validation status
   validationStatus: LicenseValidationResult | null;
+  /** BACKLOG-3951 — from the last completed license answer; undefined = unknown. */
+  membershipStanding?: LicenseContextValue["membershipStanding"];
+  membershipOrgName?: string;
 }
 
 // Default license state (individual with no AI)
@@ -275,6 +289,8 @@ export function LicenseProvider({
           hasInitialized: true,
           answeredForUserId: answeringFor,
           answerIsUsable: usable,
+          membershipStanding: usable ? license.membershipStanding : undefined,
+          membershipOrgName: usable ? license.membershipOrgName : undefined,
         }));
       } else {
         // No license found - use defaults
@@ -284,6 +300,9 @@ export function LicenseProvider({
           hasInitialized: true,
           answeredForUserId: answeringFor,
           answerIsUsable: true,
+          // BACKLOG-3951: no answer about the brokerage either.
+          membershipStanding: undefined,
+          membershipOrgName: undefined,
         }));
       }
     } catch {
@@ -298,6 +317,9 @@ export function LicenseProvider({
         hasInitialized: true,
         answeredForUserId: answeringFor,
         answerIsUsable: true,
+        // BACKLOG-3951: a failed read says nothing about the brokerage.
+        membershipStanding: undefined,
+        membershipOrgName: undefined,
       }));
     }
   }, [currentUserId]);
@@ -578,9 +600,14 @@ export function LicenseProvider({
   // SPRINT-127: transactionLimit from plan feature. Plan features are sole source of truth.
   // Parse max_transaction_size feature value (string) as integer.
   // Defaults to Infinity (fail-open) when the feature is missing or not yet loaded.
+  // BACKLOG-4149: a plan that carries unlimited_transactions has NO cap, whatever
+  // max_transaction_size says. Read `allowed`, never `value`: the Agent subscription and
+  // the Unlimited override arrive as allowed:true with value "false". Strict read, not the
+  // fail-open featureIsAllowed(): a map with the cap but without the key keeps the cap.
   const planMaxTxn = planFeatures["max_transaction_size"]?.value;
   const parsedPlanLimit = planMaxTxn ? parseInt(planMaxTxn, 10) : NaN;
-  const transactionLimit = !isNaN(parsedPlanLimit) ? parsedPlanLimit : Infinity;
+  const unlimitedTransactions = planFeatures["unlimited_transactions"]?.allowed === true;
+  const transactionLimit = !unlimitedTransactions && !isNaN(parsedPlanLimit) ? parsedPlanLimit : Infinity;
 
   // SPRINT-127: canCreateTransaction uses plan-feature-derived limit
   const canCreateTransaction = transactionCount < transactionLimit;
@@ -606,8 +633,14 @@ export function LicenseProvider({
       transactionCount,
       transactionLimit,
       canCreateTransaction,
+      // BACKLOG-3951: only an answer for the user signed in right now.
+      membershipStanding:
+        state.answeredForUserId === currentUserId ? state.membershipStanding : undefined,
+      membershipOrgName:
+        state.answeredForUserId === currentUserId ? state.membershipOrgName : undefined,
     }),
     [
+      currentUserId,
       state,
       isLicenseResolved,
       hasAIAddon,

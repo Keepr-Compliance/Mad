@@ -514,7 +514,7 @@ describe("useIPhoneSync", () => {
         syncStateRef.isActive = true;
 
         act(() => {
-          syncProgressCallback?.({ phase: "parsing_messages", overallProgress: 60, message: "Reading messages" });
+          syncProgressCallback?.({ phase: "parsing-messages", overallProgress: 60, message: "Reading messages" });
         });
         act(() => {
           syncProgressCallback?.({ phase: "cleanup", overallProgress: 40, message: "Securing your iPhone backup… 40%" });
@@ -551,7 +551,7 @@ describe("useIPhoneSync", () => {
 
       act(() => {
         syncProgressCallback?.({
-          phase: "parsing_messages",
+          phase: "parsing-messages",
           overallProgress: 60,
           message: "Parsing messages...",
         });
@@ -561,7 +561,7 @@ describe("useIPhoneSync", () => {
 
       act(() => {
         syncProgressCallback?.({
-          phase: "parsing_contacts",
+          phase: "parsing-contacts",
           overallProgress: 70,
         });
       });
@@ -1336,7 +1336,7 @@ describe("useIPhoneSync", () => {
 
       // Set phase to extracting (safe to disconnect)
       act(() => {
-        syncProgressCallback?.({ phase: "parsing_messages", overallProgress: 70 });
+        syncProgressCallback?.({ phase: "parsing-messages", overallProgress: 70 });
       });
 
       // Disconnect during extraction

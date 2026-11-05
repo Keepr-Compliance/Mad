@@ -7,6 +7,16 @@
 import type { UserLicense } from "../models";
 
 /**
+ * BACKLOG-3951 — the signed-in user's standing with their brokerage
+ * (electron/services/membershipStanding.ts). "unlicensed" = a member with no
+ * license assigned; "left_brokerage" = removed by the brokerage.
+ */
+export interface LicenseMembershipStanding {
+  standing: "licensed" | "unlicensed" | "left_brokerage" | "unknown" | "none";
+  organization_name?: string;
+}
+
+/**
  * License API (BACKLOG-426, SPRINT-062)
  */
 export interface WindowApiLicense {
@@ -22,6 +32,8 @@ export interface WindowApiLicense {
      * must treat false as "not known yet", not as "individual".
      */
     sessionBacked?: boolean;
+    /** BACKLOG-3951 — standing with the brokerage; absent when unknown. */
+    membership?: LicenseMembershipStanding;
   }>;
   /** Refresh license data from database */
   refresh: () => Promise<{
@@ -30,6 +42,8 @@ export interface WindowApiLicense {
     error?: string;
     /** BACKLOG-2885 — see `get`. */
     sessionBacked?: boolean;
+    /** BACKLOG-3951 — see `get`. */
+    membership?: LicenseMembershipStanding;
   }>;
 
   // ============================================

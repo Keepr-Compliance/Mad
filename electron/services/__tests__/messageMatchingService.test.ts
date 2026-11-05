@@ -3,7 +3,7 @@
  * Tests for phone normalization and message-contact matching logic.
  *
  * @see TASK-977
- * @see TASK-2087 (address filtering tests)
+ * @see BACKLOG-4039 / BACKLOG-3984 (auto-link path removed; control C2 below)
  */
 
 import {
@@ -101,428 +101,54 @@ describe("messageMatchingService", () => {
 });
 
 // ============================================
-// TASK-2087: Address filtering tests
+// BACKLOG-4039 / BACKLOG-3984 — CONTROL C2
 // ============================================
-// These tests require DB mocks and test autoLinkEmailsToTransaction /
-// autoLinkTextsToTransaction address filtering behavior.
-
-const mockDbAll = jest.fn();
-const mockDbGet = jest.fn();
-const mockDbRun = jest.fn();
-
-jest.mock("../db/core/dbConnection", () => ({
-  dbAll: (...args: unknown[]) => mockDbAll(...args),
-  dbGet: (...args: unknown[]) => mockDbGet(...args),
-  dbRun: (...args: unknown[]) => mockDbRun(...args),
-}));
-
-jest.mock("../logService", () => {
-  const mockLogFn = jest.fn().mockResolvedValue(undefined);
-  return {
-    __esModule: true,
-    default: {
-      info: mockLogFn,
-      warn: mockLogFn,
-      error: mockLogFn,
-      debug: mockLogFn,
-    },
+// The deal-level auto-link path (texts + emails, behind the IPC channel
+// `transactions:auto-link-texts`) had no caller in src/ and its email half read
+// columns `messages` has never had. It was removed, not repaired: live email
+// auto-linking is autoLinkService, on the `emails` table. These assertions go
+// red if any removed export comes back, under its name or on the default object.
+describe("BACKLOG-4039/3984 C2 — the removed auto-link path stays removed", () => {
+  /* eslint-disable @typescript-eslint/no-require-imports */
+  const service = require("../messageMatchingService") as Record<string, unknown> & {
+    default: Record<string, unknown>;
   };
-});
+  const sqlModule = require("../db/messageMatchingSql") as Record<string, unknown>;
+  /* eslint-enable @typescript-eslint/no-require-imports */
 
-// Re-import after mocks are set up (jest hoists mocks above imports)
-import {
-  autoLinkEmailsToTransaction,
-  autoLinkTextsToTransaction,
-} from "../messageMatchingService";
+  const REMOVED_FUNCTIONS = [
+    "autoLinkAllToTransaction",
+    "autoLinkTextsToTransaction",
+    "autoLinkEmailsToTransaction",
+    "findEmailsByAddresses",
+  ];
+  // filterEmailMatchesByAddress was never exported, so no runtime lookup can see
+  // it; its removal is proven by type-check and lint, not here.
+  const REMOVED_SQL = [
+    "EMAIL_CHANNEL_CANDIDATES_SQL",
+    "TRANSACTION_ADDRESS_SQL",
+    "ignoredEmailsByExternalIdSql",
+    "claimMessagesForTransactionSql085",
+    "claimMessagesForTransactionSql09",
+    "TRANSACTION_TEXT_WINDOW_SQL",
+    "MESSAGE_THREAD_ID_SQL",
+    "messageBodiesSql",
+  ];
 
-describe("messageMatchingService - address filtering (TASK-2087)", () => {
-  const mockUserId = "user-1";
-  const mockTransactionId = "txn-1";
-
-  beforeEach(() => {
-    jest.clearAllMocks();
+  it.each(REMOVED_FUNCTIONS)("messageMatchingService does not export %s", (name) => {
+    expect(typeof service[name]).toBe("undefined");
+    expect(typeof service.default[name]).toBe("undefined");
   });
 
-  describe("filterEmailMatchesByAddress (via autoLinkEmailsToTransaction)", () => {
-    it("should process messages in batches when there are more than 100", async () => {
-      // Set up transaction with address
-      mockDbGet.mockImplementation((sql: string) => {
-        if (sql.includes("FROM transactions")) {
-          return {
-            user_id: mockUserId,
-            property_address: "123 Oak Street, Portland, OR",
-            property_street: null,
-          };
-        }
-        // For createCommunicationReference checks
-        if (sql.includes("FROM communications") && sql.includes("message_id")) return null;
-        if (sql.includes("FROM messages WHERE id")) return { id: "msg" };
-        return null;
-      });
-
-      // Generate 150 message IDs to trigger batching (batch size = 100)
-      const messageIds = Array.from({ length: 150 }, (_, i) => `msg-${i}`);
-
-      mockDbAll.mockImplementation((sql: string) => {
-        // Contact emails for transaction
-        if (sql.includes("FROM transaction_contacts") && sql.includes("contact_emails")) {
-          return [{ contactId: "contact-1", email: "agent@realty.com" }];
-        }
-        // findEmailsByAddresses: return 150 matching messages
-        if (sql.includes("FROM messages m") && sql.includes("channel = 'email'")) {
-          return messageIds.map(id => ({
-            id,
-            sender: "agent@realty.com",
-            recipients: null,
-            direction: "inbound",
-            channel: "email",
-          }));
-        }
-        // filterEmailMatchesByAddress: batch queries for message content
-        if (sql.includes("FROM messages") && sql.includes("subject")) {
-          // Extract the IDs from the SQL placeholders by checking params
-          // Return messages with address in content for about half
-          return messageIds
-            .filter((_, i) => i % 2 === 0)
-            .map(id => ({
-              id,
-              subject: "Re: 123 Oak closing",
-              body_text: null,
-            }));
-        }
-        return [];
-      });
-
-      const result = await autoLinkEmailsToTransaction(mockTransactionId);
-
-      // Should have linked the filtered subset (those with address in content)
-      expect(result.linked).toBeGreaterThan(0);
-      expect(result.linked).toBeLessThan(150);
-
-      // Verify that the batch query for message content was called
-      // (filterEmailMatchesByAddress uses batches of 100)
-      const contentQueryCalls = mockDbAll.mock.calls.filter(
-        (call) => typeof call[0] === "string" && call[0].includes("subject, body_text")
-      );
-      // With 150 messages, there should be 2 batch calls (100 + 50)
-      expect(contentQueryCalls.length).toBe(2);
-    });
-
-    it("should filter emails by address content when transaction has property_address", async () => {
-      mockDbGet.mockImplementation((sql: string) => {
-        if (sql.includes("FROM transactions")) {
-          return {
-            user_id: mockUserId,
-            property_address: "456 Elm Drive, Seattle, WA",
-            property_street: null,
-          };
-        }
-        if (sql.includes("FROM communications") && sql.includes("message_id")) return null;
-        if (sql.includes("FROM messages WHERE id")) return { id: "msg" };
-        return null;
-      });
-
-      mockDbAll.mockImplementation((sql: string) => {
-        if (sql.includes("FROM transaction_contacts") && sql.includes("contact_emails")) {
-          return [{ contactId: "contact-1", email: "buyer@example.com" }];
-        }
-        // findEmailsByAddresses: return 3 messages
-        if (sql.includes("FROM messages m") && sql.includes("channel = 'email'")) {
-          return [
-            { id: "msg-1", sender: "buyer@example.com", recipients: null, direction: "inbound", channel: "email" },
-            { id: "msg-2", sender: "buyer@example.com", recipients: null, direction: "inbound", channel: "email" },
-            { id: "msg-3", sender: "buyer@example.com", recipients: null, direction: "inbound", channel: "email" },
-          ];
-        }
-        // filterEmailMatchesByAddress: only msg-1 and msg-3 mention the address
-        if (sql.includes("subject, body_text")) {
-          return [
-            { id: "msg-1", subject: "456 Elm closing documents", body_text: null },
-            { id: "msg-3", subject: null, body_text: "Please review the offer for 456 Elm." },
-          ];
-        }
-        return [];
-      });
-
-      const result = await autoLinkEmailsToTransaction(mockTransactionId);
-
-      // Only 2 of 3 emails mention the address
-      expect(result.linked).toBe(2);
-    });
-
-    it("matches abbreviated address variants via canonicalization (BACKLOG-2311)", async () => {
-      // Transaction stores the full form; the email uses the abbreviated form.
-      mockDbGet.mockImplementation((sql: string) => {
-        if (sql.includes("FROM transactions")) {
-          return {
-            user_id: mockUserId,
-            property_address: "3414 Sapp Road Southwest, Atlanta, GA",
-            property_street: null,
-          };
-        }
-        if (sql.includes("FROM communications") && sql.includes("message_id")) return null;
-        if (sql.includes("FROM messages WHERE id")) return { id: "msg" };
-        return null;
-      });
-
-      mockDbAll.mockImplementation((sql: string) => {
-        if (sql.includes("FROM transaction_contacts") && sql.includes("contact_emails")) {
-          return [{ contactId: "contact-1", email: "buyer@example.com" }];
-        }
-        if (sql.includes("FROM messages m") && sql.includes("channel = 'email'")) {
-          return [
-            { id: "msg-abbrev", sender: "buyer@example.com", recipients: null, direction: "inbound", channel: "email" },
-            { id: "msg-nomatch", sender: "buyer@example.com", recipients: null, direction: "inbound", channel: "email" },
-          ];
-        }
-        if (sql.includes("subject, body_text")) {
-          // Only msg-abbrev names the street (abbreviated); the canonicalizer
-          // must fold "Rd SW" to match stored "Road Southwest".
-          return [
-            { id: "msg-abbrev", subject: "Re: 3414 Sapp Rd SW", body_text: null },
-            { id: "msg-nomatch", subject: "General question", body_text: "no address" },
-          ];
-        }
-        return [];
-      });
-
-      const result = await autoLinkEmailsToTransaction(mockTransactionId);
-
-      // The abbreviated-variant email links; the unrelated one does not.
-      expect(result.linked).toBe(1);
-    });
+  it.each(REMOVED_SQL)("messageMatchingSql does not export %s", (name) => {
+    expect(typeof sqlModule[name]).toBe("undefined");
   });
 
-  describe("autoLinkEmailsToTransaction - address filter (BACKLOG-2311 restored fallback)", () => {
-    it("falls back to unfiltered when 0 candidate emails match the address (BACKLOG-2311)", async () => {
-      // BACKLOG-1364 previously returned 0 here (no silent fallback). BACKLOG-2311
-      // restores the widening fallback: a near-miss must not drop every candidate.
-      mockDbGet.mockImplementation((sql: string) => {
-        if (sql.includes("FROM transactions")) {
-          return {
-            user_id: mockUserId,
-            property_address: "999 Nonexistent Way, Nowhere, XX",
-            property_street: null,
-            skip_address_filter: 0,
-          };
-        }
-        if (sql.includes("FROM communications") && sql.includes("message_id")) return null;
-        if (sql.includes("FROM messages WHERE id")) return { id: "msg" };
-        return null;
-      });
-
-      let findEmailsCallCount = 0;
-      mockDbAll.mockImplementation((sql: string) => {
-        if (sql.includes("FROM transaction_contacts") && sql.includes("contact_emails")) {
-          return [{ contactId: "contact-1", email: "seller@example.com" }];
-        }
-        // findEmailsByAddresses: return 2 candidate messages
-        if (sql.includes("FROM messages m") && sql.includes("channel = 'email'")) {
-          findEmailsCallCount++;
-          return [
-            { id: "msg-1", sender: "seller@example.com", recipients: null, direction: "inbound", channel: "email" },
-            { id: "msg-2", sender: "seller@example.com", recipients: null, direction: "inbound", channel: "email" },
-          ];
-        }
-        // filterEmailMatchesByAddress: NO emails match the address
-        if (sql.includes("subject, body_text")) {
-          return [];
-        }
-        return [];
-      });
-
-      const result = await autoLinkEmailsToTransaction(mockTransactionId);
-
-      // BACKLOG-2311: filtered pass yields 0 → widen to all candidate emails.
-      expect(result.linked).toBe(2);
-      // findEmailsByAddresses is fetched once; the fallback reuses that result.
-      expect(findEmailsCallCount).toBe(1);
-    });
-
-    it("should skip address filter when transaction has no property_address", async () => {
-      mockDbGet.mockImplementation((sql: string) => {
-        if (sql.includes("FROM transactions")) {
-          return {
-            user_id: mockUserId,
-            property_address: null,
-            property_street: null,
-          };
-        }
-        if (sql.includes("FROM communications") && sql.includes("message_id")) return null;
-        if (sql.includes("FROM messages WHERE id")) return { id: "msg" };
-        return null;
-      });
-
-      mockDbAll.mockImplementation((sql: string) => {
-        if (sql.includes("FROM transaction_contacts") && sql.includes("contact_emails")) {
-          return [{ contactId: "contact-1", email: "agent@realty.com" }];
-        }
-        if (sql.includes("FROM messages m") && sql.includes("channel = 'email'")) {
-          return [
-            { id: "msg-1", sender: "agent@realty.com", recipients: null, direction: "inbound", channel: "email" },
-          ];
-        }
-        return [];
-      });
-
-      const result = await autoLinkEmailsToTransaction(mockTransactionId);
-
-      expect(result.linked).toBe(1);
-
-      // Should NOT have queried for message content (no address filter)
-      const contentQueryCalls = mockDbAll.mock.calls.filter(
-        (call) => typeof call[0] === "string" && call[0].includes("subject, body_text")
-      );
-      expect(contentQueryCalls.length).toBe(0);
-    });
-
-    it("should skip address filter when skip_address_filter toggle is ON", async () => {
-      mockDbGet.mockImplementation((sql: string) => {
-        if (sql.includes("FROM transactions")) {
-          return {
-            user_id: mockUserId,
-            property_address: "123 Main St, Portland, OR",
-            property_street: null,
-            skip_address_filter: 1,
-          };
-        }
-        if (sql.includes("FROM communications") && sql.includes("message_id")) return null;
-        if (sql.includes("FROM messages WHERE id")) return { id: "msg" };
-        return null;
-      });
-
-      mockDbAll.mockImplementation((sql: string) => {
-        if (sql.includes("FROM transaction_contacts") && sql.includes("contact_emails")) {
-          return [{ contactId: "contact-1", email: "agent@realty.com" }];
-        }
-        if (sql.includes("FROM messages m") && sql.includes("channel = 'email'")) {
-          return [
-            { id: "msg-1", sender: "agent@realty.com", recipients: null, direction: "inbound", channel: "email" },
-            { id: "msg-2", sender: "agent@realty.com", recipients: null, direction: "inbound", channel: "email" },
-          ];
-        }
-        return [];
-      });
-
-      const result = await autoLinkEmailsToTransaction(mockTransactionId);
-
-      // BACKLOG-1364: All emails linked because address filter is toggled off
-      expect(result.linked).toBe(2);
-
-      // Should NOT have queried for message content (address filter skipped)
-      const contentQueryCalls = mockDbAll.mock.calls.filter(
-        (call) => typeof call[0] === "string" && call[0].includes("subject, body_text")
-      );
-      expect(contentQueryCalls.length).toBe(0);
-    });
-  });
-
-  describe("autoLinkEmailsToTransaction - nothing to link when no candidates", () => {
-    it("links nothing when there are no unlinked candidate emails (BACKLOG-2311)", async () => {
-      // Transaction has address "456 Maple Drive"; the contact's matching emails
-      // are all already linked, so findEmailsByAddresses returns []. With no
-      // candidate emails there is nothing for the widening fallback to attach.
-      mockDbGet.mockImplementation((sql: string) => {
-        if (sql.includes("FROM transactions")) {
-          return {
-            user_id: mockUserId,
-            property_address: "456 Maple Drive, Portland, OR",
-            property_street: null,
-            skip_address_filter: 0,
-          };
-        }
-        if (sql.includes("FROM communications") && sql.includes("message_id")) return null;
-        if (sql.includes("FROM messages WHERE id")) return { id: "msg" };
-        return null;
-      });
-
-      let findEmailsCallCount = 0;
-      mockDbAll.mockImplementation((sql: string) => {
-        if (sql.includes("FROM transaction_contacts") && sql.includes("contact_emails")) {
-          return [{ contactId: "contact-1", email: "bob@example.com" }];
-        }
-        // findEmailsByAddresses: returns 0 because the matching email is already linked
-        if (sql.includes("FROM messages m") && sql.includes("channel = 'email'")) {
-          findEmailsCallCount++;
-          return [];
-        }
-        return [];
-      });
-
-      const result = await autoLinkEmailsToTransaction(mockTransactionId);
-
-      // Should NOT have linked anything (all are already linked)
-      expect(result.linked).toBe(0);
-      // BACKLOG-1364: findEmailsByAddresses called once (no fallback)
-      expect(findEmailsCallCount).toBe(1);
-    });
-  });
-
-  describe("autoLinkTextsToTransaction - no address filtering", () => {
-    it("should NOT apply address filtering to text messages", async () => {
-      mockDbGet.mockImplementation((sql: string) => {
-        if (sql.includes("FROM transactions")) {
-          return {
-            user_id: mockUserId,
-            started_at: "2024-01-01T00:00:00Z",
-            closed_at: null,
-          };
-        }
-        if (sql.includes("FROM communications") && sql.includes("message_id")) return null;
-        if (sql.includes("FROM messages WHERE id")) return { id: "msg" };
-        return null;
-      });
-
-      mockDbAll.mockImplementation((sql: string) => {
-        // Contact phones for transaction
-        if (sql.includes("FROM transaction_contacts") && sql.includes("contact_phones")) {
-          return [{ contactId: "contact-1", phone: "+14155550109" }];
-        }
-        // findTextMessagesByPhones: return messages
-        // participants_flat must contain the phone digits for matching
-        if (sql.includes("FROM messages m") && sql.includes("channel IN ('sms', 'imessage')")) {
-          return [
-            {
-              id: "msg-1",
-              participants: null,
-              participants_flat: "14155550109",
-              direction: "inbound",
-              channel: "sms",
-            },
-            {
-              id: "msg-2",
-              participants: null,
-              participants_flat: "14155550109",
-              direction: "outbound",
-              channel: "imessage",
-            },
-          ];
-        }
-        return [];
-      });
-
-      const result = await autoLinkTextsToTransaction(mockTransactionId);
-
-      // All messages should be linked without any address filtering
-      expect(result.linked).toBe(2);
-
-      // Verify NO queries for message content (subject/body_text) were made
-      // Address filtering queries use "subject, body_text" in their SQL
-      const contentQueryCalls = mockDbAll.mock.calls.filter(
-        (call) => typeof call[0] === "string" && call[0].includes("subject, body_text")
-      );
-      expect(contentQueryCalls.length).toBe(0);
-
-      // Also verify the text message query SQL does NOT reference address-related columns
-      const textQueryCalls = mockDbAll.mock.calls.filter(
-        (call) => typeof call[0] === "string" && call[0].includes("channel IN ('sms', 'imessage')")
-      );
-      for (const call of textQueryCalls) {
-        const sql = call[0] as string;
-        expect(sql).not.toContain("body_text");
-        expect(sql).not.toContain("subject");
-        expect(sql).not.toContain("property_address");
-      }
-    });
+  it("the kept helpers are still exported (positive control for the lookups above)", () => {
+    for (const name of ["normalizePhone", "phonesMatch", "createCommunicationReferenceSync", "findTextMessagesByPhones"]) {
+      expect(typeof service[name]).toBe("function");
+    }
+    expect(typeof sqlModule.TRANSACTION_CONTACT_EMAILS_SQL).not.toBe("undefined");
+    expect(typeof sqlModule.messagesForPhoneMatchingSql).toBe("function");
   });
 });

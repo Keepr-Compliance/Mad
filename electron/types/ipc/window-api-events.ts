@@ -3,7 +3,6 @@
  * Top-level event listeners for auth, mailbox, deep link, and other events
  */
 
-import type { User, Subscription } from "../models";
 import type { FolderExportProgress } from "./common";
 
 /**
@@ -15,6 +14,17 @@ import type { FolderExportProgress } from "./common";
 export interface DeepLinkLicenseBlockedPayload {
   userId: string;
   blockReason: string;
+}
+
+/**
+ * BACKLOG-4046: the payload of the deep-link device-limit event. Exactly the
+ * user id and the two device counts the sign-in screen shows. Built in main by
+ * `deviceLimitPayload()` and narrowed again by the preload bridge.
+ */
+export interface DeepLinkDeviceLimitPayload {
+  userId: string;
+  deviceCount: number;
+  deviceLimit: number;
 }
 
 /**
@@ -79,48 +89,6 @@ export interface WindowApiEvents {
     }) => void,
   ) => () => void;
   onMicrosoftMailboxPendingCancelled: (callback: () => void) => () => void;
-  onGoogleLoginComplete: (
-    callback: (result: {
-      success: boolean;
-      user?: User;
-      sessionToken?: string;
-      subscription?: Subscription;
-      isNewUser?: boolean;
-      pendingLogin?: boolean;
-      error?: string;
-    }) => void,
-  ) => () => void;
-  onMicrosoftLoginComplete: (
-    callback: (result: {
-      success: boolean;
-      user?: User;
-      sessionToken?: string;
-      subscription?: Subscription;
-      isNewUser?: boolean;
-      pendingLogin?: boolean;
-      error?: string;
-    }) => void,
-  ) => () => void;
-  // Event listeners for pending login (OAuth succeeded but DB not initialized - login-first flow)
-  onGoogleLoginPending: (
-    callback: (result: {
-      success: boolean;
-      pendingLogin?: boolean;
-      oauthData?: unknown;
-      error?: string;
-    }) => void,
-  ) => () => void;
-  onMicrosoftLoginPending: (
-    callback: (result: {
-      success: boolean;
-      pendingLogin?: boolean;
-      oauthData?: unknown;
-      error?: string;
-    }) => void,
-  ) => () => void;
-  // Event listeners for login cancelled (user closed popup window)
-  onGoogleLoginCancelled: (callback: () => void) => () => void;
-  onMicrosoftLoginCancelled: (callback: () => void) => () => void;
   /**
    * BACKLOG-1832: Fires when a background auto-sync starts for a specific transaction.
    * The renderer uses this to show a "fetching emails…" indicator.
@@ -216,16 +184,6 @@ export interface WindowApiEvents {
    * Fired when user authenticates successfully but device registration fails due to limit
    */
   onDeepLinkDeviceLimit: (
-    callback: (data: {
-      accessToken: string;
-      refreshToken: string;
-      userId: string;
-      licenseStatus: {
-        isValid: boolean;
-        licenseType: "trial" | "individual" | "team";
-        deviceCount: number;
-        deviceLimit: number;
-      };
-    }) => void,
+    callback: (data: DeepLinkDeviceLimitPayload) => void,
   ) => () => void;
 }

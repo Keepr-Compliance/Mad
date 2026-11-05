@@ -64,7 +64,7 @@ import {
   SEAL_QUIT_QUIT_ANYWAY,
   sealQuitPromptHeading,
 } from "./utils/sealQuitPrompt";
-import { redactEmail, redactId } from "./utils/redactSensitive";
+import { redactId } from "./utils/redactSensitive";
 
 // ==========================================
 // DEEP LINK PROTOCOL REGISTRATION (TASK-1500)
@@ -168,6 +168,11 @@ import {
   executeRecovery,
   type RetryState,
 } from "./services/updaterRetryPolicy";
+// BACKLOG-3469: the Settings auto-download switch drives autoUpdater.autoDownload.
+import {
+  recoveryMayDownload,
+  runStartupUpdateCheck,
+} from "./services/updateDownloadPolicy";
 // Import constants
 import {
   WINDOW_CONFIG,
@@ -219,6 +224,9 @@ import { registerDriverHandlers } from "./handlers/driverHandlers";
 import { registerLLMHandlers } from "./handlers/llmHandlers";
 import { registerLicenseHandlers } from "./handlers/licenseHandlers";
 import { registerFeatureGateHandlers } from "./handlers/featureGateHandlers";
+// BACKLOG-4120: Learn mode ("Help Keepr learn"). Separate from AI detection.
+import { registerLearnModeHandlers } from "./handlers/learnModeHandlers";
+import { openQuestionAttachment } from "./services/learnAttachmentDownload";
 import { registerEntitlementHandlers } from "./handlers/entitlementHandlers";
 import { registerPaymentHandlers } from "./handlers/paymentHandlers";
 import { registerBillingHandlers } from "./handlers/billingHandlers";
@@ -246,6 +254,11 @@ import {
   CURRENT_PRIVACY_POLICY_VERSION,
 } from "./constants/legalVersions";
 import type { OAuthProvider, SubscriptionTier, SubscriptionStatus, User } from "./types";
+import {
+  provisionDeepLinkSignIn,
+  recordDeepLinkSignInFailure,
+  type DeepLinkProvisionResult,
+} from "./services/loginProvisioningService";
 import {
   noteSignIn,
   saveSignInSession,
@@ -305,6 +318,7 @@ import { startAttachmentOcr, stopAttachmentOcr } from "./services/ocr/attachment
 import { normalizeOAuthProvider } from "./utils/normalizeOAuthProvider";
 import { buildDeepLinkAuthPayload } from "./utils/deepLinkAuthPayload";
 import { licenseBlockedPayload } from "./utils/deepLinkLicenseBlockedPayload";
+import { deviceLimitPayload } from "./utils/deepLinkDeviceLimitPayload";
 
 // BACKLOG-3432: which installer this build came from, as a derived value only.
 // The Windows one-click installer migrates a prior per-machine install to
@@ -360,71 +374,6 @@ process.on("unhandledRejection", (reason: unknown) => {
 });
 
 let mainWindow: BrowserWindow | null = null;
-
-/**
- * Create or update local SQLite user from deep link auth data (TASK-1507D)
- *
- * This ensures the local database has a user record after deep link auth,
- * which is required for FK constraints (mailbox connection, audit logs, etc.)
- *
- * @param userData - User data from Supabase session
- * @returns Promise<void>
- */
-async function syncDeepLinkUserToLocalDb(userData: PendingDeepLinkUser): Promise<void> {
-  try {
-    // Check if user already exists by email (deep link users use Supabase ID as oauth_id)
-    // We check by email first since that's the unique identifier
-    let localUser = await databaseService.getUserByEmail(userData.email);
-
-    if (!localUser) {
-      // Also check by OAuth ID in case the user was created via a different flow
-      // Map 'azure' to 'microsoft' for lookup (Azure AD is Microsoft's provider)
-      const lookupProvider = userData.provider === "azure" ? "microsoft" : userData.provider;
-      localUser = await databaseService.getUserByOAuthId(lookupProvider, userData.supabaseId);
-    }
-
-    if (!localUser) {
-      // TASK-1507G: Use Supabase Auth UUID as local user ID for unified IDs
-      // Map 'azure' to 'microsoft' - Azure AD is Microsoft's auth provider
-      const normalizedProvider = userData.provider === "azure" ? "microsoft" : userData.provider;
-      await databaseService.createUser({
-        id: userData.supabaseId,
-        email: userData.email,
-        display_name: userData.displayName || userData.email.split("@")[0],
-        avatar_url: userData.avatarUrl,
-        oauth_provider: normalizedProvider,
-        oauth_id: userData.supabaseId,
-        subscription_tier: userData.subscriptionTier || "free",
-        subscription_status: userData.subscriptionStatus || "trial",
-        trial_ends_at: userData.trialEndsAt,
-        is_active: true,
-      });
-      log.info("[DeepLink] Created local SQLite user for:", redactId(userData.supabaseId));
-    } else if (localUser.id !== userData.supabaseId) {
-      // BACKLOG-600: Local user exists with different ID than Supabase auth.uid()
-      // This happens for users created before TASK-1507G (user ID unification)
-      // Migrate the local user to use the Supabase ID for FK constraint compatibility
-      log.info("[DeepLink] Migrating local user ID to match Supabase", {
-        oldId: redactId(localUser.id),
-        newId: redactId(userData.supabaseId),
-        email: redactEmail(userData.email),
-      });
-      try {
-        await databaseService.migrateUserIdForUnification(localUser.id, userData.supabaseId);
-        log.info("[DeepLink] Local user ID migrated successfully to:", redactId(userData.supabaseId));
-      } catch (migrationError) {
-        log.error("[DeepLink] Failed to migrate local user ID:", migrationError);
-        // Don't throw - auth should continue, but Supabase operations may fail
-      }
-    } else {
-      log.info("[DeepLink] Local user already exists with correct ID for:", redactEmail(userData.email));
-    }
-  } catch (error) {
-    log.error("[DeepLink] Failed to create local user:", error);
-    // Don't rethrow - auth should still succeed even if local user creation fails
-    // The user will be created on next database operation that requires it
-  }
-}
 
 // ==========================================
 // DEEP LINK URL REDACTION (TASK-1939)
@@ -695,6 +644,14 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       // BACKLOG-4040 S3: id only — the scope is persisted to sentry/scope_v3.json in plaintext.
       Sentry.setUser({ id: user.id });
       log.info("[DeepLink] Session established for user:", redactId(user.id));
+      // BACKLOG-3956: one helper normalizes here AND for the renderer payload below.
+      const provider = (normalizeOAuthProvider(user.app_metadata?.provider) || "google") as OAuthProvider;
+      // Extract email - Azure/Microsoft may have empty user.email but email in user_metadata
+      const userEmail = user.email || user.user_metadata?.email || "";
+      // BACKLOG-3340: who a sign-in denied below is recorded against. Built from
+      // the same two consts as deepLinkUserData, so the failure lookup finds the
+      // row provisioning writes.
+      const signInIdentity = { supabaseId: user.id, email: userEmail, provider };
 
       // TASK-1507: Step 2 - Validate license
       log.info("[DeepLink] Validating license for user:", redactId(user.id));
@@ -712,6 +669,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         Sentry.captureException(new Error("Deep link auth: license blocked"), {
           tags: { component: "deep-link", action: "auth-callback", error_code: "LICENSE_BLOCKED", block_reason: licenseStatus.blockReason || "unknown" },
         });
+        recordDeepLinkSignInFailure(signInIdentity, "license_blocked");
         // BACKLOG-4041: user id and block reason only. The Supabase client
         // keeps the session set above (setSession), which the blocked
         // screen's contact lookup (sessionHandlers handleGetUserContact) reads.
@@ -743,20 +701,18 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         Sentry.captureException(new Error("Deep link auth: device limit exceeded"), {
           tags: { component: "deep-link", action: "auth-callback", error_code: "DEVICE_LIMIT" },
         });
-        sendToRenderer("auth:deep-link-device-limit", {
-          accessToken,
-          refreshToken,
-          userId: user.id,
-          licenseStatus,
-        });
+        recordDeepLinkSignInFailure(signInIdentity, "device_limit");
+        sendToRenderer(
+          "auth:deep-link-device-limit",
+          deviceLimitPayload(user.id, licenseStatus),
+        );
         focusMainWindow();
         return;
       }
 
       // TASK-1507D: Step 5.5 - Create local SQLite user
       // This is required for FK constraints (mailbox connection, audit logs, contacts)
-      // BACKLOG-3956: one helper normalizes here AND for the renderer payload below.
-      const provider = (normalizeOAuthProvider(user.app_metadata?.provider) || "google") as OAuthProvider;
+      // (`provider` and `userEmail` are derived above, before the licence step.)
 
       // Map license type to subscription tier
       // licenseType: 'trial' | 'individual' | 'team' -> subscriptionTier: 'free' | 'pro' | 'enterprise'
@@ -775,9 +731,6 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         return "trial"; // Default for trial license
       };
 
-      // Extract email - Azure/Microsoft may have empty user.email but email in user_metadata
-      const userEmail = user.email || user.user_metadata?.email || "";
-
       const deepLinkUserData: PendingDeepLinkUser = {
         supabaseId: user.id,
         email: userEmail,
@@ -794,19 +747,25 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       let localUser: User | null = null; // Hoisted for session save logic
 
       if (databaseService.isInitialized()) {
-        // Database is ready - create user now
+        // Database is ready - provision the user row and session row now, in
+        // one transaction (BACKLOG-3322; the same call the deferred-DB drain makes).
         log.info("[DeepLink] Database initialized, creating local user");
-        await syncDeepLinkUserToLocalDb(deepLinkUserData);
-
-        // TASK-1507F: Get the local user ID after creation/sync
-        localUser = await databaseService.getUserByEmail(userEmail);
-        if (localUser) {
+        let provisioned: DeepLinkProvisionResult | null = null;
+        try {
+          provisioned = await provisionDeepLinkSignIn(deepLinkUserData);
+        } catch (provisionError) {
+          // Auth still succeeds. The provisioning transaction rolled back, so no
+          // user row is left without its session row; the next sign-in retries.
+          log.error("[DeepLink] Failed to create local user and session:", provisionError);
+        }
+        if (provisioned) {
+          localUser = provisioned.user;
           localUserId = localUser.id;
           log.info("[DeepLink] Using local user ID:", redactId(localUserId));
 
           // Save session to disk for persistence across app restarts
           try {
-            const sessionToken = await databaseService.createSession(localUserId);
+            const sessionToken = provisioned.sessionToken;
 
             // Build full Subscription object from license status
             const subscriptionTier = deepLinkUserData.subscriptionTier || "free";
@@ -823,7 +782,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
               trialDaysRemaining: licenseStatus.trialDaysRemaining ?? 0,
             };
 
-            await saveSignInSession({
+            const saved = await saveSignInSession({
               user: localUser,
               sessionToken,
               provider,
@@ -837,12 +796,19 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
                 refresh_token: refreshToken,
               },
             });
-            log.info("[DeepLink] Session saved successfully with Supabase tokens");
+            if (saved) {
+              log.info("[DeepLink] Session saved successfully with Supabase tokens");
+            } else {
+              // The writer has already logged and reported why (sessionService).
+              log.error(
+                "[DeepLink] Session NOT saved: the session file was not written. Reads stay refused until a write succeeds or the app relaunches",
+              );
+            }
           } catch (sessionError) {
             log.error("[DeepLink] Failed to save session:", sessionError);
           }
         } else {
-          log.warn("[DeepLink] Local user not found after sync, using Supabase ID");
+          log.warn("[DeepLink] Local user not provisioned, using Supabase ID");
         }
       } else {
         // Database not ready yet - store for later
@@ -895,6 +861,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
           licenseStatus,
           device: deviceResult.device,
           isNewUser: needsTermsAcceptance, // BACKLOG-546: Based on terms, not transactions
+          localUser, // BACKLOG-4148: carries this sign-in's last-login stamp
         }),
       );
 
@@ -1312,15 +1279,21 @@ function createWindow(): void {
         // "error" event → handleUpdaterError → surfaceUpdaterError. These
         // catches ONLY prevent the untagged/unscrubbed duplicate capture.
         // BACKLOG-3927: no feed contact in the Store build.
-        checkForUpdatesUnlessStore(autoUpdater, "startup")
-          ?.then((result) => {
-            result?.downloadPromise?.catch(() => {
+        // BACKLOG-3469: the stored auto-download value is applied BEFORE the
+        // check runs (electron-updater reads autoDownload inside the check).
+        runStartupUpdateCheck(autoUpdater, () =>
+          checkForUpdatesUnlessStore(autoUpdater, "startup")
+            ?.then((result) => {
+              result?.downloadPromise?.catch(() => {
+                /* surfaced via the tagged autoUpdater "error" event */
+              });
+            })
+            .catch(() => {
               /* surfaced via the tagged autoUpdater "error" event */
-            });
-          })
-          .catch(() => {
-            /* surfaced via the tagged autoUpdater "error" event */
-          });
+            }),
+        ).catch(() => {
+          /* surfaced via the tagged autoUpdater "error" event */
+        });
       }, UPDATE_CHECK_DELAY);
     }
   }
@@ -1437,7 +1410,12 @@ function handleUpdaterError(err: Error): void {
   // observable, but the REAL disableDifferentialDownload + downloadUpdate()
   // re-attempt is proven by a mocked-autoUpdater unit test
   // (executeRecovery in updaterRetryPolicy.test.ts).
-  const decision = decideRecovery(errorType, updaterRetryState, updaterDownloadStarted);
+  // BACKLOG-3469: with the auto-download switch off, recovery never downloads.
+  const decision = decideRecovery(
+    errorType,
+    updaterRetryState,
+    recoveryMayDownload(autoUpdater, updaterDownloadStarted),
+  );
   const recovered = executeRecovery(decision, updaterRetryState, autoUpdater, {
     onAttempt: (d) => {
       log.warn(`[AutoUpdater] self-recovery: ${d.reason}`);
@@ -1675,7 +1653,12 @@ app.whenReady().then(async () => {
       },
     });
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("update-available", info);
+      // BACKLOG-3469: tell the renderer whether a download starts by itself
+      // (switch on) or waits for the user's Download click (switch off).
+      mainWindow.webContents.send("update-available", {
+        ...info,
+        autoDownload: autoUpdater.autoDownload,
+      });
     }
   });
 
@@ -1959,6 +1942,9 @@ app.whenReady().then(async () => {
 
   // Register feature gate handlers (SPRINT-122)
   registerFeatureGateHandlers();
+  // BACKLOG-4120 PR3: the one-attachment downloader is injected, so the Learn
+  // handlers keep no static edge to the mail provider services.
+  registerLearnModeHandlers({ openQuestionAttachment });
 
   // Register per-transaction paywall entitlement handlers (BACKLOG-2006a)
   registerEntitlementHandlers();

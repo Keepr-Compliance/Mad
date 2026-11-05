@@ -335,6 +335,13 @@ export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void 
                 });
               });
           }
+        } else if (result.refusedForDiskSpace?.phase === "before") {
+          // BACKLOG-2883: a pre-flight refusal wrote nothing. It is an expected
+          // outcome, not a failure, and is logged as one.
+          logService.warn(
+            `macOS Messages import refused for disk space (nothing written): ${result.error}`,
+            "MessageImportHandlers"
+          );
         } else {
           logService.error(
             `macOS Messages import failed: ${result.error}`,

@@ -13,7 +13,7 @@
  *   · geometry (phone width, scrim, Electron top).
  */
 import React, { useEffect, useState } from "react";
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { AppShell } from "../../AppShell";
 import { useModalFlow } from "../../state/flows/useModalFlow";
@@ -545,5 +545,45 @@ describe("C14 Sign out", () => {
     expect(Sentry.captureException).toHaveBeenCalledTimes(1);
     expect((Sentry.captureException as jest.Mock).mock.calls[0][0]).toBe(failure);
     logSpy.mockRestore();
+  });
+});
+
+// BACKLOG-4120 P5 (SR 426498b4 change 6): the panel's "Help Keepr learn" row
+// follows the STRICT autodetect_eval read only, independent of the AI add-on.
+describe("P5 Help Keepr learn row (BACKLOG-4120)", () => {
+  function strict(state: "allowed" | "blocked" | "unknown" | "pending"): void {
+    jest.mocked(window.api.featureGate.strictState).mockImplementation(((key: string) =>
+      key === "autodetect_eval"
+        ? state === "pending"
+          ? new Promise(() => undefined)
+          : Promise.resolve(state)
+        : Promise.resolve("blocked")) as typeof window.api.featureGate.strictState);
+  }
+  afterEach(() => {
+    jest.mocked(window.api.featureGate.strictState).mockResolvedValue("blocked");
+    mockHasAI = true;
+  });
+
+  it("shown with the AI add-on blocked and autodetect_eval allowed, after Contacts", async () => {
+    mockHasAI = false;
+    strict("allowed");
+    render(<Harness />);
+    openFromInitials();
+    const nav = screen.getByRole("navigation", { name: "Settings" });
+    await within(nav).findByTestId(accountPanelRowTestId("settings-learn"));
+    const labels = within(nav).getAllByRole("button").map((b) => b.textContent);
+    expect(labels).not.toContain("AI");
+    expect(labels.indexOf("Help Keepr learn")).toBe(labels.indexOf("Contacts") + 1);
+  });
+
+  it.each(["blocked", "unknown", "pending"] as const)("hidden when the strict read is %s (AI allowed)", async (state) => {
+    mockHasAI = true;
+    strict(state);
+    render(<Harness />);
+    openFromInitials();
+    await waitFor(() => expect(window.api.featureGate.strictState).toHaveBeenCalledWith("autodetect_eval"));
+    const nav = screen.getByRole("navigation", { name: "Settings" });
+    expect(within(nav).queryByTestId(accountPanelRowTestId("settings-learn"))).toBeNull();
+    expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toContain("AI");
   });
 });

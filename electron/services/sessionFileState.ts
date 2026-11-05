@@ -19,3 +19,18 @@ export function setSessionFileAwaitingWrite(value: boolean): void {
 export function isSessionFileAwaitingWrite(): boolean {
   return awaitingWrite;
 }
+
+/**
+ * BACKLOG-3322: every clearSession() call, counted when it is REQUESTED (before
+ * it queues), whether or not the unlink later succeeds. A sign-in write retry
+ * compares it inside the write lock so it never writes after a sign-out.
+ */
+let clearRequests = 0;
+
+export function noteSessionClearRequested(): void {
+  clearRequests += 1;
+}
+
+export function getSessionClearRequests(): number {
+  return clearRequests;
+}

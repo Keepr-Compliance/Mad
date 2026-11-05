@@ -107,6 +107,7 @@ jest.mock("../services/supabaseService", () => ({
 
 import { auditService, type AuditLogEntry } from "../services/auditService";
 import databaseService from "../services/databaseService";
+import supabaseService from "../services/supabaseService";
 import { registerContactHandlers } from "../handlers/contactHandlers";
 import { registerUserSettingsHandlers } from "../handlers/userSettingsHandlers";
 import {
@@ -347,6 +348,19 @@ const SITES: Site[] = [
     resourceId: USER,
     failChange: "CREATE TRIGGER k3 BEFORE UPDATE ON users_local BEGIN SELECT RAISE(ABORT, 'forced change failure'); END",
   },
+  {
+    // BACKLOG-4030: the cloud-to-local copy of the phone type. The cloud holds
+    // "android", the local row holds nothing, so the handler writes.
+    name: "user:sync-phone-type-from-cloud",
+    action: "SETTINGS_CHANGE",
+    kind: "phoneType",
+    seed: () => {
+      (supabaseService.getPreferences as jest.Mock).mockResolvedValue({ phone_type: "android" });
+    },
+    call: () => invoke("user:sync-phone-type-from-cloud", USER),
+    resourceId: USER,
+    failChange: "CREATE TRIGGER k3 BEFORE UPDATE ON users_local BEGIN SELECT RAISE(ABORT, 'forced change failure'); END",
+  },
 ];
 
 test("R0 the real driver, the shipped schema and every handler are under test", () => {
@@ -485,6 +499,24 @@ describe("restore of a contact that is already active", () => {
     seedContact();
     const res = await invoke("contacts:restore", DANA);
     expect(res).toEqual({ success: true, restored: false });
+    await settle();
+    expect(entries()).toEqual([]);
+  });
+});
+
+describe("cloud-to-local phone type copy that writes nothing (BACKLOG-4030)", () => {
+  test.each([
+    ["no phone type in the cloud", {}, null],
+    ["the local row already holds the cloud value", { phone_type: "iphone" }, "iphone"],
+  ])("%s: success, nothing written, no entry", async (_name, prefs, localValue) => {
+    if (localValue) {
+      db.prepare("UPDATE users_local SET mobile_phone_type = ? WHERE id = ?").run(localValue, USER);
+    }
+    (supabaseService.getPreferences as jest.Mock).mockResolvedValue(prefs);
+    const before = changeState();
+    const res = await invoke("user:sync-phone-type-from-cloud", USER);
+    expect(res).toEqual({ success: true });
+    expect(changeState()).toEqual(before);
     await settle();
     expect(entries()).toEqual([]);
   });

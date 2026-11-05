@@ -91,6 +91,9 @@ export interface DeepLinkAuthData {
     id: string;
     email?: string;
     name?: string;
+    /** The local row's values after this sign-in; absent when the DB was not open yet. */
+    created_at?: string;
+    last_login_at?: string;
   };
   provider?: string; // "google" | "azure" | etc from Supabase app_metadata
   licenseStatus?: {
@@ -346,10 +349,8 @@ const Login = ({
    */
   const handleDeviceLimit = useCallback((data: {
     userId: string;
-    licenseStatus: {
-      deviceCount: number;
-      deviceLimit: number;
-    };
+    deviceCount: number;
+    deviceLimit: number;
   }) => {
     logger.warn("[Login] Device limit reached");
     clearRetryTimers();
@@ -361,12 +362,12 @@ const Login = ({
     if (onDeviceLimitReached) {
       onDeviceLimitReached({
         userId: data.userId,
-        deviceCount: data.licenseStatus.deviceCount,
-        deviceLimit: data.licenseStatus.deviceLimit,
+        deviceCount: data.deviceCount,
+        deviceLimit: data.deviceLimit,
       });
     } else {
       // Default handling if no callback provided
-      setError(`Device limit reached (${data.licenseStatus.deviceCount}/${data.licenseStatus.deviceLimit}). Please deactivate a device first.`);
+      setError(`Device limit reached (${data.deviceCount}/${data.deviceLimit}). Please deactivate a device first.`);
     }
   }, [onDeviceLimitReached, clearRetryTimers, resetRetryState]);
 

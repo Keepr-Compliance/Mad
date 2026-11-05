@@ -200,7 +200,116 @@ describe('SavedViews', () => {
     expect(screen.getByRole('status')).toHaveTextContent('At most 2 pinned cards. Unpin one first.');
     rerender(<SavedViews<View> {...props} pinning={{ max: 3, onTogglePin }} />);
     fireEvent.click(screen.getByRole('button', { name: 'Save and pin' }));
-    expect(props.onSave).toHaveBeenCalledWith('Third');
+    expect(props.onSave).toHaveBeenCalledWith('Third', { pin: true });
+  });
+
+  // ─── BACKLOG-4132: "Save current view" vs "Save current view as a card" ───
+  const saveRows = () =>
+    Array.from(document.querySelectorAll<HTMLButtonElement>('[data-slot="saved-views-save"], [data-slot="saved-views-save-card"]'));
+
+  it('4132-K1 with pinning both save rows show, plain first; without pinning exactly one row', () => {
+    const { unmount } = setup({ pinning: { max: 5, onTogglePin: jest.fn() } });
+    openByClick();
+    expect(saveRows().map((b) => b.textContent)).toEqual(['Save current view', 'Save current view as a card']);
+    unmount();
+    setup();
+    openByClick();
+    expect(saveRows().map((b) => b.textContent)).toEqual(['Save current view']);
+    expect(screen.queryByRole('button', { name: 'Save current view as a card' })).toBeNull();
+  });
+
+  it('4132-K2 plain save with pinning: "Save view", no hint or card fields, onSave(name, {pin:false}), never a pin', () => {
+    const onTogglePin = jest.fn();
+    const { props } = setup({
+      pinning: { max: 5, onTogglePin },
+      saveFields: <label>Column<select aria-label="Column" /></label>,
+    });
+    openByClick();
+    fireEvent.click(screen.getByRole('button', { name: 'Save current view' }));
+    const input = screen.getByRole('textbox', { name: 'View name' });
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute('placeholder', 'View name…');
+    expect(screen.queryByRole('button', { name: 'Save and pin' })).toBeNull();
+    expect(screen.queryByText('Saves the filters and the time range')).toBeNull();
+    expect(screen.queryByRole('combobox', { name: 'Column' })).toBeNull();
+    fireEvent.change(input, { target: { value: 'Plain' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save view' }));
+    expect(props.onSave).toHaveBeenCalledTimes(1);
+    expect(props.onSave).toHaveBeenCalledWith('Plain', { pin: false });
+    expect(onTogglePin).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Save current view' })).toHaveFocus();
+  });
+
+  it('4132-K3 card save with pinning: hint, card fields, "Save and pin", onSave(name, {pin:true})', () => {
+    const onTogglePin = jest.fn();
+    const { props } = setup({
+      pinning: { max: 5, onTogglePin },
+      saveFields: <label>Column<select aria-label="Column" /></label>,
+    });
+    openByClick();
+    fireEvent.click(screen.getByRole('button', { name: 'Save current view as a card' }));
+    const input = screen.getByRole('textbox', { name: 'View name' });
+    expect(input).toHaveAttribute('placeholder', 'Card name…');
+    expect(screen.getByText('Saves the filters and the time range')).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Column' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Save view' })).toBeNull();
+    fireEvent.change(input, { target: { value: 'Card' } });
+    key(input, 'Enter');
+    expect(props.onSave).toHaveBeenCalledTimes(1);
+    expect(props.onSave).toHaveBeenCalledWith('Card', { pin: true });
+    expect(onTogglePin).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Save current view as a card' })).toHaveFocus();
+  });
+
+  it('4132-K4 at the pin cap the plain save still saves unpinned; the card save is refused', () => {
+    const onTogglePin = jest.fn();
+    const { props } = setup({ pinning: { max: 2, onTogglePin } });
+    openByClick();
+    fireEvent.click(screen.getByRole('button', { name: 'Save current view as a card' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'View name' }), { target: { value: 'Third' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save and pin' }));
+    expect(props.onSave).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent('At most 2 pinned cards. Unpin one first.');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByRole('button', { name: 'Save current view as a card' })).toHaveFocus();
+    fireEvent.click(screen.getByRole('button', { name: 'Save current view' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'View name' }), { target: { value: 'Third' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save view' }));
+    expect(props.onSave).toHaveBeenCalledTimes(1);
+    expect(props.onSave).toHaveBeenCalledWith('Third', { pin: false });
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(onTogglePin).not.toHaveBeenCalled();
+  });
+
+  it('4132-K5 keyboard with pinning: no rows -> Enter focuses "Save current view"; Tab goes on to the card row; Escape from the card form returns to it', async () => {
+    const user = userEvent.setup();
+    setup({ views: [], pinning: { max: 5, onTogglePin: jest.fn() } });
+    trigger().focus();
+    await act(async () => { await user.keyboard('{Enter}'); });
+    expect(screen.getByRole('button', { name: 'Save current view' })).toHaveFocus();
+    await act(async () => { await user.tab(); });
+    expect(screen.getByRole('button', { name: 'Save current view as a card' })).toHaveFocus();
+    await act(async () => { await user.keyboard('{Enter}'); });
+    expect(screen.getByRole('textbox', { name: 'View name' })).toHaveFocus();
+    await act(async () => { await user.keyboard('{Escape}'); });
+    expect(screen.getByRole('button', { name: 'Save current view as a card' })).toHaveFocus();
+    expect(panel()).not.toBeNull();
+  });
+
+  it('4132-K5b keyboard with pinning and rows: Tab from the last row action reaches both save rows in order', async () => {
+    const user = userEvent.setup();
+    setup({ views: [VIEWS[1]], pinning: { max: 5, onTogglePin: jest.fn() } });
+    trigger().focus();
+    await act(async () => { await user.keyboard('{Enter}'); });
+    expect(rows()[0]).toHaveFocus();
+    await act(async () => { await user.tab(); }); // default toggle
+    await act(async () => { await user.tab(); }); // pin
+    await act(async () => { await user.tab(); }); // delete
+    expect(screen.getByRole('button', { name: 'Delete Stalled' })).toHaveFocus();
+    await act(async () => { await user.tab(); });
+    expect(screen.getByRole('button', { name: 'Save current view' })).toHaveFocus();
+    await act(async () => { await user.tab(); });
+    expect(screen.getByRole('button', { name: 'Save current view as a card' })).toHaveFocus();
   });
 
   it('T11 saveFields render inside the save form only while it is open', () => {
@@ -424,5 +533,104 @@ describe('SavedViews', () => {
     });
     expect(panel()).toBeNull();
     expect(within(document.body).queryByRole('dialog')).toBeNull();
+  });
+});
+
+/**
+ * BACKLOG-4121: the applied-view chip and its X. v2 ("Stalled") is the active
+ * view and is not the first row, so a lookup by position instead of by id
+ * shows the wrong name.
+ */
+describe('SavedViews applied-view chip (BACKLOG-4121)', () => {
+  const clearButton = () => document.querySelector<HTMLButtonElement>('[data-slot="saved-views-clear"]');
+
+  it('K-a with onClear and a matching activeViewId: trigger shows the name, is named "Views: <name>", no chevron, X beside it', () => {
+    setup({ activeViewId: 'v2', onClear: jest.fn() });
+    const t = screen.getByRole('button', { name: 'Views: Stalled' });
+    expect(t).toBe(trigger());
+    expect(within(t).getByText('Stalled')).toHaveClass('truncate');
+    expect(within(t).getByText('Views:')).toHaveClass('sr-only');
+    // Only the Bookmark icon is left; the chevron is gone.
+    expect(t.querySelectorAll('svg')).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Clear view Stalled' })).toBe(clearButton());
+  });
+
+  it('K-a the pin badge stays on the chip', () => {
+    setup({ activeViewId: 'v2', onClear: jest.fn(), pinning: { max: 5, onTogglePin: jest.fn() } });
+    expect(trigger()).toHaveAccessibleName('Views: Stalled 2');
+    expect(within(trigger()).getByText('2')).toHaveAttribute('data-slot', 'saved-views-badge');
+  });
+
+  it('K-b the X is a sibling of the trigger; a click calls onClear once, focuses the trigger, panel stays closed', () => {
+    const onClear = jest.fn();
+    setup({ activeViewId: 'v2', onClear });
+    const x = clearButton() as HTMLButtonElement;
+    expect(trigger().contains(x)).toBe(false);
+    expect(x.closest('button')).toBe(x);
+    fireEvent.click(x);
+    expect(onClear).toHaveBeenCalledTimes(1);
+    expect(trigger()).toHaveFocus();
+    expect(panel()).toBeNull();
+    expect(trigger()).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('K-b the X closes an open panel instead of leaving it open', () => {
+    setup({ activeViewId: 'v2', onClear: jest.fn() });
+    openByClick();
+    expect(panel()).not.toBeNull();
+    fireEvent.click(clearButton() as HTMLButtonElement);
+    expect(panel()).toBeNull();
+  });
+
+  it('K-c activeViewId null with onClear: plain "Views", chevron, no X', () => {
+    setup({ activeViewId: null, onClear: jest.fn() });
+    expect(trigger()).toHaveAccessibleName('Views');
+    expect(trigger().querySelectorAll('svg')).toHaveLength(2);
+    expect(clearButton()).toBeNull();
+  });
+
+  it('K-c activeViewId names no listed view: plain "Views", no X', () => {
+    setup({ activeViewId: 'gone', onClear: jest.fn() });
+    expect(trigger()).toHaveAccessibleName('Views');
+    expect(clearButton()).toBeNull();
+  });
+
+  it('K-c no onClear: plain "Views" even when a view is active; classes, Escape and Tab order unchanged', async () => {
+    const user = userEvent.setup();
+    setup({ activeViewId: 'v2' });
+    expect(trigger()).toHaveAccessibleName('Views');
+    expect(trigger()).toHaveClass('border-gray-300', 'bg-white', 'text-gray-700');
+    expect(trigger()).not.toHaveClass('bg-primary-50');
+    expect(clearButton()).toBeNull();
+    // Tab from the trigger leaves the component: no extra stop was added.
+    const after = document.createElement('button');
+    after.textContent = 'after';
+    document.body.appendChild(after);
+    trigger().focus();
+    await user.tab();
+    expect(after).toHaveFocus();
+    after.remove();
+    // Escape while open still closes and returns focus.
+    openByClick();
+    key(window as unknown as Element, 'Escape');
+    expect(panel()).toBeNull();
+    expect(trigger()).toHaveFocus();
+  });
+
+  it('K-c with the chip: Tab goes trigger -> X -> out', async () => {
+    const user = userEvent.setup();
+    setup({ activeViewId: 'v2', onClear: jest.fn() });
+    trigger().focus();
+    await user.tab();
+    expect(clearButton()).toHaveFocus();
+  });
+
+  it('K-p chip colour tokens are the Dropdown filter chip active tokens', () => {
+    // Parity with the pill this chip copies (dropdown.tsx filter trigger, filterActive).
+    const CHIP = ['border-primary-300', 'bg-primary-50', 'text-primary-700', 'rounded-md', 'border', 'pr-7'];
+    setup({ activeViewId: 'v2', onClear: jest.fn() });
+    expect(trigger()).toHaveClass(...CHIP);
+    expect(trigger()).not.toHaveClass('bg-white', 'border-gray-300');
+    expect(clearButton()).toHaveClass('text-primary-700');
   });
 });

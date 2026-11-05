@@ -22,6 +22,12 @@ export interface DeepLinkAuthPayloadInput<L, D> {
   licenseStatus: L;
   device: D;
   isNewUser: boolean;
+  /**
+   * BACKLOG-4148: the provisioned local row, re-read after this sign-in's
+   * last-login stamp. Null when the database was not open yet (the row is
+   * provisioned later by the pending-user drain).
+   */
+  localUser?: { created_at?: string | null; last_login_at?: string | null } | null;
 }
 
 export function buildDeepLinkAuthPayload<L, D>(input: DeepLinkAuthPayloadInput<L, D>) {
@@ -33,6 +39,8 @@ export function buildDeepLinkAuthPayload<L, D>(input: DeepLinkAuthPayloadInput<L
       id: input.localUserId,
       email: input.userEmail,
       name: input.supabaseUser.user_metadata?.full_name as string | undefined,
+      created_at: input.localUser?.created_at ?? undefined,
+      last_login_at: input.localUser?.last_login_at ?? undefined,
     },
     // azure -> microsoft; same helper and same "google" default as the local
     // user record main.ts writes for this sign-in.

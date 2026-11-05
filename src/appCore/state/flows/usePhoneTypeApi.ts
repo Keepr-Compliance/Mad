@@ -19,7 +19,7 @@
  * TASK-1612: Migrated to use settingsService instead of direct window.api calls.
  */
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { settingsService } from "@/services";
 import type { ImportSource } from "@/services/settingsService";
 import { importSourceForPhoneType } from "@/utils/iphoneSyncEnabled";
@@ -31,6 +31,29 @@ import {
   selectIsDatabaseInitialized,
 } from "../machine";
 import logger from '../../../utils/logger';
+
+/**
+ * BACKLOG-4030: the line shown when the phone type could not be saved to the
+ * local database (for example, main cancelled the save because its audit entry
+ * could not be written). Fixed and short: the main-process message is three
+ * sentences, so it is logged, not shown.
+ */
+export const PHONE_TYPE_NOT_SAVED_NOTICE =
+  "Your phone type was not saved. Please try again.";
+
+/**
+ * BACKLOG-4030: what a phone-type save did.
+ * - saved: stored (local DB too, when it is open) and the step was completed.
+ * - no-user: no signed-in user in the state machine; nothing was written.
+ * - local-cancelled: the local DB save failed. The step was NOT completed and
+ *   a notice was raised; `message` is the line shown to the user.
+ * - error: an unexpected failure before the local save; nothing was completed.
+ */
+export type SavePhoneTypeResult =
+  | { status: "saved" }
+  | { status: "no-user" }
+  | { status: "local-cancelled"; message: string }
+  | { status: "error" };
 
 interface UsePhoneTypeApiOptions {
   userId: string | undefined;
@@ -45,7 +68,13 @@ interface UsePhoneTypeApiReturn {
   setHasSelectedPhoneType: (selected: boolean) => void;
   setSelectedPhoneType: (type: PhoneType) => void;
   setNeedsDriverSetup: (needs: boolean) => void;
-  savePhoneType: (phoneType: "iphone" | "android") => Promise<boolean>;
+  savePhoneType: (phoneType: "iphone" | "android") => Promise<SavePhoneTypeResult>;
+  /** BACKLOG-4030: the "phone type not saved" line to show, or null. */
+  phoneTypeSaveNotice: string | null;
+  /** BACKLOG-4030: raise the notice (used by the post-DB-init flush). */
+  reportPhoneTypeSaveFailed: () => void;
+  /** BACKLOG-4030: called once the notice has been shown. */
+  clearPhoneTypeSaveNotice: () => void;
 }
 
 export function usePhoneTypeApi({
@@ -62,6 +91,16 @@ export function usePhoneTypeApi({
   }
 
   const { state, dispatch } = machineState;
+
+  // BACKLOG-4030: carried to OnboardingFlow, which shows it. This hook runs
+  // above NotificationProvider (App.tsx), so it cannot show a toast itself.
+  const [phoneTypeSaveNotice, setPhoneTypeSaveNotice] = useState<string | null>(null);
+  const reportPhoneTypeSaveFailed = useCallback(() => {
+    setPhoneTypeSaveNotice(PHONE_TYPE_NOT_SAVED_NOTICE);
+  }, []);
+  const clearPhoneTypeSaveNotice = useCallback(() => {
+    setPhoneTypeSaveNotice(null);
+  }, []);
 
   // Derive hasSelectedPhoneType from state machine
   const hasSelectedPhoneType = selectHasSelectedPhoneType(state);
@@ -116,14 +155,14 @@ export function usePhoneTypeApi({
    * 3. State machine (source of truth for UI)
    */
   const savePhoneType = useCallback(
-    async (phoneType: "iphone" | "android"): Promise<boolean> => {
+    async (phoneType: "iphone" | "android"): Promise<SavePhoneTypeResult> => {
       // userId comes from state machine
       const currentUserId =
         state.status === "ready" || state.status === "onboarding"
           ? state.user.id
           : null;
 
-      if (!currentUserId) return false;
+      if (!currentUserId) return { status: "no-user" };
 
       // BACKLOG-2408: platform is carried on both the onboarding and ready
       // states, so it is read under the same guard as the user id above. NOT
@@ -215,11 +254,18 @@ export function usePhoneTypeApi({
         const isDbReady = selectIsDatabaseInitialized(state);
 
         if (isDbReady) {
+          // BACKLOG-4030: a failed local save is shown and the step is NOT
+          // completed, so the user stays on the phone-type step and can try
+          // again. Main cancels the save when its audit entry cannot be
+          // written; dropping that here left the local record without the
+          // answer while onboarding moved on.
+          let localSaved = false;
           try {
             const localResult = await settingsService.setPhoneType(
               currentUserId,
               phoneType
             );
+            localSaved = localResult.success;
             if (!localResult.success) {
               logger.warn(
                 "[usePhoneTypeApi] Failed to save to local DB:",
@@ -227,11 +273,17 @@ export function usePhoneTypeApi({
               );
             }
           } catch (localError) {
-            // Log but don't fail - Supabase is primary storage
             logger.warn(
               "[usePhoneTypeApi] Error saving to local DB:",
               localError
             );
+          }
+          if (!localSaved) {
+            reportPhoneTypeSaveFailed();
+            return {
+              status: "local-cancelled",
+              message: PHONE_TYPE_NOT_SAVED_NOTICE,
+            };
           }
         } else {
           logger.debug(
@@ -248,13 +300,13 @@ export function usePhoneTypeApi({
           phoneType,
         });
 
-        return true;
+        return { status: "saved" };
       } catch (error) {
         logger.error("[usePhoneTypeApi] Error saving phone type:", error);
-        return false;
+        return { status: "error" };
       }
     },
-    [state, dispatch]
+    [state, dispatch, reportPhoneTypeSaveFailed]
   );
 
   return {
@@ -266,5 +318,8 @@ export function usePhoneTypeApi({
     setSelectedPhoneType,
     setNeedsDriverSetup,
     savePhoneType,
+    phoneTypeSaveNotice,
+    reportPhoneTypeSaveFailed,
+    clearPhoneTypeSaveNotice,
   };
 }

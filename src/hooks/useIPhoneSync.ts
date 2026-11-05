@@ -4,6 +4,7 @@ import * as Sentry from "@sentry/electron/renderer";
 import type {
   iOSDevice,
   BackupProgress,
+  PriorBackupState,
   SyncStatus,
   UseIPhoneSyncReturn,
   UserFacingError,
@@ -206,6 +207,14 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   // BACKLOG-3881: the last sync stopped because this iPhone's backups are Apple-encrypted.
   const [appleEncryptedBackup, setAppleEncryptedBackup] = useState(false);
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
+  // BACKLOG-2931: is a USABLE prior backup on this computer? Read through
+  // backup:check-status, which answers with the sync's own mapping (toPriorBackupState,
+  // BACKLOG-2907/2938). "unknown" until that answer arrives, and whenever it cannot be
+  // had — never "none" by default, which is the two-hour sentence on every connect.
+  const [priorBackup, setPriorBackup] = useState<PriorBackupState>("unknown");
+  // BACKLOG-2931: the device the current priorBackup answer is for. A check that
+  // resolves after the device changed is dropped.
+  const connectedUdidRef = useRef<string | null>(null);
   const [isWaitingForPasscode, setIsWaitingForPasscode] = useState(false);
   // BACKLOG-4002 (Windows): the backup tool is suspended. Shown in place of the
   // "please don't cancel" panel; cleared on resume, error, complete, start, cancel, dismiss.
@@ -233,6 +242,14 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   const [installDriverError, setInstallDriverError] = useState<string | null>(null);
   // BACKLOG-3816: Sync / Try Again is being prepared (not yet handed to main, not refused).
   const [isStarting, setIsStarting] = useState(false);
+  // BACKLOG-4116: Cancel clears main's "running" flags at once while the cancelled backup is
+  // still stopping, and main refuses a new start until it has. The cancelled run's own
+  // sync:start request returns when the stop is done, so Sync waits for that reply.
+  const [isStopping, setIsStopping] = useState(false);
+  /** BACKLOG-4116: the sync:start request awaiting its reply (null = none). */
+  const pendingStartRef = useRef<object | null>(null);
+  /** BACKLOG-4116: the request Cancel is waiting on; its reply ends isStopping. */
+  const stoppingStartRef = useRef<object | null>(null);
   // BACKLOG-3816: the hold after a dropped connection / refused backup service. Not reset by
   // cancelSync or dismissSync: Close calls cancelSync, and reopening must not skip the hold.
   const [retryAvailableAt, setRetryAvailableAt] = useState<number | null>(null);
@@ -357,6 +374,25 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
 
     const cleanups: (() => void)[] = [];
 
+    // BACKLOG-2931: read the prior-backup usability for `udid`. Anything short of a
+    // successful reply carrying "exists" or "none" — no API, a reject, success:false,
+    // an older main process without the field — is "unknown".
+    const refreshPriorBackup = async (udid: string): Promise<void> => {
+      let next: PriorBackupState = "unknown";
+      try {
+        const backupApi = window.api?.backup;
+        if (backupApi?.checkStatus) {
+          const result = await backupApi.checkStatus(udid);
+          if (result?.success && (result.priorBackup === "exists" || result.priorBackup === "none")) {
+            next = result.priorBackup;
+          }
+        }
+      } catch (err) {
+        logger.warn("[useIPhoneSync] Failed to read prior backup status:", err);
+      }
+      if (connectedUdidRef.current === udid) setPriorBackup(next);
+    };
+
     // Helper to handle device connection
     const handleDeviceConnected = async (device: unknown) => {
       const connectedDevice = device as iOSDevice;
@@ -370,6 +406,10 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       };
       setIsConnected(true);
       setDevice(mappedDevice);
+      // BACKLOG-2931: forget the previous answer before asking for this device's.
+      connectedUdidRef.current = connectedDevice.udid;
+      setPriorBackup("unknown");
+      void refreshPriorBackup(connectedDevice.udid);
       // BACKLOG-3816: a cable wiggle is disconnect-then-reconnect. The reconnect lands while
       // the sync error screen is up, and clearing here left "Sync Failed" with no reason.
       // The failure's message belongs to the failed sync; Try Again / Close clear it.
@@ -418,6 +458,9 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           logger.debug("[useIPhoneSync] Device disconnected");
           setIsConnected(false);
           setDevice(null);
+          // BACKLOG-2931: the answer belonged to the device that just left.
+          connectedUdidRef.current = null;
+          setPriorBackup("unknown");
           // Only show error if sync is in a phase that requires the device
           // Phases that require device: preparing, backing_up
           // Phases safe to disconnect: extracting, storing, complete
@@ -481,8 +524,11 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           } else if (syncProgress.phase === "decrypting") {
             phase = "extracting";
           } else if (
-            syncProgress.phase === "parsing_messages" ||
-            syncProgress.phase === "parsing_contacts" ||
+            // BACKLOG-2909/2939: main sends these hyphenated. The underscore spelling
+            // never matched, so every parsing tick read as the backup ("Keep connected")
+            // and an unplug while parsing failed a sync that was going to finish.
+            syncProgress.phase === "parsing-messages" ||
+            syncProgress.phase === "parsing-contacts" ||
             syncProgress.phase === "resolving"
           ) {
             phase = "extracting";
@@ -694,6 +740,9 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           storageCompleteReceivedAtRef.current = Date.now();
           setSyncStatus("complete");
           setLastSyncTime(new Date());
+          // BACKLOG-2931: the sync just wrote a backup. Re-read rather than assume
+          // "exists" — a sync can finish with a backup that is still not usable.
+          if (connectedUdidRef.current) void refreshPriorBackup(connectedUdidRef.current);
           setProgress({
             phase: "complete",
             percent: 100,
@@ -1273,6 +1322,8 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       }
     };
 
+    const startRequest = {};
+    pendingStartRef.current = startRequest;
     try {
       logger.info("[useIPhoneSync] Starting sync for device:", device.udid);
 
@@ -1314,6 +1365,13 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       }
       logger.error("[useIPhoneSync] Sync error:", errorMessage);
       failStart(errorMessage);
+    } finally {
+      // BACKLOG-4116: this request has its reply, whichever path it took.
+      if (pendingStartRef.current === startRequest) pendingStartRef.current = null;
+      if (stoppingStartRef.current === startRequest) {
+        stoppingStartRef.current = null;
+        setIsStopping(false);
+      }
     }
   }, [device, isWindows, armRetryCooldown]);
 
@@ -1338,6 +1396,11 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   const cancelSync = useCallback(async (trigger: SyncCancelTrigger) => {
     logger.info("[useIPhoneSync] Cancelling sync", { trigger });
     syncStateRef.isActive = false;
+    // BACKLOG-4116: only a request still awaiting its reply is still stopping in main.
+    if (pendingStartRef.current !== null) {
+      stoppingStartRef.current = pendingStartRef.current;
+      setIsStopping(true);
+    }
 
     try {
       const syncApi = window.api?.sync;
@@ -1515,6 +1578,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     userError, // TASK-2276: Structured error for rich UI display
     appleEncryptedBackup,
     lastSyncTime,
+    priorBackup, // BACKLOG-2931
     isWaitingForPasscode,
     toolSuspendedNotice, // BACKLOG-4002
     // TASK-910: Sync lock state
@@ -1535,6 +1599,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     appleDevicesState,
     appleUsbDriver,
     isStarting,
+    isStopping,
     retryAvailableAt,
     startSync,
     cancelSync,

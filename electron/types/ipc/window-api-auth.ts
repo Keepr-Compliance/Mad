@@ -57,32 +57,6 @@ export interface DisconnectMailboxResult {
  * Auth methods on window.api
  */
 export interface WindowApiAuth {
-  googleLogin: () => Promise<{
-    success: boolean;
-    authUrl?: string;
-    error?: string;
-  }>;
-  googleCompleteLogin: (code: string) => Promise<{
-    success: boolean;
-    user?: User;
-    sessionToken?: string;
-    subscription?: Subscription;
-    isNewUser?: boolean;
-    error?: string;
-  }>;
-  microsoftLogin: () => Promise<{
-    success: boolean;
-    authUrl?: string;
-    error?: string;
-  }>;
-  microsoftCompleteLogin: (code: string) => Promise<{
-    success: boolean;
-    user?: User;
-    sessionToken?: string;
-    subscription?: Subscription;
-    isNewUser?: boolean;
-    error?: string;
-  }>;
   googleConnectMailbox: (
     userId: string,
   ) => Promise<{ success: boolean; error?: string }>;

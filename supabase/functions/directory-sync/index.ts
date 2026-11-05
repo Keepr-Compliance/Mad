@@ -18,10 +18,13 @@
  *   6. Suspend removed members (license_status = 'suspended')
  *   7. Update directory_sync_last_at / directory_sync_error
  *
- * Authentication:
- *   - Requires Authorization header with Bearer token matching the
- *     SUPABASE_SERVICE_ROLE_KEY. This restricts invocation to internal
- *     callers (cron jobs, admin scripts) that possess the service role key.
+ * Authentication (auth.ts, BACKLOG-4015):
+ *   - Requires an Authorization Bearer token that is either one of the
+ *     function's own keys (SUPABASE_SERVICE_ROLE_KEY or a SUPABASE_SECRET_KEYS
+ *     value, timing-safe compare) or a service_role JWT for this project.
+ *     The JWT branch relies on verify_jwt = true (supabase/config.toml): the
+ *     gateway has verified its signature before this code runs.
+ *   - Caller: the admin portal's "Sync now" action. No cron job calls it.
  *
  * Design decisions:
  *   - One org at a time to limit blast radius
@@ -36,7 +39,8 @@ import {
   resolveRole,
   extractGroupRoleMapping,
 } from "../_shared/groupRoleMapper.ts";
-import { placeDirectoryUser } from "./placement.ts";
+import { type Placement, placeDirectoryUser } from "./placement.ts";
+import { authorizeServiceCaller } from "./auth.ts";
 import {
   defaultLastAdminNotifyDeps,
   notifyLastAdminKept,
@@ -515,6 +519,26 @@ function sleep(ms: number): Promise<void> {
 // ---------------------------------------------------------------------------
 
 /**
+ * BACKLOG-4034: the Azure tenant of the organization, as stored: organizations.microsoft_tenant_id,
+ * else the tenant segment of the IdP issuer_url. Raw value, no shape check (a domain-form tenant
+ * is valid for the Graph token); callers decide what a missing tenant means.
+ */
+export function azureTenantIdOf(
+  org: Record<string, unknown>,
+  idp: Pick<IdpConfig, "issuer_url">,
+): string | null {
+  let tenantId = (org.microsoft_tenant_id as string | null) || null;
+  if (!tenantId && idp.issuer_url) {
+    // issuer_url is typically https://login.microsoftonline.com/{tenantId}/v2.0
+    const match = idp.issuer_url.match(/login\.microsoftonline\.com\/([^/]+)/);
+    tenantId = match?.[1] || null;
+  }
+  return tenantId;
+}
+
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
  * Fetch users from the appropriate provider based on IdP type.
  */
 async function fetchProviderUsers(
@@ -527,14 +551,7 @@ async function fetchProviderUsers(
     }
 
     // Extract tenant ID from issuer_url or use the org's microsoft_tenant_id
-    let tenantId = org.microsoft_tenant_id as string | null;
-    if (!tenantId && idp.issuer_url) {
-      // issuer_url is typically https://login.microsoftonline.com/{tenantId}/v2.0
-      const match = idp.issuer_url.match(
-        /login\.microsoftonline\.com\/([^/]+)/,
-      );
-      tenantId = match?.[1] || null;
-    }
+    const tenantId = azureTenantIdOf(org, idp);
     if (!tenantId) {
       throw new Error("Azure AD IdP missing tenant ID");
     }
@@ -651,13 +668,7 @@ export async function syncOrganization(
 
       if (idp.provider_type === "azure_ad") {
         // Get Azure access token (already used for fetching users)
-        let tenantId = org.microsoft_tenant_id as string | null;
-        if (!tenantId && idp.issuer_url) {
-          const match = idp.issuer_url.match(
-            /login\.microsoftonline\.com\/([^/]+)/,
-          );
-          tenantId = match?.[1] || null;
-        }
+        const tenantId = azureTenantIdOf(org, idp);
         if (tenantId && idp.client_id && idp.client_secret_encrypted) {
           const groupAccessToken = await getAzureAccessToken(
             tenantId,
@@ -762,10 +773,36 @@ export async function syncOrganization(
     for (const member of existingUsers) {
       existingByEmail.set(member.email, member);
       if (member.oauth_id) {
-        existingByExternalId.set(member.oauth_id, member);
+        existingByExternalId.set(member.oauth_id.toLowerCase(), member);
       }
       if (member.scim_external_id) {
-        existingByExternalId.set(member.scim_external_id, member);
+        existingByExternalId.set(member.scim_external_id.toLowerCase(), member);
+      }
+    }
+
+    // BACKLOG-4034: the Entra object id of each member, from the azure identity Supabase Auth
+    // stores, in this organization's tenant. Only a GUID-shaped tenant is used for these lookups
+    // (the Graph token above takes the raw value). A failed read stops this organization's run.
+    const rawTenantId = idp.provider_type === "azure_ad" ? azureTenantIdOf(org, idp) : null;
+    const tenantIdForOid = rawTenantId && GUID_RE.test(rawTenantId) ? rawTenantId : null;
+    if (rawTenantId && !tenantIdForOid) {
+      console.log(
+        `[directory-sync] Org ${orgId}: tenant is not a GUID; matching by email only`,
+      );
+    }
+    if (tenantIdForOid && memberUserIds.length > 0) {
+      const { data: idRows, error: idMapError } = await supabaseAdmin.rpc(
+        "idp_object_ids_for_users",
+        { p_user_ids: memberUserIds, p_tenant_id: tenantIdForOid },
+      );
+      if (idMapError) {
+        throw new Error(`Failed to read members' object ids: ${idMapError.message}`);
+      }
+      for (const row of (idRows ?? []) as Array<{ user_id: string; object_id: string | null }>) {
+        const member = existingUsers.find((m) => m.user_id === row.user_id);
+        if (member && row.object_id) {
+          existingByExternalId.set(row.object_id.toLowerCase(), member);
+        }
       }
     }
 
@@ -777,10 +814,40 @@ export async function syncOrganization(
 
     // 4. Process provider users: add new, reactivate returned
     for (const providerUser of providerUsers) {
-      // Try to match by external ID first, then by email
-      let existingMember =
-        existingByExternalId.get(providerUser.externalId) ||
-        existingByEmail.get(providerUser.email);
+      // Match order (BACKLOG-4034): (a) a member's object id / scim_external_id / oauth_id,
+      // (b) any Keepr account by tenant + object id, (c) a member by email, (d) any account
+      // by sign-in email (placement below).
+      let existingMember = existingByExternalId.get(providerUser.externalId.toLowerCase());
+      let objectIdPlacement: Placement | null = null;
+      if (!existingMember && tenantIdForOid) {
+        const byId = await placeDirectoryUser(
+          supabaseAdmin,
+          orgId,
+          providerUser.email,
+          { tenantId: tenantIdForOid, objectId: providerUser.externalId },
+          { objectIdOnly: true },
+        );
+        if (byId.kind === "skip" && byId.reason === "lookup_failed") {
+          // Stop the run: skipping one person here would leave them unseen, and step 5 would
+          // suspend a member matched only by email.
+          throw new Error("Failed to look up a directory person by object id");
+        }
+        if (byId.kind === "member") {
+          existingMember = existingUsers.find((m) => m.user_id === byId.userId);
+          if (!existingMember) {
+            seenMemberIds.add(byId.userId);
+            console.log(
+              `[directory-sync] Org ${orgId}: member ${providerUser.email} found by object id but not loaded; skipped`,
+            );
+            continue;
+          }
+        } else if (byId.kind === "add" || byId.kind === "skip") {
+          objectIdPlacement = byId;
+        }
+      }
+      if (!existingMember && !objectIdPlacement) {
+        existingMember = existingByEmail.get(providerUser.email);
+      }
 
       if (existingMember) {
         seenMemberIds.add(existingMember.user_id);
@@ -863,11 +930,11 @@ export async function syncOrganization(
           }
         }
 
-        // Update external ID / sync timestamp on user record
+        // Update names / sync timestamp on user record. BACKLOG-4034: oauth_id is the sign-in
+        // subject and is no longer overwritten with the directory id.
         await supabaseAdmin
           .from("users")
           .update({
-            oauth_id: providerUser.externalId,
             first_name: providerUser.firstName || undefined,
             last_name: providerUser.lastName || undefined,
             display_name: providerUser.displayName || undefined,
@@ -885,22 +952,32 @@ export async function syncOrganization(
         continue;
       }
 
-      // New member -- is this an existing Keepr person (by sign-in email)?
-      const placement = await placeDirectoryUser(supabaseAdmin, orgId, providerUser.email);
+      // New member -- is this an existing Keepr person (found by object id above, else by
+      // sign-in email)?
+      const placement = objectIdPlacement ??
+        await placeDirectoryUser(supabaseAdmin, orgId, providerUser.email);
       if (placement.kind === "skip") {
         console.log(
-          `[directory-sync] Org ${orgId}: not adding ${providerUser.email}: ${placement.reason}`,
+          `[directory-sync] Org ${orgId}: not adding ${providerUser.email}: ${placement.reason}${placement.matchedBy ? ` (matched by ${placement.matchedBy})` : ""}`,
         );
         continue;
       }
+      if (placement.kind === "member" || placement.kind === "none") {
+        // Only the object-id step answers these, and it is handled above.
+        continue;
+      }
       const existingUser = placement.kind === "add" ? { id: placement.userId } : null;
+      if (placement.kind === "add") {
+        console.log(
+          `[directory-sync] Org ${orgId}: adding ${providerUser.email} (matched by ${placement.matchedBy})`,
+        );
+      }
 
       if (existingUser) {
-        // User exists but not in this org -- add membership
+        // User exists but not in this org -- add membership (oauth_id kept: BACKLOG-4034)
         await supabaseAdmin
           .from("users")
           .update({
-            oauth_id: providerUser.externalId,
             first_name: providerUser.firstName || undefined,
             last_name: providerUser.lastName || undefined,
             display_name: providerUser.displayName || undefined,
@@ -1143,27 +1220,25 @@ Deno.serve(async (req: Request) => {
     }
 
     // -----------------------------------------------------------------------
-    // Authentication: verify the caller has the service role key.
-    // This function is internal -- invoked by cron jobs or admin scripts,
-    // not by end users. The service role key acts as a shared secret.
+    // Authentication (auth.ts): the caller must hold one of the function's
+    // own keys or a gateway-verified service_role JWT for this project.
+    // Internal only -- called by the admin portal's "Sync now" action, not
+    // by end users.
     // -----------------------------------------------------------------------
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
+    const auth = authorizeServiceCaller(req.headers.get("Authorization"), {
+      serviceKey: supabaseServiceKey,
+      supabaseUrl,
+      secretKeys: Deno.env.get("SUPABASE_SECRET_KEYS"),
+    });
+    if (!auth.ok) {
       return new Response(
-        JSON.stringify({ error: "Missing or invalid Authorization header" }),
+        JSON.stringify({
+          error: auth.status === 401
+            ? "Missing or invalid Authorization header"
+            : "Unauthorized",
+        }),
         {
-          status: 401,
-          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-        },
-      );
-    }
-
-    const bearerToken = authHeader.substring(7);
-    if (bearerToken !== supabaseServiceKey) {
-      return new Response(
-        JSON.stringify({ error: "Unauthorized" }),
-        {
-          status: 403,
+          status: auth.status,
           headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
         },
       );
