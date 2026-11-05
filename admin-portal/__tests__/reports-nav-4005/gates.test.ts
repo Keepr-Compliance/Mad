@@ -20,6 +20,7 @@ const PAGES = [
   'app/dashboard/reports/funnel/page.tsx',
   'app/dashboard/reports/iphone-sync/page.tsx',
   'app/dashboard/reports/google-messages-sync/page.tsx',
+  'app/dashboard/reports/email-precache/page.tsx',
   'app/dashboard/reports/submissions/page.tsx',
   'app/dashboard/reports/exports/page.tsx',
   'app/dashboard/reports/support-sla/page.tsx',
@@ -41,6 +42,7 @@ describe('C3 middleware route permissions', () => {
     '/dashboard/reports/analytics',
     '/dashboard/reports/funnel',
     '/dashboard/reports/iphone-sync',
+    '/dashboard/reports/email-precache',
     '/dashboard/reports/submissions?period=7',
     '/dashboard/reports/support-sla',
   ])('%s requires analytics.view', (p) => {

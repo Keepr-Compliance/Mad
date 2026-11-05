@@ -170,6 +170,7 @@ describe('C6 Reports page lists every registry report, Analytics first (BACKLOG-
       '/dashboard/reports/analytics',
       '/dashboard/reports/iphone-sync',
       '/dashboard/reports/google-messages-sync',
+      '/dashboard/reports/email-precache',
       '/dashboard/reports/submissions',
       '/dashboard/reports/exports',
       '/dashboard/reports/support-sla',
