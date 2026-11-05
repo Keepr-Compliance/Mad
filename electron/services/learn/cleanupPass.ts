@@ -15,11 +15,22 @@ export function isDealAnswer(value: unknown): value is DealAnswer {
   return typeof value === "string" && (LEARN_RULES.dealAnswers as readonly string[]).includes(value);
 }
 
-/** The next unanswered candidate of the run, or null when the pass is done. */
-export function nextCleanupQuestion(userId: string, run: LearnRunResult): CleanupCandidate | null {
+/**
+ * The next unanswered candidate of the run, or null when the pass is done.
+ * `excludeDetectionIds` (PR3): detections skipped for now in this session;
+ * every candidate sharing a skipped detection's deal key is skipped too, so
+ * the same deal is not asked again under its other key.
+ */
+export function nextCleanupQuestion(
+  userId: string,
+  run: LearnRunResult,
+  excludeDetectionIds: readonly string[] = [],
+): CleanupCandidate | null {
   const answered = new Set(listDealAnswers(userId).map((a) => a.address_key));
   const candidates = cleanupCandidates(run, listAnswerKeyTransactions(userId));
-  return candidates.find((c) => !answered.has(c.addressKey)) ?? null;
+  const excluded = new Set(excludeDetectionIds);
+  const skippedKeys = new Set(candidates.filter((c) => excluded.has(c.detectionId)).map((c) => c.addressKey));
+  return candidates.find((c) => !answered.has(c.addressKey) && !skippedKeys.has(c.addressKey)) ?? null;
 }
 
 /**

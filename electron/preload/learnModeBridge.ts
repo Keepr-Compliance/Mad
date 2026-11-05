@@ -34,7 +34,8 @@ export const learnModeBridge: WindowApiLearn = {
     };
   },
 
-  cleanupNext: () => ipcRenderer.invoke("learn:cleanup-next"),
+  cleanupNext: (args?: { exclude: string[] }) =>
+    args === undefined ? ipcRenderer.invoke("learn:cleanup-next") : ipcRenderer.invoke("learn:cleanup-next", args),
   cleanupAnswer: (args) => ipcRenderer.invoke("learn:cleanup-answer", args),
   sampleDraw: (args: { windowMonths: number }) => ipcRenderer.invoke("learn:sample-draw", args),
   sampleNext: () => ipcRenderer.invoke("learn:sample-next"),
@@ -42,4 +43,7 @@ export const learnModeBridge: WindowApiLearn = {
   score: () => ipcRenderer.invoke("learn:score"),
   deleteAnswers: () => ipcRenderer.invoke("learn:delete-answers"),
   preview: (args: LearnPreviewArgs) => ipcRenderer.invoke("learn:preview", args),
+  /** Open (downloading first if needed) the one attachment the question is about. */
+  attachmentOpen: (args: { detectionId: string; attachmentId: string }) =>
+    ipcRenderer.invoke("learn:attachment-open", args),
 };

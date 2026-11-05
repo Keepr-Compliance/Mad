@@ -41,3 +41,19 @@ export const LearnPreviewArgsSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("cleanup"), detectionId: DetectionIdSchema }),
   z.strictObject({ kind: z.literal("bulk"), rowId: RowIdSchema }),
 ]);
+
+/**
+ * learn:cleanup-next (PR3): optional detections skipped for now in this
+ * session. Skipping stores nothing; the deal is asked again next time.
+ */
+export const LearnCleanupNextArgsSchema = z
+  .strictObject({ exclude: z.array(DetectionIdSchema).max(5000) })
+  .optional();
+
+const AttachmentIdSchema = z.string().min(1).max(128);
+
+/** learn:attachment-open (PR3): the cleanup question and its one attachment. */
+export const LearnAttachmentOpenArgsSchema = z.strictObject({
+  detectionId: DetectionIdSchema,
+  attachmentId: AttachmentIdSchema,
+});

@@ -11,6 +11,7 @@ import {
   ANSWERED_BULK_WITH_TEXT_SQL,
   ANSWER_BULK_SQL,
   ANSWER_KEY_TRANSACTIONS_SQL,
+  COUNT_LIVE_ANSWERS_SQL,
   COUNT_LIVE_BULK_SAMPLE_SQL,
   COUNT_NULL_SENT_AT_SQL,
   DRAW_BULK_CANDIDATES_SQL,
@@ -23,6 +24,7 @@ import {
   PREVIEW_ATTACHMENTS_SQL,
   PREVIEW_EMAILS_BY_IDS_SQL,
   PREVIEW_EMAIL_FOR_BULK_ROW_SQL,
+  QUESTION_ATTACHMENT_SQL,
   SOFT_CLEAR_BULK_SQL,
   SOFT_CLEAR_DEAL_ANSWERS_SQL,
   UPSERT_DEAL_ANSWER_SQL,
@@ -239,4 +241,29 @@ export function isLiveBulkRow(userId: string, rowId: string): boolean {
 export function previewAttachments(userId: string, emailIds: string[]): PreviewAttachmentRow[] {
   if (emailIds.length === 0) return [];
   return dbAll<PreviewAttachmentRow>(PREVIEW_ATTACHMENTS_SQL, [userId, JSON.stringify(emailIds)]);
+}
+
+// ---- settings screen (PR3) ------------------------------------------------
+
+/** Saved answers of the user (live cleanup answers + answered sample rows). */
+export function countLiveAnswers(userId: string): { deal: number; bulk: number } {
+  const row = dbGet<{ deal: number; bulk: number }>(COUNT_LIVE_ANSWERS_SQL, [userId, userId]);
+  return { deal: row?.deal ?? 0, bulk: row?.bulk ?? 0 };
+}
+
+export interface QuestionAttachmentRow {
+  id: string;
+  email_id: string;
+  filename: string;
+  mime_type: string | null;
+  file_size_bytes: number | null;
+  storage_path: string | null;
+  provider_attachment_id: string | null;
+  external_id: string | null;
+  source: string | null;
+}
+
+/** One attachment on one of the user's own messages, or null. */
+export function getQuestionAttachment(userId: string, attachmentId: string): QuestionAttachmentRow | null {
+  return dbGet<QuestionAttachmentRow>(QUESTION_ATTACHMENT_SQL, [userId, attachmentId]) ?? null;
 }

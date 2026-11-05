@@ -21,7 +21,13 @@ export type { PublicRunSummary, SampleDrawResult, LearnScore, BulkAnswer, DealAn
 export type LearnFailure = { success: false; error: string };
 
 export type LearnStateResult =
-  | { success: true; available: boolean; enabled: boolean }
+  | {
+      success: true;
+      available: boolean;
+      enabled: boolean;
+      /** Saved answers of this user (counts only), whatever the toggle and the key say. */
+      answers: { deal: number; bulk: number };
+    }
   | LearnFailure;
 
 export type LearnSetEnabledResult = { success: true; enabled: boolean } | LearnFailure;
@@ -67,7 +73,7 @@ export interface LearnPreviewAttachment {
   filename: string;
   mimeType: string | null;
   sizeBytes: number | null;
-  /** Already on disk. Learn mode never downloads an attachment. */
+  /** Already on disk. Learn mode downloads only the question's own attachment (learn:attachment-open). */
   downloaded: boolean;
   /** Set only when downloaded; opened through the existing attachment channels. */
   storagePath: string | null;
@@ -90,7 +96,20 @@ export interface LearnPreviewEmail {
 }
 
 export type LearnPreviewResult =
-  | { success: true; emails: LearnPreviewEmail[]; totalEmails: number }
+  | {
+      success: true;
+      emails: LearnPreviewEmail[];
+      totalEmails: number;
+      /**
+       * Cleanup previews only: the one attachment the question is about (the
+       * first PDF, newest message first), or null. Bulk previews: always null.
+       */
+      questionAttachmentId: string | null;
+    }
+  | LearnFailure;
+
+export type LearnAttachmentOpenResult =
+  | { success: true; dataUrl: string; downloadedNow: boolean }
   | LearnFailure;
 
 export type LearnPreviewArgs =
@@ -102,7 +121,7 @@ export interface WindowApiLearn {
   setEnabled: (args: { enabled: boolean }) => Promise<LearnSetEnabledResult>;
   run: (args: { windowMonths: number }) => Promise<LearnRunResultResponse>;
   onRunProgress: (callback: (progress: LearnRunProgressEvent) => void) => () => void;
-  cleanupNext: () => Promise<LearnCleanupNextResult>;
+  cleanupNext: (args?: { exclude: string[] }) => Promise<LearnCleanupNextResult>;
   cleanupAnswer: (args: { detectionId: string; answer: DealAnswer }) => Promise<LearnAnswerResult>;
   sampleDraw: (args: { windowMonths: number }) => Promise<LearnSampleDrawResponse>;
   sampleNext: () => Promise<LearnSampleNextResult>;
@@ -110,4 +129,5 @@ export interface WindowApiLearn {
   score: () => Promise<LearnScoreResult>;
   deleteAnswers: () => Promise<LearnDeleteAnswersResult>;
   preview: (args: LearnPreviewArgs) => Promise<LearnPreviewResult>;
+  attachmentOpen: (args: { detectionId: string; attachmentId: string }) => Promise<LearnAttachmentOpenResult>;
 }

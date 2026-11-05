@@ -7,12 +7,18 @@
 // questions, stores the answers in the local encrypted database, and never
 // creates a transaction, changes the dashboard, or sends mail anywhere.
 //
-// THE GATE. Every channel except `learn:get-state` and `learn:set-enabled`
-// calls `isLearnModeAllowed` first, before any read or write:
+// THE GATE. Every channel in LEARN_GATED_CHANNELS calls `isLearnModeAllowed`
+// first, before any read or write:
 //   the user's own toggle is ON (local switch row; missing row = OFF)
 //   AND the strict autodetect_eval read is allowed (isAutodetectEvalAllowed).
-// `learn:set-enabled` checks only the strict key (the toggle is what it sets);
-// `learn:get-state` reports both and acts on nothing.
+// Three channels are ungated (session only):
+//   `learn:get-state`      reports availability, the toggle and the count of
+//                          saved answers; acts on nothing.
+//   `learn:set-enabled`    turning ON checks only the strict key (the toggle is
+//                          what it sets); turning OFF is never refused.
+//   `learn:delete-answers` soft-removes the caller's own answers, with Learn
+//                          mode off and with the org key off (founder,
+//                          2026-11-04): a user can always remove his own rows.
 //
 // What this file deliberately does NOT import: emailSyncHandlers
 // (isAutoDetectAllowed), llmConfigService, transactionService,
@@ -27,10 +33,13 @@
 // attached to an error report. Logs name the channel and counts only; errors
 // are logged by name, never by message, and are not sent to Sentry.
 //
-// Attachments: Learn mode lists them by name and reports whether the file is
-// already on disk; it never downloads one (no M0a question is about an
-// attachment — founder rule 2026-11-04: only the attachment a question is
-// about may be downloaded).
+// Attachments (founder, 2026-11-04): Learn mode lists them by name and
+// downloads ONLY the attachment a cleanup question is about, when that
+// question is shown (`learn:attachment-open`). "The one" is decided here
+// (pickQuestionAttachmentId); any other id is refused before any provider
+// call. The downloader is INJECTED by main.ts (`deps.openQuestionAttachment`),
+// so this file keeps no static edge to the mail provider services. Previews,
+// cleanup-next and sample-next never download.
 
 import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
@@ -39,7 +48,9 @@ import type { z } from "zod/v4";
 import logService from "../services/logService";
 import sessionService from "../services/sessionService";
 import {
+  countLiveAnswers,
   getLearnModeEnabled,
+  getQuestionAttachment,
   isLiveBulkRow,
   listAnswerKeyTransactions,
   listAnsweredBulkWithText,
@@ -51,7 +62,9 @@ import {
   softClearAnswers,
   type PreviewAttachmentRow,
   type PreviewEmailRow,
+  type QuestionAttachmentRow,
 } from "../services/db/learnModeDbService";
+import { pickQuestionAttachmentId } from "../services/learn/questionAttachment";
 import {
   clearLastRun,
   getLastRun,
@@ -63,7 +76,9 @@ import { answerCleanupQuestion, nextCleanupQuestion } from "../services/learn/cl
 import { answerBulkQuestion, ensureBulkSample, nextBulkQuestion } from "../services/learn/bulkSample";
 import { formatCopyBlock, scoreRun } from "../services/learn/scoring";
 import {
+  LearnAttachmentOpenArgsSchema,
   LearnCleanupAnswerArgsSchema,
+  LearnCleanupNextArgsSchema,
   LearnPreviewArgsSchema,
   LearnRunArgsSchema,
   LearnSampleAnswerArgsSchema,
@@ -72,6 +87,7 @@ import {
 } from "../schemas/learnMode";
 import type {
   LearnAnswerResult,
+  LearnAttachmentOpenResult,
   LearnCleanupNextResult,
   LearnDeleteAnswersResult,
   LearnFailure,
@@ -98,12 +114,12 @@ export const LEARN_GATED_CHANNELS = [
   "learn:sample-next",
   "learn:sample-answer",
   "learn:score",
-  "learn:delete-answers",
   "learn:preview",
+  "learn:attachment-open",
 ] as const;
 
 /** Channels that do NOT call isLearnModeAllowed, and why (header). */
-export const LEARN_UNGATED_CHANNELS = ["learn:get-state", "learn:set-enabled"] as const;
+export const LEARN_UNGATED_CHANNELS = ["learn:get-state", "learn:set-enabled", "learn:delete-answers"] as const;
 
 export const LEARN_NOT_AVAILABLE_ERROR = "Learn mode is not available.";
 export const LEARN_NOT_ON_ERROR = "Learn mode is off.";
@@ -113,6 +129,22 @@ export const LEARN_NO_RUN_ERROR = "Run the check first.";
 export const LEARN_RUN_BUSY_ERROR = "A check is already running.";
 export const LEARN_NOT_IN_SET_ERROR = "That item is not part of the current questions.";
 export const LEARN_FAILED_ERROR = "Learn mode request failed.";
+export const LEARN_ATTACHMENT_UNAVAILABLE_ERROR = "The document could not be opened.";
+export const LEARN_ATTACHMENT_TOO_LARGE_ERROR = "The document is too large to preview.";
+
+/**
+ * What main.ts injects. The downloader lives outside this file so the Learn
+ * handlers never import a mail provider service (header).
+ */
+export interface LearnModeHandlerDeps {
+  openQuestionAttachment?: (
+    userId: string,
+    row: QuestionAttachmentRow,
+  ) => Promise<
+    | { ok: true; dataUrl: string; downloadedNow: boolean }
+    | { ok: false; reason: "too_large" | "not_available" | "failed" }
+  >;
+}
 
 /** Messages per preview: newest first. */
 export const LEARN_PREVIEW_MAX_EMAILS = 5;
@@ -209,14 +241,43 @@ function toPreviewEmails(rows: PreviewEmailRow[], attachments: PreviewAttachment
   }));
 }
 
-export function registerLearnModeHandlers(): void {
+/**
+ * The cleanup preview of one detection of the user's current run: its
+ * messages (newest first, capped) and their attachments. Null when the
+ * detection is not part of the run.
+ */
+function cleanupPreview(
+  userId: string,
+  detectionId: string,
+): { rows: PreviewEmailRow[]; attachments: PreviewAttachmentRow[]; total: number } | LearnFailure {
+  const run = getLastRun(userId);
+  if (!run) return fail(LEARN_NO_RUN_ERROR);
+  const detection = run.detections.find((d) => d.id === detectionId);
+  if (!detection) return fail(LEARN_NOT_IN_SET_ERROR);
+  const rows = previewEmailsByIds(userId, detection.emailIds, LEARN_PREVIEW_MAX_EMAILS);
+  const attachments = previewAttachments(userId, rows.map((r) => r.id));
+  return { rows, attachments, total: detection.emailIds.length };
+}
+
+function isPreviewFailure(
+  x: { rows: PreviewEmailRow[] } | LearnFailure,
+): x is LearnFailure {
+  return (x as LearnFailure).success === false;
+}
+
+export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void {
   ipcMain.handle(
     "learn:get-state",
     guarded("learn:get-state", async (): Promise<LearnStateResult> => {
       const userId = await sessionUserId();
       if (!userId) return fail(LEARN_NO_SESSION_ERROR);
       const available = (await isAutodetectEvalAllowed()) === true;
-      return { success: true, available, enabled: available && getLearnModeEnabled(userId) };
+      return {
+        success: true,
+        available,
+        enabled: available && getLearnModeEnabled(userId),
+        answers: countLiveAnswers(userId),
+      };
     }),
   );
 
@@ -271,12 +332,14 @@ export function registerLearnModeHandlers(): void {
 
   ipcMain.handle(
     "learn:cleanup-next",
-    guarded("learn:cleanup-next", async (): Promise<LearnCleanupNextResult> => {
+    guarded("learn:cleanup-next", async (_e, payload?: unknown): Promise<LearnCleanupNextResult> => {
       const g = await gate();
       if (isFailure(g)) return g;
+      const parsed = LearnCleanupNextArgsSchema.safeParse(payload);
+      if (!parsed.success) return fail(LEARN_INVALID_ERROR);
       const run = getLastRun(g.userId);
       if (!run) return fail(LEARN_NO_RUN_ERROR);
-      const next = nextCleanupQuestion(g.userId, run);
+      const next = nextCleanupQuestion(g.userId, run, parsed.data?.exclude ?? []);
       if (!next) return { success: true, question: null };
       const detection = run.detections.find((d) => d.id === next.detectionId);
       return {
@@ -360,9 +423,10 @@ export function registerLearnModeHandlers(): void {
   ipcMain.handle(
     "learn:delete-answers",
     guarded("learn:delete-answers", async (): Promise<LearnDeleteAnswersResult> => {
-      const g = await gate();
-      if (isFailure(g)) return g;
-      const removed = softClearAnswers(g.userId);
+      // UNGATED (founder, 2026-11-04): session only. Own rows only, soft.
+      const userId = await sessionUserId();
+      if (!userId) return fail(LEARN_NO_SESSION_ERROR);
+      const removed = softClearAnswers(userId);
       logService.info("Learn mode answers cleared", MODULE, removed);
       return { success: true, removed };
     }),
@@ -377,20 +441,48 @@ export function registerLearnModeHandlers(): void {
       if (!args) return fail(LEARN_INVALID_ERROR);
 
       if (args.kind === "cleanup") {
-        const run = getLastRun(g.userId);
-        if (!run) return fail(LEARN_NO_RUN_ERROR);
-        const detection = run.detections.find((d) => d.id === args.detectionId);
-        if (!detection) return fail(LEARN_NOT_IN_SET_ERROR);
-        const rows = previewEmailsByIds(g.userId, detection.emailIds, LEARN_PREVIEW_MAX_EMAILS);
-        const attachments = previewAttachments(g.userId, rows.map((r) => r.id));
-        return { success: true, emails: toPreviewEmails(rows, attachments), totalEmails: detection.emailIds.length };
+        const p = cleanupPreview(g.userId, args.detectionId);
+        if (isPreviewFailure(p)) return p;
+        const emails = toPreviewEmails(p.rows, p.attachments);
+        return {
+          success: true,
+          emails,
+          totalEmails: p.total,
+          questionAttachmentId: pickQuestionAttachmentId(emails),
+        };
       }
 
       if (!isLiveBulkRow(g.userId, args.rowId)) return fail(LEARN_NOT_IN_SET_ERROR);
       const row = previewEmailForBulkRow(g.userId, args.rowId);
-      if (!row) return { success: true, emails: [], totalEmails: 0 };
+      if (!row) return { success: true, emails: [], totalEmails: 0, questionAttachmentId: null };
       const attachments = previewAttachments(g.userId, [row.id]);
-      return { success: true, emails: toPreviewEmails([row], attachments), totalEmails: 1 };
+      return { success: true, emails: toPreviewEmails([row], attachments), totalEmails: 1, questionAttachmentId: null };
+    }),
+  );
+
+  ipcMain.handle(
+    "learn:attachment-open",
+    guarded("learn:attachment-open", async (_e, payload: unknown): Promise<LearnAttachmentOpenResult> => {
+      const g = await gate();
+      if (isFailure(g)) return g;
+      const args = parse(LearnAttachmentOpenArgsSchema, payload);
+      if (!args) return fail(LEARN_INVALID_ERROR);
+      // Recompute "the one" from the same preview set; any other id is refused
+      // before anything is read or fetched.
+      const p = cleanupPreview(g.userId, args.detectionId);
+      if (isPreviewFailure(p)) return p;
+      const theOne = pickQuestionAttachmentId(toPreviewEmails(p.rows, p.attachments));
+      if (theOne === null || theOne !== args.attachmentId) return fail(LEARN_NOT_IN_SET_ERROR);
+      const row = getQuestionAttachment(g.userId, theOne);
+      if (!row) return fail(LEARN_NOT_IN_SET_ERROR);
+      if (!deps.openQuestionAttachment) return fail(LEARN_ATTACHMENT_UNAVAILABLE_ERROR);
+      const opened = await deps.openQuestionAttachment(g.userId, row);
+      if (!opened.ok) {
+        logService.info("Learn mode attachment not opened", MODULE, { reason: opened.reason });
+        return fail(opened.reason === "too_large" ? LEARN_ATTACHMENT_TOO_LARGE_ERROR : LEARN_ATTACHMENT_UNAVAILABLE_ERROR);
+      }
+      logService.info("Learn mode attachment opened", MODULE, { downloadedNow: opened.downloadedNow });
+      return { success: true, dataUrl: opened.dataUrl, downloadedNow: opened.downloadedNow };
     }),
   );
 }
