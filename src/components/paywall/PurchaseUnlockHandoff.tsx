@@ -38,6 +38,13 @@ export interface PurchaseUnlockHandoffProps {
   onCancel: () => void;
 }
 
+/**
+ * C7 wording, decided 2026-10-10 (BACKLOG-3648): a brokerage member with no
+ * license assigned. Re-exported by ExportUnlockPrompt. BACKLOG-3951: also shown
+ * here when main or the portal refuses a card payment for that reason.
+ */
+export const NO_LICENSE_MESSAGE = "Your brokerage hasn't assigned you a license. Contact your admin.";
+
 /** UI phases. None reveals content; only a confirmed unlock calls onUnlocked. */
 type Phase =
   | "idle" // show quote + primary CTA (consent copy for saved-card)
@@ -140,7 +147,9 @@ export function PurchaseUnlockHandoff({
         ? "You appear to be offline. Reconnect and try again."
         : result.error === "unauthenticated"
           ? "Please sign in again to continue."
-          : "We couldn't start the checkout. Please try again.",
+          : result.error === "not_licensed"
+            ? NO_LICENSE_MESSAGE
+            : "We couldn't start the checkout. Please try again.",
     );
   }, [localTransactionId]);
 
@@ -186,6 +195,11 @@ export function PurchaseUnlockHandoff({
       case "offline":
         setPhase("error");
         setErrorMessage("You appear to be offline. Reconnect and try again.");
+        return;
+      case "not_licensed":
+        // BACKLOG-3951: nothing was charged.
+        setPhase("error");
+        setErrorMessage(NO_LICENSE_MESSAGE);
         return;
       default:
         setPhase("error");

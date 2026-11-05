@@ -70,6 +70,9 @@ jest.mock("../supabaseService", () => ({
     }),
     getAuthSession: () => mockGetAuthSession(),
     getActiveOrganizationMembershipOutcome: (u: string) => mockMembership(u),
+    // BACKLOG-3951: unlockWithCredit also reads the membership standing. No
+    // rows = no brokerage, so the debit cases here are unchanged.
+    getMembershipStandingRows: async () => ({ status: "rows", rows: [] }),
   },
 }));
 
