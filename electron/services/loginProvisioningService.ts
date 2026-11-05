@@ -249,7 +249,17 @@ export function provisionDeepLinkLogin(
       resourceType: "SESSION",
       metadata: { provider: u.provider, isNewUser: existing === null, method: "browser" },
     });
-    return { user, sessionToken, isNewUser: existing === null };
+    // BACKLOG-4148: stamp "Last login" in the same save, for a new AND a
+    // returning user. Sync on purpose (`updateLastLoginSync`): a promise-returning
+    // write here would let the transaction commit over a failed UPDATE. Then
+    // re-read, so the returned row (and the session file built from it) carries
+    // the stamp rather than the row as it was before this sign-in.
+    updateLastLoginSync(user.id);
+    const stamped = getUserByIdSync(user.id);
+    if (!stamped) {
+      throw new Error("Failed to retrieve user after the last-login stamp");
+    }
+    return { user: stamped, sessionToken, isNewUser: existing === null };
   });
 }
 

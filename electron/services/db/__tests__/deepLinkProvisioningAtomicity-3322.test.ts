@@ -47,13 +47,22 @@
  * part of the same transaction and carries no session or resource id; a failed
  * provisioning writes one LOGIN_FAILED afterwards for a user whose row exists,
  * on the id that row really has, and none for a first sign-in.
- *   - move recordInTransaction after the dbTransaction                -> D9
+ *   - move recordInTransaction after the dbTransaction                -> D3-D9, D12
  *   - drop recordInTransaction                                        -> D7, D12
  *   - put the session token back in sessionId / resourceId            -> D7
- *   - drop the recordDeepLinkSignInFailure call in the wrapper        -> D10, D13
+ *   - drop the recordDeepLinkSignInFailure call in the wrapper        -> D10, D11, D13
  *   - write the failure with u.supabaseId instead of the looked-up id -> D13
  *     (no users_local row has that id, so the foreign key refuses the row;
  *     D10 cannot see this one: its local id IS the Supabase id)
+ *
+ * BACKLOG-4148 (D14-D16): the sign-in stamps users_local.last_login_at in the
+ * same transaction, for a new and a returning user, and returns the re-read row.
+ *   - drop the stamp                                                  -> D14, D15, D16
+ *   - stamp only when the user was just created                       -> D15, D16
+ *   - return the pre-stamp row (no re-read)                           -> D14, D15
+ *   - move the stamp after the dbTransaction (own write)              -> D14, D15, D16
+ *   - `void updateLastLogin(user.id)` (promise wrapper) in the body   -> D16
+ *   - wrap the stamp in try/catch and swallow the error               -> D16
  *
  * Run locally with (the shared native module is the Electron build):
  *   ELECTRON_RUN_AS_NODE=1 npx electron node_modules/.bin/jest \
@@ -439,5 +448,47 @@ describe("BACKLOG-3322 deep-link provisioning is one transaction", () => {
       "LOGIN",
       "LOGIN",
     ]);
+  });
+
+  const lastLogin = (db: DatabaseType, id: string): string | null =>
+    (db.prepare("SELECT last_login_at FROM users_local WHERE id = ?").get(id) as { last_login_at: string | null })
+      .last_login_at;
+
+  it("D14 a new user: last_login_at is stamped (SQLite CURRENT_TIMESTAMP text) and the returned row carries it", async () => {
+    const real = seedDb();
+    setDb(real);
+    const u = deepLinkUser();
+    const r = await provisionDeepLinkSignIn(u);
+    const stamped = lastLogin(real, u.supabaseId);
+    expect(stamped).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);
+    expect(r.user.last_login_at).toBe(stamped);
+  });
+
+  it("D15 a returning user with an old stamp: replaced by this sign-in's, returned row carries the new value", async () => {
+    const real = seedDb();
+    setDb(real);
+    const u = deepLinkUser();
+    insertUser(real, u.supabaseId, u.email, u.supabaseId);
+    real.prepare("UPDATE users_local SET last_login_at = '2026-01-27 09:00:00' WHERE id = ?").run(u.supabaseId);
+    const r = await provisionDeepLinkSignIn(u);
+    expect(r.isNewUser).toBe(false);
+    const stamped = lastLogin(real, u.supabaseId);
+    expect(stamped).not.toBe("2026-01-27 09:00:00");
+    expect(stamped! > "2026-01-27 09:00:00").toBe(true);
+    expect(r.user.last_login_at).toBe(stamped);
+  });
+
+  it("D16 the stamp fails: the whole sign-in rolls back (no session, no LOGIN, old stamp kept)", () => {
+    const real = seedDb();
+    const u = deepLinkUser();
+    insertUser(real, u.supabaseId, u.email, u.supabaseId);
+    real.prepare("UPDATE users_local SET last_login_at = '2026-01-27 09:00:00' WHERE id = ?").run(u.supabaseId);
+    setDb(throwingAfter(real, /SET last_login_at/i));
+    expect(() => provisionDeepLinkLogin(u)).toThrow(/INJECTED/);
+    expect({ sessions: count(real, "sessions"), audit: count(real, "audit_logs"), stamp: lastLogin(real, u.supabaseId) }).toEqual({
+      sessions: 0,
+      audit: 0,
+      stamp: "2026-01-27 09:00:00",
+    });
   });
 });
