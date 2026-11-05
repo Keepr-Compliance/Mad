@@ -17,9 +17,9 @@
  * is shown in the picker by design, and setting its column would hide it.
  * A non-empty column is never touched. The qualifier does not filter
  * `channel`, so a legacy `channel = 'email'` row in `messages` with a
- * per-message link is re-pointed too. That changes nothing visible: the only
- * email-channel read (`EMAIL_CHANNEL_CANDIDATES_SQL`, messageMatchingSql.ts)
- * already excludes rows linked to the asked deal through `communications`.
+ * per-message link is re-pointed too. That changes nothing visible: no code
+ * reads email-channel rows from `messages` for linking (the one read that did,
+ * `EMAIL_CHANNEL_CANDIDATES_SQL`, was removed by BACKLOG-4039 / BACKLOG-3984).
  * CROSS JOIN pins the loop to `communications` (covering index
  * `idx_comm_msg_txn`, then `messages` by primary key); the messages-driven
  * forms walk every NULL-column message and were 9-10x slower.

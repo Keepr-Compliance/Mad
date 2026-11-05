@@ -406,7 +406,6 @@ describe("migration v77 — BACKLOG-3983, texts whose deal column names a deal t
     // A new writer fails here: add it to the executed census (C2) and to this map.
     expect(found).toEqual({
       [path.join("services", "db", "messageDbService.ts")]: 2, // linkMessageToTransaction, REPOINT
-      [path.join("services", "db", "messageMatchingSql.ts")]: 2, // claim 0.9, claim 0.85
       [path.join("services", "db", "migrationV76Sql.ts")]: 2, // v76 setter, v76 clear
       [path.join("services", "db", "migrationV77Sql.ts")]: 1, // v77 setter
     });
@@ -446,9 +445,11 @@ describe("migration v77 — BACKLOG-3983, texts whose deal column names a deal t
         mm.createCommunicationReferenceSync(m, t, USER, "manual", 1.0);
       });
 
-    // claimMessagesForTransactionSql09 (autoLinkTextsToTransaction).
+    // BACKLOG-4039 / BACKLOG-3984: the pattern claims (claimMessagesForTransactionSql09 /
+    // 085, autoLinkTexts/EmailsToTransaction) were removed with the dead auto-link path,
+    // so they are no longer writers. t-auto is attached manually for the steps below.
     text(db, "t-auto", "2026-03-01T16:00:00.000Z", T1);
-    await mm.autoLinkTextsToTransaction(A);
+    manual("t-auto", A);
     expect(take()).toEqual([["t-auto", null, A]]);
     expect(orphans()).toEqual([]);
 
@@ -465,21 +466,9 @@ describe("migration v77 — BACKLOG-3983, texts whose deal column names a deal t
     expect(take()).toEqual([["t-auto", B, A]]);
     expect(orphans()).toEqual([]);
 
-    // claimMessagesForTransactionSql085 (autoLinkEmailsToTransaction). Driven, and it
-    // never writes: its candidate read (EMAIL_CHANNEL_CANDIDATES_SQL) selects
-    // m.sender / m.recipients, which `messages` does not have, so the call returns
-    // that error before the claim. Recorded, not fixed here (emails are outside v77).
+    // A legacy email-channel row in `messages`, attached manually.
     email(db, "e-auto", "2026-03-03T00:00:00.000Z");
-    const emailRun = await mm.autoLinkEmailsToTransaction(A);
-    expect(emailRun.linked).toBe(0);
-    expect(emailRun.errors.length).toBeGreaterThan(0);
-    // The failing read itself (the wrapped message differs by runner: CI's plain node
-    // reports "Unknown error", Electron's node the SQLite text).
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { EMAIL_CHANNEL_CANDIDATES_SQL } = require("../db/messageMatchingSql");
-    expect(() => db.prepare(EMAIL_CHANNEL_CANDIDATES_SQL)).toThrow(/no such column: m\.sender/);
     expect(take()).toEqual([]);
-    expect(orphans()).toEqual([]);
     manual("e-auto", A);
     expect(take()).toEqual([["e-auto", null, A]]);
 
