@@ -54,9 +54,13 @@ let mainWindow: BrowserWindow | null = null;
  * --------------------------------------------
  * `sync:progress` is emitted once per parsed chunk of `idevicebackup2` stdout,
  * with no dedupe and no interval — `backupService.ts`'s own comment calls that
- * output "very spammy" and keeps it out of the log for exactly that reason. Every
- * one of those is forwarded 1:1 by `deviceSyncOrchestrator` and pushed 1:1 by
- * `syncHandlers`. Close the window during a sync — macOS does not quit, so that
+ * output "very spammy" and keeps it out of the log for exactly that reason. Until
+ * BACKLOG-2897 every one of those was forwarded 1:1 by `deviceSyncOrchestrator`;
+ * transfer events are now forwarded at most once a second
+ * (`BACKUP_PROGRESS_INTERVAL_MS`), and `syncHandlers` still pushes each forwarded
+ * event 1:1. The rates below were measured before 2897; this guard stays so it
+ * does not depend on every producer staying throttled. Close the window during a
+ * sync — macOS does not quit, so that
  * is one Dock click away from this defect's own scenario — and each becomes a
  * `log.warn`, which clears the file level (`config/logFileConfig.ts`).
  *
