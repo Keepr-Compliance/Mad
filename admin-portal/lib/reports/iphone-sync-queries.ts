@@ -79,11 +79,13 @@ export async function getIphoneSyncRuns(
   limit = RUN_LIMIT
 ): Promise<IphoneSyncData> {
   // BACKLOG-3892 E: source_metrics carries the kept-backup facts (quarantine).
+  // BACKLOG-2950: device_error_code is the phone's MBErrorDomain integer. The
+  // CODE only: the phone's description of it is never read by this report.
   return getSyncRuns<SyncOutcomeRow>(supabase, range, {
     source: 'iphone-backup',
     limit,
     packagedOnly: false,
-    extraColumns: ['source_metrics'],
+    extraColumns: ['source_metrics', 'device_error_code'],
   });
 }
 

@@ -126,6 +126,50 @@ describe('getIphoneSyncRuns', () => {
     }
   });
 
+  // BACKLOG-2950 PR-B. The phone's error DESCRIPTION can carry a file name, so
+  // the report reads the code only. This pins the whole list: adding any column
+  // (the description included) has to change this test on purpose.
+  it('selects exactly these columns: the device error CODE, never its description', async () => {
+    const { client, calls } = stubClient();
+    await getIphoneSyncRuns(client, THIS_WEEK);
+
+    const selected = String(argsFor(calls, 'select')[0][0])
+      .split(',')
+      .map((c) => c.trim());
+    expect(selected).toEqual([
+      'id',
+      'user_id',
+      'created_at',
+      'source',
+      'outcome',
+      'elapsed_ms',
+      'phases',
+      'prior_backup',
+      'incremental',
+      'was_encrypted',
+      'device_model',
+      'device_ios_version',
+      'device_used_bytes',
+      'backup_bytes',
+      'backup_bytes_unmeasured',
+      'messages_extracted',
+      'conversations_extracted',
+      'contacts_extracted',
+      'app_version',
+      'platform',
+      'is_packaged',
+      'started_at',
+      'bytes_transferred',
+      'bytes_last_increased_at',
+      'last_phase',
+      'reason_code',
+      'ended_by',
+      'source_metrics',
+      'device_error_code',
+    ]);
+    expect(selected.some((c) => c.includes('description'))).toBe(false);
+  });
+
   it('says the window was TRUNCATED when the cap was reached, and not when it was not', async () => {
     const atCap = Array.from({ length: 3 }, (_, i) => ({ id: `r${i}`, user_id: null }));
     const capped = await getIphoneSyncRuns(stubClient(atCap).client, THIS_WEEK, 3);
