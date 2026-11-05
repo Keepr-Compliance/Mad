@@ -466,6 +466,38 @@ describe("migration v77 — BACKLOG-3983, texts whose deal column names a deal t
     expect(take()).toEqual([["t-auto", B, A]]);
     expect(orphans()).toEqual([]);
 
+    // BACKLOG-4037: REPOINT via transactionService.unlinkCommunication (a
+    // per-message link removed through the communications row).
+    const linkId = (m: string, t: string): string =>
+      (db.prepare("SELECT id FROM communications WHERE message_id = ? AND transaction_id = ?").get(m, t) as {
+        id: string;
+      }).id;
+    // C-a: links A (older) then B (newer), column B. Removing B re-points at A.
+    text(db, "t-4037", "2026-03-07T16:00:00.000Z", "th-4037-a", PHONE2);
+    manual("t-4037", A);
+    manual("t-4037", B);
+    expect(take()).toEqual([
+      ["t-4037", null, A],
+      ["t-4037", A, B],
+    ]);
+    await txService.unlinkCommunication(linkId("t-4037", B));
+    expect(take()).toEqual([["t-4037", B, A]]);
+    expect(orphans()).toEqual([]);
+    // C-b: the only link removed -> NULL.
+    text(db, "t-4037b", "2026-03-08T16:00:00.000Z", "th-4037-b", PHONE2);
+    manual("t-4037b", A);
+    expect(take()).toEqual([["t-4037b", null, A]]);
+    await txService.unlinkCommunication(linkId("t-4037b", A));
+    expect(take()).toEqual([["t-4037b", A, null]]);
+    expect(orphans()).toEqual([]);
+    // C-c: an email-channel messages row is not a text; its column is not written.
+    email(db, "e-4037", "2026-03-09T00:00:00.000Z");
+    manual("e-4037", A);
+    expect(take()).toEqual([["e-4037", null, A]]);
+    await txService.unlinkCommunication(linkId("e-4037", A));
+    expect(take()).toEqual([]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM communications WHERE message_id = 'e-4037'").get()).toEqual({ n: 0 });
+
     // A legacy email-channel row in `messages`, attached manually.
     email(db, "e-auto", "2026-03-03T00:00:00.000Z");
     expect(take()).toEqual([]);
