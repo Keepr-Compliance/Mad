@@ -18,10 +18,13 @@
  *   6. Suspend removed members (license_status = 'suspended')
  *   7. Update directory_sync_last_at / directory_sync_error
  *
- * Authentication:
- *   - Requires Authorization header with Bearer token matching the
- *     SUPABASE_SERVICE_ROLE_KEY. This restricts invocation to internal
- *     callers (cron jobs, admin scripts) that possess the service role key.
+ * Authentication (auth.ts, BACKLOG-4015):
+ *   - Requires an Authorization Bearer token that is either one of the
+ *     function's own keys (SUPABASE_SERVICE_ROLE_KEY or a SUPABASE_SECRET_KEYS
+ *     value, timing-safe compare) or a service_role JWT for this project.
+ *     The JWT branch relies on verify_jwt = true (supabase/config.toml): the
+ *     gateway has verified its signature before this code runs.
+ *   - Caller: the admin portal's "Sync now" action. No cron job calls it.
  *
  * Design decisions:
  *   - One org at a time to limit blast radius
@@ -37,6 +40,7 @@ import {
   extractGroupRoleMapping,
 } from "../_shared/groupRoleMapper.ts";
 import { type Placement, placeDirectoryUser } from "./placement.ts";
+import { authorizeServiceCaller } from "./auth.ts";
 import {
   defaultLastAdminNotifyDeps,
   notifyLastAdminKept,
@@ -1216,27 +1220,25 @@ Deno.serve(async (req: Request) => {
     }
 
     // -----------------------------------------------------------------------
-    // Authentication: verify the caller has the service role key.
-    // This function is internal -- invoked by cron jobs or admin scripts,
-    // not by end users. The service role key acts as a shared secret.
+    // Authentication (auth.ts): the caller must hold one of the function's
+    // own keys or a gateway-verified service_role JWT for this project.
+    // Internal only -- called by the admin portal's "Sync now" action, not
+    // by end users.
     // -----------------------------------------------------------------------
-    const authHeader = req.headers.get("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
+    const auth = authorizeServiceCaller(req.headers.get("Authorization"), {
+      serviceKey: supabaseServiceKey,
+      supabaseUrl,
+      secretKeys: Deno.env.get("SUPABASE_SECRET_KEYS"),
+    });
+    if (!auth.ok) {
       return new Response(
-        JSON.stringify({ error: "Missing or invalid Authorization header" }),
+        JSON.stringify({
+          error: auth.status === 401
+            ? "Missing or invalid Authorization header"
+            : "Unauthorized",
+        }),
         {
-          status: 401,
-          headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
-        },
-      );
-    }
-
-    const bearerToken = authHeader.substring(7);
-    if (bearerToken !== supabaseServiceKey) {
-      return new Response(
-        JSON.stringify({ error: "Unauthorized" }),
-        {
-          status: 403,
+          status: auth.status,
           headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
         },
       );
