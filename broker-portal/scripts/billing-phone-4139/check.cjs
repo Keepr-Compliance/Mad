@@ -12,7 +12,14 @@ function probe(W) {
   const scrollerOf = (el) => { for (let p = el.parentElement; p; p = p.parentElement) { const ox = getComputedStyle(p).overflowX; if (ox === 'auto' || ox === 'scroll' || ox === 'hidden') return p; } return null; };
   const shown = (el) => { const sc = scrollerOf(el); const r = el.getBoundingClientRect(); const b = sc ? sc.getBoundingClientRect() : { left: 0, right: W }; return r.left >= Math.max(0, b.left) - 1 && r.right <= Math.min(W, b.right) + 1; };
   const label = (el) => (el.getAttribute('aria-label') || el.getAttribute('data-billing-action') || el.textContent || el.type || '').trim().replace(/\s+/g, ' ').slice(0, 30);
-  const out = { sw: document.documentElement.scrollWidth, targets: [], texts: {}, rects: {} };
+  const out = { sw: document.documentElement.scrollWidth, targets: [], texts: {}, rects: {}, pillRows: [] };
+  // BACKLOG-4157: per stacked row, the date cell (first cell), the status cell and the row's content edge
+  for (const tr of document.querySelectorAll('tr[data-org-invoice-row], tr[data-billing-row]')) {
+    const cells = [...tr.children]; const d = cells[0].getBoundingClientRect();
+    const pc = cells.find((c) => /^(Paid|Due|Overdue|Void|Unpaid|Payment failed|Refunded|Partly refunded|Disputed)$/.test(c.textContent.trim()));
+    const p = pc.firstElementChild.getBoundingClientRect(); const t = tr.getBoundingClientRect(); const cs = getComputedStyle(tr);
+    out.pillRows.push({ dateTop: Math.round(d.top), pillTop: Math.round(pc.getBoundingClientRect().top), pillRight: Math.round(p.right), rowRight: Math.round(t.right - parseFloat(cs.paddingRight)) });
+  }
   const seen = {};
   for (const el of document.querySelectorAll('a, button, input, table, td, th, li, section, h2, p, span')) {
     if (el.getClientRects().length === 0) continue;
@@ -56,6 +63,13 @@ function probe(W) {
   ctl('C1 org page fits', PHONE.every((W) => M['org-due'][W].sw <= W), PHONE.map((W) => `${W}:sw=${M['org-due'][W].sw}`).join(' '));
   ctl('C2 Pay on screen', WIDTHS.every((W) => pay(W) && pay(W).shown), WIDTHS.map((W) => `${W}:${pay(W) ? (pay(W).shown ? 'shown' : 'hidden') : 'absent'}`).join(' '));
   ctl('C3 solo receipt on screen', PHONE.every((W) => ['$19.99', 'Paid', 'View'].every((t) => M['solo-receipts'][W].texts[t] === true)) && PHONE.every((W) => M['solo-receipts'][W].sw <= W), PHONE.map((W) => `${W}:${JSON.stringify(M['solo-receipts'][W].texts)}`).join(' '));
+  // C5 (BACKLOG-4157): below lg the status pill is on the date's line (top within 2 px) and flush right in the row.
+  const c5 = [];
+  for (const n of ['org-due', 'solo-receipts']) for (const W of PHONE) for (const [i, r] of M[n][W].pillRows.entries()) {
+    const ok = Math.abs(r.pillTop - r.dateTop) <= 2 && Math.abs(r.pillRight - r.rowRight) <= 1;
+    c5.push({ ok, s: `${n}@${W}#${i} date.top=${r.dateTop} pill.top=${r.pillTop} pill.right=${r.pillRight} row.right=${r.rowRight}` });
+  }
+  ctl('C5 pill on the date line, flush right (390, 768; brokerage + solo)', c5.length === 6 && c5.every((c) => c.ok), c5.map((c) => `${c.ok ? '' : 'BAD '}${c.s}`).join(' | '));
   const small = [];
   // C4 covers exactly the blocks dumped below; the kit-drawn modal Close is excluded (BACKLOG-4141).
   const C4_BLOCKS = ['org-due', 'solo-receipts', 'seats', 'seats-modal', 'autorenew-on', 'autorenew-ending', 'solo-plan-active', 'solo-plan-failed', 'solo-payment', 'solo-choose'];
