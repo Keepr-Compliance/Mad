@@ -287,9 +287,10 @@ export const MB_ERROR_FILE_MISSING = 4;
  * It deliberately quotes no required size: the estimate is ~3x low and belongs to
  * BACKLOG-2918. A wrong number here would be a fourth thing to disbelieve.
  *
- * Keeps the literal substring "disk space" so that deviceSyncOrchestrator's
- * `/disk space|no space|ENOSPC|not enough space/i` Sentry tag still fires. That
- * coupling is asserted by a test rather than left to be rediscovered.
+ * Keeps the literal substring "disk space". Since BACKLOG-2950 the orchestrator's
+ * disk-space Sentry event is decided on `errorCode === "INSUFFICIENT_SPACE"`, not on
+ * this sentence; the substring still matters to the orchestrator's delta-failure
+ * guard (`/disk space|no space|ENOSPC|not enough space/i`), and tests pin it.
  */
 export const BACKUP_STOPPED_FOR_QUIT_MESSAGE =
   "Backup stopped because Keepr was closed.";
