@@ -65,12 +65,17 @@ const AUDIT_SERVICE_FILE = "electron/services/auditService.ts";
  * Audit sites written with `auditService.log` today: 38 (BACKLOG-3339 plan,
  * pm_comments 7e81dd50, re-counted by this walk; 39 until the unused
  * `transactions:create` and `contacts:delete` channels were removed, then 37;
- * 38 since Settings "Export My Data" writes an entry). `log` calls plus
+ * 38 since Settings "Export My Data" writes an entry; 39 since the
+ * cloud-to-local phone type copy `user:sync-phone-type-from-cloud` writes one,
+ * BACKLOG-4030; 36 since BACKLOG-4103 deleted the in-app OAuth login path and
+ * its three LOGIN / LOGIN_FAILED entries; 37 since BACKLOG-3340 writes the
+ * browser sign-in's LOGIN with recordInTransaction in
+ * `provisionDeepLinkLogin`). `log` calls plus
  * `recordInTransaction` calls must add up to this. A conversion moves a site
  * from one side to the other; a NEW audited site changes the total and must
  * update this number on purpose.
  */
-const AUDITED_SITES_TOTAL = 38;
+const AUDITED_SITES_TOTAL = 37;
 
 type Reason = string;
 const R_REMOTE =
@@ -88,10 +93,7 @@ const ALLOWLIST: Record<string, { count: number; reason: Reason }> = {
   "electron/handlers/transactionExportHandlers.ts::transactions:submit::TRANSACTION_SUBMIT": { count: 1, reason: R_REMOTE },
   "electron/handlers/transactionExportHandlers.ts::transactions:resubmit::TRANSACTION_SUBMIT": { count: 1, reason: R_REMOTE },
   // E — sign-in, session, mailbox; and one read
-  "electron/handlers/googleAuthHandlers.ts::handleGoogleCompleteLogin::LOGIN": { count: 1, reason: R_SESSION },
   "electron/handlers/googleAuthHandlers.ts::processLoginInBackground::MAILBOX_CONNECT": { count: 3, reason: R_SESSION },
-  "electron/handlers/microsoftAuthHandlers.ts::processAuthInBackground::LOGIN": { count: 1, reason: R_SESSION },
-  "electron/handlers/microsoftAuthHandlers.ts::processAuthInBackground::LOGIN_FAILED": { count: 1, reason: R_SESSION },
   "electron/handlers/microsoftAuthHandlers.ts::processAuthInBackground::MAILBOX_CONNECT": { count: 3, reason: R_SESSION },
   "electron/handlers/sharedAuthHandlers.ts::handleCompletePendingLogin::LOGIN_FAILED": { count: 1, reason: R_SESSION },
   "electron/handlers/sharedAuthHandlers.ts::handleCompletePendingLogin::LOGIN": { count: 1, reason: R_SESSION },

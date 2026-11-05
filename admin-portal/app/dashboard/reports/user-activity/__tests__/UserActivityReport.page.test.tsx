@@ -35,6 +35,8 @@ function stubSupabase() {
           ? { data: null, error: state.viewsError }
           : { data: state.views, error: null };
       }
+      // BACKLOG-4144: the report gate
+      if (fn === 'report_my_access') return { data: 'owner', error: null };
       // has_permission and is_super_admin
       return { data: true, error: null };
     },

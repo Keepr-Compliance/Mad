@@ -1,5 +1,5 @@
 /**
- * BACKLOG-4005 C2/C3/C5 — every moved page keeps its own analytics.view gate,
+ * BACKLOG-4005 C2/C3/C5 — every moved page keeps its own gate (BACKLOG-4144: per report),
  * the middleware gates the whole /dashboard/reports tree, and the registry
  * stays reports-only.
  *
@@ -20,18 +20,20 @@ const PAGES = [
   'app/dashboard/reports/funnel/page.tsx',
   'app/dashboard/reports/iphone-sync/page.tsx',
   'app/dashboard/reports/google-messages-sync/page.tsx',
+  'app/dashboard/reports/email-precache/page.tsx',
   'app/dashboard/reports/submissions/page.tsx',
   'app/dashboard/reports/exports/page.tsx',
   'app/dashboard/reports/support-sla/page.tsx',
 ];
 
-describe('C2 each moved page checks auth, internal role and analytics.view', () => {
+// BACKLOG-4144: the pages moved off analytics.view onto the per-report gate. The behaviour is
+// proven in report-gate-4144.test.tsx; this keeps the old check from coming back as a text guard.
+describe('C2 each page goes through the per-report gate (BACKLOG-4144)', () => {
   it.each(PAGES)('%s', (file) => {
     const src = readFileSync(path.join(ROOT, file), 'utf8');
-    expect(src).toContain('getAuthenticatedUser()');
-    expect(src).toContain(".from('internal_roles')");
-    expect(src).toContain("required_permission: 'analytics.view'");
-    expect(src).toContain("redirect('/dashboard?error=insufficient_permissions')");
+    expect(src).toMatch(file.endsWith('reports/page.tsx') ? /await requireMyReports\(\)/ : /await requireReportAccess\(\w+\)/);
+    expect(src).not.toContain('has_permission');
+    expect(src).not.toContain('getAuthenticatedUser');
   });
 });
 
@@ -41,6 +43,7 @@ describe('C3 middleware route permissions', () => {
     '/dashboard/reports/analytics',
     '/dashboard/reports/funnel',
     '/dashboard/reports/iphone-sync',
+    '/dashboard/reports/email-precache',
     '/dashboard/reports/submissions?period=7',
     '/dashboard/reports/support-sla',
   ])('%s requires analytics.view', (p) => {

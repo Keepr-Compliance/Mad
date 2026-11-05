@@ -48,6 +48,15 @@ interface TransactionListComponentProps {
    * overview tab; the Dashboard's Todo rows pass "checklist".
    */
   initialTransactionTab?: TransactionTab;
+  /**
+   * BACKLOG-2890: Mac Messages auto-sync is held because the messages-source
+   * preference could not be read (useAutoRefresh `messagesSyncHeld`).
+   */
+  messagesSyncHeld?: boolean;
+  /** BACKLOG-2890: re-read the preference, then run the normal sync (app.triggerRefresh). */
+  onRetryMessagesRead?: () => void | Promise<void>;
+  /** BACKLOG-2890: open Settings at Messages (app.openSettings("settings-messages")). */
+  onChooseMessagesSource?: () => void;
 }
 
 /**
@@ -62,6 +71,9 @@ function TransactionList({
   initialTransaction,
   initialTransactionId,
   initialTransactionTab,
+  messagesSyncHeld,
+  onRetryMessagesRead,
+  onChooseMessagesSource,
 }: TransactionListComponentProps) {
   // Database initialization guard (belt-and-suspenders defense)
   const { isDatabaseInitialized } = useAppStateMachine();
@@ -499,6 +511,9 @@ function TransactionList({
           onShowError={notify.error}
           initialTab={initialTab}
           initialHighlight={initialHighlight}
+          messagesSyncHeld={messagesSyncHeld}
+          onRetryMessagesRead={onRetryMessagesRead}
+          onChooseMessagesSource={onChooseMessagesSource}
         />
       )}
 
@@ -513,6 +528,9 @@ function TransactionList({
           onShowSuccess={notify.success}
           onShowError={notify.error}
           initialTab={initialTab}
+          messagesSyncHeld={messagesSyncHeld}
+          onRetryMessagesRead={onRetryMessagesRead}
+          onChooseMessagesSource={onChooseMessagesSource}
         />
       )}
 

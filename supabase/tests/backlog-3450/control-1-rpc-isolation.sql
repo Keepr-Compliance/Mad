@@ -103,7 +103,8 @@ BEGIN
       IF v_message LIKE 'CONTROL 1 FAILED%' THEN
         RAISE;
       END IF;
-      ASSERT v_message LIKE 'Only the view owner%',
+      -- BACKLOG-4087: a non-owner who is not an editor gets the single not-found message, no id.
+      ASSERT v_message = 'Saved view not found',
         format('CONTROL 1: delete was refused, but for the wrong reason: %s', v_message);
       RAISE NOTICE 'PASS: delete refused — %', v_message;
   END;

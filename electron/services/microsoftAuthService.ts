@@ -352,53 +352,6 @@ class MicrosoftAuthService {
   }
 
   /**
-   * Step 1: Authenticate for Login (minimal scopes)
-   * Opens browser, user logs in, redirects back to local server
-   */
-  async authenticateForLogin(): Promise<AuthFlowResult> {
-    this._ensureInitialized();
-    const scopes = [
-      "openid",
-      "profile",
-      "email",
-      "User.Read",
-      "offline_access",
-    ];
-
-    // Generate PKCE challenge (optional but recommended)
-    const codeVerifier = crypto.randomBytes(32).toString("base64url");
-    const codeChallenge = crypto
-      .createHash("sha256")
-      .update(codeVerifier)
-      .digest("base64url");
-
-    // BACKLOG-1121: Start server first to get dynamic port, then build auth URL
-    const { codePromise, listeningPromise } = this.startLocalServer();
-    await listeningPromise;
-
-    // Build authorization URL with dynamically assigned redirect URI
-    const params = new URLSearchParams({
-      client_id: this.clientId,
-      response_type: "code",
-      redirect_uri: this.redirectUri,
-      scope: scopes.join(" "),
-      response_mode: "query",
-      prompt: "select_account", // Show account picker, only consent if needed
-      code_challenge: codeChallenge,
-      code_challenge_method: "S256",
-    });
-
-    const authUrl = `${this.authorizeUrl}?${params.toString()}`;
-
-    return {
-      authUrl,
-      codePromise,
-      codeVerifier,
-      scopes,
-    };
-  }
-
-  /**
    * Step 2: Authenticate for Mailbox Access
    * Requests full mailbox permissions
    * @param loginHint - User email to pre-fill

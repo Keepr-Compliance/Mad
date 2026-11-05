@@ -155,6 +155,8 @@ export function useAppStateMachine(): AppStateMachine {
     },
     onNewUserFlowSet: auth.setIsNewUserFlow,
     onNeedsDriverSetup: phoneTypeApi.setNeedsDriverSetup,
+    // BACKLOG-4030: the queued phone type failing to save after DB open.
+    onPhoneTypeSaveFailed: phoneTypeApi.reportPhoneTypeSaveFailed,
   });
 
   // ============================================

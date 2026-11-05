@@ -64,6 +64,12 @@ interface FakeOpts {
    * the seat rule and the auth.users key. Error shape from keepr-test control C2.
    */
   billingPending?: boolean;
+  /** BACKLOG-4034: auth.identities rows (provider azure) with their tenant and object id. */
+  identities?: Array<{ user_id: string; tid: string; oid: string }>;
+  /** BACKLOG-4034: make user_id_for_idp_object_id return this error. */
+  failOidLookup?: Err;
+  /** BACKLOG-4034: fail the next read of this table. */
+  failSelect?: { table: string; error: Err };
 }
 
 const IDP_ORIGINS = ['jit', 'scim', 'directory_sync'];
@@ -103,6 +109,11 @@ function makeDb(tables: Tables, opts: FakeOpts = {}) {
     const run = (): { data: unknown; error: Err; count?: number } => {
       const rows = (tables[table] ??= []);
       if (op === 'select') {
+        if (opts.failSelect && opts.failSelect.table === table) {
+          const error = opts.failSelect.error;
+          opts.failSelect = undefined;
+          return { data: null, error };
+        }
         const hit = rows.filter((r) => filters.every((f) => f(r)));
         if (head) return { data: null, error: null, count: hit.length };
         return { data: hit.map((r) => project(r, cols)), error: null, count: wantCount ? hit.length : undefined };
@@ -212,6 +223,18 @@ function makeDb(tables: Tables, opts: FakeOpts = {}) {
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
   async function rpc(fn: string, args: Record<string, unknown>) {
     rpcCalls.push({ fn, args });
+    // BACKLOG-4034 (migration <version>_idp_object_id_lookups.sql), transcribed: the single
+    // user whose azure identity has this (tid, oid), lower(btrim()) on both; NULL for none or
+    // more than one, and NULL when that id has no users row.
+    if (fn === 'user_id_for_idp_object_id') {
+      if (opts.failOidLookup) return { data: null, error: opts.failOidLookup };
+      const n = (v: unknown) => String(v ?? '').trim().toLowerCase();
+      const hits = [...new Set((opts.identities ?? [])
+        .filter((i) => n(i.tid) === n(args.p_tenant_id) && n(i.oid) === n(args.p_object_id))
+        .map((i) => i.user_id))];
+      const ok = hits.length === 1 && (tables.users ?? []).some((u) => u.id === hits[0]);
+      return { data: ok ? hits[0] : null, error: null };
+    }
     if (fn !== 'user_id_for_auth_email') return { data: null, error: null };
     if (opts.failLookup) return { data: null, error: opts.failLookup };
     const e = String(args.p_email ?? '').trim().toLowerCase();
@@ -749,5 +772,75 @@ describe('POST existing person: lookup by sign-in email (BACKLOG-3998)', () => {
     await handleCreateUser(postReq('q@example.test'), AUTH as never, db.client as never, BASE, deps().d);
     expect(memberWrites(db.writes).some((w) => w.payload?.user_id === 'u-x')).toBe(false);
     expect(userWrites(db.writes).some((w) => w.rows.some((r) => r.id === 'u-x'))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4034: POST finds the person by the Entra object id (externalId) in the
+// organization's tenant before any email match.
+// ---------------------------------------------------------------------------
+
+/** BACKLOG-4034: invented all-zero GUID placeholders (built, not literal). */
+const fakeGuid = (tail: string) => `00000000-0000-0000-0000-${tail.padStart(12, '0')}`;
+describe('POST existing person: lookup by tenant + object id (BACKLOG-4034)', () => {
+  const TID = fakeGuid('a1');
+  const OID = fakeGuid('b1');
+  const SUB = fakeGuid('c1');
+  function oidTables(): Tables {
+    const t = baseTables({
+      users: [...baseTables().users.filter((u) => u.id !== 'u-p'), { id: 'u-q', email: 'q.signin@example.test', oauth_id: SUB }],
+    });
+    t.organizations[0].microsoft_tenant_id = TID;
+    return t;
+  }
+  const req = () => postReq('q.dir@example.test', { externalId: OID, emails: [{ value: 'q.other@example.test', primary: true }] });
+
+  it('C4 externalId = the object id: links that account, membership written, scim_external_id = object id, no new users row', async () => {
+    const t = oidTables();
+    const db = makeDb(t, { authIds: ['u-q'], identities: [{ user_id: 'u-q', tid: TID, oid: OID }] });
+    const res = await handleCreateUser(req(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(201);
+    expect(db.rpcCalls).toEqual([{ fn: 'user_id_for_idp_object_id', args: { p_tenant_id: TID, p_object_id: OID } }]);
+    expect(memberWrites(db.writes)[0]?.payload).toMatchObject({ user_id: 'u-q', provisioned_by: 'scim' });
+    expect(userWrites(db.writes).filter((w) => w.op === 'insert')).toEqual([]);
+    expect(t.users.find((u) => u.id === 'u-q')?.scim_external_id).toBe(OID);
+    expect(t.users.find((u) => u.id === 'u-q')?.oauth_id).toBe(SUB);
+  });
+
+  it('C11 the object-id lookup fails: 500, logged 500, no membership, the email lookup is never asked', async () => {
+    const db = makeDb(oidTables(), {
+      authIds: ['u-q'],
+      identities: [{ user_id: 'u-q', tid: TID, oid: OID }],
+      failOidLookup: { code: '57014', message: 'canceling statement due to statement timeout' },
+    });
+    const res = await handleCreateUser(req(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(500);
+    expect(db.rpcCalls.map((c) => c.fn)).toEqual(['user_id_for_idp_object_id']);
+    expect(memberWrites(db.writes)).toEqual([]);
+    expect(userWrites(db.writes)).toEqual([]);
+    expect(db.writes.some((w) => w.table === 'scim_sync_log' && w.payload?.response_status === 500
+      && w.payload?.error_message === 'Failed to look up the person by object id')).toBe(true);
+  });
+
+  it('C11 the tenant read fails: 500, no lookup, no membership', async () => {
+    const db = makeDb(oidTables(), {
+      authIds: ['u-q'],
+      identities: [{ user_id: 'u-q', tid: TID, oid: OID }],
+      failSelect: { table: 'organizations', error: { message: 'canceling statement due to statement timeout' } },
+    });
+    const res = await handleCreateUser(req(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(500);
+    expect(db.rpcCalls).toEqual([]);
+    expect(memberWrites(db.writes)).toEqual([]);
+    expect(userWrites(db.writes)).toEqual([]);
+  });
+
+  it('C3 an object id in another tenant is not this person: the email path runs', async () => {
+    const t = oidTables();
+    const db = makeDb(t, { authIds: ['u-q'], identities: [{ user_id: 'u-q', tid: fakeGuid('a2'), oid: OID }] });
+    await handleCreateUser(req(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(db.rpcCalls[0]).toEqual({ fn: 'user_id_for_idp_object_id', args: { p_tenant_id: TID, p_object_id: OID } });
+    expect(db.rpcCalls.slice(1).every((c) => c.fn === 'user_id_for_auth_email')).toBe(true);
+    expect(memberWrites(db.writes).some((w) => w.payload?.user_id === 'u-q')).toBe(false);
   });
 });

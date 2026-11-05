@@ -29,12 +29,11 @@ describe('no service role in the report (C2)', () => {
 });
 
 describe('the page authorises (C1)', () => {
-  it('through the cookie client, internal role and analytics.view', () => {
+  it('through the per-report gate (BACKLOG-4144)', () => {
     const src = readFileSync(path.join(ROOT, PAGE), 'utf8');
-    expect(src).toContain('getAuthenticatedUser()');
-    expect(src).toContain(".from('internal_roles')");
-    expect(src).toContain("required_permission: 'analytics.view'");
-    expect(src).toContain("redirect('/dashboard?error=insufficient_permissions')");
+    // BACKLOG-4144: the per-report gate (cookie client + internal role inside report-gate.ts).
+    expect(src).toContain('await requireReportAccess(USER_ACTIVITY_REPORT_KEY)');
+    expect(src).not.toContain('has_permission');
   });
 });
 

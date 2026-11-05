@@ -24,6 +24,8 @@ export const SETTINGS_TABS: readonly SettingsTab[] = [
   // iPhone Sync SECTION (#settings-iphone-sync) remains on Windows only,
   // for the Apple driver tools, grayed out unless the import source is iPhone.
   { id: "settings-contacts", label: "Contacts" },
+  // BACKLOG-4120: shown only when the strict autodetect_eval read is "allowed".
+  { id: "settings-learn", label: "Help Keepr learn" },
   { id: "settings-ai", label: "AI" },
   { id: "settings-security", label: "Security" },
   { id: "settings-data", label: "Data & Privacy" },
@@ -34,7 +36,13 @@ export const SETTINGS_TABS: readonly SettingsTab[] = [
   { id: "settings-about", label: "About" },
 ];
 
-/** The tabs this user sees: AI only with the AI add-on (BACKLOG-462). */
-export function visibleSettingsTabs(hasAIAddon: boolean): SettingsTab[] {
-  return SETTINGS_TABS.filter((t) => t.id !== "settings-ai" || hasAIAddon);
+/**
+ * The tabs this user sees: AI only with the AI add-on (BACKLOG-462); "Help
+ * Keepr learn" only when the strict autodetect_eval read is "allowed"
+ * (BACKLOG-4120). The two are independent: Learn mode never needs AI.
+ */
+export function visibleSettingsTabs(hasAIAddon: boolean, learnAvailable: boolean = false): SettingsTab[] {
+  return SETTINGS_TABS.filter(
+    (t) => (t.id !== "settings-ai" || hasAIAddon) && (t.id !== "settings-learn" || learnAvailable),
+  );
 }

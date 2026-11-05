@@ -112,6 +112,7 @@ describe('BACKLOG-3097 — /help', () => {
       const { container } = render(<HelpPage />);
       expect(renderedHrefs(container)).toEqual([
         '/download',
+        '/guides/invoices', // BACKLOG-3855
         '/guides/microsoft-approval',
         '/support/new',
       ]);
@@ -123,7 +124,7 @@ describe('BACKLOG-3097 — /help', () => {
       expect(renderedHrefs(container)).toEqual(['/support/new']);
     });
 
-    it.each(['/download', '/guides/microsoft-approval', '/support/new'])(
+    it.each(['/download', '/guides/invoices', '/guides/microsoft-approval', '/support/new'])(
       '%s resolves to a route file',
       (href) => {
         expect(resolveRoute(href)).not.toBeNull();
@@ -161,12 +162,13 @@ describe('BACKLOG-3097 — /help', () => {
   });
 
   describe('the removed articles are gone', () => {
-    it('renders exactly the two surviving articles', () => {
+    it('renders exactly the surviving articles (plus BACKLOG-3855 invoices)', () => {
       const { container } = render(<HelpPage />);
       const headings = [...container.querySelectorAll('h2')].map((h) => h.textContent?.trim());
 
       expect(headings).toEqual([
         'Connecting Keepr to Entra ID (Microsoft 365)',
+        'Where do I find my invoices?',
         'Download the Desktop App',
       ]);
     });

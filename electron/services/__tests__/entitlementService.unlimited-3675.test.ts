@@ -59,6 +59,7 @@ const mockInvoke = jest.fn();
 const mockGetSession = jest.fn();
 const mockGetAuthSession = jest.fn();
 const mockMembership = jest.fn();
+const mockStandingRows = jest.fn();
 jest.mock("../supabaseService", () => ({
   __esModule: true,
   default: {
@@ -70,6 +71,9 @@ jest.mock("../supabaseService", () => ({
     }),
     getAuthSession: () => mockGetAuthSession(),
     getActiveOrganizationMembershipOutcome: (u: string) => mockMembership(u),
+    // BACKLOG-3951: unlockWithCredit also reads the membership standing. No
+    // rows = no brokerage, so the debit cases here are unchanged.
+    getMembershipStandingRows: (u: string) => mockStandingRows(u),
   },
 }));
 
@@ -173,6 +177,7 @@ beforeEach(() => {
   mockMaybeSingle.mockResolvedValue({ data: null, error: null }); // no unlock row
   mockInvoke.mockResolvedValue({ data: { pass: null, reason: "not_entitled" }, error: null });
   notEntitledLive();
+  mockStandingRows.mockResolvedValue({ status: "rows", rows: [] });
 
   // Fresh module graph per test (memo state), with a fake OS secret store.
   const provider = require("../../capabilities/secretStoreProvider");
@@ -584,5 +589,109 @@ describe("BACKLOG-3675 P16 offline pass refresher", () => {
     service.startOfflinePassRefresher();
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
+  });
+});
+
+// ── BACKLOG-3951: a brokerage member with no license assigned ────────────
+// Rows are the transcribed keepr-test row (helpers/membership3951Fixtures.ts),
+// re-keyed to this suite's user. The active-only membership read answers
+// "none" for such a member, so the live unlimited read is a definite "no" and
+// the credit debit is the path under test.
+describe("BACKLOG-3951 credit unlock and the membership standing", () => {
+  const {
+    UNASSIGNED_MEMBER_ROW,
+  } = require("./helpers/membership3951Fixtures") as typeof import("./helpers/membership3951Fixtures");
+  const { personalMembership } = require("./helpers/postgrestEmulator") as typeof import("./helpers/postgrestEmulator");
+  const unassigned = { ...UNASSIGNED_MEMBER_ROW, user_id: USER_A };
+  const suspended = { ...unassigned, license_status: "suspended" };
+  const ownPersonal = personalMembership({ userId: USER_A });
+  const rows = (r: unknown[]) => mockStandingRows.mockResolvedValue({ status: "rows", rows: r });
+  const NOT_LICENSED = { success: false, status: "locked", error: "not_licensed" };
+  const UNVERIFIED = { success: false, status: "locked", error: "entitlement_unverified" };
+
+  beforeEach(() => {
+    mockMembership.mockResolvedValue({ status: "none" });
+  });
+
+  it("C1 unassigned ⇒ not_licensed; unlock_transaction never called", async () => {
+    rows([unassigned]);
+    expect(await service.unlockWithCredit(TX)).toEqual(NOT_LICENSED);
+    expect(rpcNames()).not.toContain("unlock_transaction");
+    expect(mockStandingRows).toHaveBeenCalledWith(USER_A);
+  });
+
+  it.each([
+    ["suspended alone", () => [suspended]],
+    ["suspended + own personal row", () => [suspended, ownPersonal]],
+    ["solo user (own personal row only)", () => [ownPersonal]],
+    ["no rows", () => []],
+  ])("C2 %s ⇒ the debit runs", async (_n, r) => {
+    rows(r());
+    await service.unlockWithCredit(TX);
+    expect(mockRpc).toHaveBeenCalledWith("unlock_transaction", { p_local_transaction_id: TX });
+  });
+
+  it("R2 solo user whose standing read errors ⇒ entitlement_unverified, no debit", async () => {
+    mockStandingRows.mockResolvedValue({ status: "error" });
+    expect(await service.unlockWithCredit(TX)).toEqual(UNVERIFIED);
+    expect(rpcNames()).not.toContain("unlock_transaction");
+  });
+
+  it("R2 standing read throws ⇒ entitlement_unverified, no debit", async () => {
+    mockStandingRows.mockRejectedValue(new Error("boom"));
+    expect(await service.unlockWithCredit(TX)).toEqual(UNVERIFIED);
+    expect(rpcNames()).not.toContain("unlock_transaction");
+  });
+
+  it("R1 a standing read that never answers ⇒ entitlement_unverified after 5 s, no debit", async () => {
+    // setImmediate stays real: the live "no" deletes the offline pass on disk
+    // first, so the standing read (and its timer) starts only after real I/O.
+    jest.useFakeTimers({ doNotFake: ["setImmediate"] });
+    try {
+      mockStandingRows.mockReturnValue(new Promise(() => {}));
+      let settled: unknown = "pending";
+      void service.unlockWithCredit(TX).then((r) => {
+        settled = r;
+      });
+      for (let i = 0; i < 200 && mockStandingRows.mock.calls.length === 0; i += 1) await flush();
+      expect(mockStandingRows).toHaveBeenCalledTimes(1);
+      await jest.advanceTimersByTimeAsync(4_999);
+      expect(settled).toBe("pending");
+      await jest.advanceTimersByTimeAsync(2);
+      expect(settled).toEqual(UNVERIFIED);
+      expect(rpcNames()).not.toContain("unlock_transaction");
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("R2 pin: live read error + valid offline pass ⇒ unlocked from the pass; the standing read is not consulted", async () => {
+    await store.storeOfflinePass(makePass(), nowSec() - 60);
+    errorLive();
+    rows([unassigned]);
+    expect(await service.unlockWithCredit(TX)).toEqual({ success: true, status: "unlocked" });
+    expect(mockStandingRows).not.toHaveBeenCalled();
+    expect(rpcNames()).not.toContain("unlock_transaction");
+  });
+
+  it("3675 unchanged: unlimited account ⇒ unlocked with no debit and no standing read", async () => {
+    entitledLive();
+    rows([unassigned]);
+    expect(await service.unlockWithCredit(TX)).toEqual({ success: true, status: "unlocked" });
+    expect(mockStandingRows).not.toHaveBeenCalled();
+  });
+
+  it("C4 unassigned, deal unlocked before ⇒ export allowed; the standing is never read on the export path", async () => {
+    rows([unassigned]);
+    mockMaybeSingle.mockResolvedValue({
+      data: { unlocked_at: "2026-10-01T00:00:00Z", funding_source: "grant", refunded_at: null },
+      error: null,
+    });
+    expect(await service.getExportDecision(TX)).toEqual({ allowed: true, mode: "full" });
+    const { enforceExportGate } = require("../exportGate");
+    await expect(
+      enforceExportGate({ transactionId: TX, userId: USER_A, communications: [] }),
+    ).resolves.not.toThrow();
+    expect(mockStandingRows).not.toHaveBeenCalled();
   });
 });

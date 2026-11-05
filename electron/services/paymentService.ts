@@ -51,6 +51,24 @@ const MODULE = "PaymentService";
 const CONFIRM_POLL_ATTEMPTS = 15; // ~15 * 2s ≈ 30s; webhook typically < 10s
 const CONFIRM_POLL_INTERVAL_MS = 2000;
 
+/**
+ * BACKLOG-3951: the refusal key of a purchase route's JSON error body. The
+ * checkout-session and charge routes answer `{ error: "no_license" }` (the
+ * subscription-session route uses `code`, read by toRefusalCode). Anything
+ * unreadable is null.
+ */
+export function readRefusalKey(body: string): string | null {
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    if (parsed && typeof parsed === "object" && typeof (parsed as { error?: unknown }).error === "string") {
+      return (parsed as { error: string }).error;
+    }
+  } catch {
+    // Not JSON.
+  }
+  return null;
+}
+
 function portalBase(): string {
   return process.env.BROKER_PORTAL_URL || "https://app.keeprcompliance.com";
 }
@@ -159,6 +177,10 @@ class PaymentService {
           status: res.status,
           body: body.slice(0, 200),
         });
+        // BACKLOG-3951: the portal refuses a brokerage member with no license.
+        if (res.status === 403 && readRefusalKey(body) === "no_license") {
+          return { started: false, error: "not_licensed" };
+        }
         return { started: false, error: res.status === 401 ? "unauthenticated" : "no_quote" };
       }
 
@@ -231,6 +253,11 @@ class PaymentService {
 
       if (!res.ok) {
         logService.warn("[Payment] charge failed", MODULE, { status: res.status });
+        // BACKLOG-3951: the portal refuses a brokerage member with no license.
+        if (res.status === 403) {
+          const body = await res.text().catch(() => "");
+          if (readRefusalKey(body) === "no_license") return { outcome: "not_licensed" };
+        }
         return { outcome: "error" };
       }
 

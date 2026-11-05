@@ -49,7 +49,10 @@ export interface FeatureAccess {
 export type StrictFeatureKey =
   | "email_contact_inference"
   | "desktop_hide_from_export"
-  | "transaction_checklists";
+  | "transaction_checklists"
+  // BACKLOG-4120: makes the Learn mode ("Help Keepr learn") switch available.
+  // Separate from AI detection: Learn mode never reads ai_detection.
+  | "autodetect_eval";
 
 /**
  * What a strict read concluded.

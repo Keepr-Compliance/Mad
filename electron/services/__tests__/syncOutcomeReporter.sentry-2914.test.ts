@@ -327,3 +327,45 @@ describe("BACKLOG-2914: THE WIRING — the real timeline reaches Sentry", () => 
     expect(() => timeline.endSync("complete")).not.toThrow();
   });
 });
+
+describe("BACKLOG-2950: the phone's own error code is a TAG on the outcome event", () => {
+  /**
+   * Shape transcribed from the producer: the orchestrator's backup-failure
+   * `setContext` (deviceSyncOrchestrator.ts, BACKLOG-3440 block) writes
+   * `reasonCode`, a NUMERIC `deviceErrorCode` and `endedBy`; a real sync_outcomes
+   * row for a host-disk-full failure reads INSUFFICIENT_SPACE / 105 / device-error.
+   */
+  function diskFullRow(): SyncOutcomeRow {
+    const row = realisticRow({ outcome: "error" });
+    row.fields.outcome = "error";
+    row.fields.reasonCode = "INSUFFICIENT_SPACE";
+    row.fields.deviceErrorCode = 105;
+    row.fields.endedBy = "device-error";
+    return row;
+  }
+
+  it("THE CONTROL — the 'Sync outcome: error' event is tagged device_error_code=105", () => {
+    // Strip the code before it reaches the event (add `deviceerror` to
+    // PII_KEY_PATTERN, or delete the tag line in buildOutcomeTags) and this reds.
+    reportOutcomeToSentry(diskFullRow());
+
+    expect(captureMessage).toHaveBeenCalledTimes(1);
+    const [message, context] = captureMessage.mock.calls[0];
+    expect(message).toBe("Sync outcome: error");
+    expect(context.tags.device_error_code).toBe("105");
+    expect(context.tags.reason_code).toBe("INSUFFICIENT_SPACE");
+  });
+
+  it("uses the snake_case tag name, not the camelCase field name", () => {
+    const tags = buildOutcomeTags(diskFullRow());
+    expect(tags.device_error_code).toBe("105");
+    expect(tags).not.toHaveProperty("deviceErrorCode");
+  });
+
+  it("a run the phone did not explain carries NO device_error_code tag — not '0', not 'undefined'", () => {
+    const row = diskFullRow();
+    delete row.fields.deviceErrorCode;
+    expect(buildOutcomeTags(row)).not.toHaveProperty("device_error_code");
+    expect(buildOutcomeTags(realisticRow())).not.toHaveProperty("device_error_code");
+  });
+});

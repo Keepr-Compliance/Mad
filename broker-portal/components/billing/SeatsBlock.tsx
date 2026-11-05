@@ -15,6 +15,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button, FieldError, Input, Label, Modal, ModalFooter, StatCard } from '@keepr/design-system';
 import { BillingBlock } from './BillingBlock';
+import { TOUCH_BUTTON } from './touch';
 import { addSeats } from '@/lib/actions/seats';
 import { formatSeatPrice, type SeatsView } from '@/lib/billing/seats';
 
@@ -113,7 +114,7 @@ export function SeatsBlock({ view, viewer }: { view: SeatsView | null; viewer: S
       </div>
       {view.canAdd && view.version !== null ? (
         <div className="mt-4">
-          <Button variant="primary" size="sm" onClick={() => setOpen(true)}>
+          <Button variant="primary" size="sm" className={TOUCH_BUTTON} onClick={() => setOpen(true)}>
             Add seats
           </Button>
         </div>
@@ -136,6 +137,7 @@ export function SeatsBlock({ view, viewer }: { view: SeatsView | null; viewer: S
           value={count}
           onChange={(e) => setCount(e.target.value)}
           disabled={busy}
+          className={TOUCH_BUTTON}
         />
         {valid ? <p className="mt-3 text-sm text-gray-600">{addSeatsLine(view, add)}</p> : null}
         {error ? (
@@ -144,10 +146,10 @@ export function SeatsBlock({ view, viewer }: { view: SeatsView | null; viewer: S
           </FieldError>
         ) : null}
         <ModalFooter>
-          <Button type="button" variant="secondary" onClick={close} disabled={busy}>
+          <Button type="button" variant="secondary" className={TOUCH_BUTTON} onClick={close} disabled={busy}>
             Cancel
           </Button>
-          <Button type="button" variant="primary" onClick={confirm} disabled={busy || !valid}>
+          <Button type="button" variant="primary" className={TOUCH_BUTTON} onClick={confirm} disabled={busy || !valid}>
             {busy ? 'Adding…' : 'Confirm'}
           </Button>
         </ModalFooter>

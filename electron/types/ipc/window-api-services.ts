@@ -12,7 +12,15 @@ import type { LLMHandlerResponse, LLMUserConfig, LLMPreferences, LLMUsageStats, 
 export interface WindowApiPreferences {
   get: (
     userId: string,
-  ) => Promise<{ success: boolean; preferences?: Record<string, unknown> }>;
+  ) => Promise<{
+    success: boolean;
+    preferences?: Record<string, unknown>;
+    error?: string;
+    /** BACKLOG-2824: "copy" = the cloud read failed and the local copy was served. */
+    source?: "cloud" | "copy";
+    /** BACKLOG-2824: when the served copy was taken from the cloud. */
+    copiedAt?: string;
+  }>;
   save: (
     userId: string,
     preferences: Record<string, unknown>,
@@ -309,6 +317,11 @@ export interface WindowApiUpdate {
    */
   onError: (callback: (error: UpdateErrorPayload | string) => void) => () => void;
   install: () => void;
+  /**
+   * BACKLOG-3469: download an offered update when auto-download is off.
+   * Refused (success false) in the Store build.
+   */
+  download: () => Promise<{ success: boolean; error?: string }>;
   checkForUpdates: () => Promise<{
     updateAvailable: boolean;
     version?: string;

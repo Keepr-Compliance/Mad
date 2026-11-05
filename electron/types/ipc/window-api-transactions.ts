@@ -912,11 +912,6 @@ export interface WindowApiTransactions {
     linked?: number;
     error?: string;
   }>;
-  /** Auto-links text messages to a transaction based on assigned contacts */
-  autoLinkTexts: (transactionId: string) => Promise<{
-    success: boolean;
-    error?: string;
-  }>;
   /** Re-syncs auto-link communications for all contacts on a transaction */
   resyncAutoLink: (transactionId: string) => Promise<{
     success: boolean;

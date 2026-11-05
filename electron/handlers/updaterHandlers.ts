@@ -1,7 +1,7 @@
 // ============================================
 // AUTO-UPDATER IPC HANDLERS
 // Extracted from main.ts for modularity
-// Handles: install-update
+// Handles: check-for-updates, download-update, install-update, open-manual-installer
 // ============================================
 
 import { ipcMain, app, shell, BrowserWindow } from "electron";
@@ -181,6 +181,35 @@ export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
         currentVersion: app.getVersion(),
         error: error instanceof Error ? error.message : "Check failed",
       };
+    }
+  });
+
+  // BACKLOG-3469: download an offered update when auto-download is off
+  // (Settings switch). The update banner's "Download" button calls this.
+  ipcMain.handle("app:download-update", async () => {
+    // BACKLOG-3927: the Store build never downloads from the update feed.
+    if (isSelfUpdateDisabled()) {
+      logService.warn("download-update ignored: Store build", "UpdaterHandlers");
+      return { success: false, error: STORE_UPDATES_MESSAGE };
+    }
+    logService.info("Downloading update (user request)...", "UpdaterHandlers");
+    Sentry.addBreadcrumb({ category: "auto-updater", message: "User triggered download-update", level: "info" });
+    try {
+      // Not awaited: progress, completion and failure reach the renderer through
+      // the updater events. A failure is surfaced by the tagged autoUpdater
+      // "error" event; only log here so it never reaches the untagged
+      // unhandledRejection capture (BACKLOG-1903/1905 B2).
+      autoUpdater.downloadUpdate().catch((error: unknown) => {
+        logService.warn("User-requested update download failed", "UpdaterHandlers", {
+          error: error instanceof Error ? error.message : "Download failed",
+        });
+      });
+      return { success: true };
+    } catch (error) {
+      logService.warn("User-requested update download could not start", "UpdaterHandlers", {
+        error: error instanceof Error ? error.message : "Download failed",
+      });
+      return { success: false, error: error instanceof Error ? error.message : "Download failed" };
     }
   });
 

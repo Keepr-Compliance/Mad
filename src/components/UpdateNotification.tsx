@@ -1,9 +1,15 @@
 import { useState, useEffect } from "react";
 import { Z_CLASS } from "../constants/zLayers";
+import { isStoreBuild } from "../utils/platform";
 import type { UpdateErrorType } from "../../electron/types/ipc";
 
 interface UpdateInfo {
   version: string;
+  /**
+   * BACKLOG-3469: false when the Settings auto-download switch is off and the
+   * update waits for the user's Download click. Missing = downloading.
+   */
+  autoDownload?: boolean;
 }
 
 /**
@@ -64,6 +70,8 @@ export default function UpdateNotification() {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [translocationDetected, setTranslocationDetected] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  // BACKLOG-3469: an update was offered but auto-download is off.
+  const [awaitingDownload, setAwaitingDownload] = useState(false);
 
   useEffect(() => {
     const cleanups: (() => void)[] = [];
@@ -74,6 +82,7 @@ export default function UpdateNotification() {
         setUpdateAvailable(true);
         setUpdateError(null);
         setUpdateInfo(info as UpdateInfo);
+        setAwaitingDownload((info as UpdateInfo | null)?.autoDownload === false);
       });
       if (cleanup) cleanups.push(cleanup);
     }
@@ -135,6 +144,19 @@ export default function UpdateNotification() {
   const handleInstall = () => {
     if (window.api?.update?.install) {
       window.api.update.install();
+    }
+  };
+
+  // BACKLOG-3469: start the download of an offered update (switch off).
+  const handleDownloadUpdate = async () => {
+    if (!window.api?.update?.download) return;
+    setAwaitingDownload(false);
+    setDownloadProgress(0);
+    try {
+      const result = await window.api.update.download();
+      if (!result?.success) setAwaitingDownload(true);
+    } catch {
+      setAwaitingDownload(true);
     }
   };
 
@@ -289,6 +311,32 @@ export default function UpdateNotification() {
           <button
             onClick={handleDismiss}
             className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+          >
+            Later
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // BACKLOG-3469: auto-download is off — offer the update, download on click.
+  if (updateAvailable && awaitingDownload) {
+    return (
+      <div className={`fixed bottom-4 right-4 bg-blue-500 text-white p-4 rounded-lg shadow-lg max-w-sm ${Z_CLASS.update}`}>
+        <h3 className="font-bold text-lg mb-2">Update Available</h3>
+        <p className="text-sm mb-3">Version {updateInfo?.version} is ready to download.</p>
+        <div className="flex gap-2">
+          {!isStoreBuild() && (
+            <button
+              onClick={() => void handleDownloadUpdate()}
+              className="flex-1 bg-white text-blue-500 px-4 py-2 rounded font-medium hover:bg-blue-50 transition-colors"
+            >
+              Download
+            </button>
+          )}
+          <button
+            onClick={handleDismiss}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
           >
             Later
           </button>

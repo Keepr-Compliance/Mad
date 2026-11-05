@@ -25,6 +25,7 @@ import type {
   WindowApiAppCleanup,
 } from "./window-api-services";
 import type { WindowApiChecklists } from "./window-api-checklists";
+import type { WindowApiLearn } from "./window-api-learn";
 import type { WindowApiRcsImport } from "./window-api-rcs-import";
 import type { WindowApiAtRest } from "./window-api-at-rest";
 import type { WindowApiEntitlement } from "./window-api-entitlement";
@@ -88,6 +89,8 @@ export interface WindowApi extends WindowApiEvents {
   failureLog: WindowApiFailureLog;
   featureGate: WindowApiFeatureGate;
   checklists: WindowApiChecklists;
+  /** Learn mode, "Help Keepr learn" (BACKLOG-4120). */
+  learn: WindowApiLearn;
   rcsImport: WindowApiRcsImport;
   entitlement: WindowApiEntitlement;
   payment: WindowApiPayment;

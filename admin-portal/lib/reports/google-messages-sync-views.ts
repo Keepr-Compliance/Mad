@@ -23,6 +23,7 @@ import {
   viewPeriodMatches,
   type StoredViewPeriod,
 } from './view-period';
+import { parseViewAccess, viewAccessFields, type SharedViewFields } from './saved-view-access';
 
 export const GM_SYNC_REPORT_KEY = reportViewKey('google-messages-sync');
 
@@ -48,7 +49,8 @@ export interface StoredGmFilters {
   period: StoredViewPeriod;
 }
 
-export interface GmSavedView {
+/** BACKLOG-4087: `SharedViewFields` = the caller's access (saved-view-access.ts). */
+export interface GmSavedView extends SharedViewFields {
   id: string;
   name: string;
   filters: GmFilters;
@@ -94,12 +96,14 @@ export function parseGmSavedView(raw: unknown): GmSavedView | null {
   const row = raw as Record<string, unknown>;
   if (typeof row.id !== 'string' || row.id.length === 0) return null;
   const blob = row.filters != null && typeof row.filters === 'object' ? (row.filters as Record<string, unknown>) : null;
+  const access = parseViewAccess(row);
   return {
     id: row.id,
     name: typeof row.name === 'string' && row.name.length > 0 ? row.name : 'Untitled view',
     filters: parseGmFilters(row.filters),
     period: parseViewPeriod(blob?.period, SHARED_VIEW_PERIODS),
-    isDefault: row.is_default === true,
+    isDefault: access.isDefault,
+    ...viewAccessFields(access),
   };
 }
 

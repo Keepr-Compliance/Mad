@@ -583,6 +583,48 @@ describe('3847: personal plan blocks', () => {
     expect(r.titles).not.toContain('Choose a plan');
   });
 
+  // BACKLOG-3860 T11 (page). Override shape: migration 20261031140000:235-238,
+  // paid_through as keepr-test renders to_jsonb(timestamptz). [EDITED: years.]
+  it('T11 page: live trial -> "Free trial, ends <date>", Choose a plan with Subscribe, no Keepr-grant line', async () => {
+    seedOverride({ enabled: true, source: 'trial', paid_through: '2099-11-14T05:51:51.123973+00:00' });
+    const r = await text();
+    expect(r.text).toContain('Free trial, ends Nov 14, 2099');
+    expect(r.text).toContain('Unlimited exports until then. To keep them, choose a plan below.');
+    expect(r.titles).toContain('Choose a plan');
+    expect(r.buttons).toContain('Subscribe — $19.99/month');
+    expect(r.text).not.toContain('provided by Keepr');
+    expect(r.text).not.toContain('Free trial ended');
+  });
+
+  it('T11 page: ended trial -> "Free trial ended on <date>", then pay as you go with Subscribe', async () => {
+    seedOverride({ enabled: true, source: 'trial', paid_through: '2025-11-14T05:51:51.123973+00:00' });
+    const r = await text();
+    expect(r.text).toContain('Free trial ended on Nov 14, 2025.');
+    expect(r.text).toContain('Solo, pay as you go');
+    expect(r.titles).toContain('Choose a plan');
+    expect(r.buttons).toContain('Subscribe — $19.99/month');
+    expect(r.text).not.toContain('Free trial, ends');
+    expect(r.text).not.toContain('Contact support');
+  });
+
+  it('T11 page: suspended account on a live trial -> the suspended plan reads "Free trial", purchases paused (as for pay as you go)', async () => {
+    seedOverride({ enabled: true, source: 'trial', paid_through: '2099-11-14T05:51:51.123973+00:00' });
+    mockBillingDb.rows('licenses').push({ id: 'lic-SEEDED', user_id: FIXTURE_USER_ID, status: 'suspended' });
+    given([personalMembership()]);
+    const { container, unmount } = render(await BillingRoute({}));
+    const plan = container.querySelector('[data-billing-plan="suspended_solo"]')?.textContent ?? '';
+    const all = container.textContent ?? '';
+    unmount();
+    expect(plan).toContain('Free trial');
+    expect(plan).not.toContain('Solo, pay as you go');
+    expect(all).toContain('Purchases are paused until support reinstates your account.');
+  });
+
+  it('T11 page control: plain pay as you go shows no trial line', async () => {
+    const r = await text();
+    expect(r.text).not.toMatch(/Free trial/);
+  });
+
   it('a stripe-sourced override with no mirror row is not a support grant: Subscribe offered', async () => {
     seedOverride({ enabled: true, paid_through: '2026-12-01T00:00:00Z', source: 'stripe' });
     expect((await text()).titles).toContain('Choose a plan');
@@ -759,6 +801,33 @@ describe('3848: credits, payment & contact, receipts / invoices', () => {
     expect(r.invoiceTitle).toBe('Receipts');
     expect(r.invoiceText).toContain('No payments yet.');
     expect(mockBillingDb.calls.filter((c) => c.op !== 'select')).toEqual([]);
+  });
+
+  // BACKLOG-3860 C9: during a live trial the Credits, Payment and Receipts blocks read
+  // exactly as for a Keepr support grant today (pay-as-you-go wording).
+  it('C9: live trial -> Credits, Payment and Receipts blocks identical to a support grant', async () => {
+    seedCustomer();
+    mockSessionRpc.mockResolvedValue({ data: 3, error: null });
+    const grant = (o: unknown) => {
+      mockBillingDb.rows('organization_plans').length = 0;
+      mockBillingDb.rows('organization_plans').push({ organization_id: FIXTURE_PERSONAL_ORG_ID, feature_overrides: { unlimited_transactions: o } });
+    };
+    grant({ enabled: true, source: 'support', paid_through: '2099-11-14T05:51:51.123973+00:00' });
+    const support = await page();
+    grant({ enabled: true, source: 'trial', paid_through: '2099-11-14T05:51:51.123973+00:00' });
+    const trial = await page();
+    expect(trial.planText).toContain('Free trial, ends');
+    expect(support.planText).toContain('provided by Keepr');
+    expect([trial.credits, trial.payment, trial.invoiceTitle, trial.invoiceText]).toEqual([
+      support.credits,
+      support.payment,
+      support.invoiceTitle,
+      support.invoiceText,
+    ]);
+    expect(trial.credits).toContain('3credits available');
+    expect(trial.credits).toContain('Buy credits in the Keepr desktop app');
+    expect(trial.payment).toContain(`Receipts sent to${CUS.email}`);
+    expect(trial.invoiceTitle).toBe('Receipts');
   });
 
   it('C-CREDITS: get_credit_balance on the session client with no argument; the service client is never used for it', async () => {
@@ -1231,8 +1300,19 @@ describe('BACKLOG-3854: set-up brokerage -> seats + Manage billing', () => {
     const { container, unmount } = render(await BillingRoute({}));
     expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Available2');
     expect(container.textContent).toContain('Organization plan');
-    expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(role === 'it_admin' ? 0 : 1);
-    expect(stripeCalls()).toBe(0);
+    expect(within(container).queryAllByRole('button', { name: 'Manage billing' })).toHaveLength(role === 'it_admin' ? 0 : 1);
+    // BACKLOG-3855: Broker/Admin now read the recent invoices (one customer read for the clock, one
+    // invoice list without a status filter, per render; two renders above); IT admin reads nothing
+    // from Stripe.
+    if (role === 'it_admin') {
+      expect(stripeCalls()).toBe(0);
+    } else {
+      const call = [{ customer: 'cus_EDITED_3854', limit: 10 }];
+      expect(mockStripe.invoicesList.mock.calls).toEqual([call, call]);
+      expect(mockStripe.customersRetrieve).toHaveBeenCalledTimes(2);
+      expect(mockStripe.clockRetrieve).toHaveBeenCalledTimes(2); // the p3848 customer is on a test clock
+      expect(stripeCalls()).toBe(6);
+    }
     unmount();
   });
 
@@ -1257,7 +1337,7 @@ describe('BACKLOG-3854: set-up brokerage -> seats + Manage billing', () => {
     const { container, unmount } = render(await BillingRoute({}));
     expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Available2');
     expect(within(container).queryAllByRole('button', { name: 'Add seats' })).toHaveLength(0);
-    expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(0);
+    expect(within(container).queryAllByRole('button', { name: 'Manage billing' })).toHaveLength(0);
     unmount();
   });
 
@@ -1268,7 +1348,7 @@ describe('BACKLOG-3854: set-up brokerage -> seats + Manage billing', () => {
       setUp('suspended', 'test', true);
       const { container, unmount } = render(await BillingRoute({}));
       expect(container.querySelector('[data-billing-banner="org_suspended"]')).not.toBeNull();
-      expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(n);
+      expect(within(container).queryAllByRole('button', { name: 'Manage billing' })).toHaveLength(n);
       expect(within(container).queryAllByRole('button', { name: 'Add seats' })).toHaveLength(0);
       unmount();
     }

@@ -172,6 +172,7 @@ jest.mock("../supabaseService", () => {
     __esModule: true,
     default: {
       getAuthUserId: () => mockSdkUserId,
+      getAuthSession: async () => null,
       getClient: () => ({
         from: () => chain,
         auth: {
