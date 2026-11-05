@@ -527,6 +527,27 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   "electron/handlers/systemHandlers.ts::ipc:system:initialize-secure-storage":
     "BACKLOG-3322 — the macOS deep-link login provisions the user, token and session as separate writes, so a crash between them leaves a local users row with no durable session: no session.json on disk, and the relaunch that grants Full Disk Access lands the founder back on a failed-login screen while `ensureUserInLocalDb` reports 'already exists -> success' over it. The counted pair is `createUser` at systemHandlers.ts:562 and `createLocalUserFromCloud` at :651. BACKLOG-3253 removes the DB-init deferral this catch-up path exists to compensate for, and BACKLOG-3322 carries the open Fork D question of what this path should do when tokens are absent.",
 
+  // ==========================================================================
+  // BACKLOG-4014 — SURFACED BY CALL TOKENS INSIDE `db/`
+  // ==========================================================================
+  // Measured at `4512ba619`: five units, the ENTIRE surfaced population. One
+  // (`rcsChatPeopleDbService::recordRcsThreadName`) was a braceless-else false
+  // positive and was reformatted, not listed. These four were each opened and
+  // read. NOT FIXED HERE.
+  //
+  // Damage transcribed from BACKLOG-2541 ("The actual gap"), which owns the
+  // three address-book syncs.
+  "electron/services/db/externalContactDbService.ts::fullSync":
+    "BACKLOG-2541 — the macOS address-book sync upserts, prunes vanished contacts and refreshes message dates as three separate commits, so a crash between them leaves the address book half-synced: contacts upserted but vanished ones not yet pruned, or pruned but message dates stale, until the next full sync repairs it.",
+  "electron/services/db/externalContactDbService.ts::syncGoogleContacts":
+    "BACKLOG-2541 — the Google contacts sync has the same three separate commits (upsert, stale prune, recency update), so a crash between them leaves the Google contacts half-synced: upserted but vanished ones not yet pruned, or pruned but message dates stale, until the next sync.",
+  "electron/services/db/externalContactDbService.ts::syncContactsBySource":
+    "BACKLOG-2541 — the generic per-source sync (default branch) has the same three separate commits, so a crash between them leaves that source's contacts half-synced: upserted but vanished ones not yet pruned, or pruned but message dates stale, until the next sync.",
+  // Damage as measured by the BACKLOG-3226 plan probe (crash at write 2) on this
+  // function; BACKLOG-4146 owns removing or wrapping it. No production caller.
+  "electron/services/db/communicationDbService.ts::createCommunicationReference":
+    "BACKLOG-4146 — the link INSERT and the deal's text-thread count UPDATE are separate statements, so a crash between them leaves the text linked and the deal's text_thread_count stale (one short) until the next link or unlink on that deal. No production caller today; only test fixtures use it.",
+
   // MERGE NOTE: the incoming side of this conflict was the original nine-entry
   // list. It is deliberately discarded, not merged — every entry in it was
   // either fixed or never a violation, and re-adding one would fail the
@@ -1050,9 +1071,9 @@ function unitsInFile(rel: string, lines: string[], dbWriters: Set<string>): Fn[]
   // `recordRcsThreadName` was NOT an offender: one write per arm of a braceless
   // if/else (the BACKLOG-3239 stated floor), called only inside the cache
   // commit's transaction. Its if/else now has braces and it drops out. The other
-  // four are real multi-write units with no transaction of their own; each needs
-  // a wrap or a `KNOWN_UNWRAPPED` entry citing its own filed item, and until it
-  // has one the offender test below reports it.
+  // four are real multi-write units with no transaction of their own and are in
+  // `KNOWN_UNWRAPPED`: the three address-book syncs under BACKLOG-2541,
+  // `createCommunicationReference` under BACKLOG-4146.
   //
   // Controls: the BACKLOG-4014 describe below. Restoring the old `db/` gate
   // reddens its first test; removing the `selfName` strip reddens its second
