@@ -8,6 +8,7 @@
  */
 
 import { useState } from 'react';
+import { ArrowUpRight } from 'lucide-react';
 import { openBrokerageBillingPortal } from '@/lib/actions/billingPortal';
 import { TOUCH_LINK } from './touch';
 
@@ -31,7 +32,14 @@ export function ViewAllInvoicesLink() {
       disabled={pending}
       onClick={() => void open()}
     >
-      {pending ? 'Opening Stripe…' : `${VIEW_ALL_INVOICES_LABEL} ↗`}
+      {pending ? (
+        'Opening Stripe…'
+      ) : (
+        <>
+          {VIEW_ALL_INVOICES_LABEL}
+          <ArrowUpRight aria-hidden="true" data-billing-arrow="" className="ml-1 inline-block h-[1em] w-[1em] shrink-0 align-[-0.125em]" />
+        </>
+      )}
     </button>
   );
 }
