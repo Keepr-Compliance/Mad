@@ -22,6 +22,9 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
+/** `total_tokens` includes cached re-reads; `billable_tokens` is what was actually charged for. */
+const BILLABLE_TOOLTIP = 'Total includes cached re-reads; billable reflects cost';
+
 function formatDuration(ms: number): string {
   const secs = Math.round(ms / 1000);
   if (secs < 60) return `${secs}s`;
@@ -93,6 +96,9 @@ function SummaryRow({ summary }: { summary: TokenMetricsSummary }) {
       </div>
       <div className="flex items-center gap-3 text-sm">
         <span className="font-medium text-gray-900">{formatTokens(summary.total_tokens)}</span>
+        <span className="text-xs text-gray-400" title={BILLABLE_TOOLTIP}>
+          {formatTokens(summary.billable_tokens)} billable
+        </span>
         <span className="text-xs text-gray-400">{formatDuration(summary.duration_ms)}</span>
       </div>
     </div>
@@ -108,7 +114,7 @@ function DetailTable({ rows }: { rows: TokenMetricRow[] }) {
           <tr className="text-gray-400 uppercase tracking-wider">
             <th className="text-left py-1 font-medium">Agent</th>
             <th className="text-right py-1 font-medium">Total</th>
-            <th className="text-right py-1 font-medium">Billable</th>
+            <th className="text-right py-1 font-medium" title={BILLABLE_TOOLTIP}>Billable</th>
             <th className="text-right py-1 font-medium">Duration</th>
           </tr>
         </thead>
@@ -208,6 +214,7 @@ export default function TokenMetricsBreakdown({
   if (rows.length === 0) return null;
 
   const totalTokens = rows.reduce((s, r) => s + r.total_tokens, 0);
+  const totalBillableTokens = rows.reduce((s, r) => s + r.billable_tokens, 0);
 
   const inner = (
     <div className="px-4 py-3">
@@ -227,7 +234,11 @@ export default function TokenMetricsBreakdown({
           </span>
         </div>
         <span className="text-sm font-medium text-gray-700">
-          {formatTokens(totalTokens)} / {rows.length} run{rows.length !== 1 ? 's' : ''}
+          {formatTokens(totalTokens)}{' '}
+          <span className="text-xs font-normal text-gray-400" title={BILLABLE_TOOLTIP}>
+            ({formatTokens(totalBillableTokens)} billable)
+          </span>{' '}
+          / {rows.length} run{rows.length !== 1 ? 's' : ''}
         </span>
       </button>
 
