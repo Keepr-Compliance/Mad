@@ -47,6 +47,15 @@ export const REPORTS: ReportEntry[] = [
     permission: PERMISSIONS.ANALYTICS_VIEW,
   },
   {
+    // BACKLOG-4130: the desktop email pre-cache run (source 'email-precache').
+    slug: 'email-precache',
+    title: 'Email Sync Timing',
+    description:
+      'How long email syncs took (first sync, incremental, forced re-sync), grouped by how much mail each one fetched.',
+    source: 'sync_outcomes',
+    permission: PERMISSIONS.ANALYTICS_VIEW,
+  },
+  {
     slug: 'submissions',
     title: 'Submissions',
     description:

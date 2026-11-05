@@ -224,6 +224,9 @@ import { registerDriverHandlers } from "./handlers/driverHandlers";
 import { registerLLMHandlers } from "./handlers/llmHandlers";
 import { registerLicenseHandlers } from "./handlers/licenseHandlers";
 import { registerFeatureGateHandlers } from "./handlers/featureGateHandlers";
+// BACKLOG-4120: Learn mode ("Help Keepr learn"). Separate from AI detection.
+import { registerLearnModeHandlers } from "./handlers/learnModeHandlers";
+import { openQuestionAttachment } from "./services/learnAttachmentDownload";
 import { registerEntitlementHandlers } from "./handlers/entitlementHandlers";
 import { registerPaymentHandlers } from "./handlers/paymentHandlers";
 import { registerBillingHandlers } from "./handlers/billingHandlers";
@@ -1939,6 +1942,9 @@ app.whenReady().then(async () => {
 
   // Register feature gate handlers (SPRINT-122)
   registerFeatureGateHandlers();
+  // BACKLOG-4120 PR3: the one-attachment downloader is injected, so the Learn
+  // handlers keep no static edge to the mail provider services.
+  registerLearnModeHandlers({ openQuestionAttachment });
 
   // Register per-transaction paywall entitlement handlers (BACKLOG-2006a)
   registerEntitlementHandlers();

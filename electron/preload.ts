@@ -59,6 +59,7 @@ import {
   failureLogBridge,
   featureGateBridge,
   checklistBridge,
+  learnModeBridge,
   rcsImportBridge,
   entitlementBridge,
   paymentBridge,
@@ -158,6 +159,9 @@ contextBridge.exposeInMainWorld("api", {
 
   // Transaction checklists (BACKLOG-3475)
   checklists: checklistBridge,
+
+  // Learn mode, "Help Keepr learn" (BACKLOG-4120)
+  learn: learnModeBridge,
 
   // RCS import from the Chrome extension (BACKLOG-3619)
   rcsImport: rcsImportBridge,
