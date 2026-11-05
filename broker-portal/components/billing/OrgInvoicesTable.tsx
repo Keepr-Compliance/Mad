@@ -7,6 +7,7 @@
 import { Badge, Table, TableBody, TableContainer, TableHead, Td, Th, Tr, type BadgeHue } from '@keepr/design-system';
 import type { OrgInvoiceRow, OrgInvoiceStatus } from '@/lib/billing/orgInvoices';
 import { formatMoney, formatUnixDay } from './format';
+import { TOUCH_LINK } from './touch';
 
 export const ORG_INVOICES_EMPTY = 'No invoices yet.';
 export const ORG_INVOICES_UNAVAILABLE = 'Your invoices are unavailable right now.';
@@ -19,7 +20,10 @@ const STATUS: Record<OrgInvoiceStatus, [string, BadgeHue]> = {
   unpaid: ['Unpaid', 'red'],
 };
 
-const linkClass = 'font-medium text-indigo-700 hover:underline';
+const linkClass = `font-medium text-indigo-700 hover:underline ${TOUCH_LINK}`;
+// BACKLOG-4139: below lg each row stacks (date + amount, status, then the actions on their own line),
+// so nothing needs a sideways scroll. From lg up it is the plain table.
+const ROW_STACK = 'max-lg:grid max-lg:grid-cols-[1fr_auto] max-lg:items-center max-lg:gap-x-4 max-lg:gap-y-1 max-lg:px-4 max-lg:py-3';
 
 export function OrgInvoicesTable({ rows }: { rows: OrgInvoiceRow[] | null }) {
   if (rows === null || rows.length === 0) {
@@ -30,9 +34,11 @@ export function OrgInvoicesTable({ rows }: { rows: OrgInvoiceRow[] | null }) {
     );
   }
   return (
-    <TableContainer scrollX className="mt-3">
-      <Table>
-        <TableHead>
+    // relative: the sr-only "Actions" header is position:absolute; without it the label escapes the
+    // scroller and widens the page whenever the table scrolls (BACKLOG-4139).
+    <TableContainer scrollX className="relative mt-3">
+      <Table className="max-lg:block">
+        <TableHead className="max-lg:hidden">
           <tr>
             <Th>Date</Th>
             <Th>Amount</Th>
@@ -42,17 +48,17 @@ export function OrgInvoicesTable({ rows }: { rows: OrgInvoiceRow[] | null }) {
             </Th>
           </tr>
         </TableHead>
-        <TableBody>
+        <TableBody className="max-lg:block">
           {rows.map((r, i) => {
             const [label, hue] = STATUS[r.status];
             return (
-              <Tr key={i} data-org-invoice-row="">
-                <Td emphasis="primary">{formatUnixDay(r.created)}</Td>
-                <Td className="tabular-nums">{formatMoney(r.amountCents, r.currency)}</Td>
-                <Td>
+              <Tr key={i} data-org-invoice-row="" className={ROW_STACK}>
+                <Td emphasis="primary" className="max-lg:p-0">{formatUnixDay(r.created)}</Td>
+                <Td className="tabular-nums max-lg:p-0 max-lg:text-right">{formatMoney(r.amountCents, r.currency)}</Td>
+                <Td className="max-lg:col-span-2 max-lg:p-0">
                   <Badge hue={hue}>{label}</Badge>
                 </Td>
-                <Td>
+                <Td className="max-lg:col-span-2 max-lg:p-0">
                   <span className="flex gap-4">
                     {r.pdfUrl ? (
                       <a className={linkClass} href={r.pdfUrl} target="_blank" rel="noopener noreferrer" data-billing-action="download_invoice">

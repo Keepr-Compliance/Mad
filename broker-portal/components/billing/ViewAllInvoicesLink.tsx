@@ -9,6 +9,7 @@
 
 import { useState } from 'react';
 import { openBrokerageBillingPortal } from '@/lib/actions/billingPortal';
+import { TOUCH_LINK } from './touch';
 
 export const VIEW_ALL_INVOICES_LABEL = 'View all invoices';
 
@@ -26,7 +27,7 @@ export function ViewAllInvoicesLink() {
     <button
       type="button"
       data-billing-action="view_all_invoices"
-      className="text-sm font-medium text-indigo-700 hover:underline disabled:opacity-60"
+      className={`text-sm font-medium text-indigo-700 hover:underline disabled:opacity-60 ${TOUCH_LINK}`}
       disabled={pending}
       onClick={() => void open()}
     >
