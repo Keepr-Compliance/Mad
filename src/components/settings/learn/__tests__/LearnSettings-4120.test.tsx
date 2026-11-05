@@ -184,8 +184,8 @@ describe("ON toggle ON", () => {
     expect(within(start).getByText("4")).toBeInTheDocument();
     expect(within(start).getByText("Questions ready")).toBeInTheDocument();
     const doing = screen.getByTestId("learn-doing");
-    expect(within(doing).getByTestId("learn-tile-found")).toHaveTextContent("0 of 1");
-    expect(within(doing).getByTestId("learn-tile-missed")).toHaveTextContent("1");
+    expect(within(doing).getByTestId("learn-tile-found")).toHaveTextContent("Not enough deals yet to score");
+    expect(within(doing).getByTestId("learn-tile-found")).not.toHaveTextContent("0 of 0");
   });
 
   it("with a run already in main, does not run again", async () => {
@@ -345,7 +345,7 @@ describe("SC score", () => {
 
     const done = await screen.findByRole("dialog", { name: "Thanks, 2 answers saved" });
     expect(within(done).getByText("Thanks, 2 answers saved")).toBeInTheDocument();
-    expect(within(done).getByTestId("learn-tile-found")).toHaveTextContent("0 of 1");
+    expect(within(done).getByTestId("learn-tile-found")).toHaveTextContent("Not enough deals yet to score");
     fireEvent.click(within(done).getByRole("button", { name: "Details" }));
     const details = within(done).getByTestId("learn-score-details");
     expect(details).toHaveTextContent("Manual deals created before 2026-08-31 (possibly auto-detected): 1 (minimum)");

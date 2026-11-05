@@ -8,9 +8,11 @@ import type { LearnTiles } from "./learnScoreView";
 
 export function LearnStatTiles({ tiles, className }: { tiles: LearnTiles; className?: string }): React.ReactElement {
   const cells: Array<{ value: string; label: string; tone: string; testId: string }> = [
-    { value: `${tiles.found} of ${tiles.of}`, label: "of your deals found", tone: "text-green-700", testId: "learn-tile-found" },
+    tiles.empty
+      ? { value: "Not enough deals yet to score", label: "", tone: "text-gray-600", testId: "learn-tile-found" }
+      : { value: `${tiles.found} of ${tiles.of}`, label: "of your deals found", tone: "text-green-700", testId: "learn-tile-found" },
     { value: String(tiles.wrongFinds), label: "wrong finds", tone: "text-amber-700", testId: "learn-tile-wrong" },
-    { value: String(tiles.missed), label: "deals missed", tone: "text-red-700", testId: "learn-tile-missed" },
+    { value: tiles.empty ? "-" : String(tiles.missed), label: "deals missed", tone: "text-red-700", testId: "learn-tile-missed" },
   ];
   return (
     <div className={cn("grid grid-cols-3", className)}>

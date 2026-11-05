@@ -15,10 +15,26 @@ describe("tiles", () => {
       found: 18,
       positives: 20,
       missed: 2,
+      recallExcludingLegacy: { k: 18, n: 20, interval: { rate: 90, low: 69.9, high: 97.2 } },
       knownWrong: 1,
       precisionAfterCleanup: { k: 7, n: 10, interval: { rate: 70, low: 39.7, high: 89.2 } },
     };
-    expect(learnTiles(s)).toEqual({ found: 18, of: 20, wrongFinds: 3, missed: 2 });
+    expect(learnTiles(s)).toEqual({ found: 18, of: 20, wrongFinds: 3, missed: 2, empty: false });
+  });
+
+  it("found and missed use the base without pre-cutoff manual deals", () => {
+    const s = {
+      ...base,
+      found: 5,
+      positives: 8,
+      missed: 3,
+      recallExcludingLegacy: { k: 4, n: 5, interval: { rate: 80, low: 37.6, high: 96.4 } },
+    };
+    expect(learnTiles(s)).toMatchObject({ found: 4, of: 5, missed: 1, empty: false });
+  });
+
+  it("empty when every manual deal predates the cutoff", () => {
+    expect(learnTiles(base)).toMatchObject({ found: 0, of: 0, missed: 0, empty: true });
   });
 });
 

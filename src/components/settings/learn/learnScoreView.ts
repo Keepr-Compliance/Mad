@@ -3,12 +3,13 @@
  *
  * Counts only (the score itself holds no address, subject or id). The three
  * tiles on L1 and L4:
- *   found      hand-entered deals Keepr found, of all hand-entered deals in
- *              the mail window (recall)
+ *   found      hand-entered deals Keepr found, of the hand-entered deals in
+ *              the mail window created on or after this user's cutoff (recall
+ *              without legacy manual deals; the details keep both bases)
  *   wrongFinds shown deals that are not real: detections matched to a deal
  *              you rejected plus detections you answered No to (the "7 of 10
  *              shown deals are real" bar is per shown detection)
- *   missed     hand-entered deals Keepr did not find
+ *   missed     the same base, deals Keepr did not find
  * The detail lines carry what the boards do not: recall with and without the
  * cleanup Yes answers and without manual deals created before this user's
  * cutoff (with "minimum" when no auto-detected row proves the cutoff), and
@@ -23,11 +24,14 @@ export interface LearnTiles {
   of: number;
   wrongFinds: number;
   missed: number;
+  /** True when no deal is left to score on (every manual deal predates the cutoff). */
+  empty: boolean;
 }
 
 export function learnTiles(s: LearnScore): LearnTiles {
   const shownWrong = s.precisionAfterCleanup.n - s.precisionAfterCleanup.k;
-  return { found: s.found, of: s.positives, wrongFinds: shownWrong, missed: s.missed };
+  const base = s.recallExcludingLegacy;
+  return { found: base.k, of: base.n, wrongFinds: shownWrong, missed: base.n - base.k, empty: base.n === 0 };
 }
 
 function pct(r: Rate): string {
