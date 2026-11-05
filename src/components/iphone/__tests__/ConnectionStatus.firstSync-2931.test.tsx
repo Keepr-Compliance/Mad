@@ -394,14 +394,22 @@ describe("BACKLOG-2931 connect screen: real hook + real flow", () => {
     expect(currentHook!.priorBackup).toBe("exists");
   });
 
-  it("a disconnect forgets the state; a late answer for the old device is not applied to the new one", async () => {
+  it("a disconnect forgets the answer for the device that left", async () => {
+    checkStatus.mockResolvedValueOnce(await replyFor(REPORT_COMPLETE));
+    render(<Harness />);
+    await connect(DEVICE);
+    expect(currentHook!.priorBackup).toBe("exists");
+
+    await act(async () => { cbs.disconnected(); });
+    expect(currentHook!.priorBackup).toBe("unknown");
+  });
+
+  it("a late answer for the old device is not applied to the new one", async () => {
     let resolveA: (v: unknown) => void = () => {};
     checkStatus.mockImplementationOnce(() => new Promise((r) => { resolveA = r; }));
     render(<Harness />);
     await connect(DEVICE);
-
     await act(async () => { cbs.disconnected(); });
-    expect(currentHook!.priorBackup).toBe("unknown");
 
     // B's own check stays pending.
     await connect(DEVICE_B);
