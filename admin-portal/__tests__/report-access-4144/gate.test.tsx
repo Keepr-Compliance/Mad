@@ -87,6 +87,7 @@ const PAGES: Record<string, () => Promise<{ default: Page }>> = {
   analytics: () => import('@/app/dashboard/reports/analytics/page') as never,
   'iphone-sync': () => import('@/app/dashboard/reports/iphone-sync/page') as never,
   'google-messages-sync': () => import('@/app/dashboard/reports/google-messages-sync/page') as never,
+  'email-precache': () => import('@/app/dashboard/reports/email-precache/page') as never,
   submissions: () => import('@/app/dashboard/reports/submissions/page') as never,
   exports: () => import('@/app/dashboard/reports/exports/page') as never,
   'support-sla': () => import('@/app/dashboard/reports/support-sla/page') as never,
@@ -120,8 +121,8 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('the page set is the registry', () => {
-  it('8 registered reports, one loader each', () => {
-    expect(SLUGS).toHaveLength(8);
+  it('9 registered reports, one loader each', () => {
+    expect(SLUGS).toHaveLength(9);
     expect(Object.keys(PAGES).sort()).toEqual([...SLUGS].sort());
   });
 

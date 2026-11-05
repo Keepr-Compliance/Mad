@@ -16,6 +16,7 @@ import {
   type EpSyncOutcomeRow,
 } from '../email-precache';
 import { RUN_LIMIT } from '../iphone-sync-queries';
+import { POSTGREST_MAX_ROWS } from '../support-sla-queries';
 
 let seq = 0;
 function row(over: Partial<EpSyncOutcomeRow> & { checked?: number | null; backfill?: boolean } = {}): EpSyncOutcomeRow {
@@ -114,5 +115,9 @@ describe('cap', () => {
   it('uses its own per-query cap and leaves the shared RUN_LIMIT alone', () => {
     expect(RUN_LIMIT).toBe(200);
     expect(EP_RUN_LIMIT).toBeGreaterThan(RUN_LIMIT);
+  });
+
+  it('does not exceed the server max_rows, so a hit cap is visible as truncated', () => {
+    expect(EP_RUN_LIMIT).toBeLessThanOrEqual(POSTGREST_MAX_ROWS);
   });
 });

@@ -26,8 +26,13 @@ export const EP_EXTRA_COLUMNS = ['run_kind', 'source_metrics'] as const;
  * alone: it is asserted by the iPhone report's tests and used by both sync
  * reports. Email syncs run on every login and every sync, so 200 would cover
  * only the newest few days.
+ *
+ * Not above the server's max_rows (1000, POSTGREST_MAX_ROWS): the read is a
+ * single unpaged .limit(), and getSyncRuns reports `truncated` when the rows
+ * returned reach this cap. A cap above max_rows would never be reached and the
+ * page would show the newest 1000 syncs as if complete.
  */
-export const EP_RUN_LIMIT = 2000;
+export const EP_RUN_LIMIT = 1000;
 
 export interface EpSyncOutcomeRow {
   id: string;
@@ -82,7 +87,11 @@ export interface EpKindSummary {
   complete: number;
   error: number;
   cancelled: number;
-  /** Incremental runs that also fetched a widened window's older mail. */
+  /**
+   * Incremental runs that also re-checked the older part of the history window
+   * (backfill). This counts every incremental run of a mailbox younger than the
+   * window, not only after the window was widened.
+   */
   backfilled: number;
   cells: Record<string, EpCell>;
 }

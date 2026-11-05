@@ -73,9 +73,10 @@ export interface EmailPrecacheRunContext {
   /** The configured Email History window, in months. Omitted when the run
    *  ended before the preference was read. */
   windowMonths?: number;
-  /** True when this run also fetched the gap between a widened window and the
-   *  oldest cached mail (BACKLOG-3056). Without it, `checked` on such a run is
-   *  not "new mail only". */
+  /** True when this run also re-checked the range between the window start and
+   *  the oldest cached mail (BACKLOG-3056). That range is re-asked on every run
+   *  of a mailbox younger than the window, not only after the window was
+   *  widened. Without it, `checked` on such a run is not "new mail only". */
   backfill: boolean;
 }
 

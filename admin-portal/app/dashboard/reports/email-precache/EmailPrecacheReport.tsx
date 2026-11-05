@@ -106,7 +106,7 @@ export function EmailPrecacheReport({ report, period, truncated, rowCap, basePat
                   {formatCount(k.total)} runs: {formatCount(k.complete)} completed, {formatCount(k.error)} failed,{' '}
                   {formatCount(k.cancelled)} cancelled
                   {k.backfilled > 0 ? (
-                    <div>{formatCount(k.backfilled)} also fetched older mail after the history window was widened</div>
+                    <div>{formatCount(k.backfilled)} also re-checked the older part of the history window</div>
                   ) : null}
                 </td>
               ))}
