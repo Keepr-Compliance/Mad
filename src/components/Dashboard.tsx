@@ -11,6 +11,7 @@ import type { TransactionTab } from "./transactionDetailsModule/types";
 import StartNewAuditModal from "./StartNewAuditModal";
 import { FeatureGate } from "./common/FeatureGate";
 import { AlertBanner, AlertIcons } from "./common/AlertBanner";
+import { MembershipNotice } from "./license/MembershipNotice";
 import { TransactionLimitModal } from "./common/TransactionLimitModal";
 import { TourTooltip, TourTooltipContext } from "./common/TourTooltip";
 import { useLicense } from "../contexts/LicenseContext";
@@ -288,6 +289,9 @@ function Dashboard({
             testId="messages-held-banner"
           />
         )}
+
+        {/* BACKLOG-3951: removed from a brokerage (dismissible, per user) */}
+        <MembershipNotice userId={user?.id} />
 
         {/* Unified Sync Status - shows progress during sync, completion after */}
         {/* data-tour wrapper always renders so Joyride tour step has a target */}

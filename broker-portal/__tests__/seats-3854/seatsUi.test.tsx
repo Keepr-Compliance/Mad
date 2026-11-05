@@ -180,7 +180,7 @@ describe('organization blocks (SB) and Manage billing', () => {
           seats={{ view: v, viewer: role as SeatsViewer }}
         />
       );
-      expect(screen.queryAllByRole('button', { name: 'Manage billing ↗' }).length > 0).toBe(shows);
+      expect(screen.queryAllByRole('button', { name: 'Manage billing' }).length > 0).toBe(shows);
       expect(document.querySelector('[data-billing-block="payment"], [data-billing-block="invoices"]')).toBeNull();
       unmount();
     }

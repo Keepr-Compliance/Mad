@@ -2,6 +2,7 @@ import { BOOK_A_CALL_URL } from '@/lib/billing/bookCall';
 import { BillingBlock } from './BillingBlock';
 import { SubscribeButton } from './AgentPlanControls';
 import type { PersonalPlanData } from './BillingPage';
+import { TOUCH_BUTTON } from './touch';
 
 const CARD = 'flex flex-col gap-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm';
 const CARD_HI = 'flex flex-col gap-3 rounded-xl border-2 border-indigo-600 bg-white p-5 shadow-lg';
@@ -73,7 +74,7 @@ export function ChoosePlanBlock({ prices, suspended = false }: { prices?: Person
               href={BOOK_A_CALL_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-auto rounded-lg border border-indigo-200 px-4 py-2.5 text-center text-sm font-semibold text-indigo-700 hover:bg-indigo-50"
+              className={`mt-auto rounded-lg border border-indigo-200 px-4 py-2.5 text-center text-sm font-semibold text-indigo-700 hover:bg-indigo-50 ${TOUCH_BUTTON}`}
             >
               Book a Call
             </a>
