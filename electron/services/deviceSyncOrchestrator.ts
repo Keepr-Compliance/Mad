@@ -63,6 +63,7 @@ import {
 import {
   formatDiskSpaceError,
   formatUnknownBackupSizeError,
+  formatDeviceNoAnswerError,
   formatMissingDriversError,
   formatDriverServiceStoppedError,
   formatStoreAppleDevicesMissingError,
@@ -1631,12 +1632,18 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // stopped waiting for it), and a query that never answered is stopped at the time
       // limit and ends the sync with its own message.
       let storageQueryTimedOut = false;
+      // BACKLOG-4124: the query exited 0 without one byte from the phone. Used only to
+      // word and record the size-unknown refusal below; it refuses nothing on its own.
+      let storageQueryNoAnswer = false;
       const storageInfoOrCancel = await raceCancel(
         preflightSignal,
         this.deviceService.getDeviceStorageInfo(options.udid, {
           signal: preflightSignal,
           onTimeout: () => {
             storageQueryTimedOut = true;
+          },
+          onNoAnswer: () => {
+            storageQueryNoAnswer = true;
           },
         }),
       );
@@ -1713,7 +1720,17 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         // nothing, and the backup asked for a passcode five seconds later — then
         // unlocking and retrying clears it, and this refusal is self-curing rather
         // than a wall.
-        const userError = formatUnknownBackupSizeError();
+        //
+        // BACKLOG-4124: when the size is unknown BECAUSE the phone never answered the
+        // query, say that and record it as DEVICE_NO_ANSWER. Every other unknown keeps
+        // the BACKUP_SIZE_UNKNOWN message, now with a recorded reason. A measured prior
+        // backup never reaches this branch, so no run that proceeded before is refused.
+        const deviceNoAnswer =
+          storageQueryNoAnswer && estimate.source === "device-storage-unavailable";
+        const reasonCode = deviceNoAnswer ? "DEVICE_NO_ANSWER" : "BACKUP_SIZE_UNKNOWN";
+        const userError = deviceNoAnswer
+          ? formatDeviceNoAnswerError()
+          : formatUnknownBackupSizeError();
         log.warn(
           "[DeviceSyncOrchestrator] Sync refused: backup size could not be determined",
           {
@@ -1721,6 +1738,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             reason: estimate.reason,
             priorBackup: priorBackup.kind,
             storageInfoPresent: storageInfo !== null,
+            reasonCode,
           },
         );
         Sentry.captureMessage("Sync refused: backup size unknown", {
@@ -1729,12 +1747,17 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             service: "sync-orchestrator",
             failure_reason: "backup_size_unknown",
             estimate_source: estimate.source,
+            reason_code: reasonCode,
           },
           extra: {
             reason: estimate.reason,
             priorBackup: priorBackup.kind,
             storageInfoPresent: storageInfo !== null,
           },
+        });
+        syncTimeline.setContext({
+          endedBy: deviceNoAnswer ? "device-no-answer" : "size-unknown",
+          reasonCode,
         });
         this.isRunning = false;
         this.emit("error", { message: userError.description, userError });
