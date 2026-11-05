@@ -10,7 +10,7 @@
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import * as Sentry from '@sentry/nextjs';
-import { getStripe, verifyBearerUser, CURRENCY, UNLOCK_PRODUCT_NAME } from '@/lib/stripe';
+import { getStripe, verifyBearerUserWithToken, CURRENCY, UNLOCK_PRODUCT_NAME } from '@/lib/stripe';
 import { createServiceClient } from '@/lib/supabase/service';
 import { LICENCE_READ_FAILED, readOwnLicenceSuspended } from '@/lib/auth/suspension';
 import { getNextUnlockQuote } from '@/lib/payments/fulfillment';
@@ -21,6 +21,7 @@ import {
   isModeAllowedForUser,
 } from '@/lib/billing/customers';
 import { BROKERAGE_BLOCK_READ_FAILED, readBrokeragePurchaseBlocked } from '@/lib/billing/purchaseBlocked';
+import { readBearerPortalAccess } from '@/lib/billing/bearerPortalAccess';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,7 +31,7 @@ interface Body {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  const user = await verifyBearerUser(req);
+  const user = await verifyBearerUserWithToken(req);
   if (!user) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
@@ -74,6 +75,18 @@ export async function POST(req: Request): Promise<Response> {
   }
   if (brokerageBlocked) {
     return NextResponse.json({ error: 'account_suspended' }, { status: 403 });
+  }
+
+  // BACKLOG-3951: a brokerage member without a license buys nothing, the same
+  // refusal the Agent plan route gives (subscription-session, no_license).
+  // The portal's one classifier decides; a failed read refuses (fail closed).
+  const access = await readBearerPortalAccess(user.token, user.userId);
+  if (access.kind === 'unknown') {
+    console.error('[payments] membership check failed');
+    return NextResponse.json({ error: 'payments unavailable right now' }, { status: 503 });
+  }
+  if (access.kind === 'floor' && access.via === 'unlicensed') {
+    return NextResponse.json({ error: 'no_license' }, { status: 403 });
   }
 
   // Re-quote server-side (never trust a client price; handles the tier-crossed race).

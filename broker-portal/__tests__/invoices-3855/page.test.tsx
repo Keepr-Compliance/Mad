@@ -109,7 +109,7 @@ async function page() {
     viewAll: c.querySelectorAll('[data-billing-action="view_all_invoices"]'),
     downloads: c.querySelectorAll('[data-billing-action="download_invoice"]'),
     pays: c.querySelectorAll('[data-billing-action="pay_invoice"]'),
-    manage: within(c).queryAllByRole('button', { name: 'Manage billing ↗' }),
+    manage: within(c).queryAllByRole('button', { name: 'Manage billing' }),
     unmount: view.unmount,
   };
 }

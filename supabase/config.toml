@@ -382,6 +382,11 @@ verify_jwt = false
 [functions.scim]
 verify_jwt = false
 
+# BACKLOG-4015: keep the gateway JWT check ON. directory-sync/auth.ts trusts the role and ref
+# claims of a JWT bearer only because the gateway has verified its signature.
+[functions.directory-sync]
+verify_jwt = true
+
 [analytics]
 enabled = false
 port = 54327

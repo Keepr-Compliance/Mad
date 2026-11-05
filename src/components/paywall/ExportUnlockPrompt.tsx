@@ -31,7 +31,7 @@
  */
 
 import React, { useCallback, useContext, useEffect, useState } from "react";
-import { Button } from "@keepr/ui";
+import { Button, EmptyState } from "@keepr/ui";
 import { useTransactionEntitlement } from "../../hooks/useTransactionEntitlement";
 import LicenseContext from "../../contexts/LicenseContext";
 import { paymentService, type SubscriptionRefusalCode } from "../../services/paymentService";
@@ -40,7 +40,7 @@ import {
   type AgentPricesResult,
   type PlanSummaryResult,
 } from "../../services/billingService";
-import { PurchaseUnlockHandoff } from "./PurchaseUnlockHandoff";
+import { PurchaseUnlockHandoff, NO_LICENSE_MESSAGE } from "./PurchaseUnlockHandoff";
 import { PlanCards, type AgentAction, type SoloAction } from "./PlanCards";
 import { AgentSubscribeFlow } from "./AgentSubscribeFlow";
 import logger from "../../utils/logger";
@@ -56,8 +56,8 @@ export interface ExportUnlockPromptProps {
   onCancel: () => void;
 }
 
-/** C7 wording, decided 2026-10-10 (BACKLOG-3648). */
-export const NO_LICENSE_MESSAGE = "Your brokerage hasn't assigned you a license. Contact your admin.";
+/** C7 wording, decided 2026-10-10 (BACKLOG-3648). Declared beside the card flow, which shows it too. */
+export { NO_LICENSE_MESSAGE };
 /** State D wording, decided 2026-10-09 (BACKLOG-3648). */
 export const STATE_D_MESSAGE = "Your team license covers this account. Contact your broker admin.";
 
@@ -154,7 +154,9 @@ export function ExportUnlockPrompt({
       setUnlockError(
         result.error === "offline"
           ? "Unlocking requires an internet connection."
-          : "Could not unlock with a credit. Please try again.",
+          : result.error === "not_licensed"
+            ? NO_LICENSE_MESSAGE
+            : "Could not unlock with a credit. Please try again.",
       );
     } catch (err) {
       logger.error("Credit unlock failed:", err);
@@ -213,6 +215,29 @@ export function ExportUnlockPrompt({
     // The plan state may have changed while the browser was open.
     void billingService.getPlanSummary().then(setPlanSummary);
   }, []);
+
+  // ── BACKLOG-3951: a brokerage member with no license assigned ───────────
+  // No unlock of any kind (credit, Pay, Subscribe, Book a call): the founder's
+  // message and "Not now" only. Decided by the license context's membership
+  // standing; while that is unknown this panel does not show (main refuses the
+  // spend paths on its own). Deals unlocked earlier never reach this prompt.
+  if (license?.membershipStanding === "unlicensed") {
+    return (
+      <div data-testid="export-unlock-prompt">
+        <EmptyState data-testid="paywall-no-license" title={NO_LICENSE_MESSAGE} />
+        <div className="mt-3 flex justify-end">
+          <button
+            type="button"
+            onClick={onCancel}
+            data-testid="unlock-cancel"
+            className="text-xs font-medium text-gray-500 hover:text-gray-700"
+          >
+            Not now
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // ── Purchase hand-off (Solo "Pay $X") ───────────────────────────────────
   if (showPurchase) {

@@ -93,6 +93,24 @@ export type MembershipOutcome =
   | { status: "error" };
 
 /**
+ * BACKLOG-3951: one of the user's own membership rows, at ANY status, as read
+ * by {@link SupabaseService.getMembershipStandingRows}. Classified by
+ * `membershipStanding.ts`.
+ */
+export interface MembershipStandingRow {
+  user_id?: string;
+  organization_id: string;
+  role?: string | null;
+  license_status?: string | null;
+  organizations?: EmbeddedOrganization | EmbeddedOrganization[] | null;
+}
+
+/** BACKLOG-3951: the raw rows, or a failure kept apart from "no rows". */
+export type MembershipStandingRowsResult =
+  | { status: "rows"; rows: MembershipStandingRow[] }
+  | { status: "error" };
+
+/**
  * Device information
  */
 interface DeviceInfo {
@@ -565,6 +583,52 @@ class SupabaseService {
       Sentry.captureException(err, {
         tags: { service: "supabase-service", operation: "getActiveOrganizationMembership" },
       });
+      return { status: "error" };
+    }
+  }
+
+  /**
+   * BACKLOG-3951: every membership row of this user, at ANY license status, so
+   * the desktop can tell a member with no license ('unassigned') or a removed
+   * member ('suspended' / 'expired') from a solo user. The active-only read
+   * above is untouched; its callers keep their answer.
+   *
+   * RLS: `organization_members_select_public` lets a user read their own rows
+   * at any status (`user_id = auth.uid()`), and `organizations_select_public`
+   * their own organizations, so no new policy is needed (SR plan review §3).
+   *
+   * Same constraints as the active read: no `.limit(1)`, deterministic order on
+   * base columns, and `personal_owner_user_id` is never named (the whole
+   * embedded record is selected). Never throws; an error is kept apart from
+   * "no rows". Callers bound it with a timeout (membershipStanding.ts).
+   */
+  async getMembershipStandingRows(userId: string): Promise<MembershipStandingRowsResult> {
+    try {
+      const client = this._ensureClient();
+      const { data, error } = await client
+        .from("organization_members")
+        .select("user_id, organization_id, role, license_status, organizations(*)")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true });
+
+      if (error) {
+        logService.warn(
+          `[Supabase] Failed to read membership standing: ${error.message}`,
+          "SupabaseService"
+        );
+        return { status: "error" };
+      }
+      if (!Array.isArray(data)) {
+        logService.warn(
+          "[Supabase] Failed to read membership standing: result was not a list of rows",
+          "SupabaseService"
+        );
+        return { status: "error" };
+      }
+      return { status: "rows", rows: data as MembershipStandingRow[] };
+    } catch (err) {
+      logService.error("[Supabase] Error reading membership standing", "SupabaseService", { err });
       return { status: "error" };
     }
   }
