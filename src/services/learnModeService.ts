@@ -10,10 +10,12 @@
  * Nothing here logs a reply or an error message, and nothing goes to Sentry: a
  * thrown invoke becomes the fixed failure below.
  *
- * The consumer is PR3's Settings section.
+ * Consumers: the Settings "Help Keepr learn" section and its question dialog
+ * (BACKLOG-4120 PR3), and the delete row in Data & Privacy.
  */
 import type {
   BulkAnswer,
+  LearnAttachmentOpenResult,
   DealAnswer,
   LearnAnswerResult,
   LearnCleanupNextResult,
@@ -53,7 +55,9 @@ export const learnModeService = {
   onRunProgress: (callback: (progress: LearnRunProgressEvent) => void): (() => void) =>
     window.api.learn.onRunProgress(callback),
 
-  cleanupNext: (): Promise<LearnCleanupNextResult> => call(() => window.api.learn.cleanupNext()),
+  /** `exclude`: detections skipped for now in this session (nothing is stored). */
+  cleanupNext: (exclude: string[] = []): Promise<LearnCleanupNextResult> =>
+    call(() => (exclude.length > 0 ? window.api.learn.cleanupNext({ exclude }) : window.api.learn.cleanupNext())),
 
   cleanupAnswer: (detectionId: string, answer: DealAnswer): Promise<LearnAnswerResult> =>
     call(() => window.api.learn.cleanupAnswer({ detectionId, answer })),
@@ -71,6 +75,10 @@ export const learnModeService = {
   deleteAnswers: (): Promise<LearnDeleteAnswersResult> => call(() => window.api.learn.deleteAnswers()),
 
   preview: (args: LearnPreviewArgs): Promise<LearnPreviewResult> => call(() => window.api.learn.preview(args)),
+
+  /** The one attachment a cleanup question is about; main downloads it if needed. */
+  attachmentOpen: (detectionId: string, attachmentId: string): Promise<LearnAttachmentOpenResult> =>
+    call(() => window.api.learn.attachmentOpen({ detectionId, attachmentId })),
 };
 
 export default learnModeService;

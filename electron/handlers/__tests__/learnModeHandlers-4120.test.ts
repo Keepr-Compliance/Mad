@@ -17,7 +17,8 @@
  *   P3    a run makes 0 Supabase table/RPC calls once the gate has passed
  *   P5    (main) feature-gate:strict-state answers for autodetect_eval, blocked
  *         on the production map
- *   PV    preview: membership checks; attachments listed, never downloaded;
+ *   PV    preview: membership checks; attachments listed, never downloaded by
+ *         the preview (PR3: only learn:attachment-open, see AT below);
  *         canary body never logged, sent as an event, or reported to Sentry;
  *         no provider fetch module is even loaded
  *
@@ -300,6 +301,7 @@ const VALID: Record<string, unknown> = {
   "learn:score": undefined,
   "learn:delete-answers": undefined,
   "learn:preview": { kind: "bulk", rowId: "row-4120-x" },
+  "learn:attachment-open": { detectionId: "d1", attachmentId: "att-4120-x" },
   "learn:get-state": undefined,
   "learn:set-enabled": { enabled: true },
 };
@@ -412,7 +414,7 @@ describe("SETS gated and ungated channels, by execution", () => {
     const registered = [...ipcHandlers.keys()].filter((c) => c.startsWith("learn:")).sort();
     const listed = [...handlers.LEARN_GATED_CHANNELS, ...handlers.LEARN_UNGATED_CHANNELS].sort();
     expect(registered).toEqual(listed);
-    expect(registered).toHaveLength(11);
+    expect(registered).toHaveLength(12);
     expect(Object.keys(VALID).sort()).toEqual(listed);
   });
 
@@ -450,6 +452,14 @@ describe("C9 switch matrix", () => {
       setAutoDetect(autoDetect);
       planMap(evalState, aiDetection);
       const expectAllowed = toggle && evalState === "allowed";
+      // PR3: a downloader is wired, so a refusal that still downloads would show.
+      const downloads: string[] = [];
+      handlers.registerLearnModeHandlers({
+        openQuestionAttachment: async (_u, row) => {
+          downloads.push(row.id);
+          return { ok: false, reason: "failed" };
+        },
+      });
 
       await expect(handlers.isLearnModeAllowed(USER)).resolves.toBe(expectAllowed);
       for (const channel of handlers.LEARN_GATED_CHANNELS) {
@@ -457,13 +467,19 @@ describe("C9 switch matrix", () => {
         const refusedByGate = r.success === false && r.error === handlers.LEARN_NOT_ON_ERROR;
         expect({ channel, refusedByGate }).toEqual({ channel, refusedByGate: !expectAllowed });
       }
+      if (!expectAllowed) expect(downloads).toEqual([]);
       if (expectAllowed) {
         const r = await invoke("learn:run", { windowMonths: 12 });
         expect(r.success).toBe(true);
       }
       // get-state reports availability from the strict key alone.
       const state = await invoke("learn:get-state");
-      expect(state).toEqual({ success: true, available: evalState === "allowed", enabled: expectAllowed });
+      expect(state).toEqual({
+        success: true,
+        available: evalState === "allowed",
+        enabled: expectAllowed,
+        answers: { deal: 0, bulk: 0 },
+      });
     },
   );
 
@@ -483,7 +499,12 @@ describe("C9 switch matrix", () => {
     handlers = await import("../learnModeHandlers");
     handlers.registerLearnModeHandlers();
     expect(await invoke("learn:set-enabled", { enabled: true })).toEqual({ success: true, enabled: true });
-    expect(await invoke("learn:get-state")).toEqual({ success: true, available: true, enabled: true });
+    expect(await invoke("learn:get-state")).toEqual({
+      success: true,
+      available: true,
+      enabled: true,
+      answers: { deal: 0, bulk: 0 },
+    });
   });
 
   it("set-enabled false always succeeds, even when the key is off, and keeps the row off if the key returns", async () => {
@@ -691,5 +712,293 @@ describe("PV preview channel", () => {
     expect(JSON.stringify(logCalls)).not.toMatch(/canary/i);
     expect(logCalls[0][3]).toEqual({ channel: "learn:preview", errorName: "Error" });
     expect(sentryCalls).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR3
+// ---------------------------------------------------------------------------
+
+const OTHER = "user-4120-other";
+
+function seedOtherUser(): void {
+  run(`INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES (?, 'b@example.test', 'google', 'oa-b')`, OTHER);
+}
+
+function seedAnswers(userId: string, tag: string): void {
+  run(
+    `INSERT INTO learn_deal_answers (id, user_id, run_id, address_key, property_address, answer, answered_at, rule_version, created_at, updated_at)
+     VALUES (?, ?, 'run-x', ?, 'somewhere', 'yes', '2026-11-01T00:00:00Z', 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`,
+    `dla-${tag}`,
+    userId,
+    `key-${tag}`,
+  );
+  run(
+    `INSERT INTO learn_bulk_answers (id, user_id, source, external_id, sampled_at, answer, answered_at, rule_version, created_at, updated_at)
+     VALUES (?, ?, 'gmail', ?, '2026-11-01T00:00:00Z', 'skip', '2026-11-01T00:00:00Z', 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`,
+    `lba-${tag}`,
+    userId,
+    `ext-${tag}`,
+  );
+  run(
+    `INSERT INTO learn_bulk_answers (id, user_id, source, external_id, sampled_at, answer, answered_at, rule_version, created_at, updated_at)
+     VALUES (?, ?, 'gmail', ?, '2026-11-01T00:00:00Z', NULL, NULL, 1, '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')`,
+    `lbu-${tag}`,
+    userId,
+    `ext-u-${tag}`,
+  );
+}
+
+function liveCounts(userId: string): { deal: number; bulk: number } {
+  return {
+    deal: (db.prepare(`SELECT COUNT(*) AS n FROM learn_deal_answers WHERE user_id = ? AND deleted_at IS NULL`).get(userId) as { n: number }).n,
+    bulk: (db.prepare(`SELECT COUNT(*) AS n FROM learn_bulk_answers WHERE user_id = ? AND deleted_at IS NULL`).get(userId) as { n: number }).n,
+  };
+}
+
+describe("DEL delete answers is ungated (founder, 2026-11-04)", () => {
+  it.each([
+    { label: "toggle OFF, key absent (production map)", toggle: false, evalState: "absent" as EvalState },
+    { label: "toggle ON, key disabled", toggle: true, evalState: "disabled" as EvalState },
+    { label: "toggle OFF, plan unreadable", toggle: false, evalState: "unreadable" as EvalState },
+    { label: "toggle ON, key allowed", toggle: true, evalState: "allowed" as EvalState },
+  ])("$label: the caller's answers are soft-removed, another user's are untouched", async ({ toggle, evalState }) => {
+    seedOtherUser();
+    setToggle(toggle);
+    planMap(evalState, true);
+    seedAnswers(USER, "u");
+    seedAnswers(OTHER, "o");
+
+    const r = await invoke("learn:delete-answers");
+    expect(r).toEqual({ success: true, removed: { deal: 1, bulk: 2 } });
+    expect(liveCounts(USER)).toEqual({ deal: 0, bulk: 0 });
+    expect(liveCounts(OTHER)).toEqual({ deal: 1, bulk: 2 });
+    // Soft: every row is still on disk.
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM learn_deal_answers`).get() as { n: number }).n).toBe(2);
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM learn_bulk_answers`).get() as { n: number }).n).toBe(4);
+  });
+
+  it("get-state reports the saved-answer count whatever the toggle and the key say", async () => {
+    seedOtherUser();
+    setToggle(false);
+    planMap("absent", false);
+    seedAnswers(USER, "u");
+    seedAnswers(OTHER, "o");
+    expect(await invoke("learn:get-state")).toEqual({
+      success: true,
+      available: false,
+      enabled: false,
+      answers: { deal: 1, bulk: 1 },
+    });
+    await invoke("learn:delete-answers");
+    expect(await invoke("learn:get-state")).toEqual({
+      success: true,
+      available: false,
+      enabled: false,
+      answers: { deal: 0, bulk: 0 },
+    });
+  });
+});
+
+describe("CN cleanup-next: skip for now", () => {
+  function seedDeal(address: string, sentAt: string): void {
+    seedEmail({
+      sentAt,
+      subject: "Offer accepted",
+      body: `Offer accepted on ${address}. Closing next month, escrow opened.`,
+    });
+  }
+
+  it("an excluded detection is passed over; nothing is stored; without the list it comes back", async () => {
+    setToggle(true);
+    seedDeal("4120 Canarytest Lane, Testville, ZZ 00000", "2026-10-01T10:00:00.000Z");
+    seedDeal("4121 Canarytest Lane, Testville, ZZ 00000", "2026-10-03T10:00:00.000Z");
+    expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
+
+    const first = (await invoke("learn:cleanup-next")).question as { detectionId: string };
+    const second = (await invoke("learn:cleanup-next", { exclude: [first.detectionId] })).question as {
+      detectionId: string;
+    };
+    expect(second.detectionId).not.toBe(first.detectionId);
+    expect(await invoke("learn:cleanup-next", { exclude: [first.detectionId, second.detectionId] })).toEqual({
+      success: true,
+      question: null,
+    });
+    expect(((await invoke("learn:cleanup-next")).question as { detectionId: string }).detectionId).toBe(
+      first.detectionId,
+    );
+    expect(liveCounts(USER).deal).toBe(0);
+  });
+
+  it("a malformed exclude list is refused", async () => {
+    setToggle(true);
+    expect(await invoke("learn:cleanup-next", { exclude: ["not-a-detection"] })).toEqual({
+      success: false,
+      error: handlers.LEARN_INVALID_ERROR,
+    });
+  });
+});
+
+describe("AT the one attachment a cleanup question is about", () => {
+  type OpenFn = NonNullable<import("../learnModeHandlers").LearnModeHandlerDeps["openQuestionAttachment"]>;
+  const openCalls: Array<{ userId: string; id: string }> = [];
+  const fakeOpen: OpenFn = async (userId, row) => {
+    openCalls.push({ userId, id: row.id });
+    return { ok: true, dataUrl: "data:application/pdf;base64,AAAA", downloadedNow: row.storage_path === null };
+  };
+
+  function withDownloader(): void {
+    openCalls.length = 0;
+    handlers.registerLearnModeHandlers({ openQuestionAttachment: fakeOpen });
+  }
+
+  function seedAttachmentTyped(emailId: string, id: string, filename: string, mime: string | null): void {
+    run(
+      `INSERT INTO attachments (id, email_id, filename, mime_type, file_size_bytes, storage_path) VALUES (?, ?, ?, ?, 1234, NULL)`,
+      id,
+      emailId,
+      filename,
+      mime,
+    );
+  }
+
+  /** Two messages about one deal (older + newer), a second deal, and OTHER's attachment. */
+  async function seedTwoDeals(): Promise<{ deal: string; otherDeal: string }> {
+    setToggle(true);
+    const older = seedEmail({ sentAt: "2026-10-01T10:00:00.000Z", subject: "Offer accepted", body: CANARY_BODY });
+    const newer = seedEmail({
+      sentAt: "2026-10-05T10:00:00.000Z",
+      subject: "Counter offer",
+      body: `Counter offer on ${CANARY_ADDRESS}. Escrow opened, closing next month.`,
+    });
+    seedAttachmentTyped(older, "att-old-pdf", "Older agreement.pdf", "application/pdf");
+    seedAttachmentTyped(newer, "att-new-jpg", "Photo.jpg", "image/jpeg");
+    // Sorts BEFORE the PDFs (the preview orders a message's attachments by file name).
+    seedAttachmentTyped(newer, "att-new-jpg0", "Aa front photo.jpg", "image/jpeg");
+    seedAttachmentTyped(newer, "att-new-pdf", "Newer agreement.pdf", "application/pdf");
+    seedAttachmentTyped(newer, "att-new-pdf2", "Zz addendum.pdf", "application/pdf");
+    const otherDealEmail = seedEmail({
+      sentAt: "2026-10-07T10:00:00.000Z",
+      subject: "Offer accepted",
+      body: "Offer accepted on 77 Canarytest Road, Testville, ZZ 00000. Closing next month, escrow opened.",
+    });
+    seedAttachmentTyped(otherDealEmail, "att-other-deal", "Other deal.pdf", "application/pdf");
+    seedOtherUser();
+    run(
+      `INSERT INTO emails (id, user_id, external_id, source, account_id, subject, sender, recipients, sent_at, body_plain, has_attachments)
+       VALUES ('e-other', ?, 'ext-o', 'gmail', 'acct-o', 'x', 'a@example.test', 'b@example.test', '2026-10-02T10:00:00.000Z', 'x', 1)`,
+      OTHER,
+    );
+    seedAttachmentTyped("e-other", "att-other-user", "Theirs.pdf", "application/pdf");
+
+    const r = await invoke("learn:run", { windowMonths: 12 });
+    expect(r.success).toBe(true);
+    const ids = (r.summary as { detectionIds: string[] }).detectionIds;
+    expect(ids).toHaveLength(2);
+    // Which detection is which: ask the preview.
+    const p1 = await invoke("learn:preview", { kind: "cleanup", detectionId: ids[0] });
+    const hasCanary = (p1.emails as Array<{ id: string }>).some((e) => e.id === older || e.id === newer);
+    return hasCanary ? { deal: ids[0], otherDeal: ids[1] } : { deal: ids[1], otherDeal: ids[0] };
+  }
+
+  it("the preview names the first PDF of the NEWEST message; bulk previews name none", async () => {
+    withDownloader();
+    const { deal, otherDeal } = await seedTwoDeals();
+    const p = await invoke("learn:preview", { kind: "cleanup", detectionId: deal });
+    expect(p.questionAttachmentId).toBe("att-new-pdf");
+    const q = await invoke("learn:preview", { kind: "cleanup", detectionId: otherDeal });
+    expect(q.questionAttachmentId).toBe("att-other-deal");
+    expect(openCalls).toEqual([]);
+  });
+
+  it("opening it calls the downloader exactly once, for that id and this user", async () => {
+    withDownloader();
+    const { deal } = await seedTwoDeals();
+    openCalls.length = 0;
+    const r = await invoke("learn:attachment-open", { detectionId: deal, attachmentId: "att-new-pdf" });
+    expect(r).toEqual({ success: true, dataUrl: "data:application/pdf;base64,AAAA", downloadedNow: true });
+    expect(openCalls).toEqual([{ userId: USER, id: "att-new-pdf" }]);
+  });
+
+  it.each([
+    ["a sibling PDF on the same message", "att-new-pdf2"],
+    ["a non-PDF sibling", "att-new-jpg"],
+    ["a non-PDF sibling that sorts first", "att-new-jpg0"],
+    ["the older message's PDF", "att-old-pdf"],
+    ["another detection's attachment", "att-other-deal"],
+    ["another user's attachment", "att-other-user"],
+    ["an unknown id", "att-nope"],
+  ])("%s is refused with 0 downloader calls", async (_label, attachmentId) => {
+    withDownloader();
+    const { deal } = await seedTwoDeals();
+    openCalls.length = 0;
+    expect(await invoke("learn:attachment-open", { detectionId: deal, attachmentId })).toEqual({
+      success: false,
+      error: handlers.LEARN_NOT_IN_SET_ERROR,
+    });
+    expect(openCalls).toEqual([]);
+  });
+
+  it("preview, cleanup-next, sample-draw, sample-next and score never download", async () => {
+    withDownloader();
+    const { deal, otherDeal } = await seedTwoDeals();
+    await invoke("learn:cleanup-next");
+    await invoke("learn:cleanup-next", { exclude: [deal] });
+    await invoke("learn:preview", { kind: "cleanup", detectionId: deal });
+    await invoke("learn:preview", { kind: "cleanup", detectionId: otherDeal });
+    await invoke("learn:sample-draw", { windowMonths: 12 });
+    const next = (await invoke("learn:sample-next")).question as { rowId: string } | null;
+    if (next) await invoke("learn:preview", { kind: "bulk", rowId: next.rowId });
+    await invoke("learn:score");
+    expect(openCalls).toEqual([]);
+    // and nothing on disk changed
+    expect(
+      (db.prepare(`SELECT COUNT(*) AS n FROM attachments WHERE storage_path IS NOT NULL`).get() as { n: number }).n,
+    ).toBe(0);
+  });
+
+  it("a PDF whose file name carries the street number wins over an earlier PDF; open accepts the same id", async () => {
+    withDownloader();
+    setToggle(true);
+    const email = seedEmail({ sentAt: "2026-10-05T10:00:00.000Z", subject: "Counter offer", body: CANARY_BODY });
+    seedAttachmentTyped(email, "att-a-generic", "Aa agreement.pdf", "application/pdf");
+    seedAttachmentTyped(email, "att-b-named", "Counter 4120 signed.pdf", "application/octet-stream");
+    const r = await invoke("learn:run", { windowMonths: 12 });
+    const [deal] = (r.summary as { detectionIds: string[] }).detectionIds;
+    const p = await invoke("learn:preview", { kind: "cleanup", detectionId: deal });
+    expect(p.questionAttachmentId).toBe("att-b-named");
+    openCalls.length = 0;
+    expect((await invoke("learn:attachment-open", { detectionId: deal, attachmentId: "att-b-named" })).success).toBe(true);
+    expect(await invoke("learn:attachment-open", { detectionId: deal, attachmentId: "att-a-generic" })).toEqual({
+      success: false,
+      error: handlers.LEARN_NOT_IN_SET_ERROR,
+    });
+    expect(openCalls).toEqual([{ userId: USER, id: "att-b-named" }]);
+  });
+
+  it("with no downloader wired, the one attachment is reported unavailable", async () => {
+    const { deal } = await seedTwoDeals();
+    expect(await invoke("learn:attachment-open", { detectionId: deal, attachmentId: "att-new-pdf" })).toEqual({
+      success: false,
+      error: handlers.LEARN_ATTACHMENT_UNAVAILABLE_ERROR,
+    });
+  });
+});
+
+describe("RJ a second learn:run while one runs joins it (Settings reopened mid-scan)", () => {
+  it("both callers get the same successful run; no 'already running' error", async () => {
+    setToggle(true);
+    seedEmail({ sentAt: "2026-10-05T10:00:00.000Z", subject: "Offer accepted", body: CANARY_BODY });
+    const [a, b] = await Promise.all([
+      invoke("learn:run", { windowMonths: 12 }),
+      invoke("learn:run", { windowMonths: 12 }),
+    ]);
+    expect(a.success).toBe(true);
+    expect(b.success).toBe(true);
+    expect((b.summary as { runId: string }).runId).toBe((a.summary as { runId: string }).runId);
+    // Once it has finished, a new call starts a new run.
+    const c = await invoke("learn:run", { windowMonths: 12 });
+    expect(c.success).toBe(true);
+    expect((c.summary as { runId: string }).runId).not.toBe((a.summary as { runId: string }).runId);
   });
 });

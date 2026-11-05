@@ -243,3 +243,32 @@ export const PREVIEW_ATTACHMENTS_SQL = sql`
   WHERE e.user_id = ? AND a.email_id IN (SELECT value FROM json_each(?))
   ORDER BY a.email_id, a.filename, a.id
 `;
+
+// ---------------------------------------------------------------------------
+// Settings screen (BACKLOG-4120 PR3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Saved answers of the user: live cleanup answers plus answered live sample
+ * rows. Counts only. Bound: user id, user id.
+ */
+export const COUNT_LIVE_ANSWERS_SQL = sql`
+  SELECT
+    (SELECT COUNT(*) FROM learn_deal_answers WHERE user_id = ? AND deleted_at IS NULL) AS deal,
+    (SELECT COUNT(*) FROM learn_bulk_answers WHERE user_id = ? AND deleted_at IS NULL AND answer IS NOT NULL) AS bulk
+`;
+
+/**
+ * One attachment of the user's mail, with what a single provider download
+ * needs. Bound: user id, attachment id. No row when the attachment is not on
+ * one of the user's own messages.
+ */
+export const QUESTION_ATTACHMENT_SQL = sql`
+  SELECT a.id AS id, a.email_id AS email_id, a.filename AS filename, a.mime_type AS mime_type,
+         a.file_size_bytes AS file_size_bytes, a.storage_path AS storage_path,
+         a.provider_attachment_id AS provider_attachment_id,
+         e.external_id AS external_id, e.source AS source
+  FROM attachments a
+  JOIN emails e ON e.id = a.email_id
+  WHERE e.user_id = ? AND a.id = ?
+`;
