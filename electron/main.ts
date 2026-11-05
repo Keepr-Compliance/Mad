@@ -853,6 +853,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
           licenseStatus,
           device: deviceResult.device,
           isNewUser: needsTermsAcceptance, // BACKLOG-546: Based on terms, not transactions
+          localUser, // BACKLOG-4148: carries this sign-in's last-login stamp
         }),
       );
 

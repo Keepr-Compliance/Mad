@@ -122,6 +122,8 @@ beforeEach(() => {
   mockUsers.getUserByEmailSync.mockReturnValue(null);
   mockUsers.getUserByOAuthIdSync.mockReturnValue(null);
   mockUsers.createUserSync.mockImplementation((row: { id: string }) => userRow(row.id));
+  // BACKLOG-4148: provisionDeepLinkLogin re-reads the row after the last-login stamp.
+  mockUsers.getUserByIdSync.mockImplementation((id: string) => userRow(id));
   mockUsers.migrateUserIdForUnification.mockResolvedValue(undefined);
   mockCreateSessionSync.mockReturnValue(TOKEN);
 });
