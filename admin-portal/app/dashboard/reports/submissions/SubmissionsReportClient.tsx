@@ -6,16 +6,18 @@
  */
 
 import { useRouter } from 'next/navigation';
+import { reportShareApi } from '@/lib/reports/report-share-api';
 import { submissionsViewsApi } from '@/lib/reports/submissions-views-api';
 import { SubmissionsReport, type SubmissionsReportProps } from './SubmissionsReport';
 
-export function SubmissionsReportClient(props: Omit<SubmissionsReportProps, 'onNavigate' | 'viewsApi'>) {
+export function SubmissionsReportClient(props: Omit<SubmissionsReportProps, 'onNavigate' | 'viewsApi' | 'shareApi'>) {
   const router = useRouter();
   return (
     <SubmissionsReport
       {...props}
       onNavigate={(url) => router.push(url, { scroll: false })}
       viewsApi={submissionsViewsApi}
+      shareApi={reportShareApi}
     />
   );
 }

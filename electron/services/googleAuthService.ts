@@ -437,59 +437,6 @@ class GoogleAuthService {
   }
 
   /**
-   * Authenticate for login (minimal scopes)
-   * Step 1: Get user into the app
-   * Opens browser, user logs in, redirects back to local server
-   */
-  async authenticateForLogin(): Promise<AuthFlowResult> {
-    this._ensureInitialized();
-
-    const scopes = [
-      "openid",
-      "https://www.googleapis.com/auth/userinfo.email",
-      "https://www.googleapis.com/auth/userinfo.profile",
-    ];
-
-    try {
-      logService.debug("[GoogleAuth] Starting login flow with minimal scopes (PKCE)", "GoogleAuth");
-
-      // Generate PKCE challenge
-      const { codeVerifier, codeChallenge } = this._generatePKCE();
-
-      // BACKLOG-1121: Start server first to get dynamic port, then build auth URL
-      const { codePromise, listeningPromise } = this.startLocalServer();
-      await listeningPromise;
-
-      // Build authorization URL with dynamically assigned redirect URI
-      const params = new URLSearchParams({
-        client_id: this.clientId,
-        response_type: "code",
-        redirect_uri: this.redirectUri,
-        scope: scopes.join(" "),
-        access_type: "offline",
-        prompt: "select_account",
-        code_challenge: codeChallenge,
-        code_challenge_method: "S256",
-      });
-
-      const authUrl = `${GOOGLE_AUTH_URL}?${params.toString()}`;
-
-      logService.debug("[GoogleAuth] Auth URL generated with PKCE, local server started", "GoogleAuth");
-
-      return {
-        authUrl,
-        codePromise,
-        codeVerifier,
-        scopes,
-      };
-    } catch (error) {
-      logService.error("[GoogleAuth] Login flow failed:", "GoogleAuth", { error });
-      this.stopLocalServer();
-      throw error;
-    }
-  }
-
-  /**
    * Exchange authorization code for tokens using PKCE + client_secret
    * Google requires client_secret for all app types; PKCE is defense-in-depth.
    * @param code - Authorization code from OAuth callback

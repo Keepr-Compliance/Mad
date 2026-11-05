@@ -12,6 +12,7 @@
  */
 
 import { useMemo } from 'react';
+import type { SavedViewsSharing, ShareDialogProps } from '@keepr/ui';
 import type { PeriodOnlyViewsApi } from './period-only-views-api';
 import {
   PERIOD_ONLY_SAVE_HINT,
@@ -19,7 +20,9 @@ import {
   type PeriodOnlySavedView,
   type PeriodOnlyViews,
 } from './period-only-views';
+import type { ShareApi } from './report-share-api';
 import { useReportSavedViews } from './use-report-saved-views';
+import { useReportViewSharing } from './use-report-view-sharing';
 import type { ResolvedPeriodLike } from './view-period';
 
 export interface PeriodOnlySavedViewsProps {
@@ -33,15 +36,29 @@ export interface PeriodOnlySavedViewsProps {
   saveHint: string;
   defaultViewId: string | null;
   onSetDefault(view: PeriodOnlySavedView | null): void;
+  onClear(): void;
+  /** BACKLOG-4087. Undefined when sharing is not offered. */
+  sharing: SavedViewsSharing<PeriodOnlySavedView> | undefined;
+}
+
+/** The SavedViews props plus the one ShareDialog the report renders (BACKLOG-4087). */
+export interface PeriodOnlySavedViewsResult extends PeriodOnlySavedViewsProps {
+  shareDialog: ShareDialogProps;
 }
 
 export function usePeriodOnlySavedViews(
   api: PeriodOnlyViewsApi | undefined,
   views: PeriodOnlyViews,
   period: ResolvedPeriodLike,
-  navigateToPeriod: (key: string, from?: string, to?: string) => void
-): PeriodOnlySavedViewsProps {
+  navigateToPeriod: (key: string, from?: string, to?: string) => void,
+  shareApi?: ShareApi
+): PeriodOnlySavedViewsResult {
   const saved = useReportSavedViews(api, views.reportKey);
+  // An editor's Update stores the page's period, exactly as Save would.
+  const { sharing, shareDialog } = useReportViewSharing(shareApi, saved, views.reportKey, () => ({
+    filters: views.serialize(period),
+    metric: PERIOD_ONLY_VIEW_METRIC,
+  }));
 
   const activeViewId = useMemo(
     () => (saved.views ?? []).find((v) => views.isActive(v, period))?.id ?? null,
@@ -63,6 +80,13 @@ export function usePeriodOnlySavedViews(
     });
   }
 
+  // Clear the applied view (BACKLOG-4121): the built-in period, written into
+  // the URL even when the page already shows it. A bare URL would re-open the
+  // default view (default-view.ts).
+  function onClear() {
+    navigateToPeriod(views.defaultPeriodKey);
+  }
+
   return {
     views: saved.views,
     loading: saved.loading,
@@ -74,5 +98,8 @@ export function usePeriodOnlySavedViews(
     saveHint: PERIOD_ONLY_SAVE_HINT,
     defaultViewId: saved.defaultViewId,
     onSetDefault: saved.setDefault,
+    onClear,
+    sharing,
+    shareDialog,
   };
 }

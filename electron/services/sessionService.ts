@@ -9,7 +9,7 @@ import logService from "./logService";
 import { emitSessionChanged } from "./authEvents";
 import { renameWithRetry } from "./atRest/fileCrypto";
 import { lastIpcChannelStarted } from "./ipcReplySize";
-import { isSessionFileAwaitingWrite, setSessionFileAwaitingWrite } from "./sessionFileState";
+import { isSessionFileAwaitingWrite, noteSessionClearRequested, setSessionFileAwaitingWrite } from "./sessionFileState";
 
 // ============================================
 // TYPES & INTERFACES
@@ -316,9 +316,12 @@ export class SessionService {
    */
   async saveSession(
     sessionData: SessionData,
-    opts?: { endsSignInWait?: boolean },
+    opts?: { endsSignInWait?: boolean; proceed?: () => boolean },
   ): Promise<boolean> {
     return this.runSerialized(async () => {
+      // BACKLOG-3322: a sign-in retry decides inside the lock, after any
+      // clear queued ahead of it has run, whether it may still write.
+      if (opts?.proceed && !opts.proceed()) return false;
       this.generation++;
       const ok = await this._writeSession(sessionData);
       // BACKLOG-4076: the sign-in write ends the "previous session on disk"
@@ -492,6 +495,7 @@ export class SessionService {
    * Clear session data
    */
   async clearSession(): Promise<boolean> {
+    noteSessionClearRequested();
     return this.runSerialized(() => this._clearSessionInternal());
   }
 
