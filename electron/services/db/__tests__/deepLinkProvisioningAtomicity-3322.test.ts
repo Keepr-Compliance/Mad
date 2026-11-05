@@ -57,10 +57,10 @@
  *
  * BACKLOG-4148 (D14-D16): the sign-in stamps users_local.last_login_at in the
  * same transaction, for a new and a returning user, and returns the re-read row.
- *   - drop the stamp                                                  -> D14, D15
- *   - stamp only when the user was just created                       -> D15
+ *   - drop the stamp                                                  -> D14, D15, D16
+ *   - stamp only when the user was just created                       -> D15, D16
  *   - return the pre-stamp row (no re-read)                           -> D14, D15
- *   - move the stamp after the dbTransaction (own write)              -> D16
+ *   - move the stamp after the dbTransaction (own write)              -> D14, D15, D16
  *   - `void updateLastLogin(user.id)` (promise wrapper) in the body   -> D16
  *   - wrap the stamp in try/catch and swallow the error               -> D16
  *
