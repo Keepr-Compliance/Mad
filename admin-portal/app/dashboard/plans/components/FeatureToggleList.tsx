@@ -460,6 +460,10 @@ export function FeatureToggleList({
     // Also lock if any unmet dependency is itself tier-locked (can never be enabled on this tier)
     const depsAreTierLocked = hasUnmetDeps && unmetDeps.some((dep) => isTierLocked(dep, planTier));
     const isLocked = tierLocked || depsAreTierLocked;
+    // BACKLOG-4149: the cap does not apply while Unlimited transactions is on. Follows the live
+    // (unsaved) toggle, not the saved props. The input stays editable: the cap still applies to
+    // any org on this plan whose override turns Unlimited off.
+    const unlimitedOn = allFeatures.some((f) => f.key === 'unlimited_transactions' && featureState[f.id]?.enabled === true);
 
     // Build tooltip text
     let tooltip = '';
@@ -506,6 +510,9 @@ export function FeatureToggleList({
             <p className="text-xs text-gray-500 mt-0.5">{fd.description}</p>
           )}
           <p className="text-xs text-gray-400 mt-0.5 font-mono">{fd.key}</p>
+          {fd.key === 'max_transaction_size' && unlimitedOn && (
+            <p className="text-xs text-gray-500 mt-0.5">Not applied while Unlimited transactions is on.</p>
+          )}
         </div>
 
         <div className="flex items-center gap-4 shrink-0">
