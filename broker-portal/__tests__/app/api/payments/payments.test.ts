@@ -16,6 +16,7 @@ import { NextResponse } from 'next/server';
 // ---- Mocks ---------------------------------------------------------------
 
 import { BillingDb, eqValue, type Row } from '../../../helpers/billingDb';
+import { brokerageMembership, personalMembership } from '../../../helpers/postgrestEmulator';
 
 const mockGetUser = jest.fn();
 const mockRpc = jest.fn();
@@ -37,8 +38,13 @@ jest.mock('@sentry/nextjs', () => ({
   captureException: jest.fn(),
 }));
 
+// BACKLOG-3951: the card routes also read the caller's own memberships through a
+// Bearer-token client (readBearerPortalAccess). Both that reader and the token
+// verifier build this client; `from` serves organization_members out of a BillingDb
+// so the real classifier runs. Default: the caller owns a personal organization.
+let mockMemberDb: BillingDb;
 jest.mock('@supabase/supabase-js', () => ({
-  createClient: () => ({ auth: { getUser: mockGetUser } }),
+  createClient: () => ({ auth: { getUser: mockGetUser }, from: (t: string) => mockMemberDb.from(t) }),
 }));
 
 jest.mock('@/lib/supabase/service', () => ({
@@ -162,6 +168,7 @@ beforeEach(() => {
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'anon_dummy';
   process.env.NEXT_PUBLIC_APP_URL = 'https://app.keeprcompliance.com';
   useDb({ organizations: [personalOrg(true)] });
+  mockMemberDb = new BillingDb({ organization_members: [personalMembership('USER-1')] });
 });
 
 // ---- R5: auth ------------------------------------------------------------
@@ -1005,4 +1012,175 @@ describe('BACKLOG-3853 C-3 / C-3b / C-11: purchase routes refuse a member of a s
     expect(res.status).toBe(409);
     expect(mockRpc.mock.calls.map((c) => c[0])).toContain('get_next_unlock_quote');
   });
+});
+
+// ---- BACKLOG-3951: a brokerage member without a license buys nothing ------
+//
+// C10. The per-deal checkout and the saved-card charge give the refusal the Agent
+// plan route already gives (subscription-session: no_license, 403), decided by the
+// same classifier over the caller's own rows (readBearerPortalAccess). The refusal
+// sits after the brokerage-suspension check and before the quote, the customer and
+// every Stripe call; a failed membership read refuses too (fail closed, 503).
+//
+// UNASSIGNED_MEMBER_ROW is transcribed, not invented (R3): on keepr-test, an active
+// `agent` of a test brokerage (SCIM-provisioned, no personal organization) was
+// unassigned by that brokerage's it_admin through the producer,
+// set_member_license(member, 'unassign'), inside a rolled-back transaction on
+// 2026-11-05. Every column and every embedded organizations(*) key is as read back;
+// ids are nil, the name and slug are replaced, timestamps are kept. The producer
+// also clears license_assigned_at and bumps updated_at; deactivated_at stays null.
+
+const NIL = '00000000-0000-0000-0000-000000000000';
+
+const UNASSIGNED_MEMBER_ROW: Row = {
+  id: NIL,
+  organization_id: NIL,
+  user_id: 'USER-1',
+  role: 'agent',
+  license_status: 'unassigned',
+  provisioned_by: 'scim',
+  provisioned_at: '2026-10-16T20:29:44.317+00:00',
+  provisioning_metadata: null,
+  scim_synced_at: '2026-10-16T20:29:44.317+00:00',
+  joined_at: '2026-10-16T20:29:44.317+00:00',
+  invited_at: '2026-10-16T20:29:44.384209+00:00',
+  invited_by: null,
+  invited_email: null,
+  invited_first_name: null,
+  invited_last_name: null,
+  invitation_token: null,
+  invitation_expires_at: null,
+  last_invited_at: null,
+  idp_groups: null,
+  group_sync_enabled: false,
+  license_assigned_at: null,
+  deactivated_at: null,
+  created_at: '2026-10-16T20:29:44.384209+00:00',
+  updated_at: '2026-11-05T06:25:49.566556+00:00',
+  organizations: {
+    id: NIL,
+    name: 'Fixture Brokerage',
+    slug: 'fixture-brokerage',
+    plan: 'trial',
+    is_test: true,
+    settings: {},
+    max_seats: 3,
+    retention_years: 7,
+    default_member_role: 'agent',
+    personal_owner_user_id: null,
+    sso_enabled: false,
+    sso_required: false,
+    sso_domain_restriction: null,
+    scim_enabled: true,
+    jit_provisioning_enabled: false,
+    directory_sync_enabled: false,
+    directory_sync_last_at: null,
+    google_domain: null,
+    microsoft_tenant_id: null,
+    graph_admin_consent_at: null,
+    graph_admin_consent_granted: false,
+    created_at: '2026-10-16T20:29:44.384209+00:00',
+    updated_at: '2026-10-16T20:29:44.384209+00:00',
+  },
+};
+
+/**
+ * The billing-only login (migration 20261020180000): invited as an `agent` at
+ * 'unassigned' with provisioning_metadata.billing_only, then claimed. The
+ * classifier reads it as any other unassigned member.
+ */
+const BILLING_ONLY_MEMBER_ROW: Row = {
+  ...UNASSIGNED_MEMBER_ROW,
+  provisioned_by: 'invite',
+  provisioning_metadata: { billing_only: true },
+  scim_synced_at: null,
+};
+
+describe('BACKLOG-3951 C10: purchase routes refuse a brokerage member without a license', () => {
+  const ROUTES = [
+    ['checkout-session', '@/app/api/payments/checkout-session/route'],
+    ['charge', '@/app/api/payments/charge/route'],
+  ] as const;
+
+  function wire(memberRows: Row[]): void {
+    signedIn();
+    quoteRpc(1499);
+    // No stripe_customers row: an unrefused checkout would CREATE a customer here.
+    useDb({ organizations: [personalOrg(true)], stripe_customers: [], licenses: [{ id: 'LIC-1', user_id: 'USER-1', status: 'active' }] });
+    mockMemberDb = new BillingDb({ organization_members: memberRows });
+  }
+  function nothingBought(): void {
+    expect(mockRpc.mock.calls.map((c) => c[0])).not.toContain('get_next_unlock_quote');
+    expect(db.callsTo('stripe_customers', 'select')).toEqual([]);
+    expect(db.callsTo('stripe_customers', 'insert')).toEqual([]);
+    expect(mockCustomersCreate).not.toHaveBeenCalled();
+    expect(mockCheckoutCreate).not.toHaveBeenCalled();
+    expect(mockPaymentIntentsCreate).not.toHaveBeenCalled();
+  }
+  /** checkout-session: 200 with a new customer and session; charge: the saved-card check (409) after the quote. */
+  async function proceeds(name: string, mod: string): Promise<void> {
+    mockCustomersCreate.mockResolvedValue({ id: 'cus_FX3951' });
+    mockCheckoutCreate.mockResolvedValue({ id: 'cs_1', url: 'https://checkout.stripe/x', payment_intent: 'pi_1' });
+    const { POST } = await import(mod);
+    const res = await POST(bearer('valid'));
+    if (name === 'checkout-session') {
+      expect(res.status).toBe(200);
+      expect(mockCheckoutCreate).toHaveBeenCalledTimes(1);
+    } else {
+      expect(res.status).toBe(409);
+      expect(await (res as NextResponse).json()).toEqual({ error: 'no_saved_payment_method' });
+    }
+    expect(mockRpc.mock.calls.map((c) => c[0])).toContain('get_next_unlock_quote');
+  }
+
+  it.each(ROUTES)('%s: unassigned member (keepr-test row) -> 403 no_license, nothing bought', async (_n, mod) => {
+    wire([UNASSIGNED_MEMBER_ROW]);
+    const { POST } = await import(mod);
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(403);
+    expect(await (res as NextResponse).json()).toEqual({ error: 'no_license' });
+    nothingBought();
+  });
+
+  it.each(ROUTES)('%s: billing-only login (unassigned, billing_only) -> 403 no_license, nothing bought', async (_n, mod) => {
+    wire([BILLING_ONLY_MEMBER_ROW]);
+    const { POST } = await import(mod);
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(403);
+    expect(await (res as NextResponse).json()).toEqual({ error: 'no_license' });
+    nothingBought();
+  });
+
+  it.each(ROUTES)('%s: the membership read fails -> 503, nothing bought', async (_n, mod) => {
+    wire([personalMembership('USER-1')]);
+    mockMemberDb.failNext['organization_members.select'] = { code: 'PGRST000', message: 'fixture: read failed' };
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { POST } = await import(mod);
+    const res = await POST(bearer('valid'));
+    expect(res.status).toBe(503);
+    expect(errSpy).toHaveBeenCalledWith('[payments] membership check failed');
+    errSpy.mockRestore();
+    nothingBought();
+  });
+
+  it.each(ROUTES)('%s: the read goes through the Bearer client, scoped to the caller', async (_n, mod) => {
+    // Another user's unassigned row in the same table must not decide for the caller.
+    wire([personalMembership('USER-1'), { ...UNASSIGNED_MEMBER_ROW, user_id: 'OTHER-USER' }]);
+    await proceeds(_n, mod);
+  });
+
+  const UNCHANGED: [string, Row[]][] = [
+    ['solo personal owner', [personalMembership('USER-1')]],
+    ['active brokerage agent', [brokerageMembership('agent', 'post', 'USER-1')]],
+    ['active brokerage broker', [brokerageMembership('broker', 'post', 'USER-1')]],
+    ['suspended member with no personal organization', [{ ...UNASSIGNED_MEMBER_ROW, license_status: 'suspended' }]],
+    ['suspended member back on their own personal organization', [{ ...UNASSIGNED_MEMBER_ROW, license_status: 'suspended' }, personalMembership('USER-1')]],
+    ['no membership rows', []],
+  ];
+  for (const [who, rows] of UNCHANGED) {
+    it.each(ROUTES)(`%s: ${who} -> unchanged, proceeds to the quote`, async (name, mod) => {
+      wire(rows);
+      await proceeds(name, mod);
+    });
+  }
 });
