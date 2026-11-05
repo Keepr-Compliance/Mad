@@ -20,6 +20,7 @@ import {
   ATTACHMENT_SPACE_HEADROOM_BYTES,
 } from "../../../../electron/utils/diskSpace";
 import { describeAttachmentSpaceRefusal } from "../ImportPlanDialog";
+import { describeAttachmentsSkippedForSpace } from "../../../utils/diskSpaceCopy";
 
 jest.mock("../../../../electron/services/logService", () => {
   const noop = jest.fn();
@@ -150,6 +151,34 @@ describe("BACKLOG-2882 — the printed figures add up", () => {
     }
     expect(refusals).toBeGreaterThan(1_000_000);
     expect({ incoherent, samples }).toEqual({ incoherent: 0, samples: [] });
+  });
+});
+
+describe("BACKLOG-2882 — the post-import warning prints no total that can disagree", () => {
+  it("states exactly three figures and the parts, added as a reader would, exceed the free space", () => {
+    // Attachments 1..5000 MB, free space 1 MB below the requirement: the
+    // hardest refusal for every size. A printed total here disagreed with its
+    // parts in 2,647 of 5,000 cases.
+    let bad = 0;
+    const samples: string[] = [];
+    for (let att = 1; att <= 5000; att++) {
+      const attachmentBytes = att * MB;
+      const v = evaluateAttachmentSpace(attachmentBytes, attachmentBytes + ATTACHMENT_SPACE_HEADROOM_BYTES - MB);
+      const text = describeAttachmentsSkippedForSpace({
+        attachmentBytes: v.estimatedBytes,
+        headroomBytes: v.headroomBytes,
+        requiredBytes: v.requiredBytes,
+        availableBytes: v.availableBytes as number,
+      });
+      const figures = [...text.matchAll(/([\d.]+) (GB|MB)/g)].map((m) => figureBytes(m[1], m[2]));
+      const ok =
+        v.fits === false && figures.length === 3 && figures[0] + figures[1] > figures[2] + 1e-6;
+      if (!ok) {
+        bad++;
+        if (samples.length < 3) samples.push(`${att} MB: ${text}`);
+      }
+    }
+    expect({ bad, samples }).toEqual({ bad: 0, samples: [] });
   });
 });
 

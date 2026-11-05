@@ -24,7 +24,7 @@ import { DATA_EXPORT_NOT_RECORDED_MESSAGE } from '../utils/exportAuditCopy';
 // the renderer-main boundary.
 import type { AttachmentsRefusedForSpace } from '@electron/types/ipc/window-api-messages';
 import { macMessagesSyncOn } from './importSourcePolicy';
-import { formatGbUp, formatGbDirected } from '../utils/diskSpaceCopy';
+import { describeAttachmentsSkippedForSpace } from '../utils/diskSpaceCopy';
 
 export type SyncType = 'contacts' | 'emails' | 'messages' | 'iphone'
   | 'reindex' | 'backup' | 'restore' | 'ccpa-export'
@@ -957,13 +957,16 @@ class SyncOrchestratorServiceClass {
             // BACKLOG-2882: state the figure the guard compared (attachments +
             // headroom). "they need 0.0 GB but only 1.3 GB is free" was the
             // two-number sentence that cannot produce its own verdict.
-            // Required rounds up and free rounds down, as in the settings
-            // refusal, so the two can never print equal.
+            // Parts round up and free rounds down, as in the settings refusal,
+            // and no total is printed (see describeAttachmentsSkippedForSpace).
             const spaceWarning =
               refused.requiredBytes !== undefined && refused.headroomBytes !== undefined
-                ? `Attachments were not imported: they need ${formatGbDirected(refused.requiredBytes, Math.ceil)} of free space ` +
-                  `(${formatGbUp(refused.estimatedBytes)} for attachments plus ${formatGbUp(refused.headroomBytes)} kept free) ` +
-                  `but only ${formatGbDirected(refused.availableBytes, Math.floor)} is free. Messages imported normally.`
+                ? describeAttachmentsSkippedForSpace({
+                    attachmentBytes: refused.estimatedBytes,
+                    headroomBytes: refused.headroomBytes,
+                    requiredBytes: refused.requiredBytes,
+                    availableBytes: refused.availableBytes,
+                  })
                 : `Attachments were not imported: they need ${attachGb.toFixed(1)} GB ` +
                   `but only ${haveGb.toFixed(1)} GB is free. Messages imported normally.`;
             warning = warning ? `${warning} ${spaceWarning}` : spaceWarning;

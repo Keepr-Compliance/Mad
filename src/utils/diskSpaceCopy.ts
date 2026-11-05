@@ -47,6 +47,22 @@ export interface AttachmentSpaceRefusalFacts {
 }
 
 /**
+ * BACKLOG-2882: the warning shown after an import that copied the messages but
+ * skipped the attachments for lack of space. It has no total: a total built
+ * from the exact requirement disagreed with its printed parts in about half of
+ * all cases ("2.3 GB (53 MB plus 2.2 GB)"). Parts round up and free space
+ * rounds down, as in `describeAttachmentSpaceRefusal`, so the printed parts
+ * always add up to more than the printed free space.
+ */
+export function describeAttachmentsSkippedForSpace(facts: AttachmentSpaceRefusalFacts): string {
+  return (
+    `Attachments were not imported: they need ${formatGbUp(facts.attachmentBytes)} for attachments ` +
+    `plus ${formatGbUp(facts.headroomBytes)} kept free, ` +
+    `but only ${formatGbDirected(facts.availableBytes, Math.floor)} is free. Messages imported normally.`
+  );
+}
+
+/**
  * BACKLOG-2882: the refusal sentence, shared by the inline notice and this
  * dialog so they cannot drift apart.
  *

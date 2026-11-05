@@ -139,22 +139,31 @@ describe('BACKLOG-2883 — the refusal is typed on the queue item', () => {
 });
 
 describe('BACKLOG-2882 — the attachment refusal warning states the compared figure', () => {
-  it('names the attachments, the headroom and their sum', async () => {
+  async function warningFor(estimatedBytes: number, availableBytes: number): Promise<string> {
     importResult = {
       success: true,
       messagesImported: 12,
       attachmentsRefusedForSpace: {
-        estimatedBytes: 39_000_000,
-        availableBytes: 1_300_000_000,
+        estimatedBytes,
+        availableBytes,
         attachmentCount: 40,
         headroomBytes: GiB,
-        requiredBytes: 39_000_000 + GiB,
+        requiredBytes: estimatedBytes + GiB,
       },
     };
-    const warning = (await runMessagesSync())?.warning ?? '';
-    expect(warning).toContain('they need 2.2 GB of free space');
-    expect(warning).toContain('(39 MB for attachments plus 2.2 GB kept free)');
-    expect(warning).toContain('only 1.3 GB is free');
-    expect(warning).toContain('Messages imported normally.');
+    return (await runMessagesSync())?.warning ?? '';
+  }
+
+  it("names the attachments and the headroom, with no total, in the founder's case", async () => {
+    expect(await warningFor(39_000_000, 1_300_000_000)).toBe(
+      'Attachments were not imported: they need 39 MB for attachments plus 2.2 GB kept free, but only 1.3 GB is free. Messages imported normally.'
+    );
+  });
+
+  it('a 53 MB estimate prints parts that add up to more than the free space, not "2.3 GB (53 MB plus 2.2 GB)"', async () => {
+    // required = 2,200,483,648; 2,200,000,000 free refuses and floors to 2.2 GB.
+    expect(await warningFor(53_000_000, 2_200_000_000)).toBe(
+      'Attachments were not imported: they need 53 MB for attachments plus 2.2 GB kept free, but only 2.2 GB is free. Messages imported normally.'
+    );
   });
 });
