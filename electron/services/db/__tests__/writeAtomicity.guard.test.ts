@@ -330,11 +330,13 @@ const EXEMPT: Record<string, string> = {
  *     some multi-write functions are counted as ZERO-write and can never appear
  *     here. 56 functions have the shape, 4 are multi-write, at `0dca6beb1`.
  *     Tracked by BACKLOG-3225.
- *   - Call-token counting is scoped OUT of `db/`. That is a floor with a
- *     measured size, not a proof of absence: turning it on surfaced EIGHT more
- *     at `0dca6beb1`, all real (a raw write plus a non-exported local helper
- *     that writes). After BACKLOG-3226 it surfaces SEVEN, a different seven —
- *     see the BACKLOG-3226 paragraph at `isDbWriterCall` below.
+ *   - CLOSED BY BACKLOG-4014: call-token counting used to be scoped OUT of
+ *     `db/` (EIGHT more at `0dca6beb1`, seven after BACKLOG-3226, five after
+ *     BACKLOG-2554). It is now ON there too; the five it surfaced at
+ *     `4512ba619` and what happened to each are in the BACKLOG-4014 paragraph
+ *     at `isDbWriterCall` below. What remains is the BACKLOG-3238 floor: a
+ *     SQL-less db export that reaches a writer through a non-twin call is not
+ *     in the writer set, measured hiding `syncOutlookContacts`.
  *
  *   - A write inside a NESTED PROMISE-RETURNING LITERAL is attributed to the
  *     unit that encloses it, so the headline can name a function that issues no
@@ -996,8 +998,6 @@ function classMemberUnits(
 }
 
 function unitsInFile(rel: string, lines: string[], dbWriters: Set<string>): Fn[] {
-  const inDbLayer = rel.startsWith("electron/services/db/");
-
   // Declarations in this file, for identifier-registered handlers and for the
   // local-helper closure below.
   const declared = new Map<string, { line: number; body: string; exported: boolean }>();
@@ -1031,10 +1031,51 @@ function unitsInFile(rel: string, lines: string[], dbWriters: Set<string>): Fn[]
     if (reaches) localWriters.add(name);
   }
 
-  // Inside `db/` the raw-SQL rule stands and call tokens are OFF. `db/` is the
-  // leaf layer: its functions hold the SQL, so a uniform rule would have them
-  // counting each other, and a writer's own declaration line matches its own
-  // call pattern.
+  // ADOPTED BY BACKLOG-4014 — call tokens count EVERYWHERE, `db/` included.
+  // A db-layer function that issues a raw write and then CALLS a writer (a db
+  // writer, or a non-exported helper in the same file that writes) now counts
+  // both. The two objections the old rule answered are handled without it: a
+  // writer's own declaration line is removed by the `selfName` strip in
+  // `writeOffsets`, and leaf writers that call each other from inside a
+  // transaction are cleared by `wrapsItself` / `namesCalledInsideATransaction`
+  // exactly as callers outside `db/` are.
+  //
+  // MEASURED at `4512ba619`, real driver: the flip surfaces FIVE units, the five
+  // the BACKLOG-2554 paragraph below predicts —
+  //   communicationDbService.ts:822   createCommunicationReference
+  //   externalContactDbService.ts:896 syncGoogleContacts
+  //   externalContactDbService.ts:930 syncContactsBySource
+  //   externalContactDbService.ts:1262 fullSync
+  //   rcsChatPeopleDbService.ts:115   recordRcsThreadName
+  // `recordRcsThreadName` was NOT an offender: one write per arm of a braceless
+  // if/else (the BACKLOG-3239 stated floor), called only inside the cache
+  // commit's transaction. Its if/else now has braces and it drops out. The other
+  // four are real multi-write units with no transaction of their own; each needs
+  // a wrap or a `KNOWN_UNWRAPPED` entry citing its own filed item, and until it
+  // has one the offender test below reports it.
+  //
+  // Controls: the BACKLOG-4014 describe below. Restoring the old `db/` gate
+  // reddens its first test; removing the `selfName` strip reddens its second
+  // AND the scan, with every one-write db writer reading as two writes.
+  //
+  // WHAT THIS DOES NOT DO (measured in BACKLOG-3226): with call tokens ON, three
+  // wrong fixes for that item's seams still cleared their unit. A green guard
+  // says a unit opens a transaction, not that the right writes are inside it;
+  // each unit still needs its own per-write inTransaction check and k=1..N crash
+  // sweep.
+  //
+  // FLOOR, still open: a SQL-less db export that reaches a writer through a
+  // NON-twin call is not in the writer set (BACKLOG-3238). At `4512ba619` that
+  // hides `upsertFromOutlook` and `deleteStaleContactsBySource`, so
+  // `syncOutlookContacts` (externalContactDbService.ts:861) counts one write
+  // with the same three-step shape as `syncGoogleContacts`, and units 2-4 above
+  // count two of their three steps.
+  //
+  // HISTORY of the scoped-out rule, kept because later items cite it. Before
+  // BACKLOG-4014 call tokens were OFF inside `db/`, on the reasoning that `db/`
+  // is the leaf layer: its functions hold the SQL, so a uniform rule would have
+  // them counting each other, and a writer's own declaration line matches its
+  // own call pattern.
   //
   // MEASURED, not assumed. With call tokens ON inside `db/` and own-name
   // stripping applied, the offender set goes 13 -> 21 at `0dca6beb1`. The eight
@@ -1054,15 +1095,14 @@ function unitsInFile(rel: string, lines: string[], dbWriters: Set<string>): Fn[]
   // and ZERO constant references, and `git show 0dca6beb1` shows the SQL was
   // already inline at the SHA the paragraph cites. Their second write is the
   // `ensureSyncStateRow(...)` CALL, invisible for the reason this paragraph is
-  // actually about — call tokens are OFF inside `db/`. So resolving constants
+  // actually about — call tokens were OFF inside `db/`. So resolving constants
   // does NOT close these two; BACKLOG-3226 still owns them. The sentence is
   // corrected rather than deleted because a known-false comment left in place
   // is worse than the defect it describes.
   //
-  // So the scoped-out decision is a FLOOR, not a proof of absence, and the floor
-  // has a measured size. Not adopted here — eight new dispositions inside the
-  // write-densest directory in the repo is its own task, and SR ruled it comes
-  // back for review rather than being absorbed.
+  // So the scoped-out decision was a FLOOR, not a proof of absence, and the floor
+  // had a measured size. Not adopted at the time — eight new dispositions inside
+  // the write-densest directory in the repo was its own task (now BACKLOG-4014).
   //
   // SO THIS IS A FLOOR WITH A MEASURED SIZE, NOT A PROOF OF ABSENCE. SR
   // decomposed the eight and they are real, not artifacts of the uniform rule:
@@ -1073,7 +1113,7 @@ function unitsInFile(rel: string, lines: string[], dbWriters: Set<string>): Fn[]
   // decision as "nothing is there".
   //
   // UPDATED BY BACKLOG-3226 — measured with call tokens ON in `db/` (the one-line
-  // flip of `inDbLayer` below), real driver. At `205144a0b`, before the fix, the
+  // flip of the old `inDbLayer` gate), real driver. At `205144a0b`, before the fix, the
   // set was eight units, a different eight from the list above:
   // communicationDbService.ts createCommunicationReference (:808) and
   // createThreadCommunicationReferenceSync (:1102); emailSyncStateService.ts
@@ -1093,10 +1133,8 @@ function unitsInFile(rel: string, lines: string[], dbWriters: Set<string>): Fn[]
   // an empty transaction in the seam; the fix plus a swallowed count error) ALSO
   // clear that unit. What guards the two seams instead is the real-driver suite
   // `communicationDbService.threadCountAtomicity-3226.test.ts`. So BACKLOG-3226
-  // does NOT carry the rule change; it is its own item, for its own SR ruling.
-  const isDbWriterCall = inDbLayer
-    ? null
-    : (name: string) => dbWriters.has(name) || localWriters.has(name);
+  // did NOT carry the rule change; it became BACKLOG-4014 (top of this block).
+  const isDbWriterCall = (name: string): boolean => dbWriters.has(name) || localWriters.has(name);
 
   const found: Fn[] = [];
   for (let i = 0; i < lines.length; i++) {
@@ -1653,7 +1691,7 @@ function braceDepths(src: string): number[] {
  * BACKLOG-2569 gave: two heuristics over two different views of one body is how
  * `updateContactRole` was silently cleared.
  *
- * A write is a raw SQL statement, or — outside `db/` — a CALL to a db-layer
+ * A write is a raw SQL statement, or a CALL to a db-layer
  * writer. `selfName` is stripped so a function never counts its own declaration
  * line or its own recursion: `export function createLink(` matches
  * `\bcreateLink\s*\(`.
@@ -2749,8 +2787,9 @@ export function backfillContactEmailsSync(
     const before = writersFrom(decls, false);
     const after = writersFrom(decls);
 
-    // NOT `electron/services/db/...`: inside `db/` the raw-SQL rule stands and
-    // call tokens are OFF, which would make every assertion below vacuous.
+    // A handler path, because the transcribed caller is a handler. (Written
+    // when call tokens were OFF inside `db/`, which would have made every
+    // assertion below vacuous there; BACKLOG-4014 turned them on.)
     const rel = "electron/handlers/contactHandlers.ts";
     const lines = CALLER_COMPOSING_THE_TWINS.split("\n");
     const unitsBefore = unitsInFile(rel, lines, before);
@@ -2781,6 +2820,106 @@ export function backfillContactEmailsSync(
 
     expect(offenders(unitsBefore)).toEqual([]);
     expect(offenders(unitsAfter)).toEqual(["ipc:contacts:create"]);
+  });
+});
+
+/**
+ * ===========================================================================
+ * BACKLOG-4014 — CALL TOKENS COUNT INSIDE `db/` TOO
+ * ===========================================================================
+ * Before this item, `unitsInFile` turned call-token counting OFF for any file
+ * under `electron/services/db/`, so a db-layer function that issued one raw
+ * write and then CALLED a second writer (a db writer, or a non-exported helper
+ * in the same file that writes) counted ONE write and could never be reported.
+ * Measured against the unchanged guard with the fixture below: 1 write and 0
+ * offenders for the two-write function.
+ *
+ * TRANSCRIBED, NOT INVENTED. `electron/services/db/communicationDbService.ts`
+ * @ `4512ba619`: `deleteCommunicationByThreadSync` VERBATIM from `:1166-1179`
+ * and `updateTransactionThreadCountInternal` reduced to its write
+ * (`:1395-1399`; the count read is dropped — a reduction is a claim that the
+ * read does not matter to the write count); plus `linkMessageToTransaction`
+ * VERBATIM from `electron/services/db/messageDbService.ts:339-345`, a real
+ * one-write db writer. The path is a db/ path on purpose: that is the branch
+ * under test.
+ *
+ * Two directions, because a count alone cannot separate a fix from a regression:
+ *   - the two-write function IS reported (catches the `inDbLayer` gate coming
+ *     back);
+ *   - the ONE-write exported writer is NOT reported. Its declaration line
+ *     `export function linkMessageToTransaction(` matches its own call
+ *     pattern, and the name is a real db writer, so without the `selfName`
+ *     strip in `writeOffsets` it counts 2 and reads as a false offender.
+ */
+describe("call tokens count inside db/ (BACKLOG-4014)", () => {
+  const DB_FILE_WITH_LOCAL_HELPER = `
+export function deleteCommunicationByThreadSync(
+  threadId: string,
+  transactionId: string,
+): void {
+  const statement = sql\`
+    DELETE FROM communications
+    WHERE thread_id = ? AND transaction_id = ?
+  \`;
+  dbRun(statement, [threadId, transactionId]);
+
+  // BACKLOG-396: Thread-based unlinking is always for text messages, update count
+  updateTransactionThreadCountInternal(transactionId);
+}
+
+export function linkMessageToTransaction(messageId: string, transactionId: string): void {
+  const db = ensureDb();
+  db.prepare(\`UPDATE messages SET transaction_id = ? WHERE id = ?\`).run(
+    transactionId,
+    messageId
+  );
+}
+
+function updateTransactionThreadCountInternal(transactionId: string): void {
+  const statement = sql\`UPDATE transactions SET text_thread_count = ? WHERE id = ?\`;
+  dbRun(statement, [threadCount, transactionId]);
+}
+`;
+
+  const offenders = (units: Fn[]): string[] =>
+    units
+      .filter((u) => unitWrites(u).length >= 2)
+      .filter((u) => !wrapsItself(u.body))
+      .filter((u) => !writesAreBranchExclusive(u.body, u.isDbWriterCall, u.name))
+      .map((u) => u.name);
+
+  it("a raw write plus a call to a local writing helper is TWO writes in db/, and is reported", () => {
+    const units = unitsInFile(
+      "electron/services/db/fixture4014.ts",
+      DB_FILE_WITH_LOCAL_HELPER.split("\n"),
+      dbLayerWriters()
+    );
+    // PRECONDITION: the enumerator sees both exported units (the helper is not
+    // exported, so it is not a unit of its own).
+    expect(units.map((u) => u.name)).toEqual([
+      "deleteCommunicationByThreadSync",
+      "linkMessageToTransaction",
+    ]);
+    const two = units.find((u) => u.name === "deleteCommunicationByThreadSync") as Fn;
+    expect(unitWrites(two).map((w) => w.label)).toEqual([
+      "<sql>",
+      "updateTransactionThreadCountInternal",
+    ]);
+    expect(offenders(units)).toEqual(["deleteCommunicationByThreadSync"]);
+  });
+
+  it("a one-write db writer does NOT count its own declaration line (selfName strip)", () => {
+    const units = unitsInFile(
+      "electron/services/db/fixture4014.ts",
+      DB_FILE_WITH_LOCAL_HELPER.split("\n"),
+      dbLayerWriters()
+    );
+    // PRECONDITION for the strip to matter: the name IS a real db writer, so
+    // its declaration line would match without the strip.
+    expect(dbLayerWriters().has("linkMessageToTransaction")).toBe(true);
+    const one = units.find((u) => u.name === "linkMessageToTransaction") as Fn;
+    expect(unitWrites(one).map((w) => w.label)).toEqual(["<sql>"]);
+    expect(offenders(units)).not.toContain("linkMessageToTransaction");
   });
 });
 
