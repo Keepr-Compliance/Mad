@@ -104,7 +104,7 @@ if (argv.includes("--write")) {
   } catch (error) {
     fail(`--assets is not JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (!Array.isArray(assets) || assets.length === 0) fail("--assets is empty — nothing was attached, or the input is wrong");
+  if (!Array.isArray(assets)) fail("--assets must be a JSON array");
   const attached = new Set(assets.map((a) => (typeof a === "string" ? a : a?.name)).filter(Boolean));
   const names = advertised(body);
   if (names.length !== 3) fail(`expected 3 advertised downloads in the body, found ${names.length}: ${JSON.stringify(names)}`);
