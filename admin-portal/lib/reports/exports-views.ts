@@ -28,6 +28,7 @@ import {
   type ResolvedPeriodLike,
   type StoredViewPeriod,
 } from './view-period';
+import { parseViewAccess, viewAccessFields, type SharedViewFields } from './saved-view-access';
 
 export const EXPORTS_REPORT_KEY = 'exports';
 
@@ -101,7 +102,8 @@ export function parseExportMetric(raw: unknown): ExportViewMetric {
   return col ? { col, fn: 'count' } : { ...EXPORT_FALLBACK_METRIC };
 }
 
-export interface ExportSavedView {
+/** BACKLOG-4087: `SharedViewFields` = the caller's access (saved-view-access.ts). */
+export interface ExportSavedView extends SharedViewFields {
   id: string;
   name: string;
   filters: ExportFilters;
@@ -117,13 +119,15 @@ export function parseExportSavedView(raw: unknown): ExportSavedView | null {
   if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const row = raw as Record<string, unknown>;
   if (typeof row.id !== 'string' || row.id.length === 0) return null;
+  const access = parseViewAccess(row);
   return {
     id: row.id,
     name: typeof row.name === 'string' && row.name.length > 0 ? row.name : 'Untitled view',
     filters: parseExportFilters(row.filters),
     metric: parseExportMetric(row.metric),
-    pinned: row.pinned === true,
-    isDefault: row.is_default === true,
+    pinned: access.pinned,
+    isDefault: access.isDefault,
+    ...viewAccessFields(access),
     period: parseViewPeriod(
       row.filters != null && typeof row.filters === 'object'
         ? (row.filters as Record<string, unknown>).period

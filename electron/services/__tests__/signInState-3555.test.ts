@@ -9,6 +9,9 @@ jest.mock("../sessionService", () => ({
   default: { saveSession: (...a: unknown[]) => mockSaveSession(...a) },
 }));
 
+// BACKLOG-3322: a failed write is retried with the SDK's tokens; none here, so one wait then stop.
+jest.mock("../supabaseService", () => ({ __esModule: true, default: { getAuthSession: jest.fn(async () => null) } }));
+
 const mockLogWarn = jest.fn();
 jest.mock("../logService", () => ({
   __esModule: true,
@@ -60,7 +63,8 @@ describe("signInState (BACKLOG-3555)", () => {
     mockSaveSession.mockResolvedValueOnce(true);
     setPendingDeepLinkUser(USER);
     await expect(saveSignInSession(DATA)).resolves.toBe(true);
-    expect(mockSaveSession).toHaveBeenCalledWith(DATA, { endsSignInWait: true });
+    // BACKLOG-3322: the exact options, so a write that drops endsSignInWait or the in-lock stop check reds here.
+    expect(mockSaveSession).toHaveBeenCalledWith(DATA, { endsSignInWait: true, proceed: expect.any(Function) });
     expect(isSignInAwaitingSessionWrite()).toBe(false);
   });
 
@@ -86,8 +90,10 @@ describe("signInState (BACKLOG-3555)", () => {
       expect(SIGN_IN_WRITE_OVERDUE_MS).toBe(60_000);
       mockSaveSession.mockResolvedValue(false);
       setPendingDeepLinkUser(USER);
-      await saveSignInSession(DATA); // the persist failed: flag stays set
-      jest.advanceTimersByTime(SIGN_IN_WRITE_OVERDUE_MS - 1);
+      const p = saveSignInSession(DATA); // the persist failed: flag stays set
+      await jest.advanceTimersByTimeAsync(500); // one retry wait; no SDK tokens -> stop
+      await p;
+      jest.advanceTimersByTime(SIGN_IN_WRITE_OVERDUE_MS - 1 - 500);
       expect(mockLogWarn).not.toHaveBeenCalled();
       expect(mockCaptureMessage).not.toHaveBeenCalled();
       jest.advanceTimersByTime(1);

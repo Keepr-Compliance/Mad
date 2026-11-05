@@ -1,5 +1,6 @@
-import { getAuthenticatedUser } from '@/lib/supabase/server';
-import { redirect } from 'next/navigation';
+import { requireReportAccess } from '@/lib/reports/report-gate';
+import { ReportAccessProvider } from '@/lib/reports/report-access-context';
+import { ReportShareButton } from '@/components/reports/ReportShareButton';
 import Link from 'next/link';
 import { ChevronLeft, MessageSquare } from 'lucide-react';
 import { getSyncRuns, RUN_LIMIT } from '@/lib/reports/iphone-sync-queries';
@@ -29,17 +30,7 @@ export default async function GoogleMessagesSyncReportPage({
 }: {
   searchParams: Promise<ParamRecord>;
 }) {
-  const { supabase, user } = await getAuthenticatedUser();
-  if (!user) redirect('/login');
-
-  const { data: internalRole } = await supabase.from('internal_roles').select('role_id').eq('user_id', user.id).single();
-  if (!internalRole) redirect('/login?error=not_authorized');
-
-  const { data: hasPerm } = await supabase.rpc('has_permission', {
-    check_user_id: user.id,
-    required_permission: 'analytics.view',
-  });
-  if (!hasPerm) redirect('/dashboard?error=insufficient_permissions');
+  const { supabase, access } = await requireReportAccess(GM_SYNC_REPORT_KEY);
 
   const params = await searchParams;
   // A bare URL opens the user's default view (filters + time range); any period
@@ -64,38 +55,43 @@ export default async function GoogleMessagesSyncReportPage({
   const report = buildGoogleMessagesSyncReport(rows, users);
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      <div>
-        <Link href={REPORTS_BASE_PATH} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900">
-          <ChevronLeft className="h-4 w-4" />
-          All reports
-        </Link>
-        <div className="mt-2 flex items-center gap-3">
-          <MessageSquare className="h-7 w-7 text-primary-600" />
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Google Messages Sync Performance</h1>
-            <p className="text-sm text-gray-500">
-              Every Google Messages Sync that finished in the selected period: time per stage, chats, messages and why
-              a run did not complete. Dev builds are left out; a Sync still running is not counted.
-            </p>
+    <ReportAccessProvider reportKey={GM_SYNC_REPORT_KEY} title="Google Messages Sync Performance" access={access}>
+      <div className="max-w-7xl mx-auto space-y-6">
+        <div>
+          <Link href={REPORTS_BASE_PATH} className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900">
+            <ChevronLeft className="h-4 w-4" />
+            All reports
+          </Link>
+          <div className="mt-2 flex items-center gap-3">
+            <MessageSquare className="h-7 w-7 text-primary-600" />
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Google Messages Sync Performance</h1>
+              <p className="text-sm text-gray-500">
+                Every Google Messages Sync that finished in the selected period: time per stage, chats, messages and why
+                a run did not complete. Dev builds are left out; a Sync still running is not counted.
+              </p>
+            </div>
+            <div className="ml-auto">
+              <ReportShareButton />
+            </div>
           </div>
         </div>
+
+        {failed ? (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-5 text-sm text-amber-900">
+            The sync data could not be read. This is a query failure, not an empty table — the numbers below are not a
+            true zero.
+          </div>
+        ) : null}
+
+        <GoogleMessagesSyncReportClient
+          report={report}
+          period={period}
+          truncated={truncated}
+          rowCap={RUN_LIMIT}
+          initialView={initialView}
+        />
       </div>
-
-      {failed ? (
-        <div className="rounded-lg border border-amber-300 bg-amber-50 p-5 text-sm text-amber-900">
-          The sync data could not be read. This is a query failure, not an empty table — the numbers below are not a
-          true zero.
-        </div>
-      ) : null}
-
-      <GoogleMessagesSyncReportClient
-        report={report}
-        period={period}
-        truncated={truncated}
-        rowCap={RUN_LIMIT}
-        initialView={initialView}
-      />
-    </div>
+    </ReportAccessProvider>
   );
 }

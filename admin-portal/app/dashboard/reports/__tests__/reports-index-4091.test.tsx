@@ -53,7 +53,11 @@ vi.mock('@/lib/supabase/server', () => ({
     const single = (data: unknown) => ({ select: () => ({ eq: () => ({ single: async () => ({ data, error: null }) }) }) });
     return {
       user: { id: 'u-1' },
-      supabase: { rpc: async () => ({ data: true, error: null }), from: () => single({ role_id: 'r1' }) },
+      supabase: { rpc: async (fn: string) =>
+          // BACKLOG-4144: an owner's list = every registry report.
+          fn === 'report_list_my_reports'
+            ? { data: (await import('@/lib/reports/registry')).REPORTS.map((r) => ({ report_key: r.slug, access: 'owner' })), error: null }
+            : { data: true, error: null }, from: () => single({ role_id: 'r1' }) },
     };
   },
 }));
@@ -291,7 +295,8 @@ describe('T9 the gate stays in page.tsx', () => {
 
   it('page.tsx keeps the gate before it reads the view', () => {
     const src = readFileSync(path.join(ROOT, 'app/dashboard/reports/page.tsx'), 'utf8');
-    const gate = src.indexOf("redirect('/dashboard?error=insufficient_permissions')");
+    // BACKLOG-4144: the gate is report_list_my_reports through requireMyReports().
+    const gate = src.indexOf('await requireMyReports()');
     expect(gate).toBeGreaterThan(-1);
     expect(src.indexOf('await searchParams')).toBeGreaterThan(gate);
   });

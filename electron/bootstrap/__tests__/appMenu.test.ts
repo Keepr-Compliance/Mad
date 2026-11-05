@@ -102,7 +102,8 @@ describe("every BrowserWindow sets devTools from the policy", () => {
       });
       windows += n;
     }
-    expect(windows).toBeGreaterThanOrEqual(9);
+    // 7 since BACKLOG-4103 removed the two in-app OAuth login windows.
+    expect(windows).toBeGreaterThanOrEqual(7);
   });
   it("main.ts installs the menu before the first createWindow()", () => {
     const src = fs.readFileSync(path.join(__dirname, "../../main.ts"), "utf8");

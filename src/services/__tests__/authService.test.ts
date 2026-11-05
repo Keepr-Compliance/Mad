@@ -31,10 +31,6 @@ import type { User, Subscription } from "@/types";
 // ============================================
 
 // Mock functions for window.api.auth methods
-const mockGoogleLogin = jest.fn();
-const mockGoogleCompleteLogin = jest.fn();
-const mockMicrosoftLogin = jest.fn();
-const mockMicrosoftCompleteLogin = jest.fn();
 const mockCompletePendingLogin = jest.fn();
 const mockLogout = jest.fn();
 const mockValidateSession = jest.fn();
@@ -53,10 +49,6 @@ beforeAll(() => {
   Object.defineProperty(window, "api", {
     value: {
       auth: {
-        googleLogin: mockGoogleLogin,
-        googleCompleteLogin: mockGoogleCompleteLogin,
-        microsoftLogin: mockMicrosoftLogin,
-        microsoftCompleteLogin: mockMicrosoftCompleteLogin,
         completePendingLogin: mockCompletePendingLogin,
         logout: mockLogout,
         validateSession: mockValidateSession,
@@ -116,163 +108,6 @@ const mockSessionToken = "session-token-abc123";
 // ============================================
 
 describe("authService", () => {
-  describe("googleLogin", () => {
-    it("should return success with authUrl when login succeeds", async () => {
-      const authUrl = "https://accounts.google.com/oauth/authorize?...";
-      mockGoogleLogin.mockResolvedValue({ success: true, authUrl });
-
-      const result = await authService.googleLogin();
-
-      expect(result.success).toBe(true);
-      expect(result.data?.authUrl).toBe(authUrl);
-      expect(mockGoogleLogin).toHaveBeenCalledTimes(1);
-    });
-
-    it("should return error when API returns failure", async () => {
-      mockGoogleLogin.mockResolvedValue({ success: false, error: "OAuth failed" });
-
-      const result = await authService.googleLogin();
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("OAuth failed");
-    });
-
-    it("should catch and return error when API throws exception", async () => {
-      mockGoogleLogin.mockRejectedValue(new Error("Network error"));
-
-      const result = await authService.googleLogin();
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Network error");
-    });
-  });
-
-  describe("googleCompleteLogin", () => {
-    it("should return LoginResult on successful completion", async () => {
-      mockGoogleCompleteLogin.mockResolvedValue({
-        success: true,
-        user: mockUser,
-        sessionToken: mockSessionToken,
-        subscription: mockSubscription,
-        isNewUser: false,
-      });
-
-      const result = await authService.googleCompleteLogin("auth-code-123");
-
-      expect(result.success).toBe(true);
-      expect(result.data?.user).toEqual(mockUser);
-      expect(result.data?.sessionToken).toBe(mockSessionToken);
-      expect(result.data?.subscription).toEqual(mockSubscription);
-      expect(result.data?.isNewUser).toBe(false);
-      expect(mockGoogleCompleteLogin).toHaveBeenCalledWith("auth-code-123");
-    });
-
-    it("should return error when API returns failure", async () => {
-      mockGoogleCompleteLogin.mockResolvedValue({ success: false, error: "Invalid code" });
-
-      const result = await authService.googleCompleteLogin("invalid-code");
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Invalid code");
-    });
-
-    it("should return 'Login failed' when success but missing user/sessionToken", async () => {
-      mockGoogleCompleteLogin.mockResolvedValue({ success: true }); // Missing user/sessionToken
-
-      const result = await authService.googleCompleteLogin("code");
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Login failed");
-    });
-
-    it("should catch and return error when API throws exception", async () => {
-      mockGoogleCompleteLogin.mockRejectedValue(new Error("Token exchange failed"));
-
-      const result = await authService.googleCompleteLogin("code");
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Token exchange failed");
-    });
-  });
-
-  describe("microsoftLogin", () => {
-    it("should return success with authUrl when login succeeds", async () => {
-      const authUrl = "https://login.microsoftonline.com/oauth/authorize?...";
-      mockMicrosoftLogin.mockResolvedValue({ success: true, authUrl });
-
-      const result = await authService.microsoftLogin();
-
-      expect(result.success).toBe(true);
-      expect(result.data?.authUrl).toBe(authUrl);
-      expect(mockMicrosoftLogin).toHaveBeenCalledTimes(1);
-    });
-
-    it("should return error when API returns failure", async () => {
-      mockMicrosoftLogin.mockResolvedValue({ success: false, error: "Azure AD error" });
-
-      const result = await authService.microsoftLogin();
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Azure AD error");
-    });
-
-    it("should catch and return error when API throws exception", async () => {
-      mockMicrosoftLogin.mockRejectedValue(new Error("Connection timeout"));
-
-      const result = await authService.microsoftLogin();
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Connection timeout");
-    });
-  });
-
-  describe("microsoftCompleteLogin", () => {
-    it("should return LoginResult on successful completion", async () => {
-      mockMicrosoftCompleteLogin.mockResolvedValue({
-        success: true,
-        user: mockUser,
-        sessionToken: mockSessionToken,
-        subscription: mockSubscription,
-        isNewUser: true,
-      });
-
-      const result = await authService.microsoftCompleteLogin("ms-auth-code");
-
-      expect(result.success).toBe(true);
-      expect(result.data?.user).toEqual(mockUser);
-      expect(result.data?.sessionToken).toBe(mockSessionToken);
-      expect(result.data?.isNewUser).toBe(true);
-      expect(mockMicrosoftCompleteLogin).toHaveBeenCalledWith("ms-auth-code");
-    });
-
-    it("should return error when API returns failure", async () => {
-      mockMicrosoftCompleteLogin.mockResolvedValue({ success: false, error: "Token expired" });
-
-      const result = await authService.microsoftCompleteLogin("expired-code");
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Token expired");
-    });
-
-    it("should return 'Login failed' when success but missing required fields", async () => {
-      mockMicrosoftCompleteLogin.mockResolvedValue({ success: true, user: mockUser }); // Missing sessionToken
-
-      const result = await authService.microsoftCompleteLogin("code");
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Login failed");
-    });
-
-    it("should catch and return error when API throws exception", async () => {
-      mockMicrosoftCompleteLogin.mockRejectedValue(new Error("Graph API error"));
-
-      const result = await authService.microsoftCompleteLogin("code");
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Graph API error");
-    });
-  });
-
   describe("completePendingLogin", () => {
     const mockOAuthData = { provider: "google", tokens: { access_token: "abc" } };
 

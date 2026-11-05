@@ -36,9 +36,10 @@
  * `handleCompletePendingLogin` end to end with only its edges mocked. The rest
  * drive `provisionLogin` directly.
  *
- * `handleGoogleLogin` and `handleMicrosoftLogin` sit behind the OAuth window and
- * the code exchange and are NOT driven end to end by this file. They are covered
- * only through `provisionLogin` (H3/H4 are their shape). Stated, not implied.
+ * The in-app OAuth-window handlers (`handleGoogleLogin`, `handleMicrosoftLogin`)
+ * that H3/H4 used to stand in for were deleted by BACKLOG-4103. The only
+ * remaining production caller of `provisionLogin` is `handleCompletePendingLogin`
+ * (sharedAuthHandlers.ts); the deep link uses `provisionDeepLinkSignIn`.
  *
  * ---------------------------------------------------------------------------
  * MUTATIONS THAT MAKE IT RED (run at adoption; re-run before recommending)

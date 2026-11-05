@@ -24,6 +24,7 @@ import type { createServiceClient } from '@/lib/supabase/service';
 import {
   ROW_PRIORITY,
   agentPlanState,
+  isTrialOverride,
   overrideEffective,
   pickAgentRow,
   type AgentPlanState,
@@ -54,6 +55,13 @@ export interface AgentPlanView {
   override: UnlimitedOverride | undefined;
   /** support_grant only: the grant still gives Unlimited. When false the page shows "contact support". */
   supportGrantEffective: boolean;
+  /** BACKLOG-3860, state 'trial' only: the trial override's paid_through (when the trial ends). */
+  trialEndsOn: string | null;
+  /**
+   * BACKLOG-3860, state 'none' only: the paid_through of an ENDED trial override, for the
+   * "Free trial ended" line. A view hint, never a state; gone once a Stripe grant replaces it.
+   */
+  trialEndedOn: string | null;
   suspended: boolean;
   /** A mirror row is `incomplete`: a Checkout payment failed or was abandoned. Does not change `state` or `row`. */
   paymentIncomplete: boolean;
@@ -100,13 +108,17 @@ export async function getAgentPlanView(
     .limit(1);
   if (lErr) throw new Error(`licenses read failed: ${lErr.message}`);
 
-  const state = agentPlanState(row, override);
+  const state = agentPlanState(row, override, now);
+  const trialPaidThrough =
+    isTrialOverride(override) && typeof override?.paid_through === 'string' ? override.paid_through : null;
   return {
     state,
     row,
     personalOrganizationId: org?.id ?? null,
     override,
     supportGrantEffective: state === 'support_grant' && overrideEffective(override ?? null, now),
+    trialEndsOn: state === 'trial' ? trialPaidThrough : null,
+    trialEndedOn: state === 'none' ? trialPaidThrough : null,
     suspended: Array.isArray(susp) && susp.length > 0,
     paymentIncomplete,
   };
