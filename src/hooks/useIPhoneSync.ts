@@ -233,6 +233,14 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   const [installDriverError, setInstallDriverError] = useState<string | null>(null);
   // BACKLOG-3816: Sync / Try Again is being prepared (not yet handed to main, not refused).
   const [isStarting, setIsStarting] = useState(false);
+  // BACKLOG-4116: Cancel clears main's "running" flags at once while the cancelled backup is
+  // still stopping, and main refuses a new start until it has. The cancelled run's own
+  // sync:start request returns when the stop is done, so Sync waits for that reply.
+  const [isStopping, setIsStopping] = useState(false);
+  /** BACKLOG-4116: the sync:start request awaiting its reply (null = none). */
+  const pendingStartRef = useRef<object | null>(null);
+  /** BACKLOG-4116: the request Cancel is waiting on; its reply ends isStopping. */
+  const stoppingStartRef = useRef<object | null>(null);
   // BACKLOG-3816: the hold after a dropped connection / refused backup service. Not reset by
   // cancelSync or dismissSync: Close calls cancelSync, and reopening must not skip the hold.
   const [retryAvailableAt, setRetryAvailableAt] = useState<number | null>(null);
@@ -1273,6 +1281,8 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       }
     };
 
+    const startRequest = {};
+    pendingStartRef.current = startRequest;
     try {
       logger.info("[useIPhoneSync] Starting sync for device:", device.udid);
 
@@ -1314,6 +1324,13 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
       }
       logger.error("[useIPhoneSync] Sync error:", errorMessage);
       failStart(errorMessage);
+    } finally {
+      // BACKLOG-4116: this request has its reply, whichever path it took.
+      if (pendingStartRef.current === startRequest) pendingStartRef.current = null;
+      if (stoppingStartRef.current === startRequest) {
+        stoppingStartRef.current = null;
+        setIsStopping(false);
+      }
     }
   }, [device, isWindows, armRetryCooldown]);
 
@@ -1338,6 +1355,11 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
   const cancelSync = useCallback(async (trigger: SyncCancelTrigger) => {
     logger.info("[useIPhoneSync] Cancelling sync", { trigger });
     syncStateRef.isActive = false;
+    // BACKLOG-4116: only a request still awaiting its reply is still stopping in main.
+    if (pendingStartRef.current !== null) {
+      stoppingStartRef.current = pendingStartRef.current;
+      setIsStopping(true);
+    }
 
     try {
       const syncApi = window.api?.sync;
@@ -1535,6 +1557,7 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
     appleDevicesState,
     appleUsbDriver,
     isStarting,
+    isStopping,
     retryAvailableAt,
     startSync,
     cancelSync,

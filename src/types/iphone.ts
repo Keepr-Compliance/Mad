@@ -157,6 +157,8 @@ export interface ConnectionStatusProps {
   appleUsbDriver?: AppleUsbDriverState | null;
   /** BACKLOG-3816: the sync request is being prepared — the button shows "Getting ready…". */
   isStarting?: boolean;
+  /** BACKLOG-4116: a cancelled sync is still stopping — the button is disabled. */
+  isStopping?: boolean;
   /** BACKLOG-3816: epoch ms until which the Sync button stays disabled (hold after a failure). */
   retryAvailableAt?: number | null;
 }
@@ -264,6 +266,12 @@ export interface UseIPhoneSyncReturn {
    * handed to the main process or refused. The buttons show "Getting ready…".
    */
   isStarting: boolean;
+  /**
+   * BACKLOG-4116: Cancel was pressed while the sync's start request was still awaiting its
+   * reply; main refuses a new start until that request returns. Sync / Try Again stay
+   * disabled until then. Optional because several test doubles of the context predate it.
+   */
+  isStopping?: boolean;
   /**
    * BACKLOG-3816: epoch ms until which Sync / Try Again stay disabled, because the
    * last sync ended with the connection dropping or the phone's backup service

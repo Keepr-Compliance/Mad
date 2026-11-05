@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import { useIPhoneSyncContext } from "../../contexts/IPhoneSyncContext";
-import { ConnectionStatus } from "./ConnectionStatus";
+import { ConnectionStatus, STOPPING_PREVIOUS_SYNC_LABEL } from "./ConnectionStatus";
 import { SyncProgress } from "./SyncProgress";
 import { SyncLockBanner } from "../sync/SyncLockBanner";
 import logger from "../../utils/logger";
@@ -78,6 +78,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     dismissSync,
     checkSyncStatus,
     isStarting,
+    isStopping = false,
     retryAvailableAt,
   } = useIPhoneSyncContext();
   const retrySecondsLeft = useRetryCountdown(retryAvailableAt);
@@ -180,6 +181,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
           appleDevicesState={appleDevicesState}
           appleUsbDriver={appleUsbDriver}
           isStarting={isStarting}
+          isStopping={isStopping}
           retryAvailableAt={retryAvailableAt}
         />
       )}
@@ -378,10 +380,13 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
                   void cancelSync("try-again-no-device");
                 }
               }}
-              disabled={isStarting || retrySecondsLeft > 0}
+              disabled={isStarting || isStopping || retrySecondsLeft > 0}
               className="px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium rounded-lg hover:from-purple-600 hover:to-indigo-700 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
             >
-              <SyncStartButtonContent isStarting={isStarting} label="Try Again" />
+              <SyncStartButtonContent
+                isStarting={isStarting}
+                label={isStopping ? STOPPING_PREVIOUS_SYNC_LABEL : "Try Again"}
+              />
             </button>
           </div>
           <RetryCooldownNotice secondsLeft={retrySecondsLeft} />
