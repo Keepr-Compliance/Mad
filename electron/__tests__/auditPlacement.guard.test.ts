@@ -65,12 +65,14 @@ const AUDIT_SERVICE_FILE = "electron/services/auditService.ts";
  * Audit sites written with `auditService.log` today: 38 (BACKLOG-3339 plan,
  * pm_comments 7e81dd50, re-counted by this walk; 39 until the unused
  * `transactions:create` and `contacts:delete` channels were removed, then 37;
- * 38 since Settings "Export My Data" writes an entry). `log` calls plus
+ * 38 since Settings "Export My Data" writes an entry; 39 since the
+ * cloud-to-local phone type copy `user:sync-phone-type-from-cloud` writes one,
+ * BACKLOG-4030). `log` calls plus
  * `recordInTransaction` calls must add up to this. A conversion moves a site
  * from one side to the other; a NEW audited site changes the total and must
  * update this number on purpose.
  */
-const AUDITED_SITES_TOTAL = 38;
+const AUDITED_SITES_TOTAL = 39;
 
 type Reason = string;
 const R_REMOTE =

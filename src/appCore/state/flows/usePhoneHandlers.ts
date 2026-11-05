@@ -15,6 +15,7 @@
 import { useCallback, useMemo } from "react";
 import { authService } from "@/services";
 import type { AppStep, PendingOnboardingData } from "../types";
+import type { SavePhoneTypeResult } from "./usePhoneTypeApi";
 import type { PendingOAuthData } from "../../../components/Login";
 import { USE_NEW_ONBOARDING } from "../../routing/routeConfig";
 import logger from '../../../utils/logger';
@@ -33,7 +34,7 @@ export interface UsePhoneHandlersOptions {
   setSelectedPhoneType: (phoneType: "iphone" | "android" | null) => void;
   setHasSelectedPhoneType: (value: boolean) => void;
   setNeedsDriverSetup: (value: boolean) => void;
-  savePhoneType: (phoneType: "iphone" | "android") => Promise<boolean>;
+  savePhoneType: (phoneType: "iphone" | "android") => Promise<SavePhoneTypeResult>;
 
   // Email onboarding
   setHasCompletedEmailOnboarding: (value: boolean) => void;
@@ -85,8 +86,11 @@ export function usePhoneHandlers({
 
     if (!currentUserId) return;
 
-    const success = await savePhoneType("iphone");
-    if (success) {
+    const result = await savePhoneType("iphone");
+    // BACKLOG-4030: a cancelled local save stays on the phone-type step. The
+    // notice is already raised; nothing is queued as pending.
+    if (result.status === "local-cancelled") return;
+    if (result.status === "saved") {
       setHasSelectedPhoneType(true);
       // Windows flow: Phone Type -> Email -> Driver Setup -> Dashboard
       // macOS flow: Phone Type -> Email -> Secure Storage -> Permissions -> Dashboard
@@ -95,8 +99,9 @@ export function usePhoneHandlers({
         setCurrentStep("email-onboarding");
       }
     } else {
-      // DB not initialized (first-time macOS user after auth) - store in pending data
-      // and let OnboardingFlow handle navigation. DB will be initialized at secure-storage step.
+      // no-user / error: keep the answer in pending data and let OnboardingFlow
+      // handle navigation. (A closed DB is not this branch: savePhoneType
+      // returns "saved" and queues the answer in the state machine.)
       setSelectedPhoneType("iphone");
       setPendingOnboardingData((prev) => ({ ...prev, phoneType: "iphone" }));
       if (!USE_NEW_ONBOARDING) {
@@ -123,11 +128,13 @@ export function usePhoneHandlers({
 
     if (!currentUserId) return;
 
-    const success = await savePhoneType("android");
-    if (success) {
+    const result = await savePhoneType("android");
+    // BACKLOG-4030: a cancelled local save stays on the phone-type step.
+    if (result.status === "local-cancelled") return;
+    if (result.status === "saved") {
       setHasSelectedPhoneType(true);
     } else {
-      // DB not initialized — store in pending data, let OnboardingFlow handle navigation
+      // no-user / error — store in pending data, let OnboardingFlow handle navigation
       setSelectedPhoneType("android");
       setPendingOnboardingData((prev) => ({ ...prev, phoneType: "android" }));
     }
@@ -160,15 +167,17 @@ export function usePhoneHandlers({
 
     if (!currentUserId) return;
 
-    const success = await savePhoneType("android");
-    if (success) {
+    const result = await savePhoneType("android");
+    // BACKLOG-4030: a cancelled local save stays on the phone-type step.
+    if (result.status === "local-cancelled") return;
+    if (result.status === "saved") {
       setHasSelectedPhoneType(true);
       // When new onboarding is enabled, don't call setCurrentStep - let OnboardingFlow handle navigation
       if (!USE_NEW_ONBOARDING) {
         setCurrentStep("email-onboarding");
       }
     } else {
-      // DB not initialized (first-time macOS user after auth) - store in pending data
+      // no-user / error - store in pending data
       setSelectedPhoneType("android");
       setPendingOnboardingData((prev) => ({ ...prev, phoneType: "android" }));
       if (!USE_NEW_ONBOARDING) {
