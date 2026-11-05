@@ -388,11 +388,10 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // if the handlers had been left completely untouched (measured). That is
   // BACKLOG-3238.
 
-  // --- BACKLOG-2550 (critical, open): message link pointer vs junction ----
-  "electron/services/messageMatchingService.ts::autoLinkTextsToTransaction":
-    "BACKLOG-2550 @0dca6beb1 (:386, junction INSERT loop then one bulk messages UPDATE): junction rows with messages.transaction_id still NULL, so the message is re-offered as unlinked and the re-link is blocked only by the unique index",
-  "electron/services/messageMatchingService.ts::autoLinkEmailsToTransaction":
-    "BACKLOG-2550 @0dca6beb1 (:645, same shape on the email path): the pointer set with no junction row leaves the message invisible to every reader that joins through communications, while the messages table claims it is linked",
+  // --- BACKLOG-2550: message link pointer vs junction ----
+  // The two messageMatchingService.ts entries (autoLinkTextsToTransaction,
+  // autoLinkEmailsToTransaction) were removed with the functions themselves by
+  // BACKLOG-4039 / BACKLOG-3984 (dead, no renderer caller), not by a wrap.
   // `autoLinkService.ts::expandAttachedThreadsForUser` was removed by a
   // wrapper refactor, NOT by the link fix. Its "2 writes" were the wrapper's
   // two call sites of the non-exported helper `expandAttachedThreadsForUserOnce`
