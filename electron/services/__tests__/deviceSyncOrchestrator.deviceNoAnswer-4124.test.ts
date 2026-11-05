@@ -254,7 +254,8 @@ beforeEach(() => {
     if (r.kind !== "held") {
       void Promise.resolve().then(() => {
         if (r.kind === "stdout") {
-          proc.stdout.emit("data", Buffer.from(r.stdout));
+          // No chunk for empty stdout: a real child writes no data event for nothing.
+          if (r.stdout) proc.stdout.emit("data", Buffer.from(r.stdout));
           if (r.stderr) proc.stderr.emit("data", Buffer.from(r.stderr));
         }
         const code = r.kind === "stdout" ? (r.code ?? 0) : 0;
