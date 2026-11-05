@@ -37,6 +37,7 @@ import {
   MessageSquare,
   Shield,
   SlidersHorizontal,
+  Sparkle,
   Sparkles,
   User,
   Users,
@@ -50,6 +51,7 @@ import { visibleSettingsTabs } from "../../components/settings/settingsTabs";
 import { formatPlanLabel } from "../../components/settings/account/formatPlanLabel";
 import { useLicense } from "../../contexts/LicenseContext";
 import { useFeatureGate } from "../../hooks/useFeatureGate";
+import { useStrictFeatureState } from "../../hooks/useStrictFeatureState";
 import { useEscapeToClose } from "../../hooks/useEscapeToClose";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
 import { useCopyText } from "../../hooks/useCopyText";
@@ -66,6 +68,7 @@ export const SETTINGS_TAB_ICONS: Record<string, LucideIcon> = {
   "settings-email": Mail,
   "settings-messages": MessageSquare,
   "settings-contacts": Users,
+  "settings-learn": Sparkle,
   "settings-ai": Sparkles,
   "settings-security": Shield,
   "settings-data": Database,
@@ -171,7 +174,9 @@ const OpenAccountPanel = React.forwardRef<HTMLDivElement, OpenAccountPanelProps>
 ) {
   const { licenseType } = useLicense();
   const { isAllowed } = useFeatureGate();
-  const tabs = visibleSettingsTabs(isAllowed("ai_detection"));
+  // BACKLOG-4120: "Help Keepr learn" on the strict autodetect_eval read only.
+  const learnAvailable = useStrictFeatureState("autodetect_eval") === "allowed";
+  const tabs = visibleSettingsTabs(isAllowed("ai_detection"), learnAvailable);
   const { copied, copy } = useCopyText("AccountPanel");
   const planLabel = licenseType ? formatPlanLabel(licenseType) : "";
 
