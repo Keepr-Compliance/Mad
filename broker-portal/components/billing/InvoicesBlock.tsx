@@ -56,13 +56,13 @@ export function InvoicesBlock({ data }: { data?: InvoicesData }) {
                 const [label, hue] = STATUS[r.status];
                 return (
                   <tr key={r.id} data-billing-row={r.id} className="max-lg:grid max-lg:grid-cols-[1fr_auto] max-lg:items-center max-lg:gap-x-4 max-lg:gap-y-1 max-lg:py-3">
-                    <td className="whitespace-nowrap px-3 py-2 text-gray-900 max-lg:p-0">{formatUnixDay(r.created)}</td>
-                    <td className="whitespace-nowrap px-3 py-2 text-gray-700 max-lg:col-span-2 max-lg:whitespace-normal max-lg:p-0">{r.description}</td>
-                    <td className="whitespace-nowrap px-3 py-2 tabular-nums text-gray-700 max-lg:col-start-2 max-lg:row-start-1 max-lg:p-0 max-lg:text-right">{formatMoney(r.amountCents, r.currency)}</td>
-                    <td className="whitespace-nowrap px-3 py-2 max-lg:p-0">
+                    <td className="whitespace-nowrap px-3 py-2 text-gray-900 max-lg:col-start-1 max-lg:row-start-1 max-lg:p-0">{formatUnixDay(r.created)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-gray-700 max-lg:col-span-2 max-lg:row-start-2 max-lg:whitespace-normal max-lg:p-0">{r.description}</td>
+                    <td className="whitespace-nowrap px-3 py-2 tabular-nums text-gray-700 max-lg:col-span-2 max-lg:row-start-3 max-lg:p-0">{formatMoney(r.amountCents, r.currency)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 max-lg:col-start-2 max-lg:row-start-1 max-lg:justify-self-end max-lg:p-0 max-lg:text-right">
                       <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${hue}`}>{label}</span>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2 max-lg:p-0 max-lg:text-right">
+                    <td className="whitespace-nowrap px-3 py-2 max-lg:col-span-2 max-lg:row-start-4 max-lg:p-0">
                       {r.link ? (
                         <a className={`font-medium text-indigo-700 hover:underline ${TOUCH_LINK}`} href={r.link} target="_blank" rel="noopener noreferrer">
                           {r.linkLabel}

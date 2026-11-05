@@ -8,6 +8,8 @@
  */
 import { render, fireEvent, within } from '@testing-library/react';
 import React from 'react';
+import fs from 'fs';
+import path from 'path';
 
 jest.mock('next/navigation', () => ({ useRouter: () => ({ refresh: jest.fn(), push: jest.fn() }) }));
 jest.mock('next/link', () => ({
@@ -80,6 +82,66 @@ const BILLING: PersonalBillingData = {
   rows: SOLO,
   failedInvoice: null,
 };
+
+/**
+ * BACKLOG-4157: below lg the status pill sits on the date's line, right-aligned. jsdom has no layout,
+ * so "same line" is the grid placement: date and pill are cells of one row element, both pinned to
+ * grid row 1 (date in column 1, pill in column 2, pushed to the end); amount and actions are placed
+ * on later rows of their own. scripts/billing-phone-4139 measures the real rects in Chromium.
+ */
+const pillBesideDate = (row: Element, date: RegExp, pill: string, amount: RegExp) => {
+  const cells = [...row.children];
+  const dateCell = cells[0];
+  expect(dateCell.textContent).toMatch(date);
+  const pillCell = cells.find((c) => c.textContent === pill)!;
+  const amountCell = cells.find((c) => amount.test(c.textContent || ''))!;
+  expect(dateCell.parentElement).toBe(pillCell.parentElement);
+  expect(dateCell.parentElement).toBe(row);
+  expect(tok(dateCell)).toEqual(expect.arrayContaining(['max-lg:col-start-1', 'max-lg:row-start-1']));
+  expect(tok(pillCell)).toEqual(expect.arrayContaining(['max-lg:col-start-2', 'max-lg:row-start-1', 'max-lg:justify-self-end']));
+  for (const c of [amountCell]) {
+    expect(tok(c)).not.toContain('max-lg:row-start-1');
+    expect(tok(c)).toContain('max-lg:col-span-2');
+  }
+  // desktop: no placement class is width-independent, so the table columns are untouched
+  for (const c of cells) for (const t of tok(c)) expect(t).not.toMatch(/^(col-start|row-start|col-span|justify-self)-/);
+};
+
+describe('BACKLOG-4157 status pill beside the date; icon arrows', () => {
+  it('brokerage invoice row: Due / Paid pill is in the date row below lg', () => {
+    const { container } = render(<ManageBillingBlock invoices={ORG} />);
+    const rows = container.querySelectorAll('tr[data-org-invoice-row]');
+    expect(rows.length).toBe(2);
+    pillBesideDate(rows[0], /^\w{3} \d+, 2026$/, 'Due', /\$99\.96/);
+    pillBesideDate(rows[1], /^\w{3} \d+, 2026$/, 'Paid', /\$0\.00/);
+  });
+
+  it('solo receipt row: Paid pill is in the date row below lg', () => {
+    const { container } = render(<InvoicesBlock data={{ rows: SOLO, state: 'active' }} />);
+    const row = container.querySelector('tr[data-billing-row]')!;
+    pillBesideDate(row, /^\w{3} \d+, 2026$/, 'Paid', /\$19\.99/);
+  });
+
+  it('View all invoices and Manage billing: accessible name has no arrow character; the icon is aria-hidden', () => {
+    const { container } = render(<ManageBillingBlock invoices={ORG} />);
+    for (const [action, name] of [['view_all_invoices', 'View all invoices'], ['manage_billing', 'Manage billing']] as const) {
+      const el = (action === 'view_all_invoices' ? container.querySelector(`[data-billing-action="${action}"]`) : [...container.querySelectorAll('button')].find((b) => b.textContent === name))!;
+      expect(el).toBeTruthy();
+      expect(el.textContent).toBe(name);
+      expect(el.textContent).not.toMatch(/[\u2197\u2192\u2191\u279c]/);
+      const icon = el.querySelector('svg[data-billing-arrow]')!;
+      expect(icon).toBeTruthy();
+      expect(icon.getAttribute('aria-hidden')).toBe('true');
+    }
+  });
+
+  it('no arrow glyph is left in any billing component', () => {
+    const dir = path.join(__dirname, '../../components/billing');
+    for (const f of fs.readdirSync(dir).filter((x) => /\.tsx?$/.test(x))) {
+      expect([f, fs.readFileSync(path.join(dir, f), 'utf8').match(/[\u2190-\u21ff\u2794\u279c\u27a1]/g)]).toEqual([f, null]);
+    }
+  });
+});
 
 describe('BACKLOG-4139/4140 billing page below lg', () => {
   it('brokerage invoices stack below lg (not md); Pay, Download PDF, View all, guide link are 44 below lg only', () => {
