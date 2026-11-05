@@ -121,7 +121,7 @@ describe("BACKLOG-3951 C6: classifyMembershipStanding", () => {
     ["no rows", [], "none"],
     ["not an array (error result)", null, "error"],
     ["an object where a list was expected", { organization_id: "x" }, "error"],
-  ])("%s → %s", (_label, rows, expected) => {
+  ])("%s", (_label, rows, expected) => {
     expect(mod.classifyMembershipStanding(rows, U).standing).toBe(expected);
   });
 
