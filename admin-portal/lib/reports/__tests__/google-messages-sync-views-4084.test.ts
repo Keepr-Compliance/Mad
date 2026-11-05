@@ -54,6 +54,9 @@ describe('P2 parse', () => {
       filters: { types: ['retry'], outcomes: ['error'], platforms: ['darwin'], search: 'x' },
       period: { key: 'last-month' },
       isDefault: true,
+      // BACKLOG-4087: a row with no `access` (a database before sharing) is the user's own.
+      access: 'owner',
+      accessFromServer: false,
     });
   });
 

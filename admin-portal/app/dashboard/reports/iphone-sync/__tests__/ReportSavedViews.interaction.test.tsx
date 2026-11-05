@@ -484,6 +484,26 @@ describe('saving the current view', () => {
     expect(api.save).not.toHaveBeenCalled();
   });
 
+  // BACKLOG-4132: "Save current view" saves a view that is NOT a card, even at
+  // the pin cap, while "Save current view as a card" is still refused there.
+  it('4132 "Save current view" saves unpinned, even with five cards pinned', async () => {
+    const five = Array.from({ length: 5 }, (_, i) =>
+      row({ id: `v${i}`, name: `View ${i}`, pinned: true })
+    );
+    const api = fakeApi(five);
+    mount({ api });
+    openViews();
+    fireEvent.click(await screen.findByRole('button', { name: 'Save current view' }));
+    expect(screen.queryByRole('button', { name: /Save and pin/ })).toBeNull();
+    fireEvent.change(screen.getByLabelText('View name'), { target: { value: 'Just a view' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save view' }));
+    await waitFor(() => expect(api.save).toHaveBeenCalledTimes(1));
+    const payload = api.save.mock.calls[0][0];
+    expect(payload.name).toBe('Just a view');
+    expect(payload.pinned).toBe(false);
+    expect(payload.id ?? null).toBeNull();
+  });
+
   it('refuses a sixth card from the save form too', async () => {
     const five = Array.from({ length: 5 }, (_, i) =>
       row({ id: `v${i}`, name: `View ${i}`, pinned: true })
