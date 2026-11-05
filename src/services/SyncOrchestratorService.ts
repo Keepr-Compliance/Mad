@@ -24,7 +24,7 @@ import { DATA_EXPORT_NOT_RECORDED_MESSAGE } from '../utils/exportAuditCopy';
 // the renderer-main boundary.
 import type { AttachmentsRefusedForSpace } from '@electron/types/ipc/window-api-messages';
 import { macMessagesSyncOn } from './importSourcePolicy';
-import { formatGb, formatGbDirected } from '../utils/diskSpaceCopy';
+import { formatGbUp, formatGbDirected } from '../utils/diskSpaceCopy';
 
 export type SyncType = 'contacts' | 'emails' | 'messages' | 'iphone'
   | 'reindex' | 'backup' | 'restore' | 'ccpa-export'
@@ -962,7 +962,7 @@ class SyncOrchestratorServiceClass {
             const spaceWarning =
               refused.requiredBytes !== undefined && refused.headroomBytes !== undefined
                 ? `Attachments were not imported: they need ${formatGbDirected(refused.requiredBytes, Math.ceil)} of free space ` +
-                  `(${formatGb(refused.estimatedBytes)} for attachments plus ${formatGb(refused.headroomBytes)} kept free) ` +
+                  `(${formatGbUp(refused.estimatedBytes)} for attachments plus ${formatGbUp(refused.headroomBytes)} kept free) ` +
                   `but only ${formatGbDirected(refused.availableBytes, Math.floor)} is free. Messages imported normally.`
                 : `Attachments were not imported: they need ${attachGb.toFixed(1)} GB ` +
                   `but only ${haveGb.toFixed(1)} GB is free. Messages imported normally.`;

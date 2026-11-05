@@ -59,7 +59,7 @@ import { ResponsiveModal } from "../common/ResponsiveModal";
 // override list is the resolver's own type, so a new override kind becomes a
 // compile-time fact here rather than a silently-unrendered case.
 import type { ImportPlanOverride } from "@electron/types/ipc/window-api-messages";
-import { formatGb, describeAttachmentSpaceRefusal } from "../../utils/diskSpaceCopy";
+import { formatGbUp, describeAttachmentSpaceRefusal } from "../../utils/diskSpaceCopy";
 
 /**
  * Why the dialog is open.
@@ -476,7 +476,7 @@ export function ImportPlanDialog({
                 className="w-full px-3 py-2.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded transition-all"
               >
                 {verb} last {fittingWindow.lookbackMonths} months —{" "}
-                {formatGb(fittingWindow.attachmentBytes)}
+                {formatGbUp(fittingWindow.attachmentBytes)}
               </button>
             )}
 

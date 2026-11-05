@@ -153,7 +153,7 @@ describe('BACKLOG-2882 — the attachment refusal warning states the compared fi
     };
     const warning = (await runMessagesSync())?.warning ?? '';
     expect(warning).toContain('they need 2.2 GB of free space');
-    expect(warning).toContain('(39 MB for attachments plus 2.1 GB kept free)');
+    expect(warning).toContain('(39 MB for attachments plus 2.2 GB kept free)');
     expect(warning).toContain('only 1.3 GB is free');
     expect(warning).toContain('Messages imported normally.');
   });
