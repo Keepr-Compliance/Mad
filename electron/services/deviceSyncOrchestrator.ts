@@ -2171,11 +2171,20 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           // disk full) leaves nothing behind. A usable earlier backup is kept.
           await this.removeUnfinishedBackup(options.udid, mayRemoveUnfinishedBackup);
 
-          const isDiskSpaceError = /disk space|no space|ENOSPC|not enough space/i.test(error);
+          // BACKLOG-2950: decided on the classified code, not on the words of the
+          // user-facing sentence, so rewording the copy cannot silence this event.
+          const isDiskSpaceError = backupResult.errorCode === "INSUFFICIENT_SPACE";
           if (isDiskSpaceError) {
+            const deviceErrorCode = backupResult.failureCause?.deviceErrorCode;
             Sentry.captureMessage("Backup failed due to insufficient disk space", {
               level: "error",
-              tags: { service: "sync-orchestrator", failure_reason: "disk_space" },
+              tags: {
+                service: "sync-orchestrator",
+                failure_reason: "disk_space",
+                ...(typeof deviceErrorCode === "number"
+                  ? { device_error_code: String(deviceErrorCode) }
+                  : {}),
+              },
               extra: {
                 estimatedBackupSize: this.estimatedBackupSize,
                 error,

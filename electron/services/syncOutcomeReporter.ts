@@ -163,6 +163,14 @@ export function buildOutcomeTags(row: SyncOutcomeRow): Record<string, string> {
   );
   if (reason !== undefined) tags.reason_code = reason;
 
+  // BACKLOG-2950: the phone's own MBErrorDomain code (105 = host disk full, 208 =
+  // locked, ...), as a TAG so failures group and filter by it. Read from the SCRUBBED
+  // fields like every other tag. A number only: absent stays absent, never "0" or
+  // "undefined". The code is sent; the phone's description never is.
+  if (typeof safe.deviceErrorCode === "number") {
+    tags.device_error_code = String(safe.deviceErrorCode);
+  }
+
   return tags;
 }
 
