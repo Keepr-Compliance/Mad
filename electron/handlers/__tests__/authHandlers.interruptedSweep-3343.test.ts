@@ -65,7 +65,9 @@ describe("initializeDatabase runs the interrupted iPhone sync sweep (BACKLOG-334
     const { initializeDatabase, order } = setup(async () => ({ found: 0, recovered: 0, durationMs: 0 }));
     await initializeDatabase();
     order.push("init-resolved");
-    expect(order).toEqual(["db-open", "sweep-done", "audit-init", "init-resolved"]);
+    // BACKLOG-3340: the audit service is initialized straight after the database
+    // opens, before the sweep, so a browser sign-in in that window can write LOGIN.
+    expect(order).toEqual(["db-open", "audit-init", "sweep-done", "init-resolved"]);
   });
 
   it("O2 a sweep that throws is reported to Sentry and initialization still completes", async () => {
@@ -75,7 +77,7 @@ describe("initializeDatabase runs the interrupted iPhone sync sweep (BACKLOG-334
     sentry.captureException.mockClear();
     await expect(initializeDatabase()).resolves.toBeUndefined();
     expect(mockAuditInitialize).toHaveBeenCalledTimes(1);
-    expect(order).toEqual(["db-open", "sweep-done", "audit-init"]);
+    expect(order).toEqual(["db-open", "audit-init", "sweep-done"]);
     expect(sentry.captureException).toHaveBeenCalledWith(
       expect.objectContaining({ message: "injected marker read failure" }),
       expect.objectContaining({ tags: { area: "iphone-sync-recovery" } }),
