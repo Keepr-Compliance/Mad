@@ -1,3 +1,4 @@
+-- Run rollback-4144 before rollback-4087.
 -- BACKLOG-4087 rollback (keepr-test, or production with a go). Restores report_list_saved_views (4084
 -- body), report_save_view and report_delete_saved_view (3450 bodies) exactly as pg_get_functiondef
 -- printed them on keepr-test before the apply (md5 of each definition: list 08fc7184, save 8be16a22,

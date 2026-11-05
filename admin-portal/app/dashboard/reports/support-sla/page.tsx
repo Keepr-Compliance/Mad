@@ -1,5 +1,6 @@
-import { getAuthenticatedUser } from '@/lib/supabase/server';
-import { redirect } from 'next/navigation';
+import { requireReportAccess } from '@/lib/reports/report-gate';
+import { ReportAccessProvider } from '@/lib/reports/report-access-context';
+import { ReportShareButton } from '@/components/reports/ReportShareButton';
 import Link from 'next/link';
 import { ChevronLeft, LifeBuoy } from 'lucide-react';
 import {
@@ -26,7 +27,7 @@ export const dynamic = 'force-dynamic';
  * Support SLA report — Admin Portal (BACKLOG-3721)
  *
  * The former Support → Analytics screen, moved under Reports. Server
- * component: authorises (internal role + analytics.view), resolves the
+ * component: authorises (internal role + report access, BACKLOG-4144), resolves the
  * period, reads the period's tickets, the exact open count and the agents'
  * names through the authenticated client, and hands the built report to the
  * client shell. Every number comes from lib/reports/support-sla.ts
@@ -42,29 +43,7 @@ export default async function SupportSlaReportPage({
 }: {
   searchParams: Promise<ParamRecord>;
 }) {
-  const { supabase, user } = await getAuthenticatedUser();
-
-  if (!user) {
-    redirect('/login');
-  }
-
-  const { data: internalRole } = await supabase
-    .from('internal_roles')
-    .select('role_id')
-    .eq('user_id', user.id)
-    .single();
-
-  if (!internalRole) {
-    redirect('/login?error=not_authorized');
-  }
-
-  const { data: hasPerm } = await supabase.rpc('has_permission', {
-    check_user_id: user.id,
-    required_permission: 'analytics.view',
-  });
-  if (!hasPerm) {
-    redirect('/dashboard?error=insufficient_permissions');
-  }
+  const { supabase, access } = await requireReportAccess(SUPPORT_SLA_REPORT_KEY);
 
   const params = await searchParams;
   // A bare URL opens the user's default view (its time range); any period
@@ -91,52 +70,57 @@ export default async function SupportSlaReportPage({
     : buildSupportSlaReport(tickets.rows, users, period, openCount, { settings, now: new Date() });
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      <div>
-        <Link
-          href={REPORTS_BASE_PATH}
-          className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"
-        >
-          <ChevronLeft className="h-4 w-4" />
-          All reports
-        </Link>
-        <div className="mt-2 flex items-center gap-3">
-          <LifeBuoy className="h-7 w-7 text-primary-600" />
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Support SLA</h1>
-            <p className="text-sm text-gray-500">
-              How quickly support tickets got a first response and were resolved in the selected
-              period, overall and per agent.
-            </p>
+    <ReportAccessProvider reportKey={SUPPORT_SLA_REPORT_KEY} title="Support SLA" access={access}>
+      <div className="max-w-7xl mx-auto space-y-6">
+        <div>
+          <Link
+            href={REPORTS_BASE_PATH}
+            className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            All reports
+          </Link>
+          <div className="mt-2 flex items-center gap-3">
+            <LifeBuoy className="h-7 w-7 text-primary-600" />
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Support SLA</h1>
+              <p className="text-sm text-gray-500">
+                How quickly support tickets got a first response and were resolved in the selected
+                period, overall and per agent.
+              </p>
+            </div>
+            <div className="ml-auto">
+              <ReportShareButton />
+            </div>
           </div>
         </div>
+
+        {tickets.failed ? (
+          <div
+            data-notice="read-failed"
+            className="rounded-lg border border-amber-300 bg-amber-50 p-5 text-sm text-amber-900"
+          >
+            {READ_FAILED_MESSAGE}
+          </div>
+        ) : null}
+
+        {settings === null ? (
+          <div
+            data-notice="settings-read-failed"
+            className="rounded-lg border border-amber-300 bg-amber-50 p-5 text-sm text-amber-900"
+          >
+            {SLA_SETTINGS_READ_FAILED_MESSAGE}
+          </div>
+        ) : null}
+
+        <SupportSlaReportClient
+          report={report}
+          settings={settings}
+          period={period}
+          truncated={tickets.truncated}
+          rowCap={SUPPORT_TICKET_LIMIT}
+        />
       </div>
-
-      {tickets.failed ? (
-        <div
-          data-notice="read-failed"
-          className="rounded-lg border border-amber-300 bg-amber-50 p-5 text-sm text-amber-900"
-        >
-          {READ_FAILED_MESSAGE}
-        </div>
-      ) : null}
-
-      {settings === null ? (
-        <div
-          data-notice="settings-read-failed"
-          className="rounded-lg border border-amber-300 bg-amber-50 p-5 text-sm text-amber-900"
-        >
-          {SLA_SETTINGS_READ_FAILED_MESSAGE}
-        </div>
-      ) : null}
-
-      <SupportSlaReportClient
-        report={report}
-        settings={settings}
-        period={period}
-        truncated={tickets.truncated}
-        rowCap={SUPPORT_TICKET_LIMIT}
-      />
-    </div>
+    </ReportAccessProvider>
   );
 }

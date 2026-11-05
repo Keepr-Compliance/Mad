@@ -17,6 +17,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createShareApi, isMissingFunctionError, type ShareApi } from '../report-share-api';
 import { useReportViewSharing } from '../use-report-view-sharing';
+import { ReportAccessProvider } from '../report-access-context';
+import type { ReportAccess } from '../report-access';
+import type { ReactNode } from 'react';
 
 vi.mock('@/lib/supabase/client', () => ({ createClient: () => ({}) }));
 
@@ -141,13 +144,41 @@ function fakeShareApi(): ShareApi & { [K in keyof ShareApi]: ReturnType<typeof v
   } as never;
 }
 
-function mount(views: View[] | null, api: ShareApi | 'none' = fakeShareApi()) {
+// BACKLOG-4144: the open report's access. 'owner' keeps every 4087 case below as it was.
+function mount(views: View[] | null, api: ShareApi | 'none' = fakeShareApi(), access: ReportAccess | 'none' = 'owner') {
   const shareApi = api === 'none' ? undefined : api;
+  const wrapper =
+    access === 'none'
+      ? undefined
+      : ({ children }: { children: ReactNode }) => (
+          <ReportAccessProvider reportKey="user-activity" title="User Activity" access={access}>
+            {children}
+          </ReportAccessProvider>
+        );
   const write = vi.fn((op: () => Promise<unknown>) => void op().catch(() => undefined));
   const current = vi.fn(() => ({ filters: { orgs: ['Acme'] }, metric: { col: 'events', fn: 'count' } }));
-  const hook = renderHook(() => useReportViewSharing(shareApi, { views, write }, 'user-activity', current));
+  const hook = renderHook(() => useReportViewSharing(shareApi, { views, write }, 'user-activity', current), { wrapper });
   return { hook, write, current, shareApi };
 }
+
+describe('V1 (BACKLOG-4144) view Share follows the caller\'s report role', () => {
+  it('V1a a report VIEWER gets no Share; Leave and Update stay', () => {
+    const s = mount([OWN], fakeShareApi(), 'viewer').hook.result.current.sharing;
+    expect(s).toBeDefined();
+    expect(s!.onShare).toBeUndefined();
+    expect(typeof s!.onLeave).toBe('function');
+    expect(typeof s!.onUpdate).toBe('function');
+  });
+
+  it('V1b no report access in context (no provider): no Share', () => {
+    expect(mount([OWN], fakeShareApi(), 'none').hook.result.current.sharing?.onShare).toBeUndefined();
+  });
+
+  it('V1c an EDITOR and an OWNER get Share', () => {
+    expect(typeof mount([OWN], fakeShareApi(), 'editor').hook.result.current.sharing?.onShare).toBe('function');
+    expect(typeof mount([OWN], fakeShareApi(), 'owner').hook.result.current.sharing?.onShare).toBe('function');
+  });
+});
 
 describe('P5 sharing is offered only when the database has the share functions', () => {
   it('P5a rows from a database before sharing (no access field): no sharing', () => {
@@ -169,7 +200,7 @@ describe('P5 sharing is offered only when the database has the share functions',
     const api = fakeShareApi();
     api.candidates.mockRejectedValue({ code: 'PGRST202', message: 'Could not find the function public.report_share_candidates' });
     const { hook } = mount([OWN], api);
-    act(() => hook.result.current.sharing!.onShare(OWN));
+    act(() => hook.result.current.sharing!.onShare!(OWN));
     await waitFor(() => expect(hook.result.current.sharing).toBeUndefined());
   });
 });
@@ -178,7 +209,7 @@ describe('P6 the ShareDialog picker is fed by candidates only', () => {
   it('P6b Share opens the dialog with the candidates for THAT view', async () => {
     const { hook, shareApi } = mount([OWN]);
     expect(hook.result.current.shareDialog.open).toBe(false);
-    act(() => hook.result.current.sharing!.onShare(OWN));
+    act(() => hook.result.current.sharing!.onShare!(OWN));
     expect(hook.result.current.shareDialog).toMatchObject({ open: true, viewName: 'Mine' });
     await waitFor(() => expect(hook.result.current.shareDialog.candidates).toEqual([{ id: vid(101), name: 'Avery Example' }]));
     expect(shareApi!.candidates).toHaveBeenCalledWith(vid(1));
@@ -188,7 +219,7 @@ describe('P6 the ShareDialog picker is fed by candidates only', () => {
   it('grant and remove write, then re-read the grants; a refusal shows', async () => {
     const { hook, shareApi } = mount([OWN]);
     const api = shareApi as ReturnType<typeof fakeShareApi>;
-    act(() => hook.result.current.sharing!.onShare(OWN));
+    act(() => hook.result.current.sharing!.onShare!(OWN));
     await waitFor(() => expect(hook.result.current.shareDialog.candidates).not.toBeNull());
     act(() => hook.result.current.shareDialog.onGrant(vid(101), 'editor'));
     await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(2));
@@ -216,8 +247,8 @@ describe('R1 a late reply for another view is discarded', () => {
       id === vid(1) ? new Promise((r) => (resolveACand = r)) : Promise.resolve([{ id: vid(102), name: 'Blake Builder' }])
     );
     const { hook } = mount([OWN, OTHER], api);
-    act(() => hook.result.current.sharing!.onShare(OWN));
-    act(() => hook.result.current.sharing!.onShare(OTHER));
+    act(() => hook.result.current.sharing!.onShare!(OWN));
+    act(() => hook.result.current.sharing!.onShare!(OTHER));
     await waitFor(() => expect(hook.result.current.shareDialog.grants).toEqual(B_GRANTS));
     await act(async () => {
       resolveA(A_GRANTS);

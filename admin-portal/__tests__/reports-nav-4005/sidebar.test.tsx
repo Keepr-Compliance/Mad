@@ -14,6 +14,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const nav = vi.hoisted(() => ({ pathname: '/dashboard' }));
 const perms = vi.hoisted(() => ({ allow: null as null | Set<string> }));
+// BACKLOG-4144: the Reports link also needs a non-empty report_list_my_reports.
+const myReports = vi.hoisted(() => ({ has: true }));
+vi.mock('@/lib/reports/use-my-reports', () => ({ useHasReports: () => myReports.has }));
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: vi.fn(), push: vi.fn(), replace: vi.fn() }),
@@ -57,7 +60,11 @@ vi.mock('@/lib/supabase/server', () => ({
     const single = (data: unknown) => ({ select: () => ({ eq: () => ({ single: async () => ({ data, error: null }) }) }) });
     return {
       user: { id: 'u-1' },
-      supabase: { rpc: async () => ({ data: true, error: null }), from: () => single({ role_id: 'r1' }) },
+      supabase: { rpc: async (fn: string) =>
+          // BACKLOG-4144: an owner's list = every registry report.
+          fn === 'report_list_my_reports'
+            ? { data: (await import('@/lib/reports/registry')).REPORTS.map((r) => ({ report_key: r.slug, access: 'owner' })), error: null }
+            : { data: true, error: null }, from: () => single({ role_id: 'r1' }) },
     };
   },
 }));
@@ -70,6 +77,7 @@ afterEach(() => {
   cleanup();
   nav.pathname = '/dashboard';
   perms.allow = null;
+  myReports.has = true;
   document.body.style.overflow = '';
 });
 

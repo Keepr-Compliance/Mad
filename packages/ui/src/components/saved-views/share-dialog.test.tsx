@@ -194,6 +194,35 @@ describe('ShareDialog (BACKLOG-4087)', () => {
     expect(name).toHaveAttribute('title', long);
   });
 
+  // BACKLOG-4144: the copy is the caller's to set; absent, it is the saved-view copy.
+  function roleLines() {
+    fireEvent.click(accessTrigger());
+    const lines = ['Can view', 'Can edit'].map((label) => {
+      const option = screen.getByRole('option', { name: new RegExp(`^${label}`) });
+      const desc = option.querySelector('[id$="-desc"]');
+      return desc?.textContent ?? null;
+    });
+    fireEvent.click(accessTrigger());
+    return lines;
+  }
+  const descriptionText = () => document.getElementById(dialog().getAttribute('aria-describedby') ?? '')?.textContent ?? null;
+
+  it('C7a no description props: today\'s saved-view copy, exact', () => {
+    setup();
+    expect(descriptionText()).toBe('People you add see this view under “Shared with you”.');
+    expect(roleLines()).toEqual(['Opens the view', 'Also updates its filters and metric']);
+  });
+
+  it('C7b report copy passed in: the description and both role lines are the caller\'s', () => {
+    setup({
+      description: 'People you add can open this report.',
+      roleDescriptions: { viewer: 'Opens the report', editor: 'Also shares saved views on it' },
+    });
+    expect(descriptionText()).toBe('People you add can open this report.');
+    expect(roleLines()).toEqual(['Opens the report', 'Also shares saved views on it']);
+    expect(dialog()).not.toHaveTextContent('Shared with you');
+  });
+
   it('S2 the dialog makes no data calls: no network or browser storage in its source', () => {
     const source = fs.readFileSync(path.join(__dirname, 'share-dialog.tsx'), 'utf8');
     expect(source).not.toMatch(/\bfetch\s*\(|supabase\.|\.rpc\(|localStorage|sessionStorage|XMLHttpRequest|indexedDB|window\.confirm/i);
