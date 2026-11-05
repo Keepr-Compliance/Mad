@@ -7,6 +7,9 @@ import logger from "../../utils/logger";
 import { useRetryCountdown } from "../../utils/syncRetryCooldown";
 import { RetryCooldownNotice, SyncStartButtonContent } from "./SyncStartButtonContent";
 
+/** BACKLOG-4116: the Sync / Try Again label while a cancelled sync is still stopping. */
+export const STOPPING_PREVIOUS_SYNC_LABEL = "Stopping the previous sync\u2026";
+
 /**
  * ConnectionStatus Component
  * Displays iPhone connection status and provides sync action
@@ -51,6 +54,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   appleDevicesState = null,
   appleUsbDriver = null,
   isStarting = false,
+  isStopping = false,
   retryAvailableAt = null,
 }) => {
   // BACKLOG-3816: hold after a dropped connection / refused backup service.
@@ -222,12 +226,16 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
 
       <button
         onClick={() => { logger.info("[ConnectionStatus] Sync iPhone clicked"); onSyncClick(); }}
-        disabled={isStarting || retrySecondsLeft > 0}
+        disabled={isStarting || isStopping || retrySecondsLeft > 0}
         className="mt-6 px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium rounded-lg hover:from-purple-600 hover:to-indigo-700 transition-all shadow-md hover:shadow-lg disabled:opacity-60 disabled:cursor-not-allowed"
       >
         <SyncStartButtonContent
           isStarting={isStarting}
-          label={lastSyncTime ? "Sync New Data" : "Sync Messages & Contacts"}
+          label={
+            isStopping
+              ? STOPPING_PREVIOUS_SYNC_LABEL
+              : lastSyncTime ? "Sync New Data" : "Sync Messages & Contacts"
+          }
         />
       </button>
       <RetryCooldownNotice secondsLeft={retrySecondsLeft} />
