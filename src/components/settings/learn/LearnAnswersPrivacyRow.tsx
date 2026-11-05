@@ -67,7 +67,7 @@ export function LearnAnswersPrivacyRow(): React.ReactElement | null {
       <ConfirmationDialog
         open={confirming}
         title="Delete your Learn mode answers?"
-        description="Keepr will forget every answer you gave in Learn mode on this computer."
+        description="Keepr will stop using every answer you gave in Learn mode on this computer."
         confirmLabel="Delete answers"
         isDestructive
         loading={deleting}

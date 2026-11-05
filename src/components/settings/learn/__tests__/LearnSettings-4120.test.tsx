@@ -22,6 +22,7 @@ import "@testing-library/jest-dom";
 import { PlatformProvider } from "@/contexts/PlatformContext";
 import { LearnSettings } from "../LearnSettings";
 import { LearnAnswersPrivacyRow } from "../LearnAnswersPrivacyRow";
+import { LearnEmailPane } from "../LearnEmailPane";
 import type { LearnPreviewResult, LearnScoreResult, LearnStateResult } from "../../../../../electron/types/ipc/window-api-learn";
 import {
   CLEANUP_NEXT,
@@ -192,6 +193,44 @@ describe("ON toggle ON", () => {
     await screen.findByTestId("learn-start");
     expect(api.run).not.toHaveBeenCalled();
   });
+
+  it("the footer names the Data & Privacy tab", async () => {
+    renderSection();
+    expect(await screen.findByTestId("learn-footer")).toHaveTextContent("you can delete them in Data & Privacy.");
+  });
+
+  it("with no questions left, promises no new ones after a mail sync", async () => {
+    install({ cleanup: [], bulk: [], sampleSize: 0 });
+    renderSection();
+    const start = await screen.findByTestId("learn-start");
+    expect(start).toHaveTextContent("No questions right now");
+    expect(start).toHaveTextContent("There are no more questions about the mail on this computer.");
+    expect(start).not.toHaveTextContent(/mail sync/i);
+  });
+});
+
+describe("RD the email preview is contained", () => {
+  it("hostile position / z-index / class never reach the DOM, and the scroll box isolates the body", () => {
+    const email = (PREVIEW_CLEANUP as Extract<LearnPreviewResult, { success: true }>).emails[0];
+    render(
+      <LearnEmailPane
+        email={{
+          ...email,
+          bodyHtml:
+            '<div class="fixed inset-0 z-50" style="position:fixed;inset:0;z-index:99999;color:#111">Canaryredress</div>',
+        }}
+        highlightAddress={null}
+      />,
+    );
+    const body = screen.getByTestId("learn-email-body");
+    const div = within(body).getByText("Canaryredress");
+    expect(div).not.toHaveAttribute("class");
+    expect(div.getAttribute("style")).toBe("color:#111");
+    const box = screen.getByTestId("learn-email-scroll");
+    for (const c of ["relative", "isolate", "overflow-x-hidden", "overflow-y-auto", "[contain:paint]"]) {
+      expect(box.className.split(/\s+/)).toContain(c);
+    }
+  });
 });
 
 describe("AT the one attachment, when its question is shown", () => {
@@ -359,6 +398,7 @@ describe("DEL Data & Privacy: delete Learn mode answers", () => {
     expect(row).toHaveTextContent("5 answers saved on this computer");
     fireEvent.click(within(row).getByRole("button", { name: "Delete answers" }));
     const confirm = await screen.findByRole("alertdialog");
+    expect(confirm).toHaveTextContent("Keepr will stop using every answer you gave in Learn mode on this computer.");
     fireEvent.click(within(confirm).getByRole("button", { name: "Delete answers" }));
     await waitFor(() => expect(api.deleteAnswers).toHaveBeenCalledTimes(1));
     await within(row).findByText("Your Learn mode answers were deleted.");

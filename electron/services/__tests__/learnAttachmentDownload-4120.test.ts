@@ -110,7 +110,7 @@ const outlook = {
 jest.mock("../gmailFetchService", () => ({ __esModule: true, default: gmail }));
 jest.mock("../outlookFetchService", () => ({ __esModule: true, default: outlook }));
 
-import { openQuestionAttachment } from "../learnAttachmentDownload";
+import { LEARN_ATTACHMENT_MAX_BYTES, openQuestionAttachment } from "../learnAttachmentDownload";
 import { getQuestionAttachment } from "../db/learnModeDbService";
 
 const USER = "user-4120-a";
@@ -240,6 +240,19 @@ describe("D3 already on disk", () => {
     expect(gmail.initialize).not.toHaveBeenCalled();
     expect(gmail.getEmailById).not.toHaveBeenCalled();
     expect(gmail.getAttachment).not.toHaveBeenCalled();
+  });
+});
+
+describe("D6 too large: refused before any provider call", () => {
+  it.each(["gmail", "outlook"] as const)("%s: a stored size over the cap is too_large with 0 provider calls", async (source) => {
+    seedEmail("e-big", source, "ext-big");
+    seedAttachment("a-big", "e-big", "Canary target agreement.pdf", source === "gmail" ? "part-2" : "graph-2");
+    run(`UPDATE attachments SET file_size_bytes = ? WHERE id = 'a-big'`, LEARN_ATTACHMENT_MAX_BYTES + 1);
+    expect(await openQuestionAttachment(USER, rowFor("a-big"))).toEqual({ ok: false, reason: "too_large" });
+    for (const fn of [gmail.initialize, gmail.getEmailById, gmail.getAttachment, outlook.initialize, outlook.getAttachments, outlook.getAttachment]) {
+      expect(fn).not.toHaveBeenCalled();
+    }
+    expect(storageOf("a-big")).toBeNull();
   });
 });
 

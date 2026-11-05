@@ -126,7 +126,6 @@ export const LEARN_NOT_ON_ERROR = "Learn mode is off.";
 export const LEARN_NO_SESSION_ERROR = "Not signed in.";
 export const LEARN_INVALID_ERROR = "Invalid request.";
 export const LEARN_NO_RUN_ERROR = "Run the check first.";
-export const LEARN_RUN_BUSY_ERROR = "A check is already running.";
 export const LEARN_NOT_IN_SET_ERROR = "That item is not part of the current questions.";
 export const LEARN_FAILED_ERROR = "Learn mode request failed.";
 export const LEARN_ATTACHMENT_UNAVAILABLE_ERROR = "The document could not be opened.";
@@ -217,7 +216,15 @@ function isFailure(x: { userId: string } | LearnFailure): x is LearnFailure {
   return (x as LearnFailure).success === false;
 }
 
-const runningUsers = new Set<string>();
+/**
+ * The run in flight for each user. A second learn:run while one runs (Settings
+ * left and reopened mid-scan) joins it: same result, progress to both callers.
+ */
+interface InflightRun {
+  done: Promise<LearnRunResultResponse>;
+  senders: Set<IpcMainInvokeEvent["sender"]>;
+}
+const runningUsers = new Map<string, InflightRun>();
 
 function toPreviewEmails(rows: PreviewEmailRow[], attachments: PreviewAttachmentRow[]): LearnPreviewEmail[] {
   return rows.map((r) => ({
@@ -249,14 +256,14 @@ function toPreviewEmails(rows: PreviewEmailRow[], attachments: PreviewAttachment
 function cleanupPreview(
   userId: string,
   detectionId: string,
-): { rows: PreviewEmailRow[]; attachments: PreviewAttachmentRow[]; total: number } | LearnFailure {
+): { rows: PreviewEmailRow[]; attachments: PreviewAttachmentRow[]; total: number; address: string } | LearnFailure {
   const run = getLastRun(userId);
   if (!run) return fail(LEARN_NO_RUN_ERROR);
   const detection = run.detections.find((d) => d.id === detectionId);
   if (!detection) return fail(LEARN_NOT_IN_SET_ERROR);
   const rows = previewEmailsByIds(userId, detection.emailIds, LEARN_PREVIEW_MAX_EMAILS);
   const attachments = previewAttachments(userId, rows.map((r) => r.id));
-  return { rows, attachments, total: detection.emailIds.length };
+  return { rows, attachments, total: detection.emailIds.length, address: detection.address };
 }
 
 function isPreviewFailure(
@@ -304,29 +311,40 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
       if (isFailure(g)) return g;
       const args = parse(LearnRunArgsSchema, payload);
       if (!args) return fail(LEARN_INVALID_ERROR);
-      if (runningUsers.has(g.userId)) return fail(LEARN_RUN_BUSY_ERROR);
-      runningUsers.add(g.userId);
-      try {
-        const result = await runBaseline0(g.userId, args.windowMonths, {
-          onProgress: (p) => {
-            const progress: LearnRunProgressEvent = {
-              runId: p.runId,
-              pagesDone: p.pagesDone,
-              rowsScanned: p.rowsScanned,
-            };
-            if (!event.sender.isDestroyed()) event.sender.send(LEARN_RUN_PROGRESS_CHANNEL, progress);
-          },
-        });
-        setLastRun(g.userId, result);
-        const summary = toPublicRunSummary(result);
-        logService.info("Learn mode run finished", MODULE, {
-          rowsScanned: summary.rowsScanned,
-          detections: summary.detectionCount,
-        });
-        return { success: true, summary };
-      } finally {
-        runningUsers.delete(g.userId);
+      const userId = g.userId;
+      const inflight = runningUsers.get(userId);
+      if (inflight) {
+        inflight.senders.add(event.sender);
+        return inflight.done;
       }
+      const senders = new Set<IpcMainInvokeEvent["sender"]>([event.sender]);
+      const done = (async (): Promise<LearnRunResultResponse> => {
+        try {
+          const result = await runBaseline0(userId, args.windowMonths, {
+            onProgress: (p) => {
+              const progress: LearnRunProgressEvent = {
+                runId: p.runId,
+                pagesDone: p.pagesDone,
+                rowsScanned: p.rowsScanned,
+              };
+              for (const sender of senders) {
+                if (!sender.isDestroyed()) sender.send(LEARN_RUN_PROGRESS_CHANNEL, progress);
+              }
+            },
+          });
+          setLastRun(userId, result);
+          const summary = toPublicRunSummary(result);
+          logService.info("Learn mode run finished", MODULE, {
+            rowsScanned: summary.rowsScanned,
+            detections: summary.detectionCount,
+          });
+          return { success: true, summary };
+        } finally {
+          runningUsers.delete(userId);
+        }
+      })();
+      runningUsers.set(userId, { done, senders });
+      return done;
     }),
   );
 
@@ -448,7 +466,7 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
           success: true,
           emails,
           totalEmails: p.total,
-          questionAttachmentId: pickQuestionAttachmentId(emails),
+          questionAttachmentId: pickQuestionAttachmentId(emails, p.address),
         };
       }
 
@@ -471,7 +489,7 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
       // before anything is read or fetched.
       const p = cleanupPreview(g.userId, args.detectionId);
       if (isPreviewFailure(p)) return p;
-      const theOne = pickQuestionAttachmentId(toPreviewEmails(p.rows, p.attachments));
+      const theOne = pickQuestionAttachmentId(toPreviewEmails(p.rows, p.attachments), p.address);
       if (theOne === null || theOne !== args.attachmentId) return fail(LEARN_NOT_IN_SET_ERROR);
       const row = getQuestionAttachment(g.userId, theOne);
       if (!row) return fail(LEARN_NOT_IN_SET_ERROR);

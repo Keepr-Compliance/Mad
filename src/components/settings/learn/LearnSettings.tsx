@@ -111,7 +111,7 @@ export function LearnSettings(): React.ReactElement {
                   <span className="font-semibold">{learn.questionsReady === 0 ? "No questions right now" : "Questions ready"}</span>
                   <span className="text-[13px] text-sky-100">
                     {learn.questionsReady === 0
-                      ? "Keepr will have more after your next mail sync."
+                      ? "There are no more questions about the mail on this computer."
                       : `${minutesFor(learn.questionsReady)}. Stop any time; your answers are kept.`}
                   </span>
                 </span>
@@ -141,7 +141,7 @@ export function LearnSettings(): React.ReactElement {
 
             <p className="m-0 text-[13px] text-gray-500" data-testid="learn-footer">
               {learn.answerCount === 1 ? "1 answer so far." : `${learn.answerCount} answers so far.`} Turning Learn mode
-              off keeps your answers; you can delete them in Privacy.
+              off keeps your answers; you can delete them in Data & Privacy.
             </p>
           </>
         )}

@@ -873,6 +873,8 @@ describe("AT the one attachment a cleanup question is about", () => {
     });
     seedAttachmentTyped(older, "att-old-pdf", "Older agreement.pdf", "application/pdf");
     seedAttachmentTyped(newer, "att-new-jpg", "Photo.jpg", "image/jpeg");
+    // Sorts BEFORE the PDFs (the preview orders a message's attachments by file name).
+    seedAttachmentTyped(newer, "att-new-jpg0", "Aa front photo.jpg", "image/jpeg");
     seedAttachmentTyped(newer, "att-new-pdf", "Newer agreement.pdf", "application/pdf");
     seedAttachmentTyped(newer, "att-new-pdf2", "Zz addendum.pdf", "application/pdf");
     const otherDealEmail = seedEmail({
@@ -921,6 +923,7 @@ describe("AT the one attachment a cleanup question is about", () => {
   it.each([
     ["a sibling PDF on the same message", "att-new-pdf2"],
     ["a non-PDF sibling", "att-new-jpg"],
+    ["a non-PDF sibling that sorts first", "att-new-jpg0"],
     ["the older message's PDF", "att-old-pdf"],
     ["another detection's attachment", "att-other-deal"],
     ["another user's attachment", "att-other-user"],
@@ -954,11 +957,48 @@ describe("AT the one attachment a cleanup question is about", () => {
     ).toBe(0);
   });
 
+  it("a PDF whose file name carries the street number wins over an earlier PDF; open accepts the same id", async () => {
+    withDownloader();
+    setToggle(true);
+    const email = seedEmail({ sentAt: "2026-10-05T10:00:00.000Z", subject: "Counter offer", body: CANARY_BODY });
+    seedAttachmentTyped(email, "att-a-generic", "Aa agreement.pdf", "application/pdf");
+    seedAttachmentTyped(email, "att-b-named", "Counter 4120 signed.pdf", "application/octet-stream");
+    const r = await invoke("learn:run", { windowMonths: 12 });
+    const [deal] = (r.summary as { detectionIds: string[] }).detectionIds;
+    const p = await invoke("learn:preview", { kind: "cleanup", detectionId: deal });
+    expect(p.questionAttachmentId).toBe("att-b-named");
+    openCalls.length = 0;
+    expect((await invoke("learn:attachment-open", { detectionId: deal, attachmentId: "att-b-named" })).success).toBe(true);
+    expect(await invoke("learn:attachment-open", { detectionId: deal, attachmentId: "att-a-generic" })).toEqual({
+      success: false,
+      error: handlers.LEARN_NOT_IN_SET_ERROR,
+    });
+    expect(openCalls).toEqual([{ userId: USER, id: "att-b-named" }]);
+  });
+
   it("with no downloader wired, the one attachment is reported unavailable", async () => {
     const { deal } = await seedTwoDeals();
     expect(await invoke("learn:attachment-open", { detectionId: deal, attachmentId: "att-new-pdf" })).toEqual({
       success: false,
       error: handlers.LEARN_ATTACHMENT_UNAVAILABLE_ERROR,
     });
+  });
+});
+
+describe("RJ a second learn:run while one runs joins it (Settings reopened mid-scan)", () => {
+  it("both callers get the same successful run; no 'already running' error", async () => {
+    setToggle(true);
+    seedEmail({ sentAt: "2026-10-05T10:00:00.000Z", subject: "Offer accepted", body: CANARY_BODY });
+    const [a, b] = await Promise.all([
+      invoke("learn:run", { windowMonths: 12 }),
+      invoke("learn:run", { windowMonths: 12 }),
+    ]);
+    expect(a.success).toBe(true);
+    expect(b.success).toBe(true);
+    expect((b.summary as { runId: string }).runId).toBe((a.summary as { runId: string }).runId);
+    // Once it has finished, a new call starts a new run.
+    const c = await invoke("learn:run", { windowMonths: 12 });
+    expect(c.success).toBe(true);
+    expect((c.summary as { runId: string }).runId).not.toBe((a.summary as { runId: string }).runId);
   });
 });
