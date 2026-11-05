@@ -15,9 +15,10 @@ import type { BackfillAvailability, BackfillProgress, BackfillResult } from "../
  * existence. The question this answers is "is a full transfer coming?", not
  * "is there a directory on disk?".
  *
- * - `"exists"`  a prior backup is on disk AND is usable — `isComplete &&
- *               !isInterrupted`, the one predicate, evaluated by
- *               `isUsablePriorBackup` in `deviceSyncOrchestrator.ts`. The next
+ * - `"exists"`  a prior backup is on disk AND is usable — `isComplete` (an
+ *               interrupted but complete backup is usable, BACKLOG-2911), the one
+ *               predicate, evaluated by `isUsablePriorBackup` and mapped by
+ *               `toPriorBackupState` in `deviceSyncOrchestrator.ts`. The next
  *               sync is incremental.
  * - `"none"`    no full transfer can be avoided. EITHER the host established
  *               there is no prior backup (a proven ENOENT — producible since
