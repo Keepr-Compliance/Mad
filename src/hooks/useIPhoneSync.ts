@@ -489,8 +489,11 @@ export function useIPhoneSync(enabled: boolean = true): UseIPhoneSyncReturn {
           } else if (syncProgress.phase === "decrypting") {
             phase = "extracting";
           } else if (
-            syncProgress.phase === "parsing_messages" ||
-            syncProgress.phase === "parsing_contacts" ||
+            // BACKLOG-2909/2939: main sends these hyphenated. The underscore spelling
+            // never matched, so every parsing tick read as the backup ("Keep connected")
+            // and an unplug while parsing failed a sync that was going to finish.
+            syncProgress.phase === "parsing-messages" ||
+            syncProgress.phase === "parsing-contacts" ||
             syncProgress.phase === "resolving"
           ) {
             phase = "extracting";

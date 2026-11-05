@@ -2232,6 +2232,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         return this.stopForAppleEncryptedBackup();
       }
 
+      // BACKLOG-2909: the phone is no longer needed from here. Tell the renderer now — it
+      // judges an unplug from the last phase it was sent, and the C-DELTA parse copy below
+      // (every attachment decrypted) can take minutes before the first parsing tick.
+      this.emitProgress({
+        phase: "parsing-contacts",
+        phaseProgress: 0,
+        overallProgress: this.calculateOverallProgress("parsing-contacts", 0),
+        message: "Reading contacts...",
+      });
+
       // BACKLOG-3816 S4-C, C-DELTA: unchanged files are still sealed, so the parsers and
       // the attachment copier read a parse copy (decrypted to userData/at-rest-tmp) -
       // removed after persistence / on failure / at launch, like the 3817 copy.
