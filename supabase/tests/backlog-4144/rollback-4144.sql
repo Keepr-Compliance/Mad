@@ -1,3 +1,4 @@
+-- Run rollback-4144 before rollback-4087.
 -- BACKLOG-4144 M1 rollback (keepr-test, or production with a go). Restores report_list_saved_views,
 -- report_save_view, report_share_candidates and report_share_set to the BACKLOG-4087 bodies exactly as
 -- pg_get_functiondef printed them on keepr-test before the M1 apply (md5 of each definition: list

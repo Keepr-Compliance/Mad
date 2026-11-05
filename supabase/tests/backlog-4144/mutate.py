@@ -32,6 +32,9 @@ MUT = {
   'SA_is_super_admin_not_join': [(SA_JOIN, "    WHEN public.is_super_admin(p_user) THEN 'owner'\n")],
   # the four 4087 recipient paths without the report-access predicate, one at a time
   'SHARED1_list_no_access_check': [("\n      AND public._report_access_role(v_caller_id, v.report_key) IS NOT NULL\n  ) x;", "\n  ) x;")],
+  # SR1: the editor-save check keyed on the client's p_report_key instead of the view's own key
+  'SR1_editor_save_keyed_on_p_report_key': [("      AND public._report_access_role(v_caller_id, v_view_key) IS NOT NULL;",
+                                             "      AND public._report_access_role(v_caller_id, p_report_key) IS NOT NULL;")],
   'SHARED2_editor_save_no_access_check': [("\n      AND public._report_access_role(v_caller_id, v_view_key) IS NOT NULL;", ";")],
   'SHARED3_candidates_no_access_check': [("\n      AND public._report_access_role(ir.user_id, v_view_key) IS NOT NULL\n  ) c;", "\n  ) c;")],
   'SHARED4_share_set_grantee_no_access_check': [("\n    AND public._report_access_role(p_user_id, v.report_key) IS NOT NULL\n  FOR UPDATE;", "\n  FOR UPDATE;")],

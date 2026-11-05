@@ -8,7 +8,7 @@
 -- picked BY NAME):
 --   users  1 A Super Admin   2 B Support Supervisor   3 C Support Supervisor   4 D Super Admin
 --          5 E Support Agent (internal role WITHOUT analytics.view)   6 F authenticated, no internal role
---   views  21 V = A on funnel   22 W = B on funnel   23 X = C on funnel   24 Y = B on exports
+--   views  21 V = A on funnel   22 W = B on funnel   23 X = C on funnel   24 Y = B on exports   25 Z = A on exports
 -- Output: RAISE 'P4144_RESULT {total, pass, fail, reds, checks}'.
 
 DO $drv$
@@ -115,7 +115,7 @@ BEGIN
     s text; s2 text; s3 text; s4 text; n int; n2 int; ok boolean; d0 text; a0 text; k text;
     uA uuid := pg_temp.fx(1); uB uuid := pg_temp.fx(2); uC uuid := pg_temp.fx(3);
     uD uuid := pg_temp.fx(4); uE uuid := pg_temp.fx(5); uF uuid := pg_temp.fx(6);
-    V uuid := pg_temp.fx(21); W uuid := pg_temp.fx(22); XV uuid := pg_temp.fx(23); YV uuid := pg_temp.fx(24);
+    V uuid := pg_temp.fx(21); W uuid := pg_temp.fx(22); XV uuid := pg_temp.fx(23); YV uuid := pg_temp.fx(24); ZV uuid := pg_temp.fx(25);
     r_sa uuid := (SELECT id FROM public.admin_roles WHERE name = 'Super Admin');
     r_ss uuid := (SELECT id FROM public.admin_roles WHERE name = 'Support Supervisor');
     r_ag uuid := (SELECT id FROM public.admin_roles WHERE name = 'Support Agent');
@@ -146,13 +146,14 @@ BEGIN
       (V, uA, 'funnel', 'A funnel', '{"q":"a"}', m1::jsonb),
       (W, uB, 'funnel', 'B funnel', '{}', m1::jsonb),
       (XV, uC, 'funnel', 'C funnel', '{}', m1::jsonb),
-      (YV, uB, 'exports', 'B exports', '{}', m1::jsonb);
+      (YV, uB, 'exports', 'B exports', '{}', m1::jsonb),
+      (ZV, uA, 'exports', 'A exports', '{"q":"z0"}', m1::jsonb);
 
     r := r || jsonb_build_object('K0_fixtures', pg_temp.pass(
       r_sa IS NOT NULL AND r_ss IS NOT NULL AND r_ag IS NOT NULL
       AND (SELECT is_system FROM public.admin_roles WHERE id = r_sa)
       AND NOT (SELECT is_system FROM public.admin_roles WHERE id = r_ss)
-      AND (SELECT count(*) FROM public.report_saved_views WHERE user_id IN (uA, uB, uC)) = 4
+      AND (SELECT count(*) FROM public.report_saved_views WHERE user_id IN (uA, uB, uC)) = 5
       AND NOT EXISTS (SELECT 1 FROM public.internal_roles WHERE user_id = uF)
       AND NOT EXISTS (SELECT 1 FROM public.report_access WHERE user_id IN (uA, uB, uC, uD, uE, uF)),
       'fixture mismatch'));
@@ -242,6 +243,14 @@ BEGIN
       s2 = VNF AND s4 NOT LIKE 'ERR%'
       AND (SELECT filters->>'q' FROM public.report_saved_views WHERE id = V) = 'b2',
       'before=' || s2 || ' after=' || s4 || ' q=' || (SELECT filters->>'q' FROM public.report_saved_views WHERE id = V)));
+    -- C5e: the editor-save check uses the VIEW's report key, not the p_report_key the client sends.
+    -- B holds an editor share on Z (exports) and report access on funnel only, and names 'funnel'.
+    INSERT INTO public.report_saved_view_shares (view_id, user_id, role, granted_by) VALUES (ZV, uB, 'editor', uA);
+    s := pg_temp.call_as(uB, format('SELECT public.report_save_view(%L, NULL, %L::jsonb, %L::jsonb, false, %L::uuid)', 'funnel', '{"q":"hijack"}', m1, ZV));
+    r := r || jsonb_build_object('C5e_editor_save_keyed_on_view_report', pg_temp.pass(
+      s = VNF AND pg_temp.my(uB, 'funnel') = '"viewer"' AND pg_temp.my(uB, 'exports') = 'null'
+      AND (SELECT filters->>'q' = 'z0' AND user_id = uA AND report_key = 'exports' FROM public.report_saved_views WHERE id = ZV),
+      s || ' q=' || (SELECT filters->>'q' FROM public.report_saved_views WHERE id = ZV)));
     s := pg_temp.uids(pg_temp.call_as(uA, format('SELECT public.report_share_candidates(%L::uuid)', V)));
     r := r || jsonb_build_object('C5c_share_candidates_need_access', pg_temp.pass(
       s3 = '04' AND s = '02,03,04',
