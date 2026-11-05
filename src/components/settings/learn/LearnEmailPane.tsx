@@ -10,7 +10,6 @@ import React, { useMemo, useState } from "react";
 import type { LearnPreviewEmail } from "../../../../electron/types/ipc/window-api-learn";
 import {
   HIGHLIGHT_CLASS,
-  hasRemoteImages,
   highlightHtml,
   highlightText,
   sanitizeLearnEmailHtml,
@@ -44,12 +43,15 @@ export function LearnEmailPane({
   const [showImages, setShowImages] = useState(false);
   const re = useMemo(() => (highlightAddress ? streetPhraseRegex(highlightAddress) : null), [highlightAddress]);
   const raw = email.bodyHtml;
+  // The images-off pass also says whether "Show images" would load anything
+  // (hasRemoteImages is the same decision).
+  const imagesOff = useMemo(() => (raw ? sanitizeLearnEmailHtml(raw, { showImages: false }) : null), [raw]);
   const body = useMemo(() => {
-    if (!raw) return null;
-    const { html } = sanitizeLearnEmailHtml(raw, { showImages });
+    if (!raw || !imagesOff) return null;
+    const html = showImages ? sanitizeLearnEmailHtml(raw, { showImages: true }).html : imagesOff.html;
     return highlightHtml(html, re);
-  }, [raw, showImages, re]);
-  const remote = raw ? hasRemoteImages(raw) : false;
+  }, [raw, imagesOff, showImages, re]);
+  const remote = (imagesOff?.blockedImages ?? 0) > 0;
   const sender = splitSender(email.sender);
 
   return (
@@ -74,7 +76,11 @@ export function LearnEmailPane({
           </button>
         </div>
       )}
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 text-[13px]">
+      {/* Contained: nothing in the email can paint outside this box or above the question. */}
+      <div
+        className="relative isolate min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-5 py-5 text-[13px] [contain:paint]"
+        data-testid="learn-email-scroll"
+      >
         {body !== null ? (
           <div className="learn-email-body break-words" data-testid="learn-email-body" dangerouslySetInnerHTML={{ __html: body }} />
         ) : (

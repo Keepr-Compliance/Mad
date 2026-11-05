@@ -9,8 +9,11 @@
  * `src` and `style`, so reusing it would load tracking pixels and CSS
  * `url(...)` backgrounds from ~200 newsletters while the user labels them.
  *
- * Blocked (images off):  http(s) `src`, every `srcset`, `background`, and any
- *                        `url(...)` inside `style`.
+ * Blocked (images off):  http(s) `src`, every `srcset`, `background`, and every
+ *                        inline-style declaration that could load something
+ *                        (see filterStyle: an allowlist, not a pattern).
+ * Never kept:            `class`, and style declarations that place the email
+ *                        over the rest of the window (position, z-index, offsets).
  * Always kept:           `data:image/...` sources (already inside the message).
  * Never resolvable:      `cid:` parts. The local database stores no content id
  *                        for an inline part, so they render as a placeholder.
@@ -27,13 +30,84 @@ const ALLOWED_TAGS = [
   "img", "blockquote", "pre", "code", "hr", "mark",
 ];
 
-const ALLOWED_ATTR = ["src", "alt", "style", "width", "height", "align", "valign", "colspan", "rowspan", "color", "class"];
+const ALLOWED_ATTR = ["src", "alt", "style", "width", "height", "align", "valign", "colspan", "rowspan", "color"];
 
 /** Placeholder for an inline (cid:) image the database cannot resolve. */
 export const INLINE_IMAGE_PLACEHOLDER = "[inline image]";
 
 const CID_IMG = /<img\b[^>]*\ssrc\s*=\s*["']?cid:[^"'\s>]*["']?[^>]*>/gi;
-const CSS_URL = /url\s*\([^)]*\)/gi;
+
+// ---------------------------------------------------------------------------
+// Inline styles: a declaration allowlist
+// ---------------------------------------------------------------------------
+
+/** Declarations that move the email out of its pane. Dropped in both modes. */
+const REDRESS_PROP = /^(position|z-index|top|right|bottom|left|inset(-.*)?)$/;
+
+/** Plain formatting. Kept in both modes when the value is inert. */
+const SAFE_PROP =
+  /^(color|background-color|opacity|visibility|display|vertical-align|text-align|float|clear|direction|unicode-bidi|white-space|word-break|word-wrap|overflow-wrap|hyphens|line-height|letter-spacing|word-spacing|text-indent|text-transform|text-overflow|text-decoration(-.*)?|font(-.*)?|(min-|max-)?(width|height)|margin(-.*)?|padding(-.*)?|outline(-.*)?|box-sizing|table-layout|border-collapse|border-spacing|caption-side|empty-cells|list-style-type|list-style-position|overflow(-x|-y)?|border(-(top|right|bottom|left))?(-(color|style|width))?|border-(top-|bottom-)?(left-|right-)?radius)$/;
+
+/** Properties whose value can name an image or other resource. Kept only with images on. */
+const FETCH_PROP =
+  /^(-webkit-)?(background|list-style|content|border-image|cursor|mask|filter|backdrop-filter|clip-path|shape-outside|offset-path|box-reflect)(-.*)?$/;
+
+/** The only CSS functions an inert value may call: colours. */
+const INERT_FUNCTIONS = new Set(["rgb", "rgba", "hsl", "hsla"]);
+
+/** Decode CSS escapes (`\72`, `\75 `, `\(`) the way the CSS tokenizer does. */
+export function cssUnescape(s: string): string {
+  return s.replace(/\\(?:([0-9a-fA-F]{1,6})(?:\r\n|[ \t\n\r\f])?|(\r\n|[\n\r\f])|([\s\S]))/g, (_m, hex, nl, ch) => {
+    if (hex) {
+      const cp = parseInt(hex as string, 16);
+      return cp === 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff) ? "\uFFFD" : String.fromCodePoint(cp);
+    }
+    if (nl) return "";
+    return ch as string;
+  });
+}
+
+/** True when a decoded value calls nothing but a colour function. */
+function isInert(decoded: string): boolean {
+  if (decoded.includes("\\")) return false;
+  for (const m of decoded.matchAll(/([a-z0-9_-]*)\s*\(/gi)) {
+    if (!INERT_FUNCTIONS.has(m[1].toLowerCase())) return false;
+  }
+  return true;
+}
+
+type Verdict = "keep" | "drop" | "images";
+
+function classifyDeclaration(raw: string): Verdict {
+  const colon = raw.indexOf(":");
+  if (colon < 0) return "drop";
+  const name = cssUnescape(raw.slice(0, colon)).trim().toLowerCase();
+  const value = cssUnescape(raw.slice(colon + 1)).trim();
+  if (!/^-?[a-z][a-z0-9-]*$/.test(name) || value.length === 0) return "drop";
+  if (REDRESS_PROP.test(name)) return "drop";
+  const inert = isInert(value);
+  if (SAFE_PROP.test(name)) return inert ? "keep" : "drop";
+  if (FETCH_PROP.test(name)) return inert ? "keep" : "images";
+  return "drop";
+}
+
+/**
+ * Filter an inline `style` value. Each declaration is decoded before it is
+ * judged; the kept ones are emitted exactly as written. With images off the
+ * output never calls a CSS function other than rgb/rgba/hsl/hsla.
+ */
+export function filterStyle(style: string, showImages: boolean): { style: string; blocked: number } {
+  const kept: string[] = [];
+  let blocked = 0;
+  for (const part of style.split(";")) {
+    const decl = part.trim();
+    if (!decl) continue;
+    const verdict = classifyDeclaration(decl);
+    if (verdict === "keep" || (verdict === "images" && showImages)) kept.push(decl);
+    else if (verdict === "images") blocked += 1;
+  }
+  return { style: kept.join(";"), blocked };
+}
 
 export interface SanitizedEmail {
   html: string;
@@ -45,7 +119,7 @@ export function sanitizeLearnEmailHtml(raw: string, opts: { showImages: boolean 
   let blocked = 0;
   const withPlaceholders = raw.replace(
     CID_IMG,
-    `<span class="learn-inline-image">${INLINE_IMAGE_PLACEHOLDER}</span>`,
+    `<span style="color:#6b7280;font-style:italic">${INLINE_IMAGE_PLACEHOLDER}</span>`,
   );
 
   DOMPurify.addHook("uponSanitizeAttribute", (_node, data) => {
@@ -58,14 +132,12 @@ export function sanitizeLearnEmailHtml(raw: string, opts: { showImages: boolean 
       data.keepAttr = false;
       return;
     }
-    if (name === "style" && CSS_URL.test(value)) {
-      CSS_URL.lastIndex = 0;
-      if (!opts.showImages) {
-        blocked += 1;
-        data.attrValue = value.replace(CSS_URL, "none");
-      }
+    if (name === "style") {
+      const filtered = filterStyle(value, opts.showImages);
+      blocked += filtered.blocked;
+      if (filtered.style) data.attrValue = filtered.style;
+      else data.keepAttr = false;
     }
-    CSS_URL.lastIndex = 0;
   });
   try {
     const html = DOMPurify.sanitize(withPlaceholders, {
@@ -80,9 +152,12 @@ export function sanitizeLearnEmailHtml(raw: string, opts: { showImages: boolean 
   }
 }
 
-/** True when the raw message has something "Show images" would load. */
+/**
+ * True when "Show images" would load something: exactly what the images-off
+ * pass removed and the images-on pass keeps.
+ */
 export function hasRemoteImages(raw: string): boolean {
-  return /<img\b[^>]*\ssrc\s*=\s*["']?https?:/i.test(raw) || /url\s*\(\s*["']?https?:/i.test(raw);
+  return sanitizeLearnEmailHtml(raw, { showImages: false }).blockedImages > 0;
 }
 
 // ---------------------------------------------------------------------------
