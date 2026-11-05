@@ -879,7 +879,17 @@ jobs:
           echo "Downloaded artifacts:"
           find artifacts -type f -name "*.*" | head -50
 
+      # BACKLOG-3200: the download table is built from the files being attached,
+      # not typed here -- electron-builder does not suffix the default macOS arch.
+      - name: Write release notes from the built files
+        run: |
+          node scripts/ci/release-download-table.mjs --write \
+            --version "${{ steps.version.outputs.version }}" \
+            --mac-dir artifacts/release-macos --win-dir artifacts/release-windows \
+            --out "$RUNNER_TEMP/release-body.md"
+
       - name: Create Release
+        id: create-release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         with:
           tag_name: v${{ steps.version.outputs.version }}
@@ -889,32 +899,17 @@ jobs:
           files: |
             artifacts/release-macos/*
             artifacts/release-windows/*
-          body: |
-            ## Keepr v${{ steps.version.outputs.version }}
-
-            ### Downloads
-
-            | Platform | Download |
-            |----------|----------|
-            | macOS (Apple Silicon) | `Keepr-${{ steps.version.outputs.version }}-arm64.dmg` |
-            | macOS (Intel) | `Keepr-${{ steps.version.outputs.version }}-x64.dmg` |
-            | Windows | `Keepr-Setup-${{ steps.version.outputs.version }}.exe` |
-
-            ### What's New
-
-            <!-- Add release notes here -->
-
-            ### Installation
-
-            **macOS**: Download the `.dmg` file, open it, and drag Keepr to your Applications folder.
-
-            **Windows**: Download the `.exe` installer and run it. The installer is signed by Blue Spaces LLC.
-
-            ---
-
-            🤖 Release created automatically from main branch
+          body_path: ${{ runner.temp }}/release-body.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # BACKLOG-3200: every filename the release body advertises is attached.
+      - name: Assert advertised downloads are attached
+        env:
+          ASSETS: ${{ steps.create-release.outputs.assets }}
+        run: |
+          node scripts/ci/release-download-table.mjs --check \
+            --body "$RUNNER_TEMP/release-body.md" --assets "$ASSETS"
 
       # Mirror release assets to the public repo so the download page works
       # without GitHub authentication
