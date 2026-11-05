@@ -17,8 +17,13 @@ const MIGRATION = path.resolve(
 );
 const IPHONE_QUERIES = path.resolve(__dirname, '../../lib/reports/iphone-sync-queries.ts');
 
-function policy(name: string): string {
-  const sql = readFileSync(MIGRATION, 'utf8');
+/** A Windows checkout converts LF to CRLF; every expectation below is written with LF. */
+function lf(text: string): string {
+  return text.replace(/\r\n/g, '\n');
+}
+
+function policy(name: string, raw: string = readFileSync(MIGRATION, 'utf8')): string {
+  const sql = lf(raw);
   const start = sql.indexOf(`ALTER POLICY ${name}`);
   if (start < 0) throw new Error(`policy ${name} not found in the M2 migration`);
   const end = sql.indexOf('COMMENT ON POLICY', start);
@@ -26,12 +31,24 @@ function policy(name: string): string {
 }
 
 describe('M2 RLS keys == report queries', () => {
-  it('funnel branch lists exactly FUNNEL_STEP_EVENTS', () => {
-    const text = policy('analytics_events_select_own_or_internal');
+  function funnelNames(text: string): string[] {
     const m = text.match(/event_name IN \(([^)]*)\)\s*AND \(SELECT public\.report_my_access\('funnel'\)\)/);
     if (!m) throw new Error('funnel branch not found');
-    const names = Array.from(m[1].matchAll(/'([^']+)'/g), (x) => x[1]);
-    expect(names.sort()).toEqual([...FUNNEL_STEP_EVENTS].sort());
+    return Array.from(m[1].matchAll(/'([^']+)'/g), (x) => x[1]).sort();
+  }
+
+  it('funnel branch lists exactly FUNNEL_STEP_EVENTS', () => {
+    expect(funnelNames(policy('analytics_events_select_own_or_internal'))).toEqual([...FUNNEL_STEP_EVENTS].sort());
+  });
+
+  it('reads a CRLF checkout of the migration the same way', () => {
+    const crlf = readFileSync(MIGRATION, 'utf8').replace(/\r?\n/g, '\r\n');
+    expect(crlf).toContain('\r\n');
+    const text = policy('analytics_events_select_own_or_internal', crlf);
+    expect(funnelNames(text)).toEqual([...FUNNEL_STEP_EVENTS].sort());
+    expect(text).toContain(
+      `event_name = '${EXPORT_EVENT_NAME}'\n      AND (SELECT public.report_my_access('exports')) IS NOT NULL`
+    );
   });
 
   it('exports branch keys on EXPORT_EVENT_NAME', () => {
@@ -43,7 +60,7 @@ describe('M2 RLS keys == report queries', () => {
 
   it('sync_outcomes branches key on the two report sources', () => {
     const text = policy('"Internal roles can read sync outcomes"');
-    const iphone = readFileSync(IPHONE_QUERIES, 'utf8').match(/getSyncRuns<SyncOutcomeRow>\([^]*?source: '([^']+)'/);
+    const iphone = lf(readFileSync(IPHONE_QUERIES, 'utf8')).match(/getSyncRuns<SyncOutcomeRow>\([^]*?source: '([^']+)'/);
     if (!iphone) throw new Error('iPhone source not found in iphone-sync-queries.ts');
     expect(text).toContain(`source = '${iphone[1]}'\n      AND (SELECT public.report_my_access('iphone-sync')) IS NOT NULL`);
     expect(text).toContain(
