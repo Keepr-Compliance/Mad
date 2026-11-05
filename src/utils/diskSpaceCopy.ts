@@ -45,21 +45,16 @@ export interface AttachmentSpaceRefusalFacts {
  * the verdict ("needs up to 39 MB but only 1.3 GB is available. It will not
  * start.") — and hide the headroom that did.
  *
- * Required is rounded UP and available DOWN. Rounding both to nearest let them
- * print identically near the boundary (2.6455 GB vs 2.6454 GB, both "2.6 GB"
- * — or "2.65 GB" at two decimals), which shows no shortfall at all. With
- * directional rounding, required > available implies ceil(required) >
- * floor(available), so the pair can never be disproved, and each figure stays
- * true as an upper / lower bound.
+ * The sentence names the two parts the guard added (attachments, headroom) and
+ * the free space, with no separate total: a total that did not equal the
+ * printed parts read as an arithmetic error. Free space is rounded DOWN, so the
+ * stated figure never overstates what is available.
  */
 export function describeAttachmentSpaceRefusal(facts: AttachmentSpaceRefusalFacts): string {
-  const required = formatGbDirected(facts.requiredBytes, Math.ceil);
   const available = formatGbDirected(facts.availableBytes, Math.floor);
   return (
-    `This import needs up to ${required} of free space — up to ` +
-    `${formatGb(facts.attachmentBytes)} for attachments, plus ` +
-    `${formatGb(facts.headroomBytes)} kept free so your Mac can keep working — ` +
-    `but only ${available} is available. It will not start.`
+    `Keepr needs ${formatGb(facts.attachmentBytes)} for the attachments plus ` +
+    `${formatGb(facts.headroomBytes)} kept free so your Mac keeps working. ` +
+    `Only ${available} is available, so the import will not start.`
   );
 }
-

@@ -546,7 +546,7 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
     // window named with its own estimate.
     expect(screen.getByTestId("import-without-attachments")).toBeInTheDocument();
     expect(block).toHaveTextContent(
-      /needs up to 82\.2 GB of free space — up to 80\.0 GB for attachments/i
+      "Keepr needs 80.0 GB for the attachments plus 2.1 GB kept free so your Mac keeps working. Only 40.0 GB is available, so the import will not start."
     );
 
     // ...and there is deliberately NO "import anyway" escape. An override is
