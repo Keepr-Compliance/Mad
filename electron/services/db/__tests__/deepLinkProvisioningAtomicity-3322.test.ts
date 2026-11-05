@@ -43,6 +43,18 @@
  *   - move the migration inside the transaction                        -> D3, D5
  *   - rethrow the migration error in the wrapper's catch               -> D8
  *
+ * BACKLOG-3340 (D9-D13, and audit counts in D1/D2/D5/D7): the LOGIN entry is
+ * part of the same transaction and carries no session or resource id; a failed
+ * provisioning writes one LOGIN_FAILED afterwards for a user whose row exists,
+ * on the id that row really has, and none for a first sign-in.
+ *   - move recordInTransaction after the dbTransaction                -> D9
+ *   - drop recordInTransaction                                        -> D7, D12
+ *   - put the session token back in sessionId / resourceId            -> D7
+ *   - drop the recordDeepLinkSignInFailure call in the wrapper        -> D10, D13
+ *   - write the failure with u.supabaseId instead of the looked-up id -> D13
+ *     (no users_local row has that id, so the foreign key refuses the row;
+ *     D10 cannot see this one: its local id IS the Supabase id)
+ *
  * Run locally with (the shared native module is the Electron build):
  *   ELECTRON_RUN_AS_NODE=1 npx electron node_modules/.bin/jest \
  *     electron/services/db/__tests__/deepLinkProvisioningAtomicity-3322.test.ts --bail=0
@@ -69,11 +81,19 @@ jest.mock("../../logService", () => ({
   __esModule: true,
   default: { info: jest.fn(), error: jest.fn(), warn: jest.fn(), debug: jest.fn() },
 }));
+const mockCaptureMessage = jest.fn();
+jest.mock("@sentry/electron/main", () => ({
+  captureMessage: (...a: unknown[]) => mockCaptureMessage(...a),
+  captureException: jest.fn(),
+  addBreadcrumb: jest.fn(),
+}));
 
 import { setDb } from "../core/dbConnection";
 import type { PendingDeepLinkUser } from "../../signInState";
 import { provisionDeepLinkLogin, provisionDeepLinkSignIn } from "../../loginProvisioningService";
 import logService from "../../logService";
+import { auditService, AuditNotRecordedError } from "../../auditService";
+import { forceAuditInsertFailure, realAuditDb, settle } from "./fixtures/auditTxProbe";
 
 const SCHEMA_PATH = nodePath.join(__dirname, "..", "..", "..", "database", "schema.sql");
 
@@ -83,6 +103,24 @@ const opened: DatabaseType[] = [];
 beforeAll(() => {
   tmpDir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "deeplink-3322-"));
 });
+// BACKLOG-3340: the audit service on the real audit primitives, as dealAuditInTransaction-3339 does.
+const fakeCloud = { getAuthSession: async () => null, batchInsertAuditLogs: async () => undefined };
+beforeEach(() => {
+  const svc = auditService as unknown as Record<string, unknown>;
+  svc.pendingSyncQueue = [];
+  svc.pendingLocalWrites = [];
+  svc.localInsertFailing = false;
+  svc.kickScheduled = false;
+  svc.initialized = false;
+  auditService.initialize(realAuditDb as never, fakeCloud as never);
+  auditService.stopSyncInterval();
+  mockCaptureMessage.mockClear();
+});
+afterEach(async () => {
+  auditService.stopSyncInterval();
+  await settle();
+});
+
 afterAll(() => {
   for (const d of opened) {
     try {
@@ -104,7 +142,7 @@ function seedDb(): DatabaseType {
   return db;
 }
 
-function count(db: DatabaseType, table: "users_local" | "sessions"): number {
+function count(db: DatabaseType, table: "users_local" | "sessions" | "audit_logs"): number {
   return (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n;
 }
 
@@ -167,9 +205,10 @@ describe("BACKLOG-3322 deep-link provisioning is one transaction", () => {
     const real = seedDb();
     setDb(throwingAfter(real, /INSERT INTO users_local/i));
     expect(() => provisionDeepLinkLogin(deepLinkUser())).toThrow(/INJECTED/);
-    expect({ users: count(real, "users_local"), sessions: count(real, "sessions") }).toEqual({
+    expect({ users: count(real, "users_local"), sessions: count(real, "sessions"), audit: count(real, "audit_logs") }).toEqual({
       users: 0,
       sessions: 0,
+      audit: 0,
     });
   });
 
@@ -177,9 +216,10 @@ describe("BACKLOG-3322 deep-link provisioning is one transaction", () => {
     const real = seedDb();
     setDb(throwingAfter(real, /INSERT INTO sessions/i));
     expect(() => provisionDeepLinkLogin(deepLinkUser())).toThrow(/INJECTED/);
-    expect({ users: count(real, "users_local"), sessions: count(real, "sessions") }).toEqual({
+    expect({ users: count(real, "users_local"), sessions: count(real, "sessions"), audit: count(real, "audit_logs") }).toEqual({
       users: 0,
       sessions: 0,
+      audit: 0,
     });
   });
 
@@ -227,6 +267,10 @@ describe("BACKLOG-3322 deep-link provisioning is one transaction", () => {
     );
     expect(sessionUsers).toEqual([u.supabaseId, u.supabaseId]);
     expect(real.prepare("SELECT id FROM users_local").all()).toEqual([{ id: u.supabaseId }]);
+    // BACKLOG-3340: one LOGIN, on the migrated id (the migration writes none).
+    expect(real.prepare("SELECT user_id, action FROM audit_logs").all()).toEqual([
+      { user_id: u.supabaseId, action: "LOGIN" },
+    ]);
   });
 
   it("D6 heal: a user row with no session (a pre-3322 crash leftover) gets its session on the next sign-in, no second user", async () => {
@@ -252,6 +296,25 @@ describe("BACKLOG-3322 deep-link provisioning is one transaction", () => {
     expect(real.prepare("SELECT user_id, session_token FROM sessions").all()).toEqual([
       { user_id: u.supabaseId, session_token: r.sessionToken },
     ]);
+    // BACKLOG-3340: exactly one LOGIN, same commit, with no session or resource id.
+    expect(
+      real.prepare("SELECT user_id, action, resource_type, resource_id, session_id, success FROM audit_logs").all(),
+    ).toEqual([
+      {
+        user_id: u.supabaseId,
+        action: "LOGIN",
+        resource_type: "SESSION",
+        resource_id: null,
+        session_id: null,
+        success: 1,
+      },
+    ]);
+    // ...and the session token appears in no column of the row.
+    const row = real.prepare("SELECT * FROM audit_logs").get() as Record<string, unknown>;
+    const carrying = Object.entries(row)
+      .filter(([, v]) => v !== null && String(v).includes(r.sessionToken))
+      .map(([k]) => k);
+    expect(carrying).toEqual([]);
   });
 
   it("D8 the legacy-id migration fails (real driver, real UNIQUE conflict): the sign-in still completes on the OLD id, the error is logged not thrown", async () => {
@@ -280,5 +343,101 @@ describe("BACKLOG-3322 deep-link provisioning is one transaction", () => {
       "LoginProvisioning",
       expect.objectContaining({ error: expect.any(String) }),
     );
+  });
+
+  it("D9 the LOGIN insert fails (real CHECK-style abort): no user, no session, no audit row", () => {
+    const real = seedDb();
+    setDb(real);
+    forceAuditInsertFailure(real);
+    expect(() => provisionDeepLinkLogin(deepLinkUser())).toThrow(AuditNotRecordedError);
+    expect({ users: count(real, "users_local"), sessions: count(real, "sessions"), audit: count(real, "audit_logs") }).toEqual({
+      users: 0,
+      sessions: 0,
+      audit: 0,
+    });
+  });
+
+  it("D10 existing user, the session insert fails: one LOGIN_FAILED for that user after the rollback, no LOGIN", async () => {
+    const real = seedDb();
+    const u = deepLinkUser();
+    insertUser(real, u.supabaseId, u.email, u.supabaseId);
+    setDb(throwingAfter(real, /INSERT INTO sessions/i));
+    await expect(provisionDeepLinkSignIn(u)).rejects.toThrow(/INJECTED/);
+    await settle();
+    expect(count(real, "sessions")).toBe(0);
+    expect(real.prepare("SELECT user_id, action, success FROM audit_logs").all()).toEqual([
+      { user_id: u.supabaseId, action: "LOGIN_FAILED", success: 0 },
+    ]);
+  });
+
+  it("D13 legacy user whose migration failed, then the session insert fails: one LOGIN_FAILED on the LEGACY id", async () => {
+    const real = seedDb();
+    const u = deepLinkUser();
+    const oldId = randomUUID();
+    // The legacy user, found by email under an id that is not the Supabase id.
+    // No row holds the Supabase id, so a LOGIN_FAILED written on it has no
+    // users_local row and the foreign key refuses it.
+    insertUser(real, oldId, u.email, "legacy-subject");
+    // The migration's primary-record update fails (and rolls back), then the
+    // provisioning transaction's session insert fails. Injected rather than
+    // D8's conflicting row: that row would give the Supabase id a users_local
+    // row to point at.
+    setDb(throwingAfter(throwingAfter(real, /UPDATE users_local SET id/i), /INSERT INTO sessions/i));
+    (logService.error as jest.Mock).mockClear();
+
+    await expect(provisionDeepLinkSignIn(u)).rejects.toThrow(/INJECTED/);
+    await settle();
+
+    expect(logService.error).toHaveBeenCalledWith(
+      "[DeepLink] Failed to migrate local user ID",
+      "LoginProvisioning",
+      expect.objectContaining({ error: expect.any(String) }),
+    );
+    expect(real.prepare("SELECT id FROM users_local").all()).toEqual([{ id: oldId }]);
+    expect(count(real, "sessions")).toBe(0);
+    expect(real.prepare("SELECT user_id, action, success FROM audit_logs").all()).toEqual([
+      { user_id: oldId, action: "LOGIN_FAILED", success: 0 },
+    ]);
+  });
+
+  it("D11 a first sign-in with a provider users_local refuses (BACKLOG-4096 shape): no rows anywhere, one Sentry report", async () => {
+    const real = seedDb();
+    setDb(real);
+    const u = { ...deepLinkUser(), provider: "email" as never };
+    // The driver's SqliteError is built by a plain constructor function, so
+    // `rejects.toThrow` only recognises it when it shares jest's realm (true
+    // under ELECTRON_RUN_AS_NODE, false under CI's plain-node `npm test`, which
+    // reported "Received function did not throw"). Read the rejection directly.
+    const rejection = await provisionDeepLinkSignIn(u).then(
+      () => "resolved",
+      (e: unknown) => e as { message?: string; code?: string },
+    );
+    expect(rejection).toMatchObject({
+      code: "SQLITE_CONSTRAINT_CHECK",
+      message: expect.stringMatching(/^CHECK constraint failed: oauth_provider/),
+    });
+    await settle();
+    expect({ users: count(real, "users_local"), sessions: count(real, "sessions"), audit: count(real, "audit_logs") }).toEqual({
+      users: 0,
+      sessions: 0,
+      audit: 0,
+    });
+    expect(mockCaptureMessage).toHaveBeenCalledWith(
+      "Sign-in failure not written to the audit log",
+      expect.objectContaining({ tags: expect.objectContaining({ why: "no_local_user" }) }),
+    );
+  });
+
+  it("D12 two sign-ins for one user: two sessions, two LOGIN rows, one per sign-in", async () => {
+    const real = seedDb();
+    setDb(real);
+    const u = deepLinkUser();
+    await provisionDeepLinkSignIn(u);
+    await provisionDeepLinkSignIn(u);
+    expect(count(real, "sessions")).toBe(2);
+    expect((real.prepare("SELECT action FROM audit_logs").all() as { action: string }[]).map((r) => r.action)).toEqual([
+      "LOGIN",
+      "LOGIN",
+    ]);
   });
 });

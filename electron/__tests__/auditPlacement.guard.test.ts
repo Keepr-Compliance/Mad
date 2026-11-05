@@ -67,12 +67,13 @@ const AUDIT_SERVICE_FILE = "electron/services/auditService.ts";
  * `transactions:create` and `contacts:delete` channels were removed, then 37;
  * 38 since Settings "Export My Data" writes an entry; 35 since BACKLOG-4103
  * deleted the in-app OAuth login path and its three LOGIN / LOGIN_FAILED
- * entries). `log` calls plus
+ * entries; 36 since BACKLOG-3340 writes the browser sign-in's LOGIN with
+ * recordInTransaction in `provisionDeepLinkLogin`). `log` calls plus
  * `recordInTransaction` calls must add up to this. A conversion moves a site
  * from one side to the other; a NEW audited site changes the total and must
  * update this number on purpose.
  */
-const AUDITED_SITES_TOTAL = 35;
+const AUDITED_SITES_TOTAL = 36;
 
 type Reason = string;
 const R_REMOTE =
