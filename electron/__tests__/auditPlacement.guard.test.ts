@@ -68,12 +68,14 @@ const AUDIT_SERVICE_FILE = "electron/services/auditService.ts";
  * 38 since Settings "Export My Data" writes an entry; 39 since the
  * cloud-to-local phone type copy `user:sync-phone-type-from-cloud` writes one,
  * BACKLOG-4030; 36 since BACKLOG-4103 deleted the in-app OAuth login path and
- * its three LOGIN / LOGIN_FAILED entries). `log` calls plus
+ * its three LOGIN / LOGIN_FAILED entries; 37 since BACKLOG-3340 writes the
+ * browser sign-in's LOGIN with recordInTransaction in
+ * `provisionDeepLinkLogin`). `log` calls plus
  * `recordInTransaction` calls must add up to this. A conversion moves a site
  * from one side to the other; a NEW audited site changes the total and must
  * update this number on purpose.
  */
-const AUDITED_SITES_TOTAL = 36;
+const AUDITED_SITES_TOTAL = 37;
 
 type Reason = string;
 const R_REMOTE =
