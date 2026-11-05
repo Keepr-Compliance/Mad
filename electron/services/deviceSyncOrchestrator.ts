@@ -248,8 +248,25 @@ function snapshotStateForMark(status: BackupStatusReport): MarkSnapshotState {
  * have no usable prior backup to speak of, and each caller decides separately what
  * that means for the state it reports.
  */
-function isUsablePriorBackup(status: BackupStatusReport): boolean {
+export function isUsablePriorBackup(status: BackupStatusReport): boolean {
   return status.state === "present" && status.isComplete;
+}
+
+/**
+ * BACKLOG-2907 / 2938: the ONE mapping from a backup check to `PriorBackupState`.
+ *
+ *   present AND usable      -> "exists"   incremental; no banner
+ *   present AND NOT usable  -> "none"     full transfer; SHOW the banner
+ *   absent                  -> "none"     full transfer; SHOW the banner
+ *   unknown                 -> "unknown"  establishes nothing; claim neither
+ *
+ * BACKLOG-2931: exported so `backup:check-status` (the connect screen, before a sync)
+ * answers with the same value this orchestrator records during the sync. Two screens,
+ * one producer — they cannot disagree.
+ */
+export function toPriorBackupState(status: BackupStatusReport): PriorBackupState {
+  if (status.state === "present") return isUsablePriorBackup(status) ? "exists" : "none";
+  return status.state === "absent" ? "none" : "unknown";
 }
 
 /**
@@ -1282,8 +1299,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       //   absent                  -> "none"     full transfer; SHOW the banner
       //   unknown                 -> "unknown"  establishes nothing; claim neither
       //
-      // `usableAsPriorBackup` is hoisted here and consumed TWICE — by this mapping and
-      // by the BACKLOG-2925 estimate basis below — because the defect this item fixes
+      // One predicate, `isUsablePriorBackup`, answers for this mapping (through
+      // `toPriorBackupState`, which `backup:check-status` also calls — BACKLOG-2931) and
+      // for the BACKLOG-2925 estimate basis below — because the defect this item fixes
       // was two sites answering "is the prior backup any good?" separately. Deriving
       // the condition again at either site is how it returns in a new form;
       // `deviceSyncOrchestrator.usabilityParity-2938.test.ts` pins the two together
@@ -1295,14 +1313,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // user a full transfer.
       const usableAsPriorBackup = isUsablePriorBackup(backupStatus);
 
-      this.priorBackup =
-        backupStatus.state === "present"
-          ? usableAsPriorBackup
-            ? "exists"
-            : "none"
-          : backupStatus.state === "absent"
-            ? "none"
-            : "unknown";
+      this.priorBackup = toPriorBackupState(backupStatus);
 
       // BACKLOG-2914 (FIX 4): RECORDED, NOT INFERRED LATER.
       //

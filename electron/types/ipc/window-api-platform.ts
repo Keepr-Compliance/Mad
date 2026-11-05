@@ -16,9 +16,10 @@ import type { SyncPhase } from "../../services/deviceSyncOrchestrator";
  * existence. The question this answers is "is a full transfer coming?", not
  * "is there a directory on disk?".
  *
- * - `"exists"`  a prior backup is on disk AND is usable — `isComplete &&
- *               !isInterrupted`, the one predicate, evaluated by
- *               `isUsablePriorBackup` in `deviceSyncOrchestrator.ts`. The next
+ * - `"exists"`  a prior backup is on disk AND is usable — `isComplete` (an
+ *               interrupted but complete backup is usable, BACKLOG-2911), the one
+ *               predicate, evaluated by `isUsablePriorBackup` and mapped by
+ *               `toPriorBackupState` in `deviceSyncOrchestrator.ts`. The next
  *               sync is incremental.
  * - `"none"`    no full transfer can be avoided. EITHER the host established
  *               there is no prior backup (a proven ENOENT — producible since
@@ -190,6 +191,25 @@ export interface WindowApiBackup {
     }) => void,
   ) => () => void;
   onError: (callback: (error: { message: string }) => void) => () => void;
+  /**
+   * `backup:check-status` (preload deviceBridge.ts). BACKLOG-2917: `state` is three-state;
+   * `sizeBytes: null` means "not measured", never "empty".
+   *
+   * BACKLOG-2931: `priorBackup` is the sync's own usability answer
+   * (`toPriorBackupState` in deviceSyncOrchestrator.ts), read before the sync for the
+   * connect screen. Missing (an older main process) means `"unknown"`.
+   */
+  checkStatus?: (udid: string) => Promise<{
+    success: boolean;
+    state?: "absent" | "unknown" | "present";
+    reason?: string;
+    isComplete?: boolean;
+    isInterrupted?: boolean;
+    lastSyncTime?: string | null;
+    sizeBytes?: number | null;
+    priorBackup?: PriorBackupState;
+    error?: string;
+  }>;
 }
 
 /**

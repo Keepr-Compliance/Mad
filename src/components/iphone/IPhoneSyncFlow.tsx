@@ -60,6 +60,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
     userError,
     appleEncryptedBackup,
     lastSyncTime,
+    priorBackup,
     isWaitingForPasscode,
     toolSuspendedNotice,
     syncLocked,
@@ -171,6 +172,7 @@ export const IPhoneSyncFlow: React.FC<IPhoneSyncFlowProps> = ({ onClose }) => {
           device={device}
           onSyncClick={startSync}
           lastSyncTime={lastSyncTime}
+          priorBackup={priorBackup}
           driverMissing={driverMissing}
           onInstallDriver={recoverInstallDriver}
           isInstallingDriver={installDriverStatus === "installing"}
