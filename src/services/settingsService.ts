@@ -85,6 +85,15 @@ export interface IntegrationsPreferences {
 }
 
 /**
+ * BACKLOG-3951: dismissed app notices. `membershipNoticeDismissedFor` holds the
+ * name of the brokerage whose removed-member notice the user dismissed; a
+ * removal from a different brokerage shows the notice again.
+ */
+export interface NoticePreferences {
+  membershipNoticeDismissedFor?: string;
+}
+
+/**
  * User preferences object
  */
 export interface UserPreferences {
@@ -94,6 +103,7 @@ export interface UserPreferences {
   contactAutoRole?: ContactAutoRolePreferences;
   export?: ExportPreferences;
   integrations?: IntegrationsPreferences;
+  notices?: NoticePreferences;
   [key: string]: unknown;
 }
 
@@ -255,6 +265,41 @@ export const settingsService = {
     try {
       const result = await this.updatePreferences(userId, {
         integrations: { iphoneSyncEnabled: enabled },
+      });
+      return { success: result.success, error: result.error };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /**
+   * BACKLOG-3951: the brokerage name whose removed-member notice this user
+   * dismissed. `null` = read succeeded, nothing dismissed. `undefined` = the
+   * read failed (not known).
+   */
+  async getMembershipNoticeDismissedFor(userId: string): Promise<string | null | undefined> {
+    try {
+      const result = await this.getPreferences(userId);
+      if (result.success && result.data) {
+        const val = result.data.notices?.membershipNoticeDismissedFor;
+        return typeof val === "string" ? val : null;
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
+  },
+
+  /**
+   * BACKLOG-3951: persist the dismissal of the removed-member notice for one brokerage.
+   */
+  async setMembershipNoticeDismissedFor(
+    userId: string,
+    brokerageName: string
+  ): Promise<ApiResult<void>> {
+    try {
+      const result = await this.updatePreferences(userId, {
+        notices: { membershipNoticeDismissedFor: brokerageName },
       });
       return { success: result.success, error: result.error };
     } catch (error) {
