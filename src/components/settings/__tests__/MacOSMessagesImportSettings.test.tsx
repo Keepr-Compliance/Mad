@@ -491,6 +491,9 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
       attachmentCount: opts.attachmentCount ?? 1000,
       availableDiskBytes: opts.availableDiskBytes,
       fitsOnDisk: opts.fitsOnDisk,
+      // BACKLOG-2882: always set by the producer — estimate + 2 GiB headroom.
+      requiredDiskBytes: opts.attachmentBytes + 2_147_483_648,
+      diskHeadroomBytes: 2_147_483_648,
     };
   }
 
@@ -514,6 +517,29 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
     // Explicitly NOT the vague framing the item rejects: this is a disk
     // capacity fact, not a performance hint.
     expect(estimate).not.toHaveTextContent(/slow/i);
+  });
+
+  it("states the attachments figure the same way in the panel estimate and the refusal sentence", async () => {
+    // 80.04 GB: nearest rounding prints 80.0, rounding up prints 80.1. The
+    // sentence rounds parts up (BACKLOG-2882), so the panel must too, or one
+    // estimate reads "80.0 GB" above and "80.1 GB" in the dialog.
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue(
+      estimateResponse({
+        messages: 480000,
+        attachmentBytes: 80_040_000_000,
+        availableDiskBytes: 40 * GB,
+        fitsOnDisk: false,
+      }),
+    );
+
+    renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+
+    const estimate = await screen.findByTestId("import-size-estimate");
+    expect(estimate).toHaveTextContent("about 80.1 GB of attachments");
+    await screen.findByTestId("import-space-notice");
+    fireEvent.click(screen.getByRole("button", { name: /Import Messages/i }));
+    const block = await screen.findByTestId("import-space-block");
+    expect(block).toHaveTextContent("Keepr needs 80.1 GB for the attachments");
   });
 
   it("BLOCKS the import when the attachments do not fit, with no override", async () => {
@@ -542,7 +568,9 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
     // The ways through are offered — text-only, and (when one exists) a shorter
     // window named with its own estimate.
     expect(screen.getByTestId("import-without-attachments")).toBeInTheDocument();
-    expect(block).toHaveTextContent(/needs up to 80\.0 GB/i);
+    expect(block).toHaveTextContent(
+      "Keepr needs 80.0 GB for the attachments plus 2.2 GB kept free so your Mac keeps working. Only 40.0 GB is available, so the import will not start."
+    );
 
     // ...and there is deliberately NO "import anyway" escape. An override is
     // exactly what would let macOS evict the user's Time Machine snapshots to

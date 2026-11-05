@@ -47,6 +47,10 @@ export interface AttachmentsRefusedForSpace {
   availableBytes: number;
   /** Attachments that were left uncopied. */
   attachmentCount: number;
+  /** BACKLOG-2882: free space kept on top of the estimate. */
+  headroomBytes?: number;
+  /** BACKLOG-2882: estimate + headroom — the figure that was compared. */
+  requiredBytes?: number;
 }
 
 /**
