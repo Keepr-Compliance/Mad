@@ -275,8 +275,9 @@ on the computer"), Ended by `device-error`.
   > iPhone is locked. Please unlock your iPhone and try again, and leave it unlocked while the sync runs.
   <!-- lit electron/services/backupService.ts:305 `iPhone is locked. Please unlock your iPhone and try again, and leave it unlocked ` -->
   <!-- lit electron/services/backupService.ts:306 `while the sync runs.` -->
-- **Log:** `ErrorCode 208: Device locked (MBErrorDomain/208)`, exit code
-  **48**, and `device_error_code` 208 on the run.
+- **Log:** `ErrorCode 208: Device locked (MBErrorDomain/208)`, and
+  `device_error_code` 208 on the run. Exit code 48 was observed once
+  (2026-08-28); the code does not depend on it.
   `*** Waiting for passcode to be entered on the device ***` normally appears
   just before this, but it also appears in healthy runs while the user enters
   the passcode.
@@ -373,8 +374,8 @@ on the computer"), Ended by `device-error`.
 
 - **Portal:** Reason empty, and Ended by empty or `app-quit`.
 - **What it means:**
-  - `app-quit`: Keepr was closed during the backup. The user saw
-    "Backup stopped because Keepr was closed."
+  - `app-quit`: Keepr was closed during the backup. The run's recorded
+    message is "Backup stopped because Keepr was closed."
     <!-- lit electron/services/backupService.ts:295 `Backup stopped because Keepr was closed.` -->
   - **Both empty:** the sync was refused at a check before the backup started.
     Examples are the up-front disk check (§3.6 c), the Windows driver checks,
@@ -519,8 +520,8 @@ The four causes from that evening map to today's sections as follows:
 | 3 | Backup service stuck on the phone (exit 255, no disconnects) | §3.5 `SERVICE_UNAVAILABLE` |
 | 4 | Not enough real free space on the Mac (105, exit 151) | §3.6 `INSUFFICIENT_SPACE` |
 
-A fifth cause was added the next day: a phone that really was locked (208,
-exit 48), §3.7.
+A fifth cause was added the next day: a phone that really was locked (208),
+§3.7.
 
 ---
 
