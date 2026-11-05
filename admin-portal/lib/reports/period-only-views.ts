@@ -18,7 +18,10 @@
  * requires one) and `pinned: false`.
  */
 
+import { DEFAULT_ANALYTICS_PERIOD } from './analytics-period';
 import { hasExplicitState, resolveInitialView, type SearchParamsLike } from './default-view';
+import { DEFAULT_FUNNEL_PERIOD } from './funnel-period';
+import { DEFAULT_PERIOD } from './period';
 import {
   ANALYTICS_VIEW_PERIODS,
   FUNNEL_VIEW_PERIODS,
@@ -31,6 +34,7 @@ import {
   type StoredViewPeriod,
   type ViewPeriodSpec,
 } from './view-period';
+import { parseViewAccess, viewAccessFields, type SharedViewFields } from './saved-view-access';
 
 /** Report keys = the reports' registry slugs (lib/reports/registry.ts). */
 export const FUNNEL_REPORT_KEY = 'funnel';
@@ -55,7 +59,8 @@ export interface StoredPeriodOnlyFilters {
   period: StoredViewPeriod;
 }
 
-export interface PeriodOnlySavedView {
+/** BACKLOG-4087: `SharedViewFields` = the caller's access (saved-view-access.ts). */
+export interface PeriodOnlySavedView extends SharedViewFields {
   id: string;
   name: string;
   /** Null when the row has no period this report accepts. */
@@ -73,6 +78,11 @@ export interface PeriodInput {
 export interface PeriodOnlyViews {
   reportKey: string;
   spec: ViewPeriodSpec;
+  /**
+   * The report's BUILT-IN period (BACKLOG-4121). Clearing a view navigates to
+   * it written out explicitly: a bare URL would re-open the default view.
+   */
+  defaultPeriodKey: string;
   serialize(period: ResolvedPeriodLike): StoredPeriodOnlyFilters;
   parseRows(raw: unknown): PeriodOnlySavedView[];
   /** Is the page showing this view? Never true for a view with no readable period. */
@@ -95,7 +105,7 @@ function paramString(params: SearchParamsLike, key: string): string | undefined 
   return typeof value === 'string' ? value : undefined;
 }
 
-export function createPeriodOnlyViews(reportKey: string, spec: ViewPeriodSpec): PeriodOnlyViews {
+export function createPeriodOnlyViews(reportKey: string, spec: ViewPeriodSpec, defaultPeriodKey: string): PeriodOnlyViews {
   function parseRow(raw: unknown): PeriodOnlySavedView | null {
     if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return null;
     const row = raw as Record<string, unknown>;
@@ -104,11 +114,13 @@ export function createPeriodOnlyViews(reportKey: string, spec: ViewPeriodSpec): 
       row.filters != null && typeof row.filters === 'object' && !Array.isArray(row.filters)
         ? (row.filters as Record<string, unknown>)
         : null;
+    const access = parseViewAccess(row);
     return {
       id: row.id,
       name: typeof row.name === 'string' && row.name.length > 0 ? row.name : 'Untitled view',
       period: parseViewPeriod(blob?.period, spec),
-      isDefault: row.is_default === true,
+      isDefault: access.isDefault,
+      ...viewAccessFields(access),
     };
   }
 
@@ -120,6 +132,7 @@ export function createPeriodOnlyViews(reportKey: string, spec: ViewPeriodSpec): 
   return {
     reportKey,
     spec,
+    defaultPeriodKey,
     serialize: (period) => ({ period: serializeViewPeriod(period) }),
     parseRows,
     isActive: (view, period) => view.period !== null && viewPeriodMatches(view.period, period),
@@ -144,6 +157,6 @@ export function createPeriodOnlyViews(reportKey: string, spec: ViewPeriodSpec): 
   };
 }
 
-export const funnelViews = createPeriodOnlyViews(FUNNEL_REPORT_KEY, FUNNEL_VIEW_PERIODS);
-export const analyticsViews = createPeriodOnlyViews(ANALYTICS_REPORT_KEY, ANALYTICS_VIEW_PERIODS);
-export const supportSlaViews = createPeriodOnlyViews(SUPPORT_SLA_REPORT_KEY, SHARED_VIEW_PERIODS);
+export const funnelViews = createPeriodOnlyViews(FUNNEL_REPORT_KEY, FUNNEL_VIEW_PERIODS, DEFAULT_FUNNEL_PERIOD);
+export const analyticsViews = createPeriodOnlyViews(ANALYTICS_REPORT_KEY, ANALYTICS_VIEW_PERIODS, DEFAULT_ANALYTICS_PERIOD);
+export const supportSlaViews = createPeriodOnlyViews(SUPPORT_SLA_REPORT_KEY, SHARED_VIEW_PERIODS, DEFAULT_PERIOD);

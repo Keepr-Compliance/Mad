@@ -121,6 +121,8 @@ export interface SyncOutcomeRow {
   last_phase?: string | null;
   reason_code?: string | null;
   ended_by?: string | null;
+  // BACKLOG-2950: the phone's MBErrorDomain code, e.g. 105 or 208. Code only.
+  device_error_code?: number | null;
   // BACKLOG-3892 E: allow-listed facts the desktop app writes (backupEncryptionMetrics).
   source_metrics?: unknown;
 }
@@ -221,6 +223,8 @@ export interface SyncRun {
   lastPhaseRaw: string | null;
   reasonCode: string | null;
   endedBy: string | null;
+  /** BACKLOG-2950: the phone's own error code (null: none reported). */
+  deviceErrorCode: number | null;
   /** BACKLOG-3892 E: the kept backup could not be read and was moved aside (null: not reported). */
   keptBackupLabel: string | null;
 
@@ -646,6 +650,7 @@ export function buildRun(row: SyncOutcomeRow, users: Map<string, ReportUser>): S
     lastPhaseRaw: row.last_phase ?? null,
     reasonCode: row.reason_code ?? null,
     endedBy: row.ended_by ?? null,
+    deviceErrorCode: row.device_error_code ?? null,
     keptBackupLabel: keptBackupLabel(row.source_metrics),
 
     stalled: isStalled(row),

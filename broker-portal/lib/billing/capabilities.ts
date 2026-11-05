@@ -37,7 +37,8 @@ export type BillingBlock = 'plan' | 'choose_plan' | 'seats' | 'credits' | 'payme
 /**
  * BACKLOG-3854: an organization's money blocks once billing is set up. The payment method and the
  * invoices are on Stripe's page ("Manage billing", founder 546c9af1); the empty org frames for
- * `payment` and `invoices` are not shown.
+ * `payment` and `invoices` are not shown. BACKLOG-3855: the last invoices are listed inside
+ * `manage_billing`, gated on canSeeInvoices (no rule change here).
  */
 const ORG_MONEY_BLOCKS: BillingBlock[] = ['plan', 'seats', 'manage_billing'];
 
@@ -118,11 +119,14 @@ const PERSONAL_PRIMARY: Record<AgentPlanState, BillingPrimaryAction | null> = {
   cancel_pending: 'keep_plan',
   payment_failed: 'update_card',
   support_grant: null,
+  // BACKLOG-3860: a live trial subscribes from block 2, as pay as you go does.
+  trial: null,
 };
 
 function personal(s: BillingSituation): BillingCapabilities {
+  // BACKLOG-3860: a live trial may subscribe (a Stripe grant replaces the trial override).
   const blocks: BillingBlock[] =
-    s.agentPlan === 'none'
+    s.agentPlan === 'none' || s.agentPlan === 'trial'
       ? ['plan', 'choose_plan', 'credits', 'payment', 'invoices']
       : ['plan', 'credits', 'payment', 'invoices'];
   return {

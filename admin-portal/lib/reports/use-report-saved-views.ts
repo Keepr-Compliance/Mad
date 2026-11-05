@@ -19,6 +19,8 @@ import { writeFailureMessage } from './report-views';
 export interface SavedViewLike {
   id: string;
   isDefault: boolean;
+  /** BACKLOG-4087. Missing = the user's own view. */
+  access?: 'owner' | 'editor' | 'viewer';
 }
 
 export interface UseReportSavedViews<V, F, M> {
@@ -33,6 +35,11 @@ export interface UseReportSavedViews<V, F, M> {
   remove(view: V): void;
   /** Make `view` the default, or clear the default (null). */
   setDefault(view: V | null): void;
+  /**
+   * Run any other write the same way (BACKLOG-4087: an editor update, leaving a shared view): a
+   * refusal sets `writeError`, and both outcomes re-read the list.
+   */
+  write(op: () => Promise<unknown>): void;
 }
 
 export function useReportSavedViews<V extends SavedViewLike, F, M>(
@@ -107,7 +114,11 @@ export function useReportSavedViews<V extends SavedViewLike, F, M>(
     [api, reportKey, run]
   );
 
-  const defaultViewId = useMemo(() => (views ?? []).find((v) => v.isDefault)?.id ?? null, [views]);
+  // Own views only (BACKLOG-4087): a shared view is never the user's default.
+  const defaultViewId = useMemo(
+    () => (views ?? []).find((v) => v.isDefault && (v.access === undefined || v.access === 'owner'))?.id ?? null,
+    [views]
+  );
 
-  return { views, loading, writeError, defaultViewId, save, remove, setDefault };
+  return { views, loading, writeError, defaultViewId, save, remove, setDefault, write: run };
 }

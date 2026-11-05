@@ -8,13 +8,22 @@
  * banner (founder d0c22cef #5) and after the plan ended (invoice history). Never IT admin.
  * A saved card does not pay invoices automatically (they are sent invoices), so the copy does not
  * say it does.
+ *
+ * BACKLOG-3855: above the button, the last invoices (OrgInvoicesTable), "View all invoices" (the
+ * same action as the button) and the help article. `invoices` undefined = not passed (no list).
  */
 
+import Link from 'next/link';
 import { Alert } from '@keepr/design-system';
 import { BillingBlock } from './BillingBlock';
 import { ManageBillingButton } from './ManageBillingButton';
+import { OrgInvoicesTable } from './OrgInvoicesTable';
+import { ViewAllInvoicesLink } from './ViewAllInvoicesLink';
+import type { OrgInvoiceRow } from '@/lib/billing/orgInvoices';
 
-export function ManageBillingBlock({ unavailable }: { unavailable?: boolean }) {
+export const INVOICES_HELP_HREF = '/guides/invoices';
+
+export function ManageBillingBlock({ unavailable, invoices }: { unavailable?: boolean; invoices?: OrgInvoiceRow[] | null }) {
   return (
     <BillingBlock id="manage-billing" title="Invoices & payment method">
       {unavailable ? (
@@ -22,10 +31,23 @@ export function ManageBillingBlock({ unavailable }: { unavailable?: boolean }) {
           <Alert variant="error">Stripe is unavailable right now. Try again in a minute.</Alert>
         </div>
       ) : null}
-      <p className="mt-2 text-sm text-gray-700">View, download and pay invoices, and save a payment method, on Stripe&apos;s billing page.</p>
+      {invoices !== undefined ? (
+        <>
+          <OrgInvoicesTable rows={invoices} />
+          <div className="mt-2">
+            <ViewAllInvoicesLink />
+          </div>
+        </>
+      ) : null}
+      <p className="mt-3 text-sm text-gray-700">Save a payment method and see every invoice on Stripe&apos;s billing page.</p>
       <div className="mt-3">
         <ManageBillingButton />
       </div>
+      <p className="mt-3 text-sm">
+        <Link href={INVOICES_HELP_HREF} className="font-medium text-indigo-700 hover:underline">
+          Where do I find my invoices?
+        </Link>
+      </p>
     </BillingBlock>
   );
 }

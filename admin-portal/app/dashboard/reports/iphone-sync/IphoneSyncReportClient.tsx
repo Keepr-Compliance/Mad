@@ -11,11 +11,12 @@
  */
 
 import { useRouter } from 'next/navigation';
+import { reportShareApi } from '@/lib/reports/report-share-api';
 import { reportViewsApi } from '@/lib/reports/report-views-api';
 import { IphoneSyncReport, type IphoneSyncReportProps } from './IphoneSyncReport';
 
 export function IphoneSyncReportClient(
-  props: Omit<IphoneSyncReportProps, 'onNavigate' | 'viewsApi'>
+  props: Omit<IphoneSyncReportProps, 'onNavigate' | 'viewsApi' | 'shareApi'>
 ) {
   const router = useRouter();
   return (
@@ -23,6 +24,7 @@ export function IphoneSyncReportClient(
       {...props}
       onNavigate={(url) => router.push(url, { scroll: false })}
       viewsApi={reportViewsApi}
+      shareApi={reportShareApi}
     />
   );
 }

@@ -347,6 +347,35 @@ describe('Subscribe: refused before any Stripe call', () => {
     expect(await subscribe()).toHaveProperty('redirect');
   });
 
+  // BACKLOG-3860 T9 (and the website side of T8). The trial override is the start
+  // function's own shape (migration 20261031140000:235-238): enabled true, source
+  // 'trial', paid_through = to_jsonb(timestamptz), which keepr-test renders as
+  // "2026-11-14T05:51:51.123973+00:00". [EDITED: years, so one is always ahead and
+  // one always past.] Runs through the real billingCapabilities (no stubbed caps).
+  const TRIAL_LIVE = { enabled: true, source: 'trial', paid_through: '2099-11-14T05:51:51.123973+00:00' };
+  const TRIAL_ENDED = { enabled: true, source: 'trial', paid_through: '2025-11-14T05:51:51.123973+00:00' };
+  const planWith = (o: unknown) => ({
+    organization_plans: [{ organization_id: FIXTURE_PERSONAL_ORG_ID, feature_overrides: { unlimited_transactions: o } }],
+  });
+
+  it.each([
+    ['live trial', TRIAL_LIVE],
+    ['ended trial', TRIAL_ENDED],
+  ])('T9: %s override -> Subscribe reaches Stripe Checkout', async (_n, override) => {
+    seed(planWith(override));
+    expect(await subscribe()).toEqual({ redirect: 'https://checkout.stripe.com/c/pay/created' });
+  });
+
+  it.each([
+    ['sourceless {enabled:true} (3845 k07)', { enabled: true }],
+    ['source support, paid_through ahead', { enabled: true, source: 'support', paid_through: '2099-11-14T05:51:51.123973+00:00' }],
+    ['an arbitrary other source', { enabled: true, source: 'promo', paid_through: '2099-11-14T05:51:51.123973+00:00' }],
+  ])('T9/T8: %s -> still refused as a Keepr grant, zero Stripe calls', async (_n, override) => {
+    seed(planWith(override));
+    expect(await subscribe()).toEqual({ error: expect.stringContaining('come from Keepr') });
+    expect(stripeOps()).toEqual([]);
+  });
+
   it('C-SUSP (R4): a suspended licence row of ANY type (here team) -> refused, zero Stripe calls', async () => {
     seed({ licenses: [{ id: 'lic-1', user_id: FIXTURE_USER_ID, status: 'suspended', license_type: 'team' }] });
     expect(await subscribe()).toEqual({ error: 'Your account is suspended. Please contact support.' });

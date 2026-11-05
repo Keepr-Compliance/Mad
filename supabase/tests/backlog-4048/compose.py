@@ -1,0 +1,17 @@
+#!/usr/bin/env python3
+"""BACKLOG-4048: build one SQL text for a single kt-sql call on keepr-test.
+
+Usage: compose.py <out.sql> <modes> [--with-migration]
+Mode names are defined in controls.sql (base, current, M1..M12, SR_M13_submitter_any_org).
+The controls end in RAISE, so the whole call rolls back (migration included when composed in).
+"""
+import os, sys
+here = os.path.dirname(os.path.abspath(__file__))
+mig = os.path.join(here, '..', '..', 'migrations', '20261104210000_org_billing_state_functions_caller_check.sql')
+out, modes = sys.argv[1], sys.argv[2]
+ctl = open(os.path.join(here, 'controls.sql')).read()
+assert ctl.count('ARRAY[__MODES__]') == 1
+ctl = ctl.replace('ARRAY[__MODES__]', 'ARRAY[' + ','.join("'%s'" % m.strip() for m in modes.split(',')) + ']')
+text = (open(mig).read() + '\n' if '--with-migration' in sys.argv[3:] else '') + ctl
+open(out, 'w').write(text)
+print(out, len(text))

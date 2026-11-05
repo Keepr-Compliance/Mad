@@ -1,0 +1,49 @@
+# BACKLOG-4144 M2 harness results, keepr-test, 2026-11-05T07:01:23Z, migration at bb981c93e
+## baseline (keepr-test migrated; run restores pre-M2 text first)
+{
+ "fail": 0,
+ "pass": 49,
+ "reds": {},
+ "total": 49
+}
+## mutations
+== ADD_policy_beside_old
+MUTATION APPLIED numstat=2/1
+  - ALTER POLICY analytics_events_select_own_or_internal ON public.analytics_events
+  + DROP POLICY IF EXISTS analytics_events_select_by_report ON public.analytics_events;
+  + CREATE POLICY analytics_events_select_by_report ON public.analytics_events FOR SELECT TO authenticated
+RESULT total=49 pass=36 fail=13 reds=C1a_agent_events_0,C1b_supervisor_no_access_events_0,C1n_unread_event_name_0_for_superadmin,C1s_exports_viewer_funnel_only_events_0,C1t_report_viewers_unread_event_0,C1zb_sla_viewer_other_tables_0,C1zc_row_without_analytics_view_closed,C1zd_removed_access_closes_at_read,K1_policy_set_unchanged,K2_policy_count_per_table,K3_only_four_texts_changed,K4_new_texts_use_wrapper_not_internal,RB1_rollback_restores_exact_text
+RESTORED clean=True
+== PRIVATE_helper_not_wrapper
+MUTATION APPLIED numstat=1/1
+  - AND (SELECT public.report_my_access('funnel')) IS NOT NULL
+  + AND (SELECT public._report_access_role((SELECT auth.uid()), 'funnel')) IS NOT NULL
+RESULT total=49 pass=33 fail=16 reds=C1a_agent_events_0,C1b_supervisor_no_access_events_0,C1i_superadmin_funnel_events_4,C1j_superadmin_export_events_2,C1n_unread_event_name_0_for_superadmin,C1p_funnel_viewer_funnel_events_4,C1q_funnel_viewer_export_completed_2,C1r_exports_viewer_export_completed_2,C1s_exports_viewer_funnel_only_events_0,C1t_report_viewers_unread_event_0,C1zb_sla_viewer_other_tables_0,C1zc_row_without_analytics_view_closed,C1zd_removed_access_closes_at_read,C6a_own_event_readable,C6f_others_rows_closed_to_no_role,K4_new_texts_use_wrapper_not_internal
+RESTORED clean=True
+== SWAP_funnel_exports_keys
+MUTATION APPLIED numstat=2/2
+  - AND (SELECT public.report_my_access('funnel')) IS NOT NULL
+  + AND (SELECT public.report_my_access('exports')) IS NOT NULL
+  - AND (SELECT public.report_my_access('exports')) IS NOT NULL
+  + AND (SELECT public.report_my_access('funnel')) IS NOT NULL
+RESULT total=49 pass=47 fail=2 reds=C1p_funnel_viewer_funnel_events_4,C1s_exports_viewer_funnel_only_events_0
+RESTORED clean=True
+== NO_own_rows_events
+MUTATION APPLIED numstat=1/2
+  - ((SELECT auth.uid()) = user_id)
+  - OR (
+  + (
+RESULT total=49 pass=48 fail=1 reds=C6a_own_event_readable
+RESTORED clean=True
+== NO_own_rows_submissions
+MUTATION APPLIED numstat=1/2
+  - (user_id = (SELECT auth.uid()))
+  - OR can_review_submission(organization_id)
+  + can_review_submission(organization_id)
+RESULT total=49 pass=48 fail=1 reds=C6d_own_submission_readable
+RESTORED clean=True
+== NO_can_review_submission
+MUTATION APPLIED numstat=0/1
+  - OR can_review_submission(organization_id)
+RESULT total=49 pass=48 fail=1 reds=C6e_reviewer_reads_org_submissions
+RESTORED clean=True
