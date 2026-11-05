@@ -175,9 +175,10 @@ export interface SyncOutcomeRow {
    */
   startedAt: number;
   /**
-   * BACKLOG-3671 P2: the source's own metrics (Google Messages only), ALREADY
-   * built by that source's allow-list builder (rcsSyncOutcome.buildRcsSourceMetrics
-   * — the only writer). Never a spread of producer data.
+   * BACKLOG-3671 P2: the source's own metrics, ALREADY built by that source's
+   * allow-list builder (Google Messages: rcsSyncOutcome.buildRcsSourceMetrics;
+   * BACKLOG-4130 email pre-cache: emailPrecacheOutcome.buildEmailPrecacheSourceMetrics).
+   * Never a spread of producer data.
    */
   sourceMetrics?: Record<string, unknown>;
 }

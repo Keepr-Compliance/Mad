@@ -54,6 +54,10 @@ import {
   precacheTimingOutcome,
   type EmailPrecacheMode,
 } from "./emailPrecacheTiming";
+// BACKLOG-4130: the same timing record, sent to sync_outcomes (source
+// 'email-precache') through the shared fire-and-forget writer.
+import { buildEmailPrecacheOutcomeRow } from "./emailPrecacheOutcome";
+import { recordSyncOutcome } from "./syncOutcomeSupabase";
 import { getRawDatabase } from "./db/core/dbConnection";
 import { recordMailFoldersForFetchedEmails } from "./mailFolderCaptureService";
 import { selectForceRemovableAttachmentPaths } from "./db/emailForceSetSql";
@@ -2246,6 +2250,11 @@ class EmailSyncService {
     let timedProviders: readonly EmailForceProvider[] = [];
     // BACKLOG-3799: providers whose pre-cache fetch threw (timing outcome).
     const failedPrecacheProviders = new Set<EmailForceProvider>();
+    // BACKLOG-4130: the configured window and whether this run backfilled a
+    // widened one, hoisted like `precacheMode` so the `finally` can send them.
+    // `undefined` = the run ended before the preference was read.
+    let precacheWindowMonths: number | undefined;
+    let precacheBackfill = false;
 
     let forceStaging: EmailForceStaging | null = null;
     let forceSwap: ForceSwapResult | undefined;
@@ -2343,6 +2352,7 @@ class EmailSyncService {
 
     // Read user's cache duration preference
     const cacheDurationMonths = await getEmailCacheDurationMonths(userId);
+    precacheWindowMonths = cacheDurationMonths;
     const cacheSinceDate = computeEmailCacheSinceDate(cacheDurationMonths);
 
     // Incremental: find the latest cached email timestamp.
@@ -2428,6 +2438,7 @@ class EmailSyncService {
       oldestCached && cacheSinceDate < oldestCached
         ? { after: cacheSinceDate, before: oldestCached }
         : null;
+    precacheBackfill = backfillWindow !== null;
 
     logService.info("Email pre-cache date range computed", "EmailSyncService", {
       cacheDurationMonths,
@@ -3352,6 +3363,18 @@ class EmailSyncService {
           formatEmailPrecacheTimingLine(timing),
           "EmailSyncService",
           { ...timing, userId },
+        );
+        // BACKLOG-4130: the same run to sync_outcomes. Inside this `try` on
+        // purpose: a synchronous throw from the builder must not skip
+        // `forceStaging.drop()` below. The send itself never throws (async,
+        // fire-and-forget); `userId` is never passed — the writer uses the
+        // signed-in auth uid.
+        recordSyncOutcome(
+          buildEmailPrecacheOutcomeRow(timing, {
+            runStartedAt,
+            windowMonths: precacheWindowMonths,
+            backfill: precacheBackfill,
+          }),
         );
       } catch (timingError) {
         logService.warn("Could not emit email pre-cache timing", "EmailSyncService", {
