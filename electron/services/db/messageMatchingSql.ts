@@ -47,20 +47,15 @@
  * pre-move text by `__tests__/messageMatchingSql.dateFilter.test.ts` — a builder is
  * byte-identical only if EVERY branch is, and testing one branch tests one branch.
  *
- * ## Separators
+ * ## Removed builders
  *
- * This module's callers built placeholder lists with `.join(",")` — comma, no space —
- * so every list here passes `sql`,`` rather than taking `placeholderList`'s `, `
- * default. One character per placeholder, and the difference between byte-identical and
- * not.
+ * BACKLOG-4039 / BACKLOG-3984 removed the deal-level auto-link path and, with it, every
+ * placeholder-list builder this module had (the 0.9 / 0.85 claims, the body batch, the
+ * email-channel candidates and the rejected-email lookup).
  */
 
 import { sql } from "./core/sqlText";
 import type { SafeSql } from "./core/sqlText";
-import { placeholderList } from "./core/sqlFragments";
-
-/** Comma with no space — what this module's callers' `.join(",")` produced. */
-const COMMA = sql`,`;
 
 /** The optional date bounds on the text-message candidate read. */
 export interface MessageDateWindow {
@@ -149,50 +144,6 @@ export const INSERT_COMMUNICATION_SQL = sql`
     ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
   `;
 
-/** Subjects and bodies for a batch of messages. Bound: one message id per placeholder. */
-export function messageBodiesSql(idCount: number): SafeSql {
-  const placeholders = placeholderList(idCount, COMMA);
-  return sql`
-      SELECT id, subject, body_text
-      FROM messages
-      WHERE id IN (${placeholders})
-    `;
-}
-
-/**
- * A transaction's window, for the text path. One bound parameter: transaction id.
- *
- * `TRANSACTION_TEXT_WINDOW_SQL`, not `TRANSACTION_WINDOW_SQL`: `db/auditCoverageSql.ts:55`
- * already exports that name for a different statement (it also selects `created_at` and
- * `status`, and scopes by `user_id`). Same name, two statements, is exactly the trap
- * BACKLOG-3044 PR 3 was sent back for.
- */
-export const TRANSACTION_TEXT_WINDOW_SQL = sql`SELECT user_id, started_at, closed_at FROM transactions WHERE id = ?`;
-
-/** A message's thread. One bound parameter: message id. */
-export const MESSAGE_THREAD_ID_SQL = sql`SELECT thread_id FROM messages WHERE id = ?`;
-
-/**
- * Claim a batch of messages for a transaction at PATTERN confidence 0.9. Bound: the
- * transaction id, then one message id per placeholder.
- *
- * `AND transaction_id IS NULL` makes the write a claim rather than a reassignment — a
- * message already attached to another deal is left alone. That is what stops a
- * pattern match from silently moving correspondence between transactions.
- *
- * Kept separate from `claimMessagesForTransactionSql085` below rather than taking the
- * confidence as a parameter: the two texts differ (`0.9` vs `0.85`), and parameterising
- * would change both statements to save one constant.
- */
-export function claimMessagesForTransactionSql09(idCount: number): SafeSql {
-  const placeholders = placeholderList(idCount, COMMA);
-  return sql`
-        UPDATE messages
-        SET transaction_id = ?, transaction_link_source = 'pattern', transaction_link_confidence = 0.9
-        WHERE id IN (${placeholders}) AND transaction_id IS NULL
-      `;
-}
-
 /** The email addresses on a transaction's contacts. One bound parameter: transaction id. */
 export const TRANSACTION_CONTACT_EMAILS_SQL = sql`
     SELECT
@@ -202,68 +153,3 @@ export const TRANSACTION_CONTACT_EMAILS_SQL = sql`
     JOIN contact_emails ce ON tc.contact_id = ce.contact_id
     WHERE tc.transaction_id = ? AND tc.removed_at IS NULL
   `;
-
-/**
- * Email-channel candidates for a transaction. Bound: user id, then the transaction id
- * twice.
- *
- * Note this one carries only the `communications` exclusion, not the two
- * `ignored_communications` arms the text read has. That asymmetry is the base's and is
- * preserved rather than tidied — evening it up would change the statement and alter
- * which emails are offered.
- */
-export const EMAIL_CHANNEL_CANDIDATES_SQL = sql`
-    SELECT
-      m.id,
-      m.sender,
-      m.recipients,
-      m.direction,
-      m.channel
-    FROM messages m
-    WHERE m.user_id = ?
-      AND m.channel = 'email'
-      AND m.duplicate_of IS NULL
-      AND (
-        m.transaction_id IS NULL
-        OR m.transaction_id != ?
-      )
-      AND m.id NOT IN (
-        SELECT message_id FROM communications
-        WHERE transaction_id = ? AND message_id IS NOT NULL
-      )
-  `;
-
-/**
- * A transaction's address fields, for the email path's address filter. One bound
- * parameter: transaction id.
- *
- * `skip_address_filter` is selected because a deal can opt out of address matching
- * entirely; the caller must be able to see that rather than infer it.
- */
-export const TRANSACTION_ADDRESS_SQL = sql`SELECT user_id, property_address, property_street, skip_address_filter FROM transactions WHERE id = ?`;
-
-/**
- * Which of a set of already-rejected emails carries this provider id. Bound: the
- * external id, then one email id per placeholder.
- *
- * The base spelled this with `+` concatenation rather than a template. The text is
- * unchanged; only the way it is assembled is.
- */
-export function ignoredEmailsByExternalIdSql(idCount: number): SafeSql {
-  const placeholders = placeholderList(idCount, COMMA);
-  return sql`SELECT id FROM emails WHERE external_id = ? AND id IN (${placeholders})`;
-}
-
-/**
- * Claim a batch of messages at PATTERN confidence 0.85 — the email path's lower bar.
- * Bound: transaction id, then one message id per placeholder. See the 0.9 twin above
- * on why `AND transaction_id IS NULL` is load-bearing and why these are two constants.
- */
-export function claimMessagesForTransactionSql085(idCount: number): SafeSql {
-  const placeholders = placeholderList(idCount, COMMA);
-  return sql`
-        UPDATE messages
-        SET transaction_id = ?, transaction_link_source = 'pattern', transaction_link_confidence = 0.85
-        WHERE id IN (${placeholders}) AND transaction_id IS NULL
-      `;
-}

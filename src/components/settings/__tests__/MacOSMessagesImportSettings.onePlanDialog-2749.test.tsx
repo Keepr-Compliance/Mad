@@ -705,6 +705,10 @@ describe("BACKLOG-2749 — completion reports coverage, not fetch volume", () =>
     attachmentBytes: 61_300_000_000,
     availableDiskBytes: 59_100_000_000,
     fitsOnDisk: false,
+    // BACKLOG-2882: always set by the producer since 2882 — estimate + the
+    // 2 GiB ATTACHMENT_SPACE_HEADROOM_BYTES (electron/utils/diskSpace.ts).
+    requiredDiskBytes: 61_300_000_000 + 2_147_483_648,
+    diskHeadroomBytes: 2_147_483_648,
   };
 
   beforeEach(() => {
@@ -988,6 +992,10 @@ describe("BACKLOG-2749 — the space refusal names a window that fits", () => {
     attachmentBytes: 61_300_000_000,
     availableDiskBytes: 59_100_000_000,
     fitsOnDisk: false,
+    // BACKLOG-2882: always set by the producer since 2882 — estimate + the
+    // 2 GiB ATTACHMENT_SPACE_HEADROOM_BYTES (electron/utils/diskSpace.ts).
+    requiredDiskBytes: 61_300_000_000 + 2_147_483_648,
+    diskHeadroomBytes: 2_147_483_648,
   };
 
   beforeEach(() => {
@@ -1006,7 +1014,7 @@ describe("BACKLOG-2749 — the space refusal names a window that fits", () => {
   });
 
   it("offers the LARGEST preset that fits, with that window's own estimate", async () => {
-    // 24 and 18 months do not fit; 12 does, at 8.2 GB. The button must name 12
+    // 24 and 18 months do not fit; 12 does, at 8.3 GB (8.24 GB rounded up). The button must name 12
     // — the largest that fits — and carry main's figure for THAT window, never
     // a figure scaled from another.
     (window.api.messages.getImportCount as jest.Mock).mockImplementation(
@@ -1018,7 +1026,7 @@ describe("BACKLOG-2749 — the space refusal names a window that fits", () => {
         if (months === 12)
           return Promise.resolve({
             ...TOO_BIG,
-            attachmentBytes: 8_200_000_000,
+            attachmentBytes: 8_240_000_000,
             fitsOnDisk: true,
           });
         return Promise.resolve({
@@ -1035,7 +1043,7 @@ describe("BACKLOG-2749 — the space refusal names a window that fits", () => {
     const fitting = await within(dialog).findByTestId(
       "import-plan-fitting-window"
     );
-    expect(fitting).toHaveTextContent("Import last 12 months — 8.2 GB");
+    expect(fitting).toHaveTextContent("Import last 12 months — 8.3 GB");
     // The smaller windows also fit, but the founder asked for the LARGEST.
     expect(fitting).not.toHaveTextContent("6 months");
     expect(fitting).not.toHaveTextContent("3 months");
@@ -1215,6 +1223,10 @@ describe("BACKLOG-2749 — a failed preference write stops the run", () => {
     attachmentBytes: 61_300_000_000,
     availableDiskBytes: 59_100_000_000,
     fitsOnDisk: false,
+    // BACKLOG-2882: always set by the producer since 2882 — estimate + the
+    // 2 GiB ATTACHMENT_SPACE_HEADROOM_BYTES (electron/utils/diskSpace.ts).
+    requiredDiskBytes: 61_300_000_000 + 2_147_483_648,
+    diskHeadroomBytes: 2_147_483_648,
   };
 
   beforeEach(() => {

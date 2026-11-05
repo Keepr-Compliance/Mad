@@ -1134,6 +1134,7 @@ export const USERS_WITH_A_MISSING_DISPLAY_NAME: ReportUser[] = [
  *          ended_by, app_version, platform, incremental, prior_backup,
  *          device_model, device_ios_version, was_encrypted, is_packaged,
  *          started_at, bytes_transferred, phases
+ *   (`device_error_code` = 105 added from the same row on 2026-11-05, BACKLOG-2950.)
  *   from sync_outcomes where source='iphone-backup' and id::text like '6c87…';
  *
  * Its id and user are synthetic, as everywhere else in this file; every number
@@ -1188,4 +1189,5 @@ export const FOUNDER_QA_ROW: SyncOutcomeRow = {
   last_phase: 'backup:waiting-for-device',
   reason_code: 'INSUFFICIENT_SPACE',
   ended_by: 'device-error',
+  device_error_code: 105,
 };

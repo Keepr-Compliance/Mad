@@ -96,16 +96,21 @@ export const IPHONE_WAITING_TOOLTIP = "Waiting for iPhone · preparing the expor
 /** Mac wording transcribed from useIPhoneSync.ts onToolsMissing (userError.title). */
 export const IPHONE_TOOLS_MISSING_MAC = "iPhone sync tools not installed";
 export const IPHONE_INSTALL_APPLE_DEVICES = "Install Apple Devices to sync";
+/** Same words as the dashboard's held banner title (Dashboard.tsx, testId messages-held-banner). */
+export const IPHONE_SYNC_PAUSED = "Messages sync paused";
 
 /**
  * iPhone pill. `enabled` = resolveIphoneSyncEnabled (SR B2: the Settings
  * opt-out turns detection off while the source stays iPhone Sync).
+ * `readFailed` = the BACKLOG-2893 hold (preferences could not be read): with
+ * detection off the pill then says "Messages sync paused", as the dashboard
+ * banner does, not that the user turned it off (BACKLOG-4135).
  */
 export function deriveIPhonePill(
   sync: IPhonePillInput,
   enabled: boolean,
   now: number,
-  opts: { isMacOS?: boolean } = {},
+  opts: { isMacOS?: boolean; readFailed?: boolean } = {},
 ): SyncPillState {
   const view = resolveIPhoneSyncView(sync);
   switch (view) {
@@ -141,6 +146,8 @@ export function deriveIPhonePill(
   if (sync.toolsMissing) {
     return pill("iphone", IPHONE, opts.isMacOS ? IPHONE_TOOLS_MISSING_MAC : IPHONE_INSTALL_APPLE_DEVICES, "warning");
   }
+  // BACKLOG-4135: off because the preferences could not be read (2893 hold).
+  if (!enabled && opts.readFailed) return pill("iphone", IPHONE, IPHONE_SYNC_PAUSED, "neutral");
   // D2 (PM): detection is off in Settings › iPhone Sync (USB).
   if (!enabled) return pill("iphone", IPHONE, "iPhone sync is off in Settings", "neutral");
   if (sync.isConnected && sync.syncStatus === "idle") {

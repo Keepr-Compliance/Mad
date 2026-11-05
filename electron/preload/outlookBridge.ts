@@ -126,6 +126,13 @@ export const updateBridge = {
   install: () => ipcRenderer.send("install-update"),
 
   /**
+   * BACKLOG-3469: download an offered update (auto-download switched off).
+   * Progress and completion arrive through onProgress / onDownloaded.
+   */
+  download: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke("app:download-update"),
+
+  /**
    * Manually check for updates
    * @returns Update check result
    */

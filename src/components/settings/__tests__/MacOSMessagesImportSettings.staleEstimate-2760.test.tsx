@@ -106,6 +106,9 @@ const ALL_TIME_RESULT = {
   attachmentCount: 113_402,
   availableDiskBytes: 59_100_000_000,
   fitsOnDisk: false,
+  // BACKLOG-2882: always set by the producer — estimate + the 2 GiB headroom.
+  requiredDiskBytes: 61_300_000_000 + 2_147_483_648,
+  diskHeadroomBytes: 2_147_483_648,
 };
 
 /** The stale window the component used to estimate from: 3 months, 2.6 GB. */
@@ -117,6 +120,8 @@ const THREE_MONTH_RESULT = {
   attachmentCount: 2_913,
   availableDiskBytes: 59_100_000_000,
   fitsOnDisk: true,
+  requiredDiskBytes: 2_600_000_000 + 2_147_483_648,
+  diskHeadroomBytes: 2_147_483_648,
 };
 
 interface Deferred<T> {
@@ -247,7 +252,9 @@ describe("BACKLOG-2760 — first paint estimates the STORED window, not useState
     // unchanged and still inline (the user learns the fact before clicking);
     // the DECISION moved into the dialog behind the Import button.
     expect(screen.getByTestId("import-space-notice")).toHaveTextContent(
-      "This import needs up to 61.3 GB for attachments but only 59.1 GB is available. It will not start."
+      // BACKLOG-2882: the required figure (estimate + headroom) is stated, so
+      // the numbers shown can produce the refusal shown.
+      "Keepr needs 61.3 GB for the attachments plus 2.2 GB kept free so your Mac keeps working. Only 59.1 GB is available, so the import will not start."
     );
     await expectImportRefused();
   });

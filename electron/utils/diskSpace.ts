@@ -199,6 +199,12 @@ export interface AttachmentSpaceVerdict {
   shortfallBytes: number;
   /** Headroom applied on top of the estimate. */
   headroomBytes: number;
+  /**
+   * BACKLOG-2882: the figure the comparison actually used — estimate PLUS
+   * headroom. A refusal must show this, not the estimate alone, or the user can
+   * disprove it with subtraction ("39 MB is way less than 1.3 GB").
+   */
+  requiredBytes: number;
 }
 
 /**
@@ -221,6 +227,7 @@ export function evaluateAttachmentSpace(
       availableBytes: null,
       shortfallBytes: 0,
       headroomBytes,
+      requiredBytes: estimatedBytes + headroomBytes,
     };
   }
 
@@ -236,6 +243,7 @@ export function evaluateAttachmentSpace(
       availableBytes,
       shortfallBytes: 0,
       headroomBytes,
+      requiredBytes: estimatedBytes + headroomBytes,
     };
   }
 
@@ -248,6 +256,7 @@ export function evaluateAttachmentSpace(
     availableBytes,
     shortfallBytes: shortfall > 0 ? shortfall : 0,
     headroomBytes,
+    requiredBytes: required,
   };
 }
 

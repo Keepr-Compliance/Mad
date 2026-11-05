@@ -26,7 +26,7 @@ vi.mock('@/lib/supabase/server', () => {
   return {
     getAuthenticatedUser: async () => ({
       user: { id: 'u-1' },
-      supabase: { from: () => builder, rpc: async () => ({ data: true, error: null }) },
+      supabase: { from: () => builder, rpc: async (fn: string) => ({ data: fn === 'report_my_access' ? 'owner' : true, error: null }) },
     }),
   };
 });

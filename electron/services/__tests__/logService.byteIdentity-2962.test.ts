@@ -33,6 +33,8 @@
 import { LogService } from "../logService";
 import type { Logger } from "../../capabilities/logger";
 import { installLogger } from "../../capabilities/loggerProvider";
+import { DatabaseError } from "../../types/database";
+import { redactLogHook } from "../../config/logFileConfig";
 
 /**
  * The `transaction=` id in the transcribed CACHE-HITMISS line, replaced.
@@ -182,5 +184,92 @@ describe("logService line bytes are unchanged by the Logger seam (BACKLOG-2962)"
     at("2026-08-31T00:52:00.585Z");
     await new LogService({ logToConsole: false }).info("not emitted", "Transactions");
     expect(received).toEqual([]);
+  });
+});
+
+/**
+ * An Error in metadata keeps its message (BACKLOG-4072).
+ *
+ * `message` and `stack` are own NON-enumerable properties of an Error, so a bare
+ * `JSON.stringify` drops both: `new Error("why")` serialised as `{}`, and a
+ * DatabaseError as `{ "name": "DatabaseError" }` only (its constructor assigns
+ * `this.name`, which is enumerable). The call shape these cases use is the live
+ * one at electron/handlers/licenseHandlers.ts — `logService.error(msg, ctx, { error })`.
+ */
+describe("logService keeps an Error's name and message, and not its stack (BACKLOG-4072)", () => {
+  beforeEach(() => {
+    received = [];
+    installLogger(captureLogger());
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    require("../../../tests/helpers/installTestCapabilities").installTestCapabilities();
+  });
+
+  it("P1: the message of a plain Error appears in the written line", async () => {
+    at("2026-08-31T00:52:00.585Z");
+    await new LogService().error("[License] Failed to get license:", "License", {
+      error: new Error("why"),
+    });
+
+    expect(received).toHaveLength(1);
+    expect(received[0].line).toContain('"message": "why"');
+    expect(received[0].line).toContain('"name": "Error"');
+  });
+
+  it("P1b: a DatabaseError keeps its name, message, and own fields", async () => {
+    at("2026-08-31T00:52:00.585Z");
+    await new LogService().error("[License] Failed to get license:", "License", {
+      error: new DatabaseError("no such table: licenses", "SQLITE_ERROR"),
+    });
+
+    const line = received[0].line;
+    expect(line).toContain('"name": "DatabaseError"');
+    expect(line).toContain('"message": "no such table: licenses"');
+    expect(line).toContain('"code": "SQLITE_ERROR"');
+  });
+
+  it("P2: an email in the message is raw before the sink hook and redacted after it", async () => {
+    at("2026-08-31T00:52:00.585Z");
+    await new LogService().error("[License] Failed to get license:", "License", {
+      error: new Error("no row for jane.doe@example.com"),
+    });
+
+    const line = received[0].line;
+    // logService itself does not redact: the email reaches the line raw...
+    expect(line).toContain("jane.doe@example.com");
+    // ...and the electron-log sink hook is what redacts it.
+    const hooked = redactLogHook({
+      data: [line],
+      level: "error",
+      date: new Date(),
+    } as unknown as Parameters<typeof redactLogHook>[0]);
+    const out = String((hooked as { data: unknown[] }).data[0]);
+    expect(out).toContain("j***@example.com");
+    expect(out).not.toContain("jane.doe@example.com");
+  });
+
+  it("P3: a newline in the message cannot forge a second log line", async () => {
+    at("2026-08-31T00:52:00.585Z");
+    const forged = "2026-08-31T00:52:00.585Z ERROR [Forged] fake";
+    await new LogService().error("[License] Failed to get license:", "License", {
+      error: new Error(`real failure\n${forged}`),
+    });
+
+    const lines = received[0].line.split(/\r?\n/);
+    expect(lines.some((l) => l.startsWith(forged))).toBe(false);
+  });
+
+  it("P4: the stack is left out — no stack frames in the line", async () => {
+    at("2026-08-31T00:52:00.585Z");
+    await new LogService().error("[License] Failed to get license:", "License", {
+      error: new Error("why"),
+    });
+
+    // "    at " matches a frame whether it is written raw or JSON-escaped after "\n".
+    expect(received[0].line).not.toContain("    at ");
+    expect(received[0].line).not.toContain('"stack"');
   });
 });

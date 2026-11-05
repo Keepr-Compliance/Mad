@@ -11,7 +11,10 @@ import type {
 } from "./common";
 // BACKLOG-2743: ONE definition of the refusal shape. Re-exported here so the
 // renderer imports it from the IPC contract rather than re-spelling the literal.
-import type { AttachmentsRefusedForSpace } from "../../services/macOSMessagesImportService/types";
+import type {
+  AttachmentsRefusedForSpace,
+  ImportRefusedForDiskSpace,
+} from "../../services/macOSMessagesImportService/types";
 // BACKLOG-2749: the override list is the resolver's own type, re-exported here
 // rather than re-spelled. The dialog renders `overrides[]` as DATA (the shape
 // BACKLOG-2772 emitted for exactly this consumer), so a new override kind added
@@ -169,6 +172,13 @@ export interface MessageImportCountResult {
   availableDiskBytes?: number | null;
   /** False only when free space is known AND insufficient. */
   fitsOnDisk?: boolean;
+  /**
+   * BACKLOG-2882: estimate + headroom — the figure `fitsOnDisk` compared
+   * against `availableDiskBytes`. A refusal shows this, not `attachmentBytes`.
+   */
+  requiredDiskBytes?: number;
+  /** BACKLOG-2882: the headroom inside `requiredDiskBytes`. */
+  diskHeadroomBytes?: number;
 }
 
 /**
@@ -220,6 +230,13 @@ export interface WindowApiMessages {
     alreadyInProgress?: boolean;
     /** BACKLOG-2743: pre-flight free-space check refused the attachment copy */
     attachmentsRefusedForSpace?: AttachmentsRefusedForSpace;
+    /**
+     * BACKLOG-2870 / BACKLOG-2883: the whole import was refused (`phase:
+     * "before"`, nothing written) or stopped (`"during"`) for disk space. The
+     * main process has sent this since 2870; it is declared here so the
+     * renderer can tell a refusal from a failure without reading `error` text.
+     */
+    refusedForDiskSpace?: ImportRefusedForDiskSpace;
     /** BACKLOG-2743: user chose to import without attachments */
     attachmentsSkippedByChoice?: boolean;
     /**

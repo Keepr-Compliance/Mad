@@ -268,6 +268,8 @@ function seedMessages(count: number): string[] {
 }
 
 beforeEach(() => {
+  // A case whose planned crash never fired must not carry it into this seed.
+  resetInjector(0);
   handlers.clear();
   db = new Database(":memory:") as unknown as DatabaseType;
   db.exec(SCHEMA);
@@ -384,7 +386,22 @@ const EMAIL_PATHS = {
   restoreThread: 6,
   restoreSingle: 2,
   restoreText: 6,
+  // BACKLOG-4037: one per-message text link — suppression INSERT, junction
+  // DELETE, text_thread_count recompute, column re-point.
+  unlinkText: 4,
 } as const;
+
+/** One text linked to TXN through the real producer; returns [messageId, communicationId]. */
+async function seedLinkedText(): Promise<[string, string]> {
+  const [id] = seedMessages(1);
+  await transactionService.linkMessages([id], TXN);
+  const comm = db.prepare("SELECT id FROM communications WHERE message_id = ?").get(id) as { id: string };
+  return [id, comm.id];
+}
+const columnOf = (messageId: string): string | null =>
+  (db.prepare("SELECT transaction_id FROM messages WHERE id = ?").get(messageId) as {
+    transaction_id: string | null;
+  }).transaction_id;
 
 // ===========================================================================
 describe("BACKLOG-3309/3310 preconditions — the instrument itself", () => {
@@ -433,6 +450,18 @@ describe("BACKLOG-3309/3310 preconditions — the instrument itself", () => {
     expect(messageCount()).toBe(linkedCount);
   });
 
+  it("unlink text (BACKLOG-4037): 4 writes, the last re-points the column, which goes NULL", async () => {
+    const [m, comm] = await seedLinkedText();
+    expect(columnOf(m)).toBe(TXN);
+    resetInjector(0);
+    const r = await unlink(comm);
+    expect(r.ok).toBe(true);
+    expect(writeCount).toBe(EMAIL_PATHS.unlinkText);
+    expect(writeLog[writeLog.length - 1]).toMatch(/^UPDATE messages SET transaction_id/);
+    expect(columnOf(m)).toBeNull();
+    expect(db.prepare("SELECT 1 FROM communications WHERE id = ?").get(comm)).toBeUndefined();
+  });
+
   it("the injector fires: crashing write 1 of an unlink throws out of the call", async () => {
     resetInjector(1);
     const r = await unlink(c1);
@@ -462,6 +491,18 @@ describe("BACKLOG-3309/3310 crash sweep — every write, every path: call fails,
     expect(firedAt).toBe(at);
     expect(r.ok).toBe(false);
     expect(snapshot()).toEqual(before);
+  });
+
+  it.each(sweep(EMAIL_PATHS.unlinkText))("unlink text (BACKLOG-4037): crash at write %i", async (at) => {
+    const [m, comm] = await seedLinkedText();
+    const before = snapshot();
+    resetInjector(at);
+    const r = await unlink(comm);
+    expect(firedAt).toBe(at);
+    expect(r.ok).toBe(false);
+    expect(snapshot()).toEqual(before);
+    expect(columnOf(m)).toBe(TXN);
+    expect(db.prepare("SELECT 1 FROM communications WHERE id = ?").get(comm)).toBeTruthy();
   });
 
   it.each(sweep(EMAIL_PATHS.restoreThread))("restore thread: crash at write %i", async (at) => {
