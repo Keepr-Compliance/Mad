@@ -32,6 +32,7 @@ export type UserErrorCode =
    * which is the defect this code exists to end.
    */
   | "BACKUP_SIZE_UNKNOWN"
+  | "DEVICE_NO_ANSWER"
   | "MISSING_DRIVERS"
   | "DRIVER_SERVICE_STOPPED"
   | "DEVICE_NOT_DETECTED"
@@ -99,6 +100,22 @@ export function formatUnknownBackupSizeError(): UserFacingError {
     actionSuggestion:
       "Unlock your iPhone and keep it plugged in, then sync again. If it keeps happening, reconnect the cable and free up disk space before retrying.",
     code: "BACKUP_SIZE_UNKNOWN",
+  };
+}
+
+/**
+ * BACKLOG-4124: the backup size is unknown because the iPhone never answered the size
+ * query (the tool exited 0 with no output). No Trust prompt is involved: the connection
+ * was made and the phone did not reply. The remedy is in the description because the
+ * screen renders the plain error string.
+ */
+export function formatDeviceNoAnswerError(): UserFacingError {
+  return {
+    title: "Your iPhone didn't answer",
+    description:
+      "Your iPhone didn't answer when Keepr checked the backup size, so the sync didn't start. Unlock it, unplug and replug it, then try again.",
+    actionSuggestion: "Unlock your iPhone, unplug it and plug it back in, then sync again.",
+    code: "DEVICE_NO_ANSWER",
   };
 }
 
