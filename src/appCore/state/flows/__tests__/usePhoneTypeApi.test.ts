@@ -13,7 +13,7 @@
  */
 
 import { renderHook, act } from "@testing-library/react";
-import { usePhoneTypeApi } from "../usePhoneTypeApi";
+import { usePhoneTypeApi, PHONE_TYPE_NOT_SAVED_NOTICE } from "../usePhoneTypeApi";
 
 // ============================================
 // MOCK SETUP
@@ -108,7 +108,7 @@ describe("usePhoneTypeApi", () => {
 
       await act(async () => {
         const success = await result.current.savePhoneType("iphone");
-        expect(success).toBe(true);
+        expect(success).toEqual({ status: "saved" });
       });
 
       // Should call Supabase first
@@ -139,7 +139,7 @@ describe("usePhoneTypeApi", () => {
 
       await act(async () => {
         const success = await result.current.savePhoneType("android");
-        expect(success).toBe(true);
+        expect(success).toEqual({ status: "saved" });
       });
 
       expect(mockSetPhoneTypeCloud).toHaveBeenCalledWith("user-123", "android");
@@ -169,7 +169,7 @@ describe("usePhoneTypeApi", () => {
       await act(async () => {
         const success = await result.current.savePhoneType("iphone");
         // Should still succeed - graceful degradation
-        expect(success).toBe(true);
+        expect(success).toEqual({ status: "saved" });
       });
 
       // Supabase was attempted
@@ -211,7 +211,7 @@ describe("usePhoneTypeApi", () => {
 
       await act(async () => {
         const success = await result.current.savePhoneType("iphone");
-        expect(success).toBe(true);
+        expect(success).toEqual({ status: "saved" });
       });
 
       // Supabase should be called (always available after auth)
@@ -236,7 +236,7 @@ describe("usePhoneTypeApi", () => {
       consoleSpy.mockRestore();
     });
 
-    it("should return false if user ID is not available", async () => {
+    it("should return no-user if user ID is not available", async () => {
       // Set state without user
       mockMachineState.mockReturnValue({
         state: createMockState({
@@ -252,7 +252,7 @@ describe("usePhoneTypeApi", () => {
 
       await act(async () => {
         const success = await result.current.savePhoneType("iphone");
-        expect(success).toBe(false);
+        expect(success).toEqual({ status: "no-user" });
       });
 
       // No API calls should be made
@@ -261,12 +261,13 @@ describe("usePhoneTypeApi", () => {
       expect(mockDispatch).not.toHaveBeenCalled();
     });
 
-    it("should handle local DB save failure gracefully", async () => {
-      // Supabase succeeds, local DB fails
-      mockSetPhoneType.mockResolvedValue({
-        success: false,
-        error: "Database write error",
-      });
+    // BACKLOG-4030: this test used to lock in the opposite — a local failure
+    // returned true, only warned, and still completed the step. Main returns
+    // this exact message when it cancels the save for want of an audit entry.
+    it("C4: a cancelled local save raises the notice and stays on the step", async () => {
+      const MAIN_CANCEL =
+        "Your phone type was not saved because its audit record could not be saved. Please try again. If this keeps happening, contact support.";
+      mockSetPhoneType.mockResolvedValue({ success: false, error: MAIN_CANCEL });
 
       const consoleSpy = jest
         .spyOn(console, "warn")
@@ -275,27 +276,37 @@ describe("usePhoneTypeApi", () => {
       const { result } = renderHook(() =>
         usePhoneTypeApi({ userId: "user-123", isWindows: false })
       );
+      expect(result.current.phoneTypeSaveNotice).toBeNull();
 
+      let saveResult: unknown;
       await act(async () => {
-        const success = await result.current.savePhoneType("iphone");
-        // Should still succeed - Supabase is primary
-        expect(success).toBe(true);
+        saveResult = await result.current.savePhoneType("iphone");
       });
 
-      // Warning was logged for local DB failure
+      expect(saveResult).toEqual({
+        status: "local-cancelled",
+        message: PHONE_TYPE_NOT_SAVED_NOTICE,
+      });
+      expect(result.current.phoneTypeSaveNotice).toBe(PHONE_TYPE_NOT_SAVED_NOTICE);
+      // The main-process detail is logged, not shown.
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining("Failed to save to local DB"),
-        expect.any(String)
+        MAIN_CANCEL
       );
+      // The step is NOT completed: onboarding stays on phone-type.
+      expect(mockDispatch).not.toHaveBeenCalled();
 
-      // Step completion was still dispatched
-      expect(mockDispatch).toHaveBeenCalled();
+      // Clearing the notice once shown.
+      act(() => {
+        result.current.clearPhoneTypeSaveNotice();
+      });
+      expect(result.current.phoneTypeSaveNotice).toBeNull();
 
       consoleSpy.mockRestore();
     });
 
-    it("should handle local DB exception gracefully", async () => {
-      // Local DB throws an exception
+    // BACKLOG-4030: used to assert true (step completed) on a local throw.
+    it("a local DB exception raises the notice and stays on the step", async () => {
       mockSetPhoneType.mockRejectedValue(new Error("DB connection lost"));
 
       const consoleSpy = jest
@@ -306,13 +317,17 @@ describe("usePhoneTypeApi", () => {
         usePhoneTypeApi({ userId: "user-123", isWindows: false })
       );
 
+      let saveResult: unknown;
       await act(async () => {
-        const success = await result.current.savePhoneType("iphone");
-        // Should still succeed - Supabase is primary
-        expect(success).toBe(true);
+        saveResult = await result.current.savePhoneType("iphone");
       });
 
-      // Warning was logged
+      expect(saveResult).toEqual({
+        status: "local-cancelled",
+        message: PHONE_TYPE_NOT_SAVED_NOTICE,
+      });
+      expect(result.current.phoneTypeSaveNotice).toBe(PHONE_TYPE_NOT_SAVED_NOTICE);
+      expect(mockDispatch).not.toHaveBeenCalled();
       expect(consoleSpy).toHaveBeenCalledWith(
         expect.stringContaining("Error saving to local DB"),
         expect.any(Error)
@@ -321,7 +336,7 @@ describe("usePhoneTypeApi", () => {
       consoleSpy.mockRestore();
     });
 
-    it("should return false if Supabase throws an exception", async () => {
+    it("should return error if Supabase throws an exception", async () => {
       // Supabase throws an exception (not just returns error)
       mockSetPhoneTypeCloud.mockRejectedValue(new Error("Network timeout"));
 
@@ -335,7 +350,7 @@ describe("usePhoneTypeApi", () => {
 
       await act(async () => {
         const success = await result.current.savePhoneType("iphone");
-        expect(success).toBe(false);
+        expect(success).toEqual({ status: "error" });
       });
 
       // Error was logged

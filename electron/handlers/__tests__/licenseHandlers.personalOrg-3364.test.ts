@@ -61,6 +61,14 @@ jest.mock("../../services/supabaseService", () => ({
   default: {
     getActiveOrganizationMembership: (...args: unknown[]) =>
       mockGetActiveOrganizationMembership(...args),
+    // BACKLOG-2888: license:get now asks isAuthenticated() and reads the
+    // membership OUTCOME. Shimmed onto the existing membership mock so every
+    // assertion below is unchanged: an object is a member, null is none.
+    isAuthenticated: () => true,
+    getActiveOrganizationMembershipOutcome: async (...a: unknown[]) => {
+      const m = await mockGetActiveOrganizationMembership(...a);
+      return m ? { status: "member", ...m } : { status: "none" };
+    },
   },
 }));
 

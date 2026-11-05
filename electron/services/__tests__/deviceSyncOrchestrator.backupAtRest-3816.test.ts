@@ -973,6 +973,41 @@ describe("D — C-DELTA reads a parse copy", () => {
     await o.completeBackupAtRest();
     await sealedAfter(o);
   });
+
+  // BACKLOG-2909: building the parse copy decrypts sms.db, the contacts database and every
+  // message attachment — seconds to minutes on a real backup, after the phone is no longer
+  // needed. The renderer decides whether an unplug fails the sync from the LAST phase it was
+  // sent, so a post-backup phase must reach it before the copy starts, not after.
+  it("BACKLOG-2909: a post-backup phase is sent before the parse copy is built", async () => {
+    atRest = new BackupAtRest({
+      backupsRoot: () => backups,
+      files: () => files,
+      markers: () => createMarkerStore({ userData: () => userData }),
+      ensureKey: async () => undefined,
+      freeBytes: async () => Number.MAX_SAFE_INTEGER,
+      sleep: async () => undefined,
+      log: () => undefined,
+      strategy: () => "delta",
+    });
+    const o = newOrchestrator();
+    const phases: string[] = [];
+    o.on("progress", (p: { phase: string }) => phases.push(p.phase));
+    let phasesAtCopy: string[] | null = null;
+    jest.spyOn(atRest, "buildParseCopy").mockImplementation(async (_udid, out) => {
+      phasesAtCopy = phases.filter((phase) => phase !== "cleanup");
+      fsSync.mkdirSync(path.join(out, "3d"), { recursive: true });
+      fsSync.writeFileSync(path.join(out, "3d", SMS_ID), "decrypted sms copy");
+      return { copied: 1, missing: 0, unreadable: 0 };
+    });
+    backupReturns(ok());
+    const result = await o.sync({ udid: UDID });
+    expect(result.success).toBe(true);
+    expect(phasesAtCopy).not.toBeNull();
+    expect(phasesAtCopy!.at(-1)).toBe("parsing-contacts");
+    await o.cleanupBackup(result.backupPath!);
+    await o.completeBackupAtRest();
+    await sealedAfter(o);
+  });
 });
 
 describe("BACKLOG-3892 E — a C-DELTA parse copy refused by the at-rest layer", () => {

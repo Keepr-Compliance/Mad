@@ -62,7 +62,7 @@ export function useTitleBarSync(app: AppStateMachine, everyScreen: boolean = PIL
   const { isMacOS } = usePlatform();
   const source = useImportSource(app.currentUser?.id, app.modalState.showSettings);
   const iphone = useOptionalIPhoneSyncContext();
-  const { enabled: iphoneEnabled } = useIPhoneSyncEnabled();
+  const { enabled: iphoneEnabled, readFailed: iphoneReadFailed } = useIPhoneSyncEnabled();
   const visible = pillVisible(app, everyScreen);
   const android = useAndroidSyncState(visible && source === "android-messages-web");
   useRetryCountdown(visible ? iphone?.retryAvailableAt : null); // re-renders the "Try again in N s" count
@@ -84,7 +84,7 @@ export function useTitleBarSync(app: AppStateMachine, everyScreen: boolean = PIL
     app.openAndroidSync();
   };
   if (source === "iphone-sync" && iphone) {
-    return { pill: deriveIPhonePill(iphone, iphoneEnabled, now, { isMacOS }), onClick: openIPhone };
+    return { pill: deriveIPhonePill(iphone, iphoneEnabled, now, { isMacOS, readFailed: iphoneReadFailed }), onClick: openIPhone };
   }
   if (source === "android-messages-web") {
     return {

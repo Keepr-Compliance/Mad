@@ -312,9 +312,31 @@ export function registerUserSettingsHandlers(): void {
 
       // 3. Update local DB
       if (user) {
-        await databaseService.updateUser(validatedUserId, {
-          mobile_phone_type: cloudPhoneType,
-        });
+        // BACKLOG-4030: same rule as user:set-phone-type (BACKLOG-3339): the
+        // local copy and its audit entry commit together or not at all. A
+        // failed entry cancels the copy.
+        const entry = {
+          userId: validatedUserId,
+          action: "SETTINGS_CHANGE" as const,
+          resourceType: "SETTINGS" as const,
+          resourceId: validatedUserId,
+          metadata: {
+            setting: "mobile_phone_type",
+            value: cloudPhoneType,
+            source: "cloud_copy",
+          },
+        };
+        try {
+          dbTransaction(() => {
+            databaseService.updateUserSync(validatedUserId, {
+              mobile_phone_type: cloudPhoneType,
+            });
+            auditService.recordInTransaction(entry);
+          });
+        } catch (error) {
+          auditService.recordFailure({ ...entry, errorMessage: dealChangeFailureCode(error) });
+          throw contactChangeUserError("phoneType", error);
+        }
         logService.info(
           `[user:sync-phone-type] Synced phone type to local DB: ${cloudPhoneType}`,
           "Settings",

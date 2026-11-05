@@ -26,8 +26,10 @@ export function GeneralSettings({ userId, initialPreferences }: GeneralSettingsP
     return typeof val === "boolean" ? val : true;
   });
   const [autoDownloadUpdates, setAutoDownloadUpdates] = useState<boolean>(() => {
+    // BACKLOG-3469: default ON — matches the updater, which downloads
+    // automatically unless the user turned this off.
     const val = initialPreferences?.updates?.autoDownload;
-    return typeof val === "boolean" ? val : false;
+    return typeof val === "boolean" ? val : true;
   });
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(() => {
     const val = initialPreferences?.notifications?.enabled;

@@ -184,6 +184,22 @@ describe("useAppStateMachine", () => {
         expect(capturedState?.currentStep).toBeDefined();
       });
     });
+
+    // BACKLOG-4030 C5 (no-provider half): the harness has NO
+    // NotificationProvider, as in App.tsx where useAppStateMachine runs above
+    // it. A toast called from inside the hook (useNotification) would throw
+    // here. The phone-type notice is carried on the app object instead.
+    it("exposes the phone-type save notice with no NotificationProvider mounted", async () => {
+      setupMocks({ isAuthenticated: false });
+
+      renderWithProviders();
+
+      await waitFor(() => {
+        expect(capturedState).not.toBeNull();
+      });
+      expect(capturedState?.phoneTypeSaveNotice).toBeNull();
+      expect(typeof capturedState?.clearPhoneTypeSaveNotice).toBe("function");
+    });
   });
 
   describe("context integration", () => {

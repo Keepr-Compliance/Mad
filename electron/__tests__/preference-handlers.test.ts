@@ -31,9 +31,18 @@ jest.mock("../services/supabaseService", () => ({
   },
 }));
 
+// BACKLOG-2824: this suite runs with NO local preferences copy, declared
+// explicitly, so a failed cloud read must still fail. The copy paths are
+// covered in handlers/__tests__/preferenceHandlers.localCopy-2824.test.ts.
+jest.mock("../services/preferencesMirror", () => ({
+  __esModule: true,
+  readPreferencesCopy: jest.fn(async () => null),
+}));
+
 // Import after mocks are set up
 import { registerPreferenceHandlers } from "../handlers/preferenceHandlers";
 import supabaseService from "../services/supabaseService";
+import { readPreferencesCopy } from "../services/preferencesMirror";
 
 // Get reference to mocked service
 const mockSupabaseService = supabaseService as jest.Mocked<
@@ -126,6 +135,9 @@ describe("Preference Handlers", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain("Service error");
+      // BACKLOG-2824: no copy, so the copy was looked up and not served.
+      expect(readPreferencesCopy).toHaveBeenCalledWith(TEST_USER_ID);
+      expect(result.source).toBeUndefined();
     });
   });
 

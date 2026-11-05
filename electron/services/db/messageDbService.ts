@@ -4,7 +4,7 @@
  */
 
 import type { Message, Communication } from "../../types";
-import { ensureDb, dbRun } from "./core/dbConnection";
+import { ensureDb, dbGet, dbRun } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
 import logService from "../logService";
 import { toLookupKey } from "../../utils/phoneNormalization";
@@ -398,6 +398,21 @@ export const REPOINT_MESSAGE_TRANSACTION_SQL = sql`UPDATE messages SET transacti
 
 export function repointMessageTransaction(messageId: string): void {
   dbRun(REPOINT_MESSAGE_TRANSACTION_SQL, [messageId]);
+}
+
+/**
+ * BACKLOG-4037 — the two columns `unlinkCommunication` needs to decide whether a
+ * per-message link's removal re-points the message's column. Sync read.
+ */
+export function getMessageChannelAndDeal(
+  messageId: string,
+): { channel: string | null; transaction_id: string | null } | null {
+  return (
+    dbGet<{ channel: string | null; transaction_id: string | null }>(
+      sql`SELECT channel, transaction_id FROM messages WHERE id = ?`,
+      [messageId],
+    ) ?? null
+  );
 }
 
 /**

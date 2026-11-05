@@ -2101,6 +2101,8 @@ class MacOSMessagesImportService {
           estimatedBytes: spaceEstimate.eligibleBytes,
           availableBytes: verdict.availableBytes,
           attachmentCount: spaceEstimate.eligibleCount,
+          headroomBytes: verdict.headroomBytes,
+          requiredBytes: verdict.requiredBytes,
         },
       };
     }
@@ -2540,6 +2542,10 @@ class MacOSMessagesImportService {
      * number the user is shown and the number the import enforces cannot drift.
      */
     fitsOnDisk?: boolean;
+    /** BACKLOG-2882: estimate + headroom — the figure `fitsOnDisk` compared. */
+    requiredDiskBytes?: number;
+    /** BACKLOG-2882: the headroom inside `requiredDiskBytes`. */
+    diskHeadroomBytes?: number;
   }> {
     // Check platform
     if (os.platform() !== "darwin") {
@@ -2722,6 +2728,10 @@ class MacOSMessagesImportService {
           attachmentCount: estimate.eligibleCount,
           availableDiskBytes,
           fitsOnDisk: verdict.fits,
+          // BACKLOG-2882: the verdict's own numbers, so a refusal can state the
+          // requirement it enforced rather than the estimate alone.
+          requiredDiskBytes: verdict.requiredBytes,
+          diskHeadroomBytes: verdict.headroomBytes,
         };
       } catch (error) {
         await dbClose();

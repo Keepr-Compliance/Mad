@@ -125,6 +125,13 @@ export interface AppStateMachine {
   selectedPhoneType: "iphone" | "android" | null;
   isLoadingPhoneType: boolean;
   needsDriverSetup: boolean;
+  /**
+   * BACKLOG-4030: "phone type not saved" line for OnboardingFlow to show, or
+   * null. Carried here because this object is built above NotificationProvider.
+   */
+  phoneTypeSaveNotice: string | null;
+  /** BACKLOG-4030: called by OnboardingFlow once it has shown the notice. */
+  clearPhoneTypeSaveNotice: () => void;
 
   // New user flow state
   isNewUserFlow: boolean;
@@ -146,6 +153,8 @@ export interface AppStateMachine {
   isAnySyncing: boolean;
   currentSyncMessage: string | null;
   triggerRefresh: () => Promise<void>;
+  /** BACKLOG-2890: Mac Messages auto-sync held after a failed preferences read. */
+  messagesSyncHeld: boolean;
 
   // ============================================
   // SEMANTIC MODAL TRANSITIONS
