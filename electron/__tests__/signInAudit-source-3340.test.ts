@@ -53,6 +53,19 @@ describe("BACKLOG-3340 handleDeepLinkCallback records its two sign-in denials", 
   it("writes no audit entry itself", () => {
     expect(occurrences(src, "auditService.")).toBe(0);
   });
+
+  // BACKLOG-3956 / 3340: the identity a denial is recorded against and the user
+  // provisioning writes come from ONE derivation of email and provider, so the
+  // failure lookup finds the row provisioning wrote.
+  it("derives email and provider once, for both signInIdentity and deepLinkUserData", () => {
+    expect([
+      occurrences(src, "normalizeOAuthProvider("),
+      occurrences(src, "user.email || user.user_metadata?.email"),
+      occurrences(src, "const signInIdentity = { supabaseId: user.id, email: userEmail, provider };"),
+      occurrences(src, "        email: userEmail,\n"),
+    ]).toEqual([1, 1, 1, 1]);
+    expect(src.indexOf("const signInIdentity")).toBeLessThan(src.indexOf("validateLicense("));
+  });
 });
 
 /**
