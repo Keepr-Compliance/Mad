@@ -7,8 +7,10 @@
  */
 
 import { useState } from 'react';
+import { ArrowUpRight } from 'lucide-react';
 import { Button } from '@keepr/design-system';
 import { openBrokerageBillingPortal } from '@/lib/actions/billingPortal';
+import { TOUCH_BUTTON } from './touch';
 
 export const MANAGE_BILLING_LABEL = 'Manage billing';
 
@@ -23,8 +25,15 @@ export function ManageBillingButton() {
     }
   };
   return (
-    <Button type="button" variant="secondary" size="sm" disabled={pending} onClick={() => void open()}>
-      {pending ? 'Opening Stripe…' : `${MANAGE_BILLING_LABEL} ↗`}
+    <Button type="button" variant="secondary" size="sm" className={TOUCH_BUTTON} disabled={pending} onClick={() => void open()}>
+      {pending ? (
+        'Opening Stripe…'
+      ) : (
+        <>
+          {MANAGE_BILLING_LABEL}
+          <ArrowUpRight aria-hidden="true" data-billing-arrow="" className="ml-1 inline-block h-[1em] w-[1em] shrink-0 align-[-0.125em]" />
+        </>
+      )}
     </Button>
   );
 }

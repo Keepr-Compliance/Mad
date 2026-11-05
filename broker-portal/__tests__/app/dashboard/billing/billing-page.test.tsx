@@ -1300,7 +1300,7 @@ describe('BACKLOG-3854: set-up brokerage -> seats + Manage billing', () => {
     const { container, unmount } = render(await BillingRoute({}));
     expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Available2');
     expect(container.textContent).toContain('Organization plan');
-    expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(role === 'it_admin' ? 0 : 1);
+    expect(within(container).queryAllByRole('button', { name: 'Manage billing' })).toHaveLength(role === 'it_admin' ? 0 : 1);
     // BACKLOG-3855: Broker/Admin now read the recent invoices (one customer read for the clock, one
     // invoice list without a status filter, per render; two renders above); IT admin reads nothing
     // from Stripe.
@@ -1337,7 +1337,7 @@ describe('BACKLOG-3854: set-up brokerage -> seats + Manage billing', () => {
     const { container, unmount } = render(await BillingRoute({}));
     expect(container.querySelector('[data-seats-counts]')?.textContent).toBe('Seats3In use1Available2');
     expect(within(container).queryAllByRole('button', { name: 'Add seats' })).toHaveLength(0);
-    expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(0);
+    expect(within(container).queryAllByRole('button', { name: 'Manage billing' })).toHaveLength(0);
     unmount();
   });
 
@@ -1348,7 +1348,7 @@ describe('BACKLOG-3854: set-up brokerage -> seats + Manage billing', () => {
       setUp('suspended', 'test', true);
       const { container, unmount } = render(await BillingRoute({}));
       expect(container.querySelector('[data-billing-banner="org_suspended"]')).not.toBeNull();
-      expect(within(container).queryAllByRole('button', { name: 'Manage billing ↗' })).toHaveLength(n);
+      expect(within(container).queryAllByRole('button', { name: 'Manage billing' })).toHaveLength(n);
       expect(within(container).queryAllByRole('button', { name: 'Add seats' })).toHaveLength(0);
       unmount();
     }

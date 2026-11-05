@@ -14,11 +14,12 @@ import {
   startAgentCheckout,
   type AgentActionResult,
 } from '@/lib/actions/agentPlan';
+import { TOUCH_BUTTON } from './touch';
 
 const PRIMARY =
-  'rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60';
+  `rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700 disabled:opacity-60 ${TOUCH_BUTTON}`;
 const SECONDARY =
-  'rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60';
+  `rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60 ${TOUCH_BUTTON}`;
 const GENERIC_ERROR = 'Something went wrong. Please try again.';
 
 /** redirect() inside a server action surfaces as a digest error; it is not a failure. */

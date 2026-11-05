@@ -25,7 +25,7 @@ describe('C8: View all invoices', () => {
   it('is a text link (not a second Manage billing button) and calls the portal action with no arguments', async () => {
     const { container } = render(<ManageBillingBlock invoices={[ROW]} />);
     const link = container.querySelector('[data-billing-action="view_all_invoices"]') as HTMLElement;
-    expect(link.textContent).toBe('View all invoices ↗');
+    expect(link.textContent).toBe('View all invoices');
     expect(link.className).not.toMatch(/\bbg-/);
     await act(async () => {
       fireEvent.click(link);
@@ -37,7 +37,7 @@ describe('C8: View all invoices', () => {
     const { container } = render(<ManageBillingBlock />);
     expect(container.querySelector('[data-billing-action="view_all_invoices"]')).toBeNull();
     expect(container.querySelector('[data-org-invoice-row]')).toBeNull();
-    expect(within(container).getByRole('button', { name: 'Manage billing ↗' })).toBeTruthy();
+    expect(within(container).getByRole('button', { name: 'Manage billing' })).toBeTruthy();
   });
 });
 
@@ -46,7 +46,7 @@ describe('SR C6: an unavailable list keeps both controls', () => {
     const { container } = render(<ManageBillingBlock invoices={null} />);
     expect(container.textContent).toContain('Your invoices are unavailable right now.');
     expect(container.querySelector('[data-billing-action="view_all_invoices"]')).not.toBeNull();
-    expect(within(container).getByRole('button', { name: 'Manage billing ↗' })).toBeTruthy();
+    expect(within(container).getByRole('button', { name: 'Manage billing' })).toBeTruthy();
   });
 });
 
