@@ -16,6 +16,7 @@ vi.mock('@/lib/supabase/client', () => ({ createClient: () => stub.current!.clie
 vi.mock('../analytics/components/VersionChart', () => ({ VersionChart: () => <div data-chart="versions" /> }));
 
 import { createShareRpcStub, ownRow, sharedRow } from '@/lib/reports/__tests__/share-rpc-stub';
+import { withReportAccess } from '@/lib/reports/__tests__/report-access-wrapper';
 import { resolvePeriod } from '@/lib/reports/period';
 import { getAnalyticsData, type AnalyticsData } from '@/lib/reports/analytics-queries';
 import { resolveAnalyticsPeriod } from '@/lib/reports/analytics-period';
@@ -128,7 +129,7 @@ describe('every report offers Share and Leave once the database has sharing', ()
   for (const [key, element] of REPORTS) {
     it(key, async () => {
       stub.current!.setListRows([ownRow({ name: 'Mine' }), sharedRow('viewer')]);
-      render(element());
+      render(element(), { wrapper: withReportAccess('owner', key) });
       await waitFor(() =>
         expect(stub.current!.calls('report_list_saved_views')).toContainEqual({ p_report_key: key })
       );
@@ -139,6 +140,31 @@ describe('every report offers Share and Leave once the database has sharing', ()
       fireEvent.click(within(panel).getByRole('button', { name: 'Share Mine' }));
       expect(await screen.findByRole('dialog', { name: 'Share Mine' })).toBeTruthy();
       await waitFor(() => expect(stub.current!.calls('report_share_candidates')).toHaveLength(1));
+    });
+  }
+});
+
+// BACKLOG-4144 V1: the same 8 seams as a report VIEWER. Own rows lose Share; shared rows keep Leave.
+// An EDITOR keeps Share. The access comes from the page's ReportAccessProvider.
+describe('V1 a report viewer is offered no view Share on any report (BACKLOG-4144)', () => {
+  for (const [key, element] of REPORTS) {
+    it(`${key}: viewer has Leave but no Share; editor has Share`, async () => {
+      stub.current!.setListRows([ownRow({ name: 'Mine' }), sharedRow('viewer')]);
+      const { unmount } = render(element(), { wrapper: withReportAccess('viewer', key) });
+      await waitFor(() =>
+        expect(stub.current!.calls('report_list_saved_views')).toContainEqual({ p_report_key: key })
+      );
+      fireEvent.click(screen.getByRole('button', { name: /^Views/ }));
+      const panel = await screen.findByRole('dialog', { name: 'Saved views' });
+      await waitFor(() => expect(within(panel).getByRole('button', { name: 'Leave Quinn view' })).toBeTruthy());
+      expect(within(panel).queryByRole('button', { name: 'Share Mine' })).toBeNull();
+      expect(within(panel).queryByRole('button', { name: /^Share / })).toBeNull();
+      unmount();
+
+      render(element(), { wrapper: withReportAccess('editor', key) });
+      fireEvent.click(screen.getByRole('button', { name: /^Views/ }));
+      const panel2 = await screen.findByRole('dialog', { name: 'Saved views' });
+      await waitFor(() => expect(within(panel2).getByRole('button', { name: 'Share Mine' })).toBeTruthy());
     });
   }
 });
