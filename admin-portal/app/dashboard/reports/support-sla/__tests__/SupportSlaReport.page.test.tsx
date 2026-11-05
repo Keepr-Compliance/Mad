@@ -46,13 +46,20 @@ vi.mock('next/navigation', () => ({
   redirect: (to: string) => {
     throw new Error(`redirect:${to}`);
   },
+  notFound: () => {
+    throw new Error('notFound');
+  },
 }));
 
 function stubSupabase() {
   return {
-    rpc: async (_fn: string, args: { required_permission: string }) => {
-      state.permAsked.push(args.required_permission);
-      return { data: state.hasPerm, error: null };
+    // BACKLOG-4144: the page asks report_my_access; `hasPerm` false = no access to the report.
+    rpc: async (fn: string, args: { p_key?: string }) => {
+      if (fn === 'report_my_access') {
+        state.permAsked.push(`${fn}:${args.p_key}`);
+        return { data: state.hasPerm ? 'owner' : null, error: null };
+      }
+      return { data: [], error: null };
     },
     from(table: string) {
       let head = false;
@@ -251,10 +258,10 @@ describe('Support SLA report page', () => {
     }
   });
 
-  it('asks for analytics.view and sends a user without it to the dashboard', async () => {
+  it('asks report_my_access for support-sla; no access is a 404 (BACKLOG-4144)', async () => {
     state.hasPerm = false;
-    await expect(renderPage()).rejects.toThrow('redirect:/dashboard?error=insufficient_permissions');
-    expect(state.permAsked).toEqual(['analytics.view']);
+    await expect(renderPage()).rejects.toThrow('notFound');
+    expect(state.permAsked).toEqual(['report_my_access:support-sla']);
   });
 
   it('a signed-in user with no internal role is not authorised', async () => {

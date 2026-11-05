@@ -12,6 +12,7 @@
 --          5 E Support Agent (internal role WITHOUT analytics.view)   6 F authenticated, no internal role
 --   views  21 V = A, pinned AND default (shared)   22 W = A, not shared   31-35 B pins   41 X = B, not shared
 --          all on report key p4087; 99 = an id that matches nothing
+--   BACKLOG-4144 M1 present: catalog rows p4087 + p4087x; report access B on both, C on p4087 (viewer)
 -- Output: RAISE 'P4087_RESULT {total, pass, fail, reds, checks}'.
 
 DO $drv$
@@ -111,6 +112,7 @@ BEGIN
     NF text := 'ERR P0001 Saved view not found';
     eh text := 'public._report_share_eligible(uuid)';
     msgs text[];
+    sup boolean; ks text[];
   BEGIN
     -- ===== fixtures =====
     INSERT INTO auth.users (id, email, aud, role, instance_id, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
@@ -122,6 +124,14 @@ BEGIN
       FROM generate_series(1, 6) x
     ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name;
     INSERT INTO public.internal_roles (user_id, role_id) VALUES (uA, r_sa), (uB, r_ss), (uC, r_ss), (uD, r_sa), (uE, r_ag);
+    -- BACKLOG-4144 M1: a shared view is listed, edited and shared only for people with access to its report.
+    -- When M1 is present, give the fixture keys a catalog row and the recipients B and C report access
+    -- (A and D are Super Admins and own every report). Without M1 this block is skipped.
+    IF to_regclass('public.report_access') IS NOT NULL THEN
+      EXECUTE 'INSERT INTO public.reports (report_key) VALUES ($1), ($2) ON CONFLICT DO NOTHING' USING 'p4087', 'p4087x';
+      EXECUTE 'INSERT INTO public.report_access (report_key, user_id, role) VALUES ($1, $3, $4), ($2, $3, $4), ($1, $5, $4)'
+        USING 'p4087', 'p4087x', uB, 'viewer', uC;
+    END IF;
 
     INSERT INTO public.report_saved_views (id, user_id, report_key, name, filters, metric, pinned, is_default) VALUES
       (V, uA, 'p4087', 'A one', '{"q":"a"}', m1::jsonb, true, true),
@@ -405,19 +415,32 @@ BEGIN
     END IF;
 
     -- ===== K16: re-applying the migration changes nothing =====
-    d0 := (SELECT string_agg(md5(pg_temp.def(x)), ',') FROM unnest(pg_temp.sigs() || eh) x);
-    a0 := (SELECT string_agg(pg_temp.acl(x), ',') FROM unnest(pg_temp.sigs() || eh) x);
+    -- When BACKLOG-4144 M1 is present, it owns report_list_saved_views, report_save_view,
+    -- report_share_candidates and report_share_set (re-running this file swaps them back to the 4087
+    -- bodies inside the subtransaction), so those four are superseded by 4144 K16. Only the other
+    -- functions are compared then.
+    sup := to_regclass('public.report_access') IS NOT NULL;
+    ks := ARRAY(SELECT x FROM unnest(pg_temp.sigs() || eh) x
+                 WHERE NOT sup OR x NOT IN ('public.report_list_saved_views(text)',
+                                            'public.report_save_view(text,text,jsonb,jsonb,boolean,uuid)',
+                                            'public.report_share_candidates(uuid)',
+                                            'public.report_share_set(uuid,uuid,text)'));
+    d0 := (SELECT string_agg(md5(pg_temp.def(x)), ',') FROM unnest(ks) x);
+    a0 := (SELECT string_agg(pg_temp.acl(x), ',') FROM unnest(ks) x);
     BEGIN
       EXECUTE $mg$__MIGRATION__$mg$;
-      s := CASE WHEN (SELECT string_agg(md5(pg_temp.def(x)), ',') FROM unnest(pg_temp.sigs() || eh) x) = d0
-                 AND (SELECT string_agg(pg_temp.acl(x), ',') FROM unnest(pg_temp.sigs() || eh) x) = a0
+      s := CASE WHEN (SELECT string_agg(md5(pg_temp.def(x)), ',') FROM unnest(ks) x) = d0
+                 AND (SELECT string_agg(pg_temp.acl(x), ',') FROM unnest(ks) x) = a0
             THEN 'same' ELSE 'changed' END;
       RAISE EXCEPTION 'RB_DONE' USING DETAIL = s;
     EXCEPTION WHEN OTHERS THEN
       IF SQLERRM = 'RB_DONE' THEN GET STACKED DIAGNOSTICS s = PG_EXCEPTION_DETAIL;
       ELSE s := 'ERR ' || SQLSTATE || ' ' || left(SQLERRM, 80); END IF;
     END;
-    r := r || jsonb_build_object('K16_reapply_idempotent', pg_temp.pass(s = 'same', s));
+    r := r || jsonb_build_object('K16_reapply_idempotent', pg_temp.pass(s = 'same' AND cardinality(ks) = CASE WHEN sup THEN 5 ELSE 9 END, s || ' n=' || cardinality(ks)));
+    IF sup THEN
+      r := r || jsonb_build_object('K16_four_superseded_by_4144_K16', 'PASS');
+    END IF;
 
     -- ===== K17: the rollback restores the 4084 shape exactly =====
     BEGIN

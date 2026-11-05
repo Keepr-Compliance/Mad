@@ -45,8 +45,11 @@ export interface SavedViewUpdate<F = unknown, M = unknown> {
 
 /** Sharing support (BACKLOG-4087). Absent: no Share, Update or Leave buttons. */
 export interface SavedViewsSharing<V extends SavedViewItem, F = unknown, M = unknown> {
-  /** Open the adopter's ShareDialog for `view`. Offered on the user's own rows only. The panel closes first. */
-  onShare: (view: V) => void;
+  /**
+   * Open the adopter's ShareDialog for `view`. Offered on the user's own rows only. The panel closes first.
+   * Optional (BACKLOG-4144): absent, own rows get no Share while shared rows keep Update and Leave.
+   */
+  onShare?: (view: V) => void;
   /** The user stops seeing a view shared with them. Called only after the in-panel confirm. */
   onLeave: (view: V) => void;
   /**

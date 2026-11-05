@@ -29,8 +29,17 @@ import type { DropdownOption } from '../dropdown/types';
  *   cancels the confirm; the next closes the dialog.
  * - Hiding or showing these controls is presentation only. The server
  *   functions decide who may share, and refuse everyone else.
+ * - `description` and `roleDescriptions` (BACKLOG-4144) let an adopter word
+ *   the dialog for what it shares (a report rather than a view). Absent, the
+ *   saved-view copy below is used unchanged.
  */
 export type ShareRole = 'viewer' | 'editor';
+
+/** The one-line explanation under each role in the Access select. */
+export interface ShareRoleDescriptions {
+  viewer: string;
+  editor: string;
+}
 
 /** A person the owner may share with: id and display name only. */
 export interface ShareCandidate {
@@ -60,12 +69,18 @@ export interface ShareDialogProps {
   onGrant: (userId: string, role: ShareRole) => void;
   /** Take access away from `grant`. Called only after the in-dialog confirm. */
   onRemove: (grant: ShareGrant) => void;
+  /** The line under the title. Defaults to the saved-view copy. */
+  description?: string;
+  /** The line under each role in the Access select. Defaults to the saved-view copy. */
+  roleDescriptions?: ShareRoleDescriptions;
 }
 
-const ROLE_OPTIONS: DropdownOption<ShareRole>[] = [
-  { value: 'viewer', label: 'Can view', description: 'Opens the view' },
-  { value: 'editor', label: 'Can edit', description: 'Also updates its filters and metric' },
-];
+const DEFAULT_DESCRIPTION = 'People you add see this view under “Shared with you”.';
+
+const DEFAULT_ROLE_DESCRIPTIONS: ShareRoleDescriptions = {
+  viewer: 'Opens the view',
+  editor: 'Also updates its filters and metric',
+};
 
 const ROLE_LABEL: Record<ShareRole, string> = { viewer: 'Can view', editor: 'Can edit' };
 
@@ -78,7 +93,13 @@ export function ShareDialog({
   error,
   onGrant,
   onRemove,
+  description = DEFAULT_DESCRIPTION,
+  roleDescriptions = DEFAULT_ROLE_DESCRIPTIONS,
 }: ShareDialogProps) {
+  const roleOptions: DropdownOption<ShareRole>[] = [
+    { value: 'viewer', label: 'Can view', description: roleDescriptions.viewer },
+    { value: 'editor', label: 'Can edit', description: roleDescriptions.editor },
+  ];
   const [userId, setUserId] = React.useState<string | null>(null);
   const [role, setRole] = React.useState<ShareRole>('viewer');
   /** The grant whose Remove confirm is showing, by user id. */
@@ -142,7 +163,7 @@ export function ShareDialog({
       >
         <DialogHeader>
           <DialogTitle className="truncate pr-6">Share {viewName}</DialogTitle>
-          <DialogDescription>People you add see this view under “Shared with you”.</DialogDescription>
+          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
 
         {candidates === null ? (
@@ -162,7 +183,7 @@ export function ShareDialog({
             <div className="sm:w-36">
               <Dropdown<ShareRole>
                 label="Access"
-                options={ROLE_OPTIONS}
+                options={roleOptions}
                 value={role}
                 onChange={setRole}
                 searchable={false}

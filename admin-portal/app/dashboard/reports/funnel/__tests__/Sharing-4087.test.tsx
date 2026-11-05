@@ -25,6 +25,7 @@ import { funnelViewsApi } from '@/lib/reports/period-only-views-api';
 import { reportShareApi } from '@/lib/reports/report-share-api';
 import { createShareRpcStub, legacyRow, ownRow, sharedRow } from '@/lib/reports/__tests__/share-rpc-stub';
 import { FunnelReport } from '../FunnelReport';
+import { withReportAccess } from '@/lib/reports/__tests__/report-access-wrapper';
 
 const FUNNEL = computeFunnel(ALL_TIME_ROWS);
 const PERIOD = resolveFunnelPeriod({ period: '30' }, NOW);
@@ -50,7 +51,8 @@ function mount(rows: unknown[]) {
       onNavigate={onNavigate}
       viewsApi={funnelViewsApi}
       shareApi={reportShareApi}
-    />
+    />,
+    { wrapper: withReportAccess('owner') }
   );
   return { onNavigate };
 }

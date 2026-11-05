@@ -228,6 +228,10 @@ function RunEvidence({ run }: { run: SyncRun }) {
   if (run.reasonCode) {
     items.push({ label: 'Reason', value: reasonCodeLabel(run.reasonCode), raw: run.reasonCode });
   }
+  // BACKLOG-2950: the phone's own code, shown as the number support looks up.
+  if (run.deviceErrorCode != null) {
+    items.push({ label: "Phone's error code", value: String(run.deviceErrorCode) });
+  }
   if (run.keptBackupLabel) {
     items.push({ label: 'Kept backup', value: run.keptBackupLabel });
   }

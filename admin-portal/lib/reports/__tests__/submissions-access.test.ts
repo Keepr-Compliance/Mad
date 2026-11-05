@@ -24,11 +24,11 @@ describe('no service role in the report (C8)', () => {
     expect(src).not.toMatch(/createServiceClient|SERVICE_ROLE|service_role|supabase\/service/);
   });
 
-  it('the page authorises through the cookie client, internal role and analytics.view', () => {
+  it('the page authorises through the per-report gate (BACKLOG-4144)', () => {
     const src = readFileSync(path.join(ROOT, FILES[0]), 'utf8');
-    expect(src).toContain('getAuthenticatedUser()');
-    expect(src).toContain(".from('internal_roles')");
-    expect(src).toContain("required_permission: 'analytics.view'");
+    // BACKLOG-4144: the per-report gate (cookie client + internal role inside report-gate.ts).
+    expect(src).toContain('await requireReportAccess(SUBMISSIONS_REPORT_KEY)');
+    expect(src).not.toContain('has_permission');
   });
 });
 

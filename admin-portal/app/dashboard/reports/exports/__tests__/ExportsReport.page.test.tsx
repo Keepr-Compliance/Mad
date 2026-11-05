@@ -36,6 +36,8 @@ function stubSupabase() {
         state.listKeys.push(args);
         return state.viewsError ? { data: null, error: state.viewsError } : { data: state.views, error: null };
       }
+      // BACKLOG-4144: the report gate
+      if (fn === 'report_my_access') return { data: 'owner', error: null };
       return { data: true, error: null };
     },
     from() {

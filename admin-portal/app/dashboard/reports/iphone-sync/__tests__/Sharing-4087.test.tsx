@@ -23,6 +23,7 @@ import { reportShareApi } from '@/lib/reports/report-share-api';
 import { FIXTURE_ROWS_24, FIXTURE_USERS_24 } from '@/lib/reports/__tests__/iphone-sync.fixture';
 import { createShareRpcStub, ownRow, sharedRow } from '@/lib/reports/__tests__/share-rpc-stub';
 import { IphoneSyncReport } from '../IphoneSyncReport';
+import { withReportAccess } from '@/lib/reports/__tests__/report-access-wrapper';
 
 const NOW = new Date('2026-09-19T22:07:00.000Z');
 const WEEK = resolvePeriod({ period: 'week' }, NOW);
@@ -55,7 +56,8 @@ function mount(rows: unknown[]) {
       onNavigate={vi.fn()}
       viewsApi={reportViewsApi}
       shareApi={reportShareApi}
-    />
+    />,
+    { wrapper: withReportAccess('owner') }
   );
 }
 

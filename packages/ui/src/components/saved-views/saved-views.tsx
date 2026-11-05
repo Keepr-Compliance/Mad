@@ -70,7 +70,8 @@ function ownFirst<V extends SavedViewItem>(views: V[]): V[] {
  * carry no Default, Pin or Delete button, never count toward the pin badge,
  * and their accessible name is "<name> shared by <ownerName>" (the owner name
  * is truncated, with the full name in a title attribute). With `sharing`:
- * own rows get "Share <name>" (closes the panel, then `onShare`); editor rows
+ * own rows get "Share <name>" when `onShare` is given (closes the panel, then
+ * `onShare`; BACKLOG-4144: absent for a report viewer); editor rows
  * get "Update <name> with the current filters" (`onUpdate` with exactly the
  * filters and metric from `current()`); every shared row gets "Leave <name>",
  * which asks first in the panel (Cancel / Leave view) and calls `onLeave`
@@ -275,7 +276,7 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
   }
 
   function handleShare(view: V) {
-    if (!sharing) return;
+    if (!sharing?.onShare) return;
     // Close first: the panel's capture-phase Escape listener would otherwise eat the dialog's Escape.
     close(false);
     sharing.onShare(view);
@@ -391,7 +392,7 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
             )}
           </button>
         ) : null}
-        {own && sharing ? (
+        {own && sharing?.onShare ? (
           <button
             type="button"
             aria-label={`Share ${view.name}`}

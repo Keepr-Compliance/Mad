@@ -23,12 +23,15 @@ import { usePermissions } from '@/components/providers/PermissionsProvider';
 import type { PermissionKey } from '@/lib/permissions';
 import { PERMISSIONS } from '@/lib/permissions';
 import { useFocusTrap } from '@/hooks/useFocusTrap';
+import { useHasReports } from '@/lib/reports/use-my-reports';
 
 interface NavItem {
   label: string;
   href: string;
   icon: React.ComponentType<{ className?: string }>;
   permission: PermissionKey;
+  /** BACKLOG-4144: shown only when the user has at least one report (`report_list_my_reports`). */
+  needsReports?: true;
 }
 
 /** Top-level nav items (not grouped) */
@@ -36,7 +39,7 @@ const mainNavItems: NavItem[] = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, permission: PERMISSIONS.DASHBOARD_VIEW },
   // BACKLOG-4005: one entry. Analytics and Funnel are cards on the Reports page.
   // Prefix-matched, so it stays lit on every /dashboard/reports/* page.
-  { label: 'Reports', href: '/dashboard/reports', icon: FileBarChart2, permission: PERMISSIONS.ANALYTICS_VIEW },
+  { label: 'Reports', href: '/dashboard/reports', icon: FileBarChart2, permission: PERMISSIONS.ANALYTICS_VIEW, needsReports: true },
   { label: 'Users', href: '/dashboard/users', icon: Users, permission: PERMISSIONS.USERS_VIEW },
   { label: 'Organizations', href: '/dashboard/organizations', icon: Building2, permission: PERMISSIONS.ORGANIZATIONS_VIEW },
   { label: 'Plans', href: '/dashboard/plans', icon: CreditCard, permission: PERMISSIONS.PLANS_VIEW },
@@ -104,6 +107,7 @@ export function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose
   const searchParams = useSearchParams();
   const { user, signOut } = useAuth();
   const { hasPermission, roleName, loading } = usePermissions();
+  const hasReports = useHasReports(user?.id);
 
   const displayName =
     user?.user_metadata?.full_name ||
@@ -196,6 +200,8 @@ export function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose
   const renderNavItem = (item: NavItem, isSubItem = false, isCollapsed = collapsed, onNavigate?: () => void) => {
     // While permissions are loading, show all items to prevent flash
     if (!loading && !hasPermission(item.permission)) return null;
+    // Not while loading either: the link stays hidden until the list says there is a report.
+    if (item.needsReports && !hasReports) return null;
 
     const itemPath = item.href.split('?')[0];
     const itemQuery = item.href.includes('?') ? new URLSearchParams(item.href.split('?')[1]) : null;
