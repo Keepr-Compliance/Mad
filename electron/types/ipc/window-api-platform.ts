@@ -189,6 +189,25 @@ export interface WindowApiBackup {
     }) => void,
   ) => () => void;
   onError: (callback: (error: { message: string }) => void) => () => void;
+  /**
+   * `backup:check-status` (preload deviceBridge.ts). BACKLOG-2917: `state` is three-state;
+   * `sizeBytes: null` means "not measured", never "empty".
+   *
+   * BACKLOG-2931: `priorBackup` is the sync's own usability answer
+   * (`toPriorBackupState` in deviceSyncOrchestrator.ts), read before the sync for the
+   * connect screen. Missing (an older main process) means `"unknown"`.
+   */
+  checkStatus?: (udid: string) => Promise<{
+    success: boolean;
+    state?: "absent" | "unknown" | "present";
+    reason?: string;
+    isComplete?: boolean;
+    isInterrupted?: boolean;
+    lastSyncTime?: string | null;
+    sizeBytes?: number | null;
+    priorBackup?: PriorBackupState;
+    error?: string;
+  }>;
 }
 
 /**
