@@ -18,7 +18,7 @@ const state = vi.hoisted(() => ({
   access: {} as Record<string, string>,
   accessError: false,
   list: [] as unknown,
-  listError: false,
+  listError: null as null | { code: string; message: string },
   rpcCalls: [] as { fn: string; args: unknown }[],
   tables: [] as string[],
 }));
@@ -61,7 +61,7 @@ vi.mock('@/lib/supabase/server', () => ({
           return { data: state.access[String(args?.p_key)] ?? null, error: null };
         }
         if (fn === 'report_list_my_reports') {
-          return state.listError ? { data: null, error: { message: 'refused' } } : { data: state.list, error: null };
+          return state.listError ? { data: null, error: state.listError } : { data: state.list, error: null };
         }
         if (fn === 'has_permission') return { data: true, error: null };
         return { data: [], error: null };
@@ -112,7 +112,7 @@ beforeEach(() => {
   state.access = {};
   state.accessError = false;
   state.list = [];
-  state.listError = false;
+  state.listError = null;
   state.rpcCalls = [];
   state.tables = [];
   vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -192,9 +192,17 @@ describe('G3 the index lists only report_list_my_reports', () => {
     expect((await callIndex()).result!.props.reports.map((r) => r.slug)).toEqual(SLUGS);
   });
 
-  it('an empty list, or one that cannot be read, is a 404', async () => {
+  it('an empty list is a 404', async () => {
     expect((await callIndex()).error?.message).toBe('NOT_FOUND');
-    state.listError = true;
+  });
+
+  // PostgREST always sets a code. A missing function (PGRST202) must not fall back to listing
+  // every report; neither may any other refusal.
+  it.each([
+    { code: 'PGRST202', message: 'Could not find the function' },
+    { code: '42501', message: 'Access denied' },
+  ])('a list that cannot be read ($code) is a 404', async (err) => {
+    state.listError = err;
     state.list = SLUGS.map((s) => ({ report_key: s, access: 'owner' }));
     expect((await callIndex()).error?.message).toBe('NOT_FOUND');
   });

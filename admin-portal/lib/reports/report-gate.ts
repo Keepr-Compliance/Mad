@@ -20,6 +20,7 @@ type Authenticated = Awaited<ReturnType<typeof getAuthenticatedUser>>;
 type Supabase = Authenticated['supabase'];
 
 /** Signed in with an internal role, else the same redirects the pages used before. */
+// Middleware stays coarse (analytics.view): _report_access_role admits only users passing _report_share_eligible, the same analytics.view join.
 async function requireInternalUser(): Promise<{ supabase: Supabase; user: NonNullable<Authenticated['user']> }> {
   const { supabase, user } = await getAuthenticatedUser();
   if (!user) redirect('/login');
