@@ -1,5 +1,4 @@
-import { getAuthenticatedUser } from '@/lib/supabase/server';
-import { redirect } from 'next/navigation';
+import { requireMyReports } from '@/lib/reports/report-gate';
 import { cookies } from 'next/headers';
 import { REPORTS } from '@/lib/reports/registry';
 import type { ParamRecord } from '@/lib/reports/report-url';
@@ -11,7 +10,8 @@ export const dynamic = 'force-dynamic';
 /**
  * Reports index — Admin Portal (BACKLOG-3441)
  *
- * Lists every registered report. New reports are added to
+ * Lists the registered reports the caller may open (BACKLOG-4144: `report_list_my_reports`;
+ * none at all is a 404). New reports are added to
  * `lib/reports/registry.ts`; the sidebar does not change.
  * Analytics (BACKLOG-3723) and Paywall Funnel (BACKLOG-3722) are registry
  * reports; neither has a sidebar entry of its own (BACKLOG-4005).
@@ -24,31 +24,10 @@ export default async function ReportsIndexPage({
 }: {
   searchParams: Promise<ParamRecord>;
 }) {
-  const { supabase, user } = await getAuthenticatedUser();
-
-  if (!user) {
-    redirect('/login');
-  }
-
-  // Verify internal role
-  const { data: internalRole } = await supabase
-    .from('internal_roles')
-    .select('role_id')
-    .eq('user_id', user.id)
-    .single();
-
-  if (!internalRole) {
-    redirect('/login?error=not_authorized');
-  }
-
-  // Defense-in-depth: verify page-level permission
-  const { data: hasPerm } = await supabase.rpc('has_permission', {
-    check_user_id: user.id,
-    required_permission: 'analytics.view',
-  });
-  if (!hasPerm) {
-    redirect('/dashboard?error=insufficient_permissions');
-  }
+  // BACKLOG-4144: only the reports the caller may open, in registry order.
+  const { reports: mine } = await requireMyReports();
+  const keys = new Set(mine.map((r) => r.reportKey));
+  const reports = REPORTS.filter((r) => keys.has(r.slug));
 
   const params = await searchParams;
   const cookieStore = await cookies();
@@ -57,5 +36,5 @@ export default async function ReportsIndexPage({
     cookie: cookieStore.get(REPORTS_VIEW_COOKIE)?.value,
   });
 
-  return <ReportsIndex reports={REPORTS} initialView={initialView} />;
+  return <ReportsIndex reports={reports} initialView={initialView} />;
 }
