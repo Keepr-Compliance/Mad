@@ -138,14 +138,12 @@ export function LearnSettings(): React.ReactElement {
                 <LearnStatTiles tiles={learnTiles(learn.score)} />
               </div>
             )}
-          </>
-        )}
 
-        {(learn.enabled || learn.answerCount > 0) && (
-          <p className="m-0 text-[13px] text-gray-500" data-testid="learn-footer">
-            {learn.answerCount === 1 ? "1 answer so far." : `${learn.answerCount} answers so far.`} Turning Learn mode off
-            keeps your answers; you can delete them in Privacy.
-          </p>
+            <p className="m-0 text-[13px] text-gray-500" data-testid="learn-footer">
+              {learn.answerCount === 1 ? "1 answer so far." : `${learn.answerCount} answers so far.`} Turning Learn mode
+              off keeps your answers; you can delete them in Privacy.
+            </p>
+          </>
         )}
       </div>
 

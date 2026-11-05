@@ -17,7 +17,8 @@
  *   P3    a run makes 0 Supabase table/RPC calls once the gate has passed
  *   P5    (main) feature-gate:strict-state answers for autodetect_eval, blocked
  *         on the production map
- *   PV    preview: membership checks; attachments listed, never downloaded;
+ *   PV    preview: membership checks; attachments listed, never downloaded by
+ *         the preview (PR3: only learn:attachment-open, see AT below);
  *         canary body never logged, sent as an event, or reported to Sentry;
  *         no provider fetch module is even loaded
  *
@@ -451,6 +452,14 @@ describe("C9 switch matrix", () => {
       setAutoDetect(autoDetect);
       planMap(evalState, aiDetection);
       const expectAllowed = toggle && evalState === "allowed";
+      // PR3: a downloader is wired, so a refusal that still downloads would show.
+      const downloads: string[] = [];
+      handlers.registerLearnModeHandlers({
+        openQuestionAttachment: async (_u, row) => {
+          downloads.push(row.id);
+          return { ok: false, reason: "failed" };
+        },
+      });
 
       await expect(handlers.isLearnModeAllowed(USER)).resolves.toBe(expectAllowed);
       for (const channel of handlers.LEARN_GATED_CHANNELS) {
@@ -458,6 +467,7 @@ describe("C9 switch matrix", () => {
         const refusedByGate = r.success === false && r.error === handlers.LEARN_NOT_ON_ERROR;
         expect({ channel, refusedByGate }).toEqual({ channel, refusedByGate: !expectAllowed });
       }
+      if (!expectAllowed) expect(downloads).toEqual([]);
       if (expectAllowed) {
         const r = await invoke("learn:run", { windowMonths: 12 });
         expect(r.success).toBe(true);
