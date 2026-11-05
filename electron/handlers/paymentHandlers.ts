@@ -17,6 +17,8 @@ import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import paymentService from "../services/paymentService";
 import logService from "../services/logService";
+import supabaseService from "../services/supabaseService";
+import { readMembershipStanding } from "../services/membershipStanding";
 import type {
   BeginCheckoutResult,
   BeginSubscriptionResult,
@@ -36,6 +38,21 @@ export function isValidTransactionIdArg(value: unknown): value is string {
 
 const MODULE = "PaymentHandlers";
 
+/**
+ * BACKLOG-3951: is the signed-in user a brokerage member with no license
+ * assigned? Read fresh and bounded before every card payment starts. Only a
+ * definite "unlicensed" refuses here; a read that cannot be answered lets the
+ * payment proceed, because the portal routes (checkout-session, charge) make
+ * the same check server-side and fail closed. No user id: paymentService
+ * answers unauthenticated itself.
+ */
+async function isUnlicensedMember(): Promise<boolean> {
+  const userId = supabaseService.getAuthUserId();
+  if (!userId) return false;
+  const { standing } = await readMembershipStanding(userId);
+  return standing === "unlicensed";
+}
+
 /** Register all payment IPC handlers. */
 export function registerPaymentHandlers(): void {
   // Flow A (first purchase / fallback): open Checkout in the system browser.
@@ -47,6 +64,9 @@ export function registerPaymentHandlers(): void {
     ): Promise<BeginCheckoutResult> => {
       if (!localTransactionId || typeof localTransactionId !== "string") {
         return { started: false, error: "error" };
+      }
+      if (await isUnlicensedMember()) {
+        return { started: false, error: "not_licensed" };
       }
       return paymentService.beginCheckout(localTransactionId);
     },
@@ -61,6 +81,9 @@ export function registerPaymentHandlers(): void {
     ): Promise<ChargeResult> => {
       if (!localTransactionId || typeof localTransactionId !== "string") {
         return { outcome: "error" };
+      }
+      if (await isUnlicensedMember()) {
+        return { outcome: "not_licensed" };
       }
       return paymentService.chargeSavedCard(localTransactionId);
     },

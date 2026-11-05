@@ -30,6 +30,7 @@
 import { net } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import supabaseService from "./supabaseService";
+import { readMembershipStanding } from "./membershipStanding";
 import logService from "./logService";
 import {
   getCachedUnlock,
@@ -691,6 +692,18 @@ class EntitlementService {
       if (await this.hasValidOfflinePass(userId)) {
         return { success: true, status: "unlocked" };
       }
+      return { success: false, status: "locked", error: "entitlement_unverified" };
+    }
+
+    // BACKLOG-3951: a brokerage member with no license assigned gets no new
+    // unlock. Fresh, bounded read on every click. A read that cannot be
+    // answered refuses too (same as the live read's error above): this path
+    // spends, so it fails closed. Deactivated members and solo users proceed.
+    const membership = await readMembershipStanding(userId);
+    if (membership.standing === "unlicensed") {
+      return { success: false, status: "locked", error: "not_licensed" };
+    }
+    if (membership.standing === "error") {
       return { success: false, status: "locked", error: "entitlement_unverified" };
     }
 
