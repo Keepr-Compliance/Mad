@@ -130,21 +130,19 @@ export function highlightHtml(html: string, re: RegExp | null): string {
   for (let n = walker.nextNode(); n; n = walker.nextNode()) texts.push(n as Text);
   for (const text of texts) {
     const value = text.nodeValue ?? "";
-    re.lastIndex = 0;
-    if (!re.test(value)) continue;
-    re.lastIndex = 0;
+    const runs = highlightText(value, re);
+    if (!runs.some((r) => r.mark)) continue;
     const frag = document.createDocumentFragment();
-    let last = 0;
-    for (let m = re.exec(value); m; m = re.exec(value)) {
-      if (m.index > last) frag.appendChild(document.createTextNode(value.slice(last, m.index)));
+    for (const run of runs) {
+      if (!run.mark) {
+        frag.appendChild(document.createTextNode(run.text));
+        continue;
+      }
       const mark = document.createElement("mark");
       mark.className = HIGHLIGHT_CLASS;
-      mark.textContent = m[0];
+      mark.textContent = run.text;
       frag.appendChild(mark);
-      last = m.index + m[0].length;
-      if (m[0].length === 0) re.lastIndex += 1;
     }
-    if (last < value.length) frag.appendChild(document.createTextNode(value.slice(last)));
     text.parentNode?.replaceChild(frag, text);
   }
   return template.innerHTML;
@@ -154,13 +152,13 @@ export function highlightHtml(html: string, re: RegExp | null): string {
 export function highlightText(text: string, re: RegExp | null): Array<{ text: string; mark: boolean }> {
   if (!re) return [{ text, mark: false }];
   const out: Array<{ text: string; mark: boolean }> = [];
-  re.lastIndex = 0;
   let last = 0;
-  for (let m = re.exec(text); m; m = re.exec(text)) {
-    if (m.index > last) out.push({ text: text.slice(last, m.index), mark: false });
+  for (const m of text.matchAll(re)) {
+    const at = m.index ?? 0;
+    if (m[0].length === 0) continue;
+    if (at > last) out.push({ text: text.slice(last, at), mark: false });
     out.push({ text: m[0], mark: true });
-    last = m.index + m[0].length;
-    if (m[0].length === 0) re.lastIndex += 1;
+    last = at + m[0].length;
   }
   if (last < text.length) out.push({ text: text.slice(last), mark: false });
   return out;
