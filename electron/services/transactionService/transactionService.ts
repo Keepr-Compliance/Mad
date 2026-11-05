@@ -54,7 +54,12 @@ import {
 // callback returns, the transaction commits, and the failure arrives later as
 // an unhandled rejection. `repointMessageTransaction` (BACKLOG-3908) is sync
 // for the same reason.
-import { linkMessageToTransaction, repointMessageTransaction } from "../db/messageDbService";
+import {
+  getMessageChannelAndDeal,
+  linkMessageToTransaction,
+  repointMessageTransaction,
+} from "../db/messageDbService";
+import { isTextMessage } from "../../utils/channelHelpers";
 import {
   addIgnoredCommunicationSync,
   createCommunicationSync,
@@ -1643,7 +1648,11 @@ class TransactionService {
     // dropping one sibling here would split the conversation with no write
     // failure at all. (The old per-sibling try/catch counted it as `failed` and
     // still returned success.)
-    const planned: Array<{ id: string; ignoreRow: NewIgnoredCommunication }> = [];
+    const planned: Array<{
+      id: string;
+      ignoreRow: NewIgnoredCommunication;
+      repointMessageId?: string;
+    }> = [];
     for (const id of idsToUnlink) {
       const sibling =
         id === communicationId
@@ -1653,7 +1662,19 @@ class TransactionService {
       const siblingRec = sibling as Communication & {
         email_id?: string;
         thread_id?: string;
+        message_id?: string;
       };
+
+      // BACKLOG-4037: a per-message TEXT link also names its deal in
+      // messages.transaction_id. Read it here (phase 1); phase 2 re-points it.
+      // Texts only: every reader of that column is text-only.
+      let repointMessageId: string | undefined;
+      if (siblingRec.message_id) {
+        const message = getMessageChannelAndDeal(siblingRec.message_id);
+        if (message?.transaction_id && message.channel && isTextMessage({ channel: message.channel })) {
+          repointMessageId = siblingRec.message_id;
+        }
+      }
 
       // BACKLOG-1585: Resolve email_id when null (older records or
       // thread-based linking). Without email_id the ignored_communications
@@ -1677,6 +1698,7 @@ class TransactionService {
 
       planned.push({
         id,
+        repointMessageId,
         ignoreRow: {
           user_id: sibling.user_id,
           transaction_id: sibling.transaction_id,
@@ -1706,6 +1728,12 @@ class TransactionService {
         for (const { id, ignoreRow } of planned) {
           addIgnoredCommunicationSync(ignoreRow);
           deleteCommunicationSync(id);
+        }
+        // BACKLOG-4037: AFTER every link row is gone, so the removed deal is no
+        // longer a candidate; the column takes the newest remaining link or
+        // NULL. Same order as unlinkMessages (BACKLOG-3908).
+        for (const { repointMessageId } of planned) {
+          if (repointMessageId) repointMessageTransaction(repointMessageId);
         }
       });
     } catch (err) {
