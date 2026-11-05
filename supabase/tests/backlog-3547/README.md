@@ -33,7 +33,7 @@ Run under `bash`, not zsh.
 BEGIN
   backlog-3477's prelude, unchanged (catalogue, 3473, 3535, 3474, 3476, 3477)
   -> backlog-3477/lib/fixtures-3477.sql
-  -> lib/widen-commission.sql   (the nine BACKLOG-3519 columns, no FK/CHECKs;
+  -> lib/widen-commission.sql   (the four BACKLOG-3519 commission columns, no CHECKs;
                                  pg_temp.desk(), the desktop insert shape)
   -> 3547 (or a mutant of it) -> control
 ROLLBACK
@@ -47,7 +47,7 @@ ROLLBACK
 | c01 | allowed: desktop insert (`uploading`), desktop resubmit insert (version 2, `uploading`), no status (default `submitted`), explicit `submitted`, desktop finalize UPDATE | m03 |
 | c02 | refused: `under_review`, `needs_changes`, `resubmitted`, `approved`, `rejected`, NULL | m01, m02, m04, m08, m11, m12 |
 | c03 | refused: `reviewed_by`, `reviewed_at`, `review_notes`, each alone | m05–m08, m11 |
-| c04 | desktop insert carrying the nine commission/split columns passes; plus `reviewed_by` is refused | m05, m08, m11 |
+| c04 | desktop insert carrying the four commission columns passes; plus `reviewed_by` is refused | m05, m08, m11 |
 | c05 | a non-empty `status_history` is refused by the 3477 trigger (not this migration); an empty one passes | none here — proved by backlog-3477 m37/m38 |
 | c06 | existing terms: another user's `submitted_by`, a non-member org, a personal org — all refused | m08, m09, m10 |
 | c07 | the service role may still insert a reviewed row | — |
