@@ -14,10 +14,12 @@
  * - REFUSAL: the backupInFlight guard's return (deviceSyncOrchestrator.ts, `error: "Sync already
  *   in progress", duration: 0`, no errorCode) as sync:start's toSyncReply passes it on.
  * - CANCELLED: `errorResult("Sync cancelled by user")`, the cancelled frame's exit.
+ * - C6's error event: the orchestrator's exported disconnect message (as failureUx-3816 uses).
  */
 import React from "react";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import "@testing-library/jest-dom";
+import { BACKUP_DEVICE_DISCONNECTED_MESSAGE } from "../../../../electron/services/deviceSyncOrchestrator";
 import { useIPhoneSync, syncStateRef } from "../../../hooks/useIPhoneSync";
 import { syncOrchestrator } from "../../../services/SyncOrchestratorService";
 import { IPhoneSyncFlow } from "../IPhoneSyncFlow";
@@ -240,5 +242,28 @@ describe("BACKLOG-4116: Start after Cancel waits for the cancelled sync to stop"
     expect(syncApi.cancel).toHaveBeenCalledWith("error-close");
     expect(screen.getByRole("button", { name: SYNC_LABEL })).toBeEnabled();
     expect(screen.queryByText(STOPPING_LABEL)).not.toBeInTheDocument();
+  });
+
+  it("C6: an error event during the stop shows Try Again disabled as 'Stopping the previous sync…' until the reply", async () => {
+    // The hook's sync:error handler is not gated on the run being active, so an error event
+    // that lands after Cancel opens the error screen while the request is still pending.
+    render(<Harness />);
+    await connect();
+    await startABackup();
+    await pressCancel();
+
+    await act(async () => {
+      cbs.error({ message: BACKUP_DEVICE_DISCONNECTED_MESSAGE });
+    });
+    await flush();
+    expect(screen.getByText("Sync Failed")).toBeInTheDocument();
+    const stopping = screen.getByRole("button", { name: STOPPING_LABEL });
+    expect(stopping).toBeDisabled();
+    fireEvent.click(stopping);
+    await flush();
+    expect(syncApi.start).toHaveBeenCalledTimes(1);
+
+    await reply(0, CANCELLED);
+    expect(screen.getByRole("button", { name: "Try Again" })).toBeEnabled();
   });
 });
