@@ -1,0 +1,109 @@
+# BACKLOG-4087 keepr-test controls, 2026-11-04, base int-portal/reports-246 @ 493cb6ec5
+# migration file md5 b3801eb3 (20261104200000_backlog_4087_report_view_shares.sql)
+#
+# 1) before the apply: ./run.sh --with-migration  -> total 24, pass 24, fail 0
+#    afterwards: report_saved_view_shares absent, 0 p4087 fixtures, report_list_saved_views md5 08fc7184
+# 2) mutations, before the apply: ./mutate.py <modes>  (file edit, exact match once, git diff --numstat,
+#    run --with-migration, git checkout --, status clean). Every mode: total 24.
+#   (batch 1: M2-M4; batch 2: the rest, M1/M1b/M5 re-run with the removed lines printed)
+#   == M2_no_mask
+#   MUTATION APPLIED numstat=2	2	supabase/migrations/20261104200000_backlog_4087_report_view_shares.sql
+#     + 'pinned', v.pinned,
+#     + 'is_default', v.is_default,
+#   RESULT total=24 pass=23 fail=1 reds=K2_mask_pinned_and_default
+#   RESTORED clean=True
+#   == M2b_mask_default_only
+#   MUTATION APPLIED numstat=1	1	supabase/migrations/20261104200000_backlog_4087_report_view_shares.sql
+#     + 'pinned', v.pinned,
+#   RESULT total=24 pass=23 fail=1 reds=K2_mask_pinned_and_default
+#   RESTORED clean=True
+#   == M3_editor_writes_name_pin
+#   MUTATION APPLIED numstat=3	1	supabase/migrations/20261104200000_backlog_4087_report_view_shares.sql
+#     + SET name = btrim(p_name),
+#     + pinned = p_pinned,
+#     + filters = coalesce(p_filters, '{}'::jsonb),
+#   RESULT total=24 pass=22 fail=2 reds=K3_editor_save_filters_metric_only,K4_viewer_and_stranger_cannot_save
+#   RESTORED clean=True
+#   == M4_pincap_on_editor
+#   MUTATION APPLIED numstat=3	0	supabase/migrations/20261104200000_backlog_4087_report_view_shares.sql
+#     + IF v_is_editor AND p_pinned AND (SELECT count(*) FROM report_saved_views WHERE user_id = v_caller_id AND report_key = p_report_key AND pinned) >= 5 TH
+#     + RAISE EXCEPTION 'At most 5 pinned cards per report. Unpin one first.';
+#     + END IF;
+#   RESULT total=24 pass=20 fail=4 reds=K11_grantee_loses_analytics_view,K12_owner_loses_eligibility,K3_editor_save_filters_metric_only,K4_viewer_and_stranger_cannot_save
+#   RESTORED clean=True
+#   == M5b_save_no_owner_check
+#   MUTATION APPLIED numstat=1	2	supabase/migrations/20261104200000_backlog_4087_report_view_shares.sql
+#     - AND public._report_share_eligible(v_caller_id)
+#     - AND public._report_share_eligible(v_owner_id);
+#     + AND public._report_share_eligible(v_caller_id);
+#   RESULT total=24 pass=23 fail=1 reds=K12_owner_loses_eligibility
+#   RESTORED clean=True
+#   == M6_viewer_can_save
+#   MUTATION APPLIED numstat=1	1	supabase/migrations/20261104200000_backlog_4087_report_view_shares.sql
+#     - WHERE s.view_id = p_id AND s.user_id = v_caller_id AND s.role = 'editor'
+#     + WHERE s.view_id = p_id AND s.user_id = v_caller_id
+#   RESULT total=24 pass=21 fail=3 reds=K11_grantee_loses_analytics_view,K12_owner_loses_eligibility,K4_viewer_and_stranger_cannot_save
+#   RESTORED clean=True
+#   == M7_editor_reshares
+#   MUTATION APPLIED numstat=1	1	supabase/migrations/20261104200000_backlog_4087_report_view_shares.sql
+#     - AND v.user_id = v_caller_id
+#     + AND (v.user_id = v_caller_id OR EXISTS (SELECT 1 FROM report_saved_view_shares s0 WHERE s0.view_id = v.id AND s0.user_id = v_caller_id AND s0.role = '
+#   RESULT total=24 pass=19 fail=5 reds=K10_one_refusal_message,K15_share_remove,K5_editor_reshare_refused,K7_share_list,K9_admin_sees_only_shared
+#   RESTORED clean=True
+#   == M8_superadmin_bypass_list
+#   MUTATION APPLIED numstat=1	1	supabase/migrations/20261104200000_backlog_4087_report_view_shares.sql
+#     - WHERE v.user_id = v_caller_id
+#     + WHERE (v.user_id = v_caller_id OR EXISTS (SELECT 1 FROM internal_roles ir2 JOIN admin_roles ar ON ar.id = ir2.role_id WHERE ir2.user_id = v_caller_id 
+#   RESULT total=24 pass=22 fail=2 reds=K9_admin_sees_only_shared,P1_3450_isolation
+#   RESTORED clean=True
+#   == M9_helper_granted
+#   MUTATION APPLIED numstat=1	0	supabase/migrations/20261104200000_backlog_4087_report_view_shares.sql
+#     + GRANT EXECUTE ON FUNCTION public._report_share_eligible(UUID) TO authenticated;
+#   RESULT total=24 pass=22 fail=2 reds=K13_anon_and_non_internal_refused,K14_catalog
+#   RESTORED clean=True
+#   == M10_remove_oracle
+#   MUTATION APPLIED numstat=3	0	supabase/migrations/20261104200000_backlog_4087_report_view_shares.sql
+#     + IF v_view_id IS NULL AND EXISTS (SELECT 1 FROM report_saved_views x WHERE x.id = p_id) THEN
+#     + RAISE EXCEPTION 'Only the view owner can delete it';
+#     + END IF;
+#   RESULT total=24 pass=22 fail=2 reds=K10_one_refusal_message,P1_3450_isolation
+#   RESTORED clean=True
+#   == M11_table_select_granted
+#   MUTATION APPLIED numstat=1	0	supabase/migrations/20261104200000_backlog_4087_report_view_shares.sql
+#     + GRANT SELECT ON public.report_saved_view_shares TO authenticated;
+#   RESULT total=24 pass=22 fail=2 reds=K14_catalog,K8_recipient_direct_select
+#   RESTORED clean=True
+#   == M1_elig_internal_only
+#   MUTATION APPLIED numstat=0	3	supabase/migrations/20261104200000_backlog_4087_report_view_shares.sql
+#     - JOIN admin_role_permissions arp ON arp.role_id = ir.role_id
+#     - JOIN admin_permissions ap ON ap.id = arp.permission_id
+#     - AND ap.key = 'analytics.view'
+#   RESULT total=24 pass=19 fail=5 reds=K10_one_refusal_message,K11_grantee_loses_analytics_view,K12_owner_loses_eligibility,K15_share_remove,K6a_candidates
+#   RESTORED clean=True
+#   == M1b_list_no_readtime_check
+#   MUTATION APPLIED numstat=0	2	supabase/migrations/20261104200000_backlog_4087_report_view_shares.sql
+#     - AND public._report_share_eligible(v_caller_id)
+#     - AND public._report_share_eligible(v.user_id)
+#   RESULT total=24 pass=22 fail=2 reds=K11_grantee_loses_analytics_view,K12_owner_loses_eligibility
+#   RESTORED clean=True
+#   == M5_list_no_owner_check
+#   MUTATION APPLIED numstat=0	1	supabase/migrations/20261104200000_backlog_4087_report_view_shares.sql
+#     - AND public._report_share_eligible(v.user_id)
+#   RESULT total=24 pass=23 fail=1 reds=K12_owner_loses_eligibility
+#   RESTORED clean=True
+# 3) applied on keepr-test: ~/.claude/bin/kt-sql <migration file>, then
+#    insert into supabase_migrations.schema_migrations (version, name)
+#      values ('20261104200000', 'backlog_4087_report_view_shares');   (statements column left NULL, as 4084)
+#    definitions md5 (pg_get_functiondef, first 8):
+#      _report_share_eligible a9d7c11d   report_list_saved_views a31218b2   report_save_view 5a109e6a
+#      report_delete_saved_view 156e499f  report_share_candidates 50c4e961  report_share_list eceddc00
+#      report_share_set bfe2f5e7          report_share_remove c3633c5a       report_set_default_view f96e460c (unchanged)
+# 4) after the apply: ./run.sh -> 24/24; ./run.sh --with-migration -> 24/24 (K16: re-running the committed
+#    file leaves every definition and grant unchanged). md5s identical after both runs.
+# 5) regression: ../backlog-4084/run.sh base --with-migration before the apply -> 18/18.
+#    after the apply: 17/18, C12_reapply_idempotent red by construction (re-running the 4084 file replaces
+#    report_list_saved_views with its 4084 body). 4084 C4a unchanged: report_set_default_view is not
+#    touched here and still answers 'Saved view not found'.
+#    3450 control-1 / control-4 assertions updated to the single message. They pick two existing internal
+#    users; keepr-test has one, so they were not run there. Their isolation assertions are ported as P1
+#    here, and the 3450 control-2 mutants are M8 (list isolation) and M10 (remove owner check).

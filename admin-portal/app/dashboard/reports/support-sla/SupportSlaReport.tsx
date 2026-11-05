@@ -24,6 +24,7 @@ import {
   FilterCaption,
   PeriodPicker,
   SavedViews,
+  ShareDialog,
   SortableTh,
   StatCard,
   TruncationNotice,
@@ -43,6 +44,7 @@ import {
 } from '@/lib/reports/support-sla';
 import { supportSlaViews, type PeriodOnlySavedView } from '@/lib/reports/period-only-views';
 import type { PeriodOnlyViewsApi } from '@/lib/reports/period-only-views-api';
+import type { ShareApi } from '@/lib/reports/report-share-api';
 import { usePeriodOnlySavedViews } from '@/lib/reports/use-period-only-saved-views';
 import { SupportSlaHowToUse } from './SupportSlaHowToUse';
 
@@ -94,6 +96,8 @@ export interface SupportSlaReportProps {
   onNavigate?: (url: string) => void;
   /** Saved-view storage (BACKLOG-4084). Absent = saved views unavailable (fails closed). */
   viewsApi?: PeriodOnlyViewsApi;
+  /** Saved-view sharing (BACKLOG-4087). Absent = no Share, Update or Leave. */
+  shareApi?: ShareApi;
 }
 
 const COLUMNS: [SupportSlaSortKey, string][] = [
@@ -112,6 +116,7 @@ export function SupportSlaReport({
   rowCap,
   onNavigate,
   viewsApi,
+  shareApi,
 }: SupportSlaReportProps) {
   const { sortKey, sortDirection, onSort } = useSortState<SupportSlaSortKey>({
     initialKey: 'resolvedInPeriod',
@@ -127,7 +132,13 @@ export function SupportSlaReport({
     onNavigate?.(buildPeriodUrl(search, nextPeriod, from, to));
   }
 
-  const savedViews = usePeriodOnlySavedViews(viewsApi, supportSlaViews, period, navigateToPeriod);
+  const { shareDialog, ...savedViews } = usePeriodOnlySavedViews(
+    viewsApi,
+    supportSlaViews,
+    period,
+    navigateToPeriod,
+    shareApi
+  );
 
   const s = report?.summary ?? null;
   const num = (v: number | undefined) => (s ? (v ?? 0) : '-');
@@ -148,7 +159,12 @@ export function SupportSlaReport({
       <FilterBar
         hasFilters={false}
         onClear={() => undefined}
-        trailing={<SavedViews<PeriodOnlySavedView> {...savedViews} />}
+        trailing={
+          <>
+            <SavedViews<PeriodOnlySavedView> {...savedViews} />
+            <ShareDialog {...shareDialog} />
+          </>
+        }
       >
         <PeriodPicker<PeriodKey>
           options={PERIOD_OPTIONS}

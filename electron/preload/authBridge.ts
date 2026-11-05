@@ -6,33 +6,6 @@
 import { ipcRenderer } from "electron";
 
 export const authBridge = {
-  /**
-   * Initiates Google OAuth login flow
-   * @returns Login initiation result
-   */
-  googleLogin: () => ipcRenderer.invoke("auth:google:login"),
-
-  /**
-   * Completes Google OAuth login with authorization code
-   * @param code - OAuth authorization code from Google
-   * @returns Login completion result
-   */
-  googleCompleteLogin: (code: string) =>
-    ipcRenderer.invoke("auth:google:complete-login", code),
-
-  /**
-   * Initiates Microsoft OAuth login flow
-   * @returns Login initiation result
-   */
-  microsoftLogin: () => ipcRenderer.invoke("auth:microsoft:login"),
-
-  /**
-   * Completes Microsoft OAuth login with authorization code
-   * @param code - OAuth authorization code from Microsoft
-   * @returns Login completion result
-   */
-  microsoftCompleteLogin: (code: string) =>
-    ipcRenderer.invoke("auth:microsoft:complete-login", code),
 
   /**
    * Connects Google mailbox for a logged-in user

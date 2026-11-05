@@ -10,11 +10,14 @@
  */
 
 import { useMemo, useState } from 'react';
-import { SavedViews } from '@keepr/ui';
-import type { PeriodRange } from '@/lib/reports/period';
+import { SavedViews, ShareDialog, type SaveViewOptions } from '@keepr/ui';
+import { DEFAULT_PERIOD, type PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
 import type { ReportViewsApi } from '@/lib/reports/report-views-api';
+import type { ShareApi } from '@/lib/reports/report-share-api';
+import { isOwnView } from '@/lib/reports/saved-view-access';
 import { useReportSavedViews } from '@/lib/reports/use-report-saved-views';
+import { useReportViewSharing } from '@/lib/reports/use-report-view-sharing';
 import { serializeViewPeriod, viewPeriodMatches } from '@/lib/reports/view-period';
 import {
   activeFilterNames,
@@ -91,6 +94,8 @@ export interface ExportsReportProps {
   rowCap: number;
   onNavigate?: (url: string) => void;
   viewsApi?: ExportViewsApi;
+  /** Saved-view sharing (BACKLOG-4087). Absent = no Share, Update or Leave. */
+  shareApi?: ShareApi;
   /**
    * The default saved view the server opened the page with (bare URL only),
    * or null. Read ONCE, as the filters' initial state; never synced after.
@@ -111,6 +116,7 @@ export function ExportsReport({
   rowCap,
   onNavigate,
   viewsApi,
+  shareApi,
   initialView = null,
 }: ExportsReportProps) {
   const [filters, setFilters] = useState<ExportFilters>(() => initialView?.filters ?? EMPTY_EXPORT_FILTERS);
@@ -158,7 +164,8 @@ export function ExportsReport({
   const formatOptions = sortedOptions(new Map(all.map((e) => [e.format, formatLabel(e.format)] as const)));
 
   // ─── Saved views ───────────────────────────────────────────────
-  const pinned = useMemo(() => (views ?? []).filter((v) => v.pinned).slice(0, MAX_PINNED), [views]);
+  // Own views only (BACKLOG-4087): a shared view is never one of the user's cards.
+  const pinned = useMemo(() => (views ?? []).filter((v) => v.pinned && isOwnView(v)).slice(0, MAX_PINNED), [views]);
   // A card applies its filters only and follows the page's period (SR ruling,
   // BACKLOG-4084); the Views list applies filters and time range.
   const cards = pinned.map((view) => ({
@@ -198,15 +205,24 @@ export function ExportsReport({
     updateFilters(back);
   }
 
-  // Every save pins, as before; the kit refuses a sixth pin before calling.
-  function saveCurrentView(name: string) {
+  // Only "Save current view as a card" pins (BACKLOG-4132); the kit refuses a
+  // sixth pin before calling. "Save current view" saves unpinned.
+  function saveCurrentView(name: string, options?: SaveViewOptions) {
     savedViews.save({
       name,
       filters: serializeExportFilters(filters, serializeViewPeriod(period)),
       metric,
-      pinned: true,
+      pinned: options?.pin === true,
     });
   }
+  // Sharing (BACKLOG-4087). An editor's Update changes the FILTERS only (founder rule): the hook
+  // sends the view's own card metric, never this one (use-report-view-sharing.ts).
+  const { sharing, shareDialog } = useReportViewSharing(shareApi, savedViews, EXPORTS_REPORT_KEY, () => ({
+    filters: serializeExportFilters(filters, serializeViewPeriod(period)),
+    // Required by the kit payload type; ignored for a view that has its own metric (every view here).
+    metric,
+  }));
+
 
   // Re-saves the view as stored, period included: only `pinned` changes.
   function togglePin(view: ExportSavedView) {
@@ -240,6 +256,14 @@ export function ExportsReport({
     onNavigate?.(buildPeriodUrl(search, nextPeriod, from, to));
   }
 
+  // Clear the applied view (BACKLOG-4121): empty filters and the built-in
+  // period, written into the URL. Never a bare URL: that re-opens the default view.
+  function clearView() {
+    setRestoreFilters(null);
+    updateFilters(EMPTY_EXPORT_FILTERS);
+    navigateToPeriod(DEFAULT_PERIOD);
+  }
+
   const filterNames = activeFilterNames(filters);
   const caption = `Cards, chart and tables follow the filters: ${period.label}${
     filterNames.length > 0 ? ` · ${filterNames.join(' · ')}` : ' · no other filters'
@@ -258,28 +282,33 @@ export function ExportsReport({
         onFiltersChange={updateFilters}
         onClear={() => updateFilters(EMPTY_EXPORT_FILTERS)}
         views={
-          <SavedViews<ExportSavedView>
-            views={views}
-            loading={savedViews.loading}
-            activeViewId={activeViewId}
-            writeError={savedViews.writeError}
-            onApply={applyView}
-            onDelete={savedViews.remove}
-            onSave={saveCurrentView}
-            saveHint={EXPORTS_SAVE_HINT}
-            defaultViewId={savedViews.defaultViewId}
-            onSetDefault={savedViews.setDefault}
-            pinning={{ max: MAX_PINNED, onTogglePin: togglePin }}
-            saveFields={
-              <MetricSaveFields
-                value={metric}
-                onChange={(next) => setMetric({ col: next.col as ExportViewMetric['col'], fn: 'count' })}
-                columns={EXPORT_METRIC_COLUMNS}
-                functions={EXPORT_METRIC_FUNCTIONS}
-                functionsForColumn={exportFunctionsFor}
-              />
-            }
-          />
+          <>
+            <SavedViews<ExportSavedView>
+              views={views}
+              loading={savedViews.loading}
+              activeViewId={activeViewId}
+              writeError={savedViews.writeError}
+              onApply={applyView}
+              onDelete={savedViews.remove}
+              onSave={saveCurrentView}
+              saveHint={EXPORTS_SAVE_HINT}
+              defaultViewId={savedViews.defaultViewId}
+              onSetDefault={savedViews.setDefault}
+              onClear={clearView}
+              sharing={sharing}
+              pinning={{ max: MAX_PINNED, onTogglePin: togglePin }}
+              saveFields={
+                <MetricSaveFields
+                  value={metric}
+                  onChange={(next) => setMetric({ col: next.col as ExportViewMetric['col'], fn: 'count' })}
+                  columns={EXPORT_METRIC_COLUMNS}
+                  functions={EXPORT_METRIC_FUNCTIONS}
+                  functionsForColumn={exportFunctionsFor}
+                />
+              }
+            />
+            <ShareDialog {...shareDialog} />
+          </>
         }
       />
 
