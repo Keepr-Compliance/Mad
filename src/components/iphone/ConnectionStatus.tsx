@@ -7,6 +7,9 @@ import logger from "../../utils/logger";
 import { useRetryCountdown } from "../../utils/syncRetryCooldown";
 import { RetryCooldownNotice, SyncStartButtonContent } from "./SyncStartButtonContent";
 
+/** BACKLOG-4116: the Sync / Try Again label while a cancelled sync is still stopping. */
+export const STOPPING_PREVIOUS_SYNC_LABEL = "Stopping the previous sync\u2026";
+
 /**
  * ConnectionStatus Component
  * Displays iPhone connection status and provides sync action
@@ -41,6 +44,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   device,
   onSyncClick,
   lastSyncTime,
+  priorBackup = "unknown",
   driverMissing = false,
   onInstallDriver,
   isInstallingDriver = false,
@@ -51,6 +55,7 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
   appleDevicesState = null,
   appleUsbDriver = null,
   isStarting = false,
+  isStopping = false,
   retryAvailableAt = null,
 }) => {
   // BACKLOG-3816: hold after a dropped connection / refused backup service.
@@ -222,43 +227,53 @@ export const ConnectionStatus: React.FC<ConnectionStatusProps> = ({
 
       <button
         onClick={() => { logger.info("[ConnectionStatus] Sync iPhone clicked"); onSyncClick(); }}
-        disabled={isStarting || retrySecondsLeft > 0}
+        disabled={isStarting || isStopping || retrySecondsLeft > 0}
         className="mt-6 px-6 py-3 bg-gradient-to-r from-purple-500 to-indigo-600 text-white font-medium rounded-lg hover:from-purple-600 hover:to-indigo-700 transition-all shadow-md hover:shadow-lg disabled:opacity-60 disabled:cursor-not-allowed"
       >
         <SyncStartButtonContent
           isStarting={isStarting}
-          label={lastSyncTime ? "Sync New Data" : "Sync Messages & Contacts"}
+          label={
+            isStopping
+              ? STOPPING_PREVIOUS_SYNC_LABEL
+              : lastSyncTime ? "Sync New Data" : "Sync Messages & Contacts"
+          }
         />
       </button>
       <RetryCooldownNotice secondsLeft={retrySecondsLeft} />
 
-      {/* Sync time note - different message for first vs subsequent syncs */}
-      <div className="mt-4 flex items-start gap-2 text-left max-w-sm">
-        <svg
-          className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-          />
-        </svg>
-        <p className="text-xs text-gray-400">
-          {lastSyncTime ? (
-            <>
-              <span className="font-medium text-gray-500">Incremental sync</span> will only transfer new data since your last sync. This is usually much faster.
-            </>
-          ) : (
-            <>
-              <span className="font-medium text-gray-500">First sync</span> may take up to two hours depending on your phone's data. Future syncs will be much faster as only new data is transferred.
-            </>
-          )}
-        </p>
-      </div>
+      {/* Sync time note - different message for first vs subsequent syncs.
+          BACKLOG-2931: keyed on whether a USABLE prior backup is on this computer (the
+          progress banner's value, BACKLOG-2907/2938), not on lastSyncTime — which is null
+          while loading and on any fetch failure, and set for a sync done on another
+          computer. "unknown" claims neither. */}
+      {priorBackup !== "unknown" && (
+        <div className="mt-4 flex items-start gap-2 text-left max-w-sm">
+          <svg
+            className="w-4 h-4 text-blue-400 flex-shrink-0 mt-0.5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+          <p className="text-xs text-gray-400">
+            {priorBackup === "exists" ? (
+              <>
+                <span className="font-medium text-gray-500">Incremental sync</span> will only transfer new data since your last sync. This is usually much faster.
+              </>
+            ) : (
+              <>
+                <span className="font-medium text-gray-500">First sync</span> may take up to two hours depending on your phone's data. Future syncs will be much faster as only new data is transferred.
+              </>
+            )}
+          </p>
+        </div>
+      )}
     </div>
   );
 };

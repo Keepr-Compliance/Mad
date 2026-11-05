@@ -12,6 +12,7 @@ import { backupService } from "../services/backupService";
 import { backupDecryptionService } from "../services/backupDecryptionService";
 import { BackupOptions, BackupProgress } from "../types/backup";
 import { rateLimiters } from "../utils/rateLimit";
+import { toPriorBackupState } from "../services/deviceSyncOrchestrator";
 
 import { sendToMainWindow } from "../windowRegistry";
 
@@ -75,22 +76,31 @@ export function registerBackupHandlers(_mainWindow: BrowserWindow): void {
         throw new Error("Device UDID is required");
       }
 
-      const status = await backupService.checkBackupStatus(udid);
+      // BACKLOG-2931: the connect screen calls this on every device connect. Read the
+      // recorded size (walk and record only when there is none), as the sync's own check
+      // does — without it each connect walked the whole backup (BACKLOG-3816: ~135 s on
+      // a large one). `isComplete` comes from the index files, not the size, so the
+      // answer below is the same either way; only the latency changes.
+      const status = await backupService.checkBackupStatus(udid, { useRecordedSize: true });
+
+      // BACKLOG-2931: the SAME usability mapping the sync records (BACKLOG-2907/2938),
+      // so the connect screen's sentence and the progress banner cannot disagree.
+      const priorBackup = toPriorBackupState(status);
 
       // BACKLOG-2917: the IPC boundary repeated the collapse it was handed. A failed
       // check and a genuinely absent backup both returned `exists: false`, so even a
       // correct three-state value in the main process would have arrived in the
       // renderer as two. `state` crosses the boundary intact.
       //
-      // No renderer code calls this today (`deviceBridge.ts` exposes it;
-      // `src/services/deviceService.ts` wraps every other `backup:*` channel and not
-      // this one), so this is fixed as fragile construction, not as a live bug.
+      // Renderer caller: useIPhoneSync (BACKLOG-2931), on device connect and after a
+      // sync completes.
       if (status.state === "unknown") {
         return {
           success: true,
           state: "unknown" as const,
           reason: status.reason,
           lastSyncTime: null,
+          priorBackup,
         };
       }
 
@@ -99,12 +109,14 @@ export function registerBackupHandlers(_mainWindow: BrowserWindow): void {
           success: true,
           state: "absent" as const,
           lastSyncTime: null,
+          priorBackup,
         };
       }
 
       return {
         success: true,
         state: "present" as const,
+        priorBackup,
         isComplete: status.isComplete,
         // BACKLOG-2911: the device did not report the snapshot as finished.
         isInterrupted: status.isInterrupted,
@@ -117,6 +129,8 @@ export function registerBackupHandlers(_mainWindow: BrowserWindow): void {
       return {
         success: false,
         error: (error as Error).message,
+        // BACKLOG-2931: nothing was established; the connect screen claims neither.
+        priorBackup: "unknown" as const,
       };
     }
   });

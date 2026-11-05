@@ -163,3 +163,116 @@ describe("UpdateNotification actions", () => {
     expect(screen.getByText("Report issue")).toBeInTheDocument();
   });
 });
+
+/**
+ * BACKLOG-3469: with the Settings auto-download switch OFF, main sends
+ * update-available with autoDownload false and nothing downloads until the
+ * user clicks Download.
+ */
+describe("UpdateNotification with auto-download off (BACKLOG-3469)", () => {
+  let availableCb: ((info: unknown) => void) | undefined;
+  let progressCb: ((p: unknown) => void) | undefined;
+  const mockDownload = jest.fn();
+
+  function setupAvailableApi(storeBuild = false) {
+    const noopListener = () => () => {};
+    Object.defineProperty(window, "api", {
+      value: {
+        system: { isStoreBuild: storeBuild },
+        update: {
+          onAvailable: (cb: (info: unknown) => void) => {
+            availableCb = cb;
+            return () => {
+              availableCb = undefined;
+            };
+          },
+          onProgress: (cb: (p: unknown) => void) => {
+            progressCb = cb;
+            return () => {
+              progressCb = undefined;
+            };
+          },
+          onDownloaded: noopListener,
+          onTranslocationDetected: noopListener,
+          onError: noopListener,
+          download: mockDownload,
+          install: jest.fn(),
+        },
+      },
+      writable: true,
+      configurable: true,
+    });
+  }
+
+  const emitAvailable = (info: unknown) =>
+    act(() => {
+      availableCb?.(info);
+    });
+
+  beforeEach(() => {
+    availableCb = undefined;
+    progressCb = undefined;
+    mockDownload.mockReset();
+    mockDownload.mockResolvedValue({ success: true });
+    setupAvailableApi();
+  });
+
+  it("switch off: offers the update with a Download button, no download in progress", () => {
+    render(<UpdateNotification />);
+    emitAvailable({ version: "2.99.0", autoDownload: false });
+    expect(screen.getByText("Update Available")).toBeInTheDocument();
+    expect(screen.getByText(/2\.99\.0/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
+    expect(screen.queryByText("Downloading Update...")).not.toBeInTheDocument();
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
+
+  it("Download click: calls download once and shows the progress card", async () => {
+    render(<UpdateNotification />);
+    emitAvailable({ version: "2.99.0", autoDownload: false });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    });
+    expect(mockDownload).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Downloading Update...")).toBeInTheDocument();
+    act(() => {
+      progressCb?.({ percent: 42 });
+    });
+    expect(screen.getByText("42%")).toBeInTheDocument();
+  });
+
+  it("refused download: the Download button comes back", async () => {
+    mockDownload.mockResolvedValue({ success: false, error: "no" });
+    render(<UpdateNotification />);
+    emitAvailable({ version: "2.99.0", autoDownload: false });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Download" }));
+    });
+    expect(screen.getByRole("button", { name: "Download" })).toBeInTheDocument();
+  });
+
+  it.each([[{ version: "2.99.0", autoDownload: true }], [{ version: "2.99.0" }]])(
+    "switch on or flag missing (%j): today's downloading card, no Download button",
+    (info) => {
+      render(<UpdateNotification />);
+      emitAvailable(info);
+      expect(screen.getByText("Downloading Update...")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
+    },
+  );
+
+  it("Store build: no Download button", () => {
+    setupAvailableApi(true);
+    render(<UpdateNotification />);
+    emitAvailable({ version: "2.99.0", autoDownload: false });
+    expect(screen.queryByRole("button", { name: "Download" })).not.toBeInTheDocument();
+  });
+
+  it("Later dismisses the offer without downloading", () => {
+    const { container } = render(<UpdateNotification />);
+    emitAvailable({ version: "2.99.0", autoDownload: false });
+    fireEvent.click(screen.getByText("Later"));
+    expect(container).toBeEmptyDOMElement();
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
+});

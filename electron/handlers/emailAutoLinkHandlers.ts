@@ -1,6 +1,7 @@
 // ============================================
 // EMAIL AUTO-LINK IPC HANDLERS
-// Handles: auto-link-texts, resync-auto-link, update-address-filter
+// Handles: resync-auto-link, update-address-filter
+// BACKLOG-4039 / BACKLOG-3984: auto-link-texts removed (no renderer caller)
 // Extracted from emailSyncHandlers.ts (TASK-2065)
 // BACKLOG-1364: Added update-address-filter handler
 // ============================================
@@ -11,7 +12,6 @@ import { ipcMain } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import transactionService from "../services/transactionService";
 import logService from "../services/logService";
-import { autoLinkAllToTransaction } from "../services/messageMatchingService";
 import {
   autoLinkCommunicationsForContact,
   expandAttachedThreadsForUser,
@@ -27,44 +27,6 @@ import {
  * Register email auto-link IPC handlers
  */
 export function registerEmailAutoLinkHandlers(): void {
-  // Auto-link text messages to a transaction based on assigned contacts
-  ipcMain.handle(
-    "transactions:auto-link-texts",
-    wrapHandler(async (
-      event: IpcMainInvokeEvent,
-      transactionId: string,
-    ): Promise<TransactionResponse> => {
-      logService.info("Auto-linking communications to transaction", "Transactions", {
-        transactionId,
-      });
-
-      // Validate transaction ID
-      const validatedTransactionId = validateTransactionId(transactionId);
-      if (!validatedTransactionId) {
-        throw new ValidationError(
-          "Transaction ID validation failed",
-          "transactionId",
-        );
-      }
-
-      const result = await autoLinkAllToTransaction(validatedTransactionId);
-
-      logService.info("Auto-link communications complete", "Transactions", {
-        transactionId: validatedTransactionId,
-        linked: result.linked,
-        skipped: result.skipped,
-        errors: result.errors.length,
-      });
-
-      return {
-        success: result.errors.length === 0,
-        linked: result.linked,
-        skipped: result.skipped,
-        errors: result.errors.length > 0 ? result.errors : undefined,
-      };
-    }, { module: "Transactions" }),
-  );
-
   // Re-sync auto-link communications for all contacts on a transaction
   // Use when contacts have been updated and user wants to re-link communications
   ipcMain.handle(

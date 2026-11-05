@@ -12,7 +12,11 @@
 
 import React from "react";
 import { renderHook, act } from "@testing-library/react";
-import { usePhoneTypeApi } from "../usePhoneTypeApi";
+import {
+  usePhoneTypeApi,
+  PHONE_TYPE_NOT_SAVED_NOTICE,
+  type SavePhoneTypeResult,
+} from "../usePhoneTypeApi";
 import { AppStateProvider } from "../../machine/AppStateContext";
 import type {
   AppState,
@@ -503,13 +507,13 @@ describe("usePhoneTypeApi - State Machine Path", () => {
         wrapper: createWrapper(onboardingStatePhoneType),
       });
 
-      let saveResult: boolean | undefined;
+      let saveResult: SavePhoneTypeResult | undefined;
       await act(async () => {
         saveResult = await result.current.savePhoneType("iphone");
       });
 
       // The preference write is best-effort; the phone-type save still succeeds.
-      expect(saveResult).toBe(true);
+      expect(saveResult).toEqual({ status: "saved" });
       // And the phone type itself is still persisted.
       expect(mockSetPhoneTypeCloud).toHaveBeenCalledWith("test-user", "iphone");
     });
@@ -521,21 +525,21 @@ describe("usePhoneTypeApi - State Machine Path", () => {
         wrapper: createWrapper(onboardingStatePhoneType),
       });
 
-      let saveResult: boolean | undefined;
+      let saveResult: SavePhoneTypeResult | undefined;
       await act(async () => {
         saveResult = await result.current.savePhoneType("android");
       });
 
       // The preference write is best-effort; the phone-type save still succeeds.
-      expect(saveResult).toBe(true);
+      expect(saveResult).toEqual({ status: "saved" });
     });
 
-    it("calls cloud API first and local API second, returns true on success", async () => {
+    it("calls cloud API first and local API second, returns saved on success", async () => {
       const { result } = renderHook(() => usePhoneTypeApi(defaultOptions), {
         wrapper: createWrapper(onboardingStatePhoneType),
       });
 
-      let saveResult: boolean | undefined;
+      let saveResult: SavePhoneTypeResult | undefined;
       await act(async () => {
         saveResult = await result.current.savePhoneType("iphone");
       });
@@ -544,11 +548,13 @@ describe("usePhoneTypeApi - State Machine Path", () => {
       expect(mockSetPhoneTypeCloud).toHaveBeenCalledWith("test-user", "iphone");
       // Local API should also be called (DB is initialized in onboardingStatePhoneType)
       expect(mockSetPhoneType).toHaveBeenCalledWith("test-user", "iphone");
-      expect(saveResult).toBe(true);
+      expect(saveResult).toEqual({ status: "saved" });
     });
 
-    it("returns true even when local DB fails (graceful degradation)", async () => {
-      // TASK-1600: Local DB failure should not fail the operation
+    it("reports a local DB failure and does not complete the step (BACKLOG-4030)", async () => {
+      // BACKLOG-4030: was "returns true even when local DB fails". The local
+      // save failing (e.g. main cancelled it for want of an audit entry) is now
+      // shown and the user stays on the phone-type step.
       // Cloud save succeeded (in beforeEach), local fails
       mockSetPhoneType.mockResolvedValueOnce({
         success: false,
@@ -559,16 +565,19 @@ describe("usePhoneTypeApi - State Machine Path", () => {
         wrapper: createWrapper(onboardingStatePhoneType),
       });
 
-      let saveResult: boolean | undefined;
+      let saveResult: SavePhoneTypeResult | undefined;
       await act(async () => {
         saveResult = await result.current.savePhoneType("android");
       });
 
-      // TASK-1600: Should still succeed because cloud save worked
-      expect(saveResult).toBe(true);
+      expect(saveResult).toEqual({
+        status: "local-cancelled",
+        message: PHONE_TYPE_NOT_SAVED_NOTICE,
+      });
+      expect(result.current.phoneTypeSaveNotice).toBe(PHONE_TYPE_NOT_SAVED_NOTICE);
     });
 
-    it("returns false when cloud API throws error", async () => {
+    it("returns error when cloud API throws", async () => {
       // TASK-1600: Only exception in cloud API should cause failure
       mockSetPhoneTypeCloud.mockRejectedValueOnce(new Error("Network error"));
 
@@ -576,27 +585,27 @@ describe("usePhoneTypeApi - State Machine Path", () => {
         wrapper: createWrapper(onboardingStatePhoneType),
       });
 
-      let saveResult: boolean | undefined;
+      let saveResult: SavePhoneTypeResult | undefined;
       await act(async () => {
         saveResult = await result.current.savePhoneType("iphone");
       });
 
-      expect(saveResult).toBe(false);
+      expect(saveResult).toEqual({ status: "error" });
     });
 
-    it("returns false when no user is available (loading state)", async () => {
+    it("returns no-user when no user is available (loading state)", async () => {
       const { result } = renderHook(() => usePhoneTypeApi(defaultOptions), {
         wrapper: createWrapper(loadingUserData),
       });
 
-      let saveResult: boolean | undefined;
+      let saveResult: SavePhoneTypeResult | undefined;
       await act(async () => {
         saveResult = await result.current.savePhoneType("iphone");
       });
 
       expect(mockSetPhoneTypeCloud).not.toHaveBeenCalled();
       expect(mockSetPhoneType).not.toHaveBeenCalled();
-      expect(saveResult).toBe(false);
+      expect(saveResult).toEqual({ status: "no-user" });
     });
 
     it("uses user id from state machine, not from options", async () => {

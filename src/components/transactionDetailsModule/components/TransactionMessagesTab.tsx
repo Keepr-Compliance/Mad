@@ -29,6 +29,7 @@ import { useHideFromExportState } from "../../../hooks/useHideFromExportState";
 import { transactionService } from "../../../services/transactionService";
 import { auditWindowMs, type TextThreadSummary } from "../hooks/useTextThreads";
 import logger from '../../../utils/logger';
+import { Button, EmptyState } from "@keepr/ui";
 
 /**
  * Check if a message falls within the audit date range.
@@ -141,6 +142,15 @@ interface TransactionMessagesTabProps {
    * the open conversation re-renders with the new marker.
    */
   onHiddenFromExportChanged?: () => void | Promise<void>;
+  /**
+   * BACKLOG-2890: Mac Messages auto-sync is held because the messages-source
+   * preference could not be read (useAutoRefresh `messagesSyncHeld`).
+   */
+  messagesSyncHeld?: boolean;
+  /** BACKLOG-2890: re-read the preference, then run the normal sync (app.triggerRefresh). */
+  onRetryMessagesRead?: () => void | Promise<void>;
+  /** BACKLOG-2890: open Settings at Messages (app.openSettings("settings-messages")). */
+  onChooseMessagesSource?: () => void;
 }
 
 /**
@@ -180,6 +190,9 @@ export function TransactionMessagesTab({
   hasReviewItems = false,
   reviewRefreshKey = 0,
   onHiddenFromExportChanged,
+  messagesSyncHeld = false,
+  onRetryMessagesRead,
+  onChooseMessagesSource,
 }: TransactionMessagesTabProps): React.ReactElement {
   // BACKLOG-3884: paged mode — the cards carry header rows only.
   const pagedMode = threads !== undefined;
@@ -1036,6 +1049,41 @@ export function TransactionMessagesTab({
       <div>
         {/* BACKLOG-3663: a source that does not reach back to the audit start. */}
         {userId && transactionId && <TextCoverageNotice transactionId={transactionId} userId={userId} onTextsAdded={reloadAfterBackfill} />}
+        {/* BACKLOG-2890 (founder, 2026-11-04): the source is unknown because the
+            preference read failed, so "nothing linked" would be the wrong story. */}
+        {messagesSyncHeld ? (
+          <EmptyState
+            data-testid="text-source-not-read"
+            title="Text source not read"
+            description="Keepr couldn't read which messages source this Mac uses, so texts weren't synced."
+            action={
+              <div className="flex items-center justify-center gap-3">
+                <Button size="sm" onClick={() => void onRetryMessagesRead?.()} data-testid="text-source-retry">
+                  Retry
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => onChooseMessagesSource?.()} data-testid="text-source-choose">
+                  Choose source
+                </Button>
+                {/* Manual attach does not depend on the source preference, and it is
+                    the only zero-texts way to link texts already in the local DB.
+                    Same gate, handler and lock as the normal zero-texts block.
+                    Sync Messages stays out: it would run the held sync. */}
+                {userId && transactionId && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={handleAttachClick}
+                    disabled={!!editLockedTooltip}
+                    title={editLockedTooltip}
+                    data-testid="attach-messages-button"
+                  >
+                    Attach Messages
+                  </Button>
+                )}
+              </div>
+            }
+          />
+        ) : (
         <div className="bg-gray-50 rounded-lg p-6 text-center">
           <svg
             className="w-12 h-12 text-gray-300 mx-auto mb-3"
@@ -1108,6 +1156,7 @@ export function TransactionMessagesTab({
             )}
           </div>
         </div>
+        )}
 
         {/* BACKLOG-1577: Show removed conversations even when no active messages */}
         {transactionId && (

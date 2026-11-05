@@ -24,6 +24,7 @@ import {
 import type { Transaction } from "../types";
 import { useReconnectionSummary } from "../hooks/useReconnectionSummary";
 import AuthContext from "../contexts/AuthContext";
+import { useIPhoneSyncEnabled } from "../contexts/IPhoneSyncContext";
 import billingService from "../services/billingService";
 
 /** Tile icons (24px outline paths, unchanged from the inline tiles). */
@@ -52,6 +53,8 @@ interface DashboardActionProps {
   onDismissSetupPrompt?: () => void;
   /** Callback to trigger a manual sync refresh */
   onTriggerRefresh?: () => void;
+  /** BACKLOG-2890: Mac Messages auto-sync is held after a failed preferences read */
+  messagesSyncHeld?: boolean;
   /** Callback when user selects a pending transaction to review */
   onSelectPendingTransaction?: (transaction: Transaction) => void;
   /** Callback to open Settings modal. Pass a scrollTarget to scroll to a specific section. */
@@ -86,6 +89,7 @@ function Dashboard({
   onContinueSetup,
   onDismissSetupPrompt,
   onTriggerRefresh,
+  messagesSyncHeld = false,
   onSelectPendingTransaction,
   onOpenSettings,
   onOpenTransaction,
@@ -101,6 +105,16 @@ function Dashboard({
 
   // Get sync state from SyncOrchestrator (single source of truth for sync status)
   const { isRunning: isAnySyncing } = useSyncOrchestrator();
+
+  // BACKLOG-2893: the iPhone sync provider's own preferences read can fail too.
+  // One banner covers both holds; a manual sync re-reads both (retryRead is a
+  // no-op unless that read failed).
+  const { readFailed: iphoneReadHeld, retryRead: retryIphoneRead } = useIPhoneSyncEnabled();
+  const syncHeld = messagesSyncHeld || iphoneReadHeld;
+  const refreshAndRetryReads = useCallback(() => {
+    void retryIphoneRead();
+    onTriggerRefresh?.();
+  }, [retryIphoneRead, onTriggerRefresh]);
 
   // Initialize the onboarding tour for first-time users.
   // BACKLOG-3673: never over the terms screen -- the tour sits above it. It
@@ -264,6 +278,18 @@ function Dashboard({
           />
         )}
 
+        {/* BACKLOG-2890 / BACKLOG-2893: Mac Messages or iPhone sync held after a failed preferences read */}
+        {syncHeld && (
+          <AlertBanner
+            icon={AlertIcons.warning}
+            title="Messages sync paused"
+            description="Keepr couldn't read your messages settings, so syncing is paused. Check your connection, then Retry."
+            actionText="Retry"
+            onAction={refreshAndRetryReads}
+            testId="messages-held-banner"
+          />
+        )}
+
         {/* BACKLOG-3951: removed from a brokerage (dismissible, per user) */}
         <MembershipNotice userId={user?.id} />
 
@@ -344,7 +370,7 @@ function Dashboard({
           onViewActiveTransactions={handleViewActiveTransactions}
           onCreateManually={handleCreateManually}
           onClose={handleCloseStartNewAuditModal}
-          onSync={onTriggerRefresh}
+          onSync={onTriggerRefresh ? refreshAndRetryReads : undefined}
           isSyncing={isAnySyncing}
         />
       )}
