@@ -166,7 +166,7 @@ BEGIN
     r1 text := 'p4084-r1'; r2 text := 'p4084-r2';
     sd text := 'public.report_set_default_view(text,uuid)';
     sl text := 'public.report_list_saved_views(text)';
-    d0 text; a0 text; l0 text;
+    d0 text; a0 text; l0 text; sup boolean;
   BEGIN
     INSERT INTO auth.users (id, email, aud, role, instance_id, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
     SELECT pg_temp.fx(x), 'p4084-' || x || '@example.test', 'authenticated', 'authenticated',
@@ -177,7 +177,7 @@ BEGIN
       FROM generate_series(1, 3) x
     ON CONFLICT (id) DO NOTHING;
     INSERT INTO public.internal_roles (user_id, role_id)
-    SELECT u, (SELECT ar.id FROM public.admin_roles ar ORDER BY ar.slug LIMIT 1) FROM unnest(ARRAY[A, B]) u;
+    SELECT u, (SELECT ar.id FROM public.admin_roles ar WHERE ar.name = 'Support Supervisor') FROM unnest(ARRAY[A, B]) u;
 
     INSERT INTO public.report_saved_views (id, user_id, report_key, name, filters, metric, pinned) VALUES
       (pg_temp.fx(21), A, r1, 'A one', '{"period":{"key":"month"}}', '{"col":"rows","fn":"count"}', false),
@@ -284,10 +284,16 @@ BEGIN
       n || ' of 4 functions compliant; set ' || pg_temp.acl(sd) || '; list ' || pg_temp.acl(sl)));
 
     -- ===== C12: re-applying the migration changes nothing =====
-    d0 := md5(pg_temp.def(sd) || pg_temp.def(sl)); a0 := pg_temp.acl(sd) || pg_temp.acl(sl);
+    -- When the 4087 functions are present, report_list_saved_views belongs to 4087 (re-running this
+    -- file swaps it back to the 4084 body inside the subtransaction), so the list half is
+    -- superseded by 4087 K16. Only set_default and the one-default index are compared then.
+    sup := to_regprocedure('public._report_share_eligible(uuid)') IS NOT NULL;
+    d0 := md5(pg_temp.def(sd) || CASE WHEN sup THEN '' ELSE pg_temp.def(sl) END);
+    a0 := pg_temp.acl(sd) || CASE WHEN sup THEN '' ELSE pg_temp.acl(sl) END;
     BEGIN
       EXECUTE $mg$__MIGRATION__$mg$;
-      s := CASE WHEN md5(pg_temp.def(sd) || pg_temp.def(sl)) = d0 AND pg_temp.acl(sd) || pg_temp.acl(sl) = a0
+      s := CASE WHEN md5(pg_temp.def(sd) || CASE WHEN sup THEN '' ELSE pg_temp.def(sl) END) = d0
+                 AND pg_temp.acl(sd) || CASE WHEN sup THEN '' ELSE pg_temp.acl(sl) END = a0
                  AND to_regclass('public.report_saved_views_one_default') IS NOT NULL
             THEN 'same' ELSE 'changed' END;
       RAISE EXCEPTION 'RB_DONE' USING DETAIL = s;
@@ -296,6 +302,9 @@ BEGIN
       ELSE s := 'ERR ' || SQLSTATE || ' ' || left(SQLERRM, 80); END IF;
     END;
     r := r || jsonb_build_object('C12_reapply_idempotent', pg_temp.chk(s, 'same'));
+    IF sup THEN
+      r := r || jsonb_build_object('C12_list_half_superseded_by_4087_K16', 'PASS');
+    END IF;
 
     -- ===== C13: the rollback restores the 3450 shape =====
     l0 := pg_temp.acl(sl);

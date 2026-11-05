@@ -18,9 +18,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { SavedViews } from '@keepr/ui';
+import { SavedViews, ShareDialog, type SaveViewOptions } from '@keepr/ui';
 import type { IphoneSyncReportModel } from '@/lib/reports/iphone-sync';
-import type { PeriodRange } from '@/lib/reports/period';
+import { DEFAULT_PERIOD, type PeriodRange } from '@/lib/reports/period';
 import {
   activeFilterNames,
   applyFilters,
@@ -59,7 +59,9 @@ import {
   type ViewMetric,
 } from '@/lib/reports/report-views';
 import type { ReportViewsApi } from '@/lib/reports/report-views-api';
+import type { ShareApi } from '@/lib/reports/report-share-api';
 import { useReportSavedViews } from '@/lib/reports/use-report-saved-views';
+import { useReportViewSharing } from '@/lib/reports/use-report-view-sharing';
 import { serializeViewPeriod, viewPeriodMatches } from '@/lib/reports/view-period';
 import { HowToUse } from './HowToUse';
 import { MetricSaveFields } from './MetricSaveFields';
@@ -138,6 +140,8 @@ export interface IphoneSyncReportProps {
    * founder applying its migration, and the rest of the page must not care.
    */
   viewsApi?: ReportViewsApi;
+  /** Saved-view sharing (BACKLOG-4087). Absent = no Share, Update or Leave. */
+  shareApi?: ShareApi;
 }
 
 export function IphoneSyncReport({
@@ -148,6 +152,7 @@ export function IphoneSyncReport({
   initialState = DEFAULT_CLIENT_STATE,
   onNavigate,
   viewsApi,
+  shareApi,
 }: IphoneSyncReportProps) {
   const [filters, setFilters] = useState<RunFilters>(initialState.filters);
   const [sortKey, setSortKey] = useState<SortKey>(initialState.sortKey);
@@ -268,17 +273,26 @@ export function IphoneSyncReport({
   }
 
   // A refused write says so and re-reads the list (useReportSavedViews).
-  // Every save pins, as before; the kit refuses a sixth pin before calling.
-  function saveCurrentView(name: string) {
+  // Only "Save current view as a card" pins (BACKLOG-4132); the kit refuses a
+  // sixth pin before calling. "Save current view" saves unpinned.
+  function saveCurrentView(name: string, options?: SaveViewOptions) {
     savedViews.save({
       name,
       // The five filter keys and the period KEY (dates for a custom range).
       // No run data, no user labels, no ids.
       filters: serializeFilters(filters, stalledOnly, serializeViewPeriod(period)),
       metric,
-      pinned: true,
+      pinned: options?.pin === true,
     });
   }
+  // Sharing (BACKLOG-4087). An editor's Update changes the FILTERS only (founder rule): the hook
+  // sends the view's own card metric, never this one (use-report-view-sharing.ts).
+  const { sharing, shareDialog } = useReportViewSharing(shareApi, savedViews, REPORT_KEY, () => ({
+    filters: serializeFilters(filters, stalledOnly, serializeViewPeriod(period)),
+    // Required by the kit payload type; ignored for a view that has its own metric (every view here).
+    metric,
+  }));
+
 
   // Re-saves the view as stored, period included: only `pinned` changes.
   function togglePin(view: ReportSavedView) {
@@ -325,6 +339,23 @@ export function IphoneSyncReport({
     setStalledOnly(false);
   }
 
+  // Clear the applied view (BACKLOG-4121): empty filters and the built-in
+  // period. The URL is built from the CLEARED state, not the current search
+  // string (it still holds the filters being cleared), and always names the
+  // period: a bare URL re-opens the default view. The card restore point is
+  // forgotten too, or the next card click would bring the old filters back.
+  function clearView() {
+    clearFilters();
+    setRestoreState(null);
+    const params = applyClientState(new URLSearchParams(), {
+      filters: EMPTY_FILTERS,
+      sortKey,
+      sortDirection,
+      stalledOnly: false,
+    });
+    onNavigate?.(buildPeriodUrl(params, DEFAULT_PERIOD));
+  }
+
   const filterNames = activeFilterNames(filters);
   const caption = `Every card, chart and row below follows the filters: ${period.label}${
     filterNames.length > 0 ? ` · ${filterNames.join(' · ')}` : ' · no other filters'
@@ -344,28 +375,33 @@ export function IphoneSyncReport({
         onFiltersChange={updateFilters}
         onClear={clearFilters}
         viewsSlot={
-          <SavedViews<ReportSavedView>
-            views={views}
-            loading={savedViews.loading}
-            activeViewId={activeViewId}
-            writeError={savedViews.writeError}
-            onApply={applyView}
-            onDelete={savedViews.remove}
-            onSave={saveCurrentView}
-            saveHint={IPHONE_SAVE_HINT}
-            defaultViewId={savedViews.defaultViewId}
-            onSetDefault={savedViews.setDefault}
-            pinning={{ max: MAX_PINNED, onTogglePin: togglePin }}
-            saveFields={
-              <MetricSaveFields
-                value={metric}
-                onChange={(next) => setMetric({ col: next.col as MetricColumn, fn: next.fn as MetricFunction })}
-                columns={METRIC_COLUMNS}
-                functions={METRIC_FUNCTIONS}
-                functionsForColumn={iphoneFunctionsFor}
-              />
-            }
-          />
+          <>
+            <SavedViews<ReportSavedView>
+              views={views}
+              loading={savedViews.loading}
+              activeViewId={activeViewId}
+              writeError={savedViews.writeError}
+              onApply={applyView}
+              onDelete={savedViews.remove}
+              onSave={saveCurrentView}
+              saveHint={IPHONE_SAVE_HINT}
+              defaultViewId={savedViews.defaultViewId}
+              onSetDefault={savedViews.setDefault}
+              onClear={clearView}
+              sharing={sharing}
+              pinning={{ max: MAX_PINNED, onTogglePin: togglePin }}
+              saveFields={
+                <MetricSaveFields
+                  value={metric}
+                  onChange={(next) => setMetric({ col: next.col as MetricColumn, fn: next.fn as MetricFunction })}
+                  columns={METRIC_COLUMNS}
+                  functions={METRIC_FUNCTIONS}
+                  functionsForColumn={iphoneFunctionsFor}
+                />
+              }
+            />
+            <ShareDialog {...shareDialog} />
+          </>
         }
       />
 

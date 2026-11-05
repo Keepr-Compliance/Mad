@@ -1,5 +1,6 @@
-import { getAuthenticatedUser } from '@/lib/supabase/server';
-import { redirect } from 'next/navigation';
+import { requireReportAccess } from '@/lib/reports/report-gate';
+import { ReportAccessProvider } from '@/lib/reports/report-access-context';
+import { ReportShareButton } from '@/components/reports/ReportShareButton';
 import Link from 'next/link';
 import { ChevronLeft, Activity } from 'lucide-react';
 import {
@@ -24,7 +25,7 @@ export const dynamic = 'force-dynamic';
 /**
  * User Activity report — Admin Portal (BACKLOG-3720)
  *
- * Server component: authorises (internal role + analytics.view), resolves the
+ * Server component: authorises (internal role + report access, BACKLOG-4144), resolves the
  * period, reads users, devices, memberships, organizations, internal staff and
  * the period's audit events through the authenticated client — every read
  * paged — and hands a plain view model to the client shell.
@@ -34,29 +35,7 @@ export default async function UserActivityReportPage({
 }: {
   searchParams: Promise<ParamRecord>;
 }) {
-  const { supabase, user } = await getAuthenticatedUser();
-
-  if (!user) {
-    redirect('/login');
-  }
-
-  const { data: internalRole } = await supabase
-    .from('internal_roles')
-    .select('role_id')
-    .eq('user_id', user.id)
-    .single();
-
-  if (!internalRole) {
-    redirect('/login?error=not_authorized');
-  }
-
-  const { data: hasPerm } = await supabase.rpc('has_permission', {
-    check_user_id: user.id,
-    required_permission: 'analytics.view',
-  });
-  if (!hasPerm) {
-    redirect('/dashboard?error=insufficient_permissions');
-  }
+  const { supabase, user, access } = await requireReportAccess(USER_ACTIVITY_REPORT_KEY);
 
   const params = await searchParams;
   const now = new Date();
@@ -94,37 +73,42 @@ export default async function UserActivityReportPage({
   });
 
   return (
-    <div className="max-w-7xl mx-auto space-y-6">
-      <div>
-        <Link
-          href={REPORTS_BASE_PATH}
-          className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"
-        >
-          <ChevronLeft className="h-4 w-4" />
-          All reports
-        </Link>
-        <div className="mt-2 flex items-center gap-3">
-          <Activity className="h-7 w-7 text-primary-600" />
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">User Activity</h1>
-            <p className="text-sm text-gray-500">
-              One row per customer: when they last signed in and were last seen, their devices, and
-              how many transactions, submissions and exports they ran in the selected period.
-            </p>
+    <ReportAccessProvider reportKey={USER_ACTIVITY_REPORT_KEY} title="User Activity" access={access}>
+      <div className="max-w-7xl mx-auto space-y-6">
+        <div>
+          <Link
+            href={REPORTS_BASE_PATH}
+            className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            All reports
+          </Link>
+          <div className="mt-2 flex items-center gap-3">
+            <Activity className="h-7 w-7 text-primary-600" />
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">User Activity</h1>
+              <p className="text-sm text-gray-500">
+                One row per customer: when they last signed in and were last seen, their devices, and
+                how many transactions, submissions and exports they ran in the selected period.
+              </p>
+            </div>
+            <div className="ml-auto">
+              <ReportShareButton />
+            </div>
           </div>
         </div>
-      </div>
 
-      <UserActivityReportClient
-        report={report}
-        period={period}
-        eventsFailed={events.failed}
-        lookupsFailed={users.failed || devices.failed || memberships.failed || orgs.failed}
-        truncated={events.truncated}
-        rowCap={PAGE_SIZE * MAX_PAGES}
-        staffExclusionIncomplete={!staff.complete}
-        initialView={initialView}
-      />
-    </div>
+        <UserActivityReportClient
+          report={report}
+          period={period}
+          eventsFailed={events.failed}
+          lookupsFailed={users.failed || devices.failed || memberships.failed || orgs.failed}
+          truncated={events.truncated}
+          rowCap={PAGE_SIZE * MAX_PAGES}
+          staffExclusionIncomplete={!staff.complete}
+          initialView={initialView}
+        />
+      </div>
+    </ReportAccessProvider>
   );
 }

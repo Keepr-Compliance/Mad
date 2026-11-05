@@ -66,6 +66,8 @@ export interface SuiteSpec<P extends ResolvedPeriodLike> {
   custom?: { stored: { key: 'custom'; from: string; to: string }; url: string };
   /** A period key from ANOTHER report's set (or a custom range on Analytics). */
   foreign: unknown;
+  /** Where the applied-view X goes (BACKLOG-4121): the report's built-in period, explicit. */
+  builtInUrl: string;
 }
 
 export function runPeriodOnlyViewsSuite<P extends ResolvedPeriodLike>(spec: SuiteSpec<P>) {
@@ -194,6 +196,46 @@ export function runPeriodOnlyViewsSuite<P extends ResolvedPeriodLike>(spec: Suit
       fireEvent.click(within(panel()).getByRole('button', { name: 'Delete Other range' }));
       await waitFor(() => expect(api.remove).toHaveBeenCalledWith('view-other-1'));
       expect(onNavigate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe(`${R} V1 the applied-view X resets to the built-in period (BACKLOG-4121)`, () => {
+    const clearX = (name: string) => screen.getByRole('button', { name: `Clear view ${name}` });
+
+    it(`${R}: on a non-default view the trigger names it; X navigates once to ${spec.builtInUrl}`, async () => {
+      const { onNavigate } = mount(spec.other.period);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Views: Other range' })).toBeTruthy());
+      fireEvent.click(clearX('Other range'));
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+      expect(onNavigate.mock.calls[0][0]).toBe(spec.builtInUrl);
+    });
+
+    it(`${R}: on a bare URL already showing the built-in period, X still writes the period (never a bare URL)`, async () => {
+      expect(window.location.search).toBe('');
+      const { onNavigate } = mount();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Views: Page range' })).toBeTruthy());
+      fireEvent.click(clearX('Page range'));
+      expect(onNavigate).toHaveBeenCalledTimes(1);
+      expect(onNavigate.mock.calls[0][0]).toBe(spec.builtInUrl);
+    });
+
+    it(`${R}: the URL the X writes does not re-open the default view on the server; a bare URL would`, async () => {
+      const listViews = vi.fn().mockResolvedValue(rows);
+      const params = Object.fromEntries(new URLSearchParams(spec.builtInUrl));
+      const afterX = await spec.views.resolveInitial(params, listViews);
+      expect(afterX.initialView).toBeNull();
+      expect(afterX.periodInput.period).toBe(params.period);
+      expect(listViews).not.toHaveBeenCalled();
+      const bare = await spec.views.resolveInitial({}, listViews);
+      expect(bare.initialView?.id).toBe('view-default-1');
+    });
+
+    it(`${R}: once the page leaves the view, its chip and X are gone`, async () => {
+      const { rerender } = mount(spec.other.period);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Views: Other range' })).toBeTruthy());
+      rerender(spec.pagePeriod);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Views: Page range' })).toBeTruthy());
+      expect(screen.queryByRole('button', { name: 'Clear view Other range' })).toBeNull();
     });
   });
 }

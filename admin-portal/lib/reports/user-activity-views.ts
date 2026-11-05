@@ -25,6 +25,7 @@ import {
   viewPeriodParams,
   type StoredViewPeriod,
 } from './view-period';
+import { parseViewAccess, viewAccessFields, type SharedViewFields } from './saved-view-access';
 
 export const USER_ACTIVITY_REPORT_KEY = 'user-activity';
 
@@ -49,7 +50,8 @@ export interface StoredUserActivityFilters {
   period: StoredViewPeriod;
 }
 
-export interface UserActivitySavedView {
+/** BACKLOG-4087: `SharedViewFields` = the caller's access (saved-view-access.ts). */
+export interface UserActivitySavedView extends SharedViewFields {
   id: string;
   name: string;
   filters: UserActivityFilters;
@@ -91,12 +93,14 @@ export function parseUserActivitySavedView(raw: unknown): UserActivitySavedView 
   const row = raw as Record<string, unknown>;
   if (typeof row.id !== 'string' || row.id.length === 0) return null;
   const blob = row.filters != null && typeof row.filters === 'object' ? (row.filters as Record<string, unknown>) : null;
+  const access = parseViewAccess(row);
   return {
     id: row.id,
     name: typeof row.name === 'string' && row.name.length > 0 ? row.name : 'Untitled view',
     filters: parseUserActivityFilters(row.filters),
     period: parseViewPeriod(blob?.period, SHARED_VIEW_PERIODS),
-    isDefault: row.is_default === true,
+    isDefault: access.isDefault,
+    ...viewAccessFields(access),
   };
 }
 

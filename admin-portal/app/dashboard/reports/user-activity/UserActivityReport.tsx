@@ -11,9 +11,9 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Dropdown, FilterBar, FilterCaption, PeriodPicker, SavedViews, StatCard, useSortState } from '@keepr/ui';
+import { Dropdown, FilterBar, FilterCaption, PeriodPicker, SavedViews, ShareDialog, StatCard, useSortState } from '@keepr/ui';
 import { Search } from 'lucide-react';
-import { PERIOD_OPTIONS, type PeriodKey, type PeriodRange } from '@/lib/reports/period';
+import { DEFAULT_PERIOD, PERIOD_OPTIONS, type PeriodKey, type PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
 import {
   ACTIVE_DEFINITION,
@@ -33,7 +33,9 @@ import {
   type UserActivityReportModel,
   type UserActivitySortKey,
 } from '@/lib/reports/user-activity';
+import type { ShareApi } from '@/lib/reports/report-share-api';
 import { useReportSavedViews } from '@/lib/reports/use-report-saved-views';
+import { useReportViewSharing } from '@/lib/reports/use-report-view-sharing';
 import type { UserActivityViewsApi } from '@/lib/reports/user-activity-views-api';
 import {
   serializeUserActivityView,
@@ -72,6 +74,8 @@ export interface UserActivityReportProps {
   initialView?: UserActivitySavedView | null;
   /** Saved-view storage. Absent = saved views unavailable (fails closed). */
   viewsApi?: UserActivityViewsApi;
+  /** Saved-view sharing (BACKLOG-4087). Absent = no Share, Update or Leave. */
+  shareApi?: ShareApi;
 }
 
 function Banner({ testId, children }: { testId: string; children: string }) {
@@ -96,6 +100,7 @@ export function UserActivityReport({
   onNavigate,
   initialView = null,
   viewsApi,
+  shareApi,
 }: UserActivityReportProps) {
   // useState's initial value only: the default view seeds the first render and
   // is never synced again, so a later navigation cannot re-apply it.
@@ -128,6 +133,13 @@ export function UserActivityReport({
     setVisibleCount(INITIAL_VISIBLE_USERS);
   }
 
+  // Clear the applied view (BACKLOG-4121): empty filters and the built-in
+  // period, written into the URL. Never a bare URL: that re-opens the default view.
+  function clearView() {
+    updateFilters(EMPTY_USER_ACTIVITY_FILTERS);
+    navigateToPeriod(DEFAULT_PERIOD);
+  }
+
   function navigateToPeriod(nextPeriod: string, from?: string, to?: string) {
     const search = typeof window === 'undefined' ? '' : window.location.search.replace(/^\?/, '');
     onNavigate?.(buildPeriodUrl(search, nextPeriod, from, to));
@@ -154,6 +166,12 @@ export function UserActivityReport({
       pinned: false,
     });
   }
+  // Sharing (BACKLOG-4087). Update stores the page's current state, exactly as Save would.
+  const { sharing, shareDialog } = useReportViewSharing(shareApi, savedViews, USER_ACTIVITY_REPORT_KEY, () => ({
+    filters: serializeUserActivityView(filters, period),
+    metric: USER_ACTIVITY_VIEW_METRIC,
+  }));
+
 
   return (
     <div className="space-y-6">
@@ -165,18 +183,23 @@ export function UserActivityReport({
         hasFilters={hasActiveUserActivityFilters(filters)}
         onClear={() => updateFilters(EMPTY_USER_ACTIVITY_FILTERS)}
         trailing={
-          <SavedViews<UserActivitySavedView>
-            views={savedViews.views}
-            loading={savedViews.loading}
-            activeViewId={activeViewId}
-            writeError={savedViews.writeError}
-            onApply={applyView}
-            onDelete={savedViews.remove}
-            onSave={saveView}
-            saveHint={USER_ACTIVITY_SAVE_HINT}
-            defaultViewId={savedViews.defaultViewId}
-            onSetDefault={savedViews.setDefault}
-          />
+          <>
+            <SavedViews<UserActivitySavedView>
+              views={savedViews.views}
+              loading={savedViews.loading}
+              activeViewId={activeViewId}
+              writeError={savedViews.writeError}
+              onApply={applyView}
+              onDelete={savedViews.remove}
+              onSave={saveView}
+              saveHint={USER_ACTIVITY_SAVE_HINT}
+              defaultViewId={savedViews.defaultViewId}
+              onSetDefault={savedViews.setDefault}
+              onClear={clearView}
+              sharing={sharing}
+            />
+            <ShareDialog {...shareDialog} />
+          </>
         }
       >
         <PeriodPicker<PeriodKey>

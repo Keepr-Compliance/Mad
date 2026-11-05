@@ -602,6 +602,33 @@ describe('non-Stripe overrides (RC-5): mirror the grant RPC refusal', () => {
     expect(alerts('reconcile_mismatch')).toEqual([]);
   });
 
+  // BACKLOG-3860 C4. A trial override (migration 20261031140000:235-238 shape) with an open
+  // paid Stripe subscription is NOT a support grant: counted as a mismatch (never
+  // overrideBlocked) and re-granted from Stripe, which replaces the trial.
+  it.each([
+    ['live trial', { enabled: true, source: 'trial', paid_through: future }],
+    ['ended trial', { enabled: true, source: 'trial', paid_through: '2026-01-01T00:00:00.000Z' }],
+  ])('C4 forward: %s override + open paid sub -> mismatch, re-grant attempted, not overrideBlocked', async (_l, override) => {
+    renewalUser(override);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(r).toMatchObject({ forwardScanned: 1, regrantAttempted: 1, mismatches: 1, overrideBlocked: 0 });
+    expect(grants()).toEqual([{ p_user_id: USER, p_paid_through: paidThrough(LINE_END_2A), p_mode: 'test' }]);
+  });
+
+  it('C4 reverse: trial override + nothing open in Stripe -> left alone (no revoke, Stripe not asked)', async () => {
+    seed({
+      organizations: [personal(USER, ORG, true)],
+      organization_plans: [plan(ORG, { enabled: true, source: 'trial', paid_through: future })],
+      stripe_customers: [customer(USER, SUB_VOID_CANCELED.customer, 'test')],
+      billing_subscriptions: [mirror(USER, SUB_VOID_CANCELED.id, SUB_VOID_CANCELED.customer, 'test', { status: 'canceled' })],
+    });
+    serve(SUB_VOID_CANCELED);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(revokes()).toEqual([]);
+    expect(r).toMatchObject({ reverseScanned: 1, revokeAttempted: 0, mismatches: 0 });
+    expect(stripeCalls.filter((c) => c.op === 'subscriptions.list' && (c.args[0] as Obj).customer)).toEqual([]);
+  });
+
   it('reverse: support override + nothing open in Stripe -> no revoke call, Stripe not asked', async () => {
     seed({
       organizations: [personal(USER, ORG, true)],

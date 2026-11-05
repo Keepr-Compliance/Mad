@@ -32,6 +32,17 @@ export function hasExplicitState(params: SearchParamsLike, reportKeys: readonly 
 export interface DefaultableView {
   id: string;
   isDefault: boolean;
+  /** BACKLOG-4087. Missing = the user's own view. */
+  access?: 'owner' | 'editor' | 'viewer';
+}
+
+/**
+ * The user's own view (BACKLOG-4087). A view shared with the user is apply-only: it is never their
+ * default, whatever its flag says. The server masks the flag and so do the parsers; this is the
+ * third guard, at the one place every report's default is chosen.
+ */
+function isOwnDefaultable(view: DefaultableView): boolean {
+  return view.access === undefined || view.access === 'owner';
 }
 
 /**
@@ -53,5 +64,5 @@ export function resolveInitialView<V extends DefaultableView>({
 }): V | null {
   if (views === null) return null;
   if (hasExplicitState(params, reportKeys)) return null;
-  return views.find((v) => v.isDefault) ?? null;
+  return views.find((v) => v.isDefault && isOwnDefaultable(v)) ?? null;
 }

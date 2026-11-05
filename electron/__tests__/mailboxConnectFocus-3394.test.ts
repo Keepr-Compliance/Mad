@@ -111,7 +111,6 @@ jest.mock("axios");
 jest.mock("../services/googleAuthService", () => ({
   __esModule: true,
   default: {
-    authenticateForLogin: jest.fn(),
     authenticateForMailbox: jest.fn(),
     exchangeCodeForTokens: jest.fn(),
     getUserInfo: jest.fn(),
@@ -125,7 +124,6 @@ jest.mock("../services/googleAuthService", () => ({
 jest.mock("../services/microsoftAuthService", () => ({
   __esModule: true,
   default: {
-    authenticateForLogin: jest.fn(),
     authenticateForMailbox: jest.fn(),
     exchangeCodeForTokens: jest.fn(),
     getUserInfo: jest.fn(),

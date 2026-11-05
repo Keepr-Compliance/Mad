@@ -36,4 +36,5 @@ runPeriodOnlyViewsSuite({
     url: '?period=custom&from=2026-10-01&to=2026-10-10',
   },
   foreign: { key: 'week' },
+  builtInUrl: '?period=30',
 });

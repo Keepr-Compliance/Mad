@@ -12,7 +12,7 @@
  * the "No funnel events" text.
  */
 
-import { FilterBar, FilterCaption, PeriodPicker, SavedViews, StatCard, TruncationNotice } from '@keepr/ui';
+import { FilterBar, FilterCaption, PeriodPicker, SavedViews, ShareDialog, StatCard, TruncationNotice } from '@keepr/ui';
 import { AlertTriangle } from 'lucide-react';
 import type { FunnelResult } from '@/lib/funnel-analytics';
 import {
@@ -23,6 +23,7 @@ import {
 } from '@/lib/reports/funnel-period';
 import { funnelViews, type PeriodOnlySavedView } from '@/lib/reports/period-only-views';
 import type { PeriodOnlyViewsApi } from '@/lib/reports/period-only-views-api';
+import type { ShareApi } from '@/lib/reports/report-share-api';
 import { usePeriodOnlySavedViews } from '@/lib/reports/use-period-only-saved-views';
 
 export const FAILED_TEXT =
@@ -46,6 +47,8 @@ export interface FunnelReportProps {
   onNavigate?: (url: string) => void;
   /** Saved-view storage (BACKLOG-4084). Absent = saved views unavailable (fails closed). */
   viewsApi?: PeriodOnlyViewsApi;
+  /** Saved-view sharing (BACKLOG-4087). Absent = no Share, Update or Leave. */
+  shareApi?: ShareApi;
 }
 
 export function FunnelReport({
@@ -56,6 +59,7 @@ export function FunnelReport({
   rowCap,
   onNavigate,
   viewsApi,
+  shareApi,
 }: FunnelReportProps) {
   const { steps, topCount } = funnel;
   const hasData = topCount > 0 || steps.some((s) => s.userCount > 0);
@@ -65,7 +69,7 @@ export function FunnelReport({
     onNavigate?.(buildFunnelPeriodUrl(search, nextPeriod, from, to));
   }
 
-  const savedViews = usePeriodOnlySavedViews(viewsApi, funnelViews, period, navigateToPeriod);
+  const { shareDialog, ...savedViews } = usePeriodOnlySavedViews(viewsApi, funnelViews, period, navigateToPeriod, shareApi);
 
   return (
     <div className="space-y-6">
@@ -81,7 +85,12 @@ export function FunnelReport({
       <FilterBar
         hasFilters={false}
         onClear={() => undefined}
-        trailing={<SavedViews<PeriodOnlySavedView> {...savedViews} />}
+        trailing={
+          <>
+            <SavedViews<PeriodOnlySavedView> {...savedViews} />
+            <ShareDialog {...shareDialog} />
+          </>
+        }
       >
         <PeriodPicker<FunnelPeriodKey>
           options={FUNNEL_PERIOD_OPTIONS}
