@@ -157,9 +157,27 @@ function setup(features: FeatureMap, transactionCount: number): void {
   };
 }
 
-/** Lets the mocked feature map and validation land, then flushes the renders they cause. */
-async function settle(): Promise<void> {
+/**
+ * Renders hasAIAddon beside each screen. Every fixture here (except the empty map) has
+ * ai_detection OFF, and an unloaded map is fail-open (hasAIAddon true), so "false" is
+ * readable only once the feature map has actually loaded. Without this gate, a map that
+ * never loads leaves the limit at fail-open Infinity and passes every "unlimited" test.
+ */
+function MapLoaded(): React.ReactElement {
+  const { hasAIAddon } = useLicense();
+  return <span data-testid="map-loaded">{String(hasAIAddon)}</span>;
+}
+
+/**
+ * Lets the mocked feature map and validation land, then flushes the renders they cause.
+ * `gated` waits for the map to be visibly loaded; C3 (empty map) passes false, because an
+ * empty map has no ai_detection entry and so never reads "false".
+ */
+async function settle(gated = true): Promise<void> {
   await waitFor(() => expect((window.api.featureGate.getAll as jest.Mock)).toHaveBeenCalled());
+  if (gated) {
+    await waitFor(() => expect(screen.getByTestId("map-loaded").textContent).toBe("false"));
+  }
   await act(async () => {
     await new Promise((r) => setTimeout(r, 50));
   });
@@ -174,14 +192,15 @@ function Probe(): React.ReactElement {
   );
 }
 
-async function probeText(features: FeatureMap, count: number): Promise<string> {
+async function probeText(features: FeatureMap, count: number, gated = true): Promise<string> {
   setup(features, count);
   render(
     <LicenseProvider userId={USER.id}>
       <Probe />
+      <MapLoaded />
     </LicenseProvider>,
   );
-  await settle();
+  await settle(gated);
   // Settled first, then read once: before the feature map lands the limit is Infinity
   // (fail-open), which would satisfy an "unlimited" expectation on its own.
   return screen.getByTestId("probe").textContent as string;
@@ -227,8 +246,10 @@ describe("BACKLOG-4149 C2 — without unlimited the cap still applies", () => {
 });
 
 describe("BACKLOG-4149 C3 — loading or a failed read stays fail-open", () => {
+  // Ungated on purpose: an empty map has no ai_detection entry, so the map-loaded signal
+  // would never read "false". This case IS the fail-open state, so there is nothing to wait for.
   it("empty map, count 150: Infinity, can create", async () => {
-    expect(await probeText({}, 150)).toBe("Infinity|true|150");
+    expect(await probeText({}, 150, false)).toBe("Infinity|true|150");
   });
 });
 
@@ -238,6 +259,7 @@ describe("BACKLOG-4149 C4 — the Account row", () => {
     render(
       <LicenseProvider userId={USER.id}>
         <AccountSettings user={USER} />
+        <MapLoaded />
       </LicenseProvider>,
     );
     const label = await screen.findByText("Transactions");
@@ -261,6 +283,7 @@ describe("BACKLOG-4149 C5 — New Transaction on the Dashboard", () => {
     render(
       <LicenseProvider userId={USER.id}>
         <Dashboard onAuditNew={onAuditNew} onViewTransactions={jest.fn()} onManageContacts={jest.fn()} />
+        <MapLoaded />
       </LicenseProvider>,
     );
     await settle();
