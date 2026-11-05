@@ -3,6 +3,7 @@
  * Device detection, backup, drivers, and sync (primarily Windows)
  */
 import type { BackfillAvailability, BackfillProgress, BackfillResult } from "../iphoneBackfill";
+import type { SyncPhase } from "../../services/deviceSyncOrchestrator";
 
 /**
  * BACKLOG-2907: what the host knows about a prior backup for this device.
@@ -259,6 +260,13 @@ export type SyncCancelTrigger =
   | "try-again-no-device";
 
 /**
+ * BACKLOG-2939: every phase sent on `sync:progress` — the orchestrator's `SyncPhase`
+ * (deviceSyncOrchestrator `emitProgress`, forwarded by syncHandlers) plus "storing",
+ * which syncHandlers sends itself while saving to the database.
+ */
+export type SyncProgressPhase = SyncPhase | "storing";
+
+/**
  * Sync methods (Windows)
  */
 export interface WindowApiSync {
@@ -282,7 +290,8 @@ export interface WindowApiSync {
   stopDetection: () => Promise<{ success: boolean }>;
   onProgress: (
     callback: (progress: {
-      phase: string;
+      /** BACKLOG-2939: the real phase set, so a misspelt comparison fails type-check. */
+      phase: SyncProgressPhase;
       phaseProgress: number;
       overallProgress: number;
       message: string;
