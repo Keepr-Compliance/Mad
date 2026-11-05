@@ -8,7 +8,7 @@
  * @module onboarding/OnboardingFlow
  */
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useOnboardingQueue, type OnboardingAppState } from "./queue/useOnboardingQueue";
 import { OnboardingShell } from "./shell/OnboardingShell";
 import { ProgressIndicator } from "./shell/ProgressIndicator";
@@ -30,6 +30,7 @@ import { usePlatform } from '../../contexts/PlatformContext';
 import { useIPhoneSyncEnabled } from '../../contexts/IPhoneSyncContext';
 import { importSourceForPhoneType } from '../../utils/iphoneSyncEnabled';
 import { toOnboardingAuthProvider } from '../../utils/authProvider';
+import { NotificationContext } from '../../contexts/NotificationContext';
 
 /**
  * Props for the OnboardingFlow component.
@@ -75,6 +76,27 @@ const NOT_RESUMING: ResumeBundle = {
 export function OnboardingFlow({ app }: OnboardingFlowProps) {
   // Access state machine state when feature flag is enabled
   const machineState = useOptionalMachineState();
+
+  // BACKLOG-4030: a phone type that could not be saved is shown here. The save
+  // runs in useAppStateMachine, above NotificationProvider, so it carries the
+  // line on `app` and this component (under the provider) shows it. Read
+  // through useContext, not useNotification, which throws with no provider
+  // (same reason as Contacts.tsx). In the outer component so it is shown even
+  // while the inner flow waits for the resume check.
+  const notify = useContext(NotificationContext)?.notify;
+  const { phoneTypeSaveNotice, clearPhoneTypeSaveNotice } = app;
+  // One toast per notice, also under StrictMode's double effect run.
+  const noticeShownRef = useRef(false);
+  useEffect(() => {
+    if (!phoneTypeSaveNotice) {
+      noticeShownRef.current = false;
+      return;
+    }
+    if (!notify || noticeShownRef.current) return;
+    noticeShownRef.current = true;
+    notify.error(phoneTypeSaveNotice);
+    clearPhoneTypeSaveNotice();
+  }, [phoneTypeSaveNotice, notify, clearPhoneTypeSaveNotice]);
 
   // userId is available once the state machine reaches "onboarding" (it
   // carries `user` from AUTH_LOADED). Needed before the resume check can run.

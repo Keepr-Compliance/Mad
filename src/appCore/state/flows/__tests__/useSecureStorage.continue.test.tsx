@@ -21,9 +21,10 @@ import { INITIAL_APP_STATE } from "../../machine/types";
 import type { AppState, OnboardingState, PlatformInfo, User } from "../../machine/types";
 
 const mockInit = jest.fn();
+const mockSetPhoneType = jest.fn();
 jest.mock("@/services", () => ({
   systemService: { initializeSecureStorage: (...a: unknown[]) => mockInit(...a) },
-  settingsService: { setPhoneType: jest.fn() },
+  settingsService: { setPhoneType: (...a: unknown[]) => mockSetPhoneType(...a) },
 }));
 jest.mock("../../machine/utils/featureFlags", () => ({
   isNewStateMachineEnabled: jest.fn().mockReturnValue(true),
@@ -179,5 +180,74 @@ describe("BACKLOG-3321 C4: secure-storage Continue on the closed route", () => {
     });
 
     expect(mockInit).toHaveBeenCalledTimes(0);
+  });
+});
+
+/**
+ * BACKLOG-4030 control C6: the phone type queued before the database opened is
+ * saved right after the open. A failed save is reported through
+ * onPhoneTypeSaveFailed (which raises the "not saved" notice), not only logged.
+ * Reached only from the closed onboarding literal above (defence only since
+ * BACKLOG-3555). The failure shape is main's audit cancel.
+ */
+describe("BACKLOG-4030 C6: queued phone type save after the database opens", () => {
+  const MAIN_CANCEL =
+    "Your phone type was not saved because its audit record could not be saved. Please try again. If this keeps happening, contact support.";
+
+  function closedWithQueuedPhone(): AppState {
+    return { ...(closedOnboarding() as OnboardingState), selectedPhoneType: "android" };
+  }
+
+  beforeEach(() => {
+    mockSetPhoneType.mockReset();
+  });
+
+  it("a cancelled save calls onPhoneTypeSaveFailed once; the open still succeeds", async () => {
+    mockSetPhoneType.mockResolvedValue({ success: false, error: MAIN_CANCEL });
+    const onPhoneTypeSaveFailed = jest.fn();
+    const { result } = renderHook(
+      () => useSecureStorage({ ...options, onPhoneTypeSaveFailed }),
+      { wrapper: wrapper(closedWithQueuedPhone()) },
+    );
+
+    let ok: boolean | undefined;
+    await act(async () => {
+      ok = await result.current.initializeSecureStorage();
+    });
+
+    expect(mockSetPhoneType).toHaveBeenCalledWith("user-123", "android");
+    expect(onPhoneTypeSaveFailed).toHaveBeenCalledTimes(1);
+    expect(ok).toBe(true);
+  });
+
+  it("a thrown save calls onPhoneTypeSaveFailed once", async () => {
+    mockSetPhoneType.mockRejectedValue(new Error("ipc gone"));
+    const onPhoneTypeSaveFailed = jest.fn();
+    const { result } = renderHook(
+      () => useSecureStorage({ ...options, onPhoneTypeSaveFailed }),
+      { wrapper: wrapper(closedWithQueuedPhone()) },
+    );
+
+    await act(async () => {
+      await result.current.initializeSecureStorage();
+    });
+
+    expect(onPhoneTypeSaveFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it("a saved phone type does not call onPhoneTypeSaveFailed", async () => {
+    mockSetPhoneType.mockResolvedValue({ success: true });
+    const onPhoneTypeSaveFailed = jest.fn();
+    const { result } = renderHook(
+      () => useSecureStorage({ ...options, onPhoneTypeSaveFailed }),
+      { wrapper: wrapper(closedWithQueuedPhone()) },
+    );
+
+    await act(async () => {
+      await result.current.initializeSecureStorage();
+    });
+
+    expect(mockSetPhoneType).toHaveBeenCalledTimes(1);
+    expect(onPhoneTypeSaveFailed).not.toHaveBeenCalled();
   });
 });

@@ -71,6 +71,8 @@ interface PhoneTypeApiReturn {
   selectedPhoneType: "iphone" | "android" | null;
   isLoadingPhoneType: boolean;
   needsDriverSetup: boolean;
+  phoneTypeSaveNotice: string | null;
+  clearPhoneTypeSaveNotice: () => void;
 }
 
 interface AuthFlowReturn {
@@ -189,6 +191,8 @@ export function constructStateProps(
   | "selectedPhoneType"
   | "isLoadingPhoneType"
   | "needsDriverSetup"
+  | "phoneTypeSaveNotice"
+  | "clearPhoneTypeSaveNotice"
   | "isNewUserFlow"
   | "pendingOAuthData"
   | "pendingOnboardingData"
@@ -242,6 +246,8 @@ export function constructStateProps(
     selectedPhoneType: phoneTypeApi.selectedPhoneType,
     isLoadingPhoneType: phoneTypeApi.isLoadingPhoneType,
     needsDriverSetup: phoneTypeApi.needsDriverSetup,
+    phoneTypeSaveNotice: phoneTypeApi.phoneTypeSaveNotice,
+    clearPhoneTypeSaveNotice: phoneTypeApi.clearPhoneTypeSaveNotice,
 
     // New user flow state
     isNewUserFlow: auth.isNewUserFlow,

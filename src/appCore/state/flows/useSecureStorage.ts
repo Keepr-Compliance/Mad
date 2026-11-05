@@ -68,6 +68,11 @@ interface UseSecureStorageOptions {
   onEmailOnboardingComplete: (completed: boolean, connected: boolean) => void;
   onNewUserFlowSet: (isNew: boolean) => void;
   onNeedsDriverSetup: (needs: boolean) => void;
+  /**
+   * BACKLOG-4030: the queued phone type could not be saved after the database
+   * opened. Raises the "phone type not saved" notice.
+   */
+  onPhoneTypeSaveFailed?: () => void;
 }
 
 interface UseSecureStorageReturn {
@@ -79,9 +84,11 @@ interface UseSecureStorageReturn {
 }
 
 export function useSecureStorage(
-  // Options kept for API compatibility but not used - state machine is source of truth
-  _options: UseSecureStorageOptions
+  // Options kept for API compatibility; only onPhoneTypeSaveFailed is read
+  // (BACKLOG-4030) - state machine is source of truth for the rest
+  options: UseSecureStorageOptions
 ): UseSecureStorageReturn {
+  const { onPhoneTypeSaveFailed } = options;
   const machineState = useOptionalMachineState();
 
   if (!machineState) {
@@ -137,10 +144,14 @@ export function useSecureStorage(
                 logger.info("[useSecureStorage] Synced queued phone type to DB:", phoneType);
               } else {
                 logger.warn("[useSecureStorage] Failed to sync phone type to DB:", syncResult.error);
+                // BACKLOG-4030: shown, not only logged. The database open
+                // itself succeeded, so this step still completes.
+                onPhoneTypeSaveFailed?.();
               }
             } catch (syncError) {
-              // Log but don't fail - phone type is already in state
+              // Don't fail the database open - phone type is already in state
               logger.warn("[useSecureStorage] Failed to sync phone type to DB:", syncError);
+              onPhoneTypeSaveFailed?.();
             }
           }
 
@@ -158,7 +169,7 @@ export function useSecureStorage(
       // The database is already open (or the orchestrator is opening it)
       return true;
     },
-    [dispatch, needsDatabaseOpen, state]
+    [dispatch, needsDatabaseOpen, state, onPhoneTypeSaveFailed]
   );
 
   return {
