@@ -163,6 +163,8 @@ const createAppStateMock = (
   selectedPhoneType: "iphone",
   isLoadingPhoneType: false,
   needsDriverSetup: false,
+  phoneTypeSaveNotice: null,
+  clearPhoneTypeSaveNotice: jest.fn(),
 
   // New user flow
   isNewUserFlow: false,
