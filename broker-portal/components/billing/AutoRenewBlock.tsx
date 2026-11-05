@@ -14,6 +14,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button, ConfirmationDialog, FieldError } from '@keepr/design-system';
 import { BillingBlock } from './BillingBlock';
+import { TOUCH_BUTTON } from './touch';
 import { setAutoRenew } from '@/lib/actions/autoRenew';
 import { formatPlanDate, type PlanEnd } from '@/lib/billing/planEnd';
 
@@ -59,11 +60,11 @@ export function AutoRenewBlock({ organizationId, planEnd }: { organizationId: st
       {showOff || showOn ? (
         <div className="mt-3">
           {showOff ? (
-            <Button variant="secondary" size="sm" disabled={busy} onClick={() => setConfirming(true)}>
+            <Button variant="secondary" size="sm" className={TOUCH_BUTTON} disabled={busy} onClick={() => setConfirming(true)}>
               Turn off auto-renew
             </Button>
           ) : (
-            <Button variant="secondary" size="sm" disabled={busy} onClick={() => run(true)}>
+            <Button variant="secondary" size="sm" className={TOUCH_BUTTON} disabled={busy} onClick={() => run(true)}>
               {busy ? 'Working…' : 'Turn auto-renew back on'}
             </Button>
           )}

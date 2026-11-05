@@ -9,6 +9,7 @@
 import { useState } from 'react';
 import { Button } from '@keepr/design-system';
 import { openBrokerageBillingPortal } from '@/lib/actions/billingPortal';
+import { TOUCH_BUTTON } from './touch';
 
 export const MANAGE_BILLING_LABEL = 'Manage billing';
 
@@ -23,7 +24,7 @@ export function ManageBillingButton() {
     }
   };
   return (
-    <Button type="button" variant="secondary" size="sm" disabled={pending} onClick={() => void open()}>
+    <Button type="button" variant="secondary" size="sm" className={TOUCH_BUTTON} disabled={pending} onClick={() => void open()}>
       {pending ? 'Opening Stripe…' : `${MANAGE_BILLING_LABEL} ↗`}
     </Button>
   );

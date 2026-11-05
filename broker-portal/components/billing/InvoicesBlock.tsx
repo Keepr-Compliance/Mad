@@ -3,6 +3,7 @@ import type { AgentPlanState } from '@/lib/billing/capabilities';
 import type { BillingRow, RowStatus } from '@/lib/billing/personalBilling';
 import { onAgentPlan } from './CreditsBlock';
 import { formatMoney, formatUnixDay } from './format';
+import { TOUCH_LINK } from './touch';
 
 export const ROWS_EMPTY = 'No payments yet.';
 export const ROWS_UNAVAILABLE = 'Your payment history is unavailable right now.';
@@ -40,8 +41,8 @@ export function InvoicesBlock({ data }: { data?: InvoicesData }) {
         <p className="mt-3 text-sm text-gray-600">{rows === null ? ROWS_UNAVAILABLE : ROWS_EMPTY}</p>
       ) : (
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200 text-sm">
-            <thead className="bg-gray-50">
+          <table className="min-w-full divide-y divide-gray-200 text-sm max-lg:block">
+            <thead className="bg-gray-50 max-lg:hidden">
               <tr>
                 {['Date', 'Description', 'Amount', 'Status', ''].map((h, i) => (
                   <th key={i} className="whitespace-nowrap px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
@@ -50,20 +51,20 @@ export function InvoicesBlock({ data }: { data?: InvoicesData }) {
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200">
+            <tbody className="divide-y divide-gray-200 max-lg:block">
               {rows.map((r) => {
                 const [label, hue] = STATUS[r.status];
                 return (
-                  <tr key={r.id} data-billing-row={r.id}>
-                    <td className="whitespace-nowrap px-3 py-2 text-gray-900">{formatUnixDay(r.created)}</td>
-                    <td className="whitespace-nowrap px-3 py-2 text-gray-700">{r.description}</td>
-                    <td className="whitespace-nowrap px-3 py-2 tabular-nums text-gray-700">{formatMoney(r.amountCents, r.currency)}</td>
-                    <td className="whitespace-nowrap px-3 py-2">
+                  <tr key={r.id} data-billing-row={r.id} className="max-lg:grid max-lg:grid-cols-[1fr_auto] max-lg:items-center max-lg:gap-x-4 max-lg:gap-y-1 max-lg:py-3">
+                    <td className="whitespace-nowrap px-3 py-2 text-gray-900 max-lg:p-0">{formatUnixDay(r.created)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-gray-700 max-lg:col-span-2 max-lg:whitespace-normal max-lg:p-0">{r.description}</td>
+                    <td className="whitespace-nowrap px-3 py-2 tabular-nums text-gray-700 max-lg:col-start-2 max-lg:row-start-1 max-lg:p-0 max-lg:text-right">{formatMoney(r.amountCents, r.currency)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 max-lg:p-0">
                       <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${hue}`}>{label}</span>
                     </td>
-                    <td className="whitespace-nowrap px-3 py-2">
+                    <td className="whitespace-nowrap px-3 py-2 max-lg:p-0 max-lg:text-right">
                       {r.link ? (
-                        <a className="font-medium text-indigo-700 hover:underline" href={r.link} target="_blank" rel="noopener noreferrer">
+                        <a className={`font-medium text-indigo-700 hover:underline ${TOUCH_LINK}`} href={r.link} target="_blank" rel="noopener noreferrer">
                           {r.linkLabel}
                         </a>
                       ) : null}
