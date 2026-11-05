@@ -125,6 +125,13 @@ export interface AppStateMachine {
   selectedPhoneType: "iphone" | "android" | null;
   isLoadingPhoneType: boolean;
   needsDriverSetup: boolean;
+  /**
+   * BACKLOG-4030: "phone type not saved" line for OnboardingFlow to show, or
+   * null. Carried here because this object is built above NotificationProvider.
+   */
+  phoneTypeSaveNotice: string | null;
+  /** BACKLOG-4030: called by OnboardingFlow once it has shown the notice. */
+  clearPhoneTypeSaveNotice: () => void;
 
   // New user flow state
   isNewUserFlow: boolean;

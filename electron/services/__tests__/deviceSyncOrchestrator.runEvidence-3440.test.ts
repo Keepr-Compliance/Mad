@@ -172,6 +172,9 @@ jest.mock("../iosContactsParser", () => ({
 import { DeviceSyncOrchestrator } from "../deviceSyncOrchestrator";
 import { syncTimeline } from "../syncTimeline";
 import type { BackupResult } from "../../types/backup";
+import * as Sentry from "@sentry/electron/main";
+
+const captureMessage = Sentry.captureMessage as unknown as jest.Mock;
 
 /** The founder's 2026-08-27 locked-phone failure, transcribed. */
 const DEVICE_LOCKED_208: Partial<BackupResult> = {
@@ -479,4 +482,72 @@ describe("BACKLOG-3598: quitting during a backup is recorded as app-quit, not de
 afterAll(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   require("./helpers/testUserData").removeTestUserDataDir();
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-2950 — the disk-space event is decided on the code, not on the sentence
+// ---------------------------------------------------------------------------
+
+const DISK_SPACE_EVENT = "Backup failed due to insufficient disk space";
+
+function diskSpaceEvents(): unknown[][] {
+  return captureMessage.mock.calls.filter((c) => c[0] === DISK_SPACE_EVENT);
+}
+
+describe("BACKLOG-2950: the disk-space Sentry event follows errorCode, not the copy", () => {
+  /**
+   * The host-disk-full failure as backupService classifies it (classifyBackupFailure,
+   * device code 105 -> INSUFFICIENT_SPACE). The SENTENCE is deliberately reworded to
+   * contain none of "disk space" / "no space" / "ENOSPC" / "not enough space": the
+   * event must not depend on how the user-facing copy is phrased.
+   */
+  const HOST_DISK_FULL_105_REWORDED: Partial<BackupResult> = {
+    error: "This computer is full. Make room on it and sync again.",
+    errorCode: "INSUFFICIENT_SPACE",
+    failureCause: {
+      deviceErrorCode: 105,
+      deviceErrorDescription:
+        "Insufficient free disk space on drive to back up (MBErrorDomain/105)",
+      exitCode: 151,
+      source: "stdout-line",
+    },
+  };
+
+  it("THE CONTROL — INSUFFICIENT_SPACE with reworded copy still captures the event, tagged 105", async () => {
+    // Restore `/disk space|no space|ENOSPC|not enough space/i.test(error)` as the
+    // decision and this reds: the reworded sentence matches none of those words.
+    await outcomeRowForFailure(HOST_DISK_FULL_105_REWORDED);
+
+    const events = diskSpaceEvents();
+    expect(events).toHaveLength(1);
+    const context = events[0][1] as { tags: Record<string, string>; extra: Record<string, unknown> };
+    expect(context.tags.failure_reason).toBe("disk_space");
+    expect(context.tags.device_error_code).toBe("105");
+    // The code travels; the phone's own description does not.
+    expect(JSON.stringify(context)).not.toContain("MBErrorDomain");
+  });
+
+  it("a non-disk failure whose sentence SAYS 'no space' does not capture the disk-space event", async () => {
+    // An unmapped device code is shown with the phone's own words
+    // (describeUnmappedDeviceError), which can mention space on the PHONE. Deciding
+    // on the sentence — alone or OR-ed with the code — would file it as host disk full.
+    // The sentence TEMPLATE is the real one (backupService.ts describeUnmappedDeviceError);
+    // the quoted description is INVENTED — no unmapped code mentioning space has been
+    // observed (zero unmapped codes in 90 d of sync_outcomes, RE-MEASURED 9ce74fe0).
+    await outcomeRowForFailure({
+      error:
+        'The backup stopped with error 56. Your iPhone reported: "no space for the backup ' +
+        'manifest". Keepr does not have a specific explanation for this one — please send ' +
+        "this message to support.",
+      errorCode: "UNKNOWN_ERROR",
+      failureCause: {
+        deviceErrorCode: 56,
+        deviceErrorDescription: "no space for the backup manifest",
+        exitCode: 200,
+        source: "stdout-line",
+      },
+    });
+
+    expect(diskSpaceEvents()).toHaveLength(0);
+  });
 });

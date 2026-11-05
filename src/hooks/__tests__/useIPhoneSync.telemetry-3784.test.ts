@@ -78,7 +78,7 @@ describe("useIPhoneSync telemetry (BACKLOG-3784)", () => {
     it.each([
       ["backup", "backing_up"],
       ["decrypting", "extracting"],
-      ["parsing_messages", "extracting"],
+      ["parsing-messages", "extracting"],
       ["resolving", "extracting"],
       ["storing", "storing"],
       ["complete", "complete"],

@@ -155,11 +155,30 @@ export class LogService {
       : "";
     const sanitizedMessage = this.sanitizeForLog(entry.message);
     const metadata = entry.metadata
-      ? `\n${JSON.stringify(entry.metadata, null, 2)}`
+      ? `\n${JSON.stringify(entry.metadata, this.errorReplacer, 2)}`
       : "";
 
     return `${timestamp} ${level} ${context} ${sanitizedMessage}${metadata}`;
   }
+
+  /**
+   * JSON.stringify replacer that keeps an Error's `name` and `message`
+   * (BACKLOG-4072). Both are own NON-enumerable properties of an Error, so a
+   * bare stringify drops them. Own enumerable fields (e.g. DatabaseError `code`)
+   * are kept. The stack is left out on purpose: it carries filesystem paths the
+   * log redaction hook does not strip. The message still passes through
+   * sanitizeForLog, like the entry's own message.
+   */
+  private errorReplacer = (_key: string, value: unknown): unknown => {
+    if (value instanceof Error) {
+      return {
+        ...value,
+        name: value.name,
+        message: this.sanitizeForLog(value.message),
+      };
+    }
+    return value;
+  };
 
   /**
    * Write log entry to file

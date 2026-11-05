@@ -30,11 +30,12 @@ import {
 // MOCKS
 // ============================================
 
-// Mock electron net module
+// Mock electron net module. `net.isOnline` is a function in Electron
+// (electron.d.ts), so the mock has that shape (BACKLOG-4102).
 const mockIsOnline = jest.fn();
 jest.mock("electron", () => ({
   ipcMain: { handle: jest.fn() },
-  net: { get isOnline() { return mockIsOnline(); } },
+  net: { isOnline: () => mockIsOnline() },
 }));
 
 // Mock session service

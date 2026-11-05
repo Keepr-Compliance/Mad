@@ -17,6 +17,7 @@
  * isolates the module to re-register against a fresh electron mock + env.
  */
 
+const mockRelaunchLog = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() };
 const mockRelaunch = jest.fn();
 const mockExit = jest.fn();
 
@@ -73,7 +74,7 @@ function loadRelaunchHandler(): () => Promise<{ relaunched: boolean }> {
 
   jest.doMock("../../services/logService", () => ({
     __esModule: true,
-    default: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() },
+    default: mockRelaunchLog,
   }));
 
   jest.doMock("../../services/sessionService", () => ({
@@ -290,5 +291,40 @@ describe("permissionHandlers — relaunch-app (BACKLOG-1842, BACKLOG-2173b)", ()
 
     expect(mockSaveSession).toHaveBeenCalledTimes(1);
     expect(mockSaveSession.mock.calls[0][0]).not.toHaveProperty("accountSetupFinishedAt");
+  });
+});
+
+describe("BACKLOG-3299: relaunch flush honours saveSession's boolean", () => {
+  beforeEach(() => {
+    jest.resetModules();
+    Object.values(mockRelaunchLog).forEach((f) => f.mockClear());
+    mockRelaunch.mockReset(); mockExit.mockReset();
+    appMock.isPackaged = true; delete process.env.KEEPR_E2E;
+    mockLoadSession.mockReset().mockResolvedValue(null);
+    mockGetAuthSession.mockReset().mockResolvedValue({ userId: "user-1", accessToken: "a", refreshToken: "r" });
+    mockGetUserById.mockReset().mockResolvedValue({ id: "user-1", email: "u@example.com", oauth_provider: "google", subscription_tier: "free", subscription_status: "trial" });
+    mockCreateSession.mockReset().mockResolvedValue("tok");
+  });
+  const msgs = (f: jest.Mock) => f.mock.calls.map((c) => String(c[0]));
+
+  it("P2: flush returns false -> no 'succeeded' line, one error line, still relaunches, plain saveSession (no endsSignInWait)", async () => {
+    mockSaveSession.mockReset().mockResolvedValue(false);
+    const handler = loadRelaunchHandler();
+    const result = await handler();
+    expect(mockSaveSession).toHaveBeenCalledTimes(1);
+    expect(mockSaveSession.mock.calls[0][1]).toBeUndefined();
+    expect(msgs(mockRelaunchLog.info).filter((m) => m.includes("flush succeeded"))).toEqual([]);
+    expect(msgs(mockRelaunchLog.error).filter((m) => /\[Relaunch\]/.test(m))).toHaveLength(1);
+    expect(mockRelaunch).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ relaunched: true });
+  });
+
+  it("K1b: flush returns true -> 'succeeded' once, no error", async () => {
+    mockSaveSession.mockReset().mockResolvedValue(true);
+    const handler = loadRelaunchHandler();
+    await handler();
+    expect(msgs(mockRelaunchLog.info).filter((m) => m.includes("flush succeeded"))).toHaveLength(1);
+    expect(msgs(mockRelaunchLog.error)).toEqual([]);
+    expect(mockSaveSession.mock.calls[0][1]).toBeUndefined();
   });
 });

@@ -126,6 +126,12 @@ export interface ConnectionStatusProps {
   /** Last sync timestamp (from backup status) */
   lastSyncTime?: Date | null;
   /**
+   * BACKLOG-2931: whether a usable prior backup is on this computer — the same value
+   * the progress banner uses (BACKLOG-2907). Drives the first-sync / incremental
+   * sentence; `"unknown"` (the default) shows neither.
+   */
+  priorBackup?: PriorBackupState;
+  /**
    * BACKLOG-1919: Whether the Apple Mobile Device Support driver is missing
    * while no device is detected (Windows). When true, the disconnected view
    * shows an inline one-click install button instead of silent "Connect your
@@ -157,6 +163,8 @@ export interface ConnectionStatusProps {
   appleUsbDriver?: AppleUsbDriverState | null;
   /** BACKLOG-3816: the sync request is being prepared — the button shows "Getting ready…". */
   isStarting?: boolean;
+  /** BACKLOG-4116: a cancelled sync is still stopping — the button is disabled. */
+  isStopping?: boolean;
   /** BACKLOG-3816: epoch ms until which the Sync button stays disabled (hold after a failure). */
   retryAvailableAt?: number | null;
 }
@@ -211,6 +219,8 @@ export interface UseIPhoneSyncReturn {
   appleEncryptedBackup: boolean;
   /** Last sync time for this device (from backup status) */
   lastSyncTime: Date | null;
+  /** BACKLOG-2931: usable prior backup on this computer, read on connect. See ConnectionStatusProps. */
+  priorBackup?: PriorBackupState;
   /** Whether the sync is waiting for the user to enter their iPhone passcode */
   isWaitingForPasscode: boolean;
   /** BACKLOG-4002 (Windows): the backup tool is suspended. See SyncProgressProps. */
@@ -264,6 +274,12 @@ export interface UseIPhoneSyncReturn {
    * handed to the main process or refused. The buttons show "Getting ready…".
    */
   isStarting: boolean;
+  /**
+   * BACKLOG-4116: Cancel was pressed while the sync's start request was still awaiting its
+   * reply; main refuses a new start until that request returns. Sync / Try Again stay
+   * disabled until then. Optional because several test doubles of the context predate it.
+   */
+  isStopping?: boolean;
   /**
    * BACKLOG-3816: epoch ms until which Sync / Try Again stay disabled, because the
    * last sync ended with the connection dropping or the phone's backup service
