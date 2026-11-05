@@ -124,6 +124,26 @@ describe('SavedViews sharing (BACKLOG-4087)', () => {
     expect(screen.queryByRole('button', { name: /^Share / })).toBeNull();
   });
 
+  it('C1f (BACKLOG-4144) `sharing` without onShare: own rows have no Share; shared rows keep Update and Leave', () => {
+    const { onShare: _omit, ...rest } = makeSharing();
+    void _omit;
+    setup({ pinning: PIN, sharing: rest });
+    open();
+    expect(buttonsIn(rowItem('Pipeline'))).toEqual([
+      expect.stringMatching(/^Pipeline/),
+      'Make Pipeline the default',
+      'Unpin Pipeline',
+      'Delete Pipeline',
+    ]);
+    expect(buttonsIn(rowItem('Budget'))).toEqual([
+      expect.stringMatching(/^Budget/),
+      'Update Budget with the current filters',
+      'Leave Budget',
+    ]);
+    expect(buttonsIn(rowItem('Backlog'))).toEqual([expect.stringMatching(/^Backlog/), 'Leave Backlog']);
+    expect(screen.queryByRole('button', { name: /^Share / })).toBeNull();
+  });
+
   it('C1e a shared row that is the defaultViewId shows no Default marker', () => {
     setup({ defaultViewId: 's-ed' });
     open();

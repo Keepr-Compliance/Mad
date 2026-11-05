@@ -42,6 +42,7 @@ import {
   USERS,
 } from '@/lib/reports/__tests__/user-activity.fixture';
 import { UserActivityReportClient } from '../UserActivityReportClient';
+import { withReportAccess } from '@/lib/reports/__tests__/report-access-wrapper';
 
 const REPORT = buildUserActivityReport({
   users: USERS,
@@ -66,7 +67,7 @@ beforeEach(() => {
 
 function mount(rows: unknown[]) {
   stub.current!.setListRows(rows);
-  render(<UserActivityReportClient report={REPORT} period={LAST_WEEK} rowCap={20000} />);
+  render(<UserActivityReportClient report={REPORT} period={LAST_WEEK} rowCap={20000} />, { wrapper: withReportAccess('owner') });
 }
 
 const panel = () => screen.getByRole('dialog', { name: 'Saved views' });

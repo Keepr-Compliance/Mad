@@ -19,11 +19,17 @@
  * - Leave (shared rows): `report_share_remove` with the caller's own id.
  * Update and Leave go through the saved-views write runner, so a refusal shows and the list re-reads.
  *
+ * - BACKLOG-4144: Share is offered only when the caller's access to the open report (from
+ *   `ReportAccessProvider`) is editor or owner. A report viewer, or a page with no provider, gets
+ *   Update and Leave but no Share.
+ *
  * Hiding these is presentation only. The server functions are the access guard.
  */
 
 import { useCallback, useRef, useState } from 'react';
 import type { SavedViewItem, SavedViewsSharing, SavedViewUpdate, ShareDialogProps } from '@keepr/ui';
+import { canShareViews } from './report-access';
+import { useOpenReport } from './report-access-context';
 import { isMissingFunctionError, type ShareApi } from './report-share-api';
 import { writeFailureMessage } from './report-views';
 import type { SharedViewFields } from './saved-view-access';
@@ -51,6 +57,7 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
   reportKey: string,
   current: () => SavedViewUpdate<F, M>
 ): UseReportViewSharing<V> {
+  const mayShare = canShareViews(useOpenReport()?.access ?? null);
   const [missing, setMissing] = useState(false);
   const [target, setTarget] = useState<V | null>(null);
   const [candidates, setCandidates] = useState<ShareDialogProps['candidates']>(null);
@@ -99,14 +106,18 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
   const sharing: SavedViewsSharing<V> | undefined =
     available && shareApi
       ? {
-          onShare: (view) => {
-            openViewId.current = view.id;
-            setTarget(view);
-            setCandidates(null);
-            setGrants(null);
-            setError(null);
-            readDialog(shareApi, view.id);
-          },
+          ...(mayShare
+            ? {
+                onShare: (view: V) => {
+                  openViewId.current = view.id;
+                  setTarget(view);
+                  setCandidates(null);
+                  setGrants(null);
+                  setError(null);
+                  readDialog(shareApi, view.id);
+                },
+              }
+            : {}),
           onLeave: (view) => {
             saved.write(() =>
               shareApi.leave(view.id).catch((err) => {

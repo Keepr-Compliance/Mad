@@ -43,7 +43,7 @@ vi.mock('@/lib/supabase/server', async () => {
       return {
         user: { id: 'u-1' },
         supabase: {
-          rpc: async () => ({ data: true, error: null }),
+          rpc: async (fn: string) => ({ data: fn === 'report_my_access' ? 'owner' : true, error: null }),
           from: (table: string) => (table === 'internal_roles' ? roles : client.from(table)),
         },
       };
