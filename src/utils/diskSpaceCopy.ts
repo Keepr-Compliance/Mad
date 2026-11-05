@@ -24,6 +24,16 @@ export function formatGbDirected(bytes: number, round: (x: number) => number): s
   return `${(round(bytes / 1e8) / 10).toFixed(1)} GB`;
 }
 
+/**
+ * `formatGb` rounded UP: 0.1 GB, or whole MB below 0.1 GB. For figures that are
+ * ADDED to reach a requirement (BACKLOG-2882), where rounding down would let
+ * the printed parts sum to no more than the printed free space. Integer byte
+ * counts that are exact multiples of 0.1 GB (e.g. 80e9) print unchanged.
+ */
+export function formatGbUp(bytes: number): string {
+  return formatGbDirected(bytes, Math.ceil);
+}
+
 /** The numbers an attachment-space refusal states — all from the main process. */
 export interface AttachmentSpaceRefusalFacts {
   /** Attachment bytes the copy would write (an upper bound). */
@@ -47,14 +57,19 @@ export interface AttachmentSpaceRefusalFacts {
  *
  * The sentence names the two parts the guard added (attachments, headroom) and
  * the free space, with no separate total: a total that did not equal the
- * printed parts read as an arithmetic error. Free space is rounded DOWN, so the
- * stated figure never overstates what is available.
+ * printed parts read as an arithmetic error. The parts round UP and the free
+ * space rounds DOWN, so on every refusal the printed parts add up to more than
+ * the printed free space: ceil(a) + ceil(h) >= a + h = required > available >=
+ * floor(available). Nearest rounding cannot promise that (a 2 GiB headroom and
+ * a half-GB estimate both rounded down and printed 0.5 + 2.1 = 2.6 against
+ * "only 2.6 GB is available"). The cost is that the 2 GiB headroom prints as
+ * 2.2 GB.
  */
 export function describeAttachmentSpaceRefusal(facts: AttachmentSpaceRefusalFacts): string {
   const available = formatGbDirected(facts.availableBytes, Math.floor);
   return (
-    `Keepr needs ${formatGb(facts.attachmentBytes)} for the attachments plus ` +
-    `${formatGb(facts.headroomBytes)} kept free so your Mac keeps working. ` +
+    `Keepr needs ${formatGbUp(facts.attachmentBytes)} for the attachments plus ` +
+    `${formatGbUp(facts.headroomBytes)} kept free so your Mac keeps working. ` +
     `Only ${available} is available, so the import will not start.`
   );
 }

@@ -519,6 +519,29 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
     expect(estimate).not.toHaveTextContent(/slow/i);
   });
 
+  it("states the attachments figure the same way in the panel estimate and the refusal sentence", async () => {
+    // 80.04 GB: nearest rounding prints 80.0, rounding up prints 80.1. The
+    // sentence rounds parts up (BACKLOG-2882), so the panel must too, or one
+    // estimate reads "80.0 GB" above and "80.1 GB" in the dialog.
+    (window.api.messages.getImportCount as jest.Mock).mockResolvedValue(
+      estimateResponse({
+        messages: 480000,
+        attachmentBytes: 80_040_000_000,
+        availableDiskBytes: 40 * GB,
+        fitsOnDisk: false,
+      }),
+    );
+
+    renderStrict(<MacOSMessagesImportSettings userId={userId} />);
+
+    const estimate = await screen.findByTestId("import-size-estimate");
+    expect(estimate).toHaveTextContent("about 80.1 GB of attachments");
+    await screen.findByTestId("import-space-notice");
+    fireEvent.click(screen.getByRole("button", { name: /Import Messages/i }));
+    const block = await screen.findByTestId("import-space-block");
+    expect(block).toHaveTextContent("Keepr needs 80.1 GB for the attachments");
+  });
+
   it("BLOCKS the import when the attachments do not fit, with no override", async () => {
     (window.api.messages.getImportCount as jest.Mock).mockResolvedValue(
       estimateResponse({
@@ -546,7 +569,7 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
     // window named with its own estimate.
     expect(screen.getByTestId("import-without-attachments")).toBeInTheDocument();
     expect(block).toHaveTextContent(
-      "Keepr needs 80.0 GB for the attachments plus 2.1 GB kept free so your Mac keeps working. Only 40.0 GB is available, so the import will not start."
+      "Keepr needs 80.0 GB for the attachments plus 2.2 GB kept free so your Mac keeps working. Only 40.0 GB is available, so the import will not start."
     );
 
     // ...and there is deliberately NO "import anyway" escape. An override is

@@ -46,6 +46,7 @@ import { settingsService, systemService } from '../../services';
 import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
 import { parseLocalCalendarDay } from '../../utils/dateRangeUtils';
+import { formatGb, formatGbUp } from '../../utils/diskSpaceCopy';
 // BACKLOG-2734: the defaults and the absent-vs-null resolution now have ONE
 // renderer-side definition, shared with `AndroidMessagesSettings`. Both panels
 // mirrored the same two constants and the same two ternaries, which is how the
@@ -1176,13 +1177,6 @@ export function MacOSMessagesImportSettings({
         ? "Keepr needs Full Disk Access to read your messages"
         : spaceBlockedReason;
 
-  // BACKLOG-2743: Plain size formatting — real numbers, no adjectives.
-  const formatGb = (bytes: number): string => {
-    const gb = bytes / 1e9;
-    if (gb < 0.1) return `${Math.max(1, Math.round(bytes / 1e6))} MB`;
-    return `${gb.toFixed(1)} GB`;
-  };
-
   // BACKLOG-2286: Format the effective-window cutoff as a local calendar day
   // (e.g. "Jan 1, 2026"). parseLocalCalendarDay uses only the calendar-day
   // portion so the shown date matches the audit boundary with no UTC off-by-one.
@@ -2084,7 +2078,7 @@ export function MacOSMessagesImportSettings({
             {availableCount !== null && (
               <>This selection covers {availableCount.toLocaleString()} messages and </>
             )}
-            about {formatGb(sizeEstimate.attachmentBytes)} of attachments
+            about {formatGbUp(sizeEstimate.attachmentBytes)} of attachments
             {sizeEstimate.availableDiskBytes !== null && (
               <>. You have {formatGb(sizeEstimate.availableDiskBytes)} available</>
             )}

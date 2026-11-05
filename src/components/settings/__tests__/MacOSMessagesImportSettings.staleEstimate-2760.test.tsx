@@ -254,7 +254,7 @@ describe("BACKLOG-2760 — first paint estimates the STORED window, not useState
     expect(screen.getByTestId("import-space-notice")).toHaveTextContent(
       // BACKLOG-2882: the required figure (estimate + headroom) is stated, so
       // the numbers shown can produce the refusal shown.
-      "Keepr needs 61.3 GB for the attachments plus 2.1 GB kept free so your Mac keeps working. Only 59.1 GB is available, so the import will not start."
+      "Keepr needs 61.3 GB for the attachments plus 2.2 GB kept free so your Mac keeps working. Only 59.1 GB is available, so the import will not start."
     );
     await expectImportRefused();
   });
