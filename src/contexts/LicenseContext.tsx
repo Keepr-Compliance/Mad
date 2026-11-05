@@ -600,9 +600,14 @@ export function LicenseProvider({
   // SPRINT-127: transactionLimit from plan feature. Plan features are sole source of truth.
   // Parse max_transaction_size feature value (string) as integer.
   // Defaults to Infinity (fail-open) when the feature is missing or not yet loaded.
+  // BACKLOG-4149: a plan that carries unlimited_transactions has NO cap, whatever
+  // max_transaction_size says. Read `allowed`, never `value`: the Agent subscription and
+  // the Unlimited override arrive as allowed:true with value "false". Strict read, not the
+  // fail-open featureIsAllowed(): a map with the cap but without the key keeps the cap.
   const planMaxTxn = planFeatures["max_transaction_size"]?.value;
   const parsedPlanLimit = planMaxTxn ? parseInt(planMaxTxn, 10) : NaN;
-  const transactionLimit = !isNaN(parsedPlanLimit) ? parsedPlanLimit : Infinity;
+  const unlimitedTransactions = planFeatures["unlimited_transactions"]?.allowed === true;
+  const transactionLimit = !unlimitedTransactions && !isNaN(parsedPlanLimit) ? parsedPlanLimit : Infinity;
 
   // SPRINT-127: canCreateTransaction uses plan-feature-derived limit
   const canCreateTransaction = transactionCount < transactionLimit;
