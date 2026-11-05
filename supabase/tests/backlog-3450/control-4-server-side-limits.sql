@@ -97,7 +97,8 @@ BEGIN
     PERFORM public.report_save_view('control-4', 'stolen', k_filters, k_metric, false, v_first);
   EXCEPTION WHEN OTHERS THEN
     GET STACKED DIAGNOSTICS v_message = MESSAGE_TEXT;
-    v_refused := v_message LIKE 'Only the view owner%';
+    -- BACKLOG-4087: a non-owner who is not an editor gets the single not-found message, no id.
+    v_refused := v_message = 'Saved view not found';
   END;
   ASSERT v_refused, 'CONTROL 4 FAILED (c2): another internal user UPDATED the owner''s view';
   ASSERT (SELECT name FROM report_saved_views WHERE id = v_first) = 'CONTROL 4 pin 1 renamed',

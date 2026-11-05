@@ -24,6 +24,7 @@ import {
   type ResolvedPeriodLike,
   type StoredViewPeriod,
 } from './view-period';
+import { isOwnView, parseViewAccess, viewAccessFields, type SharedViewFields } from './saved-view-access';
 
 /** Which report a saved view belongs to. One table serves them all. */
 export const REPORT_KEY = 'iphone-sync';
@@ -251,7 +252,8 @@ export function parseMetric(raw: unknown): ViewMetric {
 // ─── The view itself ─────────────────────────────────────────────
 
 /** A row of `report_saved_views`, already parsed. */
-export interface ReportSavedView {
+/** BACKLOG-4087: `SharedViewFields` = the caller's access (saved-view-access.ts). */
+export interface ReportSavedView extends SharedViewFields {
   id: string;
   name: string;
   filters: RunFilters;
@@ -270,14 +272,16 @@ export function parseSavedView(raw: unknown): ReportSavedView | null {
   const row = raw as Record<string, unknown>;
   if (typeof row.id !== 'string' || row.id.length === 0) return null;
   const { filters, stalledOnly } = parseStoredFilters(row.filters);
+  const access = parseViewAccess(row);
   return {
     id: row.id,
     name: typeof row.name === 'string' && row.name.length > 0 ? row.name : 'Untitled view',
     filters,
     stalledOnly,
     metric: parseMetric(row.metric),
-    pinned: row.pinned === true,
-    isDefault: row.is_default === true,
+    pinned: access.pinned,
+    isDefault: access.isDefault,
+    ...viewAccessFields(access),
     period: parseViewPeriod(
       row.filters != null && typeof row.filters === 'object'
         ? (row.filters as Record<string, unknown>).period
@@ -293,7 +297,8 @@ export function parseSavedViews(raw: unknown): ReportSavedView[] {
 }
 
 export function pinnedViews(views: ReportSavedView[]): ReportSavedView[] {
-  return views.filter((v) => v.pinned).slice(0, MAX_PINNED);
+  // Own views only (BACKLOG-4087): a shared view is never one of the user's cards.
+  return views.filter((v) => v.pinned && isOwnView(v)).slice(0, MAX_PINNED);
 }
 
 /** True when pinning one more would exceed the cap. */

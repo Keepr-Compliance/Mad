@@ -1,5 +1,6 @@
-import { getAuthenticatedUser } from '@/lib/supabase/server';
-import { redirect } from 'next/navigation';
+import { requireReportAccess } from '@/lib/reports/report-gate';
+import { ReportAccessProvider } from '@/lib/reports/report-access-context';
+import { ReportShareButton } from '@/components/reports/ReportShareButton';
 import Link from 'next/link';
 import { ChevronLeft, Filter } from 'lucide-react';
 import { computeFunnel } from '@/lib/funnel-analytics';
@@ -16,7 +17,7 @@ export const dynamic = 'force-dynamic';
 /**
  * Paywall Funnel report — Admin Portal (BACKLOG-2014, report kit BACKLOG-3722)
  *
- * Server component: authorises (internal role + analytics.view), resolves the
+ * Server component: authorises (internal role + report access, BACKLOG-4144), resolves the
  * funnel's own period, reads the funnel events from `analytics_events` —
  * paged — and hands the `computeFunnel` result to the client shell, so the
  * founder can tell a PRICE problem (drop at unlock clicked -> payment) from
@@ -28,31 +29,7 @@ export default async function FunnelPage({
 }: {
   searchParams: Promise<ParamRecord>;
 }) {
-  const { supabase, user } = await getAuthenticatedUser();
-
-  if (!user) {
-    redirect('/login');
-  }
-
-  // Verify internal role.
-  const { data: internalRole } = await supabase
-    .from('internal_roles')
-    .select('role_id')
-    .eq('user_id', user.id)
-    .single();
-
-  if (!internalRole) {
-    redirect('/login?error=not_authorized');
-  }
-
-  // Defense-in-depth: verify page-level permission (reuses analytics.view).
-  const { data: hasPerm } = await supabase.rpc('has_permission', {
-    check_user_id: user.id,
-    required_permission: 'analytics.view',
-  });
-  if (!hasPerm) {
-    redirect('/dashboard?error=insufficient_permissions');
-  }
+  const { supabase, access } = await requireReportAccess(FUNNEL_REPORT_KEY);
 
   const params = await searchParams;
   // A bare URL opens the user's default view (its time range); any period
@@ -72,34 +49,39 @@ export default async function FunnelPage({
   const funnel = computeFunnel(events.rows);
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6">
-      <div>
-        <Link
-          href={REPORTS_BASE_PATH}
-          className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"
-        >
-          <ChevronLeft className="h-4 w-4" />
-          All reports
-        </Link>
-        <div className="mt-2 flex items-center gap-3">
-          <Filter className="h-7 w-7 text-primary-600" />
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">Paywall Funnel</h1>
-            <p className="text-sm text-gray-500">
-              Paywall viewed &rarr; unlock clicked &rarr; payment succeeded &rarr; export completed. Where do
-              users drop off?
-            </p>
+    <ReportAccessProvider reportKey={FUNNEL_REPORT_KEY} title="Paywall Funnel" access={access}>
+      <div className="max-w-5xl mx-auto space-y-6">
+        <div>
+          <Link
+            href={REPORTS_BASE_PATH}
+            className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"
+          >
+            <ChevronLeft className="h-4 w-4" />
+            All reports
+          </Link>
+          <div className="mt-2 flex items-center gap-3">
+            <Filter className="h-7 w-7 text-primary-600" />
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900">Paywall Funnel</h1>
+              <p className="text-sm text-gray-500">
+                Paywall viewed &rarr; unlock clicked &rarr; payment succeeded &rarr; export completed. Where do
+                users drop off?
+              </p>
+            </div>
+            <div className="ml-auto">
+              <ReportShareButton />
+            </div>
           </div>
         </div>
-      </div>
 
-      <FunnelReportClient
-        funnel={funnel}
-        period={period}
-        failed={events.failed}
-        truncated={events.truncated}
-        rowCap={PAGE_SIZE * MAX_PAGES}
-      />
-    </div>
+        <FunnelReportClient
+          funnel={funnel}
+          period={period}
+          failed={events.failed}
+          truncated={events.truncated}
+          rowCap={PAGE_SIZE * MAX_PAGES}
+        />
+      </div>
+    </ReportAccessProvider>
   );
 }

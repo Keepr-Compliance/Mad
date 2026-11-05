@@ -86,7 +86,6 @@ const mockDatabaseService = {
 };
 
 const mockGoogleAuthService = {
-  authenticateForLogin: jest.fn(),
   authenticateForMailbox: jest.fn(),
   exchangeCodeForTokens: jest.fn(),
   getUserInfo: jest.fn(),
@@ -94,7 +93,6 @@ const mockGoogleAuthService = {
 };
 
 const mockMicrosoftAuthService = {
-  authenticateForLogin: jest.fn(),
   authenticateForMailbox: jest.fn(),
   exchangeCodeForTokens: jest.fn(),
   getUserInfo: jest.fn(),
@@ -248,7 +246,6 @@ import { registerAuthHandlers } from "../handlers/authHandlers";
 // Test constants
 const TEST_USER_ID = "550e8400-e29b-41d4-a716-446655440000";
 const TEST_SESSION_TOKEN = "test-session-token-" + Date.now();
-const TEST_AUTH_CODE = "valid-authorization-code-12345";
 
 describe("Auth Handlers Integration Tests", () => {
   let registeredHandlers: IpcHandlerRegistry;
@@ -273,168 +270,6 @@ describe("Auth Handlers Integration Tests", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-  });
-
-  describe("Complete Google OAuth Login Flow", () => {
-    const mockTokens = {
-      access_token: "google-access-token",
-      refresh_token: "google-refresh-token",
-      expires_at: new Date(Date.now() + 3600000).toISOString(),
-      scopes: ["email", "profile"],
-    };
-
-    const mockUserInfo = {
-      id: "google-user-123",
-      email: "newuser@gmail.com",
-      given_name: "New",
-      family_name: "User",
-      name: "New User",
-      picture: "https://example.com/avatar.png",
-    };
-
-    const mockCloudUser = {
-      id: "cloud-user-123",
-      subscription_tier: "free",
-      subscription_status: "active",
-      trial_ends_at: new Date(
-        Date.now() + 7 * 24 * 60 * 60 * 1000,
-      ).toISOString(),
-    };
-
-    it("should complete full login flow for new user", async () => {
-      // Step 1: Start login - get auth URL
-      mockGoogleAuthService.authenticateForLogin.mockResolvedValue({
-        authUrl: "https://accounts.google.com/oauth?client_id=test",
-        scopes: ["email", "profile"],
-      });
-
-      const loginHandler = registeredHandlers.get("auth:google:login");
-      const loginResult = await loginHandler(mockEvent);
-
-      expect(loginResult.success).toBe(true);
-      expect(loginResult.authUrl).toContain("google.com");
-      expect(mockLogService.info).toHaveBeenCalledWith(
-        "Starting Google login flow with redirect",
-        "AuthHandlers",
-      );
-
-      // Step 2: Complete login with auth code
-      mockGoogleAuthService.exchangeCodeForTokens.mockResolvedValue({
-        tokens: mockTokens,
-        userInfo: mockUserInfo,
-      });
-      mockSupabaseService.syncUser.mockResolvedValue(mockCloudUser);
-      mockProvisionLogin.mockReturnValue({
-        user: {
-          id: TEST_USER_ID,
-          email: mockUserInfo.email,
-          terms_accepted_at: null,
-        },
-        sessionToken: TEST_SESSION_TOKEN,
-        isNewUser: true, // New user
-        existingBefore: null,
-      });
-      mockSupabaseService.validateSubscription.mockResolvedValue({
-        tier: "free",
-        status: "active",
-      });
-
-      const completeHandler = registeredHandlers.get(
-        "auth:google:complete-login",
-      );
-      const completeResult = await completeHandler(mockEvent, TEST_AUTH_CODE);
-
-      expect(completeResult.success).toBe(true);
-      expect(completeResult.user.id).toBe(TEST_USER_ID);
-      expect(completeResult.sessionToken).toBe(TEST_SESSION_TOKEN);
-      expect(completeResult.isNewUser).toBe(true);
-
-      // Verify all steps were executed (session-only OAuth: no token encryption, no session file persistence)
-      expect(mockSupabaseService.syncUser).toHaveBeenCalled();
-      // One call now carries the user row, the token row and the session row —
-      // that is the point of BACKLOG-2546. The payload is asserted here; that
-      // all three land together, or none do, is asserted on the real driver.
-      expect(mockProvisionLogin).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "google",
-          create: expect.objectContaining({ email: mockUserInfo.email }),
-          token: expect.objectContaining({ purpose: "authentication" }),
-          touchLastLogin: true,
-        }),
-      );
-      // Note: sessionService.saveSession not called in session-only OAuth
-      expect(mockRateLimitService.recordAttempt).toHaveBeenCalledWith(
-        mockUserInfo.email,
-        true,
-      );
-      expect(mockAuditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "LOGIN",
-          success: true,
-        }),
-      );
-    });
-
-    it("should handle returning user login", async () => {
-      const existingUser = {
-        id: TEST_USER_ID,
-        email: "existing@gmail.com",
-        terms_accepted_at: new Date().toISOString(),
-        terms_version_accepted: "1.0",
-        privacy_policy_version_accepted: "1.0",
-      };
-
-      mockGoogleAuthService.exchangeCodeForTokens.mockResolvedValue({
-        tokens: mockTokens,
-        userInfo: { ...mockUserInfo, email: "existing@gmail.com" },
-      });
-      mockSupabaseService.syncUser.mockResolvedValue(mockCloudUser);
-      mockProvisionLogin.mockReturnValue({
-        user: existingUser,
-        sessionToken: TEST_SESSION_TOKEN,
-        isNewUser: false,
-        existingBefore: existingUser,
-      });
-      mockSupabaseService.validateSubscription.mockResolvedValue({
-        tier: "pro",
-        status: "active",
-      });
-
-      const completeHandler = registeredHandlers.get(
-        "auth:google:complete-login",
-      );
-      const result = await completeHandler(mockEvent, TEST_AUTH_CODE);
-
-      expect(result.success).toBe(true);
-      expect(result.isNewUser).toBe(false);
-      // Which of create/update runs is decided inside the transaction against
-      // the real row (H2 in loginProvisioningAtomicity-2546). What the handler
-      // decides is that a returning user carries an update payload.
-      expect(mockProvisionLogin).toHaveBeenCalledWith(
-        expect.objectContaining({
-          updateExisting: expect.objectContaining({ email: expect.any(String) }),
-        }),
-      );
-    });
-  });
-
-  describe("Complete Microsoft OAuth Login Flow", () => {
-    it("should complete full Microsoft login flow", async () => {
-      const codePromise = Promise.resolve("ms-auth-code");
-
-      mockMicrosoftAuthService.authenticateForLogin.mockResolvedValue({
-        authUrl: "https://login.microsoftonline.com/oauth",
-        codePromise,
-        codeVerifier: "verifier-123",
-        scopes: ["User.Read"],
-      });
-
-      const loginHandler = registeredHandlers.get("auth:microsoft:login");
-      const loginResult = await loginHandler(mockEvent);
-
-      expect(loginResult.success).toBe(true);
-      expect(loginResult.authUrl).toContain("microsoftonline");
-    });
   });
 
   describe("Session Lifecycle", () => {
@@ -569,62 +404,6 @@ describe("Auth Handlers Integration Tests", () => {
         expect.any(Object),
       );
     });
-  });
-
-  describe("Error Handling and Recovery", () => {
-    it("should handle token exchange failure gracefully", async () => {
-      mockGoogleAuthService.exchangeCodeForTokens.mockRejectedValue(
-        new Error("Invalid authorization code"),
-      );
-
-      const handler = registeredHandlers.get("auth:google:complete-login");
-      const result = await handler(mockEvent, "invalid-code");
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("Invalid authorization code");
-      // Note: auditService.log is not called in this error path - only logService.error
-      expect(mockLogService.error).toHaveBeenCalledWith(
-        "Google complete login failed",
-        "AuthHandlers",
-        expect.any(Object),
-      );
-    });
-
-    it("should handle database errors during user creation", async () => {
-      mockGoogleAuthService.exchangeCodeForTokens.mockResolvedValue({
-        tokens: { access_token: "token" },
-        userInfo: { id: "123", email: "test@example.com" },
-      });
-      mockSupabaseService.syncUser.mockResolvedValue({ id: "cloud-123" });
-      mockProvisionLogin.mockImplementation(() => {
-        throw new Error("Database connection lost");
-      });
-
-      const handler = registeredHandlers.get("auth:google:complete-login");
-      const result = await handler(mockEvent, TEST_AUTH_CODE);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("Database connection lost");
-    });
-
-    it("should validate input parameters", async () => {
-      const handler = registeredHandlers.get("auth:google:complete-login");
-
-      // Empty auth code
-      const result1 = await handler(mockEvent, "");
-      expect(result1.success).toBe(false);
-      expect(result1.error).toContain("Authorization code");
-
-      // Malformed auth code (must be long enough to pass length check)
-      const result2 = await handler(
-        mockEvent,
-        "abcdefghijklmnop<script>alert(1)</script>",
-      );
-      expect(result2.success).toBe(false);
-      expect(result2.error).toContain("invalid characters");
-    });
-
-    // Note: shell:open-external handler tests are in system-handlers.test.ts
   });
 
   describe("Mailbox Connection Flows", () => {

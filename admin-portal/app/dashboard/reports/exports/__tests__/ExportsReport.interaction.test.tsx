@@ -177,4 +177,22 @@ describe('saved views', () => {
       pinned: true,
     });
   });
+
+  it('4132 "Save current view" saves the same view unpinned', async () => {
+    const api = fakeApi([]);
+    mount(api);
+    pick('Format', 'PDF');
+    fireEvent.click(screen.getByRole('button', { name: /^Views/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Save current view' }));
+    fireEvent.change(screen.getByLabelText('View name'), { target: { value: 'PDF list' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save view' }));
+    await waitFor(() => expect(api.save).toHaveBeenCalledTimes(1));
+    expect(api.save.mock.calls[0][0]).toEqual({
+      reportKey: 'exports',
+      name: 'PDF list',
+      filters: { orgs: [], users: [], formats: ['pdf'], search: '', period: { key: 'custom', from: '2026-10-12', to: '2026-10-18' } },
+      metric: { col: 'exports', fn: 'count' },
+      pinned: false,
+    });
+  });
 });

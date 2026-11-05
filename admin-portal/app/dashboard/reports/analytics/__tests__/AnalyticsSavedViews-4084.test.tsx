@@ -39,4 +39,5 @@ runPeriodOnlyViewsSuite({
   other: { key: '7', period: resolveAnalyticsPeriod({ period: '7' }, NOW), url: '?period=7' },
   defaultKey: 'all',
   foreign: { key: 'custom', from: '2026-10-01', to: '2026-10-10' },
+  builtInUrl: '?period=30',
 });
