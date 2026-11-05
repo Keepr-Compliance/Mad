@@ -79,7 +79,6 @@ jest.mock("axios");
 jest.mock("../services/googleAuthService", () => ({
   __esModule: true,
   default: {
-    authenticateForLogin: jest.fn(),
     authenticateForMailbox: jest.fn(),
     exchangeCodeForTokens: jest.fn(),
     getUserInfo: jest.fn(),
@@ -93,7 +92,6 @@ jest.mock("../services/googleAuthService", () => ({
 jest.mock("../services/microsoftAuthService", () => ({
   __esModule: true,
   default: {
-    authenticateForLogin: jest.fn(),
     authenticateForMailbox: jest.fn(),
     exchangeCodeForTokens: jest.fn(),
     getUserInfo: jest.fn(),
@@ -318,6 +316,11 @@ describe("BACKLOG-3888: recording the connected email provider", () => {
       (c) => c[0] === `${provider}:mailbox-connected`,
     )?.[1];
   }
+
+  it("Google connect hands the PKCE verifier from authenticateForMailbox to the code exchange (BACKLOG-4103)", async () => {
+    await connect("google");
+    expect(mockGoogleAuthService.exchangeCodeForTokens).toHaveBeenCalledWith("google-auth-code", "verifier-123");
+  });
 
   it('Outlook connect writes ["outlook"]; then Gmail -> ["outlook","gmail"]; a duplicate leaves it unchanged', async () => {
     await connect("microsoft");

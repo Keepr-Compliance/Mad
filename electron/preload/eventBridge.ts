@@ -11,38 +11,6 @@ import type {
 } from "../types/ipc";
 
 export const eventBridge = {
-  /**
-   * Listens for Google login completion events
-   * @param callback - Callback function to handle login result
-   * @returns Cleanup function to remove listener
-   */
-  onGoogleLoginComplete: (callback: (result: unknown) => void) => {
-    const listener = (_: IpcRendererEvent, result: unknown) => callback(result);
-    ipcRenderer.on("google:login-complete", listener);
-    return () => ipcRenderer.removeListener("google:login-complete", listener);
-  },
-
-  /**
-   * Listens for Google login pending events (OAuth succeeded, needs keychain setup)
-   * @param callback - Callback function to handle pending login data
-   * @returns Cleanup function to remove listener
-   */
-  onGoogleLoginPending: (callback: (result: unknown) => void) => {
-    const listener = (_: IpcRendererEvent, result: unknown) => callback(result);
-    ipcRenderer.on("google:login-pending", listener);
-    return () => ipcRenderer.removeListener("google:login-pending", listener);
-  },
-
-  /**
-   * Listens for Google login cancelled events (user closed popup)
-   * @param callback - Callback function to handle cancellation
-   * @returns Cleanup function to remove listener
-   */
-  onGoogleLoginCancelled: (callback: () => void) => {
-    const listener = () => callback();
-    ipcRenderer.on("google:login-cancelled", listener);
-    return () => ipcRenderer.removeListener("google:login-cancelled", listener);
-  },
 
   /**
    * Listens for Google mailbox connection events
@@ -66,42 +34,6 @@ export const eventBridge = {
     ipcRenderer.on("google:mailbox-cancelled", listener);
     return () =>
       ipcRenderer.removeListener("google:mailbox-cancelled", listener);
-  },
-
-  /**
-   * Listens for Microsoft login completion events
-   * @param callback - Callback function to handle login result
-   * @returns Cleanup function to remove listener
-   */
-  onMicrosoftLoginComplete: (callback: (result: unknown) => void) => {
-    const listener = (_: IpcRendererEvent, result: unknown) => callback(result);
-    ipcRenderer.on("microsoft:login-complete", listener);
-    return () =>
-      ipcRenderer.removeListener("microsoft:login-complete", listener);
-  },
-
-  /**
-   * Listens for Microsoft login pending events (OAuth succeeded, needs keychain setup)
-   * @param callback - Callback function to handle pending login data
-   * @returns Cleanup function to remove listener
-   */
-  onMicrosoftLoginPending: (callback: (result: unknown) => void) => {
-    const listener = (_: IpcRendererEvent, result: unknown) => callback(result);
-    ipcRenderer.on("microsoft:login-pending", listener);
-    return () =>
-      ipcRenderer.removeListener("microsoft:login-pending", listener);
-  },
-
-  /**
-   * Listens for Microsoft login cancelled events (user closed popup)
-   * @param callback - Callback function to handle cancellation
-   * @returns Cleanup function to remove listener
-   */
-  onMicrosoftLoginCancelled: (callback: () => void) => {
-    const listener = () => callback();
-    ipcRenderer.on("microsoft:login-cancelled", listener);
-    return () =>
-      ipcRenderer.removeListener("microsoft:login-cancelled", listener);
   },
 
   /**
