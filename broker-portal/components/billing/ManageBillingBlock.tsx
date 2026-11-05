@@ -19,6 +19,7 @@ import { BillingBlock } from './BillingBlock';
 import { ManageBillingButton } from './ManageBillingButton';
 import { OrgInvoicesTable } from './OrgInvoicesTable';
 import { ViewAllInvoicesLink } from './ViewAllInvoicesLink';
+import { TOUCH_LINK } from './touch';
 import type { OrgInvoiceRow } from '@/lib/billing/orgInvoices';
 
 export const INVOICES_HELP_HREF = '/guides/invoices';
@@ -44,7 +45,7 @@ export function ManageBillingBlock({ unavailable, invoices }: { unavailable?: bo
         <ManageBillingButton />
       </div>
       <p className="mt-3 text-sm">
-        <Link href={INVOICES_HELP_HREF} className="font-medium text-indigo-700 hover:underline">
+        <Link href={INVOICES_HELP_HREF} className={`font-medium text-indigo-700 hover:underline ${TOUCH_LINK}`}>
           Where do I find my invoices?
         </Link>
       </p>

@@ -35,6 +35,14 @@ export interface LicenseInfo {
    * export. Anything branching on license CLASS must treat `false` as unknown.
    */
   sessionBacked: boolean;
+  /**
+   * BACKLOG-3951 — standing with the brokerage, from main's separate bounded
+   * read. Absent = unknown (no session, read failed, or an older main
+   * process); callers then show no membership message.
+   */
+  membershipStanding?: "licensed" | "unlicensed" | "left_brokerage" | "unknown" | "none";
+  /** BACKLOG-3951 — the brokerage's name, set for "left_brokerage". */
+  membershipOrgName?: string;
 }
 
 /**
@@ -109,6 +117,8 @@ export const licenseService = {
           // it. Default TRUE — treating every answer as unknown would disable
           // Complete outright, which is worse than the bug being fixed.
           sessionBacked: result.sessionBacked !== false,
+          membershipStanding: result.membership?.standing,
+          membershipOrgName: result.membership?.organization_name,
         });
       }
       return errorResult(result.error || "Failed to get license");
@@ -134,6 +144,8 @@ export const licenseService = {
           organization_name: result.license.organization_name,
           // BACKLOG-2885 — see `get`.
           sessionBacked: result.sessionBacked !== false,
+          membershipStanding: result.membership?.standing,
+          membershipOrgName: result.membership?.organization_name,
         });
       }
       return errorResult(result.error || "Failed to refresh license");

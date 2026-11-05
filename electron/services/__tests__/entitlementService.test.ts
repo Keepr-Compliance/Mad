@@ -54,6 +54,9 @@ jest.mock("../supabaseService", () => ({
     // membership" answer the real method returns for an empty result, so
     // every case in this suite stays a non-entitled account.
     getActiveOrganizationMembershipOutcome: jest.fn(async () => ({ status: "none" })),
+    // BACKLOG-3951: unlockWithCredit also reads the membership standing. No
+    // rows = a solo user with no brokerage, so every case here still debits.
+    getMembershipStandingRows: jest.fn(async () => ({ status: "rows", rows: [] })),
   },
 }));
 

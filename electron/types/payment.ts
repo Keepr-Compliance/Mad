@@ -58,6 +58,8 @@ export type ChargeOutcome =
   | "invalid_payment_method"
   | "no_saved_card"
   | "offline"
+  /** BACKLOG-3951: a brokerage member with no license assigned; nothing was charged. */
+  | "not_licensed"
   | "error";
 
 export interface ChargeResult {
