@@ -30,7 +30,8 @@ jobs:
   # Build and release for macOS
   release-macos:
     name: Release macOS
-    runs-on: macos-latest
+    # BACKLOG-3198: pinned label; must equal .github/macos-runner.json "label".
+    runs-on: macos-26
     # BACKLOG-3927: a Store run builds Windows only.
     if: inputs.channel != 'store'
 
@@ -42,6 +43,11 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22.23.4'
+
+      # BACKLOG-3198: the OS inside a pinned label still moves. Refuse to sign
+      # on a macOS version nobody has recorded; moving it is a PR.
+      - name: Assert macOS runner matches the recorded version
+        run: node scripts/ci/check-macos-runner.mjs --host
 
       - name: Install dependencies
         run: npm install

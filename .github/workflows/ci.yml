@@ -207,7 +207,9 @@ jobs:
     name: Test & Lint (${{ matrix.os }})
     needs: check-changes
     if: needs.check-changes.outputs.docs-only != 'true'
-    runs-on: ${{ matrix.os }}
+    # BACKLOG-3198: matrix value stays macos-latest (it names the required check);
+    # the runner is the pinned label in .github/macos-runner.json.
+    runs-on: ${{ matrix.os == 'macos-latest' && 'macos-26' || matrix.os }}
     timeout-minutes: 60  # Windows test runs took 37-44 min in Nov 2026 and hit 45 (BACKLOG-4115 pre.3 PR); 30 cancelled them earlier (BACKLOG-3794)
 
     strategy:
@@ -225,6 +227,11 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
+
+      # BACKLOG-3198: warn (not fail) when the OS inside the pinned label moved.
+      - name: Report macOS runner drift
+        if: matrix.os == 'macos-latest'
+        run: node scripts/ci/check-macos-runner.mjs --host --warn
 
       - name: Check Node.js version (BACKLOG-4053)
         shell: bash
@@ -519,6 +526,10 @@ jobs:
 
       - name: Assert the packager cannot pack its own output
         run: node scripts/ci/check-package-sanity.mjs --config package.json
+
+      # BACKLOG-3198: every macOS job runs on the pinned label.
+      - name: Assert macOS runners use the pinned label
+        run: node scripts/ci/check-macos-runner.mjs --workflows
 
   # BACKLOG-3814. The iPhone tools in resources/win/libimobiledevice are the signed
   # copies from the 2.40.0 installer, shipped byte-for-byte every release. This job
@@ -947,7 +958,9 @@ jobs:
 
   build:
     name: Build Application
-    runs-on: ${{ matrix.os }}
+    # BACKLOG-3198: matrix value stays macos-latest (it names the required check);
+    # the runner is the pinned label in .github/macos-runner.json.
+    runs-on: ${{ matrix.os == 'macos-latest' && 'macos-26' || matrix.os }}
     needs: [check-changes, test]
     if: needs.check-changes.outputs.docs-only != 'true'
 
@@ -1055,7 +1068,9 @@ jobs:
   # Package on main (production) and develop (staging) branches
   package:
     name: Package Application
-    runs-on: ${{ matrix.os }}
+    # BACKLOG-3198: matrix value stays macos-latest (it names the required check);
+    # the runner is the pinned label in .github/macos-runner.json.
+    runs-on: ${{ matrix.os == 'macos-latest' && 'macos-26' || matrix.os }}
     needs: [check-changes, test, build]
     if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop') && needs.check-changes.outputs.docs-only != 'true'
 
