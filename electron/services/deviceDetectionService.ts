@@ -1347,10 +1347,14 @@ export class DeviceDetectionService extends EventEmitter {
    *
    * BACKLOG-3996: the query has a time limit and stops when `options.signal` aborts
    * (Cancel). Either way it resolves null; `onTimeout` says which null was a time-out.
+   *
+   * BACKLOG-4124: `onNoAnswer` says which null was "the phone never answered": the
+   * tool exited 0 without writing a single byte (libimobiledevice gave up after its own
+   * receive waits). Still resolves null.
    */
   async getDeviceStorageInfo(
     udid: string,
-    options: { signal?: AbortSignal; onTimeout?: () => void } = {},
+    options: { signal?: AbortSignal; onTimeout?: () => void; onNoAnswer?: () => void } = {},
   ): Promise<DeviceStorageInfo | null> {
     try {
       // SECURITY: Validate UDID before spawning process
@@ -1454,6 +1458,16 @@ export class DeviceDetectionService extends EventEmitter {
             log.warn(`[DeviceDetection] Failed to get storage info: ${stderr}`);
             resolve(null);
             return;
+          }
+
+          // BACKLOG-4124: exit 0 and not one byte of stdout = the phone never answered.
+          // Only reached when the query was not already settled by the time limit or
+          // Cancel (above), and only for exit 0. A prompt answer with nothing usable has
+          // a first byte and is NOT this case.
+          if (firstByteMs === null) {
+            // Not tagged [STORAGE-QUERY]: that tag is one line per close (BACKLOG-3422).
+            log.warn(`[DeviceDetection] Storage query exited 0 with no answer from the phone device=${deviceTag}`);
+            options.onNoAnswer?.();
           }
 
           try {

@@ -140,6 +140,20 @@ interface UseAutoRefreshReturn {
   currentSyncMessage: string | null;
   /** Manually trigger a full refresh */
   triggerRefresh: () => Promise<void>;
+  /**
+   * BACKLOG-2890: true on macOS while the last preferences read failed. Mac
+   * Messages auto-sync is held until a later read succeeds; the dashboard shows
+   * a banner in this state.
+   */
+  messagesSyncHeld: boolean;
+}
+
+/** BACKLOG-2890: what one preferences read produced. */
+interface PreferenceReadOutcome {
+  /** The read threw, or returned no successful result. */
+  failed: boolean;
+  /** The stored import source, when the read succeeded and one is set. */
+  source: ImportSource | null;
 }
 
 const initialSyncOperation: SyncOperation = {
@@ -204,14 +218,20 @@ export function useAutoRefresh({
   // guessed "macos-native" (an Android user on a Mac must not get one Mac
   // Messages run before the read).
   const [importSource, setImportSource] = useState<ImportSource | null>(null);
+  // BACKLOG-2890 (founder, 2026-11-04): a failed or non-success preferences read
+  // is NOT "no choice made". Mac Messages auto-sync is held until a later read
+  // succeeds. Kept apart from importSource, where null still means "nothing
+  // stored" and takes the platform default (importSourcePolicy.ts).
+  const [preferenceReadFailed, setPreferenceReadFailed] = useState(false);
 
-  // Load auto-sync and notification preferences
-  useEffect(() => {
-    if (!userId || !isDatabaseInitialized) return;
-
-    const loadPreference = async () => {
+  /**
+   * Read the preferences once and apply them to state. Returns the outcome so a
+   * caller in the middle of a refresh can act on it before the next render.
+   */
+  const readPreferences = useCallback(
+    async (uid: string): Promise<PreferenceReadOutcome> => {
       try {
-        const result = await window.api.preferences.get(userId);
+        const result = await window.api.preferences.get(uid);
         if (result.success && result.preferences) {
           const prefs = result.preferences as AutoSyncPreferences;
           // Default to true if not set
@@ -221,14 +241,20 @@ export function useAutoRefresh({
           const notifEnabled = prefs.notifications?.enabled !== false;
           setNotificationsEnabled(notifEnabled);
           // BACKLOG-1467: Load import source to gate macOS messages sync
-          if (prefs.messages?.source) {
-            setImportSource(prefs.messages.source);
+          const source = prefs.messages?.source ?? null;
+          if (source) {
+            setImportSource(source);
           }
+          setPreferenceReadFailed(false);
+          return { failed: false, source };
         }
+        setPreferenceReadFailed(true);
+        return { failed: true, source: null };
       } catch (prefsError) {
         // Default to enabled on error
         setAutoSyncEnabled(true);
         setNotificationsEnabled(true);
+        setPreferenceReadFailed(true);
         Sentry.captureException(prefsError, {
           tags: { sync_type: "auto_refresh" },
           level: "warning",
@@ -237,13 +263,26 @@ export function useAutoRefresh({
             error_message: prefsError instanceof Error ? prefsError.message : String(prefsError),
           },
         });
+        return { failed: true, source: null };
+      }
+    },
+    [],
+  );
+
+  // Load auto-sync and notification preferences
+  useEffect(() => {
+    if (!userId || !isDatabaseInitialized) return;
+
+    const loadPreference = async () => {
+      try {
+        await readPreferences(userId);
       } finally {
         setHasLoadedPreference(true);
       }
     };
 
     loadPreference();
-  }, [userId, isDatabaseInitialized]);
+  }, [userId, isDatabaseInitialized, readPreferences]);
 
   /**
    * Run sync via orchestrator.
@@ -259,10 +298,25 @@ export function useAutoRefresh({
       uid: string,
       emailConnected: boolean,
       isAborted?: () => boolean,
+      retryFailedRead = false,
     ): Promise<void> => {
       // Build list of sync types based on platform and permissions
       // Order: Contacts (fast) → Emails (if AI addon) → Messages (slow)
       const typesToSync: SyncType[] = [];
+
+      // BACKLOG-2890: after a failed preferences read, re-read once at the start
+      // of this refresh. The outcome is used directly below: the state set by
+      // the re-read is not visible in this closure until the next render.
+      // Only the triggerRefresh path re-reads. In the dashboard auto-trigger, a
+      // successful re-read changes state, which re-runs that effect and sets its
+      // abort flag, so the run would end before requestSync and sync nothing.
+      let readFailed = preferenceReadFailed;
+      let source = importSource;
+      if (readFailed && retryFailedRead) {
+        const outcome = await readPreferences(uid);
+        readFailed = outcome.failed;
+        source = outcome.source ?? importSource;
+      }
 
       // TASK-2092: Always sync contacts — the orchestrator and IPC handlers
       // have their own internal guards (platform checks, FDA, source preferences).
@@ -305,7 +359,8 @@ export function useAutoRefresh({
       }
       // BACKLOG-1467: skip Mac Messages for another known source (iPhone,
       // Android). BACKLOG-3749: an unknown value never turns it off.
-      if (isMacOS && hasPermissions && hasLoadedPreference && macMessagesSyncOn(importSource)) {
+      // BACKLOG-2890: a failed preferences read holds Mac Messages (only them).
+      if (isMacOS && hasPermissions && hasLoadedPreference && !readFailed && macMessagesSyncOn(source)) {
         typesToSync.push('messages');
       }
 
@@ -314,7 +369,7 @@ export function useAutoRefresh({
         requestSync(typesToSync, uid);
       }
     },
-    [isMacOS, hasPermissions, hasAIAddon, importSource, hasLoadedPreference, requestSync]
+    [isMacOS, hasPermissions, hasAIAddon, importSource, hasLoadedPreference, preferenceReadFailed, readPreferences, requestSync]
   );
 
   /**
@@ -326,7 +381,8 @@ export function useAutoRefresh({
     // stamps it, so an automatic dashboard sync doesn't immediately re-fire on top
     // of a manual one.
     lastAutoSyncAtByUser.set(userId, Date.now());
-    await runAutoRefresh(userId, hasEmailConnected);
+    // BACKLOG-2890: re-read the preferences first if the last read failed.
+    await runAutoRefresh(userId, hasEmailConnected, undefined, true);
   }, [userId, hasEmailConnected, runAutoRefresh]);
 
   // BACKLOG-1559: Reset auto-refresh trigger on login (userId change)
@@ -525,6 +581,7 @@ export function useAutoRefresh({
     isAnySyncing: isRunning,
     currentSyncMessage: null,
     triggerRefresh,
+    messagesSyncHeld: isMacOS && preferenceReadFailed,
   };
 }
 

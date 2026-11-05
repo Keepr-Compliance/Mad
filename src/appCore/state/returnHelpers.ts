@@ -71,6 +71,8 @@ interface PhoneTypeApiReturn {
   selectedPhoneType: "iphone" | "android" | null;
   isLoadingPhoneType: boolean;
   needsDriverSetup: boolean;
+  phoneTypeSaveNotice: string | null;
+  clearPhoneTypeSaveNotice: () => void;
 }
 
 interface AuthFlowReturn {
@@ -139,6 +141,7 @@ interface AutoSyncReturn {
   isAnySyncing: boolean;
   currentSyncMessage: string | null;
   triggerRefresh: () => Promise<void>;
+  messagesSyncHeld: boolean;
 }
 
 // ============================================
@@ -188,6 +191,8 @@ export function constructStateProps(
   | "selectedPhoneType"
   | "isLoadingPhoneType"
   | "needsDriverSetup"
+  | "phoneTypeSaveNotice"
+  | "clearPhoneTypeSaveNotice"
   | "isNewUserFlow"
   | "pendingOAuthData"
   | "pendingOnboardingData"
@@ -199,6 +204,7 @@ export function constructStateProps(
   | "isAnySyncing"
   | "currentSyncMessage"
   | "triggerRefresh"
+  | "messagesSyncHeld"
 > {
   return {
     // Navigation state
@@ -240,6 +246,8 @@ export function constructStateProps(
     selectedPhoneType: phoneTypeApi.selectedPhoneType,
     isLoadingPhoneType: phoneTypeApi.isLoadingPhoneType,
     needsDriverSetup: phoneTypeApi.needsDriverSetup,
+    phoneTypeSaveNotice: phoneTypeApi.phoneTypeSaveNotice,
+    clearPhoneTypeSaveNotice: phoneTypeApi.clearPhoneTypeSaveNotice,
 
     // New user flow state
     isNewUserFlow: auth.isNewUserFlow,
@@ -261,6 +269,7 @@ export function constructStateProps(
     isAnySyncing: autoSync.isAnySyncing,
     currentSyncMessage: autoSync.currentSyncMessage,
     triggerRefresh: autoSync.triggerRefresh,
+    messagesSyncHeld: autoSync.messagesSyncHeld,
   };
 }
 

@@ -132,6 +132,7 @@ export function AppRouter({ app }: AppRouterProps) {
         onSyncAndroid={showAndroidSyncButton ? openAndroidSync : undefined}
         onTourStateChange={setIsTourActive}
         onTriggerRefresh={app.triggerRefresh}
+        messagesSyncHeld={app.messagesSyncHeld}
         onOpenSettings={openSettings}
         onOpenTransaction={openTransactionAt}
         user={currentUser ?? undefined}

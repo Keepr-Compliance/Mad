@@ -63,6 +63,7 @@ import {
 import {
   formatDiskSpaceError,
   formatUnknownBackupSizeError,
+  formatDeviceNoAnswerError,
   formatMissingDriversError,
   formatDriverServiceStoppedError,
   formatStoreAppleDevicesMissingError,
@@ -247,8 +248,25 @@ function snapshotStateForMark(status: BackupStatusReport): MarkSnapshotState {
  * have no usable prior backup to speak of, and each caller decides separately what
  * that means for the state it reports.
  */
-function isUsablePriorBackup(status: BackupStatusReport): boolean {
+export function isUsablePriorBackup(status: BackupStatusReport): boolean {
   return status.state === "present" && status.isComplete;
+}
+
+/**
+ * BACKLOG-2907 / 2938: the ONE mapping from a backup check to `PriorBackupState`.
+ *
+ *   present AND usable      -> "exists"   incremental; no banner
+ *   present AND NOT usable  -> "none"     full transfer; SHOW the banner
+ *   absent                  -> "none"     full transfer; SHOW the banner
+ *   unknown                 -> "unknown"  establishes nothing; claim neither
+ *
+ * BACKLOG-2931: exported so `backup:check-status` (the connect screen, before a sync)
+ * answers with the same value this orchestrator records during the sync. Two screens,
+ * one producer — they cannot disagree.
+ */
+export function toPriorBackupState(status: BackupStatusReport): PriorBackupState {
+  if (status.state === "present") return isUsablePriorBackup(status) ? "exists" : "none";
+  return status.state === "absent" ? "none" : "unknown";
 }
 
 /**
@@ -378,6 +396,18 @@ function estimateSourceFor(basis: PriorBackupBasis): EstimateSource {
  * into four backlog items. Accuracy of the estimate itself is BACKLOG-2896.
  */
 export const SYNC_DISK_POLL_INTERVAL_MS = 5000;
+
+/**
+ * BACKLOG-2897: transfer-phase backup progress reaches the renderer at most this often.
+ *
+ * `backupService` emits one `progress` event per parsed stdout chunk, and each one used
+ * to become a `sync:progress` send and a React render — 10,000 events in, 10,000 sends
+ * out — which is how a full backup made the window stop responding. Time-based, not
+ * count-based: the chunk rate varies by orders of magnitude between batches, so an
+ * every-Nth gate floods in the fast stretches and freezes the bar in the slow ones.
+ * Same rate as the seal pass on the same channel (`backupAtRest.PROGRESS_INTERVAL_MS`).
+ */
+export const BACKUP_PROGRESS_INTERVAL_MS = 1000;
 
 /**
  * BACKLOG-2899: free space the sync will not consume, in bytes.
@@ -839,6 +869,15 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    */
   private lastBackupSync: LastBackupSync | null = null;
 
+  /**
+   * BACKLOG-2897: the transfer-progress throttle. While the timer runs, transfer events
+   * are held (newest wins) and the held one is sent when it fires. A send of any other
+   * progress drops the held value, so a stale transfer figure never lands after it.
+   */
+  private backupProgressTimer: ReturnType<typeof setTimeout> | null = null;
+  private heldBackupProgress: SyncProgress | null = null;
+  private lastSentBackupMessage: string | null = null;
+
   constructor() {
     super();
     this.deviceService = deviceDetectionService;
@@ -881,7 +920,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         );
       }
 
-      this.emitProgress({
+      // BACKLOG-2897: throttled HERE, after the byte count above has seen this event.
+      this.forwardBackupProgress(progress.phase, {
         phase: "backup",
         phaseProgress: calculatedProgress,
         overallProgress: this.calculateOverallProgress(
@@ -1026,6 +1066,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // BACKLOG-2907: a new run must establish its own answer. Without this reset the
     // early progress events of run 2 would carry run 1's prior-backup state.
     this.priorBackup = "unknown";
+    this.clearBackupProgressThrottle();
     this.backupTimelinePhase = "backup";
     this.abortController = new AbortController();
     // BACKLOG-3816: this frame's own cancel token. Read from here on, never through
@@ -1258,8 +1299,9 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       //   absent                  -> "none"     full transfer; SHOW the banner
       //   unknown                 -> "unknown"  establishes nothing; claim neither
       //
-      // `usableAsPriorBackup` is hoisted here and consumed TWICE — by this mapping and
-      // by the BACKLOG-2925 estimate basis below — because the defect this item fixes
+      // One predicate, `isUsablePriorBackup`, answers for this mapping (through
+      // `toPriorBackupState`, which `backup:check-status` also calls — BACKLOG-2931) and
+      // for the BACKLOG-2925 estimate basis below — because the defect this item fixes
       // was two sites answering "is the prior backup any good?" separately. Deriving
       // the condition again at either site is how it returns in a new form;
       // `deviceSyncOrchestrator.usabilityParity-2938.test.ts` pins the two together
@@ -1271,14 +1313,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // user a full transfer.
       const usableAsPriorBackup = isUsablePriorBackup(backupStatus);
 
-      this.priorBackup =
-        backupStatus.state === "present"
-          ? usableAsPriorBackup
-            ? "exists"
-            : "none"
-          : backupStatus.state === "absent"
-            ? "none"
-            : "unknown";
+      this.priorBackup = toPriorBackupState(backupStatus);
 
       // BACKLOG-2914 (FIX 4): RECORDED, NOT INFERRED LATER.
       //
@@ -1631,12 +1666,18 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       // stopped waiting for it), and a query that never answered is stopped at the time
       // limit and ends the sync with its own message.
       let storageQueryTimedOut = false;
+      // BACKLOG-4124: the query exited 0 without one byte from the phone. Used only to
+      // word and record the size-unknown refusal below; it refuses nothing on its own.
+      let storageQueryNoAnswer = false;
       const storageInfoOrCancel = await raceCancel(
         preflightSignal,
         this.deviceService.getDeviceStorageInfo(options.udid, {
           signal: preflightSignal,
           onTimeout: () => {
             storageQueryTimedOut = true;
+          },
+          onNoAnswer: () => {
+            storageQueryNoAnswer = true;
           },
         }),
       );
@@ -1713,7 +1754,17 @@ export class DeviceSyncOrchestrator extends EventEmitter {
         // nothing, and the backup asked for a passcode five seconds later — then
         // unlocking and retrying clears it, and this refusal is self-curing rather
         // than a wall.
-        const userError = formatUnknownBackupSizeError();
+        //
+        // BACKLOG-4124: when the size is unknown BECAUSE the phone never answered the
+        // query, say that and record it as DEVICE_NO_ANSWER. Every other unknown keeps
+        // the BACKUP_SIZE_UNKNOWN message, now with a recorded reason. A measured prior
+        // backup never reaches this branch, so no run that proceeded before is refused.
+        const deviceNoAnswer =
+          storageQueryNoAnswer && estimate.source === "device-storage-unavailable";
+        const reasonCode = deviceNoAnswer ? "DEVICE_NO_ANSWER" : "BACKUP_SIZE_UNKNOWN";
+        const userError = deviceNoAnswer
+          ? formatDeviceNoAnswerError()
+          : formatUnknownBackupSizeError();
         log.warn(
           "[DeviceSyncOrchestrator] Sync refused: backup size could not be determined",
           {
@@ -1721,6 +1772,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             reason: estimate.reason,
             priorBackup: priorBackup.kind,
             storageInfoPresent: storageInfo !== null,
+            reasonCode,
           },
         );
         Sentry.captureMessage("Sync refused: backup size unknown", {
@@ -1729,12 +1781,17 @@ export class DeviceSyncOrchestrator extends EventEmitter {
             service: "sync-orchestrator",
             failure_reason: "backup_size_unknown",
             estimate_source: estimate.source,
+            reason_code: reasonCode,
           },
           extra: {
             reason: estimate.reason,
             priorBackup: priorBackup.kind,
             storageInfoPresent: storageInfo !== null,
           },
+        });
+        syncTimeline.setContext({
+          endedBy: deviceNoAnswer ? "device-no-answer" : "size-unknown",
+          reasonCode,
         });
         this.isRunning = false;
         this.emit("error", { message: userError.description, userError });
@@ -2114,11 +2171,20 @@ export class DeviceSyncOrchestrator extends EventEmitter {
           // disk full) leaves nothing behind. A usable earlier backup is kept.
           await this.removeUnfinishedBackup(options.udid, mayRemoveUnfinishedBackup);
 
-          const isDiskSpaceError = /disk space|no space|ENOSPC|not enough space/i.test(error);
+          // BACKLOG-2950: decided on the classified code, not on the words of the
+          // user-facing sentence, so rewording the copy cannot silence this event.
+          const isDiskSpaceError = backupResult.errorCode === "INSUFFICIENT_SPACE";
           if (isDiskSpaceError) {
+            const deviceErrorCode = backupResult.failureCause?.deviceErrorCode;
             Sentry.captureMessage("Backup failed due to insufficient disk space", {
               level: "error",
-              tags: { service: "sync-orchestrator", failure_reason: "disk_space" },
+              tags: {
+                service: "sync-orchestrator",
+                failure_reason: "disk_space",
+                ...(typeof deviceErrorCode === "number"
+                  ? { device_error_code: String(deviceErrorCode) }
+                  : {}),
+              },
               extra: {
                 estimatedBackupSize: this.estimatedBackupSize,
                 error,
@@ -2185,6 +2251,16 @@ export class DeviceSyncOrchestrator extends EventEmitter {
       if (backupResult.isEncrypted) {
         return this.stopForAppleEncryptedBackup();
       }
+
+      // BACKLOG-2909: the phone is no longer needed from here. Tell the renderer now — it
+      // judges an unplug from the last phase it was sent, and the C-DELTA parse copy below
+      // (every attachment decrypted) can take minutes before the first parsing tick.
+      this.emitProgress({
+        phase: "parsing-contacts",
+        phaseProgress: 0,
+        overallProgress: this.calculateOverallProgress("parsing-contacts", 0),
+        message: "Reading contacts...",
+      });
 
       // BACKLOG-3816 S4-C, C-DELTA: unchanged files are still sealed, so the parsers and
       // the attachment copier read a parse copy (decrypted to userData/at-rest-tmp) -
@@ -2482,6 +2558,8 @@ export class DeviceSyncOrchestrator extends EventEmitter {
 
       return this.errorResult(errorMessage);
     } finally {
+      // BACKLOG-2897: nothing held from the backup is sent after the sync has ended.
+      this.clearBackupProgressThrottle();
       // BACKLOG-3816 S4-C: EVERY non-success end - error, cancel, disconnect, disk
       // guard, watchdog, password failure - seals the chain. Not awaited: a 67 GB seal
       // must not hold the sync's answer; the per-phone lock refuses a new sync until it
@@ -2908,6 +2986,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     // Don't null the controller -- sync() checks signal.aborted at checkpoints
     // and the next sync()/processExistingBackup() call creates a fresh controller.
     this.isRunning = false;
+    this.clearBackupProgressThrottle();
     // Always cancel backup service — even if orchestrator thinks it's not running,
     // the backup process may still be alive (race condition on disconnect/error)
     this.backupService.cancelBackup();
@@ -3039,6 +3118,7 @@ export class DeviceSyncOrchestrator extends EventEmitter {
     this.abortController?.abort();
     this.abortController = null;
     this.isRunning = false;
+    this.clearBackupProgressThrottle();
     this.currentPhase = "idle";
     this.estimatedBackupSize = 0;
   }
@@ -3234,10 +3314,54 @@ export class DeviceSyncOrchestrator extends EventEmitter {
    * Emit a progress event
    */
   private emitProgress(progress: SyncProgress): void {
+    // BACKLOG-2897: whatever is sent now is newer than a held transfer value.
+    this.heldBackupProgress = null;
     // BACKLOG-2907: attached here rather than at each of the ~18 call sites, so
     // no emit can forget it and silently report `undefined` (which the renderer
     // reads as "unknown" — safe, but it would hide the signal for a whole run).
     this.emit("progress", { ...progress, priorBackup: this.priorBackup });
+  }
+
+  /**
+   * BACKLOG-2897: forward one backup progress event, at most one transfer send per
+   * BACKUP_PROGRESS_INTERVAL_MS. Phase changes (any non-`transferring` event) and message
+   * changes are sent at once; within an interval only the newest transfer value is kept
+   * and it is sent when the interval ends.
+   */
+  private forwardBackupProgress(phase: BackupProgress["phase"], progress: SyncProgress): void {
+    if (phase !== "transferring" || progress.message !== this.lastSentBackupMessage) {
+      this.sendBackupProgress(progress);
+      return;
+    }
+    if (this.backupProgressTimer !== null) {
+      this.heldBackupProgress = progress;
+      return;
+    }
+    this.sendBackupProgress(progress);
+  }
+
+  private sendBackupProgress(progress: SyncProgress): void {
+    this.lastSentBackupMessage = progress.message;
+    this.emitProgress(progress);
+    if (this.backupProgressTimer === null) this.armBackupProgressTimer();
+  }
+
+  private armBackupProgressTimer(): void {
+    const timer = setTimeout(() => {
+      this.backupProgressTimer = null;
+      const held = this.heldBackupProgress;
+      if (held) this.sendBackupProgress(held);
+    }, BACKUP_PROGRESS_INTERVAL_MS);
+    timer.unref?.();
+    this.backupProgressTimer = timer;
+  }
+
+  /** BACKLOG-2897: at sync start and end, and on cancel/reset: nothing held survives. */
+  private clearBackupProgressThrottle(): void {
+    if (this.backupProgressTimer !== null) clearTimeout(this.backupProgressTimer);
+    this.backupProgressTimer = null;
+    this.heldBackupProgress = null;
+    this.lastSentBackupMessage = null;
   }
 
   /**

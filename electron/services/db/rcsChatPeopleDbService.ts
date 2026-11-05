@@ -114,8 +114,11 @@ export function clearRcsChatPeople(userId: string): number {
  */
 export function recordRcsThreadName(userId: string, threadId: string, name: string | null): void {
   const db = ensureDb();
-  if (name === null) deleteThreadNamesByIdsSync(db, userId, [threadId]);
-  else db.prepare(UPSERT_THREAD_NAME_SQL).run(userId, threadId, name);
+  if (name === null) {
+    deleteThreadNamesByIdsSync(db, userId, [threadId]);
+  } else {
+    db.prepare(UPSERT_THREAD_NAME_SQL).run(userId, threadId, name);
+  }
 }
 
 /** Clear: every Google Messages thread name (gmweb2-…) of the user. */

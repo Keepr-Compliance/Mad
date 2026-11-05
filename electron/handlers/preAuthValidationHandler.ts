@@ -14,7 +14,7 @@
  * @module handlers/preAuthValidationHandler
  */
 
-import { ipcMain, net } from "electron";
+import { ipcMain } from "electron";
 import sessionService from "../services/sessionService";
 import supabaseService from "../services/supabaseService";
 import { isAuthRetryableFetchError } from "@supabase/supabase-js";
@@ -62,15 +62,9 @@ export async function handlePreAuthValidation(): Promise<PreAuthResult> {
     return { valid: true, noSession: true };
   }
 
-  // Step 2: Check network availability
-  const isOnline = net.isOnline;
-
-  if (!isOnline) {
-    // console.log("[PRE-AUTH] Device is OFFLINE — checking grace period...");
-    return handleOfflineGracePeriod(session.lastServerValidatedAt);
-  }
-
-  // Step 3: Try server-side validation
+  // Step 2: Try server-side validation. There is no network precheck
+  // (BACKLOG-4102): offline, auth-js returns a retryable fetch error and
+  // keepOrRejectOnNetworkError decides.
   // console.log("[PRE-AUTH] Session found. Validating with Supabase server...");
   try {
     // Initialize Supabase client (env vars only, no DB)

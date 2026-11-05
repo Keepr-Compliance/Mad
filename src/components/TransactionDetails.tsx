@@ -111,6 +111,15 @@ interface TransactionDetailsComponentProps {
    * scrolls+highlights the matching email/text card immediately.
    */
   initialHighlight?: HighlightTarget | null;
+  /**
+   * BACKLOG-2890: Mac Messages auto-sync is held because the messages-source
+   * preference could not be read (useAutoRefresh `messagesSyncHeld`).
+   */
+  messagesSyncHeld?: boolean;
+  /** BACKLOG-2890: re-read the preference, then run the normal sync (app.triggerRefresh). */
+  onRetryMessagesRead?: () => void | Promise<void>;
+  /** BACKLOG-2890: open Settings at Messages (app.openSettings("settings-messages")). */
+  onChooseMessagesSource?: () => void;
 }
 
 /**
@@ -127,6 +136,9 @@ function TransactionDetails({
   onShowError,
   initialTab = "overview",
   initialHighlight = null,
+  messagesSyncHeld = false,
+  onRetryMessagesRead,
+  onChooseMessagesSource,
 }: TransactionDetailsComponentProps) {
   // Local state to track transaction - allows updates from edit modal
   // without requiring parent to re-render
@@ -1649,6 +1661,9 @@ function TransactionDetails({
               // BACKLOG-1869: scroll+highlight the card matching the search result.
               highlightTarget={highlightTarget}
               onHighlightConsumed={clearHighlightTarget}
+              messagesSyncHeld={messagesSyncHeld}
+              onRetryMessagesRead={onRetryMessagesRead}
+              onChooseMessagesSource={onChooseMessagesSource}
             />
             </>
           )}

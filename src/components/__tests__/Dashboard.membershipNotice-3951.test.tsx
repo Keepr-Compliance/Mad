@@ -119,6 +119,17 @@ describe("BACKLOG-3951 Dashboard mounts the removed-member notice", () => {
     });
   });
 
+  it("removed member while Messages sync is held: both banners, the 2890 banner first", async () => {
+    await act(async () => {
+      render(<Dashboard {...baseProps} messagesSyncHeld onTriggerRefresh={jest.fn()} />);
+    });
+    const held = screen.getByTestId("messages-held-banner");
+    const notice = screen.getByTestId("membership-notice");
+    expect(held).toHaveTextContent("Messages sync paused");
+    expect(notice).toHaveTextContent("You're no longer part of Fixture Brokerage.");
+    expect(held.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("previously dismissed for this brokerage: not shown on the dashboard", async () => {
     prefs().get.mockResolvedValue({
       success: true,

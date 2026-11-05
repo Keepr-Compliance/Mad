@@ -168,6 +168,11 @@ import {
   executeRecovery,
   type RetryState,
 } from "./services/updaterRetryPolicy";
+// BACKLOG-3469: the Settings auto-download switch drives autoUpdater.autoDownload.
+import {
+  recoveryMayDownload,
+  runStartupUpdateCheck,
+} from "./services/updateDownloadPolicy";
 // Import constants
 import {
   WINDOW_CONFIG,
@@ -1263,15 +1268,21 @@ function createWindow(): void {
         // "error" event → handleUpdaterError → surfaceUpdaterError. These
         // catches ONLY prevent the untagged/unscrubbed duplicate capture.
         // BACKLOG-3927: no feed contact in the Store build.
-        checkForUpdatesUnlessStore(autoUpdater, "startup")
-          ?.then((result) => {
-            result?.downloadPromise?.catch(() => {
+        // BACKLOG-3469: the stored auto-download value is applied BEFORE the
+        // check runs (electron-updater reads autoDownload inside the check).
+        runStartupUpdateCheck(autoUpdater, () =>
+          checkForUpdatesUnlessStore(autoUpdater, "startup")
+            ?.then((result) => {
+              result?.downloadPromise?.catch(() => {
+                /* surfaced via the tagged autoUpdater "error" event */
+              });
+            })
+            .catch(() => {
               /* surfaced via the tagged autoUpdater "error" event */
-            });
-          })
-          .catch(() => {
-            /* surfaced via the tagged autoUpdater "error" event */
-          });
+            }),
+        ).catch(() => {
+          /* surfaced via the tagged autoUpdater "error" event */
+        });
       }, UPDATE_CHECK_DELAY);
     }
   }
@@ -1388,7 +1399,12 @@ function handleUpdaterError(err: Error): void {
   // observable, but the REAL disableDifferentialDownload + downloadUpdate()
   // re-attempt is proven by a mocked-autoUpdater unit test
   // (executeRecovery in updaterRetryPolicy.test.ts).
-  const decision = decideRecovery(errorType, updaterRetryState, updaterDownloadStarted);
+  // BACKLOG-3469: with the auto-download switch off, recovery never downloads.
+  const decision = decideRecovery(
+    errorType,
+    updaterRetryState,
+    recoveryMayDownload(autoUpdater, updaterDownloadStarted),
+  );
   const recovered = executeRecovery(decision, updaterRetryState, autoUpdater, {
     onAttempt: (d) => {
       log.warn(`[AutoUpdater] self-recovery: ${d.reason}`);
@@ -1626,7 +1642,12 @@ app.whenReady().then(async () => {
       },
     });
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("update-available", info);
+      // BACKLOG-3469: tell the renderer whether a download starts by itself
+      // (switch on) or waits for the user's Download click (switch off).
+      mainWindow.webContents.send("update-available", {
+        ...info,
+        autoDownload: autoUpdater.autoDownload,
+      });
     }
   });
 

@@ -8,18 +8,21 @@
  */
 
 import { AuthApiError } from "@supabase/auth-js";
+import { net } from "electron";
 import { handlePreAuthValidation } from "../handlers/preAuthValidationHandler";
 import logService from "../services/logService";
+import { retryableDnsError } from "./helpers/realAuthJsErrors";
 
 // ============================================
 // MOCKS
 // ============================================
 
-// Mock electron net module
+// Mock electron net module. Electron declares `net.isOnline(): boolean` — a
+// FUNCTION (electron.d.ts), so the mock has the same shape (BACKLOG-4102).
 const mockIsOnline = jest.fn();
 jest.mock("electron", () => ({
   ipcMain: { handle: jest.fn() },
-  net: { get isOnline() { return mockIsOnline(); } },
+  net: { isOnline: () => mockIsOnline() },
 }));
 
 // Mock session service
@@ -302,18 +305,29 @@ describe("handlePreAuthValidation", () => {
   // Offline + within grace period
   // ------------------------------------------
 
+  // There is no network precheck (BACKLOG-4102): the server check always runs.
+  // Offline, auth-js RETURNS a retryable fetch error from setSession, and
+  // keepOrRejectOnNetworkError decides (BACKLOG-3768). `mockIsOnline` reports
+  // offline in these cases to show that it does not change the path.
+
   describe("offline, within grace period", () => {
-    it("returns valid when lastServerValidatedAt is within 24h", async () => {
+    it("server check still runs; retryable error within 24h -> valid, not cleared", async () => {
       mockIsOnline.mockReturnValue(false);
       mockLoadSession.mockResolvedValue({
         ...mockSession,
         lastServerValidatedAt: Date.now() - 3600000, // 1 hour ago
       });
+      mockSetSession.mockResolvedValue({
+        data: { session: null, user: null },
+        error: await retryableDnsError(),
+      });
 
       const result = await handlePreAuthValidation();
 
       expect(result).toEqual({ valid: true });
-      expect(mockSetSession).not.toHaveBeenCalled(); // No server calls when offline
+      expect(mockSetSession).toHaveBeenCalledTimes(1);
+      expect(mockClearSession).not.toHaveBeenCalled();
+      expect(mockIsOnline).not.toHaveBeenCalled();
     });
   });
 
@@ -322,28 +336,72 @@ describe("handlePreAuthValidation", () => {
   // ------------------------------------------
 
   describe("offline, expired grace period", () => {
-    it("returns invalid when lastServerValidatedAt is older than 24h", async () => {
+    it("server check still runs; retryable error after 24h -> session cleared, token_invalid", async () => {
       mockIsOnline.mockReturnValue(false);
       mockLoadSession.mockResolvedValue({
         ...mockSession,
         lastServerValidatedAt: Date.now() - 25 * 60 * 60 * 1000, // 25 hours ago
       });
+      mockSetSession.mockResolvedValue({
+        data: { session: null, user: null },
+        error: await retryableDnsError(),
+      });
 
       const result = await handlePreAuthValidation();
 
-      expect(result).toEqual({ valid: false, reason: "offline_grace_expired" });
+      expect(result).toEqual({ valid: false, reason: "token_invalid" });
+      expect(mockSetSession).toHaveBeenCalledTimes(1);
+      expect(mockClearSession).toHaveBeenCalledTimes(1);
     });
 
-    it("returns invalid when lastServerValidatedAt is missing (migration)", async () => {
+    it("server check still runs; retryable error, lastServerValidatedAt missing -> session cleared, token_invalid", async () => {
       mockIsOnline.mockReturnValue(false);
       mockLoadSession.mockResolvedValue({
         ...mockSession,
         lastServerValidatedAt: undefined,
       });
+      mockSetSession.mockResolvedValue({
+        data: { session: null, user: null },
+        error: await retryableDnsError(),
+      });
 
       const result = await handlePreAuthValidation();
 
-      expect(result).toEqual({ valid: false, reason: "offline_grace_expired" });
+      expect(result).toEqual({ valid: false, reason: "token_invalid" });
+      expect(mockSetSession).toHaveBeenCalledTimes(1);
+      expect(mockClearSession).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ------------------------------------------
+  // BACKLOG-4102: no network precheck
+  // ------------------------------------------
+
+  describe("network precheck (BACKLOG-4102)", () => {
+    it("C2: the handler never reads net.isOnline", async () => {
+      // Count every read of the property, whether it is then called or not.
+      const original = Object.getOwnPropertyDescriptor(net, "isOnline");
+      if (!original) throw new Error("mocked net.isOnline is missing");
+      const reads = jest.fn();
+      Object.defineProperty(net, "isOnline", {
+        configurable: true,
+        get() {
+          reads();
+          return original.value;
+        },
+      });
+      mockLoadSession.mockResolvedValue(mockSession);
+      mockSetSession.mockResolvedValue({ error: null });
+      mockGetUser.mockResolvedValue({ data: { user: { id: "user-123" } }, error: null });
+
+      try {
+        const result = await handlePreAuthValidation();
+        expect(result).toEqual({ valid: true });
+      } finally {
+        Object.defineProperty(net, "isOnline", original);
+      }
+
+      expect(reads).not.toHaveBeenCalled();
     });
   });
 

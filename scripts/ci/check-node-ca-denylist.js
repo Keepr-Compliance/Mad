@@ -40,8 +40,10 @@ const EXPECTED_REMOVED = new Set([
  * Denylisted roots present in Electron's bundled store, per bundled Node.
  * An unknown Node fails on purpose: re-measure and add it. A Node that
  * already dropped some of these (upstream 24.22.1+ drops three) changes this.
+ * 24.22.2 (Electron 44.10.2): 118 roots, only emSign Root CA - G1 of the four.
+ * The jest fixture (nodeCaDenylist-4052.test.ts) stays the 44.9.3 store: see BACKLOG-4052.
  */
-const PRESENT_BEFORE = { '22.22.0': 4, '24.22.0': 4 };
+const PRESENT_BEFORE = { '22.22.0': 4, '24.22.0': 4, '24.22.2': 1 };
 
 const fail = (msg) => {
   console.error(`[check-node-ca-denylist] FAIL: ${msg}`);
@@ -97,8 +99,24 @@ const verify = (pems, label) => {
     return `${v.stdout}${v.stderr}`;
   });
 };
-const okBefore = verify(beforePems, 'before');
+// "Verifies before" is only meaningful for chains whose root is in the
+// unfiltered store; a Node that no longer ships that root skips it.
+// "error 20 after" stays required for every chain.
+const crossCert = new crypto.X509Certificate(fs.readFileSync(cross));
+const rootPresent = beforePems.some((pem) => {
+  const root = new crypto.X509Certificate(pem);
+  return crossCert.checkIssued(root) && crossCert.verify(root.publicKey);
+});
+const okBefore = rootPresent ? verify(beforePems, 'before') : [];
+// Independent of checkIssued: the cross-signed G3's issuer is emSign ECC Root CA - G3.
+const CHAIN_ROOT = '86a1ecba089c4a8d3bbe2734c612ba341d813e043cf9e8a862cd5c57a36bbe6b';
+const expectBefore = before.has(CHAIN_ROOT) ? issuing.length : 0;
+if (okBefore.length !== expectBefore) fail(`before-check ran on ${okBefore.length} chains, the store says ${expectBefore}`);
 const okAfter = verify(afterPems, 'after');
 if (!okBefore.every((o) => /: OK\s*$/.test(o))) fail(`a chain did not verify against the unfiltered store:\n${okBefore.join('')}`);
 if (!okAfter.every((o) => /error 20 /.test(o))) fail(`a chain still verifies (or fails differently) after the filter:\n${okAfter.join('')}`);
-console.log(`[check-node-ca-denylist] openssl: ${issuing.length}/${issuing.length} OK before, ${issuing.length}/${issuing.length} error 20 after`);
+console.log(
+  `[check-node-ca-denylist] openssl: ${okBefore.length}/${issuing.length} OK before` +
+    (okBefore.length < issuing.length ? ` (${issuing.length - okBefore.length} skipped: chain root not in the unfiltered store)` : '') +
+    `, ${issuing.length}/${issuing.length} error 20 after`,
+);

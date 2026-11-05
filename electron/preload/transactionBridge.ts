@@ -528,16 +528,6 @@ export const transactionBridge = {
     ipcRenderer.invoke("transactions:restore-removed-email", ignoredCommId, emailId, transactionId),
 
   /**
-   * Auto-links text messages to a transaction based on assigned contacts
-   * Finds SMS/iMessage messages from contacts' phone numbers and creates
-   * communication references linking them to the transaction.
-   * @param transactionId - Transaction ID to link messages to
-   * @returns Auto-link result with counts of linked/skipped messages
-   */
-  autoLinkTexts: (transactionId: string) =>
-    ipcRenderer.invoke("transactions:auto-link-texts", transactionId),
-
-  /**
    * Exports transaction to an organized folder structure
    * Creates: Summary_Report.pdf, emails/, texts/, attachments/
    * @param transactionId - Transaction ID to export
