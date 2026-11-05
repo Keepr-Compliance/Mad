@@ -84,3 +84,84 @@ MUTATION APPLIED numstat=1/0
   + GRANT SELECT ON public.report_access TO authenticated;
 RESULT total=25 pass=23 fail=2 reds=C4_privileges_catalog,P0_superadmin_nonempty_and_tables_closed
 RESTORED clean=True
+
+# --- fix-up (SR c75f4a5d in pm_comments): C5e + SR1 mode, rollback order header; migration unchanged (md5 f0a08a55) ---
+# fix commit ee7fb0f02 before mutations. 4144 run.sh 26/26, --with-migration 26/26; 4087 28/28 both; 4084 base 19/19
+== ELIG_helper_skips_analytics_view
+MUTATION APPLIED numstat=0/1
+  - WHEN NOT public._report_share_eligible(p_user) THEN NULL
+RESULT total=26 pass=24 fail=2 reds=C3b_role_without_analytics_view_closes,C3c_row_without_analytics_view_closed
+RESTORED clean=True
+== SEED_rows_for_analytics_view_holders
+MUTATION APPLIED numstat=1/0
+  + INSERT INTO public.report_access (report_key, user_id, role) SELECT k.report_key, ir.user_id, 'viewer' FROM public.reports k CROSS JOIN public.interna
+RESULT total=26 pass=23 fail=3 reds=C7a_start_closed_catalog_8,C9b_owner_list_and_candidates,K16_reapply_idempotent_no_seed
+RESTORED clean=True
+== SA_is_super_admin_not_join
+MUTATION APPLIED numstat=1/7
+  - WHEN EXISTS (
+  - SELECT 1
+  - FROM internal_roles ir
+  - JOIN admin_roles ar ON ar.id = ir.role_id
+  - WHERE ir.user_id = p_user
+  - AND ar.is_system
+  - ) THEN 'owner'
+  + WHEN public.is_super_admin(p_user) THEN 'owner'
+RESULT total=26 pass=21 fail=5 reds=C5c_share_candidates_need_access,C8a_editor_shares_own_view,C9b_owner_list_and_candidates,C9c_owner_grant_limits,K10_one_refusal_message
+RESTORED clean=True
+== SHARED1_list_no_access_check
+MUTATION APPLIED numstat=0/1
+  - AND public._report_access_role(v_caller_id, v.report_key) IS NOT NULL
+RESULT total=26 pass=25 fail=1 reds=C5a_list_hides_shared_view_without_access
+RESTORED clean=True
+== SR1_editor_save_keyed_on_p_report_key
+MUTATION APPLIED numstat=1/1
+  - AND public._report_access_role(v_caller_id, v_view_key) IS NOT NULL;
+  + AND public._report_access_role(v_caller_id, p_report_key) IS NOT NULL;
+RESULT total=26 pass=25 fail=1 reds=C5e_editor_save_keyed_on_view_report
+RESTORED clean=True
+== SHARED2_editor_save_no_access_check
+MUTATION APPLIED numstat=1/2
+  - AND public._report_share_eligible(v_owner_id)
+  - AND public._report_access_role(v_caller_id, v_view_key) IS NOT NULL;
+  + AND public._report_share_eligible(v_owner_id);
+RESULT total=26 pass=24 fail=2 reds=C5b_editor_save_needs_access,C5e_editor_save_keyed_on_view_report
+RESTORED clean=True
+== SHARED3_candidates_no_access_check
+MUTATION APPLIED numstat=0/1
+  - AND public._report_access_role(ir.user_id, v_view_key) IS NOT NULL
+RESULT total=26 pass=25 fail=1 reds=C5c_share_candidates_need_access
+RESTORED clean=True
+== SHARED4_share_set_grantee_no_access_check
+MUTATION APPLIED numstat=0/1
+  - AND public._report_access_role(p_user_id, v.report_key) IS NOT NULL
+RESULT total=26 pass=25 fail=1 reds=C5d_share_set_grantee_needs_access
+RESTORED clean=True
+== VIEWER_may_share_views
+MUTATION APPLIED numstat=1/1
+  - AND public._report_access_role(v_caller_id, v.report_key) IN ('editor', 'owner')
+  + AND public._report_access_role(v_caller_id, v.report_key) IS NOT NULL
+RESULT total=26 pass=25 fail=1 reds=C8b_viewer_cannot_share
+RESTORED clean=True
+== NONOWNER_access_set
+MUTATION APPLIED numstat=1/1
+  - IF public._report_access_role(v_caller_id, p_key) IS DISTINCT FROM 'owner'
+  + IF public._report_access_role(v_caller_id, p_key) IS NULL
+RESULT total=26 pass=23 fail=3 reds=C9a_editor_cannot_manage_access,C9b_owner_list_and_candidates,K10_one_refusal_message
+RESTORED clean=True
+== LEAK_refusal_message
+MUTATION APPLIED numstat=1/1
+  - RAISE EXCEPTION 'Report not found';
+  + RAISE EXCEPTION 'Only a report owner can list access';
+RESULT total=26 pass=23 fail=3 reds=C9a_editor_cannot_manage_access,C9c_owner_grant_limits,K10_one_refusal_message
+RESTORED clean=True
+== HELPER_execute_granted
+MUTATION APPLIED numstat=1/0
+  + GRANT EXECUTE ON FUNCTION public._report_access_role(UUID, TEXT) TO authenticated;
+RESULT total=26 pass=24 fail=2 reds=C4_privileges_catalog,K13_anon_non_internal_helper_refused
+RESTORED clean=True
+== TABLE_select_granted
+MUTATION APPLIED numstat=1/0
+  + GRANT SELECT ON public.report_access TO authenticated;
+RESULT total=26 pass=24 fail=2 reds=C4_privileges_catalog,P0_superadmin_nonempty_and_tables_closed
+RESTORED clean=True
