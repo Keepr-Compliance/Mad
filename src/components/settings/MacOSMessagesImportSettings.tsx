@@ -23,6 +23,7 @@ import { ImportInfoPopover } from "./ImportInfoPopover";
 // contradicted each other on the founder's machine (2026-08-22).
 import {
   ImportPlanDialog,
+  describeAttachmentSpaceRefusal,
   type ImportPlanDialogReason,
   type FittingWindowCandidate,
   type FittingWindowStatus,
@@ -274,6 +275,12 @@ export function MacOSMessagesImportSettings({
     /** BACKLOG-2743: non-fatal notice (e.g. attachments skipped for disk space). */
     warning?: string;
     /**
+     * BACKLOG-2883: the import REFUSED to start for disk space. Nothing was
+     * written, so the card must not say "failed" — that is the word for the
+     * mid-write crash this refusal exists to prevent.
+     */
+    refusedForDiskSpace?: boolean;
+    /**
      * BACKLOG-2794: the request met an import already running and joined it.
      * Not a success and not a failure — no counts here mean anything.
      */
@@ -365,6 +372,9 @@ export function MacOSMessagesImportSettings({
     attachmentCount: number;
     availableDiskBytes: number | null;
     fitsOnDisk: boolean;
+    /** BACKLOG-2882: estimate + headroom, from the main-process verdict. */
+    requiredDiskBytes: number | null;
+    diskHeadroomBytes: number | null;
   } | null>(null);
 
   /**
@@ -750,6 +760,8 @@ export function MacOSMessagesImportSettings({
                 // bytes vs available would duplicate the headroom rule and let
                 // the shown number drift from the enforced one.
                 fitsOnDisk: result.fitsOnDisk !== false,
+                requiredDiskBytes: result.requiredDiskBytes ?? null,
+                diskHeadroomBytes: result.diskHeadroomBytes ?? null,
               }
             : null
         );
@@ -1680,9 +1692,12 @@ export function MacOSMessagesImportSettings({
         success: false,
         messagesImported: 0,
         error: safeErrorMessage(messagesItem.error, 'Import failed'),
+        // BACKLOG-2883: typed by the orchestrator from the main process's
+        // `refusedForDiskSpace.phase` — never inferred from the message.
+        refusedForDiskSpace: messagesItem.errorKind === 'disk_space_refused' || undefined,
       });
     }
-  }, [messagesItem?.status, messagesItem?.error, messagesItem?.warning, messagesItem?.importedCount, messagesItem?.cancelled, messagesItem?.rolledBack, messagesItem?.coalesced]);
+  }, [messagesItem?.status, messagesItem?.error, messagesItem?.errorKind, messagesItem?.warning, messagesItem?.importedCount, messagesItem?.cancelled, messagesItem?.rolledBack, messagesItem?.coalesced]);
 
   // BACKLOG-2748: the "Cancelling..." state is cleared when the run leaves
   // 'running' — otherwise the NEXT import would render its Cancel button
@@ -2159,12 +2174,21 @@ export function MacOSMessagesImportSettings({
         >
           <p className="text-xs text-amber-800 font-medium">
             {/* "up to": the figure is an upper bound by construction — identical
-                files are copied once, and that is not subtracted here. */}
-            This import needs up to {formatGb(sizeEstimate.attachmentBytes)} for attachments
-            {sizeEstimate.availableDiskBytes !== null && (
-              <> but only {formatGb(sizeEstimate.availableDiskBytes)} is available</>
+                files are copied once, and that is not subtracted here.
+                BACKLOG-2882: the sentence states estimate + headroom, the
+                figure the guard compared; see describeAttachmentSpaceRefusal. */}
+            {sizeEstimate.availableDiskBytes !== null &&
+            sizeEstimate.requiredDiskBytes !== null &&
+            sizeEstimate.diskHeadroomBytes !== null ? (
+              describeAttachmentSpaceRefusal({
+                attachmentBytes: sizeEstimate.attachmentBytes,
+                headroomBytes: sizeEstimate.diskHeadroomBytes,
+                requiredBytes: sizeEstimate.requiredDiskBytes,
+                availableBytes: sizeEstimate.availableDiskBytes,
+              })
+            ) : (
+              <>This import needs more free space than is available. It will not start.</>
             )}
-            . It will not start.
           </p>
           <p className="text-xs text-amber-700 mt-1">
             Press Import to see the periods that would fit.
@@ -2177,7 +2201,7 @@ export function MacOSMessagesImportSettings({
         <div
           data-testid="import-result"
           className={`relative mb-3 p-2 pr-7 rounded text-xs ${
-            lastResult.cancelled || lastResult.coalesced
+            lastResult.cancelled || lastResult.coalesced || lastResult.refusedForDiskSpace
               ? "bg-yellow-50 text-yellow-700 border border-yellow-200"
               : lastResult.success
                 ? "bg-green-50 text-green-700 border border-green-200"
@@ -2230,6 +2254,14 @@ export function MacOSMessagesImportSettings({
                 new messages.
               </>
             )
+          ) : lastResult.refusedForDiskSpace ? (
+            // BACKLOG-2883: a refusal, not a failure. The main process's
+            // sentence says what it needs; this says what the user most needs
+            // to know on a full disk — that their library is intact.
+            <span data-testid="import-result-space-refused">
+              Import did not start. {safeErrorMessage(lastResult.error)}{" "}
+              <strong>Nothing was imported and nothing was changed.</strong>
+            </span>
           ) : (
             <>Import failed: {safeErrorMessage(lastResult.error)}</>
           )}
@@ -2310,6 +2342,8 @@ export function MacOSMessagesImportSettings({
             overrides={planFacts?.overrides ?? []}
             attachmentBytes={sizeEstimate?.attachmentBytes ?? null}
             availableDiskBytes={sizeEstimate?.availableDiskBytes ?? null}
+            requiredDiskBytes={sizeEstimate?.requiredDiskBytes ?? null}
+            diskHeadroomBytes={sizeEstimate?.diskHeadroomBytes ?? null}
             fittingWindow={fittingWindow}
             fittingWindowStatus={fittingWindowStatus}
             // The dropdown's own words, so the copy names the setting back to

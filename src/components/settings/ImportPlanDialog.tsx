@@ -59,6 +59,7 @@ import { ResponsiveModal } from "../common/ResponsiveModal";
 // override list is the resolver's own type, so a new override kind becomes a
 // compile-time fact here rather than a silently-unrendered case.
 import type { ImportPlanOverride } from "@electron/types/ipc/window-api-messages";
+import { formatGb, describeAttachmentSpaceRefusal } from "../../utils/diskSpaceCopy";
 
 /**
  * Why the dialog is open.
@@ -153,6 +154,10 @@ export interface ImportPlanDialogProps {
   attachmentBytes: number | null;
   /** Free space available to the app; null when unreadable. */
   availableDiskBytes: number | null;
+  /** BACKLOG-2882: attachments + headroom, the figure the guard compared. */
+  requiredDiskBytes: number | null;
+  /** BACKLOG-2882: the headroom inside `requiredDiskBytes`. */
+  diskHeadroomBytes: number | null;
   /** The largest preset window that fits, once known. */
   fittingWindow: FittingWindowCandidate | null;
   fittingWindowStatus: FittingWindowStatus;
@@ -194,20 +199,10 @@ export interface ImportPlanDialogProps {
   onCancel: () => void;
 }
 
-/**
- * Plain size formatting — real numbers, no adjectives.
- *
- * Transcribed from `MacOSMessagesImportSettings`'s `formatGb` rather than
- * re-derived, so the dialog and the panel behind it round identically. Three
- * suites assert the panel's exact strings ("61.3 GB", "2.6 GB"), and a dialog
- * that rounded differently would put two spellings of one number on screen.
- */
-export function formatGb(bytes: number): string {
-  const gb = bytes / 1e9;
-  if (gb < 0.1) return `${Math.max(1, Math.round(bytes / 1e6))} MB`;
-  return `${gb.toFixed(1)} GB`;
-}
-
+// BACKLOG-2882: the size formatter and the refusal sentence live in
+// src/utils/diskSpaceCopy so the sync orchestrator's warning shares them.
+export { formatGb, describeAttachmentSpaceRefusal } from "../../utils/diskSpaceCopy";
+export type { AttachmentSpaceRefusalFacts } from "../../utils/diskSpaceCopy";
 /**
  * The pre-import dialog.
  *
@@ -224,6 +219,8 @@ export function ImportPlanDialog({
   overrides,
   attachmentBytes,
   availableDiskBytes,
+  requiredDiskBytes,
+  diskHeadroomBytes,
   fittingWindow,
   fittingWindowStatus,
   rangeLabel,
@@ -428,13 +425,20 @@ export function ImportPlanDialog({
               figure is an upper bound by construction — identical files are
               copied once, and that is not subtracted here. */}
           <p className="text-sm text-gray-800 font-medium mb-2">
-            This import needs up to{" "}
-            {attachmentBytes !== null ? formatGb(attachmentBytes) : "more space"}{" "}
-            for attachments
-            {availableDiskBytes !== null && (
-              <> but only {formatGb(availableDiskBytes)} is available</>
+            {attachmentBytes !== null &&
+            availableDiskBytes !== null &&
+            requiredDiskBytes !== null &&
+            diskHeadroomBytes !== null ? (
+              describeAttachmentSpaceRefusal({
+                attachmentBytes,
+                headroomBytes: diskHeadroomBytes,
+                requiredBytes: requiredDiskBytes,
+                availableBytes: availableDiskBytes,
+              })
+            ) : (
+              // A number the main process did not send is not invented here.
+              <>This import needs more free space than is available. It will not start.</>
             )}
-            . It will not start.
           </p>
 
           {/* Founder decision 6 (`2259031c`): the refusal computes the way out.

@@ -705,6 +705,10 @@ describe("BACKLOG-2749 — completion reports coverage, not fetch volume", () =>
     attachmentBytes: 61_300_000_000,
     availableDiskBytes: 59_100_000_000,
     fitsOnDisk: false,
+    // BACKLOG-2882: always set by the producer since 2882 — estimate + the
+    // 2 GiB ATTACHMENT_SPACE_HEADROOM_BYTES (electron/utils/diskSpace.ts).
+    requiredDiskBytes: 61_300_000_000 + 2_147_483_648,
+    diskHeadroomBytes: 2_147_483_648,
   };
 
   beforeEach(() => {
@@ -988,6 +992,10 @@ describe("BACKLOG-2749 — the space refusal names a window that fits", () => {
     attachmentBytes: 61_300_000_000,
     availableDiskBytes: 59_100_000_000,
     fitsOnDisk: false,
+    // BACKLOG-2882: always set by the producer since 2882 — estimate + the
+    // 2 GiB ATTACHMENT_SPACE_HEADROOM_BYTES (electron/utils/diskSpace.ts).
+    requiredDiskBytes: 61_300_000_000 + 2_147_483_648,
+    diskHeadroomBytes: 2_147_483_648,
   };
 
   beforeEach(() => {
@@ -1215,6 +1223,10 @@ describe("BACKLOG-2749 — a failed preference write stops the run", () => {
     attachmentBytes: 61_300_000_000,
     availableDiskBytes: 59_100_000_000,
     fitsOnDisk: false,
+    // BACKLOG-2882: always set by the producer since 2882 — estimate + the
+    // 2 GiB ATTACHMENT_SPACE_HEADROOM_BYTES (electron/utils/diskSpace.ts).
+    requiredDiskBytes: 61_300_000_000 + 2_147_483_648,
+    diskHeadroomBytes: 2_147_483_648,
   };
 
   beforeEach(() => {

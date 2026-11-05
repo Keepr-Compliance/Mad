@@ -24,6 +24,7 @@ import { DATA_EXPORT_NOT_RECORDED_MESSAGE } from '../utils/exportAuditCopy';
 // the renderer-main boundary.
 import type { AttachmentsRefusedForSpace } from '@electron/types/ipc/window-api-messages';
 import { macMessagesSyncOn } from './importSourcePolicy';
+import { formatGb, formatGbDirected } from '../utils/diskSpaceCopy';
 
 export type SyncType = 'contacts' | 'emails' | 'messages' | 'iphone'
   | 'reindex' | 'backup' | 'restore' | 'ccpa-export'
@@ -198,7 +199,22 @@ export interface SyncItem {
   errorKind?: SyncErrorKind;
 }
 
-export type SyncErrorKind = 'device_disconnected';
+export type SyncErrorKind = 'device_disconnected' | 'disk_space_refused';
+
+/**
+ * BACKLOG-2883: the macOS Messages import REFUSED to start for disk space —
+ * the pre-flight ran before the first write, so nothing was imported and
+ * nothing changed. Thrown instead of a plain Error so the queue item carries
+ * `errorKind: 'disk_space_refused'` and the settings card can say "did not
+ * start" rather than "failed". Discriminated on the main process's typed
+ * `refusedForDiskSpace.phase`, never on the message text.
+ */
+export class DiskSpaceRefusalError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DiskSpaceRefusalError';
+  }
+}
 
 export interface SyncOrchestratorState {
   isRunning: boolean;
@@ -880,6 +896,13 @@ class SyncOrchestratorServiceClass {
             return { coalesced: true };
           }
           if (!result.success) {
+            // BACKLOG-2883: a pre-flight refusal wrote nothing. `"during"` — the
+            // disk filled mid-run — is a real failure and keeps the plain Error.
+            if (result.refusedForDiskSpace?.phase === 'before') {
+              throw new DiskSpaceRefusalError(
+                result.error || 'Not enough free disk space to start the import'
+              );
+            }
             throw new Error(result.error || 'Message import failed');
           }
           onProgress(100);
@@ -928,11 +951,21 @@ class SyncOrchestratorServiceClass {
           // not an error — but it must be SAID, or attachments would go missing
           // with the UI reporting unqualified success.
           if (result.attachmentsRefusedForSpace) {
-            const needGb = result.attachmentsRefusedForSpace.estimatedBytes / 1e9;
-            const haveGb = result.attachmentsRefusedForSpace.availableBytes / 1e9;
+            const refused = result.attachmentsRefusedForSpace;
+            const attachGb = refused.estimatedBytes / 1e9;
+            const haveGb = refused.availableBytes / 1e9;
+            // BACKLOG-2882: state the figure the guard compared (attachments +
+            // headroom). "they need 0.0 GB but only 1.3 GB is free" was the
+            // two-number sentence that cannot produce its own verdict.
+            // Required rounds up and free rounds down, as in the settings
+            // refusal, so the two can never print equal.
             const spaceWarning =
-              `Attachments were not imported: they need ${needGb.toFixed(1)} GB ` +
-              `but only ${haveGb.toFixed(1)} GB is free. Messages imported normally.`;
+              refused.requiredBytes !== undefined && refused.headroomBytes !== undefined
+                ? `Attachments were not imported: they need ${formatGbDirected(refused.requiredBytes, Math.ceil)} of free space ` +
+                  `(${formatGb(refused.estimatedBytes)} for attachments plus ${formatGb(refused.headroomBytes)} kept free) ` +
+                  `but only ${formatGbDirected(refused.availableBytes, Math.floor)} is free. Messages imported normally.`
+                : `Attachments were not imported: they need ${attachGb.toFixed(1)} GB ` +
+                  `but only ${haveGb.toFixed(1)} GB is free. Messages imported normally.`;
             warning = warning ? `${warning} ${spaceWarning}` : spaceWarning;
           }
           return { warning, importedCount: result.messagesImported };
@@ -1620,7 +1653,11 @@ class SyncOrchestratorServiceClass {
           // BACKLOG-2127: preserve the typed reconnect provider so the UI can
           // render a "Reconnect" CTA without parsing the message text.
           const reconnectProvider = error instanceof EmailReconnectError ? error.provider : undefined;
-          this.updateQueueItem(type, { status: 'error', error: errorMsg, reconnectProvider, cancelRequested: undefined });
+          // BACKLOG-2883: typed, so no consumer reads the message to tell a
+          // refusal from a failure.
+          const errorKind: SyncErrorKind | undefined =
+            error instanceof DiskSpaceRefusalError ? 'disk_space_refused' : undefined;
+          this.updateQueueItem(type, { status: 'error', error: errorMsg, reconnectProvider, errorKind, cancelRequested: undefined });
         }
 
         this.updateOverallProgress();

@@ -491,6 +491,9 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
       attachmentCount: opts.attachmentCount ?? 1000,
       availableDiskBytes: opts.availableDiskBytes,
       fitsOnDisk: opts.fitsOnDisk,
+      // BACKLOG-2882: always set by the producer — estimate + 2 GiB headroom.
+      requiredDiskBytes: opts.attachmentBytes + 2_147_483_648,
+      diskHeadroomBytes: 2_147_483_648,
     };
   }
 
@@ -542,7 +545,9 @@ describe("MacOSMessagesImportSettings — disk space guard (BACKLOG-2743)", () =
     // The ways through are offered — text-only, and (when one exists) a shorter
     // window named with its own estimate.
     expect(screen.getByTestId("import-without-attachments")).toBeInTheDocument();
-    expect(block).toHaveTextContent(/needs up to 80\.0 GB/i);
+    expect(block).toHaveTextContent(
+      /needs up to 82\.2 GB of free space — up to 80\.0 GB for attachments/i
+    );
 
     // ...and there is deliberately NO "import anyway" escape. An override is
     // exactly what would let macOS evict the user's Time Machine snapshots to
