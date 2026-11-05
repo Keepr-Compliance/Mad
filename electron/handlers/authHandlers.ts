@@ -42,6 +42,20 @@ export const initializeDatabase = async (): Promise<void> => {
     // cannot quit by accident. Note the FIX is initialize() rejecting; this
     // flag only upgrades the outcome from "error screen" to "clean exit".
     await databaseService.initialize({ quitOnUnrecoverableFailure: true });
+
+    // Initialize audit service with dependencies.
+    // BACKLOG-3340: straight after the database opens, with no await between.
+    // A browser sign-in that lands once databaseService.isInitialized() is true
+    // provisions immediately (main.ts handleDeepLinkCallback) and writes its
+    // LOGIN entry inside that transaction, which throws (and rolls the sign-in
+    // back) while this service is uninitialized. Before 3340 this ran after the
+    // awaited iPhone-sync sweep below, a window of seconds.
+    // Remaining window (pre-existing, not closed here): databaseService sets its
+    // connection before it awaits its own migrations, so isInitialized() is
+    // already true while they run. A sign-in that lands then fails closed (no
+    // LOGIN, rolled back, the next sign-in provisions); before 3340 it
+    // provisioned against a half-migrated schema. No jest control covers it.
+    auditService.initialize(databaseService, supabaseService);
     await logService.debug("Database initialized", "AuthHandlers");
 
     // BACKLOG-3343: remove any iPhone sync that a crash, force-quit or power loss left
@@ -58,9 +72,6 @@ export const initializeDatabase = async (): Promise<void> => {
         error: sweepError instanceof Error ? sweepError.message : String(sweepError),
       });
     }
-
-    // Initialize audit service with dependencies
-    auditService.initialize(databaseService, supabaseService);
 
     // BACKLOG-3052: contact names and property addresses only leave this
     // machine while a support-access window is open.

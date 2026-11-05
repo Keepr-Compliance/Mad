@@ -256,6 +256,7 @@ import {
 import type { OAuthProvider, SubscriptionTier, SubscriptionStatus, User } from "./types";
 import {
   provisionDeepLinkSignIn,
+  recordDeepLinkSignInFailure,
   type DeepLinkProvisionResult,
 } from "./services/loginProvisioningService";
 import {
@@ -643,6 +644,14 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
       // BACKLOG-4040 S3: id only — the scope is persisted to sentry/scope_v3.json in plaintext.
       Sentry.setUser({ id: user.id });
       log.info("[DeepLink] Session established for user:", redactId(user.id));
+      // BACKLOG-3956: one helper normalizes here AND for the renderer payload below.
+      const provider = (normalizeOAuthProvider(user.app_metadata?.provider) || "google") as OAuthProvider;
+      // Extract email - Azure/Microsoft may have empty user.email but email in user_metadata
+      const userEmail = user.email || user.user_metadata?.email || "";
+      // BACKLOG-3340: who a sign-in denied below is recorded against. Built from
+      // the same two consts as deepLinkUserData, so the failure lookup finds the
+      // row provisioning writes.
+      const signInIdentity = { supabaseId: user.id, email: userEmail, provider };
 
       // TASK-1507: Step 2 - Validate license
       log.info("[DeepLink] Validating license for user:", redactId(user.id));
@@ -660,6 +669,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         Sentry.captureException(new Error("Deep link auth: license blocked"), {
           tags: { component: "deep-link", action: "auth-callback", error_code: "LICENSE_BLOCKED", block_reason: licenseStatus.blockReason || "unknown" },
         });
+        recordDeepLinkSignInFailure(signInIdentity, "license_blocked");
         // BACKLOG-4041: user id and block reason only. The Supabase client
         // keeps the session set above (setSession), which the blocked
         // screen's contact lookup (sessionHandlers handleGetUserContact) reads.
@@ -691,6 +701,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         Sentry.captureException(new Error("Deep link auth: device limit exceeded"), {
           tags: { component: "deep-link", action: "auth-callback", error_code: "DEVICE_LIMIT" },
         });
+        recordDeepLinkSignInFailure(signInIdentity, "device_limit");
         sendToRenderer(
           "auth:deep-link-device-limit",
           deviceLimitPayload(user.id, licenseStatus),
@@ -701,8 +712,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
 
       // TASK-1507D: Step 5.5 - Create local SQLite user
       // This is required for FK constraints (mailbox connection, audit logs, contacts)
-      // BACKLOG-3956: one helper normalizes here AND for the renderer payload below.
-      const provider = (normalizeOAuthProvider(user.app_metadata?.provider) || "google") as OAuthProvider;
+      // (`provider` and `userEmail` are derived above, before the licence step.)
 
       // Map license type to subscription tier
       // licenseType: 'trial' | 'individual' | 'team' -> subscriptionTier: 'free' | 'pro' | 'enterprise'
@@ -720,9 +730,6 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
         if (ts === "converted") return "active";
         return "trial"; // Default for trial license
       };
-
-      // Extract email - Azure/Microsoft may have empty user.email but email in user_metadata
-      const userEmail = user.email || user.user_metadata?.email || "";
 
       const deepLinkUserData: PendingDeepLinkUser = {
         supabaseId: user.id,
@@ -854,6 +861,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
           licenseStatus,
           device: deviceResult.device,
           isNewUser: needsTermsAcceptance, // BACKLOG-546: Based on terms, not transactions
+          localUser, // BACKLOG-4148: carries this sign-in's last-login stamp
         }),
       );
 

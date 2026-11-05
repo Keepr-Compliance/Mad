@@ -136,8 +136,10 @@ function setup(options: {
     },
   }));
 
+  const mockRecordDeepLinkSignInFailure = jest.fn();
   jest.doMock("../../services/loginProvisioningService", () => ({
     provisionDeepLinkSignIn: mockProvisionDeepLinkSignIn,
+    recordDeepLinkSignInFailure: mockRecordDeepLinkSignInFailure,
   }));
 
   jest.doMock("../../services/supabaseService", () => ({
@@ -172,6 +174,7 @@ function setup(options: {
     mockGetUserById,
     mockGetAuthSession,
     mockProvisionDeepLinkSignIn,
+    mockRecordDeepLinkSignInFailure,
   };
 }
 
@@ -202,7 +205,14 @@ describe("systemHandlers — deferred-DB deep-link session persistence (BACKLOG-
       refreshToken: "supabase-refresh-token",
     };
 
-    const { initHandler, mockCreateUser, mockCreateSession, mockSaveSession, mockProvisionDeepLinkSignIn } = setup({
+    const {
+      initHandler,
+      mockCreateUser,
+      mockCreateSession,
+      mockSaveSession,
+      mockProvisionDeepLinkSignIn,
+      mockRecordDeepLinkSignInFailure,
+    } = setup({
       pendingUser,
       existingLocalUser: null,
       createdLocalUser,
@@ -210,6 +220,9 @@ describe("systemHandlers — deferred-DB deep-link session persistence (BACKLOG-
     });
 
     await initHandler();
+
+    // BACKLOG-3340: a drained sign-in that provisions records no failure.
+    expect(mockRecordDeepLinkSignInFailure).not.toHaveBeenCalled();
 
     // BACKLOG-3322: user + session rows come from the one provisioning call.
     expect(mockProvisionDeepLinkSignIn).toHaveBeenCalledTimes(1);
@@ -272,7 +285,7 @@ describe("systemHandlers — deferred-DB deep-link session persistence (BACKLOG-
     };
     const createdLocalUser = { id: TEST_USER_ID, email: "no-session@example.com", oauth_provider: "google" };
 
-    const { initHandler, mockSaveSession, mockProvisionDeepLinkSignIn, mockCreateUser } = setup({
+    const { initHandler, mockSaveSession, mockProvisionDeepLinkSignIn, mockCreateUser, mockRecordDeepLinkSignInFailure } = setup({
       pendingUser,
       existingLocalUser: null,
       createdLocalUser,
@@ -280,6 +293,9 @@ describe("systemHandlers — deferred-DB deep-link session persistence (BACKLOG-
     });
 
     await expect(initHandler()).resolves.toBeDefined();
+    // BACKLOG-3340: the sign-in never completes; one failure entry, for this user.
+    expect(mockRecordDeepLinkSignInFailure).toHaveBeenCalledTimes(1);
+    expect(mockRecordDeepLinkSignInFailure).toHaveBeenCalledWith(pendingUser, "no_auth_session");
     // No tokens -> no durable session possible -> no user row written either.
     expect(mockProvisionDeepLinkSignIn).not.toHaveBeenCalled();
     expect(mockCreateUser).not.toHaveBeenCalled();

@@ -24,6 +24,10 @@ export interface User {
   display_name?: string;
   avatar_url?: string;
   terms_accepted_at?: string;
+  /** users_local.created_at, shown as "Member since" (BACKLOG-4148). */
+  created_at?: string;
+  /** users_local.last_login_at, shown as "Last login" (BACKLOG-4148). */
+  last_login_at?: string;
 }
 
 // Auth state interface
@@ -96,6 +100,8 @@ export function AuthProvider({
           display_name: user.display_name,
           avatar_url: user.avatar_url,
           terms_accepted_at: user.terms_accepted_at,
+          created_at: user.created_at,
+          last_login_at: user.last_login_at,
         };
         setState({
           isAuthenticated: true,

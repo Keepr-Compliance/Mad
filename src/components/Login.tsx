@@ -91,6 +91,9 @@ export interface DeepLinkAuthData {
     id: string;
     email?: string;
     name?: string;
+    /** The local row's values after this sign-in; absent when the DB was not open yet. */
+    created_at?: string;
+    last_login_at?: string;
   };
   provider?: string; // "google" | "azure" | etc from Supabase app_metadata
   licenseStatus?: {

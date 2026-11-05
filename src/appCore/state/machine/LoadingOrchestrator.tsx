@@ -557,6 +557,8 @@ export function LoadingOrchestrator({
               email: string;
               display_name?: string;
               avatar_url?: string;
+              created_at?: string;
+              last_login_at?: string;
             };
 
             const user: User = {
@@ -575,6 +577,9 @@ export function LoadingOrchestrator({
               email: apiUser.email,
               display_name: apiUser.display_name,
               avatar_url: apiUser.avatar_url,
+              // BACKLOG-4148: Account settings shows these two from currentUser.
+              created_at: apiUser.created_at,
+              last_login_at: apiUser.last_login_at,
             };
             login(
               authContextUser,

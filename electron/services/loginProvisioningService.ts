@@ -57,7 +57,8 @@ import type {
   OAuthToken,
 } from "../types";
 import type { PendingDeepLinkUser } from "./signInState";
-import { dbTransaction } from "./db/core/dbConnection";
+import * as Sentry from "@sentry/electron/main";
+import { dbTransaction, isInitialized as isDbOpen } from "./db/core/dbConnection";
 import {
   createUserSync,
   getUserByEmailSync,
@@ -70,6 +71,7 @@ import {
 import { saveOAuthTokenSync } from "./db/oauthTokenDbService";
 import { createSessionSync } from "./db/sessionDbService";
 import logService from "./logService";
+import auditService from "./auditService";
 import { redactId } from "../utils/redactSensitive";
 
 /** The token write, when the calling path saves one. */
@@ -233,8 +235,96 @@ export function provisionDeepLinkLogin(
         is_active: true,
       });
     const sessionToken = createSessionSync(user.id);
-    return { user, sessionToken, isNewUser: existing === null };
+    // BACKLOG-3340: the sign-in's audit entry is part of the same save as the
+    // user row and the session row (the BACKLOG-3339 rule). If the entry cannot
+    // be written the whole sign-in rolls back; a sign-in the audit log cannot
+    // record is not provisioned. This is the ONLY place a browser sign-in writes
+    // LOGIN: both deep-link branches reach it once per sign-in, the session-file
+    // retries (signInState.saveSignInSession) never come back here, and the
+    // legacy-id migration runs before this transaction.
+    // The entry carries no session id and no resource id.
+    auditService.recordInTransaction({
+      userId: user.id,
+      action: "LOGIN",
+      resourceType: "SESSION",
+      metadata: { provider: u.provider, isNewUser: existing === null, method: "browser" },
+    });
+    // BACKLOG-4148: stamp "Last login" in the same save, for a new AND a
+    // returning user. Sync on purpose (`updateLastLoginSync`): a promise-returning
+    // write here would let the transaction commit over a failed UPDATE. Then
+    // re-read, so the returned row (and the session file built from it) carries
+    // the stamp rather than the row as it was before this sign-in.
+    updateLastLoginSync(user.id);
+    const stamped = getUserByIdSync(user.id);
+    if (!stamped) {
+      throw new Error("Failed to retrieve user after the last-login stamp");
+    }
+    return { user: stamped, sessionToken, isNewUser: existing === null };
   });
+}
+
+/** Why a browser sign-in failed, as a fixed code (the cloud copy keeps it). */
+export type DeepLinkSignInFailureReason =
+  | "provisioning_failed"
+  | "license_blocked"
+  | "device_limit"
+  | "no_auth_session";
+
+/**
+ * BACKLOG-3340: record a failed browser sign-in as LOGIN_FAILED, in its own
+ * write, after any rollback (`auditService.recordFailure`, the 3339 rule).
+ * Never throws.
+ *
+ * Who the row belongs to: the LOCAL user found now, by email then
+ * (provider, Supabase id) — the same lookup `provisionDeepLinkLogin` makes, so
+ * a legacy-id user whose migration failed is recorded under the id it actually
+ * has. `audit_logs.user_id` references `users_local(id)` with foreign keys on,
+ * so when no local row exists (a first sign-in that rolled back) or the
+ * database is not open, NO row can be written: an entry for an id with no
+ * user row would fail its foreign key, and if buffered while the database is
+ * closed it would block every buffered entry behind it on each flush. That
+ * case is reported to Sentry and the log instead.
+ */
+export function recordDeepLinkSignInFailure(
+  u: Pick<PendingDeepLinkUser, "supabaseId" | "email" | "provider">,
+  reason: DeepLinkSignInFailureReason,
+  error?: unknown,
+): void {
+  const notRecorded = (why: string): void => {
+    void logService.warn("[DeepLink] Sign-in failure not written to the audit log", "LoginProvisioning", {
+      reason,
+      why,
+    });
+    Sentry.captureMessage("Sign-in failure not written to the audit log", {
+      level: "warning",
+      tags: { component: "deep-link", reason, why },
+    });
+  };
+  try {
+    if (!isDbOpen()) {
+      notRecorded("database_closed");
+      return;
+    }
+    const local =
+      (u.email ? getUserByEmailSync(u.email) : null) ??
+      getUserByOAuthIdSync(u.provider, u.supabaseId);
+    if (!local) {
+      notRecorded("no_local_user");
+      return;
+    }
+    auditService.recordFailure({
+      userId: local.id,
+      action: "LOGIN_FAILED",
+      resourceType: "SESSION",
+      metadata: { provider: u.provider, reason, method: "browser" },
+      errorMessage: error instanceof Error ? error.message : undefined,
+    });
+  } catch (lookupError) {
+    notRecorded("lookup_failed");
+    void logService.error("[DeepLink] Sign-in failure lookup failed", "LoginProvisioning", {
+      error: lookupError instanceof Error ? lookupError.message : String(lookupError),
+    });
+  }
 }
 
 /**
@@ -285,7 +375,14 @@ export async function provisionDeepLinkSignIn(
       );
     }
   }
-  const result = provisionDeepLinkLogin(u);
+  let result: DeepLinkProvisionResult;
+  try {
+    result = provisionDeepLinkLogin(u);
+  } catch (provisionError) {
+    // BACKLOG-3340: the transaction has rolled back; the failure is its own write.
+    recordDeepLinkSignInFailure(u, "provisioning_failed", provisionError);
+    throw provisionError;
+  }
   // Not awaited, for the same reason (the rows are already committed here).
   void logService.info(
     result.isNewUser

@@ -20,6 +20,8 @@ export interface UseLoginHandlersOptions {
       email: string;
       display_name?: string;
       avatar_url?: string;
+      created_at?: string;
+      last_login_at?: string;
     },
     token: string,
     provider: string,
@@ -85,7 +87,14 @@ export function useLoginHandlers({
       // TASK-1507C: Call login() to set currentUser in AuthContext
       if (data.user) {
         login(
-          { id: data.user.id, email: data.user.email || "", display_name: data.user.name },
+          {
+            id: data.user.id,
+            email: data.user.email || "",
+            display_name: data.user.name,
+            // BACKLOG-4148: "Member since" / "Last login" in Account settings.
+            created_at: data.user.created_at,
+            last_login_at: data.user.last_login_at,
+          },
           // BACKLOG-3956: "azure" -> "microsoft"; every other value kept as-is.
           // The "google" stand-in covers only an absent value, which the main
           // process never sends (it defaults before sending).
