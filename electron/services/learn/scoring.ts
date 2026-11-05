@@ -54,14 +54,18 @@ export interface LearnScore {
   cleanupUnanswered: number;
 
   positives: number;
-  /** Positives that are 'manual' rows created before 2.33.0 (subset of positives). */
+  /** Positives that are 'manual' rows created before this user's cutoff (subset of positives). */
   legacyManualPositives: number;
+  /** Day of this user's cutoff (UTC). */
+  legacyCutoffDay: string;
+  /** No auto/hybrid row proved the upgrade time: legacyManualPositives is a minimum. */
+  legacyCutoffIsMinimum: boolean;
   found: number;
   missed: number;
 
   recall: Rate;
   recallWithCleanupYes: Rate;
-  /** Same two rates with the pre-2.33.0 'manual' rows left out of the answer key. */
+  /** Same two rates with the legacy 'manual' rows (created before the user's cutoff) left out. */
   recallExcludingLegacy: Rate;
   recallWithCleanupYesExcludingLegacy: Rate;
   precisionBeforeCleanup: Rate;
@@ -254,6 +258,8 @@ export function scoreRun(
     cleanupUnanswered: unmatchedKeys.size - cleanupYes - cleanupNo,
     positives,
     legacyManualPositives: key.legacyManualPositives,
+    legacyCutoffDay: new Date(key.legacyCutoffMs).toISOString().slice(0, 10),
+    legacyCutoffIsMinimum: key.legacyCutoffIsMinimum,
     found,
     missed: positives - found,
     recall: rate(found, positives),
@@ -290,13 +296,13 @@ export function formatCopyBlock(s: LearnScore): string {
     `Keepr Learn mode score (rules v${s.ruleVersion})`,
     `Window: ${s.windowMonths} months, ${s.earliestDay ?? "-"} to ${s.latestDay ?? "-"}`,
     `Emails scanned: ${s.rowsScanned}; without a sent date: ${s.nullSentAt}`,
-    `Deals in key: manual ${s.buckets.manual} (of which created before 2.33.0, possibly auto-detected: ${s.legacyManualPositives} in the mail window), auto ${s.buckets.auto}, hybrid ${s.buckets.hybrid}, rejected ${s.buckets.rejected}; outside the mail window: ${s.labelsWithoutLocalMail}`,
+    `Deals in key: manual ${s.buckets.manual} (of which created before ${s.legacyCutoffDay}, possibly auto-detected: ${s.legacyManualPositives} in the mail window${s.legacyCutoffIsMinimum ? ", minimum" : ""}), auto ${s.buckets.auto}, hybrid ${s.buckets.hybrid}, rejected ${s.buckets.rejected}; outside the mail window: ${s.labelsWithoutLocalMail}`,
     `Detections: ${s.detections}; true ${s.trueDetections}; known wrong ${s.knownWrong}; unmatched ${s.unmatched} = ${s.unmatchedDeals} deals + ${s.unaskable} without a key (cleanup yes ${s.cleanupYes}, no ${s.cleanupNo}, unanswered ${s.cleanupUnanswered})`,
     `Deals found: ${s.found}; missed: ${s.missed}`,
     `Recall: ${fmt(s.recall)}`,
     `Recall with cleanup Yes: ${fmt(s.recallWithCleanupYes)}`,
-    `Recall without pre-2.33.0 manual deals: ${fmt(s.recallExcludingLegacy)}`,
-    `Recall with cleanup Yes, without pre-2.33.0 manual deals: ${fmt(s.recallWithCleanupYesExcludingLegacy)}`,
+    `Recall without manual deals created before the cutoff: ${fmt(s.recallExcludingLegacy)}`,
+    `Recall with cleanup Yes, without manual deals created before the cutoff: ${fmt(s.recallWithCleanupYesExcludingLegacy)}`,
     `Precision before cleanup: ${fmt(s.precisionBeforeCleanup)}`,
     `Precision after cleanup: ${fmt(s.precisionAfterCleanup)}`,
     `Side: correct ${s.side.correct}, wrong ${s.side.wrong}, not predicted ${s.side.notPredicted}, skipped ${s.side.skipped}`,

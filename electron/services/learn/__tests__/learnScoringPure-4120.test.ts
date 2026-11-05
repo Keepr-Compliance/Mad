@@ -204,8 +204,8 @@ describe("C2b manual rows created before 2.33.0 are reported separately", () => 
     expect([s4.recall.k, s4.recall.n]).toEqual([2, 3]);
     expect([s4.recallExcludingLegacy.k, s4.recallExcludingLegacy.n]).toEqual([1, 2]);
     const text = formatCopyBlock(s4);
-    expect(text).toContain("created before 2.33.0, possibly auto-detected: 1");
-    expect(text).toContain("Recall without pre-2.33.0 manual deals: 1/2");
+    expect(text).toContain("created before 2026-08-31, possibly auto-detected: 1 in the mail window, minimum)");
+    expect(text).toContain("Recall without manual deals created before the cutoff: 1/2");
   });
 
   it("recall with cleanup Yes is reported with and without the pre-2.33.0 manual rows", () => {
@@ -229,7 +229,88 @@ describe("C2b manual rows created before 2.33.0 are reported separately", () => 
     // full key: (2 + 1) / (3 + 1); without legacy: (1 + 1) / (2 + 1)
     expect([s.recallWithCleanupYes.k, s.recallWithCleanupYes.n]).toEqual([3, 4]);
     expect([s.recallWithCleanupYesExcludingLegacy.k, s.recallWithCleanupYesExcludingLegacy.n]).toEqual([2, 3]);
-    expect(formatCopyBlock(s)).toContain("Recall with cleanup Yes, without pre-2.33.0 manual deals: 2/3");
+    expect(formatCopyBlock(s)).toContain("Recall with cleanup Yes, without manual deals created before the cutoff: 2/3");
+  });
+
+  it("per-user cutoff: a manual row after 2.33.0 but before the user's first auto row is legacy", () => {
+    // PR2 (SR 45eea66c): cutoff = max(global, earliest auto/hybrid created_at of this user).
+    const rows = [
+      keyRow({ property_address: "11 Canarytest Way, Testville, ZZ 00000", created_at: "2026-09-10 10:00:00" }), // before first auto -> legacy
+      keyRow({ property_address: "12 Canarytest Way, Testville, ZZ 00000", created_at: "2026-09-20 10:00:00" }), // after first auto -> hand-entered
+      keyRow({
+        property_address: "13 Canarytest Way, Testville, ZZ 00000",
+        detection_source: "auto",
+        created_at: "2026-09-15 10:00:00",
+      }),
+    ];
+    const k = buildAnswerKey(rows, win);
+    expect(k.positives.map((p) => p.legacyManual)).toEqual([true, false]);
+    expect(k.legacyManualPositives).toBe(1);
+    expect(iso(k.legacyCutoffMs)).toBe("2026-09-15T10:00:00.000Z");
+    expect(k.legacyCutoffIsMinimum).toBe(false);
+    const s = scoreRun(run([det("d1", "11 canarytest way, testville, zz 00000")]), rows, [], []);
+    const text = formatCopyBlock(s);
+    expect(text).toContain("created before 2026-09-15, possibly auto-detected: 1 in the mail window)");
+    expect(text).not.toContain("minimum");
+  });
+
+  it("per-user cutoff: a REJECTED auto row also proves the upgrade; hybrid counts too", () => {
+    const rows = [
+      keyRow({ property_address: "14 Canarytest Way, Testville, ZZ 00000", created_at: "2026-09-10 10:00:00" }),
+      keyRow({
+        property_address: "15 Canarytest Way, Testville, ZZ 00000",
+        detection_source: "auto",
+        detection_status: "rejected",
+        created_at: "2026-09-11 10:00:00",
+      }),
+      keyRow({
+        property_address: "16 Canarytest Way, Testville, ZZ 00000",
+        detection_source: "hybrid",
+        created_at: "2026-09-13 10:00:00",
+      }),
+    ];
+    const k = buildAnswerKey(rows, win);
+    // the rejected auto row is the earliest proof
+    expect(iso(k.legacyCutoffMs)).toBe("2026-09-11T10:00:00.000Z");
+    expect(k.positives.map((p) => p.legacyManual)).toEqual([true]);
+    // hybrid alone also proves it
+    const h = buildAnswerKey([rows[0], rows[2]], win);
+    expect(iso(h.legacyCutoffMs)).toBe("2026-09-13T10:00:00.000Z");
+    expect(h.legacyCutoffIsMinimum).toBe(false);
+  });
+
+  it("per-user cutoff never moves before the global cutoff (an auto row dated earlier)", () => {
+    const rows = [
+      keyRow({ property_address: "17 Canarytest Way, Testville, ZZ 00000", created_at: iso(CUT - 1000) }),
+      keyRow({ property_address: "18 Canarytest Way, Testville, ZZ 00000", detection_source: "auto", created_at: "2026-08-01 10:00:00" }),
+    ];
+    const k = buildAnswerKey(rows, win);
+    expect(k.legacyCutoffMs).toBe(CUT);
+    expect(k.legacyCutoffIsMinimum).toBe(false);
+    expect(k.positives.map((p) => p.legacyManual)).toEqual([true]);
+  });
+
+  it("no auto/hybrid row: global cutoff, and the Copy line says the count is a minimum", () => {
+    const rows = [keyRow({ property_address: "19 Canarytest Way, Testville, ZZ 00000", created_at: "2026-09-10 10:00:00" })];
+    const k = buildAnswerKey(rows, win);
+    expect(k.legacyCutoffMs).toBe(CUT);
+    expect(k.legacyCutoffIsMinimum).toBe(true);
+    expect(k.positives.map((p) => p.legacyManual)).toEqual([false]);
+    const s = scoreRun(run([]), rows, [], []);
+    expect(formatCopyBlock(s)).toContain("created before 2026-08-31, possibly auto-detected: 0 in the mail window, minimum)");
+  });
+
+  it("labelsWithoutLocalMail counts a rejected row outside the scanned window (SF2)", () => {
+    const k = buildAnswerKey(
+      [
+        keyRow({ status: "rejected", started_at: "2025-01-01", closed_at: "2025-02-01" }),
+        keyRow({ property_address: "21 Canarytest Way, Testville, ZZ 00000", started_at: "2025-01-01", closed_at: "2025-02-01" }),
+      ],
+      win,
+    );
+    expect(k.negatives).toHaveLength(0);
+    expect(k.positives).toHaveLength(0);
+    expect(k.labelsWithoutLocalMail).toBe(2);
   });
 
   it("a hand-entered deal and a rejected auto deal at one address: the detection is a true detection", () => {
@@ -291,7 +372,7 @@ function run(detections: LearnRunResult["detections"]): LearnRunResult {
 }
 
 function det(id: string, address: string, side: "buyer" | "seller" | null = "buyer") {
-  return { id, address, addressKey: addressKey(address), firstMs: T0, lastMs: T0 + DAY, emailCount: 2, side };
+  return { id, address, addressKey: addressKey(address), firstMs: T0, lastMs: T0 + DAY, emailCount: 2, emailIds: [], side };
 }
 
 describe("scoring arithmetic", () => {
