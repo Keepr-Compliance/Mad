@@ -157,11 +157,24 @@ export function LearnQuestionDialog({
             Undo last
           </button>
         </div>
-        <div className="grid min-h-0 flex-1 grid-cols-[1fr_420px]">
-          <div className="flex min-h-0 flex-col border-r border-[#EEECE7]" key={questionKey}>
+        {/* The preview column can never widen or heighten the dialog: minmax(0,1fr) and
+            min-w-0 / min-h-0 down the chain. Without them a 1400px email table measured the
+            column at 2737px and pushed the answer panel out of the dialog (BACKLOG-4120). */}
+        <div
+          className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_420px] grid-rows-[minmax(0,1fr)]"
+          data-testid="learn-question-body"
+        >
+          <div
+            className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-[#EEECE7]"
+            key={questionKey}
+            data-testid="learn-preview-column"
+          >
             <LeftPane session={session} />
           </div>
-          <div className="flex flex-col justify-center gap-6 px-9 py-10 text-center">
+          <div
+            className="flex min-h-0 min-w-0 flex-col justify-center gap-6 overflow-y-auto px-9 py-10 text-center"
+            data-testid="learn-answer-panel"
+          >
             {session.phase === "error" ? (
               <>
                 <p className="text-sm text-red-700">{session.error ?? "Something went wrong."}</p>

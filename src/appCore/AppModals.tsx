@@ -18,6 +18,7 @@ import type { Transaction } from "@/types";
 import { useGoogleMessagesSyncStatus } from "../hooks/useGoogleMessagesSyncStatus";
 import { useExtensionFolderRefresh } from "../hooks/useExtensionFolderRefresh";
 import { useSubmissionStatusNotice } from "./hooks/useSubmissionStatusNotice";
+import { LearnScoreHost, LearnSessionHost } from "../components/settings/learn/LearnSessionHost";
 import {
   clearOpenTransactionRequest,
   notifyTransactionsViewClosed,
@@ -54,6 +55,7 @@ export function AppModals({ app }: AppModalsProps) {
     handleNotNowMovePrompt,
     closeIPhoneSync,
     closeAndroidSync,
+    closeLearnSession,
   } = app;
 
   // BACKLOG-3658: a Google Messages Sync on the dashboard indicator, even minimized.
@@ -165,6 +167,13 @@ export function AppModals({ app }: AppModalsProps) {
           onSuccess={handleAuditTransactionSuccess}
         />
       )}
+
+      {/* Learn mode, opened from Settings › Help Keepr learn (Start / See score)
+          after Settings closes (BACKLOG-4120). */}
+      {modalState.learnOverlay?.kind === "session" && currentUser && (
+        <LearnSessionHost total={modalState.learnOverlay.total} onClose={closeLearnSession} />
+      )}
+      {modalState.learnOverlay?.kind === "score" && currentUser && <LearnScoreHost onClose={closeLearnSession} />}
 
       {/* iPhone Sync Flow Modal */}
       {modalState.showIPhoneSync && <IPhoneSyncModal onClose={closeIPhoneSync} />}
