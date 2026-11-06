@@ -16,6 +16,14 @@ import {
   streetPhraseRegex,
 } from "./learnEmailHtml";
 
+/**
+ * Long lines wrap anywhere; tables, images and pre blocks are capped at the pane's
+ * width. A fixed-width table that still cannot shrink scrolls sideways inside the
+ * scroll box, never the dialog (BACKLOG-4120).
+ */
+export const EMAIL_WRAP =
+  "[overflow-wrap:anywhere] [word-break:break-word] [&_table]:max-w-full [&_img]:max-w-full [&_img]:h-auto [&_pre]:max-w-full [&_pre]:whitespace-pre-wrap";
+
 export function formatLearnDate(iso: string | null, withTime: boolean): string {
   if (!iso) return "";
   const d = new Date(iso);
@@ -55,7 +63,7 @@ export function LearnEmailPane({
   const sender = splitSender(email.sender);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-white" data-testid="learn-email-pane">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-white" data-testid="learn-email-pane">
       <div className="flex flex-col gap-1 border-b border-[#EEECE7] px-5 py-4 text-[13px]">
         <span className="text-base font-semibold">{email.subject || "(no subject)"}</span>
         <span>
@@ -78,13 +86,17 @@ export function LearnEmailPane({
       )}
       {/* Contained: nothing in the email can paint outside this box or above the question. */}
       <div
-        className="relative isolate min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-5 py-5 text-[13px] [contain:paint]"
+        className="relative isolate min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-auto px-5 py-5 text-[13px] [contain:paint]"
         data-testid="learn-email-scroll"
       >
         {body !== null ? (
-          <div className="learn-email-body break-words" data-testid="learn-email-body" dangerouslySetInnerHTML={{ __html: body }} />
+          <div
+            className={`learn-email-body ${EMAIL_WRAP}`}
+            data-testid="learn-email-body"
+            dangerouslySetInnerHTML={{ __html: body }}
+          />
         ) : (
-          <div className="whitespace-pre-wrap break-words" data-testid="learn-email-body">
+          <div className={`whitespace-pre-wrap ${EMAIL_WRAP}`} data-testid="learn-email-body">
             {highlightText(email.bodyPlain ?? "", re).map((run, i) =>
               run.mark ? (
                 <mark key={i} className={HIGHLIGHT_CLASS}>

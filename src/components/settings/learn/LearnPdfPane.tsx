@@ -30,12 +30,12 @@ export function LearnPdfPane({
   const onLoad = useCallback(({ numPages: n }: { numPages: number }) => setNumPages(n), []);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-[#EEECE7]" data-testid="learn-pdf-pane">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[#EEECE7]" data-testid="learn-pdf-pane">
       <div className="flex items-center justify-between gap-3 border-b border-[#E6E4DF] bg-white px-4 py-2.5 text-[13px]">
         <span className="truncate font-semibold">{filename} · PDF</span>
         {numPages > 0 && <span className="flex-none text-gray-500">{numPages === 1 ? "1 page" : `${numPages} pages`}</span>}
       </div>
-      <div className="flex min-h-0 flex-1 justify-center overflow-y-auto p-5">
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-auto p-5 [justify-content:safe_center]" data-testid="learn-pdf-scroll">
         {failed ? (
           <p className="self-center text-sm text-gray-500">This document could not be shown.</p>
         ) : (
