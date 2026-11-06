@@ -104,6 +104,17 @@ describe('EpicLaneGrid', () => {
     expect(within(screen.getByTestId('epic-lane-epic-c')).getByText('↳ Epic A')).toBeTruthy();
   });
 
+  it('cells are epic-row drop targets (dim=epic, keyed by epic id / No Epic)', () => {
+    renderEpicGrid();
+    const ids = (testId: string) =>
+      Array.from(screen.getByTestId(testId).querySelectorAll('[data-droppable-id]')).map((n) =>
+        n.getAttribute('data-droppable-id')
+      );
+    expect(ids('epic-lane-epic-b')).toContain('cell:dim=epic:key=epic-b:status=testing');
+    expect(ids('epic-lane-none')).toContain('cell:dim=epic:key=No Epic:status=pending');
+    expect(ids('epic-lane-epic-b')).toHaveLength(9);
+  });
+
   it('epics never render as cards', () => {
     renderEpicGrid();
     // Cards render their title, so a card for an epic would add a second match.

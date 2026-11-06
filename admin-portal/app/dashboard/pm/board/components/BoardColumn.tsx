@@ -144,6 +144,7 @@ export function SwimLaneCell({
   return (
     <div
       ref={setNodeRef}
+      data-droppable-id={droppableId}
       className={`min-w-[260px] flex-1 bg-gray-50 px-2 py-2 min-h-[5rem] ${
         isOver ? 'ring-2 ring-primary-400 ring-inset bg-primary-50' : ''
       }`}
