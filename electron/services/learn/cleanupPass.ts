@@ -9,7 +9,13 @@
 import { listAnswerKeyTransactions, listDealAnswers, recordDealAnswer } from "../db/learnModeDbService";
 import { LEARN_RULES, type DealAnswer } from "./learnRules";
 import type { LearnRunResult } from "./baselineRunner";
-import { cleanupCandidates, type CleanupCandidate } from "./scoring";
+import { cleanupCandidates, isHiddenBySeed, type CleanupCandidate } from "./scoring";
+
+/** BACKLOG-4175: is this candidate's detection all exact-seed mail (not asked)? */
+function hiddenCandidate(run: LearnRunResult, c: CleanupCandidate): boolean {
+  const d = run.detections.find((x) => x.id === c.detectionId);
+  return d !== undefined && isHiddenBySeed(run, d);
+}
 
 export function isDealAnswer(value: unknown): value is DealAnswer {
   return typeof value === "string" && (LEARN_RULES.dealAnswers as readonly string[]).includes(value);
@@ -30,12 +36,17 @@ export function nextCleanupQuestion(
   const candidates = cleanupCandidates(run, listAnswerKeyTransactions(userId));
   const excluded = new Set(excludeDetectionIds);
   const skippedKeys = new Set(candidates.filter((c) => excluded.has(c.detectionId)).map((c) => c.addressKey));
-  return candidates.find((c) => !answered.has(c.addressKey) && !skippedKeys.has(c.addressKey)) ?? null;
+  return (
+    candidates.find(
+      (c) => !answered.has(c.addressKey) && !skippedKeys.has(c.addressKey) && !hiddenCandidate(run, c),
+    ) ?? null
+  );
 }
 
 /**
  * Store an answer for one detection of the run. Refused (false) when the
- * value is not yes/no or the detection is not a cleanup candidate of this run.
+ * value is not yes/no, the detection is not a cleanup candidate of this run,
+ * or it is hidden by the sender seeds (never asked, so never answered).
  */
 export function answerCleanupQuestion(
   userId: string,
@@ -47,7 +58,7 @@ export function answerCleanupQuestion(
   const candidate = cleanupCandidates(run, listAnswerKeyTransactions(userId)).find(
     (c) => c.detectionId === detectionId,
   );
-  if (!candidate) return false;
+  if (!candidate || hiddenCandidate(run, candidate)) return false;
   recordDealAnswer({
     userId,
     runId: run.runId,

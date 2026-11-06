@@ -214,7 +214,7 @@ describe("C10 learn tables: CHECKs, ids, timestamps, soft removal", () => {
     expect([typeof b.created_at, typeof b.updated_at, b.rule_version, b.answer, b.deleted_at]).toEqual([
       "string",
       "string",
-      1,
+      2,
       null,
       null,
     ]);
@@ -388,7 +388,7 @@ describe("N1 / N2 / P2 a full Learn mode session", () => {
     const found = result.detections.find((d) => d.addressKey === "4120 canarytest|00000")!;
     expect(answerCleanupQuestion(USER, result, found.id, "yes")).toBe(false);
 
-    const s = scoreRun(result, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER));
+    const s = scoreRun(result, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER), 0);
     expect([s.positives, s.found, s.missed, s.trueDetections, s.cleanupYes, s.cleanupNo]).toEqual([2, 1, 1, 1, 1, 1]);
     expect(s.side).toEqual({ correct: 1, wrong: 0, notPredicted: 0, skipped: 0 });
   });
@@ -402,7 +402,7 @@ describe("N1 / N2 / P2 a full Learn mode session", () => {
       const q = nextCleanupQuestion(USER, result)!;
       answerCleanupQuestion(USER, result, q.detectionId, "yes");
       ensureBulkSample(USER, 12, NOW);
-      scoreRun(result, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER));
+      scoreRun(result, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER), 0);
     } finally {
       (global as unknown as { fetch: unknown }).fetch = realFetch;
     }

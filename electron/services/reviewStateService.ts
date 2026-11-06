@@ -131,6 +131,9 @@ import {
   type NormalizedAddress,
 } from "../utils/addressNormalization";
 import { DedicatedWorkerError, isPoolReady, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
+import { readAddressPassSenders } from "./db/addressPassSendersDb";
+import { BUNDLED_SENDER_RULES, type SenderRuleSet } from "../utils/senderFilter/bundledRules";
+import { isSignalLive, matchesExactAddress } from "../utils/senderFilter/senderFilter";
 import {
   FOLDER_MATCH_CANDIDATE_EMAILS_SQL,
   FOLDER_MATCH_CANDIDATE_PARAM_COUNT,
@@ -874,8 +877,26 @@ export interface AddressMatchPassResult {
   candidates: number;
   /** Candidates that passed contentContainsAddressAdjacent. */
   matched: number;
+  /** Matched emails left out because the From address is an exact sender seed (BACKLOG-4175). */
+  seedSkipped: number;
   /** Why nothing ran, when nothing ran. */
   skipped?: "missing" | "locked" | "no-address";
+}
+
+/**
+ * BACKLOG-4175: the matched ids minus those whose From address is an exact
+ * sender seed, when the seed signal is live for the address pass. Nothing is
+ * unlinked or removed: a seed email is simply not queued. Deal-contact mail
+ * never reaches here (the candidate SQL excludes it).
+ */
+function dropSeedSenders(userId: string, matchedIds: string[], rules: SenderRuleSet): string[] {
+  if (matchedIds.length === 0 || !isSignalLive(rules, "seedAddress", "addressPass")) return matchedIds;
+  const seed = new Set(
+    readAddressPassSenders(userId, matchedIds)
+      .filter((r) => matchesExactAddress(r.sender, rules))
+      .map((r) => r.id),
+  );
+  return seed.size === 0 ? matchedIds : matchedIds.filter((id) => !seed.has(id));
 }
 
 /**
@@ -894,6 +915,7 @@ export async function queueAddressMatchesForTransaction(transactionId: string): 
     queued: 0,
     candidates: 0,
     matched: 0,
+    seedSkipped: 0,
     skipped,
   });
 
@@ -928,10 +950,13 @@ export async function queueAddressMatchesForTransaction(transactionId: string): 
   );
 
   const matched = matchedIds.length;
+  // BACKLOG-4175: after the matcher, whichever path ran it (worker or main thread).
+  const toQueue = dropSeedSenders(txn.user_id, matchedIds, BUNDLED_SENDER_RULES);
+  const seedSkipped = matched - toQueue.length;
   let queued = 0;
-  for (let i = 0; i < matchedIds.length; i++) {
+  for (let i = 0; i < toQueue.length; i++) {
     if (i > 0 && i % ADDRESS_MATCH_EMAILS_PER_TURN === 0) await yieldToEventLoop();
-    if (await queueEmailForReview(transactionId, matchedIds[i], txn.user_id, "address")) queued++;
+    if (await queueEmailForReview(transactionId, toQueue[i], txn.user_id, "address")) queued++;
   }
 
   const bounds = getCachedEmailSentAtBounds(txn.user_id);
@@ -944,11 +969,12 @@ export async function queueAddressMatchesForTransaction(transactionId: string): 
     transactionId,
     candidates,
     matched,
+    seedSkipped,
     queued,
     uncoveredDays,
   });
 
-  return { queued, candidates, matched };
+  return { queued, candidates, matched, seedSkipped };
 }
 
 /**

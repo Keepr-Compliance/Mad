@@ -199,6 +199,7 @@ describe("C2b manual rows created before 2.33.0 are reported separately", () => 
       rows,
       [],
       [],
+      0,
     );
     expect([s4.positives, s4.legacyManualPositives]).toEqual([3, 1]);
     expect([s4.recall.k, s4.recall.n]).toEqual([2, 3]);
@@ -224,6 +225,7 @@ describe("C2b manual rows created before 2.33.0 are reported separately", () => 
       rows,
       [{ address_key: addressKey(addr40) as string, answer: "yes" as const, rule_version: 1 }],
       [],
+      0,
     );
     expect(s.cleanupYes).toBe(1);
     // full key: (2 + 1) / (3 + 1); without legacy: (1 + 1) / (2 + 1)
@@ -248,7 +250,7 @@ describe("C2b manual rows created before 2.33.0 are reported separately", () => 
     expect(k.legacyManualPositives).toBe(1);
     expect(iso(k.legacyCutoffMs)).toBe("2026-09-15T10:00:00.000Z");
     expect(k.legacyCutoffIsMinimum).toBe(false);
-    const s = scoreRun(run([det("d1", "11 canarytest way, testville, zz 00000")]), rows, [], []);
+    const s = scoreRun(run([det("d1", "11 canarytest way, testville, zz 00000")]), rows, [], [], 0);
     const text = formatCopyBlock(s);
     expect(text).toContain("created before 2026-09-15, possibly auto-detected: 1 in the mail window)");
     expect(text).not.toContain("minimum");
@@ -296,7 +298,7 @@ describe("C2b manual rows created before 2.33.0 are reported separately", () => 
     expect(k.legacyCutoffMs).toBe(CUT);
     expect(k.legacyCutoffIsMinimum).toBe(true);
     expect(k.positives.map((p) => p.legacyManual)).toEqual([false]);
-    const s = scoreRun(run([]), rows, [], []);
+    const s = scoreRun(run([]), rows, [], [], 0);
     expect(formatCopyBlock(s)).toContain("created before 2026-08-31, possibly auto-detected: 0 in the mail window, minimum)");
   });
 
@@ -331,6 +333,7 @@ describe("C2b manual rows created before 2.33.0 are reported separately", () => 
       rows,
       [{ address_key: addressKey(addr70) as string, answer: "no" as const, rule_version: 1 }],
       [],
+      0,
     );
     expect([s.positives, s.found]).toEqual([1, 1]);
     expect([s.trueDetections, s.knownWrong]).toEqual([1, 0]);
@@ -368,11 +371,13 @@ function run(detections: LearnRunResult["detections"]): LearnRunResult {
     firstMs: T0,
     lastMs: T0 + 30 * DAY,
     detections,
+    senderRulesVersion: 1,
+    seedHidesQuestions: true,
   };
 }
 
 function det(id: string, address: string, side: "buyer" | "seller" | null = "buyer") {
-  return { id, address, addressKey: addressKey(address), firstMs: T0, lastMs: T0 + DAY, emailCount: 2, emailIds: [], side };
+  return { id, address, addressKey: addressKey(address), firstMs: T0, lastMs: T0 + DAY, emailCount: 2, emailIds: [], seedEmailIds: [], side };
 }
 
 describe("scoring arithmetic", () => {
@@ -394,7 +399,7 @@ describe("scoring arithmetic", () => {
     { address_key: "40 canarytest|00000", answer: "yes" as const, rule_version: 1 },
     { address_key: "50 canarytest|00000", answer: "no" as const, rule_version: 1 },
   ];
-  const s = scoreRun(r, keyRows, answers, []);
+  const s = scoreRun(r, keyRows, answers, [], 0);
 
   it("counts", () => {
     expect({
@@ -439,7 +444,7 @@ describe("scoring arithmetic", () => {
     const withCommas = extracted("Offer accepted on 4120 Canarytest Lane, Testville, ZZ 00000. Escrow closing, buyer.");
     const commaLess = extracted("Offer accepted on 4120 Canarytest Lane Testville ZZ 00000 closing escrow buyer");
     expect(withCommas).not.toBe(commaLess);
-    const dup = scoreRun(run([det("d1", withCommas), det("d2", commaLess)]), [keyRow()], [], []);
+    const dup = scoreRun(run([det("d1", withCommas), det("d2", commaLess)]), [keyRow()], [], [], 0);
     expect([dup.trueDetections, dup.found, dup.missed]).toEqual([2, 1, 0]);
     expect([dup.recall.k, dup.recall.n]).toEqual([1, 1]);
     expect([dup.precisionBeforeCleanup.k, dup.precisionBeforeCleanup.n]).toEqual([2, 2]);
@@ -451,7 +456,7 @@ describe("scoring arithmetic", () => {
     const commaLess = extracted("Offer accepted on 4120 Canarytest Lane Testville ZZ 00000 closing escrow buyer");
     expect(addressKey(withCommas)).toBe(addressKey(commaLess));
     const yes = [{ address_key: addressKey(withCommas) as string, answer: "yes" as const, rule_version: 1 }];
-    const s2 = scoreRun(run([det("d1", withCommas), det("d2", commaLess)]), [], yes, []);
+    const s2 = scoreRun(run([det("d1", withCommas), det("d2", commaLess)]), [], yes, [], 0);
     expect([s2.unmatched, s2.unmatchedDeals, s2.unaskable]).toEqual([2, 1, 0]);
     expect([s2.cleanupYes, s2.cleanupNo, s2.cleanupUnanswered]).toEqual([1, 0, 0]);
     expect([s2.recallWithCleanupYes.k, s2.recallWithCleanupYes.n]).toEqual([1, 1]);
@@ -460,7 +465,7 @@ describe("scoring arithmetic", () => {
 
   it("an unmatched detection with no addressKey is its own count, not 'unanswered'", () => {
     const noKey = { ...det("d1", "x"), addressKey: null };
-    const s3 = scoreRun(run([noKey]), [], [], []);
+    const s3 = scoreRun(run([noKey]), [], [], [], 0);
     expect([s3.unmatched, s3.unmatchedDeals, s3.unaskable, s3.cleanupUnanswered]).toEqual([1, 0, 1, 0]);
   });
 

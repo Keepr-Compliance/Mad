@@ -14,6 +14,7 @@ import {
   COUNT_LIVE_ANSWERS_SQL,
   COUNT_LIVE_BULK_SAMPLE_SQL,
   COUNT_NULL_SENT_AT_SQL,
+  DEAL_LINKED_SEED_CANDIDATES_SQL,
   DRAW_BULK_CANDIDATES_SQL,
   EMAIL_KEYSET_PAGE_SQL,
   GET_LEARN_MODE_ENABLED_SQL,
@@ -73,6 +74,7 @@ export interface BulkSampleRow {
 
 export interface AnsweredBulkRow {
   answer: BulkAnswer;
+  rule_version: number;
   subject: string | null;
   body_plain: string | null;
   body_html: string | null;
@@ -244,6 +246,22 @@ export function countNullSentAt(userId: string): number {
 
 export function listAnswerKeyTransactions(userId: string): AnswerKeyRow[] {
   return dbAll<AnswerKeyRow>(ANSWER_KEY_TRANSACTIONS_SQL, [userId]);
+}
+
+/**
+ * BACKLOG-4175: candidate seed messages linked to the user's non-rejected
+ * deals (substring prefilter; the caller matches the From address exactly).
+ */
+export function listDealLinkedSeedCandidates(
+  userId: string,
+  seedAddresses: readonly string[],
+): Array<{ id: string; sender: string | null }> {
+  if (seedAddresses.length === 0) return [];
+  return dbAll<{ id: string; sender: string | null }>(DEAL_LINKED_SEED_CANDIDATES_SQL, [
+    userId,
+    userId,
+    JSON.stringify(seedAddresses),
+  ]);
 }
 
 // ---- preview (read only) --------------------------------------------------
