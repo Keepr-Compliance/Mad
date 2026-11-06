@@ -2,11 +2,13 @@
  * BACKLOG-2771 — every export entry point routes through the ONE resolver.
  *
  * `exportPlan.test.ts` pins what the resolver decides. This suite pins that the
- * three IPC channels actually ASK it, rather than deciding for themselves:
+ * export IPC channels actually ASK it, rather than deciding for themselves:
  *
  *   - `transactions:export-folder`   (folder audit package)
  *   - `transactions:export-enhanced` (pdf / csv / excel / json / txt_eml)
- *   - `transactions:export-pdf`      (orphan channel, no renderer caller)
+ *
+ * (A third, path-taking PDF channel with no renderer caller was covered here
+ * until BACKLOG-3302 deleted it.)
  *
  * ## The control this file exists for
  *
@@ -22,9 +24,6 @@
  * and a midnight text that is the next day. Measured: with a single
  * late-evening text, reverting the boundary to the old UTC-midnight rule left
  * this suite entirely green under TZ=UTC.
- * (`transactions:export-pdf` requests no window at all — by design, since it
- * takes no options — so it is asserted for full-record pass-through instead of
- * a boundary it does not have.)
  *
  * The export services are mocked, so what these tests observe is the PLAN each
  * handler hands its renderer — which is exactly the decision under test.

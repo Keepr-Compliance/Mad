@@ -3,7 +3,8 @@
  *
  * This is the ONE place the include set is decided. Before it there were three
  * implementations (the folder handler's inline pair, enhancedExportService's
- * private pair, and `transactions:export-pdf`'s absence of one), the
+ * private pair, and the since-deleted path-taking PDF channel's absence of
+ * one — BACKLOG-3302), the
  * BACKLOG-2343 timezone fix had to be written twice, and the two copies still
  * disagreed afterwards.
  *

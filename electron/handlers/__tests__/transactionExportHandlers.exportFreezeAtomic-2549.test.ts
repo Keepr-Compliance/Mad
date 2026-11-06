@@ -33,7 +33,10 @@
  * ===========================================================================
  * CONTROLS — RUN, NOT ASSUMED (results in the BACKLOG-2549 pm_comments record)
  * ===========================================================================
- * MEASURED, not predicted — each line is what the run actually produced:
+ * HISTORY (BACKLOG-2549). These lines were measured when the suite still had
+ * cases B and SECONDARY; BACKLOG-3302 deleted both, so their counts no longer
+ * match this file. MEASURED, not predicted — each line is what the run
+ * actually produced:
  *
  *   - against unfixed code    -> A, B, SECONDARY RED on both channels
  *                                (6 failed / 8 passed); C, D, E, F green
@@ -43,7 +46,12 @@
  *                             -> D and E RED (4 failed / 10 passed); A, B, C, F
  *                                and SECONDARY all STAY GREEN
  *
- * That last line is why E exists. A displaced binding is atomic and silent: it
+ * BACKLOG-3302 (results in its pm_comments record): a separate
+ * `first_exported_at` stamp written outside the transaction in
+ * `completeExport`, ahead of the completion write -> A RED (re-seamed onto
+ * `recordExportCompletion`), together with C and D.
+ *
+ * The swapped-bindings line above is why E exists. A displaced binding is atomic and silent: it
  * writes one row, in one statement, and every atomicity case passes straight
  * through it. Only a case that asserts the VALUES catches it.
  *

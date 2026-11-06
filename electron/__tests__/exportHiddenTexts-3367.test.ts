@@ -27,9 +27,9 @@
  * unchanged, which is exactly the production behaviour that made the double
  * resolve invisible.
  *
- * `transactions:export-pdf` is NOT covered. It has no caller in `src/` and the
- * founder ruled it deleted on 2026-09-12 (BACKLOG-3234 → BACKLOG-3302); the
- * resolver filter reaches it for free and nothing was built for it.
+ * The path-taking PDF channel was never covered here: it had no caller in
+ * `src/`, the founder ruled it deleted on 2026-09-12 (BACKLOG-3234), and
+ * BACKLOG-3302 deleted it.
  */
 
 import { randomUUID } from "crypto";
