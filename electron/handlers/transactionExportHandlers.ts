@@ -1,6 +1,6 @@
 // ============================================
 // TRANSACTION EXPORT & SUBMISSION IPC HANDLERS
-// Handles: PDF export, enhanced export, folder export,
+// Handles: enhanced export, folder export,
 //          submission, resubmission, and sync
 // ============================================
 
@@ -14,7 +14,6 @@ import logService from "../services/logService";
 import submissionService from "../services/submissionService";
 import submissionSyncService from "../services/submissionSyncService";
 import supabaseService from "../services/supabaseService";
-import databaseService from "../services/databaseService";
 import enhancedExportService from "../services/enhancedExportService";
 import folderExportService from "../services/folderExportService";
 // BACKLOG-1802: EXPORT is the awaited completeness backstop for auto-sync.
@@ -23,7 +22,6 @@ import { ensureTransactionEmailsSynced } from "../services/transactionSyncTrigge
 // (Layer 3). Non-throwing; the renderer ExportModal is the primary prompt.
 import { ensureTransactionMessagesSynced } from "../services/messagesSyncTrigger";
 import { wrapHandler } from "../utils/wrapHandler";
-import { emitExportCompleted } from "../services/exportGate";
 // BACKLOG-3733: load → paywall gate → resolve, in ONE shared function.
 import { prepareTransactionCommunications } from "../services/transactionCommunicationSet";
 import type {
@@ -36,7 +34,6 @@ import type { FolderExportProgress } from "../types/ipc";
 import {
   ValidationError,
   validateTransactionId,
-  validateFilePath,
   sanitizeObject,
 } from "../utils/validation";
 // BACKLOG-2771: ONE resolver decides what every format includes. The date and
@@ -62,53 +59,6 @@ interface ExportOptions {
   /** BACKLOG-3767: add the transaction's checklists to the PDF. Only `true` counts. */
   includeChecklist?: boolean;
   [key: string]: unknown;
-}
-
-/**
- * BACKLOG-2013 — stamp the freeze boundary on the FIRST successful export.
- *
- * Write-once: the marker is only set when it is currently NULL, so re-exports
- * never move the boundary (the exported PDF is a snapshot; the freeze anchors
- * to the first extraction). Enforcement lives in SQL — `stampFirstExportedAt`
- * runs `UPDATE ... WHERE first_exported_at IS NULL` — so the write-once rule
- * holds even against a racing export, not just by caller convention. The
- * in-memory `currentFirstExportedAt` short-circuit is a cheap fast-path only.
- * Non-throwing — a failure to stamp must never fail the export the user just
- * performed; it is logged and the next export retries.
- *
- * BACKLOG-2549 — THIS IS NO LONGER A SHARED FUNNEL, and the sentence that said
- * so has been removed rather than left to read as live. Only
- * `transactions:export-pdf` still calls this. The enhanced and folder paths
- * fold the stamp into their single export-completion UPDATE
- * (`recordExportCompletion`, write-once via `COALESCE`), because writing the
- * marker separately from `export_status` left a window in which a deal was
- * exported and still editable.
- *
- * What the swallow means on the one path that remains: a stamp failure is still
- * silent here. It cannot produce that window, because the PDF path never sets
- * `export_status` at all — it produces the INVERSE state (frozen, artifact on
- * disk, still reading as `not_exported`), which is a separate defect reported
- * out of BACKLOG-2549 and deliberately not changed here.
- */
-async function markFirstExport(
-  transactionId: string,
-  currentFirstExportedAt: string | null | undefined,
-): Promise<void> {
-  if (currentFirstExportedAt && String(currentFirstExportedAt).trim().length > 0) {
-    return; // Already frozen — boundary is immutable except via admin unfreeze.
-  }
-  try {
-    databaseService.stampFirstExportedAt(
-      transactionId,
-      new Date().toISOString(),
-    );
-  } catch (err) {
-    logService.warn(
-      "Failed to stamp first_exported_at freeze marker (BACKLOG-2013)",
-      "Transactions",
-      { transactionId, error: err instanceof Error ? err.message : String(err) },
-    );
-  }
 }
 
 /**
@@ -170,140 +120,6 @@ function toSubmitResponse(result: SubmissionResult): TransactionResponse {
 export function registerTransactionExportHandlers(
   _mainWindow: BrowserWindow | null,
 ): void {
-  // Export transaction to PDF
-  handleBusy(
-    "transactions:export-pdf",
-    wrapHandler(async (
-      event: IpcMainInvokeEvent,
-      transactionId: string,
-      outputPath?: string,
-    ): Promise<TransactionResponse> => {
-      logService.info("Exporting transaction to PDF", "Transactions", {
-        transactionId,
-      });
-
-      // Validate inputs
-      const validatedTransactionId = validateTransactionId(transactionId);
-      if (!validatedTransactionId) {
-        throw new ValidationError(
-          "Transaction ID validation failed",
-          "transactionId",
-        );
-      }
-      const validatedPath = outputPath ? validateFilePath(outputPath) : null;
-
-      // Get transaction details with communications
-      let details = await transactionService.getTransactionDetails(
-        validatedTransactionId,
-      );
-
-      if (!details) {
-        return {
-          success: false,
-          error: "Transaction not found",
-        };
-      }
-
-      // BACKLOG-1802 (founder policy): EXPORT is the AWAITED completeness backstop.
-      // Force a stale-check sync of the full audit window (bypasses the freshness
-      // throttle) before producing the artifact, then re-fetch so freshly-linked
-      // communications are included. Non-throwing — a provider outage degrades to
-      // "export what we already have".
-      await ensureTransactionEmailsSynced({
-        transactionId: validatedTransactionId,
-        userId: details.user_id,
-        reason: "export",
-      });
-      // BACKLOG-2292 (Layer 3 backstop): also awaited + non-throwing for TEXTS.
-      // Imports older messages when the audit start predates the imported floor,
-      // then expands attached threads. The shared prep's re-fetch (BACKLOG-3733)
-      // below picks up both freshly-linked emails AND texts. This is the last
-      // line of defense — the renderer ExportModal gate is the primary prompt.
-      await ensureTransactionMessagesSynced({
-        transactionId: validatedTransactionId,
-        userId: details.user_id,
-        reason: "export",
-      });
-      // BACKLOG-3733: re-fetch (picks up what the sync linked) → paywall gate
-      // (BACKLOG-2006a / 2075, fail-closed: a locked transaction throws
-      // PAYWALL_LOCKED) → resolve, in the shared prep every channel uses.
-      //
-      // BACKLOG-2771: this channel has no renderer caller
-      // (`window.api.transactions.exportPDF` is referenced nowhere in src/) and
-      // takes no options, so it requests no audit window and no attachments —
-      // the resolver returns the full record, which is exactly what this channel
-      // produced when it had no filtering of its own.
-      const pdfPrep = await prepareTransactionCommunications({
-        transactionId: validatedTransactionId,
-        fallback: details,
-        request: () => ({
-          format: "pdf",
-          contentType: "both",
-          attachmentType: "none",
-          emailMode: "thread",
-        }),
-      });
-      if (!pdfPrep) return { success: false, error: "Transaction not found" };
-      details = pdfPrep.details;
-      const pdfPlan = pdfPrep.plan;
-
-      // Use provided output path or generate default one
-      const pdfPath =
-        validatedPath || folderExportService.getDefaultExportPath(details).replace(/\/$/, "") + ".pdf";
-
-      // Generate combined PDF using folder export service
-      // BACKLOG-3367: the hidden-text filter reaches this channel for free —
-      // it goes through the same resolver — so the count it passes is correct.
-      // Nothing was BUILT for this channel: it has no renderer caller and the
-      // founder ruled it deleted on 2026-09-12 (BACKLOG-3234 → BACKLOG-3302).
-      // This argument exists only because the signature now requires it.
-      const generatedPath = await folderExportService.exportTransactionToCombinedPDF(
-        details,
-        pdfPlan.communications,
-        pdfPath,
-        // BACKLOG-3683: `attachmentType: "none"` — this channel writes no
-        // attachment files, so none can be left out.
-        { hiddenTextCount: pdfPlan.hiddenTextCount, hiddenTexts: pdfPlan.hiddenTexts, filesNotIncluded: [] },
-      );
-
-      // BACKLOG-2006a — funnel: export-completed (main-side, non-throwing).
-      await emitExportCompleted({
-        userId: details.user_id,
-        transactionId: validatedTransactionId,
-        mode: pdfPrep.decision.mode,
-        format: "pdf",
-      });
-
-      // BACKLOG-2013 — stamp the freeze boundary on first successful export.
-      await markFirstExport(validatedTransactionId, details.first_exported_at);
-
-      // Audit log data export
-      await auditService.log({
-        userId: details.user_id,
-        action: "DATA_EXPORT",
-        resourceType: "EXPORT",
-        resourceId: validatedTransactionId,
-        metadata: {
-          format: "pdf",
-          propertyAddress: details.property_address,
-        },
-        success: true,
-      });
-
-      logService.info("PDF exported successfully", "Transactions", {
-        transactionId: validatedTransactionId,
-        path: generatedPath,
-      });
-
-      // BACKLOG-3808: deliberately NOT recorded as openable (see pm_comments).
-
-      return {
-        success: true,
-        path: generatedPath,
-      };
-    }, { module: "Transactions" }),
-  );
-
   // Enhanced export with options
   handleBusy(
     "transactions:export-enhanced",
@@ -338,8 +154,10 @@ export function registerTransactionExportHandlers(
         };
       }
 
-      // BACKLOG-1802: EXPORT completeness backstop (see export-pdf). Awaited,
-      // throttle-bypassing, non-throwing; re-fetch to include freshly-linked comms.
+      // BACKLOG-1802 (founder policy): EXPORT is the AWAITED completeness backstop.
+      // Force a stale-check sync of the full audit window (bypasses the freshness
+      // throttle) before producing the artifact. Non-throwing — a provider outage
+      // degrades to "export what we already have".
       await ensureTransactionEmailsSynced({
         transactionId: validatedTransactionId,
         userId: details.user_id,
@@ -489,8 +307,10 @@ export function registerTransactionExportHandlers(
         };
       }
 
-      // BACKLOG-1802: EXPORT completeness backstop (see export-pdf). Awaited,
-      // throttle-bypassing, non-throwing; re-fetch to include freshly-linked comms.
+      // BACKLOG-1802 (founder policy): EXPORT is the AWAITED completeness backstop.
+      // Force a stale-check sync of the full audit window (bypasses the freshness
+      // throttle) before producing the artifact. Non-throwing — a provider outage
+      // degrades to "export what we already have".
       await ensureTransactionEmailsSynced({
         transactionId: validatedTransactionId,
         userId: details.user_id,
@@ -531,7 +351,7 @@ export function registerTransactionExportHandlers(
       // BEHAVIOUR CHANGE, deliberate: a LOCKED transaction whose narrowed
       // content selection matches nothing now returns PAYWALL_LOCKED instead of
       // "No text communications found...". The paywall is the truer answer, and
-      // it is what export-pdf and export-enhanced have always returned.
+      // it is what export-enhanced has always returned.
       const folderPrep = await prepareTransactionCommunications({
         transactionId: validatedTransactionId,
         fallback: details,

@@ -1025,9 +1025,9 @@ function unitsInFile(rel: string, lines: string[], dbWriters: Set<string>): Fn[]
   // full closure makes every caller-of-two-callers an offender, and an async
   // orchestrator cannot be fixed with a `dbTransaction` anyway.
   //
-  // This is what sees BACKLOG-2549: `markFirstExport` in
-  // `transactionExportHandlers.ts` is exactly this shape, wrapping
-  // `stampFirstExportedAt`.
+  // This is what saw BACKLOG-2549: `markFirstExport` in
+  // `transactionExportHandlers.ts` was exactly this shape, wrapping
+  // `stampFirstExportedAt` (both deleted by BACKLOG-3302).
   const localWriters = new Set<string>();
   for (const [name, decl] of declared) {
     if (decl.exported) continue;

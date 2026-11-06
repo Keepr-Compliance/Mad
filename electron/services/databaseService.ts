@@ -2532,17 +2532,9 @@ class DatabaseService implements IDatabaseService {
   }
 
   /**
-   * BACKLOG-2013 — write-once stamp of the export-freeze marker. Enforced in SQL
-   * (`WHERE first_exported_at IS NULL`); returns true only when this call set it.
-   */
-  stampFirstExportedAt(transactionId: string, timestamp: string): boolean {
-    return transactionDb.stampFirstExportedAt(transactionId, timestamp);
-  }
-
-  /**
    * BACKLOG-2549 — record an export completion as ONE statement, so
    * `export_status` and the BACKLOG-2013 freeze marker can never flip
-   * separately. SYNCHRONOUS, mirroring `stampFirstExportedAt` above rather than
+   * separately. SYNCHRONOUS rather than
    * the async `updateTransaction`: an async wrapper over a sync primitive turns
    * a throw into a rejection, which is the shape `syncTwin.guard.test.ts`
    * forbids.

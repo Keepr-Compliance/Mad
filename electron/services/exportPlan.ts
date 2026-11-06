@@ -11,7 +11,8 @@
  *      private `_filterCommunicationsByDate` and `_filterByContentType` that
  *      the BACKLOG-2343 comment itself described as "mirroring the
  *      folder-export handler".
- *   3. `transactions:export-pdf` — no filtering at all.
+ *   3. a third, path-taking PDF channel — no filtering at all (deleted,
+ *      BACKLOG-3302).
  *
  * The BACKLOG-2343 timezone fix had to be applied to copies (1) and (2)
  * separately, and even after that they still disagreed (`||` vs `??` on the
@@ -59,9 +60,8 @@ export type {
  *
  * `startDate`/`endDate` are the audit window. Each entry point supplies its own
  * (folder export uses the transaction's started_at/closed_at; the enhanced
- * export prefers explicit option dates and falls back to the transaction's;
- * the orphan `transactions:export-pdf` channel supplies neither, which is why
- * it exports the whole record). That per-entry-point difference is legitimate
+ * export prefers explicit option dates and falls back to the transaction's).
+ * That per-entry-point difference is legitimate
  * and lives in the REQUEST — it is not a reason to have three filters.
  */
 export interface ExportPlanRequest {
@@ -242,7 +242,7 @@ function communicationDate(comm: Communication): Date {
  * ## Who derives from this (census, BACKLOG-2788)
  *
  * - export surfaces: `filterByDateWindow` below (folder, enhanced pdf/csv/
- *   excel/json/txt_eml, and the orphan export-pdf channel)
+ *   excel/json/txt_eml)
  * - broker submission: the four `submissionDbService` query bounds
  * - attachment counts / attachments tab: `attachmentHandlers`,
  *   `attachmentDbService` (both LATENT — their renderer callers pass no window)

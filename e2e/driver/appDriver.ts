@@ -1228,27 +1228,48 @@ export class KeeprAppDriver implements AppDriver {
 
   // ---------------------------------------------------------------------------
   // BACKLOG-1983 (export-completeness cell): trigger the combined-PDF export via the REAL preload
-  // bridge (window.api.transactions.exportPDF → ipcRenderer.invoke('transactions:export-pdf', ...)).
-  // Passing an EXPLICIT outputPath bypasses the native save dialog, and the seeded covering
-  // email_sync_state makes the awaited pre-export sync take the "covered" (no-network) branch. Returns
-  // the handler's { success, path, error } so the cell can HARNESS_ERROR if the PDF was not produced.
+  // bridge the ExportModal's "One PDF" button uses (window.api.transactions.exportEnhanced →
+  // ipcRenderer.invoke('transactions:export-enhanced', ...), exportFormat 'pdf', summaryOnly false).
+  // BACKLOG-3302 deleted the path-taking PDF channel this used to drive.
+  //
+  // exportEnhanced takes no output path: it writes into app.getPath('downloads'). So the driver first
+  // points the MAIN process's 'downloads' path at `outDir` through the Electron app handle. Without
+  // that handle (the 'cdp' strategy) it REFUSES rather than write into the real ~/Downloads.
+  // The seeded covering email_sync_state makes the awaited pre-export sync take the "covered"
+  // (no-network) branch. Returns the handler's { success, path, error }.
   // ---------------------------------------------------------------------------
-  async exportPdfToPath(
+  async exportCombinedPdfToDir(
     transactionId: string,
-    outputPath: string,
+    outDir: string,
   ): Promise<{ success: boolean; path?: string; error?: string }> {
+    if (!this.app) {
+      return { success: false, error: 'no Electron app handle: cannot redirect downloads, refusing to export' };
+    }
+    const resolved = await this.app.evaluate(({ app }, dir) => {
+      app.setPath('downloads', dir);
+      return app.getPath('downloads');
+    }, outDir);
+    if (resolved !== outDir) {
+      return { success: false, error: `downloads path not redirected (got ${resolved})` };
+    }
     return this.page.evaluate(
-      async ({ txId, out }) => {
+      async ({ txId }) => {
         const api = (window as unknown as {
-          api?: { transactions?: { exportPDF?: (id: string, p: string) => Promise<unknown> } };
+          api?: { transactions?: { exportEnhanced?: (id: string, o: unknown) => Promise<unknown> } };
         }).api;
-        const fn = api?.transactions?.exportPDF;
+        const fn = api?.transactions?.exportEnhanced;
         if (typeof fn !== 'function') {
-          return { success: false, error: 'window.api.transactions.exportPDF is not available' };
+          return { success: false, error: 'window.api.transactions.exportEnhanced is not available' };
         }
-        return (await fn(txId, out)) as { success: boolean; path?: string; error?: string };
+        return (await fn(txId, {
+          exportFormat: 'pdf',
+          summaryOnly: false,
+          contentType: 'both',
+          attachmentType: 'none',
+          emailExportMode: 'thread',
+        })) as { success: boolean; path?: string; error?: string };
       },
-      { txId: transactionId, out: outputPath },
+      { txId: transactionId },
     );
   }
 

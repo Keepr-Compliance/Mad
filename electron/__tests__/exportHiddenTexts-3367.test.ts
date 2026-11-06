@@ -105,7 +105,6 @@ jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: {
     updateTransaction: jest.fn().mockResolvedValue(undefined),
-    stampFirstExportedAt: jest.fn().mockReturnValue(true),
     recordExportCompletion: jest.fn().mockReturnValue(true),
   },
 }));

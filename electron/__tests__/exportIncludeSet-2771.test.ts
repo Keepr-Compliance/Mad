@@ -86,7 +86,6 @@ jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: {
     updateTransaction: jest.fn().mockResolvedValue(undefined),
-    stampFirstExportedAt: jest.fn().mockReturnValue(true),
   },
 }));
 
@@ -266,17 +265,6 @@ describe("BACKLOG-2771: every export entry point resolves its include set once",
       expect(ids(enhancedPlan().communications)).toEqual([IN_WINDOW_EMAIL.id as string]);
     });
 
-    it("the orphan export-pdf channel requests no window and exports the full record", async () => {
-      // `window.api.transactions.exportPDF` has no caller in src/ and the channel
-      // takes no options, so it states an empty request rather than inheriting
-      // one. Behavior is unchanged from when it had no filtering at all.
-      await handlers.get("transactions:export-pdf")(event, TX_ID, "/tmp/out.pdf");
-
-      expect(mockExportToCombinedPDF).toHaveBeenCalledTimes(1);
-      expect(ids(mockExportToCombinedPDF.mock.calls[0][1] as Communication[])).toEqual(
-        ids(ALL_COMMS),
-      );
-    });
   });
 
   describe("content selection speaks ONE vocabulary", () => {
@@ -434,13 +422,6 @@ describe("BACKLOG-2771: every export entry point resolves its include set once",
 
       expect(enhancedPlan().writesAttachmentsToDisk).toBe(false);
       expect(enhancedPlan().attachmentComms).toEqual([]);
-    });
-
-    it("the orphan export-pdf channel", async () => {
-      await handlers.get("transactions:export-pdf")(event, TX_ID, "/tmp/out.pdf");
-      // This channel has no attachment phase at all; it renders the combined PDF
-      // only. Its plan says so rather than leaving it implicit.
-      expect(mockExportToCombinedPDF).toHaveBeenCalledTimes(1);
     });
 
     it("anti-vacuity: the same handlers DO select attachments when asked", async () => {

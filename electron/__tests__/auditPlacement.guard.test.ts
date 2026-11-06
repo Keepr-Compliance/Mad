@@ -71,13 +71,14 @@ const AUDIT_SERVICE_FILE = "electron/services/auditService.ts";
  * its three LOGIN / LOGIN_FAILED entries; 37 since BACKLOG-3340 writes the
  * browser sign-in's LOGIN with recordInTransaction in
  * `provisionDeepLinkLogin`; 34 since BACKLOG-3302 deleted the pending-login
- * handler's LOGIN / LOGIN_FAILED and the pending-mailbox MAILBOX_CONNECT).
+ * handler's LOGIN / LOGIN_FAILED and the pending-mailbox MAILBOX_CONNECT; 33
+ * since BACKLOG-3302 PR 3 deleted the unreachable PDF channel's DATA_EXPORT).
  * `log` calls plus
  * `recordInTransaction` calls must add up to this. A conversion moves a site
  * from one side to the other; a NEW audited site changes the total and must
  * update this number on purpose.
  */
-const AUDITED_SITES_TOTAL = 34;
+const AUDITED_SITES_TOTAL = 33;
 
 type Reason = string;
 const R_REMOTE =
@@ -102,7 +103,6 @@ const ALLOWLIST: Record<string, { count: number; reason: Reason }> = {
   "electron/handlers/sessionSignOut.ts::signOutLocalSession::LOGOUT": { count: 1, reason: R_SESSION },
   "electron/handlers/attachmentHandlers.ts::auditAttachmentAccess::DATA_ACCESS": { count: 1, reason: R_READ },
   // F — no UI caller
-  "electron/handlers/transactionExportHandlers.ts::transactions:export-pdf::DATA_EXPORT": { count: 1, reason: R_UNREACHABLE },
   "electron/services/transactionService/transactionService.ts::adminUnfreezeTransaction::TRANSACTION_UPDATE": { count: 1, reason: R_UNREACHABLE },
 };
 

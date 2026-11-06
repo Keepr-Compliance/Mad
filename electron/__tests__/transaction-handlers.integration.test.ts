@@ -72,7 +72,6 @@ const mockDatabaseService = {
   databaseService: {
     updateTransaction: jest.fn(),
     // BACKLOG-2013: export completion stamps the freeze marker via this path.
-    stampFirstExportedAt: jest.fn().mockReturnValue(true),
     // BACKLOG-2549: the enhanced and folder paths now write tracking + the
     // freeze marker in ONE statement through this method instead.
     recordExportCompletion: jest.fn(),
@@ -81,7 +80,6 @@ const mockDatabaseService = {
   // BACKLOG-3339: the synchronous writes the handlers call inside the transaction.
   updateTransactionSync: jest.fn(),
   deleteTransactionSync: jest.fn(),
-  stampFirstExportedAt: jest.fn().mockReturnValue(true),
   recordExportCompletion: jest.fn(),
   isInitialized: jest.fn().mockReturnValue(true),
 };
@@ -400,7 +398,7 @@ describe("Transaction Handlers Integration Tests", () => {
       created_at: new Date().toISOString(),
     };
 
-    it("should complete full lifecycle: create -> update -> export -> delete", async () => {
+    it("should complete full lifecycle: create -> update -> delete", async () => {
       // Step 1: Create transaction (the channel the New Transaction screen calls).
       // Its TRANSACTION_CREATE entry is written inside createAuditedTransaction,
       // which is mocked here, so the handler-level check is that it was called.
@@ -454,29 +452,7 @@ describe("Transaction Handlers Integration Tests", () => {
         expect.objectContaining({ action: "TRANSACTION_UPDATE" }),
       );
 
-      // Step 3: Export to PDF
-      mockTransactionService.getTransactionDetails.mockResolvedValue({
-        ...baseTransaction,
-        status: "active",
-        sale_price: 500000,
-        communications: [
-          { id: "comm-1", type: "email", subject: "Offer accepted" },
-        ],
-      });
-      mockFolderExportService.exportTransactionToCombinedPDF.mockResolvedValue(
-        "/exports/123-main-st.pdf",
-      );
-
-      const exportHandler = registeredHandlers.get("transactions:export-pdf");
-      const exportResult = await exportHandler(mockEvent, TEST_TXN_ID);
-
-      expect(exportResult.success).toBe(true);
-      expect(exportResult.path).toContain(".pdf");
-      expect(mockAuditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({ action: "DATA_EXPORT" }),
-      );
-
-      // Step 4: Delete transaction
+      // Step 3: Delete transaction
       mockTransactionService.deleteTransaction.mockResolvedValue(undefined);
 
       const deleteHandler = registeredHandlers.get("transactions:delete");
@@ -834,23 +810,6 @@ describe("Transaction Handlers Integration Tests", () => {
       expect(result.error).toContain("token expired");
     });
 
-    it("should handle file system error during export", async () => {
-      mockTransactionService.getTransactionDetails.mockResolvedValue({
-        id: TEST_TXN_ID,
-        user_id: TEST_USER_ID,
-        property_address: "123 Main St",
-        communications: [],
-      });
-      mockFolderExportService.exportTransactionToCombinedPDF.mockRejectedValue(
-        new Error("ENOSPC: no space left on device"),
-      );
-
-      const handler = registeredHandlers.get("transactions:export-pdf");
-      const result = await handler(mockEvent, TEST_TXN_ID);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("space");
-    });
   });
 
   describe("Input Validation", () => {
@@ -895,23 +854,5 @@ describe("Transaction Handlers Integration Tests", () => {
       expect(result).toBeDefined();
     });
 
-    it("should reject path traversal in export path", async () => {
-      mockTransactionService.getTransactionDetails.mockResolvedValue({
-        id: TEST_TXN_ID,
-        user_id: TEST_USER_ID,
-        property_address: "123 Main St",
-        communications: [],
-      });
-
-      const handler = registeredHandlers.get("transactions:export-pdf");
-      const result = await handler(
-        mockEvent,
-        TEST_TXN_ID,
-        "../../../etc/passwd",
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("Validation error");
-    });
   });
 });

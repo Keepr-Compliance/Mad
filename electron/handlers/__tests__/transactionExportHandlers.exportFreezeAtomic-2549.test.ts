@@ -13,14 +13,13 @@
  * identity anchors (address, type, audit start) are still editable, because the
  * freeze predicate reads `first_exported_at`.
  *
- * Two DIFFERENT routes produce that same row, and a test that models only the
- * first misses the one that actually ships:
- *
- *   A. THE STAMP FAILS AND NOTHING SAYS SO. `markFirstExport` is deliberately
- *      non-throwing — it catches and logs. So the export returns SUCCESS to the
- *      user and leaves the deal unfrozen. No crash is required.
- *   B. CONTROL IS LOST BETWEEN THE TWO WRITES. The first statement is committed
- *      and the second never reaches SQLite.
+ * BACKLOG-3302 deleted the separate stamp writer with the path-taking PDF
+ * channel, its last caller. Cases A, B and SECONDARY injected their fault at
+ * that writer. B (control lost between two writes) and SECONDARY (the separate
+ * writer is not called) have no subject left: there is one statement, and the
+ * compiler refuses the deleted writer. A is kept on the one remaining seam,
+ * `recordExportCompletion`: when the completion write fails, the row must not
+ * read as exported-but-editable OR frozen-but-not-exported.
  *
  * ===========================================================================
  * WHY THIS SUITE READS THE ROW BACK
@@ -30,25 +29,6 @@
  * pass against the defect. Every load-bearing assertion below is a `SELECT` on
  * the test database. Same reasoning as
  * `electron/__tests__/transactionNullClear-2759.test.ts`.
- *
- * ===========================================================================
- * WHY THE FAULT IS INJECTED AT `stampFirstExportedAt`
- * ===========================================================================
- * This file must COMPILE AND RUN UNCHANGED before the fix, after it, and after
- * the revert control — otherwise the "before" and "after" are two different
- * tests. ts-jest runs with diagnostics on (`jest.config.js:20-26`), so a single
- * reference to the post-fix writer would fail to compile against unfixed code
- * and the reachability control could not run at all. `stampFirstExportedAt`
- * exists on BOTH sides (the PDF path keeps it), so it is the one stable seam.
- *
- * STATED LIMIT: case B models the crash IN-PROCESS — the spy records the call
- * and never reaches SQLite, which is the state a process death between the two
- * awaits leaves behind. The handler's return value is therefore NOT meaningful
- * for case B and is not asserted. No child-process kill is used: unlike
- * BACKLOG-2548 (a `db.transaction()` wrapper around three statements, where the
- * control had to prove the wrapper survives a real SIGKILL), the fix here is a
- * SINGLE statement whose atomicity is SQLite's own. A kill would be testing the
- * driver.
  *
  * ===========================================================================
  * CONTROLS — RUN, NOT ASSUMED (results in the BACKLOG-2549 pm_comments record)
@@ -209,9 +189,8 @@ const SEEDED_EXPORT_COUNT = 3;
 let db: DatabaseType;
 /** The real facade instance the handler holds — the fault-injection seam. */
 let databaseService: {
-  stampFirstExportedAt: (transactionId: string, timestamp: string) => boolean;
+  recordExportCompletion: (transactionId: string, input: Record<string, unknown>) => void;
 };
-let stampSpy: jest.SpyInstance;
 
 type TxRow = Record<string, unknown>;
 
@@ -293,50 +272,34 @@ afterAll(() => {
 
 beforeEach(() => {
   jest.clearAllMocks();
-  stampSpy = jest.spyOn(databaseService, "stampFirstExportedAt");
   (transactionService.getTransactionDetails as jest.Mock).mockImplementation(async () =>
     detailsFromDb(),
   );
 });
 
-afterEach(() => {
-  stampSpy.mockRestore();
-});
-
 describe("BACKLOG-2549 — export status and the freeze stamp flip together", () => {
   describe.each(CHANNELS)("$label", ({ channel, options }) => {
     // -----------------------------------------------------------------------
-    // A and B — the defect. RED before the fix.
+    // A — the completion write FAILS: export status and the freeze flip
+    // together or not at all.
     // -----------------------------------------------------------------------
 
-    it("A: a freeze-stamp FAILURE cannot leave the deal exported-but-editable", async () => {
+    it("A: a completion-write FAILURE leaves export status and the freeze in step", async () => {
       seed({ frozen: false });
-      stampSpy.mockImplementation(() => {
-        throw new Error("SIMULATED freeze-stamp failure");
+      const spy = jest.spyOn(databaseService, "recordExportCompletion").mockImplementation(() => {
+        throw new Error("SIMULATED completion-write failure");
       });
-
-      await invoke(channel, options);
-
-      const r = row();
-      expect({
-        exported: r.export_status === "exported",
-        frozen: r.first_exported_at !== null,
-      }).toEqual({ exported: true, frozen: true });
-    });
-
-    it("B: losing control between the writes cannot leave the deal exported-but-editable", async () => {
-      seed({ frozen: false });
-      // Recording no-op: the statement never reaches SQLite, which is what a
-      // process death between the two awaits leaves behind.
-      stampSpy.mockImplementation(() => true);
-
-      await invoke(channel, options);
+      try {
+        await invoke(channel, options);
+      } finally {
+        spy.mockRestore();
+      }
 
       const r = row();
       expect({
         exported: r.export_status === "exported",
         frozen: r.first_exported_at !== null,
-      }).toEqual({ exported: true, frozen: true });
+      }).toEqual({ exported: false, frozen: false });
     });
 
     // -----------------------------------------------------------------------
@@ -425,18 +388,6 @@ describe("BACKLOG-2549 — export status and the freeze stamp flip together", ()
       expect(anchorsNow()).toEqual(before);
     });
 
-    // -----------------------------------------------------------------------
-    // SECONDARY — records the mechanism change. A shape assertion cannot tell
-    // a correct row from a wrong one; the SELECTs above are load-bearing.
-    // -----------------------------------------------------------------------
-
-    it("SECONDARY: the completion path no longer reaches the separate stamp writer", async () => {
-      seed({ frozen: false });
-
-      await invoke(channel, options);
-
-      expect(stampSpy).not.toHaveBeenCalled();
-    });
   });
 });
 
@@ -494,30 +445,6 @@ describe("BACKLOG-3808 — a finished export is registered as openable", () => {
       realPath: dir,
       kind: "dir",
     });
-  });
-
-  it("export-pdf to a renderer-chosen path: open-folder refuses that path", async () => {
-    seed({ frozen: false });
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { registerConversationHandlers } = require("../conversationHandlers");
-    if (!handlers.has("open-folder")) registerConversationHandlers({} as never);
-    mockShellOpenPath.mockReset();
-    mockShellOpenPath.mockResolvedValue("");
-
-    const chosen = path.join(outDir, "chosen.pdf");
-    fs.writeFileSync(chosen, "%PDF");
-    (folderExportService.exportTransactionToCombinedPDF as jest.Mock).mockResolvedValueOnce(chosen);
-
-    const handler = handlers.get("transactions:export-pdf");
-    if (!handler) throw new Error("handler not registered: transactions:export-pdf");
-    const result = (await handler({} as never, TXN, chosen)) as { success: boolean; path?: string };
-    expect(result).toMatchObject({ success: true, path: chosen });
-
-    const openFolder = handlers.get("open-folder");
-    if (!openFolder) throw new Error("handler not registered: open-folder");
-    const opened = (await openFolder({} as never, chosen)) as { success: boolean; error?: string };
-    expect(opened.success).toBe(false);
-    expect(mockShellOpenPath).not.toHaveBeenCalled();
   });
 
   it("a path no export returned is not openable", async () => {
