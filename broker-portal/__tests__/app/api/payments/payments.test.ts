@@ -1183,4 +1183,49 @@ describe('BACKLOG-3951 C10: purchase routes refuse a brokerage member without a 
       await proceeds(name, mod);
     });
   }
+
+  // BACKLOG-4155: with two brokerage rows, an ACTIVE row anywhere decides
+  // (allowed); else an UNASSIGNED row anywhere refuses. Every case in both
+  // row orders. Org B is brokerageMembership's transcribed embed with a
+  // distinct id (personal_owner_user_id null).
+  const ORG_B_4155 = '00000000-0000-4000-8000-0000004155b1'; // pii-allow-uuid: invented fixture id
+  const activeAtB = (): Row => {
+    const base = brokerageMembership('agent', 'post', 'USER-1');
+    return {
+      ...base,
+      id: `${ORG_B_4155}-agent`,
+      organization_id: ORG_B_4155,
+      organizations: { ...(base.organizations as Record<string, unknown>), id: ORG_B_4155 },
+    };
+  };
+  const unassignedAtB = (): Row => ({ ...activeAtB(), license_status: 'unassigned' });
+  const suspendedAtA = (): Row => ({ ...UNASSIGNED_MEMBER_ROW, license_status: 'suspended' });
+
+  const ALLOWED_4155: [string, Row[]][] = [
+    ['4155 C1 unassigned at A + active at B (A first)', [UNASSIGNED_MEMBER_ROW, activeAtB()]],
+    ['4155 C1 unassigned at A + active at B (B first)', [activeAtB(), UNASSIGNED_MEMBER_ROW]],
+  ];
+  for (const [who, rows] of ALLOWED_4155) {
+    it.each(ROUTES)(`%s: ${who} -> proceeds to the quote`, async (name, mod) => {
+      wire(rows);
+      await proceeds(name, mod);
+    });
+  }
+
+  const REFUSED_4155: [string, Row[]][] = [
+    ['4155 C3a suspended at A + unassigned at B + own personal (A first)', [suspendedAtA(), unassignedAtB(), personalMembership('USER-1')]],
+    ['4155 C3a suspended at A + unassigned at B + own personal (B first)', [unassignedAtB(), suspendedAtA(), personalMembership('USER-1')]],
+    ['4155 C3b suspended at A + unassigned at B (A first)', [suspendedAtA(), unassignedAtB()]],
+    ['4155 C3b suspended at A + unassigned at B (B first)', [unassignedAtB(), suspendedAtA()]],
+  ];
+  for (const [who, rows] of REFUSED_4155) {
+    it.each(ROUTES)(`%s: ${who} -> 403 no_license, nothing bought`, async (_n, mod) => {
+      wire(rows);
+      const { POST } = await import(mod);
+      const res = await POST(bearer('valid'));
+      expect(res.status).toBe(403);
+      expect(await (res as NextResponse).json()).toEqual({ error: 'no_license' });
+      nothingBought();
+    });
+  }
 });
