@@ -6,64 +6,88 @@ user_invocable: true
 
 # Fix Deep Link Protocol Registration
 
-Fixes the `keepr://` OAuth callback not routing to the dev Electron app. This is a common issue caused by:
+**Run this skill as written. Do not substitute narrower fixes.**
+
+Fixes the `keepr://` OAuth callback not routing to the dev Electron app. Causes:
 1. Installed Keepr.app at /Applications intercepting the protocol
 2. Git worktrees with node_modules/electron registering competing handlers
 3. Stale Launch Services cache remembering old bindings
 
+## Dead end: do not try to re-point the handler directly
+
+`LSSetDefaultHandlerForURLScheme('keepr', 'com.github.Electron')` and
+`NSWorkspace.setDefaultApplication(at:toOpenURLsWithScheme:)` both **return success and change nothing**
+(observed 2026-11-06). macOS only routes a scheme to apps that **declare** it in `CFBundleURLTypes`.
+The dev `Electron.app` does not, so while any declaring Keepr.app is registered, Keepr.app wins.
+The only working path is to take Keepr.app out of Launch Services (steps below), after which dev's
+runtime `setAsDefaultProtocolClient` owns `keepr:`.
+
 ## Steps
 
-1. Kill any running Keepr/Electron instances
-2. Check for and handle /Applications/Keepr*.app (rename or delete per user preference)
-3. Clean up finished git worktrees that may have competing Electron registrations
+1. Stop the processes that are yours; quit installed Keepr gently
+2. Rename /Applications/Keepr.app so it no longer declares `keepr:`
+3. List worktrees (informational only)
 4. Reset the macOS Launch Services cache
-5. Wait 3 seconds for cache to rebuild
-6. Restart the dev server
+5. Wait 3 seconds for the cache to rebuild
+6. Start `npm run dev` and verify the effective handler
+7. **After sign-in: restore Keepr.app (mandatory)**
 
 ## Commands
 
 ```bash
-# Step 1: Kill running instances
-pkill -f "electron" 2>/dev/null
-pkill -f "vite" 2>/dev/null
+# Step 1: List dev Electron processes and who owns them. Do NOT blanket `pkill -f electron`.
+# Other sessions/worktrees may own these — ask the user before closing any that aren't yours.
+# The dev binary is the SHARED node_modules Electron, so `pkill -f <worktree>` misses it: kill by PID.
+for pid in $(pgrep -f electron/dist/Electron.app/Contents/MacOS/Electron); do
+  echo "$pid $(lsof -a -p "$pid" -d cwd -Fn | sed -n 's/^n//p')"
+done
+# kill <pid>   # only your own, or with the user's go
+
+# Quit the installed app gently (no pkill)
+osascript -e 'tell application id "com.keeprcompliance.keepr" to quit'
 sleep 1
 
-# Step 2: Check for installed app
-KEEPR_APPS=$(ls /Applications/ 2>/dev/null | grep -i keepr)
-if [ -n "$KEEPR_APPS" ]; then
-  echo "Found installed Keepr apps in /Applications:"
-  echo "$KEEPR_APPS"
-  echo "Renaming to prevent protocol conflict..."
-  for app in /Applications/Keepr*.app; do
-    [ -e "$app" ] && mv "$app" "${app%.app}-disabled.app" 2>/dev/null && echo "  Renamed: $app"
-  done
-fi
+# Step 2: Rename the installed app
+[ -e /Applications/Keepr.app ] && mv /Applications/Keepr.app /Applications/Keepr-disabled.app && echo "Renamed Keepr.app -> Keepr-disabled.app"
 
-# Step 3: Clean up stale worktrees
-echo "Checking worktrees..."
-cd "$CLAUDE_PROJECT_DIR" 2>/dev/null || cd /Users/daniel/Documents/Mad
-STALE_WORKTREES=$(git worktree list | grep -v "$(pwd)" | grep -v "\[develop\]" | awk '{print $1}')
-if [ -n "$STALE_WORKTREES" ]; then
-  echo "Found worktrees that may conflict:"
-  echo "$STALE_WORKTREES"
-  echo "Run 'git worktree remove <path> --force' for completed ones"
-fi
-git worktree prune
+# Step 3: Worktrees — informational only. NEVER remove one without the user's go.
+cd "$CLAUDE_PROJECT_DIR" 2>/dev/null || cd /Users/daniel/Developer/Mad
+git worktree list
 
 # Step 4: Reset Launch Services
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -kill -r -domain local -domain system -domain user
 
 # Step 5: Wait
-echo "Waiting 3 seconds for cache rebuild..."
 sleep 3
 
-# Step 6: Restart dev
-echo "Ready — run 'npm run dev' to start the app"
+# Step 6: Start dev (from the worktree you are testing)
+npm run dev
 ```
+
+**Env files:** dev needs `.env.development` / `.env.local` in the worktree, or sign-in fails with a
+missing `SUPABASE_URL`. Copy them from `/Users/daniel/Developer/Mad` with `cp` — never print them.
 
 ## Verification
 
-After running, verify the dev app owns the protocol:
+Resolve the **effective** handler (what macOS actually opens):
 ```bash
-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -dump | grep -i keepr | grep -i bindings
+osascript -l JavaScript -e 'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL($.NSURL.URLWithString("keepr://x")).path.js'
+```
+Expected while dev is running: `.../node_modules/electron/dist/Electron.app`.
+
+`defaults read com.apple.LaunchServices/com.apple.launchservices.secure LSHandlers` can show a stale
+stored entry that macOS ignores — do not trust it over the command above.
+
+## Restore after sign-in (MANDATORY)
+
+The installed app must never be left renamed.
+
+```bash
+# 1. Quit the dev app if you are done with it (by PID, see Step 1)
+# 2. Put the installed app back and re-register it
+mv /Applications/Keepr-disabled.app /Applications/Keepr.app
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Keepr.app
+osascript -l JavaScript -e "ObjC.import('CoreServices'); \$.LSSetDefaultHandlerForURLScheme(\$('keepr'), \$('com.keeprcompliance.keepr'))"
+# 3. Verify — must print /Applications/Keepr.app
+osascript -l JavaScript -e 'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL($.NSURL.URLWithString("keepr://x")).path.js'
 ```
