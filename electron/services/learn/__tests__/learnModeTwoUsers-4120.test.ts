@@ -16,6 +16,9 @@
  *   T6 preview attachments (PREVIEW_ATTACHMENTS_SQL) refuses a foreign id
  *   T7 bulk-row preview and answer text resolve to USER's copy of a message
  *      that both accounts hold under one (source, external_id)
+ *   T8 "Your answers" (LIST_ANSWERS_SQL) excludes OTHER's answers, and the
+ *      subject resolves to USER's copy of a shared message
+ *   T9 deleting one answer (softDeleteAnswer) never touches OTHER's rows
  */
 import * as nodePath from "path";
 import * as fs from "fs";
@@ -46,7 +49,9 @@ import {
   insertBulkSample,
   answerBulk,
   listAnsweredBulkWithText,
+  listAnswers,
   listDealAnswers,
+  softDeleteAnswer,
   previewAttachments,
   previewEmailForBulkRow,
   previewEmailsByIds,
@@ -171,5 +176,39 @@ describe("two accounts, one local database", () => {
     expect(previewEmailForBulkRow(USER, String(row.id))?.id).toBe("e-0002");
     expect(answerBulk(USER, String(row.id), "real_estate")).toBe(true);
     expect(listAnsweredBulkWithText(USER).map((g) => g.subject)).toEqual(["User copy"]);
+  });
+
+  it("T8 Your answers lists only USER's answers; a shared message shows USER's subject", () => {
+    seedEmail("e-0001", OTHER, "ext-shared", "Other copy", "x");
+    seedEmail("e-0002", USER, "ext-shared", "User copy", "x");
+    insertBulkSample(USER, [{ source: "gmail", external_id: "ext-shared" }], 1);
+    insertBulkSample(OTHER, [{ source: "gmail", external_id: "ext-shared" }], 1);
+    for (const row of db.prepare(`SELECT id, user_id FROM learn_bulk_answers`).all() as Array<Record<string, string>>) {
+      expect(answerBulk(row.user_id, row.id, "skip")).toBe(true);
+    }
+    run(
+      `INSERT INTO learn_deal_answers (id, user_id, run_id, address_key, property_address, answer, answered_at, rule_version, created_at, updated_at)
+       VALUES ('lda-o', ?, 'run-1', 'key-other', ?, 'yes', 'x', 1, 'x', 'x')`,
+      OTHER,
+      OTHER_DEAL,
+    );
+    const got = listAnswers(USER);
+    expect(got.map((g) => [g.kind, g.label])).toEqual([["bulk", "User copy"]]);
+  });
+
+  it("T9 deleting one of USER's answers never touches OTHER's rows, and OTHER's id is refused", () => {
+    const ins = (id: string, user: string) =>
+      run(
+        `INSERT INTO learn_deal_answers (id, user_id, run_id, address_key, property_address, answer, answered_at, rule_version, created_at, updated_at)
+         VALUES (?, ?, 'run-1', 'key-same', 'addr', 'yes', 'x', 1, 'x', 'x')`,
+        id,
+        user,
+      );
+    ins("lda-u", USER);
+    ins("lda-o", OTHER);
+    expect(softDeleteAnswer(USER, "deal", "lda-o", 1)).toBe(false);
+    expect(softDeleteAnswer(USER, "deal", "lda-u", 1)).toBe(true);
+    const live = db.prepare(`SELECT id FROM learn_deal_answers WHERE deleted_at IS NULL`).all() as Array<{ id: string }>;
+    expect(live.map((r) => r.id)).toEqual(["lda-o"]);
   });
 });

@@ -3,7 +3,8 @@
  * macOS runner pin (BACKLOG-3198).
  *
  * .github/macos-runner.json records the runner label every macOS job uses and
- * the macOS version and build that label was last measured at. Moving either
+ * the macOS (version, build) pairs that label is known to serve. A label can be
+ * served by more than one image at once, so any recorded pair is accepted. Moving either
  * is meant to be a PR, not something that happens to the release.
  *
  * GitHub-hosted runners can be pinned by LABEL only (macos-26), not by image
@@ -13,8 +14,8 @@
  *   --workflows   every macOS `runs-on` in release.yml and ci.yml resolves to
  *                 the pinned label, and no job asks for macos-latest. Static;
  *                 runs on any OS.
- *   --host        sw_vers on this machine matches the recorded version and
- *                 build. Run on the macOS runner. --warn prints a workflow
+ *   --host        sw_vers on this machine matches one recorded version and
+ *                 build pair. Run on the macOS runner. --warn prints a workflow
  *                 warning instead of failing.
  *
  * Options: --config <path>, --workflow <path> (repeatable),
@@ -53,8 +54,12 @@ try {
 } catch (error) {
   fail(`cannot read ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
 }
-for (const key of ["label", "productVersion", "buildVersion"]) {
-  if (typeof config[key] !== "string" || config[key].trim() === "") fail(`${configPath}: "${key}" must be a non-empty string`);
+if (typeof config.label !== "string" || config.label.trim() === "") fail(`${configPath}: "label" must be a non-empty string`);
+if (!Array.isArray(config.images) || config.images.length === 0) fail(`${configPath}: "images" must be a non-empty array`);
+for (const image of config.images) {
+  for (const key of ["productVersion", "buildVersion"]) {
+    if (typeof image?.[key] !== "string" || image[key].trim() === "") fail(`${configPath}: every "images" entry needs a non-empty "${key}"`);
+  }
 }
 if (!/^macos-\d+(-[a-z0-9]+)*$/.test(config.label) || config.label.startsWith("macos-latest")) {
   fail(`${configPath}: label "${config.label}" is not a versioned macOS label (e.g. macos-26)`);
@@ -109,13 +114,13 @@ function checkHost() {
   } catch (error) {
     fail(`cannot run sw_vers: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (product === config.productVersion && build === config.buildVersion) {
+  if (config.images.some((i) => i.productVersion === product && i.buildVersion === build)) {
     console.log(`check-macos-runner: OK — macOS ${product} (${build}) matches ${path.basename(configPath)}`);
     return;
   }
   const message =
     `this runner is macOS ${product} (${build}); ${path.basename(configPath)} records ` +
-    `${config.productVersion} (${config.buildVersion}) for ${config.label}. The runner image moved. ` +
+    `${config.images.map((i) => `${i.productVersion} (${i.buildVersion})`).join(" and ")} for ${config.label}. The runner image moved. ` +
     `Update .github/macos-runner.json in a PR, then run the Release workflow by workflow_dispatch ` +
     `on that branch to prove signing and notarisation on the new OS before releasing.`;
   if (warnOnly) {

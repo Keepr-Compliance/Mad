@@ -18,6 +18,8 @@ export interface UseLogoutHandlerOptions {
   onSetSelectedPhoneType: (value: "iphone" | "android" | null) => void;
   onSetCurrentStep: (step: AppStep) => void;
   setIsNewUserFlow: (value: boolean) => void;
+  /** BACKLOG-4120: close Learn mode over the main screen, so it never reopens for the next user. */
+  onCloseLearn?: () => void;
 }
 
 export function useLogoutHandler({
@@ -28,6 +30,7 @@ export function useLogoutHandler({
   onSetSelectedPhoneType,
   onSetCurrentStep,
   setIsNewUserFlow,
+  onCloseLearn,
 }: UseLogoutHandlerOptions) {
   const handleLogout = useCallback(async (): Promise<void> => {
     await logout();
@@ -37,11 +40,12 @@ export function useLogoutHandler({
       stateMachineDispatch({ type: "LOGOUT" });
     }
     onCloseProfile();
+    onCloseLearn?.();
     setIsNewUserFlow(false);
     onSetHasSelectedPhoneType(false);
     onSetSelectedPhoneType(null);
     onSetCurrentStep("login");
-  }, [logout, stateMachineDispatch, onCloseProfile, onSetHasSelectedPhoneType, onSetSelectedPhoneType, onSetCurrentStep, setIsNewUserFlow]);
+  }, [logout, stateMachineDispatch, onCloseProfile, onSetHasSelectedPhoneType, onSetSelectedPhoneType, onSetCurrentStep, setIsNewUserFlow, onCloseLearn]);
 
   return { handleLogout };
 }

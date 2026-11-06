@@ -25,6 +25,7 @@ import type { AppStateMachine } from "../state/types";
 import type { LearnScoreResult } from "../../../electron/types/ipc/window-api-learn";
 import {
   CLEANUP_NEXT,
+  LIST_ANSWERS,
   PREVIEW_CLEANUP,
   SCORE,
   STATE_ON,
@@ -32,12 +33,16 @@ import {
 
 jest.mock("../../components/Settings", () => {
   const { LearnSettings } = jest.requireActual("../../components/settings/learn/LearnSettings");
+  const { LearnAnswersPrivacyRow } = jest.requireActual("../../components/settings/learn/LearnAnswersPrivacyRow");
   const { PlatformProvider } = jest.requireActual("@/contexts/PlatformContext");
   function StubSettings(props: { onStartLearn?: (total: number) => void; onSeeLearnScore?: () => void }) {
     return (
       <PlatformProvider>
         <div data-testid="settings-page">
           <LearnSettings onStart={props.onStartLearn} onSeeScore={props.onSeeLearnScore} />
+          <div id="settings-privacy">
+            <LearnAnswersPrivacyRow />
+          </div>
         </div>
       </PlatformProvider>
     );
@@ -85,6 +90,8 @@ function installFakeMain(): void {
     preview: jest.fn(async () => PREVIEW_CLEANUP),
     attachmentOpen: jest.fn(async () => ({ success: true, dataUrl: "data:application/pdf;base64,JVBERi0=", downloadedNow: true })),
     deleteAnswers: jest.fn(async () => ({ success: true, removed: { deal: 0, bulk: 0 } })),
+    listAnswers: jest.fn(async () => ({ success: true, answers: [] })),
+    deleteAnswer: jest.fn(async () => ({ success: true })),
   };
   (window.api as unknown as { learn: unknown }).learn = learnApi;
 }
@@ -162,5 +169,79 @@ describe("Help Keepr learn › Start and See score hand off to the main screen (
     expect(screen.queryByTestId("settings-page")).toBeNull();
     expect(d.closest('[data-testid="settings-layer"], [data-testid="settings-page"], #settings-learn')).toBeNull();
     expect(within(d).getByTestId("learn-tile-found")).toBeInTheDocument();
+  });
+});
+
+/**
+ * C10 (2.46.2) — STRUCTURAL, not class strings: inside the real SettingsLayer,
+ * a delete confirmation must render inside the row that asked, inside the
+ * Settings layer, and no alertdialog may open. A confirmation dialog portals to
+ * <body>, outside the Settings page, where it sits behind it (z-index alone
+ * cannot be judged in jsdom). @keepr/ui is NOT mocked.
+ */
+describe("C10 delete confirmations stay inside the Settings page", () => {
+  beforeEach(() => {
+    learnApi.getState.mockImplementation(async () => ({ ...STATE_ON, answers: { deal: 1, bulk: 2 } }));
+    learnApi.listAnswers.mockImplementation(async () => LIST_ANSWERS);
+  });
+
+  it("Your answers › Delete asks inside its row, inside the Settings layer", async () => {
+    renderWithSettingsOpen();
+    const layer = await screen.findByTestId("settings-layer");
+    const box = await within(layer).findByTestId("learn-answers-list");
+    const row = within(box).getAllByTestId("learn-answer-row")[0];
+    fireEvent.click(within(row).getByRole("button", { name: "Delete" }));
+    const confirmButton = within(row).getByRole("button", { name: "Delete" });
+    expect(within(row).getByText("Delete?")).toBeInTheDocument();
+    expect(layer.contains(confirmButton)).toBe(true);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    fireEvent.click(confirmButton);
+    await waitFor(() => expect(learnApi.deleteAnswer).toHaveBeenCalledWith({ kind: "deal", id: "dla-c" }));
+  });
+
+  it("Data & Privacy › Delete all asks inside its row, inside the Settings layer", async () => {
+    renderWithSettingsOpen();
+    const layer = await screen.findByTestId("settings-layer");
+    const row = await within(layer).findByTestId("learn-answers-privacy");
+    fireEvent.click(within(row).getByRole("button", { name: "Delete all" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    const confirm = within(row).getByTestId("learn-delete-all-confirm");
+    const confirmButton = within(confirm).getByRole("button", { name: "Delete all" });
+    expect(layer.contains(confirmButton)).toBe(true);
+    fireEvent.click(confirmButton);
+    await waitFor(() => expect(learnApi.deleteAnswers).toHaveBeenCalledTimes(1));
+  });
+
+  it("Data & Privacy › Review opens Your answers inside the row", async () => {
+    renderWithSettingsOpen();
+    const layer = await screen.findByTestId("settings-layer");
+    const row = await within(layer).findByTestId("learn-answers-privacy");
+    fireEvent.click(within(row).getByRole("button", { name: "Review" }));
+    const list = await within(row).findByTestId("learn-answers-list");
+    expect(within(list).getAllByTestId("learn-answer-row")).toHaveLength(3);
+  });
+});
+
+describe("C11 logout closes Learn mode", () => {
+  it("an open sitting is closed, so it never reopens for the next user", async () => {
+    const { renderHook } = await import("@testing-library/react");
+    const { useLogoutHandler } = await import("../state/flows/auth/useLogoutHandler");
+    const { result } = renderHook(() => {
+      const modal = useModalFlow();
+      const logout = useLogoutHandler({
+        logout: async () => undefined,
+        onCloseProfile: modal.closeProfile,
+        onCloseLearn: modal.closeLearnSession,
+        onSetHasSelectedPhoneType: () => undefined,
+        onSetSelectedPhoneType: () => undefined,
+        onSetCurrentStep: () => undefined,
+        setIsNewUserFlow: () => undefined,
+      });
+      return { modal, logout };
+    });
+    act(() => result.current.modal.openLearnSession(30));
+    expect(result.current.modal.modalState.learnOverlay).toEqual({ kind: "session", total: 30 });
+    await act(async () => result.current.logout.handleLogout());
+    expect(result.current.modal.modalState.learnOverlay).toBeNull();
   });
 });

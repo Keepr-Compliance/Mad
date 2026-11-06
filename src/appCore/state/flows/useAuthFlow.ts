@@ -22,6 +22,7 @@ export function useAuthFlow({
   isAuthenticated,
   currentUserId,
   onCloseProfile,
+  onCloseLearn,
   onSetHasSelectedPhoneType,
   onSetSelectedPhoneType,
   onSetCurrentStep,
@@ -52,6 +53,7 @@ export function useAuthFlow({
     onSetSelectedPhoneType,
     onSetCurrentStep,
     setIsNewUserFlow,
+    onCloseLearn,
   });
 
   const { handleAcceptTerms, handleDeclineTerms } = useTermsHandlers({
