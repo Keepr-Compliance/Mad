@@ -112,6 +112,7 @@ export function useAppStateMachine(): AppStateMachine {
     isAuthenticated,
     currentUserId: currentUser?.id ?? null,
     onCloseProfile: modal.closeProfile,
+    onCloseLearn: modal.closeLearnSession,
     onSetHasSelectedPhoneType: phoneTypeApi.setHasSelectedPhoneType,
     onSetSelectedPhoneType: phoneTypeApi.setSelectedPhoneType,
     onSetCurrentStep: (step) => nav.setCurrentStep(step),

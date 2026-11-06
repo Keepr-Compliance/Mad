@@ -304,6 +304,8 @@ const VALID: Record<string, unknown> = {
   "learn:attachment-open": { detectionId: "d1", attachmentId: "att-4120-x" },
   "learn:get-state": undefined,
   "learn:set-enabled": { enabled: true },
+  "learn:list-answers": undefined,
+  "learn:delete-answer": { kind: "deal", id: "dla-4120-x" },
 };
 
 function signedIn(on = true): void {
@@ -414,7 +416,7 @@ describe("SETS gated and ungated channels, by execution", () => {
     const registered = [...ipcHandlers.keys()].filter((c) => c.startsWith("learn:")).sort();
     const listed = [...handlers.LEARN_GATED_CHANNELS, ...handlers.LEARN_UNGATED_CHANNELS].sort();
     expect(registered).toEqual(listed);
-    expect(registered).toHaveLength(12);
+    expect(registered).toHaveLength(14);
     expect(Object.keys(VALID).sort()).toEqual(listed);
   });
 
@@ -1000,5 +1002,195 @@ describe("RJ a second learn:run while one runs joins it (Settings reopened mid-s
     const c = await invoke("learn:run", { windowMonths: 12 });
     expect(c.success).toBe(true);
     expect((c.summary as { runId: string }).runId).not.toBe((a.summary as { runId: string }).runId);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2.46.2: "Your answers" — list and delete ONE answer (ungated, own rows, soft)
+// ---------------------------------------------------------------------------
+
+function liveRow(table: "learn_deal_answers" | "learn_bulk_answers", id: string): boolean {
+  return !!db.prepare(`SELECT 1 FROM ${table} WHERE id = ? AND deleted_at IS NULL`).get(id);
+}
+
+describe("C5 delete-one is ungated, own rows only", () => {
+  it.each([
+    { label: "toggle OFF, key absent (production map)", toggle: false, evalState: "absent" as EvalState },
+    { label: "toggle ON, key disabled", toggle: true, evalState: "disabled" as EvalState },
+    { label: "toggle OFF, plan unreadable", toggle: false, evalState: "unreadable" as EvalState },
+    { label: "toggle ON, key allowed", toggle: true, evalState: "allowed" as EvalState },
+  ])("$label: list shows the caller's answers; delete removes exactly one", async ({ toggle, evalState }) => {
+    seedOtherUser();
+    setToggle(toggle);
+    planMap(evalState, true);
+    seedAnswers(USER, "u");
+    seedAnswers(OTHER, "o");
+
+    const listed = await invoke("learn:list-answers");
+    expect(listed.success).toBe(true);
+    expect((listed.answers as Array<{ id: string }>).map((a) => a.id).sort()).toEqual(["dla-u", "lba-u"]);
+
+    expect(await invoke("learn:delete-answer", { kind: "deal", id: "dla-u" })).toEqual({ success: true });
+    expect(liveRow("learn_deal_answers", "dla-u")).toBe(false);
+    expect(liveRow("learn_bulk_answers", "lba-u")).toBe(true);
+    expect(liveCounts(OTHER)).toEqual({ deal: 1, bulk: 2 });
+  });
+});
+
+describe("C6 two users: delete and list never reach another user's rows", () => {
+  it("deleting OTHER's ids is refused and leaves them live; the list never carries them", async () => {
+    seedOtherUser();
+    seedAnswers(USER, "u");
+    seedAnswers(OTHER, "o");
+    expect(await invoke("learn:delete-answer", { kind: "deal", id: "dla-o" })).toEqual({
+      success: false,
+      error: handlers.LEARN_NOT_IN_SET_ERROR,
+    });
+    expect(await invoke("learn:delete-answer", { kind: "bulk", id: "lba-o" })).toEqual({
+      success: false,
+      error: handlers.LEARN_NOT_IN_SET_ERROR,
+    });
+    expect(liveRow("learn_deal_answers", "dla-o")).toBe(true);
+    expect(liveRow("learn_bulk_answers", "lba-o")).toBe(true);
+    // No row was re-queued for OTHER either.
+    expect(liveCounts(OTHER)).toEqual({ deal: 1, bulk: 2 });
+    const ids = ((await invoke("learn:list-answers")).answers as Array<{ id: string }>).map((a) => a.id);
+    expect(ids.some((id) => id.endsWith("-o"))).toBe(false);
+  });
+
+  it("an unanswered sample row is not an answer and cannot be deleted", async () => {
+    seedAnswers(USER, "u");
+    expect(await invoke("learn:delete-answer", { kind: "bulk", id: "lbu-u" })).toEqual({
+      success: false,
+      error: handlers.LEARN_NOT_IN_SET_ERROR,
+    });
+    expect(liveRow("learn_bulk_answers", "lbu-u")).toBe(true);
+  });
+});
+
+describe("C7 soft delete, and the item is asked again", () => {
+  it("deal: the row stays on disk with deleted_at, and cleanup-next asks the deal again", async () => {
+    setToggle(true);
+    seedEmail({
+      sentAt: "2026-10-01T10:00:00.000Z",
+      subject: "Offer accepted",
+      body: "Offer accepted on 4120 Canarytest Lane, Testville, ZZ 00000. Closing next month, escrow opened.",
+    });
+    expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
+    const q = (await invoke("learn:cleanup-next")).question as { detectionId: string };
+    expect(await invoke("learn:cleanup-answer", { detectionId: q.detectionId, answer: "yes" })).toEqual({ success: true });
+    expect(await invoke("learn:cleanup-next")).toEqual({ success: true, question: null });
+
+    const [row] = (await invoke("learn:list-answers")).answers as Array<{ id: string; kind: string; label: string }>;
+    expect(row.kind).toBe("deal");
+    expect(await invoke("learn:delete-answer", { kind: "deal", id: row.id })).toEqual({ success: true });
+    const onDisk = db.prepare(`SELECT deleted_at FROM learn_deal_answers WHERE id = ?`).get(row.id) as {
+      deleted_at: string | null;
+    };
+    expect(onDisk.deleted_at).not.toBeNull();
+    expect(((await invoke("learn:cleanup-next")).question as { detectionId: string }).detectionId).toBe(q.detectionId);
+  });
+
+  it("mail: the answered row is soft-removed, a fresh unanswered row for the same message is asked again, sample size kept", async () => {
+    setToggle(true);
+    for (let i = 0; i < 3; i++) seedEmail({ sentAt: `2026-10-0${i + 1}T10:00:00.000Z`, subject: `Note ${i}` });
+    const draw = await invoke("learn:sample-draw", { windowMonths: 12 });
+    expect((draw.result as { sampleSize: number }).sampleSize).toBe(3);
+    for (let i = 0; i < 3; i++) {
+      const next = (await invoke("learn:sample-next")).question as { rowId: string };
+      expect(await invoke("learn:sample-answer", { rowId: next.rowId, answer: "real_estate" })).toEqual({ success: true });
+    }
+    expect(await invoke("learn:sample-next")).toEqual({ success: true, question: null });
+
+    const answers = (await invoke("learn:list-answers")).answers as Array<{ id: string; kind: string }>;
+    const victim = answers[0];
+    const ext = (db.prepare(`SELECT external_id FROM learn_bulk_answers WHERE id = ?`).get(victim.id) as { external_id: string })
+      .external_id;
+    expect(await invoke("learn:delete-answer", { kind: "bulk", id: victim.id })).toEqual({ success: true });
+
+    const old = db.prepare(`SELECT deleted_at FROM learn_bulk_answers WHERE id = ?`).get(victim.id) as { deleted_at: string | null };
+    expect(old.deleted_at).not.toBeNull();
+    const fresh = db
+      .prepare(`SELECT id, answer FROM learn_bulk_answers WHERE user_id = ? AND external_id = ? AND deleted_at IS NULL`)
+      .all(USER, ext) as Array<{ id: string; answer: string | null }>;
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0].answer).toBeNull();
+    expect(fresh[0].id).not.toBe(victim.id);
+    expect(liveCounts(USER).bulk).toBe(3);
+    expect(await invoke("learn:sample-next")).toEqual({ success: true, question: { rowId: fresh[0].id } });
+    expect(((await invoke("learn:list-answers")).answers as unknown[]).length).toBe(2);
+  });
+});
+
+describe("C14 the mail re-queue is atomic with the soft delete", () => {
+  it("a failing re-queue INSERT leaves the old row live and the sample at 200", async () => {
+    const { insertBulkSample } = await import("../../services/db/learnModeDbService");
+    const rows = Array.from({ length: 200 }, (_, i) => ({ source: "gmail" as const, external_id: `ext-s-${i}` }));
+    expect(insertBulkSample(USER, rows, 1)).toBe(200);
+    const victim = (db.prepare(`SELECT id FROM learn_bulk_answers WHERE user_id = ? ORDER BY id LIMIT 1`).get(USER) as {
+      id: string;
+    }).id;
+    run(`UPDATE learn_bulk_answers SET answer = 'skip', answered_at = '2026-11-01T00:00:00Z' WHERE id = ?`, victim);
+    db.exec(`CREATE TRIGGER t_fail_requeue BEFORE INSERT ON learn_bulk_answers BEGIN SELECT RAISE(ABORT, 'forced'); END;`);
+
+    const r = await invoke("learn:delete-answer", { kind: "bulk", id: victim });
+    expect(r).toEqual({ success: false, error: handlers.LEARN_FAILED_ERROR });
+    expect(liveRow("learn_bulk_answers", victim)).toBe(true);
+    expect(liveCounts(USER).bulk).toBe(200);
+  });
+});
+
+describe("C9 delete-answer arguments are refused unless they parse", () => {
+  it.each([
+    { label: "extra key", payload: { kind: "deal", id: "dla-u", extra: 1 } },
+    { label: "unknown kind", payload: { kind: "x", id: "dla-u" } },
+    { label: "empty id", payload: { kind: "deal", id: "" } },
+    { label: "id over 64 chars", payload: { kind: "deal", id: "a".repeat(65) } },
+    { label: "no payload", payload: undefined },
+  ])("$label -> invalid, nothing written", async ({ payload }) => {
+    seedAnswers(USER, "u");
+    expect(await invoke("learn:delete-answer", payload)).toEqual({ success: false, error: handlers.LEARN_INVALID_ERROR });
+    expect(liveCounts(USER)).toEqual({ deal: 1, bulk: 2 });
+  });
+});
+
+describe("C13 privacy on the new channels", () => {
+  it("the list carries the address and subject to the screen, never to a log, an event or Sentry; no cloud call", async () => {
+    await expect(handlers.isLearnModeAllowed(USER)).resolves.toBe(false);
+    cloudCalls.length = 0;
+    logCalls.length = 0;
+    run(
+      `INSERT INTO learn_deal_answers (id, user_id, run_id, address_key, property_address, answer, answered_at, rule_version, created_at, updated_at)
+       VALUES ('dla-c', ?, 'run-x', 'key-c', ?, 'yes', '2026-11-02T00:00:00Z', 1, 'x', 'x')`,
+      USER,
+      CANARY_ADDRESS,
+    );
+    seedEmail({ sentAt: "2026-10-01T10:00:00.000Z", subject: "Canarysubject offer", externalId: "ext-c" });
+    run(
+      `INSERT INTO learn_bulk_answers (id, user_id, source, external_id, sampled_at, answer, answered_at, rule_version, created_at, updated_at)
+       VALUES ('lba-c', ?, 'gmail', 'ext-c', 'x', 'real_estate', '2026-11-01T00:00:00Z', 1, 'x', 'x')`,
+      USER,
+    );
+    const listed = await invoke("learn:list-answers");
+    expect(listed).toEqual({
+      success: true,
+      answers: [
+        { kind: "deal", id: "dla-c", label: CANARY_ADDRESS, itemDate: null, answeredAt: "2026-11-02T00:00:00Z", answer: "yes" },
+        {
+          kind: "bulk",
+          id: "lba-c",
+          label: "Canarysubject offer",
+          itemDate: "2026-10-01T10:00:00.000Z",
+          answeredAt: "2026-11-01T00:00:00Z",
+          answer: "real_estate",
+        },
+      ],
+    });
+    await invoke("learn:delete-answer", { kind: "deal", id: "dla-c" });
+    await invoke("learn:delete-answer", { kind: "bulk", id: "lba-c" });
+    expect(logCalls.length).toBeGreaterThan(0);
+    expect(JSON.stringify({ logCalls, sentryCalls, sent })).not.toMatch(/canary/i);
+    expect(sentryCalls).toEqual([]);
+    expect(cloudCalls).toEqual([]);
   });
 });

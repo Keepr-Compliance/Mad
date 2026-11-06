@@ -19,8 +19,10 @@ import type {
   DealAnswer,
   LearnAnswerResult,
   LearnCleanupNextResult,
+  LearnDeleteAnswerResult,
   LearnDeleteAnswersResult,
   LearnFailure,
+  LearnListAnswersResult,
   LearnPreviewArgs,
   LearnPreviewResult,
   LearnRunProgressEvent,
@@ -73,6 +75,13 @@ export const learnModeService = {
   score: (): Promise<LearnScoreResult> => call(() => window.api.learn.score()),
 
   deleteAnswers: (): Promise<LearnDeleteAnswersResult> => call(() => window.api.learn.deleteAnswers()),
+
+  /** The user's saved answers, newest first. */
+  listAnswers: (): Promise<LearnListAnswersResult> => call(() => window.api.learn.listAnswers()),
+
+  /** Delete one saved answer (soft, in main); the item can be asked again. */
+  deleteAnswer: (kind: "deal" | "bulk", id: string): Promise<LearnDeleteAnswerResult> =>
+    call(() => window.api.learn.deleteAnswer({ kind, id })),
 
   preview: (args: LearnPreviewArgs): Promise<LearnPreviewResult> => call(() => window.api.learn.preview(args)),
 
