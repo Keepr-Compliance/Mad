@@ -140,6 +140,41 @@ describe('handleEpicMove', () => {
   });
 });
 
+describe('Partial failure message', () => {
+  it('says the status was saved but the epic move failed when only the parent write fails', async () => {
+    const { result } = await mountProjectMode();
+    q.reorderItem.mockRejectedValueOnce(new Error('cycle'));
+    await act(() =>
+      result.current.handleEpicMove(CHILD_A1, { status: 'testing', parent: { parentId: 'epic-b', sortOrder: 7 } })
+    );
+    expect(q.updateItemStatus).toHaveBeenCalledWith('child-a1', 'testing');
+    expect(result.current.boardError).toMatch(/status was saved but the epic move failed/);
+  });
+});
+
+describe('Stale project response', () => {
+  it('ignores a slow response for a previous project and refuses Add backlog under its epic', async () => {
+    let resolveA: (v: unknown) => void = () => {};
+    const slowA = new Promise((r) => { resolveA = r; });
+    const colsB = projectColumns();
+    colsB.pending = colsB.pending.filter((i) => i.id !== 'epic-a');
+    q.getBoardTasks.mockImplementation((_s: unknown, pid: string) =>
+      pid === PROJECT_ID ? slowA : Promise.resolve(colsB)
+    );
+    persist({ swimLane: 'project', selectedProjectId: PROJECT_ID });
+    const { result } = renderHook(() => useBoardData());
+    await waitFor(() => expect(q.getBoardTasks).toHaveBeenCalledWith(null, PROJECT_ID));
+    act(() => result.current.setSelectedProjectId('project-q'));
+    await waitFor(() => expect(q.getBoardTasks).toHaveBeenCalledWith(null, 'project-q'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => { resolveA(projectColumns()); await slowA; });
+    const allIds = (Object.values(result.current.columns) as { id: string }[][]).flat().map((i) => i.id);
+    expect(allIds).not.toContain('epic-a');
+    await act(() => result.current.handleQuickAdd('Wrong parent', 'pending', 'epic-a'));
+    expect(q.createItem).not.toHaveBeenCalled();
+  });
+});
+
 describe('Project mode never assigns to a hidden sprint', () => {
   it('bulk assign-to-sprint is a no-op', async () => {
     persist({ swimLane: 'project', selectedProjectId: PROJECT_ID, selectedSprintId: 'sprint-old' });

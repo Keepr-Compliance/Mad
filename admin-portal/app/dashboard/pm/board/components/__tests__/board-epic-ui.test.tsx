@@ -21,7 +21,7 @@ import type { SwimLaneMode } from '../../../components/SwimLaneSelector';
 afterEach(cleanup);
 
 const PROJECTS = [
-  { id: 'project-p', name: 'Stable' },
+  { id: 'project-p', name: 'Stable', status: 'active' },
   { id: 'project-q', name: 'Alpha' },
 ] as PmProject[];
 
@@ -48,15 +48,31 @@ function renderFilters(swimLane: SwimLaneMode, onProjectChange = vi.fn()) {
 }
 
 describe('BoardFilters', () => {
-  it('Project mode shows the project picker, prompts "Select a project", hides sprint + Backlog', () => {
+  it('Project mode shows a searchable project picker, prompts "Select a project", hides sprint + Backlog', () => {
     const onProjectChange = renderFilters('project');
-    const picker = screen.getByLabelText('Project') as HTMLSelectElement;
-    expect(picker.value).toBe('');
-    expect(within(picker).getAllByRole('option').map((o) => o.textContent)).toEqual(['Select a project', 'Alpha', 'Stable']);
+    const picker = screen.getByLabelText('Project');
+    expect(picker.textContent).toBe('Select a project');
     expect(screen.queryByText('Select Sprint')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Backlog' })).toBeNull();
-    fireEvent.change(picker, { target: { value: 'project-p' } });
+    fireEvent.click(picker);
+    const input = screen.getByPlaceholderText('Search projects...');
+    expect(screen.getAllByText(/^(Alpha|Stable)$/).map((o) => o.textContent)).toEqual(['Alpha', 'Stable']);
+    fireEvent.change(input, { target: { value: 'stab' } });
+    expect(screen.queryByText('Alpha')).toBeNull();
+    fireEvent.click(screen.getByText('Stable'));
     expect(onProjectChange).toHaveBeenCalledWith('project-p');
+    expect(screen.queryByPlaceholderText('Search projects...')).toBeNull();
+  });
+
+  it('shows "No projects found" and the status badge, and clears search on backdrop close', () => {
+    renderFilters('project');
+    fireEvent.click(screen.getByLabelText('Project'));
+    expect(screen.getByText('active')).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText('Search projects...'), { target: { value: 'zzz' } });
+    expect(screen.getByText('No projects found')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('project-dropdown-backdrop'));
+    fireEvent.click(screen.getByLabelText('Project'));
+    expect((screen.getByPlaceholderText('Search projects...') as HTMLInputElement).value).toBe('');
   });
 
   it.each(['off', 'area', 'assignee'] as SwimLaneMode[])('%s mode keeps the sprint selector, no picker', (mode) => {

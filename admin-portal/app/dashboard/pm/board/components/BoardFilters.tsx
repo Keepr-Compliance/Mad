@@ -15,7 +15,7 @@
 import { useState, useMemo } from 'react';
 import { KanbanSquare, ChevronDown, RefreshCw, List } from 'lucide-react';
 import { SwimLaneSelector, type SwimLaneMode } from '../../components/SwimLaneSelector';
-import type { PmProject, PmSprint } from '@/lib/pm-types';
+import { PROJECT_STATUS_COLORS, type PmProject, type PmSprint } from '@/lib/pm-types';
 
 interface BoardFiltersProps {
   sprints: PmSprint[];
@@ -69,6 +69,14 @@ export function BoardFilters({
     () => [...projects].sort((a, b) => a.name.localeCompare(b.name)),
     [projects]
   );
+  const [projectDropdownOpen, setProjectDropdownOpen] = useState(false);
+  const [projectSearch, setProjectSearch] = useState('');
+  const filteredProjects = useMemo(() => {
+    if (!projectSearch.trim()) return sortedProjects;
+    const q = projectSearch.toLowerCase();
+    return sortedProjects.filter((p) => p.name.toLowerCase().includes(q));
+  }, [sortedProjects, projectSearch]);
+  const selectedProject = projects.find((p) => p.id === selectedProjectId);
 
   return (
     <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
@@ -78,21 +86,83 @@ export function BoardFilters({
           <h1 className="text-lg font-semibold text-gray-900">Board</h1>
         </div>
 
-        {/* Project picker (Project mode only) */}
+        {/* Project picker (Project mode only, searchable) */}
         {projectMode && (
-          <select
-            aria-label="Project"
-            value={selectedProjectId}
-            onChange={(e) => onProjectChange(e.target.value)}
-            className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white text-gray-900 max-w-xs"
-          >
-            <option value="">Select a project</option>
-            {sortedProjects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+          <div className="relative">
+            <button
+              aria-label="Project"
+              onClick={() => {
+                setProjectDropdownOpen(!projectDropdownOpen);
+                if (projectDropdownOpen) setProjectSearch('');
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-200 rounded-lg bg-white hover:bg-gray-50 transition-colors text-gray-900 max-w-xs"
+            >
+              <span className="truncate">
+                {selectedProject ? selectedProject.name : 'Select a project'}
+              </span>
+              <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
+            </button>
+
+            {projectDropdownOpen && (
+              <>
+                {/* Backdrop to close dropdown */}
+                <div
+                  data-testid="project-dropdown-backdrop"
+                  className="fixed inset-0 z-10"
+                  onClick={() => {
+                    setProjectDropdownOpen(false);
+                    setProjectSearch('');
+                  }}
+                />
+                <div className="absolute top-full left-0 mt-1 w-72 bg-white border border-gray-200 rounded-lg shadow-lg z-20">
+                  <input
+                    type="text"
+                    value={projectSearch}
+                    onChange={(e) => setProjectSearch(e.target.value)}
+                    placeholder="Search projects..."
+                    className="w-full px-3 py-2 border-b border-gray-200 text-sm text-gray-900 bg-white placeholder-gray-400 focus:outline-none rounded-t-lg"
+                    autoFocus
+                  />
+                  <div className="max-h-60 overflow-y-auto">
+                    {filteredProjects.length === 0 ? (
+                      <div className="p-3 text-sm text-gray-400">
+                        No projects found
+                      </div>
+                    ) : (
+                      filteredProjects.map((project) => (
+                        <button
+                          key={project.id}
+                          onClick={() => {
+                            onProjectChange(project.id);
+                            setProjectDropdownOpen(false);
+                            setProjectSearch('');
+                          }}
+                          className={`w-full text-left px-3 py-2 text-sm hover:bg-gray-50 transition-colors ${
+                            project.id === selectedProjectId
+                              ? 'bg-primary-50 text-primary-700 font-medium'
+                              : 'text-gray-700'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="truncate mr-2">{project.name}</span>
+                            {project.status && (
+                              <span
+                                className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${
+                                  PROJECT_STATUS_COLORS[project.status] ?? 'bg-gray-100 text-gray-600'
+                                }`}
+                              >
+                                {project.status}
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         )}
 
         {/* Sprint selector dropdown (searchable) */}

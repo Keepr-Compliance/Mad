@@ -14,7 +14,7 @@
  * - Board state persistence to localStorage
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { SwimLaneMode } from '../../components/SwimLaneSelector';
 import {
   listSprints,
@@ -195,6 +195,9 @@ export function useBoardData() {
   }, [refreshLabels]);
 
   const projectMode = swimLane === 'project';
+  // Latest picked project, read after awaits to drop stale responses.
+  const selectedProjectRef = useRef(selectedProjectId);
+  selectedProjectRef.current = selectedProjectId;
   // The sprint only matters outside Project mode; keeping it out of Project
   // mode's deps stops a late sprint-list load from refetching the project.
   const sprintForLoad = projectMode ? '' : selectedSprintId;
@@ -209,7 +212,10 @@ export function useBoardData() {
         return;
       }
       try {
-        const data = await getBoardTasks(null, selectedProjectId);
+        const requestedProjectId = selectedProjectId;
+        const data = await getBoardTasks(null, requestedProjectId);
+        // A newer project was picked while this was in flight: drop it.
+        if (selectedProjectRef.current !== requestedProjectId) return;
         setColumns(data);
       } catch (err) {
         // No listItems fallback here: it is page-capped and would show a
@@ -326,6 +332,16 @@ export function useBoardData() {
       // row's epic, no sprint.
       if (projectMode) {
         if (!selectedProjectId) return;
+        // Refuse a lane whose epic is not in the loaded project (stale board).
+        if (groupKey && groupKey !== NO_EPIC_KEY) {
+          const loadedEpic = (Object.values(columns) as PmBacklogItem[][]).some((items) =>
+            items.some((i) => i.type === 'epic' && i.id === groupKey)
+          );
+          if (!loadedEpic) {
+            setBoardError('Could not add the item. The board is still loading. Try again.');
+            return;
+          }
+        }
         try {
           const params: CreateItemParams = {
             title,
@@ -356,7 +372,7 @@ export function useBoardData() {
         console.error('Failed to quick-add item:', err);
       }
     },
-    [projectMode, selectedProjectId, selectedSprintId, swimLane, loadBoardData]
+    [projectMode, selectedProjectId, selectedSprintId, swimLane, columns, loadBoardData]
   );
 
   /** Project mode: create a new epic in the picked project (a new row). */
@@ -385,12 +401,20 @@ export function useBoardData() {
       plan: { status: ItemStatus | null; parent: { parentId: string | null; sortOrder: number } | null }
     ) => {
       setBoardError(null);
+      let statusSaved = false;
       try {
-        if (plan.status) await updateItemStatus(item.id, plan.status);
+        if (plan.status) {
+          await updateItemStatus(item.id, plan.status);
+          statusSaved = true;
+        }
         if (plan.parent) await reorderItem(item.id, plan.parent.parentId, plan.parent.sortOrder);
       } catch (err) {
         console.error('Failed to move item between epics:', err);
-        setBoardError(`Could not move #${item.item_number}. The board was reloaded.`);
+        setBoardError(
+          statusSaved
+            ? `#${item.item_number}: the status was saved but the epic move failed. The board was reloaded.`
+            : `Could not move #${item.item_number}. The board was reloaded.`
+        );
       }
       await loadBoardData();
     },
