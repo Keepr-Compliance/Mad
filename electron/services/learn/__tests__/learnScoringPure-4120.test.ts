@@ -368,11 +368,13 @@ function run(detections: LearnRunResult["detections"]): LearnRunResult {
     firstMs: T0,
     lastMs: T0 + 30 * DAY,
     detections,
+    senderRulesVersion: 1,
+    seedHidesQuestions: true,
   };
 }
 
 function det(id: string, address: string, side: "buyer" | "seller" | null = "buyer") {
-  return { id, address, addressKey: addressKey(address), firstMs: T0, lastMs: T0 + DAY, emailCount: 2, emailIds: [], side };
+  return { id, address, addressKey: addressKey(address), firstMs: T0, lastMs: T0 + DAY, emailCount: 2, emailIds: [], seedEmailIds: [], side };
 }
 
 describe("scoring arithmetic", () => {

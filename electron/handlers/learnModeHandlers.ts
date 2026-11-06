@@ -60,6 +60,7 @@ import {
   listAnsweredBulkWithText,
   listAnswers,
   listDealAnswers,
+  listDealLinkedSeedCandidates,
   previewAttachments,
   previewEmailForBulkRow,
   previewEmailsByIds,
@@ -80,7 +81,14 @@ import {
 } from "../services/learn/baselineRunner";
 import { answerCleanupQuestion, nextCleanupQuestion } from "../services/learn/cleanupPass";
 import { answerBulkQuestion, ensureBulkSample, nextBulkQuestion } from "../services/learn/bulkSample";
-import { formatCopyBlock, scoreRun } from "../services/learn/scoring";
+import {
+  countSeedLinkedToDeals,
+  formatCopyBlock,
+  isHiddenBySeed,
+  scoreRun,
+  visibleEmailIds,
+} from "../services/learn/scoring";
+import { BUNDLED_SENDER_RULES } from "../utils/senderFilter/bundledRules";
 import { LEARN_RULES } from "../services/learn/learnRules";
 import {
   LearnAttachmentOpenArgsSchema,
@@ -268,8 +276,13 @@ function toPreviewEmails(rows: PreviewEmailRow[], attachments: PreviewAttachment
 
 /**
  * The cleanup preview of one detection of the user's current run: its
- * messages (newest first, capped) and their attachments. Null when the
+ * messages (newest first, capped) and their attachments. Refused when the
  * detection is not part of the run.
+ *
+ * BACKLOG-4175: exact-seed messages are left out BEFORE the cap (so a mixed
+ * detection whose newest mail is all seed still shows its other mail), `total`
+ * is the visible count, and an all-seed detection is refused like an unknown
+ * id. learn:preview and learn:attachment-open both come through here.
  */
 function cleanupPreview(
   userId: string,
@@ -278,10 +291,11 @@ function cleanupPreview(
   const run = getLastRun(userId);
   if (!run) return fail(LEARN_NO_RUN_ERROR);
   const detection = run.detections.find((d) => d.id === detectionId);
-  if (!detection) return fail(LEARN_NOT_IN_SET_ERROR);
-  const rows = previewEmailsByIds(userId, detection.emailIds, LEARN_PREVIEW_MAX_EMAILS);
+  if (!detection || isHiddenBySeed(run, detection)) return fail(LEARN_NOT_IN_SET_ERROR);
+  const ids = visibleEmailIds(run, detection);
+  const rows = previewEmailsByIds(userId, ids, LEARN_PREVIEW_MAX_EMAILS);
   const attachments = previewAttachments(userId, rows.map((r) => r.id));
-  return { rows, attachments, total: detection.emailIds.length, address: detection.address };
+  return { rows, attachments, total: ids.length, address: detection.address };
 }
 
 function isPreviewFailure(
@@ -383,7 +397,7 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
         question: {
           detectionId: next.detectionId,
           address: next.address,
-          emailCount: detection?.emailCount ?? 0,
+          emailCount: detection ? visibleEmailIds(run, detection).length : 0,
         },
       };
     }),
@@ -451,6 +465,10 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
         listAnswerKeyTransactions(g.userId),
         listDealAnswers(g.userId),
         listAnsweredBulkWithText(g.userId),
+        countSeedLinkedToDeals(
+          listDealLinkedSeedCandidates(g.userId, BUNDLED_SENDER_RULES.suppress.exactAddresses),
+          BUNDLED_SENDER_RULES,
+        ),
       );
       return { success: true, score, copyBlock: formatCopyBlock(score) };
     }),

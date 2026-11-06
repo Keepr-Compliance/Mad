@@ -135,7 +135,7 @@ export const SOFT_CLEAR_BULK_SQL = sql`
  * subject / body columns are NULL when the message is no longer cached.
  */
 export const ANSWERED_BULK_WITH_TEXT_SQL = sql`
-  SELECT b.answer AS answer, e.subject AS subject, e.body_plain AS body_plain, e.body_html AS body_html,
+  SELECT b.answer AS answer, b.rule_version AS rule_version, e.subject AS subject, e.body_plain AS body_plain, e.body_html AS body_html,
          e.id IS NOT NULL AS cached
   FROM learn_bulk_answers b
   LEFT JOIN emails e ON e.id = (
@@ -188,6 +188,23 @@ export const ANSWER_KEY_TRANSACTIONS_SQL = sql`
          created_at
   FROM transactions
   WHERE user_id = ?
+`;
+
+/**
+ * BACKLOG-4175: messages linked to one of the user's NON-rejected deals whose
+ * sender contains one of the given seed addresses (prefilter only; the caller
+ * checks the parsed From address exactly). Rejected = status 'rejected' OR
+ * detection_status 'rejected' (answerKey.ts bucketOf). Bound: user id, user
+ * id, JSON array of lowercase seed addresses.
+ */
+export const DEAL_LINKED_SEED_CANDIDATES_SQL = sql`
+  SELECT DISTINCT e.id AS id, e.sender AS sender
+  FROM communications c
+  JOIN transactions t ON t.id = c.transaction_id
+  JOIN emails e ON e.id = c.email_id
+  WHERE t.user_id = ? AND e.user_id = ?
+    AND NOT (COALESCE(t.status, 'active') = 'rejected' OR COALESCE(t.detection_status, 'confirmed') = 'rejected')
+    AND EXISTS (SELECT 1 FROM json_each(?) j WHERE instr(lower(e.sender), j.value) > 0)
 `;
 
 // ---------------------------------------------------------------------------

@@ -214,7 +214,7 @@ describe("C10 learn tables: CHECKs, ids, timestamps, soft removal", () => {
     expect([typeof b.created_at, typeof b.updated_at, b.rule_version, b.answer, b.deleted_at]).toEqual([
       "string",
       "string",
-      1,
+      2,
       null,
       null,
     ]);

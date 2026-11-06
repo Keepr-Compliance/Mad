@@ -28,6 +28,8 @@ import {
 } from "../db/learnModeDbService";
 import { LEARN_RULES } from "./learnRules";
 import { addressKey } from "./dealMatcher";
+import { BUNDLED_SENDER_RULES, type SenderRuleSet } from "../../utils/senderFilter/bundledRules";
+import { isSignalLive, matchesExactAddress } from "../../utils/senderFilter/senderFilter";
 
 export interface LearnDetection {
   /** "d1", "d2", ... stable within one run. */
@@ -44,6 +46,12 @@ export interface LearnDetection {
    * public summary and never persisted (C12: nothing durable keys on emails.id).
    */
   emailIds: string[];
+  /**
+   * The subset of `emailIds` whose From address is an exact sender seed
+   * (BACKLOG-4175). Main memory only, like `emailIds`. Nothing is dropped
+   * from the run: baseline 0 sees every row.
+   */
+  seedEmailIds: string[];
   /** From the group's first typed email, as generateTransactionSummary does. */
   side: "buyer" | "seller" | null;
 }
@@ -61,6 +69,12 @@ export interface LearnRunResult {
   firstMs: number | null;
   lastMs: number | null;
   detections: LearnDetection[];
+  /**
+   * Sender rules version used for `seedEmailIds`, and whether the seed signal
+   * is live for Learn questions (hides all-seed detections) or measure-only.
+   */
+  senderRulesVersion: number;
+  seedHidesQuestions: boolean;
 }
 
 export interface LearnRunProgress {
@@ -90,6 +104,8 @@ export interface RunOptions {
   maxPages?: number;
   nowMs?: number;
   pageSize?: number;
+  /** Sender rules (BACKLOG-4175). Defaults to the bundled set. */
+  senderRules?: SenderRuleSet;
 }
 
 export class LearnRunError extends Error {
@@ -153,6 +169,9 @@ export async function runBaseline0(
   const maxPages = options.maxPages ?? Number.POSITIVE_INFINITY;
   const sinceIso = computeEmailCacheSinceDate(windowMonths, options.nowMs ?? Date.now()).toISOString();
   const runId = crypto.randomUUID();
+  const senderRules = options.senderRules ?? BUNDLED_SENDER_RULES;
+  const seedEvaluated = senderRules.modes.seedAddress.learnQuestions !== "off";
+  const seedIds = new Set<string>();
 
   let cursor = { sentAt: "", id: "" };
   let rowsScanned = 0;
@@ -176,6 +195,9 @@ export async function runBaseline0(
     }
     cursor = { sentAt: last.sent_at, id: last.id };
     rowsScanned += rows.length;
+    if (seedEvaluated) {
+      for (const row of rows) if (matchesExactAddress(row.sender, senderRules)) seedIds.add(row.id);
+    }
 
     const analyzed = transactionExtractorService.batchAnalyze(rows.map(toExtractorEmail));
     analyzed.forEach((a, i) => emailIdOf.set(a, rows[i].id));
@@ -196,6 +218,7 @@ export async function runBaseline0(
   const detections: LearnDetection[] = Object.entries(grouped).map(([address, group], i) => {
     const times = group.map((g) => dateMs(g.date)).filter(Number.isFinite);
     const type = group.map((g) => g.transactionType).find(Boolean) ?? null;
+    const emailIds = group.map((g) => emailIdOf.get(g)).filter((id): id is string => typeof id === "string");
     return {
       id: `d${i + 1}`,
       address,
@@ -203,7 +226,8 @@ export async function runBaseline0(
       firstMs: times.length ? Math.min(...times) : Number.NaN,
       lastMs: times.length ? Math.max(...times) : Number.NaN,
       emailCount: group.length,
-      emailIds: group.map((g) => emailIdOf.get(g)).filter((id): id is string => typeof id === "string"),
+      emailIds,
+      seedEmailIds: emailIds.filter((id) => seedIds.has(id)),
       side: type ? (LEARN_RULES.sideByDetectedType[type] ?? null) : null,
     };
   });
@@ -220,6 +244,8 @@ export async function runBaseline0(
     firstMs,
     lastMs,
     detections,
+    senderRulesVersion: senderRules.version,
+    seedHidesQuestions: isSignalLive(senderRules, "seedAddress", "learnQuestions"),
   };
 }
 

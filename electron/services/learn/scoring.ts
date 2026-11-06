@@ -14,6 +14,8 @@ import { buildAnswerKey, type AnswerKeyBucket, type KeyedTransaction } from "./a
 import type { LearnDetection, LearnRunResult } from "./baselineRunner";
 import { isSameDeal } from "./dealMatcher";
 import { wilsonInterval, type WilsonInterval } from "./wilson";
+import type { SenderRuleSet } from "../../utils/senderFilter/bundledRules";
+import { matchesExactAddress } from "../../utils/senderFilter/senderFilter";
 
 export interface Rate {
   k: number;
@@ -52,6 +54,20 @@ export interface LearnScore {
   cleanupYes: number;
   cleanupNo: number;
   cleanupUnanswered: number;
+
+  /**
+   * BACKLOG-4175: what the exact sender seeds hide from the cleanup pass.
+   * `keys`: unanswered deal keys whose every candidate detection is all-seed
+   * (left out of cleanupUnanswered; an already answered key still counts in
+   * cleanupYes / cleanupNo). `detections`: all-seed candidate detections.
+   * `emails`: seed messages in candidate detections (hidden from previews).
+   */
+  hiddenBySeed: { keys: number; detections: number; emails: number };
+  /** Seed-matched messages linked to a non-rejected deal (expected 0). */
+  seedLinkedToDeals: number;
+  /** Saved answers per rules version (deal = cleanup answers, bulk = answered sample rows). */
+  answersByRuleVersion: Array<{ ruleVersion: number; deal: number; bulk: number }>;
+  senderRulesVersion: number;
 
   positives: number;
   /** Positives that are 'manual' rows created before this user's cutoff (subset of positives). */
@@ -137,6 +153,70 @@ export function cleanupCandidates(run: LearnRunResult, keyRows: AnswerKeyRow[]):
     }));
 }
 
+/**
+ * BACKLOG-4175: a detection is hidden from the cleanup pass when the seed
+ * signal is live for Learn questions and EVERY message of it is from an exact
+ * seed. A mixed detection is still asked (its preview leaves the seed mail out).
+ */
+export function isHiddenBySeed(run: LearnRunResult, d: LearnDetection): boolean {
+  return run.seedHidesQuestions && d.emailIds.length > 0 && d.seedEmailIds.length === d.emailIds.length;
+}
+
+/**
+ * BACKLOG-4175: the messages of a detection the user is shown: every message
+ * except the exact-seed ones (when the seed is live for Learn questions).
+ */
+export function visibleEmailIds(run: LearnRunResult, d: LearnDetection): string[] {
+  if (!run.seedHidesQuestions || d.seedEmailIds.length === 0) return d.emailIds;
+  const seed = new Set(d.seedEmailIds);
+  return d.emailIds.filter((id) => !seed.has(id));
+}
+
+/**
+ * Deal keys hidden from the cleanup pass: keys whose every candidate
+ * detection is hidden. Counted per key, the unit `cleanupUnanswered` uses.
+ */
+export function hiddenCleanupKeys(run: LearnRunResult, candidates: CleanupCandidate[]): Set<string> {
+  const byId = new Map(run.detections.map((d) => [d.id, d]));
+  const askable = new Set<string>();
+  const all = new Set<string>();
+  for (const c of candidates) {
+    all.add(c.addressKey);
+    const d = byId.get(c.detectionId);
+    if (!d || !isHiddenBySeed(run, d)) askable.add(c.addressKey);
+  }
+  return new Set([...all].filter((k) => !askable.has(k)));
+}
+
+/**
+ * BACKLOG-4175: of the candidate rows (deal-linked messages whose sender
+ * contains a seed), those whose parsed From address IS a seed.
+ */
+export function countSeedLinkedToDeals(
+  rows: ReadonlyArray<{ id: string; sender: string | null }>,
+  rules: SenderRuleSet,
+): number {
+  return new Set(rows.filter((r) => matchesExactAddress(r.sender, rules)).map((r) => r.id)).size;
+}
+
+function answersByRuleVersion(
+  dealAnswers: DealAnswerRow[],
+  bulkRows: AnsweredBulkRow[],
+): Array<{ ruleVersion: number; deal: number; bulk: number }> {
+  const byVersion = new Map<number, { ruleVersion: number; deal: number; bulk: number }>();
+  const slot = (v: number) => {
+    let e = byVersion.get(v);
+    if (!e) {
+      e = { ruleVersion: v, deal: 0, bulk: 0 };
+      byVersion.set(v, e);
+    }
+    return e;
+  };
+  for (const a of dealAnswers) slot(a.rule_version).deal += 1;
+  for (const b of bulkRows) slot(b.rule_version).bulk += 1;
+  return [...byVersion.values()].sort((a, b) => a.ruleVersion - b.ruleVersion);
+}
+
 function toDay(ms: number | null): string | null {
   return ms === null || !Number.isFinite(ms) ? null : new Date(ms).toISOString().slice(0, 10);
 }
@@ -146,6 +226,7 @@ export function scoreRun(
   keyRows: AnswerKeyRow[],
   dealAnswers: DealAnswerRow[],
   bulkRows: AnsweredBulkRow[],
+  seedLinkedToDeals = 0,
 ): LearnScore {
   const key = buildAnswerKey(keyRows, scannedRange(run));
   const classified = classify(run.detections, key.positives, key.negatives, key.neutral);
@@ -205,6 +286,18 @@ export function scoreRun(
   const cleanupNo = noKeys.size;
   const detections = run.detections.length;
 
+  // BACKLOG-4175: hidden per KEY; a key already answered stays in yes / no.
+  const candidates = cleanupCandidates(run, keyRows);
+  const hiddenUnanswered = [...hiddenCleanupKeys(run, candidates)].filter((k) => !answerByKey.has(k));
+  const candidateDetections = candidates
+    .map((c) => run.detections.find((d) => d.id === c.detectionId))
+    .filter((d): d is LearnDetection => d !== undefined);
+  const hiddenBySeed = {
+    keys: hiddenUnanswered.length,
+    detections: candidateDetections.filter((d) => isHiddenBySeed(run, d)).length,
+    emails: run.seedHidesQuestions ? candidateDetections.reduce((n, d) => n + d.seedEmailIds.length, 0) : 0,
+  };
+
   let realEstate = 0;
   let newsletterSpam = 0;
   let skip = 0;
@@ -255,7 +348,11 @@ export function scoreRun(
     unaskable,
     cleanupYes,
     cleanupNo,
-    cleanupUnanswered: unmatchedKeys.size - cleanupYes - cleanupNo,
+    cleanupUnanswered: unmatchedKeys.size - cleanupYes - cleanupNo - hiddenBySeed.keys,
+    hiddenBySeed,
+    seedLinkedToDeals,
+    answersByRuleVersion: answersByRuleVersion(dealAnswers, bulkRows),
+    senderRulesVersion: run.senderRulesVersion,
     positives,
     legacyManualPositives: key.legacyManualPositives,
     legacyCutoffDay: new Date(key.legacyCutoffMs).toISOString().slice(0, 10),
@@ -298,6 +395,8 @@ export function formatCopyBlock(s: LearnScore): string {
     `Emails scanned: ${s.rowsScanned}; without a sent date: ${s.nullSentAt}`,
     `Deals in key: manual ${s.buckets.manual} (of which created before ${s.legacyCutoffDay}, possibly auto-detected: ${s.legacyManualPositives} in the mail window${s.legacyCutoffIsMinimum ? ", minimum" : ""}), auto ${s.buckets.auto}, hybrid ${s.buckets.hybrid}, rejected ${s.buckets.rejected}; outside the mail window: ${s.labelsWithoutLocalMail}`,
     `Detections: ${s.detections}; true ${s.trueDetections}; known wrong ${s.knownWrong}; unmatched ${s.unmatched} = ${s.unmatchedDeals} deals + ${s.unaskable} without a key (cleanup yes ${s.cleanupYes}, no ${s.cleanupNo}, unanswered ${s.cleanupUnanswered})`,
+    `Hidden by sender seeds (sender rules v${s.senderRulesVersion}): ${s.hiddenBySeed.keys} deals, ${s.hiddenBySeed.detections} detections, ${s.hiddenBySeed.emails} emails; seed emails linked to deals: ${s.seedLinkedToDeals}`,
+    `Answers by rules version: ${s.answersByRuleVersion.length ? s.answersByRuleVersion.map((v) => `v${v.ruleVersion} deal ${v.deal} / bulk ${v.bulk}`).join(", ") : "none"}`,
     `Deals found: ${s.found}; missed: ${s.missed}`,
     `Recall: ${fmt(s.recall)}`,
     `Recall with cleanup Yes: ${fmt(s.recallWithCleanupYes)}`,
