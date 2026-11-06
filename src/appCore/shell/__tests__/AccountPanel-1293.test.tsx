@@ -9,6 +9,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { AccountPanel } from "../AccountPanel";
 import type { AppStateMachine } from "../../state/types";
+import { systemService } from "../../../services/systemService";
 
 jest.mock("../../../contexts/LicenseContext", () => ({
   useLicense: () => ({ licenseType: "individual" }),
@@ -68,5 +69,20 @@ describe("AccountPanel version label (BACKLOG-1293)", () => {
     getAppInfo().mockReturnValue(new Promise(() => {}));
     render(<AccountPanel app={makeApp()} />);
     expect(screen.queryByTestId("account-panel-version")).toBeNull();
+  });
+});
+
+describe("systemService.getAppVersion (BACKLOG-1293)", () => {
+  it.each([[{ name: "keepr" }], [{ name: "keepr", version: "" }], [{ name: "keepr", version: "  " }], [null]])(
+    "fails when the response carries no version: %p",
+    async (info) => {
+      getAppInfo().mockResolvedValue(info);
+      await expect(systemService.getAppVersion()).resolves.toMatchObject({ success: false });
+    },
+  );
+
+  it("returns the version when present", async () => {
+    getAppInfo().mockResolvedValue({ name: "keepr", version: "2.46.2" });
+    await expect(systemService.getAppVersion()).resolves.toEqual({ success: true, data: { version: "2.46.2" } });
   });
 });
