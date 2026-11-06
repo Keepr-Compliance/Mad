@@ -12,6 +12,7 @@
 import React from "react";
 import { Check, SkipForward, Sparkle, Undo2, X } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@keepr/ui";
+import { Z_CLASS } from "@/constants/zLayers";
 import type { UseLearnSession } from "./useLearnSession";
 import { LearnEmailPane, formatLearnDate, splitSender } from "./LearnEmailPane";
 import { LearnPdfPane } from "./LearnPdfPane";
@@ -122,9 +123,11 @@ export function LearnQuestionDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? undefined : onClose())}>
+      {/* Portaled to body: the Settings dialog band keeps it above the Settings page (z-[105]). */}
       <DialogContent
         hideClose
-        className="flex h-[640px] max-h-[calc(100vh-32px)] w-[1120px] max-w-[calc(100vw-32px)] flex-col gap-0 overflow-hidden rounded-xl border-0 bg-white p-0 text-[15px] leading-normal text-[#1C2430]"
+        overlayClassName={Z_CLASS.settingsDialog}
+        className={`${Z_CLASS.settingsDialog} flex h-[640px] max-h-[calc(100vh-32px)] w-[1120px] max-w-[calc(100vw-32px)] flex-col gap-0 overflow-hidden rounded-xl border-0 bg-white p-0 text-[15px] leading-normal text-[#1C2430]`}
       >
         <DialogTitle className="sr-only">Learn mode question</DialogTitle>
         <DialogDescription className="sr-only">Answer the question about the item on the left.</DialogDescription>
