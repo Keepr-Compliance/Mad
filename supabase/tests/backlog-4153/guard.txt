@@ -1,0 +1,19 @@
+  -- BACKLOG-4153 guard begin: no credit unlock for a brokerage member whose license is
+  -- unassigned, unless another brokerage grants them access. Personal organizations never count.
+  IF EXISTS (SELECT 1
+               FROM public.organization_members m
+               JOIN public.organizations o ON o.id = m.organization_id
+              WHERE m.user_id = v_uid
+                AND o.personal_owner_user_id IS NULL
+                AND m.license_status = 'unassigned')
+     AND NOT EXISTS (SELECT 1
+               FROM public.organization_members m2
+               JOIN public.organizations o2 ON o2.id = m2.organization_id
+              WHERE m2.user_id = v_uid
+                AND o2.personal_owner_user_id IS NULL
+                AND public.member_status_grants_access(m2.license_status)) THEN
+    RAISE EXCEPTION 'not_licensed'
+      USING ERRCODE = 'P0001', HINT = 'Your brokerage hasn''t assigned you a license. Contact your admin.';
+  END IF;
+  -- BACKLOG-4153 guard end
+

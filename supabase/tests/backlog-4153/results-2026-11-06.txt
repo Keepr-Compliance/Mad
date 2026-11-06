@@ -1,0 +1,72 @@
+BACKLOG-4153 DB controls, keepr-test, 2026-11-06. Every call is one transaction that ends in RAISE
+(rolled back). Composed with compose.py; parsed with parse.py.
+
+Migration 20261106120000: md5(prosrc) of unlock_transaction(text) c044fab7e359a66ab472d61d69037f87
+(3853 body) -> be681af740257942945997c0e3113e44 (computed from the exact text between the $function$
+markers by build_migration.py; equal to md5(prosrc) after apply). ACL after apply, unchanged:
+{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+
+== Run 1: before the change (current body c044fab7), compose.py <out> base,R_no_suspension_gate ==
+base                  checks=25 pass=20 fail=5
+  red a_unassigned_only_refused                    unlocked=true
+  red e_nothing_spent                              debits 0->1 unlocks 0->1 balance 1->0
+  red h_unassigned_plus_personal_refused           unlocked=true
+  red i1_suspended_older_unassigned_newer_refused  unlocked=true
+  red i2_unassigned_older_suspended_newer_refused  unlocked=true
+R_no_suspension_gate  MUTATION APPLIED unlock_transaction prosrc c044fab7->e387fe95  checks=25 fail=6
+  (the five above + j_suspended_brokerage_still_account_suspended)
+
+== Run 2: migration applied TWICE in the same call (second apply = re-run no-op; pre-check took the
+new md5, post-check passed md5 + ACL both times), then 10 modes ==
+mode                              mutation (md5(prosrc))   checks pass fail  reds
+base                              none                     25     25   0     -
+M1_guard_off                      be681af7->986685bd       25     20   5     a, e, h, i1, i2
+M2_any_unassigned_refuses         be681af7->ff685848       25     24   1     b
+M3_any_non_active_counts          be681af7->2dfb9251       25     23   2     g, g2
+M4_no_active_brokerage_refuses    be681af7->5410023d       25     22   3     d, g, g2
+M5_guard_above_already            be681af7->c3d33d41       25     24   1     f
+M6_message_changed                be681af7->5e067ac0       25     21   4     a, h, i1, i2  (P0001:unlicensed)
+M7_personal_counts_as_active      be681af7->24945828       25     24   1     h (DEFENSIVE fixture)
+M8_first_brokerage_row_decides    be681af7->4a14a75e       25     23   2     b, i1
+R_no_suspension_gate              be681af7->34f51fce       25     24   1     j
+Every mutant printed "MUTATION APPLIED" (exact-once replace; raises on 0 or 2+ matches; prosrc and
+functiondef md5 must both change).
+
+Checks (25): 12 fixture-state probes (P0_jit_allowed, Pa..Pj, H0) + 13 outcome checks:
+ a unassigned-only -> P0001 not_licensed          b unassigned A + active B -> unlocked
+ c active -> unlocked                             d personal org only -> unlocked
+ e after (a): debit rows, transaction_unlocks rows and get_credit_balance unchanged (balance 1)
+ f unlocked while active, then unassigned, same deal -> already=true
+ g suspended-only -> unlocked                     g2 expired-only -> unlocked (DEFENSIVE)
+ h unassigned brokerage + active personal -> not_licensed (DEFENSIVE)
+ i1 suspended at A (older) + unassigned at B (newer) -> not_licensed
+ i2 unassigned at B (older) + suspended at A (newer) -> not_licensed
+ j active member of a suspended brokerage -> account_suspended (3853 regression)
+
+Fixture writers: invites = client-session INSERT by the org admin (invite guard shape); claimed by
+accept_invitation; unassigned by set_member_license('unassign'); second brokerage row by
+jit_join_organization(azure_ad) (no other-brokerage check; accept_invitation, SCIM and directory
+sync refuse already_placed); suspended = service UPDATE as deactivateUser.ts writes it; personal org
+by _ensure_personal_organization_for. DEFENSIVE: g2 (no writer of member 'expired' found); h
+(H0 shows the real path removes the personal row: retire_personal_membership); j's suspended deal
+row (inserted directly).
+
+== Rollback controls ==
+R1 migration -> rollback-4153 -> rollback-4153 again: md5(prosrc) c044fab7..., ACL unchanged
+   (second rollback a no-op through its pre-check; post-checks passed).
+R3 body neither 4153 nor 3853 (one-character edit, md5 302a5ebb): rollback-4153 refuses.
+R4 same foreign body: the migration pre-check refuses.
+
+== Regression: backlog-3853 controls, base mode ==
+Errors before reaching any check, with AND without the 4153 migration (identical):
+  ERROR 23502 null value in column "dedupe_key" of relation "billing_outbox"
+The 3853 harness no longer runs against keepr-test (schema moved on after it was written); not
+caused by 4153. Control j above covers the 3853 unlock gate (account_suspended) with and without
+the migration, and R_no_suspension_gate proves j is load-bearing.
+
+rollback-3853-m1.sql: it does NOT pin unlock_transaction's md5 (its only pre-check counts
+org_deals rows). On keepr-test it refuses ("3 org_deals row(s) exist"). In a venue with no deals it
+would replace the 4153 body with the pre-3853 one without warning; apply rollback-4153.sql first.
+
+After all calls: unlock_transaction md5(prosrc) c044fab7e359a66ab472d61d69037f87, ACL as above,
+0 P4153 orgs, 0 p4153 users, 0 p4153 unlock rows.
