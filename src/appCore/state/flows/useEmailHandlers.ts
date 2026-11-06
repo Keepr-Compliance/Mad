@@ -21,7 +21,6 @@ import { emitEmailConnectionChanged } from "@/utils/emailConnectionEvents";
 import { emitEmailAdminConsentBlocked } from "@/utils/emailAdminConsentEvents";
 import { emitEmailConnectFailed } from "@/utils/emailConnectFailedEvents";
 import type { AppStep, PendingOnboardingData } from "../types";
-import type { PendingOAuthData } from "../../../components/Login";
 import { USE_NEW_ONBOARDING } from "../../routing/routeConfig";
 import logger from '../../../utils/logger';
 

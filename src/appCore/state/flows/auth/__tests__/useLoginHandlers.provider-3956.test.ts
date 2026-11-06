@@ -21,7 +21,6 @@ function setup() {
       login,
       onSetCurrentStep: jest.fn(),
       setIsNewUserFlow: jest.fn(),
-      setPendingOAuthData: jest.fn(),
     }),
   );
   return { login, handle: result.current.handleDeepLinkAuthSuccess };

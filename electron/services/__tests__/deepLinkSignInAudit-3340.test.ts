@@ -49,7 +49,6 @@ const mockUsers = {
   updateUserSync: jest.fn(),
 };
 jest.mock("../db/userDbService", () => mockUsers);
-jest.mock("../db/oauthTokenDbService", () => ({ saveOAuthToken: jest.fn() }));
 const mockCreateSessionSync = jest.fn();
 jest.mock("../db/sessionDbService", () => ({ createSessionSync: (...a: unknown[]) => mockCreateSessionSync(...a) }));
 jest.mock("../logService", () => ({

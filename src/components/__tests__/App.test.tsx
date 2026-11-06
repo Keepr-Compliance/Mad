@@ -171,7 +171,6 @@ const createAppStateMock = (
     isNewUserFlow: false,
 
     // Pending data
-    pendingOAuthData: null,
     pendingOnboardingData: {
       termsAccepted: false,
       phoneType: null,
@@ -214,7 +213,6 @@ const createAppStateMock = (
 
     // Auth handlers
     handleLoginSuccess: jest.fn(),
-    handleLoginPending: jest.fn(),
     handleLogout: jest.fn().mockResolvedValue(undefined),
 
     // Terms handlers

@@ -79,10 +79,6 @@ jest.mock("os", () => ({
   release: jest.fn().mockReturnValue("21.0.0"),
 }));
 
-jest.mock("../services/loginProvisioningService", () => ({
-  __esModule: true,
-}));
-
 jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: {

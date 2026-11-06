@@ -45,6 +45,12 @@ const REMOVED: ReadonlyArray<RegExp> = [
   /\bon(Google|Microsoft)MailboxPending(Connected|Cancelled)\b/,
   /\bprovisionLogin\b/,
   /\b(resolve|reject)CodeDirectly\b/,
+  // PR 2
+  /\b[pP]endingOAuthData\b/,
+  /\bsetPendingOAuthData\b/,
+  /\bhandleLoginPending\b/,
+  /\bonLoginPending\b/,
+  /\bonPendingOAuthClear\b/,
 ];
 
 function productionFiles(): string[] {
@@ -88,6 +94,8 @@ describe("BACKLOG-3302: the pending-login and pre-DB mailbox surface is gone", (
       "electron/services/loginProvisioningService.ts",
       "src/services/authService.ts",
       "src/components/Login.tsx",
+      "src/appCore/state/flows/useAuthFlow.ts",
+      "src/appCore/state/flows/usePhoneHandlers.ts",
     ])
       expect([must, files.includes(must)]).toEqual([must, true]);
     expect(read("electron/preload/authBridge.ts")).toMatch(/\bopenAuthInBrowser\b/);

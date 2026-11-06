@@ -173,7 +173,6 @@ function SignInDriver() {
     platform: { isMacOS: true, isWindows: false },
     onSetCurrentStep: () => {},
     setIsNewUserFlow: () => {},
-    setPendingOAuthData: () => {},
   });
   signIn = handleDeepLinkAuthSuccess;
   return null;
