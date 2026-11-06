@@ -112,6 +112,7 @@ interface ModalFlowReturn {
   openAndroidSync: (start?: "default" | "link") => void;
   closeAndroidSync: () => void;
   openLearnSession: (total: number) => void;
+  openLearnScore: () => void;
   closeLearnSession: () => void;
 }
 
@@ -304,6 +305,7 @@ export function constructModalTransitions(
   | "openAndroidSync"
   | "closeAndroidSync"
   | "openLearnSession"
+  | "openLearnScore"
   | "closeLearnSession"
 > {
   return {
@@ -329,6 +331,7 @@ export function constructModalTransitions(
     openAndroidSync: modal.openAndroidSync,
     closeAndroidSync: modal.closeAndroidSync,
     openLearnSession: modal.openLearnSession,
+    openLearnScore: modal.openLearnScore,
     closeLearnSession: modal.closeLearnSession,
   };
 }

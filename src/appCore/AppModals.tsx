@@ -18,7 +18,7 @@ import type { Transaction } from "@/types";
 import { useGoogleMessagesSyncStatus } from "../hooks/useGoogleMessagesSyncStatus";
 import { useExtensionFolderRefresh } from "../hooks/useExtensionFolderRefresh";
 import { useSubmissionStatusNotice } from "./hooks/useSubmissionStatusNotice";
-import { LearnSessionHost } from "../components/settings/learn/LearnSessionHost";
+import { LearnScoreHost, LearnSessionHost } from "../components/settings/learn/LearnSessionHost";
 import {
   clearOpenTransactionRequest,
   notifyTransactionsViewClosed,
@@ -168,11 +168,12 @@ export function AppModals({ app }: AppModalsProps) {
         />
       )}
 
-      {/* Learn mode questions, opened from Settings › Help Keepr learn › Start
+      {/* Learn mode, opened from Settings › Help Keepr learn (Start / See score)
           after Settings closes (BACKLOG-4120). */}
-      {typeof modalState.learnSessionTotal === "number" && currentUser && (
-        <LearnSessionHost total={modalState.learnSessionTotal} onClose={closeLearnSession} />
+      {modalState.learnOverlay?.kind === "session" && currentUser && (
+        <LearnSessionHost total={modalState.learnOverlay.total} onClose={closeLearnSession} />
       )}
+      {modalState.learnOverlay?.kind === "score" && currentUser && <LearnScoreHost onClose={closeLearnSession} />}
 
       {/* iPhone Sync Flow Modal */}
       {modalState.showIPhoneSync && <IPhoneSyncModal onClose={closeIPhoneSync} />}

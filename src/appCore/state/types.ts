@@ -68,11 +68,15 @@ export interface ModalState {
    */
   androidSyncStart: AndroidSyncStart;
   /**
-   * BACKLOG-4120: Learn mode questions, shown over the main screen after
-   * Settings closes. The number of questions ready at Start; null = closed.
+   * BACKLOG-4120: Learn mode, shown over the main screen after Settings
+   * closes — a question sitting (Start; the questions ready) or the score
+   * (See score). null = closed.
    */
-  learnSessionTotal: number | null;
+  learnOverlay: LearnOverlay | null;
 }
+
+/** What Learn mode shows over the main screen (BACKLOG-4120). */
+export type LearnOverlay = { kind: "session"; total: number } | { kind: "score" };
 
 /** Where the Sync Android modal starts. */
 export type AndroidSyncStart = "default" | "link";
@@ -207,8 +211,9 @@ export interface AppStateMachine {
   openAndroidSync(start?: AndroidSyncStart): void;
   closeAndroidSync(): void;
 
-  // Learn mode questions (BACKLOG-4120)
+  // Learn mode over the main screen (BACKLOG-4120)
   openLearnSession(total: number): void;
+  openLearnScore(): void;
   closeLearnSession(): void;
 
   // ============================================

@@ -9,13 +9,13 @@
  * Learn mode is separate from AI detection: it reads mail on this computer,
  * never creates a transaction, and never uses AI.
  *
- * Start does not open the questions here: onStart closes Settings and the
- * app opens them over the main screen (LearnSessionHost, BACKLOG-4120 2.46.1).
+ * Start and See score open nothing here: onStart / onSeeScore close Settings
+ * and the app opens the questions or the score over the main screen
+ * (LearnSessionHost / LearnScoreHost in AppModals, BACKLOG-4120 2.46.1).
  */
-import React, { useState } from "react";
+import React from "react";
 import { usePlatform } from "@/contexts/PlatformContext";
 import { useLearnSettings } from "./useLearnSettings";
-import { LearnScoreDialog } from "./LearnScoreDialog";
 import { LearnStatTiles } from "./LearnStatTiles";
 import { learnTiles } from "./learnScoreView";
 
@@ -24,10 +24,15 @@ function minutesFor(questions: number): string {
   return minutes === 1 ? "About 1 minute" : `About ${minutes} minutes`;
 }
 
-export function LearnSettings({ onStart }: { onStart: (total: number) => void }): React.ReactElement {
+export function LearnSettings({
+  onStart,
+  onSeeScore,
+}: {
+  onStart: (total: number) => void;
+  onSeeScore: () => void;
+}): React.ReactElement {
   const learn = useLearnSettings();
   const { isMacOS } = usePlatform();
-  const [scoreOpen, setScoreOpen] = useState(false);
   const machine = isMacOS ? "this Mac" : "this computer";
 
   return (
@@ -117,7 +122,7 @@ export function LearnSettings({ onStart }: { onStart: (total: number) => void })
                   <button
                     type="button"
                     className="font-medium text-sky-700 hover:text-sky-800"
-                    onClick={() => setScoreOpen(true)}
+                    onClick={onSeeScore}
                   >
                     See score →
                   </button>
@@ -134,13 +139,6 @@ export function LearnSettings({ onStart }: { onStart: (total: number) => void })
         )}
       </div>
 
-      <LearnScoreDialog
-        open={scoreOpen}
-        answered={null}
-        score={learn.score}
-        copyBlock={learn.copyBlock}
-        onClose={() => setScoreOpen(false)}
-      />
     </div>
   );
 }

@@ -21,7 +21,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import "@testing-library/jest-dom";
 import { PlatformProvider } from "@/contexts/PlatformContext";
 import { LearnSettings } from "../LearnSettings";
-import { LearnSessionHost } from "../LearnSessionHost";
+import { LearnScoreHost, LearnSessionHost } from "../LearnSessionHost";
 import { LearnAnswersPrivacyRow } from "../LearnAnswersPrivacyRow";
 import { LearnEmailPane } from "../LearnEmailPane";
 import type { LearnPreviewResult, LearnScoreResult, LearnStateResult } from "../../../../../electron/types/ipc/window-api-learn";
@@ -127,10 +127,12 @@ function install(overrides: Partial<FakeMain> = {}): void {
 /** The section plus the app-level host Start hands off to (BACKLOG-4120 2.46.1: AppModals). */
 function SectionWithHost() {
   const [total, setTotal] = React.useState<number | null>(null);
+  const [score, setScore] = React.useState(false);
   return (
     <>
-      <LearnSettings onStart={setTotal} />
+      <LearnSettings onStart={setTotal} onSeeScore={() => setScore(true)} />
       {total !== null && <LearnSessionHost total={total} onClose={() => setTotal(null)} />}
+      {score && <LearnScoreHost onClose={() => setScore(false)} />}
     </>
   );
 }

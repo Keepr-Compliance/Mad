@@ -67,3 +67,32 @@ export function LearnSessionHost({ total, onClose }: { total: number; onClose: (
     </div>
   );
 }
+
+/**
+ * "See score" over the main screen (BACKLOG-4120, 2.46.1): Settings › Help
+ * Keepr learn › See score closes Settings and AppModals mounts this. Reads the
+ * score from main once, then shows the L4 dialog titled "How Keepr is doing".
+ */
+export function LearnScoreHost({ onClose }: { onClose: () => void }): React.ReactElement {
+  const [view, setView] = useState<{ score: LearnScore | null; copyBlock: string | null } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void learnModeService.score().then((r) => {
+      if (!cancelled) setView({ score: r.success ? r.score : null, copyBlock: r.success ? r.copyBlock : null });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <LearnScoreDialog
+      open={view !== null}
+      answered={null}
+      score={view?.score ?? null}
+      copyBlock={view?.copyBlock ?? null}
+      onClose={onClose}
+    />
+  );
+}

@@ -33,11 +33,11 @@ import {
 jest.mock("../../components/Settings", () => {
   const { LearnSettings } = jest.requireActual("../../components/settings/learn/LearnSettings");
   const { PlatformProvider } = jest.requireActual("@/contexts/PlatformContext");
-  function StubSettings(props: { onStartLearn?: (total: number) => void }) {
+  function StubSettings(props: { onStartLearn?: (total: number) => void; onSeeLearnScore?: () => void }) {
     return (
       <PlatformProvider>
         <div data-testid="settings-page">
-          <LearnSettings onStart={props.onStartLearn} />
+          <LearnSettings onStart={props.onStartLearn} onSeeScore={props.onSeeLearnScore} />
         </div>
       </PlatformProvider>
     );
@@ -112,10 +112,14 @@ const Harness = forwardRef<Modal>(function Harness(_props, ref) {
   );
 });
 
-async function openSettingsAndStart(): Promise<HTMLElement> {
+function renderWithSettingsOpen(): void {
   const ref = React.createRef<Modal>();
   render(<Harness ref={ref} />);
   act(() => ref.current!.openSettings());
+}
+
+async function openSettingsAndStart(): Promise<HTMLElement> {
+  renderWithSettingsOpen();
   const start = await screen.findByTestId("learn-start");
   await waitFor(() => expect(start).not.toBeDisabled());
   fireEvent.click(start);
@@ -126,7 +130,7 @@ beforeEach(() => {
   installFakeMain();
 });
 
-describe("Help Keepr learn › Start hands off to the main screen (BACKLOG-4120 2.46.1)", () => {
+describe("Help Keepr learn › Start and See score hand off to the main screen (BACKLOG-4120 2.46.1)", () => {
   it("Start closes Settings, then opens the question dialog outside any Settings tree", async () => {
     const dialog = await openSettingsAndStart();
     // 1. The Settings page is gone.
@@ -148,5 +152,15 @@ describe("Help Keepr learn › Start hands off to the main screen (BACKLOG-4120 
     expect(screen.queryByTestId("settings-layer")).toBeNull();
     fireEvent.click(within(done).getByRole("button", { name: /done|close/i }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("See score closes Settings, then opens the score outside any Settings tree", async () => {
+    renderWithSettingsOpen();
+    fireEvent.click(await screen.findByRole("button", { name: /See score/ }));
+    const d = await screen.findByRole("dialog", { name: "How Keepr is doing" });
+    expect(screen.queryByTestId("settings-layer")).toBeNull();
+    expect(screen.queryByTestId("settings-page")).toBeNull();
+    expect(d.closest('[data-testid="settings-layer"], [data-testid="settings-page"], #settings-learn')).toBeNull();
+    expect(within(d).getByTestId("learn-tile-found")).toBeInTheDocument();
   });
 });

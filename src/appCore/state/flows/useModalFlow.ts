@@ -6,7 +6,7 @@
  */
 
 import { useState, useCallback, useMemo } from "react";
-import type { AndroidSyncStart, ModalState } from "../types";
+import type { AndroidSyncStart, LearnOverlay, ModalState } from "../types";
 
 export interface UseModalFlowReturn {
   // State
@@ -54,8 +54,9 @@ export interface UseModalFlowReturn {
   openAndroidSync: (start?: AndroidSyncStart) => void;
   closeAndroidSync: () => void;
 
-  // Learn mode questions (BACKLOG-4120): opened from Settings after it closes
+  // Learn mode (BACKLOG-4120): opened from Settings after it closes
   openLearnSession: (total: number) => void;
+  openLearnScore: () => void;
   closeLearnSession: () => void;
 
   // Internal setters (for orchestrator to control)
@@ -79,7 +80,7 @@ export function useModalFlow(): UseModalFlowReturn {
   const [showIPhoneSync, setShowIPhoneSync] = useState<boolean>(false);
   const [showAndroidSync, setShowAndroidSync] = useState<boolean>(false);
   const [androidSyncStart, setAndroidSyncStart] = useState<AndroidSyncStart>("default");
-  const [learnSessionTotal, setLearnSessionTotal] = useState<number | null>(null);
+  const [learnOverlay, setLearnOverlay] = useState<LearnOverlay | null>(null);
 
   // Semantic modal methods
   // BACKLOG-3964: showProfile = the account side panel (shell/AccountPanel).
@@ -145,8 +146,9 @@ export function useModalFlow(): UseModalFlowReturn {
     setAndroidSyncStart("default");
   }, []);
 
-  const openLearnSession = useCallback((total: number) => setLearnSessionTotal(total), []);
-  const closeLearnSession = useCallback(() => setLearnSessionTotal(null), []);
+  const openLearnSession = useCallback((total: number) => setLearnOverlay({ kind: "session", total }), []);
+  const openLearnScore = useCallback(() => setLearnOverlay({ kind: "score" }), []);
+  const closeLearnSession = useCallback(() => setLearnOverlay(null), []);
 
   // Memoized modal state object
   const modalState = useMemo<ModalState>(
@@ -163,7 +165,7 @@ export function useModalFlow(): UseModalFlowReturn {
       showIPhoneSync,
       showAndroidSync,
       androidSyncStart,
-      learnSessionTotal,
+      learnOverlay,
     }),
     [
       showProfile,
@@ -178,7 +180,7 @@ export function useModalFlow(): UseModalFlowReturn {
       showIPhoneSync,
       showAndroidSync,
       androidSyncStart,
-      learnSessionTotal,
+      learnOverlay,
     ],
   );
 
@@ -207,6 +209,7 @@ export function useModalFlow(): UseModalFlowReturn {
       openAndroidSync,
       closeAndroidSync,
       openLearnSession,
+      openLearnScore,
       closeLearnSession,
       setShowProfile,
       setShowTermsModal,
@@ -236,6 +239,7 @@ export function useModalFlow(): UseModalFlowReturn {
       openAndroidSync,
       closeAndroidSync,
       openLearnSession,
+      openLearnScore,
       closeLearnSession,
     ],
   );

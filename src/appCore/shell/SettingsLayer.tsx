@@ -48,6 +48,7 @@ function OpenSettingsLayer({ app, user }: SettingsLayerProps & { user: NonNullab
     openAndroidSync,
     openIPhoneSync,
     openLearnSession,
+    openLearnScore,
     handleLogout,
   } = app;
   const rootRef = useRef<HTMLDivElement>(null);
@@ -83,6 +84,12 @@ function OpenSettingsLayer({ app, user }: SettingsLayerProps & { user: NonNullab
     [closeSettings, openLearnSession],
   );
 
+  // BACKLOG-4120: Help Keepr learn › See score — the same hand-off as Start.
+  const handleSeeLearnScoreFromSettings = useCallback(() => {
+    closeSettings();
+    openLearnScore();
+  }, [closeSettings, openLearnScore]);
+
   return (
     <div ref={rootRef} className={`absolute inset-0 ${Z_CLASS.settings} bg-gray-50`} data-testid="settings-layer">
       <Settings
@@ -97,6 +104,7 @@ function OpenSettingsLayer({ app, user }: SettingsLayerProps & { user: NonNullab
         onLinkGoogleMessages={handleLinkGoogleMessagesFromSettings}
         onImportIphone={handleImportIphoneFromSettings}
         onStartLearn={handleStartLearnFromSettings}
+        onSeeLearnScore={handleSeeLearnScoreFromSettings}
       />
     </div>
   );
