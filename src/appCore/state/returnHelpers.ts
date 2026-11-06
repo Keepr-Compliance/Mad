@@ -111,6 +111,9 @@ interface ModalFlowReturn {
   closeIPhoneSync: () => void;
   openAndroidSync: (start?: "default" | "link") => void;
   closeAndroidSync: () => void;
+  openLearnSession: (total: number) => void;
+  openLearnScore: () => void;
+  closeLearnSession: () => void;
 }
 
 interface PhoneHandlersReturn {
@@ -301,6 +304,9 @@ export function constructModalTransitions(
   | "closeIPhoneSync"
   | "openAndroidSync"
   | "closeAndroidSync"
+  | "openLearnSession"
+  | "openLearnScore"
+  | "closeLearnSession"
 > {
   return {
     openProfile: modal.openProfile,
@@ -324,6 +330,9 @@ export function constructModalTransitions(
     closeIPhoneSync: modal.closeIPhoneSync,
     openAndroidSync: modal.openAndroidSync,
     closeAndroidSync: modal.closeAndroidSync,
+    openLearnSession: modal.openLearnSession,
+    openLearnScore: modal.openLearnScore,
+    closeLearnSession: modal.closeLearnSession,
   };
 }
 
