@@ -141,6 +141,8 @@ export function registerPermissionHandlers(): void {
 
       return {
         name: appName,
+        // BACKLOG-1293: shown at the bottom of the account side panel.
+        version: app.getVersion(),
         path: appPath,
         pid: process.pid,
       };
