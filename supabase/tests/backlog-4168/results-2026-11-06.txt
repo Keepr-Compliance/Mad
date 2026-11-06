@@ -1,51 +1,31 @@
-BACKLOG-4168 harness results, keepr-test, 2026-11-06, branch base 4f37577f9
+BACKLOG-4168 harness results, keepr-test, 2026-11-06. Details: pm_comments on BACKLOG-4168.
 
-== baseline BEFORE the migration (want OPEN)
-(run before apply; all 8 OPEN: H1 n=6, H2 agent added super-admin, H3 1 row, H4 1 row, H5 SA removed, H6 'No user found' vs 'already has an internal role', H7 sole SA demoted self (sa_holders=0), H8 editor added internal_users.manage to own role)
+== baseline --pre --want PRE
+total=8 pass=8 fail=0
+== baseline --want POST (applied)
+total=8 pass=8 fail=0
+== controls (applied)
+total=78 pass=78 fail=0
+== controls --with-migration
+total=78 pass=78 fail=0
 
-== baseline AFTER apply (want CLOSED)
-{
- "fail": 0,
- "pass": 8,
- "reds": {},
- "total": 8,
- "checks": {
-  "H6_email_oracle": "CLOSED [ERR 42501 Not permitted] vs [ERR 42501 Not permitted]",
-  "H7_sole_sa_demotes_self": "CLOSED ERR 42501 Not permitted | sa_holders=1",
-  "H1_anon_or_public_execute": "CLOSED n=0",
-  "H2_agent_adds_super_admin": "CLOSED ERR 42501 Not permitted | -",
-  "H5_agent_removes_super_admin": "CLOSED ERR 42501 Not permitted | super-admin",
-  "H3_agent_inserts_sa_invitation": "CLOSED ERR 42501 new row violates row-level security policy for table \"pending_internal_invitatio",
-  "H4_agent_updates_invitation_to_sa": "CLOSED 0",
-  "H8_editor_adds_unheld_key_to_own_role": "CLOSED ERR 42501 Not permitted"
- }
-}
-
-== controls AFTER apply
-{
- "fail": 0,
- "pass": 67,
- "reds": {},
- "total": 67
-}
-
-== mutations (controls --with-migration, migration file mutated)
+== mutate.py all
 == CEIL_manage_only
 MUTATION APPLIED numstat=1/0
   + WHEN p_grantor IS NOT NULL AND p_role_id IS NOT NULL THEN true
-RESULT total=67 pass=47 fail=20 reds=A12_manager_own_role_refused,A3_manager_equal_role_refused,A4_manager_side_role_refused,A5_manager_super_admin_refused,A8_manager_unknown_email_sa_refused,A9_manager_cannot_overwrite_sa_invitation,C3_manager_sa_invite_refused,C5_manager_equal_role_invite_refused,G1_can_grant_role_matrix,I2_manager_inserts_sa_refused,I5_manager_update_to_sa_refused,I6_manager_cannot_touch_sa_invitation,R2_manager_removes_peer_refused,R3_manager_removes_sa_refused,U2_manager_to_sa_refused,U3_manager_to_equal_refused,U4_manager_peer_current_role_refused,U5_manager_demotes_sa_refused,X1_one_refusal_everywhere,X2_unknown_and_known_email_refused_alike
+RESULT total=78 pass=52 fail=26 reds=A12_manager_own_role_refused,A3_manager_equal_role_refused,A4_manager_side_role_refused,A5_manager_super_admin_refused,A8_manager_unknown_email_sa_refused,A9_existing_sa_invitation_unchanged,C3_manager_sa_invite_refused,C5_manager_equal_role_invite_refused,G1_can_grant_role_matrix,I2_manager_inserts_sa_refused,I5_manager_update_to_sa_refused,I6_manager_cannot_touch_sa_invitation,R2_manager_removes_peer_refused,R3_manager_removes_sa_refused,S1_permissions_of_role_above_caller_refused,S2_lower_role_to_caller_level_refused,S3_editor_on_role_above_editor_refused,S4_cancel_sa_invitation_by_manager_zero_rows,S5_rename_role_above_caller_refused,S6_remove_role_not_below_caller_refused,U2_manager_to_sa_refused,U3_manager_to_equal_refused,U4_manager_peer_current_role_refused,U5_manager_demotes_sa_refused,X1_one_refusal_everywhere,X2_unknown_and_known_email_refused_alike
 RESTORED clean=True
 == STRICT_to_subset
 MUTATION APPLIED numstat=1/1
   - ELSE EXISTS (
   + ELSE true OR EXISTS (
-RESULT total=67 pass=59 fail=8 reds=A12_manager_own_role_refused,A3_manager_equal_role_refused,C5_manager_equal_role_invite_refused,G1_can_grant_role_matrix,R2_manager_removes_peer_refused,U3_manager_to_equal_refused,U4_manager_peer_current_role_refused,X1_one_refusal_everywhere
+RESULT total=78 pass=69 fail=9 reds=A12_manager_own_role_refused,A3_manager_equal_role_refused,C5_manager_equal_role_invite_refused,G1_can_grant_role_matrix,R2_manager_removes_peer_refused,S2_lower_role_to_caller_level_refused,U3_manager_to_equal_refused,U4_manager_peer_current_role_refused,X1_one_refusal_everywhere
 RESTORED clean=True
 == SELF_removed
 MUTATION APPLIED numstat=0/2
   - OR p_user_id = v_uid
   - OR p_user_id = v_uid
-RESULT total=67 pass=64 fail=3 reds=R5_sa_self_remove_refused,U6_sa_self_change_refused,X1_one_refusal_everywhere
+RESULT total=78 pass=75 fail=3 reds=R5_sa_self_remove_refused,U6_sa_self_change_refused,X1_one_refusal_everywhere
 RESTORED clean=True
 == GUARD_removed
 MUTATION APPLIED numstat=0/7
@@ -56,7 +36,7 @@ MUTATION APPLIED numstat=0/7
   - OR (EXISTS (SELECT 1 FROM public.admin_roles WHERE id = v_cur_role_id AND is_system)
   - AND NOT EXISTS (SELECT 1 FROM public.internal_roles ir JOIN public.admin_roles ar ON ar.id = ir.role_id
   - WHERE ar.is_system AND ir.user_id <> p_user_id))
-RESULT total=67 pass=67 fail=0 reds=
+RESULT total=78 pass=78 fail=0 reds=
 RESTORED clean=True
 == SELF_and_GUARD_removed
 MUTATION APPLIED numstat=0/9
@@ -69,44 +49,82 @@ MUTATION APPLIED numstat=0/9
   - OR (EXISTS (SELECT 1 FROM public.admin_roles WHERE id = v_cur_role_id AND is_system)
   - AND NOT EXISTS (SELECT 1 FROM public.internal_roles ir JOIN public.admin_roles ar ON ar.id = ir.role_id
   - WHERE ar.is_system AND ir.user_id <> p_user_id))
-RESULT total=67 pass=62 fail=5 reds=R5_sa_self_remove_refused,R7_sole_sa_self_remove_refused,U6_sa_self_change_refused,U9_sole_sa_self_demote_refused,X1_one_refusal_everywhere
+RESULT total=78 pass=73 fail=5 reds=R5_sa_self_remove_refused,R7_sole_sa_self_remove_refused,U6_sa_self_change_refused,U9_sole_sa_self_demote_refused,X1_one_refusal_everywhere
 RESTORED clean=True
 == CURRENT_role_ceiling_removed
 MUTATION APPLIED numstat=0/2
   - OR NOT public._admin_can_grant_role_as(v_uid, v_cur_role_id)
   - OR NOT public._admin_can_grant_role_as(v_uid, v_cur_role_id)
-RESULT total=67 pass=62 fail=5 reds=R2_manager_removes_peer_refused,R3_manager_removes_sa_refused,U4_manager_peer_current_role_refused,U5_manager_demotes_sa_refused,X1_one_refusal_everywhere
+RESULT total=78 pass=73 fail=5 reds=R2_manager_removes_peer_refused,R3_manager_removes_sa_refused,U4_manager_peer_current_role_refused,U5_manager_demotes_sa_refused,X1_one_refusal_everywhere
 RESTORED clean=True
 == POLICY_back_to_ALL
 MUTATION APPLIED numstat=1/0
   + CREATE POLICY internal_users_can_manage_invitations ON public.pending_internal_invitations FOR ALL TO authenticated USING (public.has_internal_role((S
-RESULT total=67 pass=58 fail=9 reds=I10_cancel_needs_manage,I2_manager_inserts_sa_refused,I3_manager_forged_inviter_refused,I4_no_manage_insert_refused,I5_manager_update_to_sa_refused,I6_manager_cannot_touch_sa_invitation,I8_no_manage_update_zero_rows,I9_manager_forges_inviter_on_update_refused,Z2_invitation_policies
+RESULT total=78 pass=68 fail=10 reds=I10_cancel_needs_manage,I2_manager_inserts_sa_refused,I3_insert_other_inviter_refused,I4_no_manage_insert_refused,I5_manager_update_to_sa_refused,I6_manager_cannot_touch_sa_invitation,I8_no_manage_update_zero_rows,I9_update_other_inviter_refused,S4_cancel_sa_invitation_by_manager_zero_rows,Z2_invitation_policies
 RESTORED clean=True
 == ACCEPT_no_inviter_check
 MUTATION APPLIED numstat=0/2
   - OR NOT public._admin_keys_held(v_inv.invited_by, ARRAY['internal_users.manage'])
   - OR NOT public._admin_can_grant_role_as(v_inv.invited_by, v_inv.role_id)
-RESULT total=67 pass=63 fail=4 reds=C3_manager_sa_invite_refused,C4_inviter_without_manage_refused,C5_manager_equal_role_invite_refused,X1_one_refusal_everywhere
+RESULT total=78 pass=74 fail=4 reds=C3_manager_sa_invite_refused,C4_inviter_without_manage_refused,C5_manager_equal_role_invite_refused,X1_one_refusal_everywhere
 RESTORED clean=True
 == CRUD_no_key_ceiling
 MUTATION APPLIED numstat=0/2
   - OR NOT (public.is_super_admin(v_uid) OR public._admin_keys_held(v_uid, p_permission_keys))
   - OR NOT (public.is_super_admin(v_uid) OR public._admin_keys_held(v_uid, p_permission_keys))
-RESULT total=67 pass=64 fail=3 reds=K2_editor_create_unheld_key_refused,K4_editor_unheld_key_refused,X1_one_refusal_everywhere
+RESULT total=78 pass=76 fail=2 reds=K2_editor_create_unheld_key_refused,X1_one_refusal_everywhere
 RESTORED clean=True
 == CRUD_own_role_allowed
 MUTATION APPLIED numstat=0/1
   - OR EXISTS (SELECT 1 FROM public.internal_roles WHERE user_id = v_uid AND role_id = p_role_id)
-RESULT total=67 pass=65 fail=2 reds=K5_editor_own_role_refused,X1_one_refusal_everywhere
+RESULT total=78 pass=78 fail=0 reds=
 RESTORED clean=True
 == MSG_distinct_in_add
 MUTATION APPLIED numstat=1/1
   - RAISE EXCEPTION 'Not permitted' USING ERRCODE = '42501';
   + RAISE EXCEPTION 'Cannot grant this role' USING ERRCODE = '42501';
-RESULT total=67 pass=57 fail=10 reds=A10_outsider_refused,A11_internal_no_manage_refused,A12_manager_own_role_refused,A3_manager_equal_role_refused,A4_manager_side_role_refused,A5_manager_super_admin_refused,A6_no_manage_refused,A8_manager_unknown_email_sa_refused,X1_one_refusal_everywhere,X2_unknown_and_known_email_refused_alike
+RESULT total=78 pass=68 fail=10 reds=A10_outsider_refused,A11_internal_no_manage_refused,A12_manager_own_role_refused,A3_manager_equal_role_refused,A4_manager_side_role_refused,A5_manager_super_admin_refused,A6_no_manage_refused,A8_manager_unknown_email_sa_refused,X1_one_refusal_everywhere,X2_unknown_and_known_email_refused_alike
+RESTORED clean=True
+== UPDPERM_no_before_check
+MUTATION APPLIED numstat=0/1
+  - OR NOT public._admin_can_grant_role_as(v_uid, p_role_id)
+RESULT total=78 pass=75 fail=3 reds=S1_permissions_of_role_above_caller_refused,S3_editor_on_role_above_editor_refused,X1_one_refusal_everywhere
+RESTORED clean=True
+== UPDPERM_no_after_check
+MUTATION APPLIED numstat=0/3
+  - IF NOT public._admin_can_grant_role_as(v_uid, p_role_id) THEN
+  - RAISE EXCEPTION 'Not permitted' USING ERRCODE = '42501';
+  - END IF;
+RESULT total=78 pass=76 fail=2 reds=S2_lower_role_to_caller_level_refused,X1_one_refusal_everywhere
+RESTORED clean=True
+== UPDROLE_no_ceiling
+MUTATION APPLIED numstat=0/4
+  - IF NOT public._admin_can_grant_role_as(auth.uid(), p_role_id) THEN
+  - RAISE EXCEPTION 'Not permitted' USING ERRCODE = '42501';
+  - END IF;
+  - 
+RESULT total=78 pass=76 fail=2 reds=S5_rename_role_above_caller_refused,X1_one_refusal_everywhere
+RESTORED clean=True
+== DELROLE_no_ceiling
+MUTATION APPLIED numstat=0/4
+  - IF NOT public._admin_can_grant_role_as(auth.uid(), p_role_id) THEN
+  - RAISE EXCEPTION 'Not permitted' USING ERRCODE = '42501';
+  - END IF;
+  - 
+RESULT total=78 pass=76 fail=2 reds=S6_remove_role_not_below_caller_refused,X1_one_refusal_everywhere
+RESTORED clean=True
+== INV_CANCEL_manage_only
+MUTATION APPLIED numstat=0/1
+  - AND public.can_grant_role(role_id)
+RESULT total=78 pass=76 fail=2 reds=S4_cancel_sa_invitation_by_manager_zero_rows,Z2_invitation_policies
+RESTORED clean=True
+== ANON_table_grants_kept
+MUTATION APPLIED numstat=0/1
+  - REVOKE ALL ON TABLE public.pending_internal_invitations FROM anon;
+RESULT total=78 pass=77 fail=1 reds=Z3_no_anon_table_privileges
 RESTORED clean=True
 == GRANT_anon_kept_on_remove
 MUTATION APPLIED numstat=0/1
   - REVOKE EXECUTE ON FUNCTION public.admin_remove_internal_user(uuid) FROM PUBLIC, anon;
-RESULT total=67 pass=66 fail=1 reds=Z1_execute_grants
+RESULT total=78 pass=77 fail=1 reds=Z1_execute_grants
 RESTORED clean=True
