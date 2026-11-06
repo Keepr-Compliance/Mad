@@ -239,7 +239,7 @@ describe("RD the email preview is contained", () => {
     expect(div).not.toHaveAttribute("class");
     expect(div.getAttribute("style")).toBe("color:#111");
     const box = screen.getByTestId("learn-email-scroll");
-    for (const c of ["relative", "isolate", "overflow-x-hidden", "overflow-y-auto", "[contain:paint]"]) {
+    for (const c of ["relative", "isolate", "overflow-x-auto", "overflow-y-auto", "[contain:paint]"]) {
       expect(box.className.split(/\s+/)).toContain(c);
     }
   });
