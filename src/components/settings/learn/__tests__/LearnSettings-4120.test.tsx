@@ -508,6 +508,14 @@ describe("C1/C2/C3 sittings of 12", () => {
     expect(within(second).getByRole("button", { name: "6 more" })).toBeInTheDocument();
   });
 
+  it("C3 with exactly 12 items the sitting fills up and offers no more (nothing left to ask)", async () => {
+    install({ cleanup: [], bulk: mailRows(12), sampleSize: 12 });
+    const dialog = await startSession();
+    for (let n = 1; n <= 12; n++) await answerQuestion(dialog, n, 12);
+    const done = await screen.findByRole("dialog", { name: "Thanks, 12 answers saved" });
+    expect(within(done).queryByRole("button", { name: /more$/ })).toBeNull();
+  });
+
   it("C3 with 5 items the sitting ends at 5 and offers no more", async () => {
     install({ cleanup: [], bulk: mailRows(5), sampleSize: 5 });
     const dialog = await startSession();
