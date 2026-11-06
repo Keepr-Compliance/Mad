@@ -9,7 +9,6 @@
 import React, { useState } from "react";
 import { Check } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@keepr/ui";
-import { Z_CLASS } from "@/constants/zLayers";
 import { useCopyText } from "@/hooks/useCopyText";
 import type { LearnScore } from "../../../../electron/types/ipc/window-api-learn";
 import { LearnStatTiles } from "./LearnStatTiles";
@@ -36,11 +35,9 @@ export function LearnScoreDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? undefined : onClose())}>
-      {/* Portaled to body: the Settings dialog band keeps it above the Settings page (z-[105]). */}
       <DialogContent
         hideClose
-        overlayClassName={Z_CLASS.settingsDialog}
-        className={`${Z_CLASS.settingsDialog} flex w-[560px] max-w-[calc(100vw-32px)] flex-col items-center gap-6 rounded-xl border-0 bg-white px-12 py-8 text-center text-[15px] leading-normal text-[#1C2430]`}
+        className="flex w-[560px] max-w-[calc(100vw-32px)] flex-col items-center gap-6 rounded-xl border-0 bg-white px-12 py-8 text-center text-[15px] leading-normal text-[#1C2430]"
       >
         <span className="inline-grid h-12 w-12 place-items-center rounded-full bg-green-100 text-green-700">
           <Check className="h-6 w-6" strokeWidth={2.5} aria-hidden="true" />
