@@ -195,6 +195,9 @@ export function useBoardData() {
   }, [refreshLabels]);
 
   const projectMode = swimLane === 'project';
+  // The sprint only matters outside Project mode; keeping it out of Project
+  // mode's deps stops a late sprint-list load from refetching the project.
+  const sprintForLoad = projectMode ? '' : selectedSprintId;
 
   const loadBoardData = useCallback(async () => {
     // Project mode (BACKLOG-4176): every item of one project, no sprint.
@@ -219,14 +222,14 @@ export function useBoardData() {
       }
       return;
     }
-    if (!selectedSprintId) { setLoading(false); return; }
+    if (!sprintForLoad) { setLoading(false); return; }
     try {
-      const data = await getBoardTasks(selectedSprintId);
+      const data = await getBoardTasks(sprintForLoad);
       setColumns(data);
     } catch (err) {
       console.error('Failed to load board tasks:', err);
       try {
-        const result = await listItems({ sprint_id: selectedSprintId, page_size: 200 });
+        const result = await listItems({ sprint_id: sprintForLoad, page_size: 200 });
         const items = result.items || [];
         setColumns({
           pending: items.filter((i) => i.status === 'pending'),
@@ -246,7 +249,7 @@ export function useBoardData() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [projectMode, selectedProjectId, selectedSprintId]);
+  }, [projectMode, selectedProjectId, sprintForLoad]);
 
   const handleItemUpdated = useCallback(() => {
     loadBoardData();
@@ -266,8 +269,8 @@ export function useBoardData() {
   useEffect(() => {
     if (!hydrated) return;
     if (projectMode) { setLoading(true); loadBoardData(); return; }
-    if (selectedSprintId) { setLoading(true); loadBoardData(); }
-  }, [hydrated, projectMode, selectedSprintId, loadBoardData]);
+    if (sprintForLoad) { setLoading(true); loadBoardData(); }
+  }, [hydrated, projectMode, sprintForLoad, loadBoardData]);
 
   const loadBacklogItems = useCallback(async (search?: string) => {
     setBacklogLoading(true);

@@ -68,6 +68,13 @@ describe('Project mode loading', () => {
     expect(result.current.columns.pending.length).toBeGreaterThan(0);
   });
 
+  it('a sprint list arriving after mount does not refetch the project', async () => {
+    q.listSprints.mockResolvedValue([{ id: 'sprint-1', status: 'active', name: 'S' }]);
+    const { result } = await mountProjectMode();
+    await waitFor(() => expect(result.current.selectedSprintId).toBe('sprint-1'));
+    expect(q.getBoardTasks).toHaveBeenCalledTimes(1);
+  });
+
   it('with no project picked, fetches nothing and stops loading', async () => {
     persist({ swimLane: 'project' });
     const { result } = renderHook(() => useBoardData());
