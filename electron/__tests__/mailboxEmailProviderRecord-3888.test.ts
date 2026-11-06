@@ -49,7 +49,6 @@ jest.mock("os", () => ({
 
 jest.mock("../services/loginProvisioningService", () => ({
   __esModule: true,
-  provisionLogin: jest.fn(),
 }));
 
 jest.mock("../services/databaseService", () => ({
@@ -83,8 +82,6 @@ jest.mock("../services/googleAuthService", () => ({
     exchangeCodeForTokens: jest.fn(),
     getUserInfo: jest.fn(),
     stopLocalServer: jest.fn(),
-    resolveCodeDirectly: jest.fn(),
-    rejectCodeDirectly: jest.fn(),
     revokeToken: jest.fn().mockResolvedValue({ outcome: "revoked" }),
   },
 }));
@@ -96,8 +93,6 @@ jest.mock("../services/microsoftAuthService", () => ({
     exchangeCodeForTokens: jest.fn(),
     getUserInfo: jest.fn(),
     stopLocalServer: jest.fn(),
-    resolveCodeDirectly: jest.fn(),
-    rejectCodeDirectly: jest.fn(),
     revokeToken: jest.fn().mockResolvedValue({ outcome: "unsupported" }),
   },
 }));

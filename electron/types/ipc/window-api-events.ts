@@ -60,35 +60,6 @@ export interface WindowApiEvents {
   onMicrosoftMailboxDisconnected: (
     callback: (result: { success: boolean }) => void,
   ) => () => void;
-  // Pre-DB mailbox connection events (for collecting tokens before DB init)
-  onGoogleMailboxPendingConnected: (
-    callback: (result: {
-      success: boolean;
-      email?: string;
-      tokens?: {
-        access_token: string;
-        refresh_token: string | null;
-        expires_at: string;
-        scopes: string;
-      };
-      error?: string;
-    }) => void,
-  ) => () => void;
-  onGoogleMailboxPendingCancelled: (callback: () => void) => () => void;
-  onMicrosoftMailboxPendingConnected: (
-    callback: (result: {
-      success: boolean;
-      email?: string;
-      tokens?: {
-        access_token: string;
-        refresh_token: string | null;
-        expires_at: string;
-        scopes: string;
-      };
-      error?: string;
-    }) => void,
-  ) => () => void;
-  onMicrosoftMailboxPendingCancelled: (callback: () => void) => () => void;
   /**
    * BACKLOG-1832: Fires when a background auto-sync starts for a specific transaction.
    * The renderer uses this to show a "fetching emails…" indicator.

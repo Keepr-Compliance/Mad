@@ -60,20 +60,6 @@ jest.mock("os", () => ({
 }));
 
 // Mock services with inline factories (hoisting-safe)
-// BACKLOG-2546: the login write chain is one transaction behind
-// `provisionLogin`, so that is the seam these handler tests intercept. WHICH of
-// create/update runs is now decided inside the transaction against the real row,
-// and is covered on the real driver in
-// `services/db/__tests__/loginProvisioningAtomicity-2546.test.ts`. What is
-// asserted here is what the HANDLER decides to send, which is what these cases
-// were always about.
-const mockProvisionLogin = jest.fn();
-
-jest.mock("../services/loginProvisioningService", () => ({
-  __esModule: true,
-  provisionLogin: (...args: unknown[]) => mockProvisionLogin(...args),
-}));
-
 jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: {
@@ -123,8 +109,6 @@ jest.mock("../services/googleAuthService", () => ({
     exchangeCodeForTokens: jest.fn(),
     getUserInfo: jest.fn(),
     stopLocalServer: jest.fn(),
-    resolveCodeDirectly: jest.fn(),
-    rejectCodeDirectly: jest.fn(),
     revokeToken: jest.fn().mockResolvedValue({ outcome: "revoked" }),
   },
 }));
@@ -136,8 +120,6 @@ jest.mock("../services/microsoftAuthService", () => ({
     exchangeCodeForTokens: jest.fn(),
     getUserInfo: jest.fn(),
     stopLocalServer: jest.fn(),
-    resolveCodeDirectly: jest.fn(),
-    rejectCodeDirectly: jest.fn(),
     revokeToken: jest.fn().mockResolvedValue({
       outcome: "unsupported",
       message: "Microsoft publishes no revocation endpoint for app grants",
@@ -977,27 +959,6 @@ describe("Auth Handlers", () => {
     });
   });
 
-  describe("Mailbox PKCE verifier hand-off (BACKLOG-4103 keep-control)", () => {
-    it("Google mailbox-pending passes the verifier from authenticateForMailbox to the code exchange", async () => {
-      mockGoogleAuthService.authenticateForMailbox.mockResolvedValue(fixture({
-        authUrl: "https://accounts.google.com/oauth",
-        codePromise: Promise.resolve("pending-code"),
-        codeVerifier: "pending-verifier",
-        scopes: ["gmail.readonly"],
-      }));
-      mockGoogleAuthService.exchangeCodeForTokens.mockResolvedValue(fixture({
-        tokens: { access_token: "a", refresh_token: "r", expires_at: "2030-01-01T00:00:00.000Z", scopes: ["gmail.readonly"] },
-      }));
-      mockGoogleAuthService.getUserInfo.mockResolvedValue(fixture({ id: "g1", email: "broker@example.com" }));
-
-      const handler = registeredHandlers.get("auth:google:connect-mailbox-pending");
-      const result = await handler(mockEvent, undefined);
-
-      expect(result.success).toBe(true);
-      expect(mockGoogleAuthService.exchangeCodeForTokens).toHaveBeenCalledWith("pending-code", "pending-verifier");
-    });
-  });
-
   describe("OAuth Popup Window Security Configuration", () => {
     const { BrowserWindow } = require("electron");
 
@@ -1005,64 +966,6 @@ describe("Auth Handlers", () => {
       jest.clearAllMocks();
       // Track BrowserWindow constructor calls
       BrowserWindow.mockClear();
-    });
-
-    it("should create the Google mailbox-pending popup without webSecurity: false", async () => {
-      mockGoogleAuthService.authenticateForMailbox.mockResolvedValue(fixture({
-        authUrl: "https://accounts.google.com/oauth",
-        codePromise: new Promise<string>(() => {}),
-        scopes: ["email", "profile"],
-      }));
-
-      // The pending handler waits for the redirect code after opening the
-      // popup, so do not await it: let the window be created, then assert.
-      const handler = registeredHandlers.get("auth:google:connect-mailbox-pending");
-      void handler(mockEvent, undefined);
-      await new Promise((resolve) => setTimeout(resolve, 0));
-
-      // Verify BrowserWindow was called
-      expect(BrowserWindow).toHaveBeenCalled();
-
-      // Get the configuration passed to BrowserWindow
-      const callArgs = BrowserWindow.mock.calls[0][0];
-
-      // Verify webSecurity is NOT set to false
-      expect(callArgs.webPreferences?.webSecurity).not.toBe(false);
-      // Verify allowRunningInsecureContent is NOT set to true
-      expect(callArgs.webPreferences?.allowRunningInsecureContent).not.toBe(
-        true,
-      );
-      // Verify other security settings are correct
-      expect(callArgs.webPreferences?.nodeIntegration).toBe(false);
-      expect(callArgs.webPreferences?.contextIsolation).toBe(true);
-    });
-
-    it("should create the Microsoft mailbox-pending popup without webSecurity: false", async () => {
-      mockMicrosoftAuthService.authenticateForMailbox.mockResolvedValue({
-        authUrl: "https://login.microsoftonline.com/oauth",
-        codePromise: new Promise<string>(() => {}),
-        codeVerifier: "verifier-123",
-        scopes: ["User.Read"],
-      });
-
-      const handler = registeredHandlers.get("auth:microsoft:connect-mailbox-pending");
-      await handler(mockEvent, undefined);
-
-      // Verify BrowserWindow was called
-      expect(BrowserWindow).toHaveBeenCalled();
-
-      // Get the configuration passed to BrowserWindow
-      const callArgs = BrowserWindow.mock.calls[0][0];
-
-      // Verify webSecurity is NOT set to false
-      expect(callArgs.webPreferences?.webSecurity).not.toBe(false);
-      // Verify allowRunningInsecureContent is NOT set to true
-      expect(callArgs.webPreferences?.allowRunningInsecureContent).not.toBe(
-        true,
-      );
-      // Verify other security settings are correct
-      expect(callArgs.webPreferences?.nodeIntegration).toBe(false);
-      expect(callArgs.webPreferences?.contextIsolation).toBe(true);
     });
 
     it("should use system browser for Google mailbox connect (RFC 8252)", async () => {

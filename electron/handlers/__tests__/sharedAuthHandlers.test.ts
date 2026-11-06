@@ -142,19 +142,6 @@ jest.mock("../syncHandlers", () => ({
   setSyncUserId: jest.fn(),
 }));
 
-// BACKLOG-2546: the login write chain no longer runs as separate
-// `databaseService` calls — it is one transaction owned by
-// `loginProvisioningService.provisionLogin`, so that is the interception point
-// now. What a partial failure leaves behind is asserted against the REAL driver
-// in `db/__tests__/loginProvisioningAtomicity-2546.test.ts`; these cases are
-// about the handler's own response shape.
-const mockProvisionLogin = jest.fn();
-
-jest.mock("../../services/loginProvisioningService", () => ({
-  __esModule: true,
-  provisionLogin: (...args: unknown[]) => mockProvisionLogin(...args),
-}));
-
 jest.mock("../../utils/userIdHelper", () => ({
   getValidUserId: jest.fn().mockResolvedValue("validated-user-id"),
 }));
@@ -166,8 +153,6 @@ jest.mock("../../constants/legalVersions", () => ({
 
 import {
   registerSharedAuthHandlers,
-  handleCompletePendingLogin,
-  handleSavePendingMailboxTokens,
   handleDisconnectMailbox,
 } from "../sharedAuthHandlers";
 import { openMailboxFetchScope } from "../../services/mailboxFetchGeneration";
@@ -182,14 +167,6 @@ describe("SharedAuthHandlers", () => {
     it("should register all expected IPC channels", () => {
       registerSharedAuthHandlers(null);
 
-      expect(mockIpcHandle).toHaveBeenCalledWith(
-        "auth:complete-pending-login",
-        expect.any(Function)
-      );
-      expect(mockIpcHandle).toHaveBeenCalledWith(
-        "auth:save-pending-mailbox-tokens",
-        expect.any(Function)
-      );
       expect(mockIpcHandle).toHaveBeenCalledWith(
         "auth:google:disconnect-mailbox",
         expect.any(Function)
@@ -208,142 +185,9 @@ describe("SharedAuthHandlers", () => {
       );
     });
 
-    it("should register exactly 6 handlers", () => {
+    it("should register exactly 4 handlers", () => {
       registerSharedAuthHandlers(null);
-      expect(mockIpcHandle).toHaveBeenCalledTimes(6);
-    });
-  });
-
-  describe("handleCompletePendingLogin", () => {
-    const baseOauthData = {
-      provider: "google" as const,
-      userInfo: {
-        id: "oauth-id-123",
-        email: "test@example.com",
-        given_name: "Test",
-        family_name: "User",
-        name: "Test User",
-      },
-      tokens: {
-        access_token: "mock-access-token",
-        refresh_token: "mock-refresh-token",
-        expires_in: 3600,
-      },
-      cloudUser: {
-        id: "cloud-user-id",
-        subscription_tier: "free" as const,
-        subscription_status: "trial" as const,
-        terms_accepted_at: "2024-01-01T00:00:00Z",
-        terms_version_accepted: "1.0",
-        privacy_policy_version_accepted: "1.0",
-      },
-    };
-
-    it("should return success with user for new user login", async () => {
-      const mockUser = {
-        id: "cloud-user-id",
-        email: "test@example.com",
-        display_name: "Test User",
-        is_active: true,
-        terms_accepted_at: "2024-01-01T00:00:00Z",
-        terms_version_accepted: "1.0",
-        privacy_policy_version_accepted: "1.0",
-      };
-
-      mockProvisionLogin.mockReturnValue({
-        user: mockUser,
-        sessionToken: "mock-session-token",
-        isNewUser: true,
-        existingBefore: null,
-      });
-
-      const result = await handleCompletePendingLogin(
-        {} as any,
-        baseOauthData
-      );
-
-      expect(result.success).toBe(true);
-      expect(result.user).toBeDefined();
-      expect(result.sessionToken).toBe("mock-session-token");
-    });
-
-    it("should return success for existing user login", async () => {
-      const existingUser = {
-        id: "existing-user-id",
-        email: "test@example.com",
-        display_name: "Test User",
-        is_active: true,
-        terms_accepted_at: "2024-01-01T00:00:00Z",
-        terms_version_accepted: "1.0",
-        privacy_policy_version_accepted: "1.0",
-      };
-
-      mockProvisionLogin.mockReturnValue({
-        user: existingUser,
-        sessionToken: "mock-session-token",
-        isNewUser: false,
-        existingBefore: existingUser,
-      });
-
-      const result = await handleCompletePendingLogin(
-        {} as any,
-        baseOauthData
-      );
-
-      expect(result.success).toBe(true);
-      expect(result.user).toBeDefined();
-    });
-
-    it("should return error on database failure", async () => {
-      mockProvisionLogin.mockImplementation(() => {
-        throw new Error("Database connection lost");
-      });
-
-      const result = await handleCompletePendingLogin(
-        {} as any,
-        baseOauthData
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("Database connection lost");
-    });
-  });
-
-  describe("handleSavePendingMailboxTokens", () => {
-    const tokenData = {
-      userId: "user-123",
-      provider: "google" as const,
-      email: "user@gmail.com",
-      tokens: {
-        access_token: "access-token",
-        refresh_token: "refresh-token",
-        expires_at: "2024-12-31T00:00:00Z",
-        scopes: "mail.read",
-      },
-    };
-
-    it("should return success when tokens saved successfully", async () => {
-      mockDatabaseService.saveOAuthToken.mockResolvedValue(undefined);
-
-      const result = await handleSavePendingMailboxTokens(
-        {} as any,
-        tokenData
-      );
-
-      expect(result.success).toBe(true);
-    });
-
-    it("should return error when user not found", async () => {
-      const { getValidUserId } = require("../../utils/userIdHelper");
-      (getValidUserId as jest.Mock).mockResolvedValueOnce(null);
-
-      const result = await handleSavePendingMailboxTokens(
-        {} as any,
-        tokenData
-      );
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("No user found");
+      expect(mockIpcHandle).toHaveBeenCalledTimes(4);
     });
   });
 
