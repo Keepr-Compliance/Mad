@@ -99,7 +99,8 @@ export async function readPlanLinesWithOrgs(
 ): Promise<{ lines: Record<string, PlanLine>; brokerageOrgIds: Record<string, string> }> {
   const [membersRes, personalRes, subsRes, suspendedRes] = await Promise.all([
     // Same order as broker-portal's portal-access read (created_at, then id):
-    // pickBrokerageMembership takes the FIRST brokerage row.
+    // pickBrokerageMembership takes the first ACTIVE brokerage row, else the first
+    // unassigned one, else the first row.
     service
       .from('organization_members')
       .select('user_id, role, organization_id, license_status, created_at, id, organizations(name, personal_owner_user_id)')
