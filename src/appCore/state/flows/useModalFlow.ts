@@ -54,6 +54,10 @@ export interface UseModalFlowReturn {
   openAndroidSync: (start?: AndroidSyncStart) => void;
   closeAndroidSync: () => void;
 
+  // Learn mode questions (BACKLOG-4120): opened from Settings after it closes
+  openLearnSession: (total: number) => void;
+  closeLearnSession: () => void;
+
   // Internal setters (for orchestrator to control)
   setShowProfile: (show: boolean) => void;
   setShowTermsModal: (show: boolean) => void;
@@ -75,6 +79,7 @@ export function useModalFlow(): UseModalFlowReturn {
   const [showIPhoneSync, setShowIPhoneSync] = useState<boolean>(false);
   const [showAndroidSync, setShowAndroidSync] = useState<boolean>(false);
   const [androidSyncStart, setAndroidSyncStart] = useState<AndroidSyncStart>("default");
+  const [learnSessionTotal, setLearnSessionTotal] = useState<number | null>(null);
 
   // Semantic modal methods
   // BACKLOG-3964: showProfile = the account side panel (shell/AccountPanel).
@@ -140,6 +145,9 @@ export function useModalFlow(): UseModalFlowReturn {
     setAndroidSyncStart("default");
   }, []);
 
+  const openLearnSession = useCallback((total: number) => setLearnSessionTotal(total), []);
+  const closeLearnSession = useCallback(() => setLearnSessionTotal(null), []);
+
   // Memoized modal state object
   const modalState = useMemo<ModalState>(
     () => ({
@@ -155,6 +163,7 @@ export function useModalFlow(): UseModalFlowReturn {
       showIPhoneSync,
       showAndroidSync,
       androidSyncStart,
+      learnSessionTotal,
     }),
     [
       showProfile,
@@ -169,6 +178,7 @@ export function useModalFlow(): UseModalFlowReturn {
       showIPhoneSync,
       showAndroidSync,
       androidSyncStart,
+      learnSessionTotal,
     ],
   );
 
@@ -196,6 +206,8 @@ export function useModalFlow(): UseModalFlowReturn {
       closeIPhoneSync,
       openAndroidSync,
       closeAndroidSync,
+      openLearnSession,
+      closeLearnSession,
       setShowProfile,
       setShowTermsModal,
       setShowMoveAppPrompt,
@@ -223,6 +235,8 @@ export function useModalFlow(): UseModalFlowReturn {
       closeIPhoneSync,
       openAndroidSync,
       closeAndroidSync,
+      openLearnSession,
+      closeLearnSession,
     ],
   );
 }

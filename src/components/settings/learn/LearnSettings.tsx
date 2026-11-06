@@ -8,12 +8,13 @@
  *
  * Learn mode is separate from AI detection: it reads mail on this computer,
  * never creates a transaction, and never uses AI.
+ *
+ * Start does not open the questions here: onStart closes Settings and the
+ * app opens them over the main screen (LearnSessionHost, BACKLOG-4120 2.46.1).
  */
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useState } from "react";
 import { usePlatform } from "@/contexts/PlatformContext";
 import { useLearnSettings } from "./useLearnSettings";
-import { useLearnSession } from "./useLearnSession";
-import { LearnQuestionDialog } from "./LearnQuestionDialog";
 import { LearnScoreDialog } from "./LearnScoreDialog";
 import { LearnStatTiles } from "./LearnStatTiles";
 import { learnTiles } from "./learnScoreView";
@@ -23,25 +24,11 @@ function minutesFor(questions: number): string {
   return minutes === 1 ? "About 1 minute" : `About ${minutes} minutes`;
 }
 
-export function LearnSettings(): React.ReactElement {
+export function LearnSettings({ onStart }: { onStart: (total: number) => void }): React.ReactElement {
   const learn = useLearnSettings();
-  const session = useLearnSession();
   const { isMacOS } = usePlatform();
-  const [scoreOpen, setScoreOpen] = useState<null | { answered: number | null }>(null);
+  const [scoreOpen, setScoreOpen] = useState(false);
   const machine = isMacOS ? "this Mac" : "this computer";
-
-  const { answered, close } = session;
-  const { refresh } = learn;
-  const finishSession = useCallback((): void => {
-    close();
-    void refresh();
-    setScoreOpen({ answered });
-  }, [answered, close, refresh]);
-
-  // The sitting ran out of questions: show the score (board L4).
-  useEffect(() => {
-    if (session.phase === "done") finishSession();
-  }, [session.phase, finishSession]);
 
   return (
     <div id="settings-learn" className="mb-8" data-testid="settings-learn">
@@ -101,7 +88,7 @@ export function LearnSettings(): React.ReactElement {
                 type="button"
                 data-testid="learn-start"
                 disabled={learn.questionsReady === 0}
-                onClick={() => void session.start(learn.questionsReady)}
+                onClick={() => onStart(learn.questionsReady)}
                 className="flex w-full items-center gap-4 rounded-lg bg-sky-700 px-5 py-4 text-left text-white hover:bg-sky-800 disabled:cursor-default disabled:hover:bg-sky-700"
               >
                 <span className="inline-grid h-11 w-11 flex-none place-items-center rounded-lg bg-white/15 text-lg font-bold">
@@ -130,7 +117,7 @@ export function LearnSettings(): React.ReactElement {
                   <button
                     type="button"
                     className="font-medium text-sky-700 hover:text-sky-800"
-                    onClick={() => setScoreOpen({ answered: null })}
+                    onClick={() => setScoreOpen(true)}
                   >
                     See score →
                   </button>
@@ -147,22 +134,12 @@ export function LearnSettings(): React.ReactElement {
         )}
       </div>
 
-      <LearnQuestionDialog
-        session={session}
-        onClose={() => {
-          if (session.answered > 0) finishSession();
-          else {
-            session.close();
-            void learn.refresh();
-          }
-        }}
-      />
       <LearnScoreDialog
-        open={scoreOpen !== null}
-        answered={scoreOpen?.answered ?? null}
+        open={scoreOpen}
+        answered={null}
         score={learn.score}
         copyBlock={learn.copyBlock}
-        onClose={() => setScoreOpen(null)}
+        onClose={() => setScoreOpen(false)}
       />
     </div>
   );

@@ -53,13 +53,15 @@ interface SettingsComponentProps {
   onLinkGoogleMessages?: () => void;
   /** BACKLOG-3156 stage G: the iPhone pane's "Import from iPhone" — the dashboard's iPhone sync. */
   onImportIphone?: () => void;
+  /** BACKLOG-4120: Help Keepr learn › Start — Settings closes, the questions open over the main screen. */
+  onStartLearn: (total: number) => void;
 }
 
 /**
  * Settings — the full Settings page (BACKLOG-3964: no longer a popup). One
  * header row (Back + tabs), one column of section cards.
  */
-function Settings({ onClose, userId, account, initialSection, onSectionReached, onLogout, onEmailConnected, onEmailDisconnected, onLinkGoogleMessages, onImportIphone }: SettingsComponentProps) {
+function Settings({ onClose, userId, account, initialSection, onSectionReached, onLogout, onEmailConnected, onEmailDisconnected, onLinkGoogleMessages, onImportIphone, onStartLearn }: SettingsComponentProps) {
   const { isAllowed } = useFeatureGate();
   const hasAIAddon = isAllowed("ai_detection");
   // BACKLOG-4120: strict (fail-closed) read; pending/blocked/unknown = hidden.
@@ -332,7 +334,7 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
 
             {/* BACKLOG-4120: "Help Keepr learn". Outside the AI add-on gate on
                 purpose: Learn mode never uses AI. */}
-            {learnAvailable && <LearnSettings />}
+            {learnAvailable && <LearnSettings onStart={onStartLearn} />}
 
             {/* AI Settings - Only visible with AI add-on (BACKLOG-462) */}
             <FeatureGate requires="ai_addon">

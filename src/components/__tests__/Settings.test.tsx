@@ -72,7 +72,7 @@ const renderSettings = async (props: { onClose: () => void; userId: string; onIm
   const result = render(
     <NotificationProvider>
       <PlatformProvider>
-        <Settings account={ACCOUNT} {...props} />
+        <Settings account={ACCOUNT} onStartLearn={jest.fn()} {...props} />
       </PlatformProvider>
     </NotificationProvider>
   );
@@ -851,7 +851,7 @@ describe("Settings", () => {
       render(
         <NotificationProvider>
           <PlatformProvider>
-            <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} />
+            <Settings account={ACCOUNT} onStartLearn={jest.fn()} userId={mockUserId} onClose={mockOnClose} />
           </PlatformProvider>
         </NotificationProvider>
       );
@@ -1064,7 +1064,7 @@ describe("Settings", () => {
       render(
         <NotificationProvider>
           <PlatformProvider>
-            <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} />
+            <Settings account={ACCOUNT} onStartLearn={jest.fn()} userId={mockUserId} onClose={mockOnClose} />
           </PlatformProvider>
         </NotificationProvider>
       );
@@ -1631,7 +1631,7 @@ describe("Settings", () => {
         <NotificationProvider>
           <PlatformProvider>
             <IPhoneSyncProvider userId={mockUserId}>
-              <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} />
+              <Settings account={ACCOUNT} onStartLearn={jest.fn()} userId={mockUserId} onClose={mockOnClose} />
             </IPhoneSyncProvider>
           </PlatformProvider>
         </NotificationProvider>,
@@ -1789,7 +1789,7 @@ describe("Settings", () => {
       rerender(
         <NotificationProvider>
           <PlatformProvider>
-            <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} />
+            <Settings account={ACCOUNT} onStartLearn={jest.fn()} userId={mockUserId} onClose={mockOnClose} />
           </PlatformProvider>
         </NotificationProvider>
       );
@@ -2013,7 +2013,7 @@ describe("Settings", () => {
       const ui = (props: Partial<React.ComponentProps<typeof Settings>>) => (
         <NotificationProvider>
           <PlatformProvider>
-            <Settings account={ACCOUNT} userId={mockUserId} onClose={mockOnClose} {...props} />
+            <Settings account={ACCOUNT} onStartLearn={jest.fn()} userId={mockUserId} onClose={mockOnClose} {...props} />
           </PlatformProvider>
         </NotificationProvider>
       );

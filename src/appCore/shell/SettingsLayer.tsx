@@ -47,6 +47,7 @@ function OpenSettingsLayer({ app, user }: SettingsLayerProps & { user: NonNullab
     clearSettingsTarget,
     openAndroidSync,
     openIPhoneSync,
+    openLearnSession,
     handleLogout,
   } = app;
   const rootRef = useRef<HTMLDivElement>(null);
@@ -71,6 +72,17 @@ function OpenSettingsLayer({ app, user }: SettingsLayerProps & { user: NonNullab
     openIPhoneSync();
   }, [closeSettings, openIPhoneSync]);
 
+  // BACKLOG-4120 (2.46.1): Help Keepr learn › Start — Settings closes first, then
+  // the questions open over the main screen (AppModals). Opened inside Settings,
+  // the question dialog sat behind the page and Start appeared to do nothing.
+  const handleStartLearnFromSettings = useCallback(
+    (total: number) => {
+      closeSettings();
+      openLearnSession(total);
+    },
+    [closeSettings, openLearnSession],
+  );
+
   return (
     <div ref={rootRef} className={`absolute inset-0 ${Z_CLASS.settings} bg-gray-50`} data-testid="settings-layer">
       <Settings
@@ -84,6 +96,7 @@ function OpenSettingsLayer({ app, user }: SettingsLayerProps & { user: NonNullab
         onEmailDisconnected={handleEmailDisconnectedFromSettings}
         onLinkGoogleMessages={handleLinkGoogleMessagesFromSettings}
         onImportIphone={handleImportIphoneFromSettings}
+        onStartLearn={handleStartLearnFromSettings}
       />
     </div>
   );
