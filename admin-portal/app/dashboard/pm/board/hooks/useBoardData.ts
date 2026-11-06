@@ -22,6 +22,7 @@ import {
   listProjects,
   getBoardTasks,
   updateItemStatus,
+  reorderItem,
   createItem,
   assignItem,
   bulkUpdate,
@@ -32,6 +33,7 @@ import {
 } from '@/lib/pm-queries';
 import type {
   PmBacklogItem,
+  PmProject,
   PmSprint,
   PmLabel,
   ItemStatus,
@@ -39,6 +41,7 @@ import type {
   CreateItemParams,
 } from '@/lib/pm-types';
 import type { AssignableUser } from '../../components/KanbanCard';
+import { NO_EPIC_KEY } from '../lib/swim-lane-ids';
 
 // ---------------------------------------------------------------------------
 // Board state persistence
@@ -46,8 +49,17 @@ import type { AssignableUser } from '../../components/KanbanCard';
 
 const BOARD_STATE_KEY = 'pm-board-state';
 
+function emptyBoardColumns(): BoardColumns {
+  return {
+    pending: [], in_progress: [], testing: [], completed: [],
+    blocked: [], deferred: [], obsolete: [], reopened: [], waiting_for_user: [],
+  };
+}
+
 interface BoardPersistedState {
   selectedSprintId: string;
+  /** Project shown in Project mode (BACKLOG-4176). */
+  selectedProjectId?: string;
   swimLane: SwimLaneMode;
   collapsedLanes: string[];
   compactCards?: boolean;
@@ -80,10 +92,10 @@ export function useBoardData() {
   const [selectedSprintId, setSelectedSprintId] = useState<string>('');
   const [swimLane, setSwimLane] = useState<SwimLaneMode>('project');
   const [backlogOpen, setBacklogOpen] = useState(false);
-  const [columns, setColumns] = useState<BoardColumns>({
-    pending: [], in_progress: [], testing: [], completed: [],
-    blocked: [], deferred: [], obsolete: [], reopened: [], waiting_for_user: [],
-  });
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [projects, setProjects] = useState<PmProject[]>([]);
+  const [boardError, setBoardError] = useState<string | null>(null);
+  const [columns, setColumns] = useState<BoardColumns>(emptyBoardColumns);
   const [backlogItems, setBacklogItems] = useState<PmBacklogItem[]>([]);
   const [backlogLoading, setBacklogLoading] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -115,6 +127,7 @@ export function useBoardData() {
     const persisted = readPersistedBoardState();
     if (persisted) {
       if (persisted.selectedSprintId) setSelectedSprintId(persisted.selectedSprintId);
+      if (persisted.selectedProjectId) setSelectedProjectId(persisted.selectedProjectId);
       if (persisted.swimLane) setSwimLane(persisted.swimLane);
       if (persisted.collapsedLanes) setCollapsedLanes(new Set(persisted.collapsedLanes));
       if (typeof persisted.compactCards === 'boolean') setCompactCards(persisted.compactCards);
@@ -127,14 +140,14 @@ export function useBoardData() {
     if (!hydrated) return; // Wait for restore before writing to avoid clobbering.
     try {
       const state: BoardPersistedState = {
-        selectedSprintId, swimLane,
+        selectedSprintId, selectedProjectId, swimLane,
         collapsedLanes: Array.from(collapsedLanes), compactCards,
       };
       localStorage.setItem(BOARD_STATE_KEY, JSON.stringify(state));
     } catch (err) {
       console.error('Failed to persist board state to localStorage:', err);
     }
-  }, [hydrated, selectedSprintId, swimLane, collapsedLanes, compactCards]);
+  }, [hydrated, selectedSprintId, selectedProjectId, swimLane, collapsedLanes, compactCards]);
 
   // -- Data fetching -------------------------------------------------------
 
@@ -160,10 +173,11 @@ export function useBoardData() {
     async function loadProjects() {
       try {
         const data = await listProjects();
-        const projects = Array.isArray(data) ? data : [];
+        const list = Array.isArray(data) ? data : [];
         const map = new Map<string, string>();
-        for (const p of projects) map.set(p.id, p.name);
+        for (const p of list) map.set(p.id, p.name);
         setNameMap(map);
+        setProjects(list);
       } catch (err) {
         console.error('Failed to load projects:', err);
       }
@@ -180,7 +194,31 @@ export function useBoardData() {
     refreshLabels();
   }, [refreshLabels]);
 
+  const projectMode = swimLane === 'project';
+
   const loadBoardData = useCallback(async () => {
+    // Project mode (BACKLOG-4176): every item of one project, no sprint.
+    if (projectMode) {
+      if (!selectedProjectId) {
+        setColumns(emptyBoardColumns());
+        setLoading(false);
+        setRefreshing(false);
+        return;
+      }
+      try {
+        const data = await getBoardTasks(null, selectedProjectId);
+        setColumns(data);
+      } catch (err) {
+        // No listItems fallback here: it is page-capped and would show a
+        // silently truncated project.
+        console.error('Failed to load project board:', err);
+        setBoardError('Could not load this project. Try Refresh.');
+      } finally {
+        setLoading(false);
+        setRefreshing(false);
+      }
+      return;
+    }
     if (!selectedSprintId) { setLoading(false); return; }
     try {
       const data = await getBoardTasks(selectedSprintId);
@@ -208,16 +246,28 @@ export function useBoardData() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [selectedSprintId]);
+  }, [projectMode, selectedProjectId, selectedSprintId]);
 
   const handleItemUpdated = useCallback(() => {
     loadBoardData();
     refreshLabels();
   }, [loadBoardData, refreshLabels]);
 
+  // The board's source: a project in Project mode, the sprint otherwise.
+  const boardSourceKey = projectMode ? `project:${selectedProjectId}` : `sprint:${selectedSprintId}`;
+
+  // Switching source must not show the previous source's items under the
+  // new grouping while the fetch is in flight.
   useEffect(() => {
+    setColumns(emptyBoardColumns());
+    setBoardError(null);
+  }, [boardSourceKey]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    if (projectMode) { setLoading(true); loadBoardData(); return; }
     if (selectedSprintId) { setLoading(true); loadBoardData(); }
-  }, [selectedSprintId, loadBoardData]);
+  }, [hydrated, projectMode, selectedSprintId, loadBoardData]);
 
   const loadBacklogItems = useCallback(async (search?: string) => {
     setBacklogLoading(true);
@@ -269,12 +319,30 @@ export function useBoardData() {
 
   const handleQuickAdd = useCallback(
     async (title: string, status: ItemStatus, groupKey?: string) => {
+      // Project mode "Add backlog": item in the picked project, under the
+      // row's epic, no sprint.
+      if (projectMode) {
+        if (!selectedProjectId) return;
+        try {
+          const params: CreateItemParams = {
+            title,
+            project_id: selectedProjectId,
+            parent_id: groupKey && groupKey !== NO_EPIC_KEY ? groupKey : null,
+          };
+          const created = await createItem(params);
+          if (status !== 'pending' && created.id) await updateItemStatus(created.id, status);
+        } catch (err) {
+          console.error('Failed to add backlog item:', err);
+          setBoardError('Could not add the item. Try again.');
+        }
+        await loadBoardData();
+        return;
+      }
       if (!selectedSprintId) return;
       try {
         const params: CreateItemParams = { title, sprint_id: selectedSprintId };
         const isRealGroup = groupKey && !groupKey.startsWith('No ') && groupKey !== 'Unassigned';
-        if (isRealGroup && swimLane === 'project') params.project_id = groupKey;
-        else if (isRealGroup && swimLane === 'area') params.area = groupKey;
+        if (isRealGroup && swimLane === 'area') params.area = groupKey;
         const created = await createItem(params);
         if (status !== 'pending' && created.id) await updateItemStatus(created.id, status);
         if (isRealGroup && swimLane === 'assignee' && created.id) {
@@ -285,7 +353,45 @@ export function useBoardData() {
         console.error('Failed to quick-add item:', err);
       }
     },
-    [selectedSprintId, swimLane, loadBoardData]
+    [projectMode, selectedProjectId, selectedSprintId, swimLane, loadBoardData]
+  );
+
+  /** Project mode: create a new epic in the picked project (a new row). */
+  const handleAddEpic = useCallback(
+    async (title: string) => {
+      if (!projectMode || !selectedProjectId) return;
+      try {
+        await createItem({ title, type: 'epic', project_id: selectedProjectId });
+      } catch (err) {
+        console.error('Failed to add epic:', err);
+        setBoardError('Could not add the epic. Try again.');
+      }
+      await loadBoardData();
+    },
+    [projectMode, selectedProjectId, loadBoardData]
+  );
+
+  /**
+   * Project mode: move an item to another epic row. Status is written first,
+   * then the parent. reorderItem is always given the item's own sort_order,
+   * because it defaults a missing one to 0.
+   */
+  const handleEpicMove = useCallback(
+    async (
+      item: PmBacklogItem,
+      plan: { status: ItemStatus | null; parent: { parentId: string | null; sortOrder: number } | null }
+    ) => {
+      setBoardError(null);
+      try {
+        if (plan.status) await updateItemStatus(item.id, plan.status);
+        if (plan.parent) await reorderItem(item.id, plan.parent.parentId, plan.parent.sortOrder);
+      } catch (err) {
+        console.error('Failed to move item between epics:', err);
+        setBoardError(`Could not move #${item.item_number}. The board was reloaded.`);
+      }
+      await loadBoardData();
+    },
+    [loadBoardData]
   );
 
   const handleToggleSelect = useCallback((itemId: string) => {
@@ -310,6 +416,8 @@ export function useBoardData() {
   }, [selectedIds, loadBoardData]);
 
   const handleBulkAssignSprint = useCallback(async () => {
+    // Project mode has no sprint on screen; never assign to a hidden one.
+    if (projectMode) return;
     if (selectedIds.size === 0 || !selectedSprintId) return;
     try {
       await assignToSprint(Array.from(selectedIds), selectedSprintId);
@@ -319,7 +427,7 @@ export function useBoardData() {
       console.error('Failed to bulk assign to sprint:', err);
       setBulkError('Failed to assign to sprint. Please try again.');
     }
-  }, [selectedIds, selectedSprintId, loadBoardData]);
+  }, [projectMode, selectedIds, selectedSprintId, loadBoardData]);
 
   const handleBulkAssignUser = useCallback(async (assigneeId: string | null) => {
     if (selectedIds.size === 0) return;
@@ -366,6 +474,12 @@ export function useBoardData() {
     sprints,
     selectedSprintId,
     setSelectedSprintId,
+    selectedProjectId,
+    setSelectedProjectId,
+    projects,
+    projectMode,
+    boardError,
+    setBoardError,
     swimLane,
     setSwimLane,
     backlogOpen,
@@ -396,6 +510,8 @@ export function useBoardData() {
     handleItemUpdated,
     handleStatusChange,
     handleQuickAdd,
+    handleAddEpic,
+    handleEpicMove,
     handleToggleSelect,
     handleBulkStatusChange,
     handleBulkAssignSprint,
