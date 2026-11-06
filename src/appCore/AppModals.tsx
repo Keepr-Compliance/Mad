@@ -170,7 +170,7 @@ export function AppModals({ app }: AppModalsProps) {
 
       {/* Learn mode questions, opened from Settings › Help Keepr learn › Start
           after Settings closes (BACKLOG-4120). */}
-      {modalState.learnSessionTotal !== null && currentUser && (
+      {modalState.learnSessionTotal != null && currentUser && (
         <LearnSessionHost total={modalState.learnSessionTotal} onClose={closeLearnSession} />
       )}
 
