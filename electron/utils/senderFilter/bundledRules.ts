@@ -8,6 +8,11 @@
  * In use today: `suppress.exactAddresses` and `modes.seedAddress`. Every other
  * field is present for the shape and is read by nothing yet.
  *
+ * UNREAD PLACEHOLDERS: `thresholds`, `keep`, `freeMailDomains` and every mode
+ * other than `seedAddress`. Their values are not decisions; the PR that first
+ * reads each one sets it. In particular `approvedHost` live on `addressPass` is
+ * to be confirmed in PR2 / PR4 before any host is approved.
+ *
  * Every address and host here is lowercase (a pin test asserts it): matching
  * compares the parsed, lowercased From address with these entries exactly.
  */

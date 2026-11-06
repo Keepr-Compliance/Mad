@@ -1295,4 +1295,21 @@ describe("P12 (4175) exact sender seeds in the preview and attachment open", () 
     expect((await invoke("learn:attachment-open", { detectionId: mixed, attachmentId: "att-4175-ord" })).success).toBe(true);
     expect(openCalls).toEqual(["att-4175-ord"]);
   });
+
+  it("WIRE: learn:score reports a seed email linked to an active deal in the Copy block", async () => {
+    await seedRun();
+    run(
+      `INSERT INTO transactions (id, user_id, property_address, status) VALUES ('t-4175-active', ?, ?, 'active')`,
+      USER,
+      MIXED_ADDRESS,
+    );
+    run(
+      `INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id) VALUES ('c-4175-s0', ?, 't-4175-active', 'e-4175-s0', 'th-e-4175-s0')`,
+      USER,
+    );
+    const r = await invoke("learn:score");
+    expect(r.success).toBe(true);
+    expect(r.copyBlock).toContain("seed emails linked to deals: 1");
+    expect((r.score as { seedLinkedToDeals: number }).seedLinkedToDeals).toBe(1);
+  });
 });

@@ -46,7 +46,7 @@ jest.mock("../../logService", () => {
 import { runBaseline0, type LearnRunResult } from "../baselineRunner";
 import { answerCleanupQuestion, nextCleanupQuestion } from "../cleanupPass";
 import { addressKey } from "../dealMatcher";
-import { countSeedLinkedToDeals, formatCopyBlock, scoreRun } from "../scoring";
+import { countSeedLinkedToDeals, formatCopyBlock, isHiddenBySeed, scoreRun, visibleEmailIds } from "../scoring";
 import {
   listAnswerKeyTransactions,
   listAnsweredBulkWithText,
@@ -65,6 +65,12 @@ const SEED_B = "recommendations@mail.zillow.com";
 const SEED_OFF: SenderRuleSet = {
   ...BUNDLED_SENDER_RULES,
   modes: { ...BUNDLED_SENDER_RULES.modes, seedAddress: { learnQuestions: "off", addressPass: "off", detector: "off" } },
+};
+
+/** The seed signal measured but not live for Learn questions. */
+const SEED_MEASURE: SenderRuleSet = {
+  ...BUNDLED_SENDER_RULES,
+  modes: { ...BUNDLED_SENDER_RULES.modes, seedAddress: { learnQuestions: "measure", addressPass: "live", detector: "live" } },
 };
 
 const run = (q: string, ...p: unknown[]) => db.prepare(q).run(...(p as never[]));
@@ -102,7 +108,7 @@ function detectionOf(r: LearnRunResult, emailId: string) {
 }
 
 function score(r: LearnRunResult) {
-  return scoreRun(r, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER));
+  return scoreRun(r, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER), 0);
 }
 
 const A1 = "4175 Canarytest Way, Testville, ZZ 00000";
@@ -301,5 +307,20 @@ describe("RV answers per rules version in the Copy block", () => {
     const block = formatCopyBlock(score(r));
     expect(block).toContain("Answers by rules version: v1 deal 1 / bulk 1, v2 deal 1 / bulk 0");
     expect(block).toContain("Hidden by sender seeds (sender rules v1): 0 deals, 0 detections, 0 emails");
+  });
+});
+
+describe("MODE learnQuestions = measure records seeds and hides nothing", () => {
+  it("seed ids recorded; the all-seed detection is asked; preview ids unfiltered; nothing reported hidden", async () => {
+    const seed = alert(SEED_A, A1, 1);
+    const r = await runBaseline0(USER, 12, { nowMs: NOW, yieldFn: noYield, senderRules: SEED_MEASURE });
+    const d = detectionOf(r, seed);
+    expect(d.seedEmailIds).toEqual([seed]);
+    expect(r.seedHidesQuestions).toBe(false);
+    expect(isHiddenBySeed(r, d)).toBe(false);
+    expect(visibleEmailIds(r, d)).toEqual([seed]);
+    expect(nextCleanupQuestion(USER, r)?.detectionId).toBe(d.id);
+    const sc = score(r);
+    expect([sc.hiddenBySeed, sc.cleanupUnanswered]).toEqual([{ keys: 0, detections: 0, emails: 0 }, 1]);
   });
 });

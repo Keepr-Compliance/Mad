@@ -226,7 +226,7 @@ export function scoreRun(
   keyRows: AnswerKeyRow[],
   dealAnswers: DealAnswerRow[],
   bulkRows: AnsweredBulkRow[],
-  seedLinkedToDeals = 0,
+  seedLinkedToDeals: number,
 ): LearnScore {
   const key = buildAnswerKey(keyRows, scannedRange(run));
   const classified = classify(run.detections, key.positives, key.negatives, key.neutral);
