@@ -25,7 +25,6 @@ export default async function PlanDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const ciBreakIt: number = 'BACKLOG-4090 CI break-it';
   const { supabase, user } = await getAuthenticatedUser();
 
   if (!user) {
