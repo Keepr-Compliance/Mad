@@ -1,8 +1,9 @@
 -- BACKLOG-4168 PR 1 rollback (keepr-test, or production with a go).
--- Restores the five changed functions to the bodies production held before 20261107100000. Each body
+-- Restores the seven changed functions to the bodies production held before 20261107100000. Each body
 -- below is prosrc exactly as SELECTed (byte-identical on production and keepr-test on 2026-11-06;
--- md5(prosrc): add d104c223, update_role fb28ab2d, remove 8f5c1432, create_role 40b96420,
--- update_role_permissions b0224e65). Restores the previous EXECUTE grants and the previous
+-- md5(prosrc): add d104c223, update_user_role fb28ab2d, remove 8f5c1432, create_role 40b96420,
+-- update_role_permissions b0224e65, update_role ffa1ec1c, delete_role 75a59b63). Restores anon's
+-- previous table privileges on pending_internal_invitations. Restores the previous EXECUTE grants and the previous
 -- internal_users_can_manage_invitations policy, removes the four new invitation policies, the four
 -- new functions and the version row.
 
@@ -246,6 +247,99 @@ BEGIN
 END;
 $rbf$;
 
+CREATE OR REPLACE FUNCTION public.admin_update_role(p_role_id uuid, p_name text DEFAULT NULL::text, p_description text DEFAULT NULL::text)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $rbf$
+DECLARE
+  v_role RECORD;
+BEGIN
+  IF NOT public.has_permission(auth.uid(), 'roles.manage') THEN
+    RAISE EXCEPTION 'Unauthorized: requires roles.manage permission';
+  END IF;
+
+  SELECT * INTO v_role FROM public.admin_roles WHERE id = p_role_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Role not found'; END IF;
+  IF v_role.is_system THEN RAISE EXCEPTION 'Cannot modify system role'; END IF;
+
+  UPDATE public.admin_roles
+  SET name = COALESCE(p_name, name),
+      description = COALESCE(p_description, description),
+      updated_at = NOW()
+  WHERE id = p_role_id;
+
+  PERFORM public.log_admin_action(
+    'role.update',
+    'admin_role',
+    p_role_id::TEXT,
+    jsonb_build_object(
+      'before', jsonb_build_object(
+        'name', v_role.name,
+        'description', v_role.description
+      ),
+      'after', jsonb_build_object(
+        'name', COALESCE(p_name, v_role.name),
+        'description', COALESCE(p_description, v_role.description)
+      )
+    )
+  );
+
+  RETURN jsonb_build_object('success', true, 'role_id', p_role_id);
+END;
+$rbf$;
+
+CREATE OR REPLACE FUNCTION public.admin_delete_role(p_role_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $rbf$
+DECLARE
+  v_role RECORD;
+  v_assigned_users INT;
+  v_permissions TEXT[];
+BEGIN
+  IF NOT public.has_permission(auth.uid(), 'roles.manage') THEN
+    RAISE EXCEPTION 'Unauthorized: requires roles.manage permission';
+  END IF;
+
+  SELECT * INTO v_role FROM public.admin_roles WHERE id = p_role_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Role not found'; END IF;
+  IF v_role.is_system THEN RAISE EXCEPTION 'Cannot delete system role'; END IF;
+
+  SELECT COUNT(*) INTO v_assigned_users FROM public.internal_roles WHERE role_id = p_role_id;
+  IF v_assigned_users > 0 THEN
+    RAISE EXCEPTION 'Cannot delete role: % user(s) are still assigned to it. Reassign them first.', v_assigned_users;
+  END IF;
+
+  -- Capture permissions before deletion
+  SELECT array_agg(ap.key ORDER BY ap.key) INTO v_permissions
+  FROM public.admin_role_permissions arp
+  JOIN public.admin_permissions ap ON ap.id = arp.permission_id
+  WHERE arp.role_id = p_role_id;
+
+  DELETE FROM public.admin_roles WHERE id = p_role_id;
+
+  PERFORM public.log_admin_action(
+    'role.delete',
+    'admin_role',
+    p_role_id::TEXT,
+    jsonb_build_object(
+      'before', jsonb_build_object(
+        'name', v_role.name,
+        'slug', v_role.slug,
+        'description', v_role.description,
+        'permissions', COALESCE(to_jsonb(v_permissions), '[]'::jsonb)
+      )
+    )
+  );
+
+  RETURN jsonb_build_object('success', true, 'role_id', p_role_id);
+END;
+$rbf$;
+
 -- previous grants: admin_add_internal_user had no PUBLIC/anon EXECUTE; the other six had both
 GRANT EXECUTE ON FUNCTION public.admin_update_internal_user_role(uuid, text) TO PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.admin_remove_internal_user(uuid) TO PUBLIC, anon;
@@ -263,6 +357,8 @@ CREATE POLICY internal_users_can_manage_invitations ON public.pending_internal_i
   FOR ALL TO authenticated
   USING (has_internal_role(( SELECT auth.uid() AS uid)))
   WITH CHECK (has_internal_role(( SELECT auth.uid() AS uid)));
+
+GRANT SELECT, INSERT, UPDATE, DELETE, REFERENCES, TRIGGER ON TABLE public.pending_internal_invitations TO anon;
 
 DROP FUNCTION IF EXISTS public.admin_accept_internal_invitation(uuid, text);
 DROP FUNCTION IF EXISTS public.can_grant_role(uuid);

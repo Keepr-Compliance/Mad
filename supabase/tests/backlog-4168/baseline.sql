@@ -1,7 +1,8 @@
--- BACKLOG-4168 baseline H1-H8: each reports OPEN when the behaviour the fix removes still works,
--- CLOSED otherwise. Run BEFORE the migration (expect all OPEN) and with --with-migration (expect all
--- CLOSED). Output: RAISE 'P4168_RESULT {total, pass, fail, reds, checks}' where pass counts the
--- expected state given as the first argument of the composed call ('OPEN' or 'CLOSED').
+-- BACKLOG-4168 baseline B1-B8: eight calls whose result differs between the pre-migration and the
+-- post-migration functions. Each reports PRE when the result matches the pre-migration value and POST
+-- otherwise. Run with --pre (expect all PRE) and with --with-migration (expect all POST).
+-- Output: RAISE 'P4168_RESULT {total, pass, fail, reds, checks}'; pass counts the state given by
+-- --want.
 
 DO $drv$
 DECLARE
@@ -21,44 +22,44 @@ DECLARE
 BEGIN
   PERFORM pg_temp.setup();
 
-  -- H1: some internal-user / role writer is executable by anon or PUBLIC
+  -- B1: count of the listed functions with anon or PUBLIC EXECUTE (PRE: > 0)
   n := (SELECT count(*) FROM unnest(writers) w
          WHERE has_function_privilege('anon', w::regprocedure, 'EXECUTE')
             OR EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a WHERE p.oid = w::regprocedure AND a.grantee = 0));
-  checks := checks || jsonb_build_object('H1_anon_or_public_execute', CASE WHEN n > 0 THEN 'OPEN' ELSE 'CLOSED' END || ' n=' || n);
+  checks := checks || jsonb_build_object('B1_anon_public_execute_count', CASE WHEN n > 0 THEN 'PRE' ELSE 'POST' END || ' n=' || n);
 
-  -- H2: a Support Agent (no internal_users.manage) adds an account as Super Admin
+  -- B2: admin_add_internal_user called by a support-agent fixture, role super-admin (PRE: success)
   s := pg_temp.call_rb(uG, format('SELECT public.admin_add_internal_user(%L, %L)', 'p4168-8@example.test', 'super-admin'),
                        format('SELECT pg_temp.role_of(8)'));
-  checks := checks || jsonb_build_object('H2_agent_adds_super_admin', CASE WHEN s LIKE '%| super-admin' THEN 'OPEN' ELSE 'CLOSED' END || ' ' || s);
+  checks := checks || jsonb_build_object('B2_add_by_support_agent', CASE WHEN s LIKE '%| super-admin' THEN 'PRE' ELSE 'POST' END || ' ' || s);
 
-  -- H3: a Support Agent inserts a Super Admin invitation naming someone else as inviter
+  -- B3: invitation INSERT by a support-agent fixture, invited_by another user (PRE: 1 row)
   s := pg_temp.call_rb(uG, format('WITH i AS (INSERT INTO public.pending_internal_invitations (email, role_id, invited_by) VALUES (%L, (SELECT id FROM public.admin_roles WHERE slug = %L), %L) RETURNING 1) SELECT to_jsonb(count(*)) FROM i',
                        'p4168-inv3@example.test', 'super-admin', uA));
-  checks := checks || jsonb_build_object('H3_agent_inserts_sa_invitation', CASE WHEN s = '1' THEN 'OPEN' ELSE 'CLOSED' END || ' ' || s);
+  checks := checks || jsonb_build_object('B3_invitation_insert_by_support_agent', CASE WHEN s = '1' THEN 'PRE' ELSE 'POST' END || ' ' || s);
 
-  -- H4: a Support Agent re-points an existing invitation at Super Admin
+  -- B4: invitation UPDATE of role_id by a support-agent fixture (PRE: 1 row)
   s := pg_temp.call_rb(uG, format('WITH i AS (UPDATE public.pending_internal_invitations SET role_id = (SELECT id FROM public.admin_roles WHERE slug = %L) WHERE id = %L RETURNING 1) SELECT to_jsonb(count(*)) FROM i',
                        'super-admin', pg_temp.fx(201)));
-  checks := checks || jsonb_build_object('H4_agent_updates_invitation_to_sa', CASE WHEN s = '1' THEN 'OPEN' ELSE 'CLOSED' END || ' ' || s);
+  checks := checks || jsonb_build_object('B4_invitation_update_by_support_agent', CASE WHEN s = '1' THEN 'PRE' ELSE 'POST' END || ' ' || s);
 
-  -- H5: a Support Agent removes a Super Admin
+  -- B5: admin_remove_internal_user called by a support-agent fixture (PRE: success)
   s := pg_temp.call_rb(uG, format('SELECT public.admin_remove_internal_user(%L)', uA), 'SELECT pg_temp.role_of(1)');
-  checks := checks || jsonb_build_object('H5_agent_removes_super_admin', CASE WHEN s LIKE '%| -' THEN 'OPEN' ELSE 'CLOSED' END || ' ' || s);
+  checks := checks || jsonb_build_object('B5_remove_by_support_agent', CASE WHEN s LIKE '%| -' THEN 'PRE' ELSE 'POST' END || ' ' || s);
 
-  -- H6: the add call answers an unknown email differently from a known one (account-existence oracle)
+  -- B6: admin_add_internal_user replies for two emails compared (PRE: replies differ)
   s := pg_temp.call_rb(uG, format('SELECT public.admin_add_internal_user(%L, %L)', 'p4168-unknown@example.test', 'p4168-lower'));
   s2 := pg_temp.call_rb(uG, format('SELECT public.admin_add_internal_user(%L, %L)', 'p4168-1@example.test', 'p4168-lower'));
-  checks := checks || jsonb_build_object('H6_email_oracle', CASE WHEN s <> s2 THEN 'OPEN' ELSE 'CLOSED' END || ' [' || s || '] vs [' || s2 || ']');
+  checks := checks || jsonb_build_object('B6_add_reply_two_emails', CASE WHEN s <> s2 THEN 'PRE' ELSE 'POST' END || ' [' || s || '] vs [' || s2 || ']');
 
-  -- H7: the only Super Admin demotes themself
+  -- B7: admin_update_internal_user_role on the caller, single is_system holder (PRE: success)
   s := pg_temp.sole_sa(format('SELECT public.admin_update_internal_user_role(%L, %L)', uA, 'p4168-lower'));
-  checks := checks || jsonb_build_object('H7_sole_sa_demotes_self', CASE WHEN s LIKE '{%' THEN 'OPEN' ELSE 'CLOSED' END || ' ' || s);
+  checks := checks || jsonb_build_object('B7_update_own_role_single_holder', CASE WHEN s LIKE '{%' THEN 'PRE' ELSE 'POST' END || ' ' || s);
 
-  -- H8: a role editor adds internal_users.manage (a key they do not hold) to their own role
+  -- B8: admin_update_role_permissions by the editor fixture on its own role (PRE: success)
   s := pg_temp.call_rb(uE, format('SELECT public.admin_update_role_permissions(%L, %L::text[])', pg_temp.fx(106),
                        '{roles.manage,roles.view,dashboard.view,support.view,users.view,internal_users.manage}'));
-  checks := checks || jsonb_build_object('H8_editor_adds_unheld_key_to_own_role', CASE WHEN s LIKE '{%' THEN 'OPEN' ELSE 'CLOSED' END || ' ' || s);
+  checks := checks || jsonb_build_object('B8_role_permissions_own_role', CASE WHEN s LIKE '{%' THEN 'PRE' ELSE 'POST' END || ' ' || s);
 
   SELECT jsonb_object_agg(key, CASE WHEN value LIKE want || '%' THEN 'PASS' ELSE 'FAIL ' || value END) INTO r FROM jsonb_each_text(checks);
   RAISE EXCEPTION 'P4168_RESULT %', jsonb_build_object(

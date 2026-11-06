@@ -1,5 +1,5 @@
 #!/bin/bash
-# usage: run.sh baseline|controls [--with-migration] [--want OPEN|CLOSED]  -> prints the P4168_RESULT json
+# usage: run.sh baseline|controls [--pre] [--with-migration] [--want PRE|POST]  -> prints the P4168_RESULT json
 # keepr-test ONLY (kt-sql refuses the production ref). One call = one transaction ending in RAISE.
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"

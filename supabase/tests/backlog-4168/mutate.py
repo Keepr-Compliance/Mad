@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """BACKLOG-4168 mutations. For each mode: exact-string replace on the migration FILE (exits unless each
 fragment matches exactly the expected number of times), print MUTATION APPLIED + the changed lines,
-show `git diff --numstat`, run the controls with --with-migration (one keepr-test transaction ending in
+show `git diff --numstat`, run the controls with --with-migration (rollback first, so the run starts from the pre-migration
+state; one keepr-test transaction ending in
 RAISE, so nothing persists), assert a non-zero control count, restore the file with `git checkout --`,
 and assert the tree is clean. Commit the migration BEFORE running this: the restore is a checkout.
 
@@ -23,7 +24,7 @@ GUARD_REM = ("     OR (EXISTS (SELECT 1 FROM public.admin_roles WHERE id = v_cur
              "                          WHERE ar.is_system AND ir.user_id <> p_user_id))\n")
 # (old, new, expected match count)
 MUT = {
-  # the likely wrong fix: internal_users.manage only, no ceiling (the helper always says yes)
+  # ceiling helper always true (internal_users.manage only)
   'CEIL_manage_only': [("  SELECT CASE\n    WHEN p_grantor IS NULL OR p_role_id IS NULL THEN false\n",
                         "  SELECT CASE\n    WHEN p_grantor IS NOT NULL AND p_role_id IS NOT NULL THEN true\n    WHEN p_grantor IS NULL OR p_role_id IS NULL THEN false\n", 1)],
   # subset instead of strict subset
@@ -51,6 +52,21 @@ MUT = {
   # one function (add) says why it refused
   'MSG_distinct_in_add': [("     OR NOT public._admin_can_grant_role_as(v_uid, v_role_id)\n  THEN\n    RAISE EXCEPTION 'Not permitted' USING ERRCODE = '42501';",
                            "     OR NOT public._admin_can_grant_role_as(v_uid, v_role_id)\n  THEN\n    RAISE EXCEPTION 'Cannot grant this role' USING ERRCODE = '42501';", 1)],
+  # role permission change: no ceiling on the target role before the change
+  'UPDPERM_no_before_check': [("     OR NOT public._admin_can_grant_role_as(v_uid, p_role_id)\n  THEN", "  THEN", 1)],
+  # role permission change: no re-check after the change
+  'UPDPERM_no_after_check': [("  IF NOT public._admin_can_grant_role_as(v_uid, p_role_id) THEN\n    RAISE EXCEPTION 'Not permitted' USING ERRCODE = '42501';\n  END IF;\n", "", 1)],
+  # rename: no ceiling on the target role
+  'UPDROLE_no_ceiling': [("'Cannot modify system role'; END IF;\n\n  IF NOT public._admin_can_grant_role_as(auth.uid(), p_role_id) THEN\n    RAISE EXCEPTION 'Not permitted' USING ERRCODE = '42501';\n  END IF;\n",
+                          "'Cannot modify system role'; END IF;\n", 1)],
+  # role removal: no ceiling on the target role
+  'DELROLE_no_ceiling': [("'Cannot delete system role'; END IF;\n\n  IF NOT public._admin_can_grant_role_as(auth.uid(), p_role_id) THEN\n    RAISE EXCEPTION 'Not permitted' USING ERRCODE = '42501';\n  END IF;\n",
+                          "'Cannot delete system role'; END IF;\n", 1)],
+  # invitation cancel policy: manage only
+  'INV_CANCEL_manage_only': [("    public.has_permission((SELECT auth.uid()), 'internal_users.manage')\n    AND public.can_grant_role(role_id)\n  );\n\nREVOKE ALL",
+                              "    public.has_permission((SELECT auth.uid()), 'internal_users.manage')\n  );\n\nREVOKE ALL", 1)],
+  # anon keeps its table privileges on pending_internal_invitations
+  'ANON_table_grants_kept': [("REVOKE ALL ON TABLE public.pending_internal_invitations FROM anon;\n", "", 1)],
   # anon keeps EXECUTE on one writer
   'GRANT_anon_kept_on_remove': [("REVOKE EXECUTE ON FUNCTION public.admin_remove_internal_user(uuid) FROM PUBLIC, anon;\n", "", 1)],
 }

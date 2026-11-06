@@ -11,6 +11,8 @@ DECLARE
   uL uuid := pg_temp.fx(5); uG uuid := pg_temp.fx(6); uN uuid := pg_temp.fx(7); uX uuid := pg_temp.fx(8);
   uE uuid := pg_temp.fx(9); uQ uuid := pg_temp.fx(10);
   r_sa uuid := (SELECT id FROM public.admin_roles WHERE is_system ORDER BY created_at LIMIT 1);
+  r_sup uuid := (SELECT id FROM public.admin_roles WHERE slug = 'support-supervisor');
+  keycount text := 'SELECT count(*)::text FROM public.admin_role_permissions WHERE role_id = %L';
   NP text := 'ERR 42501 Not permitted';
   refusals text[] := '{}';
   add_q text := 'SELECT public.admin_add_internal_user(%L, %L)';
@@ -60,7 +62,7 @@ BEGIN
   s := pg_temp.call_rb(uM, format(add_q, 'p4168-inv2@example.test', 'p4168-lower'),
                        'SELECT ar.slug FROM public.pending_internal_invitations i JOIN public.admin_roles ar ON ar.id = i.role_id WHERE i.id = pg_temp.fx(202)');
   refusals := refusals || split_part(s, ' | ', 1);
-  r := r || jsonb_build_object('A9_manager_cannot_overwrite_sa_invitation', pg_temp.pass(s = NP || ' | super-admin', s));
+  r := r || jsonb_build_object('A9_existing_sa_invitation_unchanged', pg_temp.pass(s = NP || ' | super-admin', s));
   s := pg_temp.call_rb(uQ, format(add_q, 'p4168-8@example.test', 'p4168-lower2'));
   refusals := refusals || s;
   r := r || jsonb_build_object('A10_outsider_refused', pg_temp.pass(s = NP, s));
@@ -133,7 +135,7 @@ BEGIN
   s := pg_temp.call_rb(uM, format(ins_q, 'p4168-inv3@example.test', r_sa, uM));
   r := r || jsonb_build_object('I2_manager_inserts_sa_refused', pg_temp.pass(s LIKE 'ERR 42501 new row violates row-level security%', s));
   s := pg_temp.call_rb(uM, format(ins_q, 'p4168-inv3@example.test', pg_temp.fx(102), uA));
-  r := r || jsonb_build_object('I3_manager_forged_inviter_refused', pg_temp.pass(s LIKE 'ERR 42501 new row violates row-level security%', s));
+  r := r || jsonb_build_object('I3_insert_other_inviter_refused', pg_temp.pass(s LIKE 'ERR 42501 new row violates row-level security%', s));
   s := pg_temp.call_rb(uG, format(ins_q, 'p4168-inv3@example.test', pg_temp.fx(105), uG));
   r := r || jsonb_build_object('I4_no_manage_insert_refused', pg_temp.pass(s LIKE 'ERR 42501 new row violates row-level security%', s));
   s := pg_temp.call_rb(uM, format('WITH i AS (UPDATE public.pending_internal_invitations SET role_id = %L WHERE id = %L RETURNING 1) SELECT to_jsonb(count(*)) FROM i', r_sa, pg_temp.fx(201)));
@@ -145,7 +147,7 @@ BEGIN
   s := pg_temp.call_rb(uG, format('WITH i AS (UPDATE public.pending_internal_invitations SET role_id = %L WHERE id = %L RETURNING 1) SELECT to_jsonb(count(*)) FROM i', pg_temp.fx(105), pg_temp.fx(201)));
   r := r || jsonb_build_object('I8_no_manage_update_zero_rows', pg_temp.pass(s = '0', s));
   s := pg_temp.call_rb(uM, format('WITH i AS (UPDATE public.pending_internal_invitations SET invited_by = %L WHERE id = %L RETURNING 1) SELECT to_jsonb(count(*)) FROM i', uA, pg_temp.fx(201)));
-  r := r || jsonb_build_object('I9_manager_forges_inviter_on_update_refused', pg_temp.pass(s LIKE 'ERR 42501 new row violates row-level security%', s));
+  r := r || jsonb_build_object('I9_update_other_inviter_refused', pg_temp.pass(s LIKE 'ERR 42501 new row violates row-level security%', s));
   s := pg_temp.call_rb(uG, format('WITH i AS (DELETE FROM public.pending_internal_invitations WHERE id = %L RETURNING 1) SELECT to_jsonb(count(*)) FROM i', pg_temp.fx(201)));
   s2 := pg_temp.call_rb(uM, format('WITH i AS (DELETE FROM public.pending_internal_invitations WHERE id = %L RETURNING 1) SELECT to_jsonb(count(*)) FROM i', pg_temp.fx(201)));
   r := r || jsonb_build_object('I10_cancel_needs_manage', pg_temp.pass(s = '0' AND s2 = '1', s || ' / ' || s2));
@@ -219,6 +221,39 @@ BEGIN
   s := pg_temp.call_rb(uM, format('SELECT public.admin_update_role_permissions(%L, %L::text[])', pg_temp.fx(106), '{roles.manage,internal_users.manage}'));
   r := r || jsonb_build_object('K10_manager_attaches_held_keys_to_other_role', pg_temp.pass(s LIKE '{%"success": true}', s));
 
+  -- ================= target-role ceiling on role edits =================
+  s := pg_temp.call_rb(uM, format('SELECT public.admin_update_role_permissions(%L, %L::text[])', r_sup, '{dashboard.view}'), format(keycount, r_sup));
+  refusals := refusals || split_part(s, ' | ', 1);
+  r := r || jsonb_build_object('S1_permissions_of_role_above_caller_refused', pg_temp.pass(s = NP || ' | ' || (SELECT count(*) FROM public.admin_role_permissions WHERE role_id = r_sup), s));
+  s := pg_temp.call_rb(uM, format('SELECT public.admin_update_role_permissions(%L, %L::text[])', pg_temp.fx(102),
+                       '{internal_users.manage,internal_users.view,roles.manage,roles.view,dashboard.view,support.view,users.view}'), format(keycount, pg_temp.fx(102)));
+  refusals := refusals || split_part(s, ' | ', 1);
+  r := r || jsonb_build_object('S2_lower_role_to_caller_level_refused', pg_temp.pass(s = NP || ' | 2', s));
+  s := pg_temp.call_rb(uM, format('SELECT public.admin_update_role_permissions(%L, %L::text[])', pg_temp.fx(102), '{dashboard.view,support.view,users.view,roles.view}'), format(keycount, pg_temp.fx(102)));
+  r := r || jsonb_build_object('S2b_lower_role_stays_below_caller', pg_temp.pass(s LIKE '{%"success": true} | 4', s));
+  s := pg_temp.call_rb(uE, format('SELECT public.admin_update_role_permissions(%L, %L::text[])', pg_temp.fx(101), '{dashboard.view}'), format(keycount, pg_temp.fx(101)));
+  refusals := refusals || split_part(s, ' | ', 1);
+  r := r || jsonb_build_object('S3_editor_on_role_above_editor_refused', pg_temp.pass(s = NP || ' | 7', s));
+  s := pg_temp.call_rb(uM, format('SELECT public.admin_update_role(%L, %L, NULL)', r_sup, 'P4168 renamed'),
+                       format('SELECT name FROM public.admin_roles WHERE id = %L', r_sup));
+  refusals := refusals || split_part(s, ' | ', 1);
+  r := r || jsonb_build_object('S5_rename_role_above_caller_refused', pg_temp.pass(s = NP || ' | Support Supervisor', s));
+  s := pg_temp.call_rb(uM, format('SELECT public.admin_update_role(%L, %L, NULL)', pg_temp.fx(102), 'P4168 renamed'),
+                       format('SELECT name FROM public.admin_roles WHERE id = %L', pg_temp.fx(102)));
+  r := r || jsonb_build_object('S5b_rename_role_below_caller', pg_temp.pass(s LIKE '{%"success": true} | P4168 renamed', s));
+  s := pg_temp.call_rb(uM, format('SELECT public.admin_delete_role(%L)', pg_temp.fx(104)),
+                       format('SELECT count(*)::text FROM public.admin_roles WHERE id = %L', pg_temp.fx(104)));
+  refusals := refusals || split_part(s, ' | ', 1);
+  r := r || jsonb_build_object('S6_remove_role_not_below_caller_refused', pg_temp.pass(s = NP || ' | 1', s));
+  s := pg_temp.call_rb(uM, format('SELECT public.admin_delete_role(%L)', pg_temp.fx(105)),
+                       format('SELECT count(*)::text FROM public.admin_roles WHERE id = %L', pg_temp.fx(105)));
+  r := r || jsonb_build_object('S6b_remove_role_below_caller', pg_temp.pass(s LIKE '{%"success": true} | 0', s));
+  s := pg_temp.call_rb(uA, format('SELECT public.admin_delete_role(%L)', pg_temp.fx(104)),
+                       format('SELECT count(*)::text FROM public.admin_roles WHERE id = %L', pg_temp.fx(104)));
+  r := r || jsonb_build_object('S6c_sa_removes_any_unassigned_role', pg_temp.pass(s LIKE '{%"success": true} | 0', s));
+  s := pg_temp.call_rb(uM, format('WITH i AS (DELETE FROM public.pending_internal_invitations WHERE id = %L RETURNING 1) SELECT to_jsonb(count(*)) FROM i', pg_temp.fx(202)));
+  r := r || jsonb_build_object('S4_cancel_sa_invitation_by_manager_zero_rows', pg_temp.pass(s = '0', s));
+
   -- ================= can_grant_role (caller-bound) =================
   s := pg_temp.call_as(uM, format('SELECT to_jsonb(ARRAY[public.can_grant_role(%L), public.can_grant_role(%L), public.can_grant_role(%L), public.can_grant_role(%L), public.can_grant_role(%L)])',
                        pg_temp.fx(102), pg_temp.fx(103), r_sa, pg_temp.fx(104), pg_temp.fx(101)));
@@ -253,8 +288,11 @@ BEGIN
         AND (SELECT with_check FROM pg_policies WHERE schemaname = 'public' AND policyname = 'internal_managers_insert_invitations') LIKE '%can_grant_role(role_id)%invited_by = ( SELECT auth.uid()%'
         AND (SELECT with_check FROM pg_policies WHERE schemaname = 'public' AND policyname = 'internal_managers_update_invitations') LIKE '%can_grant_role(role_id)%invited_by = ( SELECT auth.uid()%'
         AND (SELECT qual FROM pg_policies WHERE schemaname = 'public' AND policyname = 'internal_managers_update_invitations') LIKE '%internal_users.manage%can_grant_role(role_id)%'
-        AND (SELECT qual FROM pg_policies WHERE schemaname = 'public' AND policyname = 'internal_managers_remove_invitations') LIKE '%internal_users.manage%';
+        AND (SELECT qual FROM pg_policies WHERE schemaname = 'public' AND policyname = 'internal_managers_remove_invitations') LIKE '%internal_users.manage%can_grant_role(role_id)%';
   r := r || jsonb_build_object('Z2_invitation_policies', pg_temp.pass(ok, s));
+  s := (SELECT string_agg(privilege_type, ',' ORDER BY privilege_type) FROM information_schema.role_table_grants
+         WHERE table_schema = 'public' AND table_name = 'pending_internal_invitations' AND grantee IN ('anon', 'PUBLIC'));
+  r := r || jsonb_build_object('Z3_no_anon_table_privileges', pg_temp.pass(s IS NULL, s));
 
   -- ================= re-apply changes nothing =================
   d0 := (SELECT string_agg(md5(p.prosrc), ',' ORDER BY f) FROM unnest(allf) f JOIN pg_proc p ON p.oid = f::regprocedure);
@@ -278,10 +316,10 @@ BEGIN
     EXECUTE $rb$__ROLLBACK__$rb$;
     s := CASE WHEN (SELECT string_agg(p.proname || '=' || md5(p.prosrc), ',' ORDER BY p.proname) FROM pg_proc p
                      WHERE p.pronamespace = 'public'::regnamespace
-                       AND p.proname IN ('admin_add_internal_user','admin_update_internal_user_role','admin_remove_internal_user','admin_create_role','admin_update_role_permissions'))
-                   = 'admin_add_internal_user=d104c223d7e75ee270540b044203e9cd,admin_create_role=40b964203481ae5d739cf5b1ca9733ad,'
+                       AND p.proname IN ('admin_add_internal_user','admin_update_internal_user_role','admin_remove_internal_user','admin_create_role','admin_update_role_permissions','admin_update_role','admin_delete_role'))
+                   = 'admin_add_internal_user=d104c223d7e75ee270540b044203e9cd,admin_create_role=40b964203481ae5d739cf5b1ca9733ad,admin_delete_role=75a59b63b814c5ddd7f54954ae896e38,'
                      'admin_remove_internal_user=8f5c1432b733e4f8bf0eb135ef9cd469,admin_update_internal_user_role=fb28ab2dde65e03161d4cce1e31129d5,'
-                     'admin_update_role_permissions=b0224e6582ddcf933f9e48dafd513454'
+                     'admin_update_role=ffa1ec1c7430dabcbcd2aa1657bf9204,admin_update_role_permissions=b0224e6582ddcf933f9e48dafd513454'
                AND to_regprocedure(acc) IS NULL
                AND to_regprocedure('public.can_grant_role(uuid)') IS NULL
                AND NOT EXISTS (SELECT 1 FROM unnest(priv) x WHERE to_regprocedure(x) IS NOT NULL)
@@ -289,6 +327,8 @@ BEGIN
                    = 'internal_users_can_manage_invitations:ALL,service_role_full_access_invitations:ALL,users_can_delete_own_invitation:DELETE,users_can_read_own_invitation:SELECT'
                AND NOT has_function_privilege('anon', 'public.admin_add_internal_user(text,text)'::regprocedure, 'EXECUTE')
                AND (SELECT bool_and(has_function_privilege('anon', x::regprocedure, 'EXECUTE')) FROM unnest(pub[2:7]) x)
+               AND has_table_privilege('anon', 'public.pending_internal_invitations', 'SELECT, INSERT, UPDATE, DELETE, REFERENCES, TRIGGER')
+               AND (SELECT count(*) FROM information_schema.role_table_grants WHERE table_schema = 'public' AND table_name = 'pending_internal_invitations' AND grantee = 'anon') = 6
                AND NOT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261107100000')
           THEN 'restored' ELSE 'not restored' END;
     RAISE EXCEPTION 'RB_DONE' USING DETAIL = s;

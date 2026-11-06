@@ -10,13 +10,18 @@
 --     demoted.
 --   * Role editors (roles.manage) attach only permission keys they hold themselves (Super Admins
 --     exempt) and never edit the permissions of their own role. is_system roles stay read-only.
+--   * Renaming, removing or changing the permissions of a role needs the same ceiling on that role,
+--     before the change; a permission change is checked again after it (the role must still be
+--     grantable by the caller).
 --   * Adding an email with no account creates a pending invitation and returns {pending: true}.
 --   * Invitations are written only through rows the caller could grant themselves
 --     (invited_by = caller). admin_accept_internal_invitation (service role only) re-checks the
 --     inviter at accept time.
 --
 -- ONE REFUSAL. Every function changed here refuses with 'Not permitted', SQLSTATE 42501.
--- admin_update_role and admin_delete_role keep their bodies; only their grants change.
+-- admin_update_role and admin_delete_role gain the ceiling check (refusing with 'Not permitted') and
+-- keep their other messages.
+-- anon holds no privileges on pending_internal_invitations.
 --
 -- Idempotent: every statement can run twice.
 -- Rollback: supabase/tests/backlog-4168/rollback-4168.sql.
@@ -398,6 +403,7 @@ BEGIN
      OR NOT public.has_permission(v_uid, 'roles.manage')
      OR EXISTS (SELECT 1 FROM public.internal_roles WHERE user_id = v_uid AND role_id = p_role_id)
      OR NOT (public.is_super_admin(v_uid) OR public._admin_keys_held(v_uid, p_permission_keys))
+     OR NOT public._admin_can_grant_role_as(v_uid, p_role_id)
   THEN
     RAISE EXCEPTION 'Not permitted' USING ERRCODE = '42501';
   END IF;
@@ -415,6 +421,11 @@ BEGIN
   FROM public.admin_permissions ap
   WHERE ap.key = ANY(p_permission_keys);
 
+  -- the role must still be below the caller after the change
+  IF NOT public._admin_can_grant_role_as(v_uid, p_role_id) THEN
+    RAISE EXCEPTION 'Not permitted' USING ERRCODE = '42501';
+  END IF;
+
   UPDATE public.admin_roles SET updated_at = NOW() WHERE id = p_role_id;
 
   PERFORM public.log_admin_action(
@@ -429,6 +440,110 @@ BEGIN
       'after', jsonb_build_object(
         'name', v_role.name,
         'permissions', to_jsonb(p_permission_keys)
+      )
+    )
+  );
+
+  RETURN jsonb_build_object('success', true, 'role_id', p_role_id);
+END;
+$$;
+
+-- ---------------------------------------------------------------------------
+-- admin_update_role / admin_delete_role: ceiling on the target role (bodies otherwise unchanged)
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION public.admin_update_role(p_role_id uuid, p_name text DEFAULT NULL::text, p_description text DEFAULT NULL::text)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_role RECORD;
+BEGIN
+  IF NOT public.has_permission(auth.uid(), 'roles.manage') THEN
+    RAISE EXCEPTION 'Unauthorized: requires roles.manage permission';
+  END IF;
+
+  SELECT * INTO v_role FROM public.admin_roles WHERE id = p_role_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Role not found'; END IF;
+  IF v_role.is_system THEN RAISE EXCEPTION 'Cannot modify system role'; END IF;
+
+  IF NOT public._admin_can_grant_role_as(auth.uid(), p_role_id) THEN
+    RAISE EXCEPTION 'Not permitted' USING ERRCODE = '42501';
+  END IF;
+
+  UPDATE public.admin_roles
+  SET name = COALESCE(p_name, name),
+      description = COALESCE(p_description, description),
+      updated_at = NOW()
+  WHERE id = p_role_id;
+
+  PERFORM public.log_admin_action(
+    'role.update',
+    'admin_role',
+    p_role_id::TEXT,
+    jsonb_build_object(
+      'before', jsonb_build_object(
+        'name', v_role.name,
+        'description', v_role.description
+      ),
+      'after', jsonb_build_object(
+        'name', COALESCE(p_name, v_role.name),
+        'description', COALESCE(p_description, v_role.description)
+      )
+    )
+  );
+
+  RETURN jsonb_build_object('success', true, 'role_id', p_role_id);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.admin_delete_role(p_role_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_role RECORD;
+  v_assigned_users INT;
+  v_permissions TEXT[];
+BEGIN
+  IF NOT public.has_permission(auth.uid(), 'roles.manage') THEN
+    RAISE EXCEPTION 'Unauthorized: requires roles.manage permission';
+  END IF;
+
+  SELECT * INTO v_role FROM public.admin_roles WHERE id = p_role_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Role not found'; END IF;
+  IF v_role.is_system THEN RAISE EXCEPTION 'Cannot delete system role'; END IF;
+
+  IF NOT public._admin_can_grant_role_as(auth.uid(), p_role_id) THEN
+    RAISE EXCEPTION 'Not permitted' USING ERRCODE = '42501';
+  END IF;
+
+  SELECT COUNT(*) INTO v_assigned_users FROM public.internal_roles WHERE role_id = p_role_id;
+  IF v_assigned_users > 0 THEN
+    RAISE EXCEPTION 'Cannot delete role: % user(s) are still assigned to it. Reassign them first.', v_assigned_users;
+  END IF;
+
+  -- Capture permissions before deletion
+  SELECT array_agg(ap.key ORDER BY ap.key) INTO v_permissions
+  FROM public.admin_role_permissions arp
+  JOIN public.admin_permissions ap ON ap.id = arp.permission_id
+  WHERE arp.role_id = p_role_id;
+
+  DELETE FROM public.admin_roles WHERE id = p_role_id;
+
+  PERFORM public.log_admin_action(
+    'role.delete',
+    'admin_role',
+    p_role_id::TEXT,
+    jsonb_build_object(
+      'before', jsonb_build_object(
+        'name', v_role.name,
+        'slug', v_role.slug,
+        'description', v_role.description,
+        'permissions', COALESCE(to_jsonb(v_permissions), '[]'::jsonb)
       )
     )
   );
@@ -533,7 +648,12 @@ CREATE POLICY internal_managers_update_invitations ON public.pending_internal_in
 DROP POLICY IF EXISTS internal_managers_remove_invitations ON public.pending_internal_invitations;
 CREATE POLICY internal_managers_remove_invitations ON public.pending_internal_invitations
   FOR DELETE TO authenticated
-  USING (public.has_permission((SELECT auth.uid()), 'internal_users.manage'));
+  USING (
+    public.has_permission((SELECT auth.uid()), 'internal_users.manage')
+    AND public.can_grant_role(role_id)
+  );
+
+REVOKE ALL ON TABLE public.pending_internal_invitations FROM anon;
 
 -- ---------------------------------------------------------------------------
 -- Grants: revoke by default, then grant only the callers
