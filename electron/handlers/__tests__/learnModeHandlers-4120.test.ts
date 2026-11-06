@@ -36,6 +36,7 @@ const Database = require(
   nodePath.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers"),
 ) as typeof import("better-sqlite3-multiple-ciphers");
 import type { Database as DatabaseType } from "better-sqlite3";
+import { gmailFrom, insertStoredEmail } from "../../services/__tests__/helpers/storedEmail-4175";
 
 import {
   createPostgrestEmulator,
@@ -1192,5 +1193,106 @@ describe("C13 privacy on the new channels", () => {
     expect(JSON.stringify({ logCalls, sentryCalls, sent })).not.toMatch(/canary/i);
     expect(sentryCalls).toEqual([]);
     expect(cloudCalls).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4175 PR0
+// ---------------------------------------------------------------------------
+
+describe("P12 (4175) exact sender seeds in the preview and attachment open", () => {
+  type OpenFn = NonNullable<import("../learnModeHandlers").LearnModeHandlerDeps["openQuestionAttachment"]>;
+  const openCalls: string[] = [];
+  const fakeOpen: OpenFn = async (_userId, row) => {
+    openCalls.push(row.id);
+    return { ok: true, dataUrl: "data:application/pdf;base64,AAAA", downloadedNow: true };
+  };
+  const SEED = "my-saved-home@mail.zillow.com";
+  const MIXED_ADDRESS = "4175 Canarytest Way, Testville, ZZ 00000";
+  const SEED_ONLY_ADDRESS = "4176 Canarytest Way, Testville, ZZ 00000";
+
+  function stored(id: string, sender: string, address: string, day: number): string {
+    insertStoredEmail(db, {
+      id,
+      userId: USER,
+      sender,
+      subject: "Offer accepted",
+      bodyPlain: `Price cut on ${address}. Offer accepted, escrow closing, buyer inspection.`,
+      sentAt: `2026-10-${String(day).padStart(2, "0")}T10:00:00.000Z`,
+      hasAttachments: true,
+    });
+    return id;
+  }
+  function pdf(emailId: string, id: string, filename: string): void {
+    run(
+      `INSERT INTO attachments (id, email_id, filename, mime_type, file_size_bytes, storage_path) VALUES (?, ?, ?, 'application/pdf', 1234, NULL)`,
+      id,
+      emailId,
+      filename,
+    );
+  }
+
+  /** A mixed detection: 1 ordinary message (oldest) + 6 seed alerts (newest); and an all-seed detection. */
+  async function seedRun(): Promise<{ mixed: string; seedOnly: string; ordinaryId: string }> {
+    setToggle(true);
+    openCalls.length = 0;
+    handlers.registerLearnModeHandlers({ openQuestionAttachment: fakeOpen });
+    const ordinaryId = stored("e-4175-ord", "agent@example.com", MIXED_ADDRESS, 1);
+    pdf(ordinaryId, "att-4175-ord", "Agreement.pdf");
+    for (let i = 0; i < 6; i++) stored(`e-4175-s${i}`, gmailFrom("Zillow", SEED), MIXED_ADDRESS, 10 + i);
+    pdf("e-4175-s5", "att-4175-seed", "Listing flyer.pdf");
+    stored("e-4175-only", gmailFrom("Zillow", SEED), SEED_ONLY_ADDRESS, 20);
+    pdf("e-4175-only", "att-4175-only", "Other flyer.pdf");
+    const r = await invoke("learn:run", { windowMonths: 12 });
+    expect(r.success).toBe(true);
+    const ids = (r.summary as { detectionIds: string[] }).detectionIds;
+    expect(ids).toEqual(["d1", "d2"]);
+    // Precondition: d1 = the mixed detection (seen first) holds all 7 messages, 6 of them seeds;
+    // d2 holds the one seed alert.
+    const { getLastRun } = await import("../../services/learn/baselineRunner");
+    const [d1, d2] = getLastRun(USER)!.detections;
+    expect([d1.emailIds.length, d1.seedEmailIds.length, d2.emailIds.length, d2.seedEmailIds.length]).toEqual([7, 6, 1, 1]);
+    return { mixed: "d1", seedOnly: "d2", ordinaryId };
+  }
+
+  it("a mixed detection whose 5 newest messages are seeds previews its ordinary message; total = visible", async () => {
+    const { mixed, ordinaryId } = await seedRun();
+    const p = await invoke("learn:preview", { kind: "cleanup", detectionId: mixed });
+    expect(p.success).toBe(true);
+    expect((p.emails as Array<{ id: string }>).map((e) => e.id)).toEqual([ordinaryId]);
+    expect(p.totalEmails).toBe(1);
+    expect(p.questionAttachmentId).toBe("att-4175-ord");
+  });
+
+  it("cleanup-next asks the mixed detection with its visible count, and never the all-seed one", async () => {
+    const { mixed } = await seedRun();
+    const q = await invoke("learn:cleanup-next");
+    expect(q.question).toEqual({ detectionId: mixed, address: expect.any(String), emailCount: 1 });
+    const q2 = await invoke("learn:cleanup-next", { exclude: [mixed] });
+    expect(q2.question).toBeNull();
+  });
+
+  it("an all-seed detection is refused by the preview and by attachment open", async () => {
+    const { seedOnly } = await seedRun();
+    expect(await invoke("learn:preview", { kind: "cleanup", detectionId: seedOnly })).toEqual({
+      success: false,
+      error: handlers.LEARN_NOT_IN_SET_ERROR,
+    });
+    expect(await invoke("learn:attachment-open", { detectionId: seedOnly, attachmentId: "att-4175-only" })).toEqual({
+      success: false,
+      error: handlers.LEARN_NOT_IN_SET_ERROR,
+    });
+    expect(openCalls).toEqual([]);
+  });
+
+  it("attachment open refuses a seed message's attachment of the mixed detection, and opens the ordinary one", async () => {
+    const { mixed } = await seedRun();
+    expect(await invoke("learn:attachment-open", { detectionId: mixed, attachmentId: "att-4175-seed" })).toEqual({
+      success: false,
+      error: handlers.LEARN_NOT_IN_SET_ERROR,
+    });
+    expect(openCalls).toEqual([]);
+    expect((await invoke("learn:attachment-open", { detectionId: mixed, attachmentId: "att-4175-ord" })).success).toBe(true);
+    expect(openCalls).toEqual(["att-4175-ord"]);
   });
 });
