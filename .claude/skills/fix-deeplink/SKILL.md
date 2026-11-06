@@ -47,8 +47,12 @@ done
 osascript -e 'tell application id "com.keeprcompliance.keepr" to quit'
 sleep 1
 
-# Step 2: Rename the installed app
-[ -e /Applications/Keepr.app ] && mv /Applications/Keepr.app /Applications/Keepr-disabled.app && echo "Renamed Keepr.app -> Keepr-disabled.app"
+# Step 2: Rename the installed app. Guarded: macOS `mv` into an EXISTING directory nests the bundle inside it.
+if [ -e /Applications/Keepr-disabled.app ]; then
+  echo "STOP: Keepr-disabled.app already exists (an earlier restore was skipped?) — ask the user before touching either"
+else
+  [ -e /Applications/Keepr.app ] && mv /Applications/Keepr.app /Applications/Keepr-disabled.app && echo "Renamed Keepr.app -> Keepr-disabled.app"
+fi
 
 # Step 3: Worktrees — informational only. NEVER remove one without the user's go.
 cd "$CLAUDE_PROJECT_DIR" 2>/dev/null || cd /Users/daniel/Developer/Mad
@@ -60,9 +64,17 @@ git worktree list
 # Step 5: Wait
 sleep 3
 
-# Step 6: Start dev (from the worktree you are testing)
+# Step 6: Start dev (from the worktree you are testing). Agents: run it in the background
+# (run_in_background) and wait for the main window — in the foreground it blocks you.
 npm run dev
 ```
+
+A port-in-use error at Step 6 means another session's dev server is running — ask the user, don't kill it.
+
+**Observed, MECHANISM UNTRACED:** `Keepr-disabled.app` stays in /Applications (rescanned by
+`lsregister -r -domain local`) and still declares `keepr:`, yet dev won on 2026-11-06. If dev stops
+winning, suspect this first; option: `lsregister -u /Applications/Keepr-disabled.app` before Step 4,
+and `-f` it back on restore.
 
 **Env files:** dev needs `.env.development` / `.env.local` in the worktree, or sign-in fails with a
 missing `SUPABASE_URL`. Copy them from `/Users/daniel/Developer/Mad` with `cp` — never print them.
@@ -78,6 +90,14 @@ Expected while dev is running: `.../node_modules/electron/dist/Electron.app`.
 `defaults read com.apple.LaunchServices/com.apple.launchservices.secure LSHandlers` can show a stale
 stored entry that macOS ignores — do not trust it over the command above.
 
+List every other registered bundle that declares `keepr:` (read-only). Any hit besides the renamed
+app — e.g. `Keepr 2.app` or a packaged `dist/mac*/Keepr.app` in a worktree — may compete with dev.
+Ask the user before acting on one.
+```bash
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -dump \
+  | awk '/^path:/{p=$0} /claimed schemes:.*keepr:/{print p}' | sort -u
+```
+
 ## Restore after sign-in (MANDATORY)
 
 The installed app must never be left renamed.
@@ -85,8 +105,14 @@ The installed app must never be left renamed.
 ```bash
 # 1. Quit the dev app if you are done with it (by PID, see Step 1)
 # 2. Put the installed app back and re-register it
-mv /Applications/Keepr-disabled.app /Applications/Keepr.app
+#    Guarded: if Keepr.app reappeared (reinstall, auto-update), mv would nest the bundle inside it.
+if [ -e /Applications/Keepr.app ]; then
+  echo "STOP: Keepr.app already exists — ask the user before touching either"
+else
+  mv /Applications/Keepr-disabled.app /Applications/Keepr.app
+fi
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f /Applications/Keepr.app
+# LSSetDefaultHandlerForURLScheme works HERE (unlike the dead end above) because Keepr.app declares keepr:.
 osascript -l JavaScript -e "ObjC.import('CoreServices'); \$.LSSetDefaultHandlerForURLScheme(\$('keepr'), \$('com.keeprcompliance.keepr'))"
 # 3. Verify — must print /Applications/Keepr.app
 osascript -l JavaScript -e 'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL($.NSURL.URLWithString("keepr://x")).path.js'
