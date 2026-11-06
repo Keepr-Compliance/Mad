@@ -13,12 +13,10 @@
  */
 
 import { useCallback, useMemo } from "react";
-import { authService } from "@/services";
 import type { AppStep, PendingOnboardingData } from "../types";
 import type { SavePhoneTypeResult } from "./usePhoneTypeApi";
 import type { PendingOAuthData } from "../../../components/Login";
 import { USE_NEW_ONBOARDING } from "../../routing/routeConfig";
-import logger from '../../../utils/logger';
 
 export interface UsePhoneHandlersOptions {
   // Auth state
@@ -222,17 +220,6 @@ export function usePhoneHandlers({
     setHasCompletedEmailOnboarding(true);
     // hasEmailConnected should already be true from email step
 
-    // On Windows, driver setup is the last step - now navigate to dashboard
-    if (pendingOAuthData && !isAuthenticated) {
-      // Pre-DB flow: need to initialize database before going to dashboard
-      const result = await authService.completePendingLogin(pendingOAuthData);
-      if (!result.success) {
-        logger.error(
-          "[usePhoneHandlers] Failed to complete pending login:",
-          result.error,
-        );
-      }
-    }
     // Navigation to dashboard is handled by the onboarding flow hook's onComplete callback
   }, [
     pendingOAuthData,
@@ -248,16 +235,6 @@ export function usePhoneHandlers({
     setHasSelectedPhoneType(true);
     setHasCompletedEmailOnboarding(true);
 
-    // Same logic as complete - driver setup is the last onboarding step on Windows
-    if (pendingOAuthData && !isAuthenticated) {
-      const result = await authService.completePendingLogin(pendingOAuthData);
-      if (!result.success) {
-        logger.error(
-          "[usePhoneHandlers] Failed to complete pending login:",
-          result.error,
-        );
-      }
-    }
     // Note: Don't call setCurrentStep here - let the onboarding flow hook handle navigation
   }, [
     pendingOAuthData,

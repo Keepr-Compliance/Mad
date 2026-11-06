@@ -22,7 +22,7 @@
  * HOW THE FAILURE IS INJECTED
  * ---------------------------------------------------------------------------
  * A Proxy over the REAL driver throws right after the matched statement has run
- * (the `loginProvisioningAtomicity-2546` pattern), so the throw fires INSIDE the
+ * (the pattern of BACKLOG-2546's forced-crash suite), so the throw fires INSIDE the
  * transaction body with the row already written. The `databaseService` facade
  * is mocked to an empty object: nothing on this path may route through it.
  *
