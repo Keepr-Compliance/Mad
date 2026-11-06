@@ -272,3 +272,62 @@ export const QUESTION_ATTACHMENT_SQL = sql`
   JOIN emails e ON e.id = a.email_id
   WHERE e.user_id = ? AND a.id = ?
 `;
+
+// ---------------------------------------------------------------------------
+// "Your answers" (BACKLOG-4120, 2.46.2): list and delete one answer
+// ---------------------------------------------------------------------------
+
+/**
+ * The user's saved answers, newest first: live cleanup answers (label = the
+ * address) and answered live sample rows (label = the subject, resolved
+ * through the provider key like ANSWERED_BULK_WITH_TEXT_SQL; NULL when the
+ * message is no longer cached). Bounded: ~200 sample rows plus the deals.
+ * Bound: user id, user id, limit.
+ */
+export const LIST_ANSWERS_SQL = sql`
+  SELECT 'deal' AS kind, d.id AS id, d.property_address AS label, NULL AS item_date,
+         d.answered_at AS answered_at, d.answer AS answer
+  FROM learn_deal_answers d
+  WHERE d.user_id = ? AND d.deleted_at IS NULL
+  UNION ALL
+  SELECT 'bulk' AS kind, b.id AS id, e.subject AS label, e.sent_at AS item_date,
+         b.answered_at AS answered_at, b.answer AS answer
+  FROM learn_bulk_answers b
+  LEFT JOIN emails e ON e.id = (
+    SELECT e2.id FROM emails e2
+    WHERE e2.user_id = b.user_id AND e2.source = b.source AND e2.external_id = b.external_id
+    ORDER BY e2.id LIMIT 1
+  )
+  WHERE b.user_id = ? AND b.deleted_at IS NULL AND b.answer IS NOT NULL
+  ORDER BY answered_at DESC, id DESC
+  LIMIT ?
+`;
+
+/** Soft-remove one live cleanup answer. Bound: deleted_at, updated_at, user id, row id. */
+export const SOFT_DELETE_DEAL_ANSWER_SQL = sql`
+  UPDATE learn_deal_answers SET deleted_at = ?, updated_at = ?
+  WHERE user_id = ? AND id = ? AND deleted_at IS NULL
+`;
+
+/** Soft-remove one ANSWERED live sample row. Bound: deleted_at, updated_at, user id, row id. */
+export const SOFT_DELETE_BULK_ANSWER_SQL = sql`
+  UPDATE learn_bulk_answers SET deleted_at = ?, updated_at = ?
+  WHERE user_id = ? AND id = ? AND deleted_at IS NULL AND answer IS NOT NULL
+`;
+
+/**
+ * Put the message of a just soft-removed sample row back in the sample, with
+ * no answer, so it is asked again (last: sampled_at = now). Run in the same
+ * transaction as SOFT_DELETE_BULK_ANSWER_SQL, only when that changed one row.
+ * Bound: new id, sampled_at, rule_version, created_at, updated_at, old row id,
+ * user id.
+ */
+export const REQUEUE_BULK_SQL = sql`
+  INSERT INTO learn_bulk_answers (
+    id, user_id, source, external_id, sampled_at, answer, answered_at,
+    rule_version, created_at, updated_at
+  )
+  SELECT ?, user_id, source, external_id, ?, NULL, NULL, ?, ?, ?
+  FROM learn_bulk_answers
+  WHERE id = ? AND user_id = ?
+`;

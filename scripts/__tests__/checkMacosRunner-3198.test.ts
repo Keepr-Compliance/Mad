@@ -68,10 +68,31 @@ describe("BACKLOG-3198 check-macos-runner --workflows", () => {
 });
 
 describe("BACKLOG-3198 check-macos-runner --host", () => {
-  it("passes on the recorded version and build", () => {
-    const r = host(CONFIG.productVersion, CONFIG.buildVersion);
+  it("records exactly the two known images", () => {
+    expect(CONFIG.images).toEqual([
+      { productVersion: "26.6.2", buildVersion: "25G83" },
+      { productVersion: "26.7.2", buildVersion: "25G332" },
+    ]);
+  });
+
+  it.each([
+    ["26.6.2", "25G83"],
+    ["26.7.2", "25G332"],
+  ])("passes on recorded pair %s / %s", (product, build) => {
+    const r = host(product, build);
     expect(r.stdout).toMatch(/OK — macOS/);
     expect(r.status).toBe(0);
+  });
+
+  it("FAILS on a mismatched pair (version of one image, build of the other)", () => {
+    expect(host("26.7.2", "25G83").status).toBe(1);
+    expect(host("26.6.2", "25G332").status).toBe(1);
+  });
+
+  it("FAILS on an unrecorded image and lists every recorded pair", () => {
+    const r = host("26.8.0", "25H1");
+    expect(r.status).toBe(1);
+    expect(r.stderr).toMatch(/26\.6\.2 \(25G83\) and 26\.7\.2 \(25G332\)/);
   });
 
   it("FAILS on the image the incident moved FROM (26.5.2 / 25F84)", () => {
@@ -81,7 +102,7 @@ describe("BACKLOG-3198 check-macos-runner --host", () => {
   });
 
   it("FAILS when only the build differs", () => {
-    expect(host(CONFIG.productVersion, "25G999").status).toBe(1);
+    expect(host(CONFIG.images[1].productVersion, "25G999").status).toBe(1);
   });
 
   it("--warn reports drift as a workflow warning and exits 0", () => {

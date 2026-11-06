@@ -12,12 +12,19 @@
  *   Undo last            shows the previous item again; the next answer
  *                        replaces the stored one (main's upserts).
  *
+ * Sittings (2.46.2): a sitting stops after LEARN_SITTING_SIZE questions
+ * (reason "sitting"); the score can then start the next one with more(),
+ * which keeps the deals skipped for now. A store in flight when the sitting
+ * is closed still completes and is counted, but nothing is asked after it
+ * (record() checks `seq`); settle() waits for it.
+ *
  * Attachments: a deal question's one attachment (main names it in the
  * preview) is opened when THAT question is shown, never earlier, and never
  * for any other attachment. Mail questions never open an attachment.
  */
 import { useCallback, useRef, useState } from "react";
 import learnModeService from "@/services/learnModeService";
+import { LEARN_SITTING_SIZE } from "./learnSitting";
 import type {
   BulkAnswer,
   DealAnswer,
@@ -52,6 +59,8 @@ export interface LearnSessionState {
   canUndo: boolean;
   busy: boolean;
   error: string | null;
+  /** Why the sitting ended: no question left, or the sitting's size reached. */
+  doneReason: "empty" | "sitting" | null;
 }
 
 const CLOSED: LearnSessionState = {
@@ -66,6 +75,7 @@ const CLOSED: LearnSessionState = {
   canUndo: false,
   busy: false,
   error: null,
+  doneReason: null,
 };
 
 export interface UseLearnSession extends LearnSessionState {
@@ -75,6 +85,16 @@ export interface UseLearnSession extends LearnSessionState {
   skip: () => Promise<void>;
   undo: () => Promise<void>;
   close: () => void;
+  /** Waits for a store in flight (if any). Never asks for anything. */
+  settle: () => Promise<void>;
+  /** Answers (not skips) stored in this sitting, including one that landed after close. */
+  getAnswered: () => number;
+  /** Questions handled (answered or skipped) in this sitting. */
+  getHandled: () => number;
+  /** Is there another question? Read only: asks main, stores nothing. */
+  peekMore: () => Promise<boolean>;
+  /** Start the next sitting; the deals skipped for now stay skipped. */
+  more: (total: number) => Promise<void>;
 }
 
 export function useLearnSession(): UseLearnSession {
@@ -82,6 +102,8 @@ export function useLearnSession(): UseLearnSession {
   const seq = useRef(0);
   const skippedDeals = useRef<string[]>([]);
   const history = useRef<HistoryEntry[]>([]);
+  const answeredRef = useRef(0);
+  const pending = useRef<Promise<unknown> | null>(null);
 
   const show = useCallback(async (item: LearnQuestion, my: number) => {
     setState((s) => ({ ...s, phase: "loading", current: item, emails: [], attachment: { status: "none" }, busy: true }));
@@ -135,14 +157,33 @@ export function useLearnSession(): UseLearnSession {
       setState((s) => ({ ...s, phase: "error", busy: false, error: failed.error }));
       return;
     }
-    setState((s) => ({ ...s, phase: "done", current: null, emails: [], attachment: { status: "none" }, busy: false }));
+    setState((s) => ({
+      ...s,
+      phase: "done",
+      doneReason: "empty",
+      current: null,
+      emails: [],
+      attachment: { status: "none" },
+      busy: false,
+    }));
   }, [show]);
 
   const start = useCallback(
     async (total: number) => {
       skippedDeals.current = [];
       history.current = [];
-      setState({ ...CLOSED, phase: "loading", index: 1, total });
+      answeredRef.current = 0;
+      setState({ ...CLOSED, phase: "loading", index: 1, total: Math.min(LEARN_SITTING_SIZE, total) });
+      await advance();
+    },
+    [advance],
+  );
+
+  const more = useCallback(
+    async (total: number) => {
+      history.current = [];
+      answeredRef.current = 0;
+      setState({ ...CLOSED, phase: "loading", index: 1, total: Math.min(LEARN_SITTING_SIZE, total) });
       await advance();
     },
     [advance],
@@ -150,19 +191,44 @@ export function useLearnSession(): UseLearnSession {
 
   const record = useCallback(
     async (store: () => Promise<{ success: boolean; error?: string }>, item: LearnQuestion, skipped: boolean) => {
+      const my = seq.current;
       setState((s) => ({ ...s, busy: true }));
-      const r = await store();
+      const p = store();
+      pending.current = p;
+      let r: { success: boolean; error?: string };
+      try {
+        r = await p;
+      } finally {
+        if (pending.current === p) pending.current = null;
+      }
       if (!r.success) {
-        setState((s) => ({ ...s, busy: false, error: r.error ?? null }));
+        if (seq.current === my) setState((s) => ({ ...s, busy: false, error: r.error ?? null }));
         return;
       }
       history.current.push({ item, skipped });
+      if (!skipped) answeredRef.current += 1;
+      // Closed (Done for now, Esc) while the store was in flight: the answer is
+      // kept and counted, but nothing more is asked.
+      if (seq.current !== my) return;
       setState((s) => ({
         ...s,
         index: Math.min(s.index + 1, Math.max(s.total, 1)),
         answered: skipped ? s.answered : s.answered + 1,
         error: null,
       }));
+      if (history.current.length >= LEARN_SITTING_SIZE) {
+        seq.current += 1;
+        setState((s) => ({
+          ...s,
+          phase: "done",
+          doneReason: "sitting",
+          current: null,
+          emails: [],
+          attachment: { status: "none" },
+          busy: false,
+        }));
+        return;
+      }
       await advance();
     },
     [advance],
@@ -203,6 +269,7 @@ export function useLearnSession(): UseLearnSession {
       if (last) history.current.push(last);
       return;
     }
+    if (!last.skipped) answeredRef.current = Math.max(0, answeredRef.current - 1);
     if (last.item.kind === "cleanup" && last.skipped) {
       const id = last.item.question.detectionId;
       skippedDeals.current = skippedDeals.current.filter((d) => d !== id);
@@ -221,5 +288,33 @@ export function useLearnSession(): UseLearnSession {
     setState(CLOSED);
   }, []);
 
-  return { ...state, start, answerDeal, answerMail, skip, undo, close };
+  const settle = useCallback(async () => {
+    const p = pending.current;
+    if (p) await p.catch(() => undefined);
+  }, []);
+
+  const getAnswered = useCallback(() => answeredRef.current, []);
+  const getHandled = useCallback(() => history.current.length, []);
+
+  const peekMore = useCallback(async () => {
+    const c = await learnModeService.cleanupNext(skippedDeals.current);
+    if (c.success && c.question) return true;
+    const b = await learnModeService.sampleNext();
+    return b.success && b.question !== null;
+  }, []);
+
+  return {
+    ...state,
+    start,
+    answerDeal,
+    answerMail,
+    skip,
+    undo,
+    close,
+    settle,
+    getAnswered,
+    getHandled,
+    peekMore,
+    more,
+  };
 }

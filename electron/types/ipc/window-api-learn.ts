@@ -68,6 +68,25 @@ export type LearnDeleteAnswersResult =
   | { success: true; removed: { deal: number; bulk: number } }
   | LearnFailure;
 
+/**
+ * One saved answer in "Your answers" (2.46.2). `label`: the address (deal) or
+ * the subject (mail; null when the message is no longer on this computer).
+ * `itemDate`: the email's date (mail only). Shown to the user only; never
+ * logged.
+ */
+export interface LearnAnswerRow {
+  kind: "deal" | "bulk";
+  id: string;
+  label: string | null;
+  itemDate: string | null;
+  answeredAt: string | null;
+  answer: DealAnswer | BulkAnswer;
+}
+
+export type LearnListAnswersResult = { success: true; answers: LearnAnswerRow[] } | LearnFailure;
+
+export type LearnDeleteAnswerResult = { success: true } | LearnFailure;
+
 export interface LearnPreviewAttachment {
   id: string;
   filename: string;
@@ -128,6 +147,8 @@ export interface WindowApiLearn {
   sampleAnswer: (args: { rowId: string; answer: BulkAnswer }) => Promise<LearnAnswerResult>;
   score: () => Promise<LearnScoreResult>;
   deleteAnswers: () => Promise<LearnDeleteAnswersResult>;
+  listAnswers: () => Promise<LearnListAnswersResult>;
+  deleteAnswer: (args: { kind: "deal" | "bulk"; id: string }) => Promise<LearnDeleteAnswerResult>;
   preview: (args: LearnPreviewArgs) => Promise<LearnPreviewResult>;
   attachmentOpen: (args: { detectionId: string; attachmentId: string }) => Promise<LearnAttachmentOpenResult>;
 }

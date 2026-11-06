@@ -42,6 +42,10 @@ export const learnModeBridge: WindowApiLearn = {
   sampleAnswer: (args) => ipcRenderer.invoke("learn:sample-answer", args),
   score: () => ipcRenderer.invoke("learn:score"),
   deleteAnswers: () => ipcRenderer.invoke("learn:delete-answers"),
+  /** The caller's saved answers, newest first (own rows only). */
+  listAnswers: () => ipcRenderer.invoke("learn:list-answers"),
+  /** Delete one saved answer; the item can be asked again. */
+  deleteAnswer: (args: { kind: "deal" | "bulk"; id: string }) => ipcRenderer.invoke("learn:delete-answer", args),
   preview: (args: LearnPreviewArgs) => ipcRenderer.invoke("learn:preview", args),
   /** Open (downloading first if needed) the one attachment the question is about. */
   attachmentOpen: (args: { detectionId: string; attachmentId: string }) =>
