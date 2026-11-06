@@ -18,6 +18,7 @@ import {
   EMAIL_KEYSET_PAGE_SQL,
   GET_LEARN_MODE_ENABLED_SQL,
   INSERT_BULK_SAMPLE_SQL,
+  LIST_ANSWERS_SQL,
   LIST_DEAL_ANSWERS_SQL,
   NEXT_UNANSWERED_BULK_SQL,
   IS_LIVE_BULK_ROW_SQL,
@@ -25,6 +26,9 @@ import {
   PREVIEW_EMAILS_BY_IDS_SQL,
   PREVIEW_EMAIL_FOR_BULK_ROW_SQL,
   QUESTION_ATTACHMENT_SQL,
+  REQUEUE_BULK_SQL,
+  SOFT_DELETE_BULK_ANSWER_SQL,
+  SOFT_DELETE_DEAL_ANSWER_SQL,
   SOFT_CLEAR_BULK_SQL,
   SOFT_CLEAR_DEAL_ANSWERS_SQL,
   UPSERT_DEAL_ANSWER_SQL,
@@ -183,6 +187,44 @@ export function softClearAnswers(userId: string): { deal: number; bulk: number }
     deal: dbRun(SOFT_CLEAR_DEAL_ANSWERS_SQL, [now, now, userId]).changes,
     bulk: dbRun(SOFT_CLEAR_BULK_SQL, [now, now, userId]).changes,
   }));
+}
+
+// ---- "Your answers" (2.46.2) ---------------------------------------------
+
+export interface LearnAnswerListRow {
+  kind: "deal" | "bulk";
+  id: string;
+  label: string | null;
+  item_date: string | null;
+  answered_at: string | null;
+  answer: string;
+}
+
+/** Most answers listed at once: ~200 sample rows plus the deals. */
+export const LEARN_LIST_ANSWERS_LIMIT = 500;
+
+/** The user's saved answers, newest first (own rows only). */
+export function listAnswers(userId: string): LearnAnswerListRow[] {
+  return dbAll<LearnAnswerListRow>(LIST_ANSWERS_SQL, [userId, userId, LEARN_LIST_ANSWERS_LIMIT]);
+}
+
+/**
+ * Soft-remove ONE saved answer of the user. A deal answer is simply removed
+ * (the cleanup pass asks the deal again while it is a candidate). A mail
+ * answer is removed and its message put back in the sample with no answer,
+ * in one transaction, so the sample keeps its size and the message is asked
+ * again. Returns false when the id is not one of the user's live answers.
+ */
+export function softDeleteAnswer(userId: string, kind: "deal" | "bulk", id: string, ruleVersion: number): boolean {
+  const now = nowIso();
+  if (kind === "deal") {
+    return dbRun(SOFT_DELETE_DEAL_ANSWER_SQL, [now, now, userId, id]).changes === 1;
+  }
+  return dbTransaction(() => {
+    if (dbRun(SOFT_DELETE_BULK_ANSWER_SQL, [now, now, userId, id]).changes !== 1) return false;
+    dbRun(REQUEUE_BULK_SQL, [crypto.randomUUID(), now, ruleVersion, now, now, id, userId]);
+    return true;
+  });
 }
 
 // ---- baseline 0 inputs (read only) ----------------------------------------

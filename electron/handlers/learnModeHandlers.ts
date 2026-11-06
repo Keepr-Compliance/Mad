@@ -11,7 +11,7 @@
 // first, before any read or write:
 //   the user's own toggle is ON (local switch row; missing row = OFF)
 //   AND the strict autodetect_eval read is allowed (isAutodetectEvalAllowed).
-// Three channels are ungated (session only):
+// Five channels are ungated (session only):
 //   `learn:get-state`      reports availability, the toggle and the count of
 //                          saved answers; acts on nothing.
 //   `learn:set-enabled`    turning ON checks only the strict key (the toggle is
@@ -19,6 +19,10 @@
 //   `learn:delete-answers` soft-removes the caller's own answers, with Learn
 //                          mode off and with the org key off (founder,
 //                          2026-11-04): a user can always remove his own rows.
+//   `learn:list-answers`   lists the caller's own saved answers, so one can be
+//                          chosen for deletion (2.46.2). Same basis as above.
+//   `learn:delete-answer`  soft-removes ONE of the caller's own answers; the
+//                          item can be asked again (2.46.2). Same basis.
 //
 // What this file deliberately does NOT import: emailSyncHandlers
 // (isAutoDetectAllowed), llmConfigService, transactionService,
@@ -54,12 +58,14 @@ import {
   isLiveBulkRow,
   listAnswerKeyTransactions,
   listAnsweredBulkWithText,
+  listAnswers,
   listDealAnswers,
   previewAttachments,
   previewEmailForBulkRow,
   previewEmailsByIds,
   setLearnModeEnabled,
   softClearAnswers,
+  softDeleteAnswer,
   type PreviewAttachmentRow,
   type PreviewEmailRow,
   type QuestionAttachmentRow,
@@ -75,10 +81,12 @@ import {
 import { answerCleanupQuestion, nextCleanupQuestion } from "../services/learn/cleanupPass";
 import { answerBulkQuestion, ensureBulkSample, nextBulkQuestion } from "../services/learn/bulkSample";
 import { formatCopyBlock, scoreRun } from "../services/learn/scoring";
+import { LEARN_RULES } from "../services/learn/learnRules";
 import {
   LearnAttachmentOpenArgsSchema,
   LearnCleanupAnswerArgsSchema,
   LearnCleanupNextArgsSchema,
+  LearnDeleteAnswerArgsSchema,
   LearnPreviewArgsSchema,
   LearnRunArgsSchema,
   LearnSampleAnswerArgsSchema,
@@ -89,7 +97,9 @@ import type {
   LearnAnswerResult,
   LearnAttachmentOpenResult,
   LearnCleanupNextResult,
+  LearnDeleteAnswerResult,
   LearnDeleteAnswersResult,
+  LearnListAnswersResult,
   LearnFailure,
   LearnPreviewEmail,
   LearnPreviewResult,
@@ -119,7 +129,13 @@ export const LEARN_GATED_CHANNELS = [
 ] as const;
 
 /** Channels that do NOT call isLearnModeAllowed, and why (header). */
-export const LEARN_UNGATED_CHANNELS = ["learn:get-state", "learn:set-enabled", "learn:delete-answers"] as const;
+export const LEARN_UNGATED_CHANNELS = [
+  "learn:get-state",
+  "learn:set-enabled",
+  "learn:delete-answers",
+  "learn:list-answers",
+  "learn:delete-answer",
+] as const;
 
 export const LEARN_NOT_AVAILABLE_ERROR = "Learn mode is not available.";
 export const LEARN_NOT_ON_ERROR = "Learn mode is off.";
@@ -149,6 +165,8 @@ export interface LearnModeHandlerDeps {
 export const LEARN_PREVIEW_MAX_EMAILS = 5;
 
 const MODULE = "LearnMode";
+
+type LearnAnswerRowAnswer = Extract<LearnListAnswersResult, { success: true }>["answers"][number]["answer"];
 
 async function sessionUserId(): Promise<string | null> {
   try {
@@ -447,6 +465,43 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
       const removed = softClearAnswers(userId);
       logService.info("Learn mode answers cleared", MODULE, removed);
       return { success: true, removed };
+    }),
+  );
+
+  ipcMain.handle(
+    "learn:list-answers",
+    guarded("learn:list-answers", async (): Promise<LearnListAnswersResult> => {
+      // UNGATED (2.46.2): session only. Own rows only. The reply carries
+      // addresses and subjects for the screen; the log carries the count only.
+      const userId = await sessionUserId();
+      if (!userId) return fail(LEARN_NO_SESSION_ERROR);
+      const rows = listAnswers(userId);
+      logService.info("Learn mode answers listed", MODULE, { count: rows.length });
+      return {
+        success: true,
+        answers: rows.map((r) => ({
+          kind: r.kind,
+          id: r.id,
+          label: r.label,
+          itemDate: r.item_date,
+          answeredAt: r.answered_at,
+          answer: r.answer as LearnAnswerRowAnswer,
+        })),
+      };
+    }),
+  );
+
+  ipcMain.handle(
+    "learn:delete-answer",
+    guarded("learn:delete-answer", async (_e, payload: unknown): Promise<LearnDeleteAnswerResult> => {
+      // UNGATED (2.46.2): session only. Own rows only, soft.
+      const userId = await sessionUserId();
+      if (!userId) return fail(LEARN_NO_SESSION_ERROR);
+      const args = parse(LearnDeleteAnswerArgsSchema, payload);
+      if (!args) return fail(LEARN_INVALID_ERROR);
+      if (!softDeleteAnswer(userId, args.kind, args.id, LEARN_RULES.version)) return fail(LEARN_NOT_IN_SET_ERROR);
+      logService.info("Learn mode answer deleted", MODULE, { kind: args.kind });
+      return { success: true };
     }),
   );
 

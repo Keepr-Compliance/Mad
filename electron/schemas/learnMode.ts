@@ -57,3 +57,12 @@ export const LearnAttachmentOpenArgsSchema = z.strictObject({
   detectionId: DetectionIdSchema,
   attachmentId: AttachmentIdSchema,
 });
+
+/**
+ * learn:delete-answer (2.46.2): one of the caller's saved answers. The id is
+ * a row id written by main (RowIdSchema, as for learn:sample-answer).
+ */
+export const LearnDeleteAnswerArgsSchema = z.strictObject({
+  kind: z.enum(["deal", "bulk"]),
+  id: RowIdSchema,
+});

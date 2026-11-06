@@ -12,6 +12,12 @@
  *   P6    the canary address / subject reach no aria-label, title or data-*
  *         attribute and no console call
  *   DEL   Data & Privacy row: shown with saved answers, deletes through main
+ *   2.46.2 (sittings of 12, Done for now, Your answers):
+ *   C1    the cap is on the SESSION: 30 items, 12 previews, then the score
+ *   C2    the card shows one sitting (12, about 5 minutes)
+ *   C3    "N more" only when another question exists; keeps skipped deals
+ *   C4    Done for now keeps an in-flight answer and asks nothing after it
+ *   C8    deleting one answer re-reads the score and the count
  *
  * window.api.learn is a fake "main" built from the transcribed replies in
  * learnFixtures-4120.ts. Synthetic data only.
@@ -32,6 +38,7 @@ import {
   PREVIEW_BULK_2,
   PREVIEW_CLEANUP,
   PREVIEW_CLEANUP_2,
+  LIST_ANSWERS,
   SAMPLE_ROW_ID,
   SCORE,
   STATE_ON,
@@ -49,6 +56,7 @@ interface FakeMain {
   answeredRows: Map<string, string>;
   sampleSize: number;
   score: LearnScoreResult;
+  list: Extract<typeof LIST_ANSWERS, { success: true }>["answers"];
 }
 
 let main: FakeMain;
@@ -74,6 +82,7 @@ function install(overrides: Partial<FakeMain> = {}): void {
     answeredRows: new Map(),
     sampleSize: 2,
     score: { ...(SCORE as Extract<LearnScoreResult, { success: true }>) },
+    list: [],
     ...overrides,
   };
   const s = SCORE as Extract<LearnScoreResult, { success: true }>;
@@ -120,6 +129,16 @@ function install(overrides: Partial<FakeMain> = {}): void {
     }),
     attachmentOpen: jest.fn(async () => ({ success: true, dataUrl: "data:application/pdf;base64,JVBERi0=", downloadedNow: true })),
     deleteAnswers: jest.fn(async () => ({ success: true, removed: { deal: 2, bulk: 3 } })),
+    listAnswers: jest.fn(async () => ({ success: true, answers: main.list })),
+    deleteAnswer: jest.fn(async ({ kind, id }: { kind: string; id: string }) => {
+      main.list = main.list.filter((a) => !(a.kind === kind && a.id === id));
+      const st = main.state as Extract<LearnStateResult, { success: true }>;
+      main.state = {
+        ...st,
+        answers: kind === "deal" ? { ...st.answers, deal: st.answers.deal - 1 } : { ...st.answers, bulk: st.answers.bulk - 1 },
+      };
+      return { success: true };
+    }),
   };
   (window.api as unknown as { learn: unknown }).learn = api;
 }
@@ -208,9 +227,9 @@ describe("ON toggle ON", () => {
     expect(api.run).not.toHaveBeenCalled();
   });
 
-  it("the footer names the Data & Privacy tab", async () => {
+  it("the footer says turning Learn mode off keeps the answers", async () => {
     renderSection();
-    expect(await screen.findByTestId("learn-footer")).toHaveTextContent("you can delete them in Data & Privacy.");
+    expect(await screen.findByTestId("learn-footer")).toHaveTextContent("Turning Learn mode off keeps your answers.");
   });
 
   it("with no questions left, promises no new ones after a mail sync", async () => {
@@ -410,10 +429,11 @@ describe("DEL Data & Privacy: delete Learn mode answers", () => {
     render(<LearnAnswersPrivacyRow />);
     const row = await screen.findByTestId("learn-answers-privacy");
     expect(row).toHaveTextContent("5 answers saved on this computer");
-    fireEvent.click(within(row).getByRole("button", { name: "Delete answers" }));
-    const confirm = await screen.findByRole("alertdialog");
-    expect(confirm).toHaveTextContent("Keepr will stop using every answer you gave in Learn mode on this computer.");
-    fireEvent.click(within(confirm).getByRole("button", { name: "Delete answers" }));
+    fireEvent.click(within(row).getByRole("button", { name: "Delete all" }));
+    expect(api.deleteAnswers).not.toHaveBeenCalled();
+    const confirm = within(row).getByTestId("learn-delete-all-confirm");
+    expect(confirm).toHaveTextContent("Delete all answers? Your transactions don't change.");
+    fireEvent.click(within(confirm).getByRole("button", { name: "Delete all" }));
     await waitFor(() => expect(api.deleteAnswers).toHaveBeenCalledTimes(1));
     await within(row).findByText("Your Learn mode answers were deleted.");
   });
@@ -423,5 +443,172 @@ describe("DEL Data & Privacy: delete Learn mode answers", () => {
     const { container } = render(<LearnAnswersPrivacyRow />);
     await waitFor(() => expect(api.getState).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 2.46.2: sittings of 12, Done for now, Your answers
+// ---------------------------------------------------------------------------
+
+function mailRows(n: number): Bulk[] {
+  return Array.from({ length: n }, (_, i) => ({ rowId: `row-4120-m${i + 1}`, preview: PREVIEW_BULK }));
+}
+
+const progress = (dialog: HTMLElement) => within(dialog).getByTestId("learn-question-progress");
+
+/** Wait for question N, then answer it (a mail question, or Yes on a deal). */
+async function answerQuestion(dialog: HTMLElement, n: number, of: number): Promise<void> {
+  await waitFor(() => expect(progress(dialog)).toHaveTextContent(`Question ${n} of ${of}`));
+  const button = await within(dialog).findByRole("button", { name: /Newsletter or spam|Yes, my deal/ });
+  await waitFor(() => expect(button).not.toBeDisabled());
+  fireEvent.click(button);
+}
+
+describe("C1/C2/C3 sittings of 12", () => {
+  it("C2 the card shows one sitting: 12 and about 5 minutes, with 234 ready", async () => {
+    install({ sampleSize: 232 });
+    renderSection();
+    const start = await screen.findByTestId("learn-start");
+    expect(within(start).getByText("12")).toBeInTheDocument();
+    expect(start).toHaveTextContent("About 5 minutes. Stop any time; your answers are kept.");
+    expect(start).not.toHaveTextContent("234");
+  });
+
+  it("C1 the SESSION stops after 12: 30 items, 12 previews, then the score with 12 more", async () => {
+    install({ cleanup: [], bulk: mailRows(30), sampleSize: 30 });
+    const dialog = await startSession();
+    for (let n = 1; n <= 11; n++) await answerQuestion(dialog, n, 12);
+    await waitFor(() => expect(progress(dialog)).toHaveTextContent("Question 12 of 12"));
+    await answerQuestion(dialog, 12, 12);
+    const done = await screen.findByRole("dialog", { name: "Thanks, 12 answers saved" });
+    expect(api.preview).toHaveBeenCalledTimes(12);
+    expect(api.sampleAnswer).toHaveBeenCalledTimes(12);
+    expect(screen.queryByRole("dialog", { name: "Learn mode question" })).toBeNull();
+    expect(within(done).getByRole("button", { name: "12 more" })).toBeInTheDocument();
+  });
+
+  it("C3 12 more starts the next sitting at Question 1 of 12 and does not re-ask a deal skipped earlier; the last offers the rest", async () => {
+    install({ bulk: mailRows(28), sampleSize: 28 }); // 2 deals + 28 mail = 30
+    const dialog = await startSession();
+    await within(dialog).findByText("4120 Canarytest Lane, Testville, ZZ 00000");
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: /Skip for now/ })).not.toBeDisabled());
+    fireEvent.click(within(dialog).getByRole("button", { name: /Skip for now/ }));
+    for (let n = 2; n <= 12; n++) await answerQuestion(dialog, n, 12);
+    const done = await screen.findByRole("dialog", { name: "Thanks, 11 answers saved" });
+    fireEvent.click(within(done).getByRole("button", { name: "12 more" }));
+
+    const next = await screen.findByRole("dialog", { name: "Learn mode question" });
+    await waitFor(() => expect(progress(next)).toHaveTextContent("Question 1 of 12"));
+    await within(next).findByRole("button", { name: /Newsletter or spam/ });
+    expect(within(next).queryByText("4120 Canarytest Lane, Testville, ZZ 00000")).toBeNull();
+    expect(api.cleanupNext).toHaveBeenLastCalledWith({ exclude: ["d1"] });
+    for (let n = 1; n <= 12; n++) await answerQuestion(next, n, 12);
+    const second = await screen.findByRole("dialog", { name: "Thanks, 12 answers saved" });
+    // 30 - 24 = 6 left (5 mail + the skipped deal, which stays skipped this time).
+    expect(within(second).getByRole("button", { name: "6 more" })).toBeInTheDocument();
+  });
+
+  it("C3 with 5 items the sitting ends at 5 and offers no more", async () => {
+    install({ cleanup: [], bulk: mailRows(5), sampleSize: 5 });
+    const dialog = await startSession();
+    for (let n = 1; n <= 5; n++) await answerQuestion(dialog, n, 5);
+    const done = await screen.findByRole("dialog", { name: "Thanks, 5 answers saved" });
+    expect(within(done).queryByRole("button", { name: /more$/ })).toBeNull();
+    expect(within(done).getByRole("button", { name: "Done" })).toBeInTheDocument();
+  });
+});
+
+describe("C4 Done for now", () => {
+  it("keeps an in-flight answer: the score waits for the store, counts it, and nothing more is asked", async () => {
+    main.bulk = [];
+    let resolveStore: (v: { success: true }) => void = () => undefined;
+    api.cleanupAnswer.mockImplementationOnce(
+      ({ detectionId, answer }: { detectionId: string; answer: string }) =>
+        new Promise((r) => {
+          resolveStore = (v) => {
+            main.answeredDeals.set(detectionId, answer);
+            r(v);
+          };
+        }),
+    );
+    const dialog = await startSession();
+    const yes = await within(dialog).findByRole("button", { name: /Yes, my deal/ });
+    await waitFor(() => expect(yes).not.toBeDisabled());
+    fireEvent.click(yes);
+    await waitFor(() => expect(api.cleanupAnswer).toHaveBeenCalledTimes(1));
+    const cleanupCalls = api.cleanupNext.mock.calls.length;
+    const previewCalls = api.preview.mock.calls.length;
+    const scoreCalls = api.score.mock.calls.length; // the Settings section read it once on load
+    fireEvent.click(within(dialog).getByRole("button", { name: "Done for now" }));
+    await act(async () => Promise.resolve());
+    expect(api.score).toHaveBeenCalledTimes(scoreCalls);
+
+    await act(async () => resolveStore({ success: true }));
+    const done = await screen.findByRole("dialog", { name: "Thanks, 1 answer saved" });
+    expect(api.score).toHaveBeenCalledTimes(scoreCalls + 1);
+    expect(api.cleanupNext).toHaveBeenCalledTimes(cleanupCalls);
+    expect(api.sampleNext).not.toHaveBeenCalled();
+    expect(api.preview).toHaveBeenCalledTimes(previewCalls);
+    // Let any late continuation run, then check the question did not come back over the score.
+    await act(async () => new Promise((r) => setTimeout(r, 20)));
+    expect(api.cleanupNext).toHaveBeenCalledTimes(cleanupCalls);
+    expect(screen.queryByRole("dialog", { name: "Learn mode question" })).toBeNull();
+    expect(done).toBeInTheDocument();
+    expect(within(done).queryByRole("button", { name: /more$/ })).toBeNull();
+  });
+
+  it("is shown while loading, on a question and on an error; with nothing answered the score is How Keepr is doing", async () => {
+    let resolvePreview: (v: LearnPreviewResult) => void = () => undefined;
+    api.preview.mockImplementationOnce(() => new Promise((r) => (resolvePreview = r)));
+    const dialog = await startSession();
+    expect(within(dialog).getByRole("button", { name: "Done for now" })).not.toBeDisabled();
+    await act(async () => resolvePreview({ success: false, error: "That item is not part of the current questions." }));
+    await within(dialog).findByText("That item is not part of the current questions.");
+    const doneForNow = within(dialog).getByRole("button", { name: "Done for now" });
+    expect(doneForNow).not.toBeDisabled();
+    fireEvent.click(doneForNow);
+    await screen.findByRole("dialog", { name: "How Keepr is doing" });
+  });
+
+  it("is shown on a question", async () => {
+    const dialog = await startSession();
+    await within(dialog).findByText("4120 Canarytest Lane, Testville, ZZ 00000");
+    expect(within(dialog).getByRole("button", { name: "Done for now" })).not.toBeDisabled();
+  });
+});
+
+describe("C8 Your answers in Help Keepr learn", () => {
+  it("lists answers newest first; Delete asks inline; a delete re-reads the count and the score", async () => {
+    const list = (LIST_ANSWERS as Extract<typeof LIST_ANSWERS, { success: true }>).answers;
+    install({ list: [...list], state: { success: true, available: true, enabled: true, answers: { deal: 1, bulk: 2 } } });
+    renderSection();
+    const box = await screen.findByTestId("learn-answers-list");
+    expect(screen.getByTestId("learn-footer")).toHaveTextContent("3 answers so far.");
+    const rows = within(box).getAllByTestId("learn-answer-row");
+    expect(rows.map((r) => r.textContent?.split(/Yes|Real|Skip/)[0])).toEqual([
+      "4120 Canarytest Lane, Testville, ZZ 00000",
+      "Canarysubject offer",
+      "Message no longer on this computer",
+    ]);
+    expect(rows[0]).toHaveTextContent("Yes, my deal · Answered");
+    expect(rows[2]).toHaveTextContent("Skipped");
+    const scoreCalls = api.score.mock.calls.length;
+
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "Delete" }));
+    expect(api.deleteAnswer).not.toHaveBeenCalled();
+    expect(within(rows[0]).getByText("Delete?")).toBeInTheDocument();
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(api.deleteAnswer).toHaveBeenCalledWith({ kind: "deal", id: "dla-c" }));
+    await waitFor(() => expect(within(box).getAllByTestId("learn-answer-row")).toHaveLength(2));
+    await waitFor(() => expect(screen.getByTestId("learn-footer")).toHaveTextContent("2 answers so far."));
+    expect(api.score.mock.calls.length).toBeGreaterThan(scoreCalls);
+  });
+
+  it("is shown with Learn mode off", async () => {
+    const list = (LIST_ANSWERS as Extract<typeof LIST_ANSWERS, { success: true }>).answers;
+    install({ list: [...list], state: { success: true, available: true, enabled: false, answers: { deal: 1, bulk: 2 } } });
+    renderSection();
+    expect(await screen.findByTestId("learn-answers-list")).toBeInTheDocument();
+    expect(screen.queryByTestId("learn-start")).toBeNull();
   });
 });

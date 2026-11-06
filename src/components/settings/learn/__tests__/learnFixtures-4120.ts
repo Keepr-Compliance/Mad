@@ -11,6 +11,7 @@
  */
 import type {
   LearnCleanupNextResult,
+  LearnListAnswersResult,
   LearnPreviewResult,
   LearnScoreResult,
   LearnStateResult,
@@ -173,4 +174,40 @@ export const PREVIEW_BULK_2: LearnPreviewResult = {
   ],
   totalEmails: 1,
   questionAttachmentId: null,
+};
+
+/**
+ * learn:list-answers (2.46.2), TRANSCRIBED from the real handler over the real
+ * schema (learnModeHandlers-4120 C13, 2026-11-06): one deal answer, one mail
+ * answer, newest first. A third row shows a message no longer cached
+ * (label null), the shape the LEFT JOIN produces.
+ */
+export const LIST_ANSWERS: LearnListAnswersResult = {
+  success: true,
+  answers: [
+    {
+      kind: "deal",
+      id: "dla-c",
+      label: "4120 Canarytest Lane, Testville, ZZ 00000",
+      itemDate: null,
+      answeredAt: "2026-11-02T00:00:00Z",
+      answer: "yes",
+    },
+    {
+      kind: "bulk",
+      id: "lba-c",
+      label: "Canarysubject offer",
+      itemDate: "2026-10-01T10:00:00.000Z",
+      answeredAt: "2026-11-01T00:00:00Z",
+      answer: "real_estate",
+    },
+    {
+      kind: "bulk",
+      id: "lba-gone",
+      label: null,
+      itemDate: null,
+      answeredAt: "2026-10-30T00:00:00Z",
+      answer: "skip",
+    },
+  ],
 };

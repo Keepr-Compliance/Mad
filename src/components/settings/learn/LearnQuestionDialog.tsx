@@ -147,15 +147,21 @@ export function LearnQuestionDialog({
               Question {Math.max(1, session.index)} of {Math.max(session.total, session.index, 1)}
             </span>
           </span>
-          <button
-            type="button"
-            className={`${TOP_BUTTON} justify-self-end`}
-            disabled={session.busy || !session.canUndo}
-            onClick={() => void session.undo()}
-          >
-            <Undo2 className="h-3.5 w-3.5" aria-hidden="true" />
-            Undo last
-          </button>
+          <span className="flex items-center gap-2 justify-self-end">
+            <button
+              type="button"
+              className={TOP_BUTTON}
+              disabled={session.busy || !session.canUndo}
+              onClick={() => void session.undo()}
+            >
+              <Undo2 className="h-3.5 w-3.5" aria-hidden="true" />
+              Undo last
+            </button>
+            {/* Always shown and never disabled: keeps the answers and shows the score. */}
+            <button type="button" className={TOP_BUTTON} onClick={onClose}>
+              Done for now
+            </button>
+          </span>
         </div>
         {/* The preview column can never widen or heighten the dialog: minmax(0,1fr) and
             min-w-0 / min-h-0 down the chain. Without them a 1400px email table measured the

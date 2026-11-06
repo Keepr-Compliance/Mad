@@ -19,6 +19,8 @@ export function LearnScoreDialog({
   answered,
   score,
   copyBlock,
+  more = null,
+  onMore,
   onClose,
 }: {
   open: boolean;
@@ -26,6 +28,9 @@ export function LearnScoreDialog({
   answered: number | null;
   score: LearnScore | null;
   copyBlock: string | null;
+  /** Size of the next sitting ("12 more"); null or absent: no next sitting offered. */
+  more?: number | null;
+  onMore?: () => void;
   onClose: () => void;
 }): React.ReactElement {
   const [details, setDetails] = useState(false);
@@ -85,13 +90,24 @@ export function LearnScoreDialog({
             )}
           </div>
         )}
-        <button
-          type="button"
-          onClick={onClose}
-          className="inline-flex h-12 w-full items-center justify-center rounded-[10px] bg-sky-700 font-semibold text-white hover:bg-sky-800"
-        >
-          Done
-        </button>
+        <div className="flex w-full gap-3">
+          {more !== null && onMore && (
+            <button
+              type="button"
+              onClick={onMore}
+              className="inline-flex h-12 flex-1 items-center justify-center rounded-[10px] border border-gray-300 bg-white font-semibold text-gray-800 hover:bg-gray-50"
+            >
+              {more} more
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="inline-flex h-12 flex-1 items-center justify-center rounded-[10px] bg-sky-700 font-semibold text-white hover:bg-sky-800"
+          >
+            Done
+          </button>
+        </div>
       </DialogContent>
     </Dialog>
   );

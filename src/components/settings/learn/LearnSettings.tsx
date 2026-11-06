@@ -18,6 +18,8 @@ import { usePlatform } from "@/contexts/PlatformContext";
 import { useLearnSettings } from "./useLearnSettings";
 import { LearnStatTiles } from "./LearnStatTiles";
 import { learnTiles } from "./learnScoreView";
+import { LearnAnswersList } from "./LearnAnswersList";
+import { LEARN_SITTING_SIZE } from "./learnSitting";
 
 function minutesFor(questions: number): string {
   const minutes = Math.max(1, Math.round((questions * 25) / 60));
@@ -34,6 +36,8 @@ export function LearnSettings({
   const learn = useLearnSettings();
   const { isMacOS } = usePlatform();
   const machine = isMacOS ? "this Mac" : "this computer";
+  // The card shows one sitting; Start passes the full count (the session stops at a sitting).
+  const sitting = Math.min(LEARN_SITTING_SIZE, learn.questionsReady);
 
   return (
     <div id="settings-learn" className="mb-8" data-testid="settings-learn">
@@ -97,14 +101,14 @@ export function LearnSettings({
                 className="flex w-full items-center gap-4 rounded-lg bg-sky-700 px-5 py-4 text-left text-white hover:bg-sky-800 disabled:cursor-default disabled:hover:bg-sky-700"
               >
                 <span className="inline-grid h-11 w-11 flex-none place-items-center rounded-lg bg-white/15 text-lg font-bold">
-                  {learn.questionsReady}
+                  {sitting}
                 </span>
                 <span className="flex flex-1 flex-col gap-0.5">
                   <span className="font-semibold">{learn.questionsReady === 0 ? "No questions right now" : "Questions ready"}</span>
                   <span className="text-[13px] text-sky-100">
                     {learn.questionsReady === 0
                       ? "There are no more questions about the mail on this computer."
-                      : `${minutesFor(learn.questionsReady)}. Stop any time; your answers are kept.`}
+                      : `${minutesFor(sitting)}. Stop any time; your answers are kept.`}
                   </span>
                 </span>
                 {learn.questionsReady > 0 && (
@@ -133,10 +137,13 @@ export function LearnSettings({
 
             <p className="m-0 text-[13px] text-gray-500" data-testid="learn-footer">
               {learn.answerCount === 1 ? "1 answer so far." : `${learn.answerCount} answers so far.`} Turning Learn mode
-              off keeps your answers; you can delete them in Data & Privacy.
+              off keeps your answers.
             </p>
           </>
         )}
+
+        {/* Shown with the toggle off too: a user can always delete one of his own answers. */}
+        {!learn.loading && <LearnAnswersList onChanged={() => void learn.refresh()} />}
       </div>
 
     </div>
