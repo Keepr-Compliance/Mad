@@ -5,7 +5,7 @@
  * Extracted to keep the composition hook under 100 lines.
  */
 
-import type { PendingOAuthData, DeepLinkAuthData } from "../../../../components/Login";
+import type { DeepLinkAuthData } from "../../../../components/Login";
 import type { Subscription } from "../../../../../electron/types/models";
 import type { PendingOnboardingData, AppStep } from "../../types";
 import type { AppAction } from "../../machine/types";
@@ -39,7 +39,6 @@ export interface UseAuthFlowOptions {
    * Called after terms are accepted to Supabase (pre-DB flow).
    */
   clearTermsRequirement: () => void;
-  isAuthenticated: boolean;
   /**
    * Current user ID (from AuthContext).
    * Used for terms acceptance when DB is not initialized.
@@ -66,12 +65,10 @@ export interface UseAuthFlowOptions {
 export interface UseAuthFlowReturn {
   // State
   isNewUserFlow: boolean;
-  pendingOAuthData: PendingOAuthData | null;
   pendingOnboardingData: PendingOnboardingData;
 
   // Setters for orchestrator
   setIsNewUserFlow: (value: boolean) => void;
-  setPendingOAuthData: (data: PendingOAuthData | null) => void;
   setPendingOnboardingData: React.Dispatch<
     React.SetStateAction<PendingOnboardingData>
   >;
@@ -89,7 +86,6 @@ export interface UseAuthFlowReturn {
     subscriptionData: Subscription | undefined,
     isNewUser: boolean,
   ) => void;
-  handleLoginPending: (oauthData: PendingOAuthData) => void;
   /** TASK-1507B: Handle deep link auth success from browser OAuth flow */
   handleDeepLinkAuthSuccess: (data: DeepLinkAuthData) => void;
   handleLogout: () => Promise<void>;

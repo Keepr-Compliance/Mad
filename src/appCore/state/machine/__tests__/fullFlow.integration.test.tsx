@@ -140,7 +140,6 @@ const initialLoadingState: LoadingState = {
 const createDefaultSecureStorageOptions = (isMacOS: boolean) => ({
   isWindows: !isMacOS,
   isMacOS,
-  pendingOAuthData: null,
   pendingOnboardingData: {
     phoneType: null as "iphone" | "android" | null,
     // BACKLOG-2414: narrowed from `string | null` to the union the hook options
@@ -151,7 +150,6 @@ const createDefaultSecureStorageOptions = (isMacOS: boolean) => ({
   },
   isAuthenticated: false,
   login: jest.fn(),
-  onPendingOAuthClear: jest.fn(),
   onPendingOnboardingClear: jest.fn(),
   onPhoneTypeSet: jest.fn(),
   onEmailOnboardingComplete: jest.fn(),
@@ -174,7 +172,6 @@ const createDefaultNavigationFlowOptions = (isMacOS: boolean) => ({
   needsTermsAcceptance: false,
   isMacOS,
   isWindows: !isMacOS,
-  pendingOAuthData: null,
   pendingOnboardingData: {
     phoneType: null as "iphone" | "android" | null,
     // BACKLOG-2414: narrowed from `string | null` to the union the hook options

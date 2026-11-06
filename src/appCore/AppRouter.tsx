@@ -36,7 +36,7 @@ export function AppRouter({ app }: AppRouterProps) {
     currentStep, isOnline, isChecking, connectionError,
     currentUser,
     // Handlers
-    handleLoginSuccess, handleLoginPending, handleDeepLinkAuthSuccess,
+    handleLoginSuccess, handleDeepLinkAuthSuccess,
     handleRetryConnection,
     openAuditTransaction, openTransactions, openContacts,
     setIsTourActive, openIPhoneSync, openAndroidSync, openSettings,
@@ -104,7 +104,6 @@ export function AppRouter({ app }: AppRouterProps) {
     return (
       <Login
         onLoginSuccess={handleLoginSuccess}
-        onLoginPending={handleLoginPending}
         onDeepLinkAuthSuccess={handleDeepLinkAuthSuccess}
         onLicenseBlocked={handleLicenseBlocked}
       />

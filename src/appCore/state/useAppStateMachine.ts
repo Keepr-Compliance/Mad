@@ -109,7 +109,6 @@ export function useAppStateMachine(): AppStateMachine {
     acceptTerms,
     declineTerms,
     clearTermsRequirement,
-    isAuthenticated,
     currentUserId: currentUser?.id ?? null,
     onCloseProfile: modal.closeProfile,
     onCloseLearn: modal.closeLearnSession,
@@ -137,11 +136,9 @@ export function useAppStateMachine(): AppStateMachine {
   const secureStorage = useSecureStorage({
     isWindows,
     isMacOS,
-    pendingOAuthData: auth.pendingOAuthData,
     pendingOnboardingData: auth.pendingOnboardingData,
     isAuthenticated,
     login,
-    onPendingOAuthClear: () => auth.setPendingOAuthData(null),
     onPendingOnboardingClear: () =>
       auth.setPendingOnboardingData({
         termsAccepted: false,
@@ -169,7 +166,6 @@ export function useAppStateMachine(): AppStateMachine {
     needsTermsAcceptance,
     isMacOS,
     isWindows,
-    pendingOAuthData: auth.pendingOAuthData,
     pendingOnboardingData: auth.pendingOnboardingData,
     isCheckingSecureStorage: secureStorage.isCheckingSecureStorage,
     isDatabaseInitialized: secureStorage.isDatabaseInitialized,
@@ -208,8 +204,6 @@ export function useAppStateMachine(): AppStateMachine {
   // PHONE HANDLERS
   // ============================================
   const phoneHandlers = usePhoneHandlers({
-    pendingOAuthData: auth.pendingOAuthData,
-    isAuthenticated,
     currentUserId: currentUser?.id,
     isWindows,
     selectedPhoneType: phoneTypeApi.selectedPhoneType,
