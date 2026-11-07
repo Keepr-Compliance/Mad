@@ -9,9 +9,6 @@
 // Gmail spam labels to filter
 const GMAIL_SPAM_LABELS = ['SPAM', 'TRASH'];
 
-// Gmail promotional/social labels (optional, configurable)
-const GMAIL_SKIP_LABELS = ['CATEGORY_PROMOTIONS', 'CATEGORY_SOCIAL'];
-
 export interface SpamFilterResult {
   isSpam: boolean;
   reason?: string;
@@ -27,22 +24,6 @@ export function isGmailSpam(labels: string[]): SpamFilterResult {
     return {
       isSpam: true,
       reason: `Gmail label: ${spamLabel}`,
-      labels,
-    };
-  }
-  return { isSpam: false, labels };
-}
-
-/**
- * Check if Gmail email is promotional/social (optional filter)
- * Use this as an OPT-IN filter for users who want to skip promotional emails
- */
-export function isGmailPromotional(labels: string[]): SpamFilterResult {
-  const skipLabel = labels.find((l) => GMAIL_SKIP_LABELS.includes(l));
-  if (skipLabel) {
-    return {
-      isSpam: true,
-      reason: `Gmail category: ${skipLabel}`,
       labels,
     };
   }
