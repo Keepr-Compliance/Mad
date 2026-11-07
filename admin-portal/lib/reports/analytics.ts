@@ -3,13 +3,14 @@
  *
  * Moved verbatim out of the old `lib/analytics-queries.ts`: the reads now live
  * in ./analytics-queries.ts (paged), and these builders turn their rows into
- * the numbers the page shows. No maths changed in the move. Two known oddities
- * are kept on purpose and pinned by tests (follow-ups filed):
- *   - the Platform bar uses `pct` (denominator = distinct users across all
- *     platforms) while the legend recomputes over the sum of per-platform
- *     counts, so the two percentages differ when a user is on two platforms;
- *   - `compareSemver` treats pre-release versions (`2.40.0-beta.3`) as
- *     non-numeric, so they sort after every numeric version.
+ * the numbers the page shows. No maths changed in the move. Two later changes:
+ *   - Platform `pct` is each platform's users over the SUM of per-platform
+ *     counts (a user on two platforms counts once per platform), so the
+ *     percentages add up to ~100 and the bar and the legend show the same
+ *     number (BACKLOG-4081);
+ *   - `compareSemver` orders pre-release versions (`2.40.0-beta.3`) just
+ *     before their release instead of after every numeric version
+ *     (BACKLOG-4082).
  */
 
 // ─── Types ───────────────────────────────────────────────────────
@@ -86,24 +87,60 @@ export interface PhonePrefRow {
 
 // ─── Builders ────────────────────────────────────────────────────
 
+/** `2.44.0`, `2.44.0-pre.2`, `2.44.0+build` -> release parts + pre-release parts. */
+const SEMVER_RE = /^(\d+(?:\.\d+)*)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/;
+
+interface ParsedVersion {
+  release: number[];
+  pre: string[];
+}
+
+function parseVersion(v: string): ParsedVersion | null {
+  const m = SEMVER_RE.exec(v);
+  if (!m) return null;
+  return { release: m[1].split('.').map(Number), pre: m[2] ? m[2].split('.') : [] };
+}
+
+const isNumericPart = (p: string) => /^\d+$/.test(p);
+
+/** Compare two pre-release parts: numbers numerically, otherwise alphabetically; numbers first. */
+function comparePrePart(a: string, b: string): number {
+  const numA = isNumericPart(a);
+  const numB = isNumericPart(b);
+  if (numA && numB) return Number(a) - Number(b);
+  if (numA) return -1;
+  if (numB) return 1;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /**
- * Compare two semver strings numerically (e.g. "2.9.1" < "2.10.1").
- * Non-semver strings like "Unknown" sort to the end.
+ * Compare two version strings, oldest first (BACKLOG-4082):
+ *   - the release number numerically ("2.9.1" < "2.10.1");
+ *   - for the same release, a pre-release sorts before the release
+ *     ("2.44.0-pre.2" < "2.44.0");
+ *   - pre-release parts numerically when both are numbers ("beta.2" < "beta.10"),
+ *     otherwise alphabetically ("alpha" < "beta");
+ *   - anything that is not a version (e.g. "Unknown") sorts last.
  */
 export function compareSemver(a: string, b: string): number {
-  const partsA = a.split('.').map(Number);
-  const partsB = b.split('.').map(Number);
-  const isNumA = partsA.every((n) => !isNaN(n));
-  const isNumB = partsB.every((n) => !isNaN(n));
-  // Non-numeric versions (e.g. "Unknown") sort to the end
-  if (!isNumA && !isNumB) return a.localeCompare(b);
-  if (!isNumA) return 1;
-  if (!isNumB) return -1;
-  for (let i = 0; i < Math.max(partsA.length, partsB.length); i++) {
-    const diff = (partsA[i] ?? 0) - (partsB[i] ?? 0);
+  const pa = parseVersion(a);
+  const pb = parseVersion(b);
+  if (!pa && !pb) return a.localeCompare(b);
+  if (!pa) return 1;
+  if (!pb) return -1;
+  for (let i = 0; i < Math.max(pa.release.length, pb.release.length); i++) {
+    const diff = (pa.release[i] ?? 0) - (pb.release[i] ?? 0);
     if (diff !== 0) return diff;
   }
-  return 0;
+  // Same release: a pre-release comes before the release itself.
+  if (pa.pre.length === 0 && pb.pre.length === 0) return 0;
+  if (pa.pre.length === 0) return 1;
+  if (pb.pre.length === 0) return -1;
+  for (let i = 0; i < Math.min(pa.pre.length, pb.pre.length); i++) {
+    const diff = comparePrePart(pa.pre[i], pb.pre[i]);
+    if (diff !== 0) return diff;
+  }
+  return pa.pre.length - pb.pre.length;
 }
 
 /** The distinct user ids a version read covers (the users lookup input). */
@@ -162,14 +199,18 @@ export function buildPlatformBreakdown(devices: PlatformDeviceRow[]): PlatformBr
     platformMap.get(platform)!.add(d.user_id);
   }
 
-  const totalUsers = new Set(devices.map((d) => d.user_id)).size || 1;
+  // BACKLOG-4081: denominator = sum of per-platform counts, so the shares add
+  // up to ~100 even when a user is on two platforms.
+  let platformTotal = 0;
+  for (const users of platformMap.values()) platformTotal += users.size;
+  const denominator = platformTotal || 1;
 
   const results: PlatformBreakdown[] = [];
   for (const [platform, users] of platformMap) {
     results.push({
       platform,
       user_count: users.size,
-      pct: Math.round((users.size / totalUsers) * 100),
+      pct: Math.round((users.size / denominator) * 100),
     });
   }
 
