@@ -206,3 +206,29 @@ describe("KH address pass: a deal contact on an approved host is never dropped",
     expect(pending()).toEqual(["e-contact"]);
   });
 });
+
+describe("RS15 (4175 PR4) the address pass reads the ACTIVE rule set", () => {
+  const SEED_X = "x@example.test";
+  let store: typeof import("../senderRuleSetStore");
+  beforeEach(async () => {
+    const paths = await import("../../capabilities/appPathsProvider");
+    paths.resetAppPaths(); // memory only: never write a cache into the shared test userData
+    store = await import("../senderRuleSetStore");
+    store.__resetForTests();
+  });
+  afterEach(() => store.__resetForTests());
+
+  it("a downloaded set's seed (absent from bundled) is not queued", async () => {
+    expect(shipped.suppress.exactAddresses).not.toContain(SEED_X);
+    const { parseSenderRuleSet } = await import("../../utils/senderFilter/ruleSetSchema");
+    const downloaded = parseSenderRuleSet(
+      JSON.parse(JSON.stringify({ ...shipped, version: 5, suppress: { ...shipped.suppress, exactAddresses: [SEED_X] } })),
+    );
+    await store.applyServerOutcome({ kind: "valid", rules: downloaded! }, USER);
+    email("e-x", gmailFrom("Alerts", SEED_X));
+    email("e-plain", gmailFrom("Client", "client@example.org"));
+    const r = await run();
+    expect(r).toEqual({ candidates: 2, matched: 2, queued: 1, seedSkipped: 1 });
+    expect(pending()).toEqual(["e-plain"]);
+  });
+});

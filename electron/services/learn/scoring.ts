@@ -20,6 +20,7 @@ import type {
 import { isSameDeal, sameStreet } from "./dealMatcher";
 import { wilsonInterval, type WilsonInterval } from "./wilson";
 import type { SenderRuleSet, SenderRuleSignal } from "../../utils/senderFilter/bundledRules";
+import type { SenderRulesSource } from "../../utils/senderFilter/ruleSetSource";
 import {
   decide,
   matchesExactAddress,
@@ -79,6 +80,9 @@ export interface LearnScore {
   /** Saved answers per rules version (deal = cleanup answers, bulk = answered sample rows). */
   answersByRuleVersion: Array<{ ruleVersion: number; deal: number; bulk: number }>;
   senderRulesVersion: number;
+  /** BACKLOG-4175 PR4: where the run's sender rules came from, and whether the last download was refused. */
+  senderRulesSource: SenderRulesSource;
+  senderRulesDownloadRejected: boolean;
   /** BACKLOG-4175: the sender filter, measured (aggregates only). */
   senderCensus: SenderCensus;
 
@@ -419,6 +423,8 @@ export function scoreRun(
     seedLinkedToDeals,
     answersByRuleVersion: answersByRuleVersion(dealAnswers, bulkRows),
     senderRulesVersion: run.senderRulesVersion,
+    senderRulesSource: run.senderRulesProvenance.source,
+    senderRulesDownloadRejected: run.senderRulesProvenance.downloadRejected,
     senderCensus: {
       dealLinkedSuppressed: dealLinkedCensus(census),
       minCensusLinkedEmails: census.rules.thresholds.minCensusLinkedEmails,
@@ -547,7 +553,7 @@ function fmt(r: Rate): string {
 /** Aggregates only (SR R9): no ids, no addresses, no per-detection rows. */
 export function formatCopyBlock(s: LearnScore): string {
   return [
-    `Keepr Learn mode score (rules v${s.ruleVersion})`,
+    `Keepr Learn mode score (rules v${s.ruleVersion}; sender rules v${s.senderRulesVersion}, source: ${s.senderRulesSource}${s.senderRulesDownloadRejected ? " (download rejected)" : ""})`,
     `Window: ${s.windowMonths} months, ${s.earliestDay ?? "-"} to ${s.latestDay ?? "-"}`,
     `Emails scanned: ${s.rowsScanned}; without a sent date: ${s.nullSentAt}`,
     `Deals in key: manual ${s.buckets.manual} (of which created before ${s.legacyCutoffDay}, possibly auto-detected: ${s.legacyManualPositives} in the mail window${s.legacyCutoffIsMinimum ? ", minimum" : ""}), auto ${s.buckets.auto}, hybrid ${s.buckets.hybrid}, rejected ${s.buckets.rejected}; outside the mail window: ${s.labelsWithoutLocalMail}`,

@@ -84,6 +84,8 @@ export const SCORE: LearnScoreResult = {
     seedLinkedToDeals: 0,
     answersByRuleVersion: [],
     senderRulesVersion: 1,
+    senderRulesSource: "bundled",
+    senderRulesDownloadRejected: false,
     senderCensus: {
       dealLinkedSuppressed: [],
       minCensusLinkedEmails: 20,
