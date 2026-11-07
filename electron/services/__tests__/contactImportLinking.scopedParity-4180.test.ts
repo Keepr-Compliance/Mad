@@ -237,3 +237,84 @@ describe("BACKLOG-4180 scoped pass ignores another user's contact ids", () => {
     db.close();
   });
 });
+
+/**
+ * BACKLOG-4180 (SR review): the scoped selection binds every phone/email key of
+ * the touched contacts, and SQLite rejects a statement above its variable limit
+ * (32,766 measured; an import may carry 5,000 records). The keys are chunked.
+ *
+ * The limit is lowered here instead of seeding 32k values: the connection
+ * refuses any scoped key-selection statement binding more than LIMIT variables, and the chunk size is
+ * a parameter. Break caught: removing the chunking (one statement for all keys)
+ * binds 1 + 2 phone + 3 email = 6 variables and throws.
+ */
+describe.each(["auto", "suggest"] as const)("BACKLOG-4180 chunked key selection == full (mode %s)", (mode) => {
+  const LIMIT = 4;
+  let chunkedDb: DatabaseType;
+  let fullDb: DatabaseType;
+  let maxBound = 0;
+
+  function limited(db: DatabaseType): DatabaseType {
+    const wrapStmt = (stmt: any, keySelection: boolean): any =>
+      new Proxy(stmt, {
+        get(target, prop) {
+          const v = target[prop];
+          if (keySelection && (prop === "all" || prop === "get" || prop === "run")) {
+            return (...args: unknown[]) => {
+              maxBound = Math.max(maxBound, args.length);
+              if (args.length > LIMIT) throw new Error(`too many SQL variables (${args.length} > ${LIMIT})`);
+              return v.apply(target, args);
+            };
+          }
+          return typeof v === "function" ? v.bind(target) : v;
+        },
+      });
+    return new Proxy(db, {
+      get(target, prop) {
+        const v = (target as any)[prop];
+        if (prop === "prepare") return (sql: string) => wrapStmt(v.call(target, sql), /external_contacts ec[\s\S]*json_each/.test(sql));
+        return typeof v === "function" ? v.bind(target) : v;
+      },
+    }) as DatabaseType;
+  }
+
+  let chunked: Record<string, unknown>;
+  let full: Record<string, unknown>;
+
+  beforeAll(() => {
+    chunkedDb = makeDb();
+    const touched = buildImportedWorld(chunkedDb, mode);
+    setDb(limited(chunkedDb) as never);
+    maxBound = 0;
+    const asks: AskPair[] = [];
+    try {
+      linkExternalContactsForContacts(USER, touched, 2);
+    } finally {
+      setDb(chunkedDb as never); // the limit applies to the key selection only
+    }
+    runUniqueNameAutoLinkForMode(mode, USER, (pair) => asks.push(pair), { contactIds: touched });
+    chunked = snapshot(chunkedDb, asks);
+
+    fullDb = makeDb();
+    buildImportedWorld(fullDb, mode);
+    const fullAsks: AskPair[] = [];
+    fullPass(mode, fullAsks);
+    full = snapshot(fullDb, fullAsks);
+  });
+
+  afterAll(() => {
+    chunkedDb.close();
+    fullDb.close();
+  });
+
+  it("a key list spanning several chunks gives the same result as the full pass", () => {
+    expect(chunked).toEqual(full);
+  });
+
+  it("not vacuous: the keys really spanned more than one statement and the limit was hit", () => {
+    // 2 phone keys + 3 email keys at chunk size 2 = 3 statements; each binds <= 3.
+    expect(maxBound).toBeGreaterThan(1);
+    expect(maxBound).toBeLessThanOrEqual(LIMIT);
+    expect((chunked.proposals as unknown[]).length).toBeGreaterThan(0);
+  });
+});
