@@ -181,7 +181,7 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
           title={renewTarget === 'off' ? 'Turn off auto-renew?' : 'Turn auto-renew back on?'}
           body={renewTarget === 'off' ? autoRenewOffBody(billing) : 'Billing continues each month.'}
           cta={renewTarget === 'off' ? 'Turn off auto-renew' : 'Turn auto-renew back on'}
-          notifyContactEmail={renewTarget === 'on' ? deal.billing_contact_email ?? '' : undefined}
+          notifyContactEmail={deal.billing_contact_email ?? ''}
           onClose={() => setRenewTarget(null)}
           onSubmit={(note, _reason, notify) => setAutoRenewAction(organizationId, renewTarget === 'on', note, deal.version, notify ?? true)}
           onDone={done}
@@ -192,8 +192,9 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
           title="Reinstate this organization?"
           body={`${organizationName} gets exports, submitting, reviews and license changes back.`}
           cta="Reinstate organization"
+          notifyContactEmail={deal?.billing_contact_email ?? ''}
           onClose={() => setReinstating(false)}
-          onSubmit={(note) => reinstateOrgAction(organizationId, note)}
+          onSubmit={(note, _reason, notify) => reinstateOrgAction(organizationId, note, notify ?? true)}
           onDone={done}
         />
       )}
@@ -375,7 +376,7 @@ function ReasonDialog({
   body: string;
   cta: string;
   withReason?: boolean;
-  /** BACKLOG-4045: set (possibly '') to offer "Email the billing contact"; '' = no contact email on file. */
+  /** BACKLOG-4045/4200/4209: set (possibly '') to offer "Email the billing contact"; '' = no contact email on file. */
   notifyContactEmail?: string;
   onClose: () => void;
   onSubmit: (note: string, reason?: 'non_payment' | 'other', notify?: boolean) => Promise<{ ok: boolean; error: string | null }>;

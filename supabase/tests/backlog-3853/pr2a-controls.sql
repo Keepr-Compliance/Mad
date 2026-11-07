@@ -97,7 +97,7 @@ BEGIN
       $q$IF NOT public.has_permission(v_uid, 'billing.view') THEN$q$, 'IF false THEN');
     WHEN 'suspend_no_perm' THEN RETURN pg_temp.mut_fn('public.admin_suspend_org(uuid,text,text)',
       $q$IF NOT public.has_permission(v_uid, 'billing.suspend') THEN$q$, 'IF false THEN');
-    WHEN 'reinstate_no_perm' THEN RETURN pg_temp.mut_fn('public.admin_reinstate_org(uuid,text)',
+    WHEN 'reinstate_no_perm' THEN RETURN pg_temp.mut_fn('public.admin_reinstate_org(uuid,text,boolean)',
       $q$IF NOT public.has_permission(v_uid, 'billing.suspend') THEN$q$, 'IF false THEN');
     WHEN 'am_check_caller_only' THEN RETURN pg_temp.mut_fn(s,
       'WHERE ir2.user_id = p_account_manager_id AND',

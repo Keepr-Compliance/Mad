@@ -1,6 +1,6 @@
 /**
- * "Account suspended" email to a brokerage's billing contact (BACKLOG-3853 PR-2, founder B4:
- * Keepr sends only "seats added" and "account suspended"; there is no reinstated email).
+ * "Account suspended" email to a brokerage's billing contact (BACKLOG-3853 PR-2). The reinstated
+ * email is BACKLOG-4209 (org-reinstated.ts / org-auto-reinstated.ts; founder ask superseded B4).
  * Sent once per suspension by the billing outbox (kind notify_org_suspended).
  *
  * BACKLOG-3853 PR-2B (founder 64e00066, 1e164f56): a Non-payment suspension carries a

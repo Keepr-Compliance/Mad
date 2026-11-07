@@ -26,7 +26,12 @@ jest.mock('@sentry/nextjs', () => ({
   captureMessage: (...a: unknown[]) => mockCaptureMessage(...a),
   captureException: jest.fn(),
 }));
-jest.mock('@/lib/email', () => ({}));
+const mockReinstatedEmail = jest.fn();
+// BACKLOG-4209: the reinstated email is queued by the database (_billing_reinstate_org), never sent here.
+jest.mock('@/lib/email', () => ({
+  sendOrgReinstatedEmail: (...a: unknown[]) => mockReinstatedEmail('staff', ...a),
+  sendOrgAutoReinstatedEmail: (...a: unknown[]) => mockReinstatedEmail('auto', ...a),
+}));
 jest.mock('@/lib/supabase/service', () => ({ createServiceClient: () => fake.service }));
 jest.mock('stripe', () => {
   const r = (kind: string) => (id: string, params?: unknown) => mockRetrieve(kind, id, params);
@@ -283,6 +288,15 @@ describe('auto-reinstate (non-payment suspensions only, after a payment)', () =>
     await deliver(activeEnvelope());
     expect(mirror().status).toBe('active');
     expect(deal().status).toBe('active');
+  });
+
+  it('C-12e (BACKLOG-4209): the reinstate is one rpc and the webhook sends no email itself', async () => {
+    suspended('non_payment');
+    serve(INV_PAID, SUB_ACTIVE);
+    await deliver(paidEnvelope());
+    expect(deal().status).toBe('active');
+    expect(fake.callsTo('_billing_auto_reinstate')).toHaveLength(1);
+    expect(mockReinstatedEmail).not.toHaveBeenCalled();
   });
 
   it('C-12: an open invoice still past due -> not reinstated', async () => {
