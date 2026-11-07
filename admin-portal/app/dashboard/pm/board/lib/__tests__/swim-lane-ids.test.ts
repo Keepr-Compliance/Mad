@@ -186,7 +186,7 @@ describe('Label lanes (BACKLOG-4196)', () => {
   });
 
   it('C10: isSwimLaneMode accepts the selector modes and nothing else', () => {
-    for (const m of ['off', 'project', 'area', 'assignee', 'label']) expect(isSwimLaneMode(m)).toBe(true);
-    for (const m of ['sprint', 'epic', '', null, undefined, 3]) expect(isSwimLaneMode(m)).toBe(false);
+    for (const m of ['off', 'project', 'area', 'assignee', 'label', 'sprint']) expect(isSwimLaneMode(m)).toBe(true);
+    for (const m of ['epic', 'cohort', '', null, undefined, 3]) expect(isSwimLaneMode(m)).toBe(false);
   });
 });

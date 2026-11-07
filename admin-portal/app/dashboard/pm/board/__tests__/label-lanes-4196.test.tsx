@@ -256,7 +256,7 @@ describe('labels on the board', () => {
   });
 
   it('C10: an unknown persisted mode falls back to Project', async () => {
-    persist({ swimLane: 'sprint' });
+    persist({ swimLane: 'swimlane-from-a-newer-build' });
     const { result } = renderHook(() => useBoardData());
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.swimLane).toBe('project');

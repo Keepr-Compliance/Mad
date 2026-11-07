@@ -64,7 +64,8 @@ export function BoardFilters({
   }, [sprints, sprintSearch]);
 
   const selectedSprint = sprints.find((s) => s.id === selectedSprintId);
-  const projectMode = swimLane === 'project';
+  // Project and Sprint mode show one whole project: project picker, no sprint selector.
+  const projectScoped = swimLane === 'project' || swimLane === 'sprint';
   const sortedProjects = useMemo(
     () => [...projects].sort((a, b) => a.name.localeCompare(b.name)),
     [projects]
@@ -86,8 +87,8 @@ export function BoardFilters({
           <h1 className="text-lg font-semibold text-gray-900">Board</h1>
         </div>
 
-        {/* Project picker (Project mode only, searchable) */}
-        {projectMode && (
+        {/* Project picker (Project / Sprint mode only, searchable) */}
+        {projectScoped && (
           <div className="relative">
             <button
               data-testid="project-picker"
@@ -168,7 +169,7 @@ export function BoardFilters({
         )}
 
         {/* Sprint selector dropdown (searchable) */}
-        {!projectMode && (
+        {!projectScoped && (
           <div className="relative">
             <button
               onClick={() => {
@@ -294,7 +295,7 @@ export function BoardFilters({
             className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`}
           />
         </button>
-        {!projectMode && (
+        {!projectScoped && (
           <button
             onClick={onBacklogToggle}
             className={`px-3 py-1.5 text-sm rounded-lg border transition-colors ${

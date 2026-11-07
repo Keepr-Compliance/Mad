@@ -30,6 +30,7 @@ import {
   bulkUpdate,
   bulkDelete,
   assignToSprint,
+  updateItemField,
   listAssignableUsers,
   listLabels,
 } from '@/lib/pm-queries';
@@ -43,7 +44,8 @@ import type {
   CreateItemParams,
 } from '@/lib/pm-types';
 import type { AssignableUser } from '../../components/KanbanCard';
-import { isSwimLaneMode, NO_EPIC_KEY } from '../lib/swim-lane-ids';
+import { isSwimLaneMode, NO_EPIC_KEY, NO_SPRINT_KEY } from '../lib/swim-lane-ids';
+import { isClosedSprint, sprintLaneLabel, type SprintDropPlan } from '../lib/sprint-lanes';
 
 // ---------------------------------------------------------------------------
 // Board state persistence
@@ -203,17 +205,20 @@ export function useBoardData() {
     refreshLabels();
   }, [refreshLabels]);
 
+  // Project mode: epic rows. Sprint mode (BACKLOG-4196): sprint rows. Both
+  // show one whole project, so both fetch by project and hide the sprint.
   const projectMode = swimLane === 'project';
-  // The board's source: a project in Project mode, the sprint otherwise.
-  const boardSourceKey = projectMode ? `project:${selectedProjectId}` : `sprint:${selectedSprintId}`;
+  const projectScoped = swimLane === 'project' || swimLane === 'sprint';
+  // The board's source: a project in Project/Sprint mode, the sprint otherwise.
+  const boardSourceKey = projectScoped ? `project:${selectedProjectId}` : `sprint:${selectedSprintId}`;
   // Latest board source (mode + project/sprint), read after awaits to drop
   // stale responses: a newer project or sprint, or a mode switch such as
   // Project -> Area, while the fetch was in flight.
   const boardSourceRef = useRef(boardSourceKey);
   boardSourceRef.current = boardSourceKey;
-  // The sprint only matters outside Project mode; keeping it out of Project
-  // mode's deps stops a late sprint-list load from refetching the project.
-  const sprintForLoad = projectMode ? '' : selectedSprintId;
+  // The sprint only matters outside the project-scoped modes; keeping it out
+  // of their deps stops a late sprint-list load from refetching the project.
+  const sprintForLoad = projectScoped ? '' : selectedSprintId;
 
   /**
    * Read the labels of every item in `data`, merge them onto the items and
@@ -249,8 +254,8 @@ export function useBoardData() {
   }, []);
 
   const loadBoardData = useCallback(async () => {
-    // Project mode (BACKLOG-4176): every item of one project, no sprint.
-    if (projectMode) {
+    // Project / Sprint mode (BACKLOG-4176, 4196): every item of one project.
+    if (projectScoped) {
       if (!selectedProjectId) {
         setColumns(emptyBoardColumns());
         setLoading(false);
@@ -306,7 +311,7 @@ export function useBoardData() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [projectMode, selectedProjectId, sprintForLoad, showColumnsWithLabels]);
+  }, [projectScoped, selectedProjectId, sprintForLoad, showColumnsWithLabels]);
 
   const handleItemUpdated = useCallback(() => {
     loadBoardData();
@@ -323,9 +328,9 @@ export function useBoardData() {
 
   useEffect(() => {
     if (!hydrated) return;
-    if (projectMode) { setLoading(true); loadBoardData(); return; }
+    if (projectScoped) { setLoading(true); loadBoardData(); return; }
     if (sprintForLoad) { setLoading(true); loadBoardData(); }
-  }, [hydrated, projectMode, sprintForLoad, loadBoardData]);
+  }, [hydrated, projectScoped, sprintForLoad, loadBoardData]);
 
   const loadBacklogItems = useCallback(async (search?: string) => {
     setBacklogLoading(true);
@@ -377,6 +382,36 @@ export function useBoardData() {
 
   const handleQuickAdd = useCallback(
     async (title: string, status: ItemStatus, groupKey?: string) => {
+      // Sprint mode: item in the picked project, in the row's sprint.
+      if (swimLane === 'sprint') {
+        if (!selectedProjectId) return;
+        const sprintId = groupKey && groupKey !== NO_SPRINT_KEY ? groupKey : null;
+        if (sprintId) {
+          // Refuse a row whose sprint holds no loaded item of the picked
+          // project (stale board), or a closed sprint.
+          const loadedRow = (Object.values(columns) as PmBacklogItem[][]).some((items) =>
+            items.some((i) => i.sprint_id === sprintId && i.project_id === selectedProjectId)
+          );
+          if (!loadedRow) {
+            setBoardError('Could not add the item. The board is still loading. Try again.');
+            return;
+          }
+          const sprint = sprints.find((s) => s.id === sprintId);
+          if (sprint && isClosedSprint(sprint)) {
+            setBoardError(`Cannot add items to ${sprintLaneLabel(sprint.id, sprint)}: the sprint is closed.`);
+            return;
+          }
+        }
+        try {
+          const created = await createItem({ title, project_id: selectedProjectId, sprint_id: sprintId });
+          if (status !== 'pending' && created.id) await updateItemStatus(created.id, status);
+        } catch (err) {
+          console.error('Failed to add sprint item:', err);
+          setBoardError('Could not add the item. Try again.');
+        }
+        await loadBoardData();
+        return;
+      }
       // Project mode "Add backlog": item in the picked project, under the
       // row's epic, no sprint.
       if (projectMode) {
@@ -434,7 +469,7 @@ export function useBoardData() {
         console.error('Failed to quick-add item:', err);
       }
     },
-    [projectMode, selectedProjectId, selectedSprintId, swimLane, columns, loadBoardData]
+    [projectMode, selectedProjectId, selectedSprintId, swimLane, columns, sprints, loadBoardData]
   );
 
   /** Project mode: create a new epic in the picked project (a new row). */
@@ -483,6 +518,37 @@ export function useBoardData() {
     [loadBoardData]
   );
 
+  /**
+   * Sprint mode: move an item to another sprint row. Status is written
+   * first, then the sprint (assignToSprint, or sprint_id cleared for
+   * "No sprint").
+   */
+  const handleSprintMove = useCallback(
+    async (item: PmBacklogItem, plan: SprintDropPlan) => {
+      setBoardError(null);
+      let statusSaved = false;
+      try {
+        if (plan.status) {
+          await updateItemStatus(item.id, plan.status);
+          statusSaved = true;
+        }
+        if (plan.sprint) {
+          if (plan.sprint.sprintId) await assignToSprint([item.id], plan.sprint.sprintId);
+          else await updateItemField(item.id, 'sprint_id', null);
+        }
+      } catch (err) {
+        console.error('Failed to move item between sprints:', err);
+        setBoardError(
+          statusSaved
+            ? `#${item.item_number}: the status was saved but the sprint move failed. The board was reloaded.`
+            : `Could not move #${item.item_number}. The board was reloaded.`
+        );
+      }
+      await loadBoardData();
+    },
+    [loadBoardData]
+  );
+
   const handleToggleSelect = useCallback((itemId: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -505,8 +571,9 @@ export function useBoardData() {
   }, [selectedIds, loadBoardData]);
 
   const handleBulkAssignSprint = useCallback(async () => {
-    // Project mode has no sprint on screen; never assign to a hidden one.
-    if (projectMode) return;
+    // Project and Sprint mode have no selected sprint on screen; never
+    // assign to a hidden (persisted) one.
+    if (projectScoped) return;
     if (selectedIds.size === 0 || !selectedSprintId) return;
     try {
       await assignToSprint(Array.from(selectedIds), selectedSprintId);
@@ -516,7 +583,7 @@ export function useBoardData() {
       console.error('Failed to bulk assign to sprint:', err);
       setBulkError('Failed to assign to sprint. Please try again.');
     }
-  }, [projectMode, selectedIds, selectedSprintId, loadBoardData]);
+  }, [projectScoped, selectedIds, selectedSprintId, loadBoardData]);
 
   const handleBulkAssignUser = useCallback(async (assigneeId: string | null) => {
     if (selectedIds.size === 0) return;
@@ -567,6 +634,7 @@ export function useBoardData() {
     setSelectedProjectId,
     projects,
     projectMode,
+    projectScoped,
     boardError,
     setBoardError,
     labelsFailed,
@@ -602,6 +670,7 @@ export function useBoardData() {
     handleQuickAdd,
     handleAddEpic,
     handleEpicMove,
+    handleSprintMove,
     handleToggleSelect,
     handleBulkStatusChange,
     handleBulkAssignSprint,

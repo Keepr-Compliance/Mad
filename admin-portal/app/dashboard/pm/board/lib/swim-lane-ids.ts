@@ -6,7 +6,7 @@
  *
  * Droppable id format (structured):
  *
- *   cell:dim=<project|area|assignee|epic|label>:key=<groupKey>:status=<status>
+ *   cell:dim=<project|area|assignee|epic|label|sprint>:key=<groupKey>:status=<status>
  *
  * In Project mode the board shows one row per epic (BACKLOG-4176); those
  * cells use `dim=epic` with the epic's id as key, or NO_EPIC_KEY.
@@ -15,6 +15,10 @@
  * label's row, so one item can have several cards on screen. Each copy gets
  * its own sortable id, `card:<itemId>:lane=<groupKey>`; itemIdFromSortableId
  * turns it back into the item id.
+ *
+ * In Sprint mode (BACKLOG-4196) the board shows one project, one row per
+ * sprint; those cells use `dim=sprint` with the sprint id as key, or
+ * NO_SPRINT_KEY.
  */
 
 import type { ItemStatus } from '@/lib/pm-types';
@@ -28,10 +32,13 @@ export const NO_EPIC_KEY = 'No Epic';
 /** Row key for items in Label mode that have no label. */
 export const NO_LABEL_KEY = 'No label';
 
-export type SwimLaneDimension = 'project' | 'area' | 'assignee' | 'epic' | 'label';
+/** Row key for items in Sprint mode that have no sprint. */
+export const NO_SPRINT_KEY = 'No sprint';
+
+export type SwimLaneDimension = 'project' | 'area' | 'assignee' | 'epic' | 'label' | 'sprint';
 
 /** Every swim-lane mode the board can show (the selector's values). */
-export const SWIM_LANE_MODES = ['off', 'project', 'area', 'assignee', 'label'] as const;
+export const SWIM_LANE_MODES = ['off', 'project', 'area', 'assignee', 'label', 'sprint'] as const;
 
 /** True for a value that is one of SWIM_LANE_MODES (e.g. a persisted one). */
 export function isSwimLaneMode(value: unknown): value is (typeof SWIM_LANE_MODES)[number] {
@@ -90,7 +97,7 @@ export function parseSwimLaneCellId(overId: string): ParsedSwimLaneCell | null {
   // "No Project", "No Area", "Unassigned", area/assignee names) are colon-
   // free; any id carrying a `:` in the key is malformed and returns null.
   const match = overId.match(
-    /^cell:dim=(project|area|assignee|epic|label):key=([^:]+):status=([a-z_]+)$/
+    /^cell:dim=(project|area|assignee|epic|label|sprint):key=([^:]+):status=([a-z_]+)$/
   );
   if (!match) return null;
   const [, dimension, groupKey, status] = match;
