@@ -96,14 +96,14 @@ export const handleNotifyOrgReinstatedRow: OutboxHandler = async (row: OutboxRow
 
   const { data: sub, error: sErr } = await service
     .from('org_billing_stripe')
-    .select('status, current_period_end')
+    .select('status, stripe_subscription_id, current_period_end')
     .eq('organization_id', org)
     .eq('stripe_mode', d.stripe_mode ?? row.stripe_mode)
     .maybeSingle();
   if (sErr) throw new Error(`org_billing_stripe read failed: ${sErr.code ?? 'unknown'}`);
-  const s = sub as { status?: string | null; current_period_end?: unknown } | null;
+  const s = sub as { status?: string | null; stripe_subscription_id?: string | null; current_period_end?: unknown } | null;
   let billing: BillingLine;
-  if (!s || s.status === 'canceled') {
+  if (!s || !s.stripe_subscription_id || !s.status || s.status === 'canceled') {
     console.info(`[billing/org-reinstated] ${row.id}: no live subscription; sending without the billing line`);
     billing = { kind: 'none' };
   } else if (d.status === 'active') {

@@ -68,7 +68,7 @@ beforeEach(() => {
   fake = createBrokerageFake({
     organizations: [{ id: ORG, name: 'Brokerage 4209 RE', is_test: true }],
     org_deals: [dealRow(ORG, { version: 3, status: 'active' })],
-    org_billing_stripe: [{ organization_id: ORG, stripe_mode: 'test', status: 'active', current_period_end: FUTURE, cancel_at_period_end: false }],
+    org_billing_stripe: [{ organization_id: ORG, stripe_mode: 'test', status: 'active', stripe_subscription_id: 'sub_4209', current_period_end: FUTURE, cancel_at_period_end: false }],
     billing_change_log: [suspendedRow(T1), reinstatedRow(T2)],
     email_delivery_log: [],
   });
@@ -145,6 +145,13 @@ describe('notify_org_reinstated', () => {
   it('J10 (D1): no subscription row -> sends without the billing line', async () => {
     fake.db.rows('org_billing_stripe').length = 0;
     await handleNotifyOrgReinstatedRow(row(), ctx());
+    expect(sent()[0].billing).toEqual({ kind: 'none' });
+  });
+
+  it('J10b (D1): customer row with no subscription yet (NULL subscription id and status) -> sends without the billing line', async () => {
+    Object.assign(fake.db.rows('org_billing_stripe')[0], { stripe_subscription_id: null, status: null });
+    await handleNotifyOrgReinstatedRow(row(), ctx());
+    expect(sent()).toHaveLength(1);
     expect(sent()[0].billing).toEqual({ kind: 'none' });
   });
 
