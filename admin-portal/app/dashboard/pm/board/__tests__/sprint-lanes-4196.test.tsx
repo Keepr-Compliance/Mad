@@ -243,6 +243,12 @@ describe('Sprint mode loading', () => {
     expect(allIds(result.current.columns)).toEqual(ITEMS.map((i) => i.id).sort());
   });
 
+  it('a sprint list arriving after mount does not refetch the project', async () => {
+    const { result } = await mountSprintMode();
+    await waitFor(() => expect(result.current.selectedSprintId).toBe(ACTIVE.id));
+    expect(q.getBoardTasks).toHaveBeenCalledTimes(1);
+  });
+
   it('merges labels onto items in Sprint mode', async () => {
     const label = { id: 'label-x', name: 'X', color: '#000000', project_id: null };
     q.fetchItemLabels.mockResolvedValue(new Map([['in-active', [label]]]));
