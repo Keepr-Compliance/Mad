@@ -12,6 +12,18 @@ import { wrapHandler } from "../wrapHandler";
 import { ValidationError } from "../validation";
 import logService from "../../services/logService";
 import type { IpcMainInvokeEvent } from "electron";
+import * as Sentry from "@sentry/electron/main";
+import { PaywallLockedError } from "../../services/exportGate";
+
+// exportGate imports these services; stub them so this suite stays a unit test.
+jest.mock("../../services/entitlementService", () => ({
+  __esModule: true,
+  default: { getExportDecision: jest.fn() },
+}));
+jest.mock("../../services/supabaseService", () => ({
+  __esModule: true,
+  default: { trackEvent: jest.fn() },
+}));
 
 // Mock logService
 jest.mock("../../services/logService", () => ({
@@ -195,5 +207,62 @@ describe("wrapHandler", () => {
       "IPC",
       { error: null },
     );
+  });
+});
+
+// BACKLOG-2081 Part 2: a locked-transaction export is expected control flow.
+// Sentry here is the global mock (tests/__mocks__/sentry-electron.js);
+// jest.clearAllMocks() in beforeEach resets its call counts per case.
+describe("wrapHandler — PaywallLockedError exemption (BACKLOG-2081)", () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("P2-C1: PaywallLockedError returns its exact message, no Sentry, no error log, one info log", async () => {
+    const handler = jest.fn().mockRejectedValue(new PaywallLockedError());
+
+    const wrapped = wrapHandler(handler, { module: "Transactions" });
+    const result = await wrapped(mockEvent);
+
+    expect(result).toEqual({
+      success: false,
+      error: "PAYWALL_LOCKED: This transaction is locked. Unlock it to export.",
+    });
+    expect(Sentry.captureException).toHaveBeenCalledTimes(0);
+    expect(logService.error).toHaveBeenCalledTimes(0);
+    expect(logService.info).toHaveBeenCalledTimes(1);
+    expect(logService.info).toHaveBeenCalledWith(expect.any(String), "Transactions");
+  });
+
+  it("P2-C2a: an Error carrying a DIFFERENT code is still captured once", async () => {
+    const handler = jest
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" }));
+
+    const wrapped = wrapHandler(handler);
+    const result = await wrapped(mockEvent);
+
+    expect(result).toEqual({ success: false, error: "database is locked" });
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+  });
+
+  it("P2-C2b: a plain Error is still captured once", async () => {
+    const handler = jest.fn().mockRejectedValue(new Error("boom"));
+
+    const wrapped = wrapHandler(handler);
+    const result = await wrapped(mockEvent);
+
+    expect(result).toEqual({ success: false, error: "boom" });
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+  });
+
+  it("P2-C3: a PAYWALL_LOCKED-prefixed message WITHOUT the code is still captured and error-logged", async () => {
+    const handler = jest.fn().mockRejectedValue(new Error("PAYWALL_LOCKED: forged"));
+
+    const wrapped = wrapHandler(handler);
+    await wrapped(mockEvent);
+
+    expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+    expect(logService.error).toHaveBeenCalledTimes(1);
   });
 });
