@@ -122,6 +122,8 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
   const rowRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
   /** What to focus after the next render: a row index, the save button, or the name field. */
   const pendingFocus = React.useRef<number | 'save' | 'saveCard' | 'name' | 'leaveCancel' | null>(null);
+  /** The row whose Delete was pressed, kept until the adopter's list no longer holds it (BACKLOG-4095). */
+  const removedRow = React.useRef<{ id: string; index: number } | null>(null);
 
   const unavailable = views === null;
   const list = React.useMemo(() => ownFirst(views ?? []), [views]);
@@ -161,7 +163,25 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
     }
   });
 
+  // After a Delete (BACKLOG-4095): once the view leaves the list, focus the
+  // row that took its place (the next one, or the previous one when the last
+  // row went), else the trigger. While the view is still listed (a refused or
+  // pending delete) nothing moves, so focus stays on that row's Delete.
+  React.useEffect(() => {
+    const removed = removedRow.current;
+    if (removed === null || list.some((v) => v.id === removed.id)) return;
+    removedRow.current = null;
+    if (list.length === 0) {
+      triggerRef.current?.focus();
+      return;
+    }
+    const next = Math.min(removed.index, list.length - 1);
+    setRovingIndex(next);
+    rowRefs.current[next]?.focus();
+  }, [list]);
+
   const close = React.useCallback((restoreFocus: boolean) => {
+    removedRow.current = null;
     setOpen(false);
     setSaveMode(null);
     setName('');
@@ -430,7 +450,10 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
             type="button"
             aria-label={`Delete ${view.name}`}
             title={`Delete ${view.name}`}
-            onClick={() => onDelete(view)}
+            onClick={() => {
+              removedRow.current = { id: view.id, index };
+              onDelete(view);
+            }}
             className="p-1 text-gray-400 hover:text-danger-600"
           >
             <X className="h-3.5 w-3.5" aria-hidden="true" />
