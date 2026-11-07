@@ -108,6 +108,10 @@ import type {
   AssignContactResult,
 } from "./types";
 import { beginLink } from "../../utils/linkInFlight";
+import { BUNDLED_SENDER_RULES } from "../../utils/senderFilter/bundledRules";
+import { buildKeepSets } from "../../utils/senderFilter/senderFilter";
+import { filterForSurface } from "../../utils/senderFilter/siteFilter";
+import { listDealContactEmails } from "../db/dealContactEmailsDb";
 import type { PickerMessage } from "../db/messageDbService";
 
 /**
@@ -138,6 +142,14 @@ export type MessageContactWithName = {
  * Orchestrates the entire transaction extraction workflow
  * Fetches emails -> Analyzes -> Extracts data -> Saves to database
  */
+/**
+ * BACKLOG-4175: the stored `emails.source` value for a connected provider
+ * ("google" -> "gmail", "microsoft" -> "outlook"), as the sync writes it.
+ */
+function emailSourceOf(provider: OAuthProvider): "gmail" | "outlook" {
+  return provider === "google" ? "gmail" : "outlook";
+}
+
 class TransactionService {
   private scanCancelled: boolean = false;
   private currentScanUserId: string | null = null;
@@ -372,7 +384,10 @@ class TransactionService {
 
         this.checkCancelled();
 
-        allEmails.push(...emails);
+        // BACKLOG-4175: tag each message with its mailbox so the sender filter
+        // reads Gmail category labels on Gmail mail only.
+        const source = emailSourceOf(provider);
+        allEmails.push(...emails.map((e) => ({ ...e, source })));
         successfulProviders.push(provider);
         await logService.info(
           `Fetched ${emails.length} emails from ${providerName}`,
@@ -387,6 +402,11 @@ class TransactionService {
         "TransactionService.scanAndExtractTransactions",
         { emailCount: emails.length, userId, providers },
       );
+
+      // BACKLOG-4175: the sender filter runs once, before any extraction path
+      // (pattern, hybrid, and the hybrid-failure fallback). `emails` stays
+      // unfiltered for the scanned count and for saving.
+      const detectorEmails = await this._filterDetectorInput(userId, emails);
 
       this.checkCancelled();
 
@@ -417,14 +437,14 @@ class TransactionService {
 
       if (strategy.method === "pattern") {
         extractionResult = await this._patternOnlyExtraction(
-          emails,
+          detectorEmails,
           userId,
           onProgress,
         );
       } else {
         try {
           extractionResult = await this._hybridExtraction(
-            emails,
+            detectorEmails,
             userId,
             strategy,
             onProgress,
@@ -439,7 +459,7 @@ class TransactionService {
             },
           );
           extractionResult = await this._patternOnlyExtraction(
-            emails,
+            detectorEmails,
             userId,
             onProgress,
           );
@@ -541,6 +561,28 @@ class TransactionService {
     } finally {
       this.currentScanUserId = null;
     }
+  }
+
+  /**
+   * BACKLOG-4175: the detector's sender filter. Drops messages a LIVE signal
+   * suppresses on the `detector` surface (keep rules K1-K3 first, except the
+   * exact seeds, which win); logs counts per signal and mode only.
+   */
+  private async _filterDetectorInput(userId: string, emails: EmailMessage[]): Promise<EmailMessage[]> {
+    const rules = BUNDLED_SENDER_RULES;
+    const keep = buildKeepSets(listDealContactEmails(userId), rules);
+    const { passed, counts } = filterForSurface(
+      emails,
+      (e) => ({ sender: e.from, source: e.source, labels: e.labels, bulkMailHeaders: e.bulkMailHeaders }),
+      rules,
+      "detector",
+      keep,
+    );
+    await logService.info("[BACKLOG-4175] detector sender filter", "TransactionService.scanAndExtractTransactions", {
+      senderRulesVersion: rules.version,
+      ...counts,
+    });
+    return passed;
   }
 
   /**
@@ -1944,6 +1986,9 @@ class TransactionService {
       bodyPreview: email.bodyPreview,
       date: email.date || new Date().toISOString(),
     }));
+    // BACKLOG-4175: deliberately NOT sender-filtered. reanalyzeProperty has no
+    // renderer caller (no src/ use of the reanalyze bridge method), so no user
+    // action reaches it; filter it when something wires it.
     const analyzed = transactionExtractorService.batchAnalyze(emailsForAnalysis);
     const realEstateEmails = analyzed.filter((a) => a.isRealEstateRelated);
 

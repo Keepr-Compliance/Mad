@@ -12,8 +12,12 @@
  * Pure data. No imports, no I/O.
  */
 
-/** Bump when any rule below changes meaning. */
-export const LEARN_RULE_VERSION = 1;
+/**
+ * Bump when any rule below changes meaning, or when question generation
+ * changes. v2 (BACKLOG-4175): cleanup questions leave out detections whose
+ * every message is from an exact sender seed.
+ */
+export const LEARN_RULE_VERSION = 2;
 
 export const LEARN_RULES = {
   version: LEARN_RULE_VERSION,
