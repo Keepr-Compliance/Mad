@@ -114,6 +114,12 @@ describe('self and above-caller rows', () => {
     expect(within(row('Name below')).getByText('Remove')).toBeTruthy();
   });
 
+  it('Resend shows only on invitations whose role is grantable', () => {
+    renderTable(new Set(['role-low']));
+    expect(within(row('inv-low@example.test')).queryByText('Resend')).not.toBeNull();
+    expect(within(row('inv-top@example.test')).queryByText('Resend')).toBeNull();
+  });
+
   it('Cancel shows only on invitations whose role is grantable', () => {
     renderTable(new Set(['role-low']));
     expect(within(row('inv-low@example.test')).queryByText('Cancel')).not.toBeNull();

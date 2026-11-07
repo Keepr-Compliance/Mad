@@ -107,6 +107,17 @@ describe('auth callback invitation accept (BACKLOG-4168)', () => {
     expect(s.log).toContain('audit:auth.login_denied:invitation_not_accepted');
   });
 
+  it('an existing internal user with a stale invitation: refusal keeps the role and the login', async () => {
+    s.roleRows.add('user-fixture-1');
+    s.existingUser = { id: 'user-fixture-1' };
+    s.accept = { data: null, error: { code: '42501', message: 'Not permitted' } };
+    const res = await call();
+    expect(s.log).toContain(ACCEPT);
+    expect(s.roleRows.has('user-fixture-1')).toBe(true);
+    expect(s.signedOut).toBe(0);
+    expect(res.headers.get('location')).toBe('https://admin.test/dashboard');
+  });
+
   it('no invitation: no users insert, no RPC, denied as before', async () => {
     s.invitation = null;
     const res = await call();

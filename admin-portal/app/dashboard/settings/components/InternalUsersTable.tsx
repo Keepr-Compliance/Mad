@@ -520,6 +520,7 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
                 {canManage && (
                   <td className="px-6 py-4 whitespace-nowrap text-right">
                     <div className="inline-flex items-center gap-3">
+                      {canGrant(invitation.role_id) && (
                       <button
                         onClick={() => handleResendInvitation(invitation.id)}
                         disabled={resendingInvitation === invitation.id}
@@ -528,6 +529,7 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
                         <RotateCw className={`h-3.5 w-3.5 ${resendingInvitation === invitation.id ? 'animate-spin' : ''}`} />
                         {resendSuccess === invitation.id ? 'Sent!' : resendingInvitation === invitation.id ? 'Sending...' : 'Resend'}
                       </button>
+                      )}
                       {canGrant(invitation.role_id) && (
                       <button
                         onClick={() => handleCancelInvitation(invitation.id)}
