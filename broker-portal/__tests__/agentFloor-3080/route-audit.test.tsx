@@ -471,6 +471,19 @@ const BILLING_PAGES: Record<string, PageEntry> = {
   },
 };
 
+/**
+ * BACKLOG-3505: the Reports index, gated by lib/reports/report-gate.ts. PR-1
+ * registers no report, so it refuses EVERY persona (feature forced on in this
+ * file), full roles included. The per-role rule is covered in
+ * __tests__/reports-3505 against an injected registry.
+ */
+const REPORTS_PAGES: Record<string, PageEntry> = {
+  'app/dashboard/reports/page.tsx': {
+    invoke: async () => (await import('@/app/dashboard/reports/page')).default(),
+    refused: { notFound: true },
+  },
+};
+
 const PLAN_GATED_ADMITTED = {
   'brokerage agent': [brokerageMembership('agent')],
   '[brokerage agent, personal-org owner]': [brokerageMembership('agent'), personalMembership()],
@@ -988,7 +1001,7 @@ describe('discovery can see what it claims to see', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
     expect(pages).toContain('app/dashboard/users/[id]/page.tsx');
-    expect(pages.length).toBe(18); // BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
+    expect(pages.length).toBe(19); // BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
   });
 
   it('finds route handlers, keyed POSIX on any OS (R8)', () => {
@@ -1031,6 +1044,20 @@ describe('discovery can see what it claims to see', () => {
   });
 });
 
+describe('reports index with the shipped registry (BACKLOG-3505)', () => {
+  const page = REPORTS_PAGES['app/dashboard/reports/page.tsx'];
+  it.each([
+    ...Object.entries(PERSONAS),
+    ['brokerage broker', [brokerageMembership('broker')]],
+    ['brokerage admin', ADMIN],
+    ['brokerage it_admin', [brokerageMembership('it_admin')]],
+  ] as [string, readonly Row[]][])('refuses the %s and writes nothing', async (_n, rows) => {
+    given(rows);
+    expect(await run(page.invoke)).toEqual(page.refused);
+    expect(mockEmulator.state.writes).toEqual([]);
+  });
+});
+
 describe('set completeness', () => {
   it('every dashboard page is classified exactly once', () => {
     const classified = [
@@ -1039,6 +1066,7 @@ describe('set completeness', () => {
       ...Object.keys(OWN_GATE_PAGES),
       ...Object.keys(PLAN_GATED_PAGES),
       ...Object.keys(BILLING_PAGES),
+      ...Object.keys(REPORTS_PAGES),
     ];
     expect(new Set(classified).size).toBe(classified.length);
     expect(discoverDashboardPages()).toEqual([...classified].sort());
