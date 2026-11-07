@@ -26,6 +26,14 @@ export interface StoredEmailInput {
   recipients?: string;
   source?: "gmail" | "outlook";
   hasAttachments?: boolean;
+  /** emails.account_id; default "acct-4175". null stores NULL. */
+  accountId?: string | null;
+  /** Gmail labels / Outlook categories, JSON-encoded as the sync does (empty → NULL). */
+  labels?: string[];
+  /** Retained bulk headers, JSON-encoded as the sync does (empty → NULL). Keys from bulkMailHeaders.ts. */
+  bulkMailHeaders?: Record<string, string | string[]>;
+  /** emails.thread_id; default `th-<id>`. */
+  threadId?: string;
 }
 
 export function gmailFrom(name: string, address: string): string {
@@ -42,7 +50,7 @@ export function insertStoredEmail(db: DatabaseType, e: StoredEmailInput): void {
     e.userId,
     `ext-${e.id}`,
     e.source ?? "gmail",
-    "acct-4175",
+    e.accountId === undefined ? "acct-4175" : e.accountId,
     "inbound",
     e.subject,
     e.bodyPlain,
@@ -51,7 +59,7 @@ export function insertStoredEmail(db: DatabaseType, e: StoredEmailInput): void {
     e.recipients ?? "me@example.test",
     null,
     null,
-    `th-${e.id}`,
+    e.threadId ?? `th-${e.id}`,
     null,
     null,
     e.sentAt,
@@ -60,8 +68,9 @@ export function insertStoredEmail(db: DatabaseType, e: StoredEmailInput): void {
     0,
     `<${e.id}@mail.example.test>`,
     "c".repeat(64),
-    null,
-    null,
+    // Same encoding as emailSyncService.ts:962-977.
+    e.labels && e.labels.length > 0 ? JSON.stringify(e.labels) : null,
+    e.bulkMailHeaders && Object.keys(e.bulkMailHeaders).length > 0 ? JSON.stringify(e.bulkMailHeaders) : null,
     "filter",
     null,
     CURRENT_DERIVATION_VERSION,

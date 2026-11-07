@@ -14,6 +14,8 @@ import {
   COUNT_LIVE_ANSWERS_SQL,
   COUNT_LIVE_BULK_SAMPLE_SQL,
   COUNT_NULL_SENT_AT_SQL,
+  DEAL_CONTACT_EMAILS_SQL,
+  DEAL_LINKED_EMAILS_SQL,
   DEAL_LINKED_SEED_CANDIDATES_SQL,
   DRAW_BULK_CANDIDATES_SQL,
   EMAIL_KEYSET_PAGE_SQL,
@@ -45,6 +47,10 @@ export interface LearnEmailRow {
   body_plain: string | null;
   body_html: string | null;
   sent_at: string;
+  source: string | null;
+  account_id: string | null;
+  labels: string | null;
+  bulk_mail_headers: string | null;
 }
 
 export interface AnswerKeyRow {
@@ -79,6 +85,21 @@ export interface AnsweredBulkRow {
   body_plain: string | null;
   body_html: string | null;
   cached: number;
+  sender: string | null;
+  source: string | null;
+  account_id: string | null;
+  labels: string | null;
+  bulk_mail_headers: string | null;
+}
+
+/** BACKLOG-4175: a message linked to a non-rejected deal, as the sender census reads it. */
+export interface DealLinkedEmailRow {
+  id: string;
+  sender: string | null;
+  source: string | null;
+  account_id: string | null;
+  labels: string | null;
+  bulk_mail_headers: string | null;
 }
 
 function nowIso(): string {
@@ -262,6 +283,16 @@ export function listDealLinkedSeedCandidates(
     userId,
     JSON.stringify(seedAddresses),
   ]);
+}
+
+/** BACKLOG-4175 (K1): contact emails on the user's non-rejected deals. */
+export function listDealContactEmails(userId: string): string[] {
+  return dbAll<{ email: string }>(DEAL_CONTACT_EMAILS_SQL, [userId]).map((r) => r.email);
+}
+
+/** BACKLOG-4175 (census): messages linked to the user's non-rejected deals, once each. */
+export function listDealLinkedEmails(userId: string): DealLinkedEmailRow[] {
+  return dbAll<DealLinkedEmailRow>(DEAL_LINKED_EMAILS_SQL, [userId, userId, userId]);
 }
 
 // ---- preview (read only) --------------------------------------------------

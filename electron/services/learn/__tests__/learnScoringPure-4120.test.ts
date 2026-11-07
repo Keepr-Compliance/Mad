@@ -373,11 +373,22 @@ function run(detections: LearnRunResult["detections"]): LearnRunResult {
     detections,
     senderRulesVersion: 1,
     seedHidesQuestions: true,
+    // No sender filter loss: the filtered runs hold the same detections.
+    filtered: { full: detections, minusContactKeeps: detections },
+    senderStats: {
+      keptBy: { K1: 0, K2: 0, K3: 0 },
+      keepConflicts: 0,
+      coverage: {
+        gmail: { rows: 0, headers: 0, labels: 0 },
+        outlook: { rows: 0, headers: 0, labels: 0 },
+        unknown: { rows: 0, headers: 0, labels: 0 },
+      },
+    },
   };
 }
 
 function det(id: string, address: string, side: "buyer" | "seller" | null = "buyer") {
-  return { id, address, addressKey: addressKey(address), firstMs: T0, lastMs: T0 + DAY, emailCount: 2, emailIds: [], seedEmailIds: [], side };
+  return { id, address, addressKey: addressKey(address), firstMs: T0, lastMs: T0 + DAY, emailCount: 2, emailIds: [], seedEmailIds: [], hiddenEmailIds: [], side };
 }
 
 describe("scoring arithmetic", () => {
