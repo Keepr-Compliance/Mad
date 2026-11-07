@@ -51,6 +51,7 @@ export type {
   SetupReminderParams,
   BillingContactReassignedParams,
   SeatsAddedParams,
+  AutoRenewOnParams,
 } from './types';
 
 // Queue (BACKLOG-2009)
@@ -77,6 +78,7 @@ import { buildAccountManagerAlertEmail } from './templates/account-manager-alert
 import { buildSetupReminderEmail } from './templates/setup-reminder';
 import { buildBillingContactReassignedEmail } from './templates/billing-contact-reassigned';
 import { buildSeatsAddedEmail } from './templates/seats-added';
+import { buildAutoRenewOnEmail } from './templates/auto-renew-on';
 import type {
   InviteEmailParams,
   DownloadInviteEmailParams,
@@ -93,6 +95,7 @@ import type {
   SetupReminderParams,
   BillingContactReassignedParams,
   SeatsAddedParams,
+  AutoRenewOnParams,
   SendEmailResult,
 } from './types';
 
@@ -364,6 +367,23 @@ export async function sendSeatsAddedEmail(params: SeatsAddedParams): Promise<Sen
     emailType: 'other',
     logMetadata: {
       kind: 'seats_added',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+    },
+  });
+}
+
+/** BACKLOG-4045: auto-renew back on, to the billing contact. Log type 'other' (the 4001 type check). */
+export async function sendAutoRenewOnEmail(params: AutoRenewOnParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildAutoRenewOnEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'auto_renew_on',
       outboxKey: params.outboxKey,
       organizationId: params.organizationId,
     },
