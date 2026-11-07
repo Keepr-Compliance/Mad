@@ -122,10 +122,11 @@ describe('BACKLOG-4157 status pill beside the date; icon arrows', () => {
     pillBesideDate(row, /^\w{3} \d+, 2026$/, 'Paid', /\$19\.99/);
   });
 
-  it('View all invoices and Manage billing: accessible name has no arrow character; the icon is aria-hidden', () => {
+  it('Manage billing: accessible name has no arrow character; the icon is aria-hidden (View all invoices is gone, BACKLOG-4187)', () => {
     const { container } = render(<ManageBillingBlock invoices={ORG} />);
-    for (const [action, name] of [['view_all_invoices', 'View all invoices'], ['manage_billing', 'Manage billing']] as const) {
-      const el = (action === 'view_all_invoices' ? container.querySelector(`[data-billing-action="${action}"]`) : [...container.querySelectorAll('button')].find((b) => b.textContent === name))!;
+    expect(container.querySelector('[data-billing-action="view_all_invoices"]')).toBeNull();
+    for (const name of ['Manage billing'] as const) {
+      const el = [...container.querySelectorAll('button')].find((b) => b.textContent === name)!;
       expect(el).toBeTruthy();
       expect(el.textContent).toBe(name);
       expect(el.textContent).not.toMatch(/[\u2197\u2192\u2191\u279c]/);
@@ -144,15 +145,15 @@ describe('BACKLOG-4157 status pill beside the date; icon arrows', () => {
 });
 
 describe('BACKLOG-4139/4140 billing page below lg', () => {
-  it('brokerage invoices stack below lg (not md); Pay, Download PDF, View all, guide link are 44 below lg only', () => {
+  it('brokerage invoices stack below lg (not md); Pay, Download PDF, Manage billing are 44 below lg only', () => {
     const { container, getByText } = render(<ManageBillingBlock invoices={ORG} />);
     stacksBelowLg(container.querySelector('table')!, 'tr[data-org-invoice-row]');
     const actions = container.querySelectorAll('a[data-billing-action], button[data-billing-action]');
-    // Download PDF x2, Pay x1, View all invoices x1
-    expect(actions.length).toBe(4);
+    // Download PDF x2, Pay x1 (BACKLOG-4187: no View all invoices, no guide link)
+    expect(actions.length).toBe(3);
     for (const a of actions) touch(a, LINK);
-    touch(getByText('Where do I find my invoices?'), LINK);
-    touch(getByText(/Manage billing/), BTN);
+    expect(container.querySelector('a[href="/guides/invoices"]')).toBeNull();
+    touch(getByText(/Manage billing/, { selector: 'button' }), BTN);
   });
 
   it('solo receipts stack below lg (not md); View is 44 below lg only', () => {

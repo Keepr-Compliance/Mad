@@ -1,10 +1,11 @@
 /**
  * API Route: Add Internal User
  *
- * Handles two cases:
- *   1. An account with this sign-in email exists -> the RPC assigns the role
- *   2. No such account (RPC SQLSTATE P0002) -> create a pending invitation
- *      (role is auto-assigned on first SSO login via /auth/callback)
+ * One RPC, admin_add_internal_user, handles both cases:
+ *   1. An account with this sign-in email exists -> the role is assigned
+ *   2. No such account -> the RPC records a pending invitation and returns
+ *      {pending: true} (the role is assigned at first sign-in via /auth/callback)
+ * A refusal (SQLSTATE 42501) is a 403 with one generic message.
  *
  * POST /api/internal-users/invite
  * Body: { email: string, role: string }
@@ -12,6 +13,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { NOT_PERMITTED_CODE, NOT_PERMITTED_MESSAGE } from '@/lib/internal-roles';
 
 export async function POST(request: NextRequest) {
   // ── 1. Auth check ──────────────────────────────────────────────────
@@ -69,85 +71,49 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // ── 4. Assign the role to the account whose sign-in email matches ──
-  // admin_add_internal_user finds the account by its auth.users email
-  // (BACKLOG-3998); SQLSTATE P0002 means no account has this email yet.
+  // ── 4. Assign or invite through the RPC ──────────────────────────
+  // admin_add_internal_user (BACKLOG-4168) assigns the role when an account has
+  // this sign-in email and otherwise records the invitation itself, returning
+  // {success, pending: true}. Every refusal is SQLSTATE 42501 'Not permitted'.
   const { data, error } = await supabase.rpc('admin_add_internal_user', {
     p_email: email,
     p_role: roleSlug,
   });
 
-  if (!error) {
-    const result = data as { success: boolean; user_id: string; role: string } | null;
+  if (error) {
+    if (error.code === NOT_PERMITTED_CODE) {
+      return NextResponse.json({ error: NOT_PERMITTED_MESSAGE }, { status: 403 });
+    }
+    console.error('[invite-internal-user] RPC error:', error.message);
+    return NextResponse.json({ error: 'Failed to add user' }, { status: 500 });
+  }
 
-    // Fire-and-forget: send notification email
-    sendInternalInviteNotification(email, roleSlug);
+  const result = data as AddInternalUserResult | null;
 
+  // Fire-and-forget: send notification email
+  sendInternalInviteNotification(email, roleSlug);
+
+  if (result?.pending === true) {
     return NextResponse.json({
       success: true,
-      user_id: result?.user_id,
-      role: result?.role ?? roleSlug,
+      pending: true,
+      outcome: 'invited',
+      message: `Invitation created for ${email} as ${roleRow.slug}. Role will be assigned on first login.`,
     });
   }
-
-  if (error.code !== 'P0002') {
-    console.error('[invite-internal-user] RPC error:', error.message);
-
-    if (error.message?.includes('already has') || error.message?.includes('already an internal')) {
-      return NextResponse.json(
-        { error: `${email} already has an internal role assigned.` },
-        { status: 409 }
-      );
-    }
-
-    return NextResponse.json(
-      { error: error.message || 'Failed to assign role' },
-      { status: 500 }
-    );
-  }
-
-  // ── Case B: User not in system → create pending invitation ──────
-  // Check if already invited
-  const { data: existingInvite } = await supabase
-    .from('pending_internal_invitations')
-    .select('id, email')
-    .eq('email', email)
-    .maybeSingle();
-
-  if (existingInvite) {
-    return NextResponse.json(
-      { error: `${email} already has a pending invitation.` },
-      { status: 409 }
-    );
-  }
-
-  const { error: inviteError } = await supabase
-    .from('pending_internal_invitations')
-    .insert({
-      email,
-      role_id: roleRow.id,
-      invited_by: user.id,
-    });
-
-  if (inviteError) {
-    console.error('[invite-internal-user] invitation insert error:', inviteError.message);
-    return NextResponse.json(
-      { error: 'Failed to create invitation' },
-      { status: 500 }
-    );
-  }
-
-  const roleName = roleRow.slug;
-
-  // Fire-and-forget: send invite email
-  sendInternalInviteNotification(email, roleName);
 
   return NextResponse.json({
     success: true,
-    pending: true,
-    message: `Invitation created for ${email} as ${roleName}. Role will be assigned on first login.`,
+    outcome: 'assigned',
+    user_id: result?.user_id,
+    role: result?.role ?? roleSlug,
   });
 }
+
+/** RETURN shapes of admin_add_internal_user (migration 20261107100000). */
+type AddInternalUserResult =
+  | { success: true; pending: true; email: string; role: string; user_id?: undefined }
+  | { success: true; user_id: string; role: string; pending?: undefined };
 
 // ---------------------------------------------------------------------------
 // Email notification helper

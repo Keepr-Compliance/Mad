@@ -45,6 +45,7 @@ jest.mock("../../config/tourSteps", () => ({
 type Standing = "licensed" | "unlicensed" | "left_brokerage" | "unknown" | "none" | undefined;
 let mockStanding: Standing;
 let mockOrgName: string | undefined;
+let mockOrgId: string | undefined;
 jest.mock("../../contexts/LicenseContext", () => ({
   useLicense: () => ({
     canCreateTransaction: true,
@@ -52,11 +53,13 @@ jest.mock("../../contexts/LicenseContext", () => ({
     transactionLimit: 100,
     membershipStanding: mockStanding,
     membershipOrgName: mockOrgName,
+    membershipOrgId: mockOrgId,
   }),
 }));
 
 const USER_A = "test-user-a";
 const BROKERAGE = "Fixture Brokerage";
+const ORG_ID = "fixture-org-a";
 
 const prefs = () =>
   (window as unknown as {
@@ -80,6 +83,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockStanding = "left_brokerage";
   mockOrgName = BROKERAGE;
+  mockOrgId = ORG_ID;
   prefs().get.mockResolvedValue({ success: true, preferences: {} });
   prefs().update.mockResolvedValue({ success: true, preferences: {} });
 });
@@ -115,7 +119,7 @@ describe("BACKLOG-3951 Dashboard mounts the removed-member notice", () => {
     });
     expect(screen.queryByTestId("membership-notice")).toBeNull();
     expect(prefs().update).toHaveBeenCalledWith(USER_A, {
-      notices: { membershipNoticeDismissedFor: BROKERAGE },
+      notices: { membershipNoticeDismissedFor: ORG_ID },
     });
   });
 
@@ -133,7 +137,7 @@ describe("BACKLOG-3951 Dashboard mounts the removed-member notice", () => {
   it("previously dismissed for this brokerage: not shown on the dashboard", async () => {
     prefs().get.mockResolvedValue({
       success: true,
-      preferences: { notices: { membershipNoticeDismissedFor: BROKERAGE } },
+      preferences: { notices: { membershipNoticeDismissedFor: ORG_ID } },
     });
     await renderDashboard();
     expect(screen.queryByTestId("membership-notice")).toBeNull();

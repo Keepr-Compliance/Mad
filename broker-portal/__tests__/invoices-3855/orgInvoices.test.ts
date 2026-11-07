@@ -160,6 +160,18 @@ describe('C5: status, amount, date, Pay — boundary sweep on the clock', () => 
     expect(rows.map((r) => r.number)).toEqual(['A9SLAZ3T-0005', 'A9SLAZ3T-0004', 'A9SLAZ3T-0003', 'A9SLAZ3T-0002', 'A9SLAZ3T-0001']);
     expect(rows.every((r) => r.status === 'overdue')).toBe(true);
   });
+
+  it('BACKLOG-4187: $0 invoices are skipped before taking five; a $0.01 invoice stays', async () => {
+    const zero = { ...I5, id: `${I5.id as string}_zero`, number: 'ZERO-0001', amount_due: 0, amount_remaining: 0, status: 'paid' as const }; // [EDITED] amount 0
+    const cent = { ...paidInvoice(), amount_due: 1 }; // [EDITED] amount_due 1 (boundary)
+    seed(T, [zero, I5, I4, I3, I2, zero, cent]);
+    const rows = (await read()) as OrgInvoiceRow[];
+    expect(rows.map((r) => r.number)).toEqual(['A9SLAZ3T-0005', 'A9SLAZ3T-0004', 'A9SLAZ3T-0003', 'A9SLAZ3T-0002', 'A9SLAZ3T-0001']);
+    expect(rows[4]).toMatchObject({ status: 'paid', amountCents: 1 });
+    // only $0 invoices -> nothing to show
+    seed(T, [zero]);
+    expect(await read()).toEqual([]);
+  });
 });
 
 describe('C6: https links only', () => {

@@ -14,6 +14,8 @@ import type { UserLicense } from "../models";
 export interface LicenseMembershipStanding {
   standing: "licensed" | "unlicensed" | "left_brokerage" | "unknown" | "none";
   organization_name?: string;
+  /** BACKLOG-4171 — the brokerage's id, set with organization_name for "left_brokerage". */
+  organization_id?: string;
 }
 
 /**

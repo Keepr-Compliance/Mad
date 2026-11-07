@@ -6,6 +6,7 @@ import { usePlatform } from "../../contexts/PlatformContext";
 import {
   isContactSourceOnByDefault,
   normalizePhoneType,
+  resolveInferredEmailSourceEnabled,
 } from "../../utils/contactSourceDefaults";
 import type { PreferencesResult } from './types';
 import type { ImportSource } from "../../services/settingsService";
@@ -148,12 +149,15 @@ export function ContactsSettings({
 
   // Contact source preferences - inferred from conversations
   const [outlookEmailsInferred, setOutlookEmailsInferred] = useState<boolean>(() => {
-    const val = initialPreferences?.contactSources?.inferred?.outlookEmails;
-    return typeof val === "boolean" ? val : false;
+    // BACKLOG-4188: unset → ON, a stored value wins — the main process's rule.
+    return resolveInferredEmailSourceEnabled(
+      initialPreferences?.contactSources?.inferred?.outlookEmails,
+    );
   });
   const [gmailEmailsInferred, setGmailEmailsInferred] = useState<boolean>(() => {
-    const val = initialPreferences?.contactSources?.inferred?.gmailEmails;
-    return typeof val === "boolean" ? val : false;
+    return resolveInferredEmailSourceEnabled(
+      initialPreferences?.contactSources?.inferred?.gmailEmails,
+    );
   });
   // BACKLOG-3670 C1: null = no stored value. Unset → ON for an Android:
   // Google Messages user (the main process applies the same rule to the

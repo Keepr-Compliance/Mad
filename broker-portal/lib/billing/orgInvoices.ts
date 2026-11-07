@@ -20,7 +20,7 @@ import type { StripeMode } from './mode';
 export const ORG_INVOICES_LIMIT = 5;
 /** All Stripe reads together get this long; past it the rows read "unavailable". */
 export const ORG_INVOICES_TIMEOUT_MS = 3000;
-/** One page from Stripe; drafts are skipped before taking ORG_INVOICES_LIMIT. */
+/** One page from Stripe; drafts and $0 invoices are skipped before taking ORG_INVOICES_LIMIT. */
 const LIST_PAGE = 10;
 
 export type OrgInvoiceStatus = 'paid' | 'due' | 'overdue' | 'void' | 'unpaid';
@@ -66,7 +66,8 @@ async function lookup(deps: Deps): Promise<OrgInvoiceRow[] | null> {
       deps.stripe.invoices.list({ customer: customerId, limit: LIST_PAGE }),
     ]);
     return list.data
-      .filter((inv) => inv.status !== 'draft')
+      // BACKLOG-4187: an invoice that asked for nothing (amount_due 0) is not shown.
+      .filter((inv) => inv.status !== 'draft' && inv.amount_due !== 0)
       .slice(0, ORG_INVOICES_LIMIT)
       .map((inv) => toRow(inv, now));
   } catch (e) {

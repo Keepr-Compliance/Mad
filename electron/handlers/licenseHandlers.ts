@@ -69,7 +69,12 @@ interface LicenseResponse {
    * bounded read of ALL their membership rows. Absent when there is no session
    * or the read failed; never changes `license`.
    */
-  membership?: { standing: MembershipStanding["standing"]; organization_name?: string };
+  membership?: {
+    standing: MembershipStanding["standing"];
+    organization_name?: string;
+    /** BACKLOG-4171 — the deciding brokerage's id (set with organization_name). */
+    organization_id?: string;
+  };
 }
 
 /**
@@ -79,12 +84,13 @@ interface LicenseResponse {
 async function membershipField(
   read: Promise<MembershipStanding>
 ): Promise<Pick<LicenseResponse, "membership">> {
-  const { standing, organizationName } = await read;
+  const { standing, organizationName, organizationId } = await read;
   if (standing === "error") return {};
   return {
     membership: {
       standing,
       ...(organizationName ? { organization_name: organizationName } : {}),
+      ...(organizationId ? { organization_id: organizationId } : {}),
     },
   };
 }
