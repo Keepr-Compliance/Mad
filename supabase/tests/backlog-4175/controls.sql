@@ -446,7 +446,7 @@ BEGIN
     s := pg_temp.pub(pg_temp.sig(pg_temp.latest(), 'seedAddress', 'measure'));     -- live -> measure
     vM := CASE WHEN s ~ '^\d+$' THEN s::bigint END;
     s2 := pg_temp.pub(pg_temp.latest(), oX);
-    s3 := pg_temp.pin(oY, s2::bigint);
+    s3 := pg_temp.pin(oY, CASE WHEN s2 ~ '^\d+$' THEN s2::bigint END);
     s4 := pg_temp.revert();
     vN := CASE WHEN s4 ~ '^\d+$' THEN s4::bigint END;
     r := r || jsonb_build_object('S16_revert_all', pg_temp.pass(
