@@ -14,7 +14,7 @@
 import { act, cleanup, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { DndContext, type DragEndEvent } from '@dnd-kit/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { STATUS_COLORS, STATUS_LABELS, type BoardColumns, type PmBacklogItem } from '@/lib/pm-types';
+import { ALLOWED_TRANSITIONS, STATUS_COLORS, STATUS_LABELS, type BoardColumns, type PmBacklogItem } from '@/lib/pm-types';
 import { EPIC_A, makeItem, toColumns } from './board-fixtures';
 
 const q = vi.hoisted(() => ({
@@ -200,6 +200,11 @@ describe('C7 drag out of Pending UAT', () => {
     const { hook, handleStatusChange } = dragHook('off');
     await hook.handleDragEnd(drop('uat-1', 'completed'));
     expect(handleStatusChange).toHaveBeenCalledWith('uat-1', 'completed');
+  });
+
+  it('status picker: Testing offers Pending UAT; Pending UAT offers Completed, Reopened, Testing', () => {
+    expect(ALLOWED_TRANSITIONS.testing).toContain('pending_uat');
+    expect(ALLOWED_TRANSITIONS.pending_uat).toEqual(['completed', 'reopened', 'testing']);
   });
 });
 
