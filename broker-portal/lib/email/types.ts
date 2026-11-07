@@ -356,6 +356,14 @@ export interface SeatsAddedParams {
   organizationId: string;
 }
 
+/** BACKLOG-4045: auto-renew turned back on by Keepr staff, to the billing contact. */
+export interface AutoRenewOnParams {
+  recipientEmail: string;
+  brokerageName: string;
+  outboxKey: string;
+  organizationId: string;
+}
+
 /** BACKLOG-4007 People v2: "You are now the billing contact" (founder R9 refinement). */
 export interface BillingContactReassignedParams {
   recipientEmail: string;
