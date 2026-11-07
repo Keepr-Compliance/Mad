@@ -149,7 +149,39 @@ jest.mock("../logService", () => ({
   },
 }));
 
+/**
+ * BACKLOG-4130: the run's sync_outcomes row. The send is mocked (no network);
+ * `buildSyncOutcomeRow` stays REAL so the assertions read the row the database
+ * would receive.
+ */
+const mockRecordSyncOutcome = jest.fn();
+jest.mock("../syncOutcomeSupabase", () => ({
+  __esModule: true,
+  ...jest.requireActual("../syncOutcomeSupabase"),
+  recordSyncOutcome: (...a: unknown[]) => mockRecordSyncOutcome(...a),
+}));
+
+/**
+ * BACKLOG-4130 C2: the builder, real by default; one test makes it throw
+ * synchronously to prove the throw cannot escape into the run.
+ */
+let builderThrows = false;
+jest.mock("../emailPrecacheOutcome", () => {
+  const actual = jest.requireActual("../emailPrecacheOutcome");
+  return {
+    __esModule: true,
+    ...actual,
+    buildEmailPrecacheOutcomeRow: (...a: unknown[]) => {
+      if (builderThrows) throw new Error("planted builder failure");
+      return actual.buildEmailPrecacheOutcomeRow(...a);
+    },
+  };
+});
+
 import emailSyncService from "../emailSyncService";
+import { buildSyncOutcomeRow } from "../syncOutcomeSupabase";
+import type { SyncOutcomeRow } from "../syncTimeline";
+import { EMAIL_STAGING_TABLE_PREFIX } from "../emailForceStaging";
 import { EMAIL_PRECACHE_TIMING_TAG } from "../emailPrecacheTiming";
 import { instrumentDatabaseTiming } from "../db/core/dbTiming";
 
@@ -335,6 +367,7 @@ function freshDatabase(): void {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  builderThrows = false;
   freshDatabase();
   restoreProviderMocks();
 });
@@ -823,5 +856,155 @@ describe("BACKLOG-2960 — database time is reported separately from total elaps
     // two-run difference failed at 154 and 195 when the baseline ran slow.
     expect(delayed.elapsedMs).toBeGreaterThanOrEqual(PLANTED_MS - TIMER_SLOP_MS);
     expect(delayed.dbMs - baseline.dbMs).toBeLessThan(DID_NOT_RISE);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4130 — the same run, sent to sync_outcomes.
+// ---------------------------------------------------------------------------
+
+/** The one row this run sent, asserting there is exactly one. */
+function theOutcomeRow(): SyncOutcomeRow {
+  expect(mockRecordSyncOutcome).toHaveBeenCalledTimes(1);
+  return mockRecordSyncOutcome.mock.calls[0][0] as SyncOutcomeRow;
+}
+
+/** The row as the database would receive it. */
+function theDbRow(): Record<string, unknown> {
+  return buildSyncOutcomeRow(theOutcomeRow(), "fixture-uid");
+}
+
+const stagingTables = (): string[] =>
+  (
+    db
+      .prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ?`)
+      .all(`${EMAIL_STAGING_TABLE_PREFIX}%`) as Array<{ name: string }>
+  ).map((r) => r.name);
+
+describe("BACKLOG-4130 — one sync_outcomes row per run", () => {
+  /**
+   * C1 (integration half) — exact key sets on BOTH maps.
+   *
+   * `fields` is asserted too: `buildSyncOutcomeRow` silently drops unknown
+   * `fields` keys, so a caller that spread `{ ...timing, userId }` there would
+   * pass every DB-row assertion. Only this assertion sees it.
+   *
+   * MUTATIONS: builder `sourceMetrics: { ...timing, ... }` -> RED;
+   * builder `fields: { ...timing, userId }` -> RED.
+   */
+  it("sends exactly one row, named keys only, no local user id or mail content", async () => {
+    mockOutlookSearch.mockResolvedValue([providerEmail(1)]);
+
+    await emailSyncService.precacheEmails(USER, undefined, { force: false });
+
+    const row = theOutcomeRow();
+    expect(Object.keys(row.fields).sort()).toEqual(["incremental", "runKind"]);
+    const dbRow = theDbRow();
+    expect(Object.keys(dbRow.source_metrics as object).sort()).toEqual(
+      ["backfill", "build", "checked", "dbMs", "providers", "windowMonths", "written"].sort(),
+    );
+    expect(dbRow).toMatchObject({
+      source: "email-precache",
+      outcome: "complete",
+      run_kind: "cache",
+      incremental: false,
+    });
+    expect(dbRow.source_metrics).toMatchObject({
+      providers: ["outlook"],
+      checked: 1,
+      written: 1,
+      windowMonths: 12,
+      backfill: false,
+    });
+    const json = JSON.stringify(row);
+    expect(json).not.toContain(USER);
+    expect(json).not.toContain("example.com");
+    expect(json).not.toContain("Subject");
+    expect(json).not.toContain("thread-");
+  });
+
+  it("matches the timing line it was built from", async () => {
+    mockOutlookSearch.mockResolvedValue([providerEmail(1), providerEmail(2)]);
+    await emailSyncService.precacheEmails(USER, undefined, { force: false });
+
+    const line = theTimingLine();
+    const row = theOutcomeRow();
+    expect(row.elapsedMs).toBe(Number(field(line, "elapsedMs")));
+    expect(row.sourceMetrics?.checked).toBe(Number(field(line, "checked")));
+    expect(row.sourceMetrics?.written).toBe(Number(field(line, "written")));
+  });
+
+  /**
+   * A seeded mailbox is a re-cache. The mocked floor (2026-01-01) is older than
+   * the March seed, so this run also backfills — asserted deliberately.
+   */
+  it("a re-cache over seeded mail reports incremental and backfill", async () => {
+    seedEmail("live-1", "ext-1", "2026-03-01T10:00:00Z");
+    await emailSyncService.precacheEmails(USER, undefined, { force: false });
+
+    const dbRow = theDbRow();
+    expect(dbRow.run_kind).toBe("re-cache");
+    expect(dbRow.incremental).toBe(true);
+    expect((dbRow.source_metrics as { backfill: boolean }).backfill).toBe(true);
+  });
+
+  it("a force run reports run_kind force and what the swap inserted", async () => {
+    seedEmail("live-1", "ext-1", "2026-03-01T10:00:00Z");
+    mockOutlookSearch.mockResolvedValue([providerEmail(1)]);
+
+    const result = await emailSyncService.precacheEmails(USER, undefined, { force: true });
+
+    const dbRow = theDbRow();
+    expect(dbRow.run_kind).toBe("force");
+    expect(dbRow.incremental).toBe(false);
+    expect((dbRow.source_metrics as { inserted: number }).inserted).toBe(result.forceSwap?.emailsInserted);
+    expect((dbRow.source_metrics as { backfill: boolean }).backfill).toBe(false);
+  });
+
+  it("a cancelled run is sent as cancelled", async () => {
+    mockOutlookInit.mockImplementation(async () => {
+      emailSyncService.requestPrecacheCancellation();
+      return true;
+    });
+    await emailSyncService.precacheEmails(USER, undefined, { force: false });
+    expect(theDbRow().outcome).toBe("cancelled");
+  });
+
+  it("the in-progress guard sends nothing", async () => {
+    let release: () => void = () => {};
+    mockOutlookInit.mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return true;
+    });
+    const first = emailSyncService.precacheEmails(USER, undefined, { force: false });
+    await sleep(20);
+    await emailSyncService.precacheEmails(USER, undefined, { force: false });
+    expect(mockRecordSyncOutcome).not.toHaveBeenCalled();
+    release();
+    await first;
+    expect(mockRecordSyncOutcome).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * C2 — THROW SAFETY. A builder that throws synchronously must not reach the
+   * run: the result still comes back, the staging tables are still dropped,
+   * and the timing line is still in the log.
+   *
+   * MUTATION: move the send out of the timing `try` (into the `finally` body
+   * after the `catch`) -> RED.
+   */
+  it("a throwing builder leaves the run result and the staging drop intact", async () => {
+    seedEmail("live-1", "ext-1", "2026-03-01T10:00:00Z");
+    mockOutlookSearch.mockResolvedValue([providerEmail(1)]);
+    builderThrows = true;
+
+    const result = await emailSyncService.precacheEmails(USER, undefined, { force: true });
+
+    expect(result.forceSwap).toBeDefined();
+    expect(stagingTables()).toEqual([]);
+    expect(timingLines()).toHaveLength(1);
+    expect(mockRecordSyncOutcome).not.toHaveBeenCalled();
   });
 });

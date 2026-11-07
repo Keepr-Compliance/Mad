@@ -164,6 +164,9 @@ class EmailAttachmentService {
    * @param externalEmailId - External email ID (Gmail/Outlook message ID)
    * @param source - Email source ("gmail" or "outlook")
    * @param attachments - Array of attachment metadata from the email
+   * @param options.quiet - BACKLOG-4120: no file name in any log line and
+   *   nothing sent to Sentry (Learn mode's single on-demand download). Default
+   *   off; every existing caller is unchanged.
    * @returns Download result with counts and details
    */
   async downloadEmailAttachments(
@@ -171,8 +174,10 @@ class EmailAttachmentService {
     emailId: string,
     externalEmailId: string,
     source: "gmail" | "outlook",
-    attachments: EmailAttachmentMeta[]
+    attachments: EmailAttachmentMeta[],
+    options: { quiet?: boolean } = {}
   ): Promise<DownloadResult> {
+    const quiet = options.quiet === true;
     const result: DownloadResult = {
       success: true,
       stored: 0,
@@ -242,7 +247,8 @@ class EmailAttachmentService {
           attachment,
           attachmentsDir,
           existingHashes,
-          providerAttachmentIdFor(attachment)
+          providerAttachmentIdFor(attachment),
+          quiet
         );
 
         result.details.push(downloadResult);
@@ -269,14 +275,24 @@ class EmailAttachmentService {
         }
         const errorMsg =
           error instanceof Error ? error.message : "Unknown error";
-        await logService.warn(
-          `Failed to process attachment: ${attachment.filename}`,
-          EmailAttachmentService.SERVICE_NAME,
-          { error: errorMsg, emailId }
-        );
-        Sentry.captureException(error, {
-          tags: { service: "email-attachment", operation: "downloadEmailAttachments" },
-        });
+        if (quiet) {
+          // BACKLOG-4120: the name and the message (which can quote a path or
+          // the name) stay out of the log, and nothing goes to Sentry.
+          await logService.warn(
+            "Failed to process attachment",
+            EmailAttachmentService.SERVICE_NAME,
+            { errorName: error instanceof Error ? error.name : typeof error, emailId }
+          );
+        } else {
+          await logService.warn(
+            `Failed to process attachment: ${attachment.filename}`,
+            EmailAttachmentService.SERVICE_NAME,
+            { error: errorMsg, emailId }
+          );
+          Sentry.captureException(error, {
+            tags: { service: "email-attachment", operation: "downloadEmailAttachments" },
+          });
+        }
         result.errors++;
         result.details.push({
           filename: attachment.filename,
@@ -310,7 +326,9 @@ class EmailAttachmentService {
      * BACKLOG-2551: already gated by the caller. BACKLOG-3187: this is Gmail's
      * `partId` or Outlook's Graph id — never a Gmail `attachmentId`.
      */
-    providerAttachmentId: string | null
+    providerAttachmentId: string | null,
+    /** BACKLOG-4120: no file name in a log line. */
+    quiet: boolean = false
   ): Promise<{ filename: string; status: "stored" | "skipped" | "error"; reason?: string }> {
     // BACKLOG-1870: `sanitizedFilename` is ONLY for deriving the on-disk file's
     // extension (the file itself is named by content hash — see below), NOT for the
@@ -325,7 +343,7 @@ class EmailAttachmentService {
     // Skip oversized attachments
     if (attachment.size > MAX_ATTACHMENT_SIZE) {
       await logService.warn(
-        `Skipping oversized attachment: ${displayFilename} (${Math.round(attachment.size / 1024 / 1024)}MB)`,
+        `Skipping oversized attachment: ${quiet ? "(name withheld)" : displayFilename} (${Math.round(attachment.size / 1024 / 1024)}MB)`,
         EmailAttachmentService.SERVICE_NAME
       );
       return {
@@ -443,7 +461,8 @@ class EmailAttachmentService {
         attachment.mimeType,
         data.length,
         storagePath,
-        providerAttachmentId
+        providerAttachmentId,
+        quiet
       );
     }
 
@@ -547,7 +566,8 @@ class EmailAttachmentService {
     mimeType: string,
     fileSize: number,
     storagePath: string,
-    providerAttachmentId: string | null
+    providerAttachmentId: string | null,
+    quiet: boolean = false
   ): Promise<string> {
     const attachmentId = crypto.randomUUID();
 
@@ -565,7 +585,7 @@ class EmailAttachmentService {
     });
 
     await logService.debug(
-      `Created attachment record: ${filename}`,
+      quiet ? "Created attachment record" : `Created attachment record: ${filename}`,
       EmailAttachmentService.SERVICE_NAME,
       { attachmentId, emailId, storagePath }
     );

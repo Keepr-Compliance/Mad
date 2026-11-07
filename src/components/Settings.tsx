@@ -24,6 +24,8 @@ import { AboutSettings } from "./settings/AboutSettings";
 import { SyncToolsSettings } from "./settings/SyncToolsSettings";
 import { useScrollSpy } from "@/hooks/useScrollSpy";
 import { useFeatureGate } from "@/hooks/useFeatureGate";
+import { useStrictFeatureState } from "@/hooks/useStrictFeatureState";
+import { LearnSettings } from "./settings/learn/LearnSettings";
 import { usePlatform } from "@/contexts/PlatformContext";
 import { useIPhoneSyncEnabled } from "@/contexts/IPhoneSyncContext";
 import { OfflineNotice } from './common/OfflineNotice';
@@ -51,15 +53,21 @@ interface SettingsComponentProps {
   onLinkGoogleMessages?: () => void;
   /** BACKLOG-3156 stage G: the iPhone pane's "Import from iPhone" — the dashboard's iPhone sync. */
   onImportIphone?: () => void;
+  /** BACKLOG-4120: Help Keepr learn › Start — Settings closes, the questions open over the main screen. */
+  onStartLearn: (total: number) => void;
+  /** BACKLOG-4120: Help Keepr learn › See score — Settings closes, the score opens over the main screen. */
+  onSeeLearnScore: () => void;
 }
 
 /**
  * Settings — the full Settings page (BACKLOG-3964: no longer a popup). One
  * header row (Back + tabs), one column of section cards.
  */
-function Settings({ onClose, userId, account, initialSection, onSectionReached, onLogout, onEmailConnected, onEmailDisconnected, onLinkGoogleMessages, onImportIphone }: SettingsComponentProps) {
+function Settings({ onClose, userId, account, initialSection, onSectionReached, onLogout, onEmailConnected, onEmailDisconnected, onLinkGoogleMessages, onImportIphone, onStartLearn, onSeeLearnScore }: SettingsComponentProps) {
   const { isAllowed } = useFeatureGate();
   const hasAIAddon = isAllowed("ai_detection");
+  // BACKLOG-4120: strict (fail-closed) read; pending/blocked/unknown = hidden.
+  const learnAvailable = useStrictFeatureState("autodetect_eval") === "allowed";
   // BACKLOG-3423: lets a source change re-gate iPhone USB detection live.
   const { applyImportSource } = useIPhoneSyncEnabled();
   // BACKLOG-1937: renderer-safe platform detection (contextIsolation=true → no process.platform)
@@ -67,7 +75,7 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // BACKLOG-3964: one tab list, shared with the account side panel.
-  const visibleTabs = useMemo(() => visibleSettingsTabs(hasAIAddon), [hasAIAddon]);
+  const visibleTabs = useMemo(() => visibleSettingsTabs(hasAIAddon, learnAvailable), [hasAIAddon, learnAvailable]);
   const visibleTabIds = useMemo(() => visibleTabs.map((t) => t.id), [visibleTabs]);
 
   // Preferences loaded once and distributed to sub-components as initial values
@@ -325,6 +333,10 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
               isGoogleConnected={isGoogleConnected}
               messagesImportSource={activeImportSource}
             />
+
+            {/* BACKLOG-4120: "Help Keepr learn". Outside the AI add-on gate on
+                purpose: Learn mode never uses AI. */}
+            {learnAvailable && <LearnSettings onStart={onStartLearn} onSeeScore={onSeeLearnScore} />}
 
             {/* AI Settings - Only visible with AI add-on (BACKLOG-462) */}
             <FeatureGate requires="ai_addon">

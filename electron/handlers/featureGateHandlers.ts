@@ -187,6 +187,7 @@ const STRICT_FEATURE_KEYS: Record<StrictFeatureKey, true> = {
   email_contact_inference: true,
   desktop_hide_from_export: true,
   transaction_checklists: true,
+  autodetect_eval: true,
 };
 
 /**
@@ -429,6 +430,29 @@ export const TRANSACTION_CHECKLISTS_FEATURE_KEY: StrictFeatureKey =
  */
 export async function isChecklistsAllowed(): Promise<boolean> {
   return isStrictFeatureAllowed(TRANSACTION_CHECKLISTS_FEATURE_KEY);
+}
+
+/**
+ * BACKLOG-4120: the plan key that makes Learn mode ("Help Keepr learn")
+ * available. Named here and nowhere else in main.
+ */
+export const AUTODETECT_EVAL_FEATURE_KEY: StrictFeatureKey = "autodetect_eval";
+
+/**
+ * Is Learn mode available to this user's organization?
+ *
+ * **The only entry point** for the autodetect_eval key (the
+ * {@link isChecklistsAllowed} pattern): `learnModeHandlers` calls this and
+ * never names the key, so the control set has one place to mutate.
+ *
+ * Strict, never `featureGateService.checkFeature`: until the feature row is
+ * applied to the database the key is absent from every plan map, and the
+ * permissive reader answers ALLOWED for an absent key and for no cache, which
+ * would turn Learn mode on for every user. Learn mode is separate from AI
+ * detection: this reads neither `ai_detection` nor `enable_auto_detect`.
+ */
+export async function isAutodetectEvalAllowed(): Promise<boolean> {
+  return isStrictFeatureAllowed(AUTODETECT_EVAL_FEATURE_KEY);
 }
 
 /**

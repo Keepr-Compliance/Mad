@@ -2049,6 +2049,78 @@ CREATE TABLE IF NOT EXISTS transaction_opens (
 CREATE INDEX IF NOT EXISTS idx_transaction_opens_opened_at
   ON transaction_opens(opened_at, transaction_id);
 
+-- ===========================================================================
+-- BACKLOG-4120 BEGIN — "Help Keepr learn" (Learn mode) local answers
+-- ===========================================================================
+-- Local only: never synced, never exported, read by no sync or export path.
+-- IF NOT EXISTS throughout: this file runs on every open, so existing
+-- databases gain the tables with no migration version (transaction_opens
+-- precedent above).
+--
+-- Every row: UUID text id, created_at + updated_at, deleted_at for soft
+-- removal. "Delete my answers" sets deleted_at; it never removes a row. The
+-- natural keys are PARTIAL unique indexes (WHERE deleted_at IS NULL), so a
+-- re-answer after a soft removal is allowed. Keys are user + provider id or
+-- normalized address, never a local emails.id. Answer rows carry the
+-- rule_version of the learn rules that produced the question.
+--
+-- CHECK constraints here are invisible to the schema-parity fingerprint
+-- (PRAGMA table_info); learnModeDb-4120.test.ts (C10) guards them.
+
+-- Learn mode switch, one live row per user. A missing row means OFF.
+CREATE TABLE IF NOT EXISTS learn_mode_settings (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL,
+  enabled    INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_learn_mode_settings_user_live
+  ON learn_mode_settings(user_id) WHERE deleted_at IS NULL;
+
+-- Cleanup pass answers: "is this a real deal?" for a detection that matched
+-- no hand-entered transaction. Never creates a transaction.
+CREATE TABLE IF NOT EXISTS learn_deal_answers (
+  id               TEXT PRIMARY KEY,
+  user_id          TEXT NOT NULL,
+  run_id           TEXT NOT NULL,
+  address_key      TEXT NOT NULL,
+  property_address TEXT NOT NULL,
+  answer           TEXT NOT NULL CHECK (answer IN ('yes', 'no')),
+  answered_at      TEXT NOT NULL,
+  rule_version     INTEGER NOT NULL,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL,
+  deleted_at       TEXT,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_learn_deal_answers_user_key_live
+  ON learn_deal_answers(user_id, address_key) WHERE deleted_at IS NULL;
+
+-- Bulk sample: messages drawn once (answer NULL until answered), keyed by the
+-- provider's own id so the sample survives a force re-cache.
+CREATE TABLE IF NOT EXISTS learn_bulk_answers (
+  id           TEXT PRIMARY KEY,
+  user_id      TEXT NOT NULL,
+  source       TEXT NOT NULL CHECK (source IN ('gmail', 'outlook')),
+  external_id  TEXT NOT NULL,
+  sampled_at   TEXT NOT NULL,
+  answer       TEXT CHECK (answer IS NULL OR answer IN ('real_estate', 'newsletter_spam', 'skip')),
+  answered_at  TEXT,
+  rule_version INTEGER NOT NULL,
+  created_at   TEXT NOT NULL,
+  updated_at   TEXT NOT NULL,
+  deleted_at   TEXT,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_learn_bulk_answers_user_msg_live
+  ON learn_bulk_answers(user_id, source, external_id) WHERE deleted_at IS NULL;
+-- ===========================================================================
+-- BACKLOG-4120 END
+-- ===========================================================================
+
 -- Initialize schema version if not exists.
 -- Version 70: the post-reset baseline (BACKLOG-2993). This file IS the
 -- v69-chain shape, declared as version 70 so that the baseline fence in

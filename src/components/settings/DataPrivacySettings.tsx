@@ -5,6 +5,7 @@ import { formatFileSize, safeErrorMessage } from '../../utils/formatUtils';
 import logger from '../../utils/logger';
 import { DATA_EXPORT_NOT_RECORDED_MESSAGE } from '../../utils/exportAuditCopy';
 import { OPERATION_LABELS } from './types';
+import { LearnAnswersPrivacyRow } from './learn/LearnAnswersPrivacyRow';
 
 interface FailureLogEntry {
   id: number;
@@ -468,6 +469,10 @@ export function DataPrivacySettings({ userId }: DataPrivacySettingsProps) {
             {(exporting || exportRunning) ? "Exporting..." : "Export My Data"}
           </button>
         </div>
+
+        {/* BACKLOG-4120: delete Learn mode answers, reachable with Learn mode
+            off and with the org key off. */}
+        <LearnAnswersPrivacyRow />
 
         {/* Clear All Data / reset / uninstall moved to the dedicated
             Troubleshooting section (BACKLOG-2112). */}

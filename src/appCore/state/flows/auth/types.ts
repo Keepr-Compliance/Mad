@@ -46,6 +46,8 @@ export interface UseAuthFlowOptions {
    */
   currentUserId: string | null;
   onCloseProfile: () => void;
+  /** BACKLOG-4120: closes Learn mode over the main screen on logout. */
+  onCloseLearn?: () => void;
   onSetHasSelectedPhoneType: (value: boolean) => void;
   onSetSelectedPhoneType: (value: "iphone" | "android" | null) => void;
   onSetCurrentStep: (step: AppStep) => void;

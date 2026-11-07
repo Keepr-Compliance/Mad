@@ -33,14 +33,15 @@ export const SYNTH = "[synthetic body — not form text]";
 /** 13 synthetic lines (442 chars) — wider than the 400-char window, so blocks never share one. */
 export const BODY: readonly string[] = Array.from({ length: 13 }, () => SYNTH);
 
-export interface TextFixture {
+/** BACKLOG-4106: generic in its source ids so other states' fixture files reuse it (additive). */
+export interface TextFixture<S extends string = SourceId> {
   id: string;
-  sources: readonly SourceId[];
+  sources: readonly S[];
   lines: readonly string[];
 }
 
 /** The fixture as extractor-shaped text (lines joined with "\n"). */
-export function fixtureText(f: TextFixture): string {
+export function fixtureText(f: TextFixture<string>): string {
   return f.lines.join("\n");
 }
 

@@ -27,7 +27,7 @@
  * State: `modalState.showProfile` is "account panel open"; the flow keeps its
  * openProfile / closeProfile names (useModalFlow).
  */
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Database,
   Info,
@@ -37,6 +37,7 @@ import {
   MessageSquare,
   Shield,
   SlidersHorizontal,
+  Sparkle,
   Sparkles,
   User,
   Users,
@@ -50,9 +51,11 @@ import { visibleSettingsTabs } from "../../components/settings/settingsTabs";
 import { formatPlanLabel } from "../../components/settings/account/formatPlanLabel";
 import { useLicense } from "../../contexts/LicenseContext";
 import { useFeatureGate } from "../../hooks/useFeatureGate";
+import { useStrictFeatureState } from "../../hooks/useStrictFeatureState";
 import { useEscapeToClose } from "../../hooks/useEscapeToClose";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
 import { useCopyText } from "../../hooks/useCopyText";
+import { systemService } from "../../services/systemService";
 import { Z_CLASS } from "../../constants/zLayers";
 import * as Sentry from "@sentry/electron/renderer";
 import logger from "../../utils/logger";
@@ -66,6 +69,7 @@ export const SETTINGS_TAB_ICONS: Record<string, LucideIcon> = {
   "settings-email": Mail,
   "settings-messages": MessageSquare,
   "settings-contacts": Users,
+  "settings-learn": Sparkle,
   "settings-ai": Sparkles,
   "settings-security": Shield,
   "settings-data": Database,
@@ -165,15 +169,38 @@ interface OpenAccountPanelProps {
   signingOut: boolean;
 }
 
+/** The running app's version, or null while loading or when it cannot be read (BACKLOG-1293). */
+function useAppVersion(): string | null {
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    systemService
+      .getAppVersion()
+      .then((result) => {
+        if (!cancelled && result.success && result.data) setVersion(result.data.version);
+      })
+      .catch(() => {
+        // getAppVersion never rejects; the label simply stays hidden.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return version;
+}
+
 const OpenAccountPanel = React.forwardRef<HTMLDivElement, OpenAccountPanelProps>(function OpenAccountPanel(
   { user, onClose, onOpenTab, onSignOut, signingOut },
   ref,
 ) {
   const { licenseType } = useLicense();
   const { isAllowed } = useFeatureGate();
-  const tabs = visibleSettingsTabs(isAllowed("ai_detection"));
+  // BACKLOG-4120: "Help Keepr learn" on the strict autodetect_eval read only.
+  const learnAvailable = useStrictFeatureState("autodetect_eval") === "allowed";
+  const tabs = visibleSettingsTabs(isAllowed("ai_detection"), learnAvailable);
   const { copied, copy } = useCopyText("AccountPanel");
   const planLabel = licenseType ? formatPlanLabel(licenseType) : "";
+  const appVersion = useAppVersion();
 
   return (
     <div
@@ -269,6 +296,12 @@ const OpenAccountPanel = React.forwardRef<HTMLDivElement, OpenAccountPanelProps>
           <LogOut className="h-5 w-5 shrink-0" aria-hidden="true" />
           <span>Sign out</span>
         </button>
+        {/* BACKLOG-1293: nothing while loading or when the version is unavailable. */}
+        {appVersion && (
+          <p data-testid="account-panel-version" className="px-3 pt-2 text-xs text-gray-400">
+            Keepr {appVersion}
+          </p>
+        )}
       </div>
     </div>
   );

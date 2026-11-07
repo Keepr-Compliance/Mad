@@ -127,6 +127,7 @@ const createModalState = (
   showIPhoneSync: false,
   showAndroidSync: false,
   androidSyncStart: "default",
+  learnOverlay: null,
   ...overrides,
 });
 
@@ -234,6 +235,9 @@ const createAppStateMock = (
   closeIPhoneSync: jest.fn(),
   openAndroidSync: jest.fn(),
   closeAndroidSync: jest.fn(),
+  openLearnSession: jest.fn(),
+  openLearnScore: jest.fn(),
+  closeLearnSession: jest.fn(),
 
   // Navigation
   goToStep: jest.fn(),
