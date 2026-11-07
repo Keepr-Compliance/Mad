@@ -40,6 +40,7 @@ export interface AdminRole {
 export interface PendingInvitation {
   id: string;
   email: string;
+  role_id: string;
   role_name: string;
   role_slug: string;
   created_at: string;
@@ -111,6 +112,7 @@ async function getPendingInvitations(): Promise<PendingInvitation[]> {
     .select(`
       id,
       email,
+      role_id,
       created_at,
       role:admin_roles(name, slug)
     `)
@@ -126,6 +128,7 @@ async function getPendingInvitations(): Promise<PendingInvitation[]> {
     return {
       id: row.id as string,
       email: row.email as string,
+      role_id: row.role_id as string,
       role_name: (role?.name as string) ?? 'Unknown',
       role_slug: (role?.slug as string) ?? 'unknown',
       created_at: row.created_at as string,

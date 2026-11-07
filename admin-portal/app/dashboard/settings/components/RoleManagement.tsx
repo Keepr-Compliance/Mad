@@ -3,7 +3,9 @@
 /**
  * RoleManagement - Create/edit/delete roles with permission matrix.
  *
- * Super admins can manage roles. Other users with roles.view can see them read-only.
+ * Users with roles.manage can edit roles below their own (BACKLOG-4168): never their
+ * own role, and only with permission keys they hold (Super Admins hold every key).
+ * Other users with roles.view can see them read-only.
  */
 
 import { useState, useCallback, useMemo } from 'react';
@@ -14,18 +16,36 @@ import { createClient } from '@/lib/supabase/client';
 import type { AdminRole, AdminPermission, InternalUser } from '../page';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
 import { PERMISSIONS, PERMISSION_CATEGORIES } from '@/lib/permissions';
+import { describeRoleError, isStrictlyBelow, NOT_PERMITTED_MESSAGE } from '@/lib/internal-roles';
 
 interface RoleManagementProps {
   roles: AdminRole[];
   permissions: AdminPermission[];
   onRefresh: () => void;
   users?: InternalUser[];
+  currentUserId?: string | null;
+  /** Role ids the signed-in user may grant (can_grant_role); null while loading. */
+  grantableRoleIds?: Set<string> | null;
   onNavigateToUsersWithRole?: (roleSlug: string) => void;
 }
 
-export function RoleManagement({ roles, permissions, onRefresh, users = [], onNavigateToUsersWithRole }: RoleManagementProps) {
-  const { hasPermission } = usePermissions();
+export function RoleManagement({ roles, permissions, onRefresh, users = [], currentUserId = null, grantableRoleIds = null, onNavigateToUsersWithRole }: RoleManagementProps) {
+  const { hasPermission, permissions: heldKeys, roleSlug } = usePermissions();
   const canManage = hasPermission(PERMISSIONS.ROLES_MANAGE);
+
+  // The caller's own role: from the users list, else from the permissions provider.
+  const ownRole = useMemo(() => {
+    const ownRoleId = users.find((u) => u.user_id === currentUserId)?.role_id;
+    return roles.find((r) => r.id === ownRoleId) ?? roles.find((r) => r.slug === roleSlug) ?? null;
+  }, [users, currentUserId, roles, roleSlug]);
+  const isSuperAdmin = ownRole?.is_system ?? false;
+
+  // Editable = roles.manage, not a system role, not the caller's own role, and below the caller.
+  const canEditRole = useCallback(
+    (role: AdminRole) =>
+      canManage && !role.is_system && role.id !== ownRole?.id && (grantableRoleIds?.has(role.id) ?? false),
+    [canManage, ownRole, grantableRoleIds],
+  );
   const [editingRole, setEditingRole] = useState<AdminRole | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<AdminRole | null>(null);
@@ -118,7 +138,7 @@ export function RoleManagement({ roles, permissions, onRefresh, users = [], onNa
                   <p className="text-xs text-gray-400 mt-0.5">{role.permission_keys.length} permission{role.permission_keys.length !== 1 ? 's' : ''}</p>
                 </div>
               </div>
-              {canManage && !role.is_system && (
+              {canEditRole(role) && (
                 <div className="flex items-center gap-2">
                   <button
                     onClick={() => { setEditingRole(role); setIsCreating(false); }}
@@ -139,7 +159,7 @@ export function RoleManagement({ roles, permissions, onRefresh, users = [], onNa
               {canManage && role.is_system && (
                 <span className="text-xs text-gray-400">All permissions</span>
               )}
-              {!canManage && (
+              {(!canManage || (!role.is_system && !canEditRole(role))) && (
                 <button
                   onClick={() => { setEditingRole(role); setIsCreating(false); }}
                   className="text-xs text-primary-600 hover:text-primary-800"
@@ -159,7 +179,9 @@ export function RoleManagement({ roles, permissions, onRefresh, users = [], onNa
           isNew={isCreating}
           permissions={permissions}
           groupedPermissions={groupedPermissions}
-          canManage={canManage}
+          canManage={!!editingRole ? canEditRole(editingRole) : canManage}
+          heldKeys={heldKeys}
+          isSuperAdmin={isSuperAdmin}
           onClose={() => { setEditingRole(null); setIsCreating(false); }}
           onSave={onRefresh}
           onError={setError}
@@ -186,6 +208,8 @@ function RoleEditor({
   permissions,
   groupedPermissions,
   canManage,
+  heldKeys,
+  isSuperAdmin,
   onClose,
   onSave,
   onError,
@@ -194,7 +218,10 @@ function RoleEditor({
   isNew: boolean;
   permissions: AdminPermission[];
   groupedPermissions: Record<string, AdminPermission[]>;
+  /** May edit THIS role (or create one); false shows it read-only. */
   canManage: boolean;
+  heldKeys: Set<string>;
+  isSuperAdmin: boolean;
   onClose: () => void;
   onSave: () => void;
   onError: (msg: string) => void;
@@ -208,6 +235,17 @@ function RoleEditor({
   const [saving, setSaving] = useState(false);
   const readOnly = !canManage || (role?.is_system ?? false);
 
+  // While editing, offer only keys the caller holds (Super Admins hold every key).
+  const visiblePermissions = useMemo(() => {
+    if (readOnly || isSuperAdmin) return groupedPermissions;
+    const out: Record<string, AdminPermission[]> = {};
+    for (const [cat, perms] of Object.entries(groupedPermissions)) {
+      const held = perms.filter((p) => heldKeys.has(p.key));
+      if (held.length > 0) out[cat] = held;
+    }
+    return out;
+  }, [readOnly, isSuperAdmin, groupedPermissions, heldKeys]);
+
   const togglePerm = useCallback((key: string) => {
     setSelectedPerms((prev) => {
       const next = new Set(prev);
@@ -218,7 +256,7 @@ function RoleEditor({
   }, []);
 
   const toggleCategory = useCallback((category: string) => {
-    const categoryPerms = groupedPermissions[category] || [];
+    const categoryPerms = visiblePermissions[category] || [];
     setSelectedPerms((prev) => {
       const allSelected = categoryPerms.every((p) => prev.has(p.key));
       const next = new Set(prev);
@@ -228,12 +266,20 @@ function RoleEditor({
       }
       return next;
     });
-  }, [groupedPermissions]);
+  }, [visiblePermissions]);
 
   const handleSave = useCallback(async () => {
     if (!name.trim()) {
       onError('Role name is required');
       return;
+    }
+    // Refuse before writing anything, so a save never half-applies (BACKLOG-4168).
+    if (!isSuperAdmin) {
+      const allHeld = Array.from(selectedPerms).every((k) => heldKeys.has(k));
+      if (isNew ? !allHeld : !isStrictlyBelow(selectedPerms, heldKeys)) {
+        onError(NOT_PERMITTED_MESSAGE);
+        return;
+      }
     }
     setSaving(true);
     try {
@@ -247,22 +293,30 @@ function RoleEditor({
           p_description: description.trim() || null,
           p_permission_keys: Array.from(selectedPerms),
         });
-        if (error) { onError(error.message); return; }
+        if (error) { onError(describeRoleError(error, 'Failed to create role')); return; }
       } else if (role) {
-        // Update name/description
-        const { error: updateErr } = await supabase.rpc('admin_update_role', {
-          p_role_id: role.id,
-          p_name: name.trim(),
-          p_description: description.trim() || null,
-        });
-        if (updateErr) { onError(updateErr.message); return; }
+        // Permissions first: it is the call the ceiling can refuse, so a refusal
+        // leaves the role untouched instead of renamed-but-not-updated.
+        const before = new Set(role.permission_keys);
+        const permsChanged =
+          before.size !== selectedPerms.size || Array.from(selectedPerms).some((k) => !before.has(k));
+        if (permsChanged) {
+          const { error: permErr } = await supabase.rpc('admin_update_role_permissions', {
+            p_role_id: role.id,
+            p_permission_keys: Array.from(selectedPerms),
+          });
+          if (permErr) { onError(describeRoleError(permErr, 'Failed to update permissions')); return; }
+        }
 
-        // Update permissions
-        const { error: permErr } = await supabase.rpc('admin_update_role_permissions', {
-          p_role_id: role.id,
-          p_permission_keys: Array.from(selectedPerms),
-        });
-        if (permErr) { onError(permErr.message); return; }
+        const nextDescription = description.trim() || null;
+        if (name.trim() !== role.name || nextDescription !== (role.description || null)) {
+          const { error: updateErr } = await supabase.rpc('admin_update_role', {
+            p_role_id: role.id,
+            p_name: name.trim(),
+            p_description: nextDescription,
+          });
+          if (updateErr) { onError(describeRoleError(updateErr, 'Failed to update role')); return; }
+        }
       }
 
       await refreshPermissions();
@@ -273,7 +327,7 @@ function RoleEditor({
     } finally {
       setSaving(false);
     }
-  }, [isNew, role, name, description, selectedPerms, onSave, onClose, onError, refreshPermissions]);
+  }, [isNew, role, name, description, selectedPerms, heldKeys, isSuperAdmin, onSave, onClose, onError, refreshPermissions]);
 
   return (
     <Card padding="none">
@@ -319,7 +373,7 @@ function RoleEditor({
           <h4 className="text-sm font-medium text-gray-700 mb-3">Permissions</h4>
           <div className="space-y-4">
             {PERMISSION_CATEGORIES.map(({ key: catKey, label: catLabel }) => {
-              const catPerms = groupedPermissions[catKey];
+              const catPerms = visiblePermissions[catKey];
               if (!catPerms || catPerms.length === 0) return null;
               const allChecked = catPerms.every((p) => selectedPerms.has(p.key));
               const someChecked = catPerms.some((p) => selectedPerms.has(p.key));
@@ -412,7 +466,7 @@ function DeleteRoleDialog({
         p_role_id: role.id,
       });
       if (error) {
-        onError(error.message);
+        onError(describeRoleError(error, 'Failed to delete role'));
         onCancel();
         return;
       }
