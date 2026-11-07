@@ -53,6 +53,7 @@ import {
   exportViewMatchesState,
   EXPORTS_REPORT_KEY,
   formatExportMetricValue,
+  parseExportMetric,
   serializeExportFilters,
   type ExportSavedView,
   type ExportViewMetric,
@@ -229,12 +230,14 @@ export function ExportsReport({
     (value: ExportViewMetric, onChange: (next: ExportViewMetric) => void) => (
       <MetricSaveFields
         value={value}
-        onChange={(next) => onChange({ col: next.col as ExportViewMetric['col'], fn: 'count' })}
+        // The report's allowlist; every Exports column is a count (BACKLOG-4142).
+        onChange={(next) => onChange(parseExportMetric({ col: next.col, fn: 'count' }))}
         columns={EXPORT_METRIC_COLUMNS}
         functions={EXPORT_METRIC_FUNCTIONS}
         functionsForColumn={exportFunctionsFor}
       />
-    )
+    ),
+    parseExportMetric
   );
 
 

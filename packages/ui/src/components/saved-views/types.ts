@@ -59,7 +59,7 @@ export interface SavedViewsSharing<V extends SavedViewItem, F = unknown, M = unk
    * `current()` at click time. With `updateMetric` (BACKLOG-4142) the filters
    * come from `current()` and the metric is the one picked in the form.
    */
-  onUpdate: (view: V, payload: SavedViewUpdate<F, M>) => void;
+  onUpdate: (view: V, payload: SavedViewUpdate<F, M>, options?: SavedViewUpdateOptions) => void;
   /** The page's current filters and metric. Read when an editor updates a view. */
   current: () => SavedViewUpdate<F, M>;
   /**
@@ -67,10 +67,21 @@ export interface SavedViewsSharing<V extends SavedViewItem, F = unknown, M = unk
    * one click with `current()`, as before. Given: Update opens an inline form
    * in the panel (same pattern as the Leave confirm) holding `render(...)`,
    * seeded with `initial(view)`, with Cancel and "Update view". The confirm
-   * sends `{ filters: current().filters, metric: <picked> }`, so an editor who
+   * sends `{ filters: current().filters, metric: <picked> }` with
+   * `{ metricPicked: true }` as the third argument, so an editor who
    * changes nothing sends the view's own metric back, never the page's.
    */
   updateMetric?: SavedViewUpdateMetric<V, M>;
+}
+
+/**
+ * Passed as `onUpdate`'s third argument from the `updateMetric` form only
+ * (BACKLOG-4142). Its presence tells the adopter that `payload.metric` was
+ * picked by the editor; a one-click Update never passes it, so an adopter can
+ * keep the view's own metric when it is missing.
+ */
+export interface SavedViewUpdateOptions {
+  metricPicked: true;
 }
 
 /** BACKLOG-4142. See `SavedViewsSharing.updateMetric`. */

@@ -133,3 +133,16 @@ describe('I4 editor picks the card metric (BACKLOG-4142)', () => {
     expect(Object.keys(args)).not.toContain('p_pinned');
   });
 });
+
+describe('I5 the picked metric goes through the iPhone Sync allowlist (BACKLOG-4142)', () => {
+  it('a column outside the list falls back to the report default metric', async () => {
+    mount([OWN_CARD, SHARED_EDITOR, SHARED_UNMASKED]);
+    await openViews();
+    fireEvent.click(within(panel()).getByRole('button', { name: 'Update Team cancelled' }));
+    const form = within(panel()).getByRole('group', { name: 'Update filters and card metric' });
+    fireEvent.change(within(form).getByRole('combobox', { name: 'Column' }), { target: { value: 'not-a-column' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Update view' }));
+    await waitFor(() => expect(stub.current!.calls('report_save_view')).toHaveLength(1));
+    expect(stub.current!.calls('report_save_view')[0]).toMatchObject({ p_metric: { col: 'runs', fn: 'count' } });
+  });
+});

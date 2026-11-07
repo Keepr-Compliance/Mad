@@ -48,6 +48,7 @@ import {
   MAX_PINNED,
   METRIC_COLUMNS,
   METRIC_FUNCTIONS,
+  parseMetric,
   pinnedViews,
   REPORT_KEY,
   serializeFilters,
@@ -299,12 +300,14 @@ export function IphoneSyncReport({
     (value: ViewMetric, onChange: (next: ViewMetric) => void) => (
       <MetricSaveFields
         value={value}
-        onChange={(next) => onChange({ col: next.col as MetricColumn, fn: next.fn as MetricFunction })}
+        // The report's allowlist: an out-of-range column or function falls back (BACKLOG-4142).
+        onChange={(next) => onChange(parseMetric(next))}
         columns={METRIC_COLUMNS}
         functions={METRIC_FUNCTIONS}
         functionsForColumn={iphoneFunctionsFor}
       />
-    )
+    ),
+    parseMetric
   );
 
 

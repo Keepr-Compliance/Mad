@@ -17,7 +17,9 @@
  * - Update (editor rows): the page's filters, read from `current()` at click time, and the view's
  *   own metric when it has one (else the payload's fixed metric).
  * - BACKLOG-4142: with `renderMetric`, Update opens the kit's inline form with that picker, seeded
- *   with the view's own metric, and the metric the editor picked is sent as is.
+ *   with the view's own metric. The picked metric is sent only when the kit marks it as picked
+ *   (`metricPicked`); otherwise the view's own metric wins, as without a picker. `normalizeMetric`
+ *   (the report's column/function allowlist) is applied to the seed and to the picked metric.
  * - Leave (shared rows): `report_share_remove` with the caller's own id.
  * Update and Leave go through the saved-views write runner, so a refusal shows and the list re-reads.
  *
@@ -62,8 +64,15 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
    * The card metric picker (BACKLOG-4142). Given: an editor picks the metric in the Update form
    * and that metric is sent. Absent: the view's own metric overrides the payload, as before.
    */
-  renderMetric?: (value: M, onChange: (next: M) => void) => ReactNode
+  renderMetric?: (value: M, onChange: (next: M) => void) => ReactNode,
+  /**
+   * The report's metric allowlist (BACKLOG-4142): returns a metric made only of that report's
+   * columns and functions, falling back to its default. Applied to the picker's seed and to the
+   * picked metric before it is written into someone else's view.
+   */
+  normalizeMetric?: (raw: unknown) => M
 ): UseReportViewSharing<V> {
+  const normalize = (raw: unknown): unknown => (normalizeMetric ? normalizeMetric(raw) : raw);
   const mayShare = canShareViews(useOpenReport()?.access ?? null);
   const [missing, setMissing] = useState(false);
   const [target, setTarget] = useState<V | null>(null);
@@ -133,16 +142,19 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
               })
             );
           },
-          onUpdate: (view, payload) => {
-            // With a picker the payload's metric is the one the editor chose in the form, seeded
-            // with the view's own (initial below), so it is sent as is.
+          onUpdate: (view, payload, options) => {
+            // With a picker AND the kit's marker, the payload's metric is the one the editor chose
+            // in the form (seeded with the view's own, initial below): sent after the allowlist.
+            // A payload without the marker came from a one-click Update (a kit that never ran the
+            // picker), so it falls through to the view's own metric below.
             // Without one: the page's filters and the VIEW's own metric when it has one (a pinned
             // card's column and function). `current()` cannot know which view is being updated, and
             // on the pinning reports its metric is the save form's, which an editor never touched:
             // sending it would reset the owner's card. Reports with no per-view metric send the
             // payload's fixed one.
             const own = (view as { metric?: unknown }).metric;
-            const metric = renderMetric ? payload.metric : own !== undefined ? own : payload.metric;
+            const picked = renderMetric !== undefined && options?.metricPicked === true;
+            const metric = picked ? normalize(payload.metric) : own !== undefined ? own : payload.metric;
             saved.write(() =>
               shareApi.update({
                 reportKey,
@@ -159,7 +171,7 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
                   // The view's own metric; a view saved without one starts from the page's.
                   initial: (view: V) => {
                     const own = (view as { metric?: M }).metric;
-                    return own !== undefined ? own : current().metric;
+                    return normalize(own !== undefined ? own : current().metric) as M;
                   },
                   // The kit slot is typed with the default (unknown) metric, like `sharing` itself;
                   // the values it hands back are the ones `initial` and this picker made.

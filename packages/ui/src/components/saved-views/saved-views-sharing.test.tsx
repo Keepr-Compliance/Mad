@@ -389,6 +389,7 @@ describe('SavedViews editor metric picker (BACKLOG-4142)', () => {
     expect(view.id).toBe('s-ed');
     expect(payload).toStrictEqual({ filters: { q: 'now' }, metric: VIEW_METRIC });
     expect(payload.metric).not.toEqual(PAGE_METRIC);
+    expect((sharing.onUpdate as jest.Mock).mock.calls[0][2]).toStrictEqual({ metricPicked: true });
     expect(form()).toBeNull();
   });
 
@@ -410,6 +411,7 @@ describe('SavedViews editor metric picker (BACKLOG-4142)', () => {
     const payload = (sharing.onUpdate as jest.Mock).mock.calls[0][1];
     expect(Object.keys(payload).sort()).toEqual(['filters', 'metric']);
     expect(payload).toStrictEqual({ filters: { q: 'new' }, metric: { col: 'errors', fn: 'count' } });
+    expect((sharing.onUpdate as jest.Mock).mock.calls[0][2]).toStrictEqual({ metricPicked: true });
   });
 
   it('U3 without updateMetric, Update is still one click with the current() payload and no form', () => {
@@ -419,6 +421,8 @@ describe('SavedViews editor metric picker (BACKLOG-4142)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Update Budget with the current filters' }));
     expect(sharing.onUpdate).toHaveBeenCalledTimes(1);
     expect((sharing.onUpdate as jest.Mock).mock.calls[0][1]).toStrictEqual({ filters: { q: 'now' }, metric: PAGE_METRIC });
+    // No picker ran, so no marker: the adopter keeps the view's own metric.
+    expect((sharing.onUpdate as jest.Mock).mock.calls[0]).toHaveLength(2);
     expect(form()).toBeNull();
     expect(document.querySelector('[data-slot="saved-views-update-form"]')).toBeNull();
   });

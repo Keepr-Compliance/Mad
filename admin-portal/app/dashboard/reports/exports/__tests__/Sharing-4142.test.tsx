@@ -74,3 +74,14 @@ describe('Exports editor metric picker (BACKLOG-4142)', () => {
     expect(stub.current!.calls('report_save_view')[0]).toMatchObject({ p_metric: { col: 'users', fn: 'count' } });
   });
 });
+
+describe('Exports allowlist (BACKLOG-4142)', () => {
+  it('X3 a column outside the list falls back to the report default metric', async () => {
+    mount([OWN_CARD, SHARED_EDITOR]);
+    const form = await openUpdateForm();
+    fireEvent.change(within(form).getByRole('combobox', { name: 'Column' }), { target: { value: 'not-a-column' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Update view' }));
+    await waitFor(() => expect(stub.current!.calls('report_save_view')).toHaveLength(1));
+    expect(stub.current!.calls('report_save_view')[0]).toMatchObject({ p_metric: { col: 'exports', fn: 'count' } });
+  });
+});

@@ -83,7 +83,7 @@ function ownFirst<V extends SavedViewItem>(views: V[]): V[] {
  * pattern as the Leave confirm: "Update filters and card metric", the
  * adopter's picker seeded with `initial(view)`, then Cancel / "Update view".
  * The confirm calls `onUpdate` with `current().filters` and the picked
- * metric. Only one inline form (Update, Leave or the save form) is open at a
+ * metric, plus `{ metricPicked: true }` as the third argument. Only one inline form (Update, Leave or the save form) is open at a
  * time. Escape or Cancel closes the Update form and returns focus to that
  * row's Update button. Without `updateMetric`, Update stays one click.
  * Without any `access` set, the panel renders exactly as before.
@@ -394,7 +394,8 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
       const state = sharing.current();
       // The page's filters and the PICKED metric, never `state.metric`: an editor who changed
       // nothing sends the view's own metric back instead of resetting the owner's card.
-      sharing.onUpdate(view, { filters: state.filters, metric: picked.metric });
+      // The marker tells the adopter this metric was picked; a one-click Update never sends it.
+      sharing.onUpdate(view, { filters: state.filters, metric: picked.metric }, { metricPicked: true });
     }
     // The store re-reads after the write and its loading render unmounts the rows.
     panelRef.current?.focus();
