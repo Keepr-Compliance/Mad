@@ -412,7 +412,7 @@ function ReasonDialog({
           </div>
         )}
         <div className="mt-4">
-          <Label htmlFor="reason-note" required>Note</Label>
+          <Label htmlFor="reason-note" required>Internal note (won't be sent to the customer)</Label>
           <Textarea id="reason-note" rows={3} value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
         {notifyContactEmail !== undefined && (

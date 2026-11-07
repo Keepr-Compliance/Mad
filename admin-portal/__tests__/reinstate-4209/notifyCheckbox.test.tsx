@@ -11,6 +11,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { ACTIVE, ACTIVE_DEAL } from '../onboarding-4007/fixtures';
 import type { OrgBilling } from '@/lib/billing/dealRules';
 
+const NOTE_LABEL = /^Internal note \(won't be sent to the customer\)/;
 const reinstateOrgAction = vi.fn();
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock('@/lib/actions/brokerageBilling', () => ({
@@ -37,7 +38,7 @@ async function openReinstateDialog(billing: OrgBilling) {
   const { BrokerageBillingCard } = await import('@/app/dashboard/organizations/[id]/components/BrokerageBillingCard');
   render(<BrokerageBillingCard organizationId="org-active" organizationName="Org" planName="Team" billing={billing} />);
   fireEvent.click(screen.getByRole('button', { name: 'Reinstate organization' }));
-  fireEvent.change(screen.getByLabelText(/Note/), { target: { value: 'paid by transfer' } });
+  fireEvent.change(screen.getByLabelText(NOTE_LABEL), { target: { value: 'paid by transfer' } });
 }
 const submit = () => {
   const buttons = screen.getAllByRole('button', { name: 'Reinstate organization' });

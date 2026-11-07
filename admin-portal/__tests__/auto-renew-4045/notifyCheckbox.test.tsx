@@ -11,6 +11,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { ACTIVE, ACTIVE_DEAL } from '../onboarding-4007/fixtures';
 import type { OrgBilling } from '@/lib/billing/dealRules';
 
+const NOTE_LABEL = /^Internal note \(won't be sent to the customer\)/;
 const setAutoRenewAction = vi.fn();
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn(), push: vi.fn() }) }));
 vi.mock('@/lib/actions/brokerageBilling', () => ({
@@ -37,7 +38,7 @@ async function openOnDialog(billing: OrgBilling) {
   const { BrokerageBillingCard } = await import('@/app/dashboard/organizations/[id]/components/BrokerageBillingCard');
   render(<BrokerageBillingCard organizationId="org-active" organizationName="Org" planName="Team" billing={billing} />);
   fireEvent.click(screen.getByRole('button', { name: 'Turn auto-renew back on' }));
-  fireEvent.change(screen.getByLabelText(/Note/), { target: { value: 'asked by phone' } });
+  fireEvent.change(screen.getByLabelText(NOTE_LABEL), { target: { value: 'asked by phone' } });
 }
 const submit = () => {
   const buttons = screen.getAllByRole('button', { name: 'Turn auto-renew back on' });
@@ -82,7 +83,7 @@ async function openOffDialog(billing: OrgBilling) {
   const { BrokerageBillingCard } = await import('@/app/dashboard/organizations/[id]/components/BrokerageBillingCard');
   render(<BrokerageBillingCard organizationId="org-active" organizationName="Org" planName="Team" billing={billing} />);
   fireEvent.click(screen.getByRole('button', { name: 'Turn off auto-renew' }));
-  fireEvent.change(screen.getByLabelText(/Note/), { target: { value: 'asked by email' } });
+  fireEvent.change(screen.getByLabelText(NOTE_LABEL), { target: { value: 'asked by email' } });
 }
 const submitOff = () => {
   const buttons = screen.getAllByRole('button', { name: 'Turn off auto-renew' });
