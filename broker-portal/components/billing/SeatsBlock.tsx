@@ -100,9 +100,16 @@ export function SeatsBlock({ view, viewer }: { view: SeatsView | null; viewer: S
     }
   };
   const line = cannotAddLine(view, viewer);
+  // BACKLOG-4187: Add seats sits on the title line (BillingBlock's action slot).
+  const action =
+    view.canAdd && view.version !== null ? (
+      <Button variant="primary" size="sm" className={TOUCH_BUTTON} onClick={() => setOpen(true)}>
+        Add seats
+      </Button>
+    ) : undefined;
 
   return (
-    <BillingBlock id="seats" title="Seats & licenses">
+    <BillingBlock id="seats" title="Seats & licenses" action={action}>
       <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3" data-seats-counts="">
         {view.unlimited ? (
           <StatCard label="Seats" value="No seat limit" hue="gray" />
@@ -112,13 +119,6 @@ export function SeatsBlock({ view, viewer }: { view: SeatsView | null; viewer: S
         <StatCard label="In use" value={view.inUse} hue="gray" />
         {view.unlimited ? null : <StatCard label="Available" value={view.free ?? 0} hue="gray" />}
       </div>
-      {view.canAdd && view.version !== null ? (
-        <div className="mt-4">
-          <Button variant="primary" size="sm" className={TOUCH_BUTTON} onClick={() => setOpen(true)}>
-            Add seats
-          </Button>
-        </div>
-      ) : null}
       {line ? (
         <p className="mt-4 text-sm text-gray-700" data-seats-line="">
           {line}

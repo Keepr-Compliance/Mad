@@ -10,7 +10,7 @@
  * Rows: the transcribed keepr-test row (helpers/membership3951Fixtures).
  */
 
-import { UNASSIGNED_MEMBER_ROW } from "../../services/__tests__/helpers/membership3951Fixtures";
+import { UNASSIGNED_MEMBER_ROW, NIL } from "../../services/__tests__/helpers/membership3951Fixtures";
 import { personalMembership } from "../../services/__tests__/helpers/postgrestEmulator";
 
 const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
@@ -150,11 +150,15 @@ describe("BACKLOG-3951 — license:get and the membership standing", () => {
     expect(r.membership).toEqual({ standing: "licensed" });
   });
 
-  it("removed member ⇒ individual, standing left_brokerage with the brokerage name", async () => {
+  it("removed member ⇒ individual, standing left_brokerage with the brokerage name and id (4171)", async () => {
     rows([{ ...unassigned, license_status: "suspended" }, personalMembership({ userId: USER_ID })]);
     const r = await licenseGet();
     expect((r.license as Record<string, unknown>).license_type).toBe("individual");
-    expect(r.membership).toEqual({ standing: "left_brokerage", organization_name: "Fixture Brokerage" });
+    expect(r.membership).toEqual({
+      standing: "left_brokerage",
+      organization_name: "Fixture Brokerage",
+      organization_id: NIL,
+    });
   });
 
   it("no local licence row ⇒ default individual, standing still carried", async () => {

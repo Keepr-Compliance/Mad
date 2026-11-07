@@ -23,7 +23,7 @@ import {
   type Emulator,
   type Row,
 } from "./helpers/postgrestEmulator";
-import { UNASSIGNED_MEMBER_ROW, BILLING_ONLY_ROW } from "./helpers/membership3951Fixtures";
+import { UNASSIGNED_MEMBER_ROW, BILLING_ONLY_ROW, NIL } from "./helpers/membership3951Fixtures";
 
 let emulator: Emulator;
 let fromImpl: (table: string) => unknown = (table) => emulator.from(table);
@@ -143,15 +143,30 @@ describe("BACKLOG-3951 C6: classifyMembershipStanding", () => {
     expect(mod.classifyMembershipStanding(rows, U).standing).toBe("none");
   });
 
-  it("left_brokerage carries the brokerage name, with a fallback when it has none", () => {
+  it("left_brokerage carries the brokerage name and id, with a name fallback when it has none", () => {
     expect(mod.classifyMembershipStanding([at("suspended")], U)).toEqual({
       standing: "left_brokerage",
       organizationName: "Fixture Brokerage",
+      organizationId: NIL,
     });
     const org = UNASSIGNED_MEMBER_ROW.organizations as Record<string, unknown>;
     expect(
       mod.classifyMembershipStanding([at("expired", { organizations: { ...org, name: null } })], U),
-    ).toEqual({ standing: "left_brokerage", organizationName: "your brokerage" });
+    ).toEqual({ standing: "left_brokerage", organizationName: "your brokerage", organizationId: NIL });
+  });
+
+  it("BACKLOG-4171: left_brokerage carries the DECIDING row's organization id", () => {
+    expect(mod.classifyMembershipStanding([laterBrokerage("expired"), at("suspended")], U)).toEqual({
+      standing: "left_brokerage",
+      organizationName: "Second Fixture Brokerage",
+      organizationId: OTHER_ORG,
+    });
+  });
+
+  it("BACKLOG-4171: a row without a usable organization id carries no id", () => {
+    expect(
+      mod.classifyMembershipStanding([at("suspended", { organization_id: "" })], U),
+    ).toEqual({ standing: "left_brokerage", organizationName: "Fixture Brokerage" });
   });
 
   it("reads the embed in the array shape too", () => {
