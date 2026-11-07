@@ -65,13 +65,36 @@ export function buildSeedSpawn(
   return { command: wrapper, args };
 }
 
+/** BACKLOG-4054: seed as a given account (a test-project user) instead of the fixture account. */
+export interface SeedIdentityOverride {
+  userId: string;
+  email: string;
+}
+
+/** The two seeder knobs (scripts/qa/harness/seed-fixture.js resolveSeedIdentity). */
+export const SEED_IDENTITY_ENV_KEYS = ['KEEPR_QA_SEED_USER_ID', 'KEEPR_QA_SEED_EMAIL'] as const;
+
+/**
+ * BACKLOG-4054: the seeder's environment. The identity knobs come ONLY from `identity`: any copy
+ * inherited from the shell is dropped, so an exported variable can never re-key an ordinary seed.
+ */
+export function buildSeedEnv(base: NodeJS.ProcessEnv, identity?: SeedIdentityOverride): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ELECTRON_ENABLE_LOGGING: '0' };
+  for (const k of SEED_IDENTITY_ENV_KEYS) delete env[k];
+  if (identity) {
+    env.KEEPR_QA_SEED_USER_ID = identity.userId;
+    env.KEEPR_QA_SEED_EMAIL = identity.email;
+  }
+  return env;
+}
+
 /** Spawn the Electron-main seed script (self-provisions the DB) and parse the emitted identity. */
-function runSeedScript(repoRoot: string, profileDir: string): SeededIdentity {
+function runSeedScript(repoRoot: string, profileDir: string, identity?: SeedIdentityOverride): SeededIdentity {
   const { command, args } = buildSeedSpawn(repoRoot, profileDir);
   const res = spawnSync(command, args, {
     cwd: repoRoot,
     encoding: 'utf8',
-    env: { ...process.env, ELECTRON_ENABLE_LOGGING: '0' },
+    env: buildSeedEnv(process.env, identity),
     // A seed takes well under a second; a long wait means a blocked prompt or a missed entry check.
     timeout: 30_000,
   });
@@ -135,9 +158,13 @@ function writeSessionJson(profileDir: string, id: SeededIdentity): void {
  * Full seed: provision DB → seed fixture → write session.json. Idempotent-ish (re-seeding the same
  * profile OR-REPLACEs rows). Returns the seeded identity for the driver to assert against.
  */
-export async function seedIsolatedProfile(repoRoot: string, profileDir: string): Promise<SeededIdentity> {
+export async function seedIsolatedProfile(
+  repoRoot: string,
+  profileDir: string,
+  opts: { identity?: SeedIdentityOverride } = {},
+): Promise<SeededIdentity> {
   if (!existsSync(profileDir)) mkdirSync(profileDir, { recursive: true });
-  const identity = runSeedScript(repoRoot, profileDir);
+  const identity = runSeedScript(repoRoot, profileDir, opts.identity);
   writeSessionJson(profileDir, identity);
   return identity;
 }
