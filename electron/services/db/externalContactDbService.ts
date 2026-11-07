@@ -19,7 +19,7 @@ import { recordShadowSync } from '../contactIngestionFunnel';
 import { requestContactLinking } from '../contactLinkingScheduler';
 import { queryContacts, isPoolReady } from '../../workers/contactWorkerPool';
 import { toLookupKey } from '../../utils/phoneNormalization';
-import { dedupeEmailValues, dedupePhoneValues } from '../../utils/contactValueDedup';
+import { dedupeEmailValues, dedupePhoneValuesWithKeys } from '../../utils/contactValueDedup';
 import {
   EXTERNAL_CONTACTS_GET_ALL_SQL,
   EXTERNAL_CONTACT_LAST_MESSAGE_EXPR,
@@ -170,6 +170,12 @@ interface ExternalContactRow {
   external_record_id: string;  // Renamed from macos_record_id (Migration 27)
   source: string;              // New field: source of contact (Migration 27)
   synced_at: string;
+  /**
+   * BACKLOG-4180 — stored lookup keys for `phones_json` (BACKLOG-1727). Selected
+   * by EXTERNAL_CONTACTS_GET_ALL_SQL and `search`. Optional: a reader that does
+   * not select it gets the `dedupePhoneValues` fallback, never a wrong answer.
+   */
+  phones_normalized_json?: string | null;
 }
 
 /**
@@ -377,12 +383,26 @@ export interface SyncResult {
  *
  * Order is preserved, so `emails?.[0]` still resolves the same primary.
  */
+/** BACKLOG-4180: NULL or unparseable stored keys mean "use the fallback". */
+function parseStoredKeys(raw: string | null | undefined): unknown {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
 function toExternalContact(row: ExternalContactRow): ExternalContact {
   return {
     id: row.id,
     user_id: row.user_id,
     name: row.name,
-    phones: dedupePhoneValues(JSON.parse(row.phones_json || '[]')),
+    // BACKLOG-4180: dedupe on the stored keys; libphonenumber only on fallback.
+    phones: dedupePhoneValuesWithKeys(
+      JSON.parse(row.phones_json || '[]'),
+      parseStoredKeys(row.phones_normalized_json),
+    ),
     emails: dedupeEmailValues(JSON.parse(row.emails_json || '[]')),
     company: row.company,
     last_message_at: row.last_message_at,
@@ -1464,7 +1484,7 @@ export function search(userId: string, query: string, limit: number = 50): Exter
     SELECT * FROM (
       SELECT id, user_id, name, phones_json, emails_json, company,
              ${EXTERNAL_CONTACT_LAST_MESSAGE_EXPR} as last_message_at,
-             external_record_id, source, synced_at
+             external_record_id, source, synced_at, phones_normalized_json
       FROM external_contacts
       WHERE user_id = ?
         AND (
