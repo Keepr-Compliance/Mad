@@ -161,3 +161,25 @@ export function getDefaultContactSourceSelection(
 export function isContactSourceKey(key: string): key is ContactSourceKey {
   return (CONTACT_SOURCE_KEYS as readonly string[]).includes(key);
 }
+
+// ===========================================================================
+// BACKLOG-4188 — the two "Auto-discover from conversations" email switches.
+// Mirror of the canonical copy; see it for the full rule.
+// ===========================================================================
+
+/** The inferred (auto-discover) email preference keys. */
+export type InferredEmailSourceKey = "outlookEmails" | "gmailEmails";
+
+/** Every inferred email key, in a stable order. */
+export const INFERRED_EMAIL_SOURCE_KEYS: readonly InferredEmailSourceKey[] = [
+  "outlookEmails",
+  "gmailEmails",
+];
+
+/**
+ * Stored boolean wins; no stored value → ON. Settings draws the switch with
+ * this so it matches what the main process will do with the same value.
+ */
+export function resolveInferredEmailSourceEnabled(stored: unknown): boolean {
+  return typeof stored === "boolean" ? stored : true;
+}

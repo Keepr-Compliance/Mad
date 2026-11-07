@@ -334,7 +334,7 @@ export async function resolveContactInferenceState(
  * The gate BACKLOG-1717 calls before building any email-inferred contact.
  *
  * Its contract there is `isContactInferenceAllowed(provider) &&
- * isContactSourceEnabled(userId, "inferred", ..., false)` — the plan and the
+ * isInferredEmailSourceEnabled(userId, ...)` (BACKLOG-4188) — the plan and the
  * user's own switch, both required, evaluated in the IPC handler before the
  * read. Nothing is built here; this item only decides the first half.
  */
