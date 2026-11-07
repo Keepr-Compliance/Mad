@@ -153,6 +153,9 @@ const BROKERAGE_FLOOR_VERDICTS: Record<(typeof PATHS)[number], Verdict> = {
   ...FLOOR_VERDICTS,
   '/dashboard/my-transactions': ADMIT,
   '/dashboard/my-transactions/abc-123': ADMIT,
+  // BACKLOG-3505: Reports passes to its page gate (role, plan key, agentScoped).
+  '/dashboard/reports': ADMIT,
+  '/dashboard/reports/fixture-report': ADMIT,
 };
 
 const everywhere = (v: Verdict) =>

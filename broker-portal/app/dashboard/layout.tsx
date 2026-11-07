@@ -9,6 +9,7 @@ import { getPortalAccess } from '@/lib/auth/portalAccess';
 import { getMyTransactionsGate } from '@/lib/my-transactions-access';
 import { billingEnabled } from '@/lib/billing/flag';
 import { billingNavVisible } from '@/lib/billing/capabilities';
+import { listMyReports } from '@/lib/reports/report-gate';
 
 export default async function DashboardLayout({
   children,
@@ -55,6 +56,11 @@ export default async function DashboardLayout({
   // BACKLOG-3080: the same gate the My Transactions pages use. Shown when the
   // pages would render (the list, or the plan message), hidden when they 404.
   const showMyTransactions = !isImpersonating && (await getMyTransactionsGate()) !== null;
+  // BACKLOG-3505: the same gate the Reports pages use. Shown only when the
+  // plan feature is on AND the caller has at least one report, which is exactly
+  // when the index renders instead of 404ing. Never while impersonating.
+  const myReports = isImpersonating ? null : await listMyReports();
+  const showReports = !!myReports && myReports.reports.length > 0;
   // BACKLOG-3844: the rule the billing page uses, on access only. No read: the
   // access above is reused. The page refuses on its own.
   // BACKLOG-3878: a suspended account sees Billing (personal owner only), Support
@@ -87,6 +93,7 @@ export default async function DashboardLayout({
       showChecklists={showChecklists}
       checklistsUnavailableLabel={checklistsUnavailableLabel}
       showMyTransactions={showMyTransactions}
+      showReports={showReports}
       showBilling={showBilling}
       suspended={suspended}
       orgSuspended={orgSuspended}
