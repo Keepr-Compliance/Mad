@@ -2,6 +2,7 @@
 -- Pre-check: md5(prosrc) must be be681af740257942945997c0e3113e44 (the 4153 body) or c044fab7e359a66ab472d61d69037f87 (already rolled back: no-op).
 -- ACL left as is (CREATE OR REPLACE keeps it); the post-check asserts it is unchanged.
 -- Run as one transaction. Also remove the ledger row 20261106120000 by hand if the venue keeps one.
+-- Run this before backlog-3853/rollback-3853-m1.sql, which refuses over the 4153 body (BACKLOG-4177).
 
 DO $pre$
 DECLARE v_md5 text;

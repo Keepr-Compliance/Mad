@@ -8,10 +8,22 @@
 -- the new functions, the new tables, the billing.* permission keys and their role grants, and the
 -- account_suspended feature key. Run as one transaction. Also remove the ledger row
 -- 20261018230000 by hand if the venue keeps one.
+--
+-- BACKLOG-4177: also refuses unless public.unlock_transaction(text) is at the 3853 body
+-- (md5(prosrc) c044fab7e359a66ab472d61d69037f87). A later body (BACKLOG-4153,
+-- be681af740257942945997c0e3113e44) must be rolled back first with
+-- supabase/tests/backlog-4153/rollback-4153.sql; this script would otherwise overwrite it.
 
 DO $pre$
-DECLARE v_n integer;
+DECLARE v_n integer; v_md5 text;
 BEGIN
+  SELECT md5(prosrc) INTO v_md5 FROM pg_proc WHERE oid = to_regprocedure('public.unlock_transaction(text)');
+  IF v_md5 IS DISTINCT FROM 'c044fab7e359a66ab472d61d69037f87' THEN
+    RAISE EXCEPTION '3853 M1 rollback refused: public.unlock_transaction(text) md5(prosrc) % is not the 3853 body c044fab7e359a66ab472d61d69037f87%', v_md5,
+      CASE WHEN v_md5 = 'be681af740257942945997c0e3113e44'
+           THEN ' (it is the BACKLOG-4153 body: run supabase/tests/backlog-4153/rollback-4153.sql first)'
+           ELSE ' (unknown body: find which later migration replaced it and roll that back first)' END;
+  END IF;
   IF to_regclass('public.org_deals') IS NOT NULL THEN
     EXECUTE 'SELECT count(*) FROM public.org_deals' INTO v_n;
     IF v_n > 0 THEN
