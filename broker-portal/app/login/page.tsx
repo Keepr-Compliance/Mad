@@ -13,6 +13,13 @@ import { Alert, Spinner } from '@keepr/design-system';
 import { AppMark } from '@keepr/ui';
 import { Loader2, XCircle } from 'lucide-react';
 import { BROKERAGE_SUSPENDED_ERROR } from '@/lib/auth/orgSuspension';
+import { TOUCH_LINK } from '@/components/billing/touch';
+
+// BACKLOG-4141: below lg (phone and 768 tablet) small print reads at 14 px; desktop is unchanged.
+const SMALL_PRINT = 'max-lg:text-sm';
+// The 44 px box would push the desktop border-b underline away from the text, so below lg the
+// legal links use a text underline in the same colour instead.
+const LEGAL_LINK_UNDERLINE = 'max-lg:border-b-0 max-lg:underline max-lg:underline-offset-4 max-lg:decoration-[#E7E8F0]';
 
 // Error messages for auth failure states
 const ERROR_MESSAGES: Record<string, string> = {
@@ -82,7 +89,7 @@ function BrandHeader({ label }: { label: string }) {
         Sign in to Keepr
       </h1>
       <p
-        className="mt-2.5 text-[11px] font-bold uppercase tracking-[0.13em]"
+        className={`mt-2.5 text-[11px] ${SMALL_PRINT} font-bold uppercase tracking-[0.13em]`}
         style={{ color: '#9297A6' }}
       >
         {label}
@@ -95,7 +102,7 @@ function BrandHeader({ label }: { label: string }) {
 function LegalFooter() {
   return (
     <p
-      className="mt-6 text-center text-xs leading-relaxed"
+      className={`mt-6 text-center text-xs ${SMALL_PRINT} leading-relaxed`}
       style={{ color: '#9297A6' }}
     >
       By continuing you agree to Keepr&apos;s{' '}
@@ -103,7 +110,7 @@ function LegalFooter() {
         href="https://keeprcompliance.com/terms"
         target="_blank"
         rel="noopener noreferrer"
-        className="border-b text-[#6C7180] hover:text-[#14162B]"
+        className={`border-b text-[#6C7180] hover:text-[#14162B] ${TOUCH_LINK} ${LEGAL_LINK_UNDERLINE}`}
         style={{ borderColor: '#E7E8F0' }}
       >
         Terms
@@ -113,7 +120,7 @@ function LegalFooter() {
         href="https://keeprcompliance.com/privacy"
         target="_blank"
         rel="noopener noreferrer"
-        className="border-b text-[#6C7180] hover:text-[#14162B]"
+        className={`border-b text-[#6C7180] hover:text-[#14162B] ${TOUCH_LINK} ${LEGAL_LINK_UNDERLINE}`}
         style={{ borderColor: '#E7E8F0' }}
       >
         Privacy Policy
@@ -186,9 +193,9 @@ function LoginForm() {
             {displayError === 'org_not_setup' ? (
               <p>
                 Your brokerage hasn&apos;t added you to Keepr yet. Ask your brokerage admin to invite you, or{' '}
-                <a href="/download" className="font-medium underline hover:text-red-600">sign up for an individual account</a>.
+                <a href="/download" className={`font-medium underline hover:text-red-600 ${TOUCH_LINK}`}>sign up for an individual account</a>.
                 {' '}If you have an agent license,{' '}
-                <a href="/auth/desktop" className="font-medium underline hover:text-red-600">sign in to the desktop app here</a>.
+                <a href="/auth/desktop" className={`font-medium underline hover:text-red-600 ${TOUCH_LINK}`}>sign in to the desktop app here</a>.
               </p>
             ) : displayError === 'jit_disabled' ? (
               <p>
@@ -259,7 +266,7 @@ function LoginForm() {
         <Alert variant="info">
           <p>
             Looking for the Keepr desktop app?{' '}
-            <a href="/auth/desktop" className="font-medium underline hover:text-primary-600">
+            <a href="/auth/desktop" className={`font-medium underline hover:text-primary-600 ${TOUCH_LINK}`}>
               Click here to sign in
             </a>{' '}
             if you have an agent license.
@@ -269,13 +276,13 @@ function LoginForm() {
 
       {/* Footer */}
       <div className="mt-4 text-center space-y-1.5">
-        <p className="text-xs" style={{ color: '#9297A6' }}>
+        <p className={`text-xs ${SMALL_PRINT}`} style={{ color: '#9297A6' }}>
           Only authorized brokers can access this portal.
         </p>
-        <p className="text-xs" style={{ color: '#9297A6' }}>
+        <p className={`text-xs ${SMALL_PRINT}`} style={{ color: '#9297A6' }}>
           Invited as a brokerage admin or IT admin? Start from the link in your invitation email.
           Already set up?{' '}
-          <a href="/setup" className="text-primary-600 hover:text-primary-700">
+          <a href="/setup" className={`text-primary-600 hover:text-primary-700 ${TOUCH_LINK}`}>
             Connect your brokerage
           </a>
         </p>
