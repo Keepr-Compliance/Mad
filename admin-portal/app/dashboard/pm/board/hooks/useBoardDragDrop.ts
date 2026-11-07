@@ -58,11 +58,11 @@ interface UseBoardDragDropParams {
   handleStatusChange: (itemId: string, newStatus: ItemStatus) => Promise<void>;
   handleEpicMove: (item: PmBacklogItem, plan: EpicDropPlan) => Promise<void>;
   /** Sprint mode: the loaded sprint list (row targets are checked against it). */
-  sprints?: PmSprint[];
+  sprints: PmSprint[];
   /** Sprint mode: move an item to another sprint row. */
-  handleSprintMove?: (item: PmBacklogItem, plan: SprintDropPlan) => Promise<void>;
+  handleSprintMove: (item: PmBacklogItem, plan: SprintDropPlan) => Promise<void>;
   /** Shows a refused drop's message. */
-  onDropRefused?: (message: string) => void;
+  onDropRefused: (message: string) => void;
 }
 
 export function useBoardDragDrop({
@@ -229,11 +229,11 @@ export function useBoardDragDrop({
           currentStatus,
           targetLaneKey,
           targetStatus,
-          sprints: sprints ?? [],
+          sprints,
         });
         if (!plan) return;
         if (isSprintDropRefusal(plan)) {
-          onDropRefused?.(plan.refused);
+          onDropRefused(plan.refused);
           return;
         }
         if (!plan.sprint && plan.status) {
@@ -241,7 +241,7 @@ export function useBoardDragDrop({
           await handleStatusChange(itemId, plan.status);
           return;
         }
-        await handleSprintMove?.(currentItem, plan);
+        await handleSprintMove(currentItem, plan);
         return;
       }
 

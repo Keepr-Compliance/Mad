@@ -328,6 +328,9 @@ describe('Label mode drops', () => {
         loadBacklogItems,
         handleStatusChange,
         handleEpicMove,
+        sprints: [],
+        handleSprintMove: vi.fn(),
+        onDropRefused: vi.fn(),
       })
     ).result.current;
   }
@@ -370,6 +373,9 @@ describe('Label mode drops', () => {
         loadBacklogItems,
         handleStatusChange,
         handleEpicMove,
+        sprints: [],
+        handleSprintMove: vi.fn(),
+        onDropRefused: vi.fn(),
       })
     );
     act(() =>
