@@ -9,6 +9,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { sendInternalInviteNotification } from '@/lib/internal-invite-email';
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -67,35 +68,11 @@ export async function POST(request: NextRequest) {
 
   const roleName = role?.name || role?.slug || 'Team Member';
 
-  // Send the email
-  sendInternalInviteNotification(invitation.email, roleName);
-
-  return NextResponse.json({ success: true });
-}
-
-function sendInternalInviteNotification(email: string, roleName: string) {
-  const brokerPortalUrl = process.env.BROKER_PORTAL_URL;
-  const apiSecret = process.env.INTERNAL_API_SECRET;
-
-  if (!brokerPortalUrl || !apiSecret) {
-    console.warn('[resend-invite] Email skipped: BROKER_PORTAL_URL or INTERNAL_API_SECRET not configured');
-    return;
+  // Send the email and wait for the outcome
+  const sent = await sendInternalInviteNotification(invitation.email, roleName, 'resend-invite');
+  if (!sent) {
+    return NextResponse.json({ error: 'Invite email could not be sent' }, { status: 502 });
   }
 
-  const adminPortalUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://admin.keeprcompliance.com';
-
-  fetch(`${brokerPortalUrl}/api/email/internal-invite`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-secret': apiSecret,
-    },
-    body: JSON.stringify({
-      email,
-      roleName,
-      loginUrl: adminPortalUrl,
-    }),
-  }).catch((err) => {
-    console.error('[resend-invite] Failed to send invite email:', err);
-  });
+  return NextResponse.json({ success: true });
 }

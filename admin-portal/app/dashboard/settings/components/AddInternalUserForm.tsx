@@ -27,6 +27,7 @@ export function AddInternalUserForm({ onSuccess, roles }: AddInternalUserFormPro
   const [error, setError] = useState<string | null>(null);
   const [isDuplicateError, setIsDuplicateError] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
+  const [emailWarning, setEmailWarning] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
   // `roles` holds only roles the caller may grant (BACKLOG-4168) and arrives after
@@ -41,6 +42,7 @@ export function AddInternalUserForm({ onSuccess, roles }: AddInternalUserFormPro
     setError(null);
     setIsDuplicateError(false);
     setSuccess(null);
+    setEmailWarning(null);
     setIsSubmitting(false);
   }, [defaultSlug]);
 
@@ -79,6 +81,7 @@ export function AddInternalUserForm({ onSuccess, roles }: AddInternalUserFormPro
     setError(null);
     setIsDuplicateError(false);
     setSuccess(null);
+    setEmailWarning(null);
 
     const trimmedEmail = email.trim();
     if (!trimmedEmail) {
@@ -98,6 +101,7 @@ export function AddInternalUserForm({ onSuccess, roles }: AddInternalUserFormPro
       const json = (await response.json()) as {
         success?: boolean;
         pending?: boolean;
+        emailSent?: boolean;
         message?: string;
         error?: string;
       };
@@ -118,7 +122,11 @@ export function AddInternalUserForm({ onSuccess, roles }: AddInternalUserFormPro
       setEmail('');
       setSelectedSlug(defaultSlug);
       onSuccess();
-      setTimeout(() => setIsOpen(false), 2000);
+      if (json.emailSent === false) {
+        setEmailWarning('The invite email could not be sent. Use Resend in the table to try again.');
+      } else {
+        setTimeout(() => setIsOpen(false), 2000);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An unexpected error occurred');
     } finally {
@@ -211,6 +219,11 @@ export function AddInternalUserForm({ onSuccess, roles }: AddInternalUserFormPro
                     <p className="text-sm text-red-700">{error}</p>
                   </div>
                 )
+              )}
+              {emailWarning && (
+                <div role="alert" className="mt-4 rounded-md bg-amber-50 border border-amber-200 px-4 py-3">
+                  <p className="text-sm text-amber-800">{emailWarning}</p>
+                </div>
               )}
               {success && (
                 <div className="mt-4 rounded-md bg-green-50 border border-green-200 px-4 py-3">
