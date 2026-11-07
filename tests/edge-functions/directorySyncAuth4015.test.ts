@@ -154,6 +154,11 @@ describe('SUPABASE_SECRET_KEYS object values are accepted, nothing else (BACKLOG
   it('C10 a value from the JSON-object form is accepted', async () => {
     expect(await call(`Bearer ${SECRET_A}`)).toBe(200);
   });
+  it('C10e a two-entry object (rotation): both the first and the second key are accepted (BACKLOG-4150)', async () => {
+    ENV.SUPABASE_SECRET_KEYS = JSON.stringify({ default: SECRET_A, rotated: SECRET_B });
+    expect(await call(`Bearer ${SECRET_A}`)).toBe(200);
+    expect(await call(`Bearer ${SECRET_B}`)).toBe(200);
+  });
   it('C10b a JSON array is not read: its elements are refused 403 (BACKLOG-4150)', async () => {
     ENV.SUPABASE_SECRET_KEYS = JSON.stringify([SECRET_A, SECRET_B]);
     expect(await call(`Bearer ${SECRET_A}`)).toBe(403);
