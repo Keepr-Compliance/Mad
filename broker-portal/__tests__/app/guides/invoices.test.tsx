@@ -25,4 +25,10 @@ describe('/guides/invoices', () => {
     ]);
     expect(renderedHrefs(container)).toEqual([]);
   });
+
+  it('BACKLOG-4187: the brokerage section names Manage billing, not View all invoices', () => {
+    const { container } = render(<InvoicesGuidePage />);
+    expect(container.textContent).not.toContain('View all invoices');
+    expect(container.textContent).toContain("Manage billing opens Stripe's billing page with every invoice and your payment method.");
+  });
 });
