@@ -572,6 +572,24 @@ describe('BoardPage in Sprint mode', () => {
     expect(screen.queryByTitle('Open backlog panel')).toBeNull();
   });
 
+  it('the bulk bar offers no "Assign Sprint" in Sprint mode', async () => {
+    persist({ swimLane: 'sprint', selectedProjectId: PROJECT_ID, selectedSprintId: ACTIVE.id });
+    render(<BoardPage />);
+    const row = await screen.findByTestId(`sprint-lane-${ACTIVE.id}`);
+    fireEvent.click(within(row).getAllByRole('checkbox')[0]);
+    await screen.findByText('1 selected');
+    expect(screen.queryByText('Assign Sprint')).toBeNull();
+  });
+
+  it('other modes unchanged: Area mode bulk bar still offers "Assign Sprint"', async () => {
+    persist({ swimLane: 'area', selectedSprintId: ACTIVE.id });
+    render(<BoardPage />);
+    const row = await screen.findByTestId('swim-lane-No Area');
+    fireEvent.click(within(row).getAllByRole('checkbox')[0]);
+    await screen.findByText('1 selected');
+    expect(screen.getByText('Assign Sprint')).toBeTruthy();
+  });
+
   it('with no project picked, asks for one', async () => {
     persist({ swimLane: 'sprint' });
     render(<BoardPage />);
