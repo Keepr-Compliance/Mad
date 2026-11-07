@@ -24,7 +24,7 @@ interface ElectronAPI {
   platform: "darwin" | "win32" | "linux" | string;
 
   // App Info
-  getAppInfo: () => Promise<{ version: string; name: string }>;
+  getAppInfo: () => Promise<{ version?: string; name: string }>;
   getMacOSVersion: () => Promise<{ version: string }>;
   checkAppLocation: () => Promise<{ inApplications: boolean; path: string }>;
 
