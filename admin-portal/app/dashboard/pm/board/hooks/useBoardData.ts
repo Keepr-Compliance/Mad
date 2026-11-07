@@ -195,9 +195,13 @@ export function useBoardData() {
   }, [refreshLabels]);
 
   const projectMode = swimLane === 'project';
-  // Latest picked project, read after awaits to drop stale responses.
-  const selectedProjectRef = useRef(selectedProjectId);
-  selectedProjectRef.current = selectedProjectId;
+  // The board's source: a project in Project mode, the sprint otherwise.
+  const boardSourceKey = projectMode ? `project:${selectedProjectId}` : `sprint:${selectedSprintId}`;
+  // Latest board source (mode + project/sprint), read after awaits to drop
+  // stale responses: a newer project or sprint, or a mode switch such as
+  // Project -> Area, while the fetch was in flight.
+  const boardSourceRef = useRef(boardSourceKey);
+  boardSourceRef.current = boardSourceKey;
   // The sprint only matters outside Project mode; keeping it out of Project
   // mode's deps stops a late sprint-list load from refetching the project.
   const sprintForLoad = projectMode ? '' : selectedSprintId;
@@ -212,10 +216,10 @@ export function useBoardData() {
         return;
       }
       try {
-        const requestedProjectId = selectedProjectId;
-        const data = await getBoardTasks(null, requestedProjectId);
-        // A newer project was picked while this was in flight: drop it.
-        if (selectedProjectRef.current !== requestedProjectId) return;
+        const requestedSource = `project:${selectedProjectId}`;
+        const data = await getBoardTasks(null, selectedProjectId);
+        // The project or the mode changed while this was in flight: drop it.
+        if (boardSourceRef.current !== requestedSource) return;
         setColumns(data);
       } catch (err) {
         // No listItems fallback here: it is page-capped and would show a
@@ -229,13 +233,17 @@ export function useBoardData() {
       return;
     }
     if (!sprintForLoad) { setLoading(false); return; }
+    const requestedSource = `sprint:${sprintForLoad}`;
     try {
       const data = await getBoardTasks(sprintForLoad);
+      // The sprint or the mode changed while this was in flight: drop it.
+      if (boardSourceRef.current !== requestedSource) return;
       setColumns(data);
     } catch (err) {
       console.error('Failed to load board tasks:', err);
       try {
         const result = await listItems({ sprint_id: sprintForLoad, page_size: 200 });
+        if (boardSourceRef.current !== requestedSource) return;
         const items = result.items || [];
         setColumns({
           pending: items.filter((i) => i.status === 'pending'),
@@ -262,9 +270,6 @@ export function useBoardData() {
     loadBoardData();
     refreshLabels();
   }, [loadBoardData, refreshLabels]);
-
-  // The board's source: a project in Project mode, the sprint otherwise.
-  const boardSourceKey = projectMode ? `project:${selectedProjectId}` : `sprint:${selectedSprintId}`;
 
   // Switching source must not show the previous source's items under the
   // new grouping while the fetch is in flight.
@@ -333,10 +338,13 @@ export function useBoardData() {
       // row's epic, no sprint.
       if (projectMode) {
         if (!selectedProjectId) return;
-        // Refuse a lane whose epic is not in the loaded project (stale board).
+        // Refuse a lane whose epic is not on the loaded board or does not
+        // belong to the picked project (stale board).
         if (groupKey && groupKey !== NO_EPIC_KEY) {
           const loadedEpic = (Object.values(columns) as PmBacklogItem[][]).some((items) =>
-            items.some((i) => i.type === 'epic' && i.id === groupKey)
+            items.some(
+              (i) => i.type === 'epic' && i.id === groupKey && i.project_id === selectedProjectId
+            )
           );
           if (!loadedEpic) {
             setBoardError('Could not add the item. The board is still loading. Try again.');
