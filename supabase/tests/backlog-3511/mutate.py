@@ -52,21 +52,17 @@ def sql_controls():
         print('  SQL   NO RESULT ' + o[:600] + out.stderr[:300])
 
 def jest_parity():
-    import tempfile
-    # P3511_TMP: a writable directory for the jest report when the default temp dir is not (sandboxes)
-    rep = tempfile.mktemp(suffix='.json', dir=os.environ.get('P3511_TMP') or None)
-    out = sh('npx', 'jest', '__tests__/reports-3511', '--json', '--outputFile=' + rep, '--silent', cwd=os.path.join(root, 'broker-portal'))
-    try:
-        d = json.load(open(rep))
-        os.remove(rep)
-        failed = sorted({a['title'] for t in d['testResults'] for a in t['assertionResults'] if a['status'] == 'failed'})
-        print('  JEST  total=%s pass=%s fail=%s reds=%s' % (d['numTotalTests'], d['numPassedTests'], d['numFailedTests'], ' | '.join(failed) or '-'))
-        if not d['numTotalTests']:
-            print('  JEST  ZERO TESTS RAN')
-        if d['numFailedTests'] == 0 and d['numRuntimeErrorTestSuites']:
-            print('  JEST  suite failed to run')
-    except Exception as e:
-        print('  JEST  NO RESULT %r ' % e + out.stdout[:300] + out.stderr[-600:])
+    # The summary line from stderr: jest skips --outputFile when this config bails on a failure.
+    out = sh('npx', 'jest', '__tests__/reports-3511', cwd=os.path.join(root, 'broker-portal'))
+    err = out.stderr
+    m = re.search(r'^Tests:\s+(.*)$', err, re.M)
+    if not m:
+        print('  JEST  NO RESULT ' + err[-600:]); return
+    nums = dict((k, int(v)) for v, k in re.findall(r'(\d+) (failed|passed|total)', m.group(1)))
+    reds = sorted(set(re.findall(r'^\s+\u25cf (.*)$', err, re.M)))
+    print('  JEST  total=%s pass=%s fail=%s reds=%s' % (nums.get('total', 0), nums.get('passed', 0), nums.get('failed', 0), ' | '.join(reds) or '-'))
+    if not nums.get('total'):
+        print('  JEST  ZERO TESTS RAN')
 
 for rel in (MIG, PRE, TSR):
     if sh('git', 'status', '--porcelain', '--', rel).stdout.strip():
