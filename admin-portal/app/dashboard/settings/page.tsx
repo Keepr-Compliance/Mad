@@ -5,7 +5,7 @@
  * and renders the management UI with tabs for users and roles.
  */
 
-import { createClient, getAuthenticatedUser } from '@/lib/supabase/server';
+import { createClient, createServiceClient, getAuthenticatedUser } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@keepr/design-system';
 import { SettingsManager } from './components/SettingsManager';
@@ -54,9 +54,14 @@ export interface AdminPermission {
   category: string;
 }
 
-async function getInternalUsers(): Promise<InternalUser[]> {
-  const supabase = await createClient();
-
+/**
+ * BACKLOG-4145: reads through the service client. The users embed is not readable with the
+ * caller's session for every settings viewer, so this runs only after the page's permission
+ * check below has passed.
+ */
+async function getInternalUsers(
+  supabase: ReturnType<typeof createServiceClient>
+): Promise<InternalUser[]> {
   const { data, error } = await supabase
     .from('internal_roles')
     .select(`
@@ -223,8 +228,11 @@ export default async function SettingsPage() {
     redirect('/dashboard?error=insufficient_permissions');
   }
 
+  // BACKLOG-4145: created only after the permission check above.
+  const serviceSupabase = createServiceClient();
+
   const [internalUsers, currentUserId, roles, permissions, pendingInvitations] = await Promise.all([
-    getInternalUsers(),
+    getInternalUsers(serviceSupabase),
     getCurrentUserId(),
     getRoles(),
     getPermissions(),

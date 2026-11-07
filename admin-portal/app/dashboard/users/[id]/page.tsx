@@ -11,6 +11,7 @@ import { AuditLogTable } from './components/AuditLogTable';
 import { BillingCreditsCard } from './components/BillingCreditsCard';
 import { SentryErrorsCard } from './components/SentryErrorsCard';
 import { createServiceClient } from '@/lib/supabase/server';
+import { canViewUserDetail } from '@/lib/user-detail-access';
 import { getBillingData } from '@/lib/billing-queries';
 import { getSuspensionStatus } from '@/lib/suspension-queries';
 import { readPlanLinesWithOrgs, validPlanLineIds } from '@/lib/planLines';
@@ -51,13 +52,12 @@ export default async function UserDetailPage({
     redirect('/login?error=not_authorized');
   }
 
-  // Defense-in-depth: verify page-level permission
-  const { data: hasPerm } = await supabase.rpc('has_permission', {
-    check_user_id: adminUser.id,
-    required_permission: 'users.view',
-  });
-  if (!hasPerm) {
-    redirect('/dashboard?error=insufficient_permissions');
+  // Defense-in-depth: verify page-level access. BACKLOG-4145: users.view, or the caller can see
+  // this user as a support ticket requester. Neither -> not found. Action controls below keep
+  // their own permission checks.
+  const canView = await canViewUserDetail(supabase, adminUser.id, id);
+  if (!canView) {
+    notFound();
   }
 
   // Service-role client for RLS-bypassing support reads (billing/credits are
@@ -108,7 +108,7 @@ export default async function UserDetailPage({
 
   const profile = profileResult.data;
 
-  // BACKLOG-3859: the plan line. Gated above (session has_permission users.view)
+  // BACKLOG-3859: the plan line. Gated above (session canViewUserDetail, BACKLOG-4145)
   // before the service client was created. Credits come from getBillingData's
   // get_credit_balance read, so no second read of the balance; when that read
   // failed (creditBalance then defaults to 0) the count is left out, not shown as 0.
