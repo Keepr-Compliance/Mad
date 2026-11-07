@@ -77,6 +77,15 @@ function ownFirst<V extends SavedViewItem>(views: V[]): V[] {
  * which asks first in the panel (Cancel / Leave view) and calls `onLeave`
  * only on the confirm. Escape cancels an open Leave confirm before it closes
  * the panel. All of this is presentation: the server enforces access.
+ *
+ * Editor metric (BACKLOG-4142): with `sharing.updateMetric`, an editor row's
+ * button is "Update <name>" and opens an inline form in the panel, the same
+ * pattern as the Leave confirm: "Update filters and card metric", the
+ * adopter's picker seeded with `initial(view)`, then Cancel / "Update view".
+ * The confirm calls `onUpdate` with `current().filters` and the picked
+ * metric. Only one inline form (Update, Leave or the save form) is open at a
+ * time. Escape or Cancel closes the Update form and returns focus to that
+ * row's Update button. Without `updateMetric`, Update stays one click.
  * Without any `access` set, the panel renders exactly as before.
  */
 type SaveMode = 'view' | 'card';
@@ -106,11 +115,14 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
   const [rovingIndex, setRovingIndex] = React.useState(0);
   /** The shared view whose Leave confirm is showing, by id. */
   const [leaveId, setLeaveId] = React.useState<string | null>(null);
+  /** The editor row whose Update form is showing, by id, and the metric picked in it (BACKLOG-4142). */
+  const [updateState, setUpdateState] = React.useState<{ id: string; metric: M } | null>(null);
 
   const baseId = React.useId();
   const panelId = `${baseId}-panel`;
   const hintId = `${baseId}-hint`;
   const sharedHeadingId = `${baseId}-shared`;
+  const updateHeadingId = `${baseId}-update`;
 
   const wrapperRef = React.useRef<HTMLDivElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
@@ -119,9 +131,15 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
   const saveCardButtonRef = React.useRef<HTMLButtonElement>(null);
   const nameRef = React.useRef<HTMLInputElement>(null);
   const leaveCancelRef = React.useRef<HTMLButtonElement>(null);
+  const updateFormRef = React.useRef<HTMLDivElement>(null);
+  const updateCancelRef = React.useRef<HTMLButtonElement>(null);
+  /** Each editor row's Update button, by row index (BACKLOG-4142). */
+  const updateRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
   const rowRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
   /** What to focus after the next render: a row index, the save button, or the name field. */
-  const pendingFocus = React.useRef<number | 'save' | 'saveCard' | 'name' | 'leaveCancel' | null>(null);
+  const pendingFocus = React.useRef<
+    number | { update: number } | 'save' | 'saveCard' | 'name' | 'leaveCancel' | 'updateForm' | null
+  >(null);
   /** Each row's Delete button, by row index (BACKLOG-4095). */
   const deleteRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
   /**
@@ -144,6 +162,11 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
   // Own rows only: a shared view's pin belongs to its owner (BACKLOG-4087).
   const pinnedCount = pinning ? list.filter((v) => isOwnView(v) && v.pinned).length : 0;
   const leaveView = leaveId === null ? null : (list.find((v) => v.id === leaveId && !isOwnView(v)) ?? null);
+  const updateMetric = sharing?.updateMetric;
+  const updateView =
+    updateState === null || !updateMetric
+      ? null
+      : (list.find((v) => v.id === updateState.id && v.access === 'editor') ?? null);
   // One slot, two sources. The local refusal is raised synchronously and is
   // the more specific of the two, so it wins over the store's.
   const message = error ?? writeError;
@@ -164,6 +187,12 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
       nameRef.current?.focus();
     } else if (target === 'leaveCancel' && leaveCancelRef.current) {
       leaveCancelRef.current.focus();
+    } else if (target === 'updateForm' && updateFormRef.current) {
+      // The adopter's picker first; Cancel when it renders nothing focusable.
+      const first = updateFormRef.current.querySelector<HTMLElement>('input, select, textarea, button');
+      (first ?? updateCancelRef.current)?.focus();
+    } else if (typeof target === 'object' && updateRefs.current[target.update]) {
+      updateRefs.current[target.update]?.focus();
     } else if (typeof target === 'number' && rowRefs.current[target]) {
       rowRefs.current[target]?.focus();
     } else if (target === 'saveCard' && saveCardButtonRef.current) {
@@ -220,6 +249,7 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
     setName('');
     setError(null);
     setLeaveId(null);
+    setUpdateState(null);
     if (restoreFocus) triggerRef.current?.focus();
   }, []);
 
@@ -234,6 +264,8 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
   }
 
   function openForm(mode: SaveMode) {
+    setLeaveId(null);
+    setUpdateState(null);
     setSaveMode(mode);
     setError(null);
     pendingFocus.current = 'name';
@@ -246,6 +278,8 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
   saveModeRef.current = saveMode;
   const leaveRef = React.useRef(leaveView);
   leaveRef.current = leaveView;
+  const updateViewRef = React.useRef(updateView);
+  updateViewRef.current = updateView;
   const listRef = React.useRef(list);
   listRef.current = list;
   React.useEffect(() => {
@@ -254,7 +288,8 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
       if (e.key !== 'Escape') return;
       e.stopPropagation();
       e.preventDefault();
-      if (leaveRef.current) cancelLeave();
+      if (updateViewRef.current) cancelUpdate();
+      else if (leaveRef.current) cancelLeave();
       else if (savingRef.current) cancelForm();
       else close(true);
     }
@@ -304,6 +339,9 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
   }
 
   function askLeave(view: V) {
+    setUpdateState(null);
+    setSaveMode(null);
+    setName('');
     setLeaveId(view.id);
     pendingFocus.current = 'leaveCancel';
   }
@@ -323,9 +361,43 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
 
   function handleUpdate(view: V) {
     if (!sharing) return;
+    if (sharing.updateMetric) {
+      askUpdate(view, sharing.updateMetric.initial(view));
+      return;
+    }
     const state = sharing.current();
     // Exactly two fields, picked by name: whatever else `current()` returns never reaches onUpdate.
     sharing.onUpdate(view, { filters: state.filters, metric: state.metric });
+  }
+
+  function askUpdate(view: V, metric: M) {
+    setLeaveId(null);
+    setSaveMode(null);
+    setName('');
+    setError(null);
+    setUpdateState({ id: view.id, metric });
+    pendingFocus.current = 'updateForm';
+  }
+
+  function cancelUpdate() {
+    // By id on the latest list: it may have been re-read since the form opened.
+    const index = listRef.current.findIndex((v) => v.id === updateViewRef.current?.id);
+    setUpdateState(null);
+    pendingFocus.current = index >= 0 ? { update: index } : null;
+  }
+
+  function confirmUpdate() {
+    const view = updateViewRef.current;
+    const picked = updateState;
+    setUpdateState(null);
+    if (view && picked && sharing) {
+      const state = sharing.current();
+      // The page's filters and the PICKED metric, never `state.metric`: an editor who changed
+      // nothing sends the view's own metric back instead of resetting the owner's card.
+      sharing.onUpdate(view, { filters: state.filters, metric: picked.metric });
+    }
+    // The store re-reads after the write and its loading render unmounts the rows.
+    panelRef.current?.focus();
   }
 
   function handleShare(view: V) {
@@ -459,8 +531,12 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
         {!own && sharing && view.access === 'editor' ? (
           <button
             type="button"
-            aria-label={`Update ${view.name} with the current filters`}
-            title={`Update ${view.name} with the current filters`}
+            ref={(node) => {
+              updateRefs.current[index] = node;
+            }}
+            aria-label={updateMetric ? `Update ${view.name}` : `Update ${view.name} with the current filters`}
+            title={updateMetric ? `Update ${view.name}` : `Update ${view.name} with the current filters`}
+            aria-expanded={updateMetric ? updateView?.id === view.id : undefined}
             onClick={() => handleUpdate(view)}
             className="p-1 text-gray-400 hover:text-primary-500"
           >
@@ -633,6 +709,41 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
                   className="rounded bg-danger-600 px-2 py-1 text-sm text-white hover:bg-danger-700"
                 >
                   Leave view
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {updateView && updateState && updateMetric ? (
+            <div
+              ref={updateFormRef}
+              role="group"
+              aria-labelledby={updateHeadingId}
+              data-slot="saved-views-update-form"
+              className="mx-2 mb-2 space-y-2 rounded border border-gray-200 bg-gray-50 p-2 text-sm text-gray-700"
+            >
+              <p id={updateHeadingId} className="font-medium">
+                Update filters and card metric
+              </p>
+              <p className="text-xs text-gray-500">{updateView.name}</p>
+              {updateMetric.render(updateState.metric, (next) =>
+                setUpdateState((prev) => (prev === null ? prev : { id: prev.id, metric: next }))
+              )}
+              <div className="flex justify-end gap-2">
+                <button
+                  ref={updateCancelRef}
+                  type="button"
+                  onClick={cancelUpdate}
+                  className="rounded px-2 py-1 text-sm text-gray-500 hover:text-gray-700"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmUpdate}
+                  className="rounded bg-primary-600 px-2 py-1 text-sm text-white hover:bg-primary-700"
+                >
+                  Update view
                 </button>
               </div>
             </div>

@@ -55,11 +55,30 @@ export interface SavedViewsSharing<V extends SavedViewItem, F = unknown, M = unk
   /**
    * Save the page's current filters and metric into a view shared with the
    * user as an editor. Offered on 'editor' rows only. The payload holds
-   * exactly `filters` and `metric`, read from `current()` at click time.
+   * exactly `filters` and `metric`. Without `updateMetric` both come from
+   * `current()` at click time. With `updateMetric` (BACKLOG-4142) the filters
+   * come from `current()` and the metric is the one picked in the form.
    */
   onUpdate: (view: V, payload: SavedViewUpdate<F, M>) => void;
-  /** The page's current filters and metric. Read when an editor clicks Update. */
+  /** The page's current filters and metric. Read when an editor updates a view. */
   current: () => SavedViewUpdate<F, M>;
+  /**
+   * Let an editor change the view's metric (BACKLOG-4142). Absent: Update is
+   * one click with `current()`, as before. Given: Update opens an inline form
+   * in the panel (same pattern as the Leave confirm) holding `render(...)`,
+   * seeded with `initial(view)`, with Cancel and "Update view". The confirm
+   * sends `{ filters: current().filters, metric: <picked> }`, so an editor who
+   * changes nothing sends the view's own metric back, never the page's.
+   */
+  updateMetric?: SavedViewUpdateMetric<V, M>;
+}
+
+/** BACKLOG-4142. See `SavedViewsSharing.updateMetric`. */
+export interface SavedViewUpdateMetric<V extends SavedViewItem, M = unknown> {
+  /** The metric the form starts with: the view's own. */
+  initial: (view: V) => M;
+  /** The picker. Controlled: render `value` and call `onChange` with the new metric. */
+  render: (value: M, onChange: (next: M) => void) => ReactNode;
 }
 
 /** How a view was saved when `pinning` is given (BACKLOG-4132). */
@@ -134,6 +153,7 @@ export interface SavedViewsProps<V extends SavedViewItem, F = unknown, M = unkno
  * RESERVED — deliberately NOT in SavedViewsProps. Each needs a caller first.
  *
  * - Sharing: BUILT in BACKLOG-4087 (`access`, `ownerName`, `sharing`, ShareDialog).
+ *   An editor changing the metric: BUILT in BACKLOG-4142 (`sharing.updateMetric`).
  *   Still reserved: renaming a shared view, an editor changing the pin or the
  *   default of a shared view, and re-sharing by a non-owner.
  * - `onRename`: no rename UI exists today and no 4084 caller renames.

@@ -16,6 +16,8 @@
  *   picker options are `report_share_candidates` output and nothing else.
  * - Update (editor rows): the page's filters, read from `current()` at click time, and the view's
  *   own metric when it has one (else the payload's fixed metric).
+ * - BACKLOG-4142: with `renderMetric`, Update opens the kit's inline form with that picker, seeded
+ *   with the view's own metric, and the metric the editor picked is sent as is.
  * - Leave (shared rows): `report_share_remove` with the caller's own id.
  * Update and Leave go through the saved-views write runner, so a refusal shows and the list re-reads.
  *
@@ -26,7 +28,7 @@
  * Hiding these is presentation only. The server functions are the access guard.
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import type { SavedViewItem, SavedViewsSharing, SavedViewUpdate, ShareDialogProps } from '@keepr/ui';
 import { canShareViews } from './report-access';
 import { useOpenReport } from './report-access-context';
@@ -55,7 +57,12 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
   shareApi: ShareApi | undefined,
   saved: Pick<UseReportSavedViews<V, F, M>, 'views' | 'write'>,
   reportKey: string,
-  current: () => SavedViewUpdate<F, M>
+  current: () => SavedViewUpdate<F, M>,
+  /**
+   * The card metric picker (BACKLOG-4142). Given: an editor picks the metric in the Update form
+   * and that metric is sent. Absent: the view's own metric overrides the payload, as before.
+   */
+  renderMetric?: (value: M, onChange: (next: M) => void) => ReactNode
 ): UseReportViewSharing<V> {
   const mayShare = canShareViews(useOpenReport()?.access ?? null);
   const [missing, setMissing] = useState(false);
@@ -127,21 +134,39 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
             );
           },
           onUpdate: (view, payload) => {
-            // The page's filters; the VIEW's own metric when it has one (a pinned card's column and
-            // function). `current()` cannot know which view is being updated, and on the pinning
-            // reports its metric is the save form's, which an editor never touched: sending it would
-            // reset the owner's card. Reports with no per-view metric send the payload's fixed one.
+            // With a picker the payload's metric is the one the editor chose in the form, seeded
+            // with the view's own (initial below), so it is sent as is.
+            // Without one: the page's filters and the VIEW's own metric when it has one (a pinned
+            // card's column and function). `current()` cannot know which view is being updated, and
+            // on the pinning reports its metric is the save form's, which an editor never touched:
+            // sending it would reset the owner's card. Reports with no per-view metric send the
+            // payload's fixed one.
             const own = (view as { metric?: unknown }).metric;
+            const metric = renderMetric ? payload.metric : own !== undefined ? own : payload.metric;
             saved.write(() =>
               shareApi.update({
                 reportKey,
                 id: view.id,
                 filters: payload.filters,
-                metric: own !== undefined ? own : payload.metric,
+                metric,
               })
             );
           },
           current,
+          ...(renderMetric
+            ? {
+                updateMetric: {
+                  // The view's own metric; a view saved without one starts from the page's.
+                  initial: (view: V) => {
+                    const own = (view as { metric?: M }).metric;
+                    return own !== undefined ? own : current().metric;
+                  },
+                  // The kit slot is typed with the default (unknown) metric, like `sharing` itself;
+                  // the values it hands back are the ones `initial` and this picker made.
+                  render: (value: unknown, onChange: (next: unknown) => void) => renderMetric(value as M, onChange),
+                },
+              }
+            : {}),
         }
       : undefined;
 

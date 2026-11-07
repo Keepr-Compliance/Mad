@@ -285,13 +285,27 @@ export function IphoneSyncReport({
       pinned: options?.pin === true,
     });
   }
-  // Sharing (BACKLOG-4087). An editor's Update changes the FILTERS only (founder rule): the hook
-  // sends the view's own card metric, never this one (use-report-view-sharing.ts).
-  const { sharing, shareDialog } = useReportViewSharing(shareApi, savedViews, REPORT_KEY, () => ({
-    filters: serializeFilters(filters, stalledOnly, serializeViewPeriod(period)),
-    // Required by the kit payload type; ignored for a view that has its own metric (every view here).
-    metric,
-  }));
+  // Sharing (BACKLOG-4087). An editor's Update sends the page's filters and the card metric picked in
+  // the Update form, which starts from the view's own (BACKLOG-4142, use-report-view-sharing.ts).
+  const { sharing, shareDialog } = useReportViewSharing(
+    shareApi,
+    savedViews,
+    REPORT_KEY,
+    () => ({
+      filters: serializeFilters(filters, stalledOnly, serializeViewPeriod(period)),
+      // Required by the kit payload type; the Update form starts from the view's own metric instead.
+      metric,
+    }),
+    (value: ViewMetric, onChange: (next: ViewMetric) => void) => (
+      <MetricSaveFields
+        value={value}
+        onChange={(next) => onChange({ col: next.col as MetricColumn, fn: next.fn as MetricFunction })}
+        columns={METRIC_COLUMNS}
+        functions={METRIC_FUNCTIONS}
+        functionsForColumn={iphoneFunctionsFor}
+      />
+    )
+  );
 
 
   // Re-saves the view as stored, period included: only `pinned` changes.

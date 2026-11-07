@@ -331,3 +331,150 @@ describe('SavedViews sharing (BACKLOG-4087)', () => {
     expect(SavedViewsFromIndex).toBe(SavedViews);
   });
 });
+
+/**
+ * BACKLOG-4142: the editor's metric picker. The view's own metric (initial)
+ * and the page's metric (current().metric) differ on purpose, so a payload
+ * built from the wrong one shows (U1).
+ */
+describe('SavedViews editor metric picker (BACKLOG-4142)', () => {
+  const VIEW_METRIC: Metric = { col: 'duration', fn: 'p90' };
+  const PAGE_METRIC: Metric = { col: 'rows', fn: 'count' };
+
+  function MetricPicker({ value, onChange }: { value: Metric; onChange: (next: Metric) => void }) {
+    return (
+      <select aria-label="Card metric" value={value.col} onChange={(e) => onChange({ col: e.target.value, fn: 'count' })}>
+        <option value="duration">Duration</option>
+        <option value="rows">Rows</option>
+        <option value="errors">Errors</option>
+      </select>
+    );
+  }
+
+  function makePickerSharing(current?: () => SavedViewUpdate<Filters, Metric>) {
+    const initial = jest.fn((_view: View) => VIEW_METRIC);
+    const sharing: SavedViewsSharing<View, Filters, Metric> = {
+      ...makeSharing(current ?? (() => ({ filters: { q: 'now' }, metric: PAGE_METRIC }))),
+      updateMetric: {
+        initial,
+        render: (value, onChange) => <MetricPicker value={value} onChange={onChange} />,
+      },
+    };
+    return { sharing, initial };
+  }
+
+  const form = () => screen.queryByRole('group', { name: 'Update filters and card metric' });
+
+  it('U0 the editor row button is "Update <name>"; it opens the form seeded from initial(view) and calls nothing', () => {
+    const { sharing, initial } = makePickerSharing();
+    setup({ sharing });
+    open();
+    expect(buttonsIn(rowItem('Budget'))).toEqual([expect.stringMatching(/^Budget/), 'Update Budget', 'Leave Budget']);
+    fireEvent.click(screen.getByRole('button', { name: 'Update Budget' }));
+    expect(form()).not.toBeNull();
+    expect(initial).toHaveBeenCalledWith(expect.objectContaining({ id: 's-ed' }));
+    expect(screen.getByRole('combobox', { name: 'Card metric' })).toHaveValue('duration');
+    expect(screen.getByRole('combobox', { name: 'Card metric' })).toHaveFocus();
+    expect(sharing.onUpdate).not.toHaveBeenCalled();
+  });
+
+  it('U1 confirm with nothing changed sends the VIEW metric from initial(view), not current().metric', () => {
+    const { sharing } = makePickerSharing();
+    setup({ sharing });
+    open();
+    fireEvent.click(screen.getByRole('button', { name: 'Update Budget' }));
+    fireEvent.click(within(form() as HTMLElement).getByRole('button', { name: 'Update view' }));
+    expect(sharing.onUpdate).toHaveBeenCalledTimes(1);
+    const [view, payload] = (sharing.onUpdate as jest.Mock).mock.calls[0];
+    expect(view.id).toBe('s-ed');
+    expect(payload).toStrictEqual({ filters: { q: 'now' }, metric: VIEW_METRIC });
+    expect(payload.metric).not.toEqual(PAGE_METRIC);
+    expect(form()).toBeNull();
+  });
+
+  it('U2 a picked metric goes out as exactly { filters, metric }, even when current() carries more', () => {
+    const extra = {
+      filters: { q: 'new' },
+      metric: PAGE_METRIC,
+      name: 'Hijacked',
+      pinned: true,
+      is_default: true,
+    } as unknown as SavedViewUpdate<Filters, Metric>;
+    const { sharing } = makePickerSharing(() => extra);
+    setup({ sharing });
+    open();
+    fireEvent.click(screen.getByRole('button', { name: 'Update Budget' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Card metric' }), { target: { value: 'errors' } });
+    fireEvent.click(within(form() as HTMLElement).getByRole('button', { name: 'Update view' }));
+    expect(sharing.onUpdate).toHaveBeenCalledTimes(1);
+    const payload = (sharing.onUpdate as jest.Mock).mock.calls[0][1];
+    expect(Object.keys(payload).sort()).toEqual(['filters', 'metric']);
+    expect(payload).toStrictEqual({ filters: { q: 'new' }, metric: { col: 'errors', fn: 'count' } });
+  });
+
+  it('U3 without updateMetric, Update is still one click with the current() payload and no form', () => {
+    const sharing = makeSharing(() => ({ filters: { q: 'now' }, metric: PAGE_METRIC }));
+    setup({ sharing });
+    open();
+    fireEvent.click(screen.getByRole('button', { name: 'Update Budget with the current filters' }));
+    expect(sharing.onUpdate).toHaveBeenCalledTimes(1);
+    expect((sharing.onUpdate as jest.Mock).mock.calls[0][1]).toStrictEqual({ filters: { q: 'now' }, metric: PAGE_METRIC });
+    expect(form()).toBeNull();
+    expect(document.querySelector('[data-slot="saved-views-update-form"]')).toBeNull();
+  });
+
+  it('U4 Cancel calls nothing and returns focus to the row Update button', () => {
+    const { sharing } = makePickerSharing();
+    setup({ sharing });
+    open();
+    fireEvent.click(screen.getByRole('button', { name: 'Update Budget' }));
+    fireEvent.click(within(form() as HTMLElement).getByRole('button', { name: 'Cancel' }));
+    expect(form()).toBeNull();
+    expect(sharing.onUpdate).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Update Budget' })).toHaveFocus();
+  });
+
+  it('U5 Escape closes the form only, focus returns to the row Update button; the next Escape closes the panel', () => {
+    const { sharing } = makePickerSharing();
+    setup({ sharing });
+    open();
+    fireEvent.click(screen.getByRole('button', { name: 'Update Budget' }));
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' });
+    expect(form()).toBeNull();
+    expect(panel()).not.toBeNull();
+    expect(sharing.onUpdate).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Update Budget' })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' });
+    expect(panel()).toBeNull();
+    expect(trigger()).toHaveFocus();
+  });
+
+  it('U6 one inline form at a time: Update, Leave and the save form replace each other', () => {
+    const { sharing } = makePickerSharing();
+    setup({ sharing });
+    open();
+    fireEvent.click(screen.getByRole('button', { name: 'Update Budget' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Leave Backlog' }));
+    expect(form()).toBeNull();
+    expect(screen.getByRole('group', { name: 'Leave Backlog' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Update Budget' }));
+    expect(screen.queryByRole('group', { name: 'Leave Backlog' })).toBeNull();
+    expect(form()).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Save current view' }));
+    expect(form()).toBeNull();
+    expect(screen.getByRole('textbox', { name: 'View name' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Update Budget' }));
+    expect(screen.queryByRole('textbox', { name: 'View name' })).toBeNull();
+    expect(form()).not.toBeNull();
+    expect(sharing.onUpdate).not.toHaveBeenCalled();
+    expect(sharing.onLeave).not.toHaveBeenCalled();
+  });
+
+  it('U7 no nested interactive elements with the Update form open', () => {
+    const { sharing } = makePickerSharing();
+    setup({ pinning: PIN, sharing });
+    open();
+    fireEvent.click(screen.getByRole('button', { name: 'Update Budget' }));
+    expect(document.querySelectorAll('button button, button select, button input')).toHaveLength(0);
+  });
+});
