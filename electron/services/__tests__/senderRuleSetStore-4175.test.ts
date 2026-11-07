@@ -7,7 +7,7 @@
  * resolved value of `client.rpc("sender_rule_set_current")` from
  * @supabase/supabase-js 2.110.2, captured 2026-11-07:
  *   valid-signed-in.json  the test Supabase project with migration
- *                         20261108100000 applied, called as a signed-in
+ *                         20261107235503 applied, called as a signed-in
  *                         synthetic user (example.test, deleted afterwards)
  *   anon-no-session.json  same project, no session (EXECUTE revoked from anon)
  *   pgrst202.json         a project WITHOUT the migration (function absent)
@@ -69,7 +69,7 @@ import * as store from "../senderRuleSetStore";
 const actualBundled: SenderRuleSet = jest.requireActual("../../utils/senderFilter/bundledRules").BUNDLED_SENDER_RULES;
 const FIX = path.join(__dirname, "fixtures", "senderRuleSetRpc-4175");
 const fixture = (name: string) => JSON.parse(fs.readFileSync(path.join(FIX, `${name}.json`), "utf8"));
-const MIGRATION = path.join(__dirname, "..", "..", "..", "supabase", "migrations", "20261108100000_backlog_4175_sender_rule_sets.sql");
+const MIGRATION = path.join(__dirname, "..", "..", "..", "supabase", "migrations", "20261107235503_backlog_4175_sender_rule_sets.sql");
 
 function v(version: number, patch: Partial<SenderRuleSet> = {}): SenderRuleSet {
   const r = parseSenderRuleSet(JSON.parse(JSON.stringify({ ...actualBundled, ...patch, version })));

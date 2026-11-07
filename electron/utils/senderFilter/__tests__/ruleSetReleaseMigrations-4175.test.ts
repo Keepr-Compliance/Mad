@@ -15,7 +15,7 @@ import path from "path";
 import { BUNDLED_SENDER_RULES } from "../bundledRules";
 
 const MIGRATIONS = path.resolve(__dirname, "../../../../supabase/migrations");
-const SEED_FILE = "20261108100000_backlog_4175_sender_rule_sets.sql";
+const SEED_FILE = "20261107235503_backlog_4175_sender_rule_sets.sql";
 
 interface Migration {
   name: string;
