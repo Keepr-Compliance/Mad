@@ -149,7 +149,7 @@ import {
 // the import goes with it. Only the type remains in use.
 import { type ContactOrigin } from "../services/db/contactOriginLink";
 import { getValidUserId } from "../utils/userIdHelper";
-import { isContactSourceEnabled, isTextPeopleEnabled } from "../utils/preferenceHelper";
+import { isContactSourceEnabled, isInferredEmailSourceEnabled, isTextPeopleEnabled } from "../utils/preferenceHelper";
 
 /**
  * BACKLOG-3670: people found in Google Messages texts are offered only while
@@ -2036,12 +2036,11 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
                 async (provider) =>
                   [
                     provider,
-                    await isContactSourceEnabled(
+                    // BACKLOG-4188: unset → ON; a stored value wins; a
+                    // failed read → OFF.
+                    await isInferredEmailSourceEnabled(
                       validatedUserId,
-                      "inferred",
                       provider === "outlook" ? "outlookEmails" : "gmailEmails",
-                      // Inferred sources default OFF, unlike the direct ones.
-                      false,
                     ),
                   ] as const,
               ),

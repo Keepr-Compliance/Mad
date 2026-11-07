@@ -13,6 +13,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@/lib/supabase/server';
+import { sendInternalInviteNotification } from '@/lib/internal-invite-email';
 import { NOT_PERMITTED_CODE, NOT_PERMITTED_MESSAGE } from '@/lib/internal-roles';
 
 export async function POST(request: NextRequest) {
@@ -90,14 +91,15 @@ export async function POST(request: NextRequest) {
 
   const result = data as AddInternalUserResult | null;
 
-  // Fire-and-forget: send notification email
-  sendInternalInviteNotification(email, roleSlug);
+  // The invite exists either way; a failed email is reported so the UI can warn.
+  const emailSent = await sendInternalInviteNotification(email, roleSlug, 'invite-internal-user');
 
   if (result?.pending === true) {
     return NextResponse.json({
       success: true,
       pending: true,
       outcome: 'invited',
+      emailSent,
       message: `Invitation created for ${email} as ${roleRow.slug}. Role will be assigned on first login.`,
     });
   }
@@ -105,6 +107,7 @@ export async function POST(request: NextRequest) {
   return NextResponse.json({
     success: true,
     outcome: 'assigned',
+    emailSent,
     user_id: result?.user_id,
     role: result?.role ?? roleSlug,
   });
@@ -114,34 +117,3 @@ export async function POST(request: NextRequest) {
 type AddInternalUserResult =
   | { success: true; pending: true; email: string; role: string; user_id?: undefined }
   | { success: true; user_id: string; role: string; pending?: undefined };
-
-// ---------------------------------------------------------------------------
-// Email notification helper
-// ---------------------------------------------------------------------------
-
-function sendInternalInviteNotification(email: string, roleName: string) {
-  const brokerPortalUrl = process.env.BROKER_PORTAL_URL;
-  const apiSecret = process.env.INTERNAL_API_SECRET;
-
-  if (!brokerPortalUrl || !apiSecret) {
-    console.warn('[invite-internal-user] Email skipped: BROKER_PORTAL_URL or INTERNAL_API_SECRET not configured');
-    return;
-  }
-
-  const adminPortalUrl = process.env.NEXT_PUBLIC_APP_URL || 'https://admin.keeprcompliance.com';
-
-  fetch(`${brokerPortalUrl}/api/email/internal-invite`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-secret': apiSecret,
-    },
-    body: JSON.stringify({
-      email,
-      roleName,
-      loginUrl: adminPortalUrl,
-    }),
-  }).catch((err) => {
-    console.error('[invite-internal-user] Failed to send invite email:', err);
-  });
-}

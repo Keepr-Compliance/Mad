@@ -18,6 +18,8 @@ import {
   isContactSourceKey,
   isContactSourceOnByDefault,
   normalizePhoneType,
+  resolveInferredEmailSourceEnabled,
+  type InferredEmailSourceKey,
 } from "./contactSourceDefaults";
 
 /**
@@ -384,6 +386,39 @@ export async function isTextPeopleEnabled(userId: string): Promise<boolean> {
   try {
     return resolveTextPeopleEnabled(await readPreferences(userId));
   } catch {
+    return false;
+  }
+}
+
+/**
+ * BACKLOG-4188: is "Auto-discover from conversations" ON for this mailbox?
+ *
+ * Settings → Contacts → Auto-discover → Outlook emails / Gmail emails. A stored
+ * boolean wins; with NO stored value it is ON (`resolveInferredEmailSourceEnabled`).
+ *
+ * A failed or timed-out read → OFF, like `isTextPeopleEnabled`. When the read
+ * fails we cannot see an explicit "off", and switching discovery on for a user
+ * who turned it off is the wrong way to fail. (Before BACKLOG-4188 the callers
+ * passed `false` to `isContactSourceEnabled`, so a failed read was already off;
+ * the only behaviour change is unset → on.)
+ *
+ * The plan gate is a separate requirement, checked by the caller.
+ */
+export async function isInferredEmailSourceEnabled(
+  userId: string,
+  key: InferredEmailSourceKey,
+): Promise<boolean> {
+  try {
+    const preferences = await readPreferences(userId);
+    return resolveInferredEmailSourceEnabled(
+      preferences?.contactSources?.inferred?.[key],
+    );
+  } catch {
+    logService.warn(
+      "[PreferenceHelper] Could not load preferences for inferred email source check, defaulting to OFF",
+      "Preferences",
+      { userId, key },
+    );
     return false;
   }
 }

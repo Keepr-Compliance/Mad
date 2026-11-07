@@ -1006,6 +1006,10 @@ export class HybridExtractorService {
    * Combines spam filtering, thread grouping, and batching for cost efficiency.
    *
    * TASK-509: This is the new optimized entry point.
+   *
+   * BACKLOG-4175: deliberately NOT sender-filtered: nothing outside tests calls
+   * this method. The live detector input is filtered in transactionService
+   * before `extract()` and `batchAnalyze()`.
    */
   async analyzeMessagesOptimized(
     messages: MessageInput[],
