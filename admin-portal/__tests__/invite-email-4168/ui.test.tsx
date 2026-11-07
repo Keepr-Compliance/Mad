@@ -41,7 +41,7 @@ describe('resend failure', () => {
 
 describe('invite with emailSent false', () => {
   async function submit(emailSent: boolean, pending = true) {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ success: true, pending: true, outcome: pending ? 'invited' : 'assigned', ...(pending ? { pending: true } : {}), emailSent }), { status: 200 })));
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ success: true, outcome: pending ? 'invited' : 'assigned', ...(pending ? { pending: true } : {}), emailSent }), { status: 200 })));
     render(<AddInternalUserForm onSuccess={vi.fn()} roles={[ROLE] as never} />);
     fireEvent.click(screen.getByRole('button', { name: /add user/i }));
     fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'person@example.test' } });
