@@ -132,7 +132,8 @@ import {
 } from "../utils/addressNormalization";
 import { DedicatedWorkerError, isPoolReady, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
 import { readAddressPassSenders } from "./db/addressPassSendersDb";
-import { BUNDLED_SENDER_RULES, type SenderRuleSet } from "../utils/senderFilter/bundledRules";
+import type { SenderRuleSet } from "../utils/senderFilter/bundledRules";
+import { getActiveSenderRules } from "./senderRuleSetStore";
 import { buildKeepSets, storedFilterRow } from "../utils/senderFilter/senderFilter";
 import { anySignalLive, filterForSurface } from "../utils/senderFilter/siteFilter";
 import { listDealContactEmails } from "./db/dealContactEmailsDb";
@@ -970,7 +971,7 @@ export async function queueAddressMatchesForTransaction(transactionId: string): 
 
   const matched = matchedIds.length;
   // BACKLOG-4175: after the matcher, whichever path ran it (worker or main thread).
-  const { toQueue, seedSkipped, ruleSkipped } = dropLiveSenders(txn.user_id, matchedIds, BUNDLED_SENDER_RULES);
+  const { toQueue, seedSkipped, ruleSkipped } = dropLiveSenders(txn.user_id, matchedIds, getActiveSenderRules().rules);
   let queued = 0;
   for (let i = 0; i < toQueue.length; i++) {
     if (i > 0 && i % ADDRESS_MATCH_EMAILS_PER_TURN === 0) await yieldToEventLoop();

@@ -214,6 +214,13 @@ describe("core modules load without Electron (BACKLOG-2962)", () => {
     expect(() => loadWithoutElectron("../../services/reviewStateService")).not.toThrow();
   });
 
+  it("senderRuleSetStore loads with no Electron present (BACKLOG-4175 PR4)", () => {
+    // reviewStateService reads the active sender rules through this store. The
+    // download (supabaseService, which imports @sentry/electron/main) lives in
+    // senderRuleSetRefresher.ts, main only.
+    expect(() => loadWithoutElectron("../../services/senderRuleSetStore")).not.toThrow();
+  });
+
   it("dialogProvider loads with no Electron present", () => {
     // The Dialog seam's own interface side (BACKLOG-2962, seams PR B).
     expect(() => loadWithoutElectron("../dialogProvider")).not.toThrow();

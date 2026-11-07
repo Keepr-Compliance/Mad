@@ -1,0 +1,13 @@
+{
+  "success": false,
+  "error": {
+    "message": "TypeError: fetch failed",
+    "details": "TypeError: fetch failed\n\nCaused by: Error: getaddrinfo ENOTFOUND keepr-no-such-host.invalid (ENOTFOUND)\nError: getaddrinfo ENOTFOUND keepr-no-such-host.invalid\n    at GetAddrInfoReqWrap.onlookupall [as oncomplete] (node:dns:122:26)",
+    "hint": "",
+    "code": ""
+  },
+  "data": null,
+  "count": null,
+  "status": 0,
+  "statusText": ""
+}
