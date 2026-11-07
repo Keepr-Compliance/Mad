@@ -74,11 +74,47 @@ describe('Turn auto-renew back on: Email the billing contact', () => {
     expect(setAutoRenewAction).toHaveBeenCalledWith('org-active', true, 'asked by phone', 3, false);
   });
 
-  it('A1b: the off dialog offers no checkbox', async () => {
-    const { BrokerageBillingCard } = await import('@/app/dashboard/organizations/[id]/components/BrokerageBillingCard');
-    render(<BrokerageBillingCard organizationId="org-active" organizationName="Org" planName="Team" billing={ACTIVE} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Turn off auto-renew' }));
-    expect(screen.queryByRole('checkbox')).toBeNull();
-    expect(screen.queryByText(/billing contact email/)).toBeNull();
+});
+
+// BACKLOG-4200: the same choice on "Turn off auto-renew" (A1b, "the off dialog offers no checkbox",
+// is inverted here by design). ACTIVE is the onboarding-4007 fixture, version 2 per that file.
+async function openOffDialog(billing: OrgBilling) {
+  const { BrokerageBillingCard } = await import('@/app/dashboard/organizations/[id]/components/BrokerageBillingCard');
+  render(<BrokerageBillingCard organizationId="org-active" organizationName="Org" planName="Team" billing={billing} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Turn off auto-renew' }));
+  fireEvent.change(screen.getByLabelText(/Note/), { target: { value: 'asked by email' } });
+}
+const submitOff = () => {
+  const buttons = screen.getAllByRole('button', { name: 'Turn off auto-renew' });
+  fireEvent.click(buttons[buttons.length - 1]);
+};
+const ACTIVE_NO_CONTACT: OrgBilling = { ...ACTIVE, deal: { ...ACTIVE_DEAL, billing_contact_email: null } };
+
+describe('Turn off auto-renew: Email the billing contact (BACKLOG-4200)', () => {
+  it('A-off1: checked by default with the contact email; submit sends notify true', async () => {
+    await openOffDialog(ACTIVE);
+    const box = screen.getByRole('checkbox', { name: 'Email the billing contact' });
+    expect((box as HTMLInputElement).checked).toBe(true);
+    expect(screen.getByText('billing@example.test')).toBeTruthy();
+    submitOff();
+    await waitFor(() => expect(setAutoRenewAction).toHaveBeenCalledTimes(1));
+    expect(setAutoRenewAction).toHaveBeenCalledWith('org-active', false, 'asked by email', ACTIVE_DEAL.version, true);
+  });
+
+  it('A-off2: unticked -> submit sends notify false', async () => {
+    await openOffDialog(ACTIVE);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Email the billing contact' }));
+    submitOff();
+    await waitFor(() => expect(setAutoRenewAction).toHaveBeenCalledTimes(1));
+    expect(setAutoRenewAction).toHaveBeenCalledWith('org-active', false, 'asked by email', ACTIVE_DEAL.version, false);
+  });
+
+  it('A-off3: no billing contact email -> no checkbox, one line, notify false', async () => {
+    await openOffDialog(ACTIVE_NO_CONTACT);
+    expect(screen.queryByRole('checkbox', { name: 'Email the billing contact' })).toBeNull();
+    expect(screen.getByText('No billing contact email on file, so no email is sent.')).toBeTruthy();
+    submitOff();
+    await waitFor(() => expect(setAutoRenewAction).toHaveBeenCalledTimes(1));
+    expect(setAutoRenewAction).toHaveBeenCalledWith('org-active', false, 'asked by email', ACTIVE_DEAL.version, false);
   });
 });
