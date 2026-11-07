@@ -213,20 +213,6 @@ export const DEAL_LINKED_SEED_CANDIDATES_SQL = sql`
 `;
 
 /**
- * BACKLOG-4175 (K1): email addresses of contacts on the user's NON-rejected
- * deals. A contact removed from a deal (`removed_at` set) does not count for
- * that deal. Bound: user id.
- */
-export const DEAL_CONTACT_EMAILS_SQL = sql`
-  SELECT DISTINCT ce.email AS email
-  FROM transaction_contacts tc
-  JOIN transactions t ON t.id = tc.transaction_id
-  JOIN contact_emails ce ON ce.contact_id = tc.contact_id
-  WHERE t.user_id = ? AND tc.removed_at IS NULL
-    AND NOT (COALESCE(t.status, 'active') = 'rejected' OR COALESCE(t.detection_status, 'confirmed') = 'rejected')
-`;
-
-/**
  * BACKLOG-4175 (census): every message linked to one of the user's NON-rejected
  * deals through `communications.email_id`, once per message. Every email link
  * sets email_id; thread-only links (no email / message id) are written for text

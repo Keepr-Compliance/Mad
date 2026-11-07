@@ -14,7 +14,6 @@ import {
   COUNT_LIVE_ANSWERS_SQL,
   COUNT_LIVE_BULK_SAMPLE_SQL,
   COUNT_NULL_SENT_AT_SQL,
-  DEAL_CONTACT_EMAILS_SQL,
   DEAL_LINKED_EMAILS_SQL,
   DEAL_LINKED_SEED_CANDIDATES_SQL,
   DRAW_BULK_CANDIDATES_SQL,
@@ -285,10 +284,8 @@ export function listDealLinkedSeedCandidates(
   ]);
 }
 
-/** BACKLOG-4175 (K1): contact emails on the user's non-rejected deals. */
-export function listDealContactEmails(userId: string): string[] {
-  return dbAll<{ email: string }>(DEAL_CONTACT_EMAILS_SQL, [userId]).map((r) => r.email);
-}
+/** BACKLOG-4175 (K1): contact emails on the user's non-rejected deals (shared reader). */
+export { listDealContactEmails } from "./dealContactEmailsDb";
 
 /** BACKLOG-4175 (census): messages linked to the user's non-rejected deals, once each. */
 export function listDealLinkedEmails(userId: string): DealLinkedEmailRow[] {
