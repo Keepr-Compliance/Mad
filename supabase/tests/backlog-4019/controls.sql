@@ -1,6 +1,7 @@
 -- BACKLOG-4019 auto-renew switch: DB controls. Venue: keepr-test, ONE call, ONE transaction
 -- ending in RAISE, so nothing persists. Run after 20261020220000 is applied, or compose it in
 -- front (compose.py --with-migration).
+-- BACKLOG-4045b (20261107160000): function signatures below updated to the 7-arg / 5-arg versions.
 -- __MODES__ is replaced with a comma list of quoted mode names. Each mode runs in its own
 -- subtransaction: apply the mutation (exact-once replace that raises on 0 or 2+ matches; the md5
 -- must change, else MUTATION NOT APPLIED), build fixtures, run every check, roll back.
@@ -168,7 +169,7 @@ BEGIN
 
   EXECUTE $f$CREATE FUNCTION pg_temp.apply_mode(m text) RETURNS text LANGUAGE plpgsql AS $b$
   DECLARE
-    sw text := 'public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer)';
+    sw text := 'public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean)';
     hp text := 'public._org_auto_renew_caller(uuid)';
     en text := 'public._billing_end_org_deal(uuid,text,text)';
     ae text := 'public._billing_apply_org_entitlement(uuid)';
@@ -252,8 +253,8 @@ $q$, '');
       IF NOT has_function_privilege('authenticated', 'public._billing_end_org_deal(uuid,text,text)', 'EXECUTE') THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
       RETURN 'MUTATION APPLIED GRANT EXECUTE _billing_end_org_deal TO authenticated';
     WHEN 'grant_switch_to_authenticated' THEN
-      EXECUTE 'GRANT EXECUTE ON FUNCTION public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer) TO authenticated';
-      IF NOT has_function_privilege('authenticated', 'public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer)', 'EXECUTE') THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
+      EXECUTE 'GRANT EXECUTE ON FUNCTION public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) TO authenticated';
+      IF NOT has_function_privilege('authenticated', 'public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean)', 'EXECUTE') THEN RAISE EXCEPTION 'MUTATION NOT APPLIED'; END IF;
       RETURN 'MUTATION APPLIED GRANT EXECUTE _billing_set_auto_renew TO authenticated';
     ELSE RAISE EXCEPTION 'unknown mode %', m;
     END CASE;
@@ -365,12 +366,12 @@ $q$, '');
       pg_temp.cell(u_sales, format(q_sw, o1, 'false', ' ', 1)) = 'refused:note_required', pg_temp.cell(u_sales, format(q_sw, o1, 'false', ' ', 1))));
     -- grants (change 7)
     r := r || jsonb_build_object('C7_grants', pg_temp.pass(
-      NOT has_function_privilege('anon', 'public.set_org_auto_renew(uuid,boolean,text,integer)', 'EXECUTE')
+      NOT has_function_privilege('anon', 'public.set_org_auto_renew(uuid,boolean,text,integer,boolean)', 'EXECUTE')
       AND NOT has_function_privilege('anon', 'public.broker_get_plan_end(uuid)', 'EXECUTE')
       AND NOT has_function_privilege('anon', 'public.org_billing_service_off(uuid)', 'EXECUTE')
       AND has_function_privilege('authenticated', 'public.org_billing_service_off(uuid)', 'EXECUTE')
       AND NOT has_function_privilege('authenticated', 'public._billing_end_org_deal(uuid,text,text)', 'EXECUTE')
-      AND NOT has_function_privilege('authenticated', 'public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer)', 'EXECUTE')
+      AND NOT has_function_privilege('authenticated', 'public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean)', 'EXECUTE')
       AND NOT has_function_privilege('authenticated', 'public._org_auto_renew_caller(uuid)', 'EXECUTE')
       AND has_function_privilege('service_role', 'public._billing_end_org_deal(uuid,text,text)', 'EXECUTE'), 'grants'));
 

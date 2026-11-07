@@ -1,6 +1,8 @@
 -- BACKLOG-4045 rollback (keepr-test). Restores public._billing_set_auto_renew to its 20261020220000
 -- body (md5 of prosrc 37a9118ba65886346a0ca9af88afdaeb), refusing unless the live body is the 4045 one
 -- (698cec91f74a59f49101fac6afe197dc). Queued notify_auto_renew_on rows are left for the drain.
+-- Removes the 20261107140000 ledger row, then re-checks md5 and ACL of the restored function.
+-- If 20261107160000 is applied, run supabase/tests/backlog-4045b/rollback.sql first.
 DO $guard$
 DECLARE v_md5 text;
 BEGIN
@@ -120,3 +122,14 @@ END
 $function$;
 REVOKE ALL ON FUNCTION public._billing_set_auto_renew(uuid, boolean, text, uuid, text, integer) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public._billing_set_auto_renew(uuid, boolean, text, uuid, text, integer) TO service_role;
+
+DELETE FROM supabase_migrations.schema_migrations WHERE version = '20261107140000';
+
+DO $check$
+BEGIN
+  IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer)')) IS DISTINCT FROM '37a9118ba65886346a0ca9af88afdaeb'
+     OR (SELECT proacl::text FROM pg_proc WHERE oid = to_regprocedure('public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer)')) IS DISTINCT FROM '{postgres=X/postgres,service_role=X/postgres}' THEN
+    RAISE EXCEPTION 'BACKLOG-4045 rollback: _billing_set_auto_renew not restored to the 20261020220000 body and ACL';
+  END IF;
+END
+$check$;
