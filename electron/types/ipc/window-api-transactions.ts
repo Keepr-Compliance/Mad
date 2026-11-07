@@ -636,10 +636,6 @@ export interface WindowApiTransactions {
   delete: (
     transactionId: string,
   ) => Promise<{ success: boolean; error?: string }>;
-  exportPDF: (
-    transactionId: string,
-    outputPath: string,
-  ) => Promise<{ success: boolean; filePath?: string; error?: string }>;
   exportEnhanced: (
     transactionId: string,
     options?: {

@@ -487,7 +487,7 @@ function buildDeleteTxFixture(userId) {
 //      normalization — unlike the em-dash subjects).
 //
 //   2. A COVERING email_sync_state row so the AWAITED pre-export sync
-//      (transactionExportHandlers.ts export-pdf → ensureTransactionEmailsSynced
+//      (transactionExportHandlers.ts export-enhanced → ensureTransactionEmailsSynced
 //      reason:'export') takes the "covered" (no-fetch) branch and makes ZERO
 //      network calls offline. The seed's mailbox oauth_tokens row makes
 //      resolveMailboxAccountId return 1 account (NOT 0), so without this the

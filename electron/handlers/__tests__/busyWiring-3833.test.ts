@@ -22,7 +22,7 @@ const CASES: Array<{ file: string; register: string; channels: string[] }> = [
   {
     file: "transactionExportHandlers",
     register: "registerTransactionExportHandlers",
-    channels: ["transactions:export-pdf", "transactions:export-enhanced", "transactions:export-folder"],
+    channels: ["transactions:export-enhanced", "transactions:export-folder"],
   },
   { file: "ccpaHandlers", register: "registerCcpaHandlers", channels: ["privacy:export-data"] },
 ];
