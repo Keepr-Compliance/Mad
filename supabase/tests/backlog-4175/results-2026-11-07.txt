@@ -1,0 +1,284 @@
+BACKLOG-4175 migration A: keepr-test results, 2026-11-07 (kt-sql, keepr-test only; every run one transaction ending in RAISE)
+
+keepr-test pg_default_acl (schema public, role postgres): tables anon/authenticated=arwdxtm (no TRUNCATE by default), functions anon/authenticated=X.
+So the S8a TRUNCATE probes cannot see a missing REVOKE; the SELECT probe is the one that goes red (TABLE_select_granted).
+
+== baseline: run.sh --with-migration
+{
+ "fail": 0,
+ "pass": 32,
+ "reds": {},
+ "total": 32
+}
+
+== mutate.py all (first pass; PUBLISH_keeps_client_version first produced NO RESULT from a harness cast, harness fixed, re-run appended at the end)
+== TABLE_select_granted
+MUTATION APPLIED numstat=1/0
+  + GRANT SELECT ON public.sender_rule_sets TO authenticated;
+RESULT total=32 pass=31 fail=1 reds=S8a_tables_closed
+RESTORED clean=True
+== CURRENT_anon_revoke_dropped
+MUTATION APPLIED numstat=0/1
+  - REVOKE EXECUTE ON FUNCTION public.sender_rule_set_current() FROM PUBLIC, anon;
+RESULT total=32 pass=30 fail=2 reds=S8b_current_anon_refused_by_grant_and_shape,S8c_function_grants
+RESTORED clean=True
+== CURRENT_returns_extra_key
+MUTATION APPLIED numstat=1/1
+  - RETURN jsonb_build_object('version', v_version, 'content', v_content);
+  + RETURN jsonb_build_object('version', v_version, 'content', v_content, 'org', v_org);
+RESULT total=32 pass=31 fail=1 reds=S8b_current_anon_refused_by_grant_and_shape
+RESTORED clean=True
+== VALIDATOR_authenticated_execute
+MUTATION APPLIED numstat=1/1
+  - REVOKE EXECUTE ON FUNCTION public._sender_rule_set_invalid(JSONB) FROM PUBLIC, anon, authenticated;
+  + REVOKE EXECUTE ON FUNCTION public._sender_rule_set_invalid(JSONB) FROM PUBLIC, anon;
+RESULT total=32 pass=31 fail=1 reds=S8c_function_grants
+RESTORED clean=True
+== GATE_any_access
+MUTATION APPLIED numstat=3/3
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS DISTINCT FROM 'owner' THEN
+  + IF v_uid IS NULL OR public.report_my_access('sender-rules') IS NULL THEN
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS DISTINCT FROM 'owner' THEN
+  + IF v_uid IS NULL OR public.report_my_access('sender-rules') IS NULL THEN
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS DISTINCT FROM 'owner' THEN
+  + IF v_uid IS NULL OR public.report_my_access('sender-rules') IS NULL THEN
+RESULT total=32 pass=24 fail=8 reds=S10a_canary_published,S10b_who_gets_what,S10c_pin_refusals,S10d_pin_and_unpin,S14_unpinned_org_never_gets_canary,S18_version_overwritten,S9_non_owners_refused,S9b_owner_release_unchanged
+RESTORED clean=True
+== GATE_ne_owner
+MUTATION APPLIED numstat=3/3
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS DISTINCT FROM 'owner' THEN
+  + IF v_uid IS NULL OR public.report_my_access('sender-rules') <> 'owner' THEN
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS DISTINCT FROM 'owner' THEN
+  + IF v_uid IS NULL OR public.report_my_access('sender-rules') <> 'owner' THEN
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS DISTINCT FROM 'owner' THEN
+  + IF v_uid IS NULL OR public.report_my_access('sender-rules') <> 'owner' THEN
+RESULT total=32 pass=24 fail=8 reds=S10a_canary_published,S10b_who_gets_what,S10c_pin_refusals,S10d_pin_and_unpin,S14_unpinned_org_never_gets_canary,S18_version_overwritten,S9_non_owners_refused,S9b_owner_release_unchanged
+RESTORED clean=True
+== ORG_no_brokerage_first
+MUTATION APPLIED numstat=1/1
+  - ORDER BY (o.personal_owner_user_id IS NOT NULL), om.created_at ASC NULLS LAST, om.id
+  + ORDER BY om.created_at ASC NULLS LAST, om.id
+RESULT total=32 pass=31 fail=1 reds=S10b_who_gets_what
+RESTORED clean=True
+== ORG_no_active_filter
+MUTATION APPLIED numstat=0/1
+  - AND om.license_status = 'active'
+RESULT total=32 pass=31 fail=1 reds=S10b_who_gets_what
+RESTORED clean=True
+== PIN_below_released_allowed
+MUTATION APPLIED numstat=0/4
+  - IF p_version < (SELECT max(version) FROM public.sender_rule_sets WHERE released) THEN
+  - RAISE EXCEPTION 'Cannot pin below the latest released version; roll back by publishing the old content as a new version'
+  - USING ERRCODE = '22023';
+  - END IF;
+RESULT total=32 pass=31 fail=1 reds=S10c_pin_refusals
+RESTORED clean=True
+== CURRENT_serves_canary
+MUTATION APPLIED numstat=0/1
+  - WHERE s.released
+RESULT total=32 pass=28 fail=4 reds=S10b_who_gets_what,S10c_pin_refusals,S10d_pin_and_unpin,S14_unpinned_org_never_gets_canary
+RESTORED clean=True
+== VALIDATOR_suppress_subset
+MUTATION APPLIED numstat=1/1
+  - IF NOT public._sender_rule_set_keys_exact(p->'suppress', ARRAY['exactAddresses', 'hosts', 'localParts', 'bulkHeaders']) THEN
+  + IF NOT coalesce((p->'suppress') ?& ARRAY['exactAddresses', 'hosts', 'localParts', 'bulkHeaders'], false) THEN
+RESULT total=32 pass=30 fail=2 reds=S11a_corpus_sql_side,S11b_publish_refuses_invalid
+RESTORED clean=True
+== PUBLISH_no_validate
+MUTATION APPLIED numstat=0/1
+  - v_reason := public._sender_rule_set_invalid(p_content);
+RESULT total=32 pass=30 fail=2 reds=S11b_publish_refuses_invalid,S13_sweep_36_refusals
+RESTORED clean=True
+== STR_no_typeof
+MUTATION APPLIED numstat=1/1
+  - WHEN jsonb_typeof(v) IS DISTINCT FROM 'string' THEN false
+  + WHEN v IS NULL THEN false
+RESULT total=32 pass=31 fail=1 reds=S11a_corpus_sql_side
+RESTORED clean=True
+== STR_null_passes
+MUTATION APPLIED numstat=2/2
+  - WHEN jsonb_typeof(v) IS DISTINCT FROM 'string' THEN false
+  + WHEN false THEN false
+  - FROM (SELECT v #>> '{}' AS s) x), false)
+  + FROM (SELECT v #>> '{}' AS s) x), NULL)
+RESULT total=32 pass=31 fail=1 reds=S11a_corpus_sql_side
+RESTORED clean=True
+== GUARD_vs_seed
+MUTATION APPLIED numstat=1/1
+  - FROM public.sender_rule_sets WHERE released ORDER BY version DESC LIMIT 1;
+  + FROM public.sender_rule_sets WHERE version = 1;
+RESULT total=32 pass=28 fail=4 reds=S13_sweep_36_refusals,S15b_stale_canary_does_not_count,S16_revert_all,S17_rollback_is_new_version
+RESTORED clean=True
+== GUARD_measure_to_live_only
+MUTATION APPLIED numstat=1/1
+  - AND (p_old #> ARRAY['modes', s.key, f.key]) IS DISTINCT FROM '"live"'::jsonb
+  + AND (p_old #> ARRAY['modes', s.key, f.key]) = '"measure"'::jsonb
+RESULT total=32 pass=31 fail=1 reds=S13_sweep_36_refusals
+RESTORED clean=True
+== GUARD_hardcoded_signals
+MUTATION APPLIED numstat=1/1
+  - FROM jsonb_each(p_new->'modes') s, jsonb_each(s.value) f
+  + FROM jsonb_each(p_new->'modes' - 'gmailSocial') s, jsonb_each(s.value) f
+RESULT total=32 pass=10 fail=22 reds=Q0_setup_approvedHost_live,Q1_host_added_live_refused,Q2_host_added_after_canary_allowed,Q3_host_added_signal_measure_allowed,Q4_same_length_swap_refused,Q5_localpart_match_change_refused,Q6_keep_host_removed_refused,Q7_freemail_added_refused,Q8_bulk_headers_widened_refused,Q9_removal_allowed,S10a_canary_published,S10b_who_gets_what,S10c_pin_refusals,S10d_pin_and_unpin,S13_sweep_36_refusals,S14_unpinned_org_never_gets_canary,S15a_promotion,S15b_stale_canary_does_not_count,S16_revert_all,S17_rollback_is_new_version,S18_version_overwritten,S9b_owner_release_unchanged
+RESTORED clean=True
+== PROMOTE_keeps_pins
+MUTATION APPLIED numstat=0/1
+  - DELETE FROM public.sender_rule_set_pins WHERE version < v_new;
+RESULT total=32 pass=31 fail=1 reds=S15a_promotion
+RESTORED clean=True
+== GUARD_stale_canary_counts
+MUTATION APPLIED numstat=1/1
+  - WHERE NOT k.released AND k.version > p_after
+  + WHERE NOT k.released
+RESULT total=32 pass=30 fail=2 reds=S13_sweep_36_refusals,S15b_stale_canary_does_not_count
+RESTORED clean=True
+== GUARD_no_hosts
+MUTATION APPLIED numstat=0/1
+  - ('{suppress,hosts}'::text[], 'add', 'approvedHost'),
+RESULT total=32 pass=31 fail=1 reds=Q1_host_added_live_refused
+RESTORED clean=True
+== GUARD_ignores_liveness
+MUTATION APPLIED numstat=1/1
+  - ELSE l.sig = ANY (v_live) END);
+  + ELSE true END);
+RESULT total=32 pass=31 fail=1 reds=Q3_host_added_signal_measure_allowed
+RESTORED clean=True
+== GUARD_length_compare
+MUTATION APPLIED numstat=2/3
+  - WHERE NOT EXISTS (
+  - SELECT 1 FROM jsonb_array_elements(coalesce(CASE WHEN l.dir = 'add' THEN p_old ELSE p_new END #> l.path, '[]'::jsonb)) AS y(v)
+  - WHERE y.v = x.v)
+  + WHERE jsonb_array_length(CASE WHEN l.dir = 'add' THEN p_new ELSE p_old END #> l.path)
+  + > jsonb_array_length(coalesce(CASE WHEN l.dir = 'add' THEN p_old ELSE p_new END #> l.path, '[]'::jsonb))
+RESULT total=32 pass=30 fail=2 reds=Q4_same_length_swap_refused,Q5_localpart_match_change_refused
+RESTORED clean=True
+== GUARD_localpart_by_value
+MUTATION APPLIED numstat=1/1
+  - WHERE y.v = x.v)
+  + WHERE y.v = x.v OR y.v->'value' = x.v->'value')
+RESULT total=32 pass=31 fail=1 reds=Q5_localpart_match_change_refused
+RESTORED clean=True
+== GUARD_no_keep_removal
+MUTATION APPLIED numstat=0/1
+  - ('{keep,platformHosts}'::text[], 'remove', NULL),
+RESULT total=32 pass=31 fail=1 reds=Q6_keep_host_removed_refused
+RESTORED clean=True
+== GUARD_no_freemail
+MUTATION APPLIED numstat=1/2
+  - ('{keep,platformAddresses}'::text[], 'remove', NULL),
+  - ('{freeMailDomains}'::text[], 'add', NULL)
+  + ('{keep,platformAddresses}'::text[], 'remove', NULL)
+RESULT total=32 pass=31 fail=1 reds=Q7_freemail_added_refused
+RESTORED clean=True
+== GUARD_no_auto_submitted_flag
+MUTATION APPLIED numstat=1/1
+  - IF 'bulkHeaders' = ANY (v_live)
+  + IF false AND 'bulkHeaders' = ANY (v_live)
+RESULT total=32 pass=31 fail=1 reds=Q8_bulk_headers_widened_refused
+RESTORED clean=True
+== REVERT_via_publish
+MUTATION APPLIED numstat=1/2
+  - INSERT INTO public.sender_rule_sets (version, content, released, bundled, canary_org, published_by)
+  - VALUES (v_new, jsonb_set(v_bundled, '{version}', to_jsonb(v_new)), true, false, NULL, v_uid);
+  + PERFORM public.sender_rule_set_publish(v_bundled);
+RESULT total=32 pass=31 fail=1 reds=S16_revert_all
+RESTORED clean=True
+== REVERT_keeps_pins
+MUTATION APPLIED numstat=0/1
+  - DELETE FROM public.sender_rule_set_pins WHERE true;
+RESULT total=32 pass=31 fail=1 reds=S16_revert_all
+RESTORED clean=True
+== REVERT_copies_latest_released
+MUTATION APPLIED numstat=1/1
+  - FROM public.sender_rule_sets WHERE bundled ORDER BY version DESC LIMIT 1;
+  + FROM public.sender_rule_sets WHERE released ORDER BY version DESC LIMIT 1;
+RESULT total=32 pass=31 fail=1 reds=S16_revert_all
+RESTORED clean=True
+== REVERT_copies_v1
+MUTATION APPLIED numstat=1/1
+  - FROM public.sender_rule_sets WHERE bundled ORDER BY version DESC LIMIT 1;
+  + FROM public.sender_rule_sets WHERE version = 1;
+RESULT total=32 pass=30 fail=2 reds=S16_revert_all,S17_rollback_is_new_version
+RESTORED clean=True
+== PUBLISH_overwrites_released_row
+MUTATION APPLIED numstat=2/2
+  - INSERT INTO public.sender_rule_sets (version, content, released, bundled, canary_org, published_by)
+  - VALUES (v_new, v_content, true, false, NULL, v_uid);
+  + UPDATE public.sender_rule_sets SET content = jsonb_set(v_content, '{version}', to_jsonb(v_rel_version)) WHERE version = v_rel_version;
+  + v_new := v_rel_version;
+RESULT total=32 pass=21 fail=11 reds=S10a_canary_published,S10b_who_gets_what,S10c_pin_refusals,S10d_pin_and_unpin,S13_sweep_36_refusals,S14_unpinned_org_never_gets_canary,S15a_promotion,S15b_stale_canary_does_not_count,S17_rollback_is_new_version,S18_version_overwritten,S9b_owner_release_unchanged
+RESTORED clean=True
+== PUBLISH_keeps_client_version
+MUTATION APPLIED numstat=1/1
+  - v_content := jsonb_set(p_content, '{version}', to_jsonb(v_new));
+  + v_content := p_content;
+NO RESULT NO RESULT: Failed to run sql query: ERROR:  22P02: invalid input syntax for type bigint: "ERR 23514 new row for relation "sender_rule_sets" violates check constraint "sender_rule_sets_content_version"" CONTEXT:  PL/pgSQL function pg_temp_47.run() line 320 at assignment PL/pgSQL function inline_code_block line 498 at assignment  
+RESTORED clean=True
+== SEED_host_edited
+MUTATION APPLIED numstat=1/1
+  - "springcm.net",
+  + "springcm.org",
+RESULT total=32 pass=31 fail=1 reds=S19_seed_row
+RESTORED clean=True
+== SEED_not_idempotent
+MUTATION APPLIED numstat=1/2
+  - ::jsonb, true, true)
+  - ON CONFLICT (version) DO NOTHING;
+  + ::jsonb, true, true);
+NO RESULT NO RESULT: Failed to run sql query: ERROR:  23505: duplicate key value violates unique constraint "sender_rule_sets_pkey" DETAIL:  Key (version)=(1) already exists.  
+RESTORED clean=True
+== CHECK_dropped
+MUTATION APPLIED numstat=0/1
+  - CONSTRAINT sender_rule_sets_content_valid CHECK (public._sender_rule_set_invalid(content) IS NULL),
+RESULT total=32 pass=22 fail=10 reds=Q0_setup_approvedHost_live,R2_check_refuses_raw_invalid_insert,S10a_canary_published,S10b_who_gets_what,S10c_pin_refusals,S10d_pin_and_unpin,S13_sweep_36_refusals,S14_unpinned_org_never_gets_canary,S15a_promotion,S15b_stale_canary_does_not_count
+RESTORED clean=True
+== CATALOG_key_missing
+MUTATION APPLIED numstat=0/1
+  - INSERT INTO public.reports (report_key) VALUES ('sender-rules') ON CONFLICT (report_key) DO NOTHING;
+NO RESULT NO RESULT: Failed to run sql query: ERROR:  23503: insert or update on table "report_access" violates foreign key constraint "report_access_report_key_fkey" DETAIL:  Key (report_key)=(sender-rules) is not present in table "reports". CONTEXT:  SQL statement "INSERT INTO public.report_access (report_key, user_id, role) VALUES ('sender-rules', u2, 'editor'), ('sender-rules', u3, 'viewer')" PL/pgSQL f
+RESTORED clean=True
+== ROLLBACK_misses_function
+MUTATION APPLIED numstat=0/1
+  - DROP FUNCTION IF EXISTS public._sender_rule_set_str_ok(JSONB, TEXT);
+RESULT total=32 pass=31 fail=1 reds=S20_rollback_removes_everything
+RESTORED clean=True
+== ROLLBACK_validators_first
+MUTATION APPLIED numstat=1/1
+  + DROP FUNCTION IF EXISTS public._sender_rule_set_invalid(JSONB);
+  - DROP FUNCTION IF EXISTS public._sender_rule_set_invalid(JSONB);
+RESULT total=32 pass=31 fail=1 reds=S20_rollback_removes_everything
+RESTORED clean=True
+== PUBLISH_keeps_client_version
+MUTATION APPLIED numstat=1/1
+  - v_content := jsonb_set(p_content, '{version}', to_jsonb(v_new));
+  + v_content := p_content;
+RESULT total=32 pass=13 fail=19 reds=Q0_setup_approvedHost_live,Q2_host_added_after_canary_allowed,Q3_host_added_signal_measure_allowed,Q4_same_length_swap_refused,Q5_localpart_match_change_refused,Q8_bulk_headers_widened_refused,Q9_removal_allowed,S10a_canary_published,S10b_who_gets_what,S10c_pin_refusals,S10d_pin_and_unpin,S13_sweep_36_refusals,S14_unpinned_org_never_gets_canary,S15a_promotion,S15b_stale_canary_does_not_count,S16_revert_all,S17_rollback_is_new_version,S18_version_overwritten,S9b_owner_release_unchanged
+RESTORED clean=True
+
+== jest / vitest mutations
+== J1_zod_suppress_not_strict MUTATION APPLIED 1 1 electron/utils/senderFilter/ruleSetSchema.ts
+    FAIL electron/utils/senderFilter/__tests__/ruleSetSqlParity-4175.test.ts
+    Test Suites: 1 failed, 1 total
+    Tests:       1 failed, 4 passed, 5 total
+   RESTORED clean= True
+== J2_bundled_freemail_edited MUTATION APPLIED 1 1 electron/utils/senderFilter/bundledRules.ts
+    FAIL electron/utils/senderFilter/__tests__/ruleSetSqlParity-4175.test.ts
+    Test Suites: 1 failed, 1 total
+    Tests:       2 failed, 3 passed, 5 total
+    Test Suites: 1 failed, 1 total
+    Tests:       2 failed, 3 passed, 5 total
+   RESTORED clean= True
+== J3_seed_host_edited MUTATION APPLIED 1 1 supabase/migrations/20261108100000_backlog_4175_sender_rule_sets.sql
+    FAIL electron/utils/senderFilter/__tests__/ruleSetSqlParity-4175.test.ts
+    Test Suites: 1 failed, 1 total
+    Tests:       1 failed, 4 passed, 5 total
+   RESTORED clean= True
+== A1_catalog_key_missing MUTATION APPLIED 0 1 supabase/migrations/20261108100000_backlog_4175_sender_rule_sets.sql
+    ❯ __tests__/report-access-4144/catalog-parity.test.ts (3 tests | 2 failed) 47ms
+    × the catalog seeds 10 distinct keys 34ms
+    × every server-only pending key is a catalog key and not yet a registry slug 7ms
+    Test Files  1 failed (1)
+    Tests  2 failed | 1 passed (3)
+    FAIL  __tests__/report-access-4144/catalog-parity.test.ts > registry == reports catalog (M1 + later report migrations) > the catalog seeds 10 distinct keys
+    FAIL  __tests__/report-access-4144/catalog-parity.test.ts > registry == reports catalog (M1 + later report migrations) > every server-only pending key is a cata
+   RESTORED clean= True
