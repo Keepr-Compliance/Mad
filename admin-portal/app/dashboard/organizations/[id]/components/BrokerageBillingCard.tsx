@@ -25,6 +25,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   FieldError,
   FieldHelp,
   Input,
@@ -180,8 +181,9 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
           title={renewTarget === 'off' ? 'Turn off auto-renew?' : 'Turn auto-renew back on?'}
           body={renewTarget === 'off' ? autoRenewOffBody(billing) : 'Billing continues each month.'}
           cta={renewTarget === 'off' ? 'Turn off auto-renew' : 'Turn auto-renew back on'}
+          notifyContactEmail={renewTarget === 'on' ? deal.billing_contact_email ?? '' : undefined}
           onClose={() => setRenewTarget(null)}
-          onSubmit={(note) => setAutoRenewAction(organizationId, renewTarget === 'on', note, deal.version)}
+          onSubmit={(note, _reason, notify) => setAutoRenewAction(organizationId, renewTarget === 'on', note, deal.version, notify ?? true)}
           onDone={done}
         />
       )}
@@ -364,6 +366,7 @@ function ReasonDialog({
   body,
   cta,
   withReason = false,
+  notifyContactEmail,
   onClose,
   onSubmit,
   onDone,
@@ -372,11 +375,15 @@ function ReasonDialog({
   body: string;
   cta: string;
   withReason?: boolean;
+  /** BACKLOG-4045: set (possibly '') to offer "Email the billing contact"; '' = no contact email on file. */
+  notifyContactEmail?: string;
   onClose: () => void;
-  onSubmit: (note: string, reason?: 'non_payment' | 'other') => Promise<{ ok: boolean; error: string | null }>;
+  onSubmit: (note: string, reason?: 'non_payment' | 'other', notify?: boolean) => Promise<{ ok: boolean; error: string | null }>;
   onDone: () => void;
 }) {
   const [note, setNote] = useState('');
+  const [notify, setNotify] = useState(true);
+  const offerNotify = notifyContactEmail !== undefined && notifyContactEmail.trim() !== '';
   const [reason, setReason] = useState<'non_payment' | 'other'>('non_payment');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -384,7 +391,7 @@ function ReasonDialog({
   const submit = async () => {
     if (!note.trim()) return setError('Enter a note. It is saved in Activity.');
     setBusy(true);
-    const res = await onSubmit(note, withReason ? reason : undefined);
+    const res = await onSubmit(note, withReason ? reason : undefined, offerNotify ? notify : false);
     setBusy(false);
     if (!res.ok) return setError(res.error);
     onDone();
@@ -407,6 +414,19 @@ function ReasonDialog({
           <Label htmlFor="reason-note" required>Note</Label>
           <Textarea id="reason-note" rows={3} value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
+        {notifyContactEmail !== undefined && (
+          offerNotify ? (
+            <div className="mt-4">
+              <div className="flex items-center gap-2">
+                <Checkbox id="notify-contact" checked={notify} disabled={busy} onChange={(e) => setNotify(e.target.checked)} />
+                <Label htmlFor="notify-contact">Email the billing contact</Label>
+              </div>
+              <FieldHelp>{notifyContactEmail}</FieldHelp>
+            </div>
+          ) : (
+            <p className="mt-4 text-sm text-gray-600">No billing contact email on file, so no email is sent.</p>
+          )
+        )}
         {error && <FieldError className="mt-3">{error}</FieldError>}
       </ModalBody>
       <ModalFooter>

@@ -1,3 +1,5 @@
+-- SUPERSEDED after 20261107160000: its fixtures have no billing contact email and its anchors name
+-- the 4045 gate line, so run supabase/tests/backlog-4045b/controls.sql instead (C1-C6 carried over).
 -- BACKLOG-4045 staff turning auto-renew back on queues notify_auto_renew_on: DB controls.
 -- Venue: keepr-test, ONE call, ONE transaction ending in RAISE, so nothing persists. Run after
 -- 20261107140000 is applied, or compose it in front (compose.py --with-migration).
@@ -180,7 +182,7 @@ BEGIN
 
   EXECUTE $f$CREATE FUNCTION pg_temp.apply_mode(m text) RETURNS text LANGUAGE plpgsql AS $b$
   DECLARE
-    sw text := 'public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer)';
+    sw text := 'public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean)';
     gate text := $q$  IF p_on AND p_caller = 'staff' AND v_new_status = 'active' THEN$q$;
   BEGIN
     CASE m
