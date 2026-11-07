@@ -5,9 +5,9 @@
  *
  * Contains:
  * - SwimLaneCell: A single droppable cell in the swim lane grid
- * - SwimLaneGrid: The full swim lane grid view with header + rows (area/assignee)
+ * - SwimLaneGrid: The full swim lane grid view with header + rows (area/assignee/label)
  * - EpicLaneGrid: Project mode, one row per epic + "No epic" (BACKLOG-4176)
- * - groupItemsByDimension: Groups items by project/area/assignee
+ * - groupItemsByDimension: Groups items by project/area/assignee/label
  */
 
 import { useCallback, useMemo } from 'react';
@@ -20,7 +20,12 @@ import {
 import { KanbanCard } from '../../components/KanbanCard';
 import { KanbanQuickAdd } from '../../components/KanbanQuickAdd';
 import { COLUMN_ORDER } from '../../components/KanbanBoard';
-import { buildSwimLaneCellId, NO_EPIC_KEY } from '../lib/swim-lane-ids';
+import {
+  buildCardSortableId,
+  buildSwimLaneCellId,
+  NO_EPIC_KEY,
+  NO_LABEL_KEY,
+} from '../lib/swim-lane-ids';
 import { groupColumnsByEpic, type EpicLane } from '../lib/epic-lanes';
 import type { PmBacklogItem, PmLabel, BoardColumns, ItemStatus } from '@/lib/pm-types';
 import { STATUS_LABELS, STATUS_COLORS } from '@/lib/pm-types';
@@ -30,10 +35,14 @@ import type { AssignableUser } from '../../components/KanbanCard';
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Group items by a dimension, returning Map<groupKey, BoardColumns>. */
+/**
+ * Group items by a dimension, returning Map<groupKey, BoardColumns>.
+ * 'label' puts an item in the group of every label it has (keyed by label
+ * id), or in NO_LABEL_KEY when it has none (BACKLOG-4196).
+ */
 export function groupItemsByDimension(
   columns: BoardColumns,
-  dimension: 'project' | 'area' | 'assignee'
+  dimension: 'project' | 'area' | 'assignee' | 'label'
 ): Map<string, BoardColumns> {
   const groups = new Map<string, BoardColumns>();
 
@@ -57,21 +66,28 @@ export function groupItemsByDimension(
 
   for (const [status, items] of Object.entries(columns)) {
     for (const item of items as PmBacklogItem[]) {
-      let groupKey: string;
+      let groupKeys: string[];
       switch (dimension) {
         case 'project':
-          groupKey = item.project_id || 'No Project';
+          groupKeys = [item.project_id || 'No Project'];
           break;
         case 'area':
-          groupKey = item.area || 'No Area';
+          groupKeys = [item.area || 'No Area'];
           break;
         case 'assignee':
-          groupKey = item.assignee_id || 'Unassigned';
+          groupKeys = [item.assignee_id || 'Unassigned'];
           break;
+        case 'label': {
+          const ids = Array.from(new Set((item.labels ?? []).map((l) => l.id)));
+          groupKeys = ids.length > 0 ? ids : [NO_LABEL_KEY];
+          break;
+        }
       }
-      // A status key this build does not know (a newer RPC) gets its own list instead of throwing.
-      const group = ensureGroup(groupKey) as unknown as Record<string, PmBacklogItem[] | undefined>;
-      (group[status] ??= []).push(item);
+      for (const groupKey of groupKeys) {
+        // A status key this build does not know (a newer RPC) gets its own list instead of throwing.
+        const group = ensureGroup(groupKey) as unknown as Record<string, PmBacklogItem[] | undefined>;
+        (group[status] ??= []).push(item);
+      }
     }
   }
 
@@ -120,6 +136,8 @@ function BoardHeaderRow({ label }: { label: string }) {
 interface SwimLaneCellProps {
   droppableId: string;
   items: PmBacklogItem[];
+  /** Drag id per card; defaults to item.id. Label mode passes a per-lane id. */
+  sortableIdFor?: (item: PmBacklogItem) => string;
   selectedIds?: Set<string>;
   onToggleSelect?: (itemId: string) => void;
   onItemUpdated?: () => void;
@@ -133,6 +151,7 @@ interface SwimLaneCellProps {
 export function SwimLaneCell({
   droppableId,
   items,
+  sortableIdFor,
   selectedIds,
   onToggleSelect,
   onItemUpdated,
@@ -151,12 +170,16 @@ export function SwimLaneCell({
         isOver ? 'ring-2 ring-primary-400 ring-inset bg-primary-50' : ''
       }`}
     >
-      <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+      <SortableContext
+        items={items.map((i) => (sortableIdFor ? sortableIdFor(i) : i.id))}
+        strategy={verticalListSortingStrategy}
+      >
         <div className="space-y-2">
           {items.map((item) => (
             <KanbanCard
               key={item.id}
               item={item}
+              sortableId={sortableIdFor ? sortableIdFor(item) : undefined}
               isSelected={selectedIds?.has(item.id)}
               compact={compact}
               onToggleSelect={
@@ -180,7 +203,7 @@ export function SwimLaneCell({
 
 interface SwimLaneGridProps {
   columns: BoardColumns;
-  swimLane: 'area' | 'assignee';
+  swimLane: 'area' | 'assignee' | 'label';
   nameMap: Map<string, string>;
   collapsedLanes: Set<string>;
   onToggleLane: (laneKey: string) => void;
@@ -207,6 +230,27 @@ export function SwimLaneGrid({
   allLabels,
   compactCards,
 }: SwimLaneGridProps) {
+  const isLabelMode = swimLane === 'label';
+
+  // Label mode: lane names and colours come from the labels on the items
+  // (the board's label list holds only global labels).
+  const labelById = useMemo(() => {
+    const map = new Map<string, PmLabel>();
+    if (!isLabelMode) return map;
+    for (const items of Object.values(columns)) {
+      for (const item of items as PmBacklogItem[]) {
+        for (const label of item.labels ?? []) map.set(label.id, label);
+      }
+    }
+    return map;
+  }, [columns, isLabelMode]);
+
+  const laneName = useCallback(
+    (groupKey: string) =>
+      (isLabelMode ? labelById.get(groupKey)?.name : nameMap.get(groupKey)) || groupKey,
+    [isLabelMode, labelById, nameMap]
+  );
+
   const swimLaneGroups = useMemo(() => {
     const groups = groupItemsByDimension(columns, swimLane);
     // Sort by group name for stable order (push "No Project"/"Unassigned" to end)
@@ -216,11 +260,12 @@ export function SwimLaneGrid({
         const bIsDefault = b.startsWith('No ') || b === 'Unassigned';
         if (aIsDefault && !bIsDefault) return 1;
         if (!aIsDefault && bIsDefault) return -1;
-        return a.localeCompare(b);
+        // Label keys are ids: order label rows by name.
+        return isLabelMode ? laneName(a).localeCompare(laneName(b)) : a.localeCompare(b);
       })
     );
     return sorted;
-  }, [columns, swimLane]);
+  }, [columns, swimLane, isLabelMode, laneName]);
 
   const handleQuickAdd = useCallback(
     (title: string, status: ItemStatus, groupKey: string) => {
@@ -231,7 +276,9 @@ export function SwimLaneGrid({
 
   return (
     <div className="min-w-fit">
-      <BoardHeaderRow label={swimLane === 'area' ? 'Area' : 'Assignee'} />
+      <BoardHeaderRow
+        label={swimLane === 'area' ? 'Area' : swimLane === 'label' ? 'Label' : 'Assignee'}
+      />
 
       {/* Swim lane rows */}
       {Array.from(swimLaneGroups.entries()).map(
@@ -241,9 +288,18 @@ export function SwimLaneGrid({
             0
           );
           const isCollapsed = collapsedLanes.has(groupKey);
-          const displayName = nameMap.get(groupKey) || groupKey;
+          const displayName = laneName(groupKey);
+          const laneColor = isLabelMode ? labelById.get(groupKey)?.color : undefined;
+          // Label mode: an item can be in several rows, so each copy needs its own drag id.
+          const sortableIdFor = isLabelMode
+            ? (item: PmBacklogItem) => buildCardSortableId(item.id, groupKey)
+            : undefined;
           return (
-            <div key={groupKey} className="flex gap-0 border-b border-gray-200">
+            <div
+              key={groupKey}
+              data-testid={`swim-lane-${groupKey}`}
+              className="flex gap-0 border-b border-gray-200"
+            >
               {/* Row name column */}
               <div className="w-[180px] min-w-[180px] bg-gray-50 px-3 py-3 sticky left-0 z-10 border-r border-gray-200">
                 <div className="flex items-start gap-1.5">
@@ -263,9 +319,16 @@ export function SwimLaneGrid({
                     <button
                       type="button"
                       onClick={() => onToggleLane(groupKey)}
-                      className="text-sm font-semibold text-gray-700 text-left block truncate w-full"
+                      className="text-sm font-semibold text-gray-700 text-left flex items-center gap-1.5 truncate w-full"
                     >
-                      {displayName}
+                      {laneColor && (
+                        <span
+                          aria-hidden="true"
+                          className="inline-block h-2.5 w-2.5 flex-shrink-0 rounded-full"
+                          style={{ backgroundColor: laneColor }}
+                        />
+                      )}
+                      <span className="truncate">{displayName}</span>
                     </button>
                     <button
                       type="button"
@@ -291,6 +354,7 @@ export function SwimLaneGrid({
                       key={status}
                       droppableId={droppableId}
                       items={items}
+                      sortableIdFor={sortableIdFor}
                       selectedIds={selectedIds}
                       onToggleSelect={onToggleSelect}
                       onItemUpdated={onItemUpdated}

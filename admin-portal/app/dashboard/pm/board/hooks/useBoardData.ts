@@ -25,6 +25,8 @@ import {
   reorderItem,
   createItem,
   assignItem,
+  addItemLabel,
+  fetchItemLabels,
   bulkUpdate,
   bulkDelete,
   assignToSprint,
@@ -41,13 +43,16 @@ import type {
   CreateItemParams,
 } from '@/lib/pm-types';
 import type { AssignableUser } from '../../components/KanbanCard';
-import { NO_EPIC_KEY } from '../lib/swim-lane-ids';
+import { isSwimLaneMode, NO_EPIC_KEY } from '../lib/swim-lane-ids';
 
 // ---------------------------------------------------------------------------
 // Board state persistence
 // ---------------------------------------------------------------------------
 
 const BOARD_STATE_KEY = 'pm-board-state';
+
+/** Shown when the item labels could not be read (BACKLOG-4196). */
+export const LABELS_LOAD_ERROR = 'Could not load labels. Try Refresh.';
 
 function emptyBoardColumns(): BoardColumns {
   return {
@@ -95,6 +100,9 @@ export function useBoardData() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
   const [projects, setProjects] = useState<PmProject[]>([]);
   const [boardError, setBoardError] = useState<string | null>(null);
+  // The last board load could not read item labels. Label mode then shows
+  // no grid rather than every item under "No label".
+  const [labelsFailed, setLabelsFailed] = useState(false);
   const [columns, setColumns] = useState<BoardColumns>(emptyBoardColumns);
   const [backlogItems, setBacklogItems] = useState<PmBacklogItem[]>([]);
   const [backlogLoading, setBacklogLoading] = useState(false);
@@ -128,7 +136,8 @@ export function useBoardData() {
     if (persisted) {
       if (persisted.selectedSprintId) setSelectedSprintId(persisted.selectedSprintId);
       if (persisted.selectedProjectId) setSelectedProjectId(persisted.selectedProjectId);
-      if (persisted.swimLane) setSwimLane(persisted.swimLane);
+      // An unknown persisted mode (older or newer build) falls back to the default.
+      if (isSwimLaneMode(persisted.swimLane)) setSwimLane(persisted.swimLane);
       if (persisted.collapsedLanes) setCollapsedLanes(new Set(persisted.collapsedLanes));
       if (typeof persisted.compactCards === 'boolean') setCompactCards(persisted.compactCards);
     }
@@ -206,6 +215,39 @@ export function useBoardData() {
   // mode's deps stops a late sprint-list load from refetching the project.
   const sprintForLoad = projectMode ? '' : selectedSprintId;
 
+  /**
+   * Read the labels of every item in `data`, merge them onto the items and
+   * show the result -- unless the board source changed while either fetch
+   * was in flight (BACKLOG-4196). pm_get_board_tasks returns no labels.
+   */
+  const showColumnsWithLabels = useCallback(async (data: BoardColumns, requestedSource: string) => {
+    const ids = (Object.values(data) as (PmBacklogItem[] | undefined)[]).flatMap((items) =>
+      (items ?? []).map((i) => i.id)
+    );
+    let labelMap: Map<string, PmLabel[]> | null = null;
+    try {
+      labelMap = await fetchItemLabels(ids);
+    } catch (err) {
+      console.error('Failed to load item labels:', err);
+    }
+    // The source or the mode changed while the labels were in flight: drop it.
+    if (boardSourceRef.current !== requestedSource) return;
+    if (!labelMap) {
+      setLabelsFailed(true);
+      setBoardError(LABELS_LOAD_ERROR);
+      setColumns(data);
+      return;
+    }
+    const found = labelMap;
+    setLabelsFailed(false);
+    setBoardError((prev) => (prev === LABELS_LOAD_ERROR ? null : prev));
+    const merged = {} as Record<string, PmBacklogItem[]>;
+    for (const [status, items] of Object.entries(data) as [string, PmBacklogItem[] | undefined][]) {
+      merged[status] = (items ?? []).map((item) => ({ ...item, labels: found.get(item.id) ?? [] }));
+    }
+    setColumns(merged as unknown as BoardColumns);
+  }, []);
+
   const loadBoardData = useCallback(async () => {
     // Project mode (BACKLOG-4176): every item of one project, no sprint.
     if (projectMode) {
@@ -220,7 +262,7 @@ export function useBoardData() {
         const data = await getBoardTasks(null, selectedProjectId);
         // The project or the mode changed while this was in flight: drop it.
         if (boardSourceRef.current !== requestedSource) return;
-        setColumns(data);
+        await showColumnsWithLabels(data, requestedSource);
       } catch (err) {
         // No listItems fallback here: it is page-capped and would show a
         // silently truncated project.
@@ -238,14 +280,14 @@ export function useBoardData() {
       const data = await getBoardTasks(sprintForLoad);
       // The sprint or the mode changed while this was in flight: drop it.
       if (boardSourceRef.current !== requestedSource) return;
-      setColumns(data);
+      await showColumnsWithLabels(data, requestedSource);
     } catch (err) {
       console.error('Failed to load board tasks:', err);
       try {
         const result = await listItems({ sprint_id: sprintForLoad, page_size: 200 });
         if (boardSourceRef.current !== requestedSource) return;
         const items = result.items || [];
-        setColumns({
+        await showColumnsWithLabels({
           pending: items.filter((i) => i.status === 'pending'),
           in_progress: items.filter((i) => i.status === 'in_progress'),
           testing: items.filter((i) => i.status === 'testing'),
@@ -256,7 +298,7 @@ export function useBoardData() {
           obsolete: items.filter((i) => i.status === 'obsolete'),
           reopened: items.filter((i) => i.status === 'reopened'),
           waiting_for_user: items.filter((i) => i.status === 'waiting_for_user'),
-        });
+        }, requestedSource);
       } catch (fallbackErr) {
         console.error('Fallback listItems also failed:', fallbackErr);
       }
@@ -264,7 +306,7 @@ export function useBoardData() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [projectMode, selectedProjectId, sprintForLoad]);
+  }, [projectMode, selectedProjectId, sprintForLoad, showColumnsWithLabels]);
 
   const handleItemUpdated = useCallback(() => {
     loadBoardData();
@@ -276,6 +318,7 @@ export function useBoardData() {
   useEffect(() => {
     setColumns(emptyBoardColumns());
     setBoardError(null);
+    setLabelsFailed(false);
   }, [boardSourceKey]);
 
   useEffect(() => {
@@ -375,6 +418,16 @@ export function useBoardData() {
         if (status !== 'pending' && created.id) await updateItemStatus(created.id, status);
         if (isRealGroup && swimLane === 'assignee' && created.id) {
           try { await assignItem(created.id, groupKey); } catch { /* non-fatal */ }
+        }
+        // Label mode: the row's key is the label id; "No label" adds none.
+        if (isRealGroup && swimLane === 'label' && created.id) {
+          try {
+            await addItemLabel(created.id, groupKey);
+          } catch (labelErr) {
+            // Non-fatal: the item exists; it shows under "No label".
+            console.error('Failed to label the new item:', labelErr);
+            setBoardError(`#${created.item_number} was added, but its label could not be set.`);
+          }
         }
         await loadBoardData();
       } catch (err) {
@@ -516,6 +569,7 @@ export function useBoardData() {
     projectMode,
     boardError,
     setBoardError,
+    labelsFailed,
     swimLane,
     setSwimLane,
     backlogOpen,
