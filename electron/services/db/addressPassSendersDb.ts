@@ -1,6 +1,7 @@
 /**
- * BACKLOG-4175: the From line of the address pass's matched emails, so exact
- * sender seeds can be left out before anything is queued for Needs Review.
+ * BACKLOG-4175: what the sender filter reads for the address pass's matched
+ * emails (From line, mailbox, labels, retained bulk headers), so mail a live
+ * sender signal suppresses is left out before anything is queued for Needs Review.
  *
  * Reads `emails` only, on the main connection, and only for the ids the
  * matcher already returned (worker or main thread). Kept out of
@@ -13,14 +14,19 @@ import { sql } from "./core/sqlText";
 
 /** Bound: user id, JSON array of email ids. */
 export const ADDRESS_PASS_SENDERS_SQL = sql`
-  SELECT id, sender FROM emails
+  SELECT id, sender, source, labels, bulk_mail_headers FROM emails
   WHERE user_id = ? AND id IN (SELECT value FROM json_each(?))
 `;
 
-export function readAddressPassSenders(
-  userId: string,
-  emailIds: readonly string[],
-): Array<{ id: string; sender: string | null }> {
+export interface AddressPassSenderRow {
+  id: string;
+  sender: string | null;
+  source: string | null;
+  labels: string | null;
+  bulk_mail_headers: string | null;
+}
+
+export function readAddressPassSenders(userId: string, emailIds: readonly string[]): AddressPassSenderRow[] {
   if (emailIds.length === 0) return [];
-  return dbAll<{ id: string; sender: string | null }>(ADDRESS_PASS_SENDERS_SQL, [userId, JSON.stringify(emailIds)]);
+  return dbAll<AddressPassSenderRow>(ADDRESS_PASS_SENDERS_SQL, [userId, JSON.stringify(emailIds)]);
 }

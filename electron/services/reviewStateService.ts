@@ -133,7 +133,9 @@ import {
 import { DedicatedWorkerError, isPoolReady, queryOnDedicatedWorker } from "../workers/contactWorkerPool";
 import { readAddressPassSenders } from "./db/addressPassSendersDb";
 import { BUNDLED_SENDER_RULES, type SenderRuleSet } from "../utils/senderFilter/bundledRules";
-import { isSignalLive, matchesExactAddress } from "../utils/senderFilter/senderFilter";
+import { buildKeepSets, storedFilterRow } from "../utils/senderFilter/senderFilter";
+import { anySignalLive, filterForSurface } from "../utils/senderFilter/siteFilter";
+import { listDealContactEmails } from "./db/dealContactEmailsDb";
 import {
   FOLDER_MATCH_CANDIDATE_EMAILS_SQL,
   FOLDER_MATCH_CANDIDATE_PARAM_COUNT,
@@ -884,19 +886,36 @@ export interface AddressMatchPassResult {
 }
 
 /**
- * BACKLOG-4175: the matched ids minus those whose From address is an exact
- * sender seed, when the seed signal is live for the address pass. Nothing is
- * unlinked or removed: a seed email is simply not queued. Deal-contact mail
- * never reaches here (the candidate SQL excludes it).
+ * BACKLOG-4175: the matched ids minus those a LIVE sender signal suppresses on
+ * the address pass (exact seeds first; then keep rules K1-K3; then the other
+ * signals). Nothing is unlinked or removed: a dropped email is simply not
+ * queued. Deal-contact mail of THIS deal never reaches here (the candidate SQL
+ * excludes it); K1 keeps contacts of the user's other non-rejected deals.
  */
-function dropSeedSenders(userId: string, matchedIds: string[], rules: SenderRuleSet): string[] {
-  if (matchedIds.length === 0 || !isSignalLive(rules, "seedAddress", "addressPass")) return matchedIds;
-  const seed = new Set(
-    readAddressPassSenders(userId, matchedIds)
-      .filter((r) => matchesExactAddress(r.sender, rules))
-      .map((r) => r.id),
+function dropLiveSenders(
+  userId: string,
+  matchedIds: string[],
+  rules: SenderRuleSet,
+): { toQueue: string[]; seedSkipped: number; ruleSkipped: number } {
+  if (matchedIds.length === 0 || !anySignalLive(rules, "addressPass")) {
+    return { toQueue: matchedIds, seedSkipped: 0, ruleSkipped: 0 };
+  }
+  const keep = buildKeepSets(listDealContactEmails(userId), rules);
+  const { dropped } = filterForSurface(
+    readAddressPassSenders(userId, matchedIds),
+    storedFilterRow,
+    rules,
+    "addressPass",
+    keep,
   );
-  return seed.size === 0 ? matchedIds : matchedIds.filter((id) => !seed.has(id));
+  if (dropped.length === 0) return { toQueue: matchedIds, seedSkipped: 0, ruleSkipped: 0 };
+  const drop = new Set(dropped.map((d) => d.item.id));
+  const seedSkipped = dropped.filter((d) => d.rule === "S0").length;
+  return {
+    toQueue: matchedIds.filter((id) => !drop.has(id)),
+    seedSkipped,
+    ruleSkipped: dropped.length - seedSkipped,
+  };
 }
 
 /**
@@ -951,8 +970,7 @@ export async function queueAddressMatchesForTransaction(transactionId: string): 
 
   const matched = matchedIds.length;
   // BACKLOG-4175: after the matcher, whichever path ran it (worker or main thread).
-  const toQueue = dropSeedSenders(txn.user_id, matchedIds, BUNDLED_SENDER_RULES);
-  const seedSkipped = matched - toQueue.length;
+  const { toQueue, seedSkipped, ruleSkipped } = dropLiveSenders(txn.user_id, matchedIds, BUNDLED_SENDER_RULES);
   let queued = 0;
   for (let i = 0; i < toQueue.length; i++) {
     if (i > 0 && i % ADDRESS_MATCH_EMAILS_PER_TURN === 0) await yieldToEventLoop();
@@ -970,6 +988,7 @@ export async function queueAddressMatchesForTransaction(transactionId: string): 
     candidates,
     matched,
     seedSkipped,
+    ruleSkipped,
     queued,
     uncoveredDays,
   });
