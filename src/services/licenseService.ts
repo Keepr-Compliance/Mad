@@ -43,6 +43,8 @@ export interface LicenseInfo {
   membershipStanding?: "licensed" | "unlicensed" | "left_brokerage" | "unknown" | "none";
   /** BACKLOG-3951 — the brokerage's name, set for "left_brokerage". */
   membershipOrgName?: string;
+  /** BACKLOG-4171 — the brokerage's id, set for "left_brokerage". */
+  membershipOrgId?: string;
 }
 
 /**
@@ -119,6 +121,7 @@ export const licenseService = {
           sessionBacked: result.sessionBacked !== false,
           membershipStanding: result.membership?.standing,
           membershipOrgName: result.membership?.organization_name,
+          membershipOrgId: result.membership?.organization_id,
         });
       }
       return errorResult(result.error || "Failed to get license");
@@ -146,6 +149,7 @@ export const licenseService = {
           sessionBacked: result.sessionBacked !== false,
           membershipStanding: result.membership?.standing,
           membershipOrgName: result.membership?.organization_name,
+          membershipOrgId: result.membership?.organization_id,
         });
       }
       return errorResult(result.error || "Failed to refresh license");

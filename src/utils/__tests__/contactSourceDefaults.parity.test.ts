@@ -73,6 +73,23 @@ describe("contactSourceDefaults parity (canonical vs renderer mirror)", () => {
     }
   });
 
+  // BACKLOG-4188: the inferred email switches.
+  it("exports the identical inferred email key list", () => {
+    expect([...mirror.INFERRED_EMAIL_SOURCE_KEYS]).toEqual([
+      ...canonical.INFERRED_EMAIL_SOURCE_KEYS,
+    ]);
+  });
+
+  it("agrees on resolveInferredEmailSourceEnabled for every stored shape", () => {
+    const stored: unknown[] = [true, false, undefined, null, "true", "false", 0, 1, {}];
+    for (const value of stored) {
+      expect({ value, on: mirror.resolveInferredEmailSourceEnabled(value) }).toEqual({
+        value,
+        on: canonical.resolveInferredEmailSourceEnabled(value),
+      });
+    }
+  });
+
   // The load-bearing one: 2 x 3 x 3 x 5 = 90 assertions.
   describe("isContactSourceOnByDefault agrees across the full cross-product", () => {
     for (const platform of PLATFORMS) {

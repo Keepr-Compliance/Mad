@@ -31,6 +31,8 @@ const SECRET_B = 'sb_secret_TESTONLYsecretkeysvalueB0000';
 const ENV_DEFAULTS: Record<string, string> = {
   SUPABASE_URL: `https://${REF}.supabase.co`,
   SUPABASE_SERVICE_ROLE_KEY: 'sb_secret_TESTONLYnotarealkey000000000',
+  // Shape transcribed from keepr-test (BACKLOG-4150): a JSON object, one entry, name "default",
+  // string value. The value here is a placeholder.
   SUPABASE_SECRET_KEYS: JSON.stringify({ default: SECRET_A }),
 };
 const ENV: Record<string, string | undefined> = { ...ENV_DEFAULTS };
@@ -148,17 +150,26 @@ describe('fail closed when the project ref cannot be read (BACKLOG-4015 R2)', ()
   });
 });
 
-describe('SUPABASE_SECRET_KEYS values are accepted (BACKLOG-4015 R3)', () => {
+describe('SUPABASE_SECRET_KEYS object values are accepted, nothing else (BACKLOG-4015 R3, BACKLOG-4150)', () => {
   it('C10 a value from the JSON-object form is accepted', async () => {
     expect(await call(`Bearer ${SECRET_A}`)).toBe(200);
   });
-  it('C10b every value is a candidate (JSON array, second element)', async () => {
-    ENV.SUPABASE_SECRET_KEYS = JSON.stringify([SECRET_A, SECRET_B]);
+  it('C10e a two-entry object (rotation): both the first and the second key are accepted (BACKLOG-4150)', async () => {
+    ENV.SUPABASE_SECRET_KEYS = JSON.stringify({ default: SECRET_A, rotated: SECRET_B });
+    expect(await call(`Bearer ${SECRET_A}`)).toBe(200);
     expect(await call(`Bearer ${SECRET_B}`)).toBe(200);
   });
-  it('C10c a comma/whitespace-separated list is accepted', async () => {
+  it('C10b a JSON array is not read: its elements are refused 403 (BACKLOG-4150)', async () => {
+    ENV.SUPABASE_SECRET_KEYS = JSON.stringify([SECRET_A, SECRET_B]);
+    expect(await call(`Bearer ${SECRET_A}`)).toBe(403);
+    expect(await call(`Bearer ${SECRET_B}`)).toBe(403);
+  });
+  it('C10c a plain-text list is not read: neither a name nor a key in it is accepted (BACKLOG-4150)', async () => {
+    ENV.SUPABASE_SECRET_KEYS = `default ${SECRET_A}`;
+    expect(await call('Bearer default')).toBe(403);
+    expect(await call(`Bearer ${SECRET_A}`)).toBe(403);
     ENV.SUPABASE_SECRET_KEYS = `${SECRET_A}, ${SECRET_B}`;
-    expect(await call(`Bearer ${SECRET_B}`)).toBe(200);
+    expect(await call(`Bearer ${SECRET_B}`)).toBe(403);
   });
   it('C10d non-string values and an unset variable accept nothing', async () => {
     ENV.SUPABASE_SECRET_KEYS = JSON.stringify({ a: '', b: 7, c: null });

@@ -64,11 +64,12 @@ function answer(extra: Record<string, unknown> = {}, sessionBacked = true) {
 }
 
 function Probe(): React.ReactElement {
-  const { membershipStanding, membershipOrgName } = useLicense();
+  const { membershipStanding, membershipOrgName, membershipOrgId } = useLicense();
   return (
     <div>
       <span data-testid="standing">{membershipStanding ?? "unknown-to-ui"}</span>
       <span data-testid="org-name">{membershipOrgName ?? "-"}</span>
+      <span data-testid="org-id">{membershipOrgId ?? "-"}</span>
     </div>
   );
 }
@@ -82,7 +83,11 @@ beforeEach(() => {
 
 it("exposes the standing main reported, with the brokerage name", async () => {
   mockLicenseService.get.mockResolvedValue(
-    answer({ membershipStanding: "left_brokerage", membershipOrgName: "Fixture Brokerage" }),
+    answer({
+      membershipStanding: "left_brokerage",
+      membershipOrgName: "Fixture Brokerage",
+      membershipOrgId: "fixture-org-a",
+    }),
   );
   render(
     <LicenseProvider userId="u1">
@@ -91,6 +96,7 @@ it("exposes the standing main reported, with the brokerage name", async () => {
   );
   await waitFor(() => expect(standing()).toBe("left_brokerage"));
   expect(screen.getByTestId("org-name")).toHaveTextContent("Fixture Brokerage");
+  expect(screen.getByTestId("org-id")).toHaveTextContent("fixture-org-a");
 });
 
 it("a failed license read exposes no standing", async () => {

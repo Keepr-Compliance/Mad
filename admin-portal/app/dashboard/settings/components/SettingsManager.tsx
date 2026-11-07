@@ -15,6 +15,7 @@ import { RoleManagement } from './RoleManagement';
 import { AuditLogContent } from '@/app/dashboard/audit-log/AuditLogContent';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
 import { PERMISSIONS } from '@/lib/permissions';
+import { useGrantableRoles } from '@/hooks/useGrantableRoles';
 
 type Tab = 'users' | 'roles' | 'audit';
 
@@ -44,6 +45,10 @@ export function SettingsManager({ initialUsers, currentUserId, initialRoles, per
   useEffect(() => {
     setUsers(initialUsers);
   }, [initialUsers]);
+
+  // Roles the signed-in user may grant, per the database's can_grant_role (BACKLOG-4168).
+  const grantableRoleIds = useGrantableRoles(initialRoles);
+  const grantableRoles = initialRoles.filter((r) => grantableRoleIds?.has(r.id));
 
   const canManageUsers = hasPermission(PERMISSIONS.INTERNAL_USERS_MANAGE);
   const canViewRoles = hasPermission(PERMISSIONS.ROLES_VIEW) || hasPermission(PERMISSIONS.ROLES_MANAGE);
@@ -100,13 +105,14 @@ export function SettingsManager({ initialUsers, currentUserId, initialRoles, per
         <div className="space-y-6">
           <InternalUsersTable
             addUserButton={canManageUsers ? (
-              <AddInternalUserForm onSuccess={handleRefresh} roles={initialRoles} />
+              <AddInternalUserForm onSuccess={handleRefresh} roles={grantableRoles} />
             ) : undefined}
             users={users}
             currentUserId={currentUserId}
             onRemoveClick={(user) => setUsersToRemove([user])}
             onBulkRemoveClick={(users) => setUsersToRemove(users)}
             roles={initialRoles}
+            grantableRoleIds={grantableRoleIds}
             onRoleChange={handleRefresh}
             externalRoleFilter={roleFilter}
             onClearExternalRoleFilter={() => setRoleFilter(null)}
@@ -128,6 +134,8 @@ export function SettingsManager({ initialUsers, currentUserId, initialRoles, per
           permissions={permissions}
           onRefresh={handleRefresh}
           users={initialUsers}
+          currentUserId={currentUserId}
+          grantableRoleIds={grantableRoleIds}
           onNavigateToUsersWithRole={handleNavigateToUsersWithRole}
         />
       )}

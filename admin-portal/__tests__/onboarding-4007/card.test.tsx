@@ -1,6 +1,6 @@
 /**
  * BACKLOG-4007 PR-2: the Billing card shows the deal state, the start date, the Stripe
- * subscription line and the billing contact with phone.
+ * subscription line. BACKLOG-4044: the billing contact is not on this card (People shows it).
  */
 import { describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -16,24 +16,31 @@ async function card(billing: typeof WAITING) {
 }
 
 describe('Billing card (BACKLOG-4007)', () => {
-  it('waiting deal: state badge, not started, contact not set yet', async () => {
+  it('waiting deal: state badge, not started, no billing contact field', async () => {
     const html = await card(WAITING);
     expect(html).toContain('Waiting for customer setup');
     expect(html).toContain('Not started');
-    expect(html).toContain('Not set yet. The broker sets it in setup.');
+    expect(html).not.toContain('Billing contact');
+    expect(html).not.toContain('Not set yet. The broker sets it in setup.');
     expect(html).toContain('Oct 24, 2026');
     expect(html).not.toContain('>Draft<');
   });
-  it('active deal: "Active", contact with "Phone not set"', async () => {
+  it('active deal: "Active"; the billing contact is not on the card', async () => {
     const html = await card(ACTIVE);
     expect(html).toContain('>Active<');
     expect(html).not.toContain('Billing active');
     expect(html).not.toContain('Waiting for customer setup');
-    expect(html).toContain('billing@example.test · Phone not set');
+    expect(html).toContain('Account manager');
+    expect(html).not.toContain('Billing contact');
+    expect(html).not.toContain('billing@example.test');
+    expect(html).not.toContain('billing team');
+    expect(html).not.toContain('Phone not set');
   });
-  it('contact with phone and billing-only login', async () => {
+  it('contact with phone and billing-only login: still not on the card', async () => {
     const html = await card({ ...ACTIVE, contact: { ...ACTIVE.contact!, phone: '+15550100', has_login: true } });
-    expect(html).toContain('billing@example.test · +15550100 · billing-only login');
+    expect(html).not.toContain('Billing contact');
+    expect(html).not.toContain('+15550100');
+    expect(html).not.toContain('billing-only login');
   });
   it('trialing subscription reads "Billing starts <date>", never the raw status', async () => {
     const html = await card({

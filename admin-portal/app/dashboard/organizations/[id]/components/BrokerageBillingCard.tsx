@@ -3,7 +3,7 @@
 /**
  * BrokerageBillingCard - staff deal setup for one brokerage (BACKLOG-3853 PR-2A).
  *
- * Shows the deal (seats, price per seat, start date, billing contact, account manager), the
+ * Shows the deal (seats, price per seat, start date, account manager), the
  * deal state, the Stripe subscription and any suspension. BACKLOG-4007: a new deal waits for
  * customer setup ('draft'); its start date is chosen here and locks once setup is done. Sales and Super Admin set up or edit the deal, and suspend
  * or reinstate the brokerage. The database checks every permission and the Sales cap;
@@ -11,6 +11,8 @@
  *
  * BACKLOG-4019: Sales and Super Admin turn the deal's auto-renew off ("Ends <date>" at the
  * Stripe period end) and back on, with a note; set_org_auto_renew checks the permission.
+ *
+ * BACKLOG-4044: the billing contact is shown and edited only in People (next to this card).
  *
  * The page renders it only when brokerage billing is switched on or the organization is
  * a test organization (shouldShowBillingCard).
@@ -79,7 +81,6 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
   const renewAction = autoRenewAction(billing);
   const renewField = autoRenewField(billing);
   const subscription = subscriptionLine(billing);
-  const contact = billing.contact;
   const manager = billing.account_managers.find((m) => m.id === deal?.account_manager_id);
   const price = billing.seat_line?.unit_price_cents ?? null;
   const list = billing.list_price_cents;
@@ -146,11 +147,6 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
           <Field label="Start date" value={formatDay(deal.start_date)} />
           {subscription && <Field label="Stripe subscription" value={subscription.value} help={subscription.help} />}
           {renewField && <Field label="Auto-renew" value={renewField} />}
-          <Field
-            label="Billing contact"
-            value={contact ? contact.name || contact.email : deal.status === 'draft' ? 'Not set yet. The broker sets it in setup.' : 'Not set'}
-            help={contact ? [contact.email, contact.phone ?? 'Phone not set', contact.has_login ? 'billing-only login' : null].filter(Boolean).join(' · ') : undefined}
-          />
           <Field label="Account manager" value={manager?.name ?? 'Not assigned'} />
           {billing.company?.legal_name && (
             <Field

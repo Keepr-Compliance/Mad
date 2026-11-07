@@ -29,6 +29,12 @@ export function AddInternalUserForm({ onSuccess, roles }: AddInternalUserFormPro
   const [success, setSuccess] = useState<string | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
+  // `roles` holds only roles the caller may grant (BACKLOG-4168) and arrives after
+  // the database answers; keep the selection on one of them.
+  useEffect(() => {
+    if (!roles.some((r) => r.slug === selectedSlug)) setSelectedSlug(defaultSlug);
+  }, [roles, selectedSlug, defaultSlug]);
+
   const resetForm = useCallback(() => {
     setEmail('');
     setSelectedSlug(defaultSlug);
@@ -221,7 +227,7 @@ export function AddInternalUserForm({ onSuccess, roles }: AddInternalUserFormPro
                 >
                   Cancel
                 </Button>
-                <Button type="submit" disabled={isSubmitting} className="shadow-sm">
+                <Button type="submit" disabled={isSubmitting || roles.length === 0} className="shadow-sm">
                   <UserPlus className="h-4 w-4" />
                   {isSubmitting ? 'Adding...' : 'Add User'}
                 </Button>

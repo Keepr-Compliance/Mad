@@ -73,7 +73,7 @@ import { dealChangeFailureCode, dealChangeUserError } from "../dealChangeAudit";
 import { createEmail, getEmailByExternalId } from "../db/emailDbService";
 import emailAttachmentService from "../emailAttachmentService";
 import * as externalContactDb from "../db/externalContactDbService";
-import { isContactSourceEnabled, isTextPeopleEnabled } from "../../utils/preferenceHelper";
+import { isInferredEmailSourceEnabled, isTextPeopleEnabled } from "../../utils/preferenceHelper";
 
 // Hybrid extraction imports
 import { HybridExtractorService } from "../extraction/hybridExtractorService";
@@ -222,8 +222,9 @@ class TransactionService {
     let inferMessageContacts = false;
     try {
       [inferOutlookContacts, inferGmailContacts, inferMessageContacts] = await Promise.all([
-        isContactSourceEnabled(userId, "inferred", "outlookEmails", false),
-        isContactSourceEnabled(userId, "inferred", "gmailEmails", false),
+        // BACKLOG-4188: unset → ON; a stored value wins; a failed read → OFF.
+        isInferredEmailSourceEnabled(userId, "outlookEmails"),
+        isInferredEmailSourceEnabled(userId, "gmailEmails"),
         // BACKLOG-3670 C1: one switch, one default (on for Android: Google Messages).
         isTextPeopleEnabled(userId),
       ]);

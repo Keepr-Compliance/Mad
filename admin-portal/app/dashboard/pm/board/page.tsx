@@ -20,7 +20,7 @@ import { BacklogSidePanel } from '../components/BacklogSidePanel';
 import { BulkActionBar } from '../components/BulkActionBar';
 import { KanbanCard } from '../components/KanbanCard';
 import { BoardFilters } from './components/BoardFilters';
-import { SwimLaneGrid } from './components/BoardColumn';
+import { EpicLaneGrid, SwimLaneGrid } from './components/BoardColumn';
 import { useBoardDragDrop } from './hooks/useBoardDragDrop';
 import { useBoardData } from './hooks/useBoardData';
 
@@ -44,6 +44,7 @@ export default function BoardPage() {
     loadBoardData: board.loadBoardData,
     loadBacklogItems: board.loadBacklogItems,
     handleStatusChange: board.handleStatusChange,
+    handleEpicMove: board.handleEpicMove,
   });
 
   return (
@@ -52,6 +53,9 @@ export default function BoardPage() {
         sprints={board.sprints}
         selectedSprintId={board.selectedSprintId}
         onSprintChange={board.setSelectedSprintId}
+        projects={board.projects}
+        selectedProjectId={board.selectedProjectId}
+        onProjectChange={board.setSelectedProjectId}
         swimLane={board.swimLane}
         onSwimLaneChange={(mode) => { board.setSwimLane(mode); board.setCollapsedLanes(new Set()); }}
         compactCards={board.compactCards}
@@ -70,10 +74,44 @@ export default function BoardPage() {
       >
         <div className="flex flex-1 overflow-hidden">
           <div className="flex-1 overflow-x-auto p-4">
+            {board.boardError && (
+              <div
+                role="alert"
+                className="mb-3 flex items-center justify-between gap-3 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+              >
+                <span>{board.boardError}</span>
+                <button
+                  type="button"
+                  onClick={() => board.setBoardError(null)}
+                  className="text-red-500 hover:text-red-700"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
             {board.loading ? (
               <div className="flex items-center justify-center h-64">
                 <Spinner size="lg" />
               </div>
+            ) : board.projectMode && !board.selectedProjectId ? (
+              <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                <KanbanSquare className="h-12 w-12 mb-3 text-gray-300" />
+                <p className="text-sm">Select a project to view the board</p>
+              </div>
+            ) : board.swimLane === 'project' ? (
+              <EpicLaneGrid
+                columns={board.columns}
+                collapsedLanes={board.collapsedLanes}
+                onToggleLane={board.toggleLane}
+                selectedIds={board.selectedIds}
+                onToggleSelect={board.handleToggleSelect}
+                onItemUpdated={board.handleItemUpdated}
+                onQuickAdd={board.handleQuickAdd}
+                onAddEpic={board.handleAddEpic}
+                users={board.boardUsers}
+                allLabels={board.boardLabels}
+                compactCards={board.compactCards}
+              />
             ) : !board.selectedSprintId ? (
               <div className="flex flex-col items-center justify-center h-64 text-gray-400">
                 <KanbanSquare className="h-12 w-12 mb-3 text-gray-300" />
@@ -108,13 +146,16 @@ export default function BoardPage() {
             )}
           </div>
 
-          <BacklogSidePanel
-            isOpen={board.backlogOpen}
-            onToggle={() => board.setBacklogOpen(!board.backlogOpen)}
-            items={board.backlogItems}
-            loading={board.backlogLoading}
-            onSearch={board.handleBacklogSearch}
-          />
+          {/* Project mode shows a whole project; the sprint backlog panel does not apply. */}
+          {!board.projectMode && (
+            <BacklogSidePanel
+              isOpen={board.backlogOpen}
+              onToggle={() => board.setBacklogOpen(!board.backlogOpen)}
+              items={board.backlogItems}
+              loading={board.backlogLoading}
+              onSearch={board.handleBacklogSearch}
+            />
+          )}
         </div>
 
         <DragOverlay>
@@ -138,7 +179,7 @@ export default function BoardPage() {
         onClearSelection={() => { board.setSelectedIds(new Set()); board.setBulkError(null); }}
         onChangeStatus={board.handleBulkStatusChange}
         onChangePriority={() => {}}
-        onAssignToSprint={board.handleBulkAssignSprint}
+        onAssignToSprint={board.projectMode ? undefined : board.handleBulkAssignSprint}
         onAssignUser={board.handleBulkAssignUser}
         onDelete={board.handleBulkDeleteRequest}
         error={board.bulkError}

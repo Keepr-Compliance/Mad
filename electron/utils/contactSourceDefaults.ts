@@ -226,3 +226,32 @@ export function getDefaultContactSourceSelection(
 export function isContactSourceKey(key: string): key is ContactSourceKey {
   return (CONTACT_SOURCE_KEYS as readonly string[]).includes(key);
 }
+
+// ===========================================================================
+// BACKLOG-4188 — the two "Auto-discover from conversations" email switches.
+// ===========================================================================
+
+/** The inferred (auto-discover) email preference keys. */
+export type InferredEmailSourceKey = "outlookEmails" | "gmailEmails";
+
+/** Every inferred email key, in a stable order. */
+export const INFERRED_EMAIL_SOURCE_KEYS: readonly InferredEmailSourceKey[] = [
+  "outlookEmails",
+  "gmailEmails",
+];
+
+/**
+ * Is auto-discover from this mailbox ON, given the value stored at
+ * `contactSources.inferred.<key>`?
+ *
+ * An explicitly stored boolean always wins. With NO stored value it is ON
+ * (founder decision, BACKLOG-4188). Anything that is not a boolean counts as
+ * no stored value. The plan gate (`email_contact_inference`) is a separate,
+ * independent requirement and is not decided here.
+ *
+ * Messages / SMS is NOT covered by this: it keeps its own rule
+ * (`resolveTextPeopleEnabled`, BACKLOG-3670).
+ */
+export function resolveInferredEmailSourceEnabled(stored: unknown): boolean {
+  return typeof stored === "boolean" ? stored : true;
+}
