@@ -1,0 +1,49 @@
+BACKLOG-4045b SQL controls, keepr-test after apply 2026-11-07 (ledger top 20261107160000), one call ending in RAISE (rolled back).
+Before apply: _billing_set_auto_renew(6) 698cec91f74a59f49101fac6afe197dc, set_org_auto_renew(4) fc2ce2ede40ab941a318cce4dd6b1e7d, admin_get_org_activity 42ffad03969ab407d626948b9fcee650.
+After apply: _billing_set_auto_renew(7) dbc2dffd26f24da2e773ff88ec96fa33, set_org_auto_renew(5) 0635beb03ede25d58f83acf5be174214, admin_get_org_activity 93ee729f73f23ecd90ffe49ca6d60704; ACLs unchanged.
+The same modes ran first with the migration composed in front (pre-apply): identical pass/fail/reds in every mode.
+G_guard reds wherever a guarded body drifts to an unknown md5. It stays green under n1_default_false (a DEFAULT lives outside prosrc) and n6_reader_no_key (that mutation restores the pinned 4036 body exactly).
+n1b_overload reds everything: with the 4-arg overload present, the 4-arg positional calls are ambiguous too.
+
+base: pass=18 fail=0 reds={}
+   none
+c1_no_enqueue: pass=16 fail=2 reds=['C1_staff_on_one_row', 'G_guard']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) baf888f9->4e86e88f [  IF false THEN]
+c2_staff_any: pass=12 fail=6 reds=['C1_staff_on_one_row', 'C2_staff_off_no_row', 'C3_brokerage_on_no_row', 'C5_suspended_no_row', 'G_guard', 'N5_suspended_notified_false']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) baf888f9->bd2b4a23 [  v_notify := p_caller = 'staff' AND p_notify AND nullif(btrim(coalesc]
+c3_any_caller: pass=16 fail=2 reds=['C3_brokerage_on_no_row', 'G_guard']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) baf888f9->15f7afff [  v_notify := p_on AND v_new_status = 'active' AND p_notify AND nullif]
+c4_before_early_return: pass=11 fail=7 reds=['C1_staff_on_one_row', 'C2_staff_off_no_row', 'C4_noop_no_row', 'C5_suspended_no_row', 'G_guard', 'N2_unticked_no_row', 'N3_no_contact_no_row']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) baf888f9->4e00ea42 [    IF p_on AND p_caller = 'staff' THEN       INSERT INTO public.billi]
+c5_no_status_test: pass=15 fail=3 reds=['C5_suspended_no_row', 'G_guard', 'N5_suspended_notified_false']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) baf888f9->691198dc [  v_notify := p_on AND p_caller = 'staff' AND p_notify AND nullif(btri]
+c6_no_on_conflict: pass=13 fail=5 reds=['C6_dedupe_on_conflict', 'G_guard', 'N1b_named_args_resolve', 'N2_unticked_no_row', 'N9_null_notify_refused']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) baf888f9->ddd3903b ['version', v_version));]
+n1_default_false: pass=14 fail=4 reds=['C1_staff_on_one_row', 'N1_default_notifies', 'N6_reader_notified', 'N7_audit_notified']
+   MUTATION APPLIED public.set_org_auto_renew(uuid,boolean,text,integer,boolean) 4393e209->ed945fd5 [p_notify boolean DEFAULT false]
+n1b_overload: pass=0 fail=18 reds=['A_actor_recorded', 'C1_staff_on_one_row', 'C2_staff_off_no_row', 'C3_brokerage_on_no_row', 'C4_noop_no_row', 'C5_suspended_no_row', 'C6_dedupe_on_conflict', 'G_guard', 'N1_default_notifies', 'N1b_named_args_resolve', 'N2_unticked_no_row', 'N3_no_contact_no_row', 'N4_no_key_for_brokerage', 'N5_suspended_notified_false', 'N6_reader_notified', 'N7_audit_notified', 'N8_grants_one_signature', 'N9_null_notify_refused']
+   MUTATION APPLIED 4-arg set_org_auto_renew overload created
+n2_no_p_notify: pass=16 fail=2 reds=['G_guard', 'N2_unticked_no_row']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) baf888f9->bcbf96b7 [  v_notify := p_on AND p_caller = 'staff' AND v_new_status = 'active' ]
+n3_no_contact: pass=16 fail=2 reds=['G_guard', 'N3_no_contact_no_row']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) baf888f9->7d1f05ca [  v_notify := p_on AND p_caller = 'staff' AND v_new_status = 'active' ]
+n4_key_every_caller: pass=16 fail=2 reds=['G_guard', 'N4_no_key_for_brokerage']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) baf888f9->ac27b5fa [          || jsonb_build_object('notified', coalesce(v_notify, false))]
+n6_reader_no_key: pass=17 fail=1 reds=['N6_reader_notified']
+   MUTATION APPLIED public.admin_get_org_activity(uuid,integer) 166fe86f->ab59facb ['plan')))]
+n7_audit_no_key: pass=16 fail=2 reds=['G_guard', 'N7_audit_notified']
+   MUTATION APPLIED public.set_org_auto_renew(uuid,boolean,text,integer,boolean) 4393e209->152ad588 [);]
+n8_grant_internal: pass=17 fail=1 reds=['N8_grants_one_signature']
+   MUTATION APPLIED GRANT EXECUTE _billing_set_auto_renew(7) TO authenticated
+n9_no_null_check: pass=16 fail=2 reds=['G_guard', 'N9_null_notify_refused']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) baf888f9->523a53c7 []
+
+BACKLOG-4019 controls (signature strings updated to 7-arg/5-arg) run before the apply with the old strings and after with the new: identical pass/fail/reds in all 23 modes: True; base 40/40.
+BACKLOG-4045 controls: superseded by these (C1-C6 carried over with contact-email fixtures).
+
+PostgREST, keepr-test, after apply: a temporary fixture staff user (sales role, password created for this run, never printed) signed in with the password grant and called /rest/v1/rpc/set_org_auto_renew on an org id with no deal, so nothing was written:
+sign-in (fixture staff user, password grant): 200 token received: True
+a_4_named_args (broker-portal shape) -> 200 {"error": "no_deal", "success": false}
+b_5_named_args_p_notify_false (admin shape) -> 200 {"error": "no_deal", "success": false}
+c_5_named_args_p_notify_null -> 200 {"error": "invalid_request", "success": false}
+Fixture user removed afterwards (auth.users, identities, sessions, public.users, internal_roles all 0; no audit rows).

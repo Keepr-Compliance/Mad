@@ -107,12 +107,15 @@ export async function suspendOrgAction(
 /**
  * BACKLOG-4019: turn the deal's auto-renew off or back on. set_org_auto_renew checks
  * billing.manage itself and needs the note for staff; the version guards against a stale card.
+ * BACKLOG-4045: notify = "Email the billing contact" on the turn-on dialog (the database queues
+ * the email only for a staff turn-on with a billing contact email; ignored when turning off).
  */
 export async function setAutoRenewAction(
   organizationId: string,
   on: boolean,
   note: string,
-  expectedVersion: number
+  expectedVersion: number,
+  notify: boolean = true
 ): Promise<ActionResult> {
   if (!note.trim()) return { ok: false, error: dealErrorMessage('note_required') };
   const { supabase, user } = await getAuthenticatedUser();
@@ -122,6 +125,7 @@ export async function setAutoRenewAction(
     p_on: on,
     p_note: note.trim(),
     p_expected_version: expectedVersion,
+    p_notify: notify,
   });
   const result = fromRpc(data as RpcResult, error);
   if (result.ok) revalidatePath(`/dashboard/organizations/${organizationId}`);
