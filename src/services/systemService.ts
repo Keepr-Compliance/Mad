@@ -215,6 +215,21 @@ export const systemService = {
   },
 
   /**
+   * The running app's version (BACKLOG-1293). Fails when the main process
+   * returns no version, so callers render nothing rather than a placeholder.
+   */
+  async getAppVersion(): Promise<ApiResult<{ version: string }>> {
+    try {
+      const info = await window.api.system.getAppInfo();
+      const version = typeof info?.version === "string" ? info.version.trim() : "";
+      if (!version) return { success: false, error: "App version unavailable" };
+      return { success: true, data: { version } };
+    } catch (error) {
+      return { success: false, error: getErrorMessage(error) };
+    }
+  },
+
+  /**
    * Run the permission setup wizard
    */
   async runPermissionSetup(): Promise<ApiResult> {
