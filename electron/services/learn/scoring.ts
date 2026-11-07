@@ -19,15 +19,10 @@ import type {
 } from "./baselineRunner";
 import { isSameDeal, sameStreet } from "./dealMatcher";
 import { wilsonInterval, type WilsonInterval } from "./wilson";
-import {
-  BUNDLED_SENDER_RULES,
-  type SenderRuleSet,
-  type SenderRuleSignal,
-} from "../../utils/senderFilter/bundledRules";
+import type { SenderRuleSet, SenderRuleSignal } from "../../utils/senderFilter/bundledRules";
 import {
   decide,
   matchesExactAddress,
-  NO_KEEP,
   storedFilterRow,
   type KeepRuleId,
   type KeepSets,
@@ -291,7 +286,7 @@ export function scoreRun(
   dealAnswers: DealAnswerRow[],
   bulkRows: AnsweredBulkRow[],
   seedLinkedToDeals: number,
-  census: SenderCensusInput = { rules: BUNDLED_SENDER_RULES, keep: NO_KEEP, linked: [] },
+  census: SenderCensusInput,
 ): LearnScore {
   const key = buildAnswerKey(keyRows, scannedRange(run));
   const classified = classify(run.detections, key.positives, key.negatives, key.neutral);

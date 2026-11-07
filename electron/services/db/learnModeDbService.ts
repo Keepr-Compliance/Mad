@@ -292,7 +292,7 @@ export function listDealContactEmails(userId: string): string[] {
 
 /** BACKLOG-4175 (census): messages linked to the user's non-rejected deals, once each. */
 export function listDealLinkedEmails(userId: string): DealLinkedEmailRow[] {
-  return dbAll<DealLinkedEmailRow>(DEAL_LINKED_EMAILS_SQL, [userId, userId, userId]);
+  return dbAll<DealLinkedEmailRow>(DEAL_LINKED_EMAILS_SQL, [userId, userId]);
 }
 
 // ---- preview (read only) --------------------------------------------------

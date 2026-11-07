@@ -47,6 +47,7 @@ import { runBaseline0, type LearnRunResult } from "../baselineRunner";
 import { answerCleanupQuestion, nextCleanupQuestion } from "../cleanupPass";
 import { addressKey } from "../dealMatcher";
 import { countSeedLinkedToDeals, formatCopyBlock, isHiddenBySenderRules, scoreRun, visibleEmailIds } from "../scoring";
+import { EMPTY_CENSUS } from "../../__tests__/helpers/emptyCensus-4175";
 import {
   listAnswerKeyTransactions,
   listAnsweredBulkWithText,
@@ -108,7 +109,7 @@ function detectionOf(r: LearnRunResult, emailId: string) {
 }
 
 function score(r: LearnRunResult) {
-  return scoreRun(r, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER), 0);
+  return scoreRun(r, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER), 0, EMPTY_CENSUS);
 }
 
 const A1 = "4175 Canarytest Way, Testville, ZZ 00000";

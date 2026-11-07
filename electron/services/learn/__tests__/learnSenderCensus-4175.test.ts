@@ -15,7 +15,7 @@
  *   C11  per mailbox (emails.account_id), NULL as its own bucket, never the id
  *   C12  the census is reported twice: full, and without K1 AND K3
  *   C13  K1 = contacts on NON-rejected deals, not removed from the deal
- *   TH   thread-only links count, once per message; rejected deals do not
+ *   KH   a message kept by K1, K2 or K3 is never hidden, even when its signal is live
  *   BS   the filter on the bulk sample (newsletter caught, real estate suppressed)
  *
  * Synthetic data only: "Canarytest" streets, reserved domains.
@@ -122,12 +122,10 @@ function deal(id: string, address: string, status = "active", detectionStatus: s
 }
 
 let linkSeq = 0;
-/** An email link carries the email's own thread_id (schema trigger, BACKLOG-1768); a thread-only link has no email_id. */
-function link(txn: string, emailId: string | null, threadOnly: string | null = null): void {
+/** An email link carries the email's own thread_id (schema trigger, BACKLOG-1768). */
+function link(txn: string, emailId: string): void {
   linkSeq += 1;
-  const threadId = emailId
-    ? (db.prepare(`SELECT thread_id FROM emails WHERE id = ?`).get(emailId) as { thread_id: string }).thread_id
-    : threadOnly;
+  const threadId = (db.prepare(`SELECT thread_id FROM emails WHERE id = ?`).get(emailId) as { thread_id: string }).thread_id;
   run(
     `INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id) VALUES (?, ?, ?, ?, ?)`,
     `c-4175c-${linkSeq}`,
@@ -222,22 +220,37 @@ describe("C11 per mailbox, NULL as its own bucket, labelled by ordinal", () => {
   });
 });
 
-describe("TH thread-only links count once per message; rejected deals do not", () => {
-  it("one direct link, one thread-only link, one message linked both ways, one on a rejected deal", async () => {
+describe("KH a message kept by K1, K2 or K3 is never hidden, even when its signal is live", () => {
+  it("suppressed-host sender is hidden; the same host's K1 / K3 senders and a K2 sender are not", async () => {
+    // Non-default rules: three approved hosts, every one LIVE on learnQuestions.
+    const rules: SenderRuleSet = {
+      ...BUNDLED_SENDER_RULES,
+      suppress: { ...BUNDLED_SENDER_RULES.suppress, hosts: ["corp.example", "corp2.example", "docusign.net"] },
+    };
+    expect(rules.modes.approvedHost.learnQuestions).toBe("live");
     deal("t1", A1);
-    deal("t-rej", A2, "rejected");
-    const direct = mail("a@client.example", 1);
-    const inThread = mail("news@list.example", 2, { threadId: "th-shared", headers: UNSUB });
-    const both = mail("b@client.example", 3, { threadId: "th-shared" });
-    const onRejected = mail("c@client.example", 4, { threadId: "th-rej" });
-    link("t1", direct);
-    link("t1", null, "th-shared");
-    link("t1", both);
-    link("t-rej", null, "th-rej");
-    link("t-rej", onRejected);
-    expect(listDealLinkedEmails(USER).map((r) => r.id)).toEqual([direct, inThread, both].sort());
-    const [m] = score(await baseline()).senderCensus.dealLinkedSuppressed;
-    expect([m.n, m.full.k]).toEqual([3, 1]);
+    contactOn("t1", "keeper@corp.example");
+    // One real-estate message per property, so each lands in its own detection.
+    const k1 = dealMail("keeper@corp.example", "4191 Canarytest Way, Testville, ZZ 00000", 1);
+    const k3 = dealMail("other@corp.example", "4192 Canarytest Way, Testville, ZZ 00000", 2);
+    const k2 = dealMail("envelope@docusign.net", "4193 Canarytest Way, Testville, ZZ 00000", 3);
+    const hidden = dealMail("someone@corp2.example", "4194 Canarytest Way, Testville, ZZ 00000", 4);
+    const r = await baseline(rules);
+    const hiddenIds = r.detections.flatMap((d) => d.hiddenEmailIds);
+    // Positive control: the suppress path hides when nothing keeps the sender.
+    expect(hiddenIds).toEqual([hidden]);
+    expect(hiddenIds).not.toContain(k1);
+    expect(hiddenIds).not.toContain(k3);
+    expect(hiddenIds).not.toContain(k2);
+    expect(r.detections.filter((d) => d.emailIds.some((id) => [k1, k2, k3].includes(id)))).toHaveLength(3);
+    expect(r.senderStats.keptBy).toMatchObject({ K1: 1, K2: 1, K3: 1 });
+    const keep = buildKeepSets(listDealContactEmails(USER), rules);
+    for (const s of ["keeper@corp.example", "other@corp.example", "envelope@docusign.net"]) {
+      expect(decide({ sender: s, source: "gmail" }, rules, "learnQuestions", keep)).toMatchObject({
+        outcome: "keep",
+        live: false,
+      });
+    }
   });
 });
 

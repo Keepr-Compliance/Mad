@@ -228,9 +228,9 @@ export const DEAL_CONTACT_EMAILS_SQL = sql`
 
 /**
  * BACKLOG-4175 (census): every message linked to one of the user's NON-rejected
- * deals, once per message — through `communications.email_id`, or through a
- * thread-only link (`communications.thread_id` with no email / message id)
- * matching `emails.thread_id`. Bound: user id (x3).
+ * deals through `communications.email_id`, once per message. Every email link
+ * sets email_id; thread-only links (no email / message id) are written for text
+ * threads only. Bound: user id (x2).
  */
 export const DEAL_LINKED_EMAILS_SQL = sql`
   SELECT e.id AS id, e.sender AS sender, e.source AS source, e.account_id AS account_id,
@@ -241,13 +241,6 @@ export const DEAL_LINKED_EMAILS_SQL = sql`
     FROM communications c
     JOIN transactions t ON t.id = c.transaction_id
     WHERE t.user_id = ? AND c.email_id IS NOT NULL
-      AND NOT (COALESCE(t.status, 'active') = 'rejected' OR COALESCE(t.detection_status, 'confirmed') = 'rejected')
-    UNION
-    SELECT e2.id
-    FROM communications c
-    JOIN transactions t ON t.id = c.transaction_id
-    JOIN emails e2 ON e2.thread_id = c.thread_id AND e2.user_id = t.user_id
-    WHERE t.user_id = ? AND c.email_id IS NULL AND c.message_id IS NULL AND c.thread_id IS NOT NULL
       AND NOT (COALESCE(t.status, 'active') = 'rejected' OR COALESCE(t.detection_status, 'confirmed') = 'rejected')
   )
   ORDER BY e.id
