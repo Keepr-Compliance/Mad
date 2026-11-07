@@ -101,6 +101,14 @@ export const MY_TRANSACTIONS_PATHS = ['/dashboard/my-transactions'] as const;
  */
 export const BILLING_PATHS = ['/dashboard/billing'] as const;
 
+/**
+ * Reports (BACKLOG-3505): passed through for a floor user routed on a BROKERAGE
+ * row only. Full-portal users are admitted above. The role, the plan key and
+ * the per-report agentScoped rule are NOT read here;
+ * lib/reports/report-gate.ts decides on the server and 404s the rest.
+ */
+export const REPORTS_PATHS = ['/dashboard/reports'] as const;
+
 /** `path` is `base` itself or a sub-path of it. Never a bare prefix match. */
 function isUnder(path: string, base: string): boolean {
   return path === base || path.startsWith(`${base}/`);
@@ -141,6 +149,9 @@ export function mayOpenDashboardPath(
   }
   if (access.kind === 'floor' && access.via === 'brokerage') {
     for (const base of MY_TRANSACTIONS_PATHS) {
+      if (isUnder(pathname, base)) return true;
+    }
+    for (const base of REPORTS_PATHS) {
       if (isUnder(pathname, base)) return true;
     }
   }

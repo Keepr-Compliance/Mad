@@ -17,6 +17,7 @@ export const PAGE_TITLES = {
   myTransactions: 'My Transactions',
   submissions: 'Submissions',
   billing: 'Billing',
+  reports: 'Reports',
   setup: 'Account Setup',
 } as const;
 
@@ -34,6 +35,7 @@ const EXACT: Record<string, string> = {
   '/my-transactions': PAGE_TITLES.myTransactions,
   '/submissions': PAGE_TITLES.submissions,
   '/billing': PAGE_TITLES.billing,
+  '/reports': PAGE_TITLES.reports,
   '/setup': PAGE_TITLES.setup,
 };
 
@@ -44,6 +46,7 @@ const DETAIL: Record<string, string> = {
   checklists: 'Checklist',
   'my-transactions': 'Transaction',
   submissions: 'Submission',
+  reports: 'Report',
 };
 
 /** Title for the phone top bar, or undefined to keep the wordmark. */
