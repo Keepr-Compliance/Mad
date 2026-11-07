@@ -438,6 +438,32 @@ BEGIN
     s2 := pg_temp.pub(jsonb_set(pg_temp.latest(), '{suppress,hosts}', '["q3.example.test"]'));
     r := r || jsonb_build_object('Q3_host_added_signal_measure_allowed', pg_temp.pass(s ~ '^\d+$' AND s2 ~ '^\d+$', s || ' | ' || s2));
 
+    -- ===== SR probes (added after SR review of PR 3414): the canary must CARRY the change, not merely exist =====
+    -- P4: canary flips approvedHost live only; a release that flips it AND adds a host -> refused (host untested)
+    c := pg_temp.sig(pg_temp.latest(), 'approvedHost', 'live');
+    s := pg_temp.pub(c, oX);
+    s2 := pg_temp.pub(jsonb_set(c, '{suppress,hosts}', (c #> '{suppress,hosts}') || '"p4.example.test"'));
+    s3 := pg_temp.pub(c);
+    r := r || jsonb_build_object('SRP4_liveness_from_new', pg_temp.pass(s ~ '^\d+$' AND s2 LIKE GUARD AND s3 ~ '^\d+$', s || ' | ' || s2 || ' | ' || s3));
+    -- P1: an unrelated canary (a different host) does not unlock a host addition
+    s := pg_temp.pub(jsonb_set(pg_temp.latest(), '{suppress,hosts}', (pg_temp.latest() #> '{suppress,hosts}') || '"p1-other.example.test"'), oX);
+    s2 := pg_temp.pub(jsonb_set(pg_temp.latest(), '{suppress,hosts}', (pg_temp.latest() #> '{suppress,hosts}') || '"p1.example.test"'));
+    s3 := pg_temp.pub(pg_temp.latest());
+    r := r || jsonb_build_object('SRP1_unrelated_canary_list', pg_temp.pass(s ~ '^\d+$' AND s2 LIKE GUARD AND s3 ~ '^\d+$', s || ' | ' || s2 || ' | ' || s3));
+    -- P2: a canary turning one cell live does not unlock a different cell
+    s := pg_temp.pub(jsonb_set(pg_temp.latest(), '{modes,gmailPromotions,learnQuestions}', '"live"'), oX);
+    s2 := pg_temp.pub(jsonb_set(pg_temp.latest(), '{modes,gmailPromotions,detector}', '"live"'));
+    s3 := pg_temp.pub(pg_temp.latest());
+    r := r || jsonb_build_object('SRP2_unrelated_canary_mode', pg_temp.pass(s ~ '^\d+$' AND s2 LIKE GUARD AND s3 ~ '^\d+$', s || ' | ' || s2 || ' | ' || s3));
+    -- P3: a canary that still KEEPS docusign.net does not unlock its removal; one that drops it does
+    s := pg_temp.pub(pg_temp.latest(), oX);
+    s2 := pg_temp.pub(jsonb_set(pg_temp.latest(), '{keep,platformHosts}', (pg_temp.latest() #> '{keep,platformHosts}') - 'docusign.net'));
+    s3 := pg_temp.pub(pg_temp.latest());
+    c := jsonb_set(pg_temp.latest(), '{keep,platformHosts}', (pg_temp.latest() #> '{keep,platformHosts}') - 'docusign.net');
+    s4 := pg_temp.pub(c, oX); s5 := pg_temp.pub(c);
+    r := r || jsonb_build_object('SRP3_remove_polarity', pg_temp.pass(s ~ '^\d+$' AND s2 LIKE GUARD AND s3 ~ '^\d+$' AND s4 ~ '^\d+$' AND s5 ~ '^\d+$',
+      s || ' | ' || s2 || ' | ' || s3 || ' | ' || s4 || ' | ' || s5));
+
     -- ===== S16: revert_all -> newest bundled content as a new released version, every pin gone, guard bypassed =====
     vb := pg_temp.maxv() + 1;
     INSERT INTO public.sender_rule_sets (version, content, released, bundled)

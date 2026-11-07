@@ -48,7 +48,7 @@ describe("rule-set validator parity (app vs server)", () => {
   });
 
   it("(d) the migration seed is the bundled rule set, and the app accepts it", () => {
-    const sql = readFileSync(MIGRATION, "utf8");
+    const sql = readFileSync(MIGRATION, "utf8").replace(/\r\n/g, "\n");
     const m = sql.match(/-- SEED-BEGIN\n'([\s\S]*?)'\n-- SEED-END/);
     expect(m).not.toBeNull();
     const seed = JSON.parse(m![1]);

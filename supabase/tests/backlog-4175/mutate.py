@@ -78,6 +78,10 @@ MUT = {
       "    UPDATE public.sender_rule_sets SET content = jsonb_set(v_content, '{version}', to_jsonb(v_rel_version)) WHERE version = v_rel_version;\n"
       "    v_new := v_rel_version;\n", 1)],
   'PUBLISH_keeps_client_version': [(MIG, "  v_content := jsonb_set(p_content, '{version}', to_jsonb(v_new));\n", "  v_content := p_content;\n", 1)],
+  'SR_remove_polarity': [(MIG, "              = (l.dir = 'add')\n", "              = true\n", 1)],
+  'SR_list_any_canary': [(MIG, "          AND (EXISTS (SELECT 1 FROM jsonb_array_elements(k.content #> l.path) AS z(v) WHERE z.v = e))\n              = (l.dir = 'add')\n", "", 1)],
+  'SR_mode_any_canary': [(MIG, "      WHERE NOT k.released AND k.version > p_after\n        AND k.content #> ARRAY['modes', c.sig, c.surf] = '\"live\"'::jsonb\n", "      WHERE NOT k.released AND k.version > p_after\n", 1)],
+  'SR_liveness_from_old': [(MIG, "  FROM jsonb_each(p_new->'modes') s\n  WHERE EXISTS", "  FROM jsonb_each(p_old->'modes') s\n  WHERE EXISTS", 1)],
   'SEED_host_edited': [(MIG, '"springcm.net"', '"springcm.org"', 1)],
   'SEED_not_idempotent': [(MIG, "::jsonb, true, true)\nON CONFLICT (version) DO NOTHING;\n", "::jsonb, true, true);\n", 1)],
   'CHECK_dropped': [(MIG, "  CONSTRAINT sender_rule_sets_content_valid CHECK (public._sender_rule_set_invalid(content) IS NULL),\n", "", 1)],

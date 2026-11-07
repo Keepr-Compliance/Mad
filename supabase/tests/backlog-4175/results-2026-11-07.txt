@@ -282,3 +282,36 @@ RESTORED clean=True
     FAIL  __tests__/report-access-4144/catalog-parity.test.ts > registry == reports catalog (M1 + later report migrations) > the catalog seeds 10 distinct keys
     FAIL  __tests__/report-access-4144/catalog-parity.test.ts > registry == reports catalog (M1 + later report migrations) > every server-only pending key is a cata
    RESTORED clean= True
+
+== Round 2 (fix-up after SR review, keepr-test via kt-sql, one transaction ending in RAISE)
+Baseline with probes P1-P4 added: total=36 pass=36 fail=0
+== SR_remove_polarity
+MUTATION APPLIED numstat=1/1
+  - = (l.dir = 'add')
+  + = true
+RESULT total=36 pass=35 fail=1 reds=SRP3_remove_polarity
+RESTORED clean=True
+== SR_list_any_canary
+MUTATION APPLIED numstat=0/2
+  - AND (EXISTS (SELECT 1 FROM jsonb_array_elements(k.content #> l.path) AS z(v) WHERE z.v = e))
+  - = (l.dir = 'add')
+RESULT total=36 pass=33 fail=3 reds=SRP1_unrelated_canary_list,SRP3_remove_polarity,SRP4_liveness_from_new
+RESTORED clean=True
+== SR_mode_any_canary
+MUTATION APPLIED numstat=0/1
+  - AND k.content #> ARRAY['modes', c.sig, c.surf] = '"live"'::jsonb
+RESULT total=36 pass=35 fail=1 reds=SRP2_unrelated_canary_mode
+RESTORED clean=True
+== SR_liveness_from_old
+MUTATION APPLIED numstat=1/1
+  - FROM jsonb_each(p_new->'modes') s
+  + FROM jsonb_each(p_old->'modes') s
+RESULT total=36 pass=35 fail=1 reds=SRP4_liveness_from_new
+RESTORED clean=True
+
+== CRLF proof (parity test d): migration converted to CRLF (708 lines), jest ruleSetSqlParity-4175
+  without .replace(/
+/g, "
+"): Tests: 1 failed, 4 passed, 5 total
+  with the replace:                  Tests: 5 passed, 5 total
+  migration restored with git checkout (clean)
