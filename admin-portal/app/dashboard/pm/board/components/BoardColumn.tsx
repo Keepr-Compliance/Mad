@@ -7,6 +7,7 @@
  * - SwimLaneCell: A single droppable cell in the swim lane grid
  * - SwimLaneGrid: The full swim lane grid view with header + rows (area/assignee/label)
  * - EpicLaneGrid: Project mode, one row per epic + "No epic" (BACKLOG-4176)
+ * - SprintLaneGrid: Sprint mode, one row per sprint + "No sprint" (BACKLOG-4196)
  * - groupItemsByDimension: Groups items by project/area/assignee/label
  */
 
@@ -25,10 +26,17 @@ import {
   buildSwimLaneCellId,
   NO_EPIC_KEY,
   NO_LABEL_KEY,
+  NO_SPRINT_KEY,
 } from '../lib/swim-lane-ids';
 import { groupColumnsByEpic, type EpicLane } from '../lib/epic-lanes';
-import type { PmBacklogItem, PmLabel, BoardColumns, ItemStatus } from '@/lib/pm-types';
-import { STATUS_LABELS, STATUS_COLORS } from '@/lib/pm-types';
+import { groupColumnsBySprint, sprintLaneLabel } from '../lib/sprint-lanes';
+import type { PmBacklogItem, PmLabel, PmSprint, BoardColumns, ItemStatus } from '@/lib/pm-types';
+import {
+  STATUS_LABELS,
+  STATUS_COLORS,
+  SPRINT_STATUS_LABELS,
+  SPRINT_STATUS_COLORS,
+} from '@/lib/pm-types';
 import type { AssignableUser } from '../../components/KanbanCard';
 
 // ---------------------------------------------------------------------------
@@ -531,6 +539,124 @@ export function EpicLaneGrid({
         </div>
         <div className="flex-1" />
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SprintLaneGrid -- Sprint mode: one row per sprint, then "No sprint" (BACKLOG-4196)
+// ---------------------------------------------------------------------------
+
+interface SprintLaneGridProps {
+  columns: BoardColumns;
+  sprints: PmSprint[];
+  collapsedLanes: Set<string>;
+  onToggleLane: (laneKey: string) => void;
+  selectedIds: Set<string>;
+  onToggleSelect: (itemId: string) => void;
+  onItemUpdated: () => void;
+  onQuickAdd: (title: string, status: ItemStatus, groupKey?: string) => Promise<void>;
+  users: AssignableUser[];
+  allLabels: PmLabel[];
+  compactCards: boolean;
+}
+
+export function SprintLaneGrid({
+  columns,
+  sprints,
+  collapsedLanes,
+  onToggleLane,
+  selectedIds,
+  onToggleSelect,
+  onItemUpdated,
+  onQuickAdd,
+  users,
+  allLabels,
+  compactCards,
+}: SprintLaneGridProps) {
+  const lanes = useMemo(() => groupColumnsBySprint(columns, sprints), [columns, sprints]);
+
+  return (
+    <div className="min-w-fit">
+      <BoardHeaderRow label="Sprint" />
+
+      {lanes.map((lane) => {
+        const itemCount = Object.values(lane.columns).reduce(
+          (sum, items) => sum + (items as PmBacklogItem[]).length,
+          0
+        );
+        const isCollapsed = collapsedLanes.has(lane.key);
+        const title = sprintLaneLabel(lane.key, lane.sprint);
+        return (
+          <div
+            key={lane.key}
+            data-testid={`sprint-lane-${lane.key === NO_SPRINT_KEY ? 'none' : lane.key}`}
+            className="flex gap-0 border-b border-gray-200"
+          >
+            <div className="w-[180px] min-w-[180px] bg-gray-50 px-3 py-3 sticky left-0 z-10 border-r border-gray-200">
+              <div className="flex items-start gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => onToggleLane(lane.key)}
+                  aria-label={isCollapsed ? 'Expand row' : 'Collapse row'}
+                  className="flex-shrink-0 mt-0.5"
+                >
+                  {isCollapsed ? (
+                    <ChevronRight className="h-3.5 w-3.5 text-gray-400" />
+                  ) : (
+                    <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
+                  )}
+                </button>
+                <div className="min-w-0 flex-1">
+                  <button
+                    type="button"
+                    onClick={() => onToggleLane(lane.key)}
+                    title={title}
+                    className="text-sm font-semibold text-gray-700 text-left block w-full line-clamp-2"
+                  >
+                    {title}
+                  </button>
+                  {lane.sprint && (
+                    <span
+                      data-testid={`sprint-lane-status-${lane.key}`}
+                      className={`inline-flex items-center mt-0.5 px-1.5 py-0 rounded text-[11px] font-medium ${SPRINT_STATUS_COLORS[lane.sprint.status] ?? 'bg-gray-100 text-gray-600'}`}
+                    >
+                      {SPRINT_STATUS_LABELS[lane.sprint.status] ?? lane.sprint.status}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onToggleLane(lane.key)}
+                    className="text-xs text-gray-400 text-left block w-full"
+                  >
+                    {itemCount} {itemCount === 1 ? 'item' : 'items'}
+                  </button>
+                </div>
+              </div>
+            </div>
+            {isCollapsed ? (
+              <div className="flex-1 bg-gray-50 px-3 py-3 flex items-center">
+                <span className="text-xs text-gray-400 italic">Collapsed</span>
+              </div>
+            ) : (
+              COLUMN_ORDER.map((status) => (
+                <SwimLaneCell
+                  key={status}
+                  droppableId={buildSwimLaneCellId('sprint', lane.key, status)}
+                  items={(lane.columns[status] || []) as PmBacklogItem[]}
+                  selectedIds={selectedIds}
+                  onToggleSelect={onToggleSelect}
+                  onItemUpdated={onItemUpdated}
+                  onQuickAdd={(title) => onQuickAdd(title, status, lane.key)}
+                  users={users}
+                  allLabels={allLabels}
+                  compact={compactCards}
+                />
+              ))
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

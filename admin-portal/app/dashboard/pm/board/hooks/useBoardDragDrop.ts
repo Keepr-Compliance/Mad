@@ -14,6 +14,8 @@
  * - Label mode (BACKLOG-4196): cards are lane copies with ids
  *   `card:<itemId>:lane=<key>`; active and over ids are turned back into
  *   item ids first. A drop changes status only, never labels.
+ * - Sprint mode (BACKLOG-4196): drop into another sprint row moves the item
+ *   to that sprint ("No sprint" clears it); closed sprints refuse the drop.
  */
 
 import { useState, useCallback } from 'react';
@@ -34,11 +36,17 @@ import {
   type EpicDropPlan,
 } from '../lib/epic-lanes';
 import {
+  isSprintDropRefusal,
+  resolveSprintDrop,
+  sprintLaneKeyForItem,
+  type SprintDropPlan,
+} from '../lib/sprint-lanes';
+import {
   updateItemStatus,
   updateItemField,
   assignToSprint,
 } from '@/lib/pm-queries';
-import type { PmBacklogItem, ItemStatus, BoardColumns } from '@/lib/pm-types';
+import type { PmBacklogItem, PmSprint, ItemStatus, BoardColumns } from '@/lib/pm-types';
 import type { SwimLaneMode } from '../../components/SwimLaneSelector';
 
 interface UseBoardDragDropParams {
@@ -49,6 +57,12 @@ interface UseBoardDragDropParams {
   loadBacklogItems: (search?: string) => Promise<void>;
   handleStatusChange: (itemId: string, newStatus: ItemStatus) => Promise<void>;
   handleEpicMove: (item: PmBacklogItem, plan: EpicDropPlan) => Promise<void>;
+  /** Sprint mode: the loaded sprint list (row targets are checked against it). */
+  sprints: PmSprint[];
+  /** Sprint mode: move an item to another sprint row. */
+  handleSprintMove: (item: PmBacklogItem, plan: SprintDropPlan) => Promise<void>;
+  /** Shows a refused drop's message. */
+  onDropRefused: (message: string) => void;
 }
 
 export function useBoardDragDrop({
@@ -59,6 +73,9 @@ export function useBoardDragDrop({
   loadBacklogItems,
   handleStatusChange,
   handleEpicMove,
+  sprints,
+  handleSprintMove,
+  onDropRefused,
 }: UseBoardDragDropParams) {
   const [activeDragItem, setActiveDragItem] = useState<PmBacklogItem | null>(null);
   const [activeDragIsBacklog, setActiveDragIsBacklog] = useState(false);
@@ -117,7 +134,8 @@ export function useBoardDragDrop({
 
       // Board card dropped onto backlog panel -> unassign from sprint
       if (overId === 'backlog-panel') {
-        if (data?.type === 'backlog-item' || swimLane === 'project') return;
+        // Project and Sprint mode hide the panel and have no selected sprint.
+        if (data?.type === 'backlog-item' || swimLane === 'project' || swimLane === 'sprint') return;
         const itemId = activeId;
         try {
           await updateItemField(itemId, 'sprint_id', null);
@@ -178,6 +196,55 @@ export function useBoardDragDrop({
         return;
       }
 
+      // Sprint mode: rows are sprints. A drop changes status and/or sprint.
+      if (swimLane === 'sprint') {
+        if (data?.type === 'backlog-item') return; // backlog panel is hidden here
+        const itemId = activeId;
+        let currentStatus: ItemStatus | null = null;
+        let currentItem: PmBacklogItem | null = null;
+        for (const [status, items] of Object.entries(columns)) {
+          const found = (items as PmBacklogItem[]).find((i) => i.id === itemId);
+          if (found) {
+            currentStatus = status as ItemStatus;
+            currentItem = found;
+            break;
+          }
+        }
+        if (!currentItem || !currentStatus) return;
+
+        // Target row: the cell's key, or the row of the card dropped onto.
+        const parsedCell = parseSwimLaneCellId(overId);
+        let targetLaneKey: string | null = null;
+        if (parsedCell) {
+          if (parsedCell.dimension !== 'sprint') return;
+          targetLaneKey = parsedCell.groupKey;
+        } else {
+          const overItem = findBoardItem(overId);
+          if (overItem) targetLaneKey = sprintLaneKeyForItem(overItem);
+        }
+        if (!targetLaneKey) return;
+
+        const plan = resolveSprintDrop({
+          item: currentItem,
+          currentStatus,
+          targetLaneKey,
+          targetStatus,
+          sprints,
+        });
+        if (!plan) return;
+        if (isSprintDropRefusal(plan)) {
+          onDropRefused(plan.refused);
+          return;
+        }
+        if (!plan.sprint && plan.status) {
+          // Same row: keep the optimistic status path.
+          await handleStatusChange(itemId, plan.status);
+          return;
+        }
+        await handleSprintMove(currentItem, plan);
+        return;
+      }
+
       if (data?.type === 'backlog-item') {
         const item = data.item as PmBacklogItem;
         if (!selectedSprintId) return;
@@ -228,6 +295,9 @@ export function useBoardDragDrop({
       loadBacklogItems,
       handleStatusChange,
       handleEpicMove,
+      sprints,
+      handleSprintMove,
+      onDropRefused,
     ]
   );
 

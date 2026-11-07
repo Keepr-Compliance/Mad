@@ -169,6 +169,9 @@ function dragHook(swimLane: SwimLaneMode) {
       loadBacklogItems: vi.fn(),
       handleStatusChange,
       handleEpicMove,
+      sprints: [],
+      handleSprintMove: vi.fn(),
+      onDropRefused: vi.fn(),
     })
   ).result.current;
   return { hook, handleStatusChange, handleEpicMove };

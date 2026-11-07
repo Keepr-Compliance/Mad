@@ -45,6 +45,9 @@ function mount(swimLane: SwimLaneMode = 'project') {
       loadBacklogItems,
       handleStatusChange,
       handleEpicMove,
+      sprints: [],
+      handleSprintMove: vi.fn(),
+      onDropRefused: vi.fn(),
     })
   ).result.current;
 }
