@@ -1,0 +1,23 @@
+BACKLOG-4045 JS controls, 2026-11-07, run against commit a78c0b839 (fix committed first).
+MUTATION APPLIED J1 C8b no status check broker-portal/lib/billing/autoRenewOnNotify.ts 4e169629->24aa5f80
+{"mutation": "J1 C8b no status check", "file": "broker-portal/lib/billing/autoRenewOnNotify.ts", "suite": "__tests__/lib/billing/outboxKinds/notify_auto_renew_on.convergence.test.ts", "failed": 1, "total": 9, "red": true}
+MUTATION APPLIED J2 C8c no superseded check broker-portal/lib/billing/autoRenewOnNotify.ts 4e169629->bcec04b0
+{"mutation": "J2 C8c no superseded check", "file": "broker-portal/lib/billing/autoRenewOnNotify.ts", "suite": "__tests__/lib/billing/outboxKinds/notify_auto_renew_on.convergence.test.ts", "failed": 2, "total": 9, "red": true}
+MUTATION APPLIED J3 C8d deal version instead of newest auto-renew change broker-portal/lib/billing/autoRenewOnNotify.ts 4e169629->9b19158c
+{"mutation": "J3 C8d deal version instead of newest auto-renew change", "file": "broker-portal/lib/billing/autoRenewOnNotify.ts", "suite": "__tests__/lib/billing/outboxKinds/notify_auto_renew_on.convergence.test.ts", "failed": 2, "total": 9, "red": true}
+MUTATION APPLIED J4 C8e no auto-renew row still sends broker-portal/lib/billing/autoRenewOnNotify.ts 4e169629->8b81e31c
+{"mutation": "J4 C8e no auto-renew row still sends", "file": "broker-portal/lib/billing/autoRenewOnNotify.ts", "suite": "__tests__/lib/billing/outboxKinds/notify_auto_renew_on.convergence.test.ts", "failed": 0, "total": 9, "red": false}
+MUTATION APPLIED J5 C8f no alreadySent broker-portal/lib/billing/autoRenewOnNotify.ts 4e169629->89530e6e
+{"mutation": "J5 C8f no alreadySent", "file": "broker-portal/lib/billing/autoRenewOnNotify.ts", "suite": "__tests__/lib/billing/outboxKinds/notify_auto_renew_on.convergence.test.ts", "failed": 1, "total": 9, "red": true}
+MUTATION APPLIED J6 C8g throw on no contact broker-portal/lib/billing/autoRenewOnNotify.ts 4e169629->9b693b85
+{"mutation": "J6 C8g throw on no contact", "file": "broker-portal/lib/billing/autoRenewOnNotify.ts", "suite": "__tests__/lib/billing/outboxKinds/notify_auto_renew_on.convergence.test.ts", "failed": 1, "total": 9, "red": true}
+MUTATION APPLIED J7 C8 newest by first row, not by version broker-portal/lib/billing/autoRenewOnNotify.ts 4e169629->656e1a2e
+{"mutation": "J7 C8 newest by first row, not by version", "file": "broker-portal/lib/billing/autoRenewOnNotify.ts", "suite": "__tests__/lib/billing/outboxKinds/notify_auto_renew_on.convergence.test.ts", "failed": 5, "total": 9, "red": true}
+MUTATION APPLIED J8 C9 template word changed broker-portal/lib/email/templates/auto-renew-on.ts ed19b344->2bb2a780
+{"mutation": "J8 C9 template word changed", "file": "broker-portal/lib/email/templates/auto-renew-on.ts", "suite": "__tests__/lib/email/auto-renew-on.test.ts", "failed": 1, "total": 2, "red": true}
+MUTATION APPLIED J9 C10 kind not registered broker-portal/lib/billing/outboxKinds.ts 2bfdb174->ebde6cd2
+{"mutation": "J9 C10 kind not registered", "file": "broker-portal/lib/billing/outboxKinds.ts", "suite": "__tests__/lib/billing/outboxKinds.contract.test.ts", "failed": 1, "total": 4, "red": true}
+J4 first draft (return newest ?? 0) stayed GREEN: vacuous mutation (no payload has version 0). Replaced; re-run:
+MUTATION APPLIED J4 C8e no auto-renew row still sends broker-portal/lib/billing/autoRenewOnNotify.ts 4e169629->34789a87
+{"mutation": "J4 C8e no auto-renew row still sends", "file": "broker-portal/lib/billing/autoRenewOnNotify.ts", "suite": "__tests__/lib/billing/outboxKinds/notify_auto_renew_on.convergence.test.ts", "failed": 1, "total": 9, "red": true}
+SUMMARY 9 of 9 red (J4 as replaced)

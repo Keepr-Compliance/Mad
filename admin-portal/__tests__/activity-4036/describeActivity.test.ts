@@ -83,3 +83,11 @@ describe('describeActivity (BACKLOG-4036)', () => {
     expect(activityNote(row('deal_saved', { detail: { reason: 'Deal created' } }))).toBe('Deal created');
   });
 });
+
+describe('auto_renew_on and the billing contact email (BACKLOG-4045 follow-up)', () => {
+  it('A5: notified true / false / absent', () => {
+    expect(describeActivity(row('auto_renew_on', { detail: { notified: true } }))).toBe('Pat Doe turned auto-renew back on. Billing contact emailed.');
+    expect(describeActivity(row('auto_renew_on', { detail: { notified: false } }))).toBe('Pat Doe turned auto-renew back on. Billing contact not emailed.');
+    expect(describeActivity(row('auto_renew_on', { detail: {} }))).toBe('Pat Doe turned auto-renew back on');
+  });
+});

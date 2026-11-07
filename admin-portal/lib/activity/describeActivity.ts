@@ -91,7 +91,10 @@ export const ACTIVITY_TEMPLATES: Record<string, Template> = {
   suspended: (who) => `${who} suspended the organization`,
   reinstated: (who) => `${who} reinstated the organization`,
   auto_renew_off: (who) => `${who} turned off auto-renew`,
-  auto_renew_on: (who) => `${who} turned auto-renew back on`,
+  auto_renew_on: (who, _subject, row) =>
+    `${who} turned auto-renew back on${
+      row.detail.notified === true ? '. Billing contact emailed.' : row.detail.notified === false ? '. Billing contact not emailed.' : ''
+    }`,
   deal_ended: () => 'The deal ended',
   setup_completed: (who) => `${who} finished billing setup`,
   // staff rows (admin_audit_logs)
