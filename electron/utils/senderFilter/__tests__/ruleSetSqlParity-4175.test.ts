@@ -23,7 +23,7 @@ import { buildCorpus, type CorpusCase } from "./ruleSetCorpus-4175";
 
 const ROOT = path.resolve(__dirname, "../../../..");
 const CORPUS = path.join(ROOT, "supabase/tests/backlog-4175/corpus.json");
-const MIGRATION = path.join(ROOT, "supabase/migrations/20261108100000_backlog_4175_sender_rule_sets.sql");
+const MIGRATION = path.join(ROOT, "supabase/migrations/20261107235503_backlog_4175_sender_rule_sets.sql");
 
 const generated = buildCorpus();
 if (process.env.WRITE_CORPUS_4175 === "1") {

@@ -268,12 +268,12 @@ RESTORED clean=True
     Test Suites: 1 failed, 1 total
     Tests:       2 failed, 3 passed, 5 total
    RESTORED clean= True
-== J3_seed_host_edited MUTATION APPLIED 1 1 supabase/migrations/20261108100000_backlog_4175_sender_rule_sets.sql
+== J3_seed_host_edited MUTATION APPLIED 1 1 supabase/migrations/20261107235503_backlog_4175_sender_rule_sets.sql
     FAIL electron/utils/senderFilter/__tests__/ruleSetSqlParity-4175.test.ts
     Test Suites: 1 failed, 1 total
     Tests:       1 failed, 4 passed, 5 total
    RESTORED clean= True
-== A1_catalog_key_missing MUTATION APPLIED 0 1 supabase/migrations/20261108100000_backlog_4175_sender_rule_sets.sql
+== A1_catalog_key_missing MUTATION APPLIED 0 1 supabase/migrations/20261107235503_backlog_4175_sender_rule_sets.sql
     ❯ __tests__/report-access-4144/catalog-parity.test.ts (3 tests | 2 failed) 47ms
     × the catalog seeds 10 distinct keys 34ms
     × every server-only pending key is a catalog key and not yet a registry slug 7ms

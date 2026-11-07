@@ -9,7 +9,7 @@ the working tree, so a mutation applied by mutate.py is what runs.
 """
 import json, os, sys
 here = os.path.dirname(os.path.abspath(__file__))
-mig = os.path.join(here, '..', '..', 'migrations', '20261108100000_backlog_4175_sender_rule_sets.sql')
+mig = os.path.join(here, '..', '..', 'migrations', '20261107235503_backlog_4175_sender_rule_sets.sql')
 out = sys.argv[1]
 ctl = open(os.path.join(here, 'controls.sql')).read()
 rb = open(os.path.join(here, 'rollback-4175.sql')).read()

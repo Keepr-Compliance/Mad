@@ -3,7 +3,7 @@
  *
  * One list of rule sets, each with the answer expected from BOTH validators:
  *   zod  parseSenderRuleSet (ruleSetSchema.ts) accepts it
- *   sql  public._sender_rule_set_invalid(content) IS NULL (migration 20261108100000)
+ *   sql  public._sender_rule_set_invalid(content) IS NULL (migration 20261107235503)
  *
  * Every case is the bundled rule set with ONE path changed. The two answers differ only where
  * the server is deliberately stricter (non-ASCII text, see the migration's validator comment):
