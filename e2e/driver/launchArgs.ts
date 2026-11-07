@@ -8,6 +8,18 @@ import type { AppDriverOptions } from './types';
  * App launch argv, kept free of Playwright imports so the Node jest run can unit-test it.
  */
 
+/**
+ * BACKLOG-4097: environment for a HERMETIC unpackaged launch. The built main loads
+ * `<repoRoot>/.env.development` with dotenv, which never overrides a variable that is already set
+ * (even to ''), and the app treats '' as missing: no Supabase client, no Sentry transport. Pass it
+ * as `env` so a run from a tree whose `.env.development` points at a live backend stays offline.
+ */
+export const HERMETIC_APP_ENV: Readonly<Record<string, string>> = Object.freeze({
+  SUPABASE_URL: '',
+  SUPABASE_ANON_KEY: '',
+  SENTRY_DSN: '',
+});
+
 export function isDefaultProfile(opts: AppDriverOptions): boolean {
   return opts.reuseProfile !== false && !opts.userDataDir;
 }

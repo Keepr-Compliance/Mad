@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { KeeprAppDriver } from '../driver/appDriver';
 import { resolveBuiltMainEntry, resolveElectronBinary } from '../driver/paths';
+import { HERMETIC_APP_ENV } from '../driver/launchArgs';
 import { seedIsolatedProfile, type SeededIdentity } from '../driver/seed/seedProfile';
 import { applyFixtureDbKey, FIXTURE_DB_KEY } from '../../scripts/qa/harness/db-key-fixture';
 import {
@@ -100,6 +101,8 @@ async function launchLoggedIn(profileDir: string): Promise<KeeprAppDriver> {
     repoRoot: REPO_ROOT,
     artifactsDir: ARTIFACTS_DIR,
     launchTimeoutMs: 60_000,
+    // BACKLOG-4097: hermetic means no backend, whatever .env.development the tree holds.
+    env: { ...HERMETIC_APP_ENV },
   });
   await driver.waitForFirstPaint(60_000);
   await driver.bringToFront();

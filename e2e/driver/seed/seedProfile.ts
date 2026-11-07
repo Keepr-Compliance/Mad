@@ -95,6 +95,16 @@ function runSeedScript(repoRoot: string, profileDir: string): SeededIdentity {
 }
 
 /**
+ * BACKLOG-4097: the offline cache of the account's setup-finished record (SessionData
+ * `accountSetupFinishedAt`, electron/services/sessionService.ts). With no Supabase session the app
+ * answers account setup from this cache alone (electron/handlers/accountSetupHandlers.ts, the
+ * no-session-user branch); without it the answer is "unknown" and routing shows "Couldn't load your
+ * account settings" instead of the app's navigation (BACKLOG-3673). A fixed value, so seeds are
+ * deterministic.
+ */
+export const SEEDED_ACCOUNT_SETUP_FINISHED_AT = '2026-01-01T00:00:00.000Z';
+
+/**
  * Write session.json into the isolated profile. Plaintext SessionData (the app auto-migrates it to
  * an encrypted wrapper on first read). NO supabaseTokens → getCurrentUser authenticates from the
  * seeded DB session alone, with no real Supabase call and no login wall.
@@ -115,6 +125,8 @@ function writeSessionJson(profileDir: string, id: SeededIdentity): void {
     // Deliberately NO supabaseTokens (skips all real-Supabase validation branches).
     // A recent lastServerValidatedAt keeps the pre-auth offline-grace path valid too.
     lastServerValidatedAt: now,
+    // BACKLOG-4097: lands on the app's navigation, not "Couldn't load your account settings".
+    accountSetupFinishedAt: SEEDED_ACCOUNT_SETUP_FINISHED_AT,
   };
   writeFileSync(join(profileDir, 'session.json'), JSON.stringify(session, null, 2), 'utf8');
 }
