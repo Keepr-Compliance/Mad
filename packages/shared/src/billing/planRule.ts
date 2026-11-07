@@ -266,10 +266,21 @@ export function isPersonalMembership(row: PortalMembershipRow | null | undefined
 /**
  * The brokerage membership this user should be routed on, or null.
  *
- * Takes the first non-personal row in the order the query returned them, so the
- * caller must order deterministically (`created_at`, then `id`). SCIM and
- * directory sync can both write, so "two brokerage rows" is reachable and must
- * not resolve arbitrarily.
+ * Among the non-personal (brokerage) rows, in the order the query returned them
+ * (BACKLOG-4155):
+ *   1. the first row whose `license_status` grants access ('active');
+ *   2. else the first 'unassigned' row;
+ *   3. else the first brokerage row.
+ * This mirrors the database's unlock guard: refuse when ANY brokerage row is
+ * unassigned and NONE grants, so an active row anywhere decides, and an
+ * unassigned row outranks a suspended / expired / pending one.
+ *
+ * The caller must still order deterministically (`created_at`, then `id`):
+ * SCIM and directory sync can both write, so "two brokerage rows" is reachable
+ * and must not resolve arbitrarily. Tier 3 is still ORDER-DEPENDENT among rows
+ * that neither grant nor are unassigned (pending at A + suspended at B: the
+ * older row decides, so with an own personal row the answer is deactivated one
+ * way round and personal_owner the other). Pre-existing, pinned by a test.
  *
  * Anything that is not an array — `null` from an error result included — is no
  * membership.
@@ -278,10 +289,13 @@ export function pickBrokerageMembership(
   rows: PortalMembershipRow[] | null | undefined
 ): PortalMembershipRow | null {
   if (!Array.isArray(rows)) return null;
-  for (const row of rows) {
-    if (row && !isPersonalMembership(row)) return row;
-  }
-  return null;
+  const brokerage = rows.filter((row) => row && !isPersonalMembership(row));
+  return (
+    brokerage.find((row) => memberStatusGrantsAccess(row.license_status)) ??
+    brokerage.find((row) => row.license_status === MEMBER_UNASSIGNED_STATUS) ??
+    brokerage[0] ??
+    null
+  );
 }
 
 // ---- Portal access — BACKLOG-3080 ----------------------------------------------
@@ -309,10 +323,10 @@ export type PortalAccess =
   | {
       kind: 'floor';
       /**
-       * deactivated (BACKLOG-3917): the first brokerage row's `license_status`
+       * deactivated (BACKLOG-3917): the picked brokerage row's `license_status`
        * does not grant access, and the member does not own a personal
        * organization row to revert to.
-       * unlicensed (BACKLOG-3851): the first brokerage row is 'unassigned' —
+       * unlicensed (BACKLOG-3851): the picked brokerage row is 'unassigned' —
        * placed in the brokerage, no license yet. Same floor as deactivated.
        * personal_owner is also returned for a DEACTIVATED (suspended/expired)
        * brokerage member who holds their own personal row (BACKLOG-3851: back
@@ -331,7 +345,9 @@ export type PortalAccess =
  *
  * In order:
  *   1. Not an array (an error result) -> unknown.
- *   2. The first brokerage row decides. A status that does not grant access:
+ *   2. The brokerage row pickBrokerageMembership picks (an active row first,
+ *      else an unassigned one, else the first; BACKLOG-4155) decides. A status
+ *      that does not grant access:
  *      - deactivated (suspended / expired) AND the user owns a personal row ->
  *        floor/personal_owner on that row (BACKLOG-3851: pay-as-you-go);
  *      - 'unassigned' -> floor/unlicensed (BACKLOG-3851);
