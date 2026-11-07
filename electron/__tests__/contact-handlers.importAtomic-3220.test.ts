@@ -711,6 +711,26 @@ describe.each(SCENARIOS.map((make, i) => [make().name, make, i] as const))("%s",
     expect(scopedCalls).toEqual([[USER, saved]]);
   });
 
+  // BACKLOG-4180 (security review): an existing-DB id comes from the renderer.
+  // One that names ANOTHER user's contact is refused before any write. Break
+  // caught: dropping the ownership check (the import marks, backfills and links
+  // the other user's contact).
+  it("4180: an existing-DB id owned by another user is refused, nothing written", async () => {
+    const dbIds = (sc.input() as Array<{ id?: string; isFromDatabase?: boolean }>)
+      .filter((c) => c.isFromDatabase && c.id && !c.id.startsWith("contacts-app-"))
+      .map((c) => c.id as string);
+    if (dbIds.length === 0) return; // scenario has no existing-DB record
+    openFromTemplate(template);
+    for (const id of dbIds) {
+      realDb!.prepare("UPDATE contacts SET user_id = 'another-user-4180' WHERE id = ?").run(id);
+    }
+    const foreignBefore = jointState(realDb!, sc);
+    const res = await runImport(sc);
+    expect(res.success).toBe(false);
+    expect(res.error ?? "").toMatch(/was not found/);
+    expect(jointState(realDb!, sc)).toBe(foreignBefore);
+  });
+
   it("C4 PRECONDITION: the clean run succeeds, writes, and changes state", () => {
     expect({ success: clean.success, error: clean.error ?? null }).toEqual({ success: true, error: null });
     // H0 (BACKLOG-3354). Break caught: `savedContactIds` also on the success

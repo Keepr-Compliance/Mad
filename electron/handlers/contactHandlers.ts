@@ -2453,6 +2453,17 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
             sanitizedContact.id &&
             !sanitizedContact.id.startsWith("contacts-app-")
           ) {
+            // BACKLOG-4180 (security review): the id arrives from the renderer.
+            // It is written to (mark imported, backfill, crosswalk) and scopes
+            // the linking pass, so it must name a contact THIS user owns. Refuse
+            // the whole call before any write, like every other invalid record.
+            const owned = await databaseService.getContactById(sanitizedContact.id);
+            if (!owned || owned.user_id !== validatedUserId) {
+              throw new ValidationError(
+                `Record ${index + 1}: the saved contact it refers to was not found`,
+                "contactsToImport",
+              );
+            }
             // BACKLOG-3819: counts + contact id only — no names or addresses in logs.
             logService.warn(`[DIAG-1270] Import path: ${sanitizedContact.id} → existingDB, emails=${(sanitizedContact.allEmails || []).length}`, 'Contacts');
             existingDbContacts.push({

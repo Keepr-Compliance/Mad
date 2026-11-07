@@ -40,7 +40,7 @@ jest.mock("../logService", () => {
 });
 
 import { setDb } from "../db/core/dbConnection";
-import { linkExternalContactsForUser } from "../contactSourceLinker";
+import { linkExternalContactsForContacts, linkExternalContactsForUser } from "../contactSourceLinker";
 import { runUniqueNameAutoLinkForMode, type AskPair } from "../contactNameAutoLink";
 import { runImportScopedLinkingPass } from "../contactImportLinking";
 import { upsertFromMacOS, upsertFromOutlook } from "../db/externalContactDbService";
@@ -207,5 +207,33 @@ describe.each(["auto", "suggest"] as const)("BACKLOG-4180 C5 scoped == full (mod
       expect(linkOf(scopedDb, "r-c")).toBeNull();
       expect(asks.some((a) => a.sourceRecordId === "r-c" && a.contactId === "c-C")).toBe(true);
     }
+  });
+});
+
+/**
+ * BACKLOG-4180 (security review): a contact id that belongs to ANOTHER user
+ * contributes no keys, so it selects none of this user's records. Break caught:
+ * dropping `c.user_id = ?` from the scoped key SQL.
+ */
+describe("BACKLOG-4180 scoped pass ignores another user's contact ids", () => {
+  it("selects nothing and links nothing", () => {
+    const db = makeDb();
+    setDb(db as never);
+    db.prepare(
+      `INSERT INTO users_local (id, email, oauth_provider, oauth_id) VALUES ('other-4180', 'other@example.test', 'google', 'oauth-other')`,
+    ).run();
+    db.prepare("INSERT INTO contacts (id, user_id, display_name, is_imported) VALUES ('c-X', 'other-4180', 'Xan Other', 1)").run();
+    syncContactEmails("c-X", [{ email: "xan@example.test", is_primary: true }]);
+    syncContactPhones("c-X", [{ phone: "(415) 555-0190", is_primary: true }]);
+    upsertFromMacOS(USER, [
+      { recordId: "r-x", name: "Xan Mine", emails: ["xan@example.test"], phones: ["(415) 555-0190"] },
+    ]);
+
+    const summary = linkExternalContactsForContacts(USER, ["c-X"]);
+
+    expect(summary.resolutions).toEqual([]);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM contact_source_links").get()).toEqual({ n: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS n FROM contact_link_proposals").get()).toEqual({ n: 0 });
+    db.close();
   });
 });

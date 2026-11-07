@@ -999,8 +999,8 @@ export function linkExternalContactsForContacts(
   if (ids.length === 0) return empty;
 
   const idMarks = placeholderList(ids.length);
-  const phoneKeys = dbAll<{ k: string }>(scopedContactPhoneKeysSql(idMarks), ids).map((r) => r.k);
-  const emailKeys = dbAll<{ k: string }>(scopedContactEmailKeysSql(idMarks), ids).map((r) => r.k);
+  const phoneKeys = dbAll<{ k: string }>(scopedContactPhoneKeysSql(idMarks), [userId, ...ids]).map((r) => r.k);
+  const emailKeys = dbAll<{ k: string }>(scopedContactEmailKeysSql(idMarks), [userId, ...ids]).map((r) => r.k);
   if (phoneKeys.length === 0 && emailKeys.length === 0) return empty;
 
   const rows = dbAll<{

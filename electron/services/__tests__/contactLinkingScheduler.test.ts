@@ -430,3 +430,68 @@ describe("BACKLOG-4180 import-scoped", () => {
     expect(notified).toEqual([USER]);
   });
 });
+
+/**
+ * BACKLOG-4180 (security review): the scoped import pass never runs alongside
+ * a pass already in flight for the same user. Break caught: calling
+ * `runScoped` without waiting on the in-flight pass.
+ */
+describe("BACKLOG-4180 import-scoped vs an in-flight pass", () => {
+  it("waits for the in-flight full pass, then runs", async () => {
+    jest.useRealTimers();
+    const events: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    configureContactLinking({
+      run: async () => {
+        events.push("full:start");
+        await gate;
+        events.push("full:end");
+      },
+      runScoped: () => {
+        events.push("scoped");
+      },
+    });
+
+    const full = runContactLinkingNow(USER);
+    await Promise.resolve();
+    expect(events).toEqual(["full:start"]);
+
+    const scopedRun = runContactLinkingScopedNow(USER, ["c-1"]);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(events).toEqual(["full:start"]); // NOT concurrent
+
+    release();
+    await full;
+    await scopedRun;
+    expect(events).toEqual(["full:start", "full:end", "scoped"]);
+  });
+
+  it("a full pass requested during a scoped pass is deferred, then re-armed", async () => {
+    jest.useRealTimers();
+    const events: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    configureContactLinking({
+      run: () => {
+        events.push("full");
+      },
+      runScoped: async () => {
+        events.push("scoped:start");
+        await gate;
+        events.push("scoped:end");
+      },
+    });
+
+    const scopedRun = runContactLinkingScopedNow(USER, ["c-1"]);
+    await Promise.resolve();
+    const full = runContactLinkingNow(USER);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(events).toEqual(["scoped:start"]); // NOT concurrent
+    release();
+    await scopedRun;
+    await full;
+    expect(events).toEqual(["scoped:start", "scoped:end"]);
+    expect(__hasPendingContactLinking(USER)).toBe(true); // re-armed, owed
+  });
+});

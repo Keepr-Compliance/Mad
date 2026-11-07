@@ -125,6 +125,25 @@ const inFlight = new Set<string>();
 /** Users who signalled while their own pass was mid-flight. */
 const rerunRequested = new Set<string>();
 /**
+ * BACKLOG-4180 — settles when the pass in flight for a user ends. The scoped
+ * import pass waits on it, so it never runs alongside a full pass (or another
+ * scoped pass) for the same user.
+ */
+const inFlightDone = new Map<string, { done: Promise<void>; settle: () => void }>();
+
+/** Mark a pass in flight; the returned function ends it. */
+function beginInFlight(userId: string): () => void {
+  let settle!: () => void;
+  const entry = { done: new Promise<void>((resolve) => (settle = resolve)), settle: () => settle() };
+  inFlightDone.set(userId, entry);
+  inFlight.add(userId);
+  return () => {
+    inFlight.delete(userId);
+    if (inFlightDone.get(userId) === entry) inFlightDone.delete(userId);
+    entry.settle();
+  };
+}
+/**
  * Per-user hold depth. While above zero, no pass may run for that user.
  *
  * Taken by a sync that has written rows it might still ROLL BACK — today the
@@ -240,16 +259,28 @@ export async function runContactLinkingScopedNow(
   const active = runner;
   if (!active || !userId) return;
 
-  if ((holds.get(userId) ?? 0) > 0) {
-    heldRequests.add(userId);
-    return;
-  }
-
   if (!active.runScoped) {
     await runContactLinkingNow(userId);
     return;
   }
 
+  // Never alongside another pass for this user (security review): wait for
+  // the one in flight to finish, then re-check everything it could change.
+  while (inFlight.has(userId)) {
+    const entry = inFlightDone.get(userId);
+    if (!entry) break;
+    await entry.done;
+  }
+  if (runner !== active) return; // reset / logout while waiting
+
+  if ((holds.get(userId) ?? 0) > 0) {
+    heldRequests.add(userId);
+    return;
+  }
+
+  // In flight from here: a full pass requested meanwhile is deferred by
+  // `execute` (rerunRequested) and re-armed below, never run concurrently.
+  const end = beginInFlight(userId);
   try {
     await active.runScoped(userId, contactIds);
   } catch (error) {
@@ -258,6 +289,7 @@ export async function runContactLinkingScopedNow(
       "ContactLinkingScheduler",
     );
   } finally {
+    end();
     try {
       active.notify?.(userId);
     } catch (error) {
@@ -265,6 +297,9 @@ export async function runContactLinkingScopedNow(
         `[Contacts] linking pass notify failed: ${error}`,
         "ContactLinkingScheduler",
       );
+    }
+    if (rerunRequested.delete(userId)) {
+      requestContactLinking(userId);
     }
   }
 }
@@ -362,7 +397,7 @@ async function execute(userId: string, reason: string): Promise<void> {
     return;
   }
 
-  inFlight.add(userId);
+  const end = beginInFlight(userId);
   try {
     await active.run(userId);
   } catch (error) {
@@ -373,7 +408,7 @@ async function execute(userId: string, reason: string): Promise<void> {
       "ContactLinkingScheduler",
     );
   } finally {
-    inFlight.delete(userId);
+    end();
 
     // Outside the run's try/catch above but inside its own, because notify
     // reaches a BrowserWindow reference that may be stale.
@@ -396,6 +431,8 @@ async function execute(userId: string, reason: string): Promise<void> {
 export function __resetContactLinkingScheduler(): void {
   cancelPendingContactLinking();
   inFlight.clear();
+  for (const entry of inFlightDone.values()) entry.settle();
+  inFlightDone.clear();
   runner = null;
 }
 

@@ -85,14 +85,20 @@ export const ALL_KEYED_EXTERNAL_RECORDS_SQL = sql`SELECT external_record_id, sou
  * `LOWER(TRIM(email))` — the index lowercases the stored side and trims the
  * probe side, so trimming both here can only widen the candidate set, never
  * narrow it. The linker still decides every match.
+ *
+ * Scoped to the user (bind userId first, then the ids): a contact id that is
+ * not this user's contributes no keys.
  */
 export const scopedContactPhoneKeysSql = (marks: SafeSql): SafeSql =>
-  sql`SELECT DISTINCT phone_normalized AS k FROM contact_phones
-       WHERE contact_id IN (${marks}) AND phone_normalized IS NOT NULL AND phone_normalized <> ''`;
+  sql`SELECT DISTINCT cp.phone_normalized AS k FROM contact_phones cp
+       JOIN contacts c ON c.id = cp.contact_id
+      WHERE c.user_id = ? AND cp.contact_id IN (${marks})
+        AND cp.phone_normalized IS NOT NULL AND cp.phone_normalized <> ''`;
 
 export const scopedContactEmailKeysSql = (marks: SafeSql): SafeSql =>
-  sql`SELECT DISTINCT LOWER(TRIM(email)) AS k FROM contact_emails
-       WHERE contact_id IN (${marks}) AND TRIM(email) <> ''`;
+  sql`SELECT DISTINCT LOWER(TRIM(ce.email)) AS k FROM contact_emails ce
+       JOIN contacts c ON c.id = ce.contact_id
+      WHERE c.user_id = ? AND ce.contact_id IN (${marks}) AND TRIM(ce.email) <> ''`;
 
 /**
  * BACKLOG-4180 — the keyed source records that share a phone key or an email
