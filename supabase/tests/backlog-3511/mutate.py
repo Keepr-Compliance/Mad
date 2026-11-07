@@ -52,9 +52,12 @@ def sql_controls():
         print('  SQL   NO RESULT ' + o[:600] + out.stderr[:300])
 
 def jest_parity():
-    out = sh('npx', 'jest', '__tests__/reports-3511', '--json', '--silent', cwd=os.path.join(root, 'broker-portal'))
+    import tempfile
+    rep = tempfile.mktemp(suffix='.json')
+    out = sh('npx', 'jest', '__tests__/reports-3511', '--json', '--outputFile=' + rep, '--silent', cwd=os.path.join(root, 'broker-portal'))
     try:
-        d = json.loads(out.stdout)
+        d = json.load(open(rep))
+        os.remove(rep)
         failed = sorted({a['title'] for t in d['testResults'] for a in t['assertionResults'] if a['status'] == 'failed'})
         print('  JEST  total=%s pass=%s fail=%s reds=%s' % (d['numTotalTests'], d['numPassedTests'], d['numFailedTests'], ' | '.join(failed) or '-'))
         if not d['numTotalTests']:
