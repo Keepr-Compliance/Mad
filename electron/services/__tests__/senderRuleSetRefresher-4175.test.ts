@@ -179,8 +179,11 @@ describe("refresher", () => {
   });
 
   it("RS13a (D1) an in-process account switch is seen through the session read: A's set leaves, one RPC for B", async () => {
+    // A's answer arrives through the 30 s tick; the next tick is 6 h away, so
+    // only the consumer-driven minute check can notice the switch below.
     rpcAnswer = async () => validAnswer(3);
-    await consumerCall();
+    await later(30_000);
+    expect(rpcCalls).toEqual(["user-a"]);
     expect(store.getActiveSenderRules()).toMatchObject({ version: 3, source: "download" });
     session = { userId: "user-b" };
     rpcAnswer = () => new Promise(() => undefined); // B's answer has not landed
