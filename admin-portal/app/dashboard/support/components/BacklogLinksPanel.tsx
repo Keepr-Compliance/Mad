@@ -41,6 +41,7 @@ const STATUS_STYLES: Record<string, string> = {
   deferred: 'bg-gray-100 text-gray-500',
   testing: 'bg-purple-100 text-purple-700',
   waiting_for_user: 'bg-amber-100 text-amber-700',
+  pending_uat: 'bg-teal-100 text-teal-700',
 };
 
 type BacklogLinkType = 'fix' | 'related' | 'duplicate';

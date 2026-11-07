@@ -13,6 +13,7 @@ export type ItemStatus =
   | 'pending'
   | 'in_progress'
   | 'testing'
+  | 'pending_uat'
   | 'completed'
   | 'blocked'
   | 'deferred'
@@ -380,6 +381,7 @@ export interface BoardColumns {
   pending: PmBacklogItem[];
   in_progress: PmBacklogItem[];
   testing: PmBacklogItem[];
+  pending_uat: PmBacklogItem[];
   completed: PmBacklogItem[];
   blocked: PmBacklogItem[];
   deferred: PmBacklogItem[];
@@ -395,7 +397,8 @@ export interface BoardColumns {
 export const ALLOWED_TRANSITIONS: Record<ItemStatus, ItemStatus[]> = {
   pending: ['in_progress', 'blocked', 'deferred'],
   in_progress: ['testing', 'blocked', 'deferred', 'pending'],
-  testing: ['completed', 'in_progress', 'blocked', 'waiting_for_user'],
+  testing: ['completed', 'in_progress', 'blocked', 'waiting_for_user', 'pending_uat'],
+  pending_uat: ['completed', 'reopened', 'testing'],
   completed: ['reopened'],
   blocked: ['pending', 'in_progress'],
   deferred: ['pending'],
@@ -412,6 +415,7 @@ export const STATUS_LABELS: Record<ItemStatus, string> = {
   pending: 'Pending',
   in_progress: 'In Progress',
   testing: 'Testing',
+  pending_uat: 'Pending UAT',
   completed: 'Completed',
   blocked: 'Blocked',
   deferred: 'Deferred',
@@ -424,6 +428,7 @@ export const STATUS_COLORS: Record<ItemStatus, string> = {
   pending: 'bg-gray-100 text-gray-800',
   in_progress: 'bg-blue-100 text-blue-800',
   testing: 'bg-yellow-100 text-yellow-800',
+  pending_uat: 'bg-teal-100 text-teal-800',
   completed: 'bg-green-100 text-green-800',
   blocked: 'bg-red-100 text-red-800',
   deferred: 'bg-orange-100 text-orange-800',
@@ -437,6 +442,7 @@ export const SEGMENT_COLORS: Record<ItemStatus, string> = {
   pending: 'bg-gray-300',
   in_progress: 'bg-blue-500',
   testing: 'bg-yellow-400',
+  pending_uat: 'bg-teal-500',
   completed: 'bg-green-500',
   blocked: 'bg-red-500',
   deferred: 'bg-orange-400',
