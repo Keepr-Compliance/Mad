@@ -14,6 +14,7 @@ import {
   createIpcHandlerRegistry,
   type IpcHandlerRegistry,
 } from "../../tests/support/ipcHandlerRegistry";
+import path from "path";
 import type { IpcMainInvokeEvent } from "electron";
 import type { Communication } from "../types/models";
 import type { TransactionWithDetails } from "../services/transactionService/types";
@@ -184,7 +185,9 @@ describe("BACKLOG-3302: the One PDF / Summary PDF buttons hand the combined rend
       const r = rendered();
       expect(r.summaryOnly).toBe(false);
       expect(r.ids).toEqual(["e1", "e2"]);
-      expect(r.out.startsWith(`${DOWNLOADS}/`)).toBe(true);
+      // Separator-agnostic: production joins with path.join, which writes "\\" on Windows.
+      const rel = path.relative(DOWNLOADS, r.out);
+      expect(rel.length > 0 && !rel.startsWith("..") && !path.isAbsolute(rel)).toBe(true);
     },
   );
 
