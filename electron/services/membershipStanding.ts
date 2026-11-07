@@ -15,12 +15,13 @@
  *   - left_brokerage (brokerage row 'suspended' / 'expired'): solo paths work.
  *   - everyone else: unchanged.
  *
- * Mirror of `classifyPortalAccess` (packages/shared/src/billing/planRule.ts)
- * with one deliberate divergence (SR plan review R2): ANY active brokerage row
- * makes the user licensed, so an older unassigned row at brokerage A does not
- * block a member licensed at brokerage B. Electron cannot import
- * packages/shared, so the status lists are copied; the parity test reads that
- * file and compares them.
+ * Mirror of `classifyPortalAccess` (packages/shared/src/billing/planRule.ts).
+ * Both now pick the deciding brokerage row the same way (BACKLOG-4155): ANY
+ * active brokerage row makes the user licensed; else ANY unassigned brokerage
+ * row makes them unlicensed (so a suspended or pending row at A cannot unlock
+ * past an unassigned row at B); else the first brokerage row decides. Electron
+ * cannot import packages/shared, so the status lists are copied; the parity
+ * tests compare the lists and the purchase verdict.
  *
  * Every read here is bounded (R1). A timeout, a throw, an error result or a
  * shape this code cannot read is `error` — never `none`, never `licensed`.
@@ -76,11 +77,11 @@ function isBrokerageRow(row: MembershipStandingRow): boolean {
  * In order:
  *   1. not an array → error
  *   2. any brokerage row with a granting status → licensed (R2)
- *   3. the FIRST brokerage row decides:
- *        'unassigned'          → unlicensed
+ *   3. any brokerage row 'unassigned' → unlicensed (BACKLOG-4155)
+ *   4. otherwise the FIRST brokerage row decides:
  *        'suspended'/'expired' → left_brokerage (+ name)
  *        anything else         → unknown (pending, null, a status never seen)
- *   4. no brokerage row (only personal rows, or none) → none
+ *   5. no brokerage row (only personal rows, or none) → none
  */
 export function classifyMembershipStanding(rows: unknown, userId: string): MembershipStanding {
   if (!Array.isArray(rows)) return { standing: "error" };
@@ -94,12 +95,13 @@ export function classifyMembershipStanding(rows: unknown, userId: string): Membe
     return { standing: "licensed" };
   }
 
+  if (brokerage.some((row) => row.license_status === MEMBER_UNASSIGNED_STATUS)) {
+    return { standing: "unlicensed" };
+  }
+
   const first = brokerage[0];
   if (!first) return { standing: "none" };
 
-  if (first.license_status === MEMBER_UNASSIGNED_STATUS) {
-    return { standing: "unlicensed" };
-  }
   if (MEMBER_DEACTIVATED_STATUSES.includes(first.license_status ?? "")) {
     const name = embedOf(first)?.name;
     return {

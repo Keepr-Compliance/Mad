@@ -109,8 +109,21 @@ describe("BACKLOG-3951 C6: classifyMembershipStanding", () => {
     // R2: any active brokerage row wins over an older non-granting one.
     ["older unassigned at A + active at B", [UNASSIGNED_MEMBER_ROW, laterBrokerage("active")], "licensed"],
     ["older suspended at A + active at B", [at("suspended"), laterBrokerage("active")], "licensed"],
-    // The FIRST brokerage row decides among non-granting rows.
+    // BACKLOG-4155: else ANY unassigned brokerage row → unlicensed, in either order.
     ["older unassigned at A + suspended at B", [UNASSIGNED_MEMBER_ROW, laterBrokerage("suspended")], "unlicensed"],
+    ["4155 C1 active at B listed first + unassigned at A", [laterBrokerage("active"), UNASSIGNED_MEMBER_ROW], "licensed"],
+    ["4155 C3a suspended at A + unassigned at B + own personal", [at("suspended"), laterBrokerage("unassigned"), personalMembership()], "unlicensed"],
+    ["4155 C3a reversed order", [laterBrokerage("unassigned"), at("suspended"), personalMembership()], "unlicensed"],
+    ["4155 C3b suspended at A + unassigned at B", [at("suspended"), laterBrokerage("unassigned")], "unlicensed"],
+    ["4155 C3b reversed order", [laterBrokerage("unassigned"), at("suspended")], "unlicensed"],
+    ["4155 C5 (defensive) pending at A + unassigned at B", [at("pending"), laterBrokerage("unassigned")], "unlicensed"],
+    ["4155 C5 (defensive) reversed order", [laterBrokerage("unassigned"), at("pending")], "unlicensed"],
+    ["4155 C6 suspended at A + active at B, reversed order", [laterBrokerage("active"), at("suspended")], "licensed"],
+    ["4155 C7 pending at A + active at B", [at("pending"), laterBrokerage("active")], "licensed"],
+    ["4155 C7 reversed order", [laterBrokerage("active"), at("pending")], "licensed"],
+    // The FIRST brokerage row still decides among rows that neither grant nor are unassigned.
+    ["4155 tier 3: pending at A first + suspended at B", [at("pending"), laterBrokerage("suspended")], "unknown"],
+    ["4155 tier 3: suspended at B first + pending at A", [laterBrokerage("suspended"), at("pending")], "left_brokerage"],
     ["only own personal row", [personalMembership()], "none"],
     // R3: a row for somebody else's personal organization is not a brokerage.
     [
