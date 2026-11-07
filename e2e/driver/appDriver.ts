@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ElectronApplication, Locator, Page } from '@playwright/test';
@@ -200,11 +199,14 @@ export class KeeprAppDriver implements AppDriver {
    * UNCONDITIONALLY from the driver's own launch (see static launch()), so NO run — including a
    * custom drive script — can be accidentally invisible; foregrounding is NOT a per-caller opt-in.
    *
-   * Three layers, each best-effort and NON-FATAL (wrapped so a foreground failure can never fail a
-   * step): (1) page.bringToFront() (works for both strategies), (2) the main-process
-   * BrowserWindow.focus({steal:true}) + show()/moveTop() via the Electron app handle (steals OS
-   * focus on the 'electron'/'unpackaged' strategies), and (3) on macOS an `osascript activate` so a
-   * headful run is genuinely on top of other windows.
+   * Two layers, each best-effort and NON-FATAL (wrapped so a foreground failure can never fail a
+   * step): (1) page.bringToFront() (works for every strategy), (2) inside the LAUNCHED main process,
+   * app.focus({ steal: true }) + show()/moveTop()/focus() on its first BrowserWindow (the
+   * 'electron'/'unpackaged' strategies, which carry an app handle).
+   *
+   * BACKLOG-4054: never activate an app by NAME. The unpackaged app runs as "Electron", so a by-name
+   * activation of "Keepr" resolves to the installed Keepr app. Focus is applied only
+   * through the launched process's own handle; the 'cdp' strategy (no handle) gets layer 1 only.
    */
   async bringToFront(): Promise<void> {
     await this.page.bringToFront().catch(() => undefined);
@@ -212,7 +214,8 @@ export class KeeprAppDriver implements AppDriver {
     // steal OS focus, which page.bringToFront() alone does not guarantee for a background-launched app.
     if (this.app) {
       await this.app
-        .evaluate(async ({ BrowserWindow }) => {
+        .evaluate(async ({ app, BrowserWindow }) => {
+          app.focus({ steal: true });
           const win = BrowserWindow.getAllWindows()[0];
           if (win) {
             if (win.isMinimized()) win.restore();
@@ -222,9 +225,6 @@ export class KeeprAppDriver implements AppDriver {
           }
         })
         .catch(() => undefined);
-    }
-    if (process.platform === 'darwin') {
-      await activateMacApp('Keepr').catch(() => undefined);
     }
   }
 
@@ -1590,15 +1590,4 @@ function describeLocator(loc: Locator): string {
   const raw = String(loc);
   const m = raw.match(/@?locator\('(.+)'\)\s*$/) ?? raw.match(/locator\('(.+)'\)/);
   return (m ? m[1] : raw).slice(0, 80);
-}
-
-/**
- * macOS-only: bring the named app to the foreground via AppleScript. Best-effort — the promise
- * resolves whether or not activation succeeds; callers wrap it in .catch() so it is never fatal.
- * Uses execFile (no shell) with a fixed arg list, so the app name can never be shell-interpreted.
- */
-function activateMacApp(appName: string): Promise<void> {
-  return new Promise((resolve) => {
-    execFile('osascript', ['-e', `tell application "${appName}" to activate`], { timeout: 4000 }, () => resolve());
-  });
 }
