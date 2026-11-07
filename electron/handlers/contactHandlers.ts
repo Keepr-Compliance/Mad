@@ -51,7 +51,7 @@ import {
   cancelPendingContactLinking,
   configureContactLinking,
   requestContactLinking,
-  runContactLinkingNow,
+  runContactLinkingScopedNow,
 } from "../services/contactLinkingScheduler";
 import {
   createLink,
@@ -66,6 +66,7 @@ import {
 import { linkExternalContactsForUser } from "../services/contactSourceLinker";
 // BACKLOG-2410 — the contact-level review queue and contact provenance.
 import { runUniqueNameAutoLink } from "../services/contactNameAutoLink";
+import { runImportScopedLinkingPass } from "../services/contactImportLinking";
 // BACKLOG-2556: `sourceLabel` was imported beside `buildEvidence` to name a
 // FOLDED record's address book in the disclosure sentence. Nothing folds, so
 // nothing here needs the label; `contactLinkEvidence` still owns it for the
@@ -812,6 +813,38 @@ function runOpportunisticLinking(userId: string): number {
 }
 
 /**
+ * BACKLOG-4180 — the pass `contacts:import` awaits, scoped to the contacts the
+ * import touched. Registered with the scheduler as `runScoped`.
+ *
+ * Same order as the full pass: the crosswalk first, then the name rule (the
+ * name rule reads the crosswalk). Fully synchronous: the scheduler's hold
+ * relies on the read completing in one tick.
+ *
+ * NO BACKFILL AFTERWARDS, unlike `runLinkingPassWithBackfill`. Every link this
+ * pass creates copies its source record's values in the same step
+ * (`resolveSourceRecord` and the name rule both call `applyLinkedSourceValues`
+ * at link time), and the import itself already wrote the picked record's values
+ * inside its transaction. Re-running the whole-book backfill here is what made
+ * a one-contact import cost the whole database.
+ *
+ * Funnel counts are NOT published: `recordLinks` describes a full pass, and a
+ * scoped `recordsIn` would read as the address book shrinking.
+ */
+function runImportScopedLinking(userId: string, contactIds: readonly string[]): void {
+  const startedAt = Date.now();
+  const result = runImportScopedLinkingPass(userId, contactIds, (pair, ctx) => {
+    fileNameQuestion(userId, pair, ctx);
+  });
+  // Counts and milliseconds only — no names, numbers or ids.
+  logService.info(
+    `[Contacts] import-scoped linking: ${contactIds.length} contact(s), ` +
+      `${result.candidateRecords} candidate record(s), ${result.contentLinked} content link(s), ` +
+      `${result.nameLinked} name link(s), asked ${result.nameAsked} in ${Date.now() - startedAt} ms`,
+    "Contacts",
+  );
+}
+
+/**
  * Phase 2, as the scheduler runs it — BACKLOG-2474.
  *
  * The linking pass, plus the ONE thing that used to depend on the pass being
@@ -1167,6 +1200,7 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
   // entry point is a no-op that creates no timers.
   configureContactLinking({
     run: runLinkingPassWithBackfill,
+    runScoped: runImportScopedLinking,
     notify: () => {
       // Its own channel, NOT `contacts:external-sync-complete`. That event is
       // also consumed by the import surface, which reloads the available list
@@ -2486,7 +2520,7 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
          * `contact-handlers.importAtomic-3220.test.ts`.
          *
          * The reads that follow the writes (`getContactById`),
-         * `reportImportLinking` and `runContactLinkingNow` run after the commit.
+         * `reportImportLinking` and `runContactLinkingScopedNow` run after the commit.
          * The progress sends stay inside: they are synchronous IPC, not DB, and
          * the batch's own progress callback already fires inside, so moving loop
          * 1's sends out would make progress run backwards.
@@ -2850,7 +2884,13 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         // Immediate rather than coalesced: this is a discrete user action with
         // the user waiting, not one writer among several in a sync run. Awaited
         // so the queue is populated before the renderer refreshes.
-        await runContactLinkingNow(validatedUserId);
+        //
+        // BACKLOG-4180: scoped to the contacts this import touched. The import
+        // changes no source record, so only records sharing an identifier or a
+        // name with these contacts can resolve differently; the whole-book pass
+        // (every record, every phone through libphonenumber, then a whole-book
+        // backfill) ran on the main thread while the user waited on one contact.
+        await runContactLinkingScopedNow(validatedUserId, savedContactIds);
 
         logService.info(
           `[Main] Successfully imported ${importedContacts.length} contacts`,

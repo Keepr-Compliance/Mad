@@ -40,6 +40,7 @@ import {
   releaseContactLinking,
   requestContactLinking,
   runContactLinkingNow,
+  runContactLinkingScopedNow,
 } from "../contactLinkingScheduler";
 
 const USER = "user-a";
@@ -358,5 +359,74 @@ describe("cancellation", () => {
     jest.advanceTimersByTime(QUIET_PERIOD_MS);
     expect(runs).toEqual([]);
     expect(jest.getTimerCount()).toBe(0);
+  });
+});
+
+/**
+ * BACKLOG-4180 C6 — the import-scoped pass honours the hold, and does not drop
+ * the pending coalesced pass a sync is owed.
+ */
+describe("BACKLOG-4180 import-scoped", () => {
+  let scoped: Array<[string, string[]]>;
+
+  function configureScoped(): void {
+    scoped = [];
+    configureContactLinking({
+      run: (userId: string) => {
+        runs.push(userId);
+      },
+      runScoped: (userId: string, ids: readonly string[]) => {
+        scoped.push([userId, [...ids]]);
+      },
+      notify: (userId: string) => {
+        notified.push(userId);
+      },
+    });
+  }
+
+  it("runs the scoped pass with the ids, notifies, and runs no full pass", async () => {
+    configureScoped();
+    await runContactLinkingScopedNow(USER, ["c-1", "c-2"]);
+    expect(scoped).toEqual([[USER, ["c-1", "c-2"]]]);
+    expect(runs).toEqual([]);
+    expect(notified).toEqual([USER]);
+  });
+
+  it("held: runs nothing now; the release arms a FULL pass", async () => {
+    configureScoped();
+    holdContactLinking(USER);
+    await runContactLinkingScopedNow(USER, ["c-1"]);
+    expect(scoped).toEqual([]);
+    expect(runs).toEqual([]);
+    releaseContactLinking(USER);
+    jest.advanceTimersByTime(QUIET_PERIOD_MS);
+    await Promise.resolve();
+    expect(runs).toEqual([USER]);
+    expect(scoped).toEqual([]);
+  });
+
+  it("does NOT cancel a pending coalesced pass owed to a sync", async () => {
+    configureScoped();
+    requestContactLinking(USER);
+    await runContactLinkingScopedNow(USER, ["c-1"]);
+    expect(__hasPendingContactLinking(USER)).toBe(true);
+    jest.advanceTimersByTime(QUIET_PERIOD_MS);
+    await Promise.resolve();
+    expect(runs).toEqual([USER]);
+  });
+
+  it("a throwing scoped pass never escapes and still notifies", async () => {
+    scoped = [];
+    configureContactLinking({
+      run: () => undefined,
+      runScoped: () => {
+        throw new Error("boom");
+      },
+      notify: (userId: string) => {
+        notified.push(userId);
+      },
+    });
+    await expect(runContactLinkingScopedNow(USER, ["c-1"])).resolves.toBeUndefined();
+    expect(notified).toEqual([USER]);
   });
 });

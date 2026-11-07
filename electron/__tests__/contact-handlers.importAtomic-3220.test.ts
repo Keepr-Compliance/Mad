@@ -291,9 +291,11 @@ jest.mock("../services/contactLinkingScheduler", () => ({
   configureContactLinking: jest.fn(),
   requestContactLinking: jest.fn(),
   runContactLinkingNow: jest.fn(() => Promise.resolve()),
+  runContactLinkingScopedNow: jest.fn(() => Promise.resolve()),
 }));
 
 import { registerContactHandlers } from "../handlers/contactHandlers";
+import { runContactLinkingScopedNow } from "../services/contactLinkingScheduler";
 
 const USER = "550e8400-e29b-41d4-a716-446655440000"; // pii-allow-uuid: placeholder UUID shared with the sibling contact-handler suites (not in RFC 4122 or RFC 9562); invented, not from any live row
 const SHA = "075d0cc68";
@@ -610,6 +612,7 @@ interface ImportResult {
   success: boolean;
   error?: string;
   savedContactIds?: string[];
+  contacts?: Array<{ id: string }>;
 }
 
 async function runImport(sc: Scenario): Promise<ImportResult> {
@@ -682,6 +685,7 @@ describe.each(SCENARIOS.map((make, i) => [make().name, make, i] as const))("%s",
   let writes = 0;
   let labels: string[] = [];
   let clean: ImportResult = { success: false, error: "not run" };
+  let scopedCalls: Array<[string, string[]]> = [];
 
   beforeAll(async () => {
     template = path.join(dir, `template-${i}.db`);
@@ -689,11 +693,22 @@ describe.each(SCENARIOS.map((make, i) => [make().name, make, i] as const))("%s",
     openFromTemplate(template);
     before = jointState(realDb!, sc);
     resetProbe();
+    (runContactLinkingScopedNow as jest.Mock).mockClear();
     clean = await runImport(sc);
+    scopedCalls = (runContactLinkingScopedNow as jest.Mock).mock.calls.map((c) => [c[0], [...c[1]].sort()]);
     total = probe.count;
     writes = probe.writes;
     labels = [...probe.labels];
     after = jointState(realDb!, sc);
+  });
+
+  // BACKLOG-4180 C5b: the post-import linking pass is scoped to EVERY contact
+  // the import saved — existing contacts it backfilled included, not only the
+  // ones it created. Break caught: passing `importWrites.createdIds`.
+  it("4180: the scoped linking pass receives every saved contact id, once", () => {
+    const saved = (clean.contacts ?? []).map((c) => c.id).sort();
+    expect(saved.length).toBeGreaterThan(0);
+    expect(scopedCalls).toEqual([[USER, saved]]);
   });
 
   it("C4 PRECONDITION: the clean run succeeds, writes, and changes state", () => {

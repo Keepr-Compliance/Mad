@@ -74,6 +74,13 @@ export interface ContactLinkingRunner {
   /** Run the pass for one user. May be async (it awaits the backfill). */
   run: (userId: string) => Promise<void> | void;
   /**
+   * BACKLOG-4180 — the pass restricted to records that share an identifier or a
+   * name with these contacts. For `contacts:import`, which changes saved
+   * contacts but no source record. Optional: without it the scoped entry point
+   * falls back to the full immediate run.
+   */
+  runScoped?: (userId: string, contactIds: readonly string[]) => Promise<void> | void;
+  /**
    * Called after a pass settles, successfully or not.
    *
    * Best-effort by contract: it reaches a possibly-stale BrowserWindow
@@ -210,6 +217,56 @@ export async function runContactLinkingNow(userId: string): Promise<void> {
 
   cancelPendingContactLinking(userId);
   await execute(userId, "immediate");
+}
+
+/**
+ * BACKLOG-4180 — `contacts:import`'s pass, scoped to the contacts it touched.
+ *
+ * Replaces `runContactLinkingNow` on the import path, which ran the WHOLE-book
+ * pass (every source record, every phone through libphonenumber) on the main
+ * thread while the user waited on one contact.
+ *
+ * Honours the hold exactly like `runContactLinkingNow`: held means a full pass
+ * is owed and armed on release, and that pass covers these contacts too.
+ *
+ * Deliberately does NOT cancel a pending coalesced pass. That pass is owed to a
+ * sync that changed source records, which this scoped run does not look at;
+ * cancelling it (as `runContactLinkingNow` does) would drop it.
+ */
+export async function runContactLinkingScopedNow(
+  userId: string,
+  contactIds: readonly string[],
+): Promise<void> {
+  const active = runner;
+  if (!active || !userId) return;
+
+  if ((holds.get(userId) ?? 0) > 0) {
+    heldRequests.add(userId);
+    return;
+  }
+
+  if (!active.runScoped) {
+    await runContactLinkingNow(userId);
+    return;
+  }
+
+  try {
+    await active.runScoped(userId, contactIds);
+  } catch (error) {
+    logService.warn(
+      `[Contacts] scoped linking pass failed: ${error}`,
+      "ContactLinkingScheduler",
+    );
+  } finally {
+    try {
+      active.notify?.(userId);
+    } catch (error) {
+      logService.warn(
+        `[Contacts] linking pass notify failed: ${error}`,
+        "ContactLinkingScheduler",
+      );
+    }
+  }
 }
 
 /**
