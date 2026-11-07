@@ -727,9 +727,9 @@ describe('SavedViews focus after a view is removed (BACKLOG-4095)', () => {
     await user.click(deleteButton('Bravo'));
     rerender(<SavedViews<View> {...props} views={ABC} loading={true} writeError={REFUSED} />);
     rerender(<SavedViews<View> {...props} views={[...ABC]} loading={false} writeError={REFUSED} />);
-    await user.click(screen.getByRole('button', { name: 'Save current view' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save current view' }));
     const input = screen.getByRole('textbox');
-    await user.type(input, 'Q3');
+    fireEvent.change(input, { target: { value: 'Q3' } });
     expect(input).toHaveFocus();
     rerender(<SavedViews<View> {...props} views={[ABC[0], ABC[2]]} loading={false} writeError={REFUSED} />);
     expect(input).toHaveFocus();
