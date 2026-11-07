@@ -234,6 +234,27 @@ async function handleChargeError(
   // stripe_customers.default_payment_method_id cache so the next attempt hits the 409
   // (no-saved-card) path -> Checkout.
   if (isInvalidPaymentMethodError(err)) {
+    // BACKLOG-2101: every StripeInvalidRequestError lands here, so log the Stripe
+    // error's own fields (never the error object, which carries the raw request).
+    const stripeErr = err as Stripe.errors.StripeError;
+    console.error('[payments/charge] invalid payment method', {
+      type: stripeErr.type,
+      code: stripeErr.code,
+      param: stripeErr.param,
+      message: stripeErr.message,
+      requestId: stripeErr.requestId,
+    });
+    Sentry.captureMessage('invalid payment method at charge', {
+      level: 'warning',
+      tags: { billing_stage: 'charge_invalid_pm', stripe_mode: mode },
+      extra: {
+        code: stripeErr.code,
+        type: stripeErr.type,
+        param: stripeErr.param,
+        request_id: stripeErr.requestId,
+        user_id: userId,
+      },
+    });
     // Best-effort cache clear; never let this failure mask the user-facing response.
     try {
       // This mode's row only (RC9).
@@ -244,7 +265,7 @@ async function handleChargeError(
         (clearErr as Error).message
       );
     }
-    const code = (err as Stripe.errors.StripeError).code ?? 'invalid_payment_method';
+    const code = stripeErr.code ?? 'invalid_payment_method';
     return NextResponse.json(
       {
         invalid_payment_method: true,
