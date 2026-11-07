@@ -1,0 +1,23 @@
+BACKLOG-4145 M1 harness results, keepr-test, 2026-11-07. Details: pm_comments on BACKLOG-4145.
+
+== controls --with-migration (pre-apply)
+total=29 pass=29 fail=0
+== controls (applied: kt-sql <migration> + schema_migrations row 20261108150000)
+total=29 pass=29 fail=0
+
+md5(prosrc) after apply:
+  support_my_requester_ids()              b793ee431c71f46877ef88883b4c6876
+  support_can_view_requester(uuid)        50f79be7895cb2b9fc039f6af654b0c0
+  pm_list_backlog_ticket_links(uuid)      16f484ea13716dee295ac1664bd16267
+  admin_list_user_devices(uuid)           a6f7c91538d37c74dc621921c9371be6 (before: 37208d52da7d6bc50307173b6a104422)
+fixtures left: 0; user triggers on support_tickets and pm_backlog_items enabled (O)
+
+== mutate.py all
+KEY_requester_email      numstat=3/2  total=29 fail=6  D3,D5,H1,H2,H4,H5
+NO_support_view_check    numstat=0/1  total=29 fail=2  D6,H6
+NO_assignee_filter       numstat=1/2  total=29 fail=4  D3,H2,H3,H4
+NO_support_admin_branch  numstat=1/2  total=29 fail=3  D4,H1,H8
+ANON_kept_on_helper      numstat=0/1  total=29 fail=2  H9,Z1
+ANON_kept_on_devices     numstat=0/1  total=29 fail=2  D9,Z1
+RPC_extra_column         numstat=2/2  total=29 fail=2  P1,P3
+every mutation: MUTATION APPLIED printed, RESTORED clean=True
