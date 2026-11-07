@@ -37,6 +37,7 @@ MUTATION APPLIED numstat=0/7
   - AND NOT EXISTS (SELECT 1 FROM public.internal_roles ir JOIN public.admin_roles ar ON ar.id = ir.role_id
   - WHERE ar.is_system AND ir.user_id <> p_user_id))
 RESULT total=78 pass=78 fail=0 reds=
+REASON zero reds expected: the self check plus the ceiling already keep one Super Admin (only a Super Admin can act on a Super Admin, and that caller remains); the guard is a second line, proven by SELF_and_GUARD_removed.
 RESTORED clean=True
 == SELF_and_GUARD_removed
 MUTATION APPLIED numstat=0/9
@@ -78,6 +79,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=0/1
   - OR EXISTS (SELECT 1 FROM public.internal_roles WHERE user_id = v_uid AND role_id = p_role_id)
 RESULT total=78 pass=78 fail=0 reds=
+REASON zero reds expected: the target-role ceiling refuses first (a non-Super-Admin's own role is never strictly below them; a Super Admin's own role is a system role, refused earlier); the own-role line is kept as a second guard per the founder rule.
 RESTORED clean=True
 == MSG_distinct_in_add
 MUTATION APPLIED numstat=1/1
