@@ -69,3 +69,28 @@ describe("detail lines", () => {
     expect(lines).toContain("Outcome: 3 deals could be scored; 1 skipped (status not closed, active or pending)");
   });
 });
+
+describe("sender filter line (BACKLOG-4175)", () => {
+  it("sums the mailboxes' full counts and names the lost deals", () => {
+    const mailbox = (k: number, n: number) => ({
+      label: "mailbox",
+      provider: "gmail" as const,
+      n,
+      full: { k, bySignal: {} },
+      minusContactKeeps: { k, bySignal: {} },
+      addressPassReady: k === 0,
+      detectorReady: false,
+    });
+    const s = {
+      ...base,
+      senderCensus: {
+        ...base.senderCensus,
+        dealLinkedSuppressed: [mailbox(1, 3), mailbox(2, 4)],
+        foundDealsLost: { full: 1, minusContactKeeps: 2 },
+      },
+    };
+    expect(learnDetailLines(s)).toContain(
+      "Sender filter (measured only): would hide 3 of 7 emails linked to your deals; deals it would lose: 1",
+    );
+  });
+});

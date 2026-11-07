@@ -124,10 +124,10 @@ export function FileUpload({ files, onFilesChange, disabled }: FileUploadProps) 
         }`}
       >
         <Upload className="mx-auto h-5 w-5 text-gray-400 mb-1" />
-        <p className="text-xs text-gray-500">
+        <p className="text-xs max-lg:text-sm text-gray-500">
           Drop files here or <span className="text-primary-600 underline">browse</span>
         </p>
-        <p className="text-xs text-gray-400 mt-0.5">
+        <p className="text-xs max-lg:text-sm text-gray-400 mt-0.5">
           Max 10MB per file
         </p>
         <input

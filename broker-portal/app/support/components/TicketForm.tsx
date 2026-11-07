@@ -22,6 +22,7 @@ import type { PendingFile } from './FileUpload';
 import { useBrowserDiagnostics, BrowserDiagnostics } from './BrowserDiagnostics';
 import { presetCategoryIds, type TicketPreset } from '@/lib/support/ticketPresets';
 import { InvoicesHelpHint } from '@/components/support/InvoicesHelpHint';
+import { TOUCH_BUTTON } from '@/components/billing/touch';
 
 export interface TicketFormProps {
   /**
@@ -178,7 +179,7 @@ export function TicketForm({ preset = null }: TicketFormProps = {}) {
             value={name}
             onChange={(e) => setName(e.target.value)}
             readOnly={isAuthenticated}
-            className={isAuthenticated ? 'bg-gray-50 text-gray-500' : undefined}
+            className={isAuthenticated ? `bg-gray-50 text-gray-500 ${TOUCH_BUTTON}` : TOUCH_BUTTON}
             placeholder="John Doe"
           />
         </div>
@@ -193,7 +194,7 @@ export function TicketForm({ preset = null }: TicketFormProps = {}) {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             readOnly={isAuthenticated}
-            className={isAuthenticated ? 'bg-gray-50 text-gray-500' : undefined}
+            className={isAuthenticated ? `bg-gray-50 text-gray-500 ${TOUCH_BUTTON}` : TOUCH_BUTTON}
             placeholder="you@example.com"
           />
         </div>
@@ -204,6 +205,7 @@ export function TicketForm({ preset = null }: TicketFormProps = {}) {
         <div>
           <Label htmlFor="category">Category</Label>
           <Select
+            className={TOUCH_BUTTON}
             id="category"
             value={categoryId}
             onChange={(e) => {
@@ -223,6 +225,7 @@ export function TicketForm({ preset = null }: TicketFormProps = {}) {
         <div>
           <Label htmlFor="priority">Priority</Label>
           <Select
+            className={TOUCH_BUTTON}
             id="priority"
             value={priority}
             onChange={(e) => setPriority(e.target.value as TicketPriority)}
@@ -243,6 +246,7 @@ export function TicketForm({ preset = null }: TicketFormProps = {}) {
         <div>
           <Label htmlFor="subcategory">Subcategory</Label>
           <Select
+            className={TOUCH_BUTTON}
             id="subcategory"
             value={subcategoryId}
             onChange={(e) => setSubcategoryId(e.target.value)}
@@ -275,6 +279,7 @@ export function TicketForm({ preset = null }: TicketFormProps = {}) {
           minLength={3}
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
+          className={TOUCH_BUTTON}
           placeholder="Brief summary of your issue"
         />
       </div>
@@ -314,7 +319,7 @@ export function TicketForm({ preset = null }: TicketFormProps = {}) {
           type="submit"
           variant="primary"
           disabled={submitting}
-          className="w-full sm:w-auto"
+          className={`w-full sm:w-auto ${TOUCH_BUTTON}`}
         >
           {submitting ? (uploadProgress || 'Submitting...') : 'Submit Ticket'}
         </Button>

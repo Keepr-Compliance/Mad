@@ -88,7 +88,12 @@ export async function GET(request: Request) {
 
     // Process any pending internal invitation for this user
     const oauthProvider = user.app_metadata?.provider ?? 'azure';
-    await processPendingInvitation(supabase, user.id, user.email ?? '', oauthProvider);
+    const invitationOutcome = await processPendingInvitation(
+      supabase,
+      user.id,
+      user.email ?? '',
+      oauthProvider
+    );
 
     // Check for internal role
     const { data: internalRole } = await supabase
@@ -106,7 +111,7 @@ export async function GET(request: Request) {
     await logAuthEvent(supabase, 'auth.login_denied', 'user', user.id, {
       email: user.email,
       source: 'admin_portal',
-      reason: 'no_internal_role',
+      reason: invitationOutcome === 'refused' ? 'invitation_not_accepted' : 'no_internal_role',
     }, request);
     await signOutLocal(supabase);
     const response = NextResponse.redirect(`${origin}/login?error=not_authorized`);
@@ -122,23 +127,22 @@ export async function GET(request: Request) {
  * Check for a pending invitation and auto-assign the internal role.
  *
  * When an admin invites a user who doesn't have a Keepr account yet,
- * we store the invitation in pending_internal_invitations. On first
- * SSO login, this function picks it up:
+ * admin_add_internal_user stores the invitation in pending_internal_invitations.
+ * On first SSO login, this function picks it up:
  *   1. Ensures public.users record exists
- *   2. Assigns the internal role (direct insert via service role)
- *   3. Deletes the invitation
+ *   2. Calls admin_accept_internal_invitation (service role only), which
+ *      re-checks the inviter, assigns the role and clears the invitation
  *
- * Uses the service role client because the admin_add_internal_user RPC
- * requires the caller to already have an internal role — a chicken-and-egg
- * problem for first-time users.
+ * Returns 'refused' when an invitation exists but was not accepted; no role is
+ * assigned in that case.
  */
 async function processPendingInvitation(
   _supabase: Awaited<ReturnType<typeof createClient>>,
   userId: string,
   email: string,
   provider: string
-) {
-  if (!email) return;
+): Promise<InvitationOutcome> {
+  if (!email) return 'none';
 
   // Use service role client to bypass RLS for auto-provisioning
   const adminClient = createServiceClient();
@@ -147,11 +151,11 @@ async function processPendingInvitation(
     // Check for pending invitation
     const { data: invitation } = await adminClient
       .from('pending_internal_invitations')
-      .select('id, role_id, email, invited_by')
+      .select('id')
       .eq('email', email.toLowerCase())
       .maybeSingle();
 
-    if (!invitation) return;
+    if (!invitation) return 'none';
 
     // Ensure public.users record exists
     const { data: existingUser } = await adminClient
@@ -173,44 +177,43 @@ async function processPendingInvitation(
 
       if (insertError) {
         console.error('[auth-callback] Failed to create public.users record:', insertError.message);
-        return;
+        return 'refused';
       }
     }
 
-    // Verify the role exists
-    const { data: role } = await adminClient
-      .from('admin_roles')
-      .select('id, slug')
-      .eq('id', invitation.role_id)
-      .single();
+    // Accept the invitation through the database (BACKLOG-4168). The RPC re-checks
+    // that the inviter may still grant the role, assigns it and clears the
+    // invitation in one transaction. It needs the public.users row above.
+    const { data: accepted, error: acceptError } = await adminClient.rpc(
+      'admin_accept_internal_invitation',
+      { p_user_id: userId, p_email: email.toLowerCase() }
+    );
 
-    if (!role) {
-      console.error('[auth-callback] Invitation references unknown role_id:', invitation.role_id);
-      return;
+    if (acceptError) {
+      // No role is assigned. The internal_roles check in GET then signs the user out.
+      console.error(
+        '[auth-callback] Invitation not accepted:',
+        acceptError.code ?? 'no-code',
+        acceptError.message
+      );
+      return 'refused';
     }
 
-    // Assign the internal role directly (bypasses RPC permission check)
-    const { error: insertRoleError } = await adminClient
-      .from('internal_roles')
-      .insert({
-        user_id: userId,
-        role_id: invitation.role_id,
-        created_by: invitation.invited_by ?? userId,
-      });
-
-    if (insertRoleError) {
-      console.error('[auth-callback] Failed to assign internal role:', insertRoleError.message);
-      return;
+    const result = accepted as AcceptInvitationResult | null;
+    if (result?.assigned === true) {
+      console.log(`[auth-callback] Processed invitation: ${email} assigned role ${result.role}`);
+      return 'assigned';
     }
-
-    // Delete the processed invitation
-    await adminClient
-      .from('pending_internal_invitations')
-      .delete()
-      .eq('id', invitation.id);
-
-    console.log(`[auth-callback] Processed invitation: ${email} assigned role ${role.slug}`);
+    return 'none';
   } catch (err) {
     console.error('[auth-callback] Error processing pending invitation:', err);
+    return 'refused';
   }
 }
+
+type InvitationOutcome = 'none' | 'assigned' | 'refused';
+
+/** RETURN shapes of admin_accept_internal_invitation (migration 20261107100000). */
+type AcceptInvitationResult =
+  | { success: true; assigned: false }
+  | { success: true; assigned: true; user_id: string; role: string };

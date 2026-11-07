@@ -75,6 +75,29 @@ describe('SeatsBlock', () => {
     await waitFor(() => expect(mockAddSeats).toHaveBeenCalledWith(2, 2));
   });
 
+  it('BACKLOG-4187: Add seats is on the title line (header action); the Fewer seats line stays in the body', async () => {
+    const { container } = render(<SeatsBlock view={await view()} viewer="admin" />);
+    const header = container.querySelector('[data-billing-block="seats"] > [data-billing-header]') as HTMLElement;
+    expect(header).not.toBeNull();
+    expect(header.querySelector('h2')?.textContent).toBe('Seats & licenses');
+    expect(header.querySelector('[data-billing-header-action] button')?.textContent).toBe('Add seats');
+    expect(screen.getAllByRole('button', { name: 'Add seats' })).toHaveLength(1);
+    expect(header.textContent).not.toContain('Fewer seats');
+    expect(screen.getByText('Fewer seats? Email sales@keeprcompliance.com.')).toBeInTheDocument();
+  });
+
+  it('BACKLOG-4187: no button -> no header action; the cannot-add line stays in the body [EDITED can_add, version]', async () => {
+    for (const over of [{ can_add: false, cannot_add_reason: 'invoice_overdue' }, { version: null }]) {
+      const { container, unmount } = render(<SeatsBlock view={await view(over)} viewer="broker" />);
+      expect(container.querySelector('[data-billing-header]')).toBeNull();
+      expect(container.querySelector('[data-billing-block="seats"] > h2')?.textContent).toBe('Seats & licenses');
+      expect(screen.queryByRole('button', { name: 'Add seats' })).toBeNull();
+      unmount();
+    }
+    const { container } = render(<SeatsBlock view={await view({ can_add: false, cannot_add_reason: 'invoice_overdue' })} viewer="broker" />);
+    expect(container.querySelector('[data-seats-line]')?.textContent).toBe('Pay the overdue invoice to add seats.');
+  });
+
   it('outside a trial the line says prorated, with the price [EDITED trialing=false]', async () => {
     const v = await view({ trialing: false });
     expect(addSeatsLine(v, 1)).toBe(

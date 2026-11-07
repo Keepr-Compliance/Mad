@@ -278,7 +278,7 @@ describe("C4 — locked deals queue nothing", () => {
 
       const r = await queueAddressMatchesForTransaction(A);
 
-      expect(r).toEqual({ queued: 0, candidates: 0, matched: 0, skipped: "locked" });
+      expect(r).toEqual({ queued: 0, candidates: 0, matched: 0, seedSkipped: 0, skipped: "locked" });
       expect(pending(A)).toEqual([]);
     },
   );

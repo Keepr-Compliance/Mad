@@ -14,6 +14,8 @@ import {
   getDefaultContactSourceSelection,
   isContactSourceKey,
   normalizePhoneType,
+  INFERRED_EMAIL_SOURCE_KEYS,
+  resolveInferredEmailSourceEnabled,
   type ContactSourceDefaultContext,
   type ContactSourceKey,
 } from "../contactSourceDefaults";
@@ -268,5 +270,29 @@ describe("isContactSourceKey", () => {
     expect(isContactSourceKey("outlookEmails")).toBe(false);
     expect(isContactSourceKey("gmailEmails")).toBe(false);
     expect(isContactSourceKey("messages")).toBe(false);
+  });
+});
+
+describe("resolveInferredEmailSourceEnabled (BACKLOG-4188)", () => {
+  it("covers exactly the two email keys, not messages", () => {
+    expect([...INFERRED_EMAIL_SOURCE_KEYS]).toEqual(["outlookEmails", "gmailEmails"]);
+  });
+
+  it("no stored value → ON", () => {
+    expect(resolveInferredEmailSourceEnabled(undefined)).toBe(true);
+    expect(resolveInferredEmailSourceEnabled(null)).toBe(true);
+  });
+
+  it("a non-boolean stored value counts as no stored value → ON", () => {
+    expect(resolveInferredEmailSourceEnabled("false")).toBe(true);
+    expect(resolveInferredEmailSourceEnabled(0)).toBe(true);
+  });
+
+  it("explicit false → OFF", () => {
+    expect(resolveInferredEmailSourceEnabled(false)).toBe(false);
+  });
+
+  it("explicit true → ON", () => {
+    expect(resolveInferredEmailSourceEnabled(true)).toBe(true);
   });
 });

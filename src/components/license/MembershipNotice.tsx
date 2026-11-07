@@ -3,7 +3,8 @@
  *
  * Shown only when the membership standing (PR-B1, via LicenseContext) is
  * "left_brokerage" for the current user and the brokerage name is known, and
- * this user has not dismissed it for that brokerage. Loading, read failed,
+ * this user has not dismissed it for that brokerage (keyed by the brokerage's
+ * id, BACKLOG-4171; the name is display only). Loading, read failed,
  * unassigned, solo or licensed: nothing.
  *
  * Copy is the founder's text verbatim (two sentences): the first is the
@@ -26,11 +27,12 @@ interface MembershipNoticeProps {
 }
 
 export function MembershipNotice({ userId }: MembershipNoticeProps): React.ReactElement | null {
-  const { membershipStanding, membershipOrgName } = useLicense();
-  const removed = membershipStanding === "left_brokerage" && !!membershipOrgName;
+  const { membershipStanding, membershipOrgName, membershipOrgId } = useLicense();
+  const removed =
+    membershipStanding === "left_brokerage" && !!membershipOrgName && !!membershipOrgId;
   const { dismissed, dismiss } = useMembershipNoticeDismissal(
     removed ? userId : undefined,
-    removed ? membershipOrgName : undefined,
+    removed ? membershipOrgId : undefined,
   );
 
   if (!removed || !membershipOrgName || dismissed !== false) return null;

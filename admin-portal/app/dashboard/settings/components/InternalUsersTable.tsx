@@ -15,6 +15,7 @@ import type { InternalUser, AdminRole, PendingInvitation } from '../page';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
 import { PERMISSIONS } from '@/lib/permissions';
 import { formatTimestamp } from '@/lib/format';
+import { describeRoleError, NOT_PERMITTED_MESSAGE } from '@/lib/internal-roles';
 
 interface InternalUsersTableProps {
   users: InternalUser[];
@@ -22,6 +23,8 @@ interface InternalUsersTableProps {
   onRemoveClick: (user: InternalUser) => void;
   onBulkRemoveClick: (users: InternalUser[]) => void;
   roles: AdminRole[];
+  /** Role ids the signed-in user may grant (can_grant_role); null while loading. */
+  grantableRoleIds: Set<string> | null;
   onRoleChange: () => void;
   externalRoleFilter?: string | null;
   onClearExternalRoleFilter?: () => void;
@@ -84,9 +87,17 @@ function SortIcon({ field, currentField, dir }: { field: SortField; currentField
     : <ArrowDown className="h-3 w-3 ml-1" />;
 }
 
-export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulkRemoveClick, roles, onRoleChange, externalRoleFilter, onClearExternalRoleFilter, addUserButton, pendingInvitations }: InternalUsersTableProps) {
+export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulkRemoveClick, roles, grantableRoleIds, onRoleChange, externalRoleFilter, onClearExternalRoleFilter, addUserButton, pendingInvitations }: InternalUsersTableProps) {
   const { hasPermission } = usePermissions();
   const canManage = hasPermission(PERMISSIONS.INTERNAL_USERS_MANAGE);
+  // BACKLOG-4168: a manager acts only on users and invitations whose role is below
+  // their own, never on themselves, and offers only roles they may grant.
+  const canGrant = useCallback((roleId: string) => grantableRoleIds?.has(roleId) ?? false, [grantableRoleIds]);
+  const canActOnUser = useCallback(
+    (u: InternalUser) => canManage && u.user_id !== currentUserId && canGrant(u.role_id),
+    [canManage, currentUserId, canGrant],
+  );
+  const grantableRoles = useMemo(() => roles.filter((r) => canGrant(r.id)), [roles, canGrant]);
   const [sortField, setSortField] = useState<SortField | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [roleFilter, setRoleFilter] = useState<string | null>(null);
@@ -97,10 +108,12 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
   const [cancellingInvitation, setCancellingInvitation] = useState<string | null>(null);
   const [resendingInvitation, setResendingInvitation] = useState<string | null>(null);
   const [resendSuccess, setResendSuccess] = useState<string | null>(null);
+  const [resendError, setResendError] = useState<string | null>(null);
 
   const handleResendInvitation = useCallback(async (invitationId: string) => {
     setResendingInvitation(invitationId);
     setResendSuccess(null);
+    setResendError(null);
     try {
       const res = await fetch('/api/internal-users/resend-invite', {
         method: 'POST',
@@ -112,10 +125,10 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
         setTimeout(() => setResendSuccess(null), 3000);
       } else {
         const data = await res.json().catch(() => ({}));
-        setRoleChangeError(data.error || 'Failed to resend invitation');
+        setResendError(data.error || 'Invite email could not be sent');
       }
     } catch {
-      setRoleChangeError('Failed to resend invitation');
+      setResendError('Invite email could not be sent');
     } finally {
       setResendingInvitation(null);
     }
@@ -125,12 +138,16 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
     setCancellingInvitation(invitationId);
     try {
       const supabase = createClient();
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('pending_internal_invitations')
         .delete()
-        .eq('id', invitationId);
+        .eq('id', invitationId)
+        .select('id');
       if (error) {
-        setRoleChangeError(`Failed to cancel invitation: ${error.message}`);
+        setRoleChangeError(`Failed to cancel invitation: ${describeRoleError(error, 'Unknown error')}`);
+      } else if (!data || data.length === 0) {
+        // The row policy refused it: nothing was removed.
+        setRoleChangeError(`Failed to cancel invitation: ${NOT_PERMITTED_MESSAGE}`);
       } else {
         onRoleChange(); // triggers router.refresh()
       }
@@ -205,7 +222,7 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
     return list;
   }, [pendingInvitations, effectiveRoleFilter, searchQuery]);
 
-  const selectableUsers = filteredUsers.filter((u) => u.user_id !== currentUserId);
+  const selectableUsers = filteredUsers.filter(canActOnUser);
   const allSelected = selectableUsers.length > 0 && selected.size === selectableUsers.length;
   const someSelected = selected.size > 0;
 
@@ -229,9 +246,9 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
     if (allSelected) {
       setSelected(new Set());
     } else {
-      setSelected(new Set(filteredUsers.filter((u) => u.user_id !== currentUserId).map((u) => u.id)));
+      setSelected(new Set(filteredUsers.filter(canActOnUser).map((u) => u.id)));
     }
-  }, [allSelected, filteredUsers, currentUserId]);
+  }, [allSelected, filteredUsers, canActOnUser]);
 
   const toggleOne = useCallback((id: string) => {
     setSelected((prev) => {
@@ -252,7 +269,7 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
         p_role_slug: newRoleSlug,
       });
       if (error) {
-        setRoleChangeError(error.message);
+        setRoleChangeError(describeRoleError(error, 'Failed to change role'));
       } else {
         onRoleChange();
       }
@@ -357,6 +374,11 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
         </div>
       )}
 
+      {resendError && (
+        <div role="alert" className="mb-4 rounded-md bg-red-50 border border-red-200 px-4 py-3">
+          <p className="text-sm text-red-700">{resendError}</p>
+        </div>
+      )}
       {roleChangeError && (
         <div className="mb-3 rounded-md bg-red-50 border border-red-200 px-4 py-3 flex items-center justify-between">
           <p className="text-sm text-red-700">Failed to change role: {roleChangeError}</p>
@@ -413,11 +435,12 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
             )}
             {filteredUsers.map((user) => {
               const isCurrentUser = user.user_id === currentUserId;
+              const canAct = canActOnUser(user);
               return (
                 <tr key={user.id} className={`hover:bg-gray-50 ${selected.has(user.id) ? 'bg-primary-50/50' : ''}`}>
                   {canManage && (
                     <td className="px-3 py-4">
-                      {!isCurrentUser ? (
+                      {canAct ? (
                         <Checkbox
                           checked={selected.has(user.id)}
                           onChange={() => toggleOne(user.id)}
@@ -441,14 +464,15 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    {canManage && !isCurrentUser ? (
+                    {canAct ? (
                       <select
+                        aria-label={`Role for ${user.display_name || user.email}`}
                         value={user.role_slug}
                         onChange={(e) => handleRoleChange(user.user_id, e.target.value)}
                         disabled={changingRole === user.user_id}
                         className="text-xs rounded-md border border-gray-300 px-2 py-1 text-gray-900 bg-white focus:border-primary-500 focus:ring-1 focus:ring-primary-500"
                       >
-                        {roles.map((r) => (
+                        {grantableRoles.map((r) => (
                           <option key={r.slug} value={r.slug}>{r.name}</option>
                         ))}
                       </select>
@@ -460,7 +484,7 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
                   <Td>{user.created_by_email || '--'}</Td>
                   {canManage && (
                     <td className="px-6 py-4 whitespace-nowrap text-right">
-                      {!isCurrentUser && (
+                      {canAct && (
                         <button
                           onClick={() => onRemoveClick(user)}
                           className="text-sm text-red-600 hover:text-red-800 font-medium transition-colors"
@@ -503,6 +527,7 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
                 {canManage && (
                   <td className="px-6 py-4 whitespace-nowrap text-right">
                     <div className="inline-flex items-center gap-3">
+                      {canGrant(invitation.role_id) && (
                       <button
                         onClick={() => handleResendInvitation(invitation.id)}
                         disabled={resendingInvitation === invitation.id}
@@ -511,6 +536,8 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
                         <RotateCw className={`h-3.5 w-3.5 ${resendingInvitation === invitation.id ? 'animate-spin' : ''}`} />
                         {resendSuccess === invitation.id ? 'Sent!' : resendingInvitation === invitation.id ? 'Sending...' : 'Resend'}
                       </button>
+                      )}
+                      {canGrant(invitation.role_id) && (
                       <button
                         onClick={() => handleCancelInvitation(invitation.id)}
                         disabled={cancellingInvitation === invitation.id}
@@ -519,6 +546,7 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
                         <X className="h-3.5 w-3.5" />
                         {cancellingInvitation === invitation.id ? 'Cancelling...' : 'Cancel'}
                       </button>
+                      )}
                     </div>
                   </td>
                 )}
