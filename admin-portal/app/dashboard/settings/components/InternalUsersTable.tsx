@@ -108,10 +108,12 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
   const [cancellingInvitation, setCancellingInvitation] = useState<string | null>(null);
   const [resendingInvitation, setResendingInvitation] = useState<string | null>(null);
   const [resendSuccess, setResendSuccess] = useState<string | null>(null);
+  const [resendError, setResendError] = useState<string | null>(null);
 
   const handleResendInvitation = useCallback(async (invitationId: string) => {
     setResendingInvitation(invitationId);
     setResendSuccess(null);
+    setResendError(null);
     try {
       const res = await fetch('/api/internal-users/resend-invite', {
         method: 'POST',
@@ -123,10 +125,10 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
         setTimeout(() => setResendSuccess(null), 3000);
       } else {
         const data = await res.json().catch(() => ({}));
-        setRoleChangeError(data.error || 'Failed to resend invitation');
+        setResendError(data.error || 'Invite email could not be sent');
       }
     } catch {
-      setRoleChangeError('Failed to resend invitation');
+      setResendError('Invite email could not be sent');
     } finally {
       setResendingInvitation(null);
     }
@@ -372,6 +374,11 @@ export function InternalUsersTable({ users, currentUserId, onRemoveClick, onBulk
         </div>
       )}
 
+      {resendError && (
+        <div role="alert" className="mb-4 rounded-md bg-red-50 border border-red-200 px-4 py-3">
+          <p className="text-sm text-red-700">{resendError}</p>
+        </div>
+      )}
       {roleChangeError && (
         <div className="mb-3 rounded-md bg-red-50 border border-red-200 px-4 py-3 flex items-center justify-between">
           <p className="text-sm text-red-700">Failed to change role: {roleChangeError}</p>
