@@ -57,6 +57,11 @@ export interface MembershipStanding {
   standing: MembershipStandingKind;
   /** The deciding brokerage's name. Set for `left_brokerage` (fallback {@link UNNAMED_BROKERAGE}). */
   organizationName?: string;
+  /**
+   * The deciding brokerage's id. Set for `left_brokerage` when the row carries
+   * one. BACKLOG-4171: the renderer keys the notice dismissal by it.
+   */
+  organizationId?: string;
 }
 
 function embedOf(row: MembershipStandingRow): { name?: string | null; personal_owner_user_id?: string | null } | null {
@@ -79,7 +84,7 @@ function isBrokerageRow(row: MembershipStandingRow): boolean {
  *   2. any brokerage row with a granting status → licensed (R2)
  *   3. any brokerage row 'unassigned' → unlicensed (BACKLOG-4155)
  *   4. otherwise the FIRST brokerage row decides:
- *        'suspended'/'expired' → left_brokerage (+ name)
+ *        'suspended'/'expired' → left_brokerage (+ name, + id)
  *        anything else         → unknown (pending, null, a status never seen)
  *   5. no brokerage row (only personal rows, or none) → none
  */
@@ -104,9 +109,11 @@ export function classifyMembershipStanding(rows: unknown, userId: string): Membe
 
   if (MEMBER_DEACTIVATED_STATUSES.includes(first.license_status ?? "")) {
     const name = embedOf(first)?.name;
+    const id = first.organization_id;
     return {
       standing: "left_brokerage",
       organizationName: typeof name === "string" && name.trim() !== "" ? name : UNNAMED_BROKERAGE,
+      ...(typeof id === "string" && id !== "" ? { organizationId: id } : {}),
     };
   }
   return { standing: "unknown" };

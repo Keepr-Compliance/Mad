@@ -5,6 +5,13 @@
  * (the same read path the BACKLOG-2890 hold state uses), so a dismissal
  * survives restarts for that user and never leaks to another user.
  *
+ * BACKLOG-4171: keyed by user + organization id. Preferences are per user, and
+ * `notices.membershipNoticeDismissedFor` holds the dismissed brokerage's id, so
+ * two brokerages with the same name (or none) keep separate dismissals and a
+ * renamed brokerage keeps its dismissal. A value saved before 4171 holds a
+ * name, never equals an id, and so shows the notice once more; the next
+ * dismiss overwrites it with the id.
+ *
  * `dismissed` is three-valued:
  *   undefined → not known yet (read pending or failed, or another user's answer)
  *   true      → this user dismissed the notice for this brokerage
@@ -18,7 +25,7 @@ import logger from "../utils/logger";
 interface DismissalState {
   /** The user this answer belongs to. */
   forUserId: string | null;
-  /** Brokerage name dismissed (null = none; undefined = read failed / pending). */
+  /** Brokerage id dismissed (null = none; undefined = read failed / pending). */
   dismissedFor: string | null | undefined;
 }
 
@@ -29,10 +36,10 @@ export interface MembershipNoticeDismissal {
 
 export function useMembershipNoticeDismissal(
   userId: string | undefined,
-  brokerageName: string | undefined,
+  organizationId: string | undefined,
 ): MembershipNoticeDismissal {
   const [state, setState] = useState<DismissalState>({ forUserId: null, dismissedFor: undefined });
-  const shouldRead = Boolean(userId && brokerageName);
+  const shouldRead = Boolean(userId && organizationId);
 
   useEffect(() => {
     if (!userId || !shouldRead) return;
@@ -46,20 +53,20 @@ export function useMembershipNoticeDismissal(
   }, [userId, shouldRead]);
 
   const dismiss = useCallback(() => {
-    if (!userId || !brokerageName) return;
-    setState({ forUserId: userId, dismissedFor: brokerageName });
-    void settingsService.setMembershipNoticeDismissedFor(userId, brokerageName).then((result) => {
+    if (!userId || !organizationId) return;
+    setState({ forUserId: userId, dismissedFor: organizationId });
+    void settingsService.setMembershipNoticeDismissedFor(userId, organizationId).then((result) => {
       if (!result.success) {
         logger.warn("[MembershipNotice] Failed to save the dismissal", { error: result.error });
       }
     });
-  }, [userId, brokerageName]);
+  }, [userId, organizationId]);
 
   let dismissed: boolean | undefined;
-  if (!userId || !brokerageName || state.forUserId !== userId || state.dismissedFor === undefined) {
+  if (!userId || !organizationId || state.forUserId !== userId || state.dismissedFor === undefined) {
     dismissed = undefined;
   } else {
-    dismissed = state.dismissedFor === brokerageName;
+    dismissed = state.dismissedFor === organizationId;
   }
 
   return { dismissed, dismiss };

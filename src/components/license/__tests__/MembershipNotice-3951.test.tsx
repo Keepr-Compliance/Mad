@@ -7,6 +7,9 @@
  * per-user store whose answers follow the shapes of electron/handlers/
  * preferenceHandlers.ts: get → { success: true, preferences } or
  * { success: false, error }; update deep-merges and answers { success: true, preferences }.
+ *
+ * BACKLOG-4171: the dismissal is keyed by the brokerage's organization id (the
+ * `organization_id` the standing payload now carries), not its name.
  */
 import React from "react";
 import fs from "fs";
@@ -15,7 +18,8 @@ import { render, screen, act, fireEvent } from "@testing-library/react";
 import { MembershipNotice } from "../MembershipNotice";
 
 type Standing = "licensed" | "unlicensed" | "left_brokerage" | "unknown" | "none" | undefined;
-let mockLicense: { membershipStanding?: Standing; membershipOrgName?: string } = {};
+let mockLicense: { membershipStanding?: Standing; membershipOrgName?: string; membershipOrgId?: string } =
+  {};
 jest.mock("../../../contexts/LicenseContext", () => ({
   useLicense: () => mockLicense,
 }));
@@ -24,6 +28,8 @@ const USER_A = "test-user-a";
 const USER_B = "test-user-b";
 const BROKERAGE = "Fixture Brokerage";
 const OTHER_BROKERAGE = "Other Fixture Brokerage";
+const ORG_ID = "fixture-org-a";
+const OTHER_ORG_ID = "fixture-org-b";
 const FOUNDER_TEXT =
   "You're no longer part of Fixture Brokerage. You can keep using Keepr on your own and unlock transactions with a monthly subscription or credits.";
 
@@ -65,7 +71,7 @@ async function renderNotice(userId: string | undefined = USER_A) {
 beforeEach(() => {
   jest.clearAllMocks();
   installStore();
-  mockLicense = { membershipStanding: "left_brokerage", membershipOrgName: BROKERAGE };
+  mockLicense = { membershipStanding: "left_brokerage", membershipOrgName: BROKERAGE, membershipOrgId: ORG_ID };
 });
 
 describe("BACKLOG-3951 MembershipNotice", () => {
@@ -87,7 +93,11 @@ describe("BACKLOG-3951 MembershipNotice", () => {
   });
 
   it("interpolates whichever brokerage name the standing carries", async () => {
-    mockLicense = { membershipStanding: "left_brokerage", membershipOrgName: OTHER_BROKERAGE };
+    mockLicense = {
+      membershipStanding: "left_brokerage",
+      membershipOrgName: OTHER_BROKERAGE,
+      membershipOrgId: OTHER_ORG_ID,
+    };
     await renderNotice();
     expect(screen.getByText("You're no longer part of Other Fixture Brokerage.")).toBeInTheDocument();
   });
@@ -99,14 +109,21 @@ describe("BACKLOG-3951 MembershipNotice", () => {
     ["unknown (pending or unrecognised status)", "unknown"],
     ["undefined (loading, read failed, signed out)", undefined],
   ] as const)("%s: renders nothing", async (_label, standing) => {
-    mockLicense = { membershipStanding: standing, membershipOrgName: BROKERAGE };
+    mockLicense = { membershipStanding: standing, membershipOrgName: BROKERAGE, membershipOrgId: ORG_ID };
     await renderNotice();
     expect(screen.queryByTestId("membership-notice")).toBeNull();
   });
 
   it("removed but no brokerage name: renders nothing", async () => {
-    mockLicense = { membershipStanding: "left_brokerage", membershipOrgName: undefined };
+    mockLicense = { membershipStanding: "left_brokerage", membershipOrgName: undefined, membershipOrgId: ORG_ID };
     await renderNotice();
+    expect(screen.queryByTestId("membership-notice")).toBeNull();
+  });
+
+  it("removed but no organization id: renders nothing (nothing to key a dismissal by)", async () => {
+    mockLicense = { membershipStanding: "left_brokerage", membershipOrgName: BROKERAGE, membershipOrgId: undefined };
+    await renderNotice();
+    expect(prefs().get).not.toHaveBeenCalled();
     expect(screen.queryByTestId("membership-notice")).toBeNull();
   });
 
@@ -136,7 +153,7 @@ describe("BACKLOG-3951 MembershipNotice", () => {
     expect(screen.queryByTestId("membership-notice")).toBeNull();
   });
 
-  it("dismiss hides it and saves the brokerage name for this user", async () => {
+  it("dismiss hides it and saves the brokerage's organization id for this user", async () => {
     await renderNotice();
     await act(async () => {
       fireEvent.click(screen.getByTitle("Dismiss"));
@@ -144,7 +161,7 @@ describe("BACKLOG-3951 MembershipNotice", () => {
     expect(screen.queryByTestId("membership-notice")).toBeNull();
     expect(prefs().update).toHaveBeenCalledTimes(1);
     expect(prefs().update).toHaveBeenCalledWith(USER_A, {
-      notices: { membershipNoticeDismissedFor: BROKERAGE },
+      notices: { membershipNoticeDismissedFor: ORG_ID },
     });
   });
 
@@ -160,10 +177,67 @@ describe("BACKLOG-3951 MembershipNotice", () => {
   });
 
   it("a removal from a different brokerage shows it again", async () => {
-    store[USER_A] = { notices: { membershipNoticeDismissedFor: BROKERAGE } };
-    mockLicense = { membershipStanding: "left_brokerage", membershipOrgName: OTHER_BROKERAGE };
+    store[USER_A] = { notices: { membershipNoticeDismissedFor: ORG_ID } };
+    mockLicense = {
+      membershipStanding: "left_brokerage",
+      membershipOrgName: OTHER_BROKERAGE,
+      membershipOrgId: OTHER_ORG_ID,
+    };
     await renderNotice();
     expect(screen.getByTestId("membership-notice")).toBeInTheDocument();
+  });
+
+  // BACKLOG-4171 controls.
+  it("two brokerages with the same name keep separate dismissals", async () => {
+    const first = await renderNotice();
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("Dismiss"));
+    });
+    expect(screen.queryByTestId("membership-notice")).toBeNull();
+    first.unmount();
+    // Removed from a second brokerage that happens to share the name.
+    mockLicense = { membershipStanding: "left_brokerage", membershipOrgName: BROKERAGE, membershipOrgId: OTHER_ORG_ID };
+    await renderNotice();
+    expect(screen.getByText("You're no longer part of Fixture Brokerage.")).toBeInTheDocument();
+  });
+
+  it("two unnamed brokerages (same fallback name) keep separate dismissals", async () => {
+    mockLicense = { membershipStanding: "left_brokerage", membershipOrgName: "your brokerage", membershipOrgId: ORG_ID };
+    const first = await renderNotice();
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("Dismiss"));
+    });
+    first.unmount();
+    mockLicense = {
+      membershipStanding: "left_brokerage",
+      membershipOrgName: "your brokerage",
+      membershipOrgId: OTHER_ORG_ID,
+    };
+    await renderNotice();
+    expect(screen.getByTestId("membership-notice")).toBeInTheDocument();
+  });
+
+  it("a renamed brokerage keeps the dismissal", async () => {
+    const first = await renderNotice();
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("Dismiss"));
+    });
+    first.unmount();
+    mockLicense = { membershipStanding: "left_brokerage", membershipOrgName: "Renamed Fixture Brokerage", membershipOrgId: ORG_ID };
+    await renderNotice();
+    expect(prefs().get).toHaveBeenLastCalledWith(USER_A);
+    expect(screen.queryByTestId("membership-notice")).toBeNull();
+  });
+
+  it("a dismissal saved before 4171 (a brokerage name) shows the notice once more; the next dismiss stores the id", async () => {
+    store[USER_A] = { notices: { membershipNoticeDismissedFor: BROKERAGE } };
+    await renderNotice();
+    expect(screen.getByTestId("membership-notice")).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByTitle("Dismiss"));
+    });
+    expect(screen.queryByTestId("membership-notice")).toBeNull();
+    expect(store[USER_A]).toEqual({ notices: { membershipNoticeDismissedFor: ORG_ID } });
   });
 
   it("one user's dismissal does not hide it for another user", async () => {
