@@ -200,17 +200,21 @@ export async function deleteItem(
 // 8. pm_reorder_item -- Move in hierarchy / reorder
 // ---------------------------------------------------------------------------
 
-/** Move an item within the hierarchy or change its sort order. */
+/**
+ * Move an item within the hierarchy or change its sort order.
+ * pm_reorder_item writes parent_id AND sort_order together, so sortOrder is
+ * required: pass the item's own sort_order to keep its position.
+ */
 export async function reorderItem(
   itemId: string,
-  newParentId?: string | null,
-  sortOrder?: number
+  newParentId: string | null,
+  sortOrder: number
 ): Promise<{ success: boolean; item_id: string; parent_id: string | null; sort_order: number }> {
   const supabase = createClient();
   const { data, error } = await supabase.rpc('pm_reorder_item', {
     p_item_id: itemId,
     p_new_parent_id: newParentId || null,
-    p_sort_order: sortOrder ?? 0,
+    p_sort_order: sortOrder,
   });
   if (error) throw error;
   return data as unknown as { success: boolean; item_id: string; parent_id: string | null; sort_order: number };

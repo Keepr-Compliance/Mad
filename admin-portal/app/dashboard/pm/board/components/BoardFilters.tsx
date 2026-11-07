@@ -90,7 +90,9 @@ export function BoardFilters({
         {projectMode && (
           <div className="relative">
             <button
-              aria-label="Project"
+              data-testid="project-picker"
+              aria-label={`Project: ${selectedProject ? selectedProject.name : 'Select a project'}`}
+              aria-expanded={projectDropdownOpen}
               onClick={() => {
                 setProjectDropdownOpen(!projectDropdownOpen);
                 if (projectDropdownOpen) setProjectSearch('');

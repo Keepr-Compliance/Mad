@@ -391,7 +391,11 @@ export interface BoardColumns {
 }
 
 // ---------------------------------------------------------------------------
-// Status transition map (mirrors DB validation logic)
+// Status transition map. Drives the UI status pickers (InlineStatusPicker,
+// TaskSidebar). The database does NOT enforce it: pm_update_item_status only
+// checks that the new value is a valid status (plus item existence and open
+// blockers when moving to in_progress). Any status-to-status change is
+// accepted server-side, e.g. a board drag.
 // ---------------------------------------------------------------------------
 
 export const ALLOWED_TRANSITIONS: Record<ItemStatus, ItemStatus[]> = {
