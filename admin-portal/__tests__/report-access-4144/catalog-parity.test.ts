@@ -13,6 +13,14 @@ const MIGRATIONS_DIR = path.resolve(__dirname, '../../../supabase/migrations');
 const M1 = '20261105100000_backlog_4144_report_access.sql';
 
 /**
+ * Catalog keys whose admin page has not landed yet. The key exists so the server can check
+ * report_my_access(key) = 'owner' (BACKLOG-4175 sender rule sets, 20261108100000); the page
+ * lands in BACKLOG-4186, which deletes this entry. The reports index lists only registry
+ * reports, so a pending key shows no dead link.
+ */
+const SERVER_ONLY_PENDING = ['sender-rules'];
+
+/**
  * Every key any migration inserts into public.reports. M1 seeds the first eight; a report added later
  * (BACKLOG-4130: email-precache, 20261105160000) adds its key in its own migration.
  */
@@ -30,13 +38,22 @@ function catalogKeys(): string[] {
 }
 
 describe('registry == reports catalog (M1 + later report migrations)', () => {
-  it('the catalog seeds 9 distinct keys', () => {
+  it('the catalog seeds 10 distinct keys', () => {
     const keys = catalogKeys();
-    expect(keys).toHaveLength(9);
+    expect(keys).toHaveLength(10);
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it('every registry slug is a catalog key and vice versa', () => {
-    expect(REPORTS.map((r) => r.slug).sort()).toEqual(catalogKeys().sort());
+  it('every server-only pending key is a catalog key and not yet a registry slug', () => {
+    const keys = catalogKeys();
+    for (const k of SERVER_ONLY_PENDING) {
+      expect(keys).toContain(k);
+      expect(REPORTS.map((r) => r.slug)).not.toContain(k);
+    }
+  });
+
+  it('every registry slug is a catalog key and vice versa (pending keys aside)', () => {
+    const keys = catalogKeys().filter((k) => !SERVER_ONLY_PENDING.includes(k));
+    expect(REPORTS.map((r) => r.slug).sort()).toEqual(keys.sort());
   });
 });
