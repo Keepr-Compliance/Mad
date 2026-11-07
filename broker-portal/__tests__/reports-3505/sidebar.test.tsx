@@ -134,6 +134,12 @@ describe('C4: Reports sidebar entry', () => {
     expect(await reportsLinks(c)).toEqual(expected);
   });
 
+  it('the layout reads portal access once per render (the gate reuses it)', async () => {
+    await reportsLinks({ access: full('broker'), registry: [BROKER_ONLY], feature: true });
+    expect(mockPortal).toHaveBeenCalledTimes(1);
+    expect(mockFeature).toHaveBeenCalledWith(ORG, 'broker_reports');
+  });
+
   it('renders exactly once, before My Account, for every bucket', () => {
     for (const props of [
       { role: 'broker' },
@@ -146,6 +152,23 @@ describe('C4: Reports sidebar entry', () => {
       const hrefs = Array.from(container.querySelectorAll('nav a')).map((a) => a.getAttribute('href'));
       expect(hrefs.filter((h) => h === '/dashboard/reports')).toHaveLength(1);
       expect(hrefs.indexOf('/dashboard/reports')).toBeLessThan(hrefs.indexOf('/dashboard/account'));
+      unmount();
+    }
+  });
+
+  it('renders nothing for Reports when showReports is false, for every bucket (the Sidebar reads the flag)', () => {
+    for (const props of [
+      { role: 'broker' },
+      { role: 'admin' },
+      { role: 'it_admin' },
+      { role: 'agent', floorOnly: true },
+    ] as Partial<SidebarProps>[]) {
+      const { container, unmount } = render(
+        <Sidebar collapsed={false} onToggle={() => {}} isImpersonating={false} displayEmail="m@fixture.example.test" showReports={false} {...props} />
+      );
+      const hrefs = Array.from(container.querySelectorAll('nav a')).map((a) => a.getAttribute('href'));
+      expect(hrefs).toContain('/dashboard/account'); // the nav rendered
+      expect(hrefs).not.toContain('/dashboard/reports');
       unmount();
     }
   });

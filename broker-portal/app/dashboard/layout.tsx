@@ -59,7 +59,8 @@ export default async function DashboardLayout({
   // BACKLOG-3505: the same gate the Reports pages use. Shown only when the
   // plan feature is on AND the caller has at least one report, which is exactly
   // when the index renders instead of 404ing. Never while impersonating.
-  const myReports = isImpersonating ? null : await listMyReports();
+  // The layout's own access read is reused: no second membership read.
+  const myReports = isImpersonating ? null : await listMyReports(undefined, portal);
   const showReports = !!myReports && myReports.reports.length > 0;
   // BACKLOG-3844: the rule the billing page uses, on access only. No read: the
   // access above is reused. The page refuses on its own.

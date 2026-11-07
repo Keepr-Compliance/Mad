@@ -32,7 +32,7 @@
 
 import { notFound } from 'next/navigation';
 import { getImpersonationSession } from '@/lib/impersonation';
-import { getPortalAccess } from '@/lib/auth/portalAccess';
+import { getPortalAccess, type PortalAccessResult } from '@/lib/auth/portalAccess';
 import { FULL_PORTAL_ROLES } from '@/lib/auth/membership';
 import { isFeatureEnabledFailClosed } from '@/lib/feature-gate';
 import { REPORT_REGISTRY, type ReportDefinition, type ReportRole } from '@/lib/reports/registry';
@@ -94,11 +94,17 @@ export function reportScopeFor(
 /**
  * The admitted caller, or null. Never throws for a refusal: the layout calls
  * this through listMyReports and must not 404 every dashboard page.
+ *
+ * `portal`: an access result the caller already read IN THIS REQUEST (the
+ * layout passes its own), so the membership, licence and brokerage reads are
+ * not repeated. Omitted -> read here. Not React cache(): getPortalAccess is
+ * also read by billing server actions after writes, where a per-request memo
+ * could hand back a stale answer, and react@18.3.1 (jest) has no cache().
  */
-export async function getReportsCaller(): Promise<ReportCaller | null> {
+export async function getReportsCaller(portal?: PortalAccessResult | null): Promise<ReportCaller | null> {
   if (await getImpersonationSession()) return null;
 
-  const portal = await getPortalAccess();
+  if (portal === undefined) portal = await getPortalAccess();
   if (!portal) return null;
   if (portal.suspended !== false) return null;
   if (portal.orgSuspended !== false) return null;
@@ -126,9 +132,10 @@ export async function getReportsCaller(): Promise<ReportCaller | null> {
 
 /** The reports this caller may open, or null when the gate refuses. */
 export async function listMyReports(
-  registry: readonly ReportDefinition[] = REPORT_REGISTRY
+  registry: readonly ReportDefinition[] = REPORT_REGISTRY,
+  portal?: PortalAccessResult | null
 ): Promise<MyReports | null> {
-  const caller = await getReportsCaller();
+  const caller = await getReportsCaller(portal);
   if (!caller) return null;
   const reports: MyReports['reports'] = [];
   for (const report of registry) {
