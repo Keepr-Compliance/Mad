@@ -64,8 +64,8 @@ def jest_parity():
             print('  JEST  ZERO TESTS RAN')
         if d['numFailedTests'] == 0 and d['numRuntimeErrorTestSuites']:
             print('  JEST  suite failed to run')
-    except Exception:
-        print('  JEST  NO RESULT ' + out.stdout[:300] + out.stderr[-600:])
+    except Exception as e:
+        print('  JEST  NO RESULT %r ' % e + out.stdout[:300] + out.stderr[-600:])
 
 for rel in (MIG, PRE, TSR):
     if sh('git', 'status', '--porcelain', '--', rel).stdout.strip():
