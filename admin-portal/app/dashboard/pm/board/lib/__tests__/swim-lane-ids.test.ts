@@ -12,6 +12,10 @@ import {
   parseSwimLaneCellId,
   SWIM_LANE_NEW_PROJECT_ID,
   NO_EPIC_KEY,
+  NO_LABEL_KEY,
+  buildCardSortableId,
+  itemIdFromSortableId,
+  isSwimLaneMode,
 } from '../swim-lane-ids';
 
 describe('SWIM_LANE_NEW_PROJECT_ID', () => {
@@ -152,5 +156,37 @@ describe('epic dimension (BACKLOG-4176)', () => {
   it('round-trips the No epic row cell', () => {
     const id = buildSwimLaneCellId('epic', NO_EPIC_KEY, 'pending');
     expect(parseSwimLaneCellId(id)).toEqual({ dimension: 'epic', groupKey: NO_EPIC_KEY, status: 'pending' });
+  });
+});
+
+describe('Label lanes (BACKLOG-4196)', () => {
+  it('C2: a label cell id round-trips, for a label id and for No label', () => {
+    for (const key of ['label-uuid-1', NO_LABEL_KEY]) {
+      const id = buildSwimLaneCellId('label', key, 'testing');
+      expect(parseSwimLaneCellId(id)).toEqual({ dimension: 'label', groupKey: key, status: 'testing' });
+    }
+    expect(NO_LABEL_KEY).toBe('No label');
+  });
+
+  it('C3: itemIdFromSortableId gives the item id of a lane copy', () => {
+    expect(itemIdFromSortableId(buildCardSortableId('item-1', 'label-uuid-1'))).toBe('item-1');
+    expect(itemIdFromSortableId(buildCardSortableId('item-1', NO_LABEL_KEY))).toBe('item-1');
+  });
+
+  it('C3: any other id passes through unchanged', () => {
+    for (const id of [
+      'item-1',
+      'pending',
+      'backlog-panel',
+      buildSwimLaneCellId('label', 'label-uuid-1', 'pending'),
+      'card:item-1',
+    ]) {
+      expect(itemIdFromSortableId(id)).toBe(id);
+    }
+  });
+
+  it('C10: isSwimLaneMode accepts the selector modes and nothing else', () => {
+    for (const m of ['off', 'project', 'area', 'assignee', 'label']) expect(isSwimLaneMode(m)).toBe(true);
+    for (const m of ['sprint', 'epic', '', null, undefined, 3]) expect(isSwimLaneMode(m)).toBe(false);
   });
 });

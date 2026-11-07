@@ -608,6 +608,54 @@ export async function getBoardTasks(
   return data as unknown as BoardColumns;
 }
 
+/** Item ids per labels query, to keep the `in (...)` filter short. */
+export const ITEM_LABELS_CHUNK = 100;
+
+interface ItemLabelRow {
+  item_id: string;
+  created_at: string | null;
+  label: PmLabel | null;
+}
+
+/**
+ * Labels for the given items, keyed by item id (BACKLOG-4196).
+ * pm_get_board_tasks returns no labels, so the board reads them here: one
+ * select on pm_item_labels with the label embedded, in chunks of
+ * ITEM_LABELS_CHUNK ids. Labels are in the order they were attached.
+ * Items with no labels are absent from the map.
+ */
+export async function fetchItemLabels(itemIds: string[]): Promise<Map<string, PmLabel[]>> {
+  const result = new Map<string, PmLabel[]>();
+  const ids = Array.from(new Set(itemIds));
+  if (ids.length === 0) return result;
+  const supabase = createClient();
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += ITEM_LABELS_CHUNK) {
+    chunks.push(ids.slice(i, i + ITEM_LABELS_CHUNK));
+  }
+  const responses = await Promise.all(
+    chunks.map((chunk) =>
+      supabase
+        .from('pm_item_labels')
+        .select('item_id, created_at, label:pm_labels(id, name, color, project_id)')
+        .in('item_id', chunk)
+    )
+  );
+  const rows: ItemLabelRow[] = [];
+  for (const { data, error } of responses) {
+    if (error) throw error;
+    rows.push(...((data ?? []) as unknown as ItemLabelRow[]));
+  }
+  rows.sort((a, b) => (a.created_at ?? '').localeCompare(b.created_at ?? ''));
+  for (const row of rows) {
+    if (!row.label) continue;
+    const list = result.get(row.item_id) ?? [];
+    list.push(row.label);
+    result.set(row.item_id, list);
+  }
+  return result;
+}
+
 // ---------------------------------------------------------------------------
 // 30. pm_get_stats -- Aggregate counts for dashboard
 // ---------------------------------------------------------------------------

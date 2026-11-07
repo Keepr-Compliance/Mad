@@ -19,6 +19,8 @@ const q = vi.hoisted(() => ({
   reorderItem: vi.fn(),
   createItem: vi.fn(),
   assignItem: vi.fn(),
+  addItemLabel: vi.fn(),
+  fetchItemLabels: vi.fn(),
   bulkUpdate: vi.fn(),
   bulkDelete: vi.fn(),
   assignToSprint: vi.fn(),
@@ -40,6 +42,7 @@ beforeEach(() => {
   localStorage.clear();
   vi.spyOn(console, 'error').mockImplementation(() => {});
   for (const fn of Object.values(q)) fn.mockReset();
+  q.fetchItemLabels.mockResolvedValue(new Map());
   q.listSprints.mockResolvedValue([]);
   q.listProjects.mockResolvedValue([]);
   q.listAssignableUsers.mockResolvedValue([]);

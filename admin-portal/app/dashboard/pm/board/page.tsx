@@ -117,6 +117,15 @@ export default function BoardPage() {
                 <KanbanSquare className="h-12 w-12 mb-3 text-gray-300" />
                 <p className="text-sm">Select a sprint to view the board</p>
               </div>
+            ) : board.swimLane === 'label' && board.labelsFailed ? (
+              // Never show every item under "No label" when labels did not load.
+              <div
+                data-testid="label-lanes-unavailable"
+                className="flex flex-col items-center justify-center h-64 text-gray-400"
+              >
+                <KanbanSquare className="h-12 w-12 mb-3 text-gray-300" />
+                <p className="text-sm">Could not load labels. Try Refresh.</p>
+              </div>
             ) : board.swimLane !== 'off' ? (
               <SwimLaneGrid
                 columns={board.columns}

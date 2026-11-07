@@ -11,6 +11,9 @@
  * - Board card drag-to-backlog unassignment
  * - Status changes on column drop
  * - Project mode (BACKLOG-4176): drop into another epic row re-parents
+ * - Label mode (BACKLOG-4196): cards are lane copies with ids
+ *   `card:<itemId>:lane=<key>`; active and over ids are turned back into
+ *   item ids first. A drop changes status only, never labels.
  */
 
 import { useState, useCallback } from 'react';
@@ -23,7 +26,7 @@ import {
   type DragEndEvent,
 } from '@dnd-kit/core';
 import { resolveColumnStatus } from '../../components/KanbanBoard';
-import { parseSwimLaneCellId } from '../lib/swim-lane-ids';
+import { itemIdFromSortableId, parseSwimLaneCellId } from '../lib/swim-lane-ids';
 import {
   collectEpicIds,
   laneKeyForItem,
@@ -88,7 +91,7 @@ export function useBoardDragDrop({
         setActiveDragItem(data.item as PmBacklogItem);
         setActiveDragIsBacklog(true);
       } else {
-        const item = findBoardItem(active.id as string);
+        const item = findBoardItem(itemIdFromSortableId(active.id as string));
         if (item) {
           setActiveDragItem(item);
           setActiveDragIsBacklog(false);
@@ -107,12 +110,15 @@ export function useBoardDragDrop({
       if (!over) return;
 
       const data = active.data.current;
-      const overId = over.id as string;
+      // Label mode lane copies carry `card:<itemId>:lane=<key>` ids; every
+      // lookup below wants the item id. Other ids pass through unchanged.
+      const activeId = itemIdFromSortableId(active.id as string);
+      const overId = itemIdFromSortableId(over.id as string);
 
       // Board card dropped onto backlog panel -> unassign from sprint
       if (overId === 'backlog-panel') {
         if (data?.type === 'backlog-item' || swimLane === 'project') return;
-        const itemId = active.id as string;
+        const itemId = activeId;
         try {
           await updateItemField(itemId, 'sprint_id', null);
           await loadBoardData();
@@ -129,7 +135,7 @@ export function useBoardDragDrop({
       // Project mode: rows are epics. A drop changes status and/or parent.
       if (swimLane === 'project') {
         if (data?.type === 'backlog-item') return; // backlog panel is hidden here
-        const itemId = active.id as string;
+        const itemId = activeId;
         let currentStatus: ItemStatus | null = null;
         let currentItem: PmBacklogItem | null = null;
         for (const [status, items] of Object.entries(columns)) {
@@ -187,7 +193,7 @@ export function useBoardDragDrop({
           console.error('Failed to assign backlog item to board:', err);
         }
       } else {
-        const itemId = active.id as string;
+        const itemId = activeId;
 
         // Find the current item to compare current project + status.
         let currentStatus: ItemStatus | null = null;
