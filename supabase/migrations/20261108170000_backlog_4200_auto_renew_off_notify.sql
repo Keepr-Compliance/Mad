@@ -6,6 +6,9 @@
 --    suspended deal keeps status 'suspended' and is not emailed.
 -- 2. IF v_notify_off: one billing_outbox row, kind notify_auto_renew_off, dedupe key
 --    'notify_auto_renew_off:<mode>:<org>:v<new version>', payload {organization_id, version}.
+--    The payload is built as jsonb_build_object('version', ..., 'organization_id', ...) on purpose
+--    (same jsonb): it keeps the 4045 insert's text unique for the mutation anchors in
+--    supabase/tests/backlog-4200-4209/controls.sql.
 -- 3. Every staff auto-renew row (on and off) records detail.notified on billing_change_log and in the
 --    function result (set_org_auto_renew copies it into admin_audit_logs metadata). Brokerage rows
 --    carry no key. The BACKLOG-4045 lines are unchanged.
