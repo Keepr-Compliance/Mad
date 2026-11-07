@@ -653,6 +653,7 @@ describe('SavedViews focus after a view is removed (BACKLOG-4095)', () => {
     expect(rows()[0].tabIndex).toBe(-1);
   });
 
+  const REFUSED = 'Could not remove that view.';
   const deleteButton = (name: string) => screen.getByRole('button', { name: `Delete ${name}` });
 
   it('K2 removing a middle row focuses the next row and makes it the Tab stop', async () => {
@@ -661,7 +662,11 @@ describe('SavedViews focus after a view is removed (BACKLOG-4095)', () => {
     openByClick();
     await user.click(deleteButton('Bravo'));
     expect(props.onDelete).toHaveBeenCalledWith(ABC[1]);
-    rerender(<SavedViews<View> {...props} views={[ABC[0], ABC[2]]} />);
+    // The admin store (use-report-saved-views.ts) re-reads after every write:
+    // loading=true with the old rows first, then the new rows with loading=false.
+    rerender(<SavedViews<View> {...props} views={ABC} loading={true} />);
+    expect(rows()).toHaveLength(0);
+    rerender(<SavedViews<View> {...props} views={[ABC[0], ABC[2]]} loading={false} />);
     expect(rows()).toHaveLength(2);
     expect(rows()[1]).toHaveTextContent('Charlie');
     expect(rows()[1]).toHaveFocus();
@@ -694,8 +699,66 @@ describe('SavedViews focus after a view is removed (BACKLOG-4095)', () => {
     const { props, rerender } = setup({ views: ABC });
     openByClick();
     await user.click(deleteButton('Bravo'));
-    rerender(<SavedViews<View> {...props} views={[...ABC]} writeError="Could not remove that view." />);
+    // Store sequence on a refusal: writeError set and loading=true (rows hidden),
+    // then the re-read rows (a new array, same views) with loading=false.
+    rerender(<SavedViews<View> {...props} views={ABC} loading={true} writeError={REFUSED} />);
+    expect(rows()).toHaveLength(0);
+    rerender(<SavedViews<View> {...props} views={[...ABC]} loading={false} writeError={REFUSED} />);
     expect(rows()).toHaveLength(3);
     expect(deleteButton('Bravo')).toHaveFocus();
+  });
+
+  it('K2b rows that arrive while loading is still true are not acted on until loading ends', async () => {
+    const user = userEvent.setup();
+    const { props, rerender } = setup({ views: ABC });
+    openByClick();
+    await user.click(deleteButton('Bravo'));
+    rerender(<SavedViews<View> {...props} views={ABC} loading={true} />);
+    rerender(<SavedViews<View> {...props} views={[ABC[0], ABC[2]]} loading={true} />);
+    rerender(<SavedViews<View> {...props} views={[ABC[0], ABC[2]]} loading={false} />);
+    expect(rows()[1]).toHaveTextContent('Charlie');
+    expect(rows()[1]).toHaveFocus();
+  });
+
+  it('K6 after a refused delete, a later removal for another reason does not pull focus out of the name field', async () => {
+    const user = userEvent.setup();
+    const { props, rerender } = setup({ views: ABC });
+    openByClick();
+    await user.click(deleteButton('Bravo'));
+    rerender(<SavedViews<View> {...props} views={ABC} loading={true} writeError={REFUSED} />);
+    rerender(<SavedViews<View> {...props} views={[...ABC]} loading={false} writeError={REFUSED} />);
+    await user.click(screen.getByRole('button', { name: 'Save current view' }));
+    const input = screen.getByRole('textbox');
+    await user.type(input, 'Q3');
+    expect(input).toHaveFocus();
+    rerender(<SavedViews<View> {...props} views={[ABC[0], ABC[2]]} loading={false} writeError={REFUSED} />);
+    expect(input).toHaveFocus();
+    expect(input).toHaveValue('Q3');
+  });
+
+  const ABCD: View[] = [...ABC, { id: 'd', name: 'Delta', pinned: false }];
+
+  it('K7 two quick deletes, landing one at a time: focus goes to the row after the latest one', async () => {
+    const user = userEvent.setup();
+    const { props, rerender } = setup({ views: ABCD });
+    openByClick();
+    await user.click(deleteButton('Alpha'));
+    await user.click(deleteButton('Bravo'));
+    rerender(<SavedViews<View> {...props} views={ABCD.slice(1)} />);
+    rerender(<SavedViews<View> {...props} views={ABCD.slice(2)} />);
+    expect(rows()[0]).toHaveTextContent('Charlie');
+    expect(rows()[0]).toHaveFocus();
+    expect(rows()[0].tabIndex).toBe(0);
+  });
+
+  it('K7b two quick deletes landing in one update: focus goes to the row after the latest one', async () => {
+    const user = userEvent.setup();
+    const { props, rerender } = setup({ views: ABCD });
+    openByClick();
+    await user.click(deleteButton('Alpha'));
+    await user.click(deleteButton('Bravo'));
+    rerender(<SavedViews<View> {...props} views={ABCD.slice(2)} />);
+    expect(rows()[0]).toHaveTextContent('Charlie');
+    expect(rows()[0]).toHaveFocus();
   });
 });
