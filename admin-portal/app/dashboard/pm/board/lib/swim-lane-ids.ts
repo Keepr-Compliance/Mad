@@ -6,18 +6,21 @@
  *
  * Droppable id format (structured):
  *
- *   cell:dim=<project|area|assignee>:key=<groupKey>:status=<status>
+ *   cell:dim=<project|area|assignee|epic>:key=<groupKey>:status=<status>
  *
- * Ghost "new project" row drop target:
- *
- *   swimlane-new-project
+ * In Project mode the board shows one row per epic (BACKLOG-4176); those
+ * cells use `dim=epic` with the epic's id as key, or NO_EPIC_KEY.
  */
 
 import type { ItemStatus } from '@/lib/pm-types';
 
+/** Legacy drop target id, still re-exported by KanbanBoard; no longer rendered. */
 export const SWIM_LANE_NEW_PROJECT_ID = 'swimlane-new-project';
 
-export type SwimLaneDimension = 'project' | 'area' | 'assignee';
+/** Row key for items in Project mode that have no epic parent in the project. */
+export const NO_EPIC_KEY = 'No Epic';
+
+export type SwimLaneDimension = 'project' | 'area' | 'assignee' | 'epic';
 
 export interface ParsedSwimLaneCell {
   dimension: SwimLaneDimension;
@@ -55,7 +58,7 @@ export function parseSwimLaneCellId(overId: string): ParsedSwimLaneCell | null {
   // "No Project", "No Area", "Unassigned", area/assignee names) are colon-
   // free; any id carrying a `:` in the key is malformed and returns null.
   const match = overId.match(
-    /^cell:dim=(project|area|assignee):key=([^:]+):status=([a-z_]+)$/
+    /^cell:dim=(project|area|assignee|epic):key=([^:]+):status=([a-z_]+)$/
   );
   if (!match) return null;
   const [, dimension, groupKey, status] = match;
