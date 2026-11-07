@@ -9,46 +9,36 @@
  * A saved card does not pay invoices automatically (they are sent invoices), so the copy does not
  * say it does.
  *
- * BACKLOG-3855: above the button, the last invoices (OrgInvoicesTable), "View all invoices" (the
- * same action as the button) and the help article. `invoices` undefined = not passed (no list).
+ * BACKLOG-3855: the last invoices (OrgInvoicesTable). `invoices` undefined = not passed (no list).
+ * BACKLOG-4187: Manage billing sits on the title line (BillingBlock's action slot); the separate
+ * "View all invoices" link and the help-article link are gone from this block (the article stays
+ * on the Help page and in the support forms).
  */
 
-import Link from 'next/link';
 import { Alert } from '@keepr/design-system';
 import { BillingBlock } from './BillingBlock';
 import { ManageBillingButton } from './ManageBillingButton';
 import { OrgInvoicesTable } from './OrgInvoicesTable';
-import { ViewAllInvoicesLink } from './ViewAllInvoicesLink';
-import { TOUCH_LINK } from './touch';
-import type { OrgInvoiceRow } from '@/lib/billing/orgInvoices';
+import { ORG_INVOICES_LIMIT, type OrgInvoiceRow } from '@/lib/billing/orgInvoices';
 
-export const INVOICES_HELP_HREF = '/guides/invoices';
+/** Under the title when the list has rows; the number is the list's real cap. */
+export const LAST_INVOICES_LINE = `Showing your last ${ORG_INVOICES_LIMIT} invoices. Click Manage billing to see all of them or change your payment method.`;
+/** Under the title when there is no list or it has no rows. */
+export const MANAGE_BILLING_LINE = "Save a payment method and see every invoice on Stripe's billing page.";
 
 export function ManageBillingBlock({ unavailable, invoices }: { unavailable?: boolean; invoices?: OrgInvoiceRow[] | null }) {
+  const hasRows = Array.isArray(invoices) && invoices.length > 0;
   return (
-    <BillingBlock id="manage-billing" title="Invoices & payment method">
+    <BillingBlock id="manage-billing" title="Invoices & payment method" action={<ManageBillingButton />}>
+      <p className="mt-3 text-sm text-gray-700" data-manage-billing-line="">
+        {hasRows ? LAST_INVOICES_LINE : MANAGE_BILLING_LINE}
+      </p>
       {unavailable ? (
         <div className="mt-3">
           <Alert variant="error">Stripe is unavailable right now. Try again in a minute.</Alert>
         </div>
       ) : null}
-      {invoices !== undefined ? (
-        <>
-          <OrgInvoicesTable rows={invoices} />
-          <div className="mt-2">
-            <ViewAllInvoicesLink />
-          </div>
-        </>
-      ) : null}
-      <p className="mt-3 text-sm text-gray-700">Save a payment method and see every invoice on Stripe&apos;s billing page.</p>
-      <div className="mt-3">
-        <ManageBillingButton />
-      </div>
-      <p className="mt-3 text-sm">
-        <Link href={INVOICES_HELP_HREF} className={`font-medium text-indigo-700 hover:underline ${TOUCH_LINK}`}>
-          Where do I find my invoices?
-        </Link>
-      </p>
+      {invoices !== undefined ? <OrgInvoicesTable rows={invoices} /> : null}
     </BillingBlock>
   );
 }
