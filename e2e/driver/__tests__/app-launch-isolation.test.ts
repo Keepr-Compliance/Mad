@@ -125,13 +125,13 @@ describe('readLaunchedIsolation (BACKLOG-4054)', () => {
   });
 
   it('SR-a reads userData, appData and the mock switch from the live app', () => {
-    g.__keeprAppLaunchGuard = { log: { transports: { file: { getFile: () => ({ path: '/live/user-data/logs/main.log' }) } } } };
+    g.__keeprAppLaunchGuard = { log: { transports: { file: { getFile: () => ({ path: '/live/log-dir/main.log' }) } } } };
     expect(readLaunchedIsolation(fakeElectron(true))).toEqual({
       actualUserData: '/live/user-data',
       appData: '/live/app-data',
       hasMockKeychain: true,
       guardRan: true,
-      logFilePath: '/live/user-data/logs/main.log',
+      logFilePath: '/live/log-dir/main.log',
     });
   });
 
