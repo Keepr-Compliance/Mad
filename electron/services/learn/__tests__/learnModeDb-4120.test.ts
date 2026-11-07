@@ -90,6 +90,7 @@ import { answerCleanupQuestion, nextCleanupQuestion } from "../cleanupPass";
 import { answerBulkQuestion, ensureBulkSample, nextBulkQuestion } from "../bulkSample";
 import { buildAnswerKey } from "../answerKey";
 import { scoreRun } from "../scoring";
+import { EMPTY_CENSUS } from "../../__tests__/helpers/emptyCensus-4175";
 import {
   getLearnModeEnabled,
   listAnswerKeyTransactions,
@@ -388,7 +389,7 @@ describe("N1 / N2 / P2 a full Learn mode session", () => {
     const found = result.detections.find((d) => d.addressKey === "4120 canarytest|00000")!;
     expect(answerCleanupQuestion(USER, result, found.id, "yes")).toBe(false);
 
-    const s = scoreRun(result, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER), 0);
+    const s = scoreRun(result, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER), 0, EMPTY_CENSUS);
     expect([s.positives, s.found, s.missed, s.trueDetections, s.cleanupYes, s.cleanupNo]).toEqual([2, 1, 1, 1, 1, 1]);
     expect(s.side).toEqual({ correct: 1, wrong: 0, notPredicted: 0, skipped: 0 });
   });
@@ -402,7 +403,7 @@ describe("N1 / N2 / P2 a full Learn mode session", () => {
       const q = nextCleanupQuestion(USER, result)!;
       answerCleanupQuestion(USER, result, q.detectionId, "yes");
       ensureBulkSample(USER, 12, NOW);
-      scoreRun(result, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER), 0);
+      scoreRun(result, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER), 0, EMPTY_CENSUS);
     } finally {
       (global as unknown as { fetch: unknown }).fetch = realFetch;
     }

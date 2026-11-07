@@ -9,13 +9,24 @@
  * Pure apart from `analyzeEmail` on the sampled messages' cached text.
  */
 import transactionExtractorService from "../transactionExtractorService";
-import type { AnswerKeyRow, AnsweredBulkRow, DealAnswerRow } from "../db/learnModeDbService";
+import type { AnswerKeyRow, AnsweredBulkRow, DealAnswerRow, DealLinkedEmailRow } from "../db/learnModeDbService";
 import { buildAnswerKey, type AnswerKeyBucket, type KeyedTransaction } from "./answerKey";
-import type { LearnDetection, LearnRunResult } from "./baselineRunner";
-import { isSameDeal } from "./dealMatcher";
+import type {
+  FilteredDetection,
+  LearnDetection,
+  LearnRunResult,
+  ProviderBucket,
+} from "./baselineRunner";
+import { isSameDeal, sameStreet } from "./dealMatcher";
 import { wilsonInterval, type WilsonInterval } from "./wilson";
-import type { SenderRuleSet } from "../../utils/senderFilter/bundledRules";
-import { matchesExactAddress } from "../../utils/senderFilter/senderFilter";
+import type { SenderRuleSet, SenderRuleSignal } from "../../utils/senderFilter/bundledRules";
+import {
+  decide,
+  matchesExactAddress,
+  storedFilterRow,
+  type KeepRuleId,
+  type KeepSets,
+} from "../../utils/senderFilter/senderFilter";
 
 export interface Rate {
   k: number;
@@ -68,6 +79,8 @@ export interface LearnScore {
   /** Saved answers per rules version (deal = cleanup answers, bulk = answered sample rows). */
   answersByRuleVersion: Array<{ ruleVersion: number; deal: number; bulk: number }>;
   senderRulesVersion: number;
+  /** BACKLOG-4175: the sender filter, measured (aggregates only). */
+  senderCensus: SenderCensus;
 
   positives: number;
   /** Positives that are 'manual' rows created before this user's cutoff (subset of positives). */
@@ -101,6 +114,51 @@ export interface LearnScore {
     /** real estate messages that analyzeEmail flags as real estate. */
     realEstateFlagged: Rate;
   };
+}
+
+/** One of the two counts the census reports: full precedence, and without K1/K3. */
+export interface CensusCount {
+  k: number;
+  bySignal: Partial<Record<SenderRuleSignal, number>>;
+}
+
+export interface MailboxCensus {
+  /** "mailbox 1", "mailbox 2", ... in account order, or "unknown mailbox" (NULL account). Never the account id. */
+  label: string;
+  provider: ProviderBucket;
+  /** Messages linked to a non-rejected deal. */
+  n: number;
+  full: CensusCount;
+  /** Without the contact keep rules K1 and K3. */
+  minusContactKeeps: CensusCount;
+  /** Full k = 0 (the address-pass exit criterion). */
+  addressPassReady: boolean;
+  /** Minus-K1/K3 k = 0 and n >= thresholds.minCensusLinkedEmails (the detector exit criterion). */
+  detectorReady: boolean;
+}
+
+export interface SenderCensus {
+  /** Deal-linked messages the filter would suppress, per mailbox. */
+  dealLinkedSuppressed: MailboxCensus[];
+  minCensusLinkedEmails: number;
+  /** Newsletter/spam sample messages the filter would suppress. */
+  bulkCaught: Rate;
+  /** Real-estate sample messages the filter would suppress (sampled). */
+  realEstateSuppressed: Rate;
+  /** Hand-entered deals found by the run and NOT by the filtered run, per deal. */
+  foundDealsLost: { full: number; minusContactKeeps: number };
+  /** Cleanup-Yes deals with no detection left in the filtered run, per deal. */
+  cleanupYesLost: { full: number; minusContactKeeps: number };
+  keptBy: Record<KeepRuleId, number>;
+  keepConflicts: number;
+  coverage: Record<ProviderBucket, { rows: number; headers: number; labels: number }>;
+}
+
+/** What the census reads besides the run. */
+export interface SenderCensusInput {
+  rules: SenderRuleSet;
+  keep: KeepSets;
+  linked: DealLinkedEmailRow[];
 }
 
 export interface CleanupCandidate {
@@ -154,22 +212,23 @@ export function cleanupCandidates(run: LearnRunResult, keyRows: AnswerKeyRow[]):
 }
 
 /**
- * BACKLOG-4175: a detection is hidden from the cleanup pass when the seed
- * signal is live for Learn questions and EVERY message of it is from an exact
- * seed. A mixed detection is still asked (its preview leaves the seed mail out).
+ * BACKLOG-4175: a detection is hidden from the cleanup pass when EVERY message
+ * of it is suppressed by a sender signal that is live for Learn questions
+ * (with the shipped rules: the exact seeds only). A mixed detection is still
+ * asked (its preview leaves the hidden mail out).
  */
-export function isHiddenBySeed(run: LearnRunResult, d: LearnDetection): boolean {
-  return run.seedHidesQuestions && d.emailIds.length > 0 && d.seedEmailIds.length === d.emailIds.length;
+export function isHiddenBySenderRules(_run: LearnRunResult, d: LearnDetection): boolean {
+  return d.emailIds.length > 0 && d.hiddenEmailIds.length === d.emailIds.length;
 }
 
 /**
  * BACKLOG-4175: the messages of a detection the user is shown: every message
- * except the exact-seed ones (when the seed is live for Learn questions).
+ * except those a live sender signal suppresses on Learn questions.
  */
-export function visibleEmailIds(run: LearnRunResult, d: LearnDetection): string[] {
-  if (!run.seedHidesQuestions || d.seedEmailIds.length === 0) return d.emailIds;
-  const seed = new Set(d.seedEmailIds);
-  return d.emailIds.filter((id) => !seed.has(id));
+export function visibleEmailIds(_run: LearnRunResult, d: LearnDetection): string[] {
+  if (d.hiddenEmailIds.length === 0) return d.emailIds;
+  const hidden = new Set(d.hiddenEmailIds);
+  return d.emailIds.filter((id) => !hidden.has(id));
 }
 
 /**
@@ -183,7 +242,7 @@ export function hiddenCleanupKeys(run: LearnRunResult, candidates: CleanupCandid
   for (const c of candidates) {
     all.add(c.addressKey);
     const d = byId.get(c.detectionId);
-    if (!d || !isHiddenBySeed(run, d)) askable.add(c.addressKey);
+    if (!d || !isHiddenBySenderRules(run, d)) askable.add(c.addressKey);
   }
   return new Set([...all].filter((k) => !askable.has(k)));
 }
@@ -227,6 +286,7 @@ export function scoreRun(
   dealAnswers: DealAnswerRow[],
   bulkRows: AnsweredBulkRow[],
   seedLinkedToDeals: number,
+  census: SenderCensusInput,
 ): LearnScore {
   const key = buildAnswerKey(keyRows, scannedRange(run));
   const classified = classify(run.detections, key.positives, key.negatives, key.neutral);
@@ -294,8 +354,8 @@ export function scoreRun(
     .filter((d): d is LearnDetection => d !== undefined);
   const hiddenBySeed = {
     keys: hiddenUnanswered.length,
-    detections: candidateDetections.filter((d) => isHiddenBySeed(run, d)).length,
-    emails: run.seedHidesQuestions ? candidateDetections.reduce((n, d) => n + d.seedEmailIds.length, 0) : 0,
+    detections: candidateDetections.filter((d) => isHiddenBySenderRules(run, d)).length,
+    emails: candidateDetections.reduce((n, d) => n + d.hiddenEmailIds.length, 0),
   };
 
   let realEstate = 0;
@@ -306,6 +366,10 @@ export function scoreRun(
   let nlCached = 0;
   let reFlagged = 0;
   let reCached = 0;
+  let nlSuppressed = 0;
+  let reSuppressed = 0;
+  const suppressesInLearn = (b: AnsweredBulkRow) =>
+    decide(storedFilterRow(b), census.rules, "learnQuestions", census.keep).outcome === "suppress";
   for (const b of bulkRows) {
     if (b.answer === "real_estate") realEstate += 1;
     else if (b.answer === "newsletter_spam") newsletterSpam += 1;
@@ -324,9 +388,11 @@ export function scoreRun(
     if (b.answer === "newsletter_spam") {
       nlCached += 1;
       if (flagged) nlFlagged += 1;
+      if (suppressesInLearn(b)) nlSuppressed += 1;
     } else {
       reCached += 1;
       if (flagged) reFlagged += 1;
+      if (suppressesInLearn(b)) reSuppressed += 1;
     }
   }
 
@@ -353,6 +419,23 @@ export function scoreRun(
     seedLinkedToDeals,
     answersByRuleVersion: answersByRuleVersion(dealAnswers, bulkRows),
     senderRulesVersion: run.senderRulesVersion,
+    senderCensus: {
+      dealLinkedSuppressed: dealLinkedCensus(census),
+      minCensusLinkedEmails: census.rules.thresholds.minCensusLinkedEmails,
+      bulkCaught: rate(nlSuppressed, nlCached),
+      realEstateSuppressed: rate(reSuppressed, reCached),
+      foundDealsLost: {
+        full: dealsLost(run.detections, run.filtered.full, key.positives),
+        minusContactKeeps: dealsLost(run.detections, run.filtered.minusContactKeeps, key.positives),
+      },
+      cleanupYesLost: {
+        full: yesLost(candidateDetections, run.filtered.full, yesKeys),
+        minusContactKeeps: yesLost(candidateDetections, run.filtered.minusContactKeeps, yesKeys),
+      },
+      keptBy: run.senderStats.keptBy,
+      keepConflicts: run.senderStats.keepConflicts,
+      coverage: run.senderStats.coverage,
+    },
     positives,
     legacyManualPositives: key.legacyManualPositives,
     legacyCutoffDay: new Date(key.legacyCutoffMs).toISOString().slice(0, 10),
@@ -382,6 +465,80 @@ export function scoreRun(
   };
 }
 
+/** Deals found by the unfiltered run and by no detection of the filtered run (per deal, never a count difference). */
+function dealsLost(
+  unfiltered: LearnDetection[],
+  filtered: FilteredDetection[],
+  positives: KeyedTransaction[],
+): number {
+  return positives.filter(
+    (p) => unfiltered.some((d) => isSameDeal(d, p)) && !filtered.some((d) => isSameDeal(d, p)),
+  ).length;
+}
+
+/** Cleanup-Yes deal keys whose candidate detections have no same-street detection left in the filtered run. */
+function yesLost(candidates: LearnDetection[], filtered: FilteredDetection[], yesKeys: Set<string>): number {
+  let lost = 0;
+  for (const k of yesKeys) {
+    const mine = candidates.filter((d) => d.addressKey === k);
+    if (mine.length === 0) continue;
+    const kept = mine.some((d) => filtered.some((f) => sameStreet(f.address, d.address, null)));
+    if (!kept) lost += 1;
+  }
+  return lost;
+}
+
+function emptyCount(): CensusCount {
+  return { k: 0, bySignal: {} };
+}
+
+/** Per mailbox (emails.account_id; NULL is its own bucket), full and without K1/K3. */
+function dealLinkedCensus(census: SenderCensusInput): MailboxCensus[] {
+  const groups = new Map<string | null, DealLinkedEmailRow[]>();
+  for (const r of census.linked) {
+    const g = groups.get(r.account_id);
+    if (g) g.push(r);
+    else groups.set(r.account_id, [r]);
+  }
+  const accounts = [...groups.keys()].filter((a): a is string => a !== null).sort();
+  const ordered: Array<[string | null, string]> = accounts.map((a, i) => [a, `mailbox ${i + 1}`]);
+  if (groups.has(null)) ordered.push([null, "unknown mailbox"]);
+  const min = census.rules.thresholds.minCensusLinkedEmails;
+  return ordered.map(([account, label]) => {
+    const rows = groups.get(account) as DealLinkedEmailRow[];
+    const full = emptyCount();
+    const minus = emptyCount();
+    for (const r of rows) {
+      const fr = storedFilterRow(r);
+      const a = decide(fr, census.rules, "learnQuestions", census.keep);
+      if (a.outcome === "suppress" && a.signal) {
+        full.k += 1;
+        full.bySignal[a.signal] = (full.bySignal[a.signal] ?? 0) + 1;
+      }
+      const b = decide(fr, census.rules, "learnQuestions", census.keep, { withoutContactKeeps: true });
+      if (b.outcome === "suppress" && b.signal) {
+        minus.k += 1;
+        minus.bySignal[b.signal] = (minus.bySignal[b.signal] ?? 0) + 1;
+      }
+    }
+    const src = rows[0]?.source;
+    return {
+      label,
+      provider: src === "gmail" || src === "outlook" ? src : "unknown",
+      n: rows.length,
+      full,
+      minusContactKeeps: minus,
+      addressPassReady: full.k === 0,
+      detectorReady: minus.k === 0 && rows.length >= min,
+    };
+  });
+}
+
+function bySignalText(c: CensusCount): string {
+  const parts = Object.entries(c.bySignal).map(([sig, n]) => `${sig} ${n}`);
+  return parts.length ? ` (${parts.join(", ")})` : "";
+}
+
 function fmt(r: Rate): string {
   if (!r.interval) return `${r.k}/${r.n} (n/a)`;
   return `${r.k}/${r.n} = ${r.interval.rate}% (95% CI ${r.interval.low}-${r.interval.high}%)`;
@@ -395,7 +552,8 @@ export function formatCopyBlock(s: LearnScore): string {
     `Emails scanned: ${s.rowsScanned}; without a sent date: ${s.nullSentAt}`,
     `Deals in key: manual ${s.buckets.manual} (of which created before ${s.legacyCutoffDay}, possibly auto-detected: ${s.legacyManualPositives} in the mail window${s.legacyCutoffIsMinimum ? ", minimum" : ""}), auto ${s.buckets.auto}, hybrid ${s.buckets.hybrid}, rejected ${s.buckets.rejected}; outside the mail window: ${s.labelsWithoutLocalMail}`,
     `Detections: ${s.detections}; true ${s.trueDetections}; known wrong ${s.knownWrong}; unmatched ${s.unmatched} = ${s.unmatchedDeals} deals + ${s.unaskable} without a key (cleanup yes ${s.cleanupYes}, no ${s.cleanupNo}, unanswered ${s.cleanupUnanswered})`,
-    `Hidden by sender seeds (sender rules v${s.senderRulesVersion}): ${s.hiddenBySeed.keys} deals, ${s.hiddenBySeed.detections} detections, ${s.hiddenBySeed.emails} emails; seed emails linked to deals: ${s.seedLinkedToDeals}`,
+    `Hidden by live sender rules (sender rules v${s.senderRulesVersion}): ${s.hiddenBySeed.keys} deals, ${s.hiddenBySeed.detections} detections, ${s.hiddenBySeed.emails} emails; seed emails linked to deals: ${s.seedLinkedToDeals}`,
+    ...senderCensusLines(s.senderCensus),
     `Answers by rules version: ${s.answersByRuleVersion.length ? s.answersByRuleVersion.map((v) => `v${v.ruleVersion} deal ${v.deal} / bulk ${v.bulk}`).join(", ") : "none"}`,
     `Deals found: ${s.found}; missed: ${s.missed}`,
     `Recall: ${fmt(s.recall)}`,
@@ -410,4 +568,24 @@ export function formatCopyBlock(s: LearnScore): string {
     `Newsletter/spam flagged as real estate: ${fmt(s.bulk.newsletterFlagged)}`,
     `Real estate flagged as real estate: ${fmt(s.bulk.realEstateFlagged)}`,
   ].join("\n");
+}
+
+/** The sender census as Copy-block lines (aggregates only; mailboxes by ordinal, never by id). */
+export function senderCensusLines(c: SenderCensus): string[] {
+  const mailboxes = c.dealLinkedSuppressed.length
+    ? c.dealLinkedSuppressed.map(
+        (m) =>
+          `${m.label} (${m.provider}): ${m.full.k}/${m.n}${bySignalText(m.full)}; without contact keeps ${m.minusContactKeeps.k}/${m.n}${bySignalText(m.minusContactKeeps)}; address pass ${m.addressPassReady ? "ready" : "not ready"}, detector ${m.detectorReady ? "ready" : "not ready"}`,
+      )
+    : ["none"];
+  const cov = (["gmail", "outlook", "unknown"] as const)
+    .map((p) => `${p} headers ${c.coverage[p].headers}/${c.coverage[p].rows}, labels ${c.coverage[p].labels}/${c.coverage[p].rows}`)
+    .join("; ");
+  return [
+    `Sender filter, deal-linked mail suppressed (detector needs >= ${c.minCensusLinkedEmails} per mailbox): ${mailboxes.join(" | ")}`,
+    `Sender filter on the bulk sample: newsletter/spam caught ${fmt(c.bulkCaught)}; real estate suppressed ${fmt(c.realEstateSuppressed)}`,
+    `Sender filter losses: deals found lost ${c.foundDealsLost.full} (without contact keeps ${c.foundDealsLost.minusContactKeeps}); cleanup Yes lost ${c.cleanupYesLost.full} (without contact keeps ${c.cleanupYesLost.minusContactKeeps})`,
+    `Sender filter keeps: contact ${c.keptBy.K1}, platform ${c.keptBy.K2}, contact domain ${c.keptBy.K3}; exact-address conflicts ${c.keepConflicts}`,
+    `Stored header coverage: ${cov}`,
+  ];
 }

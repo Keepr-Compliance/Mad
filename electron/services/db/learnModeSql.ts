@@ -132,11 +132,15 @@ export const SOFT_CLEAR_BULK_SQL = sql`
 /**
  * Answered sample rows with the text baseline 0 reads, resolved through the
  * provider key (never emails.id), one email row per message. Bound: user id.
- * subject / body columns are NULL when the message is no longer cached.
+ * subject / body / sender columns are NULL when the message is no longer
+ * cached. sender, source, account_id, labels and bulk_mail_headers feed the
+ * sender filter (BACKLOG-4175).
  */
 export const ANSWERED_BULK_WITH_TEXT_SQL = sql`
   SELECT b.answer AS answer, b.rule_version AS rule_version, e.subject AS subject, e.body_plain AS body_plain, e.body_html AS body_html,
-         e.id IS NOT NULL AS cached
+         e.id IS NOT NULL AS cached,
+         e.sender AS sender, e.source AS source, e.account_id AS account_id, e.labels AS labels,
+         e.bulk_mail_headers AS bulk_mail_headers
   FROM learn_bulk_answers b
   LEFT JOIN emails e ON e.id = (
     SELECT e2.id FROM emails e2
@@ -158,7 +162,8 @@ export const ANSWERED_BULK_WITH_TEXT_SQL = sql`
  * repeated across a page boundary. NULL sent_at never matches `>=`.
  */
 export const EMAIL_KEYSET_PAGE_SQL = sql`
-  SELECT id, subject, sender, recipients, body_plain, body_html, sent_at
+  SELECT id, subject, sender, recipients, body_plain, body_html, sent_at,
+         source, account_id, labels, bulk_mail_headers
   FROM emails
   WHERE user_id = ? AND sent_at >= ? AND (sent_at, id) > (?, ?)
   ORDER BY sent_at, id
@@ -205,6 +210,40 @@ export const DEAL_LINKED_SEED_CANDIDATES_SQL = sql`
   WHERE t.user_id = ? AND e.user_id = ?
     AND NOT (COALESCE(t.status, 'active') = 'rejected' OR COALESCE(t.detection_status, 'confirmed') = 'rejected')
     AND EXISTS (SELECT 1 FROM json_each(?) j WHERE instr(lower(e.sender), j.value) > 0)
+`;
+
+/**
+ * BACKLOG-4175 (K1): email addresses of contacts on the user's NON-rejected
+ * deals. A contact removed from a deal (`removed_at` set) does not count for
+ * that deal. Bound: user id.
+ */
+export const DEAL_CONTACT_EMAILS_SQL = sql`
+  SELECT DISTINCT ce.email AS email
+  FROM transaction_contacts tc
+  JOIN transactions t ON t.id = tc.transaction_id
+  JOIN contact_emails ce ON ce.contact_id = tc.contact_id
+  WHERE t.user_id = ? AND tc.removed_at IS NULL
+    AND NOT (COALESCE(t.status, 'active') = 'rejected' OR COALESCE(t.detection_status, 'confirmed') = 'rejected')
+`;
+
+/**
+ * BACKLOG-4175 (census): every message linked to one of the user's NON-rejected
+ * deals through `communications.email_id`, once per message. Every email link
+ * sets email_id; thread-only links (no email / message id) are written for text
+ * threads only. Bound: user id (x2).
+ */
+export const DEAL_LINKED_EMAILS_SQL = sql`
+  SELECT e.id AS id, e.sender AS sender, e.source AS source, e.account_id AS account_id,
+         e.labels AS labels, e.bulk_mail_headers AS bulk_mail_headers
+  FROM emails e
+  WHERE e.user_id = ? AND e.id IN (
+    SELECT c.email_id
+    FROM communications c
+    JOIN transactions t ON t.id = c.transaction_id
+    WHERE t.user_id = ? AND c.email_id IS NOT NULL
+      AND NOT (COALESCE(t.status, 'active') = 'rejected' OR COALESCE(t.detection_status, 'confirmed') = 'rejected')
+  )
+  ORDER BY e.id
 `;
 
 // ---------------------------------------------------------------------------

@@ -46,7 +46,8 @@ jest.mock("../../logService", () => {
 import { runBaseline0, type LearnRunResult } from "../baselineRunner";
 import { answerCleanupQuestion, nextCleanupQuestion } from "../cleanupPass";
 import { addressKey } from "../dealMatcher";
-import { countSeedLinkedToDeals, formatCopyBlock, isHiddenBySeed, scoreRun, visibleEmailIds } from "../scoring";
+import { countSeedLinkedToDeals, formatCopyBlock, isHiddenBySenderRules, scoreRun, visibleEmailIds } from "../scoring";
+import { EMPTY_CENSUS } from "../../__tests__/helpers/emptyCensus-4175";
 import {
   listAnswerKeyTransactions,
   listAnsweredBulkWithText,
@@ -108,7 +109,7 @@ function detectionOf(r: LearnRunResult, emailId: string) {
 }
 
 function score(r: LearnRunResult) {
-  return scoreRun(r, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER), 0);
+  return scoreRun(r, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER), 0, EMPTY_CENSUS);
 }
 
 const A1 = "4175 Canarytest Way, Testville, ZZ 00000";
@@ -306,7 +307,7 @@ describe("RV answers per rules version in the Copy block", () => {
     expect(answerCleanupQuestion(USER, r, detectionOf(r, ordinary).id, "yes")).toBe(true);
     const block = formatCopyBlock(score(r));
     expect(block).toContain("Answers by rules version: v1 deal 1 / bulk 1, v2 deal 1 / bulk 0");
-    expect(block).toContain("Hidden by sender seeds (sender rules v1): 0 deals, 0 detections, 0 emails");
+    expect(block).toContain("Hidden by live sender rules (sender rules v1): 0 deals, 0 detections, 0 emails");
   });
 });
 
@@ -317,7 +318,7 @@ describe("MODE learnQuestions = measure records seeds and hides nothing", () => 
     const d = detectionOf(r, seed);
     expect(d.seedEmailIds).toEqual([seed]);
     expect(r.seedHidesQuestions).toBe(false);
-    expect(isHiddenBySeed(r, d)).toBe(false);
+    expect(isHiddenBySenderRules(r, d)).toBe(false);
     expect(visibleEmailIds(r, d)).toEqual([seed]);
     expect(nextCleanupQuestion(USER, r)?.detectionId).toBe(d.id);
     const sc = score(r);

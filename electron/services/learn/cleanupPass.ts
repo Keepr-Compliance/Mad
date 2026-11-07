@@ -9,12 +9,12 @@
 import { listAnswerKeyTransactions, listDealAnswers, recordDealAnswer } from "../db/learnModeDbService";
 import { LEARN_RULES, type DealAnswer } from "./learnRules";
 import type { LearnRunResult } from "./baselineRunner";
-import { cleanupCandidates, isHiddenBySeed, type CleanupCandidate } from "./scoring";
+import { cleanupCandidates, isHiddenBySenderRules, type CleanupCandidate } from "./scoring";
 
 /** BACKLOG-4175: is this candidate's detection all exact-seed mail (not asked)? */
 function hiddenCandidate(run: LearnRunResult, c: CleanupCandidate): boolean {
   const d = run.detections.find((x) => x.id === c.detectionId);
-  return d !== undefined && isHiddenBySeed(run, d);
+  return d !== undefined && isHiddenBySenderRules(run, d);
 }
 
 export function isDealAnswer(value: unknown): value is DealAnswer {

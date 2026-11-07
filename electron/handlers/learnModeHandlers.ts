@@ -60,6 +60,8 @@ import {
   listAnsweredBulkWithText,
   listAnswers,
   listDealAnswers,
+  listDealContactEmails,
+  listDealLinkedEmails,
   listDealLinkedSeedCandidates,
   previewAttachments,
   previewEmailForBulkRow,
@@ -84,11 +86,12 @@ import { answerBulkQuestion, ensureBulkSample, nextBulkQuestion } from "../servi
 import {
   countSeedLinkedToDeals,
   formatCopyBlock,
-  isHiddenBySeed,
+  isHiddenBySenderRules,
   scoreRun,
   visibleEmailIds,
 } from "../services/learn/scoring";
 import { BUNDLED_SENDER_RULES } from "../utils/senderFilter/bundledRules";
+import { buildKeepSets } from "../utils/senderFilter/senderFilter";
 import { LEARN_RULES } from "../services/learn/learnRules";
 import {
   LearnAttachmentOpenArgsSchema,
@@ -291,7 +294,7 @@ function cleanupPreview(
   const run = getLastRun(userId);
   if (!run) return fail(LEARN_NO_RUN_ERROR);
   const detection = run.detections.find((d) => d.id === detectionId);
-  if (!detection || isHiddenBySeed(run, detection)) return fail(LEARN_NOT_IN_SET_ERROR);
+  if (!detection || isHiddenBySenderRules(run, detection)) return fail(LEARN_NOT_IN_SET_ERROR);
   const ids = visibleEmailIds(run, detection);
   const rows = previewEmailsByIds(userId, ids, LEARN_PREVIEW_MAX_EMAILS);
   const attachments = previewAttachments(userId, rows.map((r) => r.id));
@@ -469,6 +472,11 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
           listDealLinkedSeedCandidates(g.userId, BUNDLED_SENDER_RULES.suppress.exactAddresses),
           BUNDLED_SENDER_RULES,
         ),
+        {
+          rules: BUNDLED_SENDER_RULES,
+          keep: buildKeepSets(listDealContactEmails(g.userId), BUNDLED_SENDER_RULES),
+          linked: listDealLinkedEmails(g.userId),
+        },
       );
       return { success: true, score, copyBlock: formatCopyBlock(score) };
     }),
