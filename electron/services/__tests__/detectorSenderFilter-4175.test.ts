@@ -211,7 +211,12 @@ describe("shipped modes: the detector drops ONLY the exact seeds", () => {
         gmailPromotions: { mode: "measure", matched: 1 },
       }),
     });
-    expect(JSON.stringify(log)).not.toContain("@");
+    expect(Object.keys(log).sort()).toEqual(["bySignal", "evaluated", "keptBy", "liveDropped", "senderRulesVersion"]);
+    const serialized = JSON.stringify(log);
+    expect(serialized).not.toContain("@");
+    for (const forbidden of ["list.example", "shop.example", SEED().split("@")[1], USER]) {
+      expect(serialized).not.toContain(forbidden);
+    }
   });
 
   it("the measure count moves when a measure-mode match is added", async () => {
