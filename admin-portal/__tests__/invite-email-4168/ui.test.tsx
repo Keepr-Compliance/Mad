@@ -40,18 +40,30 @@ describe('resend failure', () => {
 });
 
 describe('invite with emailSent false', () => {
-  async function submit(emailSent: boolean) {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ success: true, pending: true, outcome: 'invited', emailSent }), { status: 200 })));
+  async function submit(emailSent: boolean, pending = true) {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ success: true, pending: true, outcome: pending ? 'invited' : 'assigned', ...(pending ? { pending: true } : {}), emailSent }), { status: 200 })));
     render(<AddInternalUserForm onSuccess={vi.fn()} roles={[ROLE] as never} />);
     fireEvent.click(screen.getByRole('button', { name: /add user/i }));
     fireEvent.change(screen.getByLabelText('Email address'), { target: { value: 'person@example.test' } });
     fireEvent.submit(screen.getByLabelText('Email address').closest('form')!);
-    await waitFor(() => expect(screen.getByText(/Invitation created/)).toBeTruthy());
+    await waitFor(() => expect(screen.getByText(pending ? /Invitation created/ : /Successfully added/)).toBeTruthy());
   }
 
   it('shows a warning that the email was not sent', async () => {
     await submit(false);
     expect(screen.getByRole('alert').textContent).toMatch(/invite email could not be sent/i);
+  });
+
+  it('pending invitation: the warning points to Resend', async () => {
+    await submit(false, true);
+    expect(screen.getByRole('alert').textContent).toMatch(/Resend/);
+  });
+
+  it('assigned account: no Resend hint, says they can sign in', async () => {
+    await submit(false, false);
+    const text = screen.getByRole('alert').textContent ?? '';
+    expect(text).not.toMatch(/Resend/);
+    expect(text).toMatch(/sign in at the admin portal/);
   });
 
   it('shows no warning when the email was sent', async () => {

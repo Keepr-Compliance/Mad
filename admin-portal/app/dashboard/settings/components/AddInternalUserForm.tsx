@@ -123,7 +123,11 @@ export function AddInternalUserForm({ onSuccess, roles }: AddInternalUserFormPro
       setSelectedSlug(defaultSlug);
       onSuccess();
       if (json.emailSent === false) {
-        setEmailWarning('The invite email could not be sent. Use Resend in the table to try again.');
+        setEmailWarning(
+          json.pending
+            ? 'The invite email could not be sent. Use Resend in the table to try again.'
+            : 'The notification email could not be sent. They can sign in at the admin portal.'
+        );
       } else {
         setTimeout(() => setIsOpen(false), 2000);
       }
