@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * KanbanQuickAdd -- Inline "Add item" input at the bottom of a column.
+ * KanbanQuickAdd -- Inline "Add item" (or custom label) input at the bottom of a column.
  *
  * Shows an "Add item" button that expands to a title input + submit.
  * Calls the onAdd callback with the entered title on submit.
@@ -14,9 +14,11 @@ interface KanbanQuickAddProps {
   onAdd: (title: string) => Promise<void>;
   /** If provided, component renders in always-open mode (no toggle button). */
   onCancel?: () => void;
+  /** Button text. Defaults to "Add item". */
+  label?: string;
 }
 
-export function KanbanQuickAdd({ onAdd, onCancel }: KanbanQuickAddProps) {
+export function KanbanQuickAdd({ onAdd, onCancel, label = 'Add item' }: KanbanQuickAddProps) {
   const [isOpen, setIsOpen] = useState(!!onCancel);
   const [title, setTitle] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -43,7 +45,7 @@ export function KanbanQuickAdd({ onAdd, onCancel }: KanbanQuickAddProps) {
         className="mt-2 flex items-center gap-1 text-sm text-gray-400 hover:text-gray-600 py-1 w-full"
       >
         <Plus className="h-4 w-4" />
-        Add item
+        {label}
       </button>
     );
   }

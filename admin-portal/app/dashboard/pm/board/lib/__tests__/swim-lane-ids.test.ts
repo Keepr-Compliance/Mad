@@ -11,6 +11,7 @@ import {
   buildSwimLaneCellId,
   parseSwimLaneCellId,
   SWIM_LANE_NEW_PROJECT_ID,
+  NO_EPIC_KEY,
 } from '../swim-lane-ids';
 
 describe('SWIM_LANE_NEW_PROJECT_ID', () => {
@@ -138,5 +139,18 @@ describe('parseSwimLaneCellId', () => {
     expect(
       parseSwimLaneCellId('cell:dim=assignee:key=user:42:status=completed')
     ).toBeNull();
+  });
+});
+
+describe('epic dimension (BACKLOG-4176)', () => {
+  it('round-trips an epic row cell', () => {
+    const id = buildSwimLaneCellId('epic', 'epic-a', 'testing');
+    expect(id).toBe('cell:dim=epic:key=epic-a:status=testing');
+    expect(parseSwimLaneCellId(id)).toEqual({ dimension: 'epic', groupKey: 'epic-a', status: 'testing' });
+  });
+
+  it('round-trips the No epic row cell', () => {
+    const id = buildSwimLaneCellId('epic', NO_EPIC_KEY, 'pending');
+    expect(parseSwimLaneCellId(id)).toEqual({ dimension: 'epic', groupKey: NO_EPIC_KEY, status: 'pending' });
   });
 });
