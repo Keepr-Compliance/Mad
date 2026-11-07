@@ -214,7 +214,7 @@ describe("BACKLOG-3675 online: live entitlement read", () => {
     entitledLive();
     expect(await service.getExportDecision(TX)).toEqual({ allowed: true, mode: "full" });
     const { enforceExportGate } = require("../exportGate");
-    await expect(enforceExportGate({ transactionId: TX, userId: USER_A, communications: [] })).resolves.not.toThrow();
+    await expect(enforceExportGate({ transactionId: TX, communications: [] })).resolves.not.toThrow();
   });
 
   it("C2/P15 entitled ⇒ no debit RPC, no unlock-cache write, no quote/balance fetch", async () => {
@@ -255,7 +255,7 @@ describe("BACKLOG-3675 online: live entitlement read", () => {
     const d = await service.getExportDecision(TX);
     expect(d).toEqual({ allowed: false, mode: "none", reason: "no_unlock" });
     const { enforceExportGate } = require("../exportGate");
-    await expect(enforceExportGate({ transactionId: TX, userId: USER_A, communications: [] })).rejects.toThrow(/PAYWALL_LOCKED/);
+    await expect(enforceExportGate({ transactionId: TX, communications: [] })).rejects.toThrow(/PAYWALL_LOCKED/);
   });
 
   it("C3 a hanging read times out after 5 s ⇒ locked", async () => {
@@ -296,7 +296,7 @@ describe("BACKLOG-3675 online: live entitlement read", () => {
     entitledLive();
     const { enforceExportGate } = require("../exportGate");
     for (const tx of ["tx-b1", "tx-b2", "tx-b3"]) {
-      await expect(enforceExportGate({ transactionId: tx, userId: USER_A, communications: [] })).resolves.not.toThrow();
+      await expect(enforceExportGate({ transactionId: tx, communications: [] })).resolves.not.toThrow();
     }
     expect(mockMembership).toHaveBeenCalledTimes(1);
     expect(orgFeatureCalls()).toBe(1);
@@ -362,7 +362,7 @@ describe("BACKLOG-3675 offline pass", () => {
     mockIsOnline.mockReturnValue(false);
     expect(await service.getExportDecision(TX)).toEqual({ allowed: true, mode: "full" });
     const { enforceExportGate } = require("../exportGate");
-    await expect(enforceExportGate({ transactionId: TX, userId: USER_A, communications: [] })).resolves.not.toThrow();
+    await expect(enforceExportGate({ transactionId: TX, communications: [] })).resolves.not.toThrow();
   });
 
   it("P6 control: offline, no pass ⇒ locked offline_uncached", async () => {
@@ -445,7 +445,7 @@ describe("BACKLOG-3675 offline pass", () => {
     mockIsOnline.mockReturnValue(false);
     const { enforceExportGate } = require("../exportGate");
     for (const tx of ["tx-o1", "tx-o2", "tx-o3"]) {
-      await expect(enforceExportGate({ transactionId: tx, userId: USER_A, communications: [] })).resolves.not.toThrow();
+      await expect(enforceExportGate({ transactionId: tx, communications: [] })).resolves.not.toThrow();
     }
   });
 
@@ -690,7 +690,7 @@ describe("BACKLOG-3951 credit unlock and the membership standing", () => {
     expect(await service.getExportDecision(TX)).toEqual({ allowed: true, mode: "full" });
     const { enforceExportGate } = require("../exportGate");
     await expect(
-      enforceExportGate({ transactionId: TX, userId: USER_A, communications: [] }),
+      enforceExportGate({ transactionId: TX, communications: [] }),
     ).resolves.not.toThrow();
     expect(mockStandingRows).not.toHaveBeenCalled();
   });

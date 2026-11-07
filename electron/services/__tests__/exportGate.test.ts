@@ -67,29 +67,37 @@ describe("enforceExportGate — bypass guard (Option A)", () => {
   it("BYPASS ATTEMPT: locked (mode none) ⇒ throws PaywallLockedError with code, NO comms leaked", async () => {
     mockGetExportDecision.mockResolvedValue({ allowed: false, mode: "none", reason: "no_unlock" });
     await expect(
-      enforceExportGate({ transactionId: TX, userId: USER, communications: COMMS }),
+      enforceExportGate({ transactionId: TX, communications: COMMS }),
     ).rejects.toBeInstanceOf(PaywallLockedError);
 
     // And the error message carries the machine-readable code for the renderer.
     await expect(
-      enforceExportGate({ transactionId: TX, userId: USER, communications: COMMS }),
+      enforceExportGate({ transactionId: TX, communications: COMMS }),
     ).rejects.toThrow(new RegExp(PAYWALL_LOCKED_ERROR));
   });
 
   it("unlocked ⇒ mode full, returns communications UNCHANGED (no sample reduction)", async () => {
     mockGetExportDecision.mockResolvedValue({ allowed: true, mode: "full" });
-    const r = await enforceExportGate({ transactionId: TX, userId: USER, communications: COMMS });
+    const r = await enforceExportGate({ transactionId: TX, communications: COMMS });
     expect(r.decision.mode).toBe("full");
     expect(r.communications).toBe(COMMS); // same reference — full record
   });
 
   it("asks the entitlement service for the decision by transaction id only", async () => {
     mockGetExportDecision.mockResolvedValue({ allowed: true, mode: "full" });
-    await enforceExportGate({ transactionId: TX, userId: USER, communications: COMMS });
+    await enforceExportGate({ transactionId: TX, communications: COMMS });
     // Option A: no full-transaction-list fetch; the decision is transaction-scoped.
     expect(mockGetExportDecision).toHaveBeenCalledWith(TX);
   });
 });
+
+// BACKLOG-2081 Part 3: type-level control, never called. enforceExportGate no
+// longer takes userId; if the param comes back (even as optional), this
+// directive becomes unused and `npm run type-check:tests` fails with TS2578.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+const _userIdRemoved = () =>
+  // @ts-expect-error BACKLOG-2081: enforceExportGate no longer takes userId
+  enforceExportGate({ transactionId: TX, userId: USER, communications: COMMS });
 
 describe("emitExportCompleted", () => {
   it("emits export-completed with mode + format; never throws on analytics failure", async () => {
