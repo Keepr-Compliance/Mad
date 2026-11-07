@@ -22,8 +22,10 @@ export async function canViewUserDetail(
   });
   if (hasUsersView === true) return true;
 
-  const { data: canSeeRequester } = await supabase.rpc('support_can_view_requester', {
+  // Fails closed: an error or a null answer (for example the function is absent) denies.
+  const { data: canSeeRequester, error } = await supabase.rpc('support_can_view_requester', {
     p_user_id: targetUserId,
   });
+  if (error) return false;
   return canSeeRequester === true;
 }

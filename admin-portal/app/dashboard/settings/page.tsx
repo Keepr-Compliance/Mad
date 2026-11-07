@@ -55,12 +55,12 @@ export interface AdminPermission {
 }
 
 /**
- * BACKLOG-4145: reads through the service client. The users embed is not readable with the
- * caller's session for every settings viewer, so this runs only after the page's permission
- * check below has passed.
+ * BACKLOG-4145: the caller passes the client. internal_users.view holders get the service client
+ * (the users embed is not readable with every viewer's session); everyone else keeps their own
+ * session read. Called only after the page's permission check below has passed.
  */
 async function getInternalUsers(
-  supabase: ReturnType<typeof createServiceClient>
+  supabase: ReturnType<typeof createServiceClient> | Awaited<ReturnType<typeof createClient>>
 ): Promise<InternalUser[]> {
   const { data, error } = await supabase
     .from('internal_roles')
@@ -228,11 +228,16 @@ export default async function SettingsPage() {
     redirect('/dashboard?error=insufficient_permissions');
   }
 
-  // BACKLOG-4145: created only after the permission check above.
-  const serviceSupabase = createServiceClient();
+  // BACKLOG-4145: the service client only for internal_users.view holders, created after the
+  // checks above. audit.view / roles.view-only viewers keep their own session read.
+  const { data: canViewInternalUsers } = await supabase.rpc('has_permission', {
+    check_user_id: user.id,
+    required_permission: 'internal_users.view',
+  });
+  const internalUsersClient = canViewInternalUsers === true ? createServiceClient() : supabase;
 
   const [internalUsers, currentUserId, roles, permissions, pendingInvitations] = await Promise.all([
-    getInternalUsers(serviceSupabase),
+    getInternalUsers(internalUsersClient),
     getCurrentUserId(),
     getRoles(),
     getPermissions(),

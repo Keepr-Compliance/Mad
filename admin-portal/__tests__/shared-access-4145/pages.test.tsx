@@ -13,6 +13,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const log: string[] = [];
 const perms: Record<string, boolean> = {};
 const rpcAnswers: Record<string, unknown> = {};
+const rpcErrors: Record<string, boolean> = {};
 
 class Stop extends Error {}
 
@@ -30,15 +31,15 @@ function chain(tag: string, table: string) {
     plans: { id: 'p1', name: 'Plan', tier: 'team', is_active: true, created_at: '2026-01-01', updated_at: '2026-01-01' },
     users: { id: 'target', email: 'invented@example.test' },
   };
-  // The session client's internal_roles read is the caller's own .single() row; the service
-  // client's is the settings list.
-  const data = tag === 'service' && table === 'internal_roles' ? [] : rows[table] ?? [];
-  const result = { data, error: null };
+  // internal_roles: .single() is the caller's own-role check; without it, the settings list.
+  let single = false;
   const c: Record<string, unknown> = {};
-  for (const m of ['select', 'eq', 'order', 'single', 'in', 'limit', 'not', 'is']) c[m] = () => c;
+  for (const m of ['select', 'eq', 'order', 'in', 'limit', 'not', 'is']) c[m] = () => c;
+  c.single = () => { single = true; return c; };
   c.then = (res: (v: unknown) => unknown) => {
     log.push(`${tag}.from:${table}`);
-    return Promise.resolve(result).then(res);
+    const data = table === 'internal_roles' && !single ? [] : rows[table] ?? [];
+    return Promise.resolve({ data, error: null }).then(res);
   };
   return c;
 }
@@ -53,6 +54,7 @@ function client(tag: string) {
         const keys = args.permission_keys as string[];
         return { data: keys.some((k) => perms[k] === true), error: null };
       }
+      if (rpcErrors[fn]) return { data: null, error: { message: 'invented error' } };
       return { data: rpcAnswers[fn] ?? null, error: null };
     },
     auth: { getUser: async () => ({ data: { user: { id: 'caller' } } }) },
@@ -100,6 +102,7 @@ beforeEach(() => {
   log.length = 0;
   for (const k of Object.keys(perms)) delete perms[k];
   for (const k of Object.keys(rpcAnswers)) delete rpcAnswers[k];
+  for (const k of Object.keys(rpcErrors)) delete rpcErrors[k];
 });
 
 describe('settings page (BACKLOG-4145)', () => {
@@ -119,6 +122,20 @@ describe('settings page (BACKLOG-4145)', () => {
   it('denied: redirected and the service client is never created', async () => {
     expect(await render()).toBe('stopped');
     expect(log).toContain('redirect:/dashboard?error=insufficient_permissions');
+    expect(log).not.toContain('service.create');
+  });
+
+  it('audit.view only: internal users stay on the own-session read, no service client', async () => {
+    perms['audit.view'] = true;
+    expect(await render()).toBe('rendered');
+    expect(log).not.toContain('service.create');
+    expect(log).not.toContain('service.from:internal_roles');
+    expect(log.filter((e) => e === 'session.from:internal_roles').length).toBe(2);
+  });
+
+  it('roles.view only: same, no service client', async () => {
+    perms['roles.view'] = true;
+    expect(await render()).toBe('rendered');
     expect(log).not.toContain('service.create');
   });
 });
@@ -164,6 +181,20 @@ describe('users/[id] page (BACKLOG-4145)', () => {
     expect(log).toContain('session.rpc:support_can_view_requester');
     expect(log).not.toContain('notFound');
     expect(idx('service.create')).toBeGreaterThan(idx('session.rpc:support_can_view_requester'));
+  });
+
+  it('requester check answers null: notFound, no service client', async () => {
+    expect(await render()).toBe('stopped');
+    expect(log).toContain('session.rpc:support_can_view_requester');
+    expect(log).toContain('notFound');
+    expect(log).not.toContain('service.create');
+  });
+
+  it('requester check errors (even with a truthy payload absent): notFound, no service client', async () => {
+    rpcErrors.support_can_view_requester = true;
+    expect(await render()).toBe('stopped');
+    expect(log).toContain('notFound');
+    expect(log).not.toContain('service.create');
   });
 
   it('neither rule: notFound, and no service client or billing read', async () => {
