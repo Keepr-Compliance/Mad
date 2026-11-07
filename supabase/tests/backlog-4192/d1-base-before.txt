@@ -1,0 +1,60 @@
+=== base
+{
+ "upd_anon": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "acl_board": "{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+ "acl_update": "{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+ "board_anon": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "upd_norole": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "upd_service": {
+  "ok": false,
+  "msg": "Invalid status: pending_uat. Must be one of: pending, in_progress, testing, completed, blocked, deferred, obsolete, reopened, waiting_for_user",
+  "sqlstate": "P0001"
+ },
+ "board_norole": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "upd_internal": {
+  "ok": false,
+  "msg": "Invalid status: pending_uat. Must be one of: pending, in_progress, testing, completed, blocked, deferred, obsolete, reopened, waiting_for_user",
+  "sqlstate": "P0001"
+ },
+ "board_service": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "board_internal": {
+  "ok": true,
+  "out": {
+   "keys": [
+    "blocked",
+    "completed",
+    "deferred",
+    "in_progress",
+    "obsolete",
+    "pending",
+    "reopened",
+    "testing",
+    "waiting_for_user"
+   ],
+   "total": 0,
+   "has_key": false,
+   "pending_uat_count": 0,
+   "item_in_pending_uat": false
+  }
+ }
+}

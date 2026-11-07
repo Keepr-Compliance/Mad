@@ -128,7 +128,7 @@ describe('EpicLaneGrid', () => {
       );
     expect(ids('epic-lane-epic-b')).toContain('cell:dim=epic:key=epic-b:status=testing');
     expect(ids('epic-lane-none')).toContain('cell:dim=epic:key=No Epic:status=pending');
-    expect(ids('epic-lane-epic-b')).toHaveLength(9);
+    expect(ids('epic-lane-epic-b')).toHaveLength(10); // one per COLUMN_ORDER status, incl. pending_uat (BACKLOG-4192)
   });
 
   it('epics never render as cards', () => {
@@ -144,7 +144,7 @@ describe('EpicLaneGrid', () => {
     const { onQuickAdd, onAddEpic } = renderEpicGrid();
     const row = screen.getByTestId('epic-lane-epic-b');
     const adds = within(row).getAllByRole('button', { name: 'Add backlog' });
-    expect(adds).toHaveLength(9);
+    expect(adds).toHaveLength(10);
     expect(screen.queryByRole('button', { name: 'Add item' })).toBeNull();
     fireEvent.click(adds[2]); // testing column
     fireEvent.change(within(row).getByPlaceholderText('Enter title...'), { target: { value: 'Card' } });

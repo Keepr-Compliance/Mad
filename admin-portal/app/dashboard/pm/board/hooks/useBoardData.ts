@@ -51,7 +51,7 @@ const BOARD_STATE_KEY = 'pm-board-state';
 
 function emptyBoardColumns(): BoardColumns {
   return {
-    pending: [], in_progress: [], testing: [], completed: [],
+    pending: [], in_progress: [], testing: [], pending_uat: [], completed: [],
     blocked: [], deferred: [], obsolete: [], reopened: [], waiting_for_user: [],
   };
 }
@@ -241,6 +241,7 @@ export function useBoardData() {
           pending: items.filter((i) => i.status === 'pending'),
           in_progress: items.filter((i) => i.status === 'in_progress'),
           testing: items.filter((i) => i.status === 'testing'),
+          pending_uat: items.filter((i) => i.status === 'pending_uat'),
           completed: items.filter((i) => i.status === 'completed'),
           blocked: items.filter((i) => i.status === 'blocked'),
           deferred: items.filter((i) => i.status === 'deferred'),

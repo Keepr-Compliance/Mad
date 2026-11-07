@@ -42,6 +42,7 @@ const VALID_STATUSES = new Set<string>([
   'pending',
   'in_progress',
   'testing',
+  'pending_uat',
   'waiting_for_user',
   'completed',
   'blocked',
