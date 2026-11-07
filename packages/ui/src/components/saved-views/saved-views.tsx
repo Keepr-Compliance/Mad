@@ -122,6 +122,20 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
   const rowRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
   /** What to focus after the next render: a row index, the save button, or the name field. */
   const pendingFocus = React.useRef<number | 'save' | 'saveCard' | 'name' | 'leaveCancel' | null>(null);
+  /** Each row's Delete button, by row index (BACKLOG-4095). */
+  const deleteRefs = React.useRef<(HTMLButtonElement | null)[]>([]);
+  /**
+   * The latest row whose Delete was pressed (BACKLOG-4095): its id, the ids
+   * listed before and after it at that moment, the list it was pressed on,
+   * and whether the rows have been re-read (hidden or replaced) since.
+   */
+  const removedRow = React.useRef<{
+    id: string;
+    before: string[];
+    after: string[];
+    list: V[];
+    reread: boolean;
+  } | null>(null);
 
   const unavailable = views === null;
   const list = React.useMemo(() => ownFirst(views ?? []), [views]);
@@ -161,7 +175,46 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
     }
   });
 
+  // After a Delete (BACKLOG-4095). Nothing happens while the rows are hidden
+  // (loading or unavailable): the store re-reads after every write, and its
+  // loading render unmounts every row.
+  // - The view left the list: focus the first row still listed that came
+  //   after it, else the last one before it, else the trigger.
+  // - The rows were re-read and the view is still listed: if focus was lost
+  //   with the hidden rows, put it back on that row's Delete. With a
+  //   `writeError` the delete was refused, so forget it; without one it may
+  //   still be pending (another write's re-read), so keep it.
+  const rowsReady = !unavailable && !loading;
+  React.useEffect(() => {
+    const removed = removedRow.current;
+    if (removed === null) return;
+    if (!rowsReady) {
+      removed.reread = true;
+      return;
+    }
+    if (list !== removed.list) removed.reread = true;
+    const at = list.findIndex((v) => v.id === removed.id);
+    if (at >= 0) {
+      if (!removed.reread) return;
+      const active = document.activeElement;
+      if (active === null || active === document.body) deleteRefs.current[at]?.focus();
+      if (writeError) removedRow.current = null;
+      return;
+    }
+    removedRow.current = null;
+    const ids = new Set(list.map((v) => v.id));
+    const nextId = removed.after.find((id) => ids.has(id)) ?? [...removed.before].reverse().find((id) => ids.has(id));
+    if (nextId === undefined) {
+      triggerRef.current?.focus();
+      return;
+    }
+    const next = list.findIndex((v) => v.id === nextId);
+    setRovingIndex(next);
+    rowRefs.current[next]?.focus();
+  }, [list, rowsReady, writeError]);
+
   const close = React.useCallback((restoreFocus: boolean) => {
+    removedRow.current = null;
     setOpen(false);
     setSaveMode(null);
     setName('');
@@ -428,9 +481,22 @@ export function SavedViews<V extends SavedViewItem, F = unknown, M = unknown>({
         {own ? (
           <button
             type="button"
+            ref={(node) => {
+              deleteRefs.current[index] = node;
+            }}
             aria-label={`Delete ${view.name}`}
             title={`Delete ${view.name}`}
-            onClick={() => onDelete(view)}
+            onClick={() => {
+              const ids = list.map((v) => v.id);
+              removedRow.current = {
+                id: view.id,
+                before: ids.slice(0, index),
+                after: ids.slice(index + 1),
+                list,
+                reread: false,
+              };
+              onDelete(view);
+            }}
             className="p-1 text-gray-400 hover:text-danger-600"
           >
             <X className="h-3.5 w-3.5" aria-hidden="true" />
