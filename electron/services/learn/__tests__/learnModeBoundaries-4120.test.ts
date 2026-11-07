@@ -219,3 +219,30 @@ describe("P4 learn tables appear in no sync / export / upload path", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+// BACKLOG-4175 PR4 (RS20): Learn's scoring and run code carry the run's rule
+// set as data; they never reach the store or the download. (supabaseService is
+// already in this closure before PR4, so it is not asserted here.)
+describe("RS20 (4175 PR4) the rule-set store and download stay outside Learn's services", () => {
+  const LEARN_ONLY = LEARN_ENTRIES.filter((f) => !/handlers|schemas|preload/.test(path.relative(ELECTRON, f)));
+  const relOf = (s: Set<string>) => [...s].map((f) => path.relative(REPO, f).split(path.sep).join("/"));
+
+  it("positive control: from learnModeHandlers the walk reaches the store, not the refresher", () => {
+    const reached = relOf(closure([path.join(ELECTRON, "handlers", "learnModeHandlers.ts")]));
+    expect(reached).toContain("electron/services/senderRuleSetStore.ts");
+    expect(reached).not.toContain("electron/services/senderRuleSetRefresher.ts");
+  });
+
+  it("services/learn/* and the two learn db modules reach neither the store nor the refresher", () => {
+    expect(LEARN_ONLY.length).toBeGreaterThanOrEqual(11);
+    const reached = relOf(closure(LEARN_ONLY));
+    expect(reached).toContain("electron/services/learn/scoring.ts");
+    expect(
+      reached.filter((f) => /senderRuleSetStore|senderRuleSetRefresher/.test(f)),
+    ).toEqual([]);
+  });
+
+  it("no Learn entry (handlers included) reaches the refresher", () => {
+    expect(relOf(closure(LEARN_ENTRIES)).filter((f) => f.includes("senderRuleSetRefresher"))).toEqual([]);
+  });
+});
