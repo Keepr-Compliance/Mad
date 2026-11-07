@@ -53,7 +53,8 @@ def sql_controls():
 
 def jest_parity():
     import tempfile
-    rep = tempfile.mktemp(suffix='.json')
+    # P3511_TMP: a writable directory for the jest report when the default temp dir is not (sandboxes)
+    rep = tempfile.mktemp(suffix='.json', dir=os.environ.get('P3511_TMP') or None)
     out = sh('npx', 'jest', '__tests__/reports-3511', '--json', '--outputFile=' + rep, '--silent', cwd=os.path.join(root, 'broker-portal'))
     try:
         d = json.load(open(rep))
