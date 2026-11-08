@@ -1,0 +1,26 @@
+BACKLOG-4145 M2 harness results, keepr-test, 2026-11-08. Details: pm_comments on BACKLOG-4145.
+
+Pre-state (production and keepr-test identical): 31 policies on the 13 targets, md5 83dce5f806f9431a9eead58e9f61ea89;
+159 public policies.
+
+== run.sh (rollback -> fixtures + P0 -> migration x2 -> controls), migration commit d0b346188
+total=36 pass=36 fail=0
+== applied on keepr-test (kt-sql <migration> + schema_migrations row 20261108160000), run.sh --applied
+total=37 pass=37 fail=0   (K0: applied state equals the file)
+target digest after apply: 31 / c4a120f9ee51bfe114e74def4c5071a3; public policies 159
+fixtures left: 0; auth.users grant left: none; disabled triggers: 0
+
+== 4144 M2 harness (backlog-4144-rls/run.sh) after apply
+total=49 pass=49 fail=0
+== 4145 M1 harness after apply: 28/29; K2 (M1 rollback) now stops on the M2 policies that use
+   support_my_requester_ids(): expected, the M2 rollback runs first.
+
+== mutate.py all
+PERMISSIVE_beside        numstat=2/1  total=36 fail=15  C1,C1b,C2 users_edit,C2 support_view,C5,C5b,C5d,C6,C7,C9,C10,C10b,C10c,C11,K3
+KEY_requester_email      numstat=1/0  total=36 fail=3   C5,C5b,C6
+NO_own_row_devices       numstat=1/2  total=36 fail=2   C3,C4
+INTERNAL_exclusion_kept  numstat=1/1  total=36 fail=2   C8,C10b
+ORGS_missing_users_view  numstat=1/1  total=36 fail=1   C2_users_view
+LICENSES_unaltered       numstat=0/6  total=36 fail=18  C1,C1b,C2 (10 rows),C5,C5d,C6,C10b,C11
+TYPO_permission_key      numstat=1/1  total=36 fail=2   C2_users_view,K1
+every mutation: MUTATION APPLIED printed, RESTORED clean=True
