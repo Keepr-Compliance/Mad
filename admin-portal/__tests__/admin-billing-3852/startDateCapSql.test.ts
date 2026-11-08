@@ -54,7 +54,8 @@ describe('_billing_save_deal start-date cap (BACKLOG-4033)', () => {
     const locked = existing.indexOf("'start_date_locked'");
     const past = existing.indexOf("'start_date_past'");
     const far = existing.indexOf("'start_date_too_far'");
-    const blockEnd = existing.indexOf('UPDATE public.org_deals SET');
+    // the IS DISTINCT FROM block closes at the first 4-space `END IF;` after it opens
+    const blockEnd = existing.indexOf('\n    END IF;\n', distinct);
     expect(distinct).toBeGreaterThan(-1);
     expect(distinct < locked && locked < past && past < far && far < blockEnd).toBe(true);
   });
