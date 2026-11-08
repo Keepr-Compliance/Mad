@@ -451,6 +451,19 @@ maybe(`BACKLOG-4180 contact add / Clients & Contacts on a large store (probe, si
     );
     // let any background work the handlers kicked off (get-all's backfill) finish before the next mode
     await new Promise((r) => setTimeout(r, 200));
+
+    // BACKLOG-4180 PR 2: the scheduler's full pass with nothing new (what runs after a sync or the
+    // get-available reconciliation). Before PR 2 it re-ran the backfill over every contact.
+    logMock.info.mockClear();
+    await measure(`${mode} scheduler pass, nothing new`, () =>
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      require("../../services/contactLinkingScheduler").runContactLinkingNow(USER),
+    );
+    const lines = logMock.info.mock.calls.map((c: unknown[]) => String(c[0]));
+    process.stderr.write(
+      `[4180 ${SIZE}] control: ${lines.find((s: string) => s.startsWith("[Contacts] linking pass:")) ?? "NO PASS LINE"}; ` +
+        `backfill line -> ${lines.find((s: string) => /re-ran backfill|Backfilled/.test(s)) ?? "(none)"}\n`,
+    );
   }
 
   it("pool NOT ready (main-thread fallback)", async () => {

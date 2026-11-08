@@ -156,7 +156,7 @@ import { ORIGIN_MATCH_METHOD } from "./db/contactIdentitySchemaSql";
 import { isContactOnFrozenTransaction } from "./db/frozenContactDbService";
 import { buildEvidence, sourceRecordName } from "./contactLinkEvidence";
 import { tryGatherIdentityEvidence } from "./contactIdentityEvidence";
-import { applyLinkedSourceValues } from "./contactSourceValues";
+import { applyLinkedSourceValuesOrThrow } from "./contactSourceValues";
 import { toMatchingKey } from "../utils/phoneNormalization";
 import { realContactName } from "../utils/contactDisplayLabel";
 import { nameSupportForAutoLink } from "../utils/autoLinkNameGuard";
@@ -253,7 +253,18 @@ export type LinkResolution =
       matchedOn: "email" | "phone";
     }
   /** No id match and no content match — a genuinely new person. */
-  | { outcome: "no_match"; sourceRecordId: string };
+  | { outcome: "no_match"; sourceRecordId: string }
+  /**
+   * BACKLOG-4180 — a content match whose link and value copy were rolled back
+   * together because the copy failed. Nothing was written; the next pass
+   * retries it.
+   */
+  | {
+      outcome: "link_failed";
+      sourceRecordId: string;
+      candidateContactId: string;
+      matchedOn: "email" | "phone";
+    };
 
 export interface LinkRunSummary {
   /** Records that resolved by source id — the healthy steady state. */
@@ -270,6 +281,8 @@ export interface LinkRunSummary {
    * tell a question nobody has been asked from one that has been answered.
    */
   declined: number;
+  /** BACKLOG-4180 — content matches whose link + copy rolled back. */
+  linkFailed: number;
   resolutions: LinkResolution[];
 }
 
@@ -811,15 +824,6 @@ export function resolveSourceRecord(
     };
   }
 
-  createLink({
-    userId,
-    contactId: candidateContactId,
-    sourceType,
-    sourceRecordId,
-    matchMethod: matchedOn,
-    externalUuid,
-  });
-
   // BACKLOG-2423 — the copy happens AT THE LINK, not at the next app start.
   //
   // The session-gated `backfillImportedContactsFromExternal` used to be the only
@@ -827,7 +831,32 @@ export function resolveSourceRecord(
   // user per session. A source linked after it had run contributed nothing until
   // the next launch: a transaction created in that window swept an incomplete
   // address set, and nothing re-swept when the addresses later arrived.
-  applyLinkedSourceValues(userId, candidateContactId);
+  //
+  // BACKLOG-4180 (ACID) — the link and its copy are ONE unit. Nested inside the
+  // slice transaction of `linkSourceRecords` this is a SAVEPOINT: a failed copy
+  // rolls back this record's link and any values it had copied, and the slice
+  // carries on with the next record. Before, the swallowing wrapper let a link
+  // commit without its values.
+  try {
+    dbTransaction(() => {
+      createLink({
+        userId,
+        contactId: candidateContactId,
+        sourceType,
+        sourceRecordId,
+        matchMethod: matchedOn,
+        externalUuid,
+      });
+      applyLinkedSourceValuesOrThrow(userId, candidateContactId);
+    });
+  } catch (error) {
+    logService.warn(
+      `[Contacts] a ${sourceType} link was rolled back because copying its values failed: ${error}`,
+      "Contacts",
+    );
+    // The index is NOT told: nothing about this contact changed.
+    return { outcome: "link_failed", sourceRecordId, candidateContactId, matchedOn };
+  }
 
   // BACKLOG-2620 — THE COPY ABOVE JUST CHANGED A RELATION THE INDEX IS BUILT
   // FROM, and a later record in this same pass may legitimately match this
@@ -835,6 +864,8 @@ export function resolveSourceRecord(
   // that came for free; with a batch index it has to be said. This is the only
   // in-pass invalidation there is: linking writes crosswalk rows, review-queue
   // rows and these values, and only these values are read by the index.
+  // BACKLOG-4180: only after the savepoint above committed, so a rolled-back
+  // copy never reaches the index (it re-reads this contact's rows from the DB).
   index.noteContactValuesChanged(candidateContactId);
 
   return { outcome: "linked", contactId: candidateContactId, sourceRecordId, method: matchedOn };
@@ -867,6 +898,7 @@ export function linkSourceRecords(
     flagged: 0,
     unmatched: 0,
     declined: 0,
+    linkFailed: 0,
     resolutions: [],
   };
 
@@ -893,6 +925,9 @@ export function linkSourceRecords(
             break;
           case "declined":
             summary.declined++;
+            break;
+          case "link_failed":
+            summary.linkFailed++;
             break;
           default:
             summary.unmatched++;
@@ -998,6 +1033,7 @@ export function linkExternalContactsForContacts(
     flagged: 0,
     unmatched: 0,
     declined: 0,
+    linkFailed: 0,
     resolutions: [],
   };
   if (ids.length === 0) return empty;
