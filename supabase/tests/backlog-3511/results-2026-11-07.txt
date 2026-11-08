@@ -1,0 +1,51 @@
+BACKLOG-3511 broker half, keepr-test, 2026-11-07
+
+controls --with-migration (rollback, migration x2): total=23 pass=23 fail=0
+controls against the applied migration (20261108190000 + ledger row): total=23 pass=23 fail=0
+
+mutations (mutate.py all):
+== AGENT_gets_all (supabase/migrations/20261108190000_backlog_3511_broker_report_readers.sql)
+MUTATION APPLIED numstat=1/1
+  - WHEN m.role = 'agent' THEN 'own'
+  + WHEN m.role = 'agent' THEN 'all'
+  SQL   total=23 pass=20 fail=3 reds=H1_helper_sweep,R4_agent_A_reads_own_only,R5_agent_B_reads_own_only
+  JEST  total=12 pass=7 fail=5 reds=C3 report roles: portal = public.org_report_scope › role "": portal scope = SQL scope | C3 report roles: portal = public.org_report_scope › role "Admin": portal scope = SQL scope | C3 report roles: portal = public.org_report_scope › role "agent": portal scope = SQL scope | C3 report roles: portal = public.org_report_scope › role "owner": portal scope = SQL scope | C3 report roles: portal = public.org_report_scope › the agent role is 'agent'
+RESTORED clean=True
+== ACTIVE_skipped (supabase/migrations/20261108190000_backlog_3511_broker_report_readers.sql)
+MUTATION APPLIED numstat=0/1
+  - AND m.license_status = 'active'
+  SQL   total=23 pass=17 fail=6 reds=H1_helper_sweep,R6_inactive_agent_expired_reads_0,R6_inactive_agent_pending_reads_0,R6_inactive_agent_suspended_reads_0,R6_inactive_agent_unassigned_reads_0,R7_suspended_broker_reads_0
+  JEST  total=12 pass=11 fail=1 reds=C3 report roles: portal = public.org_report_scope › active means the statuses the portal treats as granting
+RESTORED clean=True
+== ORG_skipped (supabase/migrations/20261108190000_backlog_3511_broker_report_readers.sql)
+MUTATION APPLIED numstat=1/2
+  - WHERE m.organization_id = p_org
+  - AND m.user_id = (SELECT auth.uid())
+  + WHERE m.user_id = (SELECT auth.uid())
+  SQL   total=23 pass=17 fail=6 reds=H1_helper_sweep,R1_broker_reads_all_of_org,R2_admin_reads_all_of_org,R3_it_admin_reads_all_of_org,R4_agent_A_reads_own_only,R8_other_org_broker_reads_0_of_O1
+  JEST  total=12 pass=12 fail=0 reds=-
+RESTORED clean=True
+== PERSONAL_skipped (supabase/migrations/20261108190000_backlog_3511_broker_report_readers.sql)
+MUTATION APPLIED numstat=0/1
+  - AND o.personal_owner_user_id IS NULL
+  SQL   total=23 pass=20 fail=3 reds=H1_helper_sweep,R10_personal_owner_agent_reads_0,R9_personal_owner_admin_reads_0
+  JEST  total=12 pass=12 fail=0 reds=-
+RESTORED clean=True
+== OWN_policy_no_uid (supabase/tests/backlog-3511/prelude.sql)
+MUTATION APPLIED numstat=1/1
+  - USING (public.org_report_scope(organization_id) = 'own' AND agent_user_id = (SELECT auth.uid()));
+  + USING (public.org_report_scope(organization_id) = 'own');
+  SQL   total=23 pass=21 fail=2 reds=R4_agent_A_reads_own_only,R5_agent_B_reads_own_only
+RESTORED clean=True
+== ANON_keeps_execute (supabase/migrations/20261108190000_backlog_3511_broker_report_readers.sql)
+MUTATION APPLIED numstat=0/1
+  - REVOKE EXECUTE ON FUNCTION public.org_report_scope(uuid) FROM PUBLIC, anon;
+  SQL   total=23 pass=19 fail=4 reds=G1_anon_no_execute,G2_public_no_execute,G4_anon_call_refused,K1_rollback_restores_and_reapplies
+  JEST  total=12 pass=12 fail=0 reds=-
+RESTORED clean=True
+== TS_no_it_admin (packages/shared/src/billing/planRule.ts)
+MUTATION APPLIED numstat=1/1
+  - export const FULL_PORTAL_ROLES = ['broker', 'admin', 'it_admin'] as const;
+  + export const FULL_PORTAL_ROLES = ['broker', 'admin'] as const;
+  JEST  total=12 pass=10 fail=2 reds=C3 report roles: portal = public.org_report_scope › full-role set: same set | C3 report roles: portal = public.org_report_scope › role "it_admin": portal scope = SQL scope
+RESTORED clean=True

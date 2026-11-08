@@ -14,6 +14,18 @@
  * PR-1 registers NO report: the section ships invisible. The first report is
  * registered by a later PR, together with the database policy that bounds its
  * rows.
+ *
+ * Report authors (BACKLOG-3511): bound every report source's rows with the
+ * helper public.org_report_scope(org) from migration 20261108190000 and these
+ * two SELECT policies, nothing wider:
+ *   org-wide : USING (public.org_report_scope(organization_id) = 'all')
+ *   own rows : USING (public.org_report_scope(organization_id) = 'own'
+ *                     AND agent_user_id = (SELECT auth.uid()))
+ * The helper answers 'all' for an active broker / admin / it_admin and 'own'
+ * for an active agent of a brokerage organization, NULL otherwise. The page's
+ * 'own' filter only narrows inside that bound. Harness and controls:
+ * supabase/tests/backlog-3511/. The helper's role list is compared to
+ * FULL_PORTAL_ROLES by __tests__/reports-3511/roleParity.test.ts.
  */
 
 import type { FULL_PORTAL_ROLES } from '@keepr/shared';
