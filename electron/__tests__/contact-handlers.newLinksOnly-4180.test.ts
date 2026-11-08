@@ -561,6 +561,28 @@ describe("C7 first pass per session backfills with no write in the session", () 
 });
 
 // ---------------------------------------------------------------------------
+// C8 — a source write that lands while a backfill is awaiting stays owed
+// ---------------------------------------------------------------------------
+describe("C8 a write during the worker-planned backfill is not marked done", () => {
+  it("the next pass backfills again", async () => {
+    poolReady = true;
+    externalContactDb.fullSync(USER, [{ recordId: "r-1", name: "Pat Riverton", emails: [], phones: [A] }] as any);
+    addLinkedContact("c-1", "Pat Riverton", "macos", "r-1", [], [A]);
+    // The worker plans while a sync writes an edit (main is free during the await).
+    (queryContacts as jest.Mock).mockImplementationOnce(async () => {
+      externalContactDb.fullSync(USER, [{ recordId: "r-1", name: "Pat Riverton", emails: [], phones: [A, B] }] as any);
+      return [];
+    });
+
+    await settle(); // backfill #1, edit lands mid-way and arms another pass
+    expect(backfills()).toBe(1);
+
+    await settle(); // the edit's pass: no new link, but the edit is owed
+    expect(backfills()).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // R2.3 — the main-thread fallback marks the user backfilled
 // ---------------------------------------------------------------------------
 describe("R2.3 pool down: Clients & Contacts opened twice backfills once", () => {
