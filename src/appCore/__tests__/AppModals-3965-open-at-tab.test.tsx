@@ -79,7 +79,6 @@ function Host() {
     currentUser: { id: "user-1", email: "a@example.com" },
     authProvider: "google",
     isDatabaseInitialized: true,
-    pendingOAuthData: null,
     needsTermsAcceptance: false,
     appPath: "/Applications/Keepr.app",
     closeTransactions: () => setShowTransactions(false),

@@ -6,7 +6,7 @@
  */
 
 import type { Subscription } from "../../../electron/types/models";
-import type { PendingOAuthData, DeepLinkAuthData } from "../../components/Login";
+import type { DeepLinkAuthData } from "../../components/Login";
 import type { SyncStatus } from "../../hooks/useAutoRefresh";
 
 // Application navigation steps
@@ -145,8 +145,7 @@ export interface AppStateMachine {
   // New user flow state
   isNewUserFlow: boolean;
 
-  // Pending data (pre-DB flow)
-  pendingOAuthData: PendingOAuthData | null;
+  // Pending onboarding answers (held until the database is ready)
   pendingOnboardingData: PendingOnboardingData;
 
   // Modal state (grouped)
@@ -234,7 +233,6 @@ export interface AppStateMachine {
     subscriptionData: Subscription | undefined,
     isNewUser: boolean,
   ) => void;
-  handleLoginPending: (oauthData: PendingOAuthData) => void;
   /** TASK-1507B: Handle deep link auth success from browser OAuth flow */
   handleDeepLinkAuthSuccess: (data: DeepLinkAuthData) => void;
   handleLogout: () => Promise<void>;
@@ -315,4 +313,4 @@ export interface AppStateMachine {
 }
 
 // Re-export types needed by consumers
-export type { Subscription, PendingOAuthData, DeepLinkAuthData };
+export type { Subscription, DeepLinkAuthData };

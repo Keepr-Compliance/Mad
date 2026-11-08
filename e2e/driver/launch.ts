@@ -1,8 +1,14 @@
 import { _electron, chromium } from '@playwright/test';
 import type { Browser, ElectronApplication, Page } from '@playwright/test';
 import { type ChildProcess, spawn } from 'node:child_process';
-import { buildArgs, isDefaultProfile } from './launchArgs';
-import { resolveBuiltMainEntry, resolveElectronBinary } from './paths';
+import {
+  buildArgs,
+  buildUnpackagedLaunch,
+  isDefaultProfile,
+  launchedIsolationFailure,
+  readLaunchedIsolation,
+} from './launchArgs';
+import { resolveBuiltMainEntry } from './paths';
 import { resolveCdpPort, terminateChildTree, waitForChildPort } from './process';
 import type { AppDriverOptions, LaunchStrategy } from './types';
 
@@ -74,18 +80,28 @@ export async function launchUnpackaged(opts: AppDriverOptions): Promise<LaunchHa
         "It must NEVER run against the real persisted keepr profile.",
     );
   }
-  const electronBin = resolveElectronBinary(opts.repoRoot, opts.executablePath);
+  // BACKLOG-4054: through the sandbox wrapper on macOS, with the -r isolation guard before '.'.
+  const { executablePath, args, userDataDir } = buildUnpackagedLaunch(opts.repoRoot, opts);
   // Assert the built entry exists so a missing `npm run build` fails fast (→ launch-failed).
   resolveBuiltMainEntry(opts.repoRoot);
-  const { args, userDataDir } = buildArgs(opts);
   const app = await _electron.launch({
-    executablePath: electronBin,
-    // '.' → resolves package.json "main" → the built dist-electron/main.js.
-    args: ['.', ...args],
+    executablePath,
+    // '-r guard' then '.' → resolves package.json "main" → the built dist-electron/main.js.
+    args,
     cwd: opts.repoRoot,
     timeout: opts.launchTimeoutMs ?? DEFAULT_TIMEOUT,
     env: { ...process.env, KEEPR_E2E: '1', ...(opts.env ?? {}) } as Record<string, string>,
   });
+  // BACKLOG-4054: after the app's own startup, re-check isolation in the main process and that the
+  // -r guard actually ran (a misplaced -r would otherwise start the app unguarded, silently).
+  // readLaunchedIsolation is closure-free (Playwright serialises it); it also reads the main.log path
+  // the guard redirected into the profile.
+  const seen = await app.evaluate(readLaunchedIsolation);
+  const failure = launchedIsolationFailure({ requested: userDataDir, ...seen });
+  if (failure) {
+    await app.close().catch(() => undefined);
+    throw new Error(`[keepr-e2e] ${failure}`);
+  }
   const page = await app.firstWindow({ timeout: opts.launchTimeoutMs ?? DEFAULT_TIMEOUT });
   return {
     strategy: 'unpackaged',

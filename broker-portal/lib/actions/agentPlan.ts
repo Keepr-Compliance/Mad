@@ -22,7 +22,7 @@ import { getStripe } from '@/lib/stripe';
 import { ensureStripeCustomer, getStripeCustomer, isModeAllowedForUser } from '@/lib/billing/customers';
 import { getAgentPrices, isNonStripeOverride } from '@/lib/billing/agentPlan';
 import { prepareAgentCheckout } from '@/lib/billing/agentCheckout';
-import { AGENT_KIND, type AgentInterval } from '@/lib/billing/agentCheckoutParams';
+import { AGENT_KIND, checkoutTrialEnd, type AgentInterval, type CheckoutTrialEnd } from '@/lib/billing/agentCheckoutParams';
 import { handleSubscriptionCheckout, stripeId, writeThroughCancelFlag, type BillingContext } from '@/lib/billing/sync';
 import {
   agentContext,
@@ -54,6 +54,14 @@ export async function startAgentCheckout(interval: AgentInterval = 'month'): Pro
   if (isNonStripeOverride(view.override)) return { error: SUPPORT_GRANT };
   // Subscribe lives on the Agent card of "Choose a plan" (block 2), not on "Your plan".
   if (!caps.blocks.includes('choose_plan') || !caps.canPurchase) return { error: NOT_NOW };
+  // BACKLOG-4088: a live trial subscribes with billing starting at the trial end (the desktop
+  // route's rule). A trial with no readable end date is refused, never charged now.
+  let trial: CheckoutTrialEnd | undefined;
+  if (view.state === 'trial') {
+    const t = checkoutTrialEnd(view.trialEndsOn, Date.now());
+    if (!t) return { error: NOT_NOW };
+    trial = t;
+  }
 
   if (!(await isModeAllowedForUser(service, userId, mode))) return { error: MODE_REFUSED };
 
@@ -72,6 +80,7 @@ export async function startAgentCheckout(interval: AgentInterval = 'month'): Pro
     organizationId: view.personalOrganizationId,
     interval: choice,
     returnBase: await returnBase(),
+    ...(trial ? { trial } : {}),
   });
   if ('refused' in result) return { error: result.refused };
   // Outside any try/catch: redirect() works by throwing.

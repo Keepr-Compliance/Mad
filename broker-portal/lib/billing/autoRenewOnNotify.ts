@@ -42,8 +42,8 @@ function int(v: unknown): number | null {
   return typeof v === 'number' && Number.isInteger(v) ? v : null;
 }
 
-/** The deal version of the newest auto-renew change for the org, or null when there is none. */
-async function newestAutoRenewVersion(service: ServiceClient, org: string): Promise<number | null> {
+/** The deal version of the newest auto-renew change for the org, or null when there is none (also used by autoRenewOffNotify.ts). */
+export async function newestAutoRenewVersion(service: ServiceClient, org: string): Promise<number | null> {
   const { data, error } = await service
     .from('billing_change_log')
     .select('detail')

@@ -2,11 +2,13 @@
  * BACKLOG-2771 — every export entry point routes through the ONE resolver.
  *
  * `exportPlan.test.ts` pins what the resolver decides. This suite pins that the
- * three IPC channels actually ASK it, rather than deciding for themselves:
+ * export IPC channels actually ASK it, rather than deciding for themselves:
  *
  *   - `transactions:export-folder`   (folder audit package)
  *   - `transactions:export-enhanced` (pdf / csv / excel / json / txt_eml)
- *   - `transactions:export-pdf`      (orphan channel, no renderer caller)
+ *
+ * (A third, path-taking PDF channel with no renderer caller was covered here
+ * until BACKLOG-3302 deleted it.)
  *
  * ## The control this file exists for
  *
@@ -22,9 +24,6 @@
  * and a midnight text that is the next day. Measured: with a single
  * late-evening text, reverting the boundary to the old UTC-midnight rule left
  * this suite entirely green under TZ=UTC.
- * (`transactions:export-pdf` requests no window at all — by design, since it
- * takes no options — so it is asserted for full-record pass-through instead of
- * a boundary it does not have.)
  *
  * The export services are mocked, so what these tests observe is the PLAN each
  * handler hands its renderer — which is exactly the decision under test.
@@ -86,7 +85,6 @@ jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: {
     updateTransaction: jest.fn().mockResolvedValue(undefined),
-    stampFirstExportedAt: jest.fn().mockReturnValue(true),
   },
 }));
 
@@ -266,17 +264,6 @@ describe("BACKLOG-2771: every export entry point resolves its include set once",
       expect(ids(enhancedPlan().communications)).toEqual([IN_WINDOW_EMAIL.id as string]);
     });
 
-    it("the orphan export-pdf channel requests no window and exports the full record", async () => {
-      // `window.api.transactions.exportPDF` has no caller in src/ and the channel
-      // takes no options, so it states an empty request rather than inheriting
-      // one. Behavior is unchanged from when it had no filtering at all.
-      await handlers.get("transactions:export-pdf")(event, TX_ID, "/tmp/out.pdf");
-
-      expect(mockExportToCombinedPDF).toHaveBeenCalledTimes(1);
-      expect(ids(mockExportToCombinedPDF.mock.calls[0][1] as Communication[])).toEqual(
-        ids(ALL_COMMS),
-      );
-    });
   });
 
   describe("content selection speaks ONE vocabulary", () => {
@@ -434,13 +421,6 @@ describe("BACKLOG-2771: every export entry point resolves its include set once",
 
       expect(enhancedPlan().writesAttachmentsToDisk).toBe(false);
       expect(enhancedPlan().attachmentComms).toEqual([]);
-    });
-
-    it("the orphan export-pdf channel", async () => {
-      await handlers.get("transactions:export-pdf")(event, TX_ID, "/tmp/out.pdf");
-      // This channel has no attachment phase at all; it renders the combined PDF
-      // only. Its plan says so rather than leaving it implicit.
-      expect(mockExportToCombinedPDF).toHaveBeenCalledTimes(1);
     });
 
     it("anti-vacuity: the same handlers DO select attachments when asked", async () => {

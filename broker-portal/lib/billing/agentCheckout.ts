@@ -29,6 +29,7 @@ import {
   isAgentSession,
   type AgentCheckoutOrigin,
   type AgentInterval,
+  type CheckoutTrialEnd,
 } from './agentCheckoutParams';
 
 export const ALREADY_HAVE_PLAN = 'You already have a plan. Refresh the page to see it.';
@@ -55,6 +56,8 @@ export async function prepareAgentCheckout(a: {
   returnBase: string;
   /** BACKLOG-3676: omitted for the website. */
   origin?: AgentCheckoutOrigin;
+  /** BACKLOG-4088: a caller in a live solo free trial; billing starts at its end. */
+  trial?: CheckoutTrialEnd;
 }): Promise<AgentCheckoutResult> {
   const { stripe, customerId } = a;
 
@@ -91,6 +94,8 @@ export async function prepareAgentCheckout(a: {
           s.metadata?.price_id === a.priceId &&
           // BACKLOG-3676: a session returns to where it was started; never reuse across website and desktop.
           (s.metadata?.origin ?? 'web') === (a.origin ?? 'web') &&
+          // BACKLOG-4088: same RAW trial end (missing = no trial); a session for another trial end is expired.
+          (s.metadata?.trial_end ?? null) === (a.trial ? String(a.trial.raw) : null) &&
           !!s.url
       );
   for (const s of open) {
@@ -108,6 +113,7 @@ export async function prepareAgentCheckout(a: {
       interval: a.interval,
       returnBase: a.returnBase,
       ...(a.origin ? { origin: a.origin } : {}),
+      ...(a.trial ? { trial: a.trial } : {}),
     }),
     {
       idempotencyKey: agentIdempotencyKey({
@@ -116,6 +122,7 @@ export async function prepareAgentCheckout(a: {
         interval: a.interval,
         anchorSessionId: anchor,
         ...(a.origin ? { origin: a.origin } : {}),
+        ...(a.trial ? { trialEndRaw: a.trial.raw } : {}),
       }),
     }
   );

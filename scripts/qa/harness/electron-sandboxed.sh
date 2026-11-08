@@ -22,6 +22,12 @@
 # Usage:
 #   scripts/qa/harness/electron-sandboxed.sh --use-mock-keychain --user-data-dir=<dir> <script.js> [args]
 #
+# Also the executable for every UNPACKAGED app launch (BACKLOG-4054): e2e/driver/launchArgs.ts
+# buildUnpackagedLaunch passes it to Playwright's _electron.launch, which prepends --inspect=0
+# --remote-debugging-port=0 and attaches by reading Electron's stderr. Because this script and
+# sandbox-exec both exec, Electron is the direct child and its stderr reaches Playwright unchanged.
+# NOT for ELECTRON_RUN_AS_NODE: node mode rejects the --no-sandbox switch below.
+#
 # Electron is resolved from this repository's node_modules. On non-macOS hosts there is no
 # sandbox-exec; the script execs Electron directly with the same arguments.
 set -euo pipefail

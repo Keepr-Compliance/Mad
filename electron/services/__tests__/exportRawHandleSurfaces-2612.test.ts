@@ -1,9 +1,9 @@
 /**
  * @jest-environment node
  *
- * BACKLOG-2612 — the OTHER export channels: combined PDF (channels
- * `transactions:export-pdf` / `export-enhanced`→pdf), the csv/json/eml/txt
- * variants, and the CCPA dump.
+ * BACKLOG-2612 — the OTHER export channels: combined PDF (channel
+ * `export-enhanced`→pdf; the path-taking PDF channel was deleted by
+ * BACKLOG-3302), the csv/json/eml/txt variants, and the CCPA dump.
  *
  * Two different pins:
  *
@@ -213,7 +213,7 @@ async function runEnhancedExport(format: "pdf" | "csv" | "json" | "txt_eml"): Pr
   );
 }
 
-describe("BACKLOG-2612 — combined PDF (channels export-pdf / export-enhanced→pdf)", () => {
+describe("BACKLOG-2612 — combined PDF (channel export-enhanced→pdf)", () => {
   test("the party section names exactly the two attached contacts with their own primary values", async () => {
     mockCapturedHtml.length = 0;
     await runEnhancedExport("pdf");
