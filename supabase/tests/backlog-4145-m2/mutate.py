@@ -48,6 +48,12 @@ MUT = {
                              "(t.requester_email = (( SELECT users.email FROM auth.users WHERE (users.id = ( SELECT auth.uid() AS uid))))::text)", 4)],
   # the five support policies left on the PUBLIC role list
   'ROLES_public_kept': [("  TO authenticated\n  USING (", "  USING (", 5)],
+  # backlog_links WITH CHECK left on the old internal-role check
+  'LINKS_with_check_old': [("  WITH CHECK (\n    (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.view']))\n  );\n",
+                            "  WITH CHECK (has_internal_role(( SELECT auth.uid() AS uid)));\n", 1)],
+  # backlog_links WITH CHECK clause missing (ALTER POLICY then keeps the previous one)
+  'LINKS_with_check_removed': [("  )\n  WITH CHECK (\n    (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.view']))\n  );\n",
+                                "  );\n", 1)],
   # a typo'd permission key
   'TYPO_permission_key': [("ARRAY['users.view', 'organizations.view']", "ARRAY['user.view', 'organizations.view']", 1)],
 }

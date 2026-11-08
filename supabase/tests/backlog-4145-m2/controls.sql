@@ -125,6 +125,24 @@ BEGIN
     || '/' || pg_temp.call_as(pg_temp.fx(5), format('SELECT to_jsonb(count(*)) FROM public.support_tickets WHERE id = %L', pg_temp.fx(307)));
   r := r || jsonb_build_object('C8b_internal_user_reads_ticket_carrying_their_email', pg_temp.pass(s = '1/0', s));
 
+  -- ================= C13: writes on support_ticket_backlog_links =================
+  -- authenticated holds SELECT, INSERT and DELETE on this table (no UPDATE; same on production), so
+  -- UPDATE is refused by the grant for every caller. INSERT reaches WITH CHECK; removal reaches USING.
+  BEGIN
+    s := pg_temp.call_as(pg_temp.fx(4), format('WITH i AS (INSERT INTO public.support_ticket_backlog_links (ticket_id, backlog_item_id, link_type) VALUES (%L, %L, ''related'') RETURNING 1) SELECT to_jsonb(count(*)) FROM i', pg_temp.fx(302), pg_temp.fx(401)))
+      || '|' || pg_temp.call_as(pg_temp.fx(4), format('WITH u AS (UPDATE public.support_ticket_backlog_links SET link_type = ''fix'' WHERE id = %L RETURNING 1) SELECT to_jsonb(count(*)) FROM u', pg_temp.fx(501)))
+      || '|' || pg_temp.call_as(pg_temp.fx(4), format('WITH d AS (DELETE FROM public.support_ticket_backlog_links WHERE id = %L RETURNING 1) SELECT to_jsonb(count(*)) FROM d', pg_temp.fx(501)))
+      || '|' || pg_temp.call_as(pg_temp.fx(3), format('WITH i AS (INSERT INTO public.support_ticket_backlog_links (ticket_id, backlog_item_id, link_type) VALUES (%L, %L, ''related'') RETURNING 1) SELECT to_jsonb(count(*)) FROM i', pg_temp.fx(302), pg_temp.fx(401)))
+      || '|' || pg_temp.call_as(pg_temp.fx(3), format('WITH u AS (UPDATE public.support_ticket_backlog_links SET link_type = ''fix'' WHERE id = %L RETURNING 1) SELECT to_jsonb(count(*)) FROM u', pg_temp.fx(501)))
+      || '|' || pg_temp.call_as(pg_temp.fx(3), format('WITH d AS (DELETE FROM public.support_ticket_backlog_links WHERE id = %L RETURNING 1) SELECT to_jsonb(count(*)) FROM d', pg_temp.fx(501)));
+    RAISE EXCEPTION 'RB_DONE' USING DETAIL = s;
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM = 'RB_DONE' THEN GET STACKED DIAGNOSTICS s = PG_EXCEPTION_DETAIL;
+    ELSE s := 'ERRRB ' || SQLSTATE || ' ' || left(SQLERRM, 80); END IF;
+  END;
+  r := r || jsonb_build_object('C13_backlog_links_writes_need_support_view',
+    pg_temp.pass(s LIKE 'ERR 42501 new row violates row-level security policy%|ERR 42501 permission denied for table support_ticket_backlog_links|0|1|ERR 42501 permission denied for table support_ticket_backlog_links|1', s));
+
   -- ================= C9: reassignment moves access inside one transaction =================
   BEGIN
     s := pg_temp.call_as(pg_temp.fx(2), format(usersq, pg_temp.fx(5)));
