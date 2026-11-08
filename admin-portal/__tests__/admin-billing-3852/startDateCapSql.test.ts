@@ -17,7 +17,8 @@ function code(sql: string): string {
   return sql.split('\n').map((l) => l.replace(/--.*$/, '')).join('\n');
 }
 
-const sql = code(readFileSync(path.join(MIGRATIONS, FILE), 'utf8'));
+// Windows checkouts convert the migration to CRLF; every slice below is keyed on '\n'.
+const sql = code(readFileSync(path.join(MIGRATIONS, FILE), 'utf8').replace(/\r\n/g, '\n'));
 const fnStart = sql.search(DEFINER);
 const fn = sql.slice(fnStart, sql.indexOf('$function$;', fnStart));
 const existing = fn.slice(fn.indexOf('IF FOUND THEN'), fn.indexOf('ELSE\n    IF p_expected_version IS NOT NULL'));
