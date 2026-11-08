@@ -49,6 +49,13 @@
   --border: 220 13% 91%; /* gray-200  #e5e7eb (card/divider borders) */
   --input: 216 12% 84%; /* gray-300  #d1d5db (control borders) */
 
+  /* Chart kit (BACKLOG-4208): validated data-viz steps, used as raw colours
+     (not HSL triplets) via var(--chart-N, #hex). Do not substitute a token. */
+  --chart-1: #2a78d6; /* blue: primary series */
+  --chart-2: #d03b3b; /* red: errors, failures */
+  --chart-3: #f59e0b; /* amber: cancelled, did not finish */
+  --chart-4: #1e3a8a; /* navy: inner series of a nested bar */
+
   /* Radius — rounded-lg = design-system card radius (0.5rem) */
   --radius: 0.5rem;
 }
