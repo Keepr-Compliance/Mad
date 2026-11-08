@@ -523,11 +523,9 @@ export async function handleInvoicePaid(ctx: BillingContext, invoiceId: string):
   if (!userId) return;
   // BACKLOG-3848 (SR R9): one receipt per paid Agent invoice, before and
   // whatever the grant below decides. Deduped per invoice; sent ~10 min later.
-  // BACKLOG-4088: none for the $0 trial-start invoice (nothing was paid).
-  if (!zeroTrialStart) {
-    const queued = await enqueueAgentReceipt(ctx.service, { mode: ctx.mode, userId, invoice });
-    log(ctx, `receipt for ${invoice.id}: ${queued}`);
-  }
+  // BACKLOG-4088: the $0 trial-start invoice gets none (enqueueAgentReceipt skips amount_paid 0).
+  const queued = await enqueueAgentReceipt(ctx.service, { mode: ctx.mode, userId, invoice });
+  log(ctx, `receipt for ${invoice.id}: ${queued}`);
   if (!invoice.billing_reason || !GRANT_REASONS.has(invoice.billing_reason)) {
     return log(ctx, `invoice ${invoice.id} reason ${invoice.billing_reason}; no grant`);
   }
