@@ -107,8 +107,19 @@ function isStringOrNull(v: unknown): v is string | null {
 }
 
 /**
+ * BACKLOG-4088: an optional ISO date-time, or null. Absent, null, a number or a
+ * non-date string all read as null; never a reason to reject the summary
+ * (an older portal sends neither trial field).
+ */
+function optionalIsoOrNull(v: unknown): string | null {
+  if (typeof v !== "string" || !/^\d{4}-\d{2}-\d{2}T/.test(v)) return null;
+  return Number.isFinite(Date.parse(v)) ? v : null;
+}
+
+/**
  * The DTO, field by field, or null when the body is not the portal's shape.
- * Only the six known fields are copied; anything else in the body is dropped.
+ * Only the known fields are copied; anything else in the body is dropped. The two
+ * BACKLOG-4088 trial dates are optional: absent or invalid reads as null.
  */
 export function parsePlanSummary(body: unknown): PlanSummary | null {
   if (!body || typeof body !== "object" || Array.isArray(body)) return null;
@@ -129,6 +140,8 @@ export function parsePlanSummary(body: unknown): PlanSummary | null {
     cancel_at_period_end: r.cancel_at_period_end,
     paymentIncomplete: r.paymentIncomplete,
     supportGrantEffective: r.supportGrantEffective,
+    trialEndsOn: optionalIsoOrNull(r.trialEndsOn),
+    subscriptionTrialEndsOn: optionalIsoOrNull(r.subscriptionTrialEndsOn),
   };
 }
 
