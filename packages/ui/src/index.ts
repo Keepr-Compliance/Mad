@@ -125,3 +125,6 @@ export type {
   OrgPeopleInviteResult,
   OrgPeopleUserRef,
 } from './components/org-people';
+
+// Chart kit (BACKLOG-4208) — static SVG bar charts (single | stacked | nested); see README "Chart kit".
+export * from './components/chart';
