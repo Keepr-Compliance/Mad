@@ -479,6 +479,11 @@ describe("C5 a failed copy rolls its link back", () => {
     expect(phonesOf("c-1")).toEqual([]);
     expect(linkOf("r-2")).toBe("c-2");
     expect(phonesOf("c-2")).toEqual([KEY_B]);
+    // The funnel line reports the rolled-back link (r-1).
+    const funnel = (logService.info as jest.Mock).mock.calls
+      .map((c) => String(c[0]))
+      .filter((l) => l.startsWith("[Contacts] links:"));
+    expect(funnel[funnel.length - 1]).toContain("-> link-failed 1 ->");
   });
 
   it("name rule (auto mode): the failing link is not written and not counted", async () => {
