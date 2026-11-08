@@ -149,4 +149,21 @@ describe("BACKLOG-4088 — free trial on the plan card", () => {
     expect(screen.getByText(/Unlimited exports\. Renews Nov 1[01], 2026\./)).toBeInTheDocument();
     expect(screen.queryByText(/Billing starts/)).not.toBeInTheDocument();
   });
+
+  it("the action button sits in a right-aligned row in every state that has one (trial, manage, plans)", async () => {
+    const states: Array<[PlanSummary | null, string]> = [
+      [TRIAL, "Subscribe"],
+      [SUBSCRIBED_IN_TRIAL, "Manage billing"],
+      [BASE, "Manage billing"],
+      [{ ...BASE, state: "none" } as PlanSummary, "See plans and billing"],
+    ];
+    for (const [summary, label] of states) {
+      setSummary(summary as PlanSummary);
+      const { unmount } = await renderCard();
+      const row = screen.getByTestId("plan-billing-action-row");
+      expect(row).toHaveClass("flex", "justify-end");
+      expect(row).toContainElement(screen.getByRole("button", { name: label }));
+      unmount();
+    }
+  });
 });

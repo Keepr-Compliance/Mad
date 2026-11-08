@@ -241,15 +241,17 @@ export function PlanBillingCard({ organizationId }: PlanBillingCardProps) {
       {(view.action || openFailed) && (
         <CardContent className="space-y-3">
           {view.action === "subscribe" && (
-            <Button
-              variant="primary"
-              size="sm"
-              isLoading={subscribing}
-              onClick={() => void subscribe()}
-              data-testid="plan-billing-subscribe"
-            >
-              Subscribe
-            </Button>
+            <div className="flex justify-end" data-testid="plan-billing-action-row">
+              <Button
+                variant="primary"
+                size="sm"
+                isLoading={subscribing}
+                onClick={() => void subscribe()}
+                data-testid="plan-billing-subscribe"
+              >
+                Subscribe
+              </Button>
+            </div>
           )}
           {view.action === "subscribe" && subscribeRefusal && (
             <AlertBanner variant="warning" data-testid="plan-billing-subscribe-refusal">
@@ -259,9 +261,11 @@ export function PlanBillingCard({ organizationId }: PlanBillingCardProps) {
             </AlertBanner>
           )}
           {(view.action === "manage" || view.action === "plans") && (
-            <Button variant="secondary" size="sm" isLoading={opening} onClick={() => void onOpen()}>
-              {view.action === "manage" ? "Manage billing" : "See plans and billing"}
-            </Button>
+            <div className="flex justify-end" data-testid="plan-billing-action-row">
+              <Button variant="secondary" size="sm" isLoading={opening} onClick={() => void onOpen()}>
+                {view.action === "manage" ? "Manage billing" : "See plans and billing"}
+              </Button>
+            </div>
           )}
           {openFailed && (
             <AlertBanner variant="warning">
