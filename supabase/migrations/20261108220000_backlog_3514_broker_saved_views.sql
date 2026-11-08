@@ -16,13 +16,19 @@
 -- Access model:
 --   * The table is reachable only through the four functions: RLS on, no
 --     policy, every table privilege revoked from anon and authenticated.
---   * Each function checks, in this order: a signed-in caller; the caller's
---     report scope in the view's organization (org_report_scope, which is
---     NULL for non-members, inactive members and personal organizations);
---     the broker_reports feature of that organization; ownership
---     (user_id = auth.uid()); then the inputs (key format, filters size,
---     name length). On update, remove and set-default the organization is
---     the ROW's organization, never the argument.
+--   * Check order, per path:
+--       list, and save of a NEW view: signed-in caller -> the caller's report
+--         scope in p_org (org_report_scope: NULL for non-members, inactive
+--         members and personal organizations) -> the broker_reports feature
+--         of p_org -> ownership (list reads user_id = auth.uid() only; an
+--         insert writes auth.uid()) -> inputs (key format, filters size,
+--         metric size, name length).
+--       update, remove, set-default of a view: signed-in caller -> row
+--         lookup by (id, auth.uid()), so ownership comes first because the
+--         row's organization cannot be known without reading the row -> scope
+--         in the ROW's organization, never the argument -> feature of that
+--         organization -> inputs.
+--     Every refusal raises the same text, so the order is not observable.
 --   * Every refusal raises the same text: 'Saved view not found'.
 --   * A member who leaves keeps their rows; the scope check hides them, and
 --     they return when the membership is active again.
@@ -30,7 +36,11 @@
 --     (trigger), so no update can move a view into another organization.
 --   * At most 5 pinned views per (organization, user, report). The count runs
 --     under a transaction lock keyed on that triple, so two tabs cannot both
---     count 4 and both pin. A pinned view must carry a metric.
+--     count 4 and both pin. A pinned view must carry a metric. Set-default
+--     takes the same lock, so two tabs choosing different defaults run one
+--     after the other instead of colliding on the one-default index. The
+--     lock is always taken BEFORE any row lock, in both functions, so the
+--     two cannot wait on each other.
 --   * Separate from public.report_saved_views (admin portal): those functions
 --     are keyed on user + report key only, so one table would mix portals for
 --     a user who is both internal staff and a brokerage member.
@@ -188,8 +198,7 @@ BEGIN
   IF p_id IS NOT NULL THEN
     SELECT v.organization_id, v.report_key INTO v_org, v_key
       FROM public.broker_report_saved_views v
-     WHERE v.id = p_id AND v.user_id = v_uid
-       FOR UPDATE;
+     WHERE v.id = p_id AND v.user_id = v_uid;
     IF v_org IS NULL THEN
       RAISE EXCEPTION 'Saved view not found';
     END IF;
@@ -219,6 +228,18 @@ BEGIN
     PERFORM pg_advisory_xact_lock(
       hashtextextended('broker_report_saved_views:' || v_org::text || ':' || v_uid::text || ':' || v_key, 3514)
     ) /*PIN_LOCK*/;
+  END IF;
+
+  -- Row lock after the transaction lock (never before it). Owner, org and key
+  -- are fixed after insert, so the lookup above still names this row.
+  IF p_id IS NOT NULL THEN
+    PERFORM 1 FROM public.broker_report_saved_views v WHERE v.id = p_id AND v.user_id = v_uid FOR UPDATE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Saved view not found';
+    END IF;
+  END IF;
+
+  IF v_pinned THEN
     SELECT count(*) INTO v_n
       FROM public.broker_report_saved_views
      WHERE organization_id = v_org AND user_id = v_uid AND report_key = v_key
@@ -295,8 +316,7 @@ BEGIN
   IF p_id IS NOT NULL THEN
     SELECT v.organization_id, v.report_key INTO v_org, v_key
       FROM public.broker_report_saved_views v
-     WHERE v.id = p_id AND v.user_id = v_uid
-       FOR UPDATE;
+     WHERE v.id = p_id AND v.user_id = v_uid;
     IF v_org IS NULL THEN
       RAISE EXCEPTION 'Saved view not found';
     END IF;
@@ -307,6 +327,19 @@ BEGIN
 
   IF NOT public._broker_report_views_gate(v_org /*DEFAULT_ORG*/) OR NOT public._broker_report_views_key_ok(v_key) THEN
     RAISE EXCEPTION 'Saved view not found';
+  END IF;
+
+  -- The pin lock, so a second tab waits here and then sees the first tab's
+  -- default (and clears it) instead of hitting the one-default index.
+  PERFORM pg_advisory_xact_lock(
+    hashtextextended('broker_report_saved_views:' || v_org::text || ':' || v_uid::text || ':' || v_key, 3514)
+  ) /*DEFAULT_LOCK*/;
+
+  IF p_id IS NOT NULL THEN
+    PERFORM 1 FROM public.broker_report_saved_views v WHERE v.id = p_id AND v.user_id = v_uid FOR UPDATE;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Saved view not found';
+    END IF;
   END IF;
 
   UPDATE public.broker_report_saved_views

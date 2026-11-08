@@ -30,6 +30,10 @@ PIN_LOCK = ("    PERFORM pg_advisory_xact_lock(\n"
             "      hashtextextended('broker_report_saved_views:' || v_org::text || ':' || v_uid::text || ':' || v_key, 3514)\n"
             "    ) /*PIN_LOCK*/;\n")
 
+DEFAULT_LOCK = ("  PERFORM pg_advisory_xact_lock(\n"
+                "    hashtextextended('broker_report_saved_views:' || v_org::text || ':' || v_uid::text || ':' || v_key, 3514)\n"
+                "  ) /*DEFAULT_LOCK*/;\n")
+
 # mode: (target, [(old, new, expected match count)])
 MUT = {
   # update gates on the argument org instead of the row's org
@@ -52,6 +56,10 @@ MUT = {
   'DEGRADE_throws': (DEG, [("dropped.push(`filter ${key}`) /*STRIP_UNKNOWN_FILTER*/;", "throw new Error(`unknown filter ${key}`);", 1)]),
   # anon (via PUBLIC) keeps EXECUTE on the list function
   'ANON_keeps_execute': (MIG, [("REVOKE EXECUTE ON FUNCTION public.broker_report_list_views(uuid, text) FROM PUBLIC, anon;\n", "", 1)]),
+  # set-default checks scope only (the feature check is skipped there)
+  'DEFAULT_feature_skipped': (MIG, [("public._broker_report_views_gate(v_org /*DEFAULT_ORG*/)", "(public.org_report_scope(v_org) IS NOT NULL)", 1)]),
+  # set-default runs without the lock
+  'DEFAULT_no_lock': (MIG, [(DEFAULT_LOCK, "", 1)]),
   # the pin count runs without the lock
   'PIN_no_lock': (MIG, [(PIN_LOCK, "", 1)]),
 }

@@ -63,6 +63,13 @@ BEGIN
   r := r || jsonb_build_object('C5b_feature_off_list', pg_temp.pass(s LIKE nf, s));
   s := pg_temp.call_as(pg_temp.fx(18), pg_temp.q_save(105, 'pipeline', 'x', false, 906));
   r := r || jsonb_build_object('C5c_feature_off_update_own', pg_temp.pass(s LIKE nf AND pg_temp.row_of(906) = 'T/pipeline/team view', s));
+  s := pg_temp.call_as(pg_temp.fx(18), pg_temp.q_def(105, 'pipeline', 906));
+  r := r || jsonb_build_object('C5d_feature_off_default_own', pg_temp.pass(s LIKE nf
+    AND NOT (SELECT is_default FROM public.broker_report_saved_views WHERE id = pg_temp.fx(906)), s));
+  s := pg_temp.call_as(pg_temp.fx(18), pg_temp.q_def(105, 'pipeline', NULL));
+  r := r || jsonb_build_object('C5e_feature_off_clear_default', pg_temp.pass(s LIKE nf, s));
+  s := pg_temp.call_as(pg_temp.fx(18), pg_temp.q_del(105, 906));
+  r := r || jsonb_build_object('C5f_feature_off_remove_own', pg_temp.pass(s LIKE nf AND pg_temp.row_of(906) <> 'gone', s));
 
   -- ================= C6 who may not use it at all; it_admin may =================
   s := pg_temp.call_as(pg_temp.fx(11), pg_temp.q_save(103, 'pipeline', 'x', false, NULL));
@@ -149,7 +156,14 @@ BEGIN
   r := r || jsonb_build_object('C12f_one_refusal_text', pg_temp.pass(a = b AND b = c AND c = d AND a LIKE nf, a || ' | ' || b || ' | ' || c || ' | ' || d));
 
   -- ================= C13 default: one per owner and report =================
+  -- set-default takes the pin lock for (org, user, report); user 1 has taken no lock on it so far
+  k := hashtextextended('broker_report_saved_views:' || pg_temp.fx(101)::text || ':' || pg_temp.fx(1)::text || ':pipeline', 3514);
+  a := (SELECT count(*)::text FROM pg_locks WHERE pid = pg_backend_pid() AND locktype = 'advisory'
+          AND classid = ((k >> 32) & 4294967295)::oid AND objid = (k & 4294967295)::oid AND objsubid = 1);
   s := pg_temp.call_as(pg_temp.fx(1), pg_temp.q_def(101, 'pipeline', 901));
+  b := (SELECT count(*)::text FROM pg_locks WHERE pid = pg_backend_pid() AND locktype = 'advisory'
+          AND classid = ((k >> 32) & 4294967295)::oid AND objid = (k & 4294967295)::oid AND objsubid = 1);
+  r := r || jsonb_build_object('C13d_default_takes_owner_lock', pg_temp.pass(s LIKE '{"success"%' AND a = '0' AND b = '1', s || ' before=' || a || ' after=' || b));
   a := pg_temp.call_as(pg_temp.fx(1), pg_temp.q_save(101, 'pipeline', 'second', false, NULL));
   b := pg_temp.call_as(pg_temp.fx(1), format('SELECT public.broker_report_set_default_view(%L::uuid, %L, %L::uuid)',
          pg_temp.fx(101), 'pipeline', (a::jsonb) ->> 'id'));
