@@ -347,15 +347,6 @@ export const transactionBridge = {
     ),
 
   /**
-   * Exports transaction as PDF to specified path
-   * @param transactionId - Transaction ID to export
-   * @param outputPath - File path to save PDF
-   * @returns Export result
-   */
-  exportPDF: (transactionId: string, outputPath: string) =>
-    ipcRenderer.invoke("transactions:export-pdf", transactionId, outputPath),
-
-  /**
    * Exports transaction with enhanced options (format, included data, etc.)
    * @param transactionId - Transaction ID to export
    * @param options - Export options (format, includeContacts, includeEmails, etc.)

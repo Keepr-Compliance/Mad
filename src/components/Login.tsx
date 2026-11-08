@@ -61,27 +61,6 @@ const LOGIN_RETRY_CONFIG = {
  */
 const STUCK_RETRY_HINT_MS = 60 * 1000;
 
-// Type for pending OAuth data
-export interface PendingOAuthData {
-  provider: "google" | "microsoft";
-  userInfo: { id: string; email: string; name?: string; picture?: string };
-  tokens: {
-    access_token: string;
-    refresh_token: string | null;
-    expires_at: string;
-    scopes: string[];
-  };
-  cloudUser: {
-    id: string;
-    subscription_tier?: string;
-    trial_ends_at?: string;
-    email?: string;
-    terms_accepted_at?: string;
-    privacy_policy_accepted_at?: string;
-  };
-  subscription?: { tier?: string; status?: string; trial_ends_at?: string };
-}
-
 // TASK-1507: Deep link auth callback data types
 export interface DeepLinkAuthData {
   accessToken: string;
@@ -119,7 +98,6 @@ interface LoginProps {
     subscription: Subscription,
     isNewUser: boolean,
   ) => void;
-  onLoginPending?: (oauthData: PendingOAuthData) => void;
   /** TASK-1507: Called when deep link auth succeeds with license/device validation */
   onDeepLinkAuthSuccess?: (data: DeepLinkAuthData) => void;
   /** TASK-1507: Called when license is blocked (expired/suspended) */
@@ -130,7 +108,6 @@ interface LoginProps {
 
 const Login = ({
   onLoginSuccess,
-  onLoginPending,
   onDeepLinkAuthSuccess,
   onLicenseBlocked,
   onDeviceLimitReached,

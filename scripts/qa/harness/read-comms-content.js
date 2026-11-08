@@ -8,7 +8,7 @@
  * single sentinel-prefixed JSON line on stdout:
  *   `{ rows: [{ email_id, subject, body_text, sent_at }], count }`
  *
- * WHY THIS QUERY (load-bearing): the export handler (transactions:export-pdf) builds the PDF from
+ * WHY THIS QUERY (load-bearing): the export handler (transactions:export-enhanced, format pdf) builds the PDF from
  * `details.communications` = databaseService.getCommunicationsByTransaction =
  * communicationDbService.getCommunicationsWithMessages(txId), which LEFT JOINs the `communications`
  * junction to `emails` and projects `e.subject AS subject`, `e.body_plain AS body_text`. The junction

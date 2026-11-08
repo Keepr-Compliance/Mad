@@ -2,7 +2,7 @@
  * EXPORT-COMPLETENESS cell — shared core (BACKLOG-1983, P2-C7).
  *
  * Reusable helpers for the Playwright spec (e2e/tests/export-completeness.spec.ts) that proves the
- * desktop combined-PDF export (transactions:export-pdf → BACKLOG-1584 single-HTML combined PDF) really
+ * desktop combined-PDF export (transactions:export-enhanced, format pdf → BACKLOG-1584 single-HTML combined PDF) really
  * CONTAINS every DB-linked email communication. Mirrors the BACKLOG-1982 delete-emails-core pattern:
  *
  *   1. EXPECTED constants — the FROZEN 4-item linked set the seeder plants under

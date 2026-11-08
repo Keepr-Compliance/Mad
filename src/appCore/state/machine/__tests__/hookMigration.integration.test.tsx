@@ -194,7 +194,6 @@ const errorState: ErrorState = {
 const defaultSecureStorageOptions = {
   isWindows: false,
   isMacOS: true,
-  pendingOAuthData: null,
   pendingOnboardingData: {
     phoneType: null as "iphone" | "android" | null,
     emailProvider: null as "google" | "microsoft" | null,
@@ -203,7 +202,6 @@ const defaultSecureStorageOptions = {
   },
   isAuthenticated: false,
   login: jest.fn(),
-  onPendingOAuthClear: jest.fn(),
   onPendingOnboardingClear: jest.fn(),
   onPhoneTypeSet: jest.fn(),
   onEmailOnboardingComplete: jest.fn(),
@@ -226,7 +224,6 @@ const defaultNavigationFlowOptions = {
   needsTermsAcceptance: false,
   isMacOS: true,
   isWindows: false,
-  pendingOAuthData: null,
   pendingOnboardingData: {
     phoneType: null as "iphone" | "android" | null,
     emailProvider: null as "google" | "microsoft" | null,

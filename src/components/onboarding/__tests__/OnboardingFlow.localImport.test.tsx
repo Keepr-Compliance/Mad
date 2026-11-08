@@ -114,7 +114,6 @@ function makeApp(): AppStateMachine {
     hasSecureStorageSetup: true,
     needsDriverSetup: false,
     needsTermsAcceptance: false,
-    pendingOAuthData: null,
     authProvider: "google",
     isNewUserFlow: true,
     isDatabaseInitialized: true,

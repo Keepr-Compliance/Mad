@@ -90,31 +90,32 @@ function isSameOrUnder(child, parent) {
  * @param {string}  p.actualUserData    app.getPath('userData')
  * @param {string}  p.appData           app.getPath('appData')
  * @param {(p: string) => string} [p.realpath]  injectable for tests; defaults to resolveReal
+ * @param {string}  [p.label]           who is refusing; 'seed-fixture' (default) or 'app-launch' (BACKLOG-4054)
  */
-function isolationFailure({ hasMockKeychain, opts, actualUserData, appData, realpath = resolveReal }) {
+function isolationFailure({ hasMockKeychain, opts, actualUserData, appData, realpath = resolveReal, label = 'seed-fixture' }) {
   if (!hasMockKeychain) {
-    return 'seed-fixture requires --use-mock-keychain (it must never reach the real macOS keychain).';
+    return `${label} requires --use-mock-keychain (it must never reach the real macOS keychain).`;
   }
   if (opts.userDataDirSpaceForm !== undefined) {
-    return 'seed-fixture refuses the space form "--user-data-dir <dir>" (Chromium ignores it); pass --user-data-dir=<dir> only.';
+    return `${label} refuses the space form "--user-data-dir <dir>" (Chromium ignores it); pass --user-data-dir=<dir> only.`;
   }
   if (!opts.userDataDir) {
-    return 'seed-fixture requires --user-data-dir=<isolated profile>.';
+    return `${label} requires --user-data-dir=<isolated profile>.`;
   }
   const requested = realpath(opts.userDataDir);
   const actual = realpath(actualUserData);
   if (actual !== requested) {
-    return `seed-fixture userData mismatch: Electron is using ${actual}, requested ${requested}.`;
+    return `${label} userData mismatch: Electron is using ${actual}, requested ${requested}.`;
   }
   const appDataReal = realpath(appData);
   for (const name of REAL_PROFILE_NAMES) {
     const real = path.join(appDataReal, name);
     if (isSameOrUnder(actual, real)) {
-      return `REFUSING to seed a real profile directory: ${actual} is inside ${real}.`;
+      return `${label} REFUSING a real profile directory: ${actual} is inside ${real}.`;
     }
   }
   if (isSameOrUnder(appDataReal, actual)) {
-    return `REFUSING to seed ${actual}: it contains the real application data directory ${appDataReal}.`;
+    return `${label} REFUSING ${actual}: it contains the real application data directory ${appDataReal}.`;
   }
   return null;
 }
@@ -125,5 +126,6 @@ module.exports = {
   isEntryScript,
   parseArgs,
   resolveReal,
+  isSameOrUnder,
   isolationFailure,
 };

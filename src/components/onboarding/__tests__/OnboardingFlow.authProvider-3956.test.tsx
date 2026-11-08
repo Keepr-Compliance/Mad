@@ -97,7 +97,6 @@ function makeApp(authProvider: string | null): AppStateMachine {
     hasSecureStorageSetup: true,
     needsDriverSetup: false,
     needsTermsAcceptance: false,
-    pendingOAuthData: null,
     authProvider,
     isNewUserFlow: true,
     isDatabaseInitialized: true,
