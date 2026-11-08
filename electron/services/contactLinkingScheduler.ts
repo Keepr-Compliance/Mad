@@ -74,6 +74,13 @@ export interface ContactLinkingRunner {
   /** Run the pass for one user. May be async (it awaits the backfill). */
   run: (userId: string) => Promise<void> | void;
   /**
+   * BACKLOG-4180 — the pass restricted to records that share an identifier or a
+   * name with these contacts. For `contacts:import`, which changes saved
+   * contacts but no source record. Optional: without it the scoped entry point
+   * falls back to the full immediate run.
+   */
+  runScoped?: (userId: string, contactIds: readonly string[]) => Promise<void> | void;
+  /**
    * Called after a pass settles, successfully or not.
    *
    * Best-effort by contract: it reaches a possibly-stale BrowserWindow
@@ -117,6 +124,25 @@ const pending = new Map<string, PendingRun>();
 const inFlight = new Set<string>();
 /** Users who signalled while their own pass was mid-flight. */
 const rerunRequested = new Set<string>();
+/**
+ * BACKLOG-4180 — settles when the pass in flight for a user ends. The scoped
+ * import pass waits on it, so it never runs alongside a full pass (or another
+ * scoped pass) for the same user.
+ */
+const inFlightDone = new Map<string, { done: Promise<void>; settle: () => void }>();
+
+/** Mark a pass in flight; the returned function ends it. */
+function beginInFlight(userId: string): () => void {
+  let settle!: () => void;
+  const entry = { done: new Promise<void>((resolve) => (settle = resolve)), settle: () => settle() };
+  inFlightDone.set(userId, entry);
+  inFlight.add(userId);
+  return () => {
+    inFlight.delete(userId);
+    if (inFlightDone.get(userId) === entry) inFlightDone.delete(userId);
+    entry.settle();
+  };
+}
 /**
  * Per-user hold depth. While above zero, no pass may run for that user.
  *
@@ -213,6 +239,72 @@ export async function runContactLinkingNow(userId: string): Promise<void> {
 }
 
 /**
+ * BACKLOG-4180 — `contacts:import`'s pass, scoped to the contacts it touched.
+ *
+ * Replaces `runContactLinkingNow` on the import path, which ran the WHOLE-book
+ * pass (every source record, every phone through libphonenumber) on the main
+ * thread while the user waited on one contact.
+ *
+ * Honours the hold exactly like `runContactLinkingNow`: held means a full pass
+ * is owed and armed on release, and that pass covers these contacts too.
+ *
+ * Deliberately does NOT cancel a pending coalesced pass. That pass is owed to a
+ * sync that changed source records, which this scoped run does not look at;
+ * cancelling it (as `runContactLinkingNow` does) would drop it.
+ */
+export async function runContactLinkingScopedNow(
+  userId: string,
+  contactIds: readonly string[],
+): Promise<void> {
+  const active = runner;
+  if (!active || !userId) return;
+
+  if (!active.runScoped) {
+    await runContactLinkingNow(userId);
+    return;
+  }
+
+  // Never alongside another pass for this user (security review): wait for
+  // the one in flight to finish, then re-check everything it could change.
+  while (inFlight.has(userId)) {
+    const entry = inFlightDone.get(userId);
+    if (!entry) break;
+    await entry.done;
+  }
+  if (runner !== active) return; // reset / logout while waiting
+
+  if ((holds.get(userId) ?? 0) > 0) {
+    heldRequests.add(userId);
+    return;
+  }
+
+  // In flight from here: a full pass requested meanwhile is deferred by
+  // `execute` (rerunRequested) and re-armed below, never run concurrently.
+  const end = beginInFlight(userId);
+  try {
+    await active.runScoped(userId, contactIds);
+  } catch (error) {
+    logService.warn(
+      `[Contacts] scoped linking pass failed: ${error}`,
+      "ContactLinkingScheduler",
+    );
+  } finally {
+    end();
+    try {
+      active.notify?.(userId);
+    } catch (error) {
+      logService.warn(
+        `[Contacts] linking pass notify failed: ${error}`,
+        "ContactLinkingScheduler",
+      );
+    }
+    if (rerunRequested.delete(userId)) {
+      requestContactLinking(userId);
+    }
+  }
+}
+
+/**
  * Suspend passes for a user while rollback-eligible rows are in the table.
  *
  * Depth-counted so nested or overlapping syncs compose. ALWAYS pair with
@@ -305,7 +397,7 @@ async function execute(userId: string, reason: string): Promise<void> {
     return;
   }
 
-  inFlight.add(userId);
+  const end = beginInFlight(userId);
   try {
     await active.run(userId);
   } catch (error) {
@@ -316,7 +408,7 @@ async function execute(userId: string, reason: string): Promise<void> {
       "ContactLinkingScheduler",
     );
   } finally {
-    inFlight.delete(userId);
+    end();
 
     // Outside the run's try/catch above but inside its own, because notify
     // reaches a BrowserWindow reference that may be stale.
@@ -339,6 +431,8 @@ async function execute(userId: string, reason: string): Promise<void> {
 export function __resetContactLinkingScheduler(): void {
   cancelPendingContactLinking();
   inFlight.clear();
+  for (const entry of inFlightDone.values()) entry.settle();
+  inFlightDone.clear();
   runner = null;
 }
 

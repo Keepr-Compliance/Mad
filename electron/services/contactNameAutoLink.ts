@@ -132,7 +132,9 @@ import { dbAll } from "./db/core/dbConnection";
 import {
   NAMED_EXTERNAL_RECORDS_SQL,
   NAMED_LIVE_CONTACTS_SQL,
+  scopedNameSeedsSql,
 } from "./db/contactNameAutoLinkSql";
+import { placeholderList } from "./db/core/sqlFragments";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import { createLink, findContactIdBySourceRecord } from "./db/contactSourceLinkDbService";
 import { hasCannotLink, type LinkProposalReason } from "./db/contactLinkReviewDbService";
@@ -475,8 +477,19 @@ export const NAME_ASK_CAP_PER_PASS = 50;
 export function runUniqueNameAutoLink(
   userId: string,
   onAsk?: (pair: AskPair, ctx: { reason: LinkProposalReason; holderCount: number; displayName: string }) => void,
+  scope?: NameGroupScope,
 ): NameAutoLinkSummary {
-  return runUniqueNameAutoLinkForMode(resolveContactAutoLinkMode(userId), userId, onAsk);
+  return runUniqueNameAutoLinkForMode(resolveContactAutoLinkMode(userId), userId, onAsk, scope);
+}
+
+/**
+ * BACKLOG-4180 — restrict a pass to the name groups that contain one of these
+ * contacts (or a source record the crosswalk assigns to one). Each kept group
+ * is built WHOLE, from every record and contact bearing that name, so the rule
+ * decides it exactly as a full pass would. Groups not kept are not visited.
+ */
+export interface NameGroupScope {
+  contactIds: readonly string[];
 }
 
 /**
@@ -508,6 +521,7 @@ export function runUniqueNameAutoLinkForMode(
   mode: ContactAutoLinkMode,
   userId: string,
   onAsk?: (pair: AskPair, ctx: { reason: LinkProposalReason; holderCount: number; displayName: string }) => void,
+  scope?: NameGroupScope,
 ): NameAutoLinkSummary {
   const summary: NameAutoLinkSummary = {
     groups: 0,
@@ -548,7 +562,7 @@ export function runUniqueNameAutoLinkForMode(
     onAsk?.(pair, ctx);
   };
 
-  const groups = collectNameGroups(userId);
+  const groups = collectNameGroups(userId, scope);
   summary.groups = groups.length;
 
   for (const group of groups) {
@@ -672,7 +686,23 @@ export function runUniqueNameAutoLinkForMode(
  * that should now succeed. (`removed_at` is the v56 tombstone column; the
  * `IS NULL` also covers databases where the column exists but is never set.)
  */
-export function collectNameGroups(userId: string): NameGroup[] {
+export function collectNameGroups(userId: string, scope?: NameGroupScope): NameGroup[] {
+  // BACKLOG-4180: with a scope, only the groups keyed by a seed name are built.
+  // The filter runs BEFORE the per-record owner lookup below, which is the
+  // expensive part (one statement per source record).
+  let keep: Set<string> | null = null;
+  if (scope) {
+    const ids = [...new Set(scope.contactIds.filter((id) => typeof id === "string" && id.length > 0))];
+    if (ids.length === 0) return [];
+    const marks = placeholderList(ids.length);
+    keep = new Set<string>();
+    for (const row of dbAll<{ name: string | null }>(scopedNameSeedsSql(marks), [userId, ...ids, userId, ...ids])) {
+      const norm = normalizeNameKey(row.name);
+      if (norm) keep.add(norm.key);
+    }
+    if (keep.size === 0) return [];
+  }
+
   const externalRows = dbAll<{
     external_record_id: string;
     source: ExternalContactSource;
@@ -706,6 +736,7 @@ export function collectNameGroups(userId: string): NameGroup[] {
   for (const row of externalRows) {
     const norm = normalizeNameKey(row.name);
     if (!norm) continue;
+    if (keep && !keep.has(norm.key)) continue;
     ensure(norm, row.name ?? norm.key).members.push({
       kind: "source",
       sourceType: row.source,
@@ -718,6 +749,7 @@ export function collectNameGroups(userId: string): NameGroup[] {
   for (const row of contactRows) {
     const norm = normalizeNameKey(row.display_name);
     if (!norm) continue;
+    if (keep && !keep.has(norm.key)) continue;
     ensure(norm, row.display_name ?? norm.key).members.push({
       kind: "contact",
       contactId: row.id,

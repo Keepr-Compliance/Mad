@@ -139,7 +139,11 @@ import {
   ALL_KEYED_EXTERNAL_RECORDS_SQL,
   EXTERNAL_RECORD_IS_CURRENT_SQL,
   EXTERNAL_RECORD_VALUES_ONE_SQL,
+  scopedContactEmailKeysSql,
+  scopedContactPhoneKeysSql,
+  scopedKeyedExternalRecordsSql,
 } from "./db/contactSourceLinkerSql";
+import { placeholderList } from "./db/core/sqlFragments";
 import type { ExternalContactSource } from "./db/externalContactDbService";
 import { createLink, getLinksForContactBySource } from "./db/contactSourceLinkDbService";
 import {
@@ -952,6 +956,102 @@ export function linkExternalContactsForUser(userId: string): LinkRunSummary {
   }));
 
   return linkSourceRecords(userId, candidates);
+}
+
+/** Keys bound per statement in the scoped pass; far under SQLite's 32,766-variable limit. */
+export const SCOPED_KEY_CHUNK_SIZE = 500;
+
+/**
+ * BACKLOG-4180 — the pass `contacts:import` runs, scoped to the contacts it
+ * touched.
+ *
+ * The full pass above reads every source record and normalises every phone with
+ * libphonenumber, on the main thread, while the user waits on an import of one
+ * contact. An import changes no source record; it changes only the saved
+ * contacts it touched. So the only records whose resolution can change are
+ * those that share an identifier with a touched contact. Every other record
+ * resolves exactly as it did on the last full pass:
+ *
+ *   - a record already in the crosswalk resolves by id, whatever its content;
+ *   - an unlinked record that shares nothing with a touched contact sees the
+ *     same candidates it saw before.
+ *
+ * TWO THINGS ARE NOT SCOPED, ON PURPOSE:
+ *   - The match INDEX is the user's full index. A record matching an existing
+ *     contact A and the imported contact B must come out ambiguous; with an index
+ *     of only the touched contacts it would silently link to B.
+ *   - The candidate selection is a superset: stored phone keys (no digit floor)
+ *     and trimmed, lowercased emails. `linkSourceRecords` decides every match.
+ *
+ * Synchronous, like the full pass: the scheduler's hold relies on the read
+ * completing in one tick (see `contactLinkingScheduler.execute`).
+ */
+export function linkExternalContactsForContacts(
+  userId: string,
+  contactIds: readonly string[],
+  keyChunkSize: number = SCOPED_KEY_CHUNK_SIZE,
+): LinkRunSummary {
+  const ids = [...new Set(contactIds.filter((id) => typeof id === "string" && id.length > 0))];
+  const empty: LinkRunSummary = {
+    idMatched: 0,
+    contentMatched: 0,
+    flagged: 0,
+    unmatched: 0,
+    declined: 0,
+    resolutions: [],
+  };
+  if (ids.length === 0) return empty;
+
+  const idMarks = placeholderList(ids.length);
+  const phoneKeys = dbAll<{ k: string }>(scopedContactPhoneKeysSql(idMarks), [userId, ...ids]).map((r) => r.k);
+  const emailKeys = dbAll<{ k: string }>(scopedContactEmailKeysSql(idMarks), [userId, ...ids]).map((r) => r.k);
+  if (phoneKeys.length === 0 && emailKeys.length === 0) return empty;
+
+  // One statement per chunk of keys, never one statement for all of them: SQLite
+  // rejects a statement above its bound-variable limit (32,766 measured), and an
+  // import may carry up to 5,000 records with several keys each. Rows found by
+  // more than one chunk are de-duplicated and put back in the full pass's order,
+  // so the result is identical to a single unchunked statement. This is a read.
+  type KeyedRow = {
+    external_record_id: string;
+    source: ExternalContactSource;
+    name: string | null;
+    emails_json: string | null;
+    phones_json: string | null;
+    external_uuid: string | null;
+  };
+  const byIdentity = new Map<string, KeyedRow>();
+  const collect = (phoneChunk: string[], emailChunk: string[]): void => {
+    const found = dbAll<KeyedRow>(
+      scopedKeyedExternalRecordsSql(
+        phoneChunk.length > 0 ? placeholderList(phoneChunk.length) : null,
+        emailChunk.length > 0 ? placeholderList(emailChunk.length) : null,
+      ),
+      [userId, ...phoneChunk, ...emailChunk],
+    );
+    for (const r of found) byIdentity.set(`${r.source}\u0000${r.external_record_id}`, r);
+  };
+  const size = Math.max(1, Math.floor(keyChunkSize));
+  for (let i = 0; i < phoneKeys.length; i += size) collect(phoneKeys.slice(i, i + size), []);
+  for (let i = 0; i < emailKeys.length; i += size) collect([], emailKeys.slice(i, i + size));
+  // SQLite's BINARY collation orders by UTF-8 bytes; compare the same way.
+  const byteCompare = (a: string, b: string): number => Buffer.compare(Buffer.from(a), Buffer.from(b));
+  const rows = [...byIdentity.values()].sort(
+    (a, b) => byteCompare(a.source, b.source) || byteCompare(a.external_record_id, b.external_record_id),
+  );
+  if (rows.length === 0) return empty;
+
+  const candidates: SourceRecordCandidate[] = rows.map((r) => ({
+    sourceType: r.source,
+    sourceRecordId: r.external_record_id,
+    externalUuid: r.external_uuid,
+    name: r.name,
+    emails: safeJsonArray(r.emails_json),
+    phones: safeJsonArray(r.phones_json),
+  }));
+
+  // The FULL index — see the docblock.
+  return linkSourceRecords(userId, candidates, loadContactMatchIndex(userId));
 }
 
 function safeJsonArray(raw: string | null): string[] {
