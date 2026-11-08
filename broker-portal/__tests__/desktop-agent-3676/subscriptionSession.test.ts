@@ -104,7 +104,12 @@ jest.mock('stripe', () => {
 import { POST } from '@/app/api/payments/subscription-session/route';
 import { GET as GET_PRICES } from '@/app/api/billing/agent-prices/route';
 import { PORTAL_MEMBERSHIP_SELECT } from '@/lib/auth/membership';
-import { agentIdempotencyKey, buildSubscriptionCheckoutParams } from '@/lib/billing/agentCheckoutParams';
+import {
+  MIN_CHECKOUT_TRIAL_SECONDS,
+  agentIdempotencyKey,
+  buildSubscriptionCheckoutParams,
+  checkoutTrialEnd,
+} from '@/lib/billing/agentCheckoutParams';
 import { prepareAgentCheckout } from '@/lib/billing/agentCheckout';
 import { agentContextForUser } from '@/lib/billing/agentContextCore';
 import { classifyPortalAccess } from '@/lib/auth/membership';
@@ -591,6 +596,181 @@ describe('C-REUSE-ORIGIN: an open session is reused only by the side that opened
     });
     expect(result).toEqual({ url: CREATED });
     expect(calls('checkout.sessions.expire').map((a) => a[0]).sort()).toEqual([S0.id, S1.id].sort());
+  });
+});
+
+// ---- BACKLOG-4088: a live free trial subscribes; billing starts at the trial end --------------
+
+describe('BACKLOG-4088: a trialing agent subscribes with trial_end = the trial end', () => {
+  // A fixed clock: the clamp (now + 49 h) is computed from Date.now().
+  const NOW_MS = Date.parse('2026-11-08T12:00:00.000Z');
+  const NOW_S = NOW_MS / 1000;
+  const H = 3600;
+  /** The 3860 start function's override shape (enabled, source 'trial', paid_through ISO). */
+  const trialPlan = (paidThrough: string | null) => ({
+    organization_plans: [
+      { organization_id: FIXTURE_PERSONAL_ORG_ID, feature_overrides: { unlimited_transactions: { enabled: true, source: 'trial', paid_through: paidThrough } } },
+    ],
+  });
+  const iso = (unix: number) => new Date(unix * 1000).toISOString();
+  const TEN_DAYS = NOW_S + 10 * 24 * H;
+
+  function expectedTrialCreate(anchor: string | null, raw: number, end: number): [Obj, Obj] {
+    return [
+      buildSubscriptionCheckoutParams({
+        customerId: CUS,
+        priceId: PRICE.id,
+        userId: FIXTURE_USER_ID,
+        organizationId: FIXTURE_PERSONAL_ORG_ID,
+        interval: 'month',
+        returnBase: APP,
+        origin: 'desktop',
+        trial: { raw, end },
+      }) as Obj,
+      {
+        idempotencyKey: agentIdempotencyKey({
+          userId: FIXTURE_USER_ID,
+          mode: 'test',
+          interval: 'month',
+          anchorSessionId: anchor,
+          origin: 'desktop',
+          trialEndRaw: raw,
+        }),
+      },
+    ];
+  }
+
+  beforeEach(() => {
+    jest.spyOn(Date, 'now').mockReturnValue(NOW_MS);
+  });
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('(a) live trial ending in 10 days -> 200, one create carrying subscription_data.trial_end = the trial end (not charged now)', async () => {
+    seed(trialPlan(iso(TEN_DAYS)));
+    expect(await call()).toEqual({ status: 200, body: { checkout_url: CREATED } });
+    const creates = calls('checkout.sessions.create');
+    expect(creates).toHaveLength(1);
+    expect(creates[0][0].subscription_data).toEqual({
+      metadata: { kind: 'agent', user_id: FIXTURE_USER_ID, organization_id: FIXTURE_PERSONAL_ORG_ID, keepr_solo_trial: '1' },
+      trial_end: TEN_DAYS,
+    });
+    expect(creates[0][0].metadata.trial_end).toBe(String(TEN_DAYS));
+    expect(creates).toEqual([expectedTrialCreate(S1.id, TEN_DAYS, TEN_DAYS)]);
+    expect(creates[0][1].idempotencyKey).toBe(`${expectedCreate(S1.id)[1].idempotencyKey}:t${TEN_DAYS}`);
+  });
+
+  it('(48h) trial ending in 10 h -> trial_end = now + 49 h (Stripe Checkout refuses under 48 h); metadata keeps the RAW end', async () => {
+    const raw = NOW_S + 10 * H;
+    seed(trialPlan(iso(raw)));
+    expect((await call()).status).toBe(200);
+    const [params] = calls('checkout.sessions.create')[0];
+    expect(params.subscription_data.trial_end).toBe(NOW_S + 49 * H);
+    expect(params.subscription_data.trial_end).toBeGreaterThanOrEqual(NOW_S + 48 * H);
+    expect(params.metadata.trial_end).toBe(String(raw));
+  });
+
+  it('(b) positive control: ended trial (state none) -> 200, the no-trial params byte-identical to before', async () => {
+    seed(trialPlan(iso(NOW_S - 24 * H)));
+    expect(await call()).toEqual({ status: 200, body: { checkout_url: CREATED } });
+    const creates = calls('checkout.sessions.create');
+    expect(creates).toEqual([expectedCreate(S1.id)]);
+    expect(creates[0][0].subscription_data).toEqual({ metadata: { kind: 'agent', user_id: FIXTURE_USER_ID, organization_id: FIXTURE_PERSONAL_ORG_ID } });
+    expect(creates[0][0].metadata.trial_end).toBeUndefined();
+  });
+
+  it('SR #2: trial override with paid_through null (reads trial, no end date) -> 409 already_have_plan, no Stripe call', async () => {
+    seed(trialPlan(null));
+    expect(await call()).toEqual({ status: 409, body: { code: 'already_have_plan' } });
+    expect(stripeOps()).toEqual([]);
+  });
+
+  it('control (c) 191d8cda: live trial + an ACTIVE Stripe subscription not yet mirrored -> 409, no create, no expire', async () => {
+    seed(trialPlan(iso(TEN_DAYS)));
+    expect(C_KEEP.status).toBe('active');
+    mockStripeImpl['subscriptions.list'] = async () => ({ ...clone(EMPTY_LIST), data: [clone(C_KEEP)] });
+    expect(await call()).toEqual({ status: 409, body: { code: 'already_have_plan' } });
+    expect(stripeOps()).toEqual(['prices.list', 'subscriptions.list']);
+    expect(calls('checkout.sessions.create')).toEqual([]);
+    expect(calls('checkout.sessions.expire')).toEqual([]);
+  });
+
+  it('F(b): live trial + a TRIALING Stripe subscription not yet mirrored -> 409, no create [EDITED: sub-C-keep status trialing]', async () => {
+    seed(trialPlan(iso(TEN_DAYS)));
+    mockStripeImpl['subscriptions.list'] = async () => ({ ...clone(EMPTY_LIST), data: [{ ...clone(C_KEEP), status: 'trialing' }] });
+    expect(await call()).toEqual({ status: 409, body: { code: 'already_have_plan' } });
+    expect(calls('checkout.sessions.create')).toEqual([]);
+  });
+
+  it('a mirror row trialing (subscribed during the trial) -> 409 already_have_plan, no Stripe call [EDITED: sub-C-keep status trialing]', async () => {
+    seed({ ...trialPlan(iso(TEN_DAYS)), billing_subscriptions: [{ ...mirrorRow(C_KEEP), status: 'trialing' }] });
+    expect(await call()).toEqual({ status: 409, body: { code: 'already_have_plan' } });
+    expect(stripeOps()).toEqual([]);
+  });
+
+  describe('SR #4: open-session reuse matches the RAW trial end', () => {
+    /** [EDITED] the captured open listing with S1 marked desktop and given a session trial_end. */
+    const openDesktopWith = (trialEnd: string | undefined) => {
+      const p2 = fx('sessions-open-p2');
+      p2.data = p2.data.map((s: Obj) =>
+        s.id === S1.id
+          ? { ...s, metadata: { ...s.metadata, origin: 'desktop', ...(trialEnd === undefined ? {} : { trial_end: trialEnd }) } }
+          : s
+      );
+      return lists([[fx('sessions-open-p1'), p2]]);
+    };
+
+    it('same raw trial end, trial ending in 10 h (so the clamped end moved since the session was made) -> reused, nothing created', async () => {
+      const raw = NOW_S + 10 * H;
+      seed(trialPlan(iso(raw)));
+      mockStripeImpl['checkout.sessions.list'] = openDesktopWith(String(raw));
+      expect(await call()).toEqual({ status: 200, body: { checkout_url: S1.url } });
+      expect(calls('checkout.sessions.create')).toEqual([]);
+      expect(calls('checkout.sessions.expire')).toEqual([[S0.id]]);
+    });
+
+    it.each([
+      ['a different trial end', String(TEN_DAYS + 3600)],
+      ['no trial end (opened before the trial)', undefined],
+    ])('open desktop session with %s -> expired, a new session created', async (_n, sessionTrialEnd) => {
+      seed(trialPlan(iso(TEN_DAYS)));
+      mockStripeImpl['checkout.sessions.list'] = openDesktopWith(sessionTrialEnd);
+      expect(await call()).toEqual({ status: 200, body: { checkout_url: CREATED } });
+      expect(calls('checkout.sessions.expire').map((a) => a[0]).sort()).toEqual([S0.id, S1.id].sort());
+      expect(calls('checkout.sessions.create')).toEqual([expectedTrialCreate(S1.id, TEN_DAYS, TEN_DAYS)]);
+    });
+
+    it('no trial now, open desktop session made during a trial -> expired, never reused', async () => {
+      mockStripeImpl['checkout.sessions.list'] = openDesktopWith(String(TEN_DAYS));
+      expect(await call()).toEqual({ status: 200, body: { checkout_url: CREATED } });
+      expect(calls('checkout.sessions.expire').map((a) => a[0]).sort()).toEqual([S0.id, S1.id].sort());
+      expect(calls('checkout.sessions.create')).toEqual([expectedCreate(S1.id)]);
+    });
+  });
+
+  it('key: two trial ends -> two keys; no trial -> the pinned key unchanged', () => {
+    const k = (trialEndRaw?: number) =>
+      agentIdempotencyKey({ userId: 'U', mode: 'test', interval: 'month', anchorSessionId: 'cs_x', origin: 'desktop', ...(trialEndRaw === undefined ? {} : { trialEndRaw }) });
+    expect(k()).toBe('agent-co:U:test:month:cs_x:desktop');
+    expect(k(100)).toBe('agent-co:U:test:month:cs_x:desktop:t100');
+    expect(k(100)).not.toBe(k(200));
+  });
+
+  it('checkoutTrialEnd: null for null / a non-date; raw kept; end clamped to now + 49 h only when sooner', () => {
+    expect(checkoutTrialEnd(null, NOW_MS)).toBeNull();
+    expect(checkoutTrialEnd(undefined, NOW_MS)).toBeNull();
+    expect(checkoutTrialEnd('not a date', NOW_MS)).toBeNull();
+    // Sweep the boundary: 48 h, 49 h - 1 s, 49 h, 49 h + 1 s.
+    for (const [ahead, end] of [
+      [48 * H, NOW_S + 49 * H],
+      [49 * H - 1, NOW_S + 49 * H],
+      [49 * H, NOW_S + 49 * H],
+      [49 * H + 1, NOW_S + 49 * H + 1],
+    ]) {
+      expect(checkoutTrialEnd(iso(NOW_S + ahead), NOW_MS)).toEqual({ raw: NOW_S + ahead, end });
+    }
+    expect(MIN_CHECKOUT_TRIAL_SECONDS).toBe(49 * H);
   });
 });
 
