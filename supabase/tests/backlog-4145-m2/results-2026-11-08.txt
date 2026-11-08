@@ -29,3 +29,12 @@ AUTH_users_email_back    numstat=4/4  fail=21  C1,C1b,C2 (12 rows),C3,C4,C5,C5d,
 ROLES_public_kept        numstat=0/5  fail=2   A1,C10d
 TYPO_permission_key      numstat=1/1  fail=2   C2_users_view,K1
 every mutation: MUTATION APPLIED printed, RESTORED clean=True
+
+== Fix-up 2 (harness only, migration unchanged): C13 writes on support_ticket_backlog_links
+authenticated holds SELECT, INSERT, DELETE on the table (no UPDATE; same on production), so UPDATE is refused
+by the grant for every caller. Marketing-like: insert refused (WITH CHECK), update refused, removal 0 rows.
+support.view: insert 1, update refused, removal 1.
+run.sh 40/40; run.sh --applied 41/41
+LINKS_with_check_old      numstat=1/3  fail=3  C10b,C11,C13
+LINKS_with_check_removed  numstat=0/3  fail=3  C10b,C11,C13
+both: MUTATION APPLIED printed, RESTORED clean=True
