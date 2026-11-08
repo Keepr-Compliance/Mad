@@ -13,7 +13,7 @@
 
 import * as Sentry from '@sentry/nextjs';
 import { createServiceClient } from '@/lib/supabase/service';
-import { sendViaGraph, EmailNotConfiguredError } from './send-email';
+import { sendViaGraph, EmailNotConfiguredError, logEmailDelivery } from './send-email';
 import { backoffDelayMs, isTransientError } from './retry';
 import type { EnqueueEmailParams, EmailQueueRow } from './types';
 
@@ -68,7 +68,9 @@ export interface DrainResult {
 /**
  * Drain due rows from email_delivery_queue. For each row:
  *   - re-send via Graph.
- *   - success        -> status 'sent'.
+ *   - success        -> status 'sent', plus a 'sent' email_delivery_log row
+ *                        (BACKLOG-4011; same metadata as the first-send row).
+ *   - dead-letter    -> also a 'failed' email_delivery_log row.
  *   - transient fail  -> bump attempts; if attempts >= max_attempts dead-letter
  *                        (status 'failed'), else reschedule next_attempt_at with
  *                        exponential backoff (base 60s).
@@ -118,6 +120,16 @@ export async function drainEmailQueue(now: Date = new Date()): Promise<DrainResu
         .update({ status: 'sent', updated_at: new Date().toISOString() })
         .eq('id', row.id);
       result.sent++;
+
+      // BACKLOG-4011: the first attempt logged 'queued'; record the delivery.
+      // logEmailDelivery never throws, so a logging failure cannot reach the
+      // catch below and reschedule a row that was already delivered.
+      await logEmailDelivery({
+        emailType: row.email_type,
+        recipientEmail: row.recipient_email,
+        status: 'sent',
+        metadata: { ...(row.log_metadata ?? {}), retriedFromQueue: true, queueAttempt: row.attempts + 1 },
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown email error';
       const permanent = err instanceof EmailNotConfiguredError || !isTransientError(err);
@@ -134,6 +146,13 @@ export async function drainEmailQueue(now: Date = new Date()): Promise<DrainResu
           })
           .eq('id', row.id);
         result.deadLettered++;
+        await logEmailDelivery({
+          emailType: row.email_type,
+          recipientEmail: row.recipient_email,
+          status: 'failed',
+          errorMessage: message,
+          metadata: { ...(row.log_metadata ?? {}), retriedFromQueue: true, queueAttempt: nextAttempts },
+        });
         Sentry.captureMessage('Transactional email dead-lettered after retries', {
           level: 'error',
           extra: {

@@ -7,8 +7,10 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 
 const mockSendViaGraph = jest.fn();
+const mockLog = jest.fn();
 
-// Mock the low-level Graph send + the not-configured error class.
+// Mock the low-level Graph send, the not-configured error class and the delivery
+// logger (BACKLOG-4011: the drain writes email_delivery_log rows through it).
 jest.mock('../../../lib/email/send-email', () => {
   class EmailNotConfiguredError extends Error {
     constructor(message: string) {
@@ -18,6 +20,7 @@ jest.mock('../../../lib/email/send-email', () => {
   }
   return {
     sendViaGraph: (...args: unknown[]) => mockSendViaGraph(...args),
+    logEmailDelivery: (...args: unknown[]) => mockLog(...args),
     EmailNotConfiguredError,
   };
 });
@@ -141,6 +144,28 @@ describe('drainEmailQueue', () => {
     expect(updateCalls[0]).toMatchObject({ status: 'sent' });
   });
 
+  // BACKLOG-4011: the first attempt logged 'queued'; a successful retry logs 'sent'
+  // with the same metadata the first-send row carries (subject + logMetadata).
+  it("writes a 'sent' email_delivery_log row on a successful re-send", async () => {
+    const logMetadata = { subject: 'Your receipt', paymentReference: 'pi_test_4011' };
+    selectResult = {
+      data: [queueRow({ email_type: 'receipt', attempts: 2, log_metadata: logMetadata })],
+      error: null,
+    };
+    mockSendViaGraph.mockResolvedValueOnce(undefined);
+
+    await drainEmailQueue();
+
+    expect(mockLog).toHaveBeenCalledTimes(1);
+    const arg = mockLog.mock.calls[0][0];
+    expect(arg).toMatchObject({
+      emailType: 'receipt',
+      recipientEmail: 'user@example.com',
+      status: 'sent',
+    });
+    expect(arg.metadata).toEqual({ ...logMetadata, retriedFromQueue: true, queueAttempt: 3 });
+  });
+
   it('reschedules with backoff on a transient failure below max_attempts', async () => {
     selectResult = { data: [queueRow({ attempts: 1, max_attempts: 5 })], error: null };
     mockSendViaGraph.mockRejectedValueOnce(httpErr(503));
@@ -153,6 +178,10 @@ describe('drainEmailQueue', () => {
     expect(upd.attempts).toBe(2);
     expect(upd.next_attempt_at).toBeDefined();
     expect(upd.status).toBeUndefined(); // stays 'enqueued'
+    // BACKLOG-4011: nothing is logged until the row is delivered or dead-lettered,
+    // and the drain never re-enqueues (it must not route through sendEmail()).
+    expect(mockLog).not.toHaveBeenCalled();
+    expect(insertCalls).toHaveLength(0);
   });
 
   it('dead-letters on the final transient attempt (attempts+1 >= max)', async () => {
@@ -163,6 +192,14 @@ describe('drainEmailQueue', () => {
 
     expect(result.deadLettered).toBe(1);
     expect(updateCalls[0]).toMatchObject({ status: 'failed', attempts: 5 });
+    // BACKLOG-4011 (founder ruling): a dead-lettered retry writes a 'failed' log row.
+    expect(mockLog).toHaveBeenCalledTimes(1);
+    expect(mockLog.mock.calls[0][0]).toMatchObject({
+      emailType: 'invite',
+      recipientEmail: 'user@example.com',
+      status: 'failed',
+      errorMessage: 'HTTP 500',
+    });
   });
 
   it('dead-letters immediately on a permanent (4xx) failure', async () => {
@@ -173,6 +210,8 @@ describe('drainEmailQueue', () => {
 
     expect(result.deadLettered).toBe(1);
     expect(updateCalls[0]).toMatchObject({ status: 'failed', attempts: 1 });
+    expect(mockLog).toHaveBeenCalledTimes(1);
+    expect(mockLog.mock.calls[0][0]).toMatchObject({ status: 'failed', errorMessage: 'HTTP 400' });
   });
 
   it('returns an empty summary when the query errors', async () => {
