@@ -5,8 +5,8 @@
 -- date of an existing deal. An unchanged existing date is not re-checked, the same as the past
 -- check. The order on an existing deal stays: version, mode, then (only when the date changes)
 -- locked, past, too far. date + integer, never interval '1 year' (the client is +365 days).
--- The admin action already refuses the same dates (admin-portal/lib/billing/dealRules.ts
--- checkStartDate); this closes a direct RPC call. admin_save_deal is not replaced.
+-- Same rule as admin-portal/lib/billing/dealRules.ts checkStartDate. admin_save_deal is not
+-- replaced.
 -- Pre-check: the body being replaced is the 20261020100000 one (md5 pinned), or this one.
 -- Rollback: supabase/tests/backlog-4033/rollback-4033.sql.
 
