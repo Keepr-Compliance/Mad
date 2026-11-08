@@ -207,3 +207,23 @@ describe('an empty period renders without a duplicate-key warning', () => {
     });
   }
 });
+
+describe('Submissions: a day with no attempts draws no bar', () => {
+  it('one attempts bar per day WITH attempts, and no "0" label', () => {
+    const buckets = submissionBuckets('7d');
+    const withAttempts = buckets.filter((b) => b.attempts > 0);
+    expect(withAttempts.length).toBeGreaterThan(0);
+    expect(withAttempts.length).toBeLessThan(buckets.length);
+
+    const host = document.createElement('div');
+    host.innerHTML = renderToStaticMarkup(<SubmissionCharts buckets={buckets} />);
+    const svg = host.querySelector('svg[data-chart="attempts"]') as SVGElement;
+    const bars = [...svg.querySelectorAll('path')];
+    expect(bars.map((p) => Number(p.getAttribute('data-value')))).toEqual(
+      withAttempts.map((b) => b.attempts)
+    );
+    // Value labels sit at font-size 11; axis ticks and day labels at 10.
+    const labels = [...svg.querySelectorAll('text[font-size="11"]')].map((t) => t.textContent);
+    expect(labels).not.toContain('0');
+  });
+});
