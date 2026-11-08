@@ -1,0 +1,74 @@
+BACKLOG-3514 PR-1, keepr-test, 2026-11-07
+
+controls --with-migration (rollback, migration x2): total=55 pass=55 fail=0
+controls against the applied migration (20261108220000 + ledger row): total=55 pass=55 fail=0
+residue after: 0 views, 0 p3514 orgs, 0 p3514 users
+
+broker-portal jest: 278 suites, 6311 tests, all pass; __tests__/reports-3514 + reports-3505: 94 tests
+DEGRADE_throws: jest bails after the first failing suite, so 5 of 7 suites ran (77 tests).
+
+mutations (mutate.py all):
+== UPDATE_uses_p_org (supabase/migrations/20261108220000_backlog_3514_broker_saved_views.sql)
+MUTATION APPLIED numstat=1/1
+  - v_org := v_org /*UPDATE_ORG*/;
+  + v_org := p_org;
+  SQL   total=55 pass=49 fail=6 reds=C10d_accepted_update_stays_put,C2a_leaver_update_via_other_org,C2b_dual_member_update_via_other_org,C5c_feature_off_update_own,C9a_leaver_list_hidden,C9b_reinstated_list_returns
+RESTORED clean=True
+== REMOVE_uses_p_org (supabase/migrations/20261108220000_backlog_3514_broker_saved_views.sql)
+MUTATION APPLIED numstat=1/1
+  - IF v_org IS NULL OR NOT public._broker_report_views_gate(v_org /*REMOVE_ORG*/) THEN
+  + IF v_org IS NULL OR NOT public._broker_report_views_gate(p_org) THEN
+  SQL   total=55 pass=49 fail=6 reds=C2a_leaver_default_via_other_org,C2a_leaver_remove_via_other_org,C2b_dual_member_remove_via_other_org,C5c_feature_off_update_own,C9a_leaver_list_hidden,C9b_reinstated_list_returns
+RESTORED clean=True
+== LIST_no_owner (supabase/migrations/20261108220000_backlog_3514_broker_saved_views.sql)
+MUTATION APPLIED numstat=0/1
+  - AND v.user_id = v_uid /*LIST_OWNER*/
+  SQL   total=55 pass=52 fail=3 reds=C3a_agent_lists_own_only,C3b_broker_lists_own_only,C9b_reinstated_list_returns
+RESTORED clean=True
+== LIST_reads_admin_table_sql (supabase/migrations/20261108220000_backlog_3514_broker_saved_views.sql)
+MUTATION APPLIED numstat=5/1
+  - FROM public.broker_report_saved_views v
+  + FROM (SELECT id, name, filters, metric, pinned, is_default, created_at, updated_at, report_key, user_id,
+  + p_org AS organization_id FROM public.report_saved_views
+  + UNION ALL
+  + SELECT id, name, filters, metric, pinned, is_default, created_at, updated_at, report_key, user_id,
+  + organization_id FROM public.broker_report_saved_views) v
+  SQL   total=55 pass=54 fail=1 reds=C1a_broker_list_has_no_admin_view
+RESTORED clean=True
+== LIST_reads_admin_table_ts (broker-portal/lib/reports/saved-views/broker-views-api.ts)
+MUTATION APPLIED numstat=1/1
+  - list: 'broker_report_list_views',
+  + list: 'report_list_saved_views',
+  JEST  total=94 pass=92 fail=2 reds=createBrokerViewsApi › list calls broker_report_list_views with the org and the key, and degrades rows | createBrokerViewsApi › never calls an admin report_* saved-view function
+RESTORED clean=True
+== FEATURE_skipped (supabase/migrations/20261108220000_backlog_3514_broker_saved_views.sql)
+MUTATION APPLIED numstat=0/1
+  - AND coalesce(public._org_feature_allowed(p_org, 'broker_reports'), false) /*FEATURE*/
+  SQL   total=55 pass=50 fail=5 reds=C2b_dual_member_remove_via_other_org,C2b_dual_member_update_via_other_org,C5a_feature_off_save,C5b_feature_off_list,C5c_feature_off_update_own
+RESTORED clean=True
+== ORG_KEY_mutable (supabase/migrations/20261108220000_backlog_3514_broker_saved_views.sql)
+MUTATION APPLIED numstat=1/3
+  - IF NEW.organization_id IS DISTINCT FROM OLD.organization_id /*IMMUTABLE_ORG*/
+  - OR NEW.report_key IS DISTINCT FROM OLD.report_key /*IMMUTABLE_KEY*/
+  - OR NEW.user_id IS DISTINCT FROM OLD.user_id THEN
+  + IF NEW.user_id IS DISTINCT FROM OLD.user_id THEN
+  SQL   total=55 pass=50 fail=5 reds=C10a_org_immutable,C10b_key_immutable,C10d_accepted_update_stays_put,C13a_default_moves,C14_owner_removes_own
+RESTORED clean=True
+== DEGRADE_throws (broker-portal/lib/reports/saved-views/degrade.ts)
+MUTATION APPLIED numstat=1/1
+  - dropped.push(`filter ${key}`) /*STRIP_UNKNOWN_FILTER*/;
+  + throw new Error(`unknown filter ${key}`);
+  JEST  total=77 pass=75 fail=2 reds=degradeView › strips a filter key the report no longer offers BEFORE the query, and names it | serializeViewState › saves only keys the report offers
+RESTORED clean=True
+== ANON_keeps_execute (supabase/migrations/20261108220000_backlog_3514_broker_saved_views.sql)
+MUTATION APPLIED numstat=0/1
+  - REVOKE EXECUTE ON FUNCTION public.broker_report_list_views(uuid, text) FROM PUBLIC, anon;
+  SQL   total=55 pass=52 fail=3 reds=C4_anon_call_refused,C4_rpc_grants_broker_report_list_views,K1_rollback_restores_and_reapplies
+RESTORED clean=True
+== PIN_no_lock (supabase/migrations/20261108220000_backlog_3514_broker_saved_views.sql)
+MUTATION APPLIED numstat=0/3
+  - PERFORM pg_advisory_xact_lock(
+  - hashtextextended('broker_report_saved_views:' || v_org::text || ':' || v_uid::text || ':' || v_key, 3514)
+  - ) /*PIN_LOCK*/;
+  SQL   total=55 pass=54 fail=1 reds=C11b_pin_count_takes_owner_lock
+RESTORED clean=True
