@@ -16,6 +16,7 @@ import { NOW, TABLES } from '@/lib/reports/__tests__/analytics.fixture';
 import { AnalyticsReport, FAILED_VALUE, PERIOD_DRIVEN_SECTIONS, type AnalyticsReportProps } from '../AnalyticsReport';
 import { VERSIONS_EMPTY_TEXT } from '../components/VersionDistribution';
 import { PLATFORM_EMPTY_TEXT } from '../components/PlatformBreakdown';
+import { buildPlatformBreakdown } from '@/lib/reports/analytics';
 import { PHONE_EMPTY_TEXT } from '../components/PhoneTypeBreakdown';
 import { LICENSE_EMPTY_TEXT } from '../components/LicenseUtilization';
 
@@ -74,30 +75,70 @@ describe('tiles', () => {
 });
 
 describe('sections', () => {
-  it('version rows: count and adoption, beta versions after numeric ones (pinned)', () => {
+  it('version rows: count and adoption, each beta just before its release (BACKLOG-4082)', () => {
     const m = html();
     const rows = [...m.matchAll(/font-mono[^>]*>(?:<svg[\s\S]*?<\/svg>)?([^<]+)<\/span><span[^>]*>(\d+)<\/span>[\s\S]*?(\d+)%/g)].map(
       (r) => [r[1], r[2], r[3]]
     );
     expect(rows).toEqual([
-      ['2.41.0', '3', '50'],
-      ['2.44.0', '2', '33'],
       ['2.40.0-beta.3', '1', '17'],
+      ['2.41.0', '3', '50'],
       ['2.44.0-pre.2', '1', '17'],
+      ['2.44.0', '2', '33'],
       ['Unknown', '1', '17'],
     ]);
     expect(m).toContain('seen in the last 30 days');
   });
 
-  it('platform: the bar uses pct, the legend recomputes over the sum — both pinned as they are', () => {
+  it('platform: the bar and the legend show the same pct, over the sum of platform counts (BACKLOG-4081)', () => {
     const m = html();
-    // bar (pct, distinct-user denominator 8): 75 / 38 / 13 / 13
-    expect(block(m, 'data-platform-bar', 'windows')).toContain('width:75%');
-    expect(block(m, 'data-platform-bar', 'macos')).toContain('width:38%');
-    // legend (sum 6+3+1+1 = 11): 55 / 27 / 9 / 9
+    // sum of per-platform counts 6+3+1+1 = 11: 55 / 27 / 9 / 9 (bar and legend agree)
+    expect(block(m, 'data-platform-bar', 'windows')).toContain('width:55%');
+    expect(block(m, 'data-platform-bar', 'macos')).toContain('width:27%');
+    expect(block(m, 'data-platform-bar', 'linux')).toContain('width:9%');
     expect(block(m, 'data-platform-row', 'windows')).toMatch(/>55%/);
     expect(block(m, 'data-platform-row', 'macos')).toMatch(/>27%/);
     expect(block(m, 'data-platform-row', 'linux')).toMatch(/>9%/);
+  });
+
+  it('platform overlap (22 Windows, 11 macOS, 28 distinct users): each bar width equals its legend %, and they sum to ~100', () => {
+    // Users 1-22 on Windows, users 18-28 on macOS: 5 users on both, 28 distinct.
+    const rows = [
+      ...Array.from({ length: 22 }, (_, i) => ({ platform: 'windows', user_id: `u${i + 1}` })),
+      ...Array.from({ length: 11 }, (_, i) => ({ platform: 'macos', user_id: `u${i + 18}` })),
+    ];
+    expect(new Set(rows.map((r) => r.user_id)).size).toBe(28);
+    const platform = { data: buildPlatformBreakdown(rows), failed: false, truncated: false };
+    const m = html({ data: { ...DATA, platform } });
+    const shown = ['windows', 'macos'].map((p) => {
+      const bar = Number(block(m, 'data-platform-bar', p).match(/width:(\d+)%/)?.[1]);
+      const legend = Number(block(m, 'data-platform-row', p).match(/>(\d+)%/)?.[1]);
+      return { p, bar, legend };
+    });
+    for (const s of shown) expect(s.bar).toBe(s.legend);
+    const sum = shown.reduce((t, s) => t + s.bar, 0);
+    expect(sum).toBeGreaterThanOrEqual(98);
+    expect(sum).toBeLessThanOrEqual(102);
+    expect(block(m, 'data-platform-row', 'windows')).toContain('>22 users<');
+    expect(block(m, 'data-platform-row', 'macos')).toContain('>11 users<');
+  });
+
+  it('platform legend shows the pct it is given, never a recompute from user_count', () => {
+    // Component contract: PlatformBreakdown displays entry.pct. These pcts are
+    // deliberately not count/sum (that would be 75 / 25), so a legend that
+    // recomputed from user_count would show a different number than the bar.
+    const platform = {
+      data: [
+        { platform: 'windows', user_count: 3, pct: 60 },
+        { platform: 'macos', user_count: 1, pct: 40 },
+      ],
+      failed: false,
+      truncated: false,
+    };
+    const m = html({ data: { ...DATA, platform } });
+    expect(block(m, 'data-platform-bar', 'windows')).toContain('width:60%');
+    expect(block(m, 'data-platform-row', 'windows')).toMatch(/>60%/);
+    expect(block(m, 'data-platform-row', 'macos')).toMatch(/>40%/);
   });
 
   it('R4: macos shows macOS in blue and windows shows Windows in purple; counts unchanged', () => {
