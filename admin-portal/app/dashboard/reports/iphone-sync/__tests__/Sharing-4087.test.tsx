@@ -7,6 +7,7 @@
  * I1 sharing is wired; a shared view is never a pinned card and never counts toward the cap
  * I2 4132: both save rows still offered, and "Save current view as a card" still pins
  * I3 editor Update sends the page filters + the card's own metric; p_name null, no p_pinned
+ * I4 (BACKLOG-4142) the editor picks a card metric in the Update form; the picked one is sent
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -74,7 +75,7 @@ describe('I1 sharing on a pinning report', () => {
     mount([OWN_CARD, SHARED_EDITOR, SHARED_UNMASKED]);
     await openViews();
     expect(within(panel()).getByRole('button', { name: 'Share Errors' })).toBeTruthy();
-    expect(within(panel()).getByRole('button', { name: 'Update Team cancelled with the current filters' })).toBeTruthy();
+    expect(within(panel()).getByRole('button', { name: 'Update Team cancelled' })).toBeTruthy();
     expect(within(panel()).queryByRole('button', { name: /^(Pin|Unpin) Team/ })).toBeNull();
     expect(cards()).toEqual([OWN_CARD.id]);
   });
@@ -97,7 +98,13 @@ describe('I3 editor Update', () => {
   it('the page filters and the card own metric under the view id; never name or pin', async () => {
     mount([OWN_CARD, SHARED_EDITOR, SHARED_UNMASKED]);
     await openViews();
-    fireEvent.click(within(panel()).getByRole('button', { name: 'Update Team cancelled with the current filters' }));
+    // BACKLOG-4142: Update opens the form seeded with the card's own metric; confirming unchanged keeps it.
+    fireEvent.click(within(panel()).getByRole('button', { name: 'Update Team cancelled' }));
+    const form = within(panel()).getByRole('group', { name: 'Update filters and card metric' });
+    expect(within(form).getByRole('combobox', { name: 'Column' })).toHaveProperty('value', 'duration');
+    expect(within(form).getByRole('combobox', { name: 'Function' })).toHaveProperty('value', 'average');
+    expect(stub.current!.calls('report_save_view')).toHaveLength(0);
+    fireEvent.click(within(form).getByRole('button', { name: 'Update view' }));
     await waitFor(() => expect(stub.current!.calls('report_save_view')).toHaveLength(1));
     const args = stub.current!.calls('report_save_view')[0];
     expect(args).toEqual({
@@ -108,5 +115,34 @@ describe('I3 editor Update', () => {
       p_id: SHARED_EDITOR.id,
     });
     expect(Object.keys(args)).not.toContain('p_pinned');
+  });
+});
+
+describe('I4 editor picks the card metric (BACKLOG-4142)', () => {
+  it('a picked column and function are sent as p_metric; p_name null, no p_pinned', async () => {
+    mount([OWN_CARD, SHARED_EDITOR, SHARED_UNMASKED]);
+    await openViews();
+    fireEvent.click(within(panel()).getByRole('button', { name: 'Update Team cancelled' }));
+    const form = within(panel()).getByRole('group', { name: 'Update filters and card metric' });
+    fireEvent.change(within(form).getByRole('combobox', { name: 'Column' }), { target: { value: 'backup' } });
+    fireEvent.change(within(form).getByRole('combobox', { name: 'Function' }), { target: { value: 'sum' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Update view' }));
+    await waitFor(() => expect(stub.current!.calls('report_save_view')).toHaveLength(1));
+    const args = stub.current!.calls('report_save_view')[0];
+    expect(args).toMatchObject({ p_name: null, p_metric: { col: 'backup', fn: 'sum' }, p_id: SHARED_EDITOR.id });
+    expect(Object.keys(args)).not.toContain('p_pinned');
+  });
+});
+
+describe('I5 the picked metric goes through the iPhone Sync allowlist (BACKLOG-4142)', () => {
+  it('a column outside the list falls back to the report default metric', async () => {
+    mount([OWN_CARD, SHARED_EDITOR, SHARED_UNMASKED]);
+    await openViews();
+    fireEvent.click(within(panel()).getByRole('button', { name: 'Update Team cancelled' }));
+    const form = within(panel()).getByRole('group', { name: 'Update filters and card metric' });
+    fireEvent.change(within(form).getByRole('combobox', { name: 'Column' }), { target: { value: 'not-a-column' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Update view' }));
+    await waitFor(() => expect(stub.current!.calls('report_save_view')).toHaveLength(1));
+    expect(stub.current!.calls('report_save_view')[0]).toMatchObject({ p_metric: { col: 'runs', fn: 'count' } });
   });
 });

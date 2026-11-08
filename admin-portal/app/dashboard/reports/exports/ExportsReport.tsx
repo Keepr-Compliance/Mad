@@ -53,6 +53,7 @@ import {
   exportViewMatchesState,
   EXPORTS_REPORT_KEY,
   formatExportMetricValue,
+  parseExportMetric,
   serializeExportFilters,
   type ExportSavedView,
   type ExportViewMetric,
@@ -215,13 +216,29 @@ export function ExportsReport({
       pinned: options?.pin === true,
     });
   }
-  // Sharing (BACKLOG-4087). An editor's Update changes the FILTERS only (founder rule): the hook
-  // sends the view's own card metric, never this one (use-report-view-sharing.ts).
-  const { sharing, shareDialog } = useReportViewSharing(shareApi, savedViews, EXPORTS_REPORT_KEY, () => ({
-    filters: serializeExportFilters(filters, serializeViewPeriod(period)),
-    // Required by the kit payload type; ignored for a view that has its own metric (every view here).
-    metric,
-  }));
+  // Sharing (BACKLOG-4087). An editor's Update sends the page's filters and the card metric picked in
+  // the Update form, which starts from the view's own (BACKLOG-4142, use-report-view-sharing.ts).
+  const { sharing, shareDialog } = useReportViewSharing(
+    shareApi,
+    savedViews,
+    EXPORTS_REPORT_KEY,
+    () => ({
+      filters: serializeExportFilters(filters, serializeViewPeriod(period)),
+      // Required by the kit payload type; the Update form starts from the view's own metric instead.
+      metric,
+    }),
+    (value: ExportViewMetric, onChange: (next: ExportViewMetric) => void) => (
+      <MetricSaveFields
+        value={value}
+        // The report's allowlist; every Exports column is a count (BACKLOG-4142).
+        onChange={(next) => onChange(parseExportMetric({ col: next.col, fn: 'count' }))}
+        columns={EXPORT_METRIC_COLUMNS}
+        functions={EXPORT_METRIC_FUNCTIONS}
+        functionsForColumn={exportFunctionsFor}
+      />
+    ),
+    parseExportMetric
+  );
 
 
   // Re-saves the view as stored, period included: only `pinned` changes.
