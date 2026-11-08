@@ -14,7 +14,7 @@ const M1 = '20261105100000_backlog_4144_report_access.sql';
 
 /**
  * Catalog keys whose admin page has not landed yet. The key exists so the server can check
- * report_my_access(key) = 'owner' (BACKLOG-4175 sender rule sets, 20261108100000); the page
+ * report_my_access(key) = 'owner' (BACKLOG-4175 sender rule sets, 20261107235503); the page
  * lands in BACKLOG-4186, which deletes this entry. The reports index lists only registry
  * reports, so a pending key shows no dead link.
  */

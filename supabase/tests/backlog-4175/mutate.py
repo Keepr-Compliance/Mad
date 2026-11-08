@@ -11,7 +11,7 @@ Usage: mutate.py <mode>[,<mode>...]   (or: mutate.py all)
 import os, subprocess, sys, json
 here = os.path.dirname(os.path.abspath(__file__))
 root = subprocess.check_output(['git', '-C', here, 'rev-parse', '--show-toplevel'], text=True).strip()
-MIG = 'supabase/migrations/20261108100000_backlog_4175_sender_rule_sets.sql'
+MIG = 'supabase/migrations/20261107235503_backlog_4175_sender_rule_sets.sql'
 RB = 'supabase/tests/backlog-4175/rollback-4175.sql'
 
 GATE = "public.report_my_access('sender-rules') IS DISTINCT FROM 'owner'"
