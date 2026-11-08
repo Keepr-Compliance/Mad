@@ -410,6 +410,16 @@ describe("formatLinkLine — declined (BACKLOG-2410)", () => {
     expect(formatLinkLine(base)).not.toContain("declined");
   });
 
+  /** BACKLOG-4180 — `linkFailed`, printed only when > 0, before `unmatched`. */
+  it("renders link-failed only when it is above zero", () => {
+    expect(formatLinkLine({ ...base, recordsIn: 1119, declined: 2, linkFailed: 1 })).toBe(
+      "[Contacts] links: 1119 records -> id-matched 1102 -> content-matched 12" +
+        " -> flagged 1 -> declined 2 -> link-failed 1 -> unmatched 1",
+    );
+    expect(formatLinkLine({ ...base, linkFailed: 0 })).not.toContain("link-failed");
+    expect(formatLinkLine(base)).not.toContain("link-failed");
+  });
+
   it("closes the arithmetic: id + content + flagged + declined + unmatched = recordsIn", () => {
     const stage: LinkStage = {
       recordsIn: 10,

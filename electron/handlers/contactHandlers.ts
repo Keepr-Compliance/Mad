@@ -768,6 +768,8 @@ function runOpportunisticLinking(userId: string): number {
       // "never asked", and a funnel that folds declines into `unmatched` cannot
       // make that distinction on the one screen support actually reads.
       declined: summary.declined,
+      // BACKLOG-4180 — links rolled back with their copy; shown only when > 0.
+      linkFailed: summary.linkFailed,
     });
   } catch (error) {
     logService.warn(`[Contacts] opportunistic source linking failed: ${error}`, "Contacts");
