@@ -37,7 +37,16 @@ import { AGENT_PLAN_STATES } from '@keepr/shared';
 import { mirrorState } from '@/lib/billing/sync';
 
 const ORIGIN = 'http://localhost:3000';
-const FIELDS = ['cancel_at_period_end', 'current_period_end', 'interval', 'paymentIncomplete', 'state', 'supportGrantEffective'];
+const FIELDS = [
+  'cancel_at_period_end',
+  'current_period_end',
+  'interval',
+  'paymentIncomplete',
+  'state',
+  'subscriptionTrialEndsOn',
+  'supportGrantEffective',
+  'trialEndsOn',
+];
 
 type Obj = Record<string, any>;
 const fx = (n: string): Obj =>
@@ -116,6 +125,8 @@ describe('the caller only', () => {
       cancel_at_period_end: false,
       paymentIncomplete: false,
       supportGrantEffective: false,
+      trialEndsOn: null,
+      subscriptionTrialEndsOn: null,
     });
   });
 
@@ -173,7 +184,7 @@ describe('mode is this deployment\'s', () => {
 });
 
 describe('DTO', () => {
-  it('exactly the six fields, no Stripe or customer ids', async () => {
+  it('exactly the eight fields (six + BACKLOG-4088 trialEndsOn, subscriptionTrialEndsOn), no Stripe or customer ids', async () => {
     given([subRow(FIXTURE_USER_ID, 'test', KEEP)]);
     const { body } = await call();
     expect(Object.keys(body).sort()).toEqual(FIELDS);
@@ -239,5 +250,48 @@ describe('BACKLOG-3860 T10: plan-summary maps every website state to a desktop s
     given([], TRIAL('2025-11-14T05:51:51.123973+00:00'));
     const { body } = await call();
     expect([body.state, body.supportGrantEffective]).toEqual(['none', false]);
+  });
+});
+
+// ---- BACKLOG-4088: the trial dates the desktop card shows ------------------------
+
+describe('BACKLOG-4088: trialEndsOn and subscriptionTrialEndsOn', () => {
+  const TRIAL = (paidThrough: string) => ({
+    organization_plans: [
+      { organization_id: FIXTURE_PERSONAL_ORG_ID, feature_overrides: { unlimited_transactions: { enabled: true, source: 'trial', paid_through: paidThrough } } },
+    ],
+  });
+  const LIVE_END = '2099-11-14T05:51:51.123973+00:00';
+
+  it('live trial -> state support_grant (never trial) and trialEndsOn = the override paid_through', async () => {
+    given([], TRIAL(LIVE_END));
+    const { body } = await call();
+    expect([body.state, body.trialEndsOn, body.subscriptionTrialEndsOn]).toEqual(['support_grant', LIVE_END, null]);
+  });
+
+  it('ended trial -> none, trialEndsOn null', async () => {
+    given([], TRIAL('2025-11-14T05:51:51.123973+00:00'));
+    const { body } = await call();
+    expect([body.state, body.trialEndsOn]).toEqual(['none', null]);
+  });
+
+  it('a non-trial support grant -> trialEndsOn null (the desktop shows no Subscribe)', async () => {
+    given([], { organization_plans: [{ organization_id: FIXTURE_PERSONAL_ORG_ID, feature_overrides: { unlimited_transactions: { enabled: true, source: 'support', paid_through: LIVE_END } } }] });
+    const { body } = await call();
+    expect([body.state, body.trialEndsOn]).toEqual(['support_grant', null]);
+  });
+
+  it('subscribed during the trial: row trialing + the trial override -> active, subscriptionTrialEndsOn = current_period_end [EDITED: sub-C-keep status trialing]', async () => {
+    given([{ ...subRow(FIXTURE_USER_ID, 'test', KEEP), status: 'trialing' }], TRIAL(LIVE_END));
+    const { body } = await call();
+    const end = mirrorState(KEEP as never).current_period_end;
+    expect(end).toEqual(expect.any(String));
+    expect([body.state, body.trialEndsOn, body.subscriptionTrialEndsOn, body.current_period_end]).toEqual(['active', null, end, end]);
+  });
+
+  it('an active (not trialing) row -> subscriptionTrialEndsOn null', async () => {
+    given([subRow(FIXTURE_USER_ID, 'test', KEEP)]);
+    const { body } = await call();
+    expect([body.state, body.subscriptionTrialEndsOn]).toEqual(['active', null]);
   });
 });

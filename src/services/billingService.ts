@@ -59,6 +59,14 @@ export const billingService = {
     }
   },
 
+  /**
+   * BACKLOG-4088: arm the same return-from-browser one-shot after another page was
+   * opened in the browser (the Agent plan Checkout started from the plan card).
+   */
+  armReturnRefresh(): void {
+    arm();
+  },
+
   /** Be told the fresh summary after a return from the portal. Returns unsubscribe. */
   onReturnRefresh(listener: (result: PlanSummaryResult) => void): () => void {
     refreshListeners.add(listener);

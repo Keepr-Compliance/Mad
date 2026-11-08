@@ -6,12 +6,17 @@
  *   billingService arms the return-from-billing one-shot (for every caller, not
  *   only this hook) and this hook subscribes to the fresh summary it produces.
  *
+ * - `subscribe()` (BACKLOG-4088) opens the Agent plan Checkout from the plan card
+ *   during a free trial (the export paywall's IPC, paymentService.beginSubscription)
+ *   and arms the same refresh-on-return.
+ *
  * Display only: `summary` never gates anything. `unavailable` means show the
  * feature-gate fallback line (billing off, offline, 5xx, timeout, signed out).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import billingService, { type PlanSummary } from "../../../services/billingService";
+import { paymentService, type SubscriptionRefusalCode } from "../../../services/paymentService";
 
 export interface UsePlanSummary {
   /** The portal's summary, or null when unavailable or not loaded yet. */
@@ -26,6 +31,12 @@ export interface UsePlanSummary {
   openFailedAddress: string | null;
   /** True when the portal page could not be opened at all. */
   openFailed: boolean;
+  /** BACKLOG-4088: open the Agent plan Checkout; arms the refresh-on-return when it opened. */
+  subscribe: () => Promise<void>;
+  /** BACKLOG-4088: true while the Checkout is being opened. */
+  subscribing: boolean;
+  /** BACKLOG-4088: why the last Subscribe did not open Checkout ("offline" reads as try_again), else null. */
+  subscribeRefusal: SubscriptionRefusalCode | null;
 }
 
 export function usePlanSummary(): UsePlanSummary {
@@ -34,6 +45,8 @@ export function usePlanSummary(): UsePlanSummary {
   const [unavailable, setUnavailable] = useState(false);
   const [openFailed, setOpenFailed] = useState(false);
   const [openFailedAddress, setOpenFailedAddress] = useState<string | null>(null);
+  const [subscribing, setSubscribing] = useState(false);
+  const [subscribeRefusal, setSubscribeRefusal] = useState<SubscriptionRefusalCode | null>(null);
   const mountedRef = useRef(true);
 
   const apply = useCallback(
@@ -73,5 +86,31 @@ export function usePlanSummary(): UsePlanSummary {
     }
   }, []);
 
-  return { summary, loading, unavailable, openBillingPortal, openFailed, openFailedAddress };
+  const subscribe = useCallback(async () => {
+    setSubscribing(true);
+    try {
+      const result = await paymentService.beginSubscription();
+      if (!mountedRef.current) return;
+      if (result.started) {
+        setSubscribeRefusal(null);
+        billingService.armReturnRefresh();
+      } else {
+        setSubscribeRefusal(result.code === "offline" ? "try_again" : result.code);
+      }
+    } finally {
+      if (mountedRef.current) setSubscribing(false);
+    }
+  }, []);
+
+  return {
+    summary,
+    loading,
+    unavailable,
+    openBillingPortal,
+    openFailed,
+    openFailedAddress,
+    subscribe,
+    subscribing,
+    subscribeRefusal,
+  };
 }

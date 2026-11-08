@@ -22,6 +22,8 @@ const ACTIVE = {
   cancel_at_period_end: false,
   paymentIncomplete: false,
   supportGrantEffective: false,
+  trialEndsOn: null,
+  subscriptionTrialEndsOn: null,
 };
 const ENDING = { ...ACTIVE, state: "cancel_pending" as const, cancel_at_period_end: true };
 

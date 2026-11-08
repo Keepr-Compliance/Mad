@@ -1,5 +1,6 @@
 /**
  * "Auto-renew is back on" — BACKLOG-4045 (text approved by the founder, pm_comments on 4045).
+ * BACKLOG-4200/4209: line 1 opens "As you requested," like every staff email (founder ruling on 4200).
  * Sent by the billing outbox (kind notify_auto_renew_on) to the deal's billing contact after Keepr
  * staff turned the brokerage's auto-renew back on. Three sentences. No button. Layout as seats-added.ts.
  */
@@ -13,7 +14,7 @@ export function autoRenewOnSubject(p: Pick<AutoRenewOnParams, 'brokerageName'>):
 
 export function autoRenewOnLines(p: Pick<AutoRenewOnParams, 'brokerageName'>): string[] {
   return [
-    `Keepr turned auto-renew back on for ${p.brokerageName}.`,
+    `As you requested, Keepr turned auto-renew back on for ${p.brokerageName}.`,
     'Your plan renews each month and is billed as before.',
     'If you did not ask for this, contact your Keepr account manager.',
   ];
