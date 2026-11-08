@@ -289,6 +289,93 @@ describe('P4 Update and Leave', () => {
     });
   });
 
+  // BACKLOG-4142: with a picker, the metric the editor picked is what reaches report_save_view.
+  // The card's own metric, the page's metric and the picked one all differ, so an override shows.
+  it('P4d with renderMetric: p_metric is the picked metric, p_name null, no p_pinned; the form starts from the view metric', async () => {
+    const { rpc, client } = fakeClient();
+    const shareApi = createShareApi(() => client);
+    const card = { ...EDITOR, metric: { col: 'duration', fn: 'p90' } };
+    const write = vi.fn((op: () => Promise<unknown>) => void op().catch(() => undefined));
+    const current = vi.fn(() => ({ filters: { types: ['backup'] }, metric: { col: 'runs', fn: 'count' } }));
+    const renderMetric = vi.fn(() => null);
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <ReportAccessProvider reportKey="iphone-sync" title="iPhone Sync" access="owner">
+        {children}
+      </ReportAccessProvider>
+    );
+    const hook = renderHook(
+      () => useReportViewSharing(shareApi, { views: [OWN, card], write }, 'iphone-sync', current, renderMetric),
+      { wrapper }
+    );
+    const sharing = hook.result.current.sharing!;
+    expect(sharing.updateMetric).toBeDefined();
+    expect(sharing.updateMetric!.initial(card)).toEqual({ col: 'duration', fn: 'p90' });
+    const picked = { col: 'errors', fn: 'count' };
+    act(() => sharing.onUpdate(card, { filters: { types: ['backup'] }, metric: picked }, { metricPicked: true }));
+    await waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
+    const [fn, args] = rpc.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(fn).toBe('report_save_view');
+    expect(args).toEqual({
+      p_report_key: 'iphone-sync',
+      p_name: null,
+      p_filters: { types: ['backup'] },
+      p_metric: picked,
+      p_id: vid(3),
+    });
+    expect(Object.keys(args)).not.toContain('p_pinned');
+  });
+
+  // Security review (version skew): a payload without the kit's marker came from a one-click Update,
+  // so even with a picker wired the view's own metric is what goes out.
+  it('P4f with renderMetric but no metricPicked marker: the view own metric is sent, not the payload', async () => {
+    const { rpc, client } = fakeClient();
+    const shareApi = createShareApi(() => client);
+    const card = { ...EDITOR, metric: { col: 'duration', fn: 'p90' } };
+    const write = vi.fn((op: () => Promise<unknown>) => void op().catch(() => undefined));
+    const current = vi.fn(() => ({ filters: { types: ['backup'] }, metric: { col: 'runs', fn: 'count' } }));
+    const hook = renderHook(
+      () => useReportViewSharing(shareApi, { views: [OWN, card], write }, 'iphone-sync', current, () => null),
+      { wrapper: ({ children }: { children: ReactNode }) => <ReportAccessProvider reportKey="iphone-sync" title="iPhone Sync" access="owner">{children}</ReportAccessProvider> }
+    );
+    act(() => hook.result.current.sharing!.onUpdate(card, { filters: { types: ['backup'] }, metric: { col: 'runs', fn: 'count' } }));
+    await waitFor(() => expect(rpc).toHaveBeenCalledTimes(1));
+    const args = rpc.mock.calls[0] as unknown as [string, Record<string, unknown>];
+    expect(args[1].p_metric).toEqual({ col: 'duration', fn: 'p90' });
+  });
+
+  // Security review (input validation): the picked metric and the seed go through the report's allowlist.
+  it('P4g normalizeMetric is applied to the picked metric and to the seed', async () => {
+    const { rpc, client } = fakeClient();
+    const shareApi = createShareApi(() => client);
+    const card = { ...EDITOR, metric: { col: 'not-a-column', fn: 'drop' } };
+    const write = vi.fn((op: () => Promise<unknown>) => void op().catch(() => undefined));
+    const current = vi.fn(() => ({ filters: { types: [] }, metric: { col: 'runs', fn: 'count' } }));
+    const FALLBACK = { col: 'runs', fn: 'count' };
+    const normalize = (raw: unknown) => {
+      const m = raw as { col?: unknown; fn?: unknown };
+      return m && (m.col === 'runs' || m.col === 'duration') && (m.fn === 'count' || m.fn === 'average')
+        ? { col: m.col, fn: m.fn }
+        : FALLBACK;
+    };
+    const hook = renderHook(
+      () => useReportViewSharing(shareApi, { views: [OWN, card], write }, 'iphone-sync', current, () => null, normalize),
+      { wrapper: ({ children }: { children: ReactNode }) => <ReportAccessProvider reportKey="iphone-sync" title="iPhone Sync" access="owner">{children}</ReportAccessProvider> }
+    );
+    const sharing = hook.result.current.sharing!;
+    expect(sharing.updateMetric!.initial(card)).toEqual(FALLBACK);
+    const hostile = { col: 'duration', fn: 'average', extra: '<script>' } as unknown;
+    act(() => sharing.onUpdate(card, { filters: { types: [] }, metric: { col: 'evil', fn: 'x' } }, { metricPicked: true }));
+    act(() => sharing.onUpdate(card, { filters: { types: [] }, metric: hostile }, { metricPicked: true }));
+    await waitFor(() => expect(rpc).toHaveBeenCalledTimes(2));
+    const metrics = rpc.mock.calls.map((c) => (c as unknown as [string, Record<string, unknown>])[1].p_metric);
+    expect(metrics).toEqual([FALLBACK, { col: 'duration', fn: 'average' }]);
+  });
+
+  it('P4e without renderMetric there is no picker (the kit keeps one-click Update)', () => {
+    const { hook } = mount([OWN, EDITOR]);
+    expect(hook.result.current.sharing!.updateMetric).toBeUndefined();
+  });
+
   it('Leave removes the caller access through the write runner', async () => {
     const { hook, write, shareApi } = mount([OWN, VIEWER]);
     act(() => hook.result.current.sharing!.onLeave(VIEWER));

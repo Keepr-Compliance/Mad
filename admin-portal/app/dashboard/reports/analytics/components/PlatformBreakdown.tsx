@@ -54,8 +54,8 @@ export function PlatformBreakdown({ data, failed = false }: Props) {
     );
   }
 
-  const totalUsers = data.reduce((sum, d) => sum + d.user_count, 0);
-
+  // BACKLOG-4081: the bar and the legend both show entry.pct (computed in
+  // buildPlatformBreakdown), so they can never disagree.
   return (
     <Card>
       <h3 className="text-lg font-semibold text-gray-900 mb-4">
@@ -107,10 +107,7 @@ export function PlatformBreakdown({ data, failed = false }: Props) {
                   {entry.user_count.toLocaleString()} user{entry.user_count !== 1 ? 's' : ''}
                 </span>
                 <span className="text-sm font-semibold text-gray-900 w-12 text-right">
-                  {totalUsers > 0
-                    ? Math.round((entry.user_count / totalUsers) * 100)
-                    : 0}
-                  %
+                  {entry.pct}%
                 </span>
               </div>
             </div>
