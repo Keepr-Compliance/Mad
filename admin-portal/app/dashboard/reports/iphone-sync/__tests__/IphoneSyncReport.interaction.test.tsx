@@ -53,13 +53,16 @@ function mount(rows = FIXTURE_ROWS_24, onNavigate = vi.fn()) {
 }
 
 /**
- * Column headers, looked up INSIDE the table head.
+ * Column headers, looked up INSIDE the runs table's head.
  *
  * "Platform", "Outcome" and "Type" are also filter-dropdown triggers, so an
  * unscoped `getByRole('button', {name: /^Platform/})` matches two elements.
  */
 function header(container: HTMLElement, label: RegExp) {
-  const thead = container.querySelector('thead') as HTMLElement;
+  // The RUNS table's head. Each chart above it renders a screen-reader table
+  // of its own (BACKLOG-4208), so the first <thead> in the page is a chart's.
+  const runsTable = container.querySelector('[data-run-id]')?.closest('table') as HTMLElement;
+  const thead = runsTable.querySelector('thead') as HTMLElement;
   return within(thead).getByRole('button', { name: label });
 }
 

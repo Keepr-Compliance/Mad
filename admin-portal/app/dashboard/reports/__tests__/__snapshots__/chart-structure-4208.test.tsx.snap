@@ -1,9 +1,10 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`report chart SVG structure > ExportCharts 7d > sr-only tables 1`] = `0`;
+exports[`report chart SVG structure > ExportCharts 7d > sr-only tables 1`] = `1`;
 
 exports[`report chart SVG structure > ExportCharts 7d 1`] = `
-"<svg aria-label="Exports per day" data-chart="exports" height="200" role="img" viewBox="0 0 600 200" width="100%">
+"<svg aria-labelledby=":id:" data-chart="exports" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Exports per day"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -49,10 +50,11 @@ exports[`report chart SVG structure > ExportCharts 7d 1`] = `
 "
 `;
 
-exports[`report chart SVG structure > ExportCharts 30d > sr-only tables 1`] = `0`;
+exports[`report chart SVG structure > ExportCharts 30d > sr-only tables 1`] = `1`;
 
 exports[`report chart SVG structure > ExportCharts 30d 1`] = `
-"<svg aria-label="Exports per day" data-chart="exports" height="200" role="img" viewBox="0 0 600 200" width="100%">
+"<svg aria-labelledby=":id:" data-chart="exports" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Exports per day"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -158,10 +160,11 @@ exports[`report chart SVG structure > ExportCharts 30d 1`] = `
 "
 `;
 
-exports[`report chart SVG structure > ExportCharts empty > sr-only tables 1`] = `0`;
+exports[`report chart SVG structure > ExportCharts empty > sr-only tables 1`] = `1`;
 
 exports[`report chart SVG structure > ExportCharts empty 1`] = `
-"<svg aria-label="Exports per day" data-chart="exports" height="200" role="img" viewBox="0 0 600 200" width="100%">
+"<svg aria-labelledby=":id:" data-chart="exports" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Exports per day"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -191,10 +194,11 @@ exports[`report chart SVG structure > ExportCharts empty 1`] = `
 "
 `;
 
-exports[`report chart SVG structure > SubmissionCharts 7d > sr-only tables 1`] = `0`;
+exports[`report chart SVG structure > SubmissionCharts 7d > sr-only tables 1`] = `2`;
 
 exports[`report chart SVG structure > SubmissionCharts 7d 1`] = `
-"<svg aria-label="Submit attempts per day" data-chart="attempts" height="200" role="img" viewBox="0 0 600 200" width="100%">
+"<svg aria-labelledby=":id:" data-chart="attempts" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Submit attempts per day"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -206,19 +210,19 @@ exports[`report chart SVG structure > SubmissionCharts 7d 1`] = `
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="14" y2="14">
       <text fill="#9ca3af" font-size="10" text-anchor="end" x="30" y="17"> "7"
   <g>
-    <path d="M61.714,174 L61.714,109.429 Q61.714,105.429 65.714,105.429 L85.714,105.429 Q89.714,105.429 89.714,109.429 L89.714,174 Z" data-value="3" fill="#2a78d6">
+    <path d="M61.714,174 L61.714,109.429 Q61.714,105.429 65.714,105.429 L85.714,105.429 Q89.714,105.429 89.714,109.429 L89.714,174 Z" data-series="attempts" data-value="3" fill="#2a78d6">
     <text fill="#374151" font-size="11" text-anchor="middle" x="75.714" y="101.429"> "3"
   <g>
-    <path d="M141.143,174 L141.143,18 Q141.143,14 145.143,14 L165.143,14 Q169.143,14 169.143,18 L169.143,174 Z" data-value="7" fill="#2a78d6">
+    <path d="M141.143,174 L141.143,18 Q141.143,14 145.143,14 L165.143,14 Q169.143,14 169.143,18 L169.143,174 Z" data-series="attempts" data-value="7" fill="#2a78d6">
     <text fill="#374151" font-size="11" text-anchor="middle" x="155.143" y="10"> "7"
   <g>
-    <path d="M220.571,174 L220.571,132.286 Q220.571,128.286 224.571,128.286 L244.571,128.286 Q248.571,128.286 248.571,132.286 L248.571,174 Z" data-value="2" fill="#2a78d6">
+    <path d="M220.571,174 L220.571,132.286 Q220.571,128.286 224.571,128.286 L244.571,128.286 Q248.571,128.286 248.571,132.286 L248.571,174 Z" data-series="attempts" data-value="2" fill="#2a78d6">
     <text fill="#374151" font-size="11" text-anchor="middle" x="234.571" y="124.286"> "2"
   <g>
-    <path d="M300,174 L300,40.857 Q300,36.857 304,36.857 L324,36.857 Q328,36.857 328,40.857 L328,174 Z" data-value="6" fill="#2a78d6">
+    <path d="M300,174 L300,40.857 Q300,36.857 304,36.857 L324,36.857 Q328,36.857 328,40.857 L328,174 Z" data-series="attempts" data-value="6" fill="#2a78d6">
     <text fill="#374151" font-size="11" text-anchor="middle" x="314" y="32.857"> "6"
   <g>
-    <path d="M379.429,174 L379.429,155.143 Q379.429,151.143 383.429,151.143 L403.429,151.143 Q407.429,151.143 407.429,155.143 L407.429,174 Z" data-value="1" fill="#2a78d6">
+    <path d="M379.429,174 L379.429,155.143 Q379.429,151.143 383.429,151.143 L403.429,151.143 Q407.429,151.143 407.429,155.143 L407.429,174 Z" data-series="attempts" data-value="1" fill="#2a78d6">
     <text fill="#374151" font-size="11" text-anchor="middle" x="393.429" y="147.143"> "1"
   <g aria-hidden="true">
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="75.714" y="192"> "Sep 13"
@@ -237,7 +241,8 @@ exports[`report chart SVG structure > SubmissionCharts 7d 1`] = `
     <rect data-day="2026-09-18" fill="transparent" height="160" width="79.429" x="433.143" y="14">
     <rect data-day="2026-09-19" fill="transparent" height="160" width="79.429" x="512.571" y="14">
 
-<svg aria-label="Failed submit attempts per day, stacked" data-chart="failures" height="200" role="img" viewBox="0 0 600 200" width="100%">
+<svg aria-labelledby=":id:" data-chart="failures" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Failed submit attempts per day, stacked"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -249,21 +254,18 @@ exports[`report chart SVG structure > SubmissionCharts 7d 1`] = `
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="14" y2="14">
       <text fill="#9ca3af" font-size="10" text-anchor="end" x="30" y="17"> "3"
   <g>
-  <g>
-    <path d="M141.143,174 L141.143,71.333 Q141.143,67.333 145.143,67.333 L165.143,67.333 Q169.143,67.333 169.143,71.333 L169.143,174 Z" fill="#d03b3b">
-    <path d="M141.143,65.333 L141.143,18 Q141.143,14 145.143,14 L165.143,14 Q169.143,14 169.143,18 L169.143,65.333 Z" fill="#f59e0b">
+    <path d="M141.143,174 L141.143,71.333 Q141.143,67.333 145.143,67.333 L165.143,67.333 Q169.143,67.333 169.143,71.333 L169.143,174 Z" data-series="failed" fill="#d03b3b">
+    <path d="M141.143,65.333 L141.143,18 Q141.143,14 145.143,14 L165.143,14 Q169.143,14 169.143,18 L169.143,65.333 Z" data-series="didNotFinish" fill="#f59e0b">
     <text fill="#374151" font-size="11" text-anchor="middle" x="155.143" y="10"> "3"
   <g>
-    <path d="M220.571,174 L220.571,124.667 Q220.571,120.667 224.571,120.667 L244.571,120.667 Q248.571,120.667 248.571,124.667 L248.571,174 Z" fill="#d03b3b">
+    <path d="M220.571,174 L220.571,124.667 Q220.571,120.667 224.571,120.667 L244.571,120.667 Q248.571,120.667 248.571,124.667 L248.571,174 Z" data-series="failed" fill="#d03b3b">
     <text fill="#374151" font-size="11" text-anchor="middle" x="234.571" y="116.667"> "1"
   <g>
-    <path d="M300,174 L300,124.667 Q300,120.667 304,120.667 L324,120.667 Q328,120.667 328,124.667 L328,174 Z" fill="#f59e0b">
+    <path d="M300,174 L300,124.667 Q300,120.667 304,120.667 L324,120.667 Q328,120.667 328,124.667 L328,174 Z" data-series="didNotFinish" fill="#f59e0b">
     <text fill="#374151" font-size="11" text-anchor="middle" x="314" y="116.667"> "1"
   <g>
-    <path d="M379.429,174 L379.429,71.333 Q379.429,67.333 383.429,67.333 L403.429,67.333 Q407.429,67.333 407.429,71.333 L407.429,174 Z" fill="#d03b3b">
+    <path d="M379.429,174 L379.429,71.333 Q379.429,67.333 383.429,67.333 L403.429,67.333 Q407.429,67.333 407.429,71.333 L407.429,174 Z" data-series="failed" fill="#d03b3b">
     <text fill="#374151" font-size="11" text-anchor="middle" x="393.429" y="63.333"> "2"
-  <g>
-  <g>
   <g aria-hidden="true">
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="75.714" y="192"> "Sep 13"
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="155.143" y="192"> "Sep 14"
@@ -283,10 +285,11 @@ exports[`report chart SVG structure > SubmissionCharts 7d 1`] = `
 "
 `;
 
-exports[`report chart SVG structure > SubmissionCharts 30d > sr-only tables 1`] = `0`;
+exports[`report chart SVG structure > SubmissionCharts 30d > sr-only tables 1`] = `2`;
 
 exports[`report chart SVG structure > SubmissionCharts 30d 1`] = `
-"<svg aria-label="Submit attempts per day" data-chart="attempts" height="200" role="img" viewBox="0 0 600 200" width="100%">
+"<svg aria-labelledby=":id:" data-chart="attempts" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Submit attempts per day"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -298,53 +301,53 @@ exports[`report chart SVG structure > SubmissionCharts 30d 1`] = `
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="14" y2="14">
       <text fill="#9ca3af" font-size="10" text-anchor="end" x="30" y="17"> "8"
   <g>
-    <path d="M39.521,174 L39.521,118 Q39.521,114 43.521,114 L47.012,114 Q51.012,114 51.012,118 L51.012,174 Z" data-value="3" fill="#2a78d6">
+    <path d="M39.521,174 L39.521,118 Q39.521,114 43.521,114 L47.012,114 Q51.012,114 51.012,118 L51.012,174 Z" data-series="attempts" data-value="3" fill="#2a78d6">
   <g>
-    <path d="M58.055,174 L58.055,38 Q58.055,34 62.055,34 L65.545,34 Q69.545,34 69.545,38 L69.545,174 Z" data-value="7" fill="#2a78d6">
+    <path d="M58.055,174 L58.055,38 Q58.055,34 62.055,34 L65.545,34 Q69.545,34 69.545,38 L69.545,174 Z" data-series="attempts" data-value="7" fill="#2a78d6">
   <g>
-    <path d="M76.588,174 L76.588,138 Q76.588,134 80.588,134 L84.079,134 Q88.079,134 88.079,138 L88.079,174 Z" data-value="2" fill="#2a78d6">
+    <path d="M76.588,174 L76.588,138 Q76.588,134 80.588,134 L84.079,134 Q88.079,134 88.079,138 L88.079,174 Z" data-series="attempts" data-value="2" fill="#2a78d6">
   <g>
-    <path d="M95.121,174 L95.121,58 Q95.121,54 99.121,54 L102.612,54 Q106.612,54 106.612,58 L106.612,174 Z" data-value="6" fill="#2a78d6">
+    <path d="M95.121,174 L95.121,58 Q95.121,54 99.121,54 L102.612,54 Q106.612,54 106.612,58 L106.612,174 Z" data-series="attempts" data-value="6" fill="#2a78d6">
   <g>
-    <path d="M113.655,174 L113.655,158 Q113.655,154 117.655,154 L121.145,154 Q125.145,154 125.145,158 L125.145,174 Z" data-value="1" fill="#2a78d6">
+    <path d="M113.655,174 L113.655,158 Q113.655,154 117.655,154 L121.145,154 Q125.145,154 125.145,158 L125.145,174 Z" data-series="attempts" data-value="1" fill="#2a78d6">
   <g>
-    <path d="M169.255,174 L169.255,98 Q169.255,94 173.255,94 L176.745,94 Q180.745,94 180.745,98 L180.745,174 Z" data-value="4" fill="#2a78d6">
+    <path d="M169.255,174 L169.255,98 Q169.255,94 173.255,94 L176.745,94 Q180.745,94 180.745,98 L180.745,174 Z" data-series="attempts" data-value="4" fill="#2a78d6">
   <g>
-    <path d="M187.788,174 L187.788,18 Q187.788,14 191.788,14 L195.279,14 Q199.279,14 199.279,18 L199.279,174 Z" data-value="8" fill="#2a78d6">
+    <path d="M187.788,174 L187.788,18 Q187.788,14 191.788,14 L195.279,14 Q199.279,14 199.279,18 L199.279,174 Z" data-series="attempts" data-value="8" fill="#2a78d6">
   <g>
-    <path d="M206.321,174 L206.321,118 Q206.321,114 210.321,114 L213.812,114 Q217.812,114 217.812,118 L217.812,174 Z" data-value="3" fill="#2a78d6">
+    <path d="M206.321,174 L206.321,118 Q206.321,114 210.321,114 L213.812,114 Q217.812,114 217.812,118 L217.812,174 Z" data-series="attempts" data-value="3" fill="#2a78d6">
   <g>
-    <path d="M224.855,174 L224.855,38 Q224.855,34 228.855,34 L232.345,34 Q236.345,34 236.345,38 L236.345,174 Z" data-value="7" fill="#2a78d6">
+    <path d="M224.855,174 L224.855,38 Q224.855,34 228.855,34 L232.345,34 Q236.345,34 236.345,38 L236.345,174 Z" data-series="attempts" data-value="7" fill="#2a78d6">
   <g>
-    <path d="M243.388,174 L243.388,138 Q243.388,134 247.388,134 L250.879,134 Q254.879,134 254.879,138 L254.879,174 Z" data-value="2" fill="#2a78d6">
+    <path d="M243.388,174 L243.388,138 Q243.388,134 247.388,134 L250.879,134 Q254.879,134 254.879,138 L254.879,174 Z" data-series="attempts" data-value="2" fill="#2a78d6">
   <g>
-    <path d="M261.921,174 L261.921,58 Q261.921,54 265.921,54 L269.412,54 Q273.412,54 273.412,58 L273.412,174 Z" data-value="6" fill="#2a78d6">
+    <path d="M261.921,174 L261.921,58 Q261.921,54 265.921,54 L269.412,54 Q273.412,54 273.412,58 L273.412,174 Z" data-series="attempts" data-value="6" fill="#2a78d6">
   <g>
-    <path d="M280.455,174 L280.455,158 Q280.455,154 284.455,154 L287.945,154 Q291.945,154 291.945,158 L291.945,174 Z" data-value="1" fill="#2a78d6">
+    <path d="M280.455,174 L280.455,158 Q280.455,154 284.455,154 L287.945,154 Q291.945,154 291.945,158 L291.945,174 Z" data-series="attempts" data-value="1" fill="#2a78d6">
   <g>
-    <path d="M336.055,174 L336.055,98 Q336.055,94 340.055,94 L343.545,94 Q347.545,94 347.545,98 L347.545,174 Z" data-value="4" fill="#2a78d6">
+    <path d="M336.055,174 L336.055,98 Q336.055,94 340.055,94 L343.545,94 Q347.545,94 347.545,98 L347.545,174 Z" data-series="attempts" data-value="4" fill="#2a78d6">
   <g>
-    <path d="M354.588,174 L354.588,18 Q354.588,14 358.588,14 L362.079,14 Q366.079,14 366.079,18 L366.079,174 Z" data-value="8" fill="#2a78d6">
+    <path d="M354.588,174 L354.588,18 Q354.588,14 358.588,14 L362.079,14 Q366.079,14 366.079,18 L366.079,174 Z" data-series="attempts" data-value="8" fill="#2a78d6">
   <g>
-    <path d="M373.121,174 L373.121,118 Q373.121,114 377.121,114 L380.612,114 Q384.612,114 384.612,118 L384.612,174 Z" data-value="3" fill="#2a78d6">
+    <path d="M373.121,174 L373.121,118 Q373.121,114 377.121,114 L380.612,114 Q384.612,114 384.612,118 L384.612,174 Z" data-series="attempts" data-value="3" fill="#2a78d6">
   <g>
-    <path d="M391.655,174 L391.655,38 Q391.655,34 395.655,34 L399.145,34 Q403.145,34 403.145,38 L403.145,174 Z" data-value="7" fill="#2a78d6">
+    <path d="M391.655,174 L391.655,38 Q391.655,34 395.655,34 L399.145,34 Q403.145,34 403.145,38 L403.145,174 Z" data-series="attempts" data-value="7" fill="#2a78d6">
   <g>
-    <path d="M410.188,174 L410.188,138 Q410.188,134 414.188,134 L417.679,134 Q421.679,134 421.679,138 L421.679,174 Z" data-value="2" fill="#2a78d6">
+    <path d="M410.188,174 L410.188,138 Q410.188,134 414.188,134 L417.679,134 Q421.679,134 421.679,138 L421.679,174 Z" data-series="attempts" data-value="2" fill="#2a78d6">
   <g>
-    <path d="M428.721,174 L428.721,58 Q428.721,54 432.721,54 L436.212,54 Q440.212,54 440.212,58 L440.212,174 Z" data-value="6" fill="#2a78d6">
+    <path d="M428.721,174 L428.721,58 Q428.721,54 432.721,54 L436.212,54 Q440.212,54 440.212,58 L440.212,174 Z" data-series="attempts" data-value="6" fill="#2a78d6">
   <g>
-    <path d="M447.255,174 L447.255,158 Q447.255,154 451.255,154 L454.745,154 Q458.745,154 458.745,158 L458.745,174 Z" data-value="1" fill="#2a78d6">
+    <path d="M447.255,174 L447.255,158 Q447.255,154 451.255,154 L454.745,154 Q458.745,154 458.745,158 L458.745,174 Z" data-series="attempts" data-value="1" fill="#2a78d6">
   <g>
-    <path d="M502.855,174 L502.855,98 Q502.855,94 506.855,94 L510.345,94 Q514.345,94 514.345,98 L514.345,174 Z" data-value="4" fill="#2a78d6">
+    <path d="M502.855,174 L502.855,98 Q502.855,94 506.855,94 L510.345,94 Q514.345,94 514.345,98 L514.345,174 Z" data-series="attempts" data-value="4" fill="#2a78d6">
   <g>
-    <path d="M521.388,174 L521.388,18 Q521.388,14 525.388,14 L528.879,14 Q532.879,14 532.879,18 L532.879,174 Z" data-value="8" fill="#2a78d6">
+    <path d="M521.388,174 L521.388,18 Q521.388,14 525.388,14 L528.879,14 Q532.879,14 532.879,18 L532.879,174 Z" data-series="attempts" data-value="8" fill="#2a78d6">
   <g>
-    <path d="M539.921,174 L539.921,118 Q539.921,114 543.921,114 L547.412,114 Q551.412,114 551.412,118 L551.412,174 Z" data-value="3" fill="#2a78d6">
+    <path d="M539.921,174 L539.921,118 Q539.921,114 543.921,114 L547.412,114 Q551.412,114 551.412,118 L551.412,174 Z" data-series="attempts" data-value="3" fill="#2a78d6">
   <g>
-    <path d="M558.455,174 L558.455,38 Q558.455,34 562.455,34 L565.945,34 Q569.945,34 569.945,38 L569.945,174 Z" data-value="7" fill="#2a78d6">
+    <path d="M558.455,174 L558.455,38 Q558.455,34 562.455,34 L565.945,34 Q569.945,34 569.945,38 L569.945,174 Z" data-series="attempts" data-value="7" fill="#2a78d6">
   <g>
-    <path d="M576.988,174 L576.988,138 Q576.988,134 580.988,134 L584.479,134 Q588.479,134 588.479,138 L588.479,174 Z" data-value="2" fill="#2a78d6">
+    <path d="M576.988,174 L576.988,138 Q576.988,134 580.988,134 L584.479,134 Q588.479,134 588.479,138 L588.479,174 Z" data-series="attempts" data-value="2" fill="#2a78d6">
   <g aria-hidden="true">
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="45.267" y="192"> "Aug 21"
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="137.933" y="192"> "Aug 26"
@@ -385,7 +388,8 @@ exports[`report chart SVG structure > SubmissionCharts 30d 1`] = `
     <rect data-day="2026-09-18" fill="transparent" height="160" width="18.533" x="554.933" y="14">
     <rect data-day="2026-09-19" fill="transparent" height="160" width="18.533" x="573.467" y="14">
 
-<svg aria-label="Failed submit attempts per day, stacked" data-chart="failures" height="200" role="img" viewBox="0 0 600 200" width="100%">
+<svg aria-labelledby=":id:" data-chart="failures" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Failed submit attempts per day, stacked"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -397,64 +401,55 @@ exports[`report chart SVG structure > SubmissionCharts 30d 1`] = `
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="14" y2="14">
       <text fill="#9ca3af" font-size="10" text-anchor="end" x="30" y="17"> "3"
   <g>
+    <path d="M58.055,174 L58.055,71.333 Q58.055,67.333 62.055,67.333 L65.545,67.333 Q69.545,67.333 69.545,71.333 L69.545,174 Z" data-series="failed" fill="#d03b3b">
+    <path d="M58.055,65.333 L58.055,18 Q58.055,14 62.055,14 L65.545,14 Q69.545,14 69.545,18 L69.545,65.333 Z" data-series="didNotFinish" fill="#f59e0b">
   <g>
-    <path d="M58.055,174 L58.055,71.333 Q58.055,67.333 62.055,67.333 L65.545,67.333 Q69.545,67.333 69.545,71.333 L69.545,174 Z" fill="#d03b3b">
-    <path d="M58.055,65.333 L58.055,18 Q58.055,14 62.055,14 L65.545,14 Q69.545,14 69.545,18 L69.545,65.333 Z" fill="#f59e0b">
+    <path d="M76.588,174 L76.588,124.667 Q76.588,120.667 80.588,120.667 L84.079,120.667 Q88.079,120.667 88.079,124.667 L88.079,174 Z" data-series="failed" fill="#d03b3b">
   <g>
-    <path d="M76.588,174 L76.588,124.667 Q76.588,120.667 80.588,120.667 L84.079,120.667 Q88.079,120.667 88.079,124.667 L88.079,174 Z" fill="#d03b3b">
+    <path d="M95.121,174 L95.121,124.667 Q95.121,120.667 99.121,120.667 L102.612,120.667 Q106.612,120.667 106.612,124.667 L106.612,174 Z" data-series="didNotFinish" fill="#f59e0b">
   <g>
-    <path d="M95.121,174 L95.121,124.667 Q95.121,120.667 99.121,120.667 L102.612,120.667 Q106.612,120.667 106.612,124.667 L106.612,174 Z" fill="#f59e0b">
+    <path d="M113.655,174 L113.655,71.333 Q113.655,67.333 117.655,67.333 L121.145,67.333 Q125.145,67.333 125.145,71.333 L125.145,174 Z" data-series="failed" fill="#d03b3b">
   <g>
-    <path d="M113.655,174 L113.655,71.333 Q113.655,67.333 117.655,67.333 L121.145,67.333 Q125.145,67.333 125.145,71.333 L125.145,174 Z" fill="#d03b3b">
+    <path d="M169.255,174 L169.255,71.333 Q169.255,67.333 173.255,67.333 L176.745,67.333 Q180.745,67.333 180.745,71.333 L180.745,174 Z" data-series="failed" fill="#d03b3b">
+    <path d="M169.255,65.333 L169.255,18 Q169.255,14 173.255,14 L176.745,14 Q180.745,14 180.745,18 L180.745,65.333 Z" data-series="didNotFinish" fill="#f59e0b">
   <g>
+    <path d="M187.788,174 L187.788,124.667 Q187.788,120.667 191.788,120.667 L195.279,120.667 Q199.279,120.667 199.279,124.667 L199.279,174 Z" data-series="failed" fill="#d03b3b">
   <g>
+    <path d="M206.321,174 L206.321,124.667 Q206.321,120.667 210.321,120.667 L213.812,120.667 Q217.812,120.667 217.812,124.667 L217.812,174 Z" data-series="didNotFinish" fill="#f59e0b">
   <g>
-    <path d="M169.255,174 L169.255,71.333 Q169.255,67.333 173.255,67.333 L176.745,67.333 Q180.745,67.333 180.745,71.333 L180.745,174 Z" fill="#d03b3b">
-    <path d="M169.255,65.333 L169.255,18 Q169.255,14 173.255,14 L176.745,14 Q180.745,14 180.745,18 L180.745,65.333 Z" fill="#f59e0b">
+    <path d="M224.855,174 L224.855,71.333 Q224.855,67.333 228.855,67.333 L232.345,67.333 Q236.345,67.333 236.345,71.333 L236.345,174 Z" data-series="failed" fill="#d03b3b">
   <g>
-    <path d="M187.788,174 L187.788,124.667 Q187.788,120.667 191.788,120.667 L195.279,120.667 Q199.279,120.667 199.279,124.667 L199.279,174 Z" fill="#d03b3b">
+    <path d="M243.388,174 L243.388,124.667 Q243.388,120.667 247.388,120.667 L250.879,120.667 Q254.879,120.667 254.879,124.667 L254.879,174 Z" data-series="failed" fill="#d03b3b">
+    <path d="M243.388,118.667 L243.388,71.333 Q243.388,67.333 247.388,67.333 L250.879,67.333 Q254.879,67.333 254.879,71.333 L254.879,118.667 Z" data-series="didNotFinish" fill="#f59e0b">
   <g>
-    <path d="M206.321,174 L206.321,124.667 Q206.321,120.667 210.321,120.667 L213.812,120.667 Q217.812,120.667 217.812,124.667 L217.812,174 Z" fill="#f59e0b">
+    <path d="M280.455,174 L280.455,71.333 Q280.455,67.333 284.455,67.333 L287.945,67.333 Q291.945,67.333 291.945,71.333 L291.945,174 Z" data-series="failed" fill="#d03b3b">
+    <path d="M280.455,65.333 L280.455,18 Q280.455,14 284.455,14 L287.945,14 Q291.945,14 291.945,18 L291.945,65.333 Z" data-series="didNotFinish" fill="#f59e0b">
   <g>
-    <path d="M224.855,174 L224.855,71.333 Q224.855,67.333 228.855,67.333 L232.345,67.333 Q236.345,67.333 236.345,71.333 L236.345,174 Z" fill="#d03b3b">
+    <path d="M336.055,174 L336.055,71.333 Q336.055,67.333 340.055,67.333 L343.545,67.333 Q347.545,67.333 347.545,71.333 L347.545,174 Z" data-series="failed" fill="#d03b3b">
   <g>
-    <path d="M243.388,174 L243.388,124.667 Q243.388,120.667 247.388,120.667 L250.879,120.667 Q254.879,120.667 254.879,124.667 L254.879,174 Z" fill="#d03b3b">
-    <path d="M243.388,118.667 L243.388,71.333 Q243.388,67.333 247.388,67.333 L250.879,67.333 Q254.879,67.333 254.879,71.333 L254.879,118.667 Z" fill="#f59e0b">
+    <path d="M354.588,174 L354.588,124.667 Q354.588,120.667 358.588,120.667 L362.079,120.667 Q366.079,120.667 366.079,124.667 L366.079,174 Z" data-series="failed" fill="#d03b3b">
+    <path d="M354.588,118.667 L354.588,71.333 Q354.588,67.333 358.588,67.333 L362.079,67.333 Q366.079,67.333 366.079,71.333 L366.079,118.667 Z" data-series="didNotFinish" fill="#f59e0b">
   <g>
+    <path d="M391.655,174 L391.655,71.333 Q391.655,67.333 395.655,67.333 L399.145,67.333 Q403.145,67.333 403.145,71.333 L403.145,174 Z" data-series="failed" fill="#d03b3b">
+    <path d="M391.655,65.333 L391.655,18 Q391.655,14 395.655,14 L399.145,14 Q403.145,14 403.145,18 L403.145,65.333 Z" data-series="didNotFinish" fill="#f59e0b">
   <g>
-    <path d="M280.455,174 L280.455,71.333 Q280.455,67.333 284.455,67.333 L287.945,67.333 Q291.945,67.333 291.945,71.333 L291.945,174 Z" fill="#d03b3b">
-    <path d="M280.455,65.333 L280.455,18 Q280.455,14 284.455,14 L287.945,14 Q291.945,14 291.945,18 L291.945,65.333 Z" fill="#f59e0b">
+    <path d="M410.188,174 L410.188,124.667 Q410.188,120.667 414.188,120.667 L417.679,120.667 Q421.679,120.667 421.679,124.667 L421.679,174 Z" data-series="failed" fill="#d03b3b">
   <g>
+    <path d="M428.721,174 L428.721,124.667 Q428.721,120.667 432.721,120.667 L436.212,120.667 Q440.212,120.667 440.212,124.667 L440.212,174 Z" data-series="didNotFinish" fill="#f59e0b">
   <g>
+    <path d="M447.255,174 L447.255,71.333 Q447.255,67.333 451.255,67.333 L454.745,67.333 Q458.745,67.333 458.745,71.333 L458.745,174 Z" data-series="failed" fill="#d03b3b">
   <g>
-    <path d="M336.055,174 L336.055,71.333 Q336.055,67.333 340.055,67.333 L343.545,67.333 Q347.545,67.333 347.545,71.333 L347.545,174 Z" fill="#d03b3b">
+    <path d="M502.855,174 L502.855,71.333 Q502.855,67.333 506.855,67.333 L510.345,67.333 Q514.345,67.333 514.345,71.333 L514.345,174 Z" data-series="failed" fill="#d03b3b">
+    <path d="M502.855,65.333 L502.855,18 Q502.855,14 506.855,14 L510.345,14 Q514.345,14 514.345,18 L514.345,65.333 Z" data-series="didNotFinish" fill="#f59e0b">
   <g>
-    <path d="M354.588,174 L354.588,124.667 Q354.588,120.667 358.588,120.667 L362.079,120.667 Q366.079,120.667 366.079,124.667 L366.079,174 Z" fill="#d03b3b">
-    <path d="M354.588,118.667 L354.588,71.333 Q354.588,67.333 358.588,67.333 L362.079,67.333 Q366.079,67.333 366.079,71.333 L366.079,118.667 Z" fill="#f59e0b">
+    <path d="M521.388,174 L521.388,124.667 Q521.388,120.667 525.388,120.667 L528.879,120.667 Q532.879,120.667 532.879,124.667 L532.879,174 Z" data-series="failed" fill="#d03b3b">
   <g>
+    <path d="M539.921,174 L539.921,124.667 Q539.921,120.667 543.921,120.667 L547.412,120.667 Q551.412,120.667 551.412,124.667 L551.412,174 Z" data-series="didNotFinish" fill="#f59e0b">
   <g>
-    <path d="M391.655,174 L391.655,71.333 Q391.655,67.333 395.655,67.333 L399.145,67.333 Q403.145,67.333 403.145,71.333 L403.145,174 Z" fill="#d03b3b">
-    <path d="M391.655,65.333 L391.655,18 Q391.655,14 395.655,14 L399.145,14 Q403.145,14 403.145,18 L403.145,65.333 Z" fill="#f59e0b">
+    <path d="M558.455,174 L558.455,71.333 Q558.455,67.333 562.455,67.333 L565.945,67.333 Q569.945,67.333 569.945,71.333 L569.945,174 Z" data-series="failed" fill="#d03b3b">
   <g>
-    <path d="M410.188,174 L410.188,124.667 Q410.188,120.667 414.188,120.667 L417.679,120.667 Q421.679,120.667 421.679,124.667 L421.679,174 Z" fill="#d03b3b">
-  <g>
-    <path d="M428.721,174 L428.721,124.667 Q428.721,120.667 432.721,120.667 L436.212,120.667 Q440.212,120.667 440.212,124.667 L440.212,174 Z" fill="#f59e0b">
-  <g>
-    <path d="M447.255,174 L447.255,71.333 Q447.255,67.333 451.255,67.333 L454.745,67.333 Q458.745,67.333 458.745,71.333 L458.745,174 Z" fill="#d03b3b">
-  <g>
-  <g>
-  <g>
-    <path d="M502.855,174 L502.855,71.333 Q502.855,67.333 506.855,67.333 L510.345,67.333 Q514.345,67.333 514.345,71.333 L514.345,174 Z" fill="#d03b3b">
-    <path d="M502.855,65.333 L502.855,18 Q502.855,14 506.855,14 L510.345,14 Q514.345,14 514.345,18 L514.345,65.333 Z" fill="#f59e0b">
-  <g>
-    <path d="M521.388,174 L521.388,124.667 Q521.388,120.667 525.388,120.667 L528.879,120.667 Q532.879,120.667 532.879,124.667 L532.879,174 Z" fill="#d03b3b">
-  <g>
-    <path d="M539.921,174 L539.921,124.667 Q539.921,120.667 543.921,120.667 L547.412,120.667 Q551.412,120.667 551.412,124.667 L551.412,174 Z" fill="#f59e0b">
-  <g>
-    <path d="M558.455,174 L558.455,71.333 Q558.455,67.333 562.455,67.333 L565.945,67.333 Q569.945,67.333 569.945,71.333 L569.945,174 Z" fill="#d03b3b">
-  <g>
-    <path d="M576.988,174 L576.988,124.667 Q576.988,120.667 580.988,120.667 L584.479,120.667 Q588.479,120.667 588.479,124.667 L588.479,174 Z" fill="#d03b3b">
-    <path d="M576.988,118.667 L576.988,71.333 Q576.988,67.333 580.988,67.333 L584.479,67.333 Q588.479,67.333 588.479,71.333 L588.479,118.667 Z" fill="#f59e0b">
+    <path d="M576.988,174 L576.988,124.667 Q576.988,120.667 580.988,120.667 L584.479,120.667 Q588.479,120.667 588.479,124.667 L588.479,174 Z" data-series="failed" fill="#d03b3b">
+    <path d="M576.988,118.667 L576.988,71.333 Q576.988,67.333 580.988,67.333 L584.479,67.333 Q588.479,67.333 588.479,71.333 L588.479,118.667 Z" data-series="didNotFinish" fill="#f59e0b">
   <g aria-hidden="true">
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="45.267" y="192"> "Aug 21"
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="137.933" y="192"> "Aug 26"
@@ -497,10 +492,11 @@ exports[`report chart SVG structure > SubmissionCharts 30d 1`] = `
 "
 `;
 
-exports[`report chart SVG structure > SubmissionCharts empty > sr-only tables 1`] = `0`;
+exports[`report chart SVG structure > SubmissionCharts empty > sr-only tables 1`] = `2`;
 
 exports[`report chart SVG structure > SubmissionCharts empty 1`] = `
-"<svg aria-label="Submit attempts per day" data-chart="attempts" height="200" role="img" viewBox="0 0 600 200" width="100%">
+"<svg aria-labelledby=":id:" data-chart="attempts" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Submit attempts per day"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -528,7 +524,8 @@ exports[`report chart SVG structure > SubmissionCharts empty 1`] = `
     <rect data-day="2026-09-18" fill="transparent" height="160" width="79.429" x="433.143" y="14">
     <rect data-day="2026-09-19" fill="transparent" height="160" width="79.429" x="512.571" y="14">
 
-<svg aria-label="Failed submit attempts per day, stacked" data-chart="failures" height="200" role="img" viewBox="0 0 600 200" width="100%">
+<svg aria-labelledby=":id:" data-chart="failures" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Failed submit attempts per day, stacked"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -539,13 +536,6 @@ exports[`report chart SVG structure > SubmissionCharts empty 1`] = `
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
       <text fill="#9ca3af" font-size="10" text-anchor="end" x="30" y="177">
-  <g>
-  <g>
-  <g>
-  <g>
-  <g>
-  <g>
-  <g>
   <g aria-hidden="true">
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="75.714" y="192"> "Sep 13"
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="155.143" y="192"> "Sep 14"
@@ -565,10 +555,11 @@ exports[`report chart SVG structure > SubmissionCharts empty 1`] = `
 "
 `;
 
-exports[`report chart SVG structure > SyncCharts 7d > sr-only tables 1`] = `0`;
+exports[`report chart SVG structure > SyncCharts 7d > sr-only tables 1`] = `2`;
 
 exports[`report chart SVG structure > SyncCharts 7d 1`] = `
-"<svg aria-label="Average sync duration in minutes per day" height="200" role="img" viewBox="0 0 600 200" width="100%">
+"<svg aria-labelledby=":id:" data-chart="duration" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Average sync duration in minutes per day"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -580,19 +571,19 @@ exports[`report chart SVG structure > SyncCharts 7d 1`] = `
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="14" y2="14">
       <text fill="#9ca3af" font-size="10" text-anchor="end" x="30" y="17"> "3.7"
   <g>
-    <path d="M61.714,174 L61.714,173.676 Q61.714,169.676 65.714,169.676 L85.714,169.676 Q89.714,169.676 89.714,173.676 L89.714,174 Z" data-value="0.1" fill="#2a78d6">
+    <path d="M61.714,174 L61.714,173.676 Q61.714,169.676 65.714,169.676 L85.714,169.676 Q89.714,169.676 89.714,173.676 L89.714,174 Z" data-series="duration" data-value="0.1" fill="#2a78d6">
     <text fill="#374151" font-size="11" text-anchor="middle" x="75.714" y="165.676"> "0"
   <g>
-    <path d="M141.143,174 L141.143,26.649 Q141.143,22.649 145.143,22.649 L165.143,22.649 Q169.143,22.649 169.143,26.649 L169.143,174 Z" data-value="3.5" fill="#2a78d6">
+    <path d="M141.143,174 L141.143,26.649 Q141.143,22.649 145.143,22.649 L165.143,22.649 Q169.143,22.649 169.143,26.649 L169.143,174 Z" data-series="duration" data-value="3.5" fill="#2a78d6">
     <text fill="#374151" font-size="11" text-anchor="middle" x="155.143" y="18.649"> "4"
   <g>
-    <path d="M220.571,174 L220.571,18 Q220.571,14 224.571,14 L244.571,14 Q248.571,14 248.571,18 L248.571,174 Z" data-value="3.7" fill="#2a78d6">
+    <path d="M220.571,174 L220.571,18 Q220.571,14 224.571,14 L244.571,14 Q248.571,14 248.571,18 L248.571,174 Z" data-series="duration" data-value="3.7" fill="#2a78d6">
     <text fill="#374151" font-size="11" text-anchor="middle" x="234.571" y="10"> "4"
   <g>
-    <path d="M379.429,174 L379.429,173.676 Q379.429,169.676 383.429,169.676 L403.429,169.676 Q407.429,169.676 407.429,173.676 L407.429,174 Z" data-value="0.1" fill="#2a78d6">
+    <path d="M379.429,174 L379.429,173.676 Q379.429,169.676 383.429,169.676 L403.429,169.676 Q407.429,169.676 407.429,173.676 L407.429,174 Z" data-series="duration" data-value="0.1" fill="#2a78d6">
     <text fill="#374151" font-size="11" text-anchor="middle" x="393.429" y="165.676"> "0"
   <g>
-    <path d="M458.857,174 L458.857,69.892 Q458.857,65.892 462.857,65.892 L482.857,65.892 Q486.857,65.892 486.857,69.892 L486.857,174 Z" data-value="2.5" fill="#2a78d6">
+    <path d="M458.857,174 L458.857,69.892 Q458.857,65.892 462.857,65.892 L482.857,65.892 Q486.857,65.892 486.857,69.892 L486.857,174 Z" data-series="duration" data-value="2.5" fill="#2a78d6">
     <text fill="#374151" font-size="11" text-anchor="middle" x="472.857" y="61.892"> "3"
   <g aria-hidden="true">
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="75.714" y="192"> "Sep 13"
@@ -611,7 +602,8 @@ exports[`report chart SVG structure > SyncCharts 7d 1`] = `
     <rect data-day="2026-09-18" fill="transparent" height="160" width="79.429" x="433.143" y="14">
     <rect data-day="2026-09-19" fill="transparent" height="160" width="79.429" x="512.571" y="14">
 
-<svg aria-label="Failed syncs per day, errors and cancels stacked" height="200" role="img" viewBox="0 0 600 200" width="100%">
+<svg aria-labelledby=":id:" data-chart="failures" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Failed syncs per day, errors and cancels stacked"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -623,23 +615,20 @@ exports[`report chart SVG structure > SyncCharts 7d 1`] = `
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="14" y2="14">
       <text fill="#9ca3af" font-size="10" text-anchor="end" x="30" y="17"> "3"
   <g>
-    <path d="M61.714,174 L61.714,124.667 Q61.714,120.667 65.714,120.667 L85.714,120.667 Q89.714,120.667 89.714,124.667 L89.714,174 Z" fill="#d03b3b">
-    <path d="M61.714,118.667 L61.714,71.333 Q61.714,67.333 65.714,67.333 L85.714,67.333 Q89.714,67.333 89.714,71.333 L89.714,118.667 Z" fill="#f59e0b">
+    <path d="M61.714,174 L61.714,124.667 Q61.714,120.667 65.714,120.667 L85.714,120.667 Q89.714,120.667 89.714,124.667 L89.714,174 Z" data-series="errors" fill="#d03b3b">
+    <path d="M61.714,118.667 L61.714,71.333 Q61.714,67.333 65.714,67.333 L85.714,67.333 Q89.714,67.333 89.714,71.333 L89.714,118.667 Z" data-series="cancelled" fill="#f59e0b">
     <text fill="#374151" font-size="11" text-anchor="middle" x="75.714" y="63.333"> "2"
   <g>
-    <path d="M141.143,174 L141.143,71.333 Q141.143,67.333 145.143,67.333 L165.143,67.333 Q169.143,67.333 169.143,71.333 L169.143,174 Z" fill="#d03b3b">
-    <path d="M141.143,65.333 L141.143,18 Q141.143,14 145.143,14 L165.143,14 Q169.143,14 169.143,18 L169.143,65.333 Z" fill="#f59e0b">
+    <path d="M141.143,174 L141.143,71.333 Q141.143,67.333 145.143,67.333 L165.143,67.333 Q169.143,67.333 169.143,71.333 L169.143,174 Z" data-series="errors" fill="#d03b3b">
+    <path d="M141.143,65.333 L141.143,18 Q141.143,14 145.143,14 L165.143,14 Q169.143,14 169.143,18 L169.143,65.333 Z" data-series="cancelled" fill="#f59e0b">
     <text fill="#374151" font-size="11" text-anchor="middle" x="155.143" y="10"> "3"
   <g>
-    <path d="M220.571,174 L220.571,124.667 Q220.571,120.667 224.571,120.667 L244.571,120.667 Q248.571,120.667 248.571,124.667 L248.571,174 Z" fill="#f59e0b">
+    <path d="M220.571,174 L220.571,124.667 Q220.571,120.667 224.571,120.667 L244.571,120.667 Q248.571,120.667 248.571,124.667 L248.571,174 Z" data-series="cancelled" fill="#f59e0b">
     <text fill="#374151" font-size="11" text-anchor="middle" x="234.571" y="116.667"> "1"
   <g>
-  <g>
-  <g>
-    <path d="M458.857,174 L458.857,124.667 Q458.857,120.667 462.857,120.667 L482.857,120.667 Q486.857,120.667 486.857,124.667 L486.857,174 Z" fill="#d03b3b">
-    <path d="M458.857,118.667 L458.857,71.333 Q458.857,67.333 462.857,67.333 L482.857,67.333 Q486.857,67.333 486.857,71.333 L486.857,118.667 Z" fill="#f59e0b">
+    <path d="M458.857,174 L458.857,124.667 Q458.857,120.667 462.857,120.667 L482.857,120.667 Q486.857,120.667 486.857,124.667 L486.857,174 Z" data-series="errors" fill="#d03b3b">
+    <path d="M458.857,118.667 L458.857,71.333 Q458.857,67.333 462.857,67.333 L482.857,67.333 Q486.857,67.333 486.857,71.333 L486.857,118.667 Z" data-series="cancelled" fill="#f59e0b">
     <text fill="#374151" font-size="11" text-anchor="middle" x="472.857" y="63.333"> "2"
-  <g>
   <g aria-hidden="true">
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="75.714" y="192"> "Sep 13"
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="155.143" y="192"> "Sep 14"
@@ -659,10 +648,11 @@ exports[`report chart SVG structure > SyncCharts 7d 1`] = `
 "
 `;
 
-exports[`report chart SVG structure > SyncCharts 30d > sr-only tables 1`] = `0`;
+exports[`report chart SVG structure > SyncCharts 30d > sr-only tables 1`] = `2`;
 
 exports[`report chart SVG structure > SyncCharts 30d 1`] = `
-"<svg aria-label="Average sync duration in minutes per day" height="200" role="img" viewBox="0 0 600 200" width="100%">
+"<svg aria-labelledby=":id:" data-chart="duration" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Average sync duration in minutes per day"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -674,45 +664,45 @@ exports[`report chart SVG structure > SyncCharts 30d 1`] = `
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="14" y2="14">
       <text fill="#9ca3af" font-size="10" text-anchor="end" x="30" y="17"> "6.5"
   <g>
-    <path d="M39.521,174 L39.521,174 Q39.521,171.538 41.983,171.538 L48.55,171.538 Q51.012,171.538 51.012,174 L51.012,174 Z" data-value="0.1" fill="#2a78d6">
+    <path d="M39.521,174 L39.521,174 Q39.521,171.538 41.983,171.538 L48.55,171.538 Q51.012,171.538 51.012,174 L51.012,174 Z" data-series="duration" data-value="0.1" fill="#2a78d6">
   <g>
-    <path d="M58.055,174 L58.055,91.846 Q58.055,87.846 62.055,87.846 L65.545,87.846 Q69.545,87.846 69.545,91.846 L69.545,174 Z" data-value="3.5" fill="#2a78d6">
+    <path d="M58.055,174 L58.055,91.846 Q58.055,87.846 62.055,87.846 L65.545,87.846 Q69.545,87.846 69.545,91.846 L69.545,174 Z" data-series="duration" data-value="3.5" fill="#2a78d6">
   <g>
-    <path d="M76.588,174 L76.588,86.923 Q76.588,82.923 80.588,82.923 L84.079,82.923 Q88.079,82.923 88.079,86.923 L88.079,174 Z" data-value="3.7" fill="#2a78d6">
+    <path d="M76.588,174 L76.588,86.923 Q76.588,82.923 80.588,82.923 L84.079,82.923 Q88.079,82.923 88.079,86.923 L88.079,174 Z" data-series="duration" data-value="3.7" fill="#2a78d6">
   <g>
-    <path d="M113.655,174 L113.655,174 Q113.655,171.538 116.116,171.538 L122.684,171.538 Q125.145,171.538 125.145,174 L125.145,174 Z" data-value="0.1" fill="#2a78d6">
+    <path d="M113.655,174 L113.655,174 Q113.655,171.538 116.116,171.538 L122.684,171.538 Q125.145,171.538 125.145,174 L125.145,174 Z" data-series="duration" data-value="0.1" fill="#2a78d6">
   <g>
-    <path d="M132.188,174 L132.188,116.462 Q132.188,112.462 136.188,112.462 L139.679,112.462 Q143.679,112.462 143.679,116.462 L143.679,174 Z" data-value="2.5" fill="#2a78d6">
+    <path d="M132.188,174 L132.188,116.462 Q132.188,112.462 136.188,112.462 L139.679,112.462 Q143.679,112.462 143.679,116.462 L143.679,174 Z" data-series="duration" data-value="2.5" fill="#2a78d6">
   <g>
-    <path d="M169.255,174 L169.255,42.615 Q169.255,38.615 173.255,38.615 L176.745,38.615 Q180.745,38.615 180.745,42.615 L180.745,174 Z" data-value="5.5" fill="#2a78d6">
+    <path d="M169.255,174 L169.255,42.615 Q169.255,38.615 173.255,38.615 L176.745,38.615 Q180.745,38.615 180.745,42.615 L180.745,174 Z" data-series="duration" data-value="5.5" fill="#2a78d6">
   <g>
-    <path d="M187.788,174 L187.788,146 Q187.788,142 191.788,142 L195.279,142 Q199.279,142 199.279,146 L199.279,174 Z" data-value="1.3" fill="#2a78d6">
+    <path d="M187.788,174 L187.788,146 Q187.788,142 191.788,142 L195.279,142 Q199.279,142 199.279,146 L199.279,174 Z" data-series="duration" data-value="1.3" fill="#2a78d6">
   <g>
-    <path d="M206.321,174 L206.321,131.231 Q206.321,127.231 210.321,127.231 L213.812,127.231 Q217.812,127.231 217.812,131.231 L217.812,174 Z" data-value="1.9" fill="#2a78d6">
+    <path d="M206.321,174 L206.321,131.231 Q206.321,127.231 210.321,127.231 L213.812,127.231 Q217.812,127.231 217.812,131.231 L217.812,174 Z" data-series="duration" data-value="1.9" fill="#2a78d6">
   <g>
-    <path d="M261.921,174 L261.921,146 Q261.921,142 265.921,142 L269.412,142 Q273.412,142 273.412,146 L273.412,174 Z" data-value="1.3" fill="#2a78d6">
+    <path d="M261.921,174 L261.921,146 Q261.921,142 265.921,142 L269.412,142 Q273.412,142 273.412,146 L273.412,174 Z" data-series="duration" data-value="1.3" fill="#2a78d6">
   <g>
-    <path d="M298.988,174 L298.988,94.308 Q298.988,90.308 302.988,90.308 L306.479,90.308 Q310.479,90.308 310.479,94.308 L310.479,174 Z" data-value="3.4" fill="#2a78d6">
+    <path d="M298.988,174 L298.988,94.308 Q298.988,90.308 302.988,90.308 L306.479,90.308 Q310.479,90.308 310.479,94.308 L310.479,174 Z" data-series="duration" data-value="3.4" fill="#2a78d6">
   <g>
-    <path d="M317.521,174 L317.521,18 Q317.521,14 321.521,14 L325.012,14 Q329.012,14 329.012,18 L329.012,174 Z" data-value="6.5" fill="#2a78d6">
+    <path d="M317.521,174 L317.521,18 Q317.521,14 321.521,14 L325.012,14 Q329.012,14 329.012,18 L329.012,174 Z" data-series="duration" data-value="6.5" fill="#2a78d6">
   <g>
-    <path d="M373.121,174 L373.121,101.692 Q373.121,97.692 377.121,97.692 L380.612,97.692 Q384.612,97.692 384.612,101.692 L384.612,174 Z" data-value="3.1" fill="#2a78d6">
+    <path d="M373.121,174 L373.121,101.692 Q373.121,97.692 377.121,97.692 L380.612,97.692 Q384.612,97.692 384.612,101.692 L384.612,174 Z" data-series="duration" data-value="3.1" fill="#2a78d6">
   <g>
-    <path d="M391.655,174 L391.655,57.385 Q391.655,53.385 395.655,53.385 L399.145,53.385 Q403.145,53.385 403.145,57.385 L403.145,174 Z" data-value="4.9" fill="#2a78d6">
+    <path d="M391.655,174 L391.655,57.385 Q391.655,53.385 395.655,53.385 L399.145,53.385 Q403.145,53.385 403.145,57.385 L403.145,174 Z" data-series="duration" data-value="4.9" fill="#2a78d6">
   <g>
-    <path d="M428.721,174 L428.721,109.077 Q428.721,105.077 432.721,105.077 L436.212,105.077 Q440.212,105.077 440.212,109.077 L440.212,174 Z" data-value="2.8" fill="#2a78d6">
+    <path d="M428.721,174 L428.721,109.077 Q428.721,105.077 432.721,105.077 L436.212,105.077 Q440.212,105.077 440.212,109.077 L440.212,174 Z" data-series="duration" data-value="2.8" fill="#2a78d6">
   <g>
-    <path d="M447.255,174 L447.255,72.154 Q447.255,68.154 451.255,68.154 L454.745,68.154 Q458.745,68.154 458.745,72.154 L458.745,174 Z" data-value="4.3" fill="#2a78d6">
+    <path d="M447.255,174 L447.255,72.154 Q447.255,68.154 451.255,68.154 L454.745,68.154 Q458.745,68.154 458.745,72.154 L458.745,174 Z" data-series="duration" data-value="4.3" fill="#2a78d6">
   <g>
-    <path d="M465.788,174 L465.788,57.385 Q465.788,53.385 469.788,53.385 L473.279,53.385 Q477.279,53.385 477.279,57.385 L477.279,174 Z" data-value="4.9" fill="#2a78d6">
+    <path d="M465.788,174 L465.788,57.385 Q465.788,53.385 469.788,53.385 L473.279,53.385 Q477.279,53.385 477.279,57.385 L477.279,174 Z" data-series="duration" data-value="4.9" fill="#2a78d6">
   <g>
-    <path d="M502.855,174 L502.855,138.615 Q502.855,134.615 506.855,134.615 L510.345,134.615 Q514.345,134.615 514.345,138.615 L514.345,174 Z" data-value="1.6" fill="#2a78d6">
+    <path d="M502.855,174 L502.855,138.615 Q502.855,134.615 506.855,134.615 L510.345,134.615 Q514.345,134.615 514.345,138.615 L514.345,174 Z" data-series="duration" data-value="1.6" fill="#2a78d6">
   <g>
-    <path d="M521.388,174 L521.388,64.769 Q521.388,60.769 525.388,60.769 L528.879,60.769 Q532.879,60.769 532.879,64.769 L532.879,174 Z" data-value="4.6" fill="#2a78d6">
+    <path d="M521.388,174 L521.388,64.769 Q521.388,60.769 525.388,60.769 L528.879,60.769 Q532.879,60.769 532.879,64.769 L532.879,174 Z" data-series="duration" data-value="4.6" fill="#2a78d6">
   <g>
-    <path d="M558.455,174 L558.455,160.769 Q558.455,156.769 562.455,156.769 L565.945,156.769 Q569.945,156.769 569.945,160.769 L569.945,174 Z" data-value="0.7" fill="#2a78d6">
+    <path d="M558.455,174 L558.455,160.769 Q558.455,156.769 562.455,156.769 L565.945,156.769 Q569.945,156.769 569.945,160.769 L569.945,174 Z" data-series="duration" data-value="0.7" fill="#2a78d6">
   <g>
-    <path d="M576.988,174 L576.988,101.692 Q576.988,97.692 580.988,97.692 L584.479,97.692 Q588.479,97.692 588.479,101.692 L588.479,174 Z" data-value="3.1" fill="#2a78d6">
+    <path d="M576.988,174 L576.988,101.692 Q576.988,97.692 580.988,97.692 L584.479,97.692 Q588.479,97.692 588.479,101.692 L588.479,174 Z" data-series="duration" data-value="3.1" fill="#2a78d6">
   <g aria-hidden="true">
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="45.267" y="192"> "Aug 21"
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="137.933" y="192"> "Aug 26"
@@ -753,7 +743,8 @@ exports[`report chart SVG structure > SyncCharts 30d 1`] = `
     <rect data-day="2026-09-18" fill="transparent" height="160" width="18.533" x="554.933" y="14">
     <rect data-day="2026-09-19" fill="transparent" height="160" width="18.533" x="573.467" y="14">
 
-<svg aria-label="Failed syncs per day, errors and cancels stacked" height="200" role="img" viewBox="0 0 600 200" width="100%">
+<svg aria-labelledby=":id:" data-chart="failures" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Failed syncs per day, errors and cancels stacked"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -765,62 +756,48 @@ exports[`report chart SVG structure > SyncCharts 30d 1`] = `
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="14" y2="14">
       <text fill="#9ca3af" font-size="10" text-anchor="end" x="30" y="17"> "3"
   <g>
-    <path d="M39.521,174 L39.521,124.667 Q39.521,120.667 43.521,120.667 L47.012,120.667 Q51.012,120.667 51.012,124.667 L51.012,174 Z" fill="#d03b3b">
-    <path d="M39.521,118.667 L39.521,71.333 Q39.521,67.333 43.521,67.333 L47.012,67.333 Q51.012,67.333 51.012,71.333 L51.012,118.667 Z" fill="#f59e0b">
+    <path d="M39.521,174 L39.521,124.667 Q39.521,120.667 43.521,120.667 L47.012,120.667 Q51.012,120.667 51.012,124.667 L51.012,174 Z" data-series="errors" fill="#d03b3b">
+    <path d="M39.521,118.667 L39.521,71.333 Q39.521,67.333 43.521,67.333 L47.012,67.333 Q51.012,67.333 51.012,71.333 L51.012,118.667 Z" data-series="cancelled" fill="#f59e0b">
   <g>
-    <path d="M58.055,174 L58.055,71.333 Q58.055,67.333 62.055,67.333 L65.545,67.333 Q69.545,67.333 69.545,71.333 L69.545,174 Z" fill="#d03b3b">
-    <path d="M58.055,65.333 L58.055,18 Q58.055,14 62.055,14 L65.545,14 Q69.545,14 69.545,18 L69.545,65.333 Z" fill="#f59e0b">
+    <path d="M58.055,174 L58.055,71.333 Q58.055,67.333 62.055,67.333 L65.545,67.333 Q69.545,67.333 69.545,71.333 L69.545,174 Z" data-series="errors" fill="#d03b3b">
+    <path d="M58.055,65.333 L58.055,18 Q58.055,14 62.055,14 L65.545,14 Q69.545,14 69.545,18 L69.545,65.333 Z" data-series="cancelled" fill="#f59e0b">
   <g>
-    <path d="M76.588,174 L76.588,124.667 Q76.588,120.667 80.588,120.667 L84.079,120.667 Q88.079,120.667 88.079,124.667 L88.079,174 Z" fill="#f59e0b">
+    <path d="M76.588,174 L76.588,124.667 Q76.588,120.667 80.588,120.667 L84.079,120.667 Q88.079,120.667 88.079,124.667 L88.079,174 Z" data-series="cancelled" fill="#f59e0b">
   <g>
+    <path d="M132.188,174 L132.188,124.667 Q132.188,120.667 136.188,120.667 L139.679,120.667 Q143.679,120.667 143.679,124.667 L143.679,174 Z" data-series="errors" fill="#d03b3b">
+    <path d="M132.188,118.667 L132.188,71.333 Q132.188,67.333 136.188,67.333 L139.679,67.333 Q143.679,67.333 143.679,71.333 L143.679,118.667 Z" data-series="cancelled" fill="#f59e0b">
   <g>
+    <path d="M169.255,174 L169.255,124.667 Q169.255,120.667 173.255,120.667 L176.745,120.667 Q180.745,120.667 180.745,124.667 L180.745,174 Z" data-series="cancelled" fill="#f59e0b">
   <g>
-    <path d="M132.188,174 L132.188,124.667 Q132.188,120.667 136.188,120.667 L139.679,120.667 Q143.679,120.667 143.679,124.667 L143.679,174 Z" fill="#d03b3b">
-    <path d="M132.188,118.667 L132.188,71.333 Q132.188,67.333 136.188,67.333 L139.679,67.333 Q143.679,67.333 143.679,71.333 L143.679,118.667 Z" fill="#f59e0b">
+    <path d="M187.788,174 L187.788,124.667 Q187.788,120.667 191.788,120.667 L195.279,120.667 Q199.279,120.667 199.279,124.667 L199.279,174 Z" data-series="errors" fill="#d03b3b">
+    <path d="M187.788,118.667 L187.788,71.333 Q187.788,67.333 191.788,67.333 L195.279,67.333 Q199.279,67.333 199.279,71.333 L199.279,118.667 Z" data-series="cancelled" fill="#f59e0b">
   <g>
+    <path d="M243.388,174 L243.388,124.667 Q243.388,120.667 247.388,120.667 L250.879,120.667 Q254.879,120.667 254.879,124.667 L254.879,174 Z" data-series="errors" fill="#d03b3b">
   <g>
-    <path d="M169.255,174 L169.255,124.667 Q169.255,120.667 173.255,120.667 L176.745,120.667 Q180.745,120.667 180.745,124.667 L180.745,174 Z" fill="#f59e0b">
+    <path d="M261.921,174 L261.921,124.667 Q261.921,120.667 265.921,120.667 L269.412,120.667 Q273.412,120.667 273.412,124.667 L273.412,174 Z" data-series="cancelled" fill="#f59e0b">
   <g>
-    <path d="M187.788,174 L187.788,124.667 Q187.788,120.667 191.788,120.667 L195.279,120.667 Q199.279,120.667 199.279,124.667 L199.279,174 Z" fill="#d03b3b">
-    <path d="M187.788,118.667 L187.788,71.333 Q187.788,67.333 191.788,67.333 L195.279,67.333 Q199.279,67.333 199.279,71.333 L199.279,118.667 Z" fill="#f59e0b">
+    <path d="M298.988,174 L298.988,124.667 Q298.988,120.667 302.988,120.667 L306.479,120.667 Q310.479,120.667 310.479,124.667 L310.479,174 Z" data-series="errors" fill="#d03b3b">
   <g>
+    <path d="M317.521,174 L317.521,124.667 Q317.521,120.667 321.521,120.667 L325.012,120.667 Q329.012,120.667 329.012,124.667 L329.012,174 Z" data-series="errors" fill="#d03b3b">
+    <path d="M317.521,118.667 L317.521,71.333 Q317.521,67.333 321.521,67.333 L325.012,67.333 Q329.012,67.333 329.012,71.333 L329.012,118.667 Z" data-series="cancelled" fill="#f59e0b">
   <g>
+    <path d="M336.055,174 L336.055,124.667 Q336.055,120.667 340.055,120.667 L343.545,120.667 Q347.545,120.667 347.545,124.667 L347.545,174 Z" data-series="errors" fill="#d03b3b">
+    <path d="M336.055,118.667 L336.055,71.333 Q336.055,67.333 340.055,67.333 L343.545,67.333 Q347.545,67.333 347.545,71.333 L347.545,118.667 Z" data-series="cancelled" fill="#f59e0b">
   <g>
-    <path d="M243.388,174 L243.388,124.667 Q243.388,120.667 247.388,120.667 L250.879,120.667 Q254.879,120.667 254.879,124.667 L254.879,174 Z" fill="#d03b3b">
+    <path d="M391.655,174 L391.655,124.667 Q391.655,120.667 395.655,120.667 L399.145,120.667 Q403.145,120.667 403.145,124.667 L403.145,174 Z" data-series="errors" fill="#d03b3b">
+    <path d="M391.655,118.667 L391.655,71.333 Q391.655,67.333 395.655,67.333 L399.145,67.333 Q403.145,67.333 403.145,71.333 L403.145,118.667 Z" data-series="cancelled" fill="#f59e0b">
   <g>
-    <path d="M261.921,174 L261.921,124.667 Q261.921,120.667 265.921,120.667 L269.412,120.667 Q273.412,120.667 273.412,124.667 L273.412,174 Z" fill="#f59e0b">
+    <path d="M428.721,174 L428.721,124.667 Q428.721,120.667 432.721,120.667 L436.212,120.667 Q440.212,120.667 440.212,124.667 L440.212,174 Z" data-series="errors" fill="#d03b3b">
+    <path d="M428.721,118.667 L428.721,71.333 Q428.721,67.333 432.721,67.333 L436.212,67.333 Q440.212,67.333 440.212,71.333 L440.212,118.667 Z" data-series="cancelled" fill="#f59e0b">
   <g>
+    <path d="M447.255,174 L447.255,124.667 Q447.255,120.667 451.255,120.667 L454.745,120.667 Q458.745,120.667 458.745,124.667 L458.745,174 Z" data-series="errors" fill="#d03b3b">
+    <path d="M447.255,118.667 L447.255,18 Q447.255,14 451.255,14 L454.745,14 Q458.745,14 458.745,18 L458.745,118.667 Z" data-series="cancelled" fill="#f59e0b">
   <g>
-    <path d="M298.988,174 L298.988,124.667 Q298.988,120.667 302.988,120.667 L306.479,120.667 Q310.479,120.667 310.479,124.667 L310.479,174 Z" fill="#d03b3b">
+    <path d="M521.388,174 L521.388,124.667 Q521.388,120.667 525.388,120.667 L528.879,120.667 Q532.879,120.667 532.879,124.667 L532.879,174 Z" data-series="errors" fill="#d03b3b">
+    <path d="M521.388,118.667 L521.388,71.333 Q521.388,67.333 525.388,67.333 L528.879,67.333 Q532.879,67.333 532.879,71.333 L532.879,118.667 Z" data-series="cancelled" fill="#f59e0b">
   <g>
-    <path d="M317.521,174 L317.521,124.667 Q317.521,120.667 321.521,120.667 L325.012,120.667 Q329.012,120.667 329.012,124.667 L329.012,174 Z" fill="#d03b3b">
-    <path d="M317.521,118.667 L317.521,71.333 Q317.521,67.333 321.521,67.333 L325.012,67.333 Q329.012,67.333 329.012,71.333 L329.012,118.667 Z" fill="#f59e0b">
-  <g>
-    <path d="M336.055,174 L336.055,124.667 Q336.055,120.667 340.055,120.667 L343.545,120.667 Q347.545,120.667 347.545,124.667 L347.545,174 Z" fill="#d03b3b">
-    <path d="M336.055,118.667 L336.055,71.333 Q336.055,67.333 340.055,67.333 L343.545,67.333 Q347.545,67.333 347.545,71.333 L347.545,118.667 Z" fill="#f59e0b">
-  <g>
-  <g>
-  <g>
-    <path d="M391.655,174 L391.655,124.667 Q391.655,120.667 395.655,120.667 L399.145,120.667 Q403.145,120.667 403.145,124.667 L403.145,174 Z" fill="#d03b3b">
-    <path d="M391.655,118.667 L391.655,71.333 Q391.655,67.333 395.655,67.333 L399.145,67.333 Q403.145,67.333 403.145,71.333 L403.145,118.667 Z" fill="#f59e0b">
-  <g>
-  <g>
-    <path d="M428.721,174 L428.721,124.667 Q428.721,120.667 432.721,120.667 L436.212,120.667 Q440.212,120.667 440.212,124.667 L440.212,174 Z" fill="#d03b3b">
-    <path d="M428.721,118.667 L428.721,71.333 Q428.721,67.333 432.721,67.333 L436.212,67.333 Q440.212,67.333 440.212,71.333 L440.212,118.667 Z" fill="#f59e0b">
-  <g>
-    <path d="M447.255,174 L447.255,124.667 Q447.255,120.667 451.255,120.667 L454.745,120.667 Q458.745,120.667 458.745,124.667 L458.745,174 Z" fill="#d03b3b">
-    <path d="M447.255,118.667 L447.255,18 Q447.255,14 451.255,14 L454.745,14 Q458.745,14 458.745,18 L458.745,118.667 Z" fill="#f59e0b">
-  <g>
-  <g>
-  <g>
-  <g>
-    <path d="M521.388,174 L521.388,124.667 Q521.388,120.667 525.388,120.667 L528.879,120.667 Q532.879,120.667 532.879,124.667 L532.879,174 Z" fill="#d03b3b">
-    <path d="M521.388,118.667 L521.388,71.333 Q521.388,67.333 525.388,67.333 L528.879,67.333 Q532.879,67.333 532.879,71.333 L532.879,118.667 Z" fill="#f59e0b">
-  <g>
-  <g>
-  <g>
-    <path d="M576.988,174 L576.988,124.667 Q576.988,120.667 580.988,120.667 L584.479,120.667 Q588.479,120.667 588.479,124.667 L588.479,174 Z" fill="#d03b3b">
-    <path d="M576.988,118.667 L576.988,71.333 Q576.988,67.333 580.988,67.333 L584.479,67.333 Q588.479,67.333 588.479,71.333 L588.479,118.667 Z" fill="#f59e0b">
+    <path d="M576.988,174 L576.988,124.667 Q576.988,120.667 580.988,120.667 L584.479,120.667 Q588.479,120.667 588.479,124.667 L588.479,174 Z" data-series="errors" fill="#d03b3b">
+    <path d="M576.988,118.667 L576.988,71.333 Q576.988,67.333 580.988,67.333 L584.479,67.333 Q588.479,67.333 588.479,71.333 L588.479,118.667 Z" data-series="cancelled" fill="#f59e0b">
   <g aria-hidden="true">
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="45.267" y="192"> "Aug 21"
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="137.933" y="192"> "Aug 26"
@@ -863,10 +840,11 @@ exports[`report chart SVG structure > SyncCharts 30d 1`] = `
 "
 `;
 
-exports[`report chart SVG structure > SyncCharts empty > sr-only tables 1`] = `0`;
+exports[`report chart SVG structure > SyncCharts empty > sr-only tables 1`] = `2`;
 
 exports[`report chart SVG structure > SyncCharts empty 1`] = `
-"<svg aria-label="Average sync duration in minutes per day" height="200" role="img" viewBox="0 0 600 200" width="100%">
+"<svg aria-labelledby=":id:" data-chart="duration" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Average sync duration in minutes per day"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -894,7 +872,8 @@ exports[`report chart SVG structure > SyncCharts empty 1`] = `
     <rect data-day="2026-09-18" fill="transparent" height="160" width="79.429" x="433.143" y="14">
     <rect data-day="2026-09-19" fill="transparent" height="160" width="79.429" x="512.571" y="14">
 
-<svg aria-label="Failed syncs per day, errors and cancels stacked" height="200" role="img" viewBox="0 0 600 200" width="100%">
+<svg aria-labelledby=":id:" data-chart="failures" height="200" role="img" viewBox="0 0 600 200" width="100%">
+  <title id=":id:"> "Failed syncs per day, errors and cancels stacked"
   <g aria-hidden="true">
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
@@ -905,13 +884,6 @@ exports[`report chart SVG structure > SyncCharts empty 1`] = `
     <g>
       <line stroke-width="1" stroke="#e5e7eb" x1="36" x2="592" y1="174" y2="174">
       <text fill="#9ca3af" font-size="10" text-anchor="end" x="30" y="177">
-  <g>
-  <g>
-  <g>
-  <g>
-  <g>
-  <g>
-  <g>
   <g aria-hidden="true">
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="75.714" y="192"> "Sep 13"
     <text fill="#9ca3af" font-size="10" text-anchor="middle" x="155.143" y="192"> "Sep 14"

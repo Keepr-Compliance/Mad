@@ -18,8 +18,9 @@
  * adds sits next to it and is counted separately.
  */
 
+import { cleanup, render } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { bucketByDay, type ChartRun } from '@/lib/reports/iphone-sync-charts';
 import { daysInRange, formatDayLabel, type PeriodRange } from '@/lib/reports/period';
 import type { SubmissionDayBucket } from '@/lib/reports/submissions';
@@ -176,6 +177,33 @@ describe('report chart SVG structure', () => {
       );
       expect(svgs).toMatchSnapshot();
       expect(srTables).toMatchSnapshot('sr-only tables');
+    });
+  }
+});
+
+describe('an empty period renders without a duplicate-key warning', () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  // Google Messages renders the same SyncCharts as iPhone Sync.
+  const cases: Array<[string, () => JSX.Element]> = [
+    ['iPhone Sync / Google Messages', () => <SyncCharts buckets={bucketByDay([], RANGES.empty)} />],
+    ['Submissions', () => <SubmissionCharts buckets={submissionBuckets('empty')} />],
+    ['Exports', () => <ExportCharts buckets={exportBuckets('empty')} />],
+  ];
+
+  for (const [name, element] of cases) {
+    it(name, () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      // A client render: only the reconciler checks sibling keys.
+      const { container } = render(element());
+      expect(container.querySelectorAll('svg').length).toBeGreaterThan(0);
+      const keyWarnings = spy.mock.calls.filter((args) =>
+        args.some((a) => typeof a === 'string' && a.includes('same key'))
+      );
+      expect(keyWarnings).toEqual([]);
     });
   }
 });
