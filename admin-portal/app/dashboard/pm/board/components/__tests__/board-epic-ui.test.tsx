@@ -25,14 +25,14 @@ const PROJECTS = [
   { id: 'project-q', name: 'Alpha' },
 ] as PmProject[];
 
-function renderFilters(swimLane: SwimLaneMode, onProjectChange = vi.fn()) {
+function renderFilters(swimLane: SwimLaneMode, onProjectChange = vi.fn(), selectedProjectId = '') {
   render(
     <BoardFilters
       sprints={[]}
       selectedSprintId=""
       onSprintChange={vi.fn()}
       projects={PROJECTS}
-      selectedProjectId=""
+      selectedProjectId={selectedProjectId}
       onProjectChange={onProjectChange}
       swimLane={swimLane}
       onSwimLaneChange={vi.fn()}
@@ -50,7 +50,7 @@ function renderFilters(swimLane: SwimLaneMode, onProjectChange = vi.fn()) {
 describe('BoardFilters', () => {
   it('Project mode shows a searchable project picker, prompts "Select a project", hides sprint + Backlog', () => {
     const onProjectChange = renderFilters('project');
-    const picker = screen.getByLabelText('Project');
+    const picker = screen.getByTestId('project-picker');
     expect(picker.textContent).toBe('Select a project');
     expect(screen.queryByText('Select Sprint')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Backlog' })).toBeNull();
@@ -66,18 +66,31 @@ describe('BoardFilters', () => {
 
   it('shows "No projects found" and the status badge, and clears search on backdrop close', () => {
     renderFilters('project');
-    fireEvent.click(screen.getByLabelText('Project'));
+    fireEvent.click(screen.getByTestId('project-picker'));
     expect(screen.getByText('active')).toBeTruthy();
     fireEvent.change(screen.getByPlaceholderText('Search projects...'), { target: { value: 'zzz' } });
     expect(screen.getByText('No projects found')).toBeTruthy();
     fireEvent.click(screen.getByTestId('project-dropdown-backdrop'));
-    fireEvent.click(screen.getByLabelText('Project'));
+    fireEvent.click(screen.getByTestId('project-picker'));
     expect((screen.getByPlaceholderText('Search projects...') as HTMLInputElement).value).toBe('');
+  });
+
+  it('the picker announces the selected project name and its open state (BACKLOG-4195 N7)', () => {
+    renderFilters('project', vi.fn(), 'project-q');
+    const picker = screen.getByRole('button', { name: 'Project: Alpha' });
+    expect(picker.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(picker);
+    expect(picker.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('with no project picked, the picker announces "Project: Select a project"', () => {
+    renderFilters('project');
+    expect(screen.getByRole('button', { name: 'Project: Select a project' })).toBeTruthy();
   });
 
   it.each(['off', 'area', 'assignee'] as SwimLaneMode[])('%s mode keeps the sprint selector, no picker', (mode) => {
     renderFilters(mode);
-    expect(screen.queryByLabelText('Project')).toBeNull();
+    expect(screen.queryByTestId('project-picker')).toBeNull();
     expect(screen.getByText('Select Sprint')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Backlog' })).toBeTruthy();
   });
@@ -128,7 +141,7 @@ describe('EpicLaneGrid', () => {
       );
     expect(ids('epic-lane-epic-b')).toContain('cell:dim=epic:key=epic-b:status=testing');
     expect(ids('epic-lane-none')).toContain('cell:dim=epic:key=No Epic:status=pending');
-    expect(ids('epic-lane-epic-b')).toHaveLength(9);
+    expect(ids('epic-lane-epic-b')).toHaveLength(10); // one per COLUMN_ORDER status, incl. pending_uat (BACKLOG-4192)
   });
 
   it('epics never render as cards', () => {
@@ -144,7 +157,7 @@ describe('EpicLaneGrid', () => {
     const { onQuickAdd, onAddEpic } = renderEpicGrid();
     const row = screen.getByTestId('epic-lane-epic-b');
     const adds = within(row).getAllByRole('button', { name: 'Add backlog' });
-    expect(adds).toHaveLength(9);
+    expect(adds).toHaveLength(10);
     expect(screen.queryByRole('button', { name: 'Add item' })).toBeNull();
     fireEvent.click(adds[2]); // testing column
     fireEvent.change(within(row).getByPlaceholderText('Enter title...'), { target: { value: 'Card' } });

@@ -26,6 +26,7 @@ function emptyColumns(): BoardColumns {
     pending: [],
     in_progress: [],
     testing: [],
+    pending_uat: [],
     waiting_for_user: [],
     completed: [],
     blocked: [],
@@ -84,7 +85,9 @@ export function groupColumnsByEpic(columns: BoardColumns): EpicLane[] {
       if (item.type === 'epic') continue;
       const key = laneKeyForItem(item, epicIds);
       const lane = lanesByKey.get(key) ?? noEpic;
-      (lane.columns[status as keyof BoardColumns] as PmBacklogItem[]).push(item);
+      // A status key this build does not know (a newer RPC) gets its own list instead of throwing.
+      const laneCols = lane.columns as unknown as Record<string, PmBacklogItem[] | undefined>;
+      (laneCols[status] ??= []).push(item);
     }
   }
 
