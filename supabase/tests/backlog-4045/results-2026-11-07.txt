@@ -1,0 +1,43 @@
+BACKLOG-4045 SQL controls, keepr-test after apply (ledger top 20261107140000; _billing_set_auto_renew md5(prosrc) 37a9118ba65886346a0ca9af88afdaeb before, 698cec91f74a59f49101fac6afe197dc after; ACL postgres + service_role unchanged), one call ending in RAISE (rolled back). The same modes also ran with the migration composed in front before the apply: identical reds.
+G_guard reds in every mutation mode by design: the migration guard refuses any body that is not the 20261020220000 or 4045 body.
+
+base: pass=8 fail=0 reds={}
+   none
+c1_no_enqueue: pass=6 fail=2 reds=['C1_staff_on_one_row', 'G_guard']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer) 4659251c->1528912c [  IF false THEN]
+c2_staff_any: pass=3 fail=5 reds=['C1_staff_on_one_row', 'C2_staff_off_no_row', 'C3_brokerage_on_no_row', 'C5_suspended_no_row', 'G_guard']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer) 4659251c->09798f71 [  IF p_caller = 'staff' THEN]
+c3_any_caller: pass=6 fail=2 reds=['C3_brokerage_on_no_row', 'G_guard']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer) 4659251c->d803f30f [  IF p_on AND v_new_status = 'active' THEN]
+c4_before_early_return: pass=3 fail=5 reds=['C1_staff_on_one_row', 'C2_staff_off_no_row', 'C4_noop_no_row', 'C5_suspended_no_row', 'G_guard']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer) 4659251c->f32c8d2b [    IF p_on AND p_caller = 'staff' THEN       INSERT INTO public.billi]
+c5_no_status_test: pass=6 fail=2 reds=['C5_suspended_no_row', 'G_guard']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer) 4659251c->d5dc0c9e [  IF p_on AND p_caller = 'staff' THEN]
+c6_no_on_conflict: pass=6 fail=2 reds=['C6_dedupe_on_conflict', 'G_guard']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer) 4659251c->fadb3bd4 ['version', v_version));]
+
+BACKLOG-4019 controls re-run on keepr-test, all 23 modes, before and after the 4045 apply:
+identical pass/fail/reds in every mode: True
+base: pass=40 fail=0 reds={}
+c1c_widen_suspended: pass=36 fail=4 reds=['C1c_suspended_not_widened', 'G3_finalize_plan_ended', 'G5_unlock_allowed', 'W8_canceled_features_off']
+c2_admin_widened: pass=37 fail=3 reds=['C2_caller_matrix', 'C2_rpc_cells', 'R_reader_renewing']
+c2_no_contact_branch: pass=35 fail=5 reds=['C2_billing_only_login', 'C2_caller_matrix', 'C2_rpc_cells', 'DB6_brokerage_refused_while_suspended', 'R_reader_renewing']
+c2_removed_contact_counts: pass=39 fail=1 reds=['C2_removed_contact_refused']
+c3_no_suspended_refusal: pass=39 fail=1 reds=['DB6_brokerage_refused_while_suspended']
+grant_end_to_authenticated: pass=39 fail=1 reds=['C7_grants']
+grant_switch_to_authenticated: pass=39 fail=1 reds=['C7_grants']
+w11_reader_broker_admin_only: pass=39 fail=1 reds=['R_reader_renewing']
+w12_alert_for_staff: pass=36 fail=4 reds=['D4_off_again_noop', 'W12_alert_for_admin', 'W12_dedupe', 'W12_no_alert_for_staff']
+w1_no_version_bump: pass=33 fail=7 reds=['D4_off_again_noop', 'D4_on_by_admin', 'DB6_brokerage_refused_while_suspended', 'DB6_staff_allowed_while_suspended', 'W1_off_one_sync_row', 'W12_alert_for_admin', 'W6_resume_after_end_refused']
+w4_end_any_deal: pass=39 fail=1 reds=['W4_end_active_untouched']
+w4_end_any_subscription: pass=35 fail=5 reds=['DB2_canceled_refused', 'E4_restart_opens', 'G0_open_while_canceling', 'W4_end_canceling', 'W4_end_other_sub_untouched']
+w6_resume_after_end: pass=39 fail=1 reds=['W6_resume_after_end_refused']
+w7_view_is_enough: pass=38 fail=2 reds=['C2_caller_matrix', 'C2_rpc_cells']
+w8_no_canceled_branch: pass=39 fail=1 reds=['W8_canceled_features_off']
+w9_comment_suspended_only: pass=39 fail=1 reds=['G3_comment_refused']
+w9_finalize_no_plan_ended: pass=39 fail=1 reds=['G3_finalize_plan_ended']
+w9_insert_suspended_only: pass=39 fail=1 reds=['G3_agent_insert_refused']
+w9_review_suspended_only: pass=38 fail=2 reds=['G1_review_refused', 'G4_sight']
+w9_storage_suspended_only: pass=39 fail=1 reds=['G3_storage_refused']
+w9_update_both_layers: pass=39 fail=1 reds=['G2_reviewer_update_own_refused']
+w9_update_using_suspended_only: pass=39 fail=1 reds=['G2_reviewer_update_own_refused']

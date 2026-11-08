@@ -270,82 +270,6 @@ describe("MicrosoftAuthService - Token Refresh", () => {
   });
 });
 
-describe("MicrosoftAuthService - Direct Code Resolution", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  describe("resolveCodeDirectly", () => {
-    it("should resolve the code promise when resolver is set", async () => {
-      // Start local server to set up the resolver
-      const { codePromise } = microsoftAuthService.startLocalServer();
-
-      // Resolve directly
-      microsoftAuthService.resolveCodeDirectly("test-auth-code");
-
-      // The promise should resolve with the code
-      const code = await codePromise;
-      expect(code).toBe("test-auth-code");
-    });
-
-    it("should stop local server after resolving", () => {
-      const stopSpy = jest.spyOn(microsoftAuthService, "stopLocalServer");
-
-      // Start and then resolve
-      microsoftAuthService.startLocalServer();
-      microsoftAuthService.resolveCodeDirectly("test-code");
-
-      expect(stopSpy).toHaveBeenCalled();
-      stopSpy.mockRestore();
-    });
-  });
-
-  describe("rejectCodeDirectly", () => {
-    it("should reject the code promise when rejecter is set", async () => {
-      // Start local server to set up the rejecter
-      const { codePromise } = microsoftAuthService.startLocalServer();
-
-      // Reject directly
-      microsoftAuthService.rejectCodeDirectly("Auth error");
-
-      // The promise should reject with the error
-      await expect(codePromise).rejects.toThrow("Auth error");
-    });
-
-    it("should stop local server after rejecting", async () => {
-      const stopSpy = jest.spyOn(microsoftAuthService, "stopLocalServer");
-
-      // Start and then reject - must catch the rejected promise
-      const { codePromise } = microsoftAuthService.startLocalServer();
-      microsoftAuthService.rejectCodeDirectly("error");
-
-      // Await the rejection to prevent unhandled promise rejection
-      await expect(codePromise).rejects.toThrow("error");
-      expect(stopSpy).toHaveBeenCalled();
-      stopSpy.mockRestore();
-    });
-  });
-});
-
-// Note: exchangeCodeForTokens tests require proper axios mocking at module level
-// These tests are covered by integration tests and manual testing.
-
-// Note: getUserInfo tests require proper axios mocking at module level
-// These tests are covered by integration tests and manual testing.
-
-// Note: refreshToken tests require proper axios mocking at module level
-// The axios mock is set up but the singleton service imports the real axios
-// before the mock takes effect. These tests are covered by integration tests.
-
-/**
- * BACKLOG-3206 — Microsoft cannot end its own grant, and must say so.
- *
- * This test used to assert `result.success === true`, which pinned a lie: the
- * method does nothing, and "success" for doing nothing is indistinguishable, to
- * a caller deciding what to tell the user, from a grant that was actually
- * revoked. The `success` field is gone from the shape, so the assertion is now
- * that no success-shaped result can come back at all.
- */
 describe("MicrosoftAuthService - revokeToken", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -379,34 +303,6 @@ describe("MicrosoftAuthService - stopLocalServer", () => {
   });
 });
 
-describe("MicrosoftAuthService - resolveCodeDirectly edge cases", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it("should not throw when called without active resolver", () => {
-    microsoftAuthService.stopLocalServer();
-
-    expect(() => {
-      microsoftAuthService.resolveCodeDirectly("test-code");
-    }).not.toThrow();
-  });
-});
-
-describe("MicrosoftAuthService - rejectCodeDirectly edge cases", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it("should not throw when called without active rejecter", () => {
-    microsoftAuthService.stopLocalServer();
-
-    expect(() => {
-      microsoftAuthService.rejectCodeDirectly("test-error");
-    }).not.toThrow();
-  });
-});
-
 describe("MicrosoftAuthService - authenticateForMailbox", () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -428,8 +324,8 @@ describe("MicrosoftAuthService - authenticateForMailbox", () => {
     expect(result.scopes).toContain("Mail.Read");
     expect(result.scopes).not.toContain("Mail.ReadWrite");
 
-    // Clean up
-    microsoftAuthService.resolveCodeDirectly("cleanup");
+    // Clean up: the pending code promise is settled by afterEach's stopLocalServer
+    result.codePromise.catch(() => {});
   });
 
   it("should include login hint when provided", async () => {
@@ -439,7 +335,7 @@ describe("MicrosoftAuthService - authenticateForMailbox", () => {
 
     expect(result.authUrl).toContain("login_hint=user%40example.com");
 
-    // Clean up
-    microsoftAuthService.resolveCodeDirectly("cleanup");
+    // Clean up: the pending code promise is settled by afterEach's stopLocalServer
+    result.codePromise.catch(() => {});
   });
 });

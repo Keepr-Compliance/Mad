@@ -61,60 +61,6 @@ export const eventBridge = {
   },
 
   /**
-   * Listens for pre-DB Google mailbox connection events (returns tokens)
-   * @param callback - Callback function to handle connection result with tokens
-   * @returns Cleanup function to remove listener
-   */
-  onGoogleMailboxPendingConnected: (callback: (result: unknown) => void) => {
-    const listener = (_: IpcRendererEvent, result: unknown) => callback(result);
-    ipcRenderer.on("google:mailbox-pending-connected", listener);
-    return () =>
-      ipcRenderer.removeListener("google:mailbox-pending-connected", listener);
-  },
-
-  /**
-   * Listens for pre-DB Google mailbox connection cancelled events
-   * @param callback - Callback function to handle cancellation
-   * @returns Cleanup function to remove listener
-   */
-  onGoogleMailboxPendingCancelled: (callback: () => void) => {
-    const listener = () => callback();
-    ipcRenderer.on("google:mailbox-pending-cancelled", listener);
-    return () =>
-      ipcRenderer.removeListener("google:mailbox-pending-cancelled", listener);
-  },
-
-  /**
-   * Listens for pre-DB Microsoft mailbox connection events (returns tokens)
-   * @param callback - Callback function to handle connection result with tokens
-   * @returns Cleanup function to remove listener
-   */
-  onMicrosoftMailboxPendingConnected: (callback: (result: unknown) => void) => {
-    const listener = (_: IpcRendererEvent, result: unknown) => callback(result);
-    ipcRenderer.on("microsoft:mailbox-pending-connected", listener);
-    return () =>
-      ipcRenderer.removeListener(
-        "microsoft:mailbox-pending-connected",
-        listener,
-      );
-  },
-
-  /**
-   * Listens for pre-DB Microsoft mailbox connection cancelled events
-   * @param callback - Callback function to handle cancellation
-   * @returns Cleanup function to remove listener
-   */
-  onMicrosoftMailboxPendingCancelled: (callback: () => void) => {
-    const listener = () => callback();
-    ipcRenderer.on("microsoft:mailbox-pending-cancelled", listener);
-    return () =>
-      ipcRenderer.removeListener(
-        "microsoft:mailbox-pending-cancelled",
-        listener,
-      );
-  },
-
-  /**
    * Listens for Google mailbox disconnection events
    * @param callback - Callback function to handle disconnection result
    * @returns Cleanup function to remove listener

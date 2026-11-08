@@ -84,7 +84,7 @@ const Database = require(
 ) as typeof import("better-sqlite3-multiple-ciphers");
 
 import { setDb } from "../db/core/dbConnection";
-import { saveOAuthTokenSync } from "../db/oauthTokenDbService";
+import { saveOAuthToken } from "../db/oauthTokenDbService";
 import gmailFetchService from "../gmailFetchService";
 import { GoogleContactProvider } from "../providers/googleContactProvider";
 
@@ -120,14 +120,14 @@ function instrument(handle: DatabaseType): void {
 const unhandled: unknown[] = [];
 const onUnhandled = (e: unknown) => unhandled.push(e);
 
-beforeEach(() => {
+beforeEach(async () => {
   process.env.GOOGLE_CLIENT_ID = "cid";
   process.env.GOOGLE_CLIENT_SECRET = "csecret";
   db = new Database(":memory:") as unknown as DatabaseType;
   db.exec(SCHEMA);
   db.prepare("INSERT INTO users_local (id,email,oauth_provider,oauth_id) VALUES (?, 'me@example.com', 'google', 'o-me')").run(USER);
   setDb(db);
-  saveOAuthTokenSync(USER, "google", "mailbox", {
+  await saveOAuthToken(USER, "google", "mailbox", {
     access_token: "OLD_ACCESS",
     refresh_token: "OLD_REFRESH",
     token_expires_at: SEEDED_EXPIRY,

@@ -2,10 +2,10 @@
 
 /**
  * Toggle button group for selecting swim lane grouping mode on the board.
- * Options: No Grouping | Project | Area | Assignee
+ * Options: No Grouping | Project | Area | Assignee | Label | Sprint
  */
 
-export type SwimLaneMode = 'off' | 'project' | 'area' | 'assignee';
+export type SwimLaneMode = 'off' | 'project' | 'area' | 'assignee' | 'label' | 'sprint';
 
 interface SwimLaneSelectorProps {
   value: SwimLaneMode;
@@ -17,6 +17,8 @@ const OPTIONS: { value: SwimLaneMode; label: string }[] = [
   { value: 'project', label: 'Project' },
   { value: 'area', label: 'Area' },
   { value: 'assignee', label: 'Assignee' },
+  { value: 'label', label: 'Label' },
+  { value: 'sprint', label: 'Sprint' },
 ];
 
 export function SwimLaneSelector({ value, onChange }: SwimLaneSelectorProps) {

@@ -18,13 +18,18 @@
  *   brokerage member or full role       403 brokerage_managed
  *   brokerage member, no license        403 no_license
  *   not a personal owner                403 not_available
- *   support grant, or a plan already    409 already_have_plan
+ *   support grant, a plan already, or
+ *     a free trial with no end date     409 already_have_plan
  *   no Agent price on sale              503 price_unavailable
  *   Stripe fails                        502 try_again
  *
  * Success: 200 `{ checkout_url }`, a Stripe-hosted page that returns through
  * /payments/complete (deep link back into the app). Unlimited is granted by
  * the invoice.paid webhook alone; nothing here grants it.
+ *
+ * BACKLOG-4088: a live solo free trial may subscribe. The subscription starts
+ * with trial_end = the trial's end (at least now + 49 h, Stripe's Checkout
+ * minimum), so billing starts when the trial ends.
  */
 
 import { NextResponse } from 'next/server';
@@ -39,7 +44,7 @@ import { readBearerPortalAccess } from '@/lib/billing/bearerPortalAccess';
 import { agentContextForUser } from '@/lib/billing/agentContextCore';
 import { getAgentPrices } from '@/lib/billing/agentPlan';
 import { ALREADY_HAVE_PLAN, prepareAgentCheckout } from '@/lib/billing/agentCheckout';
-import { chooseReturnBase } from '@/lib/billing/agentCheckoutParams';
+import { checkoutTrialEnd, chooseReturnBase, type CheckoutTrialEnd } from '@/lib/billing/agentCheckoutParams';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -99,8 +104,16 @@ export async function POST(req: Request): Promise<Response> {
   const { view, caps } = ctx;
 
   // active / cancel_pending / payment_failed, or support_grant (agentPlanState returns it for any
-  // non-Stripe Unlimited override): a payment would buy nothing.
-  if (view.state !== 'none') return refuse('already_have_plan', 409);
+  // non-Stripe Unlimited override, but not for a solo free trial): a payment would buy nothing.
+  if (view.state !== 'none' && view.state !== 'trial') return refuse('already_have_plan', 409);
+  // BACKLOG-4088: a live trial subscribes with billing starting at the trial end. A trial with
+  // no readable end date is refused: never charge a trialing agent now (SR 81fa81b0 #2).
+  let trial: CheckoutTrialEnd | undefined;
+  if (view.state === 'trial') {
+    const t = checkoutTrialEnd(view.trialEndsOn, Date.now());
+    if (!t) return refuse('already_have_plan', 409);
+    trial = t;
+  }
   // The website's rule (startAgentCheckout). Suspension was answered above; this is its backstop.
   if (!caps.blocks.includes('choose_plan') || !caps.canPurchase) return refuse('not_available', 403);
 
@@ -125,6 +138,7 @@ export async function POST(req: Request): Promise<Response> {
       interval: 'month',
       returnBase,
       origin: 'desktop',
+      ...(trial ? { trial } : {}),
     });
     if ('refused' in result) {
       return result.refused === ALREADY_HAVE_PLAN ? refuse('already_have_plan', 409) : refuse('try_again', 502);

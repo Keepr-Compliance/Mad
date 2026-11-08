@@ -24,4 +24,4 @@ export {
   resolveElectronBinary,
   resolveBuiltMainEntry,
 } from './paths';
-export { seedIsolatedProfile, type SeededIdentity } from './seed/seedProfile';
+export { seedIsolatedProfile, type SeededIdentity, type SeedIdentityOverride } from './seed/seedProfile';

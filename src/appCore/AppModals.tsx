@@ -36,7 +36,6 @@ export function AppModals({ app }: AppModalsProps) {
     currentUser,
     authProvider,
     isDatabaseInitialized,
-    pendingOAuthData,
     needsTermsAcceptance,
     appPath,
     // BACKLOG-2890: the Texts tab's "Text source not read" empty state
@@ -142,17 +141,7 @@ export function AppModals({ app }: AppModalsProps) {
       {/* Welcome Terms Modal (New Users Only) */}
       {(modalState.showTermsModal || (needsTermsAcceptance && currentUser)) && (
         <WelcomeTerms
-          user={
-            currentUser ||
-            (pendingOAuthData
-              ? {
-                  id: pendingOAuthData.cloudUser.id,
-                  email: pendingOAuthData.userInfo.email,
-                  display_name: pendingOAuthData.userInfo.name,
-                  avatar_url: pendingOAuthData.userInfo.picture,
-                }
-              : { id: "", email: "" })
-          }
+          user={currentUser || { id: "", email: "" }}
           onAccept={handleAcceptTerms}
           onDecline={handleDeclineTerms}
         />

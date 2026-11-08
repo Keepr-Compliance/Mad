@@ -1,0 +1,205 @@
+=== base
+{
+ "upd_anon": {
+  "ok": false,
+  "msg": "permission denied for function pm_update_item_status",
+  "sqlstate": "42501"
+ },
+ "acl_board": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+ "acl_update": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+ "board_anon": {
+  "ok": false,
+  "msg": "permission denied for function pm_get_board_tasks",
+  "sqlstate": "42501"
+ },
+ "upd_norole": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "upd_service": {
+  "ok": true,
+  "out": {
+   "success": true,
+   "new_status": "pending_uat",
+   "old_status": "testing",
+   "row_status": "pending_uat"
+  }
+ },
+ "board_norole": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "upd_internal": {
+  "ok": true,
+  "out": {
+   "success": true,
+   "new_status": "pending_uat",
+   "old_status": "testing",
+   "row_status": "pending_uat"
+  }
+ },
+ "board_service": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "board_internal": {
+  "ok": true,
+  "out": {
+   "keys": [
+    "blocked",
+    "completed",
+    "deferred",
+    "in_progress",
+    "obsolete",
+    "pending",
+    "pending_uat",
+    "reopened",
+    "testing",
+    "waiting_for_user"
+   ],
+   "total": 1,
+   "has_key": true,
+   "pending_uat_count": 1,
+   "item_in_pending_uat": true
+  }
+ }
+}
+=== M_revoke_service
+{
+ "mutation": "MUTATION APPLIED revoke service_role",
+ "upd_anon": {
+  "ok": false,
+  "msg": "permission denied for function pm_update_item_status",
+  "sqlstate": "42501"
+ },
+ "acl_board": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+ "acl_update": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+ "board_anon": {
+  "ok": false,
+  "msg": "permission denied for function pm_get_board_tasks",
+  "sqlstate": "42501"
+ },
+ "upd_norole": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "upd_service": {
+  "ok": false,
+  "msg": "permission denied for function pm_update_item_status",
+  "sqlstate": "42501"
+ },
+ "board_norole": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "upd_internal": {
+  "ok": true,
+  "out": {
+   "success": true,
+   "new_status": "pending_uat",
+   "old_status": "testing",
+   "row_status": "pending_uat"
+  }
+ },
+ "board_service": {
+  "ok": false,
+  "msg": "permission denied for function pm_get_board_tasks",
+  "sqlstate": "42501"
+ },
+ "board_internal": {
+  "ok": true,
+  "out": {
+   "keys": [
+    "blocked",
+    "completed",
+    "deferred",
+    "in_progress",
+    "obsolete",
+    "pending",
+    "pending_uat",
+    "reopened",
+    "testing",
+    "waiting_for_user"
+   ],
+   "total": 1,
+   "has_key": true,
+   "pending_uat_count": 1,
+   "item_in_pending_uat": true
+  }
+ }
+}
+=== M_grant_anon
+{
+ "mutation": "MUTATION APPLIED grant anon",
+ "upd_anon": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "acl_board": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+ "acl_update": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}",
+ "board_anon": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "upd_norole": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "upd_service": {
+  "ok": true,
+  "out": {
+   "success": true,
+   "new_status": "pending_uat",
+   "old_status": "testing",
+   "row_status": "pending_uat"
+  }
+ },
+ "board_norole": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "upd_internal": {
+  "ok": true,
+  "out": {
+   "success": true,
+   "new_status": "pending_uat",
+   "old_status": "testing",
+   "row_status": "pending_uat"
+  }
+ },
+ "board_service": {
+  "ok": false,
+  "msg": "Access denied: internal role required",
+  "sqlstate": "P0001"
+ },
+ "board_internal": {
+  "ok": true,
+  "out": {
+   "keys": [
+    "blocked",
+    "completed",
+    "deferred",
+    "in_progress",
+    "obsolete",
+    "pending",
+    "pending_uat",
+    "reopened",
+    "testing",
+    "waiting_for_user"
+   ],
+   "total": 1,
+   "has_key": true,
+   "pending_uat_count": 1,
+   "item_in_pending_uat": true
+  }
+ }
+}

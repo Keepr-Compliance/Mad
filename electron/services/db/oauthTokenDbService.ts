@@ -15,19 +15,12 @@ import { assignmentList } from "./core/columnSql";
 /**
  * Save OAuth token (encrypted)
  */
-/**
- * BACKLOG-2546 — SYNC TWIN. See `userDbService.createUserSync` for the full
- * reasoning: the login provisioning chain commits as one `dbTransaction` unit,
- * `dbTransaction` takes a SYNCHRONOUS callback by type, so the body needs a
- * callee that is synchronous all the way down. The primitive is this one; the
- * promise-returning export below is a one-line wrapper over it.
- */
-export function saveOAuthTokenSync(
+export async function saveOAuthToken(
   userId: string,
   provider: OAuthProvider,
   purpose: OAuthPurpose,
   tokenData: Partial<OAuthToken>,
-): string {
+): Promise<string> {
   // BACKLOG-3286: a mailbox row without its address is the state this item
   // exists to prevent. The statement below is an upsert, so a caller that omits
   // the address does not merely skip it — it overwrites the stored one with
@@ -76,15 +69,6 @@ export function saveOAuthTokenSync(
 
   dbRun(statement, params);
   return id;
-}
-
-export async function saveOAuthToken(
-  userId: string,
-  provider: OAuthProvider,
-  purpose: OAuthPurpose,
-  tokenData: Partial<OAuthToken>,
-): Promise<string> {
-  return saveOAuthTokenSync(userId, provider, purpose, tokenData);
 }
 
 /**

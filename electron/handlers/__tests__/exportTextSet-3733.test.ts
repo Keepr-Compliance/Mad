@@ -3,7 +3,7 @@
  *
  * BACKLOG-3733 — FIXED EXPECTED ID LISTS FOR EVERY EXPORT PATH.
  *
- * The three export channels (`transactions:export-pdf`, `-enhanced`, `-folder`)
+ * The two export channels (`transactions:export-enhanced`, `-folder`)
  * each run the same data prep: re-fetch the deal after the sync backstops, run
  * the paywall gate, then `resolveExportPlan`. This suite pins WHICH texts each
  * channel hands to its renderer, as literal id lists, over a real-sqlite corpus
@@ -34,7 +34,7 @@
  *   hd-hidden/-unh  duplicate pair, one hidden               neither
  *   hp / r-of-hp    hidden text BEFORE the window / its      out / out
  *                   in-window reaction
- *   o-before        thread text before the window            out (in for the windowless pdf channel)
+ *   o-before        thread text before the window            out
  *   pm-sel          per-message link in another chat         in
  *   pm-unsel        unlinked text in that chat               out
  *   g-in            text in a linked GROUP thread            in
@@ -284,11 +284,6 @@ const WINDOW_TEXTS = ["d-a", "g-in", "p-a", "p-b", "pm-sel", "r-of-normal", "t-l
 
 /** FIXED expected lists, per channel. */
 const EXPECTED = {
-  // No window, contentType both: adds o-before, the email, and the email-channel row.
-  pdf: {
-    ids: [...WINDOW_TEXTS, "ch-email", "em-1", "o-before"].sort(),
-    hidden: ["hd-hidden", "hp", "t-hidden"],
-  },
   // Window from the deal's dates, contentType both.
   enhanced: {
     ids: [...WINDOW_TEXTS, "ch-email", "em-1"].sort(),
@@ -316,15 +311,7 @@ interface Captured {
   hiddenCount: number;
 }
 
-async function runChannel(label: "pdf" | "enhanced" | "folder"): Promise<Captured> {
-  if (label === "pdf") {
-    const res = await invoke("transactions:export-pdf");
-    expect(res).toMatchObject({ success: true });
-    const call = (folderExportService.exportTransactionToCombinedPDF as jest.Mock).mock.calls[0];
-    const comms = call[1] as Array<{ id: string }>;
-    const opts = call[3] as { hiddenTextCount: number; hiddenTexts: Array<{ id: string }> };
-    return { ids: sortedIds(comms), hidden: sortedIds(opts.hiddenTexts), hiddenCount: opts.hiddenTextCount };
-  }
+async function runChannel(label: "enhanced" | "folder"): Promise<Captured> {
   if (label === "enhanced") {
     const res = await invoke("transactions:export-enhanced", {
       exportFormat: "excel",
@@ -396,7 +383,7 @@ for (const foreignUser of [false, true]) {
       await seed({ foreignUser });
     });
 
-    for (const label of ["pdf", "enhanced", "folder"] as const) {
+    for (const label of ["enhanced", "folder"] as const) {
       it(`${label}: the renderer receives exactly the fixed id list`, async () => {
         const got = await runChannel(label);
         expect(got.ids).toEqual(EXPECTED[label].ids);
@@ -418,11 +405,9 @@ for (const foreignUser of [false, true]) {
           throw new Error("PAYWALL_LOCKED");
         });
         const options =
-          label === "pdf"
-            ? undefined
-            : label === "enhanced"
-              ? { exportFormat: "excel", contentType: "both", attachmentType: "none" }
-              : { contentType: "texts", attachmentType: "all" };
+          label === "enhanced"
+            ? { exportFormat: "excel", contentType: "both", attachmentType: "none" }
+            : { contentType: "texts", attachmentType: "all" };
         const res = await invoke(`transactions:export-${label}`, options);
         expect(res.success).toBe(false);
         expect(folderExportService.exportTransactionToCombinedPDF).not.toHaveBeenCalled();

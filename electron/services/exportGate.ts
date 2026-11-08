@@ -58,7 +58,6 @@ export class PaywallLockedError extends Error {
  */
 export async function enforceExportGate<T>(params: {
   transactionId: string;
-  userId: string;
   communications: T[];
 }): Promise<{ decision: ExportEntitlementDecision; communications: T[] }> {
   const { transactionId, communications } = params;

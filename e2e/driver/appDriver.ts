@@ -1,4 +1,3 @@
-import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ElectronApplication, Locator, Page } from '@playwright/test';
@@ -200,11 +199,14 @@ export class KeeprAppDriver implements AppDriver {
    * UNCONDITIONALLY from the driver's own launch (see static launch()), so NO run — including a
    * custom drive script — can be accidentally invisible; foregrounding is NOT a per-caller opt-in.
    *
-   * Three layers, each best-effort and NON-FATAL (wrapped so a foreground failure can never fail a
-   * step): (1) page.bringToFront() (works for both strategies), (2) the main-process
-   * BrowserWindow.focus({steal:true}) + show()/moveTop() via the Electron app handle (steals OS
-   * focus on the 'electron'/'unpackaged' strategies), and (3) on macOS an `osascript activate` so a
-   * headful run is genuinely on top of other windows.
+   * Two layers, each best-effort and NON-FATAL (wrapped so a foreground failure can never fail a
+   * step): (1) page.bringToFront() (works for every strategy), (2) inside the LAUNCHED main process,
+   * app.focus({ steal: true }) + show()/moveTop()/focus() on its first BrowserWindow (the
+   * 'electron'/'unpackaged' strategies, which carry an app handle).
+   *
+   * BACKLOG-4054: never activate an app by NAME. The unpackaged app runs as "Electron", so a by-name
+   * activation of "Keepr" resolves to the installed Keepr app. Focus is applied only
+   * through the launched process's own handle; the 'cdp' strategy (no handle) gets layer 1 only.
    */
   async bringToFront(): Promise<void> {
     await this.page.bringToFront().catch(() => undefined);
@@ -212,7 +214,8 @@ export class KeeprAppDriver implements AppDriver {
     // steal OS focus, which page.bringToFront() alone does not guarantee for a background-launched app.
     if (this.app) {
       await this.app
-        .evaluate(async ({ BrowserWindow }) => {
+        .evaluate(async ({ app, BrowserWindow }) => {
+          app.focus({ steal: true });
           const win = BrowserWindow.getAllWindows()[0];
           if (win) {
             if (win.isMinimized()) win.restore();
@@ -222,9 +225,6 @@ export class KeeprAppDriver implements AppDriver {
           }
         })
         .catch(() => undefined);
-    }
-    if (process.platform === 'darwin') {
-      await activateMacApp('Keepr').catch(() => undefined);
     }
   }
 
@@ -1228,27 +1228,48 @@ export class KeeprAppDriver implements AppDriver {
 
   // ---------------------------------------------------------------------------
   // BACKLOG-1983 (export-completeness cell): trigger the combined-PDF export via the REAL preload
-  // bridge (window.api.transactions.exportPDF → ipcRenderer.invoke('transactions:export-pdf', ...)).
-  // Passing an EXPLICIT outputPath bypasses the native save dialog, and the seeded covering
-  // email_sync_state makes the awaited pre-export sync take the "covered" (no-network) branch. Returns
-  // the handler's { success, path, error } so the cell can HARNESS_ERROR if the PDF was not produced.
+  // bridge the ExportModal's "One PDF" button uses (window.api.transactions.exportEnhanced →
+  // ipcRenderer.invoke('transactions:export-enhanced', ...), exportFormat 'pdf', summaryOnly false).
+  // BACKLOG-3302 deleted the path-taking PDF channel this used to drive.
+  //
+  // exportEnhanced takes no output path: it writes into app.getPath('downloads'). So the driver first
+  // points the MAIN process's 'downloads' path at `outDir` through the Electron app handle. Without
+  // that handle (the 'cdp' strategy) it REFUSES rather than write into the real ~/Downloads.
+  // The seeded covering email_sync_state makes the awaited pre-export sync take the "covered"
+  // (no-network) branch. Returns the handler's { success, path, error }.
   // ---------------------------------------------------------------------------
-  async exportPdfToPath(
+  async exportCombinedPdfToDir(
     transactionId: string,
-    outputPath: string,
+    outDir: string,
   ): Promise<{ success: boolean; path?: string; error?: string }> {
+    if (!this.app) {
+      return { success: false, error: 'no Electron app handle: cannot redirect downloads, refusing to export' };
+    }
+    const resolved = await this.app.evaluate(({ app }, dir) => {
+      app.setPath('downloads', dir);
+      return app.getPath('downloads');
+    }, outDir);
+    if (resolved !== outDir) {
+      return { success: false, error: `downloads path not redirected (got ${resolved})` };
+    }
     return this.page.evaluate(
-      async ({ txId, out }) => {
+      async ({ txId }) => {
         const api = (window as unknown as {
-          api?: { transactions?: { exportPDF?: (id: string, p: string) => Promise<unknown> } };
+          api?: { transactions?: { exportEnhanced?: (id: string, o: unknown) => Promise<unknown> } };
         }).api;
-        const fn = api?.transactions?.exportPDF;
+        const fn = api?.transactions?.exportEnhanced;
         if (typeof fn !== 'function') {
-          return { success: false, error: 'window.api.transactions.exportPDF is not available' };
+          return { success: false, error: 'window.api.transactions.exportEnhanced is not available' };
         }
-        return (await fn(txId, out)) as { success: boolean; path?: string; error?: string };
+        return (await fn(txId, {
+          exportFormat: 'pdf',
+          summaryOnly: false,
+          contentType: 'both',
+          attachmentType: 'none',
+          emailExportMode: 'thread',
+        })) as { success: boolean; path?: string; error?: string };
       },
-      { txId: transactionId, out: outputPath },
+      { txId: transactionId },
     );
   }
 
@@ -1569,15 +1590,4 @@ function describeLocator(loc: Locator): string {
   const raw = String(loc);
   const m = raw.match(/@?locator\('(.+)'\)\s*$/) ?? raw.match(/locator\('(.+)'\)/);
   return (m ? m[1] : raw).slice(0, 80);
-}
-
-/**
- * macOS-only: bring the named app to the foreground via AppleScript. Best-effort — the promise
- * resolves whether or not activation succeeds; callers wrap it in .catch() so it is never fatal.
- * Uses execFile (no shell) with a fixed arg list, so the app name can never be shell-interpreted.
- */
-function activateMacApp(appName: string): Promise<void> {
-  return new Promise((resolve) => {
-    execFile('osascript', ['-e', `tell application "${appName}" to activate`], { timeout: 4000 }, () => resolve());
-  });
 }

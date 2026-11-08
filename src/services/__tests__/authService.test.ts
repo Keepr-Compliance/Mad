@@ -31,7 +31,6 @@ import type { User, Subscription } from "@/types";
 // ============================================
 
 // Mock functions for window.api.auth methods
-const mockCompletePendingLogin = jest.fn();
 const mockLogout = jest.fn();
 const mockValidateSession = jest.fn();
 const mockGetCurrentUser = jest.fn();
@@ -40,16 +39,12 @@ const mockGoogleConnectMailbox = jest.fn();
 const mockMicrosoftConnectMailbox = jest.fn();
 const mockGoogleDisconnectMailbox = jest.fn();
 const mockMicrosoftDisconnectMailbox = jest.fn();
-const mockGoogleConnectMailboxPending = jest.fn();
-const mockMicrosoftConnectMailboxPending = jest.fn();
-const mockSavePendingMailboxTokens = jest.fn();
 
 // Setup window.api mock before tests
 beforeAll(() => {
   Object.defineProperty(window, "api", {
     value: {
       auth: {
-        completePendingLogin: mockCompletePendingLogin,
         logout: mockLogout,
         validateSession: mockValidateSession,
         getCurrentUser: mockGetCurrentUser,
@@ -58,9 +53,6 @@ beforeAll(() => {
         microsoftConnectMailbox: mockMicrosoftConnectMailbox,
         googleDisconnectMailbox: mockGoogleDisconnectMailbox,
         microsoftDisconnectMailbox: mockMicrosoftDisconnectMailbox,
-        googleConnectMailboxPending: mockGoogleConnectMailboxPending,
-        microsoftConnectMailboxPending: mockMicrosoftConnectMailboxPending,
-        savePendingMailboxTokens: mockSavePendingMailboxTokens,
       },
     },
     writable: true,
@@ -108,58 +100,6 @@ const mockSessionToken = "session-token-abc123";
 // ============================================
 
 describe("authService", () => {
-  describe("completePendingLogin", () => {
-    const mockOAuthData = { provider: "google", tokens: { access_token: "abc" } };
-
-    it("should complete pending login successfully", async () => {
-      mockCompletePendingLogin.mockResolvedValue({
-        success: true,
-        user: mockUser,
-        sessionToken: mockSessionToken,
-        subscription: mockSubscription,
-        isNewUser: true,
-      });
-
-      const result = await authService.completePendingLogin(mockOAuthData);
-
-      expect(result.success).toBe(true);
-      expect(result.data?.user).toEqual(mockUser);
-      expect(result.data?.sessionToken).toBe(mockSessionToken);
-      expect(mockCompletePendingLogin).toHaveBeenCalledWith(mockOAuthData);
-    });
-
-    it("should return error when API returns failure", async () => {
-      mockCompletePendingLogin.mockResolvedValue({ success: false, error: "Keychain setup failed" });
-
-      const result = await authService.completePendingLogin(mockOAuthData);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Keychain setup failed");
-    });
-
-    it("should return 'Login failed' when success but missing required fields", async () => {
-      mockCompletePendingLogin.mockResolvedValue({ success: true }); // Missing user/sessionToken
-
-      const result = await authService.completePendingLogin(mockOAuthData);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Login failed");
-    });
-
-    it("should catch and return error when API throws exception", async () => {
-      mockCompletePendingLogin.mockRejectedValue(new Error("Database error"));
-
-      const result = await authService.completePendingLogin(mockOAuthData);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Database error");
-    });
-  });
-
-  // ============================================
-  // SESSION METHODS TESTS
-  // ============================================
-
   describe("logout", () => {
     it("should logout successfully", async () => {
       mockLogout.mockResolvedValue({ success: true });
@@ -418,149 +358,6 @@ describe("authService", () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBe("Azure AD revoke error");
-    });
-  });
-
-  // ============================================
-  // PENDING MAILBOX METHODS TESTS
-  // ============================================
-
-  describe("googleConnectMailboxPending", () => {
-    it("should connect pending Google mailbox successfully", async () => {
-      mockGoogleConnectMailboxPending.mockResolvedValue({ success: true });
-
-      const result = await authService.googleConnectMailboxPending("user@gmail.com");
-
-      expect(result.success).toBe(true);
-      expect(mockGoogleConnectMailboxPending).toHaveBeenCalledWith("user@gmail.com");
-    });
-
-    it("should work without email hint", async () => {
-      mockGoogleConnectMailboxPending.mockResolvedValue({ success: true });
-
-      const result = await authService.googleConnectMailboxPending();
-
-      expect(result.success).toBe(true);
-      expect(mockGoogleConnectMailboxPending).toHaveBeenCalledWith(undefined);
-    });
-
-    it("should return error when API returns failure", async () => {
-      mockGoogleConnectMailboxPending.mockResolvedValue({ success: false, error: "Pre-auth failed" });
-
-      const result = await authService.googleConnectMailboxPending();
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Pre-auth failed");
-    });
-
-    it("should catch and return error when API throws exception", async () => {
-      mockGoogleConnectMailboxPending.mockRejectedValue(new Error("OAuth popup blocked"));
-
-      const result = await authService.googleConnectMailboxPending();
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("OAuth popup blocked");
-    });
-  });
-
-  describe("microsoftConnectMailboxPending", () => {
-    it("should connect pending Microsoft mailbox successfully", async () => {
-      mockMicrosoftConnectMailboxPending.mockResolvedValue({ success: true });
-
-      const result = await authService.microsoftConnectMailboxPending("user@outlook.com");
-
-      expect(result.success).toBe(true);
-      expect(mockMicrosoftConnectMailboxPending).toHaveBeenCalledWith("user@outlook.com");
-    });
-
-    it("should work without email hint", async () => {
-      mockMicrosoftConnectMailboxPending.mockResolvedValue({ success: true });
-
-      const result = await authService.microsoftConnectMailboxPending();
-
-      expect(result.success).toBe(true);
-      expect(mockMicrosoftConnectMailboxPending).toHaveBeenCalledWith(undefined);
-    });
-
-    it("should return error when API returns failure", async () => {
-      mockMicrosoftConnectMailboxPending.mockResolvedValue({ success: false, error: "Tenant blocked" });
-
-      const result = await authService.microsoftConnectMailboxPending();
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Tenant blocked");
-    });
-
-    it("should catch and return error when API throws exception", async () => {
-      mockMicrosoftConnectMailboxPending.mockRejectedValue(new Error("MSAL initialization failed"));
-
-      const result = await authService.microsoftConnectMailboxPending();
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("MSAL initialization failed");
-    });
-  });
-
-  describe("savePendingMailboxTokens", () => {
-    const mockTokenData = {
-      userId: "user-123",
-      provider: "google" as const,
-      email: "user@gmail.com",
-      tokens: {
-        access_token: "access-token-xyz",
-        refresh_token: "refresh-token-xyz",
-        expires_at: "2024-12-31T23:59:59Z",
-        scopes: "email profile",
-      },
-    };
-
-    it("should save pending mailbox tokens successfully", async () => {
-      mockSavePendingMailboxTokens.mockResolvedValue({ success: true });
-
-      const result = await authService.savePendingMailboxTokens(mockTokenData);
-
-      expect(result.success).toBe(true);
-      expect(mockSavePendingMailboxTokens).toHaveBeenCalledWith(mockTokenData);
-    });
-
-    it("should handle Microsoft provider", async () => {
-      const msTokenData = { ...mockTokenData, provider: "microsoft" as const };
-      mockSavePendingMailboxTokens.mockResolvedValue({ success: true });
-
-      const result = await authService.savePendingMailboxTokens(msTokenData);
-
-      expect(result.success).toBe(true);
-      expect(mockSavePendingMailboxTokens).toHaveBeenCalledWith(msTokenData);
-    });
-
-    it("should handle null refresh token", async () => {
-      const tokenDataNoRefresh = {
-        ...mockTokenData,
-        tokens: { ...mockTokenData.tokens, refresh_token: null },
-      };
-      mockSavePendingMailboxTokens.mockResolvedValue({ success: true });
-
-      const result = await authService.savePendingMailboxTokens(tokenDataNoRefresh);
-
-      expect(result.success).toBe(true);
-    });
-
-    it("should return error when API returns failure", async () => {
-      mockSavePendingMailboxTokens.mockResolvedValue({ success: false, error: "Token storage failed" });
-
-      const result = await authService.savePendingMailboxTokens(mockTokenData);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Token storage failed");
-    });
-
-    it("should catch and return error when API throws exception", async () => {
-      mockSavePendingMailboxTokens.mockRejectedValue(new Error("Keychain access denied"));
-
-      const result = await authService.savePendingMailboxTokens(mockTokenData);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toBe("Keychain access denied");
     });
   });
 });

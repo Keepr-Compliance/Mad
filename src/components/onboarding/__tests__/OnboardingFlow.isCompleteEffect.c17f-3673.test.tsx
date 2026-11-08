@@ -44,7 +44,7 @@ const USER = { id: "u-1", email: "user@example.com" };
 const app = {
   selectedPhoneType: "android", hasEmailConnected: true, currentUser: USER, pendingOnboardingData: null,
   hasPermissions: true, hasSecureStorageSetup: true, needsDriverSetup: false, needsTermsAcceptance: false,
-  pendingOAuthData: null, authProvider: "google", isNewUserFlow: true, isDatabaseInitialized: true,
+  authProvider: "google", isNewUserFlow: true, isDatabaseInitialized: true,
 } as unknown as AppStateMachine;
 
 let latest: AppState | null = null;

@@ -1,0 +1,14 @@
+BACKLOG-4045b JS controls, 2026-11-07, run against commit 80f7e1ebc (fix committed first).
+MUTATION APPLIED A1m checkbox unchecked by default admin-portal/app/dashboard/organizations/[id]/components/BrokerageBillingCard.tsx 1b106ab1->d54e6be4
+{"mutation": "A1m checkbox unchecked by default", "file": "admin-portal/app/dashboard/organizations/[id]/components/BrokerageBillingCard.tsx", "suite": "__tests__/auto-renew-4045/notifyCheckbox.test.tsx", "failed": 2, "total": 4, "red": true}
+MUTATION APPLIED A2m1 dialog submit drops notify admin-portal/app/dashboard/organizations/[id]/components/BrokerageBillingCard.tsx 1b106ab1->a510d1af
+{"mutation": "A2m1 dialog submit drops notify", "file": "admin-portal/app/dashboard/organizations/[id]/components/BrokerageBillingCard.tsx", "suite": "__tests__/auto-renew-4045/notifyCheckbox.test.tsx", "failed": 2, "total": 4, "red": true}
+MUTATION APPLIED A2m2 card hardcodes notify true admin-portal/app/dashboard/organizations/[id]/components/BrokerageBillingCard.tsx 1b106ab1->2ea0cc8a
+{"mutation": "A2m2 card hardcodes notify true", "file": "admin-portal/app/dashboard/organizations/[id]/components/BrokerageBillingCard.tsx", "suite": "__tests__/auto-renew-4045/notifyCheckbox.test.tsx", "failed": 2, "total": 4, "red": true}
+MUTATION APPLIED A3m action leaves p_notify out of the rpc admin-portal/lib/actions/brokerageBilling.ts 76420d30->3bac042c
+{"mutation": "A3m action leaves p_notify out of the rpc", "file": "admin-portal/lib/actions/brokerageBilling.ts", "suite": "__tests__/auto-renew-4045/setAutoRenewAction.test.ts", "failed": 2, "total": 2, "red": true}
+MUTATION APPLIED A4m checkbox shown with no contact email admin-portal/app/dashboard/organizations/[id]/components/BrokerageBillingCard.tsx 1b106ab1->a64eeb4b
+{"mutation": "A4m checkbox shown with no contact email", "file": "admin-portal/app/dashboard/organizations/[id]/components/BrokerageBillingCard.tsx", "suite": "__tests__/auto-renew-4045/notifyCheckbox.test.tsx", "failed": 1, "total": 4, "red": true}
+MUTATION APPLIED A5m Activity ignores notified admin-portal/lib/activity/describeActivity.ts 40238299->e2d17bb7
+{"mutation": "A5m Activity ignores notified", "file": "admin-portal/lib/activity/describeActivity.ts", "suite": "__tests__/activity-4036/describeActivity.test.ts", "failed": 1, "total": 7, "red": true}
+SUMMARY 6 of 6 red

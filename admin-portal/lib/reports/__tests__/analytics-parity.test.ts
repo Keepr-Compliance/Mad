@@ -23,6 +23,7 @@ import type {
   VersionDistribution,
   VersionUser,
 } from '../analytics';
+import { compareSemver as compareSemverNew } from '../analytics';
 import { getAnalyticsData, type AnalyticsData } from '../analytics-queries';
 import { resolveAnalyticsPeriod } from '../analytics-period';
 import { stubClient, uuid } from './postgrest-stub';
@@ -355,9 +356,18 @@ describe('parity (b): old and new agree on the same data', () => {
   it('30 days: every section deep-equals the old code', async () => {
     const old = await oldPage(stubClient(TABLES).client, 30);
     const now = await getAnalyticsData(stubClient(TABLES).client, THIRTY.fromIso);
-    expect(now.versions.data).toEqual(old.versions);
+    // Behaviour changed on purpose after the move, so these two sections are
+    // compared to the old copy with the change applied, not deep-equal to it:
+    //   - versions (BACKLOG-4082): same rows, but a pre-release now sorts just
+    //     before its release; the old copy put every pre-release last.
+    //   - platform (BACKLOG-4081): same platforms and user counts, but pct is
+    //     now over the sum of platform counts (11), not distinct users (8).
+    expect(now.versions.data).toEqual([...old.versions].sort((a, b) => compareSemverNew(a.app_version, b.app_version)));
+    expect(now.versions.data).not.toEqual(old.versions);
     expect(newCounts(now)).toEqual(old.counts);
-    expect(now.platform.data).toEqual(old.platform);
+    expect(now.platform.data.map((p) => [p.platform, p.user_count])).toEqual(old.platform.map((p) => [p.platform, p.user_count]));
+    const platformSum = old.platform.reduce((t, p) => t + p.user_count, 0);
+    expect(now.platform.data.map((p) => p.pct)).toEqual(old.platform.map((p) => Math.round((p.user_count / platformSum) * 100)));
     expect(now.license.data).toEqual(old.license);
     expect(now.phone.data).toEqual(old.phone);
     expect([now.versions.failed, now.platform.failed, now.phone.failed, now.license.failed]).toEqual([
@@ -365,10 +375,11 @@ describe('parity (b): old and new agree on the same data', () => {
     ]);
   });
 
-  it.each(['1', '7', '90'] as const)('period %s: the version section deep-equals the old code', async (key) => {
+  it.each(['1', '7', '90'] as const)('period %s: the version section equals the old code, re-sorted by the new order', async (key) => {
     const old = await getVersionDistribution(stubClient(TABLES).client, Number(key));
     const now = await getAnalyticsData(stubClient(TABLES).client, resolveAnalyticsPeriod({ period: key }, NOW).fromIso);
-    expect(now.versions.data).toEqual(old);
+    // BACKLOG-4082 changed the order on purpose; the rows themselves are unchanged.
+    expect(now.versions.data).toEqual([...old].sort((a, b) => compareSemverNew(a.app_version, b.app_version)));
   });
 
   it('maths pin: the 30-day numbers on the fixture', async () => {
@@ -376,22 +387,22 @@ describe('parity (b): old and new agree on the same data', () => {
     // Active, seen in 30d: D1,D2,D3,D4,D5,D6,D7,D12,D14 -> users 1-6; D10 inactive, D11 NULL, D8/D9 old, D13 never seen.
     expect(newCounts(d)).toEqual({ active_users: 6, active_devices: 9, total_users: 9, total_orgs: 5 });
     expect(d.versions.data.map((v) => [v.app_version, v.user_count, v.adoption_pct])).toEqual([
-      ['2.41.0', 3, 50],
-      ['2.44.0', 2, 33],
       ['2.40.0-beta.3', 1, 17],
+      ['2.41.0', 3, 50],
       ['2.44.0-pre.2', 1, 17],
+      ['2.44.0', 2, 33],
       ['Unknown', 1, 17],
     ]);
     expect(d.versions.data.find((v) => v.app_version === 'Unknown')?.users).toEqual([
       { id: uuid(6), email: null, display_name: null },
     ]);
     // Platform: every ACTIVE device, no window. 8 distinct users; U5 and U1 on two platforms; D13 platform NULL -> Unknown.
-    // The per-platform counts sum to 11 > 8, so the pcts sum past 100 (the pinned bar/legend oddity).
+    // The per-platform counts sum to 11 > 8; pct is over that sum (BACKLOG-4081), so the pcts add up to ~100.
     expect(d.platform.data).toEqual([
-      { platform: 'windows', user_count: 6, pct: 75 },
-      { platform: 'macos', user_count: 3, pct: 38 },
-      { platform: 'Unknown', user_count: 1, pct: 13 },
-      { platform: 'linux', user_count: 1, pct: 13 },
+      { platform: 'windows', user_count: 6, pct: 55 },
+      { platform: 'macos', user_count: 3, pct: 27 },
+      { platform: 'Unknown', user_count: 1, pct: 9 },
+      { platform: 'linux', user_count: 1, pct: 9 },
     ]);
     // License: inactive / NULL-status members not counted; NULL plan -> trial with 0 seats; missing-org member ignored.
     expect(d.license.data).toEqual([
@@ -413,7 +424,7 @@ describe('parity (b): old and new agree on the same data', () => {
     expect(d.counts.active_devices.value).toBe(12);
     expect(d.counts.active_users.value).toBe(8);
     expect(d.versions.data.map((v) => v.app_version)).toEqual([
-      '2.9.1', '2.10.1', '2.39.0', '2.41.0', '2.44.0', '2.40.0-beta.3', '2.44.0-pre.2', 'Unknown',
+      '2.9.1', '2.10.1', '2.39.0', '2.40.0-beta.3', '2.41.0', '2.44.0-pre.2', '2.44.0', 'Unknown',
     ]);
   });
 });
@@ -436,8 +447,8 @@ describe('parity (b): past the 1000-row cap the old code undercounts, the new pa
     expect(now.versions.data.map((v) => [v.app_version, v.user_count])).toEqual([
       ['2.41.0', 500],
       ['2.43.0', 500],
-      ['2.44.0', 500],
       ['2.44.0-pre.2', 500],
+      ['2.44.0', 500],
       ['Unknown', 500],
     ]);
     expect(now.platform.data).toEqual([

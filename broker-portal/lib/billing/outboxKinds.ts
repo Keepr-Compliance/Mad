@@ -126,6 +126,12 @@ function stableJson(v: unknown): string {
  *                            contact to the account admin)
  *   - notify_seats_added     BACKLOG-3854, lib/billing/seatsAddedNotify.ts (enqueued by
  *                            broker_add_seats: the billing contact's "seats added" email)
+ *   - notify_auto_renew_on   BACKLOG-4045, lib/billing/autoRenewOnNotify.ts (enqueued by
+ *                            _billing_set_auto_renew when staff turn auto-renew back on)
+ *   - notify_auto_renew_off  BACKLOG-4200, lib/billing/autoRenewOffNotify.ts (enqueued by
+ *                            _billing_set_auto_renew when staff turn auto-renew off)
+ *   - notify_org_reinstated  BACKLOG-4209, lib/billing/orgReinstatedNotify.ts (enqueued by
+ *                            _billing_reinstate_org: staff or automatic reinstatement)
  */
 export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.freeze({
   agent_receipt: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
@@ -148,4 +154,10 @@ export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.f
     (await import('./billingContactReassigned')).handleNotifyBillingContactReassignedRow(row, ctx),
   notify_seats_added: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
     (await import('./seatsAddedNotify')).handleNotifySeatsAddedRow(row, ctx),
+  notify_auto_renew_on: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./autoRenewOnNotify')).handleNotifyAutoRenewOnRow(row, ctx),
+  notify_auto_renew_off: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./autoRenewOffNotify')).handleNotifyAutoRenewOffRow(row, ctx),
+  notify_org_reinstated: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./orgReinstatedNotify')).handleNotifyOrgReinstatedRow(row, ctx),
 });

@@ -111,7 +111,6 @@ function Host() {
     authProvider: "google",
     subscription: undefined,
     isDatabaseInitialized: true,
-    pendingOAuthData: null,
     needsTermsAcceptance: false,
     appPath: "/Applications/Keepr.app",
     closeProfile: jest.fn(),

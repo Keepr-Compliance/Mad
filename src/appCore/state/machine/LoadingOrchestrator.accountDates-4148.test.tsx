@@ -159,7 +159,6 @@ function TermsLayer() {
   const base: Record<string, unknown> = {
     needsTermsAcceptance,
     currentUser,
-    pendingOAuthData: null,
     isMacOS: true,
     isWindows: false,
     appPath: "/Applications/Keepr.app",
@@ -199,7 +198,6 @@ function SignInDriver({ plat }: { plat: Plat }) {
     platform: { isMacOS: plat === "mac", isWindows: plat === "win" },
     onSetCurrentStep: () => {},
     setIsNewUserFlow: () => {},
-    setPendingOAuthData: () => {},
   });
   signIn = handleDeepLinkAuthSuccess;
   return null;

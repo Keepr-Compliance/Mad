@@ -27,7 +27,6 @@ jest.mock("../core/dbConnection", () => ({
 
 import {
   updateTransaction,
-  stampFirstExportedAt,
   UNFREEZE_OVERRIDE_KEY,
 } from "../transactionDbService";
 
@@ -224,31 +223,3 @@ describe("updateTransaction — export freeze (BACKLOG-2013)", () => {
   });
 });
 
-describe("stampFirstExportedAt — write-once at the SQL layer (BACKLOG-2013)", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-  });
-
-  it("enforces write-once via `WHERE first_exported_at IS NULL` in the UPDATE", () => {
-    mockDbRun.mockReturnValue({ changes: 1 });
-
-    const stamped = stampFirstExportedAt("txn-1", "2026-07-18T00:00:00.000Z");
-
-    expect(stamped).toBe(true);
-    expect(mockDbRun).toHaveBeenCalledTimes(1);
-    const [sql, values] = mockDbRun.mock.calls[0] as [string, unknown[]];
-    expect(sql).toMatch(/UPDATE transactions SET first_exported_at = \?/);
-    expect(sql).toMatch(/WHERE id = \? AND first_exported_at IS NULL/);
-    expect(values).toEqual(["2026-07-18T00:00:00.000Z", "txn-1"]);
-  });
-
-  it("returns false when the row is already frozen (0 rows changed)", () => {
-    // Already-frozen row: the guarded UPDATE matches nothing.
-    mockDbRun.mockReturnValue({ changes: 0 });
-
-    const stamped = stampFirstExportedAt("txn-1", "2026-07-18T00:00:00.000Z");
-
-    expect(stamped).toBe(false);
-    expect(mockDbRun).toHaveBeenCalledTimes(1);
-  });
-});

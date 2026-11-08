@@ -91,6 +91,7 @@ export function HierarchyTree({ items, onItemClick }: HierarchyTreeProps) {
     pending: 'bg-gray-400',
     in_progress: 'bg-blue-500',
     testing: 'bg-yellow-500',
+    pending_uat: 'bg-teal-500',
     completed: 'bg-green-500',
     blocked: 'bg-red-500',
     deferred: 'bg-purple-400',

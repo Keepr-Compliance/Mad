@@ -1,0 +1,4 @@
+MUTATION APPLIED: extra comment line after v_columns JSONB;
+altered exit 1 {"message":"Failed to run sql query: ERROR:  P0001: 4192 pre-check: public.pm_get_board_tasks(uuid,uuid,text) differs from the expected body (md5(prosrc) 6fff11962be6078a02e70709249c275d)\nCONTEXT:  PL/pgSQL function inline_code_block line 6 at RAISE\n"}
+kt-sql: HTTP 400
+unaltered exit 0 []

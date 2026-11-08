@@ -25,24 +25,6 @@ export interface DisconnectMailboxResult extends ApiResult {
 }
 
 /**
- * Login result containing user and session info
- */
-export interface LoginResult {
-  user: User;
-  sessionToken: string;
-  subscription?: Subscription;
-  isNewUser?: boolean;
-}
-
-/**
- * Pending login result (OAuth succeeded but DB not initialized)
- */
-export interface PendingLoginResult {
-  pendingLogin: boolean;
-  oauthData: unknown;
-}
-
-/**
  * Session validation result
  */
 export interface SessionValidation {
@@ -62,47 +44,10 @@ export interface CurrentUserResult {
 }
 
 /**
- * Mailbox token data for pending connections
- */
-export interface PendingMailboxTokens {
-  access_token: string;
-  refresh_token: string | null;
-  expires_at: string;
-  scopes: string;
-}
-
-/**
  * Auth Service
  * Provides a clean abstraction over window.api.auth
  */
 export const authService = {
-  // ============================================
-  // LOGIN METHODS
-  // ============================================
-
-  /**
-   * Complete pending login after keychain setup (login-first flow)
-   */
-  async completePendingLogin(oauthData: unknown): Promise<ApiResult<LoginResult>> {
-    try {
-      const result = await window.api.auth.completePendingLogin(oauthData);
-      if (result.success && result.user && result.sessionToken) {
-        return {
-          success: true,
-          data: {
-            user: result.user,
-            sessionToken: result.sessionToken,
-            subscription: result.subscription,
-            isNewUser: result.isNewUser,
-          },
-        };
-      }
-      return { success: false, error: result.error || "Login failed" };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
   // ============================================
   // SESSION METHODS
   // ============================================
@@ -248,51 +193,6 @@ export const authService = {
         revokeOutcome: result.revokeOutcome,
         revokeReason: result.revokeReason,
       };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  // ============================================
-  // PENDING MAILBOX METHODS (Pre-DB)
-  // ============================================
-
-  /**
-   * Connect Google mailbox before DB initialization (returns tokens)
-   */
-  async googleConnectMailboxPending(emailHint?: string): Promise<ApiResult> {
-    try {
-      const result = await window.api.auth.googleConnectMailboxPending(emailHint);
-      return { success: result.success, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  /**
-   * Connect Microsoft mailbox before DB initialization (returns tokens)
-   */
-  async microsoftConnectMailboxPending(emailHint?: string): Promise<ApiResult> {
-    try {
-      const result = await window.api.auth.microsoftConnectMailboxPending(emailHint);
-      return { success: result.success, error: result.error };
-    } catch (error) {
-      return { success: false, error: getErrorMessage(error) };
-    }
-  },
-
-  /**
-   * Save pending mailbox tokens after DB initialization
-   */
-  async savePendingMailboxTokens(data: {
-    userId: string;
-    provider: "google" | "microsoft";
-    email: string;
-    tokens: PendingMailboxTokens;
-  }): Promise<ApiResult> {
-    try {
-      const result = await window.api.auth.savePendingMailboxTokens(data);
-      return { success: result.success, error: result.error };
     } catch (error) {
       return { success: false, error: getErrorMessage(error) };
     }

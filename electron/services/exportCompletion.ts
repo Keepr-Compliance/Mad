@@ -4,7 +4,7 @@
 // Every live export path finishes by recording the export, writing the audit
 // row, emitting the funnel event and registering the file as openable. That
 // tail used to be written out once per handler, and a third copy (the dead
-// export-pdf handler) drifted and forgot half of it.
+// export-pdf handler, deleted by BACKLOG-3302) drifted and forgot half of it.
 //
 // The recorded row is unchanged from BACKLOG-2549: ONE statement, with the
 // freeze marker write-once in SQL (COALESCE), so re-exporting never moves the

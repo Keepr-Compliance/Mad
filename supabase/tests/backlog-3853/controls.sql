@@ -132,7 +132,7 @@ BEGIN
       $q$IF v_mode = 'live' AND NOT public._billing_brokerage_live() THEN$q$, 'IF false THEN');
     WHEN 'r14_suspend_unguarded' THEN RETURN pg_temp.mut_fn('public._billing_suspend_org(uuid,text,text,uuid)',
       $q$IF v_deal.stripe_mode = 'live' AND NOT public._billing_brokerage_live() THEN$q$, 'IF false THEN');
-    WHEN 'sr_reinstate_no_perm' THEN RETURN pg_temp.mut_fn('public.admin_reinstate_org(uuid,text)',
+    WHEN 'sr_reinstate_no_perm' THEN RETURN pg_temp.mut_fn('public.admin_reinstate_org(uuid,text,boolean)',
       $q$IF NOT public.has_permission(v_uid, 'billing.suspend') THEN$q$, 'IF false THEN');
     WHEN 'sr_no_move_branch' THEN RETURN pg_temp.mut_fn('public._billing_guard_member_while_suspended()',
       $q$
@@ -547,7 +547,7 @@ BEGIN
      WHERE has_table_privilege('anon', t, 'SELECT') OR has_table_privilege('authenticated', t, 'SELECT')
         OR has_table_privilege('anon', t, 'INSERT') OR has_table_privilege('authenticated', t, 'INSERT');
     SELECT count(*) INTO n2 FROM unnest(ARRAY['public._billing_save_deal(uuid,jsonb,uuid,text,integer)', 'public._billing_suspend_org(uuid,text,text,uuid)',
-                                              'public._billing_reinstate_org(uuid,text,uuid)', 'public._billing_auto_reinstate(uuid,text)',
+                                              'public._billing_reinstate_org(uuid,text,uuid,boolean)', 'public._billing_auto_reinstate(uuid,text)',
                                               'public._billing_apply_org_entitlement(uuid)', 'public._billing_change_seats(uuid,integer,uuid)',
                                               'public._billing_apply_org_subscription(uuid,text,jsonb,bigint)', 'public.billing_deciding_org(uuid)',
                                               'public.billing_purchase_blocked(uuid)', 'public._billing_brokerage_live()']) fn
@@ -557,7 +557,7 @@ BEGIN
        AND NOT has_function_privilege('anon', 'public.org_billing_suspended(uuid)', 'EXECUTE')
        AND has_function_privilege('authenticated', 'public.org_billing_suspended(uuid)', 'EXECUTE')
        AND NOT has_function_privilege('anon', 'public.admin_suspend_org(uuid,text,text)', 'EXECUTE')
-       AND NOT has_function_privilege('anon', 'public.admin_reinstate_org(uuid,text)', 'EXECUTE') THEN 'PASS'
+       AND NOT has_function_privilege('anon', 'public.admin_reinstate_org(uuid,text,boolean)', 'EXECUTE') THEN 'PASS'
       ELSE 'FAIL tables=' || n || ' fns=' || n2 END);
 
     -- ===== engine rules: A12 (R8), C-12 db half, C-9 db half, A11 + C-7 =====

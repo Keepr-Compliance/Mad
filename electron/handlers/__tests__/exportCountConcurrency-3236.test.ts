@@ -175,10 +175,8 @@ const SEEDED_EXPORT_COUNT = 3;
 
 let db: DatabaseType;
 let databaseService: {
-  stampFirstExportedAt: (transactionId: string, timestamp: string) => boolean;
   recordExportCompletion: (transactionId: string, input: Record<string, unknown>) => void;
 };
-let stampSpy: jest.SpyInstance;
 let recordSpy: jest.SpyInstance;
 
 type TxRow = Record<string, unknown>;
@@ -254,7 +252,6 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  stampSpy = jest.spyOn(databaseService, "stampFirstExportedAt");
   recordSpy = jest.spyOn(databaseService, "recordExportCompletion");
   (transactionService.getTransactionDetails as jest.Mock).mockImplementation(async () =>
     detailsFromDb(),
@@ -262,7 +259,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  stampSpy.mockRestore();
   recordSpy.mockRestore();
 });
 

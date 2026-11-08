@@ -7,7 +7,7 @@
 
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CHILD_A1, PROJECT_ID, projectColumns } from '../../__tests__/board-fixtures';
+import { CHILD_A1, PROJECT_ID, makeItem, projectColumns, toColumns } from '../../__tests__/board-fixtures';
 import { NO_EPIC_KEY } from '../../lib/swim-lane-ids';
 
 const q = vi.hoisted(() => ({
@@ -19,6 +19,8 @@ const q = vi.hoisted(() => ({
   reorderItem: vi.fn(),
   createItem: vi.fn(),
   assignItem: vi.fn(),
+  addItemLabel: vi.fn(),
+  fetchItemLabels: vi.fn(),
   bulkUpdate: vi.fn(),
   bulkDelete: vi.fn(),
   assignToSprint: vi.fn(),
@@ -40,6 +42,7 @@ beforeEach(() => {
   localStorage.clear();
   vi.spyOn(console, 'error').mockImplementation(() => {});
   for (const fn of Object.values(q)) fn.mockReset();
+  q.fetchItemLabels.mockResolvedValue(new Map());
   q.listSprints.mockResolvedValue([]);
   q.listProjects.mockResolvedValue([]);
   q.listAssignableUsers.mockResolvedValue([]);
@@ -172,6 +175,58 @@ describe('Stale project response', () => {
     expect(allIds).not.toContain('epic-a');
     await act(() => result.current.handleQuickAdd('Wrong parent', 'pending', 'epic-a'));
     expect(q.createItem).not.toHaveBeenCalled();
+  });
+});
+
+describe('Add backlog refuses an epic from another project (BACKLOG-4195 N5)', () => {
+  it('an epic that IS on the loaded board but belongs to another project is refused', async () => {
+    const cols = projectColumns();
+    cols.pending = cols.pending.map((i) => (i.id === 'epic-a' ? { ...i, project_id: 'project-other' } : i));
+    q.getBoardTasks.mockResolvedValue(cols);
+    const { result } = await mountProjectMode();
+    const onBoard = (Object.values(result.current.columns) as { id: string }[][]).flat().map((i) => i.id);
+    expect(onBoard).toContain('epic-a');
+    await act(() => result.current.handleQuickAdd('Wrong project', 'pending', 'epic-a'));
+    expect(q.createItem).not.toHaveBeenCalled();
+    expect(result.current.boardError).toMatch(/Could not add the item/);
+  });
+});
+
+describe('Stale response after a mode or sprint switch (BACKLOG-4195 N6)', () => {
+  it('drops a project response that arrives after switching Project -> Area', async () => {
+    let resolveP: (v: unknown) => void = () => {};
+    const slowP = new Promise((r) => { resolveP = r; });
+    const sprintCols = toColumns([makeItem({ id: 'sprint-item', item_number: 501, project_id: null })]);
+    q.getBoardTasks.mockImplementation((sprintId: string | null) =>
+      sprintId === null ? slowP : Promise.resolve(sprintCols)
+    );
+    persist({ swimLane: 'project', selectedProjectId: PROJECT_ID, selectedSprintId: 'sprint-1' });
+    const { result } = renderHook(() => useBoardData());
+    await waitFor(() => expect(q.getBoardTasks).toHaveBeenCalledWith(null, PROJECT_ID));
+    act(() => result.current.setSwimLane('area'));
+    await waitFor(() => expect(q.getBoardTasks).toHaveBeenCalledWith('sprint-1'));
+    await waitFor(() => expect(result.current.columns.pending.map((i) => i.id)).toEqual(['sprint-item']));
+    await act(async () => { resolveP(projectColumns()); await slowP; });
+    const allIds = (Object.values(result.current.columns) as { id: string }[][]).flat().map((i) => i.id);
+    expect(allIds).toEqual(['sprint-item']);
+  });
+
+  it('drops a sprint response that arrives after picking another sprint', async () => {
+    let resolveS1: (v: unknown) => void = () => {};
+    const slowS1 = new Promise((r) => { resolveS1 = r; });
+    const s1Cols = toColumns([makeItem({ id: 's1-item', item_number: 601 })]);
+    const s2Cols = toColumns([makeItem({ id: 's2-item', item_number: 602 })]);
+    q.getBoardTasks.mockImplementation((sprintId: string | null) =>
+      sprintId === 'sprint-1' ? slowS1 : Promise.resolve(s2Cols)
+    );
+    persist({ swimLane: 'area', selectedSprintId: 'sprint-1' });
+    const { result } = renderHook(() => useBoardData());
+    await waitFor(() => expect(q.getBoardTasks).toHaveBeenCalledWith('sprint-1'));
+    act(() => result.current.setSelectedSprintId('sprint-2'));
+    await waitFor(() => expect(result.current.columns.pending.map((i) => i.id)).toEqual(['s2-item']));
+    await act(async () => { resolveS1(s1Cols); await slowS1; });
+    const allIds = (Object.values(result.current.columns) as { id: string }[][]).flat().map((i) => i.id);
+    expect(allIds).toEqual(['s2-item']);
   });
 });
 

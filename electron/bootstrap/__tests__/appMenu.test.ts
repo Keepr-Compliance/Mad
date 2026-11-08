@@ -102,8 +102,10 @@ describe("every BrowserWindow sets devTools from the policy", () => {
       });
       windows += n;
     }
-    // 7 since BACKLOG-4103 removed the two in-app OAuth login windows.
-    expect(windows).toBeGreaterThanOrEqual(7);
+    // 7 since BACKLOG-4103 removed the two in-app OAuth login windows; 5 since
+    // BACKLOG-3302 removed the two pre-DB mailbox popups (the windows inside
+    // handleGoogleConnectMailboxPending and handleMicrosoftConnectMailboxPending).
+    expect(windows).toBeGreaterThanOrEqual(5);
   });
   it("main.ts installs the menu before the first createWindow()", () => {
     const src = fs.readFileSync(path.join(__dirname, "../../main.ts"), "utf8");

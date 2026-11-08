@@ -1,12 +1,12 @@
 /**
  * useLoginHandlers Hook
  *
- * Manages login-related handlers: login success, pending OAuth, and deep link auth.
+ * Manages login-related handlers: login success and deep link auth.
  * Extracted from useAuthFlow for single-responsibility decomposition.
  */
 
 import { useCallback } from "react";
-import type { PendingOAuthData, DeepLinkAuthData } from "../../../../components/Login";
+import type { DeepLinkAuthData } from "../../../../components/Login";
 import type { Subscription } from "../../../../../electron/types/models";
 import type { AppStep } from "../../types";
 import type { User, PlatformInfo, AppAction } from "../../machine/types";
@@ -32,7 +32,6 @@ export interface UseLoginHandlersOptions {
   platform?: { isMacOS: boolean; isWindows: boolean };
   onSetCurrentStep: (step: AppStep) => void;
   setIsNewUserFlow: (value: boolean) => void;
-  setPendingOAuthData: (data: PendingOAuthData | null) => void;
 }
 
 /** Dispatch LOGIN_SUCCESS to state machine if dispatch and platform are available. */
@@ -49,7 +48,7 @@ function dispatchLoginSuccess(
 }
 
 export function useLoginHandlers({
-  login, stateMachineDispatch, platform, onSetCurrentStep, setIsNewUserFlow, setPendingOAuthData,
+  login, stateMachineDispatch, platform, onSetCurrentStep, setIsNewUserFlow,
 }: UseLoginHandlersOptions) {
   const handleLoginSuccess = useCallback(
     (
@@ -57,17 +56,11 @@ export function useLoginHandlers({
       token: string, provider: string, subscriptionData: Subscription | undefined, isNewUser: boolean,
     ): void => {
       setIsNewUserFlow(isNewUser);
-      setPendingOAuthData(null);
       login(user, token, provider, subscriptionData, isNewUser);
       dispatchLoginSuccess(stateMachineDispatch, platform,
         { id: user.id, email: user.email, displayName: user.display_name, avatarUrl: user.avatar_url }, isNewUser);
     },
-    [login, stateMachineDispatch, platform, setIsNewUserFlow, setPendingOAuthData],
-  );
-
-  const handleLoginPending = useCallback(
-    (oauthData: PendingOAuthData): void => { setPendingOAuthData(oauthData); },
-    [setPendingOAuthData],
+    [login, stateMachineDispatch, platform, setIsNewUserFlow],
   );
 
   /**
@@ -78,7 +71,6 @@ export function useLoginHandlers({
   const handleDeepLinkAuthSuccess = useCallback(
     (data: DeepLinkAuthData): void => {
       logger.debug("[useAuthFlow] Deep link auth success", { userId: data.userId || data.user?.id });
-      setPendingOAuthData(null);
 
       // BACKLOG-546: Use isNewUser from backend (based on terms acceptance)
       const isNewUser = data.isNewUser ?? (!data.licenseStatus || data.licenseStatus.transactionCount === 0);
@@ -107,8 +99,8 @@ export function useLoginHandlers({
       // New users go to onboarding (phone type selection), returning users go to dashboard
       onSetCurrentStep(isNewUser ? "phone-type-selection" : "dashboard");
     },
-    [login, stateMachineDispatch, platform, onSetCurrentStep, setIsNewUserFlow, setPendingOAuthData],
+    [login, stateMachineDispatch, platform, onSetCurrentStep, setIsNewUserFlow],
   );
 
-  return { handleLoginSuccess, handleLoginPending, handleDeepLinkAuthSuccess };
+  return { handleLoginSuccess, handleDeepLinkAuthSuccess };
 }
