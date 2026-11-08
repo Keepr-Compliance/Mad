@@ -74,6 +74,8 @@ jest.mock("../services/databaseService", () => {
       // Delegate to the real writers: see the header.
       backfillContactEmails: (id: string, v: string[]) => real.backfillContactEmails(id, v),
       backfillContactPhones: (id: string, v: string[]) => real.backfillContactPhones(id, v),
+      backfillContactEmailsSync: (id: string, v: string[]) => real.backfillContactEmailsSync(id, v),
+      backfillContactPhonesSync: (id: string, v: string[]) => real.backfillContactPhonesSync(id, v),
       getImportedContactsWithStatusAsync: jest.fn(() =>
         Promise.resolve({ contacts: [], messageDerivedPending: false }),
       ),

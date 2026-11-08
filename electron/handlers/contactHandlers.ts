@@ -21,8 +21,6 @@ import {
   setContactPrimaryPhone,
   getEmailNameMap,
   applyContactBackfillSync,
-  backfillContactEmailsSync,
-  backfillContactPhonesSync,
   type ContactBackfillPlanRow,
 } from "../services/db/contactDbService";
 import type { RemovedContactRow } from "../services/db/contactDbService";
@@ -1191,8 +1189,8 @@ async function backfillImportedContactsFromExternal(userId: string): Promise<{ u
         for (const external of externals) {
           const emailValues: string[] = external.emails_json ? JSON.parse(external.emails_json) : [];
           const phoneValues: string[] = external.phones_json ? JSON.parse(external.phones_json) : [];
-          emails += backfillContactEmailsSync(contact.id, emailValues);
-          phones += backfillContactPhonesSync(contact.id, phoneValues);
+          emails += databaseService.backfillContactEmailsSync(contact.id, emailValues);
+          phones += databaseService.backfillContactPhonesSync(contact.id, phoneValues);
         }
         return { emailsAdded: emails, phonesAdded: phones };
       });
