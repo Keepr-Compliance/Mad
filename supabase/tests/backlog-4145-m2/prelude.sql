@@ -19,7 +19,7 @@
 --   devices / audit_logs / licenses: users 5, 6, 7, 9, 11      user_preferences: 5, 6, 11
 --   tickets 301 req 5 asg 2 | 302 req 6 | 303 req 8, email of 7, asg 2 | 304 req 9 asg 4
 --           305 req NULL, email of 6, asg 2 | 306 req 4 (internal user's own ticket)
---   messages: reply + internal_note on 301 and on 306; events, participants: one on 301 and on 306
+--   messages: reply + internal_note on 301 and on 306, reply on 305 (email-only requester 6); events, participants: one on 301 and on 306
 --   attachments: on 301 and 306, one without message, one on the internal note
 --   backlog item 401, link 501 (301 -> 401)
 -- User triggers on the fixture tables except users are disabled inside the transaction.
@@ -40,7 +40,9 @@ CREATE FUNCTION pg_temp.call_as(u uuid, q text, r text DEFAULT 'authenticated') 
 DECLARE j jsonb;
 BEGIN
   BEGIN
-    PERFORM set_config('request.jwt.claims', json_build_object('sub', u, 'role', r)::text, true);
+    -- a real session token carries the account email; the requester_email branches read it
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', u, 'role', r,
+      'email', (SELECT au.email FROM auth.users au WHERE au.id = u))::text, true);
     PERFORM set_config('request.jwt.claim.sub', coalesce(u::text, ''), true);
     PERFORM set_config('request.jwt.claim.role', r, true);
     EXECUTE format('SET LOCAL ROLE %I', r);
@@ -77,52 +79,77 @@ CREATE FUNCTION pg_temp.tdigest() RETURNS text LANGUAGE sql AS $b$
     FROM pg_policies WHERE schemaname = 'public' AND tablename = ANY (pg_temp.targets())
 $b$;
 
--- shape of every public policy (name, table, cmd, roles, permissive), no expressions
+-- shape of every public policy (name, table, cmd, permissive), no expressions, no roles
 CREATE FUNCTION pg_temp.shape() RETURNS text LANGUAGE sql AS $b$
-  SELECT count(*) || '/' || md5(string_agg(tablename || policyname || permissive || cmd || roles::text, ','
+  SELECT count(*) || '/' || md5(string_agg(tablename || policyname || permissive || cmd, ','
          ORDER BY tablename, policyname))
     FROM pg_policies WHERE schemaname = 'public'
 $b$;
 
--- per-table counts of fixture rows NOT owned by u, as one jsonb (run as the caller via call_as)
-CREATE FUNCTION pg_temp.vecq(u uuid) RETURNS text LANGUAGE sql AS $b$
-  SELECT format($q$SELECT jsonb_build_object(
-    'users', (SELECT count(*) FROM public.users WHERE id = ANY (%1$s) AND id <> %2$L),
-    'organizations', (SELECT count(*) FROM public.organizations WHERE id = ANY (%3$s)),
-    'organization_members', (SELECT count(*) FROM public.organization_members WHERE organization_id = ANY (%3$s) AND user_id <> %2$L),
-    'devices', (SELECT count(*) FROM public.devices WHERE user_id = ANY (%1$s) AND user_id <> %2$L),
-    'user_preferences', (SELECT count(*) FROM public.user_preferences WHERE user_id = ANY (%1$s) AND user_id <> %2$L),
-    'audit_logs', (SELECT count(*) FROM public.audit_logs WHERE user_id = ANY (%1$s) AND user_id <> %2$L),
-    'licenses', (SELECT count(*) FROM public.licenses WHERE user_id = ANY (%1$s) AND user_id <> %2$L),
-    'support_tickets', (SELECT count(*) FROM public.support_tickets WHERE id = ANY (%4$s) AND requester_id IS DISTINCT FROM %2$L),
-    'support_ticket_messages', (SELECT count(*) FROM public.support_ticket_messages WHERE ticket_id = ANY (%5$s)),
-    'support_ticket_events', (SELECT count(*) FROM public.support_ticket_events WHERE ticket_id = ANY (%5$s)),
-    'support_ticket_participants', (SELECT count(*) FROM public.support_ticket_participants WHERE ticket_id = ANY (%5$s)),
-    'support_ticket_attachments', (SELECT count(*) FROM public.support_ticket_attachments WHERE ticket_id = ANY (%5$s)),
-    'support_ticket_backlog_links', (SELECT count(*) FROM public.support_ticket_backlog_links WHERE id = %6$L))$q$,
-    pg_temp.fxa(1,2,3,4,5,6,7,8,9,10,11,12,13,14,21,22,23,24,25,26,27,28), u, pg_temp.fxa(601,602,603),
-    pg_temp.fxa(301,302,303,304,305,306),
-    -- tickets not filed by u
-    (SELECT 'ARRAY[' || coalesce(string_agg(quote_literal(t.id), ','), '') || ']::uuid[]' FROM public.support_tickets t
-      WHERE t.id IN (pg_temp.fx(301), pg_temp.fx(302), pg_temp.fx(303), pg_temp.fx(304), pg_temp.fx(305), pg_temp.fx(306))
-        AND t.requester_id IS DISTINCT FROM u),
-    pg_temp.fx(501))
+-- roles of every public policy other than the five support policies M2 moves to authenticated
+CREATE FUNCTION pg_temp.roles_rest() RETURNS text LANGUAGE sql AS $b$
+  SELECT count(*) || '/' || md5(string_agg(tablename || policyname || roles::text, ',' ORDER BY tablename, policyname))
+    FROM pg_policies WHERE schemaname = 'public'
+     AND policyname NOT IN ('support_tickets_select_public', 'support_ticket_messages_select_public',
+       'support_ticket_events_select_public', 'support_ticket_participants_select_public',
+       'support_ticket_attachments_select_public')
 $b$;
 
--- per-table counts of rows u owns
+-- per-table count queries of fixture rows NOT owned by u (k, q); run as the caller via call_as
+CREATE FUNCTION pg_temp.vparts(u uuid) RETURNS TABLE (k text, q text) LANGUAGE sql AS $b$
+  WITH a AS (SELECT pg_temp.fxa(1,2,3,4,5,6,7,8,9,10,11,12,13,14,21,22,23,24,25,26,27,28) f, quote_literal(u) uu,
+                    pg_temp.fxa(601,602,603) o, pg_temp.fxa(301,302,303,304,305,306) tk,
+                    (SELECT 'ARRAY[' || coalesce(string_agg(quote_literal(t.id), ','), '') || ']::uuid[]' FROM public.support_tickets t
+                      WHERE t.id IN (pg_temp.fx(301), pg_temp.fx(302), pg_temp.fx(303), pg_temp.fx(304), pg_temp.fx(305), pg_temp.fx(306))
+                        AND t.requester_id IS DISTINCT FROM u) tn,
+                    quote_literal(pg_temp.fx(501)) l)
+  SELECT v.k, v.q FROM a, LATERAL (VALUES
+    (1, 'users', 'SELECT count(*) FROM public.users WHERE id = ANY (' || f || ') AND id <> ' || uu),
+    (2, 'organizations', 'SELECT count(*) FROM public.organizations WHERE id = ANY (' || o || ')'),
+    (3, 'organization_members', 'SELECT count(*) FROM public.organization_members WHERE organization_id = ANY (' || o || ') AND user_id <> ' || uu),
+    (4, 'devices', 'SELECT count(*) FROM public.devices WHERE user_id = ANY (' || f || ') AND user_id <> ' || uu),
+    (5, 'user_preferences', 'SELECT count(*) FROM public.user_preferences WHERE user_id = ANY (' || f || ') AND user_id <> ' || uu),
+    (6, 'audit_logs', 'SELECT count(*) FROM public.audit_logs WHERE user_id = ANY (' || f || ') AND user_id <> ' || uu),
+    (7, 'licenses', 'SELECT count(*) FROM public.licenses WHERE user_id = ANY (' || f || ') AND user_id <> ' || uu),
+    (8, 'support_tickets', 'SELECT count(*) FROM public.support_tickets WHERE id = ANY (' || tk || ') AND requester_id IS DISTINCT FROM ' || uu),
+    (9, 'support_ticket_messages', 'SELECT count(*) FROM public.support_ticket_messages WHERE ticket_id = ANY (' || tn || ')'),
+    (10, 'support_ticket_events', 'SELECT count(*) FROM public.support_ticket_events WHERE ticket_id = ANY (' || tn || ')'),
+    (11, 'support_ticket_participants', 'SELECT count(*) FROM public.support_ticket_participants WHERE ticket_id = ANY (' || tn || ')'),
+    (12, 'support_ticket_attachments', 'SELECT count(*) FROM public.support_ticket_attachments WHERE ticket_id = ANY (' || tn || ')'),
+    (13, 'support_ticket_backlog_links', 'SELECT count(*) FROM public.support_ticket_backlog_links WHERE id = ' || l)
+  ) v(n, k, q) ORDER BY v.n
+$b$;
+
+-- per-table count queries of rows u owns
+CREATE FUNCTION pg_temp.oparts(u uuid) RETURNS TABLE (k text, q text) LANGUAGE sql AS $b$
+  SELECT v.k, replace(v.q, '$U', quote_literal(u)) FROM (VALUES
+    (1, 'users', 'SELECT count(*) FROM public.users WHERE id = $U'),
+    (2, 'organization_members', 'SELECT count(*) FROM public.organization_members WHERE user_id = $U'),
+    (3, 'devices', 'SELECT count(*) FROM public.devices WHERE user_id = $U'),
+    (4, 'user_preferences', 'SELECT count(*) FROM public.user_preferences WHERE user_id = $U'),
+    (5, 'audit_logs', 'SELECT count(*) FROM public.audit_logs WHERE user_id = $U'),
+    (6, 'licenses', 'SELECT count(*) FROM public.licenses WHERE user_id = $U'),
+    (7, 'support_tickets', 'SELECT count(*) FROM public.support_tickets WHERE requester_id = $U'),
+    (8, 'support_ticket_messages', 'SELECT count(*) FROM public.support_ticket_messages m JOIN public.support_tickets t ON t.id = m.ticket_id WHERE t.requester_id = $U'),
+    (9, 'support_ticket_events', 'SELECT count(*) FROM public.support_ticket_events e JOIN public.support_tickets t ON t.id = e.ticket_id WHERE t.requester_id = $U'),
+    (10, 'support_ticket_participants', 'SELECT count(*) FROM public.support_ticket_participants p JOIN public.support_tickets t ON t.id = p.ticket_id WHERE t.requester_id = $U'),
+    (11, 'support_ticket_attachments', 'SELECT count(*) FROM public.support_ticket_attachments a JOIN public.support_tickets t ON t.id = a.ticket_id WHERE t.requester_id = $U')
+  ) v(n, k, q) ORDER BY v.n
+$b$;
+
+-- one query building the whole vector
+CREATE FUNCTION pg_temp.vecq(u uuid) RETURNS text LANGUAGE sql AS $b$
+  SELECT 'SELECT jsonb_build_object(' || string_agg(quote_literal(k) || ', (' || q || ')', ', ') || ')' FROM pg_temp.vparts(u)
+$b$;
 CREATE FUNCTION pg_temp.ownq(u uuid) RETURNS text LANGUAGE sql AS $b$
-  SELECT format($q$SELECT jsonb_build_object(
-    'users', (SELECT count(*) FROM public.users WHERE id = %1$L),
-    'organization_members', (SELECT count(*) FROM public.organization_members WHERE user_id = %1$L),
-    'devices', (SELECT count(*) FROM public.devices WHERE user_id = %1$L),
-    'user_preferences', (SELECT count(*) FROM public.user_preferences WHERE user_id = %1$L),
-    'audit_logs', (SELECT count(*) FROM public.audit_logs WHERE user_id = %1$L),
-    'licenses', (SELECT count(*) FROM public.licenses WHERE user_id = %1$L),
-    'support_tickets', (SELECT count(*) FROM public.support_tickets WHERE requester_id = %1$L),
-    'support_ticket_messages', (SELECT count(*) FROM public.support_ticket_messages m JOIN public.support_tickets t ON t.id = m.ticket_id WHERE t.requester_id = %1$L),
-    'support_ticket_events', (SELECT count(*) FROM public.support_ticket_events e JOIN public.support_tickets t ON t.id = e.ticket_id WHERE t.requester_id = %1$L),
-    'support_ticket_participants', (SELECT count(*) FROM public.support_ticket_participants p JOIN public.support_tickets t ON t.id = p.ticket_id WHERE t.requester_id = %1$L),
-    'support_ticket_attachments', (SELECT count(*) FROM public.support_ticket_attachments a JOIN public.support_tickets t ON t.id = a.ticket_id WHERE t.requester_id = %1$L))$q$, u)
+  SELECT 'SELECT jsonb_build_object(' || string_agg(quote_literal(k) || ', (' || q || ')', ', ') || ')' FROM pg_temp.oparts(u)
+$b$;
+
+-- the same vector, one call per table, so a table whose read fails shows ERR without hiding the rest
+CREATE FUNCTION pg_temp.each(u uuid, own boolean) RETURNS text LANGUAGE sql AS $b$
+  SELECT jsonb_object_agg(p.k, CASE WHEN r LIKE 'ERR%' THEN to_jsonb(r) ELSE r::jsonb END)::text
+    FROM (SELECT * FROM pg_temp.vparts(u) WHERE NOT own UNION ALL SELECT * FROM pg_temp.oparts(u) WHERE own) p,
+         LATERAL (SELECT pg_temp.call_as(u, 'SELECT to_jsonb((' || p.q || '))') r) x
 $b$;
 
 CREATE FUNCTION pg_temp.vec(u uuid) RETURNS text LANGUAGE sql AS $b$ SELECT pg_temp.call_as(u, pg_temp.vecq(u)) $b$;
@@ -211,7 +238,8 @@ BEGIN
     (pg_temp.fx(701), pg_temp.fx(301), 'fixture reply', 'reply'),
     (pg_temp.fx(702), pg_temp.fx(301), 'fixture note', 'internal_note'),
     (pg_temp.fx(703), pg_temp.fx(306), 'fixture reply', 'reply'),
-    (pg_temp.fx(704), pg_temp.fx(306), 'fixture note', 'internal_note');
+    (pg_temp.fx(704), pg_temp.fx(306), 'fixture note', 'internal_note'),
+    (pg_temp.fx(705), pg_temp.fx(305), 'fixture reply', 'reply');
   INSERT INTO public.support_ticket_events (ticket_id, event_type)
   SELECT pg_temp.fx(x), 'p4145m2_fixture' FROM unnest(ARRAY[301, 306]) x;
   INSERT INTO public.support_ticket_participants (ticket_id, email)
@@ -231,21 +259,17 @@ END $b$;
 DO $p0$
 BEGIN
   PERFORM pg_temp.setup();
-  -- The four support child-table policies read auth.users (email), on which authenticated has no
-  -- SELECT, on production and keepr-test alike: a direct authenticated read of those tables fails
-  -- with 42501 today, before and after M2 (no app code reads them directly; RPCs do). Record that
-  -- once, then grant SELECT (id, email) on auth.users to authenticated INSIDE this rolled-back
-  -- transaction so the controls can measure the policy logic itself.
-  CREATE TEMP TABLE p4145m2_child_pre AS
-  SELECT pg_temp.call_as(pg_temp.fx(5), 'SELECT to_jsonb(count(*)) FROM public.support_ticket_messages') AS c5,
-         pg_temp.call_as(pg_temp.fx(4), 'SELECT to_jsonb(count(*)) FROM public.support_ticket_events') AS c4;
-  GRANT SELECT (id, email) ON auth.users TO authenticated;
+  -- Each P0 vector is read one table per call, so a table whose read fails before M2 shows as ERR
+  -- (the four child-table policies read auth.users, which authenticated cannot read).
   CREATE TEMP TABLE p4145m2_p0 AS
   SELECT pg_temp.tdigest() AS tdigest,
          pg_temp.shape() AS shape,
-         pg_temp.vec(pg_temp.fx(4)) AS v4,
-         pg_temp.vec(pg_temp.fx(5)) AS v5, pg_temp.own(pg_temp.fx(5)) AS o5,
-         pg_temp.vec(pg_temp.fx(11)) AS v11, pg_temp.own(pg_temp.fx(11)) AS o11,
-         pg_temp.call_as(NULL, 'SELECT to_jsonb(count(*)) FROM public.support_tickets', 'anon') AS anon_tickets;
+         pg_temp.roles_rest() AS roles_rest,
+         pg_temp.each(pg_temp.fx(4), false) AS v4,
+         pg_temp.each(pg_temp.fx(5), false) AS v5, pg_temp.each(pg_temp.fx(5), true) AS o5,
+         pg_temp.each(pg_temp.fx(11), false) AS v11, pg_temp.each(pg_temp.fx(11), true) AS o11,
+         (SELECT jsonb_object_agg(x, pg_temp.call_as(NULL, format('SELECT to_jsonb(count(*)) FROM public.%I', x), 'anon'))::text
+            FROM unnest(ARRAY['support_tickets','support_ticket_messages','support_ticket_events',
+                              'support_ticket_participants','support_ticket_attachments']) x) AS anon5;
 END
 $p0$;

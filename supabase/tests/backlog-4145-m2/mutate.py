@@ -43,6 +43,11 @@ MUT = {
   'ORGS_missing_users_view': [("ARRAY['organizations.view', 'users.view', 'users.edit']", "ARRAY['organizations.view', 'users.edit']", 1)],
   # licenses left unaltered (keeps has_internal_role)
   'LICENSES_unaltered': [(LIC, "", 1)],
+  # child-table email read back on auth.users (not readable by authenticated)
+  'AUTH_users_email_back': [("(t.requester_email = (auth.jwt() ->> 'email'::text))",
+                             "(t.requester_email = (( SELECT users.email FROM auth.users WHERE (users.id = ( SELECT auth.uid() AS uid))))::text)", 4)],
+  # the five support policies left on the PUBLIC role list
+  'ROLES_public_kept': [("  TO authenticated\n  USING (", "  USING (", 5)],
   # a typo'd permission key
   'TYPO_permission_key': [("ARRAY['users.view', 'organizations.view']", "ARRAY['user.view', 'organizations.view']", 1)],
 }

@@ -14,8 +14,13 @@
 -- Support tickets and their child tables: the requester branches (requester_id, requester_email) no
 -- longer exclude internal users, so an internal user without support.view still reads the tickets
 -- they filed themselves. The internal_note exclusion on messages and attachments is kept.
+-- On the four child tables the caller's email is now read as auth.jwt() ->> 'email', as the
+-- support_tickets policy already does (the previous auth.users lookup is not readable by
+-- authenticated, so every direct read of those tables failed). These five policies now apply TO
+-- authenticated (previously PUBLIC): an anonymous read returns no rows.
+-- Policy count is unchanged.
 --
--- The policies are changed IN PLACE with ALTER POLICY: same names, commands, roles and count. No
+-- The policies are changed IN PLACE with ALTER POLICY: same names, commands and count. No
 -- policy is added (permissive policies OR together, so an added policy would leave the old access
 -- open). Every helper is caller-bound SECURITY DEFINER with EXECUTE granted to authenticated, and
 -- every call is wrapped in (SELECT ...) so it runs once per statement.
@@ -155,6 +160,7 @@ ALTER POLICY licenses_select_public ON public.licenses
 -- 8. support_tickets
 -- ============================================================
 ALTER POLICY support_tickets_select_public ON public.support_tickets
+  TO authenticated
   USING (
     (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.view']))
     OR (SELECT public.report_my_access('support-sla')) IS NOT NULL
@@ -166,52 +172,48 @@ ALTER POLICY support_tickets_select_public ON public.support_tickets
 -- 9. support_ticket_messages
 -- ============================================================
 ALTER POLICY support_ticket_messages_select_public ON public.support_ticket_messages
+  TO authenticated
   USING (
     (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.view']))
     OR ((message_type <> 'internal_note'::text) AND (EXISTS ( SELECT 1
          FROM support_tickets t
-        WHERE ((t.id = support_ticket_messages.ticket_id) AND ((t.requester_id = ( SELECT auth.uid() AS uid)) OR (t.requester_email = (( SELECT users.email
-                 FROM auth.users
-                WHERE (users.id = ( SELECT auth.uid() AS uid))))::text))))))
+        WHERE ((t.id = support_ticket_messages.ticket_id) AND ((t.requester_id = ( SELECT auth.uid() AS uid)) OR (t.requester_email = (auth.jwt() ->> 'email'::text)))))))
   );
 
 -- ============================================================
 -- 10. support_ticket_events
 -- ============================================================
 ALTER POLICY support_ticket_events_select_public ON public.support_ticket_events
+  TO authenticated
   USING (
     (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.view']))
     OR (EXISTS ( SELECT 1
          FROM support_tickets t
-        WHERE ((t.id = support_ticket_events.ticket_id) AND ((t.requester_id = ( SELECT auth.uid() AS uid)) OR (t.requester_email = (( SELECT users.email
-                 FROM auth.users
-                WHERE (users.id = ( SELECT auth.uid() AS uid))))::text)))))
+        WHERE ((t.id = support_ticket_events.ticket_id) AND ((t.requester_id = ( SELECT auth.uid() AS uid)) OR (t.requester_email = (auth.jwt() ->> 'email'::text))))))
   );
 
 -- ============================================================
 -- 11. support_ticket_participants
 -- ============================================================
 ALTER POLICY support_ticket_participants_select_public ON public.support_ticket_participants
+  TO authenticated
   USING (
     (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.view']))
     OR (EXISTS ( SELECT 1
          FROM support_tickets t
-        WHERE ((t.id = support_ticket_participants.ticket_id) AND ((t.requester_id = ( SELECT auth.uid() AS uid)) OR (t.requester_email = (( SELECT users.email
-                 FROM auth.users
-                WHERE (users.id = ( SELECT auth.uid() AS uid))))::text)))))
+        WHERE ((t.id = support_ticket_participants.ticket_id) AND ((t.requester_id = ( SELECT auth.uid() AS uid)) OR (t.requester_email = (auth.jwt() ->> 'email'::text))))))
   );
 
 -- ============================================================
 -- 12. support_ticket_attachments
 -- ============================================================
 ALTER POLICY support_ticket_attachments_select_public ON public.support_ticket_attachments
+  TO authenticated
   USING (
     (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.view']))
     OR ((EXISTS ( SELECT 1
          FROM support_tickets t
-        WHERE ((t.id = support_ticket_attachments.ticket_id) AND ((t.requester_id = ( SELECT auth.uid() AS uid)) OR (t.requester_email = (( SELECT users.email
-                 FROM auth.users
-                WHERE (users.id = ( SELECT auth.uid() AS uid))))::text))))) AND ((message_id IS NULL) OR (EXISTS ( SELECT 1
+        WHERE ((t.id = support_ticket_attachments.ticket_id) AND ((t.requester_id = ( SELECT auth.uid() AS uid)) OR (t.requester_email = (auth.jwt() ->> 'email'::text)))))) AND ((message_id IS NULL) OR (EXISTS ( SELECT 1
          FROM support_ticket_messages m
         WHERE ((m.id = support_ticket_attachments.message_id) AND (m.message_type <> 'internal_note'::text))))))
   );

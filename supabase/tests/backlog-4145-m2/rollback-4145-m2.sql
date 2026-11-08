@@ -2,6 +2,7 @@
 -- the production catalog on 2026-11-07 (pg_policies quals, verbatim; identical on keepr-test).
 -- Digest of the 31 policies on the 13 tables before M2 (see controls.sql K2):
 --   n=31 md5=83dce5f806f9431a9eead58e9f61ea89
+-- Rollback order: this file BEFORE the M1 rollback (the policies here use M1's helper).
 -- Run only inside a transaction that is rolled back (harness), or with an explicit go for a real rollback.
 
 ALTER POLICY users_select_public ON public.users
@@ -32,6 +33,7 @@ ALTER POLICY licenses_select_public ON public.licenses
   USING (((( SELECT auth.uid() AS uid) = user_id) OR has_internal_role(( SELECT auth.uid() AS uid))));
 
 ALTER POLICY support_tickets_select_public ON public.support_tickets
+  TO public
   USING (((EXISTS ( SELECT 1
    FROM internal_roles
   WHERE (internal_roles.user_id = ( SELECT auth.uid() AS uid)))) OR ((requester_email = (auth.jwt() ->> 'email'::text)) AND (NOT (EXISTS ( SELECT 1
@@ -41,6 +43,7 @@ ALTER POLICY support_tickets_select_public ON public.support_tickets
   WHERE (internal_roles.user_id = ( SELECT auth.uid() AS uid))))))));
 
 ALTER POLICY support_ticket_messages_select_public ON public.support_ticket_messages
+  TO public
   USING (((EXISTS ( SELECT 1
    FROM internal_roles
   WHERE (internal_roles.user_id = ( SELECT auth.uid() AS uid)))) OR ((message_type <> 'internal_note'::text) AND (EXISTS ( SELECT 1
@@ -52,6 +55,7 @@ ALTER POLICY support_ticket_messages_select_public ON public.support_ticket_mess
   WHERE (internal_roles.user_id = ( SELECT auth.uid() AS uid))))))));
 
 ALTER POLICY support_ticket_events_select_public ON public.support_ticket_events
+  TO public
   USING (((EXISTS ( SELECT 1
    FROM internal_roles
   WHERE (internal_roles.user_id = ( SELECT auth.uid() AS uid)))) OR ((EXISTS ( SELECT 1
@@ -63,6 +67,7 @@ ALTER POLICY support_ticket_events_select_public ON public.support_ticket_events
   WHERE (internal_roles.user_id = ( SELECT auth.uid() AS uid))))))));
 
 ALTER POLICY support_ticket_participants_select_public ON public.support_ticket_participants
+  TO public
   USING (((EXISTS ( SELECT 1
    FROM internal_roles
   WHERE (internal_roles.user_id = ( SELECT auth.uid() AS uid)))) OR ((EXISTS ( SELECT 1
@@ -74,6 +79,7 @@ ALTER POLICY support_ticket_participants_select_public ON public.support_ticket_
   WHERE (internal_roles.user_id = ( SELECT auth.uid() AS uid))))))));
 
 ALTER POLICY support_ticket_attachments_select_public ON public.support_ticket_attachments
+  TO public
   USING (((EXISTS ( SELECT 1
    FROM internal_roles
   WHERE (internal_roles.user_id = ( SELECT auth.uid() AS uid)))) OR ((EXISTS ( SELECT 1
