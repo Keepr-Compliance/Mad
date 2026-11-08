@@ -84,8 +84,9 @@ export function useEpicDragDrop({ moveItemParent, onRefreshFallback }: UseEpicDr
       moveItemParent(item.id, targetParentId);
 
       // Fire the reorder RPC in the background — only refresh on failure to
-      // revert to server state. sprint_id is untouched.
-      reorderItem(item.id, targetParentId).catch(() => {
+      // revert to server state. sprint_id is untouched. The RPC also writes
+      // sort_order, so pass the item's own to keep its position.
+      reorderItem(item.id, targetParentId, item.sort_order).catch(() => {
         onRefreshFallback();
       });
     },

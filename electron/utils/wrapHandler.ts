@@ -5,6 +5,7 @@
  *
  * Error handling behavior:
  * - ValidationError -> { success: false, error: "Validation error: " + message } (no logging, expected input failure)
+ * - PaywallLockedError (code PAYWALL_LOCKED) -> { success: false, error: message } (info log only, no Sentry; expected paywall control flow)
  * - Error -> { success: false, error: message } (logged via logService)
  * - Non-Error throw -> { success: false, error: "Unknown error" } (logged via logService)
  *
@@ -16,6 +17,7 @@ import type { IpcMainInvokeEvent } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import { ValidationError } from "./validation";
 import logService from "../services/logService";
+import { PAYWALL_LOCKED_ERROR } from "../types/entitlement";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyIpcHandler = (event: IpcMainInvokeEvent, ...args: any[]) => Promise<any>;
@@ -58,6 +60,17 @@ export function wrapHandler<T extends AnyIpcHandler>(
     } catch (error) {
       if (error instanceof ValidationError) {
         return { success: false, error: `Validation error: ${error.message}` };
+      }
+      // BACKLOG-2081: a locked-transaction export is expected control flow, not a
+      // fault. Keyed on the stable error code (never the message text) so a forged
+      // "PAYWALL_LOCKED:" message is still captured. The message is returned
+      // unchanged: the renderer routes to the unlock prompt by its prefix.
+      if (
+        error instanceof Error &&
+        (error as { code?: unknown }).code === PAYWALL_LOCKED_ERROR
+      ) {
+        logService.info(`Handler paywall: ${error.message}`, options?.module ?? "IPC");
+        return { success: false, error: error.message };
       }
       const errorMessage =
         error instanceof Error ? error.message : "Unknown error";

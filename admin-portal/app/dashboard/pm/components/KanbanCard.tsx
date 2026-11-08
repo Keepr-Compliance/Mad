@@ -26,6 +26,8 @@ export type { AssignableUser } from './InlineAssigneePicker';
 
 interface KanbanCardProps {
   item: PmBacklogItem;
+  /** Drag id for this card. Defaults to item.id; Label mode gives each lane copy its own. */
+  sortableId?: string;
   isDragOverlay?: boolean;
   isSelected?: boolean;
   compact?: boolean;
@@ -37,6 +39,7 @@ interface KanbanCardProps {
 
 export function KanbanCard({
   item,
+  sortableId,
   isDragOverlay = false,
   isSelected = false,
   compact = false,
@@ -52,7 +55,7 @@ export function KanbanCard({
     transform,
     transition,
     isDragging,
-  } = useSortable({ id: item.id });
+  } = useSortable({ id: sortableId ?? item.id });
 
   const style = {
     transform: CSS.Transform.toString(transform),

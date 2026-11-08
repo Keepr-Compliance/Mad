@@ -46,7 +46,7 @@ export function makeItem(
 
 export function emptyColumns(): BoardColumns {
   return {
-    pending: [], in_progress: [], testing: [], waiting_for_user: [], completed: [],
+    pending: [], in_progress: [], testing: [], pending_uat: [], waiting_for_user: [], completed: [],
     blocked: [], deferred: [], obsolete: [], reopened: [],
   };
 }
