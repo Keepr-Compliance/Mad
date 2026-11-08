@@ -18,7 +18,8 @@
 --   orgs 601 (5 agent, 11 admin), 602 (6), 603 (9)
 --   devices / audit_logs / licenses: users 5, 6, 7, 9, 11      user_preferences: 5, 6, 11
 --   tickets 301 req 5 asg 2 | 302 req 6 | 303 req 8, email of 7, asg 2 | 304 req 9 asg 4
---           305 req NULL, email of 6, asg 2 | 306 req 4 (internal user's own ticket)
+--           305 req NULL, email of 6, asg 2 | 306 req 4 (internal user's own ticket, other contact email)
+--           307 req NULL, email of 4 (matched only by the session email)
 --   messages: reply + internal_note on 301 and on 306, reply on 305 (email-only requester 6); events, participants: one on 301 and on 306
 --   attachments: on 301 and 306, one without message, one on the internal note
 --   backlog item 401, link 501 (301 -> 401)
@@ -56,6 +57,10 @@ BEGIN
     RETURN 'ERR ' || SQLSTATE || ' ' || left(SQLERRM, 80);
   END;
 END $b$;
+
+-- jsonb of a reply, or the reply as a jsonb string when it is not JSON (an ERR text)
+CREATE FUNCTION pg_temp.js(s text) RETURNS jsonb LANGUAGE plpgsql AS $b$
+BEGIN RETURN s::jsonb; EXCEPTION WHEN OTHERS THEN RETURN to_jsonb(s); END $b$;
 
 CREATE FUNCTION pg_temp.pass(ok boolean, detail text) RETURNS text LANGUAGE sql AS $b$
   SELECT CASE WHEN coalesce(ok, false) THEN 'PASS' ELSE 'FAIL ' || left(coalesce(detail, 'null'), 400) END
@@ -95,13 +100,15 @@ CREATE FUNCTION pg_temp.roles_rest() RETURNS text LANGUAGE sql AS $b$
        'support_ticket_attachments_select_public')
 $b$;
 
--- per-table count queries of fixture rows NOT owned by u (k, q); run as the caller via call_as
+-- per-table count queries of fixture rows NOT owned by u (k, q); run as the caller via call_as.
+-- A ticket is u's own when its requester_id is u or its requester_email is u's account email.
 CREATE FUNCTION pg_temp.vparts(u uuid) RETURNS TABLE (k text, q text) LANGUAGE sql AS $b$
   WITH a AS (SELECT pg_temp.fxa(1,2,3,4,5,6,7,8,9,10,11,12,13,14,21,22,23,24,25,26,27,28) f, quote_literal(u) uu,
-                    pg_temp.fxa(601,602,603) o, pg_temp.fxa(301,302,303,304,305,306) tk,
+                    pg_temp.fxa(601,602,603) o, pg_temp.fxa(301,302,303,304,305,306,307) tk,
                     (SELECT 'ARRAY[' || coalesce(string_agg(quote_literal(t.id), ','), '') || ']::uuid[]' FROM public.support_tickets t
-                      WHERE t.id IN (pg_temp.fx(301), pg_temp.fx(302), pg_temp.fx(303), pg_temp.fx(304), pg_temp.fx(305), pg_temp.fx(306))
-                        AND t.requester_id IS DISTINCT FROM u) tn,
+                      WHERE t.id IN (pg_temp.fx(301), pg_temp.fx(302), pg_temp.fx(303), pg_temp.fx(304), pg_temp.fx(305), pg_temp.fx(306), pg_temp.fx(307))
+                        AND t.requester_id IS DISTINCT FROM u
+                        AND t.requester_email IS DISTINCT FROM (SELECT au.email FROM auth.users au WHERE au.id = u)) tn,
                     quote_literal(pg_temp.fx(501)) l)
   SELECT v.k, v.q FROM a, LATERAL (VALUES
     (1, 'users', 'SELECT count(*) FROM public.users WHERE id = ANY (' || f || ') AND id <> ' || uu),
@@ -111,7 +118,7 @@ CREATE FUNCTION pg_temp.vparts(u uuid) RETURNS TABLE (k text, q text) LANGUAGE s
     (5, 'user_preferences', 'SELECT count(*) FROM public.user_preferences WHERE user_id = ANY (' || f || ') AND user_id <> ' || uu),
     (6, 'audit_logs', 'SELECT count(*) FROM public.audit_logs WHERE user_id = ANY (' || f || ') AND user_id <> ' || uu),
     (7, 'licenses', 'SELECT count(*) FROM public.licenses WHERE user_id = ANY (' || f || ') AND user_id <> ' || uu),
-    (8, 'support_tickets', 'SELECT count(*) FROM public.support_tickets WHERE id = ANY (' || tk || ') AND requester_id IS DISTINCT FROM ' || uu),
+    (8, 'support_tickets', 'SELECT count(*) FROM public.support_tickets WHERE id = ANY (' || tn || ')'),
     (9, 'support_ticket_messages', 'SELECT count(*) FROM public.support_ticket_messages WHERE ticket_id = ANY (' || tn || ')'),
     (10, 'support_ticket_events', 'SELECT count(*) FROM public.support_ticket_events WHERE ticket_id = ANY (' || tn || ')'),
     (11, 'support_ticket_participants', 'SELECT count(*) FROM public.support_ticket_participants WHERE ticket_id = ANY (' || tn || ')'),
@@ -233,7 +240,8 @@ BEGIN
     (pg_temp.fx(303), 'P4145m2 ticket 303', 'fixture', pg_temp.fx(8), 'p4145m2-7@example.test', 'P4145m2 user 7', pg_temp.fx(2)),
     (pg_temp.fx(304), 'P4145m2 ticket 304', 'fixture', pg_temp.fx(9), 'p4145m2-9@example.test', 'P4145m2 user 9', pg_temp.fx(4)),
     (pg_temp.fx(305), 'P4145m2 ticket 305', 'fixture', NULL, 'p4145m2-6@example.test', 'P4145m2 user 6', pg_temp.fx(2)),
-    (pg_temp.fx(306), 'P4145m2 ticket 306', 'fixture', pg_temp.fx(4), 'p4145m2-4@example.test', 'P4145m2 user 4', NULL);
+    (pg_temp.fx(306), 'P4145m2 ticket 306', 'fixture', pg_temp.fx(4), 'p4145m2-4-alt@example.test', 'P4145m2 user 4', NULL),
+    (pg_temp.fx(307), 'P4145m2 ticket 307', 'fixture', NULL, 'p4145m2-4@example.test', 'P4145m2 user 4', NULL);
   INSERT INTO public.support_ticket_messages (id, ticket_id, body, message_type) VALUES
     (pg_temp.fx(701), pg_temp.fx(301), 'fixture reply', 'reply'),
     (pg_temp.fx(702), pg_temp.fx(301), 'fixture note', 'internal_note'),

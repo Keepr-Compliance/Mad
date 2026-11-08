@@ -13,15 +13,15 @@ BEGIN
   SELECT * INTO p0 FROM p4145m2_p0;
 
   -- ================= P0: baseline before M2 (same transaction, same fixtures) =================
-  s := (SELECT string_agg(k || '=' || v::text, ',') FROM jsonb_each(p0.v4::jsonb) e(k, v)
+  s := (SELECT string_agg(k || '=' || v::text, ',') FROM jsonb_each(pg_temp.js(p0.v4)) e(k, v)
          WHERE (k NOT IN ('support_ticket_messages','support_ticket_events','support_ticket_participants','support_ticket_attachments') AND (jsonb_typeof(v) <> 'number' OR v::int = 0))
             OR (k IN ('support_ticket_messages','support_ticket_events','support_ticket_participants','support_ticket_attachments') AND v::text NOT LIKE '"ERR 42501 permission denied for table users%'));
   r := r || jsonb_build_object('P0_marketing_reads_every_target_before',
-    pg_temp.pass(s IS NULL AND (SELECT count(*) FROM jsonb_object_keys(p0.v4::jsonb)) = 13, coalesce(s, '') || ' ; ' || p0.v4));
+    pg_temp.pass(s IS NULL AND (SELECT count(*) FROM jsonb_object_keys(pg_temp.js(p0.v4))) = 13, coalesce(s, '') || ' ; ' || p0.v4));
   r := r || jsonb_build_object('P0_pre_state_is_prod_text', pg_temp.pass(p0.tdigest = '31/83dce5f806f9431a9eead58e9f61ea89', p0.tdigest));
 
   -- ================= H1: child tables failed for authenticated before M2; readable after =================
-  s := (SELECT string_agg(k, ',') FROM jsonb_each(p0.o5::jsonb) e(k, v)
+  s := (SELECT string_agg(k, ',') FROM jsonb_each(pg_temp.js(p0.o5)) e(k, v)
          WHERE k IN ('support_ticket_messages','support_ticket_events','support_ticket_participants','support_ticket_attachments') AND v::text NOT LIKE '"ERR 42501 permission denied for table users%');
   s2 := pg_temp.each(pg_temp.fx(5), true);
   r := r || jsonb_build_object('H1_child_tables_failed_before_read_after',
@@ -73,17 +73,17 @@ BEGIN
   -- ================= C3: own rows still readable (customer 5) =================
   s := pg_temp.own(pg_temp.fx(5));
   r := r || jsonb_build_object('C3_customer_own_rows',
-    pg_temp.pass(s::jsonb = '{"users":1,"organization_members":1,"devices":1,"user_preferences":1,"audit_logs":1,"licenses":1,"support_tickets":1,"support_ticket_messages":1,"support_ticket_events":1,"support_ticket_participants":1,"support_ticket_attachments":1}'::jsonb, s));
+    pg_temp.pass(pg_temp.js(s) = '{"users":1,"organization_members":1,"devices":1,"user_preferences":1,"audit_logs":1,"licenses":1,"support_tickets":1,"support_ticket_messages":1,"support_ticket_events":1,"support_ticket_participants":1,"support_ticket_attachments":1}'::jsonb, s));
 
   -- ================= C4: broker org-member reads unchanged (before = after) =================
   s := (SELECT string_agg(x.lbl || ':' || k, ',') FROM (VALUES
           ('v5', p0.v5, pg_temp.each(pg_temp.fx(5), false)), ('o5', p0.o5, pg_temp.each(pg_temp.fx(5), true)),
           ('v11', p0.v11, pg_temp.each(pg_temp.fx(11), false)), ('o11', p0.o11, pg_temp.each(pg_temp.fx(11), true))) x(lbl, b, a),
-          jsonb_object_keys(x.b::jsonb) k
-         WHERE k NOT IN ('support_ticket_messages','support_ticket_events','support_ticket_participants','support_ticket_attachments') AND (x.b::jsonb -> k) IS DISTINCT FROM (x.a::jsonb -> k));
+          jsonb_object_keys(pg_temp.js(x.b)) k
+         WHERE k NOT IN ('support_ticket_messages','support_ticket_events','support_ticket_participants','support_ticket_attachments') AND (pg_temp.js(x.b) -> k) IS DISTINCT FROM (pg_temp.js(x.a) -> k));
   s2 := pg_temp.each(pg_temp.fx(5), false) || ' | ' || pg_temp.each(pg_temp.fx(11), false);
-  r := r || jsonb_build_object('C4_broker_counts_unchanged', pg_temp.pass(s IS NULL AND p0.v5::jsonb ->> 'users' = '1'
-    AND p0.v11::jsonb ->> 'organization_members' = '1' AND s2 NOT LIKE '%ERR%', coalesce(s, '') || ' ; ' || s2));
+  r := r || jsonb_build_object('C4_broker_counts_unchanged', pg_temp.pass(s IS NULL AND pg_temp.js(p0.v5) ->> 'users' = '1'
+    AND pg_temp.js(p0.v11) ->> 'organization_members' = '1' AND s2 NOT LIKE '%ERR%', coalesce(s, '') || ' ; ' || s2));
 
   -- ================= C12: the requester_email branch on child tables reads the session email =================
   s := pg_temp.call_as(pg_temp.fx(6), format('SELECT to_jsonb(count(*)) FROM public.support_ticket_messages WHERE id = %L', pg_temp.fx(705)))
@@ -119,7 +119,11 @@ BEGIN
   -- ================= C8: internal users still see their own tickets (internal notes hidden) =================
   s := pg_temp.own(pg_temp.fx(4));
   r := r || jsonb_build_object('C8_internal_user_own_ticket',
-    pg_temp.pass(s::jsonb = '{"users":1,"organization_members":0,"devices":0,"user_preferences":0,"audit_logs":0,"licenses":0,"support_tickets":1,"support_ticket_messages":1,"support_ticket_events":1,"support_ticket_participants":1,"support_ticket_attachments":1}'::jsonb, s));
+    pg_temp.pass(pg_temp.js(s) = '{"users":1,"organization_members":0,"devices":0,"user_preferences":0,"audit_logs":0,"licenses":0,"support_tickets":1,"support_ticket_messages":1,"support_ticket_events":1,"support_ticket_participants":1,"support_ticket_attachments":1}'::jsonb, s));
+
+  s := pg_temp.call_as(pg_temp.fx(4), format('SELECT to_jsonb(count(*)) FROM public.support_tickets WHERE id = %L', pg_temp.fx(307)))
+    || '/' || pg_temp.call_as(pg_temp.fx(5), format('SELECT to_jsonb(count(*)) FROM public.support_tickets WHERE id = %L', pg_temp.fx(307)));
+  r := r || jsonb_build_object('C8b_internal_user_reads_ticket_carrying_their_email', pg_temp.pass(s = '1/0', s));
 
   -- ================= C9: reassignment moves access inside one transaction =================
   BEGIN
@@ -185,8 +189,8 @@ BEGIN
           FROM unnest(ARRAY['support_tickets','support_ticket_messages','support_ticket_events',
                             'support_ticket_participants','support_ticket_attachments']) x);
   r := r || jsonb_build_object('A1_anon_support_tables_0_rows',
-    pg_temp.pass(s::jsonb = '{"support_tickets":"0","support_ticket_messages":"0","support_ticket_events":"0","support_ticket_participants":"0","support_ticket_attachments":"0"}'::jsonb
-                 AND p0.anon5::jsonb ->> 'support_tickets' = '0', p0.anon5 || ' -> ' || s));
+    pg_temp.pass(pg_temp.js(s) = '{"support_tickets":"0","support_ticket_messages":"0","support_ticket_events":"0","support_ticket_participants":"0","support_ticket_attachments":"0"}'::jsonb
+                 AND pg_temp.js(p0.anon5) ->> 'support_tickets' = '0', p0.anon5 || ' -> ' || s));
   s := pg_temp.call_as(NULL, 'SELECT to_jsonb(count(*)) FROM public.users', 'anon');
   r := r || jsonb_build_object('A2_anon_users_0', pg_temp.pass(s = '0', s));
 
