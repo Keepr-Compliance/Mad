@@ -231,6 +231,7 @@ BEGIN
       'anon=' || s || ' u5=' || left(s2, 80)));
 
     -- ===== S8c: EXECUTE grants. anon none; authenticated the 4 RPCs only; definers pin search_path =====
+    -- (the count excludes the BACKLOG-4186 read functions sender_rule_set_admin_*, checked in backlog-4186)
     s := '';
     FOREACH k IN ARRAY pub_sigs LOOP
       IF has_function_privilege('anon', k, 'EXECUTE') OR NOT has_function_privilege('authenticated', k, 'EXECUTE')
@@ -247,8 +248,8 @@ BEGIN
       END IF;
     END LOOP;
     r := r || jsonb_build_object('S8c_function_grants', pg_temp.pass(
-      s = '' AND (SELECT count(*) FROM pg_proc WHERE proname LIKE '%sender_rule_set%') = 10, s
-      || ' n=' || (SELECT count(*) FROM pg_proc WHERE proname LIKE '%sender_rule_set%')));
+      s = '' AND (SELECT count(*) FROM pg_proc WHERE proname LIKE '%sender_rule_set%' AND proname NOT LIKE 'sender_rule_set_admin_%') = 10, s
+      || ' n=' || (SELECT count(*) FROM pg_proc WHERE proname LIKE '%sender_rule_set%' AND proname NOT LIKE 'sender_rule_set_admin_%')));
 
     -- ===== S9: owner gate. editor, viewer, no analytics.view, plain user, no JWT sub: refused; nothing written =====
     n := (SELECT count(*) FROM public.sender_rule_sets);
