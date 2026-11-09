@@ -28,6 +28,7 @@ function fake(overrides: Partial<AppLifecycle> = {}): AppLifecycle {
     isReady: () => true,
     whenReady: async () => {},
     quit: () => {},
+    relaunch: () => {},
     ...overrides,
   };
 }
@@ -52,6 +53,7 @@ describe("appLifecycleProvider (BACKLOG-2962)", () => {
     expect(() => hostAppLifecycle.isReady()).toThrow(/isReady cannot be answered/);
     expect(() => hostAppLifecycle.whenReady()).toThrow(/whenReady cannot be answered/);
     expect(() => hostAppLifecycle.quit()).toThrow(/quit cannot be answered/);
+    expect(() => hostAppLifecycle.relaunch()).toThrow(/relaunch cannot be answered/);
     // All four point at the composition root, so a developer meeting one in a
     // new shell is told what to do rather than what went wrong.
     expect(() => hostAppLifecycle.quit()).toThrow(/installNativeCapabilities/);
@@ -59,11 +61,16 @@ describe("appLifecycleProvider (BACKLOG-2962)", () => {
 
   it("forwards each member to whatever is installed", async () => {
     const quit = jest.fn();
-    installAppLifecycle(fake({ isPackaged: () => false, isReady: () => false, quit }));
+    const relaunch = jest.fn();
+    installAppLifecycle(fake({ isPackaged: () => false, isReady: () => false, quit, relaunch }));
     expect(hostAppLifecycle.isPackaged()).toBe(false);
     expect(hostAppLifecycle.isReady()).toBe(false);
     await expect(hostAppLifecycle.whenReady()).resolves.toBeUndefined();
     hostAppLifecycle.quit();
+    expect(quit).toHaveBeenCalledTimes(1);
+    // BACKLOG-2834: Start fresh's relaunch.
+    hostAppLifecycle.relaunch();
+    expect(relaunch).toHaveBeenCalledTimes(1);
     expect(quit).toHaveBeenCalledTimes(1);
   });
 

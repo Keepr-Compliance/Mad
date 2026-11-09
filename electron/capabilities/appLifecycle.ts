@@ -73,6 +73,13 @@ export interface AppLifecycle {
    * a graceful quit is what is wanted.
    */
   quit(): void;
+
+  /**
+   * BACKLOG-2834 — start a new instance and end this one now. Electron's
+   * `app.relaunch()` + `app.exit(0)`, the idiom resetService uses. Only the
+   * "Start fresh" choice after an unrecoverable migration calls it.
+   */
+  relaunch(): void;
 }
 
 /** Raised by {@link UnavailableAppLifecycle}. */
@@ -119,5 +126,9 @@ export class UnavailableAppLifecycle implements AppLifecycle {
 
   quit(): void {
     throw new AppLifecycleUnavailableError("quit");
+  }
+
+  relaunch(): void {
+    throw new AppLifecycleUnavailableError("relaunch");
   }
 }

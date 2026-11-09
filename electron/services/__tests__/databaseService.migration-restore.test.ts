@@ -162,6 +162,11 @@ import databaseService from "../databaseService";
 // databaseService throws.
 import { MigrationRecoveryFailedError } from "../../types/database";
 
+/** A move-aside target does not exist yet; everything else does. */
+function existsExceptAsideNames(p: string): boolean {
+  return !/-(pre-restore|unmigratable)-/.test(String(p));
+}
+
 describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
   // Store original state so we can reset between tests
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -187,7 +192,11 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     mockGetEncryptionKey.mockResolvedValue("abcdef1234567890");
     mockInitializeEncryption.mockResolvedValue(undefined);
     mockIsDatabaseEncrypted.mockResolvedValue(true); // Already encrypted, no migration needed
-    mockExistsSync.mockReturnValue(true);
+    // BACKLOG-2834: path-aware. Every file "exists" except a move-aside
+    // name (mad-pre-restore-* / mad-unmigratable-*): the shared move-aside
+    // helper probes for a free name, and a blanket `true` makes every name
+    // look taken, so the move fails closed and nothing is restored.
+    mockExistsSync.mockImplementation(existsExceptAsideNames);
     mockCloseDb.mockResolvedValue(undefined);
     mockShowMessageBox.mockResolvedValue({ response: 0 });
 
@@ -461,6 +470,13 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     });
   });
 
+  /**
+   * BACKLOG-2834 -- the restore still happens and keeps every 3975 guarantee,
+   * but a restored file whose migration failed (here deterministically: a
+   * plain Error has no SQLite code) is never continued on. A non-startup
+   * caller gets MigrationRecoveryFailedError (autoRestoreStatus "succeeded")
+   * and the notice; startup gets the Quit / Start fresh choice.
+   */
   describe("Migration failure with successful auto-restore", () => {
     beforeEach(() => {
       // Make runMigrations throw by having schema.sql execution fail
@@ -489,9 +505,9 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     });
 
     it("should restore from backup when migration fails", async () => {
-      const result = await service.initialize();
+      const error = await expectTerminalRejection();
 
-      expect(result).toBe(true);
+      expect(error.autoRestoreStatus).toBe("succeeded");
       // BACKLOG-3952 R5: destination-specific. The pre-migration backup is
       // also a copyFileSync, so "called at all" cannot tell the two apart.
       // BACKLOG-3975: the source is the backup written THIS launch, not the
@@ -507,7 +523,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     });
 
     it("BACKLOG-3975: moves the current database aside (main, -wal, -shm) BEFORE copying, and never deletes it", async () => {
-      await service.initialize();
+      await expectTerminalRejection();
 
       const renames = mockRenameSync.mock.calls.map((c) => [String(c[0]), String(c[1])]);
       expect(renames.map((r) => r[0])).toEqual([
@@ -516,7 +532,8 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
         "/mock/userData/mad.db-shm",
       ]);
       for (const [from, to] of renames) {
-        expect(to).toMatch(/^\/mock\/userData\/mad-pre-restore-\d{8}T\d{6}\.db(-wal|-shm)?$/);
+        // BACKLOG-2834: shared helper -- millisecond time, optional -n suffix.
+        expect(to).toMatch(/^\/mock\/userData\/mad-pre-restore-\d{8}T\d{9}(-\d+)?\.db(-wal|-shm)?$/);
         expect(to.endsWith(from.slice("/mock/userData/mad.db".length))).toBe(true);
       }
       // The aside name must not match the rolling `-backup-` prune.
@@ -533,21 +550,27 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       ).toBe(false);
     });
 
-    it("should show warning dialog on successful restore", async () => {
-      await service.initialize();
+    // BACKLOG-2834 -- INVERTED IN PLACE (was: "should show warning dialog on
+    // successful restore"). "Your data has been restored" is no longer shown:
+    // the app does not continue on the restored file.
+    it("shows the non-startup notice, never the 'restored' warning", async () => {
+      await expectTerminalRejection();
 
       expect(mockShowMessageBox).toHaveBeenCalledTimes(1);
-      expect(mockShowMessageBox).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "warning",
-          title: "Database Update Notice",
-          message: expect.stringContaining("restored"),
-        })
+      expect(mockShowMessageBox).toHaveBeenCalledWith({
+        type: "error",
+        title: "Database Update Failed",
+        message: "A database update failed.",
+        detail: "Your current data was not changed. If this keeps happening, contact support.",
+        buttons: ["OK"],
+      });
+      expect(mockShowMessageBox).not.toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Database Update Notice" }),
       );
     });
 
     it("should report to Sentry with correct tags on successful restore", async () => {
-      await service.initialize();
+      await expectTerminalRejection();
 
       expect(mockCaptureException).toHaveBeenCalledWith(
         expect.any(Error),
@@ -556,22 +579,26 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
             migration_failure: "true",
             auto_restore: "succeeded",
             backup_integrity: "valid",
+            // BACKLOG-2834: a plain Error carries no SQLite code -> deterministic, no retry.
+            error_code: "none",
+            retried_after_restore: "false",
           }),
         })
       );
     });
 
-    it("should update shared references after restore", async () => {
-      await service.initialize();
+    // BACKLOG-2834/2836 -- INVERTED IN PLACE (was: "should update shared
+    // references after restore", setDb >= 2). Neither the failed handle nor
+    // the restored one is ever published.
+    it("never publishes the failed or the restored handle", async () => {
+      await expectTerminalRejection();
 
-      // setDb should be called at least twice: once during initial init, once after restore
-      expect(mockSetDb.mock.calls.length).toBeGreaterThanOrEqual(2);
-      expect(mockSetDbPath).toHaveBeenCalledWith("/mock/userData/mad.db");
-      expect(mockSetEncryptionKey).toHaveBeenCalledWith("abcdef1234567890");
+      expect(mockSetDb).not.toHaveBeenCalled();
+      expect(service.isInitialized()).toBe(false);
     });
 
     it("should verify backup integrity with encryption params before restore", async () => {
-      await service.initialize();
+      await expectTerminalRejection();
 
       // Database constructor should be called with readonly for integrity check
       const readonlyCalls = MockDatabase.mock.calls.filter(
@@ -586,31 +613,67 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     });
 
     /**
-     * BACKLOG-2999 / BACKLOG-2834 BOUNDARY -- green today BY DESIGN. The
-     * discriminator is `mockQuit` NOT being called even though quitting is
-     * ENABLED here: that is what stops a later change silently widening the
-     * terminal path to cover a branch that did recover the user's data.
-     * Re-running migrations against the restored file is BACKLOG-2834's
-     * subject and is deliberately NOT fixed here.
+     * BACKLOG-2834 -- INVERTS the 2999 BOUNDARY (founder ruling 93ac157a). A
+     * restore whose file cannot be migrated is no longer a successful start:
+     * at startup the user is asked, and Quit (index 0, also Esc) quits with
+     * the restored data left in place. Full object, transcribed from
+     * databaseService._handleUnmigratableDatabase.
      */
-    it("BOUNDARY (BACKLOG-2834): a SUCCESSFUL restore is not terminal -- resolves true, stays initialized, never quits", async () => {
-      const result = await service.initialize({ quitOnUnrecoverableFailure: true });
+    it("BOUNDARY (BACKLOG-2834): a restored file that cannot be migrated is not continued on -- startup asks Quit / Start fresh", async () => {
+      const error = await expectTerminalRejection({ quitOnUnrecoverableFailure: true });
 
-      expect(result).toBe(true);
-      expect(mockQuit).not.toHaveBeenCalled();
-      expect(service.isInitialized()).toBe(true);
-      // BACKLOG-2962, seams PR B: full object, not `objectContaining`. This box
-      // now reaches the platform through the Dialog capability, and a seam that
-      // dropped `detail` or `buttons` would have passed the partial match.
-      // Transcribed from `databaseService.ts:346-352`.
+      expect(error.autoRestoreStatus).toBe("succeeded");
+      expect(mockQuit).toHaveBeenCalledTimes(1);
+      expect(service.isInitialized()).toBe(false);
+      expect(mockShowMessageBox).toHaveBeenCalledTimes(1);
       expect(mockShowMessageBox).toHaveBeenCalledWith({
-        type: "warning",
-        title: "Database Update Notice",
-        message: "A database update failed, but your data has been restored.",
+        type: "error",
+        title: "Keepr couldn't update your data",
+        message: "Keepr couldn't finish updating your data.",
         detail:
-          "The app will continue with your existing data. Please contact support if this happens again.",
-        buttons: ["OK"],
+          "Your data is safe. You can quit and contact support, or start fresh with an empty database. " +
+          "Your current data is kept either way.",
+        buttons: ["Quit", "Start fresh"],
+        defaultId: 0,
+        cancelId: 0,
       });
+    });
+
+    /**
+     * BACKLOG-2834 C12 (SR change 7) -- a transient failure twice on a full
+     * disk. Round 1 restores and moves the original to mad-pre-restore-*;
+     * round 2's pre-migration backup copy fails (ENOSPC, swallowed), so round
+     * 2 finds no same-launch backup and takes the terminal branch. Its detail
+     * must still name round 1's kept file, not claim nothing was replaced.
+     * Error shape transcribed from the real driver (restoreRerun-2834 C6:
+     * name SqliteError, code SQLITE_FULL, "database or disk is full").
+     */
+    it("C12 two transient failures with the round-2 backup copy failing: the dialog names round 1's kept file", async () => {
+      mockDbExec.mockImplementation((sql: string) => {
+        if (sql.includes("CREATE TABLE IF NOT EXISTS test")) {
+          throw Object.assign(new Error("database or disk is full"), {
+            name: "SqliteError",
+            code: "SQLITE_FULL",
+          });
+        }
+      });
+      let backupCopies = 0;
+      mockCopyFileSync.mockImplementation((_src: string, dest: string) => {
+        if (String(dest).includes("-backup-") && ++backupCopies === 2) {
+          throw new Error("ENOSPC: no space left on device");
+        }
+      });
+
+      const error = await expectTerminalRejection({ quitOnUnrecoverableFailure: true });
+
+      expect(error.autoRestoreStatus).toBe("no_backup");
+      expect(backupCopies).toBe(2);
+      expect(copiesOntoLiveDb()).toHaveLength(1);
+      expect(mockShowMessageBox).toHaveBeenCalledTimes(1);
+      const detail = String(mockShowMessageBox.mock.calls[0][0].detail);
+      expect(detail).toMatch(/Your previous database was kept as mad-pre-restore-\d{8}T\d{9}(-\d+)?\.db\./);
+      expect(detail).not.toContain("Keepr did not replace or delete your data file");
+      expect(mockQuit).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -851,13 +914,13 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       expect(mockQuit).toHaveBeenCalledTimes(1);
     });
 
-    it("ROUTE 4 -- the post-restore PROBE fails: tears down the handle the restore already published to every consumer", async () => {
+    it("ROUTE 4 -- the post-restore PROBE fails: rejects, publishes nothing, tears down through both predicates", async () => {
       failMigrationWithGoodBackup();
-      // The copy succeeds and _attemptAutoRestore assigns this.db AND calls
-      // setDb(newDb) BEFORE probing. On a probe failure it returns
-      // restored:false with both already published -- so pre-fix this was the
-      // worst of the four routes: initialize() returned true and all 46
-      // isInitialized() call sites saw a perfectly initialized database.
+      // The copy succeeds and the probe fails. Before BACKLOG-2999 this was
+      // the worst of the four routes (the restored handle was published, so
+      // all 46 isInitialized() call sites saw an initialized database). Since
+      // BACKLOG-2836 the restored handle is returned unpublished and closed by
+      // _attemptAutoRestore on a probe failure.
       mockDbPrepare.mockImplementation((sql: string) => {
         if (sql.includes("sqlite_master") && sql.includes("schema_version")) {
           return { get: jest.fn().mockReturnValue({ name: "schema_version" }) };
@@ -880,9 +943,10 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
 
       expect(error.autoRestoreStatus).toBe("failed");
       expect(error.backupIntegrity).toBe("valid");
-      // The restored handle really was published to consumers first...
-      expect(mockSetDb.mock.calls.length).toBeGreaterThanOrEqual(2);
-      // ...and the terminal branch takes it back through BOTH predicates.
+      // BACKLOG-2836: neither the failed handle nor the restored one was
+      // published (was: setDb >= 2), and the terminal branch still tears down
+      // through BOTH predicates.
+      expect(mockSetDb).not.toHaveBeenCalled();
       expect(mockCloseDb).toHaveBeenCalled();
       expect(service.isInitialized()).toBe(false);
       expect(mockQuit).toHaveBeenCalledTimes(1);
@@ -1082,7 +1146,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
         "mad-backup-20260222T100000.db",
         "mad-backup-20260221T100000.db",
       ]);
-      mockExistsSync.mockReturnValue(true);
+      mockExistsSync.mockImplementation(existsExceptAsideNames);
       mockDbPragma.mockImplementation((pragma: string) => {
         if (pragma.includes("integrity_check")) {
           return [{ integrity_check: "ok" }];
@@ -1105,7 +1169,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
 
     it("BACKLOG-3975: restores the same-launch backup even when newer-named files exist", async () => {
       mockReaddirSync.mockReturnValue(["mad-backup-20991231T235959.db"]);
-      mockExistsSync.mockReturnValue(true);
+      mockExistsSync.mockImplementation(existsExceptAsideNames);
       service["sameLaunchBackupPath"] = "/mock/userData/mad-backup-20260222T100000.db";
 
       await service["_attemptAutoRestore"](new Error("test"));
@@ -1116,7 +1180,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     });
 
     it("BACKLOG-3975: when the copy fails, the moved files are put back", async () => {
-      mockExistsSync.mockReturnValue(true);
+      mockExistsSync.mockImplementation(existsExceptAsideNames);
       service["sameLaunchBackupPath"] = "/mock/userData/mad-backup-20260222T100000.db";
       mockCopyFileSync.mockImplementation(() => {
         throw new Error("ENOSPC: no space left on device");
@@ -1135,7 +1199,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     });
 
     it("BACKLOG-3975: when moving the database aside fails, nothing is copied", async () => {
-      mockExistsSync.mockReturnValue(true);
+      mockExistsSync.mockImplementation(existsExceptAsideNames);
       service["sameLaunchBackupPath"] = "/mock/userData/mad-backup-20260222T100000.db";
       mockRenameSync.mockImplementation(() => {
         throw new Error("EBUSY");
@@ -1169,7 +1233,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
 
       // Backup available and valid
       mockReaddirSync.mockReturnValue(["mad-backup-20260222T100000.db"]);
-      mockExistsSync.mockReturnValue(true);
+      mockExistsSync.mockImplementation(existsExceptAsideNames);
       mockDbPragma.mockImplementation((pragma: string) => {
         if (pragma.includes("integrity_check")) {
           return [{ integrity_check: "ok" }];

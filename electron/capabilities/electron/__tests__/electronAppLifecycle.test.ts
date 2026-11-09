@@ -66,6 +66,27 @@ describe("ElectronAppLifecycle (BACKLOG-2962)", () => {
     expect((app as unknown as { exit?: unknown }).exit).toBeUndefined();
   });
 
+  it("relaunch() is app.relaunch() then app.exit(0) — the resetService idiom (BACKLOG-2834)", () => {
+    // Start fresh has already moved the database aside; a cancellable quit
+    // there could leave the app running with no database. Attached locally,
+    // like isReady above, so the shared mock keeps not having them.
+    const order: string[] = [];
+    const relaunch = jest.fn(() => order.push("relaunch"));
+    const exit = jest.fn(() => order.push("exit"));
+    const a = app as unknown as { relaunch?: unknown; exit?: unknown };
+    a.relaunch = relaunch;
+    a.exit = exit;
+    try {
+      new ElectronAppLifecycle().relaunch();
+      expect(order).toEqual(["relaunch", "exit"]);
+      expect(exit).toHaveBeenCalledWith(0);
+      expect(mockQuit).not.toHaveBeenCalled();
+    } finally {
+      delete a.relaunch;
+      delete a.exit;
+    }
+  });
+
   it("constructing it touches nothing", () => {
     new ElectronAppLifecycle();
     expect(mockQuit).not.toHaveBeenCalled();

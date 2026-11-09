@@ -1593,7 +1593,12 @@ describe("DatabaseService", () => {
 
     /** Helper: Setup for successful backup restore */
     function setupSuccessfulRestore() {
-      (freshFs.existsSync as jest.Mock).mockReturnValue(true);
+      // BACKLOG-2834: path-aware. The move-aside helper probes for a free
+      // mad-pre-restore-* name; a blanket `true` makes every name look taken,
+      // so the move fails closed and no restore happens.
+      (freshFs.existsSync as jest.Mock).mockImplementation(
+        (p: string) => !/-(pre-restore|unmigratable)-/.test(String(p)),
+      );
       (freshFs.readdirSync as jest.Mock).mockReturnValue(["mad-backup-20260220T120000.db"]);
 
       mockDb.pragma.mockImplementation((pragmaStr: string) => {
@@ -1620,6 +1625,9 @@ describe("DatabaseService", () => {
     }
 
     describe("migration failure triggers auto-restore", () => {
+      // BACKLOG-2834: the restore still happens, but a restored file whose
+      // migration failed deterministically is never continued on -- the caller
+      // gets MigrationRecoveryFailedError and (non-startup) a notice.
       it("should attempt auto-restore when runMigrations throws", async () => {
         setupMigrationFailure();
         setupSuccessfulRestore();
@@ -1627,7 +1635,7 @@ describe("DatabaseService", () => {
         const sentryCapture = await getFreshSentry();
         const showMessageBox = await getFreshDialog();
 
-        await databaseService.initialize();
+        await initializeExpectingTerminalRejection();
 
         // Verify Sentry was called with migration failure tags
         expect(sentryCapture).toHaveBeenCalledWith(
@@ -1641,25 +1649,26 @@ describe("DatabaseService", () => {
           }),
         );
 
-        // Verify success dialog was shown
-        expect(showMessageBox).toHaveBeenCalledWith(
-          expect.objectContaining({
-            type: "warning",
-            title: "Database Update Notice",
-          }),
-        );
+        // BACKLOG-2834: the non-startup notice, never "your data has been restored".
+        expect(showMessageBox).toHaveBeenCalledWith({
+          type: "error",
+          title: "Database Update Failed",
+          message: "A database update failed.",
+          detail: "Your current data was not changed. If this keeps happening, contact support.",
+          buttons: ["OK"],
+        });
       });
 
-      it("should show success dialog and app continues after restore", async () => {
+      // BACKLOG-2834 -- INVERTED IN PLACE (was: "should show success dialog
+      // and app continues after restore"). Continuing ran the app on the
+      // pre-migration copy, behind the schema the code expects.
+      it("does not continue on the restored, unmigrated database", async () => {
         setupMigrationFailure();
         setupSuccessfulRestore();
 
-        // initialize should NOT throw -- the app continues
-        const result = await databaseService.initialize();
-        expect(result).toBe(true);
+        await initializeExpectingTerminalRejection();
 
-        // Verify the database service is still functional
-        expect(databaseService.isInitialized()).toBe(true);
+        expect(databaseService.isInitialized()).toBe(false);
       });
     });
 
@@ -1777,7 +1786,7 @@ describe("DatabaseService", () => {
         setupMigrationFailure();
         setupSuccessfulRestore();
 
-        await databaseService.initialize();
+        await initializeExpectingTerminalRejection();
 
         // Verify prepare was called with SELECT 1 (connectivity check)
         expect(mockDb.prepare).toHaveBeenCalledWith("SELECT 1 AS ok");
