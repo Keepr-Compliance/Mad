@@ -66,6 +66,9 @@ const DB_SIBLING_BACKUP_PATTERNS: RegExp[] = [
   /^mad\.db\.safety-restore-copy$/,
   // Default name of a user-made backup (sqliteBackupService.generateBackupFilename); copied byte-for-byte from mad.db.
   /^keepr-backup-.*\.db$/,
+  // BACKLOG-3975 / BACKLOG-2834: mad.db moved aside by the auto-restore
+  // (databaseService._moveAside); opened with the same key.
+  /^mad-pre-restore-.*\.db$/,
 ];
 
 /** Another writer created the store between our read and our create. */
