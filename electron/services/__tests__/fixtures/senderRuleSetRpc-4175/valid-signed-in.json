@@ -1,0 +1,118 @@
+{
+  "success": true,
+  "error": null,
+  "data": {
+    "content": {
+      "keep": {
+        "platformHosts": [
+          "docusign.net",
+          "docusign.com",
+          "springcm.net",
+          "showingtime.com",
+          "showingtime.net"
+        ],
+        "platformAddresses": []
+      },
+      "modes": {
+        "localPart": {
+          "detector": "measure",
+          "addressPass": "off",
+          "learnQuestions": "measure"
+        },
+        "bulkHeaders": {
+          "detector": "measure",
+          "addressPass": "off",
+          "learnQuestions": "measure"
+        },
+        "gmailSocial": {
+          "detector": "measure",
+          "addressPass": "off",
+          "learnQuestions": "measure"
+        },
+        "seedAddress": {
+          "detector": "live",
+          "addressPass": "live",
+          "learnQuestions": "live"
+        },
+        "approvedHost": {
+          "detector": "live",
+          "addressPass": "live",
+          "learnQuestions": "live"
+        },
+        "gmailUpdates": {
+          "detector": "measure",
+          "addressPass": "off",
+          "learnQuestions": "measure"
+        },
+        "gmailPromotions": {
+          "detector": "measure",
+          "addressPass": "off",
+          "learnQuestions": "measure"
+        }
+      },
+      "schema": 1,
+      "version": 1,
+      "suppress": {
+        "hosts": [],
+        "localParts": [],
+        "bulkHeaders": {
+          "anyKeyPresent": [
+            "list_unsubscribe",
+            "list_unsubscribe_post"
+          ],
+          "precedenceValues": [
+            "bulk",
+            "list",
+            "junk"
+          ],
+          "autoSubmittedCounts": false
+        },
+        "exactAddresses": [
+          "my-saved-home@mail.zillow.com",
+          "recommendations@mail.zillow.com"
+        ]
+      },
+      "thresholds": {
+        "reportMaxRows": 500,
+        "minCensusLinkedEmails": 20,
+        "reportSendIntervalHours": 24
+      },
+      "freeMailDomains": [
+        "gmail.com",
+        "googlemail.com",
+        "outlook.com",
+        "hotmail.com",
+        "live.com",
+        "msn.com",
+        "yahoo.com",
+        "ymail.com",
+        "rocketmail.com",
+        "icloud.com",
+        "me.com",
+        "mac.com",
+        "aol.com",
+        "proton.me",
+        "protonmail.com",
+        "pm.me",
+        "gmx.com",
+        "gmx.net",
+        "mail.com",
+        "zoho.com",
+        "yandex.com",
+        "fastmail.com",
+        "comcast.net",
+        "verizon.net",
+        "att.net",
+        "sbcglobal.net",
+        "bellsouth.net",
+        "cox.net",
+        "charter.net",
+        "earthlink.net"
+      ]
+    },
+    "version": 1
+  },
+  "count": null,
+  "status": 200,
+  "statusText": "OK"
+}

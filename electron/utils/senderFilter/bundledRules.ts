@@ -16,6 +16,24 @@
  *
  * Every address and host here is lowercase (a pin test asserts it): matching
  * compares the parsed, lowercased From address with these entries exactly.
+ *
+ * This set is the FALLBACK (BACKLOG-4175 PR4): the app runs the server's answer
+ * when it has one (senderRuleSetStore.ts). `version` is the server version this
+ * content equals. A change here ships with a release migration that inserts the
+ * same content at the same version, and refuses (never skips) a taken number
+ * (ruleSetReleaseMigrations-4175.test.ts enforces both):
+ *
+ *   DO $rel$
+ *   DECLARE v_new JSONB := '<this set as JSON>'::jsonb; v_old JSONB;
+ *   BEGIN
+ *     SELECT content INTO v_old FROM public.sender_rule_sets WHERE version = <N>;
+ *     IF v_old IS NULL THEN
+ *       INSERT INTO public.sender_rule_sets (version, content, released, bundled) VALUES (<N>, v_new, true, true);
+ *       DELETE FROM public.sender_rule_set_pins WHERE version < <N>;
+ *     ELSIF v_old <> v_new THEN
+ *       RAISE EXCEPTION 'sender_rule_sets v<N> already holds different content';
+ *     END IF;
+ *   END $rel$;
  */
 
 import type { SingleValueKey } from "../bulkMailHeaders";
