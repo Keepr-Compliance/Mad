@@ -592,9 +592,19 @@ describe('customer.subscription.* (C-3, C-ORD, C-PF)', () => {
     expect(fx('inv-2d-cardfail').status).toBe('open');
     expect((await deliver(fx('ev-2d-invoice.payment_failed'))).status).toBe(200);
     expect(revokes()).toHaveLength(1);
+    // BACKLOG-3932 C6 (founder Q2: Stripe emails solo agents): the Agent path queues no Keepr email.
+    expect(db.callsTo('billing_outbox')).toEqual([]);
     expect((await deliver(fx('ev-2d-sub.updated-past_due'))).status).toBe(200);
     expect(revokes()).toHaveLength(2);
     expect(grants()).toEqual([]);
+  });
+
+  it('C5 (BACKLOG-3932): a one-time unlock payment_intent.payment_failed marks the row failed and queues no email [SYNTHETIC envelope]', async () => {
+    useDb({ payment_intents: [{ stripe_payment_intent_id: 'pi_3932_unlock', status: 'created' }] });
+    const ev = { id: 'evt_3932_unlock_failed', object: 'event', type: 'payment_intent.payment_failed', created: 1791658164, livemode: false, data: { object: { id: 'pi_3932_unlock' } } };
+    expect((await deliver(ev)).status).toBe(200);
+    expect(db.rows('payment_intents')[0].status).toBe('failed');
+    expect(db.callsTo('billing_outbox')).toEqual([]);
   });
 
   it.each(['unpaid', 'incomplete_expired'])(

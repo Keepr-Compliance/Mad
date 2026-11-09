@@ -1,0 +1,125 @@
+{
+  "id": "pi_3UZy62Bg3cyTef3d1SVAbIkF",
+  "object": "payment_intent",
+  "allowed_payment_method_types": [
+    "card",
+    "us_bank_account"
+  ],
+  "amount": 7497,
+  "amount_capturable": 0,
+  "amount_details": {
+    "tip": {}
+  },
+  "amount_received": 0,
+  "application": null,
+  "application_fee_amount": null,
+  "automatic_payment_methods": null,
+  "canceled_at": null,
+  "cancellation_reason": null,
+  "capture_method": "automatic",
+  "client_secret": "pi_FIXTURE_secret_REDACTED",
+  "confirmation_method": "automatic",
+  "created": 1794251954,
+  "currency": "usd",
+  "customer": "cus_VbAQ6VzSoiH9qW",
+  "customer_account": null,
+  "description": "Subscription creation",
+  "excluded_payment_method_types": null,
+  "invoice": "in_1UZy5nBg3cyTef3dlpu03abQ",
+  "last_payment_error": {
+    "code": "insufficient_funds",
+    "decline_code": "generic_decline",
+    "doc_url": "https://stripe.com/docs/error-codes/insufficient-funds",
+    "failure_code": "insufficient_funds",
+    "message": "The customer's account has insufficient funds to cover this payment.",
+    "network_decline_code": "R01",
+    "payment_method": {
+      "id": "pm_1UZy64Bg3cyTef3d3hRsVamD",
+      "object": "payment_method",
+      "allow_redisplay": "unspecified",
+      "billing_details": {
+        "address": {
+          "city": "city",
+          "country": "US",
+          "line1": "Test line1",
+          "line2": null,
+          "postal_code": "12345",
+          "state": "CA"
+        },
+        "email": "insufficientFunds@example.test",
+        "name": "Created from pm_usBankAccount_insufficientFunds",
+        "phone": null,
+        "tax_id": null
+      },
+      "created": 1794251956,
+      "customer": null,
+      "customer_account": null,
+      "livemode": false,
+      "metadata": {},
+      "shared_payment_granted_token": null,
+      "type": "us_bank_account",
+      "us_bank_account": {
+        "account_holder_type": "individual",
+        "account_type": "checking",
+        "bank_name": "STRIPE TEST BANK",
+        "financial_connections_account": null,
+        "fingerprint": "hVWeS8j4fth7g9lY",
+        "last4": "2227",
+        "networks": {
+          "preferred": "ach",
+          "supported": [
+            "ach"
+          ]
+        },
+        "routing_number": "110000000",
+        "status_details": {}
+      }
+    },
+    "payment_method_type": "us_bank_account",
+    "type": "card_error"
+  },
+  "latest_charge": "py_3UZy62Bg3cyTef3d1UKwgx3d",
+  "livemode": false,
+  "managed_payments": {
+    "enabled": false
+  },
+  "metadata": {},
+  "next_action": null,
+  "on_behalf_of": null,
+  "payment_details": {
+    "customer_reference": null,
+    "order_reference": "in_1UZy5nBg3cyTef3dlpu03abQ"
+  },
+  "payment_method": null,
+  "payment_method_configuration_details": null,
+  "payment_method_options": {
+    "card": {
+      "installments": null,
+      "mandate_options": null,
+      "network": null,
+      "request_three_d_secure": "automatic"
+    },
+    "us_bank_account": {
+      "mandate_options": {},
+      "transaction_purpose": "unspecified",
+      "verification_method": "automatic"
+    }
+  },
+  "payment_method_types": [
+    "card",
+    "us_bank_account"
+  ],
+  "payment_record": null,
+  "processing": null,
+  "receipt_email": null,
+  "review": null,
+  "setup_future_usage": null,
+  "shared_payment_granted_token": null,
+  "shipping": null,
+  "source": null,
+  "statement_descriptor": null,
+  "statement_descriptor_suffix": null,
+  "status": "requires_payment_method",
+  "transfer_data": null,
+  "transfer_group": null
+}
