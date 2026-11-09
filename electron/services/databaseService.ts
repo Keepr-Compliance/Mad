@@ -1619,7 +1619,7 @@ class DatabaseService implements IDatabaseService {
       type: "error",
       title: "Keepr couldn't update your data",
       message: "Keepr couldn't update your data. Please contact support.",
-      detail: "Your data was not changed.",
+      detail: "Your data is kept on this computer.",
       buttons: ["Quit"],
     });
     await hostErrorReporter.flush(2000);

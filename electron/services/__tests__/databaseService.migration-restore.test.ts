@@ -630,7 +630,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
         type: "error",
         title: "Keepr couldn't update your data",
         message: "Keepr couldn't update your data. Please contact support.",
-        detail: "Your data was not changed.",
+        detail: "Your data is kept on this computer.",
         buttons: ["Quit"],
       });
       // The only move is the restore's own pre-restore copy; nothing else is set aside.
@@ -1099,6 +1099,70 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
         expect.stringContaining("testkey123")
       );
       expect(mockDbPragma).toHaveBeenCalledWith("cipher_compatibility = 4");
+    });
+  });
+
+  /**
+   * BACKLOG-2834 (SR PR review 0a22fffe, change 1) -- the move-aside name
+   * probe and its -100 cap. Date is frozen so the base name is known; fs is
+   * mocked. (a)/(b) red if the probe is disabled, (c) if the cap is.
+   */
+  describe("move-aside name probe and cap (_moveAside)", () => {
+    const FROZEN = "2026-11-08T07:00:10.123Z";
+    const BASE = "/mock/userData/mad-pre-restore-20261108T070010123";
+    const LIVE = "/mock/userData/mad.db";
+
+    beforeEach(() => {
+      jest.useFakeTimers({ now: new Date(FROZEN) });
+      service["dbPath"] = LIVE;
+    });
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    function existing(paths: string[]): void {
+      const set = new Set([LIVE, ...paths]);
+      mockExistsSync.mockImplementation((p: string) => set.has(String(p)));
+    }
+
+    it("(a) base name taken: the file goes to -2 and the existing aside file is not touched", () => {
+      existing([`${BASE}.db`]);
+
+      const r = service["_moveAside"]("pre-restore");
+
+      expect(r.error).toBeUndefined();
+      expect(r.asidePath).toBe(`${BASE}-2.db`);
+      expect(mockRenameSync.mock.calls).toEqual([[LIVE, `${BASE}-2.db`]]);
+      expect(mockRenameSync.mock.calls.some((c) => String(c[1]).startsWith(`${BASE}.db`))).toBe(false);
+      expect(mockUnlinkSync).not.toHaveBeenCalled();
+    });
+
+    it("(b) only <base>-wal exists: still -2 (a sidecar makes the name taken)", () => {
+      existing([`${BASE}.db-wal`]);
+
+      const r = service["_moveAside"]("pre-restore");
+
+      expect(r.error).toBeUndefined();
+      expect(r.asidePath).toBe(`${BASE}-2.db`);
+      expect(mockRenameSync.mock.calls).toEqual([[LIVE, `${BASE}-2.db`]]);
+    });
+
+    it("(c) every name up to -100 taken: error, undone, nothing renamed, bounded", () => {
+      let probes = 0;
+      mockExistsSync.mockImplementation((p: string) => {
+        // A probe without its cap would loop forever on a synchronous path,
+        // which jest cannot time out. Fail loudly instead of hanging.
+        if (++probes > 2000) throw new Error("move-aside probe is unbounded");
+        return String(p) === LIVE || String(p).startsWith(BASE);
+      });
+
+      const r = service["_moveAside"]("pre-restore");
+
+      expect(r.error).toBeInstanceOf(Error);
+      expect(String((r.error as Error).message)).toBe("No free name to move the database aside");
+      expect(r.undone).toBe(true);
+      expect(mockRenameSync).not.toHaveBeenCalled();
+      expect(probes).toBeLessThanOrEqual(3 * 100);
     });
   });
 
