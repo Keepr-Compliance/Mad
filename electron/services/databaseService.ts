@@ -245,7 +245,8 @@ class DatabaseService implements IDatabaseService {
    * `true` on that path, so the caller could not tell a good start from a
    * failed one.
    *
-   * BACKLOG-2834: also rejects when the restore worked but the restored file
+   * BACKLOG-2834: also rejects (and, at startup, quits after a contact-support
+   * dialog) when the restore worked but the restored file
    * still cannot be migrated (a deterministic failure, or a transient one that
    * failed again on its single re-run). It never continues on an unmigrated
    * file. BACKLOG-2836: the handle is published only after migrations succeed.
@@ -497,8 +498,8 @@ class DatabaseService implements IDatabaseService {
           if (restoreResult.restored && restoreResult.handle) {
             // BACKLOG-2834: the restored file is the pre-migration copy, behind
             // the schema this code expects. Never continue on it: record the
-            // failure IN that file (it survives Quit and travels with Start
-            // fresh), close it, and let the user choose.
+            // failure IN that file (it survives the quit), close it, and tell
+            // the user to contact support.
             this._recordMigrationFailure(
               restoreResult.handle,
               migrationError,
@@ -1592,13 +1593,11 @@ class DatabaseService implements IDatabaseService {
   }
 
   /**
-   * BACKLOG-2834 (founder 93ac157a, 0b88dec2): the restored database cannot be
-   * migrated. At startup the user chooses Quit or Start fresh (two steps);
-   * Start fresh MOVES the database aside as mad-unmigratable-<time>.db and
-   * relaunches. Other callers (sqliteBackupService's restore) only get a notice.
-   *
-   * Both choice dialogs set defaultId 0 and cancelId 0: Enter, Esc and closing
-   * the window mean Quit / Go back, never Start fresh.
+   * BACKLOG-2834: the restored database cannot be migrated. Founder decision
+   * 2026-11-09 (supersedes the Start fresh half of 93ac157a): no Start fresh.
+   * At startup the user is told to contact support and the app quits; the
+   * restored data is left exactly as it is. Other callers (sqliteBackupService's
+   * restore) only get a notice and the rejection.
    */
   private async _handleUnmigratableDatabase(options?: { quitOnUnrecoverableFailure?: boolean }): Promise<void> {
     if (!hostAppLifecycle.isReady()) {
@@ -1615,48 +1614,14 @@ class DatabaseService implements IDatabaseService {
       await hostErrorReporter.flush(2000);
       return;
     }
-    for (;;) {
-      const choice = await hostDialog.showMessageBox({
-        type: "error",
-        title: "Keepr couldn't update your data",
-        message: "Keepr couldn't finish updating your data.",
-        detail:
-          "Your data is safe. You can quit and contact support, or start fresh with an empty database. " +
-          "Your current data is kept either way.",
-        buttons: ["Quit", "Start fresh"],
-        defaultId: 0,
-        cancelId: 0,
-      });
-      if (choice.response !== 1) break;
-      const confirm = await hostDialog.showMessageBox({
-        type: "warning",
-        title: "Start fresh?",
-        message: "Start fresh with an empty database?",
-        detail:
-          "Transactions and audit history that weren't synced to the cloud won't be in it. " +
-          "Cloud data syncs back, and you can import messages and contacts again from your Mac or phone. " +
-          "Your current data is saved in a separate file for support.",
-        buttons: ["Go back", "Start fresh"],
-        defaultId: 0,
-        cancelId: 0,
-      });
-      if (confirm.response !== 1) continue;
-      const moved = this._moveDatabaseAside("unmigratable");
-      await hostErrorReporter.flush(2000);
-      if (moved) {
-        await logService.warn("Start fresh: database moved aside", "DatabaseService", { keptAs: path.basename(moved) });
-        hostAppLifecycle.relaunch();
-        return;
-      }
-      await hostDialog.showMessageBox({
-        type: "error",
-        title: "Keepr couldn't update your data",
-        message: "Keepr couldn't set your data aside.",
-        detail: "Nothing was deleted. Please contact support.",
-        buttons: ["Quit"],
-      });
-      break;
-    }
+    // AWAITED: the user is told before the app exits.
+    await hostDialog.showMessageBox({
+      type: "error",
+      title: "Keepr couldn't update your data",
+      message: "Keepr couldn't update your data. Please contact support.",
+      detail: "Your data was not changed.",
+      buttons: ["Quit"],
+    });
     await hostErrorReporter.flush(2000);
     hostAppLifecycle.quit();
   }
@@ -1665,7 +1630,7 @@ class DatabaseService implements IDatabaseService {
   private static readonly MOVE_ASIDE_MAX_SUFFIX = 100;
 
   /**
-   * BACKLOG-2834 / BACKLOG-3975 — the ONE move-aside: rename mad.db and its
+   * BACKLOG-2834 / BACKLOG-3975 — the move-aside: rename mad.db and its
    * -wal / -shm to mad-<label>-<YYYYMMDDTHHMMSSmmm>.db. A name is taken if the
    * base or either sidecar exists; then -2, -3 ... up to -100 are tried, and
    * past that nothing moves (error, undone). Never overwrites, never deletes.
@@ -1708,20 +1673,6 @@ class DatabaseService implements IDatabaseService {
     } catch (error) {
       return { asidePath, undo, error, undone: undo() };
     }
-  }
-
-  /** Start fresh's move aside. Returns the new path, or null (nothing moved). */
-  private _moveDatabaseAside(label: string): string | null {
-    if (!this.dbPath) return null;
-    const r = this._moveAside(label);
-    if (r.error) {
-      hostLogger.error(
-        "[DatabaseService] Could not move the database aside",
-        r.error instanceof Error ? r.error.message : String(r.error),
-      );
-      return null;
-    }
-    return r.asidePath;
   }
 
   private _verifyBackupIntegrity(backupPath: string, key: string): boolean {

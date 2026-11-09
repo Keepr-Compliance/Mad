@@ -67,10 +67,6 @@ export interface MessageBoxRequest {
   readonly detail: string;
   /** Button labels, in order. Index 0 is the default. */
   readonly buttons: string[];
-  /** Index of the button Enter selects (Electron `defaultId`). */
-  readonly defaultId?: number;
-  /** Index reported when the box is dismissed with Esc or closed (Electron `cancelId`). */
-  readonly cancelId?: number;
 }
 
 /** What the host reports once the box is dismissed. */

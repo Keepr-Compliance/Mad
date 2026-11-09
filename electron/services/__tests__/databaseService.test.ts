@@ -1597,7 +1597,7 @@ describe("DatabaseService", () => {
       // mad-pre-restore-* name; a blanket `true` makes every name look taken,
       // so the move fails closed and no restore happens.
       (freshFs.existsSync as jest.Mock).mockImplementation(
-        (p: string) => !/-(pre-restore|unmigratable)-/.test(String(p)),
+        (p: string) => !/-pre-restore-/.test(String(p)),
       );
       (freshFs.readdirSync as jest.Mock).mockReturnValue(["mad-backup-20260220T120000.db"]);
 

@@ -39,9 +39,4 @@ export class ElectronAppLifecycle implements AppLifecycle {
   quit(): void {
     app.quit();
   }
-
-  relaunch(): void {
-    app.relaunch();
-    app.exit(0);
-  }
 }

@@ -154,10 +154,6 @@ function installTestCapabilities() {
     isReady: () => currentApp().isReady(),
     whenReady: () => currentApp().whenReady(),
     quit: () => currentApp().quit(),
-    relaunch: () => {
-      currentApp().relaunch();
-      currentApp().exit(0);
-    },
   });
 
   installWindows({

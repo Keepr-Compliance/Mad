@@ -67,5 +67,4 @@ export const hostAppLifecycle: AppLifecycle = {
   isReady: () => installed.isReady(),
   whenReady: () => installed.whenReady(),
   quit: () => installed.quit(),
-  relaunch: () => installed.relaunch(),
 };

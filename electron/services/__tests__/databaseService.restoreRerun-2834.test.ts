@@ -11,24 +11,21 @@
  * SQLITE_FULL from `max_page_count`), never hand-written objects.
  *
  *   C1  deterministic failure: restored, NOT retried, no silent continue,
- *       failure recorded in the restored file, Quit leaves data intact.
+ *       the contact-support dialog with [Quit] only, failure recorded in the
+ *       restored file, data left intact.
  *   C2  transient failure that clears: migrations re-run once on the restored
  *       file, the app starts at the new version, no dialog.
  *   C3  transient failure that does not clear: exactly one retry, then the
- *       two-button dialog.
- *   C4  Start fresh moves the file aside as mad-unmigratable-*.db; it still
- *       opens with the same key and still holds the seeded row.
+ *       contact-support dialog.
  *   C5  (2836) neither isInitialized() predicate is true while migrations run.
  *   C6  classifier on real errors, raw and as wrapped by the runner.
- *   C7  a non-startup caller never gets the Start fresh choice.
+ *   C7  a non-startup caller gets the notice, no quit, file not moved.
  *   C8  a real SQLITE_BUSY inside a migration body takes the BACKLOG-3952
  *       wait path, not a restore.
  *   C9  (SR-A) a retry that clears never broadcasts "error", so a
  *       whenDbReady() waiter started during attempt 1 resolves ready:true.
  *   C10 (SR-B) two restores in one launch keep two distinct pre-restore
  *       copies (no same-second rename overwrite).
- *   C11 (SR-C) Start fresh: no mad.db / -wal / -shm left, and the failure
- *       record travels inside the moved file.
  *
  * Run without touching the shared native module:
  *   ELECTRON_RUN_AS_NODE=1 npx electron node_modules/.bin/jest \
@@ -41,16 +38,12 @@ import path from "path";
 const mockUserData = { dir: "" };
 const mockShowMessageBox = jest.fn();
 const mockQuit = jest.fn();
-const mockRelaunch = jest.fn();
-const mockExit = jest.fn();
 jest.mock("electron", () => ({
   app: {
     getPath: jest.fn(() => mockUserData.dir),
     isReady: jest.fn(() => true),
     whenReady: jest.fn().mockResolvedValue(undefined),
     quit: mockQuit,
-    relaunch: mockRelaunch,
-    exit: mockExit,
   },
   dialog: { showMessageBox: mockShowMessageBox },
 }));
@@ -182,8 +175,6 @@ describeUnlessWindows("BACKLOG-2834/2836 real driver — a failed migration at s
     dbFile = path.join(tmpDir, "mad.db");
     mockShowMessageBox.mockReset();
     mockQuit.mockReset();
-    mockRelaunch.mockReset();
-    mockExit.mockReset();
     mockCaptureException.mockReset();
   });
 
@@ -199,8 +190,16 @@ describeUnlessWindows("BACKLOG-2834/2836 real driver — a failed migration at s
 
     await expect(service.initialize({ quitOnUnrecoverableFailure: true })).rejects.toThrow();
     expect(calls).toBe(1);
+    // Founder decision 2026-11-09: one dialog, contact support, [Quit] only.
+    expect(mockShowMessageBox).toHaveBeenCalledTimes(1);
+    expect(mockShowMessageBox.mock.calls[0][mockShowMessageBox.mock.calls[0].length - 1]).toEqual({
+      type: "error",
+      title: "Keepr couldn't update your data",
+      message: "Keepr couldn't update your data. Please contact support.",
+      detail: "Your data was not changed.",
+      buttons: ["Quit"],
+    });
     expect(mockQuit).toHaveBeenCalledTimes(1);
-    expect(mockRelaunch).not.toHaveBeenCalled();
     expect(service.isInitialized()).toBe(false);
     expect(connIsInitialized()).toBe(false);
 
@@ -236,7 +235,7 @@ describeUnlessWindows("BACKLOG-2834/2836 real driver — a failed migration at s
     expect(db.prepare("SELECT v FROM seed_2834").get()).toEqual({ v: "kept" });
   });
 
-  it("C3 transient failure that does not clear: exactly one retry, then the two-button choice", async () => {
+  it("C3 transient failure that does not clear: exactly one retry, then the contact-support dialog", async () => {
     // Fails on calls 1-3 and succeeds from call 4, so an unbounded retry
     // finishes (resolves, calls = 4) and reds here instead of hanging the run.
     await arrange((d) => {
@@ -249,36 +248,12 @@ describeUnlessWindows("BACKLOG-2834/2836 real driver — a failed migration at s
     expect(calls).toBe(2);
     expect(mockShowMessageBox).toHaveBeenCalledTimes(1);
     const opts = mockShowMessageBox.mock.calls[0][mockShowMessageBox.mock.calls[0].length - 1];
-    expect(opts.buttons).toEqual(["Quit", "Start fresh"]);
-    // Esc / closing the window means Quit, never Start fresh.
-    expect(opts).toMatchObject({ defaultId: 0, cancelId: 0 });
+    expect(opts).toMatchObject({
+      title: "Keepr couldn't update your data",
+      message: "Keepr couldn't update your data. Please contact support.",
+      buttons: ["Quit"],
+    });
     expect(mockQuit).toHaveBeenCalledTimes(1);
-  });
-
-  it("C4 Start fresh moves the database aside (never deletes) and it still opens with the same key", async () => {
-    await arrange(throwRealError);
-    mockShowMessageBox
-      .mockResolvedValueOnce({ response: 1 }) // Start fresh
-      .mockResolvedValueOnce({ response: 1 }); // confirm
-
-    await expect(service.initialize({ quitOnUnrecoverableFailure: true })).rejects.toThrow();
-    expect(mockShowMessageBox).toHaveBeenCalledTimes(2);
-    const confirm = mockShowMessageBox.mock.calls[1][mockShowMessageBox.mock.calls[1].length - 1];
-    expect(confirm).toMatchObject({ buttons: ["Go back", "Start fresh"], defaultId: 0, cancelId: 0 });
-    expect(mockRelaunch).toHaveBeenCalledTimes(1);
-    expect(mockQuit).not.toHaveBeenCalled();
-    expect(fs.existsSync(dbFile)).toBe(false);
-    expect(fs.existsSync(dbFile + "-wal")).toBe(false);
-
-    const aside = fs.readdirSync(tmpDir).filter((f) => /^mad-unmigratable-.*\.db$/.test(f));
-    expect(aside).toHaveLength(1);
-    const db = openWithKey(path.join(tmpDir, aside[0]));
-    try {
-      expect(db.prepare("SELECT v FROM seed_2834").get()).toEqual({ v: "kept" });
-      expect(version(db)).toBe(LATEST);
-    } finally {
-      db.close();
-    }
   });
 
   it("C5 (2836) the database is not published while migrations run", async () => {
@@ -410,35 +385,20 @@ describeUnlessWindows("BACKLOG-2834/2836 real driver — a failed migration at s
     expect(kept).toHaveLength(2);
   });
 
-  it("C11 (SR-C) Start fresh: the failure record travels with the moved file; no sidecar is left behind", async () => {
-    await arrange(throwRealError);
-    mockShowMessageBox.mockResolvedValueOnce({ response: 1 }).mockResolvedValueOnce({ response: 1 });
-    await expect(service.initialize({ quitOnUnrecoverableFailure: true })).rejects.toThrow();
-    for (const sfx of ["", "-wal", "-shm"]) expect(fs.existsSync(dbFile + sfx)).toBe(false);
-    const aside = fs.readdirSync(tmpDir).filter((f) => /^mad-unmigratable-.*\.db$/.test(f));
-    expect(aside).toHaveLength(1);
-    const db = openWithKey(path.join(tmpDir, aside[0]));
-    try {
-      const rec = db.prepare("SELECT metadata FROM failure_log WHERE operation = 'migration'").all() as Array<{ metadata: string }>;
-      expect(rec).toHaveLength(1);
-      expect(JSON.parse(rec[0].metadata)).toMatchObject({ migrationVersion: NEXT, code: "SQLITE_ERROR" });
-    } finally {
-      db.close();
-    }
-  });
-
-  it("C7 a non-startup caller (no quit flag) never gets Start fresh and never moves the file", async () => {
+  it("C7 a non-startup caller (no quit flag) gets the notice only: no quit, file not moved", async () => {
     await arrange(throwRealError);
     mockShowMessageBox.mockResolvedValue({ response: 1 });
 
     await expect(service.initialize()).rejects.toThrow();
-    expect(mockRelaunch).not.toHaveBeenCalled();
     expect(mockQuit).not.toHaveBeenCalled();
     expect(fs.existsSync(dbFile)).toBe(true);
-    expect(fs.readdirSync(tmpDir).filter((f) => f.startsWith("mad-unmigratable-"))).toHaveLength(0);
-    for (const call of mockShowMessageBox.mock.calls) {
-      const opts = call[call.length - 1];
-      expect(opts.buttons ?? []).not.toContain("Start fresh");
-    }
+    expect(mockShowMessageBox).toHaveBeenCalledTimes(1);
+    expect(mockShowMessageBox.mock.calls[0][mockShowMessageBox.mock.calls[0].length - 1]).toEqual({
+      type: "error",
+      title: "Database Update Failed",
+      message: "A database update failed.",
+      detail: "Your current data was not changed. If this keeps happening, contact support.",
+      buttons: ["OK"],
+    });
   });
 });

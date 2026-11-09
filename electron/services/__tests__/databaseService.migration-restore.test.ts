@@ -164,7 +164,7 @@ import { MigrationRecoveryFailedError } from "../../types/database";
 
 /** A move-aside target does not exist yet; everything else does. */
 function existsExceptAsideNames(p: string): boolean {
-  return !/-(pre-restore|unmigratable)-/.test(String(p));
+  return !/-pre-restore-/.test(String(p));
 }
 
 describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
@@ -193,7 +193,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     mockInitializeEncryption.mockResolvedValue(undefined);
     mockIsDatabaseEncrypted.mockResolvedValue(true); // Already encrypted, no migration needed
     // BACKLOG-2834: path-aware. Every file "exists" except a move-aside
-    // name (mad-pre-restore-* / mad-unmigratable-*): the shared move-aside
+    // name (mad-pre-restore-*): the move-aside
     // helper probes for a free name, and a blanket `true` makes every name
     // look taken, so the move fails closed and nothing is restored.
     mockExistsSync.mockImplementation(existsExceptAsideNames);
@@ -475,7 +475,7 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
    * but a restored file whose migration failed (here deterministically: a
    * plain Error has no SQLite code) is never continued on. A non-startup
    * caller gets MigrationRecoveryFailedError (autoRestoreStatus "succeeded")
-   * and the notice; startup gets the Quit / Start fresh choice.
+   * and the notice; startup gets the contact-support dialog and quits.
    */
   describe("Migration failure with successful auto-restore", () => {
     beforeEach(() => {
@@ -613,13 +613,13 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
     });
 
     /**
-     * BACKLOG-2834 -- INVERTS the 2999 BOUNDARY (founder ruling 93ac157a). A
-     * restore whose file cannot be migrated is no longer a successful start:
-     * at startup the user is asked, and Quit (index 0, also Esc) quits with
-     * the restored data left in place. Full object, transcribed from
-     * databaseService._handleUnmigratableDatabase.
+     * BACKLOG-2834 -- INVERTS the 2999 BOUNDARY. A restore whose file cannot
+     * be migrated is no longer a successful start: at startup the user is told
+     * to contact support and the app quits with the restored data left in
+     * place (founder decision 2026-11-09: no Start fresh). Full object,
+     * transcribed from databaseService._handleUnmigratableDatabase.
      */
-    it("BOUNDARY (BACKLOG-2834): a restored file that cannot be migrated is not continued on -- startup asks Quit / Start fresh", async () => {
+    it("BOUNDARY (BACKLOG-2834): a restored file that cannot be migrated is not continued on -- startup says contact support and quits", async () => {
       const error = await expectTerminalRejection({ quitOnUnrecoverableFailure: true });
 
       expect(error.autoRestoreStatus).toBe("succeeded");
@@ -629,14 +629,12 @@ describe("DatabaseService Migration Auto-Restore (TASK-2057)", () => {
       expect(mockShowMessageBox).toHaveBeenCalledWith({
         type: "error",
         title: "Keepr couldn't update your data",
-        message: "Keepr couldn't finish updating your data.",
-        detail:
-          "Your data is safe. You can quit and contact support, or start fresh with an empty database. " +
-          "Your current data is kept either way.",
-        buttons: ["Quit", "Start fresh"],
-        defaultId: 0,
-        cancelId: 0,
+        message: "Keepr couldn't update your data. Please contact support.",
+        detail: "Your data was not changed.",
+        buttons: ["Quit"],
       });
+      // The only move is the restore's own pre-restore copy; nothing else is set aside.
+      expect(mockRenameSync.mock.calls.every((c) => /-pre-restore-/.test(String(c[1])))).toBe(true);
     });
 
     /**
