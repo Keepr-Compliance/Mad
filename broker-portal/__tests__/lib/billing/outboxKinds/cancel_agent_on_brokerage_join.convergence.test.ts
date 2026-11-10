@@ -195,13 +195,16 @@ describe('cancel_agent_on_brokerage_join', () => {
   });
 
   it('C13a: cancel then the send fails -> retry sends ONE email and cancels nothing again', async () => {
-    mockSend.mockResolvedValueOnce({ success: false, outcome: 'failed' });
+    mockSend.mockImplementationOnce(async (p: Obj) => {
+      db.rows('email_delivery_log').push({ status: 'failed', metadata: { kind: AGENT_PLAN_ENDED_LOG_KIND, outboxKey: p.outboxKey } });
+      return { success: false, outcome: 'failed' };
+    });
     await expect(handleJoinCancelRow(row(), ctx())).rejects.toThrow('email send failed');
     expect(stripe.callsTo('subscriptions.cancel')).toHaveLength(1);
     await handleJoinCancelRow({ ...row(), attempts: 2 }, ctx());
     expect(stripe.callsTo('subscriptions.cancel')).toHaveLength(1);
     expect(sends()).toHaveLength(2); // the failed attempt + the one that went out
-    expect(db.rows('email_delivery_log')).toHaveLength(1);
+    expect(db.rows('email_delivery_log').filter((r) => r.status === 'sent')).toHaveLength(1);
   });
 
   it('C13b: two Agent plans -> both cancelled, ONE email', async () => {
