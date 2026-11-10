@@ -32,6 +32,7 @@ const EXPECTED_KINDS: string[] = [
   'notify_auto_renew_on', // BACKLOG-4045
   'notify_auto_renew_off', // BACKLOG-4200
   'notify_org_reinstated', // BACKLOG-4209
+  'notify_payment_failed', // BACKLOG-3932
 ];
 const DIR = path.join(__dirname, 'outboxKinds');
 

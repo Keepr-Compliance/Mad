@@ -132,6 +132,8 @@ function stableJson(v: unknown): string {
  *                            _billing_set_auto_renew when staff turn auto-renew off)
  *   - notify_org_reinstated  BACKLOG-4209, lib/billing/orgReinstatedNotify.ts (enqueued by
  *                            _billing_reinstate_org: staff or automatic reinstatement)
+ *   - notify_payment_failed  BACKLOG-3932, lib/billing/paymentFailedNotify.ts (enqueued by the
+ *                            Stripe webhook on a brokerage invoice.payment_failed, +1 hour)
  */
 export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.freeze({
   agent_receipt: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
@@ -160,4 +162,6 @@ export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.f
     (await import('./autoRenewOffNotify')).handleNotifyAutoRenewOffRow(row, ctx),
   notify_org_reinstated: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
     (await import('./orgReinstatedNotify')).handleNotifyOrgReinstatedRow(row, ctx),
+  notify_payment_failed: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./paymentFailedNotify')).handleNotifyPaymentFailedRow(row, ctx),
 });

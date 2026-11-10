@@ -847,10 +847,37 @@ export interface TicketLinkRow {
 }
 
 /**
- * Fetch support tickets linked to a backlog item (reverse of getBacklogLinks).
- * Given a backlog_item_id, returns the linked support tickets.
+ * BACKLOG-4145: the fields a PM viewer may see for a ticket linked to a backlog item.
+ * Exactly the columns pm_list_backlog_ticket_links returns (migration 20261108150000).
  */
-export async function getTicketLinksForBacklogItem(backlogItemId: string): Promise<TicketLinkRow[]> {
+export interface PmTicketLinkSummary {
+  ticket_number: number;
+  subject: string;
+  status: string;
+}
+
+/**
+ * BACKLOG-4145: linked tickets for the PM panel, read through the pm_list_backlog_ticket_links
+ * RPC (number, subject, status only). Works for any pm.view holder.
+ */
+export async function getTicketLinksForBacklogItem(backlogItemId: string): Promise<PmTicketLinkSummary[]> {
+  const supabase = createClient();
+  const { data, error } = await supabase.rpc('pm_list_backlog_ticket_links', {
+    p_backlog_item_id: backlogItemId,
+  });
+  if (error) throw error;
+  return ((data ?? []) as PmTicketLinkSummary[]).map((row) => ({
+    ticket_number: row.ticket_number,
+    subject: row.subject,
+    status: row.status,
+  }));
+}
+
+/**
+ * Fetch support tickets linked to a backlog item (reverse of getBacklogLinks), with the link id,
+ * link type and ticket id. BACKLOG-4145: used only for support.view holders, who may manage links.
+ */
+export async function getManagedTicketLinksForBacklogItem(backlogItemId: string): Promise<TicketLinkRow[]> {
   const supabase = createClient();
   const { data, error } = await supabase
     .from('support_ticket_backlog_links')
@@ -931,49 +958,26 @@ export async function removeBacklogLink(linkId: string): Promise<void> {
  */
 export async function searchTicketsForBacklogLink(
   query: string,
-  excludeBacklogItemId: string
+  excludeTicketNumbers: number[]
 ): Promise<Array<{ id: string; ticket_number: number; subject: string; status: string }>> {
+  // BACKLOG-4145: search through support_search_tickets_for_link (the support-side search RPC)
+  // instead of a direct support_tickets read; already-linked tickets are left out here.
   const supabase = createClient();
-
-  // Get already-linked ticket IDs to exclude
-  const { data: existingLinks } = await supabase
-    .from('support_ticket_backlog_links')
-    .select('ticket_id')
-    .eq('backlog_item_id', excludeBacklogItemId);
-
-  const excludeIds = (existingLinks ?? []).map(
-    (l: { ticket_id: string }) => l.ticket_id
-  );
-
-  // Search by ticket_number (if query is numeric) or subject (ilike)
-  const isNumeric = /^\d+$/.test(query.trim());
-
-  let baseQuery = supabase
-    .from('support_tickets')
-    .select('id, ticket_number, subject, status')
-    .is('deleted_at', null)
-    .order('created_at', { ascending: false })
-    .limit(10);
-
-  if (excludeIds.length > 0) {
-    baseQuery = baseQuery.not('id', 'in', `(${excludeIds.join(',')})`);
-  }
-
-  if (isNumeric) {
-    baseQuery = baseQuery.eq('ticket_number', parseInt(query.trim(), 10));
-  } else {
-    baseQuery = baseQuery.ilike('subject', `%${query.trim()}%`);
-  }
-
-  const { data, error } = await baseQuery;
+  const { data, error } = await supabase.rpc('support_search_tickets_for_link', {
+    p_query: query.trim(),
+    p_exclude_ticket_id: null,
+  });
   if (error) throw error;
 
-  return (data ?? []).map((t: { id: string; ticket_number: number; subject: string; status: string }) => ({
-    id: t.id,
-    ticket_number: t.ticket_number,
-    subject: t.subject,
-    status: t.status,
-  }));
+  const exclude = new Set(excludeTicketNumbers);
+  return ((data ?? []) as Array<{ id: string; ticket_number: number; subject: string; status: string }>)
+    .filter((t) => !exclude.has(t.ticket_number))
+    .map((t) => ({
+      id: t.id,
+      ticket_number: t.ticket_number,
+      subject: t.subject,
+      status: t.status,
+    }));
 }
 
 /**

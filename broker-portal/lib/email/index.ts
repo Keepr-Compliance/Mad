@@ -54,6 +54,7 @@ export type {
   AutoRenewOnParams,
   AutoRenewOffParams,
   OrgReinstatedParams,
+  PaymentFailedParams,
 } from './types';
 
 // Queue (BACKLOG-2009)
@@ -84,6 +85,7 @@ import { buildAutoRenewOnEmail } from './templates/auto-renew-on';
 import { buildAutoRenewOffEmail } from './templates/auto-renew-off';
 import { buildOrgReinstatedEmail } from './templates/org-reinstated';
 import { buildOrgAutoReinstatedEmail } from './templates/org-auto-reinstated';
+import { buildPaymentFailedEmail } from './templates/payment-failed';
 import type {
   InviteEmailParams,
   DownloadInviteEmailParams,
@@ -103,6 +105,7 @@ import type {
   AutoRenewOnParams,
   AutoRenewOffParams,
   OrgReinstatedParams,
+  PaymentFailedParams,
   SendEmailResult,
 } from './types';
 
@@ -462,6 +465,27 @@ export async function sendSetupReminderEmail(params: SetupReminderParams): Promi
       organizationId: params.organizationId,
       variant: params.variant,
       day: params.day,
+    },
+  });
+}
+
+/**
+ * BACKLOG-3932: a brokerage invoice payment failed, to the billing contact. Log type 'other',
+ * kind org_payment_failed (distinct from the account-manager alert's reason 'payment_failed').
+ * The pay link is a bearer link: it is in the email body only, never in logMetadata.
+ */
+export async function sendPaymentFailedEmail(params: PaymentFailedParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildPaymentFailedEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'org_payment_failed',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
     },
   });
 }
