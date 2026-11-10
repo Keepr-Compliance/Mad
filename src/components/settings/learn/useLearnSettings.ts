@@ -29,6 +29,12 @@ export interface LearnSettingsState {
   copyBlock: string | null;
   saving: boolean;
   error: string | null;
+  /** BACKLOG-4219: "Share my score with Keepr" is ON. */
+  pilotReport: boolean;
+  /** BACKLOG-4219: a withdraw is still owed (it finishes when the computer is online). */
+  pilotPending: boolean;
+  pilotLastSentAt: string | null;
+  pilotSaving: boolean;
 }
 
 const INITIAL: LearnSettingsState = {
@@ -43,10 +49,16 @@ const INITIAL: LearnSettingsState = {
   copyBlock: null,
   saving: false,
   error: null,
+  pilotReport: false,
+  pilotPending: false,
+  pilotLastSentAt: null,
+  pilotSaving: false,
 };
 
 export interface UseLearnSettings extends LearnSettingsState {
   setEnabled: (enabled: boolean) => Promise<void>;
+  /** BACKLOG-4219: turn "Share my score with Keepr" on or off. */
+  setPilotReport: (enabled: boolean) => Promise<void>;
   /** Re-read the score and the question count (after a session). */
   refresh: () => Promise<void>;
 }
@@ -83,7 +95,14 @@ export function useLearnSettings(): UseLearnSettings {
   const loadCounts = useCallback(async () => {
     const st = await learnModeService.getState();
     if (st.success) {
-      patch({ available: st.available, enabled: st.enabled, answerCount: st.answers.deal + st.answers.bulk });
+      patch({
+        available: st.available,
+        enabled: st.enabled,
+        answerCount: st.answers.deal + st.answers.bulk,
+        pilotReport: st.pilotReport,
+        pilotPending: st.pilotPending,
+        pilotLastSentAt: st.pilotLastSentAt,
+      });
     }
   }, [patch]);
 
@@ -120,6 +139,9 @@ export function useLearnSettings(): UseLearnSettings {
         available: st.available,
         enabled: st.enabled,
         answerCount: st.answers.deal + st.answers.bulk,
+        pilotReport: st.pilotReport,
+        pilotPending: st.pilotPending,
+        pilotLastSentAt: st.pilotLastSentAt,
       });
       if (st.enabled) await prepare();
     })();
@@ -137,9 +159,24 @@ export function useLearnSettings(): UseLearnSettings {
         return;
       }
       patch({ saving: false, enabled: r.enabled, phase: "idle", score: null, copyBlock: null, questionsReady: 0 });
+      // Learn mode off also turns sharing off (main): re-read it.
+      if (!r.enabled) await loadCounts();
       if (r.enabled) await prepare();
     },
-    [patch, prepare],
+    [patch, prepare, loadCounts],
+  );
+
+  const setPilotReport = useCallback(
+    async (enabled: boolean) => {
+      patch({ pilotSaving: true, error: null });
+      const r = await learnModeService.setPilotReport(enabled);
+      if (!r.success) {
+        patch({ pilotSaving: false, error: r.error });
+        return;
+      }
+      patch({ pilotSaving: false, pilotReport: r.pilotReport, pilotPending: r.pilotPending });
+    },
+    [patch],
   );
 
   const refresh = useCallback(async () => {
@@ -149,5 +186,5 @@ export function useLearnSettings(): UseLearnSettings {
     await loadScore();
   }, [loadCounts, loadScore]);
 
-  return { ...state, setEnabled, refresh };
+  return { ...state, setEnabled, setPilotReport, refresh };
 }

@@ -79,6 +79,10 @@ import {
   V75_CHECKLIST_LINKS_TABLE_INFO_SQL,
 } from "./db/migrationV75Sql";
 import {
+  V79_ADD_PILOT_COLUMNS_SQL,
+  V79_LEARN_SETTINGS_TABLE_INFO_SQL,
+} from "./db/learnModeSql";
+import {
   V76_BROKEN_TEXT_IDS_SQL,
   V76_CLEAR_DANGLING_SQL,
   V76_REPOINT_SQL,
@@ -1991,6 +1995,24 @@ class DatabaseService implements IDatabaseService {
           hostLogger.info(`[v78] rebuilt checklist links, copied ${links} link(s) and ${members} member(s)`);
         }
         d.exec(V78_INDEXES_AND_TRIGGER_SQL);
+      },
+    },
+    {
+      version: 79,
+      description:
+        "BACKLOG-4219 Learn pilot report: learn_mode_settings gains pilot_report " +
+        "(default OFF), pilot_pending_withdraw, pilot_sent_versions, pilot_unsettled_at",
+      // Guarded like v75: a FRESH install already has the columns from schema.sql
+      // (schema_version seeds at BASELINE 70, then this migration still runs), so
+      // the ALTERs are skipped there and the migration is re-runnable. Upgraded
+      // rows get pilot_report = 0: nobody shares until they turn it on.
+      migrate: (d) => {
+        const hasCol = (
+          d.prepare(V79_LEARN_SETTINGS_TABLE_INFO_SQL).all() as Array<{ name: string }>
+        ).some((c) => c.name === "pilot_report");
+        if (!hasCol) {
+          d.exec(V79_ADD_PILOT_COLUMNS_SQL);
+        }
       },
     },
   ];

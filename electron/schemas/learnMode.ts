@@ -23,6 +23,9 @@ const WindowMonthsSchema = z
 
 export const LearnSetEnabledArgsSchema = z.strictObject({ enabled: z.boolean() });
 
+/** BACKLOG-4219: "Share my score with Keepr". */
+export const LearnSetPilotReportArgsSchema = z.strictObject({ enabled: z.boolean() });
+
 export const LearnRunArgsSchema = z.strictObject({ windowMonths: WindowMonthsSchema });
 
 export const LearnCleanupAnswerArgsSchema = z.strictObject({

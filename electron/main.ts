@@ -229,6 +229,10 @@ import { registerLearnModeHandlers } from "./handlers/learnModeHandlers";
 import { openQuestionAttachment } from "./services/learnAttachmentDownload";
 import { registerEntitlementHandlers } from "./handlers/entitlementHandlers";
 import { startSenderRuleSetRefresher } from "./services/senderRuleSetRefresher";
+import {
+  createLearnPilotReportService,
+  startLearnPilotReportService,
+} from "./services/learnPilotReportService";
 import { registerPaymentHandlers } from "./handlers/paymentHandlers";
 import { registerBillingHandlers } from "./handlers/billingHandlers";
 import { sanitizeSessionId } from "./services/paymentService";
@@ -1945,7 +1949,11 @@ app.whenReady().then(async () => {
   registerFeatureGateHandlers();
   // BACKLOG-4120 PR3: the one-attachment downloader is injected, so the Learn
   // handlers keep no static edge to the mail provider services.
-  registerLearnModeHandlers({ openQuestionAttachment });
+  // BACKLOG-4219: the pilot report send / withdraw is injected, so the Learn
+  // handlers keep no static edge to it; its startup and sign-in check starts here.
+  const learnPilotReport = createLearnPilotReportService();
+  registerLearnModeHandlers({ openQuestionAttachment, pilotReport: learnPilotReport });
+  startLearnPilotReportService(learnPilotReport);
 
   // Register per-transaction paywall entitlement handlers (BACKLOG-2006a)
   registerEntitlementHandlers();

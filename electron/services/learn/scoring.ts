@@ -27,6 +27,7 @@ import {
   storedFilterRow,
   type KeepRuleId,
   type KeepSets,
+  type SenderFilterSurface,
 } from "../../utils/senderFilter/senderFilter";
 
 export interface Rate {
@@ -292,6 +293,25 @@ export function scoreRun(
   seedLinkedToDeals: number,
   census: SenderCensusInput,
 ): LearnScore {
+  return scoreRunWithDetector(run, keyRows, dealAnswers, bulkRows, seedLinkedToDeals, census).score;
+}
+
+/**
+ * BACKLOG-4219: the score, plus the same sender census decided on the
+ * `detector` surface (what the detector WOULD drop under the run's rule set).
+ * `score.senderCensus` is unchanged (learnQuestions). Every number in
+ * `detector` is measured on the detector surface: mailboxes and the bulk
+ * sample by `decide(..., "detector")` here, losses and keeps from the runner's
+ * detector pass (`run.detector`). Only `coverage` is shared (surface-free).
+ */
+export function scoreRunWithDetector(
+  run: LearnRunResult,
+  keyRows: AnswerKeyRow[],
+  dealAnswers: DealAnswerRow[],
+  bulkRows: AnsweredBulkRow[],
+  seedLinkedToDeals: number,
+  census: SenderCensusInput,
+): { score: LearnScore; detector: SenderCensus } {
   const key = buildAnswerKey(keyRows, scannedRange(run));
   const classified = classify(run.detections, key.positives, key.negatives, key.neutral);
   const answerByKey = new Map(dealAnswers.map((a) => [a.address_key, a.answer]));
@@ -372,8 +392,10 @@ export function scoreRun(
   let reCached = 0;
   let nlSuppressed = 0;
   let reSuppressed = 0;
-  const suppressesInLearn = (b: AnsweredBulkRow) =>
-    decide(storedFilterRow(b), census.rules, "learnQuestions", census.keep).outcome === "suppress";
+  let nlSuppressedDet = 0;
+  let reSuppressedDet = 0;
+  const suppressesOn = (b: AnsweredBulkRow, surface: SenderFilterSurface) =>
+    decide(storedFilterRow(b), census.rules, surface, census.keep).outcome === "suppress";
   for (const b of bulkRows) {
     if (b.answer === "real_estate") realEstate += 1;
     else if (b.answer === "newsletter_spam") newsletterSpam += 1;
@@ -392,15 +414,35 @@ export function scoreRun(
     if (b.answer === "newsletter_spam") {
       nlCached += 1;
       if (flagged) nlFlagged += 1;
-      if (suppressesInLearn(b)) nlSuppressed += 1;
+      if (suppressesOn(b, "learnQuestions")) nlSuppressed += 1;
+      if (suppressesOn(b, "detector")) nlSuppressedDet += 1;
     } else {
       reCached += 1;
       if (flagged) reFlagged += 1;
-      if (suppressesInLearn(b)) reSuppressed += 1;
+      if (suppressesOn(b, "learnQuestions")) reSuppressed += 1;
+      if (suppressesOn(b, "detector")) reSuppressedDet += 1;
     }
   }
 
-  return {
+  const detector: SenderCensus = {
+    dealLinkedSuppressed: dealLinkedCensus(census, "detector"),
+    minCensusLinkedEmails: census.rules.thresholds.minCensusLinkedEmails,
+    bulkCaught: rate(nlSuppressedDet, nlCached),
+    realEstateSuppressed: rate(reSuppressedDet, reCached),
+    foundDealsLost: {
+      full: dealsLost(run.detections, run.detector.filtered.full, key.positives),
+      minusContactKeeps: dealsLost(run.detections, run.detector.filtered.minusContactKeeps, key.positives),
+    },
+    cleanupYesLost: {
+      full: yesLost(candidateDetections, run.detector.filtered.full, yesKeys),
+      minusContactKeeps: yesLost(candidateDetections, run.detector.filtered.minusContactKeeps, yesKeys),
+    },
+    keptBy: run.detector.senderStats.keptBy,
+    keepConflicts: run.detector.senderStats.keepConflicts,
+    coverage: run.detector.senderStats.coverage,
+  };
+
+  const score: LearnScore = {
     ruleVersion: run.ruleVersion,
     windowMonths: run.windowMonths,
     earliestDay: toDay(run.firstMs),
@@ -426,7 +468,7 @@ export function scoreRun(
     senderRulesSource: run.senderRulesProvenance.source,
     senderRulesDownloadRejected: run.senderRulesProvenance.downloadRejected,
     senderCensus: {
-      dealLinkedSuppressed: dealLinkedCensus(census),
+      dealLinkedSuppressed: dealLinkedCensus(census, "learnQuestions"),
       minCensusLinkedEmails: census.rules.thresholds.minCensusLinkedEmails,
       bulkCaught: rate(nlSuppressed, nlCached),
       realEstateSuppressed: rate(reSuppressed, reCached),
@@ -469,6 +511,7 @@ export function scoreRun(
       realEstateFlagged: rate(reFlagged, reCached),
     },
   };
+  return { score, detector };
 }
 
 /** Deals found by the unfiltered run and by no detection of the filtered run (per deal, never a count difference). */
@@ -499,7 +542,7 @@ function emptyCount(): CensusCount {
 }
 
 /** Per mailbox (emails.account_id; NULL is its own bucket), full and without K1/K3. */
-function dealLinkedCensus(census: SenderCensusInput): MailboxCensus[] {
+function dealLinkedCensus(census: SenderCensusInput, surface: SenderFilterSurface): MailboxCensus[] {
   const groups = new Map<string | null, DealLinkedEmailRow[]>();
   for (const r of census.linked) {
     const g = groups.get(r.account_id);
@@ -516,12 +559,12 @@ function dealLinkedCensus(census: SenderCensusInput): MailboxCensus[] {
     const minus = emptyCount();
     for (const r of rows) {
       const fr = storedFilterRow(r);
-      const a = decide(fr, census.rules, "learnQuestions", census.keep);
+      const a = decide(fr, census.rules, surface, census.keep);
       if (a.outcome === "suppress" && a.signal) {
         full.k += 1;
         full.bySignal[a.signal] = (full.bySignal[a.signal] ?? 0) + 1;
       }
-      const b = decide(fr, census.rules, "learnQuestions", census.keep, { withoutContactKeeps: true });
+      const b = decide(fr, census.rules, surface, census.keep, { withoutContactKeeps: true });
       if (b.outcome === "suppress" && b.signal) {
         minus.k += 1;
         minus.bySignal[b.signal] = (minus.bySignal[b.signal] ?? 0) + 1;

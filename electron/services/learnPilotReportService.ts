@@ -1,0 +1,287 @@
+/**
+ * Learn pilot report: send and withdraw — BACKLOG-4219 PR2 (main process only).
+ *
+ * When a user has turned on "Share my score with Keepr", each Learn score
+ * (`learn:score`) may send one numbers-only snapshot (learn/pilotReport.ts) to
+ * `learn_pilot_report_submit`. Turning it off — or Learn mode off, or Delete
+ * all answers, or the org losing autodetect_eval — calls
+ * `learn_pilot_report_withdraw`, which deletes every snapshot of the caller.
+ *
+ * INJECTED, never imported by the Learn handlers (main.ts passes it to
+ * registerLearnModeHandlers), so learnModeHandlers.ts keeps no static edge to
+ * the network path (P10).
+ *
+ * R1, one serial queue per user. Every submit and every withdraw for a user is
+ * a job on that user's queue; jobs run one at a time, in order. A withdraw
+ * waits for an in-flight submit to settle (resolve, fail, or time out) and
+ * only then deletes. A submit re-reads the switch and the owed-withdraw flag
+ * immediately before its RPC and drops itself if either says no. A submit that
+ * timed out without settling may still land on the server, so the next
+ * successful withdraw schedules ONE more withdraw 60 s later.
+ *
+ * D3 / R7, throttle per (user, sender-rules version), persisted in
+ * learn_mode_settings.pilot_sent_versions ({version: last successful submit},
+ * at most 5, oldest evicted), written ONLY after a successful submit and
+ * cleared by a successful withdraw. Send when the version has no entry; or its
+ * entry is >= 6 h old AND (an answer was saved after it, or it is >= 24 h old).
+ * A restart reads the column, so the throttle survives it.
+ *
+ * R3, startup and sign-in. `start()` (main.ts) checks 30 s after start, then
+ * once a minute reads the session user (cached; no network) and checks again
+ * whenever it changes (a sign-in) — and retries an owed withdraw for the
+ * signed-in user at most every 5 min. The check is for the SIGNED-IN user only:
+ * another user's owed withdraw waits until that user signs in, because a
+ * withdraw deletes the caller's rows. Key lost = the strict read says
+ * "blocked" (never "unknown": offline must not turn sharing off).
+ *
+ * Logs carry the step and counts or an error CODE only; never the payload.
+ */
+import { app } from "electron";
+
+import logService from "./logService";
+import supabaseService from "./supabaseService";
+import { AUTODETECT_EVAL_FEATURE_KEY, resolveStrictFeatureState } from "../handlers/featureGateHandlers";
+import {
+  getPilotState,
+  latestAnswerAt,
+  markPilotWithdrawDone,
+  setPilotOffPending,
+  setPilotSentVersions,
+  setPilotUnsettledAt,
+} from "./db/learnModeDbService";
+import { buildPilotReport } from "./learn/pilotReport";
+import type { LearnScore, SenderCensus } from "./learn/scoring";
+
+export const PILOT_RPC_TIMEOUT_MS = 10_000;
+export const PILOT_MIN_RESEND_MS = 6 * 60 * 60 * 1000;
+export const PILOT_IDLE_RESEND_MS = 24 * 60 * 60 * 1000;
+export const PILOT_EXTRA_WITHDRAW_MS = 60_000;
+export const PILOT_MAX_SENT_VERSIONS = 5;
+export const PILOT_FIRST_CHECK_MS = 30_000;
+export const PILOT_SESSION_TICK_MS = 60_000;
+export const PILOT_RETRY_MS = 5 * 60 * 1000;
+
+export const SUBMIT_RPC = "learn_pilot_report_submit";
+export const WITHDRAW_RPC = "learn_pilot_report_withdraw";
+
+const MODULE = "LearnPilot";
+
+/** What the Learn handlers see (injected). Both are fire-and-forget. */
+export interface LearnPilotReportDeps {
+  maybeSend: (userId: string, score: LearnScore, detector: SenderCensus) => void;
+  queueWithdraw: (userId: string) => void;
+}
+
+type RpcResult = { error: { code?: string } | null };
+type RpcCall = (name: string, args: Record<string, unknown> | undefined, signal: AbortSignal) => Promise<RpcResult>;
+
+export interface PilotServiceOptions {
+  now?: () => number;
+  appVersion?: () => string;
+  /** The RPC as the signed-in Supabase user. */
+  rpc?: RpcCall;
+  /** The Supabase auth user the RPC runs as (null = signed out). */
+  authUserId?: () => Promise<string | null>;
+  featureState?: () => Promise<"allowed" | "blocked" | "unknown">;
+  setTimer?: (fn: () => void, ms: number) => void;
+  timeoutMs?: number;
+}
+
+const defaultRpc: RpcCall = async (name, args, signal) =>
+  (await supabaseService
+    .getClient()
+    .rpc(name, args)
+    .abortSignal(signal)) as unknown as RpcResult;
+
+async function defaultAuthUserId(): Promise<string | null> {
+  try {
+    return (await supabaseService.getAuthSession())?.userId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function unrefTimer(fn: () => void, ms: number): void {
+  const t = setTimeout(fn, ms);
+  (t as { unref?: () => void }).unref?.();
+}
+
+export function createLearnPilotReportService(opts: PilotServiceOptions = {}) {
+  const now = opts.now ?? (() => Date.now());
+  const appVersion = opts.appVersion ?? (() => app.getVersion());
+  const rpc = opts.rpc ?? defaultRpc;
+  const authUserId = opts.authUserId ?? defaultAuthUserId;
+  const featureState = opts.featureState ?? (() => resolveStrictFeatureState(AUTODETECT_EVAL_FEATURE_KEY));
+  const setTimer = opts.setTimer ?? unrefTimer;
+  const timeoutMs = opts.timeoutMs ?? PILOT_RPC_TIMEOUT_MS;
+
+  const queues = new Map<string, Promise<void>>();
+
+  function enqueue(userId: string, job: () => Promise<void>): Promise<void> {
+    const prev = queues.get(userId) ?? Promise.resolve();
+    const next = prev.then(job).catch((error: unknown) => {
+      logService.warn("Learn pilot job failed", MODULE, {
+        errorName: error instanceof Error ? error.name : typeof error,
+      });
+    });
+    queues.set(userId, next);
+    void next.then(() => {
+      if (queues.get(userId) === next) queues.delete(userId);
+    });
+    return next;
+  }
+
+  /** "timeout" when the call did not settle in time (it was aborted, but may have landed). */
+  async function call(name: string, args?: Record<string, unknown>): Promise<RpcResult | "timeout"> {
+    const ac = new AbortController();
+    const TIMED_OUT = Symbol("timeout");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
+      timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
+      (timer as { unref?: () => void }).unref?.();
+    });
+    try {
+      const r = await Promise.race([rpc(name, args, ac.signal), timeout]);
+      if (r === TIMED_OUT) {
+        ac.abort();
+        return "timeout";
+      }
+      return r;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /** Sharing is ON and no withdraw is owed. The ONE check both reads use. */
+  function sharingOn(st: { enabled: boolean; pendingWithdraw: boolean }): boolean {
+    return st.enabled && !st.pendingWithdraw;
+  }
+
+  function isDue(userId: string, version: number, sentVersions: Record<string, string>): boolean {
+    const last = sentVersions[String(version)];
+    if (!last) return true;
+    const lastMs = Date.parse(last);
+    const age = now() - lastMs;
+    if (age < PILOT_MIN_RESEND_MS) return false;
+    if (age >= PILOT_IDLE_RESEND_MS) return true;
+    const latest = latestAnswerAt(userId);
+    return latest !== null && Date.parse(latest) > lastMs;
+  }
+
+  function recordSent(userId: string, version: number): void {
+    const map = { ...getPilotState(userId).sentVersions, [String(version)]: new Date(now()).toISOString() };
+    const kept = Object.entries(map)
+      .sort((a, b) => Date.parse(b[1]) - Date.parse(a[1]))
+      .slice(0, PILOT_MAX_SENT_VERSIONS);
+    setPilotSentVersions(userId, Object.fromEntries(kept));
+  }
+
+  async function submitJob(userId: string, score: LearnScore, detector: SenderCensus): Promise<void> {
+    const before = getPilotState(userId);
+    if (!sharingOn(before)) return;
+    if (!isDue(userId, score.senderRulesVersion, before.sentVersions)) return;
+    const built = buildPilotReport(score, detector, appVersion());
+    if (!built.ok) {
+      logService.warn("Learn pilot report not built", MODULE, { reason: built.reason });
+      return;
+    }
+    if ((await authUserId()) !== userId) return;
+    // R1: re-read immediately before the RPC; a switch-off since then wins.
+    if (!sharingOn(getPilotState(userId))) return;
+    const r = await call(SUBMIT_RPC, { p_report: built.report });
+    if (r === "timeout") {
+      setPilotUnsettledAt(userId, new Date(now()).toISOString());
+      logService.warn("Learn pilot submit timed out", MODULE, {});
+      return;
+    }
+    if (r.error) {
+      logService.warn("Learn pilot submit refused", MODULE, { code: r.error.code ?? "unknown" });
+      return;
+    }
+    recordSent(userId, score.senderRulesVersion);
+    logService.info("Learn pilot report sent", MODULE, { senderRulesVersion: score.senderRulesVersion });
+  }
+
+  async function withdrawJob(userId: string, extra: boolean): Promise<void> {
+    const st = getPilotState(userId);
+    if (extra ? st.enabled : !st.pendingWithdraw) return;
+    // A withdraw deletes the CALLER's rows: only ever as the user who owes it.
+    if ((await authUserId()) !== userId) return;
+    const r = await call(WITHDRAW_RPC);
+    if (r === "timeout" || r.error) {
+      logService.warn("Learn pilot withdraw not done", MODULE, {
+        code: r === "timeout" ? "timeout" : (r.error?.code ?? "unknown"),
+      });
+      return;
+    }
+    if (extra) return;
+    markPilotWithdrawDone(userId);
+    logService.info("Learn pilot report withdrawn", MODULE, {});
+    if (getPilotState(userId).unsettledAt) {
+      setPilotUnsettledAt(userId, null);
+      setTimer(() => void enqueue(userId, () => withdrawJob(userId, true)), PILOT_EXTRA_WITHDRAW_MS);
+    }
+  }
+
+  function maybeSend(userId: string, score: LearnScore, detector: SenderCensus): Promise<void> {
+    return enqueue(userId, () => submitJob(userId, score, detector));
+  }
+
+  function queueWithdraw(userId: string): Promise<void> {
+    return enqueue(userId, () => withdrawJob(userId, false));
+  }
+
+  /** R3: the startup / sign-in check, for the signed-in user only. */
+  async function checkPendingPilotWork(userId: string): Promise<void> {
+    if ((await authUserId()) !== userId) return;
+    if (getPilotState(userId).enabled && (await featureState()) === "blocked") {
+      setPilotOffPending(userId);
+      logService.info("Learn pilot sharing turned off: feature not allowed", MODULE, {});
+    }
+    // Owed withdraws are paid even if sharing was turned back on since: the
+    // submit refuses to run while one is owed, so the delete always goes first.
+    if (getPilotState(userId).pendingWithdraw) await queueWithdraw(userId);
+  }
+
+  let lastUser: string | null = null;
+  let lastCheckMs = 0;
+
+  /** One session tick: a new signed-in user is a sign-in; an owed withdraw is retried every 5 min. */
+  async function tick(): Promise<void> {
+    const u = await authUserId();
+    const changed = u !== lastUser;
+    lastUser = u;
+    if (!u) return;
+    if (changed || (getPilotState(u).pendingWithdraw && now() - lastCheckMs >= PILOT_RETRY_MS)) {
+      lastCheckMs = now();
+      await checkPendingPilotWork(u);
+    }
+  }
+
+  /** Resolves when every queued job of this user has run (tests). */
+  function idle(userId: string): Promise<void> {
+    return queues.get(userId) ?? Promise.resolve();
+  }
+
+  return { maybeSend, queueWithdraw, checkPendingPilotWork, tick, idle };
+}
+
+export type LearnPilotReportService = ReturnType<typeof createLearnPilotReportService>;
+
+let started = false;
+
+/** Called once from electron/main.ts. A no-op under jest unless `force`. */
+export function startLearnPilotReportService(
+  service: LearnPilotReportService,
+  deps: { force?: boolean } = {},
+): void {
+  if (started) return;
+  if (process.env.NODE_ENV === "test" && !deps.force) return;
+  started = true;
+  const runTick = () => void service.tick().catch(() => undefined);
+  setTimeout(() => {
+    runTick();
+    const every = setInterval(runTick, PILOT_SESSION_TICK_MS);
+    (every as { unref?: () => void }).unref?.();
+  }, PILOT_FIRST_CHECK_MS);
+}

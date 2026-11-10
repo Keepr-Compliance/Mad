@@ -307,6 +307,8 @@ const VALID: Record<string, unknown> = {
   "learn:set-enabled": { enabled: true },
   "learn:list-answers": undefined,
   "learn:delete-answer": { kind: "deal", id: "dla-4120-x" },
+  // BACKLOG-4219
+  "learn:set-pilot-report": { enabled: false },
 };
 
 function signedIn(on = true): void {
@@ -417,7 +419,7 @@ describe("SETS gated and ungated channels, by execution", () => {
     const registered = [...ipcHandlers.keys()].filter((c) => c.startsWith("learn:")).sort();
     const listed = [...handlers.LEARN_GATED_CHANNELS, ...handlers.LEARN_UNGATED_CHANNELS].sort();
     expect(registered).toEqual(listed);
-    expect(registered).toHaveLength(14);
+    expect(registered).toHaveLength(15);
     expect(Object.keys(VALID).sort()).toEqual(listed);
   });
 
@@ -481,7 +483,7 @@ describe("C9 switch matrix", () => {
         success: true,
         available: evalState === "allowed",
         enabled: expectAllowed,
-        answers: { deal: 0, bulk: 0 },
+        answers: { deal: 0, bulk: 0 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null,
       });
     },
   );
@@ -506,7 +508,7 @@ describe("C9 switch matrix", () => {
       success: true,
       available: true,
       enabled: true,
-      answers: { deal: 0, bulk: 0 },
+      answers: { deal: 0, bulk: 0 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null,
     });
   });
 
@@ -791,14 +793,14 @@ describe("DEL delete answers is ungated (founder, 2026-11-04)", () => {
       success: true,
       available: false,
       enabled: false,
-      answers: { deal: 1, bulk: 1 },
+      answers: { deal: 1, bulk: 1 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null,
     });
     await invoke("learn:delete-answers");
     expect(await invoke("learn:get-state")).toEqual({
       success: true,
       available: false,
       enabled: false,
-      answers: { deal: 0, bulk: 0 },
+      answers: { deal: 0, bulk: 0 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null,
     });
   });
 });

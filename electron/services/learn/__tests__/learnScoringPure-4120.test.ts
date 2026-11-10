@@ -391,6 +391,19 @@ function run(detections: LearnRunResult["detections"]): LearnRunResult {
         unknown: { rows: 0, headers: 0, labels: 0 },
       },
     },
+    // BACKLOG-4219: the detector-surface pass, same shape (no loss, no keeps).
+    detector: {
+      filtered: { full: detections, minusContactKeeps: detections },
+      senderStats: {
+        keptBy: { K1: 0, K2: 0, K3: 0 },
+        keepConflicts: 0,
+        coverage: {
+          gmail: { rows: 0, headers: 0, labels: 0 },
+          outlook: { rows: 0, headers: 0, labels: 0 },
+          unknown: { rows: 0, headers: 0, labels: 0 },
+        },
+      },
+    },
   };
 }
 

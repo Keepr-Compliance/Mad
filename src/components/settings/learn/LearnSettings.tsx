@@ -20,6 +20,7 @@ import { LearnStatTiles } from "./LearnStatTiles";
 import { learnTiles } from "./learnScoreView";
 import { LearnAnswersList } from "./LearnAnswersList";
 import { LEARN_SITTING_SIZE } from "./learnSitting";
+import { pilotConsentText, pilotStatusLine } from "./learnPilotCopy";
 
 function minutesFor(questions: number): string {
   const minutes = Math.max(1, Math.round((questions * 25) / 60));
@@ -52,9 +53,12 @@ export function LearnSettings({
         <div className="flex items-center justify-between gap-4 rounded-lg border border-[#E6E4DF] bg-white px-5 py-4">
           <span className="flex flex-col gap-0.5">
             <span className="text-sm font-semibold text-gray-900">Learn mode</span>
-            <span className="text-[13px] text-gray-500">
-              Keepr asks questions about mail on {machine}. It never creates transactions and never uses AI. Nothing
-              leaves {machine}.
+            <span className="text-[13px] text-gray-500" data-testid="learn-mode-copy">
+              {/* BACKLOG-4219: true with sharing OFF and ON. */}
+              Keepr asks questions about mail on {machine}. It never creates transactions and never uses AI.{" "}
+              {learn.pilotReport
+                ? `Your answers stay on ${machine}. Only the numbers are shared with Keepr.`
+                : `Nothing leaves ${machine}.`}
             </span>
           </span>
           <button
@@ -79,6 +83,41 @@ export function LearnSettings({
 
         {learn.enabled && (
           <>
+            {/* BACKLOG-4219: the pilot report switch (default OFF). */}
+            <div
+              className="flex items-center justify-between gap-4 rounded-lg border border-[#E6E4DF] bg-white px-5 py-4"
+              data-testid="learn-pilot-row"
+            >
+              <span className="flex flex-col gap-0.5">
+                <span className="text-sm font-semibold text-gray-900">Share my score with Keepr</span>
+                <span className="text-[13px] text-gray-500" data-testid="learn-pilot-consent">
+                  {pilotConsentText()}
+                </span>
+                {pilotStatusLine(learn.pilotPending, learn.pilotLastSentAt, machine) && (
+                  <span className="text-[13px] text-gray-500" data-testid="learn-pilot-status">
+                    {pilotStatusLine(learn.pilotPending, learn.pilotLastSentAt, machine)}
+                  </span>
+                )}
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={learn.pilotReport}
+                aria-label="Share my score with Keepr"
+                disabled={learn.loading || learn.pilotSaving}
+                onClick={() => void learn.setPilotReport(!learn.pilotReport)}
+                className={`relative inline-flex h-6 w-10 flex-none items-center rounded-full transition-colors disabled:opacity-50 ${
+                  learn.pilotReport ? "bg-sky-700" : "bg-gray-300"
+                }`}
+              >
+                <span
+                  className={`inline-block h-[18px] w-[18px] transform rounded-full bg-white transition-transform ${
+                    learn.pilotReport ? "translate-x-[19px]" : "translate-x-[3px]"
+                  }`}
+                />
+              </button>
+            </div>
+
             {learn.phase === "reading" || learn.phase === "idle" ? (
               <div
                 className="flex items-center gap-4 rounded-lg bg-sky-700 px-5 py-4 text-white"

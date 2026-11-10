@@ -27,10 +27,20 @@ export type LearnStateResult =
       enabled: boolean;
       /** Saved answers of this user (counts only), whatever the toggle and the key say. */
       answers: { deal: number; bulk: number };
+      /** BACKLOG-4219: "Share my score with Keepr" is ON. */
+      pilotReport: boolean;
+      /** BACKLOG-4219: a withdraw is owed to Keepr (offline when it was turned off). */
+      pilotPending: boolean;
+      /** BACKLOG-4219: ISO time of the last successful send, or null. */
+      pilotLastSentAt: string | null;
     }
   | LearnFailure;
 
 export type LearnSetEnabledResult = { success: true; enabled: boolean } | LearnFailure;
+
+export type LearnSetPilotReportResult =
+  | { success: true; pilotReport: boolean; pilotPending: boolean }
+  | LearnFailure;
 
 export type LearnRunResultResponse = { success: true; summary: PublicRunSummary } | LearnFailure;
 
@@ -138,6 +148,8 @@ export type LearnPreviewArgs =
 export interface WindowApiLearn {
   getState: () => Promise<LearnStateResult>;
   setEnabled: (args: { enabled: boolean }) => Promise<LearnSetEnabledResult>;
+  /** BACKLOG-4219: turn "Share my score with Keepr" on or off. */
+  setPilotReport: (args: { enabled: boolean }) => Promise<LearnSetPilotReportResult>;
   run: (args: { windowMonths: number }) => Promise<LearnRunResultResponse>;
   onRunProgress: (callback: (progress: LearnRunProgressEvent) => void) => () => void;
   cleanupNext: (args?: { exclude: string[] }) => Promise<LearnCleanupNextResult>;
