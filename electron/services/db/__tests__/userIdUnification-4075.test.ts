@@ -177,7 +177,7 @@ describe("BACKLOG-4075: migrateUserIdForUnification on the migrated schema", () 
     expect(refusing.sort()).toEqual([...APPEND_ONLY_USER_TABLES].sort());
   });
 
-  it("U3 a failure rolls everything back and leaves foreign keys ON", async () => {
+  it("U3 a failure on the first statement (users_local primary key) changes nothing and leaves foreign keys ON; does not prove rollback", async () => {
     seedLegacy();
     // A second local row already holding the target id: the users_local UPDATE collides on the primary key.
     createUserSync({ id: SUPA, email: "other-4075@example.test", oauth_provider: "google", oauth_id: SUPA, is_active: true } as never);
@@ -193,6 +193,39 @@ describe("BACKLOG-4075: migrateUserIdForUnification on the migrated schema", () 
     }
     expect(String(err)).toMatch(/UNIQUE constraint failed: users_local\.id/);
     expect(owned(LEGACY)).toEqual([1, 1, 1, 1, 1]);
+    expect(fkViolations()).toEqual([]);
+    expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
+  });
+
+  it("U6 a child-table UPDATE that fails mid-loop rolls back every earlier statement and leaves foreign keys ON", async () => {
+    seedLegacy();
+    // The failing table must sit in the MIDDLE of the real processing order, with
+    // seeded rows in tables processed before AND after it. (`transactions` is the
+    // last table the writer visits, so it cannot be the failing one.)
+    const order = listUserIdColumns(db).map((d) => d.table);
+    const failing = "llm_settings";
+    const before = ["contacts", "learn_mode_settings"];
+    const after = ["sessions", "transactions"];
+    for (const t of before) expect(order.indexOf(t)).toBeLessThan(order.indexOf(failing));
+    for (const t of after) expect(order.indexOf(t)).toBeGreaterThan(order.indexOf(failing));
+    db.exec(
+      `CREATE TRIGGER t4075_fail_mid_loop BEFORE UPDATE OF user_id ON ${failing} BEGIN SELECT RAISE(ABORT, 'injected-4075-mid-loop'); END`,
+    );
+    let err: unknown = null;
+    try {
+      await migrateUserIdForUnification(LEGACY, SUPA);
+    } catch (e) {
+      err = e;
+    }
+    // Message match, not `.rejects.toThrow` (cross-realm SqliteError, see U3).
+    expect(String(err)).toMatch(/injected-4075-mid-loop/);
+    expect((db.prepare("SELECT id FROM users_local").all() as Array<{ id: string }>).map((r) => r.id)).toEqual([LEGACY]);
+    for (const t of [...before, failing, ...after]) {
+      const n = (uid: string) => (db.prepare(`SELECT count(*) AS n FROM ${t} WHERE user_id = ?`).get(uid) as { n: number }).n;
+      expect([t, n(LEGACY), n(SUPA)]).toEqual([t, 1, 0]);
+    }
+    expect(owned(LEGACY)).toEqual([1, 1, 1, 1, 1]);
+    expect(owned(SUPA)).toEqual([0, 0, 0, 0, 0]);
     expect(fkViolations()).toEqual([]);
     expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
   });
