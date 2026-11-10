@@ -20,6 +20,8 @@
  *      mad-pre-restore copy; a manual-restore copy is never touched by it
  *   K8 a this-launch pre-restore copy whose backup copy and undo both failed
  *      survives a later auto-restore round in the same process
+ *   K8b the same when the move-aside itself fails part-way and its undo fails
+ *   K9 an earlier launch's copy survives a launch whose backup copy fails
  *
  *   ELECTRON_RUN_AS_NODE=1 npx electron node_modules/.bin/jest \
  *     electron/services/__tests__/sqliteBackupService.keepOne-3298.test.ts
@@ -334,6 +336,76 @@ describeUnlessWindows("BACKLOG-3298 real driver — a manual restore keeps one c
     await expect(service.initialize()).rejects.toThrow();
     copySpy.mockRestore();
     renameSpy.mockRestore();
+    const round1 = preRestore();
+    expect(round1).toHaveLength(1);
+    expect(fs.existsSync(dbFile)).toBe(false);
+
+    // Round 2, same process: a manual restore whose migrations fail reaches auto-restore again.
+    await reset();
+    await new Promise((r) => setTimeout(r, 5));
+    await restoreDatabase(userBackup);
+    const round2 = preRestore();
+    expect(round2.length).toBe(2);
+    expect(round2).toContain(round1[0]);
+  });
+
+  it("K9 automatic: an earlier launch's copy survives a launch whose backup copy fails (prune only after the copy)", async () => {
+    await reset();
+    service._preRestoreKeptThisProcess.clear();
+    MIGRATIONS.push({
+      version: LATEST + 1,
+      description: "BACKLOG-3298 failing migration",
+      migrate: (d) => d.exec("INSERT INTO no_such_table_3298 VALUES (1)"),
+    });
+    mockShowMessageBox.mockResolvedValue({ response: 0 });
+    await expect(service.initialize({ quitOnUnrecoverableFailure: true })).rejects.toThrow();
+    const earlier = preRestore();
+    expect(earlier).toHaveLength(1);
+
+    // Relaunch; this time the backup copy into mad.db fails and the undo works.
+    await reset();
+    service._preRestoreKeptThisProcess.clear();
+    await new Promise((r) => setTimeout(r, 5));
+    const realCopy = fs.copyFileSync;
+    jest.spyOn(fs, "copyFileSync").mockImplementation(((src: string, dest: string) => {
+      if (dest === dbFile && String(src).includes("-backup-")) throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+      return realCopy(src, dest);
+    }) as typeof fs.copyFileSync);
+    await expect(service.initialize({ quitOnUnrecoverableFailure: true })).rejects.toThrow();
+    jest.restoreAllMocks();
+    expect(fs.existsSync(dbFile)).toBe(true); // undo put this launch's file back
+    expect(preRestore()).toEqual(earlier);
+  });
+
+  it("K8b a move-aside that fails part-way and cannot be undone still protects its copy from a later round", async () => {
+    await reset();
+    service._preRestoreKeptThisProcess.clear();
+    MIGRATIONS.push({
+      version: LATEST + 1,
+      description: "BACKLOG-3298 failing migration",
+      migrate: (d) => d.exec("INSERT INTO no_such_table_3298 VALUES (1)"),
+    });
+    mockShowMessageBox.mockResolvedValue({ response: 0 });
+    // A second reader keeps mad.db-wal on disk when the app closes its handle,
+    // so _moveAside has a sidecar to move.
+    const reader = new RealDatabase(dbFile, { readonly: true });
+    reader.pragma(`key = "x'${KEY}'"`);
+    reader.pragma("cipher_compatibility = 4");
+    reader.prepare("SELECT count(*) FROM t_3298").get();
+    const realRename = fs.renameSync;
+    const renameSpy = jest.spyOn(fs, "renameSync").mockImplementation(((from: string, to: string) => {
+      if (from === `${dbFile}-wal` && String(to).includes("pre-restore")) throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      if (String(from).includes("pre-restore") && to === dbFile) throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      return realRename(from, to);
+    }) as typeof fs.renameSync);
+    try {
+      expect(fs.existsSync(`${dbFile}-wal`)).toBe(true);
+      // Round 1: the base file moves, the -wal move fails, the undo fails.
+      await expect(service.initialize()).rejects.toThrow();
+    } finally {
+      renameSpy.mockRestore();
+      reader.close();
+    }
     const round1 = preRestore();
     expect(round1).toHaveLength(1);
     expect(fs.existsSync(dbFile)).toBe(false);
