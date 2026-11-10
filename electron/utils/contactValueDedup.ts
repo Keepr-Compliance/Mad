@@ -164,3 +164,52 @@ export function dedupePhoneValues(
 ): string[] {
   return dedupeBy(values, (trimmed) => toLookupKey(trimmed));
 }
+
+/**
+ * BACKLOG-4180 — `dedupePhoneValues` without running libphonenumber on the read.
+ *
+ * `external_contacts.phones_normalized_json` already holds the lookup key of
+ * every phone (written by `normalizedPhonesJson` in `externalContactDbService`
+ * at each upsert). That writer drops the entries whose key is `""` — null and
+ * blank/whitespace values — which are exactly the entries `dedupeBy` skips. So
+ * the stored keys line up with the KEPT phones, one for one, and NOT with the
+ * raw array index: a leading blank or `null` shifts every index after it.
+ *
+ * Used only when the stored array is a string array whose length equals the
+ * number of kept phones. Anything else (NULL, bad JSON, a length mismatch)
+ * falls back to `dedupePhoneValues`, so the output is never worse than today.
+ *
+ * Output is the same as `dedupePhoneValues`: trimmed display strings, first
+ * spelling kept, order preserved. Known limit: a stored key was computed with
+ * the phone metadata in use when the row was written; after a library update it
+ * can differ from today's key until the next sync rewrites the row. That only
+ * affects which duplicates collapse on screen, never which values are stored.
+ */
+export function dedupePhoneValuesWithKeys(
+  values: readonly unknown[] | null | undefined,
+  storedKeys: unknown,
+): string[] {
+  if (!Array.isArray(values)) return [];
+  if (!Array.isArray(storedKeys) || !storedKeys.every((k) => typeof k === "string" && k !== "")) {
+    return dedupePhoneValues(values);
+  }
+
+  const kept: string[] = [];
+  for (const raw of values) {
+    if (typeof raw !== "string") continue;
+    const trimmed = raw.trim();
+    if (trimmed === "") continue;
+    kept.push(trimmed);
+  }
+  if (kept.length !== storedKeys.length) return dedupePhoneValues(values);
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (let i = 0; i < kept.length; i++) {
+    const key = storedKeys[i] as string;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(kept[i]);
+  }
+  return out;
+}

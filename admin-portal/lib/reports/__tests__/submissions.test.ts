@@ -6,7 +6,6 @@
 
 import { describe, expect, it } from 'vitest';
 import { resolvePeriod } from '../period';
-import { stackSegments, COLOR_CANCELLED, COLOR_ERROR } from '../iphone-sync-charts';
 import {
   bucketSubmissionsByDay,
   buildOpenAttempts,
@@ -193,11 +192,6 @@ describe('per-day buckets', () => {
     expect(day.failed).toBe(2);
     expect(day.didNotFinish).toBe(2);
     expect(day.cancelled).toBe(2);
-    const segs = stackSegments(
-      { dayIso: day.dayIso, dayLabel: day.dayLabel, errors: day.failed, cancelled: day.didNotFinish, total: 4 },
-      4
-    );
-    expect(segs.map((s) => s.color)).toEqual([COLOR_ERROR, COLOR_CANCELLED]);
     expect(failureTooltipLines(day)[1]).toBe('2 failed or unknown · 2 did not finish or stalled');
   });
 });

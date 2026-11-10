@@ -21,7 +21,7 @@
  * byte-identical copy under the same name. The caller now imports the existing one.
  */
 
-import { sql } from "./core/sqlText";
+import { sql, type SafeSql } from "./core/sqlText";
 
 /**
  * One external record's value blobs. Three bound parameters: user id, source,
@@ -78,3 +78,60 @@ export const ALL_KEYED_EXTERNAL_RECORDS_SQL = sql`SELECT external_record_id, sou
        FROM external_contacts
       WHERE user_id = ? AND external_record_id IS NOT NULL
       ORDER BY source, external_record_id`;
+
+/**
+ * BACKLOG-4180 — the identifier keys of a set of saved contacts, as the match
+ * index compares them. Phones: the stored `phone_normalized`. Emails:
+ * `LOWER(TRIM(email))` — the index lowercases the stored side and trims the
+ * probe side, so trimming both here can only widen the candidate set, never
+ * narrow it. The linker still decides every match.
+ *
+ * Scoped to the user (bind userId first, then the ids): a contact id that is
+ * not this user's contributes no keys.
+ */
+export const scopedContactPhoneKeysSql = (marks: SafeSql): SafeSql =>
+  sql`SELECT DISTINCT cp.phone_normalized AS k FROM contact_phones cp
+       JOIN contacts c ON c.id = cp.contact_id
+      WHERE c.user_id = ? AND cp.contact_id IN (${marks})
+        AND cp.phone_normalized IS NOT NULL AND cp.phone_normalized <> ''`;
+
+export const scopedContactEmailKeysSql = (marks: SafeSql): SafeSql =>
+  sql`SELECT DISTINCT LOWER(TRIM(ce.email)) AS k FROM contact_emails ce
+       JOIN contacts c ON c.id = ce.contact_id
+      WHERE c.user_id = ? AND ce.contact_id IN (${marks}) AND TRIM(ce.email) <> ''`;
+
+/**
+ * BACKLOG-4180 — the keyed source records that share a phone key or an email
+ * with the given keys. Same columns and same total order as
+ * ALL_KEYED_EXTERNAL_RECORDS_SQL, so a scoped pass sees its records in the
+ * order the full pass would.
+ *
+ * Phones compare on the STORED lookup keys (`phones_normalized_json`), not on
+ * libphonenumber at read time. The linker's own probe is `toMatchingKey`, which
+ * is `toLookupKey` above a digit floor, so a stored key is a superset of what
+ * the linker can match on. `json_valid` guards both arrays: one bad row must not
+ * fail the whole selection.
+ *
+ * Bind order: userId, then the phone keys, then the email keys. Either arm may
+ * be omitted by passing `null` for its marks.
+ */
+export const scopedKeyedExternalRecordsSql = (
+  phoneMarks: SafeSql | null,
+  emailMarks: SafeSql | null,
+): SafeSql => {
+  const phoneArm = phoneMarks
+    ? sql`EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(ec.phones_normalized_json)
+                                               THEN ec.phones_normalized_json ELSE '[]' END) p
+                    WHERE p.value IN (${phoneMarks}))`
+    : sql`0`;
+  const emailArm = emailMarks
+    ? sql`EXISTS (SELECT 1 FROM json_each(CASE WHEN json_valid(ec.emails_json)
+                                               THEN ec.emails_json ELSE '[]' END) e
+                    WHERE e.type = 'text' AND LOWER(TRIM(e.value)) IN (${emailMarks}))`
+    : sql`0`;
+  return sql`SELECT ec.external_record_id, ec.source, ec.name, ec.emails_json, ec.phones_json, ec.external_uuid
+       FROM external_contacts ec
+      WHERE ec.user_id = ? AND ec.external_record_id IS NOT NULL
+        AND (${phoneArm} OR ${emailArm})
+      ORDER BY ec.source, ec.external_record_id`;
+};

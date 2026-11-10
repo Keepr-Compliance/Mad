@@ -151,6 +151,56 @@ The design system also ships `Badge`, `Table`, `Modal`, `PageHeader`,
 `Spinner`, `SearchInput`, and Button variants `dangerOutline` / `success` /
 `warning`. Those are out of scope for the Tier-1 seed; add in later waves.
 
+## Chart kit (BACKLOG-4208)
+
+Static SVG bar charts in `src/components/chart/`, exported from the package
+root. Geometry is ported from the admin report charts (iPhone Sync,
+Submissions, Exports), so a chart drawn with the kit matches today's pixels.
+
+**Static by design.** A fixed `viewBox="0 0 600 200"` at `width="100%"`. No
+chart library, no `ResizeObserver`, no `useLayoutEffect`: the chart is computed
+from the data alone, so `renderToStaticMarkup` produces the whole chart and a
+test can assert on the markup. `purity.test.ts` enforces this.
+
+```tsx
+<ChartFrame title="Failed syncs per day" legend={<Legend series={series} />}>
+  <BarChart
+    mode="stacked"
+    chartId="failures"
+    title="Failed syncs per day"
+    desc="Errors and cancels, stacked."
+    data={[{ key: '2026-09-14', label: 'Sep 14', values: { errors: 5, cancelled: 3 } }]}
+    series={[
+      { key: 'errors', label: 'error', color: CHART_2.value },
+      { key: 'cancelled', label: 'cancelled', color: CHART_3.value },
+    ]}
+  />
+</ChartFrame>
+```
+
+| Export | What it is |
+|---|---|
+| `BarChart` | `mode`: `single` (first series), `stacked` (series bottom-up, 2px apart, the gap taken from the upper segment), `nested` (second series as a half-width bar inside the first). Props: `data` (`{ key, label, values }`, values keyed by series key), `series` (`{ key, label, color? }`), `title`, `desc`, `chartId`, `formatValue`, `formatTick`, `tooltipLines`, `showValueLabels` (default on; hidden on bars under 14px), `categoryHeader`. |
+| `GridLines` | Three lines at 0, half and max, keyed by index (at max 0 all three values are 0). Tick text is blank at max 0. |
+| `CategoryAxis` | Category labels; every label up to 14, then every ceil(n/7)-th plus the first and last. |
+| `ChartFrame`, `Legend`, `LegendSwatch` | The card around a chart; one swatch per series. |
+| `ChartTooltip` | The fixed box that follows the pointer over a column. |
+| `ChartDataTable` | The chart's numbers as an `sr-only` table (one row per category). `BarChart` renders it. |
+| `scale.ts` exports | `barLayout`, `barHeight`, `roundedTopBarPath`, `stackSegments`, `gridValues`, `thinLabels`, `maxOf` and the geometry constants. |
+| `palette.ts` exports | `CHART_1`..`CHART_4` (`--chart-1`..`--chart-4`: `#2a78d6`, `#d03b3b`, `#f59e0b`, `#1e3a8a`), `seriesColor(i)`. Fills are `var(--chart-N, #hex)`, so a page without `theme.css` still gets the colour. |
+
+**Rules a consumer can rely on**
+
+- `null` means **no bar**, and the column still exists. When every value is
+  zero, null or absent (max 0) no bar is drawn at all and nothing in the
+  markup is `NaN` or `Infinity`.
+- Every category gets a full-height hit rect carrying `data-day={key}`, empty
+  ones included. Single and nested bars carry `data-value`; every bar and
+  segment carries `data-series`; stacked segments carry no `data-value`.
+  `chartId` becomes `data-chart` on the `<svg>`.
+- Accessibility: `role="img"`, `aria-labelledby` pointing at the SVG `<title>`
+  and `<desc>` (ids from `useId`, unique per chart), plus the `sr-only` table.
+
 ## Dropdown (BACKLOG-4032)
 
 Searchable single-choice picker. Built on an inline popover (a `relative`

@@ -204,6 +204,7 @@ jest.mock("../contactLinkingScheduler", () => ({
   configureContactLinking: jest.fn(),
   requestContactLinking: jest.fn(),
   runContactLinkingNow: jest.fn(),
+  runContactLinkingScopedNow: jest.fn(),
 }));
 jest.mock("../db/contactSourceLinkDbService", () => ({
   __esModule: true,

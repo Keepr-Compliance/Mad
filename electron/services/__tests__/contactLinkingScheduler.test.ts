@@ -40,6 +40,7 @@ import {
   releaseContactLinking,
   requestContactLinking,
   runContactLinkingNow,
+  runContactLinkingScopedNow,
 } from "../contactLinkingScheduler";
 
 const USER = "user-a";
@@ -358,5 +359,221 @@ describe("cancellation", () => {
     jest.advanceTimersByTime(QUIET_PERIOD_MS);
     expect(runs).toEqual([]);
     expect(jest.getTimerCount()).toBe(0);
+  });
+});
+
+/**
+ * BACKLOG-4180 C6 — the import-scoped pass honours the hold, and does not drop
+ * the pending coalesced pass a sync is owed.
+ */
+describe("BACKLOG-4180 import-scoped", () => {
+  let scoped: Array<[string, string[]]>;
+
+  function configureScoped(): void {
+    scoped = [];
+    configureContactLinking({
+      run: (userId: string) => {
+        runs.push(userId);
+      },
+      runScoped: (userId: string, ids: readonly string[]) => {
+        scoped.push([userId, [...ids]]);
+      },
+      notify: (userId: string) => {
+        notified.push(userId);
+      },
+    });
+  }
+
+  it("runs the scoped pass with the ids, notifies, and runs no full pass", async () => {
+    configureScoped();
+    await runContactLinkingScopedNow(USER, ["c-1", "c-2"]);
+    expect(scoped).toEqual([[USER, ["c-1", "c-2"]]]);
+    expect(runs).toEqual([]);
+    expect(notified).toEqual([USER]);
+  });
+
+  it("held: runs nothing now; the release arms a FULL pass", async () => {
+    configureScoped();
+    holdContactLinking(USER);
+    await runContactLinkingScopedNow(USER, ["c-1"]);
+    expect(scoped).toEqual([]);
+    expect(runs).toEqual([]);
+    releaseContactLinking(USER);
+    jest.advanceTimersByTime(QUIET_PERIOD_MS);
+    await Promise.resolve();
+    expect(runs).toEqual([USER]);
+    expect(scoped).toEqual([]);
+  });
+
+  it("does NOT cancel a pending coalesced pass owed to a sync", async () => {
+    configureScoped();
+    requestContactLinking(USER);
+    await runContactLinkingScopedNow(USER, ["c-1"]);
+    expect(__hasPendingContactLinking(USER)).toBe(true);
+    jest.advanceTimersByTime(QUIET_PERIOD_MS);
+    await Promise.resolve();
+    expect(runs).toEqual([USER]);
+  });
+
+  it("a throwing scoped pass never escapes and still notifies", async () => {
+    scoped = [];
+    configureContactLinking({
+      run: () => undefined,
+      runScoped: () => {
+        throw new Error("boom");
+      },
+      notify: (userId: string) => {
+        notified.push(userId);
+      },
+    });
+    await expect(runContactLinkingScopedNow(USER, ["c-1"])).resolves.toBeUndefined();
+    expect(notified).toEqual([USER]);
+  });
+});
+
+/**
+ * BACKLOG-4180 (security review): the scoped import pass never runs alongside
+ * a pass already in flight for the same user. Break caught: calling
+ * `runScoped` without waiting on the in-flight pass.
+ */
+describe("BACKLOG-4180 import-scoped vs an in-flight pass", () => {
+  it("waits for the in-flight full pass, then runs", async () => {
+    jest.useRealTimers();
+    const events: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    configureContactLinking({
+      run: async () => {
+        events.push("full:start");
+        await gate;
+        events.push("full:end");
+      },
+      runScoped: () => {
+        events.push("scoped");
+      },
+    });
+
+    const full = runContactLinkingNow(USER);
+    await Promise.resolve();
+    expect(events).toEqual(["full:start"]);
+
+    const scopedRun = runContactLinkingScopedNow(USER, ["c-1"]);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(events).toEqual(["full:start"]); // NOT concurrent
+
+    release();
+    await full;
+    await scopedRun;
+    expect(events).toEqual(["full:start", "full:end", "scoped"]);
+  });
+
+  it("a full pass requested during a scoped pass is deferred, then re-armed", async () => {
+    jest.useRealTimers();
+    const events: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    configureContactLinking({
+      run: () => {
+        events.push("full");
+      },
+      runScoped: async () => {
+        events.push("scoped:start");
+        await gate;
+        events.push("scoped:end");
+      },
+    });
+
+    const scopedRun = runContactLinkingScopedNow(USER, ["c-1"]);
+    await Promise.resolve();
+    const full = runContactLinkingNow(USER);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(events).toEqual(["scoped:start"]); // NOT concurrent
+    release();
+    await scopedRun;
+    await full;
+    expect(events).toEqual(["scoped:start", "scoped:end"]);
+    expect(__hasPendingContactLinking(USER)).toBe(true); // re-armed, owed
+  });
+});
+
+/**
+ * BACKLOG-4180 (SR review) — pins `runContactLinkingScopedNow`'s wait.
+ * G1 breaks: waiting once instead of looping. G2 breaks: checking the hold only
+ * before the wait.
+ */
+describe("BACKLOG-4180 import-scoped wait (G1, G2)", () => {
+  it("G1: two scoped imports waiting on one full pass never run concurrently", async () => {
+    jest.useRealTimers();
+    const events: string[] = [];
+    let releaseFull!: () => void;
+    const fullGate = new Promise<void>((r) => (releaseFull = r));
+    let releaseScoped!: () => void;
+    const scopedGate = new Promise<void>((r) => (releaseScoped = r));
+    let active = 0;
+    let maxActive = 0;
+    configureContactLinking({
+      run: async () => {
+        events.push("full:start");
+        await fullGate;
+        events.push("full:end");
+      },
+      runScoped: async (_u: string, ids: readonly string[]) => {
+        active++;
+        maxActive = Math.max(maxActive, active);
+        events.push(`scoped:start:${ids[0]}`);
+        await scopedGate;
+        events.push(`scoped:end:${ids[0]}`);
+        active--;
+      },
+    });
+
+    const full = runContactLinkingNow(USER);
+    await Promise.resolve();
+    const a = runContactLinkingScopedNow(USER, ["c-1"]);
+    const b = runContactLinkingScopedNow(USER, ["c-2"]);
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(events).toEqual(["full:start"]);
+
+    releaseFull();
+    await full;
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    // Exactly one scoped pass started; the other is still waiting on it.
+    expect(events.filter((e) => e.startsWith("scoped:start"))).toHaveLength(1);
+    expect(maxActive).toBe(1);
+
+    releaseScoped();
+    await a;
+    await b;
+    expect(events.filter((e) => e.startsWith("scoped:start"))).toHaveLength(2);
+    expect(maxActive).toBe(1);
+  });
+
+  it("G2: a hold taken while the import waits stops it from running", async () => {
+    jest.useRealTimers();
+    const scoped: string[] = [];
+    let releaseFull!: () => void;
+    const fullGate = new Promise<void>((r) => (releaseFull = r));
+    configureContactLinking({
+      run: async () => {
+        await fullGate;
+      },
+      runScoped: (_u: string, ids: readonly string[]) => {
+        scoped.push(ids[0]);
+      },
+    });
+
+    const full = runContactLinkingNow(USER);
+    await Promise.resolve();
+    const waiting = runContactLinkingScopedNow(USER, ["c-1"]); // no hold yet
+    for (let i = 0; i < 3; i++) await Promise.resolve();
+
+    holdContactLinking(USER); // taken AFTER the import started waiting
+    releaseFull();
+    await full;
+    await waiting;
+    expect(scoped).toEqual([]); // held: not run; a full pass is owed instead
+
+    releaseContactLinking(USER);
+    expect(__hasPendingContactLinking(USER)).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-import { getAuthenticatedUser } from '@/lib/supabase/server';
+import { createServiceClient, getAuthenticatedUser } from '@/lib/supabase/server';
 import { redirect, notFound } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Building2, CreditCard } from 'lucide-react';
@@ -57,6 +57,10 @@ export default async function PlanDetailPage({
     required_permission: 'plans.manage',
   });
 
+  // BACKLOG-4145: the organizations embed is read through the service client, created only
+  // after the plans.view check above.
+  const serviceSupabase = createServiceClient();
+
   // Fetch plan, plan features, all feature definitions, dependencies, and orgs using this plan in parallel
   const [planResult, planFeaturesResult, allFeaturesResult, depsResult, orgsOnPlanResult] = await Promise.all([
     supabase.from('plans').select('*').eq('id', id).single(),
@@ -66,7 +70,7 @@ export default async function PlanDetailPage({
       .eq('plan_id', id),
     supabase.from('feature_definitions').select('*').order('category').order('name'),
     supabase.from('feature_dependencies').select('feature_key, depends_on_key'),
-    supabase
+    serviceSupabase
       .from('organization_plans')
       .select('organization_id, assigned_at, organizations(id, name)')
       .eq('plan_id', id)

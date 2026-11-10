@@ -6,6 +6,8 @@ import logger from '../../utils/logger';
 import { safeErrorMessage } from '../../utils/formatUtils';
 import { InfoTooltip } from '../common/InfoTooltip';
 import { isStoreBuild } from '../../utils/platform';
+import { ToggleSwitch } from './ToggleSwitch';
+import { notifyShowTodoChanged, showTodoFromPreferences } from '../dashboard/panels/todoPanelPreference';
 import type { PreferencesResult } from './types';
 
 /** BACKLOG-3927: Settings text in the Microsoft Store build. */
@@ -54,6 +56,8 @@ export function GeneralSettings({ userId, initialPreferences }: GeneralSettingsP
     const val = initialPreferences?.contactAutoRole?.enabled;
     return typeof val === "boolean" ? val : false;
   });
+  // BACKLOG-4220: default off (founder, 2026-11-10).
+  const [showTodo, setShowTodo] = useState<boolean>(() => showTodoFromPreferences(initialPreferences));
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'up-to-date' | 'available' | 'error'>('idle');
   const [updateVersion, setUpdateVersion] = useState<string>('');
 
@@ -121,6 +125,16 @@ export function GeneralSettings({ userId, initialPreferences }: GeneralSettingsP
       await settingsService.updatePreferences(userId, { export: { emailExportMode: mode } });
     } catch (err) {
       logger.error("Failed to save email export mode preference:", err);
+    }
+  };
+
+  const handleShowTodoChange = async (newValue: boolean): Promise<void> => {
+    setShowTodo(newValue);
+    notifyShowTodoChanged(newValue);
+    const result = await settingsService.updatePreferences(userId, { dashboard: { showTodo: newValue } });
+    if (!result.success) {
+      setShowTodo(!newValue);
+      notifyShowTodoChanged(!newValue);
     }
   };
 
@@ -311,6 +325,25 @@ export function GeneralSettings({ userId, initialPreferences }: GeneralSettingsP
               }`}
             />
           </button>
+        </div>
+
+        {/* Show to-do list on the dashboard (BACKLOG-4220) */}
+        <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
+          <div className="flex-1">
+            <h4 className="text-sm font-medium text-gray-900">
+              Show to-do list on the dashboard
+            </h4>
+            <p className="text-xs text-gray-600 mt-1">
+              When off, Recent uses the full width
+            </p>
+          </div>
+          <ToggleSwitch
+            className="ml-4"
+            checked={showTodo}
+            onChange={(next) => void handleShowTodoChange(next)}
+            ariaLabel="Show to-do list on the dashboard"
+            testId="settings-show-todo-toggle"
+          />
         </div>
 
         {/* Export Settings — matching ExportModal UI */}
