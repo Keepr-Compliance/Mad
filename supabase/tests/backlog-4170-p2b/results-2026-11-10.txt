@@ -1,0 +1,230 @@
+BACKLOG-4170 PR2b harness results, keepr-test, 2026-11-10. Details: pm_comments on BACKLOG-4170.
+int base int-portal/admin-functions-248 @ 6ef44480d; migration commit 9d88ba648.
+migration file md5 abc68fa182ac5b30d470d46754d98264; rollback file md5 1efbf5a1679db4b167bf365fd0cc2009
+
+State per signature: production md5(prosrc) -> this file's md5 (production and keepr-test identical before
+PR2b: md5(prosrc), proacl, proconfig, provolatile). EXECUTE holders unchanged on all 9: PUBLIC anon authenticated service_role.
+  support_add_message/5                  e3e727b1bfe3b691d9dfabf42cfbd1f3 -> 9d9cb01bb5a1fed81f584aa6f268118c
+  support_get_ticket_detail/2            b928028c9f9593a1f93969f4b8369cf7 -> fd14d57fe2cbd29a39a6e1af7b75e23f
+  support_list_tickets/10                5766828b06209e1eea2bddbe9b2fde50 -> 6220590c8de1afd36c0f03152c3e7d92
+  support_add_attachment/6               aa3a50264023fc32fee00d6d4143fc45 -> 25d8804822f9512df1ab5b37341a36a7
+  support_add_diagnostic_attachment/6    a297e2cf5e4d12477635396471a394b5 -> 5d1cd82cfbe147bafb45ebdf41ff0e13
+  support_delete_own_attachment/1        2b572da7a34406c679369645cb11eb4f -> 7ecbe698370302a1659f11a43606de51
+  support_list_attachments/1             38d3854b45e5280ceb12e1bdc92e273f -> 48d9e3f2c8a85e760b47a2448dd8fae0
+  support_list_events/1                  c1d3c37c7eccf1ef9fc87e584f5cce97 -> 269465224f282e27485b37fa0f2830e0
+  support_record_attachment_access/1     6dd6d0b646e5787ef3bf65e6d19848ef -> a1c89e345b3dbccc6d61a50bfc74b84f
+
+== run.sh (one transaction ending in RAISE; payload_md5 = md5 of a caller's 34 replies, before vs after, same fixtures)
+{
+ "fail": 0,
+ "pass": 427,
+ "reds": {},
+ "total": 427,
+ "payload_md5": {
+  "u0": {
+   "after": "d16979ff76168dca1c760d76c6a22111",
+   "equal": false,
+   "before": "9514a5243c0f9d735cc550959a68566d"
+  },
+  "anon": {
+   "after": "89522f10efc56df6bacf91785611523d",
+   "equal": true,
+   "before": "89522f10efc56df6bacf91785611523d"
+  },
+  "u_sa": {
+   "after": "9c16b237577bfefc30362c45b8f0b833",
+   "equal": true,
+   "before": "9c16b237577bfefc30362c45b8f0b833"
+  },
+  "u_cust": {
+   "after": "50290e0c09cc8f8d3cc6a64ae4fc4c98",
+   "equal": true,
+   "before": "50290e0c09cc8f8d3cc6a64ae4fc4c98"
+  },
+  "u_nullsub": {
+   "after": "89522f10efc56df6bacf91785611523d",
+   "equal": true,
+   "before": "89522f10efc56df6bacf91785611523d"
+  },
+  "u_view+manage": {
+   "after": "5a39d2e79b8f6ff9c3cd14aeecf37f69",
+   "equal": true,
+   "before": "5a39d2e79b8f6ff9c3cd14aeecf37f69"
+  },
+  "u_support.view": {
+   "after": "8a2ac0a6f4f99af9db1d5c66f8ce025a",
+   "equal": false,
+   "before": "c7be4879ecb3edcc9abe5bf2884948ef"
+  },
+  "u_support.admin": {
+   "after": "e5cad853536e870a26230fcfad7f53d3",
+   "equal": false,
+   "before": "6ece719183e0bab98f249805511f8662"
+  },
+  "u_support.manage": {
+   "after": "23dbbfa48c37d1875628e2cd24f127a0",
+   "equal": false,
+   "before": "e3390d1779ea41f8959c85b6784a41c5"
+  },
+  "u_other_users.view": {
+   "after": "d0e2b046309f54794a51e33924cfce76",
+   "equal": false,
+   "before": "be4ed40356d3a1aab3e9c332c71c4d5f"
+  }
+ }
+}
+
+== mutate.py all (each: MUTATION APPLIED, changed lines, run, restore)
+== IS_AGENT_kept_add_message
+MUTATION APPLIED numstat=2/2
+  - ('public.support_add_message(uuid,text,text,text,text)', 'e3e727b1bfe3b691d9dfabf42cfbd1f3', '9d9cb01bb5a1fed81f584aa6f268118c'),
+  + ('public.support_add_message(uuid,text,text,text,text)', 'e3e727b1bfe3b691d9dfabf42cfbd1f3', 'e3e727b1bfe3b691d9dfabf42cfbd1f3'),
+  - v_is_agent := public.has_permission(auth.uid(), 'support.view');
+  + v_is_agent := EXISTS (SELECT 1 FROM internal_roles WHERE user_id = auth.uid());
+RESULT total=427 pass=397 fail=30
+REDS D_u0_add_note_refused,D_u0_refused_m_other_note,D_u0_reply_reopens_as_requester,D_u_other_users.view_refused_m_other_note,D_u_support.admin_alone_is_requester,D_u_support.manage_alone_is_requester,K1_internal_0_of_9_helper_9_of_9,K1_key_support_add_message/5,K3_bodies_differ_from_prod,K5_only_line_changed_support_add_message/5,M_u0_m_by_email_reply,M_u0_m_cust_email_reply,M_u0_m_other_note,M_u0_m_u0_note,M_u0_m_u0_reply,M_u_other_users.view_m_by_email_reply,M_u_other_users.view_m_cust_email_reply,M_u_other_users.view_m_other_note,M_u_other_users.view_m_u0_note,M_u_other_users.view_m_u0_reply,M_u_support.admin_m_by_email_reply,M_u_support.admin_m_cust_email_reply,M_u_support.admin_m_other_note,M_u_support.admin_m_u0_note,M_u_support.admin_m_u0_reply,M_u_support.manage_m_by_email_reply,M_u_support.manage_m_cust_email_reply,M_u_support.manage_m_other_note,M_u_support.manage_m_u0_note,M_u_support.manage_m_u0_reply
+RESTORED clean=True
+== IS_AGENT_kept_get_ticket_detail
+MUTATION APPLIED numstat=2/2
+  - ('public.support_get_ticket_detail(uuid,text)', 'b928028c9f9593a1f93969f4b8369cf7', 'fd14d57fe2cbd29a39a6e1af7b75e23f'),
+  + ('public.support_get_ticket_detail(uuid,text)', 'b928028c9f9593a1f93969f4b8369cf7', 'b928028c9f9593a1f93969f4b8369cf7'),
+  - v_is_agent := public.has_permission(v_caller_id, 'support.view');
+  + v_is_agent := EXISTS (SELECT 1 FROM internal_roles WHERE user_id = v_caller_id);
+RESULT total=427 pass=394 fail=33
+REDS D_u0_own_ticket_no_note,D_u0_refused_d_other,D_u_other_users.view_refused_d_other,D_u_support.admin_alone_is_requester,D_u_support.manage_alone_is_requester,K1_internal_0_of_9_helper_9_of_9,K1_key_support_get_ticket_detail/2,K3_bodies_differ_from_prod,K5_only_line_changed_support_get_ticket_detail/2,M_u0_d_bad_email,M_u0_d_by_email,M_u0_d_cust,M_u0_d_cust_email,M_u0_d_other,M_u0_d_u0,M_u_other_users.view_d_bad_email,M_u_other_users.view_d_by_email,M_u_other_users.view_d_cust,M_u_other_users.view_d_cust_email,M_u_other_users.view_d_other,M_u_other_users.view_d_u0,M_u_support.admin_d_bad_email,M_u_support.admin_d_by_email,M_u_support.admin_d_cust,M_u_support.admin_d_cust_email,M_u_support.admin_d_other,M_u_support.admin_d_u0,M_u_support.manage_d_bad_email,M_u_support.manage_d_by_email,M_u_support.manage_d_cust,M_u_support.manage_d_cust_email,M_u_support.manage_d_other,M_u_support.manage_d_u0
+RESTORED clean=True
+== IS_AGENT_kept_list_tickets
+MUTATION APPLIED numstat=2/2
+  - ('public.support_list_tickets(text,text,uuid,uuid,text,text,integer,integer,text,text)', '5766828b06209e1eea2bddbe9b2fde50', '6220590c8de1afd36c0f03152c3e7d92')
+  + ('public.support_list_tickets(text,text,uuid,uuid,text,text,integer,integer,text,text)', '5766828b06209e1eea2bddbe9b2fde50', '5766828b06209e1eea2bddbe9b2fde50')
+  - v_is_agent := public.has_permission(v_caller_id, 'support.view');
+  + v_is_agent := EXISTS (SELECT 1 FROM internal_roles WHERE user_id = v_caller_id);
+RESULT total=427 pass=406 fail=21
+REDS D_other_users.view_lists_nothing,D_u0_list_own_only,D_u0_search_note_0,D_u_support.admin_alone_is_requester,D_u_support.manage_alone_is_requester,K1_internal_0_of_9_helper_9_of_9,K1_key_support_list_tickets/10,K3_bodies_differ_from_prod,K5_only_line_changed_support_list_tickets/10,M_u0_l_email,M_u0_l_note,M_u0_l_subj,M_u_other_users.view_l_email,M_u_other_users.view_l_note,M_u_other_users.view_l_subj,M_u_support.admin_l_email,M_u_support.admin_l_note,M_u_support.admin_l_subj,M_u_support.manage_l_email,M_u_support.manage_l_note,M_u_support.manage_l_subj
+RESTORED clean=True
+== IS_AGENT_kept_list_attachments
+MUTATION APPLIED numstat=4/2
+  - ('public.support_list_attachments(uuid)', '38d3854b45e5280ceb12e1bdc92e273f', '48d9e3f2c8a85e760b47a2448dd8fae0'),
+  + ('public.support_list_attachments(uuid)', '38d3854b45e5280ceb12e1bdc92e273f', '38d3854b45e5280ceb12e1bdc92e273f'),
+  - v_is_internal := public.has_permission(v_caller, 'support.view');
+  + v_is_internal := EXISTS (
+  + SELECT 1 FROM internal_roles ir WHERE ir.user_id = v_caller
+  + );
+RESULT total=427 pass=406 fail=21
+REDS D_u0_attachments_own_no_note,D_u0_refused_la_other,D_u_other_users.view_refused_la_other,D_u_support.admin_alone_is_requester,D_u_support.manage_alone_is_requester,K1_internal_0_of_9_helper_9_of_9,K1_key_support_list_attachments/1,K3_bodies_differ_from_prod,K5_only_line_changed_support_list_attachments/1,M_u0_la_cust,M_u0_la_other,M_u0_la_u0,M_u_other_users.view_la_cust,M_u_other_users.view_la_other,M_u_other_users.view_la_u0,M_u_support.admin_la_cust,M_u_support.admin_la_other,M_u_support.admin_la_u0,M_u_support.manage_la_cust,M_u_support.manage_la_other,M_u_support.manage_la_u0
+RESTORED clean=True
+== IS_AGENT_kept_list_events
+MUTATION APPLIED numstat=4/2
+  - ('public.support_list_events(uuid)', 'c1d3c37c7eccf1ef9fc87e584f5cce97', '269465224f282e27485b37fa0f2830e0'),
+  + ('public.support_list_events(uuid)', 'c1d3c37c7eccf1ef9fc87e584f5cce97', 'c1d3c37c7eccf1ef9fc87e584f5cce97'),
+  - v_is_internal := public.has_permission(v_caller, 'support.view');
+  + v_is_internal := EXISTS (
+  + SELECT 1 FROM internal_roles ir WHERE ir.user_id = v_caller
+  + );
+RESULT total=427 pass=410 fail=17
+REDS D_u0_refused_le_other,D_u_other_users.view_refused_le_other,K1_internal_0_of_9_helper_9_of_9,K1_key_support_list_events/1,K3_bodies_differ_from_prod,K5_only_line_changed_support_list_events/1,M_u0_le_cust,M_u0_le_other,M_u_other_users.view_le_cust,M_u_other_users.view_le_other,M_u_other_users.view_le_u0,M_u_support.admin_le_cust,M_u_support.admin_le_other,M_u_support.admin_le_u0,M_u_support.manage_le_cust,M_u_support.manage_le_other,M_u_support.manage_le_u0
+RESTORED clean=True
+== IS_AGENT_kept_record_attachment_access
+MUTATION APPLIED numstat=2/2
+  - ('public.support_record_attachment_access(uuid)', '6dd6d0b646e5787ef3bf65e6d19848ef', 'a1c89e345b3dbccc6d61a50bfc74b84f')
+  + ('public.support_record_attachment_access(uuid)', '6dd6d0b646e5787ef3bf65e6d19848ef', '6dd6d0b646e5787ef3bf65e6d19848ef')
+  - v_is_internal := public.has_permission(v_caller, 'support.view');
+  + v_is_internal := EXISTS (SELECT 1 FROM internal_roles ir WHERE ir.user_id = v_caller);
+RESULT total=427 pass=408 fail=19
+REDS D_u0_read_logged_as_requester,D_u0_refused_r_other,D_u_other_users.view_refused_r_other,K1_internal_0_of_9_helper_9_of_9,K1_key_support_record_attachment_access/1,K3_bodies_differ_from_prod,K5_only_line_changed_support_record_attachment_access/1,M_u0_r_cust,M_u0_r_other,M_u0_r_u0,M_u_other_users.view_r_cust,M_u_other_users.view_r_other,M_u_other_users.view_r_u0,M_u_support.admin_r_cust,M_u_support.admin_r_other,M_u_support.admin_r_u0,M_u_support.manage_r_cust,M_u_support.manage_r_other,M_u_support.manage_r_u0
+RESTORED clean=True
+== INLINE_left_add_attachment
+MUTATION APPLIED numstat=2/2
+  - ('public.support_add_attachment(uuid,uuid,text,bigint,text,text)', 'aa3a50264023fc32fee00d6d4143fc45', '25d8804822f9512df1ab5b37341a36a7'),
+  + ('public.support_add_attachment(uuid,uuid,text,bigint,text,text)', 'aa3a50264023fc32fee00d6d4143fc45', 'aa3a50264023fc32fee00d6d4143fc45'),
+  - OR public.has_permission(v_uploader_id, 'support.view')
+  + OR EXISTS (SELECT 1 FROM internal_roles ir WHERE ir.user_id = v_uploader_id)
+RESULT total=427 pass=410 fail=17
+REDS D_u0_refused_a_other,D_u_other_users.view_refused_a_other,K1_internal_0_of_9_helper_9_of_9,K1_key_support_add_attachment/6,K3_bodies_differ_from_prod,K5_only_line_changed_support_add_attachment/6,M_u0_a_cust,M_u0_a_other,M_u_other_users.view_a_cust,M_u_other_users.view_a_other,M_u_other_users.view_a_u0,M_u_support.admin_a_cust,M_u_support.admin_a_other,M_u_support.admin_a_u0,M_u_support.manage_a_cust,M_u_support.manage_a_other,M_u_support.manage_a_u0
+RESTORED clean=True
+== INLINE_left_add_diagnostic_attachment
+MUTATION APPLIED numstat=2/2
+  - ('public.support_add_diagnostic_attachment(uuid,text,bigint,text,text,integer)', 'a297e2cf5e4d12477635396471a394b5', '5d1cd82cfbe147bafb45ebdf41ff0e13'),
+  + ('public.support_add_diagnostic_attachment(uuid,text,bigint,text,text,integer)', 'a297e2cf5e4d12477635396471a394b5', 'a297e2cf5e4d12477635396471a394b5'),
+  - OR public.has_permission(v_caller, 'support.view')
+  + OR EXISTS (SELECT 1 FROM internal_roles ir WHERE ir.user_id = v_caller)
+RESULT total=427 pass=410 fail=17
+REDS D_u0_refused_g_other,D_u_other_users.view_refused_g_other,K1_internal_0_of_9_helper_9_of_9,K1_key_support_add_diagnostic_attachment/6,K3_bodies_differ_from_prod,K5_only_line_changed_support_add_diagnostic_attachment/6,M_u0_g_cust,M_u0_g_other,M_u_other_users.view_g_cust,M_u_other_users.view_g_other,M_u_other_users.view_g_u0,M_u_support.admin_g_cust,M_u_support.admin_g_other,M_u_support.admin_g_u0,M_u_support.manage_g_cust,M_u_support.manage_g_other,M_u_support.manage_g_u0
+RESTORED clean=True
+== INLINE_left_delete_own_attachment
+MUTATION APPLIED numstat=2/2
+  - ('public.support_delete_own_attachment(uuid)', '2b572da7a34406c679369645cb11eb4f', '7ecbe698370302a1659f11a43606de51'),
+  + ('public.support_delete_own_attachment(uuid)', '2b572da7a34406c679369645cb11eb4f', '2b572da7a34406c679369645cb11eb4f'),
+  - OR public.has_any_permission(v_caller, ARRAY['support.manage', 'support.admin'])
+  + OR EXISTS (SELECT 1 FROM internal_roles ir WHERE ir.user_id = v_caller)
+RESULT total=427 pass=411 fail=16
+REDS B0_support.view_only_delete_differs,D_u0_refused_x_other,D_u_other_users.view_refused_x_other,D_view_delete_other_refused,K1_internal_0_of_9_helper_9_of_9,K1_key_support_delete_own_attachment/1,K3_bodies_differ_from_prod,K5_only_line_changed_support_delete_own_attachment/1,M_u0_x_cust,M_u0_x_other,M_u_other_users.view_x_cust,M_u_other_users.view_x_other,M_u_other_users.view_x_u0,M_u_support.view_x_cust,M_u_support.view_x_other,M_u_support.view_x_u0
+RESTORED clean=True
+== RAISE_non_agent
+MUTATION APPLIED numstat=2/2
+  - ('public.support_add_attachment(uuid,uuid,text,bigint,text,text)', 'aa3a50264023fc32fee00d6d4143fc45', '25d8804822f9512df1ab5b37341a36a7'),
+  + ('public.support_add_attachment(uuid,uuid,text,bigint,text,text)', 'aa3a50264023fc32fee00d6d4143fc45', 'd1cb04ba4f2c358b5ccb697850b5102c'),
+  - support_is_ticket_requester(p_ticket_id::text)
+  + false
+RESULT total=427 pass=423 fail=4
+REDS B0_u_cust_unchanged_34,K5_only_line_changed_support_add_attachment/6,M_u0_a_u0,M_u_cust_a_cust
+RESTORED clean=True
+== REQUESTER_branch_changed
+MUTATION APPLIED numstat=2/2
+  - ('public.support_get_ticket_detail(uuid,text)', 'b928028c9f9593a1f93969f4b8369cf7', 'fd14d57fe2cbd29a39a6e1af7b75e23f'),
+  + ('public.support_get_ticket_detail(uuid,text)', 'b928028c9f9593a1f93969f4b8369cf7', 'a893aeda86911f72c50cb931980ec939'),
+  - AND (requester_id = v_caller_id OR requester_email = (SELECT email FROM auth.users WHERE id = v_caller_id))
+  + AND requester_id = v_caller_id
+RESULT total=427 pass=423 fail=4
+REDS B0_u_cust_unchanged_34,D_cust_reads_email_only_ticket,K5_only_line_changed_support_get_ticket_detail/2,M_u_cust_d_cust_email
+RESTORED clean=True
+== REQUESTER_list_changed
+MUTATION APPLIED numstat=3/3
+  - ('public.support_list_tickets(text,text,uuid,uuid,text,text,integer,integer,text,text)', '5766828b06209e1eea2bddbe9b2fde50', '6220590c8de1afd36c0f03152c3e7d92')
+  + ('public.support_list_tickets(text,text,uuid,uuid,text,text,integer,integer,text,text)', '5766828b06209e1eea2bddbe9b2fde50', '1ae49de0c025a160b7f230438c9f0c2e')
+  - OR (t.requester_id = v_caller_id OR t.requester_email = v_caller_email)
+  + OR t.requester_id = v_caller_id
+  - OR (t.requester_id = v_caller_id OR t.requester_email = v_caller_email)
+  + OR t.requester_id = v_caller_id
+RESULT total=427 pass=423 fail=4
+REDS B0_u_cust_unchanged_34,D_cust_reads_email_only_ticket,K5_only_line_changed_support_list_tickets/10,M_u_cust_l_subj
+RESTORED clean=True
+== REQUESTER_anon_changed
+MUTATION APPLIED numstat=2/2
+  - ('public.support_get_ticket_detail(uuid,text)', 'b928028c9f9593a1f93969f4b8369cf7', 'fd14d57fe2cbd29a39a6e1af7b75e23f'),
+  + ('public.support_get_ticket_detail(uuid,text)', 'b928028c9f9593a1f93969f4b8369cf7', 'c6e30e8ad50adb3c642b95d633022968'),
+  - AND requester_email = p_requester_email
+  + AND p_requester_email IS NOT NULL
+RESULT total=427 pass=421 fail=6
+REDS B0_anon_unchanged_34,B0_u_nullsub_unchanged_34,D_anon_bad_email_denied,K5_only_line_changed_support_get_ticket_detail/2,M_anon_d_bad_email,M_u_nullsub_d_bad_email
+RESTORED clean=True
+== DELETE_override_view
+MUTATION APPLIED numstat=2/2
+  - ('public.support_delete_own_attachment(uuid)', '2b572da7a34406c679369645cb11eb4f', '7ecbe698370302a1659f11a43606de51'),
+  + ('public.support_delete_own_attachment(uuid)', '2b572da7a34406c679369645cb11eb4f', 'a42091bcc30d898161e7b19ec0e9331e'),
+  - OR public.has_any_permission(v_caller, ARRAY['support.manage', 'support.admin'])
+  + OR public.has_permission(v_caller, 'support.view')
+RESULT total=427 pass=412 fail=15
+REDS B0_support.view_only_delete_differs,D_u_support.admin_delete_other_allowed,D_u_support.manage_delete_other_allowed,D_view_delete_other_refused,K1_key_support_delete_own_attachment/1,K5_only_line_changed_support_delete_own_attachment/1,M_u_support.admin_x_cust,M_u_support.admin_x_other,M_u_support.admin_x_u0,M_u_support.manage_x_cust,M_u_support.manage_x_other,M_u_support.manage_x_u0,M_u_support.view_x_cust,M_u_support.view_x_other,M_u_support.view_x_u0
+RESTORED clean=True
+== GRANT_changed
+MUTATION APPLIED numstat=1/0
+  + REVOKE EXECUTE ON FUNCTION public.support_list_events(uuid) FROM PUBLIC, anon;
+RESULT total=427 pass=421 fail=6
+REDS B0_anon_unchanged_34,D_anon_list_attachments_events_empty,K2_grants_unchanged_support_list_events/1,M_anon_le_cust,M_anon_le_other,M_anon_le_u0
+RESTORED clean=True
+== REFUSAL_text_changed
+MUTATION APPLIED numstat=2/2
+  - ('public.support_add_message(uuid,text,text,text,text)', 'e3e727b1bfe3b691d9dfabf42cfbd1f3', '9d9cb01bb5a1fed81f584aa6f268118c'),
+  + ('public.support_add_message(uuid,text,text,text,text)', 'e3e727b1bfe3b691d9dfabf42cfbd1f3', '31d18537737ccd9cbf0c3fdfd154ffbe'),
+  - RAISE EXCEPTION 'Only agents can add internal notes';
+  + RAISE EXCEPTION 'support.view required to add internal notes';
+RESULT total=427 pass=410 fail=17
+REDS B0_u_cust_unchanged_34,D_u0_add_note_refused,D_u0_refused_m_other_note,D_u_other_users.view_refused_m_other_note,D_u_support.admin_alone_is_requester,D_u_support.manage_alone_is_requester,K5_only_line_changed_support_add_message/5,M_u0_m_other_note,M_u0_m_u0_note,M_u_cust_m_other_note,M_u_cust_m_u0_note,M_u_other_users.view_m_other_note,M_u_other_users.view_m_u0_note,M_u_support.admin_m_other_note,M_u_support.admin_m_u0_note,M_u_support.manage_m_other_note,M_u_support.manage_m_u0_note
+RESTORED clean=True
+
+== keepr-test apply: kt-sql <migration> + supabase_migrations.schema_migrations 20261111115000 backlog_4170_support_group_e_permissions
+applied md5(prosrc) of the 9 = the post column above; ACL unchanged; fixtures left: 0 users, 0 roles, 0 tickets
+== backlog-4170-p2b/run.sh --applied: total=428 pass=428 fail=0
+== backlog-4170-p1/run.sh --applied: total=119 pass=119 fail=0
+== backlog-4170-p2a/run.sh --applied: total=267 pass=267 fail=0
