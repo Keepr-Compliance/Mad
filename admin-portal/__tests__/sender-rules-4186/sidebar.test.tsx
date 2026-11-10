@@ -15,6 +15,7 @@ import { ACCESS } from './fixtures-pr-c';
 
 const state = vi.hoisted(() => ({
   access: null as unknown,
+  list: [] as unknown,
   error: null as unknown,
   pathname: '/dashboard',
   calls: [] as { fn: string; args: unknown }[],
@@ -44,6 +45,7 @@ vi.mock('@/lib/supabase/client', () => ({
     rpc: async (fn: string, args?: unknown) => {
       state.calls.push({ fn, args });
       if (fn === 'report_my_access') return { data: state.access, error: state.error };
+      if (fn === 'report_list_my_reports') return { data: state.list, error: null };
       return { data: [], error: null };
     },
   }),
@@ -55,6 +57,7 @@ const HREF = '/dashboard/ai/sender-rules';
 
 beforeEach(() => {
   state.access = null;
+  state.list = [];
   state.error = null;
   state.pathname = '/dashboard';
   state.calls = [];
@@ -111,5 +114,31 @@ describe('the AI section follows report_my_access(sender-rules)', () => {
     await waitFor(() => expect(links(aside())).toHaveLength(1));
     expect(links(drawer())).toHaveLength(1);
     expect((links(aside())[0].getAttribute('class') ?? '').split(/\s+/)).toContain('bg-gray-800');
+  });
+});
+
+// Coordinator ruling 2026-11-10: sender-rules is not a Reports-registry report, so a grant on it
+// alone must not show the Reports link (report_list_my_reports does list the key).
+describe('the Reports link counts Reports-registry keys only', () => {
+  const reportsLinks = () => within(aside()).queryAllByRole('link').filter((a) => a.getAttribute('href') === '/dashboard/reports');
+
+  it('a sender-rules-only grant: AI section yes, Reports link no', async () => {
+    state.access = ACCESS.viewer;
+    state.list = [{ report_key: 'sender-rules', access: ACCESS.viewer }];
+    render(<Sidebar collapsed={false} onToggle={vi.fn()} />);
+    await waitFor(() => expect(aiButton(aside())).toHaveLength(1));
+    await waitFor(() => expect(state.calls.some((c) => c.fn === 'report_list_my_reports')).toBe(true));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(reportsLinks()).toHaveLength(0);
+  });
+
+  it('sender-rules plus one registry report: Reports link shown', async () => {
+    state.access = ACCESS.viewer;
+    state.list = [
+      { report_key: 'funnel', access: 'viewer' },
+      { report_key: 'sender-rules', access: ACCESS.viewer },
+    ];
+    render(<Sidebar collapsed={false} onToggle={vi.fn()} />);
+    await waitFor(() => expect(reportsLinks()).toHaveLength(1));
   });
 });

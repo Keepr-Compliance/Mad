@@ -78,6 +78,7 @@ vi.mock('@/lib/supabase/client', () => ({ createClient: () => ({ rpc: async () =
 
 import { ReportAccessProvider } from '@/lib/reports/report-access-context';
 import SenderRulesPage from '@/app/dashboard/ai/sender-rules/page';
+import ReportsIndexPage from '@/app/dashboard/reports/page';
 import { SenderRulesView } from '@/app/dashboard/ai/sender-rules/SenderRulesView';
 import type { SenderRulesViewProps } from '@/app/dashboard/ai/sender-rules/SenderRulesView';
 
@@ -226,5 +227,32 @@ describe('what the page reads, in order', () => {
     state.answers.admin_list_organizations = { data: { success: false, error: 'not_authorized' } };
     state.access = { [KEY]: 'owner' };
     expect(viewProps((await callPage()).result).orgs).toEqual({ ok: false });
+  });
+});
+
+// Coordinator ruling 2026-11-10: the Reports index counts Reports-registry keys only, so a
+// sender-rules-only grant is a 404 there, not an empty index.
+describe('Reports index and a sender-rules grant', () => {
+  async function callIndex() {
+    try {
+      return { result: (await ReportsIndexPage({ searchParams: Promise.resolve({}) })) as ReactElement<{ reports: { slug: string }[] }> };
+    } catch (error) {
+      return { error: error as Error };
+    }
+  }
+
+  it('sender-rules only: 404', async () => {
+    state.answers.report_list_my_reports = { data: [{ report_key: KEY, access: 'viewer' }] };
+    expect((await callIndex()).error?.message).toBe('NOT_FOUND');
+  });
+
+  it('sender-rules plus funnel: lists funnel only', async () => {
+    state.answers.report_list_my_reports = {
+      data: [
+        { report_key: 'funnel', access: 'viewer' },
+        { report_key: KEY, access: 'owner' },
+      ],
+    };
+    expect((await callIndex()).result!.props.reports.map((r) => r.slug)).toEqual(['funnel']);
   });
 });

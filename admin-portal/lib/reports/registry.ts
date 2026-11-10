@@ -111,3 +111,13 @@ export function reportViewKey(slug: string): string {
   if (!entry) throw new Error(`Unknown report: ${slug}`);
   return entry.slug;
 }
+
+/**
+ * Only the rows whose key is a Reports-registry report. `report_list_my_reports` lists every key in
+ * `public.reports`, including keys whose page is not under Reports (BACKLOG-4186: 'sender-rules'
+ * lives in the AI section), so the Reports link and index count registry keys only.
+ */
+export function registeredReportsOnly<T extends { reportKey: string }>(rows: T[]): T[] {
+  const slugs = new Set(REPORTS.map((r) => r.slug));
+  return rows.filter((r) => slugs.has(r.reportKey));
+}
