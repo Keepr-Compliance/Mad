@@ -80,4 +80,10 @@ describe("submission-sync start option (BACKLOG-3456)", () => {
   it("startSubmissionSync: false starts no poller", () => {
     expect(register(false)).not.toHaveBeenCalled();
   });
+
+  it("main.ts registers the export handlers with startSubmissionSync: true, once", () => {
+    const main = fs.readFileSync(path.join(__dirname, "..", "..", "main.ts"), "utf8");
+    const re = /^\s*registerTransactionExportHandlers\(\{ startSubmissionSync: true \}\);/gm;
+    expect(main.match(re)).toHaveLength(1);
+  });
 });
