@@ -310,6 +310,20 @@ describe("P12 owed withdraw for the signed-in user only (R3)", () => {
     expect(getPilotState(A)).toMatchObject({ enabled: false, pendingWithdraw: false });
   });
 
+  it("a sign-in is itself a trigger: signed out, then A signs in with sharing ON and the key lost -> withdraw", async () => {
+    setPilotOn(A);
+    feature = "blocked";
+    const s = service();
+    authUser = null;
+    await s.tick();
+    expect(calls).toEqual([]);
+    authUser = A; // nothing owed yet: only the sign-in can start the check
+    await s.tick();
+    await s.idle(A);
+    expect(names()).toEqual(["withdraw"]);
+    expect(getPilotState(A)).toMatchObject({ enabled: false, pendingWithdraw: false });
+  });
+
   it("the withdraw job itself refuses to run as another user", async () => {
     setPilotOn(A);
     setPilotOffPending(A);
