@@ -17,6 +17,9 @@ MIG = os.path.join(here, '..', '..', 'migrations', '20261112100000_backlog_3962_
 RB = os.path.join(here, 'rollback-3962-pr1.sql')
 
 MUTANTS = {
+    # S1: token match on the first space-separated word only
+    'M_token_first_word': [("     WHERE btrim(a.answer) = v_row.token\n",
+                            "     WHERE split_part(btrim(a.answer), ' ', 1) = v_row.token\n")],
     # (a) token match: substring instead of exact equality
     'M_token_substring': [("     WHERE btrim(a.answer) = v_row.token\n",
                            "     WHERE btrim(a.answer) LIKE '%' || v_row.token || '%'\n")],

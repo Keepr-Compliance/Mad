@@ -35,3 +35,8 @@ MUTATION APPLIED M_begin_check_no_role_check -> fail 1: T19b_C4b_begin_check_gra
 MUTATION APPLIED M_due_no_role_check -> fail 1: T19c_C4b_due_granted_still_refused
 MUTATION APPLIED M_record_check_no_role_check -> fail 6 (as before)
 rollback: table false, functions 0. keepr-test afterwards: domain_claims present, schema_migrations row present.
+
+S1 (SR fix-up): T23c added, mutant M_token_first_word added to compose.py. Venue keepr-test, KEEPR_3962_APPLIED=1.
+P3962_RESULT base: pass 64, fail 0
+P3962_RESULT M_token_first_word: pass 61, fail 3 (T23c_token_with_extra_words_not_verified red; T23b and T25 red as a consequence, the claim is already verified when they run)
+composed-text diff base vs mutant (git diff --no-index --numstat): 2 added, 2 removed
