@@ -63,7 +63,7 @@ function readFile(file: string): { enabled: boolean; deviceId: string | null } {
   }
 }
 
-function writeFile(): void {
+function saveFile(): void {
   if (!filePath) {
     throw new Error("Diagnostics sharing preference was never loaded");
   }
@@ -84,7 +84,7 @@ export function loadDiagnosticsSharingPreference(userDataDir: string): boolean {
   if (deviceId === null) {
     deviceId = crypto.randomUUID();
     try {
-      writeFile();
+      saveFile();
     } catch {
       // Kept in memory for this session.
     }
@@ -119,7 +119,7 @@ export function getDiagnosticsSharingState(): DiagnosticsSharingState {
 export function setDiagnosticsSharingEnabled(enabled: boolean): DiagnosticsSharingState {
   enabledNow = enabled;
   if (!enabled) deviceId = crypto.randomUUID();
-  writeFile();
+  saveFile();
   return getDiagnosticsSharingState();
 }
 
