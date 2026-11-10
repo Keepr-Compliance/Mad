@@ -406,6 +406,27 @@ export default function OrgSettingsClient({ features, peopleOrganizationId }: Or
         </Link>
       )}
 
+      {/* Domain verification — BACKLOG-3962. The route refuses non-admins server-side; a support
+          session cannot read the claims, so the link is not offered there. */}
+      {!isImpersonating && (
+        <Link
+          href="/dashboard/settings/domain"
+          className="block bg-white rounded-lg shadow-sm border border-gray-200 hover:shadow-md hover:border-gray-300 transition-all"
+        >
+          <div className="px-6 py-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">
+                Domain Verification
+              </h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Prove your brokerage owns its email domain by adding a DNS record
+              </p>
+            </div>
+            <ChevronRight className="h-5 w-5 text-gray-400" />
+          </div>
+        </Link>
+      )}
+
       {/* People — BACKLOG-4007. Admin and IT admin here; a broker gets a People-only page. */}
       {peopleOrganizationId && <PeopleCard organizationId={peopleOrganizationId} linkUsers />}
     </div>
