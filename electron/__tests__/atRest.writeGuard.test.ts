@@ -125,6 +125,7 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
   "electron/services/featureGateService.ts": { count: 1, reason: `${META} (feature flag cache)` },
   "electron/services/licenseService.ts": { count: 1, reason: `${META} (license status cache)` },
   "electron/services/crashReportingPreference.ts": { count: 1, reason: `${META} (crash reporting on/off)` },
+  "electron/services/diagnosticsSharingPreference.ts": { count: 1, reason: `${META} (diagnostics sharing on/off + random diagnostics device id, BACKLOG-4181)` },
   // --- not under userData -------------------------------------------------------------
   "electron/services/appCleanupService.ts": { count: 1, reason: "uninstall helper script in the temp dir; no customer content" },
   "electron/services/appleDriverService.ts": { count: 2, reason: "Apple driver installer copy/download in the temp dir; no customer content" },

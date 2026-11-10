@@ -16,6 +16,11 @@ import {
   setCrashReportingEnabled,
   type CrashReportingState,
 } from "../services/crashReportingPreference";
+import {
+  getDiagnosticsSharingState,
+  setDiagnosticsSharingEnabled,
+  type DiagnosticsSharingState,
+} from "../services/diagnosticsSharingPreference";
 import { handleBusy } from "../utils/busyIpc";
 import auditService from "../services/auditService";
 import databaseService from "../services/databaseService";
@@ -195,6 +200,34 @@ export function registerCcpaHandlers(): void {
       } catch (err) {
         logService.error("[CcpaHandlers] Failed to save crash reporting choice", "CcpaHandlers", { error: err instanceof Error ? err.message : String(err) });
         return { success: false, error: "Could not save the setting", ...getCrashReportingState() };
+      }
+    }, { module: "CcpaHandlers" }),
+  );
+
+  /**
+   * BACKLOG-4181: the "Share diagnostics with Keepr" switch in Settings → Data &
+   * Privacy. Read live by every diagnostics send, so it takes effect at once.
+   */
+  ipcMain.handle(
+    "privacy:get-diagnostics-sharing",
+    wrapHandler(async (): Promise<{ success: boolean } & Partial<DiagnosticsSharingState>> => {
+      return { success: true, ...getDiagnosticsSharingState() };
+    }, { module: "CcpaHandlers" }),
+  );
+
+  ipcMain.handle(
+    "privacy:set-diagnostics-sharing",
+    wrapHandler(async (_event, enabled: unknown): Promise<{ success: boolean; error?: string } & Partial<DiagnosticsSharingState>> => {
+      if (typeof enabled !== "boolean") {
+        return { success: false, error: "enabled must be a boolean" };
+      }
+      try {
+        const state = setDiagnosticsSharingEnabled(enabled);
+        logService.info(`[CcpaHandlers] Diagnostics sharing set to ${enabled ? "on" : "off"}`, "CcpaHandlers");
+        return { success: true, ...state };
+      } catch (err) {
+        logService.error("[CcpaHandlers] Failed to save diagnostics sharing choice", "CcpaHandlers", { error: err instanceof Error ? err.message : String(err) });
+        return { success: false, error: "Could not save the setting", ...getDiagnosticsSharingState() };
       }
     }, { module: "CcpaHandlers" }),
   );
