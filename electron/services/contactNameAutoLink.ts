@@ -128,7 +128,7 @@
  * was explicitly not chosen.
  */
 
-import { dbAll } from "./db/core/dbConnection";
+import { dbAll, dbTransaction } from "./db/core/dbConnection";
 import {
   NAMED_EXTERNAL_RECORDS_SQL,
   NAMED_LIVE_CONTACTS_SQL,
@@ -146,7 +146,7 @@ import { hasCannotLink, type LinkProposalReason } from "./db/contactLinkReviewDb
 // (`contactSourceLinker` -> `contactSourceValues` -> `contactSourceLinker`).
 import { isContactOnFrozenTransaction } from "./db/frozenContactDbService";
 import { sourceFamily } from "./contactLinkEvidence";
-import { applyLinkedSourceValues } from "./contactSourceValues";
+import { applyLinkedSourceValuesOrThrow } from "./contactSourceValues";
 // BACKLOG-2668 — the tier gate. A leaf, like `frozenContactDbService`: it
 // imports `dbGet` and the log service and nothing from the linking services, so
 // consulting it here cannot re-form the `contactSourceLinker` ->
@@ -623,16 +623,32 @@ export function runUniqueNameAutoLinkForMode(
           );
           break;
         }
-        const result = createLink({
-          userId,
-          contactId,
-          sourceType,
-          sourceRecordId,
-          matchMethod: "unique_name",
-        });
-        if (result.created) {
-          // BACKLOG-2423: a link is also a copy. See contactSourceValues.
-          applyLinkedSourceValues(userId, contactId);
+        // BACKLOG-2423: a link is also a copy. See contactSourceValues.
+        // BACKLOG-4180 (ACID): the link and its copy commit or roll back
+        // together (one transaction; a SAVEPOINT if a caller already holds
+        // one). A failed copy leaves no link, is not counted, and is retried by
+        // the next pass. Before, these were two autocommits and the copy's
+        // failure was swallowed.
+        let created = false;
+        try {
+          created = dbTransaction(() => {
+            const result = createLink({
+              userId,
+              contactId,
+              sourceType,
+              sourceRecordId,
+              matchMethod: "unique_name",
+            });
+            if (result.created) applyLinkedSourceValuesOrThrow(userId, contactId);
+            return result.created;
+          });
+        } catch (error) {
+          logService.warn(
+            `[Contacts] a unique-name link was rolled back because copying its values failed: ${error}`,
+            "Contacts",
+          );
+        }
+        if (created) {
           summary.autoLinked++;
           summary.actions.push(decision.action);
           logService.info(

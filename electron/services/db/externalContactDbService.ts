@@ -17,6 +17,7 @@ import { sql, type SafeSql } from "./core/sqlText";
 import logService from '../logService';
 import { recordShadowSync } from '../contactIngestionFunnel';
 import { requestContactLinking } from '../contactLinkingScheduler';
+import { noteContactSourcesChanged } from '../contactSourcesEpoch';
 import { queryContacts, isPoolReady } from '../../workers/contactWorkerPool';
 import { toLookupKey } from '../../utils/phoneNormalization';
 import { dedupeEmailValues, dedupePhoneValuesWithKeys } from '../../utils/contactValueDedup';
@@ -663,6 +664,12 @@ export function upsertFromiPhone(userId: string, contacts: iPhoneContact[], sess
   // table. Session-less callers are not provisional and signal normally.
   if (count > 0 && sessionId === undefined) requestContactLinking(userId);
 
+  // BACKLOG-4180 — the source-change mark is set on BOTH paths. It only makes
+  // the next pass re-run the backfill (additive, idempotent); it links nothing,
+  // so a session that later rolls back costs one extra backfill, never a link
+  // to a deleted record. The pass itself still waits for the commit point.
+  if (count > 0) noteContactSourcesChanged(userId);
+
   return count;
 }
 
@@ -799,7 +806,12 @@ export function upsertExternalContacts(
   // android_sync. THIS is the line that closes the Windows hole: a user with
   // macosEnabled=false and iphoneEnabled=false reaches Phase 2 through here,
   // and there is no platform gate anywhere on it.
-  if (count > 0) requestContactLinking(userId);
+  if (count > 0) {
+    // BACKLOG-4180: these sources cannot tell an insert from an update, so any
+    // write counts as a change for the backfill.
+    noteContactSourcesChanged(userId);
+    requestContactLinking(userId);
+  }
 
   return count;
 }
@@ -1288,6 +1300,12 @@ export function fullSync(userId: string, macOSContacts: MacOSContact[]): SyncRes
   // log showed "Upserted 716 external contacts" every single sync — a number
   // that says nothing about whether anything actually changed.
   const { inserted, updated, unchanged } = classifyMacOSSync(userId, macOSContacts);
+
+  // BACKLOG-4180: a source change for the backfill only when a record is new or
+  // its content changed. `upsertFromMacOS` writes every record on every sync,
+  // so its count would make each macOS sync re-run the whole-book backfill.
+  // Marked BEFORE the upsert, whose own signal arms the pass.
+  if (inserted + updated > 0) noteContactSourcesChanged(userId);
 
   // Step 1: Upsert all contacts (this sets synced_at to current time)
   upsertFromMacOS(userId, macOSContacts);
