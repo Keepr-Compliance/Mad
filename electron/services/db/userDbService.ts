@@ -317,6 +317,51 @@ export async function hasCompletedEmailOnboarding(
 }
 
 /**
+ * BACKLOG-4075: every column that holds a local user id, derived from the
+ * schema itself — never a hand-kept list. A hand list drifted to 3 tables that
+ * do not exist and missed 33 of the 41 that reference `users_local`, so a
+ * unification left their rows under the old id (orphans, invisible with
+ * `foreign_keys = OFF`).
+ *
+ * Two sources, unioned:
+ * 1. every foreign key that references `users_local` (any column name);
+ * 2. every `user_id` column in a table with no such foreign key. On the
+ *    current schema that is `contact_link_proposals`, `contact_link_verdicts`,
+ *    `contact_source_links`, `mail_folder_names`, `mail_folder_refs`,
+ *    `rcs_cache_staging_chats`, `rcs_cache_staging_jobs` and
+ *    `transaction_unlocks_cache` — each stores the owning local user's id, so
+ *    each moves with the user.
+ */
+export function listUserIdColumns(
+  db: ReturnType<typeof ensureDb>,
+): Array<{ table: string; column: string }> {
+  const tables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'users_local' ORDER BY name")
+    .all() as Array<{ name: string }>;
+  const out: Array<{ table: string; column: string }> = [];
+  for (const { name } of tables) {
+    const fks = (db.prepare("SELECT \"table\" AS ref, \"from\" AS col FROM pragma_foreign_key_list(?)").all(name) as Array<{ ref: string; col: string }>)
+      .filter((f) => f.ref === "users_local")
+      .map((f) => f.col);
+    if (fks.length > 0) {
+      for (const column of new Set(fks)) out.push({ table: name, column });
+      continue;
+    }
+    const hasUserId = (db.prepare("SELECT 1 FROM pragma_table_info(?) WHERE name = 'user_id'").get(name)) !== undefined;
+    if (hasUserId) out.push({ table: name, column: "user_id" });
+  }
+  return out;
+}
+
+/**
+ * BACKLOG-4075: user-owned tables a unification must NOT rewrite. `audit_logs`
+ * is append-only: its `prevent_audit_update` trigger refuses every UPDATE
+ * (BACKLOG-3023 restores it if weakened), so rewriting its `user_id` would
+ * abort the whole unification. Its rows keep the id that acted.
+ */
+export const APPEND_ONLY_USER_TABLES: ReadonlySet<string> = new Set(["audit_logs"]);
+
+/**
  * Migrate a local user's ID to match Supabase auth.uid()
  * BACKLOG-600: This handles users created before TASK-1507G (user ID unification)
  *
@@ -343,39 +388,14 @@ export async function migrateUserIdForUnification(oldUserId: string, newUserId: 
       db.prepare("UPDATE users_local SET id = ? WHERE id = ?").run(newUserId, oldUserId);
       void logService.info("[DB Migration] Updated users_local primary record", "userDbService");
 
-      // Tables with user_id FK that need to be updated
-      const tablesToUpdate = [
-        "messages",
-        "contacts",
-        "contact_phones",
-        "contact_emails",
-        "transactions",
-        "emails",
-        "communications",
-        "sessions",
-        "oauth_tokens",
-        "email_accounts",
-        "user_preferences",
-        "external_contacts",
-        "attachments",
-        "audit_logs_local",
-      ];
-
-      for (const table of tablesToUpdate) {
-        try {
-          // Check if table exists and has user_id column
-          const tableInfo = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
-          const hasUserId = tableInfo.some((col) => col.name === "user_id");
-
-          if (hasUserId) {
-            const result = db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`).run(newUserId, oldUserId);
-            if (result.changes > 0) {
-              void logService.info(`[DB Migration] Updated ${result.changes} rows in ${table}`, "userDbService");
-            }
-          }
-        } catch (tableError) {
-          // Table might not exist, skip it
-          void logService.debug(`[DB Migration] Skipping table ${table}: ${tableError}`, "userDbService");
+      // BACKLOG-4075: derived from the schema (listUserIdColumns), not hand-listed.
+      for (const { table, column } of listUserIdColumns(db)) {
+        if (APPEND_ONLY_USER_TABLES.has(table)) continue;
+        const result = db
+          .prepare(`UPDATE "${table}" SET "${column}" = ? WHERE "${column}" = ?`)
+          .run(newUserId, oldUserId);
+        if (result.changes > 0) {
+          void logService.info(`[DB Migration] Updated ${result.changes} rows in ${table}`, "userDbService");
         }
       }
     });
