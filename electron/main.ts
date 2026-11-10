@@ -229,6 +229,7 @@ import { registerFeatureGateHandlers } from "./handlers/featureGateHandlers";
 import { registerLearnModeHandlers } from "./handlers/learnModeHandlers";
 import { openQuestionAttachment } from "./services/learnAttachmentDownload";
 import { registerEntitlementHandlers } from "./handlers/entitlementHandlers";
+import { startSenderRuleSetRefresher } from "./services/senderRuleSetRefresher";
 import { registerPaymentHandlers } from "./handlers/paymentHandlers";
 import { registerBillingHandlers } from "./handlers/billingHandlers";
 import { sanitizeSessionId } from "./services/paymentService";
@@ -1935,6 +1936,9 @@ app.whenReady().then(async () => {
 
   // Register per-transaction paywall entitlement handlers (BACKLOG-2006a)
   registerEntitlementHandlers();
+
+  // BACKLOG-4175 PR4: sender rule-set download (main only; consumers read the store).
+  startSenderRuleSetRefresher();
 
   // Register PAYG card-purchase handlers (BACKLOG-2015)
   registerPaymentHandlers();

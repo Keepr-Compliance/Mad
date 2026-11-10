@@ -211,7 +211,7 @@ describe("shipped modes: the detector drops ONLY the exact seeds", () => {
         gmailPromotions: { mode: "measure", matched: 1 },
       }),
     });
-    expect(Object.keys(log).sort()).toEqual(["bySignal", "evaluated", "keptBy", "liveDropped", "senderRulesVersion"]);
+    expect(Object.keys(log).sort()).toEqual(["bySignal", "evaluated", "keptBy", "liveDropped", "senderRulesSource", "senderRulesVersion"]);
     const serialized = JSON.stringify(log);
     expect(serialized).not.toContain("@");
     for (const forbidden of ["list.example", "shop.example", SEED().split("@")[1], USER]) {
@@ -275,5 +275,53 @@ describe("KH detector: a deal contact on an approved host is never dropped", () 
     ]);
     expect(analyzedIds()).toEqual(["contact"]);
     expect(filterLog()).toMatchObject({ keptBy: { K1: 1, K2: 0, K3: 0 } });
+  });
+});
+
+describe("PR4 (4175) the detector reads the ACTIVE rule set and never waits on the download", () => {
+  const SEED_X = "x@example.test";
+  let store: typeof import("../senderRuleSetStore");
+  beforeEach(async () => {
+    const paths = await import("../../capabilities/appPathsProvider");
+    paths.resetAppPaths(); // memory only: never write a cache into the shared test userData
+    store = await import("../senderRuleSetStore");
+    store.__resetForTests();
+  });
+  afterEach(() => store.__resetForTests());
+
+  it("RS16 a downloaded set's seed (absent from bundled) is dropped; the log names the source", async () => {
+    expect(shipped.suppress.exactAddresses).not.toContain(SEED_X);
+    const { parseSenderRuleSet } = await import("../../utils/senderFilter/ruleSetSchema");
+    const downloaded = parseSenderRuleSet(
+      JSON.parse(JSON.stringify({ ...shipped, version: 5, suppress: { ...shipped.suppress, exactAddresses: [SEED_X] } })),
+    );
+    await store.applyServerOutcome({ kind: "valid", rules: downloaded! }, USER);
+    setStrategy("pattern");
+    await scan("google", [msg("x", `"Alerts" <${SEED_X}>`), msg("agent", `"Agent" <agent@example.com>`)]);
+    expect(analyzedIds()).toEqual(["agent"]);
+    expect(filterLog()).toMatchObject({ senderRulesVersion: 5, senderRulesSource: "download", liveDropped: 1 });
+  });
+
+  it("RS9a (detector) a scan completes while the session read and the download never answer", async () => {
+    const supabaseService = (await import("../supabaseService")).default as unknown as { getAuthSession: jest.Mock };
+    supabaseService.getAuthSession.mockReturnValue(new Promise(() => undefined));
+    const triggered = jest.fn(() => new Promise(() => undefined));
+    store.setRefreshTrigger(triggered);
+    setStrategy("pattern");
+    (gmailFetchService.initialize as jest.Mock).mockResolvedValue(undefined);
+    (gmailFetchService.searchEmails as jest.Mock).mockResolvedValue([msg("agent", `"Agent" <agent@example.com>`)]);
+    const HUNG = Symbol("hung");
+    let sentinel: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      transactionService.scanAndExtractTransactions(USER, { provider: "google" }),
+      new Promise((resolve) => {
+        sentinel = setTimeout(() => resolve(HUNG), 3_000);
+      }),
+    ]);
+    clearTimeout(sentinel);
+    expect(outcome).not.toBe(HUNG);
+    expect((outcome as { success: boolean }).success).toBe(true);
+    expect(triggered).toHaveBeenCalled();
+    expect(filterLog()).toMatchObject({ evaluated: 1 });
   });
 });
