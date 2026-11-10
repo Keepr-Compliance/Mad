@@ -40,11 +40,11 @@ export function DashboardPanels({
   disabled = false,
 }: DashboardPanelsProps): React.ReactElement {
   const gate = useSessionStrictFeatureState("transaction_checklists");
-  // BACKLOG-4220: Settings > General can hide Todo. Until the preference is
-  // read, the layout is today's and Todo shows its loading state.
+  // BACKLOG-4220: Todo shows only when Settings > General turned it on (default
+  // off). Until the preference is read it stays hidden, so it never flashes up.
   const showTodo = useShowTodoPanel(userId);
-  const todoHidden = showTodo === false;
-  const { recent, todo, reload, tickItem, tickingItemId, tickError } = useDashboardPanels(userId, showTodo);
+  const todoHidden = showTodo !== true;
+  const { recent, todo, reload, tickItem, tickingItemId, tickError } = useDashboardPanels(userId, !todoHidden);
 
   return (
     <div className={`mt-6 ${todoHidden ? PANELS_GRID_ONE : PANELS_GRID_TWO}`} data-testid="dashboard-panels">

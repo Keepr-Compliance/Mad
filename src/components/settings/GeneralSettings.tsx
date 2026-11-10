@@ -56,7 +56,7 @@ export function GeneralSettings({ userId, initialPreferences }: GeneralSettingsP
     const val = initialPreferences?.contactAutoRole?.enabled;
     return typeof val === "boolean" ? val : false;
   });
-  // BACKLOG-4220: default shown.
+  // BACKLOG-4220: default off (founder, 2026-11-10).
   const [showTodo, setShowTodo] = useState<boolean>(() => showTodoFromPreferences(initialPreferences));
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'checking' | 'up-to-date' | 'available' | 'error'>('idle');
   const [updateVersion, setUpdateVersion] = useState<string>('');

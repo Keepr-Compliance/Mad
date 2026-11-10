@@ -6,13 +6,16 @@
  * electron/handlers/preferenceHandlers.ts returns:
  * `{ success: true, preferences: <bag>, source: "cloud" }`.
  *
+ * Founder decision 2026-11-10: default OFF. Only a stored `true` shows Todo.
+ *
  * C1 off -> no Todo panel.
  * C2 off -> one column at every width (Recent spans the row).
  * C3 off -> the Todo read never runs.
- * C4 no stored value -> Todo shown and read (default unchanged).
+ * C4 no stored value -> Todo hidden and not read (default off).
+ * C4b stored true -> today's layout, Todo read once.
  * C5 the Settings switch writes `dashboard.showTodo` and the mounted panels follow.
  * C6 off -> on in the same mount reads Todo again.
- * C7 preference not read yet -> today's layout, Todo loading, no Todo read.
+ * C7 preference not read yet / read failed -> hidden, no Todo read, no flash.
  * C8 a switch change during the first read wins over the stored value.
  */
 import React from "react";
@@ -93,25 +96,35 @@ async function settle() {
   });
 }
 
-describe("Todo hidden (dashboard.showTodo = false)", () => {
-  beforeEach(() => storedPreferences({ sync: { autoSyncOnLogin: true }, dashboard: { showTodo: false } }));
+const SWITCH = { name: "Show to-do list on the dashboard" };
 
-  it("C1: no Todo panel; Recent is the only panel", async () => {
+function expectHidden() {
+  expect(screen.queryByTestId("dashboard-todo")).not.toBeInTheDocument();
+  const grid = screen.getByTestId("dashboard-panels");
+  expect(grid.children).toHaveLength(1);
+  expect(grid.firstElementChild).toBe(screen.getByTestId("dashboard-recent"));
+  expect(grid.className.split(/\s+/)).not.toContain("md:grid-cols-2");
+  expect(api().checklists.listOpenRequired).not.toHaveBeenCalled();
+}
+
+describe.each([
+  ["stored false", { sync: { autoSyncOnLogin: true }, dashboard: { showTodo: false } }],
+  ["nothing stored (default off)", { sync: { autoSyncOnLogin: true } }],
+  ["empty bag (default off)", {}],
+  ["non-boolean value (default off)", { dashboard: { showTodo: "yes" } }],
+])("Todo hidden: %s", (_label, bag) => {
+  beforeEach(() => storedPreferences(bag));
+
+  it("C1/C4: no Todo panel; Recent is the only panel", async () => {
     renderPanels();
     await settle();
-    expect(screen.queryByTestId("dashboard-todo")).not.toBeInTheDocument();
-    const grid = screen.getByTestId("dashboard-panels");
-    expect(grid.children).toHaveLength(1);
-    expect(grid.firstElementChild).toBe(screen.getByTestId("dashboard-recent"));
+    expectHidden();
   });
 
-  it.each([400, 767, 768, 1024, 1280])("C2: %ipx wide -> one column (no half-width class)", async (width) => {
+  it.each([400, 767, 768, 1024, 1280])("C2: %ipx wide -> one column", async (width) => {
     renderPanels();
     await settle();
-    await waitFor(() => expect(screen.queryByTestId("dashboard-todo")).not.toBeInTheDocument());
-    const grid = screen.getByTestId("dashboard-panels");
-    expect(columnsAt(grid.className, width)).toBe(1);
-    expect(grid.className.split(/\s+/)).not.toContain("md:grid-cols-2");
+    expect(columnsAt(screen.getByTestId("dashboard-panels").className, width)).toBe(1);
   });
 
   it("C3: the Todo read never runs", async () => {
@@ -122,54 +135,49 @@ describe("Todo hidden (dashboard.showTodo = false)", () => {
   });
 });
 
-describe("Todo shown by default (C4)", () => {
-  it.each([
-    ["no dashboard key", { sync: { autoSyncOnLogin: true } }],
-    ["empty bag", {}],
-    ["non-boolean value", { dashboard: { showTodo: "no" } }],
-  ])("%s -> Todo shown, read once, two columns from 768 px", async (_label, bag) => {
-    storedPreferences(bag);
+describe("Todo shown only when stored true (C4b)", () => {
+  it("stored true -> Todo shown, read once, two columns from 768 px, Recent first", async () => {
+    storedPreferences({ dashboard: { showTodo: true } });
     renderPanels();
     expect(await screen.findByText("Signed disclosure")).toBeInTheDocument();
     const grid = screen.getByTestId("dashboard-panels");
-    expect([400, 768, 1280].map((w) => columnsAt(grid.className, w))).toEqual([1, 2, 2]);
+    expect([400, 767, 768, 1280].map((w) => columnsAt(grid.className, w))).toEqual([1, 1, 2, 2]);
+    expect(grid.firstElementChild).toBe(screen.getByTestId("dashboard-recent"));
+    expect(grid.children[1]).toBe(screen.getByTestId("dashboard-todo"));
     expect(api().checklists.listOpenRequired).toHaveBeenCalledTimes(1);
   });
 
-  it("a failed preferences read -> Todo shown and read", async () => {
-    api().preferences.get.mockResolvedValue({ success: false, error: "offline" });
-    renderPanels();
-    expect(await screen.findByText("Signed disclosure")).toBeInTheDocument();
-    expect(api().checklists.listOpenRequired).toHaveBeenCalledTimes(1);
-  });
-
-  it("showTodoFromPreferences: absent = shown, only false hides", () => {
-    expect(showTodoFromPreferences({})).toBe(true);
-    expect(showTodoFromPreferences(undefined)).toBe(true);
-    expect(showTodoFromPreferences({ dashboard: {} })).toBe(true);
-    expect(showTodoFromPreferences({ dashboard: { showTodo: true } })).toBe(true);
+  it("showTodoFromPreferences: only a stored true shows", () => {
+    expect(showTodoFromPreferences({})).toBe(false);
+    expect(showTodoFromPreferences(undefined)).toBe(false);
+    expect(showTodoFromPreferences({ dashboard: {} })).toBe(false);
+    expect(showTodoFromPreferences({ dashboard: { showTodo: "yes" } })).toBe(false);
     expect(showTodoFromPreferences({ dashboard: { showTodo: false } })).toBe(false);
+    expect(showTodoFromPreferences({ dashboard: { showTodo: true } })).toBe(true);
   });
 
-  it("Settings switch is on when nothing is stored", () => {
-    render(<GeneralSettings userId="user-1" initialPreferences={{}} />);
-    expect(screen.getByRole("switch", { name: "Show to-do list on the dashboard" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
+  it("Settings switch is off when nothing is stored, on when true is stored", () => {
+    const { unmount } = render(<GeneralSettings userId="user-1" initialPreferences={{}} />);
+    expect(screen.getByRole("switch", SWITCH)).toHaveAttribute("aria-checked", "false");
+    unmount();
+    render(<GeneralSettings userId="user-1" initialPreferences={{ dashboard: { showTodo: true } }} />);
+    expect(screen.getByRole("switch", SWITCH)).toHaveAttribute("aria-checked", "true");
   });
 });
 
-describe("before the preference is read (C7, C8)", () => {
-  it("C7: preference not known yet -> two columns, Todo loading, Todo not read", async () => {
+describe("before or without a preference read (C7, C8)", () => {
+  it("C7: read not answered yet -> hidden, no Todo read (no flash)", async () => {
     api().preferences.get.mockImplementation(() => new Promise(() => undefined));
     renderPanels();
     await screen.findByText("1 Recent St");
-    const grid = screen.getByTestId("dashboard-panels");
-    expect(grid.className.split(/\s+/)).toContain("md:grid-cols-2");
-    expect(screen.getByTestId("dashboard-todo")).toBeInTheDocument();
-    expect(screen.queryByTestId("dashboard-todo-count")).not.toBeInTheDocument();
-    expect(api().checklists.listOpenRequired).not.toHaveBeenCalled();
+    expectHidden();
+  });
+
+  it("C7: read failed -> hidden, no Todo read", async () => {
+    api().preferences.get.mockResolvedValue({ success: false, error: "offline" });
+    renderPanels();
+    await settle();
+    expectHidden();
   });
 
   it("C8: a switch change made while the read is in flight beats the stored value", async () => {
@@ -182,14 +190,14 @@ describe("before the preference is read (C7, C8)", () => {
       </>,
     );
     await screen.findByText("1 Recent St");
-    fireEvent.click(screen.getByRole("switch", { name: "Show to-do list on the dashboard" }));
-    await waitFor(() => expect(screen.queryByTestId("dashboard-todo")).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("switch", SWITCH));
+    expect(await screen.findByText("Signed disclosure")).toBeInTheDocument();
     await act(async () => {
       answer({ success: true, preferences: {}, source: "cloud" });
       await Promise.resolve();
     });
-    expect(screen.queryByTestId("dashboard-todo")).not.toBeInTheDocument();
-    expect(api().checklists.listOpenRequired).not.toHaveBeenCalled();
+    expect(screen.getByTestId("dashboard-todo")).toBeInTheDocument();
+    expect(api().checklists.listOpenRequired).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -205,39 +213,31 @@ describe("the Settings switch drives the mounted dashboard (C5, C6)", () => {
   }
 
   it("C5: turning it off writes dashboard.showTodo=false and removes Todo without a remount", async () => {
-    renderBoth({});
+    renderBoth({ dashboard: { showTodo: true } });
     expect(await screen.findByText("Signed disclosure")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("switch", { name: "Show to-do list on the dashboard" }));
+    fireEvent.click(screen.getByRole("switch", SWITCH));
     await waitFor(() => expect(screen.queryByTestId("dashboard-todo")).not.toBeInTheDocument());
     expect(api().preferences.update).toHaveBeenCalledWith("user-1", { dashboard: { showTodo: false } });
     expect(columnsAt(screen.getByTestId("dashboard-panels").className, 1024)).toBe(1);
-    expect(screen.getByRole("switch", { name: "Show to-do list on the dashboard" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
+    expect(screen.getByRole("switch", SWITCH)).toHaveAttribute("aria-checked", "false");
   });
 
-  it("C6: turning it back on reads Todo again and shows it", async () => {
-    renderBoth({ dashboard: { showTodo: false } });
+  it("C6: turning it on (from the default) reads Todo and shows it", async () => {
+    renderBoth({});
     await settle();
     expect(api().checklists.listOpenRequired).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("switch", { name: "Show to-do list on the dashboard" }));
+    fireEvent.click(screen.getByRole("switch", SWITCH));
     expect(await screen.findByText("Signed disclosure")).toBeInTheDocument();
     expect(api().checklists.listOpenRequired).toHaveBeenCalledTimes(1);
     expect(api().preferences.update).toHaveBeenCalledWith("user-1", { dashboard: { showTodo: true } });
   });
 
   it("a failed save puts the switch and the dashboard back", async () => {
-    renderBoth({});
+    renderBoth({ dashboard: { showTodo: true } });
     expect(await screen.findByText("Signed disclosure")).toBeInTheDocument();
     api().preferences.update.mockResolvedValue({ success: false, error: "offline" });
-    fireEvent.click(screen.getByRole("switch", { name: "Show to-do list on the dashboard" }));
-    await waitFor(() =>
-      expect(screen.getByRole("switch", { name: "Show to-do list on the dashboard" })).toHaveAttribute(
-        "aria-checked",
-        "true",
-      ),
-    );
+    fireEvent.click(screen.getByRole("switch", SWITCH));
+    await waitFor(() => expect(screen.getByRole("switch", SWITCH)).toHaveAttribute("aria-checked", "true"));
     expect(screen.getByTestId("dashboard-todo")).toBeInTheDocument();
   });
 });

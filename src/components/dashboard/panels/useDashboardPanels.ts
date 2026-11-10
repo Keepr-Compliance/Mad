@@ -54,15 +54,14 @@ export interface DashboardPanels {
 
 /**
  * `todoEnabled` (BACKLOG-4220): true reads Todo as before; false never reads it
- * (the panel is hidden); null means the preference is not known yet, so Todo
- * shows its loading state and is not read until it is.
+ * (the panel is hidden, or the preference is not read yet).
  */
 export function useDashboardPanels(
   userId: string | undefined,
-  todoEnabled: boolean | null = true,
+  todoEnabled = true,
 ): DashboardPanels {
   const [recent, setRecent] = useState<RecentState>({ status: "loading" });
-  const [todo, setTodo] = useState<TodoState>({ status: userId && todoEnabled !== false ? "loading" : "off" });
+  const [todo, setTodo] = useState<TodoState>({ status: userId && todoEnabled ? "loading" : "off" });
   const [reloadKey, setReloadKey] = useState(0);
   const [tickingItemId, setTickingItemId] = useState<string | null>(null);
   const [tickError, setTickError] = useState<TickError | null>(null);
@@ -86,12 +85,8 @@ export function useDashboardPanels(
 
   useEffect(() => {
     const id = ++todoReadId.current;
-    if (!userId || todoEnabled === false) {
+    if (!userId || !todoEnabled) {
       setTodo({ status: "off" });
-      return;
-    }
-    if (todoEnabled === null) {
-      setTodo({ status: "loading" });
       return;
     }
     // Keep the last answer on screen during a re-read; only a first read shows "loading".

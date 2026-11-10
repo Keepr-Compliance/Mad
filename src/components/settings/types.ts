@@ -46,7 +46,7 @@ export interface PreferencesResult {
     notifications?: {
       enabled?: boolean;
     };
-    /** BACKLOG-4220: absent = Todo shown on the dashboard. */
+    /** BACKLOG-4220: absent = Todo hidden on the dashboard. */
     dashboard?: {
       showTodo?: boolean;
     };
