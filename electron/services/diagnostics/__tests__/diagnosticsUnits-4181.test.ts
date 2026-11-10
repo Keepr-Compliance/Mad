@@ -19,6 +19,7 @@ import {
 } from "../../diagnosticsSharingPreference";
 import { DIAG_BASE_FORMATS, DIAG_OP, DIAG_ROUTE_KEYS, DIAG_STRING_FIELDS, joinWholeNames } from "../fields";
 import * as perf from "../perf";
+import * as prefModule from "../../diagnosticsSharingPreference";
 import { diagnosticsBeforeSendLog, filterDiagnosticLogs, filterEnvelopeLogs } from "../diagnosticsLogTransport";
 
 const UUID_V4 = DIAG_BASE_FORMATS["keepr.deviceId"];
@@ -266,6 +267,23 @@ describe("transport filter, each check on its own", () => {
     const sameId = (env[1][0][1] as { items: Array<{ attributes: Record<string, { value: unknown }> }> }).items[0];
     sameId.attributes["keepr.deviceId"].value = getDiagnosticsDeviceId();
     expect(filterEnvelopeLogs(env)).toBeNull();
+  });
+
+  it("OFF: the device id is never resolved (consent gate does not read it)", () => {
+    setDiagnosticsSharingEnabled(false);
+    const env = envOf(diagLog()); // stamped with the current id, built before the spy
+    const spy = jest.spyOn(prefModule, "getDiagnosticsDeviceId");
+    try {
+      expect(filterEnvelopeLogs(env)).toBeNull();
+      expect(spy).not.toHaveBeenCalled();
+      // positive control: ON does read it (and then sends the log)
+      setDiagnosticsSharingEnabled(true);
+      expect(spy).not.toHaveBeenCalled();
+      expect(filterEnvelopeLogs(env)).not.toBeNull();
+      expect(spy).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("ON, another device id: dropped (device-id check on its own)", () => {

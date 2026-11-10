@@ -105,7 +105,9 @@ export function diagnosticsBeforeSendLog<L extends { attributes?: Record<string,
 export function filterEnvelopeLogs(envelope: Envelope): Envelope | null {
   const [headers, items] = envelope;
   const enabled = isDiagnosticsSharingEnabled();
-  const deviceId = getDiagnosticsDeviceId();
+  // Read only once a log item is reached with sharing ON: while OFF the device
+  // id is never resolved, compared or stamped.
+  let deviceId: string | null = null;
   const kept: EnvelopeItem[] = [];
   for (const item of items) {
     const [header, payload] = item;
@@ -114,9 +116,11 @@ export function filterEnvelopeLogs(envelope: Envelope): Envelope | null {
       continue;
     }
     if (!enabled) continue;
+    deviceId ??= getDiagnosticsDeviceId();
+    const id = deviceId;
     const logs = (payload as { items?: unknown } | null)?.items;
     if (!Array.isArray(logs)) continue;
-    const rebuilt = logs.map((l) => rebuildLog(l, deviceId)).filter((l): l is SerializedLog => l !== null);
+    const rebuilt = logs.map((l) => rebuildLog(l, id)).filter((l): l is SerializedLog => l !== null);
     if (rebuilt.length === 0) continue;
     kept.push([{ ...header, item_count: rebuilt.length }, { items: rebuilt }]);
   }
