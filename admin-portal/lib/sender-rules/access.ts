@@ -11,3 +11,9 @@ import type { ReportAccess } from '@/lib/reports/report-access';
 export function canEditSenderRules(access: ReportAccess | null | undefined): boolean {
   return access === 'owner';
 }
+
+/** The report key the access checks use (BACKLOG-4144 `public.reports`, inserted by 4175). */
+export const SENDER_RULES_REPORT_KEY = 'sender-rules';
+
+/** The page, in the sidebar's AI section (founder ruling 2026-11-10: not under Reports). */
+export const SENDER_RULES_PATH = '/dashboard/ai/sender-rules';
