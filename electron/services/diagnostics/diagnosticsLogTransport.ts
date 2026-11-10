@@ -105,7 +105,7 @@ export function diagnosticsBeforeSendLog<L extends { attributes?: Record<string,
 export function filterEnvelopeLogs(envelope: Envelope): Envelope | null {
   const [headers, items] = envelope;
   const enabled = isDiagnosticsSharingEnabled();
-  const deviceId = enabled ? getDiagnosticsDeviceId() : "";
+  const deviceId = getDiagnosticsDeviceId();
   const kept: EnvelopeItem[] = [];
   for (const item of items) {
     const [header, payload] = item;
