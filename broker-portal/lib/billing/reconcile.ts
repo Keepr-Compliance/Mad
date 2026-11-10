@@ -50,10 +50,13 @@
  *    no unprocessed `resume_agent_subscription` row -> alert only
  *    (`paused_subscription_licence_active`); support decides.
  *
- * Brokerage members (BACKLOG-3934, founder decision 2026-10-13): a user with an
- * open, unpaused Agent subscription who is an active member of a non-personal
- * organization -> one `agent_subscription_brokerage_member` alert per run with
- * the subscription ids. Alert only; support cancels and refunds in Stripe.
+ * Brokerage members (BACKLOG-3934; BACKLOG-3850): a user with a non-closed
+ * Agent subscription (paused ones included) who is a member of a non-personal
+ * organization gets a `cancel_agent_on_brokerage_join` row unless one is
+ * waiting (lib/billing/joinCancel.ts ends the plan, no refund). One
+ * `agent_subscription_brokerage_member` alert per run lists the open, unpaused
+ * ones unless the only cause is a row queued less than an hour ago and not
+ * parked. Support cancels in Stripe, with no refund, if the alert keeps firing.
  *
  * Cap: each side looks at RECONCILE_MAX_ITEMS per run and sets `truncated`
  * (carried by the alert) when there were more. Stripe lists newest first, so
@@ -70,6 +73,7 @@ import type { StripeMode } from './mode';
 import { parseRunAfter, OUTBOX_STALE_AFTER_MS } from './outbox';
 import { END_NOW_KIND } from './endPlanNow';
 import { enqueueOutbox } from './outboxEnqueue';
+import { JOIN_CANCEL_KIND } from './joinCancelKind';
 import { licenceStatus, PAUSE_KIND, RESUME_KIND } from './suspension';
 import { isNonStripeOverride, overrideEffective, type UnlimitedOverride } from './agentPlan';
 import { handleInvoicePaid, listAll, OPEN_STATUSES, refreshMirrorRow, revokeIfCurrent, stripeId, type BillingContext } from './sync';
@@ -109,8 +113,10 @@ export interface ReconcileResult {
   pausedLicenceActive: number;
   /** BACKLOG-3933: reverse revokes whose stale open mirror row was re-read from Stripe and rewritten. */
   mirrorRepaired: number;
-  /** BACKLOG-3934: users paying for an Agent plan while an active member of a brokerage (alert only). */
+  /** BACKLOG-3934: users paying for an Agent plan while an active member of a brokerage (alerted). */
   brokerageMembers: number;
+  /** BACKLOG-3850: cancel_agent_on_brokerage_join rows enqueued by this run. */
+  joinCancelEnqueued: number;
 }
 
 /** The R10.1 definition. Anything else (absent, non-stripe, disabled, expired, malformed) is not effective. */
@@ -199,6 +205,7 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
     pausedLicenceActive: 0,
     mirrorRepaired: 0,
     brokerageMembers: 0,
+    joinCancelEnqueued: 0,
   };
   const mismatchIds: string[] = [];
   const pausedActiveIds: string[] = [];
@@ -315,7 +322,7 @@ export async function reconcileAgentSubscriptions(deps: ReconcileDeps): Promise<
   // ---- BACKLOG-3878 R7: suspended licence, plan still collecting
   const unpausedIds = await suspendedSafetyNet(deps, result);
 
-  // ---- BACKLOG-3934: paying for an Agent plan while a brokerage member (alert only)
+  // ---- BACKLOG-3934 / 3850: an Agent plan while a brokerage member (enqueue the cancel; alert)
   const brokerageIds = await brokerageMemberScan(deps, result);
   if (brokerageIds.length > 0) {
     billingAlert('agent_subscription_brokerage_member', deps.mode, {
@@ -429,25 +436,50 @@ export const BROKERAGE_MEMBER_STATUSES = ['active', 'unassigned'] as const;
 /** BACKLOG-3934: Agent subscription statuses that still charge the user. */
 export const BROKERAGE_ALERT_SUB_STATUSES = new Set(['active', 'trialing', 'past_due']);
 
+/** BACKLOG-3850: a waiting row older than this, or parked, means the cancel is not happening. */
+export const JOIN_CANCEL_ALERT_AFTER_MS = 60 * 60 * 1000;
+/** BACKLOG-3850: Agent subscription statuses with nothing left to end. */
+const JOIN_CANCEL_CLOSED = new Set(['canceled', 'incomplete_expired']);
+
+/** BACKLOG-3850: unprocessed join-cancel rows for this user in this mode. */
+async function pendingJoinCancel(deps: ReconcileDeps, userId: string): Promise<{ run_after: string | null; created_at: string | null }[]> {
+  const { data, error } = await deps.service
+    .from('billing_outbox')
+    .select('id, run_after, created_at')
+    .eq('stripe_mode', deps.mode)
+    .eq('kind', JOIN_CANCEL_KIND)
+    .eq('user_id', userId)
+    .is('processed_at', null)
+    .limit(10);
+  if (error) throw new Error(`billing_outbox read failed: ${error.code ?? 'unknown'}`);
+  return (data as { run_after: string | null; created_at: string | null }[] | null) ?? [];
+}
+
 /**
- * BACKLOG-3934 (founder decision 2026-10-13, instead of 3850's automatic
- * cancel): a user with an open, unpaused Agent subscription in this mode who is
- * an active member of a brokerage (an organization that is not a personal one)
- * pays twice. Nothing is changed here; one alert per run lists the Stripe
- * subscription ids and support cancels + refunds by hand. Mode isolation is the
- * user's stripe_customers row in this mode. Returns the subscription ids found.
+ * BACKLOG-3934, superseded by BACKLOG-3850's automatic cancel: a user with an Agent
+ * subscription in this mode who is a member of a brokerage (an organization that
+ * is not a personal one).
+ *   - enqueue: any non-closed Agent subscription, paused ones included (F2), and no
+ *     join-cancel row waiting -> one row (payload as the database trigger's, plus
+ *     source 'reconcile'; the key carries the member row and the UTC day);
+ *   - alert (open, unpaused, still charging): when no row was waiting before this
+ *     run, or a waiting row is parked or older than JOIN_CANCEL_ALERT_AFTER_MS. A
+ *     fresh waiting row is the cancel in progress: no alert.
+ * Mode isolation is the user's stripe_customers row in this mode. Nothing is
+ * refunded. Returns the alerted subscription ids.
  */
 async function brokerageMemberScan(deps: ReconcileDeps, result: ReconcileResult): Promise<string[]> {
   const found: string[] = [];
+  const now = deps.now ? deps.now() : new Date();
   try {
     const { data: members, error } = await deps.service
       .from('organization_members')
-      .select('user_id, organization_id')
+      .select('id, user_id, organization_id')
       .in('license_status', [...BROKERAGE_MEMBER_STATUSES])
       .not('user_id', 'is', null)
       .limit(RECONCILE_MAX_ITEMS * 5);
     if (error) throw new Error(`organization_members read failed: ${error.code ?? 'unknown'}`);
-    const rows = (members as { user_id: string | null; organization_id: string }[] | null) ?? [];
+    const rows = (members as { id: string; user_id: string | null; organization_id: string }[] | null) ?? [];
     const orgIds = [...new Set(rows.map((r) => r.organization_id))];
     if (orgIds.length === 0) return found;
     const { data: orgs, error: orgErr } = await deps.service
@@ -460,7 +492,11 @@ async function brokerageMemberScan(deps: ReconcileDeps, result: ReconcileResult)
         .filter((o) => o.personal_owner_user_id === null || o.personal_owner_user_id === undefined)
         .map((o) => o.id)
     );
-    const users = [...new Set(rows.filter((r) => r.user_id && brokerageOrgs.has(r.organization_id)).map((r) => r.user_id as string))];
+    const byUser = new Map<string, { id: string; organization_id: string }>();
+    for (const r of rows) {
+      if (r.user_id && brokerageOrgs.has(r.organization_id) && !byUser.has(r.user_id)) byUser.set(r.user_id, r);
+    }
+    const users = [...byUser.keys()];
     if (users.length > RECONCILE_MAX_ITEMS) result.truncated = true;
     for (const userId of users.slice(0, RECONCILE_MAX_ITEMS)) {
       try {
@@ -469,10 +505,35 @@ async function brokerageMemberScan(deps: ReconcileDeps, result: ReconcileResult)
         const subs = await listAll((after) =>
           deps.stripe.subscriptions.list({ customer: customer.stripe_customer_id, status: 'all', limit: 100, ...(after ? { starting_after: after } : {}) })
         );
-        const paying = subs.filter(
-          (s) => (!s.metadata?.kind || s.metadata.kind === 'agent') && BROKERAGE_ALERT_SUB_STATUSES.has(s.status) && !s.pause_collection
-        );
-        if (paying.length === 0) continue;
+        const agent = subs.filter((s) => !s.metadata?.kind || s.metadata.kind === 'agent');
+        const open = agent.filter((s) => !JOIN_CANCEL_CLOSED.has(s.status));
+        if (open.length === 0) continue;
+        const paying = agent.filter((s) => BROKERAGE_ALERT_SUB_STATUSES.has(s.status) && !s.pause_collection);
+
+        const pending = await pendingJoinCancel(deps, userId);
+        if (pending.length === 0) {
+          const member = byUser.get(userId) as { id: string; organization_id: string };
+          const added = await enqueueOutbox(deps.service, {
+            mode: deps.mode,
+            kind: JOIN_CANCEL_KIND,
+            userId,
+            dedupeKey: `join-cancel:${deps.mode}:${userId}:reconcile:${member.id}:${now.toISOString().slice(0, 10)}`,
+            payload: {
+              brokerage_organization_id: member.organization_id,
+              member_id: member.id,
+              stripe_customer_id: customer.stripe_customer_id,
+              source: 'reconcile',
+            },
+            runAfter: now,
+          });
+          if (added === 'enqueued') result.joinCancelEnqueued++;
+        }
+        const stuck = pending.some((p) => {
+          if (parseRunAfter(p.run_after) === null) return true; // parked
+          const created = p.created_at ? Date.parse(p.created_at) : NaN;
+          return !Number.isFinite(created) || now.getTime() - created >= JOIN_CANCEL_ALERT_AFTER_MS;
+        });
+        if (paying.length === 0 || (pending.length > 0 && !stuck)) continue;
         result.brokerageMembers++;
         found.push(...paying.map((s) => s.id));
       } catch (err) {

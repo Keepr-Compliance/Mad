@@ -134,6 +134,10 @@ function stableJson(v: unknown): string {
  *                            _billing_reinstate_org: staff or automatic reinstatement)
  *   - notify_payment_failed  BACKLOG-3932, lib/billing/paymentFailedNotify.ts (enqueued by the
  *                            Stripe webhook on a brokerage invoice.payment_failed, +1 hour)
+ *   - cancel_agent_on_brokerage_join
+ *                            BACKLOG-3850, lib/billing/joinCancel.ts (enqueued by
+ *                            _retire_personal_membership at a brokerage join, and by the nightly
+ *                            reconcile: end the personal Agent plan, no refund, one email)
  */
 export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.freeze({
   agent_receipt: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
@@ -164,4 +168,6 @@ export const OUTBOX_HANDLERS: Readonly<Record<string, OutboxHandler>> = Object.f
     (await import('./orgReinstatedNotify')).handleNotifyOrgReinstatedRow(row, ctx),
   notify_payment_failed: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
     (await import('./paymentFailedNotify')).handleNotifyPaymentFailedRow(row, ctx),
+  cancel_agent_on_brokerage_join: async (row: OutboxRow, ctx: OutboxHandlerContext) =>
+    (await import('./joinCancel')).handleJoinCancelRow(row, ctx),
 });
