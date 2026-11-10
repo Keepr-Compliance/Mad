@@ -31,7 +31,7 @@ jest.mock('@/lib/email', () => ({ sendAgentPlanEndedEmail: (...a: unknown[]) => 
 
 import { handleJoinCancelRow, AGENT_PLAN_ENDED_LOG_KIND } from '@/lib/billing/joinCancel';
 import { NonRetryableOutboxError, outboxIdempotencyKey, type OutboxRow } from '@/lib/billing/outboxKinds';
-import { agentPlanEndedLines, buildAgentPlanEndedEmail, AGENT_PLAN_ENDED_SUBJECT } from '@/lib/email/templates/agent-plan-ended';
+import { agentPlanEndedLines, buildAgentPlanEndedEmail, AGENT_PLAN_ENDED_SUBJECT, CONTACT_SUPPORT_BUTTON_LABEL } from '@/lib/email/templates/agent-plan-ended';
 
 type Obj = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
 const FX = path.join(__dirname, '../../../fixtures/stripe/p3848');
@@ -180,7 +180,7 @@ describe('cancel_agent_on_brokerage_join', () => {
     // Mirror write-through (this user, this mode, this subscription).
     expect(db.rows('billing_subscriptions')[0]).toMatchObject({ status: 'canceled', cancel_at_period_end: false, paused: false });
     expect(sends()).toEqual([
-      { recipientEmail: 'billing-3850@example.test', brokerageName: 'Brokerage 3850', licensed: true, outboxKey: row().dedupe_key, userId: USER },
+      { recipientEmail: 'billing-3850@example.test', brokerageName: 'Brokerage 3850', licensed: true, supportUrl: expect.stringMatching(/\/support\/new$/), outboxKey: row().dedupe_key, userId: USER },
     ]);
   });
 
@@ -376,7 +376,7 @@ describe('F6 / 35b3b3ab: each license_status gets its own copy', () => {
     expect(agentPlanEndedLines({ brokerageName: 'Acme Realty', licensed: true })).toEqual([
       "You've joined Acme Realty on Keepr, so your brokerage now covers your account.",
       "We've ended your personal Agent plan today, and you won't be charged for it again. Your transactions and credits stay with you.",
-      'Questions? Reply to this email.',
+      'If you believe this was a mistake, contact support@keeprcompliance.com.',
     ]);
   });
 
@@ -387,9 +387,33 @@ describe('F6 / 35b3b3ab: each license_status gets its own copy', () => {
     expect(lines.slice(1)).toEqual(agentPlanEndedLines({ brokerageName: 'Acme Realty', licensed: true }).slice(1));
   });
 
+  it('both versions end with the support-contact line, then render the Contact support button', () => {
+    const END = 'If you believe this was a mistake, contact support@keeprcompliance.com.';
+    const URL = 'https://portal.example.test/support/new';
+    for (const licensed of [true, false]) {
+      const lines = agentPlanEndedLines({ brokerageName: 'Acme Realty', licensed });
+      expect(lines[lines.length - 1]).toBe(END);
+      const built = buildAgentPlanEndedEmail({
+        recipientEmail: 'a@example.test',
+        brokerageName: 'Acme Realty',
+        licensed,
+        supportUrl: URL,
+        outboxKey: 'k',
+        userId: 'u',
+      });
+      expect(built.text.endsWith(`${END}\n\n${CONTACT_SUPPORT_BUTTON_LABEL}: ${URL}`)).toBe(true);
+      expect(built.text).not.toContain('Reply to this email');
+      expect(CONTACT_SUPPORT_BUTTON_LABEL).toBe('Contact support');
+      expect(built.html).toContain(`href="${URL}"`);
+      expect(built.html).toContain('data-contact-support="true"');
+      expect(built.html).toContain(CONTACT_SUPPORT_BUTTON_LABEL);
+      expect(built.html.indexOf(END)).toBeLessThan(built.html.indexOf('data-contact-support'));
+    }
+  });
+
   it('built email: subject, both bodies, escaped brokerage name', () => {
-    const lic = buildAgentPlanEndedEmail({ recipientEmail: 'a@example.test', brokerageName: 'A & B <Realty>', licensed: true, outboxKey: 'k', userId: 'u' });
-    const unl = buildAgentPlanEndedEmail({ recipientEmail: 'a@example.test', brokerageName: 'A & B <Realty>', licensed: false, outboxKey: 'k', userId: 'u' });
+    const lic = buildAgentPlanEndedEmail({ recipientEmail: 'a@example.test', brokerageName: 'A & B <Realty>', licensed: true, supportUrl: 'https://portal.example.test/support/new', outboxKey: 'k', userId: 'u' });
+    const unl = buildAgentPlanEndedEmail({ recipientEmail: 'a@example.test', brokerageName: 'A & B <Realty>', licensed: false, supportUrl: 'https://portal.example.test/support/new', outboxKey: 'k', userId: 'u' });
     expect([lic.subject, unl.subject]).toEqual([AGENT_PLAN_ENDED_SUBJECT, AGENT_PLAN_ENDED_SUBJECT]);
     expect(AGENT_PLAN_ENDED_SUBJECT).toBe('Your Keepr Agent plan has ended');
     expect(lic.text).toContain('covers your account');

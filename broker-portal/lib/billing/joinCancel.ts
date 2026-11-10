@@ -49,6 +49,12 @@ import { NonRetryableOutboxError, outboxIdempotencyKey, type OutboxHandler, type
 import { agentSubscriptions, stripeGate } from './suspension';
 import { listAll } from './sync';
 
+/** Same base as the payment-failed email's links (paymentFailedNotify.ts). */
+function portalBaseUrl(): string {
+  return process.env.NEXT_PUBLIC_APP_URL || 'https://app.keeprcompliance.com';
+}
+const SUPPORT_NEW_PATH = '/support/new';
+
 type ServiceClient = ReturnType<typeof createServiceClient>;
 
 export { JOIN_CANCEL_KIND } from './joinCancelKind';
@@ -240,6 +246,7 @@ export const handleJoinCancelRow: OutboxHandler = async (row, ctx) => {
     recipientEmail,
     brokerageName: join.brokerageName,
     licensed: join.member.license_status === 'active',
+    supportUrl: `${portalBaseUrl()}${SUPPORT_NEW_PATH}`,
     outboxKey: row.dedupe_key,
     userId,
   });
