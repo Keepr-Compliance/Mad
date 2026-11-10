@@ -487,7 +487,7 @@ function buildDeleteTxFixture(userId) {
 //      normalization — unlike the em-dash subjects).
 //
 //   2. A COVERING email_sync_state row so the AWAITED pre-export sync
-//      (transactionExportHandlers.ts export-pdf → ensureTransactionEmailsSynced
+//      (transactionExportHandlers.ts export-enhanced → ensureTransactionEmailsSynced
 //      reason:'export') takes the "covered" (no-fetch) branch and makes ZERO
 //      network calls offline. The seed's mailbox oauth_tokens row makes
 //      resolveMailboxAccountId return 1 account (NOT 0), so without this the
@@ -518,6 +518,31 @@ const EXPORT_COMPLETENESS_BODY_MARKERS = {
 /** The mailbox oauth_tokens id the covering email_sync_state row must key on. */
 const EXPORT_COMPLETENESS_ACCOUNT_ID = 'qa-seed-token-google-mailbox';
 
+/** The fixture account's identity when no identity knob is set. */
+// pii-allow-uuid: invented fixture id (unchanged default), not from any live row
+const DEFAULT_SEED_USER_ID = 'a0000000-0000-4000-8000-00000000e2e0';
+const DEFAULT_SEED_EMAIL = 'qa.seed@keepr.test';
+const UUID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * BACKLOG-4054: the seeded account's identity. Default: the fixture account above. A test that signs
+ * in as a real test-project user sets BOTH KEEPR_QA_SEED_USER_ID (a UUID) and KEEPR_QA_SEED_EMAIL,
+ * so the seeded rows are that user's from the start and sign-in opens a session for the seeded row
+ * (the app matches the local user by email). Exactly one knob, or a non-UUID id, is refused: a
+ * half-set identity would only fail later, at sign-in. The values are never echoed.
+ */
+function resolveSeedIdentity(env = process.env) {
+  const userId = env.KEEPR_QA_SEED_USER_ID || '';
+  const email = env.KEEPR_QA_SEED_EMAIL || '';
+  if (!userId && !email) return { userId: DEFAULT_SEED_USER_ID, email: DEFAULT_SEED_EMAIL };
+  if (!userId || !email) {
+    throw new Error('KEEPR_QA_SEED_USER_ID and KEEPR_QA_SEED_EMAIL must be set together, or neither.');
+  }
+  if (!UUID_SHAPE.test(userId)) throw new Error('KEEPR_QA_SEED_USER_ID must be a UUID.');
+  if (!/^[^@\s]+@[^@\s]+$/.test(email)) throw new Error('KEEPR_QA_SEED_EMAIL must be an email address.');
+  return { userId, email };
+}
+
 /** The default known fixture. Deterministic ids so re-seeds are idempotent (INSERT OR REPLACE). */
 function defaultFixture() {
   const nowIso = new Date().toISOString();
@@ -528,7 +553,7 @@ function defaultFixture() {
   // (transactions:get-details / get-communications) run validateTransactionId and REJECTED it with
   // "Transaction ID must be a valid UUID", so contact_assignments never loaded and the address-filter
   // toggle (gated on hasContacts) never rendered. A valid UUID fixes the whole detail-view path.
-  const userId = 'a0000000-0000-4000-8000-00000000e2e0';
+  const { userId, email: seedEmail } = resolveSeedIdentity();
   const sessionToken = process.env.KEEPR_QA_SESSION_TOKEN || 'qa-seed-session-token-0001';
   const txId = 'b0000000-0000-4000-8000-00000000d100';
   // Session expires well into the future so validateSession passes.
@@ -619,7 +644,7 @@ function defaultFixture() {
   return {
     user: {
       id: userId,
-      email: 'qa.seed@keepr.test',
+      email: seedEmail,
       first_name: 'QA',
       last_name: 'Seed',
       display_name: 'QA Seed',
@@ -1030,6 +1055,14 @@ function main() {
     process.stderr.write(`\n  x seed-fixture error: ${msg}\n`);
     process.exit(2);
   };
+
+  // BACKLOG-4054: refuse a half-set or malformed identity before any app or DB work (exit 2).
+  try {
+    resolveSeedIdentity(process.env);
+  } catch (err) {
+    fail(err);
+    return;
+  }
   process.on('uncaughtException', fail);
   process.on('unhandledRejection', fail);
 
@@ -1061,6 +1094,9 @@ module.exports = {
   parseArgs,
   assertIsolatedProfile,
   defaultFixture,
+  resolveSeedIdentity,
+  DEFAULT_SEED_USER_ID,
+  DEFAULT_SEED_EMAIL,
   participantHash,
   SENTINEL,
   FIXTURE_ADDRESS,

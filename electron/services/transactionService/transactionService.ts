@@ -108,7 +108,7 @@ import type {
   AssignContactResult,
 } from "./types";
 import { beginLink } from "../../utils/linkInFlight";
-import { BUNDLED_SENDER_RULES } from "../../utils/senderFilter/bundledRules";
+import { getActiveSenderRules } from "../senderRuleSetStore";
 import { buildKeepSets } from "../../utils/senderFilter/senderFilter";
 import { filterForSurface } from "../../utils/senderFilter/siteFilter";
 import { listDealContactEmails } from "../db/dealContactEmailsDb";
@@ -569,7 +569,8 @@ class TransactionService {
    * exact seeds, which win); logs counts per signal and mode only.
    */
   private async _filterDetectorInput(userId: string, emails: EmailMessage[]): Promise<EmailMessage[]> {
-    const rules = BUNDLED_SENDER_RULES;
+    const active = getActiveSenderRules();
+    const rules = active.rules;
     const keep = buildKeepSets(listDealContactEmails(userId), rules);
     const { passed, counts } = filterForSurface(
       emails,
@@ -580,6 +581,7 @@ class TransactionService {
     );
     await logService.info("[BACKLOG-4175] detector sender filter", "TransactionService.scanAndExtractTransactions", {
       senderRulesVersion: rules.version,
+      senderRulesSource: active.source,
       ...counts,
     });
     return passed;

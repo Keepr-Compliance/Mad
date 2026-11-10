@@ -100,7 +100,6 @@ const app = {
   hasSecureStorageSetup: true,
   needsDriverSetup: false,
   needsTermsAcceptance: false,
-  pendingOAuthData: null,
   authProvider: "google",
   isNewUserFlow: false,
   isDatabaseInitialized: false,

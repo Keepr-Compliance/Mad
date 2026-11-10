@@ -364,6 +364,31 @@ export interface AutoRenewOnParams {
   organizationId: string;
 }
 
+/** BACKLOG-4200: auto-renew turned off by Keepr staff, to the billing contact. */
+export interface AutoRenewOffParams {
+  recipientEmail: string;
+  brokerageName: string;
+  /** The plan's end date ("Nov 27, 2026"), or null when unknown or past (fallback wording). */
+  endsOn: string | null;
+  outboxKey: string;
+  organizationId: string;
+}
+
+/**
+ * BACKLOG-4209: the billing line of the reinstated emails (lib/email/templates/billing-line.ts).
+ * endsOn null = unknown or already past (fallback wording); 'none' = no live subscription, line left out.
+ */
+export type BillingLine = { kind: 'renews' } | { kind: 'ends'; endsOn: string | null } | { kind: 'none' };
+
+/** BACKLOG-4209: the brokerage was reinstated (by staff or automatically), to the billing contact. */
+export interface OrgReinstatedParams {
+  recipientEmail: string;
+  brokerageName: string;
+  billing: BillingLine;
+  outboxKey: string;
+  organizationId: string;
+}
+
 /** BACKLOG-4007 People v2: "You are now the billing contact" (founder R9 refinement). */
 export interface BillingContactReassignedParams {
   recipientEmail: string;

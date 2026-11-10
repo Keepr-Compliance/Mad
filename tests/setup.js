@@ -65,11 +65,6 @@ if (typeof window !== 'undefined') {
       googleDisconnectMailbox: jest.fn().mockResolvedValue({ success: true }),
       microsoftDisconnectMailbox: jest.fn().mockResolvedValue({ success: true }),
       completeEmailOnboarding: jest.fn().mockResolvedValue({ success: true }),
-      completePendingLogin: jest.fn().mockResolvedValue({ success: true }),
-      // Pre-DB mailbox connection methods
-      googleConnectMailboxPending: jest.fn().mockResolvedValue({ success: true }),
-      microsoftConnectMailboxPending: jest.fn().mockResolvedValue({ success: true }),
-      savePendingMailboxTokens: jest.fn().mockResolvedValue({ success: true }),
       acceptTermsToSupabase: jest.fn().mockResolvedValue({ success: true }),
     },
     transactions: {
@@ -488,11 +483,6 @@ if (typeof window !== 'undefined') {
     onMicrosoftMailboxDisconnected: jest.fn(() => jest.fn()),
     onGoogleMailboxCancelled: jest.fn(() => jest.fn()),
     onMicrosoftMailboxCancelled: jest.fn(() => jest.fn()),
-    // Pre-DB mailbox connection event listeners
-    onGoogleMailboxPendingConnected: jest.fn(() => jest.fn()),
-    onMicrosoftMailboxPendingConnected: jest.fn(() => jest.fn()),
-    onGoogleMailboxPendingCancelled: jest.fn(() => jest.fn()),
-    onMicrosoftMailboxPendingCancelled: jest.fn(() => jest.fn()),
   };
 
   // Mock electron for tests

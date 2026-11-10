@@ -55,7 +55,7 @@ const SIGN_IN_WRITERS = new Set([
 ]);
 
 /** Known call counts. Change deliberately when a call is added or removed. */
-const EXPECTED_CALLS = { saveSession: 3, saveSignInSession: 2 };
+const EXPECTED_CALLS = { saveSession: 2, saveSignInSession: 2 };
 
 function read(rel: string): string {
   // Windows checkouts use CRLF (BACKLOG-3555).

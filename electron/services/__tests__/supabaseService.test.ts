@@ -128,6 +128,23 @@ describe("SupabaseService", () => {
       expect((supabaseService as any).initialized).toBe(true);
     });
 
+    it("BACKLOG-4097: treats credentials set to empty as missing (hermetic e2e pin)", async () => {
+      jest.resetModules();
+      const originalUrl = process.env.SUPABASE_URL;
+      const originalKey = process.env.SUPABASE_ANON_KEY;
+      process.env.SUPABASE_URL = "";
+      process.env.SUPABASE_ANON_KEY = "";
+      try {
+        const service = (await import("../supabaseService")).default;
+        (service as any).initialized = false;
+        (service as any).client = null;
+        expect(() => service.initialize()).toThrow("Supabase credentials not configured");
+      } finally {
+        process.env.SUPABASE_URL = originalUrl;
+        process.env.SUPABASE_ANON_KEY = originalKey;
+      }
+    });
+
     it("should throw error when credentials are missing", async () => {
       // Reset module and clear env vars
       jest.resetModules();

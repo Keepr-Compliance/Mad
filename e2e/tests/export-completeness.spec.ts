@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { KeeprAppDriver } from '../driver/appDriver';
 import { resolveBuiltMainEntry, resolveElectronBinary } from '../driver/paths';
+import { HERMETIC_APP_ENV } from '../driver/launchArgs';
 import { seedIsolatedProfile, type SeededIdentity } from '../driver/seed/seedProfile';
 import { applyFixtureDbKey, FIXTURE_DB_KEY } from '../../scripts/qa/harness/db-key-fixture';
 import {
@@ -20,7 +21,8 @@ import {
  * BACKLOG-1983 (P2-C7) — the EXPORT → PDF COMPLETENESS cell (HERMETIC).
  *
  * Proves, offline and deterministically (isolated profile, stub auth, NO real M365/OAuth/network), that
- * the desktop combined-PDF export (transactions:export-pdf → BACKLOG-1584 single-HTML combined PDF)
+ * the desktop combined-PDF export (transactions:export-enhanced, exportFormat 'pdf' — the ExportModal's
+ * "One PDF" path → BACKLOG-1584 single-HTML combined PDF)
  * actually CONTAINS every DB-linked email communication — asserting on EXTRACTED PDF TEXT, not bytes
  * (filenames embed Date.now()):
  *
@@ -99,6 +101,8 @@ async function launchLoggedIn(profileDir: string): Promise<KeeprAppDriver> {
     repoRoot: REPO_ROOT,
     artifactsDir: ARTIFACTS_DIR,
     launchTimeoutMs: 60_000,
+    // BACKLOG-4097: hermetic means no backend, whatever .env.development the tree holds.
+    env: { ...HERMETIC_APP_ENV },
   });
   await driver.waitForFirstPaint(60_000);
   await driver.bringToFront();
@@ -145,18 +149,21 @@ test.describe('export → PDF completeness cell (BACKLOG-1983)', () => {
         EXPECTED_LINKED_EMAILS.map((e) => e.emailId).sort(),
       );
 
-      // ── STEP 2: TRIGGER the real export via the preload bridge with an EXPLICIT scratch outputPath
-      // (no native dialog). The awaited pre-export sync degrades via the seeded covering sync-state.
-      const outDir = join(SCRATCH, 'export-completeness-out');
-      if (!existsSync(outDir)) mkdirSync(outDir, { recursive: true });
-      const outPath = join(outDir, `export-${Date.now()}.pdf`);
-      const result = await driver.exportPdfToPath(txId, outPath);
+      // ── STEP 2: TRIGGER the real export via the preload bridge, with the main process's downloads
+      // path redirected to a FRESH scratch dir (no native dialog, nothing written to ~/Downloads). The
+      // awaited pre-export sync degrades via the seeded covering sync-state.
+      const outDir = join(SCRATCH, `export-completeness-out-${Date.now()}`);
+      mkdirSync(outDir, { recursive: true });
+      const result = await driver.exportCombinedPdfToDir(txId, outDir);
       await driver.screenshot('01-after-export');
 
       if (!result.success) {
-        throw new Error(`[export-completeness] HARNESS_ERROR: export-pdf did not succeed: ${result.error ?? 'unknown error'}`);
+        throw new Error(`[export-completeness] HARNESS_ERROR: combined-PDF export did not succeed: ${result.error ?? 'unknown error'}`);
       }
-      const producedPath = result.path ?? outPath;
+      const producedPath = result.path ?? '';
+      if (!producedPath.startsWith(outDir) || !producedPath.endsWith('.pdf')) {
+        throw new Error(`[export-completeness] HARNESS_ERROR: export wrote outside the scratch dir or not a PDF: ${producedPath}`);
+      }
       if (!existsSync(producedPath) || statSync(producedPath).size === 0) {
         throw new Error(`[export-completeness] HARNESS_ERROR: PDF was not produced or is empty at ${producedPath}.`);
       }

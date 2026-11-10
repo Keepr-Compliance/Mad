@@ -61,11 +61,9 @@ function closedOnboarding(database: "not-initialized" | "unknown" = "not-initial
 const options = {
   isWindows: false,
   isMacOS: true,
-  pendingOAuthData: null,
   pendingOnboardingData: { termsAccepted: false, phoneType: null, emailProvider: null, emailConnected: false },
   isAuthenticated: true,
   login: jest.fn(),
-  onPendingOAuthClear: jest.fn(),
   onPendingOnboardingClear: jest.fn(),
   onPhoneTypeSet: jest.fn(),
   onEmailOnboardingComplete: jest.fn(),

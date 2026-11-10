@@ -26,11 +26,21 @@
  * Kit components (@keepr/ui), no hand-styled controls:
  *   Card/CardHeader/CardTitle/CardDescription/CardContent  packages/ui/src/components/card.tsx:13,28,40,55,67
  *   Button variant="secondary" size="sm"                   packages/ui/src/components/button.tsx:23-24,49
+ *   Button variant="primary" size="sm" (trial Subscribe)   packages/ui/src/components/button.tsx
  *   StatusPill                                             packages/ui/src/components/phone/status-pill.tsx:19-36
  *   AlertBanner variant="warning"                          packages/ui/src/components/alert-banner.tsx:24-25,44
  *   Skeleton                                               packages/ui/src/components/skeleton.tsx:8
- * No `primary`-scale hue is used (pill hues success/warning/danger/gray, banner
- * warning): under founder D2 that scale is still sky, next to #007AFF.
+ * No `primary`-scale hue is used in the pills or banners (success/warning/danger/gray,
+ * banner warning). The trial Subscribe button is the kit's primary variant, as on
+ * the export paywall's Subscribe (PlanCards.tsx AgentButton).
+ *
+ * BACKLOG-4088 (founder 73bc361e Q3/Q4):
+ *   - a live free trial arrives as state support_grant + trialEndsOn: "Free trial",
+ *     pill "Trial", "Unlimited exports until <date>. Subscribe now and you won't be
+ *     charged until then.", button "Subscribe" (opens the Agent plan Checkout; billing
+ *     starts at the trial end). A support grant without trialEndsOn is unchanged.
+ *   - subscribed during the trial (state active + subscriptionTrialEndsOn):
+ *     "Billing starts <date>." in place of "Renews <date>.".
  */
 
 import React, { useEffect, useState } from "react";
@@ -52,6 +62,7 @@ import { useCreditBalance } from "@/hooks/useCreditBalance";
 import { entitlementService } from "@/services/entitlementService";
 import type { PlanSummary } from "@/services/billingService";
 import { usePlanSummary } from "./usePlanSummary";
+import { REFUSAL_MESSAGES } from "../../paywall/ExportUnlockPrompt";
 
 export interface PlanBillingCardProps {
   /** 3964's Account tab plan label. Accepted for that mount; this card names the plan itself. */
@@ -61,7 +72,7 @@ export interface PlanBillingCardProps {
   userId: string;
 }
 
-type Action = "manage" | "plans" | null;
+type Action = "manage" | "plans" | "subscribe" | null;
 
 interface View {
   title: string;
@@ -103,13 +114,14 @@ function payAsYouGo(price: string | null): View {
 function viewFromSummary(summary: PlanSummary, price: string | null): View {
   const date = formatDate(summary.current_period_end);
   switch (summary.state) {
-    case "active":
-      return {
-        title: "Agent",
-        pill: { hue: "success", text: "Active" },
-        detail: date ? `Unlimited exports. Renews ${date}.` : "Unlimited exports.",
-        action: "manage",
-      };
+    case "active": {
+      // BACKLOG-4088: still in the Stripe trial -> when billing starts, not a renewal.
+      const billingStarts = formatDate(summary.subscriptionTrialEndsOn);
+      let detail = "Unlimited exports.";
+      if (billingStarts) detail = `Unlimited exports. Billing starts ${billingStarts}.`;
+      else if (date) detail = `Unlimited exports. Renews ${date}.`;
+      return { title: "Agent", pill: { hue: "success", text: "Active" }, detail, action: "manage" };
+    }
     case "cancel_pending":
       return {
         title: "Agent",
@@ -124,8 +136,19 @@ function viewFromSummary(summary: PlanSummary, price: string | null): View {
         detail: "Unlimited exports are off until it's paid.",
         action: "manage",
       };
-    case "support_grant":
+    case "support_grant": {
+      // BACKLOG-4088: a live free trial (the portal sends its end date); any other Keepr grant has none.
+      const trialEnds = formatDate(summary.trialEndsOn);
+      if (trialEnds) {
+        return {
+          title: "Free trial",
+          pill: { hue: "success", text: "Trial" },
+          detail: `Unlimited exports until ${trialEnds}. Subscribe now and you won't be charged until then.`,
+          action: "subscribe",
+        };
+      }
       return { title: "Unlimited exports", pill: { hue: "success", text: "Active" }, action: null };
+    }
     case "none":
     default:
       return payAsYouGo(price);
@@ -135,8 +158,17 @@ function viewFromSummary(summary: PlanSummary, price: string | null): View {
 export function PlanBillingCard({ organizationId }: PlanBillingCardProps) {
   const { isLicenseResolved } = useLicense();
   const { features, hasInitialized } = useFeatureGate();
-  const { summary, loading, unavailable, openBillingPortal, openFailed, openFailedAddress } =
-    usePlanSummary();
+  const {
+    summary,
+    loading,
+    unavailable,
+    openBillingPortal,
+    openFailed,
+    openFailedAddress,
+    subscribe,
+    subscribing,
+    subscribeRefusal,
+  } = usePlanSummary();
   const { balance, loading: balanceLoading } = useCreditBalance();
   const [price, setPrice] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
@@ -208,10 +240,32 @@ export function PlanBillingCard({ organizationId }: PlanBillingCardProps) {
       </CardHeader>
       {(view.action || openFailed) && (
         <CardContent className="space-y-3">
-          {view.action && (
-            <Button variant="secondary" size="sm" isLoading={opening} onClick={() => void onOpen()}>
-              {view.action === "manage" ? "Manage billing" : "See plans and billing"}
-            </Button>
+          {view.action === "subscribe" && (
+            <div className="flex justify-end" data-testid="plan-billing-action-row">
+              <Button
+                variant="primary"
+                size="sm"
+                isLoading={subscribing}
+                onClick={() => void subscribe()}
+                data-testid="plan-billing-subscribe"
+              >
+                Subscribe
+              </Button>
+            </div>
+          )}
+          {view.action === "subscribe" && subscribeRefusal && (
+            <AlertBanner variant="warning" data-testid="plan-billing-subscribe-refusal">
+              {subscribeRefusal === "brokerage_managed"
+                ? REFUSAL_MESSAGES.not_available
+                : REFUSAL_MESSAGES[subscribeRefusal]}
+            </AlertBanner>
+          )}
+          {(view.action === "manage" || view.action === "plans") && (
+            <div className="flex justify-end" data-testid="plan-billing-action-row">
+              <Button variant="secondary" size="sm" isLoading={opening} onClick={() => void onOpen()}>
+                {view.action === "manage" ? "Manage billing" : "See plans and billing"}
+              </Button>
+            </div>
           )}
           {openFailed && (
             <AlertBanner variant="warning">
