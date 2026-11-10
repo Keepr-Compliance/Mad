@@ -17,8 +17,10 @@ const M1 = '20261105100000_backlog_4144_report_access.sql';
  * report_my_access(key) = 'owner' (BACKLOG-4175 sender rule sets, 20261107235503); the page
  * lands in BACKLOG-4186, which deletes this entry. The reports index lists only registry
  * reports, so a pending key shows no dead link.
+ * 'learn-pilot' (BACKLOG-4219 PR1, 20261112130000) is gated the same way; its page lands in
+ * BACKLOG-4219 PR3, which deletes that entry.
  */
-const SERVER_ONLY_PENDING = ['sender-rules'];
+const SERVER_ONLY_PENDING = ['sender-rules', 'learn-pilot'];
 
 /**
  * Every key any migration inserts into public.reports. M1 seeds the first eight; a report added later
@@ -38,9 +40,9 @@ function catalogKeys(): string[] {
 }
 
 describe('registry == reports catalog (M1 + later report migrations)', () => {
-  it('the catalog seeds 10 distinct keys', () => {
+  it('the catalog seeds 11 distinct keys', () => {
     const keys = catalogKeys();
-    expect(keys).toHaveLength(10);
+    expect(keys).toHaveLength(11);
     expect(new Set(keys).size).toBe(keys.length);
   });
 
