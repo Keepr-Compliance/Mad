@@ -52,9 +52,17 @@ export interface DashboardPanels {
   tickError: TickError | null;
 }
 
-export function useDashboardPanels(userId: string | undefined): DashboardPanels {
+/**
+ * `todoEnabled` (BACKLOG-4220): true reads Todo as before; false never reads it
+ * (the panel is hidden); null means the preference is not known yet, so Todo
+ * shows its loading state and is not read until it is.
+ */
+export function useDashboardPanels(
+  userId: string | undefined,
+  todoEnabled: boolean | null = true,
+): DashboardPanels {
   const [recent, setRecent] = useState<RecentState>({ status: "loading" });
-  const [todo, setTodo] = useState<TodoState>({ status: userId ? "loading" : "off" });
+  const [todo, setTodo] = useState<TodoState>({ status: userId && todoEnabled !== false ? "loading" : "off" });
   const [reloadKey, setReloadKey] = useState(0);
   const [tickingItemId, setTickingItemId] = useState<string | null>(null);
   const [tickError, setTickError] = useState<TickError | null>(null);
@@ -78,8 +86,12 @@ export function useDashboardPanels(userId: string | undefined): DashboardPanels 
 
   useEffect(() => {
     const id = ++todoReadId.current;
-    if (!userId) {
+    if (!userId || todoEnabled === false) {
       setTodo({ status: "off" });
+      return;
+    }
+    if (todoEnabled === null) {
+      setTodo({ status: "loading" });
       return;
     }
     // Keep the last answer on screen during a re-read; only a first read shows "loading".
@@ -88,7 +100,7 @@ export function useDashboardPanels(userId: string | undefined): DashboardPanels 
       if (todoReadId.current !== id) return;
       setTodo(result.success && result.data ? { status: "ready", data: result.data } : { status: "error" });
     });
-  }, [userId, reloadKey]);
+  }, [userId, reloadKey, todoEnabled]);
 
   const tickItem = useCallback(
     async (itemId: string) => {
