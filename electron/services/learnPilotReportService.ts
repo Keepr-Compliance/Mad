@@ -20,7 +20,7 @@
  * successful withdraw schedules ONE more withdraw 60 s later.
  *
  * D3 / R7, throttle per (user, sender-rules version), persisted in
- * learn_mode_settings.pilot_sent_versions ({version: last successful submit},
+ * the Learn settings row's pilot_sent_versions ({version: last successful submit},
  * at most 5, oldest evicted), written ONLY after a successful submit and
  * cleared by a successful withdraw. Send when the version has no entry; or its
  * entry is >= 6 h old AND (an answer was saved after it, or it is >= 24 h old).

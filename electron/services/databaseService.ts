@@ -2000,7 +2000,7 @@ class DatabaseService implements IDatabaseService {
     {
       version: 79,
       description:
-        "BACKLOG-4219 Learn pilot report: learn_mode_settings gains pilot_report " +
+        "BACKLOG-4219 Learn pilot report: the Learn mode settings row gains pilot_report " +
         "(default OFF), pilot_pending_withdraw, pilot_sent_versions, pilot_unsettled_at",
       // Guarded like v75: a FRESH install already has the columns from schema.sql
       // (schema_version seeds at BASELINE 70, then this migration still runs), so
