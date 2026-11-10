@@ -312,7 +312,7 @@ describe("transport filter, each check on its own", () => {
   });
 
   it("an envelope left empty answers 200 without calling the next layer", async () => {
-    const send = jest.fn(async () => ({ statusCode: 200 }));
+    const send = jest.fn(async (_envelope: unknown) => ({ statusCode: 200 }));
     const t = filterDiagnosticLogs(() => ({ send, flush: async () => true }))({});
     await expect(t.send(envOf(diagLog({ "keepr.diag": false })) as never)).resolves.toEqual({ statusCode: 200 });
     expect(send).not.toHaveBeenCalled();
