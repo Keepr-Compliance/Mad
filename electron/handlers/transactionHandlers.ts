@@ -4,9 +4,12 @@
 // This file provides backwards compatibility for existing tests.
 // ============================================
 
-import type { BrowserWindow } from "electron";
 import { registerTransactionCrudHandlers } from "./transactionCrudHandlers";
-import { registerTransactionExportHandlers, cleanupTransactionHandlers } from "./transactionExportHandlers";
+import {
+  registerTransactionExportHandlers,
+  cleanupTransactionHandlers,
+  type TransactionExportHandlerOptions,
+} from "./transactionExportHandlers";
 import { registerEmailSyncHandlers } from "./emailSyncHandlers";
 import { registerEmailLinkingHandlers } from "./emailLinkingHandlers";
 import { registerEmailAutoLinkHandlers } from "./emailAutoLinkHandlers";
@@ -15,17 +18,17 @@ import { registerTransactionSearchHandlers } from "./transactionSearchHandlers";
 
 /**
  * Register all transaction-related IPC handlers (delegates to domain files).
- * @param _mainWindow - Main window instance (BACKLOG-3454: IGNORED — pushes resolve the live window via sendToMainWindow; kept so existing call sites and suites compile)
+ * @param options - forwarded to registerTransactionExportHandlers (BACKLOG-3456)
  */
 export function registerTransactionHandlers(
-  _mainWindow: BrowserWindow | null,
+  options: TransactionExportHandlerOptions,
 ): void {
-  registerTransactionCrudHandlers(_mainWindow);
-  registerTransactionExportHandlers(_mainWindow);
-  registerEmailSyncHandlers(_mainWindow);
+  registerTransactionCrudHandlers(null);
+  registerTransactionExportHandlers(options);
+  registerEmailSyncHandlers(null);
   registerEmailLinkingHandlers();
   registerEmailAutoLinkHandlers();
-  registerAttachmentHandlers(_mainWindow);
+  registerAttachmentHandlers(null);
   registerTransactionSearchHandlers();
 }
 

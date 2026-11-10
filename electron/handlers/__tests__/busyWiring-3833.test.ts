@@ -11,20 +11,29 @@ import * as path from "path";
 
 const HANDLERS_DIR = path.resolve(__dirname, "..");
 
-const CASES: Array<{ file: string; register: string; channels: string[] }> = [
-  { file: "syncHandlers", register: "registerSyncHandlers", channels: ["sync:start"] },
-  { file: "messageImportHandlers", register: "registerMessageImportHandlers", channels: ["messages:import-macos"] },
+// `args`: what each register function is called with (BACKLOG-3456: per case,
+// because the signatures differ and this call is invisible to the compiler).
+const CASES: Array<{ file: string; register: string; channels: string[]; args: () => unknown[] }> = [
+  { file: "syncHandlers", register: "registerSyncHandlers", channels: ["sync:start"], args: () => [inert(), "user-1"] },
+  {
+    file: "messageImportHandlers",
+    register: "registerMessageImportHandlers",
+    channels: ["messages:import-macos"],
+    args: () => [inert()],
+  },
   {
     file: "emailSyncHandlers",
     register: "registerEmailSyncHandlers",
     channels: ["transactions:scan", "transactions:sync-and-fetch-emails"],
+    args: () => [inert()],
   },
   {
     file: "transactionExportHandlers",
     register: "registerTransactionExportHandlers",
     channels: ["transactions:export-enhanced", "transactions:export-folder"],
+    args: () => [{ startSubmissionSync: true }],
   },
-  { file: "ccpaHandlers", register: "registerCcpaHandlers", channels: ["privacy:export-data"] },
+  { file: "ccpaHandlers", register: "registerCcpaHandlers", channels: ["privacy:export-data"], args: () => [] },
 ];
 
 /**
@@ -83,7 +92,7 @@ describe("busy wiring of long user-started IPC handlers (BACKLOG-3833)", () => {
       }));
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const mod = require(path.join(HANDLERS_DIR, c.file));
-      mod[c.register](inert(), "user-1");
+      mod[c.register](...c.args());
     });
     for (const ch of c.channels) {
       expect(busyChannels).toContain(ch);

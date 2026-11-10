@@ -280,7 +280,7 @@ beforeAll(() => {
     { batchInsertAuditLogs: async () => undefined } as any,
   );
   registerTransactionCrudHandlers(null);
-  registerTransactionExportHandlers(null);
+  registerTransactionExportHandlers({ startSubmissionSync: false });
 });
 
 afterAll(() => {

@@ -1891,7 +1891,7 @@ app.whenReady().then(async () => {
   // Register existing handler modules
   registerAuthHandlers(mainWindow!);
   registerTransactionCrudHandlers(mainWindow!);
-  registerTransactionExportHandlers(mainWindow!);
+  registerTransactionExportHandlers({ startSubmissionSync: true });
   registerTransactionSearchHandlers();
   registerEmailSyncHandlers(mainWindow!);
   registerEmailLinkingHandlers();
