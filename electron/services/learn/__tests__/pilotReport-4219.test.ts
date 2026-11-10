@@ -300,6 +300,22 @@ describe("C-DET the detector block is decided on the detector surface", () => {
     expect([det.by_signal.bulkHeaders, det.by_signal.gmailPromotions, det.k]).toEqual([0, 0, 0]);
   });
 
+  it("C-DET2 losses come from the runner's detector pass: a deal found only through bulk mail", async () => {
+    const diverged: SenderRuleSet = {
+      ...BUNDLED_SENDER_RULES,
+      modes: { ...BUNDLED_SENDER_RULES.modes, bulkHeaders: { learnQuestions: "measure", addressPass: "off", detector: "off" } },
+    };
+    deal("t1", A1);
+    link("t1", dealMail("updates@list.example", A1, 1, { headers: UNSUB }));
+    const r = await baseline(diverged);
+    const { score, detector } = scoreBoth(r, diverged);
+    const built = buildPilotReport(score, detector, APP_VERSION);
+    if (!built.ok) throw new Error(built.reason);
+    expect(built.report.found).toBe(1);
+    expect(built.report.census.learn_questions.found_deals_lost).toEqual({ full: 1, minus: 1 });
+    expect(built.report.census.detector.found_deals_lost).toEqual({ full: 0, minus: 0 });
+  });
+
   it("precondition: with the bundled modes the two blocks are equal (why C-DET needs diverged modes)", async () => {
     const r = await seededReport();
     expect(r.census.detector).toEqual(r.census.learn_questions);
