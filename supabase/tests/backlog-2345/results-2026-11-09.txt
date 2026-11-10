@@ -1,0 +1,51 @@
+# BACKLOG-2345 runs on keepr-test, 2026-11-09. Each run is one kt-sql call ending in RAISE (nothing persists).
+# Fixture row ids are replaced with <uuid>.
+
+## Old body (2005a, md5 c201419e1dcb0bae2dd34bea95118ef6): rollback-2345.sql body composed in front, mode base
+base: pass=24 fail=12 mut=none
+   RED G_ledger_sum_2 FAIL 1 {"already": false, "refunded": true, "unlock_id": "<uuid>", "balance_afte
+   RED K_ledger_sum_0 FAIL -1 {"already": false, "refunded": true, "unlock_id": "<uuid>", "balance_aft
+   RED Q_ledger_sum_0 FAIL 1
+   RED S_ledger_sum_0 FAIL -1 {"already": false, "refunded": true, "unlock_id": "<uuid>", "balance_aft
+   RED K_no_refund_row FAIL 1:-1
+   RED S5_ledger_sum_5 FAIL 4 {"already": false, "refunded": true, "unlock_id": "<uuid>", "balance_afte
+   RED S_double_no_row FAIL 1:-1 {"already": true, "refunded": true, "unlock_id": "<uuid>"}
+   RED S_flag_consumed FAIL {"already": false, "refunded": true, "unlock_id": "<uuid>", "balance_after"
+   RED S_no_refund_row FAIL 1:-1
+   RED Q_one_row_minus2 FAIL 1:-1 {"already": false, "refunded": true, "unlock_id": "<uuid>", "balance_a
+   RED S5_flag_consumed FAIL {"already": false, "refunded": true, "unlock_id": "<uuid>", "balance_after"
+   RED B_flag_not_consumed FAIL {"already": false, "refunded": true, "unlock_id": "<uuid>", "balance_after"
+
+## New body (md5 977ff4981212913bb18d0b1f2ff5a1b8), after apply, migration composed in again (applied twice)
+base: pass=36 fail=0 mut=none
+no_cap: pass=34 fail=2 mut=MUTATION APPLIED cb3a5b5c->4f029e49 [ v_refundable := v_refundable;]
+   RED K_no_error FAIL ERR P0001 Balance invariant violated
+   RED K_refunded_at_set FAIL ERR P0001 Balance invariant violated
+no_floor0: pass=36 fail=0 mut=MUTATION APPLIED cb3a5b5c->71df531d [v_refundable := v_purchase_amount - v_debits_drawn;]
+no_backstop: pass=36 fail=0 mut=MUTATION APPLIED cb3a5b5c->fa5e96e7 [ ]
+no_consumed: pass=32 fail=4 mut=MUTATION APPLIED cb3a5b5c->6b402a50 [v_refundable := v_purchase_amount;]
+   RED F_ledger_sum_5 FAIL 4
+   RED S5_ledger_sum_5 FAIL 4 {"already": false, "refunded": true, "unlock_id": "d4
+   RED F_one_row_minus1 FAIL 1:-2 {"already": false, "refunded": true, "unlock_id": 
+   RED S5_flag_consumed FAIL {"already": false, "refunded": true, "unlock_id": "d4ba
+no_purchase_only: pass=35 fail=1 mut=MUTATION APPLIED cb3a5b5c->767aa696 [JOIN public.credit_ledger f ON f.id = d.funded_by]
+   RED G_ledger_sum_2 FAIL 0 {"already": false, "refunded": true, "unlock_id": "24
+wrong_clamp_read: pass=27 fail=9 mut=MUTATION APPLIED cb3a5b5c->fa5e96e7 [ ] + MUTATION APPLIED fa5e96e7->964e5343 [ IF true THEN] + MUTATION APPLIED 964e5343->8a4b0daf ['adjustment', -1,] + MUTATION APPLIED 8a4b0daf->255e7a67 ['balance_after', GREATEST(public.get_credit_balance(p_user_i]
+   RED G_ledger_sum_2 FAIL 1 {"already": false, "refunded": true, "unlock_id": "01
+   RED K_ledger_sum_0 FAIL -1 {"already": false, "refunded": true, "unlock_id": "7
+   RED Q_ledger_sum_0 FAIL 1
+   RED S_ledger_sum_0 FAIL -1 {"already": false, "refunded": true, "unlock_id": "7
+   RED K_no_refund_row FAIL 1:-1
+   RED S5_ledger_sum_5 FAIL 4 {"already": false, "refunded": true, "unlock_id": "be
+   RED S_double_no_row FAIL 1:-1 {"already": true, "refunded": true, "unlock_id": "
+   RED S_no_refund_row FAIL 1:-1
+   RED Q_one_row_minus2 FAIL 1:-1 {"already": false, "refunded": true, "unlock_id": 
+no_cap_no_backstop: pass=34 fail=2 mut=MUTATION APPLIED cb3a5b5c->4f029e49 [ v_refundable := v_refundable;] + MUTATION APPLIED 4f029e49->8e22b029 [ ]
+   RED K_ledger_sum_0 FAIL -1 {"already": false, "refunded": true, "unlock_id": "1
+   RED K_no_refund_row FAIL 1:-1
+wrong_skip_refunded_at: pass=31 fail=5 mut=MUTATION APPLIED cb3a5b5c->fac7794a [ IF v_refundable = 0 THEN RETURN jsonb_build_object('refunde]
+   RED S_pi_refunded FAIL fulfilled
+   RED S_double_no_row FAIL 0:0 {"already": false, "refunded": true, "unlock_id": "
+   RED G_refunded_at_set FAIL {"already": false, "refunded": true, "unlock_id": "5518
+   RED K_refunded_at_set FAIL {"already": false, "refunded": true, "unlock_id": "d7df
+   RED S_refunded_at_set FAIL {"already": false, "refunded": true, "unlock_id": "9f01
