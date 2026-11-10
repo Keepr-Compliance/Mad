@@ -176,6 +176,9 @@ BEGIN
   -- C6: a value that only CONTAINS the token (a split record joined with a suffix).
   g := pg_temp.rc(cA, oA, ARRAY[tA || 'x', 'x' || tA], true, 'manual');
   INSERT INTO r3962 VALUES ('T23_C6_substring_not_verified', g LIKE '%"result": "mismatch"%' AND pg_temp.st(cA) = 'pending', g);
+  -- C6b: the token with extra text after it, or a prefix word before it (whitespace inside the value).
+  g := pg_temp.rc(cA, oA, ARRAY[tA || ' extra text', 'v=spf1 ' || tA], true, 'manual');
+  INSERT INTO r3962 VALUES ('T23c_token_with_extra_words_not_verified', (g LIKE '%"result": "mismatch"%' OR g LIKE '%"result": "not_found"%') AND g NOT LIKE '%"result": "verified"%' AND pg_temp.st(cA) = 'pending', g);
   g := pg_temp.rc(cA, oA, ARRAY[upper(tA)], true, 'manual');
   INSERT INTO r3962 VALUES ('T23b_case_changed_not_verified', g NOT LIKE '%"result": "verified"%' AND pg_temp.st(cA) = 'pending', g);
   -- C2: B's check with A's token in DNS.
