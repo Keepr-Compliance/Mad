@@ -6,6 +6,7 @@ import logger from '../../utils/logger';
 import { DATA_EXPORT_NOT_RECORDED_MESSAGE } from '../../utils/exportAuditCopy';
 import { OPERATION_LABELS } from './types';
 import { LearnAnswersPrivacyRow } from './learn/LearnAnswersPrivacyRow';
+import { getDiagnosticsSharing, setDiagnosticsSharing } from '../../services/diagnosticsSharingService';
 
 interface FailureLogEntry {
   id: number;
@@ -79,6 +80,37 @@ export function DataPrivacySettings({ userId }: DataPrivacySettingsProps) {
       notify.error("Could not save the crash report setting.");
     } finally {
       setCrashReportingSaving(false);
+    }
+  };
+
+  // BACKLOG-4181: "Share diagnostics with Keepr" switch. null until loaded.
+  const [diagnosticsSharing, setDiagnosticsSharingState] = useState<boolean | null>(null);
+  const [diagnosticsSaving, setDiagnosticsSaving] = useState<boolean>(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getDiagnosticsSharing()
+      .then((enabled) => {
+        if (!cancelled && enabled !== null) setDiagnosticsSharingState(enabled);
+      })
+      .catch((err) => logger.error("Failed to load diagnostics sharing setting:", err));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleDiagnosticsToggle = async (): Promise<void> => {
+    if (diagnosticsSharing === null || diagnosticsSaving) return;
+    setDiagnosticsSaving(true);
+    try {
+      const result = await setDiagnosticsSharing(!diagnosticsSharing);
+      if (typeof result.enabled === "boolean") setDiagnosticsSharingState(result.enabled);
+      if (!result.success) notify.error("Could not save the diagnostics setting.");
+    } catch (err) {
+      logger.error("Failed to save diagnostics sharing setting:", err);
+      notify.error("Could not save the diagnostics setting.");
+    } finally {
+      setDiagnosticsSaving(false);
     }
   };
 
@@ -273,6 +305,46 @@ export function DataPrivacySettings({ userId }: DataPrivacySettingsProps) {
               <span
                 className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
                   crashReporting.enabled ? "translate-x-6" : "translate-x-1"
+                }`}
+              />
+            </button>
+          </div>
+        )}
+
+        {/* BACKLOG-4181: Share diagnostics with Keepr (needs crash reports on) */}
+        {diagnosticsSharing !== null && (
+          <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
+            <div className="flex-1">
+              <h4 className="text-sm font-medium text-gray-900">
+                Share diagnostics with Keepr
+              </h4>
+              <p className="text-xs text-gray-600 mt-1">
+                Sends app speed and error details, never your messages, contacts or files.
+              </p>
+              {crashReporting && !crashReporting.enabled && (
+                <p className="text-xs text-gray-600 mt-2" data-testid="diagnostics-needs-crash-reports">
+                  Needs Send crash reports.
+                </p>
+              )}
+              {crashReporting?.enabled && !crashReporting.wasEnabledAtLaunch && diagnosticsSharing && (
+                <p className="text-xs text-gray-600 mt-2" data-testid="diagnostics-next-launch">
+                  Takes effect after restart.
+                </p>
+              )}
+            </div>
+            <button
+              onClick={handleDiagnosticsToggle}
+              disabled={diagnosticsSaving || crashReporting?.enabled === false}
+              className={`ml-4 relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 ${
+                diagnosticsSharing ? "bg-blue-500" : "bg-gray-300"
+              }`}
+              role="switch"
+              aria-checked={diagnosticsSharing}
+              aria-label="Share diagnostics with Keepr"
+            >
+              <span
+                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                  diagnosticsSharing ? "translate-x-6" : "translate-x-1"
                 }`}
               />
             </button>
