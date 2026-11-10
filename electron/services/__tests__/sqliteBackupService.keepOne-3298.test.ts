@@ -16,6 +16,10 @@
  *      copy, or the kept copy the user just restored FROM (the undo)
  *   K5b the same, when the kept copy is opened through a symlink
  *   K7 a throw while keeping the copy never undoes the successful restore
+ *   K6 automatic restore keep-1: a later launch prunes the earlier launch's
+ *      mad-pre-restore copy; a manual-restore copy is never touched by it
+ *   K8 a this-launch pre-restore copy whose backup copy and undo both failed
+ *      survives a later auto-restore round in the same process
  *
  *   ELECTRON_RUN_AS_NODE=1 npx electron node_modules/.bin/jest \
  *     electron/services/__tests__/sqliteBackupService.keepOne-3298.test.ts
@@ -131,6 +135,7 @@ describeUnlessWindows("BACKLOG-3298 real driver — a manual restore keeps one c
   let userBackup: string;
 
   const kept = (): string[] => fs.readdirSync(tmpDir).filter((f) => KEPT_RE.test(f)).sort();
+  const preRestore = (): string[] => fs.readdirSync(tmpDir).filter((f) => /^mad-pre-restore-.*\.db$/.test(f)).sort();
   const insert = (v: string): void => {
     service.getRawDatabase().prepare("INSERT INTO t_3298 VALUES (?)").run(v);
   };
@@ -277,4 +282,68 @@ describeUnlessWindows("BACKLOG-3298 real driver — a manual restore keeps one c
     expect(fs.existsSync(dbFile)).toBe(true);
   });
 
+  it("K6 automatic restore: a later launch keeps only its own pre-restore copy; manual copies untouched", async () => {
+    insert("manual");
+    expect((await restoreDatabase(userBackup)).success).toBe(true);
+    const manual = kept();
+    expect(manual).toHaveLength(1);
+    await reset();
+    MIGRATIONS.push({
+      version: LATEST + 1,
+      description: "BACKLOG-3298 failing migration",
+      migrate: (d) => d.exec("INSERT INTO no_such_table_3298 VALUES (1)"),
+    });
+    mockShowMessageBox.mockResolvedValue({ response: 0 });
+
+    await expect(service.initialize({ quitOnUnrecoverableFailure: true })).rejects.toThrow();
+    const launch1 = preRestore();
+    expect(launch1).toHaveLength(1);
+
+    // A relaunch is a new process: nothing in it was made by this launch.
+    await reset();
+    service._preRestoreKeptThisProcess.clear();
+    await new Promise((r) => setTimeout(r, 5));
+    await expect(service.initialize({ quitOnUnrecoverableFailure: true })).rejects.toThrow();
+    const launch2 = preRestore();
+    expect(launch2).toHaveLength(1);
+    expect(launch2[0]).not.toBe(launch1[0]);
+    expect(kept()).toEqual(manual);
+  });
+
+  it("K8 a this-launch copy whose backup copy AND undo failed is not pruned by a later round", async () => {
+    await reset();
+    service._preRestoreKeptThisProcess.clear();
+    MIGRATIONS.push({
+      version: LATEST + 1,
+      description: "BACKLOG-3298 failing migration",
+      migrate: (d) => d.exec("INSERT INTO no_such_table_3298 VALUES (1)"),
+    });
+    mockShowMessageBox.mockResolvedValue({ response: 0 });
+    const realCopy = fs.copyFileSync;
+    const realRename = fs.renameSync;
+    const copySpy = jest.spyOn(fs, "copyFileSync").mockImplementation(((src: string, dest: string) => {
+      if (dest === dbFile && String(src).includes("-backup-")) throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+      return realCopy(src, dest);
+    }) as typeof fs.copyFileSync);
+    const renameSpy = jest.spyOn(fs, "renameSync").mockImplementation(((from: string, to: string) => {
+      if (String(from).includes("pre-restore") && String(to).startsWith(dbFile)) throw Object.assign(new Error("EPERM"), { code: "EPERM" });
+      return realRename(from, to);
+    }) as typeof fs.renameSync);
+
+    // Round 1: the restore copy fails and the files cannot be put back.
+    await expect(service.initialize()).rejects.toThrow();
+    copySpy.mockRestore();
+    renameSpy.mockRestore();
+    const round1 = preRestore();
+    expect(round1).toHaveLength(1);
+    expect(fs.existsSync(dbFile)).toBe(false);
+
+    // Round 2, same process: a manual restore whose migrations fail reaches auto-restore again.
+    await reset();
+    await new Promise((r) => setTimeout(r, 5));
+    await restoreDatabase(userBackup);
+    const round2 = preRestore();
+    expect(round2.length).toBe(2);
+    expect(round2).toContain(round1[0]);
+  });
 });
