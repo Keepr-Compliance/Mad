@@ -19,6 +19,7 @@ import { getValidUserId } from "../utils/userIdHelper";
 import { bringAppToFront } from "../utils/bringAppToFront";
 
 import { sendToMainWindow, getMainWindow } from "../windowRegistry";
+import { isAuthAttemptSuperseded } from "../services/authAttemptSuperseded";
 
 // Type definitions
 interface AuthResponse {
@@ -196,6 +197,12 @@ export async function handleMicrosoftConnectMailbox(
             );
           });
       } catch (error) {
+        // BACKLOG-3283 Path 3: a newer connect replaced this one. Say nothing to
+        // the renderer — its listener belongs to the newer attempt now.
+        if (isAuthAttemptSuperseded(error)) {
+          await logService.info("Microsoft mailbox connect superseded by a newer attempt", "AuthHandlers");
+          return;
+        }
         // BACKLOG-2007: An org tenant admin-consent block arrives here as an
         // AADSTS error (the OAuth redirect's error_description rejects the code
         // promise in microsoftAuthService's local server). Classify it so the

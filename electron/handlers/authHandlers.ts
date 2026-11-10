@@ -50,11 +50,11 @@ export const initializeDatabase = async (): Promise<void> => {
     // LOGIN entry inside that transaction, which throws (and rolls the sign-in
     // back) while this service is uninitialized. Before 3340 this ran after the
     // awaited iPhone-sync sweep below, a window of seconds.
-    // Remaining window (pre-existing, not closed here): databaseService sets its
-    // connection before it awaits its own migrations, so isInitialized() is
-    // already true while they run. A sign-in that lands then fails closed (no
-    // LOGIN, rolled back, the next sign-in provisions); before 3340 it
-    // provisioned against a half-migrated schema. No jest control covers it.
+    // BACKLOG-2836 closed the window that remained here: databaseService now
+    // publishes its connection only after its migrations succeed, so
+    // isInitialized() is false while they run and a sign-in that lands then is
+    // deferred (main.ts setPendingDeepLinkUser) instead of provisioning against
+    // a half-migrated schema. Control: C5 in databaseService.restoreRerun-2834.
     auditService.initialize(databaseService, supabaseService);
     await logService.debug("Database initialized", "AuthHandlers");
 

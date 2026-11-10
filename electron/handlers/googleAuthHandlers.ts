@@ -19,6 +19,7 @@ import { getValidUserId } from "../utils/userIdHelper";
 import { bringAppToFront } from "../utils/bringAppToFront";
 
 import { sendToMainWindow, getMainWindow } from "../windowRegistry";
+import { isAuthAttemptSuperseded } from "../services/authAttemptSuperseded";
 
 // Module-level storage for PKCE code verifiers between split IPC handlers
 // Key: flow type ("mailbox"), Value: codeVerifier
@@ -226,6 +227,12 @@ export async function handleGoogleConnectMailbox(
             );
           });
       } catch (error) {
+        // BACKLOG-3283 Path 3: a newer connect replaced this one. Say nothing to
+        // the renderer — its listener belongs to the newer attempt now.
+        if (isAuthAttemptSuperseded(error)) {
+          await logService.info("Google mailbox connect superseded by a newer attempt", "AuthHandlers");
+          return;
+        }
         await logService.error(
           "Google mailbox connection failed",
           "AuthHandlers",
