@@ -640,10 +640,21 @@ describe('BACKLOG-4088: a trialing agent subscribes with trial_end = the trial e
     ];
   }
 
+  // Pin the whole Date (Date.now AND `new Date()`): getAgentPlanView defaults `now` to
+  // `new Date()` (lib/billing/agentPlan.ts:74), which a Date.now spy does not reach. Every other
+  // timer stays real so the async route code runs normally.
   beforeEach(() => {
-    jest.spyOn(Date, 'now').mockReturnValue(NOW_MS);
+    jest.useFakeTimers({
+      now: NOW_MS,
+      doNotFake: [
+        'hrtime', 'nextTick', 'performance', 'queueMicrotask', 'requestAnimationFrame', 'cancelAnimationFrame',
+        'requestIdleCallback', 'cancelIdleCallback', 'setImmediate', 'clearImmediate', 'setInterval', 'clearInterval',
+        'setTimeout', 'clearTimeout',
+      ],
+    });
   });
   afterEach(() => {
+    jest.useRealTimers();
     jest.restoreAllMocks();
   });
 
