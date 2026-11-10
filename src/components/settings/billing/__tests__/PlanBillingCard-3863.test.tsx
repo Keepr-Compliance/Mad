@@ -35,6 +35,9 @@ const ACTIVE = {
   cancel_at_period_end: false,
   paymentIncomplete: false,
   supportGrantEffective: false,
+  // BACKLOG-4088: the two trial dates; null outside a trial.
+  trialEndsOn: null,
+  subscriptionTrialEndsOn: null,
 };
 const ENDING = { ...ACTIVE, state: "cancel_pending" as const, cancel_at_period_end: true };
 const FAILED = { ...ACTIVE, state: "payment_failed" as const, paymentIncomplete: true };

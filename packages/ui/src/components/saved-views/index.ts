@@ -7,6 +7,8 @@ export type {
   SavedViewsProps,
   SavedViewsSharing,
   SavedViewUpdate,
+  SavedViewUpdateMetric,
+  SavedViewUpdateOptions,
   SaveViewOptions,
 } from './types';
 // ShareDialog (BACKLOG-4087) — the owner shares one saved view; see share-dialog.tsx header.

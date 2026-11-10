@@ -83,3 +83,28 @@ describe('describeActivity (BACKLOG-4036)', () => {
     expect(activityNote(row('deal_saved', { detail: { reason: 'Deal created' } }))).toBe('Deal created');
   });
 });
+
+describe('auto_renew_on and the billing contact email (BACKLOG-4045 follow-up)', () => {
+  it('A5: notified true / false / absent', () => {
+    expect(describeActivity(row('auto_renew_on', { detail: { notified: true } }))).toBe('Pat Doe turned auto-renew back on. Billing contact emailed.');
+    expect(describeActivity(row('auto_renew_on', { detail: { notified: false } }))).toBe('Pat Doe turned auto-renew back on. Billing contact not emailed.');
+    expect(describeActivity(row('auto_renew_on', { detail: {} }))).toBe('Pat Doe turned auto-renew back on');
+  });
+});
+
+describe('auto_renew_off and reinstated: the billing contact email (BACKLOG-4200 / 4209)', () => {
+  it('D-off: auto_renew_off notified true / false / absent', () => {
+    expect(describeActivity(row('auto_renew_off', { detail: { notified: true } }))).toBe('Pat Doe turned off auto-renew. Billing contact emailed.');
+    expect(describeActivity(row('auto_renew_off', { detail: { notified: false } }))).toBe('Pat Doe turned off auto-renew. Billing contact not emailed.');
+    expect(describeActivity(row('auto_renew_off', { detail: {} }))).toBe('Pat Doe turned off auto-renew');
+  });
+
+  it('D-re: reinstated notified true / false / absent, and the automatic row (no actor -> "Keepr")', () => {
+    expect(describeActivity(row('reinstated', { detail: { notified: true, via: 'staff' } }))).toBe('Pat Doe reinstated the organization. Billing contact emailed.');
+    expect(describeActivity(row('reinstated', { detail: { notified: false, via: 'staff' } }))).toBe('Pat Doe reinstated the organization. Billing contact not emailed.');
+    expect(describeActivity(row('reinstated', { detail: {} }))).toBe('Pat Doe reinstated the organization');
+    expect(describeActivity(row('reinstated', { actor_name: 'Keepr', detail: { notified: true, via: 'auto' } }))).toBe(
+      'Keepr reinstated the organization. Billing contact emailed.',
+    );
+  });
+});

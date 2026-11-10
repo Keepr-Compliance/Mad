@@ -154,17 +154,6 @@ const mockLogService = {
   warn: jest.fn().mockResolvedValue(undefined),
 };
 
-// BACKLOG-2546: the login write chain is one transaction behind
-// `provisionLogin`. These flows assert the handler's end-to-end response and
-// what it sends; the transaction's own behaviour is covered against the real
-// driver in `services/db/__tests__/loginProvisioningAtomicity-2546.test.ts`.
-const mockProvisionLogin = jest.fn();
-
-jest.mock("../services/loginProvisioningService", () => ({
-  __esModule: true,
-  provisionLogin: (...args: unknown[]) => mockProvisionLogin(...args),
-}));
-
 jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: mockDatabaseService,

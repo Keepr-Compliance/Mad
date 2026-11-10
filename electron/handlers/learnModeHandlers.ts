@@ -90,7 +90,7 @@ import {
   scoreRun,
   visibleEmailIds,
 } from "../services/learn/scoring";
-import { BUNDLED_SENDER_RULES } from "../utils/senderFilter/bundledRules";
+import { getActiveSenderRules } from "../services/senderRuleSetStore";
 import { buildKeepSets } from "../utils/senderFilter/senderFilter";
 import { LEARN_RULES } from "../services/learn/learnRules";
 import {
@@ -355,7 +355,11 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
       const senders = new Set<IpcMainInvokeEvent["sender"]>([event.sender]);
       const done = (async (): Promise<LearnRunResultResponse> => {
         try {
+          // BACKLOG-4175 PR4: the active set, read once; the score uses this same set.
+          const { rules: senderRules, ...senderRulesProvenance } = getActiveSenderRules();
           const result = await runBaseline0(userId, args.windowMonths, {
+            senderRules,
+            senderRulesProvenance,
             onProgress: (p) => {
               const progress: LearnRunProgressEvent = {
                 runId: p.runId,
@@ -469,12 +473,12 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
         listDealAnswers(g.userId),
         listAnsweredBulkWithText(g.userId),
         countSeedLinkedToDeals(
-          listDealLinkedSeedCandidates(g.userId, BUNDLED_SENDER_RULES.suppress.exactAddresses),
-          BUNDLED_SENDER_RULES,
+          listDealLinkedSeedCandidates(g.userId, run.senderRules.suppress.exactAddresses),
+          run.senderRules,
         ),
         {
-          rules: BUNDLED_SENDER_RULES,
-          keep: buildKeepSets(listDealContactEmails(g.userId), BUNDLED_SENDER_RULES),
+          rules: run.senderRules,
+          keep: buildKeepSets(listDealContactEmails(g.userId), run.senderRules),
           linked: listDealLinkedEmails(g.userId),
         },
       );

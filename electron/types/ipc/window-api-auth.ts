@@ -96,34 +96,6 @@ export interface WindowApiAuth {
   completeEmailOnboarding: (
     userId: string,
   ) => Promise<{ success: boolean; error?: string }>;
-  // Complete pending login after keychain setup (login-first flow)
-  completePendingLogin: (oauthData: unknown) => Promise<{
-    success: boolean;
-    user?: User;
-    sessionToken?: string;
-    subscription?: Subscription;
-    isNewUser?: boolean;
-    error?: string;
-  }>;
-  // Pre-DB mailbox connection (returns tokens instead of saving to DB)
-  googleConnectMailboxPending: (
-    emailHint?: string,
-  ) => Promise<{ success: boolean; error?: string }>;
-  microsoftConnectMailboxPending: (
-    emailHint?: string,
-  ) => Promise<{ success: boolean; error?: string }>;
-  // Save pending mailbox tokens after DB initialization
-  savePendingMailboxTokens: (data: {
-    userId: string;
-    provider: "google" | "microsoft";
-    email: string;
-    tokens: {
-      access_token: string;
-      refresh_token: string | null;
-      expires_at: string;
-      scopes: string;
-    };
-  }) => Promise<{ success: boolean; error?: string }>;
 
   // TASK-1507: Deep link browser auth
   /**

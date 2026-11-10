@@ -1,0 +1,127 @@
+BACKLOG-4200 + BACKLOG-4209 SQL controls, keepr-test, 2026-11-07. Every call is one transaction ending in RAISE (rolled back).
+
+Pins read before apply (md5 of prosrc): _billing_set_auto_renew(7) dbc2dffd26f24da2e773ff88ec96fa33, set_org_auto_renew(5)
+0635beb03ede25d58f83acf5be174214, admin_get_org_activity 93ee729f73f23ecd90ffe49ca6d60704, _billing_reinstate_org(3)
+9aeb774ad532a183c64df4b70e4820b6, admin_reinstate_org(2) 3a92c28461f73f4e6ee7aa0102559126, _billing_auto_reinstate
+4bcc2398653dd3d027443e529be70e17. Ledger top 20261108150000.
+Pre-apply: every mode below ran with both migrations composed in front (compose.py --with-migration): base 45/45.
+Applied: each migration file + its ledger row (version, name) in one kt-sql call.
+After apply: _billing_set_auto_renew(7) 7cfb206c94f5edcb2314ee82fe58f556, _billing_reinstate_org(4)
+7ab5b46d84e7b3994eaf12f2becaee23, admin_reinstate_org(3) b9b3d2704de93c62599da0d84bd45921 (each equal to the md5
+computed locally from the file); set_org_auto_renew, admin_get_org_activity, _billing_auto_reinstate unchanged; ACLs
+{postgres,service_role} x2 and {postgres,authenticated,service_role} for admin_reinstate_org; old 3-arg / 2-arg gone.
+Second run of both files on the applied state (rolled back): guards pass, md5s unchanged.
+Rollback rehearsal (rollback-4209.sql then rollback-4200.sql, rolled back): their own md5 + proacl checks pass;
+md5s back to dbc2dffd / 9aeb774a / 3a92c284; ledger rows gone inside the transaction; still present afterwards.
+Post-apply: the same modes re-run without the migrations composed: identical pass/fail/reds in every mode.
+
+Notes on the reds:
+- G_guard_4200 / G_guard_4209 red with every mutation of a guarded body (by design). They stay green under
+  a1_internal_default_false and n1_default_false (a DEFAULT is outside prosrc), n1b_overload, n8_grant_internal.
+  r9_overload reds G_guard_4209 (the 2-arg signature is present again); n6_reader_no_key reds both (the reader pin).
+- f1_no_enqueue also reds F2/F3/F4/F6: those checks assert the off-row count stays at 1 after F1.
+- r6_before_refusal: R6 reds. A4 does NOT red under it: _billing_auto_reinstate refuses not_suspended itself (its own
+  check) before it calls _billing_reinstate_org, so the injected insert is never reached on the second automatic call.
+  A4 rests on that refusal; the plan's A4 mutation was measured, not assumed. W1 (double email) is held by A2 + the
+  webhook test instead.
+- r11_no_suspended_at reds BY EXCEPTION, not by count: R11 = "FAIL ERR 23502 null value in column dedupe_key".
+- r5_key_version: "ver 1->1 rows=1" (version asserted unchanged, so the red is not vacuous).
+
+base: pass=45 fail=0 reds={}
+   none
+f1_no_enqueue: pass=39 fail=6 reds=['F1_staff_off_one_row', 'F2_staff_on_no_off_row', 'F3_brokerage_off_no_row', 'F4_noop_no_row', 'F6_unticked_no_row', 'G_guard_4200']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->ebc427dd [  IF false THEN]
+f2_staff_any: pass=41 fail=4 reds=['F2_staff_on_no_off_row', 'F5_suspended_no_row', 'F6_unticked_no_row', 'G_guard_4200']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->4edf7038 [  v_notify_off := p_caller = 'staff' AND p_notify AND nullif(btrim(coa]
+f3_any_caller: pass=43 fail=2 reds=['F3_brokerage_off_no_row', 'G_guard_4200']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->ac328a5d [  v_notify_off := NOT p_on AND v_new_status = 'canceling' AND p_notify]
+f4_before_early_return: pass=39 fail=6 reds=['F2_staff_on_no_off_row', 'F4_noop_no_row', 'F5_suspended_no_row', 'F6_unticked_no_row', 'F7_off_no_contact_no_row', 'G_guard_4200']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->32988774 [    IF NOT p_on AND p_caller = 'staff' THEN       INSERT INTO public.b]
+f5_no_status_test: pass=43 fail=2 reds=['F5_suspended_no_row', 'G_guard_4200']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->b68d1b42 [  v_notify_off := NOT p_on AND p_caller = 'staff' AND p_notify AND nul]
+f6_no_p_notify: pass=43 fail=2 reds=['F6_unticked_no_row', 'G_guard_4200']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->9fb58416 [  v_notify_off := NOT p_on AND p_caller = 'staff' AND v_new_status = ']
+f7_no_contact: pass=43 fail=2 reds=['F7_off_no_contact_no_row', 'G_guard_4200']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->692d4c60 [  v_notify_off := NOT p_on AND p_caller = 'staff' AND v_new_status = ']
+f8_no_on_conflict: pass=43 fail=2 reds=['F8_dedupe_on_conflict', 'G_guard_4200']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->799e351a ['version', v_version, 'organization_id', p_org));]
+f9_log_wrapper_on_only: pass=39 fail=6 reds=['F5_suspended_no_row', 'F6_unticked_no_row', 'F7_off_no_contact_no_row', 'F9_log_notified_true', 'G_guard_4200', 'N6_reader_notified']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->99ca4ede [          || CASE WHEN p_on AND p_caller = 'staff' THEN jsonb_build_ob]
+f10_result_wrapper_on_only: pass=41 fail=4 reds=['F10_result_and_audit_notified', 'F6_unticked_no_row', 'F7_off_no_contact_no_row', 'G_guard_4200']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->1c8fd93c [         || CASE WHEN p_on AND p_caller = 'staff' THEN jsonb_build_obj]
+c1_no_enqueue: pass=43 fail=2 reds=['C1_staff_on_one_row', 'G_guard_4200']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->56616c1e [  IF false THEN]
+c2_staff_any: pass=39 fail=6 reds=['C1_staff_on_one_row', 'C2_staff_off_no_row', 'C3_brokerage_on_no_row', 'C5_suspended_no_row', 'G_guard_4200', 'N5_suspended_notified_false']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->febccfd8 [  v_notify := p_caller = 'staff' AND p_notify AND nullif(btrim(coalesc]
+c3_any_caller: pass=43 fail=2 reds=['C3_brokerage_on_no_row', 'G_guard_4200']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->cfecd138 [  v_notify := p_on AND v_new_status = 'active' AND p_notify AND nullif]
+c4_before_early_return: pass=38 fail=7 reds=['C1_staff_on_one_row', 'C2_staff_off_no_row', 'C4_noop_no_row', 'C5_suspended_no_row', 'G_guard_4200', 'N2_unticked_no_row', 'N3_no_contact_no_row']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->45791c4c [    IF p_on AND p_caller = 'staff' THEN       INSERT INTO public.billi]
+c5_no_status_test: pass=42 fail=3 reds=['C5_suspended_no_row', 'G_guard_4200', 'N5_suspended_notified_false']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->c2f68382 [  v_notify := p_on AND p_caller = 'staff' AND p_notify AND nullif(btri]
+c6_no_on_conflict: pass=40 fail=5 reds=['C6_dedupe_on_conflict', 'G_guard_4200', 'N1b_named_args_resolve', 'N2_unticked_no_row', 'N9_null_notify_refused']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->0c073459 ['version', v_version));]
+n1_default_false: pass=34 fail=11 reds=['C1_staff_on_one_row', 'F1_staff_off_one_row', 'F10_result_and_audit_notified', 'F2_staff_on_no_off_row', 'F3_brokerage_off_no_row', 'F4_noop_no_row', 'F6_unticked_no_row', 'F9_log_notified_true', 'N1_default_notifies', 'N6_reader_notified', 'N7_audit_notified']
+   MUTATION APPLIED public.set_org_auto_renew(uuid,boolean,text,integer,boolean) 4393e209->ed945fd5 [p_notify boolean DEFAULT false]
+n1b_overload: pass=18 fail=27 reds=['A_actor_recorded', 'C1_staff_on_one_row', 'C2_staff_off_no_row', 'C3_brokerage_on_no_row', 'C4_noop_no_row', 'C5_suspended_no_row', 'C6_dedupe_on_conflict', 'F1_staff_off_one_row', 'F10_result_and_audit_notified', 'F2_staff_on_no_off_row', 'F3_brokerage_off_no_row', 'F4_noop_no_row', 'F5_suspended_no_row', 'F6_unticked_no_row', 'F7_off_no_contact_no_row', 'F8_dedupe_on_conflict', 'F9_log_notified_true', 'N1_default_notifies', 'N1b_named_args_resolve', 'N2_unticked_no_row', 'N3_no_contact_no_row', 'N4_no_key_for_brokerage', 'N5_suspended_notified_false', 'N6_reader_notified', 'N7_audit_notified', 'N8_grants_one_signature', 'N9_null_notify_refused']
+   MUTATION APPLIED 4-arg set_org_auto_renew overload created
+n2_no_p_notify: pass=43 fail=2 reds=['G_guard_4200', 'N2_unticked_no_row']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->c299e099 [  v_notify := p_on AND p_caller = 'staff' AND v_new_status = 'active' ]
+n3_no_contact: pass=43 fail=2 reds=['G_guard_4200', 'N3_no_contact_no_row']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->0a111c9b [  v_notify := p_on AND p_caller = 'staff' AND v_new_status = 'active' ]
+n4_key_every_caller: pass=42 fail=3 reds=['F3_brokerage_off_no_row', 'G_guard_4200', 'N4_no_key_for_brokerage']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->950efc29 [          || jsonb_build_object('notified', coalesce(CASE WHEN p_on TH]
+n6_reader_no_key: pass=41 fail=4 reds=['G_guard_4200', 'G_guard_4209', 'N6_reader_notified', 'R1b_reader_notified']
+   MUTATION APPLIED public.admin_get_org_activity(uuid,integer) 166fe86f->ab59facb ['plan')))]
+n7_audit_no_key: pass=42 fail=3 reds=['F10_result_and_audit_notified', 'G_guard_4200', 'N7_audit_notified']
+   MUTATION APPLIED public.set_org_auto_renew(uuid,boolean,text,integer,boolean) 4393e209->152ad588 [);]
+n8_grant_internal: pass=44 fail=1 reds=['N8_grants_one_signature']
+   MUTATION APPLIED GRANT EXECUTE _billing_set_auto_renew(7) TO authenticated
+n9_no_null_check: pass=43 fail=2 reds=['G_guard_4200', 'N9_null_notify_refused']
+   MUTATION APPLIED public._billing_set_auto_renew(uuid,boolean,text,uuid,text,integer,boolean) c3786135->deae5221 []
+r1_no_enqueue: pass=37 fail=8 reds=['A1_auto_reinstate_one_row', 'A2_one_email_only', 'A3_via_staff_and_auto', 'A4_second_call_no_row', 'G_guard_4209', 'R1_staff_reinstate_one_row', 'R5_two_suspensions_two_rows', 'R7_canceling_one_row']
+   MUTATION APPLIED public._billing_reinstate_org(uuid,text,uuid,boolean) 8d903bb0->77992cf4 [  IF false THEN]
+a1_internal_default_false: pass=41 fail=4 reds=['A1_auto_reinstate_one_row', 'A2_one_email_only', 'A3_via_staff_and_auto', 'A4_second_call_no_row']
+   MUTATION APPLIED public._billing_reinstate_org(uuid,text,uuid,boolean) 8d903bb0->aa2b63c7 [p_notify boolean DEFAULT false]
+a1b_gate_actor: pass=40 fail=5 reds=['A1_auto_reinstate_one_row', 'A2_one_email_only', 'A3_via_staff_and_auto', 'A4_second_call_no_row', 'G_guard_4209']
+   MUTATION APPLIED public._billing_reinstate_org(uuid,text,uuid,boolean) 8d903bb0->a6f3b28a [  v_notify := p_notify AND nullif(btrim(coalesce(v_deal.billing_contac]
+a2_auto_double: pass=40 fail=5 reds=['A1_auto_reinstate_one_row', 'A2_one_email_only', 'A4_second_call_no_row', 'A5_auto_no_contact_no_row', 'G_guard_4209']
+   MUTATION APPLIED public._billing_auto_reinstate(uuid,text) ea14b070->cb38eb17 [  PERFORM public._billing_reinstate_org(p_org, 'auto: paid', NULL);   ]
+a3_via_constant: pass=42 fail=3 reds=['A1_auto_reinstate_one_row', 'A3_via_staff_and_auto', 'G_guard_4209']
+   MUTATION APPLIED public._billing_reinstate_org(uuid,text,uuid,boolean) 8d903bb0->d66b3364 [v_via text := 'staff';]
+r3_no_p_notify: pass=43 fail=2 reds=['G_guard_4209', 'R3_unticked_no_row']
+   MUTATION APPLIED public._billing_reinstate_org(uuid,text,uuid,boolean) 8d903bb0->6a47d381 [  v_notify := nullif(btrim(coalesce(v_deal.billing_contact_email, ''))]
+r4_no_contact: pass=42 fail=3 reds=['A5_auto_no_contact_no_row', 'G_guard_4209', 'R4_no_contact_no_row']
+   MUTATION APPLIED public._billing_reinstate_org(uuid,text,uuid,boolean) 8d903bb0->12e84165 [  v_notify := p_notify AND v_deal.suspended_at IS NOT NULL;]
+r5_key_version: pass=41 fail=4 reds=['A1_auto_reinstate_one_row', 'G_guard_4209', 'R1_staff_reinstate_one_row', 'R5_two_suspensions_two_rows']
+   MUTATION APPLIED public._billing_reinstate_org(uuid,text,uuid,boolean) 8d903bb0->6c7844f8 [p_org::text || ':v' || v_deal.version::text,]
+r6_before_refusal: pass=39 fail=6 reds=['A1_auto_reinstate_one_row', 'A3_via_staff_and_auto', 'G_guard_4209', 'R1_staff_reinstate_one_row', 'R11_null_suspended_at_no_row', 'R6_not_suspended_no_row']
+   MUTATION APPLIED public._billing_reinstate_org(uuid,text,uuid,boolean) 8d903bb0->6ba5ca0e [  IF p_notify AND nullif(btrim(coalesce(v_deal.billing_contact_email, ]
+r8_no_null_check: pass=43 fail=2 reds=['G_guard_4209', 'R8_null_notify_refused']
+   MUTATION APPLIED public._billing_reinstate_org(uuid,text,uuid,boolean) 8d903bb0->594b12c0 []
+r9_overload: pass=36 fail=9 reds=['A3_via_staff_and_auto', 'G_guard_4209', 'R1_staff_reinstate_one_row', 'R10_dedupe_on_conflict', 'R1b_reader_notified', 'R5_two_suspensions_two_rows', 'R6_not_suspended_no_row', 'R7_canceling_one_row', 'R9_grants_one_signature']
+   MUTATION APPLIED 2-arg admin_reinstate_org overload created
+r10_no_on_conflict: pass=43 fail=2 reds=['G_guard_4209', 'R10_dedupe_on_conflict']
+   MUTATION APPLIED public._billing_reinstate_org(uuid,text,uuid,boolean) 8d903bb0->b39c0a1a ['suspended_at_epoch', v_epoch, 'via', v_via));]
+r11_no_suspended_at: pass=43 fail=2 reds=['G_guard_4209', 'R11_null_suspended_at_no_row']
+   MUTATION APPLIED public._billing_reinstate_org(uuid,text,uuid,boolean) 8d903bb0->36f91ab4 [  v_notify := p_notify AND nullif(btrim(coalesce(v_deal.billing_contac]
+
+== Regression harnesses after apply ==
+backlog-4019 (23 modes): identical pass/fail/reds to results-2026-10-21.txt; base 40/40.
+backlog-3853/controls.sql (30 modes, signature strings updated to admin_reinstate_org(uuid,text,boolean) and
+  _billing_reinstate_org(uuid,text,uuid,boolean)): identical to results-4177-4178-2026-11-06.txt; base 54/54;
+  sr_reinstate_no_perm still reds C13_reinstate_needs_billing_suspend.
+backlog-3853/pr2-controls.sql: base stops in fixture setup with billing_contact_not_member; backlog-3853/pr2a-controls.sql:
+  base 14/37. Both identical with rollback-4209 + rollback-4200 composed in front and the HEAD strings (old functions
+  restored, rolled back): pre-existing fixture drift (the fixtures predate the BACKLOG-4007 billing-contact rules), not
+  caused by this change. Not repaired here.
+backlog-4045b (16 modes): every mode identical to results-2026-11-07.txt except G_guard red in every mode (it pins the
+  4045b body dbc2dffd; by design) and n4_key_every_caller = MUTATION NOT APPLIED (its anchor is the old change-log
+  wrapper). Both are carried into this harness (G_guard_4200, n4_key_every_caller on the new wrapper).
+backlog-4045 (7 modes): superseded by 4045b since 20261107160000 (its fixtures have no billing contact email, so C1
+  reds at base, and its anchors are the 6-arg body); recorded, not repaired.
+
+== PostgREST ==
+NOT RUN. Minting a session needs keepr-test's anon key; reading it from the Supabase CLI was refused by the session's
+permission classifier (credential materialization). Per the brief, stopped and reported. The named-argument shapes are
+exercised in SQL as role authenticated (R1 named 2-arg, R3/R8/R11 named 3-arg incl. p_notify NULL, R10 positional 2-arg).

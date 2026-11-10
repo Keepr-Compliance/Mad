@@ -366,6 +366,32 @@ describe('Subscribe: refused before any Stripe call', () => {
     expect(await subscribe()).toEqual({ redirect: 'https://checkout.stripe.com/c/pay/created' });
   });
 
+  // BACKLOG-4088 (founder 73bc361e Q1): the website's Subscribe uses the same trial-end rule.
+  it('4088: live trial -> the Checkout carries subscription_data.trial_end = the trial end (billing starts then)', async () => {
+    seed(planWith(TRIAL_LIVE));
+    expect(await subscribe()).toEqual({ redirect: 'https://checkout.stripe.com/c/pay/created' });
+    const raw = Math.floor(Date.parse(TRIAL_LIVE.paid_through) / 1000);
+    const [params, opts] = calls('checkout.sessions.create')[0];
+    expect(params.subscription_data).toEqual({
+      metadata: { kind: 'agent', user_id: FIXTURE_USER_ID, organization_id: FIXTURE_PERSONAL_ORG_ID, keepr_solo_trial: '1' },
+      trial_end: raw,
+    });
+    expect(params.metadata.trial_end).toBe(String(raw));
+    expect(opts.idempotencyKey).toBe(`${expectedCreate(S1.id)[1].idempotencyKey}:t${raw}`);
+  });
+
+  it('4088: ended trial -> the no-trial params, byte-identical to before', async () => {
+    seed(planWith(TRIAL_ENDED));
+    await subscribe();
+    expect(calls('checkout.sessions.create')).toEqual([expectedCreate(S1.id)]);
+  });
+
+  it('4088 SR #2: trial override with paid_through null -> refused, zero Stripe calls (never charged now)', async () => {
+    seed(planWith({ enabled: true, source: 'trial', paid_through: null }));
+    expect(await subscribe()).toEqual({ error: 'That change is not available for your plan right now. Refresh the page.' });
+    expect(stripeOps()).toEqual([]);
+  });
+
   it.each([
     ['sourceless {enabled:true} (3845 k07)', { enabled: true }],
     ['source support, paid_through ahead', { enabled: true, source: 'support', paid_through: '2099-11-14T05:51:51.123973+00:00' }],

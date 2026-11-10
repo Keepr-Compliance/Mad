@@ -10,7 +10,6 @@ import type {
   AppStep,
   AppUser,
   ModalState,
-  PendingOAuthData,
   PendingOnboardingData,
   Subscription,
 } from "./types";
@@ -77,10 +76,8 @@ interface PhoneTypeApiReturn {
 
 interface AuthFlowReturn {
   isNewUserFlow: boolean;
-  pendingOAuthData: PendingOAuthData | null;
   pendingOnboardingData: PendingOnboardingData;
   handleLoginSuccess: AppStateMachine["handleLoginSuccess"];
-  handleLoginPending: AppStateMachine["handleLoginPending"];
   handleDeepLinkAuthSuccess: AppStateMachine["handleDeepLinkAuthSuccess"];
   handleLogout: AppStateMachine["handleLogout"];
   handleAcceptTerms: AppStateMachine["handleAcceptTerms"];
@@ -164,7 +161,7 @@ export function constructStateProps(
   secureStorage: SecureStorageReturn,
   emailOnboardingApi: EmailOnboardingApiReturn,
   phoneTypeApi: PhoneTypeApiReturn,
-  auth: Pick<AuthFlowReturn, "isNewUserFlow" | "pendingOAuthData" | "pendingOnboardingData">,
+  auth: Pick<AuthFlowReturn, "isNewUserFlow" | "pendingOnboardingData">,
   modal: Pick<ModalFlowReturn, "modalState">,
   autoSync: AutoSyncReturn,
 ): Pick<
@@ -197,7 +194,6 @@ export function constructStateProps(
   | "phoneTypeSaveNotice"
   | "clearPhoneTypeSaveNotice"
   | "isNewUserFlow"
-  | "pendingOAuthData"
   | "pendingOnboardingData"
   | "modalState"
   | "showSetupPromptDismissed"
@@ -256,7 +252,6 @@ export function constructStateProps(
     isNewUserFlow: auth.isNewUserFlow,
 
     // Pending data
-    pendingOAuthData: auth.pendingOAuthData,
     pendingOnboardingData: auth.pendingOnboardingData,
 
     // Modal state
@@ -341,7 +336,7 @@ export function constructModalTransitions(
  */
 export function constructHandlers(
   nav: Pick<NavigationFlowReturn, "goToStep" | "goToEmailOnboarding" | "handleDismissSetupPrompt" | "setIsTourActive" | "getPageTitle">,
-  auth: Pick<AuthFlowReturn, "handleLoginSuccess" | "handleLoginPending" | "handleDeepLinkAuthSuccess" | "handleLogout" | "handleAcceptTerms" | "handleDeclineTerms">,
+  auth: Pick<AuthFlowReturn, "handleLoginSuccess" | "handleDeepLinkAuthSuccess" | "handleLogout" | "handleAcceptTerms" | "handleDeclineTerms">,
   permissions: Pick<PermissionsFlowReturn, "handlePermissionsGranted" | "checkPermissions">,
   phoneHandlers: PhoneHandlersReturn,
   emailHandlers: EmailHandlersReturn,
@@ -354,7 +349,6 @@ export function constructHandlers(
   | "goToStep"
   | "goToEmailOnboarding"
   | "handleLoginSuccess"
-  | "handleLoginPending"
   | "handleDeepLinkAuthSuccess"
   | "handleLogout"
   | "handleAcceptTerms"
@@ -389,7 +383,6 @@ export function constructHandlers(
 
     // Auth handlers
     handleLoginSuccess: auth.handleLoginSuccess,
-    handleLoginPending: auth.handleLoginPending,
     handleDeepLinkAuthSuccess: auth.handleDeepLinkAuthSuccess,
     handleLogout: auth.handleLogout,
 

@@ -336,6 +336,81 @@ describe('invoice.paid gates on real fixtures (C-3b, C-D3, C-D2, C-D2b)', () => 
     expect(grants()).toEqual([]);
   });
 
+  // BACKLOG-4088: the $0 first invoice of a subscription a trialing agent started through
+  // Keepr's Checkout grants to the trial end + 2 h, so exports do not lock between the trial
+  // override's end and the first real charge. [EDITED: sub-E-trialing metadata gains
+  // keepr_solo_trial '1', which only Keepr's Checkout params set.] Every other gate still runs.
+  const keeprTrial = (over: Obj = {}): Obj => {
+    const sub = fx('sub-E-trialing');
+    return { ...sub, metadata: { ...sub.metadata, keepr_solo_trial: '1' }, ...over };
+  };
+  const receipts = () => db.rows('billing_outbox').filter((r) => r.kind === 'agent_receipt');
+
+  it('4088 carve-out: Keepr trial-start invoice (total 0) -> grant to trial_end + 2 h through the same call, NO receipt', async () => {
+    const sub = keeprTrial();
+    const inv = fx('inv-E-trial');
+    expect([inv.total, inv.billing_reason, sub.status, sub.trial_end]).toEqual([0, 'subscription_create', 'trialing', 1794379058]);
+    useDb({ stripe_customers: [customerRow(sub.customer)] });
+    serve(inv, sub);
+    expect((await deliver(fx('ev-E-trial-invoice.paid'))).status).toBe(200);
+    expect(grants()).toEqual([{ p_user_id: USER, p_paid_through: paidThrough(1794379058), p_mode: 'test' }]);
+    expect(receipts()).toEqual([]);
+  });
+
+  it('4088 SR #1: carve-out invoice + another open subscription for the user -> no grant [SEEDED: mirror drift]', async () => {
+    const sub = keeprTrial();
+    useDb({
+      stripe_customers: [customerRow(sub.customer)],
+      billing_subscriptions: [
+        subRow(sub.id, sub.customer, { status: 'trialing' }),
+        subRow('sub_OTHER_OPEN', 'cus_OTHER', { status: 'past_due' }),
+      ],
+    });
+    serve(fx('inv-E-trial'), sub);
+    expect((await deliver(fx('ev-E-trial-invoice.paid'))).status).toBe(200);
+    expect(grants()).toEqual([]);
+  });
+
+  it('4088: a marked $0 invoice whose billing_reason is not subscription_create -> no grant [EDITED: billing_reason subscription_cycle]', async () => {
+    const sub = keeprTrial();
+    useDb({ stripe_customers: [customerRow(sub.customer)] });
+    serve({ ...fx('inv-E-trial'), billing_reason: 'subscription_cycle' }, sub);
+    expect((await deliver(fx('ev-E-trial-invoice.paid'))).status).toBe(200);
+    expect(grants()).toEqual([]);
+  });
+
+  it('4088: a marked trial longer than any Keepr trial (93 days) -> no grant [EDITED: trial_end, current_period_end, line period end]', async () => {
+    const base = fx('sub-E-trialing');
+    const end = base.created + 93 * 24 * 3600;
+    const sub = keeprTrial({ trial_end: end, current_period_end: end });
+    const inv = fx('inv-E-trial');
+    inv.lines.data[0].period.end = end;
+    useDb({ stripe_customers: [customerRow(sub.customer)] });
+    serve(inv, sub);
+    expect((await deliver(fx('ev-E-trial-invoice.paid'))).status).toBe(200);
+    expect(grants()).toEqual([]);
+  });
+
+  it('4088 boundary: a marked trial of exactly 92 days -> grant [EDITED: trial_end, current_period_end, line period end]', async () => {
+    const base = fx('sub-E-trialing');
+    const end = base.created + 92 * 24 * 3600;
+    const sub = keeprTrial({ trial_end: end, current_period_end: end });
+    const inv = fx('inv-E-trial');
+    inv.lines.data[0].period.end = end;
+    useDb({ stripe_customers: [customerRow(sub.customer)] });
+    serve(inv, sub);
+    expect((await deliver(fx('ev-E-trial-invoice.paid'))).status).toBe(200);
+    expect(grants().map((g) => g.p_paid_through)).toEqual([paidThrough(end)]);
+  });
+
+  it('4088: marked, but the subscription is no longer trialing (active) -> no $0 grant [EDITED: status active]', async () => {
+    const sub = keeprTrial({ status: 'active' });
+    useDb({ stripe_customers: [customerRow(sub.customer)] });
+    serve(fx('inv-E-trial'), sub);
+    expect((await deliver(fx('ev-E-trial-invoice.paid'))).status).toBe(200);
+    expect(grants()).toEqual([]);
+  });
+
   it('C-3c: invoice.paid while the subscription is paused -> no grant [COMPOSED: resume invoice, paused sub re-fetch]', async () => {
     const sub = fx('sub-2cu-paused');
     const inv = fx('inv-2cu-resume');

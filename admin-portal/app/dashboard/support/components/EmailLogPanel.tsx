@@ -24,6 +24,8 @@ const STATUS_STYLES: Record<string, string> = {
   failed: 'bg-red-100 text-red-700',
   skipped: 'bg-yellow-100 text-yellow-700',
   attempted: 'bg-blue-100 text-blue-700',
+  // BACKLOG-4011: first attempt failed and the send was moved to the retry queue.
+  queued: 'bg-indigo-100 text-indigo-700',
 };
 
 const TYPE_LABELS: Record<string, string> = {
@@ -31,6 +33,8 @@ const TYPE_LABELS: Record<string, string> = {
   ticket_notification: 'Notification',
   ticket_confirmation: 'Confirmation',
   ticket_reply: 'Reply',
+  ticket_resolved: 'Resolved',
+  receipt: 'Receipt',
   other: 'Other',
 };
 

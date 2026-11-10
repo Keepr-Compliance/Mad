@@ -65,13 +65,36 @@ export function buildSeedSpawn(
   return { command: wrapper, args };
 }
 
+/** BACKLOG-4054: seed as a given account (a test-project user) instead of the fixture account. */
+export interface SeedIdentityOverride {
+  userId: string;
+  email: string;
+}
+
+/** The two seeder knobs (scripts/qa/harness/seed-fixture.js resolveSeedIdentity). */
+export const SEED_IDENTITY_ENV_KEYS = ['KEEPR_QA_SEED_USER_ID', 'KEEPR_QA_SEED_EMAIL'] as const;
+
+/**
+ * BACKLOG-4054: the seeder's environment. The identity knobs come ONLY from `identity`: any copy
+ * inherited from the shell is dropped, so an exported variable can never re-key an ordinary seed.
+ */
+export function buildSeedEnv(base: NodeJS.ProcessEnv, identity?: SeedIdentityOverride): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, ELECTRON_ENABLE_LOGGING: '0' };
+  for (const k of SEED_IDENTITY_ENV_KEYS) delete env[k];
+  if (identity) {
+    env.KEEPR_QA_SEED_USER_ID = identity.userId;
+    env.KEEPR_QA_SEED_EMAIL = identity.email;
+  }
+  return env;
+}
+
 /** Spawn the Electron-main seed script (self-provisions the DB) and parse the emitted identity. */
-function runSeedScript(repoRoot: string, profileDir: string): SeededIdentity {
+function runSeedScript(repoRoot: string, profileDir: string, identity?: SeedIdentityOverride): SeededIdentity {
   const { command, args } = buildSeedSpawn(repoRoot, profileDir);
   const res = spawnSync(command, args, {
     cwd: repoRoot,
     encoding: 'utf8',
-    env: { ...process.env, ELECTRON_ENABLE_LOGGING: '0' },
+    env: buildSeedEnv(process.env, identity),
     // A seed takes well under a second; a long wait means a blocked prompt or a missed entry check.
     timeout: 30_000,
   });
@@ -95,6 +118,16 @@ function runSeedScript(repoRoot: string, profileDir: string): SeededIdentity {
 }
 
 /**
+ * BACKLOG-4097: the offline cache of the account's setup-finished record (SessionData
+ * `accountSetupFinishedAt`, electron/services/sessionService.ts). With no Supabase session the app
+ * answers account setup from this cache alone (electron/handlers/accountSetupHandlers.ts, the
+ * no-session-user branch); without it the answer is "unknown" and routing shows "Couldn't load your
+ * account settings" instead of the app's navigation (BACKLOG-3673). A fixed value, so seeds are
+ * deterministic.
+ */
+export const SEEDED_ACCOUNT_SETUP_FINISHED_AT = '2026-01-01T00:00:00.000Z';
+
+/**
  * Write session.json into the isolated profile. Plaintext SessionData (the app auto-migrates it to
  * an encrypted wrapper on first read). NO supabaseTokens → getCurrentUser authenticates from the
  * seeded DB session alone, with no real Supabase call and no login wall.
@@ -115,6 +148,8 @@ function writeSessionJson(profileDir: string, id: SeededIdentity): void {
     // Deliberately NO supabaseTokens (skips all real-Supabase validation branches).
     // A recent lastServerValidatedAt keeps the pre-auth offline-grace path valid too.
     lastServerValidatedAt: now,
+    // BACKLOG-4097: lands on the app's navigation, not "Couldn't load your account settings".
+    accountSetupFinishedAt: SEEDED_ACCOUNT_SETUP_FINISHED_AT,
   };
   writeFileSync(join(profileDir, 'session.json'), JSON.stringify(session, null, 2), 'utf8');
 }
@@ -123,9 +158,13 @@ function writeSessionJson(profileDir: string, id: SeededIdentity): void {
  * Full seed: provision DB → seed fixture → write session.json. Idempotent-ish (re-seeding the same
  * profile OR-REPLACEs rows). Returns the seeded identity for the driver to assert against.
  */
-export async function seedIsolatedProfile(repoRoot: string, profileDir: string): Promise<SeededIdentity> {
+export async function seedIsolatedProfile(
+  repoRoot: string,
+  profileDir: string,
+  opts: { identity?: SeedIdentityOverride } = {},
+): Promise<SeededIdentity> {
   if (!existsSync(profileDir)) mkdirSync(profileDir, { recursive: true });
-  const identity = runSeedScript(repoRoot, profileDir);
+  const identity = runSeedScript(repoRoot, profileDir, opts.identity);
   writeSessionJson(profileDir, identity);
   return identity;
 }

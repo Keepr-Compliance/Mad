@@ -39,6 +39,33 @@ export const updateWithDefault: SavedViewUpdate<Filters, Metric> = { filters: { 
 // (no excess-property check on a function's return), so the runtime half of
 // the guard is the component itself: it picks the two fields by name (C2).
 
+// BACKLOG-4142: the editor metric picker is typed by the view and the metric.
+export const pickerOk: SavedViewsSharing<View, Filters, Metric> = {
+  ...sharing,
+  updateMetric: {
+    initial: (v) => ({ col: v.name, fn: 'count' }),
+    render: (value, onChange) => <button onClick={() => onChange({ col: value.col, fn: 'sum' })}>{value.fn}</button>,
+  },
+};
+
+export const pickerInitialString: SavedViewsSharing<View, Filters, Metric> = {
+  ...sharing,
+  updateMetric: {
+    // @ts-expect-error initial must return the metric M, not a string
+    initial: () => 'rows',
+    render: () => null,
+  },
+};
+
+export const pickerOnChangeString: SavedViewsSharing<View, Filters, Metric> = {
+  ...sharing,
+  updateMetric: {
+    initial: () => ({ col: 'rows', fn: 'count' }),
+    // @ts-expect-error the picker hands back an M, not a string
+    render: (_value, onChange) => <button onClick={() => onChange('rows')}>x</button>,
+  },
+};
+
 // @ts-expect-error access is owner | editor | viewer
 export const badAccess: View = { id: 'v2', name: 'X', pinned: false, access: 'admin' };
 

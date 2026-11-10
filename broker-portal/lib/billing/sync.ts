@@ -484,19 +484,46 @@ async function isKeeprResumeInvoice(ctx: BillingContext, invoice: Stripe.Invoice
   return ((data as { id: string }[] | null) ?? []).some((r) => r.id === marker);
 }
 
+/**
+ * BACKLOG-4088: the longest Keepr trial a subscription may carry (solo_trial days are
+ * 1-90, migration 20261031140000) plus 2 days for the Checkout 49 h minimum.
+ */
+export const MAX_KEEPR_TRIAL_SECONDS = (90 + 2) * 24 * 60 * 60;
+
+/**
+ * BACKLOG-4088: a subscription a trialing agent started through Keepr's Checkout
+ * (agentCheckoutParams.ts sets keepr_solo_trial; only our server writes it), still in
+ * its trial, whose trial is no longer than a Keepr trial can be.
+ */
+export function isKeeprTrialSubscription(sub: Stripe.Subscription): boolean {
+  if (sub.status !== 'trialing' || sub.metadata?.keepr_solo_trial !== '1') return false;
+  if (typeof sub.trial_end !== 'number' || typeof sub.created !== 'number') return false;
+  return sub.trial_end - sub.created <= MAX_KEEPR_TRIAL_SECONDS;
+}
+
 /** invoice.paid: the only grant path. */
 export async function handleInvoicePaid(ctx: BillingContext, invoiceId: string): Promise<void> {
   const invoice = await ctx.stripe.invoices.retrieve(invoiceId, { expand: ['charge'] });
   if (invoice.status !== 'paid') return log(ctx, `invoice ${invoice.id} is ${invoice.status}; no grant`);
-  if (!(invoice.total > 0)) return log(ctx, `invoice ${invoice.id} total ${invoice.total}; no grant`);
+  // BACKLOG-4088: the one $0 invoice that may grant is the first invoice of a Keepr trial
+  // subscription (checked below, once the subscription is read). It still passes every
+  // other check, and the grant runs through the same call, to the trial end + buffer.
+  const zeroTrialStart = !(invoice.total > 0);
+  if (zeroTrialStart && invoice.billing_reason !== 'subscription_create') {
+    return log(ctx, `invoice ${invoice.id} total ${invoice.total}; no grant`);
+  }
   const subId = stripeId(invoice.subscription);
   if (!subId) return;
 
   const sub = await ctx.stripe.subscriptions.retrieve(subId);
+  if (zeroTrialStart && !isKeeprTrialSubscription(sub)) {
+    return log(ctx, `invoice ${invoice.id} total ${invoice.total}; no grant`);
+  }
   const userId = await resolveAgentUser(ctx, sub, 'grant');
   if (!userId) return;
   // BACKLOG-3848 (SR R9): one receipt per paid Agent invoice, before and
   // whatever the grant below decides. Deduped per invoice; sent ~10 min later.
+  // BACKLOG-4088: the $0 trial-start invoice gets none (enqueueAgentReceipt skips amount_paid 0).
   const queued = await enqueueAgentReceipt(ctx.service, { mode: ctx.mode, userId, invoice });
   log(ctx, `receipt for ${invoice.id}: ${queued}`);
   if (!invoice.billing_reason || !GRANT_REASONS.has(invoice.billing_reason)) {

@@ -358,7 +358,7 @@ export const TRANSACTION_COLUMN_POLICY: Record<TransactionColumn, ColumnPolicy> 
   first_exported_at: {
     insert: "db-default",
     update: "writable",
-    why: "BACKLOG-2013 freeze marker. Set write-once at the SQL layer by TWO writers — `recordExportCompletion` folds it into the export-completion UPDATE (BACKLOG-2549; called from `completeExport` in `exportCompletion.ts` for the enhanced and folder paths, BACKLOG-3303) and `stampFirstExportedAt` sets it alone (the PDF path) — and cleared by admin unfreeze via the override path below. Both enforce write-once in SQL, one with COALESCE and one with a NULL predicate. A brand-new deal has never been exported.",
+    why: "BACKLOG-2013 freeze marker. Set write-once at the SQL layer by ONE writer — `recordExportCompletion` folds it into the export-completion UPDATE with COALESCE (BACKLOG-2549; called from `completeExport` in `exportCompletion.ts` for the enhanced and folder paths, BACKLOG-3303) — and cleared by admin unfreeze via the override path below. The separate NULL-predicate stamp writer was deleted with the path-taking PDF channel (BACKLOG-3302). A brand-new deal has never been exported.",
   },
   detection_source: {
     insert: "writable",
@@ -1220,28 +1220,6 @@ export function updateTransaction(
 
 
 /**
- * BACKLOG-2013 — stamp the export-freeze marker (`first_exported_at`) write-once
- * at the SQL layer. The `WHERE first_exported_at IS NULL` predicate makes the
- * boundary immutable in the database itself: a second (or racing) export can
- * never move it, independent of caller convention. Returns true iff this call
- * was the one that set the marker (`changes === 1`); a false return means the
- * transaction was already frozen and the boundary was left untouched.
- *
- * Does NOT go through `updateTransaction` on purpose — that path builds a
- * generic `WHERE id = ?` update, which cannot express the write-once guard.
- */
-export function stampFirstExportedAt(
-  transactionId: string,
-  timestamp: string,
-): boolean {
-  const result = dbRun(
-    sql`UPDATE transactions SET first_exported_at = ? WHERE id = ? AND first_exported_at IS NULL`,
-    [timestamp, transactionId],
-  );
-  return result.changes === 1;
-}
-
-/**
  * BACKLOG-2549 — parameters of one export completion.
  *
  * DECLARED AS A NAMED INTERFACE, NOT INLINE IN THE PARAMETER LIST, AND THAT IS
@@ -1268,12 +1246,12 @@ export interface ExportCompletionParams {
  * freeze marker as two separate awaited statements. Between them the row is
  * `export_status = 'exported'` with `first_exported_at` NULL: an exported
  * artifact on disk while the deal's identity anchors are still editable. A
- * crash is not required to reach it — `markFirstExport` is non-throwing, so a
+ * crash is not required to reach it — the old stamp helper was non-throwing, so a
  * stamp FAILURE produced the same row and returned success to the user.
  *
  * The write-once rule moves from a `WHERE` predicate into the `SET`:
- * `COALESCE(first_exported_at, ?)` keeps the boundary immutable in SQL, exactly
- * as `stampFirstExportedAt` does, while still permitting the four tracking
+ * `COALESCE(first_exported_at, ?)` keeps the boundary immutable in SQL, as the
+ * deleted separate stamp writer did with a NULL predicate, while still permitting the four tracking
  * columns to be written on EVERY export. `WHERE` is `id = ?` alone and must
  * stay that way — adding `AND first_exported_at IS NULL` here would silently
  * stop recording re-exports.

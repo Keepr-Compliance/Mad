@@ -29,8 +29,11 @@ import { enqueueEmail } from './queue';
  * BACKLOG-4001: supabase-js resolves a refused insert with { error } rather than
  * throwing, so the result is read. Only the error code and the type/status tags are
  * reported: a check-violation's `details` carries the whole row, recipient included.
+ *
+ * BACKLOG-4011: exported for the retry drain (queue.ts), which writes the 'sent' or
+ * 'failed' row when a queued send is retried.
  */
-async function logEmailDelivery(opts: {
+export async function logEmailDelivery(opts: {
   emailType: EmailType;
   recipientEmail: string;
   status: EmailLogStatus;

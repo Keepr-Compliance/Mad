@@ -45,7 +45,6 @@ Object.defineProperty(window, "localStorage", { value: localStorageMock });
 const defaultOptions = {
   isWindows: false,
   isMacOS: true,
-  pendingOAuthData: null,
   pendingOnboardingData: {
     termsAccepted: false,
     phoneType: null as "iphone" | "android" | null,
@@ -54,7 +53,6 @@ const defaultOptions = {
   },
   isAuthenticated: false,
   login: jest.fn(),
-  onPendingOAuthClear: jest.fn(),
   onPendingOnboardingClear: jest.fn(),
   onPhoneTypeSet: jest.fn(),
   onEmailOnboardingComplete: jest.fn(),
