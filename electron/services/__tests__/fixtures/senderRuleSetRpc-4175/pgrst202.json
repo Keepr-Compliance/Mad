@@ -1,0 +1,13 @@
+{
+  "success": false,
+  "error": {
+    "code": "PGRST202",
+    "details": "Searched for the function public.sender_rule_set_current without parameters or with a single unnamed json/jsonb parameter, but no matches were found in the schema cache.",
+    "hint": null,
+    "message": "Could not find the function public.sender_rule_set_current without parameters in the schema cache"
+  },
+  "data": null,
+  "count": null,
+  "status": 404,
+  "statusText": "Not Found"
+}
