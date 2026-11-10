@@ -29,30 +29,6 @@ const BROKERAGE_A = {
 const BROKERAGE_B = { ...BROKERAGE_A, organization_id: 'org-b', org_name: 'Brokerage B', role: 'admin' };
 const PERSONAL = { ...BROKERAGE_A, organization_id: 'org-p', org_name: 'Personal', role: 'admin', is_personal: true };
 
-beforeAll(() => {
-  // jsdom has no <dialog> modal API.
-  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
-    this.setAttribute('open', '');
-  };
-  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
-    this.removeAttribute('open');
-  };
-});
-beforeEach(() => {
-  refresh.mockReset();
-  changeMemberRole.mockReset();
-});
-afterEach(cleanup);
-
-function rowFor(name: string) {
-  return screen.getByText(name).closest('li') as HTMLElement;
-}
-
-function submitIn(dialog: HTMLElement, role: string) {
-  fireEvent.change(within(dialog).getByLabelText('Role'), { target: { value: role } });
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Change Role' }));
-}
-
 const USER = {
   id: 'user-1',
   email: 'pat@example.test',
@@ -132,6 +108,19 @@ describe('UserProfileCard role change', () => {
     await waitFor(() => expect(refresh).toHaveBeenCalled());
     expect(changeMemberRole).toHaveBeenCalledTimes(1);
     expect(changeMemberRole).toHaveBeenCalledWith({ organizationId: 'org-b', userId: 'user-1', role: 'broker' });
+  });
+
+  it('two brokerages: Cancel closes the picker without opening the role dialog or calling the action', () => {
+    render(<UserProfileCard user={USER} canEditRole memberships={[BROKERAGE_A, BROKERAGE_B]} />);
+    fireEvent.click(changeRoleButton() as HTMLElement);
+    expect(screen.getByLabelText('Organization')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByLabelText('Organization')).toBeNull();
+    expect(screen.queryByLabelText('Role')).toBeNull();
+    expect(document.querySelector('dialog[open]')).toBeNull();
+    expect(changeMemberRole).not.toHaveBeenCalled();
   });
 
   it('shows a refusal in the dialog and does not refresh', async () => {
