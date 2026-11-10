@@ -126,17 +126,17 @@ BEGIN
   s := (SELECT string_agg(c || '=' || res, ' ; ') FROM p4170p4_p0
          WHERE lbl = 'u0_none' AND c IN ('suspend', 'unsuspend', 'update_license', 'adjust_plus', 'adjust_minus', 'reinstate', 'create_other')
            AND NOT coalesce(pg_temp.ok_reply('u0_none', c, res), false));
-  r := r || jsonb_build_object('P0_zero_key_internal_runs_every_B_case_before',
+  r := r || jsonb_build_object('P0_u0_B_cases_before',
     pg_temp.pass(s IS NULL AND (SELECT count(*) FROM p4170p4_p0 WHERE lbl = 'u0_none') = 16, s));
   s := (SELECT string_agg(c || '=' || res, ' ; ') FROM p4170p4_p0
          WHERE lbl = 'u0_none' AND c IN ('finalize', 'purchase') AND NOT coalesce(pg_temp.ok_reply('u0_none', c, res), false));
-  r := r || jsonb_build_object('P0_zero_key_internal_runs_finalize_purchase_before', pg_temp.pass(s IS NULL, s));
+  r := r || jsonb_build_object('P0_u0_C_cases_before', pg_temp.pass(s IS NULL, s));
   s := (SELECT string_agg(c || '=' || res, ' ; ') FROM p4170p4_p0
          WHERE lbl = 'c_claims' AND c IN ('finalize', 'finalize_done', 'purchase', 'refund') AND NOT coalesce(pg_temp.ok_reply('c_claims', c, res), false));
-  r := r || jsonb_build_object('P0_c_claims_passes_C_body_before', pg_temp.pass(s IS NULL, s));
+  r := r || jsonb_build_object('P0_c_claims_C_cases_before', pg_temp.pass(s IS NULL, s));
   s := (SELECT string_agg(c || '=' || res, ' ; ') FROM p4170p4_p0
          WHERE lbl = 'c_noclaims' AND c IN ('finalize', 'purchase', 'refund') AND pg_temp.rep(res) = 'ERR P0001 Unauthorized');
-  r := r || jsonb_build_object('P0_c_noclaims_passes_C_guard_before',
+  r := r || jsonb_build_object('P0_c_noclaims_C_cases_before',
     pg_temp.pass(s IS NULL AND (SELECT count(*) FROM p4170p4_p0 WHERE lbl = 'c_noclaims' AND c IN ('finalize', 'purchase', 'refund')) = 3, s));
   r := r || jsonb_build_object('P0_catalog_before',
     pg_temp.pass(cat0 ->> 'credits_adjust' = '' AND cat0 -> 'credits_adjust_key' = 'null'::jsonb

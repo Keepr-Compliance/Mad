@@ -8,6 +8,8 @@ count, restore both files with `git checkout --`, and assert the tree is clean. 
 the restore is a checkout.
 
 Usage: mutate.py <mode>[,<mode>...]   (or: mutate.py all)
+Run it while keepr-test holds the pre-PR4 bodies: the call starts with the rollback file, whose pre-pin
+is repinned to the mutant text, so it refuses the PR4 bodies once the migration is applied there.
 """
 import os, re, subprocess, sys, json
 here = os.path.dirname(os.path.abspath(__file__))
@@ -75,7 +77,7 @@ MUT = {
                           "REVOKE EXECUTE ON FUNCTION public.record_credit_purchase(uuid, integer, integer, jsonb) FROM PUBLIC, anon;", 1),
                          ("('public.record_credit_purchase(uuid,integer,integer,jsonb)', '%s', '" + ACL_C + "')",
                           "('public.record_credit_purchase(uuid,integer,integer,jsonb)', '%s', '" + ACL_B + "')", 1)]},
-  # the three C guards without COALESCE (a NULL role passes the IF)
+  # the three C guards without COALESCE
   'NULL_ROLE_unsafe': {MIG: [(C_NEW, "  IF auth.role() <> 'service_role' THEN\n", 3)]},
   # record_refund EXECUTE widened to authenticated (post-check edited to match)
   'REFUND_acl_widened': {MIG: [("GRANT EXECUTE ON FUNCTION public.record_refund(uuid, text, jsonb) TO service_role;",

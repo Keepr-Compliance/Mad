@@ -336,3 +336,6 @@ MUTATION APPLIED 0/1/admin-portal/__tests__/phone-layout-3841/pages.test.tsx
    -        canSuspend
 FAILED [('__tests__/phone-layout-3841/pages.test.tsx', 'C11 page restores: phone token present, desktop tokens kept > user profile: name row wraps, suspend/impersonate are 44px')]
 RESTORED clean=True
+
+## Note
+mutate.py runs were made before the keepr-test apply (see mutate.py docstring). P0 control keys renamed after these runs (P0_u0_B_cases_before, P0_u0_C_cases_before, P0_c_claims_C_cases_before, P0_c_noclaims_C_cases_before); run.sh after the rename: total 298 pass 298 fail 0.
