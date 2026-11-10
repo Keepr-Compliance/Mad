@@ -29,6 +29,8 @@ export interface DashboardShellProps {
   checklistsUnavailableLabel?: string | null;
   /** BACKLOG-3080: lib/my-transactions-access.ts, via the layout. */
   showMyTransactions?: boolean;
+  /** BACKLOG-3505: the layout passes lib/reports/report-gate.ts listMyReports. */
+  showReports?: boolean;
   /** BACKLOG-3080: not a full-portal user; the Sidebar shows the floor only. */
   floorOnly?: boolean;
   /** BACKLOG-3844: lib/billing/capabilities.ts billingNavVisible, via the layout. */
@@ -49,6 +51,7 @@ export function DashboardShell({
   showChecklists,
   checklistsUnavailableLabel,
   showMyTransactions,
+  showReports,
   floorOnly,
   showBilling,
   suspended,
@@ -94,6 +97,7 @@ export function DashboardShell({
         showChecklists={showChecklists}
         checklistsUnavailableLabel={checklistsUnavailableLabel}
         showMyTransactions={showMyTransactions}
+        showReports={showReports}
         floorOnly={floorOnly}
         showBilling={showBilling}
         suspended={suspended}

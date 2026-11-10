@@ -308,7 +308,7 @@ describe("BACKLOG-2553 — restoreDatabase drains the contact worker pool", () =
 
     const result = await restoreDatabase(backupPath);
 
-    expect(result).toEqual({ success: true });        // (4) the restore really ran
+    expect(result).toEqual({ success: true, keptPreviousAs: expect.stringMatching(/mad-before-restore-/) }); // (4) the restore really ran
     expect(snapshot).not.toBeNull();                  // (3) the sample was taken
     expect(snapshot).toEqual({ poolReady: false, workerExited: true });
 
@@ -444,7 +444,7 @@ describe("BACKLOG-2553 — restoreDatabase drains the contact worker pool", () =
     expect(before.map((r) => r.id)).toEqual(["live-contact"]);
 
     const result = await restoreDatabase(backupPath);
-    expect(result).toEqual({ success: true });
+    expect(result).toEqual({ success: true, keptPreviousAs: expect.stringMatching(/mad-before-restore-/) });
     expect(isPoolReady()).toBe(true);
 
     const after = (await queryContacts("external", USER)) as ExternalRow[];

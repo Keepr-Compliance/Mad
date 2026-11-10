@@ -153,6 +153,25 @@ describe("BackupRestoreHandlers", () => {
 
       expect(restoreDatabase).toHaveBeenCalledWith("/user/chosen/backup.db");
     });
+
+    it("BACKLOG-3298: the confirmation says a copy of the current data is kept", async () => {
+      const { dialog } = require("electron");
+      (dialog.showOpenDialog as jest.Mock).mockResolvedValue({
+        canceled: false,
+        filePaths: ["/user/chosen/backup.db"],
+      });
+      (dialog.showMessageBox as jest.Mock).mockResolvedValue({ response: 0 });
+
+      registerBackupRestoreHandlers();
+      await registeredHandlers["db:restore"]({} as any);
+
+      const opts = (dialog.showMessageBox as jest.Mock).mock.calls[0][1];
+      expect(opts.detail).toBe(
+        "This will replace your current database with the backup. " +
+          "All data added since the backup was created will be lost. " +
+          "A copy of your current data will be kept until your next restore."
+      );
+    });
   });
 
   describe("db:get-backup-info handler", () => {

@@ -52,7 +52,16 @@ type Phase =
   | "awaiting-browser" // Checkout / SCA opened externally; waiting for the deep-link return
   | "confirming" // browser returned; polling the authoritative gate
   | "declined" // hard decline — retry / other card
+  // BACKLOG-4213: saved card unusable (detached/deleted). Renders exactly as
+  // "declined" (same copy shape, same "Try another card" → Checkout); only the
+  // data-phase test hook differs so QA can tell the two failure modes apart.
+  | "invalid-payment-method"
   | "error"; // unexpected failure — retry
+
+/** Phases whose primary CTA is "Try another card" → Flow A Checkout (a NEW card). */
+function needsNewCard(phase: Phase): boolean {
+  return phase === "declined" || phase === "invalid-payment-method";
+}
 
 function formatPrice(quote: UnlockQuote): string {
   const usd = quote.currency.toUpperCase() === "USD";
@@ -186,10 +195,11 @@ export function PurchaseUnlockHandoff({
       case "invalid_payment_method":
         // BACKLOG-2088: the saved card is no longer usable (detached/deleted).
         // Nothing was charged; the portal has cleared the stale saved-card cache.
-        // Reuse the "declined" phase so the primary CTA becomes "Try another card"
-        // and routes to Flow A Checkout (add a NEW card) — never re-charge the dead
-        // card. Never show a false "Payment received".
-        setPhase("declined");
+        // Its own phase (BACKLOG-4213) that needsNewCard() treats like "declined":
+        // the primary CTA becomes "Try another card" and routes to Flow A Checkout
+        // (add a NEW card) — never re-charge the dead card. Never show a false
+        // "Payment received".
+        setPhase("invalid-payment-method");
         setErrorMessage("We couldn't charge your saved card. Add a new card to continue.");
         return;
       case "offline":
@@ -216,7 +226,7 @@ export function PurchaseUnlockHandoff({
    *  - Otherwise: Flow B when a saved card is known, else Flow A.
    */
   const handlePrimary = useCallback((): void => {
-    if (phase === "declined") {
+    if (needsNewCard(phase)) {
       void startCheckout();
       return;
     }
@@ -362,7 +372,7 @@ function primaryLabel(
   if (phase === "starting") return "Starting…";
   if (phase === "confirming") return "Confirming…";
   if (phase === "awaiting-browser") return "Waiting for browser…";
-  if (phase === "declined") return "Try another card";
+  if (needsNewCard(phase)) return "Try another card";
   if (phase === "error") return "Try again";
   if (hasSavedCard) return `Confirm — ${priceLabel ?? "unlock"}`;
   return `Continue to checkout — ${priceLabel ?? "unlock"}`;

@@ -299,6 +299,24 @@ describe("ReviewDuplicatesModal", () => {
     await waitFor(() => expect(window.api.contacts.getReviewQueue).toHaveBeenCalledTimes(2));
   });
 
+  /** BACKLOG-4180 — a confirm rolled back because its values could not be copied. */
+  it("shows the failure and keeps the question when the link could not be saved", async () => {
+    jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({ success: true, clusters: [cluster()] });
+    jest
+      .mocked(window.api.contacts.confirmLink)
+      .mockResolvedValue({ success: false, error: "Couldn't link this contact. Try again." });
+    const onResolved = jest.fn();
+
+    render(<ReviewDuplicatesModal userId={USER} onClose={jest.fn()} onResolved={onResolved} />);
+    fireEvent.click(await screen.findByTestId(`review-confirm-${item().proposalId}`));
+
+    expect(await screen.findByTestId("review-duplicates-error")).toHaveTextContent(
+      "Couldn't link this contact. Try again.",
+    );
+    expect(onResolved).not.toHaveBeenCalled();
+    expect(screen.getByTestId(`review-confirm-${item().proposalId}`)).toBeInTheDocument();
+  });
+
   it("rejects the exact proposal clicked", async () => {
     jest.mocked(window.api.contacts.getReviewQueue).mockResolvedValue({
       success: true,

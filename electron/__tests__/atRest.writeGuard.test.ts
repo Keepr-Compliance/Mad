@@ -110,7 +110,7 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
       "`.backup` if the migration fails. Allowed as a legacy path: it runs only on a database that is still " +
       "plaintext, and the plaintext `.backup` is deleted once the migration succeeds",
   },
-  "electron/services/sqliteBackupService.ts": { count: 4, reason: SQLCIPHER },
+  "electron/services/sqliteBackupService.ts": { count: 5, reason: `${SQLCIPHER}; BACKLOG-3298 adds 1 rename: the safety copy is renamed to mad-before-restore-<time>.db on success` },
   "electron/services/databaseEncryptionService.ts": { count: 3, reason: `${SEALED} (DB key store)` },
   // --- already sealed ---------------------------------------------------------------
   "electron/services/sessionService.ts": { count: 1, reason: `${SEALED} (session file via encryptSessionData, written to a tmp file — BACKLOG-3833)` },
