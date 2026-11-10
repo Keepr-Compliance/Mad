@@ -1695,6 +1695,54 @@ class DatabaseService implements IDatabaseService {
     }
   }
 
+  /**
+   * BACKLOG-3023 — put back a weakened `prevent_audit_update` trigger.
+   *
+   * Never throws (it runs between the migration chain and publish, and anything
+   * escaping runMigrations goes to auto-restore). Never shown to the user.
+   * Reported off-device either way: no shipped build writes the weak trigger,
+   * so a repair on a released build means a downgrade, an old restored file or
+   * an edited one, and the local log lives on the same machine as the file.
+   */
+  private async _repairAuditUpdateTrigger(db: DatabaseType): Promise<void> {
+    const tags = { service: "database-service", operation: "auditTriggerRepair" };
+    const warn = async (message: string, meta: Record<string, unknown>): Promise<void> => {
+      try {
+        await logService.warn(message, "DatabaseService", meta);
+      } catch {
+        // A failed log write must not escape into auto-restore.
+      }
+    };
+    try {
+      let previousDefinition: string | null = null;
+      const outcome = auditDb.repairAuditUpdateTrigger(db, (previous) => {
+        previousDefinition = previous;
+        void warn("Audit-log update trigger is not strict; replacing it", { previousDefinition: previous });
+      });
+      if (outcome === "repaired") {
+        // Its own try: a reporting failure is not a repair failure.
+        try {
+          hostErrorReporter.captureMessage("Audit-log update trigger was not strict; restored", {
+            level: "warning",
+            tags,
+            extra: { previousDefinition },
+          });
+        } catch {
+          // The reporter contract forbids throwing; this only enforces it here.
+        }
+      }
+    } catch (repairError) {
+      try {
+        hostErrorReporter.captureException(repairError, { tags });
+      } catch {
+        // The reporter contract forbids throwing; this only enforces it here.
+      }
+      await warn("Audit-log trigger check failed (non-fatal)", {
+        error: repairError instanceof Error ? repairError.message : String(repairError),
+      });
+    }
+  }
+
   // ============================================
   // MIGRATIONS (Version-based runner)
   // ============================================
@@ -1853,6 +1901,14 @@ class DatabaseService implements IDatabaseService {
       await hostErrorReporter.flush(2000);
       throw error;
     }
+
+    // BACKLOG-3023: schema.sql's CREATE TRIGGER IF NOT EXISTS cannot replace a
+    // same-named weakened audit trigger, so compare its definition here, every
+    // launch, after the chain (a migration could rewrite the table). Outside the
+    // try above on purpose: a failure here must never reach the
+    // migration-failure path (auto-restore). It is hardening, not a reason to
+    // restore, and the user is never shown it.
+    await this._repairAuditUpdateTrigger(currentDb);
 
     // Backup retention: keep last 3, delete older. Gated on willRunMigration so
     // the rolling window tracks the last 3 MIGRATION events (S5, BACKLOG-1772),
