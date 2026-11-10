@@ -2,7 +2,8 @@
 """BACKLOG-4219 PR1: build one SQL text for a single kt-sql call on keepr-test.
 
 Usage: compose.py <out.sql> [--with-migration]
---with-migration puts the migration in front TWICE (the second apply proves it is idempotent).
+--with-migration puts the rollback, then the migration TWICE, in front (fresh apply; the second
+apply proves it is idempotent).
 The controls end in RAISE, so the whole call rolls back (migration included when composed in).
 The rollback script is embedded so S20 can run it. Files are read from the working tree, so a
 mutation applied by mutate.py is what runs.
@@ -18,6 +19,9 @@ assert ctl.count('__ROLLBACK__') == 1
 for tag in ('$rb$', '$b$', '$f$', '$drv$'):
     assert tag not in rb and tag not in m, tag
 ctl = ctl.replace('__ROLLBACK__', rb)
-text = (m + '\n' + m + '\n' if '--with-migration' in sys.argv[2:] else '') + ctl
+# --with-migration starts from NO 4219 objects: the rollback runs first, so a mutation that drops a
+# REVOKE or changes DDL is measured against a fresh apply even where the migration is already applied
+# (keepr-test). All of it is inside the one transaction that ends in RAISE.
+text = (rb + '\n' + m + '\n' + m + '\n' if '--with-migration' in sys.argv[2:] else '') + ctl
 open(out, 'w').write(text)
 print(out, len(text))
