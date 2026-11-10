@@ -17,6 +17,9 @@ MIG = os.path.join(here, '..', '..', 'migrations', '20261112100000_backlog_3962_
 RB = os.path.join(here, 'rollback-3962-pr1.sql')
 
 MUTANTS = {
+    # S2: the has_internal_role pin names a wrong md5; the pre-check must raise
+    'M_pin_wrong_md5': [("IS DISTINCT FROM '221786001ca8ce4767112e1175cc6ece' THEN\n",
+                         "IS DISTINCT FROM '00000000000000000000000000000000' THEN\n")],
     # S1: token match on the first space-separated word only
     'M_token_first_word': [("     WHERE btrim(a.answer) = v_row.token\n",
                             "     WHERE split_part(btrim(a.answer), ' ', 1) = v_row.token\n")],

@@ -49,6 +49,11 @@ BEGIN
   IF v IS DISTINCT FROM 'cfc4ffb201632d3df5aad1f349c18b8e' THEN
     RAISE EXCEPTION 'BACKLOG-3962: has_permission md5 % is not the expected body', v;
   END IF;
+  -- both staff functions gate on has_internal_role.
+  SELECT md5(prosrc) INTO v FROM pg_proc WHERE oid = 'public.has_internal_role(uuid)'::regprocedure;
+  IF v IS DISTINCT FROM '221786001ca8ce4767112e1175cc6ece' THEN
+    RAISE EXCEPTION 'BACKLOG-3962: has_internal_role md5 % is not the expected body', v;
+  END IF;
   SELECT md5(prosrc) INTO v FROM pg_proc
    WHERE oid = 'public.log_admin_action(text, text, text, jsonb, inet, text)'::regprocedure;
   IF v IS DISTINCT FROM '4793571138164901ad451d3cc09b2224' THEN

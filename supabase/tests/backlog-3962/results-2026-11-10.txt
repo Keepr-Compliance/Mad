@@ -40,3 +40,8 @@ S1 (SR fix-up): T23c added, mutant M_token_first_word added to compose.py. Venue
 P3962_RESULT base: pass 64, fail 0
 P3962_RESULT M_token_first_word: pass 61, fail 3 (T23c_token_with_extra_words_not_verified red; T23b and T25 red as a consequence, the claim is already verified when they run)
 composed-text diff base vs mutant (git diff --no-index --numstat): 2 added, 2 removed
+
+S2 (SR fix-up): pre-check pins has_internal_role(uuid) by md5(prosrc); prod and keepr-test md5 both start 22178600.
+P3962_RESULT base (pre-check passes with the pin): pass 64, fail 0
+M_pin_wrong_md5 (pin set to a wrong md5): pre-check raises "BACKLOG-3962: has_internal_role md5 ... is not the expected body"
+Full run, all 18 modes, KEEPR_3962_APPLIED=1: every mutant red, rollback removes every object; keepr-test left with 0 rows.
