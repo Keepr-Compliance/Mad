@@ -128,12 +128,16 @@ BEGIN
   s := pg_temp.writes();
   r := r || jsonb_build_object('D1_inline_join_and_is_system_write_paths_unchanged',
     pg_temp.pass(p0.writes = s AND s ~ '^2\|0\|1\|', p0.writes || ' -> ' || s));
+  -- section 18 refusal: support.manage (+ support-sla viewer, so it sees the row: n=1) without support.admin updates 0
+  r := r || jsonb_build_object('D3_sla_update_refused_without_support_admin',
+    pg_temp.pass(split_part(s, '|', 4) = '0/1' AND split_part(p0.writes, '|', 4) = '0/1', p0.writes || ' -> ' || s));
   s := (SELECT string_agg(policyname, ',') FROM pg_policies WHERE schemaname = 'public'
          AND policyname IN ('support_templates_manage', 'support_sla_settings_update_admin')
          AND ((coalesce(qual, '') || coalesce(with_check, '')) ~ 'internal_roles|admin_role_permissions|admin_permissions'
               OR qual !~ 'has_any_permission' OR with_check !~ 'has_any_permission'));
   n := (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND policyname IN ('support_templates_manage', 'support_sla_settings_update_admin'));
   r := r || jsonb_build_object('D2_dep_policies_use_helper_in_using_and_check', pg_temp.pass(s IS NULL AND n = 2, coalesce(s, '') || ' n=' || n));
+  r := r || jsonb_build_object('D4_sla_post_digest_pinned', pg_temp.pass(pg_temp.depdigest() = '2/4eda5dee54a150054949730869030329', pg_temp.depdigest()));
 
   -- ================= K-pol: count / shape unchanged; no internal-role text except the own-role branch =================
   s := pg_temp.shape();

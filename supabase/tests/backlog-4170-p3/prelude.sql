@@ -11,6 +11,7 @@
 --     19 internal_users.manage (212)  20 analytics.view (213)  21 organizations.view (214)
 --     22 plans.view (215)    23 support.manage (216)
 --     24 support.admin + analytics.view (217) + support-sla report viewer (SLA write check only)
+--     25 support.manage + analytics.view (218) + support-sla report viewer, NO support.admin (SLA refusal check)
 --     30 the REAL Super Admin role (is_system)
 --   customers: 5 requester of 301 (assigned to 2), member of org 601, own rows in every billing table
 --              (stripe_customers: one live + one test), own lifecycle event, pending internal
@@ -104,6 +105,8 @@ CREATE FUNCTION pg_temp.writes() RETURNS text LANGUAGE sql AS $b$
   SELECT pg_temp.rb(pg_temp.fx(23), 'WITH u AS (UPDATE public.support_response_templates SET body = body WHERE name LIKE ''P4170p3%'' RETURNING 1) SELECT to_jsonb(count(*)) FROM u')
     || '|' || pg_temp.rb(pg_temp.fx(3), 'WITH u AS (UPDATE public.support_response_templates SET body = body WHERE name LIKE ''P4170p3%'' RETURNING 1) SELECT to_jsonb(count(*)) FROM u')
     || '|' || pg_temp.rb(pg_temp.fx(24), 'WITH u AS (UPDATE public.support_sla_settings SET time_zone = time_zone RETURNING 1) SELECT to_jsonb(count(*)) FROM u')
+    || '|' || pg_temp.rb(pg_temp.fx(25), 'WITH u AS (UPDATE public.support_sla_settings SET time_zone = time_zone RETURNING 1) SELECT to_jsonb(count(*)) FROM u')
+    || '/' || pg_temp.call_as(pg_temp.fx(25), 'SELECT to_jsonb(count(*)) FROM public.support_sla_settings')
     || '|' || pg_temp.rb(pg_temp.fx(30), 'WITH i AS (INSERT INTO public.admin_roles (name, slug, description, is_system) VALUES (''P4170p3 sa-made'', ''p4170p3-sa-made'', ''fixture'', false)) SELECT to_jsonb(0)',
                          'SELECT count(*) FROM public.admin_roles WHERE slug = ''p4170p3-sa-made''')
     || '|' || pg_temp.rb(pg_temp.fx(30), format('WITH u AS (UPDATE public.admin_roles SET description = ''fixture2'' WHERE id = %L RETURNING 1) SELECT to_jsonb(count(*)) FROM u', pg_temp.fx(201)))
@@ -223,10 +226,10 @@ BEGIN
   INSERT INTO auth.users (id, email, aud, role, instance_id, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
   SELECT pg_temp.fx(x), 'p4170p3-' || x || '@example.test', 'authenticated', 'authenticated',
          '00000000-0000-0000-0000-000000000000', '{"provider":"email"}', '{}', now(), now()
-    FROM unnest(ARRAY[1,2,3,4,5,6,12,13,14,15,16,17,18,19,20,21,22,23,24,30]) x;
+    FROM unnest(ARRAY[1,2,3,4,5,6,12,13,14,15,16,17,18,19,20,21,22,23,24,25,30]) x;
   INSERT INTO public.users (id, email, oauth_provider, oauth_id, display_name)
   SELECT pg_temp.fx(x), 'p4170p3-' || x || '@example.test', 'email', pg_temp.fx(x)::text, 'P4170p3 user ' || x
-    FROM unnest(ARRAY[1,2,3,4,5,6,12,13,14,15,16,17,18,19,20,21,22,23,24,30]) x
+    FROM unnest(ARRAY[1,2,3,4,5,6,12,13,14,15,16,17,18,19,20,21,22,23,24,25,30]) x
   ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name;
 
   INSERT INTO public.admin_roles (id, name, slug, description, is_system)
@@ -253,6 +256,12 @@ BEGIN
   SELECT pg_temp.fx(217), ap.id FROM public.admin_permissions ap WHERE ap.key IN ('support.admin', 'analytics.view');
   INSERT INTO public.internal_roles (user_id, role_id) VALUES (pg_temp.fx(24), pg_temp.fx(217));
   INSERT INTO public.report_access (report_key, user_id, role) VALUES ('support-sla', pg_temp.fx(24), 'viewer');
+  INSERT INTO public.admin_roles (id, name, slug, description, is_system)
+    VALUES (pg_temp.fx(218), 'P4170p3 sla manage', 'p4170p3-sla-manage', 'fixture', false);
+  INSERT INTO public.admin_role_permissions (role_id, permission_id)
+  SELECT pg_temp.fx(218), ap.id FROM public.admin_permissions ap WHERE ap.key IN ('support.manage', 'analytics.view');
+  INSERT INTO public.internal_roles (user_id, role_id) VALUES (pg_temp.fx(25), pg_temp.fx(218));
+  INSERT INTO public.report_access (report_key, user_id, role) VALUES ('support-sla', pg_temp.fx(25), 'viewer');
   INSERT INTO public.internal_roles (user_id, role_id)
   SELECT pg_temp.fx(30), ar.id FROM public.admin_roles ar WHERE ar.is_system AND ar.name = 'Super Admin';
 

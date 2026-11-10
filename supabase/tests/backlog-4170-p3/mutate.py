@@ -62,6 +62,9 @@ MUT = {
   'DEPS_inline_left': (MIG, [(None, 17, None)]),
   # sections 17-18 without WITH CHECK (ALTER POLICY then keeps the previous inline check)
   'DEP_check_left': (MIG, [("  )\n  WITH CHECK (\n    (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.manage', 'support.admin']))\n  );\n", "  );\n", 1)]),
+  # section 18 widened to support.manage (SR wrong implementation, 06e1a86f)
+  'SLA_key_widened': (MIG, [("ALTER POLICY support_sla_settings_update_admin ON public.support_sla_settings\n  USING (\n    (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.admin']))\n  )\n  WITH CHECK (\n    (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.admin']))\n  );",
+                             "ALTER POLICY support_sla_settings_update_admin ON public.support_sla_settings\n  USING (\n    (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.manage', 'support.admin']))\n  )\n  WITH CHECK (\n    (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.manage', 'support.admin']))\n  );", 1)]),
   # the rollback file drifted from the production text (digest control)
   'ROLLBACK_drift': (RB, [("ALTER POLICY support_templates_select ON public.support_response_templates\n  USING (true);",
                            "ALTER POLICY support_templates_select ON public.support_response_templates\n  USING ((( SELECT auth.uid() AS uid) IS NOT NULL));", 1)]),
