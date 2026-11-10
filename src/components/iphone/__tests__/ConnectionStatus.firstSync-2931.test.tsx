@@ -95,7 +95,7 @@ type CheckStatusReply = Record<string, unknown>;
 let checkStatusHandler: ((event: unknown, udid: string) => Promise<CheckStatusReply>) | null = null;
 function realCheckStatusHandler() {
   if (!checkStatusHandler) {
-    registerBackupHandlers({} as never);
+    registerBackupHandlers();
     const call = (ipcMain.handle as jest.Mock).mock.calls.find((c) => c[0] === "backup:check-status");
     checkStatusHandler = call![1];
   }

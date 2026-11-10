@@ -299,7 +299,7 @@ describe("Auth Handlers", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     setMainWindow(mockMainWindow as any);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    registerAuthHandlers(mockMainWindow as any);
+    registerAuthHandlers();
   });
 
   beforeEach(() => {

@@ -49,7 +49,7 @@ describe("registerTransactionHandlers (guard: all sub-handlers wired)", () => {
   });
 
   it("calls registerTransactionCrudHandlers", () => {
-    expect(registerTransactionCrudHandlers).toHaveBeenCalledWith(null);
+    expect(registerTransactionCrudHandlers).toHaveBeenCalledWith();
   });
 
   it("calls registerTransactionExportHandlers", () => {
@@ -57,7 +57,7 @@ describe("registerTransactionHandlers (guard: all sub-handlers wired)", () => {
   });
 
   it("calls registerEmailSyncHandlers", () => {
-    expect(registerEmailSyncHandlers).toHaveBeenCalledWith(null);
+    expect(registerEmailSyncHandlers).toHaveBeenCalledWith();
   });
 
   it("calls registerEmailLinkingHandlers", () => {
@@ -69,7 +69,7 @@ describe("registerTransactionHandlers (guard: all sub-handlers wired)", () => {
   });
 
   it("calls registerAttachmentHandlers", () => {
-    expect(registerAttachmentHandlers).toHaveBeenCalledWith(null);
+    expect(registerAttachmentHandlers).toHaveBeenCalledWith();
   });
 
   it("calls registerTransactionSearchHandlers — the BACKLOG-1866 guard", () => {

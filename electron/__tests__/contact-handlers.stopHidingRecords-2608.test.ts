@@ -290,7 +290,7 @@ beforeEach(() => {
   mockImportedContacts = [importedContact(CONTACT, "Rosalind Vance", ROSALIND_PHONE_E164, ROSALIND_EMAIL)];
   mockShadowRows = CANDIDATES.map((c) => shadowRow(c.rec, c.name, c.src, c.emails, c.phones));
   registeredHandlers.clear();
-  registerContactHandlers({} as any);
+  registerContactHandlers();
   seedContactRow(CONTACT, "Rosalind Vance");
 });
 

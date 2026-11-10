@@ -320,9 +320,9 @@ maybe(`BACKLOG-4180 contact add / Clients & Contacts on a large store (probe, si
 
     // 5. Register the real handlers.
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require("../../handlers/contactHandlers").registerContactHandlers(null);
+    require("../../handlers/contactHandlers").registerContactHandlers();
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require("../../handlers/transactionCrudHandlers").registerTransactionCrudHandlers(null);
+    require("../../handlers/transactionCrudHandlers").registerTransactionCrudHandlers();
 
     // 6. Saved contacts: import the first CFG.contacts address-book rows through the real flow.
     const t1 = Date.now();

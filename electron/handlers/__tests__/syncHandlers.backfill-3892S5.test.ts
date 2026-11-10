@@ -89,7 +89,7 @@ describe("BACKLOG-3892 S5: backfill IPC", () => {
     handlers.clear();
     rateLimiters.sync.clearKey(UDID);
     mockForceReimport.mockReturnValue(false);
-    registerSyncHandlers({} as never, "user-1");
+    registerSyncHandlers("user-1");
     mockSync.mockResolvedValue({ success: false, messages: [], contacts: [], conversations: [], error: "x", duration: 1 });
   });
   afterEach(() => cleanupSyncHandlers());

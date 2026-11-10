@@ -279,7 +279,7 @@ beforeAll(() => {
     // Cloud sync is deliberately inert here — see "WHAT THIS SUITE DOES NOT PROVE".
     { batchInsertAuditLogs: async () => undefined } as any,
   );
-  registerTransactionCrudHandlers(null);
+  registerTransactionCrudHandlers();
   registerTransactionExportHandlers({ startSubmissionSync: false });
 });
 

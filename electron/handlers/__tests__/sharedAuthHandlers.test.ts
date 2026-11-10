@@ -165,7 +165,7 @@ describe("SharedAuthHandlers", () => {
 
   describe("registerSharedAuthHandlers", () => {
     it("should register all expected IPC channels", () => {
-      registerSharedAuthHandlers(null);
+      registerSharedAuthHandlers();
 
       expect(mockIpcHandle).toHaveBeenCalledWith(
         "auth:google:disconnect-mailbox",
@@ -186,7 +186,7 @@ describe("SharedAuthHandlers", () => {
     });
 
     it("should register exactly 4 handlers", () => {
-      registerSharedAuthHandlers(null);
+      registerSharedAuthHandlers();
       expect(mockIpcHandle).toHaveBeenCalledTimes(4);
     });
   });
@@ -211,7 +211,6 @@ describe("SharedAuthHandlers", () => {
       mockDatabaseService.deleteOAuthToken.mockResolvedValue(undefined);
 
       const result = await handleDisconnectMailbox(
-        null,
         "user-123",
         "google"
       );
@@ -224,7 +223,6 @@ describe("SharedAuthHandlers", () => {
       (getValidUserId as jest.Mock).mockResolvedValueOnce(null);
 
       const result = await handleDisconnectMailbox(
-        null,
         "user-123",
         "microsoft"
       );
@@ -239,7 +237,6 @@ describe("SharedAuthHandlers", () => {
       );
 
       const result = await handleDisconnectMailbox(
-        null,
         "user-123",
         "google"
       );
@@ -251,7 +248,7 @@ describe("SharedAuthHandlers", () => {
     it("should log audit entry on success", async () => {
       mockDatabaseService.deleteOAuthToken.mockResolvedValue(undefined);
 
-      await handleDisconnectMailbox(null, "user-123", "google");
+      await handleDisconnectMailbox("user-123", "google");
 
       expect(mockAuditService.log).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -296,7 +293,7 @@ describe("SharedAuthHandlers", () => {
             return { outcome: "revoked" };
           });
 
-          await handleDisconnectMailbox(null, "user-123", provider);
+          await handleDisconnectMailbox("user-123", provider);
 
           expect(staleWhenRevoking).toBe(true);
           expect(scope.signal.aborted).toBe(true);
@@ -330,7 +327,6 @@ describe("SharedAuthHandlers", () => {
         mockDatabaseService.getOAuthToken.mockResolvedValue(googleToken);
 
         const result = await handleDisconnectMailbox(
-          null,
           "user-123",
           "google"
         );
@@ -347,7 +343,7 @@ describe("SharedAuthHandlers", () => {
       it("revokes BEFORE it deletes the row", async () => {
         mockDatabaseService.getOAuthToken.mockResolvedValue(googleToken);
 
-        await handleDisconnectMailbox(null, "user-123", "google");
+        await handleDisconnectMailbox("user-123", "google");
 
         const revokedAt =
           mockGoogleAuthService.revokeToken.mock.invocationCallOrder[0];
@@ -368,7 +364,6 @@ describe("SharedAuthHandlers", () => {
         );
 
         const result = await handleDisconnectMailbox(
-          null,
           "user-123",
           "google"
         );
@@ -387,7 +382,6 @@ describe("SharedAuthHandlers", () => {
         );
 
         const result = await handleDisconnectMailbox(
-          null,
           "user-123",
           "google"
         );
@@ -407,7 +401,6 @@ describe("SharedAuthHandlers", () => {
         mockDatabaseService.getOAuthToken.mockResolvedValue(null);
 
         const result = await handleDisconnectMailbox(
-          null,
           "user-123",
           "google"
         );
@@ -425,7 +418,7 @@ describe("SharedAuthHandlers", () => {
           refresh_token: undefined,
         });
 
-        await handleDisconnectMailbox(null, "user-123", "google");
+        await handleDisconnectMailbox("user-123", "google");
 
         expect(mockGoogleAuthService.revokeToken).toHaveBeenCalledWith(
           "the-access-token"
@@ -437,7 +430,6 @@ describe("SharedAuthHandlers", () => {
       // it must not read the token row it cannot act on.
       it("reports unsupported for Microsoft, reads no token, calls no Google revoke", async () => {
         const result = await handleDisconnectMailbox(
-          null,
           "user-123",
           "microsoft"
         );
@@ -457,7 +449,7 @@ describe("SharedAuthHandlers", () => {
           reason: "network",
         });
 
-        await handleDisconnectMailbox(null, "user-123", "google");
+        await handleDisconnectMailbox("user-123", "google");
 
         expect(mockAuditService.log).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -482,7 +474,6 @@ describe("SharedAuthHandlers", () => {
         });
 
         const result = await handleDisconnectMailbox(
-          null,
           "user-123",
           "google"
         );

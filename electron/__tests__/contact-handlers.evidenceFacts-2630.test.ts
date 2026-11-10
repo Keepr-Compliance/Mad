@@ -40,7 +40,6 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import type { BrowserWindow } from "electron";
 import { CONTACT_IDENTITY_SCHEMA } from "../services/__tests__/helpers/contactIdentitySchema";
 import { CONTACT_COMMUNICATION_SCHEMA } from "../services/__tests__/helpers/contactCommunicationSchema";
 import { openTestDb, type TestDb } from "../services/__tests__/helpers/syncSqliteDriver";
@@ -293,10 +292,7 @@ beforeEach(() => {
   mockImportedContacts = [];
   mockShadowRows = [];
   registeredHandlers.clear();
-  registerContactHandlers({
-    isDestroyed: () => false,
-    webContents: { send: jest.fn() },
-  } as unknown as BrowserWindow);
+  registerContactHandlers();
 });
 
 afterEach(() => {

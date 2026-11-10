@@ -282,7 +282,7 @@ const EDITS: Edit[] = [
 ];
 
 beforeAll(() => {
-  registerTransactionCrudHandlers(null);
+  registerTransactionCrudHandlers();
   registerEmailLinkingHandlers();
   registerReviewQueueHandlers();
   registerHiddenTextHandlers();

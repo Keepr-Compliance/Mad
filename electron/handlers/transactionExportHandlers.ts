@@ -69,11 +69,6 @@ export const cleanupTransactionHandlers = (): void => {
 };
 
 /**
- * Register transaction export and submission IPC handlers
- * @param _mainWindow - Main window instance. No push reads it any more (BACKLOG-3454: pushes resolve the live window via sendToMainWindow), but its truthiness still gates the submission sync pollers below.
- */
-
-/**
  * BACKLOG-3403: the renderer's confirmation of what will be left out. Anything
  * malformed reads as "nothing confirmed", which makes the service ask again
  * rather than send.

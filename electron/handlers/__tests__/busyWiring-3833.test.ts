@@ -14,18 +14,18 @@ const HANDLERS_DIR = path.resolve(__dirname, "..");
 // `args`: what each register function is called with (BACKLOG-3456: per case,
 // because the signatures differ and this call is invisible to the compiler).
 const CASES: Array<{ file: string; register: string; channels: string[]; args: () => unknown[] }> = [
-  { file: "syncHandlers", register: "registerSyncHandlers", channels: ["sync:start"], args: () => [inert(), "user-1"] },
+  { file: "syncHandlers", register: "registerSyncHandlers", channels: ["sync:start"], args: () => ["user-1"] },
   {
     file: "messageImportHandlers",
     register: "registerMessageImportHandlers",
     channels: ["messages:import-macos"],
-    args: () => [inert()],
+    args: () => [],
   },
   {
     file: "emailSyncHandlers",
     register: "registerEmailSyncHandlers",
     channels: ["transactions:scan", "transactions:sync-and-fetch-emails"],
-    args: () => [inert()],
+    args: () => [],
   },
   {
     file: "transactionExportHandlers",

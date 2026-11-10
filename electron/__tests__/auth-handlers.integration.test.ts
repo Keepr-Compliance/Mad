@@ -239,11 +239,6 @@ const TEST_SESSION_TOKEN = "test-session-token-" + Date.now();
 describe("Auth Handlers Integration Tests", () => {
   let registeredHandlers: IpcHandlerRegistry;
   const mockEvent = {} as IpcMainInvokeEvent;
-  const mockMainWindow = {
-    webContents: {
-      send: mockWebContentsSend,
-    },
-  };
 
   beforeAll(() => {
     // Capture registered handlers
@@ -254,7 +249,7 @@ describe("Auth Handlers Integration Tests", () => {
 
     // Register all handlers
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    registerAuthHandlers(mockMainWindow as any);
+    registerAuthHandlers();
   });
 
   beforeEach(() => {

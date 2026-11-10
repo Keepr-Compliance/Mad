@@ -131,11 +131,7 @@ describe("transactions:bulk-update-status — accepted status domain (BACKLOG-27
         registeredHandlers.set(channel, handler);
       },
     );
-    registerTransactionCrudHandlers({
-      webContents: { send: jest.fn() },
-      isDestroyed: () => false,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any);
+    registerTransactionCrudHandlers();
   });
 
   beforeEach(() => {

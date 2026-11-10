@@ -108,7 +108,7 @@ describe("transactions:scan auto-detect gate (BACKLOG-2313)", () => {
   let scan: IpcHandler;
 
   beforeAll(() => {
-    registerEmailSyncHandlers({} as never);
+    registerEmailSyncHandlers();
     scan = handlers.get("transactions:scan")!;
     expect(scan).toBeDefined();
   });

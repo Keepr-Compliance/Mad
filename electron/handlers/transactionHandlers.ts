@@ -23,12 +23,12 @@ import { registerTransactionSearchHandlers } from "./transactionSearchHandlers";
 export function registerTransactionHandlers(
   options: TransactionExportHandlerOptions,
 ): void {
-  registerTransactionCrudHandlers(null);
+  registerTransactionCrudHandlers();
   registerTransactionExportHandlers(options);
-  registerEmailSyncHandlers(null);
+  registerEmailSyncHandlers();
   registerEmailLinkingHandlers();
   registerEmailAutoLinkHandlers();
-  registerAttachmentHandlers(null);
+  registerAttachmentHandlers();
   registerTransactionSearchHandlers();
 }
 
