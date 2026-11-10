@@ -1313,3 +1313,129 @@ describe("P12 (4175) exact sender seeds in the preview and attachment open", () 
     expect((r.score as { seedLinkedToDeals: number }).seedLinkedToDeals).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4175 PR4: the active (downloaded) rule set
+// ---------------------------------------------------------------------------
+
+describe("PR4 (4175) Learn mode reads the active sender rule set", () => {
+  type Store = typeof import("../../services/senderRuleSetStore");
+  type RuleSet = import("../../utils/senderFilter/bundledRules").SenderRuleSet;
+  let store: Store;
+  let bundled: RuleSet;
+  const origRpc = mockSupabaseClient.rpc.getMockImplementation();
+
+  /** The bundled set with `version` and the listed fields changed, validated. */
+  async function ruleSet(version: number, patch: (r: RuleSet) => RuleSet = (r) => r): Promise<RuleSet> {
+    const { parseSenderRuleSet } = await import("../../utils/senderFilter/ruleSetSchema");
+    const r = parseSenderRuleSet(JSON.parse(JSON.stringify(patch({ ...bundled, version }))));
+    if (!r) throw new Error(`fixture v${version} is not a valid rule set`);
+    return r;
+  }
+
+  beforeEach(async () => {
+    const paths = await import("../../capabilities/appPathsProvider");
+    paths.resetAppPaths(); // no cache file: memory only, nothing written to the shared test userData
+    store = await import("../../services/senderRuleSetStore");
+    store.__resetForTests();
+    bundled = (await import("../../utils/senderFilter/bundledRules")).BUNDLED_SENDER_RULES;
+    setToggle(true);
+  });
+
+  afterEach(() => {
+    mockSupabaseClient.rpc.mockImplementation(origRpc as never);
+  });
+
+  it("RS9a learn:run completes while the rule-set download never answers", async () => {
+    // The download RPC hangs (as the refresher would see it); every other RPC as before.
+    mockSupabaseClient.rpc.mockImplementation(((fn: string, args?: { p_org_id?: string }) => {
+      if (fn === "sender_rule_set_current") {
+        return { abortSignal: () => new Promise(() => undefined) } as never;
+      }
+      return origRpc!(fn, args);
+    }) as never);
+    const triggered = jest.fn(() => new Promise(() => undefined));
+    store.setRefreshTrigger(triggered);
+    const HUNG = Symbol("hung");
+    let sentinel: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      invoke("learn:run", { windowMonths: 12 }),
+      new Promise((resolve) => {
+        sentinel = setTimeout(() => resolve(HUNG), 3_000);
+      }),
+    ]);
+    clearTimeout(sentinel);
+    expect(outcome).not.toBe(HUNG);
+    expect((outcome as { success: boolean }).success).toBe(true);
+    expect(triggered).toHaveBeenCalled();
+  });
+
+  /**
+   * RS17 (+ SR D2): the run used v7, the active set at score time is v8, and
+   * every one of the four score sites must read the RUN's set:
+   *   :472 seed candidates (exactAddresses)  -> seedLinkedToDeals
+   *   :473 countSeedLinkedToDeals rules      -> seedLinkedToDeals
+   *   :476 census rules                      -> minCensusLinkedEmails, census k
+   *   :477 keep sets (freeMailDomains)       -> census k
+   */
+  it("RS17 learn:score scores with the run's rule set, not the one active at score time", async () => {
+    const SEED7 = "seed7@example.test";
+    const v7 = await ruleSet(7, (r) => ({
+      ...r,
+      suppress: { ...r.suppress, exactAddresses: [...r.suppress.exactAddresses, SEED7] },
+      freeMailDomains: [...r.freeMailDomains, "freemail.example"],
+      thresholds: { ...r.thresholds, minCensusLinkedEmails: 3 },
+    }));
+    const v8 = await ruleSet(8);
+    await store.applyServerOutcome({ kind: "valid", rules: v7 }, USER);
+
+    run(`INSERT INTO transactions (id, user_id, property_address, status) VALUES ('t-4175-pr4', ?, ?, 'active')`, USER, "4177 Canarytest Way, Testville, ZZ 00000");
+    run(`INSERT INTO contacts (id, user_id, display_name) VALUES ('ct-4175-pr4', ?, 'Test Contact')`, USER);
+    run(`INSERT INTO contact_emails (id, contact_id, email) VALUES ('ce-4175-pr4', 'ct-4175-pr4', 'pat@freemail.example')`);
+    run(`INSERT INTO transaction_contacts (id, transaction_id, contact_id, removed_at) VALUES ('tc-4175-pr4', 't-4175-pr4', 'ct-4175-pr4', NULL)`);
+    const linked = (id: string, sender: string, bulk?: Record<string, string>) => {
+      insertStoredEmail(db, {
+        id,
+        userId: USER,
+        sender,
+        subject: "Hello",
+        bodyPlain: "Lunch on Friday?",
+        sentAt: "2026-10-05T10:00:00.000Z",
+        bulkMailHeaders: bulk,
+      });
+      run(`INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id) VALUES (?, ?, 't-4175-pr4', ?, ?)`, `c-${id}`, USER, id, `th-${id}`);
+    };
+    linked("e-4175-pr4-seed", gmailFrom("Alerts", SEED7));
+    linked("e-4175-pr4-bulk", gmailFrom("Other", "other@freemail.example"), { list_unsubscribe: "<mailto:u@freemail.example>" });
+
+    expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
+    await store.applyServerOutcome({ kind: "valid", rules: v8 }, USER);
+    expect(store.getActiveSenderRules().version).toBe(8);
+
+    const r = await invoke("learn:score");
+    expect(r.success).toBe(true);
+    const score = r.score as {
+      seedLinkedToDeals: number;
+      senderCensus: { minCensusLinkedEmails: number; dealLinkedSuppressed: Array<{ n: number; full: { k: number } }> };
+    };
+    expect(score.seedLinkedToDeals).toBe(1);
+    expect(score.senderCensus.minCensusLinkedEmails).toBe(3);
+    expect(score.senderCensus.dealLinkedSuppressed.map((m) => [m.full.k, m.n])).toEqual([[2, 2]]);
+    expect(String(r.copyBlock).split("\n")[0]).toBe("Keepr Learn mode score (rules v2; sender rules v7, source: download)");
+  });
+
+  it("RS18a a refused download over a newer cache: source: cache (download rejected)", async () => {
+    await store.applyServerOutcome({ kind: "valid", rules: await ruleSet(3) }, USER);
+    await store.applyServerOutcome({ kind: "rejected", reason: "shape", version: 9 }, USER);
+    expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
+    const r = await invoke("learn:score");
+    expect(String(r.copyBlock).split("\n")[0]).toContain("sender rules v3, source: cache (download rejected))");
+  });
+
+  it("RS18b a refused download with no newer cache: source: bundled (download rejected)", async () => {
+    await store.applyServerOutcome({ kind: "rejected", reason: "shape", version: 9 }, USER);
+    expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
+    const r = await invoke("learn:score");
+    expect(String(r.copyBlock).split("\n")[0]).toContain(`sender rules v${bundled.version}, source: bundled (download rejected))`);
+  });
+});

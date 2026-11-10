@@ -27,7 +27,10 @@ export interface SiteFilterCounts {
   evaluated: number;
   /** Dropped because a live signal suppressed them. */
   liveDropped: number;
-  /** Per signal: its mode on this surface and how many messages it suppressed (live or measure). */
+  /**
+   * Per signal: its mode on this surface and how many messages it matched first
+   * in precedence order (live or measure), so each message counts once.
+   */
   bySignal: Record<SenderRuleSignal, { mode: SenderRuleMode; matched: number }>;
   /** Messages a keep rule saved from a suppress signal. */
   keptBy: Record<KeepRuleId, number>;
@@ -35,6 +38,7 @@ export interface SiteFilterCounts {
 
 export interface SiteFilterResult<T> {
   passed: T[];
+  /** `rule` is the live rule that dropped the item (`SenderDecision.liveRule`). */
   dropped: Array<{ item: T; rule: SuppressRuleId }>;
   counts: SiteFilterCounts;
 }
@@ -63,9 +67,9 @@ export function filterForSurface<T>(
     counts.evaluated++;
     if (d.outcome === "keep") counts.keptBy[d.rule as KeepRuleId]++;
     if (d.outcome === "suppress" && d.signal) counts.bySignal[d.signal].matched++;
-    if (d.outcome === "suppress" && d.live) {
+    if (d.outcome === "suppress" && d.liveRule !== null) {
       counts.liveDropped++;
-      dropped.push({ item, rule: d.rule as SuppressRuleId });
+      dropped.push({ item, rule: d.liveRule });
     } else {
       passed.push(item);
     }

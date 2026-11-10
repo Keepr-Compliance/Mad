@@ -113,6 +113,9 @@ const PORTABLE = new Set([
   // under another shell" are different properties and epic 9 wants both.
   "electron/services/initializationBroadcaster.ts",
   "electron/services/reviewStateService.ts",
+  // BACKLOG-4175 PR4: the sender rule-set store reviewStateService reads. The
+  // download (supabaseService, Sentry) lives in senderRuleSetRefresher.ts, main only.
+  "electron/services/senderRuleSetStore.ts",
   // Seams PR B (Dialog + AppLifecycle). `databaseService.ts` was the last module
   // in BACKLOG-2961's extraction closure to import `electron`: 3
   // `dialog.showMessageBox` and 7 `app.isPackaged`/`isReady`/`whenReady`/`quit`.
