@@ -1,0 +1,176 @@
+BACKLOG-4170 PR3 harness results — keepr-test, 2026-11-10, int base c8ac4c433
+migration 20261111120000_backlog_4170_shared_table_policies.sql md5 a8af7a1c357acc8f8f5440f7678b5fdc
+
+## Digests (pg_temp.tdigest over the 16 targets; pg_temp.depdigest over support_sla_settings)
+production before = keepr-test before: 16 targets 36/801af2214b81aebad5e5c7831547727a; support_sla_settings 2/807b7e3820f853eb4e18e29bfe74f922; all public policy shape 159/94747d496adb9386fe9c3ebdf8c3bfed
+plan v1 digest (15 tables + licenses) unchanged on both: 35/2867eccb5b4f7a22c78b8078dab144a7
+after (harness and keepr-test applied): 16 targets 36/47e249294084f0b508e2ba40ae36f914; support_sla_settings 2/4eda5dee54a150054949730869030329; shape 159/94747d496adb9386fe9c3ebdf8c3bfed (unchanged)
+TRUNCATE held by anon/authenticated on the 16: none (before and after)
+
+## Step 1 (int head c8ac4c433, before PR3): p1 --applied 119/119, p2a --applied 267/267, p2b --applied 428/428
+
+## Discovery run (migration sections 1-16 only, before sections 17-18 were added): total 43 pass 41 fail 2
+reds: ['M_support.admin', 'M_support.manage']
+cause: support_templates_manage evaluates internal_roles -> admin_role_permissions -> admin_permissions inline as the caller; with sections 11-12 those rows are not visible to support.manage / support.admin holders. Same shape: support_sla_settings_update_admin. Reproduced below as mutation DEPS_inline_left.
+
+## run.sh (before keepr-test apply)
+{
+ "fail": 0,
+ "pass": 46,
+ "reds": {},
+ "total": 46,
+ "writes_p0": "2|0|1|ERR 42P17 infinite recursion detected in policy for relation \"admin_roles\":0|ERR 42P17 infinite recursion detected in policy for relation \"admin_roles\"|0:1",
+ "post_digest": "36/47e249294084f0b508e2ba40ae36f914",
+ "writes_post": "2|0|1|ERR 42P17 infinite recursion detected in policy for relation \"admin_roles\":0|ERR 42P17 infinite recursion detected in policy for relation \"admin_roles\"|0:1",
+ "post_depdigest": "2/4eda5dee54a150054949730869030329"
+}
+
+## mutate.py all
+== PERMISSIVE_beside (20261111120000_backlog_4170_shared_table_policies.sql)
+MUTATION APPLIED numstat=2/1
+  - ALTER POLICY "Internal users can view roles" ON public.admin_roles
+  + DROP POLICY IF EXISTS m4170p3_roles_beside ON public.admin_roles;
+  + CREATE POLICY m4170p3_roles_beside ON public.admin_roles FOR SELECT TO authenticated
+RESULT total=46 pass=26 fail=20 reds=C11_policy_functions_executable_by_authenticated,K3_rollback_restores_prod_text,Kpol_16_select_policies_keyed,Kpol_no_internal_role_text_except_own_role,Kpol_policy_count_and_shape_unchanged,Kpol_target_policy_count_36,M_analytics.view,M_audit.view,M_billing.view,M_organizations.view,M_plans.view,M_support.admin,M_support.manage,M_support.view_assigned,M_support.view_unassigned,M_u0,M_users.edit,M_users.view,R1_u0_own_role_embed_1_other_role_0,R5_logs_policy_to_authenticated_others_unchanged
+    K3_rollback_restores_prod_text: FAIL 37/31b48aea613fc3c9b5b195d6323222fe/160/63a9c678278b94c4fee99baffb49995d/2/807b7e3820f853eb4e18e29bfe74f922
+    Kpol_16_select_policies_keyed: FAIL admin_roles.Internal users can view roles n=17
+    Kpol_no_internal_role_text_except_own_role: FAIL admin_roles.m4170p3_roles_beside | has_internal_role(( SELECT auth.uid() AS uid))
+    Kpol_policy_count_and_shape_unchanged: FAIL 159/94747d496adb9386fe9c3ebdf8c3bfed vs 160/63a9c678278b94c4fee99baffb49995d
+    Kpol_target_policy_count_36: FAIL 37
+    R1_u0_own_role_embed_1_other_role_0: FAIL 1/1/1
+    R5_logs_policy_to_authenticated_others_unchanged: FAIL {authenticated} ; 159/6aea899a0139fc937761dfa9bd3fb6a4 vs 158/43850f932b73b2176e521e772c888f8a
+RESTORED clean=True
+== WRONG_REQUESTER_KEY (20261111120000_backlog_4170_shared_table_policies.sql)
+MUTATION APPLIED numstat=3/3
+  - OR (user_id IN (SELECT public.support_my_requester_ids()))
+  + OR (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.view']))
+  - OR (user_id IN (SELECT public.support_my_requester_ids()))
+  + OR (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.view']))
+  - OR (user_id IN (SELECT public.support_my_requester_ids()))
+  + OR (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.view']))
+RESULT total=46 pass=42 fail=4 reds=C11_policy_functions_executable_by_authenticated,M_support.admin,M_support.view_assigned,M_support.view_unassigned
+RESTORED clean=True
+== OWN_ROW_dropped (20261111120000_backlog_4170_shared_table_policies.sql)
+MUTATION APPLIED numstat=1/2
+  - (( SELECT auth.uid() AS uid) = user_id)
+  - OR (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['users.view']))
+  + (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['users.view']))
+RESULT total=46 pass=44 fail=2 reds=M_u_cust,M_u_cust2
+RESTORED clean=True
+== STRIPE_live_dropped (20261111120000_backlog_4170_shared_table_policies.sql)
+MUTATION APPLIED numstat=1/1
+  - ((( SELECT auth.uid() AS uid) = user_id) AND (stripe_mode = 'live'::text))
+  + (( SELECT auth.uid() AS uid) = user_id)
+RESULT total=46 pass=45 fail=1 reds=M_u_cust
+RESTORED clean=True
+== OWN_ROLE_dropped (20261111120000_backlog_4170_shared_table_policies.sql)
+MUTATION APPLIED numstat=0/1
+  - OR (id IN (SELECT ir.role_id FROM public.internal_roles ir WHERE ir.user_id = (SELECT auth.uid())))
+RESULT total=46 pass=32 fail=14 reds=Kpol_no_internal_role_text_except_own_role,M_analytics.view,M_audit.view,M_billing.view,M_organizations.view,M_plans.view,M_support.admin,M_support.manage,M_support.view_assigned,M_support.view_unassigned,M_u0,M_users.edit,M_users.view,R1_u0_own_role_embed_1_other_role_0
+    Kpol_no_internal_role_text_except_own_role: FAIL  | ( SELECT has_any_permission(( SELECT auth.uid() AS uid), ARRAY['roles.view'::text, 'roles.manage'::text, 'internal_users.view'::text, 'internal_users.manage'::text]) AS has_any_permission)
+    R1_u0_own_role_embed_1_other_role_0: FAIL 0/0/0
+RESTORED clean=True
+== INVITE_view_only (20261111120000_backlog_4170_shared_table_policies.sql)
+MUTATION APPLIED numstat=1/1
+  - (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['internal_users.view', 'internal_users.manage']))
+  + (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['internal_users.view']))
+RESULT total=46 pass=44 fail=2 reds=M_internal_users.manage,R2_manage_only_cancels_invitation
+    R2_manage_only_cancels_invitation: FAIL 0/1
+RESTORED clean=True
+== LOGS_roles_public (20261111120000_backlog_4170_shared_table_policies.sql)
+MUTATION APPLIED numstat=0/1
+  - TO authenticated
+RESULT total=46 pass=44 fail=2 reds=M_anon_reads_nothing,R5_logs_policy_to_authenticated_others_unchanged
+    R5_logs_policy_to_authenticated_others_unchanged: FAIL {public} ; 158/43850f932b73b2176e521e772c888f8a vs 158/43850f932b73b2176e521e772c888f8a
+RESTORED clean=True
+== TEMPLATES_true_left (20261111120000_backlog_4170_shared_table_policies.sql)
+MUTATION APPLIED numstat=0/8
+  - ALTER POLICY support_templates_select ON public.support_response_templates
+  - USING (
+  - (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.view']))
+  - );
+  - 
+RESULT total=46 pass=31 fail=15 reds=Kpol_16_select_policies_keyed,M_analytics.view,M_audit.view,M_billing.view,M_internal_users.manage,M_internal_users.view,M_organizations.view,M_plans.view,M_roles.manage,M_roles.view,M_u0,M_u_cust,M_u_cust2,M_users.edit,M_users.view
+    Kpol_16_select_policies_keyed: FAIL support_response_templates.support_templates_select n=16
+RESTORED clean=True
+== ORGPLANS_no_support_view (20261111120000_backlog_4170_shared_table_policies.sql)
+MUTATION APPLIED numstat=1/1
+  - (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['organizations.view', 'users.view', 'support.view']))
+  + (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['organizations.view', 'users.view']))
+RESULT total=46 pass=43 fail=3 reds=M_support.view_assigned,M_support.view_unassigned,R4_support_view_reads_plan_through_users_page_embed
+    R4_support_view_reads_plan_through_users_page_embed: FAIL 1 -> 0
+RESTORED clean=True
+== WRONG_KEY (20261111120000_backlog_4170_shared_table_policies.sql)
+MUTATION APPLIED numstat=1/1
+  - (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['audit.view']))
+  + (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['users.view']))
+RESULT total=46 pass=44 fail=2 reds=M_audit.view,M_users.view
+RESTORED clean=True
+== INTERNAL_kept (20261111120000_backlog_4170_shared_table_policies.sql)
+MUTATION APPLIED numstat=1/0
+  + OR has_internal_role(( SELECT auth.uid() AS uid))
+RESULT total=46 pass=29 fail=17 reds=C11_policy_functions_executable_by_authenticated,Kpol_no_internal_role_text_except_own_role,M_analytics.view,M_audit.view,M_internal_users.manage,M_internal_users.view,M_organizations.view,M_plans.view,M_roles.manage,M_roles.view,M_support.admin,M_support.manage,M_support.view_assigned,M_support.view_unassigned,M_u0,M_users.edit,M_users.view
+    Kpol_no_internal_role_text_except_own_role: FAIL payment_intents.payment_intents_select_own | (( SELECT has_any_permission(( SELECT auth.uid() AS uid), ARRAY['roles.view'::text, 'roles.manage'::text, 'internal_users.view'::text, 'internal_users
+RESTORED clean=True
+== LIFECYCLE_unaltered (20261111120000_backlog_4170_shared_table_policies.sql)
+MUTATION APPLIED numstat=0/8
+  - ALTER POLICY "Internal roles can read lifecycle events" ON public.app_lifecycle_events
+  - USING (
+  - (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['analytics.view']))
+  - );
+  - 
+RESULT total=46 pass=29 fail=17 reds=Kpol_16_select_policies_keyed,Kpol_no_internal_role_text_except_own_role,M_audit.view,M_billing.view,M_internal_users.manage,M_internal_users.view,M_organizations.view,M_plans.view,M_roles.manage,M_roles.view,M_support.admin,M_support.manage,M_support.view_assigned,M_support.view_unassigned,M_u0,M_users.edit,M_users.view
+    Kpol_16_select_policies_keyed: FAIL app_lifecycle_events.Internal roles can read lifecycle events n=16
+    Kpol_no_internal_role_text_except_own_role: FAIL app_lifecycle_events.Internal roles can read lifecycle events | (( SELECT has_any_permission(( SELECT auth.uid() AS uid), ARRAY['roles.view'::text, 'roles.manage'::text, 'internal_users.view'::te
+RESTORED clean=True
+== DEPS_inline_left (20261111120000_backlog_4170_shared_table_policies.sql)
+MUTATION APPLIED numstat=0/24
+  - ALTER POLICY support_templates_manage ON public.support_response_templates
+  - USING (
+  - (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.manage', 'support.admin']))
+  - )
+  - WITH CHECK (
+  - (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.manage', 'support.admin']))
+  - );
+  - 
+  - ALTER POLICY support_sla_settings_update_admin ON public.support_sla_settings
+  - USING (
+  - (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.admin']))
+  - )
+  ... 15 changed lines
+RESULT total=46 pass=42 fail=4 reds=D1_inline_join_and_is_system_write_paths_unchanged,D2_dep_policies_use_helper_in_using_and_check,M_support.admin,M_support.manage
+    D1_inline_join_and_is_system_write_paths_unchanged: FAIL 2|0|1|ERR 42P17 infinite recursion detected in policy for relation "admin_roles":0|ERR 42P17 infinite recursion detected in policy for relation "admin_roles"|0:1 -> 0|0|0|ERR 42P17 infinite recur
+    D2_dep_policies_use_helper_in_using_and_check: FAIL support_templates_manage,support_sla_settings_update_admin n=2
+RESTORED clean=True
+== DEP_check_left (20261111120000_backlog_4170_shared_table_policies.sql)
+MUTATION APPLIED numstat=0/3
+  - )
+  - WITH CHECK (
+  - (SELECT public.has_any_permission((SELECT auth.uid()), ARRAY['support.manage', 'support.admin']))
+RESULT total=46 pass=44 fail=2 reds=D1_inline_join_and_is_system_write_paths_unchanged,D2_dep_policies_use_helper_in_using_and_check
+    D1_inline_join_and_is_system_write_paths_unchanged: FAIL 2|0|1|ERR 42P17 infinite recursion detected in policy for relation "admin_roles":0|ERR 42P17 infinite recursion detected in policy for relation "admin_roles"|0:1 -> ERR 42501 new row violates row
+    D2_dep_policies_use_helper_in_using_and_check: FAIL support_templates_manage n=2
+RESTORED clean=True
+== ROLLBACK_drift (rollback-4170-p3.sql)
+MUTATION APPLIED numstat=1/1
+  - USING (true);
+  + USING ((( SELECT auth.uid() AS uid) IS NOT NULL));
+RESULT total=46 pass=44 fail=2 reds=K3_rollback_restores_prod_text,P0_pre_state_is_prod_text
+    K3_rollback_restores_prod_text: FAIL 36/97ddb31befc93eb9f394b8abca8b8b90/159/94747d496adb9386fe9c3ebdf8c3bfed/2/807b7e3820f853eb4e18e29bfe74f922
+RESTORED clean=True
+SUMMARY PERMISSIVE_beside=46/20 WRONG_REQUESTER_KEY=46/4 OWN_ROW_dropped=46/2 STRIPE_live_dropped=46/1 OWN_ROLE_dropped=46/14 INVITE_view_only=46/2 LOGS_roles_public=46/2 TEMPLATES_true_left=46/15 ORGPLANS_no_support_view=46/3 WRONG_KEY=46/2 INTERNAL_kept=46/17 LIFECYCLE_unaltered=46/17 DEPS_inline_left=46/4 DEP_check_left=46/2 ROLLBACK_drift=46/2
+
+## keepr-test apply: migration + supabase_migrations.schema_migrations (20261111120000, backlog_4170_shared_table_policies), one kt-sql call
+## backlog-4170-p3/run.sh --applied (after apply)
+total=47 pass=47 fail=0 reds=[]
+## backlog-4170-p1/run.sh --applied (after apply)
+total=119 pass=119 fail=0 reds=[]
+## backlog-4170-p2a/run.sh --applied (after apply)
+total=267 pass=267 fail=0 reds=[]
+## backlog-4170-p2b/run.sh --applied (after apply)
+total=428 pass=428 fail=0 reds=[]
+
+## Neighbouring harnesses on the applied state
+backlog-4145-m2 --applied: 41/41
+backlog-4168 controls: 76/78, reds I11_internal_reads_outsider_does_not (asserts a support.view-only internal user reads pending invitations) and K16_reapply_idempotent (re-applying 4168 on the current state changes internal_users_read_invitations). Same file with rollback-4170-p3.sql in front: 78/78. Both reds are that harness asserting the pre-PR3 SELECT key.
+backlog-4086 base: 25/28 with and without rollback-4170-p3.sql in front (S2a/S2b/S2c) — unchanged by PR3.
