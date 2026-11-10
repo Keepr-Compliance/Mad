@@ -420,3 +420,18 @@ export interface LastAdminKeptParams {
   kind: 'deactivate' | 'demote';
   source: 'scim' | 'directory_sync';
 }
+
+/**
+ * BACKLOG-3932: a payment on a brokerage invoice failed, to the deal's billing contact.
+ * `payUrl` is Stripe's hosted invoice page (a bearer link) or, without one, the Keepr Billing
+ * page. It goes into the email body only, never into the delivery log.
+ */
+export interface PaymentFailedParams {
+  recipientEmail: string;
+  brokerageName: string;
+  /** "$24.97", or null when the currency cannot be formatted safely (the sentence then omits it). */
+  amountLabel: string | null;
+  payUrl: string;
+  outboxKey: string;
+  organizationId: string;
+}
