@@ -75,12 +75,13 @@ export async function licenceStatus(service: ServiceClient, userId: string): Pro
   return (data as { status?: string } | null)?.status ?? null;
 }
 
-function isAgent(sub: Pick<Stripe.Subscription, 'metadata'>): boolean {
+/** An Agent plan: metadata.kind absent or 'agent' (a brokerage plan says 'brokerage'). Shared with joinCancel.ts (BACKLOG-3850). */
+export function isAgent(sub: Pick<Stripe.Subscription, 'metadata'>): boolean {
   return !sub.metadata?.kind || sub.metadata.kind === 'agent';
 }
 
 /** Contract (e): the first Stripe call runs; every later one only before the deadline. */
-function stripeGate(ctx: OutboxHandlerContext): () => void {
+export function stripeGate(ctx: OutboxHandlerContext): () => void {
   let first = true;
   return () => {
     if (!first && Date.now() >= ctx.deadline.getTime()) throw new Error('outbox deadline reached');
@@ -93,7 +94,8 @@ async function customerOf(row: OutboxRow, ctx: OutboxHandlerContext): Promise<st
   return c?.stripe_customer_id ?? null;
 }
 
-async function agentSubscriptions(ctx: OutboxHandlerContext, customerId: string, gate: () => void): Promise<Stripe.Subscription[]> {
+/** Every Agent subscription of this customer, any status. */
+export async function agentSubscriptions(ctx: OutboxHandlerContext, customerId: string, gate: () => void): Promise<Stripe.Subscription[]> {
   const subs = await listAll((after) => {
     gate();
     return ctx.stripe.subscriptions.list({ customer: customerId, status: 'all', limit: 100, ...(after ? { starting_after: after } : {}) });

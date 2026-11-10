@@ -8,6 +8,7 @@
 import { Card } from '@keepr/design-system';
 import { SuspendDialog } from './SuspendDialog';
 import { ImpersonateButton } from './ImpersonateButton';
+import { UserRoleAction, type BrokerageMembership } from './UserRoleAction';
 import { formatTimestamp } from '@/lib/format';
 
 interface UserProfile {
@@ -43,9 +44,21 @@ interface UserProfileCardProps {
   isOwnProfile?: boolean;
   /** users.suspend (BACKLOG-4170): shows Suspend / Unsuspend. */
   canSuspend?: boolean;
+  /** BACKLOG-3976: the viewer holds users.edit. The server checks it again on every change. */
+  canEditRole?: boolean;
+  /** BACKLOG-3976: this user's memberships; personal organizations are never offered for a role change. */
+  memberships?: (BrokerageMembership & { is_personal?: boolean })[];
 }
 
-export function UserProfileCard({ user, canImpersonate = false, isOwnProfile = false, canSuspend = false }: UserProfileCardProps) {
+export function UserProfileCard({
+  user,
+  canImpersonate = false,
+  isOwnProfile = false,
+  canSuspend = false,
+  canEditRole = false,
+  memberships = [],
+}: UserProfileCardProps) {
+  const brokerageMemberships = memberships.filter((m) => !m.is_personal);
   const displayName = user.display_name || user.email || 'Unknown User';
   const initials = getInitials(user.display_name, user.email);
 
@@ -71,7 +84,10 @@ export function UserProfileCard({ user, canImpersonate = false, isOwnProfile = f
             <h2 className="text-xl font-bold text-gray-900 truncate">
               {displayName}
             </h2>
-            <div className="flex items-center gap-2 max-md:gap-3">
+            <div className="flex items-center flex-wrap gap-2 max-md:gap-3">
+              {canEditRole && brokerageMemberships.length > 0 && (
+                <UserRoleAction userId={user.id} userName={displayName} memberships={brokerageMemberships} />
+              )}
               {canImpersonate && user.status !== 'suspended' && user.status !== 'banned' && (
                 <ImpersonateButton
                   userId={user.id}

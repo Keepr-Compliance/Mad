@@ -1,5 +1,5 @@
 /**
- * BACKLOG-3976: the user detail page hands OrganizationCard is_personal per membership (from the
+ * BACKLOG-3976: the user detail page hands UserProfileCard is_personal per membership (from the
  * organization's personal_owner_user_id) and the Change Role flag from the users.edit permission.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,15 +10,15 @@ vi.mock('next/navigation', () => ({ redirect: vi.fn(), notFound: vi.fn() }));
 vi.mock('next/link', () => ({ default: () => null }));
 vi.mock('@sentry/nextjs', () => ({ captureException: vi.fn() }));
 vi.mock('lucide-react', () => ({ ArrowLeft: () => null }));
-vi.mock('@/app/dashboard/users/[id]/components/UserProfileCard', () => ({ UserProfileCard: () => null }));
+function UserProfileCardStub() { return null; }
+vi.mock('@/app/dashboard/users/[id]/components/UserProfileCard', () => ({ UserProfileCard: UserProfileCardStub }));
 vi.mock('@/app/dashboard/users/[id]/components/LicenseCard', () => ({ LicenseCard: () => null }));
 vi.mock('@/app/dashboard/users/[id]/components/DevicesTable', () => ({ DevicesTable: () => null }));
 vi.mock('@/app/dashboard/users/[id]/components/AuditLogTable', () => ({ AuditLogTable: () => null }));
 vi.mock('@/app/dashboard/users/[id]/components/BillingCreditsCard', () => ({ BillingCreditsCard: () => null }));
 vi.mock('@/app/dashboard/users/[id]/components/SentryErrorsCard', () => ({ SentryErrorsCard: () => null }));
 vi.mock('@/app/dashboard/users/[id]/components/PlanCard', () => ({ PlanCard: () => null }));
-function OrganizationCardStub() { return null; }
-vi.mock('@/app/dashboard/users/[id]/components/OrganizationCard', () => ({ OrganizationCard: OrganizationCardStub }));
+vi.mock('@/app/dashboard/users/[id]/components/OrganizationCard', () => ({ OrganizationCard: () => null }));
 vi.mock('@/lib/billing-queries', () => ({ getBillingData: async () => ({ errorMessages: [], creditBalance: 0 }) }));
 vi.mock('@/lib/suspension-queries', () => ({ getSuspensionStatus: async () => null }));
 vi.mock('@/lib/planLines', () => ({
@@ -63,7 +63,7 @@ function findCard(node: ReactNode): Props | undefined {
   if (!node || typeof node !== 'object') return undefined;
   if (Array.isArray(node)) { for (const n of node) { const r = findCard(n); if (r) return r; } return undefined; }
   const el = node as { type?: unknown; props?: Record<string, unknown> };
-  if (el.type === OrganizationCardStub) return el.props as unknown as Props;
+  if (el.type === UserProfileCardStub) return el.props as unknown as Props;
   return el.props ? findCard(el.props.children as ReactNode) : undefined;
 }
 async function cardProps() {
@@ -73,7 +73,7 @@ async function cardProps() {
   return props as Props;
 }
 
-describe('User page OrganizationCard props (BACKLOG-3976)', () => {
+describe('User page UserProfileCard props (BACKLOG-3976)', () => {
   beforeEach(() => { state.perms = {}; });
 
   it('is_personal is true only for a membership whose org has personal_owner_user_id', async () => {

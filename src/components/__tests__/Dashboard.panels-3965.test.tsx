@@ -55,6 +55,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockSyncing = false;
   api().featureGate.strictState.mockResolvedValue("allowed");
+  // BACKLOG-4220: Todo is off by default; these tests are about Todo shown.
+  api().preferences.get.mockResolvedValue({ success: true, preferences: { dashboard: { showTodo: true } }, source: "cloud" });
   api().transactions.getRecentlyOpened.mockResolvedValue({
     success: true,
     transactions: [
