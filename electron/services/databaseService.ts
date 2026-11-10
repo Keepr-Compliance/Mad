@@ -37,6 +37,7 @@ import {
 } from "./db/core/dbConnection";
 import { SCHEMA_VERSION_SQL } from "./db/storageDiagnosticsSql";
 import { INSERT_FAILURE_LOG_SQL } from "./db/failureLogSql";
+import { pickAsidePath } from "./db/asideName";
 // BACKLOG-2551: migration v71's SQL text lives in the db layer and is imported, per
 // the SQL boundary rule. Importing a const string is not a service call — the
 // migration body still uses only the handle the runner passes it.
@@ -1626,30 +1627,22 @@ class DatabaseService implements IDatabaseService {
     hostAppLifecycle.quit();
   }
 
-  /** Most names tried before a move aside gives up (fails closed, moves nothing). */
-  private static readonly MOVE_ASIDE_MAX_SUFFIX = 100;
-
   /**
    * BACKLOG-2834 / BACKLOG-3975 — the move-aside: rename mad.db and its
-   * -wal / -shm to mad-<label>-<YYYYMMDDTHHMMSSmmm>.db. A name is taken if the
-   * base or either sidecar exists; then -2, -3 ... up to -100 are tried, and
-   * past that nothing moves (error, undone). Never overwrites, never deletes.
+   * -wal / -shm to the name `pickAsidePath` (db/asideName.ts) picks:
+   * mad-<label>-<YYYYMMDDTHHMMSSmmm>[-n].db, base or either sidecar taken ->
+   * -2 ... -100, past that nothing moves (error, undone). Never overwrites, never deletes.
    * All or nothing: a partial move is undone. `undo()` puts the files back
    * (3975's copy-failure path uses it).
    */
   private _moveAside(label: string): { asidePath: string; undo: () => boolean; error?: unknown; undone?: boolean } {
     const dbPath = this.dbPath as string;
-    const dbDir = path.dirname(dbPath);
-    const dbName = path.basename(dbPath, ".db");
-    const timestamp = new Date().toISOString().replace(/[-:.]/g, "").slice(0, 18);
-    const taken = (p: string): boolean => ["", "-wal", "-shm"].some((x) => fs.existsSync(p + x));
-    let asidePath = path.join(dbDir, `${dbName}-${label}-${timestamp}.db`);
-    for (let n = 2; taken(asidePath); n++) {
-      if (n > DatabaseService.MOVE_ASIDE_MAX_SUFFIX) {
-        return { asidePath, undo: () => true, error: new Error("No free name to move the database aside"), undone: true };
-      }
-      asidePath = path.join(dbDir, `${dbName}-${label}-${timestamp}-${n}.db`);
+    const picked = pickAsidePath(dbPath, label);
+    if (picked === null) {
+      // asidePath is unread here: the one caller maps undone:true to no kept path.
+      return { asidePath: dbPath, undo: () => true, error: new Error("No free name to move the database aside"), undone: true };
     }
+    const asidePath = picked;
     const moved: Array<{ from: string; to: string }> = [];
     const undo = (): boolean => {
       let ok = true;
