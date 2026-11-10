@@ -90,6 +90,17 @@ function rebuildLog(raw: unknown, deviceId: string): SerializedLog | null {
   return rebuilt;
 }
 
+/**
+ * `beforeSendLog` for `Sentry.init`: the FIRST pass. Drops every log while the
+ * switch is off, and every log that is not a marked diagnostics log (the SDK's
+ * own net / child-process logs). Not the final gate: scope attributes and
+ * renderer logs arrive after it, which is why the transport filter exists.
+ */
+export function diagnosticsBeforeSendLog<L extends { attributes?: Record<string, unknown> }>(sentryLog: L): L | null {
+  if (!isDiagnosticsSharingEnabled()) return null;
+  return sentryLog.attributes?.["keepr.diag"] === true ? sentryLog : null;
+}
+
 /** Filter one envelope's log items. Returns a NEW envelope, or null when nothing is left. */
 export function filterEnvelopeLogs(envelope: Envelope): Envelope | null {
   const [headers, items] = envelope;
@@ -142,4 +153,17 @@ export function filterDiagnosticLogs<O, T extends { send: (envelope: never) => P
       }) as T["send"],
     };
   };
+}
+
+/**
+ * The Sentry transport as installSentry builds it: the log filter OUTSIDE the
+ * offline wrapper (the queue only stores filtered logs) and again INSIDE it,
+ * under the crash-reporting gate (a replay re-checks the switch and device id).
+ */
+export function composeDiagnosticsTransport<OB, OO, T extends { send: (envelope: never) => PromiseLike<unknown> }>(
+  makeOffline: (makeBase: (options: OB) => T) => (options: OO) => T,
+  gate: (makeBase: (options: OB) => T) => (options: OB) => T,
+  makeNetwork: (options: OB) => T,
+): (options: OO) => T {
+  return filterDiagnosticLogs(makeOffline(gate(filterDiagnosticLogs(makeNetwork))));
 }

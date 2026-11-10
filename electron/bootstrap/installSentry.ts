@@ -109,11 +109,11 @@ import {
   loadCrashReportingPreference,
 } from "../services/crashReportingPreference";
 import { nodeCaDenylistFailure } from "./nodeCaDenylist";
+import { loadDiagnosticsSharingPreference } from "../services/diagnosticsSharingPreference";
 import {
-  isDiagnosticsSharingEnabled,
-  loadDiagnosticsSharingPreference,
-} from "../services/diagnosticsSharingPreference";
-import { filterDiagnosticLogs } from "../services/diagnostics/diagnosticsLogTransport";
+  composeDiagnosticsTransport,
+  diagnosticsBeforeSendLog,
+} from "../services/diagnostics/diagnosticsLogTransport";
 import { configureDiagnostics } from "../services/diagnostics/perf";
 
 // Load environment files based on whether app is packaged or in development
@@ -181,8 +181,10 @@ Sentry.init({
   // BACKLOG-4181: Sentry Logs are rebuilt from the diagnostics allowlist at
   // send time, outside the offline wrapper (so the queue only stores filtered
   // logs) and again inside it (so a replay re-checks the switch and device id).
-  transport: filterDiagnosticLogs(
-    Sentry.makeElectronOfflineTransport(gateBaseTransport(filterDiagnosticLogs(Sentry.makeElectronTransport))),
+  transport: composeDiagnosticsTransport(
+    Sentry.makeElectronOfflineTransport,
+    gateBaseTransport,
+    Sentry.makeElectronTransport,
   ),
   // BACKLOG-4040 S3: the offline queue is sealed at rest (replaces the stock
   // plaintext store; the wrapper spreads these options after its own default).
@@ -238,10 +240,7 @@ Sentry.init({
   // beforeSend, so this is the one hook they do pass: everything but a marked
   // diagnostics log (SDK net / child-process logs included) is dropped here.
   enableLogs: true,
-  beforeSendLog(sentryLog) {
-    if (!isDiagnosticsSharingEnabled()) return null;
-    return sentryLog.attributes?.["keepr.diag"] === true ? sentryLog : null;
-  },
+  beforeSendLog: diagnosticsBeforeSendLog,
 });
 
 // BACKLOG-4181: the diagnostics helper's sink. Never logger.fmt; the helper
