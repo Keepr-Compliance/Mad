@@ -8,7 +8,7 @@
 
 export const TIPS = {
   card:
-    'These rules decide which mail Keepr hides from an agent, judged only by who sent it. A rule changes what the agent sees only where it is set to Live below.',
+    'These rules decide which mail Keepr hides from an agent, going by the sender, mailing-list headers and Gmail tabs, never by what the mail says. A rule changes what the agent sees only where it is set to Live below.',
   hide:
     'Mail from senders on these lists can be hidden from the agent. Addresses always win; the other lists never hide mail from the agent’s deal contacts, their company domains, or senders under Always keep.',
   'suppress.exactAddresses':
