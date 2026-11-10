@@ -66,7 +66,7 @@ export default async function UserDetailPage({
   const serviceSupabase = createServiceClient();
 
   // Fetch target user profile and check permissions in parallel
-  const [profileResult, orgsResult, licensesResult, devicesResult, auditResult, impersonatePermResult, devicesManagePermResult, billingData, suspensionStatus] =
+  const [profileResult, orgsResult, licensesResult, devicesResult, auditResult, impersonatePermResult, devicesManagePermResult, billingData, suspensionStatus, usersEditPermResult] =
     await Promise.all([
       supabase
         .from('users')
@@ -75,7 +75,7 @@ export default async function UserDetailPage({
         .single(),
       supabase
         .from('organization_members')
-        .select('organization_id, role, joined_at, organizations(name, organization_plans(plan_id, plans(id, name, tier)))')
+        .select('organization_id, role, joined_at, organizations(name, personal_owner_user_id, organization_plans(plan_id, plans(id, name, tier)))')
         .eq('user_id', id),
       supabase
         .from('licenses')
@@ -100,6 +100,11 @@ export default async function UserDetailPage({
       }),
       getBillingData(serviceSupabase, id),
       getSuspensionStatus(serviceSupabase, id),
+      // BACKLOG-3976: Change Role on the Organizations card (the RPC checks it again).
+      supabase.rpc('has_permission', {
+        check_user_id: adminUser.id,
+        required_permission: 'users.edit',
+      }),
     ]);
 
   if (!profileResult.data) {
@@ -148,6 +153,7 @@ export default async function UserDetailPage({
   const orgMemberships = (orgsResult.data ?? []).map((m) => {
     const org = m.organizations as unknown as {
       name: string;
+      personal_owner_user_id: string | null;
       organization_plans: OrgPlanEmbed;
     } | null;
     const orgPlan = pickOrgPlanRow(org?.organization_plans);
@@ -159,6 +165,7 @@ export default async function UserDetailPage({
       plan_id: orgPlan?.plan_id ?? null,
       plan_name: orgPlan?.plans?.name ?? null,
       plan_tier: orgPlan?.plans?.tier ?? null,
+      is_personal: org?.personal_owner_user_id != null,
     };
   });
 
@@ -185,7 +192,12 @@ export default async function UserDetailPage({
 
       {/* Two-column grid for org + account */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <OrganizationCard memberships={orgMemberships} />
+        <OrganizationCard
+          memberships={orgMemberships}
+          userId={id}
+          userName={profile.display_name || profile.email}
+          canEditRole={usersEditPermResult.data === true}
+        />
         <LicenseCard licenses={licensesResult.data ?? []} />
       </div>
 
