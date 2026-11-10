@@ -290,7 +290,7 @@ describe('cancel_agent_on_brokerage_join', () => {
   it('Q2 / R5: the renewal was paid before the void -> alert paid_at_brokerage_join, plan still ended, no refund', async () => {
     stripe.impl['invoices.voidInvoice'] = () => {
       invoices = [clone(PAID)];
-      throw stripeError(VOID_REFUSED);
+      throw stripeError(VOID_REFUSED as { error: { message?: string } });
     };
     await handleJoinCancelRow(row(), ctx());
     expect(alerts('paid_at_brokerage_join')).toEqual([{ subscription_id: SUB.id, invoice_id: OPEN.id, outbox_id: row().id }]);
