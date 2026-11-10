@@ -195,6 +195,15 @@ jest.mock("../services/contactLinkingScheduler", () => ({
     };
     await linker.linkExternalContactsForUser(userId);
   }),
+  // BACKLOG-4180: what `contacts:import` awaits now — the pass scoped to the
+  // contacts it touched. Same switch, the REAL scoped linker.
+  runContactLinkingScopedNow: jest.fn(async (userId: string, contactIds: readonly string[]) => {
+    if (sweep === "off") return;
+    const linker = jest.requireActual("../services/contactSourceLinker") as {
+      linkExternalContactsForContacts: (u: string, ids: readonly string[]) => unknown;
+    };
+    linker.linkExternalContactsForContacts(userId, contactIds);
+  }),
 }));
 
 jest.mock("../services/contactsService", () => ({

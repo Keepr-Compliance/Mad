@@ -196,3 +196,24 @@ describe('saved views', () => {
     });
   });
 });
+
+/** Hover one day's column in a chart; return the tooltip's lines. */
+function hoverLines(container: HTMLElement, chart: string, day: string): string[] {
+  const column = container.querySelector(`[data-chart="${chart}"] rect[data-day="${day}"]`) as Element;
+  fireEvent.mouseMove(column, { clientX: 10, clientY: 10 });
+  const tip = screen.getByRole('tooltip');
+  const lines = [...tip.children].map((line) => line.textContent ?? '');
+  fireEvent.mouseLeave(column);
+  return lines;
+}
+
+describe('chart tooltip names the hovered day (BACKLOG-4208)', () => {
+  it('the exports chart, Oct 13', () => {
+    const { container } = mount();
+    expect(hoverLines(container, 'exports', '2026-10-13')).toEqual([
+      'Oct 13',
+      '4 exports · 1 unique',
+      'pdf 3 · folder 1',
+    ]);
+  });
+});

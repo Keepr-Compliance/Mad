@@ -2,12 +2,15 @@
  * OrganizationCard - Displays the user's organization membership
  *
  * Shows org name (linked), role, join date, and plan info (linked).
+ * BACKLOG-3976: staff with users.edit get Change Role on each brokerage membership. Personal
+ * organizations have one member and no brokerage roles, so they get no Change Role.
  */
 
 import Link from 'next/link';
 import { ArrowRight, Building2 } from 'lucide-react';
 import { Card } from '@keepr/design-system';
 import { formatDate } from '@/lib/format';
+import { MembershipRoleAction } from './MembershipRoleAction';
 
 interface OrgMembership {
   organization_id: string;
@@ -17,6 +20,8 @@ interface OrgMembership {
   plan_id?: string | null;
   plan_name?: string | null;
   plan_tier?: string | null;
+  /** BACKLOG-3976: organizations.personal_owner_user_id is set. */
+  is_personal?: boolean;
 }
 
 function getRoleBadgeColor(role: string | null): string {
@@ -34,8 +39,16 @@ function getRoleBadgeColor(role: string | null): string {
 
 export function OrganizationCard({
   memberships,
+  userId,
+  userName = null,
+  canEditRole = false,
 }: {
   memberships: OrgMembership[];
+  /** BACKLOG-3976: the user this page shows (the role change targets them). */
+  userId?: string;
+  userName?: string | null;
+  /** BACKLOG-3976: the viewer holds users.edit. The server checks it again on every change. */
+  canEditRole?: boolean;
 }) {
   return (
     <Card>
@@ -74,11 +87,21 @@ export function OrganizationCard({
                   </Link>
                 )}
               </div>
-              <span
-                className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(m.role)}`}
-              >
-                {m.role || 'unknown'}
-              </span>
+              <div className="flex flex-col items-end gap-1">
+                <span
+                  className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getRoleBadgeColor(m.role)}`}
+                >
+                  {m.role || 'unknown'}
+                </span>
+                {canEditRole && userId && !m.is_personal && (
+                  <MembershipRoleAction
+                    organizationId={m.organization_id}
+                    userId={userId}
+                    userName={userName}
+                    role={m.role}
+                  />
+                )}
+              </div>
             </li>
           ))}
         </ul>

@@ -427,6 +427,26 @@ const FICTIONAL_NAMES = new Set([
   // until someone writes the second one.
   "marcus ord",
   "priya raman",
+  // BACKLOG-4180 — the stored-phone-key and import-scoped linking suites
+  // (externalContactDbService.storedPhoneKeys-4180, contactImportLinking.
+  // scopedParity-4180). Invented by the engineer; each name labels the case it
+  // drives (a blank phone, a phone-only match, a second card, ...), and the
+  // numbers beside them are reserved 555-01xx.
+  "quill blank",
+  "quill null",
+  "quill plain",
+  "quill display",
+  "avery existing",
+  "avery altcard",
+  "alex phoneshare",
+  "bee emailshare",
+  "blair imported",
+  "casey named",
+  "dana existing",
+  "dana maiden",
+  "drew twomatch",
+  "elliot unrelated",
+  "xan mine",
 ]);
 
 const overlap = ALLOWED_DOMAINS.filter((d) => CONSUMER_DOMAINS.includes(d));

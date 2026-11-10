@@ -291,9 +291,11 @@ jest.mock("../services/contactLinkingScheduler", () => ({
   configureContactLinking: jest.fn(),
   requestContactLinking: jest.fn(),
   runContactLinkingNow: jest.fn(() => Promise.resolve()),
+  runContactLinkingScopedNow: jest.fn(() => Promise.resolve()),
 }));
 
 import { registerContactHandlers } from "../handlers/contactHandlers";
+import { runContactLinkingScopedNow } from "../services/contactLinkingScheduler";
 
 const USER = "550e8400-e29b-41d4-a716-446655440000"; // pii-allow-uuid: placeholder UUID shared with the sibling contact-handler suites (not in RFC 4122 or RFC 9562); invented, not from any live row
 const SHA = "075d0cc68";
@@ -610,6 +612,7 @@ interface ImportResult {
   success: boolean;
   error?: string;
   savedContactIds?: string[];
+  contacts?: Array<{ id: string }>;
 }
 
 async function runImport(sc: Scenario): Promise<ImportResult> {
@@ -682,6 +685,7 @@ describe.each(SCENARIOS.map((make, i) => [make().name, make, i] as const))("%s",
   let writes = 0;
   let labels: string[] = [];
   let clean: ImportResult = { success: false, error: "not run" };
+  let scopedCalls: Array<[string, string[]]> = [];
 
   beforeAll(async () => {
     template = path.join(dir, `template-${i}.db`);
@@ -689,11 +693,42 @@ describe.each(SCENARIOS.map((make, i) => [make().name, make, i] as const))("%s",
     openFromTemplate(template);
     before = jointState(realDb!, sc);
     resetProbe();
+    (runContactLinkingScopedNow as jest.Mock).mockClear();
     clean = await runImport(sc);
+    scopedCalls = (runContactLinkingScopedNow as jest.Mock).mock.calls.map((c) => [c[0], [...c[1]].sort()]);
     total = probe.count;
     writes = probe.writes;
     labels = [...probe.labels];
     after = jointState(realDb!, sc);
+  });
+
+  // BACKLOG-4180 C5b: the post-import linking pass is scoped to EVERY contact
+  // the import saved — existing contacts it backfilled included, not only the
+  // ones it created. Break caught: passing `importWrites.createdIds`.
+  it("4180: the scoped linking pass receives every saved contact id, once", () => {
+    const saved = (clean.contacts ?? []).map((c) => c.id).sort();
+    expect(saved.length).toBeGreaterThan(0);
+    expect(scopedCalls).toEqual([[USER, saved]]);
+  });
+
+  // BACKLOG-4180 (security review): an existing-DB id comes from the renderer.
+  // One that names ANOTHER user's contact is refused before any write. Break
+  // caught: dropping the ownership check (the import marks, backfills and links
+  // the other user's contact).
+  it("4180: an existing-DB id owned by another user is refused, nothing written", async () => {
+    const dbIds = (sc.input() as Array<{ id?: string; isFromDatabase?: boolean }>)
+      .filter((c) => c.isFromDatabase && c.id && !c.id.startsWith("contacts-app-"))
+      .map((c) => c.id as string);
+    if (dbIds.length === 0) return; // scenario has no existing-DB record
+    openFromTemplate(template);
+    for (const id of dbIds) {
+      realDb!.prepare("UPDATE contacts SET user_id = 'another-user-4180' WHERE id = ?").run(id);
+    }
+    const foreignBefore = jointState(realDb!, sc);
+    const res = await runImport(sc);
+    expect(res.success).toBe(false);
+    expect(res.error ?? "").toMatch(/was not found/);
+    expect(jointState(realDb!, sc)).toBe(foreignBefore);
   });
 
   it("C4 PRECONDITION: the clean run succeeds, writes, and changes state", () => {

@@ -270,6 +270,36 @@ export function applyLinkedSourceValuesOrThrow(
 }
 
 /**
+ * BACKLOG-4180 — a user-driven link whose value copy failed.
+ *
+ * Thrown INSIDE the caller's transaction so the link, the user's verdict and
+ * any copied values roll back together; the caller catches exactly this class
+ * outside the transaction and reports a retryable failure. Any other error
+ * keeps propagating as before.
+ */
+export class LinkValueCopyError extends Error {
+  constructor(cause: unknown) {
+    super(`copying a linked source's values failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.name = "LinkValueCopyError";
+  }
+}
+
+/** The copy users see when a link is refused because its values could not be copied. */
+export const LINK_COPY_FAILED_MESSAGE = "Couldn't link this contact. Try again.";
+
+/**
+ * `applyLinkedSourceValuesOrThrow`, failing as `LinkValueCopyError`. For the
+ * user-driven link paths (review-queue confirm, manual link).
+ */
+export function applyLinkedSourceValuesForUserLink(userId: string, contactId: string): void {
+  try {
+    applyLinkedSourceValuesOrThrow(userId, contactId);
+  } catch (error) {
+    throw new LinkValueCopyError(error);
+  }
+}
+
+/**
  * `applyLinkedSourceValuesOrThrow`, with any failure logged and swallowed.
  *
  * SWALLOWING IS CORRECT ONLY OUTSIDE A TRANSACTION (BACKLOG-3220). This used to
