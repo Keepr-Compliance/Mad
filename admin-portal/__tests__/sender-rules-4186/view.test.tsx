@@ -37,7 +37,7 @@ import type { SenderRuleSet, SenderRulesAdminState } from '@/lib/sender-rules/ty
 
 import { ERRORS, ORG_A, ORG_B } from './fixtures';
 import { CONTENT_V2_SAME_RULES, CONTENT_V3, CONTENT_V4, ORG_LIST, STATE_MIXED, STATE_READ_BY_VIEWER } from './fixtures-pr-c';
-import { bundled, clone, fakeClient } from './helpers';
+import { bundled, clone, fakeClient, type RpcCall } from './helpers';
 
 const WRITE_LABELS = ['Publish to everyone', 'Publish to test org', "Make this everyone's", 'Stop test', 'Undo everything', 'Edit from this version'];
 
@@ -71,7 +71,7 @@ function setup(opts: {
 
 const button = (name: string) => screen.queryAllByRole('button', { name });
 const writeControls = () => WRITE_LABELS.flatMap((n) => button(n));
-const writes = (calls: { fn: string }[]) => calls.filter((c) => c.fn !== 'sender_rule_set_admin_content');
+const writes = (calls: RpcCall[]) => calls.filter((c) => c.fn !== 'sender_rule_set_admin_content');
 
 beforeEach(() => {
   nav.refresh.mockClear();
