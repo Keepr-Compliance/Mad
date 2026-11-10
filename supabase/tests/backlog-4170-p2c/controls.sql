@@ -37,9 +37,10 @@ CREATE FUNCTION pg_temp.is_agent(l text) RETURNS boolean LANGUAGE sql IMMUTABLE 
   SELECT l IN ('u_support.view', 'u_sa', 'u_view+manage')
 $b$;
 
--- an internal_note message_added event row
+-- an internal-note event row: message_added / internal_note, or internal_note_deleted
 CREATE FUNCTION pg_temp.is_note_ev(e jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $b$
-  SELECT e ->> 'event_type' = 'message_added' AND (e ->> 'new_value') IS NOT DISTINCT FROM 'internal_note'
+  SELECT (e ->> 'event_type' = 'message_added' AND (e ->> 'new_value') IS NOT DISTINCT FROM 'internal_note')
+      OR e ->> 'event_type' = 'internal_note_deleted'
 $b$;
 CREATE FUNCTION pg_temp.strip_arr(a jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $b$
   SELECT coalesce((SELECT jsonb_agg(x.e ORDER BY x.o) FROM jsonb_array_elements(a) WITH ORDINALITY x(e, o)
@@ -67,7 +68,7 @@ $b$;
 CREATE FUNCTION pg_temp.msg_allowed(l text, cc text) RETURNS boolean LANGUAGE sql IMMUTABLE AS $b$
   SELECT cc = 'm_999_reply' OR CASE
     WHEN l = 'u_cust' THEN cc IN ('m_901_reply', 'm_901_reply_em7', 'm_902_reply', 'm_902_reply_em7', 'm_902_reply_EM7')
-    WHEN l = 'u0' THEN cc IN ('m_903_reply', 'm_903_reply_em1', 'm_903_reply_em7', 'm_903_note')
+    WHEN l = 'u0' THEN cc IN ('m_903_reply', 'm_903_reply_em1', 'm_903_reply_em7', 'm_903_note', 'm_903_reply_pct', 'm_903_reply_em1pct')
     WHEN l IN ('anon', 'u_nullsub') THEN cc IN ('m_901_reply', 'm_902_reply', 'm_903_reply', 'm_904_reply', 'm_903_note', 'm_904_note',
                                                  'm_901_reply_em7', 'm_902_reply_em7', 'm_902_reply_EM7', 'm_903_reply_em1', 'm_904_reply_em8')
     ELSE false END
@@ -113,13 +114,14 @@ BEGIN
   END LOOP;
 
   -- ================= D: requester view payloads differ ONLY by the internal_note event rows =================
-  -- for every non-agent view reply: P0 minus M = at most the one 97x (internal_note) event id, nothing added
+  -- for every non-agent view reply: P0 minus M = nothing, or exactly that ticket's 90x (internal_note_deleted)
+  -- and 97x (message_added / internal_note) event ids; nothing added
   FOR x IN SELECT m.lbl, m.c, m.f, m.res, p.res AS p0res FROM p4170p2c_m m JOIN p4170p2c_p0 p USING (lbl, c)
             WHERE m.f <> 'support_add_message/5' AND NOT pg_temp.is_agent(m.lbl) AND p.res NOT LIKE 'ERR %' LOOP
     s := (SELECT string_agg(i, ',' ORDER BY i) FROM unnest(pg_temp.ev_ids(x.f, x.p0res)) i WHERE i <> ALL (coalesce(pg_temp.ev_ids(x.f, x.res), '{}')));
     s2 := (SELECT string_agg(i, ',' ORDER BY i) FROM unnest(coalesce(pg_temp.ev_ids(x.f, x.res), '{}')) i WHERE i <> ALL (pg_temp.ev_ids(x.f, x.p0res)));
-    r := r || jsonb_build_object('D_' || x.lbl || '_' || x.c || '_removed_only_note_event',
-      pg_temp.pass(coalesce(s, '') ~ '^(97[1-4])?$' AND s2 IS NULL AND x.res NOT LIKE 'ERR %', coalesce(s, 'none') || ' removed; added ' || coalesce(s2, 'none')));
+    r := r || jsonb_build_object('D_' || x.lbl || '_' || x.c || '_removed_only_note_events',
+      pg_temp.pass(coalesce(s, '') ~ '^(90([6-9]),97[1-4])?$' AND (s IS NULL OR right(split_part(s, ',', 1), 1)::int - 5 = right(split_part(s, ',', 2), 1)::int) AND s2 IS NULL AND x.res NOT LIKE 'ERR %', coalesce(s, 'none') || ' removed; added ' || coalesce(s2, 'none')));
   END LOOP;
   n := (SELECT count(*) FROM p4170p2c_m m JOIN p4170p2c_p0 p USING (lbl, c)
          WHERE m.f <> 'support_add_message/5' AND NOT pg_temp.is_agent(m.lbl) AND p.res NOT LIKE 'ERR %' AND m.res <> p.res);
@@ -137,11 +139,14 @@ BEGIN
   -- P0 really showed the note event to that requester (the fixture can tell the fix apart)
   s := pg_temp.p0('u_cust', 'le_cust');
   r := r || jsonb_build_object('D_p0_u_cust_saw_971', pg_temp.pass('971' = ANY (pg_temp.ev_ids('support_list_events/1', s)), s));
+  r := r || jsonb_build_object('D_p0_u_cust_saw_906', pg_temp.pass('906' = ANY (pg_temp.ev_ids('support_list_events/1', s)), s));
+  s := pg_temp.p0('anon', 'd_by_email');
+  r := r || jsonb_build_object('D_p0_anon_d_by_email_saw_906', pg_temp.pass('906' = ANY (pg_temp.ev_ids('support_get_ticket_detail/2', s)), s));
   -- agents still see it
   s := pg_temp.m('u_sa', 'd_cust');
-  r := r || jsonb_build_object('D_u_sa_d_cust_sees_971', pg_temp.pass(pg_temp.ev_ids('support_get_ticket_detail/2', s) = ARRAY['961', '971', '981', '991'], s));
+  r := r || jsonb_build_object('D_u_sa_d_cust_sees_906_971', pg_temp.pass(pg_temp.ev_ids('support_get_ticket_detail/2', s) = ARRAY['906', '961', '971', '981', '991'], s));
   s := pg_temp.m('u_support.view', 'le_other');
-  r := r || jsonb_build_object('D_support.view_le_other_sees_974', pg_temp.pass(pg_temp.ev_ids('support_list_events/1', s) = ARRAY['964', '974', '984', '994'], s));
+  r := r || jsonb_build_object('D_support.view_le_other_sees_909_974', pg_temp.pass(pg_temp.ev_ids('support_list_events/1', s) = ARRAY['909', '964', '974', '984', '994'], s));
 
   -- ================= A: support_add_message, named cases =================
   -- refused: error is the function's existing unknown-ticket reply, nothing written, no reopen
@@ -153,6 +158,8 @@ BEGIN
       ('A_anon_wrong_email_903_refused', 'anon', 'm_903_reply_em7', 903, 'resolved'),
       ('A_anon_wrong_email_904_refused', 'anon', 'm_904_reply_em99', 904, 'new'),
       ('A_nullsub_wrong_email_903_refused', 'u_nullsub', 'm_903_reply_em7', 903, 'resolved'),
+      ('A_anon_percent_email_903_refused', 'anon', 'm_903_reply_pct', 903, 'resolved'),
+      ('A_anon_requester_email_suffix_903_refused', 'anon', 'm_903_reply_em1pct', 903, 'resolved'),
       ('A_decoy_903_refused', 'u_other_users.view', 'm_903_reply', 903, 'resolved')
     ) v(k, l, cc, t, st) LOOP
     s := pg_temp.m(x.l, x.cc);
@@ -192,10 +199,10 @@ BEGIN
   -- requester note: the existing refusal, unchanged
   s := pg_temp.m('u0', 'm_903_note');
   r := r || jsonb_build_object('A_requester_note_still_refused', pg_temp.pass(s LIKE 'ERR P0001 Only agents can add internal notes%', s));
-  -- P0 really allowed the non-requesters (the fixture can tell the fix apart)
+  -- the fixture can tell the fix apart: P0 differs from the post matrix on >= 20 add_message cells
   n := (SELECT count(*) FROM p4170p2c_p0 p WHERE p.f = 'support_add_message/5' AND NOT pg_temp.is_agent(p.lbl)
           AND NOT pg_temp.msg_allowed(p.lbl, p.c) AND p.res NOT LIKE 'ERR %');
-  r := r || jsonb_build_object('A_p0_non_requesters_were_allowed', pg_temp.pass(n >= 20, n::text));
+  r := r || jsonb_build_object('A_p0_fixture_distinguishes_fix', pg_temp.pass(n >= 20, n::text));
 
   -- ================= K: state =================
   s := pg_temp.state()::text;

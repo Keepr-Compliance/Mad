@@ -9,8 +9,9 @@
 --   Any other ticket gets the function's existing reply for an unknown ticket ('Ticket not found').
 --   Agents (support.view) are unchanged.
 -- support_get_ticket_detail, support_list_events
---   A caller without support.view no longer receives event rows with event_type = 'message_added'
---   and new_value = 'internal_note'. Agents receive every row, as before.
+--   A caller without support.view does not receive event rows with event_type = 'message_added'
+--   and new_value = 'internal_note', or with event_type = 'internal_note_deleted'. Agents receive
+--   every row, as before.
 --
 -- Only those lines differ from the PR2b bodies (20261111115000). Every other line and every RAISE
 -- text is unchanged.
@@ -31,8 +32,8 @@ BEGIN
     SELECT v.sig, v.prev, v.post, md5(p.prosrc) AS cur
       FROM (VALUES
         ('public.support_add_message(uuid,text,text,text,text)', '9d9cb01bb5a1fed81f584aa6f268118c', '3bdb2c269b47a42a5f70bf09295c638c'),
-        ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', '290a91e37cfd48c35c4ca3d43faeabfd'),
-        ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', '99b46c147a1f842aa4da05b9953d7253')
+        ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', '24dab3474673fb425725e9cfdc004118'),
+        ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', 'd7333c467e6e7f8f8bb1a292aeaf0ae7')
       ) AS v(sig, prev, post)
       LEFT JOIN pg_proc p ON p.oid = to_regprocedure(v.sig)
   LOOP
@@ -227,7 +228,7 @@ BEGIN
   LEFT JOIN auth.users u ON u.id = e.actor_id
   LEFT JOIN profiles p ON p.id = e.actor_id
   WHERE e.ticket_id = p_ticket_id
-  AND (v_is_agent OR NOT (e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note'));
+  AND (v_is_agent OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'));
 
   SELECT COALESCE(jsonb_agg(
     to_jsonb(a.*) ORDER BY a.created_at ASC
@@ -294,7 +295,7 @@ BEGIN
     )
     FROM support_ticket_events e
     WHERE e.ticket_id = p_ticket_id
-    AND (v_is_internal OR NOT (e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note'))),
+    AND (v_is_internal OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'))),
     '[]'::jsonb
   );
 END;

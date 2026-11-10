@@ -93,7 +93,7 @@ $b$;
 CREATE FUNCTION pg_temp.run() RETURNS jsonb LANGUAGE plpgsql AS $f$
 DECLARE
   r jsonb := '{}'::jsonb;
-  s text; s2 text; x record; ok boolean; want text; src text;
+  s text; s2 text; s3 text; x record; ok boolean; want text; src text;
   post jsonb := '__POSTMD5__'::jsonb;
 BEGIN
   -- ================= P0: the state before PR2b (same transaction, same fixtures) =================
@@ -282,9 +282,20 @@ BEGIN
   r := r || jsonb_build_object('K0_rollback_restores_prod', pg_temp.pass(pg_temp.js(s2) = pg_temp.prod(), s2));
 
   -- ================= KA (applied mode only): keepr-test state before this call equals the file =================
+  -- keepr-test also carries 20261111125000 (BACKLOG-4170 PR2c), which re-creates 3 of the 9; it is
+  -- replayed after this file in version order (in a rolled-back subtransaction) for this check only,
+  -- so the behaviour controls above still run on the PR2b text.
   IF to_regclass('pg_temp.p4170p2b_applied') IS NOT NULL THEN
     s2 := (SELECT st::text FROM p4170p2b_applied);
-    r := r || jsonb_build_object('KA_applied_state_equals_file', pg_temp.pass(s2::jsonb = s::jsonb, s2 || ' vs ' || s));
+    BEGIN
+      EXECUTE $p2c$__PR2C__$p2c$;
+      s3 := pg_temp.state()::text;
+      RAISE EXCEPTION 'P2C_DONE' USING DETAIL = s3;
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM = 'P2C_DONE' THEN GET STACKED DIAGNOSTICS s3 = PG_EXCEPTION_DETAIL;
+      ELSE s3 := 'ERR ' || SQLSTATE || ' ' || left(SQLERRM, 160); END IF;
+    END;
+    r := r || jsonb_build_object('KA_applied_state_equals_file', pg_temp.pass(pg_temp.js(s2) = pg_temp.js(s3), s2 || ' vs ' || s3));
   END IF;
 
   RETURN r;

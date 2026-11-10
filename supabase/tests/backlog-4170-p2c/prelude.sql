@@ -12,7 +12,8 @@
 --     903 T_u0 (requester 1, resolved), 904 T_other (requester 8)
 --   per ticket k: reply 910+k, internal_note 920+k, attachments 930/940/950+k, events:
 --     960+k status_changed, 970+k message_added/internal_note, 980+k message_added/reply,
---     990+k message_added with new_value NULL (must stay visible: the filter is NULL-safe)
+--     990+k message_added with new_value NULL (must stay visible: the filter is NULL-safe),
+--     905+k internal_note_deleted (shape of support_delete_internal_note's INSERT)
 
 CREATE FUNCTION pg_temp.fx(n int) RETURNS uuid LANGUAGE sql IMMUTABLE AS $b$
   SELECT ('00000000-0000-4170-8000-' || lpad(n::text, 12, '0'))::uuid
@@ -119,7 +120,9 @@ CREATE FUNCTION pg_temp.cases() RETURNS TABLE (n int, c text, f text, q text, po
     (21, 'm_904_reply_em99', 'support_add_message/5', format($f$SELECT public.support_add_message(%L::uuid, 'p4170p2c new', 'reply', %L, NULL::text) - 'id'$f$, pg_temp.fx(904), pg_temp.em(99)), pg_temp.after_msg(904)),
     (22, 'm_903_note', 'support_add_message/5', format($f$SELECT public.support_add_message(%L::uuid, 'p4170p2c new', 'internal_note', NULL::text, NULL::text) - 'id'$f$, pg_temp.fx(903)), pg_temp.after_msg(903)),
     (23, 'm_904_note', 'support_add_message/5', format($f$SELECT public.support_add_message(%L::uuid, 'p4170p2c new', 'internal_note', NULL::text, NULL::text) - 'id'$f$, pg_temp.fx(904)), pg_temp.after_msg(904)),
-    (24, 'm_999_reply', 'support_add_message/5', format($f$SELECT public.support_add_message(%L::uuid, 'p4170p2c new', 'reply', NULL::text, NULL::text) - 'id'$f$, pg_temp.fx(999)), pg_temp.after_msg(999))
+    (24, 'm_999_reply', 'support_add_message/5', format($f$SELECT public.support_add_message(%L::uuid, 'p4170p2c new', 'reply', NULL::text, NULL::text) - 'id'$f$, pg_temp.fx(999)), pg_temp.after_msg(999)),
+    (25, 'm_903_reply_pct', 'support_add_message/5', format($f$SELECT public.support_add_message(%L::uuid, 'p4170p2c new', 'reply', %L, NULL::text) - 'id'$f$, pg_temp.fx(903), '%'), pg_temp.after_msg(903)),
+    (26, 'm_903_reply_em1pct', 'support_add_message/5', format($f$SELECT public.support_add_message(%L::uuid, 'p4170p2c new', 'reply', %L, NULL::text) - 'id'$f$, pg_temp.fx(903), pg_temp.em(1) || '%'), pg_temp.after_msg(903))
   ) v(n, c, f, q, post)
 $b$;
 
@@ -215,6 +218,11 @@ BEGIN
   UNION ALL
   SELECT pg_temp.fx(990 + k), pg_temp.fx(900 + k), pg_temp.fx(6), 'message_added', NULL,
          '{"fixture": "null new_value"}'::jsonb, now() - interval '2 minutes' + k * interval '1 second'
+    FROM generate_series(1, 4) k;
+  -- shape transcribed from support_delete_internal_note's INSERT (actor = the note's author)
+  INSERT INTO public.support_ticket_events (id, ticket_id, actor_id, event_type, old_value, metadata, created_at)
+  SELECT pg_temp.fx(905 + k), pg_temp.fx(900 + k), pg_temp.fx(6), 'internal_note_deleted', 'Internal note deleted',
+         jsonb_build_object('deleted_message_id', pg_temp.fx(920 + k)), now() - interval '1 minute' + k * interval '1 second'
     FROM generate_series(1, 4) k;
 END $b$;
 

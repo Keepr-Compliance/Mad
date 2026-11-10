@@ -37,12 +37,12 @@ EDITS = {
   'support_get_ticket_detail': [
     ("  LEFT JOIN profiles p ON p.id = e.actor_id\n  WHERE e.ticket_id = p_ticket_id;\n",
      "  LEFT JOIN profiles p ON p.id = e.actor_id\n  WHERE e.ticket_id = p_ticket_id\n"
-     "  AND (v_is_agent OR NOT (e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note'));\n"),
+     "  AND (v_is_agent OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'));\n"),
   ],
   'support_list_events': [
     ("    FROM support_ticket_events e\n    WHERE e.ticket_id = p_ticket_id),\n",
      "    FROM support_ticket_events e\n    WHERE e.ticket_id = p_ticket_id\n"
-     "    AND (v_is_internal OR NOT (e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note'))),\n"),
+     "    AND (v_is_internal OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'))),\n"),
   ],
 }
 
@@ -63,8 +63,9 @@ HEADER = """-- BACKLOG-4170 PR2c — support functions: requester checks and eve
 --   Any other ticket gets the function's existing reply for an unknown ticket ('Ticket not found').
 --   Agents (support.view) are unchanged.
 -- support_get_ticket_detail, support_list_events
---   A caller without support.view no longer receives event rows with event_type = 'message_added'
---   and new_value = 'internal_note'. Agents receive every row, as before.
+--   A caller without support.view does not receive event rows with event_type = 'message_added'
+--   and new_value = 'internal_note', or with event_type = 'internal_note_deleted'. Agents receive
+--   every row, as before.
 --
 -- Only those lines differ from the PR2b bodies (20261111115000). Every other line and every RAISE
 -- text is unchanged.

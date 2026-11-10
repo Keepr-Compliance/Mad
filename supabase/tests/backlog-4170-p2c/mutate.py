@@ -17,8 +17,8 @@ rel = 'supabase/migrations/20261111125000_backlog_4170_support_requester_checks.
 mig = os.path.join(root, rel)
 PIN = dict(SIGS)
 
-FILTER = "(v_is_agent OR NOT (e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note'))"
-FILTER_I = "(v_is_internal OR NOT (e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note'))"
+FILTER = "(v_is_agent OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'))"
+FILTER_I = "(v_is_internal OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'))"
 SIGNED_IN = ("    IF NOT v_is_agent AND NOT EXISTS (\n      SELECT 1 FROM support_tickets\n      WHERE id = p_ticket_id\n"
              "      AND (requester_id = auth.uid() OR requester_email = (SELECT email FROM auth.users WHERE id = auth.uid()))\n"
              "    ) THEN\n      RAISE EXCEPTION 'Ticket not found: %', p_ticket_id;\n    END IF;\n")
@@ -35,8 +35,8 @@ MUT = {
   'FILTER_eq_null_get_ticket_detail': [('support_get_ticket_detail', "e.new_value IS NOT DISTINCT FROM 'internal_note'", "e.new_value = 'internal_note'", 1)],
   'FILTER_eq_null_list_events': [('support_list_events', "e.new_value IS NOT DISTINCT FROM 'internal_note'", "e.new_value = 'internal_note'", 1)],
   # agents filtered too
-  'AGENT_filtered_get_ticket_detail': [('support_get_ticket_detail', "(v_is_agent OR NOT (e.event_type", "(false OR NOT (e.event_type", 1)],
-  'AGENT_filtered_list_events': [('support_list_events', "(v_is_internal OR NOT (e.event_type", "(false OR NOT (e.event_type", 1)],
+  'AGENT_filtered_get_ticket_detail': [('support_get_ticket_detail', "(v_is_agent OR NOT ((e.event_type", "(false OR NOT ((e.event_type", 1)],
+  'AGENT_filtered_list_events': [('support_list_events', "(v_is_internal OR NOT ((e.event_type", "(false OR NOT ((e.event_type", 1)],
   # requester check removed: both branches, then each branch alone
   'REQUESTER_CHECK_removed': [('support_add_message', SIGNED_IN, "", 1), ('support_add_message', SIGNED_OUT, "", 1)],
   'REQUESTER_CHECK_removed_signed_in': [('support_add_message', SIGNED_IN, "", 1)],
@@ -52,9 +52,15 @@ MUT = {
   # signed-out email compared case-sensitively
   'EMAIL_CASE_sensitive': [('support_add_message', "      AND lower(requester_email) = lower(p_sender_email)\n",
                             "      AND requester_email = p_sender_email\n", 1)],
+  # internal_note_deleted condition removed (each function)
+  'NOTE_DELETED_removed_get_ticket_detail': [('support_get_ticket_detail', " OR e.event_type = 'internal_note_deleted'));", "));", 1)],
+  'NOTE_DELETED_removed_list_events': [('support_list_events', " OR e.event_type = 'internal_note_deleted'))),", "))),", 1)],
+  # signed-out compare written with ILIKE
+  'SR_signed_out_ilike': [('support_add_message', "      AND lower(requester_email) = lower(p_sender_email)\n",
+                           "      AND requester_email ILIKE p_sender_email\n", 1)],
   # agents subjected to the requester check
   'AGENT_blocked': [('support_add_message', "    IF NOT v_is_agent AND NOT EXISTS (\n", "    IF NOT EXISTS (\n", 1)],
-  # a new refusal text (reveals that the ticket exists)
+  # a refusal text that differs from the unknown-ticket reply
   'NEW_REFUSAL_TEXT': [('support_add_message', "    ) THEN\n      RAISE EXCEPTION 'Ticket not found: %', p_ticket_id;\n    END IF;\n",
                          "    ) THEN\n" + NEWTXT, 2)],
 }
