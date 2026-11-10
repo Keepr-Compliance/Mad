@@ -14,6 +14,7 @@
 --   u8 personal org P (membership created EARLIER) + org X (later)  -> resolves to X
 --   u9 org X membership suspended only  -> no org
 --   u13 member of org Z (brokerage, active; autodetect_eval on)
+--   u14 org X suspended (EARLIER) + org Z active (later)  -> resolves to Z
 -- The autodetect_eval override is the shape the founder's go set on the pilot org
 -- (organization_plans.feature_overrides {"autodetect_eval":{"enabled":true}}, pm_comments 32c2a51a / fe112802
 -- on BACKLOG-4120); keepr-test has no such row, so it is inserted here.
@@ -170,7 +171,7 @@ BEGIN
     t1 timestamptz; t2 timestamptz; vC bigint; vR bigint; vv int;
     u1 uuid := pg_temp.fx(1); u2 uuid := pg_temp.fx(2); u3 uuid := pg_temp.fx(3);
     u5 uuid := pg_temp.fx(5); u6 uuid := pg_temp.fx(6); u7 uuid := pg_temp.fx(7); u8 uuid := pg_temp.fx(8);
-    u9 uuid := pg_temp.fx(9); u10 uuid := pg_temp.fx(10); u12 uuid := pg_temp.fx(12); u13 uuid := pg_temp.fx(13);
+    u9 uuid := pg_temp.fx(9); u10 uuid := pg_temp.fx(10); u12 uuid := pg_temp.fx(12); u13 uuid := pg_temp.fx(13); u14 uuid := pg_temp.fx(14);
     oX uuid := pg_temp.fx(31); oY uuid := pg_temp.fx(32); oP uuid := pg_temp.fx(33); oZ uuid := pg_temp.fx(34);
     r_sa uuid := (SELECT id FROM public.admin_roles WHERE name = 'Super Admin');
     r_ss uuid := (SELECT id FROM public.admin_roles WHERE name = 'Support Supervisor');
@@ -201,13 +202,17 @@ BEGIN
     INSERT INTO auth.users (id, email, aud, role, instance_id, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
     SELECT pg_temp.fx(x), 'p4219-' || x || '@example.test', 'authenticated', 'authenticated',
            '00000000-0000-0000-0000-000000000000', '{"provider":"email"}', '{}', now(), now()
-      FROM generate_series(1, 13) x;
+      FROM generate_series(1, 14) x;
     INSERT INTO public.users (id, email, oauth_provider, oauth_id, display_name)
     SELECT pg_temp.fx(x), 'p4219-' || x || '@example.test', 'email', pg_temp.fx(x)::text, 'P4219 user ' || x
-      FROM generate_series(1, 13) x
+      FROM generate_series(1, 14) x
     ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name;
     INSERT INTO public.internal_roles (user_id, role_id) VALUES (u1, r_sa), (u2, r_ss), (u3, r_ss);
-    INSERT INTO public.report_access (report_key, user_id, role) VALUES ('learn-pilot', u2, 'viewer');
+    -- (a mutation that drops the catalog key makes this insert fail; K0 then reds instead of the run aborting)
+    BEGIN
+      INSERT INTO public.report_access (report_key, user_id, role) VALUES ('learn-pilot', u2, 'viewer');
+    EXCEPTION WHEN OTHERS THEN NULL;
+    END;
     -- org fixtures: triggers off for these rows only (billing / seat / personal-org guards are not under test)
     SET LOCAL session_replication_role = replica;
     INSERT INTO public.organizations (id, name, slug) VALUES
@@ -221,7 +226,9 @@ BEGIN
       (oP, u8, 'admin', 'active', now() - interval '1 day'),
       (oX, u8, 'agent', 'active', now()),
       (oX, u9, 'agent', 'suspended', now()),
-      (oZ, u13, 'agent', 'active', now());
+      (oZ, u13, 'agent', 'active', now()),
+      (oX, u14, 'agent', 'suspended', now() - interval '1 day'),
+      (oZ, u14, 'agent', 'active', now());
     INSERT INTO public.organization_plans (organization_id, plan_id, feature_overrides) VALUES
       (oX, pl_team, '{"autodetect_eval":{"enabled":true}}'),
       (oZ, pl_team, '{"autodetect_eval":{"enabled":true}}');
@@ -311,6 +318,13 @@ BEGIN
       s = '""' AND (SELECT org_id FROM public.learn_pilot_reports WHERE user_id = u8) = oX,
       s || ' org=' || coalesce((SELECT org_id::text FROM public.learn_pilot_reports WHERE user_id = u8), '-')));
 
+    -- ===== S2b: a suspended membership is never the org (u14: X suspended earlier, Z active) =====
+    s := pg_temp.sub(u14, pg_temp.rep(1));
+    r := r || jsonb_build_object('S2b_org_active_only', pg_temp.pass(
+      s = '""' AND (SELECT org_id FROM public.learn_pilot_reports WHERE user_id = u14) = oZ,
+      s || ' org=' || coalesce((SELECT org_id::text FROM public.learn_pilot_reports WHERE user_id = u14), '-')));
+    DELETE FROM public.learn_pilot_reports WHERE user_id = u14;
+
     -- ===== P11 (server half): submit then withdraw, in that order -> no row =====
     s := pg_temp.wd(u8);
     r := r || jsonb_build_object('P11_submit_then_withdraw', pg_temp.pass(
@@ -380,8 +394,11 @@ BEGIN
       s = '""' AND s2 = '1' AND pg_temp.vers(u12) = '{}', s || ' wd=' || s2 || ' vers=' || pg_temp.vers(u12)));
 
     -- ===== S7c: the in-submit sweep deletes any row older than 180 days =====
-    INSERT INTO public.learn_pilot_reports (user_id, sender_rules_version, org_id, report, app_version, submitted_at)
-    VALUES (u13, 3, oZ, pg_temp.rep(3), '2.47.0', now() - interval '181 days');
+    BEGIN
+      INSERT INTO public.learn_pilot_reports (user_id, sender_rules_version, org_id, report, app_version, submitted_at)
+      VALUES (u13, 3, oZ, pg_temp.rep(3), '2.47.0', now() - interval '181 days');
+    EXCEPTION WHEN OTHERS THEN NULL;
+    END;
     s := pg_temp.sub(u8, pg_temp.rep(1));
     r := r || jsonb_build_object('S7c_submit_sweeps_old_rows', pg_temp.pass(
       s = '""' AND pg_temp.vers(u13) = '{}' AND pg_temp.vers(u8) = '{1}',
@@ -440,9 +457,15 @@ BEGIN
     s3 := s3 || pg_temp.sub(u6, pg_temp.rep(999999));
     s4 := pg_temp.sub(u13, pg_temp.rep(vC));
     -- a row whose user is no longer active in its org (u9 suspended in X), and one older than 180 days
-    INSERT INTO public.learn_pilot_reports (user_id, sender_rules_version, org_id, report, app_version, submitted_at) VALUES
-      (u9, 1, oX, pg_temp.rep(1), '2.47.0', now()),
-      (u10, 3, oX, pg_temp.rep(3), '2.47.0', now() - interval '181 days');
+    -- (direct inserts; a mutated key can refuse them, which K1 reports instead of the run aborting)
+    s := 'ok';
+    BEGIN
+      INSERT INTO public.learn_pilot_reports (user_id, sender_rules_version, org_id, report, app_version, submitted_at) VALUES
+        (u9, 1, oX, pg_temp.rep(1), '2.47.0', now()),
+        (u10, 3, oX, pg_temp.rep(3), '2.47.0', now() - interval '181 days');
+    EXCEPTION WHEN OTHERS THEN s := 'ERR ' || SQLSTATE || ' ' || left(SQLERRM, 100);
+    END;
+    r := r || jsonb_build_object('K1_direct_fixture_rows', pg_temp.pass(s = 'ok', s));
 
     -- ===== S4: the admin read gate =====
     s := pg_temp.lst(u1);
@@ -466,14 +489,14 @@ BEGIN
       || ' u5=' || pg_temp.lst(u5) || ' noseed=' || f));
 
     -- ===== S4b / S7: hidden rows (left the org, older than 180 days); viewer sees the same rows as owner =====
-    j := s::jsonb;
+    j := CASE WHEN s LIKE 'ERR%' THEN '{"rows":[]}'::jsonb ELSE s::jsonb END;
     r := r || jsonb_build_object('S4b_hidden_rows', pg_temp.pass(
       NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_label' = 'p4219-9@example.test')
       AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x
                       WHERE x->>'user_label' = 'p4219-10@example.test' AND x->>'sender_rules_version' = '3')
       AND EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x
                   WHERE x->>'user_label' = 'p4219-10@example.test' AND x->>'sender_rules_version' = '2')
-      AND pg_temp.lst(u2)::jsonb = j
+      AND pg_temp.lst(u2) = j::text
       AND (j->'truncated') = 'false'::jsonb,
       left(j::text, 300)));
 
