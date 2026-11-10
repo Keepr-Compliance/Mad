@@ -30,6 +30,7 @@ import {
 import { LEARN_RULES } from "./learnRules";
 import { addressKey } from "./dealMatcher";
 import { BUNDLED_SENDER_RULES, type SenderRuleSet } from "../../utils/senderFilter/bundledRules";
+import type { SenderRulesProvenance } from "../../utils/senderFilter/ruleSetSource";
 import {
   buildKeepSets,
   decide,
@@ -90,6 +91,13 @@ export interface LearnRunResult {
    * is live for Learn questions (hides all-seed detections) or measure-only.
    */
   senderRulesVersion: number;
+  /**
+   * BACKLOG-4175 PR4: the rule set this run used, and where it came from. The
+   * score reads THIS set, not whatever is active when the score is asked for.
+   * Main memory only; never in the public summary.
+   */
+  senderRules: SenderRuleSet;
+  senderRulesProvenance: SenderRulesProvenance;
   seedHidesQuestions: boolean;
   /**
    * BACKLOG-4175: the same run with every message the sender filter would
@@ -149,6 +157,8 @@ export interface RunOptions {
   pageSize?: number;
   /** Sender rules (BACKLOG-4175). Defaults to the bundled set. */
   senderRules?: SenderRuleSet;
+  /** Where `senderRules` came from (BACKLOG-4175 PR4). Defaults to the bundled set's. */
+  senderRulesProvenance?: SenderRulesProvenance;
   /** Keep sets (K1/K3). Defaults to the contacts on the user's non-rejected deals. */
   keepSets?: KeepSets;
 }
@@ -219,6 +229,11 @@ export async function runBaseline0(
   const sinceIso = computeEmailCacheSinceDate(windowMonths, options.nowMs ?? Date.now()).toISOString();
   const runId = crypto.randomUUID();
   const senderRules = options.senderRules ?? BUNDLED_SENDER_RULES;
+  const senderRulesProvenance: SenderRulesProvenance = options.senderRulesProvenance ?? {
+    version: senderRules.version,
+    source: "bundled",
+    downloadRejected: false,
+  };
   const seedEvaluated = senderRules.modes.seedAddress.learnQuestions !== "off";
   const seedIds = new Set<string>();
   const keep = options.keepSets ?? buildKeepSets(listDealContactEmails(userId), senderRules);
@@ -324,6 +339,8 @@ export async function runBaseline0(
     lastMs,
     detections,
     senderRulesVersion: senderRules.version,
+    senderRules,
+    senderRulesProvenance,
     seedHidesQuestions: isSignalLive(senderRules, "seedAddress", "learnQuestions"),
     filtered: {
       full: filteredDetections(realEstate.filter((a) => !suppressedFull.has(emailIdOf.get(a) ?? ""))),

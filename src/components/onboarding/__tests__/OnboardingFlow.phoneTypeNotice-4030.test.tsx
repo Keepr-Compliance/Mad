@@ -82,7 +82,6 @@ function makeApp(notice: string | null, clear: jest.Mock): AppStateMachine {
     hasSecureStorageSetup: true,
     needsDriverSetup: false,
     needsTermsAcceptance: false,
-    pendingOAuthData: null,
     authProvider: "google",
     isNewUserFlow: true,
     isDatabaseInitialized: true,

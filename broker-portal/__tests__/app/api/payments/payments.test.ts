@@ -56,6 +56,10 @@ jest.mock('@/lib/supabase/service', () => ({
 // uses `instanceof Stripe.errors.StripeError` and its subclasses (BACKLOG-2088).
 class StripeErrorMock extends Error {
   code?: string;
+  type?: string;
+  param?: string;
+  requestId?: string;
+  raw?: unknown;
   payment_intent?: unknown;
 }
 class StripeCardErrorMock extends StripeErrorMock {}
@@ -321,6 +325,82 @@ describe('POST /api/payments/charge — off-session outcomes (BACKLOG-2088)', ()
     expect(customerUpdates).toContainEqual({ default_payment_method_id: null });
     // No PI row is written for a charge that never created a PaymentIntent.
     expect(paymentIntentInserts).toBe(0);
+  });
+
+  // BACKLOG-2101 N1-C1: the invalid-PM branch logs only the Stripe error's own
+  // fields (exact key set: never the error object, never a spread of it).
+  it('invalid PM logs type/code/param/message/requestId and one Sentry warning (exact keys)', async () => {
+    wireChargeContext();
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const err = new StripeInvalidRequestErrorMock('No such PaymentMethod: pm_saved_1');
+      err.code = 'resource_missing';
+      err.type = 'invalid_request_error';
+      err.param = 'payment_method';
+      err.requestId = 'req_2101';
+      err.raw = { headers: { authorization: 'x' } };
+      mockPaymentIntentsCreate.mockRejectedValue(err);
+      const { POST } = await import('@/app/api/payments/charge/route');
+      const res = await POST(chargeReq());
+
+      const logged = errSpy.mock.calls.filter((c) => c[0] === '[payments/charge] invalid payment method');
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).toHaveLength(2);
+      expect(logged[0][1]).toEqual({
+        type: 'invalid_request_error',
+        code: 'resource_missing',
+        param: 'payment_method',
+        message: 'No such PaymentMethod: pm_saved_1',
+        requestId: 'req_2101',
+      });
+      expect(Object.getPrototypeOf(logged[0][1])).toBe(Object.prototype);
+
+      expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+      expect(mockCaptureMessage.mock.calls[0][1]).toEqual({
+        level: 'warning',
+        tags: { billing_stage: 'charge_invalid_pm', stripe_mode: 'test' },
+        extra: {
+          code: 'resource_missing',
+          type: 'invalid_request_error',
+          param: 'payment_method',
+          request_id: 'req_2101',
+          user_id: 'USER-1',
+        },
+      });
+
+      // The user-facing outcome is unchanged.
+      expect(res.status).toBe(402);
+      expect(await (res as NextResponse).json()).toMatchObject({ invalid_payment_method: true, code: 'resource_missing' });
+      readBack();
+      expect(customerUpdates).toContainEqual({ default_payment_method_id: null });
+      expect(paymentIntentInserts).toBe(0);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  // BACKLOG-2101 N1-C3a/b: ANY StripeInvalidRequestError stays a recoverable 402
+  // (BACKLOG-2088), including one with no code or an unrelated code.
+  it.each([
+    ['no code', undefined],
+    ['unrelated code', 'parameter_invalid_integer'],
+  ])('StripeInvalidRequestError with %s → 402 invalid_payment_method + clears cache', async (_label, code) => {
+    wireChargeContext();
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const err = new StripeInvalidRequestErrorMock('Some invalid request');
+      if (code !== undefined) err.code = code;
+      mockPaymentIntentsCreate.mockRejectedValue(err);
+      const { POST } = await import('@/app/api/payments/charge/route');
+      const res = await POST(chargeReq());
+      expect(res.status).toBe(402);
+      expect(await (res as NextResponse).json()).toMatchObject({ invalid_payment_method: true });
+      readBack();
+      expect(customerUpdates).toContainEqual({ default_payment_method_id: null });
+      expect(paymentIntentInserts).toBe(0);
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it('non-throwing create with a non-terminal status → 402, never a false { succeeded: true }', async () => {

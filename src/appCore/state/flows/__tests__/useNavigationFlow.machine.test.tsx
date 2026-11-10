@@ -37,7 +37,6 @@ const defaultOptions = {
   needsTermsAcceptance: false,
   isMacOS: true,
   isWindows: false,
-  pendingOAuthData: null,
   pendingOnboardingData: {
     termsAccepted: false,
     phoneType: null as "iphone" | "android" | null,

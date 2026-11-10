@@ -138,41 +138,6 @@ class MicrosoftAuthService {
   }
 
   /**
-   * Resolve the authorization code directly from navigation interception
-   * This bypasses the HTTP server round-trip for faster auth
-   * @param code - The authorization code from the callback URL
-   */
-  resolveCodeDirectly(code: string): void {
-    if (this.codeResolver) {
-      logService.info(
-        "[MicrosoftAuth] Resolving code directly from navigation interception",
-        "MicrosoftAuth"
-      );
-      this.codeResolver(code);
-      this.codeResolver = null;
-      this.codeRejecter = null;
-      this.stopLocalServer();
-    }
-  }
-
-  /**
-   * Reject the authorization code directly (for errors from navigation)
-   * @param error - The error message
-   */
-  rejectCodeDirectly(error: string): void {
-    if (this.codeRejecter) {
-      logService.info(
-        "[MicrosoftAuth] Rejecting code directly from navigation interception",
-        "MicrosoftAuth"
-      );
-      this.codeRejecter(new Error(error));
-      this.codeResolver = null;
-      this.codeRejecter = null;
-      this.stopLocalServer();
-    }
-  }
-
-  /**
    * Start a temporary local HTTP server to catch OAuth redirect.
    * BACKLOG-1121: Uses port 0 (OS-assigned) and 5-min timeout.
    * @returns Object with codePromise (resolves to auth code) and listeningPromise (resolves to assigned port)

@@ -107,6 +107,11 @@ const ACTIVE_DTO = {
   paymentIncomplete: false,
   supportGrantEffective: false,
 };
+/**
+ * BACKLOG-4088: what the desktop makes of ACTIVE_DTO, an older portal's body with
+ * neither trial date: both read as null and the summary still parses.
+ */
+const ACTIVE_SUMMARY = { ...ACTIVE_DTO, trialEndsOn: null, subscriptionTrialEndsOn: null };
 
 function response(status: number, body: unknown): any {
   return { status, ok: status >= 200 && status < 300, json: async () => body };
@@ -248,7 +253,7 @@ describe("BACKLOG-3863 — billing:plan-summary", () => {
     mockFetch.mockResolvedValueOnce(
       response(200, { ...ACTIVE_DTO, stripe_customer_id: "cus_x", mode: "live" }),
     );
-    expect(await invoke("billing:plan-summary")).toEqual({ unavailable: false, summary: ACTIVE_DTO });
+    expect(await invoke("billing:plan-summary")).toEqual({ unavailable: false, summary: ACTIVE_SUMMARY });
     expect(mockFetch).toHaveBeenCalledTimes(1);
     const [url, init] = mockFetch.mock.calls[0];
     expect(url).toBe(PROD_SUMMARY);
@@ -294,6 +299,44 @@ describe("BACKLOG-3863 — billing:plan-summary", () => {
   ])("a malformed body (%s) → unavailable", async (_label, body) => {
     mockFetch.mockResolvedValueOnce(response(200, body));
     expect(await invoke("billing:plan-summary")).toEqual({ unavailable: true });
+  });
+
+  // BACKLOG-4088 (SR 81fa81b0 #3): the two trial dates never reject the summary.
+  // Live-trial body transcribed from broker-portal/__tests__/plan-summary-3863/
+  // planSummaryRoute.test.ts ("live trial -> state support_grant ... trialEndsOn").
+  const TRIAL_END = "2099-11-14T05:51:51.123973+00:00";
+  const LIVE_TRIAL_DTO = {
+    state: "support_grant",
+    interval: null,
+    current_period_end: null,
+    cancel_at_period_end: false,
+    paymentIncomplete: false,
+    supportGrantEffective: true,
+    trialEndsOn: TRIAL_END,
+    subscriptionTrialEndsOn: null,
+  };
+
+  it("4088: a live-trial body -> parsed with trialEndsOn kept", async () => {
+    mockFetch.mockResolvedValueOnce(response(200, LIVE_TRIAL_DTO));
+    expect(await invoke("billing:plan-summary")).toEqual({ unavailable: false, summary: LIVE_TRIAL_DTO });
+  });
+
+  it("4088: subscribed in trial -> subscriptionTrialEndsOn kept", async () => {
+    const body = { ...ACTIVE_DTO, subscriptionTrialEndsOn: ACTIVE_DTO.current_period_end, trialEndsOn: null };
+    mockFetch.mockResolvedValueOnce(response(200, body));
+    expect(await invoke("billing:plan-summary")).toEqual({ unavailable: false, summary: body });
+  });
+
+  it.each([
+    ["absent (an older portal)", {}],
+    ["null", { trialEndsOn: null, subscriptionTrialEndsOn: null }],
+    ["a number", { trialEndsOn: 1794336475, subscriptionTrialEndsOn: 1794336475 }],
+    ["a non-date string", { trialEndsOn: "soon", subscriptionTrialEndsOn: "2026-13-99T00:00:00Z" }],
+    ["a date with no time part", { trialEndsOn: "2026-11-21", subscriptionTrialEndsOn: "2026-11-21" }],
+    ["an object", { trialEndsOn: { at: TRIAL_END }, subscriptionTrialEndsOn: [TRIAL_END] }],
+  ])("4088: trial dates %s -> both null, the summary still parses", async (_label, extra) => {
+    mockFetch.mockResolvedValueOnce(response(200, { ...ACTIVE_DTO, ...extra }));
+    expect(await invoke("billing:plan-summary")).toEqual({ unavailable: false, summary: ACTIVE_SUMMARY });
   });
 
   it("the token never goes to a portal address outside the allow-list", async () => {
@@ -360,7 +403,7 @@ describe("BACKLOG-3863 — billing:refresh", () => {
   });
 
   it("drops the feature-gate cache and answers a fresh summary", async () => {
-    expect(await invoke("billing:refresh")).toEqual({ unavailable: false, summary: ACTIVE_DTO });
+    expect(await invoke("billing:refresh")).toEqual({ unavailable: false, summary: ACTIVE_SUMMARY });
     expect(mockFeatureInvalidate).toHaveBeenCalledTimes(1);
     expect(mockFetch).toHaveBeenCalledTimes(1);
   });

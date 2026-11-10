@@ -193,41 +193,6 @@ class GoogleAuthService {
   }
 
   /**
-   * Resolve the authorization code directly from navigation interception
-   * This bypasses the HTTP server round-trip for faster auth
-   * @param code - The authorization code from the callback URL
-   */
-  resolveCodeDirectly(code: string): void {
-    if (this.codeResolver) {
-      logService.info(
-        "[GoogleAuth] Resolving code directly from navigation interception",
-        "GoogleAuth",
-      );
-      this.codeResolver(code);
-      this.codeResolver = null;
-      this.codeRejecter = null;
-      this.stopLocalServer();
-    }
-  }
-
-  /**
-   * Reject the authorization code directly (for errors from navigation)
-   * @param error - The error message
-   */
-  rejectCodeDirectly(error: string): void {
-    if (this.codeRejecter) {
-      logService.info(
-        "[GoogleAuth] Rejecting code directly from navigation interception",
-        "GoogleAuth",
-      );
-      this.codeRejecter(new Error(error));
-      this.codeResolver = null;
-      this.codeRejecter = null;
-      this.stopLocalServer();
-    }
-  }
-
-  /**
    * Start a temporary local HTTP server to catch OAuth redirect.
    * BACKLOG-1121: Uses port 0 (OS-assigned) and 5-min timeout.
    * @returns Object with codePromise and listeningPromise (resolves to assigned port)

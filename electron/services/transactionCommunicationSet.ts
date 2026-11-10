@@ -88,7 +88,6 @@ export async function prepareTransactionCommunications(
   return loadGateResolve(args, (details) =>
     enforceExportGate({
       transactionId: args.transactionId,
-      userId: details.user_id,
       communications: details.communications || [],
     }),
   );

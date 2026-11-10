@@ -19,8 +19,8 @@ One command that, in a single headful pass:
    contacts, one transaction at *742 Birchwood Lane NE*, three emails + links) and writes a matching
    `session.json`. NEVER touches the real `~/Library/Application Support/keepr` profile.
 3. **Launches UNPACKAGED and foregrounded** — via Playwright `_electron.launch()` against the
-   node_modules `electron` binary + the built `dist-electron/main.js`. No packaging, no codesign, no
-   Gatekeeper. The window is brought to the FRONT so you can watch it.
+   node_modules `electron` binary (on macOS through the `sandbox-exec` wrapper, see §1) + the built
+   `dist-electron/main.js`. No packaging, no codesign, no Gatekeeper. The window is brought to the FRONT so you can watch it.
 4. **Lands logged-in with NO OAuth** — the seeded `session.json` + DB session authenticate the app; there
    is no login wall and no `keepr://` deep-link.
 5. **Drives** — dismiss the feature tour → open **Settings** (via testid, screenshot) → open the
@@ -45,11 +45,38 @@ Screenshots land in `.qa-scratch/drive-pivot/` (override with `QA_ARTIFACTS_DIR`
 
 ### 1. Unpackaged launch (`e2e/driver/launch.ts` → `launchUnpackaged`)
 
-`_electron.launch({ executablePath: node_modules/.bin/electron, args: ['.', '--user-data-dir=<isolated>'],
-env: { KEEPR_E2E: '1' } })`. The `.` entry resolves `package.json` `"main"` to the built
-`dist-electron/main.js`. Default Electron fuses leave the Node inspector enabled, so Playwright attaches to
-the **main process** (unlike the hardened packaged build, which blocks `_electron.launch`). An isolated
-`--user-data-dir` is **mandatory** — the launcher refuses to run against the real profile.
+`buildUnpackagedLaunch` (`e2e/driver/launchArgs.ts`) composes
+`_electron.launch({ executablePath: scripts/qa/harness/electron-sandboxed.sh, args: ['-r', <appLaunchGuard.js>,
+'.', '--user-data-dir=<isolated>', '--use-mock-keychain'], env: { KEEPR_E2E: '1' } })`. The `.` entry resolves
+`package.json` `"main"` to the built `dist-electron/main.js`. Default Electron fuses leave the Node inspector
+enabled, so Playwright attaches to the **main process** (unlike the hardened packaged build, which blocks
+`_electron.launch`). An isolated `--user-data-dir` is **mandatory** — the launcher refuses to run against the
+real profile.
+
+Since BACKLOG-4054 the app launch is isolated in three layers:
+
+- **Sandbox (macOS).** The executable is always the in-repo wrapper, which `exec`s `sandbox-exec` with a
+  profile denying the real keepr, keepr-dev and Electron profiles, `~/Library/Logs/keepr*`, Messages and
+  AddressBook, then `exec`s Electron. Electron is still the process Playwright spawned, so its stderr attach
+  and process-group kill are unchanged. The builder refuses to launch if the wrapper is missing or if
+  `executablePath` names anything else. Other platforms have no `sandbox-exec`: the raw binary is used and
+  the builder prints one `[keepr-e2e] UNSANDBOXED app launch` line to stderr.
+- **Guard.** `-r scripts/qa/harness/appLaunchGuard.js` runs in the main process before the app's entry (it
+  must come before `.`; anything after `.` is app argv). It applies the seeder's checks (mock keychain
+  switch, `=` form, realpath(userData) equals the requested dir, not inside a real profile) and exits 3 on
+  failure. Playwright reports that as "Process failed to launch!"; the reason line is visible with
+  `DEBUG=pw:browser`. On success it redirects the main log to `<profile>/logs/main.log` (`app.setPath('logs')`
+  plus electron-log's `resolvePathFn`, as `installAppDataPaths.ts` does for keepr-dev). Without it, a
+  `--user-data-dir` launch writes the installed app's `~/Library/Logs/keepr/main.log`.
+- **Re-check.** After launch the driver runs `app.evaluate(readLaunchedIsolation)` and refuses (closes the
+  app, throws) unless the guard's sentinel is present, userData is the requested dir, the mock switch is
+  set and electron-log's file path is under the profile.
+
+**`KEEPR_ELECTRON_BIN` does not apply to the app launch on macOS.** It names the raw Electron binary that
+node-mode DB readers spawn with `ELECTRON_RUN_AS_NODE=1` (`resolveElectronBinary`), and is still honoured for
+the app on other platforms. Do not point it at the wrapper: the wrapper adds `--no-sandbox`, which node mode
+rejects (`bad option: --no-sandbox`), so every spec with a DB reader breaks. The earlier walkthrough
+runbook's "Route B" (`KEEPR_ELECTRON_BIN=<wrapper>`) is obsolete for the app and was never valid for readers.
 
 ### 2. Serving built assets, not the dev server (the one app-code hook)
 

@@ -113,50 +113,6 @@ export const authBridge = {
     ipcRenderer.invoke("auth:complete-email-onboarding", userId),
 
   /**
-   * Completes a pending login after keychain/database setup
-   * Called when OAuth succeeded but database wasn't initialized yet
-   * @param oauthData - The pending OAuth data from login-pending event
-   * @returns Login completion result
-   */
-  completePendingLogin: (oauthData: unknown) =>
-    ipcRenderer.invoke("auth:complete-pending-login", oauthData),
-
-  /**
-   * Pre-DB Google mailbox connection (returns tokens instead of saving to DB)
-   * Used during onboarding before database is initialized
-   * @param emailHint - Optional email hint for pre-filling the login
-   * @returns Connection initiation result
-   */
-  googleConnectMailboxPending: (emailHint?: string) =>
-    ipcRenderer.invoke("auth:google:connect-mailbox-pending", emailHint),
-
-  /**
-   * Pre-DB Microsoft mailbox connection (returns tokens instead of saving to DB)
-   * Used during onboarding before database is initialized
-   * @param emailHint - Optional email hint for pre-filling the login
-   * @returns Connection initiation result
-   */
-  microsoftConnectMailboxPending: (emailHint?: string) =>
-    ipcRenderer.invoke("auth:microsoft:connect-mailbox-pending", emailHint),
-
-  /**
-   * Saves pending mailbox tokens after database is initialized
-   * @param data - Token data including userId, provider, email, and tokens
-   * @returns Save result
-   */
-  savePendingMailboxTokens: (data: {
-    userId: string;
-    provider: "google" | "microsoft";
-    email: string;
-    tokens: {
-      access_token: string;
-      refresh_token: string | null;
-      expires_at: string;
-      scopes: string;
-    };
-  }) => ipcRenderer.invoke("auth:save-pending-mailbox-tokens", data),
-
-  /**
    * DEV ONLY: Expire a mailbox token for testing Connection Issue state
    * @param userId - User ID
    * @param provider - OAuth provider (google | microsoft)

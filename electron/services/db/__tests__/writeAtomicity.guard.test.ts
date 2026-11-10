@@ -378,14 +378,15 @@ const KNOWN_UNWRAPPED: Record<string, string> = {
   // --- BACKLOG-2546: DISCHARGED by the login-provisioning transaction -------
   // The three entries that were here (googleAuthHandlers::handleGoogleLogin,
   // ::handleGoogleCompleteLogin, microsoftAuthHandlers::handleMicrosoftLogin)
-  // are deleted because their bug is fixed: all four login paths now commit the
-  // user, token and session rows in one transaction owned by
-  // `services/loginProvisioningService.ts`.
+  // were deleted when BACKLOG-2546 put the login chain in one transaction; the
+  // handlers themselves were later removed (BACKLOG-4103; the pending-login
+  // handler and `provisionLogin` by BACKLOG-3302). The live deep-link sign-in
+  // commits its user row, session row, LOGIN entry and last-login stamp in one
+  // transaction in `services/loginProvisioningService.ts::provisionDeepLinkLogin`.
   //
-  // READ THIS BEFORE TRUSTING THE DELETION. It is evidenced by the DIFF and by
-  // the forced-crash suite `loginProvisioningAtomicity-2546.test.ts`, NOT by
-  // this guard. This guard cannot tell "fixed" from "made invisible" here: the
-  // fix turns five db/ exports into delegates, which drops them from
+  // READ THIS BEFORE TRUSTING THE DELETION. It was evidenced by the DIFF and by
+  // a forced-crash suite on the real driver, NOT by this guard. This guard
+  // cannot tell "fixed" from "made invisible" here: the fix turns five db/ exports into delegates, which drops them from
   // `dbLayerWriters()`, so the same three entries would also have to be deleted
   // if the handlers had been left completely untouched (measured). That is
   // BACKLOG-3238.
@@ -1024,9 +1025,9 @@ function unitsInFile(rel: string, lines: string[], dbWriters: Set<string>): Fn[]
   // full closure makes every caller-of-two-callers an offender, and an async
   // orchestrator cannot be fixed with a `dbTransaction` anyway.
   //
-  // This is what sees BACKLOG-2549: `markFirstExport` in
-  // `transactionExportHandlers.ts` is exactly this shape, wrapping
-  // `stampFirstExportedAt`.
+  // This is what saw BACKLOG-2549: `markFirstExport` in
+  // `transactionExportHandlers.ts` was exactly this shape, wrapping
+  // `stampFirstExportedAt` (both deleted by BACKLOG-3302).
   const localWriters = new Set<string>();
   for (const [name, decl] of declared) {
     if (decl.exported) continue;

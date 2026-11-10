@@ -18,6 +18,7 @@ import { cleanupCandidates, formatCopyBlock, scoreRun } from "../scoring";
 import { EMPTY_CENSUS } from "../../__tests__/helpers/emptyCensus-4175";
 import type { AnswerKeyRow } from "../../db/learnModeDbService";
 import type { LearnRunResult } from "../baselineRunner";
+import { BUNDLED_SENDER_RULES } from "../../../utils/senderFilter/bundledRules";
 
 const DAY = 24 * 60 * 60 * 1000;
 const T0 = Date.UTC(2026, 2, 1, 12); // 2026-03-01
@@ -376,6 +377,8 @@ function run(detections: LearnRunResult["detections"]): LearnRunResult {
     lastMs: T0 + 30 * DAY,
     detections,
     senderRulesVersion: 1,
+    senderRules: BUNDLED_SENDER_RULES,
+    senderRulesProvenance: { version: 1, source: "bundled", downloadRejected: false },
     seedHidesQuestions: true,
     // No sender filter loss: the filtered runs hold the same detections.
     filtered: { full: detections, minusContactKeeps: detections },

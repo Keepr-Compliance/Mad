@@ -4,9 +4,11 @@
  * BACKLOG-2612 — pdfExportService.ts IS DEAD CODE, AND MUST STAY DEAD UNTIL
  * IT IS REMOVED.
  *
- * Measured at develop (plan §1b, SR-endorsed): `transactions:export-pdf`
- * routes to `folderExportService.exportTransactionToCombinedPDF`, and NO
- * production module imports `pdfExportService`. The file still holds a full
+ * Measured at develop (plan §1b, SR-endorsed): the combined PDF is rendered by
+ * `folderExportService.exportTransactionToCombinedPDF` (today reached through
+ * `transactions:export-enhanced`; the path-taking PDF channel that also reached
+ * it was deleted by BACKLOG-3302), and NO production module imports
+ * `pdfExportService`. The file still holds a full
  * second copy of handle resolution and the `'Unknown'` sentinel that
  * BACKLOG-2461/2463 removed from the live path — re-wiring an export to it
  * would silently resurrect both, and no other test would notice.

@@ -36,8 +36,9 @@
  *   F11 per-message .txt / .eml                     no notice by design — SUMMARY.txt
  *                                                   is the only file describing the export
  *
- * `transactions:export-pdf` is excluded: no caller in src/, founder ruled it
- * deleted 2026-09-12 (BACKLOG-3234 → BACKLOG-3302).
+ * The path-taking PDF channel was excluded (no caller in src/, founder ruled it
+ * deleted 2026-09-12, BACKLOG-3234) and has since been deleted (BACKLOG-3302).
+ * The measurement above is history: it was taken at `2888c483d`.
  */
 
 let lastLoadedHtmlContent: string | null = null;
