@@ -1,0 +1,495 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`DAYS_7 duration (single) structure 1`] = `
+"<div class="relative">
+<svg viewBox="0 0 600 200" width="100%" height="200" role="img" aria-labelledby=":id0:-title">
+<title id=":id0:-title">Average duration</title>
+<g aria-hidden="true">
+<g>
+<line x1="36" x2="592" y1="174" y2="174" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="177" text-anchor="end" font-size="10" fill="#9ca3af">0.0</text>
+</g>
+<g>
+<line x1="36" x2="592" y1="94" y2="94" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="97" text-anchor="end" font-size="10" fill="#9ca3af">91</text>
+</g>
+<g>
+<line x1="36" x2="592" y1="14" y2="14" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="17" text-anchor="end" font-size="10" fill="#9ca3af">182</text>
+</g>
+</g>
+<g>
+<path d="M141.14285714285714,174 L141.14285714285714,163.7347275729224 Q141.14285714285714,159.7347275729224 145.14285714285714,159.7347275729224 L165.14285714285714,159.7347275729224 Q169.14285714285714,159.7347275729224 169.14285714285714,163.7347275729224 L169.14285714285714,174 Z" fill="var(--chart-1, #2a78d6)" data-series="duration" data-value="16.2">
+</path>
+<text x="155.14285714285714" y="155.7347275729224" text-anchor="middle" font-size="11" fill="#374151">16</text>
+</g>
+<g>
+<path d="M220.57142857142858,174 L220.57142857142858,162.94221243808477 Q220.57142857142858,158.94221243808477 224.57142857142858,158.94221243808477 L244.57142857142858,158.94221243808477 Q248.57142857142858,158.94221243808477 248.57142857142858,162.94221243808477 L248.57142857142858,174 Z" fill="var(--chart-1, #2a78d6)" data-series="duration" data-value="17.1">
+</path>
+<text x="234.57142857142858" y="154.94221243808477" text-anchor="middle" font-size="11" fill="#374151">17</text>
+</g>
+<g>
+<path d="M300,174 L300,18 Q300,14 304,14 L324,14 Q328,14 328,18 L328,174 Z" fill="var(--chart-1, #2a78d6)" data-series="duration" data-value="181.7">
+</path>
+<text x="314" y="10" text-anchor="middle" font-size="11" fill="#374151">182</text>
+</g>
+<g>
+<path d="M379.42857142857144,174 L379.42857142857144,174 Q379.42857142857144,173.11942762795817 380.3091438006133,173.11942762795817 L406.5479990565296,173.11942762795817 Q407.42857142857144,173.11942762795817 407.42857142857144,174 L407.42857142857144,174 Z" fill="var(--chart-1, #2a78d6)" data-series="duration" data-value="1">
+</path>
+<text x="393.42857142857144" y="169.11942762795817" text-anchor="middle" font-size="11" fill="#374151">1</text>
+</g>
+<g>
+<path d="M458.8571428571429,174 L458.8571428571429,161.26912493120528 Q458.8571428571429,157.26912493120528 462.8571428571429,157.26912493120528 L482.8571428571429,157.26912493120528 Q486.8571428571429,157.26912493120528 486.8571428571429,161.26912493120528 L486.8571428571429,174 Z" fill="var(--chart-1, #2a78d6)" data-series="duration" data-value="19">
+</path>
+<text x="472.8571428571429" y="153.26912493120528" text-anchor="middle" font-size="11" fill="#374151">19</text>
+</g>
+<g aria-hidden="true">
+<text x="75.71428571428572" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 13</text>
+<text x="155.14285714285714" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 14</text>
+<text x="234.57142857142858" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 15</text>
+<text x="314" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 16</text>
+<text x="393.42857142857144" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 17</text>
+<text x="472.8571428571429" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 18</text>
+<text x="552.2857142857142" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 19</text>
+</g>
+<g>
+<rect data-day="2026-09-13" x="36" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-14" x="115.42857142857143" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-15" x="194.85714285714286" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-16" x="274.2857142857143" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-17" x="353.7142857142857" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-18" x="433.14285714285717" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-19" x="512.5714285714286" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+</g>
+</svg>"
+`;
+
+exports[`DAYS_7 failures (stacked) structure 1`] = `
+"<div class="relative">
+<svg viewBox="0 0 600 200" width="100%" height="200" role="img" aria-labelledby=":id0:-title">
+<title id=":id0:-title">Failed syncs</title>
+<g aria-hidden="true">
+<g>
+<line x1="36" x2="592" y1="174" y2="174" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="177" text-anchor="end" font-size="10" fill="#9ca3af">0</text>
+</g>
+<g>
+<line x1="36" x2="592" y1="94" y2="94" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="97" text-anchor="end" font-size="10" fill="#9ca3af">4</text>
+</g>
+<g>
+<line x1="36" x2="592" y1="14" y2="14" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="17" text-anchor="end" font-size="10" fill="#9ca3af">8</text>
+</g>
+</g>
+<g>
+<path d="M141.14285714285714,174 L141.14285714285714,78 Q141.14285714285714,74 145.14285714285714,74 L165.14285714285714,74 Q169.14285714285714,74 169.14285714285714,78 L169.14285714285714,174 Z" fill="var(--chart-2, #d03b3b)" data-series="errors">
+</path>
+<path d="M141.14285714285714,72 L141.14285714285714,18 Q141.14285714285714,14 145.14285714285714,14 L165.14285714285714,14 Q169.14285714285714,14 169.14285714285714,18 L169.14285714285714,72 Z" fill="var(--chart-3, #f59e0b)" data-series="cancelled">
+</path>
+<text x="155.14285714285714" y="10" text-anchor="middle" font-size="11" fill="#374151">8</text>
+</g>
+<g>
+<path d="M220.57142857142858,174 L220.57142857142858,98 Q220.57142857142858,94 224.57142857142858,94 L244.57142857142858,94 Q248.57142857142858,94 248.57142857142858,98 L248.57142857142858,174 Z" fill="var(--chart-2, #d03b3b)" data-series="errors">
+</path>
+<path d="M220.57142857142858,92 L220.57142857142858,78 Q220.57142857142858,74 224.57142857142858,74 L244.57142857142858,74 Q248.57142857142858,74 248.57142857142858,78 L248.57142857142858,92 Z" fill="var(--chart-3, #f59e0b)" data-series="cancelled">
+</path>
+<text x="234.57142857142858" y="70" text-anchor="middle" font-size="11" fill="#374151">5</text>
+</g>
+<g>
+<path d="M300,174 L300,158 Q300,154 304,154 L324,154 Q328,154 328,158 L328,174 Z" fill="var(--chart-3, #f59e0b)" data-series="cancelled">
+</path>
+<text x="314" y="150" text-anchor="middle" font-size="11" fill="#374151">1</text>
+</g>
+<g>
+<path d="M379.42857142857144,174 L379.42857142857144,138 Q379.42857142857144,134 383.42857142857144,134 L403.42857142857144,134 Q407.42857142857144,134 407.42857142857144,138 L407.42857142857144,174 Z" fill="var(--chart-2, #d03b3b)" data-series="errors">
+</path>
+<text x="393.42857142857144" y="130" text-anchor="middle" font-size="11" fill="#374151">2</text>
+</g>
+<g>
+<path d="M458.8571428571429,174 L458.8571428571429,138 Q458.8571428571429,134 462.8571428571429,134 L482.8571428571429,134 Q486.8571428571429,134 486.8571428571429,138 L486.8571428571429,174 Z" fill="var(--chart-2, #d03b3b)" data-series="errors">
+</path>
+<path d="M458.8571428571429,132 L458.8571428571429,98 Q458.8571428571429,94 462.8571428571429,94 L482.8571428571429,94 Q486.8571428571429,94 486.8571428571429,98 L486.8571428571429,132 Z" fill="var(--chart-3, #f59e0b)" data-series="cancelled">
+</path>
+<text x="472.8571428571429" y="90" text-anchor="middle" font-size="11" fill="#374151">4</text>
+</g>
+<g aria-hidden="true">
+<text x="75.71428571428572" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 13</text>
+<text x="155.14285714285714" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 14</text>
+<text x="234.57142857142858" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 15</text>
+<text x="314" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 16</text>
+<text x="393.42857142857144" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 17</text>
+<text x="472.8571428571429" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 18</text>
+<text x="552.2857142857142" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 19</text>
+</g>
+<g>
+<rect data-day="2026-09-13" x="36" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-14" x="115.42857142857143" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-15" x="194.85714285714286" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-16" x="274.2857142857143" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-17" x="353.7142857142857" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-18" x="433.14285714285717" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-19" x="512.5714285714286" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+</g>
+</svg>"
+`;
+
+exports[`DAYS_30 duration (single) structure 1`] = `
+"<div class="relative">
+<svg viewBox="0 0 600 200" width="100%" height="200" role="img" aria-labelledby=":id0:-title">
+<title id=":id0:-title">Average duration</title>
+<g aria-hidden="true">
+<g>
+<line x1="36" x2="592" y1="174" y2="174" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="177" text-anchor="end" font-size="10" fill="#9ca3af">0.0</text>
+</g>
+<g>
+<line x1="36" x2="592" y1="94" y2="94" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="97" text-anchor="end" font-size="10" fill="#9ca3af">91</text>
+</g>
+<g>
+<line x1="36" x2="592" y1="14" y2="14" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="17" text-anchor="end" font-size="10" fill="#9ca3af">182</text>
+</g>
+</g>
+<g>
+<path d="M484.32133333333337,174 L484.32133333333337,163.7347275729224 Q484.32133333333337,159.7347275729224 488.32133333333337,159.7347275729224 L491.812,159.7347275729224 Q495.812,159.7347275729224 495.812,163.7347275729224 L495.812,174 Z" fill="var(--chart-1, #2a78d6)" data-series="duration" data-value="16.2">
+</path>
+</g>
+<g>
+<path d="M502.8546666666667,174 L502.8546666666667,162.94221243808477 Q502.8546666666667,158.94221243808477 506.8546666666667,158.94221243808477 L510.3453333333333,158.94221243808477 Q514.3453333333333,158.94221243808477 514.3453333333333,162.94221243808477 L514.3453333333333,174 Z" fill="var(--chart-1, #2a78d6)" data-series="duration" data-value="17.1">
+</path>
+</g>
+<g>
+<path d="M521.3880000000001,174 L521.3880000000001,18 Q521.3880000000001,14 525.3880000000001,14 L528.8786666666668,14 Q532.8786666666668,14 532.8786666666668,18 L532.8786666666668,174 Z" fill="var(--chart-1, #2a78d6)" data-series="duration" data-value="181.7">
+</path>
+</g>
+<g>
+<path d="M539.9213333333335,174 L539.9213333333335,174 Q539.9213333333335,173.11942762795817 540.8019057053752,173.11942762795817 L550.5314276279584,173.11942762795817 Q551.4120000000001,173.11942762795817 551.4120000000001,174 L551.4120000000001,174 Z" fill="var(--chart-1, #2a78d6)" data-series="duration" data-value="1">
+</path>
+</g>
+<g>
+<path d="M558.4546666666668,174 L558.4546666666668,161.26912493120528 Q558.4546666666668,157.26912493120528 562.4546666666668,157.26912493120528 L565.9453333333335,157.26912493120528 Q569.9453333333335,157.26912493120528 569.9453333333335,161.26912493120528 L569.9453333333335,174 Z" fill="var(--chart-1, #2a78d6)" data-series="duration" data-value="19">
+</path>
+</g>
+<g aria-hidden="true">
+<text x="45.266666666666666" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Aug 21</text>
+<text x="137.93333333333337" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Aug 26</text>
+<text x="230.60000000000002" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Aug 31</text>
+<text x="323.26666666666665" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 5</text>
+<text x="415.93333333333334" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 10</text>
+<text x="508.6" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 15</text>
+<text x="582.7333333333333" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 19</text>
+</g>
+<g>
+<rect data-day="2026-08-21" x="36" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-22" x="54.53333333333333" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-23" x="73.06666666666666" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-24" x="91.60000000000001" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-25" x="110.13333333333334" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-26" x="128.66666666666669" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-27" x="147.20000000000002" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-28" x="165.73333333333335" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-29" x="184.26666666666668" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-30" x="202.8" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-31" x="221.33333333333334" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-01" x="239.86666666666667" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-02" x="258.40000000000003" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-03" x="276.9333333333334" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-04" x="295.4666666666667" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-05" x="314" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-06" x="332.53333333333336" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-07" x="351.0666666666667" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-08" x="369.6" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-09" x="388.1333333333334" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-10" x="406.6666666666667" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-11" x="425.20000000000005" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-12" x="443.73333333333335" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-13" x="462.2666666666667" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-14" x="480.80000000000007" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-15" x="499.33333333333337" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-16" x="517.8666666666668" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-17" x="536.4000000000001" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-18" x="554.9333333333334" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-19" x="573.4666666666667" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+</g>
+</svg>"
+`;
+
+exports[`DAYS_30 failures (stacked) structure 1`] = `
+"<div class="relative">
+<svg viewBox="0 0 600 200" width="100%" height="200" role="img" aria-labelledby=":id0:-title">
+<title id=":id0:-title">Failed syncs</title>
+<g aria-hidden="true">
+<g>
+<line x1="36" x2="592" y1="174" y2="174" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="177" text-anchor="end" font-size="10" fill="#9ca3af">0</text>
+</g>
+<g>
+<line x1="36" x2="592" y1="94" y2="94" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="97" text-anchor="end" font-size="10" fill="#9ca3af">4</text>
+</g>
+<g>
+<line x1="36" x2="592" y1="14" y2="14" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="17" text-anchor="end" font-size="10" fill="#9ca3af">8</text>
+</g>
+</g>
+<g>
+<path d="M484.32133333333337,174 L484.32133333333337,78 Q484.32133333333337,74 488.32133333333337,74 L491.812,74 Q495.812,74 495.812,78 L495.812,174 Z" fill="var(--chart-2, #d03b3b)" data-series="errors">
+</path>
+<path d="M484.32133333333337,72 L484.32133333333337,18 Q484.32133333333337,14 488.32133333333337,14 L491.812,14 Q495.812,14 495.812,18 L495.812,72 Z" fill="var(--chart-3, #f59e0b)" data-series="cancelled">
+</path>
+</g>
+<g>
+<path d="M502.8546666666667,174 L502.8546666666667,98 Q502.8546666666667,94 506.8546666666667,94 L510.3453333333333,94 Q514.3453333333333,94 514.3453333333333,98 L514.3453333333333,174 Z" fill="var(--chart-2, #d03b3b)" data-series="errors">
+</path>
+<path d="M502.8546666666667,92 L502.8546666666667,78 Q502.8546666666667,74 506.8546666666667,74 L510.3453333333333,74 Q514.3453333333333,74 514.3453333333333,78 L514.3453333333333,92 Z" fill="var(--chart-3, #f59e0b)" data-series="cancelled">
+</path>
+</g>
+<g>
+<path d="M521.3880000000001,174 L521.3880000000001,158 Q521.3880000000001,154 525.3880000000001,154 L528.8786666666668,154 Q532.8786666666668,154 532.8786666666668,158 L532.8786666666668,174 Z" fill="var(--chart-3, #f59e0b)" data-series="cancelled">
+</path>
+</g>
+<g>
+<path d="M539.9213333333335,174 L539.9213333333335,138 Q539.9213333333335,134 543.9213333333335,134 L547.4120000000001,134 Q551.4120000000001,134 551.4120000000001,138 L551.4120000000001,174 Z" fill="var(--chart-2, #d03b3b)" data-series="errors">
+</path>
+</g>
+<g>
+<path d="M558.4546666666668,174 L558.4546666666668,138 Q558.4546666666668,134 562.4546666666668,134 L565.9453333333335,134 Q569.9453333333335,134 569.9453333333335,138 L569.9453333333335,174 Z" fill="var(--chart-2, #d03b3b)" data-series="errors">
+</path>
+<path d="M558.4546666666668,132 L558.4546666666668,98 Q558.4546666666668,94 562.4546666666668,94 L565.9453333333335,94 Q569.9453333333335,94 569.9453333333335,98 L569.9453333333335,132 Z" fill="var(--chart-3, #f59e0b)" data-series="cancelled">
+</path>
+</g>
+<g aria-hidden="true">
+<text x="45.266666666666666" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Aug 21</text>
+<text x="137.93333333333337" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Aug 26</text>
+<text x="230.60000000000002" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Aug 31</text>
+<text x="323.26666666666665" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 5</text>
+<text x="415.93333333333334" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 10</text>
+<text x="508.6" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 15</text>
+<text x="582.7333333333333" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 19</text>
+</g>
+<g>
+<rect data-day="2026-08-21" x="36" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-22" x="54.53333333333333" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-23" x="73.06666666666666" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-24" x="91.60000000000001" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-25" x="110.13333333333334" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-26" x="128.66666666666669" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-27" x="147.20000000000002" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-28" x="165.73333333333335" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-29" x="184.26666666666668" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-30" x="202.8" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-08-31" x="221.33333333333334" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-01" x="239.86666666666667" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-02" x="258.40000000000003" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-03" x="276.9333333333334" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-04" x="295.4666666666667" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-05" x="314" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-06" x="332.53333333333336" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-07" x="351.0666666666667" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-08" x="369.6" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-09" x="388.1333333333334" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-10" x="406.6666666666667" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-11" x="425.20000000000005" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-12" x="443.73333333333335" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-13" x="462.2666666666667" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-14" x="480.80000000000007" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-15" x="499.33333333333337" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-16" x="517.8666666666668" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-17" x="536.4000000000001" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-18" x="554.9333333333334" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-19" x="573.4666666666667" y="14" width="18.533333333333335" height="160" fill="transparent">
+</rect>
+</g>
+</svg>"
+`;
+
+exports[`DAYS_EMPTY duration (single) structure 1`] = `
+"<div class="relative">
+<svg viewBox="0 0 600 200" width="100%" height="200" role="img" aria-labelledby=":id0:-title">
+<title id=":id0:-title">Average duration</title>
+<g aria-hidden="true">
+<g>
+<line x1="36" x2="592" y1="174" y2="174" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="177" text-anchor="end" font-size="10" fill="#9ca3af">
+</text>
+</g>
+<g>
+<line x1="36" x2="592" y1="174" y2="174" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="177" text-anchor="end" font-size="10" fill="#9ca3af">
+</text>
+</g>
+<g>
+<line x1="36" x2="592" y1="174" y2="174" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="177" text-anchor="end" font-size="10" fill="#9ca3af">
+</text>
+</g>
+</g>
+<g aria-hidden="true">
+<text x="75.71428571428572" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 7</text>
+<text x="155.14285714285714" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 8</text>
+<text x="234.57142857142858" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 9</text>
+<text x="314" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 10</text>
+<text x="393.42857142857144" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 11</text>
+<text x="472.8571428571429" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 12</text>
+<text x="552.2857142857142" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 13</text>
+</g>
+<g>
+<rect data-day="2026-09-07" x="36" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-08" x="115.42857142857143" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-09" x="194.85714285714286" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-10" x="274.2857142857143" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-11" x="353.7142857142857" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-12" x="433.14285714285717" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-13" x="512.5714285714286" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+</g>
+</svg>"
+`;
+
+exports[`DAYS_EMPTY failures (stacked) structure 1`] = `
+"<div class="relative">
+<svg viewBox="0 0 600 200" width="100%" height="200" role="img" aria-labelledby=":id0:-title">
+<title id=":id0:-title">Failed syncs</title>
+<g aria-hidden="true">
+<g>
+<line x1="36" x2="592" y1="174" y2="174" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="177" text-anchor="end" font-size="10" fill="#9ca3af">
+</text>
+</g>
+<g>
+<line x1="36" x2="592" y1="174" y2="174" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="177" text-anchor="end" font-size="10" fill="#9ca3af">
+</text>
+</g>
+<g>
+<line x1="36" x2="592" y1="174" y2="174" stroke="#e5e7eb" stroke-width="1">
+</line>
+<text x="30" y="177" text-anchor="end" font-size="10" fill="#9ca3af">
+</text>
+</g>
+</g>
+<g aria-hidden="true">
+<text x="75.71428571428572" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 7</text>
+<text x="155.14285714285714" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 8</text>
+<text x="234.57142857142858" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 9</text>
+<text x="314" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 10</text>
+<text x="393.42857142857144" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 11</text>
+<text x="472.8571428571429" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 12</text>
+<text x="552.2857142857142" y="192" text-anchor="middle" font-size="10" fill="#9ca3af">Sep 13</text>
+</g>
+<g>
+<rect data-day="2026-09-07" x="36" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-08" x="115.42857142857143" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-09" x="194.85714285714286" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-10" x="274.2857142857143" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-11" x="353.7142857142857" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-12" x="433.14285714285717" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+<rect data-day="2026-09-13" x="512.5714285714286" y="14" width="79.42857142857143" height="160" fill="transparent">
+</rect>
+</g>
+</svg>"
+`;
