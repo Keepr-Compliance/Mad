@@ -1,0 +1,338 @@
+BACKLOG-4170 PR4 harness results — keepr-test, 2026-11-10, migration and harness at bceffd5e8
+base: origin/int-portal/admin-functions-248 e14df9fd4 + merge of origin/int-portal/release-2.47 2374f86d4
+migration 20261111140000_backlog_4170_billing_write_permissions.sql md5 86b0bf4a36ac117571e46fbe52c76123
+
+## Functions: keepr-test before -> after (md5(prosrc), proacl)
+admin_suspend_user(uuid,text)                       c626b20ccdd9e6fc2595b3b33ca07bc6 -> 9456e424a6e67e7854eecf011644210e  {postgres,authenticated,service_role}
+admin_unsuspend_user(uuid)                          25b70a3e30d2f029a920844097342248 -> bf90c682d4a149803723a568af8ace02  {postgres,authenticated,service_role}
+admin_update_license(uuid,jsonb)                    ab793576ab168fec56e30d428cfc0514 -> a4e8f48882981a58ad484bea7bbafd83  {postgres,authenticated,service_role}
+admin_adjust_credits(uuid,integer,text,jsonb)       32260362f3b97ab78b39eb9801510f69 -> 91edfad9cd29b13238f4e652c634fef0  {postgres,authenticated,service_role}
+reinstate_suspended_account(uuid,text)              8c3026b70a4c7a67d248f15640f3dc78 -> 2269e6ded34fde3a3ad2b737a9e94c61  {postgres,authenticated,service_role}
+create_active_individual_license(uuid)             f16cd5585a0d62636a7ac1384fa6073d -> 444a6fb65e16149252aa5aae5abb7dfb  {postgres,authenticated,service_role}
+finalize_paid_unlock(uuid,text,integer,uuid,jsonb)  b6ae1cead90857a8611c70862b569b77 -> abca1cd3389a48209d431ca331116ac2  {postgres,service_role}
+record_credit_purchase(uuid,integer,integer,jsonb)  d44d9c9b68946403230151b958b0a2b3 -> 4a5267d181be72eff3c8424f04f18453  {postgres,service_role}
+record_refund(uuid,text,jsonb)                      977ff4981212913bb18d0b1f2ff5a1b8 -> 699d942f9ebd462e6d4e1e60521c63b5  {postgres,service_role}
+admin_get_user_detail(uuid)                         fe2ed884c110aac7ad0e7075d093cc6c -> absent
+resolve_credit_read_user_id(uuid)                   9569dacf52cf0eb8a78dd9215c1e4ceb (not changed)
+catalog: admin_permissions 36 -> 37 (credits.adjust, category billing); admin_role_permissions 128 -> 132
+  credits.adjust: sales, super-admin, support-supervisor; billing.suspend: sales, super-admin -> + support-supervisor
+
+## run.sh (before keepr-test apply): total 298 pass 298 fail 0
+## keepr-test apply: migration applied twice (two calls), schema_migrations row 20261111140000 recorded
+## run.sh --applied (after apply): total 300 pass 300 fail 0 (KA_applied_state_equals_file, KA_applied_catalog_equals_file pass)
+## run.sh (after apply): total 298 pass 298 fail 0
+
+## Other harnesses after the keepr-test apply
+backlog-4170-p1 plain 118/118; --applied 118/119: KA_applied_state_equals_file red (admin_get_user_detail is dropped by PR4). Expected.
+backlog-4170-p2a plain 266/266, --applied 267/267; p2b plain 427/427, --applied 428/428; p2c plain 336/336, --applied 337/337
+backlog-4170-p3 plain 47/48, --applied 48/49: B0_pre_fixture_counts_equal_plan_baseline red (admin_permissions 37, admin_role_permissions 132 vs its 36/128 baseline). Expected: PR4 adds those rows.
+Superseded by backlog-4170-p4 (frozen, not re-run, would red on keyless fixture roles): backlog-3714 c4, backlog-3846 u01-u03/u10, backlog-3856 k6, backlog-3857 c5, backlog-3878 w01-w16.
+
+## mutate.py all (22 modes, each red; RESOLVE modes dropped: resolve_credit_read_user_id is not changed)
+== INTERNAL_ORed
+MUTATION APPLIED numstat=3/3/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql | 1/1/supabase/tests/backlog-4170-p4/rollback-4170-p4.sql
+  - ('public.admin_suspend_user(uuid,text)', 'c626b20ccdd9e6fc2595b3b33ca07bc6', '9456e424a6e67e7854eecf011644210e'),
+  + ('public.admin_suspend_user(uuid,text)', 'c626b20ccdd9e6fc2595b3b33ca07bc6', '9a74b4a92e2378b463054548f5923625'),
+  - IF NOT public.has_internal_role(auth.uid()) OR NOT public.has_permission(auth.uid(), 'users.suspend') THEN
+  + IF NOT public.has_internal_role(auth.uid()) AND NOT public.has_permission(auth.uid(), 'users.suspend') THEN
+  - ('public.admin_suspend_user(uuid,text)', '9456e424a6e67e7854eecf011644210e', '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
+  + ('public.admin_suspend_user(uuid,text)', '9a74b4a92e2378b463054548f5923625', '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
+  - ('public.admin_suspend_user(uuid,text)', 'c626b20ccdd9e6fc2595b3b33ca07bc6', '9456e424a6e67e7854eecf011644210e'),
+  + ('public.admin_suspend_user(uuid,text)', 'c626b20ccdd9e6fc2595b3b33ca07bc6', '9a74b4a92e2378b463054548f5923625'),
+RESULT total=298 pass=289 fail=9
+REDS K1_guard_suspend,M_u0_none_suspend,M_u_billing.manage_suspend,M_u_billing.suspend_suspend,M_u_credits.adjust_suspend,M_u_licenses.edit_suspend,M_u_sales_suspend,M_u_support.view_suspend,M_u_users.view_suspend
+RESTORED clean=True
+== HIDE_ONLY
+MUTATION APPLIED numstat=181/144/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql
+  - 
+  - DO $pin$
+  + -- BACKLOG-4170 PR4 rollback: restores the ten functions changed by 20261111140000 to the text, ACL and
+  + -- comment keepr-test held on 2026-11-10 before PR4 (bodies dumped from keepr-test; record_refund is the
+  + -- BACKLOG-2345 body), recreates admin_get_user_detail(uuid) with the BACKLOG-4170 PR1 body and ACL
+  + -- {postgres,authenticated,service_role}, and removes the PR4 catalog rows (credits.adjust and its role
+  + -- grants by cascade; support-supervisor's billing.suspend).
+  + -- Pre-pin: refuses unless each of the ten bodies is the PR4 text or the text this file restores (a
+  + -- later migration's body is not overwritten).
+  + -- Run only inside a transaction that is rolled back (harness), or with an explicit go for a real rollback.
+  + 
+  + DO $rbpin$
+RESULT total=298 pass=162 fail=136
+REDS K1_guard_adjust_credits,K1_guard_create_license,K1_guard_finalize,K1_guard_purchase,K1_guard_refund,K1_guard_reinstate,K1_guard_suspend,K1_guard_unsuspend,K1_guard_update_license,K2_acl_finalize,K2_acl_purchase,K2_acl_suspend,K2_acl_unsuspend,K3_C_comments_service_role_only,K4_pin_stops_on_B_drift,K4_pin_stops_on_pre_2345_refund,K4_pin_stops_without_2345_recorded,K5_catalog,K5_role_4104_granted_credits_adjust,K6_get_user_detail_absent,M_anon_finalize,M_anon_finalize_done,M_anon_get_user_detail,M_anon_purchase,M_anon_suspend,M_anon_unsuspend,M_c_claims_finalize,M_c_claims_finalize_done,M_c
+RESTORED clean=True
+== WRONG_KEY_credits
+MUTATION APPLIED numstat=3/3/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql | 1/1/supabase/tests/backlog-4170-p4/rollback-4170-p4.sql
+  - ('public.admin_adjust_credits(uuid,integer,text,jsonb)', '32260362f3b97ab78b39eb9801510f69', '91edfad9cd29b13238f4e652c634fef0'),
+  + ('public.admin_adjust_credits(uuid,integer,text,jsonb)', '32260362f3b97ab78b39eb9801510f69', '6d3392e1cacf925708b7afa3c64af359'),
+  - IF NOT public.has_internal_role(auth.uid()) OR NOT public.has_permission(auth.uid(), 'credits.adjust') THEN
+  + IF NOT public.has_internal_role(auth.uid()) OR NOT public.has_permission(auth.uid(), 'billing.manage') THEN
+  - ('public.admin_adjust_credits(uuid,integer,text,jsonb)', '91edfad9cd29b13238f4e652c634fef0', '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postg
+  + ('public.admin_adjust_credits(uuid,integer,text,jsonb)', '6d3392e1cacf925708b7afa3c64af359', '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postg
+  - ('public.admin_adjust_credits(uuid,integer,text,jsonb)', '32260362f3b97ab78b39eb9801510f69', '91edfad9cd29b13238f4e652c634fef0'),
+  + ('public.admin_adjust_credits(uuid,integer,text,jsonb)', '32260362f3b97ab78b39eb9801510f69', '6d3392e1cacf925708b7afa3c64af359'),
+RESULT total=298 pass=290 fail=8
+REDS B0_credits_adjust_only_gets_balance_after,K1_guard_adjust_credits,M_u_billing.manage_adjust_minus,M_u_billing.manage_adjust_plus,M_u_credits.adjust_adjust_minus,M_u_credits.adjust_adjust_plus,M_u_sup_adjust_minus,M_u_sup_adjust_plus
+RESTORED clean=True
+== SA_not_granted
+MUTATION APPLIED numstat=2/2/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql
+  - (r.slug IN ('super-admin', 'sales', 'support-supervisor') AND p.key = 'credits.adjust')
+  + (r.slug IN ('sales', 'support-supervisor') AND p.key = 'credits.adjust')
+  - WHERE ap.key = 'credits.adjust') IS DISTINCT FROM 'sales,super-admin,support-supervisor' THEN
+  + WHERE ap.key = 'credits.adjust') IS DISTINCT FROM 'sales,support-supervisor' THEN
+RESULT total=298 pass=292 fail=6
+REDS B0_super_admin_B_unchanged,K5_catalog,M_c_claims_adjust_minus,M_c_claims_adjust_plus,M_u_sa_adjust_minus,M_u_sa_adjust_plus
+RESTORED clean=True
+== SUP_billing_suspend_missing
+MUTATION APPLIED numstat=1/2/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql
+  - OR (r.slug = 'support-supervisor' AND p.key = 'billing.suspend')
+  - IF NOT EXISTS (SELECT 1 FROM public.admin_role_permissions rp
+  + IF false AND NOT EXISTS (SELECT 1 FROM public.admin_role_permissions rp
+RESULT total=298 pass=296 fail=2
+REDS K5_catalog,M_u_sup_reinstate
+RESTORED clean=True
+== KEY_not_inserted
+MUTATION APPLIED numstat=1/4/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql
+  - INSERT INTO public.admin_permissions (key, label, description, category) VALUES
+  - ('credits.adjust', 'Adjust credits', 'Grant or claw back a user''s credits', 'billing')
+  - ON CONFLICT (key) DO NOTHING;
+  - WHERE ap.key = 'credits.adjust') IS DISTINCT FROM 'sales,super-admin,support-supervisor' THEN
+  + WHERE ap.key = 'credits.adjust') IS DISTINCT FROM NULL THEN
+RESULT total=298 pass=284 fail=14
+REDS B0_credits_adjust_only_gets_balance_after,B0_super_admin_B_unchanged,K5_catalog,K5_role_4104_granted_credits_adjust,M_c_claims_adjust_minus,M_c_claims_adjust_plus,M_u_credits.adjust_adjust_minus,M_u_credits.adjust_adjust_plus,M_u_sa_adjust_minus,M_u_sa_adjust_plus,M_u_sales_adjust_minus,M_u_sales_adjust_plus,M_u_sup_adjust_minus,M_u_sup_adjust_plus
+RESTORED clean=True
+== C_body_left
+MUTATION APPLIED numstat=3/3/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql | 1/1/supabase/tests/backlog-4170-p4/rollback-4170-p4.sql
+  - ('public.finalize_paid_unlock(uuid,text,integer,uuid,jsonb)', 'b6ae1cead90857a8611c70862b569b77', 'abca1cd3389a48209d431ca331116ac2'),
+  + ('public.finalize_paid_unlock(uuid,text,integer,uuid,jsonb)', 'b6ae1cead90857a8611c70862b569b77', 'b6ae1cead90857a8611c70862b569b77'),
+  - IF COALESCE(auth.role(), '') <> 'service_role' THEN
+  + IF auth.role() <> 'service_role' AND NOT public.has_internal_role(auth.uid()) THEN
+  - ('public.finalize_paid_unlock(uuid,text,integer,uuid,jsonb)', 'abca1cd3389a48209d431ca331116ac2', '{postgres=X/postgres,service_role=X/postgres}'),
+  + ('public.finalize_paid_unlock(uuid,text,integer,uuid,jsonb)', 'b6ae1cead90857a8611c70862b569b77', '{postgres=X/postgres,service_role=X/postgres}'),
+  - ('public.finalize_paid_unlock(uuid,text,integer,uuid,jsonb)', 'b6ae1cead90857a8611c70862b569b77', 'abca1cd3389a48209d431ca331116ac2'),
+  + ('public.finalize_paid_unlock(uuid,text,integer,uuid,jsonb)', 'b6ae1cead90857a8611c70862b569b77', 'b6ae1cead90857a8611c70862b569b77'),
+RESULT total=298 pass=295 fail=3
+REDS K1_guard_finalize,M_c_claims_finalize_done,M_c_noclaims_finalize_done
+RESTORED clean=True
+== C_grant_left
+MUTATION APPLIED numstat=2/2/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql
+  - REVOKE EXECUTE ON FUNCTION public.record_credit_purchase(uuid, integer, integer, jsonb) FROM PUBLIC, anon, authenticated;
+  + REVOKE EXECUTE ON FUNCTION public.record_credit_purchase(uuid, integer, integer, jsonb) FROM PUBLIC, anon;
+  - ('public.record_credit_purchase(uuid,integer,integer,jsonb)', '4a5267d181be72eff3c8424f04f18453', '{postgres=X/postgres,service_role=X/postgres}'),
+  + ('public.record_credit_purchase(uuid,integer,integer,jsonb)', '4a5267d181be72eff3c8424f04f18453', '{postgres=X/postgres,authenticated=X/postgres,service_role=X/
+RESULT total=298 pass=285 fail=13
+REDS K2_acl_purchase,M_u0_none_purchase,M_u_billing.manage_purchase,M_u_billing.suspend_purchase,M_u_credits.adjust_purchase,M_u_cust_purchase,M_u_licenses.edit_purchase,M_u_sa_purchase,M_u_sales_purchase,M_u_sup_purchase,M_u_support.view_purchase,M_u_users.suspend_purchase,M_u_users.view_purchase
+RESTORED clean=True
+== NULL_ROLE_unsafe
+MUTATION APPLIED numstat=9/9/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql | 3/3/supabase/tests/backlog-4170-p4/rollback-4170-p4.sql
+  - ('public.finalize_paid_unlock(uuid,text,integer,uuid,jsonb)', 'b6ae1cead90857a8611c70862b569b77', 'abca1cd3389a48209d431ca331116ac2'),
+  - ('public.record_credit_purchase(uuid,integer,integer,jsonb)', 'd44d9c9b68946403230151b958b0a2b3', '4a5267d181be72eff3c8424f04f18453'),
+  - ('public.record_refund(uuid,text,jsonb)', '977ff4981212913bb18d0b1f2ff5a1b8', '699d942f9ebd462e6d4e1e60521c63b5')
+  + ('public.finalize_paid_unlock(uuid,text,integer,uuid,jsonb)', 'b6ae1cead90857a8611c70862b569b77', '0c579ac94d4ee3f0d64600b85b11fd58'),
+  + ('public.record_credit_purchase(uuid,integer,integer,jsonb)', 'd44d9c9b68946403230151b958b0a2b3', 'c8621f83b00cee84cb9178980b41fa65'),
+  + ('public.record_refund(uuid,text,jsonb)', '977ff4981212913bb18d0b1f2ff5a1b8', '2375ae46e7b585821b1ba295187ce782')
+  - IF COALESCE(auth.role(), '') <> 'service_role' THEN
+  + IF auth.role() <> 'service_role' THEN
+  - IF COALESCE(auth.role(), '') <> 'service_role' THEN
+  + IF auth.role() <> 'service_role' THEN
+  - IF COALESCE(auth.role(), '') <> 'service_role' THEN
+  + IF auth.role() <> 'service_role' THEN
+RESULT total=298 pass=291 fail=7
+REDS K1_guard_finalize,K1_guard_purchase,K1_guard_refund,M_c_noclaims_finalize,M_c_noclaims_finalize_done,M_c_noclaims_purchase,M_c_noclaims_refund
+RESTORED clean=True
+== REFUND_acl_widened
+MUTATION APPLIED numstat=2/1/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql
+  + GRANT EXECUTE ON FUNCTION public.record_refund(uuid, text, jsonb) TO authenticated;
+  - ('public.record_refund(uuid,text,jsonb)', '699d942f9ebd462e6d4e1e60521c63b5', '{postgres=X/postgres,service_role=X/postgres}')
+  + ('public.record_refund(uuid,text,jsonb)', '699d942f9ebd462e6d4e1e60521c63b5', '{postgres=X/postgres,service_role=X/postgres,authenticated=X/postgres}')
+RESULT total=298 pass=285 fail=13
+REDS K2_acl_refund,M_u0_none_refund,M_u_billing.manage_refund,M_u_billing.suspend_refund,M_u_credits.adjust_refund,M_u_cust_refund,M_u_licenses.edit_refund,M_u_sa_refund,M_u_sales_refund,M_u_sup_refund,M_u_support.view_refund,M_u_users.suspend_refund,M_u_users.view_refund
+RESTORED clean=True
+== REFUND_from_c201
+MUTATION APPLIED numstat=12/43/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql | 1/1/supabase/tests/backlog-4170-p4/rollback-4170-p4.sql
+  - ('public.record_refund(uuid,text,jsonb)', '977ff4981212913bb18d0b1f2ff5a1b8', '699d942f9ebd462e6d4e1e60521c63b5')
+  + ('public.record_refund(uuid,text,jsonb)', '977ff4981212913bb18d0b1f2ff5a1b8', '86bd212be514335488bd8df3af75e11c')
+  - v_unlock           public.transaction_unlocks;
+  + v_unlock          public.transaction_unlocks;
+  - v_purchase_amount  integer;
+  - v_debits_drawn     integer;
+  - v_refundable       integer := 0;
+  - v_balance          integer;
+  - v_adjustment_id    uuid;
+  + v_adjustment_id   uuid;
+  - -- Idempotent: already refunded -> no-op.
+  - -- The purchase that funded this unlock (via the debit's funded_by). A grant-funded unlock
+RESULT total=298 pass=296 fail=2
+REDS K1_refund_keeps_2345_floor,M_svc_refund
+RESTORED clean=True
+== CREATE_branch_left
+MUTATION APPLIED numstat=3/4/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql | 1/1/supabase/tests/backlog-4170-p4/rollback-4170-p4.sql
+  - ('public.create_active_individual_license(uuid)', 'f16cd5585a0d62636a7ac1384fa6073d', '444a6fb65e16149252aa5aae5abb7dfb'),
+  + ('public.create_active_individual_license(uuid)', 'f16cd5585a0d62636a7ac1384fa6073d', 'f16cd5585a0d62636a7ac1384fa6073d'),
+  - OR (p_user_id IS DISTINCT FROM auth.uid() AND NOT (public.has_internal_role(auth.uid())
+  - AND public.has_permission(auth.uid(), 'licenses.edit')))) THEN
+  + OR (p_user_id IS DISTINCT FROM auth.uid() AND NOT public.has_internal_role(auth.uid()))) THEN
+  - ('public.create_active_individual_license(uuid)', '444a6fb65e16149252aa5aae5abb7dfb', '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
+  + ('public.create_active_individual_license(uuid)', 'f16cd5585a0d62636a7ac1384fa6073d', '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
+  - ('public.create_active_individual_license(uuid)', 'f16cd5585a0d62636a7ac1384fa6073d', '444a6fb65e16149252aa5aae5abb7dfb'),
+  + ('public.create_active_individual_license(uuid)', 'f16cd5585a0d62636a7ac1384fa6073d', 'f16cd5585a0d62636a7ac1384fa6073d'),
+RESULT total=298 pass=290 fail=8
+REDS K1_guard_create_license,M_u0_none_create_other,M_u_billing.manage_create_other,M_u_billing.suspend_create_other,M_u_credits.adjust_create_other,M_u_support.view_create_other,M_u_users.suspend_create_other,M_u_users.view_create_other
+RESTORED clean=True
+== CREATE_self_gated
+MUTATION APPLIED numstat=3/3/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql | 1/1/supabase/tests/backlog-4170-p4/rollback-4170-p4.sql
+  - ('public.create_active_individual_license(uuid)', 'f16cd5585a0d62636a7ac1384fa6073d', '444a6fb65e16149252aa5aae5abb7dfb'),
+  + ('public.create_active_individual_license(uuid)', 'f16cd5585a0d62636a7ac1384fa6073d', '424a9b9b984af99e3eb65d8582b9c3e0'),
+  - OR (p_user_id IS DISTINCT FROM auth.uid() AND NOT (public.has_internal_role(auth.uid())
+  + OR (NOT (public.has_internal_role(auth.uid())
+  - ('public.create_active_individual_license(uuid)', '444a6fb65e16149252aa5aae5abb7dfb', '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
+  + ('public.create_active_individual_license(uuid)', '424a9b9b984af99e3eb65d8582b9c3e0', '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
+  - ('public.create_active_individual_license(uuid)', 'f16cd5585a0d62636a7ac1384fa6073d', '444a6fb65e16149252aa5aae5abb7dfb'),
+  + ('public.create_active_individual_license(uuid)', 'f16cd5585a0d62636a7ac1384fa6073d', '424a9b9b984af99e3eb65d8582b9c3e0'),
+RESULT total=298 pass=289 fail=9
+REDS K1_guard_create_license,M_u0_none_create_self,M_u_billing.manage_create_self,M_u_billing.suspend_create_self,M_u_credits.adjust_create_self,M_u_cust_create_self,M_u_support.view_create_self,M_u_users.suspend_create_self,M_u_users.view_create_self
+RESTORED clean=True
+== DETAIL_not_dropped
+MUTATION APPLIED numstat=0/4/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql
+  - DROP FUNCTION IF EXISTS public.admin_get_user_detail(uuid);
+  - IF to_regprocedure('public.admin_get_user_detail(uuid)') IS NOT NULL THEN
+  - RAISE EXCEPTION 'BACKLOG-4170 PR4 post-check: admin_get_user_detail(uuid) still exists';
+  - END IF;
+RESULT total=298 pass=281 fail=17
+REDS K6_get_user_detail_absent,M_anon_get_user_detail,M_c_claims_get_user_detail,M_c_noclaims_get_user_detail,M_svc_get_user_detail,M_u0_none_get_user_detail,M_u_billing.manage_get_user_detail,M_u_billing.suspend_get_user_detail,M_u_credits.adjust_get_user_detail,M_u_cust_get_user_detail,M_u_licenses.edit_get_user_detail,M_u_sa_get_user_detail,M_u_sales_get_user_detail,M_u_sup_get_user_detail,M_u_support.view_get_user_detail,M_u_users.suspend_get_user_detail,M_u_users.view_get_user_detail
+RESTORED clean=True
+== ANON_not_revoked
+MUTATION APPLIED numstat=2/2/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql
+  - REVOKE EXECUTE ON FUNCTION public.admin_suspend_user(uuid, text) FROM PUBLIC, anon;
+  + REVOKE EXECUTE ON FUNCTION public.admin_suspend_user(uuid, text) FROM PUBLIC;
+  - ('public.admin_suspend_user(uuid,text)', '9456e424a6e67e7854eecf011644210e', '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}'),
+  + ('public.admin_suspend_user(uuid,text)', '9456e424a6e67e7854eecf011644210e', '{postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postg
+RESULT total=298 pass=296 fail=2
+REDS K2_acl_suspend,M_anon_suspend
+RESTORED clean=True
+== REFUSAL_text_changed
+MUTATION APPLIED numstat=3/3/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql | 1/1/supabase/tests/backlog-4170-p4/rollback-4170-p4.sql
+  - ('public.admin_adjust_credits(uuid,integer,text,jsonb)', '32260362f3b97ab78b39eb9801510f69', '91edfad9cd29b13238f4e652c634fef0'),
+  + ('public.admin_adjust_credits(uuid,integer,text,jsonb)', '32260362f3b97ab78b39eb9801510f69', '079f98509f1c42887bca487f9bb05b07'),
+  - RAISE EXCEPTION 'Unauthorized';
+  + RAISE EXCEPTION 'Unauthorized: credits.adjust required';
+  - ('public.admin_adjust_credits(uuid,integer,text,jsonb)', '91edfad9cd29b13238f4e652c634fef0', '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postg
+  + ('public.admin_adjust_credits(uuid,integer,text,jsonb)', '079f98509f1c42887bca487f9bb05b07', '{postgres=X/postgres,authenticated=X/postgres,service_role=X/postg
+  - ('public.admin_adjust_credits(uuid,integer,text,jsonb)', '32260362f3b97ab78b39eb9801510f69', '91edfad9cd29b13238f4e652c634fef0'),
+  + ('public.admin_adjust_credits(uuid,integer,text,jsonb)', '32260362f3b97ab78b39eb9801510f69', '079f98509f1c42887bca487f9bb05b07'),
+RESULT total=298 pass=277 fail=21
+REDS K1_guard_adjust_credits,M_c_noclaims_adjust_minus,M_c_noclaims_adjust_plus,M_svc_adjust_minus,M_svc_adjust_plus,M_u0_none_adjust_minus,M_u0_none_adjust_plus,M_u_billing.manage_adjust_minus,M_u_billing.manage_adjust_plus,M_u_billing.suspend_adjust_minus,M_u_billing.suspend_adjust_plus,M_u_cust_adjust_minus,M_u_cust_adjust_plus,M_u_licenses.edit_adjust_minus,M_u_licenses.edit_adjust_plus,M_u_support.view_adjust_minus,M_u_support.view_adjust_plus,M_u_users.suspend_adjust_minus,M_u_users.suspend_adjust_plus,M_u_users.view_adjust_minus,M_u_users.view_adjust_plus
+RESTORED clean=True
+== PIN_drift
+MUTATION APPLIED numstat=1/1/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql
+  - IF r.cur NOT IN (r.prev, r.post) THEN
+  + IF false THEN
+RESULT total=298 pass=296 fail=2
+REDS K4_pin_stops_on_B_drift,K4_pin_stops_on_pre_2345_refund
+RESTORED clean=True
+== PIN_no_2345_check
+MUTATION APPLIED numstat=1/1/supabase/migrations/20261111140000_backlog_4170_billing_write_permissions.sql
+  - IF NOT EXISTS (SELECT 1 FROM supabase_migrations.schema_migrations WHERE version = '20261110100000') THEN
+  + IF false THEN
+RESULT total=298 pass=297 fail=1
+REDS K4_pin_stops_without_2345_recorded
+RESTORED clean=True
+== ROLLBACK_drift_acl
+MUTATION APPLIED numstat=1/0/supabase/tests/backlog-4170-p4/rollback-4170-p4.sql
+  + GRANT EXECUTE ON FUNCTION public.record_refund(uuid, text, jsonb) TO authenticated;
+RESULT total=298 pass=296 fail=2
+REDS K0_rollback_restores_functions,P0_pre_state_is_base
+RESTORED clean=True
+== ROLLBACK_drift_catalog
+MUTATION APPLIED numstat=1/1/supabase/tests/backlog-4170-p4/rollback-4170-p4.sql
+  - WHERE rp.role_id = r.id AND rp.permission_id = p.id AND r.slug = 'support-supervisor' AND p.key = 'billing.suspend';
+  + WHERE rp.role_id = r.id AND rp.permission_id = p.id AND false;
+RESULT total=298 pass=297 fail=1
+REDS K0_rollback_restores_catalog
+RESTORED clean=True
+== ROLLBACK_drift_comment
+MUTATION APPLIED numstat=1/1/supabase/tests/backlog-4170-p4/rollback-4170-p4.sql
+  - 'BACKLOG-2005a: PAYG purchase-and-unlock. service_role/internal only. Under 2004 per-user advisory lock: short-circuit if already unlocked (R4), record purchase
+  + 'BACKLOG-2005a: PAYG purchase-and-unlock. service_role only. Under 2004 per-user advisory lock: short-circuit if already unlocked (R4), record purchase (+1, ide
+RESULT total=298 pass=296 fail=2
+REDS K0_rollback_restores_functions,P0_pre_state_is_base
+RESTORED clean=True
+== ROLLBACK_pin_removed
+MUTATION APPLIED numstat=1/1/supabase/tests/backlog-4170-p4/rollback-4170-p4.sql
+  - IF r.cur IS NULL OR r.cur NOT IN (r.prev, r.post) THEN
+  + IF false THEN
+RESULT total=298 pass=297 fail=1
+REDS K0_rollback_pin_stops_on_later_body
+RESTORED clean=True
+exit=0
+
+## admin-portal UI mutations (vitest __tests__/action-gates-4170 + __tests__/phone-layout-3841; 39 tests green unmutated)
+== GATE_ONLY_suspend
+MUTATION APPLIED 1/1/admin-portal/app/dashboard/users/[id]/components/UserProfileCard.tsx
+   -              {canSuspend && (
+   +              {(
+FAILED [('__tests__/action-gates-4170/actionRender.test.tsx', 'UserProfileCard suspend (users.suspend) > absent without canSuspend')]
+RESTORED clean=True
+== PAGE_PROP_SWAP
+MUTATION APPLIED 1/1/admin-portal/app/dashboard/users/[id]/page.tsx
+   -  const [profileResult, orgsResult, licensesResult, devicesResult, auditResult, impersonatePermResult, devicesManagePermResult, billingData, suspensi
+   +  const [profileResult, orgsResult, licensesResult, devicesResult, auditResult, impersonatePermResult, devicesManagePermResult, billingData, suspensi
+FAILED [('__tests__/action-gates-4170/userPageActionProps.test.tsx', 'user page action flags (BACKLOG-4170) > only credits.adjust held: only canAdjustCredits is true'), ('__tests__/action-gates-4170/userPageActionProps.test.tsx', 'user page action flags (BACKLOG-4170) > only licenses.edit held: only canEdit is true')]
+RESTORED clean=True
+== PAGE_WRONG_KEY_reinstate
+MUTATION APPLIED 1/1/admin-portal/app/dashboard/users/[id]/page.tsx
+   -        required_permission: 'billing.suspend',
+   +        required_permission: 'billing.manage',
+FAILED [('__tests__/action-gates-4170/userPageActionProps.test.tsx', 'user page action flags (BACKLOG-4170) > each action key is requested by its exact name'), ('__tests__/action-gates-4170/userPageActionProps.test.tsx', 'user page action flags (BACKLOG-4170) > only billing.suspend held: only canReinstate is true')]
+RESTORED clean=True
+== LICENSE_gate_removed
+MUTATION APPLIED 1/1/admin-portal/app/dashboard/users/[id]/components/LicenseCard.tsx
+   -        {primaryLicense && canEdit && (
+   +        {primaryLicense && (
+FAILED [('__tests__/action-gates-4170/actionRender.test.tsx', 'LicenseCard edit (licenses.edit) > absent without canEdit')]
+RESTORED clean=True
+== CREDIT_gate_removed
+MUTATION APPLIED 1/1/admin-portal/app/dashboard/users/[id]/components/BillingCreditsCard.tsx
+   -        {canAdjustCredits && (
+   +        {true && (
+FAILED [('__tests__/action-gates-4170/actionRender.test.tsx', 'BillingCreditsCard actions (credits.adjust, billing.suspend) > canReinstate only: Reinstate shown, grant action hidden'), ('__tests__/action-gates-4170/actionRender.test.tsx', 'BillingCreditsCard actions (credits.adjust, billing.suspend) > no flags: no grant action, Reinstate hidden, suspension still shown')]
+RESTORED clean=True
+== REINSTATE_gate_removed
+MUTATION APPLIED 1/1/admin-portal/app/dashboard/users/[id]/components/SuspensionAction.tsx
+   -            {canReinstate && (
+   +            {true && (
+FAILED [('__tests__/action-gates-4170/actionRender.test.tsx', 'BillingCreditsCard actions (credits.adjust, billing.suspend) > canAdjustCredits only: grant action shown, Reinstate hidden'), ('__tests__/action-gates-4170/actionRender.test.tsx', 'BillingCreditsCard actions (credits.adjust, billing.suspend) > no flags: no grant action, Reinstate hidden, suspension still shown'), ('__tests__/action-gat
+RESTORED clean=True
+== REINSTATE_not_passed
+MUTATION APPLIED 1/1/admin-portal/app/dashboard/users/[id]/components/BillingCreditsCard.tsx
+   -        <SuspensionAction userId={userId} status={suspension} canReinstate={canReinstate} />
+   +        <SuspensionAction userId={userId} status={suspension} />
+FAILED [('__tests__/action-gates-4170/actionRender.test.tsx', 'BillingCreditsCard actions (credits.adjust, billing.suspend) > canReinstate only: Reinstate shown, grant action hidden'), ('__tests__/action-gates-4170/actionRender.test.tsx', 'BillingCreditsCard actions (credits.adjust, billing.suspend) > no flags: no grant action, Reinstate hidden, suspension still shown')]
+RESTORED clean=True
+== MEMBERS_header_ungated
+MUTATION APPLIED 1/1/admin-portal/app/dashboard/organizations/[id]/components/MembersTable.tsx
+   -              {canSuspend && (
+   +              {true && (
+FAILED [('__tests__/action-gates-4170/actionRender.test.tsx', 'MembersTable suspend controls (users.suspend) > canSuspend false: no row Suspend/Unsuspend item, no header checkbox, no row checkboxes')]
+RESTORED clean=True
+== MEMBERS_row_checkbox_ungated
+MUTATION APPLIED 1/1/admin-portal/app/dashboard/organizations/[id]/components/MembersTable.tsx
+   -                {canSuspend && (
+   +                {true && (
+FAILED [('__tests__/action-gates-4170/actionRender.test.tsx', 'MembersTable suspend controls (users.suspend) > canSuspend false: no row Suspend/Unsuspend item, no header checkbox, no row checkboxes')]
+RESTORED clean=True
+== MEMBERS_row_item_ungated
+MUTATION APPLIED 1/1/admin-portal/app/dashboard/organizations/[id]/components/MembersTable.tsx
+   -                    onSuspendToggle={canSuspend ? handleSuspendToggle : undefined}
+   +                    onSuspendToggle={handleSuspendToggle}
+FAILED [('__tests__/action-gates-4170/actionRender.test.tsx', 'MembersTable suspend controls (users.suspend) > canSuspend false: no row Suspend/Unsuspend item, no header checkbox, no row checkboxes')]
+RESTORED clean=True
+== ORG_WRONG_KEY
+MUTATION APPLIED 1/1/admin-portal/app/dashboard/organizations/[id]/page.tsx
+   -    required_permission: 'users.suspend',
+   +    required_permission: 'users.edit',
+FAILED [('__tests__/action-gates-4170/orgPageCanSuspend.test.tsx', 'organization page MembersTable canSuspend (BACKLOG-4170) > every other key held but not users.suspend: canSuspend is false'), ('__tests__/action-gates-4170/orgPageCanSuspend.test.tsx', 'organization page MembersTable canSuspend (BACKLOG-4170) > users.suspend held: canSuspend is true, and the exact key is requested')]
+RESTORED clean=True
+== PHONE_LAYOUT_unfixed
+MUTATION APPLIED 0/1/admin-portal/__tests__/phone-layout-3841/pages.test.tsx
+   -        canSuspend
+FAILED [('__tests__/phone-layout-3841/pages.test.tsx', 'C11 page restores: phone token present, desktop tokens kept > user profile: name row wraps, suspend/impersonate are 44px')]
+RESTORED clean=True
