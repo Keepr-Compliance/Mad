@@ -2,7 +2,7 @@
  * BACKLOG-4186 PR B — the client validator against the SQL validator (control A7) and threshold
  * input (control A14, library half).
  *
- * Corpus: supabase/tests/backlog-4175/corpus.json, 282 cases; `sql` is the SQL validator's answer
+ * Corpus: supabase/tests/backlog-4175/corpus.json, 285 cases; `sql` is the SQL validator's answer
  * recorded by the 4175 keepr-test harness. corpus-sql-reasons.json is the SQL validator's REASON
  * for every case, captured 2026-11-09 by supabase/tests/backlog-4186/capture-corpus-reasons.py
  * (kt-sql on keepr-test, public._sender_rule_set_invalid over the same corpus).
@@ -28,10 +28,10 @@ const sqlReasons = JSON.parse(
 ) as { name: string; reason: string | null }[];
 
 describe('A7: invalidReason agrees with the SQL validator on the 4175 corpus', () => {
-  it('reads the whole corpus (282 cases, 4 where Zod and SQL disagree)', () => {
-    expect(corpus).toHaveLength(282);
+  it('reads the whole corpus (285 cases, 4 where Zod and SQL disagree)', () => {
+    expect(corpus).toHaveLength(285);
     expect(corpus.filter((c) => c.zod !== c.sql)).toHaveLength(4);
-    expect(sqlReasons).toHaveLength(282);
+    expect(sqlReasons).toHaveLength(285);
     expect(sqlReasons.map((r) => r.name)).toEqual(corpus.map((c) => c.name));
   });
 
