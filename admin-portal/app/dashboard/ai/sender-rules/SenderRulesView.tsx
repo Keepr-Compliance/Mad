@@ -111,13 +111,18 @@ function Loaded({
   };
 
   /** Run one write; then always re-read the state (no optimistic update). */
-  const run = async <T,>(op: () => Promise<T>, done: string, at: Place, onOk?: (result: T) => void) => {
+  const run = async <T,>(
+    op: () => Promise<T>,
+    done: string | ((result: T) => string),
+    at: Place,
+    onOk?: (result: T) => void,
+  ) => {
     setBusy(true);
     setNotice(null);
     try {
       const result = await op();
       onOk?.(result);
-      setNotice({ tone: 'ok', message: done, at });
+      setNotice({ tone: 'ok', message: typeof done === 'function' ? done(result) : done, at });
     } catch (e) {
       if (e instanceof SenderRulesError) setNotice({ tone: 'error', message: e.message, blocks: e.blocks, at });
       else setNotice({ tone: 'error', message: 'The change could not be saved.', at });
@@ -181,8 +186,9 @@ function Loaded({
       </p>
     ) : null;
 
-  const basePin = state.pins.find((p) => p.version === baseVersion);
-  const baseNote = basePin && baseVersion !== releasedVersion ? `testing on ${orgLabel(basePin.org_name)}` : undefined;
+  // Every org testing the base version, not just the first: the label must not understate who runs it.
+  const basePins = baseVersion !== releasedVersion ? state.pins.filter((p) => p.version === baseVersion) : [];
+  const baseNote = basePins.length > 0 ? `testing on ${basePins.map((p) => orgLabel(p.org_name)).join(', ')}` : undefined;
 
   const openPromote = async (version: number) => {
     setPending({ type: 'promote', version });
@@ -443,7 +449,14 @@ function Loaded({
           confirmLabel="Make this everyone's"
           loading={busy}
           onCancel={() => setPending(null)}
-          onConfirm={() => run(() => api().promote(pending.version), `v${pending.version} is now everyone's.`, 'running')}
+          onConfirm={() =>
+            // promote re-publishes v<n>'s content as a NEW version; name the version everyone now runs.
+            run(
+              () => api().promote(pending.version),
+              (v) => `v${pending.version}'s rules are now everyone's, as v${v}.`,
+              'running',
+            )
+          }
         />
       )}
 

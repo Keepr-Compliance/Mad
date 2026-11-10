@@ -346,7 +346,8 @@ describe('results next to the action', () => {
     fireEvent.click(within(screen.getByTestId(`pin-${ORG_A}`)).getByRole('button', { name: "Make this everyone's" }));
     fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: "Make this everyone's" }));
     const at = await screen.findByTestId('notice-at-running');
-    expect(at.textContent).toBe("v4 is now everyone's.");
+    // promote re-publishes v4's content as a new version (the fake answers 5): the message names both.
+    expect(at.textContent).toBe("v4's rules are now everyone's, as v5.");
   });
 
   it('undo everything: shows in History', async () => {
@@ -373,6 +374,18 @@ describe('Edit card after a publish', () => {
     await screen.findByTestId('notice-at-publish-test');
     // The fake publish answers version 5.
     expect(description()).toBe("Editing from v5. Changes are compared with everyone's rules (v3).");
+  });
+
+  it('a version tested on two orgs names both (not just the first)', async () => {
+    const state = clone(STATE_MIXED) as SenderRulesAdminState;
+    state.pins = state.pins.map((p) => ({ ...p, version: 4 }));
+    setup({ load: { ok: true, state, released: clone(CONTENT_V3) } });
+    fireEvent.click(within(screen.getByTestId('version-4')).getByRole('button', { name: 'Edit from this version' }));
+    await waitFor(() =>
+      expect(description()).toBe(
+        "Editing from v4 (testing on Test Org A, Test Org B). Changes are compared with everyone's rules (v3).",
+      ),
+    );
   });
 
   it('a version under test is named with its org', async () => {
