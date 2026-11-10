@@ -5,13 +5,16 @@ Usage: compose.py <out.sql> [--applied]
 Order: [--applied: record the 9 functions' current state] -> rollback file (so the call always starts
 from the production text) -> prelude (fixtures + P0 matrix read BEFORE PR2b) -> migration TWICE (the
 second apply proves it re-runs cleanly through its own pre-pin) -> controls.
---applied adds KA: the state keepr-test held before this call equals what the migration file produces.
+--applied adds KA: the state keepr-test held before this call equals what the migration file produces,
+with 20261111125000 (PR2c) replayed after it in version order (KA only).
 Every call ends in RAISE, so the whole call rolls back. The migration is read from the working tree, so
 a mutation applied to the file by mutate.py is what runs.
 """
 import hashlib, json, os, re, sys
 here = os.path.dirname(os.path.abspath(__file__))
 MIG = os.path.join(here, '..', '..', 'migrations', '20261111115000_backlog_4170_support_group_e_permissions.sql')
+# BACKLOG-4170 PR2c re-creates 3 of the 9; replayed after this file in version order for KA only
+P2C = os.path.join(here, '..', '..', 'migrations', '20261111125000_backlog_4170_support_requester_checks.sql')
 # harness key (name/nargs) -> regprocedure signature, in the migration's order
 SIGS = [
     ('support_add_message/5', 'public.support_add_message(uuid,text,text,text,text)'),
@@ -53,15 +56,16 @@ if __name__ == '__main__':
     body = open(os.path.join(here, 'controls.sql')).read()
     rb = open(os.path.join(here, 'rollback-4170-p2b.sql')).read()
     m = open(MIG).read()
-    for tag in ('$rb$', '$mg$', '$drv$'):
-        assert tag not in rb and tag not in m, tag
+    m2c = open(P2C).read()
+    for tag in ('$rb$', '$mg$', '$drv$', '$p2c$'):
+        assert tag not in rb and tag not in m and tag not in m2c, tag
     post = bodies(m)
     assert len(post) == 9, post
     assert pre.count('__SIGS__') == 1
     pre = pre.replace('__SIGS__', sigs_values())
-    for ph in ('__ROLLBACK__', '__MIGRATION__', '__POSTMD5__'):
+    for ph in ('__ROLLBACK__', '__MIGRATION__', '__POSTMD5__', '__PR2C__'):
         assert body.count(ph) == 1, ph
-    body = body.replace('__ROLLBACK__', rb).replace('__MIGRATION__', m).replace('__POSTMD5__', json.dumps(post))
+    body = body.replace('__ROLLBACK__', rb).replace('__MIGRATION__', m).replace('__POSTMD5__', json.dumps(post)).replace('__PR2C__', m2c)
     text = (APPLIED if '--applied' in args else '') + rb + '\n' + pre + '\n' + m + '\n' + m + '\n' + body
     open(out, 'w').write(text)
     print(out, len(text))
