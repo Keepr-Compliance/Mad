@@ -48,6 +48,8 @@ export interface RulesCardProps {
   readOnly: boolean;
   /** The version the draft was loaded from (owner only). */
   baseVersion?: number;
+  /** Where the base version runs, when it is a test (e.g. "testing on Org A"). */
+  baseNote?: string;
   releasedVersion: number;
   onChange?: (next: SenderRuleSet) => void;
   thresholdText?: Record<ThresholdKey, string>;
@@ -59,6 +61,7 @@ export function RulesCard({
   content,
   readOnly,
   baseVersion,
+  baseNote,
   releasedVersion,
   onChange,
   thresholdText,
@@ -111,7 +114,7 @@ export function RulesCard({
             {readOnly
               ? `The rules every org runs (v${releasedVersion}).`
               : baseVersion !== undefined && baseVersion !== releasedVersion
-                ? `Editing from v${baseVersion}. Changes are compared with everyone's rules (v${releasedVersion}).`
+                ? `Editing from v${baseVersion}${baseNote ? ` (${baseNote})` : ''}. Changes are compared with everyone's rules (v${releasedVersion}).`
                 : `Editing from everyone's rules (v${releasedVersion}).`}
           </CardDescription>
         </div>
