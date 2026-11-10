@@ -2,7 +2,8 @@
 """BACKLOG-3962 PR1: build one SQL text for a single kt-sql call on keepr-test.
 
 Usage: compose.py <out.sql> <mode>
-  mode = base | <mutant> | rollback
+  mode = base | <mutant> | rollback | live
+  live: controls.sql only, against the objects as applied on the venue.
   base / mutants: migration (mutated for a mutant) + controls.sql. Ends in RAISE: nothing persists.
   rollback: migration + rollback-3962-pr1.sql + a probe that every object is gone.
 A mutation is an exact, once-only text replacement; it must change the text, else exit 2
@@ -73,12 +74,14 @@ if mode in MUTANTS:
             if l[:1] in '+-' and not l.startswith(('+++', '---'))]
     print(f'MUTATION APPLIED {mode}: ' + ' | '.join(diff)[:400])
     mig = m
-elif mode not in ('base', 'rollback'):
+elif mode not in ('base', 'rollback', 'live'):
     print(f'unknown mode {mode}', file=sys.stderr)
     sys.exit(2)
 
 head = f"SELECT set_config('p3962.mode', '{mode}', true);\n"
-if mode == 'rollback':
+if mode == 'live':
+    text = head + ctl
+elif mode == 'rollback':
     probe = """
 DO $rb$
 BEGIN

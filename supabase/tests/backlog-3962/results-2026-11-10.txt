@@ -27,3 +27,5 @@ MUTATION APPLIED M_r5_manual_counts: -  IF v_row.status = 'verified' AND p_sourc
 MUTATION APPLIED M_grant_authenticated: +GRANT EXECUTE ON FUNCTION public._domain_claim_record_check(uuid, uuid, text[], boolean, text) TO authenticated;
   => BACKLOG-3962: authenticated can execute public._domain_claim_record_check(uuid, uuid, text[], boolean, text)
   => P3962_RESULT {"mode": "rollback", "table": false, "functions": 0}
+Applied on keepr-test 2026-11-10 (POSTCHECK passed); schema_migrations row (20261112100000, backlog_3962_domain_claims).
+live (controls.sql against the applied objects): P3962_RESULT {fail: 0, mode: live, pass: 63, reds: {}}; domain_claims rows afterwards: 0.
