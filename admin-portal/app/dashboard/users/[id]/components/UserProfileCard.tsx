@@ -42,6 +42,8 @@ interface UserProfileCardProps {
   user: UserProfile;
   canImpersonate?: boolean;
   isOwnProfile?: boolean;
+  /** users.suspend (BACKLOG-4170): shows Suspend / Unsuspend. */
+  canSuspend?: boolean;
   /** BACKLOG-3976: the viewer holds users.edit. The server checks it again on every change. */
   canEditRole?: boolean;
   /** BACKLOG-3976: this user's memberships; personal organizations are never offered for a role change. */
@@ -52,6 +54,7 @@ export function UserProfileCard({
   user,
   canImpersonate = false,
   isOwnProfile = false,
+  canSuspend = false,
   canEditRole = false,
   memberships = [],
 }: UserProfileCardProps) {
@@ -92,11 +95,13 @@ export function UserProfileCard({
                   isOwnProfile={isOwnProfile}
                 />
               )}
-              <SuspendDialog
-                userId={user.id}
-                userName={displayName}
-                isSuspended={user.status === 'suspended'}
-              />
+              {canSuspend && (
+                <SuspendDialog
+                  userId={user.id}
+                  userName={displayName}
+                  isSuspended={user.status === 'suspended'}
+                />
+              )}
             </div>
           </div>
           {user.email && (

@@ -66,7 +66,7 @@ export default async function UserDetailPage({
   const serviceSupabase = createServiceClient();
 
   // Fetch target user profile and check permissions in parallel
-  const [profileResult, orgsResult, licensesResult, devicesResult, auditResult, impersonatePermResult, devicesManagePermResult, billingData, suspensionStatus, usersEditPermResult] =
+  const [profileResult, orgsResult, licensesResult, devicesResult, auditResult, impersonatePermResult, devicesManagePermResult, billingData, suspensionStatus, usersEditPermResult, suspendPermResult, licensesEditPermResult, creditsAdjustPermResult, billingSuspendPermResult] =
     await Promise.all([
       supabase
         .from('users')
@@ -104,6 +104,23 @@ export default async function UserDetailPage({
       supabase.rpc('has_permission', {
         check_user_id: adminUser.id,
         required_permission: 'users.edit',
+      }),
+      // BACKLOG-4170: each action is shown only to holders of the key its RPC checks.
+      supabase.rpc('has_permission', {
+        check_user_id: adminUser.id,
+        required_permission: 'users.suspend',
+      }),
+      supabase.rpc('has_permission', {
+        check_user_id: adminUser.id,
+        required_permission: 'licenses.edit',
+      }),
+      supabase.rpc('has_permission', {
+        check_user_id: adminUser.id,
+        required_permission: 'credits.adjust',
+      }),
+      supabase.rpc('has_permission', {
+        check_user_id: adminUser.id,
+        required_permission: 'billing.suspend',
       }),
     ]);
 
@@ -185,6 +202,7 @@ export default async function UserDetailPage({
         user={profile}
         canImpersonate={impersonatePermResult.data === true}
         isOwnProfile={adminUser.id === id}
+        canSuspend={suspendPermResult.data === true}
         canEditRole={usersEditPermResult.data === true}
         memberships={orgMemberships}
       />
@@ -195,11 +213,17 @@ export default async function UserDetailPage({
       {/* Two-column grid for org + account */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <OrganizationCard memberships={orgMemberships} />
-        <LicenseCard licenses={licensesResult.data ?? []} />
+        <LicenseCard licenses={licensesResult.data ?? []} canEdit={licensesEditPermResult.data === true} />
       </div>
 
       {/* Billing & Credits (support-facing; credit grant/clawback is live) */}
-      <BillingCreditsCard data={billingData} userId={id} suspension={suspensionStatus} />
+      <BillingCreditsCard
+        data={billingData}
+        userId={id}
+        suspension={suspensionStatus}
+        canAdjustCredits={creditsAdjustPermResult.data === true}
+        canReinstate={billingSuspendPermResult.data === true}
+      />
 
       {/* Devices */}
       <DevicesTable

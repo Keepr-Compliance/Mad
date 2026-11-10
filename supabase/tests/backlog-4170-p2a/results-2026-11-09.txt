@@ -1,0 +1,60 @@
+BACKLOG-4170 PR2a harness results, keepr-test, 2026-11-09. Details: pm_comments on BACKLOG-4170.
+int base int-portal/admin-functions-248 @ f4b72af3c; migration commit bae5c2f3e.
+migration file md5 3124ca1d5c28bc9e5f4a72fb9397e431; rollback file md5 dbbaad1ecf15ebdc675e5f5121254c73
+
+State per signature: production md5(prosrc) -> this file's md5, production EXECUTE holders
+(production and keepr-test identical before PR2a: md5(prosrc), proacl, proconfig, provolatile).
+  support_agent_analytics/1            04e8b2ac36c410123ffcaba2831a0dbd -> 18abe4fd25bbfd56d4138b424041f987  PUBLIC anon authenticated service_role
+  support_assign_ticket/2              cdc27dba988c5cd2e2e1e05361372e3c -> c30a516fb95a22f71ba1bdfc094a12e9  authenticated service_role
+  support_bulk_update_tickets/3        acdd7bf7ee40bc6ba872554438045906 -> 31fd7004f95c8ab28622ecc2d048589c  PUBLIC anon authenticated service_role
+  support_bulk_update_tickets/5        b33cb66459a64d4f3074ead0abbdfb61 -> 83b9bd18035e342f8825fd0fce11328c  PUBLIC anon authenticated service_role
+  support_bulk_update_tickets/6        51a032512a9aa2952b1e44b5de9f5514 -> 244263a960e0110fb18af78108c7eec4  PUBLIC anon authenticated service_role
+  support_create_template/3            a9583ac82fb77119ab5c655602961f1a -> 8ada3005bc8ddd738376f6069c944556  PUBLIC anon authenticated service_role
+  support_delete_template/1            e49a16a0652947c77e1a938ebf613f3f -> 0cb0fc431406a837c4e1be706813e750  authenticated service_role
+  support_update_template/5            faa1972e45968cabb372a7c19f083e26 -> 90555dd611cdf36ae06d52ce83b3aa32  authenticated service_role
+  support_list_all_templates/0         9b7aab726245c7d79f4f51fc830f46a1 -> 0c8984ec590a48c3e9ce41c43a027e16  authenticated service_role
+  support_list_templates/0             e0b516b7e4fa7f31d3069689bd3c8c34 -> 7f7806abab505a3a7cb798b45f62fd7f  authenticated service_role
+  support_get_related_tickets/1        f07af0dc30c78077ec0f92aec548cc15 -> 1829c1423857e3548a3828ec6114e70b  PUBLIC anon authenticated service_role
+  support_get_ticket_stats/0           143268d8467069815725b63d46321c0f -> 7eefb879c71d3f2d3f809417f1ab5ffc  authenticated service_role
+  support_link_tickets/3               670b5c231766c25c08f138fb326b4068 -> a08829b6b19d5ba34b3c91790a6734ce  PUBLIC anon authenticated service_role
+  support_unlink_tickets/2             471f1d402dd9eccd4f13500d75d74fdd -> 89c1472d01a8da65661eb2a136143728  PUBLIC anon authenticated service_role
+  support_list_agents/0                c43c764d2e8774598ca42178b6278494 -> d437bec2c5b791796aa8101da8ab82dc  PUBLIC anon authenticated service_role
+  support_add_participant/4            ab0ebdddf278d4cd42189c1108a9b424 -> ee07cfcd6213395faf0eda77c896d904  PUBLIC anon authenticated service_role
+  support_remove_participant/1         5bf202181373c0a7b5263b489bdc874e -> da84180d65d465cd48e62ead1d1dd324  PUBLIC anon authenticated service_role
+  support_requester_recent_tickets/1   386d6f8045eb6cbdcaa745354851bac3 -> 5020c5e27cf4657622b37b72c298df4d  PUBLIC anon authenticated service_role
+  support_search_requesters/1          3ede1502ca6eaa20350f3eb6ee2b4620 -> c714b28d1dfd9d7c1baaabd8af2e9f77  PUBLIC anon authenticated service_role
+  support_search_tickets_for_link/2    ff5ea5c11488dea9623d050de194a0eb -> d65d34da1f77e2429e61b878b6db7294  PUBLIC anon authenticated service_role
+  support_update_ticket_category/2     6d72b79f3ab18e4184ae5a6f1bebdc43 -> 903c220241bf1a91ac0e1aa48fba32fd  authenticated service_role
+  support_update_ticket_priority/2     e05219f24e3214566285f714ea4c575b -> 3fbf0e72a6010a207c5dd249674becd3  authenticated service_role
+  support_update_ticket_status/3       ca21d75b52989bb088da077908989bf3 -> c960e205a9b5245686e0b52615c1c72f  authenticated service_role
+  ACL on all 23 after: {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+
+== run.sh (rollback -> fixtures + P0 -> migration x2 -> controls)
+total=266 pass=266 fail=0
+  matrix 9 callers x 23 cases = 207 rows swept (u0 zero-key internal, support.view, support.manage,
+  support.admin, users.view decoy, real Super Admin, customer, authenticated with NULL sub, anon).
+  Allowed rows = the production body's reply (pinned from Super Admin, P0); every denied row asserts
+  the exact pre-state refusal (SQLSTATE + text); anon asserts 'permission denied for function <name>'.
+  P0 x4; B0 x3 (Super Admin, customer, NULL sub unchanged); K1 x23 (guard IF line); K2 x23 (grants,
+  ACL entry for entry); K3 x3; K4 (pin stops on drift); K0 (rollback restores production state)
+== applied on keepr-test (kt-sql <migration> + ledger row 20261111110000), run.sh --applied
+total=267 pass=267 fail=0   (KA: applied state equals the file)
+fixtures left: 0 users, 0 roles, 0 templates, 0 renamed functions
+backlog-4170-p1/run.sh --applied (PR1 applied on keepr-test): total=119 pass=119 fail=0
+check-migration-grants --base origin/int-portal/admin-functions-248: 1 file, 0 failures, 0 warnings
+
+== mutate.py all (266 controls each; each MUTATION APPLIED printed, RESTORED clean=True)
+OR_not_AND               total=266 pass=261 fail=5  reds=K1_guard_support_get_ticket_stats/0,M_u0_none_support_get_ticket_stats/0,M_u_other_users.view_support_get_ticket_stats/0,M_u_support.admin_support_get_ticket_stats/0,M_u_support.manage_support_get_ticket_stats/0
+WRONG_KEY                total=266 pass=264 fail=2  reds=K1_guard_support_assign_ticket/2,M_u_support.view_support_assign_ticket/2
+TEMPLATES_view           total=266 pass=262 fail=4  reds=K1_guard_support_create_template/3,M_u_support.admin_support_create_template/3,M_u_support.manage_support_create_template/3,M_u_support.view_support_create_template/3
+LIST_TEMPLATES_narrowed  total=266 pass=262 fail=4  reds=K1_guard_support_list_templates/0,M_u_support.admin_support_list_templates/0,M_u_support.manage_support_list_templates/0,M_u_support.view_support_list_templates/0
+ANON_not_revoked         total=266 pass=264 fail=2  reds=K2_grants_support_search_requesters/1,M_anon_support_search_requesters/1
+REFUSAL_text_changed     total=266 pass=257 fail=9  reds=B0_u_cust_unchanged,B0_u_nullsub_unchanged,K1_guard_support_remove_participant/1,M_u0_none_support_remove_participant/1,M_u_cust_support_remove_participant/1,M_u_nullsub_support_remove_participant/1,M_u_other_users.view_support_remove_participant/1,M_u_support.admin_support_remove_participant/1,M_u_support.manage_support_remove_participant/1
+D_left                   total=266 pass=260 fail=6  reds=K1_guard_support_bulk_update_tickets/5,K3_bodies_differ_from_prod,M_u0_none_support_bulk_update_tickets/5,M_u_other_users.view_support_bulk_update_tickets/5,M_u_support.admin_support_bulk_update_tickets/5,M_u_support.manage_support_bulk_update_tickets/5
+
+Notes:
+- support_bulk_update_tickets has three overloads whose trailing parameters have defaults, so a call
+  with 3 or 5 arguments is ambiguous (42725) on production too. The /3 and /5 cases rename the longer
+  overloads inside the rolled-back call subtransaction so each body is reached by its own call.
+- The harness does not read or write admin_audit_logs; the PR1 review's second billing.* audit row
+  carry-over applies to the PR1 harness only.
