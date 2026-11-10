@@ -983,9 +983,10 @@ describe('3934: open Agent subscription + brokerage membership -> one alert per 
     expect(brokerageAlerts()).toEqual([{ count: 1, subscription_ids: sub.id }]);
     expect(r.brokerageMembers).toBe(1);
     expect(JSON.stringify(brokerageAlerts())).not.toContain(USER);
-    // Alert only: nothing written, nothing cancelled.
+    // Nothing cancelled here. BACKLOG-3850 (ruling 89ef80a7, F1 option a): exactly one
+    // cancel_agent_on_brokerage_join row is enqueued; the handler ends the plan.
     expect(db.callsTo('billing_subscriptions', 'update')).toEqual([]);
-    expect(db.rows('billing_outbox')).toEqual([]);
+    expect(db.rows('billing_outbox').map((r) => r.kind)).toEqual(['cancel_agent_on_brokerage_join']);
     expect(stripeCalls.filter((c) => !['subscriptions.list', 'subscriptions.retrieve'].includes(c.op))).toEqual([]);
     expect(alerts('reconcile_mismatch')).toEqual([]);
   });
@@ -1024,6 +1025,95 @@ describe('3934: open Agent subscription + brokerage membership -> one alert per 
     await reconcileAgentSubscriptions(deps('test'));
     expect(brokerageAlerts()).toEqual([]);
     expect(stripeCalls.filter((c) => c.op === 'subscriptions.list' && (c.args[0] as Obj).customer)).toEqual([]);
+  });
+
+  // ---- BACKLOG-3850: the reconcile enqueue and the alert rule (ruling 89ef80a7, F1 + F2) ----
+  const joinRows = () => db.rows('billing_outbox').filter((r) => r.kind === 'cancel_agent_on_brokerage_join');
+  function waiting(over: Row = {}): Row {
+    return {
+      id: 'ob-join-1',
+      stripe_mode: 'test',
+      kind: 'cancel_agent_on_brokerage_join',
+      user_id: USER,
+      dedupe_key: 'join-cancel:test:trigger:1',
+      run_after: new Date(NOW.getTime() - 10 * 60_000).toISOString(),
+      created_at: new Date(NOW.getTime() - 10 * 60_000).toISOString(),
+      processed_at: null,
+      payload: {},
+      ...over,
+    };
+  }
+
+  it('3850 R1: enqueue payload = the trigger shape + source reconcile, key per member row and UTC day', async () => {
+    payingAgent(SUB_VOID, [member(USER)]);
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(joinRows()).toEqual([
+      expect.objectContaining({
+        stripe_mode: 'test',
+        user_id: USER,
+        dedupe_key: `join-cancel:test:${USER}:reconcile:om-${USER}-${BRK}:2026-11-20`,
+        payload: { brokerage_organization_id: BRK, member_id: `om-${USER}-${BRK}`, stripe_customer_id: SUB_VOID.customer, source: 'reconcile' },
+      }),
+    ]);
+    expect(r.joinCancelEnqueued).toBe(1);
+  });
+
+  it('3850 R2: a fresh waiting row (10 min, not parked) -> NO alert, no second row', async () => {
+    payingAgent(SUB_VOID, [member(USER)]);
+    db.rows('billing_outbox').push(waiting());
+    const r = await reconcileAgentSubscriptions(deps());
+    expect(brokerageAlerts()).toEqual([]);
+    expect(r.brokerageMembers).toBe(0);
+    expect(joinRows()).toHaveLength(1);
+    expect(r.joinCancelEnqueued).toBe(0);
+  });
+
+  it('3850 R3: a waiting row older than one hour -> ONE alert, no second row', async () => {
+    payingAgent(SUB_VOID, [member(USER)]);
+    db.rows('billing_outbox').push(waiting({ created_at: new Date(NOW.getTime() - 61 * 60_000).toISOString() }));
+    await reconcileAgentSubscriptions(deps());
+    expect(brokerageAlerts()).toEqual([{ count: 1, subscription_ids: SUB_VOID.id }]);
+    expect(joinRows()).toHaveLength(1);
+  });
+
+  it('3850 R4: a parked waiting row (run_after infinity), even fresh -> ONE alert, no second row', async () => {
+    payingAgent(SUB_VOID, [member(USER)]);
+    db.rows('billing_outbox').push(waiting({ run_after: 'infinity' }));
+    await reconcileAgentSubscriptions(deps());
+    expect(brokerageAlerts()).toEqual([{ count: 1, subscription_ids: SUB_VOID.id }]);
+    expect(joinRows()).toHaveLength(1);
+  });
+
+  it('3850 R5 (F2): a paused Agent plan -> one row enqueued, no alert', async () => {
+    payingAgent(SUB_PAUSED, [member(USER)]);
+    await reconcileAgentSubscriptions(deps());
+    expect(joinRows()).toHaveLength(1);
+    expect(brokerageAlerts()).toEqual([]);
+  });
+
+  it('3850 R6: canceled or brokerage-kind only -> no row', async () => {
+    payingAgent(SUB_VOID_CANCELED, [member(USER)]);
+    await reconcileAgentSubscriptions(deps());
+    expect(joinRows()).toEqual([]);
+    payingAgent(SUB_BROKERAGE, [member(USER)]);
+    await reconcileAgentSubscriptions(deps());
+    expect(joinRows()).toEqual([]);
+  });
+
+  it('3850 C12: two runs -> ONE row (the second sees it waiting)', async () => {
+    payingAgent(SUB_VOID, [member(USER)]);
+    await reconcileAgentSubscriptions(deps());
+    const second = await reconcileAgentSubscriptions(deps());
+    expect(joinRows()).toHaveLength(1);
+    expect(second.joinCancelEnqueued).toBe(0);
+  });
+
+  it('3850: a processed row does not count as waiting -> a new row', async () => {
+    payingAgent(SUB_VOID, [member(USER)]);
+    db.rows('billing_outbox').push(waiting({ processed_at: new Date(NOW.getTime() - 5 * 60_000).toISOString() }));
+    await reconcileAgentSubscriptions(deps());
+    expect(joinRows()).toHaveLength(2);
+    expect(brokerageAlerts()).toEqual([{ count: 1, subscription_ids: SUB_VOID.id }]);
   });
 
   it('two such users -> still ONE alert carrying both ids', async () => {
