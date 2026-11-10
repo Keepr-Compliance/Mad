@@ -115,6 +115,9 @@ for mode in modes:
         try:
             d = json.loads(o[o.index('{'):o.rindex('}') + 1])
             print('RESULT total=%s pass=%s fail=%s reds=%s' % (d['total'], d['pass'], d['fail'], ','.join(sorted(d['reds']))))
+            for k in sorted(d['reds']):
+                if k[0] in 'RDK':
+                    print('    %s: %s' % (k, d['reds'][k][:200]))
             if not d['total']:
                 print('ZERO CONTROLS RAN')
             summary.append((mode, d['total'], d['fail']))
