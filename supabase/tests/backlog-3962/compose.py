@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """BACKLOG-3962 PR1: build one SQL text for a single kt-sql call on keepr-test.
 
-Usage: compose.py <out.sql> <mode>
+Usage: compose.py <out.sql> <mode> [--applied]
   mode = base | <mutant> | rollback | live
   live: controls.sql only, against the objects as applied on the venue.
   base / mutants: migration (mutated for a mutant) + controls.sql. Ends in RAISE: nothing persists.
@@ -38,6 +38,12 @@ MUTANTS = {
     # (b) R1 / C4b: record_check's inside role check dropped
     'M_record_check_no_role_check': [("    RAISE EXCEPTION 'Not allowed' USING ERRCODE = '42501';\n  END IF;\n  IF p_source IS NULL",
                                       "    NULL;\n  END IF;\n  IF p_source IS NULL")],
+    # R1 / C4b: begin_check's inside role check dropped
+    'M_begin_check_no_role_check': [("    RAISE EXCEPTION 'Not allowed' USING ERRCODE = '42501';\n  END IF;\n\n  UPDATE public.domain_claims c\n",
+                                     "    NULL;\n  END IF;\n\n  UPDATE public.domain_claims c\n")],
+    # R1 / C4b: due_for_recheck's inside role check dropped
+    'M_due_no_role_check': [("    RAISE EXCEPTION 'Not allowed' USING ERRCODE = '42501';\n  END IF;\n  RETURN QUERY\n",
+                             "    NULL;\n  END IF;\n  RETURN QUERY\n")],
     # (c) one verified claim per domain: the partial unique index dropped
     'M_no_verified_unique': [("CREATE UNIQUE INDEX domain_claims_one_verified_per_domain\n  ON public.domain_claims (domain) WHERE status = 'verified';\n",
                               "")],
@@ -56,6 +62,9 @@ MUTANTS = {
 }
 
 out, mode = sys.argv[1], sys.argv[2]
+# --applied: the venue already has the migration; drop it first INSIDE the same transaction
+# (the final RAISE undoes the drop too).
+applied = '--applied' in sys.argv[3:]
 mig = open(MIG).read()
 ctl = open(os.path.join(here, 'controls.sql')).read()
 
@@ -79,6 +88,8 @@ elif mode not in ('base', 'rollback', 'live'):
     sys.exit(2)
 
 head = f"SELECT set_config('p3962.mode', '{mode}', true);\n"
+if applied and mode != 'live':
+    head += open(RB).read() + '\n'
 if mode == 'live':
     text = head + ctl
 elif mode == 'rollback':

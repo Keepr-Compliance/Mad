@@ -29,3 +29,9 @@ MUTATION APPLIED M_grant_authenticated: +GRANT EXECUTE ON FUNCTION public._domai
   => P3962_RESULT {"mode": "rollback", "table": false, "functions": 0}
 Applied on keepr-test 2026-11-10 (POSTCHECK passed); schema_migrations row (20261112100000, backlog_3962_domain_claims).
 live (controls.sql against the applied objects): P3962_RESULT {fail: 0, mode: live, pass: 63, reds: {}}; domain_claims rows afterwards: 0.
+Added after apply (KEEPR_3962_APPLIED=1 bash run.sh ..., drop-first inside the same rolled-back transaction):
+base: P3962_RESULT {fail: 0, mode: base, pass: 63}
+MUTATION APPLIED M_begin_check_no_role_check -> fail 1: T19b_C4b_begin_check_granted_still_refused
+MUTATION APPLIED M_due_no_role_check -> fail 1: T19c_C4b_due_granted_still_refused
+MUTATION APPLIED M_record_check_no_role_check -> fail 6 (as before)
+rollback: table false, functions 0. keepr-test afterwards: domain_claims present, schema_migrations row present.
