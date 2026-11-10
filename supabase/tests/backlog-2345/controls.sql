@@ -104,9 +104,13 @@ BEGIN
   BEGIN
     BEGIN
       PERFORM pg_temp.as_service();
+      -- run under the real database role so the EXECUTE grant is exercised (jwt claims alone are not)
+      PERFORM set_config('role', 'service_role', true);
       v := public.record_refund(u, tx, jsonb_build_object('webhook_event_id', 'evt_p2345_r_' || gen_random_uuid(), 'stripe_payment_intent_id', 'pi_test_p2345_r'));
+      PERFORM set_config('role', 'none', true);
       RETURN v::text;
     EXCEPTION WHEN OTHERS THEN
+      PERFORM set_config('role', 'none', true);
       RETURN 'ERR ' || SQLSTATE || ' ' || left(SQLERRM, 80);
     END;
   END $b$$f$;
@@ -147,7 +151,7 @@ BEGIN
     rr text := 'public.record_refund(uuid,text,jsonb)';
     bs text := E'\n    -- Backstop: this write must not leave the balance below zero.\n    IF public.get_credit_balance(p_user_id) < 0 THEN\n      RAISE EXCEPTION ''Balance invariant violated'';\n    END IF;\n';
     cap text := $q$    v_refundable := LEAST(v_refundable, GREATEST(v_balance, 0));$q$;
-    out text;
+    out text; a1 text; a2 text;
   BEGIN
     CASE m
     WHEN 'base' THEN RETURN 'none';
@@ -182,6 +186,19 @@ BEGIN
     RETURN jsonb_build_object('refunded', true, 'already', false, 'unlock_id', v_unlock.id, 'credit_already_consumed', true);
   END IF;
   IF v_refundable > 0 THEN$q$);
+    -- R2 control: service_role loses its explicit grant AND is revoked (dropping the GRANT alone is
+    -- vacuous: the explicit service_role grant is already in the catalog). Proof = proacl change.
+    WHEN 'no_service_grant' THEN
+      a1 := (SELECT p.proacl::text FROM pg_proc p WHERE p.oid = to_regprocedure(rr));
+      EXECUTE 'REVOKE EXECUTE ON FUNCTION public.record_refund(uuid,text,jsonb) FROM service_role';
+      a2 := (SELECT p.proacl::text FROM pg_proc p WHERE p.oid = to_regprocedure(rr));
+      IF a1 = a2 THEN RAISE EXCEPTION 'MUTATION NOT APPLIED: proacl unchanged'; END IF;
+      RETURN 'MUTATION APPLIED acl ' || left(md5(a1), 8) || '->' || left(md5(a2), 8) || ' ' || a2;
+    -- S2: gate alone (equivalent while GREATEST floors at 0), and gate + floor removed
+    WHEN 'gate_ne0' THEN RETURN pg_temp.mut_fn(rr, $q$  IF v_refundable > 0 THEN$q$, $q$  IF v_refundable <> 0 THEN$q$);
+    WHEN 'no_floor0_gate_ne0' THEN
+      out := pg_temp.mut_fn(rr, $q$v_refundable := GREATEST(v_purchase_amount - v_debits_drawn, 0);$q$, $q$v_refundable := v_purchase_amount - v_debits_drawn;$q$);
+      RETURN out || ' + ' || pg_temp.mut_fn(rr, $q$  IF v_refundable > 0 THEN$q$, $q$  IF v_refundable <> 0 THEN$q$);
     ELSE RAISE EXCEPTION 'unknown mode %', m;
     END CASE;
   END $b$$f$;
@@ -276,6 +293,21 @@ BEGIN
     r := r || jsonb_build_object('G_ledger_sum_2', pg_temp.ck(pg_temp.sum_(u) = 2, pg_temp.sum_(u)::text || ' ' || s));
     r := r || jsonb_build_object('G_refunded_at_set', pg_temp.ck(pg_temp.refunded(u, 'tx-g'), s));
 
+    -- ===== O: over-drawn purchase (no producer emits this today): 1-unit purchase, TWO debits
+    -- funded_by it. The second debit is a direct insert. Expect: nothing taken back, no row. =====
+    u := pg_temp.mk_user();
+    PERFORM pg_temp.adjust(u, 5);
+    PERFORM pg_temp.payg(u, 'tx-o');
+    INSERT INTO public.credit_ledger (user_id, entry_type, amount, funded_by, funding_source, metadata)
+    SELECT u, 'debit', -1, d.funded_by, 'purchase', '{}'::jsonb
+      FROM public.credit_ledger d WHERE d.user_id = u AND d.entry_type = 'debit';
+    r := r || jsonb_build_object('O_setup_overdrawn', pg_temp.ck(
+      (SELECT count(*) FROM public.credit_ledger WHERE user_id = u AND entry_type = 'debit') = 2 AND pg_temp.sum_(u) = 4, pg_temp.sum_(u)::text));
+    s := pg_temp.refund(u, 'tx-o');
+    r := r || jsonb_build_object('O_ledger_sum_4', pg_temp.ck(pg_temp.sum_(u) = 4, pg_temp.sum_(u)::text || ' ' || s));
+    r := r || jsonb_build_object('O_no_refund_row', pg_temp.ck(pg_temp.refund_rows(u) = '0:0', pg_temp.refund_rows(u)));
+    r := r || jsonb_build_object('O_refunded_at_set', pg_temp.ck(COALESCE(pg_temp.refunded(u, 'tx-o'), false), s));
+
     -- ===== N: no unlock row -> unchanged exit =====
     u := pg_temp.mk_user();
     pi := pg_temp.mk_pi(u, 'tx-n');
@@ -288,16 +320,22 @@ BEGIN
     u := pg_temp.mk_user();
     PERFORM pg_temp.as_user(u);
     BEGIN
+      -- real role: with service_role-only EXECUTE a signed-in user is stopped by the grant
+      -- ("permission denied"); the inner guard ("Unauthorized") is the second line
+      PERFORM set_config('role', 'authenticated', true);
       PERFORM public.record_refund(u, 'tx-a', '{}'::jsonb);
+      PERFORM set_config('role', 'none', true);
       r := r || jsonb_build_object('A_user_refused', 'FAIL no error');
     EXCEPTION WHEN OTHERS THEN
-      r := r || jsonb_build_object('A_user_refused', pg_temp.ck(SQLERRM = 'Unauthorized', SQLERRM));
+      PERFORM set_config('role', 'none', true);
+      r := r || jsonb_build_object('A_user_refused', pg_temp.ck(SQLERRM = 'Unauthorized' OR SQLERRM LIKE 'permission denied%', SQLERRM));
     END;
 
-    -- ===== catalog: anon refused, authenticated + service_role kept, security definer =====
+    -- ===== catalog: only service_role holds EXECUTE (PUBLIC, anon, authenticated do not), security definer =====
     r := r || jsonb_build_object('C_grants_secdef', pg_temp.ck(
       NOT has_function_privilege('anon', 'public.record_refund(uuid,text,jsonb)', 'EXECUTE')
-      AND has_function_privilege('authenticated', 'public.record_refund(uuid,text,jsonb)', 'EXECUTE')
+      AND NOT has_function_privilege('authenticated', 'public.record_refund(uuid,text,jsonb)', 'EXECUTE')
+      AND (SELECT p.proacl::text FROM pg_proc p WHERE p.oid = 'public.record_refund(uuid,text,jsonb)'::regprocedure) = '{postgres=X/postgres,service_role=X/postgres}'
       AND has_function_privilege('service_role', 'public.record_refund(uuid,text,jsonb)', 'EXECUTE')
       AND (SELECT p.prosecdef FROM pg_proc p WHERE p.oid = 'public.record_refund(uuid,text,jsonb)'::regprocedure),
       (SELECT p.proacl::text FROM pg_proc p WHERE p.oid = 'public.record_refund(uuid,text,jsonb)'::regprocedure)));

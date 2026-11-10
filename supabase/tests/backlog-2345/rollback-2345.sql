@@ -1,8 +1,9 @@
 -- BACKLOG-2345 rollback (keepr-test; production only if the migration was applied there).
 -- Restores the deployed 20260715_backlog_2005_stripe_payg.sql body of record_refund verbatim (the
 -- deployed body is the file's body without its comment lines; md5 c201419e1dcb0bae2dd34bea95118ef6),
--- checks its md5, then removes the 20261110100000 ledger row. CREATE OR REPLACE keeps the ACL, so
--- the REVOKE from PUBLIC and anon stays in place (anon never passed the guard inside anyway).
+-- checks its md5, restores the previous ACL (EXECUTE for PUBLIC, anon, authenticated, service_role;
+-- CREATE OR REPLACE keeps the current ACL, so the grant is explicit), then removes the
+-- 20261110100000 ledger row. The inner guard refuses PUBLIC and anon callers either way.
 -- No data change: adjustments and refunded_at values written while the fix was live stay.
 BEGIN;
 
@@ -77,6 +78,8 @@ COMMENT ON FUNCTION public.record_refund(uuid, text, jsonb) IS
   'payment_intents row refunded. Idempotent (no-op if already refunded). The -1 '
   'adjustment cannot become spendable grant capacity (2004 CR1 clamp).';
 
+GRANT EXECUTE ON FUNCTION public.record_refund(uuid, text, jsonb) TO PUBLIC, anon, authenticated, service_role;
+
 DO $chk$
 BEGIN
   IF (SELECT md5(p.prosrc) FROM pg_proc p
@@ -84,9 +87,11 @@ BEGIN
      <> 'c201419e1dcb0bae2dd34bea95118ef6' THEN
     RAISE EXCEPTION 'BACKLOG-2345 rollback: restored body md5 mismatch';
   END IF;
-  IF has_function_privilege('anon', 'public.record_refund(uuid,text,jsonb)', 'EXECUTE')
-     OR NOT has_function_privilege('service_role', 'public.record_refund(uuid,text,jsonb)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'BACKLOG-2345 rollback: unexpected grants';
+  IF NOT has_function_privilege('anon', 'public.record_refund(uuid,text,jsonb)', 'EXECUTE')
+     OR NOT has_function_privilege('authenticated', 'public.record_refund(uuid,text,jsonb)', 'EXECUTE')
+     OR NOT has_function_privilege('service_role', 'public.record_refund(uuid,text,jsonb)', 'EXECUTE')
+     OR (SELECT p.proacl::text FROM pg_proc p WHERE p.oid = to_regprocedure('public.record_refund(uuid,text,jsonb)')) !~ '(^\{|,)=X/postgres' THEN
+    RAISE EXCEPTION 'BACKLOG-2345 rollback: old ACL not restored';
   END IF;
 END
 $chk$;

@@ -12,7 +12,7 @@
 -- the refund does not turn the webhook into a permanent error).
 -- Removing the desktop unlock on refund is not part of this change (BACKLOG-4218).
 -- Pre-check: the body being replaced is the 20260715_backlog_2005_stripe_payg.sql one (md5 pinned),
--- or this one. Grants: PUBLIC and anon lose EXECUTE; authenticated and service_role keep it.
+-- or this one. Grants: EXECUTE for service_role only (PUBLIC, anon, authenticated lose it).
 -- Post-check: new md5 and the grants.
 -- Rollback: supabase/tests/backlog-2345/rollback-2345.sql.
 
@@ -132,10 +132,12 @@ COMMENT ON FUNCTION public.record_refund(uuid, text, jsonb) IS
   'credit_already_consumed=true when nothing is unspent. Never leaves the balance below zero. '
   'Idempotent (no-op if already refunded).';
 
--- Only the webhook (service_role) and internal staff (authenticated + has_internal_role) pass the
--- guard inside; PUBLIC and anon lose EXECUTE (BACKLOG-3611 gate).
-REVOKE EXECUTE ON FUNCTION public.record_refund(uuid, text, jsonb) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.record_refund(uuid, text, jsonb) TO authenticated, service_role;
+-- Only the Stripe webhook (service_role) calls this; no signed-in client does. Follows the repo's
+-- revoke-by-default rule for new and replaced functions: EXECUTE for service_role only. The
+-- has_internal_role branch inside the body stays as a second line and is unreachable for
+-- authenticated callers once the grant is gone.
+REVOKE EXECUTE ON FUNCTION public.record_refund(uuid, text, jsonb) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.record_refund(uuid, text, jsonb) TO service_role;
 
 DO $post$
 DECLARE v_src text; v_acl text;
@@ -147,7 +149,7 @@ BEGIN
   END IF;
   IF has_function_privilege('anon', 'public.record_refund(uuid,text,jsonb)', 'EXECUTE')
      OR v_acl LIKE '{=X%' OR v_acl LIKE '%,=X%'
-     OR NOT has_function_privilege('authenticated', 'public.record_refund(uuid,text,jsonb)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.record_refund(uuid,text,jsonb)', 'EXECUTE')
      OR NOT has_function_privilege('service_role', 'public.record_refund(uuid,text,jsonb)', 'EXECUTE') THEN
     RAISE EXCEPTION 'BACKLOG-2345: record_refund ACL unexpected: %', v_acl;
   END IF;

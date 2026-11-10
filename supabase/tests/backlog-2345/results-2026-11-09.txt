@@ -49,3 +49,38 @@ wrong_skip_refunded_at: pass=31 fail=5 mut=MUTATION APPLIED cb3a5b5c->fac7794a [
    RED G_refunded_at_set FAIL {"already": false, "refunded": true, "unlock_id": "5518
    RED K_refunded_at_set FAIL {"already": false, "refunded": true, "unlock_id": "d7df
    RED S_refunded_at_set FAIL {"already": false, "refunded": true, "unlock_id": "9f01
+
+## Fix-up round (R1, R2, S2), 2026-11-09. keepr-test, new migration applied; md5 977ff498, ACL {postgres=X/postgres,service_role=X/postgres}. 40 checks per mode (36 + 4 over-draw fixture O)
+base | none | pass 40 fail 0 total 40
+gate_ne0 | MUTATION APPLIED cb3a5b5c->0d0fd1b5 [ IF v_refundable <> 0 THEN] | pass 40 fail 0 total 40
+no_floor0 | MUTATION APPLIED cb3a5b5c->71df531d [v_refundable := v_purchase_amount - v_debits_drawn;] | pass 40 fail 0 total 40
+no_service_grant | MUTATION APPLIED acl db23e67d->dfda960b {postgres=X/postgres} | pass 17 fail 23 total 40
+    RED K_no_error
+    RED B_pi_refunded
+    RED N_exit_reason
+    RED S_pi_refunded
+    RED B_ledger_sum_0
+    RED F_ledger_sum_5
+    RED P_ledger_sum_0
+    RED Q_ledger_sum_0
+    RED C_grants_secdef
+    RED S_double_no_row
+    RED S_flag_consumed
+    RED B_one_row_minus1
+    RED F_one_row_minus1
+    RED P_one_row_minus1
+    RED Q_one_row_minus2
+    RED S5_flag_consumed
+    RED B_refunded_at_set
+    RED G_refunded_at_set
+    RED K_refunded_at_set
+    RED O_refunded_at_set
+    RED S_refunded_at_set
+    RED B_flag_not_consumed
+    RED B_double_no_second_row
+no_floor0_gate_ne0 | MUTATION APPLIED cb3a5b5c->71df531d [v_refundable := v_purchase_amount - v_debits_drawn;] + MUTATION APPLIED 71df531d->3d819ab6 [ IF v_refundable <> 0 THEN] | pass 38 fail 2 total 40
+    RED O_ledger_sum_4
+    RED O_no_refund_row
+
+Rollback dry run (rollback-2345.sql body, BEGIN/COMMIT replaced by a final RAISE so it rolls back): md5=c201419e1dcb0bae2dd34bea95118ef6 acl={postgres=X/postgres,service_role=X/postgres,=X/postgres,anon=X/postgres,authenticated=X/postgres}; afterwards the function is back on 977ff498 / service_role-only.
+gate_ne0 alone is equivalent while GREATEST floors refundable at 0; it goes red only with the floor removed (no_floor0_gate_ne0).
