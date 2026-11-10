@@ -105,6 +105,8 @@ export interface UserPreferences {
   export?: ExportPreferences;
   integrations?: IntegrationsPreferences;
   notices?: NoticePreferences;
+  /** BACKLOG-4220: absent `showTodo` = Todo hidden on the dashboard. */
+  dashboard?: { showTodo?: boolean };
   [key: string]: unknown;
 }
 
