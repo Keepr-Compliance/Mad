@@ -1,4 +1,4 @@
-BACKLOG-3962 PR1 portal mutation controls, 2026-11-10, at commit ccdc2eba2 (83 tests in __tests__/domain-claims-3962)
+BACKLOG-3962 PR1 portal mutation controls, 2026-11-10, at commit ccdc2eba2, rewritten as 5a280765a with only same-line fixture-id waiver comments added (83 tests in __tests__/domain-claims-3962)
 MUTATION APPLIED TM1_R2_begin_refusal_ignored: 'if (false) {'  numstat: 1	1	broker-portal/lib/actions/domainClaim.ts
   => total 83 passed 81 failed 2 suites-errored 0  RED
 MUTATION APPLIED TM2_b_role_gate_dropped: "if (access.kind !== 'full') return { ok: false };"  numstat: 1	1	broker-portal/lib/domain/access.ts
