@@ -1,0 +1,138 @@
+BACKLOG-4186 PR A: keepr-test results, 2026-11-09 (kt-sql, keepr-test only; every run one transaction ending in RAISE)
+
+== baseline: run.sh
+{
+ "fail": 0,
+ "pass": 13,
+ "reds": {},
+ "total": 13
+}
+
+== mutate.py all
+== R1_owner_only_read
+MUTATION APPLIED numstat=2/2
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS NULL THEN
+  + IF v_uid IS NULL OR public.report_my_access('sender-rules') IS DISTINCT FROM 'owner' THEN
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS NULL THEN
+  + IF v_uid IS NULL OR public.report_my_access('sender-rules') IS DISTINCT FROM 'owner' THEN
+RESULT total=13 pass=11 fail=2 reds=C1_content_by_version,R1_grant_holders_read
+RESTORED clean=True
+== R1b_not_in
+MUTATION APPLIED numstat=2/2
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS NULL THEN
+  + IF v_uid IS NULL OR public.report_my_access('sender-rules') NOT IN ('viewer', 'editor', 'owner') THEN
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS NULL THEN
+  + IF v_uid IS NULL OR public.report_my_access('sender-rules') NOT IN ('viewer', 'editor', 'owner') THEN
+RESULT total=13 pass=12 fail=1 reds=R1b_no_grant_refused
+RESTORED clean=True
+== R1b_ne_owner
+MUTATION APPLIED numstat=2/2
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS NULL THEN
+  + IF v_uid IS NULL OR public.report_my_access('sender-rules') <> 'owner' THEN
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS NULL THEN
+  + IF v_uid IS NULL OR public.report_my_access('sender-rules') <> 'owner' THEN
+RESULT total=13 pass=10 fail=3 reds=C1_content_by_version,R1_grant_holders_read,R1b_no_grant_refused
+RESTORED clean=True
+== R1b_not_positive
+MUTATION APPLIED numstat=2/2
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS NULL THEN
+  + IF NOT (v_uid IS NOT NULL AND public.report_my_access('sender-rules') IN ('viewer', 'editor', 'owner')) THEN
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS NULL THEN
+  + IF NOT (v_uid IS NOT NULL AND public.report_my_access('sender-rules') IN ('viewer', 'editor', 'owner')) THEN
+RESULT total=13 pass=12 fail=1 reds=R1b_no_grant_refused
+RESTORED clean=True
+== R1b_state_only_not_in
+MUTATION APPLIED numstat=1/1
+  - IF v_uid IS NULL OR public.report_my_access('sender-rules') IS NULL THEN
+  + IF v_uid IS NULL OR public.report_my_access('sender-rules') NOT IN ('viewer', 'editor', 'owner') THEN
+RESULT total=13 pass=12 fail=1 reds=R1b_no_grant_refused
+RESTORED clean=True
+== R2_revokes_dropped
+MUTATION APPLIED numstat=0/2
+  - REVOKE EXECUTE ON FUNCTION public.sender_rule_set_admin_state() FROM PUBLIC, anon;
+  - REVOKE EXECUTE ON FUNCTION public.sender_rule_set_admin_content(BIGINT) FROM PUBLIC, anon;
+RESULT total=13 pass=11 fail=2 reds=R1b_no_grant_refused,R2_function_grants
+RESTORED clean=True
+== R2_content_revoke_dropped
+MUTATION APPLIED numstat=0/1
+  - REVOKE EXECUTE ON FUNCTION public.sender_rule_set_admin_content(BIGINT) FROM PUBLIC, anon;
+RESULT total=13 pass=11 fail=2 reds=R1b_no_grant_refused,R2_function_grants
+RESTORED clean=True
+== R2_anon_only_revoke
+MUTATION APPLIED numstat=1/1
+  - REVOKE EXECUTE ON FUNCTION public.sender_rule_set_admin_state() FROM PUBLIC, anon;
+  + REVOKE EXECUTE ON FUNCTION public.sender_rule_set_admin_state() FROM anon;
+RESULT total=13 pass=11 fail=2 reds=R1b_no_grant_refused,R2_function_grants
+RESTORED clean=True
+== R3_published_by
+MUTATION APPLIED numstat=2/2
+  - 'published_at', x.published_at) ORDER BY x.version DESC), '[]'::jsonb)
+  + 'published_at', x.published_at, 'published_by', x.published_by) ORDER BY x.version DESC), '[]'::jsonb)
+  - SELECT s.version, s.released, s.bundled, s.canary_org, o.name AS canary_org_name, s.published_at
+  + SELECT s.version, s.released, s.bundled, s.canary_org, o.name AS canary_org_name, s.published_at, s.published_by
+RESULT total=13 pass=12 fail=1 reds=R3_exact_keys
+RESTORED clean=True
+== R3_pinned_by
+MUTATION APPLIED numstat=1/1
+  - 'pinned_at', p.pinned_at) ORDER BY p.pinned_at DESC, p.org_id), '[]'::jsonb)
+  + 'pinned_at', p.pinned_at, 'pinned_by', p.pinned_by) ORDER BY p.pinned_at DESC, p.org_id), '[]'::jsonb)
+RESULT total=13 pass=12 fail=1 reds=R3_exact_keys
+RESTORED clean=True
+== R4_pins_from_canary_org
+MUTATION APPLIED numstat=1/1
+  - FROM public.sender_rule_set_pins p
+  + FROM (SELECT k.canary_org AS org_id, k.version, k.published_at AS pinned_at FROM public.sender_rule_sets k WHERE NOT k.released) p
+RESULT total=13 pass=11 fail=2 reds=R4_pins_from_pin_table,R6_deleted_org_kept
+RESTORED clean=True
+== R5_released_is_max
+MUTATION APPLIED numstat=1/1
+  - (SELECT max(r.version) FROM public.sender_rule_sets r WHERE r.released),
+  + (SELECT max(r.version) FROM public.sender_rule_sets r),
+RESULT total=13 pass=12 fail=1 reds=R5_released_version
+RESTORED clean=True
+== R6_inner_join_org
+MUTATION APPLIED numstat=1/1
+  - LEFT JOIN public.organizations o ON o.id = s.canary_org
+  + JOIN public.organizations o ON o.id = s.canary_org
+RESULT total=13 pass=10 fail=3 reds=R6_deleted_org_kept,R7_cap_200,V1_versions_listing
+RESTORED clean=True
+== R6_pin_inner_join
+MUTATION APPLIED numstat=1/1
+  - LEFT JOIN public.organizations po ON po.id = p.org_id)
+  + JOIN public.organizations po ON po.id = p.org_id)
+RESULT total=13 pass=13 fail=0 reds=
+RESTORED clean=True
+== R7_no_limit
+MUTATION APPLIED numstat=0/1
+  - LIMIT 200
+RESULT total=13 pass=12 fail=1 reds=R7_cap_200
+RESTORED clean=True
+== R7_truncated_ge
+MUTATION APPLIED numstat=1/1
+  - (SELECT count(*) FROM public.sender_rule_sets t) > 200,
+  + (SELECT count(*) FROM public.sender_rule_sets t) >= 200,
+RESULT total=13 pass=12 fail=1 reds=R7_cap_200
+RESTORED clean=True
+== R7_truncated_false
+MUTATION APPLIED numstat=1/1
+  - (SELECT count(*) FROM public.sender_rule_sets t) > 200,
+  + false,
+RESULT total=13 pass=12 fail=1 reds=R7_cap_200
+RESTORED clean=True
+== R7_oldest_first
+MUTATION APPLIED numstat=1/1
+  - ORDER BY s.version DESC
+  + ORDER BY s.version ASC
+RESULT total=13 pass=12 fail=1 reds=R7_cap_200
+RESTORED clean=True
+== C1_content_ignores_version
+MUTATION APPLIED numstat=1/1
+  - RETURN (SELECT c.content FROM public.sender_rule_sets c WHERE c.version = p_version);
+  + RETURN (SELECT c.content FROM public.sender_rule_sets c WHERE c.released ORDER BY c.version DESC LIMIT 1);
+RESULT total=13 pass=12 fail=1 reds=C1_content_by_version
+RESTORED clean=True
+== RB_misses_content
+MUTATION APPLIED numstat=0/1
+  - DROP FUNCTION IF EXISTS public.sender_rule_set_admin_content(BIGINT);
+RESULT total=13 pass=12 fail=1 reds=RB_rollback_removes_functions
+RESTORED clean=True
