@@ -15,6 +15,8 @@
 --        'p4170p4-tx1' (written by finalize_paid_unlock as service_role, so its credit is spent)
 --   4013 customer: suspended user, suspended license, one account_suspensions 'suspended' row
 --   4014 customer: no license
+--   case finalize_done re-runs finalize_paid_unlock for 'p4170p4-tx1' (the already-fulfilled return,
+--   which does not reach record_credit_purchase)
 --   callers also include anon, service_role (svc), a service_role database role carrying an
 --   authenticated JWT for user 4009 (c_claims), and postgres with no JWT claims (c_noclaims)
 
@@ -145,6 +147,8 @@ CREATE FUNCTION pg_temp.cases() RETURNS TABLE (n int, c text, q text, chk text) 
         format('SELECT count(*)::text FROM public.credit_ledger WHERE user_id = %L AND entry_type = ''purchase''', pg_temp.fx(4012))),
     (13, 'refund', format('SELECT public.record_refund(%L::uuid, ''p4170p4-tx1'', ''{}''::jsonb)', pg_temp.fx(4012)),
         format('SELECT count(*)::text FROM public.transaction_unlocks WHERE user_id = %L AND local_transaction_id = ''p4170p4-tx1'' AND refunded_at IS NOT NULL', pg_temp.fx(4012))),
+    (16, 'finalize_done', format('SELECT public.finalize_paid_unlock(%L::uuid, ''p4170p4-tx1'', 1500, NULL::uuid, ''{}''::jsonb)', pg_temp.fx(4012)),
+        format('SELECT count(*)::text FROM public.transaction_unlocks WHERE user_id = %L AND local_transaction_id = ''p4170p4-tx1''', pg_temp.fx(4012))),
     (14, 'create_trial', format('SELECT to_jsonb(public.create_trial_license(%L::uuid))', pg_temp.fx(4014)),
         format('SELECT count(*)::text FROM public.licenses WHERE user_id = %L', pg_temp.fx(4014))),
     (15, 'get_user_detail', format('SELECT public.admin_get_user_detail(%L::uuid)', pg_temp.fx(4012)), 'SELECT 1::text')

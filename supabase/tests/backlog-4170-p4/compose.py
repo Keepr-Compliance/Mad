@@ -24,6 +24,8 @@ def bodies(text):
     """{harness key: md5 of the body} for every CREATE OR REPLACE FUNCTION in the text (prosrc = text between the $function$ tags)."""
     out = {}
     for name, body in re.findall(r'CREATE OR REPLACE FUNCTION public\.(\w+)\(.*?AS \$function\$(.*?)\$function\$;', text, re.S):
+        if name not in KEYS:
+            continue
         out[KEYS[name]] = hashlib.md5(body.encode()).hexdigest()
     return out
 

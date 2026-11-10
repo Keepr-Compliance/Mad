@@ -29,7 +29,7 @@ CREATE FUNCTION pg_temp.fn(c text) RETURNS text LANGUAGE sql IMMUTABLE AS $b$
     WHEN 'update_license' THEN 'admin_update_license' WHEN 'adjust_plus' THEN 'admin_adjust_credits'
     WHEN 'adjust_minus' THEN 'admin_adjust_credits' WHEN 'reinstate' THEN 'reinstate_suspended_account'
     WHEN 'create_other' THEN 'create_active_individual_license' WHEN 'create_self' THEN 'create_active_individual_license'
-    WHEN 'finalize' THEN 'finalize_paid_unlock' WHEN 'purchase' THEN 'record_credit_purchase' WHEN 'refund' THEN 'record_refund'
+    WHEN 'finalize' THEN 'finalize_paid_unlock' WHEN 'finalize_done' THEN 'finalize_paid_unlock' WHEN 'purchase' THEN 'record_credit_purchase' WHEN 'refund' THEN 'record_refund'
     WHEN 'create_trial' THEN 'create_trial_license' WHEN 'get_user_detail' THEN 'admin_get_user_detail' ELSE 'get_credit_balance' END
 $b$;
 
@@ -46,6 +46,7 @@ CREATE FUNCTION pg_temp.allowed(c text) RETURNS text[] LANGUAGE sql IMMUTABLE AS
     WHEN 'create_self' THEN ARRAY['u0_none', 'u_users.suspend', 'u_licenses.edit', 'u_credits.adjust', 'u_billing.suspend',
                                   'u_users.view', 'u_billing.manage', 'u_support.view', 'u_sa', 'u_sup', 'u_sales', 'u_cust', 'c_claims']
     WHEN 'finalize' THEN ARRAY['svc']
+    WHEN 'finalize_done' THEN ARRAY['svc']
     WHEN 'purchase' THEN ARRAY['svc']
     WHEN 'refund' THEN ARRAY['svc']
     WHEN 'create_trial' THEN ARRAY['svc', 'c_claims']
@@ -66,6 +67,7 @@ CREATE FUNCTION pg_temp.ok_reply(lbl text, c text, s text) RETURNS boolean LANGU
     WHEN 'create_self' THEN pg_temp.js(pg_temp.rep(s)) ->> 'user_id' = (SELECT cl.u::text FROM pg_temp.callers() cl WHERE cl.lbl = $1)
                             AND pg_temp.eff(s) = '1'
     WHEN 'finalize' THEN pg_temp.js(pg_temp.rep(s)) ->> 'unlocked' = 'true' AND pg_temp.eff(s) = '1'
+    WHEN 'finalize_done' THEN pg_temp.js(pg_temp.rep(s)) ->> 'already_fulfilled' = 'true' AND pg_temp.eff(s) = '1'
     WHEN 'purchase' THEN pg_temp.js(pg_temp.rep(s)) ->> 'ledger_entry_id' IS NOT NULL AND pg_temp.eff(s) = '2'
     WHEN 'refund' THEN pg_temp.js(pg_temp.rep(s)) ->> 'refunded' = 'true'
                        AND pg_temp.js(pg_temp.rep(s)) ->> 'credit_already_consumed' = 'true' AND pg_temp.eff(s) = '1'
@@ -76,7 +78,7 @@ $b$;
 -- the side effect a refused call leaves (nothing written)
 CREATE FUNCTION pg_temp.noeff(c text) RETURNS text LANGUAGE sql IMMUTABLE AS $b$
   SELECT CASE c WHEN 'suspend' THEN 'active' WHEN 'unsuspend' THEN 'suspended' WHEN 'update_license' THEN '5'
-    WHEN 'reinstate' THEN 'suspended' WHEN 'purchase' THEN '1' WHEN 'create_self' THEN '0' ELSE '0' END
+    WHEN 'reinstate' THEN 'suspended' WHEN 'purchase' THEN '1' WHEN 'finalize_done' THEN '1' WHEN 'create_self' THEN '0' ELSE '0' END
 $b$;
 
 -- after PR4: 'ALLOWED', 'SAME' (identical to P0, ids masked) or the exact refusal reply
@@ -87,8 +89,8 @@ CREATE FUNCTION pg_temp.expect(lbl text, c text) RETURNS text LANGUAGE sql IMMUT
     WHEN c = 'get_user_detail' THEN 'ERR 42883 function public.admin_get_user_detail(uuid) does not exist'
     WHEN c = 'create_self' AND lbl IN ('svc', 'c_noclaims') THEN 'SAME'
     WHEN lbl = 'anon' THEN 'ERR 42501 permission denied for function ' || pg_temp.fn(c)
-    WHEN c IN ('finalize', 'purchase', 'refund') AND lbl IN ('c_claims', 'c_noclaims') THEN 'ERR P0001 Unauthorized'
-    WHEN c IN ('finalize', 'purchase', 'refund', 'create_trial') AND lbl NOT IN ('svc', 'c_claims', 'c_noclaims')
+    WHEN c IN ('finalize', 'finalize_done', 'purchase', 'refund') AND lbl IN ('c_claims', 'c_noclaims') THEN 'ERR P0001 Unauthorized'
+    WHEN c IN ('finalize', 'finalize_done', 'purchase', 'refund', 'create_trial') AND lbl NOT IN ('svc', 'c_claims', 'c_noclaims')
       THEN 'ERR 42501 permission denied for function ' || pg_temp.fn(c)
     WHEN c IN ('create_other', 'create_trial') THEN 'ERR 42501 Not allowed for this user'
     ELSE 'ERR P0001 Unauthorized'
@@ -125,12 +127,12 @@ BEGIN
          WHERE lbl = 'u0_none' AND c IN ('suspend', 'unsuspend', 'update_license', 'adjust_plus', 'adjust_minus', 'reinstate', 'create_other')
            AND NOT coalesce(pg_temp.ok_reply('u0_none', c, res), false));
   r := r || jsonb_build_object('P0_zero_key_internal_runs_every_B_case_before',
-    pg_temp.pass(s IS NULL AND (SELECT count(*) FROM p4170p4_p0 WHERE lbl = 'u0_none') = 15, s));
+    pg_temp.pass(s IS NULL AND (SELECT count(*) FROM p4170p4_p0 WHERE lbl = 'u0_none') = 16, s));
   s := (SELECT string_agg(c || '=' || res, ' ; ') FROM p4170p4_p0
          WHERE lbl = 'u0_none' AND c IN ('finalize', 'purchase') AND NOT coalesce(pg_temp.ok_reply('u0_none', c, res), false));
   r := r || jsonb_build_object('P0_zero_key_internal_runs_finalize_purchase_before', pg_temp.pass(s IS NULL, s));
   s := (SELECT string_agg(c || '=' || res, ' ; ') FROM p4170p4_p0
-         WHERE lbl = 'c_claims' AND c IN ('finalize', 'purchase', 'refund') AND NOT coalesce(pg_temp.ok_reply('c_claims', c, res), false));
+         WHERE lbl = 'c_claims' AND c IN ('finalize', 'finalize_done', 'purchase', 'refund') AND NOT coalesce(pg_temp.ok_reply('c_claims', c, res), false));
   r := r || jsonb_build_object('P0_c_claims_passes_C_body_before', pg_temp.pass(s IS NULL, s));
   s := (SELECT string_agg(c || '=' || res, ' ; ') FROM p4170p4_p0
          WHERE lbl = 'c_noclaims' AND c IN ('finalize', 'purchase', 'refund') AND pg_temp.rep(res) = 'ERR P0001 Unauthorized');
@@ -162,7 +164,7 @@ BEGIN
     END IF;
     r := r || jsonb_build_object('M_' || x.lbl || '_' || x.c, pg_temp.pass(ok, 'expected ' || e || ', got ' || x.res));
   END LOOP;
-  r := r || jsonb_build_object('M_count_240', pg_temp.pass((SELECT count(*) FROM p4170p4_m) = 240, (SELECT count(*) FROM p4170p4_m)::text));
+  r := r || jsonb_build_object('M_count_256', pg_temp.pass((SELECT count(*) FROM p4170p4_m) = 256, (SELECT count(*) FROM p4170p4_m)::text));
 
   -- ================= B0: Super Admin's B cases succeed before and after =================
   s := (SELECT string_agg(a.c || ': ' || a.res || ' -> ' || b.res, ' ; ') FROM p4170p4_p0 a JOIN p4170p4_m b USING (lbl, c)
