@@ -289,10 +289,10 @@ describe("SqliteBackupService", () => {
       expect(mockDbServiceInitialize).toHaveBeenCalled();
     });
 
-    it("should clean up safety copy on success", async () => {
+    it("BACKLOG-3298: does not delete the safety copy on success (it is kept; see keepOne-3298)", async () => {
       await restoreDatabase("/tmp/valid.db");
 
-      expect(mockUnlinkSync).toHaveBeenCalledWith(
+      expect(mockUnlinkSync).not.toHaveBeenCalledWith(
         "/mock/userData/mad.db.safety-restore-copy"
       );
     });

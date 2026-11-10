@@ -195,6 +195,8 @@ describe("(4) unusable store: set aside only when nothing depends on it", () => 
     // BACKLOG-2834: written by databaseService._moveAside (the pre-restore move).
     "mad-pre-restore-20261108T070010123.db",
     "mad-pre-restore-20261108T070010123-2.db",
+    // BACKLOG-3298: the manual restore's kept pre-restore copy.
+    "mad-before-restore-20261110T032445592.db",
   ]) {
     it(`corrupt store + no mad.db + encrypted ${name} -> refuses, store kept`, async () => {
       breakStore("corrupt");
