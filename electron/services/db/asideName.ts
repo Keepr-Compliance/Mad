@@ -29,3 +29,52 @@ export function pickAsidePath(dbPath: string, label: string, now: Date = new Dat
   }
   return asidePath;
 }
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Same file under two spellings (symlink, `..`) compares equal. */
+function canonical(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return path.resolve(p);
+  }
+}
+
+/**
+ * Keep-one retention (BACKLOG-3298, founder decisions 2026-11-09 / 2026-11-10):
+ * delete every `mad-<label>-<time>[-n].db` (and its -wal / -shm) beside
+ * `dbPath` except the paths in `keep`. Matches ONLY the exact name
+ * `pickAsidePath` writes, so `mad.db`, `mad-backup-*`, `keepr-backup-*` and
+ * other labels never match. Call it only AFTER the new copy exists. Never
+ * throws; returns what it deleted.
+ */
+export function pruneAsideCopies(dbPath: string, label: string, keep: ReadonlySet<string>): string[] {
+  const removed: string[] = [];
+  try {
+    const dbDir = path.dirname(dbPath);
+    const dbName = path.basename(dbPath, ".db");
+    const re = new RegExp(`^${escapeRe(dbName)}-${escapeRe(label)}-\\d{8}T\\d{9}(-\\d+)?\\.db$`);
+    const keepCanonical = new Set([...keep].map(canonical));
+    for (const name of fs.readdirSync(dbDir)) {
+      if (!re.test(name)) continue;
+      const full = path.join(dbDir, name);
+      if (keepCanonical.has(canonical(full))) continue;
+      for (const x of ASIDE_SIDECARS) {
+        try {
+          if (fs.existsSync(full + x)) {
+            fs.unlinkSync(full + x);
+            removed.push(full + x);
+          }
+        } catch {
+          // Retention never fails the caller; the copy stays for next time.
+        }
+      }
+    }
+  } catch {
+    // Cannot read the folder: nothing deleted.
+  }
+  return removed;
+}

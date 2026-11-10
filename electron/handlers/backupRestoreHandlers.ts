@@ -88,7 +88,7 @@ export function registerBackupRestoreHandlers(): void {
         detail:
           "This will replace your current database with the backup. " +
           "All data added since the backup was created will be lost. " +
-          "A safety copy of your current data will be made in case the restore fails.",
+          "A copy of your current data will be kept until your next restore.",
         buttons: ["Cancel", "Restore"],
         defaultId: 0,
         cancelId: 0,
