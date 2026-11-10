@@ -330,6 +330,21 @@ describe('results next to the action', () => {
     expect(within(screen.getByTestId('review-publish')).getByTestId('notice-at-publish-everyone')).toBe(at);
     expect(at.textContent).toContain('These changes must run on a test org first:');
     expect(at.textContent).toContain('Details are at the top of the page.');
+    // Shown as a failure, never in the success style.
+    expect(at.className).toContain('text-red-600');
+    expect(at.className).not.toContain('text-success');
+  });
+
+  it('a refused test publish: failure next to the action, and the Edit card base does not move', async () => {
+    setup({ publish: { error: ERRORS.release_refused } });
+    const before = screen.getByTestId('rules-card').querySelector('p')?.textContent;
+    addDomain();
+    fireEvent.change(screen.getByLabelText('Test org'), { target: { value: ORG_A } });
+    fireEvent.click(button('Publish to test org')[0]);
+    const at = await screen.findByTestId('notice-at-publish-test');
+    expect(at.className).toContain('text-red-600');
+    expect(at.textContent).not.toContain('Published to');
+    expect(screen.getByTestId('rules-card').querySelector('p')?.textContent).toBe(before);
   });
 
   it('stop test: shows in Running now', async () => {
