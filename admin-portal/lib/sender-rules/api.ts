@@ -61,11 +61,20 @@ export class SenderRulesError extends Error {
   }
 }
 
-/** A PostgREST error from one of the RPCs above -> a SenderRulesError. */
-export function toSenderRulesError(e: RpcError): SenderRulesError {
+/** The words for a 42501, by what was refused: a read ("see") or a write ("change"). */
+export const NOT_ALLOWED_WRITE = "You can't change these rules.";
+export const NOT_ALLOWED_READ = "You don't have access to these rules.";
+
+/**
+ * A PostgREST error from one of the RPCs above -> a SenderRulesError. `op` says whether the refused
+ * call was a read (state, content) or a write; only the 42501 wording depends on it.
+ */
+export function toSenderRulesError(e: RpcError, op: 'read' | 'write' = 'write'): SenderRulesError {
   const code = e.code ?? null;
   const msg = e.message ?? '';
-  if (code === '42501') return new SenderRulesError('not_allowed', "You can't change these rules.", code);
+  if (code === '42501') {
+    return new SenderRulesError('not_allowed', op === 'read' ? NOT_ALLOWED_READ : NOT_ALLOWED_WRITE, code);
+  }
   if (code === '22023') {
     if (msg.startsWith('Invalid rule set: ')) return new SenderRulesError('invalid', msg, code);
     if (e.details) {
@@ -143,9 +152,9 @@ export interface SenderRulesApi {
 }
 
 export function createSenderRulesApi(client: RpcClient): SenderRulesApi {
-  async function call(fn: string, args?: Record<string, unknown>): Promise<unknown> {
+  async function call(fn: string, args?: Record<string, unknown>, op: 'read' | 'write' = 'write'): Promise<unknown> {
     const { data, error } = await client.rpc(fn, args);
-    if (error) throw toSenderRulesError(error);
+    if (error) throw toSenderRulesError(error, op);
     return data;
   }
 
@@ -172,7 +181,7 @@ export function createSenderRulesApi(client: RpcClient): SenderRulesApi {
   }
 
   async function content(version: number): Promise<SenderRuleSet | null> {
-    const data = await call('sender_rule_set_admin_content', { p_version: version });
+    const data = await call('sender_rule_set_admin_content', { p_version: version }, 'read');
     if (data === null || data === undefined) return null;
     const parsed = parseRuleSet(data);
     if (parsed === null) throw new SenderRulesError('unreadable', 'Version ' + version + ' could not be read.');
@@ -181,7 +190,7 @@ export function createSenderRulesApi(client: RpcClient): SenderRulesApi {
 
   return {
     async state() {
-      const parsed = parseAdminState(await call('sender_rule_set_admin_state'));
+      const parsed = parseAdminState(await call('sender_rule_set_admin_state', undefined, 'read'));
       if (parsed === null) throw new SenderRulesError('unreadable', 'The sender rules could not be read.');
       return parsed;
     },

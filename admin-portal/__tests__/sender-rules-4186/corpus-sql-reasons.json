@@ -752,6 +752,14 @@
   "reason": "thresholds.minCensusLinkedEmails: not an integer >= 0"
  },
  {
+  "name": "minCensusLinkedEmails: 2^53-1",
+  "reason": null
+ },
+ {
+  "name": "minCensusLinkedEmails: 2^53",
+  "reason": "thresholds.minCensusLinkedEmails: not an integer >= 0"
+ },
+ {
   "name": "reportSendIntervalHours: 1",
   "reason": null
  },
@@ -762,6 +770,10 @@
  {
   "name": "reportSendIntervalHours: null",
   "reason": "thresholds.reportSendIntervalHours: not a positive integer"
+ },
+ {
+  "name": "reportSendIntervalHours: 2^53-1",
+  "reason": null
  },
  {
   "name": "reportSendIntervalHours: 2^53",

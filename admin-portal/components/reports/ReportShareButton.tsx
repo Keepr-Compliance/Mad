@@ -26,7 +26,14 @@ export const REPORT_SHARE_ROLE_DESCRIPTIONS: ShareRoleDescriptions = {
   editor: 'Also shares saved views on it',
 };
 
-export function ReportShareButton({ api = reportAccessApi }: { api?: ReportAccessApi }) {
+export function ReportShareButton({
+  api = reportAccessApi,
+  roleDescriptions = REPORT_SHARE_ROLE_DESCRIPTIONS,
+}: {
+  api?: ReportAccessApi;
+  /** The line under each role. Defaults to the report copy; a page whose editor has no extra power overrides it (BACKLOG-4186). */
+  roleDescriptions?: ShareRoleDescriptions;
+}) {
   const report = useOpenReport();
   const [missing, setMissing] = useState(false);
   const [open, setOpen] = useState(false);
@@ -111,7 +118,7 @@ export function ReportShareButton({ api = reportAccessApi }: { api?: ReportAcces
         }}
         viewName={report.title}
         description={REPORT_SHARE_DESCRIPTION}
-        roleDescriptions={REPORT_SHARE_ROLE_DESCRIPTIONS}
+        roleDescriptions={roleDescriptions}
         candidates={candidates}
         grants={grants}
         error={error}

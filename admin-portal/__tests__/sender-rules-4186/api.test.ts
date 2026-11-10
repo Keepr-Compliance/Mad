@@ -23,6 +23,7 @@ import {
   STATE_INITIAL,
   STATE_RELEASED,
 } from './fixtures';
+import { READ_REFUSED, WRITE_REFUSED } from './fixtures-pr-c';
 import { bundled, clone, fakeClient } from './helpers';
 
 const has = (o: object | undefined, k: string) => o !== undefined && Object.prototype.hasOwnProperty.call(o, k);
@@ -204,9 +205,31 @@ describe('refusals (captured from keepr-test)', () => {
   });
 
   it('42501 -> not_allowed; anything else -> unknown with its raw text', () => {
-    expect(toSenderRulesError({ code: '42501', message: 'Not allowed' }).kind).toBe('not_allowed');
+    const e = toSenderRulesError(WRITE_REFUSED);
+    expect(e.kind).toBe('not_allowed');
+    // PR B SR S1: the plain line, never the server's raw "Not allowed".
+    expect(e.message).toBe("You can't change these rules.");
     const u = toSenderRulesError({ code: 'P0002', message: 'No bundled rule set' });
     expect([u.kind, u.message]).toEqual(['unknown', 'No bundled rule set']);
+  });
+
+  // PR B SR S2: a refused READ is worded as a read, not "You can't change these rules."
+  it('a 42501 on a read (state, content) says the rules cannot be seen', async () => {
+    const { client } = fakeClient({
+      sender_rule_set_admin_state: { error: READ_REFUSED },
+      sender_rule_set_admin_content: { error: READ_REFUSED },
+    });
+    const api = createSenderRulesApi(client);
+    for (const p of [api.state(), api.content(3)]) {
+      const e = await rejection(p);
+      expect([e.kind, e.code, e.message]).toEqual(['not_allowed', '42501', "You don't have access to these rules."]);
+    }
+  });
+
+  it('a 42501 on a write keeps the write wording', async () => {
+    const { client } = fakeClient({ sender_rule_set_publish: { error: WRITE_REFUSED } });
+    const e = await rejection(createSenderRulesApi(client).publishCanary(clone(CONTENT_V2), ORG_A));
+    expect([e.kind, e.message]).toEqual(['not_allowed', "You can't change these rules."]);
   });
 
   it('a refused release rejects with the mapped error', async () => {
