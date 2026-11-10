@@ -82,6 +82,7 @@ BEGIN
   r := r || jsonb_build_object('canary_2', pg_temp.call(u1, format('SELECT to_jsonb(public.sender_rule_set_publish(%L::jsonb, %L::uuid))', c2, oA)));
   r := r || jsonb_build_object('state_mixed', pg_temp.call(u1, 'SELECT public.sender_rule_set_admin_state()'));
   r := r || jsonb_build_object('content_released', pg_temp.call(u1, format('SELECT public.sender_rule_set_admin_content(%L::bigint)', v)));
+  r := r || jsonb_build_object('content_canary_1', pg_temp.call(u1, format('SELECT public.sender_rule_set_admin_content(%L::bigint)', v - 1)));
   r := r || jsonb_build_object('content_canary_2', pg_temp.call(u1,
         format('SELECT public.sender_rule_set_admin_content(%L::bigint)', (SELECT max(version) FROM public.sender_rule_sets))));
 

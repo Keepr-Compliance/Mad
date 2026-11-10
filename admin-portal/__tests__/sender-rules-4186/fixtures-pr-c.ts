@@ -62,13 +62,13 @@ export const STATE_MIXED = {
   {
    "org_id": ORG_A,
    "org_name": "Test Org A",
-   "pinned_at": "2026-11-10T03:19:38.67697+00:00",
+   "pinned_at": "2026-11-10T03:29:01.305676+00:00",
    "version": 4
   },
   {
    "org_id": ORG_B,
    "org_name": "Test Org B",
-   "pinned_at": "2026-11-10T03:19:38.67697+00:00",
+   "pinned_at": "2026-11-10T03:29:01.305676+00:00",
    "version": 3
   }
  ],
@@ -79,7 +79,7 @@ export const STATE_MIXED = {
    "bundled": false,
    "canary_org": ORG_A,
    "canary_org_name": "Test Org A",
-   "published_at": "2026-11-10T03:19:38.67697+00:00",
+   "published_at": "2026-11-10T03:29:01.305676+00:00",
    "released": false,
    "version": 4
   },
@@ -87,7 +87,7 @@ export const STATE_MIXED = {
    "bundled": false,
    "canary_org": null,
    "canary_org_name": null,
-   "published_at": "2026-11-10T03:19:38.67697+00:00",
+   "published_at": "2026-11-10T03:29:01.305676+00:00",
    "released": true,
    "version": 3
   },
@@ -95,7 +95,7 @@ export const STATE_MIXED = {
    "bundled": false,
    "canary_org": ORG_A,
    "canary_org_name": "Test Org A",
-   "published_at": "2026-11-10T03:19:38.67697+00:00",
+   "published_at": "2026-11-10T03:29:01.305676+00:00",
    "released": false,
    "version": 2
   },
@@ -222,6 +222,118 @@ export const CONTENT_V3: SenderRuleSet = {
  "version": 3
 };
 
+/** sender_rule_set_admin_content(2): canary v2, the same rules as released v3 (only `version` differs). */
+export const CONTENT_V2_SAME_RULES: SenderRuleSet = {
+ "freeMailDomains": [
+  "gmail.com",
+  "googlemail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "msn.com",
+  "yahoo.com",
+  "ymail.com",
+  "rocketmail.com",
+  "icloud.com",
+  "me.com",
+  "mac.com",
+  "aol.com",
+  "proton.me",
+  "protonmail.com",
+  "pm.me",
+  "gmx.com",
+  "gmx.net",
+  "mail.com",
+  "zoho.com",
+  "yandex.com",
+  "fastmail.com",
+  "comcast.net",
+  "verizon.net",
+  "att.net",
+  "sbcglobal.net",
+  "bellsouth.net",
+  "cox.net",
+  "charter.net",
+  "earthlink.net"
+ ],
+ "keep": {
+  "platformAddresses": [],
+  "platformHosts": [
+   "docusign.net",
+   "docusign.com",
+   "springcm.net",
+   "showingtime.com",
+   "showingtime.net"
+  ]
+ },
+ "modes": {
+  "approvedHost": {
+   "addressPass": "live",
+   "detector": "live",
+   "learnQuestions": "live"
+  },
+  "bulkHeaders": {
+   "addressPass": "off",
+   "detector": "measure",
+   "learnQuestions": "measure"
+  },
+  "gmailPromotions": {
+   "addressPass": "off",
+   "detector": "measure",
+   "learnQuestions": "measure"
+  },
+  "gmailSocial": {
+   "addressPass": "off",
+   "detector": "measure",
+   "learnQuestions": "measure"
+  },
+  "gmailUpdates": {
+   "addressPass": "off",
+   "detector": "measure",
+   "learnQuestions": "measure"
+  },
+  "localPart": {
+   "addressPass": "off",
+   "detector": "measure",
+   "learnQuestions": "measure"
+  },
+  "seedAddress": {
+   "addressPass": "live",
+   "detector": "live",
+   "learnQuestions": "live"
+  }
+ },
+ "schema": 1,
+ "suppress": {
+  "bulkHeaders": {
+   "anyKeyPresent": [
+    "list_unsubscribe",
+    "list_unsubscribe_post"
+   ],
+   "autoSubmittedCounts": false,
+   "precedenceValues": [
+    "bulk",
+    "list",
+    "junk"
+   ]
+  },
+  "exactAddresses": [
+   "my-saved-home@mail.zillow.com",
+   "recommendations@mail.zillow.com"
+  ],
+  "hosts": [
+   "promo.example.com"
+  ],
+  "localParts": []
+ },
+ "thresholds": {
+  "minCensusLinkedEmails": 20,
+  "reportMaxRows": 500,
+  "reportSendIntervalHours": 24
+ },
+ "version": 2
+};
+
 /** sender_rule_set_admin_content(4): canary v4. */
 export const CONTENT_V4: SenderRuleSet = {
  "freeMailDomains": [
@@ -339,7 +451,7 @@ export const CONTENT_V4: SenderRuleSet = {
 export const ORG_LIST = {
  "organizations": [
   {
-   "created_at": "2026-11-10T03:19:38.67697+00:00",
+   "created_at": "2026-11-10T03:29:01.305676+00:00",
    "id": ORG_A,
    "is_personal": false,
    "is_test": false,
@@ -351,7 +463,7 @@ export const ORG_LIST = {
    "slug": "p4186c-a"
   },
   {
-   "created_at": "2026-11-10T03:19:38.67697+00:00",
+   "created_at": "2026-11-10T03:29:01.305676+00:00",
    "id": ORG_B,
    "is_personal": false,
    "is_test": true,
@@ -379,7 +491,7 @@ export const STATE_REVERTED = {
    "bundled": false,
    "canary_org": null,
    "canary_org_name": null,
-   "published_at": "2026-11-10T03:19:38.67697+00:00",
+   "published_at": "2026-11-10T03:29:01.305676+00:00",
    "released": true,
    "version": 5
   },
@@ -387,7 +499,7 @@ export const STATE_REVERTED = {
    "bundled": false,
    "canary_org": ORG_A,
    "canary_org_name": "Test Org A",
-   "published_at": "2026-11-10T03:19:38.67697+00:00",
+   "published_at": "2026-11-10T03:29:01.305676+00:00",
    "released": false,
    "version": 4
   },
@@ -395,7 +507,7 @@ export const STATE_REVERTED = {
    "bundled": false,
    "canary_org": null,
    "canary_org_name": null,
-   "published_at": "2026-11-10T03:19:38.67697+00:00",
+   "published_at": "2026-11-10T03:29:01.305676+00:00",
    "released": true,
    "version": 3
   },
@@ -403,7 +515,7 @@ export const STATE_REVERTED = {
    "bundled": false,
    "canary_org": ORG_A,
    "canary_org_name": "Test Org A",
-   "published_at": "2026-11-10T03:19:38.67697+00:00",
+   "published_at": "2026-11-10T03:29:01.305676+00:00",
    "released": false,
    "version": 2
   },
