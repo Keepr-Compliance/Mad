@@ -1,0 +1,9 @@
+# keepr-test, 2026-11-10T03:52:33Z, migration applied (md5(prosrc) cf50f00c32bc28c3279701f967951d8d, ledger tip 20261110130000)
+# python3 compose.py   (each mode = one rolled-back transaction; mutation proven applied by pg_temp.mutate)
+base: pass=22 fail=0 reds={}
+no_permission_check: pass=19 fail=3 reds={"T2_no_audit": "1", "T2_role_unchanged": "agent", "T2_no_users_edit_refused": "{\"success\": true, \"new_role\": \"agent\", \"old_role\": \"broker\"}"}
+no_last_admin_rule: pass=20 fail=2 reds={"T5_role_unchanged": "agent", "T5_last_admin_refused": "{\"success\": true, \"new_role\": \"agent\", \"old_role\": \"admin\"}"}
+no_audit_write: pass=21 fail=1 reds={"T1_audit_row": "0"}
+anon_granted: pass=20 fail=2 reds={"T14_acl": "0", "T4_anon_no_execute": "{\"error\": \"not_authenticated\", \"success\": false}"}
+no_idp_rule: pass=21 fail=1 reds={"T10_idp_managed_refused": "{\"success\": true, \"new_role\": \"broker\", \"old_role\": \"agent\"}"}
+no_org_scope: pass=20 fail=2 reds={"T7_not_member_refused": "{\"success\": true, \"new_role\": \"broker\", \"old_role\": \"agent\"}", "T7_other_org_unchanged": "broker"}
