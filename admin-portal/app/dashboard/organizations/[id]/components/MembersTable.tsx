@@ -7,7 +7,6 @@ import {
   Button,
   Checkbox,
   Label,
-  Select,
   Table,
   TableBody,
   TableContainer,
@@ -19,8 +18,7 @@ import {
 import { suspendUser, unsuspendUser } from '@/lib/admin-queries';
 import { formatDate } from '@/lib/format';
 import { startNavigationProgress } from '@/components/pwa/NavigationProgress';
-import { changeMemberRole } from '@/lib/actions/changeMemberRole';
-import { MEMBER_ROLE_OPTIONS, type MemberRole } from '@/lib/actions/changeMemberRole.helpers';
+import { ChangeMemberRoleDialog, type ChangeMemberRoleTarget } from '@/components/shared/ChangeMemberRoleDialog';
 type MemberLicenseStatus = 'pending' | 'active' | 'expired' | 'suspended';
 
 export interface MemberRow {
@@ -246,11 +244,8 @@ export function MembersTable({ members, organizationId, canEditRole = false }: M
   } | null>(null);
   const [confirmReason, setConfirmReason] = useState('');
 
-  // BACKLOG-3976: change one member's role.
-  const roleRef = useRef<HTMLDialogElement>(null);
-  const [roleTarget, setRoleTarget] = useState<MemberRow | null>(null);
-  const [roleChoice, setRoleChoice] = useState<MemberRole>('agent');
-  const [roleError, setRoleError] = useState<string | null>(null);
+  // BACKLOG-3976: change one member's role (dialog shared with the user detail page).
+  const [roleTarget, setRoleTarget] = useState<ChangeMemberRoleTarget | null>(null);
 
   // License summary counts (always from full members list)
   const licenseSummary = useMemo(() => {
@@ -398,31 +393,27 @@ export function MembersTable({ members, organizationId, canEditRole = false }: M
     router.refresh();
   }, [confirmAction, confirmReason, router]);
 
-  const openRoleDialog = useCallback((member: MemberRow) => {
-    setRoleTarget(member);
-    setRoleChoice((MEMBER_ROLE_OPTIONS.find((o) => o.value === member.role)?.value ?? 'agent') as MemberRole);
-    setRoleError(null);
-    setMessage(null);
-    roleRef.current?.showModal();
-  }, []);
+  const openRoleDialog = useCallback(
+    (member: MemberRow) => {
+      setMessage(null);
+      setRoleTarget({
+        organizationId,
+        userId: member.user_id,
+        name: member.display_name || member.email,
+        role: member.role,
+      });
+    },
+    [organizationId]
+  );
 
-  const executeRoleChange = useCallback(async () => {
-    if (!roleTarget) return;
-    setLoading(true);
-    setRoleError(null);
-    const result = await changeMemberRole({ organizationId, userId: roleTarget.user_id, role: roleChoice });
-    setLoading(false);
-    if (!result.success) {
-      setRoleError(result.error ?? 'Failed to change role');
-      return;
-    }
-    const name = roleTarget.display_name || roleTarget.email || 'Member';
-    const label = MEMBER_ROLE_OPTIONS.find((o) => o.value === roleChoice)?.label ?? roleChoice;
-    roleRef.current?.close();
-    setRoleTarget(null);
-    setMessage({ type: 'success', text: `Changed ${name}'s role to ${label}.` });
-    router.refresh();
-  }, [organizationId, roleTarget, roleChoice, router]);
+  const handleRoleChanged = useCallback(
+    (target: ChangeMemberRoleTarget, roleLabel: string) => {
+      setRoleTarget(null);
+      setMessage({ type: 'success', text: `Changed ${target.name || 'Member'}'s role to ${roleLabel}.` });
+      router.refresh();
+    },
+    [router]
+  );
 
   const handleSuspendToggle = useCallback(
     (userId: string, isSuspended: boolean) => {
@@ -719,58 +710,11 @@ export function MembersTable({ members, organizationId, canEditRole = false }: M
       </dialog>
 
       {/* Change role dialog (BACKLOG-3976) */}
-      <dialog
-        ref={roleRef}
-        className="rounded-lg shadow-xl border border-gray-200 p-0 backdrop:bg-black/50 max-w-md w-full"
-      >
-        {roleTarget && (
-          <div className="p-6">
-            <h3 className="text-lg font-semibold text-gray-900">Change Role</h3>
-
-            <p className="mt-2 text-sm text-gray-600">
-              Change the role of{' '}
-              <span className="font-medium text-gray-900">
-                {roleTarget.display_name || roleTarget.email || 'this member'}
-              </span>{' '}
-              in this organization. The change is recorded in the audit log.
-            </p>
-
-            <div className="mt-4">
-              <Label htmlFor="member-role">Role</Label>
-              <Select
-                id="member-role"
-                value={roleChoice}
-                onChange={(e) => setRoleChoice(e.target.value as MemberRole)}
-                disabled={loading}
-              >
-                {MEMBER_ROLE_OPTIONS.map((r) => (
-                  <option key={r.value} value={r.value}>
-                    {r.label}
-                  </option>
-                ))}
-              </Select>
-            </div>
-
-            {roleError && (
-              <div role="alert" className="mt-4 rounded-lg px-4 py-2.5 text-sm bg-danger-50 text-danger-600">
-                {roleError}
-              </div>
-            )}
-
-            <div className="mt-6 flex justify-end gap-3">
-              <Button variant="secondary" onClick={() => roleRef.current?.close()} disabled={loading}>
-                Cancel
-              </Button>
-              <Button
-                onClick={executeRoleChange}
-                disabled={loading || roleChoice === roleTarget.role}
-              >
-                {loading ? 'Processing...' : 'Change Role'}
-              </Button>
-            </div>
-          </div>
-        )}
-      </dialog>
+      <ChangeMemberRoleDialog
+        target={roleTarget}
+        onClose={() => setRoleTarget(null)}
+        onChanged={handleRoleChanged}
+      />
     </>
   );
 }
