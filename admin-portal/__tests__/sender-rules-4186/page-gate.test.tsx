@@ -79,6 +79,8 @@ vi.mock('@/lib/supabase/client', () => ({ createClient: () => ({ rpc: async () =
 import { ReportAccessProvider } from '@/lib/reports/report-access-context';
 import SenderRulesPage from '@/app/dashboard/ai/sender-rules/page';
 import ReportsIndexPage from '@/app/dashboard/reports/page';
+import { ReportShareButton } from '@/components/reports/ReportShareButton';
+import { SENDER_RULES_SHARE_ROLE_DESCRIPTIONS } from '@/lib/sender-rules/access';
 import { SenderRulesView } from '@/app/dashboard/ai/sender-rules/SenderRulesView';
 import type { SenderRulesViewProps } from '@/app/dashboard/ai/sender-rules/SenderRulesView';
 
@@ -179,6 +181,17 @@ describe('what the page reads, in order', () => {
     expect(p.access).toBe('owner');
     expect(p.load).toMatchObject({ ok: true, released: CONTENT_V3 });
     expect(p.orgs).toMatchObject({ ok: true });
+    // The share dialog gets this page's role lines (editor = viewer here).
+    const share: Record<string, unknown>[] = [];
+    const walk = (n: ReactNode): void => {
+      if (Array.isArray(n)) return n.forEach(walk);
+      if (!isValidElement(n)) return;
+      const el = n as ReactElement<{ children?: ReactNode }>;
+      if (el.type === ReportShareButton) share.push(el.props as Record<string, unknown>);
+      walk(el.props.children);
+    };
+    walk(result);
+    expect(share).toEqual([{ roleDescriptions: SENDER_RULES_SHARE_ROLE_DESCRIPTIONS }]);
   });
 
   // A8b: the org list reaches owners only (it names personal orgs).

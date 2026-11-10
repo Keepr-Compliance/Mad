@@ -3,7 +3,7 @@ import { requireReportAccess } from '@/lib/reports/report-gate';
 import { ReportAccessProvider } from '@/lib/reports/report-access-context';
 import { ReportShareButton } from '@/components/reports/ReportShareButton';
 import { createSenderRulesApi } from '@/lib/sender-rules/api';
-import { canEditSenderRules, SENDER_RULES_REPORT_KEY } from '@/lib/sender-rules/access';
+import { canEditSenderRules, SENDER_RULES_REPORT_KEY, SENDER_RULES_SHARE_ROLE_DESCRIPTIONS } from '@/lib/sender-rules/access';
 import { loadSenderRules } from '@/lib/sender-rules/load';
 import { parseOrgList, type OrgListResult } from '@/lib/sender-rules/orgs';
 import { SenderRulesView } from './SenderRulesView';
@@ -46,7 +46,7 @@ export default async function SenderRulesPage() {
               </p>
             </div>
           </div>
-          <ReportShareButton />
+          <ReportShareButton roleDescriptions={SENDER_RULES_SHARE_ROLE_DESCRIPTIONS} />
         </div>
         <SenderRulesView
           key={load.ok ? load.state.released_version : 'unreadable'}
