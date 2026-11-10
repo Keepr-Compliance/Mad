@@ -103,6 +103,10 @@ const PATHS = [
   '/dashboard/billing',
   '/dashboard/billing/x',
   '/dashboard/billingx',
+  // BACKLOG-3505 (C5): broker Reports.
+  '/dashboard/reports',
+  '/dashboard/reports/fixture-report',
+  '/dashboard/reportsx',
 ] as const;
 
 type Verdict = typeof ADMIT | string;
@@ -132,6 +136,11 @@ const FLOOR_VERDICTS: Record<(typeof PATHS)[number], Verdict> = {
   '/dashboard/billing': TO_DASHBOARD,
   '/dashboard/billing/x': TO_DASHBOARD,
   '/dashboard/billingx': TO_DASHBOARD,
+  // BACKLOG-3505 (C5): Reports is for a floor user routed on a BROKERAGE row
+  // only; see BROKERAGE_FLOOR_VERDICTS. The page gate decides the rest.
+  '/dashboard/reports': TO_DASHBOARD,
+  '/dashboard/reports/fixture-report': TO_DASHBOARD,
+  '/dashboard/reportsx': TO_DASHBOARD,
 };
 const PERSONAL_OWNER_VERDICTS: Record<(typeof PATHS)[number], Verdict> = {
   ...FLOOR_VERDICTS,
@@ -144,6 +153,9 @@ const BROKERAGE_FLOOR_VERDICTS: Record<(typeof PATHS)[number], Verdict> = {
   ...FLOOR_VERDICTS,
   '/dashboard/my-transactions': ADMIT,
   '/dashboard/my-transactions/abc-123': ADMIT,
+  // BACKLOG-3505: Reports passes to its page gate (role, plan key, agentScoped).
+  '/dashboard/reports': ADMIT,
+  '/dashboard/reports/fixture-report': ADMIT,
 };
 
 const everywhere = (v: Verdict) =>

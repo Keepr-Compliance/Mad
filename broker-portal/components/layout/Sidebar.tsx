@@ -40,6 +40,11 @@
  * broker / admin / it_admin, flag on. Never a brokerage agent and never during
  * impersonation. The page refuses on its own; a hidden entry is not the gate.
  *
+ * BACKLOG-3505: Reports, ONE slot after every role bucket and before Billing,
+ * shown only when the layout's `showReports` (lib/reports/report-gate.ts) says
+ * so. Not inside a bucket: it_admin has no member bucket, and an agent has the
+ * floor bucket. Never during impersonation. The pages refuse on their own.
+ *
  * BACKLOG-3798: below md the aside is hidden and the same nav renders in a
  * slide-out drawer (mobileOpen), always expanded. The drawer is a SIBLING of
  * the aside, never inside it: the aside is display:none below md.
@@ -56,6 +61,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   ChevronLeft,
+  BarChart3,
   ChevronRight,
   ClipboardCheck,
   CreditCard,
@@ -111,6 +117,9 @@ const myTransactionsNavItem: NavItem = {
   icon: FileText,
 };
 
+/** BACKLOG-3505. */
+const reportsNavItem: NavItem = { label: 'Reports', href: '/dashboard/reports', icon: BarChart3 };
+
 const checklistsNavItem: NavItem = { label: 'Checklists', href: '/dashboard/checklists', icon: ClipboardCheck };
 
 /** A copy of `items` with `item` placed right after the entry with `href`. */
@@ -159,6 +168,8 @@ export interface SidebarProps {
   checklistsUnavailableLabel?: string | null;
   /** BACKLOG-3080: the layout passes lib/my-transactions-access.ts. Floor bucket only. */
   showMyTransactions?: boolean;
+  /** BACKLOG-3505: the layout passes lib/reports/report-gate.ts listMyReports. Every bucket. */
+  showReports?: boolean;
   /** BACKLOG-3080: not a full-portal user; show the floor bucket only. */
   floorOnly?: boolean;
   /**
@@ -199,6 +210,7 @@ export function Sidebar({
   showChecklists = false,
   checklistsUnavailableLabel = null,
   showMyTransactions = false,
+  showReports = false,
   floorOnly = false,
   showBilling = false,
   suspended = false,
@@ -316,6 +328,7 @@ export function Sidebar({
         {!showAdminNav && checklistsSlot && r(checklistsNavItem)}
         {showAdminNav && adminItems.map(r)}
         {showBrokerSettings && r(settingsNavItem)}
+        {showReports && !isImpersonating && r(reportsNavItem)}
         {showBilling && !isImpersonating && r(billingNavItem)}
         {personalNavItems.map(r)}
       </>
