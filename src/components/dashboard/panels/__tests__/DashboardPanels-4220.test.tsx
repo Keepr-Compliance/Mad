@@ -12,6 +12,8 @@
  * C4 no stored value -> Todo shown and read (default unchanged).
  * C5 the Settings switch writes `dashboard.showTodo` and the mounted panels follow.
  * C6 off -> on in the same mount reads Todo again.
+ * C7 preference not read yet -> today's layout, Todo loading, no Todo read.
+ * C8 a switch change during the first read wins over the stored value.
  */
 import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -155,6 +157,39 @@ describe("Todo shown by default (C4)", () => {
       "aria-checked",
       "true",
     );
+  });
+});
+
+describe("before the preference is read (C7, C8)", () => {
+  it("C7: preference not known yet -> two columns, Todo loading, Todo not read", async () => {
+    api().preferences.get.mockImplementation(() => new Promise(() => undefined));
+    renderPanels();
+    await screen.findByText("1 Recent St");
+    const grid = screen.getByTestId("dashboard-panels");
+    expect(grid.className.split(/\s+/)).toContain("md:grid-cols-2");
+    expect(screen.getByTestId("dashboard-todo")).toBeInTheDocument();
+    expect(screen.queryByTestId("dashboard-todo-count")).not.toBeInTheDocument();
+    expect(api().checklists.listOpenRequired).not.toHaveBeenCalled();
+  });
+
+  it("C8: a switch change made while the read is in flight beats the stored value", async () => {
+    let answer: (value: unknown) => void = () => undefined;
+    api().preferences.get.mockImplementation(() => new Promise((resolve) => (answer = resolve)));
+    render(
+      <>
+        <DashboardPanels userId="user-1" onOpenTransaction={jest.fn()} onViewTransactions={jest.fn()} />
+        <GeneralSettings userId="user-1" initialPreferences={{}} />
+      </>,
+    );
+    await screen.findByText("1 Recent St");
+    fireEvent.click(screen.getByRole("switch", { name: "Show to-do list on the dashboard" }));
+    await waitFor(() => expect(screen.queryByTestId("dashboard-todo")).not.toBeInTheDocument());
+    await act(async () => {
+      answer({ success: true, preferences: {}, source: "cloud" });
+      await Promise.resolve();
+    });
+    expect(screen.queryByTestId("dashboard-todo")).not.toBeInTheDocument();
+    expect(api().checklists.listOpenRequired).not.toHaveBeenCalled();
   });
 });
 
