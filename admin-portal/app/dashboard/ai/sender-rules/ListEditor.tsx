@@ -8,6 +8,7 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
 import { Button, Input } from '@keepr/ui';
+import { InfoTip } from './InfoTip';
 
 export interface ListEditorProps {
   id: string;
@@ -23,9 +24,11 @@ export interface ListEditorProps {
   placeholder?: string;
   /** Extra control next to the input (the sender-name match). */
   extra?: React.ReactNode;
+  /** The (i) tip next to the list's title. */
+  tip?: string;
 }
 
-export function ListEditor({ id, label, items, cap, readOnly, onAdd, onRemove, format, placeholder, extra }: ListEditorProps) {
+export function ListEditor({ id, label, items, cap, readOnly, onAdd, onRemove, format, placeholder, extra, tip }: ListEditorProps) {
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -39,7 +42,10 @@ export function ListEditor({ id, label, items, cap, readOnly, onAdd, onRemove, f
   return (
     <div className="space-y-2" data-testid={`list-${id}`}>
       <div className="flex items-baseline justify-between gap-2">
-        <h4 className="text-sm font-medium text-gray-900">{label}</h4>
+        <div className="flex items-center gap-1.5">
+          <h4 className="text-sm font-medium text-gray-900">{label}</h4>
+          {tip && <InfoTip label={label} text={tip} />}
+        </div>
         <span className="text-xs text-gray-500">
           {items.length} / {cap}
         </span>

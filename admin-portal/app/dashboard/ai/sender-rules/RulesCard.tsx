@@ -32,6 +32,8 @@ import {
   toggleBulkKey,
   type StringListPath,
 } from '@/lib/sender-rules/edit';
+import { TIPS, type TipKey } from '@/lib/sender-rules/tips';
+import { InfoTip } from './InfoTip';
 import { ListEditor } from './ListEditor';
 
 const BULK_KEY_LABELS: Record<(typeof BULK_KEYS)[number], string> = {
@@ -77,6 +79,7 @@ export function RulesCard({
         cap={CAPS[path]}
         readOnly={readOnly}
         placeholder={placeholder}
+        tip={TIPS[path]}
         onAdd={(input) => {
           const r = addStringItems(items, input, STRING_LIST_KIND[path], CAPS[path]);
           if (r.items.length !== items.length) change(setStringList(content, path, r.items));
@@ -89,11 +92,21 @@ export function RulesCard({
 
   const lps = content.suppress.localParts;
 
+  const heading = (title: string, tip: TipKey) => (
+    <div className="flex items-center gap-1.5">
+      <h3 className="text-sm font-semibold text-gray-900">{title}</h3>
+      <InfoTip label={title} text={TIPS[tip]} />
+    </div>
+  );
+
   return (
     <Card data-testid="rules-card">
       <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0">
         <div className="space-y-1.5">
-          <CardTitle className="text-base">{readOnly ? 'Rules' : 'Edit'}</CardTitle>
+          <div className="flex items-center gap-1.5">
+            <CardTitle className="text-base">{readOnly ? 'Rules' : 'Edit'}</CardTitle>
+            <InfoTip label={readOnly ? 'Rules' : 'Edit'} text={TIPS.card} />
+          </div>
           <CardDescription>
             {readOnly
               ? `The rules every org runs (v${releasedVersion}).`
@@ -114,7 +127,7 @@ export function RulesCard({
         )}
 
         <section className="space-y-4">
-          <h3 className="text-sm font-semibold text-gray-900">Hide mail from</h3>
+          {heading('Hide mail from', 'hide')}
           {list('suppress.exactAddresses', 'Addresses', 'name@example.com')}
           {list('suppress.hosts', 'Domains', 'example.com')}
           <ListEditor
@@ -125,6 +138,7 @@ export function RulesCard({
             cap={CAPS['suppress.localParts']}
             readOnly={readOnly}
             placeholder="noreply"
+            tip={TIPS['suppress.localParts']}
             extra={
               <select
                 aria-label="Sender name match"
@@ -144,7 +158,10 @@ export function RulesCard({
             onRemove={(i) => change(setLocalParts(content, lps.filter((_, j) => j !== i)))}
           />
           <div className="space-y-2" data-testid="bulk-headers">
-            <h4 className="text-sm font-medium text-gray-900">Bulk headers</h4>
+            <div className="flex items-center gap-1.5">
+              <h4 className="text-sm font-medium text-gray-900">Bulk headers</h4>
+              <InfoTip label="Bulk headers" text={TIPS.bulkHeaders} />
+            </div>
             <div className="flex flex-wrap gap-4">
               {BULK_KEYS.map((k) => {
                 const on = content.suppress.bulkHeaders.anyKeyPresent.includes(k);
@@ -179,7 +196,7 @@ export function RulesCard({
         </section>
 
         <section className="space-y-4">
-          <h3 className="text-sm font-semibold text-gray-900">Always keep</h3>
+          {heading('Always keep', 'keep')}
           {list('keep.platformHosts', 'Platform domains', 'example.com')}
           {list('keep.platformAddresses', 'Platform addresses', 'name@example.com')}
         </section>
@@ -189,15 +206,23 @@ export function RulesCard({
         </section>
 
         <section className="space-y-2">
-          <h3 className="text-sm font-semibold text-gray-900">Where each rule is live</h3>
+          {heading('Where each rule is live', 'modes')}
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm" data-testid="modes-grid">
               <thead>
                 <tr className="text-left text-xs text-gray-500">
-                  <th className="py-1 pr-4 font-medium">Rule</th>
+                  <th className="py-1 pr-4 font-medium">
+                    <span className="inline-flex items-center gap-1.5">
+                      Rule
+                      <InfoTip label="Rule" text={TIPS.rule} />
+                    </span>
+                  </th>
                   {SURFACES.map((f) => (
                     <th key={f} className="py-1 pr-4 font-medium">
-                      {SURFACE_LABELS[f]}
+                      <span className="inline-flex items-center gap-1.5">
+                        {SURFACE_LABELS[f]}
+                        <InfoTip label={SURFACE_LABELS[f]} text={TIPS[f]} />
+                      </span>
                     </th>
                   ))}
                 </tr>
@@ -234,13 +259,16 @@ export function RulesCard({
         </section>
 
         <section className="space-y-2">
-          <h3 className="text-sm font-semibold text-gray-900">Thresholds</h3>
+          {heading('Thresholds', 'thresholds')}
           <div className="grid gap-4 sm:grid-cols-3">
             {THRESHOLD_KEYS.map((k) => (
               <div key={k} className="space-y-1">
-                <Label htmlFor={`threshold-${k}`} className="text-sm">
-                  {THRESHOLD_LABELS[k]}
-                </Label>
+                <div className="flex items-center gap-1.5">
+                  <Label htmlFor={`threshold-${k}`} className="text-sm">
+                    {THRESHOLD_LABELS[k]}
+                  </Label>
+                  <InfoTip label={THRESHOLD_LABELS[k]} text={TIPS[k]} />
+                </div>
                 {readOnly ? (
                   <p id={`threshold-${k}`} className="text-sm text-gray-700">
                     {content.thresholds[k]}
