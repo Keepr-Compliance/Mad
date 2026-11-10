@@ -42,9 +42,19 @@ interface BillingCreditsCardProps {
   userId: string;
   /** Current chargeback-suspension standing (BACKLOG-2077). */
   suspension: SuspensionStatus;
+  /** credits.adjust (BACKLOG-4170): shows the credit grant / claw back action. */
+  canAdjustCredits?: boolean;
+  /** billing.suspend (BACKLOG-4170): shows Reinstate on a suspended account. */
+  canReinstate?: boolean;
 }
 
-export function BillingCreditsCard({ data, userId, suspension }: BillingCreditsCardProps) {
+export function BillingCreditsCard({
+  data,
+  userId,
+  suspension,
+  canAdjustCredits = false,
+  canReinstate = false,
+}: BillingCreditsCardProps) {
   const {
     creditBalance,
     ledger,
@@ -349,12 +359,14 @@ export function BillingCreditsCard({ data, userId, suspension }: BillingCreditsC
         </h4>
 
         {/* Live: grant / claw back credits (calls admin_adjust_credits). */}
-        <div className="mt-3">
-          <CreditGrantAction userId={userId} currentBalance={creditBalance} />
-        </div>
+        {canAdjustCredits && (
+          <div className="mt-3">
+            <CreditGrantAction userId={userId} currentBalance={creditBalance} />
+          </div>
+        )}
 
         {/* Live: account suspension (chargeback) status + reinstate. */}
-        <SuspensionAction userId={userId} status={suspension} />
+        <SuspensionAction userId={userId} status={suspension} canReinstate={canReinstate} />
 
         {/* Still coming soon — separate ticket. */}
         <p className="mt-4 text-xs text-gray-400">

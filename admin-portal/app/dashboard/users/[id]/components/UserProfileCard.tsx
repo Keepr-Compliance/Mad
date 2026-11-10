@@ -41,9 +41,11 @@ interface UserProfileCardProps {
   user: UserProfile;
   canImpersonate?: boolean;
   isOwnProfile?: boolean;
+  /** users.suspend (BACKLOG-4170): shows Suspend / Unsuspend. */
+  canSuspend?: boolean;
 }
 
-export function UserProfileCard({ user, canImpersonate = false, isOwnProfile = false }: UserProfileCardProps) {
+export function UserProfileCard({ user, canImpersonate = false, isOwnProfile = false, canSuspend = false }: UserProfileCardProps) {
   const displayName = user.display_name || user.email || 'Unknown User';
   const initials = getInitials(user.display_name, user.email);
 
@@ -77,11 +79,13 @@ export function UserProfileCard({ user, canImpersonate = false, isOwnProfile = f
                   isOwnProfile={isOwnProfile}
                 />
               )}
-              <SuspendDialog
-                userId={user.id}
-                userName={displayName}
-                isSuspended={user.status === 'suspended'}
-              />
+              {canSuspend && (
+                <SuspendDialog
+                  userId={user.id}
+                  userName={displayName}
+                  isSuspended={user.status === 'suspended'}
+                />
+              )}
             </div>
           </div>
           {user.email && (
