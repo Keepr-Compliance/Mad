@@ -56,6 +56,9 @@ function thresholdTexts(c: SenderRuleSet): Record<ThresholdKey, string> {
 }
 
 export function SenderRulesView({ access, load, orgs, api: injected }: SenderRulesViewProps) {
+  // The last result lives ABOVE the keyed editor: a publish changes released_version, the editor
+  // remounts on the new rules, and the message must survive that (SR delta review, 2026-11-10).
+  const [notice, setNotice] = useState<Notice>(null);
   if (!load.ok) {
     return (
       <AlertBanner variant="destructive" data-testid="sender-rules-unreadable">
@@ -64,7 +67,18 @@ export function SenderRulesView({ access, load, orgs, api: injected }: SenderRul
       </AlertBanner>
     );
   }
-  return <Loaded access={access} state={load.state} released={load.released} orgs={orgs} injected={injected} />;
+  return (
+    <Loaded
+      key={load.state.released_version}
+      access={access}
+      state={load.state}
+      released={load.released}
+      orgs={orgs}
+      injected={injected}
+      notice={notice}
+      setNotice={setNotice}
+    />
+  );
 }
 
 function Loaded({
@@ -73,12 +87,16 @@ function Loaded({
   released,
   orgs,
   injected,
+  notice,
+  setNotice,
 }: {
   access: ReportAccess;
   state: Extract<SenderRulesLoad, { ok: true }>['state'];
   released: SenderRuleSet;
   orgs: OrgListResult | null;
   injected?: SenderRulesApi;
+  notice: Notice;
+  setNotice: (n: Notice) => void;
 }) {
   const router = useRouter();
   const canEdit = canEditSenderRules(access);
@@ -90,7 +108,6 @@ function Loaded({
   const [thresholdText, setThresholdText] = useState<Record<ThresholdKey, string>>(() => thresholdTexts(released));
   const [thresholdErrors, setThresholdErrors] = useState<Partial<Record<ThresholdKey, string>>>({});
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<Notice>(null);
   const [pending, setPending] = useState<Pending>(null);
   const [pendingDiff, setPendingDiff] = useState<DiffView | null>(null);
   const [viewing, setViewing] = useState<{ version: number; diff: DiffView } | null>(null);

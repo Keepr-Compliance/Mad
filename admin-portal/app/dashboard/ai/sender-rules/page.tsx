@@ -48,8 +48,9 @@ export default async function SenderRulesPage() {
           </div>
           <ReportShareButton roleDescriptions={SENDER_RULES_SHARE_ROLE_DESCRIPTIONS} />
         </div>
+        {/* No key here: SenderRulesView keys its editor on released_version itself and keeps the
+            last result above that key, so a publish's message survives the refresh. */}
         <SenderRulesView
-          key={load.ok ? load.state.released_version : 'unreadable'}
           access={access}
           load={load}
           orgs={orgs}
