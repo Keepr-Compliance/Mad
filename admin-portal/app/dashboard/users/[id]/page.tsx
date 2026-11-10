@@ -185,6 +185,8 @@ export default async function UserDetailPage({
         user={profile}
         canImpersonate={impersonatePermResult.data === true}
         isOwnProfile={adminUser.id === id}
+        canEditRole={usersEditPermResult.data === true}
+        memberships={orgMemberships}
       />
 
       {/* Plan (BACKLOG-3859) */}
@@ -192,12 +194,7 @@ export default async function UserDetailPage({
 
       {/* Two-column grid for org + account */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <OrganizationCard
-          memberships={orgMemberships}
-          userId={id}
-          userName={profile.display_name || profile.email}
-          canEditRole={usersEditPermResult.data === true}
-        />
+        <OrganizationCard memberships={orgMemberships} />
         <LicenseCard licenses={licensesResult.data ?? []} />
       </div>
 
