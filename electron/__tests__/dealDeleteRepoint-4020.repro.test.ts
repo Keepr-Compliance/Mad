@@ -99,7 +99,7 @@ const invoke = (channel: string, ...args: unknown[]): Promise<any> => {
   return handler(evt, ...args);
 };
 
-beforeAll(() => registerTransactionCrudHandlers(null));
+beforeAll(() => registerTransactionCrudHandlers());
 
 beforeEach(() => {
   db = openAuditProbeDb();

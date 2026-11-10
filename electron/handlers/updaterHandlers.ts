@@ -4,7 +4,7 @@
 // Handles: check-for-updates, download-update, install-update, open-manual-installer
 // ============================================
 
-import { ipcMain, app, shell, BrowserWindow } from "electron";
+import { ipcMain, app, shell } from "electron";
 import { autoUpdater } from "electron-updater";
 import * as Sentry from "@sentry/electron/main";
 import * as path from "path";
@@ -95,7 +95,7 @@ function readGithubPublishConfig(): GithubPublishConfig | undefined {
 /**
  * Register auto-updater IPC handlers
  */
-export function registerUpdaterHandlers(_mainWindow: BrowserWindow): void {
+export function registerUpdaterHandlers(): void {
   // Prevent double registration
   if (handlersRegistered) {
     logService.warn(

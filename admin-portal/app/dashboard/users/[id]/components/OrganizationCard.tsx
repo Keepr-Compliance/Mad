@@ -2,6 +2,7 @@
  * OrganizationCard - Displays the user's organization membership
  *
  * Shows org name (linked), role, join date, and plan info (linked).
+ * BACKLOG-3976: Change Role lives in the profile header (UserProfileCard); this card shows the role badge only.
  */
 
 import Link from 'next/link';
@@ -17,6 +18,8 @@ interface OrgMembership {
   plan_id?: string | null;
   plan_name?: string | null;
   plan_tier?: string | null;
+  /** BACKLOG-3976: organizations.personal_owner_user_id is set. */
+  is_personal?: boolean;
 }
 
 function getRoleBadgeColor(role: string | null): string {
@@ -32,11 +35,7 @@ function getRoleBadgeColor(role: string | null): string {
   }
 }
 
-export function OrganizationCard({
-  memberships,
-}: {
-  memberships: OrgMembership[];
-}) {
+export function OrganizationCard({ memberships }: { memberships: OrgMembership[] }) {
   return (
     <Card>
       <h3 className="text-sm font-semibold text-gray-900 uppercase tracking-wider flex items-center gap-2">

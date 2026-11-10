@@ -311,6 +311,79 @@ describe("PurchaseUnlockHandoff — Flow B (saved card, one-click)", () => {
   });
 });
 
+/**
+ * BACKLOG-4213 — the invalid saved-card response gets its own data-phase test
+ * hook, distinct from a hard decline, with NO visible change.
+ *
+ * Fixtures are the MAIN-process result shapes the renderer receives (not the
+ * route JSON), transcribed from their producers:
+ *  - declined: electron/services/paymentService.ts:251, fed by the portal's
+ *    402 `{ declined: true, code: err.code ?? 'card_declined', message }`
+ *    (broker-portal/app/api/payments/charge/route.ts:223).
+ *  - invalid: electron/services/paymentService.ts:245-249, fed by the portal's
+ *    402 `{ invalid_payment_method: true, code, message }` (route.ts:270-274);
+ *    `resource_missing` is the code pinned at
+ *    broker-portal/__tests__/app/api/payments/payments.test.ts:373, and the
+ *    message is route.ts:274's literal.
+ * The renderer ignores `result.message` and renders its own copy, so the
+ * visible text below is the component's literal for each outcome.
+ */
+describe("PurchaseUnlockHandoff — data-phase test hook (BACKLOG-4213)", () => {
+  const DECLINED_RESULT = {
+    outcome: "declined",
+    code: "card_declined",
+    message: "Your card was declined.",
+  };
+  const INVALID_PM_RESULT = {
+    outcome: "invalid_payment_method",
+    code: "resource_missing",
+    message: "We could not charge your saved card. Please add a new card.",
+  };
+
+  async function renderAndCharge(result: object): Promise<void> {
+    hasSavedCardMock.mockResolvedValue({ hasSavedCard: true });
+    chargeMock.mockResolvedValue(result);
+    render(
+      <PurchaseUnlockHandoff
+        localTransactionId={TX}
+        quote={QUOTE}
+        onUnlocked={jest.fn()}
+        onCancel={jest.fn()}
+      />,
+      { wrapper: strictWrapper },
+    );
+    const btn = await screen.findByTestId("purchase-confirm");
+    await waitFor(() => expect(btn).toBeEnabled());
+    await userEvent.click(btn);
+    await screen.findByTestId("purchase-error");
+  }
+
+  it("hard decline keeps data-phase=\"declined\" and its exact visible copy", async () => {
+    await renderAndCharge(DECLINED_RESULT);
+    expect(screen.getByTestId("purchase-unlock-handoff")).toHaveAttribute("data-phase", "declined");
+    expect(screen.getByTestId("purchase-error").textContent).toBe(
+      "Your card was declined. Try another card to continue.",
+    );
+    expect(screen.getByTestId("purchase-confirm").textContent).toBe("Try another card");
+    expect(screen.getByTestId("purchase-back")).toBeEnabled();
+    expect(screen.getByTestId("purchase-cancel")).toBeEnabled();
+  });
+
+  it("invalid saved card gets data-phase=\"invalid-payment-method\" with unchanged visible copy and buttons", async () => {
+    await renderAndCharge(INVALID_PM_RESULT);
+    expect(screen.getByTestId("purchase-unlock-handoff")).toHaveAttribute(
+      "data-phase",
+      "invalid-payment-method",
+    );
+    expect(screen.getByTestId("purchase-error").textContent).toBe(
+      "We couldn't charge your saved card. Add a new card to continue.",
+    );
+    expect(screen.getByTestId("purchase-confirm").textContent).toBe("Try another card");
+    expect(screen.getByTestId("purchase-back")).toBeEnabled();
+    expect(screen.getByTestId("purchase-cancel")).toBeEnabled();
+  });
+});
+
 describe("PurchaseUnlockHandoff — fail-closed / edge states", () => {
   it("offline / no quote → disabled 'requires internet', no portal call", async () => {
     render(

@@ -285,10 +285,7 @@ beforeEach(() => {
   mockDb.exec(CONTACT_IDENTITY_SCHEMA);
   mockShadowRows = [];
   registeredHandlers.clear();
-  registerContactHandlers({
-    isDestroyed: () => false,
-    webContents: { send: jest.fn() },
-  } as any);
+  registerContactHandlers();
 });
 
 afterEach(() => {

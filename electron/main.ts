@@ -1889,11 +1889,11 @@ app.whenReady().then(async () => {
   // On macOS, cold start URLs come through the 'open-url' event which is already registered
 
   // Register existing handler modules
-  registerAuthHandlers(mainWindow!);
-  registerTransactionCrudHandlers(mainWindow!);
-  registerTransactionExportHandlers(mainWindow!);
+  registerAuthHandlers();
+  registerTransactionCrudHandlers();
+  registerTransactionExportHandlers({ startSubmissionSync: true });
   registerTransactionSearchHandlers();
-  registerEmailSyncHandlers(mainWindow!);
+  registerEmailSyncHandlers();
   registerEmailLinkingHandlers();
   registerEmailAutoLinkHandlers();
   registerReviewQueueHandlers();
@@ -1908,17 +1908,17 @@ app.whenReady().then(async () => {
   registerRcsImportHandlers();
   registerAtRestHandlers();
   void startRcsExtensionBridge();
-  registerAttachmentHandlers(mainWindow!);
-  registerContactHandlers(mainWindow!);
+  registerAttachmentHandlers();
+  registerContactHandlers();
   registerAddressHandlers();
   registerFeedbackHandlers();
   registerSystemHandlers();
   registerDiagnosticHandlers();
   registerUserSettingsHandlers();
   registerPreferenceHandlers();
-  registerDeviceHandlers(mainWindow!);
-  registerBackupHandlers(mainWindow!);
-  registerSyncHandlers(mainWindow!);
+  registerDeviceHandlers();
+  registerBackupHandlers();
+  registerSyncHandlers();
   registerDriverHandlers();
 
   // Initialize LLM services and register handlers
@@ -1949,10 +1949,10 @@ app.whenReady().then(async () => {
 
   // Register extracted handlers from handlers/ directory
   registerPermissionHandlers();
-  registerConversationHandlers(mainWindow!);
-  registerMessageImportHandlers(mainWindow!);
-  registerOutlookHandlers(mainWindow!);
-  registerUpdaterHandlers(mainWindow!);
+  registerConversationHandlers();
+  registerMessageImportHandlers();
+  registerOutlookHandlers();
+  registerUpdaterHandlers();
   registerErrorLoggingHandlers();
   registerResetHandlers();
   registerAppCleanupHandlers();

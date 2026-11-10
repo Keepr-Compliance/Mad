@@ -12,7 +12,6 @@ import {
   prepareTextAttachmentCount,
   prepareTextAttachmentSize,
 } from "../services/db/attachmentAuditStatsSql";
-import type { BrowserWindow } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import path from "path";
 import logService from "../services/logService";
@@ -379,11 +378,8 @@ export function resetOpenTempCleanupForTests(): void {
 
 /**
  * Register attachment IPC handlers
- * @param _mainWindow - Main window instance (unused in attachment handlers)
  */
-export function registerAttachmentHandlers(
-  _mainWindow: BrowserWindow | null,
-): void {
+export function registerAttachmentHandlers(): void {
   registerOpenTempCleanup();
 
   // TASK-1776: Get attachments for a specific email (with on-demand download)

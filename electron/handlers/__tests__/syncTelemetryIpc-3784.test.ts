@@ -64,7 +64,7 @@ const timeline = syncTimeline as unknown as {
 describe("BACKLOG-3784: telemetry IPC", () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    registerSyncHandlers({} as never);
+    registerSyncHandlers();
   });
 
   afterEach(() => cleanupSyncHandlers());

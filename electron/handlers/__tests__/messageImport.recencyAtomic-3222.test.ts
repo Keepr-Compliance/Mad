@@ -144,7 +144,7 @@ const PHONE_AGG_READ_RE = /SELECT\s+participants_flat,\s*MAX\(sent_at\)[\s\S]*GR
 type Handler = (e: IpcMainInvokeEvent, ...a: unknown[]) => Promise<{ success: boolean }>;
 let handler: Handler;
 beforeAll(() => {
-  registerMessageImportHandlers({ isDestroyed: () => false, webContents: { send: jest.fn() } } as never);
+  registerMessageImportHandlers();
   for (const [ch, h] of mockIpcHandle.mock.calls) if (ch === "messages:import-macos") handler = h as Handler;
   expect(handler).toBeDefined();
 });

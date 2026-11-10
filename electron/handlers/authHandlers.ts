@@ -10,7 +10,6 @@
  * - handlers/sharedAuthHandlers.ts - Cross-provider handlers (pending login, mailbox disconnect)
  */
 
-import type { BrowserWindow } from "electron";
 import * as Sentry from "@sentry/electron/main";
 
 // Import services for initializeDatabase
@@ -97,18 +96,18 @@ export const initializeDatabase = async (): Promise<void> => {
  * Register all authentication handlers
  * This is the main entry point called from main.ts
  */
-export function registerAuthHandlers(_mainWindow: BrowserWindow | null): void {
+export function registerAuthHandlers(): void {
   // Google OAuth handlers (login, mailbox connection)
-  registerGoogleAuthHandlers(_mainWindow);
+  registerGoogleAuthHandlers();
 
   // Microsoft OAuth handlers (login, mailbox connection)
-  registerMicrosoftAuthHandlers(_mainWindow);
+  registerMicrosoftAuthHandlers();
 
   // Session handlers (logout, terms, validation)
   registerSessionHandlers();
 
   // Shared handlers (pending login completion, mailbox disconnect)
-  registerSharedAuthHandlers(_mainWindow);
+  registerSharedAuthHandlers();
 
   // BACKLOG-3833: the once-a-minute idle check. Started here, with the auth
   // channels it belongs to, so the app cannot have one without the other.

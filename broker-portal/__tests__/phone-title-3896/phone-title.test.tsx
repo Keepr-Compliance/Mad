@@ -67,6 +67,8 @@ const EXPECTED: Record<string, string> = {
   '/dashboard/submissions': 'Submissions',
   '/dashboard/submissions/s-1': 'Submission',
   '/dashboard/billing': 'Billing',
+  '/dashboard/reports': 'Reports', // BACKLOG-3505
+  '/dashboard/reports/r-1': 'Report',
   '/dashboard/setup': 'Account Setup',
 };
 

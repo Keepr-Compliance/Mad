@@ -264,7 +264,7 @@ beforeEach(() => {
   mockFullSync.mockClear();
   mockGetContactNames.mockClear();
   registeredHandlers.clear();
-  registerContactHandlers({} as any);
+  registerContactHandlers();
 });
 
 afterEach(() => {

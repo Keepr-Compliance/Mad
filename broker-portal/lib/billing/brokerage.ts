@@ -23,6 +23,9 @@
  *     _billing_auto_reinstate also requires a payment after the suspension began.
  *   - invoice.payment_failed with the PaymentIntent in requires_action (ACH needs verification)
  *     is not a failure: log only.
+ *   - BACKLOG-3932: any other invoice.payment_failed also queues the billing contact's
+ *     "payment failed" email (kind notify_payment_failed, +1 hour, one per failed attempt).
+ *     The account-manager alert keeps its one-per-invoice key.
  *   - BACKLOG-4007 PR-3: a $0 invoice.paid (trial invoices) records no payment; the subscription
  *     is still mirrored.
  *   - Refund or dispute on a brokerage payment: alert + account-manager email; never a suspension.
@@ -44,6 +47,7 @@ import type Stripe from 'stripe';
 import { billingAlert } from './alert';
 import { enqueueOutbox } from './outboxEnqueue';
 import { NOTIFY_ACCOUNT_MANAGER_KIND } from './brokerageNotify';
+import { NOTIFY_PAYMENT_FAILED_KIND, PAYMENT_FAILED_DELAY_MS, failedAttemptId } from './paymentFailedNotify';
 import { type BillingContext, stripeId } from './sync';
 import { listOpenInvoices, overdueOf, stripeNow } from './overdue';
 
@@ -159,6 +163,22 @@ async function notifyAccountManager(
     runAfter: new Date(),
   });
   log(ctx, `account-manager ${reason} email ${res}`);
+}
+
+/**
+ * BACKLOG-3932: the billing contact's "payment failed" email, one row per failed attempt
+ * (./paymentFailedNotify.ts), sent an hour later only if the invoice is still unpaid then.
+ */
+async function notifyPaymentFailed(ctx: BillingContext, org: string, invoiceId: string, chargeId: string): Promise<void> {
+  const res = await enqueueOutbox(ctx.service, {
+    mode: ctx.mode,
+    kind: NOTIFY_PAYMENT_FAILED_KIND,
+    organizationId: org,
+    dedupeKey: `${NOTIFY_PAYMENT_FAILED_KIND}:${ctx.mode}:${org}:${invoiceId}:${chargeId}`,
+    payload: { organization_id: org, invoice_id: invoiceId, charge_id: chargeId },
+    runAfter: new Date(Date.now() + PAYMENT_FAILED_DELAY_MS),
+  });
+  log(ctx, `billing-contact payment-failed email ${res}`);
 }
 
 async function maybeNotifyOverdue(ctx: BillingContext, org: string, customerId: string): Promise<void> {
@@ -321,14 +341,13 @@ export async function dispatchBrokerageEvent(ctx: BillingContext, objectId: stri
       }
       // invoice.payment_failed
       const piId = invoicePaymentIntentId(inv);
-      if (piId) {
-        const pi = await ctx.stripe.paymentIntents.retrieve(piId);
-        if (pi.status === 'requires_action') {
-          log(ctx, `invoice ${inv.id}: payment needs verification (requires_action); not a failure`);
-          return true;
-        }
+      const pi = piId ? await ctx.stripe.paymentIntents.retrieve(piId) : null;
+      if (pi?.status === 'requires_action') {
+        log(ctx, `invoice ${inv.id}: payment needs verification (requires_action); not a failure`);
+        return true;
       }
       await notifyAccountManager(ctx, org, 'payment_failed', inv.id, inv.id);
+      await notifyPaymentFailed(ctx, org, inv.id, failedAttemptId(pi));
       return true;
     }
     case 'charge':

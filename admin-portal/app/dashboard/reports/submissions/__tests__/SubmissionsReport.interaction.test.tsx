@@ -91,3 +91,29 @@ describe('sort', () => {
     expect(rowIds(container)[0]).toBe(PERIOD_ROWS.find((r) => r.retry_count === 2)!.submission_id);
   });
 });
+
+/** Hover one day's column in a chart; return the tooltip's lines. */
+function hoverLines(container: HTMLElement, chart: string, day: string): string[] {
+  const column = container.querySelector(`[data-chart="${chart}"] rect[data-day="${day}"]`) as Element;
+  fireEvent.mouseMove(column, { clientX: 10, clientY: 10 });
+  const tip = screen.getByRole('tooltip');
+  const lines = [...tip.children].map((line) => line.textContent ?? '');
+  fireEvent.mouseLeave(column);
+  return lines;
+}
+
+describe('chart tooltips name the hovered day (BACKLOG-4208)', () => {
+  it('the attempts chart, Oct 2', () => {
+    const { container } = mount();
+    expect(hoverLines(container, 'attempts', '2026-10-02')).toEqual(['Oct 2', '3 attempts · 0 committed']);
+  });
+
+  it('the failures chart, Sep 30', () => {
+    const { container } = mount();
+    expect(hoverLines(container, 'failures', '2026-09-30')).toEqual([
+      'Sep 30',
+      '1 failed or unknown · 1 did not finish or stalled',
+      '0 cancelled · 0 committed',
+    ]);
+  });
+});

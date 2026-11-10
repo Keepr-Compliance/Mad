@@ -169,7 +169,7 @@ describe("BACKLOG-2791 — audit-range extension runs the review sweep", () => {
     mockGetTransactionDetails.mockResolvedValue(EXISTING);
     mockUpdateTransaction.mockResolvedValue(undefined);
     mockSyncReviewQueue.mockResolvedValue({ added: 0, linked: 0, outstanding: 0 });
-    registerTransactionCrudHandlers(null);
+    registerTransactionCrudHandlers();
   });
 
   it("extending the END date runs the sweep, once, on this transaction", async () => {

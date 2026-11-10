@@ -340,7 +340,7 @@ beforeAll(() => {
   db = new Database(":memory:");
   db.exec(SCHEMA);
   setDb(db);
-  registerTransactionExportHandlers(null);
+  registerTransactionExportHandlers({ startSubmissionSync: false });
 });
 
 afterAll(() => {
