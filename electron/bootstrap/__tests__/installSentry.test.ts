@@ -181,7 +181,8 @@ describe("installSentry: the init call transcribed from main.ts (BACKLOG-2962)",
     const options = initOptions(load({ isPackaged: false }));
     // `Object.keys` order is insertion order — a dropped, added or reordered
     // key reds here before any value is looked at.
-    expect(Object.keys(options)).toEqual(["dsn", "environment", "release", "enabled", "transport", "transportOptions", "beforeBreadcrumb", "beforeSend"]);
+    // BACKLOG-4181: enableLogs + beforeSendLog (the diagnostics health stream).
+    expect(Object.keys(options)).toEqual(["dsn", "environment", "release", "enabled", "transport", "transportOptions", "beforeBreadcrumb", "beforeSend", "enableLogs", "beforeSendLog"]);
   });
 
   it("BACKLOG-4040 S3: transportOptions replaces the offline store with the sealed one", () => {
@@ -409,11 +410,14 @@ describe("installSentry: the crash reporting switch (BACKLOG-3801)", () => {
   function networkTransport(loaded: Loaded): Net {
     const options = initOptions(loaded);
     expect(loaded.makeOffline).toHaveBeenCalledTimes(1);
-    // The offline wrapper must be the transport, built from a base factory —
-    // NOT given a `shouldSend` option, which queues to disk when false.
-    expect(options.transport).toBe(loaded.makeOffline.mock.results[0].value);
-    const baseFactory = loaded.makeOffline.mock.calls[0][0] as (o: unknown) => Net;
-    return baseFactory({});
+    // The offline wrapper must be built from a base factory — NOT given a
+    // `shouldSend` option, which queues to disk when false. BACKLOG-4181: the
+    // transport is the diagnostics log filter around it; with the identity
+    // offline mock, calling it builds the whole chain down to the network.
+    expect(loaded.makeOffline.mock.calls[0]).toHaveLength(1);
+    expect(typeof loaded.makeOffline.mock.calls[0][0]).toBe("function");
+    expect(typeof options.transport).toBe("function");
+    return (options.transport as (o: unknown) => Net)({});
   }
 
   it("packaged, no saved choice: ON — enabled, and an envelope reaches the network", async () => {

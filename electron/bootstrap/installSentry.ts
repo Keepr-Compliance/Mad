@@ -109,6 +109,12 @@ import {
   loadCrashReportingPreference,
 } from "../services/crashReportingPreference";
 import { nodeCaDenylistFailure } from "./nodeCaDenylist";
+import {
+  isDiagnosticsSharingEnabled,
+  loadDiagnosticsSharingPreference,
+} from "../services/diagnosticsSharingPreference";
+import { filterDiagnosticLogs } from "../services/diagnostics/diagnosticsLogTransport";
+import { configureDiagnostics } from "../services/diagnostics/perf";
 
 // Load environment files based on whether app is packaged or in development
 if (app.isPackaged) {
@@ -129,6 +135,10 @@ if (app.isPackaged) {
 // the offline queue an earlier run left on disk, which `enabled: false` alone
 // does not: the transport is built and flushed whenever a DSN is set.
 const crashReportingAtLaunch = loadCrashReportingPreference(app.getPath("userData"));
+// BACKLOG-4181: "Share diagnostics with Keepr" and the random diagnostics
+// device id, read the same way. Checked LIVE afterwards (helper, beforeSendLog,
+// transport filter); this load only sets the starting value.
+loadDiagnosticsSharingPreference(app.getPath("userData"));
 
 // BACKLOG-4040 S3: the stock offline queue that 2.41 / 2.42 wrote in plaintext is
 // deleted, whatever the crash-reporting choice; new reports queue sealed. Once the
@@ -168,7 +178,12 @@ Sentry.init({
   enabled: (app.isPackaged || !!process.env.SENTRY_DSN) && crashReportingAtLaunch,
   // BACKLOG-3801: the single network egress for main AND renderer envelopes
   // (renderer envelopes arrive over IPC and leave through this transport).
-  transport: Sentry.makeElectronOfflineTransport(gateBaseTransport(Sentry.makeElectronTransport)),
+  // BACKLOG-4181: Sentry Logs are rebuilt from the diagnostics allowlist at
+  // send time, outside the offline wrapper (so the queue only stores filtered
+  // logs) and again inside it (so a replay re-checks the switch and device id).
+  transport: filterDiagnosticLogs(
+    Sentry.makeElectronOfflineTransport(gateBaseTransport(filterDiagnosticLogs(Sentry.makeElectronTransport))),
+  ),
   // BACKLOG-4040 S3: the offline queue is sealed at rest (replaces the stock
   // plaintext store; the wrapper spreads these options after its own default).
   transportOptions: { createStore: createSealedOfflineStore },
@@ -218,6 +233,25 @@ Sentry.init({
       return null;
     }
   },
+  // BACKLOG-4181: Sentry Logs carry the diagnostics health stream. First pass
+  // only — the transport filter above is the final gate. Logs never pass
+  // beforeSend, so this is the one hook they do pass: everything but a marked
+  // diagnostics log (SDK net / child-process logs included) is dropped here.
+  enableLogs: true,
+  beforeSendLog(sentryLog) {
+    if (!isDiagnosticsSharingEnabled()) return null;
+    return sentryLog.attributes?.["keepr.diag"] === true ? sentryLog : null;
+  },
+});
+
+// BACKLOG-4181: the diagnostics helper's sink. Never logger.fmt; the helper
+// passes the op name as the body.
+configureDiagnostics({
+  sink: (level, body, attributes) => {
+    Sentry.logger[level](body, attributes);
+  },
+  appVersion: app.getVersion(),
+  os: `${process.platform}-${readRoot(() => os.release()) ?? "unknown"}`,
 });
 
 // BACKLOG-4052: installNodeCaDenylist runs before Sentry exists and fails open;
