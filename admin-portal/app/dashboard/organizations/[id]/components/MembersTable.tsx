@@ -2,11 +2,12 @@
 
 import { useState, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { Users, MoreVertical, ExternalLink, Ban, CheckCircle, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { Users, MoreVertical, ExternalLink, Ban, CheckCircle, ArrowUpDown, ArrowUp, ArrowDown, Shield } from 'lucide-react';
 import {
   Button,
   Checkbox,
   Label,
+  Select,
   Table,
   TableBody,
   TableContainer,
@@ -18,6 +19,8 @@ import {
 import { suspendUser, unsuspendUser } from '@/lib/admin-queries';
 import { formatDate } from '@/lib/format';
 import { startNavigationProgress } from '@/components/pwa/NavigationProgress';
+import { changeMemberRole } from '@/lib/actions/changeMemberRole';
+import { MEMBER_ROLE_OPTIONS, type MemberRole } from '@/lib/actions/changeMemberRole.helpers';
 type MemberLicenseStatus = 'pending' | 'active' | 'expired' | 'suspended';
 
 export interface MemberRow {
@@ -32,6 +35,10 @@ export interface MemberRow {
 
 interface MembersTableProps {
   members: MemberRow[];
+  /** BACKLOG-3976: the organization these members belong to (the role change targets it). */
+  organizationId: string;
+  /** BACKLOG-3976: the viewer holds users.edit. The server checks it again on every change. */
+  canEditRole?: boolean;
 }
 
 type SortField = 'name' | 'email' | 'role' | 'license' | 'joined';
@@ -117,10 +124,13 @@ function classifyLicense(status: string | null): LicenseCategory {
 function RowActionMenu({
   member,
   onSuspendToggle,
+  onChangeRole,
   loading,
 }: {
   member: MemberRow;
   onSuspendToggle: (userId: string, isSuspended: boolean) => void;
+  /** Present only when the viewer may change roles (BACKLOG-3976). */
+  onChangeRole?: (member: MemberRow) => void;
   loading: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -171,6 +181,21 @@ function RowActionMenu({
               <ExternalLink className="h-3.5 w-3.5" />
               View User Detail
             </button>
+            {onChangeRole && (
+              <button
+                type="button"
+                disabled={loading}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen(false);
+                  onChangeRole(member);
+                }}
+                className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2 disabled:opacity-50"
+              >
+                <Shield className="h-3.5 w-3.5" />
+                Change Role
+              </button>
+            )}
             <button
               type="button"
               disabled={loading}
@@ -204,7 +229,7 @@ function RowActionMenu({
   );
 }
 
-export function MembersTable({ members }: MembersTableProps) {
+export function MembersTable({ members, organizationId, canEditRole = false }: MembersTableProps) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
@@ -220,6 +245,12 @@ export function MembersTable({ members }: MembersTableProps) {
     label: string;
   } | null>(null);
   const [confirmReason, setConfirmReason] = useState('');
+
+  // BACKLOG-3976: change one member's role.
+  const roleRef = useRef<HTMLDialogElement>(null);
+  const [roleTarget, setRoleTarget] = useState<MemberRow | null>(null);
+  const [roleChoice, setRoleChoice] = useState<MemberRole>('agent');
+  const [roleError, setRoleError] = useState<string | null>(null);
 
   // License summary counts (always from full members list)
   const licenseSummary = useMemo(() => {
@@ -366,6 +397,32 @@ export function MembersTable({ members }: MembersTableProps) {
 
     router.refresh();
   }, [confirmAction, confirmReason, router]);
+
+  const openRoleDialog = useCallback((member: MemberRow) => {
+    setRoleTarget(member);
+    setRoleChoice((MEMBER_ROLE_OPTIONS.find((o) => o.value === member.role)?.value ?? 'agent') as MemberRole);
+    setRoleError(null);
+    setMessage(null);
+    roleRef.current?.showModal();
+  }, []);
+
+  const executeRoleChange = useCallback(async () => {
+    if (!roleTarget) return;
+    setLoading(true);
+    setRoleError(null);
+    const result = await changeMemberRole({ organizationId, userId: roleTarget.user_id, role: roleChoice });
+    setLoading(false);
+    if (!result.success) {
+      setRoleError(result.error ?? 'Failed to change role');
+      return;
+    }
+    const name = roleTarget.display_name || roleTarget.email || 'Member';
+    const label = MEMBER_ROLE_OPTIONS.find((o) => o.value === roleChoice)?.label ?? roleChoice;
+    roleRef.current?.close();
+    setRoleTarget(null);
+    setMessage({ type: 'success', text: `Changed ${name}'s role to ${label}.` });
+    router.refresh();
+  }, [organizationId, roleTarget, roleChoice, router]);
 
   const handleSuspendToggle = useCallback(
     (userId: string, isSuspended: boolean) => {
@@ -571,6 +628,7 @@ export function MembersTable({ members }: MembersTableProps) {
                   <RowActionMenu
                     member={member}
                     onSuspendToggle={handleSuspendToggle}
+                    onChangeRole={canEditRole ? openRoleDialog : undefined}
                     loading={loading}
                   />
                 </td>
@@ -655,6 +713,60 @@ export function MembersTable({ members }: MembersTableProps) {
                   `Confirm ${confirmAction.type === 'suspend' ? 'Suspend' : 'Unsuspend'}`
                 )}
               </button>
+            </div>
+          </div>
+        )}
+      </dialog>
+
+      {/* Change role dialog (BACKLOG-3976) */}
+      <dialog
+        ref={roleRef}
+        className="rounded-lg shadow-xl border border-gray-200 p-0 backdrop:bg-black/50 max-w-md w-full"
+      >
+        {roleTarget && (
+          <div className="p-6">
+            <h3 className="text-lg font-semibold text-gray-900">Change Role</h3>
+
+            <p className="mt-2 text-sm text-gray-600">
+              Change the role of{' '}
+              <span className="font-medium text-gray-900">
+                {roleTarget.display_name || roleTarget.email || 'this member'}
+              </span>{' '}
+              in this organization. The change is recorded in the audit log.
+            </p>
+
+            <div className="mt-4">
+              <Label htmlFor="member-role">Role</Label>
+              <Select
+                id="member-role"
+                value={roleChoice}
+                onChange={(e) => setRoleChoice(e.target.value as MemberRole)}
+                disabled={loading}
+              >
+                {MEMBER_ROLE_OPTIONS.map((r) => (
+                  <option key={r.value} value={r.value}>
+                    {r.label}
+                  </option>
+                ))}
+              </Select>
+            </div>
+
+            {roleError && (
+              <div role="alert" className="mt-4 rounded-lg px-4 py-2.5 text-sm bg-danger-50 text-danger-600">
+                {roleError}
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end gap-3">
+              <Button variant="secondary" onClick={() => roleRef.current?.close()} disabled={loading}>
+                Cancel
+              </Button>
+              <Button
+                onClick={executeRoleChange}
+                disabled={loading || roleChoice === roleTarget.role}
+              >
+                {loading ? 'Processing...' : 'Change Role'}
+              </Button>
             </div>
           </div>
         )}

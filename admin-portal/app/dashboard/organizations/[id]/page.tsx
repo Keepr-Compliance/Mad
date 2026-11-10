@@ -61,6 +61,7 @@ export default async function OrganizationDetailPage({
   });
 
   // BACKLOG-4007: Invite on this page needs the same permission as the Users page invite.
+  // BACKLOG-3976: the member role change uses it too (the RPC checks it again).
   const { data: canInvite } = await supabase.rpc('has_permission', {
     check_user_id: adminUser.id,
     required_permission: 'users.edit',
@@ -246,7 +247,7 @@ export default async function OrganizationDetailPage({
             <div className="mt-4 flex justify-center">{inviteButton}</div>
           </div>
         ) : (
-          <MembersTable members={members} />
+          <MembersTable members={members} organizationId={org.id} canEditRole={!!canInvite} />
         )}
       </div>
     </div>
