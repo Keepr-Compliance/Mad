@@ -7,6 +7,10 @@
  * Queries support_ticket_backlog_links in reverse (given backlog_item_id, show tickets).
  * Includes inline search to link/unlink tickets with link type selection.
  *
+ * BACKLOG-4145: without support.view the panel reads through pm_list_backlog_ticket_links
+ * (number, subject, status only) and shows no search, link or unlink controls. With
+ * support.view it reads the link rows (link id, type, ticket id) and can manage links.
+ *
  * Pattern: Adapted from support/BacklogLinksPanel.tsx + pm/LinkedItemsPanel.tsx
  */
 
@@ -15,11 +19,14 @@ import Link from 'next/link';
 import { Ticket, X, Plus, Loader2, Search } from 'lucide-react';
 import {
   getTicketLinksForBacklogItem,
+  getManagedTicketLinksForBacklogItem,
   searchTicketsForBacklogLink,
   createBacklogLink,
   removeBacklogLink,
 } from '@/lib/support-queries';
-import type { TicketLinkRow } from '@/lib/support-queries';
+import type { TicketLinkRow, PmTicketLinkSummary } from '@/lib/support-queries';
+import { usePermissions } from '@/components/providers/PermissionsProvider';
+import { PERMISSIONS } from '@/lib/permissions';
 
 interface SupportTicketLinksPanelProps {
   itemId: string;
@@ -47,11 +54,17 @@ function formatTicketNumber(num: number): string {
   return `TKT-${String(num).padStart(4, '0')}`;
 }
 
+/** One displayed row. `link` is present only for support.view holders (managed read). */
+type DisplayRow = PmTicketLinkSummary & { link?: TicketLinkRow };
+
 export function SupportTicketLinksPanel({ itemId, onUpdate }: SupportTicketLinksPanelProps) {
+  const { hasPermission, loading: permissionsLoading } = usePermissions();
+  const canManage = hasPermission(PERMISSIONS.SUPPORT_VIEW);
+
   const [expanded, setExpanded] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [links, setLinks] = useState<TicketLinkRow[]>([]);
+  const [links, setLinks] = useState<DisplayRow[]>([]);
 
   // Search / add state
   const [showSearch, setShowSearch] = useState(false);
@@ -69,18 +82,28 @@ export function SupportTicketLinksPanel({ itemId, onUpdate }: SupportTicketLinks
     setLoading(true);
     setError(null);
     try {
-      const result = await getTicketLinksForBacklogItem(itemId);
-      setLinks(result);
+      if (canManage) {
+        const result = await getManagedTicketLinksForBacklogItem(itemId);
+        setLinks(result.map((link) => ({
+          ticket_number: link.ticket_number,
+          subject: link.subject,
+          status: link.status,
+          link,
+        })));
+      } else {
+        setLinks(await getTicketLinksForBacklogItem(itemId));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load ticket links');
     } finally {
       setLoading(false);
     }
-  }, [itemId]);
+  }, [itemId, canManage]);
 
   useEffect(() => {
+    if (permissionsLoading) return;
     fetchLinks();
-  }, [fetchLinks]);
+  }, [fetchLinks, permissionsLoading]);
 
   // Focus search input when panel opens
   const prevShowSearch = useRef(showSearch);
@@ -91,9 +114,12 @@ export function SupportTicketLinksPanel({ itemId, onUpdate }: SupportTicketLinks
     }
   }
 
+  const linkedTicketNumbers = links.map((row) => row.ticket_number);
+  const linkedKey = linkedTicketNumbers.join(',');
+
   // Debounced search
   useEffect(() => {
-    if (!searchQuery || searchQuery.length < 1) {
+    if (!canManage || !searchQuery || searchQuery.length < 1) {
       setSearchResults([]);
       setSearching(false);
       return;
@@ -108,7 +134,10 @@ export function SupportTicketLinksPanel({ itemId, onUpdate }: SupportTicketLinks
     searchTimerRef.current = setTimeout(async () => {
       setSearching(true);
       try {
-        const results = await searchTicketsForBacklogLink(searchQuery, itemId);
+        const results = await searchTicketsForBacklogLink(
+          searchQuery,
+          linkedKey ? linkedKey.split(',').map(Number) : []
+        );
         if (!cancelled) {
           setSearchResults(results);
         }
@@ -130,7 +159,7 @@ export function SupportTicketLinksPanel({ itemId, onUpdate }: SupportTicketLinks
         clearTimeout(searchTimerRef.current);
       }
     };
-  }, [searchQuery, itemId]);
+  }, [searchQuery, canManage, linkedKey]);
 
   async function handleLink(ticketId: string) {
     setLinking(true);
@@ -197,49 +226,68 @@ export function SupportTicketLinksPanel({ itemId, onUpdate }: SupportTicketLinks
             <>
               {links.length > 0 && (
                 <div className="space-y-1.5">
-                  {links.map((link) => (
-                    <div key={link.id} className="group py-1.5">
+                  {links.map((row) => {
+                    const link = canManage ? row.link : undefined;
+                    return (
+                    <div key={link ? link.id : `ticket-${row.ticket_number}`} className="group py-1.5">
                       <div className="flex items-center gap-1.5">
                         <Ticket className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                        {link ? (
+                          <Link
+                            href={`/dashboard/support/${link.ticket_id}`}
+                            className="text-sm text-gray-700 hover:text-primary-600 font-mono"
+                          >
+                            {formatTicketNumber(row.ticket_number)}
+                          </Link>
+                        ) : (
+                          <span className="text-sm text-gray-700 font-mono">
+                            {formatTicketNumber(row.ticket_number)}
+                          </span>
+                        )}
+                        {link && (
+                          <span
+                            className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${LINK_TYPE_STYLES[link.link_type] || 'bg-gray-100 text-gray-600'}`}
+                          >
+                            {link.link_type}
+                          </span>
+                        )}
+                        {link && (
+                          <button
+                            onClick={() => handleUnlink(link.id)}
+                            disabled={unlinking === link.id}
+                            className="opacity-0 group-hover:opacity-100 ml-auto p-0.5 text-gray-400 hover:text-red-500 transition-opacity"
+                            title="Unlink ticket"
+                          >
+                            {unlinking === link.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <X className="h-3.5 w-3.5" />
+                            )}
+                          </button>
+                        )}
+                      </div>
+                      {link ? (
                         <Link
                           href={`/dashboard/support/${link.ticket_id}`}
-                          className="text-sm text-gray-700 hover:text-primary-600 font-mono"
+                          className="block text-sm text-gray-600 hover:text-primary-600 truncate mt-0.5 pl-5"
                         >
-                          {formatTicketNumber(link.ticket_number)}
+                          {row.subject}
                         </Link>
-                        <span
-                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${LINK_TYPE_STYLES[link.link_type] || 'bg-gray-100 text-gray-600'}`}
-                        >
-                          {link.link_type}
+                      ) : (
+                        <span className="block text-sm text-gray-600 truncate mt-0.5 pl-5">
+                          {row.subject}
                         </span>
-                        <button
-                          onClick={() => handleUnlink(link.id)}
-                          disabled={unlinking === link.id}
-                          className="opacity-0 group-hover:opacity-100 ml-auto p-0.5 text-gray-400 hover:text-red-500 transition-opacity"
-                          title="Unlink ticket"
-                        >
-                          {unlinking === link.id ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <X className="h-3.5 w-3.5" />
-                          )}
-                        </button>
-                      </div>
-                      <Link
-                        href={`/dashboard/support/${link.ticket_id}`}
-                        className="block text-sm text-gray-600 hover:text-primary-600 truncate mt-0.5 pl-5"
-                      >
-                        {link.subject}
-                      </Link>
+                      )}
                       <div className="flex items-center gap-2 mt-0.5 pl-5">
                         <span
-                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${TICKET_STATUS_STYLES[link.status] || 'bg-gray-100 text-gray-500'}`}
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${TICKET_STATUS_STYLES[row.status] || 'bg-gray-100 text-gray-500'}`}
                         >
-                          {link.status.replace('_', ' ')}
+                          {row.status.replace('_', ' ')}
                         </span>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
 
@@ -247,7 +295,7 @@ export function SupportTicketLinksPanel({ itemId, onUpdate }: SupportTicketLinks
                 <p className="text-xs text-gray-400 py-1">No linked tickets</p>
               )}
 
-              {!showSearch ? (
+              {!canManage ? null : !showSearch ? (
                 <button
                   onClick={() => setShowSearch(true)}
                   className="flex items-center gap-1 text-xs text-primary-600 hover:text-primary-700 font-medium mt-2"
