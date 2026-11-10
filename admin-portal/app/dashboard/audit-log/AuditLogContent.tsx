@@ -42,6 +42,7 @@ const ACTION_LABELS: Record<string, { label: string; color: string }> = {
   'internal_user.add': { label: 'Internal User Added', color: 'bg-emerald-100 text-emerald-700' },
   'internal_user.remove': { label: 'Internal User Removed', color: 'bg-orange-100 text-orange-700' },
   'internal_user.role_change': { label: 'Role Changed', color: 'bg-purple-100 text-purple-700' },
+  'org_member.role_change': { label: 'Member Role Changed', color: 'bg-purple-100 text-purple-700' },
   'role.create': { label: 'Role Created', color: 'bg-indigo-100 text-indigo-700' },
   'role.update': { label: 'Role Updated', color: 'bg-indigo-100 text-indigo-700' },
   'role.update_permissions': { label: 'Permissions Updated', color: 'bg-indigo-100 text-indigo-700' },
