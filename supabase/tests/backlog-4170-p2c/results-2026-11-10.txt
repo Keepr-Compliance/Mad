@@ -1,63 +1,63 @@
-BACKLOG-4170 PR2c harness results, keepr-test, 2026-11-10. Measured on commit ab089afd7 (int base 59658d404).
-migration md5 176f8bb288ca7b0c0bb784c8807fd5b3; gen_migration.py --check: GEN CHECK EQUAL
-body md5 PR2b -> PR2c: add_message 9d9cb01bb5a1fed81f584aa6f268118c -> 3bdb2c269b47a42a5f70bf09295c638c; get_ticket_detail fd14d57fe2cbd29a39a6e1af7b75e23f -> 290a91e37cfd48c35c4ca3d43faeabfd; list_events 269465224f282e27485b37fa0f2830e0 -> 99b46c147a1f842aa4da05b9953d7253
+BACKLOG-4170 PR2c harness results, keepr-test, 2026-11-10. Measured on commit edf7c7fcd (int base 59658d404).
+migration md5 5b06fd427e42988de855cf1d0d85c0ab; gen_migration.py --check: GEN CHECK EQUAL
+body md5 PR2b -> PR2c: add_message 9d9cb01bb5a1fed81f584aa6f268118c -> 3bdb2c269b47a42a5f70bf09295c638c; get_ticket_detail fd14d57fe2cbd29a39a6e1af7b75e23f -> 24dab3474673fb425725e9cfdc004118; list_events 269465224f282e27485b37fa0f2830e0 -> d7333c467e6e7f8f8bb1a292aeaf0ae7
 
-== run.sh (before the real apply)
+== run.sh
 {
  "fail": 0,
- "pass": 312,
+ "pass": 336,
  "reds": {},
- "total": 312,
+ "total": 336,
  "payload_md5": {
   "u0": {
-   "after": "e93fae1501c7104af15a6ac6bed46cc9",
+   "after": "17e84b9f1dbc32cfdffddc65f7377760",
    "equal": false,
-   "before": "c87d96a6714a4169ddc87688d4630bb7"
+   "before": "10b5c4c0e393c3f69075b9543a5efa56"
   },
   "anon": {
-   "after": "159a621dabd5690597a90b00282c0dbd",
+   "after": "5705cb64be2aa8cabd1557005507406a",
    "equal": false,
-   "before": "f2b48a13ebeb02a59ea16138249eedc7"
+   "before": "92c6280a4b3d4feea4ef79b010dd3959"
   },
   "u_sa": {
-   "after": "c50a1e48b15e02f2749ff0a29c4267d7",
+   "after": "f2eda8cb06d1fa9b93fdf8544b2cced7",
    "equal": true,
-   "before": "c50a1e48b15e02f2749ff0a29c4267d7"
+   "before": "f2eda8cb06d1fa9b93fdf8544b2cced7"
   },
   "u_cust": {
-   "after": "576fee012b2d72b2a19e63cc0803671b",
+   "after": "6d8e51f2c22e43f3fcc86ce336056967",
    "equal": false,
-   "before": "7bfebd2f0d375e412a4858fe3ce31a8c"
+   "before": "2a49d261773211b97a1e5874ae219cf2"
   },
   "u_nullsub": {
-   "after": "159a621dabd5690597a90b00282c0dbd",
+   "after": "5705cb64be2aa8cabd1557005507406a",
    "equal": false,
-   "before": "f2b48a13ebeb02a59ea16138249eedc7"
+   "before": "92c6280a4b3d4feea4ef79b010dd3959"
   },
   "u_view+manage": {
-   "after": "4e2c55caa8e367e419d148e1073a2db3",
+   "after": "b811ee7af3af6971bf361853315d4355",
    "equal": true,
-   "before": "4e2c55caa8e367e419d148e1073a2db3"
+   "before": "b811ee7af3af6971bf361853315d4355"
   },
   "u_support.view": {
-   "after": "70893d8477f5a61eaf1c58f06f59d31a",
+   "after": "13487ef5ed9520e417367d78d949ae7f",
    "equal": true,
-   "before": "70893d8477f5a61eaf1c58f06f59d31a"
+   "before": "13487ef5ed9520e417367d78d949ae7f"
   },
   "u_support.admin": {
-   "after": "826290a268c98fbbbb82d5b201f64488",
+   "after": "74e560230ec61e2a0246279d38c0e4b6",
    "equal": false,
-   "before": "ba704afd4ad590946d038cc9491f33e0"
+   "before": "b51ddad60f7b67f526c93a40656ee0c2"
   },
   "u_support.manage": {
-   "after": "826290a268c98fbbbb82d5b201f64488",
+   "after": "74e560230ec61e2a0246279d38c0e4b6",
    "equal": false,
-   "before": "9d6c546681632e8104372848e6aefaf5"
+   "before": "d9c02aa9989a7ff876b30311f1848e10"
   },
   "u_other_users.view": {
-   "after": "826290a268c98fbbbb82d5b201f64488",
+   "after": "74e560230ec61e2a0246279d38c0e4b6",
    "equal": false,
-   "before": "ac847351d40dc006d0ac82383caff116"
+   "before": "702d352bc2c40767c407765aae631cbb"
   }
  }
 }
@@ -65,59 +65,59 @@ body md5 PR2b -> PR2c: add_message 9d9cb01bb5a1fed81f584aa6f268118c -> 3bdb2c269
 == mutations (mutate.py all)
 == FILTER_removed_get_ticket_detail
 MUTATION APPLIED numstat=2/3
-  - ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', '290a91e37cfd48c35c4ca3d43faeabfd'),
+  - ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', '24dab3474673fb425725e9cfdc004118'),
   + ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', 'fd14d57fe2cbd29a39a6e1af7b75e23f'),
   - WHERE e.ticket_id = p_ticket_id
-  - AND (v_is_agent OR NOT (e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note'));
+  - AND (v_is_agent OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'));
   + WHERE e.ticket_id = p_ticket_id;
-RESULT total=312 pass=301 fail=11
+RESULT total=336 pass=325 fail=11
 REDS D_anon_d_by_email_keeps_961_981_991,D_nonvacuous_requester_replies_changed,D_u0_d_u0_keeps_963_983_993,K_touched_bodies_differ_from_pr2b,V_anon_d_by_email,V_u0_d_u0,V_u_cust_d_bad_email,V_u_cust_d_by_email,V_u_cust_d_cust,V_u_cust_d_cust_email,V_u_nullsub_d_by_email
 RESTORED clean=True
 == FILTER_removed_list_events
 MUTATION APPLIED numstat=2/3
-  - ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', '99b46c147a1f842aa4da05b9953d7253')
+  - ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', 'd7333c467e6e7f8f8bb1a292aeaf0ae7')
   + ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', '269465224f282e27485b37fa0f2830e0')
   - WHERE e.ticket_id = p_ticket_id
-  - AND (v_is_internal OR NOT (e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note'))),
+  - AND (v_is_internal OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'))),
   + WHERE e.ticket_id = p_ticket_id),
-RESULT total=312 pass=307 fail=5
+RESULT total=336 pass=331 fail=5
 REDS D_u_cust_le_cust_keeps_961_981_991,K_touched_bodies_differ_from_pr2b,V_u0_le_u0,V_u_cust_le_cust,V_u_cust_le_cust_email
 RESTORED clean=True
 == FILTER_eq_null_get_ticket_detail
 MUTATION APPLIED numstat=2/2
-  - ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', '290a91e37cfd48c35c4ca3d43faeabfd'),
-  + ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', 'c93ce60e42d83b53ce9cacc2d82789bf'),
-  - AND (v_is_agent OR NOT (e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note'));
-  + AND (v_is_agent OR NOT (e.event_type = 'message_added' AND e.new_value = 'internal_note'));
-RESULT total=312 pass=296 fail=16
-REDS D_anon_d_by_email_keeps_961_981_991,D_anon_d_by_email_removed_only_note_event,D_u0_d_u0_keeps_963_983_993,D_u0_d_u0_removed_only_note_event,D_u_cust_d_bad_email_removed_only_note_event,D_u_cust_d_by_email_removed_only_note_event,D_u_cust_d_cust_email_removed_only_note_event,D_u_cust_d_cust_removed_only_note_event,D_u_nullsub_d_by_email_removed_only_note_event,V_anon_d_by_email,V_u0_d_u0,V_u_cust_d_bad_email,V_u_cust_d_by_email,V_u_cust_d_cust,V_u_cust_d_cust_email,V_u_nullsub_d_by_email
+  - ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', '24dab3474673fb425725e9cfdc004118'),
+  + ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', '6f92d68998d520d855ae7b66f112e0b5'),
+  - AND (v_is_agent OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'));
+  + AND (v_is_agent OR NOT ((e.event_type = 'message_added' AND e.new_value = 'internal_note') OR e.event_type = 'internal_note_deleted'));
+RESULT total=336 pass=320 fail=16
+REDS D_anon_d_by_email_keeps_961_981_991,D_anon_d_by_email_removed_only_note_events,D_u0_d_u0_keeps_963_983_993,D_u0_d_u0_removed_only_note_events,D_u_cust_d_bad_email_removed_only_note_events,D_u_cust_d_by_email_removed_only_note_events,D_u_cust_d_cust_email_removed_only_note_events,D_u_cust_d_cust_removed_only_note_events,D_u_nullsub_d_by_email_removed_only_note_events,V_anon_d_by_email,V_u0_d_u0,V_u_cust_d_bad_email,V_u_cust_d_by_email,V_u_cust_d_cust,V_u_cust_d_cust_email,V_u_nullsub_d_by_email
 RESTORED clean=True
 == FILTER_eq_null_list_events
 MUTATION APPLIED numstat=2/2
-  - ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', '99b46c147a1f842aa4da05b9953d7253')
-  + ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', '4780158c6f326c4d3e25a8eda2f9b04b')
-  - AND (v_is_internal OR NOT (e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note'))),
-  + AND (v_is_internal OR NOT (e.event_type = 'message_added' AND e.new_value = 'internal_note'))),
-RESULT total=312 pass=305 fail=7
-REDS D_u0_le_u0_removed_only_note_event,D_u_cust_le_cust_email_removed_only_note_event,D_u_cust_le_cust_keeps_961_981_991,D_u_cust_le_cust_removed_only_note_event,V_u0_le_u0,V_u_cust_le_cust,V_u_cust_le_cust_email
+  - ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', 'd7333c467e6e7f8f8bb1a292aeaf0ae7')
+  + ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', '4073e088f0f6bb3cdc780d76806e11e6')
+  - AND (v_is_internal OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'))),
+  + AND (v_is_internal OR NOT ((e.event_type = 'message_added' AND e.new_value = 'internal_note') OR e.event_type = 'internal_note_deleted'))),
+RESULT total=336 pass=329 fail=7
+REDS D_u0_le_u0_removed_only_note_events,D_u_cust_le_cust_email_removed_only_note_events,D_u_cust_le_cust_keeps_961_981_991,D_u_cust_le_cust_removed_only_note_events,V_u0_le_u0,V_u_cust_le_cust,V_u_cust_le_cust_email
 RESTORED clean=True
 == AGENT_filtered_get_ticket_detail
 MUTATION APPLIED numstat=2/2
-  - ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', '290a91e37cfd48c35c4ca3d43faeabfd'),
-  + ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', '2c0f75d8d761fbe6cfc6fcceeb20cf4c'),
-  - AND (v_is_agent OR NOT (e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note'));
-  + AND (false OR NOT (e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note'));
-RESULT total=312 pass=290 fail=22
-REDS B0_u_sa_unchanged,B0_u_support.view_unchanged,B0_u_view+manage_unchanged,D_u_sa_d_cust_sees_971,V_u_sa_d_bad_email,V_u_sa_d_by_email,V_u_sa_d_cust,V_u_sa_d_cust_email,V_u_sa_d_other,V_u_sa_d_u0,V_u_support.view_d_bad_email,V_u_support.view_d_by_email,V_u_support.view_d_cust,V_u_support.view_d_cust_email,V_u_support.view_d_other,V_u_support.view_d_u0,V_u_view+manage_d_bad_email,V_u_view+manage_d_by_email,V_u_view+manage_d_cust,V_u_view+manage_d_cust_email,V_u_view+manage_d_other,V_u_view+manage_d_u0
+  - ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', '24dab3474673fb425725e9cfdc004118'),
+  + ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', '13d2400b1806a64fec336fa890f34c9b'),
+  - AND (v_is_agent OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'));
+  + AND (false OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'));
+RESULT total=336 pass=314 fail=22
+REDS B0_u_sa_unchanged,B0_u_support.view_unchanged,B0_u_view+manage_unchanged,D_u_sa_d_cust_sees_906_971,V_u_sa_d_bad_email,V_u_sa_d_by_email,V_u_sa_d_cust,V_u_sa_d_cust_email,V_u_sa_d_other,V_u_sa_d_u0,V_u_support.view_d_bad_email,V_u_support.view_d_by_email,V_u_support.view_d_cust,V_u_support.view_d_cust_email,V_u_support.view_d_other,V_u_support.view_d_u0,V_u_view+manage_d_bad_email,V_u_view+manage_d_by_email,V_u_view+manage_d_cust,V_u_view+manage_d_cust_email,V_u_view+manage_d_other,V_u_view+manage_d_u0
 RESTORED clean=True
 == AGENT_filtered_list_events
 MUTATION APPLIED numstat=2/2
-  - ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', '99b46c147a1f842aa4da05b9953d7253')
-  + ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', 'c3aed41ab61659e8e6255a8d378090da')
-  - AND (v_is_internal OR NOT (e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note'))),
-  + AND (false OR NOT (e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note'))),
-RESULT total=312 pass=296 fail=16
-REDS B0_u_sa_unchanged,B0_u_support.view_unchanged,B0_u_view+manage_unchanged,D_support.view_le_other_sees_974,V_u_sa_le_cust,V_u_sa_le_cust_email,V_u_sa_le_other,V_u_sa_le_u0,V_u_support.view_le_cust,V_u_support.view_le_cust_email,V_u_support.view_le_other,V_u_support.view_le_u0,V_u_view+manage_le_cust,V_u_view+manage_le_cust_email,V_u_view+manage_le_other,V_u_view+manage_le_u0
+  - ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', 'd7333c467e6e7f8f8bb1a292aeaf0ae7')
+  + ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', '7805cdcb6a91d998b743801a94d1916d')
+  - AND (v_is_internal OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'))),
+  + AND (false OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'))),
+RESULT total=336 pass=320 fail=16
+REDS B0_u_sa_unchanged,B0_u_support.view_unchanged,B0_u_view+manage_unchanged,D_support.view_le_other_sees_909_974,V_u_sa_le_cust,V_u_sa_le_cust_email,V_u_sa_le_other,V_u_sa_le_u0,V_u_support.view_le_cust,V_u_support.view_le_cust_email,V_u_support.view_le_other,V_u_support.view_le_u0,V_u_view+manage_le_cust,V_u_view+manage_le_cust_email,V_u_view+manage_le_other,V_u_view+manage_le_u0
 RESTORED clean=True
 == REQUESTER_CHECK_removed
 MUTATION APPLIED numstat=1/15
@@ -137,8 +137,8 @@ MUTATION APPLIED numstat=1/15
   - ) THEN
   - RAISE EXCEPTION 'Ticket not found: %', p_ticket_id;
   - END IF;
-RESULT total=312 pass=243 fail=69
-REDS A_anon_wrong_email_903_refused,A_anon_wrong_email_904_refused,A_cust_not_requester_903_refused,A_cust_not_requester_904_refused,A_cust_note_904_refused_as_not_found,A_cust_passing_requester_email_904_refused,A_decoy_903_refused,A_nullsub_wrong_email_903_refused,K_touched_bodies_differ_from_pr2b,V_anon_m_903_reply_em7,V_anon_m_904_reply_em99,V_u0_m_901_reply,V_u0_m_901_reply_em7,V_u0_m_902_reply,V_u0_m_902_reply_EM7,V_u0_m_902_reply_em7,V_u0_m_904_note,V_u0_m_904_reply,V_u0_m_904_reply_em8,V_u0_m_904_reply_em99,V_u_cust_m_903_note,V_u_cust_m_903_reply,V_u_cust_m_903_reply_em1,V_u_cust_m_903_reply_em7,V_u_cust_m_904_note,V_u_cust_m_904_reply,V_u_cust_m_904_reply_em8,V_u_cust_m_904_reply_em99,V_u_nullsub_m_903_reply_em7,V_u_nullsub_m_904_reply_em99,V_u_other_users.view_m_901_reply,V_u_other_users.view_m_901_reply_em7,V_u_other_users.view_m_902_reply,V_u_other_users.view_m_902_reply_EM7,V_u_other_users.view_m_902_reply_em7,V_u_other_users.view_m_903_note,V_u_other_users.view_m_903_reply,V_u_other_users.view_m_903_reply_em1,V_u_other_users.view_m_903_reply_em7,V_u_other_users.view_m_904_note,V_u_other_users.view_m_904_reply,V_u_other_users.view_m_904_reply_em8,V_u_other_users.view_m_904_reply_em99,V_u_support.admin_m_901_reply,V_u_support.admin_m_901_reply_em7,V_u_support.admin_m_902_reply,V_u_support.admin_m_902_reply_EM7,V_u_support.admin_m_902_reply_em7,V_u_support.admin_m_903_note,V_u_support.admin_m_903_reply,V_u_support.admin_m_903_reply_em1,V_u_support.admin_m_903_reply_em7,V_u_support.admin_m_904_note,V_u_support.admin_m_904_reply,V_u_support.admin_m_904_reply_em8,V_u_support.admin_m_904_reply_em99,V_u_support.manage_m_901_reply,V_u_support.manage_m_901_reply_em7,V_u_support.manage_m_902_reply,V_u_support.manage_m_902_reply_EM7,V_u_support.manage_m_902_reply_em7,V_u_support.manage_m_903_note,V_u_support.manage_m_903_reply,V_u_support.manage_m_903_reply_em1,V_u_support.manage_m_903_reply_em7,V_u_support.manage_m_904_note,V_u_support.manage_m_904_reply,V_u_support.manage_m_904_reply_em8,V_u_support.manage_m_904_reply_em99
+RESULT total=336 pass=253 fail=83
+REDS A_anon_percent_email_903_refused,A_anon_requester_email_suffix_903_refused,A_anon_wrong_email_903_refused,A_anon_wrong_email_904_refused,A_cust_not_requester_903_refused,A_cust_not_requester_904_refused,A_cust_note_904_refused_as_not_found,A_cust_passing_requester_email_904_refused,A_decoy_903_refused,A_nullsub_wrong_email_903_refused,K_touched_bodies_differ_from_pr2b,V_anon_m_903_reply_em1pct,V_anon_m_903_reply_em7,V_anon_m_903_reply_pct,V_anon_m_904_reply_em99,V_u0_m_901_reply,V_u0_m_901_reply_em7,V_u0_m_902_reply,V_u0_m_902_reply_EM7,V_u0_m_902_reply_em7,V_u0_m_904_note,V_u0_m_904_reply,V_u0_m_904_reply_em8,V_u0_m_904_reply_em99,V_u_cust_m_903_note,V_u_cust_m_903_reply,V_u_cust_m_903_reply_em1,V_u_cust_m_903_reply_em1pct,V_u_cust_m_903_reply_em7,V_u_cust_m_903_reply_pct,V_u_cust_m_904_note,V_u_cust_m_904_reply,V_u_cust_m_904_reply_em8,V_u_cust_m_904_reply_em99,V_u_nullsub_m_903_reply_em1pct,V_u_nullsub_m_903_reply_em7,V_u_nullsub_m_903_reply_pct,V_u_nullsub_m_904_reply_em99,V_u_other_users.view_m_901_reply,V_u_other_users.view_m_901_reply_em7,V_u_other_users.view_m_902_reply,V_u_other_users.view_m_902_reply_EM7,V_u_other_users.view_m_902_reply_em7,V_u_other_users.view_m_903_note,V_u_other_users.view_m_903_reply,V_u_other_users.view_m_903_reply_em1,V_u_other_users.view_m_903_reply_em1pct,V_u_other_users.view_m_903_reply_em7,V_u_other_users.view_m_903_reply_pct,V_u_other_users.view_m_904_note,V_u_other_users.view_m_904_reply,V_u_other_users.view_m_904_reply_em8,V_u_other_users.view_m_904_reply_em99,V_u_support.admin_m_901_reply,V_u_support.admin_m_901_reply_em7,V_u_support.admin_m_902_reply,V_u_support.admin_m_902_reply_EM7,V_u_support.admin_m_902_reply_em7,V_u_support.admin_m_903_note,V_u_support.admin_m_903_reply,V_u_support.admin_m_903_reply_em1,V_u_support.admin_m_903_reply_em1pct,V_u_support.admin_m_903_reply_em7,V_u_support.admin_m_903_reply_pct,V_u_support.admin_m_904_note,V_u_support.admin_m_904_reply,V_u_support.admin_m_904_reply_em8,V_u_support.admin_m_904_reply_em99,V_u_support.manage_m_901_reply,V_u_support.manage_m_901_reply_em7,V_u_support.manage_m_902_reply,V_u_support.manage_m_902_reply_EM7,V_u_support.manage_m_902_reply_em7,V_u_support.manage_m_903_note,V_u_support.manage_m_903_reply,V_u_support.manage_m_903_reply_em1,V_u_support.manage_m_903_reply_em1pct,V_u_support.manage_m_903_reply_em7,V_u_support.manage_m_903_reply_pct,V_u_support.manage_m_904_note,V_u_support.manage_m_904_reply,V_u_support.manage_m_904_reply_em8,V_u_support.manage_m_904_reply_em99
 RESTORED clean=True
 == REQUESTER_CHECK_removed_signed_in
 MUTATION APPLIED numstat=1/8
@@ -151,8 +151,8 @@ MUTATION APPLIED numstat=1/8
   - ) THEN
   - RAISE EXCEPTION 'Ticket not found: %', p_ticket_id;
   - END IF;
-RESULT total=312 pass=251 fail=61
-REDS A_cust_not_requester_903_refused,A_cust_not_requester_904_refused,A_cust_note_904_refused_as_not_found,A_cust_passing_requester_email_904_refused,A_decoy_903_refused,V_u0_m_901_reply,V_u0_m_901_reply_em7,V_u0_m_902_reply,V_u0_m_902_reply_EM7,V_u0_m_902_reply_em7,V_u0_m_904_note,V_u0_m_904_reply,V_u0_m_904_reply_em8,V_u0_m_904_reply_em99,V_u_cust_m_903_note,V_u_cust_m_903_reply,V_u_cust_m_903_reply_em1,V_u_cust_m_903_reply_em7,V_u_cust_m_904_note,V_u_cust_m_904_reply,V_u_cust_m_904_reply_em8,V_u_cust_m_904_reply_em99,V_u_other_users.view_m_901_reply,V_u_other_users.view_m_901_reply_em7,V_u_other_users.view_m_902_reply,V_u_other_users.view_m_902_reply_EM7,V_u_other_users.view_m_902_reply_em7,V_u_other_users.view_m_903_note,V_u_other_users.view_m_903_reply,V_u_other_users.view_m_903_reply_em1,V_u_other_users.view_m_903_reply_em7,V_u_other_users.view_m_904_note,V_u_other_users.view_m_904_reply,V_u_other_users.view_m_904_reply_em8,V_u_other_users.view_m_904_reply_em99,V_u_support.admin_m_901_reply,V_u_support.admin_m_901_reply_em7,V_u_support.admin_m_902_reply,V_u_support.admin_m_902_reply_EM7,V_u_support.admin_m_902_reply_em7,V_u_support.admin_m_903_note,V_u_support.admin_m_903_reply,V_u_support.admin_m_903_reply_em1,V_u_support.admin_m_903_reply_em7,V_u_support.admin_m_904_note,V_u_support.admin_m_904_reply,V_u_support.admin_m_904_reply_em8,V_u_support.admin_m_904_reply_em99,V_u_support.manage_m_901_reply,V_u_support.manage_m_901_reply_em7,V_u_support.manage_m_902_reply,V_u_support.manage_m_902_reply_EM7,V_u_support.manage_m_902_reply_em7,V_u_support.manage_m_903_note,V_u_support.manage_m_903_reply,V_u_support.manage_m_903_reply_em1,V_u_support.manage_m_903_reply_em7,V_u_support.manage_m_904_note,V_u_support.manage_m_904_reply,V_u_support.manage_m_904_reply_em8,V_u_support.manage_m_904_reply_em99
+RESULT total=336 pass=267 fail=69
+REDS A_cust_not_requester_903_refused,A_cust_not_requester_904_refused,A_cust_note_904_refused_as_not_found,A_cust_passing_requester_email_904_refused,A_decoy_903_refused,V_u0_m_901_reply,V_u0_m_901_reply_em7,V_u0_m_902_reply,V_u0_m_902_reply_EM7,V_u0_m_902_reply_em7,V_u0_m_904_note,V_u0_m_904_reply,V_u0_m_904_reply_em8,V_u0_m_904_reply_em99,V_u_cust_m_903_note,V_u_cust_m_903_reply,V_u_cust_m_903_reply_em1,V_u_cust_m_903_reply_em1pct,V_u_cust_m_903_reply_em7,V_u_cust_m_903_reply_pct,V_u_cust_m_904_note,V_u_cust_m_904_reply,V_u_cust_m_904_reply_em8,V_u_cust_m_904_reply_em99,V_u_other_users.view_m_901_reply,V_u_other_users.view_m_901_reply_em7,V_u_other_users.view_m_902_reply,V_u_other_users.view_m_902_reply_EM7,V_u_other_users.view_m_902_reply_em7,V_u_other_users.view_m_903_note,V_u_other_users.view_m_903_reply,V_u_other_users.view_m_903_reply_em1,V_u_other_users.view_m_903_reply_em1pct,V_u_other_users.view_m_903_reply_em7,V_u_other_users.view_m_903_reply_pct,V_u_other_users.view_m_904_note,V_u_other_users.view_m_904_reply,V_u_other_users.view_m_904_reply_em8,V_u_other_users.view_m_904_reply_em99,V_u_support.admin_m_901_reply,V_u_support.admin_m_901_reply_em7,V_u_support.admin_m_902_reply,V_u_support.admin_m_902_reply_EM7,V_u_support.admin_m_902_reply_em7,V_u_support.admin_m_903_note,V_u_support.admin_m_903_reply,V_u_support.admin_m_903_reply_em1,V_u_support.admin_m_903_reply_em1pct,V_u_support.admin_m_903_reply_em7,V_u_support.admin_m_903_reply_pct,V_u_support.admin_m_904_note,V_u_support.admin_m_904_reply,V_u_support.admin_m_904_reply_em8,V_u_support.admin_m_904_reply_em99,V_u_support.manage_m_901_reply,V_u_support.manage_m_901_reply_em7,V_u_support.manage_m_902_reply,V_u_support.manage_m_902_reply_EM7,V_u_support.manage_m_902_reply_em7,V_u_support.manage_m_903_note,V_u_support.manage_m_903_reply,V_u_support.manage_m_903_reply_em1,V_u_support.manage_m_903_reply_em1pct,V_u_support.manage_m_903_reply_em7,V_u_support.manage_m_903_reply_pct,V_u_support.manage_m_904_note,V_u_support.manage_m_904_reply,V_u_support.manage_m_904_reply_em8,V_u_support.manage_m_904_reply_em99
 RESTORED clean=True
 == REQUESTER_CHECK_removed_signed_out
 MUTATION APPLIED numstat=1/8
@@ -165,8 +165,8 @@ MUTATION APPLIED numstat=1/8
   - ) THEN
   - RAISE EXCEPTION 'Ticket not found: %', p_ticket_id;
   - END IF;
-RESULT total=312 pass=305 fail=7
-REDS A_anon_wrong_email_903_refused,A_anon_wrong_email_904_refused,A_nullsub_wrong_email_903_refused,V_anon_m_903_reply_em7,V_anon_m_904_reply_em99,V_u_nullsub_m_903_reply_em7,V_u_nullsub_m_904_reply_em99
+RESULT total=336 pass=323 fail=13
+REDS A_anon_percent_email_903_refused,A_anon_requester_email_suffix_903_refused,A_anon_wrong_email_903_refused,A_anon_wrong_email_904_refused,A_nullsub_wrong_email_903_refused,V_anon_m_903_reply_em1pct,V_anon_m_903_reply_em7,V_anon_m_903_reply_pct,V_anon_m_904_reply_em99,V_u_nullsub_m_903_reply_em1pct,V_u_nullsub_m_903_reply_em7,V_u_nullsub_m_903_reply_pct,V_u_nullsub_m_904_reply_em99
 RESTORED clean=True
 == REQUESTER_signed_in_id_only
 MUTATION APPLIED numstat=2/2
@@ -174,7 +174,7 @@ MUTATION APPLIED numstat=2/2
   + ('public.support_add_message(uuid,text,text,text,text)', '9d9cb01bb5a1fed81f584aa6f268118c', 'a7db17a2592ecdf555e2df18fca969ac'),
   - AND (requester_id = auth.uid() OR requester_email = (SELECT email FROM auth.users WHERE id = auth.uid()))
   + AND requester_id = auth.uid()
-RESULT total=312 pass=308 fail=4
+RESULT total=336 pass=332 fail=4
 REDS A_requester_by_email_signed_in_902_posts_and_reopens,V_u_cust_m_902_reply,V_u_cust_m_902_reply_EM7,V_u_cust_m_902_reply_em7
 RESTORED clean=True
 == REQUESTER_signed_in_uses_sender_email
@@ -183,7 +183,7 @@ MUTATION APPLIED numstat=2/2
   + ('public.support_add_message(uuid,text,text,text,text)', '9d9cb01bb5a1fed81f584aa6f268118c', '27c1f0d5341c97b99390f9b2a9dff32b'),
   - AND (requester_id = auth.uid() OR requester_email = (SELECT email FROM auth.users WHERE id = auth.uid()))
   + AND (requester_id = auth.uid() OR requester_email = COALESCE(p_sender_email, (SELECT email FROM auth.users WHERE id = auth.uid())))
-RESULT total=312 pass=293 fail=19
+RESULT total=336 pass=317 fail=19
 REDS A_cust_passing_requester_email_904_refused,V_u0_m_901_reply_em7,V_u0_m_902_reply_em7,V_u0_m_904_reply_em8,V_u_cust_m_902_reply_EM7,V_u_cust_m_903_reply_em1,V_u_cust_m_904_reply_em8,V_u_other_users.view_m_901_reply_em7,V_u_other_users.view_m_902_reply_em7,V_u_other_users.view_m_903_reply_em1,V_u_other_users.view_m_904_reply_em8,V_u_support.admin_m_901_reply_em7,V_u_support.admin_m_902_reply_em7,V_u_support.admin_m_903_reply_em1,V_u_support.admin_m_904_reply_em8,V_u_support.manage_m_901_reply_em7,V_u_support.manage_m_902_reply_em7,V_u_support.manage_m_903_reply_em1,V_u_support.manage_m_904_reply_em8
 RESTORED clean=True
 == EMAIL_CASE_sensitive
@@ -192,8 +192,35 @@ MUTATION APPLIED numstat=2/2
   + ('public.support_add_message(uuid,text,text,text,text)', '9d9cb01bb5a1fed81f584aa6f268118c', '0e1a093aecf64b9f4988de25338bb59b'),
   - AND lower(requester_email) = lower(p_sender_email)
   + AND requester_email = p_sender_email
-RESULT total=312 pass=309 fail=3
+RESULT total=336 pass=333 fail=3
 REDS A_requester_signed_out_upper_email_902_posts,V_anon_m_902_reply_EM7,V_u_nullsub_m_902_reply_EM7
+RESTORED clean=True
+== NOTE_DELETED_removed_get_ticket_detail
+MUTATION APPLIED numstat=2/2
+  - ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', '24dab3474673fb425725e9cfdc004118'),
+  + ('public.support_get_ticket_detail(uuid,text)', 'fd14d57fe2cbd29a39a6e1af7b75e23f', '64c4bef81801bf4207f0cddc2a99e438'),
+  - AND (v_is_agent OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'));
+  + AND (v_is_agent OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note')));
+RESULT total=336 pass=320 fail=16
+REDS D_anon_d_by_email_keeps_961_981_991,D_anon_d_by_email_removed_only_note_events,D_u0_d_u0_keeps_963_983_993,D_u0_d_u0_removed_only_note_events,D_u_cust_d_bad_email_removed_only_note_events,D_u_cust_d_by_email_removed_only_note_events,D_u_cust_d_cust_email_removed_only_note_events,D_u_cust_d_cust_removed_only_note_events,D_u_nullsub_d_by_email_removed_only_note_events,V_anon_d_by_email,V_u0_d_u0,V_u_cust_d_bad_email,V_u_cust_d_by_email,V_u_cust_d_cust,V_u_cust_d_cust_email,V_u_nullsub_d_by_email
+RESTORED clean=True
+== NOTE_DELETED_removed_list_events
+MUTATION APPLIED numstat=2/2
+  - ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', 'd7333c467e6e7f8f8bb1a292aeaf0ae7')
+  + ('public.support_list_events(uuid)', '269465224f282e27485b37fa0f2830e0', '6441ea763c8ade98f6714130a21986c5')
+  - AND (v_is_internal OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note') OR e.event_type = 'internal_note_deleted'))),
+  + AND (v_is_internal OR NOT ((e.event_type = 'message_added' AND e.new_value IS NOT DISTINCT FROM 'internal_note')))),
+RESULT total=336 pass=329 fail=7
+REDS D_u0_le_u0_removed_only_note_events,D_u_cust_le_cust_email_removed_only_note_events,D_u_cust_le_cust_keeps_961_981_991,D_u_cust_le_cust_removed_only_note_events,V_u0_le_u0,V_u_cust_le_cust,V_u_cust_le_cust_email
+RESTORED clean=True
+== SR_signed_out_ilike
+MUTATION APPLIED numstat=2/2
+  - ('public.support_add_message(uuid,text,text,text,text)', '9d9cb01bb5a1fed81f584aa6f268118c', '3bdb2c269b47a42a5f70bf09295c638c'),
+  + ('public.support_add_message(uuid,text,text,text,text)', '9d9cb01bb5a1fed81f584aa6f268118c', 'e92731124e35e6ba709ae731838a63dc'),
+  - AND lower(requester_email) = lower(p_sender_email)
+  + AND requester_email ILIKE p_sender_email
+RESULT total=336 pass=330 fail=6
+REDS A_anon_percent_email_903_refused,A_anon_requester_email_suffix_903_refused,V_anon_m_903_reply_em1pct,V_anon_m_903_reply_pct,V_u_nullsub_m_903_reply_em1pct,V_u_nullsub_m_903_reply_pct
 RESTORED clean=True
 == AGENT_blocked
 MUTATION APPLIED numstat=2/2
@@ -201,8 +228,8 @@ MUTATION APPLIED numstat=2/2
   + ('public.support_add_message(uuid,text,text,text,text)', '9d9cb01bb5a1fed81f584aa6f268118c', 'd949c04bc923e1434b5c50b1f8394111'),
   - IF NOT v_is_agent AND NOT EXISTS (
   + IF NOT EXISTS (
-RESULT total=312 pass=268 fail=44
-REDS A_agent_support.view_903_posts_no_reopen,A_super_admin_note_904_posts,B0_u_sa_unchanged,B0_u_support.view_unchanged,B0_u_view+manage_unchanged,V_u_sa_m_901_reply,V_u_sa_m_901_reply_em7,V_u_sa_m_902_reply,V_u_sa_m_902_reply_EM7,V_u_sa_m_902_reply_em7,V_u_sa_m_903_note,V_u_sa_m_903_reply,V_u_sa_m_903_reply_em1,V_u_sa_m_903_reply_em7,V_u_sa_m_904_note,V_u_sa_m_904_reply,V_u_sa_m_904_reply_em8,V_u_sa_m_904_reply_em99,V_u_support.view_m_901_reply,V_u_support.view_m_901_reply_em7,V_u_support.view_m_902_reply,V_u_support.view_m_902_reply_EM7,V_u_support.view_m_902_reply_em7,V_u_support.view_m_903_note,V_u_support.view_m_903_reply,V_u_support.view_m_903_reply_em1,V_u_support.view_m_903_reply_em7,V_u_support.view_m_904_note,V_u_support.view_m_904_reply,V_u_support.view_m_904_reply_em8,V_u_support.view_m_904_reply_em99,V_u_view+manage_m_901_reply,V_u_view+manage_m_901_reply_em7,V_u_view+manage_m_902_reply,V_u_view+manage_m_902_reply_EM7,V_u_view+manage_m_902_reply_em7,V_u_view+manage_m_903_note,V_u_view+manage_m_903_reply,V_u_view+manage_m_903_reply_em1,V_u_view+manage_m_903_reply_em7,V_u_view+manage_m_904_note,V_u_view+manage_m_904_reply,V_u_view+manage_m_904_reply_em8,V_u_view+manage_m_904_reply_em99
+RESULT total=336 pass=286 fail=50
+REDS A_agent_support.view_903_posts_no_reopen,A_super_admin_note_904_posts,B0_u_sa_unchanged,B0_u_support.view_unchanged,B0_u_view+manage_unchanged,V_u_sa_m_901_reply,V_u_sa_m_901_reply_em7,V_u_sa_m_902_reply,V_u_sa_m_902_reply_EM7,V_u_sa_m_902_reply_em7,V_u_sa_m_903_note,V_u_sa_m_903_reply,V_u_sa_m_903_reply_em1,V_u_sa_m_903_reply_em1pct,V_u_sa_m_903_reply_em7,V_u_sa_m_903_reply_pct,V_u_sa_m_904_note,V_u_sa_m_904_reply,V_u_sa_m_904_reply_em8,V_u_sa_m_904_reply_em99,V_u_support.view_m_901_reply,V_u_support.view_m_901_reply_em7,V_u_support.view_m_902_reply,V_u_support.view_m_902_reply_EM7,V_u_support.view_m_902_reply_em7,V_u_support.view_m_903_note,V_u_support.view_m_903_reply,V_u_support.view_m_903_reply_em1,V_u_support.view_m_903_reply_em1pct,V_u_support.view_m_903_reply_em7,V_u_support.view_m_903_reply_pct,V_u_support.view_m_904_note,V_u_support.view_m_904_reply,V_u_support.view_m_904_reply_em8,V_u_support.view_m_904_reply_em99,V_u_view+manage_m_901_reply,V_u_view+manage_m_901_reply_em7,V_u_view+manage_m_902_reply,V_u_view+manage_m_902_reply_EM7,V_u_view+manage_m_902_reply_em7,V_u_view+manage_m_903_note,V_u_view+manage_m_903_reply,V_u_view+manage_m_903_reply_em1,V_u_view+manage_m_903_reply_em1pct,V_u_view+manage_m_903_reply_em7,V_u_view+manage_m_903_reply_pct,V_u_view+manage_m_904_note,V_u_view+manage_m_904_reply,V_u_view+manage_m_904_reply_em8,V_u_view+manage_m_904_reply_em99
 RESTORED clean=True
 == NEW_REFUSAL_TEXT
 MUTATION APPLIED numstat=3/3
@@ -212,70 +239,69 @@ MUTATION APPLIED numstat=3/3
   + RAISE EXCEPTION 'Access denied: you can only reply to your own tickets';
   - RAISE EXCEPTION 'Ticket not found: %', p_ticket_id;
   + RAISE EXCEPTION 'Access denied: you can only reply to your own tickets';
-RESULT total=312 pass=244 fail=68
-REDS A_anon_wrong_email_903_refused,A_anon_wrong_email_904_refused,A_cust_not_requester_903_refused,A_cust_not_requester_904_refused,A_cust_note_904_refused_as_not_found,A_cust_passing_requester_email_904_refused,A_decoy_903_refused,A_nullsub_wrong_email_903_refused,V_anon_m_903_reply_em7,V_anon_m_904_reply_em99,V_u0_m_901_reply,V_u0_m_901_reply_em7,V_u0_m_902_reply,V_u0_m_902_reply_EM7,V_u0_m_902_reply_em7,V_u0_m_904_note,V_u0_m_904_reply,V_u0_m_904_reply_em8,V_u0_m_904_reply_em99,V_u_cust_m_903_note,V_u_cust_m_903_reply,V_u_cust_m_903_reply_em1,V_u_cust_m_903_reply_em7,V_u_cust_m_904_note,V_u_cust_m_904_reply,V_u_cust_m_904_reply_em8,V_u_cust_m_904_reply_em99,V_u_nullsub_m_903_reply_em7,V_u_nullsub_m_904_reply_em99,V_u_other_users.view_m_901_reply,V_u_other_users.view_m_901_reply_em7,V_u_other_users.view_m_902_reply,V_u_other_users.view_m_902_reply_EM7,V_u_other_users.view_m_902_reply_em7,V_u_other_users.view_m_903_note,V_u_other_users.view_m_903_reply,V_u_other_users.view_m_903_reply_em1,V_u_other_users.view_m_903_reply_em7,V_u_other_users.view_m_904_note,V_u_other_users.view_m_904_reply,V_u_other_users.view_m_904_reply_em8,V_u_other_users.view_m_904_reply_em99,V_u_support.admin_m_901_reply,V_u_support.admin_m_901_reply_em7,V_u_support.admin_m_902_reply,V_u_support.admin_m_902_reply_EM7,V_u_support.admin_m_902_reply_em7,V_u_support.admin_m_903_note,V_u_support.admin_m_903_reply,V_u_support.admin_m_903_reply_em1,V_u_support.admin_m_903_reply_em7,V_u_support.admin_m_904_note,V_u_support.admin_m_904_reply,V_u_support.admin_m_904_reply_em8,V_u_support.admin_m_904_reply_em99,V_u_support.manage_m_901_reply,V_u_support.manage_m_901_reply_em7,V_u_support.manage_m_902_reply,V_u_support.manage_m_902_reply_EM7,V_u_support.manage_m_902_reply_em7,V_u_support.manage_m_903_note,V_u_support.manage_m_903_reply,V_u_support.manage_m_903_reply_em1,V_u_support.manage_m_903_reply_em7,V_u_support.manage_m_904_note,V_u_support.manage_m_904_reply,V_u_support.manage_m_904_reply_em8,V_u_support.manage_m_904_reply_em99
+RESULT total=336 pass=254 fail=82
+REDS A_anon_percent_email_903_refused,A_anon_requester_email_suffix_903_refused,A_anon_wrong_email_903_refused,A_anon_wrong_email_904_refused,A_cust_not_requester_903_refused,A_cust_not_requester_904_refused,A_cust_note_904_refused_as_not_found,A_cust_passing_requester_email_904_refused,A_decoy_903_refused,A_nullsub_wrong_email_903_refused,V_anon_m_903_reply_em1pct,V_anon_m_903_reply_em7,V_anon_m_903_reply_pct,V_anon_m_904_reply_em99,V_u0_m_901_reply,V_u0_m_901_reply_em7,V_u0_m_902_reply,V_u0_m_902_reply_EM7,V_u0_m_902_reply_em7,V_u0_m_904_note,V_u0_m_904_reply,V_u0_m_904_reply_em8,V_u0_m_904_reply_em99,V_u_cust_m_903_note,V_u_cust_m_903_reply,V_u_cust_m_903_reply_em1,V_u_cust_m_903_reply_em1pct,V_u_cust_m_903_reply_em7,V_u_cust_m_903_reply_pct,V_u_cust_m_904_note,V_u_cust_m_904_reply,V_u_cust_m_904_reply_em8,V_u_cust_m_904_reply_em99,V_u_nullsub_m_903_reply_em1pct,V_u_nullsub_m_903_reply_em7,V_u_nullsub_m_903_reply_pct,V_u_nullsub_m_904_reply_em99,V_u_other_users.view_m_901_reply,V_u_other_users.view_m_901_reply_em7,V_u_other_users.view_m_902_reply,V_u_other_users.view_m_902_reply_EM7,V_u_other_users.view_m_902_reply_em7,V_u_other_users.view_m_903_note,V_u_other_users.view_m_903_reply,V_u_other_users.view_m_903_reply_em1,V_u_other_users.view_m_903_reply_em1pct,V_u_other_users.view_m_903_reply_em7,V_u_other_users.view_m_903_reply_pct,V_u_other_users.view_m_904_note,V_u_other_users.view_m_904_reply,V_u_other_users.view_m_904_reply_em8,V_u_other_users.view_m_904_reply_em99,V_u_support.admin_m_901_reply,V_u_support.admin_m_901_reply_em7,V_u_support.admin_m_902_reply,V_u_support.admin_m_902_reply_EM7,V_u_support.admin_m_902_reply_em7,V_u_support.admin_m_903_note,V_u_support.admin_m_903_reply,V_u_support.admin_m_903_reply_em1,V_u_support.admin_m_903_reply_em1pct,V_u_support.admin_m_903_reply_em7,V_u_support.admin_m_903_reply_pct,V_u_support.admin_m_904_note,V_u_support.admin_m_904_reply,V_u_support.admin_m_904_reply_em8,V_u_support.admin_m_904_reply_em99,V_u_support.manage_m_901_reply,V_u_support.manage_m_901_reply_em7,V_u_support.manage_m_902_reply,V_u_support.manage_m_902_reply_EM7,V_u_support.manage_m_902_reply_em7,V_u_support.manage_m_903_note,V_u_support.manage_m_903_reply,V_u_support.manage_m_903_reply_em1,V_u_support.manage_m_903_reply_em1pct,V_u_support.manage_m_903_reply_em7,V_u_support.manage_m_903_reply_pct,V_u_support.manage_m_904_note,V_u_support.manage_m_904_reply,V_u_support.manage_m_904_reply_em8,V_u_support.manage_m_904_reply_em99
 RESTORED clean=True
 
-== run.sh --applied before the real apply: 313 total, 312 pass, 1 fail = KA_applied_state_equals_file (keepr-test still held PR2b text; positive control for KA)
-== sibling harnesses --applied before the real apply: p1 119/119, p2a 267/267, p2b 428/428, p3 49/49, 4145-m2 41/41
-== real apply on keepr-test: migration file + schema_migrations row 20261111125000 backlog_4170_support_requester_checks
-== run.sh --applied after the real apply
+== keepr-test re-apply: rollback-4170-p2c.sql then the migration (the pre-pin accepts PR2b or this file's text). Read back: md5 add_message 3bdb2c26, get_ticket_detail 24dab347, list_events d7333c46; ACL {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}; schema_migrations 20261111125000 backlog_4170_support_requester_checks (row unchanged)
+== run.sh --applied after the re-apply
 {
  "fail": 0,
- "pass": 313,
+ "pass": 337,
  "reds": {},
- "total": 313,
+ "total": 337,
  "payload_md5": {
   "u0": {
-   "after": "f347d4fed35fa0cf7ab7ff1173df71c5",
+   "after": "0c47698dd2b7c02b96fc5f94d89ea760",
    "equal": false,
-   "before": "cec74b192cb4d039a037c6fa4db31645"
+   "before": "5350cfc15c15e2a59afb52136e01ce66"
   },
   "anon": {
-   "after": "2906c71869478a23be77ea719ddf8f3d",
+   "after": "07c497135fb22163228e1af73a999f0c",
    "equal": false,
-   "before": "e8b5d6fcb47c2db83d85c199356a5946"
+   "before": "a5b304ba4573d62a91f41251ba2b3506"
   },
   "u_sa": {
-   "after": "32d6bcd07cd17c09a3fee032edc3f28b",
+   "after": "29bea65db1a9bedb399fd6a7a6f0219e",
    "equal": true,
-   "before": "32d6bcd07cd17c09a3fee032edc3f28b"
+   "before": "29bea65db1a9bedb399fd6a7a6f0219e"
   },
   "u_cust": {
-   "after": "849dbea5c0efbac5187a72a6a7d3e679",
+   "after": "6e620a216380f883f9a7465b39a530c5",
    "equal": false,
-   "before": "3cacd41324536506a574448777015506"
+   "before": "4ab74088d789d9ed44c9b5d42bef34ec"
   },
   "u_nullsub": {
-   "after": "2906c71869478a23be77ea719ddf8f3d",
+   "after": "07c497135fb22163228e1af73a999f0c",
    "equal": false,
-   "before": "e8b5d6fcb47c2db83d85c199356a5946"
+   "before": "a5b304ba4573d62a91f41251ba2b3506"
   },
   "u_view+manage": {
-   "after": "80fed4be0e1c5f87542dcfc49cc1b682",
+   "after": "eafe9206c5a9166a48c401379fb7cae8",
    "equal": true,
-   "before": "80fed4be0e1c5f87542dcfc49cc1b682"
+   "before": "eafe9206c5a9166a48c401379fb7cae8"
   },
   "u_support.view": {
-   "after": "dc1159d0d07b72bd9f1664c343581ebf",
+   "after": "36d2fd088113b0110e1594fd48b62dc1",
    "equal": true,
-   "before": "dc1159d0d07b72bd9f1664c343581ebf"
+   "before": "36d2fd088113b0110e1594fd48b62dc1"
   },
   "u_support.admin": {
-   "after": "826290a268c98fbbbb82d5b201f64488",
+   "after": "74e560230ec61e2a0246279d38c0e4b6",
    "equal": false,
-   "before": "ba704afd4ad590946d038cc9491f33e0"
+   "before": "b51ddad60f7b67f526c93a40656ee0c2"
   },
   "u_support.manage": {
-   "after": "826290a268c98fbbbb82d5b201f64488",
+   "after": "74e560230ec61e2a0246279d38c0e4b6",
    "equal": false,
-   "before": "9d6c546681632e8104372848e6aefaf5"
+   "before": "d9c02aa9989a7ff876b30311f1848e10"
   },
   "u_other_users.view": {
-   "after": "826290a268c98fbbbb82d5b201f64488",
+   "after": "74e560230ec61e2a0246279d38c0e4b6",
    "equal": false,
-   "before": "ac847351d40dc006d0ac82383caff116"
+   "before": "702d352bc2c40767c407765aae631cbb"
   }
  }
 }
-== sibling harnesses --applied after the real apply: p1 119/119, p2a 267/267, p3 49/49, 4145-m2 41/41; p2b 427/428, only KA_applied_state_equals_file red (expected: p2b pins the PR2b text of the 3 functions PR2c replaces; its non-KA controls still pass because it reapplies its own rollback + migration in-transaction)
+== sibling harnesses --applied after the re-apply: p1 119/119, p2a 267/267, p2b 428/428 (its KA replays 20261111125000 after its own migration), p3 49/49, 4145-m2 41/41
+== p2b positive control: replay replaced by SELECT 1 (MUTATION APPLIED, numstat 1/1) -> 428 total, 427 pass, fail = KA_applied_state_equals_file; restored clean
