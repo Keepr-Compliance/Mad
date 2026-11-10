@@ -30,8 +30,10 @@ export type BillingAlertName =
   | 'paid_while_suspended'
   | 'suspended_subscription_unpaused'
   | 'paused_subscription_licence_active'
-  // BACKLOG-3934 (a paying Agent who is also a brokerage member; support cancels + refunds)
+  // BACKLOG-3934 (a paying Agent who is also a brokerage member; BACKLOG-3850 cancels it, no refund)
   | 'agent_subscription_brokerage_member'
+  // BACKLOG-3850 (an open Agent renewal was paid before the join cancel could void it; kept, no refund)
+  | 'paid_at_brokerage_join'
   // BACKLOG-3853 PR-2 (brokerage subscription)
   | 'brokerage_orphan_object'
   // BACKLOG-4019: the stored brokerage subscription ended while the deal was not canceling.
