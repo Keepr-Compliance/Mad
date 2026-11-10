@@ -480,3 +480,56 @@ describe("BACKLOG-3555 KEEP-2 (rebuilt on the real driver for BACKLOG-4075)", ()
     expect(fkViolations()).toEqual([]);
   });
 });
+
+describe("BACKLOG-4075: the two refusal paths log and report no full id, email or payload", () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const sentry = require("@sentry/electron/main") as { captureMessage: jest.Mock; setUser: jest.Mock; captureException: jest.Mock };
+  const FULL_IDS = [A, B, LEGACY];
+  const refusalWarns = () =>
+    mockWarn.mock.calls.filter((c) => /different account|not the signed-in account/.test(String(c[0])));
+
+  function expectRedacted(expectedMessage: string) {
+    const warns = refusalWarns();
+    expect(warns).toHaveLength(1);
+    const meta = warns[0][2] as Record<string, unknown>;
+    // Only the 8-char prefixes (plus, on the identity gate, a boolean).
+    for (const v of Object.values(meta)) {
+      if (typeof v === "string") expect(v).toMatch(/^[0-9a-f]{8}\.\.\.$/);
+      else expect(typeof v).toBe("boolean");
+    }
+    const logged = JSON.stringify(warns);
+    const msgs = sentry.captureMessage.mock.calls.filter((c) => c[0] === expectedMessage);
+    expect(msgs).toHaveLength(1);
+    // Exactly (message, { level, tags }): no `extra`, no `user`, no `contexts`.
+    expect(msgs[0]).toHaveLength(2);
+    expect(Object.keys(msgs[0][1] as object).sort()).toEqual(["level", "tags"]);
+    const reported = JSON.stringify(sentry.captureMessage.mock.calls);
+    for (const text of [logged, reported]) {
+      for (const id of FULL_IDS) expect(text).not.toContain(id);
+      expect(text).not.toContain("example.test");
+      expect(text).not.toContain("file-at");
+      expect(text).not.toContain("file-rt");
+    }
+    expect(sentry.setUser).not.toHaveBeenCalled();
+  }
+
+  it("RD-1 in-process refusal (SDK holds B, file = A): WARN carries 8-char prefixes only; Sentry gets level + tags only", async () => {
+    const tok = provision(A, A_EMAIL);
+    mockLoadSession.mockResolvedValue(await sessionFile(A, tok));
+    sdkHolds(sdkUser(B, B_EMAIL));
+    const r = await run();
+    expect(r.success).toBe(false);
+    expect(mockSetSession).not.toHaveBeenCalled();
+    expectRedacted("Session restore: SDK holds a different account");
+  });
+
+  it("RD-2 cold-start identity gate (file = A, SDK restores to B): WARN carries 8-char prefixes only; Sentry gets level + tags only", async () => {
+    const tok = provision(A, A_EMAIL);
+    mockLoadSession.mockResolvedValue(await sessionFile(A, tok));
+    coldStartRestoresTo(sdkUser(B, B_EMAIL));
+    const r = await run();
+    expect(r.success).toBe(false);
+    expect(mockClearSession).toHaveBeenCalledTimes(1);
+    expectRedacted("Session restore: local user is a different account");
+  });
+});
