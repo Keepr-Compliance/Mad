@@ -81,6 +81,32 @@ export function dbErrorCode(err: unknown): string {
 }
 
 /**
+ * BACKLOG-2834 — the SQLite code behind a migration failure. The versioned
+ * runner wraps the driver's error in its own Error and keeps the original as
+ * `cause`, so the wrapper's own `code` is absent; read the cause's.
+ */
+export function migrationErrorCode(err: unknown): string {
+  const own = dbErrorCode(err);
+  if (own !== "none") return own;
+  if (err && typeof err === "object" && "cause" in err) {
+    return dbErrorCode((err as { cause?: unknown }).cause);
+  }
+  return "none";
+}
+
+/**
+ * BACKLOG-2834 (founder ruling 2026-09-08): retry a failed migration once, and
+ * only when the failure is transient. Matched on the code FAMILY, because the
+ * driver reports extended codes (SQLITE_IOERR_WRITE, SQLITE_FULL, ...).
+ * BUSY / LOCKED / READONLY are not here: isRetryableDbWriteError sends them to
+ * the BACKLOG-3952 wait loop before any restore happens.
+ */
+export function isTransientMigrationError(err: unknown): boolean {
+  const code = migrationErrorCode(err);
+  return code.startsWith("SQLITE_FULL") || code.startsWith("SQLITE_IOERR");
+}
+
+/**
  * Throws the driver's own error when the handle cannot write a page.
  * Nothing is committed: the header write is rolled back.
  *

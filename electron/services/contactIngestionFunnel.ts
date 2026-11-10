@@ -248,6 +248,13 @@ export interface LinkStage {
    * arithmetic note below stays honest about older snapshots.
    */
   declined?: number;
+  /**
+   * BACKLOG-4180 — content matches whose link and value copy were rolled back
+   * together because the copy failed (`link_failed`); retried next pass.
+   * Optional like `declined`, and rendered only when > 0: it is an error count,
+   * and a zero on every healthy line would be noise.
+   */
+  linkFailed?: number;
 }
 
 /**
@@ -427,7 +434,7 @@ export function formatPickerLine(stage: PickerStage): string {
  * ```
  * links: 1116 records -> id-matched 1102 -> content-matched 12 -> flagged 1 -> declined 0 -> unmatched 1
  * ```
- * The arithmetic closes: id + content + flagged + declined + unmatched = recordsIn.
+ * The arithmetic closes: id + content + flagged + declined + link-failed + unmatched = recordsIn.
  *
  * `declined` (BACKLOG-2410) is rendered whenever it is present, INCLUDING when
  * it is zero — a stage that ran and found nothing to decline must not look like
@@ -441,6 +448,7 @@ export function formatLinkLine(stage: LinkStage): string {
     ` -> content-matched ${stage.contentMatched}` +
     ` -> flagged ${stage.flagged}` +
     (stage.declined === undefined ? "" : ` -> declined ${stage.declined}`) +
+    (stage.linkFailed !== undefined && stage.linkFailed > 0 ? ` -> link-failed ${stage.linkFailed}` : "") +
     ` -> unmatched ${stage.unmatched}`
   );
 }

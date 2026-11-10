@@ -36,6 +36,8 @@ import {
   getRawDatabase as getSharedConnection,
 } from "./db/core/dbConnection";
 import { SCHEMA_VERSION_SQL } from "./db/storageDiagnosticsSql";
+import { INSERT_FAILURE_LOG_SQL } from "./db/failureLogSql";
+import { pickAsidePath, pruneAsideCopies } from "./db/asideName";
 // BACKLOG-2551: migration v71's SQL text lives in the db layer and is imported, per
 // the SQL boundary rule. Importing a const string is not a service call — the
 // migration body still uses only the handle the runner passes it.
@@ -148,6 +150,8 @@ import {
   DB_WRITE_RETRY_BUDGET_MS,
   dbErrorCode,
   isRetryableDbWriteError,
+  isTransientMigrationError,
+  migrationErrorCode,
   probeWritable,
   retryDelayMs,
   setBusyTimeout,
@@ -241,6 +245,12 @@ class DatabaseService implements IDatabaseService {
    * failed AND the auto-restore recovered nothing. It previously returned
    * `true` on that path, so the caller could not tell a good start from a
    * failed one.
+   *
+   * BACKLOG-2834: also rejects (and, at startup, quits after a contact-support
+   * dialog) when the restore worked but the restored file
+   * still cannot be migrated (a deterministic failure, or a transient one that
+   * failed again on its single re-run). It never continues on an unmigrated
+   * file. BACKLOG-2836: the handle is published only after migrations succeed.
    *
    * @param options.quitOnUnrecoverableFailure - exit the app after telling the
    *   user, on that unrecoverable path. DEFAULT FALSE, deliberately: only the
@@ -362,18 +372,20 @@ class DatabaseService implements IDatabaseService {
       // then writes failed). That user-driven repeat takes a new pre-migration
       // backup and runs migrations again; the automatic retries never do.
       // ======================================================================
+      // BACKLOG-2834: a restore hands back a handle to re-run migrations on, once.
+      let pendingHandle: DatabaseType | null = null;
+      let retriedAfterRestore = false;
+      let keptFromEarlierRound: string | undefined;
       for (;;) {
-        const openedDb = await this._openWritableDatabase(options);
-        this.db = openedDb;
-
-        // Share connection with dbConnection module for sub-services
-        setDb(this.db);
-        setDbPath(this.dbPath);
-        setEncryptionKey(this.encryptionKey);
+        // BACKLOG-2836: the handle is published (this.db + setDb) only after
+        // migrations succeed. Until then neither isInitialized() is true and
+        // every facade read throws "not initialized", as it does before open.
+        const openedDb = pendingHandle ?? (await this._openWritableDatabase(options));
+        pendingHandle = null;
 
         // Safety check: ensure failure_log table exists even if migration v31 failed
         // (e.g., disk full during migration). Fixes Sentry ELECTRON-2P / ELECTRON-2X.
-        this._ensureFailureLogTable(this.db);
+        this._ensureFailureLogTable(openedDb);
 
         // BACKLOG-1381: Broadcast migrating stage before running migrations
         initializationBroadcaster.broadcast({
@@ -383,7 +395,8 @@ class DatabaseService implements IDatabaseService {
         });
 
         try {
-          await this.runMigrations();
+          await this.runMigrations(openedDb);
+          this._publishDatabase(openedDb);
 
           // BACKLOG-1381: Broadcast db-ready after successful migrations
           initializationBroadcaster.broadcast({
@@ -392,28 +405,32 @@ class DatabaseService implements IDatabaseService {
           });
           break;
         } catch (migrationError) {
-          if (isRetryableDbWriteError(migrationError)) {
+          // BACKLOG-2834: a migration body's error arrives wrapped by the
+          // runner, with the driver's error as `cause`. Without reading the
+          // cause, BUSY / LOCKED / READONLY inside a migration skipped this
+          // branch and went to auto-restore.
+          if (
+            isRetryableDbWriteError(migrationError) ||
+            isRetryableDbWriteError((migrationError as { cause?: unknown } | null)?.cause)
+          ) {
             // BACKLOG-3952: not a migration defect — the file cannot be
-            // written. Tear the handle down through BOTH predicates (setDb has
-            // run), then ask the user. Returning means "Try again".
+            // written. Close the (unpublished, BACKLOG-2836) handle, then ask
+            // the user. Returning means "Try again".
             try {
-              await closeDb();
+              openedDb.close();
             } catch {
               /* already closed; the dialog matters, not the close */
             }
             this.db = null;
-            await this._handleDbNotWritable(migrationError, 1, 0, "migration", options);
+            await this._handleDbNotWritable(
+              (migrationError as { cause?: unknown } | null)?.cause ?? migrationError,
+              1,
+              0,
+              "migration",
+              options,
+            );
             continue;
           }
-
-          // BACKLOG-1381: Broadcast error on migration failure
-          initializationBroadcaster.broadcast({
-            stage: "error",
-            error: {
-              message: migrationError instanceof Error ? migrationError.message : "Migration failed",
-              retryable: true,
-            },
-          });
 
           // Migration failed -- attempt auto-restore from pre-migration backup
           hostLogger.error("[DatabaseService] Migration FAILED:", migrationError instanceof Error ? migrationError.message : String(migrationError));
@@ -421,7 +438,7 @@ class DatabaseService implements IDatabaseService {
             error: migrationError instanceof Error ? migrationError.message : String(migrationError),
           });
 
-          const restoreResult = await this._attemptAutoRestore(migrationError);
+          const restoreResult = await this._attemptAutoRestore(migrationError, openedDb);
 
           // Report to Sentry with migration failure tags
           hostErrorReporter.captureException(migrationError, {
@@ -436,7 +453,41 @@ class DatabaseService implements IDatabaseService {
               stale_backups_skipped: String(restoreResult.staleBackupsSkipped ?? 0),
               // BACKLOG-3952 R4: every migration_failure event says which SQLite
               // code it was, so the field shows codes outside the retry predicate.
-              error_code: dbErrorCode(migrationError),
+              error_code: migrationErrorCode(migrationError),
+              retried_after_restore: String(retriedAfterRestore),
+            },
+          });
+
+          // BACKLOG-2834 (founder 0b88dec2): re-run migrations ONCE on the
+          // restored file, and only for a transient failure.
+          if (
+            restoreResult.restored &&
+            restoreResult.handle &&
+            !retriedAfterRestore &&
+            isTransientMigrationError(migrationError)
+          ) {
+            retriedAfterRestore = true;
+            // BACKLOG-2834 (SR change 7): the user's original file is now at
+            // this name. If round 2 ends on the terminal branch with no
+            // same-launch backup (its backup copy failed, e.g. disk full), the
+            // dialog must still say where that file went.
+            keptFromEarlierRound = restoreResult.keptPreviousAs ?? keptFromEarlierRound;
+            await logService.warn("Re-running migrations once on the restored database", "DatabaseService", {
+              code: migrationErrorCode(migrationError),
+            });
+            pendingHandle = restoreResult.handle;
+            continue;
+          }
+
+          // BACKLOG-1381: Broadcast error on migration failure.
+          // BACKLOG-2834 (SR change 1): only once the outcome is final. Before
+          // the retry decision it resolved every pending whenDbReady() waiter
+          // with ready:false, even when the retry then succeeded.
+          initializationBroadcaster.broadcast({
+            stage: "error",
+            error: {
+              message: migrationError instanceof Error ? migrationError.message : "Migration failed",
+              retryable: true,
             },
           });
 
@@ -445,25 +496,29 @@ class DatabaseService implements IDatabaseService {
             await hostAppLifecycle.whenReady();
           }
 
-          if (restoreResult.restored) {
-            // BACKLOG-2999 — DELIBERATELY NON-TERMINAL, and this boundary is
-            // load-bearing. The restore recovered something: the backup was
-            // copied over the database, reopened and probe-verified, so the
-            // user's data is open and readable. What is STILL wrong is that
-            // migrations are never re-run against the restored file — that is
-            // BACKLOG-2834's subject, not this item's. Widening the terminal
-            // path to cover it here would change a user-visible outcome ("the
-            // app opens on your data" -> "the app quits") on a branch with no
-            // 2999 defect behind it, in the same commit. Do not "fix" 2834 by
-            // deleting this boundary: the no-quit assertion in
-            // databaseService.migration-restore.test.ts pins it.
-            hostDialog.showMessageBox({
-              type: "warning",
-              title: "Database Update Notice",
-              message: "A database update failed, but your data has been restored.",
-              detail: "The app will continue with your existing data. Please contact support if this happens again.",
-              buttons: ["OK"],
-            });
+          if (restoreResult.restored && restoreResult.handle) {
+            // BACKLOG-2834: the restored file is the pre-migration copy, behind
+            // the schema this code expects. Never continue on it: record the
+            // failure IN that file (it survives the quit), close it, and tell
+            // the user to contact support.
+            this._recordMigrationFailure(
+              restoreResult.handle,
+              migrationError,
+              retriedAfterRestore,
+              restoreResult.keptPreviousAs ?? keptFromEarlierRound,
+            );
+            try {
+              restoreResult.handle.close();
+            } catch {
+              /* the choice matters, not the close */
+            }
+            this.db = null;
+            await this._handleUnmigratableDatabase(options);
+            throw new MigrationRecoveryFailedError(
+              "Database migration failed on the restored database",
+              restoreResult.autoRestoreStatus,
+              restoreResult.backupIntegrity,
+            );
           } else {
             // ==============================================================
             // BACKLOG-2999 — THE TERMINAL BRANCH. Nothing was recovered.
@@ -488,6 +543,7 @@ class DatabaseService implements IDatabaseService {
             // and dbConnection.isInitialized() — rather than leaving a
             // condemned database readable.
             try {
+              openedDb.close();
               await closeDb();
             } catch {
               // Already closed on the copy-throw route (_attemptAutoRestore
@@ -505,15 +561,18 @@ class DatabaseService implements IDatabaseService {
             // whereas this user's data may well be recoverable and those
             // scripts would destroy it. The path is appended because it is the
             // first thing support asks for.
+            const keptPreviousAs = restoreResult.keptPreviousAs ?? keptFromEarlierRound;
             await hostDialog.showMessageBox({
               type: "error",
               title: "Database Update Failed",
               message: "A database update failed and could not be automatically fixed.",
               // BACKLOG-3975: says what happened to the files, and nothing more.
               // No restore claim: nothing usable was restored on this branch.
+              // BACKLOG-2834: on a retry round the original was moved aside in
+              // round 1, so round 1's name is the one to give.
               detail:
-                (restoreResult.keptPreviousAs
-                  ? `Your previous database was kept as ${path.basename(restoreResult.keptPreviousAs)}.\n\n`
+                (keptPreviousAs
+                  ? `Your previous database was kept as ${path.basename(keptPreviousAs)}.\n\n`
                   : "Keepr did not replace or delete your data file.\n\n") +
                 `Database: ${this.dbPath ?? "unknown"}\n\n` +
                 "If this keeps happening, contact support.",
@@ -1342,13 +1401,17 @@ class DatabaseService implements IDatabaseService {
    * and told the user it was restored. Now, with no same-launch backup there
    * is no restore. When there is one, mad.db (and its -wal / -shm) are renamed
    * to mad-pre-restore-<time>.db first, so nothing the user had is lost; the
-   * name does not match the `-backup-` prune, so it is never deleted
-   * automatically.
+   * name does not match the `-backup-` prune. BACKLOG-3298: once a new copy is
+   * made, copies from EARLIER launches are deleted (keep one); copies from this
+   * launch never are.
    */
   private async _attemptAutoRestore(
-    _migrationError: unknown
+    _migrationError: unknown,
+    failedHandle?: DatabaseType,
   ): Promise<{
     restored: boolean;
+    /** BACKLOG-2834/2836: the restored handle, open and NOT published. */
+    handle?: DatabaseType;
     autoRestoreStatus: AutoRestoreStatus;
     backupIntegrity: BackupIntegrity;
     /** Set when mad.db was moved aside and is still there under this path. */
@@ -1397,35 +1460,25 @@ class DatabaseService implements IDatabaseService {
       backupPath,
     });
 
+    if (failedHandle) {
+      try { failedHandle.close(); } catch { /* May already be in a bad state */ }
+    }
     if (this.db) {
       try { this.db.close(); } catch { /* May already be in a bad state */ }
       this.db = null;
     }
 
     // Move the current files aside. All or nothing: a partial move is undone.
-    const timestamp = new Date().toISOString().replace(/[-:.]/g, "").slice(0, 15);
-    const asidePath = path.join(dbDir, `${dbName}-pre-restore-${timestamp}.db`);
-    const moved: Array<{ from: string; to: string }> = [];
-    const undoMoves = (): boolean => {
-      let ok = true;
-      for (const m of [...moved].reverse()) {
-        try {
-          fs.renameSync(m.to, m.from);
-        } catch {
-          ok = false;
-        }
-      }
-      return ok;
-    };
-    try {
-      for (const suffix of ["", "-wal", "-shm"]) {
-        const from = dbPath + suffix;
-        if (suffix !== "" && !fs.existsSync(from)) continue;
-        fs.renameSync(from, asidePath + suffix);
-        moved.push({ from, to: asidePath + suffix });
-      }
-    } catch (moveError) {
-      const undone = undoMoves();
+    const aside = this._moveAside("pre-restore");
+    const asidePath = aside.asidePath;
+    const undoMoves = aside.undo;
+    // BACKLOG-3298: a copy made by this launch is never pruned. Recorded as soon
+    // as it is on disk, so a failed backup copy whose undo also fails still
+    // leaves it protected from a later round in this process.
+    if (aside.undone !== true) this._preRestoreKeptThisProcess.add(asidePath);
+    if (aside.error) {
+      const moveError = aside.error;
+      const undone = aside.undone;
       await logService.error("Could not move the current database aside; not restoring", "DatabaseService", {
         error: moveError instanceof Error ? moveError.message : String(moveError),
         undone,
@@ -1461,14 +1514,17 @@ class DatabaseService implements IDatabaseService {
     await logService.info("Backup restored; previous database kept", "DatabaseService", {
       keptAs: path.basename(asidePath),
     });
+    // BACKLOG-3298 keep-one (founder decision 2026-11-10): the new copy is on
+    // disk, so delete pre-restore copies from EARLIER launches only.
+    const prunedPreRestore = pruneAsideCopies(dbPath, "pre-restore", this._preRestoreKeptThisProcess);
+    if (prunedPreRestore.length > 0) {
+      await logService.info("Removed older pre-restore copies", "DatabaseService", {
+        removed: prunedPreRestore.map((p) => path.basename(p)),
+      });
+    }
 
     try {
       const newDb = this._openDatabase();
-      this.db = newDb;
-
-      setDb(newDb);
-      setDbPath(dbPath);
-      setEncryptionKey(this.encryptionKey);
 
       try {
         const probe = newDb.prepare(CONNECTIVITY_PROBE_SQL).get() as { ok: number } | undefined;
@@ -1479,6 +1535,7 @@ class DatabaseService implements IDatabaseService {
         await logService.error("Post-restore connectivity check failed", "DatabaseService", {
           error: probeError instanceof Error ? probeError.message : String(probeError),
         });
+        try { newDb.close(); } catch { /* nothing usable either way */ }
         return {
           restored: false,
           autoRestoreStatus: "failed",
@@ -1490,6 +1547,7 @@ class DatabaseService implements IDatabaseService {
       await logService.info("Auto-restore completed successfully", "DatabaseService");
       return {
         restored: true,
+        handle: newDb,
         autoRestoreStatus: "succeeded",
         backupIntegrity: "valid",
         keptPreviousAs: asidePath,
@@ -1504,6 +1562,125 @@ class DatabaseService implements IDatabaseService {
         backupIntegrity: "valid",
         keptPreviousAs: asidePath,
       };
+    }
+  }
+
+  /** BACKLOG-2836: the one place the live handle is published. */
+  private _publishDatabase(db: DatabaseType): void {
+    this.db = db;
+    setDb(db);
+    if (this.dbPath) setDbPath(this.dbPath);
+    if (this.encryptionKey) setEncryptionKey(this.encryptionKey);
+  }
+
+  /**
+   * BACKLOG-2834 (founder 93ac157a §3): version, code and message, written into
+   * the restored file's failure_log so it survives a restart, plus main.log.
+   */
+  private _recordMigrationFailure(
+    db: DatabaseType,
+    err: unknown,
+    retried: boolean,
+    keptPreviousAs?: string,
+  ): void {
+    const migrationVersion = (err as { migrationVersion?: unknown } | null)?.migrationVersion ?? null;
+    const code = migrationErrorCode(err);
+    const message = err instanceof Error ? err.message : String(err);
+    hostLogger.error("[DatabaseService] Migration failed on the restored database", { migrationVersion, code, message });
+    try {
+      db.prepare(INSERT_FAILURE_LOG_SQL).run(
+        "migration",
+        message,
+        JSON.stringify({
+          migrationVersion,
+          code,
+          retried,
+          keptPreviousAs: keptPreviousAs ? path.basename(keptPreviousAs) : null,
+        }),
+      );
+    } catch (writeError) {
+      hostLogger.warn(
+        "[DatabaseService] Could not record the migration failure",
+        writeError instanceof Error ? writeError.message : String(writeError),
+      );
+    }
+  }
+
+  /**
+   * BACKLOG-2834: the restored database cannot be migrated. Founder decision
+   * 2026-11-09 (supersedes the Start fresh half of 93ac157a): no Start fresh.
+   * At startup the user is told to contact support and the app quits; the
+   * restored data is left exactly as it is. Other callers (sqliteBackupService's
+   * restore) only get a notice and the rejection.
+   */
+  private async _handleUnmigratableDatabase(options?: { quitOnUnrecoverableFailure?: boolean }): Promise<void> {
+    if (!hostAppLifecycle.isReady()) {
+      await hostAppLifecycle.whenReady();
+    }
+    if (!options?.quitOnUnrecoverableFailure) {
+      await hostDialog.showMessageBox({
+        type: "error",
+        title: "Database Update Failed",
+        message: "A database update failed.",
+        detail: "Your current data was not changed. If this keeps happening, contact support.",
+        buttons: ["OK"],
+      });
+      await hostErrorReporter.flush(2000);
+      return;
+    }
+    // AWAITED: the user is told before the app exits.
+    await hostDialog.showMessageBox({
+      type: "error",
+      title: "Keepr couldn't update your data",
+      message: "Keepr couldn't update your data. Please contact support.",
+      detail: "Your data is kept on this computer.",
+      buttons: ["Quit"],
+    });
+    await hostErrorReporter.flush(2000);
+    hostAppLifecycle.quit();
+  }
+
+  /** BACKLOG-3298: pre-restore copies made by this process; never pruned. */
+  private _preRestoreKeptThisProcess = new Set<string>();
+
+  /**
+   * BACKLOG-2834 / BACKLOG-3975 — the move-aside: rename mad.db and its
+   * -wal / -shm to the name `pickAsidePath` (db/asideName.ts) picks:
+   * mad-<label>-<YYYYMMDDTHHMMSSmmm>[-n].db, base or either sidecar taken ->
+   * -2 ... -100, past that nothing moves (error, undone). Never overwrites, never deletes.
+   * All or nothing: a partial move is undone. `undo()` puts the files back
+   * (3975's copy-failure path uses it).
+   */
+  private _moveAside(label: string): { asidePath: string; undo: () => boolean; error?: unknown; undone?: boolean } {
+    const dbPath = this.dbPath as string;
+    const picked = pickAsidePath(dbPath, label);
+    if (picked === null) {
+      // asidePath is unread here: the one caller maps undone:true to no kept path.
+      return { asidePath: dbPath, undo: () => true, error: new Error("No free name to move the database aside"), undone: true };
+    }
+    const asidePath = picked;
+    const moved: Array<{ from: string; to: string }> = [];
+    const undo = (): boolean => {
+      let ok = true;
+      for (const m of [...moved].reverse()) {
+        try {
+          fs.renameSync(m.to, m.from);
+        } catch {
+          ok = false;
+        }
+      }
+      return ok;
+    };
+    try {
+      for (const suffix of ["", "-wal", "-shm"]) {
+        const from = dbPath + suffix;
+        if (suffix !== "" && !fs.existsSync(from)) continue;
+        fs.renameSync(from, asidePath + suffix);
+        moved.push({ from, to: asidePath + suffix });
+      }
+      return { asidePath, undo };
+    } catch (error) {
+      return { asidePath, undo, error, undone: undo() };
     }
   }
 
@@ -1527,12 +1704,61 @@ class DatabaseService implements IDatabaseService {
     }
   }
 
+  /**
+   * BACKLOG-3023 — put back a weakened `prevent_audit_update` trigger.
+   *
+   * Never throws (it runs between the migration chain and publish, and anything
+   * escaping runMigrations goes to auto-restore). Never shown to the user.
+   * Reported off-device either way: no shipped build writes the weak trigger,
+   * so a repair on a released build means a downgrade, an old restored file or
+   * an edited one, and the local log lives on the same machine as the file.
+   */
+  private async _repairAuditUpdateTrigger(db: DatabaseType): Promise<void> {
+    const tags = { service: "database-service", operation: "auditTriggerRepair" };
+    const warn = async (message: string, meta: Record<string, unknown>): Promise<void> => {
+      try {
+        await logService.warn(message, "DatabaseService", meta);
+      } catch {
+        // A failed log write must not escape into auto-restore.
+      }
+    };
+    try {
+      let previousDefinition: string | null = null;
+      const outcome = auditDb.repairAuditUpdateTrigger(db, (previous) => {
+        previousDefinition = previous;
+        void warn("Audit-log update trigger is not strict; replacing it", { previousDefinition: previous });
+      });
+      if (outcome === "repaired") {
+        // Its own try: a reporting failure is not a repair failure.
+        try {
+          hostErrorReporter.captureMessage("Audit-log update trigger was not strict; restored", {
+            level: "warning",
+            tags,
+            extra: { previousDefinition },
+          });
+        } catch {
+          // The reporter contract forbids throwing; this only enforces it here.
+        }
+      }
+    } catch (repairError) {
+      try {
+        hostErrorReporter.captureException(repairError, { tags });
+      } catch {
+        // The reporter contract forbids throwing; this only enforces it here.
+      }
+      await warn("Audit-log trigger check failed (non-fatal)", {
+        error: repairError instanceof Error ? repairError.message : String(repairError),
+      });
+    }
+  }
+
   // ============================================
   // MIGRATIONS (Version-based runner)
   // ============================================
 
-  async runMigrations(): Promise<void> {
-    const currentDb = this._ensureDb();
+  async runMigrations(db?: DatabaseType): Promise<void> {
+    // BACKLOG-2836: initialize() passes its unpublished handle.
+    const currentDb = db ?? this._ensureDb();
     // BACKLOG-3975: only a backup written by this run counts as same-launch.
     this.sameLaunchBackupPath = null;
     const schemaPath = path.join(__dirname, "../database/schema.sql");
@@ -1665,7 +1891,7 @@ class DatabaseService implements IDatabaseService {
 
     try {
       currentDb.exec(schemaSql);
-      await this._runVersionedMigrations();
+      await this._runVersionedMigrations(false, currentDb);
     } catch (error) {
       await logService.error("Failed to run migrations", "DatabaseService", {
         error: error instanceof Error ? error.message : String(error),
@@ -1684,6 +1910,14 @@ class DatabaseService implements IDatabaseService {
       await hostErrorReporter.flush(2000);
       throw error;
     }
+
+    // BACKLOG-3023: schema.sql's CREATE TRIGGER IF NOT EXISTS cannot replace a
+    // same-named weakened audit trigger, so compare its definition here, every
+    // launch, after the chain (a migration could rewrite the table). Outside the
+    // try above on purpose: a failure here must never reach the
+    // migration-failure path (auto-restore). It is hardening, not a reason to
+    // restore, and the user is never shown it.
+    await this._repairAuditUpdateTrigger(currentDb);
 
     // Backup retention: keep last 3, delete older. Gated on willRunMigration so
     // the rolling window tracks the last 3 MIGRATION events (S5, BACKLOG-1772),
@@ -2040,8 +2274,8 @@ class DatabaseService implements IDatabaseService {
     }
   }
 
-  async _runVersionedMigrations(dryRun: boolean = false): Promise<MigrationPlan | void> {
-    const currentDb = this._ensureDb();
+  async _runVersionedMigrations(dryRun: boolean = false, db?: DatabaseType): Promise<MigrationPlan | void> {
+    const currentDb = db ?? this._ensureDb();
     const migrations = DatabaseService.MIGRATIONS;
 
     DatabaseService.validateNoDuplicateVersions(migrations);
@@ -2133,9 +2367,14 @@ class DatabaseService implements IDatabaseService {
             "DatabaseService",
             { error: error instanceof Error ? error.message : String(error) }
           );
-          throw new Error(
-            `Migration ${m.version} (${m.description}) failed: ${error instanceof Error ? error.message : String(error)}. ` +
-            `Database remains at version ${m.version - 1}. Pre-migration backup available.`
+          // BACKLOG-2834: keep the driver's error as `cause` (its `code`
+          // decides retry-or-not) and the version for the failure record.
+          throw Object.assign(
+            new Error(
+              `Migration ${m.version} (${m.description}) failed: ${error instanceof Error ? error.message : String(error)}. ` +
+              `Database remains at version ${m.version - 1}. Pre-migration backup available.`
+            ),
+            { cause: error, migrationVersion: m.version },
           );
         }
       }

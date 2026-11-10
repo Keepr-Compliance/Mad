@@ -34,6 +34,8 @@ export const databaseBackupBridge = {
       cancelled?: boolean;
       error?: string;
       requiresRestart?: boolean;
+      /** BACKLOG-3298: where the replaced data was kept (success only). */
+      keptPreviousAs?: string;
     }>,
 
   /**
