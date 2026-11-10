@@ -79,7 +79,8 @@ import {
   setLearnModeEnabled,
   setPilotOffPending,
   setPilotOn,
-  softClearAnswers,
+  softClearAnswersAndStopSharing,
+  turnLearnModeOff,
   softDeleteAnswer,
   type PreviewAttachmentRow,
   type PreviewEmailRow,
@@ -319,18 +320,6 @@ function cleanupPreview(
   return { rows, attachments, total: ids.length, address: detection.address };
 }
 
-/**
- * BACKLOG-4219: an OFF path. Sharing OFF + withdraw owed are written first;
- * then the withdraw is queued. A user who never shared (and owes nothing)
- * causes no write and no call.
- */
-function withdrawPilotIfSharing(userId: string, deps: LearnModeHandlerDeps): void {
-  const st = getPilotState(userId);
-  if (!st.enabled && !st.pendingWithdraw) return;
-  setPilotOffPending(userId);
-  deps.pilotReport?.queueWithdraw(userId);
-}
-
 function lastSentAt(sentVersions: Record<string, string>): string | null {
   const times = Object.values(sentVersions).sort();
   return times.length ? times[times.length - 1] : null;
@@ -371,10 +360,14 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
       if (!userId) return fail(LEARN_NO_SESSION_ERROR);
       // Turning OFF is never refused (session only); only turning ON needs the key.
       if (args.enabled && !((await isAutodetectEvalAllowed()) === true)) return fail(LEARN_NOT_AVAILABLE_ERROR);
-      setLearnModeEnabled(userId, args.enabled);
-      if (!args.enabled) {
+      // BACKLOG-4219: OFF also turns sharing off (same transaction), then withdraws.
+      // A user who never shared owes nothing: no write, no call.
+      if (args.enabled) {
+        setLearnModeEnabled(userId, true);
+      } else {
+        const { pilotWithdrawOwed } = turnLearnModeOff(userId);
         clearLastRun(userId);
-        withdrawPilotIfSharing(userId, deps);
+        if (pilotWithdrawOwed) deps.pilotReport?.queueWithdraw(userId);
       }
       logService.info("Learn mode toggled", MODULE, { enabled: args.enabled });
       return { success: true, enabled: getLearnModeEnabled(userId) };
@@ -562,8 +555,9 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
       // UNGATED (founder, 2026-11-04): session only. Own rows only, soft.
       const userId = await sessionUserId();
       if (!userId) return fail(LEARN_NO_SESSION_ERROR);
-      const removed = softClearAnswers(userId);
-      withdrawPilotIfSharing(userId, deps);
+      // BACKLOG-4219: Delete all also turns sharing off (same transaction), then withdraws.
+      const { removed, pilotWithdrawOwed } = softClearAnswersAndStopSharing(userId);
+      if (pilotWithdrawOwed) deps.pilotReport?.queueWithdraw(userId);
       logService.info("Learn mode answers cleared", MODULE, removed);
       return { success: true, removed };
     }),

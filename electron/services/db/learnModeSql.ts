@@ -75,10 +75,14 @@ export const PILOT_TURN_OFF_SQL = sql`
   WHERE user_id = ? AND deleted_at IS NULL
 `;
 
-/** A withdraw succeeded: nothing owed, nothing on the server. Bound: updated_at, user id. */
+/**
+ * A withdraw succeeded: nothing owed, nothing on the server, and any unsettled
+ * submit is now covered (the caller schedules its one extra withdraw). One
+ * statement. Bound: updated_at, user id.
+ */
 export const PILOT_WITHDRAW_DONE_SQL = sql`
   UPDATE learn_mode_settings
-  SET pilot_pending_withdraw = 0, pilot_sent_versions = NULL, updated_at = ?
+  SET pilot_pending_withdraw = 0, pilot_sent_versions = NULL, pilot_unsettled_at = NULL, updated_at = ?
   WHERE user_id = ? AND deleted_at IS NULL
 `;
 

@@ -106,42 +106,59 @@ function unrefTimer(fn: () => void, ms: number): void {
   (t as { unref?: () => void }).unref?.();
 }
 
-export function createLearnPilotReportService(opts: PilotServiceOptions = {}) {
-  const now = opts.now ?? (() => Date.now());
-  const appVersion = opts.appVersion ?? (() => app.getVersion());
-  const rpc = opts.rpc ?? defaultRpc;
-  const authUserId = opts.authUserId ?? defaultAuthUserId;
-  const featureState = opts.featureState ?? (() => resolveStrictFeatureState(AUTODETECT_EVAL_FEATURE_KEY));
-  const setTimer = opts.setTimer ?? unrefTimer;
-  const timeoutMs = opts.timeoutMs ?? PILOT_RPC_TIMEOUT_MS;
+/**
+ * A class so each job is its own unit for the write-atomicity guard
+ * (BACKLOG-2530): every job issues at most ONE local write on any path, and the
+ * jobs run at different times around awaited RPCs, so no transaction could
+ * span them anyway.
+ */
+export class LearnPilotReportService {
+  private readonly now: () => number;
+  private readonly appVersion: () => string;
+  private readonly rpc: RpcCall;
+  private readonly authUserId: () => Promise<string | null>;
+  private readonly featureState: () => Promise<"allowed" | "blocked" | "unknown">;
+  private readonly setTimer: (fn: () => void, ms: number) => void;
+  private readonly timeoutMs: number;
+  private readonly queues = new Map<string, Promise<void>>();
+  private lastUser: string | null = null;
+  private lastCheckMs = 0;
 
-  const queues = new Map<string, Promise<void>>();
+  constructor(opts: PilotServiceOptions = {}) {
+    this.now = opts.now ?? (() => Date.now());
+    this.appVersion = opts.appVersion ?? (() => app.getVersion());
+    this.rpc = opts.rpc ?? defaultRpc;
+    this.authUserId = opts.authUserId ?? defaultAuthUserId;
+    this.featureState = opts.featureState ?? (() => resolveStrictFeatureState(AUTODETECT_EVAL_FEATURE_KEY));
+    this.setTimer = opts.setTimer ?? unrefTimer;
+    this.timeoutMs = opts.timeoutMs ?? PILOT_RPC_TIMEOUT_MS;
+  }
 
-  function enqueue(userId: string, job: () => Promise<void>): Promise<void> {
-    const prev = queues.get(userId) ?? Promise.resolve();
+  private enqueue(userId: string, job: () => Promise<void>): Promise<void> {
+    const prev = this.queues.get(userId) ?? Promise.resolve();
     const next = prev.then(job).catch((error: unknown) => {
       logService.warn("Learn pilot job failed", MODULE, {
         errorName: error instanceof Error ? error.name : typeof error,
       });
     });
-    queues.set(userId, next);
+    this.queues.set(userId, next);
     void next.then(() => {
-      if (queues.get(userId) === next) queues.delete(userId);
+      if (this.queues.get(userId) === next) this.queues.delete(userId);
     });
     return next;
   }
 
   /** "timeout" when the call did not settle in time (it was aborted, but may have landed). */
-  async function call(name: string, args?: Record<string, unknown>): Promise<RpcResult | "timeout"> {
+  private async call(name: string, args?: Record<string, unknown>): Promise<RpcResult | "timeout"> {
     const ac = new AbortController();
     const TIMED_OUT = Symbol("timeout");
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
-      timer = setTimeout(() => resolve(TIMED_OUT), timeoutMs);
+      timer = setTimeout(() => resolve(TIMED_OUT), this.timeoutMs);
       (timer as { unref?: () => void }).unref?.();
     });
     try {
-      const r = await Promise.race([rpc(name, args, ac.signal), timeout]);
+      const r = await Promise.race([this.rpc(name, args, ac.signal), timeout]);
       if (r === TIMED_OUT) {
         ac.abort();
         return "timeout";
@@ -153,44 +170,44 @@ export function createLearnPilotReportService(opts: PilotServiceOptions = {}) {
   }
 
   /** Sharing is ON and no withdraw is owed. The ONE check both reads use. */
-  function sharingOn(st: { enabled: boolean; pendingWithdraw: boolean }): boolean {
+  private sharingOn(st: { enabled: boolean; pendingWithdraw: boolean }): boolean {
     return st.enabled && !st.pendingWithdraw;
   }
 
-  function isDue(userId: string, version: number, sentVersions: Record<string, string>): boolean {
+  private isDue(userId: string, version: number, sentVersions: Record<string, string>): boolean {
     const last = sentVersions[String(version)];
     if (!last) return true;
     const lastMs = Date.parse(last);
-    const age = now() - lastMs;
+    const age = this.now() - lastMs;
     if (age < PILOT_MIN_RESEND_MS) return false;
     if (age >= PILOT_IDLE_RESEND_MS) return true;
     const latest = latestAnswerAt(userId);
     return latest !== null && Date.parse(latest) > lastMs;
   }
 
-  function recordSent(userId: string, version: number): void {
-    const map = { ...getPilotState(userId).sentVersions, [String(version)]: new Date(now()).toISOString() };
+  private recordSent(userId: string, version: number): void {
+    const map = { ...getPilotState(userId).sentVersions, [String(version)]: new Date(this.now()).toISOString() };
     const kept = Object.entries(map)
       .sort((a, b) => Date.parse(b[1]) - Date.parse(a[1]))
       .slice(0, PILOT_MAX_SENT_VERSIONS);
     setPilotSentVersions(userId, Object.fromEntries(kept));
   }
 
-  async function submitJob(userId: string, score: LearnScore, detector: SenderCensus): Promise<void> {
+  private async submitJob(userId: string, score: LearnScore, detector: SenderCensus): Promise<void> {
     const before = getPilotState(userId);
-    if (!sharingOn(before)) return;
-    if (!isDue(userId, score.senderRulesVersion, before.sentVersions)) return;
-    const built = buildPilotReport(score, detector, appVersion());
+    if (!this.sharingOn(before)) return;
+    if (!this.isDue(userId, score.senderRulesVersion, before.sentVersions)) return;
+    const built = buildPilotReport(score, detector, this.appVersion());
     if (!built.ok) {
       logService.warn("Learn pilot report not built", MODULE, { reason: built.reason });
       return;
     }
-    if ((await authUserId()) !== userId) return;
+    if ((await this.authUserId()) !== userId) return;
     // R1: re-read immediately before the RPC; a switch-off since then wins.
-    if (!sharingOn(getPilotState(userId))) return;
-    const r = await call(SUBMIT_RPC, { p_report: built.report });
+    if (!this.sharingOn(getPilotState(userId))) return;
+    const r = await this.call(SUBMIT_RPC, { p_report: built.report });
     if (r === "timeout") {
-      setPilotUnsettledAt(userId, new Date(now()).toISOString());
+      setPilotUnsettledAt(userId, new Date(this.now()).toISOString());
       logService.warn("Learn pilot submit timed out", MODULE, {});
       return;
     }
@@ -198,16 +215,16 @@ export function createLearnPilotReportService(opts: PilotServiceOptions = {}) {
       logService.warn("Learn pilot submit refused", MODULE, { code: r.error.code ?? "unknown" });
       return;
     }
-    recordSent(userId, score.senderRulesVersion);
+    this.recordSent(userId, score.senderRulesVersion);
     logService.info("Learn pilot report sent", MODULE, { senderRulesVersion: score.senderRulesVersion });
   }
 
-  async function withdrawJob(userId: string, extra: boolean): Promise<void> {
+  private async withdrawJob(userId: string, extra: boolean): Promise<void> {
     const st = getPilotState(userId);
     if (extra ? st.enabled : !st.pendingWithdraw) return;
     // A withdraw deletes the CALLER's rows: only ever as the user who owes it.
-    if ((await authUserId()) !== userId) return;
-    const r = await call(WITHDRAW_RPC);
+    if ((await this.authUserId()) !== userId) return;
+    const r = await this.call(WITHDRAW_RPC);
     if (r === "timeout" || r.error) {
       logService.warn("Learn pilot withdraw not done", MODULE, {
         code: r === "timeout" ? "timeout" : (r.error?.code ?? "unknown"),
@@ -215,58 +232,55 @@ export function createLearnPilotReportService(opts: PilotServiceOptions = {}) {
       return;
     }
     if (extra) return;
-    markPilotWithdrawDone(userId);
+    const unsettled = getPilotState(userId).unsettledAt !== null;
+    markPilotWithdrawDone(userId); // also clears the unsettled mark (one statement)
     logService.info("Learn pilot report withdrawn", MODULE, {});
-    if (getPilotState(userId).unsettledAt) {
-      setPilotUnsettledAt(userId, null);
-      setTimer(() => void enqueue(userId, () => withdrawJob(userId, true)), PILOT_EXTRA_WITHDRAW_MS);
+    if (unsettled) {
+      this.setTimer(() => void this.enqueue(userId, () => this.withdrawJob(userId, true)), PILOT_EXTRA_WITHDRAW_MS);
     }
   }
 
-  function maybeSend(userId: string, score: LearnScore, detector: SenderCensus): Promise<void> {
-    return enqueue(userId, () => submitJob(userId, score, detector));
+  maybeSend(userId: string, score: LearnScore, detector: SenderCensus): Promise<void> {
+    return this.enqueue(userId, () => this.submitJob(userId, score, detector));
   }
 
-  function queueWithdraw(userId: string): Promise<void> {
-    return enqueue(userId, () => withdrawJob(userId, false));
+  queueWithdraw(userId: string): Promise<void> {
+    return this.enqueue(userId, () => this.withdrawJob(userId, false));
   }
 
   /** R3: the startup / sign-in check, for the signed-in user only. */
-  async function checkPendingPilotWork(userId: string): Promise<void> {
-    if ((await authUserId()) !== userId) return;
-    if (getPilotState(userId).enabled && (await featureState()) === "blocked") {
+  async checkPendingPilotWork(userId: string): Promise<void> {
+    if ((await this.authUserId()) !== userId) return;
+    if (getPilotState(userId).enabled && (await this.featureState()) === "blocked") {
       setPilotOffPending(userId);
       logService.info("Learn pilot sharing turned off: feature not allowed", MODULE, {});
     }
     // Owed withdraws are paid even if sharing was turned back on since: the
     // submit refuses to run while one is owed, so the delete always goes first.
-    if (getPilotState(userId).pendingWithdraw) await queueWithdraw(userId);
+    if (getPilotState(userId).pendingWithdraw) await this.queueWithdraw(userId);
   }
 
-  let lastUser: string | null = null;
-  let lastCheckMs = 0;
-
   /** One session tick: a new signed-in user is a sign-in; an owed withdraw is retried every 5 min. */
-  async function tick(): Promise<void> {
-    const u = await authUserId();
-    const changed = u !== lastUser;
-    lastUser = u;
+  async tick(): Promise<void> {
+    const u = await this.authUserId();
+    const changed = u !== this.lastUser;
+    this.lastUser = u;
     if (!u) return;
-    if (changed || (getPilotState(u).pendingWithdraw && now() - lastCheckMs >= PILOT_RETRY_MS)) {
-      lastCheckMs = now();
-      await checkPendingPilotWork(u);
+    if (changed || (getPilotState(u).pendingWithdraw && this.now() - this.lastCheckMs >= PILOT_RETRY_MS)) {
+      this.lastCheckMs = this.now();
+      await this.checkPendingPilotWork(u);
     }
   }
 
   /** Resolves when every queued job of this user has run (tests). */
-  function idle(userId: string): Promise<void> {
-    return queues.get(userId) ?? Promise.resolve();
+  idle(userId: string): Promise<void> {
+    return this.queues.get(userId) ?? Promise.resolve();
   }
-
-  return { maybeSend, queueWithdraw, checkPendingPilotWork, tick, idle };
 }
 
-export type LearnPilotReportService = ReturnType<typeof createLearnPilotReportService>;
+export function createLearnPilotReportService(opts: PilotServiceOptions = {}): LearnPilotReportService {
+  return new LearnPilotReportService(opts);
+}
 
 let started = false;
 

@@ -175,8 +175,42 @@ export function setPilotOffPending(userId: string): void {
   dbRun(PILOT_TURN_OFF_SQL, [nowIso(), userId]);
 }
 
+/** Also clears pilot_unsettled_at (one statement). */
 export function markPilotWithdrawDone(userId: string): void {
   dbRun(PILOT_WITHDRAW_DONE_SQL, [nowIso(), userId]);
+}
+
+/** Sharing OFF + withdraw owed, only if the user shares or already owes one. Returns whether a withdraw is owed. */
+function stopPilotSharingIfOn(userId: string): boolean {
+  const st = getPilotState(userId);
+  if (!st.enabled && !st.pendingWithdraw) return false;
+  setPilotOffPending(userId);
+  return true;
+}
+
+/**
+ * Learn mode OFF and, in the same transaction, sharing OFF + withdraw owed
+ * (when the user shares). Returns whether a withdraw is owed.
+ */
+export function turnLearnModeOff(userId: string): { pilotWithdrawOwed: boolean } {
+  return dbTransaction(() => {
+    setLearnModeEnabled(userId, false);
+    return { pilotWithdrawOwed: stopPilotSharingIfOn(userId) };
+  });
+}
+
+/**
+ * Delete all answers (soft) and, in the same transaction, sharing OFF +
+ * withdraw owed (when the user shares).
+ */
+export function softClearAnswersAndStopSharing(userId: string): {
+  removed: { deal: number; bulk: number };
+  pilotWithdrawOwed: boolean;
+} {
+  return dbTransaction(() => {
+    const removed = softClearAnswers(userId);
+    return { removed, pilotWithdrawOwed: stopPilotSharingIfOn(userId) };
+  });
 }
 
 export function setPilotSentVersions(userId: string, map: Record<string, string>): void {
