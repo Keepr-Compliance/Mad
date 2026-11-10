@@ -379,6 +379,11 @@ const REFUSED_PAGES: Record<string, PageEntry> = {
     invoke: async () => (await import('@/app/dashboard/settings/scim/page')).default(),
     refused: { notFound: true },
   },
+  // BACKLOG-3962: domain verification; admin / IT admin of the brokerage only.
+  'app/dashboard/settings/domain/page.tsx': {
+    invoke: async () => (await import('@/app/dashboard/settings/domain/page')).default(),
+    refused: { redirect: '/dashboard' },
+  },
   // BACKLOG-4007 PR-3: the setup guide is for a brokerage's broker/admin only.
   'app/dashboard/setup/page.tsx': {
     invoke: async () => (await import('@/app/dashboard/setup/page')).default({ searchParams: Promise.resolve({}) }),
@@ -580,6 +585,10 @@ const REFUSED_ACTIONS: Record<string, ActionEntry> = {
     lastName: '',
     phone: '',
   }),
+  // BACKLOG-3962: domain verification; admin / IT admin of the brokerage only.
+  'lib/actions/domainClaim.ts#createDomainClaim': act(() => import('@/lib/actions/domainClaim'), 'createDomainClaim', 'brokerage-audit.example'),
+  'lib/actions/domainClaim.ts#checkDomainClaim': act(() => import('@/lib/actions/domainClaim'), 'checkDomainClaim', '00000000-0000-4000-8000-000000003962'), // pii-allow-uuid: invented fixture id
+  'lib/actions/domainClaim.ts#withdrawDomainClaim': act(() => import('@/lib/actions/domainClaim'), 'withdrawDomainClaim', '00000000-0000-4000-8000-000000003962'), // pii-allow-uuid: invented fixture id
 };
 
 /**
@@ -656,6 +665,9 @@ const REVIEWER_REFUSED_PERSONAS = {
  */
 type Persona = keyof typeof PERSONAS;
 const NOT_AUTHORIZED_THROW: Outcome = { threw: 'Not authorized' };
+const DOMAIN_CLAIM_REFUSED: Outcome = {
+  returned: { success: false, message: 'Only an admin or IT admin of this brokerage can verify a domain.' },
+};
 const byPersona = (agent: Outcome, others: Outcome): Record<Persona, Outcome> => ({
   'brokerage agent': agent,
   'personal-org owner': others,
@@ -680,6 +692,9 @@ const REFUSALS: Record<string, Outcome | Record<Persona, Outcome>> = {
   'lib/actions/resendInvite.ts#resendInvite': { returned: { success: false, error: 'Not authorized' } },
   'lib/actions/memberLicense.ts#setMemberLicense': failed('Not authorized'),
   'lib/actions/memberName.ts#setMemberName': failed('Not authorized'),
+  'lib/actions/domainClaim.ts#createDomainClaim': DOMAIN_CLAIM_REFUSED,
+  'lib/actions/domainClaim.ts#checkDomainClaim': DOMAIN_CLAIM_REFUSED,
+  'lib/actions/domainClaim.ts#withdrawDomainClaim': DOMAIN_CLAIM_REFUSED,
   'lib/actions/billingSetup.ts#completeBillingSetup': {
     returned: {
       success: false,
@@ -1001,7 +1016,7 @@ describe('discovery can see what it claims to see', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
     expect(pages).toContain('app/dashboard/users/[id]/page.tsx');
-    expect(pages.length).toBe(19); // BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
+    expect(pages.length).toBe(20); // BACKLOG-3962: + settings/domain; BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
   });
 
   it('finds route handlers, keyed POSIX on any OS (R8)', () => {
@@ -1040,7 +1055,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(58); // BACKLOG-3854: + addSeats, openBrokerageBillingPortal; BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
+    expect(actions.length).toBe(61); // BACKLOG-3962: + createDomainClaim, checkDomainClaim, withdrawDomainClaim; BACKLOG-3854: + addSeats, openBrokerageBillingPortal; BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
   });
 });
 
