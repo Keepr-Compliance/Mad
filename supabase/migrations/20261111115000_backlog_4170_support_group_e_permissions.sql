@@ -61,6 +61,7 @@ END
 $pin$;
 
 -- support.view
+-- Intentionally callable by anon: a signed-out requester replies to their own ticket (p_sender_email)
 CREATE OR REPLACE FUNCTION public.support_add_message(p_ticket_id uuid, p_body text, p_message_type text DEFAULT 'reply'::text, p_sender_email text DEFAULT NULL::text, p_sender_name text DEFAULT NULL::text)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -159,6 +160,7 @@ END;
 $function$;
 
 -- support.view
+-- Intentionally callable by anon: a signed-out requester reads their own ticket (p_requester_email must match)
 CREATE OR REPLACE FUNCTION public.support_get_ticket_detail(p_ticket_id uuid, p_requester_email text DEFAULT NULL::text)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -256,6 +258,7 @@ END;
 $function$;
 
 -- support.view
+-- Intentionally callable by anon: grants unchanged; the body refuses a caller with no user id before any read or write
 CREATE OR REPLACE FUNCTION public.support_list_tickets(p_status text DEFAULT NULL::text, p_priority text DEFAULT NULL::text, p_category_id uuid DEFAULT NULL::uuid, p_assignee_id uuid DEFAULT NULL::uuid, p_search text DEFAULT NULL::text, p_requester_email text DEFAULT NULL::text, p_page integer DEFAULT 1, p_page_size integer DEFAULT 20, p_sort_by text DEFAULT 'created_at'::text, p_sort_dir text DEFAULT 'desc'::text)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -504,6 +507,7 @@ END;
 $function$;
 
 -- support.view
+-- Intentionally callable by anon: grants unchanged; the body refuses a caller with no user id before any read or write
 CREATE OR REPLACE FUNCTION public.support_add_attachment(p_ticket_id uuid, p_message_id uuid DEFAULT NULL::uuid, p_file_name text DEFAULT ''::text, p_file_size bigint DEFAULT 0, p_file_type text DEFAULT ''::text, p_storage_path text DEFAULT ''::text)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -541,6 +545,7 @@ END;
 $function$;
 
 -- support.view
+-- Intentionally callable by anon: grants unchanged; the body refuses a caller with no user id before any read or write
 CREATE OR REPLACE FUNCTION public.support_add_diagnostic_attachment(p_ticket_id uuid, p_file_name text, p_file_size bigint, p_file_type text, p_storage_path text, p_retention_days integer DEFAULT 30)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -599,6 +604,7 @@ END;
 $function$;
 
 -- support.manage or support.admin
+-- Intentionally callable by anon: grants unchanged; the body refuses a caller with no user id before any read or write
 CREATE OR REPLACE FUNCTION public.support_delete_own_attachment(p_attachment_id uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -648,6 +654,7 @@ END;
 $function$;
 
 -- support.view
+-- Intentionally callable by anon: returns [] to a caller with no user id
 CREATE OR REPLACE FUNCTION public.support_list_attachments(p_ticket_id uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -701,6 +708,7 @@ END;
 $function$;
 
 -- support.view
+-- Intentionally callable by anon: returns [] to a caller with no user id
 CREATE OR REPLACE FUNCTION public.support_list_events(p_ticket_id uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
@@ -744,6 +752,7 @@ END;
 $function$;
 
 -- support.view
+-- Intentionally callable by anon: grants unchanged; the body refuses a caller with no user id before any read or write
 CREATE OR REPLACE FUNCTION public.support_record_attachment_access(p_attachment_id uuid)
  RETURNS jsonb
  LANGUAGE plpgsql
