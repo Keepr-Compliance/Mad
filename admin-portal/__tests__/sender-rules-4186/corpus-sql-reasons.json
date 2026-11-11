@@ -1,0 +1,1142 @@
+[
+ {
+  "name": "bundled",
+  "reason": null
+ },
+ {
+  "name": "suppress.exactAddresses: 500 items (cap)",
+  "reason": null
+ },
+ {
+  "name": "suppress.exactAddresses: 501 items",
+  "reason": "suppress.exactAddresses: more than 500 items"
+ },
+ {
+  "name": "suppress.exactAddresses: not a list",
+  "reason": "suppress.exactAddresses: not a list"
+ },
+ {
+  "name": "suppress.exactAddresses: null",
+  "reason": "suppress.exactAddresses: not a list"
+ },
+ {
+  "name": "suppress.exactAddresses: missing",
+  "reason": "suppress: keys"
+ },
+ {
+  "name": "suppress.exactAddresses: null element",
+  "reason": "suppress.exactAddresses[1]: not a valid address"
+ },
+ {
+  "name": "suppress.exactAddresses: number element",
+  "reason": "suppress.exactAddresses[0]: not a valid address"
+ },
+ {
+  "name": "suppress.exactAddresses: boolean element",
+  "reason": "suppress.exactAddresses[0]: not a valid address"
+ },
+ {
+  "name": "suppress.exactAddresses: object element",
+  "reason": "suppress.exactAddresses[0]: not a valid address"
+ },
+ {
+  "name": "suppress.hosts: 2000 items (cap)",
+  "reason": null
+ },
+ {
+  "name": "suppress.hosts: 2001 items",
+  "reason": "suppress.hosts: more than 2000 items"
+ },
+ {
+  "name": "suppress.hosts: not a list",
+  "reason": "suppress.hosts: not a list"
+ },
+ {
+  "name": "suppress.hosts: null",
+  "reason": "suppress.hosts: not a list"
+ },
+ {
+  "name": "suppress.hosts: missing",
+  "reason": "suppress: keys"
+ },
+ {
+  "name": "suppress.hosts: null element",
+  "reason": "suppress.hosts[1]: not a valid host"
+ },
+ {
+  "name": "suppress.hosts: number element",
+  "reason": "suppress.hosts[0]: not a valid host"
+ },
+ {
+  "name": "suppress.hosts: boolean element",
+  "reason": "suppress.hosts[0]: not a valid host"
+ },
+ {
+  "name": "suppress.hosts: object element",
+  "reason": "suppress.hosts[0]: not a valid host"
+ },
+ {
+  "name": "suppress.localParts: 50 items (cap)",
+  "reason": null
+ },
+ {
+  "name": "suppress.localParts: 51 items",
+  "reason": "suppress.localParts: more than 50 items"
+ },
+ {
+  "name": "suppress.localParts: not a list",
+  "reason": "suppress.localParts: not a list"
+ },
+ {
+  "name": "suppress.localParts: null",
+  "reason": "suppress.localParts: not a list"
+ },
+ {
+  "name": "suppress.localParts: missing",
+  "reason": "suppress: keys"
+ },
+ {
+  "name": "suppress.localParts: null element",
+  "reason": "suppress.localParts[1]: not a valid item"
+ },
+ {
+  "name": "suppress.localParts: number element",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "suppress.localParts: boolean element",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "suppress.localParts: object element",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "suppress.bulkHeaders.anyKeyPresent: 4 items (cap)",
+  "reason": null
+ },
+ {
+  "name": "suppress.bulkHeaders.anyKeyPresent: 5 items",
+  "reason": "suppress.bulkHeaders.anyKeyPresent: more than 4 items"
+ },
+ {
+  "name": "suppress.bulkHeaders.anyKeyPresent: not a list",
+  "reason": "suppress.bulkHeaders.anyKeyPresent: not a list"
+ },
+ {
+  "name": "suppress.bulkHeaders.anyKeyPresent: null",
+  "reason": "suppress.bulkHeaders.anyKeyPresent: not a list"
+ },
+ {
+  "name": "suppress.bulkHeaders.anyKeyPresent: missing",
+  "reason": "suppress.bulkHeaders: keys"
+ },
+ {
+  "name": "suppress.bulkHeaders.anyKeyPresent: null element",
+  "reason": "suppress.bulkHeaders.anyKeyPresent[1]: not a valid bulkkey"
+ },
+ {
+  "name": "suppress.bulkHeaders.anyKeyPresent: number element",
+  "reason": "suppress.bulkHeaders.anyKeyPresent[0]: not a valid bulkkey"
+ },
+ {
+  "name": "suppress.bulkHeaders.anyKeyPresent: boolean element",
+  "reason": "suppress.bulkHeaders.anyKeyPresent[0]: not a valid bulkkey"
+ },
+ {
+  "name": "suppress.bulkHeaders.anyKeyPresent: object element",
+  "reason": "suppress.bulkHeaders.anyKeyPresent[0]: not a valid bulkkey"
+ },
+ {
+  "name": "suppress.bulkHeaders.precedenceValues: 10 items (cap)",
+  "reason": null
+ },
+ {
+  "name": "suppress.bulkHeaders.precedenceValues: 11 items",
+  "reason": "suppress.bulkHeaders.precedenceValues: more than 10 items"
+ },
+ {
+  "name": "suppress.bulkHeaders.precedenceValues: not a list",
+  "reason": "suppress.bulkHeaders.precedenceValues: not a list"
+ },
+ {
+  "name": "suppress.bulkHeaders.precedenceValues: null",
+  "reason": "suppress.bulkHeaders.precedenceValues: not a list"
+ },
+ {
+  "name": "suppress.bulkHeaders.precedenceValues: missing",
+  "reason": "suppress.bulkHeaders: keys"
+ },
+ {
+  "name": "suppress.bulkHeaders.precedenceValues: null element",
+  "reason": "suppress.bulkHeaders.precedenceValues[1]: not a valid precedence"
+ },
+ {
+  "name": "suppress.bulkHeaders.precedenceValues: number element",
+  "reason": "suppress.bulkHeaders.precedenceValues[0]: not a valid precedence"
+ },
+ {
+  "name": "suppress.bulkHeaders.precedenceValues: boolean element",
+  "reason": "suppress.bulkHeaders.precedenceValues[0]: not a valid precedence"
+ },
+ {
+  "name": "suppress.bulkHeaders.precedenceValues: object element",
+  "reason": "suppress.bulkHeaders.precedenceValues[0]: not a valid precedence"
+ },
+ {
+  "name": "keep.platformHosts: 200 items (cap)",
+  "reason": null
+ },
+ {
+  "name": "keep.platformHosts: 201 items",
+  "reason": "keep.platformHosts: more than 200 items"
+ },
+ {
+  "name": "keep.platformHosts: not a list",
+  "reason": "keep.platformHosts: not a list"
+ },
+ {
+  "name": "keep.platformHosts: null",
+  "reason": "keep.platformHosts: not a list"
+ },
+ {
+  "name": "keep.platformHosts: missing",
+  "reason": "keep: keys"
+ },
+ {
+  "name": "keep.platformHosts: null element",
+  "reason": "keep.platformHosts[1]: not a valid host"
+ },
+ {
+  "name": "keep.platformHosts: number element",
+  "reason": "keep.platformHosts[0]: not a valid host"
+ },
+ {
+  "name": "keep.platformHosts: boolean element",
+  "reason": "keep.platformHosts[0]: not a valid host"
+ },
+ {
+  "name": "keep.platformHosts: object element",
+  "reason": "keep.platformHosts[0]: not a valid host"
+ },
+ {
+  "name": "keep.platformAddresses: 200 items (cap)",
+  "reason": null
+ },
+ {
+  "name": "keep.platformAddresses: 201 items",
+  "reason": "keep.platformAddresses: more than 200 items"
+ },
+ {
+  "name": "keep.platformAddresses: not a list",
+  "reason": "keep.platformAddresses: not a list"
+ },
+ {
+  "name": "keep.platformAddresses: null",
+  "reason": "keep.platformAddresses: not a list"
+ },
+ {
+  "name": "keep.platformAddresses: missing",
+  "reason": "keep: keys"
+ },
+ {
+  "name": "keep.platformAddresses: null element",
+  "reason": "keep.platformAddresses[1]: not a valid address"
+ },
+ {
+  "name": "keep.platformAddresses: number element",
+  "reason": "keep.platformAddresses[0]: not a valid address"
+ },
+ {
+  "name": "keep.platformAddresses: boolean element",
+  "reason": "keep.platformAddresses[0]: not a valid address"
+ },
+ {
+  "name": "keep.platformAddresses: object element",
+  "reason": "keep.platformAddresses[0]: not a valid address"
+ },
+ {
+  "name": "freeMailDomains: 500 items (cap)",
+  "reason": null
+ },
+ {
+  "name": "freeMailDomains: 501 items",
+  "reason": "freeMailDomains: more than 500 items"
+ },
+ {
+  "name": "freeMailDomains: not a list",
+  "reason": "freeMailDomains: not a list"
+ },
+ {
+  "name": "freeMailDomains: null",
+  "reason": "freeMailDomains: not a list"
+ },
+ {
+  "name": "freeMailDomains: missing",
+  "reason": "root: keys"
+ },
+ {
+  "name": "freeMailDomains: null element",
+  "reason": "freeMailDomains[1]: not a valid host"
+ },
+ {
+  "name": "freeMailDomains: number element",
+  "reason": "freeMailDomains[0]: not a valid host"
+ },
+ {
+  "name": "freeMailDomains: boolean element",
+  "reason": "freeMailDomains[0]: not a valid host"
+ },
+ {
+  "name": "freeMailDomains: object element",
+  "reason": "freeMailDomains[0]: not a valid host"
+ },
+ {
+  "name": "root: extra key",
+  "reason": "root: keys"
+ },
+ {
+  "name": "root: missing schema",
+  "reason": "root: keys"
+ },
+ {
+  "name": "suppress: extra key",
+  "reason": "suppress: keys"
+ },
+ {
+  "name": "suppress: missing hosts",
+  "reason": "suppress: keys"
+ },
+ {
+  "name": "suppress: not an object",
+  "reason": "suppress: keys"
+ },
+ {
+  "name": "suppress.bulkHeaders: extra key",
+  "reason": "suppress.bulkHeaders: keys"
+ },
+ {
+  "name": "suppress.bulkHeaders: missing precedenceValues",
+  "reason": "suppress.bulkHeaders: keys"
+ },
+ {
+  "name": "suppress.bulkHeaders: not an object",
+  "reason": "suppress.bulkHeaders: keys"
+ },
+ {
+  "name": "keep: extra key",
+  "reason": "keep: keys"
+ },
+ {
+  "name": "keep: missing platformHosts",
+  "reason": "keep: keys"
+ },
+ {
+  "name": "keep: not an object",
+  "reason": "keep: keys"
+ },
+ {
+  "name": "thresholds: extra key",
+  "reason": "thresholds: keys"
+ },
+ {
+  "name": "thresholds: missing reportMaxRows",
+  "reason": "thresholds: keys"
+ },
+ {
+  "name": "thresholds: not an object",
+  "reason": "thresholds: keys"
+ },
+ {
+  "name": "modes: extra key",
+  "reason": "modes: keys"
+ },
+ {
+  "name": "modes: missing gmailSocial",
+  "reason": "modes: keys"
+ },
+ {
+  "name": "modes: not an object",
+  "reason": "modes: keys"
+ },
+ {
+  "name": "modes.seedAddress: extra key",
+  "reason": "modes.seedAddress: keys"
+ },
+ {
+  "name": "modes.seedAddress: missing detector",
+  "reason": "modes.seedAddress: keys"
+ },
+ {
+  "name": "modes.seedAddress: not an object",
+  "reason": "modes.seedAddress: keys"
+ },
+ {
+  "name": "modes.approvedHost: extra key",
+  "reason": "modes.approvedHost: keys"
+ },
+ {
+  "name": "modes.approvedHost: missing detector",
+  "reason": "modes.approvedHost: keys"
+ },
+ {
+  "name": "modes.approvedHost: not an object",
+  "reason": "modes.approvedHost: keys"
+ },
+ {
+  "name": "modes.localPart: extra key",
+  "reason": "modes.localPart: keys"
+ },
+ {
+  "name": "modes.localPart: missing detector",
+  "reason": "modes.localPart: keys"
+ },
+ {
+  "name": "modes.localPart: not an object",
+  "reason": "modes.localPart: keys"
+ },
+ {
+  "name": "modes.bulkHeaders: extra key",
+  "reason": "modes.bulkHeaders: keys"
+ },
+ {
+  "name": "modes.bulkHeaders: missing detector",
+  "reason": "modes.bulkHeaders: keys"
+ },
+ {
+  "name": "modes.bulkHeaders: not an object",
+  "reason": "modes.bulkHeaders: keys"
+ },
+ {
+  "name": "modes.gmailPromotions: extra key",
+  "reason": "modes.gmailPromotions: keys"
+ },
+ {
+  "name": "modes.gmailPromotions: missing detector",
+  "reason": "modes.gmailPromotions: keys"
+ },
+ {
+  "name": "modes.gmailPromotions: not an object",
+  "reason": "modes.gmailPromotions: keys"
+ },
+ {
+  "name": "modes.gmailSocial: extra key",
+  "reason": "modes.gmailSocial: keys"
+ },
+ {
+  "name": "modes.gmailSocial: missing detector",
+  "reason": "modes.gmailSocial: keys"
+ },
+ {
+  "name": "modes.gmailSocial: not an object",
+  "reason": "modes.gmailSocial: keys"
+ },
+ {
+  "name": "modes.gmailUpdates: extra key",
+  "reason": "modes.gmailUpdates: keys"
+ },
+ {
+  "name": "modes.gmailUpdates: missing detector",
+  "reason": "modes.gmailUpdates: keys"
+ },
+ {
+  "name": "modes.gmailUpdates: not an object",
+  "reason": "modes.gmailUpdates: keys"
+ },
+ {
+  "name": "localParts item: valid exact",
+  "reason": null
+ },
+ {
+  "name": "localParts item: valid prefix",
+  "reason": null
+ },
+ {
+  "name": "localParts item: extra key",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "localParts item: missing match",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "localParts item: match suffix",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "localParts item: match null",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "localParts item: value number",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "localParts item: value null",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "host: valid",
+  "reason": null
+ },
+ {
+  "name": "host: 253 chars",
+  "reason": null
+ },
+ {
+  "name": "host: 254 chars",
+  "reason": "suppress.hosts[0]: not a valid host"
+ },
+ {
+  "name": "host: no dot",
+  "reason": "suppress.hosts[0]: not a valid host"
+ },
+ {
+  "name": "host: space",
+  "reason": "suppress.hosts[0]: not a valid host"
+ },
+ {
+  "name": "host: uppercase",
+  "reason": "suppress.hosts[0]: not a valid host"
+ },
+ {
+  "name": "host: trailing dot",
+  "reason": "suppress.hosts[0]: not a valid host"
+ },
+ {
+  "name": "host: underscore",
+  "reason": "suppress.hosts[0]: not a valid host"
+ },
+ {
+  "name": "host: number 1.5",
+  "reason": "suppress.hosts[0]: not a valid host"
+ },
+ {
+  "name": "host: non-ASCII",
+  "reason": "suppress.hosts[0]: not a valid host"
+ },
+ {
+  "name": "host: empty",
+  "reason": "suppress.hosts[0]: not a valid host"
+ },
+ {
+  "name": "freeMailDomains: uppercase",
+  "reason": "freeMailDomains[0]: not a valid host"
+ },
+ {
+  "name": "platformHosts: wildcard",
+  "reason": "keep.platformHosts[0]: not a valid host"
+ },
+ {
+  "name": "address: valid",
+  "reason": null
+ },
+ {
+  "name": "address: 254 chars",
+  "reason": null
+ },
+ {
+  "name": "address: 255 chars",
+  "reason": "suppress.exactAddresses[0]: not a valid address"
+ },
+ {
+  "name": "address: no at",
+  "reason": "suppress.exactAddresses[0]: not a valid address"
+ },
+ {
+  "name": "address: two ats",
+  "reason": "suppress.exactAddresses[0]: not a valid address"
+ },
+ {
+  "name": "address: host without dot",
+  "reason": "suppress.exactAddresses[0]: not a valid address"
+ },
+ {
+  "name": "address: uppercase local",
+  "reason": "suppress.exactAddresses[0]: not a valid address"
+ },
+ {
+  "name": "address: uppercase host",
+  "reason": "suppress.exactAddresses[0]: not a valid address"
+ },
+ {
+  "name": "address: space",
+  "reason": "suppress.exactAddresses[0]: not a valid address"
+ },
+ {
+  "name": "address: tab",
+  "reason": "suppress.exactAddresses[0]: not a valid address"
+ },
+ {
+  "name": "address: true",
+  "reason": "suppress.exactAddresses[0]: not a valid address"
+ },
+ {
+  "name": "address: non-ASCII local part",
+  "reason": "suppress.exactAddresses[0]: not a valid address"
+ },
+ {
+  "name": "address: NBSP in local part",
+  "reason": "suppress.exactAddresses[0]: not a valid address"
+ },
+ {
+  "name": "platformAddresses: uppercase",
+  "reason": "keep.platformAddresses[0]: not a valid address"
+ },
+ {
+  "name": "localPart: 64 chars",
+  "reason": null
+ },
+ {
+  "name": "localPart: 65 chars",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "localPart: empty",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "localPart: contains at",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "localPart: uppercase",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "localPart: space",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "localPart: symbols",
+  "reason": null
+ },
+ {
+  "name": "localPart: non-ASCII",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "localPart: NBSP",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "localPart: U+2028",
+  "reason": "suppress.localParts[0]: not a valid item"
+ },
+ {
+  "name": "precedence: 32 chars",
+  "reason": null
+ },
+ {
+  "name": "precedence: 33 chars",
+  "reason": "suppress.bulkHeaders.precedenceValues[0]: not a valid precedence"
+ },
+ {
+  "name": "precedence: empty",
+  "reason": "suppress.bulkHeaders.precedenceValues[0]: not a valid precedence"
+ },
+ {
+  "name": "precedence: uppercase",
+  "reason": "suppress.bulkHeaders.precedenceValues[0]: not a valid precedence"
+ },
+ {
+  "name": "precedence: number",
+  "reason": "suppress.bulkHeaders.precedenceValues[0]: not a valid precedence"
+ },
+ {
+  "name": "precedence: with space",
+  "reason": "suppress.bulkHeaders.precedenceValues[0]: not a valid precedence"
+ },
+ {
+  "name": "precedence: non-ASCII",
+  "reason": "suppress.bulkHeaders.precedenceValues[0]: not a valid precedence"
+ },
+ {
+  "name": "precedence: symbols",
+  "reason": null
+ },
+ {
+  "name": "anyKeyPresent: all four",
+  "reason": null
+ },
+ {
+  "name": "anyKeyPresent: authentication_results",
+  "reason": "suppress.bulkHeaders.anyKeyPresent[0]: not a valid bulkkey"
+ },
+ {
+  "name": "anyKeyPresent: wire name",
+  "reason": "suppress.bulkHeaders.anyKeyPresent[0]: not a valid bulkkey"
+ },
+ {
+  "name": "anyKeyPresent: uppercase",
+  "reason": "suppress.bulkHeaders.anyKeyPresent[0]: not a valid bulkkey"
+ },
+ {
+  "name": "autoSubmittedCounts: true",
+  "reason": null
+ },
+ {
+  "name": "autoSubmittedCounts: string",
+  "reason": "suppress.bulkHeaders.autoSubmittedCounts: not a boolean"
+ },
+ {
+  "name": "autoSubmittedCounts: number",
+  "reason": "suppress.bulkHeaders.autoSubmittedCounts: not a boolean"
+ },
+ {
+  "name": "autoSubmittedCounts: null",
+  "reason": "suppress.bulkHeaders.autoSubmittedCounts: not a boolean"
+ },
+ {
+  "name": "schema: 2",
+  "reason": "schema: must be 1"
+ },
+ {
+  "name": "schema: string",
+  "reason": "schema: must be 1"
+ },
+ {
+  "name": "schema: null",
+  "reason": "schema: must be 1"
+ },
+ {
+  "name": "version: 7",
+  "reason": null
+ },
+ {
+  "name": "version: 0",
+  "reason": "version: not a positive integer"
+ },
+ {
+  "name": "version: -1",
+  "reason": "version: not a positive integer"
+ },
+ {
+  "name": "version: 1.5",
+  "reason": "version: not a positive integer"
+ },
+ {
+  "name": "version: string",
+  "reason": "version: not a positive integer"
+ },
+ {
+  "name": "version: null",
+  "reason": "version: not a positive integer"
+ },
+ {
+  "name": "version: 2^53-1",
+  "reason": null
+ },
+ {
+  "name": "version: 2^53",
+  "reason": "version: not a positive integer"
+ },
+ {
+  "name": "minCensusLinkedEmails: 0",
+  "reason": null
+ },
+ {
+  "name": "minCensusLinkedEmails: -1",
+  "reason": "thresholds.minCensusLinkedEmails: not an integer >= 0"
+ },
+ {
+  "name": "minCensusLinkedEmails: 1.5",
+  "reason": "thresholds.minCensusLinkedEmails: not an integer >= 0"
+ },
+ {
+  "name": "minCensusLinkedEmails: string",
+  "reason": "thresholds.minCensusLinkedEmails: not an integer >= 0"
+ },
+ {
+  "name": "minCensusLinkedEmails: null",
+  "reason": "thresholds.minCensusLinkedEmails: not an integer >= 0"
+ },
+ {
+  "name": "minCensusLinkedEmails: 2^53-1",
+  "reason": null
+ },
+ {
+  "name": "minCensusLinkedEmails: 2^53",
+  "reason": "thresholds.minCensusLinkedEmails: not an integer >= 0"
+ },
+ {
+  "name": "reportSendIntervalHours: 1",
+  "reason": null
+ },
+ {
+  "name": "reportSendIntervalHours: 0",
+  "reason": "thresholds.reportSendIntervalHours: not a positive integer"
+ },
+ {
+  "name": "reportSendIntervalHours: null",
+  "reason": "thresholds.reportSendIntervalHours: not a positive integer"
+ },
+ {
+  "name": "reportSendIntervalHours: 2^53-1",
+  "reason": null
+ },
+ {
+  "name": "reportSendIntervalHours: 2^53",
+  "reason": "thresholds.reportSendIntervalHours: not a positive integer"
+ },
+ {
+  "name": "reportMaxRows: 1",
+  "reason": null
+ },
+ {
+  "name": "reportMaxRows: 500",
+  "reason": null
+ },
+ {
+  "name": "reportMaxRows: 501",
+  "reason": "thresholds.reportMaxRows: not an integer 1-500"
+ },
+ {
+  "name": "reportMaxRows: 0",
+  "reason": "thresholds.reportMaxRows: not an integer 1-500"
+ },
+ {
+  "name": "reportMaxRows: null",
+  "reason": "thresholds.reportMaxRows: not an integer 1-500"
+ },
+ {
+  "name": "modes.seedAddress.learnQuestions: live",
+  "reason": null
+ },
+ {
+  "name": "modes.seedAddress.learnQuestions: off",
+  "reason": null
+ },
+ {
+  "name": "modes.seedAddress.learnQuestions: LIVE",
+  "reason": "modes.seedAddress.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.seedAddress.learnQuestions: null",
+  "reason": "modes.seedAddress.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.seedAddress.addressPass: live",
+  "reason": null
+ },
+ {
+  "name": "modes.seedAddress.addressPass: off",
+  "reason": null
+ },
+ {
+  "name": "modes.seedAddress.addressPass: LIVE",
+  "reason": "modes.seedAddress.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.seedAddress.addressPass: null",
+  "reason": "modes.seedAddress.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.seedAddress.detector: live",
+  "reason": null
+ },
+ {
+  "name": "modes.seedAddress.detector: off",
+  "reason": null
+ },
+ {
+  "name": "modes.seedAddress.detector: LIVE",
+  "reason": "modes.seedAddress.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.seedAddress.detector: null",
+  "reason": "modes.seedAddress.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.approvedHost.learnQuestions: live",
+  "reason": null
+ },
+ {
+  "name": "modes.approvedHost.learnQuestions: off",
+  "reason": null
+ },
+ {
+  "name": "modes.approvedHost.learnQuestions: LIVE",
+  "reason": "modes.approvedHost.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.approvedHost.learnQuestions: null",
+  "reason": "modes.approvedHost.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.approvedHost.addressPass: live",
+  "reason": null
+ },
+ {
+  "name": "modes.approvedHost.addressPass: off",
+  "reason": null
+ },
+ {
+  "name": "modes.approvedHost.addressPass: LIVE",
+  "reason": "modes.approvedHost.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.approvedHost.addressPass: null",
+  "reason": "modes.approvedHost.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.approvedHost.detector: live",
+  "reason": null
+ },
+ {
+  "name": "modes.approvedHost.detector: off",
+  "reason": null
+ },
+ {
+  "name": "modes.approvedHost.detector: LIVE",
+  "reason": "modes.approvedHost.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.approvedHost.detector: null",
+  "reason": "modes.approvedHost.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.localPart.learnQuestions: live",
+  "reason": null
+ },
+ {
+  "name": "modes.localPart.learnQuestions: off",
+  "reason": null
+ },
+ {
+  "name": "modes.localPart.learnQuestions: LIVE",
+  "reason": "modes.localPart.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.localPart.learnQuestions: null",
+  "reason": "modes.localPart.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.localPart.addressPass: live",
+  "reason": null
+ },
+ {
+  "name": "modes.localPart.addressPass: off",
+  "reason": null
+ },
+ {
+  "name": "modes.localPart.addressPass: LIVE",
+  "reason": "modes.localPart.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.localPart.addressPass: null",
+  "reason": "modes.localPart.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.localPart.detector: live",
+  "reason": null
+ },
+ {
+  "name": "modes.localPart.detector: off",
+  "reason": null
+ },
+ {
+  "name": "modes.localPart.detector: LIVE",
+  "reason": "modes.localPart.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.localPart.detector: null",
+  "reason": "modes.localPart.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.bulkHeaders.learnQuestions: live",
+  "reason": null
+ },
+ {
+  "name": "modes.bulkHeaders.learnQuestions: off",
+  "reason": null
+ },
+ {
+  "name": "modes.bulkHeaders.learnQuestions: LIVE",
+  "reason": "modes.bulkHeaders.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.bulkHeaders.learnQuestions: null",
+  "reason": "modes.bulkHeaders.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.bulkHeaders.addressPass: live",
+  "reason": null
+ },
+ {
+  "name": "modes.bulkHeaders.addressPass: off",
+  "reason": null
+ },
+ {
+  "name": "modes.bulkHeaders.addressPass: LIVE",
+  "reason": "modes.bulkHeaders.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.bulkHeaders.addressPass: null",
+  "reason": "modes.bulkHeaders.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.bulkHeaders.detector: live",
+  "reason": null
+ },
+ {
+  "name": "modes.bulkHeaders.detector: off",
+  "reason": null
+ },
+ {
+  "name": "modes.bulkHeaders.detector: LIVE",
+  "reason": "modes.bulkHeaders.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.bulkHeaders.detector: null",
+  "reason": "modes.bulkHeaders.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailPromotions.learnQuestions: live",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailPromotions.learnQuestions: off",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailPromotions.learnQuestions: LIVE",
+  "reason": "modes.gmailPromotions.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailPromotions.learnQuestions: null",
+  "reason": "modes.gmailPromotions.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailPromotions.addressPass: live",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailPromotions.addressPass: off",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailPromotions.addressPass: LIVE",
+  "reason": "modes.gmailPromotions.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailPromotions.addressPass: null",
+  "reason": "modes.gmailPromotions.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailPromotions.detector: live",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailPromotions.detector: off",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailPromotions.detector: LIVE",
+  "reason": "modes.gmailPromotions.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailPromotions.detector: null",
+  "reason": "modes.gmailPromotions.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailSocial.learnQuestions: live",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailSocial.learnQuestions: off",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailSocial.learnQuestions: LIVE",
+  "reason": "modes.gmailSocial.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailSocial.learnQuestions: null",
+  "reason": "modes.gmailSocial.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailSocial.addressPass: live",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailSocial.addressPass: off",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailSocial.addressPass: LIVE",
+  "reason": "modes.gmailSocial.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailSocial.addressPass: null",
+  "reason": "modes.gmailSocial.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailSocial.detector: live",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailSocial.detector: off",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailSocial.detector: LIVE",
+  "reason": "modes.gmailSocial.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailSocial.detector: null",
+  "reason": "modes.gmailSocial.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailUpdates.learnQuestions: live",
+  "reason": "modes.gmailUpdates.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailUpdates.learnQuestions: off",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailUpdates.learnQuestions: LIVE",
+  "reason": "modes.gmailUpdates.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailUpdates.learnQuestions: null",
+  "reason": "modes.gmailUpdates.learnQuestions: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailUpdates.addressPass: live",
+  "reason": "modes.gmailUpdates.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailUpdates.addressPass: off",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailUpdates.addressPass: LIVE",
+  "reason": "modes.gmailUpdates.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailUpdates.addressPass: null",
+  "reason": "modes.gmailUpdates.addressPass: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailUpdates.detector: live",
+  "reason": "modes.gmailUpdates.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailUpdates.detector: off",
+  "reason": null
+ },
+ {
+  "name": "modes.gmailUpdates.detector: LIVE",
+  "reason": "modes.gmailUpdates.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.gmailUpdates.detector: null",
+  "reason": "modes.gmailUpdates.detector: not an allowed mode"
+ },
+ {
+  "name": "modes.seedAddress.detector: number",
+  "reason": "modes.seedAddress.detector: not an allowed mode"
+ }
+]
