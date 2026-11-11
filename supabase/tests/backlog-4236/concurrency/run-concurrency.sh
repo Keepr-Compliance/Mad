@@ -1,7 +1,8 @@
 #!/bin/bash
 # BACKLOG-4236 two-session controls. PREREQUISITE: both migrations applied (committed) on the test
 # project. Each case: setup (committed fixtures, ids random per run) -> two parallel kt-sql calls,
-# the second started 1 s after the first -> assert -> automated verdict -> teardown + verify (always,
+# the second started 1 s after the first and held by gate.sql until the first is seen in its hold
+# -> assert -> automated verdict -> teardown + verify (always,
 # from the trap). Prints PASS or FAIL per case and exits non-zero on FAIL or on a dirty teardown.
 #   C1a  new-row writes (a new deal, a new blob) holding their transaction, then turn-off.
 #        Expect: deal applied, blob ok, turn-off success; afterwards no deal and no live new blob.
@@ -31,7 +32,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 K=~/.claude/bin/kt-sql
-case "${1:-}" in C1a|C1b|C2|C3|C4) ;; *) sed -n '2,30p' "$0"; exit 2 ;; esac
+case "${1:-}" in C1a|C1b|C2|C3|C4) ;; *) sed -n '2,31p' "$0"; exit 2 ;; esac
 CASE="$1"
 
 umask 077
@@ -85,7 +86,7 @@ DEAL4A="$(echo "$out" | col deal4a)"; DEAL4B="$(echo "$out" | col deal4b)"
 LOW_SHA="$(echo "$out" | col low_sha)"; LOW_ID="$(echo "$out" | col low_id)"; HIGH_SHA="$(echo "$out" | col high_sha)"
 [ -n "$DEAL" ] && [ -n "$MSG" ] && [ -n "$LOW_ID" ] || { echo "setup failed: $out" >&2; exit 1; }
 
-pair() {  # first now, second 1 s later, both in parallel
+pair() {  # first now, second 1 s later (it waits server-side in gate.sql for the first's hold)
   ( $K "$tmp/$1" > "$tmp/first.out" 2>&1 || true ) &
   p1=$!
   sleep 1
@@ -97,11 +98,11 @@ pair() {  # first now, second 1 s later, both in parallel
 }
 
 case "$CASE" in
-  C1a) fill a.sql as-user.sql c1-newwrite-hold.sql; fill b.sql as-user.sql c1-off.sql; pair a.sql b.sql ;;
-  C1b) fill a.sql as-user.sql c1-off-hold.sql; fill b.sql as-user.sql c1-newwrite.sql; pair a.sql b.sql ;;
-  C2)  fill a.sql c2-deal-hold.sql as-user.sql c2-upsert.sql; fill b.sql as-user.sql c2-tombstone.sql; pair a.sql b.sql ;;
-  C3)  fill a.sql as-user.sql c3-register-hold.sql; fill b.sql as-user.sql c3-register.sql; pair a.sql b.sql ;;
-  C4)  fill a.sql c4-lowlock-then-files.sql as-user.sql c4-files-a.sql; fill b.sql as-user.sql c4-files-b.sql; pair a.sql b.sql ;;
+  C1a) fill a.sql as-user.sql c1-newwrite-hold.sql; fill b.sql gate.sql as-user.sql c1-off.sql; pair a.sql b.sql ;;
+  C1b) fill a.sql as-user.sql c1-off-hold.sql; fill b.sql gate.sql as-user.sql c1-newwrite.sql; pair a.sql b.sql ;;
+  C2)  fill a.sql c2-deal-hold.sql as-user.sql c2-upsert.sql; fill b.sql gate.sql as-user.sql c2-tombstone.sql; pair a.sql b.sql ;;
+  C3)  fill a.sql as-user.sql c3-register-hold.sql; fill b.sql gate.sql as-user.sql c3-register.sql; pair a.sql b.sql ;;
+  C4)  fill a.sql c4-lowlock-then-files.sql as-user.sql c4-files-a.sql; fill b.sql gate.sql as-user.sql c4-files-b.sql; pair a.sql b.sql ;;
 esac
 fill assert.filled.sql assert.sql
 $K "$tmp/assert.filled.sql" > "$tmp/state.out"
