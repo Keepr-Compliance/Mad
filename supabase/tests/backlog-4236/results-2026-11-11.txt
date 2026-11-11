@@ -1,0 +1,905 @@
+# BACKLOG-4236 PR-1 results, 2026-11-11, at dc1e4365a
+
+## Single-session controls (run.sh)
+{
+ "fail": 1,
+ "pass": 62,
+ "real_fail": 0,
+ "real_reds": [],
+ "reds": {
+  "Z0_parser_counts_a_fail": "FAIL: expected"
+ },
+ "total": 63
+}
+wall_s=20
+
+## Mutations (mutate.py all): MISSED 0 of 111
+Each mode: MUTATION APPLIED + numstat + changed lines, the controls result, the migration-text test result, the verdict, the restore.
+
+== G01_license_revoke_keeps_authenticated (want red: A2_function_privileges)
+MUTATION APPLIED numstat=1/1
+  - REVOKE ALL ON FUNCTION public._cloud_autosave_license(uuid) FROM PUBLIC, anon, authenticated, service_role;
+  + REVOKE ALL ON FUNCTION public._cloud_autosave_license(uuid) FROM PUBLIC, anon;
+RESULT total=63 pass=61 real_fail=1 reds=A2_function_privileges
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== G02_state_revoke_keeps_public (want red: A2_function_privileges)
+MUTATION APPLIED numstat=1/1
+  - REVOKE ALL ON FUNCTION public.get_my_cloud_autosave_state() FROM PUBLIC, anon, authenticated, service_role;
+  + REVOKE ALL ON FUNCTION public.get_my_cloud_autosave_state() FROM anon, authenticated, service_role;
+RESULT total=63 pass=61 real_fail=1 reds=A2_function_privileges
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== G03_assign_granted_to_authenticated (want red: A2_function_privileges)
+MUTATION APPLIED numstat=1/1
+  - GRANT EXECUTE ON FUNCTION public.assign_member_addon(uuid, uuid, text, boolean, timestamptz) TO service_role;
+  + GRANT EXECUTE ON FUNCTION public.assign_member_addon(uuid, uuid, text, boolean, timestamptz) TO service_role, authenticated;
+RESULT total=63 pass=60 real_fail=2 reds=A2_function_privileges,M1_assign
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== G04_deals_revoke_keeps_anon (want red: A1_table_privileges R1_owner_only_reads)
+MUTATION APPLIED numstat=1/1
+  - REVOKE ALL ON TABLE public.cloud_deals FROM PUBLIC, anon, authenticated;
+  + REVOKE ALL ON TABLE public.cloud_deals FROM PUBLIC, authenticated;
+RESULT total=63 pass=60 real_fail=2 reds=A1_table_privileges,R1_owner_only_reads
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== G05_blobs_revoke_dropped (want red: A1_table_privileges)
+MUTATION APPLIED numstat=0/1
+  - REVOKE ALL ON TABLE public.cloud_blobs FROM PUBLIC, anon, authenticated;
+RESULT total=63 pass=60 real_fail=2 reds=A1_table_privileges,W1_no_direct_writes
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== G06_update_granted_on_deals (want red: A1_table_privileges W1_no_direct_writes)
+MUTATION APPLIED numstat=1/1
+  - GRANT SELECT ON TABLE public.cloud_deals TO authenticated;
+  + GRANT SELECT, INSERT, UPDATE ON TABLE public.cloud_deals TO authenticated;
+RESULT total=63 pass=60 real_fail=2 reds=A1_table_privileges,W1_no_direct_writes
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== G07_owner_write_policy (want red: W1_no_direct_writes A4_policies_and_publication)
+MUTATION APPLIED numstat=3/1
+  - GRANT SELECT ON TABLE public.cloud_deals TO authenticated;
+  + GRANT SELECT, INSERT ON TABLE public.cloud_deals TO authenticated;
+  + DROP POLICY IF EXISTS cloud_deals_insert_own ON public.cloud_deals;
+  + CREATE POLICY cloud_deals_insert_own ON public.cloud_deals FOR INSERT TO authenticated WITH CHECK (owner_user_id = (SELECT auth.uid()));
+RESULT total=63 pass=59 real_fail=3 reds=A1_table_privileges,A4_policies_and_publication,W1_no_direct_writes
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== G08_realtime (want red: A4_policies_and_publication)
+MUTATION APPLIED numstat=1/0
+  + DO $pub$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND tablename = 'cloud_deals') THEN ALTER PUBLICATION supa
+RESULT total=63 pass=61 real_fail=1 reds=A4_policies_and_publication
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== R01_org_keyed_read (want red: R1_owner_only_reads)
+MUTATION APPLIED numstat=1/1
+  - FOR SELECT TO authenticated USING (owner_user_id = (SELECT auth.uid()) /*POL:deals*/);
+  + FOR SELECT TO authenticated USING (owner_user_id = (SELECT auth.uid()) OR organization_id IN (SELECT m.organization_id FROM public.organization_members m WHERE 
+RESULT total=63 pass=61 real_fail=1 reds=R1_owner_only_reads
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== R02_staff_read (want red: R1_owner_only_reads)
+MUTATION APPLIED numstat=1/1
+  - FOR SELECT TO authenticated USING (owner_user_id = (SELECT auth.uid()) /*POL:messages*/);
+  + FOR SELECT TO authenticated USING (owner_user_id = (SELECT auth.uid()) OR EXISTS (SELECT 1 FROM public.internal_roles ir WHERE ir.user_id = (SELECT auth.uid()))
+RESULT total=63 pass=61 real_fail=1 reds=R1_owner_only_reads
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== S01_upload_without_entitlement (want red: P1_storage_insert)
+MUTATION APPLIED numstat=0/1
+  - AND (SELECT public.cloud_autosave_entitled())                                    /*STO:ins:entitled*/
+RESULT total=63 pass=61 real_fail=1 reds=P1_storage_insert
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== S02_upload_without_blob (want red: P1_storage_insert)
+MUTATION APPLIED numstat=0/5
+  - AND EXISTS (SELECT 1 FROM public.cloud_blobs b
+  - WHERE b.storage_path = objects.name
+  - AND b.owner_user_id = (SELECT auth.uid())
+  - AND b.uploaded_at IS NULL
+  - AND b.purge_requested_at IS NULL)                                 /*STO:ins:blob*/
+RESULT total=63 pass=61 real_fail=1 reds=P1_storage_insert
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== S03_upload_without_path_pin (want green: -)
+MUTATION APPLIED numstat=0/1
+  - AND split_part(objects.name, '/', 1) = (SELECT auth.uid())::text                 /*STO:ins:path*/
+RESULT total=63 pass=62 real_fail=0 reds=
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT green as measured
+RESTORED clean=True
+== S04_read_ignores_fence (want red: P2_storage_read_closed_by_fence SET2_off_unlicensed_deletes_all)
+MUTATION APPLIED numstat=1/1
+  - AND b.purge_requested_at IS NULL)                                 /*STO:sel:fence*/
+  + )
+RESULT total=63 pass=60 real_fail=2 reds=P2_storage_read_closed_by_fence,SET2_off_unlicensed_deletes_all
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== S05_owner_update_policy (want red: P1_storage_insert A4_policies_and_publication)
+MUTATION APPLIED numstat=2/0
+  + DROP POLICY IF EXISTS "Cloud deal files: owner updates" ON storage.objects;
+  + CREATE POLICY "Cloud deal files: owner updates" ON storage.objects FOR UPDATE TO authenticated USING (bucket_id = 'cloud-deal-files' AND split_part(objects.name
+RESULT total=63 pass=59 real_fail=3 reds=A4_policies_and_publication,G1_rollback_then_apply,P1_storage_insert
+TRIPWIRE exit=1 Tests:       2 failed, 10 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L01_brk_revoked (want red: E3_revoked)
+MUTATION APPLIED numstat=0/1
+  - AND a.revoked_at IS NULL                                                      /*BRK:revoked*/
+RESULT total=63 pass=59 real_fail=3 reds=E3_revoked,E4_reason_live_rows_only,P1_storage_insert
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L02_brk_ends_at (want red: E3_ends_at)
+MUTATION APPLIED numstat=0/1
+  - AND (a.ends_at IS NULL OR a.ends_at > now())                                  /*BRK:ends*/
+RESULT total=63 pass=61 real_fail=1 reds=E3_ends_at
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L03_brk_member (want red: E3_member_inactive)
+MUTATION APPLIED numstat=0/1
+  - AND public.member_status_grants_access(m.license_status)                      /*BRK:member*/
+RESULT total=63 pass=61 real_fail=1 reds=E3_member_inactive
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L04_brk_notpersonal (want red: E3_personal_assignment)
+MUTATION APPLIED numstat=0/1
+  - AND o.personal_owner_user_id IS NULL                                          /*BRK:notpersonal*/
+RESULT total=63 pass=61 real_fail=1 reds=E3_personal_assignment
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L05_brk_billing (want red: E3_billing_off)
+MUTATION APPLIED numstat=0/1
+  - AND public.org_billing_service_off(o.id) IS FALSE                             /*BRK:billing*/
+RESULT total=63 pass=60 real_fail=2 reds=E3_billing_off,E4_reason_live_rows_only
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L06_brk_plan (want red: E3_plan_disallows)
+MUTATION APPLIED numstat=0/1
+  - AND public._org_feature_allowed(o.id, 'cloud_autosave_assignable') IS TRUE   /*BRK:plan*/
+RESULT total=63 pass=61 real_fail=1 reds=E3_plan_disallows
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L07_brk_reads_solo_key (want red: E0_licensed_paths)
+MUTATION APPLIED numstat=1/1
+  - AND public._org_feature_allowed(o.id, 'cloud_autosave_assignable') IS TRUE   /*BRK:plan*/
+  + AND public._org_feature_allowed(o.id, 'cloud_autosave') IS TRUE   /*BRK:plan*/
+RESULT total=63 pass=24 real_fail=38 reds=B1_register_dedupe_and_refence,B2_fenced_blob_not_attachable,B3_blob_and_tombstone_caps,E0_licensed_paths,E3_ends_at,E5_assignment_order,E6_entitled_matches_state,E7_internal_caller_checks,I1_install_binding,I2_list_and_delete_install,K0_fixtures,MCP1_failing_disconnect_refuses,O1_owner_binding,P1_storage_insert,P2_storage_read_closed_by_fence,P3_confirm_states,R1_owner_only_reads,SET1_enable_gates,SET2_off_unlicensed_deletes_all,ST1_shape_and_reasons,ST2_readonly_block,T1_tombstone_scrub_unentitled,T2_same_hash_revives,T3_shared_blob_fencing,T4_replaced_blob_fenced,U1_entitlement_every_write,U3_child_versions,U3_versions_and_ids,U4_child_write_keeps_deal_version,U5_deal_organization,U6_byte_cap,U6_row_cap,U7_deal_values,U7_row_rejects,U7_structural_refusals,U8_derived_columns,U9_body_cap,W1_no_direct_writes
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L08_brk_join_on_id_only (want red: E3_membership_join)
+MUTATION APPLIED numstat=1/1
+  - ON m.id = a.membership_id AND m.organization_id = a.organization_id AND m.user_id = a.user_id  /*BRK:join*/
+  + ON m.id = a.membership_id  /*BRK:join*/
+RESULT total=63 pass=61 real_fail=1 reds=E3_membership_join
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L09_brk_no_order (want red: E5_assignment_order)
+MUTATION APPLIED numstat=0/1
+  - ORDER BY a.assigned_at, a.organization_id                                       /*BRK:order*/
+RESULT total=63 pass=61 real_fail=1 reds=E5_assignment_order
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L10_solo_no_membership (want red: E1_personal_org_without_membership)
+MUTATION APPLIED numstat=0/2
+  - JOIN public.organization_members m ON m.organization_id = o.id AND m.user_id = p_user_id      /*SOLO:member*/
+  - AND public.member_status_grants_access(m.license_status)                      /*SOLO:active*/
+RESULT total=63 pass=61 real_fail=1 reds=E1_personal_org_without_membership
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L11_solo_billing (want red: E2_solo_billing_off)
+MUTATION APPLIED numstat=0/1
+  - AND public.org_billing_service_off(o.id) IS FALSE                             /*SOLO:billing*/
+RESULT total=63 pass=61 real_fail=1 reds=E2_solo_billing_off
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L12_solo_plan (want red: E2_solo_paid_through)
+MUTATION APPLIED numstat=0/1
+  - AND public._org_feature_allowed(o.id, 'cloud_autosave') IS TRUE               /*SOLO:plan*/
+RESULT total=63 pass=60 real_fail=2 reds=E2_solo_paid_through,E3_personal_assignment
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L13_reasons_all_rows (want red: E4_reason_live_rows_only)
+MUTATION APPLIED numstat=1/1
+  - WHEN bool_and(x.billing_off) FILTER (WHERE x.live) THEN 'billing_off'
+  + WHEN bool_and(x.billing_off) THEN 'billing_off'
+RESULT total=63 pass=61 real_fail=1 reds=E4_reason_live_rows_only
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L14_license_no_caller_check (want red: E7_internal_caller_checks)
+MUTATION APPLIED numstat=0/3
+  - IF (p_user_id = auth.uid() OR auth.role() = 'service_role' OR auth.role() IS NULL) IS NOT TRUE THEN
+  - RAISE EXCEPTION 'not allowed' USING ERRCODE = '42501';
+  - END IF;
+RESULT total=63 pass=61 real_fail=1 reds=E7_internal_caller_checks
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L15_entitled_ignores_enabled (want red: SET3_off_then_upsert)
+MUTATION APPLIED numstat=1/1
+  - SELECT l.licensed AND s.enabled                                                /*ENT:enabled*/
+  + SELECT l.licensed                                                /*ENT:enabled*/
+RESULT total=63 pass=61 real_fail=1 reds=SET3_off_then_upsert
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== L16_entitled_ignores_notice (want red: U1_entitlement_every_write E6_entitled_matches_state)
+MUTATION APPLIED numstat=0/1
+  - AND s.notice_version = public._cloud_autosave_current_notice_version()  /*ENT:notice*/
+RESULT total=63 pass=60 real_fail=2 reds=E6_entitled_matches_state,U1_entitlement_every_write
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== O01_enable_without_licence (want red: SET1_enable_gates)
+MUTATION APPLIED numstat=1/1
+  - IF (SELECT l.licensed FROM public._cloud_autosave_license(v_uid) l) IS NOT TRUE THEN      /*SET:licence*/
+  + IF false THEN      /*SET:licence*/
+RESULT total=63 pass=60 real_fail=2 reds=E1_personal_org_without_membership,SET1_enable_gates
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== O02_enable_any_notice (want red: SET1_enable_gates)
+MUTATION APPLIED numstat=1/1
+  - IF p_notice_version IS DISTINCT FROM v_cur THEN                                          /*SET:notice*/
+  + IF false THEN                                          /*SET:notice*/
+RESULT total=63 pass=61 real_fail=1 reds=SET1_enable_gates
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== O03_off_not_one_unit (want red: MCP1_failing_disconnect_refuses)
+MUTATION APPLIED numstat=0/2
+  - EXCEPTION WHEN OTHERS THEN                                                                     /*SET:unit*/
+  - RETURN jsonb_build_object('success', false, 'error', 'turn_off_failed');
+RESULT total=63 pass=61 real_fail=1 reds=MCP1_failing_disconnect_refuses
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== O04_off_reports_and_succeeds (want red: MCP1_failing_disconnect_refuses)
+MUTATION APPLIED numstat=1/1
+  - RETURN jsonb_build_object('success', false, 'error', 'turn_off_failed');
+  + NULL;
+RESULT total=63 pass=61 real_fail=1 reds=MCP1_failing_disconnect_refuses
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== O05_disconnect_unguarded (want red: SET2_off_unlicensed_deletes_all)
+MUTATION APPLIED numstat=1/1
+  - IF to_regprocedure('public._mcp_disconnect_all_for(uuid,text)') IS NOT NULL THEN            /*SET:mcp*/
+  + IF true THEN            /*SET:mcp*/
+RESULT total=63 pass=59 real_fail=3 reds=B1_register_dedupe_and_refence,SET2_off_unlicensed_deletes_all,SET3_off_then_upsert
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== O06_off_keeps_rows (want red: SET2_off_unlicensed_deletes_all)
+MUTATION APPLIED numstat=0/1
+  - DELETE FROM public.cloud_deals WHERE owner_user_id = v_uid;                                  /*SET:delete*/
+RESULT total=63 pass=60 real_fail=2 reds=SET2_off_unlicensed_deletes_all,SET3_off_then_upsert
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== O07_off_no_fence (want red: SET2_off_unlicensed_deletes_all)
+MUTATION APPLIED numstat=2/2
+  - UPDATE public.cloud_blobs SET purge_requested_at = now()
+  - WHERE owner_user_id = v_uid AND purge_requested_at IS NULL;                                 /*SET:fence*/
+  + UPDATE public.cloud_blobs SET purge_requested_at = purge_requested_at
+  + WHERE false;                                 /*SET:fence*/
+RESULT total=63 pass=60 real_fail=2 reds=B1_register_dedupe_and_refence,SET2_off_unlicensed_deletes_all
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== D01_deal_values_unchecked (want red: U7_deal_values)
+MUTATION APPLIED numstat=1/3
+  - ELSE public._cloud_bad_field(p_deal,
+  - ARRAY['started_at', 'closed_at', 'reviewed_at', 'local_created_at', 'source_updated_at'],
+  - ARRAY['detection_confidence'], ARRAY['texts_outside_window_count'], ARRAY[]::text[]) END;   /*DEAL:values*/
+  + ELSE NULL END;   /*DEAL:values*/
+RESULT total=63 pass=61 real_fail=1 reds=U7_deal_values
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== D02_org_personal_allowed (want red: U5_own_personal_org)
+MUTATION APPLIED numstat=0/1
+  - AND o.personal_owner_user_id IS NULL                                                  /*ORG:notpersonal*/
+RESULT total=63 pass=61 real_fail=1 reds=U5_own_personal_org
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== D03_org_inactive_member_allowed (want red: U5_deal_organization)
+MUTATION APPLIED numstat=1/1
+  - AND public.member_status_grants_access(m.license_status);                             /*ORG:member*/
+  + ;
+RESULT total=63 pass=61 real_fail=1 reds=U5_deal_organization
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== D04_deal_lookup_ignores_install (want red: I1_install_binding)
+MUTATION APPLIED numstat=1/1
+  - WHERE x.owner_user_id = v_uid AND x.source_install_id = v_inst AND x.local_transaction_id = v_local FOR UPDATE;
+  + WHERE x.owner_user_id = v_uid AND x.local_transaction_id = v_local ORDER BY x.version DESC LIMIT 1 FOR UPDATE;
+RESULT total=63 pass=61 real_fail=1 reds=I1_install_binding
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== D05_confirmed_detection_only (want red: U8_derived_columns)
+MUTATION APPLIED numstat=1/2
+  - is_confirmed = (v_st IS NULL OR v_st <> 'rejected')
+  - AND (v_det IS NULL OR v_det NOT IN ('pending', 'rejected')),               /*DEAL:confirmed*/
+  + is_confirmed = (v_det IS NULL OR v_det NOT IN ('pending', 'rejected')),               /*DEAL:confirmed*/
+RESULT total=63 pass=61 real_fail=1 reds=U8_derived_columns
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== D06_deal_byte_cap_off_by_one (want red: U6_byte_cap)
+MUTATION APPLIED numstat=1/1
+  - IF octet_length(p_deal::text) > 1048576 THEN                                               /*CAP:bytes:deal*/
+  + IF octet_length(p_deal::text) > 2097152 THEN                                               /*CAP:bytes:deal*/
+RESULT total=63 pass=61 real_fail=1 reds=U6_byte_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W01_same_hash_ignores_tombstone (want red: T2_same_hash_revives)
+MUTATION APPLIED numstat=1/1
+  - WHEN p_version > 0 AND p_removed_at IS NULL AND p_cur_hash = p_new_hash THEN 'unchanged'      /*ROW:same*/
+  + WHEN p_version > 0 AND p_cur_hash = p_new_hash THEN 'unchanged'      /*ROW:same*/
+RESULT total=63 pass=61 real_fail=1 reds=T2_same_hash_revives
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W02_no_same_hash_branch (want red: U3_versions_and_ids U3_child_versions)
+MUTATION APPLIED numstat=1/1
+  - WHEN p_version > 0 AND p_removed_at IS NULL AND p_cur_hash = p_new_hash THEN 'unchanged'      /*ROW:same*/
+  + WHEN false THEN 'unchanged'      /*ROW:same*/
+RESULT total=63 pass=60 real_fail=2 reds=U3_child_versions,U3_versions_and_ids
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W03_no_compare_and_set (want red: U3_versions_and_ids U3_child_versions)
+MUTATION APPLIED numstat=1/2
+  - WHEN p_version > 0 AND p_removed_at IS NULL AND p_base IS NOT NULL
+  - AND p_base IS DISTINCT FROM p_version THEN 'conflict'                                    /*ROW:cas*/
+  + WHEN false THEN 'conflict'
+RESULT total=63 pass=60 real_fail=2 reds=U3_child_versions,U3_versions_and_ids
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W04_child_write_bumps_deal (want red: U4_child_write_keeps_deal_version)
+MUTATION APPLIED numstat=1/1
+  - UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;                     /*MSG:touch*/
+  + UPDATE public.cloud_deals SET last_synced_at = now(), version = version + 1 WHERE id = v_deal;
+RESULT total=63 pass=61 real_fail=1 reds=U4_child_write_keeps_deal_version
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W05_row_values_unchecked (want red: U7_row_rejects)
+MUTATION APPLIED numstat=1/1
+  - IF v_bad IS NOT NULL THEN                                                                /*MSG:values*/
+  + IF false THEN
+RESULT total=63 pass=61 real_fail=1 reds=U7_row_rejects
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W06_hidden_optional (want red: U7_structural_refusals)
+MUTATION APPLIED numstat=0/1
+  - OR jsonb_typeof(r -> 'hidden_from_export') IS DISTINCT FROM 'boolean'
+RESULT total=63 pass=61 real_fail=1 reds=U7_structural_refusals
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W07_link_state_constant (want red: U8_derived_columns)
+MUTATION APPLIED numstat=0/1
+  - WHEN r ->> 'match_reason' = 'address_missing' THEN 'needs_review'
+RESULT total=63 pass=61 real_fail=1 reds=U8_derived_columns
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W08_checklist_private_from_flag_only (want red: U8_derived_columns)
+MUTATION APPLIED numstat=1/1
+  - v_private := (r ->> 'template_id') = 'keepr:my-items' OR coalesce((r ->> 'is_private')::boolean, false);   /*CHK:private*/
+  + v_private := coalesce((r ->> 'is_private')::boolean, false);   /*CHK:private*/
+RESULT total=63 pass=61 real_fail=1 reds=U8_derived_columns
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W09_no_private_propagation (want red: U8_derived_columns)
+MUTATION APPLIED numstat=0/2
+  - UPDATE public.cloud_deal_checklist_items SET is_private = v_private
+  - WHERE cloud_checklist_id = cur.id AND cloud_deal_id = v_deal AND is_private IS DISTINCT FROM v_private;   /*CHK:propagate*/
+RESULT total=63 pass=61 real_fail=1 reds=U8_derived_columns
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W10_item_private_from_payload (want red: U8_derived_columns)
+MUTATION APPLIED numstat=1/1
+  - is_private = p.is_private,                                                             /*ITEM:private*/
+  + is_private = coalesce((r ->> 'is_private')::boolean, false),
+RESULT total=63 pass=61 real_fail=1 reds=U8_derived_columns
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W11_body_cap_off_by_one (want red: U9_body_cap)
+MUTATION APPLIED numstat=1/1
+  - IF char_length(v_body) > 1000000 THEN v_body := left(v_body, 1000000); v_trunc := true; END IF;   /*MSG:truncate*/
+  + IF char_length(v_body) >= 1000000 THEN v_body := left(v_body, 1000000); v_trunc := true; END IF;
+RESULT total=63 pass=61 real_fail=1 reds=U9_body_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W12_no_truncation (want red: U9_body_cap)
+MUTATION APPLIED numstat=1/1
+  - IF char_length(v_body) > 1000000 THEN v_body := left(v_body, 1000000); v_trunc := true; END IF;   /*MSG:truncate*/
+  + 
+RESULT total=63 pass=61 real_fail=1 reds=U9_body_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W13_file_attaches_fenced_blob (want red: B2_fenced_blob_not_attachable)
+MUTATION APPLIED numstat=0/1
+  - AND b.purge_requested_at IS NULL                                                     /*FILE:unfenced*/
+RESULT total=63 pass=61 real_fail=1 reds=B2_fenced_blob_not_attachable
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W14_file_blob_any_owner (want red: O1_owner_binding)
+MUTATION APPLIED numstat=1/1
+  - WHERE b.owner_user_id = v_uid                                                          /*OWNER:fileblob*/
+  + WHERE true
+RESULT total=63 pass=61 real_fail=1 reds=O1_owner_binding
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== W15_messages_row_cap_off_by_one (want red: U6_row_cap)
+MUTATION APPLIED numstat=1/1
+  - IF jsonb_array_length(p_rows) > 500 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:rows:messages*/
+  + IF jsonb_array_length(p_rows) >= 500 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:rows:messages*/
+RESULT total=63 pass=61 real_fail=1 reds=U6_row_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== T01_tombstone_scrub_kept_body (want red: T1_tombstone_scrub_unentitled)
+MUTATION APPLIED numstat=1/1
+  - subject = NULL, body_text = NULL, body_truncated = false, participants = NULL          /*TOMB:scrub*/
+  + body_truncated = false          /*TOMB:scrub*/
+RESULT total=63 pass=61 real_fail=1 reds=T1_tombstone_scrub_unentitled
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== T02_tombstone_owner (want red: O1_owner_binding)
+MUTATION APPLIED numstat=1/1
+  - WHERE t.id = $1 AND t.owner_user_id = $2 /*OWNER:tombstone*/
+  + WHERE t.id = $1 AND $2 IS NOT NULL /*OWNER:tombstone*/
+RESULT total=63 pass=61 real_fail=1 reds=O1_owner_binding
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== T03_tombstone_install (want red: I1_install_binding)
+MUTATION APPLIED numstat=1/1
+  - AND d.source_install_id = $3 /*INSTALL:tombstone*/
+  + AND $3 IS NOT NULL /*INSTALL:tombstone*/
+RESULT total=63 pass=61 real_fail=1 reds=I1_install_binding
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== T04_tombstone_cap_off_by_one (want red: B3_blob_and_tombstone_caps)
+MUTATION APPLIED numstat=1/1
+  - IF v_tab IS NULL OR p_source_install_id IS NULL OR p_cloud_ids IS NULL OR cardinality(p_cloud_ids) > 1000 THEN   /*CAP:tombstone*/
+  + IF v_tab IS NULL OR p_source_install_id IS NULL OR p_cloud_ids IS NULL OR cardinality(p_cloud_ids) >= 1000 THEN   /*CAP:tombstone*/
+RESULT total=63 pass=61 real_fail=1 reds=B3_blob_and_tombstone_caps
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== T05_tombstone_needs_entitlement (want red: T1_tombstone_scrub_unentitled)
+MUTATION APPLIED numstat=1/0
+  + IF public.cloud_autosave_entitled() IS NOT TRUE THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+RESULT total=63 pass=61 real_fail=1 reds=T1_tombstone_scrub_unentitled
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== T06_fence_ignores_references (want red: T3_shared_blob_fencing I2_list_and_delete_install)
+MUTATION APPLIED numstat=1/1
+  - AND NOT EXISTS (SELECT 1 FROM public.cloud_deal_files f WHERE f.blob_id = b.id);       /*FENCE:unreferenced*/
+  + ;
+RESULT total=63 pass=60 real_fail=2 reds=I2_list_and_delete_install,T3_shared_blob_fencing
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== T07_fence_no_caller_check (want red: E7_internal_caller_checks)
+MUTATION APPLIED numstat=0/3
+  - IF auth.uid() IS DISTINCT FROM p_owner AND auth.role() IS DISTINCT FROM 'service_role' THEN
+  - RAISE EXCEPTION 'not allowed' USING ERRCODE = '42501';
+  - END IF;
+RESULT total=63 pass=61 real_fail=1 reds=E7_internal_caller_checks
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== T08_delete_deal_any_owner (want red: O1_owner_binding)
+MUTATION APPLIED numstat=1/1
+  - WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:delete_deal*/
+  + WHERE d.id = p_cloud_deal_id                                  /*OWNER:delete_deal*/
+RESULT total=63 pass=61 real_fail=1 reds=O1_owner_binding
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== T09_delete_install_any_owner (want red: O1_owner_binding)
+MUTATION APPLIED numstat=1/1
+  - WHERE d.owner_user_id = v_uid                                                  /*OWNER:delete_install*/
+  + WHERE true
+RESULT total=63 pass=60 real_fail=2 reds=I2_list_and_delete_install,O1_owner_binding
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== T10_delete_install_all_installs (want red: I1_install_binding)
+MUTATION APPLIED numstat=1/1
+  - AND d.source_install_id = p_source_install_id;                               /*INSTALL:delete_install*/
+  + ;
+RESULT total=63 pass=60 real_fail=2 reds=I1_install_binding,I2_list_and_delete_install
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== T11_list_installs_any_owner (want red: O1_owner_binding)
+MUTATION APPLIED numstat=1/1
+  - FROM public.cloud_deals d WHERE d.owner_user_id = v_uid                         /*OWNER:list_installs*/
+  + FROM public.cloud_deals d WHERE true
+RESULT total=63 pass=59 real_fail=3 reds=I2_list_and_delete_install,O1_owner_binding,ST2_readonly_block
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== B01_blob_cap_off_by_one (want red: B3_blob_and_tombstone_caps)
+MUTATION APPLIED numstat=1/1
+  - IF p_size_bytes > 52428800 THEN RETURN jsonb_build_object('ok', false, 'error', 'too_large'); END IF;   /*CAP:blob*/
+  + IF p_size_bytes >= 52428800 THEN RETURN jsonb_build_object('ok', false, 'error', 'too_large'); END IF;   /*CAP:blob*/
+RESULT total=63 pass=61 real_fail=1 reds=B3_blob_and_tombstone_caps
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== B02_confirm_any_owner (want red: O1_owner_binding)
+MUTATION APPLIED numstat=1/1
+  - WHERE x.id = p_blob_id AND x.owner_user_id = v_uid                                        /*OWNER:confirm*/
+  + WHERE x.id = p_blob_id                                        /*OWNER:confirm*/
+RESULT total=63 pass=61 real_fail=1 reds=O1_owner_binding
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== B03_confirm_no_object_check (want red: P3_confirm_states)
+MUTATION APPLIED numstat=0/1
+  - IF v_found IS NOT TRUE THEN RETURN jsonb_build_object('ok', false, 'error', 'object_missing'); END IF;   /*CONFIRM:exists*/
+RESULT total=63 pass=61 real_fail=1 reds=P3_confirm_states
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== B04_confirm_no_size_check (want red: P3_confirm_states)
+MUTATION APPLIED numstat=0/1
+  - IF v_size IS DISTINCT FROM b.size_bytes::text THEN RETURN jsonb_build_object('ok', false, 'error', 'size_mismatch'); END IF;   /*CONFIRM:size*/
+RESULT total=63 pass=61 real_fail=1 reds=P3_confirm_states
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== M01_assign_any_caller (want red: E7_internal_caller_checks)
+MUTATION APPLIED numstat=1/1
+  - IF auth.role() IS DISTINCT FROM 'service_role' THEN                                      /*ASSIGN:role*/
+  + IF false THEN                                      /*ASSIGN:role*/
+RESULT total=63 pass=61 real_fail=1 reds=E7_internal_caller_checks
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== M02_assign_inactive_member (want red: M1_assign_inactive_member)
+MUTATION APPLIED numstat=1/1
+  - AND public.member_status_grants_access(m.license_status);                            /*ASSIGN:member*/
+  + ;
+RESULT total=63 pass=61 real_fail=1 reds=M1_assign_inactive_member
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== M03_assign_ignores_plan (want red: M1_assign_plan)
+MUTATION APPLIED numstat=1/1
+  - IF public._org_feature_allowed(p_organization_id, 'cloud_autosave_assignable') IS NOT TRUE THEN   /*ASSIGN:plan*/
+  + IF false THEN   /*ASSIGN:plan*/
+RESULT total=63 pass=61 real_fail=1 reds=M1_assign_plan
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== K01_key_on_somewhere (want red: F1_feature_keys)
+MUTATION APPLIED numstat=1/1
+  - SELECT p.id, fd.id, false, 'false'
+  + SELECT p.id, fd.id, p.tier = 'enterprise', 'false'
+RESULT total=63 pass=61 real_fail=1 reds=F1_feature_keys
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== K02_key_with_tier (want red: F1_feature_keys)
+MUTATION APPLIED numstat=1/1
+  - 'sync', 'boolean', 'false', NULL, 165, false)
+  + 'sync', 'boolean', 'false', 'team', 165, false)
+RESULT total=63 pass=60 real_fail=2 reds=E3_personal_assignment_crash,F1_feature_keys
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== RB01_rollback_keeps_a_function (want red: G1_rollback_then_apply)
+MUTATION APPLIED numstat=0/1
+  - DROP FUNCTION IF EXISTS public.cloud_list_installs();
+RESULT total=63 pass=61 real_fail=1 reds=G1_rollback_then_apply
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_entitled_parties (want red: U1_entitlement_every_write)
+MUTATION APPLIED numstat=0/3
+  - IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:parties*/
+  - RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
+  - END IF;
+RESULT total=63 pass=61 real_fail=1 reds=U1_entitlement_every_write
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_owner_parties (want red: O1_owner_binding)
+MUTATION APPLIED numstat=1/1
+  - WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:parties*/
+  + WHERE d.id = p_cloud_deal_id
+RESULT total=63 pass=61 real_fail=1 reds=O1_owner_binding
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_install_parties (want red: I1_install_binding)
+MUTATION APPLIED numstat=0/1
+  - AND d.source_install_id = p_source_install_id                                           /*INSTALL:parties*/
+RESULT total=63 pass=61 real_fail=1 reds=I1_install_binding
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_rows_parties (want red: U6_row_cap)
+MUTATION APPLIED numstat=1/1
+  - IF jsonb_array_length(p_rows) > 500 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:rows:parties*/
+  + 
+RESULT total=63 pass=61 real_fail=1 reds=U6_row_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_bytes_parties (want red: U6_byte_cap)
+MUTATION APPLIED numstat=1/1
+  - IF octet_length(p_rows::text) > 16777216 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:bytes:parties*/
+  + 
+RESULT total=63 pass=61 real_fail=1 reds=U6_byte_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_entitled_checklists (want red: U1_entitlement_every_write)
+MUTATION APPLIED numstat=0/3
+  - IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:checklists*/
+  - RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
+  - END IF;
+RESULT total=63 pass=61 real_fail=1 reds=U1_entitlement_every_write
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_owner_checklists (want red: O1_owner_binding)
+MUTATION APPLIED numstat=1/1
+  - WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:checklists*/
+  + WHERE d.id = p_cloud_deal_id
+RESULT total=63 pass=61 real_fail=1 reds=O1_owner_binding
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_install_checklists (want red: I1_install_binding)
+MUTATION APPLIED numstat=0/1
+  - AND d.source_install_id = p_source_install_id                                           /*INSTALL:checklists*/
+RESULT total=63 pass=61 real_fail=1 reds=I1_install_binding
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_rows_checklists (want red: U6_row_cap)
+MUTATION APPLIED numstat=1/1
+  - IF jsonb_array_length(p_rows) > 500 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:rows:checklists*/
+  + 
+RESULT total=63 pass=61 real_fail=1 reds=U6_row_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_bytes_checklists (want red: U6_byte_cap)
+MUTATION APPLIED numstat=1/1
+  - IF octet_length(p_rows::text) > 16777216 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:bytes:checklists*/
+  + 
+RESULT total=63 pass=61 real_fail=1 reds=U6_byte_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_entitled_items (want red: U1_entitlement_every_write)
+MUTATION APPLIED numstat=0/3
+  - IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:items*/
+  - RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
+  - END IF;
+RESULT total=63 pass=61 real_fail=1 reds=U1_entitlement_every_write
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_owner_items (want red: O1_owner_binding)
+MUTATION APPLIED numstat=1/1
+  - WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:items*/
+  + WHERE d.id = p_cloud_deal_id
+RESULT total=63 pass=61 real_fail=1 reds=O1_owner_binding
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_install_items (want red: I1_install_binding)
+MUTATION APPLIED numstat=0/1
+  - AND d.source_install_id = p_source_install_id                                           /*INSTALL:items*/
+RESULT total=63 pass=61 real_fail=1 reds=I1_install_binding
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_rows_items (want red: U6_row_cap)
+MUTATION APPLIED numstat=1/1
+  - IF jsonb_array_length(p_rows) > 500 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:rows:items*/
+  + 
+RESULT total=63 pass=61 real_fail=1 reds=U6_row_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_bytes_items (want red: U6_byte_cap)
+MUTATION APPLIED numstat=1/1
+  - IF octet_length(p_rows::text) > 16777216 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:bytes:items*/
+  + 
+RESULT total=63 pass=61 real_fail=1 reds=U6_byte_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_entitled_messages (want red: U1_entitlement_every_write)
+MUTATION APPLIED numstat=0/3
+  - IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:messages*/
+  - RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
+  - END IF;
+RESULT total=63 pass=61 real_fail=1 reds=U1_entitlement_every_write
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_owner_messages (want red: O1_owner_binding)
+MUTATION APPLIED numstat=1/1
+  - WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:messages*/
+  + WHERE d.id = p_cloud_deal_id
+RESULT total=63 pass=61 real_fail=1 reds=O1_owner_binding
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_install_messages (want red: I1_install_binding)
+MUTATION APPLIED numstat=0/1
+  - AND d.source_install_id = p_source_install_id                                           /*INSTALL:messages*/
+RESULT total=63 pass=61 real_fail=1 reds=I1_install_binding
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_rows_messages (want red: U6_row_cap)
+MUTATION APPLIED numstat=1/1
+  - IF jsonb_array_length(p_rows) > 500 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:rows:messages*/
+  + 
+RESULT total=63 pass=61 real_fail=1 reds=U6_row_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_bytes_messages (want red: U6_byte_cap)
+MUTATION APPLIED numstat=1/1
+  - IF octet_length(p_rows::text) > 16777216 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:bytes:messages*/
+  + 
+RESULT total=63 pass=61 real_fail=1 reds=U6_byte_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_entitled_files (want red: U1_entitlement_every_write)
+MUTATION APPLIED numstat=0/3
+  - IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:files*/
+  - RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
+  - END IF;
+RESULT total=63 pass=61 real_fail=1 reds=U1_entitlement_every_write
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_owner_files (want red: O1_owner_binding)
+MUTATION APPLIED numstat=1/1
+  - WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:files*/
+  + WHERE d.id = p_cloud_deal_id
+RESULT total=63 pass=61 real_fail=1 reds=O1_owner_binding
+TRIPWIRE exit=0 Tests:       12 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_install_files (want red: I1_install_binding)
+MUTATION APPLIED numstat=0/1
+  - AND d.source_install_id = p_source_install_id                                           /*INSTALL:files*/
+RESULT total=63 pass=61 real_fail=1 reds=I1_install_binding
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_rows_files (want red: U6_row_cap)
+MUTATION APPLIED numstat=1/1
+  - IF jsonb_array_length(p_rows) > 500 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:rows:files*/
+  + 
+RESULT total=63 pass=61 real_fail=1 reds=U6_row_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_bytes_files (want red: U6_byte_cap)
+MUTATION APPLIED numstat=1/1
+  - IF octet_length(p_rows::text) > 16777216 THEN RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large'); END IF;   /*CAP:bytes:files*/
+  + 
+RESULT total=63 pass=61 real_fail=1 reds=U6_byte_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_entitled_deal (want red: U1_entitlement_every_write)
+MUTATION APPLIED numstat=0/3
+  - IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:deal*/
+  - RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
+  - END IF;
+RESULT total=63 pass=60 real_fail=2 reds=SET3_off_then_upsert,U1_entitlement_every_write
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_entitled_register (want red: U1_entitlement_every_write)
+MUTATION APPLIED numstat=0/3
+  - IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:register*/
+  - RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
+  - END IF;
+RESULT total=63 pass=61 real_fail=1 reds=U1_entitlement_every_write
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_entitled_mark_synced (want red: U1_entitlement_every_write)
+MUTATION APPLIED numstat=0/3
+  - IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:mark_synced*/
+  - RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
+  - END IF;
+RESULT total=63 pass=61 real_fail=1 reds=U1_entitlement_every_write
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_owner_mark_synced (want red: O1_owner_binding)
+MUTATION APPLIED numstat=1/1
+  - WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:mark_synced*/
+  + WHERE d.id = p_cloud_deal_id
+RESULT total=63 pass=61 real_fail=1 reds=O1_owner_binding
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_install_mark_synced (want red: I1_install_binding)
+MUTATION APPLIED numstat=0/1
+  - AND d.source_install_id = p_source_install_id                                           /*INSTALL:mark_synced*/
+RESULT total=63 pass=61 real_fail=1 reds=I1_install_binding
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+== U_bytes_deal (want red: U6_byte_cap)
+MUTATION APPLIED numstat=0/3
+  - IF octet_length(p_deal::text) > 1048576 THEN                                               /*CAP:bytes:deal*/
+  - RETURN jsonb_build_object('ok', false, 'error', 'batch_too_large');
+  - END IF;
+RESULT total=63 pass=61 real_fail=1 reds=U6_byte_cap
+TRIPWIRE exit=1 Tests:       1 failed, 11 passed, 12 total
+VERDICT RED as wanted
+RESTORED clean=True
+MISSED 0 of 111
+
+## Residue after the last run (catalog query)
+[{"residue":{"tables":0,"functions":0,"bucket":0,"storage_policies":0,"feature_keys":0,"roles":0,"fixture_users":0,"fixture_orgs":0,"ledger":0}}]
+
+## Two-session cases (concurrency/): NOT RUN. They need a committed apply.
