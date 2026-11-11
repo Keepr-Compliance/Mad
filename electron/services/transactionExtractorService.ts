@@ -78,6 +78,66 @@ interface Keywords {
 /**
  * Regex patterns
  */
+/**
+ * Street suffixes the address patterns end the street at (the original list,
+ * kept as it was).
+ */
+const STREET_SUFFIX =
+  "(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Way|Court|Ct|Boulevard|Blvd|Place|Pl|Circle|Cir|Parkway|Pkwy|Trail|Ter|Crescent|Hill|Freeway|Path|Route|Rte|Square|Turnpike|Vista|Viaduct|Cove|Dale|Ridge|View|Walk|Wood|Drive|Court)";
+
+/** The street: a number, the name (it may span a line), then a suffix. Group 1. */
+const STREET = `\\b(\\d+\\s+[A-Za-z\\s\\-\\.]+?\\s+${STREET_SUFFIX})`;
+
+/**
+ * BACKLOG-4225: US state and territory codes. Matched on lowercased text with
+ * flag i, so a bare `[A-Z]{2}` matched any two-letter word ("to", "is").
+ */
+const US_STATE_CODES = [
+  "al", "ak", "az", "ar", "ca", "co", "ct", "de", "fl", "ga", "hi", "id", "il", "in", "ia", "ks",
+  "ky", "la", "me", "md", "ma", "mi", "mn", "ms", "mo", "mt", "ne", "nv", "nh", "nj", "nm", "ny",
+  "nc", "nd", "oh", "ok", "or", "pa", "ri", "sc", "sd", "tn", "tx", "ut", "vt", "va", "wa", "wv",
+  "wi", "wy", "dc", "pr", "vi", "gu", "as", "mp",
+];
+const STATE = `(?:${US_STATE_CODES.join("|")})`;
+
+/** A city of 1-4 words, on one line. */
+const CITY = "[A-Za-z]+(?:[ \\t]+[A-Za-z]+){0,3}";
+/** Between city and state: a comma and/or spaces, never a line break. */
+const CITY_STATE_SEP = "(?:[ \\t]*,[ \\t]*|[ \\t]+)";
+
+/** Street + city + state + ZIP. One line break is allowed after the suffix (group 2). */
+const ADDRESS_WITH_ZIP = new RegExp(
+  `${STREET}([ \\t]*,?[ \\t]*\\r?\\n[ \\t]*|[ \\t]*,[ \\t]*|[ \\t]+)(${CITY}${CITY_STATE_SEP}${STATE}[ \\t,]+\\d{5}(?:-\\d{4})?)\\b`,
+  "gi",
+);
+
+/**
+ * Street + city + state, no ZIP, all on one line. The state must end the
+ * address: a comma, period, semicolon, line break or the end of the text
+ * follows it, so prose ("... lives in ohio") is not read as a city and state.
+ */
+const ADDRESS_NO_ZIP = new RegExp(
+  `${STREET}([ \\t]*,[ \\t]*|[ \\t]+)(${CITY}${CITY_STATE_SEP}${STATE})\\b(?=[ \\t]*(?:[,.;\\r\\n]|$))`,
+  "gi",
+);
+
+/** BACKLOG-4225: the street alone, ending at the suffix. */
+const ADDRESS_STREET_ONLY = new RegExp(`${STREET}\\b`, "gi");
+
+/**
+ * One address match as one line: whitespace collapsed, and a line break
+ * between the street and the city line shown as ", " so the street line
+ * stays the street.
+ */
+function cleanAddressMatch(m: RegExpMatchArray): string {
+  const ws = (s: string): string => s.replace(/\s+/g, " ").trim();
+  const street = ws(m[1] ?? m[0]);
+  if (m[3] === undefined) return street;
+  const sep = m[2] ?? " ";
+  const joiner = sep.includes(",") || /\n/.test(sep) ? ", " : " ";
+  return `${street}${joiner}${ws(m[3])}`;
+}
+
 interface Patterns {
   address: RegExp;
   money: RegExp;
@@ -171,8 +231,11 @@ class TransactionExtractorService {
     // Address patterns - Multiple patterns for flexibility
     // Pattern 1: Full address with ZIP (most confident)
     // Format: 123 Main Street, San Francisco, CA 94102
-    address:
-      /\b\d+\s+[A-Za-z\s\-\.]+?\s+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Way|Court|Ct|Boulevard|Blvd|Place|Pl|Circle|Cir|Parkway|Pkwy|Trail|Ter|Crescent|Hill|Freeway|Path|Route|Rte|Square|Turnpike|Vista|Viaduct|Cove|Dale|Ridge|View|Walk|Wood|Drive|Court)[,\s]+[A-Za-z\s]+?[,\s]+[A-Z]{2}[\s,]+\d{5}(?:-\d{4})?\b/gi,
+    // BACKLOG-4225: the city/state tail stays on one line (one line break is
+    // allowed right after the street suffix, for a city line under the
+    // street), the city is at most 4 words, and the state must be a real US
+    // state/territory code.
+    address: ADDRESS_WITH_ZIP,
 
     // Money amounts
     money: /\$\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/g,
@@ -498,20 +561,16 @@ class TransactionExtractorService {
    * @private
    */
   private _extractAddresses(text: string): string[] {
-    // Try primary pattern first (with ZIP)
-    let matches = text.match(this.patterns.address) || [];
-
-    // If no addresses found, try fallback pattern (without ZIP)
-    if (matches.length === 0) {
-      // Fallback: Address without ZIP code
-      // Format: 123 Main Street, San Francisco, CA
-      const fallbackPattern =
-        /\b\d+\s+[A-Za-z\s\-\.]+?\s+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Way|Court|Ct|Boulevard|Blvd|Place|Pl|Circle|Cir|Parkway|Pkwy|Trail|Ter|Crescent|Hill|Freeway|Path|Route|Rte|Square|Turnpike|Vista|Viaduct|Cove|Dale|Ridge|View|Walk|Wood|Drive|Court)[,\s]+[A-Za-z\s]+?[,\s]+[A-Z]{2}\b/gi;
-      matches = text.match(fallbackPattern) || [];
+    // 1. Street + city + state + ZIP. 2. Street + city + state, no ZIP.
+    // 3. BACKLOG-4225: the street alone, ending at the street suffix.
+    // Each runs only when the one before it found nothing.
+    for (const pattern of [ADDRESS_WITH_ZIP, ADDRESS_NO_ZIP, ADDRESS_STREET_ONLY]) {
+      // A fresh copy: `patterns.address` is this same /g regex, and its
+      // `.test()` calls elsewhere leave lastIndex where a match ended.
+      const found = [...text.matchAll(new RegExp(pattern))].map(cleanAddressMatch);
+      if (found.length > 0) return [...new Set(found)];
     }
-
-    // Remove duplicates and return
-    return [...new Set(matches)].map((addr) => addr.trim());
+    return [];
   }
 
   /**

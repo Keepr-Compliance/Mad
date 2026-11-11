@@ -112,9 +112,10 @@ function score(r: LearnRunResult) {
   return scoreRun(r, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER), 0, EMPTY_CENSUS);
 }
 
-const A1 = "4175 Canarytest Way, Testville, ZZ 00000";
-const A2 = "4176 Canarytest Way, Testville, ZZ 00000";
-const A3 = "4177 Canarytest Way, Testville, ZZ 00000";
+// BACKLOG-4225: state "WA" (ZIP still synthetic) in text the real extractor reads; it only takes a real US state code.
+const A1 = "4175 Canarytest Way, Testville, WA 00000";
+const A2 = "4176 Canarytest Way, Testville, WA 00000";
+const A3 = "4177 Canarytest Way, Testville, WA 00000";
 
 beforeEach(() => {
   db = new Database(":memory:") as unknown as DatabaseType;
@@ -204,7 +205,7 @@ describe("P11 hidden is per deal key", () => {
     // K1: one all-seed detection and one mixed detection under ONE key (two
     // spellings that groupByProperty keeps apart and addressKey joins).
     const k1SeedOnly = mail(gmailFrom("Zillow", SEED_A), A1, 1, {
-      body: "Price cut on 4175 Canarytest Way Testville ZZ 00000 offer escrow buyer closing",
+      body: "Price cut on 4175 Canarytest Way Testville WA 00000 offer escrow buyer closing",
     });
     const k1Seed = alert(SEED_B, A1, 2);
     const k1Agent = mail("agent@example.com", A1, 3);
