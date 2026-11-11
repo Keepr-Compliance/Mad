@@ -22,8 +22,8 @@ export function buildDomainCaptureNoticeEmail(params: DomainCaptureNoticeParams)
   const subject = `${brokerageName} will move your Keepr account on ${date}`;
   return buildSimpleNotice(subject, [
     `${brokerageName} verified that it owns ${domain}.`,
-    `On ${date}, your Keepr account (${recipientEmail}) moves into ${brokerageName}, and any personal Keepr plan on it ends.`,
-    `After the move, ${brokerageName} manages this account and can end your access to it. If you opt out, your account stays separate${payer === true ? ' and stays on your own paid plan' : ''}.`,
+    `On ${date}, your Keepr account (${recipientEmail}) will move into ${brokerageName}, and any personal Keepr plan on it will end.`,
+    `After the move, ${brokerageName} will manage this account and can end your access to it. If you opt out, your account stays separate${payer === true ? ' and stays on your own paid plan' : ''}.`,
     `To opt out, sign in at ${optOutUrl} before ${date}.`,
   ]);
 }

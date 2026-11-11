@@ -31,6 +31,7 @@ import {
 import { loadCaptureNotice, loadCaptureSection, type CaptureDomainView } from '@/lib/domain/captureView';
 import CaptureSection from '@/app/dashboard/settings/domain/CaptureSection';
 import CaptureNoticeBanner from '@/components/CaptureNoticeBanner';
+import { CAPTURE_BANNER_DETAIL } from '@/lib/domain/captureCopy';
 import type { DomainClaimView } from '@/lib/domain/claims';
 
 const start = startCapture as jest.Mock;
@@ -380,5 +381,11 @@ describe('personal-owner banner', () => {
     expect(optOut).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
     expect(cancel).not.toHaveBeenCalled();
+  });
+});
+
+describe('capture banner copy (BACKLOG-3962)', () => {
+  it('uses future tense for the post-move sentence', () => {
+    expect(CAPTURE_BANNER_DETAIL).toContain('After the move, the brokerage will manage this account and can end your access to it.');
   });
 });
