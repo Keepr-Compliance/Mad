@@ -73,6 +73,51 @@ beforeEach(() => {
 afterEach(() => jest.useRealTimers());
 
 describe("SR B1: OFF while the profile UPDATE is in flight", () => {
+  it("SR D1: OFF then ON while in flight, then OFF later: the row ends cleared", async () => {
+    const { h, deps } = harness();
+    h.hold = true;
+    const svc = createDeviceProfileService(deps);
+    const run = svc.onDeviceRegistered(USER, DEVICE, "login", ROW);
+    await untilInFlight(h);
+    h.gate.on = false;
+    await svc.onPrivacyGateChanged();
+    h.gate.on = true;
+    await svc.onPrivacyGateChanged();
+    h.release?.();
+    await settle(run);
+    h.gate.on = false;
+    await svc.onPrivacyGateChanged();
+    await jest.advanceTimersByTimeAsync(1000);
+    expect({ seq: seq(h.updates), file: h.file !== null }).toEqual({ seq: expect.arrayContaining(["profile"]), file: false });
+    expect(seq(h.updates).at(-1)).toBe("null");
+  });
+
+  it("D1 variant: the upload reports failure after a clear removed the flag; the flag comes back, a later OFF clears", async () => {
+    const { h, deps } = harness();
+    h.hold = true;
+    const base = deps.updateRow;
+    let failProfile = true;
+    deps.updateRow = async (u, d, p) => {
+      const r = await base(u, d, p);
+      return p !== null && failProfile ? { ok: false, rows: 0 } : r; // applied, but reported as failed
+    };
+    const svc = createDeviceProfileService(deps);
+    const run = svc.onDeviceRegistered(USER, DEVICE, "login", ROW);
+    await untilInFlight(h);
+    h.gate.on = false;
+    await svc.onPrivacyGateChanged();
+    h.gate.on = true;
+    await svc.onPrivacyGateChanged();
+    h.release?.();
+    await settle(run);
+    failProfile = false;
+    expect(h.file).not.toBeNull();
+    h.gate.on = false;
+    await svc.onPrivacyGateChanged();
+    expect(seq(h.updates).at(-1)).toBe("null");
+    expect(h.file).toBeNull();
+  });
+
   it("first-ever write: a null lands last and nothing is left pending", async () => {
     const { h, deps } = harness();
     h.hold = true;

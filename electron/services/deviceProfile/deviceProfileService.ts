@@ -254,15 +254,19 @@ export function createDeviceProfileService(deps: ServiceDeps): DeviceProfileServ
     });
     if (!shouldWrite(prev, next, reason)) return;
     const res = await deps.updateRow(userId, deviceId, row);
-    // A failed UPDATE leaves the fingerprint untouched: the next launch retries.
-    if (res.ok && res.rows >= 1) {
-      await withState((entries) => {
-        const found = entryOf(entries, key);
-        if (!found) return { entries, result: undefined }; // cleared meanwhile
-        const entry: StateEntry = { deviceKey: key, rowId, fp: next.fp, writtenAt: new Date(deps.now()).toISOString() };
-        return { entries: [...without(entries, key), entry], result: undefined };
-      });
-    }
+    // The profile may now be on the row, so this account's flag is written back
+    // even if a clear removed it while the UPDATE was in flight (OFF then ON).
+    // A failed UPDATE may still have landed: the flag comes back with an empty
+    // fingerprint, so the next launch retries the write.
+    const succeeded = res.ok && res.rows >= 1;
+    await withState((entries) => {
+      const found = entryOf(entries, key);
+      const stamp = new Date(deps.now()).toISOString();
+      const entry: StateEntry = succeeded
+        ? { deviceKey: key, rowId, fp: next.fp, writtenAt: stamp }
+        : (found ?? { deviceKey: key, rowId, fp: {}, writtenAt: stamp });
+      return { entries: [...without(entries, key), entry], result: undefined };
+    });
     // OFF arrived while the UPDATE (or the bookkeeping after it) was in flight:
     // a fresh null, sent AFTER it, so the null is the last write the row sees.
     // Not deduped with a clear already running, which may have landed first.
