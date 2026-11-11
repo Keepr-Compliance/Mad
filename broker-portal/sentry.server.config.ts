@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/nextjs';
+import { scrubMcpRequest } from './lib/mcp/sentryScrub';
 
 /**
  * Sentry server-side SDK initialization for broker-portal.
@@ -49,6 +50,9 @@ Sentry.init({
   tracesSampleRate: 0.1,
 
   beforeSend(event) {
+    // BACKLOG-4237: no request headers, cookies or body for /api/mcp and /oauth.
+    scrubMcpRequest(event);
+
     if (event.message) {
       event.message = scrubEmails(event.message) as string;
     }
@@ -86,5 +90,9 @@ Sentry.init({
     }
 
     return event;
+  },
+
+  beforeSendTransaction(event) {
+    return scrubMcpRequest(event);
   },
 });
