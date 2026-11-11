@@ -536,6 +536,8 @@ BEGIN
     RETURN public._mcp_token_fail(p_client_id, 'invalid_request');
   END IF;
 
+  -- token insert failure: everything in this block is rolled back (code not used up)
+  BEGIN
   UPDATE public.mcp_authorization_codes k
      SET used_at = now()
    WHERE k.code_sha256 = sha256(p_code_digest)
@@ -595,9 +597,12 @@ BEGIN
       (sha256(p_at_digest), v_code.connection_id, 'access', v_pepper, now() + interval '1 hour'),
       (sha256(p_rt_digest), v_code.connection_id, 'refresh', v_pepper, now() + interval '30 days');
   EXCEPTION WHEN unique_violation OR not_null_violation THEN
-    RETURN public._mcp_refuse('invalid_request');
+    RAISE EXCEPTION USING ERRCODE = 'MC001', MESSAGE = 'mcp token insert failed';
   END;
   RETURN jsonb_build_object('ok', true, 'token_type', 'Bearer', 'expires_in', 3600, 'scope', 'mcp:read');
+  EXCEPTION WHEN SQLSTATE 'MC001' THEN
+    RETURN public._mcp_token_fail(p_client_id, 'invalid_request');
+  END;
 END
 $fn$;
 REVOKE ALL ON FUNCTION public.mcp_exchange_code(text, bytea, text, text, text, text, bytea, bytea) FROM PUBLIC, anon, authenticated, service_role;

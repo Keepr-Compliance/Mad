@@ -729,6 +729,7 @@ BEGIN
 
   -- ===== N1: a rejected redemption uses up the code =====
   BEGIN
+    c2 := pg_temp.connect(A, 'n1g', pg_temp.gpt());               -- another ACTIVE connection of the same user
     c := pg_temp.to_code(A, 'n1');
     t := pg_temp.exch('c-n1', 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXl', 'n1', pg_temp.claude(), 'at-n1x', 'rt-n1x');
     t2 := pg_temp.exch('c-n1', pg_temp.ver(), 'n1', pg_temp.claude(), 'at-n1', 'rt-n1');
@@ -736,9 +737,14 @@ BEGIN
       pg_temp.err(c ->> 'appr') = 'OK' AND pg_temp.err(t) = 'invalid_grant' AND pg_temp.err(t2) = 'invalid_grant'
       AND NOT EXISTS (SELECT 1 FROM public.mcp_connections WHERE client_id = pg_temp.cid('n1'))
       AND (SELECT count(*) FROM public.mcp_call_log WHERE user_id = A AND event = 'code_rejected') = 1
-      AND (SELECT count(*) FROM public.mcp_call_log WHERE user_id = A AND event = 'code_replay') = 0,
+      AND (SELECT count(*) FROM public.mcp_call_log WHERE user_id = A AND event = 'code_replay') = 0
+      AND (c2 ->> 'ok')::boolean
+      AND EXISTS (SELECT 1 FROM public.mcp_connections WHERE id = (c2 ->> 'conn')::uuid AND status = 'active')
+      AND (SELECT count(*) FROM public.mcp_tokens WHERE connection_id = (c2 ->> 'conn')::uuid) = 2
+      AND pg_temp.err(pg_temp.st('at-n1g')) = 'OK',
       'wrong=' || t || ' right=' || t2 || ' conns=' || (SELECT count(*) FROM public.mcp_connections WHERE client_id = pg_temp.cid('n1'))
-      || ' events=' || coalesce((SELECT string_agg(event, ',') FROM public.mcp_call_log WHERE user_id = A AND event LIKE 'code%'), '-')));
+      || ' events=' || coalesce((SELECT string_agg(event, ',') FROM public.mcp_call_log WHERE user_id = A AND event LIKE 'code%'), '-')
+      || ' other_active=' || (EXISTS (SELECT 1 FROM public.mcp_connections WHERE id = (c2 ->> 'conn')::uuid))::text));
     RAISE EXCEPTION USING ERRCODE = 'T4238';
   EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('N1_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
@@ -784,6 +790,53 @@ BEGIN
     r := r || jsonb_build_object('N3_inline_pruning', pg_temp.pass(ok, s));
     RAISE EXCEPTION USING ERRCODE = 'T4238';
   EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('N3_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  -- ===== N3b: the token prune touches only the refreshed connection =====
+  BEGIN
+    c := pg_temp.connect(A, 'n3s');
+    c2 := pg_temp.connect(A, 'n3g', pg_temp.gpt());
+    c3 := pg_temp.connect(B, 'n3b');
+    INSERT INTO public.mcp_tokens (token_sha256, connection_id, kind, pepper_version, issued_at, expires_at) VALUES
+      (sha256(pg_temp.dg('old-n3s')), (c ->> 'conn')::uuid, 'access', 1, now() - interval '3 days', now() - interval '2 days'),
+      (sha256(pg_temp.dg('old-n3g')), (c2 ->> 'conn')::uuid, 'access', 1, now() - interval '3 days', now() - interval '2 days'),
+      (sha256(pg_temp.dg('old-n3b')), (c3 ->> 'conn')::uuid, 'access', 1, now() - interval '3 days', now() - interval '2 days');
+    t := pg_temp.refr('rt-n3s', 'n3s', 'at-n3s2', 'rt-n3s2');
+    r := r || jsonb_build_object('N3b_token_prune_scope', pg_temp.pass(
+      (c ->> 'ok')::boolean AND (c2 ->> 'ok')::boolean AND (c3 ->> 'ok')::boolean AND pg_temp.err(t) = 'OK'
+      AND NOT EXISTS (SELECT 1 FROM public.mcp_tokens WHERE token_sha256 = sha256(pg_temp.dg('old-n3s')))
+      AND EXISTS (SELECT 1 FROM public.mcp_tokens WHERE token_sha256 = sha256(pg_temp.dg('old-n3g')))
+      AND EXISTS (SELECT 1 FROM public.mcp_tokens WHERE token_sha256 = sha256(pg_temp.dg('old-n3b'))),
+      t || ' own_pruned=' || (NOT EXISTS (SELECT 1 FROM public.mcp_tokens WHERE token_sha256 = sha256(pg_temp.dg('old-n3s'))))::text
+        || ' other_conn_kept=' || (EXISTS (SELECT 1 FROM public.mcp_tokens WHERE token_sha256 = sha256(pg_temp.dg('old-n3g'))))::text
+        || ' other_user_kept=' || (EXISTS (SELECT 1 FROM public.mcp_tokens WHERE token_sha256 = sha256(pg_temp.dg('old-n3b'))))::text));
+    RAISE EXCEPTION USING ERRCODE = 'T4238';
+  EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('N3b_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  -- ===== W3: a token insert failure in exchange rolls the whole redemption back =====
+  -- The code is NOT used up: a retry with fresh digests succeeds.
+  BEGIN
+    c := pg_temp.connect(A, 'w3a');                      -- older active connection (claude), access token at-w3a
+    c3 := pg_temp.connect(B, 'w3x');                     -- another user's connection, access token at-w3x
+    c2 := pg_temp.to_code(A, 'w3b');                     -- second consent, same redirect address as w3a
+    t := pg_temp.exch('c-w3b', pg_temp.ver(), 'w3b', pg_temp.claude(), 'at-w3x', 'rt-w3b');   -- access digest already exists
+    ok := pg_temp.j(t) = '{"ok": false, "error": "invalid_request"}'::jsonb
+      AND EXISTS (SELECT 1 FROM public.mcp_connections WHERE id = (c ->> 'conn')::uuid AND status = 'active')
+      AND (SELECT count(*) FROM public.mcp_tokens WHERE connection_id = (c ->> 'conn')::uuid) = 2
+      AND (SELECT count(*) FROM public.mcp_tokens WHERE connection_id = (c3 ->> 'conn')::uuid) = 2
+      AND NOT EXISTS (SELECT 1 FROM public.mcp_connections WHERE client_id = pg_temp.cid('w3b') AND status = 'active')
+      AND EXISTS (SELECT 1 FROM public.mcp_authorization_codes WHERE code_sha256 = sha256(pg_temp.dg('c-w3b')) AND used_at IS NULL)
+      AND NOT EXISTS (SELECT 1 FROM public.mcp_call_log WHERE user_id = A AND event = 'reconnect_replaced');
+    s := t || ' older_active=' || (EXISTS (SELECT 1 FROM public.mcp_connections WHERE id = (c ->> 'conn')::uuid AND status = 'active'))::text
+      || ' new_active=' || (EXISTS (SELECT 1 FROM public.mcp_connections WHERE client_id = pg_temp.cid('w3b') AND status = 'active'))::text
+      || ' code_unused=' || (EXISTS (SELECT 1 FROM public.mcp_authorization_codes WHERE code_sha256 = sha256(pg_temp.dg('c-w3b')) AND used_at IS NULL))::text;
+    t2 := pg_temp.exch('c-w3b', pg_temp.ver(), 'w3b', pg_temp.claude(), 'at-w3b', 'rt-w3b');
+    ok := ok AND pg_temp.err(t2) = 'OK' AND pg_temp.err(pg_temp.st('at-w3b')) = 'OK';
+    s := s || ' retry=' || pg_temp.err(t2);
+    r := r || jsonb_build_object('W3_exchange_insert_failure_rolls_back', pg_temp.pass((c ->> 'ok')::boolean AND (c3 ->> 'ok')::boolean AND pg_temp.err(c2 ->> 'appr') = 'OK' AND ok, s));
+    RAISE EXCEPTION USING ERRCODE = 'T4238';
+  EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('W3_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
 
   -- ===== N5: check_access is not_connected while the kill switch is off =====

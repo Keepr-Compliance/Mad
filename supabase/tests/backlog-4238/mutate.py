@@ -207,6 +207,13 @@ MUT = {
       'N3_inline_pruning', 'red', 'token prune also removes used refresh tokens'),
   'N5_check_access_ignores_kill_switch': ('controls.sql', [(MIG, "                AND s.enabled\n", '', 1)],
       'N5_check_access_kill_switch', 'red', 'check_access without the enabled term'),
+  'W4_rejection_deletes_all_user_connections': ('controls.sql', [(MIG, "    DELETE FROM public.mcp_connections c\n     WHERE c.id = v_code.connection_id AND c.status = 'pending'\n    RETURNING c.user_id INTO v_user;",
+      "    DELETE FROM public.mcp_connections c\n     WHERE c.user_id = (SELECT x.user_id FROM public.mcp_connections x WHERE x.id = v_code.connection_id)\n    RETURNING c.user_id INTO v_user;", 1)],
+      'N1_wrong_verifier_uses_up_code', 'red', 'rejected-redemption DELETE keyed on the user instead of the connection'),
+  'W2_token_prune_all_connections': ('controls.sql', [(MIG, "   WHERE o.connection_id = v_conn AND o.expires_at < now() - interval '1 day';", "   WHERE o.expires_at < now() - interval '1 day';", 1)],
+      'N3b_token_prune_scope', 'red', 'token prune without the connection term'),
+  'W3_insert_failure_returns_in_handler': ('controls.sql', [(MIG, "    RAISE EXCEPTION USING ERRCODE = 'MC001', MESSAGE = 'mcp token insert failed';", "    RETURN public._mcp_refuse('invalid_request');", 1)],
+      'W3_exchange_insert_failure_rolls_back', 'red', 'token insert failure returns from the inner handler (previous shape)'),
 }
 
 
