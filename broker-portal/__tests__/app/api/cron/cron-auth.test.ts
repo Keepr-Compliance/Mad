@@ -32,7 +32,7 @@ jest.mock('@/lib/supabase/service', () => {
       from: () => ({
         select: () => filter,
       }),
-      // BACKLOG-3962: domain-recheck calls rpc only.
+      // BACKLOG-3962: domain-recheck and domain-capture-switch start with rpc.
       rpc: (...args: unknown[]) => mockRpc(...args),
     }),
   };
@@ -54,6 +54,7 @@ jest.mock('@/lib/payments/fulfillment', () => ({
 import { GET as emailRetry } from '../../../../app/api/cron/email-retry/route';
 import { GET as paymentReconcile } from '../../../../app/api/cron/payment-reconcile/route';
 import { GET as domainRecheck } from '../../../../app/api/cron/domain-recheck/route';
+import { GET as domainCaptureSwitch } from '../../../../app/api/cron/domain-capture-switch/route';
 import { isAuthorizedCronRequest } from '../../../../lib/auth/cronAuth';
 
 const ORIGINAL = process.env.CRON_SECRET;
@@ -82,6 +83,7 @@ const routes: Array<[string, (r: Request) => Promise<Response>, () => jest.Mock]
   ['email-retry', emailRetry, () => mockDrain],
   ['payment-reconcile', paymentReconcile, () => mockLimit],
   ['domain-recheck', domainRecheck, () => mockRpc],
+  ['domain-capture-switch', domainCaptureSwitch, () => mockRpc],
 ];
 
 describe.each(routes)('GET /api/cron/%s authorization', (_name, GET, work) => {
