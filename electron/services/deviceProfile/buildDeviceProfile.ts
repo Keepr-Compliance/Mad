@@ -198,23 +198,32 @@ function prune<T extends Record<string, unknown>>(o: T): T {
   return o;
 }
 
-export function buildDeviceProfile(c: CollectedProfile, target: "row"): DeviceProfileRow;
-export function buildDeviceProfile(c: CollectedProfile, target: "log"): MachineClass;
-export function buildDeviceProfile(c: CollectedProfile, target: "row" | "log"): DeviceProfileRow | MachineClass {
+type BuiltFor<T extends "row" | "log"> = T extends "row" ? DeviceProfileRow : MachineClass;
+
+// One declaration, no overloads: the write-atomicity guard keys units by name.
+export function buildDeviceProfile<T extends "row" | "log">(c: CollectedProfile, target: T): BuiltFor<T> {
+  return (target === "log" ? buildMachineClass(c) : buildRow(c)) as BuiltFor<T>;
+}
+
+function buildMachineClass(c: CollectedProfile): MachineClass {
   const ramGB = ramGBOf(c.ramBytes);
   const cpuCores = intOk(c.cpuCores, 1024) && c.cpuCores > 0 ? c.cpuCores : undefined;
   const diskType = oneOf(c.diskType, DISK_TYPES) ? c.diskType : undefined;
   const softwareRendering = typeof c.softwareRendering === "boolean" ? c.softwareRendering : undefined;
 
-  if (target === "log") {
-    return prune({
-      ramGB: ramGB === undefined ? undefined : ramBucketGB(ramGB),
-      cpuCores,
-      diskType,
-      softwareRendering,
-    });
-  }
+  return prune({
+    ramGB: ramGB === undefined ? undefined : ramBucketGB(ramGB),
+    cpuCores,
+    diskType,
+    softwareRendering,
+  });
+}
 
+function buildRow(c: CollectedProfile): DeviceProfileRow {
+  const ramGB = ramGBOf(c.ramBytes);
+  const cpuCores = intOk(c.cpuCores, 1024) && c.cpuCores > 0 ? c.cpuCores : undefined;
+  const diskType = oneOf(c.diskType, DISK_TYPES) ? c.diskType : undefined;
+  const softwareRendering = typeof c.softwareRendering === "boolean" ? c.softwareRendering : undefined;
   const cpuModel = typeof c.cpuModel === "string" ? c.cpuModel.replace(/\s+/g, " ").trim() : undefined;
   const os = osFields(c);
   const dbMB = typeof c.dbBytes === "number" && c.dbBytes >= 0 ? twoSigFigs(c.dbBytes / 1024 ** 2) : undefined;
