@@ -42,7 +42,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 }
 
-function notPost(): Response {
+function notPost(_req?: Request): Response {
   return mcpEnabled() ? mcpMethodNotAllowed() : mcpNotFound();
 }
 

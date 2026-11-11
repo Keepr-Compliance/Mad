@@ -66,11 +66,11 @@ async function routeFetch(input: string | URL | Request, init?: RequestInit): Pr
     case 'POST':
       return route.POST(req);
     case 'GET':
-      return route.GET();
+      return route.GET(req);
     case 'DELETE':
-      return route.DELETE();
+      return route.DELETE(req);
     default:
-      return route.PUT();
+      return route.PUT(req);
   }
 }
 
@@ -226,9 +226,19 @@ describe('A3: Origin', () => {
 
 describe('A4: POST only', () => {
   it.each(['GET', 'PUT', 'PATCH', 'DELETE'] as const)('%s returns 405 with Allow: POST', async (m) => {
-    const res = await route[m]();
+    const res = await route[m](new Request(MCP_URL, { method: m }));
     expect(res.status).toBe(405);
     expect(res.headers.get('allow')).toBe('POST');
+  });
+
+  it('GET with a valid token and an SSE accept header is still 405', async () => {
+    const res = await route.GET(
+      new Request(MCP_URL, {
+        method: 'GET',
+        headers: { authorization: `Bearer ${CONNECTED_APP_TOKEN}`, accept: 'text/event-stream' },
+      })
+    );
+    expect(res.status).toBe(405);
   });
 
   it('positive: POST returns 200', async () => {
