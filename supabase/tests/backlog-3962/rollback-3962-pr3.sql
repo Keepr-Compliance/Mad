@@ -196,6 +196,7 @@ DROP FUNCTION IF EXISTS public._domain_capture_switch(uuid);
 DROP FUNCTION IF EXISTS public._domain_capture_due(integer);
 DROP FUNCTION IF EXISTS public._domain_capture_mark_notice(uuid, text);
 DROP FUNCTION IF EXISTS public.caller_capture_notice();
+DROP FUNCTION IF EXISTS public.domain_capture_history(uuid);
 DROP FUNCTION IF EXISTS public.domain_capture_opt_out_self(uuid);
 DROP FUNCTION IF EXISTS public.domain_capture_cancel(uuid);
 DROP FUNCTION IF EXISTS public.domain_capture_start(uuid, uuid, uuid[]);
@@ -204,6 +205,7 @@ DROP FUNCTION IF EXISTS public._domain_capture_eval(uuid, uuid, text);
 DROP FUNCTION IF EXISTS public._domain_capture_is_payer(uuid);
 DROP FUNCTION IF EXISTS public._domain_capture_billing_ready();
 DROP TABLE IF EXISTS public.domain_capture_switches;
+DROP FUNCTION IF EXISTS public._domain_capture_switches_clear_defer();
 ALTER TABLE public.organization_members DROP CONSTRAINT organization_members_provisioned_by_check;
 ALTER TABLE public.organization_members ADD CONSTRAINT organization_members_provisioned_by_check
   CHECK (provisioned_by IS NULL OR provisioned_by = ANY (ARRAY['manual', 'scim', 'jit', 'invite']::text[]));
