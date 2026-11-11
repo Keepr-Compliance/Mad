@@ -2,7 +2,10 @@
 """BACKLOG-3962 PR1: build one SQL text for a single kt-sql call on keepr-test.
 
 Usage: compose.py <out.sql> <mode> [--applied]
-  mode = base | <mutant> | rollback | live
+  mode = base | <mutant> | rollback | live            (PR1, 20261112100000)
+       | pr2 | <pr2 mutant> | pr2_live                 (PR2, 20261112110000)
+  pr2 / pr2 mutants: rollback-3962-pr2.sql (the PR1 body) + the PR2 migration (mutated for a
+  mutant) + controls-pr2.sql. Needs the PR1 table on the venue. pr2_live: controls-pr2.sql only.
   live: controls.sql only, against the objects as applied on the venue.
   base / mutants: migration (mutated for a mutant) + controls.sql. Ends in RAISE: nothing persists.
   rollback: migration + rollback-3962-pr1.sql + a probe that every object is gone.
@@ -15,6 +18,25 @@ import difflib, os, re, sys
 here = os.path.dirname(os.path.abspath(__file__))
 MIG = os.path.join(here, '..', '..', 'migrations', '20261112100000_backlog_3962_domain_claims.sql')
 RB = os.path.join(here, 'rollback-3962-pr1.sql')
+MIG2 = os.path.join(here, '..', '..', 'migrations', '20261112110000_backlog_3962_recheck_lapse_cutoff.sql')
+RB2 = os.path.join(here, 'rollback-3962-pr2.sql')
+CTL2 = os.path.join(here, 'controls-pr2.sql')
+
+MUTANTS2 = {
+    # (c) S3 cutoff applies to every status, not only lapsed
+    'P2_cutoff_any_status': [("       AND NOT (c.status = 'lapsed' AND c.last_miss_counted_at IS NOT NULL AND c.last_miss_counted_at <= now() - interval '30 days')\n",
+                              "       AND NOT (c.last_miss_counted_at <= now() - interval '30 days')\n")],
+    # NULL guard removed: a lapsed row with a NULL last_miss_counted_at must stay due
+    'P2_no_null_guard': [("c.last_miss_counted_at IS NOT NULL AND ", "")],
+    # (d) S3 cutoff keyed on last_checked_at instead of last_miss_counted_at
+    'P2_cutoff_on_last_checked': [("       AND NOT (c.status = 'lapsed' AND c.last_miss_counted_at IS NOT NULL AND c.last_miss_counted_at <= now() - interval '30 days')\n",
+                                   "       AND NOT (c.status = 'lapsed' AND c.last_checked_at <= now() - interval '30 days')\n")],
+    # S3 cutoff removed (PR1 behaviour)
+    'P2_no_cutoff': [("       AND NOT (c.status = 'lapsed' AND c.last_miss_counted_at IS NOT NULL AND c.last_miss_counted_at <= now() - interval '30 days')\n", "")],
+    # the pre-check pins a wrong md5; it must raise
+    'P2_pin_wrong_md5': [("IS DISTINCT FROM 'dc93015cbbcc7f6a77bcd8325f3a02d9' THEN\n",
+                          "IS DISTINCT FROM '00000000000000000000000000000000' THEN\n")],
+}
 
 MUTANTS = {
     # S2: the has_internal_role pin names a wrong md5; the pre-check must raise
@@ -67,7 +89,39 @@ MUTANTS = {
                                "GRANT EXECUTE ON FUNCTION public._domain_claim_record_check(uuid, uuid, text[], boolean, text) TO authenticated;\n-- POSTCHECK BEGIN\n")],
 }
 
+def mutate(src, mode, table):
+    m = src
+    for old, new in table[mode]:
+        n = m.count(old)
+        if n != 1:
+            print(f'MUTATION NOT APPLIED: {mode}: pattern found {n} times', file=sys.stderr)
+            sys.exit(2)
+        m = m.replace(old, new)
+    if m == src:
+        print(f'MUTATION NOT APPLIED: {mode}: text unchanged', file=sys.stderr)
+        sys.exit(2)
+    diff = [l for l in difflib.unified_diff(src.splitlines(), m.splitlines(), lineterm='', n=0)
+            if l[:1] in '+-' and not l.startswith(('+++', '---'))]
+    print(f'MUTATION APPLIED {mode}: ' + ' | '.join(diff)[:400])
+    return m
+
+
 out, mode = sys.argv[1], sys.argv[2]
+END = "\nDO $end$ BEGIN RAISE EXCEPTION 'P3962_END_NO_RESULT'; END $end$;\n"
+if mode == 'pr2' or mode == 'pr2_live' or mode in MUTANTS2:
+    head = f"SELECT set_config('p3962.mode', '{mode}', true);\n"
+    ctl2 = open(CTL2).read()
+    if mode == 'pr2_live':
+        text = head + ctl2
+    else:
+        mig2 = open(MIG2).read()
+        if mode in MUTANTS2:
+            mig2 = mutate(mig2, mode, MUTANTS2)
+        text = head + open(RB2).read() + '\n' + mig2 + '\n' + ctl2
+    text += END
+    assert not re.search(r'^\s*COMMIT\b', text, re.I | re.M), 'COMMIT statement in composed text'
+    open(out, 'w').write(text)
+    sys.exit(0)
 # --applied: the venue already has the migration; drop it first INSIDE the same transaction
 # (the final RAISE undoes the drop too).
 applied = '--applied' in sys.argv[3:]

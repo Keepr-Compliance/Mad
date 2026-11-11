@@ -831,6 +831,9 @@ const KNOWN_ROUTE_HANDLERS = [
   // BACKLOG-3863 PR-2: GET only, Bearer JWT (verifyBearerUser); reads the
   // verified caller's own plan, no request-supplied ids. Display only.
   'app/api/billing/plan-summary/route.ts',
+  // BACKLOG-3962 PR2: GET only, CRON_SECRET bearer (isAuthorizedCronRequest); no session, no
+  // request-supplied ids. Claims and their organizations come from the due query.
+  'app/api/cron/domain-recheck/route.ts',
   'app/api/cron/email-retry/route.ts',
   'app/api/cron/payment-reconcile/route.ts',
   'app/api/download/route.ts',
@@ -1035,7 +1038,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(28); // BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session
+    expect(handlers.length).toBe(29); // BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session; BACKLOG-3962: + cron/domain-recheck
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {
