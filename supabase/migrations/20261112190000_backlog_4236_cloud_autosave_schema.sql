@@ -20,8 +20,9 @@
 --   service_role: assign_member_addon
 --   no API role: _cloud_autosave_license, _cloud_autosave_current_notice_version,
 --     _cloud_bad_field, _cloud_row_status, _cloud_fence_unreferenced
--- Lock order in every write: the caller's settings row, then deals (id order), then child rows,
---   then blobs (id order).
+-- Lock order in every write: the caller's settings row, then deals (id order), then blobs (id order,
+--   all of a call's blobs in one statement), then child rows of the locked deals. Tombstones and
+--   deletes fence blobs once, after their rows, through _cloud_fence_unreferenced (id order).
 -- Re-runnable: IF NOT EXISTS / CREATE OR REPLACE / DROP POLICY IF EXISTS.
 -- ============================================================================
 
@@ -409,6 +410,8 @@ LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $f$
 #variable_conflict use_column
 DECLARE v_org uuid; v_any boolean; v_reason text;
 BEGIN
+  -- auth.role() IS NULL: a session with no request claims (the database owner, e.g. a migration or a
+  -- scheduled job). EXECUTE is revoked from every API role.
   IF (p_user_id = auth.uid() OR auth.role() = 'service_role' OR auth.role() IS NULL) IS NOT TRUE THEN
     RAISE EXCEPTION 'not allowed' USING ERRCODE = '42501';
   END IF;
@@ -1002,7 +1005,7 @@ GRANT EXECUTE ON FUNCTION public.cloud_upsert_messages(uuid, uuid, jsonb) TO aut
 CREATE OR REPLACE FUNCTION public.cloud_upsert_files(p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_deal uuid; r jsonb; i integer := 0; out jsonb := '[]'::jsonb;
-        cur record; v_status text; v_bad text; v_msg uuid; v_blob uuid; v_old_blob uuid;
+        cur record; v_status text; v_bad text; v_msg uuid; v_blob uuid; v_old_blob uuid; v_old_blobs uuid[] := '{}';
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
   PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
@@ -1027,6 +1030,14 @@ BEGIN
     END IF;
     i := i + 1;
   END LOOP;
+  -- every blob this call can attach or replace, locked once, in id order
+  PERFORM 1 FROM public.cloud_blobs b
+   WHERE b.owner_user_id = v_uid
+     AND ((b.purge_requested_at IS NULL AND b.sha256 IN (SELECT e ->> 'blob_sha256' FROM jsonb_array_elements(p_rows) e))
+          OR b.id IN (SELECT f.blob_id FROM public.cloud_deal_files f
+                       WHERE f.cloud_deal_id = v_deal
+                         AND f.local_attachment_id IN (SELECT e ->> 'local_id' FROM jsonb_array_elements(p_rows) e)))
+   ORDER BY b.id FOR UPDATE;                                                                 /*FILE:lockblobs*/
   FOR r IN SELECT value FROM jsonb_array_elements(p_rows) LOOP
     v_bad := public._cloud_bad_field(r, ARRAY['source_updated_at'], ARRAY[]::text[], ARRAY[]::text[], ARRAY[]::text[]);
     IF v_bad IS NULL AND (jsonb_typeof(r -> 'filename') IS DISTINCT FROM 'string' OR length(r ->> 'filename') = 0) THEN v_bad := 'filename'; END IF;
@@ -1055,8 +1066,7 @@ BEGIN
       SELECT b.id INTO v_blob FROM public.cloud_blobs b
        WHERE b.owner_user_id = v_uid                                                          /*OWNER:fileblob*/
          AND b.sha256 = r ->> 'blob_sha256'
-         AND b.purge_requested_at IS NULL                                                     /*FILE:unfenced*/
-       FOR UPDATE;
+         AND b.purge_requested_at IS NULL;                                                    /*FILE:unfenced*/
       IF v_blob IS NULL THEN
         out := out || jsonb_build_object('local_id', r ->> 'local_id', 'status', 'rejected', 'reason', 'blob_unavailable');
         CONTINUE;
@@ -1076,12 +1086,13 @@ BEGIN
         content_hash = r ->> 'content_hash', version = cur.version + 1, updated_at = now(), removed_at = NULL
        WHERE id = cur.id RETURNING * INTO cur;
       IF v_old_blob IS NOT NULL AND v_old_blob IS DISTINCT FROM v_blob THEN
-        PERFORM public._cloud_fence_unreferenced(v_uid, ARRAY[v_old_blob]);
+        v_old_blobs := v_old_blobs || v_old_blob;
       END IF;
     END IF;
     out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
                                      'content_hash', cur.content_hash, 'status', v_status);
   END LOOP;
+  PERFORM public._cloud_fence_unreferenced(v_uid, v_old_blobs);                              /*FILE:fence*/
   UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
@@ -1095,6 +1106,7 @@ CREATE OR REPLACE FUNCTION public.cloud_tombstone(p_source_install_id uuid, p_ki
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_tab text; v_id uuid; out jsonb := '[]'::jsonb;
         v_row_id uuid; v_row_deal uuid; v_row_removed timestamptz; v_row_version bigint; v_blob uuid; v_deals uuid[];
+        v_fence uuid[] := '{}';
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_authorized'); END IF;
   v_tab := CASE p_kind WHEN 'party' THEN 'cloud_deal_parties' WHEN 'checklist' THEN 'cloud_deal_checklists'
@@ -1150,11 +1162,12 @@ BEGIN
       UPDATE public.cloud_deal_files f SET removed_at = now(), version = version + 1, updated_at = now(),
              filename = NULL, blob_id = NULL
        WHERE f.id = v_row_id RETURNING f.version INTO v_row_version;
-      PERFORM public._cloud_fence_unreferenced(v_uid, ARRAY[v_blob]);
+      v_fence := v_fence || v_blob;
     END IF;
     UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_row_deal;
     out := out || jsonb_build_object('cloud_id', v_id, 'status', 'removed', 'version', v_row_version);
   END LOOP;
+  PERFORM public._cloud_fence_unreferenced(v_uid, v_fence);                                  /*TOMB:fence*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
 REVOKE ALL ON FUNCTION public.cloud_tombstone(uuid, text, uuid[]) FROM PUBLIC, anon, authenticated, service_role;

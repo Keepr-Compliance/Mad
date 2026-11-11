@@ -156,7 +156,7 @@ MUT = {
   'W11_body_cap_off_by_one': (sub('    IF char_length(v_body) > 1000000 THEN v_body := left(v_body, 1000000); v_trunc := true; END IF;   /*MSG:truncate*/',
       '    IF char_length(v_body) >= 1000000 THEN v_body := left(v_body, 1000000); v_trunc := true; END IF;'), 'U9_body_cap', 'red'),
   'W12_no_truncation': (sub('    IF char_length(v_body) > 1000000 THEN v_body := left(v_body, 1000000); v_trunc := true; END IF;   /*MSG:truncate*/', ''), 'U9_body_cap', 'red'),
-  'W13_file_attaches_fenced_blob': (drop('         AND b.purge_requested_at IS NULL                                                     /*FILE:unfenced*/\n'), 'B2_fenced_blob_not_attachable', 'red'),
+  'W13_file_attaches_fenced_blob': (sub('         AND b.purge_requested_at IS NULL;                                                    /*FILE:unfenced*/', '         ;'), 'B2_fenced_blob_not_attachable', 'red'),
   'W14_file_blob_any_owner': (sub('       WHERE b.owner_user_id = v_uid                                                          /*OWNER:fileblob*/\n', '       WHERE true\n'), 'O1_owner_binding', 'red'),
   'W15_messages_row_cap_off_by_one': (sub(ROWS % 'messages', ROWS.replace('> 500', '>= 500') % 'messages'), 'U6_row_cap', 'red'),
   # ---------------------------------------------------------------- tombstone, delete, blobs
@@ -200,6 +200,43 @@ MUT = {
   'K02_key_with_tier': (sub("'sync', 'boolean', 'false', NULL, 165, false)", "'sync', 'boolean', 'false', 'team', 165, false)", f=M1), 'F1_feature_keys', 'red'),
   'RB01_rollback_keeps_a_function': (sub('DROP FUNCTION IF EXISTS public.cloud_list_installs();\n', '', f=RB), 'G1_rollback_then_apply', 'red'),
 }
+# round 2 (review b34a1d5f): child lookups, erasure, bindings found in review, file lock order
+LOOKUP = {
+  'parties': "SELECT * INTO cur FROM public.cloud_deal_parties WHERE cloud_deal_id = v_deal AND local_party_id = r ->> 'local_id' FOR UPDATE;",
+  'checklists': "SELECT * INTO cur FROM public.cloud_deal_checklists WHERE cloud_deal_id = v_deal AND local_checklist_id = r ->> 'local_id' FOR UPDATE;",
+  'items': "SELECT * INTO cur FROM public.cloud_deal_checklist_items WHERE cloud_deal_id = v_deal AND local_item_id = r ->> 'local_id' FOR UPDATE;",
+  'messages': "     WHERE cloud_deal_id = v_deal AND channel_kind = v_kind AND local_message_id = r ->> 'local_id' FOR UPDATE;",
+  'files': "SELECT * INTO cur FROM public.cloud_deal_files WHERE cloud_deal_id = v_deal AND local_attachment_id = r ->> 'local_id' FOR UPDATE;",
+}
+for k, frag in LOOKUP.items():
+    MUT['C_lookup_ignores_deal_%s' % k] = (sub(frag, frag.replace('cloud_deal_id = v_deal AND ', '')), 'B1_child_rows_stay_in_their_deal', 'red')
+MUT.update({
+  'MY01_tomb_file_no_fence': (sub('  PERFORM public._cloud_fence_unreferenced(v_uid, v_fence);                                  /*TOMB:fence*/\n', ''),
+      'T5_last_file_reference_fences_blob', 'red'),
+  'MY04_tomb_party_keeps_pii': (sub('             display_name = NULL, company = NULL, emails = NULL, phones = NULL, notes = NULL\n', '             notes = notes\n'),
+      'T6_party_and_item_scrub', 'red'),
+  'C_tomb_item_keeps_text': (sub("""    ELSIF p_kind = 'checklist_item' THEN
+      UPDATE public.cloud_deal_checklist_items SET removed_at = now(), version = version + 1, updated_at = now(),
+             title = '[removed]', description = NULL, note = NULL, links = '[]'::jsonb""", """    ELSIF p_kind = 'checklist_item' THEN
+      UPDATE public.cloud_deal_checklist_items SET removed_at = now(), version = version + 1, updated_at = now()"""),
+      'T6_party_and_item_scrub', 'red'),
+  'MY02_deal_org_any_member': (sub("      JOIN public.organization_members m ON m.organization_id = o.id AND m.user_id = v_uid\n",
+      "      JOIN public.organization_members m ON m.organization_id = o.id\n"), 'U5_org_needs_callers_membership', 'red'),
+  'MY03_solo_any_org': (sub("   WHERE o.personal_owner_user_id = p_user_id\n     AND public.member_status_grants_access(m.license_status)                      /*SOLO:active*/",
+      "   WHERE true\n     AND public.member_status_grants_access(m.license_status)                      /*SOLO:active*/"), 'E8_solo_path_is_own_personal_org', 'red'),
+  'MY05_item_parent_removed_ok': (sub(" AND c.removed_at IS NULL;   /*ITEM:parent*/", ";   /*ITEM:parent*/"), 'T8_item_needs_live_checklist', 'red'),
+  'MY06_used_bytes_counts_fenced': (sub("b.uploaded_at IS NOT NULL AND b.purge_requested_at IS NULL;", "b.uploaded_at IS NOT NULL;"), 'ST3_used_bytes_excludes_fenced', 'red'),
+  'MY07_party_lookup_ignores_deal': (sub(LOOKUP['parties'], "SELECT * INTO cur FROM public.cloud_deal_parties WHERE local_party_id = r ->> 'local_id' FOR UPDATE;"),
+      'B1_child_rows_stay_in_their_deal', 'red'),
+  'MY08_upload_to_fenced_blob': (sub("                 AND b.purge_requested_at IS NULL)                                 /*STO:ins:blob*/",
+      ")                                 /*STO:ins:blob*/"), 'P4_no_upload_to_fenced_blob', 'red'),
+  'MY09_party_revive_keeps_removed': (sub("        content_hash = r ->> 'content_hash', version = cur.version + 1, updated_at = now(), removed_at = NULL\n       WHERE id = cur.id RETURNING * INTO cur;\n    END IF;\n    out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,\n                                     'content_hash', cur.content_hash, 'status', v_status);\n  END LOOP;\n  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;\n  RETURN jsonb_build_object('ok', true, 'results', out);\nEND $f$;\nREVOKE ALL ON FUNCTION public.cloud_upsert_parties",
+      "        content_hash = r ->> 'content_hash', version = cur.version + 1, updated_at = now()\n       WHERE id = cur.id RETURNING * INTO cur;\n    END IF;\n    out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,\n                                     'content_hash', cur.content_hash, 'status', v_status);\n  END LOOP;\n  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;\n  RETURN jsonb_build_object('ok', true, 'results', out);\nEND $f$;\nREVOKE ALL ON FUNCTION public.cloud_upsert_parties"),
+      'T7_party_revives', 'red'),
+  'F01_replaced_blob_not_fenced': (sub('  PERFORM public._cloud_fence_unreferenced(v_uid, v_old_blobs);                              /*FILE:fence*/\n', ''), 'T4_replaced_blob_fenced', 'red'),
+  'F02_blobs_locked_per_row': (sub("   ORDER BY b.id FOR UPDATE;                                                                 /*FILE:lockblobs*/", "   ORDER BY b.id;"), '', 'green'),
+})
+ROUND2 = [k for k in MUT if k.startswith(('C_', 'MY0', 'F0'))] + ['W13_file_attaches_fenced_blob', 'W14_file_blob_any_owner']
 for k in ['parties', 'checklists', 'items', 'messages', 'files']:
     MUT['U_entitled_%s' % k] = (sub(ENT % k, ''), 'U1_entitlement_every_write', 'red')
     MUT['U_owner_%s' % k] = (sub(OWN_CHILD % k, '   WHERE d.id = p_cloud_deal_id\n'), 'O1_owner_binding', 'red')
@@ -236,7 +273,7 @@ def run_trip():
 if sh('git', 'status', '--porcelain', '--', M1, M2, RB).stdout.strip():
     sys.exit('migration/rollback have uncommitted changes; commit before mutating')
 
-modes = list(MUT) if sys.argv[1] == 'all' else sys.argv[1].split(',')
+modes = list(MUT) if sys.argv[1] == 'all' else ROUND2 if sys.argv[1] == 'round2' else sys.argv[1].split(',')
 missed = 0
 for mode in modes:
     edits, targets, want = MUT[mode]

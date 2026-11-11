@@ -982,6 +982,135 @@ BEGIN
     r := r || jsonb_build_object('G1_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
 
+  -- ===================================================================== child rows stay inside their deal
+  BEGIN
+    -- the same local child id exists in S's deal SD and in A's second-install deal D2
+    t := pg_temp.deal(A, jsonb_build_object('source_install_id', I2, 'local_id', 'x-2', 'content_hash', pg_temp.h('x-2')));
+    u := pg_temp.cid(t);
+    PERFORM pg_temp.up(S, 'cloud_upsert_checklists', I1, SD, jsonb_build_array(jsonb_build_object('local_id', 'cl-1', 'content_hash', pg_temp.h('cl-1'), 'template_id', 'tpl-1')));
+    PERFORM pg_temp.up(A, 'cloud_upsert_checklists', I2, u, jsonb_build_array(jsonb_build_object('local_id', 'cl-1', 'content_hash', pg_temp.h('cl-1'), 'template_id', 'tpl-1')));
+    acc := '';
+    FOREACH fn IN ARRAY CHILD_FNS LOOP
+      t2 := pg_temp.st(pg_temp.up(S, fn, I1, SD, jsonb_build_array(pg_temp.row_of(fn, 'dup-1', 's'))))
+         || pg_temp.st(pg_temp.up(A, fn, I2, u, jsonb_build_array(pg_temp.row_of(fn, 'dup-1', 'i'))));
+      IF t2 <> 'appliedapplied' THEN acc := acc || ' setup_' || fn || '=' || t2; END IF;
+    END LOOP;
+    -- snapshot of the two other rows, then A writes the same local id into D1
+    js := jsonb_build_object(
+      'p', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_parties WHERE local_party_id = 'dup-1'),
+      'c', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_checklists WHERE local_checklist_id = 'dup-1'),
+      'i', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_checklist_items WHERE local_item_id = 'dup-1'),
+      'm', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_messages WHERE local_message_id = 'dup-1'),
+      'f', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_files WHERE local_attachment_id = 'dup-1'));
+    FOREACH fn IN ARRAY CHILD_FNS LOOP
+      t2 := pg_temp.up(A, fn, I1, D1, jsonb_build_array(pg_temp.row_of(fn, 'dup-1', 'a')));
+      IF pg_temp.st(t2) <> 'applied' OR (pg_temp.j(t2) -> 'results' -> 0 ->> 'version') <> '1' THEN acc := acc || ' write_' || fn || '=' || left(t2, 120); END IF;
+    END LOOP;
+    js2 := jsonb_build_object(
+      'p', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_parties WHERE local_party_id = 'dup-1' AND cloud_deal_id <> D1),
+      'c', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_checklists WHERE local_checklist_id = 'dup-1' AND cloud_deal_id <> D1),
+      'i', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_checklist_items WHERE local_item_id = 'dup-1' AND cloud_deal_id <> D1),
+      'm', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_messages WHERE local_message_id = 'dup-1' AND cloud_deal_id <> D1),
+      'f', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_files WHERE local_attachment_id = 'dup-1' AND cloud_deal_id <> D1));
+    n := (SELECT count(*) FROM public.cloud_deal_parties WHERE local_party_id = 'dup-1' AND cloud_deal_id = D1)
+       + (SELECT count(*) FROM public.cloud_deal_checklists WHERE local_checklist_id = 'dup-1' AND cloud_deal_id = D1)
+       + (SELECT count(*) FROM public.cloud_deal_checklist_items WHERE local_item_id = 'dup-1' AND cloud_deal_id = D1)
+       + (SELECT count(*) FROM public.cloud_deal_messages WHERE local_message_id = 'dup-1' AND cloud_deal_id = D1)
+       + (SELECT count(*) FROM public.cloud_deal_files WHERE local_attachment_id = 'dup-1' AND cloud_deal_id = D1);
+    r := r || jsonb_build_object('B1_child_rows_stay_in_their_deal', pg_temp.pass(acc = '' AND js = js2 AND n = 5
+      AND jsonb_array_length(js -> 'p') = 2 AND jsonb_array_length(js -> 'f') = 2, acc || ' before=' || js::text || ' after=' || js2::text || ' n=' || n));
+    RAISE EXCEPTION USING ERRCODE = 'T4236';
+  EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('B1c_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  -- ===================================================================== tombstone erasure, per kind
+  BEGIN
+    -- f-1 is the only file using BL: its tombstone fences BL and closes the stored object
+    n := pg_temp.j(pg_temp.call_as(A, 'SELECT to_jsonb(count(*)) FROM storage.objects WHERE bucket_id = ''cloud-deal-files'''))::text::bigint;
+    t := pg_temp.tomb(A, I1, 'file', ARRAY[F1]);
+    r := r || jsonb_build_object('T5_last_file_reference_fences_blob', pg_temp.pass(n = 1 AND pg_temp.st(t) = 'removed'
+      AND (SELECT purge_requested_at IS NOT NULL FROM public.cloud_blobs WHERE id = BL)
+      AND (SELECT blob_id IS NULL AND filename IS NULL FROM public.cloud_deal_files WHERE id = F1)
+      AND pg_temp.call_as(A, 'SELECT to_jsonb(count(*)) FROM storage.objects WHERE bucket_id = ''cloud-deal-files''') = '0', n || ' ' || t));
+    RAISE EXCEPTION USING ERRCODE = 'T4236';
+  EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('T5_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  BEGIN
+    PERFORM pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.row_of('cloud_upsert_parties', 'p-1', 'full')
+      || '{"company":"Co","notes":"n","emails":[{"email":"x@example.test","is_primary":true,"label":null}],"phones":[{"e164":"+12065550100","display":null,"is_primary":true,"label":null}]}'));
+    ok := (SELECT company = 'Co' AND notes = 'n' AND emails IS NOT NULL AND phones IS NOT NULL AND display_name IS NOT NULL FROM public.cloud_deal_parties WHERE id = P1);
+    t := pg_temp.tomb(A, I1, 'party', ARRAY[P1]);
+    t2 := pg_temp.tomb(A, I1, 'checklist_item', ARRAY[IT1]);
+    r := r || jsonb_build_object('T6_party_and_item_scrub', pg_temp.pass(ok AND pg_temp.st(t) = 'removed' AND pg_temp.st(t2) = 'removed'
+      AND (SELECT display_name IS NULL AND company IS NULL AND emails IS NULL AND phones IS NULL AND notes IS NULL AND removed_at IS NOT NULL
+             FROM public.cloud_deal_parties WHERE id = P1)
+      AND (SELECT title = '[removed]' AND description IS NULL AND note IS NULL AND links = '[]'::jsonb AND removed_at IS NOT NULL
+             FROM public.cloud_deal_checklist_items WHERE id = IT1)
+      AND (SELECT removed_at IS NULL FROM public.cloud_deal_checklists WHERE id = C1), t || t2));
+    RAISE EXCEPTION USING ERRCODE = 'T4236';
+  EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('T6_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  BEGIN
+    -- a removed party sent again with the same content comes back
+    PERFORM pg_temp.tomb(A, I1, 'party', ARRAY[P1]);
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.row_of('cloud_upsert_parties', 'p-1')));
+    r := r || jsonb_build_object('T7_party_revives', pg_temp.pass(pg_temp.st(t) = 'applied' AND pg_temp.cid(t) = P1
+      AND (SELECT removed_at IS NULL AND display_name = 'Party a' FROM public.cloud_deal_parties WHERE id = P1), t));
+    RAISE EXCEPTION USING ERRCODE = 'T4236';
+  EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('T7_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  BEGIN
+    -- an item cannot attach to a removed checklist
+    PERFORM pg_temp.tomb(A, I1, 'checklist', ARRAY[C1]);
+    t := pg_temp.up(A, 'cloud_upsert_checklist_items', I1, D1, jsonb_build_array(pg_temp.row_of('cloud_upsert_checklist_items', 'it-9')));
+    r := r || jsonb_build_object('T8_item_needs_live_checklist', pg_temp.pass(pg_temp.st(t) = 'rejected:parent_missing', t));
+    RAISE EXCEPTION USING ERRCODE = 'T4236';
+  EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('T8_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  -- ===================================================================== bindings found in review
+  BEGIN
+    -- an organization A is not a member of, where another user is an active member
+    SET LOCAL session_replication_role = replica;
+    INSERT INTO public.organizations (id, name, slug) VALUES (pg_temp.fx(103), 'Fixture O3', 'p4236-o3-' || substr(md5('__RUN__'), 1, 8));
+    INSERT INTO public.organization_members (id, organization_id, user_id, role, license_status) VALUES (pg_temp.fx(208), pg_temp.fx(103), X, 'agent', 'active');
+    SET LOCAL session_replication_role = origin;
+    t := pg_temp.deal(A, jsonb_build_object('source_install_id', I1, 'local_id', 'g-3', 'content_hash', pg_temp.h('g3'), 'organization_id', pg_temp.fx(103)));
+    r := r || jsonb_build_object('U5_org_needs_callers_membership', pg_temp.pass(pg_temp.err(t) = 'invalid_organization', t));
+    RAISE EXCEPTION USING ERRCODE = 'T4236';
+  EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('U5c_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  BEGIN
+    -- the solo key on a brokerage plan does not license its unassigned members
+    UPDATE public.organization_plans SET feature_overrides = '{"cloud_autosave_assignable":{"enabled":true},"cloud_autosave":{"enabled":true}}' WHERE organization_id = O;
+    r := r || jsonb_build_object('E8_solo_path_is_own_personal_org', pg_temp.pass(pg_temp.state(J) ->> 'licensed' = 'false'
+      AND pg_temp.state(A) ->> 'path' = 'brokerage', pg_temp.state(J)::text));
+    RAISE EXCEPTION USING ERRCODE = 'T4236';
+  EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('E8_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  BEGIN
+    n := (pg_temp.state(A) -> 'storage' ->> 'used_bytes')::bigint;
+    UPDATE public.cloud_blobs SET purge_requested_at = now() WHERE id = BL;
+    r := r || jsonb_build_object('ST3_used_bytes_excludes_fenced', pg_temp.pass(n = 10 AND (pg_temp.state(A) -> 'storage' ->> 'used_bytes')::bigint = 0, n::text));
+    RAISE EXCEPTION USING ERRCODE = 'T4236';
+  EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('ST3_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  BEGIN
+    -- a registered, not uploaded blob that is fenced: only the fence term can refuse the upload
+    js := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L, 6, NULL)', pg_temp.h('blob-q'))));
+    UPDATE public.cloud_blobs SET purge_requested_at = now() WHERE id = (js ->> 'blob_id')::uuid;
+    t := pg_temp.call_as(A, format('INSERT INTO storage.objects (bucket_id, name, metadata) VALUES (%L, %L, %L::jsonb)', 'cloud-deal-files', js ->> 'storage_path', '{"size":"6"}'));
+    r := r || jsonb_build_object('P4_no_upload_to_fenced_blob', pg_temp.pass(t LIKE 'ERR 42501%' AND pg_temp.err(pg_temp.call_as(A, 'SELECT to_jsonb(public.cloud_autosave_entitled())')) = 'true', t));
+    RAISE EXCEPTION USING ERRCODE = 'T4236';
+  EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('P4_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
   -- a deliberate red that the driver must count (proves the parser counts failures)
   r := r || jsonb_build_object('Z0_parser_counts_a_fail', pg_temp.pass(false, 'expected'));
   RETURN r;
