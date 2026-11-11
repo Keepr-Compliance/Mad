@@ -187,6 +187,11 @@ export function rekeyUnsyncedAuditLogsSync(db: DatabaseType, oldUserId: string, 
   return changes;
 }
 
+/** Promise-returning wrapper over `rekeyUnsyncedAuditLogsSync` (BACKLOG-2960 twin rule). */
+export function rekeyUnsyncedAuditLogs(db: DatabaseType, oldUserId: string, newUserId: string): Promise<number> {
+  return Promise.resolve(rekeyUnsyncedAuditLogsSync(db, oldUserId, newUserId));
+}
+
 /**
  * Mark audit logs as synced (only sets synced_at, only on not-yet-synced rows)
  *
