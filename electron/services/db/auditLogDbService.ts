@@ -164,6 +164,30 @@ export function repairAuditUpdateTrigger(
 }
 
 /**
+ * BACKLOG-4075: move a unified user's NOT-YET-SYNCED audit rows from the old
+ * local id to the account's Supabase id, so they reach the cloud (whose RLS
+ * accepts only `user_id = auth.uid()`) and the user's data export. Rows that
+ * were already synced keep the old id here, matching their cloud copy.
+ *
+ * Same sanctioned shape as `markAuditLogsSynced`: drop the strict trigger, one
+ * UPDATE, restore it from the ONE constant, all in one transaction. Called from
+ * inside the unification's `db.transaction`, so it runs as a SAVEPOINT and a
+ * later failure rolls it back with the rest. The trigger is never left weak or
+ * absent on disk, so BACKLOG-3023's launch check finds it strict.
+ */
+export function rekeyUnsyncedAuditLogsSync(db: DatabaseType, oldUserId: string, newUserId: string): number {
+  let changes = 0;
+  db.transaction(() => {
+    db.exec("DROP TRIGGER IF EXISTS prevent_audit_update");
+    changes = db
+      .prepare("UPDATE audit_logs SET user_id = ? WHERE user_id = ? AND synced_at IS NULL")
+      .run(newUserId, oldUserId).changes;
+    db.exec(PREVENT_AUDIT_UPDATE_DDL);
+  })();
+  return changes;
+}
+
+/**
  * Mark audit logs as synced (only sets synced_at, only on not-yet-synced rows)
  *
  * The `audit_logs` table is append-only: `prevent_audit_update` refuses EVERY
