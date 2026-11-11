@@ -276,6 +276,24 @@ describe("P11 one serial queue per user (R1)", () => {
   });
 });
 
+describe("B1 a submit is only ever sent as the user it belongs to", () => {
+  it("A shares; B signed in -> 0 calls; signed out -> 0 calls; A signed in -> exactly 1 submit as A", async () => {
+    setPilotOn(A);
+    const s = service();
+    const v1 = scoreFromFixture(1);
+    authUser = B;
+    await s.maybeSend(A, v1.score, v1.detector);
+    expect(calls).toEqual([]);
+    authUser = null;
+    await s.maybeSend(A, v1.score, v1.detector);
+    expect(calls).toEqual([]);
+    expect(getPilotState(A).sentVersions).toEqual({});
+    authUser = A;
+    await s.maybeSend(A, v1.score, v1.detector);
+    expect(calls.map((c) => [c.name, c.user])).toEqual([["learn_pilot_report_submit", A]]);
+  });
+});
+
 describe("P12 owed withdraw for the signed-in user only (R3)", () => {
   it("A owes, B signed in -> 0 calls; A signs in -> exactly 1, as A", async () => {
     setPilotOn(A);
@@ -428,6 +446,27 @@ describe("P6 an offline withdraw stays owed and is paid once", () => {
     await s.idle(A);
     expect(names()).toEqual(["withdraw"]);
     expect(getPilotState(A).pendingWithdraw).toBe(false);
+  });
+});
+
+describe("B2 a timed-out withdraw stays owed and is retried", () => {
+  it("timeout -> pending 1, sent versions kept; the next check pays exactly 1 withdraw", async () => {
+    setPilotOn(A);
+    const v1 = scoreFromFixture(1);
+    await service().maybeSend(A, v1.score, v1.detector);
+    const sent = getPilotState(A).sentVersions;
+    expect(Object.keys(sent)).toEqual(["1"]);
+    setPilotOffPending(A);
+    answer = (name) => (name.endsWith("withdraw") ? new Promise<Answer>(() => undefined) : Promise.resolve({ error: null }));
+    await service({ timeoutMs: 5 }).queueWithdraw(A);
+    expect(getPilotState(A)).toMatchObject({ pendingWithdraw: true, sentVersions: sent });
+    answer = async () => ({ error: null });
+    calls.length = 0;
+    const s = service();
+    await s.tick();
+    await s.idle(A);
+    expect(names()).toEqual(["withdraw"]);
+    expect(getPilotState(A)).toMatchObject({ pendingWithdraw: false, sentVersions: {} });
   });
 });
 
