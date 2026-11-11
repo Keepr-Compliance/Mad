@@ -211,6 +211,57 @@ describe('capture table', () => {
       expect(all().checked).toBe(false);
     });
 
+    it('select-all then Start: confirm count and payload are exactly the selectable rows', async () => {
+      start.mockResolvedValue({ success: true, message: 'ok' });
+      render(<CaptureSection domains={await loadView()} />);
+      fireEvent.click(all());
+      fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+      const date = formatCaptureDate(new Date(Date.now() + 14 * 86_400_000).toISOString());
+      expect(screen.getByTestId('capture-start-confirm-text').textContent).toBe(captureStartConfirmText(SELECTABLE.length, date));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Start the move' }));
+      });
+      expect(start).toHaveBeenCalledTimes(1);
+      expect([...start.mock.calls[0][0].userIds].sort()).toEqual([...SELECTABLE].sort());
+    });
+
+    it('is disabled while a move is being started', async () => {
+      start.mockReturnValue(new Promise(() => {}));
+      render(<CaptureSection domains={await loadView()} />);
+      fireEvent.click(all());
+      fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Start the move' }));
+      });
+      expect(all().disabled).toBe(true);
+    });
+
+    it('one click from the partial state ticks every selectable row', async () => {
+      render(<CaptureSection domains={await loadView()} />);
+      fireEvent.click(row('u-can').getByRole('checkbox'));
+      fireEvent.click(all());
+      for (const id of SELECTABLE) expect((row(id).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+      expect(all().checked).toBe(true);
+    });
+
+    it('a ticked row that stops being selectable after a refresh is not counted or sent', async () => {
+      start.mockResolvedValue({ success: true, message: 'ok' });
+      const { rerender } = render(<CaptureSection domains={await loadView()} />);
+      fireEvent.click(row('u-can').getByRole('checkbox'));
+      const moved = CANDIDATES.map((c) =>
+        c.user_id === 'u-can' ? { ...c, switch_id: 's-new', switch_at: FUTURE, notice_delivered: true } : c,
+      );
+      rerender(<CaptureSection domains={await loadView(moved)} />);
+      expect(row('u-can').queryAllByRole('checkbox')).toHaveLength(0);
+      expect((screen.getByRole('button', { name: 'Start' }) as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(row('u-can2').getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Start the move' }));
+      });
+      expect(start.mock.calls[0][0].userIds).toEqual(['u-can2']);
+    });
+
     it('is disabled when no row can be selected', async () => {
       const only = [candidate({ user_id: 'u-tenant', email: 'ms@a-brokerage.example', attestation: null, convertible: false, reason: 'no_tenant' })];
       render(<CaptureSection domains={await loadView(only, [])} />);

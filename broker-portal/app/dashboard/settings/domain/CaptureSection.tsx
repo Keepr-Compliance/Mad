@@ -92,7 +92,8 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
   const now = Date.now();
   const selectAllRef = useRef<HTMLInputElement>(null);
   const selectableIds = view.rows.filter(isSelectable).map((r) => r.userId);
-  const selectedCount = selectableIds.filter((id) => selected.has(id)).length;
+  const chosenIds = selectableIds.filter((id) => selected.has(id));
+  const selectedCount = chosenIds.length;
   const allSelected = selectableIds.length > 0 && selectedCount === selectableIds.length;
   const someSelected = selectedCount > 0 && !allSelected;
 
@@ -127,7 +128,7 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
     setBusy(true);
     setNotice(null);
     try {
-      const res = await startCapture({ claimId: view.claimId, userIds: Array.from(selected) });
+      const res = await startCapture({ claimId: view.claimId, userIds: chosenIds });
       setNotice({ tone: res.success ? 'success' : 'destructive', text: res.message });
       if (res.success) {
         setSelected(new Set());
@@ -163,7 +164,7 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-medium text-gray-900">{view.domain}</h3>
         {view.state === 'ok' && view.rows.length > 0 && (
-          <Button type="button" onClick={openConfirm} disabled={busy || selected.size === 0}>
+          <Button type="button" onClick={openConfirm} disabled={busy || chosenIds.length === 0}>
             Start
           </Button>
         )}
@@ -252,13 +253,13 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
         dismissible={!busy}
       >
         <p className="text-sm text-gray-700" data-testid="capture-start-confirm-text">
-          {captureStartConfirmText(selected.size, moveDate)}
+          {captureStartConfirmText(chosenIds.length, moveDate)}
         </p>
         <div className="mt-4 flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={() => setConfirmOpen(false)} disabled={busy}>
             Back
           </Button>
-          <Button type="button" onClick={handleStart} disabled={busy || selected.size === 0}>
+          <Button type="button" onClick={handleStart} disabled={busy || chosenIds.length === 0}>
             {busy ? 'Starting...' : 'Start the move'}
           </Button>
         </div>
