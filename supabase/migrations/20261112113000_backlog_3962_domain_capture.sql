@@ -15,6 +15,7 @@
 -- Functions (every one SET search_path TO '', REVOKE from PUBLIC and anon, explicit GRANT):
 --   _domain_capture_billing_ready()                internal: the 3850 plan-cancel trigger is live
 --   _domain_capture_eval(uuid, uuid, text)          internal: candidate + attestation rule
+--   _domain_capture_is_payer(uuid)                  internal: pays for a personal plan (live subscription, no organization)
 --   domain_capture_candidates(uuid, uuid)           authenticated; admin of the org, claim verified
 --   domain_capture_start(uuid, uuid, uuid[])        authenticated; admin of the org, claim verified
 --   domain_capture_cancel(uuid)                     authenticated; admin of the row's org
@@ -126,7 +127,7 @@ CREATE TABLE public.domain_capture_switches (
     CHECK (attestation IN ('azure_tid', 'google_hd', 'email_confirmed')),
   CONSTRAINT domain_capture_switches_reason_check CHECK (reason IS NULL OR reason IN (
     'opted_out', 'admin_cancelled', 'notice_undelivered', 'claim_withdrawn', 'claim_revoked',
-    'claim_lapsed', 'claim_not_verified', 'not_eligible', 'switch_error')),
+    'claim_lapsed', 'claim_not_verified', 'not_eligible', 'switch_error', 'brokerage_suspended')),
   CONSTRAINT domain_capture_switches_license_check
     CHECK (license_status IS NULL OR license_status IN ('active', 'unassigned'))
 );
@@ -165,12 +166,26 @@ AS $function$
          LIKE '%_billing_enqueue_agent_cancel_on_join(%';
 $function$;
 
+-- A person who pays for their own plan: a live (not closed) subscription row that belongs to no
+-- organization. This is the database copy of the subscription, not Stripe.
+CREATE FUNCTION public._domain_capture_is_payer(p_user uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SET search_path TO ''
+AS $function$
+  SELECT EXISTS (SELECT 1 FROM public.billing_subscriptions b
+                  WHERE b.user_id = p_user AND b.organization_id IS NULL
+                    AND b.status NOT IN ('canceled', 'incomplete_expired', 'incomplete'));
+$function$;
+
 -- The candidate rule for one person, one organization, one verified domain.
 -- Returns the attestation ('azure_tid' | 'google_hd' | 'email_confirmed') or a refusal 'no:<why>':
 --   no:no_user           no such sign-in account
 --   no:email_domain      the account email is not on the domain (exact domain, no subdomains)
 --   no:not_personal      the person owns no personal organization
 --   no:brokerage_member  the person has a row in any brokerage, any status (deactivated included)
+--   no:no_tenant         a Microsoft sign-in, but the organization has no Microsoft tenant recorded
 --   no:foreign_tenant    a Microsoft sign-in from a tenant that is not the organization's
 --   no:no_attestation    email match only: listed, never converted automatically
 CREATE FUNCTION public._domain_capture_eval(p_user uuid, p_org uuid, p_domain text)
@@ -203,8 +218,14 @@ BEGIN
   END IF;
 
   SELECT nullif(btrim(o.microsoft_tenant_id), '') INTO v_tenant FROM public.organizations o WHERE o.id = p_org;
-  -- Any Microsoft sign-in whose tenant is not this organization's (or the organization has none
-  -- recorded) is a different directory: never a candidate.
+  -- A Microsoft sign-in while the organization records no tenant: listed as "cannot convert", never
+  -- scheduled (nothing says which directory it belongs to).
+  IF v_tenant IS NULL AND EXISTS (SELECT 1 FROM auth.identities i
+                                   WHERE i.user_id = p_user AND i.provider = 'azure') THEN
+    RETURN 'no:no_tenant';
+  END IF;
+  -- Any Microsoft sign-in whose tenant is not this organization's is a different directory: never
+  -- a candidate.
   IF EXISTS (SELECT 1 FROM auth.identities i
               WHERE i.user_id = p_user AND i.provider = 'azure'
                 AND (v_tenant IS NULL
@@ -234,7 +255,8 @@ $function$;
 -- Org admin functions
 -- ---------------------------------------------------------------------------
 
--- People on the claim's domain who could be moved. Refusals other than no_attestation are left out.
+-- People on the claim's domain who could be moved. Refusals other than no_attestation and no_tenant
+-- are left out; those two are listed with convertible false and a reason.
 CREATE FUNCTION public.domain_capture_candidates(p_org uuid, p_claim uuid)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -264,6 +286,7 @@ BEGIN
              'user_id', x.id, 'email', x.email,
              'attestation', CASE WHEN x.ev LIKE 'no:%' THEN NULL ELSE x.ev END,
              'convertible', x.ev NOT LIKE 'no:%',
+             'reason', CASE WHEN x.ev LIKE 'no:%' THEN substr(x.ev, 4) END,
              'switch_id', s.id, 'switch_at', s.switch_at, 'notice_delivered', s.notice_delivered)
            ORDER BY x.email)
       FROM (SELECT u.id, u.email, public._domain_capture_eval(u.id, p_org, v_claim.domain) AS ev
@@ -271,7 +294,7 @@ BEGIN
              WHERE lower(split_part(btrim(u.email), '@', 2)) = v_claim.domain) x
       LEFT JOIN public.domain_capture_switches s
              ON s.user_id = x.id AND s.organization_id = p_org AND s.status = 'scheduled'
-     WHERE x.ev IN ('azure_tid', 'google_hd', 'email_confirmed', 'no:no_attestation')), '[]'::jsonb));
+     WHERE x.ev IN ('azure_tid', 'google_hd', 'email_confirmed', 'no:no_attestation', 'no:no_tenant')), '[]'::jsonb));
 END;
 $function$;
 
@@ -314,6 +337,10 @@ BEGIN
   IF NOT public._domain_capture_billing_ready() THEN
     RETURN jsonb_build_object('success', false, 'error', 'billing_not_ready');
   END IF;
+  -- The brokerage's Billing step is not done: nobody is moved in (same predicate as the join guard).
+  IF public._billing_org_join_blocked(p_org) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'billing_setup_incomplete');
+  END IF;
   IF p_users IS NULL OR cardinality(p_users) = 0 OR cardinality(p_users) > 500 THEN
     RETURN jsonb_build_object('success', false, 'error', 'invalid_selection');
   END IF;
@@ -335,7 +362,8 @@ BEGIN
       CONTINUE;
     END;
     v_scheduled := v_scheduled || jsonb_build_object('switch_id', v_row.id, 'user_id', v_user,
-      'email', v_row.email_at_start, 'switch_at', v_row.switch_at);
+      'email', v_row.email_at_start, 'switch_at', v_row.switch_at,
+      'payer', public._domain_capture_is_payer(v_user));
   END LOOP;
 
   RETURN jsonb_build_object('success', true, 'domain', v_claim.domain,
@@ -517,7 +545,8 @@ $function$;
 --   still scheduled and due; notice delivered (else cancelled notice_undelivered); claim verified
 --   (else cancelled claim_not_verified) with a verified DNS answer recorded in the last hour (else
 --   left scheduled, retried next run); the candidate rule and attestation still hold (else
---   cancelled not_eligible); the 3850 plan-cancel trigger is live (else left scheduled).
+--   cancelled not_eligible); the 3850 plan-cancel trigger is live and the brokerage's Billing step
+--   is done (else left scheduled). A suspended brokerage cancels the switch (brokerage_suspended).
 -- Then the seat decision and the membership insert, in this transaction, under the organization lock.
 CREATE FUNCTION public._domain_capture_switch(p_switch uuid)
 RETURNS jsonb
@@ -537,6 +566,8 @@ DECLARE
   v_member uuid;
   v_payer boolean;
   v_fallback boolean := false;
+  v_suspended boolean := false;
+  v_role text;
 BEGIN
   IF coalesce(auth.role(), '') <> 'service_role' THEN
     RAISE EXCEPTION 'Not allowed' USING ERRCODE = '42501';
@@ -585,9 +616,13 @@ BEGIN
   IF NOT public._domain_capture_billing_ready() THEN
     RETURN jsonb_build_object('success', false, 'error', 'billing_not_ready');
   END IF;
+  IF public._billing_org_join_blocked(v_row.organization_id) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'billing_setup_incomplete');
+  END IF;
 
   -- Seats (ruling B). Same lock as the seat trigger: one seat writer per organization at a time.
-  SELECT o.max_seats, o.personal_owner_user_id, o.name INTO v_max, v_personal, v_name
+  SELECT o.max_seats, o.personal_owner_user_id, o.name, coalesce(o.default_member_role, 'agent')
+    INTO v_max, v_personal, v_name, v_role
     FROM public.organizations o WHERE o.id = v_row.organization_id
     FOR NO KEY UPDATE;
   IF v_personal IS NOT NULL THEN
@@ -601,28 +636,46 @@ BEGIN
      AND public.member_row_holds_seat(m.license_status, m.invitation_expires_at, m.user_id);
   v_status := CASE WHEN v_max IS NULL OR v_max <= 0 OR v_used < v_max THEN 'active' ELSE 'unassigned' END;
 
-  v_payer := EXISTS (SELECT 1 FROM public.billing_subscriptions b
-                      WHERE b.user_id = v_row.user_id AND b.organization_id IS NULL
-                        AND b.status NOT IN ('canceled', 'incomplete_expired'));
+  v_payer := public._domain_capture_is_payer(v_row.user_id);
 
   BEGIN
     INSERT INTO public.organization_members
       (organization_id, user_id, role, license_status, joined_at, provisioned_by, provisioned_at)
-    VALUES (v_row.organization_id, v_row.user_id, 'agent', v_status, now(), 'domain_capture', now())
+    VALUES (v_row.organization_id, v_row.user_id, v_role, v_status, now(), 'domain_capture', now())
     RETURNING id INTO v_member;
   EXCEPTION WHEN SQLSTATE 'P0001' THEN
-    IF v_status <> 'active' OR SQLERRM NOT LIKE '%seat_limit_reached%' THEN
+    IF SQLERRM LIKE '%account_suspended%' THEN
+      v_suspended := true;
+    ELSIF v_status <> 'active' OR SQLERRM NOT LIKE '%seat_limit_reached%' THEN
       RAISE;
+    ELSE
+      -- The seat trigger disagreed with the count above: join without a seat, never refuse.
+      RAISE WARNING 'BACKLOG-3962: seat trigger refused a counted free seat in organization %', v_row.organization_id;
+      v_status := 'unassigned';
+      v_fallback := true;
+      BEGIN
+        INSERT INTO public.organization_members
+          (organization_id, user_id, role, license_status, joined_at, provisioned_by, provisioned_at)
+        VALUES (v_row.organization_id, v_row.user_id, v_role, v_status, now(), 'domain_capture', now())
+        RETURNING id INTO v_member;
+      EXCEPTION WHEN SQLSTATE 'P0001' THEN
+        IF SQLERRM LIKE '%account_suspended%' THEN
+          v_suspended := true;
+        ELSE
+          RAISE;
+        END IF;
+      END;
     END IF;
-    -- The seat trigger disagreed with the count above: join without a seat, never refuse.
-    RAISE WARNING 'BACKLOG-3962: seat trigger refused a counted free seat in organization %', v_row.organization_id;
-    v_status := 'unassigned';
-    v_fallback := true;
-    INSERT INTO public.organization_members
-      (organization_id, user_id, role, license_status, joined_at, provisioned_by, provisioned_at)
-    VALUES (v_row.organization_id, v_row.user_id, 'agent', v_status, now(), 'domain_capture', now())
-    RETURNING id INTO v_member;
   END;
+
+  -- A suspended brokerage takes nobody in (the member trigger refused): no membership, no plan
+  -- cancellation, the switch ends.
+  IF v_suspended THEN
+    UPDATE public.domain_capture_switches
+       SET status = 'cancelled', reason = 'brokerage_suspended', ended_at = now(), updated_at = now()
+     WHERE id = v_row.id;
+    RETURN jsonb_build_object('success', true, 'outcome', 'cancelled', 'reason', 'brokerage_suspended');
+  END IF;
 
   UPDATE public.domain_capture_switches
      SET status = 'switched', member_id = v_member, license_status = v_status, payer = v_payer,
@@ -841,6 +894,7 @@ $function$;
 -- ---------------------------------------------------------------------------
 REVOKE ALL ON FUNCTION public._domain_capture_billing_ready() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public._domain_capture_eval(uuid, uuid, text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public._domain_capture_is_payer(uuid) FROM PUBLIC, anon, authenticated;
 
 REVOKE ALL ON FUNCTION public.domain_capture_candidates(uuid, uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.domain_capture_candidates(uuid, uuid) TO authenticated;
@@ -885,6 +939,7 @@ DECLARE
   v_closed text[] := ARRAY[
     'public._domain_capture_billing_ready()',
     'public._domain_capture_eval(uuid, uuid, text)',
+    'public._domain_capture_is_payer(uuid)',
     'public._domain_capture_mark_notice(uuid, text)',
     'public._domain_capture_due(integer)',
     'public._domain_capture_switch(uuid)',

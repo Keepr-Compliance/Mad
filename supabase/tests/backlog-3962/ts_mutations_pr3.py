@@ -30,6 +30,18 @@ M = {
       "  if (input?.confirm !== true) return fail(DOMAIN_CAPTURE_CONFIRM);\n",
       "",
       '__tests__/domain-capture-3962/domainCaptureAction.test.ts'),
+  'T_notice_payer_not_passed': ('broker-portal/lib/domain/captureNotice.ts',
+      "        payer: row.payer === true,\n",
+      "",
+      '__tests__/domain-capture-3962/domainCaptureAction.test.ts'),
+  'T_notice_always_payer_copy': ('broker-portal/lib/email/templates/domain-capture-notice.ts',
+      "${payer === true ? ' and stays on your own paid plan' : ''}",
+      " and stays on your own paid plan",
+      '__tests__/domain-capture-3962/emails.test.ts'),
+  'T_setup_message_unmapped': ('broker-portal/lib/actions/domainCapture.ts',
+      "    case 'billing_setup_incomplete':\n      return fail(DOMAIN_CAPTURE_BILLING_SETUP);\n",
+      "",
+      '__tests__/domain-capture-3962/domainCaptureAction.test.ts'),
   'T_route_accepts_capture_kind': ('broker-portal/app/api/email/seat-limit-reached/route.ts',
       "      (kind !== 'add' && kind !== 'reactivate')\n",
       "      (kind !== 'add' && kind !== 'reactivate' && kind !== 'domain_capture')\n",
@@ -48,6 +60,12 @@ for n in names:
     print(f'{n}: MUTATION APPLIED [{ns}] -> {new.strip()[:90]}')
     out = subprocess.run(['npx', 'jest', test], cwd=BP, capture_output=True, text=True)
     t = re.search(r'Tests:\s+(.*)', out.stderr + out.stdout)
-    fails = re.findall(r'✕ (.*)', out.stderr + out.stdout)
-    print(f'  {t.group(1) if t else "NO TEST COUNT"} | red: {"; ".join(f.strip() for f in fails[:4])}')
+    txt = out.stderr + out.stdout
+    fails = list(dict.fromkeys(re.findall(r'^\s*● (.+?)\s*$', txt, re.M)))
+    fails = [f for f in fails if not f.startswith('Console')]
+    print(f'  {t.group(1) if t else "NO TEST COUNT"} | red ({len(fails)}):')
+    for f in fails:
+        print(f'    - {f}')
+    if t is None or ' 0 total' in t.group(1):
+        print('  WARNING: no test count / zero tests')
     subprocess.run(['git', 'checkout', '--', rel], cwd=ROOT, check=True)

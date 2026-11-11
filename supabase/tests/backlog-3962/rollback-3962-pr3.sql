@@ -201,6 +201,7 @@ DROP FUNCTION IF EXISTS public.domain_capture_cancel(uuid);
 DROP FUNCTION IF EXISTS public.domain_capture_start(uuid, uuid, uuid[]);
 DROP FUNCTION IF EXISTS public.domain_capture_candidates(uuid, uuid);
 DROP FUNCTION IF EXISTS public._domain_capture_eval(uuid, uuid, text);
+DROP FUNCTION IF EXISTS public._domain_capture_is_payer(uuid);
 DROP FUNCTION IF EXISTS public._domain_capture_billing_ready();
 DROP TABLE IF EXISTS public.domain_capture_switches;
 ALTER TABLE public.organization_members DROP CONSTRAINT organization_members_provisioned_by_check;

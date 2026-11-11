@@ -77,7 +77,18 @@ INSERT INTO fx VALUES
   ('p_fail', 'fail@cap-3962.test', 'email'),
   ('p_w',    'w@w-3962.test', 'email'),
   ('p_r',    'r@r-3962.test', 'email'),
-  ('p_l',    'l@l-3962.test', 'email');
+  ('p_l',    'l@l-3962.test', 'email'),
+  ('u_admN', 'admn@corp-3962.test', 'email'),
+  ('p_nt',   'nt@nt-3962.test', 'azure:tid-n-3962'),
+  ('u_admD', 'admd@corp-3962.test', 'email'),
+  ('p_d',    'd@d-3962.test', 'email'),
+  ('p_d2',   'd2@d-3962.test', 'email'),
+  ('p_dx',   'dx@d-3962.test', 'email'),
+  ('u_admS', 'adms@corp-3962.test', 'email'),
+  ('p_s',    's@s-3962.test', 'email'),
+  ('u_admK', 'admk@corp-3962.test', 'email'),
+  ('p_k',    'k@k-3962.test', 'email'),
+  ('p_i',    'i@k-3962.test', 'email');
 
 INSERT INTO auth.users (id, email, instance_id, aud, role, email_confirmed_at)
   SELECT pg_temp.id(k), e, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', now() FROM fx;
@@ -97,7 +108,13 @@ INSERT INTO public.organizations (id, name, slug, is_test, max_seats, microsoft_
   (pg_temp.id('oB'), 'Capture B 3962', 'cap-b-3962', true, 10, NULL),
   (pg_temp.id('oW'), 'Capture W 3962', 'cap-w-3962', true, 10, NULL),
   (pg_temp.id('oR'), 'Capture R 3962', 'cap-r-3962', true, 10, NULL),
-  (pg_temp.id('oL'), 'Capture L 3962', 'cap-l-3962', true, 10, NULL);
+  (pg_temp.id('oL'), 'Capture L 3962', 'cap-l-3962', true, 10, NULL),
+  (pg_temp.id('oN'), 'Capture N 3962', 'cap-n-3962', true, 10, NULL),
+  (pg_temp.id('oD'), 'Capture D 3962', 'cap-d-3962', true, 10, NULL),
+  (pg_temp.id('oS'), 'Capture S 3962', 'cap-s-3962', true, 10, NULL);
+-- oK: new members get the organization's default role, not a fixed one
+INSERT INTO public.organizations (id, name, slug, is_test, max_seats, microsoft_tenant_id, default_member_role)
+  VALUES (pg_temp.id('oK'), 'Capture K 3962', 'cap-k-3962', true, 10, NULL, 'broker');
 INSERT INTO public.organizations (id, name, slug, is_test, max_seats, personal_owner_user_id)
   SELECT pg_temp.id('po_' || k), 'Personal', 'po-' || replace(k, '_', '-') || '-3962', true, 1, pg_temp.id(k)
     FROM fx WHERE k LIKE 'p\_%';
@@ -110,7 +127,11 @@ INSERT INTO public.organization_members (organization_id, user_id, role, license
   (pg_temp.id('oB'), pg_temp.id('p_deact'), 'agent', 'suspended'),
   (pg_temp.id('oW'), pg_temp.id('u_admW'), 'admin', 'active'),
   (pg_temp.id('oR'), pg_temp.id('u_admR'), 'admin', 'active'),
-  (pg_temp.id('oL'), pg_temp.id('u_admL'), 'admin', 'active');
+  (pg_temp.id('oL'), pg_temp.id('u_admL'), 'admin', 'active'),
+  (pg_temp.id('oN'), pg_temp.id('u_admN'), 'admin', 'active'),
+  (pg_temp.id('oD'), pg_temp.id('u_admD'), 'admin', 'active'),
+  (pg_temp.id('oS'), pg_temp.id('u_admS'), 'admin', 'active'),
+  (pg_temp.id('oK'), pg_temp.id('u_admK'), 'admin', 'active');
 
 -- staff with organizations.edit (revoke)
 INSERT INTO public.admin_roles (id, name, slug) VALUES (pg_temp.id('role_edit'), 'org edit 3962c', 'org-edit-3962c');
@@ -123,14 +144,17 @@ INSERT INTO public.domain_claims (id, organization_id, domain, token, status, ve
   SELECT pg_temp.id('c' || o), pg_temp.id('o' || o), d,
          'keepr-domain-verification=' || substr(md5('t3962c' || o) || md5('u3962c' || o), 1, 48),
          'verified', now() - interval '20 days', now(), 'verified'
-    FROM (VALUES ('A', 'cap-3962.test'), ('W', 'w-3962.test'), ('R', 'r-3962.test'), ('L', 'l-3962.test')) v(o, d);
+    FROM (VALUES ('A', 'cap-3962.test'), ('W', 'w-3962.test'), ('R', 'r-3962.test'), ('L', 'l-3962.test'),
+                 ('N', 'nt-3962.test'), ('D', 'd-3962.test'), ('S', 's-3962.test'), ('K', 'k-3962.test')) v(o, d);
 
 -- p_mail pays for a personal Agent plan (one Stripe customer, one live subscription row)
 INSERT INTO public.stripe_customers (user_id, stripe_mode, stripe_customer_id) VALUES
   (pg_temp.id('p_mail'), 'test', 'cus_3962c_mail'),
-  (pg_temp.id('p_g'), 'test', 'cus_3962c_g');
+  (pg_temp.id('p_g'), 'test', 'cus_3962c_g'),
+  (pg_temp.id('p_i'), 'test', 'cus_3962c_i');
 INSERT INTO public.billing_subscriptions (stripe_mode, user_id, stripe_customer_id, stripe_subscription_id, status)
-  VALUES ('test', pg_temp.id('p_mail'), 'cus_3962c_mail', 'sub_3962c_mail', 'active');
+  VALUES ('test', pg_temp.id('p_mail'), 'cus_3962c_mail', 'sub_3962c_mail', 'active'),
+         ('test', pg_temp.id('p_i'), 'cus_3962c_i', 'sub_3962c_i', 'incomplete');
 
 -- __MODE__
 
@@ -141,7 +165,7 @@ DECLARE
   pMail uuid := pg_temp.id('p_mail'); pAz uuid := pg_temp.id('p_az'); pAzf uuid := pg_temp.id('p_azf');
   pG uuid := pg_temp.id('p_g'); pNone uuid := pg_temp.id('p_none'); pDeact uuid := pg_temp.id('p_deact');
   pOther uuid := pg_temp.id('p_other'); pOpt uuid := pg_temp.id('p_opt'); pFail uuid := pg_temp.id('p_fail');
-  g text; j jsonb; n int; n2 int; s uuid;
+  g text; g2 text; j jsonb; n int; n2 int; s uuid;
   v_pass int := 0; v_fail int := 0; reds jsonb := '{}'::jsonb; k record;
 BEGIN
   CREATE TEMP TABLE r3962 (k text, ok boolean, got text) ON COMMIT DROP;
@@ -169,6 +193,10 @@ BEGIN
   INSERT INTO r3962 VALUES ('S02_scheduled_set',
     jsonb_array_length(coalesce(j -> 'scheduled', '[]'::jsonb)) = 5
       AND (SELECT count(*) FROM public.domain_capture_switches WHERE organization_id = oA AND status = 'scheduled') = 5, left(g, 400));
+  INSERT INTO r3962 VALUES ('S08_start_reports_payer',
+    (SELECT bool_and((x ->> 'payer')::boolean = (x ->> 'email' = 'mail@cap-3962.test'))
+       FROM jsonb_array_elements(coalesce(j -> 'scheduled', '[]'::jsonb)) x) IS TRUE
+      AND (SELECT count(*) FROM jsonb_array_elements(coalesce(j -> 'scheduled', '[]'::jsonb)) x WHERE x ? 'payer') = 5, left(g, 400));
   INSERT INTO r3962 VALUES ('S03_foreign_tenant_never_scheduled',
     NOT EXISTS (SELECT 1 FROM public.domain_capture_switches WHERE user_id = pAzf)
       AND g LIKE '%foreign_tenant%', left(g, 400));
@@ -300,6 +328,73 @@ BEGIN
    WHERE organization_id IN (pg_temp.id('oW'), pg_temp.id('oR'), pg_temp.id('oL'))
      AND user_id IN (pg_temp.id('p_w'), pg_temp.id('p_r'), pg_temp.id('p_l'));
   INSERT INTO r3962 VALUES ('X04_zero_switches_after_cascade', n = 0, n::text);
+
+  -- ---- ruling g: no tenant recorded ----------------------------------------------------------
+  g := pg_temp.q(pg_temp.id('u_admN'), 'authenticated', format('SELECT public.domain_capture_candidates(%L::uuid, %L::uuid)::text', pg_temp.id('oN'), pg_temp.id('cN')));
+  j := CASE WHEN g LIKE '{%' THEN g::jsonb ELSE '{}'::jsonb END;
+  g2 := pg_temp.start(pg_temp.id('u_admN'), pg_temp.id('oN'), pg_temp.id('cN'), ARRAY[pg_temp.id('p_nt')]);
+  INSERT INTO r3962 VALUES ('K06_no_tenant_listed_not_convertible_never_scheduled',
+    (SELECT x ->> 'convertible' || '/' || coalesce(x ->> 'reason', '-') || '/' || coalesce(x ->> 'attestation', '-')
+       FROM jsonb_array_elements(coalesce(j -> 'candidates', '[]'::jsonb)) x WHERE x ->> 'email' = 'nt@nt-3962.test') = 'false/no_tenant/-'
+      AND NOT EXISTS (SELECT 1 FROM public.domain_capture_switches WHERE user_id = pg_temp.id('p_nt'))
+      AND g2 LIKE '%no_tenant%', left(g, 300) || ' | ' || left(g2, 200));
+
+  -- ---- the 3850 gate (function renamed away inside this rolled-back transaction) -----------------
+  ALTER FUNCTION public._billing_enqueue_agent_cancel_on_join(uuid, uuid, uuid) RENAME TO _bl3962_tmp;
+  g := pg_temp.start(pg_temp.id('u_admD'), pg_temp.id('oD'), pg_temp.id('cD'), ARRAY[pg_temp.id('p_dx')]);
+  ALTER FUNCTION public._bl3962_tmp(uuid, uuid, uuid) RENAME TO _billing_enqueue_agent_cancel_on_join;
+  INSERT INTO r3962 VALUES ('B01_start_refused_without_3850',
+    g LIKE '%billing_not_ready%' AND NOT EXISTS (SELECT 1 FROM public.domain_capture_switches WHERE user_id = pg_temp.id('p_dx')), g);
+  g := pg_temp.start(pg_temp.id('u_admD'), pg_temp.id('oD'), pg_temp.id('cD'), ARRAY[pg_temp.id('p_d')]);
+  PERFORM pg_temp.mark(pg_temp.sid(pg_temp.id('p_d')), 'sent');
+  UPDATE public.domain_capture_switches SET switch_at = now() - interval '1 minute' WHERE organization_id = pg_temp.id('oD');
+  ALTER FUNCTION public._billing_enqueue_agent_cancel_on_join(uuid, uuid, uuid) RENAME TO _bl3962_tmp;
+  g := pg_temp.sw(pg_temp.sid(pg_temp.id('p_d')));
+  ALTER FUNCTION public._bl3962_tmp(uuid, uuid, uuid) RENAME TO _billing_enqueue_agent_cancel_on_join;
+  INSERT INTO r3962 VALUES ('B02_switch_deferred_without_3850',
+    g LIKE '%billing_not_ready%' AND pg_temp.sst(pg_temp.id('p_d')) = 'scheduled:-' AND pg_temp.members(pg_temp.id('oD'), pg_temp.id('p_d')) = 0, g);
+
+  -- ---- the brokerage's Billing step not done ---------------------------------------------------
+  INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status) VALUES (pg_temp.id('oD'), 'test', 5, 'draft');
+  INSERT INTO public.org_deal_lines (organization_id, item_key, quantity_rule, unit_price_cents)
+    VALUES (pg_temp.id('oD'), 'brokerage_seat', 'seats', 5000);
+  g := pg_temp.start(pg_temp.id('u_admD'), pg_temp.id('oD'), pg_temp.id('cD'), ARRAY[pg_temp.id('p_d2')]);
+  INSERT INTO r3962 VALUES ('B03_start_refused_billing_setup_pending',
+    g LIKE '%billing_setup_incomplete%' AND NOT EXISTS (SELECT 1 FROM public.domain_capture_switches WHERE user_id = pg_temp.id('p_d2')), g);
+  g := pg_temp.sw(pg_temp.sid(pg_temp.id('p_d')));
+  INSERT INTO r3962 VALUES ('B04_switch_deferred_billing_setup_pending',
+    g LIKE '%billing_setup_incomplete%' AND pg_temp.sst(pg_temp.id('p_d')) = 'scheduled:-' AND pg_temp.members(pg_temp.id('oD'), pg_temp.id('p_d')) = 0, g);
+  DELETE FROM public.org_deals WHERE organization_id = pg_temp.id('oD');
+  g := pg_temp.sw(pg_temp.sid(pg_temp.id('p_d')));
+  INSERT INTO r3962 VALUES ('B05_same_switch_goes_through_once_setup_done',
+    g LIKE '%switched%' AND pg_temp.members(pg_temp.id('oD'), pg_temp.id('p_d')) = 1, g);
+
+  -- ---- suspended brokerage: cancelled, no membership, no outbox row ------------------------------
+  PERFORM pg_temp.start(pg_temp.id('u_admS'), pg_temp.id('oS'), pg_temp.id('cS'), ARRAY[pg_temp.id('p_s')]);
+  PERFORM pg_temp.mark(pg_temp.sid(pg_temp.id('p_s')), 'sent');
+  UPDATE public.domain_capture_switches SET switch_at = now() - interval '1 minute' WHERE organization_id = pg_temp.id('oS');
+  INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status, suspended_at, suspended_reason, status_before_suspension)
+    VALUES (pg_temp.id('oS'), 'test', 5, 'suspended', now(), 'other', 'active');
+  n := pg_temp.outbox(pg_temp.id('p_s'));
+  g := pg_temp.sw(pg_temp.sid(pg_temp.id('p_s')));
+  INSERT INTO r3962 VALUES ('H01_suspended_brokerage_cancels_no_member_no_outbox',
+    g LIKE '%brokerage_suspended%' AND g LIKE '%"success": true%' AND pg_temp.sst(pg_temp.id('p_s')) = 'cancelled:brokerage_suspended'
+      AND pg_temp.members(pg_temp.id('oS'), pg_temp.id('p_s')) = 0 AND pg_temp.outbox(pg_temp.id('p_s')) = n
+      AND EXISTS (SELECT 1 FROM public.organization_members m JOIN public.organizations o ON o.id = m.organization_id
+                   WHERE m.user_id = pg_temp.id('p_s') AND o.personal_owner_user_id IS NOT NULL), g);
+
+  -- ---- role = the organization's default; an incomplete subscription is not a payer -------------
+  g := pg_temp.start(pg_temp.id('u_admK'), pg_temp.id('oK'), pg_temp.id('cK'), ARRAY[pg_temp.id('p_k'), pg_temp.id('p_i')]);
+  PERFORM pg_temp.mark(pg_temp.sid(pg_temp.id(x)), 'sent') FROM unnest(ARRAY['p_k', 'p_i']) x;
+  UPDATE public.domain_capture_switches SET switch_at = now() - interval '1 minute' WHERE organization_id = pg_temp.id('oK');
+  g := pg_temp.sw(pg_temp.sid(pg_temp.id('p_k')));
+  INSERT INTO r3962 VALUES ('R01_role_is_org_default_member_role',
+    (SELECT role FROM public.organization_members WHERE organization_id = pg_temp.id('oK') AND user_id = pg_temp.id('p_k')) = 'broker', g);
+  g := pg_temp.sw(pg_temp.sid(pg_temp.id('p_i')));
+  j := CASE WHEN g LIKE '{%' THEN g::jsonb ELSE '{}'::jsonb END;
+  INSERT INTO r3962 VALUES ('P01_incomplete_subscription_is_not_a_payer',
+    j ->> 'outcome' = 'switched' AND j ->> 'payer' = 'false'
+      AND (SELECT payer FROM public.domain_capture_switches WHERE user_id = pg_temp.id('p_i') AND status = 'switched') = false, g);
 
   -- ---- due ----------------------------------------------------------------------------------
   PERFORM pg_temp.start(uAdmA, oA, cA, ARRAY[pFail]);  -- email no longer on domain: skipped
