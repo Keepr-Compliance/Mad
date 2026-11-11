@@ -17,8 +17,9 @@
 #   C2   one session holds the deal row, then upserts the message; the other tombstones that message.
 #        Expect: no 40P01; upsert applied; tombstone removed.
 #        Mutant: in cloud_tombstone remove the /*TOMB:lockdeals*/ statement -> 40P01 in one session.
-#   C3   two registrations of the same content, the first uncommitted for 3 s.
-#        Expect: both ok with the same blob_id; one live blob with that content.
+#   C3   two registrations of the same content, the first uncommitted for 8 s.
+#        Expect: both ok with the same blob_id; one live blob with that content; overlap waiters=1
+#        (session 1 sees session 2 blocked on its lock; otherwise the verdict is NO_OVERLAP).
 #        Mutant: remove the ON CONFLICT ... DO NOTHING in cloud_register_blob -> ERR 23505.
 #   C4   two file upserts on two deals attaching the same two blobs in opposite payload order; the
 #        first session holds the lower-id blob first.
@@ -95,6 +96,11 @@ pair() {  # first now, second 1 s later (it waits server-side in gate.sql for th
   wait $p1 $p2
   echo "first:  $(cat "$tmp/first.out")"
   echo "second: $(cat "$tmp/second.out")"
+  # every session's error line, SQLSTATE first ("none" when the session returned rows)
+  for s in first second; do
+    e="$(grep -oE 'ERROR: +[0-9A-Z]{5}: [^\\]*' "$tmp/$s.out" | head -1 || true)"
+    echo "error ${s}: ${e:-none}"
+  done
 }
 
 case "$CASE" in
@@ -138,6 +144,12 @@ elif case == 'C3':
         and a['r'].get('blob_id') == b['r'].get('blob_id') and st.get('live_cc_blob') == 1
 elif case == 'C4':
     ok = ok and all(x.get('r', {}).get('ok') is True and [e.get('status') for e in x['r'].get('results', [])] == ['applied', 'applied'] for x in (a, b))
-print('PASS' if ok else 'FAIL')
+print('NO_OVERLAP' if case == 'C3' and a.get('waiters') != 1 else 'PASS' if ok else 'FAIL')
 PY
 )"
+if [ "$CASE" = C3 ]; then
+  w="$(python3 -c 'import json,sys
+try: print(json.loads(open(sys.argv[1]).read().split("\nkt-sql:")[0])[-1].get("waiters"))
+except Exception: print("none")' "$tmp/first.out")"
+  echo "overlap: waiters=${w} (1 = session 2 was blocked on session 1's uncommitted registration; else the verdict is NO_OVERLAP)"
+fi
