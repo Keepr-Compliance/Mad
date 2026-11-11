@@ -47,7 +47,7 @@ describe('DomainName', () => {
 describe('DomainSettingsClient', () => {
   it('a pending claim shows the record name and value to publish, and a Check button', () => {
     render(<DomainSettingsClient claims={[base]} loadState="ok" />);
-    fireEvent.click(screen.getByRole('button', { name: 'Instructions' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Instructions for / }));
     expect(screen.getByText('_keepr.xn--bcher-kva.example')).toBeTruthy();
     expect(screen.getByText(base.recordValue!)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Check' })).toBeTruthy();

@@ -7,7 +7,7 @@
  * brokerage. It carries no gate of its own. Every action re-checks on the server.
  */
 
-import { Fragment, useEffect, useRef, useState, useTransition } from 'react';
+import { Fragment, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Check, ChevronLeft, ChevronDown, ChevronRight, Copy } from 'lucide-react';
@@ -156,18 +156,7 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
   const [addError, setAddError] = useState<string | null>(null);
   // Rows whose DNS instructions are open (pending/lapsed rows start collapsed).
   const [openIds, setOpenIds] = useState<Record<string, boolean>>({});
-  // Set after a successful add: the next claim that was not in the list then opens by itself.
-  const autoOpenFrom = useRef<Set<string> | null>(null);
   const [, startTransition] = useTransition();
-
-  useEffect(() => {
-    const before = autoOpenFrom.current;
-    if (!before) return;
-    const added = claims.filter((c) => !before.has(c.id)).map((c) => c.id);
-    if (added.length === 0) return;
-    autoOpenFrom.current = null;
-    setOpenIds((o) => ({ ...o, ...Object.fromEntries(added.map((id) => [id, true])) }));
-  }, [claims]);
 
   const refresh = () => startTransition(() => router.refresh());
 
@@ -189,7 +178,11 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
       const res = await createDomainClaim(domainInput);
       if (res.success) {
         setNotice({ claimId: null, tone: 'info', text: res.message });
-        autoOpenFrom.current = new Set(claims.map((c) => c.id));
+        // Open the claim the RPC returned (a re-add of a listed pending domain included).
+        if (res.claimId) {
+          const id = res.claimId;
+          setOpenIds((o) => ({ ...o, [id]: true }));
+        }
         setDomainInput('');
         setAddOpen(false);
         refresh();
@@ -363,8 +356,9 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
                             type="button"
                             variant="secondary"
                             size="sm"
+                            aria-label={`Instructions for ${claim.domain}`}
                             aria-expanded={isOpen}
-                            aria-controls={detailId}
+                            aria-controls={isOpen ? detailId : undefined}
                             onClick={() => setOpenIds((o) => ({ ...o, [claim.id]: !o[claim.id] }))}
                           >
                             Instructions

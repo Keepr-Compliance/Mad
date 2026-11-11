@@ -34,7 +34,7 @@ const verified: DomainClaimView = { ...pending, status: 'verified', verifiedAt: 
 describe('instructions', () => {
   it.each(['pending', 'lapsed'] as const)('%s: Host is the relative label, with the full-name fallback', (status) => {
     render(<DomainSettingsClient claims={[{ ...pending, status }]} loadState="ok" />);
-    fireEvent.click(screen.getByRole('button', { name: 'Instructions' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Instructions for / }));
     expect(screen.getByText('At your DNS host, add a TXT record. Leave your other records as they are.')).toBeTruthy();
     expect(screen.getByLabelText('Host').textContent).toBe('_keepr');
     expect(screen.getByLabelText('Value').textContent).toBe(VALUE);
