@@ -282,10 +282,9 @@ export function SharingDialog({
             type="button"
             variant="destructive"
             size="sm"
-            aria-disabled={busy.has(key) || undefined}
             onClick={() => {
-              // One write per row at a time: a second confirm while one is in flight does nothing.
-              if (busy.has(key)) return;
+              // No second remove while one is in flight: this confirm unmounts on click, and the
+              // row's menu (the only way back to it) is disabled until the write settles.
               // Focus moves to the next row's trigger, or the add field when this was the last row.
               const list = visible ?? [];
               const at = list.findIndex((e) => principalKey(e) === key);
