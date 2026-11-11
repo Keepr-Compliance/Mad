@@ -229,10 +229,7 @@ beforeEach(() => {
   mockDb.exec(CONTACT_IDENTITY_SCHEMA);
   registeredHandlers.clear();
   __resetContactLinkingScheduler();
-  registerContactHandlers({
-    isDestroyed: () => false,
-    webContents: { send: jest.fn() },
-  } as any);
+  registerContactHandlers();
 });
 
 afterEach(() => {
@@ -382,6 +379,11 @@ describe("the isFromDatabase branch refuses before the import-marking write (BAC
 
   it("CONTROL: an address-book value on the same branch DOES reach the facade, with that value", async () => {
     markImportedSpy().mockClear();
+    // BACKLOG-4180: the import refuses an existing-contact id the caller does not
+    // own. Same row shape the suite's other seeds write (INSERT INTO contacts).
+    mockDb!
+      .prepare("INSERT INTO contacts (id, user_id, display_name, source, is_imported) VALUES (?, ?, ?, ?, 1)")
+      .run(SAVED_ID, USER, "Saved 3193", "manual");
 
     const outcome = await importRecords([
       { ...record("outlook"), id: SAVED_ID, isFromDatabase: true },

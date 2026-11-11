@@ -13,6 +13,7 @@
  */
 
 import * as Sentry from "@sentry/electron/main";
+import { AuthAttemptSupersededError } from "./authAttemptSuperseded";
 import axios, { AxiosError } from "axios";
 import crypto from "crypto";
 import http from "http";
@@ -124,6 +125,8 @@ class GoogleAuthService {
   // Store resolve/reject functions to allow direct code resolution from navigation interception
   private codeResolver: ((code: string) => void) | null = null;
   private codeRejecter: ((error: Error) => void) | null = null;
+  // BACKLOG-3283: the current attempt's codePromise, so a supersede can mark it handled.
+  private pendingCodePromise: Promise<string> | null = null;
   /** BACKLOG-1121: Auth server timeout (5 minutes) to prevent port leak */
   private static readonly AUTH_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -205,7 +208,19 @@ class GoogleAuthService {
         "[GoogleAuth] Stopping existing server before starting new one",
         "GoogleAuth",
       );
+      // BACKLOG-3283 Path 3: end the replaced attempt instead of orphaning its
+      // codePromise (stopLocalServer never settles it). Handlers stay silent on
+      // this error — see authAttemptSuperseded.ts.
+      const supersededRejecter = this.codeRejecter;
+      const supersededPromise = this.pendingCodePromise;
       this.stopLocalServer();
+      if (supersededRejecter) {
+        // Mark it handled first: if no consumer has attached yet, the rejection
+        // must not reach main.ts's unhandledRejection hook (and Sentry).
+        // Consumers that do await it still see the rejection.
+        supersededPromise?.catch(() => undefined);
+        supersededRejecter(new AuthAttemptSupersededError());
+      }
     }
 
     let resolveListening: (port: number) => void;
@@ -292,6 +307,7 @@ class GoogleAuthService {
       }, GoogleAuthService.AUTH_TIMEOUT_MS);
     });
 
+    this.pendingCodePromise = codePromise;
     return { codePromise, listeningPromise };
   }
 

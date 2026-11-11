@@ -76,7 +76,7 @@ describe("iPhone sync: attachments refused for want of the file-data key (BACKLO
     orchestratorEvents.removeAllListeners();
     send = jest.fn();
     setMainWindow({ isDestroyed: () => false, webContents: { send } } as never);
-    registerSyncHandlers({ isDestroyed: () => false, webContents: { send } } as never);
+    registerSyncHandlers();
     setSyncUserId("user-1");
   });
 

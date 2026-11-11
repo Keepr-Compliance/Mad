@@ -55,6 +55,7 @@ export type {
   AutoRenewOffParams,
   OrgReinstatedParams,
   PaymentFailedParams,
+  AgentPlanEndedParams,
 } from './types';
 
 // Queue (BACKLOG-2009)
@@ -86,6 +87,7 @@ import { buildAutoRenewOffEmail } from './templates/auto-renew-off';
 import { buildOrgReinstatedEmail } from './templates/org-reinstated';
 import { buildOrgAutoReinstatedEmail } from './templates/org-auto-reinstated';
 import { buildPaymentFailedEmail } from './templates/payment-failed';
+import { buildAgentPlanEndedEmail } from './templates/agent-plan-ended';
 import type {
   InviteEmailParams,
   DownloadInviteEmailParams,
@@ -106,6 +108,7 @@ import type {
   AutoRenewOffParams,
   OrgReinstatedParams,
   PaymentFailedParams,
+  AgentPlanEndedParams,
   SendEmailResult,
 } from './types';
 
@@ -486,6 +489,28 @@ export async function sendPaymentFailedEmail(params: PaymentFailedParams): Promi
       kind: 'org_payment_failed',
       outboxKey: params.outboxKey,
       organizationId: params.organizationId,
+    },
+  });
+}
+
+/**
+ * BACKLOG-3850: the personal Agent plan ended because the person joined a brokerage, to the Agent
+ * plan's billing contact. Log type 'other' (the 4011 CHECK), kind agent_plan_ended_on_join; the
+ * outbox handler reads that kind + outboxKey back so a retry never sends twice.
+ */
+export async function sendAgentPlanEndedEmail(params: AgentPlanEndedParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildAgentPlanEndedEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'agent_plan_ended_on_join',
+      outboxKey: params.outboxKey,
+      userId: params.userId,
+      licensed: params.licensed,
     },
   });
 }

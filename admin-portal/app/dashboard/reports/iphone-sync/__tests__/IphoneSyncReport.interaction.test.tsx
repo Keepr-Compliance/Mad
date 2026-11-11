@@ -53,13 +53,16 @@ function mount(rows = FIXTURE_ROWS_24, onNavigate = vi.fn()) {
 }
 
 /**
- * Column headers, looked up INSIDE the table head.
+ * Column headers, looked up INSIDE the runs table's head.
  *
  * "Platform", "Outcome" and "Type" are also filter-dropdown triggers, so an
  * unscoped `getByRole('button', {name: /^Platform/})` matches two elements.
  */
 function header(container: HTMLElement, label: RegExp) {
-  const thead = container.querySelector('thead') as HTMLElement;
+  // The RUNS table's head. Each chart above it renders a screen-reader table
+  // of its own (BACKLOG-4208), so the first <thead> in the page is a chart's.
+  const runsTable = container.querySelector('[data-run-id]')?.closest('table') as HTMLElement;
+  const thead = runsTable.querySelector('thead') as HTMLElement;
   return within(thead).getByRole('button', { name: label });
 }
 
@@ -290,5 +293,35 @@ describe('filters, driven through the UI', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Clear filters/ }));
     expect(screen.getByText(/Showing 5 of 24/)).toBeTruthy();
+  });
+});
+
+/** Hover one day's column in a chart; return the tooltip's lines. */
+function hoverLines(container: HTMLElement, chart: string, day: string): string[] {
+  const column = container.querySelector(`[data-chart="${chart}"] rect[data-day="${day}"]`) as Element;
+  fireEvent.mouseMove(column, { clientX: 10, clientY: 10 });
+  const tip = screen.getByRole('tooltip');
+  const lines = [...tip.children].map((line) => line.textContent ?? '');
+  fireEvent.mouseLeave(column);
+  return lines;
+}
+
+describe('chart tooltips name the hovered day (BACKLOG-4208)', () => {
+  it('the duration chart, Sep 18', () => {
+    const { container } = mount();
+    expect(hoverLines(container, 'duration', '2026-09-18')).toEqual([
+      'Sep 18',
+      '5 runs · average 19 min',
+      'longest 50 min',
+    ]);
+  });
+
+  it('the failures chart, Sep 14', () => {
+    const { container } = mount();
+    expect(hoverLines(container, 'failures', '2026-09-14')).toEqual([
+      'Sep 14',
+      '5 errors · 3 cancelled · 1 completed',
+      '2 stalled',
+    ]);
   });
 });

@@ -213,12 +213,16 @@ describe("SupabaseService", () => {
       // The in-memory cache is not the only durable copy: the SDK runs persistSession:false, so
       // session.json must be updated with the rotated tokens or a restart after ~1h restores a
       // USED refresh token and GoTrue reuse-detection revokes the family (forced re-login).
-      expect(mockUpdateSession).toHaveBeenCalledWith({
-        supabaseTokens: {
-          access_token: "rotated-access-token",
-          refresh_token: "rotated-refresh-token",
+      // BACKLOG-4075: the second argument is the same-account guard, run inside the lock.
+      expect(mockUpdateSession).toHaveBeenCalledWith(
+        {
+          supabaseTokens: {
+            access_token: "rotated-access-token",
+            refresh_token: "rotated-refresh-token",
+          },
         },
-      });
+        { proceed: expect.any(Function) },
+      );
     });
 
     it("should clear local session cache on SIGNED_OUT event", () => {

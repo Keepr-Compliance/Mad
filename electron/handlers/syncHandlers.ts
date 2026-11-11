@@ -5,7 +5,7 @@
  * for iPhone sync operations on Windows.
  */
 
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain } from "electron";
 import log from "electron-log";
 import { rendererFreezeProfiler } from "../services/rendererFreezeProfiler";
 import { setIpcReplySizePhaseSource } from "../services/ipcReplySize";
@@ -171,15 +171,9 @@ async function getCurrentUserIdForSync(): Promise<string | null> {
 
 /**
  * Register sync-related IPC handlers
- * @param _mainWindow - Ignored since BACKLOG-3454. This module used to hold it in
- *   `mainWindowRef` and every push read that captured value; after a Dock reopen
- *   on macOS the window was destroyed and `sendToRenderer` returned silently —
- *   below a `log.info` that had already claimed the event was sent. Pushes now
- *   resolve the CURRENT window through `sendToMainWindow`. Kept in the signature
- *   so existing call sites and suites compile.
  * @param userId - The current user's ID (optional, can be set later via setCurrentUserId)
  */
-export function registerSyncHandlers(_mainWindow: BrowserWindow, userId?: string): void {
+export function registerSyncHandlers(userId?: string): void {
   orchestrator = deviceSyncOrchestrator;
   if (userId) {
     currentUserId = userId;

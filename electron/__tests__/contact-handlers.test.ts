@@ -16,7 +16,6 @@ import type { IpcMainInvokeEvent } from "electron";
 
 // Mock electron module
 const mockIpcHandle = jest.fn();
-const mockWebContentsSend = jest.fn();
 
 jest.mock("electron", () => ({
   ipcMain: {
@@ -29,14 +28,6 @@ jest.mock("electron", () => ({
   // (second condition false), so real handler behavior is preserved.
   app: { isPackaged: false },
 }));
-
-// Mock BrowserWindow instance for progress events
-const mockMainWindow = {
-  isDestroyed: jest.fn().mockReturnValue(false),
-  webContents: {
-    send: mockWebContentsSend,
-  },
-} as unknown as import("electron").BrowserWindow;
 
 // Mock services - inline factories since jest.mock is hoisted
 // Note: getUserById returns the user only for TEST_USER_ID, null for empty/invalid IDs
@@ -446,7 +437,7 @@ describe("Contact Handlers", () => {
     });
 
     // Register all handlers with mock window
-    registerContactHandlers(mockMainWindow);
+    registerContactHandlers();
   });
 
   beforeEach(() => {

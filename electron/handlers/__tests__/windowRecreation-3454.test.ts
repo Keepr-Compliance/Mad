@@ -111,8 +111,8 @@ describe("a push reaches the window that exists now, not the one registration sa
 
     // Exactly what `app.whenReady()` does: one window, one registration.
     setMainWindow(A.win as never);
-    registerDeviceHandlers(A.win as never);
-    registerSyncHandlers(A.win as never);
+    registerDeviceHandlers();
+    registerSyncHandlers();
   });
 
   afterEach(() => {

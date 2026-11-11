@@ -161,7 +161,7 @@ function resetAuditService(init = true): void {
 }
 
 beforeAll(() => {
-  registerContactHandlers({} as never);
+  registerContactHandlers();
   registerUserSettingsHandlers();
 });
 

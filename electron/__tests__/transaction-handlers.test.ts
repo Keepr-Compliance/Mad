@@ -238,7 +238,7 @@ describe("Transaction Handlers", () => {
     // resolves the live one through the registry, so the stand-in is registered
     // there rather than only handed to the register call.
     setMainWindow(mockMainWindow as any);
-    registerTransactionHandlers(mockMainWindow as any);
+    registerTransactionHandlers({ startSubmissionSync: true });
   });
 
   beforeEach(() => {

@@ -123,7 +123,7 @@ const update = () => jest.mocked(transactionService.updateTransaction) as unknow
 const writeSync = () => jest.mocked(databaseService.updateTransactionSync) as unknown as jest.Mock;
 
 beforeAll(() => {
-  registerTransactionCrudHandlers(null);
+  registerTransactionCrudHandlers();
   registerEmailAutoLinkHandlers();
 });
 beforeEach(() => jest.clearAllMocks());

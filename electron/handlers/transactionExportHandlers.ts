@@ -5,7 +5,6 @@
 // ============================================
 
 import { ipcMain } from "electron";
-import type { BrowserWindow } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import transactionService from "../services/transactionService";
 import type { TransactionWithDetails } from "../services/transactionService";
@@ -70,11 +69,6 @@ export const cleanupTransactionHandlers = (): void => {
 };
 
 /**
- * Register transaction export and submission IPC handlers
- * @param _mainWindow - Main window instance. No push reads it any more (BACKLOG-3454: pushes resolve the live window via sendToMainWindow), but its truthiness still gates the submission sync pollers below.
- */
-
-/**
  * BACKLOG-3403: the renderer's confirmation of what will be left out. Anything
  * malformed reads as "nothing confirmed", which makes the service ask again
  * rather than send.
@@ -117,8 +111,18 @@ function toSubmitResponse(result: SubmissionResult): TransactionResponse {
   };
 }
 
+/**
+ * Options for {@link registerTransactionExportHandlers}.
+ * `startSubmissionSync`: start the submission-status pollers (periodic sync and
+ * the realtime subscription). The app passes `true`; suites that must keep the
+ * pollers off pass `false`. Required, so every caller chooses.
+ */
+export interface TransactionExportHandlerOptions {
+  startSubmissionSync: boolean;
+}
+
 export function registerTransactionExportHandlers(
-  _mainWindow: BrowserWindow | null,
+  options: TransactionExportHandlerOptions,
 ): void {
   // Enhanced export with options
   handleBusy(
@@ -708,11 +712,9 @@ export function registerTransactionExportHandlers(
   // ============================================
 
   // BACKLOG-3454: nothing is handed to the sync service any more -- it resolves
-  // the live window itself. Handing it the window captured at registration is
-  // what killed its status pushes after a macOS Dock reopen. The truthiness gate
-  // below is unchanged: it also gates the pollers, and suites that pass null
-  // rely on those staying off.
-  if (_mainWindow) {
+  // the live window itself. BACKLOG-3456: the pollers start only when the caller
+  // asks for it (the app does; suites that need them off pass false).
+  if (options.startSubmissionSync) {
     // Start periodic sync with 1 minute interval (fallback for missed realtime events)
     submissionSyncService.startPeriodicSync(60000);
     // Start realtime subscription for instant status change notifications

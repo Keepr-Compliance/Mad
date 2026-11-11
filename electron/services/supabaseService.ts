@@ -11,6 +11,7 @@ import { User, SubscriptionTier, Subscription } from "../types/models";
 import type { AuditLogEntry } from "./auditService";
 import logService from "./logService";
 import sessionService from "./sessionService";
+import { isSameAccount } from "./accountIdentity";
 import { writePreferencesCopy } from "./preferencesMirror";
 import { supabaseNetFetch } from "./supabaseNetFetch";
 
@@ -724,13 +725,46 @@ class SupabaseService {
         // to the SDK by the caller that already owns persisting them
         // (main.ts / sessionHandlers.ts), so writing here would be a second,
         // racing writer of session.json rather than a fix.
+        //
+        // BACKLOG-4075: only into the SAME account's file. The check runs inside
+        // sessionService's lock, against the file on disk at write time. Same id,
+        // or the same-account rule (a pre-1507G file keeps its legacy local id,
+        // so a bare id compare would skip every rotation for it: BACKLOG-2332).
+        const rotatedFor = session.user;
+        const rotatedEmail =
+          rotatedFor.email ||
+          (typeof (rotatedFor.user_metadata as Record<string, unknown> | undefined)?.email === "string"
+            ? ((rotatedFor.user_metadata as Record<string, unknown>).email as string)
+            : null);
         void sessionService
-          .updateSession({
-            supabaseTokens: {
-              access_token: session.access_token,
-              refresh_token: session.refresh_token,
+          .updateSession(
+            {
+              supabaseTokens: {
+                access_token: session.access_token,
+                refresh_token: session.refresh_token,
+              },
             },
-          })
+            {
+              proceed: (current) => {
+                const fileUser = current.user;
+                if (fileUser?.id === rotatedFor.id) return true;
+                if (fileUser && isSameAccount(fileUser, { id: rotatedFor.id, email: rotatedEmail })) return true;
+                logService.warn(
+                  "[Supabase] Rotated tokens belong to a different account than session.json; not written",
+                  "SupabaseService",
+                  {
+                    fileId: String(fileUser?.id ?? "").substring(0, 8) + "...",
+                    sdkId: rotatedFor.id.substring(0, 8) + "...",
+                  }
+                );
+                Sentry.captureMessage("Token write-back skipped: different account", {
+                  level: "warning",
+                  tags: { service: "supabase-service", operation: "tokenWriteBack.otherAccount" },
+                });
+                return false;
+              },
+            }
+          )
           .catch((error) => {
             logService.warn(
               "[Supabase] Failed to persist refreshed tokens to session.json (non-fatal)",

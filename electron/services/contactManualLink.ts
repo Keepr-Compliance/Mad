@@ -92,7 +92,7 @@ import {
   type ExternalContact,
   type ExternalContactSource,
 } from "./db/externalContactDbService";
-import { applyLinkedSourceValues } from "./contactSourceValues";
+import { applyLinkedSourceValuesForUserLink, LinkValueCopyError } from "./contactSourceValues";
 import { sourceLabel } from "./contactLinkEvidence";
 import logService from "./logService";
 
@@ -142,7 +142,13 @@ export type LinkSourceOutcome =
   | { ok: false; reason: "record_not_found" }
   | { ok: false; reason: "unknown_source" }
   | { ok: false; reason: "claimed"; incumbentContactId: string }
-  | { ok: false; reason: "prior_rejection" };
+  | { ok: false; reason: "prior_rejection" }
+  /**
+   * BACKLOG-4180 — the source's values could not be copied onto the contact, so
+   * the verdict, the link and the copy were all rolled back. Retryable. Per
+   * record: in a batch the other records are unaffected.
+   */
+  | { ok: false; reason: "copy_failed" };
 
 interface LinkSourceOptions {
   /**
@@ -300,6 +306,24 @@ export function linkSourceRecordToContact(
   }
   const source = sourceType as ExternalContactSource;
 
+  // BACKLOG-4180 (ACID): a failed value copy throws inside the transaction, so
+  // the verdict, the link and any copied values roll back together.
+  try {
+    return linkSourceRecordInTransaction(userId, contactId, source, sourceRecordId, options);
+  } catch (error) {
+    if (!(error instanceof LinkValueCopyError)) throw error;
+    logService.warn(`[Contacts] manual link rolled back: ${error.message}`, "Contacts");
+    return { ok: false, reason: "copy_failed" };
+  }
+}
+
+function linkSourceRecordInTransaction(
+  userId: string,
+  contactId: string,
+  source: ExternalContactSource,
+  sourceRecordId: string,
+  options: LinkSourceOptions,
+): LinkSourceOutcome {
   return dbTransaction<LinkSourceOutcome>(() => {
     // ---- 1. The contact exists, and is not tombstoned ----------------------
     // `contactTombstoneSql` states plainly that dedup and matching lookups are
@@ -368,7 +392,8 @@ export function linkSourceRecordToContact(
     });
 
     // ---- 7. The addresses travel with the record -------------------------
-    applyLinkedSourceValues(userId, contactId);
+    // BACKLOG-4180: throws on failure; see linkSourceRecordToContact.
+    applyLinkedSourceValuesForUserLink(userId, contactId);
 
     // ---- 8. The question is answered, so take it off the queue -----------
     // Only this pair. See the header — a sibling's question is the founder's
@@ -420,6 +445,10 @@ export interface SourceRecordRef {
  *   - ONE TRANSACTION: records 1-2 are rolled back too. The user picked five
  *     people, four were fine, and they get nothing because the fifth hit a
  *     disk error.
+ *
+ * BACKLOG-4180: a failed VALUE COPY is not a throw here. It rolls back that
+ * one record (verdict, link and values) and returns `copy_failed`; the other
+ * records link normally. No record is ever half-applied.
  *
  * `outcomes[i]` corresponds to `records[i]`, SAME ORDER, so the caller can name
  * which record did what without matching on identity.

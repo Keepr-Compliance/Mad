@@ -14,7 +14,7 @@
  *       score reports it as hidden
  *   P6  an all-seed detection cannot be answered; no row is written
  *   P9  seedLinkedToDeals counts non-rejected deals only
- *   P10 a cleanup answer is stamped rule_version 2
+ *   P10 a cleanup answer is stamped the current rule_version (3 since BACKLOG-4225)
  *   P11 hidden is per deal KEY: unanswered count, answered keys, hidden keys
  *   RV  the Copy block lists answers per rules version
  *
@@ -112,9 +112,10 @@ function score(r: LearnRunResult) {
   return scoreRun(r, listAnswerKeyTransactions(USER), listDealAnswers(USER), listAnsweredBulkWithText(USER), 0, EMPTY_CENSUS);
 }
 
-const A1 = "4175 Canarytest Way, Testville, ZZ 00000";
-const A2 = "4176 Canarytest Way, Testville, ZZ 00000";
-const A3 = "4177 Canarytest Way, Testville, ZZ 00000";
+// BACKLOG-4225: state "WA" (ZIP still synthetic) in text the real extractor reads; it only takes a real US state code.
+const A1 = "4175 Canarytest Way, Testville, WA 00000";
+const A2 = "4176 Canarytest Way, Testville, WA 00000";
+const A3 = "4177 Canarytest Way, Testville, WA 00000";
 
 beforeEach(() => {
   db = new Database(":memory:") as unknown as DatabaseType;
@@ -191,11 +192,11 @@ describe("P6 an all-seed detection is never answered", () => {
 });
 
 describe("P10 answers are stamped with the new rules version", () => {
-  it("a cleanup answer row has rule_version 2", async () => {
+  it("a cleanup answer row has rule_version 3", async () => {
     const ordinary = mail("agent@example.com", A2, 1);
     const r = await runBaseline0(USER, 12, { nowMs: NOW, yieldFn: noYield });
     expect(answerCleanupQuestion(USER, r, detectionOf(r, ordinary).id, "yes")).toBe(true);
-    expect(get(`SELECT rule_version FROM learn_deal_answers`)).toEqual({ rule_version: 2 });
+    expect(get(`SELECT rule_version FROM learn_deal_answers`)).toEqual({ rule_version: 3 });
   });
 });
 
@@ -204,7 +205,7 @@ describe("P11 hidden is per deal key", () => {
     // K1: one all-seed detection and one mixed detection under ONE key (two
     // spellings that groupByProperty keeps apart and addressKey joins).
     const k1SeedOnly = mail(gmailFrom("Zillow", SEED_A), A1, 1, {
-      body: "Price cut on 4175 Canarytest Way Testville ZZ 00000 offer escrow buyer closing",
+      body: "Price cut on 4175 Canarytest Way Testville WA 00000 offer escrow buyer closing",
     });
     const k1Seed = alert(SEED_B, A1, 2);
     const k1Agent = mail("agent@example.com", A1, 3);
@@ -290,7 +291,7 @@ describe("P9 seed mail linked to deals: non-rejected deals only", () => {
 });
 
 describe("RV answers per rules version in the Copy block", () => {
-  it("one v1 and one v2 deal answer, one v1 sample answer -> both versions listed", async () => {
+  it("one v1 and one v3 deal answer, one v1 sample answer -> both versions listed", async () => {
     const ordinary = mail("agent@example.com", A2, 1);
     const r = await runBaseline0(USER, 12, { nowMs: NOW, yieldFn: noYield });
     run(
@@ -306,7 +307,7 @@ describe("RV answers per rules version in the Copy block", () => {
     );
     expect(answerCleanupQuestion(USER, r, detectionOf(r, ordinary).id, "yes")).toBe(true);
     const block = formatCopyBlock(score(r));
-    expect(block).toContain("Answers by rules version: v1 deal 1 / bulk 1, v2 deal 1 / bulk 0");
+    expect(block).toContain("Answers by rules version: v1 deal 1 / bulk 1, v3 deal 1 / bulk 0");
     expect(block).toContain("Hidden by live sender rules (sender rules v1): 0 deals, 0 detections, 0 emails");
   });
 });

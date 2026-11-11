@@ -3,7 +3,7 @@
  * Handles Outlook mailbox connection flows (sign-in is the browser deep link)
  */
 
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain } from "electron";
 
 // Import services
 import databaseService from "../services/databaseService";
@@ -19,6 +19,7 @@ import { getValidUserId } from "../utils/userIdHelper";
 import { bringAppToFront } from "../utils/bringAppToFront";
 
 import { sendToMainWindow, getMainWindow } from "../windowRegistry";
+import { isAuthAttemptSuperseded } from "../services/authAttemptSuperseded";
 
 // Type definitions
 interface AuthResponse {
@@ -35,7 +36,6 @@ interface LoginStartResponse extends AuthResponse {
  * Microsoft Auth: Connect mailbox (Outlook/Mail access)
  */
 export async function handleMicrosoftConnectMailbox(
-  _mainWindow: BrowserWindow | null,
   userId: string
 ): Promise<LoginStartResponse> {
   try {
@@ -196,6 +196,12 @@ export async function handleMicrosoftConnectMailbox(
             );
           });
       } catch (error) {
+        // BACKLOG-3283 Path 3: a newer connect replaced this one. Say nothing to
+        // the renderer — its listener belongs to the newer attempt now.
+        if (isAuthAttemptSuperseded(error)) {
+          await logService.info("Microsoft mailbox connect superseded by a newer attempt", "AuthHandlers");
+          return;
+        }
         // BACKLOG-2007: An org tenant admin-consent block arrives here as an
         // AADSTS error (the OAuth redirect's error_description rejects the code
         // promise in microsoftAuthService's local server). Classify it so the
@@ -251,10 +257,8 @@ export async function handleMicrosoftConnectMailbox(
 /**
  * Register all Microsoft auth handlers
  */
-export function registerMicrosoftAuthHandlers(
-  _mainWindow: BrowserWindow | null
-): void {
+export function registerMicrosoftAuthHandlers(): void {
   ipcMain.handle("auth:microsoft:connect-mailbox", (event, userId: string) =>
-    handleMicrosoftConnectMailbox(_mainWindow, userId)
+    handleMicrosoftConnectMailbox(userId)
   );
 }

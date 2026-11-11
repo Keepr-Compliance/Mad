@@ -2,9 +2,9 @@
   "$comment": "Sites where SQL text is defined outside electron/services/db/**, recorded so scripts/ci/check-sql-boundary.mjs fails only on NEW ones. Every entry names the backlog item that will remove it. Entries only ratchet DOWN: an entry leaves this file when its SQL moves into db/**, never by being deleted to silence the gate, and never by regenerating after adding a violation: --update-baseline refuses to record ANY key absent from the current baseline (not merely a grown total, which a swap would slip past) unless given --allow-growth. Removing keys never needs a flag. owner:UNOWNED is not a legal value.",
   "generatedBy": "node scripts/ci/check-sql-boundary.mjs --update-baseline",
   "backlog": "BACKLOG-2959",
-  "measuredAt": "9be6dd4d5d3298bc081cc9432285f9ca989b03f6",
-  "totalSites": 48,
-  "entryCount": 39,
+  "measuredAt": "a5775982063fa1bbefcf7ee77998ebf63222dd60",
+  "totalSites": 44,
+  "entryCount": 36,
   "entries": [
     {
       "file": "electron/handlers/conversationHandlers.ts",
@@ -29,30 +29,6 @@
       "bucket": "VIOLATION",
       "count": 1,
       "owner": "BACKLOG-3059"
-    },
-    {
-      "file": "electron/handlers/sessionHandlers.ts",
-      "verb": "prepare",
-      "match": "text:0ab42fc28b31",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2765"
-    },
-    {
-      "file": "electron/handlers/sessionHandlers.ts",
-      "verb": "prepare",
-      "match": "text:7a1e6f2a6525",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2765"
-    },
-    {
-      "file": "electron/handlers/sessionHandlers.ts",
-      "verb": "prepare",
-      "match": "text:b8895fc382b5",
-      "bucket": "VIOLATION",
-      "count": 1,
-      "owner": "BACKLOG-2765"
     },
     {
       "file": "electron/handlers/sharedAuthHandlers.ts",
@@ -171,7 +147,7 @@
       "verb": "pragma",
       "match": "text:30b356b3dc46",
       "bucket": "VIOLATION",
-      "count": 2,
+      "count": 1,
       "owner": "BACKLOG-2992"
     },
     {

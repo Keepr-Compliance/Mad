@@ -114,7 +114,7 @@ describe("BACKLOG-2880 — the Sync button announces its run on the review chann
   let sync: IpcHandler;
 
   beforeAll(() => {
-    registerEmailSyncHandlers({} as never);
+    registerEmailSyncHandlers();
     sync = handlers.get("transactions:sync-and-fetch-emails")!;
     expect(sync).toBeDefined();
   });

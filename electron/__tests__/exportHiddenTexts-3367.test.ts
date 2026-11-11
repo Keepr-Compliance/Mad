@@ -202,7 +202,7 @@ describe("BACKLOG-3367: every export handler omits hidden texts and states the c
     mockIpcHandle.mockImplementation((channel: string, handler: unknown) => {
       handlers.set(channel, handler as never);
     });
-    registerTransactionExportHandlers(null);
+    registerTransactionExportHandlers({ startSubmissionSync: false });
   });
 
   const folderPlan = (): ExportPlan => mockExportToFolder.mock.calls[0][1] as ExportPlan;

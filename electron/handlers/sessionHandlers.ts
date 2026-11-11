@@ -6,6 +6,7 @@
 import { ipcMain, IpcMainInvokeEvent, shell } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import type { User } from "../types/models";
+import { isSameAccount, type AccountIdentity } from "../services/accountIdentity";
 import { getSignInGeneration, isSignInAwaitingSessionWrite } from "../services/signInState";
 
 // Import services
@@ -590,100 +591,21 @@ async function handleValidateSession(
   }
 }
 
-/**
- * TASK-1507G: Migrate user from old random ID to Supabase Auth ID
- * Updates all FK references in child tables
- * @param oldUser - The user with the incorrect local ID
- * @param newSupabaseId - The correct Supabase Auth UUID
- * @returns The migrated user with the new ID
- */
-async function migrateUserToSupabaseId(
-  oldUser: User,
-  newSupabaseId: string
-): Promise<User> {
-  // Check if user with Supabase ID already exists (edge case: concurrent migration)
-  const existingUser = await databaseService.getUserById(newSupabaseId);
-  if (existingUser) {
-    // User already migrated or created correctly - just return existing
-    await logService.info(
-      "TASK-1507G: User with Supabase ID already exists, skipping migration",
-      "SessionHandlers",
-      { supabaseId: newSupabaseId.substring(0, 8) + "..." }
-    );
-    return existingUser;
+/** BACKLOG-4075: the SDK's current user, read from its in-memory session (no network unless expired). */
+async function readSdkIdentity(sdkUserId: string): Promise<AccountIdentity | null> {
+  try {
+    const { data } = await supabaseService.getClient().auth.getSession();
+    const u = data?.session?.user;
+    if (!u || u.id !== sdkUserId) return null;
+    const metaEmail = (u.user_metadata as Record<string, unknown> | undefined)?.email;
+    return { id: u.id, email: u.email || (typeof metaEmail === "string" ? metaEmail : null) };
+  } catch {
+    return null;
   }
-
-  const db = databaseService.getRawDatabase();
-
-  // Transaction to ensure atomicity
-  const migrate = db.transaction(() => {
-    // 1. Create new user with Supabase ID (copy all data)
-    db.prepare(`
-      INSERT INTO users_local (
-        id, email, first_name, last_name, display_name, avatar_url,
-        oauth_provider, oauth_id, subscription_tier, subscription_status,
-        trial_ends_at, terms_accepted_at, terms_version_accepted,
-        privacy_policy_accepted_at, privacy_policy_version_accepted,
-        email_onboarding_completed_at, mobile_phone_type, timezone, theme,
-        license_type, ai_detection_enabled, organization_id,
-        created_at, updated_at
-      )
-      SELECT
-        ?, email, first_name, last_name, display_name, avatar_url,
-        oauth_provider, oauth_id, subscription_tier, subscription_status,
-        trial_ends_at, terms_accepted_at, terms_version_accepted,
-        privacy_policy_accepted_at, privacy_policy_version_accepted,
-        email_onboarding_completed_at, mobile_phone_type, timezone, theme,
-        license_type, ai_detection_enabled, organization_id,
-        created_at, CURRENT_TIMESTAMP
-      FROM users_local WHERE id = ?
-    `).run(newSupabaseId, oldUser.id);
-
-    // 2. Update FK references in all child tables (SR Engineer verified complete list)
-    const tables = [
-      'sessions',
-      'oauth_tokens',
-      'contacts',
-      'transactions',
-      'communications',
-      'emails',
-      'messages',
-      'llm_settings',
-      'audit_logs',
-      'classification_feedback',
-      'audit_packages',
-      'ignored_communications',
-    ];
-
-    for (const table of tables) {
-      try {
-        db.prepare(`UPDATE ${table} SET user_id = ? WHERE user_id = ?`)
-          .run(newSupabaseId, oldUser.id);
-      } catch {
-        // Table may not exist or have user_id column - ignore
-      }
-    }
-
-    // 3. Delete old user record
-    db.prepare('DELETE FROM users_local WHERE id = ?').run(oldUser.id);
-  });
-
-  migrate();
-
-  // Return the migrated user
-  const migratedUser = await databaseService.getUserById(newSupabaseId);
-  if (!migratedUser) {
-    throw new Error('User migration failed - could not find migrated user');
-  }
-
-  await logService.info(
-    "TASK-1507G: User migration complete",
-    "SessionHandlers",
-    { newId: newSupabaseId.substring(0, 8) + "..." }
-  );
-
-  return migratedUser;
 }
+
+// BACKLOG-4075: the rule lives in a leaf module so the token write-back uses it too.
+export { isSameAccount };
 
 /** BACKLOG-4038: the support form's prefill. Name and email only, never tokens. */
 export interface UserContactResponse {
@@ -858,6 +780,35 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
 
     sessionSecurityService.recordActivity(session.sessionToken);
 
+    // BACKLOG-4075: inside a running app the SDK can already hold ANOTHER
+    // account (e.g. a deep-link sign-in that was blocked before its session
+    // was written). Restoring this file's tokens would silently switch the SDK
+    // back to the file's account. Touch nothing: no setSession, no clear.
+    const heldSdkUserId = supabaseService.getAuthUserId();
+    if (heldSdkUserId && heldSdkUserId !== session.user.id) {
+      let held = await readSdkIdentity(heldSdkUserId);
+      if (!held) {
+        // The SDK session cannot be read (e.g. expired while offline). The local
+        // row for the held id is the next record of who that is. Its OAuth id is
+        // not used: that match is for the session-file target only.
+        const local = await databaseService.getUserById(heldSdkUserId);
+        if (local) held = { id: local.id, email: local.email, oauthId: null };
+      }
+      // Fail closed: an identity that cannot be read is not proof of the same account.
+      if (!held || !isSameAccount(session.user, held)) {
+        await logService.warn(
+          "SDK holds a different account than the saved session; not restoring it",
+          "SessionHandlers",
+          { fileId: session.user.id.substring(0, 8) + "...", sdkId: heldSdkUserId.substring(0, 8) + "...", sdkIdentityKnown: !!held }
+        );
+        Sentry.captureMessage("Session restore: SDK holds a different account", {
+          level: "warning",
+          tags: { service: "session-handlers", operation: "handleGetCurrentUser.sdkHoldsOtherAccount" },
+        });
+        return { success: false, error: "Session belongs to a different account" };
+      }
+    }
+
     // BACKLOG-546 T&C FIX: Restore Supabase SDK session for returning users
     // The Supabase SDK uses persistSession: false, so on app restart the SDK has no session.
     // This causes RLS policy failures (auth.uid() = null) when accepting T&C.
@@ -991,9 +942,37 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
 
     // TASK-1507G: Check for ID mismatch - user exists but with wrong ID
     // Get the authoritative Supabase UUID (session.user.id should be it, but verify via auth service)
-    const supabaseUserId = supabaseService.getAuthUserId() || session.user.id;
+    const sdkUserId = supabaseService.getAuthUserId();
+    const supabaseUserId = sdkUserId || session.user.id;
 
     if (freshUser && freshUser.id !== supabaseUserId) {
+      // BACKLOG-4075: the migration below re-points every local row to
+      // supabaseUserId. Only do that for the SAME account under an older id.
+      // With an SDK user, compare against the SDK's own identity; with none,
+      // the target id came from this session file, the file freshUser was
+      // found from.
+      const target = sdkUserId
+        ? await readSdkIdentity(sdkUserId)
+        : { id: session.user.id, email: session.user.email, oauthId: session.user.oauth_id };
+      if (!target || !isSameAccount(freshUser, target)) {
+        await logService.warn(
+          "Saved session's local user is not the signed-in account; not migrating, signing out",
+          "SessionHandlers",
+          {
+            localId: freshUser.id.substring(0, 8) + "...",
+            supabaseId: supabaseUserId.substring(0, 8) + "...",
+            sdkIdentityKnown: !!target,
+          }
+        );
+        Sentry.captureMessage("Session restore: local user is a different account", {
+          level: "warning",
+          tags: { service: "session-handlers", operation: "handleGetCurrentUser.identityMismatch" },
+        });
+        await databaseService.deleteSession(session.sessionToken);
+        await sessionService.clearSession();
+        sessionSecurityService.cleanupSession(session.sessionToken);
+        return { success: false, error: "Session belongs to a different account" };
+      }
       await logService.info(
         "TASK-1507G: ID mismatch detected, migrating user",
         "SessionHandlers",
@@ -1003,8 +982,15 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
         }
       );
 
-      // Migrate user to Supabase ID
-      freshUser = await migrateUserToSupabaseId(freshUser, supabaseUserId);
+      // BACKLOG-4075: the same writer the deep-link sign-in uses
+      // (loginProvisioningService provisionDeepLinkSignIn). The old
+      // copy-then-delete migration could never commit on the shipped schema:
+      // its INSERT duplicated the source row's UNIQUE email/oauth columns.
+      const already = await databaseService.getUserById(supabaseUserId);
+      if (!already) {
+        await databaseService.migrateUserIdForUnification(freshUser.id, supabaseUserId);
+      }
+      freshUser = already ?? (await databaseService.getUserById(supabaseUserId));
     }
 
     // TASK-1809: Always fetch cloud user with retry to reliably check terms state

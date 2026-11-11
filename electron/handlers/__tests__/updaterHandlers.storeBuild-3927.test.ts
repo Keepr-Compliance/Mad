@@ -50,7 +50,7 @@ const flush = async () => {
   await new Promise((r) => setImmediate(r));
 };
 
-beforeAll(() => registerUpdaterHandlers({} as never));
+beforeAll(() => registerUpdaterHandlers());
 beforeEach(() => {
   jest.clearAllMocks();
   mockStore = true;

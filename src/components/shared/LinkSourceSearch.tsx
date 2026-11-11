@@ -138,8 +138,18 @@ export const LinkSourceSearch: React.FC<LinkSourceSearchProps> = ({
     );
     const linked = outcomes.filter((o) => o.ok).length;
     const claimed = outcomes.filter((o) => !o.ok && o.reason === "claimed").length;
+    // BACKLOG-4180: nothing was written for these; keep them selected to retry.
+    const copyFailed = attempted.filter(
+      (_r, i) => outcomes[i] && !outcomes[i].ok && outcomes[i].reason === "copy_failed",
+    );
 
     if (linked > 0) onLinked?.();
+
+    if (copyFailed.length > 0) {
+      setFailure("Couldn't link this contact. Try again.");
+      setSelectedIds(copyFailed.map(rowId));
+      return;
+    }
 
     if (rejected.length > 0) {
       // Not an error — the disclosure this feature exists to make. Anything that
