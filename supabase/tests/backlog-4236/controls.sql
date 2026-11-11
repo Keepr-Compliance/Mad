@@ -201,6 +201,31 @@ BEGIN
   EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('E2_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
 
+  BEGIN
+    SET LOCAL session_replication_role = replica;
+    INSERT INTO public.org_deals (organization_id, stripe_mode, term, seats, start_date, status, suspended_reason, entitlement_prior, version)
+    VALUES (PS, 'test', 'month', 1, current_date, 'suspended', 'non_payment', '{}'::jsonb, 1);
+    SET LOCAL session_replication_role = origin;
+    r := r || jsonb_build_object('E2_solo_billing_off', pg_temp.pass(pg_temp.state(S) ->> 'licensed' = 'false', pg_temp.state(S)::text));
+    RAISE EXCEPTION USING ERRCODE = 'T4236';
+  EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('E2b_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  BEGIN
+    -- internal helpers refuse a caller asking about someone else (reachable only from definer code)
+    PERFORM set_config('request.jwt.claims', json_build_object('sub', S, 'role', 'authenticated')::text, true);
+    PERFORM set_config('request.jwt.claim.sub', S::text, true);
+    PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+    BEGIN PERFORM * FROM public._cloud_autosave_license(A); t := 'ran'; EXCEPTION WHEN OTHERS THEN t := 'ERR ' || SQLSTATE; END;
+    BEGIN PERFORM public._cloud_fence_unreferenced(A, ARRAY[BL]); t2 := 'ran'; EXCEPTION WHEN OTHERS THEN t2 := 'ERR ' || SQLSTATE; END;
+    PERFORM pg_temp.clear_claims();
+    t3 := (SELECT public.assign_member_addon(O, J, 'cloud_autosave', true, NULL)) ->> 'error';
+    r := r || jsonb_build_object('E7_internal_caller_checks', pg_temp.pass(t = 'ERR 42501' AND t2 = 'ERR 42501' AND t3 = 'not_authorized'
+      AND (SELECT purge_requested_at IS NULL FROM public.cloud_blobs WHERE id = BL), t || ' ' || t2 || ' ' || coalesce(t3, '-')));
+    RAISE EXCEPTION USING ERRCODE = 'T4236';
+  EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN PERFORM pg_temp.clear_claims(); r := r || jsonb_build_object('E7_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
   -- brokerage: each term alone
   BEGIN
     PERFORM pg_temp.assign(O, A, false);
@@ -850,6 +875,12 @@ BEGIN
       AND pg_temp.j(t2) ->> 'state' = 'new' AND (pg_temp.j(t2) ->> 'blob_id')::uuid <> BL
       AND (SELECT purge_requested_at IS NOT NULL FROM public.cloud_blobs WHERE id = BL)
       AND pg_temp.j(t2) ->> 'storage_path' = A::text || '/' || (pg_temp.j(t2) ->> 'blob_id'), t || t2));
+    -- a deal created after the fence cannot attach the fenced blob, only the new live one
+    UPDATE public.cloud_blobs SET purge_requested_at = now() WHERE id = (pg_temp.j(t2) ->> 'blob_id')::uuid;
+    t := pg_temp.deal(A, jsonb_build_object('source_install_id', I1, 'local_id', 't-5', 'content_hash', pg_temp.h('t-5')));
+    t3 := pg_temp.up(A, 'cloud_upsert_files', I1, pg_temp.cid(t), jsonb_build_array(jsonb_build_object('local_id', 'f-5',
+            'content_hash', pg_temp.h('f-5'), 'filename', 'e.pdf', 'blob_sha256', pg_temp.h('blob-a'))));
+    r := r || jsonb_build_object('B2_fenced_blob_not_attachable', pg_temp.pass(pg_temp.st(t3) = 'rejected:blob_unavailable', t3));
     RAISE EXCEPTION USING ERRCODE = 'T4236';
   EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('B1_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
