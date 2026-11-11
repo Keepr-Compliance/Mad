@@ -81,7 +81,11 @@ export interface SharingDialogProps {
   levels?: readonly SharingLevelOption[];
   /** Who may be added, from a server-side scoped function. Null while loading. */
   candidates: readonly SharingPrincipal[] | null;
-  /** Who has access now, owner excluded. Null while loading. */
+  /**
+   * Who has access now, owner excluded. Null while loading. A new `entries` array is the source of
+   * truth: it replaces any row the dialog hid or re-levelled after a successful write. Keep it the
+   * same array between reads (e.g. useMemo) so the dialog can tell a read from a re-render.
+   */
   entries: readonly SharingEntry[] | null;
   owner?: SharingOwner;
   /** What the server said when it refused the last write, or null. */
@@ -90,10 +94,20 @@ export interface SharingDialogProps {
   searchPlaceholder?: string;
   /** Give every picked principal `level`, in one call. */
   onGrant: (principals: SharingPrincipal[], level: SharingLevel) => void;
-  /** Change an entry's level in place. Not called when the level is unchanged. */
-  onChangeLevel: (entry: SharingEntry, level: SharingLevel) => void;
-  /** Take access away. Called only after the in-dialog confirm. */
-  onRemove: (entry: SharingEntry) => void;
+  /**
+   * Change an entry's level in place. Not called when the level is unchanged.
+   * Return the write's promise to get the in-flight state: while it is pending the row reads
+   * "Saving…" and its menu is disabled; on success the row shows the new level at once; on failure
+   * the row is as before (show the refusal through `error`).
+   */
+  onChangeLevel: (entry: SharingEntry, level: SharingLevel) => void | Promise<unknown>;
+  /**
+   * Take access away. Called only after the in-dialog confirm.
+   * Return the write's promise to get the in-flight state: while it is pending the row reads
+   * "Removing…" and its menu is disabled (no second remove); on success the row leaves the list at
+   * once; on failure it stays (show the refusal through `error`).
+   */
+  onRemove: (entry: SharingEntry) => void | Promise<unknown>;
   /** Make a person the owner. Absent: no "Make owner…" item. Called only after the confirm. */
   onTransferOwnership?: (entry: SharingEntry) => void;
   generalAccess?: SharingGeneralAccess;

@@ -35,7 +35,7 @@
  * Hiding these is presentation only. The server functions are the access guard.
  */
 
-import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { SavedViewItem, SavedViewsSharing, SavedViewUpdate, SharingDialogProps, SharingEntry, SharingPrincipal } from '@keepr/ui';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { canShareViews } from './report-access';
@@ -171,6 +171,10 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
     [noteFailure]
   );
 
+  // The same arrays between reads: the dialog treats a new `entries` as a fresh read.
+  const principals = useMemo(() => toPrincipals(candidates), [candidates]);
+  const entries = useMemo(() => toEntries(grants), [grants]);
+
   const available = Boolean(shareApi) && !missing && serverSupportsSharing(saved.views);
 
   const sharing: SavedViewsSharing<V> | undefined =
@@ -236,8 +240,12 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
         }
       : undefined;
 
-  function afterWrite(op: Promise<unknown>, viewId: string) {
-    if (!shareApi) return;
+  /**
+   * Re-read after a write, show a refusal. Returns `op` itself so the dialog can show the row as in
+   * flight and apply a success at once (BACKLOG-3513 PR-6); the re-read stays the source of truth.
+   */
+  function afterWrite(op: Promise<unknown>, viewId: string): Promise<unknown> | undefined {
+    if (!shareApi) return undefined;
     setError(null);
     op.then(
       () => readDialog(shareApi, viewId),
@@ -246,6 +254,7 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
         readDialog(shareApi, viewId);
       }
     );
+    return op;
   }
 
   const shareDialog: SharingDialogProps = {
@@ -260,8 +269,8 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
     description: VIEW_SHARE_DESCRIPTION,
     levels: VIEW_SHARE_LEVELS,
     owner: viewShareOwner(user),
-    candidates: toPrincipals(candidates),
-    entries: toEntries(grants),
+    candidates: principals,
+    entries,
     error,
     onGrant: (principals, level) => {
       if (!shareApi || !target) return;
@@ -275,11 +284,11 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
     onChangeLevel: (entry, level) => {
       if (!shareApi || !target) return;
       // In place: report_share_set upserts, so one call changes the level.
-      afterWrite(shareApi.share(target.id, entry.id, level), target.id);
+      return afterWrite(shareApi.share(target.id, entry.id, level), target.id);
     },
     onRemove: (entry) => {
       if (!shareApi || !target) return;
-      afterWrite(shareApi.removeGrant(target.id, entry.id), target.id);
+      return afterWrite(shareApi.removeGrant(target.id, entry.id), target.id);
     },
   };
 

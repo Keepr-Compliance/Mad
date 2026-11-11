@@ -454,6 +454,99 @@ describe('SharingDialog (BACKLOG-3513)', () => {
     expect(input()).toHaveFocus();
   });
 
+  // BACKLOG-3513 PR-6: a row write in flight. The adopter returns the write's promise.
+  function deferred() {
+    let resolve: () => void = () => undefined;
+    let reject: (e: unknown) => void = () => undefined;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+  function confirmRemove(name: string) {
+    fireEvent.click(trigger(new RegExp(`^Access for ${name}: `)));
+    fireEvent.click(item(/^Remove access$/));
+    fireEvent.click(within(screen.getByRole('group', { name: `Remove access for ${name}` })).getByRole('button', { name: 'Remove access' }));
+  }
+  const rowTrigger = (name: string) => screen.queryByRole('button', { name: new RegExp(`^Access for ${name}: `) });
+
+  it('W1 remove in flight: the row reads Removing…, its menu is disabled, and no second remove can start', async () => {
+    const d = deferred();
+    const onRemove = jest.fn(() => d.promise);
+    setup({ onRemove });
+    confirmRemove('Jordan Lee');
+    expect(onRemove).toHaveBeenCalledTimes(1);
+    const t = rowTrigger('Jordan Lee')!;
+    expect(t).toHaveAccessibleName('Access for Jordan Lee: Removing…');
+    expect(t).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(t);
+    fireEvent.keyDown(t, { key: 'ArrowDown' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Remove access for Jordan Lee' })).toBeNull();
+    expect(onRemove).toHaveBeenCalledTimes(1);
+    await act(async () => d.reject(new Error('refused')));
+  });
+
+  it('W2 remove succeeds: the row leaves at once, before the next entries; the next entries are the truth', async () => {
+    const d = deferred();
+    const onRemove = jest.fn(() => d.promise);
+    const { rerender, props } = setup({ onRemove });
+    confirmRemove('Jordan Lee');
+    await act(async () => d.resolve());
+    expect(rowTrigger('Jordan Lee')).toBeNull();
+    expect(rowNames()).toEqual(['Dana Holt (You)', 'Priya Raman', 'Role: Agents']);
+    // Same entries array (a re-render, not a read): still gone.
+    rerender(<SharingDialog {...props} onRemove={onRemove} />);
+    expect(rowTrigger('Jordan Lee')).toBeNull();
+    // A new read that still lists Jordan wins.
+    rerender(<SharingDialog {...props} onRemove={onRemove} entries={[...ENTRIES]} />);
+    expect(rowTrigger('Jordan Lee')).toHaveAccessibleName('Access for Jordan Lee: Can edit');
+  });
+
+  it('W3 remove refused: the row comes back as it was, menu usable', async () => {
+    const d = deferred();
+    setup({ onRemove: jest.fn(() => d.promise) });
+    confirmRemove('Jordan Lee');
+    await act(async () => d.reject(new Error('refused')));
+    const t = rowTrigger('Jordan Lee')!;
+    expect(t).toHaveAccessibleName('Access for Jordan Lee: Can edit');
+    expect(t).not.toHaveAttribute('aria-disabled');
+    fireEvent.click(t);
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+  });
+
+  it('W4 level change: Saving… and disabled while in flight; the new level on success; unchanged on refusal', async () => {
+    const ok = deferred();
+    const onChangeLevel = jest.fn(() => ok.promise);
+    const { unmount } = setup({ onChangeLevel });
+    fireEvent.click(rowTrigger('Jordan Lee')!);
+    fireEvent.click(radio(/^Can view/));
+    const t = rowTrigger('Jordan Lee')!;
+    expect(t).toHaveAccessibleName('Access for Jordan Lee: Saving…');
+    expect(t).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(t);
+    expect(screen.queryByRole('menu')).toBeNull();
+    await act(async () => ok.resolve());
+    expect(rowTrigger('Jordan Lee')).toHaveAccessibleName('Access for Jordan Lee: Can view');
+    expect(onChangeLevel).toHaveBeenCalledTimes(1);
+    unmount();
+
+    const no = deferred();
+    setup({ onChangeLevel: jest.fn(() => no.promise) });
+    fireEvent.click(rowTrigger('Jordan Lee')!);
+    fireEvent.click(radio(/^Can view/));
+    await act(async () => no.reject(new Error('refused')));
+    expect(rowTrigger('Jordan Lee')).toHaveAccessibleName('Access for Jordan Lee: Can edit');
+    expect(rowTrigger('Jordan Lee')).not.toHaveAttribute('aria-disabled');
+  });
+
+  it('W5 an adopter that returns nothing keeps today\'s behaviour: no pending, the row waits for the next entries', () => {
+    setup({ onRemove: jest.fn() });
+    confirmRemove('Jordan Lee');
+    expect(rowTrigger('Jordan Lee')).toHaveAccessibleName('Access for Jordan Lee: Can edit');
+  });
+
   it('K10 SharingDialog is exported from the package index', () => {
     expect(SharingDialogFromIndex).toBe(SharingDialog);
   });

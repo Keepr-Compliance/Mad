@@ -97,14 +97,49 @@ export function SharingDialog({
   const openRowRef = React.useRef<HTMLDivElement>(null);
   /** Row whose menu trigger gets focus back after a menu or confirm closes. */
   const [refocus, setRefocus] = React.useState<string | null>(null);
+  /** Rows with a write in flight (adopter returned a promise): what kind, for the pending label. */
+  const [busy, setBusy] = React.useState<ReadonlyMap<string, 'remove' | 'level'>>(new Map());
+  /** Rows whose remove succeeded and levels whose change succeeded, until the next `entries`. */
+  const [gone, setGone] = React.useState<ReadonlySet<string>>(new Set());
+  const [levelNow, setLevelNow] = React.useState<ReadonlyMap<string, SharingLevel>>(new Map());
 
-  // A closed dialog forgets its picks, menus and confirms.
+  // A new `entries` is the adopter's read: the source of truth replaces what the dialog assumed.
+  React.useEffect(() => {
+    setGone(new Set());
+    setLevelNow(new Map());
+  }, [entries]);
+
+  /**
+   * Run one row write. A promise from the adopter marks the row busy until it settles; success
+   * applies `onOk` (hide the row / show the level); failure leaves the row as it was.
+   */
+  function track(key: string, kind: 'remove' | 'level', result: void | Promise<unknown>, onOk: () => void) {
+    if (!result || typeof (result as Promise<unknown>).then !== 'function') return;
+    setBusy((prev) => new Map(prev).set(key, kind));
+    const done = () =>
+      setBusy((prev) => {
+        const next = new Map(prev);
+        next.delete(key);
+        return next;
+      });
+    (result as Promise<unknown>).then(
+      () => {
+        done();
+        onOk();
+      },
+      () => done()
+    );
+  }
+
+  // A closed dialog forgets its picks, menus, confirms and what it assumed after a write.
   React.useEffect(() => {
     if (open) return;
     setChips([]);
     setLevel(firstLevel);
     setMenuFor(null);
     setConfirm(null);
+    setGone(new Set());
+    setLevelNow(new Map());
   }, [open, firstLevel]);
 
   React.useEffect(() => {
@@ -122,6 +157,21 @@ export function SharingDialog({
     Array.from(triggers).find((b) => b.dataset.menuFor === refocus)?.focus();
     setRefocus(null);
   }, [refocus, addInputId]);
+
+  // What the list shows: `entries` less rows whose remove succeeded, with levels whose change
+  // succeeded, until the adopter's next read replaces them.
+  const visible = React.useMemo(
+    () =>
+      entries === null
+        ? null
+        : entries
+            .filter((e) => !gone.has(principalKey(e)))
+            .map((e) => {
+              const to = levelNow.get(principalKey(e));
+              return to === undefined || to === e.level ? e : { ...e, level: to };
+            }),
+    [entries, gone, levelNow]
+  );
 
   const levelLabel = (value: SharingLevel) => levels.find((l) => l.value === value)?.label ?? value;
   const editorLabel = levelLabel('editor');
@@ -179,7 +229,9 @@ export function SharingDialog({
       hint: `Not available for ${displayName(entry)}`,
       onSelect: () => {
         closeMenu(true);
-        if (entry.level !== l.value) onChangeLevel(entry, l.value);
+        if (busy.has(key) || entry.level === l.value) return;
+        const to = l.value;
+        track(key, 'level', onChangeLevel(entry, to), () => setLevelNow((prev) => new Map(prev).set(key, to)));
       },
     }));
     items.push({ kind: 'separator', key: 'sep' });
@@ -230,14 +282,17 @@ export function SharingDialog({
             type="button"
             variant="destructive"
             size="sm"
+            aria-disabled={busy.has(key) || undefined}
             onClick={() => {
+              // One write per row at a time: a second confirm while one is in flight does nothing.
+              if (busy.has(key)) return;
               // Focus moves to the next row's trigger, or the add field when this was the last row.
-              const list = entries ?? [];
+              const list = visible ?? [];
               const at = list.findIndex((e) => principalKey(e) === key);
               const next = at >= 0 && at + 1 < list.length ? principalKey(list[at + 1]) : ADD_FIELD;
               setConfirm(null);
               setRefocus(next);
-              onRemove(entry);
+              track(key, 'remove', onRemove(entry), () => setGone((prev) => new Set(prev).add(key)));
             }}
           >
             Remove access
@@ -273,10 +328,12 @@ export function SharingDialog({
         </div>
       );
     }
-    const menuOpen = menuFor === key;
+    const pending = busy.get(key);
+    const menuOpen = menuFor === key && !pending;
     const menuId = `sharing-menu-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+    const pendingLabel = pending === 'remove' ? 'Removing…' : pending === 'level' ? 'Saving…' : null;
     return (
-      <div ref={menuOpen ? openRowRef : undefined}>
+      <div ref={menuOpen ? openRowRef : undefined} aria-busy={pending ? true : undefined}>
         <div className="flex items-center gap-3 py-2">
           <SharingAvatar kind={entry.kind} name={entry.name} />
           <span className="flex min-w-0 flex-1 flex-col">
@@ -291,9 +348,14 @@ export function SharingDialog({
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             aria-controls={menuOpen ? menuId : undefined}
-            aria-label={`Access for ${forWhom}: ${levelLabel(entry.level)}`}
-            onClick={() => setMenuFor(menuOpen ? null : key)}
+            aria-label={`Access for ${forWhom}: ${pendingLabel ?? levelLabel(entry.level)}`}
+            aria-disabled={pending ? true : undefined}
+            onClick={() => {
+              if (pending) return;
+              setMenuFor(menuOpen ? null : key);
+            }}
             onKeyDown={(e) => {
+              if (pending) return;
               if (!menuOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
                 e.preventDefault();
                 setMenuFor(key);
@@ -301,10 +363,11 @@ export function SharingDialog({
             }}
             className={cn(
               'flex h-8 flex-shrink-0 items-center gap-1 rounded-md border pl-2.5 pr-2 text-sm text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
-              menuOpen ? 'border-gray-300 bg-gray-100' : 'border-transparent hover:bg-gray-100'
+              menuOpen ? 'border-gray-300 bg-gray-100' : 'border-transparent hover:bg-gray-100',
+              pending && 'cursor-wait text-gray-500 hover:bg-transparent'
             )}
           >
-            {levelLabel(entry.level)}
+            {pendingLabel ?? levelLabel(entry.level)}
             <ChevronDown className={cn('h-4 w-4 text-gray-500', menuOpen && 'rotate-180')} aria-hidden="true" />
           </button>
         </div>
@@ -376,9 +439,9 @@ export function SharingDialog({
 
         <div className="flex flex-col gap-1">
           <p className="mb-1 text-xs font-medium uppercase tracking-wider text-gray-500">People with access</p>
-          {entries === null ? (
+          {visible === null ? (
             <p className="text-sm text-gray-500">Loading…</p>
-          ) : entries.length === 0 && !owner ? (
+          ) : visible.length === 0 && !owner ? (
             <p className="text-sm text-gray-500">Only you</p>
           ) : (
             <ul ref={listRef} aria-label="People with access" className="flex flex-col divide-y divide-gray-100">
@@ -394,7 +457,7 @@ export function SharingDialog({
                   <span className="px-2.5 text-sm text-gray-600">Owner</span>
                 </li>
               ) : null}
-              {entries.map((entry) => (
+              {visible.map((entry) => (
                 <li key={principalKey(entry)} data-slot="sharing-entry">
                   {renderEntry(entry)}
                 </li>

@@ -252,3 +252,97 @@ describe('S3 writes carry the open report key; stale replies are dropped', () =>
     expect(api.grants).toHaveBeenCalledWith('funnel');
   });
 });
+
+// BACKLOG-3513 PR-6: Remove looked stuck. The write returns well before the re-read; the row must
+// show the write in flight, block a second remove, and apply a success at once.
+describe('H the report dialog while a write is in flight', () => {
+  function deferred<T = void>() {
+    let resolve: (v: T) => void = () => undefined;
+    let reject: (e: unknown) => void = () => undefined;
+    const promise = new Promise<T>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+  const BO: ShareGrant = { userId: uid(2), name: 'Bo Larkspur', role: 'viewer' };
+
+  /** First grants read answers at once; later reads wait for `reread`. */
+  function heldApi(write: { set?: Promise<void>; remove?: Promise<void> }, reread: Promise<ShareGrant[]>) {
+    let reads = 0;
+    const api = {
+      candidates: vi.fn(async () => [{ id: uid(1), name: 'Avery Quinn' }]),
+      grants: vi.fn((): Promise<ShareGrant[]> => (++reads === 1 ? Promise.resolve([BO]) : reread)),
+      set: vi.fn(() => write.set ?? Promise.resolve()),
+      remove: vi.fn(() => write.remove ?? Promise.resolve()),
+    };
+    return api;
+  }
+  async function openDialog(api: ReportAccessApi) {
+    mount('owner', api);
+    fireEvent.click(shareButton()!);
+    const dialog = await screen.findByRole('dialog', { name: 'Share “Paywall Funnel”' });
+    await within(dialog).findByRole('button', { name: 'Access for Bo Larkspur: Can view' });
+    return dialog;
+  }
+  function confirmRemoveBo(dialog: HTMLElement) {
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Access for Bo Larkspur: / }));
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /^Remove access$/ }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Remove access for Bo Larkspur' })).getByRole('button', { name: 'Remove access' }));
+  }
+  const boTrigger = (dialog: HTMLElement) => within(dialog).queryByRole('button', { name: /^Access for Bo Larkspur: / });
+
+  it('H1 remove held: the row reads Removing…, its menu does not open, and no second remove is sent', async () => {
+    const remove = deferred();
+    const api = heldApi({ remove: remove.promise }, new Promise(() => undefined));
+    const dialog = await openDialog(api);
+    confirmRemoveBo(dialog);
+    const t = boTrigger(dialog)!;
+    expect(t.getAttribute('aria-label')).toBe('Access for Bo Larkspur: Removing…');
+    expect(t.getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(t);
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Remove access for Bo Larkspur' })).toBeNull();
+    expect(api.remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('H2 remove succeeds while the re-read is still out: the row is gone at once', async () => {
+    const remove = deferred();
+    const reread = deferred<ShareGrant[]>();
+    const api = heldApi({ remove: remove.promise }, reread.promise);
+    const dialog = await openDialog(api);
+    confirmRemoveBo(dialog);
+    await act(async () => remove.resolve());
+    expect(api.grants).toHaveBeenCalledTimes(2); // the re-read was sent and is still out
+    expect(boTrigger(dialog)).toBeNull();
+    expect(within(dialog).queryByText('Bo Larkspur')).toBeNull();
+    // The re-read stays the source of truth.
+    await act(async () => reread.resolve([]));
+    expect(boTrigger(dialog)).toBeNull();
+    expect(api.remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('H3 level change succeeds while the re-read is still out: the new level shows at once', async () => {
+    const set = deferred();
+    const api = heldApi({ set: set.promise }, new Promise(() => undefined));
+    const dialog = await openDialog(api);
+    fireEvent.click(boTrigger(dialog)!);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitemradio', { name: /^Can edit/ }));
+    expect(boTrigger(dialog)!.getAttribute('aria-label')).toBe('Access for Bo Larkspur: Saving…');
+    expect(boTrigger(dialog)!.getAttribute('aria-disabled')).toBe('true');
+    await act(async () => set.resolve());
+    expect(boTrigger(dialog)!.getAttribute('aria-label')).toBe('Access for Bo Larkspur: Can edit');
+    expect(api.set).toHaveBeenCalledTimes(1);
+  });
+
+  it('H4 remove refused: the row comes back and the refusal shows', async () => {
+    const remove = deferred();
+    const api = heldApi({ remove: remove.promise }, Promise.resolve([BO]));
+    const dialog = await openDialog(api);
+    confirmRemoveBo(dialog);
+    await act(async () => remove.reject({ message: 'Report not found' }));
+    await waitFor(() => expect(within(dialog).getByRole('alert').textContent).toContain('Report not found'));
+    expect(boTrigger(dialog)!.getAttribute('aria-label')).toBe('Access for Bo Larkspur: Can view');
+    expect(boTrigger(dialog)!.getAttribute('aria-disabled')).toBeNull();
+  });
+});

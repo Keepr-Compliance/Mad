@@ -246,7 +246,9 @@ describe('P6 the SharingDialog picker is fed by candidates only', () => {
       [vid(1), vid(102), 'editor'],
     ]);
     api.removeGrant.mockRejectedValueOnce({ message: 'Saved view not found' });
-    act(() => hook.result.current.shareDialog.onRemove(entry(vid(101), 'Avery Example', 'editor')));
+    act(() => {
+      void hook.result.current.shareDialog.onRemove(entry(vid(101), 'Avery Example', 'editor'));
+    });
     await waitFor(() => expect(hook.result.current.shareDialog.error).toBe('Saved view not found'));
     act(() => hook.result.current.shareDialog.onOpenChange(false));
     expect(hook.result.current.shareDialog.open).toBe(false);
@@ -291,7 +293,9 @@ describe('A1 a level change is ONE report_share_set upsert, never remove + grant
     api.grants.mockResolvedValue([{ userId: vid(101), name: 'Avery Example', role: 'editor' }]);
     act(() => hook.result.current.sharing!.onShare!(OWN));
     await waitFor(() => expect(hook.result.current.shareDialog.entries).toHaveLength(1));
-    act(() => hook.result.current.shareDialog.onChangeLevel(hook.result.current.shareDialog.entries![0], 'viewer'));
+    act(() => {
+      void hook.result.current.shareDialog.onChangeLevel(hook.result.current.shareDialog.entries![0], 'viewer');
+    });
     await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(2));
     expect(api.share.mock.calls).toEqual([[vid(1), vid(101), 'viewer']]);
     expect(api.removeGrant).not.toHaveBeenCalled();
@@ -398,7 +402,9 @@ describe('R1 a late reply for another view is discarded', () => {
     });
     expect(hook.result.current.shareDialog).toMatchObject({ name: 'Mine too', entries: [entry(vid(202), 'Robin Marsh', 'editor')] });
     expect(hook.result.current.shareDialog.candidates).toEqual([person(vid(102), 'Blake Builder')]);
-    act(() => hook.result.current.shareDialog.onRemove(hook.result.current.shareDialog.entries![0]));
+    act(() => {
+      void hook.result.current.shareDialog.onRemove(hook.result.current.shareDialog.entries![0]);
+    });
     act(() => hook.result.current.shareDialog.onGrant([person(vid(102), 'Blake Builder')], 'viewer'));
     expect(api.removeGrant).toHaveBeenCalledWith(vid(5), vid(202));
     expect(api.share).toHaveBeenCalledWith(vid(5), vid(102), 'viewer');
@@ -590,5 +596,87 @@ describe('O1 the saved-view owner row is the signed-in user, by name (BACKLOG-35
     const { hook } = mount([OWN]);
     act(() => hook.result.current.sharing!.onShare!(OWN));
     expect(hook.result.current.shareDialog.owner).toEqual({ id: SELF, name: 'Daniel Haim', isYou: true });
+  });
+});
+
+// BACKLOG-3513 PR-6: the saved-view dialog while a write is in flight (same contract as reports).
+describe('H the saved-view dialog while a write is in flight', () => {
+  function deferred<T = void>() {
+    let resolve: (v: T) => void = () => undefined;
+    const promise = new Promise<T>((res) => (resolve = res));
+    return { promise, resolve };
+  }
+  async function openWith(api: ReturnType<typeof fakeShareApi>) {
+    function Harness() {
+      const { sharing, shareDialog } = useReportViewSharing(api, { views: [OWN], write: vi.fn() }, 'user-activity', () => ({
+        filters: {},
+        metric: null,
+      }));
+      return (
+        <>
+          <button type="button" onClick={() => sharing?.onShare?.(OWN)}>
+            open
+          </button>
+          <SharingDialog {...shareDialog} />
+        </>
+      );
+    }
+    render(
+      <ReportAccessProvider reportKey="user-activity" title="User Activity" access="owner">
+        <Harness />
+      </ReportAccessProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'open' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Share “Mine”' });
+    await within(dialog).findByRole('button', { name: 'Access for Avery Example: Can edit' });
+    return dialog;
+  }
+  function heldGrants(api: ReturnType<typeof fakeShareApi>) {
+    let reads = 0;
+    api.grants.mockImplementation(() =>
+      ++reads === 1 ? Promise.resolve([{ userId: vid(101), name: 'Avery Example', role: 'editor' }]) : new Promise(() => undefined)
+    );
+  }
+  const avery = (dialog: HTMLElement) => within(dialog).queryByRole('button', { name: /^Access for Avery Example: / });
+
+  it('H1 remove held: Removing…, menu disabled, one removeGrant only', async () => {
+    const api = fakeShareApi();
+    heldGrants(api);
+    api.removeGrant.mockReturnValue(new Promise(() => undefined));
+    const dialog = await openWith(api);
+    fireEvent.click(avery(dialog)!);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /^Remove access$/ }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Remove access for Avery Example' })).getByRole('button', { name: 'Remove access' }));
+    expect(avery(dialog)!.getAttribute('aria-label')).toBe('Access for Avery Example: Removing…');
+    fireEvent.click(avery(dialog)!);
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(api.removeGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it('H2 remove succeeds while the re-read is out: the row is gone at once', async () => {
+    const api = fakeShareApi();
+    heldGrants(api);
+    const d = deferred();
+    api.removeGrant.mockReturnValue(d.promise);
+    const dialog = await openWith(api);
+    fireEvent.click(avery(dialog)!);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /^Remove access$/ }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Remove access for Avery Example' })).getByRole('button', { name: 'Remove access' }));
+    await act(async () => d.resolve());
+    expect(api.grants).toHaveBeenCalledTimes(2);
+    expect(avery(dialog)).toBeNull();
+  });
+
+  it('H3 level change succeeds while the re-read is out: the new level shows at once', async () => {
+    const api = fakeShareApi();
+    heldGrants(api);
+    const d = deferred();
+    api.share.mockReturnValue(d.promise);
+    const dialog = await openWith(api);
+    fireEvent.click(avery(dialog)!);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitemradio', { name: /^Can view/ }));
+    expect(avery(dialog)!.getAttribute('aria-label')).toBe('Access for Avery Example: Saving…');
+    await act(async () => d.resolve());
+    expect(avery(dialog)!.getAttribute('aria-label')).toBe('Access for Avery Example: Can view');
   });
 });
