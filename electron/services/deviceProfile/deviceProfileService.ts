@@ -253,24 +253,31 @@ export function createDeviceProfileService(deps: ServiceDeps): DeviceProfileServ
       return { entries: [...without(entries, key), entry], result: found };
     });
     if (!shouldWrite(prev, next, reason)) return;
-    const res = await deps.updateRow(userId, deviceId, row);
-    // The profile may now be on the row, so this account's flag is written back
-    // even if a clear removed it while the UPDATE was in flight (OFF then ON).
-    // A failed UPDATE may still have landed: the flag comes back with an empty
-    // fingerprint, so the next launch retries the write.
-    const succeeded = res.ok && res.rows >= 1;
-    await withState((entries) => {
-      const found = entryOf(entries, key);
-      const stamp = new Date(deps.now()).toISOString();
-      const entry: StateEntry = succeeded
-        ? { deviceKey: key, rowId, fp: next.fp, writtenAt: stamp }
-        : (found ?? { deviceKey: key, rowId, fp: {}, writtenAt: stamp });
-      return { entries: [...without(entries, key), entry], result: undefined };
-    });
-    // OFF arrived while the UPDATE (or the bookkeeping after it) was in flight:
-    // a fresh null, sent AFTER it, so the null is the last write the row sees.
-    // Not deduped with a clear already running, which may have landed first.
-    if (!deps.isGateOn()) await sendClear(userId, deviceId);
+    // A throw counts as a reported failure: the server may already have applied
+    // the write, so the bookkeeping below runs either way (finally).
+    let succeeded = false;
+    try {
+      const res = await deps.updateRow(userId, deviceId, row);
+      succeeded = res.ok && res.rows >= 1;
+    } finally {
+      // The profile may now be on the row, so this account's flag is written back
+      // even if a clear removed it while the UPDATE was in flight (OFF then ON).
+      // A failed UPDATE may still have landed: the flag comes back with an empty
+      // fingerprint, so the next launch retries the write.
+      await withState((entries) => {
+        const found = entryOf(entries, key);
+        const stamp = new Date(deps.now()).toISOString();
+        const entry: StateEntry = succeeded
+          ? { deviceKey: key, rowId, fp: next.fp, writtenAt: stamp }
+          : (found ?? { deviceKey: key, rowId, fp: {}, writtenAt: stamp });
+        return { entries: [...without(entries, key), entry], result: undefined };
+      });
+      // OFF arrived while the UPDATE (or the bookkeeping after it) was in flight:
+      // a fresh null, sent AFTER it, so the null is the last write the row sees.
+      // NOT the deduped clearIfPending: a clear whose null was applied before
+      // this UPDATE may still be waiting for its response (SR probe 3).
+      if (!deps.isGateOn()) await sendClear(userId, deviceId);
+    }
   }
 
   return {

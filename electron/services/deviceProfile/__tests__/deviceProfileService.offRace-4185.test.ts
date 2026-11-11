@@ -73,6 +73,82 @@ beforeEach(() => {
 afterEach(() => jest.useRealTimers());
 
 describe("SR B1: OFF while the profile UPDATE is in flight", () => {
+  it("the upload THROWS after the server applied it, with OFF then ON meanwhile: the flag comes back and a later OFF clears", async () => {
+    const { h, deps } = harness();
+    h.hold = true;
+    const base = deps.updateRow;
+    let throwProfile = true;
+    deps.updateRow = async (u, d, p) => {
+      const r = await base(u, d, p);
+      if (p !== null && throwProfile) throw new Error("socket closed after the write"); // applied, then threw
+      return r;
+    };
+    const svc = createDeviceProfileService(deps);
+    const run = svc.onDeviceRegistered(USER, DEVICE, "login", ROW);
+    await untilInFlight(h);
+    h.gate.on = false;
+    await svc.onPrivacyGateChanged();
+    h.gate.on = true;
+    await svc.onPrivacyGateChanged();
+    h.release?.();
+    await settle(run);
+    throwProfile = false;
+    expect(h.file).not.toBeNull();
+    h.gate.on = false;
+    await svc.onPrivacyGateChanged();
+    expect(seq(h.updates).at(-1)).toBe("null");
+    expect(h.file).toBeNull();
+  });
+
+  it("the upload THROWS after the server applied it, OFF meanwhile and still OFF: a null lands last", async () => {
+    const { h, deps } = harness();
+    h.hold = true;
+    const base = deps.updateRow;
+    deps.updateRow = async (u, d, p) => {
+      const r = await base(u, d, p);
+      if (p !== null) throw new Error("socket closed after the write");
+      return r;
+    };
+    const svc = createDeviceProfileService(deps);
+    const run = svc.onDeviceRegistered(USER, DEVICE, "login", ROW);
+    await untilInFlight(h);
+    h.gate.on = false;
+    await svc.onPrivacyGateChanged();
+    h.release?.();
+    await settle(run);
+    expect(seq(h.updates).at(-1)).toBe("null");
+    expect(h.file).toBeNull();
+  });
+
+  it("SRPROBE3 the toggle's null is applied first but its response is still out when the profile returns: a fresh null must land last", async () => {
+    const { h, deps } = harness();
+    h.hold = true;
+    let nullRelease: null | (() => void) = null;
+    let firstNull = true;
+    const base = deps.updateRow;
+    deps.updateRow = async (u, d, p) => {
+      if (p === null && firstNull) {
+        firstNull = false;
+        h.updates.push(null); // applied on the server now
+        await new Promise<void>((r) => (nullRelease = r)); // response delayed
+        return { ok: true, rows: 1 };
+      }
+      return base(u, d, p);
+    };
+    const svc = createDeviceProfileService(deps);
+    const run = svc.onDeviceRegistered(USER, DEVICE, "login", ROW);
+    await untilInFlight(h);
+    h.gate.on = false;
+    const toggle = svc.onPrivacyGateChanged();
+    for (let i = 0; i < 5 && !nullRelease; i++) await jest.advanceTimersByTimeAsync(10);
+    expect(typeof nullRelease).toBe("function"); // positive control: toggle null applied, response pending
+    h.release?.(); // profile applied AFTER the toggle null, and its response returns first
+    for (let i = 0; i < 5; i++) await jest.advanceTimersByTimeAsync(10);
+    (nullRelease as unknown as () => void)();
+    await settle(Promise.all([run, toggle]));
+    expect(seq(h.updates).at(-1)).toBe("null");
+    expect(h.file).toBeNull();
+  });
   it("SR D1: OFF then ON while in flight, then OFF later: the row ends cleared", async () => {
     const { h, deps } = harness();
     h.hold = true;
