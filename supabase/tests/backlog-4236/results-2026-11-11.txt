@@ -908,7 +908,8 @@ MISSED 0 of 111
 
 Full control set: 72 total, 71 pass, Z0 deliberate red (three runs; the third after the party phone fixture changed to a reserved number).
 Mutants run this round: the new and changed ones only (22). Full-file sends this round: 25.
-F02_blobs_locked_per_row: NOT RUN in a single session (only the two-session case C4 can show it).
+F02_blobs_locked_per_row: NOT RUN. Not C4's mutant (it removes the blob lock entirely; C4 is predicted green under it).
+C4's mutant is S_C4_blobs_locked_per_row_payload_order in concurrency/mutants.py.
 Two-session cases C1a, C1b, C2, C3, C4: NOT RUN. They need a committed apply.
 
 ## Batch 1

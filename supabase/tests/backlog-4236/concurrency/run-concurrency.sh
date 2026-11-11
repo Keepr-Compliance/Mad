@@ -10,9 +10,9 @@
 #        them -> the new deal and blob are left.
 #   C1b  turn-off holding its transaction, then the same new-row writes.
 #        Expect: turn-off success, both writes {"error":"not_entitled"}; no new deal, no new blob.
-#        Mutant: in cloud_upsert_deal and cloud_register_blob move the settings FOR SHARE after the
-#        entitlement check -> the check passes on the old state, the write waits, then inserts
-#        after the turn-off committed -> a new deal and a live blob are left.
+#        Mutant S_C1b_deal_share_after_check: in cloud_upsert_deal only, move the settings FOR SHARE after
+#        the entitlement check -> the check passes on the old state, the write waits, then inserts after
+#        the turn-off committed -> d applied (b stays not_entitled) and a new deal is left.
 #   C2   one session holds the deal row, then upserts the message; the other tombstones that message.
 #        Expect: no 40P01; upsert applied; tombstone removed.
 #        Mutant: in cloud_tombstone remove the /*TOMB:lockdeals*/ statement -> 40P01 in one session.
@@ -22,12 +22,16 @@
 #   C4   two file upserts on two deals attaching the same two blobs in opposite payload order; the
 #        first session holds the lower-id blob first.
 #        Expect: no 40P01; both results ok with every row applied.
-#        Mutant: lock each blob per row in payload order instead of /*FILE:lockblobs*/ -> 40P01.
-# Mutants are applied to the APPLIED function, the case re-run, and the migration re-applied.
+#        Mutant S_C4_blobs_locked_per_row_payload_order: drop /*FILE:lockblobs*/ and lock each blob FOR
+#        UPDATE at its per-row lookup (payload order) -> 40P01. (F02, no blob lock at all, stays green.)
+# Mutant names are the modes of concurrency/mutants.py (C1a S_C1a_turnoff_unlocked_update_late, C2
+# S_C2_tombstone_no_deal_lock, C3 S_C3_register_no_on_conflict). `mutants.py emit <dir>` writes, per
+# mode, a one-function CREATE OR REPLACE for the mutant and for the pristine text; apply the mutant,
+# re-run the case, apply the pristine file. Mutant results above are predicted, not run.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 K=~/.claude/bin/kt-sql
-case "${1:-}" in C1a|C1b|C2|C3|C4) ;; *) sed -n '2,32p' "$0"; exit 2 ;; esac
+case "${1:-}" in C1a|C1b|C2|C3|C4) ;; *) sed -n '2,30p' "$0"; exit 2 ;; esac
 CASE="$1"
 
 umask 077
@@ -49,6 +53,10 @@ col() { python3 -c 'import json,sys; print(json.load(sys.stdin)[0][sys.argv[1]] 
 cleanup() {
   rc=$?
   set +e
+  trap - EXIT INT TERM
+  # sessions still running hold row locks; let them end before the teardown reads the rows
+  wait 2>/dev/null
+  [ "$INTERRUPTED" = 1 ] && sleep 8  # a killed client leaves its server transaction running (holds <= 6 s)
   if [ "$SETUP_DONE" = 1 ]; then
     fill teardown.filled.sql teardown.sql; $K "$tmp/teardown.filled.sql" >/dev/null
     fill verify.filled.sql verify.sql
@@ -65,7 +73,9 @@ cleanup() {
   [ "$VERDICT" = PASS ] || rc=1
   exit $rc
 }
-trap cleanup EXIT INT TERM
+INTERRUPTED=0
+trap cleanup EXIT
+trap 'INTERRUPTED=1; exit 130' INT TERM
 
 fill setup.filled.sql setup.sql
 SETUP_DONE=1
