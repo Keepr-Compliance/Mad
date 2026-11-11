@@ -14,28 +14,31 @@
 #      connections active=1. Differs in events and connections. NOT RUN.
 # D13b one call while another transaction holds the call's counter row for 6 s.
 #      expected: response error=busy; elapsed < 3 s; outcomes busy=1.
-#      mutant (no "PERFORM set_config('lock_timeout', '1000ms', true);" in _mcp_bump): the call
+#      mutant S_D13b_bump_no_lock_timeout (no "PERFORM set_config('lock_timeout', '1000ms', true);" in _mcp_bump): the call
 #      waits until the holder commits (about 5 s) and then counts normally -> response ok,
 #      elapsed >= 4 s, outcomes ok=1. Differs in response, elapsed and outcomes. NOT RUN.
 # D14  40 parallel calls on one connection, all inside one minute window.
 #      expected: ok <= 30; ok + rate_limited + busy = 40; no other response; 40 call log rows.
-#      mutant ("IF v_n <= p_limit THEN" -> "IF v_n <= p_limit + 10 THEN" in _mcp_bump): up to 40
+#      mutant S_D14_bump_limit_plus_10 ("IF v_n <= p_limit THEN" -> "IF v_n <= p_limit + 10 THEN" in _mcp_bump): up to 40
 #      ok -> ok = 40 - busy, which exceeds 30 whenever fewer than 10 calls are busy. When 10 or
 #      more calls are busy the mutant is not distinguishable by this case. NOT RUN.
+# D13b and D14 report INCONCLUSIVE when the run crossed a minute boundary (the counter window).
+# Mutant names are the modes of concurrency/mutants.py; `mutants.py emit <dir>` writes, per mode, a
+# one-function CREATE OR REPLACE for the mutant and for the pristine text.
 #
 # The secret, the run id and the fixture user are random per run; every filled SQL file lives in a
 # private temporary directory that the trap removes.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 K=~/.claude/bin/kt-sql
-case "${1:-}" in D7c|D13b|D14) ;; *) sed -n '2,29p' "$0"; exit 2 ;; esac
+case "${1:-}" in D7c|D13b|D14) ;; *) sed -n '2,30p' "$0"; exit 2 ;; esac
 
 umask 077
 tmp="$(mktemp -d)"
 SECRET="$(openssl rand -hex 32)"
 RUN="$(openssl rand -hex 10)"  # client id kpr_c_cc + 20 = 22 characters
 FUID="$(python3 -c 'import uuid; print(uuid.uuid4())')"  # fixture user of this run
-CONNS=""; ENABLED=""; SECRET_HEX=""; ALLOW_N=""; SETUP_DONE=0; VERDICT=FAIL
+m0=""; CONNS=""; ENABLED=""; SECRET_HEX=""; ALLOW_N=""; SETUP_DONE=0; VERDICT=FAIL
 
 fill() {  # fill <template> <out>
   sed -e "s/__SECRET__/${SECRET}/g" -e "s/__RUN__/${RUN}/g" -e "s/__UID__/${FUID}/g" -e "s/__CONNS__/${CONNS}/g" \
@@ -61,6 +64,10 @@ wait_window() { while [ "$(date +%S | sed 's/^0//')" -ge 40 ]; do sleep 1; done;
 cleanup() {
   rc=$?
   set +e
+  trap - EXIT INT TERM
+  # sessions still running hold row locks; let them end before the teardown reads the rows
+  wait 2>/dev/null
+  [ "$INTERRUPTED" = 1 ] && sleep 8  # a killed client leaves its server transaction running (holds <= 6 s)
   if [ "$SETUP_DONE" = 1 ]; then
     fill teardown.sql teardown.filled.sql; $K "$tmp/teardown.filled.sql" >/dev/null
     fill verify.sql verify.filled.sql
@@ -78,7 +85,9 @@ cleanup() {
   rm -rf "$tmp"
   exit $rc
 }
-trap cleanup EXIT INT TERM
+INTERRUPTED=0
+trap cleanup EXIT
+trap 'INTERRUPTED=1; exit 130' INT TERM
 
 snap="$($K "$here/snapshot.sql")"
 ENABLED="$(echo "$snap" | col enabled)"; SECRET_HEX="$(echo "$snap" | col secret_hex)"; ALLOW_N="$(echo "$snap" | col allow_n)"
@@ -106,7 +115,7 @@ print('PASS' if ok else 'FAIL')
 PY
 )" ;;
   D13b)
-    wait_window
+    wait_window; m0="$(date -u +%Y%m%d%H%M)"
     $K "$tmp/hold-counter.filled.sql" > "$tmp/hold.txt" 2>&1 & p1=$!
     sleep 1; t0=$(now_ms); $K "$tmp/call.filled.sql" > "$tmp/call.txt" 2>&1 || true; ms=$(( $(now_ms) - t0 ))
     wait $p1 || true
@@ -120,7 +129,7 @@ print('PASS' if (r == 'busy' and ms < 3000 and s.get('outcomes') == {'busy': 1})
 PY
 )" ;;
   D14)
-    wait_window
+    wait_window; m0="$(date -u +%Y%m%d%H%M)"
     pids=()
     for i in $(seq 1 40); do $K "$tmp/call.filled.sql" > "$tmp/d14-$i.txt" 2>&1 & pids+=($!); done
     for p in "${pids[@]}"; do wait "$p" || true; done
@@ -139,4 +148,6 @@ print('PASS' if fine else 'FAIL')
 PY
 )" ;;
 esac
+# the counter window is the server's minute; a case that crossed a local minute boundary proves nothing
+if [ -n "${m0:-}" ] && [ "$m0" != "$(date -u +%Y%m%d%H%M)" ]; then VERDICT=INCONCLUSIVE; fi
 echo "$1 ${VERDICT} ${obs} expected ${exp}"

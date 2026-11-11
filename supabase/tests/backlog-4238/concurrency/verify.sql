@@ -1,11 +1,12 @@
 -- After teardown: 'clean' only when none of the nine mcp_* tables holds a row of this run, the
--- fixture user is gone, mcp_settings equals the snapshot and the allowlist count is unchanged.
+-- fixture user is gone (auth.users and public.users), mcp_settings equals the snapshot and the allowlist count is unchanged.
 WITH ids AS (
   SELECT '__UID__'::uuid AS a, 'kpr_c_cc__RUN__'::text AS client,
          coalesce(string_to_array(nullif('__CONNS__', ''), ',')::uuid[], '{}') AS conns
 )
 SELECT CASE WHEN
       NOT EXISTS (SELECT 1 FROM auth.users u, ids WHERE u.id = ids.a)
+  AND NOT EXISTS (SELECT 1 FROM public.users u, ids WHERE u.id = ids.a)                                 -- trigger-made user row
   AND (SELECT s.enabled::text = '__ENABLED__' AND coalesce(encode(s.portal_secret_sha256, 'hex'), '') = '__SECRET_HEX__'
          FROM public.mcp_settings s WHERE s.id)                                                         -- 1 mcp_settings
   AND (SELECT count(*) FROM public.mcp_redirect_allowlist)::text = '__ALLOW_N__'                        -- 2 mcp_redirect_allowlist

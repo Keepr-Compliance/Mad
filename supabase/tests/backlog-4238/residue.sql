@@ -7,4 +7,5 @@ SELECT json_build_object(
  'mcp_functions', (SELECT count(*) FROM pg_proc WHERE proname ~ '^_?mcp_' OR proname LIKE 'p4238%' OR proname = 'get_my_cloud_autosave_state'),
  'mcp_reader_role', (SELECT count(*) FROM pg_roles WHERE rolname = 'mcp_reader'),
  'fixture_users', (SELECT count(*) FROM auth.users WHERE email LIKE 'p4238-%'),
+ 'fixture_public_users', (SELECT count(*) FROM public.users WHERE email LIKE 'p4238-%'),
  'ledger_row', (SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version = '20261112170000')) j;
