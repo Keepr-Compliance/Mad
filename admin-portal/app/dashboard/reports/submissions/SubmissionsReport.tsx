@@ -15,7 +15,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { FilterCaption, SavedViews, ShareDialog, StatCard, useSortState } from '@keepr/ui';
+import { FilterCaption, SavedViews, SharingDialog, StatCard, useSortState } from '@keepr/ui';
 import { DEFAULT_PERIOD, type PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
 import {
@@ -242,7 +242,7 @@ export function SubmissionsReport({
               onClear={clearView}
               sharing={sharing}
             />
-            <ShareDialog {...shareDialog} />
+            <SharingDialog {...shareDialog} />
           </>
         }
       />

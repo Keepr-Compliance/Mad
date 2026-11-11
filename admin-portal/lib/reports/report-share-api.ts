@@ -8,7 +8,7 @@
  *
  * - `candidates`: the people the OWNER may share one view with, from `report_share_candidates`
  *   (scoped server-side to that view and caller; id + display name only). This is the ONLY source
- *   of the ShareDialog picker: never a users list read any other way.
+ *   of the share dialog picker: never a users list read any other way.
  * - `grants`: who has access now (`report_share_list`).
  * - `share` / `removeGrant`: `report_share_set` / `report_share_remove`.
  * - `leave`: the caller removes their own access (`report_share_remove` with their own id).
@@ -18,9 +18,24 @@
  *   metric only; on the owner path a null name is refused, so this call can never rename or unpin.
  */
 
-import type { ShareCandidate, ShareGrant, ShareRole } from '@keepr/ui';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
+
+/** A saved-view or report access level. Matches the kit SharingLevel. */
+export type ShareRole = 'viewer' | 'editor';
+
+/** A person who may be granted access: id and display name only (no email). */
+export interface ShareCandidate {
+  id: string;
+  name: string;
+}
+
+/** One current grant. */
+export interface ShareGrant {
+  userId: string;
+  name: string;
+  role: ShareRole;
+}
 
 export interface ShareUpdateInput<F, M> {
   reportKey: string;
