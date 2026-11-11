@@ -542,8 +542,14 @@ export class SessionService {
   /**
    * Update session data (merge with existing)
    * @param updates - Partial session data to update
+   * @param opts.proceed - BACKLOG-4075: asked inside the lock with the record on
+   *   disk; false skips the write. Must be synchronous and must not call
+   *   sessionService (it runs while the lock is held).
    */
-  async updateSession(updates: Partial<SessionData>): Promise<boolean> {
+  async updateSession(
+    updates: Partial<SessionData>,
+    opts?: { proceed?: (current: SessionData) => boolean },
+  ): Promise<boolean> {
     // Serialize the ENTIRE load -> merge -> write so it cannot interleave with another write and
     // re-persist stale data. loadSession/_writeSession here are the internal (non-serialized)
     // path, so holding the lock across them does not deadlock.
@@ -561,6 +567,10 @@ export class SessionService {
           await logService.info("No session to update", "SessionService");
           return false;
         }
+
+        // BACKLOG-4075: decided inside the lock, against the record actually on
+        // disk now (a sign-in write queued ahead of this one has already run).
+        if (opts?.proceed && !opts.proceed(currentSession)) return false;
 
         const updatedSession: SessionData = {
           ...currentSession,
