@@ -255,7 +255,7 @@ export function createDeviceProfileService(deps: ServiceDeps): DeviceProfileServ
     if (!shouldWrite(prev, next, reason)) return;
     const res = await deps.updateRow(userId, deviceId, row);
     // A failed UPDATE leaves the fingerprint untouched: the next launch retries.
-    if (res.ok && res.rows >= 1 && deps.isGateOn()) {
+    if (res.ok && res.rows >= 1) {
       await withState((entries) => {
         const found = entryOf(entries, key);
         if (!found) return { entries, result: undefined }; // cleared meanwhile
