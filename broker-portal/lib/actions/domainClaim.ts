@@ -15,6 +15,7 @@
  */
 
 import * as Sentry from '@sentry/nextjs';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { createServiceClient } from '@/lib/supabase/service';
 import { requireDomainClaimAccess } from '@/lib/domain/access';
@@ -32,6 +33,7 @@ import {
   DOMAIN_CLAIM_UNAVAILABLE,
   checkResultMessage,
   domainTakenMessage,
+  doubledNameMessage,
   isNotDeployedError,
   type DomainCheckResult,
   type DomainClaimActionResult,
@@ -93,6 +95,33 @@ export async function createDomainClaim(input: string): Promise<DomainClaimActio
   }
 }
 
+/**
+ * True when the claim's exact token is published at `_keepr.<domain>.<domain>`: a DNS host that
+ * appends the zone to a Host that already ended in it. Never throws; any failure is "no".
+ * lookupClaimTxt(`${domain}.${domain}`) queries exactly that name.
+ */
+async function foundAtDoubledName(
+  supabase: Pick<SupabaseClient, 'from'>,
+  organizationId: string,
+  claimId: string,
+  domain: string
+): Promise<boolean> {
+  try {
+    const { data } = await supabase
+      .from('domain_claims')
+      .select('token')
+      .eq('id', claimId)
+      .eq('organization_id', organizationId)
+      .maybeSingle();
+    const token = (data as { token?: unknown } | null)?.token;
+    if (typeof token !== 'string' || token === '') return false;
+    const doubled = await lookupClaimTxt(`${domain}.${domain}`);
+    return doubled.answers.includes(token);
+  } catch {
+    return false;
+  }
+}
+
 export async function checkDomainClaim(claimId: string): Promise<DomainClaimActionResult> {
   const blocked = await blockWriteDuringImpersonation();
   if (blocked) return fail(blocked.error);
@@ -130,6 +159,16 @@ export async function checkDomainClaim(claimId: string): Promise<DomainClaimActi
   const result = reply.result;
   if (reply.success !== true || typeof result !== 'string' || !(CHECK_RESULTS as readonly string[]).includes(result)) {
     return fail(DOMAIN_CLAIM_NOT_FOUND);
+  }
+  if (result === 'not_found' && (await foundAtDoubledName(access.supabase, access.organizationId, claimId, domain))) {
+    // Display-only. The check above was recorded as a miss and stays one.
+    return {
+      success: false,
+      message: doubledNameMessage(domain),
+      result: 'not_found',
+      status: typeof reply.status === 'string' ? (reply.status as DomainClaimStatus) : undefined,
+      doubledName: true,
+    };
   }
   return {
     success: result === 'verified',

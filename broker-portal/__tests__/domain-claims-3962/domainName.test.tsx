@@ -26,6 +26,7 @@ const base: DomainClaimView = {
   verifiedAt: null,
   lastCheckedAt: null,
   lastCheckResult: null,
+  addedBy: null,
 };
 
 describe('DomainName', () => {
