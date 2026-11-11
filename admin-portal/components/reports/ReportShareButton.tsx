@@ -91,7 +91,8 @@ export function ReportShareButton({
     [api, reportKey, noteFailure]
   );
 
-  // The same arrays between reads: the dialog treats a new `entries` as a fresh read.
+  // The kit confirms a remove or level change by content, not by array identity; keeping the
+  // same arrays between reads only saves re-renders.
   const principals = useMemo(() => toPrincipals(candidates), [candidates]);
   const entries = useMemo(() => toEntries(grants), [grants]);
 
