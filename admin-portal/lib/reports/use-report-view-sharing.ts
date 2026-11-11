@@ -71,6 +71,15 @@ export const VIEW_SHARE_LEVELS: SharingDialogProps['levels'] = [
  */
 export const VIEW_SHARE_OWNER: NonNullable<SharingDialogProps['owner']> = { id: 'view-owner', name: 'You', isYou: true };
 
+/**
+ * After `Promise.allSettled` over a batch of writes: throws the first refusal, so the caller shows it.
+ * Runs only once every write has settled, so a re-read after it sees all of them.
+ */
+export function throwFirstRejection(results: readonly PromiseSettledResult<unknown>[]): void {
+  const refused = results.find((r): r is PromiseRejectedResult => r?.status === 'rejected');
+  if (refused) throw refused.reason;
+}
+
 /** Picker rows: people only. */
 export function toPrincipals(rows: readonly ShareCandidate[] | null): SharingPrincipal[] | null {
   return rows ? rows.map((c) => ({ id: c.id, kind: 'person' as const, name: c.name })) : null;
@@ -243,9 +252,11 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
     onGrant: (principals, level) => {
       if (!shareApi || !target) return;
       const viewId = target.id;
-      // One upsert per person picked (people only); one re-read after they all settle.
+      // One upsert per person picked (people only), all started now. The re-read waits for every
+      // one to settle (allSettled, not all: all would reject on the first refusal while others are
+      // still being written); then the first refusal, if any, is shown.
       const people = principals.filter((p) => p.kind === 'person');
-      afterWrite(Promise.all(people.map((p) => shareApi.share(viewId, p.id, level))), viewId);
+      afterWrite(Promise.allSettled(people.map((p) => shareApi.share(viewId, p.id, level))).then(throwFirstRejection), viewId);
     },
     onChangeLevel: (entry, level) => {
       if (!shareApi || !target) return;

@@ -246,6 +246,36 @@ describe('P6 the SharingDialog picker is fed by candidates only', () => {
 });
 
 // BACKLOG-3513 PR-4 controls A1 / A2 (plan pm_comments f24fdbc7 §5).
+// BACKLOG-3513 PR-4 fix-up M1: a refusal for one person must not re-read while another is still
+// being written. All writes start at once; the one re-read waits for every write to settle.
+describe('M1 Share with a fast refusal and a slow success re-reads once, after both settle', () => {
+  it('M1 builder 1: person 1 refused now, person 2 written later -> one re-read after person 2, error shown', async () => {
+    const { hook, shareApi } = mount([OWN]);
+    const api = shareApi as ReturnType<typeof fakeShareApi>;
+    let finishSecond: () => void = () => undefined;
+    api.share.mockImplementation((_view: string, user: string) =>
+      user === vid(101)
+        ? Promise.reject({ message: 'Saved view not found' })
+        : new Promise<void>((resolve) => (finishSecond = () => resolve()))
+    );
+    act(() => hook.result.current.sharing!.onShare!(OWN));
+    await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(1));
+    act(() =>
+      hook.result.current.shareDialog.onGrant([person(vid(101), 'Avery Example'), person(vid(102), 'Blake Builder')], 'viewer')
+    );
+    // Both writes started at once.
+    expect(api.share).toHaveBeenCalledTimes(2);
+    // Person 1 is refused; person 2 is still writing: no re-read yet.
+    for (let i = 0; i < 10; i++) await act(async () => await Promise.resolve());
+    expect(api.grants).toHaveBeenCalledTimes(1);
+    await act(async () => finishSecond());
+    await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(2));
+    expect(hook.result.current.shareDialog.error).toBe('Saved view not found');
+    for (let i = 0; i < 10; i++) await act(async () => await Promise.resolve());
+    expect(api.grants).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('A1 a level change is ONE report_share_set upsert, never remove + grant', () => {
   it('A1 onChangeLevel: exactly one share call with the new level; no removeGrant; then one re-read', async () => {
     const { hook, shareApi } = mount([OWN]);

@@ -159,6 +159,71 @@ describe('S3 writes carry the open report key; stale replies are dropped', () =>
     expect(writes).toEqual([{ fn: 'report_access_set', args: { p_key: 'funnel', p_user_id: uid(2), p_role: 'editor' } }]);
   });
 
+  // BACKLOG-3513 PR-4 fix-up M2: Share sends one upsert per person picked.
+  it('M2 two people picked -> exactly two report_access_set at the chosen level, then one re-read', async () => {
+    const { client, calls } = fakeClient({
+      report_access_candidates: [...CANDIDATES, { user_id: uid(3), display_name: 'Cal Moreno' }],
+      report_access_list: GRANTS,
+      report_access_set: { report_key: 'funnel' },
+    });
+    mount('owner', createReportAccessApi(() => client));
+    fireEvent.click(shareButton()!);
+    const dialog = await screen.findByRole('dialog', { name: 'Share “Paywall Funnel”' });
+    const field = await within(dialog).findByRole('combobox', { name: 'Add people or roles' });
+    await waitFor(() => expect((field as HTMLInputElement).disabled).toBe(false));
+    fireEvent.change(field, { target: { value: 'Av' } });
+    fireEvent.click(screen.getByRole('option', { name: /Avery Quinn/ }));
+    fireEvent.change(field, { target: { value: 'Cal' } });
+    fireEvent.click(screen.getByRole('option', { name: /Cal Moreno/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Access Can/ }));
+    fireEvent.click(screen.getByRole('option', { name: /Can edit/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Share' }));
+    await waitFor(() => expect(calls.filter((c) => c.fn === 'report_access_list')).toHaveLength(2));
+    expect(calls.filter((c) => c.fn === 'report_access_set').map((c) => c.args)).toEqual([
+      { p_key: 'funnel', p_user_id: uid(1), p_role: 'editor' },
+      { p_key: 'funnel', p_user_id: uid(3), p_role: 'editor' },
+    ]);
+    for (let i = 0; i < 10; i++) await act(async () => await Promise.resolve());
+    expect(calls.filter((c) => c.fn === 'report_access_list')).toHaveLength(2);
+  });
+
+  // BACKLOG-3513 PR-4 fix-up M1 (builder 2).
+  it('M1 person 1 refused now, person 2 written later -> one re-read after person 2, error shown', async () => {
+    let finishSecond: () => void = () => {};
+    const api: ReportAccessApi = {
+      candidates: vi.fn(async () => [
+        { id: uid(1), name: 'Avery Quinn' },
+        { id: uid(3), name: 'Cal Moreno' },
+      ]),
+      grants: vi.fn(async (): Promise<ShareGrant[]> => []),
+      set: vi.fn((_key: string, user: string) =>
+        user === uid(1)
+          ? Promise.reject({ message: 'Report not found' })
+          : new Promise<void>((resolve) => (finishSecond = () => resolve()))
+      ),
+      remove: vi.fn(async () => {}),
+    };
+    mount('owner', api);
+    fireEvent.click(shareButton()!);
+    const dialog = await screen.findByRole('dialog', { name: 'Share “Paywall Funnel”' });
+    const field = await within(dialog).findByRole('combobox', { name: 'Add people or roles' });
+    await waitFor(() => expect((field as HTMLInputElement).disabled).toBe(false));
+    await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(1));
+    fireEvent.change(field, { target: { value: 'Av' } });
+    fireEvent.click(screen.getByRole('option', { name: /Avery Quinn/ }));
+    fireEvent.change(field, { target: { value: 'Cal' } });
+    fireEvent.click(screen.getByRole('option', { name: /Cal Moreno/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Share' }));
+    expect(api.set).toHaveBeenCalledTimes(2);
+    for (let i = 0; i < 10; i++) await act(async () => await Promise.resolve());
+    expect(api.grants).toHaveBeenCalledTimes(1);
+    await act(async () => finishSecond());
+    await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(2));
+    expect(within(dialog).getByRole('alert').textContent).toContain('Report not found');
+    for (let i = 0; i < 10; i++) await act(async () => await Promise.resolve());
+    expect(api.grants).toHaveBeenCalledTimes(2);
+  });
+
   it('a grants reply from an earlier opening never shows', async () => {
     let releaseFirst: (rows: { userId: string; name: string; role: 'viewer' }[]) => void = () => {};
     let opening = 0;

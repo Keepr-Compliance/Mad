@@ -22,7 +22,7 @@ import { canGrantReportAccess } from '@/lib/reports/report-access';
 import { useOpenReport } from '@/lib/reports/report-access-context';
 import { reportAccessApi, type ReportAccessApi } from '@/lib/reports/report-access-api';
 import { isMissingFunctionError, type ShareCandidate, type ShareGrant } from '@/lib/reports/report-share-api';
-import { toEntries, toPrincipals } from '@/lib/reports/use-report-view-sharing';
+import { throwFirstRejection, toEntries, toPrincipals } from '@/lib/reports/use-report-view-sharing';
 import { writeFailureMessage } from '@/lib/reports/report-views';
 
 /** The line under each level. */
@@ -139,8 +139,13 @@ export function ReportShareButton({
         entries={toEntries(grants)}
         error={error}
         onGrant={(principals, level) =>
-          // One upsert per person picked (people only); one re-read after they all settle.
-          afterWrite(Promise.all(principals.filter((p) => p.kind === 'person').map((p) => api.set(reportKey, p.id, level))))
+          // One upsert per person picked (people only), all started now; the re-read waits for every
+          // one to settle, then the first refusal, if any, is shown.
+          afterWrite(
+            Promise.allSettled(principals.filter((p) => p.kind === 'person').map((p) => api.set(reportKey, p.id, level))).then(
+              throwFirstRejection
+            )
+          )
         }
         onChangeLevel={(entry, level) => afterWrite(api.set(reportKey, entry.id, level))}
         onRemove={(entry) => afterWrite(api.remove(reportKey, entry.id))}
