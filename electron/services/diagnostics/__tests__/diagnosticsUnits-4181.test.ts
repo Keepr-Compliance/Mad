@@ -256,9 +256,19 @@ describe("transport filter, each check on its own", () => {
     ]);
     const log = (out![1][0][1] as { items: Array<Record<string, unknown>> }).items[0];
     expect(log.body).toBe("ipc.slow");
-    expect(Object.keys(log).sort()).toEqual(["attributes", "body", "level", "severity_number", "timestamp"]);
-    expect(log).not.toHaveProperty("trace_id");
+    expect(Object.keys(log).sort()).toEqual(["attributes", "body", "level", "severity_number", "timestamp", "trace_id"]);
     expect(out![1][0][0].item_count).toBe(1);
+  });
+
+  it("trace_id is a fresh random 32-hex per log: never the incoming value, never shared (BACKLOG-4181)", () => {
+    const out = filterEnvelopeLogs(envOf(diagLog(), diagLog()));
+    const logs = (out![1][0][1] as { items: Array<{ trace_id?: unknown }> }).items;
+    expect(logs).toHaveLength(2);
+    for (const l of logs) {
+      expect(l.trace_id).toMatch(/^[0-9a-f]{32}$/);
+      expect(l.trace_id).not.toBe("0".repeat(32)); // the incoming (SDK-stamped) value
+    }
+    expect(logs[0].trace_id).not.toBe(logs[1].trace_id);
   });
 
   it("OFF: every log item is dropped (live switch on its own)", () => {
