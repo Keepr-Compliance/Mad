@@ -801,12 +801,20 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
     // back to the file's account. Touch nothing: no setSession, no clear.
     const heldSdkUserId = supabaseService.getAuthUserId();
     if (heldSdkUserId && heldSdkUserId !== session.user.id) {
-      const held = await readSdkIdentity(heldSdkUserId);
-      if (held && !isSameAccount(session.user, held)) {
+      let held = await readSdkIdentity(heldSdkUserId);
+      if (!held) {
+        // The SDK session cannot be read (e.g. expired while offline). The local
+        // row for the held id is the next record of who that is. Its OAuth id is
+        // not used: that match is for the session-file target only.
+        const local = await databaseService.getUserById(heldSdkUserId);
+        if (local) held = { id: local.id, email: local.email, oauthId: null };
+      }
+      // Fail closed: an identity that cannot be read is not proof of the same account.
+      if (!held || !isSameAccount(session.user, held)) {
         await logService.warn(
           "SDK holds a different account than the saved session; not restoring it",
           "SessionHandlers",
-          { fileId: session.user.id.substring(0, 8) + "...", sdkId: heldSdkUserId.substring(0, 8) + "..." }
+          { fileId: session.user.id.substring(0, 8) + "...", sdkId: heldSdkUserId.substring(0, 8) + "...", sdkIdentityKnown: !!held }
         );
         Sentry.captureMessage("Session restore: SDK holds a different account", {
           level: "warning",
