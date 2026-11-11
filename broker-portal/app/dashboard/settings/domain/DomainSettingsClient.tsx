@@ -9,7 +9,8 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, Copy } from 'lucide-react';
+import Link from 'next/link';
+import { Check, ChevronLeft, ChevronDown, ChevronRight, Copy } from 'lucide-react';
 // Badge/Card family/Input/Label/PageHeader are Tier-2 (no @keepr/ui equivalent yet).
 import { Badge, Card, CardContent, CardHeader, Input, Label, PageHeader } from '@keepr/design-system';
 import { AlertBanner, Button } from '@keepr/ui';
@@ -86,6 +87,51 @@ function CopyField({ id, label, value }: { id: string; label: string; value: str
   );
 }
 
+/** The relative label a DNS host wants (`_keepr`); the full name when it is not under the domain. */
+export function hostLabel(recordName: string, domain: string): string {
+  const suffix = `.${domain}`;
+  return recordName.endsWith(suffix) && recordName.length > suffix.length
+    ? recordName.slice(0, -suffix.length)
+    : recordName;
+}
+
+function RecordFields({ claim }: { claim: DomainClaimView }) {
+  return (
+    <div className="space-y-3">
+      <CopyField id={`host-${claim.id}`} label="Host" value={hostLabel(claim.recordName, claim.domain)} />
+      <CopyField id={`value-${claim.id}`} label="Value" value={claim.recordValue ?? ''} />
+      <p className="text-sm text-gray-500">
+        Most DNS hosts add your domain to the end of the Host for you. If yours asks for the full name,
+        use <code className="font-mono text-gray-800">{claim.recordName}</code>.
+      </p>
+    </div>
+  );
+}
+
+function VerifiedRecord({ claim }: { claim: DomainClaimView }) {
+  const [open, setOpen] = useState(false);
+  const panelId = `dns-record-${claim.id}`;
+  return (
+    <div>
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800"
+        aria-expanded={open}
+        aria-controls={panelId}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        Show DNS record
+      </button>
+      {open && (
+        <div id={panelId} className="mt-3">
+          <RecordFields claim={claim} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DomainSettingsClient({ claims, loadState }: DomainSettingsClientProps) {
   const router = useRouter();
   const [domainInput, setDomainInput] = useState('');
@@ -149,6 +195,13 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
 
   return (
     <div className="max-w-7xl mx-auto space-y-6">
+      <Link
+        href="/dashboard/settings"
+        className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800"
+      >
+        <ChevronLeft className="h-4 w-4" />
+        Back to Settings
+      </Link>
       <PageHeader
         phoneHideTitle
         phoneHideSubtitle
@@ -227,30 +280,39 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
             {live && claim.recordValue && (
               <CardContent>
                 <div className="space-y-3">
-                  {claim.status !== 'verified' && (
-                    <p className="text-sm text-gray-700">
-                      At your DNS host, add a TXT record with this name and value. Leave your other
-                      records as they are.
-                    </p>
+                  {claim.status === 'verified' ? (
+                    <VerifiedRecord claim={claim} />
+                  ) : (
+                    <>
+                      <p className="text-sm text-gray-700">
+                        At your DNS host, add a TXT record. Leave your other records as they are.
+                      </p>
+                      <RecordFields claim={claim} />
+                    </>
                   )}
-                  <CopyField id={`name-${claim.id}`} label="Name" value={claim.recordName} />
-                  <CopyField id={`value-${claim.id}`} label="Value" value={claim.recordValue} />
                   {notice && notice.claimId === claim.id ? (
                     <AlertBanner variant={notice.tone}>{notice.text}</AlertBanner>
                   ) : (
                     lastResult && <p className="text-sm text-gray-500">Last check: {lastResult}</p>
                   )}
-                  <div className="flex flex-wrap gap-2">
-                    <Button type="button" onClick={() => handleCheck(claim.id)} disabled={busy !== null}>
-                      {busy === claim.id ? 'Checking...' : 'Check'}
-                    </Button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {claim.status !== 'verified' && (
+                      <Button type="button" onClick={() => handleCheck(claim.id)} disabled={busy !== null}>
+                        {busy === claim.id ? 'Checking...' : 'Check'}
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       variant="secondary"
+                      size={claim.status === 'verified' ? 'sm' : undefined}
                       onClick={() => handleRemove(claim.id)}
                       disabled={busy !== null}
                     >
-                      {confirmRemove === claim.id ? 'Confirm remove' : 'Remove'}
+                      {confirmRemove === claim.id
+                        ? 'Confirm remove'
+                        : claim.status === 'verified'
+                          ? 'Remove domain'
+                          : 'Remove'}
                     </Button>
                   </div>
                 </div>

@@ -36,6 +36,8 @@ export interface DomainClaimActionResult {
   message: string;
   result?: DomainCheckResult;
   status?: DomainClaimStatus;
+  /** Display-only: the record was found at the doubled name. Never means verified. */
+  doubledName?: boolean;
 }
 
 export const DOMAIN_CLAIM_UNAVAILABLE = "Domain verification isn't available yet.";
@@ -49,6 +51,11 @@ export const DOMAIN_CLAIM_TOO_SOON = 'Wait 30 seconds between checks.';
 
 export function domainTakenMessage(domain: string): string {
   return `Another organization has already verified ${domain}. Contact support@keeprcompliance.com.`;
+}
+
+/** Shown instead of the not-found text when the record sits at `_keepr.<domain>.<domain>`. */
+export function doubledNameMessage(domain: string): string {
+  return `We found the record at _keepr.${domain}.${domain}. Your DNS host added the domain twice. Change the Host to just _keepr.`;
 }
 
 /** The message for a check result (plan section 3). */
