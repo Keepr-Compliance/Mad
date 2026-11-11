@@ -209,6 +209,8 @@ describe("C1 exact key set + body (W1 forward message, W3 beforeSendLog-only, W5
     );
     for (const l of logs) {
       expect(l.body).toBe(l.attributes["keepr.op"].value);
+      // BACKLOG-4181 SR: no trace id leaves the app (it could join a crash event).
+      expect(l).not.toHaveProperty("trace_id");
       for (const k of Object.keys(l.attributes)) {
         expect([...BASE, "keepr.durationMs", "keepr.channel", "keepr.approxBytes", "keepr.threw"]).toContain(k);
       }

@@ -33,9 +33,10 @@ import { DIAG_BASE_FORMATS } from "./diagnostics/fields";
 export const DIAGNOSTICS_SHARING_FILE_NAME = "diagnostics-sharing.json";
 
 /**
- * The default when nothing valid is saved. ONE constant: the founder has not
- * decided whether a release ships this ON before the privacy-policy text is
- * published; flipping it here flips every reader.
+ * The default when nothing valid is saved. ONE constant; flipping it here
+ * flips every reader. Founder decision 2026-11-10: ON by default from 2.47,
+ * with the privacy-policy Diagnostics text published right after. The
+ * policy's "on by default" sentence depends on this value.
  */
 export const DIAGNOSTICS_SHARING_DEFAULT = true;
 

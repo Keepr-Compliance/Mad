@@ -256,7 +256,8 @@ describe("transport filter, each check on its own", () => {
     ]);
     const log = (out![1][0][1] as { items: Array<Record<string, unknown>> }).items[0];
     expect(log.body).toBe("ipc.slow");
-    expect(Object.keys(log).sort()).toEqual(["attributes", "body", "level", "severity_number", "timestamp", "trace_id"]);
+    expect(Object.keys(log).sort()).toEqual(["attributes", "body", "level", "severity_number", "timestamp"]);
+    expect(log).not.toHaveProperty("trace_id");
     expect(out![1][0][0].item_count).toBe(1);
   });
 

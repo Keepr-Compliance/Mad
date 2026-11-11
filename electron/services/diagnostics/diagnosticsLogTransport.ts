@@ -85,7 +85,9 @@ function rebuildLog(raw: unknown, deviceId: string): SerializedLog | null {
     body: op,
     attributes: out,
   };
-  if (typeof log.trace_id === "string") rebuilt.trace_id = log.trace_id;
+  // trace_id is NOT copied (BACKLOG-4181 SR review): the SDK may stamp a
+  // diagnostics log and a crash event with the same trace id, and a crash
+  // event carries the account id. Only fixed fields leave the app.
   if (typeof log.severity_number === "number") rebuilt.severity_number = log.severity_number;
   return rebuilt;
 }
