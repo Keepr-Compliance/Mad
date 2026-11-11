@@ -29,6 +29,8 @@ export interface DomainClaimView {
   verifiedAt: string | null;
   lastCheckedAt: string | null;
   lastCheckResult: DomainCheckResult | null;
+  /** Who added the domain: display name, else email, else null. Resolved server-side. */
+  addedBy: string | null;
 }
 
 export interface DomainClaimActionResult {

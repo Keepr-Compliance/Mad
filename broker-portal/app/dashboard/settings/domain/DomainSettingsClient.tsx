@@ -7,12 +7,26 @@
  * brokerage. It carries no gate of its own. Every action re-checks on the server.
  */
 
-import { useState, useTransition } from 'react';
+import { Fragment, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Check, ChevronLeft, ChevronDown, ChevronRight, Copy } from 'lucide-react';
 // Badge/Card family/Input/Label/PageHeader are Tier-2 (no @keepr/ui equivalent yet).
-import { Badge, Card, CardContent, CardHeader, Input, Label, PageHeader } from '@keepr/design-system';
+import {
+  Badge,
+  EmptyState,
+  Input,
+  Label,
+  Modal,
+  PageHeader,
+  Table,
+  TableBody,
+  TableContainer,
+  TableHead,
+  Td,
+  Th,
+  Tr,
+} from '@keepr/design-system';
 import { AlertBanner, Button } from '@keepr/ui';
 import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 import { checkDomainClaim, createDomainClaim, withdrawDomainClaim } from '@/lib/actions/domainClaim';
@@ -138,6 +152,7 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
   const [notice, setNotice] = useState<Notice | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
   const [, startTransition] = useTransition();
 
   const refresh = () => startTransition(() => router.refresh());
@@ -151,6 +166,7 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
       setNotice({ claimId: null, tone: res.success ? 'info' : 'destructive', text: res.message });
       if (res.success) {
         setDomainInput('');
+        setAddOpen(false);
         refresh();
       }
     } catch {
@@ -207,120 +223,172 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
         phoneHideSubtitle
         title={PAGE_TITLES.domain}
         subtitle="Prove your brokerage owns its email domain by adding a DNS record"
+        actions={
+          <Button type="button" onClick={() => setAddOpen(true)} disabled={loadState !== 'ok'}>
+            Add domain
+          </Button>
+        }
       />
 
       {loadState === 'unavailable' && <AlertBanner variant="warning">{DOMAIN_CLAIM_UNAVAILABLE}</AlertBanner>}
       {loadState === 'error' && <AlertBanner variant="destructive">{DOMAIN_CLAIM_FAILED}</AlertBanner>}
       {notice && notice.claimId === null && <AlertBanner variant={notice.tone}>{notice.text}</AlertBanner>}
 
-      <Card padding="none">
-        <CardHeader>
-          <h2 className="text-lg font-semibold text-gray-900">Add a domain</h2>
-          <p className="mt-1 text-sm text-gray-500">
-            Enter only the domain your team&apos;s email addresses use, for example brokerage.com. Each
-            subdomain is verified on its own.
-          </p>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleAdd} className="flex flex-col gap-2 sm:flex-row sm:items-end">
-            <div className="flex-1">
-              <Label htmlFor="domain-claim-input">Domain</Label>
-              <Input
-                id="domain-claim-input"
-                type="text"
-                inputMode="url"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder="brokerage.com"
-                value={domainInput}
-                onChange={(e) => setDomainInput(e.target.value)}
-                disabled={loadState !== 'ok'}
-              />
-            </div>
-            <Button type="submit" disabled={busy !== null || loadState !== 'ok' || domainInput.trim() === ''}>
-              {busy === 'add' ? 'Adding...' : 'Add domain'}
+      <Modal
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        title="Add a domain"
+        dismissible={busy !== 'add'}
+      >
+        <p className="text-sm text-gray-500">
+          Enter only the domain your team&apos;s email addresses use, for example brokerage.com. Each
+          subdomain is verified on its own.
+        </p>
+        <form onSubmit={handleAdd} className="mt-4 space-y-4">
+          <div>
+            <Label htmlFor="domain-claim-input">Domain</Label>
+            <Input
+              id="domain-claim-input"
+              type="text"
+              inputMode="url"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="brokerage.com"
+              value={domainInput}
+              onChange={(e) => setDomainInput(e.target.value)}
+              disabled={loadState !== 'ok'}
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="secondary" onClick={() => setAddOpen(false)}>
+              Cancel
             </Button>
-          </form>
-        </CardContent>
-      </Card>
+            <Button type="submit" disabled={busy !== null || loadState !== 'ok' || domainInput.trim() === ''}>
+              {busy === 'add' ? 'Adding...' : 'Add'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
 
-      {claims.map((claim) => {
-        const badge = STATUS_BADGE[claim.status];
-        const live = claim.status === 'pending' || claim.status === 'verified' || claim.status === 'lapsed';
-        const lastResult =
-          claim.lastCheckResult && claim.lastCheckResult !== 'verified' && claim.status !== 'verified'
-            ? checkResultMessage(claim.lastCheckResult, claim.domain)
-            : null;
-        return (
-          <Card key={claim.id} padding="none" data-testid={`domain-claim-${claim.id}`}>
-            <CardHeader>
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-lg font-semibold text-gray-900">
-                  <DomainName claim={claim} />
-                </h2>
-                <Badge hue={badge.hue}>{badge.label}</Badge>
-              </div>
-              {claim.status === 'verified' && claim.verifiedAt && (
-                <p className="mt-1 text-sm text-gray-500">
-                  Verified {new Date(claim.verifiedAt).toLocaleDateString()}. Keep the record in place:
-                  Keepr checks it again every day.
-                </p>
-              )}
-              {claim.status === 'lapsed' && (
-                <p className="mt-1 text-sm text-gray-500">
-                  Verification lapsed: the TXT record is gone. Add it back and click Check.
-                </p>
-              )}
-              {claim.status === 'revoked' && (
-                <p className="mt-1 text-sm text-gray-500">
-                  Contact support@keeprcompliance.com if you think this is a mistake.
-                </p>
-              )}
-            </CardHeader>
-            {live && claim.recordValue && (
-              <CardContent>
-                <div className="space-y-3">
-                  {claim.status === 'verified' ? (
-                    <VerifiedRecord claim={claim} />
-                  ) : (
-                    <>
-                      <p className="text-sm text-gray-700">
-                        At your DNS host, add a TXT record. Leave your other records as they are.
-                      </p>
-                      <RecordFields claim={claim} />
-                    </>
-                  )}
-                  {notice && notice.claimId === claim.id ? (
-                    <AlertBanner variant={notice.tone}>{notice.text}</AlertBanner>
-                  ) : (
-                    lastResult && <p className="text-sm text-gray-500">Last check: {lastResult}</p>
-                  )}
-                  <div className="flex flex-wrap items-center gap-2">
-                    {claim.status !== 'verified' && (
-                      <Button type="button" onClick={() => handleCheck(claim.id)} disabled={busy !== null}>
-                        {busy === claim.id ? 'Checking...' : 'Check'}
-                      </Button>
+      {claims.length === 0 ? (
+        loadState === 'ok' && (
+          <EmptyState
+            title="No domains yet"
+            description="No domains yet. Add your brokerage's email domain to verify it."
+            action={
+              <Button type="button" onClick={() => setAddOpen(true)}>
+                + Add domain
+              </Button>
+            }
+          />
+        )
+      ) : (
+        <TableContainer scrollX>
+          <Table>
+            <TableHead>
+              <tr>
+                <Th>Domain</Th>
+                <Th>Status</Th>
+                <Th>Verified</Th>
+                <Th>Added by</Th>
+                <Th>Actions</Th>
+              </tr>
+            </TableHead>
+            <TableBody>
+              {claims.map((claim) => {
+                const badge = STATUS_BADGE[claim.status];
+                const live = claim.status === 'pending' || claim.status === 'verified' || claim.status === 'lapsed';
+                const lastResult =
+                  claim.lastCheckResult && claim.lastCheckResult !== 'verified' && claim.status !== 'verified'
+                    ? checkResultMessage(claim.lastCheckResult, claim.domain)
+                    : null;
+                const showNotice = notice && notice.claimId === claim.id;
+                const hasDetail =
+                  (live && !!claim.recordValue) || claim.status === 'revoked' || claim.status === 'lapsed' || !!showNotice;
+                return (
+                  <Fragment key={claim.id}>
+                    <Tr data-testid={`domain-claim-${claim.id}`}>
+                      <Td emphasis="primary" className="whitespace-normal">
+                        <DomainName claim={claim} />
+                      </Td>
+                      <Td>
+                        <Badge hue={badge.hue}>{badge.label}</Badge>
+                      </Td>
+                      <Td>
+                        {claim.status === 'verified' && claim.verifiedAt
+                          ? new Date(claim.verifiedAt).toLocaleDateString()
+                          : '\u2014'}
+                      </Td>
+                      <Td>{claim.addedBy ?? '\u2014'}</Td>
+                      <Td>
+                        {live && claim.recordValue && (
+                          <div className="flex flex-wrap items-center gap-2">
+                            {claim.status !== 'verified' && (
+                              <Button type="button" onClick={() => handleCheck(claim.id)} disabled={busy !== null}>
+                                {busy === claim.id ? 'Checking...' : 'Check'}
+                              </Button>
+                            )}
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size={claim.status === 'verified' ? 'sm' : undefined}
+                              onClick={() => handleRemove(claim.id)}
+                              disabled={busy !== null}
+                            >
+                              {confirmRemove === claim.id
+                                ? 'Confirm remove'
+                                : claim.status === 'verified'
+                                  ? 'Remove domain'
+                                  : 'Remove'}
+                            </Button>
+                          </div>
+                        )}
+                      </Td>
+                    </Tr>
+                    {hasDetail && (
+                      <tr>
+                        <td colSpan={5} className="px-6 pb-4 pt-0 bg-white">
+                          <div className="space-y-3">
+                            {claim.status === 'verified' && claim.verifiedAt && (
+                              <p className="text-sm text-gray-500">Keep the record in place: Keepr checks it again every day.</p>
+                            )}
+                            {claim.status === 'lapsed' && (
+                              <p className="text-sm text-gray-500">
+                                Verification lapsed: the TXT record is gone. Add it back and click Check.
+                              </p>
+                            )}
+                            {claim.status === 'revoked' && (
+                              <p className="text-sm text-gray-500">
+                                Contact support@keeprcompliance.com if you think this is a mistake.
+                              </p>
+                            )}
+                            {live && claim.recordValue &&
+                              (claim.status === 'verified' ? (
+                                <VerifiedRecord claim={claim} />
+                              ) : (
+                                <>
+                                  <p className="text-sm text-gray-700">
+                                    At your DNS host, add a TXT record. Leave your other records as they are.
+                                  </p>
+                                  <RecordFields claim={claim} />
+                                </>
+                              ))}
+                            {showNotice ? (
+                              <AlertBanner variant={notice.tone}>{notice.text}</AlertBanner>
+                            ) : (
+                              lastResult && <p className="text-sm text-gray-500">Last check: {lastResult}</p>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
                     )}
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size={claim.status === 'verified' ? 'sm' : undefined}
-                      onClick={() => handleRemove(claim.id)}
-                      disabled={busy !== null}
-                    >
-                      {confirmRemove === claim.id
-                        ? 'Confirm remove'
-                        : claim.status === 'verified'
-                          ? 'Remove domain'
-                          : 'Remove'}
-                    </Button>
-                  </div>
-                </div>
-              </CardContent>
-            )}
-          </Card>
-        );
-      })}
+                  </Fragment>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </TableContainer>
+      )}
     </div>
   );
 }

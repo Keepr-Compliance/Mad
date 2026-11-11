@@ -27,6 +27,7 @@ const pending: DomainClaimView = {
   verifiedAt: null,
   lastCheckedAt: null,
   lastCheckResult: null,
+  addedBy: null,
 };
 const verified: DomainClaimView = { ...pending, status: 'verified', verifiedAt: '2026-11-10T00:00:00Z' };
 
