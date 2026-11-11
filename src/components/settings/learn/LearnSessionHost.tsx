@@ -26,6 +26,14 @@ interface ScoreView {
   copyBlock: string | null;
   /** Size of the next sitting, when the sitting filled up and another question exists. */
   more: number | null;
+  /** BACKLOG-4219: sharing ON / OFF; null when the state could not be read. */
+  sharing: boolean | null;
+}
+
+/** BACKLOG-4219: whether the numbers are shared, for the dialog's privacy line. */
+async function readSharing(): Promise<boolean | null> {
+  const st = await learnModeService.getState();
+  return st.success ? st.pilotReport : null;
 }
 
 export function LearnSessionHost({ total, onClose }: { total: number; onClose: () => void }): React.ReactElement {
@@ -63,11 +71,13 @@ export function LearnSessionHost({ total, onClose }: { total: number; onClose: (
         next = Math.min(LEARN_SITTING_SIZE, Math.max(1, remaining.current));
       }
       const r = await learnModeService.score();
+      const sharing = await readSharing();
       setScoreView({
         answered: answered > 0 ? answered : null,
         score: r.success ? r.score : null,
         copyBlock: r.success ? r.copyBlock : null,
         more: next,
+        sharing,
       });
     },
     [close, settle, getAnswered, getHandled, peekMore],
@@ -97,6 +107,7 @@ export function LearnSessionHost({ total, onClose }: { total: number; onClose: (
         more={scoreView?.more ?? null}
         onMore={onMore}
         onClose={onClose}
+        sharing={scoreView?.sharing ?? null}
       />
     </div>
   );
@@ -108,13 +119,21 @@ export function LearnSessionHost({ total, onClose }: { total: number; onClose: (
  * score from main once, then shows the L4 dialog titled "How Keepr is doing".
  */
 export function LearnScoreHost({ onClose }: { onClose: () => void }): React.ReactElement {
-  const [view, setView] = useState<{ score: LearnScore | null; copyBlock: string | null } | null>(null);
+  const [view, setView] = useState<{
+    score: LearnScore | null;
+    copyBlock: string | null;
+    sharing: boolean | null;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void learnModeService.score().then((r) => {
-      if (!cancelled) setView({ score: r.success ? r.score : null, copyBlock: r.success ? r.copyBlock : null });
-    });
+    void (async () => {
+      const r = await learnModeService.score();
+      const sharing = await readSharing();
+      if (!cancelled) {
+        setView({ score: r.success ? r.score : null, copyBlock: r.success ? r.copyBlock : null, sharing });
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -127,6 +146,7 @@ export function LearnScoreHost({ onClose }: { onClose: () => void }): React.Reac
       score={view?.score ?? null}
       copyBlock={view?.copyBlock ?? null}
       onClose={onClose}
+      sharing={view?.sharing ?? null}
     />
   );
 }

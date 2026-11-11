@@ -21,7 +21,7 @@ export const STATE_ON: LearnStateResult = {
   success: true,
   available: true,
   enabled: true,
-  answers: { deal: 0, bulk: 0 },
+  answers: { deal: 0, bulk: 0 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null,
 };
 
 export const CLEANUP_NEXT: LearnCleanupNextResult = {
