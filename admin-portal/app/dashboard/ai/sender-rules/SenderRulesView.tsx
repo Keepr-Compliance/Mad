@@ -29,7 +29,9 @@ export const STOP_TEST_WARNING = 'The test stops. Its changes can still be publi
 export const UNDO_ALL_WARNING = 'Every org goes back to the default rules. Running tests stop. Apps pick this up within 6 hours.';
 export const PICKUP_NOTE = 'Apps pick up changes within 6 hours, or on restart.';
 
-type Notice = { tone: 'ok' | 'error'; message: string; blocks?: string[] } | null;
+/** Where an action's result is also shown, next to the button that ran it. */
+type Place = 'running' | 'publish-test' | 'publish-everyone' | 'history';
+type Notice = { tone: 'ok' | 'error'; message: string; blocks?: string[]; at?: Place } | null;
 type DiffView = { status: 'loading' } | { status: 'ready'; lines: string[] } | { status: 'error'; message: string };
 type Pending =
   | { type: 'promote'; version: number }
@@ -54,6 +56,9 @@ function thresholdTexts(c: SenderRuleSet): Record<ThresholdKey, string> {
 }
 
 export function SenderRulesView({ access, load, orgs, api: injected }: SenderRulesViewProps) {
+  // The last result lives ABOVE the keyed editor: a publish changes released_version, the editor
+  // remounts on the new rules, and the message must survive that (SR delta review, 2026-11-10).
+  const [notice, setNotice] = useState<Notice>(null);
   if (!load.ok) {
     return (
       <AlertBanner variant="destructive" data-testid="sender-rules-unreadable">
@@ -62,7 +67,18 @@ export function SenderRulesView({ access, load, orgs, api: injected }: SenderRul
       </AlertBanner>
     );
   }
-  return <Loaded access={access} state={load.state} released={load.released} orgs={orgs} injected={injected} />;
+  return (
+    <Loaded
+      key={load.state.released_version}
+      access={access}
+      state={load.state}
+      released={load.released}
+      orgs={orgs}
+      injected={injected}
+      notice={notice}
+      setNotice={setNotice}
+    />
+  );
 }
 
 function Loaded({
@@ -71,12 +87,16 @@ function Loaded({
   released,
   orgs,
   injected,
+  notice,
+  setNotice,
 }: {
   access: ReportAccess;
   state: Extract<SenderRulesLoad, { ok: true }>['state'];
   released: SenderRuleSet;
   orgs: OrgListResult | null;
   injected?: SenderRulesApi;
+  notice: Notice;
+  setNotice: (n: Notice) => void;
 }) {
   const router = useRouter();
   const canEdit = canEditSenderRules(access);
@@ -88,7 +108,6 @@ function Loaded({
   const [thresholdText, setThresholdText] = useState<Record<ThresholdKey, string>>(() => thresholdTexts(released));
   const [thresholdErrors, setThresholdErrors] = useState<Partial<Record<ThresholdKey, string>>>({});
   const [busy, setBusy] = useState(false);
-  const [notice, setNotice] = useState<Notice>(null);
   const [pending, setPending] = useState<Pending>(null);
   const [pendingDiff, setPendingDiff] = useState<DiffView | null>(null);
   const [viewing, setViewing] = useState<{ version: number; diff: DiffView } | null>(null);
@@ -109,15 +128,21 @@ function Loaded({
   };
 
   /** Run one write; then always re-read the state (no optimistic update). */
-  const run = async (op: () => Promise<unknown>, done: string) => {
+  const run = async <T,>(
+    op: () => Promise<T>,
+    done: string | ((result: T) => string),
+    at: Place,
+    onOk?: (result: T) => void,
+  ) => {
     setBusy(true);
     setNotice(null);
     try {
-      await op();
-      setNotice({ tone: 'ok', message: done });
+      const result = await op();
+      onOk?.(result);
+      setNotice({ tone: 'ok', message: typeof done === 'function' ? done(result) : done, at });
     } catch (e) {
-      if (e instanceof SenderRulesError) setNotice({ tone: 'error', message: e.message, blocks: e.blocks });
-      else setNotice({ tone: 'error', message: 'The change could not be saved.' });
+      if (e instanceof SenderRulesError) setNotice({ tone: 'error', message: e.message, blocks: e.blocks, at });
+      else setNotice({ tone: 'error', message: 'The change could not be saved.', at });
     } finally {
       setBusy(false);
       setPending(null);
@@ -155,11 +180,32 @@ function Loaded({
       setThresholdText(thresholdTexts(c));
       setThresholdErrors({});
     } catch (e) {
-      setNotice({ tone: 'error', message: e instanceof SenderRulesError ? e.message : 'Version ' + version + ' could not be read.' });
+      setNotice({
+        tone: 'error',
+        message: e instanceof SenderRulesError ? e.message : 'Version ' + version + ' could not be read.',
+        at: 'history',
+      });
     } finally {
       setBusy(false);
     }
   };
+
+  /** The result again, next to the action that produced it (the banner is at the top of the page). */
+  const resultAt = (place: Place) =>
+    notice?.at === place ? (
+      <p
+        role="status"
+        data-testid={`notice-at-${place}`}
+        className={notice.tone === 'ok' ? 'text-sm text-success-600' : 'text-sm text-red-600'}
+      >
+        {notice.message}
+        {notice.blocks && notice.blocks.length > 0 ? ' Details are at the top of the page.' : ''}
+      </p>
+    ) : null;
+
+  // Every org testing the base version, not just the first: the label must not understate who runs it.
+  const basePins = baseVersion !== releasedVersion ? state.pins.filter((p) => p.version === baseVersion) : [];
+  const baseNote = basePins.length > 0 ? `testing on ${basePins.map((p) => orgLabel(p.org_name)).join(', ')}` : undefined;
 
   const openPromote = async (version: number) => {
     setPending({ type: 'promote', version });
@@ -249,6 +295,7 @@ function Loaded({
               })}
             </ul>
           )}
+          {resultAt('running')}
         </CardContent>
       </Card>
 
@@ -257,6 +304,7 @@ function Loaded({
         content={canEdit ? draft : released}
         readOnly={!canEdit}
         baseVersion={baseVersion}
+        baseNote={baseNote}
         releasedVersion={releasedVersion}
         onChange={canEdit ? setDraft : undefined}
         thresholdText={canEdit ? thresholdText : undefined}
@@ -319,7 +367,14 @@ function Loaded({
                     variant="secondary"
                     disabled={!canPublish || !pickedOrg}
                     onClick={() =>
-                      pickedOrg && run(() => api().publishCanary(draft, pickedOrg.id), `Published to ${pickedOrg.name} for testing.`)
+                      pickedOrg &&
+                      run(
+                        () => api().publishCanary(draft, pickedOrg.id),
+                        `Published to ${pickedOrg.name} for testing.`,
+                        'publish-test',
+                        // The editor now holds the published test version: say so, not "everyone's rules".
+                        (version) => setBaseVersion(version),
+                      )
                     }
                   >
                     Publish to test org
@@ -330,6 +385,7 @@ function Loaded({
                   The org list could not be read. Publishing to a test org is not available.
                 </p>
               )}
+              {resultAt('publish-test')}
             </div>
 
             <div className="space-y-2">
@@ -337,6 +393,7 @@ function Loaded({
               <Button size="sm" disabled={!canPublish} onClick={() => setPending({ type: 'release' })}>
                 Publish to everyone
               </Button>
+              {resultAt('publish-everyone')}
             </div>
           </CardContent>
         </Card>
@@ -356,6 +413,7 @@ function Loaded({
           )}
         </CardHeader>
         <CardContent>
+          {resultAt('history')}
           <ul className="divide-y divide-gray-100 text-sm">
             {state.versions.map((v) => (
               <li key={v.version} className="flex flex-wrap items-center justify-between gap-2 py-2" data-testid={`version-${v.version}`}>
@@ -408,7 +466,14 @@ function Loaded({
           confirmLabel="Make this everyone's"
           loading={busy}
           onCancel={() => setPending(null)}
-          onConfirm={() => run(() => api().promote(pending.version), `v${pending.version} is now everyone's.`)}
+          onConfirm={() =>
+            // promote re-publishes v<n>'s content as a NEW version; name the version everyone now runs.
+            run(
+              () => api().promote(pending.version),
+              (v) => `v${pending.version}'s rules are now everyone's, as v${v}.`,
+              'running',
+            )
+          }
         />
       )}
 
@@ -420,7 +485,7 @@ function Loaded({
           confirmLabel="Stop test"
           loading={busy}
           onCancel={() => setPending(null)}
-          onConfirm={() => run(() => api().unpin(pending.pin.org_id), `The test on ${orgLabel(pending.pin.org_name)} stopped.`)}
+          onConfirm={() => run(() => api().unpin(pending.pin.org_id), `The test on ${orgLabel(pending.pin.org_name)} stopped.`, 'running')}
         />
       )}
 
@@ -446,7 +511,9 @@ function Loaded({
           confirmLabel="Publish to everyone"
           loading={busy}
           onCancel={() => setPending(null)}
-          onConfirm={() => run(() => api().publishRelease(draft), 'Published to everyone.')}
+          onConfirm={() =>
+            run(() => api().publishRelease(draft), 'Published to everyone.', 'publish-everyone', (version) => setBaseVersion(version))
+          }
         />
       )}
 
@@ -459,7 +526,7 @@ function Loaded({
           isDestructive
           loading={busy}
           onCancel={() => setPending(null)}
-          onConfirm={() => run(() => api().revertAll(), 'Every org is back on the default rules.')}
+          onConfirm={() => run(() => api().revertAll(), 'Every org is back on the default rules.', 'history')}
         />
       )}
     </div>

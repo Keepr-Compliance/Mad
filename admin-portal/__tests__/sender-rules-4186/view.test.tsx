@@ -302,3 +302,112 @@ describe('History', () => {
     expect(writes(fake.calls)[0]).toMatchObject({ fn: 'sender_rule_set_revert_all', args: undefined });
   });
 });
+
+// Founder QA 2026-11-10: the result shows next to the action, not only in the banner at the top.
+describe('results next to the action', () => {
+  const addDomain = () => {
+    fireEvent.change(screen.getByLabelText('Add to Domains'), { target: { value: 'other.example.com' } });
+    fireEvent.click(within(screen.getByTestId('list-suppress.hosts')).getByRole('button', { name: 'Add' }));
+  };
+
+  it('publish to test org: success shows in Review and publish', async () => {
+    setup();
+    addDomain();
+    fireEvent.change(screen.getByLabelText('Test org'), { target: { value: ORG_A } });
+    fireEvent.click(button('Publish to test org')[0]);
+    const at = await screen.findByTestId('notice-at-publish-test');
+    expect(at.textContent).toBe('Published to Test Org A for testing.');
+    expect(within(screen.getByTestId('review-publish')).getByTestId('notice-at-publish-test')).toBe(at);
+    expect(screen.getByTestId('sender-rules-notice').textContent).toContain('Published to Test Org A for testing.');
+  });
+
+  it('publish to everyone: a refusal shows in Review and publish and points at the details', async () => {
+    setup({ publish: { error: ERRORS.release_refused } });
+    addDomain();
+    fireEvent.click(button('Publish to everyone')[0]);
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Publish to everyone' }));
+    const at = await screen.findByTestId('notice-at-publish-everyone');
+    expect(within(screen.getByTestId('review-publish')).getByTestId('notice-at-publish-everyone')).toBe(at);
+    expect(at.textContent).toContain('These changes must run on a test org first:');
+    expect(at.textContent).toContain('Details are at the top of the page.');
+    // Shown as a failure, never in the success style.
+    expect(at.className).toContain('text-red-600');
+    expect(at.className).not.toContain('text-success');
+  });
+
+  it('a refused test publish: failure next to the action, and the Edit card base does not move', async () => {
+    setup({ publish: { error: ERRORS.release_refused } });
+    const before = screen.getByTestId('rules-card').querySelector('p')?.textContent;
+    addDomain();
+    fireEvent.change(screen.getByLabelText('Test org'), { target: { value: ORG_A } });
+    fireEvent.click(button('Publish to test org')[0]);
+    const at = await screen.findByTestId('notice-at-publish-test');
+    expect(at.className).toContain('text-red-600');
+    expect(at.textContent).not.toContain('Published to');
+    expect(screen.getByTestId('rules-card').querySelector('p')?.textContent).toBe(before);
+  });
+
+  it('stop test: shows in Running now', async () => {
+    setup();
+    fireEvent.click(within(screen.getByTestId(`pin-${ORG_B}`)).getByRole('button', { name: 'Stop test' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Stop test' }));
+    const at = await screen.findByTestId('notice-at-running');
+    expect(within(screen.getByTestId('running-now')).getByTestId('notice-at-running')).toBe(at);
+    expect(at.textContent).toBe('The test on Test Org B stopped.');
+  });
+
+  it("make everyone's: shows in Running now", async () => {
+    setup();
+    fireEvent.click(within(screen.getByTestId(`pin-${ORG_A}`)).getByRole('button', { name: "Make this everyone's" }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: "Make this everyone's" }));
+    const at = await screen.findByTestId('notice-at-running');
+    // promote re-publishes v4's content as a new version (the fake answers 5): the message names both.
+    expect(at.textContent).toBe("v4's rules are now everyone's, as v5.");
+  });
+
+  it('undo everything: shows in History', async () => {
+    setup();
+    fireEvent.click(button('Undo everything')[0]);
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Undo everything' }));
+    const at = await screen.findByTestId('notice-at-history');
+    expect(within(screen.getByTestId('history')).getByTestId('notice-at-history')).toBe(at);
+    expect(at.textContent).toBe('Every org is back on the default rules.');
+  });
+});
+
+// Founder QA 2026-11-10: after a test publish the Edit card must not read like an unsaved draft.
+describe('Edit card after a publish', () => {
+  const description = () => screen.getByTestId('rules-card').querySelector('p')?.textContent;
+
+  it('test publish: the card says it is editing the published version', async () => {
+    setup();
+    expect(description()).toBe("Editing from everyone's rules (v3).");
+    fireEvent.change(screen.getByLabelText('Add to Domains'), { target: { value: 'other.example.com' } });
+    fireEvent.click(within(screen.getByTestId('list-suppress.hosts')).getByRole('button', { name: 'Add' }));
+    fireEvent.change(screen.getByLabelText('Test org'), { target: { value: ORG_A } });
+    fireEvent.click(button('Publish to test org')[0]);
+    await screen.findByTestId('notice-at-publish-test');
+    // The fake publish answers version 5.
+    expect(description()).toBe("Editing from v5. Changes are compared with everyone's rules (v3).");
+  });
+
+  it('a version tested on two orgs names both (not just the first)', async () => {
+    const state = clone(STATE_MIXED) as SenderRulesAdminState;
+    state.pins = state.pins.map((p) => ({ ...p, version: 4 }));
+    setup({ load: { ok: true, state, released: clone(CONTENT_V3) } });
+    fireEvent.click(within(screen.getByTestId('version-4')).getByRole('button', { name: 'Edit from this version' }));
+    await waitFor(() =>
+      expect(description()).toBe(
+        "Editing from v4 (testing on Test Org A, Test Org B). Changes are compared with everyone's rules (v3).",
+      ),
+    );
+  });
+
+  it('a version under test is named with its org', async () => {
+    setup();
+    fireEvent.click(within(screen.getByTestId('version-4')).getByRole('button', { name: 'Edit from this version' }));
+    await waitFor(() =>
+      expect(description()).toBe("Editing from v4 (testing on Test Org A). Changes are compared with everyone's rules (v3)."),
+    );
+  });
+});
