@@ -284,8 +284,8 @@ describe('A8: MCP_ENABLED kill switch', () => {
     else process.env.MCP_ENABLED = value;
     expect((await post({ authorization: `Bearer ${CONNECTED_APP_TOKEN}` })).status).toBe(404);
     expect((await post({ origin: 'https://evil.example' })).status).toBe(404);
-    expect((await route.GET()).status).toBe(404);
-    expect((await route.DELETE()).status).toBe(404);
+    expect((await route.GET(new Request(MCP_URL))).status).toBe(404);
+    expect((await route.DELETE(new Request(MCP_URL, { method: 'DELETE' }))).status).toBe(404);
     expect((await metadataGET(new Request(`${BASE}/api/mcp/resource-metadata`))).status).toBe(404);
     expect(mockGetClaims).not.toHaveBeenCalled();
   });
