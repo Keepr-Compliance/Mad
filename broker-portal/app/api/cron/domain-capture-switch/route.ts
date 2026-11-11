@@ -26,5 +26,9 @@ export async function GET(req: Request): Promise<Response> {
     console.error('[cron/domain-capture-switch] due query failed');
     return NextResponse.json(summary, { status: 500 });
   }
+  // Deferred switches stay scheduled and retry next hour; surface them. Counts by reason only.
+  if (Object.values(summary.deferred).some((n) => n > 0)) {
+    console.warn('[cron/domain-capture-switch] switches deferred', summary.deferred);
+  }
   return NextResponse.json(summary);
 }

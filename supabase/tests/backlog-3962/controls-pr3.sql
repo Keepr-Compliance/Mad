@@ -30,6 +30,9 @@ BEGIN
   END;
 END $b$;
 
+CREATE FUNCTION pg_temp.h02_refuse() RETURNS trigger LANGUAGE plpgsql AS $b$
+BEGIN RAISE EXCEPTION 'bl3962_other_refusal' USING ERRCODE = 'P0001'; END $b$;
+
 CREATE FUNCTION pg_temp.sw(s uuid) RETURNS text LANGUAGE sql AS $b$
   SELECT pg_temp.q(NULL, 'service_role', format('SELECT public._domain_capture_switch(%L::uuid)::text', s))
 $b$;
@@ -88,7 +91,8 @@ INSERT INTO fx VALUES
   ('p_s',    's@s-3962.test', 'email'),
   ('u_admK', 'admk@corp-3962.test', 'email'),
   ('p_k',    'k@k-3962.test', 'email'),
-  ('p_i',    'i@k-3962.test', 'email');
+  ('p_i',    'i@k-3962.test', 'email'),
+  ('p_h',    'h@k-3962.test', 'email');
 
 INSERT INTO auth.users (id, email, instance_id, aud, role, email_confirmed_at)
   SELECT pg_temp.id(k), e, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', now() FROM fx;
@@ -390,7 +394,11 @@ BEGIN
   g := pg_temp.sw(pg_temp.sid(pg_temp.id('p_k')));
   INSERT INTO r3962 VALUES ('R01_role_is_org_default_member_role',
     (SELECT role FROM public.organization_members WHERE organization_id = pg_temp.id('oK') AND user_id = pg_temp.id('p_k')) = 'broker', g);
+  -- an organization default of 'admin' never reaches a captured member (auto-join precedent)
+  UPDATE public.organizations SET default_member_role = 'admin' WHERE id = pg_temp.id('oK');
   g := pg_temp.sw(pg_temp.sid(pg_temp.id('p_i')));
+  INSERT INTO r3962 VALUES ('R02_org_default_admin_clamped_to_agent',
+    (SELECT role FROM public.organization_members WHERE organization_id = pg_temp.id('oK') AND user_id = pg_temp.id('p_i')) = 'agent', g);
   j := CASE WHEN g LIKE '{%' THEN g::jsonb ELSE '{}'::jsonb END;
   INSERT INTO r3962 VALUES ('P01_incomplete_subscription_is_not_a_payer',
     j ->> 'outcome' = 'switched' AND j ->> 'payer' = 'false'
@@ -406,6 +414,18 @@ BEGIN
     AND pg_temp.q(NULL, 'service_role', 'SELECT count(*)::text FROM public._domain_capture_due(50)') = '0', g);
   g := pg_temp.q(uAdmA, 'authenticated', 'SELECT count(*)::text FROM public._domain_capture_due(50)');
   INSERT INTO r3962 VALUES ('D02_client_cannot_list_due', g LIKE 'ERR 42501%', g);
+
+  -- ---- a P0001 that is not account_suspended / seat_limit_reached is not swallowed -----------------
+  PERFORM pg_temp.start(pg_temp.id('u_admK'), pg_temp.id('oK'), pg_temp.id('cK'), ARRAY[pg_temp.id('p_h')]);
+  PERFORM pg_temp.mark(pg_temp.sid(pg_temp.id('p_h')), 'sent');
+  UPDATE public.domain_capture_switches SET switch_at = now() - interval '1 minute' WHERE user_id = pg_temp.id('p_h');
+  CREATE TRIGGER h02_other_p0001 BEFORE INSERT ON public.organization_members
+    FOR EACH ROW EXECUTE FUNCTION pg_temp.h02_refuse();
+  g := pg_temp.sw(pg_temp.sid(pg_temp.id('p_h')));
+  DROP TRIGGER h02_other_p0001 ON public.organization_members;
+  INSERT INTO r3962 VALUES ('H02_other_p0001_reraised_switch_stays_scheduled',
+    g LIKE 'ERR P0001%bl3962_other_refusal%' AND pg_temp.sst(pg_temp.id('p_h')) = 'scheduled:-'
+      AND pg_temp.members(pg_temp.id('oK'), pg_temp.id('p_h')) = 0, g);
 
   FOR k IN SELECT * FROM r3962 ORDER BY 1 LOOP
     IF k.ok IS TRUE THEN v_pass := v_pass + 1;

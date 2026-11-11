@@ -84,7 +84,7 @@ MUTANTS3 = {
                    "    FROM public.organizations o WHERE o.id = v_row.organization_id;\n")],
     'C_no_lock_no_fallback': [("    FROM public.organizations o WHERE o.id = v_row.organization_id\n    FOR NO KEY UPDATE;\n",
                                "    FROM public.organizations o WHERE o.id = v_row.organization_id;\n"),
-                              ("  EXCEPTION WHEN SQLSTATE 'P0001' THEN\n    IF SQLERRM LIKE '%account_suspended%' THEN", "  EXCEPTION WHEN SQLSTATE 'P9999' THEN\n    IF SQLERRM LIKE '%account_suspended%' THEN")],
+                              ("  EXCEPTION WHEN SQLSTATE 'P0001' THEN\n    IF SQLERRM = 'account_suspended' THEN", "  EXCEPTION WHEN SQLSTATE 'P9999' THEN\n    IF SQLERRM = 'account_suspended' THEN")],
     # M-a: the Billing-step check dropped at switch
     'C_no_setup_gate_switch': [("  IF public._billing_org_join_blocked(v_row.organization_id) THEN\n", "  IF false THEN\n")],
     # M-b: the Billing-step check dropped at start
@@ -96,12 +96,15 @@ MUTANTS3 = {
         ("  IF NOT public._domain_capture_billing_ready() THEN\n    RETURN jsonb_build_object('success', false, 'error', 'billing_not_ready');\n  END IF;\n  IF public._billing_org_join_blocked(v_row",
          "  IF false THEN\n    RETURN jsonb_build_object('success', false, 'error', 'billing_not_ready');\n  END IF;\n  IF public._billing_org_join_blocked(v_row")],
     # M-d: account_suspended no longer caught (re-raised)
-    'C_no_suspended_catch': [("    IF SQLERRM LIKE '%account_suspended%' THEN\n      v_suspended := true;\n    ELSIF",
+    'C_no_suspended_catch': [("    IF SQLERRM = 'account_suspended' THEN\n      v_suspended := true;\n    ELSIF",
                               "    IF false THEN\n      v_suspended := true;\n    ELSIF")],
     # M-e: 'incomplete' counts as a payer again
     'C_incomplete_is_payer': [("b.status NOT IN ('canceled', 'incomplete_expired', 'incomplete')", "b.status NOT IN ('canceled', 'incomplete_expired')")],
     # M-f: role hardcoded
-    'C_role_hardcoded': [("coalesce(o.default_member_role, 'agent')\n    INTO", "'agent'\n    INTO")],
+    'C_role_plain_coalesce': [("CASE WHEN o.default_member_role IN ('agent', 'broker') THEN o.default_member_role ELSE 'agent' END", "coalesce(o.default_member_role, 'agent')")],
+    # the suspended catch widened to every P0001 except seat_limit_reached
+    'C_suspended_catch_any_p0001': [("    IF SQLERRM = 'account_suspended' THEN\n      v_suspended := true;\n    ELSIF v_status", "    IF SQLERRM NOT LIKE '%seat_limit_reached%' THEN\n      v_suspended := true;\n    ELSIF v_status")],
+    'C_role_hardcoded': [("CASE WHEN o.default_member_role IN ('agent', 'broker') THEN o.default_member_role ELSE 'agent' END\n    INTO", "'agent'\n    INTO")],
     # M-g: no-tenant Microsoft sign-ins read as foreign (not listed)
     'C_no_tenant_as_foreign': [("    RETURN 'no:no_tenant';\n", "    RETURN 'no:foreign_tenant';\n")],
     # M-g2: the no_tenant branch dropped altogether

@@ -621,7 +621,7 @@ BEGIN
   END IF;
 
   -- Seats (ruling B). Same lock as the seat trigger: one seat writer per organization at a time.
-  SELECT o.max_seats, o.personal_owner_user_id, o.name, coalesce(o.default_member_role, 'agent')
+  SELECT o.max_seats, o.personal_owner_user_id, o.name, CASE WHEN o.default_member_role IN ('agent', 'broker') THEN o.default_member_role ELSE 'agent' END
     INTO v_max, v_personal, v_name, v_role
     FROM public.organizations o WHERE o.id = v_row.organization_id
     FOR NO KEY UPDATE;
@@ -644,7 +644,7 @@ BEGIN
     VALUES (v_row.organization_id, v_row.user_id, v_role, v_status, now(), 'domain_capture', now())
     RETURNING id INTO v_member;
   EXCEPTION WHEN SQLSTATE 'P0001' THEN
-    IF SQLERRM LIKE '%account_suspended%' THEN
+    IF SQLERRM = 'account_suspended' THEN
       v_suspended := true;
     ELSIF v_status <> 'active' OR SQLERRM NOT LIKE '%seat_limit_reached%' THEN
       RAISE;
@@ -659,7 +659,7 @@ BEGIN
         VALUES (v_row.organization_id, v_row.user_id, v_role, v_status, now(), 'domain_capture', now())
         RETURNING id INTO v_member;
       EXCEPTION WHEN SQLSTATE 'P0001' THEN
-        IF SQLERRM LIKE '%account_suspended%' THEN
+        IF SQLERRM = 'account_suspended' THEN
           v_suspended := true;
         ELSE
           RAISE;
