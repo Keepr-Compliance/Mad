@@ -10,7 +10,7 @@
 import { Fragment, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Check, ChevronLeft, ChevronDown, ChevronRight, Copy } from 'lucide-react';
+import { Check, ChevronLeft, Copy } from 'lucide-react';
 // Badge/Card family/Input/Label/PageHeader are Tier-2 (no @keepr/ui equivalent yet).
 import {
   Badge,
@@ -118,30 +118,6 @@ function RecordFields({ claim }: { claim: DomainClaimView }) {
         Most DNS hosts add your domain to the end of the Host for you. If yours asks for the full name,
         use <code className="font-mono text-gray-800">{claim.recordName}</code>.
       </p>
-    </div>
-  );
-}
-
-function VerifiedRecord({ claim }: { claim: DomainClaimView }) {
-  const [open, setOpen] = useState(false);
-  const panelId = `dns-record-${claim.id}`;
-  return (
-    <div>
-      <button
-        type="button"
-        className="inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-800"
-        aria-expanded={open}
-        aria-controls={panelId}
-        onClick={() => setOpen((o) => !o)}
-      >
-        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-        Show DNS record
-      </button>
-      {open && (
-        <div id={panelId} className="mt-3">
-          <RecordFields claim={claim} />
-        </div>
-      )}
     </div>
   );
 }
@@ -334,11 +310,14 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
                     : null;
                 const showNotice = notice && notice.claimId === claim.id;
                 const collapsible = claim.status === 'pending' || claim.status === 'lapsed';
+                const isVerified = claim.status === 'verified';
                 const isOpen = !!openIds[claim.id];
                 const detailId = `domain-instructions-${claim.id}`;
                 const hasDetail = collapsible
                   ? isOpen
-                  : (live && !!claim.recordValue) || claim.status === 'revoked' || !!showNotice;
+                  : isVerified
+                    ? (isOpen && !!claim.recordValue) || !!showNotice
+                    : (live && !!claim.recordValue) || claim.status === 'revoked' || !!showNotice;
                 return (
                   <Fragment key={claim.id}>
                     <Tr data-testid={`domain-claim-${claim.id}`}>
@@ -371,7 +350,17 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
                       <Td>
                         {live && claim.recordValue && (
                           <div className="flex flex-wrap items-center gap-2">
-                            {claim.status !== 'verified' && (
+                            {isVerified ? (
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                aria-expanded={isOpen}
+                                aria-controls={isOpen ? detailId : undefined}
+                                onClick={() => setOpenIds((o) => ({ ...o, [claim.id]: !o[claim.id] }))}
+                              >
+                                {isOpen ? 'Hide DNS record' : 'Show DNS record'}
+                              </Button>
+                            ) : (
                               <Button type="button" onClick={() => handleCheck(claim.id)} disabled={busy !== null}>
                                 {busy === claim.id ? 'Checking...' : 'Check'}
                               </Button>
@@ -379,15 +368,10 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
                             <Button
                               type="button"
                               variant="secondary"
-                              size={claim.status === 'verified' ? 'sm' : undefined}
                               onClick={() => handleRemove(claim.id)}
                               disabled={busy !== null}
                             >
-                              {confirmRemove === claim.id
-                                ? 'Confirm remove'
-                                : claim.status === 'verified'
-                                  ? 'Remove domain'
-                                  : 'Remove'}
+                              {confirmRemove === claim.id ? 'Confirm remove' : 'Remove'}
                             </Button>
                           </div>
                         )}
@@ -411,8 +395,8 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
                               </p>
                             )}
                             {live && claim.recordValue &&
-                              (claim.status === 'verified' ? (
-                                <VerifiedRecord claim={claim} />
+                              (isVerified ? (
+                                <RecordFields claim={claim} />
                               ) : (
                                 <>
                                   <p className="text-sm text-gray-700">
