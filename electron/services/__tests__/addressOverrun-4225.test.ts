@@ -81,6 +81,13 @@ describe("BACKLOG-4225 the address ends at the address", () => {
     expect(displayAddress(addr)).toBe("1234 Sample River Lane, Testville, WA 00000");
   });
 
+  it("C7 an address on the first line is still found (the shared /g pattern's lastIndex is not inherited)", () => {
+    // _analyzeSubjectLine runs patterns.address.test() on the first line first.
+    expect(extract("Escrow closing next week, buyer offer", "Offer 1234 Sample River Lane, Testville, WA 00000")).toEqual([
+      "1234 sample river lane, testville, wa 00000",
+    ]);
+  });
+
   it("C6 keys: what an existing Learn answer is stored under does not change", () => {
     // [fixed extractor input, key the pre-fix output had (transcribed)]
     const rows: Array<[string, string]> = [
