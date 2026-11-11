@@ -15,6 +15,7 @@
  *   S2  The form is usable over Learn: typing works and keeps focus, Escape
  *       closes only the form, focus returns inside Learn, and Learn is still
  *       open and clickable afterwards.
+ *   S2e Escape right after opening (no typing) closes the form and not Learn.
  *   S3  With no modal open, the form opens without a modal layer and body
  *       pointer-events are untouched.
  *
@@ -176,6 +177,18 @@ describe.each<Host>(["session", "score"])("BACKLOG-4226 over Learn (%s dialog)",
     // Learn's pointer lock is back, and a click inside Learn does not end it.
     expect(document.body.style.pointerEvents).toBe("none");
     await user.click(within(learnDialog).getAllByRole("button")[0].parentElement as HTMLElement);
+    expectLearnStillOpen(host, ctx);
+  });
+
+  it("S2e: Escape right after opening closes only the form, never Learn", async () => {
+    const ctx = await mountLearn(host);
+    const user = userEvent.setup();
+
+    await user.click(supportButton());
+    await screen.findByTestId("support-ticket-dialog");
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByTestId("support-ticket-dialog")).toBeNull());
+    await settle();
     expectLearnStillOpen(host, ctx);
   });
 });
