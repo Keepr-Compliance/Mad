@@ -154,6 +154,8 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
+  // Rows whose DNS instructions are open (pending/lapsed rows start collapsed).
+  const [openIds, setOpenIds] = useState<Record<string, boolean>>({});
   const [, startTransition] = useTransition();
 
   const refresh = () => startTransition(() => router.refresh());
@@ -176,6 +178,11 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
       const res = await createDomainClaim(domainInput);
       if (res.success) {
         setNotice({ claimId: null, tone: 'info', text: res.message });
+        // Open the claim the RPC returned (a re-add of a listed pending domain included).
+        if (res.claimId) {
+          const id = res.claimId;
+          setOpenIds((o) => ({ ...o, [id]: true }));
+        }
         setDomainInput('');
         setAddOpen(false);
         refresh();
@@ -195,9 +202,11 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
     setNotice(null);
     try {
       const res = await checkDomainClaim(claimId);
+      setOpenIds((o) => ({ ...o, [claimId]: true }));
       setNotice({ claimId, tone: res.success ? 'success' : 'destructive', text: res.message });
       refresh();
     } catch {
+      setOpenIds((o) => ({ ...o, [claimId]: true }));
       setNotice({ claimId, tone: 'destructive', text: DOMAIN_CLAIM_FAILED });
     } finally {
       setBusy(null);
@@ -324,8 +333,12 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
                     ? checkResultMessage(claim.lastCheckResult, claim.domain)
                     : null;
                 const showNotice = notice && notice.claimId === claim.id;
-                const hasDetail =
-                  (live && !!claim.recordValue) || claim.status === 'revoked' || claim.status === 'lapsed' || !!showNotice;
+                const collapsible = claim.status === 'pending' || claim.status === 'lapsed';
+                const isOpen = !!openIds[claim.id];
+                const detailId = `domain-instructions-${claim.id}`;
+                const hasDetail = collapsible
+                  ? isOpen
+                  : (live && !!claim.recordValue) || claim.status === 'revoked' || !!showNotice;
                 return (
                   <Fragment key={claim.id}>
                     <Tr data-testid={`domain-claim-${claim.id}`}>
@@ -336,9 +349,23 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
                         <Badge hue={badge.hue}>{badge.label}</Badge>
                       </Td>
                       <Td>
-                        {claim.status === 'verified' && claim.verifiedAt
-                          ? new Date(claim.verifiedAt).toLocaleDateString()
-                          : '\u2014'}
+                        {claim.status === 'verified' && claim.verifiedAt ? (
+                          new Date(claim.verifiedAt).toLocaleDateString()
+                        ) : collapsible ? (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            aria-label={`Instructions for ${claim.domain}`}
+                            aria-expanded={isOpen}
+                            aria-controls={isOpen ? detailId : undefined}
+                            onClick={() => setOpenIds((o) => ({ ...o, [claim.id]: !o[claim.id] }))}
+                          >
+                            Instructions
+                          </Button>
+                        ) : (
+                          '\u2014'
+                        )}
                       </Td>
                       <Td>{claim.addedBy ?? '\u2014'}</Td>
                       <Td>
@@ -367,7 +394,7 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
                       </Td>
                     </Tr>
                     {hasDetail && (
-                      <tr>
+                      <tr id={detailId}>
                         <td colSpan={5} className="px-6 pb-4 pt-0 bg-white">
                           <div className="space-y-3">
                             {claim.status === 'verified' && claim.verifiedAt && (

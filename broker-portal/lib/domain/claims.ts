@@ -40,6 +40,10 @@ export interface DomainClaimActionResult {
   status?: DomainClaimStatus;
   /** Display-only: the record was found at the doubled name. Never means verified. */
   doubledName?: boolean;
+  /** createDomainClaim only: the claim the RPC created or returned. */
+  claimId?: string;
+  /** createDomainClaim only: the domain already had a live claim (a re-add). */
+  existing?: boolean;
 }
 
 export const DOMAIN_CLAIM_UNAVAILABLE = "Domain verification isn't available yet.";

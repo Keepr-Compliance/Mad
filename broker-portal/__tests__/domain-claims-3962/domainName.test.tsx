@@ -3,7 +3,7 @@
  * look-alike name cannot pass for another. An ASCII domain is shown once.
  */
 
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 
 jest.mock('next/navigation', () => ({ useRouter: () => ({ refresh: jest.fn() }) }));
 jest.mock('@/lib/actions/domainClaim', () => ({
@@ -47,6 +47,7 @@ describe('DomainName', () => {
 describe('DomainSettingsClient', () => {
   it('a pending claim shows the record name and value to publish, and a Check button', () => {
     render(<DomainSettingsClient claims={[base]} loadState="ok" />);
+    fireEvent.click(screen.getByRole('button', { name: /^Instructions for / }));
     expect(screen.getByText('_keepr.xn--bcher-kva.example')).toBeTruthy();
     expect(screen.getByText(base.recordValue!)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Check' })).toBeTruthy();

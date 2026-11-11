@@ -76,7 +76,14 @@ export async function createDomainClaim(input: string): Promise<DomainClaimActio
 
   const reply = replyObject(data);
   if (reply.success === true) {
-    return { success: true, message: `Add the TXT record below for ${domain}, then click Check.`, status: 'pending' };
+    const claimId = typeof reply.claim_id === 'string' && UUID.test(reply.claim_id) ? reply.claim_id : undefined;
+    return {
+      success: true,
+      message: `Add the TXT record below for ${domain}, then click Check.`,
+      status: 'pending',
+      claimId,
+      existing: reply.existing === true,
+    };
   }
   switch (reply.error) {
     case 'invalid_domain':
