@@ -58,9 +58,9 @@ describe('table', () => {
     const r1 = within(screen.getByTestId('domain-claim-c1')).getAllByRole('cell').map((c) => c.textContent);
     expect(r1.slice(0, 4)).toEqual(['a.example', 'Verified', new Date('2026-11-10T12:00:00Z').toLocaleDateString(), 'display-name-a']);
     const r2 = within(screen.getByTestId('domain-claim-c2')).getAllByRole('cell').map((c) => c.textContent);
-    expect(r2.slice(0, 4)).toEqual(['b.example', 'Not verified yet', '—', 'dana@a.example']);
+    expect(r2.slice(0, 4)).toEqual(['b.example', 'Not verified yet', 'Instructions', 'dana@a.example']);
     const r3 = within(screen.getByTestId('domain-claim-c3')).getAllByRole('cell').map((c) => c.textContent);
-    expect(r3.slice(0, 4)).toEqual(['c.example', 'Verification lapsed', '—', '—']);
+    expect(r3.slice(0, 4)).toEqual(['c.example', 'Verification lapsed', 'Instructions', '—']);
   });
 
   it('the header Add domain button opens the add form', () => {
