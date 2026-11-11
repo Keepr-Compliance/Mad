@@ -8,7 +8,6 @@
 import {
   createMcpHandler,
   DEFAULT_NEGOTIATED_PROTOCOL_VERSION,
-  PROTOCOL_VERSION_META_KEY,
   Server,
   type McpHttpHandler,
   type McpRequestContext,
@@ -18,10 +17,12 @@ import { getStatus, STATUS_TOOL, STATUS_TOOL_NAME } from './tools/status';
 export const MCP_SERVER_NAME = 'keepr';
 export const MCP_SERVER_VERSION = '0.1.0';
 
-/** The protocol revision this request is served under. */
-function protocolVersionFor(ctx: McpRequestContext, meta: Record<string, unknown> | undefined): string {
-  const fromMeta = meta?.[PROTOCOL_VERSION_META_KEY];
-  if (typeof fromMeta === 'string' && fromMeta.length > 0) return fromMeta;
+/**
+ * The protocol revision this request is served under. Both eras send it in the
+ * MCP-Protocol-Version header (the SDK does not pass the request's _meta
+ * envelope through to tools/call params; measured with SDK 2.4.0).
+ */
+function protocolVersionFor(ctx: McpRequestContext): string {
   const fromHeader = ctx.requestInfo?.headers.get('mcp-protocol-version');
   if (fromHeader) return fromHeader;
   return DEFAULT_NEGOTIATED_PROTOCOL_VERSION;
@@ -41,8 +42,7 @@ export function createMcpServer(ctx: McpRequestContext): Server {
     if (request.params.name !== STATUS_TOOL_NAME) {
       return { content: [{ type: 'text', text: 'Unknown tool.' }], isError: true };
     }
-    const meta = request.params._meta as Record<string, unknown> | undefined;
-    const status = getStatus(protocolVersionFor(ctx, meta), MCP_SERVER_VERSION);
+    const status = getStatus(protocolVersionFor(ctx), MCP_SERVER_VERSION);
     return {
       content: [{ type: 'text', text: JSON.stringify(status) }],
       structuredContent: { ...status },
