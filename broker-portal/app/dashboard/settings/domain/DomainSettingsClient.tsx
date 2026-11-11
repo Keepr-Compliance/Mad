@@ -316,7 +316,7 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
                 const hasDetail = collapsible
                   ? isOpen
                   : isVerified
-                    ? (isOpen && !!claim.recordValue) || !!showNotice
+                    ? isOpen && !!claim.recordValue
                     : (live && !!claim.recordValue) || claim.status === 'revoked' || !!showNotice;
                 return (
                   <Fragment key={claim.id}>

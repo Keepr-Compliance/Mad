@@ -2,7 +2,7 @@
  * BACKLOG-3962 QA follow-up: Host/Value instructions, verified-claim layout, back link.
  */
 
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
 jest.mock('next/navigation', () => ({ useRouter: () => ({ refresh: jest.fn() }) }));
 jest.mock('@/lib/actions/domainClaim', () => ({
@@ -12,7 +12,7 @@ jest.mock('@/lib/actions/domainClaim', () => ({
 }));
 
 import DomainSettingsClient, { hostLabel } from '@/app/dashboard/settings/domain/DomainSettingsClient';
-import { withdrawDomainClaim } from '@/lib/actions/domainClaim';
+import { checkDomainClaim, withdrawDomainClaim } from '@/lib/actions/domainClaim';
 import type { DomainClaimView } from '@/lib/domain/claims';
 
 const VALUE = 'keepr-domain-verification=' + 'a'.repeat(48);
@@ -78,6 +78,23 @@ describe('verified claim', () => {
     expect(screen.getByLabelText('Value').textContent).toBe(VALUE);
     fireEvent.click(toggle);
     expect(screen.queryByLabelText('Host')).toBeNull();
+  });
+
+  it('Hide closes a just-verified row even while its notice is showing', async () => {
+    (checkDomainClaim as jest.Mock).mockResolvedValue({ success: true, message: 'Domain verified.' });
+    const { rerender } = render(<DomainSettingsClient claims={[pending]} loadState="ok" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check' }));
+    expect(await screen.findByText('Domain verified.')).toBeTruthy();
+    rerender(<DomainSettingsClient claims={[verified]} loadState="ok" />);
+    const toggle = screen.getByRole('button', { name: 'Hide DNS record' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByLabelText('Host')).toBeTruthy();
+    expect(screen.getByText('Domain verified.')).toBeTruthy();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle.getAttribute('aria-expanded')).toBe('false'));
+    expect(toggle.textContent).toBe('Show DNS record');
+    expect(screen.queryByLabelText('Host')).toBeNull();
+    expect(screen.queryByText('Domain verified.')).toBeNull();
   });
 
   it('Remove is still two-step', () => {
