@@ -1,0 +1,40 @@
+MUTATION APPLIED|T1a prorate true|1	1	broker-portal/lib/billing/joinCancel.ts
+KILLED failed=1/33|T1a prorate true|cancel_agent_on_brokerage_join C1: expire Checkout, void the open renewal, cancel now (pro
+MUTATION APPLIED|T1b cancel_at_period_end instead of cancel|2	2	broker-portal/lib/billing/joinCancel.ts
+KILLED failed=14/33|T1b cancel_at_period_end instead of cancel|cancel_agent_on_brokerage_join C1: expire Checkout, void the open renewal, cancel now (pro; cancel_agent_on_brokerage_join C4: converges: a second run voids, cancels and sends nothin; cancel_agent_on_brokerage_join C13a: cancel then the send fails -> retry sends ONE email a; cancel_agent_on_brokerage_join C13b: two Agent plans -> both cancelled, ONE email
+MUTATION APPLIED|T2 owner check removed (F3)|1	1	broker-portal/lib/billing/joinCancel.ts
+KILLED failed=2/33|T2 owner check removed (F3)|cancel_agent_on_brokerage_join F3: payload customer is not the user's current one -> NonRe; cancel_agent_on_brokerage_join F3: no stripe_customers row in this mode any more -> not_ow
+MUTATION APPLIED|T3a deactivated not superseded|0	1	broker-portal/lib/billing/joinCancel.ts
+KILLED failed=2/33|T3a deactivated not superseded|cancel_agent_on_brokerage_join C6: superseded (member deactivated (suspended)) -> ZERO Str; cancel_agent_on_brokerage_join C6: superseded (member deactivated (expired)) -> ZERO Strip
+MUTATION APPLIED|T3b reverted-to-personal not superseded|0	1	broker-portal/lib/billing/joinCancel.ts
+KILLED failed=1/33|T3b reverted-to-personal not superseded|cancel_agent_on_brokerage_join C6: superseded (reverted: a personal membership again) -> Z
+MUTATION APPLIED|T4 brokerage-kind not filtered|1	1	broker-portal/lib/billing/suspension.ts
+KILLED failed=1/33|T4 brokerage-kind not filtered|cancel_agent_on_brokerage_join C5: a brokerage-kind subscription on the same customer is n
+MUTATION APPLIED|T5 email dedupe removed|0	1	broker-portal/lib/billing/joinCancel.ts
+KILLED failed=1/33|T5 email dedupe removed|cancel_agent_on_brokerage_join C4: converges: a second run voids, cancels and sends nothin
+MUTATION APPLIED|T6 retry after cancel sends nothing|0	1	broker-portal/lib/billing/joinCancel.ts
+KILLED failed=1/33|T6 retry after cancel sends nothing|cancel_agent_on_brokerage_join C13a: cancel then the send fails -> retry sends ONE email a
+MUTATION APPLIED|T7 closed plans not skipped|1	1	broker-portal/lib/billing/joinCancel.ts
+KILLED failed=4/33|T7 closed plans not skipped|cancel_agent_on_brokerage_join C4: converges: a second run voids, cancels and sends nothin; cancel_agent_on_brokerage_join C13a: cancel then the send fails -> retry sends ONE email a; cancel_agent_on_brokerage_join C3 / C13c: every Agent plan already closed before the join ; cancel_agent_on_brokerage_join R8: mirror says past_due, Stripe says canceled (before the 
+MUTATION APPLIED|T8 copy not by license_status|1	1	broker-portal/lib/billing/joinCancel.ts
+KILLED failed=2/33|T8 copy not by license_status|F6 / 35b3b3ab: each license_status gets its own copy license_status unassigned at run time; F6 / 35b3b3ab: each license_status gets its own copy license_status pending at run time ->
+MUTATION APPLIED|T9 template ignores licensed|1	1	broker-portal/lib/email/templates/agent-plan-ended.ts
+KILLED failed=2/33|T9 template ignores licensed|F6 / 35b3b3ab: each license_status gets its own copy unlicensed copy: the covers clause re; F6 / 35b3b3ab: each license_status gets its own copy built email: subject, both bodies, es
+MUTATION APPLIED|T10 paid-meanwhile throws instead of alert+cancel|1	1	broker-portal/lib/billing/joinCancel.ts
+KILLED failed=1/33|T10 paid-meanwhile throws instead of alert+cancel|cancel_agent_on_brokerage_join Q2 / R5: the renewal was paid before the void -> alert paid
+MUTATION APPLIED|T11 incomplete cancelled|0	1	broker-portal/lib/billing/joinCancel.ts
+KILLED failed=1/33|T11 incomplete cancelled|cancel_agent_on_brokerage_join incomplete: only its open invoice is voided (that ends it);
+MUTATION APPLIED|R1 fresh waiting row alerts (F1)|1	1	broker-portal/lib/billing/reconcile.ts
+KILLED failed=1/91|R1 fresh waiting row alerts (F1)|3934: open Agent subscription + brokerage membership -> one alert per run 3850 R2: a fresh
+MUTATION APPLIED|R2 parked row not stuck|0	1	broker-portal/lib/billing/reconcile.ts
+KILLED failed=1/91|R2 parked row not stuck|3934: open Agent subscription + brokerage membership -> one alert per run 3850 R4: a parke
+MUTATION APPLIED|R3 one hour never reached|1	1	broker-portal/lib/billing/reconcile.ts
+KILLED failed=1/91|R3 one hour never reached|3934: open Agent subscription + brokerage membership -> one alert per run 3850 R3: a waiti
+MUTATION APPLIED|R4 paused not enqueued (F2)|1	1	broker-portal/lib/billing/reconcile.ts
+KILLED failed=1/91|R4 paused not enqueued (F2)|3934: open Agent subscription + brokerage membership -> one alert per run 3850 R5 (F2): a 
+MUTATION APPLIED|R5 enqueue despite a waiting row|1	1	broker-portal/lib/billing/reconcile.ts
+KILLED failed=3/91|R5 enqueue despite a waiting row|3934: open Agent subscription + brokerage membership -> one alert per run 3850 R2: a fresh; 3934: open Agent subscription + brokerage membership -> one alert per run 3850 R3: a waiti; 3934: open Agent subscription + brokerage membership -> one alert per run 3850 R4: a parke
+MUTATION APPLIED|R6 reconcile enqueue removed|2	2	broker-portal/lib/billing/reconcile.ts
+KILLED failed=7/91|R6 reconcile enqueue removed|3934: open Agent subscription + brokerage membership -> one alert per run active Agent pla; 3934: open Agent subscription + brokerage membership -> one alert per run past_due Agent p; 3934: open Agent subscription + brokerage membership -> one alert per run kind-absent [COM; 3934: open Agent subscription + brokerage membership -> one alert per run 3850 R1: enqueue
+RESTORED: broker-portal clean
+TS MUTANTS: killed=19 total=19

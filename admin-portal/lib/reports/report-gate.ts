@@ -15,6 +15,7 @@
 import { notFound, redirect } from 'next/navigation';
 import { getAuthenticatedUser } from '@/lib/supabase/server';
 import { parseMyReports, parseReportAccess, type MyReport, type ReportAccess } from './report-access';
+import { registeredReportsOnly } from './registry';
 
 type Authenticated = Awaited<ReturnType<typeof getAuthenticatedUser>>;
 type Supabase = Authenticated['supabase'];
@@ -48,11 +49,12 @@ export async function requireReportAccess(reportKey: string): Promise<{
   return { supabase, user, access };
 }
 
-/** The reports the caller may open. An empty or unreadable list is `notFound()`. */
+/** The Reports-registry reports the caller may open. An empty or unreadable list is `notFound()`. */
 export async function requireMyReports(): Promise<{ supabase: Supabase; reports: MyReport[] }> {
   const { supabase } = await requireInternalUser();
   const { data, error } = await supabase.rpc('report_list_my_reports');
-  const reports = error ? [] : parseMyReports(data);
+  // Registry keys only: a grant on a key whose page is not under Reports opens no index.
+  const reports = error ? [] : registeredReportsOnly(parseMyReports(data));
   if (reports.length === 0) notFound();
   return { supabase, reports };
 }

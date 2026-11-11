@@ -37,6 +37,8 @@ interface MembersTableProps {
   organizationId: string;
   /** BACKLOG-3976: the viewer holds users.edit. The server checks it again on every change. */
   canEditRole?: boolean;
+  /** BACKLOG-4170: the viewer holds users.suspend (row Suspend/Unsuspend, selection and bulk actions). */
+  canSuspend?: boolean;
 }
 
 type SortField = 'name' | 'email' | 'role' | 'license' | 'joined';
@@ -126,7 +128,8 @@ function RowActionMenu({
   loading,
 }: {
   member: MemberRow;
-  onSuspendToggle: (userId: string, isSuspended: boolean) => void;
+  /** Present only when the viewer holds users.suspend (BACKLOG-4170). */
+  onSuspendToggle?: (userId: string, isSuspended: boolean) => void;
   /** Present only when the viewer may change roles (BACKLOG-3976). */
   onChangeRole?: (member: MemberRow) => void;
   loading: boolean;
@@ -194,6 +197,7 @@ function RowActionMenu({
                 Change Role
               </button>
             )}
+            {onSuspendToggle && (
             <button
               type="button"
               disabled={loading}
@@ -220,6 +224,7 @@ function RowActionMenu({
                 </>
               )}
             </button>
+            )}
           </div>
         </>
       )}
@@ -227,7 +232,7 @@ function RowActionMenu({
   );
 }
 
-export function MembersTable({ members, organizationId, canEditRole = false }: MembersTableProps) {
+export function MembersTable({ members, organizationId, canEditRole = false, canSuspend = false }: MembersTableProps) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
@@ -480,8 +485,8 @@ export function MembersTable({ members, organizationId, canEditRole = false }: M
         </div>
       )}
 
-      {/* Bulk action bar */}
-      {someSelected && (
+      {/* Bulk action bar (users.suspend, BACKLOG-4170) */}
+      {canSuspend && someSelected && (
         <div className="mb-3 flex items-center gap-3 rounded-lg bg-primary-50 border border-primary-200 px-4 py-2.5">
           <span className="text-sm font-medium text-primary-800">
             {selected.size} selected
@@ -546,13 +551,15 @@ export function MembersTable({ members, organizationId, canEditRole = false }: M
         <Table>
           <TableHead>
             <tr>
-              <th className="w-10 px-3 py-3">
-                <Checkbox
-                  checked={allSelected}
-                  onChange={toggleAll}
-                  aria-label="Select all members"
-                />
-              </th>
+              {canSuspend && (
+                <th className="w-10 px-3 py-3">
+                  <Checkbox
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    aria-label="Select all members"
+                  />
+                </th>
+              )}
               {([
                 ['name', 'Name'],
                 ['email', 'Email'],
@@ -587,13 +594,15 @@ export function MembersTable({ members, organizationId, canEditRole = false }: M
                 }}
                 className={selected.has(member.user_id) ? 'bg-primary-50/50' : ''}
               >
-                <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>
-                  <Checkbox
-                    checked={selected.has(member.user_id)}
-                    onChange={() => toggleOne(member.user_id)}
-                    aria-label={`Select ${member.display_name || member.email}`}
-                  />
-                </td>
+                {canSuspend && (
+                  <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>
+                    <Checkbox
+                      checked={selected.has(member.user_id)}
+                      onChange={() => toggleOne(member.user_id)}
+                      aria-label={`Select ${member.display_name || member.email}`}
+                    />
+                  </td>
+                )}
                 <Td>
                   <div className="flex items-center gap-3">
                     <UserInitials name={member.display_name} />
@@ -618,7 +627,7 @@ export function MembersTable({ members, organizationId, canEditRole = false }: M
                 <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>
                   <RowActionMenu
                     member={member}
-                    onSuspendToggle={handleSuspendToggle}
+                    onSuspendToggle={canSuspend ? handleSuspendToggle : undefined}
                     onChangeRole={canEditRole ? openRoleDialog : undefined}
                     loading={loading}
                   />

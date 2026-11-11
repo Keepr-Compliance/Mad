@@ -42,9 +42,11 @@ import {
 interface SuspensionActionProps {
   userId: string;
   status: SuspensionStatus;
+  /** billing.suspend (BACKLOG-4170): shows Reinstate. The suspension status is shown either way. */
+  canReinstate?: boolean;
 }
 
-export function SuspensionAction({ userId, status }: SuspensionActionProps) {
+export function SuspensionAction({ userId, status, canReinstate = false }: SuspensionActionProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState('');
@@ -186,6 +188,7 @@ export function SuspensionAction({ userId, status }: SuspensionActionProps) {
               </p>
             )}
 
+            {canReinstate && (
             <div className="mt-3">
               <button
                 type="button"
@@ -195,10 +198,12 @@ export function SuspensionAction({ userId, status }: SuspensionActionProps) {
                 Reinstate account
               </button>
             </div>
+            )}
           </div>
         </div>
       </div>
 
+      {canReinstate && (
       <Modal
         open={open}
         onClose={closeModal}
@@ -258,6 +263,7 @@ export function SuspensionAction({ userId, status }: SuspensionActionProps) {
           </Button>
         </div>
       </Modal>
+      )}
     </>
   );
 }

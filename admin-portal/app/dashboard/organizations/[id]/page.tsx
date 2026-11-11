@@ -67,6 +67,12 @@ export default async function OrganizationDetailPage({
     required_permission: 'users.edit',
   });
 
+  // BACKLOG-4170: member Suspend / Unsuspend needs the key admin_suspend_user checks.
+  const { data: canSuspend } = await supabase.rpc('has_permission', {
+    check_user_id: adminUser.id,
+    required_permission: 'users.suspend',
+  });
+
   // BACKLOG-3853 PR-2A: the brokerage Billing card. billing.view gates the read
   // (admin_get_org_billing refuses without it); the card renders only while
   // brokerage billing is switched on or the organization is a test organization.
@@ -247,7 +253,12 @@ export default async function OrganizationDetailPage({
             <div className="mt-4 flex justify-center">{inviteButton}</div>
           </div>
         ) : (
-          <MembersTable members={members} organizationId={org.id} canEditRole={!!canInvite} />
+          <MembersTable
+            members={members}
+            organizationId={org.id}
+            canEditRole={!!canInvite}
+            canSuspend={canSuspend === true}
+          />
         )}
       </div>
     </div>
