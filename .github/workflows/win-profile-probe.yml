@@ -1,0 +1,35 @@
+# BACKLOG-4185 B6: runs the real Windows device-profile probe on a Windows runner.
+# Manual only (workflow_dispatch) and outside the required Windows Test & Lint job,
+# which is already near its timeout cap (BACKLOG-4125).
+name: Windows device-profile probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Windows device-profile probe
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.23.4
+          cache: 'npm'
+
+      - name: Install dependencies (no native builds)
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Run the live probe test
+        env:
+          KEEPR_WIN_PROFILE_PROBE: "1"
+        run: npx jest electron/services/diagnostics/__tests__/deviceProfileCollector.winLive-4185.test.ts --bail=0

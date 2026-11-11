@@ -41,7 +41,9 @@ type QueryType =
   // BACKLOG-3925: the address-only Needs Review candidates.
   | "addressMatchCandidates"
   // BACKLOG-3926: the folder / label match candidates.
-  | "folderMatchCandidates";
+  | "folderMatchCandidates"
+  // BACKLOG-4185: data-size counts for the devices row's hardware profile.
+  | "deviceDataSize";
 
 /**
  * Per-type payload carried alongside `{ id, type, userId }` (BACKLOG-1717).
@@ -717,4 +719,13 @@ export async function restartPoolAfterExclusiveAccess(
  */
 export function isPoolReady(): boolean {
   return ready && worker !== null;
+}
+
+/**
+ * BACKLOG-4185: queries in flight on the shared worker (read only). Reads 0
+ * while the pool is down too (a crash or give-up clears the map), so callers
+ * must also check isPoolReady().
+ */
+export function getPoolQueryCount(): number {
+  return pendingQueries.size;
 }

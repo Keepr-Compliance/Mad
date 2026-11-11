@@ -28,6 +28,7 @@ import sessionService from "../services/sessionService";
 import { dbTransaction } from "../services/db/core/dbConnection";
 import { resolveAttachmentAuditUserId } from "../services/db/attachmentOpenSql";
 import { isAuditNotRecorded } from "../services/dealChangeAudit";
+import { onPrivacyGateChanged } from "../services/deviceProfile/deviceProfileService";
 
 /**
  * BACKLOG-3339: shown when the data file was saved but the export could not
@@ -196,6 +197,8 @@ export function registerCcpaHandlers(): void {
       try {
         const state = setCrashReportingEnabled(enabled);
         logService.info(`[CcpaHandlers] Crash reporting set to ${enabled ? "on" : "off"}`, "CcpaHandlers");
+        // BACKLOG-4185 C5: OFF clears this device's hardware profile now.
+        onPrivacyGateChanged();
         return { success: true, ...state };
       } catch (err) {
         logService.error("[CcpaHandlers] Failed to save crash reporting choice", "CcpaHandlers", { error: err instanceof Error ? err.message : String(err) });
@@ -224,6 +227,8 @@ export function registerCcpaHandlers(): void {
       try {
         const state = setDiagnosticsSharingEnabled(enabled);
         logService.info(`[CcpaHandlers] Diagnostics sharing set to ${enabled ? "on" : "off"}`, "CcpaHandlers");
+        // BACKLOG-4185 C5: OFF clears this device's hardware profile now.
+        onPrivacyGateChanged();
         return { success: true, ...state };
       } catch (err) {
         logService.error("[CcpaHandlers] Failed to save diagnostics sharing choice", "CcpaHandlers", { error: err instanceof Error ? err.message : String(err) });
