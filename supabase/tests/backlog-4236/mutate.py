@@ -46,10 +46,10 @@ MUT = {
   'G06_update_granted_on_deals': (sub('GRANT SELECT ON TABLE public.cloud_deals TO authenticated;',
       'GRANT SELECT, INSERT, UPDATE ON TABLE public.cloud_deals TO authenticated;'), 'A1_table_privileges W1_no_direct_writes', 'red'),
   'G07_owner_write_policy': (sub('GRANT SELECT ON TABLE public.cloud_deals TO authenticated;',
-      'GRANT SELECT, INSERT ON TABLE public.cloud_deals TO authenticated;\nCREATE POLICY cloud_deals_insert_own ON public.cloud_deals FOR INSERT TO authenticated WITH CHECK (owner_user_id = (SELECT auth.uid()));'),
+      'GRANT SELECT, INSERT ON TABLE public.cloud_deals TO authenticated;\nDROP POLICY IF EXISTS cloud_deals_insert_own ON public.cloud_deals;\nCREATE POLICY cloud_deals_insert_own ON public.cloud_deals FOR INSERT TO authenticated WITH CHECK (owner_user_id = (SELECT auth.uid()));'),
       'W1_no_direct_writes A4_policies_and_publication', 'red'),
   'G08_realtime': (sub('-- ============================================================================ bucket and storage policies',
-      'ALTER PUBLICATION supabase_realtime ADD TABLE public.cloud_deals;\n-- ============================================================================ bucket and storage policies'),
+      'DO $pub$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = \'supabase_realtime\' AND tablename = \'cloud_deals\') THEN ALTER PUBLICATION supabase_realtime ADD TABLE public.cloud_deals; END IF; END $pub$;\n-- ============================================================================ bucket and storage policies'),
       'A4_policies_and_publication', 'red'),
   # ---------------------------------------------------------------- read policies
   'R01_org_keyed_read': (sub('/*POL:deals*/', 'OR organization_id IN (SELECT m.organization_id FROM public.organization_members m WHERE m.user_id = (SELECT auth.uid())) /*POL:deals*/'),
@@ -68,7 +68,7 @@ MUT = {
   'S04_read_ignores_fence': (sub("""                 AND b.purge_requested_at IS NULL)                                 /*STO:sel:fence*/""", ')'),
       'P2_storage_read_closed_by_fence SET2_off_unlicensed_deletes_all', 'red'),
   'S05_owner_update_policy': (sub('DROP POLICY IF EXISTS "Cloud deal files: owner reads live blob" ON storage.objects;',
-      'CREATE POLICY "Cloud deal files: owner updates" ON storage.objects FOR UPDATE TO authenticated USING (bucket_id = \'cloud-deal-files\' AND split_part(objects.name, \'/\', 1) = (SELECT auth.uid())::text);\nDROP POLICY IF EXISTS "Cloud deal files: owner reads live blob" ON storage.objects;'),
+      'DROP POLICY IF EXISTS "Cloud deal files: owner updates" ON storage.objects;\nCREATE POLICY "Cloud deal files: owner updates" ON storage.objects FOR UPDATE TO authenticated USING (bucket_id = \'cloud-deal-files\' AND split_part(objects.name, \'/\', 1) = (SELECT auth.uid())::text);\nDROP POLICY IF EXISTS "Cloud deal files: owner reads live blob" ON storage.objects;'),
       'P1_storage_insert A4_policies_and_publication', 'red'),
   # ---------------------------------------------------------------- licence
   'L01_brk_revoked': (drop('     AND a.revoked_at IS NULL                                                      /*BRK:revoked*/\n'), 'E3_revoked', 'red'),
@@ -127,7 +127,7 @@ MUT = {
   'D02_org_personal_allowed': (drop('       AND o.personal_owner_user_id IS NULL                                                  /*ORG:notpersonal*/\n'), 'U5_own_personal_org', 'red'),
   'D03_org_inactive_member_allowed': (sub("""       AND public.member_status_grants_access(m.license_status);                             /*ORG:member*/""", ';'), 'U5_deal_organization', 'red'),
   'D04_deal_lookup_ignores_install': (sub('WHERE x.owner_user_id = v_uid AND x.source_install_id = v_inst AND x.local_transaction_id = v_local FOR UPDATE;',
-      'WHERE x.owner_user_id = v_uid AND x.local_transaction_id = v_local ORDER BY x.created_at LIMIT 1 FOR UPDATE;'), 'I1_install_binding', 'red'),
+      'WHERE x.owner_user_id = v_uid AND x.local_transaction_id = v_local ORDER BY x.version DESC LIMIT 1 FOR UPDATE;'), 'I1_install_binding', 'red'),
   'D05_confirmed_detection_only': (sub("""      is_confirmed = (v_st IS NULL OR v_st <> 'rejected')
                      AND (v_det IS NULL OR v_det NOT IN ('pending', 'rejected')),               /*DEAL:confirmed*/""",
       """      is_confirmed = (v_det IS NULL OR v_det NOT IN ('pending', 'rejected')),               /*DEAL:confirmed*/"""), 'U8_derived_columns', 'red'),
@@ -157,7 +157,7 @@ MUT = {
       '    IF char_length(v_body) >= 1000000 THEN v_body := left(v_body, 1000000); v_trunc := true; END IF;'), 'U9_body_cap', 'red'),
   'W12_no_truncation': (sub('    IF char_length(v_body) > 1000000 THEN v_body := left(v_body, 1000000); v_trunc := true; END IF;   /*MSG:truncate*/', ''), 'U9_body_cap', 'red'),
   'W13_file_attaches_fenced_blob': (drop('         AND b.purge_requested_at IS NULL                                                     /*FILE:unfenced*/\n'), 'B2_fenced_blob_not_attachable', 'red'),
-  'W14_file_blob_any_owner': (drop('       WHERE b.owner_user_id = v_uid                                                          /*OWNER:fileblob*/\n         AND b.sha256'), 'O1_owner_binding', 'red'),
+  'W14_file_blob_any_owner': (sub('       WHERE b.owner_user_id = v_uid                                                          /*OWNER:fileblob*/\n', '       WHERE true\n'), 'O1_owner_binding', 'red'),
   'W15_messages_row_cap_off_by_one': (sub(ROWS % 'messages', ROWS.replace('> 500', '>= 500') % 'messages'), 'U6_row_cap', 'red'),
   # ---------------------------------------------------------------- tombstone, delete, blobs
   'T01_tombstone_scrub_kept_body': (sub('             subject = NULL, body_text = NULL, body_truncated = false, participants = NULL          /*TOMB:scrub*/',
@@ -192,7 +192,7 @@ MUT = {
   # ---------------------------------------------------------------- assignment
   'M01_assign_any_caller': (sub("  IF auth.role() IS DISTINCT FROM 'service_role' THEN                                      /*ASSIGN:role*/",
       "  IF false THEN                                      /*ASSIGN:role*/"), 'E7_internal_caller_checks', 'red'),
-  'M02_assign_inactive_member': (sub('       AND public.member_status_grants_access(m.license_status);                            /*ASSIGN:member*/', ';'), '', 'green'),
+  'M02_assign_inactive_member': (sub('       AND public.member_status_grants_access(m.license_status);                            /*ASSIGN:member*/', ';'), 'M1_assign_inactive_member', 'red'),
   'M03_assign_ignores_plan': (sub("    IF public._org_feature_allowed(p_organization_id, 'cloud_autosave_assignable') IS NOT TRUE THEN   /*ASSIGN:plan*/",
       "    IF false THEN   /*ASSIGN:plan*/"), 'M1_assign_plan', 'red'),
   # ---------------------------------------------------------------- M1 and rollback

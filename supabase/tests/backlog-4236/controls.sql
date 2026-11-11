@@ -305,9 +305,14 @@ BEGIN
     SET LOCAL session_replication_role = origin;
     UPDATE public.organization_plans SET feature_overrides = '{"cloud_autosave_assignable":{"enabled":true}}' WHERE organization_id = O2;
     PERFORM pg_temp.assign(O2, A, true);
+    -- in each case the row updated last (physically last) is the one that must win
     UPDATE public.member_addons SET assigned_at = now() - interval '1 day' WHERE organization_id = O2 AND user_id = A;
-    t := pg_temp.state(A) ->> 'organization_id'; t2 := pg_temp.state(A) ->> 'organization_id';
-    r := r || jsonb_build_object('E5_assignment_order', pg_temp.pass(t::uuid = O2 AND t = t2, t));
+    UPDATE public.member_addons SET assigned_at = now() - interval '2 days' WHERE organization_id = O AND user_id = A;
+    t := pg_temp.state(A) ->> 'organization_id';
+    UPDATE public.member_addons SET assigned_at = now() - interval '3 days' WHERE organization_id = O AND user_id = A;
+    UPDATE public.member_addons SET assigned_at = now() - interval '4 days' WHERE organization_id = O2 AND user_id = A;
+    t2 := pg_temp.state(A) ->> 'organization_id';
+    r := r || jsonb_build_object('E5_assignment_order', pg_temp.pass(t::uuid = O AND t2::uuid = O2, coalesce(t, '-') || ' ' || coalesce(t2, '-')));
     RAISE EXCEPTION USING ERRCODE = 'T4236';
   EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('E5_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
@@ -938,6 +943,14 @@ BEGIN
     n := (SELECT count(*) FROM public.member_addons WHERE user_id = J);
     r := r || jsonb_build_object('M1_assign', pg_temp.pass(t LIKE 'ERR 42501%'
       AND t2 = 'not_member,personal_org,not_member,unchanged,assigned,revoked,unchanged,invalid_input' AND n = 1, t || ' ' || t2 || ' n=' || n));
+    SET LOCAL session_replication_role = replica;
+    UPDATE public.organization_members SET license_status = 'suspended' WHERE id = pg_temp.fx(205);
+    SET LOCAL session_replication_role = origin;
+    t := pg_temp.err(pg_temp.assign(O, J, true));
+    SET LOCAL session_replication_role = replica;
+    UPDATE public.organization_members SET license_status = 'active' WHERE id = pg_temp.fx(205);
+    SET LOCAL session_replication_role = origin;
+    r := r || jsonb_build_object('M1_assign_inactive_member', pg_temp.pass(t = 'not_member', t));
     UPDATE public.organization_plans SET feature_overrides = '{}' WHERE organization_id = O;
     r := r || jsonb_build_object('M1_assign_plan', pg_temp.pass(pg_temp.err(pg_temp.assign(O, J, true)) = 'plan_disallows', 'plan'));
     DELETE FROM public.organization_members WHERE id = pg_temp.fx(201);
