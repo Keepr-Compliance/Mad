@@ -148,9 +148,19 @@ describe('A7: the MCP route logs no token', () => {
       body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: SECRET, arguments: {}, _meta: meta } }),
     });
     expect((await POST(mismatch)).status).toBe(400);
+    // The SDK handler itself throwing: the route answers 503 and logs the error name only.
+    const serverModule = await import('@/lib/mcp/server');
+    const spy = jest.spyOn(serverModule, 'getMcpHandler').mockReturnValueOnce({
+      fetch: async () => {
+        throw new Error(`handler failed with ${SECRET}`);
+      },
+    } as unknown as ReturnType<typeof serverModule.getMcpHandler>);
+    expect((await POST(mk('{}'))).status).toBe(503);
+    spy.mockRestore();
     const written = spies.flatMap((s) => s.mock.calls).map((c) => c.map(String).join(' '));
     // Positive control: the SDK's rejection was reported, so a log line exists to inspect.
     expect(written.some((l) => l.startsWith('[mcp] handler error:'))).toBe(true);
+    expect(written.some((l) => l.startsWith('[mcp] request failed:'))).toBe(true);
     for (const line of written) expect(line).not.toContain(SECRET);
     spies.forEach((s) => s.mockRestore());
   });
