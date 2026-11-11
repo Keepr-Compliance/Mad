@@ -444,6 +444,13 @@ describe("S1 one machine, two users: each user's pending clear is kept separatel
     expect(h.updates.at(-1)).toEqual({ userId: USER, deviceId: DEVICE, profile: null });
     expect(h.state.file).toBeNull();
   });
+  it("A and B registering at the same moment in one process both keep their entry (state writes are serialized)", async () => {
+    const h = harness();
+    const s = createDeviceProfileService(h.deps);
+    await settle(Promise.all([s.onDeviceRegistered(USER, DEVICE, "login", ROW), s.onDeviceRegistered(OTHER, DEVICE, "login", ROW)]));
+    expect(h.updates.filter((u) => u.profile !== null)).toHaveLength(2); // positive control: both wrote
+    expect(h.state.file?.entries.map((e) => e.deviceKey).sort()).toEqual([deviceKeyOf(USER, DEVICE), deviceKeyOf(OTHER, DEVICE)].sort());
+  });
   it("B's later write does not erase A's entry", async () => {
     const h = harness();
     await settle(createDeviceProfileService(h.deps).onDeviceRegistered(USER, DEVICE, "login", ROW));
