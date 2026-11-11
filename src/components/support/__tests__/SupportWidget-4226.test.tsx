@@ -46,7 +46,10 @@ let learn: Record<string, jest.Mock>;
 let captures: Array<{ question: boolean; score: boolean; form: boolean }>;
 
 function installApi(): void {
-  captures = [];
+  // Per-test log: a capture still in flight when a test ends lands in its own
+  // test's log, never in the next one's.
+  const log: typeof captures = [];
+  captures = log;
   learn = {
     getState: jest.fn(async () => STATE_ON),
     cleanupNext: jest.fn(async () => CLEANUP_NEXT),
@@ -70,7 +73,7 @@ function installApi(): void {
       // (supportTicketService.ts captureScreenshot). Read the DOM after a
       // delay too: a render that lands before the capture must show up here.
       await new Promise((r) => setTimeout(r, 50));
-      captures.push({
+      log.push({
         question: !!dialogTitled(QUESTION),
         score: !!dialogTitled(SCORE_TITLE),
         form: !!document.querySelector('[data-testid="support-ticket-dialog"]'),
@@ -149,6 +152,7 @@ describe.each<Host>(["session", "score"])("BACKLOG-4226 over Learn (%s dialog)",
 
     expect(await screen.findByTestId("support-ticket-dialog")).toBeInTheDocument();
     expect(window.api.support.captureScreenshot).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(captures).toHaveLength(1));
     expect(captures).toEqual([
       host === "session"
         ? { question: true, score: false, form: false }
