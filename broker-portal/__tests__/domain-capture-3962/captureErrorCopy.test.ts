@@ -101,3 +101,11 @@ describe('reason copy', () => {
     expect(captureReasonCopy('something_new')).toBe(CAPTURE_REASON_FALLBACK);
   });
 });
+
+describe('start confirm copy', () => {
+  it('singular and plural', () => {
+    const { captureStartConfirmText } = jest.requireActual('@/lib/domain/captureCopy');
+    expect(captureStartConfirmText(1, 'D')).toBe('This person gets an email today and moves on D. They can opt out until then.');
+    expect(captureStartConfirmText(3, 'D')).toBe('These 3 people get an email today and move on D. Each can opt out until then.');
+  });
+});

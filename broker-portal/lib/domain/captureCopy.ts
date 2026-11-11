@@ -67,8 +67,8 @@ export function captureScheduledLabel(dateText: string): string {
 export const CAPTURE_NOTICE_RETRYING = 'The notice email is being retried.';
 
 export function captureStartConfirmText(count: number, dateText: string): string {
-  const who = count === 1 ? '1 person gets' : `${count} people get`;
-  return `These ${who} an email today and move on ${dateText}. Each can opt out until then.`;
+  if (count === 1) return `This person gets an email today and moves on ${dateText}. They can opt out until then.`;
+  return `These ${count} people get an email today and move on ${dateText}. Each can opt out until then.`;
 }
 
 export const CAPTURE_CANCEL_CONFIRM = 'Cancel this move? The person stays on their personal account.';
