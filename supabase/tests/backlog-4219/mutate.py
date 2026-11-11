@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BACKLOG-4219 PR1 mutations. For each mode: exact-string replace on the migration (or rollback)
+"""BACKLOG-4219 PR1 mutations (S13_*: admin list names users by user id, PR3 server change). For each mode: exact-string replace on the migration (or rollback)
 FILE, each fragment required to match exactly the stated number of times (else exit), print
 MUTATION APPLIED + the changed lines + `git diff --numstat`, run the controls with
 --with-migration (one keepr-test transaction ending in RAISE, so nothing persists), print the
@@ -86,6 +86,21 @@ MUT = {
   'S5_submit_revoke_dropped': [(MIG, "REVOKE EXECUTE ON FUNCTION public.learn_pilot_report_submit(JSONB) FROM PUBLIC, anon;\n", "", 1)],
   'S5_list_anon_granted': [(MIG, "GRANT EXECUTE ON FUNCTION public.learn_pilot_report_admin_list() TO authenticated;",
       "GRANT EXECUTE ON FUNCTION public.learn_pilot_report_admin_list() TO authenticated, anon;", 1)],
+  'S13_revert_to_email_label': [(MIG, "      'user_id', pg.user_id,\n", "      'user_label', u.email,\n", 1),
+      (MIG, "  LEFT JOIN public.sender_rule_sets s ON", "  LEFT JOIN auth.users u ON u.id = pg.user_id\n  LEFT JOIN public.sender_rule_sets s ON", 1)],
+  'S13_user_id_holds_email': [(MIG, "      'user_id', pg.user_id,\n", "      'user_id', (SELECT u.email FROM auth.users u WHERE u.id = pg.user_id),\n", 1)],
+  'S13_email_beside_user_id': [(MIG, "      'user_id', pg.user_id,\n", "      'user_id', pg.user_id,\n      'user_email', (SELECT u.email FROM auth.users u WHERE u.id = pg.user_id),\n", 1)],
+  'S13_name_falls_back_to_email': [(MIG, "nullif(pu.last_name, '')), ''))", "nullif(pu.last_name, '')), ''), pu.email)", 1)],
+  # the '@' guard alone already nulls an email fallback (S13_name_falls_back_to_email stays green on
+  # the output); with the guard dropped too, or with an email-derived value that has no '@', it reds
+  'S13_name_falls_back_to_email_no_guard': [(MIG, "nullif(pu.last_name, '')), ''))", "nullif(pu.last_name, '')), ''), pu.email)", 1),
+      (MIG, "CASE WHEN nm.name LIKE '%@%' THEN NULL ELSE nm.name END", "nm.name", 1)],
+  'S13_name_falls_back_to_email_local_part': [(MIG, "nullif(pu.last_name, '')), ''))", "nullif(pu.last_name, '')), ''), split_part(pu.email, '@', 1))", 1)],
+  'S13_name_email_guard_dropped': [(MIG, "CASE WHEN nm.name LIKE '%@%' THEN NULL ELSE nm.name END", "nm.name", 1)],
+  'S13_name_display_only': [(MIG, "nullif(concat_ws(' ', nullif(pu.first_name, ''), nullif(pu.last_name, '')), '')) AS name", "NULL::text) AS name", 1)],
+  'S13_name_first_last_before_display': [(MIG, "coalesce(nullif(pu.display_name, ''),\n                                     nullif(concat_ws(' ', nullif(pu.first_name, ''), nullif(pu.last_name, '')), ''))",
+      "coalesce(nullif(concat_ws(' ', nullif(pu.first_name, ''), nullif(pu.last_name, '')), ''),\n                                     nullif(pu.display_name, ''))", 1)],
+  'S13_user_id_is_org_id': [(MIG, "      'user_id', pg.user_id,\n", "      'user_id', pg.org_id,\n", 1)],
   'S20_rollback_misses_validator': [(RB, "DROP FUNCTION IF EXISTS public._learn_pilot_int_ok(JSONB);\n", "", 1)],
   'S20_rollback_keeps_job': [(RB, "    PERFORM cron.unschedule('purge-learn-pilot-reports');\n", "    NULL;\n", 1)],
   'S20_rollback_keeps_catalog_key': [(RB, "DELETE FROM public.reports WHERE report_key = 'learn-pilot';\n", "", 1)],

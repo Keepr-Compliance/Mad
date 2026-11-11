@@ -184,7 +184,7 @@ BEGIN
     priv_sigs text[] := ARRAY['public._learn_pilot_int_ok(jsonb)', 'public._learn_pilot_counts_ok(jsonb,text[])',
                               'public._learn_pilot_census_invalid(jsonb)', 'public._learn_pilot_report_invalid(jsonb)'];
     expected_keys text[] := ARRAY['app_version', 'org_current_pin_at', 'org_current_pin_version', 'org_id', 'org_name',
-      'report', 'sender_rules_version', 'submitted_at', 'user_label', 'version_bundled', 'version_canary_org',
+      'report', 'sender_rules_version', 'submitted_at', 'user_id', 'user_name', 'version_bundled', 'version_canary_org',
       'version_published_at', 'version_released', 'version_was_canary_for_this_org'];
   BEGIN
     -- ===== S0: catalog key once, table empty, one purge job, daily =====
@@ -203,10 +203,15 @@ BEGIN
     SELECT pg_temp.fx(x), 'p4219-' || x || '@example.test', 'authenticated', 'authenticated',
            '00000000-0000-0000-0000-000000000000', '{"provider":"email"}', '{}', now(), now()
       FROM generate_series(1, 14) x;
-    INSERT INTO public.users (id, email, oauth_provider, oauth_id, display_name)
-    SELECT pg_temp.fx(x), 'p4219-' || x || '@example.test', 'email', pg_temp.fx(x)::text, 'P4219 user ' || x
+    -- names: u6 has display_name AND first + last (display_name wins), u10 first + last only,
+    -- u13 no name at all, everyone else a display_name
+    INSERT INTO public.users (id, email, oauth_provider, oauth_id, display_name, first_name, last_name)
+    SELECT pg_temp.fx(x), 'p4219-' || x || '@example.test', 'email', pg_temp.fx(x)::text,
+           CASE WHEN x IN (10, 13) THEN NULL ELSE 'P4219 user ' || x END,
+           CASE x WHEN 10 THEN 'Pat' WHEN 6 THEN 'Sam' END, CASE x WHEN 10 THEN 'Ten' WHEN 6 THEN 'Six' END
       FROM generate_series(1, 14) x
-    ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name;
+    ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, first_name = EXCLUDED.first_name,
+                                   last_name = EXCLUDED.last_name;
     INSERT INTO public.internal_roles (user_id, role_id) VALUES (u1, r_sa), (u2, r_ss), (u3, r_ss);
     -- (a mutation that drops the catalog key makes this insert fail; K0 then reds instead of the run aborting)
     BEGIN
@@ -491,18 +496,18 @@ BEGIN
     -- ===== S4b / S7: hidden rows (left the org, older than 180 days); viewer sees the same rows as owner =====
     j := CASE WHEN s LIKE 'ERR%' THEN '{"rows":[]}'::jsonb ELSE s::jsonb END;
     r := r || jsonb_build_object('S4b_hidden_rows', pg_temp.pass(
-      NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_label' = 'p4219-9@example.test')
+      NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' = u9::text)
       AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x
-                      WHERE x->>'user_label' = 'p4219-10@example.test' AND x->>'sender_rules_version' = '3')
+                      WHERE x->>'user_id' = u10::text AND x->>'sender_rules_version' = '3')
       AND EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x
-                  WHERE x->>'user_label' = 'p4219-10@example.test' AND x->>'sender_rules_version' = '2')
+                  WHERE x->>'user_id' = u10::text AND x->>'sender_rules_version' = '2')
       AND pg_temp.lst(u2) = j::text
       AND (j->'truncated') = 'false'::jsonb,
       left(j::text, 300)));
 
     -- ===== S11: joined to rule-set versions and pins; the canary mark is per org; LEFT JOIN; no *_by keys =====
     s := '';
-    FOR p IN SELECT x FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_label' LIKE 'p4219-%' LOOP
+    FOR p IN SELECT x FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' LIKE '00000000-0000-4219-8000-%' LOOP
       IF (SELECT array_agg(kk ORDER BY kk) FROM jsonb_object_keys(p) kk) <> expected_keys THEN
         s := s || 'keys=' || (SELECT string_agg(kk, ',' ORDER BY kk) FROM jsonb_object_keys(p) kk) || ' ';
       END IF;
@@ -511,27 +516,66 @@ BEGIN
       vC IS NOT NULL AND s = '' AND s2 = '""' AND s3 = '""""' AND s4 = '""'
       -- u6 (org X) on the canary for X: marked, pinned
       AND EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x
-                  WHERE x->>'user_label' = 'p4219-6@example.test' AND (x->>'sender_rules_version')::bigint = vC
+                  WHERE x->>'user_id' = u6::text AND (x->>'sender_rules_version')::bigint = vC
                     AND x->'version_was_canary_for_this_org' = 'true'::jsonb AND x->'version_released' = 'false'::jsonb
                     AND x->>'version_canary_org' = oX::text
                     AND (x->>'org_current_pin_version')::bigint = vC AND x->>'org_name' = 'P4219 X')
       -- u13 (org Z) on the same canary: not marked, no pin for Z
       AND EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x
-                  WHERE x->>'user_label' = 'p4219-13@example.test' AND (x->>'sender_rules_version')::bigint = vC
+                  WHERE x->>'user_id' = u13::text AND (x->>'sender_rules_version')::bigint = vC
                     AND x->'version_was_canary_for_this_org' = 'false'::jsonb
                     AND x->'org_current_pin_version' = 'null'::jsonb AND x->>'org_name' = 'P4219 Z')
       -- u6 on the released version
       AND EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x
-                  WHERE x->>'user_label' = 'p4219-6@example.test' AND (x->>'sender_rules_version')::bigint = vR
+                  WHERE x->>'user_id' = u6::text AND (x->>'sender_rules_version')::bigint = vR
                     AND x->'version_released' = 'true'::jsonb AND x->'version_was_canary_for_this_org' = 'false'::jsonb)
       -- u6 on a version the server has no row for: still listed, version columns null
       AND EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x
-                  WHERE x->>'user_label' = 'p4219-6@example.test' AND x->>'sender_rules_version' = '999999'
+                  WHERE x->>'user_id' = u6::text AND x->>'sender_rules_version' = '999999'
                     AND x->'version_released' = 'null'::jsonb AND x->'version_was_canary_for_this_org' = 'false'::jsonb
                     AND x->'report' = pg_temp.rep(999999))
       AND j::text NOT LIKE '%published_by%' AND j::text NOT LIKE '%pinned_by%',
       'vR=' || coalesce(vR::text, '-') || ' vC=' || coalesce(vC::text, s) || ' subs=' || s2 || s3 || s4 || ' ' || s
       || ' rows=' || left((j->'rows')::text, 200)));
+
+    -- ===== S13: each row names its user by Keepr user id, the user who submitted that row; no email anywhere =====
+    -- Every fixture row's user_id must be the user_id of a stored row with the same version and time (the
+    -- submitter), u6's rows must carry u6, and the whole result carries no '@', and no row key naming an email or label (the
+    -- report's own counters such as min_linked_emails are numbers and are not row keys).
+    r := r || jsonb_build_object('S13_user_id_not_email', pg_temp.pass(
+      EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' = u6::text)
+      AND (SELECT count(*) FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' LIKE '00000000-0000-4219-8000-%')
+          = (SELECT count(*) FROM jsonb_array_elements(j->'rows') x
+             WHERE EXISTS (SELECT 1 FROM public.learn_pilot_reports lr
+                           WHERE lr.user_id::text = x->>'user_id'
+                             AND lr.sender_rules_version = (x->>'sender_rules_version')::bigint
+                             AND lr.submitted_at = (x->>'submitted_at')::timestamptz
+                             AND lr.user_id::text LIKE '00000000-0000-4219-8000-%'))
+      AND (SELECT count(*) FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' LIKE '00000000-0000-4219-8000-%') >= 4
+      AND j::text NOT LIKE '%@%'
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x, jsonb_object_keys(x) kk WHERE kk ~* '(email|label|name_of_user)')
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE (x - 'report')::text ~* 'p4219-[0-9]+@'),
+      'rows=' || left((j->'rows')::text, 300)));
+
+    -- ===== S13b: user_name = display_name, else first + last, else NULL (never the email); an
+    --       email-shaped display_name comes back NULL =====
+    s := (SELECT string_agg(DISTINCT (x->>'user_id') || '=' || coalesce(x->>'user_name', '<null>') || ':' || jsonb_typeof(x->'user_name'), ' ')
+          FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' IN (u6::text, u10::text, u13::text));
+    UPDATE public.users SET display_name = 'p4219-6@example.test' WHERE id = u6;
+    s2 := pg_temp.lst(u1);
+    UPDATE public.users SET display_name = 'P4219 user 6' WHERE id = u6;
+    r := r || jsonb_build_object('S13b_user_name', pg_temp.pass(
+      NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' = u6::text AND x->>'user_name' IS DISTINCT FROM 'P4219 user 6')
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' = u6::text)
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' = u10::text AND x->>'user_name' IS DISTINCT FROM 'Pat Ten')
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' = u10::text)
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' = u13::text AND x->'user_name' <> 'null'::jsonb)
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' = u13::text AND x ? 'user_name')
+      AND s2 NOT LIKE 'ERR%'
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(s2::jsonb->'rows') x WHERE x->>'user_id' = u6::text)
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(s2::jsonb->'rows') x WHERE x->>'user_id' = u6::text AND x->'user_name' <> 'null'::jsonb)
+      AND s2 NOT LIKE '%@%',
+      coalesce(s, '-') || ' guard=' || left(s2, 120)));
 
     -- ===== S7b: the scheduled purge body (read from cron.job, not a copy) =====
     UPDATE public.learn_pilot_reports SET submitted_at = now() - interval '1 day' WHERE user_id = u10 AND sender_rules_version = 2;
