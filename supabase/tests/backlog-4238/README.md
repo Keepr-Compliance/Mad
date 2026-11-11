@@ -12,6 +12,11 @@ one rolled-back transaction: the call ends in RAISE, so nothing persists.
 | `rollback-4238.sql` | Drops every object, the role and the ledger row. |
 | `concurrency/` | Two-session controls (D7 concurrent redemption, D13 busy, D14 40 parallel calls). They need the migration applied (committed) and parallel `kt-sql` calls; `run-concurrency.sh` lists the cases and their mutants. |
 
+The portal secrets used by a run are random per run (`compose.py`, `run-concurrency.sh`) and every
+composed SQL file is written to a private temporary directory that is removed on exit.
+`run-concurrency.sh` snapshots the `mcp_settings` columns it changes, and its EXIT/INT/TERM trap
+removes exactly the run's fixture rows, restores the snapshot and verifies both.
+
 The rollback runs first in every composed call, so each function is created fresh: `CREATE OR
 REPLACE` keeps an existing function's ACL, which would hide a dropped REVOKE.
 

@@ -13,7 +13,7 @@ $h$;
 CREATE FUNCTION pg_temp.hx(b bytea) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
   SELECT CASE WHEN b IS NULL THEN 'NULL::bytea' ELSE format('decode(%L, %L)', encode(b, 'hex'), 'hex') END
 $h$;
-CREATE FUNCTION pg_temp.sec() RETURNS text LANGUAGE sql IMMUTABLE AS $h$ SELECT 'p4238-secret-current' $h$;
+CREATE FUNCTION pg_temp.sec() RETURNS text LANGUAGE sql IMMUTABLE AS $h$ SELECT '__SECRET__' $h$;
 CREATE FUNCTION pg_temp.res() RETURNS text LANGUAGE sql IMMUTABLE AS $h$ SELECT 'https://portal.example.test/api/mcp' $h$;
 CREATE FUNCTION pg_temp.claude() RETURNS text LANGUAGE sql IMMUTABLE AS $h$ SELECT 'https://claude.ai/api/mcp/auth_callback' $h$;
 CREATE FUNCTION pg_temp.gpt() RETURNS text LANGUAGE sql IMMUTABLE AS $h$ SELECT 'https://chatgpt.com/connector_platform_oauth_redirect' $h$;
@@ -59,32 +59,32 @@ CREATE FUNCTION pg_temp.pass(c boolean, detail text) RETURNS text LANGUAGE sql I
 $h$;
 
 -- anon calls
-CREATE FUNCTION pg_temp.reg(k text, uris text[], ip text, s text DEFAULT 'p4238-secret-current', cid text DEFAULT NULL) RETURNS text LANGUAGE sql AS $h$
+CREATE FUNCTION pg_temp.reg(k text, uris text[], ip text, s text DEFAULT '__SECRET__', cid text DEFAULT NULL) RETURNS text LANGUAGE sql AS $h$
   SELECT pg_temp.call_as(NULL, format('SELECT public.mcp_register_client(%L, %L, %L, %L::text[], %s)',
          s, coalesce(cid, pg_temp.cid(k)), 'Fixture app ' || k, uris, pg_temp.hx(pg_temp.dg(ip))), 'anon')
 $h$;
 CREATE FUNCTION pg_temp.beg(k text, redirect text, binding text, chal text DEFAULT 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM',
                             method text DEFAULT 'S256', resource text DEFAULT 'https://portal.example.test/api/mcp',
-                            scope text DEFAULT 'mcp:read', s text DEFAULT 'p4238-secret-current', ip text DEFAULT NULL) RETURNS text LANGUAGE sql AS $h$
+                            scope text DEFAULT 'mcp:read', s text DEFAULT '__SECRET__', ip text DEFAULT NULL) RETURNS text LANGUAGE sql AS $h$
   SELECT pg_temp.call_as(NULL, format('SELECT public.mcp_authorize_begin(%L, %L, %L, %L, %L, %L, %L, %L, %s, %s)',
          s, pg_temp.cid(k), redirect, chal, method, resource, scope, 'state-' || k,
          pg_temp.hx(pg_temp.dg(binding)), pg_temp.hx(pg_temp.dg(coalesce(ip, 'ipb-' || k)))), 'anon')
 $h$;
 CREATE FUNCTION pg_temp.exch(code text, verifier text, k text, redirect text, at text, rt text,
-                             resource text DEFAULT 'https://portal.example.test/api/mcp', s text DEFAULT 'p4238-secret-current') RETURNS text LANGUAGE sql AS $h$
+                             resource text DEFAULT 'https://portal.example.test/api/mcp', s text DEFAULT '__SECRET__') RETURNS text LANGUAGE sql AS $h$
   SELECT pg_temp.call_as(NULL, format('SELECT public.mcp_exchange_code(%L, %s, %L, %L, %L, %L, %s, %s)',
          s, pg_temp.hx(pg_temp.dg(code)), verifier, pg_temp.cid(k), redirect, resource,
          pg_temp.hx(pg_temp.dg(at)), pg_temp.hx(pg_temp.dg(rt))), 'anon')
 $h$;
 CREATE FUNCTION pg_temp.refr(rt text, k text, nat text, nrt text, resource text DEFAULT 'https://portal.example.test/api/mcp',
-                             s text DEFAULT 'p4238-secret-current') RETURNS text LANGUAGE sql AS $h$
+                             s text DEFAULT '__SECRET__') RETURNS text LANGUAGE sql AS $h$
   SELECT pg_temp.call_as(NULL, format('SELECT public.mcp_refresh(%L, %s, %L, %L, %s, %s)',
          s, pg_temp.hx(pg_temp.dg(rt)), pg_temp.cid(k), resource, pg_temp.hx(pg_temp.dg(nat)), pg_temp.hx(pg_temp.dg(nrt))), 'anon')
 $h$;
-CREATE FUNCTION pg_temp.st(at text, s text DEFAULT 'p4238-secret-current', resource text DEFAULT 'https://portal.example.test/api/mcp') RETURNS text LANGUAGE sql AS $h$
+CREATE FUNCTION pg_temp.st(at text, s text DEFAULT '__SECRET__', resource text DEFAULT 'https://portal.example.test/api/mcp') RETURNS text LANGUAGE sql AS $h$
   SELECT pg_temp.call_as(NULL, format('SELECT public.mcp_get_status(%L, %s, %L)', s, pg_temp.hx(pg_temp.dg(at)), resource), 'anon')
 $h$;
-CREATE FUNCTION pg_temp.chk(at text, s text DEFAULT 'p4238-secret-current', resource text DEFAULT 'https://portal.example.test/api/mcp') RETURNS text LANGUAGE sql AS $h$
+CREATE FUNCTION pg_temp.chk(at text, s text DEFAULT '__SECRET__', resource text DEFAULT 'https://portal.example.test/api/mcp') RETURNS text LANGUAGE sql AS $h$
   SELECT pg_temp.call_as(NULL, format('SELECT public.mcp_check_access(%L, %s, %L)', s, pg_temp.hx(pg_temp.dg(at)), resource), 'anon')
 $h$;
 -- signed-in calls

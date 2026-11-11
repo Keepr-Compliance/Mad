@@ -168,13 +168,13 @@ BEGIN
       AND pg_temp.nlog() = n0 AND pg_temp.nctr() = k0,
       t || ' ' || t2 || ' ' || t3 || ' log ' || n0 || '->' || pg_temp.nlog() || ' ctr ' || k0 || '->' || pg_temp.nctr()));
     -- case 2: wrong secret, previous hash set
-    UPDATE public.mcp_settings SET portal_secret_prev_sha256 = sha256(convert_to('p4238-secret-previous', 'UTF8')) WHERE id;
+    UPDATE public.mcp_settings SET portal_secret_prev_sha256 = sha256(convert_to('__PREV_SECRET__', 'UTF8')) WHERE id;
     n0 := pg_temp.nlog(); k0 := pg_temp.nctr();
     t := pg_temp.st('at-d1', 'wrong-secret');
     r := r || jsonb_build_object('D1_wrong_secret_prev_set', pg_temp.pass(
       pg_temp.j(t) = '{"ok": false, "error": "not_connected"}'::jsonb AND pg_temp.nlog() = n0 AND pg_temp.nctr() = k0, t));
     -- case 3: previous secret accepted during rotation
-    t := pg_temp.st('at-d1', 'p4238-secret-previous');
+    t := pg_temp.st('at-d1', '__PREV_SECRET__');
     r := r || jsonb_build_object('D1_prev_secret_accepted', pg_temp.pass(pg_temp.j(t) ->> 'ok' = 'true', t));
     UPDATE public.mcp_settings SET portal_secret_prev_sha256 = NULL WHERE id;
     -- case 4: NULL secret
