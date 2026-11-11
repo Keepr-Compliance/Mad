@@ -50,3 +50,5 @@ export const GET = notPost;
 export const PUT = notPost;
 export const PATCH = notPost;
 export const DELETE = notPost;
+// Next answers OPTIONS itself (204) unless the route exports it.
+export const OPTIONS = notPost;

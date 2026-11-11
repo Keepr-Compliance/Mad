@@ -27,10 +27,10 @@ type Hooks = {
   beforeSendTransaction: (e: Record<string, unknown>) => Record<string, unknown> | null;
 };
 
-function loadConfig(): Hooks {
+function loadConfig(file: 'server' | 'edge'): Hooks {
   mockInit.mockReset();
   jest.isolateModules(() => {
-    require('../../sentry.server.config');
+    require(file === 'server' ? '../../sentry.server.config' : '../../sentry.edge.config');
   });
   expect(mockInit).toHaveBeenCalledTimes(1);
   return mockInit.mock.calls[0][0] as Hooks;
@@ -65,10 +65,10 @@ const SCRUBBED_URLS = [
 
 const KEPT_URLS = ['https://portal.test/dashboard', 'https://portal.test/api/mcpx', 'https://portal.test/oauthx', '/api/billing/plan-summary'];
 
-describe('A7: sentry.server.config', () => {
+describe.each(['server', 'edge'] as const)('A7: sentry.%s.config', (file) => {
   describe.each(['beforeSend', 'beforeSendTransaction'] as const)('%s', (hook) => {
     it.each(SCRUBBED_URLS)('event from %p is captured with headers, cookies, body and query removed', (url) => {
-      const fn = loadConfig()[hook];
+      const fn = loadConfig(file)[hook];
       const out = fn(plantedEvent(url));
       expect(out).not.toBeNull();
       expect(JSON.stringify(out)).not.toContain(SECRET);
@@ -81,7 +81,7 @@ describe('A7: sentry.server.config', () => {
     });
 
     it('a transaction named for the route is scrubbed even without a request url', () => {
-      const fn = loadConfig()[hook];
+      const fn = loadConfig(file)[hook];
       const ev = plantedEvent('');
       delete (ev.request as Record<string, unknown>).url;
       const out = fn({ ...ev, transaction: 'POST /api/mcp' });
@@ -89,7 +89,7 @@ describe('A7: sentry.server.config', () => {
     });
 
     it.each(KEPT_URLS)('positive: an event from %p keeps its request headers', (url) => {
-      const fn = loadConfig()[hook];
+      const fn = loadConfig(file)[hook];
       const out = fn(plantedEvent(url)) as { request: { headers?: Record<string, string> } };
       expect(out.request.headers?.['content-type']).toBe('application/json');
     });

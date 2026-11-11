@@ -225,7 +225,7 @@ describe('A3: Origin', () => {
 });
 
 describe('A4: POST only', () => {
-  it.each(['GET', 'PUT', 'PATCH', 'DELETE'] as const)('%s returns 405 with Allow: POST', async (m) => {
+  it.each(['GET', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const)('%s returns 405 with Allow: POST', async (m) => {
     const res = await route[m](new Request(MCP_URL, { method: m }));
     expect(res.status).toBe(405);
     expect(res.headers.get('allow')).toBe('POST');
@@ -286,6 +286,7 @@ describe('A8: MCP_ENABLED kill switch', () => {
     expect((await post({ origin: 'https://evil.example' })).status).toBe(404);
     expect((await route.GET(new Request(MCP_URL))).status).toBe(404);
     expect((await route.DELETE(new Request(MCP_URL, { method: 'DELETE' }))).status).toBe(404);
+    expect((await route.OPTIONS(new Request(MCP_URL, { method: 'OPTIONS' }))).status).toBe(404);
     expect((await metadataGET(new Request(`${BASE}/api/mcp/resource-metadata`))).status).toBe(404);
     expect(mockGetClaims).not.toHaveBeenCalled();
   });
