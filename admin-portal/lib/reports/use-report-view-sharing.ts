@@ -145,24 +145,30 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
   const openViewId = useRef<string | null>(null);
   const isOpenFor = (viewId: string) => openViewId.current === viewId;
 
+  // Latest read wins (BACKLOG-3513 PR-6): a reply from a read older than the newest one sent is
+  // dropped, so a slow earlier re-read can never bring back a row a later write removed.
+  const readSeq = useRef(0);
+
   const readDialog = useCallback(
     (api: ShareApi, viewId: string) => {
+      const seq = ++readSeq.current;
+      const current = () => isOpenFor(viewId) && readSeq.current === seq;
       api.candidates(viewId).then(
         (rows) => {
-          if (isOpenFor(viewId)) setCandidates(rows);
+          if (current()) setCandidates(rows);
         },
         (err) => {
-          if (!isOpenFor(viewId)) return;
+          if (!current()) return;
           setCandidates(null);
           noteFailure(err);
         }
       );
       api.grants(viewId).then(
         (rows) => {
-          if (isOpenFor(viewId)) setGrants(rows);
+          if (current()) setGrants(rows);
         },
         (err) => {
-          if (!isOpenFor(viewId)) return;
+          if (!current()) return;
           setGrants(null);
           noteFailure(err);
         }

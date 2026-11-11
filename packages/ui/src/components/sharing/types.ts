@@ -82,9 +82,10 @@ export interface SharingDialogProps {
   /** Who may be added, from a server-side scoped function. Null while loading. */
   candidates: readonly SharingPrincipal[] | null;
   /**
-   * Who has access now, owner excluded. Null while loading. A new `entries` array is the source of
-   * truth: it replaces any row the dialog hid or re-levelled after a successful write. Keep it the
-   * same array between reads (e.g. useMemo) so the dialog can tell a read from a re-render.
+   * Who has access now, owner excluded. Null while loading. After a successful remove the row stays
+   * hidden until an `entries` arrives without it; after a level change the new level shows until
+   * `entries` shows it. A stale `entries`, or a new array with the same content, changes neither.
+   * Adopters should still drop read replies older than their newest read.
    */
   entries: readonly SharingEntry[] | null;
   owner?: SharingOwner;

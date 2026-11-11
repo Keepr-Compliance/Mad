@@ -335,6 +335,34 @@ describe('H the report dialog while a write is in flight', () => {
     expect(api.set).toHaveBeenCalledTimes(1);
   });
 
+  // SR R1 (pm_comments cb3517d7): an older re-read landing last must not bring a removed row back.
+  it('H5 change Cal (re-read 1 held), remove Bo (re-read 2 held), re-read 2 lands, then the older re-read 1: Bo stays gone', async () => {
+    const CAL: ShareGrant = { userId: uid(3), name: 'Cal Moreno', role: 'viewer' };
+    const r1 = deferred<ShareGrant[]>();
+    const r2 = deferred<ShareGrant[]>();
+    const answers = [Promise.resolve([BO, CAL]), r1.promise, r2.promise];
+    const api = {
+      candidates: vi.fn(async () => [{ id: uid(1), name: 'Avery Quinn' }]),
+      grants: vi.fn((): Promise<ShareGrant[]> => answers.shift() ?? new Promise(() => undefined)),
+      set: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}),
+    };
+    const dialog = await openDialog(api);
+    const cal = () => within(dialog).queryByRole('button', { name: /^Access for Cal Moreno: / });
+    fireEvent.click(cal()!);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitemradio', { name: /^Can edit/ }));
+    await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(2));
+    confirmRemoveBo(dialog);
+    await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(3));
+    expect(boTrigger(dialog)).toBeNull();
+    await act(async () => r2.resolve([{ ...CAL, role: 'editor' }]));
+    expect(boTrigger(dialog)).toBeNull();
+    await act(async () => r1.resolve([BO, CAL]));
+    expect(boTrigger(dialog)).toBeNull();
+    expect(cal()!.getAttribute('aria-label')).toBe('Access for Cal Moreno: Can edit');
+    expect(api.remove).toHaveBeenCalledTimes(1);
+  });
+
   it('H4 remove refused: the row comes back and the refusal shows', async () => {
     const remove = deferred();
     const api = heldApi({ remove: remove.promise }, Promise.resolve([BO]));

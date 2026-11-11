@@ -103,10 +103,21 @@ export function SharingDialog({
   const [gone, setGone] = React.useState<ReadonlySet<string>>(new Set());
   const [levelNow, setLevelNow] = React.useState<ReadonlyMap<string, SharingLevel>>(new Map());
 
-  // A new `entries` is the adopter's read: the source of truth replaces what the dialog assumed.
+  // Reconcile by confirmation, not by identity: an `entries` that no longer lists a removed row
+  // confirms the remove; one that shows the new level confirms the change. A stale read (still
+  // listing the row, or the old level) or a re-render with an equal new array changes nothing.
+  // `busy` is untouched here: only the write settling clears it.
   React.useEffect(() => {
-    setGone(new Set());
-    setLevelNow(new Map());
+    if (entries === null) return;
+    const levels = new Map(entries.map((e) => [principalKey(e), e.level] as const));
+    setGone((prev) => {
+      const next = new Set(Array.from(prev).filter((k) => levels.has(k)));
+      return next.size === prev.size ? prev : next;
+    });
+    setLevelNow((prev) => {
+      const next = new Map(Array.from(prev).filter(([k, to]) => levels.has(k) && levels.get(k) !== to));
+      return next.size === prev.size ? prev : next;
+    });
   }, [entries]);
 
   /**
@@ -177,10 +188,11 @@ export function SharingDialog({
   const editorLabel = levelLabel('editor');
 
   const exclude = React.useMemo(() => {
-    const keys = new Set((entries ?? []).map(principalKey));
+    // A removed row (hidden) may be picked again.
+    const keys = new Set((visible ?? []).map(principalKey));
     if (owner) keys.add(principalKey({ kind: 'person', id: owner.id }));
     return keys;
-  }, [entries, owner]);
+  }, [visible, owner]);
 
   const levelOptions: DropdownOption<SharingLevel>[] = levels.map((l) => {
     const blockedBy = chips.find((c) => !allowed(l.value, c.maxLevel));
@@ -200,6 +212,9 @@ export function SharingDialog({
 
   function share() {
     if (chips.length === 0) return;
+    // Granting a removed principal again brings the row back (the next read sets its level).
+    const granted = new Set(chips.map(principalKey));
+    setGone((prev) => (Array.from(prev).some((k) => granted.has(k)) ? new Set(Array.from(prev).filter((k) => !granted.has(k))) : prev));
     onGrant(chips, level);
     setChips([]);
     setLevel(firstLevel);

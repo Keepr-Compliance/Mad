@@ -20,7 +20,7 @@ import { createShareApi, isMissingFunctionError, type ShareApi } from '../report
 import { useReportViewSharing } from '../use-report-view-sharing';
 import { ReportAccessProvider } from '../report-access-context';
 import type { ReportAccess } from '../report-access';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 vi.mock('@/lib/supabase/client', () => ({ createClient: () => ({}) }));
 
@@ -664,6 +664,75 @@ describe('H the saved-view dialog while a write is in flight', () => {
     fireEvent.click(within(screen.getByRole('group', { name: 'Remove access for Avery Example' })).getByRole('button', { name: 'Remove access' }));
     await act(async () => d.resolve());
     expect(api.grants).toHaveBeenCalledTimes(2);
+    expect(avery(dialog)).toBeNull();
+  });
+
+  it('H4 change Robin (re-read 1 held), remove Avery (re-read 2 held), re-read 2 lands, then the older re-read 1: Avery stays gone', async () => {
+    const api = fakeShareApi();
+    const AVERY = { userId: vid(101), name: 'Avery Example', role: 'editor' as const };
+    const ROBIN = { userId: vid(102), name: 'Robin Marsh', role: 'viewer' as const };
+    let resolve1: (v: unknown) => void = () => undefined;
+    let resolve2: (v: unknown) => void = () => undefined;
+    const answers: Promise<unknown>[] = [
+      Promise.resolve([AVERY, ROBIN]),
+      new Promise((r) => (resolve1 = r)),
+      new Promise((r) => (resolve2 = r)),
+    ];
+    api.grants.mockImplementation(() => answers.shift() ?? new Promise(() => undefined));
+    const dialog = await openWith(api);
+    const robin = () => within(dialog).queryByRole('button', { name: /^Access for Robin Marsh: / });
+    fireEvent.click(robin()!);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitemradio', { name: /^Can edit/ }));
+    await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(2));
+    fireEvent.click(avery(dialog)!);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /^Remove access$/ }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Remove access for Avery Example' })).getByRole('button', { name: 'Remove access' }));
+    await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(3));
+    expect(avery(dialog)).toBeNull();
+    await act(async () => resolve2([{ ...ROBIN, role: 'editor' }]));
+    expect(avery(dialog)).toBeNull();
+    await act(async () => resolve1([AVERY, ROBIN]));
+    expect(avery(dialog)).toBeNull();
+    expect(robin()!.getAttribute('aria-label')).toBe('Access for Robin Marsh: Can edit');
+    expect(api.removeGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it('H5 the page re-renders after a successful remove, with no new read: the row stays gone', async () => {
+    const api = fakeShareApi();
+    heldGrants(api);
+    function Harness() {
+      const [, setTick] = useState(0);
+      const { sharing, shareDialog } = useReportViewSharing(api, { views: [OWN], write: vi.fn() }, 'user-activity', () => ({
+        filters: {},
+        metric: null,
+      }));
+      return (
+        <>
+          <button type="button" onClick={() => sharing?.onShare?.(OWN)}>
+            open
+          </button>
+          <button type="button" onClick={() => setTick((n) => n + 1)}>
+            rerender
+          </button>
+          <SharingDialog {...shareDialog} />
+        </>
+      );
+    }
+    render(
+      <ReportAccessProvider reportKey="user-activity" title="User Activity" access="owner">
+        <Harness />
+      </ReportAccessProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'open' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Share “Mine”' });
+    await within(dialog).findByRole('button', { name: 'Access for Avery Example: Can edit' });
+    fireEvent.click(avery(dialog)!);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /^Remove access$/ }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Remove access for Avery Example' })).getByRole('button', { name: 'Remove access' }));
+    await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(2));
+    expect(avery(dialog)).toBeNull();
+    // The rerender button sits behind the modal (aria-hidden), so it is found with hidden: true.
+    fireEvent.click(screen.getByRole('button', { name: 'rerender', hidden: true }));
     expect(avery(dialog)).toBeNull();
   });
 

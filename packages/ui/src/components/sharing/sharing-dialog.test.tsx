@@ -499,9 +499,57 @@ describe('SharingDialog (BACKLOG-3513)', () => {
     // Same entries array (a re-render, not a read): still gone.
     rerender(<SharingDialog {...props} onRemove={onRemove} />);
     expect(rowTrigger('Jordan Lee')).toBeNull();
-    // A new read that still lists Jordan wins.
+    // A new array with the same content (a stale read, or a parent that rebuilds it): still gone.
+    rerender(<SharingDialog {...props} onRemove={onRemove} entries={[...ENTRIES]} />);
+    expect(rowTrigger('Jordan Lee')).toBeNull();
+    // A read without Jordan confirms the remove ...
+    rerender(<SharingDialog {...props} onRemove={onRemove} entries={[PRIYA, AGENTS_ROLE]} />);
+    expect(rowTrigger('Jordan Lee')).toBeNull();
+    // ... and clears it: a later read that lists Jordan (granted again elsewhere) shows the row.
     rerender(<SharingDialog {...props} onRemove={onRemove} entries={[...ENTRIES]} />);
     expect(rowTrigger('Jordan Lee')).toHaveAccessibleName('Access for Jordan Lee: Can edit');
+  });
+
+  it('W6 a level change survives a stale entries with the old level; a read with the new level confirms it', async () => {
+    const d = deferred();
+    const onChangeLevel = jest.fn(() => d.promise);
+    const { rerender, props } = setup({ onChangeLevel });
+    fireEvent.click(rowTrigger('Jordan Lee')!);
+    fireEvent.click(radio(/^Can view/));
+    await act(async () => d.resolve());
+    expect(rowTrigger('Jordan Lee')).toHaveAccessibleName('Access for Jordan Lee: Can view');
+    rerender(<SharingDialog {...props} onChangeLevel={onChangeLevel} entries={[...ENTRIES]} />);
+    expect(rowTrigger('Jordan Lee')).toHaveAccessibleName('Access for Jordan Lee: Can view');
+    rerender(<SharingDialog {...props} onChangeLevel={onChangeLevel} entries={[{ ...JORDAN, level: 'viewer' }, PRIYA, AGENTS_ROLE]} />);
+    expect(rowTrigger('Jordan Lee')).toHaveAccessibleName('Access for Jordan Lee: Can view');
+    // Confirmed and cleared: a later read is shown as it is.
+    rerender(<SharingDialog {...props} onChangeLevel={onChangeLevel} entries={[...ENTRIES]} />);
+    expect(rowTrigger('Jordan Lee')).toHaveAccessibleName('Access for Jordan Lee: Can edit');
+  });
+
+  it('W7 a removed person can be granted again, and the row comes back', async () => {
+    const d = deferred();
+    const onRemove = jest.fn(() => d.promise);
+    const { props } = setup({ onRemove });
+    confirmRemove('Jordan Lee');
+    await act(async () => d.resolve());
+    expect(rowTrigger('Jordan Lee')).toBeNull();
+    pick('jordan', /Jordan Lee/);
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    expect(props.onGrant).toHaveBeenCalledWith([expect.objectContaining({ id: 'u-jl', kind: 'person' })], 'viewer');
+    expect(rowTrigger('Jordan Lee')).toHaveAccessibleName('Access for Jordan Lee: Can edit');
+  });
+
+  it('W8 a read that lands while a remove is in flight keeps the row pending', async () => {
+    const d = deferred();
+    const onRemove = jest.fn(() => d.promise);
+    const { rerender, props } = setup({ onRemove });
+    confirmRemove('Jordan Lee');
+    rerender(<SharingDialog {...props} onRemove={onRemove} entries={[...ENTRIES]} />);
+    expect(rowTrigger('Jordan Lee')).toHaveAccessibleName('Access for Jordan Lee: Removing…');
+    expect(rowTrigger('Jordan Lee')).toHaveAttribute('aria-disabled', 'true');
+    await act(async () => d.resolve());
+    expect(rowTrigger('Jordan Lee')).toBeNull();
   });
 
   it('W3 remove refused: the row comes back as it was, menu usable', async () => {

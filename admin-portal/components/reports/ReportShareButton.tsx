@@ -63,9 +63,14 @@ export function ReportShareButton({
     setError(writeFailureMessage(err));
   }, []);
 
+  // Latest read wins (BACKLOG-3513 PR-6): a reply from a read older than the newest one sent is
+  // dropped, so a slow earlier re-read can never bring back a row a later write removed.
+  const readSeq = useRef(0);
+
   const read = useCallback(
     (id: number) => {
-      const current = () => session.current === id;
+      const seq = ++readSeq.current;
+      const current = () => session.current === id && readSeq.current === seq;
       api.candidates(reportKey).then(
         (rows) => current() && setCandidates(rows),
         (err) => {
