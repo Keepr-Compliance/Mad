@@ -27,7 +27,8 @@ describe('capture emails', () => {
     });
     expect(e.subject).toBe('A Brokerage will move your Keepr account on November 24, 2026');
     expect(e.text).toContain('one@a-brokerage.example');
-    expect(e.text).toContain('can end your access');
+    expect(e.text).toContain('On November 24, 2026, your Keepr account (one@a-brokerage.example) will move into A Brokerage, and any personal Keepr plan on it will end.');
+    expect(e.text).toContain('After the move, A Brokerage will manage this account and can end your access to it.');
     expect(e.text).toContain('If you opt out, your account stays separate and stays on your own paid plan.');
     expect(e.text).toContain('https://portal.example/dashboard?capture=notice');
   });

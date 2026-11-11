@@ -92,7 +92,7 @@ export function captureBannerText(brokerageName: string, dateText: string): stri
   return `${brokerageName} will move your Keepr account on ${dateText}.`;
 }
 export const CAPTURE_BANNER_DETAIL =
-  'After the move, the brokerage manages this account and can end your access to it. If you keep your personal account, it stays separate and stays on your own plan.';
+  'After the move, the brokerage will manage this account and can end your access to it. If you keep your personal account, it stays separate and stays on your own plan.';
 export const CAPTURE_KEEP_BUTTON = 'Keep my personal account';
 export const CAPTURE_KEEP_CONFIRM_TITLE = 'Keep your personal account?';
 export function captureKeepConfirmText(brokerageName: string): string {
