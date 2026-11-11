@@ -446,6 +446,12 @@ describe("S1 one machine, two users: each user's pending clear is kept separatel
   });
   it("A and B registering at the same moment in one process both keep their entry (state writes are serialized)", async () => {
     const h = harness();
+    // A slow disk read, so the two read-modify-writes would interleave if unserialized.
+    const read = h.deps.readState;
+    h.deps.readState = async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return read();
+    };
     const s = createDeviceProfileService(h.deps);
     await settle(Promise.all([s.onDeviceRegistered(USER, DEVICE, "login", ROW), s.onDeviceRegistered(OTHER, DEVICE, "login", ROW)]));
     expect(h.updates.filter((u) => u.profile !== null)).toHaveLength(2); // positive control: both wrote
