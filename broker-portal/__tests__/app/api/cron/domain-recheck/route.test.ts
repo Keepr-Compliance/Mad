@@ -162,6 +162,12 @@ describe('GET /api/cron/domain-recheck', () => {
     expect(body).toEqual({ due: 3, recorded: 1, failed: 2, results: { not_found: 1 } });
   });
 
+  it("counts a claim_not_found reply ({ success: false, error }) as failed, not recorded", async () => {
+    recordReply = () => ({ data: { success: false, error: 'claim_not_found' }, error: null });
+    const body = await (await GET(req())).json();
+    expect(body).toEqual({ due: 2, recorded: 0, failed: 2, results: {} });
+  });
+
   it('runs at most 5 lookups at once, and more than one', async () => {
     dueReply = {
       data: Array.from({ length: 12 }, (_, i) => ({ claim_id: `c${i}`, organization_id: ORG_A, domain: `d${i}.example` })),
