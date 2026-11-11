@@ -15,7 +15,7 @@
  * (a database without them). Presentation only: the server functions are the access guard.
  */
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Share2 } from 'lucide-react';
 import { Button, SharingDialog, type SharingLevelOption } from '@keepr/ui';
 import { canGrantReportAccess } from '@/lib/reports/report-access';
@@ -63,9 +63,14 @@ export function ReportShareButton({
     setError(writeFailureMessage(err));
   }, []);
 
+  // Latest read wins (BACKLOG-3513 PR-6): a reply from a read older than the newest one sent is
+  // dropped, so a slow earlier re-read can never bring back a row a later write removed.
+  const readSeq = useRef(0);
+
   const read = useCallback(
     (id: number) => {
-      const current = () => session.current === id;
+      const seq = ++readSeq.current;
+      const current = () => session.current === id && readSeq.current === seq;
       api.candidates(reportKey).then(
         (rows) => current() && setCandidates(rows),
         (err) => {
@@ -86,6 +91,11 @@ export function ReportShareButton({
     [api, reportKey, noteFailure]
   );
 
+  // The kit confirms a remove or level change by content, not by array identity; keeping the
+  // same arrays between reads only saves re-renders.
+  const principals = useMemo(() => toPrincipals(candidates), [candidates]);
+  const entries = useMemo(() => toEntries(grants), [grants]);
+
   if (!report || !canGrantReportAccess(report.access) || missing) return null;
 
   const levels: SharingLevelOption[] = [
@@ -93,7 +103,11 @@ export function ReportShareButton({
     { value: 'editor', label: 'Can edit', description: roleDescriptions.editor },
   ];
 
-  function afterWrite(op: Promise<unknown>) {
+  /**
+   * Re-read after a write, show a refusal. Returns `op` itself so the dialog can show the row as in
+   * flight and apply a success at once (BACKLOG-3513 PR-6); the re-read stays the source of truth.
+   */
+  function afterWrite(op: Promise<unknown>): Promise<unknown> {
     const id = session.current;
     setError(null);
     op.then(
@@ -104,6 +118,7 @@ export function ReportShareButton({
         read(id);
       }
     );
+    return op;
   }
 
   return (
@@ -135,8 +150,8 @@ export function ReportShareButton({
         name={report.title}
         description={REPORT_SHARE_DESCRIPTION}
         levels={levels}
-        candidates={toPrincipals(candidates)}
-        entries={toEntries(grants)}
+        candidates={principals}
+        entries={entries}
         error={error}
         onGrant={(principals, level) =>
           // One upsert per person picked (people only), all started now; the re-read waits for every

@@ -41,7 +41,7 @@ export interface SharingEntry extends SharingPrincipal {
 export interface SharingOwner {
   id: string;
   name: string;
-  /** The row reads "You" when the viewer of the dialog is the owner. */
+  /** The viewer of the dialog is the owner: the row reads "<name> (You)" ("You" when name is empty). */
   isYou?: boolean;
   /** Second line, e.g. "Broker · created this report". */
   detail?: string;
@@ -81,7 +81,12 @@ export interface SharingDialogProps {
   levels?: readonly SharingLevelOption[];
   /** Who may be added, from a server-side scoped function. Null while loading. */
   candidates: readonly SharingPrincipal[] | null;
-  /** Who has access now, owner excluded. Null while loading. */
+  /**
+   * Who has access now, owner excluded. Null while loading. After a successful remove the row stays
+   * hidden until an `entries` arrives without it; after a level change the new level shows until
+   * `entries` shows it. A stale `entries`, or a new array with the same content, changes neither.
+   * Adopters should still drop read replies older than their newest read.
+   */
   entries: readonly SharingEntry[] | null;
   owner?: SharingOwner;
   /** What the server said when it refused the last write, or null. */
@@ -90,10 +95,20 @@ export interface SharingDialogProps {
   searchPlaceholder?: string;
   /** Give every picked principal `level`, in one call. */
   onGrant: (principals: SharingPrincipal[], level: SharingLevel) => void;
-  /** Change an entry's level in place. Not called when the level is unchanged. */
-  onChangeLevel: (entry: SharingEntry, level: SharingLevel) => void;
-  /** Take access away. Called only after the in-dialog confirm. */
-  onRemove: (entry: SharingEntry) => void;
+  /**
+   * Change an entry's level in place. Not called when the level is unchanged.
+   * Return the write's promise to get the in-flight state: while it is pending the row reads
+   * "Saving…" and its menu is disabled; on success the row shows the new level at once; on failure
+   * the row is as before (show the refusal through `error`).
+   */
+  onChangeLevel: (entry: SharingEntry, level: SharingLevel) => void | Promise<unknown>;
+  /**
+   * Take access away. Called only after the in-dialog confirm.
+   * Return the write's promise to get the in-flight state: while it is pending the row reads
+   * "Removing…" and its menu is disabled (no second remove); on success the row leaves the list at
+   * once; on failure it stays (show the refusal through `error`).
+   */
+  onRemove: (entry: SharingEntry) => void | Promise<unknown>;
   /** Make a person the owner. Absent: no "Make owner…" item. Called only after the confirm. */
   onTransferOwnership?: (entry: SharingEntry) => void;
   generalAccess?: SharingGeneralAccess;

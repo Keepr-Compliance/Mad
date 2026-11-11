@@ -1,18 +1,18 @@
 import * as React from 'react';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { SharingDialog } from '../sharing';
-import type { SharingDialogProps, SharingEntry, SharingPrincipal } from '../sharing';
+import { SharingDialog } from './sharing-dialog';
+import type { SharingDialogProps, SharingEntry, SharingPrincipal } from './types';
 
 /**
  * BACKLOG-3513 PR-4: the v1 ShareDialog (saved-views, BACKLOG-4087) is deleted. These are the
  * v1 behaviours (its suite: C6b2, C6f, C6h, C7b) that the SharingDialog suite
- * (sharing/sharing-dialog.test.tsx) did not already cover, run against SharingDialog. The rest of
+ * (sharing-dialog.test.tsx) did not already cover, run against SharingDialog. The rest of
  * the v1 suite is covered there: default level and its reset after Share (K5), people already on
  * the list not offered (K5c), remove confirm and focus return (K4, K9), refusal alert (K9c),
  * no data calls (K8).
  *
- * Kept in saved-views/ because the kit lock for this PR covers saved-views/** only.
+ * Moved here from saved-views/ in BACKLOG-3513 PR-6.
  * Fixtures are invented.
  */
 const JORDAN: SharingEntry = { id: 'u-jl', kind: 'person', name: 'Jordan Lee', level: 'editor' };

@@ -20,14 +20,22 @@ import { createShareApi, isMissingFunctionError, type ShareApi } from '../report
 import { useReportViewSharing } from '../use-report-view-sharing';
 import { ReportAccessProvider } from '../report-access-context';
 import type { ReportAccess } from '../report-access';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 
 vi.mock('@/lib/supabase/client', () => ({ createClient: () => ({}) }));
+
+// BACKLOG-3513 PR-6: the owner row reads the signed-in user from useAuth (the header's source).
+// Shape as Supabase auth returns it: id + user_metadata. Default: no user (as with no provider).
+const auth = vi.hoisted(() => ({ user: null as null | { id: string; email?: string; user_metadata: Record<string, unknown> } }));
+vi.mock('@/components/providers/AuthProvider', () => ({ useAuth: () => ({ user: auth.user }) }));
 
 const vid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const SELF = vid(900);
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  auth.user = null;
+});
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -238,7 +246,9 @@ describe('P6 the SharingDialog picker is fed by candidates only', () => {
       [vid(1), vid(102), 'editor'],
     ]);
     api.removeGrant.mockRejectedValueOnce({ message: 'Saved view not found' });
-    act(() => hook.result.current.shareDialog.onRemove(entry(vid(101), 'Avery Example', 'editor')));
+    act(() => {
+      void hook.result.current.shareDialog.onRemove(entry(vid(101), 'Avery Example', 'editor'));
+    });
     await waitFor(() => expect(hook.result.current.shareDialog.error).toBe('Saved view not found'));
     act(() => hook.result.current.shareDialog.onOpenChange(false));
     expect(hook.result.current.shareDialog.open).toBe(false);
@@ -283,7 +293,9 @@ describe('A1 a level change is ONE report_share_set upsert, never remove + grant
     api.grants.mockResolvedValue([{ userId: vid(101), name: 'Avery Example', role: 'editor' }]);
     act(() => hook.result.current.sharing!.onShare!(OWN));
     await waitFor(() => expect(hook.result.current.shareDialog.entries).toHaveLength(1));
-    act(() => hook.result.current.shareDialog.onChangeLevel(hook.result.current.shareDialog.entries![0], 'viewer'));
+    act(() => {
+      void hook.result.current.shareDialog.onChangeLevel(hook.result.current.shareDialog.entries![0], 'viewer');
+    });
     await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(2));
     expect(api.share.mock.calls).toEqual([[vid(1), vid(101), 'viewer']]);
     expect(api.removeGrant).not.toHaveBeenCalled();
@@ -352,6 +364,7 @@ describe('A2 the saved-view dialog: owner row is You, and there is no Make owner
     await within(list).findByText('Avery Example');
     const rows = within(list).getAllByRole('listitem');
     expect(rows[0].getAttribute('data-slot')).toBe('sharing-owner');
+    // No signed-in name known in this case: the kit's fallback.
     expect(rows[0].textContent).toMatch(/^.*You.*Owner$/);
     expect(within(rows[0]).queryByRole('button')).toBeNull();
     expect(within(dialog).getByText('People you add see this view under “Shared with you”.')).toBeTruthy();
@@ -389,7 +402,9 @@ describe('R1 a late reply for another view is discarded', () => {
     });
     expect(hook.result.current.shareDialog).toMatchObject({ name: 'Mine too', entries: [entry(vid(202), 'Robin Marsh', 'editor')] });
     expect(hook.result.current.shareDialog.candidates).toEqual([person(vid(102), 'Blake Builder')]);
-    act(() => hook.result.current.shareDialog.onRemove(hook.result.current.shareDialog.entries![0]));
+    act(() => {
+      void hook.result.current.shareDialog.onRemove(hook.result.current.shareDialog.entries![0]);
+    });
     act(() => hook.result.current.shareDialog.onGrant([person(vid(102), 'Blake Builder')], 'viewer'));
     expect(api.removeGrant).toHaveBeenCalledWith(vid(5), vid(202));
     expect(api.share).toHaveBeenCalledWith(vid(5), vid(102), 'viewer');
@@ -518,5 +533,219 @@ describe('P4 Update and Leave', () => {
   it('current() is the page own', () => {
     const { hook, current } = mount([OWN]);
     expect(hook.result.current.sharing!.current).toBe(current);
+  });
+});
+
+describe('O1 the saved-view owner row is the signed-in user, by name (BACKLOG-3513 PR-6)', () => {
+  function Harness() {
+    const { sharing, shareDialog } = useReportViewSharing(
+      fakeShareApiForOwner,
+      { views: [OWN], write: vi.fn() },
+      'user-activity',
+      () => ({ filters: {}, metric: null })
+    );
+    return (
+      <>
+        <button type="button" onClick={() => sharing?.onShare?.(OWN)}>
+          open
+        </button>
+        <SharingDialog {...shareDialog} />
+      </>
+    );
+  }
+  const fakeShareApiForOwner = fakeShareApi();
+
+  async function ownerRow() {
+    render(
+      <ReportAccessProvider reportKey="user-activity" title="User Activity" access="owner">
+        <Harness />
+      </ReportAccessProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'open' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Share “Mine”' });
+    const list = await within(dialog).findByRole('list', { name: 'People with access' });
+    return within(list).getAllByRole('listitem')[0];
+  }
+  const avatarOf = (row: HTMLElement) => row.querySelector('[data-slot="sharing-avatar"]')?.textContent;
+  const nameOf = (row: HTMLElement) => row.querySelector('.font-medium')?.textContent;
+
+  it('O1a full_name: "Daniel Haim (You)" and avatar DH, never YO', async () => {
+    auth.user = { id: SELF, user_metadata: { full_name: 'Daniel Haim', name: 'Dan' } };
+    const row = await ownerRow();
+    expect(row.getAttribute('data-slot')).toBe('sharing-owner');
+    expect(nameOf(row)).toBe('Daniel Haim (You)');
+    expect(avatarOf(row)).toBe('DH');
+  });
+
+  it('O1b no full_name: falls back to name', async () => {
+    auth.user = { id: SELF, user_metadata: { name: 'Robin Sample' } };
+    const row = await ownerRow();
+    expect(nameOf(row)).toBe('Robin Sample (You)');
+    expect(avatarOf(row)).toBe('RS');
+  });
+
+  it('O1c no name at all: "You", and the email is never used', async () => {
+    auth.user = { id: SELF, email: 'someone@example.com', user_metadata: { email: 'someone@example.com' } };
+    const row = await ownerRow();
+    expect(nameOf(row)).toBe('You');
+    expect(row.textContent).not.toContain('example.com');
+  });
+
+  it('O1d the owner id is the signed-in user id (not a placeholder)', () => {
+    auth.user = { id: SELF, user_metadata: { full_name: 'Daniel Haim' } };
+    const { hook } = mount([OWN]);
+    act(() => hook.result.current.sharing!.onShare!(OWN));
+    expect(hook.result.current.shareDialog.owner).toEqual({ id: SELF, name: 'Daniel Haim', isYou: true });
+  });
+});
+
+// BACKLOG-3513 PR-6: the saved-view dialog while a write is in flight (same contract as reports).
+describe('H the saved-view dialog while a write is in flight', () => {
+  function deferred<T = void>() {
+    let resolve: (v: T) => void = () => undefined;
+    const promise = new Promise<T>((res) => (resolve = res));
+    return { promise, resolve };
+  }
+  async function openWith(api: ReturnType<typeof fakeShareApi>) {
+    function Harness() {
+      const { sharing, shareDialog } = useReportViewSharing(api, { views: [OWN], write: vi.fn() }, 'user-activity', () => ({
+        filters: {},
+        metric: null,
+      }));
+      return (
+        <>
+          <button type="button" onClick={() => sharing?.onShare?.(OWN)}>
+            open
+          </button>
+          <SharingDialog {...shareDialog} />
+        </>
+      );
+    }
+    render(
+      <ReportAccessProvider reportKey="user-activity" title="User Activity" access="owner">
+        <Harness />
+      </ReportAccessProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'open' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Share “Mine”' });
+    await within(dialog).findByRole('button', { name: 'Access for Avery Example: Can edit' });
+    return dialog;
+  }
+  function heldGrants(api: ReturnType<typeof fakeShareApi>) {
+    let reads = 0;
+    api.grants.mockImplementation(() =>
+      ++reads === 1 ? Promise.resolve([{ userId: vid(101), name: 'Avery Example', role: 'editor' }]) : new Promise(() => undefined)
+    );
+  }
+  const avery = (dialog: HTMLElement) => within(dialog).queryByRole('button', { name: /^Access for Avery Example: / });
+
+  it('H1 remove held: Removing…, menu disabled, one removeGrant only', async () => {
+    const api = fakeShareApi();
+    heldGrants(api);
+    api.removeGrant.mockReturnValue(new Promise(() => undefined));
+    const dialog = await openWith(api);
+    fireEvent.click(avery(dialog)!);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /^Remove access$/ }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Remove access for Avery Example' })).getByRole('button', { name: 'Remove access' }));
+    expect(avery(dialog)!.getAttribute('aria-label')).toBe('Access for Avery Example: Removing…');
+    fireEvent.click(avery(dialog)!);
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(api.removeGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it('H2 remove succeeds while the re-read is out: the row is gone at once', async () => {
+    const api = fakeShareApi();
+    heldGrants(api);
+    const d = deferred();
+    api.removeGrant.mockReturnValue(d.promise);
+    const dialog = await openWith(api);
+    fireEvent.click(avery(dialog)!);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /^Remove access$/ }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Remove access for Avery Example' })).getByRole('button', { name: 'Remove access' }));
+    await act(async () => d.resolve());
+    expect(api.grants).toHaveBeenCalledTimes(2);
+    expect(avery(dialog)).toBeNull();
+  });
+
+  it('H4 change Robin (re-read 1 held), remove Avery (re-read 2 held), re-read 2 lands, then the older re-read 1: Avery stays gone', async () => {
+    const api = fakeShareApi();
+    const AVERY = { userId: vid(101), name: 'Avery Example', role: 'editor' as const };
+    const ROBIN = { userId: vid(102), name: 'Robin Marsh', role: 'viewer' as const };
+    let resolve1: (v: unknown) => void = () => undefined;
+    let resolve2: (v: unknown) => void = () => undefined;
+    const answers: Promise<unknown>[] = [
+      Promise.resolve([AVERY, ROBIN]),
+      new Promise((r) => (resolve1 = r)),
+      new Promise((r) => (resolve2 = r)),
+    ];
+    api.grants.mockImplementation(() => answers.shift() ?? new Promise(() => undefined));
+    const dialog = await openWith(api);
+    const robin = () => within(dialog).queryByRole('button', { name: /^Access for Robin Marsh: / });
+    fireEvent.click(robin()!);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitemradio', { name: /^Can edit/ }));
+    await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(2));
+    fireEvent.click(avery(dialog)!);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /^Remove access$/ }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Remove access for Avery Example' })).getByRole('button', { name: 'Remove access' }));
+    await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(3));
+    expect(avery(dialog)).toBeNull();
+    await act(async () => resolve2([{ ...ROBIN, role: 'editor' }]));
+    expect(avery(dialog)).toBeNull();
+    await act(async () => resolve1([AVERY, ROBIN]));
+    expect(avery(dialog)).toBeNull();
+    expect(robin()!.getAttribute('aria-label')).toBe('Access for Robin Marsh: Can edit');
+    expect(api.removeGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it('H5 the page re-renders after a successful remove, with no new read: the row stays gone', async () => {
+    const api = fakeShareApi();
+    heldGrants(api);
+    function Harness() {
+      const [, setTick] = useState(0);
+      const { sharing, shareDialog } = useReportViewSharing(api, { views: [OWN], write: vi.fn() }, 'user-activity', () => ({
+        filters: {},
+        metric: null,
+      }));
+      return (
+        <>
+          <button type="button" onClick={() => sharing?.onShare?.(OWN)}>
+            open
+          </button>
+          <button type="button" onClick={() => setTick((n) => n + 1)}>
+            rerender
+          </button>
+          <SharingDialog {...shareDialog} />
+        </>
+      );
+    }
+    render(
+      <ReportAccessProvider reportKey="user-activity" title="User Activity" access="owner">
+        <Harness />
+      </ReportAccessProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'open' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Share “Mine”' });
+    await within(dialog).findByRole('button', { name: 'Access for Avery Example: Can edit' });
+    fireEvent.click(avery(dialog)!);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitem', { name: /^Remove access$/ }));
+    fireEvent.click(within(screen.getByRole('group', { name: 'Remove access for Avery Example' })).getByRole('button', { name: 'Remove access' }));
+    await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(2));
+    expect(avery(dialog)).toBeNull();
+    // The rerender button sits behind the modal (aria-hidden), so it is found with hidden: true.
+    fireEvent.click(screen.getByRole('button', { name: 'rerender', hidden: true }));
+    expect(avery(dialog)).toBeNull();
+  });
+
+  it('H3 level change succeeds while the re-read is out: the new level shows at once', async () => {
+    const api = fakeShareApi();
+    heldGrants(api);
+    const d = deferred();
+    api.share.mockReturnValue(d.promise);
+    const dialog = await openWith(api);
+    fireEvent.click(avery(dialog)!);
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitemradio', { name: /^Can view/ }));
+    expect(avery(dialog)!.getAttribute('aria-label')).toBe('Access for Avery Example: Saving…');
+    await act(async () => d.resolve());
+    expect(avery(dialog)!.getAttribute('aria-label')).toBe('Access for Avery Example: Can view');
   });
 });

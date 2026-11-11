@@ -35,8 +35,9 @@
  * Hiding these is presentation only. The server functions are the access guard.
  */
 
-import { useCallback, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { SavedViewItem, SavedViewsSharing, SavedViewUpdate, SharingDialogProps, SharingEntry, SharingPrincipal } from '@keepr/ui';
+import { useAuth } from '@/components/providers/AuthProvider';
 import { canShareViews } from './report-access';
 import { useOpenReport } from './report-access-context';
 import { isMissingFunctionError, type ShareApi, type ShareCandidate, type ShareGrant } from './report-share-api';
@@ -64,12 +65,24 @@ export const VIEW_SHARE_LEVELS: SharingDialogProps['levels'] = [
   { value: 'editor', label: 'Can edit', description: 'Also updates its filters and metric' },
 ];
 
+/** The signed-in user, as `useAuth()` gives it: only the fields the owner row reads. */
+interface SignedInUser {
+  id: string;
+  user_metadata?: { full_name?: unknown; name?: unknown } | null;
+}
+
 /**
- * The owner row. Share is offered on the caller's own rows only, so the owner is always the caller.
- * The id is a placeholder: the kit uses it only to keep the owner out of the picker, and
- * `report_share_candidates` already leaves the caller out on the server.
+ * The owner row (BACKLOG-3513 PR-6). Share is offered on the caller's own rows only (kit
+ * SavedViews own-row gate; every report_share_* function checks the view's owner is the caller), so
+ * the owner is always the signed-in user: `isYou` is always true. The name is the one the header
+ * and sidebar show, without their email fallback: `full_name`, else `name`, else empty, which the
+ * kit reads as "You". The id is the user's own; the kit uses it to keep the owner out of the picker.
  */
-export const VIEW_SHARE_OWNER: NonNullable<SharingDialogProps['owner']> = { id: 'view-owner', name: 'You', isYou: true };
+export function viewShareOwner(user: SignedInUser | null | undefined): NonNullable<SharingDialogProps['owner']> {
+  const meta = user?.user_metadata ?? {};
+  const pick = (v: unknown) => (typeof v === 'string' && v.trim().length > 0 ? v.trim() : '');
+  return { id: user?.id ?? '', name: pick(meta.full_name) || pick(meta.name), isYou: true };
+}
 
 /**
  * After `Promise.allSettled` over a batch of writes: throws the first refusal, so the caller shows it.
@@ -114,6 +127,7 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
 ): UseReportViewSharing<V> {
   const normalize = (raw: unknown): unknown => (normalizeMetric ? normalizeMetric(raw) : raw);
   const mayShare = canShareViews(useOpenReport()?.access ?? null);
+  const { user } = useAuth();
   const [missing, setMissing] = useState(false);
   const [target, setTarget] = useState<V | null>(null);
   const [candidates, setCandidates] = useState<ShareCandidate[] | null>(null);
@@ -131,24 +145,30 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
   const openViewId = useRef<string | null>(null);
   const isOpenFor = (viewId: string) => openViewId.current === viewId;
 
+  // Latest read wins (BACKLOG-3513 PR-6): a reply from a read older than the newest one sent is
+  // dropped, so a slow earlier re-read can never bring back a row a later write removed.
+  const readSeq = useRef(0);
+
   const readDialog = useCallback(
     (api: ShareApi, viewId: string) => {
+      const seq = ++readSeq.current;
+      const current = () => isOpenFor(viewId) && readSeq.current === seq;
       api.candidates(viewId).then(
         (rows) => {
-          if (isOpenFor(viewId)) setCandidates(rows);
+          if (current()) setCandidates(rows);
         },
         (err) => {
-          if (!isOpenFor(viewId)) return;
+          if (!current()) return;
           setCandidates(null);
           noteFailure(err);
         }
       );
       api.grants(viewId).then(
         (rows) => {
-          if (isOpenFor(viewId)) setGrants(rows);
+          if (current()) setGrants(rows);
         },
         (err) => {
-          if (!isOpenFor(viewId)) return;
+          if (!current()) return;
           setGrants(null);
           noteFailure(err);
         }
@@ -156,6 +176,11 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
     },
     [noteFailure]
   );
+
+  // The kit confirms a remove or level change by content, not by array identity; keeping the
+  // same arrays between reads only saves re-renders.
+  const principals = useMemo(() => toPrincipals(candidates), [candidates]);
+  const entries = useMemo(() => toEntries(grants), [grants]);
 
   const available = Boolean(shareApi) && !missing && serverSupportsSharing(saved.views);
 
@@ -222,8 +247,12 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
         }
       : undefined;
 
-  function afterWrite(op: Promise<unknown>, viewId: string) {
-    if (!shareApi) return;
+  /**
+   * Re-read after a write, show a refusal. Returns `op` itself so the dialog can show the row as in
+   * flight and apply a success at once (BACKLOG-3513 PR-6); the re-read stays the source of truth.
+   */
+  function afterWrite(op: Promise<unknown>, viewId: string): Promise<unknown> | undefined {
+    if (!shareApi) return undefined;
     setError(null);
     op.then(
       () => readDialog(shareApi, viewId),
@@ -232,6 +261,7 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
         readDialog(shareApi, viewId);
       }
     );
+    return op;
   }
 
   const shareDialog: SharingDialogProps = {
@@ -245,9 +275,9 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
     name: target?.name ?? '',
     description: VIEW_SHARE_DESCRIPTION,
     levels: VIEW_SHARE_LEVELS,
-    owner: VIEW_SHARE_OWNER,
-    candidates: toPrincipals(candidates),
-    entries: toEntries(grants),
+    owner: viewShareOwner(user),
+    candidates: principals,
+    entries,
     error,
     onGrant: (principals, level) => {
       if (!shareApi || !target) return;
@@ -261,11 +291,11 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
     onChangeLevel: (entry, level) => {
       if (!shareApi || !target) return;
       // In place: report_share_set upserts, so one call changes the level.
-      afterWrite(shareApi.share(target.id, entry.id, level), target.id);
+      return afterWrite(shareApi.share(target.id, entry.id, level), target.id);
     },
     onRemove: (entry) => {
       if (!shareApi || !target) return;
-      afterWrite(shareApi.removeGrant(target.id, entry.id), target.id);
+      return afterWrite(shareApi.removeGrant(target.id, entry.id), target.id);
     },
   };
 
