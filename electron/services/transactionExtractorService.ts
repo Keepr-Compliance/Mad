@@ -121,8 +121,15 @@ const ADDRESS_NO_ZIP = new RegExp(
   "gi",
 );
 
-/** BACKLOG-4225: the street alone, ending at the suffix. */
-const ADDRESS_STREET_ONLY = new RegExp(`${STREET}\\b`, "gi");
+/**
+ * BACKLOG-4225: the street alone, ending at the suffix. With no city/state
+ * tail to anchor it, the street name is 1-4 words of letters (no sentence
+ * punctuation), and the number does not continue another number ("$500,000").
+ */
+const ADDRESS_STREET_ONLY = new RegExp(
+  `(?<![\\d,.$])\\b(\\d+\\s+(?:[A-Za-z][A-Za-z'\\-]*\\s+){1,4}?${STREET_SUFFIX})\\b`,
+  "gi",
+);
 
 /**
  * One address match as one line: whitespace collapsed, and a line break

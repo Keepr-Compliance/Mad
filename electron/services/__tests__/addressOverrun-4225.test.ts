@@ -88,6 +88,14 @@ describe("BACKLOG-4225 the address ends at the address", () => {
     ]);
   });
 
+  it("C8 prose: a number and a far-off suffix word are not a street (before the cap: '3 offers came in. we can meet at the court')", () => {
+    expect(extract("2 of the 3 offers came in. We can meet at the court tomorrow, escrow closing buyer")).toEqual([]);
+  });
+
+  it("C8 a money amount is not a street number (before the guard: '000 - see you on the way')", () => {
+    expect(extract(BODY.replace("thank you!", "see you on the way"))).toEqual(["1234 sample river lane"]);
+  });
+
   it("C6 keys: what an existing Learn answer is stored under does not change", () => {
     // [fixed extractor input, key the pre-fix output had (transcribed)]
     const rows: Array<[string, string]> = [
