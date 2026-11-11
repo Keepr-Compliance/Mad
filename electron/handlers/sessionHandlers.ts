@@ -6,6 +6,7 @@
 import { ipcMain, IpcMainInvokeEvent, shell } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import type { User } from "../types/models";
+import { isSameAccount, type AccountIdentity } from "../services/accountIdentity";
 import { getSignInGeneration, isSignInAwaitingSessionWrite } from "../services/signInState";
 
 // Import services
@@ -590,12 +591,6 @@ async function handleValidateSession(
   }
 }
 
-interface AccountIdentity {
-  id: string;
-  email?: string | null;
-  oauthId?: string | null;
-}
-
 /** BACKLOG-4075: the SDK's current user, read from its in-memory session (no network unless expired). */
 async function readSdkIdentity(sdkUserId: string): Promise<AccountIdentity | null> {
   try {
@@ -609,18 +604,8 @@ async function readSdkIdentity(sdkUserId: string): Promise<AccountIdentity | nul
   }
 }
 
-const normEmail = (e?: string | null): string => (e || "").trim().toLowerCase();
-
-/**
- * BACKLOG-4075: same person = same email (case-insensitive), or — for the
- * session-file target only — the same OAuth id (getUserByOAuthId found it).
- */
-export function isSameAccount(local: User, target: AccountIdentity): boolean {
-  const le = normEmail(local.email);
-  if (le && le === normEmail(target.email)) return true;
-  if (local.oauth_id && target.oauthId && local.oauth_id === target.oauthId) return true;
-  return false;
-}
+// BACKLOG-4075: the rule lives in a leaf module so the token write-back uses it too.
+export { isSameAccount };
 
 /** BACKLOG-4038: the support form's prefill. Name and email only, never tokens. */
 export interface UserContactResponse {
