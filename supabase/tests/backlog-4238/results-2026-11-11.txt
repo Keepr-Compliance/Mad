@@ -1,5 +1,5 @@
 BACKLOG-4238 PR-1 harness results, 2026-11-11 (a test project; each run is one rolled-back transaction)
-commit 48c456a39
+commit 34382069c
 
 == baseline: run.sh
 {
@@ -416,6 +416,8 @@ TRIPWIRE green (Tests:       15 passed, 15 total)
 VERDICT as expected (equivalent)
 RESTORED clean=True
 mutants: 47 run, 0 not as expected
+
+== concurrency/run-concurrency.sh: NOT RUN (needs the migration applied and committed)
 
 == residue after all runs
 [{"j":{"mcp_relations":0,"mcp_functions":0,"mcp_reader_role":0,"mcp_gate_type":0,"fixture_users":0,"ledger_row":0}}]
