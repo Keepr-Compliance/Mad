@@ -6,7 +6,7 @@ one rolled-back transaction: the call ends in RAISE, so nothing persists.
 | Script | What it does |
 |---|---|
 | `run.sh [controls file]` | Composes rollback + migration twice + `lib/helpers.sql` + the controls (`compose.py`), runs it as one call, prints `P4238_RESULT` and the wall time. |
-| `controls.sql` | 48 single-session controls (D1–D18, B2, B3, N1–N3, N5, CL, C9, LOG, G1, seed and fresh-apply checks). |
+| `controls.sql` | 50 single-session controls (D1–D18, B2, B3, N1–N3, N5, W3, CL, C9, LOG, G1, seed and fresh-apply checks). |
 | `controls-timeout.sql` | C8: a statement timeout inside the read block returns `timeout` and keeps the log row. |
 | `mutate.py <mode>\|all` | Exact-string mutation of the migration (or rollback) file; each fragment must match the stated number of times. Prints `MUTATION APPLIED` and the changed lines, runs the controls and the migration-text test, restores with `git checkout --`. Commit first. |
 | `rollback-4238.sql` | Drops every object, the role and the ledger row. |
@@ -28,6 +28,8 @@ Behaviour notes for the interface:
 - A redemption that fails its checks (verifier, client, redirect address, resource, allowlist) uses
   up the code, removes its pending connection and writes a `code_rejected` event.
 - `mcp_check_access` returns `not_connected` while the kill switch is off.
+- A token insert failure in `mcp_exchange_code` rolls the redemption back (the code stays unused) and
+  returns `invalid_request`.
 
 Mutants marked `want green` are measured equivalent in this venue and kept so the claim stays
 checked. Results: `results-2026-11-11.txt` (ends with a catalog query showing no residue).
