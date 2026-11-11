@@ -44,10 +44,18 @@ NULL_OK_BODY = """  SELECT coalesce((
 """
 GATE_SECRET = 'IF public._mcp_secret_ok(p_secret) IS NOT TRUE THEN'
 EXCH_SECRET = ("  IF public._mcp_secret_ok(p_secret) IS NOT TRUE THEN\n    RETURN public._mcp_refuse('invalid_grant');\n  END IF;\n"
-               "  IF public._mcp_fail_over('tok_fail:' || coalesce(p_client_id, ''), interval '1 minute', 20) IS NOT FALSE THEN\n"
-               "    RETURN public._mcp_refuse('rate_limited');\n  END IF;\n  IF (octet_length(p_code_digest)")
-EXCH_SECRET_NEW = ("  IF public._mcp_fail_over('tok_fail:' || coalesce(p_client_id, ''), interval '1 minute', 20) IS NOT FALSE THEN\n"
-                   "    RETURN public._mcp_refuse('rate_limited');\n  END IF;\n  IF (octet_length(p_code_digest)")
+               "  IF (octet_length(p_code_digest)")
+EXCH_SECRET_NEW = "  IF (octet_length(p_code_digest)"
+REFR_TOP = ("    RETURN public._mcp_refuse('invalid_grant');\n  END IF;\n  IF (octet_length(p_rt_digest)")
+REFR_TOP_OLD_LOCKOUT = ("    RETURN public._mcp_refuse('invalid_grant');\n  END IF;\n"
+                        "  IF coalesce((SELECT rc.count FROM public.mcp_rate_counters rc WHERE rc.bucket = 'tok_fail:' || coalesce(p_client_id, '')\n"
+                        "                AND rc.window_start = public._mcp_window(interval '1 minute')), 0) >= 20 THEN\n"
+                        "    RETURN public._mcp_refuse('rate_limited');\n  END IF;\n  IF (octet_length(p_rt_digest)")
+TOKEN_FAIL = ("  IF public._mcp_bump('tok_fail:' || coalesce(p_client_id, ''), interval '1 minute', 20) IS NOT DISTINCT FROM 'ok' THEN\n"
+              "    RETURN public._mcp_refuse(p_code);\n  END IF;\n  RETURN public._mcp_refuse('rate_limited');")
+REJECT = ("    DELETE FROM public.mcp_connections c\n     WHERE c.id = v_code.connection_id AND c.status = 'pending'\n    RETURNING c.user_id INTO v_user;\n"
+          "    INSERT INTO public.mcp_call_log (user_id, connection_id, event, outcome, ended_at)\n    VALUES (v_user, v_code.connection_id, 'code_rejected', 'ok', now());\n")
+TOKEN_PRUNE = "  DELETE FROM public.mcp_tokens o\n   WHERE o.connection_id = v_conn AND o.expires_at < now() - interval '1 day';\n"
 RO_LINE = "      PERFORM set_config('transaction_read_only', 'on', true);\n      PERFORM set_config('request.jwt.claims'"
 RO_LINE_NEW = "      PERFORM set_config('request.jwt.claims'"
 MC_EXIT = ("      RAISE EXCEPTION USING ERRCODE = 'MC000', MESSAGE = 'mcp read block done';\n    EXCEPTION\n"
@@ -68,7 +76,7 @@ MUT = {
   'M03_null_secret_matches_null_prev': ('controls.sql', [(MIG, SECRET_BODY, NULL_OK_BODY, 1)],
       'D1_null_secret', 'red', 'no p_secret IS NOT NULL term, previous hash compared with IS NOT DISTINCT FROM'),
   'M04_exchange_without_secret': ('controls.sql', [(MIG, EXCH_SECRET, EXCH_SECRET_NEW, 1)],
-      'D1_wrong_secret_prev_null', 'red', 'mcp_exchange_code without the secret check'),
+      'D1_wrong_secret_prev_null', 'red', 'mcp_exchange_code with the secret check line removed'),
   'M05_status_revoke_keeps_authenticated': ('controls.sql', [(MIG, 'REVOKE ALL ON FUNCTION public.mcp_get_status(text, bytea, text) FROM PUBLIC, anon, authenticated, service_role;',
       'REVOKE ALL ON FUNCTION public.mcp_get_status(text, bytea, text) FROM PUBLIC, anon;', 1)],
       'D2_function_grants', 'red', 'REVOKE FROM PUBLIC, anon only (authenticated and service_role keep EXECUTE)'),
@@ -93,7 +101,7 @@ MUT = {
   'M13_no_legacy_claim_sub': ('controls.sql', [(MIG, "      PERFORM set_config('request.jwt.claim.sub', g.user_id::text, true);\n", '', 1)],
       '', 'green', 'legacy request.jwt.claim.sub not set (the harness clears it, so auth.uid() falls back to the claims)'),
   'M14_reader_owned_by_postgres': ('controls.sql', [(MIG, 'SET ROLE mcp_reader;\n', '', 1), (MIG, '\nRESET ROLE;\nREVOKE CREATE ON SCHEMA public FROM mcp_reader;', '\nREVOKE CREATE ON SCHEMA public FROM mcp_reader;', 1)],
-      'D2_reader_role D3_positive_clean_reader D5_owner_only', 'red', 'reader created by postgres (RLS bypassed)'),
+      'D2_reader_role D3_positive_clean_reader D5_owner_only', 'red', 'reader created as postgres instead of mcp_reader'),
   'M15_enter_ignores_expiry': ('controls.sql', [(MIG, ENTER_TAIL, ENTER_TAIL.replace("     AND t.expires_at > now()\n", ''), 1)],
       'D6_token_resolution', 'red', 'gate without the access-token expiry'),
   'M16_enter_ignores_pepper': ('controls.sql', [(MIG, ENTER_TAIL, ENTER_TAIL.replace("     AND t.pepper_version = s.pepper_version\n", ''), 1)],
@@ -125,7 +133,7 @@ MUT = {
   'M29_impersonation_not_checked': ('controls.sql', [(MIG, "  IF public._mcp_impersonating(v_uid) IS NOT FALSE THEN\n    RETURN public._mcp_refuse('impersonating');", "  IF false THEN\n    RETURN public._mcp_refuse('impersonating');", 5)],
       'D11_cross_user_and_impersonation', 'red', 'consent functions without the impersonation check'),
   'M30_view_ignores_claim': ('controls.sql', [(MIG, '     AND (r.claimed_by IS NULL OR r.claimed_by = v_uid)\n', '', 1)],
-      'D11_cross_user_and_impersonation', 'red', 'view lets another user take over a claimed request'),
+      'D11_cross_user_and_impersonation', 'red', 'view without the claimed_by term'),
   'M31_enabled_by_default': ('controls.sql', [(MIG, 'enabled                   boolean NOT NULL DEFAULT false,', 'enabled                   boolean NOT NULL DEFAULT true,', 1)],
       'D12_fresh_apply_disabled_no_secret', 'red', 'kill switch on by default'),
   'M32_gate_ignores_kill_switch': ('controls.sql', [(MIG, "  IF (SELECT s.enabled FROM public.mcp_settings s WHERE s.id) IS NOT TRUE THEN\n    g.outcome := 'disabled';", "  IF false THEN\n    g.outcome := 'disabled';", 1)],
@@ -157,6 +165,48 @@ MUT = {
       'G1_rollback_then_apply', 'red', 'rollback leaves mcp_call_log'),
   'M45_register_ignores_null_element': ('controls.sql', [(MIG, '      AND array_position(p_redirect_uris, NULL) IS NULL\n', '', 1)],
       '', 'green', 'no array_position NULL term: a NULL element already fails the allowlist subquery'),
+  'B1_sequence_revoke_removed': ('controls.sql', [(MIG, 'REVOKE ALL ON SEQUENCE public.mcp_call_log_id_seq FROM PUBLIC, anon, authenticated;\n', '', 1)],
+      'D2_sequences_and_type_closed', 'red', 'call-log sequence REVOKE line removed'),
+  'B1_type_revoke_removed': ('controls.sql', [(MIG, 'REVOKE ALL ON TYPE public.mcp_gate FROM PUBLIC, anon, authenticated;\n', '', 1)],
+      'D2_sequences_and_type_closed', 'red', 'mcp_gate type REVOKE line removed'),
+  'X1_refresh_ignores_client': ('controls.sql', [(MIG, "     AND c.client_id = p_client_id\n", '', 1)],
+      'B2_refresh_client_resource_bound', 'red', 'refresh UPDATE without the client term'),
+  'X2_refresh_ignores_resource': ('controls.sql', [(MIG, "     AND c.resource = p_resource\n  RETURNING t.connection_id", "  RETURNING t.connection_id", 1)],
+      'B2_refresh_client_resource_bound', 'red', 'refresh UPDATE without the resource term'),
+  'X3_code_never_expires': ('controls.sql', [(MIG, "     AND k.used_at IS NULL\n     AND k.expires_at > now()\n", "     AND k.used_at IS NULL\n", 1)],
+      'B2_code_expiry', 'red', 'code redemption without the expiry term'),
+  'X4_refresh_never_expires': ('controls.sql', [(MIG, "     AND t.used_at IS NULL\n     AND t.expires_at > now()\n     AND s.id", "     AND t.used_at IS NULL\n     AND s.id", 1)],
+      'B2_refresh_expiry_pepper_kind', 'red', 'refresh UPDATE without the expiry term'),
+  'X5_refresh_ignores_pepper': ('controls.sql', [(MIG, "     AND s.id\n     AND t.pepper_version = s.pepper_version\n     AND c.id = t.connection_id", "     AND s.id\n     AND c.id = t.connection_id", 1)],
+      'B2_refresh_expiry_pepper_kind', 'red', 'refresh UPDATE without the pepper term'),
+  'X6_refresh_accepts_access_kind': ('controls.sql', [(MIG, "     AND t.kind = 'refresh'\n     AND t.used_at IS NULL\n     AND t.expires_at", "     AND t.used_at IS NULL\n     AND t.expires_at", 1)],
+      'B2_refresh_expiry_pepper_kind', 'red', 'refresh UPDATE without the kind term (the table CHECK then raises)'),
+  'X7_no_token_failure_lockout': ('controls.sql', [(MIG, TOKEN_FAIL, "  RETURN public._mcp_refuse(p_code);", 1)],
+      'B3_lockout_failures_only', 'red', 'failure counter not consulted'),
+  'B3_lockout_checked_before_token': ('controls.sql', [(MIG, REFR_TOP, REFR_TOP_OLD_LOCKOUT, 1)],
+      'B3_lockout_failures_only', 'red', 'refresh checks the failure count before the token (previous ordering)'),
+  'X8_view_ignores_kill_switch': ('controls.sql', [(MIG, "  IF (SELECT s.enabled FROM public.mcp_settings s WHERE s.id) IS NOT TRUE THEN\n    RETURN public._mcp_refuse('disabled');\n  END IF;\n  v_nonce", "  v_nonce", 1)],
+      'B2_view_kill_switch', 'red', 'view without the kill switch term'),
+  'X9_approve_skips_client_redirect': ('controls.sql', [(MIG, "     AND v_req.redirect_uri = ANY (c.redirect_uris)\n  RETURNING id INTO v_conn;", "  RETURNING id INTO v_conn;", 1)],
+      'B2_approve_client_redirects', 'red', 'approve INSERT without the client redirect-list term'),
+  'X10_no_user_cap': ('controls.sql', [(MIG, "interval '1 minute', 60);", "interval '1 minute', 100000);", 1)],
+      'B2_per_user_cap', 'red', 'per-user limit raised to 100000'),
+  'X11_no_registration_limit': ('controls.sql', [(MIG, "interval '1 hour', 10);", "interval '1 hour', 100000);", 1)],
+      'B2_registration_ip_limit', 'red', 'per-IP registration limit raised to 100000'),
+  'N1_rejection_keeps_connection': ('controls.sql', [(MIG, REJECT, '', 1)],
+      'N1_wrong_verifier_uses_up_code', 'red', 'rejected redemption leaves the pending connection and writes no event'),
+  'N2_exchange_skips_allowlist': ('controls.sql', [(MIG, "      AND EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = p_redirect_uri)\n", '', 1)],
+      'N2_exchange_rechecks_allowlist', 'red', 'exchange without the allowlist term'),
+  'N3_no_counter_prune': ('controls.sql', [(MIG, "    DELETE FROM public.mcp_rate_counters o\n     WHERE o.bucket = p_bucket AND o.window_start < now() - interval '1 day';\n", '', 1)],
+      'N3_inline_pruning', 'red', 'counter prune removed'),
+  'N3_counter_prune_all_buckets': ('controls.sql', [(MIG, "     WHERE o.bucket = p_bucket AND o.window_start < now() - interval '1 day';", "     WHERE o.window_start < now() - interval '1 day';", 1)],
+      'N3_inline_pruning', 'red', 'counter prune not limited to the bucket'),
+  'N3_no_token_prune': ('controls.sql', [(MIG, TOKEN_PRUNE, '', 1)],
+      'N3_inline_pruning', 'red', 'token prune removed'),
+  'N3_prune_used_refresh': ('controls.sql', [(MIG, "   WHERE o.connection_id = v_conn AND o.expires_at < now() - interval '1 day';", "   WHERE o.connection_id = v_conn AND (o.expires_at < now() - interval '1 day' OR o.used_at IS NOT NULL);", 1)],
+      'N3_inline_pruning', 'red', 'token prune also removes used refresh tokens'),
+  'N5_check_access_ignores_kill_switch': ('controls.sql', [(MIG, "                AND s.enabled\n", '', 1)],
+      'N5_check_access_kill_switch', 'red', 'check_access without the enabled term'),
 }
 
 

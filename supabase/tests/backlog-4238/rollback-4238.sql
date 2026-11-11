@@ -28,7 +28,7 @@ DROP FUNCTION IF EXISTS public._mcp_finish(bigint, text, integer, timestamptz);
 DROP FUNCTION IF EXISTS public._mcp_enter(bytea, text, text);
 DROP FUNCTION IF EXISTS public._mcp_reader_ok(regprocedure);
 DROP FUNCTION IF EXISTS public._mcp_impersonating(uuid);
-DROP FUNCTION IF EXISTS public._mcp_fail_over(text, interval, integer);
+DROP FUNCTION IF EXISTS public._mcp_token_fail(text, text);
 DROP FUNCTION IF EXISTS public._mcp_bump(text, interval, integer);
 DROP FUNCTION IF EXISTS public._mcp_window(interval);
 DROP FUNCTION IF EXISTS public._mcp_b64url(bytea);

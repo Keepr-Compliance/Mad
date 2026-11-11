@@ -10,7 +10,7 @@
 --             mcp_check_access, mcp_get_status (each takes the portal secret)
 --   signed in mcp_authorize_view, mcp_authorize_approve, mcp_authorize_deny,
 --             mcp_list_my_connections, mcp_disconnect, mcp_disconnect_all_mine
---   internal  _mcp_secret_ok, _mcp_refuse, _mcp_b64url, _mcp_window, _mcp_bump, _mcp_fail_over,
+--   internal  _mcp_secret_ok, _mcp_refuse, _mcp_b64url, _mcp_window, _mcp_bump, _mcp_token_fail,
 --             _mcp_impersonating, _mcp_reader_ok, _mcp_enter, _mcp_finish, _mcp_disconnect_all_for,
 --             _mcp_entitlement_now
 --   reader    _mcp_r_entitlement (owner mcp_reader, STABLE)
@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS public.mcp_call_log (
   user_id       uuid NULL REFERENCES auth.users (id) ON DELETE CASCADE,
   connection_id uuid NULL,
   provider      text NULL,
-  event         text NOT NULL CHECK (event IN ('call', 'refresh_reuse', 'code_replay', 'disconnect', 'disconnect_all', 'cloud_off', 'reconnect_replaced')),
+  event         text NOT NULL CHECK (event IN ('call', 'refresh_reuse', 'code_replay', 'code_rejected', 'disconnect', 'disconnect_all', 'cloud_off', 'reconnect_replaced')),
   tool          text NULL CHECK (tool IS NULL OR tool IN ('get_status')),
   outcome       text NOT NULL CHECK (outcome IN ('pending', 'ok', 'not_connected', 'disabled', 'rate_limited', 'busy', 'not_entitled', 'timeout', 'error')),
   started_at    timestamptz NOT NULL DEFAULT now(),
@@ -167,6 +167,7 @@ CREATE TABLE IF NOT EXISTS public.mcp_call_log (
 CREATE INDEX IF NOT EXISTS mcp_call_log_user_idx ON public.mcp_call_log (user_id, started_at);
 ALTER TABLE public.mcp_call_log ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.mcp_call_log FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON SEQUENCE public.mcp_call_log_id_seq FROM PUBLIC, anon, authenticated;
 
 DO $type$
 BEGIN
@@ -175,6 +176,7 @@ BEGIN
   END IF;
 END
 $type$;
+REVOKE ALL ON TYPE public.mcp_gate FROM PUBLIC, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- Internal helpers (no API role holds EXECUTE)
@@ -219,6 +221,8 @@ DECLARE
 BEGIN
   PERFORM set_config('lock_timeout', '1000ms', true);
   BEGIN
+    DELETE FROM public.mcp_rate_counters o
+     WHERE o.bucket = p_bucket AND o.window_start < now() - interval '1 day';
     INSERT INTO public.mcp_rate_counters AS rc (bucket, window_start, count)
     VALUES (p_bucket, public._mcp_window(p_window), 1)
     ON CONFLICT (bucket, window_start) DO UPDATE SET count = rc.count + 1
@@ -236,12 +240,18 @@ END
 $fn$;
 REVOKE ALL ON FUNCTION public._mcp_bump(text, interval, integer) FROM PUBLIC, anon, authenticated, service_role;
 
-CREATE OR REPLACE FUNCTION public._mcp_fail_over(p_bucket text, p_window interval, p_limit integer)
-RETURNS boolean LANGUAGE sql STABLE SECURITY INVOKER SET search_path = '' AS $fn$
-  SELECT coalesce((SELECT rc.count FROM public.mcp_rate_counters rc
-                    WHERE rc.bucket = p_bucket AND rc.window_start = public._mcp_window(p_window)), 0) >= p_limit
+-- Token endpoint failure: counts it for the client id; returns the refusal, or 'rate_limited'
+-- after more than 20 failures in the current minute. Called on failure paths only.
+CREATE OR REPLACE FUNCTION public._mcp_token_fail(p_client_id text, p_code text)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = '' AS $fn$
+BEGIN
+  IF public._mcp_bump('tok_fail:' || coalesce(p_client_id, ''), interval '1 minute', 20) IS NOT DISTINCT FROM 'ok' THEN
+    RETURN public._mcp_refuse(p_code);
+  END IF;
+  RETURN public._mcp_refuse('rate_limited');
+END
 $fn$;
-REVOKE ALL ON FUNCTION public._mcp_fail_over(text, interval, integer) FROM PUBLIC, anon, authenticated, service_role;
+REVOKE ALL ON FUNCTION public._mcp_token_fail(text, text) FROM PUBLIC, anon, authenticated, service_role;
 
 -- true when the user has an impersonation session in progress as the admin
 CREATE OR REPLACE FUNCTION public._mcp_impersonating(p_user_id uuid)
@@ -521,13 +531,9 @@ BEGIN
   IF public._mcp_secret_ok(p_secret) IS NOT TRUE THEN
     RETURN public._mcp_refuse('invalid_grant');
   END IF;
-  IF public._mcp_fail_over('tok_fail:' || coalesce(p_client_id, ''), interval '1 minute', 20) IS NOT FALSE THEN
-    RETURN public._mcp_refuse('rate_limited');
-  END IF;
   IF (octet_length(p_code_digest) = 32 AND octet_length(p_at_digest) = 32 AND octet_length(p_rt_digest) = 32
       AND p_at_digest IS DISTINCT FROM p_rt_digest) IS NOT TRUE THEN
-    PERFORM public._mcp_bump('tok_fail:' || coalesce(p_client_id, ''), interval '1 minute', 20);
-    RETURN public._mcp_refuse('invalid_request');
+    RETURN public._mcp_token_fail(p_client_id, 'invalid_request');
   END IF;
 
   UPDATE public.mcp_authorization_codes k
@@ -548,17 +554,22 @@ BEGIN
        WHERE c.id = (SELECT k.connection_id FROM public.mcp_authorization_codes k WHERE k.code_sha256 = sha256(p_code_digest));
       INSERT INTO public.mcp_call_log (user_id, event, outcome, ended_at) VALUES (v_user, 'code_replay', 'ok', now());
     END IF;
-    PERFORM public._mcp_bump('tok_fail:' || coalesce(p_client_id, ''), interval '1 minute', 20);
-    RETURN public._mcp_refuse('invalid_grant');
+    RETURN public._mcp_token_fail(p_client_id, 'invalid_grant');
   END IF;
 
+  -- a rejected redemption uses up the code and removes its pending connection
   IF (v_code.client_id = p_client_id
       AND v_code.redirect_uri = p_redirect_uri
       AND v_code.resource = p_resource
+      AND EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = p_redirect_uri)
       AND p_code_verifier ~ '^[A-Za-z0-9._~-]{43,128}$'
       AND public._mcp_b64url(sha256(convert_to(p_code_verifier, 'UTF8'))) = v_code.code_challenge) IS NOT TRUE THEN
-    PERFORM public._mcp_bump('tok_fail:' || coalesce(p_client_id, ''), interval '1 minute', 20);
-    RETURN public._mcp_refuse('invalid_grant');
+    DELETE FROM public.mcp_connections c
+     WHERE c.id = v_code.connection_id AND c.status = 'pending'
+    RETURNING c.user_id INTO v_user;
+    INSERT INTO public.mcp_call_log (user_id, connection_id, event, outcome, ended_at)
+    VALUES (v_user, v_code.connection_id, 'code_rejected', 'ok', now());
+    RETURN public._mcp_token_fail(p_client_id, 'invalid_grant');
   END IF;
 
   UPDATE public.mcp_connections c
@@ -605,13 +616,9 @@ BEGIN
   IF public._mcp_secret_ok(p_secret) IS NOT TRUE THEN
     RETURN public._mcp_refuse('invalid_grant');
   END IF;
-  IF public._mcp_fail_over('tok_fail:' || coalesce(p_client_id, ''), interval '1 minute', 20) IS NOT FALSE THEN
-    RETURN public._mcp_refuse('rate_limited');
-  END IF;
   IF (octet_length(p_rt_digest) = 32 AND octet_length(p_new_at_digest) = 32 AND octet_length(p_new_rt_digest) = 32
       AND p_new_at_digest IS DISTINCT FROM p_new_rt_digest) IS NOT TRUE THEN
-    PERFORM public._mcp_bump('tok_fail:' || coalesce(p_client_id, ''), interval '1 minute', 20);
-    RETURN public._mcp_refuse('invalid_request');
+    RETURN public._mcp_token_fail(p_client_id, 'invalid_request');
   END IF;
 
   UPDATE public.mcp_tokens t
@@ -640,8 +647,7 @@ BEGIN
       DELETE FROM public.mcp_connections c WHERE c.id = v_conn;
       INSERT INTO public.mcp_call_log (user_id, connection_id, event, outcome, ended_at) VALUES (v_user, v_conn, 'refresh_reuse', 'ok', now());
     END IF;
-    PERFORM public._mcp_bump('tok_fail:' || coalesce(p_client_id, ''), interval '1 minute', 20);
-    RETURN public._mcp_refuse('invalid_grant');
+    RETURN public._mcp_token_fail(p_client_id, 'invalid_grant');
   END IF;
 
   BEGIN
@@ -651,6 +657,8 @@ BEGIN
   EXCEPTION WHEN unique_violation OR not_null_violation THEN
     RETURN public._mcp_refuse('invalid_request');
   END;
+  DELETE FROM public.mcp_tokens o
+   WHERE o.connection_id = v_conn AND o.expires_at < now() - interval '1 day';
   RETURN jsonb_build_object('ok', true, 'token_type', 'Bearer', 'expires_in', 3600, 'scope', 'mcp:read');
 END
 $fn$;

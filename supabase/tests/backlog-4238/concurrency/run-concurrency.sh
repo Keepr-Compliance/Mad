@@ -22,10 +22,11 @@ umask 077
 tmp="$(mktemp -d)"
 SECRET="$(openssl rand -hex 32)"
 RUN="$(openssl rand -hex 10)"  # client id kpr_c_cc + 20 = 22 characters
+FUID="$(python3 -c 'import uuid; print(uuid.uuid4())')"  # fixture user of this run
 CONNS=""; ENABLED=""; SECRET_HEX=""; SETUP_DONE=0
 
 fill() {  # fill <template> <out>
-  sed -e "s/__SECRET__/${SECRET}/g" -e "s/__RUN__/${RUN}/g" -e "s/__CONNS__/${CONNS}/g" \
+  sed -e "s/__SECRET__/${SECRET}/g" -e "s/__RUN__/${RUN}/g" -e "s/__UID__/${FUID}/g" -e "s/__CONNS__/${CONNS}/g" \
       -e "s/__ENABLED__/${ENABLED}/g" -e "s/__SECRET_HEX__/${SECRET_HEX}/g" "$here/$1" > "$tmp/$2"
 }
 col() { python3 -c 'import json,sys; print(json.load(sys.stdin)[0][sys.argv[1]] or "")' "$1"; }

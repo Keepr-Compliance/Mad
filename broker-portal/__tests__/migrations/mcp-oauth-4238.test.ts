@@ -112,6 +112,33 @@ describe('BACKLOG-4238 migration file', () => {
     expect(SQL).not.toMatch(/CREATE POLICY/i);
   });
 
+  it('revokes the sequence of every identity or serial column, and the composite type', () => {
+    const tables = [...SQL.matchAll(/CREATE TABLE IF NOT EXISTS public\.(\w+) \(([\s\S]*?)\);/g)];
+    let seqCols = 0;
+    for (const t of tables) {
+      for (const m of t[2].matchAll(/(?:^\s*|,\s*)(\w+) (?:\w+ GENERATED (?:ALWAYS|BY DEFAULT) AS IDENTITY|(?:big|small)?serial\b)/gi)) {
+        seqCols += 1;
+        expect(SQL).toContain(`REVOKE ALL ON SEQUENCE public.${t[1]}_${m[1]}_seq FROM PUBLIC, anon, authenticated;`);
+      }
+    }
+    expect(seqCols).toBe(1);
+    expect(SQL).not.toMatch(/CREATE SEQUENCE/i);
+    const types = [...RAW.matchAll(/CREATE TYPE public\.(\w+)/g)].map((m) => m[1]);
+    expect(types).toEqual(['mcp_gate']);
+    for (const ty of types) expect(SQL).toContain(`REVOKE ALL ON TYPE public.${ty} FROM PUBLIC, anon, authenticated;`);
+  });
+
+  it('counts token endpoint failures only on failure paths', () => {
+    expect(SQL).not.toMatch(/_mcp_fail_over/);
+    for (const name of ['mcp_exchange_code', 'mcp_refresh']) {
+      const b = fn(name).body;
+      const calls = [...b.matchAll(/(\S+) public\._mcp_token_fail\(/g)].map((m) => m[1]);
+      expect(calls.length).toBeGreaterThanOrEqual(2);
+      for (const c of calls) expect(c).toBe('RETURN');
+      expect(b).not.toMatch(/tok_fail/);
+    }
+  });
+
   it('keeps the call log content-free', () => {
     const block = SQL.slice(SQL.indexOf('CREATE TABLE IF NOT EXISTS public.mcp_call_log ('), SQL.indexOf('CREATE INDEX IF NOT EXISTS mcp_call_log_user_idx'));
     const cols = [...block.matchAll(/[(,] (\w+) (?:bigint|uuid|text|timestamptz|integer)\b/g)].map((m) => m[1]);

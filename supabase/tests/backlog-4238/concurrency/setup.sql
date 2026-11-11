@@ -1,13 +1,13 @@
 -- BACKLOG-4238 concurrency fixtures. Needs the migration APPLIED (committed) on the test project.
 -- run-concurrency.sh fills __SECRET__ (random per run), __RUN__ (random per run) and reads the
 -- printed connection ids; teardown.sql removes exactly these rows and restores mcp_settings.
--- COMMITS: fixture user fx(1), one client, one active connection with an access token, one pending
+-- COMMITS: a fixture user created per run (__UID__), one client, one active connection with an access token, one pending
 -- connection with an unredeemed code, the run's secret hash and enabled = true.
 DO $cc$
-DECLARE A uuid := ('00000000-0000-4238-8000-' || lpad('1', 12, '0'))::uuid; v_conn uuid; v_conn2 uuid;
+DECLARE A uuid := '__UID__'::uuid; v_conn uuid; v_conn2 uuid;
 BEGIN
   INSERT INTO auth.users (id, email, aud, role, instance_id, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
-  VALUES (A, 'p4238-1@example.test', 'authenticated', 'authenticated', '00000000-0000-0000-0000-000000000000', '{"provider":"email"}', '{}', now(), now());
+  VALUES (A, 'p4238-__RUN__@example.test', 'authenticated', 'authenticated', '00000000-0000-0000-0000-000000000000', '{"provider":"email"}', '{}', now(), now());
   UPDATE public.mcp_settings SET enabled = true, portal_secret_sha256 = sha256(convert_to('__SECRET__', 'UTF8')) WHERE id;
   INSERT INTO public.mcp_oauth_clients (client_id, client_name, redirect_uris, ip_sha256)
   VALUES ('kpr_c_cc__RUN__', 'Fixture app cc', ARRAY['https://claude.ai/api/mcp/auth_callback'], sha256(convert_to('ip-cc-__RUN__', 'UTF8')));
@@ -25,4 +25,4 @@ BEGIN
 END
 $cc$;
 SELECT string_agg(id::text, ',' ORDER BY id) AS conns
-  FROM public.mcp_connections WHERE user_id = ('00000000-0000-4238-8000-' || lpad('1', 12, '0'))::uuid;
+  FROM public.mcp_connections WHERE user_id = '__UID__'::uuid;
