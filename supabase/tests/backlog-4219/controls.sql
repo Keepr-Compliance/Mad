@@ -184,7 +184,7 @@ BEGIN
     priv_sigs text[] := ARRAY['public._learn_pilot_int_ok(jsonb)', 'public._learn_pilot_counts_ok(jsonb,text[])',
                               'public._learn_pilot_census_invalid(jsonb)', 'public._learn_pilot_report_invalid(jsonb)'];
     expected_keys text[] := ARRAY['app_version', 'org_current_pin_at', 'org_current_pin_version', 'org_id', 'org_name',
-      'report', 'sender_rules_version', 'submitted_at', 'user_id', 'version_bundled', 'version_canary_org',
+      'report', 'sender_rules_version', 'submitted_at', 'user_id', 'user_name', 'version_bundled', 'version_canary_org',
       'version_published_at', 'version_released', 'version_was_canary_for_this_org'];
   BEGIN
     -- ===== S0: catalog key once, table empty, one purge job, daily =====
@@ -203,10 +203,15 @@ BEGIN
     SELECT pg_temp.fx(x), 'p4219-' || x || '@example.test', 'authenticated', 'authenticated',
            '00000000-0000-0000-0000-000000000000', '{"provider":"email"}', '{}', now(), now()
       FROM generate_series(1, 14) x;
-    INSERT INTO public.users (id, email, oauth_provider, oauth_id, display_name)
-    SELECT pg_temp.fx(x), 'p4219-' || x || '@example.test', 'email', pg_temp.fx(x)::text, 'P4219 user ' || x
+    -- names: u6 has display_name AND first + last (display_name wins), u10 first + last only,
+    -- u13 no name at all, everyone else a display_name
+    INSERT INTO public.users (id, email, oauth_provider, oauth_id, display_name, first_name, last_name)
+    SELECT pg_temp.fx(x), 'p4219-' || x || '@example.test', 'email', pg_temp.fx(x)::text,
+           CASE WHEN x IN (10, 13) THEN NULL ELSE 'P4219 user ' || x END,
+           CASE x WHEN 10 THEN 'Pat' WHEN 6 THEN 'Sam' END, CASE x WHEN 10 THEN 'Ten' WHEN 6 THEN 'Six' END
       FROM generate_series(1, 14) x
-    ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name;
+    ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, first_name = EXCLUDED.first_name,
+                                   last_name = EXCLUDED.last_name;
     INSERT INTO public.internal_roles (user_id, role_id) VALUES (u1, r_sa), (u2, r_ss), (u3, r_ss);
     -- (a mutation that drops the catalog key makes this insert fail; K0 then reds instead of the run aborting)
     BEGIN
@@ -551,6 +556,26 @@ BEGIN
       AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x, jsonb_object_keys(x) kk WHERE kk ~* '(email|label|name_of_user)')
       AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE (x - 'report')::text ~* 'p4219-[0-9]+@'),
       'rows=' || left((j->'rows')::text, 300)));
+
+    -- ===== S13b: user_name = display_name, else first + last, else NULL (never the email); an
+    --       email-shaped display_name comes back NULL =====
+    s := (SELECT string_agg(DISTINCT (x->>'user_id') || '=' || coalesce(x->>'user_name', '<null>') || ':' || jsonb_typeof(x->'user_name'), ' ')
+          FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' IN (u6::text, u10::text, u13::text));
+    UPDATE public.users SET display_name = 'p4219-6@example.test' WHERE id = u6;
+    s2 := pg_temp.lst(u1);
+    UPDATE public.users SET display_name = 'P4219 user 6' WHERE id = u6;
+    r := r || jsonb_build_object('S13b_user_name', pg_temp.pass(
+      NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' = u6::text AND x->>'user_name' IS DISTINCT FROM 'P4219 user 6')
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' = u6::text)
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' = u10::text AND x->>'user_name' IS DISTINCT FROM 'Pat Ten')
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' = u10::text)
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' = u13::text AND x->'user_name' <> 'null'::jsonb)
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(j->'rows') x WHERE x->>'user_id' = u13::text AND x ? 'user_name')
+      AND s2 NOT LIKE 'ERR%'
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(s2::jsonb->'rows') x WHERE x->>'user_id' = u6::text)
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(s2::jsonb->'rows') x WHERE x->>'user_id' = u6::text AND x->'user_name' <> 'null'::jsonb)
+      AND s2 NOT LIKE '%@%',
+      coalesce(s, '-') || ' guard=' || left(s2, 120)));
 
     -- ===== S7b: the scheduled purge body (read from cron.job, not a copy) =====
     UPDATE public.learn_pilot_reports SET submitted_at = now() - interval '1 day' WHERE user_id = u10 AND sender_rules_version = 2;
