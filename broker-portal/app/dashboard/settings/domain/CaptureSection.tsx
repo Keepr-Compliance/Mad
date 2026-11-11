@@ -9,7 +9,7 @@
  * and the database re-evaluates every person.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Badge,
@@ -90,6 +90,25 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const now = Date.now();
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  const selectableIds = view.rows.filter(isSelectable).map((r) => r.userId);
+  const chosenIds = selectableIds.filter((id) => selected.has(id));
+  const selectedCount = chosenIds.length;
+  const allSelected = selectableIds.length > 0 && selectedCount === selectableIds.length;
+  const someSelected = selectedCount > 0 && !allSelected;
+
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someSelected;
+  }, [someSelected]);
+
+  const toggleAll = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) selectableIds.forEach((id) => next.delete(id));
+      else selectableIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
 
   const toggle = (userId: string) => {
     setSelected((prev) => {
@@ -109,7 +128,7 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
     setBusy(true);
     setNotice(null);
     try {
-      const res = await startCapture({ claimId: view.claimId, userIds: Array.from(selected) });
+      const res = await startCapture({ claimId: view.claimId, userIds: chosenIds });
       setNotice({ tone: res.success ? 'success' : 'destructive', text: res.message });
       if (res.success) {
         setSelected(new Set());
@@ -145,7 +164,7 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-medium text-gray-900">{view.domain}</h3>
         {view.state === 'ok' && view.rows.length > 0 && (
-          <Button type="button" onClick={openConfirm} disabled={busy || selected.size === 0}>
+          <Button type="button" onClick={openConfirm} disabled={busy || chosenIds.length === 0}>
             Start
           </Button>
         )}
@@ -166,6 +185,14 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
               <tr>
                 <Th>
                   <span className="sr-only">Select</span>
+                  <input
+                    ref={selectAllRef}
+                    type="checkbox"
+                    aria-label="Select everyone who can move"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    disabled={busy || selectableIds.length === 0}
+                  />
                 </Th>
                 <Th>Name</Th>
                 <Th>Status</Th>
@@ -189,15 +216,15 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
                         />
                       )}
                     </Td>
-                    <Td>
+                    <Td className="whitespace-normal break-words">
                       <div className="text-sm text-gray-900">{row.name}</div>
                       {row.name !== row.email && <div className="text-xs text-gray-500">{row.email}</div>}
                     </Td>
-                    <Td>
+                    <Td className="whitespace-normal" data-testid={`capture-status-${row.userId}`}>
                       <Badge hue={status.hue}>{status.label}</Badge>
-                      {status.detail && <p className="mt-1 text-xs text-gray-500">{status.detail}</p>}
+                      {status.detail && <p className="mt-1 max-w-xs text-xs text-gray-500">{status.detail}</p>}
                     </Td>
-                    <Td>
+                    <Td className="whitespace-nowrap">
                       {row.switchId && (
                         <Button
                           type="button"
@@ -226,13 +253,13 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
         dismissible={!busy}
       >
         <p className="text-sm text-gray-700" data-testid="capture-start-confirm-text">
-          {captureStartConfirmText(selected.size, moveDate)}
+          {captureStartConfirmText(chosenIds.length, moveDate)}
         </p>
         <div className="mt-4 flex justify-end gap-2">
           <Button type="button" variant="secondary" onClick={() => setConfirmOpen(false)} disabled={busy}>
             Back
           </Button>
-          <Button type="button" onClick={handleStart} disabled={busy || selected.size === 0}>
+          <Button type="button" onClick={handleStart} disabled={busy || chosenIds.length === 0}>
             {busy ? 'Starting...' : 'Start the move'}
           </Button>
         </div>

@@ -180,6 +180,102 @@ describe('capture table', () => {
     }
   });
 
+  describe('select all', () => {
+    const all = () => screen.getByRole('checkbox', { name: 'Select everyone who can move' }) as HTMLInputElement;
+    const SELECTABLE = ['u-can', 'u-can2', 'u-undeliv'];
+    const NOT = ['u-tenant', 'u-attest', 'u-sched', 'u-wait', 'u-bill', 'u-opted', 'u-moved', 'u-susp'];
+
+    it('ticks every selectable row and none of the others, and enables Start', async () => {
+      render(<CaptureSection domains={await loadView()} />);
+      fireEvent.click(all());
+      for (const id of SELECTABLE) expect((row(id).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+      for (const id of NOT) expect(row(id).queryAllByRole('checkbox')).toHaveLength(0);
+      expect(screen.getAllByRole('checkbox').filter((c) => (c as HTMLInputElement).checked)).toHaveLength(SELECTABLE.length + 1);
+      expect(all().checked).toBe(true);
+      expect((screen.getByRole('button', { name: 'Start' }) as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    it('a second click clears everything', async () => {
+      render(<CaptureSection domains={await loadView()} />);
+      fireEvent.click(all());
+      fireEvent.click(all());
+      for (const id of SELECTABLE) expect((row(id).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
+      expect(all().checked).toBe(false);
+      expect((screen.getByRole('button', { name: 'Start' }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('is indeterminate, not checked, when only some rows are ticked', async () => {
+      render(<CaptureSection domains={await loadView()} />);
+      fireEvent.click(row('u-can').getByRole('checkbox'));
+      expect(all().indeterminate).toBe(true);
+      expect(all().checked).toBe(false);
+    });
+
+    it('select-all then Start: confirm count and payload are exactly the selectable rows', async () => {
+      start.mockResolvedValue({ success: true, message: 'ok' });
+      render(<CaptureSection domains={await loadView()} />);
+      fireEvent.click(all());
+      fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+      const date = formatCaptureDate(new Date(Date.now() + 14 * 86_400_000).toISOString());
+      expect(screen.getByTestId('capture-start-confirm-text').textContent).toBe(captureStartConfirmText(SELECTABLE.length, date));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Start the move' }));
+      });
+      expect(start).toHaveBeenCalledTimes(1);
+      expect([...start.mock.calls[0][0].userIds].sort()).toEqual([...SELECTABLE].sort());
+    });
+
+    it('is disabled while a move is being started', async () => {
+      start.mockReturnValue(new Promise(() => {}));
+      render(<CaptureSection domains={await loadView()} />);
+      fireEvent.click(all());
+      fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Start the move' }));
+      });
+      expect(all().disabled).toBe(true);
+    });
+
+    it('one click from the partial state ticks every selectable row', async () => {
+      render(<CaptureSection domains={await loadView()} />);
+      fireEvent.click(row('u-can').getByRole('checkbox'));
+      fireEvent.click(all());
+      for (const id of SELECTABLE) expect((row(id).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+      expect(all().checked).toBe(true);
+    });
+
+    it('a ticked row that stops being selectable after a refresh is not counted or sent', async () => {
+      start.mockResolvedValue({ success: true, message: 'ok' });
+      const { rerender } = render(<CaptureSection domains={await loadView()} />);
+      fireEvent.click(row('u-can').getByRole('checkbox'));
+      const moved = CANDIDATES.map((c) =>
+        c.user_id === 'u-can' ? { ...c, switch_id: 's-new', switch_at: FUTURE, notice_delivered: true } : c,
+      );
+      rerender(<CaptureSection domains={await loadView(moved)} />);
+      expect(row('u-can').queryAllByRole('checkbox')).toHaveLength(0);
+      expect((screen.getByRole('button', { name: 'Start' }) as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(row('u-can2').getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: 'Start' }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Start the move' }));
+      });
+      expect(start.mock.calls[0][0].userIds).toEqual(['u-can2']);
+    });
+
+    it('is disabled when no row can be selected', async () => {
+      const only = [candidate({ user_id: 'u-tenant', email: 'ms@a-brokerage.example', attestation: null, convertible: false, reason: 'no_tenant' })];
+      render(<CaptureSection domains={await loadView(only, [])} />);
+      expect(all().disabled).toBe(true);
+    });
+  });
+
+  it('the Status cell wraps and its detail text is width-capped so Actions stays on screen', async () => {
+    render(<CaptureSection domains={await loadView()} />);
+    const cell = screen.getByTestId('capture-status-u-tenant');
+    expect(cell.className).toContain('whitespace-normal');
+    expect(within(cell).getByText(CAPTURE_REASON_COPY.no_tenant).className).toContain('max-w-xs');
+  });
+
   it('Start is disabled until someone is selected', async () => {
     render(<CaptureSection domains={await loadView()} />);
     const btn = screen.getByRole('button', { name: 'Start' }) as HTMLButtonElement;
