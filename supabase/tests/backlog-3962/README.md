@@ -25,3 +25,14 @@ python3 supabase/tests/backlog-3962/ts_mutations.py [name ...]
 ```
 
 Needs a committed tree. Results: `ts-mutations-2026-11-10.txt`.
+
+## PR2 (`20261112110000_backlog_3962_recheck_lapse_cutoff.sql`)
+
+```
+bash run.sh pr2 P2_no_null_guard P2_cutoff_any_status P2_cutoff_on_last_checked P2_no_cutoff P2_pin_wrong_md5
+bash run.sh pr2_live        # controls-pr2.sql against the body applied on the venue
+```
+
+`pr2` modes need the PR1 table on the venue. Each composes `rollback-3962-pr2.sql` (the PR1 body),
+the PR2 migration or a mutant of it, and `controls-pr2.sql`, in one transaction that ends in RAISE.
+Results: `results-pr2-2026-11-10.txt`.
