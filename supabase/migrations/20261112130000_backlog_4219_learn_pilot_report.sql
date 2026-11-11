@@ -393,7 +393,8 @@ COMMENT ON FUNCTION public.learn_pilot_report_withdraw() IS
 -- 5. learn_pilot_report_admin_list — the admin page read
 --    Internal role AND report access 'learn-pilot' (owner | editor | viewer). Rows from the last
 --    180 days whose user is still an active member of the row's org. Joined to the 4175 rule-set
---    versions and pins; never returns published_by or pinned_by.
+--    versions and pins; never returns published_by or pinned_by. Each row names its user by Keepr
+--    user id (user_id); no email or other account detail is read or returned.
 -- ============================================================
 CREATE OR REPLACE FUNCTION public.learn_pilot_report_admin_list()
 RETURNS JSONB
@@ -427,7 +428,7 @@ BEGIN
     coalesce(jsonb_agg(jsonb_build_object(
       'org_id', pg.org_id,
       'org_name', o.name,
-      'user_label', u.email,
+      'user_id', pg.user_id,
       'sender_rules_version', pg.sender_rules_version,
       'version_released', s.released,
       'version_bundled', s.bundled,
@@ -444,7 +445,6 @@ BEGIN
   INTO v_rows, v_total
   FROM page pg
   LEFT JOIN public.organizations o ON o.id = pg.org_id
-  LEFT JOIN auth.users u ON u.id = pg.user_id
   LEFT JOIN public.sender_rule_sets s ON s.version = pg.sender_rules_version
   LEFT JOIN public.sender_rule_set_pins p ON p.org_id = pg.org_id;
 
