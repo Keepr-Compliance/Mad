@@ -50,6 +50,9 @@ function allowed(level: SharingLevel, maxLevel: SharingLevel | undefined): boole
   return maxLevel === undefined || ORDER[level] <= ORDER[maxLevel];
 }
 
+/** Refocus target meaning the add field rather than a row trigger. */
+const ADD_FIELD = '#add';
+
 type Confirm = { kind: 'remove' | 'owner'; key: string } | null;
 
 export function SharingDialog({
@@ -78,6 +81,9 @@ export function SharingDialog({
   const [confirm, setConfirm] = React.useState<Confirm>(null);
   const listRef = React.useRef<HTMLUListElement>(null);
   const confirmCancelRef = React.useRef<HTMLButtonElement>(null);
+  const addInputId = `${React.useId()}-add`;
+  /** The row whose menu is open: pointer-down outside it closes the menu. */
+  const openRowRef = React.useRef<HTMLDivElement>(null);
   /** Row whose menu trigger gets focus back after a menu or confirm closes. */
   const [refocus, setRefocus] = React.useState<string | null>(null);
 
@@ -96,10 +102,15 @@ export function SharingDialog({
 
   React.useEffect(() => {
     if (refocus === null) return;
+    if (refocus === ADD_FIELD) {
+      document.getElementById(addInputId)?.focus();
+      setRefocus(null);
+      return;
+    }
     const triggers = listRef.current?.querySelectorAll<HTMLButtonElement>('[data-menu-for]') ?? [];
     Array.from(triggers).find((b) => b.dataset.menuFor === refocus)?.focus();
     setRefocus(null);
-  }, [refocus]);
+  }, [refocus, addInputId]);
 
   const levelLabel = (value: SharingLevel) => levels.find((l) => l.value === value)?.label ?? value;
   const editorLabel = levelLabel('editor');
@@ -167,6 +178,7 @@ export function SharingDialog({
         key: 'owner',
         label: 'Make owner…',
         disabled: !allowed('editor', entry.maxLevel),
+        hint: `Not available for ${displayName(entry)}`,
         onSelect: () => {
           setMenuFor(null);
           setConfirm({ kind: 'owner', key });
@@ -208,7 +220,12 @@ export function SharingDialog({
             variant="destructive"
             size="sm"
             onClick={() => {
+              // Focus moves to the next row's trigger, or the add field when this was the last row.
+              const list = entries ?? [];
+              const at = list.findIndex((e) => principalKey(e) === key);
+              const next = at >= 0 && at + 1 < list.length ? principalKey(list[at + 1]) : ADD_FIELD;
               setConfirm(null);
+              setRefocus(next);
               onRemove(entry);
             }}
           >
@@ -248,7 +265,7 @@ export function SharingDialog({
     const menuOpen = menuFor === key;
     const menuId = `sharing-menu-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
     return (
-      <>
+      <div ref={menuOpen ? openRowRef : undefined}>
         <div className="flex items-center gap-3 py-2">
           <SharingAvatar kind={entry.kind} name={entry.name} />
           <span className="flex min-w-0 flex-1 flex-col">
@@ -265,6 +282,12 @@ export function SharingDialog({
             aria-controls={menuOpen ? menuId : undefined}
             aria-label={`Access for ${forWhom}: ${levelLabel(entry.level)}`}
             onClick={() => setMenuFor(menuOpen ? null : key)}
+            onKeyDown={(e) => {
+              if (!menuOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                e.preventDefault();
+                setMenuFor(key);
+              }
+            }}
             className={cn(
               'flex h-8 flex-shrink-0 items-center gap-1 rounded-md border pl-2.5 pr-2 text-sm text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
               menuOpen ? 'border-gray-300 bg-gray-100' : 'border-transparent hover:bg-gray-100'
@@ -276,10 +299,16 @@ export function SharingDialog({
         </div>
         {menuOpen ? (
           <div className="flex justify-end pb-2">
-            <AccessMenu id={menuId} ariaLabel={`Access for ${forWhom}`} items={menuItems(entry)} onClose={closeMenu} />
+            <AccessMenu
+              id={menuId}
+              ariaLabel={`Access for ${forWhom}`}
+              items={menuItems(entry)}
+              onClose={closeMenu}
+              containerRef={openRowRef}
+            />
           </div>
         ) : null}
-      </>
+      </div>
     );
   }
 
@@ -311,6 +340,7 @@ export function SharingDialog({
             exclude={exclude}
             chips={chips}
             onAdd={addChip}
+            inputId={addInputId}
             onRemoveChip={(p) => setChips((prev) => prev.filter((c) => principalKey(c) !== principalKey(p)))}
           />
           <div className="sm:w-32">

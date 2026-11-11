@@ -28,6 +28,8 @@ export interface PrincipalPickerProps {
   chips: readonly SharingPrincipal[];
   onAdd: (p: SharingPrincipal) => void;
   onRemoveChip: (p: SharingPrincipal) => void;
+  /** id of the text field, e.g. to move focus there after a removal. Default: generated. */
+  inputId?: string;
 }
 
 export function PrincipalPicker({
@@ -38,9 +40,10 @@ export function PrincipalPicker({
   chips,
   onAdd,
   onRemoveChip,
+  inputId: externalInputId,
 }: PrincipalPickerProps) {
   const baseId = React.useId();
-  const inputId = `${baseId}-input`;
+  const inputId = externalInputId ?? `${baseId}-input`;
   const listId = `${baseId}-list`;
   const [query, setQuery] = React.useState('');
   const [open, setOpen] = React.useState(false);
@@ -153,7 +156,7 @@ export function PrincipalPicker({
           type="text"
           role="combobox"
           aria-expanded={showList}
-          aria-controls={listId}
+          aria-controls={showList ? listId : undefined}
           aria-autocomplete="list"
           aria-activedescendant={showList && activeIndex >= 0 ? optionId(activeIndex) : undefined}
           autoComplete="off"
@@ -178,7 +181,9 @@ export function PrincipalPicker({
           className="absolute left-0 right-0 top-full z-50 mt-1 max-h-60 overflow-y-auto rounded-lg border border-gray-200 bg-white p-1 shadow-lg"
         >
           {options.length === 0 ? (
-            <li className="px-2.5 py-2 text-sm text-gray-500">No one else to add</li>
+            <li role="option" aria-selected={false} aria-disabled="true" className="px-2.5 py-2 text-sm text-gray-500">
+              No one else to add
+            </li>
           ) : (
             options.map((option, i) => (
               <li

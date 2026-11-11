@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { Check } from 'lucide-react';
 import { cn } from '../../lib/cn';
+import { useClickOutside } from '../../lib/use-click-outside';
 
 /**
  * The row's access menu (BACKLOG-3513): role="menu" with menuitemradio rows
@@ -14,6 +15,9 @@ import { cn } from '../../lib/cn';
  * activate (native buttons); Tab closes. Escape is caught on window in the
  * capture phase while open, the same way Dropdown does it, so the enclosing
  * Radix Dialog does not also close.
+ *
+ * A pointer-down outside `containerRef` (the row holding the trigger and the
+ * menu) closes it without moving focus; a click on the trigger toggles.
  *
  * Disabled items stay in the menu with aria-disabled (so a screen reader
  * hears they exist), are skipped by the arrow keys and do nothing on click.
@@ -30,7 +34,15 @@ export type AccessMenuItem =
       onSelect: () => void;
     }
   | { kind: 'separator'; key: string }
-  | { kind: 'action'; key: string; label: string; tone?: 'danger'; disabled?: boolean; onSelect: () => void };
+  | {
+      kind: 'action';
+      key: string;
+      label: string;
+      tone?: 'danger';
+      disabled?: boolean;
+      hint?: string;
+      onSelect: () => void;
+    };
 
 export interface AccessMenuProps {
   /** Accessible name of the menu, e.g. "Access for Jordan Lee". */
@@ -39,9 +51,11 @@ export interface AccessMenuProps {
   /** Close the menu. `restoreFocus`: put focus back on the trigger. */
   onClose: (restoreFocus: boolean) => void;
   id?: string;
+  /** The element holding the trigger and the menu. Pointer-down outside it closes the menu. Default: the menu. */
+  containerRef?: React.RefObject<HTMLElement | null>;
 }
 
-export function AccessMenu({ ariaLabel, items, onClose, id }: AccessMenuProps) {
+export function AccessMenu({ ariaLabel, items, onClose, id, containerRef }: AccessMenuProps) {
   const menuRef = React.useRef<HTMLDivElement>(null);
 
   const enabledButtons = React.useCallback((): HTMLButtonElement[] => {
@@ -69,6 +83,9 @@ export function AccessMenu({ ariaLabel, items, onClose, id }: AccessMenuProps) {
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
+
+  const closeFromOutside = React.useCallback(() => onCloseRef.current(false), []);
+  useClickOutside(containerRef ?? menuRef, closeFromOutside, true);
 
   function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     const buttons = enabledButtons();
@@ -148,12 +165,13 @@ export function AccessMenu({ ariaLabel, items, onClose, id }: AccessMenuProps) {
             data-menu-item=""
             onClick={activate}
             className={cn(
-              'rounded-md py-2 pl-8 pr-2.5 text-left text-sm focus:bg-gray-100 focus:outline-none',
+              'flex flex-col gap-0.5 rounded-md py-2 pl-8 pr-2.5 text-left text-sm focus:bg-gray-100 focus:outline-none',
               item.tone === 'danger' ? 'text-danger-700' : 'text-gray-900',
               disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-gray-100'
             )}
           >
-            {item.label}
+            <span>{item.label}</span>
+            {disabled && item.hint ? <span className="text-xs text-gray-500">{item.hint}</span> : null}
           </button>
         );
       })}

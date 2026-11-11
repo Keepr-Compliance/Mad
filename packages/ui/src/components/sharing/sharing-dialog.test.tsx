@@ -362,6 +362,84 @@ describe('SharingDialog (BACKLOG-3513)', () => {
     expect(input()).toHaveAttribute('placeholder', 'Name, email or role');
   });
 
+  it('R1 a pointer-down outside the row closes the menu without moving focus; the trigger still toggles', async () => {
+    const { props } = setup();
+    const t = trigger(/^Access for Jordan Lee/);
+    fireEvent.pointerDown(t);
+    fireEvent.click(t);
+    expect(menu()).toBeInTheDocument();
+    // A pointer-down inside the menu keeps it open.
+    fireEvent.pointerDown(radio(/^Can view/));
+    expect(menu()).toBeInTheDocument();
+    // Pointer-down on another control: the menu closes and focus stays where the user put it.
+    fireEvent.pointerDown(input());
+    act(() => input().focus());
+    expect(screen.queryByRole('menu')).toBeNull();
+    await settle();
+    expect(input()).toHaveFocus();
+    // Pointer-down on plain text outside closes it too.
+    fireEvent.click(t);
+    expect(menu()).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByText('People with access', { selector: 'p' }));
+    expect(screen.queryByRole('menu')).toBeNull();
+    await settle();
+    expect(t).not.toHaveFocus();
+    // The trigger toggles: open, then a pointer-down + click on it closes.
+    fireEvent.click(t);
+    expect(menu()).toBeInTheDocument();
+    fireEvent.pointerDown(t);
+    fireEvent.click(t);
+    expect(screen.queryByRole('menu')).toBeNull();
+    expectNoCalls(props);
+    expect(props.onOpenChange).not.toHaveBeenCalled();
+  });
+
+  it('S1 a disabled Make owner says why', () => {
+    setup({ onTransferOwnership: jest.fn() });
+    fireEvent.click(trigger(/^Access for Priya Raman/));
+    expect(item(/^Make owner/)).toHaveTextContent('Not available for Priya Raman');
+  });
+
+  it('S2 ArrowDown and ArrowUp on the trigger open the menu', async () => {
+    setup();
+    fireEvent.keyDown(trigger(/^Access for Jordan Lee/), { key: 'ArrowDown' });
+    expect(menu()).toBeInTheDocument();
+    await settle();
+    expect(radio(/^Can edit/)).toHaveFocus();
+    fireEvent.keyDown(document.activeElement as Element, { key: 'Escape' });
+    fireEvent.keyDown(trigger(/^Access for Priya Raman/), { key: 'ArrowUp' });
+    expect(menu()).toHaveAccessibleName('Access for Priya Raman');
+  });
+
+  it('S3 the combobox points at its list only while the list is open; the empty row is a disabled option', () => {
+    setup({ candidates: [] });
+    expect(input()).not.toHaveAttribute('aria-controls');
+    fireEvent.keyDown(input(), { key: 'ArrowDown' });
+    const list = screen.getByRole('listbox', { name: 'Add people or roles' });
+    expect(input()).toHaveAttribute('aria-controls', list.id);
+    const empty = within(list).getByRole('option', { name: 'No one else to add' });
+    expect(empty).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('S4 after a confirmed Remove focus goes to the next row, or the add field after the last row', async () => {
+    setup();
+    fireEvent.click(trigger(/^Access for Priya Raman/));
+    fireEvent.click(item(/^Remove access$/));
+    fireEvent.click(
+      within(screen.getByRole('group', { name: 'Remove access for Priya Raman' })).getByRole('button', { name: 'Remove access' })
+    );
+    await settle();
+    expect(trigger(/^Access for role Agents/)).toHaveFocus();
+
+    fireEvent.click(trigger(/^Access for role Agents/));
+    fireEvent.click(item(/^Remove access$/));
+    fireEvent.click(
+      within(screen.getByRole('group', { name: 'Remove access for Role: Agents' })).getByRole('button', { name: 'Remove access' })
+    );
+    await settle();
+    expect(input()).toHaveFocus();
+  });
+
   it('K10 SharingDialog is exported from the package index', () => {
     expect(SharingDialogFromIndex).toBe(SharingDialog);
   });
