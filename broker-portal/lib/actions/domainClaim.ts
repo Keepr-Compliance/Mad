@@ -15,6 +15,7 @@
  */
 
 import * as Sentry from '@sentry/nextjs';
+import type { SupabaseClient } from '@supabase/supabase-js';
 import { blockWriteDuringImpersonation } from '@/lib/impersonation-guards';
 import { createServiceClient } from '@/lib/supabase/service';
 import { requireDomainClaimAccess } from '@/lib/domain/access';
@@ -100,7 +101,7 @@ export async function createDomainClaim(input: string): Promise<DomainClaimActio
  * lookupClaimTxt(`${domain}.${domain}`) queries exactly that name.
  */
 async function foundAtDoubledName(
-  supabase: { from: (t: string) => any }, // eslint-disable-line @typescript-eslint/no-explicit-any
+  supabase: Pick<SupabaseClient, 'from'>,
   organizationId: string,
   claimId: string,
   domain: string
