@@ -6,8 +6,8 @@
  * organization is the session's (access.organizationId), never a browser value.
  *   - Candidates come from domain_capture_candidates through the caller's own session client (the
  *     function re-checks is_org_admin on auth.uid()).
- *   - Ended moves (opted out, switched, cancelled): domain_capture_switches has no client policy, so
- *     they are read with the service client, filtered to the session organization. Read only.
+ *   - Ended moves (opted out, switched, cancelled) come from domain_capture_history, also through the
+ *     session client (admin of the organization, checked inside). Read only.
  *
  * loadCaptureNotice: the signed-in person's own scheduled move (caller_capture_notice), for the
  * personal-owner banner. Read only.
@@ -25,11 +25,15 @@ export interface CaptureEnded {
 export interface CaptureRow {
   userId: string;
   email: string;
+  /** Display name, else the email (the database's fallback). */
+  name: string;
   convertible: boolean;
   reason: string | null;
   switchId: string | null;
   switchAt: string | null;
   noticeDelivered: boolean | null;
+  /** Why the hourly job last put a scheduled move off (dns_not_fresh | billing_not_ready | billing_setup_incomplete). */
+  lastDeferReason: string | null;
   ended: CaptureEnded | null;
 }
 
@@ -41,19 +45,12 @@ export interface CaptureDomainView {
 }
 
 type Rpc = Pick<SupabaseClient, 'rpc'>;
-type Reader = Pick<SupabaseClient, 'from'>;
 
-export interface CaptureSectionDeps {
-  /** Reads ended switches for the session organization. Defaults to the service client. */
-  history?: () => Reader | null;
-}
-
-const ENDED_LIMIT = 500;
-
-interface EndedRow {
-  claim_id: string;
-  user_id: string;
-  email_at_start: string;
+export interface EndedRow {
+  claimId: string;
+  userId: string;
+  email: string;
+  name: string;
   status: string;
   reason: string | null;
 }
@@ -67,31 +64,43 @@ function toRow(v: unknown): CaptureRow | null {
   const r = v as Record<string, unknown>;
   const userId = str(r.user_id);
   if (!userId) return null;
+  const email = str(r.email) ?? '';
   return {
     userId,
-    email: str(r.email) ?? '',
+    email,
+    name: str(r.name)?.trim() || email,
     convertible: r.convertible === true,
     reason: str(r.reason),
     switchId: str(r.switch_id),
     switchAt: str(r.switch_at),
     noticeDelivered: typeof r.notice_delivered === 'boolean' ? r.notice_delivered : null,
+    lastDeferReason: str(r.last_defer_reason),
     ended: null,
   };
 }
 
-async function loadEnded(deps: CaptureSectionDeps, organizationId: string): Promise<EndedRow[]> {
+/** The organization's ended moves, newest first (domain_capture_history). Empty on any failure. */
+async function loadEnded(client: Rpc, organizationId: string): Promise<EndedRow[]> {
   try {
-    const reader = deps.history ? deps.history() : null;
-    if (!reader) return [];
-    const { data, error } = await reader
-      .from('domain_capture_switches')
-      .select('claim_id, user_id, email_at_start, status, reason')
-      .eq('organization_id', organizationId)
-      .neq('status', 'scheduled')
-      .order('updated_at', { ascending: false })
-      .limit(ENDED_LIMIT);
-    if (error || !Array.isArray(data)) return [];
-    return data as EndedRow[];
+    const { data, error } = (await client.rpc('domain_capture_history', { p_org: organizationId })) as {
+      data: unknown;
+      error: { code?: string } | null;
+    };
+    if (error || !data || typeof data !== 'object') return [];
+    const reply = data as Record<string, unknown>;
+    if (reply.success !== true || !Array.isArray(reply.switches)) return [];
+    const out: EndedRow[] = [];
+    for (const v of reply.switches) {
+      if (!v || typeof v !== 'object') continue;
+      const r = v as Record<string, unknown>;
+      const claimId = str(r.claim_id);
+      const userId = str(r.user_id);
+      const status = str(r.status);
+      if (!claimId || !userId || !status || status === 'scheduled') continue;
+      const email = str(r.email) ?? '';
+      out.push({ claimId, userId, email, name: str(r.name)?.trim() || email, status, reason: str(r.reason) });
+    }
+    return out;
   } catch {
     return [];
   }
@@ -101,8 +110,8 @@ async function loadEnded(deps: CaptureSectionDeps, organizationId: string): Prom
 export function mergeEnded(rows: CaptureRow[], ended: EndedRow[], claimId: string): CaptureRow[] {
   const latest = new Map<string, EndedRow>();
   for (const e of ended) {
-    if (e.claim_id !== claimId) continue;
-    if (!latest.has(e.user_id)) latest.set(e.user_id, e); // newest first
+    if (e.claimId !== claimId) continue;
+    if (!latest.has(e.userId)) latest.set(e.userId, e); // newest first
   }
   const out = rows.map((r) => {
     if (r.switchId) return r; // a scheduled move outranks history
@@ -111,16 +120,18 @@ export function mergeEnded(rows: CaptureRow[], ended: EndedRow[], claimId: strin
   });
   const listed = new Set(rows.map((r) => r.userId));
   for (const e of latest.values()) {
-    if (listed.has(e.user_id)) continue;
+    if (listed.has(e.userId)) continue;
     // No longer a candidate (for example, now a member after the move). Shown, never selectable.
     out.push({
-      userId: e.user_id,
-      email: e.email_at_start,
+      userId: e.userId,
+      email: e.email,
+      name: e.name,
       convertible: false,
       reason: null,
       switchId: null,
       switchAt: null,
       noticeDelivered: null,
+      lastDeferReason: null,
       ended: { status: e.status, reason: e.reason },
     });
   }
@@ -137,13 +148,12 @@ export function isSelectable(row: CaptureRow): boolean {
 export async function loadCaptureSection(
   access: DomainClaimAccess,
   claims: DomainClaimView[],
-  deps: CaptureSectionDeps = {},
 ): Promise<CaptureDomainView[] | null> {
   if (!access.ok) return null;
   const verified = claims.filter((c) => c.status === 'verified');
   if (verified.length === 0) return null;
 
-  const ended = await loadEnded(deps, access.organizationId);
+  const ended = await loadEnded(access.supabase as Rpc, access.organizationId);
   const out: CaptureDomainView[] = [];
   for (const claim of verified) {
     const { data, error } = (await (access.supabase as Rpc).rpc('domain_capture_candidates', {

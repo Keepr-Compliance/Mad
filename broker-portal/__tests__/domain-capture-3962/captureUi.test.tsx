@@ -45,22 +45,31 @@ const candidate = (over: Record<string, unknown>) => ({
 });
 
 const CANDIDATES = [
-  candidate({ user_id: 'u-can', email: 'can@a-brokerage.example' }),
+  candidate({ user_id: 'u-can', email: 'can@a-brokerage.example', name: 'Casey Can' }),
   candidate({ user_id: 'u-can2', email: 'can2@a-brokerage.example' }),
   candidate({ user_id: 'u-tenant', email: 'ms@a-brokerage.example', attestation: null, convertible: false, reason: 'no_tenant' }),
   candidate({ user_id: 'u-attest', email: 'plain@a-brokerage.example', attestation: null, convertible: false, reason: 'no_attestation' }),
   candidate({ user_id: 'u-sched', email: 'sched@a-brokerage.example', switch_id: 's-sched', switch_at: FUTURE, notice_delivered: true }),
   candidate({ user_id: 'u-retry', email: 'retry@a-brokerage.example', switch_id: 's-retry', switch_at: FUTURE, notice_delivered: null }),
   candidate({ user_id: 'u-wait', email: 'wait@a-brokerage.example', switch_id: 's-wait', switch_at: PAST, notice_delivered: true }),
-  candidate({ user_id: 'u-opted', email: 'opted@a-brokerage.example' }),
+  candidate({ user_id: 'u-bill', email: 'bill@a-brokerage.example', switch_id: 's-bill', switch_at: PAST, notice_delivered: true, last_defer_reason: 'billing_setup_incomplete' }),
+  candidate({ user_id: 'u-dns', email: 'dns@a-brokerage.example', switch_id: 's-dns', switch_at: PAST, notice_delivered: true, last_defer_reason: 'dns_not_fresh' }),
+  candidate({ user_id: 'u-opted', email: 'opted@a-brokerage.example', attestation: null, convertible: false, reason: 'opted_out' }),
   candidate({ user_id: 'u-undeliv', email: 'undeliv@a-brokerage.example' }),
 ];
 
+// domain_capture_history rows (switch_id, claim_id, user_id, status, reason, switch_at, email, name, last_defer_reason)
+const hist = (over: Record<string, unknown>) => ({
+  switch_id: 's-h', claim_id: 'c1', user_id: 'u-h', status: 'cancelled', reason: null, switch_at: PAST,
+  email: 'h@a-brokerage.example', name: 'h@a-brokerage.example', last_defer_reason: null, ...over,
+});
 const ENDED = [
-  { claim_id: 'c1', user_id: 'u-opted', email_at_start: 'opted@a-brokerage.example', status: 'opted_out', reason: 'opted_out' },
-  { claim_id: 'c1', user_id: 'u-undeliv', email_at_start: 'undeliv@a-brokerage.example', status: 'cancelled', reason: 'notice_undelivered' },
-  { claim_id: 'c1', user_id: 'u-moved', email_at_start: 'moved@a-brokerage.example', status: 'switched', reason: null },
-  { claim_id: 'c1', user_id: 'u-susp', email_at_start: 'susp@a-brokerage.example', status: 'cancelled', reason: 'brokerage_suspended' },
+  hist({ switch_id: 's-live', user_id: 'u-sched', status: 'scheduled', email: 'sched@a-brokerage.example' }),
+  hist({ switch_id: 's-h1', user_id: 'u-opted', email: 'opted@a-brokerage.example', status: 'opted_out', reason: 'opted_out' }),
+  hist({ switch_id: 's-h2', user_id: 'u-undeliv', email: 'undeliv@a-brokerage.example', status: 'cancelled', reason: 'notice_undelivered' }),
+  hist({ switch_id: 's-h3', user_id: 'u-moved', email: 'moved@a-brokerage.example', name: 'Morgan Moved', status: 'switched' }),
+  hist({ switch_id: 's-h4', user_id: 'u-susp', email: 'susp@a-brokerage.example', status: 'cancelled', reason: 'brokerage_suspended' }),
+  hist({ switch_id: 's-h5', claim_id: 'c-other', user_id: 'u-elsewhere', email: 'x@other.example', status: 'switched' }),
 ];
 
 const claim = (over: Partial<DomainClaimView>): DomainClaimView => ({
@@ -69,20 +78,18 @@ const claim = (over: Partial<DomainClaimView>): DomainClaimView => ({
   lastCheckedAt: null, lastCheckResult: null, addedBy: null, ...over,
 });
 
-function historyReader(rows: unknown[]) {
-  const q: Record<string, unknown> = {};
-  for (const m of ['select', 'eq', 'neq', 'order']) q[m] = jest.fn(() => q);
-  q.limit = jest.fn(async () => ({ data: rows, error: null }));
-  return { from: jest.fn(() => q), q };
+function rpcFor(candidates: unknown[], history: unknown[]) {
+  return jest.fn(async (fn: string) => {
+    if (fn === 'domain_capture_candidates') return { data: { success: true, domain: 'a-brokerage.example', candidates }, error: null };
+    if (fn === 'domain_capture_history') return { data: { success: true, switches: history }, error: null };
+    return { data: null, error: { code: 'PGRST202' } };
+  });
 }
 
-async function loadView(candidates = CANDIDATES, ended = ENDED): Promise<CaptureDomainView[]> {
-  const rpc = jest.fn(async () => ({ data: { success: true, domain: 'a-brokerage.example', candidates }, error: null }));
-  const reader = historyReader(ended);
+async function loadView(candidates: unknown[] = CANDIDATES, ended: unknown[] = ENDED): Promise<CaptureDomainView[]> {
   const out = await loadCaptureSection(
-    { ok: true, supabase: { rpc } as never, userId: 'admin', organizationId: 'org-session' },
+    { ok: true, supabase: { rpc: rpcFor(candidates, ended) } as never, userId: 'admin', organizationId: 'org-session' },
     [claim({})],
-    { history: () => reader as never },
   );
   return out as CaptureDomainView[];
 }
@@ -96,12 +103,8 @@ beforeEach(() => {
 
 describe('loadCaptureSection gate', () => {
   it('a caller without domain access gets no section and nothing is read', async () => {
-    const rpc = jest.fn();
-    const history = jest.fn();
-    const out = await loadCaptureSection({ ok: false }, [claim({})], { history });
+    const out = await loadCaptureSection({ ok: false }, [claim({})]);
     expect(out).toBeNull();
-    expect(rpc).not.toHaveBeenCalled();
-    expect(history).not.toHaveBeenCalled();
   });
 
   it('no verified domain -> no section', async () => {
@@ -109,22 +112,24 @@ describe('loadCaptureSection gate', () => {
     const out = await loadCaptureSection(
       { ok: true, supabase: { rpc } as never, userId: 'admin', organizationId: 'org-session' },
       [claim({ status: 'pending' }), claim({ id: 'c2', status: 'lapsed' })],
-      { history: () => null },
     );
     expect(out).toBeNull();
     expect(rpc).not.toHaveBeenCalled();
   });
 
-  it('reads candidates with the session organization and the claim, history filtered to the same organization', async () => {
-    const rpc = jest.fn(async () => ({ data: { success: true, candidates: [] }, error: null }));
-    const reader = historyReader([]);
+  it('reads candidates and history on the session client with the session organization', async () => {
+    const rpc = rpcFor([], []);
     await loadCaptureSection(
       { ok: true, supabase: { rpc } as never, userId: 'admin', organizationId: 'org-session' },
       [claim({})],
-      { history: () => reader as never },
     );
     expect(rpc).toHaveBeenCalledWith('domain_capture_candidates', { p_org: 'org-session', p_claim: 'c1' });
-    expect(reader.q.eq).toHaveBeenCalledWith('organization_id', 'org-session');
+    expect(rpc).toHaveBeenCalledWith('domain_capture_history', { p_org: 'org-session' });
+  });
+
+  it('the page no longer uses the service client', () => {
+    const src = require('fs').readFileSync(require('path').join(__dirname, '../../app/dashboard/settings/domain/page.tsx'), 'utf8');
+    expect(src).not.toMatch(/createServiceClient|supabase\/service/);
   });
 
   it('a missing function shows the not-available state', async () => {
@@ -132,7 +137,6 @@ describe('loadCaptureSection gate', () => {
     const out = await loadCaptureSection(
       { ok: true, supabase: { rpc } as never, userId: 'admin', organizationId: 'org-session' },
       [claim({})],
-      { history: () => null },
     );
     expect(out?.[0].state).toBe('unavailable');
   });
@@ -148,16 +152,29 @@ describe('capture table', () => {
     expect(row('u-sched').getByText(`Scheduled for ${new Date(FUTURE).toLocaleDateString()}`)).toBeTruthy();
     expect(row('u-retry').getByText('The notice email is being retried.')).toBeTruthy();
     expect(row('u-wait').getByText('Waiting to move')).toBeTruthy();
+    expect(row('u-bill').getByText('Waiting on billing setup')).toBeTruthy();
+    expect(row('u-dns').getByText('Waiting on DNS re-check')).toBeTruthy();
     expect(row('u-opted').getByText('Opted out')).toBeTruthy();
+    expect(row('u-opted').getByText(CAPTURE_REASON_COPY.opted_out)).toBeTruthy();
     expect(row('u-undeliv').getByText('Cancelled — notice not delivered')).toBeTruthy();
     expect(row('u-moved').getByText('Switched')).toBeTruthy();
     expect(row('u-susp').getByText('Cancelled — brokerage suspended')).toBeTruthy();
+    expect(screen.queryByTestId('capture-row-u-elsewhere')).toBeNull();
+  });
+
+  it('shows the name with the email under it, or the email alone', async () => {
+    render(<CaptureSection domains={await loadView()} />);
+    expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual(['Select', 'Name', 'Status', 'Actions']);
+    const cells = row('u-can').getAllByRole('cell').map((c) => c.textContent);
+    expect(cells[1]).toBe('Casey Cancan@a-brokerage.example');
+    expect(row('u-moved').getByText('Morgan Moved')).toBeTruthy();
+    expect(row('u-can2').getAllByRole('cell')[1].textContent).toBe('can2@a-brokerage.example');
   });
 
   it('only convertible rows without a live or final move have a checkbox', async () => {
     render(<CaptureSection domains={await loadView()} />);
     const ticked = ['u-can', 'u-can2', 'u-undeliv'];
-    for (const id of ['u-can', 'u-can2', 'u-tenant', 'u-attest', 'u-sched', 'u-wait', 'u-opted', 'u-undeliv', 'u-moved', 'u-susp']) {
+    for (const id of ['u-can', 'u-can2', 'u-tenant', 'u-attest', 'u-sched', 'u-wait', 'u-bill', 'u-opted', 'u-undeliv', 'u-moved', 'u-susp']) {
       expect(row(id).queryAllByRole('checkbox')).toHaveLength(ticked.includes(id) ? 1 : 0);
     }
   });

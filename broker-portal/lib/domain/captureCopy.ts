@@ -18,6 +18,7 @@ export const CAPTURE_REASON_COPY: Record<string, string> = {
   no_attestation:
     'Only the email address matches. Keepr cannot confirm they sign in through your domain, so invite them instead.',
   already_scheduled: 'A move is already scheduled for them.',
+  opted_out: 'They chose to keep their personal account, so they will not be moved.',
 };
 
 export const CAPTURE_REASON_FALLBACK = 'Keepr cannot move this account automatically.';
@@ -56,8 +57,21 @@ export const CAPTURE_CAN_MOVE = 'Can move';
 export const CAPTURE_CANNOT_MOVE = "Can't move automatically";
 export const CAPTURE_EMPTY_TITLE = 'Nobody to move';
 export const CAPTURE_EMPTY_DESCRIPTION = 'No personal Keepr accounts use this domain.';
-export const CAPTURE_WAITING =
-  'Waiting to move. It runs once billing setup is finished and the domain check passes.';
+/** A scheduled move past its date, by the reason the hourly job last put it off. */
+export const CAPTURE_DEFER_LABEL: Record<string, string> = {
+  billing_not_ready: 'Waiting on billing setup',
+  billing_setup_incomplete: 'Waiting on billing setup',
+  dns_not_fresh: 'Waiting on DNS re-check',
+};
+export const CAPTURE_WAITING_LABEL = 'Waiting to move';
+export function captureDeferLabel(reason: string | null | undefined): string {
+  return (reason && CAPTURE_DEFER_LABEL[reason]) || CAPTURE_WAITING_LABEL;
+}
+export const CAPTURE_DEFER_DETAIL: Record<string, string> = {
+  billing_not_ready: 'Moving accounts is not available yet. It runs on its own once it is.',
+  billing_setup_incomplete: 'Finish the Billing step for this brokerage. The move runs on its own after that.',
+  dns_not_fresh: "Keepr could not re-check your domain's DNS record. It tries again every hour.",
+};
 export const CAPTURE_LOAD_FAILED = 'The list of people could not be loaded. Try again later.';
 
 export function captureScheduledLabel(dateText: string): string {

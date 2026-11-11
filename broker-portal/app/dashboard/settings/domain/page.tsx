@@ -16,7 +16,6 @@ import { requireDomainClaimAccess } from '@/lib/domain/access';
 import { loadDomainClaims } from '@/lib/domain/claimView';
 import DomainSettingsClient from './DomainSettingsClient';
 import { loadCaptureSection } from '@/lib/domain/captureView';
-import { createServiceClient } from '@/lib/supabase/service';
 import CaptureSection from './CaptureSection';
 
 export const dynamic = 'force-dynamic';
@@ -33,9 +32,7 @@ export default async function DomainSettingsPage() {
 
   const loaded = await loadDomainClaims(access.supabase, access.organizationId);
   // BACKLOG-3962 PR3b: shown only with at least one verified domain (null otherwise).
-  const capture = await loadCaptureSection(access, loaded.ok ? loaded.claims : [], {
-    history: () => createServiceClient(),
-  });
+  const capture = await loadCaptureSection(access, loaded.ok ? loaded.claims : []);
 
   return (
     <>

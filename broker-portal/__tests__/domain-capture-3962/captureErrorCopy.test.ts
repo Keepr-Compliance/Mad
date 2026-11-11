@@ -91,7 +91,7 @@ describe('reason copy', () => {
   // Every `no:<code>` _domain_capture_eval returns, plus start's already_scheduled.
   const CODES = [
     'no_user', 'email_domain', 'not_personal', 'brokerage_member', 'no_tenant',
-    'foreign_tenant', 'no_attestation', 'already_scheduled',
+    'foreign_tenant', 'no_attestation', 'already_scheduled', 'opted_out',
   ];
   it.each(CODES)('%s has its own copy', (code) => {
     expect(CAPTURE_REASON_COPY[code]).toBeTruthy();

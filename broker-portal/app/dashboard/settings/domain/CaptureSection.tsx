@@ -36,7 +36,8 @@ import {
   CAPTURE_NOTICE_RETRYING,
   CAPTURE_SECTION_INTRO,
   CAPTURE_SECTION_TITLE,
-  CAPTURE_WAITING,
+  CAPTURE_DEFER_DETAIL,
+  captureDeferLabel,
   captureEndedLabel,
   captureReasonCopy,
   captureScheduledLabel,
@@ -57,7 +58,13 @@ interface Notice {
 function rowStatus(row: CaptureRow, now: number): { label: string; hue: BadgeHue; detail: string | null } {
   if (row.switchId && row.switchAt) {
     const due = new Date(row.switchAt).getTime();
-    if (!Number.isNaN(due) && due <= now) return { label: 'Waiting to move', hue: 'yellow', detail: CAPTURE_WAITING };
+    if (!Number.isNaN(due) && due <= now) {
+      return {
+        label: captureDeferLabel(row.lastDeferReason),
+        hue: 'yellow',
+        detail: (row.lastDeferReason && CAPTURE_DEFER_DETAIL[row.lastDeferReason]) || null,
+      };
+    }
     return {
       label: captureScheduledLabel(formatCaptureDate(row.switchAt)),
       hue: 'yellow',
@@ -160,7 +167,7 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
                 <Th>
                   <span className="sr-only">Select</span>
                 </Th>
-                <Th>Email</Th>
+                <Th>Name</Th>
                 <Th>Status</Th>
                 <Th>Actions</Th>
               </tr>
@@ -182,7 +189,10 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
                         />
                       )}
                     </Td>
-                    <Td>{row.email}</Td>
+                    <Td>
+                      <div className="text-sm text-gray-900">{row.name}</div>
+                      {row.name !== row.email && <div className="text-xs text-gray-500">{row.email}</div>}
+                    </Td>
                     <Td>
                       <Badge hue={status.hue}>{status.label}</Badge>
                       {status.detail && <p className="mt-1 text-xs text-gray-500">{status.detail}</p>}
