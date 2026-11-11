@@ -271,7 +271,7 @@ beforeAll(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   databaseService = require("../../services/databaseService").default;
 
-  registerTransactionExportHandlers(null);
+  registerTransactionExportHandlers({ startSubmissionSync: false });
 });
 
 afterAll(() => {

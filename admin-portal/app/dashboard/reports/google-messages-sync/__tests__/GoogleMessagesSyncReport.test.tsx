@@ -49,11 +49,22 @@ const ROWS = [
   row({ id: 'run-2', outcome: 'error', reason_code: 'phone_unreachable', created_at: '2026-10-02T10:00:00.000Z' }),
 ];
 
+/**
+ * The page without the charts' screen-reader tables (BACKLOG-4208). The charts
+ * render above the runs table, and their hidden tables repeat day labels and
+ * numbers, so a content check on the whole page could pass on a chart's copy.
+ */
+function outsideChartTables(html: string): string {
+  return html.replace(/<table class="sr-only">[\s\S]*?<\/table>/g, '');
+}
+
 describe('GoogleMessagesSyncReport', () => {
   it('the GM columns, the breakdown in the user’s words, the shared charts', () => {
-    const html = renderToStaticMarkup(
+    const page = renderToStaticMarkup(
       <GoogleMessagesSyncReport report={buildGoogleMessagesSyncReport(ROWS, [])} period={WEEK} rowCap={200} />
     );
+    expect(page).toContain('<table class="sr-only">');
+    const html = outsideChartTables(page);
     for (const header of ['Chats', 'Messages', 'Hidden %', 'p90 per chat', 'Failure code']) expect(html).toContain(header);
     for (const iphoneOnly of ['Backup', 'Rate', 'MB/s', 'not measured']) expect(html).not.toContain(iphoneOnly);
     expect(html).toContain('38');
@@ -66,7 +77,9 @@ describe('GoogleMessagesSyncReport', () => {
   });
 
   it('an empty period: a real zero, and nothing to break down', () => {
-    const html = renderToStaticMarkup(<GoogleMessagesSyncReport report={buildGoogleMessagesSyncReport([], [])} period={WEEK} rowCap={200} />);
+    const html = outsideChartTables(
+      renderToStaticMarkup(<GoogleMessagesSyncReport report={buildGoogleMessagesSyncReport([], [])} period={WEEK} rowCap={200} />)
+    );
     expect(html).toContain('No finished runs in this period');
     expect(html).toContain('Every run in this view completed.');
   });

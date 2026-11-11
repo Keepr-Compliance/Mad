@@ -163,7 +163,7 @@ beforeEach(async () => {
   mockSession = { user: { id: SESSION_USER } };
   registeredHandlers.clear();
   resetOpenTempCleanupForTests();
-  registerAttachmentHandlers(null);
+  registerAttachmentHandlers();
   jest.clearAllMocks();
 });
 

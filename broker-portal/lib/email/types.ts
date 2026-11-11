@@ -435,3 +435,15 @@ export interface PaymentFailedParams {
   outboxKey: string;
   organizationId: string;
 }
+
+/** BACKLOG-3850: the personal Agent plan was ended because the member joined a brokerage. */
+export interface AgentPlanEndedParams {
+  recipientEmail: string;
+  brokerageName: string;
+  /** license_status 'active' at send time: the brokerage covers the account. Otherwise the unlicensed copy. */
+  licensed: boolean;
+  /** Absolute URL of the public support ticket form (<portal base>/support/new). */
+  supportUrl: string;
+  outboxKey: string;
+  userId: string;
+}

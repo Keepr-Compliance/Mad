@@ -261,7 +261,7 @@ describe("transactions:get-attachment-counts — closing-day window (BACKLOG-278
     createSchema(mockDb);
     seed(mockDb);
     registeredHandlers.clear();
-    registerAttachmentHandlers(null);
+    registerAttachmentHandlers();
   });
 
   afterEach(() => {

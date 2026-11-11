@@ -195,9 +195,12 @@ export function buildCorpus(): CorpusCase[] {
   add("minCensusLinkedEmails: 1.5", T("minCensusLinkedEmails", 1.5), false);
   add("minCensusLinkedEmails: string", T("minCensusLinkedEmails", "20"), false);
   add("minCensusLinkedEmails: null", T("minCensusLinkedEmails", null), false);
+  add("minCensusLinkedEmails: 2^53-1", T("minCensusLinkedEmails", 9007199254740991), true);
+  add("minCensusLinkedEmails: 2^53", T("minCensusLinkedEmails", 9007199254740992), false);
   add("reportSendIntervalHours: 1", T("reportSendIntervalHours", 1), true);
   add("reportSendIntervalHours: 0", T("reportSendIntervalHours", 0), false);
   add("reportSendIntervalHours: null", T("reportSendIntervalHours", null), false);
+  add("reportSendIntervalHours: 2^53-1", T("reportSendIntervalHours", 9007199254740991), true);
   add("reportSendIntervalHours: 2^53", T("reportSendIntervalHours", 9007199254740992), false);
   add("reportMaxRows: 1", T("reportMaxRows", 1), true);
   add("reportMaxRows: 500", T("reportMaxRows", 500), true);

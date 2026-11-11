@@ -4,7 +4,7 @@
 // Handles: Outlook OAuth, email export, authentication
 // ============================================
 
-import { ipcMain, shell, BrowserWindow } from "electron";
+import { ipcMain, shell } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 
 // Import services
@@ -21,7 +21,7 @@ let handlersRegistered = false;
 /**
  * Register Outlook integration IPC handlers
  */
-export function registerOutlookHandlers(_mainWindow: BrowserWindow): void {
+export function registerOutlookHandlers(): void {
   // Prevent double registration
   if (handlersRegistered) {
     logService.warn(

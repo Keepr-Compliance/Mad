@@ -343,7 +343,9 @@ describe("BACKLOG-3952 — read-only database at startup", () => {
     expect(mockRenameSync).not.toHaveBeenCalled();
     expect(mockShowMessageBox).toHaveBeenCalledTimes(1);
     expect(mockShowMessageBox).toHaveBeenCalledWith(NOT_WRITABLE_DIALOG("migration"));
-    expect(mockCloseDb).toHaveBeenCalled();
+    // BACKLOG-2836: the handle is unpublished while migrations run, so the
+    // opened handle itself is closed (closeDb is never reached).
+    expect(mockDbClose).toHaveBeenCalled();
     expect(service.isInitialized()).toBe(false);
     // R4: the migration_failure event carries the code.
     expect(mockCaptureException).toHaveBeenCalledWith(

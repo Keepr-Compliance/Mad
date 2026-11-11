@@ -3,7 +3,7 @@
  * Handles Gmail mailbox connection flows (sign-in is the browser deep link)
  */
 
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain } from "electron";
 
 // Import services
 import databaseService from "../services/databaseService";
@@ -19,6 +19,7 @@ import { getValidUserId } from "../utils/userIdHelper";
 import { bringAppToFront } from "../utils/bringAppToFront";
 
 import { sendToMainWindow, getMainWindow } from "../windowRegistry";
+import { isAuthAttemptSuperseded } from "../services/authAttemptSuperseded";
 
 // Module-level storage for PKCE code verifiers between split IPC handlers
 // Key: flow type ("mailbox"), Value: codeVerifier
@@ -39,7 +40,6 @@ interface MailboxConnectionResponse extends AuthResponse {
  * Google Auth: Connect mailbox (Gmail access)
  */
 export async function handleGoogleConnectMailbox(
-  _mainWindow: BrowserWindow | null,
   userId: string
 ): Promise<MailboxConnectionResponse> {
   try {
@@ -226,6 +226,12 @@ export async function handleGoogleConnectMailbox(
             );
           });
       } catch (error) {
+        // BACKLOG-3283 Path 3: a newer connect replaced this one. Say nothing to
+        // the renderer — its listener belongs to the newer attempt now.
+        if (isAuthAttemptSuperseded(error)) {
+          await logService.info("Google mailbox connect superseded by a newer attempt", "AuthHandlers");
+          return;
+        }
         await logService.error(
           "Google mailbox connection failed",
           "AuthHandlers",
@@ -284,11 +290,9 @@ export async function handleGoogleConnectMailbox(
 /**
  * Register all Google authentication handlers
  */
-export function registerGoogleAuthHandlers(
-  _mainWindow: BrowserWindow | null
-): void {
+export function registerGoogleAuthHandlers(): void {
   // Google Auth - Mailbox Connection
   ipcMain.handle("auth:google:connect-mailbox", (_event, userId: string) =>
-    handleGoogleConnectMailbox(_mainWindow, userId)
+    handleGoogleConnectMailbox(userId)
   );
 }

@@ -180,7 +180,7 @@ const fakeCloud = {
 };
 
 beforeAll(() => {
-  registerTransactionExportHandlers(null);
+  registerTransactionExportHandlers({ startSubmissionSync: false });
 });
 
 beforeEach(() => {

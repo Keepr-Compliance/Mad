@@ -27,13 +27,13 @@ import { registerAuthHandlers } from "../authHandlers";
 
 describe("idle check startup (BACKLOG-3833)", () => {
   it("registerAuthHandlers starts the once-a-minute idle check, with the session channels", () => {
-    registerAuthHandlers(null);
+    registerAuthHandlers();
     expect(mockRegisterSession).toHaveBeenCalledTimes(1);
     expect(mockStart).toHaveBeenCalledTimes(1);
   });
 
   it("main.ts calls registerAuthHandlers", () => {
     const main = fs.readFileSync(path.join(__dirname, "..", "..", "main.ts"), "utf8");
-    expect(main).toMatch(/^\s*registerAuthHandlers\(mainWindow!?\);/m);
+    expect(main).toMatch(/^\s*registerAuthHandlers\(\);/m);
   });
 });

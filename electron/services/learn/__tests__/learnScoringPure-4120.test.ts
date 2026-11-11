@@ -6,7 +6,9 @@
  * scoring arithmetic, Copy block aggregates only, analyzeEmail timing guard.
  *
  * Every address is synthetic (street "Canarytest", city "Testville", state
- * "ZZ", ZIP 00000/99999). Detection keys are NOT written by hand: they are
+ * "ZZ", ZIP 00000/99999). Text fed to the real extractor uses state "WA": since
+ * BACKLOG-4225 the extractor only reads a real US state code, so "ZZ" there
+ * would come out as the street alone. Detection keys are NOT written by hand: they are
  * produced by running the real `analyzeEmail` on synthetic text (C3), and the
  * test asserts each shape it relies on actually came out of the extractor.
  */
@@ -101,15 +103,16 @@ describe("C2 answer key = hand-entered deals only", () => {
 describe("C3 match rule on real analyzeEmail output", () => {
   const TX = "4120 Canarytest Lane, Testville, ZZ 00000";
   const shapes = {
-    withCommas: "Offer accepted on 4120 Canarytest Lane, Testville, ZZ 00000. Escrow closing, buyer inspection done.",
-    commaLess: "Offer accepted on 4120 Canarytest Lane Testville ZZ 00000 closing escrow buyer inspection",
-    lineBreak: "Offer accepted for\n4120 Canarytest Lane\nTestville, ZZ 00000\nclosing escrow buyer inspection",
-    stAbbrev: "Listing agreement for 4120 Canarytest St, Testville, ZZ 00000 seller closing escrow",
+    withCommas: "Offer accepted on 4120 Canarytest Lane, Testville, WA 00000. Escrow closing, buyer inspection done.",
+    commaLess: "Offer accepted on 4120 Canarytest Lane Testville WA 00000 closing escrow buyer inspection",
+    lineBreak: "Offer accepted for\n4120 Canarytest Lane\nTestville, WA 00000\nclosing escrow buyer inspection",
+    stAbbrev: "Listing agreement for 4120 Canarytest St, Testville, WA 00000 seller closing escrow",
   };
 
-  it("the extractor really emits a comma-less key and a line-break key (fixture shapes are not invented)", () => {
-    expect(extracted(shapes.commaLess)).toBe("4120 canarytest lane testville zz 00000");
-    expect(extracted(shapes.lineBreak)).toBe("4120 canarytest lane\ntestville, zz 00000");
+  it("the extractor really emits a comma-less key and a city-line-below key (fixture shapes are not invented)", () => {
+    expect(extracted(shapes.commaLess)).toBe("4120 canarytest lane testville wa 00000");
+    // BACKLOG-4225: a city line under the street comes out on one line, after ", ".
+    expect(extracted(shapes.lineBreak)).toBe("4120 canarytest lane, testville, wa 00000");
   });
 
   it.each(Object.entries(shapes))("%s matches the hand-entered address", (_name, body) => {
@@ -117,7 +120,7 @@ describe("C3 match rule on real analyzeEmail output", () => {
   });
 
   it("Rd / Road Southwest: same street", () => {
-    const det = extracted("Escrow closing for 3414 Examplecanary Rd, Testville, ZZ 00000 buyer offer");
+    const det = extracted("Escrow closing for 3414 Examplecanary Rd, Testville, WA 00000 buyer offer");
     expect(sameStreet(det, "3414 Examplecanary Road Southwest", "00000")).toBe(true);
   });
 
@@ -472,8 +475,8 @@ describe("scoring arithmetic", () => {
 
   it("two detections of ONE deal (groupByProperty keys by exact string) count one deal found", () => {
     // Both keys are real analyzeEmail output for the same street (C3 shapes).
-    const withCommas = extracted("Offer accepted on 4120 Canarytest Lane, Testville, ZZ 00000. Escrow closing, buyer.");
-    const commaLess = extracted("Offer accepted on 4120 Canarytest Lane Testville ZZ 00000 closing escrow buyer");
+    const withCommas = extracted("Offer accepted on 4120 Canarytest Lane, Testville, WA 00000. Escrow closing, buyer.");
+    const commaLess = extracted("Offer accepted on 4120 Canarytest Lane Testville WA 00000 closing escrow buyer");
     expect(withCommas).not.toBe(commaLess);
     const dup = scoreRun(run([det("d1", withCommas), det("d2", commaLess)]), [keyRow()], [], [], 0, EMPTY_CENSUS);
     expect([dup.trueDetections, dup.found, dup.missed]).toEqual([2, 1, 0]);
@@ -483,8 +486,8 @@ describe("scoring arithmetic", () => {
 
   it("one deal split into two detections, one cleanup Yes: counts ONE deal in recall, per-detection in precision", () => {
     // Both addresses are real analyzeEmail output (C3 shapes) and share one addressKey.
-    const withCommas = extracted("Offer accepted on 4120 Canarytest Lane, Testville, ZZ 00000. Escrow closing, buyer.");
-    const commaLess = extracted("Offer accepted on 4120 Canarytest Lane Testville ZZ 00000 closing escrow buyer");
+    const withCommas = extracted("Offer accepted on 4120 Canarytest Lane, Testville, WA 00000. Escrow closing, buyer.");
+    const commaLess = extracted("Offer accepted on 4120 Canarytest Lane Testville WA 00000 closing escrow buyer");
     expect(addressKey(withCommas)).toBe(addressKey(commaLess));
     const yes = [{ address_key: addressKey(withCommas) as string, answer: "yes" as const, rule_version: 1 }];
     const s2 = scoreRun(run([det("d1", withCommas), det("d2", commaLess)]), [], yes, [], 0, EMPTY_CENSUS);

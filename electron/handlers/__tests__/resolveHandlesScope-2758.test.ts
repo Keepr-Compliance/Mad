@@ -115,6 +115,7 @@ jest.mock("../../services/contactLinkingScheduler", () => ({
   configureContactLinking: jest.fn(),
   requestContactLinking: jest.fn(),
   runContactLinkingNow: jest.fn(),
+  runContactLinkingScopedNow: jest.fn(),
 }));
 jest.mock("../../services/db/contactSourceLinkDbService", () => ({
   __esModule: true,
@@ -223,7 +224,7 @@ function scopeSentToResolver(): { userId?: unknown; transactionId?: unknown } {
 
 describe("BACKLOG-2758 — contacts:resolve-handles carries a transaction scope", () => {
   beforeAll(() => {
-    registerContactHandlers({} as never);
+    registerContactHandlers();
   });
 
   beforeEach(() => {

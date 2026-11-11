@@ -22,7 +22,12 @@ describe("main.ts session idle hooks (BACKLOG-3833)", () => {
   it("the idle clock is restarted only from the Reload callback", () => {
     const calls = [...MAIN.matchAll(/sessionSecurityService\.\w+\(/g)].map((m) => m[0]);
     expect(calls).toEqual(["sessionSecurityService.noteUserReload("]);
-    const reloadBlock = MAIN.match(/reload:\s*\(\)\s*=>\s*\{[\s\S]*?\n\s*\},/);
-    expect(reloadBlock?.[0]).toContain("sessionSecurityService.noteUserReload()");
+    // BACKLOG-3456: the Reload callback moved to bootstrap/attachWindowRecovery.ts
+    // (per window); main.ts hands it the idle hook as `noteUserReload`.
+    expect(MAIN).toMatch(/noteUserReload:\s*\(\)\s*=>\s*sessionSecurityService\.noteUserReload\(\)/);
+    const RECOVERY = fs.readFileSync(path.resolve(__dirname, "../bootstrap/attachWindowRecovery.ts"), "utf8");
+    expect([...RECOVERY.matchAll(/deps\.noteUserReload\(/g)]).toHaveLength(1);
+    const reloadBlock = RECOVERY.match(/reload:\s*\(\)\s*=>\s*\{[\s\S]*?\n\s*\},/);
+    expect(reloadBlock?.[0]).toContain("deps.noteUserReload()");
   });
 });

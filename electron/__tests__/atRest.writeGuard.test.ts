@@ -110,7 +110,7 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
       "`.backup` if the migration fails. Allowed as a legacy path: it runs only on a database that is still " +
       "plaintext, and the plaintext `.backup` is deleted once the migration succeeds",
   },
-  "electron/services/sqliteBackupService.ts": { count: 4, reason: SQLCIPHER },
+  "electron/services/sqliteBackupService.ts": { count: 5, reason: `${SQLCIPHER}; BACKLOG-3298 adds 1 rename: the safety copy is renamed to mad-before-restore-<time>.db on success` },
   "electron/services/databaseEncryptionService.ts": { count: 3, reason: `${SEALED} (DB key store)` },
   // --- already sealed ---------------------------------------------------------------
   "electron/services/sessionService.ts": { count: 1, reason: `${SEALED} (session file via encryptSessionData, written to a tmp file — BACKLOG-3833)` },
@@ -125,6 +125,7 @@ const WRITER_ALLOWLIST: Record<string, Entry> = {
   "electron/services/featureGateService.ts": { count: 1, reason: `${META} (feature flag cache)` },
   "electron/services/licenseService.ts": { count: 1, reason: `${META} (license status cache)` },
   "electron/services/crashReportingPreference.ts": { count: 1, reason: `${META} (crash reporting on/off)` },
+  "electron/services/diagnosticsSharingPreference.ts": { count: 1, reason: `${META} (diagnostics sharing on/off + random diagnostics device id, BACKLOG-4181)` },
   // --- not under userData -------------------------------------------------------------
   "electron/services/appCleanupService.ts": { count: 1, reason: "uninstall helper script in the temp dir; no customer content" },
   "electron/services/appleDriverService.ts": { count: 2, reason: "Apple driver installer copy/download in the temp dir; no customer content" },

@@ -105,7 +105,8 @@ const USER = "user-4120-a";
 const OTHER = "user-4120-b";
 const NOW = Date.UTC(2026, 10, 1, 12); // 2026-11-01
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const CANARY_ADDRESS = "4120 Canarytest Lane, Testville, ZZ 00000";
+// BACKLOG-4225: state "WA" (ZIP still synthetic) in text the real extractor reads; it only takes a real US state code.
+const CANARY_ADDRESS = "4120 Canarytest Lane, Testville, WA 00000";
 const CANARY_SUBJECT = "Canarysubject offer accepted";
 
 const run = (q: string, ...p: unknown[]) => db.prepare(q).run(...(p as never[]));
@@ -215,7 +216,7 @@ describe("C10 learn tables: CHECKs, ids, timestamps, soft removal", () => {
     expect([typeof b.created_at, typeof b.updated_at, b.rule_version, b.answer, b.deleted_at]).toEqual([
       "string",
       "string",
-      2,
+      3, // LEARN_RULE_VERSION (v3 since BACKLOG-4225)
       null,
       null,
     ]);
@@ -342,12 +343,12 @@ describe("N1 / N2 / P2 a full Learn mode session", () => {
     seedEmail({
       sentAt: "2026-06-02T10:00:00.000Z",
       subject: "Escrow",
-      body: "Purchase agreement for 900 Canarytest Court, Testville, ZZ 00000, escrow closing, buyer offer.",
+      body: "Purchase agreement for 900 Canarytest Court, Testville, WA 00000, escrow closing, buyer offer.",
     });
     seedEmail({
       sentAt: "2026-06-03T10:00:00.000Z",
       subject: "Escrow",
-      body: "Listing agreement for 901 Canarytest Court, Testville, ZZ 00000, escrow closing, seller offer.",
+      body: "Listing agreement for 901 Canarytest Court, Testville, WA 00000, escrow closing, seller offer.",
     });
     for (let i = 0; i < 5; i++) seedEmail({ sentAt: `2026-06-1${i}T10:00:00.000Z` });
 

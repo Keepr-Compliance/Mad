@@ -53,13 +53,17 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+// BACKLOG-4186: the sidebar also asks report_my_access('sender-rules') (AI section); these tests
+// count only the Reports link's call.
+const listCalls = () => state.calls.filter((fn) => fn === 'report_list_my_reports');
+
 const aside = () => document.querySelector('[data-testid="desktop-sidebar"]') as HTMLElement;
 const reportsLinks = () => within(aside()).queryAllByRole('link').filter((a) => a.getAttribute('href') === '/dashboard/reports');
 
 describe('G4 the Reports link follows my report list', () => {
   it('hidden when the list is empty', async () => {
     render(<Sidebar collapsed={false} onToggle={vi.fn()} />);
-    await waitFor(() => expect(state.calls).toEqual(['report_list_my_reports']));
+    await waitFor(() => expect(listCalls()).toEqual(['report_list_my_reports']));
     expect(reportsLinks()).toHaveLength(0);
     // Other analytics.view-free links still render: the aside is not empty.
     expect(within(aside()).getByRole('link', { name: 'Dashboard' })).toBeTruthy();
@@ -76,7 +80,7 @@ describe('G4 the Reports link follows my report list', () => {
     state.list = [{ report_key: 'funnel', access: 'viewer' }];
     state.error = { code: 'PGRST202', message: 'Could not find the function' };
     render(<Sidebar collapsed={false} onToggle={vi.fn()} />);
-    await waitFor(() => expect(state.calls).toHaveLength(1));
+    await waitFor(() => expect(listCalls()).toHaveLength(1));
     expect(reportsLinks()).toHaveLength(0);
   });
 });

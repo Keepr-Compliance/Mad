@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { Users, MoreVertical, ExternalLink, Ban, CheckCircle, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { Users, MoreVertical, ExternalLink, Ban, CheckCircle, ArrowUpDown, ArrowUp, ArrowDown, Shield } from 'lucide-react';
 import {
   Button,
   Checkbox,
@@ -18,6 +18,7 @@ import {
 import { suspendUser, unsuspendUser } from '@/lib/admin-queries';
 import { formatDate } from '@/lib/format';
 import { startNavigationProgress } from '@/components/pwa/NavigationProgress';
+import { ChangeMemberRoleDialog, type ChangeMemberRoleTarget } from '@/components/shared/ChangeMemberRoleDialog';
 type MemberLicenseStatus = 'pending' | 'active' | 'expired' | 'suspended';
 
 export interface MemberRow {
@@ -32,6 +33,12 @@ export interface MemberRow {
 
 interface MembersTableProps {
   members: MemberRow[];
+  /** BACKLOG-3976: the organization these members belong to (the role change targets it). */
+  organizationId: string;
+  /** BACKLOG-3976: the viewer holds users.edit. The server checks it again on every change. */
+  canEditRole?: boolean;
+  /** BACKLOG-4170: the viewer holds users.suspend (row Suspend/Unsuspend, selection and bulk actions). */
+  canSuspend?: boolean;
 }
 
 type SortField = 'name' | 'email' | 'role' | 'license' | 'joined';
@@ -117,10 +124,14 @@ function classifyLicense(status: string | null): LicenseCategory {
 function RowActionMenu({
   member,
   onSuspendToggle,
+  onChangeRole,
   loading,
 }: {
   member: MemberRow;
-  onSuspendToggle: (userId: string, isSuspended: boolean) => void;
+  /** Present only when the viewer holds users.suspend (BACKLOG-4170). */
+  onSuspendToggle?: (userId: string, isSuspended: boolean) => void;
+  /** Present only when the viewer may change roles (BACKLOG-3976). */
+  onChangeRole?: (member: MemberRow) => void;
   loading: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -171,6 +182,22 @@ function RowActionMenu({
               <ExternalLink className="h-3.5 w-3.5" />
               View User Detail
             </button>
+            {onChangeRole && (
+              <button
+                type="button"
+                disabled={loading}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen(false);
+                  onChangeRole(member);
+                }}
+                className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2 disabled:opacity-50"
+              >
+                <Shield className="h-3.5 w-3.5" />
+                Change Role
+              </button>
+            )}
+            {onSuspendToggle && (
             <button
               type="button"
               disabled={loading}
@@ -197,6 +224,7 @@ function RowActionMenu({
                 </>
               )}
             </button>
+            )}
           </div>
         </>
       )}
@@ -204,7 +232,7 @@ function RowActionMenu({
   );
 }
 
-export function MembersTable({ members }: MembersTableProps) {
+export function MembersTable({ members, organizationId, canEditRole = false, canSuspend = false }: MembersTableProps) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
@@ -220,6 +248,9 @@ export function MembersTable({ members }: MembersTableProps) {
     label: string;
   } | null>(null);
   const [confirmReason, setConfirmReason] = useState('');
+
+  // BACKLOG-3976: change one member's role (dialog shared with the user detail page).
+  const [roleTarget, setRoleTarget] = useState<ChangeMemberRoleTarget | null>(null);
 
   // License summary counts (always from full members list)
   const licenseSummary = useMemo(() => {
@@ -367,6 +398,28 @@ export function MembersTable({ members }: MembersTableProps) {
     router.refresh();
   }, [confirmAction, confirmReason, router]);
 
+  const openRoleDialog = useCallback(
+    (member: MemberRow) => {
+      setMessage(null);
+      setRoleTarget({
+        organizationId,
+        userId: member.user_id,
+        name: member.display_name || member.email,
+        role: member.role,
+      });
+    },
+    [organizationId]
+  );
+
+  const handleRoleChanged = useCallback(
+    (target: ChangeMemberRoleTarget, roleLabel: string) => {
+      setRoleTarget(null);
+      setMessage({ type: 'success', text: `Changed ${target.name || 'Member'}'s role to ${roleLabel}.` });
+      router.refresh();
+    },
+    [router]
+  );
+
   const handleSuspendToggle = useCallback(
     (userId: string, isSuspended: boolean) => {
       openConfirm(isSuspended ? 'unsuspend' : 'suspend', [userId]);
@@ -432,8 +485,8 @@ export function MembersTable({ members }: MembersTableProps) {
         </div>
       )}
 
-      {/* Bulk action bar */}
-      {someSelected && (
+      {/* Bulk action bar (users.suspend, BACKLOG-4170) */}
+      {canSuspend && someSelected && (
         <div className="mb-3 flex items-center gap-3 rounded-lg bg-primary-50 border border-primary-200 px-4 py-2.5">
           <span className="text-sm font-medium text-primary-800">
             {selected.size} selected
@@ -498,13 +551,15 @@ export function MembersTable({ members }: MembersTableProps) {
         <Table>
           <TableHead>
             <tr>
-              <th className="w-10 px-3 py-3">
-                <Checkbox
-                  checked={allSelected}
-                  onChange={toggleAll}
-                  aria-label="Select all members"
-                />
-              </th>
+              {canSuspend && (
+                <th className="w-10 px-3 py-3">
+                  <Checkbox
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    aria-label="Select all members"
+                  />
+                </th>
+              )}
               {([
                 ['name', 'Name'],
                 ['email', 'Email'],
@@ -539,13 +594,15 @@ export function MembersTable({ members }: MembersTableProps) {
                 }}
                 className={selected.has(member.user_id) ? 'bg-primary-50/50' : ''}
               >
-                <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>
-                  <Checkbox
-                    checked={selected.has(member.user_id)}
-                    onChange={() => toggleOne(member.user_id)}
-                    aria-label={`Select ${member.display_name || member.email}`}
-                  />
-                </td>
+                {canSuspend && (
+                  <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>
+                    <Checkbox
+                      checked={selected.has(member.user_id)}
+                      onChange={() => toggleOne(member.user_id)}
+                      aria-label={`Select ${member.display_name || member.email}`}
+                    />
+                  </td>
+                )}
                 <Td>
                   <div className="flex items-center gap-3">
                     <UserInitials name={member.display_name} />
@@ -570,7 +627,8 @@ export function MembersTable({ members }: MembersTableProps) {
                 <td className="px-3 py-4" onClick={(e) => e.stopPropagation()}>
                   <RowActionMenu
                     member={member}
-                    onSuspendToggle={handleSuspendToggle}
+                    onSuspendToggle={canSuspend ? handleSuspendToggle : undefined}
+                    onChangeRole={canEditRole ? openRoleDialog : undefined}
                     loading={loading}
                   />
                 </td>
@@ -659,6 +717,13 @@ export function MembersTable({ members }: MembersTableProps) {
           </div>
         )}
       </dialog>
+
+      {/* Change role dialog (BACKLOG-3976) */}
+      <ChangeMemberRoleDialog
+        target={roleTarget}
+        onClose={() => setRoleTarget(null)}
+        onChanged={handleRoleChanged}
+      />
     </>
   );
 }

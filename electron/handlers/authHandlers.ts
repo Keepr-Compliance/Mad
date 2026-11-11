@@ -10,7 +10,6 @@
  * - handlers/sharedAuthHandlers.ts - Cross-provider handlers (pending login, mailbox disconnect)
  */
 
-import type { BrowserWindow } from "electron";
 import * as Sentry from "@sentry/electron/main";
 
 // Import services for initializeDatabase
@@ -50,11 +49,11 @@ export const initializeDatabase = async (): Promise<void> => {
     // LOGIN entry inside that transaction, which throws (and rolls the sign-in
     // back) while this service is uninitialized. Before 3340 this ran after the
     // awaited iPhone-sync sweep below, a window of seconds.
-    // Remaining window (pre-existing, not closed here): databaseService sets its
-    // connection before it awaits its own migrations, so isInitialized() is
-    // already true while they run. A sign-in that lands then fails closed (no
-    // LOGIN, rolled back, the next sign-in provisions); before 3340 it
-    // provisioned against a half-migrated schema. No jest control covers it.
+    // BACKLOG-2836 closed the window that remained here: databaseService now
+    // publishes its connection only after its migrations succeed, so
+    // isInitialized() is false while they run and a sign-in that lands then is
+    // deferred (main.ts setPendingDeepLinkUser) instead of provisioning against
+    // a half-migrated schema. Control: C5 in databaseService.restoreRerun-2834.
     auditService.initialize(databaseService, supabaseService);
     await logService.debug("Database initialized", "AuthHandlers");
 
@@ -97,18 +96,18 @@ export const initializeDatabase = async (): Promise<void> => {
  * Register all authentication handlers
  * This is the main entry point called from main.ts
  */
-export function registerAuthHandlers(_mainWindow: BrowserWindow | null): void {
+export function registerAuthHandlers(): void {
   // Google OAuth handlers (login, mailbox connection)
-  registerGoogleAuthHandlers(_mainWindow);
+  registerGoogleAuthHandlers();
 
   // Microsoft OAuth handlers (login, mailbox connection)
-  registerMicrosoftAuthHandlers(_mainWindow);
+  registerMicrosoftAuthHandlers();
 
   // Session handlers (logout, terms, validation)
   registerSessionHandlers();
 
   // Shared handlers (pending login completion, mailbox disconnect)
-  registerSharedAuthHandlers(_mainWindow);
+  registerSharedAuthHandlers();
 
   // BACKLOG-3833: the once-a-minute idle check. Started here, with the auth
   // channels it belongs to, so the app cannot have one without the other.

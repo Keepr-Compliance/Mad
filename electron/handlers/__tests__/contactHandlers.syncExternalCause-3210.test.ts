@@ -126,6 +126,7 @@ jest.mock("../../services/contactLinkingScheduler", () => ({
   configureContactLinking: jest.fn(),
   requestContactLinking: jest.fn(),
   runContactLinkingNow: jest.fn(),
+  runContactLinkingScopedNow: jest.fn(),
 }));
 jest.mock("../../services/db/contactSourceLinkDbService", () => ({
   __esModule: true,
@@ -256,7 +257,7 @@ const PERMISSION_DENIED = {
 
 describe("BACKLOG-3210: contacts:syncExternal reports the real cause of an empty read", () => {
   beforeAll(() => {
-    registerContactHandlers({} as never);
+    registerContactHandlers();
   });
 
   beforeEach(() => {

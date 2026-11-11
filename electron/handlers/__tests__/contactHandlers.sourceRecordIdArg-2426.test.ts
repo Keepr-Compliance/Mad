@@ -90,6 +90,7 @@ jest.mock("../../services/contactLinkingScheduler", () => ({
   configureContactLinking: jest.fn(),
   requestContactLinking: jest.fn(),
   runContactLinkingNow: jest.fn(),
+  runContactLinkingScopedNow: jest.fn(),
 }));
 jest.mock("../../services/db/contactSourceLinkDbService", () => ({
   __esModule: true,
@@ -196,7 +197,7 @@ async function invokeLinkSource(sourceRecordId: unknown): Promise<LinkResponse> 
 
 describe("requireSourceRecordIdArg — a refusal must name its own cause (M1)", () => {
   beforeAll(() => {
-    registerContactHandlers({} as never);
+    registerContactHandlers();
   });
 
   beforeEach(() => {

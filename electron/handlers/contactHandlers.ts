@@ -3,7 +3,7 @@
 // This file contains contact handlers to be registered in main.js
 // ============================================
 
-import { ipcMain, BrowserWindow, app } from "electron";
+import { ipcMain, app } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "crypto";
 import * as Sentry from "@sentry/electron/main";
@@ -51,8 +51,14 @@ import {
   cancelPendingContactLinking,
   configureContactLinking,
   requestContactLinking,
-  runContactLinkingNow,
+  runContactLinkingScopedNow,
 } from "../services/contactLinkingScheduler";
+import {
+  contactSourcesStamp,
+  haveContactSourcesChanged,
+  markContactSourcesBackfilled,
+  resetContactSourcesEpoch,
+} from "../services/contactSourcesEpoch";
 import {
   createLink,
   findContactIdBySourceRecord,
@@ -66,6 +72,7 @@ import {
 import { linkExternalContactsForUser } from "../services/contactSourceLinker";
 // BACKLOG-2410 — the contact-level review queue and contact provenance.
 import { runUniqueNameAutoLink } from "../services/contactNameAutoLink";
+import { runImportScopedLinkingPass } from "../services/contactImportLinking";
 // BACKLOG-2556: `sourceLabel` was imported beside `buildEvidence` to name a
 // FOLDED record's address book in the disclosure sentence. Nothing folds, so
 // nothing here needs the label; `contactLinkEvidence` still owns it for the
@@ -745,7 +752,10 @@ function runOpportunisticLinking(userId: string): number {
   let linksCreated = 0;
   try {
     const summary = linkExternalContactsForUser(userId);
-    linksCreated += summary.idMatched + summary.contentMatched;
+    // BACKLOG-4180: NEW links only. `idMatched` counts records whose link
+    // already exists (`already_linked`, including a uuid capture on one); adding
+    // it made every pass over a linked address book re-run the whole backfill.
+    linksCreated += summary.contentMatched;
     recordLinks({
       recordsIn: summary.resolutions.length,
       idMatched: summary.idMatched,
@@ -758,6 +768,8 @@ function runOpportunisticLinking(userId: string): number {
       // "never asked", and a funnel that folds declines into `unmatched` cannot
       // make that distinction on the one screen support actually reads.
       declined: summary.declined,
+      // BACKLOG-4180 — links rolled back with their copy; shown only when > 0.
+      linkFailed: summary.linkFailed,
     });
   } catch (error) {
     logService.warn(`[Contacts] opportunistic source linking failed: ${error}`, "Contacts");
@@ -812,6 +824,38 @@ function runOpportunisticLinking(userId: string): number {
 }
 
 /**
+ * BACKLOG-4180 — the pass `contacts:import` awaits, scoped to the contacts the
+ * import touched. Registered with the scheduler as `runScoped`.
+ *
+ * Same order as the full pass: the crosswalk first, then the name rule (the
+ * name rule reads the crosswalk). Fully synchronous: the scheduler's hold
+ * relies on the read completing in one tick.
+ *
+ * NO BACKFILL AFTERWARDS, unlike `runLinkingPassWithBackfill`. Every link this
+ * pass creates copies its source record's values in the same step
+ * (`resolveSourceRecord` and the name rule both call `applyLinkedSourceValues`
+ * at link time), and the import itself already wrote the picked record's values
+ * inside its transaction. Re-running the whole-book backfill here is what made
+ * a one-contact import cost the whole database.
+ *
+ * Funnel counts are NOT published: `recordLinks` describes a full pass, and a
+ * scoped `recordsIn` would read as the address book shrinking.
+ */
+function runImportScopedLinking(userId: string, contactIds: readonly string[]): void {
+  const startedAt = Date.now();
+  const result = runImportScopedLinkingPass(userId, contactIds, (pair, ctx) => {
+    fileNameQuestion(userId, pair, ctx);
+  });
+  // Counts and milliseconds only — no names, numbers or ids.
+  logService.info(
+    `[Contacts] import-scoped linking: ${contactIds.length} contact(s), ` +
+      `${result.candidateRecords} candidate record(s), ${result.contentLinked} content link(s), ` +
+      `${result.nameLinked} name link(s), asked ${result.nameAsked} in ${Date.now() - startedAt} ms`,
+    "Contacts",
+  );
+}
+
+/**
  * Phase 2, as the scheduler runs it — BACKLOG-2474.
  *
  * The linking pass, plus the ONE thing that used to depend on the pass being
@@ -836,15 +880,27 @@ function runOpportunisticLinking(userId: string): number {
 async function runLinkingPassWithBackfill(userId: string): Promise<void> {
   const startedAt = Date.now();
   const linksCreated = runOpportunisticLinking(userId);
+  // BACKLOG-4180: read AFTER the pass; the epoch the backfill settles is read
+  // again at the backfill's own start.
+  const sourcesChanged = haveContactSourcesChanged(userId);
   // BACKLOG-3837: timing only, counts and milliseconds — no names, numbers or ids.
-  logService.info(`[Contacts] linking pass: ${linksCreated} link(s) created in ${Date.now() - startedAt} ms`, "Contacts");
-  if (linksCreated === 0) return;
+  logService.info(
+    `[Contacts] linking pass: ${linksCreated} link(s) created in ${Date.now() - startedAt} ms` +
+      (sourcesChanged ? " (source records changed)" : ""),
+    "Contacts",
+  );
+  // BACKLOG-4180: re-run the backfill only when it has something to copy — a
+  // new link, or a source write since the last completed backfill (an
+  // address-book edit to an already-linked person reaches the contact only
+  // through here). See contactSourcesEpoch.
+  if (linksCreated === 0 && !sourcesChanged) return;
 
   backfilledUsers.delete(userId);
   const backfillResult = await backfillImportedContactsFromExternal(userId);
   if (backfillResult.updated > 0) {
     logService.info(
-      `[Contacts] re-ran backfill after ${linksCreated} new link(s): ` +
+      `[Contacts] re-ran backfill after ${linksCreated} new link(s)` +
+        `${sourcesChanged ? " and a source change" : ""}: ` +
         `${backfillResult.updated} contact(s) updated`,
       "Contacts",
     );
@@ -1014,6 +1070,7 @@ export function resetContactSessionState(): void {
   backfilledUsers.clear();
   linkingReconciledUsers.clear();
   cancelPendingContactLinking();
+  resetContactSourcesEpoch();
 }
 
 /**
@@ -1067,6 +1124,10 @@ async function backfillImportedContactsFromExternal(userId: string): Promise<{ u
     return { updated: 0 };
   }
 
+  // BACKLOG-4180: read at the START, so a source write that lands while this
+  // runs (the worker path awaits) still reads as changed afterwards.
+  const sourcesStamp = contactSourcesStamp(userId);
+
   try {
     // TASK-1956 / BACKLOG-2536: the worker PLANS off the main thread; the main
     // process is the only writer. See `applyContactBackfillSync` for why the
@@ -1078,6 +1139,7 @@ async function backfillImportedContactsFromExternal(userId: string): Promise<{ u
         logService.info(`Backfilled ${updated} imported contacts from external_contacts (worker-planned)`, "Contacts", { userId });
       }
       backfilledUsers.add(userId);
+      markContactSourcesBackfilled(userId, sourcesStamp);
       return { updated };
     }
 
@@ -1118,14 +1180,22 @@ async function backfillImportedContactsFromExternal(userId: string): Promise<{ u
       ]);
       if (externals.length === 0) continue;
 
-      let emailsAdded = 0;
-      let phonesAdded = 0;
-      for (const external of externals) {
-        const emails: string[] = external.emails_json ? JSON.parse(external.emails_json) : [];
-        const phones: string[] = external.phones_json ? JSON.parse(external.phones_json) : [];
-        emailsAdded += await databaseService.backfillContactEmails(contact.id, emails);
-        phonesAdded += await databaseService.backfillContactPhones(contact.id, phones);
-      }
+      // BACKLOG-4180 (ACID): one transaction per contact — its emails and
+      // phones from every linked record land together or not at all. A throw
+      // rolls back this contact only; contacts already done stay committed, the
+      // loop stops, and nothing is marked done, so the next run retries
+      // (INSERT OR IGNORE makes the retry idempotent).
+      const { emailsAdded, phonesAdded } = dbTransaction(() => {
+        let emails = 0;
+        let phones = 0;
+        for (const external of externals) {
+          const emailValues: string[] = external.emails_json ? JSON.parse(external.emails_json) : [];
+          const phoneValues: string[] = external.phones_json ? JSON.parse(external.phones_json) : [];
+          emails += databaseService.backfillContactEmailsSync(contact.id, emailValues);
+          phones += databaseService.backfillContactPhonesSync(contact.id, phoneValues);
+        }
+        return { emailsAdded: emails, phonesAdded: phones };
+      });
 
       if (emailsAdded > 0 || phonesAdded > 0) {
         updated++;
@@ -1141,6 +1211,12 @@ async function backfillImportedContactsFromExternal(userId: string): Promise<{ u
       logService.info(`Backfilled ${updated} imported contacts from external_contacts`, "Contacts", { userId });
     }
 
+    // BACKLOG-4180 (SR R2.3): mark the user done after the main-thread run too,
+    // as the worker path does. Before, with the pool down, every Clients &
+    // Contacts open re-ran the whole backfill on the main thread. The gate is
+    // reopened by a new link or a source change (runLinkingPassWithBackfill).
+    backfilledUsers.add(userId);
+    markContactSourcesBackfilled(userId, sourcesStamp);
     return { updated };
   } catch (error) {
     logService.warn(`Failed to backfill imported contacts: ${error}`, "Contacts");
@@ -1150,9 +1226,8 @@ async function backfillImportedContactsFromExternal(userId: string): Promise<{ u
 
 /**
  * Register all contact-related IPC handlers
- * @param _mainWindow - The main browser window for emitting progress events (BACKLOG-3454: IGNORED — pushes resolve the live window via sendToMainWindow; kept so existing call sites and suites compile)
  */
-export function registerContactHandlers(_mainWindow: BrowserWindow): void {
+export function registerContactHandlers(): void {
 
   // TASK-2300: Register contact sync providers
   // TASK-2301: Both providers registered here (not at module load) to avoid side effects during import
@@ -1167,6 +1242,7 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
   // entry point is a no-op that creates no timers.
   configureContactLinking({
     run: runLinkingPassWithBackfill,
+    runScoped: runImportScopedLinking,
     notify: () => {
       // Its own channel, NOT `contacts:external-sync-complete`. That event is
       // also consumed by the import surface, which reloads the available list
@@ -2419,6 +2495,17 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
             sanitizedContact.id &&
             !sanitizedContact.id.startsWith("contacts-app-")
           ) {
+            // BACKLOG-4180 (security review): the id arrives from the renderer.
+            // It is written to (mark imported, backfill, crosswalk) and scopes
+            // the linking pass, so it must name a contact THIS user owns. Refuse
+            // the whole call before any write, like every other invalid record.
+            const owned = await databaseService.getContactById(sanitizedContact.id);
+            if (!owned || owned.user_id !== validatedUserId) {
+              throw new ValidationError(
+                `Record ${index + 1}: the saved contact it refers to was not found`,
+                "contactsToImport",
+              );
+            }
             // BACKLOG-3819: counts + contact id only — no names or addresses in logs.
             logService.warn(`[DIAG-1270] Import path: ${sanitizedContact.id} → existingDB, emails=${(sanitizedContact.allEmails || []).length}`, 'Contacts');
             existingDbContacts.push({
@@ -2486,7 +2573,7 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
          * `contact-handlers.importAtomic-3220.test.ts`.
          *
          * The reads that follow the writes (`getContactById`),
-         * `reportImportLinking` and `runContactLinkingNow` run after the commit.
+         * `reportImportLinking` and `runContactLinkingScopedNow` run after the commit.
          * The progress sends stay inside: they are synchronous IPC, not DB, and
          * the batch's own progress callback already fires inside, so moving loop
          * 1's sends out would make progress run backwards.
@@ -2850,7 +2937,13 @@ export function registerContactHandlers(_mainWindow: BrowserWindow): void {
         // Immediate rather than coalesced: this is a discrete user action with
         // the user waiting, not one writer among several in a sync run. Awaited
         // so the queue is populated before the renderer refreshes.
-        await runContactLinkingNow(validatedUserId);
+        //
+        // BACKLOG-4180: scoped to the contacts this import touched. The import
+        // changes no source record, so only records sharing an identifier or a
+        // name with these contacts can resolve differently; the whole-book pass
+        // (every record, every phone through libphonenumber, then a whole-book
+        // backfill) ran on the main thread while the user waited on one contact.
+        await runContactLinkingScopedNow(validatedUserId, savedContactIds);
 
         logService.info(
           `[Main] Successfully imported ${importedContacts.length} contacts`,
