@@ -9,7 +9,8 @@
  * a Radix modal.
  *
  *   S1  "?" over Learn: exactly one screenshot, taken while the Learn dialog
- *       is in the DOM and before the form exists; Learn is not ended (the
+ *       is in the DOM and before the form exists (read after a delay, as main
+ *       captures ~150 ms after the call); Learn is not ended (the
  *       score is never asked for, the score dialog never appears) and the
  *       form opens.
  *   S2  The form is usable over Learn: typing works and keeps focus, Escape
@@ -65,6 +66,10 @@ function installApi(): void {
   api.support = {
     collectDiagnostics: jest.fn().mockResolvedValue({ success: true, diagnostics: null }),
     captureScreenshot: jest.fn().mockImplementation(async () => {
+      // Main hides "?", waits 150 ms, then captures the page
+      // (supportTicketService.ts captureScreenshot). Read the DOM after a
+      // delay too: a render that lands before the capture must show up here.
+      await new Promise((r) => setTimeout(r, 50));
       captures.push({
         question: !!dialogTitled(QUESTION),
         score: !!dialogTitled(SCORE_TITLE),
