@@ -121,4 +121,16 @@ describe("BACKLOG-4075: token write-back same-account guard", () => {
     const proceed = rotate({ id: A, email: "", user_metadata: { email: A_EMAIL } });
     expect(proceed({ user: { id: LEGACY, email: A_EMAIL } })).toBe(true);
   });
+
+  it("W5 legacy-id file, email differs only by case and a leading space: written", () => {
+    const proceed = rotate({ id: A, email: ` ${A_EMAIL.toUpperCase()}` });
+    expect(proceed({ user: { id: LEGACY, email: A_EMAIL } })).toBe(true);
+    expect(sentry.captureMessage).not.toHaveBeenCalled();
+  });
+
+  it("W6 different ids and both emails empty: not written (empty email never matches)", () => {
+    const proceed = rotate({ id: A, email: "" });
+    expect(proceed({ user: { id: LEGACY, email: "" } })).toBe(false);
+    expect(sentry.captureMessage).toHaveBeenCalledTimes(1);
+  });
 });
