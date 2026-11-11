@@ -17,13 +17,13 @@ export function formatSwitchDate(iso: string): string {
 }
 
 export function buildDomainCaptureNoticeEmail(params: DomainCaptureNoticeParams): EmailContent {
-  const { recipientEmail, brokerageName, domain, switchAt, optOutUrl } = params;
+  const { recipientEmail, brokerageName, domain, switchAt, optOutUrl, payer } = params;
   const date = formatSwitchDate(switchAt);
   const subject = `${brokerageName} will move your Keepr account on ${date}`;
   return buildSimpleNotice(subject, [
     `${brokerageName} verified that it owns ${domain}.`,
     `On ${date}, your Keepr account (${recipientEmail}) moves into ${brokerageName}, and any personal Keepr plan on it ends.`,
-    `After the move, ${brokerageName} manages this account and can end your access to it. If you opt out, your account stays separate and stays on your own paid plan.`,
+    `After the move, ${brokerageName} manages this account and can end your access to it. If you opt out, your account stays separate${payer === true ? ' and stays on your own paid plan' : ''}.`,
     `To opt out, sign in at ${optOutUrl} before ${date}.`,
   ]);
 }

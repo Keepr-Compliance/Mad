@@ -29,6 +29,7 @@ import {
   DOMAIN_CAPTURE_NOT_FOUND,
   DOMAIN_CAPTURE_NOT_SCHEDULED,
   DOMAIN_CAPTURE_BILLING_NOT_READY,
+  DOMAIN_CAPTURE_BILLING_SETUP,
   DOMAIN_CAPTURE_CONFIRM,
   DOMAIN_CAPTURE_TOO_LATE,
   DOMAIN_CAPTURE_SIGNED_OUT,
@@ -65,6 +66,8 @@ function stateError(code: unknown): DomainCaptureActionResult {
       return fail(DOMAIN_CAPTURE_NOT_VERIFIED);
     case 'billing_not_ready':
       return fail(DOMAIN_CAPTURE_BILLING_NOT_READY);
+    case 'billing_setup_incomplete':
+      return fail(DOMAIN_CAPTURE_BILLING_SETUP);
     case 'switch_not_found':
       return fail(DOMAIN_CAPTURE_NOT_FOUND);
     case 'not_scheduled':

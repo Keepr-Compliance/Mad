@@ -21,6 +21,7 @@ jest.mock('@/lib/supabase/server', () => ({ createClient: () => mockSessionClien
 jest.mock('@/lib/email', () => ({ sendDomainCaptureNoticeEmail: (...a: unknown[]) => mockSendNotice(...a) }));
 
 import {
+  DOMAIN_CAPTURE_BILLING_SETUP,
   DOMAIN_CAPTURE_CONFIRM,
   DOMAIN_CAPTURE_NOT_AUTHORIZED,
   DOMAIN_CAPTURE_UNAVAILABLE,
@@ -46,8 +47,8 @@ beforeEach(() => {
         data: {
           success: true, domain: 'a-brokerage.example', brokerage_name: 'A Brokerage',
           scheduled: [
-            { switch_id: S1, user_id: U1, email: 'one@a-brokerage.example', switch_at: '2026-11-24T10:00:00Z' },
-            { switch_id: S2, user_id: U2, email: 'two@a-brokerage.example', switch_at: '2026-11-24T10:00:00Z' },
+            { switch_id: S1, user_id: U1, email: 'one@a-brokerage.example', switch_at: '2026-11-24T10:00:00Z', payer: true },
+            { switch_id: S2, user_id: U2, email: 'two@a-brokerage.example', switch_at: '2026-11-24T10:00:00Z', payer: false },
           ],
           skipped: [],
         },
@@ -80,8 +81,9 @@ describe('startCapture', () => {
     expect(mockSendNotice).toHaveBeenCalledTimes(2);
     expect(mockSendNotice.mock.calls[0][0]).toMatchObject({
       recipientEmail: 'one@a-brokerage.example', brokerageName: 'A Brokerage', domain: 'a-brokerage.example',
-      switchId: S1, optOutUrl: expect.stringMatching(/\/dashboard\?capture=notice$/),
+      switchId: S1, optOutUrl: expect.stringMatching(/\/dashboard\?capture=notice$/), payer: true,
     });
+    expect(mockSendNotice.mock.calls[1][0]).toMatchObject({ switchId: S2, payer: false });
     expect(mockServiceRpc.mock.calls).toEqual([
       ['_domain_capture_mark_notice', { p_switch: S1, p_outcome: 'sent' }],
       ['_domain_capture_mark_notice', { p_switch: S2, p_outcome: 'failed' }],
@@ -101,6 +103,13 @@ describe('startCapture', () => {
     sessionRpc.mockResolvedValueOnce({ data: null, error: { code: 'PGRST202' } });
     const r = await startCapture({ claimId: CLAIM, userIds: [U1] });
     expect(r.message).toBe(DOMAIN_CAPTURE_UNAVAILABLE);
+    expect(mockSendNotice).not.toHaveBeenCalled();
+  });
+
+  it('says to finish the Billing step when the database reports it pending', async () => {
+    sessionRpc.mockResolvedValueOnce({ data: { success: false, error: 'billing_setup_incomplete' }, error: null });
+    const r = await startCapture({ claimId: CLAIM, userIds: [U1] });
+    expect(r).toEqual({ success: false, message: DOMAIN_CAPTURE_BILLING_SETUP });
     expect(mockSendNotice).not.toHaveBeenCalled();
   });
 

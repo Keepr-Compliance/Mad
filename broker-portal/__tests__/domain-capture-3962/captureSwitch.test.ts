@@ -153,6 +153,22 @@ describe('runCaptureSwitch', () => {
     expect(h.sendSeatAlert).not.toHaveBeenCalled();
   });
 
+  it('counts a suspended-brokerage cancellation as cancelled, not failed, and a Billing-step deferral as deferred', () => {
+    const a = sw(1); const b = sw(2);
+    const h = harness({
+      due: [a, b],
+      switchReply: (id) => id === a.switch_id
+        ? { success: true, outcome: 'cancelled', reason: 'brokerage_suspended' }
+        : { success: false, error: 'billing_setup_incomplete' },
+    });
+    return h.run().then((s) => {
+      expect(s.cancelled).toEqual({ brokerage_suspended: 1 });
+      expect(s.deferred).toEqual({ billing_setup_incomplete: 1 });
+      expect(s.failed).toBe(0);
+      expect(h.sendSwitched).not.toHaveBeenCalled();
+    });
+  });
+
   it('reports not_deployed when the functions are missing', async () => {
     const h = harness({ due: [], dueError: { code: 'PGRST202' }, switchReply: () => ({}) });
     const s = await h.run();

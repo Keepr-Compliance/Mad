@@ -23,12 +23,27 @@ describe('capture emails', () => {
     const e = buildDomainCaptureNoticeEmail({
       recipientEmail: 'one@a-brokerage.example', brokerageName: 'A Brokerage', domain: 'a-brokerage.example',
       switchAt: '2026-11-24T10:00:00Z', optOutUrl: 'https://portal.example/dashboard?capture=notice', switchId: 's1',
+      payer: true,
     });
     expect(e.subject).toBe('A Brokerage will move your Keepr account on November 24, 2026');
     expect(e.text).toContain('one@a-brokerage.example');
     expect(e.text).toContain('can end your access');
-    expect(e.text).toContain('stays on your own paid plan');
+    expect(e.text).toContain('If you opt out, your account stays separate and stays on your own paid plan.');
     expect(e.text).toContain('https://portal.example/dashboard?capture=notice');
+  });
+
+  it('notice for a non-payer does not mention a paid plan', () => {
+    const base = {
+      recipientEmail: 'one@a-brokerage.example', brokerageName: 'A Brokerage', domain: 'a-brokerage.example',
+      switchAt: '2026-11-24T10:00:00Z', optOutUrl: 'https://portal.example/dashboard?capture=notice', switchId: 's1',
+    };
+    for (const payer of [false, undefined]) {
+      const e = buildDomainCaptureNoticeEmail({ ...base, payer });
+      expect(e.text).toContain('If you opt out, your account stays separate.');
+      expect(e.text).not.toContain('paid plan');
+      expect(e.html).not.toContain('paid plan');
+    }
+    expect(buildDomainCaptureNoticeEmail({ ...base, payer: true }).html).toContain('stays on your own paid plan');
   });
 
   it('switched email differs for licensed and unlicensed', () => {

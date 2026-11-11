@@ -302,6 +302,8 @@ export interface DomainCaptureNoticeParams {
   optOutUrl: string;
   /** domain_capture_switches.id, kept in the delivery log so a queued retry can be matched */
   switchId: string;
+  /** True when the person pays for their own Keepr plan (a live subscription of their own) */
+  payer?: boolean;
 }
 
 export interface DomainCaptureSwitchedParams {

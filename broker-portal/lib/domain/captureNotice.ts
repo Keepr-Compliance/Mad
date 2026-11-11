@@ -26,6 +26,8 @@ export interface ScheduledSwitch {
   user_id: string;
   email: string;
   switch_at: string;
+  /** Pays for a personal plan (decided by the database at start); absent reads as not a payer */
+  payer?: boolean;
 }
 
 export function isScheduledSwitch(v: unknown): v is ScheduledSwitch {
@@ -58,6 +60,7 @@ export async function sendCaptureNotices(
         switchAt: row.switch_at,
         optOutUrl,
         switchId: row.switch_id,
+        payer: row.payer === true,
       });
       outcome = result.outcome ?? (result.success ? 'sent' : 'failed');
     } catch {
