@@ -9,5 +9,11 @@ trap 'rm -rf "$dir"' EXIT INT TERM
 tmp="$dir/composed.sql"
 python3 "$here/compose.py" "$tmp" "${1:-controls.sql}" >/dev/null
 t0=$(date +%s)
-~/.claude/bin/kt-sql "$tmp" 2>&1 | python3 "$here/parse.py"
+# transport failures only (curl errors before any result) are retried, at most twice
+for attempt in 1 2 3; do
+  out="$(~/.claude/bin/kt-sql "$tmp" 2>&1 || true)"
+  case "$out" in curl:*) [ "$attempt" -lt 3 ] && { echo "transport retry $attempt: ${out%%$'\n'*}" >&2; continue; } ;; esac
+  break
+done
+printf '%s\n' "$out" | python3 "$here/parse.py"
 echo "wall_s=$(( $(date +%s) - t0 ))"
