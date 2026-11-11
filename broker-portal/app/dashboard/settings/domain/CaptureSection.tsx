@@ -216,15 +216,15 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
                         />
                       )}
                     </Td>
-                    <Td>
+                    <Td className="whitespace-normal break-words">
                       <div className="text-sm text-gray-900">{row.name}</div>
                       {row.name !== row.email && <div className="text-xs text-gray-500">{row.email}</div>}
                     </Td>
-                    <Td>
+                    <Td className="whitespace-normal" data-testid={`capture-status-${row.userId}`}>
                       <Badge hue={status.hue}>{status.label}</Badge>
-                      {status.detail && <p className="mt-1 text-xs text-gray-500">{status.detail}</p>}
+                      {status.detail && <p className="mt-1 max-w-xs text-xs text-gray-500">{status.detail}</p>}
                     </Td>
-                    <Td>
+                    <Td className="whitespace-nowrap">
                       {row.switchId && (
                         <Button
                           type="button"

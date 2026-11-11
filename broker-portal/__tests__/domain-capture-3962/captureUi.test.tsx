@@ -269,6 +269,13 @@ describe('capture table', () => {
     });
   });
 
+  it('the Status cell wraps and its detail text is width-capped so Actions stays on screen', async () => {
+    render(<CaptureSection domains={await loadView()} />);
+    const cell = screen.getByTestId('capture-status-u-tenant');
+    expect(cell.className).toContain('whitespace-normal');
+    expect(within(cell).getByText(CAPTURE_REASON_COPY.no_tenant).className).toContain('max-w-xs');
+  });
+
   it('Start is disabled until someone is selected', async () => {
     render(<CaptureSection domains={await loadView()} />);
     const btn = screen.getByRole('button', { name: 'Start' }) as HTMLButtonElement;
