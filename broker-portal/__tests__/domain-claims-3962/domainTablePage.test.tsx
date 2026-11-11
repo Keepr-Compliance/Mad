@@ -22,6 +22,7 @@ jest.mock('@/components/providers/ImpersonationProvider', () => ({
   useImpersonation: () => ({ isImpersonating: false }),
 }));
 
+import { createDomainClaim } from '@/lib/actions/domainClaim';
 import DomainSettingsClient from '@/app/dashboard/settings/domain/DomainSettingsClient';
 import OrgSettingsClient from '@/app/dashboard/settings/OrgSettingsClient';
 import { loadVerifiedDomains, loadDomainClaims } from '@/lib/domain/claimView';
@@ -70,10 +71,27 @@ describe('table', () => {
   });
 });
 
+describe('add dialog', () => {
+  it('a failed add shows its error inside the dialog, not only on the page', async () => {
+    (createDomainClaim as jest.Mock).mockResolvedValue({ success: false, message: 'That domain is already verified by another brokerage.' });
+    render(<DomainSettingsClient claims={[]} loadState="ok" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add domain' }));
+    const dialog = screen.getByRole('dialog');
+    expect(dialog.getAttribute('aria-labelledby')).toBe('add-domain-title');
+    expect(document.getElementById('add-domain-title')?.textContent).toBe('Add a domain');
+    fireEvent.change(within(dialog).getByLabelText('Domain'), { target: { value: 'taken.example' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+    const alert = await within(screen.getByRole('dialog')).findByRole('alert');
+    expect(alert.textContent).toBe('That domain is already verified by another brokerage.');
+  });
+});
+
 describe('empty state', () => {
   it('shows the line and its button opens the same add form', () => {
     render(<DomainSettingsClient claims={[]} loadState="ok" />);
-    expect(screen.getByText("No domains yet. Add your brokerage's email domain to verify it.")).toBeTruthy();
+    expect(screen.getByText('No domains yet')).toBeTruthy();
+    expect(screen.getByText("Add your brokerage's email domain to verify it.")).toBeTruthy();
+    expect(screen.queryByText(/No domains yet\. /)).toBeNull();
     expect(screen.queryByRole('table')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: '+ Add domain' }));
     expect(within(screen.getByRole('dialog')).getByLabelText('Domain')).toBeTruthy();
@@ -120,16 +138,26 @@ describe('loadDomainClaims added-by', () => {
       { id: '2', domain: 'b.example', token: 't', status: 'pending', verified_at: null, last_checked_at: null, last_check_result: null, created_by: 'u2' },
       { id: '3', domain: 'c.example', token: 't', status: 'pending', verified_at: null, last_checked_at: null, last_check_result: null, created_by: 'gone' },
     ];
+    // organization_members rows as the select returns them. The o2 row (same user id, a different
+    // name) comes LAST: without the organization_id filter it would overwrite o1's name.
     const members = [
-      { user_id: 'u1', user: { email: 'u1@x.example', first_name: 'x', last_name: 'y', display_name: 'display-name-b' } },
-      { user_id: 'u2', user: { email: 'u2@x.example', first_name: null, last_name: null, display_name: null } },
+      { organization_id: 'o1', user_id: 'u1', user: { email: 'u1@x.example', first_name: 'x', last_name: 'y', display_name: 'display-name-b' } },
+      { organization_id: 'o1', user_id: 'u2', user: { email: 'u2@x.example', first_name: null, last_name: null, display_name: null } },
+      { organization_id: 'o2', user_id: 'u1', user: { email: 'u1@other.example', first_name: null, last_name: null, display_name: 'other-org-name' } },
     ];
     const client = {
       from: (t: string) => {
+        const eqs: Array<[string, unknown]> = [];
         const b: Record<string, unknown> = {
           select: () => b,
-          eq: () => b,
-          in: () => (t === 'organization_members' ? Promise.resolve({ data: members, error: null }) : b),
+          eq: (c: string, v: unknown) => (eqs.push([c, v]), b),
+          in: (c: string, vs: unknown[]) =>
+            t === 'organization_members'
+              ? Promise.resolve({
+                  data: members.filter((m) => eqs.every(([ec, ev]) => (m as Record<string, unknown>)[ec] === ev) && vs.includes((m as Record<string, unknown>)[c])),
+                  error: null,
+                })
+              : b,
           order: async () => ({ data: claimRows, error: null }),
         };
         return b;

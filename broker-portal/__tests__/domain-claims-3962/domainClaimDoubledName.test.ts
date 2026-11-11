@@ -92,6 +92,17 @@ describe('doubled-name hint', () => {
     expect(res.success).toBe(false);
   });
 
+  it.each([
+    ['the token with trailing characters', TOKEN + 'x'],
+    ['the token with a prefix', 'x' + TOKEN],
+    ['the token inside a longer value', 'v=' + TOKEN + ' more'],
+  ])('is NOT shown when the doubled name holds %s', async (_n, value) => {
+    given(value);
+    const res = await checkDomainClaim(CLAIM);
+    expect(res.doubledName).toBeUndefined();
+    expect(res.message).toBe(checkResultMessage('not_found', DOMAIN));
+  });
+
   it('is NOT shown when the doubled name has no record', async () => {
     given(null);
     const res = await checkDomainClaim(CLAIM);

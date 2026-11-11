@@ -153,24 +153,38 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
   const [, startTransition] = useTransition();
 
   const refresh = () => startTransition(() => router.refresh());
+
+  const openAdd = () => {
+    setAddError(null);
+    setAddOpen(true);
+  };
+  const closeAdd = () => {
+    setAddError(null);
+    setAddOpen(false);
+  };
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy('add');
     setNotice(null);
+    setAddError(null);
     try {
       const res = await createDomainClaim(domainInput);
-      setNotice({ claimId: null, tone: res.success ? 'info' : 'destructive', text: res.message });
       if (res.success) {
+        setNotice({ claimId: null, tone: 'info', text: res.message });
         setDomainInput('');
         setAddOpen(false);
         refresh();
+      } else {
+        // The dialog is still open: the error belongs inside it, not on the page behind it.
+        setAddError(res.message);
       }
     } catch {
-      setNotice({ claimId: null, tone: 'destructive', text: DOMAIN_CLAIM_FAILED });
+      setAddError(DOMAIN_CLAIM_FAILED);
     } finally {
       setBusy(null);
     }
@@ -224,7 +238,7 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
         title={PAGE_TITLES.domain}
         subtitle="Prove your brokerage owns its email domain by adding a DNS record"
         actions={
-          <Button type="button" onClick={() => setAddOpen(true)} disabled={loadState !== 'ok'}>
+          <Button type="button" onClick={openAdd} disabled={loadState !== 'ok'}>
             Add domain
           </Button>
         }
@@ -236,8 +250,9 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
 
       <Modal
         open={addOpen}
-        onClose={() => setAddOpen(false)}
-        title="Add a domain"
+        onClose={closeAdd}
+        title={<span id="add-domain-title">Add a domain</span>}
+        aria-labelledby="add-domain-title"
         dismissible={busy !== 'add'}
       >
         <p className="text-sm text-gray-500">
@@ -257,10 +272,16 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
               value={domainInput}
               onChange={(e) => setDomainInput(e.target.value)}
               disabled={loadState !== 'ok'}
+              autoFocus
             />
           </div>
+          {addError && (
+            <p className="text-sm text-red-600" role="alert">
+              {addError}
+            </p>
+          )}
           <div className="flex justify-end gap-2">
-            <Button type="button" variant="secondary" onClick={() => setAddOpen(false)}>
+            <Button type="button" variant="secondary" onClick={closeAdd} disabled={busy === 'add'}>
               Cancel
             </Button>
             <Button type="submit" disabled={busy !== null || loadState !== 'ok' || domainInput.trim() === ''}>
@@ -274,9 +295,9 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
         loadState === 'ok' && (
           <EmptyState
             title="No domains yet"
-            description="No domains yet. Add your brokerage's email domain to verify it."
+            description="Add your brokerage's email domain to verify it."
             action={
-              <Button type="button" onClick={() => setAddOpen(true)}>
+              <Button type="button" onClick={openAdd}>
                 + Add domain
               </Button>
             }
