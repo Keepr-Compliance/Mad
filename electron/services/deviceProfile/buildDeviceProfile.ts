@@ -4,6 +4,8 @@
  * Two targets, each an EXACT key list:
  *   - "row": the devices row's `hardware_profile` jsonb (Supabase, which already
  *     holds the account). Full profile, counts to 2 significant figures.
+ *     No message count: COUNT(messages) failed the PR B measurement gate,
+ *     so data size is dbMB plus the smaller tables' counts.
  *   - "log": the machine class every diagnostics log may carry (PR C wires it):
  *     ramGB (bucketed), cpuCores, diskType, softwareRendering. Nothing else.
  *
@@ -55,7 +57,6 @@ export interface CollectedProfile {
   avEnabled?: boolean;
   avDefsCurrent?: boolean;
   poolReady?: boolean;
-  messages?: number;
   contacts?: number;
   addressBook?: number;
   mailAccounts?: number;
@@ -82,7 +83,6 @@ export const ROW_KEYS = [
   "avEnabled",
   "avDefsCurrent",
   "poolReady",
-  "messages",
   "contacts",
   "addressBook",
   "dbMB",
@@ -235,7 +235,6 @@ export function buildDeviceProfile(c: CollectedProfile, target: "row" | "log"): 
     avEnabled: typeof c.avEnabled === "boolean" ? c.avEnabled : undefined,
     avDefsCurrent: typeof c.avDefsCurrent === "boolean" ? c.avDefsCurrent : undefined,
     poolReady: typeof c.poolReady === "boolean" ? c.poolReady : undefined,
-    messages: count(c.messages),
     contacts: count(c.contacts),
     addressBook: count(c.addressBook),
     dbMB,

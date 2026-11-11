@@ -72,14 +72,18 @@ maybe("BACKLOG-4185 deviceDataSize (real encrypted DB)", () => {
     nodeFs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("no message count: COUNT(messages) failed the measurement gate", () => {
+    expect(DEVICE_DATA_SIZE_SQL).not.toMatch(/FROM messages/);
+  });
+
   it("counts only this user's rows, and only active mailbox tokens", () => {
-    expect(readDeviceDataSizeOn(db, USER)).toEqual({ messages: 7, contacts: 4, addressBook: 5, mailAccounts: 1 });
-    expect(readDeviceDataSizeOn(db, "nobody")).toEqual({ messages: 0, contacts: 0, addressBook: 0, mailAccounts: 0 });
+    expect(readDeviceDataSizeOn(db, USER)).toEqual({ contacts: 4, addressBook: 5, mailAccounts: 1 });
+    expect(readDeviceDataSizeOn(db, "nobody")).toEqual({ contacts: 0, addressBook: 0, mailAccounts: 0 });
   });
 
   it("every count is served by an index (no full table scan)", () => {
-    const plan = (db.prepare(`EXPLAIN QUERY PLAN ${DEVICE_DATA_SIZE_SQL}`).all(USER, USER, USER, USER) as Array<{ detail: string }>).map((r) => r.detail);
-    for (const t of ["messages", "contacts", "external_contacts", "oauth_tokens"]) {
+    const plan = (db.prepare(`EXPLAIN QUERY PLAN ${DEVICE_DATA_SIZE_SQL}`).all(USER, USER, USER) as Array<{ detail: string }>).map((r) => r.detail);
+    for (const t of ["contacts", "external_contacts", "oauth_tokens"]) {
       const line = plan.find((d) => new RegExp(`\\b${t}\\b`).test(d));
       expect({ t, line }).toEqual({ t, line: expect.stringMatching(/USING (COVERING )?INDEX/) });
     }

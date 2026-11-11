@@ -20,7 +20,7 @@ jest.mock("../../diagnosticsSharingPreference", () => ({ isDiagnosticsSharingEna
 jest.mock("../../crashReportingPreference", () => ({ isCrashReportingEnabled: () => switches.crash }));
 jest.mock("../../logService", () => ({ __esModule: true, default: { warn: jest.fn(), info: jest.fn(), debug: jest.fn(), error: jest.fn() } }));
 
-const mockQueryContacts = jest.fn(async () => [{ messages: 10, contacts: 2, addressBook: 3, mailAccounts: 1 }]);
+const mockQueryContacts = jest.fn(async () => [{ contacts: 2, addressBook: 3, mailAccounts: 1 }]);
 jest.mock("../../../workers/contactWorkerPool", () => ({
   isPoolReady: () => true,
   getPoolQueryCount: () => 0,
@@ -86,7 +86,7 @@ it("ON: one UPDATE of devices for (user_id, device_id); counts from the worker; 
   await settle();
   expect(calls).toHaveLength(1);
   expect(calls[0].eqs).toEqual([["user_id", "u1"], ["device_id", "machine-a"]]);
-  expect(calls[0].update).toMatchObject({ hardware_profile: expect.objectContaining({ cpuCores: 8, messages: 10 }) });
+  expect(calls[0].update).toMatchObject({ hardware_profile: expect.objectContaining({ cpuCores: 8, contacts: 2 }) });
   expect(mockQueryContacts).toHaveBeenCalledWith("deviceDataSize", "u1", 30_000);
   const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
   expect(state.rowId).toBe(ROW);

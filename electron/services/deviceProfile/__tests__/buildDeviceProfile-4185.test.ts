@@ -26,7 +26,6 @@ const FULL_MAC: CollectedProfile = {
   avEnabled: true,
   avDefsCurrent: true,
   poolReady: true,
-  messages: 184231,
   contacts: 2040,
   addressBook: 512,
   mailAccounts: 2,
@@ -62,8 +61,9 @@ describe("P12 exact key sets", () => {
   });
   it("exact sizes never leave: 2 significant figures on the row, absent on the log", () => {
     const row = buildDeviceProfile(FULL_MAC, "row");
-    expect(row).toMatchObject({ messages: 180000, contacts: 2000, addressBook: 510, dbMB: 1500, mailAccounts: 2 });
-    expect(JSON.stringify(buildDeviceProfile(FULL_MAC, "log"))).not.toMatch(/184231|2040|512/);
+    expect(row).toMatchObject({ contacts: 2000, addressBook: 510, dbMB: 1500, mailAccounts: 2 });
+    expect(JSON.stringify(buildDeviceProfile(FULL_MAC, "log"))).not.toMatch(/2040|512/);
+    expect(row).not.toHaveProperty("messages");
   });
   it("there is no event target (events carry the devices row id only)", () => {
     const src = fs.readFileSync(path.join(__dirname, "..", "buildDeviceProfile.ts"), "utf8");

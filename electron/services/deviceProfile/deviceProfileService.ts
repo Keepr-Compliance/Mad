@@ -37,7 +37,6 @@ export const COUNTS_MAX_CHECKS = 10;
 export const CHANGE_THRESHOLD = 0.2;
 
 export interface DataSizeCounts {
-  messages?: number;
   contacts?: number;
   addressBook?: number;
   mailAccounts?: number;
@@ -54,7 +53,6 @@ export interface StateFile {
 export interface Fingerprint {
   osBuild?: string;
   ramGB?: number;
-  messages?: number;
   contacts?: number;
   addressBook?: number;
   dbMB?: number;
@@ -92,7 +90,7 @@ export function deviceKeyOf(userId: string, deviceId: string): string {
 export function fingerprintOf(row: DeviceProfileRow): Fingerprint {
   const fp: Fingerprint = {};
   if (typeof row.osBuild === "string") fp.osBuild = row.osBuild;
-  for (const k of ["ramGB", "messages", "contacts", "addressBook", "dbMB"] as const) {
+  for (const k of ["ramGB", "contacts", "addressBook", "dbMB"] as const) {
     const v = row[k];
     if (typeof v === "number") fp[k] = v;
   }
@@ -110,7 +108,7 @@ export function shouldWrite(prev: StateFile | null, next: { deviceKey: string; f
   if (prev.deviceKey !== next.deviceKey) return true;
   if (prev.fp.osBuild !== next.fp.osBuild) return true;
   if (prev.fp.ramGB !== next.fp.ramGB) return true;
-  return (["messages", "contacts", "addressBook", "dbMB"] as const).some((k) => movedMoreThan(prev.fp[k], next.fp[k]));
+  return (["contacts", "addressBook", "dbMB"] as const).some((k) => movedMoreThan(prev.fp[k], next.fp[k]));
 }
 
 /** C1: counts may be read only when the pool is up, idle, and quiet for QUIET_MS. */

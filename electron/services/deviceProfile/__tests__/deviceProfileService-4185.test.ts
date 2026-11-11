@@ -77,7 +77,7 @@ function harness(over: Partial<ServiceDeps> = {}): Harness {
     },
     queryCounts: async (): Promise<DataSizeCounts> => {
       h.countsCalls += 1;
-      return { messages: 184231, contacts: 2040, addressBook: 512, mailAccounts: 2 };
+      return { contacts: 2040, addressBook: 512, mailAccounts: 2 };
     },
     dbBytes: async () => 1_500 * 1024 ** 2,
     collectHardware: async () => {
@@ -122,7 +122,7 @@ describe("P6 shouldWrite", () => {
     v: 1,
     deviceKey: "k",
     rowId: null,
-    fp: { osBuild: "24G419", ramGB: 32, messages: 100_000, contacts: 0, dbMB: 1000 },
+    fp: { osBuild: "24G419", ramGB: 32, addressBook: 100_000, contacts: 0, dbMB: 1000 },
     writtenAt: "x",
   };
   const next = (fp: Partial<StateFile["fp"]>, deviceKey = "k") => ({ deviceKey, fp: { ...base.fp, ...fp } });
@@ -140,15 +140,15 @@ describe("P6 shouldWrite", () => {
     expect(shouldWrite(base, next({ ramGB: 64 }), "restore")).toBe(true);
   });
   it("counts: strictly more than 20% (sweep 119k / 120k / 121k on 100k)", () => {
-    expect(shouldWrite(base, next({ messages: 119_000 }), "restore")).toBe(false);
-    expect(shouldWrite(base, next({ messages: 120_000 }), "restore")).toBe(false);
-    expect(shouldWrite(base, next({ messages: 121_000 }), "restore")).toBe(true);
-    expect(shouldWrite(base, next({ messages: 79_000 }), "restore")).toBe(true);
-    expect(shouldWrite(base, next({ messages: 80_000 }), "restore")).toBe(false);
+    expect(shouldWrite(base, next({ addressBook: 119_000 }), "restore")).toBe(false);
+    expect(shouldWrite(base, next({ addressBook: 120_000 }), "restore")).toBe(false);
+    expect(shouldWrite(base, next({ addressBook: 121_000 }), "restore")).toBe(true);
+    expect(shouldWrite(base, next({ addressBook: 79_000 }), "restore")).toBe(true);
+    expect(shouldWrite(base, next({ addressBook: 80_000 }), "restore")).toBe(false);
   });
   it("0 -> n is a change; an absent count is not compared", () => {
     expect(shouldWrite(base, next({ contacts: 3 }), "restore")).toBe(true);
-    expect(shouldWrite(base, next({ messages: undefined }), "restore")).toBe(false);
+    expect(shouldWrite(base, next({ addressBook: undefined }), "restore")).toBe(false);
   });
 });
 
@@ -202,7 +202,7 @@ describe("write path", () => {
     expect(h.updates).toHaveLength(1);
     const { userId, deviceId, profile } = h.updates[0];
     expect([userId, deviceId]).toEqual([USER, DEVICE]);
-    expect(profile).toMatchObject({ messages: 180000, contacts: 2000, addressBook: 510, dbMB: 1500, mailAccounts: 2, countsState: "ok", poolReady: true });
+    expect(profile).toMatchObject({ contacts: 2000, addressBook: 510, dbMB: 1500, mailAccounts: 2, countsState: "ok", poolReady: true });
     const raw = JSON.stringify(h.state.file);
     expect(raw).not.toContain(DEVICE);
     expect(h.state.file?.deviceKey).toBe(deviceKeyOf(USER, DEVICE));
@@ -233,7 +233,7 @@ describe("P13 bounded counts scheduler (C2)", () => {
     await settle(s.onDeviceRegistered(USER, DEVICE, "login", ROW));
     expect(h.checks).toBe(COUNTS_MAX_CHECKS);
     expect(h.countsCalls).toBe(0);
-    expect(h.updates[0].profile).not.toHaveProperty("messages");
+    expect(h.updates[0].profile).not.toHaveProperty("contacts");
     expect(h.updates[0].profile).toMatchObject({ countsState: "skippedBusy" });
     expect(s.getCountsState()).toBe("skippedBusy");
     expect(jest.getTimerCount()).toBe(0);
