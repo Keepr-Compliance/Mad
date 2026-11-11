@@ -111,7 +111,8 @@ describe('SharingDialog (BACKLOG-3513)', () => {
 
   it('K2 the owner row is first, reads "Owner" with its detail line, initials avatar, no menu', () => {
     setup();
-    expect(rowNames()).toEqual(['You', 'Jordan Lee', 'Priya Raman', 'Role: Agents']);
+    // The viewer is the owner: the real name with "(You)" (BACKLOG-3513 PR-6).
+    expect(rowNames()).toEqual(['Dana Holt (You)', 'Jordan Lee', 'Priya Raman', 'Role: Agents']);
     const ownerRow = document.querySelector('[data-slot="sharing-owner"]') as HTMLElement;
     expect(ownerRow).toHaveTextContent('Broker · created this report');
     expect(ownerRow).toHaveTextContent(/Owner$/);
@@ -121,6 +122,19 @@ describe('SharingDialog (BACKLOG-3513)', () => {
     const avatars = Array.from(document.querySelectorAll('[data-slot="sharing-entry"] [data-slot="sharing-avatar"]'));
     expect(avatars.map((a) => a.textContent)).toEqual(['JL', 'PR', '']);
     expect(avatars[2].querySelector('svg')).not.toBeNull();
+  });
+
+  it('K2c the owner avatar takes the real name\'s initials, never "You"; with no name the row reads "You"', () => {
+    const { rerender, props } = setup({ owner: { id: 'u-dh', name: 'Daniel Haim', isYou: true } });
+    const ownerRow = () => document.querySelector('[data-slot="sharing-owner"]') as HTMLElement;
+    const ownerAvatar = () => ownerRow().querySelector('[data-slot="sharing-avatar"]');
+    expect(rowNames()[0]).toBe('Daniel Haim (You)');
+    expect(ownerAvatar()).toHaveTextContent('DH');
+    expect(ownerAvatar()).not.toHaveTextContent('YO');
+    expect(ownerRow().querySelector('.font-medium')).toHaveAttribute('title', 'Daniel Haim (You)');
+    rerender(<SharingDialog {...props} owner={{ id: 'u-dh', name: '  ', isYou: true }} />);
+    expect(rowNames()[0]).toBe('You');
+    expect(ownerAvatar()).not.toHaveTextContent('YO');
   });
 
   it('K2b an owner who is not the viewer is named, and the transfer copy says who stays', () => {

@@ -41,7 +41,7 @@ export interface SharingEntry extends SharingPrincipal {
 export interface SharingOwner {
   id: string;
   name: string;
-  /** The row reads "You" when the viewer of the dialog is the owner. */
+  /** The viewer of the dialog is the owner: the row reads "<name> (You)" ("You" when name is empty). */
   isYou?: boolean;
   /** Second line, e.g. "Broker · created this report". */
   detail?: string;

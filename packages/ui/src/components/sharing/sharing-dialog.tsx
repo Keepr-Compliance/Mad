@@ -17,7 +17,7 @@ import type { SharingDialogProps, SharingEntry, SharingLevel, SharingLevelOption
  * with an owner, people and roles. It knows nothing about reports or views.
  *
  * Built on the kit Dialog (Radix: focus trap, Escape, aria-modal, focus
- * return to the opener) and the kit Dropdown. Like ShareDialog v1 it makes NO
+ * return to the opener) and the kit Dropdown. It makes NO
  * data calls: the adopter feeds `candidates` (from a server-side function
  * scoped to the item and the caller, never a full user list), `entries`,
  * `owner` and `error`, and performs every write in the callbacks.
@@ -51,6 +51,17 @@ function allowed(level: SharingLevel, maxLevel: SharingLevel | undefined): boole
 }
 
 /** Refocus target meaning the add field rather than a row trigger. */
+/**
+ * The owner row's name: "<name> (You)" when the viewer is the owner, the name otherwise, and
+ * "You" when the viewer is the owner and no name is known. The avatar always takes the initials
+ * of `owner.name` itself, never of this label.
+ */
+export function ownerLabel(owner: { name: string; isYou?: boolean }): string {
+  const name = owner.name.trim();
+  if (!owner.isYou) return name;
+  return name.length > 0 ? `${name} (You)` : 'You';
+}
+
 const ADD_FIELD = '#add';
 
 type Confirm = { kind: 'remove' | 'owner'; key: string } | null;
@@ -375,8 +386,8 @@ export function SharingDialog({
                 <li data-slot="sharing-owner" className="flex items-center gap-3 py-2">
                   <SharingAvatar kind="person" name={owner.name} tone="owner" />
                   <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate text-sm font-medium text-gray-900" title={owner.name}>
-                      {owner.isYou ? 'You' : owner.name}
+                    <span className="truncate text-sm font-medium text-gray-900" title={ownerLabel(owner)}>
+                      {ownerLabel(owner)}
                     </span>
                     {owner.detail ? <span className="truncate text-xs text-gray-500">{owner.detail}</span> : null}
                   </span>

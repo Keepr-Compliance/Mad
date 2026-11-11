@@ -24,10 +24,18 @@ import type { ReactNode } from 'react';
 
 vi.mock('@/lib/supabase/client', () => ({ createClient: () => ({}) }));
 
+// BACKLOG-3513 PR-6: the owner row reads the signed-in user from useAuth (the header's source).
+// Shape as Supabase auth returns it: id + user_metadata. Default: no user (as with no provider).
+const auth = vi.hoisted(() => ({ user: null as null | { id: string; email?: string; user_metadata: Record<string, unknown> } }));
+vi.mock('@/components/providers/AuthProvider', () => ({ useAuth: () => ({ user: auth.user }) }));
+
 const vid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const SELF = vid(900);
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  auth.user = null;
+});
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -352,6 +360,7 @@ describe('A2 the saved-view dialog: owner row is You, and there is no Make owner
     await within(list).findByText('Avery Example');
     const rows = within(list).getAllByRole('listitem');
     expect(rows[0].getAttribute('data-slot')).toBe('sharing-owner');
+    // No signed-in name known in this case: the kit's fallback.
     expect(rows[0].textContent).toMatch(/^.*You.*Owner$/);
     expect(within(rows[0]).queryByRole('button')).toBeNull();
     expect(within(dialog).getByText('People you add see this view under “Shared with you”.')).toBeTruthy();
@@ -518,5 +527,68 @@ describe('P4 Update and Leave', () => {
   it('current() is the page own', () => {
     const { hook, current } = mount([OWN]);
     expect(hook.result.current.sharing!.current).toBe(current);
+  });
+});
+
+describe('O1 the saved-view owner row is the signed-in user, by name (BACKLOG-3513 PR-6)', () => {
+  function Harness() {
+    const { sharing, shareDialog } = useReportViewSharing(
+      fakeShareApiForOwner,
+      { views: [OWN], write: vi.fn() },
+      'user-activity',
+      () => ({ filters: {}, metric: null })
+    );
+    return (
+      <>
+        <button type="button" onClick={() => sharing?.onShare?.(OWN)}>
+          open
+        </button>
+        <SharingDialog {...shareDialog} />
+      </>
+    );
+  }
+  const fakeShareApiForOwner = fakeShareApi();
+
+  async function ownerRow() {
+    render(
+      <ReportAccessProvider reportKey="user-activity" title="User Activity" access="owner">
+        <Harness />
+      </ReportAccessProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'open' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Share “Mine”' });
+    const list = await within(dialog).findByRole('list', { name: 'People with access' });
+    return within(list).getAllByRole('listitem')[0];
+  }
+  const avatarOf = (row: HTMLElement) => row.querySelector('[data-slot="sharing-avatar"]')?.textContent;
+  const nameOf = (row: HTMLElement) => row.querySelector('.font-medium')?.textContent;
+
+  it('O1a full_name: "Daniel Haim (You)" and avatar DH, never YO', async () => {
+    auth.user = { id: SELF, user_metadata: { full_name: 'Daniel Haim', name: 'Dan' } };
+    const row = await ownerRow();
+    expect(row.getAttribute('data-slot')).toBe('sharing-owner');
+    expect(nameOf(row)).toBe('Daniel Haim (You)');
+    expect(avatarOf(row)).toBe('DH');
+  });
+
+  it('O1b no full_name: falls back to name', async () => {
+    auth.user = { id: SELF, user_metadata: { name: 'Robin Sample' } };
+    const row = await ownerRow();
+    expect(nameOf(row)).toBe('Robin Sample (You)');
+    expect(avatarOf(row)).toBe('RS');
+  });
+
+  it('O1c no name at all: "You", and the email is never used', async () => {
+    auth.user = { id: SELF, email: 'someone@example.com', user_metadata: { email: 'someone@example.com' } };
+    const row = await ownerRow();
+    expect(nameOf(row)).toBe('You');
+    expect(row.textContent).not.toContain('example.com');
+  });
+
+  it('O1d the owner id is the signed-in user id (not a placeholder)', () => {
+    auth.user = { id: SELF, user_metadata: { full_name: 'Daniel Haim' } };
+    const { hook } = mount([OWN]);
+    act(() => hook.result.current.sharing!.onShare!(OWN));
+    expect(hook.result.current.shareDialog.owner).toEqual({ id: SELF, name: 'Daniel Haim', isYou: true });
   });
 });

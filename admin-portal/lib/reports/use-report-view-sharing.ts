@@ -37,6 +37,7 @@
 
 import { useCallback, useRef, useState, type ReactNode } from 'react';
 import type { SavedViewItem, SavedViewsSharing, SavedViewUpdate, SharingDialogProps, SharingEntry, SharingPrincipal } from '@keepr/ui';
+import { useAuth } from '@/components/providers/AuthProvider';
 import { canShareViews } from './report-access';
 import { useOpenReport } from './report-access-context';
 import { isMissingFunctionError, type ShareApi, type ShareCandidate, type ShareGrant } from './report-share-api';
@@ -64,12 +65,24 @@ export const VIEW_SHARE_LEVELS: SharingDialogProps['levels'] = [
   { value: 'editor', label: 'Can edit', description: 'Also updates its filters and metric' },
 ];
 
+/** The signed-in user, as `useAuth()` gives it: only the fields the owner row reads. */
+interface SignedInUser {
+  id: string;
+  user_metadata?: { full_name?: unknown; name?: unknown } | null;
+}
+
 /**
- * The owner row. Share is offered on the caller's own rows only, so the owner is always the caller.
- * The id is a placeholder: the kit uses it only to keep the owner out of the picker, and
- * `report_share_candidates` already leaves the caller out on the server.
+ * The owner row (BACKLOG-3513 PR-6). Share is offered on the caller's own rows only (kit
+ * SavedViews own-row gate; every report_share_* function checks the view's owner is the caller), so
+ * the owner is always the signed-in user: `isYou` is always true. The name is the one the header
+ * and sidebar show, without their email fallback: `full_name`, else `name`, else empty, which the
+ * kit reads as "You". The id is the user's own; the kit uses it to keep the owner out of the picker.
  */
-export const VIEW_SHARE_OWNER: NonNullable<SharingDialogProps['owner']> = { id: 'view-owner', name: 'You', isYou: true };
+export function viewShareOwner(user: SignedInUser | null | undefined): NonNullable<SharingDialogProps['owner']> {
+  const meta = user?.user_metadata ?? {};
+  const pick = (v: unknown) => (typeof v === 'string' && v.trim().length > 0 ? v.trim() : '');
+  return { id: user?.id ?? '', name: pick(meta.full_name) || pick(meta.name), isYou: true };
+}
 
 /**
  * After `Promise.allSettled` over a batch of writes: throws the first refusal, so the caller shows it.
@@ -114,6 +127,7 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
 ): UseReportViewSharing<V> {
   const normalize = (raw: unknown): unknown => (normalizeMetric ? normalizeMetric(raw) : raw);
   const mayShare = canShareViews(useOpenReport()?.access ?? null);
+  const { user } = useAuth();
   const [missing, setMissing] = useState(false);
   const [target, setTarget] = useState<V | null>(null);
   const [candidates, setCandidates] = useState<ShareCandidate[] | null>(null);
@@ -245,7 +259,7 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
     name: target?.name ?? '',
     description: VIEW_SHARE_DESCRIPTION,
     levels: VIEW_SHARE_LEVELS,
-    owner: VIEW_SHARE_OWNER,
+    owner: viewShareOwner(user),
     candidates: toPrincipals(candidates),
     entries: toEntries(grants),
     error,
