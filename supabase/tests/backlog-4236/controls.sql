@@ -142,7 +142,7 @@ BEGIN
       IF n IS DISTINCT FROM 1::bigint THEN acc := acc || ' A_own:' || t || '=' || coalesce(n::text, 'null'); END IF;
       FOREACH u IN ARRAY ARRAY[B, AD, IR, X, J, S] LOOP
         n := pg_temp.j(pg_temp.call_as(u, format('SELECT to_jsonb(count(*)) FROM public.%I WHERE %I = %L', t, t2, A)))::text::bigint;
-        IF n IS DISTINCT FROM 0::bigint THEN acc := acc || ' leak:' || t || ':' || u::text; END IF;
+        IF n IS DISTINCT FROM 0::bigint THEN acc := acc || ' other_user_row:' || t || ':' || u::text; END IF;
       END LOOP;
     END LOOP;
     FOREACH u IN ARRAY ARRAY[B, AD, IR, X] LOOP
@@ -995,30 +995,27 @@ BEGIN
          || pg_temp.st(pg_temp.up(A, fn, I2, u, jsonb_build_array(pg_temp.row_of(fn, 'dup-1', 'i'))));
       IF t2 <> 'appliedapplied' THEN acc := acc || ' setup_' || fn || '=' || t2; END IF;
     END LOOP;
-    -- snapshot of the two other rows, then A writes the same local id into D1
-    js := jsonb_build_object(
-      'p', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_parties WHERE local_party_id = 'dup-1'),
-      'c', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_checklists WHERE local_checklist_id = 'dup-1'),
-      'i', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_checklist_items WHERE local_item_id = 'dup-1'),
-      'm', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_messages WHERE local_message_id = 'dup-1'),
-      'f', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_files WHERE local_attachment_id = 'dup-1'));
+    -- A writes the same local id into D1; then all three deals write it again with new content.
+    -- Whatever row a deal-blind lookup would find first, at least two of these writes would land
+    -- on another deal's row.
     FOREACH fn IN ARRAY CHILD_FNS LOOP
       t2 := pg_temp.up(A, fn, I1, D1, jsonb_build_array(pg_temp.row_of(fn, 'dup-1', 'a')));
       IF pg_temp.st(t2) <> 'applied' OR (pg_temp.j(t2) -> 'results' -> 0 ->> 'version') <> '1' THEN acc := acc || ' write_' || fn || '=' || left(t2, 120); END IF;
+      t2 := pg_temp.st(pg_temp.up(S, fn, I1, SD, jsonb_build_array(pg_temp.row_of(fn, 'dup-1', 's2'))))
+         || pg_temp.st(pg_temp.up(A, fn, I2, u, jsonb_build_array(pg_temp.row_of(fn, 'dup-1', 'i2'))))
+         || pg_temp.st(pg_temp.up(A, fn, I1, D1, jsonb_build_array(pg_temp.row_of(fn, 'dup-1', 'a2'))));
+      IF t2 <> 'appliedappliedapplied' THEN acc := acc || ' round2_' || fn || '=' || t2; END IF;
     END LOOP;
-    js2 := jsonb_build_object(
-      'p', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_parties WHERE local_party_id = 'dup-1' AND cloud_deal_id <> D1),
-      'c', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_checklists WHERE local_checklist_id = 'dup-1' AND cloud_deal_id <> D1),
-      'i', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_checklist_items WHERE local_item_id = 'dup-1' AND cloud_deal_id <> D1),
-      'm', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_messages WHERE local_message_id = 'dup-1' AND cloud_deal_id <> D1),
-      'f', (SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, version, content_hash) ORDER BY cloud_deal_id) FROM public.cloud_deal_files WHERE local_attachment_id = 'dup-1' AND cloud_deal_id <> D1));
-    n := (SELECT count(*) FROM public.cloud_deal_parties WHERE local_party_id = 'dup-1' AND cloud_deal_id = D1)
-       + (SELECT count(*) FROM public.cloud_deal_checklists WHERE local_checklist_id = 'dup-1' AND cloud_deal_id = D1)
-       + (SELECT count(*) FROM public.cloud_deal_checklist_items WHERE local_item_id = 'dup-1' AND cloud_deal_id = D1)
-       + (SELECT count(*) FROM public.cloud_deal_messages WHERE local_message_id = 'dup-1' AND cloud_deal_id = D1)
-       + (SELECT count(*) FROM public.cloud_deal_files WHERE local_attachment_id = 'dup-1' AND cloud_deal_id = D1);
-    r := r || jsonb_build_object('B1_child_rows_stay_in_their_deal', pg_temp.pass(acc = '' AND js = js2 AND n = 5
-      AND jsonb_array_length(js -> 'p') = 2 AND jsonb_array_length(js -> 'f') = 2, acc || ' before=' || js::text || ' after=' || js2::text || ' n=' || n));
+    js := jsonb_build_array(jsonb_build_array(D1, pg_temp.h('dup-1a2')), jsonb_build_array(SD, pg_temp.h('dup-1s2')), jsonb_build_array(u, pg_temp.h('dup-1i2')));
+    FOREACH t3 IN ARRAY ARRAY['cloud_deal_parties:local_party_id', 'cloud_deal_checklists:local_checklist_id', 'cloud_deal_checklist_items:local_item_id',
+                               'cloud_deal_messages:local_message_id', 'cloud_deal_files:local_attachment_id'] LOOP
+      EXECUTE format('SELECT jsonb_agg(jsonb_build_array(cloud_deal_id, content_hash) ORDER BY cloud_deal_id) FROM public.%I WHERE %I = %L',
+                     split_part(t3, ':', 1), split_part(t3, ':', 2), 'dup-1') INTO js2;
+      IF js2 IS DISTINCT FROM (SELECT jsonb_agg(e ORDER BY e ->> 0) FROM jsonb_array_elements(js) e) THEN
+        acc := acc || ' ' || split_part(t3, ':', 1) || '=' || coalesce(js2::text, 'null');
+      END IF;
+    END LOOP;
+    r := r || jsonb_build_object('B1_child_rows_stay_in_their_deal', pg_temp.pass(acc = '', acc));
     RAISE EXCEPTION USING ERRCODE = 'T4236';
   EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('B1c_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;

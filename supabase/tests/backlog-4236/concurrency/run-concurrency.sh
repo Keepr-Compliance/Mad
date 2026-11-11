@@ -1,36 +1,48 @@
 #!/bin/bash
 # BACKLOG-4236 two-session controls. PREREQUISITE: both migrations applied (committed) on the test
 # project. Each case: setup (committed fixtures, ids random per run) -> two parallel kt-sql calls,
-# the second started 1 s after the first -> assert -> teardown + verify (always, from the trap).
-#   C1a  write holding its transaction, then turn-off: off waits, then deletes everything.
-#        Expect: write applied, off success, 0 deals and 0 messages afterwards.
-#   C1b  turn-off holding its transaction, then a write: the write waits, then sees Cloud off.
-#        Expect: off success, write {"error":"not_entitled"}, 0 deals afterwards.
-#   C2   one session holds the deal row and then upserts the message; the other tombstones the same
-#        message meanwhile. Expect: no 40P01 in either result; both calls answer.
+# the second started 1 s after the first -> assert -> automated verdict -> teardown + verify (always,
+# from the trap). Prints PASS or FAIL per case and exits non-zero on FAIL or on a dirty teardown.
+#   C1a  new-row writes (a new deal, a new blob) holding their transaction, then turn-off.
+#        Expect: deal applied, blob ok, turn-off success; afterwards no deal and no live new blob.
+#        Mutant: in set_my_cloud_autosave drop the settings FOR UPDATE AND move the settings UPDATE
+#        after the DELETE and the fence -> the DELETE runs before the writes commit and cannot see
+#        them -> the new deal and blob are left.
+#   C1b  turn-off holding its transaction, then the same new-row writes.
+#        Expect: turn-off success, both writes {"error":"not_entitled"}; no new deal, no new blob.
+#        Mutant: in cloud_upsert_deal and cloud_register_blob move the settings FOR SHARE after the
+#        entitlement check -> the check passes on the old state, the write waits, then inserts
+#        after the turn-off committed -> a new deal and a live blob are left.
+#   C2   one session holds the deal row, then upserts the message; the other tombstones that message.
+#        Expect: no 40P01; upsert applied; tombstone removed.
+#        Mutant: in cloud_tombstone remove the /*TOMB:lockdeals*/ statement -> 40P01 in one session.
 #   C3   two registrations of the same content, the first uncommitted for 3 s.
-#        Expect: both ok with the same blob_id; 1 live blob.
-# Mutants (apply to the APPLIED function, re-run, restore by re-applying the migration):
-#   C1a/C1b  move "PERFORM 1 FROM public.cloud_autosave_settings ... FOR SHARE;" after the entitlement
-#            check in cloud_upsert_messages -> C1b write applied after off (rows left)
-#   C2       in cloud_tombstone, remove the /*TOMB:lockdeals*/ statement -> 40P01 in one session
-#   C3       remove "ON CONFLICT (owner_user_id, sha256) WHERE purge_requested_at IS NULL DO NOTHING"
-#            -> second registration ERR 23505
+#        Expect: both ok with the same blob_id; one live blob with that content.
+#        Mutant: remove the ON CONFLICT ... DO NOTHING in cloud_register_blob -> ERR 23505.
+#   C4   two file upserts on two deals attaching the same two blobs in opposite payload order; the
+#        first session holds the lower-id blob first.
+#        Expect: no 40P01; both results ok with every row applied.
+#        Mutant: lock each blob per row in payload order instead of /*FILE:lockblobs*/ -> 40P01.
+# Mutants are applied to the APPLIED function, the case re-run, and the migration re-applied.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 K=~/.claude/bin/kt-sql
-case "${1:-}" in C1a|C1b|C2|C3) ;; *) sed -n '2,23p' "$0"; exit 2 ;; esac
+case "${1:-}" in C1a|C1b|C2|C3|C4) ;; *) sed -n '2,32p' "$0"; exit 2 ;; esac
+CASE="$1"
 
 umask 077
 tmp="$(mktemp -d)"
 RUN="$(openssl rand -hex 8)"
 uid() { python3 -c 'import uuid; print(uuid.uuid4())'; }
-A="$(uid)"; O="$(uid)"; M="$(uid)"; I="$(uid)"; DEAL=""; MSG=""; SETUP_DONE=0
+A="$(uid)"; O="$(uid)"; M="$(uid)"; I="$(uid)"
+DEAL=""; MSG=""; DEAL4A=""; DEAL4B=""; LOW_SHA=""; LOW_ID=""; HIGH_SHA=""; SETUP_DONE=0; VERDICT=FAIL
 
 fill() {  # fill <out> <template>...
   local out="$1"; shift
   for f in "$@"; do cat "$here/$f"; echo; done | sed -e "s/__A__/${A}/g" -e "s/__O__/${O}/g" -e "s/__M__/${M}/g" \
-    -e "s/__I__/${I}/g" -e "s/__RUN__/${RUN}/g" -e "s/__DEAL__/${DEAL}/g" -e "s/__MSG__/${MSG}/g" > "$tmp/$out"
+    -e "s/__I__/${I}/g" -e "s/__RUN__/${RUN}/g" -e "s/__DEAL__/${DEAL}/g" -e "s/__MSG__/${MSG}/g" \
+    -e "s/__DEAL4A__/${DEAL4A}/g" -e "s/__DEAL4B__/${DEAL4B}/g" -e "s/__LOW_SHA__/${LOW_SHA}/g" \
+    -e "s/__LOW_ID__/${LOW_ID}/g" -e "s/__HIGH_SHA__/${HIGH_SHA}/g" > "$tmp/$out"
 }
 col() { python3 -c 'import json,sys; print(json.load(sys.stdin)[0][sys.argv[1]] or "")' "$1"; }
 
@@ -40,17 +52,17 @@ cleanup() {
   if [ "$SETUP_DONE" = 1 ]; then
     fill teardown.filled.sql teardown.sql; $K "$tmp/teardown.filled.sql" >/dev/null
     fill verify.filled.sql verify.sql
-    v="$($K "$tmp/verify.filled.sql" | col verdict)"
+    v="$($K "$tmp/verify.filled.sql" | python3 -c 'import json,sys; print([r for r in json.load(sys.stdin) if "verdict" in r][-1]["verdict"])')"
     if [ "$v" != "clean" ]; then
-      echo "=================================================================" >&2
       echo "TEARDOWN NOT CLEAN (run ${RUN}, user ${A}): fixture rows are left" >&2
-      echo "=================================================================" >&2
       rc=1
     else
       echo "teardown verified clean"
     fi
   fi
   rm -rf "$tmp"
+  echo "${CASE}: ${VERDICT}"
+  [ "$VERDICT" = PASS ] || rc=1
   exit $rc
 }
 trap cleanup EXIT INT TERM
@@ -59,9 +71,11 @@ fill setup.filled.sql setup.sql
 SETUP_DONE=1
 out="$($K "$tmp/setup.filled.sql")"
 DEAL="$(echo "$out" | col deal)"; MSG="$(echo "$out" | col message)"
-[ -n "$DEAL" ] && [ -n "$MSG" ] || { echo "setup failed: $out" >&2; exit 1; }
+DEAL4A="$(echo "$out" | col deal4a)"; DEAL4B="$(echo "$out" | col deal4b)"
+LOW_SHA="$(echo "$out" | col low_sha)"; LOW_ID="$(echo "$out" | col low_id)"; HIGH_SHA="$(echo "$out" | col high_sha)"
+[ -n "$DEAL" ] && [ -n "$MSG" ] && [ -n "$LOW_ID" ] || { echo "setup failed: $out" >&2; exit 1; }
 
-pair() {  # pair <first file> <second file>: first now, second 1 s later, both in parallel
+pair() {  # first now, second 1 s later, both in parallel
   ( $K "$tmp/$1" > "$tmp/first.out" 2>&1 || true ) &
   p1=$!
   sleep 1
@@ -72,11 +86,47 @@ pair() {  # pair <first file> <second file>: first now, second 1 s later, both i
   echo "second: $(cat "$tmp/second.out")"
 }
 
-case "$1" in
-  C1a) fill a.sql as-user.sql c1-write-hold.sql; fill b.sql as-user.sql c1-off.sql; pair a.sql b.sql ;;
-  C1b) fill a.sql as-user.sql c1-off-hold.sql; fill b.sql as-user.sql c1-write.sql; pair a.sql b.sql ;;
+case "$CASE" in
+  C1a) fill a.sql as-user.sql c1-newwrite-hold.sql; fill b.sql as-user.sql c1-off.sql; pair a.sql b.sql ;;
+  C1b) fill a.sql as-user.sql c1-off-hold.sql; fill b.sql as-user.sql c1-newwrite.sql; pair a.sql b.sql ;;
   C2)  fill a.sql c2-deal-hold.sql as-user.sql c2-upsert.sql; fill b.sql as-user.sql c2-tombstone.sql; pair a.sql b.sql ;;
   C3)  fill a.sql as-user.sql c3-register-hold.sql; fill b.sql as-user.sql c3-register.sql; pair a.sql b.sql ;;
+  C4)  fill a.sql c4-lowlock-then-files.sql as-user.sql c4-files-a.sql; fill b.sql as-user.sql c4-files-b.sql; pair a.sql b.sql ;;
 esac
 fill assert.filled.sql assert.sql
-echo "state:  $($K "$tmp/assert.filled.sql")"
+$K "$tmp/assert.filled.sql" > "$tmp/state.out"
+echo "state:  $(cat "$tmp/state.out")"
+
+VERDICT="$(python3 - "$CASE" "$tmp/first.out" "$tmp/second.out" "$tmp/state.out" <<'PY'
+import json, sys
+case, f1, f2, fs = sys.argv[1:5]
+def rows(p):
+    t = open(p).read()
+    try:
+        return json.loads(t.split('\nkt-sql:')[0])
+    except Exception:
+        return t
+def last_row(p):
+    r = rows(p)
+    return r[-1] if isinstance(r, list) and r else {}
+a, b = last_row(f1), last_row(f2)
+raw = open(f1).read() + open(f2).read()
+st = last_row(fs).get('j', {})
+ok = '40P01' not in raw
+if case == 'C1a':
+    ok = ok and a.get('d', {}).get('results', [{}])[0].get('status') == 'applied' and a.get('b', {}).get('ok') is True \
+        and b.get('r', {}).get('success') is True and st.get('deals') == 0 and st.get('live_new_blob') == 0
+elif case == 'C1b':
+    ok = ok and a.get('r', {}).get('success') is True and b.get('d', {}).get('error') == 'not_entitled' \
+        and b.get('b', {}).get('error') == 'not_entitled' and st.get('new_deal') == 0 and st.get('live_new_blob') == 0
+elif case == 'C2':
+    ok = ok and a.get('r', {}).get('results', [{}])[0].get('status') == 'applied' \
+        and b.get('r', {}).get('results', [{}])[0].get('status') == 'removed'
+elif case == 'C3':
+    ok = ok and a.get('r', {}).get('ok') is True and b.get('r', {}).get('ok') is True \
+        and a['r'].get('blob_id') == b['r'].get('blob_id') and st.get('live_cc_blob') == 1
+elif case == 'C4':
+    ok = ok and all(x.get('r', {}).get('ok') is True and [e.get('status') for e in x['r'].get('results', [])] == ['applied', 'applied'] for x in (a, b))
+print('PASS' if ok else 'FAIL')
+PY
+)"

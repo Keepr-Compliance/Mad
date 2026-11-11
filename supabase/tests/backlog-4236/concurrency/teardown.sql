@@ -1,10 +1,14 @@
--- Removes exactly the rows of one run (ids filled by run-concurrency.sh). Cloud rows, settings,
--- memberships and the assignment go with the user (ON DELETE CASCADE); the organization and its
--- plan row are removed by id.
+-- Removes exactly the rows of one run (ids filled by run-concurrency.sh). Rows in any public mcp_*
+-- table with a user_id column are deleted for this user first (present when BACKLOG-4238 is applied).
 DO $td$
+DECLARE t text;
 BEGIN
-  DELETE FROM public.cloud_blobs WHERE owner_user_id = '__A__'::uuid;
+  FOR t IN SELECT c.table_name FROM information_schema.columns c
+            WHERE c.table_schema = 'public' AND c.table_name LIKE 'mcp\_%' AND c.column_name = 'user_id' LOOP
+    EXECUTE format('DELETE FROM public.%I WHERE user_id = $1', t) USING '__A__'::uuid;
+  END LOOP;
   DELETE FROM public.cloud_deals WHERE owner_user_id = '__A__'::uuid;
+  DELETE FROM public.cloud_blobs WHERE owner_user_id = '__A__'::uuid;
   DELETE FROM public.cloud_autosave_settings WHERE user_id = '__A__'::uuid;
   DELETE FROM public.member_addons WHERE user_id = '__A__'::uuid;
   SET LOCAL session_replication_role = replica;

@@ -1,8 +1,8 @@
 -- BACKLOG-4236 two-session fixtures. Needs both migrations APPLIED (committed) on the test project.
 -- run-concurrency.sh fills __A__ (user), __O__ (organization), __M__ (membership), __I__ (install)
 -- and __RUN__, all random per run. COMMITS: one user, one organization on the team plan with
--- cloud_autosave_assignable on, one active membership, the assignment, Cloud on, one deal with one
--- message. teardown.sql removes exactly these rows.
+-- cloud_autosave_assignable on, one active membership, the assignment, Cloud on, deal cc-1 with
+-- message cc-m1, deals cc-4a and cc-4b, two registered blobs. teardown.sql removes exactly these rows.
 DO $cc$
 DECLARE A uuid := '__A__'::uuid; O uuid := '__O__'::uuid; r jsonb; d uuid;
 BEGIN
@@ -30,7 +30,16 @@ BEGIN
   r := public.cloud_upsert_messages('__I__'::uuid, d, jsonb_build_array(jsonb_build_object('local_id', 'cc-m1',
          'content_hash', encode(sha256('cc-m1'::bytea), 'hex'), 'channel_kind', 'email', 'hidden_from_export', false)));
   IF r -> 'results' -> 0 ->> 'status' IS DISTINCT FROM 'applied' THEN RAISE EXCEPTION 'message failed: %', r; END IF;
+  PERFORM public.cloud_upsert_deal(jsonb_build_object('source_install_id', '__I__', 'local_id', 'cc-4a', 'content_hash', encode(sha256('cc-4a'::bytea), 'hex')));
+  PERFORM public.cloud_upsert_deal(jsonb_build_object('source_install_id', '__I__', 'local_id', 'cc-4b', 'content_hash', encode(sha256('cc-4b'::bytea), 'hex')));
+  PERFORM public.cloud_register_blob(encode(sha256('cc-b1-__RUN__'::bytea), 'hex'), 10, NULL);
+  PERFORM public.cloud_register_blob(encode(sha256('cc-b2-__RUN__'::bytea), 'hex'), 10, NULL);
 END
 $cc$;
-SELECT d.id AS deal, m.id AS message FROM public.cloud_deals d JOIN public.cloud_deal_messages m ON m.cloud_deal_id = d.id
- WHERE d.owner_user_id = '__A__'::uuid;
+SELECT (SELECT id FROM public.cloud_deals WHERE owner_user_id = '__A__'::uuid AND local_transaction_id = 'cc-1') AS deal,
+       (SELECT m.id FROM public.cloud_deal_messages m WHERE m.owner_user_id = '__A__'::uuid AND m.local_message_id = 'cc-m1') AS message,
+       (SELECT id FROM public.cloud_deals WHERE owner_user_id = '__A__'::uuid AND local_transaction_id = 'cc-4a') AS deal4a,
+       (SELECT id FROM public.cloud_deals WHERE owner_user_id = '__A__'::uuid AND local_transaction_id = 'cc-4b') AS deal4b,
+       (SELECT sha256 FROM public.cloud_blobs WHERE owner_user_id = '__A__'::uuid ORDER BY id LIMIT 1) AS low_sha,
+       (SELECT id FROM public.cloud_blobs WHERE owner_user_id = '__A__'::uuid ORDER BY id LIMIT 1) AS low_id,
+       (SELECT sha256 FROM public.cloud_blobs WHERE owner_user_id = '__A__'::uuid ORDER BY id DESC LIMIT 1) AS high_sha;
