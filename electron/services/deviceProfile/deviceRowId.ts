@@ -37,8 +37,13 @@ export function getDeviceRowId(): string | null {
 export function loadDeviceRowIdAtBoot(userDataDir: string): void {
   try {
     const raw = fs.readFileSync(path.join(userDataDir, DEVICE_PROFILE_STATE_FILE), "utf8");
-    const parsed = JSON.parse(raw) as { rowId?: unknown };
-    if (rowId === null) setDeviceRowId(parsed?.rowId);
+    const parsed = JSON.parse(raw) as { entries?: Array<{ rowId?: unknown; writtenAt?: unknown }> };
+    if (rowId !== null || !Array.isArray(parsed?.entries)) return;
+    // The most recently written row (the last user who signed in with the setting on).
+    const latest = [...parsed.entries]
+      .filter((e) => e && typeof e.writtenAt === "string")
+      .sort((a, b) => String(b.writtenAt).localeCompare(String(a.writtenAt)))[0];
+    setDeviceRowId(latest?.rowId);
   } catch {
     // No file (first launch, or the setting is off): no id until registration.
   }

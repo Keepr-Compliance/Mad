@@ -683,9 +683,9 @@ describe("BACKLOG-4050 M-1: host inputs reach beforeBreadcrumb and beforeSend", 
 describe("BACKLOG-4185 devices row id on events", () => {
   type Net = { send: (env: unknown) => Promise<unknown> };
   const ROW = randomUUID();
-  const stateFile = JSON.stringify({ v: 1, deviceKey: "k", rowId: ROW, fp: {}, writtenAt: "x" });
+  const stateFile = JSON.stringify({ v: 2, entries: [{ deviceKey: "k0", rowId: randomUUID(), fp: {}, writtenAt: "2026-01-01T00:00:00.000Z" }, { deviceKey: "k", rowId: ROW, fp: {}, writtenAt: "2026-02-01T00:00:00.000Z" }] });
 
-  it("loaded at boot and added as one tag while both switches are ON", () => {
+  it("loaded at boot (the most recently written entry) and added as one tag while both switches are ON", () => {
     const loaded = load({ isPackaged: true, scrubPassThrough: true, deviceProfileStateFile: stateFile });
     const out = initOptions(loaded).beforeSend({ message: "boom", tags: { component: "x" } }) as { tags: Record<string, unknown> };
     expect(out.tags).toEqual({ component: "x", "keepr.device_row": ROW });
@@ -701,7 +701,7 @@ describe("BACKLOG-4185 devices row id on events", () => {
   it("absent without a state file; a malformed row id is never sent", () => {
     const none = load({ isPackaged: true, scrubPassThrough: true });
     expect((initOptions(none).beforeSend({ message: "boom" }) as { tags?: unknown }).tags).toBeUndefined();
-    const bad = load({ isPackaged: true, scrubPassThrough: true, deviceProfileStateFile: JSON.stringify({ rowId: "machine-id-a" }) });
+    const bad = load({ isPackaged: true, scrubPassThrough: true, deviceProfileStateFile: JSON.stringify({ v: 2, entries: [{ rowId: "machine-id-a", writtenAt: "x" }] }) });
     expect((initOptions(bad).beforeSend({ message: "boom" }) as { tags?: unknown }).tags).toBeUndefined();
   });
 

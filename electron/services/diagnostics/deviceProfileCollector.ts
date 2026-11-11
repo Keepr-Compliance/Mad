@@ -92,7 +92,7 @@ export interface CollectorDeps {
 
 export function parseMacSystemVersion(plist: string): { osVersion?: string; osBuild?: string } {
   const pick = (key: string): string | undefined => {
-    const m = new RegExp(`<key>${key}</key>\\s*<string>([^<]{1,32})</string>`).exec(plist);
+    const m = plist.match(new RegExp(`<key>${key}</key>\\s*<string>([^<]{1,32})</string>`));
     return m ? m[1] : undefined;
   };
   return { osVersion: pick("ProductVersion"), osBuild: pick("ProductBuildVersion") };

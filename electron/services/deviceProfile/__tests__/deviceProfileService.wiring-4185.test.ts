@@ -89,7 +89,7 @@ it("ON: one UPDATE of devices for (user_id, device_id); counts from the worker; 
   expect(calls[0].update).toMatchObject({ hardware_profile: expect.objectContaining({ cpuCores: 8, contacts: 2 }) });
   expect(mockQueryContacts).toHaveBeenCalledWith("deviceDataSize", "u1", 30_000);
   const state = JSON.parse(fs.readFileSync(stateFile, "utf8"));
-  expect(state.rowId).toBe(ROW);
+  expect(state.entries[0].rowId).toBe(ROW);
   expect(fs.readFileSync(stateFile, "utf8")).not.toContain("machine-a");
 });
 

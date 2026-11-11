@@ -23,6 +23,7 @@ import {
   shouldWrite,
   type DataSizeCounts,
   type ServiceDeps,
+  type StateEntry,
   type StateFile,
 } from "../deviceProfileService";
 import { randomUUID } from "crypto";
@@ -118,14 +119,13 @@ afterEach(() => {
 });
 
 describe("P6 shouldWrite", () => {
-  const base: StateFile = {
-    v: 1,
+  const base: StateEntry = {
     deviceKey: "k",
     rowId: null,
     fp: { osBuild: "24G419", ramGB: 32, addressBook: 100_000, contacts: 0, dbMB: 1000 },
     writtenAt: "x",
   };
-  const next = (fp: Partial<StateFile["fp"]>, deviceKey = "k") => ({ deviceKey, fp: { ...base.fp, ...fp } });
+  const next = (fp: Partial<StateEntry["fp"]>, deviceKey = "k") => ({ deviceKey, fp: { ...base.fp, ...fp } });
 
   it("login always writes; no previous state writes", () => {
     expect(shouldWrite(base, next({}), "login")).toBe(true);
@@ -205,17 +205,32 @@ describe("write path", () => {
     expect(profile).toMatchObject({ contacts: 2000, addressBook: 510, dbMB: 1500, mailAccounts: 2, countsState: "ok", poolReady: true });
     const raw = JSON.stringify(h.state.file);
     expect(raw).not.toContain(DEVICE);
-    expect(h.state.file?.deviceKey).toBe(deviceKeyOf(USER, DEVICE));
-    expect(h.state.file?.rowId).toBe(ROW);
+    expect(h.state.file?.entries).toHaveLength(1);
+    expect(h.state.file?.entries[0].deviceKey).toBe(deviceKeyOf(USER, DEVICE));
+    expect(h.state.file?.entries[0].rowId).toBe(ROW);
     expect(getDeviceRowId()).toBe(ROW);
   });
-  it("a failed UPDATE leaves the state file untouched (next launch retries)", async () => {
+  it("a failed UPDATE keeps only the pending-clear entry (empty fingerprint), so the next launch retries", async () => {
     const h = harness();
     h.updateOk.value = false;
-    const s = createDeviceProfileService(h.deps);
-    await settle(s.onDeviceRegistered(USER, DEVICE, "login", ROW));
+    await settle(createDeviceProfileService(h.deps).onDeviceRegistered(USER, DEVICE, "login", ROW));
     expect(h.updates).toHaveLength(1);
-    expect(h.state.file).toBeNull();
+    expect(h.state.file?.entries).toEqual([expect.objectContaining({ deviceKey: deviceKeyOf(USER, DEVICE), fp: {} })]);
+    h.updateOk.value = true;
+    await settle(createDeviceProfileService(h.deps).onDeviceRegistered(USER, DEVICE, "restore", ROW));
+    expect(h.updates).toHaveLength(2);
+    expect(h.state.file?.entries[0].fp).toMatchObject({ osBuild: "24G419", ramGB: 32 });
+  });
+  it("the pending-clear entry is written BEFORE the profile UPDATE", async () => {
+    const h = harness();
+    let fileAtUpdate: unknown = "unset";
+    const base = h.deps.updateRow;
+    h.deps.updateRow = async (u, d, p) => {
+      fileAtUpdate = JSON.parse(JSON.stringify(h.state.file));
+      return base(u, d, p);
+    };
+    await settle(createDeviceProfileService(h.deps).onDeviceRegistered(USER, DEVICE, "login", ROW));
+    expect(fileAtUpdate).toEqual({ v: 2, entries: [expect.objectContaining({ deviceKey: deviceKeyOf(USER, DEVICE) })] });
   });
   it("an unchanged restore in a NEW process does not write", async () => {
     const h = harness();
@@ -275,12 +290,12 @@ describe("P13 bounded counts scheduler (C2)", () => {
 });
 
 describe("P9 / B3 gate OFF and the pending clear", () => {
-  const prior: StateFile = { v: 1, deviceKey: deviceKeyOf(USER, DEVICE), rowId: ROW, fp: {}, writtenAt: "x" };
+  const prior: StateFile = { v: 2, entries: [{ deviceKey: deviceKeyOf(USER, DEVICE), rowId: ROW, fp: {}, writtenAt: "x" }] };
 
   it("OFF: no collection, one null UPDATE, file deleted after success", async () => {
     const h = harness();
     h.gate.on = false;
-    h.state.file = { ...prior };
+    h.state.file = JSON.parse(JSON.stringify(prior));
     const s = createDeviceProfileService(h.deps);
     await settle(s.onDeviceRegistered(USER, DEVICE, "restore", ROW));
     expect(h.collects).toBe(0);
@@ -290,7 +305,7 @@ describe("P9 / B3 gate OFF and the pending clear", () => {
   it("OFF while offline: file kept; next launch clears exactly once; then no further calls", async () => {
     const h = harness();
     h.gate.on = false;
-    h.state.file = { ...prior };
+    h.state.file = JSON.parse(JSON.stringify(prior));
     h.updateOk.value = false;
     await settle(createDeviceProfileService(h.deps).onDeviceRegistered(USER, DEVICE, "restore", ROW));
     expect(h.state.file).not.toBeNull();
@@ -304,7 +319,7 @@ describe("P9 / B3 gate OFF and the pending clear", () => {
   it("crash reporting OFF alone (diagnostics ON) also clears: the gate is both switches", async () => {
     const h = harness();
     const switches = { diag: true, crash: false };
-    h.state.file = { ...prior };
+    h.state.file = JSON.parse(JSON.stringify(prior));
     const s = createDeviceProfileService({ ...h.deps, isGateOn: () => switches.diag && switches.crash });
     await settle(s.onDeviceRegistered(USER, DEVICE, "restore", ROW));
     expect(h.collects).toBe(0);
@@ -409,5 +424,30 @@ describe("wiring (source checks)", () => {
       expect(block.indexOf(setter)).toBeGreaterThan(0);
       expect(block.indexOf("onPrivacyGateChanged()")).toBeGreaterThan(block.indexOf(setter));
     }
+  });
+});
+
+describe("S1 one machine, two users: each user's pending clear is kept separately", () => {
+  const OTHER = "user-b";
+  it("B signs in after A; OFF clears B now, and A's row is cleared when A next registers", async () => {
+    const h = harness();
+    await settle(createDeviceProfileService(h.deps).onDeviceRegistered(USER, DEVICE, "login", ROW));
+    await settle(createDeviceProfileService(h.deps).onDeviceRegistered(OTHER, DEVICE, "login", ROW));
+    expect(h.state.file?.entries.map((e) => e.deviceKey).sort()).toEqual([deviceKeyOf(USER, DEVICE), deviceKeyOf(OTHER, DEVICE)].sort());
+    const s = createDeviceProfileService(h.deps);
+    await settle(s.onDeviceRegistered(OTHER, DEVICE, "restore", ROW)); // unchanged: no write
+    h.gate.on = false;
+    await s.onPrivacyGateChanged();
+    expect(h.updates.at(-1)).toEqual({ userId: OTHER, deviceId: DEVICE, profile: null });
+    expect(h.state.file?.entries.map((e) => e.deviceKey)).toEqual([deviceKeyOf(USER, DEVICE)]); // A still pending
+    await settle(createDeviceProfileService(h.deps).onDeviceRegistered(USER, DEVICE, "restore", ROW));
+    expect(h.updates.at(-1)).toEqual({ userId: USER, deviceId: DEVICE, profile: null });
+    expect(h.state.file).toBeNull();
+  });
+  it("B's later write does not erase A's entry", async () => {
+    const h = harness();
+    await settle(createDeviceProfileService(h.deps).onDeviceRegistered(USER, DEVICE, "login", ROW));
+    await settle(createDeviceProfileService(h.deps).onDeviceRegistered(OTHER, DEVICE, "login", ROW));
+    expect(h.state.file?.entries).toHaveLength(2);
   });
 });

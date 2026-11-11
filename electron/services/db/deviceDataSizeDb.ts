@@ -5,7 +5,8 @@
  * Each COUNT uses its table's user_id index.
  *
  * No COUNT(messages): on a 1,000,000-message encrypted DB it took 985 ms on a
- * fresh connection (92 ms warm) and failed the 100 ms gate; these three take
+ * fresh connection (92 ms on later runs) and failed the 100 ms gate. All runs
+ * were OS-warm (file cache not purged); a cold number is unmeasured. these three take
  * ~3 ms there. Data size is carried by the database file size instead.
  */
 import { sql } from "./core/sqlText";

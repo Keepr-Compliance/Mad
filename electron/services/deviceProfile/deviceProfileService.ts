@@ -42,12 +42,21 @@ export interface DataSizeCounts {
   mailAccounts?: number;
 }
 
-export interface StateFile {
-  v: 1;
+/**
+ * One entry per (user, machine) this process has written a profile for. An
+ * entry IS the pending-clear flag for that row: it is written BEFORE the
+ * profile UPDATE and removed only after a null UPDATE for that row succeeds.
+ */
+export interface StateEntry {
   deviceKey: string;
   rowId: string | null;
   fp: Fingerprint;
   writtenAt: string;
+}
+
+export interface StateFile {
+  v: 2;
+  entries: StateEntry[];
 }
 
 export interface Fingerprint {
@@ -103,7 +112,7 @@ function movedMoreThan(prev: number | undefined, next: number | undefined): bool
   return Math.abs(next - prev) / prev > CHANGE_THRESHOLD;
 }
 
-export function shouldWrite(prev: StateFile | null, next: { deviceKey: string; fp: Fingerprint }, reason: RegistrationReason): boolean {
+export function shouldWrite(prev: StateEntry | null, next: { deviceKey: string; fp: Fingerprint }, reason: RegistrationReason): boolean {
   if (reason === "login" || prev === null) return true;
   if (prev.deviceKey !== next.deviceKey) return true;
   if (prev.fp.osBuild !== next.fp.osBuild) return true;
@@ -130,7 +139,7 @@ export function createDeviceProfileService(deps: ServiceDeps): DeviceProfileServ
   let lastRegistration: { userId: string; deviceId: string } | null = null;
   let machineClass: MachineClass | null = null;
   let countsState: CountsState | null = null;
-  let clearing: Promise<void> | null = null;
+  const clearing = new Map<string, Promise<void>>();
 
   const sleep = (ms: number): Promise<void> =>
     new Promise((resolve) => {
@@ -167,22 +176,55 @@ export function createDeviceProfileService(deps: ServiceDeps): DeviceProfileServ
     return { counts: null, state: lastReady ? "skippedBusy" : "poolDown" };
   }
 
+  // Every read-modify-write of the state file runs one at a time.
+  let stateChain: Promise<unknown> = Promise.resolve();
+  function withState<T>(fn: (entries: StateEntry[]) => { entries: StateEntry[]; result: T }): Promise<T> {
+    const run = stateChain.then(async () => {
+      const file = await deps.readState().catch(() => null);
+      const before = file && file.v === 2 && Array.isArray(file.entries) ? file.entries : [];
+      const { entries, result } = fn(before.map((e) => ({ ...e, fp: { ...e.fp } })));
+      if (entries.length === 0) {
+        if (before.length > 0) await deps.removeState();
+      } else {
+        await deps.writeState({ v: 2, entries });
+      }
+      return result;
+    });
+    stateChain = run.catch(() => undefined);
+    return run;
+  }
+  const entryOf = (entries: StateEntry[], key: string) => entries.find((e) => e.deviceKey === key) ?? null;
+  const without = (entries: StateEntry[], key: string) => entries.filter((e) => e.deviceKey !== key);
+
+  /** Null UPDATE for THIS (user, machine) row; its entry is removed only once that succeeds. */
+  async function sendClear(userId: string, deviceId: string): Promise<boolean> {
+    const key = deviceKeyOf(userId, deviceId);
+    const res = await deps.updateRow(userId, deviceId, null);
+    if (!res.ok) return false; // entry kept: the next registration retries
+    await withState((entries) => ({ entries: without(entries, key), result: undefined }));
+    return true;
+  }
+
+  /**
+   * OFF: clear this user's row if its entry says a profile may be there. Other
+   * users' entries stay until THEY register on this machine (RLS lets a user
+   * update only their own row).
+   */
   async function clearIfPending(userId: string, deviceId: string): Promise<void> {
-    if (clearing) return clearing;
-    clearing = (async () => {
+    const key = deviceKeyOf(userId, deviceId);
+    if (clearing.has(key)) return clearing.get(key);
+    const p = (async () => {
       try {
-        const state = await deps.readState();
-        if (!state) return;
-        const res = await deps.updateRow(userId, deviceId, null);
-        if (!res.ok) return; // file kept: the next registration retries
-        await deps.removeState();
+        const pending = await withState((entries) => ({ entries, result: entryOf(entries, key) !== null }));
+        if (pending) await sendClear(userId, deviceId);
       } catch (err) {
         deps.warn("[DeviceProfile] Clear failed; will retry", { error: err instanceof Error ? err.message : String(err) });
       } finally {
-        clearing = null;
+        clearing.delete(key);
       }
     })();
-    return clearing;
+    clearing.set(key, p);
+    return p;
   }
 
   async function collectAndWrite(userId: string, deviceId: string, reason: RegistrationReason, rowId: string | null): Promise<void> {
@@ -199,14 +241,34 @@ export function createDeviceProfileService(deps: ServiceDeps): DeviceProfileServ
     hw.dbBytes = await deps.dbBytes().catch(() => undefined);
 
     const row = buildDeviceProfile(hw, "row");
-    const next = { deviceKey: deviceKeyOf(userId, deviceId), fp: fingerprintOf(row) };
-    const prev = await deps.readState().catch(() => null);
-    if (!shouldWrite(prev, next, reason)) return;
+    const key = deviceKeyOf(userId, deviceId);
+    const next = { deviceKey: key, fp: fingerprintOf(row) };
     if (!deps.isGateOn()) return; // turned off while we waited
+    // Pending-clear flag FIRST: from here on an OFF can always find this row.
+    // A new entry carries an empty fingerprint, so a failed UPDATE is retried.
+    const prev = await withState((entries) => {
+      const found = entryOf(entries, key);
+      const stamp = new Date(deps.now()).toISOString();
+      const entry: StateEntry = found ? { ...found, rowId: rowId ?? found.rowId } : { deviceKey: key, rowId, fp: {}, writtenAt: stamp };
+      return { entries: [...without(entries, key), entry], result: found };
+    });
+    if (!shouldWrite(prev, next, reason)) return;
     const res = await deps.updateRow(userId, deviceId, row);
-    if (!res.ok || res.rows < 1) return; // state untouched: the next launch retries
-    if (!deps.isGateOn()) return;
-    await deps.writeState({ v: 1, deviceKey: next.deviceKey, rowId, fp: next.fp, writtenAt: new Date(deps.now()).toISOString() });
+    if (!deps.isGateOn()) {
+      // OFF arrived while the UPDATE was in flight: a fresh null, sent AFTER
+      // it, so the null is the last write the row sees. Not deduped with a
+      // clear already running, which may have landed before this UPDATE.
+      await sendClear(userId, deviceId);
+      return;
+    }
+    if (!res.ok || res.rows < 1) return; // fingerprint untouched: the next launch retries
+    await withState((entries) => {
+      const found = entryOf(entries, key);
+      if (!found) return { entries, result: undefined }; // cleared meanwhile
+      const entry: StateEntry = { deviceKey: key, rowId, fp: next.fp, writtenAt: new Date(deps.now()).toISOString() };
+      return { entries: [...without(entries, key), entry], result: undefined };
+    });
+    if (!deps.isGateOn()) await sendClear(userId, deviceId);
   }
 
   return {
@@ -298,7 +360,7 @@ function productionService(): DeviceProfileService {
     readState: async () => {
       try {
         const parsed = JSON.parse(await fsp.readFile(statePath, "utf8")) as StateFile;
-        return parsed && parsed.v === 1 && typeof parsed.deviceKey === "string" ? parsed : null;
+        return parsed && parsed.v === 2 && Array.isArray(parsed.entries) ? parsed : null;
       } catch {
         return null;
       }
