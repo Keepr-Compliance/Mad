@@ -300,7 +300,7 @@ beforeEach(() => {
   buildSchema(mockDb);
   seedContact(mockDb);
   registeredHandlers.clear();
-  registerContactHandlers({} as any);
+  registerContactHandlers();
 });
 
 afterEach(() => {
@@ -413,7 +413,7 @@ describe("the rename survives a restart", () => {
       buildSchema(mockDb);
       seedContact(mockDb);
       registeredHandlers.clear();
-      registerContactHandlers({} as any);
+      registerContactHandlers();
 
       const result = await saveFromEditForm();
       if (!result.success) throw new Error(`contacts:update failed: ${result.error}`);

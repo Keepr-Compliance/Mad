@@ -4,7 +4,7 @@
 // Handles: get-conversations, get-messages, open-folder, export-conversations
 // ============================================
 
-import { ipcMain, shell, BrowserWindow } from "electron";
+import { ipcMain, shell } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import path from "path";
 
@@ -46,7 +46,7 @@ let handlersRegistered = false;
 /**
  * Register conversation and message export IPC handlers
  */
-export function registerConversationHandlers(_mainWindow: BrowserWindow): void {
+export function registerConversationHandlers(): void {
   // Prevent double registration
   if (handlersRegistered) {
     logService.warn(

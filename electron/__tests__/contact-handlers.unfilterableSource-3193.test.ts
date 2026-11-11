@@ -229,10 +229,7 @@ beforeEach(() => {
   mockDb.exec(CONTACT_IDENTITY_SCHEMA);
   registeredHandlers.clear();
   __resetContactLinkingScheduler();
-  registerContactHandlers({
-    isDestroyed: () => false,
-    webContents: { send: jest.fn() },
-  } as any);
+  registerContactHandlers();
 });
 
 afterEach(() => {

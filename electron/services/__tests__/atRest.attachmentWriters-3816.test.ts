@@ -536,7 +536,7 @@ describe("reader: messages:get-attachments-batch (the text-thread viewer, Conver
     const { ipcMain } = require("electron") as { ipcMain: { handle: jest.Mock } };
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { registerMessageImportHandlers } = require("../../handlers/messageImportHandlers") as typeof import("../../handlers/messageImportHandlers");
-    registerMessageImportHandlers({} as never);
+    registerMessageImportHandlers();
     const call = ipcMain.handle.mock.calls.find((c) => c[0] === "messages:get-attachments-batch");
     expect(call).toBeDefined();
 

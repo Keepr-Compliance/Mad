@@ -164,7 +164,7 @@ beforeEach(() => {
     "INSERT INTO contact_emails (id, contact_id, email, is_primary) VALUES ('em-dana', ?, 'dana@example.com', 1)",
   ).run(DANA);
 
-  registerContactHandlers({} as never);
+  registerContactHandlers();
 });
 
 afterEach(() => {

@@ -73,7 +73,7 @@ describe("BACKLOG-3881: sync cooldown vs. an Apple-encrypted backup", () => {
     jest.clearAllMocks();
     handlers.clear();
     rateLimiters.sync.clearKey(UDID);
-    registerSyncHandlers({} as never, "user-1");
+    registerSyncHandlers("user-1");
   });
   afterEach(() => cleanupSyncHandlers());
 
