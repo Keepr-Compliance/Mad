@@ -216,6 +216,22 @@ describe("C1 exact key set + body (W1 forward message, W3 beforeSendLog-only, W5
   });
 });
 
+describe("trace_id is fresh per log, never the SDK's (BACKLOG-4181)", () => {
+  it("two logs: each 32 lowercase hex, neither equals the scope trace id, and they differ", async () => {
+    const sdkTraceId = Sentry.getCurrentScope().getPropagationContext().traceId;
+    expect(sdkTraceId).toMatch(/^[0-9a-f]{32}$/); // positive control: the SDK has one to stamp
+    perf.track("main.lag", 1500, { inFlightCount: 0 });
+    perf.track("main.lag", 1700, { inFlightCount: 1 });
+    const logs = logItems(await drain()).filter((l) => l.body === "main.lag") as Array<Log & { trace_id?: unknown }>;
+    expect(logs).toHaveLength(2);
+    for (const l of logs) {
+      expect(l.trace_id).toMatch(/^[0-9a-f]{32}$/);
+      expect(l.trace_id).not.toBe(sdkTraceId);
+    }
+    expect(logs[0].trace_id).not.toBe(logs[1].trace_id);
+  });
+});
+
 describe("C2 the switch is read LIVE (W2 boot read, W3, W4)", () => {
   it("C2a OFF before capture: nothing sent", async () => {
     setDiagnosticsSharingEnabled(false);
