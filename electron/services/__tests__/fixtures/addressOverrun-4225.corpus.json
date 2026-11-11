@@ -1,5 +1,5 @@
 {
- "_source": "BACKLOG-4225. Every input the extractor/Learn test suites passed to the real analyzeEmail (recorded at b1f9d6ae4 + this branch's fixtures), the same inputs with state ZZ (the pre-fix fixtures), and the synthetic BACKLOG-4225 cases. oldRealEstate/oldAddresses were produced by running the pre-fix extractor (b1f9d6ae4) on each input. Synthetic addresses only.",
+ "_source": "BACKLOG-4225. Every input the extractor/Learn test suites passed to the real analyzeEmail (recorded at b1f9d6ae4 + this branch's fixtures), the same inputs with state ZZ (the pre-fix fixtures), and the synthetic BACKLOG-4225 cases. oldRealEstate/oldAddresses were produced by running the pre-fix extractor (b1f9d6ae4) on each input. Synthetic addresses only. The last row (two addresses, junk before a ZIP) is SR's half-revert input (pm_comments 9de117e6), old output from the pre-fix extractor at int-portal/release-2.47.",
  "rows": [
   {
    "email": {
@@ -777,6 +777,17 @@
    "oldRealEstate": true,
    "oldAddresses": [
     "1234 sample\nriver lane\nann and bob are excited to"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Purchase agreement 1234 Sample Lane\nann and bob are excited to 98101. Also 55 Other Road, Testville, WA 98101"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample lane\nann and bob are excited to 98101",
+    "55 other road, testville, wa 98101"
    ]
   }
  ]
