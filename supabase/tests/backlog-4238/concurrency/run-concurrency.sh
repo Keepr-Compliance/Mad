@@ -12,11 +12,13 @@
 #      code row, the activation finds the connection already active and returns invalid_grant
 #      without a delete -> responses ok=1 invalid_grant=1, events reconnect_replaced=1 only,
 #      connections active=1. Differs in events and connections. NOT RUN.
-# D13b one call while another transaction holds the call's counter row for 6 s.
-#      expected: response error=busy; elapsed < 3 s; outcomes busy=1.
+# D13b one call while another transaction holds the call's counter row for 8 s; the call starts once
+#      the holder is seen sleeping (gate.sql). expected: response error=busy; server_ms (the call's own
+#      duration on the server) < 3000; outcomes busy=1. Window 1 measured the old client-side time:
+#      3628 ms correct, 7524 ms mutant (transport 0.6-2.6 s), hence the server-side bound.
 #      mutant S_D13b_bump_no_lock_timeout (no "PERFORM set_config('lock_timeout', '1000ms', true);" in _mcp_bump): the call
-#      waits until the holder commits (about 5 s) and then counts normally -> response ok,
-#      elapsed >= 4 s, outcomes ok=1. Differs in response, elapsed and outcomes. NOT RUN.
+#      waits until the holder commits (about 6-7 s) and then counts normally -> response ok,
+#      server_ms >= 4000, outcomes ok=1. Differs in response, elapsed and outcomes. NOT RUN.
 # D14  40 parallel calls on one connection, all inside one minute window.
 #      expected: ok <= 30; ok + rate_limited + busy = 40; no other response; 40 call log rows.
 #      mutant S_D14_bump_limit_plus_10 ("IF v_n <= p_limit THEN" -> "IF v_n <= p_limit + 10 THEN" in _mcp_bump): up to 40
@@ -31,14 +33,14 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 K=~/.claude/bin/kt-sql
-case "${1:-}" in D7c|D13b|D14) ;; *) sed -n '2,30p' "$0"; exit 2 ;; esac
+case "${1:-}" in D7c|D13b|D14) ;; *) sed -n '2,32p' "$0"; exit 2 ;; esac
 
 umask 077
 tmp="$(mktemp -d)"
 SECRET="$(openssl rand -hex 32)"
 RUN="$(openssl rand -hex 10)"  # client id kpr_c_cc + 20 = 22 characters
 FUID="$(python3 -c 'import uuid; print(uuid.uuid4())')"  # fixture user of this run
-m0=""; CONNS=""; ENABLED=""; SECRET_HEX=""; ALLOW_N=""; SETUP_DONE=0; VERDICT=FAIL
+RT=""; m0=""; CONNS=""; ENABLED=""; SECRET_HEX=""; ALLOW_N=""; SETUP_DONE=0; VERDICT=FAIL
 
 fill() {  # fill <template> <out>
   sed -e "s/__SECRET__/${SECRET}/g" -e "s/__RUN__/${RUN}/g" -e "s/__UID__/${FUID}/g" -e "s/__CONNS__/${CONNS}/g" \
@@ -58,6 +60,17 @@ except Exception:
     print('none')
 PY
 }
+# server-side duration of one call: the "ms" column of call.sql, or "none"
+srv_ms() { python3 - "$1" <<'PY'
+import json, sys
+try:
+    print(int(json.loads(open(sys.argv[1]).read())[0]['ms']))
+except Exception:
+    print('none')
+PY
+}
+# median of 3 round trips of a trivial call through kt-sql (printed only; the verdict uses server_ms)
+rt_ms() { for i in 1 2 3; do a=$(now_ms); $K -c "select 1" >/dev/null 2>&1; echo $(( $(now_ms) - a )); done | sort -n | sed -n 2p; }
 # start only in the first 40 s of a minute, so a case stays inside one counter window
 wait_window() { while [ "$(date +%S | sed 's/^0//')" -ge 40 ]; do sleep 1; done; }
 
@@ -95,13 +108,15 @@ ENABLED="$(echo "$snap" | col enabled)"; SECRET_HEX="$(echo "$snap" | col secret
 fill setup.sql setup.filled.sql
 SETUP_DONE=1
 CONNS="$($K "$tmp/setup.filled.sql" | col conns)"
-for f in exchange call hold-counter assert; do fill "$f.sql" "$f.filled.sql"; done
+for f in exchange call hold-counter assert gate; do fill "$f.sql" "$f.filled.sql"; done
+cat "$tmp/gate.filled.sql" "$tmp/exchange.filled.sql" > "$tmp/exchange-gated.filled.sql"
+cat "$tmp/gate.filled.sql" "$tmp/call.filled.sql" > "$tmp/call-gated.filled.sql"
 state() { $K "$tmp/assert.filled.sql" | python3 -c 'import json,sys; j=json.load(sys.stdin)[0]["j"]; j=json.loads(j) if isinstance(j,str) else j; print(json.dumps(j, sort_keys=True))'; }
 
 case "$1" in
   D7c)
     $K "$tmp/exchange.filled.sql" > "$tmp/d7-1.txt" 2>&1 & p1=$!
-    sleep 1; $K "$tmp/exchange.filled.sql" > "$tmp/d7-2.txt" 2>&1 & p2=$!
+    sleep 1; $K "$tmp/exchange-gated.filled.sql" > "$tmp/d7-2.txt" 2>&1 & p2=$!
     wait $p1 || true; wait $p2 || true
     r1="$(resp "$tmp/d7-1.txt")"; r2="$(resp "$tmp/d7-2.txt")"; st="$(state)"
     obs="responses=$(printf '%s\n%s\n' "$r1" "$r2" | sort | paste -sd, -) state=${st}"
@@ -115,17 +130,18 @@ print('PASS' if ok else 'FAIL')
 PY
 )" ;;
   D13b)
+    RT="$(rt_ms)"
     wait_window; m0="$(date -u +%Y%m%d%H%M)"
     $K "$tmp/hold-counter.filled.sql" > "$tmp/hold.txt" 2>&1 & p1=$!
-    sleep 1; t0=$(now_ms); $K "$tmp/call.filled.sql" > "$tmp/call.txt" 2>&1 || true; ms=$(( $(now_ms) - t0 ))
+    sleep 1; t0=$(now_ms); $K "$tmp/call-gated.filled.sql" > "$tmp/call.txt" 2>&1 || true; cms=$(( $(now_ms) - t0 ))
     wait $p1 || true
-    r="$(resp "$tmp/call.txt")"; st="$(state)"
-    obs="response=${r} elapsed_ms=${ms} state=${st}"
-    exp='response=busy elapsed_ms<3000 outcomes={"busy": 1}'
+    r="$(resp "$tmp/call.txt")"; ms="$(srv_ms "$tmp/call.txt")"; st="$(state)"
+    obs="response=${r} server_ms=${ms} client_ms=${cms} rt_ms=${RT} state=${st}"
+    exp='response=busy server_ms<3000 outcomes={"busy": 1}'
     VERDICT="$(python3 - "$r" "$ms" "$st" <<'PY'
 import json, sys
-r, ms, s = sys.argv[1], int(sys.argv[2]), json.loads(sys.argv[3])
-print('PASS' if (r == 'busy' and ms < 3000 and s.get('outcomes') == {'busy': 1}) else 'FAIL')
+r, ms, s = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
+print('PASS' if (r == 'busy' and ms.isdigit() and int(ms) < 3000 and s.get('outcomes') == {'busy': 1}) else 'FAIL')
 PY
 )" ;;
   D14)
