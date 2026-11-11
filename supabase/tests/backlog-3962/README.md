@@ -29,7 +29,7 @@ Needs a committed tree. Results: `ts-mutations-2026-11-10.txt`.
 ## PR2 (`20261112110000_backlog_3962_recheck_lapse_cutoff.sql`)
 
 ```
-bash run.sh pr2 P2_cutoff_any_status P2_cutoff_on_last_checked P2_no_cutoff P2_pin_wrong_md5
+bash run.sh pr2 P2_no_null_guard P2_cutoff_any_status P2_cutoff_on_last_checked P2_no_cutoff P2_pin_wrong_md5
 bash run.sh pr2_live        # controls-pr2.sql against the body applied on the venue
 ```
 

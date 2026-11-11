@@ -39,9 +39,9 @@ BEGIN
      WHERE c.status IN ('verified', 'lapsed')
        AND (c.last_checked_at IS NULL OR c.last_checked_at < now() - interval '20 hours')
        -- S3: a lapsed claim leaves the daily re-check 30 days after its last counted miss.
-       -- Every lapse is written with last_miss_counted_at = now() (record_check), so a lapsed
-       -- row with a NULL value is not produced by these functions.
-       AND NOT (c.status = 'lapsed' AND c.last_miss_counted_at <= now() - interval '30 days')
+       -- Every lapse is written with last_miss_counted_at = now() (record_check). A lapsed row
+       -- with a NULL value (not produced by these functions) stays due, as in PR1.
+       AND NOT (c.status = 'lapsed' AND c.last_miss_counted_at IS NOT NULL AND c.last_miss_counted_at <= now() - interval '30 days')
      ORDER BY c.last_checked_at NULLS FIRST
      LIMIT least(greatest(coalesce(p_limit, 50), 1), 200)
      FOR UPDATE SKIP LOCKED

@@ -24,13 +24,15 @@ CTL2 = os.path.join(here, 'controls-pr2.sql')
 
 MUTANTS2 = {
     # (c) S3 cutoff applies to every status, not only lapsed
-    'P2_cutoff_any_status': [("       AND NOT (c.status = 'lapsed' AND c.last_miss_counted_at <= now() - interval '30 days')\n",
+    'P2_cutoff_any_status': [("       AND NOT (c.status = 'lapsed' AND c.last_miss_counted_at IS NOT NULL AND c.last_miss_counted_at <= now() - interval '30 days')\n",
                               "       AND NOT (c.last_miss_counted_at <= now() - interval '30 days')\n")],
+    # NULL guard removed: a lapsed row with a NULL last_miss_counted_at must stay due
+    'P2_no_null_guard': [("c.last_miss_counted_at IS NOT NULL AND ", "")],
     # (d) S3 cutoff keyed on last_checked_at instead of last_miss_counted_at
-    'P2_cutoff_on_last_checked': [("       AND NOT (c.status = 'lapsed' AND c.last_miss_counted_at <= now() - interval '30 days')\n",
+    'P2_cutoff_on_last_checked': [("       AND NOT (c.status = 'lapsed' AND c.last_miss_counted_at IS NOT NULL AND c.last_miss_counted_at <= now() - interval '30 days')\n",
                                    "       AND NOT (c.status = 'lapsed' AND c.last_checked_at <= now() - interval '30 days')\n")],
     # S3 cutoff removed (PR1 behaviour)
-    'P2_no_cutoff': [("       AND NOT (c.status = 'lapsed' AND c.last_miss_counted_at <= now() - interval '30 days')\n", "")],
+    'P2_no_cutoff': [("       AND NOT (c.status = 'lapsed' AND c.last_miss_counted_at IS NOT NULL AND c.last_miss_counted_at <= now() - interval '30 days')\n", "")],
     # the pre-check pins a wrong md5; it must raise
     'P2_pin_wrong_md5': [("IS DISTINCT FROM 'dc93015cbbcc7f6a77bcd8325f3a02d9' THEN\n",
                           "IS DISTINCT FROM '00000000000000000000000000000000' THEN\n")],

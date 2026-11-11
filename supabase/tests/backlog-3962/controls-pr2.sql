@@ -115,12 +115,13 @@ BEGIN
   INSERT INTO r3962p2 VALUES ('P11_manual_hit_on_old_lapsed_verifies',
     g LIKE '%"result": "verified"%' AND (SELECT status FROM public.domain_claims WHERE id = L30) = 'verified', g);
 
-  -- Observation, not a pass/fail case: a lapsed row with a NULL last_miss_counted_at. No function
-  -- writes this shape (every lapse stamps now()); the clause leaves it out of the due set.
+  -- A lapsed row with a NULL last_miss_counted_at stays due (as in PR1). No function writes this
+  -- shape (every lapse stamps now()); the NULL guard in the clause keeps it from being cut off.
   INSERT INTO public.domain_claims (id, organization_id, domain, token, status, last_checked_at, consecutive_misses)
     VALUES (pg_temp.id('LN'), oB, 'ln-3962p2.test', pg_temp.tk('LN'), 'lapsed', now() - interval '21 hours', 3);
   d := pg_temp.due();
-  obs := obs || jsonb_build_object('lapsed_null_counted_is_due', position(pg_temp.id('LN')::text IN d) > 0);
+  INSERT INTO r3962p2 VALUES ('P12_lapsed_null_counted_miss_is_due',
+    position((pg_temp.id('LN') || ':' || oB) IN d) > 0, d);
 
   FOR k IN SELECT * FROM r3962p2 ORDER BY r3962p2.k LOOP
     IF k.ok THEN v_pass := v_pass + 1;
