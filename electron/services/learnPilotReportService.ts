@@ -1,7 +1,7 @@
 /**
  * Learn pilot report: send and withdraw — BACKLOG-4219 PR2 (main process only).
  *
- * When a user has turned on "Share my score with Keepr", each Learn score
+ * When a user has turned on "Help improve Keepr", each Learn score
  * (`learn:score`) may send one numbers-only snapshot (learn/pilotReport.ts) to
  * `learn_pilot_report_submit`. Turning it off — or Learn mode off, or Delete
  * all answers, or the org losing autodetect_eval — calls

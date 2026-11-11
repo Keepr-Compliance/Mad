@@ -23,7 +23,7 @@
 //                          chosen for deletion (2.46.2). Same basis as above.
 //   `learn:delete-answer`  soft-removes ONE of the caller's own answers; the
 //                          item can be asked again (2.46.2). Same basis.
-//   `learn:set-pilot-report` (BACKLOG-4219) "Share my score with Keepr":
+//   `learn:set-pilot-report` (BACKLOG-4219) "Help improve Keepr":
 //                          turning ON needs the full gate (Learn mode on AND
 //                          the strict key); turning OFF is never refused.
 //

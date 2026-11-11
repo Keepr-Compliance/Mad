@@ -2072,7 +2072,7 @@ CREATE TABLE IF NOT EXISTS learn_mode_settings (
   id         TEXT PRIMARY KEY,
   user_id    TEXT NOT NULL,
   enabled    INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
-  -- BACKLOG-4219 (v79): "Share my score with Keepr" (default OFF), a withdraw
+  -- BACKLOG-4219 (v79): "Help improve Keepr" (default OFF), a withdraw
   -- still owed to the server, {sender_rules_version: last_sent_at} JSON (max 5),
   -- and when a submit timed out without settling.
   pilot_report           INTEGER NOT NULL DEFAULT 0 CHECK (pilot_report IN (0, 1)),

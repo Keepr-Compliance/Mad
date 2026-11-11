@@ -51,7 +51,7 @@ export const learnModeService = {
   setEnabled: (enabled: boolean): Promise<LearnSetEnabledResult> =>
     call(() => window.api.learn.setEnabled({ enabled })),
 
-  /** BACKLOG-4219: "Share my score with Keepr". */
+  /** BACKLOG-4219: "Help improve Keepr". */
   setPilotReport: (enabled: boolean): Promise<LearnSetPilotReportResult> =>
     call(() => window.api.learn.setPilotReport({ enabled })),
 

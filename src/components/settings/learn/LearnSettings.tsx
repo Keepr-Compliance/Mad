@@ -57,7 +57,7 @@ export function LearnSettings({
               {/* BACKLOG-4219: true with sharing OFF and ON. */}
               Keepr asks questions about mail on {machine}. It never creates transactions and never uses AI.{" "}
               {learn.pilotReport
-                ? `Your answers stay on ${machine}. Only the numbers are shared with Keepr.`
+                ? `Your answers stay on ${machine}. Diagnostic numbers are shared with Keepr.`
                 : `Nothing leaves ${machine}.`}
             </span>
           </span>
@@ -89,7 +89,7 @@ export function LearnSettings({
               data-testid="learn-pilot-row"
             >
               <span className="flex flex-col gap-0.5">
-                <span className="text-sm font-semibold text-gray-900">Share my score with Keepr</span>
+                <span className="text-sm font-semibold text-gray-900">Help improve Keepr</span>
                 <span className="text-[13px] text-gray-500" data-testid="learn-pilot-consent">
                   {pilotConsentText()}
                 </span>
@@ -103,7 +103,7 @@ export function LearnSettings({
                 type="button"
                 role="switch"
                 aria-checked={learn.pilotReport}
-                aria-label="Share my score with Keepr"
+                aria-label="Help improve Keepr"
                 disabled={learn.loading || learn.pilotSaving}
                 onClick={() => void learn.setPilotReport(!learn.pilotReport)}
                 className={`relative inline-flex h-6 w-10 flex-none items-center rounded-full transition-colors disabled:opacity-50 ${

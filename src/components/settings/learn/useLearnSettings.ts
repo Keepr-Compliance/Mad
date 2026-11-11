@@ -29,7 +29,7 @@ export interface LearnSettingsState {
   copyBlock: string | null;
   saving: boolean;
   error: string | null;
-  /** BACKLOG-4219: "Share my score with Keepr" is ON. */
+  /** BACKLOG-4219: "Help improve Keepr" is ON. */
   pilotReport: boolean;
   /** BACKLOG-4219: a withdraw is still owed (it finishes when the computer is online). */
   pilotPending: boolean;
@@ -57,7 +57,7 @@ const INITIAL: LearnSettingsState = {
 
 export interface UseLearnSettings extends LearnSettingsState {
   setEnabled: (enabled: boolean) => Promise<void>;
-  /** BACKLOG-4219: turn "Share my score with Keepr" on or off. */
+  /** BACKLOG-4219: turn "Help improve Keepr" on or off. */
   setPilotReport: (enabled: boolean) => Promise<void>;
   /** Re-read the score and the question count (after a session). */
   refresh: () => Promise<void>;

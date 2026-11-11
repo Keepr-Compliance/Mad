@@ -25,7 +25,7 @@ export function LearnScoreDialog({
   onClose,
   sharing = null,
 }: {
-  /** BACKLOG-4219: "Share my score with Keepr" is ON / OFF; null = not known (neutral line). */
+  /** BACKLOG-4219: "Help improve Keepr" is ON / OFF; null = not known (neutral line). */
   sharing?: boolean | null;
   open: boolean;
   /** Answers saved in the sitting just finished; null when opened from "See score". */

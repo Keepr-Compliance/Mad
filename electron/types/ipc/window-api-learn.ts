@@ -27,7 +27,7 @@ export type LearnStateResult =
       enabled: boolean;
       /** Saved answers of this user (counts only), whatever the toggle and the key say. */
       answers: { deal: number; bulk: number };
-      /** BACKLOG-4219: "Share my score with Keepr" is ON. */
+      /** BACKLOG-4219: "Help improve Keepr" is ON. */
       pilotReport: boolean;
       /** BACKLOG-4219: a withdraw is owed to Keepr (offline when it was turned off). */
       pilotPending: boolean;
@@ -148,7 +148,7 @@ export type LearnPreviewArgs =
 export interface WindowApiLearn {
   getState: () => Promise<LearnStateResult>;
   setEnabled: (args: { enabled: boolean }) => Promise<LearnSetEnabledResult>;
-  /** BACKLOG-4219: turn "Share my score with Keepr" on or off. */
+  /** BACKLOG-4219: turn "Help improve Keepr" on or off. */
   setPilotReport: (args: { enabled: boolean }) => Promise<LearnSetPilotReportResult>;
   run: (args: { windowMonths: number }) => Promise<LearnRunResultResponse>;
   onRunProgress: (callback: (progress: LearnRunProgressEvent) => void) => () => void;

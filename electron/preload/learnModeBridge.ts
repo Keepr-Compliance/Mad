@@ -20,7 +20,7 @@ export const learnModeBridge: WindowApiLearn = {
   /** Turn Learn mode on or off for this user. Refused when not available. */
   setEnabled: (args: { enabled: boolean }) => ipcRenderer.invoke("learn:set-enabled", args),
 
-  /** BACKLOG-4219: "Share my score with Keepr". Turning on is refused when Learn mode is not allowed. */
+  /** BACKLOG-4219: "Help improve Keepr". Turning on is refused when Learn mode is not allowed. */
   setPilotReport: (args: { enabled: boolean }) => ipcRenderer.invoke("learn:set-pilot-report", args),
 
   /** Run the old rules over local mail. Returns ids and counts only. */

@@ -18,7 +18,7 @@ import { PILOT_PRIVACY_DELETE_TOO, PILOT_PRIVACY_SHARED } from "./learnPilotCopy
 
 export function LearnAnswersPrivacyRow(): React.ReactElement | null {
   const [count, setCount] = useState(0);
-  // BACKLOG-4219: "Share my score with Keepr" is ON.
+  // BACKLOG-4219: "Help improve Keepr" is ON.
   const [sharing, setSharing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [reviewing, setReviewing] = useState(false);
