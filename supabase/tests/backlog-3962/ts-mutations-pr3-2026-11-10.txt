@@ -1,0 +1,15 @@
+T_cron_no_auth: MUTATION APPLIED [1	1	broker-portal/app/api/cron/domain-capture-switch/route.ts] -> if (false && !isAuthorizedCronRequest(req.headers.get('authorization'))) {
+  5 failed, 21 passed, 26 total | red: 
+T_posted_org: MUTATION APPLIED [1	1	broker-portal/lib/actions/domainCapture.ts] -> p_org: (input as unknown as { organizationId?: string }).organizationId ?? access.organiza
+  1 failed, 8 passed, 9 total | red: 
+T_payer_gets_switched_email: MUTATION APPLIED [1	1	broker-portal/lib/domain/captureSwitch.ts] -> if (email) {
+  1 failed, 7 passed, 8 total | red: 
+T_seat_alert_per_person: MUTATION APPLIED [2	1	broker-portal/lib/domain/captureSwitch.ts] -> const entry = { emails: [] as string[], userIds: [] as string[] };
+        unassignedByOrg
+  1 failed, 7 passed, 8 total | red: 
+T_dns_after_switch: MUTATION APPLIED [1	1	broker-portal/lib/domain/captureSwitch.ts] -> for (const r of [] as DueSwitch[]) {
+  1 failed, 7 passed, 8 total | red: 
+T_opt_out_no_confirm: MUTATION APPLIED [0	1	broker-portal/lib/actions/domainCapture.ts] -> 
+  1 failed, 8 passed, 9 total | red: 
+T_route_accepts_capture_kind: MUTATION APPLIED [1	1	broker-portal/app/api/email/seat-limit-reached/route.ts] -> (kind !== 'add' && kind !== 'reactivate' && kind !== 'domain_capture')
+  1 failed, 6 passed, 7 total | red: 

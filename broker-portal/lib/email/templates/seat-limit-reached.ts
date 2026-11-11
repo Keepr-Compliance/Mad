@@ -6,9 +6,11 @@
  */
 
 import { baseLayout } from './base-layout';
+import { buildSimpleNotice } from './simple-notice';
 import type { EmailContent, SeatLimitReachedParams } from '../types';
 
 export function buildSeatLimitReachedEmail(params: SeatLimitReachedParams): EmailContent {
+  if (params.kind === 'domain_capture') return buildDomainCaptureSeatEmail(params);
   const { personLabel, brokerageName, used, maxSeats, kind } = params;
   const verb = kind === 'reactivate' ? 're-activate' : 'add';
   const counts = maxSeats !== null ? ` (${used} of ${maxSeats})` : '';
@@ -43,6 +45,21 @@ export function buildSeatLimitReachedEmail(params: SeatLimitReachedParams): Emai
   const text = [subject, '', ...lines.flatMap((l) => [l, ''])].join('\n').trimEnd();
 
   return { subject, html, text };
+}
+
+/**
+ * BACKLOG-3962: people moved in by domain capture joined the brokerage, but every license was in
+ * use, so they joined without one. They ARE members: this copy never says they were not added.
+ */
+function buildDomainCaptureSeatEmail(params: SeatLimitReachedParams): EmailContent {
+  const { personLabel, brokerageName, used, maxSeats } = params;
+  const counts = maxSeats !== null ? ` (${used} of ${maxSeats})` : '';
+  const subject = `People joined ${brokerageName} on Keepr without a license`;
+  return buildSimpleNotice(subject, [
+    `${personLabel} moved into ${brokerageName} on Keepr today because their email is on your verified domain.`,
+    `Every license is in use${counts}, so they joined without one and cannot use Keepr until they get one.`,
+    'A Broker or Admin can free a license on the Users page in Keepr, or contact Keepr support to add seats.',
+  ]);
 }
 
 function escapeHtml(str: string): string {

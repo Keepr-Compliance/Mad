@@ -38,6 +38,79 @@ MUTANTS2 = {
                           "IS DISTINCT FROM '00000000000000000000000000000000' THEN\n")],
 }
 
+
+MIG3 = os.path.join(here, '..', '..', 'migrations', '20261112113000_backlog_3962_domain_capture.sql')
+RB3 = os.path.join(here, 'rollback-3962-pr3.sql')
+CTL3 = os.path.join(here, 'controls-pr3.sql')
+SW_GUARD = ("  IF v_row.status <> 'scheduled' THEN\n    RETURN jsonb_build_object('success', false, 'error', 'not_scheduled', 'status', v_row.status);\n"
+            "  END IF;\n  IF now() < v_row.switch_at THEN\n")
+MUTANTS3 = {
+    # ruling B: free seat ignored, always unassigned
+    'C_always_unassigned': [("  v_status := CASE WHEN v_max IS NULL OR v_max <= 0 OR v_used < v_max THEN 'active' ELSE 'unassigned' END;\n",
+                             "  v_status := 'unassigned';\n")],
+    # ruling B: seat count ignored, always active
+    'C_always_active': [("  v_status := CASE WHEN v_max IS NULL OR v_max <= 0 OR v_used < v_max THEN 'active' ELSE 'unassigned' END;\n",
+                         "  v_status := 'active';\n")],
+    # ruling A: notice_delivered ignored at switch
+    'C_ignore_notice': [("  IF v_row.notice_delivered IS NOT TRUE THEN\n", "  IF false THEN\n")],
+    # opted-out rows switched anyway
+    'C_ignore_opt_out': [(SW_GUARD, SW_GUARD.replace("IF v_row.status <> 'scheduled' THEN", "IF v_row.status NOT IN ('scheduled', 'opted_out') THEN"))],
+    # switch status guard dropped
+    'C_no_status_guard': [(SW_GUARD, SW_GUARD.replace("IF v_row.status <> 'scheduled' THEN", "IF false THEN"))],
+    # opt_out_self without the owner check
+    'C_opt_out_no_uid': [("  IF NOT FOUND OR v_row.user_id IS DISTINCT FROM v_uid THEN\n", "  IF NOT FOUND THEN\n")],
+    # cascade only on revoke: withdraw and lapse no longer cancel
+    'C_cancel_only_revoke': [
+        ("  -- BACKLOG-3962 PR3a: scheduled switches end with the claim.\n  UPDATE public.domain_capture_switches\n     SET status = 'cancelled', reason = 'claim_withdrawn', ended_at = now(), updated_at = now()\n   WHERE claim_id = v_row.id AND status = 'scheduled';\n", ""),
+        ("  IF v_status = 'lapsed' AND v_row.status = 'verified' THEN\n", "  IF false THEN\n")],
+    # tenant term dropped: any Microsoft tenant attests
+    'C_no_tid_term': [
+        ("  IF EXISTS (SELECT 1 FROM auth.identities i\n              WHERE i.user_id = p_user AND i.provider = 'azure'\n                AND (v_tenant IS NULL\n",
+         "  IF false AND EXISTS (SELECT 1 FROM auth.identities i\n              WHERE i.user_id = p_user AND i.provider = 'azure'\n                AND (v_tenant IS NULL\n"),
+        ("                    AND i.identity_data -> 'custom_claims' ->> 'tid' = v_tenant) THEN\n", "                    ) THEN\n")],
+    # only access-granting brokerage rows exclude (deactivated rows ignored)
+    'C_active_rows_only': [("              WHERE m.user_id = p_user AND o.personal_owner_user_id IS NULL) THEN\n",
+                            "              WHERE m.user_id = p_user AND o.personal_owner_user_id IS NULL\n                AND public.member_status_grants_access(m.license_status)) THEN\n")],
+    # POSTCHECK: the switch granted to authenticated
+    'C_grant_authenticated': [("-- POSTCHECK BEGIN\n", "GRANT EXECUTE ON FUNCTION public._domain_capture_switch(uuid) TO authenticated;\n-- POSTCHECK BEGIN\n")],
+    # table read granted to authenticated
+    'C_table_select': [("-- POSTCHECK BEGIN\n", "GRANT SELECT ON TABLE public.domain_capture_switches TO authenticated;\n-- POSTCHECK BEGIN\n")],
+    # stale DNS accepted
+    'C_no_fresh_dns': [("     OR v_claim.last_checked_at IS NULL OR v_claim.last_checked_at < now() - interval '1 hour' THEN\n", "     AND false THEN\n")],
+    # pin on a replaced body wrong
+    'C_pin_wrong_md5': [("IS DISTINCT FROM '74760b7c6272d9e29d23f26b785cdbd2' THEN\n", "IS DISTINCT FROM '00000000000000000000000000000000' THEN\n")],
+    # concurrency script only: the organization lock dropped
+    'C_no_lock': [("    FROM public.organizations o WHERE o.id = v_row.organization_id\n    FOR NO KEY UPDATE;\n",
+                   "    FROM public.organizations o WHERE o.id = v_row.organization_id;\n")],
+    'C_no_lock_no_fallback': [("    FROM public.organizations o WHERE o.id = v_row.organization_id\n    FOR NO KEY UPDATE;\n",
+                               "    FROM public.organizations o WHERE o.id = v_row.organization_id;\n"),
+                              ("  EXCEPTION WHEN SQLSTATE 'P0001' THEN\n    IF SQLERRM = 'account_suspended' THEN", "  EXCEPTION WHEN SQLSTATE 'P9999' THEN\n    IF SQLERRM = 'account_suspended' THEN")],
+    # M-a: the Billing-step check dropped at switch
+    'C_no_setup_gate_switch': [("  IF public._billing_org_join_blocked(v_row.organization_id) THEN\n", "  IF false THEN\n")],
+    # M-b: the Billing-step check dropped at start
+    'C_no_setup_gate_start': [("  IF public._billing_org_join_blocked(p_org) THEN\n", "  IF false THEN\n")],
+    # M-c: the 3850 gate dropped (start and switch)
+    'C_no_billing_ready_gate': [
+        ("  IF NOT public._domain_capture_billing_ready() THEN\n    RETURN jsonb_build_object('success', false, 'error', 'billing_not_ready');\n  END IF;\n  -- The brokerage's Billing step",
+         "  IF false THEN\n    RETURN jsonb_build_object('success', false, 'error', 'billing_not_ready');\n  END IF;\n  -- The brokerage's Billing step"),
+        ("  IF NOT public._domain_capture_billing_ready() THEN\n    RETURN jsonb_build_object('success', false, 'error', 'billing_not_ready');\n  END IF;\n  IF public._billing_org_join_blocked(v_row",
+         "  IF false THEN\n    RETURN jsonb_build_object('success', false, 'error', 'billing_not_ready');\n  END IF;\n  IF public._billing_org_join_blocked(v_row")],
+    # M-d: account_suspended no longer caught (re-raised)
+    'C_no_suspended_catch': [("    IF SQLERRM = 'account_suspended' THEN\n      v_suspended := true;\n    ELSIF",
+                              "    IF false THEN\n      v_suspended := true;\n    ELSIF")],
+    # M-e: 'incomplete' counts as a payer again
+    'C_incomplete_is_payer': [("b.status NOT IN ('canceled', 'incomplete_expired', 'incomplete')", "b.status NOT IN ('canceled', 'incomplete_expired')")],
+    # M-f: role hardcoded
+    'C_role_plain_coalesce': [("CASE WHEN o.default_member_role IN ('agent', 'broker') THEN o.default_member_role ELSE 'agent' END", "coalesce(o.default_member_role, 'agent')")],
+    # the suspended catch widened to every P0001 except seat_limit_reached
+    'C_suspended_catch_any_p0001': [("    IF SQLERRM = 'account_suspended' THEN\n      v_suspended := true;\n    ELSIF v_status", "    IF SQLERRM NOT LIKE '%seat_limit_reached%' THEN\n      v_suspended := true;\n    ELSIF v_status")],
+    'C_role_hardcoded': [("CASE WHEN o.default_member_role IN ('agent', 'broker') THEN o.default_member_role ELSE 'agent' END\n    INTO", "'agent'\n    INTO")],
+    # M-g: no-tenant Microsoft sign-ins read as foreign (not listed)
+    'C_no_tenant_as_foreign': [("    RETURN 'no:no_tenant';\n", "    RETURN 'no:foreign_tenant';\n")],
+    # M-g2: the no_tenant branch dropped altogether
+    'C_no_tenant_branch_dropped': [("  IF v_tenant IS NULL AND EXISTS (SELECT 1 FROM auth.identities i\n", "  IF false AND EXISTS (SELECT 1 FROM auth.identities i\n")],
+}
+
 MUTANTS = {
     # S2: the has_internal_role pin names a wrong md5; the pre-check must raise
     'M_pin_wrong_md5': [("IS DISTINCT FROM '221786001ca8ce4767112e1175cc6ece' THEN\n",
@@ -107,6 +180,41 @@ def mutate(src, mode, table):
 
 
 out, mode = sys.argv[1], sys.argv[2]
+if mode == 'pr3' or mode == 'pr3_live' or mode in MUTANTS3 or mode == 'pr3_rollback':
+    END3 = "\nDO $end$ BEGIN RAISE EXCEPTION 'P3962_END_NO_RESULT'; END $end$;\n"
+    head = f"SELECT set_config('p3962.mode', '{mode}', true);\n"
+    if '--applied' in sys.argv[3:] and mode not in ('pr3_live',):
+        head += open(RB3).read() + '\n'
+    mig3 = open(MIG3).read()
+    if mode in MUTANTS3:
+        mig3 = mutate(mig3, mode, MUTANTS3)
+    if '--mig-only' in sys.argv[3:]:
+        open(out, 'w').write(mig3)
+        sys.exit(0)
+    if mode == 'pr3_live':
+        text = head + open(CTL3).read()
+    elif mode == 'pr3_rollback':
+        probe = """
+DO $rb$
+BEGIN
+  RAISE EXCEPTION 'P3962_RESULT %', jsonb_build_object('mode', 'pr3_rollback',
+    'table', to_regclass('public.domain_capture_switches') IS NOT NULL,
+    'functions', (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE '%domain_capture%'
+                     OR proname = 'caller_capture_notice'),
+    'withdraw_md5', (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.domain_claim_withdraw(uuid)'::regprocedure),
+    'revoke_md5', (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public.admin_revoke_domain_claim(uuid, text)'::regprocedure),
+    'record_md5', (SELECT md5(prosrc) FROM pg_proc WHERE oid = 'public._domain_claim_record_check(uuid, uuid, text[], boolean, text)'::regprocedure),
+    'check', (SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'organization_members_provisioned_by_check'));
+END
+$rb$;
+"""
+        text = head + mig3 + '\n' + open(RB3).read() + '\n' + probe
+    else:
+        text = head + mig3 + '\n' + open(CTL3).read()
+    text += END3
+    assert not re.search(r'^\s*COMMIT\b', text, re.I | re.M), 'COMMIT statement in composed text'
+    open(out, 'w').write(text)
+    sys.exit(0)
 END = "\nDO $end$ BEGIN RAISE EXCEPTION 'P3962_END_NO_RESULT'; END $end$;\n"
 if mode == 'pr2' or mode == 'pr2_live' or mode in MUTANTS2:
     head = f"SELECT set_config('p3962.mode', '{mode}', true);\n"
