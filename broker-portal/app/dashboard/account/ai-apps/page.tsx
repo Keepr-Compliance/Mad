@@ -9,6 +9,7 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
+import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 
 export default async function AiAppsPage() {
   const supabase = await createClient();
@@ -19,7 +20,7 @@ export default async function AiAppsPage() {
 
   return (
     <div className="max-w-2xl space-y-4">
-      <h1 className="text-2xl font-semibold text-gray-900">AI apps</h1>
+      <h1 className="text-2xl font-semibold text-gray-900">{PAGE_TITLES.aiApps}</h1>
       <p className="text-sm text-gray-700">If you were connecting an AI app to Keepr, continue here.</p>
       <Link
         href="/oauth/consent"
