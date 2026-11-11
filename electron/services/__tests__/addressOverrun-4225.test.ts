@@ -9,7 +9,9 @@
  */
 import svc from "../transactionExtractorService";
 import { addressKey, streetKey } from "../learn/dealMatcher";
-import { displayAddress, streetPhraseRegex } from "../../../src/components/settings/learn/learnEmailHtml";
+import { displayAddress, streetPhraseRegex, streetTokenRegex } from "../../../src/components/settings/learn/learnEmailHtml";
+import { pickQuestionAttachmentId, streetTokens } from "../learn/questionAttachment";
+import corpus from "./fixtures/addressOverrun-4225.corpus.json";
 
 function extract(body: string, subject = "Pre-approval"): string[] {
   return svc.analyzeEmail({ subject, bodyPlain: body, date: "2026-11-01" } as never).addresses;
@@ -35,8 +37,8 @@ describe("BACKLOG-4225 the address ends at the address", () => {
     expect(Object.keys(svc.groupByProperty([a]))).toEqual(["1234 sample river lane"]);
   });
 
-  it("C1 a period after the suffix: the street (before: no address at all)", () => {
-    expect(extract("Pre-approval for 1234 Sample\nRiver Lane.\nAnn and Bob are excited")).toEqual(["1234 sample river lane"]);
+  it("C1 a period after the suffix: still no address (the pre-fix extractor found none; detection is unchanged)", () => {
+    expect(extract("Pre-approval for 1234 Sample\nRiver Lane.\nAnn and Bob are excited")).toEqual([]);
   });
 
   it("C2 attachment-text shape: a 2-letter word that is not a state ends nothing (before: '... west sample yards is')", () => {
@@ -88,11 +90,11 @@ describe("BACKLOG-4225 the address ends at the address", () => {
     ]);
   });
 
-  it("C8 prose: a number and a far-off suffix word are not a street (before the cap: '3 offers came in. we can meet at the court')", () => {
+  it("C8 prose: a number and a far-off suffix word are not an address (none before the fix either)", () => {
     expect(extract("2 of the 3 offers came in. We can meet at the court tomorrow, escrow closing buyer")).toEqual([]);
   });
 
-  it("C8 a money amount is not a street number (before the guard: '000 - see you on the way')", () => {
+  it("C8 a money amount is not a street number", () => {
     expect(extract(BODY.replace("thank you!", "see you on the way"))).toEqual(["1234 sample river lane"]);
   });
 
@@ -111,5 +113,53 @@ describe("BACKLOG-4225 the address ends at the address", () => {
     expect(streetKey(extract("Signed 1234 West Sample Drive West Sample Yards Is\nescrow")[0])).toBe(
       streetKey("1234 West Sample Drive"),
     );
+  });
+
+  it("C9 corpus: every email gets the same NUMBER of addresses as before, and the same real-estate flag", () => {
+    // Inputs: everything the extractor and Learn suites pass to the real
+    // analyzeEmail, the same with state ZZ, and the synthetic cases above.
+    // old* fields are transcribed pre-fix output (see the fixture's _source).
+    const rows = corpus.rows as Array<{ email: Record<string, string>; oldRealEstate: boolean; oldAddresses: string[] }>;
+    expect(rows.length).toBeGreaterThan(70);
+    const para = "Escrow update for 4120 Canarytest Lane Testville ZZ 00000 buyer offer inspection 12345 and 67890 a1 b2 c3. ";
+    const all = [
+      ...rows,
+      // the 400 KB timing-guard body (learnScoringPure-4120), rebuilt here
+      { email: { subject: "x", bodyPlain: para.repeat(Math.ceil((400 * 1024) / para.length)) }, oldRealEstate: true, oldAddresses: ["4120 canarytest lane testville zz 00000"] },
+    ];
+    const got = all.map((r) => svc.analyzeEmail({ ...r.email, date: "2026-11-01" } as never));
+    const shape = (a: { isRealEstateRelated: boolean; addresses: string[] }) => [a.isRealEstateRelated, a.addresses.length];
+    expect(got.map(shape)).toEqual(all.map((r) => [r.oldRealEstate, r.oldAddresses.length]));
+
+    // Grouping (groupByProperty): the same emails are grouped, and each old
+    // group is inside one new group. Groups only merge where the shown
+    // addresses are now the same street.
+    const groupOf = (keys: Array<string | undefined>) => {
+      const m = new Map<string, number[]>();
+      keys.forEach((k, i) => {
+        if (k !== undefined) m.set(k, [...(m.get(k) ?? []), i]);
+      });
+      return m;
+    };
+    const before = groupOf(all.map((r) => r.oldAddresses[0]));
+    const after = groupOf(got.map((a) => a.addresses[0]));
+    expect([...after.values()].flat().sort((a, b) => a - b)).toEqual([...before.values()].flat().sort((a, b) => a - b));
+    const newKeyOf = new Map<number, string>();
+    for (const [k, ids] of after) for (const i of ids) newKeyOf.set(i, k);
+    for (const ids of before.values()) expect(new Set(ids.map((i) => newKeyOf.get(i))).size).toBe(1);
+  });
+
+  it("C10 attachment path: the PDF pick and the PDF highlight use the same address, so they end at the street too", () => {
+    const [addr] = extract("Signed 1234 West Sample Drive West Sample Yards Is\nescrow closing");
+    expect(streetTokens(addr)).toEqual(["1234", "west", "sample", "drive"]);
+    expect(String(streetTokenRegex(addr))).not.toMatch(/yards/);
+    // The first PDF names only a word of the old over-run tail.
+    const emails = [{ attachments: [
+      { id: "a-tail", filename: "Yards survey.pdf", mimeType: "application/pdf" },
+      { id: "a-deal", filename: "Purchase 1234 contract.pdf", mimeType: "application/pdf" },
+    ] }];
+    expect(pickQuestionAttachmentId(emails as never, addr)).toBe("a-deal");
+    // the pre-fix address (transcribed) picked the tail's PDF
+    expect(pickQuestionAttachmentId(emails as never, "1234 west sample drive west sample yards is")).toBe("a-tail");
   });
 });

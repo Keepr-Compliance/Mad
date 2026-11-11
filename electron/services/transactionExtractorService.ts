@@ -122,14 +122,34 @@ const ADDRESS_NO_ZIP = new RegExp(
 );
 
 /**
- * BACKLOG-4225: the street alone, ending at the suffix. With no city/state
- * tail to anchor it, the street name is 1-4 words of letters (no sentence
- * punctuation), and the number does not continue another number ("$500,000").
+ * BACKLOG-4225: the detection patterns, exactly as before the fix (the ZIP one
+ * is `patterns.address`; the no-ZIP one was the inline fallback), with the
+ * street captured as group 1. A capture group does not change what matches,
+ * so these still decide WHICH emails get an address.
  */
-const ADDRESS_STREET_ONLY = new RegExp(
-  `(?<![\\d,.$])\\b(\\d+\\s+(?:[A-Za-z][A-Za-z'\\-]*\\s+){1,4}?${STREET_SUFFIX})\\b`,
-  "gi",
-);
+const DETECT_WITH_ZIP =
+  /\b(\d+\s+[A-Za-z\s\-\.]+?\s+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Way|Court|Ct|Boulevard|Blvd|Place|Pl|Circle|Cir|Parkway|Pkwy|Trail|Ter|Crescent|Hill|Freeway|Path|Route|Rte|Square|Turnpike|Vista|Viaduct|Cove|Dale|Ridge|View|Walk|Wood|Drive|Court))[,\s]+[A-Za-z\s]+?[,\s]+[A-Z]{2}[\s,]+\d{5}(?:-\d{4})?\b/gi;
+const DETECT_NO_ZIP =
+  /\b(\d+\s+[A-Za-z\s\-\.]+?\s+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Way|Court|Ct|Boulevard|Blvd|Place|Pl|Circle|Cir|Parkway|Pkwy|Trail|Ter|Crescent|Hill|Freeway|Path|Route|Rte|Square|Turnpike|Vista|Viaduct|Cove|Dale|Ridge|View|Walk|Wood|Drive|Court))[,\s]+[A-Za-z\s]+?[,\s]+[A-Z]{2}\b/gi;
+
+/** Whitespace runs as one space, trimmed. */
+function collapseWs(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The address shown for one detection match: the strict pattern's match at
+ * the same position when it is no longer than the detection match (a real
+ * one-line city/state tail), otherwise the street alone, cut at its suffix.
+ */
+function shownAddress(text: string, m: RegExpMatchArray, strict: RegExp): string {
+  const at = m.index ?? 0;
+  const sticky = new RegExp(strict.source, "iy");
+  sticky.lastIndex = at;
+  const s = sticky.exec(text);
+  if (s && s[0].length <= m[0].length) return cleanAddressMatch(s);
+  return collapseWs(m[1]);
+}
 
 /**
  * One address match as one line: whitespace collapsed, and a line break
@@ -137,12 +157,11 @@ const ADDRESS_STREET_ONLY = new RegExp(
  * stays the street.
  */
 function cleanAddressMatch(m: RegExpMatchArray): string {
-  const ws = (s: string): string => s.replace(/\s+/g, " ").trim();
-  const street = ws(m[1] ?? m[0]);
+  const street = collapseWs(m[1] ?? m[0]);
   if (m[3] === undefined) return street;
   const sep = m[2] ?? " ";
   const joiner = sep.includes(",") || /\n/.test(sep) ? ", " : " ";
-  return `${street}${joiner}${ws(m[3])}`;
+  return `${street}${joiner}${collapseWs(m[3])}`;
 }
 
 interface Patterns {
@@ -238,11 +257,10 @@ class TransactionExtractorService {
     // Address patterns - Multiple patterns for flexibility
     // Pattern 1: Full address with ZIP (most confident)
     // Format: 123 Main Street, San Francisco, CA 94102
-    // BACKLOG-4225: the city/state tail stays on one line (one line break is
-    // allowed right after the street suffix, for a city line under the
-    // street), the city is at most 4 words, and the state must be a real US
-    // state/territory code.
-    address: ADDRESS_WITH_ZIP,
+    // BACKLOG-4225: unchanged — it decides WHAT is detected. Only the address
+    // string shown for a match is trimmed (see _extractAddresses).
+    address:
+      /\b\d+\s+[A-Za-z\s\-\.]+?\s+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Way|Court|Ct|Boulevard|Blvd|Place|Pl|Circle|Cir|Parkway|Pkwy|Trail|Ter|Crescent|Hill|Freeway|Path|Route|Rte|Square|Turnpike|Vista|Viaduct|Cove|Dale|Ridge|View|Walk|Wood|Drive|Court)[,\s]+[A-Za-z\s]+?[,\s]+[A-Z]{2}[\s,]+\d{5}(?:-\d{4})?\b/gi,
 
     // Money amounts
     money: /\$\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/g,
@@ -568,16 +586,29 @@ class TransactionExtractorService {
    * @private
    */
   private _extractAddresses(text: string): string[] {
-    // 1. Street + city + state + ZIP. 2. Street + city + state, no ZIP.
-    // 3. BACKLOG-4225: the street alone, ending at the street suffix.
-    // Each runs only when the one before it found nothing.
-    for (const pattern of [ADDRESS_WITH_ZIP, ADDRESS_NO_ZIP, ADDRESS_STREET_ONLY]) {
-      // A fresh copy: `patterns.address` is this same /g regex, and its
-      // `.test()` calls elsewhere leave lastIndex where a match ended.
-      const found = [...text.matchAll(new RegExp(pattern))].map(cleanAddressMatch);
-      if (found.length > 0) return [...new Set(found)];
+    // WHICH text holds an address is decided by the original two patterns
+    // (ZIP first; the no-ZIP fallback only when nothing had a ZIP).
+    // BACKLOG-4225 changes only the string kept for each match: its
+    // city/state tail is kept when it is a real one-line tail (strict
+    // pattern), otherwise the match is cut at the street suffix.
+    // Fresh copies: `patterns.address` is a shared /g regex, and its
+    // `.test()` calls elsewhere leave lastIndex where a match ended.
+    let found = [...text.matchAll(new RegExp(DETECT_WITH_ZIP))];
+    let strict = ADDRESS_WITH_ZIP;
+    if (found.length === 0) {
+      found = [...text.matchAll(new RegExp(DETECT_NO_ZIP))];
+      strict = ADDRESS_NO_ZIP;
     }
-    return [];
+    // Duplicates are removed on the matched text, as before, so each email
+    // keeps the same number of addresses.
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const m of found) {
+      if (seen.has(m[0])) continue;
+      seen.add(m[0]);
+      out.push(shownAddress(text, m, strict));
+    }
+    return out;
   }
 
   /**
