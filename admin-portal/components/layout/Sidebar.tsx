@@ -16,7 +16,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { LayoutDashboard, Users, Building2, CreditCard, Headphones, Inbox, UserCheck, Settings, LogOut, ChevronLeft, FileText, ChevronDown, ChevronRight, Shield, KanbanSquare, ListChecks, FolderKanban, Calendar, FileBarChart2, X } from 'lucide-react';
+import { LayoutDashboard, Users, Building2, CreditCard, Headphones, Inbox, UserCheck, Settings, LogOut, ChevronLeft, FileText, ChevronDown, ChevronRight, Shield, KanbanSquare, ListChecks, FolderKanban, Calendar, FileBarChart2, X, Sparkles, MailX } from 'lucide-react';
 import { AppMark, Wordmark } from '@keepr/ui';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
@@ -24,6 +24,8 @@ import type { PermissionKey } from '@/lib/permissions';
 import { PERMISSIONS } from '@/lib/permissions';
 import { useFocusTrap } from '@/hooks/useFocusTrap';
 import { useHasReports } from '@/lib/reports/use-my-reports';
+import { useSenderRulesAccess } from '@/lib/sender-rules/use-sender-rules-access';
+import { SENDER_RULES_PATH } from '@/lib/sender-rules/access';
 
 interface NavItem {
   label: string;
@@ -43,6 +45,14 @@ const mainNavItems: NavItem[] = [
   { label: 'Users', href: '/dashboard/users', icon: Users, permission: PERMISSIONS.USERS_VIEW },
   { label: 'Organizations', href: '/dashboard/organizations', icon: Building2, permission: PERMISSIONS.ORGANIZATIONS_VIEW },
   { label: 'Plans', href: '/dashboard/plans', icon: CreditCard, permission: PERMISSIONS.PLANS_VIEW },
+];
+
+/**
+ * Sub-items under the collapsible "AI" section (BACKLOG-4186). The section shows only when
+ * report_my_access('sender-rules') is non-null (useSenderRulesAccess); the page gates again.
+ */
+const aiSubItems: NavItem[] = [
+  { label: 'Sender rules', href: SENDER_RULES_PATH, icon: MailX, permission: PERMISSIONS.ANALYTICS_VIEW },
 ];
 
 /** Sub-items under the collapsible "Support" section */
@@ -100,7 +110,7 @@ interface SidebarProps {
 
 const DESKTOP_QUERY = '(min-width: 768px)';
 
-type GroupKind = 'support' | 'pm' | 'settings';
+type GroupKind = 'ai' | 'support' | 'pm' | 'settings';
 
 export function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose }: SidebarProps) {
   const pathname = usePathname();
@@ -108,6 +118,7 @@ export function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose
   const { user, signOut } = useAuth();
   const { hasPermission, roleName, loading } = usePermissions();
   const hasReports = useHasReports(user?.id);
+  const senderRulesAccess = useSenderRulesAccess(user?.id);
 
   const displayName =
     user?.user_metadata?.full_name ||
@@ -125,10 +136,14 @@ export function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose
   // Check if any PM sub-item route is active
   const isPmActive = pathname.startsWith('/dashboard/pm');
 
+  // Check if any AI sub-item route is active
+  const isAiActive = pathname.startsWith('/dashboard/ai');
+
   // Auto-expand when a settings route is active; allow manual toggle otherwise
   const [settingsExpanded, setSettingsExpanded] = useState(isSettingsActive);
   const [supportExpanded, setSupportExpanded] = useState(isSupportActive);
   const [pmExpanded, setPmExpanded] = useState(isPmActive);
+  const [aiExpanded, setAiExpanded] = useState(isAiActive);
 
   // Keep expanded state in sync when navigating to/from settings/support routes
   useEffect(() => {
@@ -149,10 +164,18 @@ export function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose
     }
   }, [isPmActive]);
 
+  useEffect(() => {
+    if (isAiActive) {
+      setAiExpanded(true);
+    }
+  }, [isAiActive]);
+
   // Whether the user can see the settings/support/pm sections at all
   const canSeeSettings = loading || settingsSectionPermissions.some((p) => hasPermission(p));
   const canSeeSupport = loading || supportSectionPermissions.some((p) => hasPermission(p));
   const canSeePm = loading || pmSectionPermissions.some((p) => hasPermission(p));
+  // Not while loading either: hidden until report_my_access('sender-rules') answers non-null.
+  const canSeeAi = senderRulesAccess !== null;
 
   // BACKLOG-3841: drawer behaviour while open. useFocusTrap moves focus to the
   // first control (Close menu), keeps Tab inside and restores focus on close.
@@ -248,6 +271,7 @@ export function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose
     setExpanded: (v: boolean) => void;
     items: NavItem[];
   }> = {
+    ai: { label: 'AI', icon: Sparkles, visible: canSeeAi, active: isAiActive, expanded: aiExpanded, setExpanded: setAiExpanded, items: aiSubItems },
     support: { label: 'Support', icon: Headphones, visible: canSeeSupport, active: isSupportActive, expanded: supportExpanded, setExpanded: setSupportExpanded, items: supportSubItems },
     pm: { label: 'Projects', icon: KanbanSquare, visible: canSeePm, active: isPmActive, expanded: pmExpanded, setExpanded: setPmExpanded, items: pmSubItems },
     settings: { label: 'Settings', icon: Settings, visible: canSeeSettings, active: isSettingsActive, expanded: settingsExpanded, setExpanded: setSettingsExpanded, items: settingsSubItems },
@@ -338,7 +362,8 @@ export function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose
         {/* Main nav items */}
         {mainNavItems.map((item) => renderNavItem(item))}
 
-        {/* Collapsible Support / Projects / Settings sections */}
+        {/* Collapsible AI / Support / Projects / Settings sections */}
+        {renderGroup('ai', collapsed)}
         {renderGroup('support', collapsed)}
         {renderGroup('pm', collapsed)}
         {renderGroup('settings', collapsed)}
@@ -408,6 +433,7 @@ export function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose
             </div>
             <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
               {mainNavItems.map((item) => renderNavItem(item, false, false, onMobileClose))}
+              {renderGroup('ai', false, onMobileClose)}
               {renderGroup('support', false, onMobileClose)}
               {renderGroup('pm', false, onMobileClose)}
               {renderGroup('settings', false, onMobileClose)}

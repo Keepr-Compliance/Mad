@@ -12,25 +12,9 @@ import { describe, expect, it } from 'vitest';
 import { buildIphoneSyncReport } from '../iphone-sync';
 import { resolvePeriod } from '../period';
 import {
-  barHeight,
-  barLayout,
-  BASELINE_Y,
   bucketByDay,
-  buildDurationSeries,
-  buildFailureSeries,
-  CHART_HEIGHT,
-  CHART_WIDTH,
-  COLOR_CANCELLED,
-  COLOR_ERROR,
   durationTooltipLines,
   failureTooltipLines,
-  gridValues,
-  MAX_BAR_WIDTH,
-  PLOT_HEIGHT,
-  roundedTopBarPath,
-  stackSegments,
-  STACK_GAP,
-  thinLabels,
 } from '../iphone-sync-charts';
 import { DERIVED_ROWS, FIXTURE_ROWS_24, FIXTURE_USERS_24 } from './iphone-sync.fixture';
 
@@ -102,126 +86,38 @@ describe('bucketByDay', () => {
   });
 });
 
-describe('the duration series', () => {
-  const series = buildDurationSeries(bucketByDay(RUNS, THIS_WEEK));
+// The bar geometry (layout, gridlines, label thinning, the stack gap, the
+// rounded-top path) moved to the @keepr/ui chart kit with BACKLOG-4208 and is
+// tested there (packages/ui/src/components/chart/scale.test.ts). What stays
+// here is what the charts are drawn FROM: the per-day buckets.
 
-  it('draws NO BAR for a day with no runs', () => {
-    expect(series.points).toHaveLength(6);
-    expect(series.points[5].value).toBeNull();
-    expect(barHeight(0, series.max)).toBe(0);
+describe('what the duration chart is drawn from', () => {
+  const buckets = bucketByDay(RUNS, THIS_WEEK);
+
+  it('leaves the average NULL (no bar) for a day with no runs', () => {
+    expect(buckets).toHaveLength(6);
+    expect(buckets[5].averageMinutes).toBeNull();
   });
 
-  it('scales to the tallest day', () => {
-    expect(series.max).toBeCloseTo(181.7, 1);
-    expect(barHeight(series.max, series.max)).toBe(PLOT_HEIGHT);
-    expect(barHeight(series.max / 2, series.max)).toBeCloseTo(PLOT_HEIGHT / 2, 6);
+  it('peaks at the tallest day', () => {
+    const averages = buckets.map((b) => b.averageMinutes).filter((v): v is number => v != null);
+    expect(Math.max(...averages)).toBeCloseTo(181.7, 1);
   });
 
   it('is empty-safe', () => {
-    const empty = buildDurationSeries(bucketByDay([], THIS_WEEK));
-    expect(empty.points).toHaveLength(6);
-    expect(empty.points.every((p) => p.value === null)).toBe(true);
-    expect(empty.max).toBe(0);
+    const empty = bucketByDay([], THIS_WEEK);
+    expect(empty).toHaveLength(6);
+    expect(empty.every((b) => b.averageMinutes === null)).toBe(true);
   });
 });
 
-describe('the failure series and its stack', () => {
+describe('what the failure chart is drawn from', () => {
   const buckets = bucketByDay(RUNS, THIS_WEEK);
-  const series = buildFailureSeries(buckets);
 
-  it('stacks errors and cancels per day', () => {
-    expect(series.points.map((p) => p.total)).toEqual([8, 5, 1, 2, 4, 0]);
-    expect(series.max).toBe(8);
-  });
-
-  it('keeps a 2px gap between the two segments, and anchors to the baseline', () => {
-    const day = series.points[0]; // 5 errors, 3 cancelled
-    const segments = stackSegments(day, series.max);
-    expect(segments).toHaveLength(2);
-
-    const [error, cancelled] = segments;
-    expect(error.color).toBe(COLOR_ERROR);
-    expect(cancelled.color).toBe(COLOR_CANCELLED);
-    // The error segment sits ON the baseline.
-    expect(error.y + error.height).toBeCloseTo(BASELINE_Y, 6);
-    // The gap is real: the cancelled segment ends 2px above the error's top.
-    const gap = error.y - (cancelled.y + cancelled.height);
-    expect(gap).toBeCloseTo(STACK_GAP, 6);
-    expect(gap).toBeGreaterThan(0);
-  });
-
-  it('draws nothing at all on a day with no failures', () => {
-    expect(stackSegments(series.points[5], series.max)).toEqual([]);
-  });
-
-  it('takes no gap when only one segment is present', () => {
-    const only = { dayIso: 'x', dayLabel: 'x', errors: 0, cancelled: 3, total: 3 };
-    const [segment] = stackSegments(only, 8);
-    expect(segment.color).toBe(COLOR_CANCELLED);
-    expect(segment.y + segment.height).toBeCloseTo(BASELINE_Y, 6);
-  });
-});
-
-describe('the axis', () => {
-  it('draws exactly THREE gridlines, at 0, half and max', () => {
-    expect(gridValues(8)).toEqual([0, 4, 8]);
-    expect(gridValues(181.7)).toHaveLength(3);
-  });
-
-  it('shows every day label up to 14 days', () => {
-    for (const n of [1, 6, 14]) {
-      expect(thinLabels(n).filter(Boolean)).toHaveLength(n);
-    }
-  });
-
-  it('thins to every ceil(n/7)th past 14 days, keeping first and last', () => {
-    // n=30 → step 5 → indices 0,5,10,15,20,25 plus the last (29) = 7 labels.
-    const thinned = thinLabels(30);
-    expect(thinned).toHaveLength(30);
-    expect(thinned.filter(Boolean)).toHaveLength(7);
-    expect(thinned[0]).toBe(true);
-    expect(thinned[29]).toBe(true);
-    expect(thinned.map((v, i) => (v ? i : -1)).filter((i) => i >= 0)).toEqual([
-      0, 5, 10, 15, 20, 25, 29,
-    ]);
-  });
-
-  it('keeps first and last at 15 and at 90 days too', () => {
-    for (const n of [15, 31, 90]) {
-      const thinned = thinLabels(n);
-      expect(thinned[0]).toBe(true);
-      expect(thinned[n - 1]).toBe(true);
-      expect(thinned.filter(Boolean).length).toBeLessThanOrEqual(9);
-      expect(thinned.filter(Boolean).length).toBeGreaterThan(1);
-    }
-  });
-});
-
-describe('bar layout', () => {
-  it('uses the mockup s geometry', () => {
-    expect(CHART_WIDTH).toBe(600);
-    expect(CHART_HEIGHT).toBe(200);
-  });
-
-  it('caps a bar at 28px however few days there are', () => {
-    const [bar] = barLayout(2);
-    expect(bar.width).toBe(MAX_BAR_WIDTH);
-  });
-
-  it('falls back to 62% of the slot when the days get tight', () => {
-    const bars = barLayout(30);
-    expect(bars[0].width).toBeLessThan(MAX_BAR_WIDTH);
-    expect(bars[0].width).toBeCloseTo(bars[0].slotWidth * 0.62, 6);
-  });
-
-  it('centres every bar in its slot and never overlaps the next', () => {
-    const bars = barLayout(6);
-    for (const bar of bars) {
-      expect(bar.x + bar.width / 2).toBeCloseTo(bar.slotCentre, 6);
-    }
-    for (let i = 1; i < bars.length; i += 1) {
-      expect(bars[i].x).toBeGreaterThanOrEqual(bars[i - 1].x + bars[i - 1].width);
-    }
+  it('counts errors and cancels per day', () => {
+    expect(buckets.map((b) => b.errors + b.cancelled)).toEqual([8, 5, 1, 2, 4, 0]);
+    expect(buckets[0].errors).toBe(5);
+    expect(buckets[0].cancelled).toBe(3);
   });
 });
 
@@ -255,28 +151,5 @@ describe('tooltip wording', () => {
   it('singularises one run and one error', () => {
     expect(durationTooltipLines(buckets[2])[1]).toContain('1 run ·');
     expect(failureTooltipLines(buckets[2])[1]).toContain('0 errors');
-  });
-});
-
-describe('bar shape', () => {
-  it('rounds the TOP corners only and keeps the foot square on the baseline', () => {
-    const d = roundedTopBarPath(10, 100, 28, 60, 4);
-    // Starts at the bottom-left, on the baseline.
-    expect(d.startsWith('M10,160')).toBe(true);
-    // Two quadratic curves — the two top corners — and no more.
-    expect(d.match(/Q/g)).toHaveLength(2);
-    // Both bottom corners are reached by straight lines, so the foot is square.
-    expect(d).toContain('L38,160');
-    expect(d).toContain('Z');
-  });
-
-  it('clamps the radius so a thin or short bar cannot invert', () => {
-    expect(roundedTopBarPath(0, 0, 2, 50, 4)).toContain('Q0,0 1,0');
-    expect(roundedTopBarPath(0, 0, 28, 1, 4)).toContain('Q0,0 1,0');
-  });
-
-  it('draws nothing for a zero-height bar', () => {
-    expect(roundedTopBarPath(0, 100, 28, 0)).toBe('');
-    expect(roundedTopBarPath(0, 100, 0, 40)).toBe('');
   });
 });

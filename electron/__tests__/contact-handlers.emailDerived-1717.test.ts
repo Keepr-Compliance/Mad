@@ -261,7 +261,7 @@ describe("BACKLOG-1717 — the gate in front of people found in email", () => {
     jest.clearAllMocks();
     mockProducer.mockResolvedValue([EMAIL_PERSON, GMAIL_PERSON]);
     gate({});
-    registerContactHandlers({} as any);
+    registerContactHandlers();
   });
 
   afterEach(() => {
@@ -518,7 +518,7 @@ describe("people found in texts are offered in the address-book half", () => {
     mockProducer.mockResolvedValue([]);
     gate({});
     mockTextPeople.mockReturnValue([TEXT_PERSON]);
-    registerContactHandlers({} as any);
+    registerContactHandlers();
   });
   afterEach(() => {
     mockDb?.close();

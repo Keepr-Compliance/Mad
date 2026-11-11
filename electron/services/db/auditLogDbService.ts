@@ -11,6 +11,7 @@
  * BACKLOG-2548 defect.)
  */
 
+import type { Database as DatabaseType } from "better-sqlite3";
 import type { AuditLogEntry, AuditLogDbRow } from "../auditService";
 import { dbAll, dbRun, ensureDb } from "./core/dbConnection";
 import { sql } from "./core/sqlText";
@@ -114,6 +115,82 @@ const PREVENT_AUDIT_UPDATE_DDL = `
     SELECT RAISE(ABORT, 'Audit logs cannot be modified');
   END
 `;
+
+/**
+ * Whitespace- and IF-NOT-EXISTS-insensitive form of a CREATE TRIGGER text.
+ * SQLite stores a trigger's text verbatim in `sqlite_master.sql` (minus
+ * IF NOT EXISTS and the trailing `;`), indentation included, so schema.sql's
+ * copy and the copy above are semantically equal but not byte-equal.
+ */
+export function normalizeTriggerSql(text: string): string {
+  return text
+    .replace(/\bIF\s+NOT\s+EXISTS\s+/gi, "")
+    .replace(/\s+/g, " ")
+    .replace(/;\s*$/, "")
+    .trim();
+}
+
+/**
+ * BACKLOG-3023. Put back the strict `prevent_audit_update` trigger on a
+ * database a pre-2548 sync left weakened. Compares the stored DEFINITION, not
+ * the name: the weakened trigger has the right name. Does nothing when the
+ * trigger already matches. Takes the handle explicitly (it runs inside
+ * runMigrations, before the handle is published).
+ *
+ * `onReplacing` is called with the prior definition (normalised, capped at
+ * 300 chars; null when the trigger is absent) BEFORE the DROP, because the
+ * DROP destroys the only record of what was there. A throw from it is ignored.
+ */
+export function repairAuditUpdateTrigger(
+  db: DatabaseType,
+  onReplacing?: (previousDefinition: string | null) => void,
+): "strict" | "repaired" {
+  const row = db
+    .prepare(sql`SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'prevent_audit_update'`)
+    .get() as { sql: string | null } | undefined;
+  if (row?.sql && normalizeTriggerSql(row.sql) === normalizeTriggerSql(PREVENT_AUDIT_UPDATE_DDL)) {
+    return "strict";
+  }
+  try {
+    onReplacing?.(row?.sql ? normalizeTriggerSql(row.sql).slice(0, 300) : null);
+  } catch {
+    // Reporting must never stop the repair.
+  }
+  db.transaction(() => {
+    db.exec("DROP TRIGGER IF EXISTS prevent_audit_update");
+    db.exec(PREVENT_AUDIT_UPDATE_DDL);
+  })();
+  return "repaired";
+}
+
+/**
+ * BACKLOG-4075: move a unified user's NOT-YET-SYNCED audit rows from the old
+ * local id to the account's Supabase id, so they reach the cloud (whose RLS
+ * accepts only `user_id = auth.uid()`) and the user's data export. Rows that
+ * were already synced keep the old id here, matching their cloud copy.
+ *
+ * Same sanctioned shape as `markAuditLogsSynced`: drop the strict trigger, one
+ * UPDATE, restore it from the ONE constant, all in one transaction. Called from
+ * inside the unification's `db.transaction`, so it runs as a SAVEPOINT and a
+ * later failure rolls it back with the rest. The trigger is never left weak or
+ * absent on disk, so BACKLOG-3023's launch check finds it strict.
+ */
+export function rekeyUnsyncedAuditLogsSync(db: DatabaseType, oldUserId: string, newUserId: string): number {
+  let changes = 0;
+  db.transaction(() => {
+    db.exec("DROP TRIGGER IF EXISTS prevent_audit_update");
+    changes = db
+      .prepare("UPDATE audit_logs SET user_id = ? WHERE user_id = ? AND synced_at IS NULL")
+      .run(newUserId, oldUserId).changes;
+    db.exec(PREVENT_AUDIT_UPDATE_DDL);
+  })();
+  return changes;
+}
+
+/** Promise-returning wrapper over `rekeyUnsyncedAuditLogsSync` (BACKLOG-2960 twin rule). */
+export function rekeyUnsyncedAuditLogs(db: DatabaseType, oldUserId: string, newUserId: string): Promise<number> {
+  return Promise.resolve(rekeyUnsyncedAuditLogsSync(db, oldUserId, newUserId));
+}
 
 /**
  * Mark audit logs as synced (only sets synced_at, only on not-yet-synced rows)

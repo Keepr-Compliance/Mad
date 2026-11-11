@@ -3,7 +3,7 @@
 // Handles iOS device detection via USB
 // ============================================
 
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain } from "electron";
 import log from "electron-log";
 import * as Sentry from "@sentry/electron/main";
 import { deviceDetectionService } from "../services/deviceDetectionService";
@@ -29,13 +29,8 @@ interface ListDevicesResponse extends DeviceResponse {
  * Registers all device-related IPC handlers.
  * Sets up event forwarding from device service to renderer process.
  *
- * @param _mainWindow Ignored since BACKLOG-3454 — every push below resolves the
- *   CURRENT window through `sendToMainWindow`. Capturing this one meant that
- *   after a Dock reopen on macOS the window was destroyed and every device
- *   event was dropped in silence. The parameter is kept so the ~20 suites that
- *   pass a stand-in window still compile.
  */
-export function registerDeviceHandlers(_mainWindow: BrowserWindow): void {
+export function registerDeviceHandlers(): void {
   log.info("[DeviceHandlers] Registering device detection handlers");
 
   // Forward device events to renderer

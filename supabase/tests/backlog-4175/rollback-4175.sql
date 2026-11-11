@@ -2,6 +2,10 @@
 -- Removes every object the migration created. Order matters: the tables carry a CHECK that calls
 -- _sender_rule_set_invalid, so the tables go before the validators.
 -- Desktop clients fall back to their cache, then to the bundled rules, when the RPC is gone.
+-- BACKLOG-4186 read functions read these tables, so they go first
+DROP FUNCTION IF EXISTS public.sender_rule_set_admin_content(BIGINT);
+DROP FUNCTION IF EXISTS public.sender_rule_set_admin_state();
+DELETE FROM supabase_migrations.schema_migrations WHERE version = '20261109210000';
 DROP FUNCTION IF EXISTS public.sender_rule_set_revert_all();
 DROP FUNCTION IF EXISTS public.sender_rule_set_pin(UUID, BIGINT);
 DROP FUNCTION IF EXISTS public.sender_rule_set_publish(JSONB, UUID);

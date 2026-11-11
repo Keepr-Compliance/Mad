@@ -115,7 +115,7 @@ const ok = (extra: Record<string, unknown> = {}) => ({
 });
 
 beforeAll(() => {
-  registerTransactionExportHandlers(null);
+  registerTransactionExportHandlers({ startSubmissionSync: false });
 });
 beforeEach(() => {
   jest.clearAllMocks();

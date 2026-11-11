@@ -22,6 +22,8 @@
  * its own account.
  */
 
+import { track } from "./diagnostics/perf";
+
 export const LARGE_REPLY_BYTES = 1024 * 1024;
 /**
  * BACKLOG-3884: a handler that takes this long logs one line at ANY time, sync
@@ -208,6 +210,12 @@ export function wrapHandleForReplySize(target: HandleTarget, deps: ReplySizeDeps
               threw
                 ? `[IpcSlowHandler] channel=${channel} durationMs=${durationMs} threw=1`
                 : `[IpcSlowHandler] channel=${channel} durationMs=${durationMs} approxBytes=${formatBytes(measure())}`,
+            );
+            // BACKLOG-4181: the same line to Sentry Logs (structured fields only).
+            track(
+              "ipc.slow",
+              durationMs,
+              threw ? { channel, threw: true } : { channel, approxBytes: Math.min(measure(), REPLY_SIZE_CAP_BYTES) },
             );
           }
         } catch {

@@ -43,23 +43,21 @@ import { registerAttachmentHandlers } from "../attachmentHandlers";
 import { registerTransactionSearchHandlers } from "../transactionSearchHandlers";
 
 describe("registerTransactionHandlers (guard: all sub-handlers wired)", () => {
-  const mockWindow = {} as Electron.BrowserWindow;
-
   beforeEach(() => {
     jest.clearAllMocks();
-    registerTransactionHandlers(mockWindow);
+    registerTransactionHandlers({ startSubmissionSync: true });
   });
 
   it("calls registerTransactionCrudHandlers", () => {
-    expect(registerTransactionCrudHandlers).toHaveBeenCalledWith(mockWindow);
+    expect(registerTransactionCrudHandlers).toHaveBeenCalledWith();
   });
 
   it("calls registerTransactionExportHandlers", () => {
-    expect(registerTransactionExportHandlers).toHaveBeenCalledWith(mockWindow);
+    expect(registerTransactionExportHandlers).toHaveBeenCalledWith({ startSubmissionSync: true });
   });
 
   it("calls registerEmailSyncHandlers", () => {
-    expect(registerEmailSyncHandlers).toHaveBeenCalledWith(mockWindow);
+    expect(registerEmailSyncHandlers).toHaveBeenCalledWith();
   });
 
   it("calls registerEmailLinkingHandlers", () => {
@@ -71,7 +69,7 @@ describe("registerTransactionHandlers (guard: all sub-handlers wired)", () => {
   });
 
   it("calls registerAttachmentHandlers", () => {
-    expect(registerAttachmentHandlers).toHaveBeenCalledWith(mockWindow);
+    expect(registerAttachmentHandlers).toHaveBeenCalledWith();
   });
 
   it("calls registerTransactionSearchHandlers — the BACKLOG-1866 guard", () => {

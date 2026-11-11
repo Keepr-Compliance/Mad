@@ -3,197 +3,70 @@
 /**
  * iPhone Sync Performance — the two per-day charts (BACKLOG-3450)
  *
- * Hand-written SVG, no chart library. The brief is per-day bars with a specific
- * stacked-failure encoding and a 2px segment gap, the colours are already-
- * validated data-viz steps, and an SVG driven by a pure series function can be
- * asserted with `renderToStaticMarkup` — where a `ResponsiveContainer` measures
- * zero and renders nothing.
+ * Drawn with the @keepr/ui BarChart (BACKLOG-4208): a static SVG on a fixed
+ * viewBox, so `renderToStaticMarkup` produces the whole chart. The geometry
+ * lives in the kit; bucketing and tooltip wording stay in
+ * `lib/reports/iphone-sync-charts`.
  *
- * Geometry and wording are transcribed from the approved mockup (artifact v5).
- * Every number the bars are drawn from lives in `lib/reports/iphone-sync-charts`
- * and is tested there.
+ * The Google Messages report renders this same component.
  */
 
-import { useState } from 'react';
 import {
-  barHeight,
-  barLayout,
-  BASELINE_Y,
-  buildDurationSeries,
-  buildFailureSeries,
-  CHART_HEIGHT,
-  CHART_WIDTH,
-  COLOR_CANCELLED,
-  COLOR_DURATION,
-  COLOR_ERROR,
-  COLOR_LABEL,
+  BarChart,
+  CHART_1,
+  CHART_2,
+  CHART_3,
+  ChartFrame,
+  Legend,
+  type ChartDatum,
+  type ChartSeries,
+} from '@keepr/ui';
+import {
   durationTooltipLines,
   failureTooltipLines,
-  gridValues,
-  PAD_LEFT,
-  PAD_TOP,
-  roundedTopBarPath,
-  stackSegments,
-  thinLabels,
   type ChartRun,
   type DayBucket,
 } from '@/lib/reports/iphone-sync-charts';
 
-export interface Tooltip {
-  x: number;
-  y: number;
-  lines: string[];
+const DURATION_SERIES: ChartSeries[] = [
+  { key: 'duration', label: 'average minutes', color: CHART_1.value },
+];
+
+const FAILURE_SERIES: ChartSeries[] = [
+  { key: 'errors', label: 'error', color: CHART_2.value },
+  { key: 'cancelled', label: 'cancelled', color: CHART_3.value },
+];
+
+/** Gridline ticks in minutes: one decimal under 10, whole minutes above. */
+export function minuteTick(value: number): string {
+  return value >= 10 ? String(Math.round(value)) : value.toFixed(1);
 }
 
-export function GridLines({ max, unit }: { max: number; unit: string }) {
-  const values = gridValues(max);
-  return (
-    <g aria-hidden="true">
-      {values.map((value) => {
-        const y = BASELINE_Y - barHeight(value, max);
-        return (
-          <g key={value}>
-            <line
-              x1={PAD_LEFT}
-              x2={CHART_WIDTH - 8}
-              y1={y}
-              y2={y}
-              stroke="#e5e7eb"
-              strokeWidth={1}
-            />
-            <text x={PAD_LEFT - 6} y={y + 3} textAnchor="end" fontSize={10} fill="#9ca3af">
-              {max === 0 ? '' : formatTick(value, unit)}
-            </text>
-          </g>
-        );
-      })}
-    </g>
-  );
-}
-
-function formatTick(value: number, unit: string): string {
-  if (unit === 'min') return value >= 10 ? String(Math.round(value)) : value.toFixed(1);
-  return String(Math.round(value));
-}
-
-export function DayLabels({ buckets }: { buckets: { dayIso: string; dayLabel: string }[] }) {
-  const bars = barLayout(buckets.length);
-  const show = thinLabels(buckets.length);
-  return (
-    <g aria-hidden="true">
-      {buckets.map((bucket, i) =>
-        show[i] ? (
-          <text
-            key={bucket.dayIso}
-            x={bars[i].slotCentre}
-            y={CHART_HEIGHT - 8}
-            textAnchor="middle"
-            fontSize={10}
-            fill="#9ca3af"
-          >
-            {bucket.dayLabel}
-          </text>
-        ) : null
-      )}
-    </g>
-  );
-}
-
-/**
- * An invisible full-height rect per day. The tooltip is a fixed div that
- * follows the pointer, so the hit area has to be the whole column — a bar
- * alone would leave an empty day unhoverable, and "no runs that day" is
- * exactly what a reader wants the tooltip to say.
- */
-export function HitRects<B extends { dayIso: string }>({
-  buckets,
-  lines,
-  onShow,
-  onHide,
-}: {
-  buckets: B[];
-  lines: (bucket: B) => string[];
-  onShow: (tooltip: Tooltip) => void;
-  onHide: () => void;
-}) {
-  const bars = barLayout(buckets.length);
-  return (
-    <g>
-      {buckets.map((bucket, i) => (
-        <rect
-          key={bucket.dayIso}
-          data-day={bucket.dayIso}
-          x={bars[i].slotX}
-          y={PAD_TOP}
-          width={bars[i].slotWidth}
-          height={BASELINE_Y - PAD_TOP}
-          fill="transparent"
-          onMouseMove={(e) => onShow({ x: e.clientX, y: e.clientY, lines: lines(bucket) })}
-          onMouseLeave={onHide}
-        />
-      ))}
-    </g>
-  );
-}
-
-export function TooltipBox({ tooltip }: { tooltip: Tooltip | null }) {
-  if (!tooltip) return null;
-  return (
-    <div
-      role="tooltip"
-      className="pointer-events-none fixed z-50 rounded-md bg-gray-900 px-2.5 py-1.5 text-xs text-white shadow-lg"
-      style={{ left: tooltip.x + 12, top: tooltip.y + 12 }}
-    >
-      {tooltip.lines.map((line, i) => (
-        <div key={line + i} className={i === 0 ? 'font-semibold' : 'text-gray-200'}>
-          {line}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-export function ChartFrame({
-  title,
-  subtitle,
-  children,
-  legend,
-}: {
-  title: string;
-  subtitle: string;
-  children: React.ReactNode;
-  legend?: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h3 className="text-base font-semibold text-gray-900">{title}</h3>
-          <p className="text-xs text-gray-500">{subtitle}</p>
-        </div>
-        {legend}
-      </div>
-      <div className="mt-3">{children}</div>
-    </div>
-  );
-}
-
-export function LegendSwatch({ color, label }: { color: string; label: string }) {
-  return (
-    <span className="inline-flex items-center gap-1.5 text-xs text-gray-600">
-      <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: color }} aria-hidden="true" />
-      {label}
-    </span>
-  );
+/** Tooltip lines for a chart category, looked up by the day it stands for. */
+export function linesByDay<B extends { dayIso: string }>(
+  buckets: B[],
+  lines: (bucket: B) => string[]
+): (datum: ChartDatum) => string[] {
+  const byDay = new Map(buckets.map((b) => [b.dayIso, b]));
+  return (datum) => {
+    const bucket = byDay.get(datum.key);
+    return bucket ? lines(bucket) : [datum.label];
+  };
 }
 
 /** Any report's day buckets (see ChartRun): the iPhone and Google Messages reports share it. */
 export function SyncCharts({ buckets }: { buckets: DayBucket<ChartRun>[] }) {
-  const [tooltip, setTooltip] = useState<Tooltip | null>(null);
-  const duration = buildDurationSeries(buckets);
-  const failures = buildFailureSeries(buckets);
-  const bars = barLayout(buckets.length);
-  const hide = () => setTooltip(null);
+  // NULL average = no finished runs that day = no bar (not a zero-height one).
+  const duration: ChartDatum[] = buckets.map((b) => ({
+    key: b.dayIso,
+    label: b.dayLabel,
+    values: { duration: b.averageMinutes },
+  }));
+  const failures: ChartDatum[] = buckets.map((b) => ({
+    key: b.dayIso,
+    label: b.dayLabel,
+    values: { errors: b.errors, cancelled: b.cancelled },
+  }));
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
@@ -201,102 +74,32 @@ export function SyncCharts({ buckets }: { buckets: DayBucket<ChartRun>[] }) {
         title="Average duration per finished run"
         subtitle="Minutes per day. A day with no finished runs draws no bar."
       >
-        <svg
-          viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
-          width="100%"
-          height={CHART_HEIGHT}
-          role="img"
-          aria-label="Average sync duration in minutes per day"
-        >
-          <GridLines max={duration.max} unit="min" />
-          {duration.points.map((point, i) =>
-            point.value == null ? null : (
-              <g key={point.dayIso}>
-                <path
-                  d={roundedTopBarPath(
-                    bars[i].x,
-                    BASELINE_Y - barHeight(point.value, duration.max),
-                    bars[i].width,
-                    barHeight(point.value, duration.max)
-                  )}
-                  fill={COLOR_DURATION}
-                  data-value={point.value}
-                />
-                {bars[i].width >= 14 ? (
-                  <text
-                    x={bars[i].slotCentre}
-                    y={BASELINE_Y - barHeight(point.value, duration.max) - 4}
-                    textAnchor="middle"
-                    fontSize={11}
-                    fill={COLOR_LABEL}
-                  >
-                    {Math.round(point.value)}
-                  </text>
-                ) : null}
-              </g>
-            )
-          )}
-          <DayLabels buckets={buckets} />
-          <HitRects
-            buckets={buckets}
-            lines={durationTooltipLines}
-            onShow={setTooltip}
-            onHide={hide}
-          />
-        </svg>
+        <BarChart
+          chartId="duration"
+          title="Average sync duration in minutes per day"
+          data={duration}
+          series={DURATION_SERIES}
+          formatTick={minuteTick}
+          tooltipLines={linesByDay(buckets, durationTooltipLines)}
+          categoryHeader="Day"
+        />
       </ChartFrame>
 
       <ChartFrame
         title="Failed syncs per day"
         subtitle="Errors and cancels, stacked. A day with no failures draws no bar."
-        legend={
-          <span className="flex items-center gap-3">
-            <LegendSwatch color={COLOR_ERROR} label="error" />
-            <LegendSwatch color={COLOR_CANCELLED} label="cancelled" />
-          </span>
-        }
+        legend={<Legend series={FAILURE_SERIES} />}
       >
-        <svg
-          viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
-          width="100%"
-          height={CHART_HEIGHT}
-          role="img"
-          aria-label="Failed syncs per day, errors and cancels stacked"
-        >
-          <GridLines max={failures.max} unit="count" />
-          {failures.points.map((point, i) => (
-            <g key={point.dayIso}>
-              {stackSegments(point, failures.max).map((segment) => (
-                <path
-                  key={segment.color}
-                  d={roundedTopBarPath(bars[i].x, segment.y, bars[i].width, segment.height)}
-                  fill={segment.color}
-                />
-              ))}
-              {point.total > 0 && bars[i].width >= 14 ? (
-                <text
-                  x={bars[i].slotCentre}
-                  y={BASELINE_Y - barHeight(point.total, failures.max) - 4}
-                  textAnchor="middle"
-                  fontSize={11}
-                  fill={COLOR_LABEL}
-                >
-                  {point.total}
-                </text>
-              ) : null}
-            </g>
-          ))}
-          <DayLabels buckets={buckets} />
-          <HitRects
-            buckets={buckets}
-            lines={failureTooltipLines}
-            onShow={setTooltip}
-            onHide={hide}
-          />
-        </svg>
+        <BarChart
+          chartId="failures"
+          title="Failed syncs per day, errors and cancels stacked"
+          mode="stacked"
+          data={failures}
+          series={FAILURE_SERIES}
+          tooltipLines={linesByDay(buckets, failureTooltipLines)}
+          categoryHeader="Day"
+        />
       </ChartFrame>
-
-      <TooltipBox tooltip={tooltip} />
     </div>
   );
 }

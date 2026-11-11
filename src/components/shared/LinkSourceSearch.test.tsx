@@ -211,6 +211,23 @@ describe("LinkSourceSearch on the shared picker", () => {
     );
   });
 
+  /** BACKLOG-4180 — a link rolled back because its values could not be copied. */
+  it("says the link failed and keeps the record selected for a retry", async () => {
+    const onClose = jest.fn();
+    linkSource.mockResolvedValue({ success: true, outcomes: [{ ok: false, reason: "copy_failed" }] });
+    renderPanel({ onClose });
+
+    await screen.findByText("Robin Marsh", { selector: '[data-testid="contact-row-name"]' });
+    fireEvent.click(rowFor(ROBIN));
+    fireEvent.click(await screen.findByTestId("link-source-commit"));
+
+    expect(await screen.findByTestId("link-source-error")).toHaveTextContent(
+      "Couldn't link this contact. Try again.",
+    );
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("link-source-commit")).toBeInTheDocument();
+  });
+
   /**
    * THE GUARANTEE THAT MUST SURVIVE THE SWAP. `ContactSearchList` renders its
    * `error` branch only when a caller supplies one; the transaction pickers do

@@ -154,7 +154,7 @@ beforeEach(async () => {
   openedPaths.length = 0;
   registeredHandlers.clear();
   resetOpenTempCleanupForTests();
-  registerAttachmentHandlers(null);
+  registerAttachmentHandlers();
 });
 
 afterEach(() => {
@@ -218,7 +218,7 @@ describe("R3 open + O1 cleanup", () => {
     fs.mkdirSync(path.dirname(stale), { recursive: true });
     fs.writeFileSync(stale, PLAIN);
     resetOpenTempCleanupForTests();
-    registerAttachmentHandlers(null); // = next launch
+    registerAttachmentHandlers(); // = next launch
     const openRoot = path.join(userData, AT_REST_OPEN_DIR);
     // the launch cleanup is fire-and-forget; wait (bounded) for the whole dir, not just the file
     for (let i = 0; i < 200 && fs.existsSync(openRoot); i++) await new Promise((r) => setTimeout(r, 10));

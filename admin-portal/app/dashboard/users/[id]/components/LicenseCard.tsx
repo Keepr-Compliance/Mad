@@ -35,7 +35,8 @@ function getStatusColor(status: string | null): string {
   }
 }
 
-export function LicenseCard({ licenses }: { licenses: License[] }) {
+/** canEdit: licenses.edit (BACKLOG-4170) shows the Edit dialog. */
+export function LicenseCard({ licenses, canEdit = false }: { licenses: License[]; canEdit?: boolean }) {
   // Use first license for the header edit button
   const primaryLicense = licenses[0] ?? null;
 
@@ -46,7 +47,7 @@ export function LicenseCard({ licenses }: { licenses: License[] }) {
           <Shield className="h-4 w-4 text-gray-400" />
           Account
         </h3>
-        {primaryLicense && (
+        {primaryLicense && canEdit && (
           <EditLicenseDialog
             license={{
               id: primaryLicense.id,

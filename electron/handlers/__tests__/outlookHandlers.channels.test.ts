@@ -39,7 +39,6 @@ jest.mock("../../services/logService", () => ({
 jest.mock("../../utils/userIdHelper", () => ({ getValidUserId: jest.fn(async () => null) }));
 
 import fs from "fs";
-import type { BrowserWindow } from "electron";
 
 type FsMethod = "writeFileSync" | "readFileSync" | "existsSync" | "unlinkSync";
 
@@ -56,7 +55,7 @@ describe("Outlook IPC handlers", () => {
 
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { registerOutlookHandlers } = require("../outlookHandlers");
-    registerOutlookHandlers({} as BrowserWindow);
+    registerOutlookHandlers();
 
     const channels = Object.keys(handlers).sort();
     expect(channels).toEqual([

@@ -61,9 +61,16 @@ export default async function OrganizationDetailPage({
   });
 
   // BACKLOG-4007: Invite on this page needs the same permission as the Users page invite.
+  // BACKLOG-3976: the member role change uses it too (the RPC checks it again).
   const { data: canInvite } = await supabase.rpc('has_permission', {
     check_user_id: adminUser.id,
     required_permission: 'users.edit',
+  });
+
+  // BACKLOG-4170: member Suspend / Unsuspend needs the key admin_suspend_user checks.
+  const { data: canSuspend } = await supabase.rpc('has_permission', {
+    check_user_id: adminUser.id,
+    required_permission: 'users.suspend',
   });
 
   // BACKLOG-3853 PR-2A: the brokerage Billing card. billing.view gates the read
@@ -246,7 +253,12 @@ export default async function OrganizationDetailPage({
             <div className="mt-4 flex justify-center">{inviteButton}</div>
           </div>
         ) : (
-          <MembersTable members={members} />
+          <MembersTable
+            members={members}
+            organizationId={org.id}
+            canEditRole={!!canInvite}
+            canSuspend={canSuspend === true}
+          />
         )}
       </div>
     </div>

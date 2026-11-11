@@ -74,7 +74,7 @@ describe("BACKLOG-3892 S1: sync:start passes the floor plan through", () => {
     jest.clearAllMocks();
     handlers.clear();
     rateLimiters.sync.clearKey(UDID);
-    registerSyncHandlers({} as never, "user-1");
+    registerSyncHandlers("user-1");
     mockSync.mockResolvedValue({ success: false, messages: [], contacts: [], conversations: [], error: "x", duration: 1 });
   });
   afterEach(() => cleanupSyncHandlers());

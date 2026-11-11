@@ -70,7 +70,8 @@ jest.mock("../contactSourceValues", () => {
   const actual = jest.requireActual("../contactSourceValues");
   return {
     ...actual,
-    applyLinkedSourceValues: (...args: unknown[]) => applyLinkedSourceValuesMock(...args),
+    // BACKLOG-4180: the user-driven link paths call the throwing variant.
+    applyLinkedSourceValuesForUserLink: (...args: unknown[]) => applyLinkedSourceValuesMock(...args),
   };
 });
 

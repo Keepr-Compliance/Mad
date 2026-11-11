@@ -130,3 +130,64 @@ MUTATION APPLIED numstat=0/1
   - REVOKE EXECUTE ON FUNCTION public.admin_remove_internal_user(uuid) FROM PUBLIC, anon;
 RESULT total=78 pass=77 fail=1 reds=Z1_execute_grants
 RESTORED clean=True
+
+== 2026-11-10, BACKLOG-4170 PR3 (20261111120000) re-keys internal_users_read_invitations to internal_users.view|internal_users.manage
+I11 now: manager (internal_users.view) reads 2, lower (support.view only) 0, outsider 0. K16 re-applies 20261107100000 then 20261111120000 (version order).
+A standalone replay of 20261107100000 after 20261111120000 reverts internal_users_read_invitations to has_internal_role.
+controls (applied keepr-test): total=78 pass=78 fail=0
+controls --with-migration: total=78 pass=78 fail=0
+mutate.py all:
+== CEIL_manage_only
+RESULT total=78 pass=52 fail=26 reds=A12_manager_own_role_refused,A3_manager_equal_role_refused,A4_manager_side_role_refused,A5_manager_super_admin_refused,A8_manager_unknown_email_sa_refused,A9_existing_sa_invitation_unchanged,C3_manager_sa_invite_refused,C5_manager_equal_role_invite_refused,G1_can_grant_role_matrix,I2_manager_inserts_sa_refused,I5_manager_update_to_sa_refused,I6_manager_cannot_touch_sa_invitation,R2_manager_removes_peer_refused,R3_manager_removes_sa_refused,S1_permissions_of_role_above_caller_refused,S2_lower_role_to_caller_level_refused,S3_editor_on_role_above_editor_refused,S4_cancel_sa_invitation_by_manager_zero_rows,S5_rename_role_above_caller_refused,S6_remove_role_not_below_caller_refused,U2_manager_to_sa_refused,U3_manager_to_equal_refused,U4_manager_peer_current_role_refused,U5_manager_demotes_sa_refused,X1_one_refusal_everywhere,X2_unknown_and_known_email_refused_alike
+RESTORED clean=True
+== STRICT_to_subset
+RESULT total=78 pass=69 fail=9 reds=A12_manager_own_role_refused,A3_manager_equal_role_refused,C5_manager_equal_role_invite_refused,G1_can_grant_role_matrix,R2_manager_removes_peer_refused,S2_lower_role_to_caller_level_refused,U3_manager_to_equal_refused,U4_manager_peer_current_role_refused,X1_one_refusal_everywhere
+RESTORED clean=True
+== SELF_removed
+RESULT total=78 pass=75 fail=3 reds=R5_sa_self_remove_refused,U6_sa_self_change_refused,X1_one_refusal_everywhere
+RESTORED clean=True
+== GUARD_removed
+RESULT total=78 pass=78 fail=0 reds=
+RESTORED clean=True
+== SELF_and_GUARD_removed
+RESULT total=78 pass=73 fail=5 reds=R5_sa_self_remove_refused,R7_sole_sa_self_remove_refused,U6_sa_self_change_refused,U9_sole_sa_self_demote_refused,X1_one_refusal_everywhere
+RESTORED clean=True
+== CURRENT_role_ceiling_removed
+RESULT total=78 pass=73 fail=5 reds=R2_manager_removes_peer_refused,R3_manager_removes_sa_refused,U4_manager_peer_current_role_refused,U5_manager_demotes_sa_refused,X1_one_refusal_everywhere
+RESTORED clean=True
+== POLICY_back_to_ALL
+RESULT total=78 pass=67 fail=11 reds=I10_cancel_needs_manage,I11_key_holder_reads_outsider_does_not,I2_manager_inserts_sa_refused,I3_insert_other_inviter_refused,I4_no_manage_insert_refused,I5_manager_update_to_sa_refused,I6_manager_cannot_touch_sa_invitation,I8_no_manage_update_zero_rows,I9_update_other_inviter_refused,S4_cancel_sa_invitation_by_manager_zero_rows,Z2_invitation_policies
+RESTORED clean=True
+== ACCEPT_no_inviter_check
+RESULT total=78 pass=74 fail=4 reds=C3_manager_sa_invite_refused,C4_inviter_without_manage_refused,C5_manager_equal_role_invite_refused,X1_one_refusal_everywhere
+RESTORED clean=True
+== CRUD_no_key_ceiling
+RESULT total=78 pass=76 fail=2 reds=K2_editor_create_unheld_key_refused,X1_one_refusal_everywhere
+RESTORED clean=True
+== CRUD_own_role_allowed
+RESULT total=78 pass=78 fail=0 reds=
+RESTORED clean=True
+== MSG_distinct_in_add
+RESULT total=78 pass=68 fail=10 reds=A10_outsider_refused,A11_internal_no_manage_refused,A12_manager_own_role_refused,A3_manager_equal_role_refused,A4_manager_side_role_refused,A5_manager_super_admin_refused,A6_no_manage_refused,A8_manager_unknown_email_sa_refused,X1_one_refusal_everywhere,X2_unknown_and_known_email_refused_alike
+RESTORED clean=True
+== UPDPERM_no_before_check
+RESULT total=78 pass=75 fail=3 reds=S1_permissions_of_role_above_caller_refused,S3_editor_on_role_above_editor_refused,X1_one_refusal_everywhere
+RESTORED clean=True
+== UPDPERM_no_after_check
+RESULT total=78 pass=76 fail=2 reds=S2_lower_role_to_caller_level_refused,X1_one_refusal_everywhere
+RESTORED clean=True
+== UPDROLE_no_ceiling
+RESULT total=78 pass=76 fail=2 reds=S5_rename_role_above_caller_refused,X1_one_refusal_everywhere
+RESTORED clean=True
+== DELROLE_no_ceiling
+RESULT total=78 pass=76 fail=2 reds=S6_remove_role_not_below_caller_refused,X1_one_refusal_everywhere
+RESTORED clean=True
+== INV_CANCEL_manage_only
+RESULT total=78 pass=76 fail=2 reds=S4_cancel_sa_invitation_by_manager_zero_rows,Z2_invitation_policies
+RESTORED clean=True
+== ANON_table_grants_kept
+RESULT total=78 pass=77 fail=1 reds=Z3_no_anon_table_privileges
+RESTORED clean=True
+== GRANT_anon_kept_on_remove
+RESULT total=78 pass=77 fail=1 reds=Z1_execute_grants
+RESTORED clean=True

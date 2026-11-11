@@ -300,6 +300,7 @@ describe('C11 page restores: phone token present, desktop tokens kept', () => {
     render(
       <UserProfileCard
         canImpersonate
+        canSuspend
         user={{ id: 'u1', email: 'agent@example.test', display_name: 'Avery Example', avatar_url: null, oauth_provider: 'google', status: 'active', subscription_tier: null, created_at: '2025-01-01T00:00:00Z', last_login_at: null }}
       />
     );

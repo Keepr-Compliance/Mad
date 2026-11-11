@@ -55,6 +55,7 @@ import {
 } from "./bootstrap/appDataPaths";
 import { getStartupFailure } from "./bootstrap/startupFailure";
 import { getMainWindow, setMainWindow } from "./windowRegistry";
+import { attachWindowRecovery, type WindowRecoveryDeps } from "./bootstrap/attachWindowRecovery";
 import {
   createSealQuitPrompt,
   installSealQuitPrompt,
@@ -1168,6 +1169,64 @@ const sealQuitPrompt = installSealQuitPrompt(
   }),
 );
 
+// BACKLOG-3456: what attachWindowRecovery needs from the main process (TASK-1968
+// crash dialog, BACKLOG-3784/3785/3884 freeze tracking).
+const windowRecoveryDeps: WindowRecoveryDeps = {
+  isPackaged: () => app.isPackaged,
+  showCrashDialog: async (reason) =>
+    (
+      await dialog.showMessageBox({
+        type: "error",
+        title: "Application Error",
+        message: "The application encountered an error.",
+        detail: `Reason: ${reason}`,
+        buttons: ["Reload", "Quit"],
+        defaultId: 0,
+        cancelId: 1,
+      })
+    ).response,
+  promptUnresponsive: async () =>
+    (
+      await dialog.showMessageBox({
+        type: "warning",
+        title: "Application Not Responding",
+        message: "The application is not responding.",
+        detail: "Would you like to wait or reload?",
+        buttons: ["Wait", "Reload", "Quit"],
+        defaultId: 0,
+        cancelId: 0,
+      })
+    ).response,
+  reportCrash: (details) => {
+    // Capture crash in Sentry (TASK-1967)
+    Sentry.captureMessage(`Renderer process gone: ${details.reason}`, {
+      level: "fatal",
+      extra: { reason: details.reason, exitCode: details.exitCode },
+    });
+  },
+  logError: (line, details) => {
+    console.error(line, details.reason, details.exitCode);
+    log.error(line, details.reason, details.exitCode);
+  },
+  warn: (line) => {
+    console.warn(line);
+    log.warn(line);
+  },
+  createTracker: () =>
+    new WindowResponsivenessTracker({
+      log: (line) => log.info(line),
+      capture: (message, context) => {
+        Sentry.captureMessage(message, context);
+      },
+      getPhase: () => syncTimeline.currentPhase(),
+      getScreen: () => currentScreenName(),
+      onFreeze: createWindowFreezeReporter(),
+    }),
+  attachTracking: attachResponsivenessTracking,
+  noteUserReload: () => sessionSecurityService.noteUserReload(),
+  quit: () => app.quit(),
+};
+
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: WINDOW_CONFIG.DEFAULT_WIDTH,
@@ -1201,6 +1260,11 @@ function createWindow(): void {
   // goes to the destroyed first window and is dropped in silence. THE SOLE
   // WRITER: `windowRecreation-3454.test.ts` fails if this call leaves.
   setMainWindow(mainWindow);
+
+  // BACKLOG-3456: crash / unresponsive recovery for THIS window. Here, not in
+  // whenReady, so a window macOS `activate` rebuilds after the last one closed
+  // gets it too.
+  attachWindowRecovery(mainWindow, windowRecoveryDeps);
 
   // BACKLOG-3816: Windows ends the session through the window; not the user's quit.
   mainWindow.on("query-session-end", () => noteSystemQuit("os-shutdown"));
@@ -1803,85 +1867,8 @@ app.whenReady().then(async () => {
   createWindow();
   log.debug(`[PERF] post-createWindow: ${Date.now() - appStartTime}ms`);
 
-  // ==========================================
-  // RENDERER CRASH RECOVERY (TASK-1968)
-  // ==========================================
-  // Handle renderer process crashes and unresponsive states
-  // Uses native dialog (not renderer-based) since the renderer may be dead
-  if (mainWindow) {
-    mainWindow.webContents.on("render-process-gone", (_event, details) => {
-      void (async () => {
-      console.error("[Main] Renderer process gone:", details.reason, details.exitCode);
-      log.error("[Main] Renderer process gone:", details.reason, details.exitCode);
-
-      // Skip dialog in development for 'killed' reason (DevTools reload causes this)
-      if (!app.isPackaged && details.reason === "killed") {
-        return;
-      }
-
-      // Capture crash in Sentry (TASK-1967)
-      Sentry.captureMessage(`Renderer process gone: ${details.reason}`, {
-        level: "fatal",
-        extra: { reason: details.reason, exitCode: details.exitCode },
-      });
-
-      const { response } = await dialog.showMessageBox({
-        type: "error",
-        title: "Application Error",
-        message: "The application encountered an error.",
-        detail: `Reason: ${details.reason}`,
-        buttons: ["Reload", "Quit"],
-        defaultId: 0,
-        cancelId: 1,
-      });
-
-      if (response === 0) {
-        mainWindow?.webContents.reload();
-      } else {
-        app.quit();
-      }
-      })();
-    });
-
-    // BACKLOG-3784: pair `unresponsive` with `responsive` so a freeze has a length.
-    const responsivenessTracker = new WindowResponsivenessTracker({
-      log: (line) => log.info(line),
-      capture: (message, context) => {
-        Sentry.captureMessage(message, context);
-      },
-      getPhase: () => syncTimeline.currentPhase(),
-      // BACKLOG-3884: the screen name on the freeze line (any duration).
-      getScreen: () => currentScreenName(),
-      // BACKLOG-3785: any freeze >= 10 s, sync or not, sends `renderer_freeze` (no frames).
-      onFreeze: createWindowFreezeReporter(),
-    });
-
-    attachResponsivenessTracking(mainWindow, responsivenessTracker, {
-      warn: (line) => {
-        console.warn(line);
-        log.warn(line);
-      },
-      promptUser: async () => {
-        const { response } = await dialog.showMessageBox({
-          type: "warning",
-          title: "Application Not Responding",
-          message: "The application is not responding.",
-          detail: "Would you like to wait or reload?",
-          buttons: ["Wait", "Reload", "Quit"],
-          defaultId: 0,
-          cancelId: 0,
-        });
-        return response;
-      },
-      reload: () => {
-        sessionSecurityService.noteUserReload();
-        mainWindow?.webContents.reload();
-      },
-      quit: () => {
-        app.quit();
-      },
-    });
-  }
+  // RENDERER CRASH RECOVERY (TASK-1968) is attached per window inside
+  // createWindow() — BACKLOG-3456.
 
   // ==========================================
   // COLD START DEEP LINK HANDLING (TASK-1500)
@@ -1902,11 +1889,11 @@ app.whenReady().then(async () => {
   // On macOS, cold start URLs come through the 'open-url' event which is already registered
 
   // Register existing handler modules
-  registerAuthHandlers(mainWindow!);
-  registerTransactionCrudHandlers(mainWindow!);
-  registerTransactionExportHandlers(mainWindow!);
+  registerAuthHandlers();
+  registerTransactionCrudHandlers();
+  registerTransactionExportHandlers({ startSubmissionSync: true });
   registerTransactionSearchHandlers();
-  registerEmailSyncHandlers(mainWindow!);
+  registerEmailSyncHandlers();
   registerEmailLinkingHandlers();
   registerEmailAutoLinkHandlers();
   registerReviewQueueHandlers();
@@ -1921,17 +1908,17 @@ app.whenReady().then(async () => {
   registerRcsImportHandlers();
   registerAtRestHandlers();
   void startRcsExtensionBridge();
-  registerAttachmentHandlers(mainWindow!);
-  registerContactHandlers(mainWindow!);
+  registerAttachmentHandlers();
+  registerContactHandlers();
   registerAddressHandlers();
   registerFeedbackHandlers();
   registerSystemHandlers();
   registerDiagnosticHandlers();
   registerUserSettingsHandlers();
   registerPreferenceHandlers();
-  registerDeviceHandlers(mainWindow!);
-  registerBackupHandlers(mainWindow!);
-  registerSyncHandlers(mainWindow!);
+  registerDeviceHandlers();
+  registerBackupHandlers();
+  registerSyncHandlers();
   registerDriverHandlers();
 
   // Initialize LLM services and register handlers
@@ -1962,10 +1949,10 @@ app.whenReady().then(async () => {
 
   // Register extracted handlers from handlers/ directory
   registerPermissionHandlers();
-  registerConversationHandlers(mainWindow!);
-  registerMessageImportHandlers(mainWindow!);
-  registerOutlookHandlers(mainWindow!);
-  registerUpdaterHandlers(mainWindow!);
+  registerConversationHandlers();
+  registerMessageImportHandlers();
+  registerOutlookHandlers();
+  registerUpdaterHandlers();
   registerErrorLoggingHandlers();
   registerResetHandlers();
   registerAppCleanupHandlers();

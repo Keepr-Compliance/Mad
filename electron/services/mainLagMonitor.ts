@@ -22,6 +22,9 @@
  * counted on the next line as `suppressed=<n>`. Never throws.
  */
 
+import { track } from "./diagnostics/perf";
+import { joinWholeNames } from "./diagnostics/fields";
+
 export const MAIN_LAG_THRESHOLD_MS = 1_000;
 export const MAIN_LAG_INTERVAL_MS = 100;
 export const MAIN_LAG_MIN_LOG_GAP_MS = 5_000;
@@ -109,9 +112,22 @@ export function createMainLagMonitor(deps: MainLagDeps): MainLagMonitor {
         ` inFlight=${ctx.inFlight.length > 0 ? ctx.inFlight.join(",") : "none"}` +
         ` syncPhase=${ctx.syncPhase ?? "none"}`;
       if (suppressed > 0) line += ` suppressed=${suppressed}`;
+      const suppressedNow = suppressed;
       suppressed = 0;
       lastLoggedAt = now;
       deps.log(line);
+      // BACKLOG-4181: the same line to Sentry Logs (structured fields only).
+      // inFlight keeps whole channel names within the 120-char field cap.
+      const inFlight = joinWholeNames(ctx.inFlight);
+      track("main.lag", Math.round(lag), {
+        sinceLastIpc: ctx.lastChannel,
+        lastIpcAgoMs: ctx.lastChannel ? Math.max(0, Math.round(now - ctx.lastStartedAt)) : null,
+        inFlight: inFlight.value,
+        inFlightCount: ctx.inFlight.length,
+        inFlightTruncated: inFlight.truncated ? true : null,
+        syncPhase: ctx.syncPhase,
+        suppressed: suppressedNow > 0 ? suppressedNow : null,
+      });
     } catch {
       // Telemetry only.
     }

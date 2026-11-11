@@ -113,7 +113,7 @@ describe("BACKLOG-4066 — the Update IPC passes the click-only reason", () => {
       expansionRan: true,
       messagesFloorISO: "2026-01-01T00:00:00.000Z",
     });
-    registerTransactionCrudHandlers(null);
+    registerTransactionCrudHandlers();
   });
 
   it("C6: calls ensureTransactionMessagesSynced once with reason 'update' and the proposed start", async () => {

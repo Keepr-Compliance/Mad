@@ -85,7 +85,7 @@ describe("S4-C: the kept backup is sealed when persistence ends, on every path",
     orchestratorEvents.removeAllListeners();
     send = jest.fn();
     setMainWindow({ isDestroyed: () => false, webContents: { send } } as never);
-    registerSyncHandlers({ isDestroyed: () => false, webContents: { send } } as never);
+    registerSyncHandlers();
   });
 
   afterEach(() => {

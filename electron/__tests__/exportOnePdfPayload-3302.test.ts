@@ -158,7 +158,7 @@ describe("BACKLOG-3302: the One PDF / Summary PDF buttons hand the combined rend
       handlers.set(channel, handler as never);
     });
     mockGetTransactionDetails.mockResolvedValue(details());
-    registerTransactionExportHandlers(null);
+    registerTransactionExportHandlers({ startSubmissionSync: false });
   });
 
   const rendered = () => {
