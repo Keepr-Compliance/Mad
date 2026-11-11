@@ -14,6 +14,8 @@ import type { UserLicense } from "../models";
 export interface LicenseMembershipStanding {
   standing: "licensed" | "unlicensed" | "left_brokerage" | "unknown" | "none";
   organization_name?: string;
+  /** BACKLOG-4171 — the brokerage's id, set with organization_name for "left_brokerage". */
+  organization_id?: string;
 }
 
 /**
@@ -185,6 +187,14 @@ export interface CrashReportingResult {
   error?: string;
 }
 
+/** BACKLOG-4181: "Share diagnostics with Keepr" switch state returned over IPC */
+export interface DiagnosticsSharingResult {
+  success: boolean;
+  /** The saved choice */
+  enabled?: boolean;
+  error?: string;
+}
+
 /**
  * Privacy / CCPA Data Export API (TASK-2053)
  */
@@ -201,6 +211,10 @@ export interface WindowApiPrivacy {
   getCrashReporting?: () => Promise<CrashReportingResult>;
   /** BACKLOG-3801: turn crash reporting on or off */
   setCrashReporting?: (enabled: boolean) => Promise<CrashReportingResult>;
+  /** BACKLOG-4181: read the "Share diagnostics with Keepr" switch */
+  getDiagnosticsSharing?: () => Promise<DiagnosticsSharingResult>;
+  /** BACKLOG-4181: turn diagnostics sharing on or off */
+  setDiagnosticsSharing?: (enabled: boolean) => Promise<DiagnosticsSharingResult>;
   /** Listen for export progress updates */
   onExportProgress: (callback: (progress: {
     category: string;

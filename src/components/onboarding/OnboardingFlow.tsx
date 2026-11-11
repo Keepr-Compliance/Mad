@@ -296,7 +296,7 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
         driverSetupComplete: !app.needsDriverSetup,
         termsAccepted: !app.needsTermsAcceptance,
         // BACKLOG-3956: narrowed here and only here; no provider fallback.
-        authProvider: toOnboardingAuthProvider(app.pendingOAuthData?.provider ?? app.authProvider),
+        authProvider: toOnboardingAuthProvider(app.authProvider),
         isNewUser: app.isNewUserFlow,
         isDatabaseInitialized,
         userId: app.currentUser?.id ?? null,
@@ -319,7 +319,7 @@ function OnboardingFlowInner({ app, machineState, resumeBundle }: OnboardingFlow
       driverSetupComplete: !app.needsDriverSetup,
       termsAccepted: !app.needsTermsAcceptance,
       // BACKLOG-3956: narrowed here and only here; no provider fallback.
-      authProvider: toOnboardingAuthProvider(app.pendingOAuthData?.provider ?? app.authProvider),
+      authProvider: toOnboardingAuthProvider(app.authProvider),
       isNewUser: app.isNewUserFlow,
       isDatabaseInitialized: app.isDatabaseInitialized,
       userId: app.currentUser?.id ?? null,

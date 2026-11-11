@@ -51,6 +51,11 @@ export type {
   SetupReminderParams,
   BillingContactReassignedParams,
   SeatsAddedParams,
+  AutoRenewOnParams,
+  AutoRenewOffParams,
+  OrgReinstatedParams,
+  PaymentFailedParams,
+  AgentPlanEndedParams,
 } from './types';
 
 // Queue (BACKLOG-2009)
@@ -77,6 +82,12 @@ import { buildAccountManagerAlertEmail } from './templates/account-manager-alert
 import { buildSetupReminderEmail } from './templates/setup-reminder';
 import { buildBillingContactReassignedEmail } from './templates/billing-contact-reassigned';
 import { buildSeatsAddedEmail } from './templates/seats-added';
+import { buildAutoRenewOnEmail } from './templates/auto-renew-on';
+import { buildAutoRenewOffEmail } from './templates/auto-renew-off';
+import { buildOrgReinstatedEmail } from './templates/org-reinstated';
+import { buildOrgAutoReinstatedEmail } from './templates/org-auto-reinstated';
+import { buildPaymentFailedEmail } from './templates/payment-failed';
+import { buildAgentPlanEndedEmail } from './templates/agent-plan-ended';
 import type {
   InviteEmailParams,
   DownloadInviteEmailParams,
@@ -93,6 +104,11 @@ import type {
   SetupReminderParams,
   BillingContactReassignedParams,
   SeatsAddedParams,
+  AutoRenewOnParams,
+  AutoRenewOffParams,
+  OrgReinstatedParams,
+  PaymentFailedParams,
+  AgentPlanEndedParams,
   SendEmailResult,
 } from './types';
 
@@ -370,6 +386,74 @@ export async function sendSeatsAddedEmail(params: SeatsAddedParams): Promise<Sen
   });
 }
 
+/** BACKLOG-4045: auto-renew back on, to the billing contact. Log type 'other' (the 4001 type check). */
+export async function sendAutoRenewOnEmail(params: AutoRenewOnParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildAutoRenewOnEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'auto_renew_on',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+    },
+  });
+}
+
+/** BACKLOG-4200: auto-renew turned off by staff, to the billing contact. Log type 'other'. */
+export async function sendAutoRenewOffEmail(params: AutoRenewOffParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildAutoRenewOffEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'auto_renew_off',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+    },
+  });
+}
+
+/** BACKLOG-4209: reinstated by Keepr staff, to the billing contact. Log type 'other', kind org_reinstated. */
+export async function sendOrgReinstatedEmail(params: OrgReinstatedParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildOrgReinstatedEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'org_reinstated',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+    },
+  });
+}
+
+/** BACKLOG-4209: reinstated automatically after a payment. Same log kind as the staff email (one send per row). */
+export async function sendOrgAutoReinstatedEmail(params: OrgReinstatedParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildOrgAutoReinstatedEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'org_reinstated',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+    },
+  });
+}
+
 export async function sendSetupReminderEmail(params: SetupReminderParams): Promise<SendEmailResult> {
   const { subject, html, text } = buildSetupReminderEmail(params);
   return sendEmail({
@@ -384,6 +468,49 @@ export async function sendSetupReminderEmail(params: SetupReminderParams): Promi
       organizationId: params.organizationId,
       variant: params.variant,
       day: params.day,
+    },
+  });
+}
+
+/**
+ * BACKLOG-3932: a brokerage invoice payment failed, to the billing contact. Log type 'other',
+ * kind org_payment_failed (distinct from the account-manager alert's reason 'payment_failed').
+ * The pay link is a bearer link: it is in the email body only, never in logMetadata.
+ */
+export async function sendPaymentFailedEmail(params: PaymentFailedParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildPaymentFailedEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'org_payment_failed',
+      outboxKey: params.outboxKey,
+      organizationId: params.organizationId,
+    },
+  });
+}
+
+/**
+ * BACKLOG-3850: the personal Agent plan ended because the person joined a brokerage, to the Agent
+ * plan's billing contact. Log type 'other' (the 4011 CHECK), kind agent_plan_ended_on_join; the
+ * outbox handler reads that kind + outboxKey back so a retry never sends twice.
+ */
+export async function sendAgentPlanEndedEmail(params: AgentPlanEndedParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildAgentPlanEndedEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: {
+      kind: 'agent_plan_ended_on_join',
+      outboxKey: params.outboxKey,
+      userId: params.userId,
+      licensed: params.licensed,
     },
   });
 }

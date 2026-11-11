@@ -42,8 +42,13 @@ jest.mock("../auditService", () => ({
 // TASK-1951: Mock preferenceHelper
 const mockIsContactSourceEnabled = jest.fn();
 const mockIsTextPeopleEnabled = jest.fn();
+// BACKLOG-4188: the Outlook/Gmail auto-discover switches have their own read
+// (unset → ON). Its rule is tested in preferenceHelper.test.ts; here we pin
+// that the scan routes through it.
+const mockIsInferredEmailSourceEnabled = jest.fn();
 jest.mock("../../utils/preferenceHelper", () => ({
   isContactSourceEnabled: (...args: unknown[]) => mockIsContactSourceEnabled(...args),
+  isInferredEmailSourceEnabled: (...args: unknown[]) => mockIsInferredEmailSourceEnabled(...args),
   isTextPeopleEnabled: (...args: unknown[]) => mockIsTextPeopleEnabled(...args),
 }));
 
@@ -324,8 +329,9 @@ describe("TransactionService - Inferred Contact Preferences (TASK-1951)", () => 
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // Default: all inferred sources OFF (the safe default)
+    // Fixture: all inferred sources OFF for this suite.
     mockIsContactSourceEnabled.mockResolvedValue(false);
+    mockIsInferredEmailSourceEnabled.mockResolvedValue(false);
   });
 
   it("should call isContactSourceEnabled for all three inferred sources during scan", async () => {
@@ -357,12 +363,12 @@ describe("TransactionService - Inferred Contact Preferences (TASK-1951)", () => 
       // May fail due to incomplete mocking -- we only care about the preference calls
     }
 
-    // Verify that isContactSourceEnabled was called for all three inferred sources
-    expect(mockIsContactSourceEnabled).toHaveBeenCalledWith(
-      mockUserId, "inferred", "outlookEmails", false
-    );
-    expect(mockIsContactSourceEnabled).toHaveBeenCalledWith(
-      mockUserId, "inferred", "gmailEmails", false
+    // BACKLOG-4188: Outlook and Gmail go through isInferredEmailSourceEnabled
+    // (unset → ON), never the old isContactSourceEnabled(..., false) read.
+    expect(mockIsInferredEmailSourceEnabled).toHaveBeenCalledWith(mockUserId, "outlookEmails");
+    expect(mockIsInferredEmailSourceEnabled).toHaveBeenCalledWith(mockUserId, "gmailEmails");
+    expect(mockIsContactSourceEnabled).not.toHaveBeenCalledWith(
+      mockUserId, "inferred", expect.anything(), expect.anything()
     );
     // BACKLOG-3670 C1: the Messages / SMS switch through the ONE rule
     // (default on for Android: Google Messages), not its own default.
@@ -404,8 +410,8 @@ describe("TransactionService - the scan is not wired to the plan gate (BACKLOG-3
     jest.clearAllMocks();
     // The user's own switch is ON for Outlook. If the scan were gated on the
     // plan, this is the state in which it would change behaviour.
-    mockIsContactSourceEnabled.mockImplementation(
-      async (_user: string, _cat: string, key: string) => key === "outlookEmails"
+    mockIsInferredEmailSourceEnabled.mockImplementation(
+      async (_user: string, key: string) => key === "outlookEmails"
     );
   });
 
@@ -437,13 +443,10 @@ describe("TransactionService - the scan is not wired to the plan gate (BACKLOG-3
       thrown = error;
     }
 
-    // The preference read itself: same key, same category, same default.
-    // Changing any of the three reds this.
-    expect(mockIsContactSourceEnabled).toHaveBeenCalledWith(
+    // The preference read itself (BACKLOG-4188: through its own helper).
+    expect(mockIsInferredEmailSourceEnabled).toHaveBeenCalledWith(
       mockUserId,
-      "inferred",
-      "outlookEmails",
-      false
+      "outlookEmails"
     );
 
     // ANTI-VACUITY: the absence assertions below mean nothing if the scan never
@@ -451,7 +454,7 @@ describe("TransactionService - the scan is not wired to the plan gate (BACKLOG-3
     // records whether anything was thrown afterwards, so a future change that
     // moves the throw earlier fails here rather than passing silently.
     // BACKLOG-3670 C1: the messages switch is read through isTextPeopleEnabled.
-    expect(mockIsContactSourceEnabled.mock.calls.length + mockIsTextPeopleEnabled.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(mockIsInferredEmailSourceEnabled.mock.calls.length + mockIsTextPeopleEnabled.mock.calls.length).toBeGreaterThanOrEqual(3);
 
     // The scan consults NO route to plan data.
     expect(mockPlanRoutes.isContactInferenceAllowed).not.toHaveBeenCalled();
@@ -465,7 +468,7 @@ describe("TransactionService - the scan is not wired to the plan gate (BACKLOG-3
 
     // Recorded, not asserted away: if the scan threw, say where it got to.
     if (thrown) {
-      expect(mockIsContactSourceEnabled).toHaveBeenCalled();
+      expect(mockIsInferredEmailSourceEnabled).toHaveBeenCalled();
     }
   });
 });

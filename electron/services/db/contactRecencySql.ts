@@ -262,7 +262,10 @@ export const EXTERNAL_CONTACTS_GET_ALL_SQL = sql`
            external_record_id, source, synced_at,
            -- BACKLOG-2401: carried so an import can record ZEXTERNALUUID on the
            -- crosswalk row at the one moment the answer is certain. Never matched on.
-           external_uuid
+           external_uuid,
+           -- BACKLOG-4180: the stored lookup keys, so the mapper dedupes phones
+           -- without running libphonenumber on every row of every read.
+           phones_normalized_json
     FROM external_contacts
     WHERE user_id = ?
   )

@@ -36,6 +36,7 @@ const Database = require(
   nodePath.join(__dirname, "..", "..", "..", "node_modules", "better-sqlite3-multiple-ciphers"),
 ) as typeof import("better-sqlite3-multiple-ciphers");
 import type { Database as DatabaseType } from "better-sqlite3";
+import { gmailFrom, insertStoredEmail } from "../../services/__tests__/helpers/storedEmail-4175";
 
 import {
   createPostgrestEmulator,
@@ -1192,5 +1193,249 @@ describe("C13 privacy on the new channels", () => {
     expect(JSON.stringify({ logCalls, sentryCalls, sent })).not.toMatch(/canary/i);
     expect(sentryCalls).toEqual([]);
     expect(cloudCalls).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4175 PR0
+// ---------------------------------------------------------------------------
+
+describe("P12 (4175) exact sender seeds in the preview and attachment open", () => {
+  type OpenFn = NonNullable<import("../learnModeHandlers").LearnModeHandlerDeps["openQuestionAttachment"]>;
+  const openCalls: string[] = [];
+  const fakeOpen: OpenFn = async (_userId, row) => {
+    openCalls.push(row.id);
+    return { ok: true, dataUrl: "data:application/pdf;base64,AAAA", downloadedNow: true };
+  };
+  const SEED = "my-saved-home@mail.zillow.com";
+  const MIXED_ADDRESS = "4175 Canarytest Way, Testville, ZZ 00000";
+  const SEED_ONLY_ADDRESS = "4176 Canarytest Way, Testville, ZZ 00000";
+
+  function stored(id: string, sender: string, address: string, day: number): string {
+    insertStoredEmail(db, {
+      id,
+      userId: USER,
+      sender,
+      subject: "Offer accepted",
+      bodyPlain: `Price cut on ${address}. Offer accepted, escrow closing, buyer inspection.`,
+      sentAt: `2026-10-${String(day).padStart(2, "0")}T10:00:00.000Z`,
+      hasAttachments: true,
+    });
+    return id;
+  }
+  function pdf(emailId: string, id: string, filename: string): void {
+    run(
+      `INSERT INTO attachments (id, email_id, filename, mime_type, file_size_bytes, storage_path) VALUES (?, ?, ?, 'application/pdf', 1234, NULL)`,
+      id,
+      emailId,
+      filename,
+    );
+  }
+
+  /** A mixed detection: 1 ordinary message (oldest) + 6 seed alerts (newest); and an all-seed detection. */
+  async function seedRun(): Promise<{ mixed: string; seedOnly: string; ordinaryId: string }> {
+    setToggle(true);
+    openCalls.length = 0;
+    handlers.registerLearnModeHandlers({ openQuestionAttachment: fakeOpen });
+    const ordinaryId = stored("e-4175-ord", "agent@example.com", MIXED_ADDRESS, 1);
+    pdf(ordinaryId, "att-4175-ord", "Agreement.pdf");
+    for (let i = 0; i < 6; i++) stored(`e-4175-s${i}`, gmailFrom("Zillow", SEED), MIXED_ADDRESS, 10 + i);
+    pdf("e-4175-s5", "att-4175-seed", "Listing flyer.pdf");
+    stored("e-4175-only", gmailFrom("Zillow", SEED), SEED_ONLY_ADDRESS, 20);
+    pdf("e-4175-only", "att-4175-only", "Other flyer.pdf");
+    const r = await invoke("learn:run", { windowMonths: 12 });
+    expect(r.success).toBe(true);
+    const ids = (r.summary as { detectionIds: string[] }).detectionIds;
+    expect(ids).toEqual(["d1", "d2"]);
+    // Precondition: d1 = the mixed detection (seen first) holds all 7 messages, 6 of them seeds;
+    // d2 holds the one seed alert.
+    const { getLastRun } = await import("../../services/learn/baselineRunner");
+    const [d1, d2] = getLastRun(USER)!.detections;
+    expect([d1.emailIds.length, d1.seedEmailIds.length, d2.emailIds.length, d2.seedEmailIds.length]).toEqual([7, 6, 1, 1]);
+    return { mixed: "d1", seedOnly: "d2", ordinaryId };
+  }
+
+  it("a mixed detection whose 5 newest messages are seeds previews its ordinary message; total = visible", async () => {
+    const { mixed, ordinaryId } = await seedRun();
+    const p = await invoke("learn:preview", { kind: "cleanup", detectionId: mixed });
+    expect(p.success).toBe(true);
+    expect((p.emails as Array<{ id: string }>).map((e) => e.id)).toEqual([ordinaryId]);
+    expect(p.totalEmails).toBe(1);
+    expect(p.questionAttachmentId).toBe("att-4175-ord");
+  });
+
+  it("cleanup-next asks the mixed detection with its visible count, and never the all-seed one", async () => {
+    const { mixed } = await seedRun();
+    const q = await invoke("learn:cleanup-next");
+    expect(q.question).toEqual({ detectionId: mixed, address: expect.any(String), emailCount: 1 });
+    const q2 = await invoke("learn:cleanup-next", { exclude: [mixed] });
+    expect(q2.question).toBeNull();
+  });
+
+  it("an all-seed detection is refused by the preview and by attachment open", async () => {
+    const { seedOnly } = await seedRun();
+    expect(await invoke("learn:preview", { kind: "cleanup", detectionId: seedOnly })).toEqual({
+      success: false,
+      error: handlers.LEARN_NOT_IN_SET_ERROR,
+    });
+    expect(await invoke("learn:attachment-open", { detectionId: seedOnly, attachmentId: "att-4175-only" })).toEqual({
+      success: false,
+      error: handlers.LEARN_NOT_IN_SET_ERROR,
+    });
+    expect(openCalls).toEqual([]);
+  });
+
+  it("attachment open refuses a seed message's attachment of the mixed detection, and opens the ordinary one", async () => {
+    const { mixed } = await seedRun();
+    expect(await invoke("learn:attachment-open", { detectionId: mixed, attachmentId: "att-4175-seed" })).toEqual({
+      success: false,
+      error: handlers.LEARN_NOT_IN_SET_ERROR,
+    });
+    expect(openCalls).toEqual([]);
+    expect((await invoke("learn:attachment-open", { detectionId: mixed, attachmentId: "att-4175-ord" })).success).toBe(true);
+    expect(openCalls).toEqual(["att-4175-ord"]);
+  });
+
+  it("WIRE: learn:score reports a seed email linked to an active deal in the Copy block", async () => {
+    await seedRun();
+    run(
+      `INSERT INTO transactions (id, user_id, property_address, status) VALUES ('t-4175-active', ?, ?, 'active')`,
+      USER,
+      MIXED_ADDRESS,
+    );
+    run(
+      `INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id) VALUES ('c-4175-s0', ?, 't-4175-active', 'e-4175-s0', 'th-e-4175-s0')`,
+      USER,
+    );
+    const r = await invoke("learn:score");
+    expect(r.success).toBe(true);
+    expect(r.copyBlock).toContain("seed emails linked to deals: 1");
+    expect((r.score as { seedLinkedToDeals: number }).seedLinkedToDeals).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4175 PR4: the active (downloaded) rule set
+// ---------------------------------------------------------------------------
+
+describe("PR4 (4175) Learn mode reads the active sender rule set", () => {
+  type Store = typeof import("../../services/senderRuleSetStore");
+  type RuleSet = import("../../utils/senderFilter/bundledRules").SenderRuleSet;
+  let store: Store;
+  let bundled: RuleSet;
+  const origRpc = mockSupabaseClient.rpc.getMockImplementation();
+
+  /** The bundled set with `version` and the listed fields changed, validated. */
+  async function ruleSet(version: number, patch: (r: RuleSet) => RuleSet = (r) => r): Promise<RuleSet> {
+    const { parseSenderRuleSet } = await import("../../utils/senderFilter/ruleSetSchema");
+    const r = parseSenderRuleSet(JSON.parse(JSON.stringify(patch({ ...bundled, version }))));
+    if (!r) throw new Error(`fixture v${version} is not a valid rule set`);
+    return r;
+  }
+
+  beforeEach(async () => {
+    const paths = await import("../../capabilities/appPathsProvider");
+    paths.resetAppPaths(); // no cache file: memory only, nothing written to the shared test userData
+    store = await import("../../services/senderRuleSetStore");
+    store.__resetForTests();
+    bundled = (await import("../../utils/senderFilter/bundledRules")).BUNDLED_SENDER_RULES;
+    setToggle(true);
+  });
+
+  afterEach(() => {
+    mockSupabaseClient.rpc.mockImplementation(origRpc as never);
+  });
+
+  it("RS9a learn:run completes while the rule-set download never answers", async () => {
+    // The download RPC hangs (as the refresher would see it); every other RPC as before.
+    mockSupabaseClient.rpc.mockImplementation(((fn: string, args?: { p_org_id?: string }) => {
+      if (fn === "sender_rule_set_current") {
+        return { abortSignal: () => new Promise(() => undefined) } as never;
+      }
+      return origRpc!(fn, args);
+    }) as never);
+    const triggered = jest.fn(() => new Promise(() => undefined));
+    store.setRefreshTrigger(triggered);
+    const HUNG = Symbol("hung");
+    let sentinel: ReturnType<typeof setTimeout> | undefined;
+    const outcome = await Promise.race([
+      invoke("learn:run", { windowMonths: 12 }),
+      new Promise((resolve) => {
+        sentinel = setTimeout(() => resolve(HUNG), 3_000);
+      }),
+    ]);
+    clearTimeout(sentinel);
+    expect(outcome).not.toBe(HUNG);
+    expect((outcome as { success: boolean }).success).toBe(true);
+    expect(triggered).toHaveBeenCalled();
+  });
+
+  /**
+   * RS17 (+ SR D2): the run used v7, the active set at score time is v8, and
+   * every one of the four score sites must read the RUN's set:
+   *   :472 seed candidates (exactAddresses)  -> seedLinkedToDeals
+   *   :473 countSeedLinkedToDeals rules      -> seedLinkedToDeals
+   *   :476 census rules                      -> minCensusLinkedEmails, census k
+   *   :477 keep sets (freeMailDomains)       -> census k
+   */
+  it("RS17 learn:score scores with the run's rule set, not the one active at score time", async () => {
+    const SEED7 = "seed7@example.test";
+    const v7 = await ruleSet(7, (r) => ({
+      ...r,
+      suppress: { ...r.suppress, exactAddresses: [...r.suppress.exactAddresses, SEED7] },
+      freeMailDomains: [...r.freeMailDomains, "freemail.example"],
+      thresholds: { ...r.thresholds, minCensusLinkedEmails: 3 },
+    }));
+    const v8 = await ruleSet(8);
+    await store.applyServerOutcome({ kind: "valid", rules: v7 }, USER);
+
+    run(`INSERT INTO transactions (id, user_id, property_address, status) VALUES ('t-4175-pr4', ?, ?, 'active')`, USER, "4177 Canarytest Way, Testville, ZZ 00000");
+    run(`INSERT INTO contacts (id, user_id, display_name) VALUES ('ct-4175-pr4', ?, 'Test Contact')`, USER);
+    run(`INSERT INTO contact_emails (id, contact_id, email) VALUES ('ce-4175-pr4', 'ct-4175-pr4', 'pat@freemail.example')`);
+    run(`INSERT INTO transaction_contacts (id, transaction_id, contact_id, removed_at) VALUES ('tc-4175-pr4', 't-4175-pr4', 'ct-4175-pr4', NULL)`);
+    const linked = (id: string, sender: string, bulk?: Record<string, string>) => {
+      insertStoredEmail(db, {
+        id,
+        userId: USER,
+        sender,
+        subject: "Hello",
+        bodyPlain: "Lunch on Friday?",
+        sentAt: "2026-10-05T10:00:00.000Z",
+        bulkMailHeaders: bulk,
+      });
+      run(`INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id) VALUES (?, ?, 't-4175-pr4', ?, ?)`, `c-${id}`, USER, id, `th-${id}`);
+    };
+    linked("e-4175-pr4-seed", gmailFrom("Alerts", SEED7));
+    linked("e-4175-pr4-bulk", gmailFrom("Other", "other@freemail.example"), { list_unsubscribe: "<mailto:u@freemail.example>" });
+
+    expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
+    await store.applyServerOutcome({ kind: "valid", rules: v8 }, USER);
+    expect(store.getActiveSenderRules().version).toBe(8);
+
+    const r = await invoke("learn:score");
+    expect(r.success).toBe(true);
+    const score = r.score as {
+      seedLinkedToDeals: number;
+      senderCensus: { minCensusLinkedEmails: number; dealLinkedSuppressed: Array<{ n: number; full: { k: number } }> };
+    };
+    expect(score.seedLinkedToDeals).toBe(1);
+    expect(score.senderCensus.minCensusLinkedEmails).toBe(3);
+    expect(score.senderCensus.dealLinkedSuppressed.map((m) => [m.full.k, m.n])).toEqual([[2, 2]]);
+    expect(String(r.copyBlock).split("\n")[0]).toBe("Keepr Learn mode score (rules v3; sender rules v7, source: download)");
+  });
+
+  it("RS18a a refused download over a newer cache: source: cache (download rejected)", async () => {
+    await store.applyServerOutcome({ kind: "valid", rules: await ruleSet(3) }, USER);
+    await store.applyServerOutcome({ kind: "rejected", reason: "shape", version: 9 }, USER);
+    expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
+    const r = await invoke("learn:score");
+    expect(String(r.copyBlock).split("\n")[0]).toContain("sender rules v3, source: cache (download rejected))");
+  });
+
+  it("RS18b a refused download with no newer cache: source: bundled (download rejected)", async () => {
+    await store.applyServerOutcome({ kind: "rejected", reason: "shape", version: 9 }, USER);
+    expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
+    const r = await invoke("learn:score");
+    expect(String(r.copyBlock).split("\n")[0]).toContain(`sender rules v${bundled.version}, source: bundled (download rejected))`);
   });
 });

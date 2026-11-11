@@ -47,11 +47,6 @@ jest.mock("os", () => ({
   release: jest.fn().mockReturnValue("21.0.0"),
 }));
 
-jest.mock("../services/loginProvisioningService", () => ({
-  __esModule: true,
-  provisionLogin: jest.fn(),
-}));
-
 jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: {
@@ -83,8 +78,6 @@ jest.mock("../services/googleAuthService", () => ({
     exchangeCodeForTokens: jest.fn(),
     getUserInfo: jest.fn(),
     stopLocalServer: jest.fn(),
-    resolveCodeDirectly: jest.fn(),
-    rejectCodeDirectly: jest.fn(),
     revokeToken: jest.fn().mockResolvedValue({ outcome: "revoked" }),
   },
 }));
@@ -96,8 +89,6 @@ jest.mock("../services/microsoftAuthService", () => ({
     exchangeCodeForTokens: jest.fn(),
     getUserInfo: jest.fn(),
     stopLocalServer: jest.fn(),
-    resolveCodeDirectly: jest.fn(),
-    rejectCodeDirectly: jest.fn(),
     revokeToken: jest.fn().mockResolvedValue({ outcome: "unsupported" }),
   },
 }));
@@ -246,7 +237,7 @@ describe("BACKLOG-3888: recording the connected email provider", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     setMainWindow(mockMainWindow as any);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    registerAuthHandlers(mockMainWindow as any);
+    registerAuthHandlers();
   });
 
   beforeEach(() => {

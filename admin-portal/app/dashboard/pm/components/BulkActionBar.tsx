@@ -27,7 +27,8 @@ interface BulkActionBarProps {
   onClearSelection: () => void;
   onChangeStatus: (status: ItemStatus) => void;
   onChangePriority: (priority: string) => void;
-  onAssignToSprint: () => void;
+  /** Omit to hide "Assign Sprint" (board Project mode, BACKLOG-4176). */
+  onAssignToSprint?: () => void;
   onAssignUser: (assigneeId: string | null) => void;
   onDelete: () => void;
   error?: string | null;
@@ -189,13 +190,15 @@ export function BulkActionBar({
         </div>
 
         {/* Sprint assignment */}
-        <button
-          onClick={onAssignToSprint}
-          className="flex items-center gap-1 text-sm text-gray-300 hover:text-white transition-colors"
-        >
-          <Calendar className="h-4 w-4" />
-          Assign Sprint
-        </button>
+        {onAssignToSprint && (
+          <button
+            onClick={onAssignToSprint}
+            className="flex items-center gap-1 text-sm text-gray-300 hover:text-white transition-colors"
+          >
+            <Calendar className="h-4 w-4" />
+            Assign Sprint
+          </button>
+        )}
 
         {/* Delete */}
         <button

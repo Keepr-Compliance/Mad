@@ -93,6 +93,7 @@ jest.mock("../../services/contactLinkingScheduler", () => ({
   configureContactLinking: jest.fn(),
   requestContactLinking: jest.fn(),
   runContactLinkingNow: jest.fn(),
+  runContactLinkingScopedNow: jest.fn(),
 }));
 jest.mock("../../services/db/contactSourceLinkDbService", () => ({
   __esModule: true,
@@ -182,7 +183,7 @@ async function invokeGetEditData(contactId: string): Promise<EditDataResponse> {
 
 describe("contacts:get-edit-data — live source set (BACKLOG-2493)", () => {
   beforeAll(() => {
-    registerContactHandlers({} as never);
+    registerContactHandlers();
   });
 
   beforeEach(() => {

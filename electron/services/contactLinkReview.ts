@@ -63,7 +63,11 @@ import {
   type RelationshipAssessment,
 } from "./db/contactLinkReviewDbService";
 import { identityPhrase, relationshipPhrase, sourceLabel } from "./contactLinkEvidence";
-import { applyLinkedSourceValues } from "./contactSourceValues";
+import {
+  applyLinkedSourceValuesForUserLink,
+  LINK_COPY_FAILED_MESSAGE,
+  LinkValueCopyError,
+} from "./contactSourceValues";
 import logService from "./logService";
 
 // ---------------------------------------------------------------------------
@@ -319,6 +323,23 @@ export function confirmProposal(userId: string, proposalId: string): ReviewDecis
     return { ok: false, error: "That review item has already been answered." };
   }
 
+  // BACKLOG-4180 (ACID): a failed value copy throws inside the transaction, so
+  // the verdict, the proposal resolution, the link and any copied values all
+  // roll back; the proposal stays pending and the user can answer again.
+  try {
+    return confirmProposalInTransaction(userId, proposalId, proposal);
+  } catch (error) {
+    if (!(error instanceof LinkValueCopyError)) throw error;
+    logService.warn(`[Contacts] confirm rolled back: ${error.message}`, "Contacts");
+    return { ok: false, error: LINK_COPY_FAILED_MESSAGE };
+  }
+}
+
+function confirmProposalInTransaction(
+  userId: string,
+  proposalId: string,
+  proposal: NonNullable<ReturnType<typeof getProposalById>>,
+): ReviewDecisionOutcome {
   return dbTransaction<ReviewDecisionOutcome>(() => {
     // Guarded on status inside the transaction: this is what makes a
     // double-click, a stale renderer, or two windows answering at once produce
@@ -380,7 +401,9 @@ export function confirmProposal(userId: string, proposalId: string): ReviewDecis
     // This is the surface where the delay was most visible — the user answers
     // "yes, same person" and the addresses that answer justified would not have
     // reached the contact until the next app start.
-    applyLinkedSourceValues(userId, proposal.contact_id);
+    // BACKLOG-4180: throws on failure (see confirmProposal) instead of letting
+    // the link commit without its values.
+    applyLinkedSourceValuesForUserLink(userId, proposal.contact_id);
 
     const alsoRejected = proposal.cluster_key.startsWith("record:")
       ? rejectSiblings(userId, proposal)

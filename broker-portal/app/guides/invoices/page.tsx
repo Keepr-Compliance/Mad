@@ -34,7 +34,7 @@ export default function InvoicesGuidePage() {
             are listed there with <strong>Download PDF</strong>, and <strong>Pay</strong> on any invoice that is due.
           </p>
           <p className="mt-3">
-            <strong>View all invoices</strong> opens Stripe&apos;s billing page with every invoice and your payment method.
+            <strong>Manage billing</strong> opens Stripe&apos;s billing page with every invoice and your payment method.
             Invoices are also emailed to your brokerage&apos;s billing contact.
           </p>
         </section>

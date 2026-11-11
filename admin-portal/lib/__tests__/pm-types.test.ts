@@ -19,6 +19,7 @@ const ALL_ITEM_STATUSES: ItemStatus[] = [
   'pending',
   'in_progress',
   'testing',
+  'pending_uat',
   'completed',
   'blocked',
   'deferred',

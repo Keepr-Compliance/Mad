@@ -123,17 +123,21 @@ beforeEach(() => {
 afterEach(() => jest.restoreAllMocks());
 
 describe('Broker / Admin, billing set up', () => {
-  it.each(['broker', 'admin'])('%s, active: five rows, Download + Pay, View all, Manage billing, help link', async (role) => {
+  it.each(['broker', 'admin'])('%s, active: five rows, Download + Pay, Manage billing in the header; no View all, no help link', async (role) => {
     signIn(full(role));
     deal('active');
     const p = await page();
     expect(p.rows).toHaveLength(5);
     expect(p.downloads).toHaveLength(5);
     expect(p.pays).toHaveLength(5);
-    expect(p.viewAll).toHaveLength(1);
+    expect(p.viewAll).toHaveLength(0);
     expect(p.manage).toHaveLength(1);
     expect(p.text).toContain('Overdue');
-    expect(p.c.querySelector('a[href="/guides/invoices"]')?.textContent).toBe('Where do I find my invoices?');
+    expect(p.c.querySelector('a[href="/guides/invoices"]')).toBeNull();
+    expect(p.text).not.toContain('Where do I find my invoices?');
+    expect(p.text).toContain('Showing your last 5 invoices. Click Manage billing to see all of them or change your payment method.');
+    // BACKLOG-4187: Manage billing is on the title line of its block
+    expect(p.c.querySelector('[data-billing-block="manage-billing"] > [data-billing-header] button')?.textContent).toBe('Manage billing');
     expect(listReads()).toEqual([[{ customer: CUSTOMER_A, limit: 10 }]]);
     p.unmount();
   });
@@ -163,13 +167,13 @@ describe('Broker / Admin, billing set up', () => {
     p.unmount();
   });
 
-  it('no invoices yet -> the empty line, View all and Manage billing still there', async () => {
+  it('no invoices yet -> the empty line and Manage billing; no View all', async () => {
     signIn(full('broker'));
     deal('active');
     stripeServes([]);
     const p = await page();
     expect(p.text).toContain('No invoices yet.');
-    expect(p.viewAll).toHaveLength(1);
+    expect(p.viewAll).toHaveLength(0);
     expect(p.manage).toHaveLength(1);
     p.unmount();
   });
@@ -230,12 +234,12 @@ describe('C2 / SR C1: the billing-only login', () => {
     expect(mockStripe.customersRetrieve).not.toHaveBeenCalled();
     p.unmount();
   });
-  it('set up: rows, View all, Manage billing', async () => {
+  it('set up: rows and Manage billing; no View all', async () => {
     signIn(BILLING_ONLY, { billingContact: true });
     deal('active');
     const p = await page();
     expect(p.rows).toHaveLength(5);
-    expect(p.viewAll).toHaveLength(1);
+    expect(p.viewAll).toHaveLength(0);
     expect(p.manage).toHaveLength(1);
     p.unmount();
   });
@@ -270,7 +274,7 @@ describe('C3: the caller organization, the current mode', () => {
 });
 
 describe('C9 / SR C6: Stripe trouble never hides the controls', () => {
-  it('Stripe hangs (active): renders inside the time limit with the unavailable line, View all and Manage billing', async () => {
+  it('Stripe hangs (active): renders inside the time limit with the unavailable line and Manage billing; no View all', async () => {
     signIn(full('broker'));
     deal('active');
     mockStripe.invoicesList.mockReturnValue(new Promise(() => {}));
@@ -278,20 +282,20 @@ describe('C9 / SR C6: Stripe trouble never hides the controls', () => {
     const p = await page();
     const elapsed = Date.now() - started;
     expect(p.text).toContain('Your invoices are unavailable right now.');
-    expect(p.viewAll).toHaveLength(1);
+    expect(p.viewAll).toHaveLength(0);
     expect(p.manage).toHaveLength(1);
     p.unmount();
     expect(elapsed).toBeGreaterThanOrEqual(2900);
     expect(elapsed).toBeLessThan(4500);
   }, 15000);
 
-  it('Stripe throws: unavailable line, View all and Manage billing', async () => {
+  it('Stripe throws: unavailable line and Manage billing; no View all', async () => {
     signIn(full('admin'));
     deal('active');
     mockStripe.invoicesList.mockRejectedValue(new Error('stripe down'));
     const p = await page();
     expect(p.text).toContain('Your invoices are unavailable right now.');
-    expect(p.viewAll).toHaveLength(1);
+    expect(p.viewAll).toHaveLength(0);
     expect(p.manage).toHaveLength(1);
     p.unmount();
   });

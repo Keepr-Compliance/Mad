@@ -56,6 +56,10 @@ jest.mock('@/lib/supabase/service', () => ({
 // uses `instanceof Stripe.errors.StripeError` and its subclasses (BACKLOG-2088).
 class StripeErrorMock extends Error {
   code?: string;
+  type?: string;
+  param?: string;
+  requestId?: string;
+  raw?: unknown;
   payment_intent?: unknown;
 }
 class StripeCardErrorMock extends StripeErrorMock {}
@@ -321,6 +325,82 @@ describe('POST /api/payments/charge — off-session outcomes (BACKLOG-2088)', ()
     expect(customerUpdates).toContainEqual({ default_payment_method_id: null });
     // No PI row is written for a charge that never created a PaymentIntent.
     expect(paymentIntentInserts).toBe(0);
+  });
+
+  // BACKLOG-2101 N1-C1: the invalid-PM branch logs only the Stripe error's own
+  // fields (exact key set: never the error object, never a spread of it).
+  it('invalid PM logs type/code/param/message/requestId and one Sentry warning (exact keys)', async () => {
+    wireChargeContext();
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const err = new StripeInvalidRequestErrorMock('No such PaymentMethod: pm_saved_1');
+      err.code = 'resource_missing';
+      err.type = 'invalid_request_error';
+      err.param = 'payment_method';
+      err.requestId = 'req_2101';
+      err.raw = { headers: { authorization: 'x' } };
+      mockPaymentIntentsCreate.mockRejectedValue(err);
+      const { POST } = await import('@/app/api/payments/charge/route');
+      const res = await POST(chargeReq());
+
+      const logged = errSpy.mock.calls.filter((c) => c[0] === '[payments/charge] invalid payment method');
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).toHaveLength(2);
+      expect(logged[0][1]).toEqual({
+        type: 'invalid_request_error',
+        code: 'resource_missing',
+        param: 'payment_method',
+        message: 'No such PaymentMethod: pm_saved_1',
+        requestId: 'req_2101',
+      });
+      expect(Object.getPrototypeOf(logged[0][1])).toBe(Object.prototype);
+
+      expect(mockCaptureMessage).toHaveBeenCalledTimes(1);
+      expect(mockCaptureMessage.mock.calls[0][1]).toEqual({
+        level: 'warning',
+        tags: { billing_stage: 'charge_invalid_pm', stripe_mode: 'test' },
+        extra: {
+          code: 'resource_missing',
+          type: 'invalid_request_error',
+          param: 'payment_method',
+          request_id: 'req_2101',
+          user_id: 'USER-1',
+        },
+      });
+
+      // The user-facing outcome is unchanged.
+      expect(res.status).toBe(402);
+      expect(await (res as NextResponse).json()).toMatchObject({ invalid_payment_method: true, code: 'resource_missing' });
+      readBack();
+      expect(customerUpdates).toContainEqual({ default_payment_method_id: null });
+      expect(paymentIntentInserts).toBe(0);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  // BACKLOG-2101 N1-C3a/b: ANY StripeInvalidRequestError stays a recoverable 402
+  // (BACKLOG-2088), including one with no code or an unrelated code.
+  it.each([
+    ['no code', undefined],
+    ['unrelated code', 'parameter_invalid_integer'],
+  ])('StripeInvalidRequestError with %s → 402 invalid_payment_method + clears cache', async (_label, code) => {
+    wireChargeContext();
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const err = new StripeInvalidRequestErrorMock('Some invalid request');
+      if (code !== undefined) err.code = code;
+      mockPaymentIntentsCreate.mockRejectedValue(err);
+      const { POST } = await import('@/app/api/payments/charge/route');
+      const res = await POST(chargeReq());
+      expect(res.status).toBe(402);
+      expect(await (res as NextResponse).json()).toMatchObject({ invalid_payment_method: true });
+      readBack();
+      expect(customerUpdates).toContainEqual({ default_payment_method_id: null });
+      expect(paymentIntentInserts).toBe(0);
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it('non-throwing create with a non-terminal status → 402, never a false { succeeded: true }', async () => {
@@ -1181,6 +1261,56 @@ describe('BACKLOG-3951 C10: purchase routes refuse a brokerage member without a 
     it.each(ROUTES)(`%s: ${who} -> unchanged, proceeds to the quote`, async (name, mod) => {
       wire(rows);
       await proceeds(name, mod);
+    });
+  }
+
+  // BACKLOG-4155: with two brokerage rows, an ACTIVE row anywhere decides
+  // (allowed); else an UNASSIGNED row anywhere refuses. Every case in both
+  // row orders. Org B is brokerageMembership's transcribed embed with a
+  // distinct id (personal_owner_user_id null). The route reads rows ordered by
+  // created_at, id, so the order is set by created_at (A's is the transcribed
+  // row's 2026-10-16), not by the list order.
+  const ORG_B_4155 = '00000000-0000-4000-8000-0000004155b1'; // pii-allow-uuid: invented fixture id
+  const B_LATER = '2026-11-01T00:00:00.000+00:00';
+  const B_EARLIER = '2026-10-01T00:00:00.000+00:00';
+  const activeAtB = (createdAt: string): Row => {
+    const base = brokerageMembership('agent', 'post', 'USER-1');
+    return {
+      ...base,
+      id: `${ORG_B_4155}-agent`,
+      organization_id: ORG_B_4155,
+      created_at: createdAt,
+      organizations: { ...(base.organizations as Record<string, unknown>), id: ORG_B_4155 },
+    };
+  };
+  const unassignedAtB = (createdAt: string): Row => ({ ...activeAtB(createdAt), license_status: 'unassigned' });
+  const suspendedAtA = (): Row => ({ ...UNASSIGNED_MEMBER_ROW, license_status: 'suspended' });
+
+  const ALLOWED_4155: [string, Row[]][] = [
+    ['4155 C1 unassigned at A + active at B (A first)', [UNASSIGNED_MEMBER_ROW, activeAtB(B_LATER)]],
+    ['4155 C1 unassigned at A + active at B (B first)', [activeAtB(B_EARLIER), UNASSIGNED_MEMBER_ROW]],
+  ];
+  for (const [who, rows] of ALLOWED_4155) {
+    it.each(ROUTES)(`%s: ${who} -> proceeds to the quote`, async (name, mod) => {
+      wire(rows);
+      await proceeds(name, mod);
+    });
+  }
+
+  const REFUSED_4155: [string, Row[]][] = [
+    ['4155 C3a suspended at A + unassigned at B + own personal (A first)', [suspendedAtA(), unassignedAtB(B_LATER), personalMembership('USER-1')]],
+    ['4155 C3a suspended at A + unassigned at B + own personal (B first)', [unassignedAtB(B_EARLIER), suspendedAtA(), personalMembership('USER-1')]],
+    ['4155 C3b suspended at A + unassigned at B (A first)', [suspendedAtA(), unassignedAtB(B_LATER)]],
+    ['4155 C3b suspended at A + unassigned at B (B first)', [unassignedAtB(B_EARLIER), suspendedAtA()]],
+  ];
+  for (const [who, rows] of REFUSED_4155) {
+    it.each(ROUTES)(`%s: ${who} -> 403 no_license, nothing bought`, async (_n, mod) => {
+      wire(rows);
+      const { POST } = await import(mod);
+      const res = await POST(bearer('valid'));
+      expect(res.status).toBe(403);
+      expect(await (res as NextResponse).json()).toEqual({ error: 'no_license' });
+      nothingBought();
     });
   }
 });

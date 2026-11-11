@@ -5,7 +5,7 @@
  * already verified the signature of any JWT bearer that reaches this code. A caller is accepted
  * when either:
  *   1. the bearer is timing-safe equal to one of the function's own keys: the injected
- *      SUPABASE_SERVICE_ROLE_KEY, or any value in SUPABASE_SECRET_KEYS; or
+ *      SUPABASE_SERVICE_ROLE_KEY, or any value of the SUPABASE_SECRET_KEYS object; or
  *   2. the bearer is a JWT whose payload has role "service_role" and ref equal to this
  *      project's ref, read from SUPABASE_URL's host.
  * Everything else is refused. Fails closed: when the project ref cannot be read from
@@ -38,35 +38,21 @@ export function timingSafeEqual(a: string, b: string): boolean {
 /**
  * Parse SUPABASE_SECRET_KEYS into a list of key strings.
  *
- * FORMAT UNTRACED: the platform injects this variable but its value cannot be observed from
- * a local machine. By analogy with SUPABASE_PUBLISHABLE_KEYS (proven to be {"<name>":"<key>"})
- * it is probably a JSON object of name -> key. This parser accepts, defensively:
- *   - a JSON object: every string value;
- *   - a JSON array: every string element;
- *   - a JSON string: that string;
- *   - not JSON: a comma- or whitespace-separated list.
- * Empty entries are ignored. Any other JSON shape yields no keys (fails closed).
- * To be confirmed by a keepr-test probe after deploy.
+ * The platform injects a JSON object of name -> key (measured on keepr-test, BACKLOG-4150).
+ * Only that form is read: every string value of the object is a key. Anything else (not JSON,
+ * a JSON array, string or other value) yields no keys, so the variable never widens the set
+ * of accepted bearers beyond its own values.
  */
 export function parseSecretKeys(raw: string | null | undefined): string[] {
   if (!raw) return [];
-  const trimmed = raw.trim();
-  if (!trimmed) return [];
   let parsed: unknown;
   try {
-    parsed = JSON.parse(trimmed);
+    parsed = JSON.parse(raw);
   } catch {
-    return trimmed.split(/[\s,]+/).filter((k) => k.length > 0);
+    return [];
   }
-  let values: unknown[];
-  if (typeof parsed === "string") values = [parsed];
-  else if (Array.isArray(parsed)) values = parsed;
-  else if (parsed && typeof parsed === "object") values = Object.values(parsed);
-  else values = [];
-  return values
-    .filter((v): v is string => typeof v === "string")
-    .map((v) => v.trim())
-    .filter((v) => v.length > 0);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+  return Object.values(parsed).filter((v): v is string => typeof v === "string");
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -110,9 +96,8 @@ export function authorizeServiceCaller(
   if (token.length === 0) return { ok: false, status: 403 };
 
   // 1. The function's own keys. Compare against every candidate (no early exit).
-  const candidates = [env.serviceKey, ...parseSecretKeys(env.secretKeys)].filter(
-    (k): k is string => typeof k === "string" && k.length > 0,
-  );
+  // An empty candidate cannot match: an empty token was refused above.
+  const candidates = [env.serviceKey, ...parseSecretKeys(env.secretKeys)];
   let keyMatch = false;
   for (const key of candidates) {
     if (timingSafeEqual(token, key)) keyMatch = true;

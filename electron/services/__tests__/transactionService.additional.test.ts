@@ -30,6 +30,9 @@ jest.mock("../db/core/dbConnection", () => ({
   ...jest.requireActual("../db/core/dbConnection"),
   dbTransaction: <T,>(fn: () => T): T => fn(),
 }));
+// BACKLOG-4175: the scan's sender filter reads deal-contact emails for its keep
+// rules; this suite has no database, so the user has none.
+jest.mock("../db/dealContactEmailsDb", () => ({ listDealContactEmails: jest.fn(() => []) }));
 jest.mock("../auditService", () => ({
   __esModule: true,
   default: { log: jest.fn(), recordInTransaction: jest.fn(), recordFailure: jest.fn() },

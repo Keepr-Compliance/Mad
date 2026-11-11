@@ -46,12 +46,46 @@ export interface AgentCheckoutInput {
   returnBase: string;
   /** Omitted for the website: its params stay exactly as captured in the TEST fixtures. */
   origin?: AgentCheckoutOrigin;
+  /**
+   * BACKLOG-4088: set only for a caller in a live solo free trial (checkoutTrialEnd).
+   * Omitted: the params stay byte-identical to the pinned TEST fixtures.
+   */
+  trial?: CheckoutTrialEnd;
+}
+
+/**
+ * BACKLOG-4088. Stripe Checkout refuses a subscription_data.trial_end less than 48 h
+ * ahead; one more hour of margin covers the time between this call and Stripe's check.
+ */
+export const MIN_CHECKOUT_TRIAL_SECONDS = 49 * 60 * 60;
+
+/** Unix seconds. `raw` = when the Keepr trial ends; `end` = what Stripe is sent (never under now + 49 h). */
+export interface CheckoutTrialEnd {
+  raw: number;
+  end: number;
+}
+
+/**
+ * BACKLOG-4088: the trial end a Checkout for a trialing agent carries, so billing starts
+ * when the trial ends (founder c2e8f85a). null when the trial has no readable end date
+ * (paid_through null or not a date): the caller refuses, never charges now (SR 81fa81b0 #2).
+ */
+export function checkoutTrialEnd(trialEndsOn: string | null | undefined, nowMs: number): CheckoutTrialEnd | null {
+  if (typeof trialEndsOn !== 'string') return null;
+  const ms = Date.parse(trialEndsOn);
+  if (!Number.isFinite(ms)) return null;
+  const raw = Math.floor(ms / 1000);
+  return { raw, end: Math.max(raw, Math.floor(nowMs / 1000) + MIN_CHECKOUT_TRIAL_SECONDS) };
 }
 
 export function buildSubscriptionCheckoutParams(i: AgentCheckoutInput): Stripe.Checkout.SessionCreateParams {
   const subscriptionMetadata: Record<string, string> = { kind: AGENT_KIND, user_id: i.userId };
   if (i.organizationId) subscriptionMetadata.organization_id = i.organizationId;
   const desktop = i.origin === 'desktop';
+  // BACKLOG-4088: the marker lets the webhook grant on the trial's $0 first invoice (sync.ts).
+  const subscriptionData: Stripe.Checkout.SessionCreateParams.SubscriptionData = i.trial
+    ? { metadata: { ...subscriptionMetadata, keepr_solo_trial: '1' }, trial_end: i.trial.end }
+    : { metadata: subscriptionMetadata };
   return {
     mode: 'subscription',
     customer: i.customerId,
@@ -59,8 +93,15 @@ export function buildSubscriptionCheckoutParams(i: AgentCheckoutInput): Stripe.C
     payment_method_types: ['card'],
     // interval / price_id: which open session may be reused for which choice.
     // origin rides the session metadata only (BACKLOG-3676); the subscription's metadata is the same for both.
-    metadata: { ...subscriptionMetadata, interval: i.interval, price_id: i.priceId, ...(desktop ? { origin: 'desktop' } : {}) },
-    subscription_data: { metadata: subscriptionMetadata },
+    // trial_end (BACKLOG-4088): the RAW trial end, which the reuse match compares (the clamped one moves every call).
+    metadata: {
+      ...subscriptionMetadata,
+      interval: i.interval,
+      price_id: i.priceId,
+      ...(desktop ? { origin: 'desktop' } : {}),
+      ...(i.trial ? { trial_end: String(i.trial.raw) } : {}),
+    },
+    subscription_data: subscriptionData,
     // The desktop returns through the deep-link bounce page, which wakes the app.
     success_url: desktop
       ? `${i.returnBase}/payments/complete?session={CHECKOUT_SESSION_ID}&kind=agent`
@@ -77,9 +118,12 @@ export function agentIdempotencyKey(k: {
   anchorSessionId: string | null;
   /** Omitted for the website, whose key is pinned by the TEST fixtures. */
   origin?: AgentCheckoutOrigin;
+  /** BACKLOG-4088: the raw trial end; omitted when there is no trial, so the pinned keys do not change. */
+  trialEndRaw?: number;
 }): string {
-  const key = `agent-co:${k.userId}:${k.mode}:${k.interval}:${k.anchorSessionId ?? 'none'}`;
-  return k.origin === 'desktop' ? `${key}:desktop` : key;
+  const base = `agent-co:${k.userId}:${k.mode}:${k.interval}:${k.anchorSessionId ?? 'none'}`;
+  const key = k.origin === 'desktop' ? `${base}:desktop` : base;
+  return k.trialEndRaw === undefined ? key : `${key}:t${k.trialEndRaw}`;
 }
 
 /**

@@ -3,7 +3,6 @@
  * TASK-1612: Migrated to authService. TASK-2099: Decomposed into sub-hooks.
  */
 import { useState, useMemo } from "react";
-import type { PendingOAuthData } from "../../../components/Login";
 import type { PendingOnboardingData } from "../types";
 import { useLoginHandlers } from "./auth/useLoginHandlers";
 import { useLogoutHandler } from "./auth/useLogoutHandler";
@@ -19,7 +18,6 @@ export function useAuthFlow({
   logout,
   declineTerms,
   clearTermsRequirement,
-  isAuthenticated,
   currentUserId,
   onCloseProfile,
   onCloseLearn,
@@ -30,19 +28,16 @@ export function useAuthFlow({
   platform,
 }: UseAuthFlowOptions): UseAuthFlowReturn {
   const [isNewUserFlow, setIsNewUserFlow] = useState<boolean>(false);
-  const [pendingOAuthData, setPendingOAuthData] =
-    useState<PendingOAuthData | null>(null);
   const [pendingOnboardingData, setPendingOnboardingData] =
     useState<PendingOnboardingData>(DEFAULT_PENDING_ONBOARDING);
 
-  const { handleLoginSuccess, handleLoginPending, handleDeepLinkAuthSuccess } =
+  const { handleLoginSuccess, handleDeepLinkAuthSuccess } =
     useLoginHandlers({
       login,
       stateMachineDispatch,
       platform,
       onSetCurrentStep,
       setIsNewUserFlow,
-      setPendingOAuthData,
     });
 
   const { handleLogout } = useLogoutHandler({
@@ -57,26 +52,18 @@ export function useAuthFlow({
   });
 
   const { handleAcceptTerms, handleDeclineTerms } = useTermsHandlers({
-    pendingOAuthData,
-    isAuthenticated,
     currentUserId,
     clearTermsRequirement,
     declineTerms,
-    onSetCurrentStep,
-    setPendingOAuthData,
-    setPendingOnboardingData,
   });
 
   return useMemo(
     () => ({
       isNewUserFlow,
-      pendingOAuthData,
       pendingOnboardingData,
       setIsNewUserFlow,
-      setPendingOAuthData,
       setPendingOnboardingData,
       handleLoginSuccess,
-      handleLoginPending,
       handleDeepLinkAuthSuccess,
       handleLogout,
       handleAcceptTerms,
@@ -84,10 +71,8 @@ export function useAuthFlow({
     }),
     [
       isNewUserFlow,
-      pendingOAuthData,
       pendingOnboardingData,
       handleLoginSuccess,
-      handleLoginPending,
       handleDeepLinkAuthSuccess,
       handleLogout,
       handleAcceptTerms,

@@ -5,7 +5,7 @@
  * and renders the management UI with tabs for users and roles.
  */
 
-import { createClient, getAuthenticatedUser } from '@/lib/supabase/server';
+import { createClient, createServiceClient, getAuthenticatedUser } from '@/lib/supabase/server';
 import { redirect } from 'next/navigation';
 import { PageHeader } from '@keepr/design-system';
 import { SettingsManager } from './components/SettingsManager';
@@ -40,6 +40,7 @@ export interface AdminRole {
 export interface PendingInvitation {
   id: string;
   email: string;
+  role_id: string;
   role_name: string;
   role_slug: string;
   created_at: string;
@@ -53,9 +54,14 @@ export interface AdminPermission {
   category: string;
 }
 
-async function getInternalUsers(): Promise<InternalUser[]> {
-  const supabase = await createClient();
-
+/**
+ * BACKLOG-4145: the caller passes the client. internal_users.view holders get the service client
+ * (the users embed is not readable with every viewer's session); everyone else keeps their own
+ * session read. Called only after the page's permission check below has passed.
+ */
+async function getInternalUsers(
+  supabase: ReturnType<typeof createServiceClient> | Awaited<ReturnType<typeof createClient>>
+): Promise<InternalUser[]> {
   const { data, error } = await supabase
     .from('internal_roles')
     .select(`
@@ -111,6 +117,7 @@ async function getPendingInvitations(): Promise<PendingInvitation[]> {
     .select(`
       id,
       email,
+      role_id,
       created_at,
       role:admin_roles(name, slug)
     `)
@@ -126,6 +133,7 @@ async function getPendingInvitations(): Promise<PendingInvitation[]> {
     return {
       id: row.id as string,
       email: row.email as string,
+      role_id: row.role_id as string,
       role_name: (role?.name as string) ?? 'Unknown',
       role_slug: (role?.slug as string) ?? 'unknown',
       created_at: row.created_at as string,
@@ -220,8 +228,16 @@ export default async function SettingsPage() {
     redirect('/dashboard?error=insufficient_permissions');
   }
 
+  // BACKLOG-4145: the service client only for internal_users.view holders, created after the
+  // checks above. audit.view / roles.view-only viewers keep their own session read.
+  const { data: canViewInternalUsers } = await supabase.rpc('has_permission', {
+    check_user_id: user.id,
+    required_permission: 'internal_users.view',
+  });
+  const internalUsersClient = canViewInternalUsers === true ? createServiceClient() : supabase;
+
   const [internalUsers, currentUserId, roles, permissions, pendingInvitations] = await Promise.all([
-    getInternalUsers(),
+    getInternalUsers(internalUsersClient),
     getCurrentUserId(),
     getRoles(),
     getPermissions(),

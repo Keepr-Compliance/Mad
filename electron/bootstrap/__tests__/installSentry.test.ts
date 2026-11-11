@@ -38,6 +38,13 @@ interface Loaded {
   makeNetwork: jest.Mock;
   networkSend: jest.Mock;
   pref: typeof import("../../services/crashReportingPreference");
+  /** BACKLOG-4181 */
+  diagPref: typeof import("../../services/diagnosticsSharingPreference");
+  perf: typeof import("../../services/diagnostics/perf");
+  loggerWarn: jest.Mock;
+  loggerInfo: jest.Mock;
+  /** Every envelope the offline wrapper was handed (what it would queue). */
+  offlineSeen: unknown[];
 }
 
 type ProcessWithResources = { resourcesPath?: string };
@@ -80,7 +87,24 @@ function load(options: {
   const makeNetwork = jest.fn(() => ({ send: networkSend, flush: async () => true }));
   // Identity: hands back the (gated) base factory it was given, so a test can
   // build the network transport exactly as the offline wrapper would.
-  const makeOffline = jest.fn((base: unknown) => base);
+  // BACKLOG-4181: it also records every envelope it is handed, which is what
+  // it would queue on a failed send.
+  const offlineSeen: unknown[] = [];
+  const makeOffline = jest.fn(
+    (base: (o: unknown) => { send: (e: unknown) => Promise<unknown> }) =>
+      (o: unknown) => {
+        const t = base(o);
+        return {
+          ...t,
+          send: (e: unknown) => {
+            offlineSeen.push(e);
+            return t.send(e);
+          },
+        };
+      },
+  );
+  const loggerWarn = jest.fn();
+  const loggerInfo = jest.fn();
   const userData = options.userDataPath ?? fs.mkdtempSync(path.join(os.tmpdir(), "keepr-3801-is-"));
   if (options.userDataPath === undefined) tempDirs.push(userData);
   const homedirSpy = options.homeDir === undefined ? undefined : jest.spyOn(os, "homedir").mockReturnValue(options.homeDir);
@@ -88,6 +112,8 @@ function load(options: {
     fs.writeFileSync(path.join(userData, "crash-reporting.json"), options.crashReportingFile);
   }
   let pref!: Loaded["pref"];
+  let diagPref!: Loaded["diagPref"];
+  let perf!: Loaded["perf"];
 
   const previousDsn = process.env.SENTRY_DSN;
   if (options.dsn === undefined) {
@@ -126,6 +152,7 @@ function load(options: {
         init,
         makeElectronOfflineTransport: makeOffline,
         makeElectronTransport: makeNetwork,
+        logger: { warn: loggerWarn, info: loggerInfo },
       }));
       jest.doMock("../../services/updateDiagnostics", () => ({
         scrubUpdaterEventPII: scrub,
@@ -134,6 +161,10 @@ function load(options: {
       require("../installSentry");
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       pref = require("../../services/crashReportingPreference");
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      diagPref = require("../../services/diagnosticsSharingPreference");
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      perf = require("../../services/diagnostics/perf");
     });
   } finally {
     homedirSpy?.mockRestore();
@@ -158,7 +189,7 @@ function load(options: {
     jest.dontMock("../../services/updateDiagnostics");
   }
 
-  return { init, dotenvConfig, scrub, logError, makeOffline, makeNetwork, networkSend, pref };
+  return { init, dotenvConfig, scrub, logError, makeOffline, makeNetwork, networkSend, pref, diagPref, perf, loggerWarn, loggerInfo, offlineSeen };
 }
 
 type InitOptions = {
@@ -181,7 +212,8 @@ describe("installSentry: the init call transcribed from main.ts (BACKLOG-2962)",
     const options = initOptions(load({ isPackaged: false }));
     // `Object.keys` order is insertion order — a dropped, added or reordered
     // key reds here before any value is looked at.
-    expect(Object.keys(options)).toEqual(["dsn", "environment", "release", "enabled", "transport", "transportOptions", "beforeBreadcrumb", "beforeSend"]);
+    // BACKLOG-4181: enableLogs + beforeSendLog (the diagnostics health stream).
+    expect(Object.keys(options)).toEqual(["dsn", "environment", "release", "enabled", "transport", "transportOptions", "beforeBreadcrumb", "beforeSend", "enableLogs", "beforeSendLog"]);
   });
 
   it("BACKLOG-4040 S3: transportOptions replaces the offline store with the sealed one", () => {
@@ -409,11 +441,14 @@ describe("installSentry: the crash reporting switch (BACKLOG-3801)", () => {
   function networkTransport(loaded: Loaded): Net {
     const options = initOptions(loaded);
     expect(loaded.makeOffline).toHaveBeenCalledTimes(1);
-    // The offline wrapper must be the transport, built from a base factory —
-    // NOT given a `shouldSend` option, which queues to disk when false.
-    expect(options.transport).toBe(loaded.makeOffline.mock.results[0].value);
-    const baseFactory = loaded.makeOffline.mock.calls[0][0] as (o: unknown) => Net;
-    return baseFactory({});
+    // The offline wrapper must be built from a base factory — NOT given a
+    // `shouldSend` option, which queues to disk when false. BACKLOG-4181: the
+    // transport is the diagnostics log filter around it; with the identity
+    // offline mock, calling it builds the whole chain down to the network.
+    expect(loaded.makeOffline.mock.calls[0]).toHaveLength(1);
+    expect(typeof loaded.makeOffline.mock.calls[0][0]).toBe("function");
+    expect(typeof options.transport).toBe("function");
+    return (options.transport as (o: unknown) => Net)({});
   }
 
   it("packaged, no saved choice: ON — enabled, and an envelope reaches the network", async () => {
@@ -457,6 +492,83 @@ describe("installSentry: the crash reporting switch (BACKLOG-3801)", () => {
   });
 });
 
+// BACKLOG-4181: what installSentry ships for Sentry Logs — the transport
+// composition, beforeSendLog and the helper's sink.
+describe("installSentry: the diagnostics health stream (BACKLOG-4181)", () => {
+  type Net = { send: (env: unknown) => Promise<unknown> };
+  const attr = (value: unknown) => ({ value, type: typeof value === "string" ? "string" : "boolean" });
+  function logEnvelope(loaded: Loaded, extra: Record<string, unknown> = {}): unknown {
+    const attrs: Record<string, unknown> = {
+      "keepr.diag": true,
+      "keepr.op": "ipc.slow",
+      "keepr.deviceId": loaded.diagPref.getDiagnosticsDeviceId(),
+      "keepr.channel": "contacts:get-all",
+      "scope.note": "jane@example.com",
+      ...extra,
+    };
+    return [
+      {},
+      [
+        [
+          { type: "log", item_count: 1 },
+          { items: [{ timestamp: 1, level: "warn", body: "jane@example.com", attributes: Object.fromEntries(Object.entries(attrs).map(([k, v]) => [k, attr(v)])) }] },
+        ],
+      ],
+    ];
+  }
+
+  it("OUTER filter: the offline wrapper is only ever handed filtered logs", async () => {
+    const loaded = load({ isPackaged: true });
+    const outer = (initOptions(loaded).transport as (o: unknown) => Net)({});
+    await outer.send(logEnvelope(loaded));
+    expect(loaded.offlineSeen).toHaveLength(1);
+    expect(JSON.stringify(loaded.offlineSeen)).not.toContain("jane@");
+    expect(JSON.stringify(loaded.offlineSeen)).toContain("contacts:get-all");
+  });
+
+  it("INNER filter: the base the offline wrapper replays through filters again (switch turned OFF after queueing)", async () => {
+    const loaded = load({ isPackaged: true });
+    initOptions(loaded);
+    const inner = (loaded.makeOffline.mock.calls[0][0] as unknown as (o: unknown) => Net)({});
+    await inner.send(logEnvelope(loaded, { "scope.note": undefined }));
+    expect(loaded.networkSend).toHaveBeenCalledTimes(1); // positive control: ON sends
+    loaded.diagPref.setDiagnosticsSharingEnabled(false);
+    await inner.send(logEnvelope(loaded, { "scope.note": undefined }));
+    expect(loaded.networkSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("beforeSendLog drops unmarked logs and every log while sharing is OFF", () => {
+    const loaded = load({ isPackaged: true });
+    const options = initOptions(loaded) as InitOptions & { enableLogs: boolean; beforeSendLog: (l: unknown) => unknown };
+    expect(options.enableLogs).toBe(true);
+    expect(options.beforeSendLog({ attributes: {} })).toBeNull();
+    expect(options.beforeSendLog({ attributes: { "keepr.diag": true } })).not.toBeNull();
+    loaded.diagPref.setDiagnosticsSharingEnabled(false);
+    expect(options.beforeSendLog({ attributes: { "keepr.diag": true } })).toBeNull();
+  });
+
+  it("the helper's sink is Sentry.logger with the op as the body and the base fields set", () => {
+    const loaded = load({ isPackaged: true });
+    loaded.perf.track("ipc.slow", 1000, { channel: "contacts:get-all" });
+    loaded.perf.event("window.unresponsive.start", {});
+    expect(loaded.loggerWarn).toHaveBeenCalledTimes(1);
+    const [body, attrs] = loaded.loggerWarn.mock.calls[0];
+    expect(body).toBe("ipc.slow");
+    expect(attrs["keepr.appVersion"]).toBe(PINNED_VERSION);
+    expect(attrs["keepr.os"]).toBe(`${process.platform}-${os.release()}`);
+    expect(attrs["keepr.deviceId"]).toBe(loaded.diagPref.getDiagnosticsDeviceId());
+    expect(loaded.loggerInfo).toHaveBeenCalledWith("window.unresponsive.start", expect.objectContaining({ "keepr.op": "window.unresponsive.start" }));
+  });
+
+  it("the diagnostics choice is read from userData before init", () => {
+    const userDataPath = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-4181-is-"));
+    tempDirs.push(userDataPath);
+    fs.writeFileSync(path.join(userDataPath, "diagnostics-sharing.json"), JSON.stringify({ enabled: false }));
+    const loaded = load({ isPackaged: true, userDataPath });
+    expect(loaded.diagPref.isDiagnosticsSharingEnabled()).toBe(false);
+  });
+});
+
 // BACKLOG-3801: the main-process gate covers the renderer only because the
 // renderer has no network transport of its own — @sentry/electron/renderer's
 // transport hands every envelope to main over IPC. A renderer `Sentry.init`
@@ -481,6 +593,32 @@ describe("renderer Sentry.init cannot send around the switch (BACKLOG-3801)", ()
     expect(keys).toHaveLength(1);
     expect(keys[0]).not.toContain("dsn");
     expect(keys[0]).not.toContain("transport");
+  });
+
+  // BACKLOG-4181 (C11): renderer logs go into main's log buffer without passing
+  // main's beforeSendLog. The transport filter would still rebuild them, but
+  // the renderer must not produce them at all.
+  it("renderer init and buildRendererSentryOptions contain no enableLogs / _experiments.enableLogs", () => {
+    const files = [path.join(REPO_ROOT, "src", "main.tsx"), path.join(REPO_ROOT, "src", "utils", "sentryRendererBreadcrumbs.ts")];
+    let sawInit = false;
+    let sawBuilder = false;
+    for (const file of files) {
+      const source = ts.createSourceFile(file, fs.readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true);
+      const names: string[] = [];
+      const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node) && node.expression.getText(source) === "Sentry.init") sawInit = true;
+        if (ts.isFunctionDeclaration(node) && node.name?.text === "buildRendererSentryOptions") sawBuilder = true;
+        if ((ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) && node.name) names.push(node.name.getText(source));
+        if (ts.isPropertyAccessExpression(node)) names.push(node.name.text);
+        if (ts.isStringLiteral(node)) names.push(node.text);
+        ts.forEachChild(node, visit);
+      };
+      visit(source);
+      expect({ file, enableLogs: names.includes("enableLogs") }).toEqual({ file, enableLogs: false });
+    }
+    // Positive control: both producers were really parsed.
+    expect(sawInit).toBe(true);
+    expect(sawBuilder).toBe(true);
   });
 });
 

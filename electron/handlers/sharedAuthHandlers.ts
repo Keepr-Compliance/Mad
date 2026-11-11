@@ -1,20 +1,11 @@
 /**
  * Shared Authentication Handlers
- * Handles cross-provider auth operations like pending login completion,
- * mailbox token management, and disconnection
+ * Handles cross-provider auth operations: mailbox disconnection and the
+ * dev-only token and onboarding helpers
  */
 
-import { ipcMain, IpcMainInvokeEvent, BrowserWindow } from "electron";
-import os from "os";
-import crypto from "crypto";
-import { app } from "electron";
+import { ipcMain } from "electron";
 import * as Sentry from "@sentry/electron/main";
-import type {
-  User,
-  Subscription,
-  SubscriptionTier,
-  SubscriptionStatus,
-} from "../types/models";
 import type {
   DisconnectMailboxResult,
   MailboxRevokeOutcome,
@@ -25,416 +16,14 @@ import type {
 import databaseService from "../services/databaseService";
 import googleAuthService from "../services/googleAuthService";
 import microsoftAuthService from "../services/microsoftAuthService";
-import supabaseService from "../services/supabaseService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
-import sessionService from "../services/sessionService";
-import { provisionLogin } from "../services/loginProvisioningService";
-import { setSyncUserId } from "./syncHandlers";
 
 // Import validation utilities
 import { getValidUserId } from "../utils/userIdHelper";
 
-// Import constants
-import {
-  CURRENT_TERMS_VERSION,
-  CURRENT_PRIVACY_POLICY_VERSION,
-} from "../constants/legalVersions";
-
 import { sendToMainWindow } from "../windowRegistry";
 import { invalidateMailboxFetches } from "../services/mailboxFetchGeneration";
-
-// Type definitions
-interface AuthResponse {
-  success: boolean;
-  error?: string;
-}
-
-/**
- * The pending-login payload, as a NAMED type rather than an inline object type
- * in the parameter list.
- *
- * That is not cosmetic. `writeAtomicity.guard.test.ts` brace-matches a function
- * body from its DECLARATION line, so an inline object type in the parameter list
- * closes the capture before the body opens and the function reads as having no
- * body at all — zero writes, zero transaction, invisible. This function is the
- * primary login path, so it should not be invisible. Filed as BACKLOG-3225 for
- * the general fix; this hoist lifts one function out of it.
- */
-interface PendingLoginPayload {
-  provider: "google" | "microsoft";
-  userInfo: {
-    id: string;
-    email: string;
-    given_name?: string;
-    family_name?: string;
-    name?: string;
-    picture?: string;
-  };
-  tokens: {
-    access_token: string;
-    refresh_token: string | null;
-    expires_at?: string;
-    expires_in?: number;
-    scopes?: string[];
-    scope?: string;
-  };
-  cloudUser: {
-    id: string;
-    subscription_tier?: SubscriptionTier;
-    subscription_status?: SubscriptionStatus;
-    trial_ends_at?: string;
-    terms_accepted_at?: string;
-    privacy_policy_accepted_at?: string;
-    terms_version_accepted?: string;
-    privacy_policy_version_accepted?: string;
-    email_onboarding_completed_at?: string;
-  };
-  subscription?: Subscription;
-}
-
-interface LoginCompleteResponse extends AuthResponse {
-  user?: User;
-  sessionToken?: string;
-  subscription?: Subscription;
-  isNewUser?: boolean;
-}
-
-/**
- * Check if user needs to accept or re-accept terms
- * BACKLOG-546: Copied from sessionHandlers.ts to determine isNewUser correctly
- */
-function needsToAcceptTerms(user: User): boolean {
-  if (!user.terms_accepted_at) {
-    return true;
-  }
-
-  if (!user.terms_version_accepted && !user.privacy_policy_version_accepted) {
-    return false;
-  }
-
-  if (
-    user.terms_version_accepted &&
-    user.terms_version_accepted !== CURRENT_TERMS_VERSION
-  ) {
-    return true;
-  }
-
-  if (
-    user.privacy_policy_version_accepted &&
-    user.privacy_policy_version_accepted !== CURRENT_PRIVACY_POLICY_VERSION
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-/**
- * Complete a pending login after keychain setup
- */
-export async function handleCompletePendingLogin(
-  _event: IpcMainInvokeEvent,
-  oauthData: PendingLoginPayload
-): Promise<LoginCompleteResponse> {
-  try {
-    await logService.info(
-      `Completing pending ${oauthData.provider} login after keychain setup`,
-      "AuthHandlers"
-    );
-
-    const { provider, userInfo, tokens, cloudUser, subscription } = oauthData;
-
-    const expiresAt = tokens.expires_at
-      ? tokens.expires_at
-      : tokens.expires_in
-        ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
-        : new Date(Date.now() + 3600 * 1000).toISOString();
-
-    // BACKLOG-2546: the user row, the token row and the session row commit as
-    // ONE unit. Before this they autocommitted separately, and a failure part
-    // way through left an account that existed but could never log in — the
-    // next attempt takes the update branch and never re-runs provisioning.
-    const provisioned = provisionLogin({
-      provider,
-      oauthId: userInfo.id,
-      create: {
-        // TASK-1507G: Use Supabase Auth UUID as local user ID for unified IDs
-        id: cloudUser.id,
-        email: userInfo.email,
-        first_name: userInfo.given_name,
-        last_name: userInfo.family_name,
-        display_name: userInfo.name,
-        avatar_url: userInfo.picture,
-        oauth_provider: provider,
-        oauth_id: userInfo.id,
-        subscription_tier: cloudUser.subscription_tier ?? "free",
-        subscription_status: cloudUser.subscription_status ?? "trial",
-        trial_ends_at: cloudUser.trial_ends_at,
-        is_active: true,
-      },
-      // BACKLOG-546: Sync terms data from cloud if user has already accepted
-      updateOnCreate: cloudUser.terms_accepted_at
-        ? {
-            terms_accepted_at: cloudUser.terms_accepted_at,
-            terms_version_accepted: cloudUser.terms_version_accepted,
-            privacy_policy_accepted_at: cloudUser.privacy_policy_accepted_at,
-            privacy_policy_version_accepted:
-              cloudUser.privacy_policy_version_accepted,
-          }
-        : undefined,
-      updateExisting: {
-        email: userInfo.email,
-        first_name: userInfo.given_name,
-        last_name: userInfo.family_name,
-        display_name: userInfo.name,
-        avatar_url: userInfo.picture,
-        ...(cloudUser.terms_accepted_at && {
-          terms_accepted_at: cloudUser.terms_accepted_at,
-          terms_version_accepted: cloudUser.terms_version_accepted,
-        }),
-        ...(cloudUser.privacy_policy_accepted_at && {
-          privacy_policy_accepted_at: cloudUser.privacy_policy_accepted_at,
-          privacy_policy_version_accepted:
-            cloudUser.privacy_policy_version_accepted,
-        }),
-        ...(cloudUser.email_onboarding_completed_at && {
-          email_onboarding_completed_at:
-            cloudUser.email_onboarding_completed_at,
-        }),
-        subscription_tier: cloudUser.subscription_tier ?? "free",
-        subscription_status: cloudUser.subscription_status ?? "trial",
-      },
-      touchLastLogin: true,
-      token: {
-        purpose: "authentication",
-        data: {
-          access_token: tokens.access_token,
-          refresh_token: tokens.refresh_token ?? undefined,
-          token_expires_at: expiresAt,
-          scopes_granted: tokens.scopes
-            ? tokens.scopes.join(" ")
-            : tokens.scope || "",
-        },
-      },
-    });
-
-    const localUser = provisioned.user;
-    const sessionToken = provisioned.sessionToken;
-    const isNewUser = provisioned.isNewUser;
-
-    // Bidirectional sync — a NETWORK call, so it runs after the commit rather
-    // than in the middle of the write chain. It reads `existingBefore`, the
-    // pre-update snapshot, because that is what the pre-BACKLOG-2546 code read:
-    // `localUser` was bound before `updateUser` ran and was never reassigned
-    // before this call. Using `provisioned.user` here would send different
-    // values to the cloud.
-    const beforeUpdate = provisioned.existingBefore;
-    if (
-      beforeUpdate?.terms_accepted_at &&
-      !cloudUser.terms_accepted_at
-    ) {
-      try {
-        await supabaseService.syncTermsAcceptance(
-          cloudUser.id,
-          beforeUpdate.terms_version_accepted || CURRENT_TERMS_VERSION,
-          beforeUpdate.privacy_policy_version_accepted ||
-            CURRENT_PRIVACY_POLICY_VERSION
-        );
-      } catch (syncError) {
-        await logService.error(
-          "Failed to sync local terms to cloud",
-          "AuthHandlers",
-          {
-            error:
-              syncError instanceof Error
-                ? syncError.message
-                : "Unknown error",
-          }
-        );
-        Sentry.captureException(syncError, {
-          tags: { service: "shared-auth-handlers", operation: "completePendingLogin.syncTerms" },
-        });
-      }
-    }
-
-    // Save session to file for persistence across app restarts.
-    //
-    // BACKLOG-3299: `saveSession` REPORTS failure, it does not throw — a session
-    // that cannot be encrypted or cannot be written resolves `false`. Discarding
-    // that boolean returned `success: true` with no session file, and the user
-    // landed on a dashboard that was signed out again on the next launch.
-    //
-    // The database commit STANDS. There is no compensating delete: the rows are a
-    // complete, usable account, `provisionLogin` is idempotent, and the next
-    // attempt takes the update branch and writes a fresh session. Deleting them
-    // would recreate the ghost account this whole item exists to remove.
-    //
-    // Device registration, the login audit entry and `setSyncUserId` are all
-    // deliberately skipped below — this login did not succeed, so nothing may
-    // record that it did.
-    const sessionSaved = await sessionService.saveSession({
-      user: localUser,
-      sessionToken,
-      provider,
-      subscription,
-      expiresAt: Date.now() + sessionService.getSessionExpirationMs(),
-      createdAt: Date.now(),
-    });
-
-    if (!sessionSaved) {
-      await logService.error(
-        "Pending login completed in the database but the session could not be saved",
-        "AuthHandlers",
-        { userId: localUser.id, provider }
-      );
-      await auditService.log({
-        userId: localUser.id,
-        action: "LOGIN_FAILED",
-        resourceType: "SESSION",
-        resourceId: sessionToken,
-        metadata: { provider, pendingLogin: true, reason: "session-not-saved" },
-        success: false,
-        errorMessage: "Session could not be saved",
-      });
-      return {
-        success: false,
-        error: "Could not save your session. Please try signing in again.",
-      };
-    }
-
-    const deviceInfo = {
-      device_id: crypto.randomUUID(),
-      device_name: os.hostname(),
-      os: os.platform() + " " + os.release(),
-      app_version: app.getVersion(),
-    };
-    await supabaseService.registerDevice(cloudUser.id, deviceInfo);
-
-    await supabaseService.trackEvent(
-      cloudUser.id,
-      "user_login",
-      { provider },
-      deviceInfo.device_id,
-      app.getVersion()
-    );
-
-    await auditService.log({
-      userId: localUser.id,
-      action: "LOGIN",
-      resourceType: "SESSION",
-      resourceId: sessionToken,
-      metadata: { provider, isNewUser, pendingLogin: true },
-      success: true,
-    });
-
-    await logService.info(
-      `Pending ${provider} login completed successfully`,
-      "AuthHandlers",
-      { userId: localUser.id }
-    );
-
-    setSyncUserId(localUser.id);
-
-    // BACKLOG-546: Use needsToAcceptTerms instead of isNewUser to determine if T&C screen needed
-    return {
-      success: true,
-      user: localUser,
-      sessionToken,
-      subscription,
-      isNewUser: needsToAcceptTerms(localUser),
-    };
-  } catch (error) {
-    await logService.error("Failed to complete pending login", "AuthHandlers", {
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
-    Sentry.captureException(error, {
-      tags: { service: "shared-auth-handlers", operation: "completePendingLogin" },
-    });
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    };
-  }
-}
-
-/**
- * Save pending mailbox tokens after database is initialized
- */
-export async function handleSavePendingMailboxTokens(
-  _event: IpcMainInvokeEvent,
-  data: {
-    userId: string;
-    provider: "google" | "microsoft";
-    email: string;
-    tokens: {
-      access_token: string;
-      refresh_token: string | null;
-      expires_at: string;
-      scopes: string;
-    };
-  }
-): Promise<AuthResponse> {
-  try {
-    await logService.info(
-      `Saving pending ${data.provider} mailbox tokens`,
-      "AuthHandlers",
-      { userId: data.userId, email: data.email }
-    );
-
-    // BACKLOG-551: Validate user ID exists in local DB (handles Supabase auth.uid() mismatch)
-    const validatedUserId = await getValidUserId(data.userId, "SharedAuth");
-    if (!validatedUserId) {
-      return {
-        success: false,
-        error: "No user found in database. Please log in first.",
-      };
-    }
-
-    await databaseService.saveOAuthToken(
-      validatedUserId,
-      data.provider,
-      "mailbox",
-      {
-        access_token: data.tokens.access_token,
-        refresh_token: data.tokens.refresh_token ?? undefined,
-        token_expires_at: data.tokens.expires_at,
-        scopes_granted: data.tokens.scopes,
-        connected_email_address: data.email,
-        mailbox_connected: true,
-      }
-    );
-
-    await logService.info(
-      `Pending ${data.provider} mailbox tokens saved`,
-      "AuthHandlers",
-      { userId: validatedUserId }
-    );
-
-    await auditService.log({
-      userId: validatedUserId,
-      action: "MAILBOX_CONNECT",
-      resourceType: "MAILBOX",
-      metadata: { provider: data.provider, email: data.email, pending: true },
-      success: true,
-    });
-
-    return { success: true };
-  } catch (error) {
-    await logService.error(
-      "Failed to save pending mailbox tokens",
-      "AuthHandlers",
-      { error: error instanceof Error ? error.message : "Unknown error" }
-    );
-    Sentry.captureException(error, {
-      tags: { service: "shared-auth-handlers", operation: "savePendingMailboxTokens" },
-    });
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    };
-  }
-}
 
 /**
  * Disconnect mailbox: end the provider's grant, then remove the local OAuth
@@ -460,7 +49,6 @@ export async function handleSavePendingMailboxTokens(
  * is a separate fact, reported separately as `revokeOutcome`.
  */
 export async function handleDisconnectMailbox(
-  _mainWindow: BrowserWindow | null,
   userId: string,
   provider: "google" | "microsoft"
 ): Promise<DisconnectMailboxResult> {
@@ -618,18 +206,13 @@ export async function handleDisconnectMailbox(
 /**
  * Register shared auth handlers
  */
-export function registerSharedAuthHandlers(
-  _mainWindow: BrowserWindow | null
-): void {
-  ipcMain.handle("auth:complete-pending-login", handleCompletePendingLogin);
-  ipcMain.handle("auth:save-pending-mailbox-tokens", handleSavePendingMailboxTokens);
-
+export function registerSharedAuthHandlers(): void {
   ipcMain.handle("auth:google:disconnect-mailbox", (event, userId: string) =>
-    handleDisconnectMailbox(_mainWindow, userId, "google")
+    handleDisconnectMailbox(userId, "google")
   );
 
   ipcMain.handle("auth:microsoft:disconnect-mailbox", (event, userId: string) =>
-    handleDisconnectMailbox(_mainWindow, userId, "microsoft")
+    handleDisconnectMailbox(userId, "microsoft")
   );
 
   // DEV ONLY: Expire a mailbox token for testing Connection Issue state

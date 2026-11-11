@@ -7,7 +7,7 @@
  * THE DEFECT
  * ===========================================================================
  * Two Microsoft token refreshers saved their result through
- * `saveOAuthTokenSync`, which is an upsert: every column the payload omitted
+ * `saveOAuthToken`, which is an upsert: every column the payload omitted
  * was overwritten. The Outlook fetch refresh omitted the address and the
  * granted scopes, so one refresh left a connected mailbox with neither — and
  * when the row had been removed while a sync was running, the upsert created a

@@ -18,6 +18,16 @@ export interface PlanSummary {
   cancel_at_period_end: boolean;
   paymentIncomplete: boolean;
   supportGrantEffective: boolean;
+  /**
+   * BACKLOG-4088: a live solo free trial's end (ISO), else null. Sent with state
+   * 'support_grant' (old desktops ignore unknown fields, and reject unknown states).
+   */
+  trialEndsOn: string | null;
+  /**
+   * BACKLOG-4088: when the subscription is in its Stripe trial (row 'trialing'), the trial
+   * end = when billing starts, else null. Stripe's current period is the trial while trialing.
+   */
+  subscriptionTrialEndsOn: string | null;
 }
 
 /** The DTO, field by field from the view. Nothing else from the row is copied. */
@@ -33,5 +43,7 @@ export function toPlanSummary(view: AgentPlanView): PlanSummary {
     cancel_at_period_end: view.row?.cancel_at_period_end === true,
     paymentIncomplete: view.paymentIncomplete,
     supportGrantEffective: trial ? true : view.supportGrantEffective,
+    trialEndsOn: trial ? view.trialEndsOn : null,
+    subscriptionTrialEndsOn: view.row?.status === 'trialing' ? (view.row.current_period_end ?? null) : null,
   };
 }

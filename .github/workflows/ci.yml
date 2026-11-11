@@ -158,7 +158,9 @@ jobs:
                 broker-portal/*)
                   BROKER_CHANGED="true"
                   ;;
-                admin-portal/*)
+                # BACKLOG-4090: admin-portal also compiles packages/ui, shared and
+                # design-system, and a lockfile change can move its types.
+                admin-portal/*|packages/ui/*|packages/shared/*|packages/design-system/*|package-lock.json)
                   ADMIN_CHANGED="true"
                   ;;
               esac
@@ -846,6 +848,53 @@ jobs:
     steps:
       - name: Skip (no admin-portal changes)
         run: echo "Skipping admin-portal lint - no admin-portal/ changes detected"
+
+  # BACKLOG-4090: type-check admin-portal. next.config.mjs sets
+  # typescript.ignoreBuildErrors, so `next build` (and Vercel) never reports
+  # type errors. The build runs FIRST: the page/route prop checks live in the
+  # generated .next/types, which tsconfig.json includes and which exist only
+  # after a build. tsc without them misses errors such as a wrong page-props
+  # shape (TS2344). NEXT_PUBLIC_SUPABASE_* come from the tracked
+  # admin-portal/.env.production; no secrets are needed to build.
+  # Not a required check (244 sign-off on BACKLOG-4090).
+  admin-portal-typecheck:
+    name: Admin Portal Type Check
+    needs: check-changes
+    if: needs.check-changes.outputs.admin-portal-changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node.js 22.23.4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.23.4
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+        env:
+          npm_config_ignore_scripts: true
+
+      - name: Build (admin-portal) to generate .next/types
+        run: npm run build -w admin-portal
+        env:
+          NEXT_TELEMETRY_DISABLED: '1'
+
+      - name: Type check (admin-portal)
+        run: npx tsc --noEmit -p admin-portal --incremental false
+
+  # Mirror of admin-portal-typecheck for changes outside its filter.
+  admin-portal-typecheck-skip:
+    name: Admin Portal Type Check
+    needs: check-changes
+    if: needs.check-changes.outputs.admin-portal-changed != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip (no admin-portal changes)
+        run: echo "Skipping admin-portal type check - no admin-portal/ changes detected"
 
   # BACKLOG-2221: gate the Expo/React Native companion (android-companion/). It has
   # its own package-lock + jest/eslint/tsc but no root CI job covered it, so SMS

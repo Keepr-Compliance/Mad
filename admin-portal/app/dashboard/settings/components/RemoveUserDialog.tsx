@@ -16,6 +16,7 @@ import { useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { ConfirmationDialog } from '@/components/shared/ConfirmationDialog';
 import type { InternalUser } from '../page';
+import { describeRoleError } from '@/lib/internal-roles';
 
 interface RemoveUserDialogProps {
   users: InternalUser[];
@@ -56,7 +57,7 @@ export function RemoveUserDialog({ users, onConfirm, onCancel }: RemoveUserDialo
 
         if (rpcError) {
           const name = user.display_name || user.email || 'Unknown User';
-          failures.push(`${name}: ${rpcError.message}`);
+          failures.push(`${name}: ${describeRoleError(rpcError, 'Failed to remove user')}`);
         }
       } catch (err) {
         const name = user.display_name || user.email || 'Unknown User';

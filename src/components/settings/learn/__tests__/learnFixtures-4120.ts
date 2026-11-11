@@ -80,6 +80,27 @@ export const SCORE: LearnScoreResult = {
     cleanupYes: 0,
     cleanupNo: 0,
     cleanupUnanswered: 1,
+    hiddenBySeed: { keys: 0, detections: 0, emails: 0 },
+    seedLinkedToDeals: 0,
+    answersByRuleVersion: [],
+    senderRulesVersion: 1,
+    senderRulesSource: "bundled",
+    senderRulesDownloadRejected: false,
+    senderCensus: {
+      dealLinkedSuppressed: [],
+      minCensusLinkedEmails: 20,
+      bulkCaught: { k: 0, n: 0, interval: null },
+      realEstateSuppressed: { k: 0, n: 0, interval: null },
+      foundDealsLost: { full: 0, minusContactKeeps: 0 },
+      cleanupYesLost: { full: 0, minusContactKeeps: 0 },
+      keptBy: { K1: 0, K2: 0, K3: 0 },
+      keepConflicts: 0,
+      coverage: {
+        gmail: { rows: 0, headers: 0, labels: 0 },
+        outlook: { rows: 0, headers: 0, labels: 0 },
+        unknown: { rows: 0, headers: 0, labels: 0 },
+      },
+    },
     positives: 1,
     legacyManualPositives: 1,
     legacyCutoffDay: "2026-08-31",
@@ -105,7 +126,7 @@ export const SCORE: LearnScoreResult = {
     },
   },
   copyBlock:
-    "Keepr Learn mode score (rules v1)\nWindow: 12 months, 2026-10-01 to 2026-10-01\nEmails scanned: 1; without a sent date: 0\nDeals in key: manual 1 (of which created before 2026-08-31, possibly auto-detected: 1 in the mail window, minimum), auto 0, hybrid 0, rejected 0; outside the mail window: 0\nDetections: 1; true 0; known wrong 0; unmatched 1 = 1 deals + 0 without a key (cleanup yes 0, no 0, unanswered 1)\nDeals found: 0; missed: 1\nRecall: 0/1 = 0% (95% CI 0-79.3%)\nRecall with cleanup Yes: 0/1 = 0% (95% CI 0-79.3%)\nRecall without manual deals created before the cutoff: 0/0 (n/a)\nRecall with cleanup Yes, without manual deals created before the cutoff: 0/0 (n/a)\nPrecision before cleanup: 0/1 = 0% (95% CI 0-79.3%)\nPrecision after cleanup: 0/0 (n/a)\nSide: correct 0, wrong 0, not predicted 0, skipped 0\nOutcome: scorable 0, skipped 0, predicted by baseline 0 0\nBulk sample: answered 0 (real estate 0, newsletter/spam 0, skip 0, no longer cached 0)\nNewsletter/spam flagged as real estate: 0/0 (n/a)\nReal estate flagged as real estate: 0/0 (n/a)",
+    "Keepr Learn mode score (rules v1)\nWindow: 12 months, 2026-10-01 to 2026-10-01\nEmails scanned: 1; without a sent date: 0\nDeals in key: manual 1 (of which created before 2026-08-31, possibly auto-detected: 1 in the mail window, minimum), auto 0, hybrid 0, rejected 0; outside the mail window: 0\nDetections: 1; true 0; known wrong 0; unmatched 1 = 1 deals + 0 without a key (cleanup yes 0, no 0, unanswered 1)\nHidden by live sender rules (sender rules v1): 0 deals, 0 detections, 0 emails; seed emails linked to deals: 0\nAnswers by rules version: none\nDeals found: 0; missed: 1\nRecall: 0/1 = 0% (95% CI 0-79.3%)\nRecall with cleanup Yes: 0/1 = 0% (95% CI 0-79.3%)\nRecall without manual deals created before the cutoff: 0/0 (n/a)\nRecall with cleanup Yes, without manual deals created before the cutoff: 0/0 (n/a)\nPrecision before cleanup: 0/1 = 0% (95% CI 0-79.3%)\nPrecision after cleanup: 0/0 (n/a)\nSide: correct 0, wrong 0, not predicted 0, skipped 0\nOutcome: scorable 0, skipped 0, predicted by baseline 0 0\nBulk sample: answered 0 (real estate 0, newsletter/spam 0, skip 0, no longer cached 0)\nNewsletter/spam flagged as real estate: 0/0 (n/a)\nReal estate flagged as real estate: 0/0 (n/a)",
 };
 
 // ---- same shapes, other synthetic values -----------------------------------

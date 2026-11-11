@@ -50,6 +50,11 @@ export function resolveExecutable(repoRoot: string, override?: string): string {
  * launcher runs (BACKLOG-1940 pivot). This is Electron itself (default fuses → inspector works,
  * so `_electron.launch()` attaches), NOT a packaged/codesigned .app. It runs the repo's built
  * `dist-electron/main.js` (resolved via the repo `.` entry). Override with KEEPR_ELECTRON_BIN.
+ *
+ * BACKLOG-4054: KEEPR_ELECTRON_BIN applies to node-mode DB readers (ELECTRON_RUN_AS_NODE=1) and to the
+ * app launch on non-macOS only. On macOS the app always launches through the sandbox wrapper
+ * (launchArgs.ts buildUnpackagedLaunch), which never reads this variable. Never set it to the wrapper:
+ * the wrapper adds --no-sandbox, which node mode rejects.
  */
 export function resolveElectronBinary(repoRoot: string, override?: string): string {
   const fromEnv = override ?? process.env.KEEPR_ELECTRON_BIN;

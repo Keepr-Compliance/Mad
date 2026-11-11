@@ -46,6 +46,10 @@ export interface PreferencesResult {
     notifications?: {
       enabled?: boolean;
     };
+    /** BACKLOG-4220: absent = Todo hidden on the dashboard. */
+    dashboard?: {
+      showTodo?: boolean;
+    };
     /**
      * BACKLOG-2486: the phone type the user declared at onboarding, as stored in
      * the Supabase preferences bag. Typed here because Settings > Contacts needs

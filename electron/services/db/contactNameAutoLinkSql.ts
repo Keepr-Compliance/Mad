@@ -27,7 +27,7 @@
  * `scripts/ci/sql-move-identity.mjs`.
  */
 
-import { sql } from "./core/sqlText";
+import { sql, type SafeSql } from "./core/sqlText";
 
 /**
  * Every named external record for a user. One bound parameter: the user id.
@@ -53,3 +53,23 @@ export const NAMED_EXTERNAL_RECORDS_SQL = sql`SELECT external_record_id, source,
 export const NAMED_LIVE_CONTACTS_SQL = sql`SELECT id, display_name FROM contacts
       WHERE user_id = ? AND removed_at IS NULL AND display_name IS NOT NULL
       ORDER BY id`;
+
+/**
+ * BACKLOG-4180 — the names that decide which name groups a scoped pass visits:
+ * the touched contacts' own names, and the names of every source record the
+ * crosswalk assigns to a touched contact. The second set matters when a record's
+ * name differs from the contact's display name (an existing contact claimed by
+ * an import): the record's group changes because its owner changed, and the
+ * contact's own name would not reach that group.
+ *
+ * Bind order: userId, the contact ids, userId, the contact ids.
+ */
+export const scopedNameSeedsSql = (marks: SafeSql): SafeSql =>
+  sql`SELECT display_name AS name FROM contacts
+       WHERE user_id = ? AND id IN (${marks}) AND display_name IS NOT NULL
+      UNION
+      SELECT ec.name AS name FROM contact_source_links l
+        JOIN external_contacts ec
+          ON ec.user_id = l.user_id AND ec.source = l.source_type
+         AND ec.external_record_id = l.source_record_id
+       WHERE l.user_id = ? AND l.contact_id IN (${marks}) AND ec.name IS NOT NULL`;

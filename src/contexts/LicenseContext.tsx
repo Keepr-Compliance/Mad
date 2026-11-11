@@ -125,6 +125,8 @@ interface LicenseContextValue {
   membershipStanding?: "licensed" | "unlicensed" | "left_brokerage" | "unknown" | "none";
   /** BACKLOG-3951 — the brokerage's name for "left_brokerage". */
   membershipOrgName?: string;
+  /** BACKLOG-4171 — the brokerage's id for "left_brokerage" (keys the notice dismissal). */
+  membershipOrgId?: string;
 }
 
 // License state interface (internal)
@@ -183,6 +185,7 @@ interface LicenseState {
   /** BACKLOG-3951 — from the last completed license answer; undefined = unknown. */
   membershipStanding?: LicenseContextValue["membershipStanding"];
   membershipOrgName?: string;
+  membershipOrgId?: string;
 }
 
 // Default license state (individual with no AI)
@@ -291,6 +294,7 @@ export function LicenseProvider({
           answerIsUsable: usable,
           membershipStanding: usable ? license.membershipStanding : undefined,
           membershipOrgName: usable ? license.membershipOrgName : undefined,
+          membershipOrgId: usable ? license.membershipOrgId : undefined,
         }));
       } else {
         // No license found - use defaults
@@ -303,6 +307,7 @@ export function LicenseProvider({
           // BACKLOG-3951: no answer about the brokerage either.
           membershipStanding: undefined,
           membershipOrgName: undefined,
+          membershipOrgId: undefined,
         }));
       }
     } catch {
@@ -320,6 +325,7 @@ export function LicenseProvider({
         // BACKLOG-3951: a failed read says nothing about the brokerage.
         membershipStanding: undefined,
         membershipOrgName: undefined,
+        membershipOrgId: undefined,
       }));
     }
   }, [currentUserId]);
@@ -638,6 +644,8 @@ export function LicenseProvider({
         state.answeredForUserId === currentUserId ? state.membershipStanding : undefined,
       membershipOrgName:
         state.answeredForUserId === currentUserId ? state.membershipOrgName : undefined,
+      membershipOrgId:
+        state.answeredForUserId === currentUserId ? state.membershipOrgId : undefined,
     }),
     [
       currentUserId,

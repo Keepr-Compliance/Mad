@@ -10,7 +10,6 @@
 
 import { dealLockReason } from "../services/transactionEligibility";
 import { ipcMain } from "electron";
-import type { BrowserWindow } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import transactionService from "../services/transactionService";
@@ -108,11 +107,8 @@ export { computeEmailFetchSinceDate } from "../utils/emailDateRange";
 
 /**
  * Register email sync IPC handlers (scan + sync-and-fetch)
- * @param _mainWindow - Main window instance (BACKLOG-3454: IGNORED — pushes resolve the live window via sendToMainWindow; kept so existing call sites and suites compile)
  */
-export function registerEmailSyncHandlers(
-  _mainWindow: BrowserWindow | null,
-): void {
+export function registerEmailSyncHandlers(): void {
   // Cancel ongoing scan
   ipcMain.handle(
     "transactions:cancel-scan",

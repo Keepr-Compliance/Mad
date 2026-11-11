@@ -3,7 +3,7 @@
 /**
  * BrokerageBillingCard - staff deal setup for one brokerage (BACKLOG-3853 PR-2A).
  *
- * Shows the deal (seats, price per seat, start date, billing contact, account manager), the
+ * Shows the deal (seats, price per seat, start date, account manager), the
  * deal state, the Stripe subscription and any suspension. BACKLOG-4007: a new deal waits for
  * customer setup ('draft'); its start date is chosen here and locks once setup is done. Sales and Super Admin set up or edit the deal, and suspend
  * or reinstate the brokerage. The database checks every permission and the Sales cap;
@@ -11,6 +11,8 @@
  *
  * BACKLOG-4019: Sales and Super Admin turn the deal's auto-renew off ("Ends <date>" at the
  * Stripe period end) and back on, with a note; set_org_auto_renew checks the permission.
+ *
+ * BACKLOG-4044: the billing contact is shown and edited only in People (next to this card).
  *
  * The page renders it only when brokerage billing is switched on or the organization is
  * a test organization (shouldShowBillingCard).
@@ -23,6 +25,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   FieldError,
   FieldHelp,
   Input,
@@ -79,7 +82,6 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
   const renewAction = autoRenewAction(billing);
   const renewField = autoRenewField(billing);
   const subscription = subscriptionLine(billing);
-  const contact = billing.contact;
   const manager = billing.account_managers.find((m) => m.id === deal?.account_manager_id);
   const price = billing.seat_line?.unit_price_cents ?? null;
   const list = billing.list_price_cents;
@@ -146,11 +148,6 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
           <Field label="Start date" value={formatDay(deal.start_date)} />
           {subscription && <Field label="Stripe subscription" value={subscription.value} help={subscription.help} />}
           {renewField && <Field label="Auto-renew" value={renewField} />}
-          <Field
-            label="Billing contact"
-            value={contact ? contact.name || contact.email : deal.status === 'draft' ? 'Not set yet. The broker sets it in setup.' : 'Not set'}
-            help={contact ? [contact.email, contact.phone ?? 'Phone not set', contact.has_login ? 'billing-only login' : null].filter(Boolean).join(' · ') : undefined}
-          />
           <Field label="Account manager" value={manager?.name ?? 'Not assigned'} />
           {billing.company?.legal_name && (
             <Field
@@ -184,8 +181,9 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
           title={renewTarget === 'off' ? 'Turn off auto-renew?' : 'Turn auto-renew back on?'}
           body={renewTarget === 'off' ? autoRenewOffBody(billing) : 'Billing continues each month.'}
           cta={renewTarget === 'off' ? 'Turn off auto-renew' : 'Turn auto-renew back on'}
+          notifyContactEmail={deal.billing_contact_email ?? ''}
           onClose={() => setRenewTarget(null)}
-          onSubmit={(note) => setAutoRenewAction(organizationId, renewTarget === 'on', note, deal.version)}
+          onSubmit={(note, _reason, notify) => setAutoRenewAction(organizationId, renewTarget === 'on', note, deal.version, notify ?? true)}
           onDone={done}
         />
       )}
@@ -194,8 +192,9 @@ export function BrokerageBillingCard({ organizationId, organizationName, planNam
           title="Reinstate this organization?"
           body={`${organizationName} gets exports, submitting, reviews and license changes back.`}
           cta="Reinstate organization"
+          notifyContactEmail={deal?.billing_contact_email ?? ''}
           onClose={() => setReinstating(false)}
-          onSubmit={(note) => reinstateOrgAction(organizationId, note)}
+          onSubmit={(note, _reason, notify) => reinstateOrgAction(organizationId, note, notify ?? true)}
           onDone={done}
         />
       )}
@@ -368,6 +367,7 @@ function ReasonDialog({
   body,
   cta,
   withReason = false,
+  notifyContactEmail,
   onClose,
   onSubmit,
   onDone,
@@ -376,11 +376,15 @@ function ReasonDialog({
   body: string;
   cta: string;
   withReason?: boolean;
+  /** BACKLOG-4045/4200/4209: set (possibly '') to offer "Email the billing contact"; '' = no contact email on file. */
+  notifyContactEmail?: string;
   onClose: () => void;
-  onSubmit: (note: string, reason?: 'non_payment' | 'other') => Promise<{ ok: boolean; error: string | null }>;
+  onSubmit: (note: string, reason?: 'non_payment' | 'other', notify?: boolean) => Promise<{ ok: boolean; error: string | null }>;
   onDone: () => void;
 }) {
   const [note, setNote] = useState('');
+  const [notify, setNotify] = useState(true);
+  const offerNotify = notifyContactEmail !== undefined && notifyContactEmail.trim() !== '';
   const [reason, setReason] = useState<'non_payment' | 'other'>('non_payment');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -388,7 +392,7 @@ function ReasonDialog({
   const submit = async () => {
     if (!note.trim()) return setError('Enter a note. It is saved in Activity.');
     setBusy(true);
-    const res = await onSubmit(note, withReason ? reason : undefined);
+    const res = await onSubmit(note, withReason ? reason : undefined, offerNotify ? notify : false);
     setBusy(false);
     if (!res.ok) return setError(res.error);
     onDone();
@@ -408,9 +412,22 @@ function ReasonDialog({
           </div>
         )}
         <div className="mt-4">
-          <Label htmlFor="reason-note" required>Note</Label>
+          <Label htmlFor="reason-note" required>Internal note (won&apos;t be sent to the customer)</Label>
           <Textarea id="reason-note" rows={3} value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
+        {notifyContactEmail !== undefined && (
+          offerNotify ? (
+            <div className="mt-4">
+              <div className="flex items-center gap-2">
+                <Checkbox id="notify-contact" checked={notify} disabled={busy} onChange={(e) => setNotify(e.target.checked)} />
+                <Label htmlFor="notify-contact">Email the billing contact</Label>
+              </div>
+              <FieldHelp>{notifyContactEmail}</FieldHelp>
+            </div>
+          ) : (
+            <p className="mt-4 text-sm text-gray-600">No billing contact email on file, so no email is sent.</p>
+          )
+        )}
         {error && <FieldError className="mt-3">{error}</FieldError>}
       </ModalBody>
       <ModalFooter>

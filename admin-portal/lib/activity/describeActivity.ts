@@ -62,6 +62,11 @@ function phone(who: string, subject: string, row: ActivityRow): string {
   return `${who} ${cleared ? 'removed' : 'changed'} ${subject}'s phone`;
 }
 
+/** BACKLOG-4045/4200/4209: detail.notified -> the email suffix; '' when the row has no key (older rows). */
+function emailed(row: ActivityRow): string {
+  return row.detail.notified === true ? '. Billing contact emailed.' : row.detail.notified === false ? '. Billing contact not emailed.' : '';
+}
+
 export const ACTIVITY_TEMPLATES: Record<string, Template> = {
   // member and phone changes (database triggers)
   member_invited: (who, subject) => `${who} invited ${subject}`,
@@ -89,9 +94,9 @@ export const ACTIVITY_TEMPLATES: Record<string, Template> = {
   deal_saved: (who) => `${who} saved the deal`,
   seats_changed: (who, _subject, row) => `${who} changed seats from ${row.detail.from ?? '?'} to ${row.detail.to ?? '?'}`,
   suspended: (who) => `${who} suspended the organization`,
-  reinstated: (who) => `${who} reinstated the organization`,
-  auto_renew_off: (who) => `${who} turned off auto-renew`,
-  auto_renew_on: (who) => `${who} turned auto-renew back on`,
+  reinstated: (who, _subject, row) => `${who} reinstated the organization${emailed(row)}`,
+  auto_renew_off: (who, _subject, row) => `${who} turned off auto-renew${emailed(row)}`,
+  auto_renew_on: (who, _subject, row) => `${who} turned auto-renew back on${emailed(row)}`,
   deal_ended: () => 'The deal ended',
   setup_completed: (who) => `${who} finished billing setup`,
   // staff rows (admin_audit_logs)

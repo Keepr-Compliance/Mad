@@ -57,5 +57,14 @@ export function learnDetailLines(s: LearnScore): string[] {
     `Buyer or seller: ${s.side.correct} right, ${s.side.wrong} wrong, ${s.side.notPredicted} not predicted; ${s.side.skipped} skipped (deal type not buyer or seller)`,
     `Outcome: ${s.outcome.scorable} deals could be scored; ${s.outcome.skipped} skipped (status not closed, active or pending)`,
     `Mail questions: ${s.bulk.realEstate} real estate, ${s.bulk.newsletterSpam} newsletter or spam, ${s.bulk.skip} skipped`,
+    senderFilterLine(s),
   ];
+}
+
+/** BACKLOG-4175: the sender filter is measured only; one line of what it would hide. */
+function senderFilterLine(s: LearnScore): string {
+  const c = s.senderCensus;
+  const k = c.dealLinkedSuppressed.reduce((t, m) => t + m.full.k, 0);
+  const n = c.dealLinkedSuppressed.reduce((t, m) => t + m.n, 0);
+  return `Sender filter (measured only): would hide ${k} of ${n} emails linked to your deals; deals it would lose: ${c.foundDealsLost.full}`;
 }

@@ -86,8 +86,9 @@ export interface IntegrationsPreferences {
 
 /**
  * BACKLOG-3951: dismissed app notices. `membershipNoticeDismissedFor` holds the
- * name of the brokerage whose removed-member notice the user dismissed; a
- * removal from a different brokerage shows the notice again.
+ * organization id (BACKLOG-4171; a brokerage name before that) of the brokerage
+ * whose removed-member notice the user dismissed; a removal from a different
+ * brokerage shows the notice again.
  */
 export interface NoticePreferences {
   membershipNoticeDismissedFor?: string;
@@ -104,6 +105,8 @@ export interface UserPreferences {
   export?: ExportPreferences;
   integrations?: IntegrationsPreferences;
   notices?: NoticePreferences;
+  /** BACKLOG-4220: absent `showTodo` = Todo hidden on the dashboard. */
+  dashboard?: { showTodo?: boolean };
   [key: string]: unknown;
 }
 

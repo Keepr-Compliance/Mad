@@ -110,7 +110,7 @@ describe("BACKLOG-3785: the sync reply carries counts, never the arrays", () => 
     jest.clearAllMocks();
     handlers.clear();
     rateLimiters.sync.clearKey(UDID);
-    registerSyncHandlers({} as never, "user-1");
+    registerSyncHandlers("user-1");
   });
   afterEach(() => cleanupSyncHandlers());
 

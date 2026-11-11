@@ -3,12 +3,7 @@
  * Handles Gmail mailbox connection flows (sign-in is the browser deep link)
  */
 
-import { devToolsPreference } from "../bootstrap/appMenu";
-import { ipcMain, BrowserWindow, Event as ElectronEvent } from "electron";
-import type {
-  OnHeadersReceivedListenerDetails,
-  HeadersReceivedResponse,
-} from "electron";
+import { ipcMain } from "electron";
 
 // Import services
 import databaseService from "../services/databaseService";
@@ -24,9 +19,10 @@ import { getValidUserId } from "../utils/userIdHelper";
 import { bringAppToFront } from "../utils/bringAppToFront";
 
 import { sendToMainWindow, getMainWindow } from "../windowRegistry";
+import { isAuthAttemptSuperseded } from "../services/authAttemptSuperseded";
 
 // Module-level storage for PKCE code verifiers between split IPC handlers
-// Key: flow type ("mailbox" | "mailbox-pending"), Value: codeVerifier
+// Key: flow type ("mailbox"), Value: codeVerifier
 const pendingCodeVerifiers = new Map<string, string>();
 
 // Type definitions
@@ -40,24 +36,10 @@ interface MailboxConnectionResponse extends AuthResponse {
   scopes?: string[];
 }
 
-interface PendingMailboxTokens {
-  accessToken: string;
-  refreshToken?: string;
-  expiresAt?: string;
-  scopesGranted?: string;
-  connectedEmailAddress?: string;
-  provider: "google" | "microsoft";
-}
-
-interface PendingMailboxResponse extends AuthResponse {
-  tokens?: PendingMailboxTokens;
-}
-
 /**
  * Google Auth: Connect mailbox (Gmail access)
  */
 export async function handleGoogleConnectMailbox(
-  _mainWindow: BrowserWindow | null,
   userId: string
 ): Promise<MailboxConnectionResponse> {
   try {
@@ -244,6 +226,12 @@ export async function handleGoogleConnectMailbox(
             );
           });
       } catch (error) {
+        // BACKLOG-3283 Path 3: a newer connect replaced this one. Say nothing to
+        // the renderer — its listener belongs to the newer attempt now.
+        if (isAuthAttemptSuperseded(error)) {
+          await logService.info("Google mailbox connect superseded by a newer attempt", "AuthHandlers");
+          return;
+        }
         await logService.error(
           "Google mailbox connection failed",
           "AuthHandlers",
@@ -300,175 +288,11 @@ export async function handleGoogleConnectMailbox(
 }
 
 /**
- * Google Auth: Connect mailbox pending (pre-DB onboarding flow)
- * Returns tokens instead of saving to DB
- */
-export async function handleGoogleConnectMailboxPending(
-  _mainWindow: BrowserWindow | null,
-  emailHint?: string
-): Promise<PendingMailboxResponse> {
-  try {
-    await logService.info(
-      "Starting Google mailbox connection (pending/pre-DB)",
-      "AuthHandlers"
-    );
-
-    // Start auth flow
-    const { authUrl, codePromise, codeVerifier } =
-      await googleAuthService.authenticateForMailbox(emailHint);
-
-    // Store codeVerifier for use after code is received
-    pendingCodeVerifiers.set("mailbox-pending", codeVerifier);
-
-    // Create a popup window
-    const authWindow = new BrowserWindow({
-      width: 500,
-      height: 700,
-      webPreferences: {
-        devTools: devToolsPreference(), // BACKLOG-3830
-        nodeIntegration: false,
-        contextIsolation: true,
-        // webSecurity defaults to true - do not disable
-      },
-      autoHideMenuBar: true,
-      title: "Connect to Gmail",
-    });
-
-    // Strip CSP headers
-    const filter = {
-      urls: [
-        "*://*.google.com/*",
-        "*://*.googleapis.com/*",
-        "*://*.gstatic.com/*",
-        "*://*.googleusercontent.com/*",
-      ],
-    };
-    authWindow.webContents.session.webRequest.onHeadersReceived(
-      filter,
-      (
-        details: OnHeadersReceivedListenerDetails,
-        callback: (response: HeadersReceivedResponse) => void
-      ) => {
-        const responseHeaders = details.responseHeaders || {};
-        delete responseHeaders["content-security-policy"];
-        delete responseHeaders["content-security-policy-report-only"];
-        delete responseHeaders["x-content-security-policy"];
-        callback({ responseHeaders });
-      }
-    );
-
-    authWindow.loadURL(authUrl);
-
-    let authCompleted = false;
-
-    authWindow.on("closed", () => {
-      if (!authCompleted) {
-        googleAuthService.stopLocalServer();
-        sendToMainWindow("google:mailbox-pending-cancelled");
-      }
-    });
-
-    const handleGoogleCallbackUrl = (callbackUrl: string) => {
-      const parsedUrl = new URL(callbackUrl);
-      const code = parsedUrl.searchParams.get("code");
-      const error = parsedUrl.searchParams.get("error");
-      const errorDescription = parsedUrl.searchParams.get("error_description");
-
-      if (error) {
-        googleAuthService.rejectCodeDirectly(errorDescription || error);
-        authCompleted = true;
-        if (authWindow && !authWindow.isDestroyed()) {
-          authWindow.close();
-        }
-      } else if (code) {
-        googleAuthService.resolveCodeDirectly(code);
-        authCompleted = true;
-        if (authWindow && !authWindow.isDestroyed()) {
-          authWindow.close();
-        }
-      }
-    };
-
-    authWindow.webContents.on(
-      "will-navigate",
-      (event: ElectronEvent, url: string) => {
-        if (url.startsWith("http://localhost:3001/callback")) {
-          event.preventDefault();
-          handleGoogleCallbackUrl(url);
-        }
-      }
-    );
-
-    authWindow.webContents.on(
-      "will-redirect",
-      (event: ElectronEvent, url: string) => {
-        if (url.startsWith("http://localhost:3001/callback")) {
-          event.preventDefault();
-          handleGoogleCallbackUrl(url);
-        }
-      }
-    );
-
-    // Wait for code and return tokens
-    const code = await codePromise;
-    authCompleted = true;
-
-    // Retrieve and clear the PKCE code verifier
-    const storedCodeVerifier = pendingCodeVerifiers.get("mailbox-pending");
-    pendingCodeVerifiers.delete("mailbox-pending");
-
-    const { tokens } = await googleAuthService.exchangeCodeForTokens(code, storedCodeVerifier);
-    const userInfo = await googleAuthService.getUserInfo(tokens.access_token);
-
-    await logService.info(
-      "Google mailbox pending connection completed",
-      "AuthHandlers",
-      { email: userInfo.email }
-    );
-
-    return {
-      success: true,
-      tokens: {
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token ?? undefined,
-        expiresAt: tokens.expires_at ?? undefined,
-        scopesGranted: Array.isArray(tokens.scopes)
-          ? tokens.scopes.join(" ")
-          : tokens.scopes,
-        connectedEmailAddress: userInfo.email,
-        provider: "google",
-      },
-    };
-  } catch (error) {
-    await logService.error(
-      "Google mailbox pending connection failed",
-      "AuthHandlers",
-      {
-        error: error instanceof Error ? error.message : "Unknown error",
-      }
-    );
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    };
-  }
-}
-
-/**
  * Register all Google authentication handlers
  */
-export function registerGoogleAuthHandlers(
-  _mainWindow: BrowserWindow | null
-): void {
+export function registerGoogleAuthHandlers(): void {
   // Google Auth - Mailbox Connection
   ipcMain.handle("auth:google:connect-mailbox", (_event, userId: string) =>
-    handleGoogleConnectMailbox(_mainWindow, userId)
-  );
-
-  // Google Auth - Mailbox Pending (pre-DB)
-  ipcMain.handle(
-    "auth:google:connect-mailbox-pending",
-    (_event, emailHint?: string) =>
-      handleGoogleConnectMailboxPending(_mainWindow, emailHint)
+    handleGoogleConnectMailbox(userId)
   );
 }

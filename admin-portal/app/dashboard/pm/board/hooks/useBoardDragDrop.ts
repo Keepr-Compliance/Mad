@@ -10,6 +10,12 @@
  * - Backlog item drag-to-board assignment
  * - Board card drag-to-backlog unassignment
  * - Status changes on column drop
+ * - Project mode (BACKLOG-4176): drop into another epic row re-parents
+ * - Label mode (BACKLOG-4196): cards are lane copies with ids
+ *   `card:<itemId>:lane=<key>`; active and over ids are turned back into
+ *   item ids first. A drop changes status only, never labels.
+ * - Sprint mode (BACKLOG-4196): drop into another sprint row moves the item
+ *   to that sprint ("No sprint" clears it); closed sprints refuse the drop.
  */
 
 import { useState, useCallback } from 'react';
@@ -22,16 +28,25 @@ import {
   type DragEndEvent,
 } from '@dnd-kit/core';
 import { resolveColumnStatus } from '../../components/KanbanBoard';
+import { itemIdFromSortableId, parseSwimLaneCellId } from '../lib/swim-lane-ids';
 import {
-  parseSwimLaneCellId,
-  SWIM_LANE_NEW_PROJECT_ID,
-} from '../lib/swim-lane-ids';
+  collectEpicIds,
+  laneKeyForItem,
+  resolveEpicDrop,
+  type EpicDropPlan,
+} from '../lib/epic-lanes';
+import {
+  isSprintDropRefusal,
+  resolveSprintDrop,
+  sprintLaneKeyForItem,
+  type SprintDropPlan,
+} from '../lib/sprint-lanes';
 import {
   updateItemStatus,
   updateItemField,
   assignToSprint,
 } from '@/lib/pm-queries';
-import type { PmBacklogItem, ItemStatus, BoardColumns } from '@/lib/pm-types';
+import type { PmBacklogItem, PmSprint, ItemStatus, BoardColumns } from '@/lib/pm-types';
 import type { SwimLaneMode } from '../../components/SwimLaneSelector';
 
 interface UseBoardDragDropParams {
@@ -41,6 +56,13 @@ interface UseBoardDragDropParams {
   loadBoardData: () => Promise<void>;
   loadBacklogItems: (search?: string) => Promise<void>;
   handleStatusChange: (itemId: string, newStatus: ItemStatus) => Promise<void>;
+  handleEpicMove: (item: PmBacklogItem, plan: EpicDropPlan) => Promise<void>;
+  /** Sprint mode: the loaded sprint list (row targets are checked against it). */
+  sprints: PmSprint[];
+  /** Sprint mode: move an item to another sprint row. */
+  handleSprintMove: (item: PmBacklogItem, plan: SprintDropPlan) => Promise<void>;
+  /** Shows a refused drop's message. */
+  onDropRefused: (message: string) => void;
 }
 
 export function useBoardDragDrop({
@@ -50,6 +72,10 @@ export function useBoardDragDrop({
   loadBoardData,
   loadBacklogItems,
   handleStatusChange,
+  handleEpicMove,
+  sprints,
+  handleSprintMove,
+  onDropRefused,
 }: UseBoardDragDropParams) {
   const [activeDragItem, setActiveDragItem] = useState<PmBacklogItem | null>(null);
   const [activeDragIsBacklog, setActiveDragIsBacklog] = useState(false);
@@ -82,7 +108,7 @@ export function useBoardDragDrop({
         setActiveDragItem(data.item as PmBacklogItem);
         setActiveDragIsBacklog(true);
       } else {
-        const item = findBoardItem(active.id as string);
+        const item = findBoardItem(itemIdFromSortableId(active.id as string));
         if (item) {
           setActiveDragItem(item);
           setActiveDragIsBacklog(false);
@@ -101,12 +127,16 @@ export function useBoardDragDrop({
       if (!over) return;
 
       const data = active.data.current;
-      const overId = over.id as string;
+      // Label mode lane copies carry `card:<itemId>:lane=<key>` ids; every
+      // lookup below wants the item id. Other ids pass through unchanged.
+      const activeId = itemIdFromSortableId(active.id as string);
+      const overId = itemIdFromSortableId(over.id as string);
 
       // Board card dropped onto backlog panel -> unassign from sprint
       if (overId === 'backlog-panel') {
-        if (data?.type === 'backlog-item') return;
-        const itemId = active.id as string;
+        // Project and Sprint mode hide the panel and have no selected sprint.
+        if (data?.type === 'backlog-item' || swimLane === 'project' || swimLane === 'sprint') return;
+        const itemId = activeId;
         try {
           await updateItemField(itemId, 'sprint_id', null);
           await loadBoardData();
@@ -117,33 +147,103 @@ export function useBoardDragDrop({
         return;
       }
 
-      // Ghost "new project" row -> assign backlog item to sprint (keeps its own project_id).
-      // Existing sprint cards dropped here are a no-op (their project is already
-      // determined by their own project_id; to change project, drop on a specific row).
-      if (overId === SWIM_LANE_NEW_PROJECT_ID) {
-        if (data?.type !== 'backlog-item') return;
-        const item = data.item as PmBacklogItem;
-        if (!selectedSprintId) return;
-        try {
-          await assignToSprint([item.id], selectedSprintId);
-          await loadBoardData();
-          await loadBacklogItems();
-        } catch (err) {
-          console.error('Failed to assign backlog item to sprint (ghost row):', err);
-        }
-        return;
-      }
-
       const targetStatus = resolveColumnStatus(overId, columns);
       if (!targetStatus) return;
 
-      // Try to extract target project from a structured swim-lane cell id.
-      // Only the 'project' swim-lane dimension triggers cross-project moves.
-      const parsedCell = parseSwimLaneCellId(overId);
-      const targetProjectId =
-        parsedCell && parsedCell.dimension === 'project' && swimLane === 'project'
-          ? parsedCell.groupKey
-          : null;
+      // Project mode: rows are epics. A drop changes status and/or parent.
+      if (swimLane === 'project') {
+        if (data?.type === 'backlog-item') return; // backlog panel is hidden here
+        const itemId = activeId;
+        let currentStatus: ItemStatus | null = null;
+        let currentItem: PmBacklogItem | null = null;
+        for (const [status, items] of Object.entries(columns)) {
+          const found = (items as PmBacklogItem[]).find((i) => i.id === itemId);
+          if (found) {
+            currentStatus = status as ItemStatus;
+            currentItem = found;
+            break;
+          }
+        }
+        if (!currentItem || !currentStatus) return;
+
+        const epicIds = collectEpicIds(columns);
+        // Target row: the cell's key, or the row of the card dropped onto.
+        const parsedCell = parseSwimLaneCellId(overId);
+        let targetLaneKey: string | null = null;
+        if (parsedCell) {
+          if (parsedCell.dimension !== 'epic') return;
+          targetLaneKey = parsedCell.groupKey;
+        } else {
+          const overItem = findBoardItem(overId);
+          if (overItem) targetLaneKey = laneKeyForItem(overItem, epicIds);
+        }
+        if (!targetLaneKey) return;
+
+        const plan = resolveEpicDrop({
+          item: currentItem,
+          currentStatus,
+          targetLaneKey,
+          targetStatus,
+          epicIds,
+        });
+        if (!plan) return;
+        if (!plan.parent && plan.status) {
+          // Same row: keep the optimistic status path.
+          await handleStatusChange(itemId, plan.status);
+          return;
+        }
+        await handleEpicMove(currentItem, plan);
+        return;
+      }
+
+      // Sprint mode: rows are sprints. A drop changes status and/or sprint.
+      if (swimLane === 'sprint') {
+        if (data?.type === 'backlog-item') return; // backlog panel is hidden here
+        const itemId = activeId;
+        let currentStatus: ItemStatus | null = null;
+        let currentItem: PmBacklogItem | null = null;
+        for (const [status, items] of Object.entries(columns)) {
+          const found = (items as PmBacklogItem[]).find((i) => i.id === itemId);
+          if (found) {
+            currentStatus = status as ItemStatus;
+            currentItem = found;
+            break;
+          }
+        }
+        if (!currentItem || !currentStatus) return;
+
+        // Target row: the cell's key, or the row of the card dropped onto.
+        const parsedCell = parseSwimLaneCellId(overId);
+        let targetLaneKey: string | null = null;
+        if (parsedCell) {
+          if (parsedCell.dimension !== 'sprint') return;
+          targetLaneKey = parsedCell.groupKey;
+        } else {
+          const overItem = findBoardItem(overId);
+          if (overItem) targetLaneKey = sprintLaneKeyForItem(overItem);
+        }
+        if (!targetLaneKey) return;
+
+        const plan = resolveSprintDrop({
+          item: currentItem,
+          currentStatus,
+          targetLaneKey,
+          targetStatus,
+          sprints,
+        });
+        if (!plan) return;
+        if (isSprintDropRefusal(plan)) {
+          onDropRefused(plan.refused);
+          return;
+        }
+        if (!plan.sprint && plan.status) {
+          // Same row: keep the optimistic status path.
+          await handleStatusChange(itemId, plan.status);
+          return;
+        }
+        await handleSprintMove(currentItem, plan);
+        return;
+      }
 
       if (data?.type === 'backlog-item') {
         const item = data.item as PmBacklogItem;
@@ -151,15 +251,6 @@ export function useBoardDragDrop({
 
         try {
           await assignToSprint([item.id], selectedSprintId);
-          // If dropped onto a specific project row whose key differs from the
-          // item's current project_id, move it to that project.
-          if (
-            targetProjectId &&
-            targetProjectId !== 'No Project' &&
-            item.project_id !== targetProjectId
-          ) {
-            await updateItemField(item.id, 'project_id', targetProjectId);
-          }
           if (targetStatus !== 'pending') {
             await updateItemStatus(item.id, targetStatus);
           }
@@ -169,7 +260,7 @@ export function useBoardDragDrop({
           console.error('Failed to assign backlog item to board:', err);
         }
       } else {
-        const itemId = active.id as string;
+        const itemId = activeId;
 
         // Find the current item to compare current project + status.
         let currentStatus: ItemStatus | null = null;
@@ -183,32 +274,11 @@ export function useBoardDragDrop({
           }
         }
         if (!currentItem || !currentStatus) return;
-
-        const statusChanged = currentStatus !== targetStatus;
-        // Cross-project move only applies in project swim-lane mode and when
-        // the target row represents a real project (not "No Project").
-        const projectChanged =
-          targetProjectId !== null &&
-          targetProjectId !== 'No Project' &&
-          currentItem.project_id !== targetProjectId;
-
-        if (!statusChanged && !projectChanged) return;
+        if (currentStatus === targetStatus) return;
 
         try {
-          if (projectChanged && statusChanged) {
-            // Both changes: run in parallel, then refresh once.
-            await Promise.all([
-              updateItemField(itemId, 'project_id', targetProjectId!),
-              updateItemStatus(itemId, targetStatus),
-            ]);
-            await loadBoardData();
-          } else if (projectChanged) {
-            await updateItemField(itemId, 'project_id', targetProjectId!);
-            await loadBoardData();
-          } else if (statusChanged) {
-            // Preserve optimistic-update behavior via handleStatusChange.
-            await handleStatusChange(itemId, targetStatus);
-          }
+          // Preserve optimistic-update behavior via handleStatusChange.
+          await handleStatusChange(itemId, targetStatus);
         } catch (err) {
           console.error('Failed to apply drag update:', err);
           // Error path: reload to revert any partial optimistic state.
@@ -216,7 +286,19 @@ export function useBoardDragDrop({
         }
       }
     },
-    [columns, selectedSprintId, swimLane, loadBoardData, loadBacklogItems, handleStatusChange]
+    [
+      columns,
+      selectedSprintId,
+      swimLane,
+      findBoardItem,
+      loadBoardData,
+      loadBacklogItems,
+      handleStatusChange,
+      handleEpicMove,
+      sprints,
+      handleSprintMove,
+      onDropRefused,
+    ]
   );
 
   return {

@@ -19,10 +19,9 @@
  * The mocked export paths do not exist on disk, so `resolveOpenablePath`
  * reports `not_found` on every channel whether or not the path was registered.
  *
- * `transactions:export-pdf` is EXCLUDED: it has no caller in `src/` and is
- * removed by BACKLOG-3302. The exclusion asserts the channel is still
- * registered, so it goes red when 3302 removes the channel; that PR must
- * delete the exclusion and that assertion.
+ * No channel is excluded. `transactions:export-pdf` was excluded until
+ * BACKLOG-3302 deleted it; a channel that comes back under any
+ * `transactions:export-*` name has no PER_CHANNEL entry and goes red here.
  *
  * Fixture values are invented and documentation-only; the details fixture is
  * transcribed from the seeded row exactly as in the BACKLOG-2549 suite.
@@ -163,10 +162,8 @@ const SEEDED_EXPORT_COUNT = 3;
 
 let db: DatabaseType;
 let databaseService: {
-  stampFirstExportedAt: (transactionId: string, timestamp: string) => boolean;
   recordExportCompletion: (transactionId: string, input: Record<string, unknown>) => void;
 };
-let stampSpy: jest.SpyInstance;
 let recordSpy: jest.SpyInstance;
 
 type TxRow = Record<string, unknown>;
@@ -209,7 +206,6 @@ async function invoke(channel: string, options: unknown): Promise<{ success: boo
   return (await handler({} as never, TXN, options)) as { success: boolean; error?: string };
 }
 
-const EXPORT_PDF = "transactions:export-pdf"; // BACKLOG-3302 removes it
 const PER_CHANNEL: Record<string, { options: unknown; recordedFormat: string; auditFormat: string; returnedPath: string }> = {
   "transactions:export-enhanced": {
     options: { exportFormat: "excel", contentType: "both", attachmentType: "none" },
@@ -228,7 +224,7 @@ const PER_CHANNEL: Record<string, { options: unknown; recordedFormat: string; au
 
 function exportChannels(): string[] {
   return [...handlers.keys()]
-    .filter((c) => c.startsWith("transactions:export-") && c !== EXPORT_PDF)
+    .filter((c) => c.startsWith("transactions:export-"))
     .sort();
 }
 
@@ -239,7 +235,6 @@ interface Capture {
   last_exported_on_moved: boolean;
   first_exported_at: unknown;
   recordCalls: number;
-  stampCalls: number;
   auditDataExport: number;
   auditHiddenTextCountIsNumber: boolean;
   funnelForThisTxn: number;
@@ -266,7 +261,6 @@ async function capture(channel: string, frozen: boolean): Promise<Capture> {
     last_exported_on_moved: r.last_exported_on !== SEEDED_LAST_EXPORTED_ON,
     first_exported_at: frozen ? r.first_exported_at : r.first_exported_at !== null,
     recordCalls: recordSpy.mock.calls.length,
-    stampCalls: stampSpy.mock.calls.length,
     auditDataExport: audits.length,
     auditHiddenTextCountIsNumber: audits.every((a) => typeof a.metadata.hiddenTextCount === "number"),
     funnelForThisTxn: (emitExportCompleted as jest.Mock).mock.calls.filter(
@@ -287,7 +281,7 @@ beforeAll(() => {
   setDb(db);
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   databaseService = require("../../services/databaseService").default;
-  registerTransactionExportHandlers(null);
+  registerTransactionExportHandlers({ startSubmissionSync: false });
 });
 
 afterAll(() => {
@@ -295,7 +289,6 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  stampSpy = jest.spyOn(databaseService, "stampFirstExportedAt");
   recordSpy = jest.spyOn(databaseService, "recordExportCompletion");
   (transactionService.getTransactionDetails as jest.Mock).mockImplementation(async () =>
     detailsFromDb(),
@@ -303,13 +296,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  stampSpy.mockRestore();
   recordSpy.mockRestore();
 });
 
 describe("BACKLOG-3303 — every export channel finishes through completeExport", () => {
-  it("enumerates the live channels from the registry, and the export-pdf exclusion is still real", () => {
-    expect(handlers.has(EXPORT_PDF)).toBe(true); // red when BACKLOG-3302 lands: delete the exclusion
+  it("enumerates the live channels from the registry", () => {
     expect(exportChannels()).toEqual(["transactions:export-enhanced", "transactions:export-folder"]);
   });
 
@@ -326,7 +317,6 @@ describe("BACKLOG-3303 — every export channel finishes through completeExport"
           last_exported_on_moved: true,
           first_exported_at: frozen ? SEEDED_FIRST_EXPORTED_AT : true,
           recordCalls: 1,
-          stampCalls: 0,
           auditDataExport: 1,
           auditHiddenTextCountIsNumber: true,
           funnelForThisTxn: 1,

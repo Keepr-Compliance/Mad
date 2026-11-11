@@ -148,7 +148,6 @@ jest.mock("../services/databaseService", () => ({
     databaseService: {
       updateTransaction: jest.fn(),
       // BACKLOG-2013: export completion stamps the freeze marker via this path.
-      stampFirstExportedAt: jest.fn().mockReturnValue(true),
       // BACKLOG-2549: the enhanced and folder paths now write tracking + the
       // freeze marker in ONE statement through this method instead.
       recordExportCompletion: jest.fn(),
@@ -157,7 +156,6 @@ jest.mock("../services/databaseService", () => ({
     // BACKLOG-3339: the synchronous writes the handlers call inside the transaction.
     updateTransactionSync: jest.fn(),
     deleteTransactionSync: jest.fn(),
-    stampFirstExportedAt: jest.fn().mockReturnValue(true),
     recordExportCompletion: jest.fn(),
     isInitialized: jest.fn().mockReturnValue(true),
   },
@@ -192,7 +190,6 @@ import transactionService from "../services/transactionService";
 import auditService from "../services/auditService";
 import logService from "../services/logService";
 import pdfExportService from "../services/pdfExportService";
-import folderExportService from "../services/folderExportService";
 import enhancedExportService from "../services/enhancedExportService";
 import databaseService from "../services/databaseService";
 
@@ -204,9 +201,6 @@ const mockAuditService = auditService as jest.Mocked<typeof auditService>;
 const mockLogService = logService as jest.Mocked<typeof logService>;
 const _mockPdfExportService = pdfExportService as jest.Mocked<
   typeof pdfExportService
->;
-const mockFolderExportService = folderExportService as jest.Mocked<
-  typeof folderExportService
 >;
 const mockEnhancedExportService = enhancedExportService as jest.Mocked<
   typeof enhancedExportService
@@ -244,7 +238,7 @@ describe("Transaction Handlers", () => {
     // resolves the live one through the registry, so the stand-in is registered
     // there rather than only handed to the register call.
     setMainWindow(mockMainWindow as any);
-    registerTransactionHandlers(mockMainWindow as any);
+    registerTransactionHandlers({ startSubmissionSync: true });
   });
 
   beforeEach(() => {
@@ -740,93 +734,6 @@ describe("Transaction Handlers", () => {
       );
 
       expect(result.success).toBe(false);
-    });
-  });
-
-  describe("transactions:export-pdf", () => {
-    const mockDetails = {
-      id: TEST_TXN_ID,
-      user_id: TEST_USER_ID,
-      property_address: "123 Main St",
-      communications: [],
-    } as unknown as TransactionWithDetails;
-
-    it("should export transaction to PDF successfully", async () => {
-      mockTransactionService.getTransactionDetails.mockResolvedValue(
-        mockDetails,
-      );
-      mockFolderExportService.exportTransactionToCombinedPDF.mockResolvedValue(
-        "/path/to/export.pdf",
-      );
-
-      const handler = registeredHandlers.get("transactions:export-pdf");
-      const result = await handler(mockEvent, TEST_TXN_ID);
-
-      expect(result.success).toBe(true);
-      expect(result.path).toBe("/path/to/export.pdf");
-      expect(mockAuditService.log).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: "DATA_EXPORT",
-          success: true,
-        }),
-      );
-    });
-
-    it("should use custom output path if provided", async () => {
-      mockTransactionService.getTransactionDetails.mockResolvedValue(
-        mockDetails,
-      );
-      mockFolderExportService.exportTransactionToCombinedPDF.mockResolvedValue(
-        "/custom/path.pdf",
-      );
-
-      const handler = registeredHandlers.get("transactions:export-pdf");
-      const result = await handler(mockEvent, TEST_TXN_ID, "/custom/path.pdf");
-
-      expect(result.success).toBe(true);
-      expect(mockFolderExportService.exportTransactionToCombinedPDF).toHaveBeenCalledWith(
-        mockDetails,
-        expect.any(Array),
-        "/custom/path.pdf",
-        // BACKLOG-3367: the omissions argument the renderer now requires. This
-        // fixture hides nothing, so the real values are pinned rather than
-        // loosened to `expect.anything()` — a wrong count here must still red.
-        // BACKLOG-3683: this channel writes no attachment files → none left out.
-        { hiddenTextCount: 0, hiddenTexts: [], filesNotIncluded: [] },
-      );
-    });
-
-    it("should handle transaction not found", async () => {
-      mockTransactionService.getTransactionDetails.mockResolvedValue(null);
-
-      const handler = registeredHandlers.get("transactions:export-pdf");
-      const result = await handler(mockEvent, TEST_TXN_ID);
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("not found");
-    });
-
-    it("should handle invalid transaction ID", async () => {
-      const handler = registeredHandlers.get("transactions:export-pdf");
-      const result = await handler(mockEvent, "");
-
-      expect(result.success).toBe(false);
-      expect(result.error).toContain("Validation error");
-    });
-
-    it("should handle export failure", async () => {
-      mockTransactionService.getTransactionDetails.mockResolvedValue(
-        mockDetails,
-      );
-      mockFolderExportService.exportTransactionToCombinedPDF.mockRejectedValue(
-        new Error("Export failed"),
-      );
-
-      const handler = registeredHandlers.get("transactions:export-pdf");
-      const result = await handler(mockEvent, TEST_TXN_ID);
-
-      expect(result.success).toBe(false);
-      expect(mockLogService.error).toHaveBeenCalled();
     });
   });
 

@@ -10,6 +10,7 @@ import type {
   OAuthProvider,
 } from "../../types";
 import type { TransactionContactResult } from "../db/transactionContactDbService";
+import type { BulkMailHeaders } from "../../utils/bulkMailHeaders";
 
 // ============================================
 // TYPES
@@ -91,6 +92,16 @@ export interface EmailMessage {
   attachments?: RawEmailAttachment[];
   /** RFC 5322 Message-ID header for deduplication */
   messageIdHeader?: string | null;
+  /**
+   * BACKLOG-4175: which mailbox the message came from, set in the scan loop
+   * ("gmail" for a Google account, "outlook" for Microsoft). The sender filter
+   * reads Gmail category labels only when this is "gmail".
+   */
+  source?: "gmail" | "outlook";
+  /** BACKLOG-4175: Gmail labelIds / Outlook categories, as the fetchers return them. */
+  labels?: string[] | null;
+  /** BACKLOG-4175: retained bulk-mail headers, as the fetchers return them. */
+  bulkMailHeaders?: BulkMailHeaders | null;
 }
 
 interface TransactionSummary {

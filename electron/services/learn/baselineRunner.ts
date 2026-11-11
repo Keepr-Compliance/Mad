@@ -24,10 +24,22 @@ import { computeEmailCacheSinceDate } from "../../utils/preferenceHelper";
 import {
   countNullSentAt,
   emailKeysetPage,
+  listDealContactEmails,
   type LearnEmailRow,
 } from "../db/learnModeDbService";
 import { LEARN_RULES } from "./learnRules";
 import { addressKey } from "./dealMatcher";
+import { BUNDLED_SENDER_RULES, type SenderRuleSet } from "../../utils/senderFilter/bundledRules";
+import type { SenderRulesProvenance } from "../../utils/senderFilter/ruleSetSource";
+import {
+  buildKeepSets,
+  decide,
+  isSignalLive,
+  matchesExactAddress,
+  storedFilterRow,
+  type KeepRuleId,
+  type KeepSets,
+} from "../../utils/senderFilter/senderFilter";
 
 export interface LearnDetection {
   /** "d1", "d2", ... stable within one run. */
@@ -44,6 +56,19 @@ export interface LearnDetection {
    * public summary and never persisted (C12: nothing durable keys on emails.id).
    */
   emailIds: string[];
+  /**
+   * The subset of `emailIds` whose From address is an exact sender seed
+   * (BACKLOG-4175). Main memory only, like `emailIds`. Nothing is dropped
+   * from the run: baseline 0 sees every row.
+   */
+  seedEmailIds: string[];
+  /**
+   * The subset of `emailIds` a LIVE sender signal suppresses on the Learn
+   * questions surface (BACKLOG-4175). A detection is hidden from the cleanup
+   * pass when this covers every message; a mixed detection's preview leaves
+   * these out. Main memory only.
+   */
+  hiddenEmailIds: string[];
   /** From the group's first typed email, as generateTransactionSummary does. */
   side: "buyer" | "seller" | null;
 }
@@ -61,6 +86,46 @@ export interface LearnRunResult {
   firstMs: number | null;
   lastMs: number | null;
   detections: LearnDetection[];
+  /**
+   * Sender rules version used for `seedEmailIds`, and whether the seed signal
+   * is live for Learn questions (hides all-seed detections) or measure-only.
+   */
+  senderRulesVersion: number;
+  /**
+   * BACKLOG-4175 PR4: the rule set this run used, and where it came from. The
+   * score reads THIS set, not whatever is active when the score is asked for.
+   * Main memory only; never in the public summary.
+   */
+  senderRules: SenderRuleSet;
+  senderRulesProvenance: SenderRulesProvenance;
+  seedHidesQuestions: boolean;
+  /**
+   * BACKLOG-4175: the same run with every message the sender filter would
+   * suppress (measure or live) left out before grouping — once with the full
+   * precedence, once without the contact keep rules K1 and K3. Detections are
+   * built from the unfiltered run; these exist for the loss metrics only.
+   */
+  filtered: { full: FilteredDetection[]; minusContactKeeps: FilteredDetection[] };
+  /** BACKLOG-4175: per-row sender filter counts over the scanned rows (aggregates only). */
+  senderStats: SenderRunStats;
+}
+
+/** A detection of a filtered run: what the loss metrics compare on. */
+export interface FilteredDetection {
+  address: string;
+  firstMs: number;
+  lastMs: number;
+}
+
+export type ProviderBucket = "gmail" | "outlook" | "unknown";
+
+export interface SenderRunStats {
+  /** Messages a keep rule saved from a suppress signal, per keep rule. */
+  keptBy: Record<KeepRuleId, number>;
+  /** Exact-address matches that a keep rule would otherwise have kept. */
+  keepConflicts: number;
+  /** Scanned rows per provider with stored bulk headers / labels. */
+  coverage: Record<ProviderBucket, { rows: number; headers: number; labels: number }>;
 }
 
 export interface LearnRunProgress {
@@ -90,6 +155,16 @@ export interface RunOptions {
   maxPages?: number;
   nowMs?: number;
   pageSize?: number;
+  /** Sender rules (BACKLOG-4175). Defaults to the bundled set. */
+  senderRules?: SenderRuleSet;
+  /** Where `senderRules` came from (BACKLOG-4175 PR4). Defaults to the bundled set's. */
+  senderRulesProvenance?: SenderRulesProvenance;
+  /** Keep sets (K1/K3). Defaults to the contacts on the user's non-rejected deals. */
+  keepSets?: KeepSets;
+}
+
+function providerOf(source: string | null): ProviderBucket {
+  return source === "gmail" || source === "outlook" ? source : "unknown";
 }
 
 export class LearnRunError extends Error {
@@ -153,6 +228,27 @@ export async function runBaseline0(
   const maxPages = options.maxPages ?? Number.POSITIVE_INFINITY;
   const sinceIso = computeEmailCacheSinceDate(windowMonths, options.nowMs ?? Date.now()).toISOString();
   const runId = crypto.randomUUID();
+  const senderRules = options.senderRules ?? BUNDLED_SENDER_RULES;
+  const senderRulesProvenance: SenderRulesProvenance = options.senderRulesProvenance ?? {
+    version: senderRules.version,
+    source: "bundled",
+    downloadRejected: false,
+  };
+  const seedEvaluated = senderRules.modes.seedAddress.learnQuestions !== "off";
+  const seedIds = new Set<string>();
+  const keep = options.keepSets ?? buildKeepSets(listDealContactEmails(userId), senderRules);
+  const hiddenIds = new Set<string>();
+  const suppressedFull = new Set<string>();
+  const suppressedMinus = new Set<string>();
+  const stats: SenderRunStats = {
+    keptBy: { K1: 0, K2: 0, K3: 0 },
+    keepConflicts: 0,
+    coverage: {
+      gmail: { rows: 0, headers: 0, labels: 0 },
+      outlook: { rows: 0, headers: 0, labels: 0 },
+      unknown: { rows: 0, headers: 0, labels: 0 },
+    },
+  };
 
   let cursor = { sentAt: "", id: "" };
   let rowsScanned = 0;
@@ -176,6 +272,25 @@ export async function runBaseline0(
     }
     cursor = { sentAt: last.sent_at, id: last.id };
     rowsScanned += rows.length;
+    for (const row of rows) {
+      if (seedEvaluated && matchesExactAddress(row.sender, senderRules)) seedIds.add(row.id);
+      const fr = storedFilterRow(row);
+      const full = decide(fr, senderRules, "learnQuestions", keep);
+      if (full.outcome === "suppress") {
+        suppressedFull.add(row.id);
+        if (full.live) hiddenIds.add(row.id);
+        if (full.keepConflict) stats.keepConflicts += 1;
+      } else if (full.outcome === "keep") {
+        stats.keptBy[full.rule as KeepRuleId] += 1;
+      }
+      if (decide(fr, senderRules, "learnQuestions", keep, { withoutContactKeeps: true }).outcome === "suppress") {
+        suppressedMinus.add(row.id);
+      }
+      const cov = stats.coverage[providerOf(row.source)];
+      cov.rows += 1;
+      if (row.bulk_mail_headers !== null) cov.headers += 1;
+      if (row.labels !== null) cov.labels += 1;
+    }
 
     const analyzed = transactionExtractorService.batchAnalyze(rows.map(toExtractorEmail));
     analyzed.forEach((a, i) => emailIdOf.set(a, rows[i].id));
@@ -196,6 +311,7 @@ export async function runBaseline0(
   const detections: LearnDetection[] = Object.entries(grouped).map(([address, group], i) => {
     const times = group.map((g) => dateMs(g.date)).filter(Number.isFinite);
     const type = group.map((g) => g.transactionType).find(Boolean) ?? null;
+    const emailIds = group.map((g) => emailIdOf.get(g)).filter((id): id is string => typeof id === "string");
     return {
       id: `d${i + 1}`,
       address,
@@ -203,7 +319,9 @@ export async function runBaseline0(
       firstMs: times.length ? Math.min(...times) : Number.NaN,
       lastMs: times.length ? Math.max(...times) : Number.NaN,
       emailCount: group.length,
-      emailIds: group.map((g) => emailIdOf.get(g)).filter((id): id is string => typeof id === "string"),
+      emailIds,
+      seedEmailIds: emailIds.filter((id) => seedIds.has(id)),
+      hiddenEmailIds: emailIds.filter((id) => hiddenIds.has(id)),
       side: type ? (LEARN_RULES.sideByDetectedType[type] ?? null) : null,
     };
   });
@@ -220,7 +338,27 @@ export async function runBaseline0(
     firstMs,
     lastMs,
     detections,
+    senderRulesVersion: senderRules.version,
+    senderRules,
+    senderRulesProvenance,
+    seedHidesQuestions: isSignalLive(senderRules, "seedAddress", "learnQuestions"),
+    filtered: {
+      full: filteredDetections(realEstate.filter((a) => !suppressedFull.has(emailIdOf.get(a) ?? ""))),
+      minusContactKeeps: filteredDetections(realEstate.filter((a) => !suppressedMinus.has(emailIdOf.get(a) ?? ""))),
+    },
+    senderStats: stats,
   };
+}
+
+function filteredDetections(results: AnalysisResult[]): FilteredDetection[] {
+  return Object.entries(transactionExtractorService.groupByProperty(results)).map(([address, group]) => {
+    const times = group.map((g) => dateMs(g.date)).filter(Number.isFinite);
+    return {
+      address,
+      firstMs: times.length ? Math.min(...times) : Number.NaN,
+      lastMs: times.length ? Math.max(...times) : Number.NaN,
+    };
+  });
 }
 
 /** What may leave main: ids and counts only. */

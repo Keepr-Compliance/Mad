@@ -27,9 +27,9 @@
  * unchanged, which is exactly the production behaviour that made the double
  * resolve invisible.
  *
- * `transactions:export-pdf` is NOT covered. It has no caller in `src/` and the
- * founder ruled it deleted on 2026-09-12 (BACKLOG-3234 → BACKLOG-3302); the
- * resolver filter reaches it for free and nothing was built for it.
+ * The path-taking PDF channel was never covered here: it had no caller in
+ * `src/`, the founder ruled it deleted on 2026-09-12 (BACKLOG-3234), and
+ * BACKLOG-3302 deleted it.
  */
 
 import { randomUUID } from "crypto";
@@ -105,7 +105,6 @@ jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: {
     updateTransaction: jest.fn().mockResolvedValue(undefined),
-    stampFirstExportedAt: jest.fn().mockReturnValue(true),
     recordExportCompletion: jest.fn().mockReturnValue(true),
   },
 }));
@@ -203,7 +202,7 @@ describe("BACKLOG-3367: every export handler omits hidden texts and states the c
     mockIpcHandle.mockImplementation((channel: string, handler: unknown) => {
       handlers.set(channel, handler as never);
     });
-    registerTransactionExportHandlers(null);
+    registerTransactionExportHandlers({ startSubmissionSync: false });
   });
 
   const folderPlan = (): ExportPlan => mockExportToFolder.mock.calls[0][1] as ExportPlan;

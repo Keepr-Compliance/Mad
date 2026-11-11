@@ -46,6 +46,8 @@ vi.mock('@/lib/supabase/server', () => ({
     user: { id: 'u1' },
     supabase: { from: (n: string) => table(n), rpc: async () => ({ data: true }) },
   }),
+  // BACKLOG-4145: the page reads the organizations embed through the service client.
+  createServiceClient: () => ({ from: (n: string) => table(n) }),
 }));
 
 function walk(node: ReactNode, visit: (el: { type: unknown; props: Record<string, unknown> }) => void) {

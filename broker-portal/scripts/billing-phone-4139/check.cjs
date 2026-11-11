@@ -20,6 +20,11 @@ function probe(W) {
     const p = pc.firstElementChild.getBoundingClientRect(); const t = tr.getBoundingClientRect(); const cs = getComputedStyle(tr);
     out.pillRows.push({ dateTop: Math.round(d.top), pillTop: Math.round(pc.getBoundingClientRect().top), pillRight: Math.round(p.right), rowRight: Math.round(t.right - parseFloat(cs.paddingRight)) });
   }
+  // BACKLOG-4187: per block header with an action, the title and the action boxes
+  out.headers = [...document.querySelectorAll('[data-billing-header]')].map((h) => {
+    const t = h.querySelector('h2').getBoundingClientRect(); const a = h.querySelector('[data-billing-header-action]').getBoundingClientRect();
+    return { title: [Math.round(t.left), Math.round(t.top), Math.round(t.right), Math.round(t.bottom)], action: [Math.round(a.left), Math.round(a.top), Math.round(a.right), Math.round(a.bottom)] };
+  });
   const seen = {};
   for (const el of document.querySelectorAll('a, button, input, table, td, th, li, section, h2, p, span')) {
     if (el.getClientRects().length === 0) continue;
@@ -70,12 +75,23 @@ function probe(W) {
     c5.push({ ok, s: `${n}@${W}#${i} date.top=${r.dateTop} pill.top=${r.pillTop} pill.right=${r.pillRight} row.right=${r.rowRight}` });
   }
   ctl('C5 pill on the date line, flush right (390, 768; brokerage + solo)', c5.length === 6 && c5.every((c) => c.ok), c5.map((c) => `${c.ok ? '' : 'BAD '}${c.s}`).join(' | '));
+  // C6 (BACKLOG-4187): Add seats / Manage billing are the header action: under the title at 390 (below sm),
+  // on the title's line and to its right from 768 up.
+  const c6 = [];
+  for (const n of ['org-due', 'seats']) for (const W of WIDTHS) {
+    const h = M[n][W].headers;
+    if (h.length !== 1) { c6.push({ ok: false, s: `${n}@${W} headers=${h.length}` }); continue; }
+    const { title: t, action: a } = h[0];
+    const ok = W < 640 ? a[1] >= t[3] && a[2] <= W : a[1] < t[3] && a[3] > t[1] && a[0] >= t[2];
+    c6.push({ ok, s: `${n}@${W} title=${t.join(',')} action=${a.join(',')}` });
+  }
+  ctl('C6 header action under the title below sm, beside it from sm (seats + brokerage invoices)', c6.every((c) => c.ok), c6.map((c) => `${c.ok ? '' : 'BAD '}${c.s}`).join(' | '));
   const small = [];
   // C4 covers exactly the blocks dumped below; the kit-drawn modal Close is excluded (BACKLOG-4141).
   const C4_BLOCKS = ['org-due', 'solo-receipts', 'seats', 'seats-modal', 'autorenew-on', 'autorenew-ending', 'solo-plan-active', 'solo-plan-failed', 'solo-payment', 'solo-choose'];
   for (const n of C4_BLOCKS)
     for (const W of PHONE) for (const t of M[n][W].targets) if (!t.close && (t.h < 44 || t.w < 44)) small.push(`${n}@${W} ${t.k} ${t.w}x${t.h}`);
-  ctl('C4 targets >=44x44 below lg in: brokerage invoices + View all + Manage billing + guide link, solo receipts, seats + Add seats modal, auto-renew, solo plan (Cancel plan, End plan now), payment method + contact (Update card, Edit contact), choose plan (Subscribe, Book a Call)', small.length === 0, small.length ? `${small.length} small: ${[...new Set(small.map((s) => s.replace(/@\d+/, '')))].join('; ')}` : 'all >=44');
+  ctl('C4 targets >=44x44 below lg in: brokerage invoices + Manage billing, solo receipts, seats + Add seats modal, auto-renew, solo plan (Cancel plan, End plan now), payment method + contact (Update card, Edit contact), choose plan (Subscribe, Book a Call)', small.length === 0, small.length ? `${small.length} small: ${[...new Set(small.map((s) => s.replace(/@\d+/, '')))].join('; ')}` : 'all >=44');
   // C4b: targets drawn by the kit itself (Modal close X, ConfirmationDialog buttons); fixable only in
   // packages/design-system, which is BACKLOG-4141's scope. INFO only: it never fails this run (SR R2).
   const kit = [];

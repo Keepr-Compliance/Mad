@@ -1,0 +1,48 @@
+BACKLOG-4170 PR1 harness results, keepr-test, 2026-11-10. Details: pm_comments on BACKLOG-4170.
+int base int-portal/admin-functions-248 @ dd29a9674; migration commit 98d476946.
+migration file md5 7f36f02beeab276281b66ccd7b8ca135; rollback file md5 0bef5ccc2c510c869aaa92384b490589
+
+Pre-state (production and keepr-test identical: md5(prosrc), proacl, proconfig, provolatile):
+  admin_search_users(text,integer)        3b2bf87eaad57515208cc5cb9e7747ee  PUBLIC anon authenticated service_role
+  admin_get_user_detail(uuid)             e690d13b157f1ec88cd664f59cfacde4  PUBLIC anon authenticated service_role
+  admin_list_organizations()              cb0100fd0402877d93f02599b18a7a69  authenticated service_role
+  admin_get_audit_logs(6)                 eaf915a01751b05e0da618dbed3a5cd5  PUBLIC anon authenticated service_role
+  admin_get_brokerage_billing_live()      90a6fabf60de43968c1c3aa84dd083c9  authenticated service_role
+  admin_get_solo_trial_setting()          833a9f7049885faeccdb36a0f03ad543  authenticated service_role
+Post-state (this file):
+  admin_search_users                      2ded913e46f67ac65c4208976f3ac240
+  admin_get_user_detail                   fe2ed884c110aac7ad0e7075d093cc6c
+  admin_list_organizations                38097f0da44a2cbb344f29e57e0b49f1
+  admin_get_audit_logs                    90abae5cd041ce79c185176f0f5f1dfa
+  admin_get_brokerage_billing_live        e452dd90c43b2265d5511519cc13f3d8
+  admin_get_solo_trial_setting            321f89f7fdd6a113a5006bc6d1395ce7
+  ACL on all six: {postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}
+
+== run.sh (rollback -> fixtures + P0 -> migration x2 -> controls)
+total=118 pass=118 fail=0
+  matrix 12 callers x 8 cases = 96 rows; P0 x3; B0 x2; K1 x6 (guard IF line); K2 x6 (grants);
+  K3 x2 (bodies = file after two applies; config/volatility unchanged); K4 (pin stops on drift);
+  K0 (rollback restores production md5/ACL/config/volatility, ACL entry for entry)
+== applied on keepr-test (kt-sql <migration> + ledger row 20261111100000), run.sh --applied
+total=119 pass=119 fail=0   (KA: applied state equals the file)
+fixtures left: 0 users, 0 roles, 0 audit rows, 0 orgs; disabled triggers: 0
+check-migration-grants --base origin/int-portal/admin-functions-248: 0 failures, 0 warnings
+
+== mutate.py all (118 controls each; each MUTATION APPLIED printed, RESTORED clean=True)
+OR_not_AND             total=118 pass=109 fail=9  reds=K1_guard_list_organizations,M_u0_none_list_organizations,M_u_audit.view_list_organizations,M_u_billing.pricebook_list_organizations,M_u_billing.view_list_organizations,M_u_organizations.edit_list_organizations,M_u_plans.view_list_organizations,M_u_support.view_list_organizations,M_u_users.view_list_organizations
+WRONG_KEY              total=118 pass=115 fail=3  reds=K1_guard_list_organizations,M_u_organizations.edit_list_organizations,M_u_organizations.view_list_organizations
+AUDIT_NULL_UNSAFE      total=118 pass=116 fail=2  reds=K1_guard_get_audit_logs,M_u_plans.view_audit_null
+AUDIT_no_action        total=118 pass=115 fail=3  reds=K1_guard_get_audit_logs,M_u_plans.view_audit_null,M_u_plans.view_audit_other
+SOLO_left              total=118 pass=110 fail=8  reds=K1_guard_solo_trial,M_u0_none_solo_trial,M_u_audit.view_solo_trial,M_u_billing.view_solo_trial,M_u_organizations.edit_solo_trial,M_u_organizations.view_solo_trial,M_u_support.view_solo_trial,M_u_users.view_solo_trial
+ANON_not_revoked       total=118 pass=116 fail=2  reds=K2_grants_search_users,M_anon_search_users
+REFUSAL_text_changed   total=118 pass=90 fail=28  reds=B0_customer_refusal_unchanged,K1_guard_get_audit_logs,M_u0_none_audit_null,M_u0_none_audit_other,M_u0_none_audit_trial,M_u_billing.pricebook_audit_null,M_u_billing.pricebook_audit_other,M_u_billing.pricebook_audit_trial,M_u_billing.view_audit_null,M_u_billing.view_audit_other,M_u_billing.view_audit_trial,M_u_cust_audit_null,M_u_cust_audit_other,M_u_cust_audit_trial,M_u_organizations.edit_audit_null,M_u_organizations.edit_audit_other,M_u_organizations.edit_audit_trial,M_u_organizations.view_audit_null,M_u_organizations.view_audit_other,M_u_organizations.view_audit_trial,M_u_plans.view_audit_null,M_u_plans.view_audit_other,M_u_support.view_audit_null,M_u_support.view_audit_other,M_u_support.view_audit_trial,M_u_users.view_audit_null,M_u_users.view_audit_other,M_u_users.view_audit_trial
+REFUSAL_shape_changed  total=118 pass=108 fail=10  reds=B0_customer_refusal_unchanged,M_u0_none_list_organizations,M_u_audit.view_list_organizations,M_u_billing.pricebook_list_organizations,M_u_billing.view_list_organizations,M_u_cust_list_organizations,M_u_organizations.edit_list_organizations,M_u_plans.view_list_organizations,M_u_support.view_list_organizations,M_u_users.view_list_organizations
+
+== backlog-3860 controls (run.run_controls(['base'], <PR1 file>), keepr-test state + PR1)
+keepr-test state without PR1: pass=34 fail=0
+keepr-test state + PR1:       pass=34 fail=0   (T5c green: Sales role reads admin_get_solo_trial_setting)
+control: PR1 with the solo_trial key set to billing.pricebook only -> pass=33 fail=1, red T5c_reader_staff_only_can_edit_flag
+
+Note: admin_get_user_detail's production body reads devices.created_at, a column that does not exist on
+production or keepr-test; every caller past the guard gets 42703. Body copied verbatim (out of scope);
+the harness counts "allowed" as reaching that error.

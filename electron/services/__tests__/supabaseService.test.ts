@@ -128,6 +128,23 @@ describe("SupabaseService", () => {
       expect((supabaseService as any).initialized).toBe(true);
     });
 
+    it("BACKLOG-4097: treats credentials set to empty as missing (hermetic e2e pin)", async () => {
+      jest.resetModules();
+      const originalUrl = process.env.SUPABASE_URL;
+      const originalKey = process.env.SUPABASE_ANON_KEY;
+      process.env.SUPABASE_URL = "";
+      process.env.SUPABASE_ANON_KEY = "";
+      try {
+        const service = (await import("../supabaseService")).default;
+        (service as any).initialized = false;
+        (service as any).client = null;
+        expect(() => service.initialize()).toThrow("Supabase credentials not configured");
+      } finally {
+        process.env.SUPABASE_URL = originalUrl;
+        process.env.SUPABASE_ANON_KEY = originalKey;
+      }
+    });
+
     it("should throw error when credentials are missing", async () => {
       // Reset module and clear env vars
       jest.resetModules();
@@ -196,12 +213,16 @@ describe("SupabaseService", () => {
       // The in-memory cache is not the only durable copy: the SDK runs persistSession:false, so
       // session.json must be updated with the rotated tokens or a restart after ~1h restores a
       // USED refresh token and GoTrue reuse-detection revokes the family (forced re-login).
-      expect(mockUpdateSession).toHaveBeenCalledWith({
-        supabaseTokens: {
-          access_token: "rotated-access-token",
-          refresh_token: "rotated-refresh-token",
+      // BACKLOG-4075: the second argument is the same-account guard, run inside the lock.
+      expect(mockUpdateSession).toHaveBeenCalledWith(
+        {
+          supabaseTokens: {
+            access_token: "rotated-access-token",
+            refresh_token: "rotated-refresh-token",
+          },
         },
-      });
+        { proceed: expect.any(Function) },
+      );
     });
 
     it("should clear local session cache on SIGNED_OUT event", () => {

@@ -106,7 +106,7 @@ maybe("BACKLOG-4020 bulk delete re-point timing, encrypted file database", () =>
   let db: DatabaseType;
 
   beforeAll(() => {
-    registerTransactionCrudHandlers(null);
+    registerTransactionCrudHandlers();
     dir = nodeFs.mkdtempSync(nodePath.join(os.tmpdir(), "keepr-4020-probe-"));
     db = new Database(nodePath.join(dir, "mad.db")) as unknown as DatabaseType;
     db.pragma(`key = "x'${KEY_HEX}'"`);

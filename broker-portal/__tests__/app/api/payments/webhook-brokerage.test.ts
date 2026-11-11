@@ -26,7 +26,12 @@ jest.mock('@sentry/nextjs', () => ({
   captureMessage: (...a: unknown[]) => mockCaptureMessage(...a),
   captureException: jest.fn(),
 }));
-jest.mock('@/lib/email', () => ({}));
+const mockReinstatedEmail = jest.fn();
+// BACKLOG-4209: the reinstated email is queued by the database (_billing_reinstate_org), never sent here.
+jest.mock('@/lib/email', () => ({
+  sendOrgReinstatedEmail: (...a: unknown[]) => mockReinstatedEmail('staff', ...a),
+  sendOrgAutoReinstatedEmail: (...a: unknown[]) => mockReinstatedEmail('auto', ...a),
+}));
 jest.mock('@/lib/supabase/service', () => ({ createServiceClient: () => fake.service }));
 jest.mock('stripe', () => {
   const r = (kind: string) => (id: string, params?: unknown) => mockRetrieve(kind, id, params);
@@ -261,6 +266,106 @@ describe('invoice.payment_failed', () => {
   });
 });
 
+/**
+ * BACKLOG-3932 — the billing contact's "payment failed" row (kind notify_payment_failed).
+ * Stripe objects: __tests__/fixtures/stripe/p3932 (TEST capture: one brokerage send_invoice
+ * invoice, two failed ACH attempts with Stripe's insufficient-funds test token, acacia re-fetch,
+ * see its README). Envelopes: the two real event ids/created from that capture.
+ */
+describe('invoice.payment_failed -> billing contact email (BACKLOG-3932)', () => {
+  const FX32 = path.join(__dirname, '../../../fixtures/stripe/p3932');
+  const fx32 = (n: string): Obj => JSON.parse(fs.readFileSync(path.join(FX32, `${n}.json`), 'utf8'));
+  const PF_ORG = 'ORG-3932-PF';
+  const INV1 = fx32('inv-pf1-failed');
+  const PI1 = fx32('pi-pf1-failed');
+  const INV2 = fx32('inv-pf2-failed');
+  const PI2 = fx32('pi-pf2-failed');
+  const EV1 = fx32('ev-pf1-invoice.payment_failed');
+  const EV2 = fx32('ev-pf2-invoice.payment_failed');
+  const ev = (e: Obj, id = e.id as string): Obj => envelope('invoice.payment_failed', e.data.object.id, e.created, id);
+  const pfRows = () => outbox().filter((r) => r.kind === 'notify_payment_failed');
+
+  beforeEach(() => {
+    fake = createBrokerageFake({
+      organizations: [{ id: PF_ORG, name: 'Brokerage 3932 PF', is_test: true }],
+      org_deals: [dealRow(PF_ORG)],
+      org_billing_stripe: [
+        {
+          organization_id: PF_ORG,
+          stripe_mode: 'test',
+          stripe_customer_id: INV1.customer,
+          stripe_subscription_id: INV1.subscription,
+          status: 'active',
+          cancel_at_period_end: false,
+          last_event_created: null,
+        },
+      ],
+      billing_outbox: [],
+      stripe_customers: [],
+    });
+    serve(INV1, PI1);
+  });
+
+  it('fixture sanity: a real brokerage send_invoice invoice, PI string, two distinct failed ACH attempts', () => {
+    expect(INV1).toMatchObject({ collection_method: 'send_invoice', status: 'open', payment_intent: PI1.id });
+    expect(INV1.subscription_details.metadata.kind).toBe('brokerage');
+    expect(PI1.status).toBe('requires_payment_method');
+    expect(PI1.last_payment_error.code).toBe('insufficient_funds');
+    expect(PI1.latest_charge).not.toEqual(PI2.latest_charge);
+    expect(EV1.data.object.id).toBe(EV2.data.object.id);
+  });
+
+  it('C1: one failed attempt -> one row keyed on invoice + charge, +1 hour; redelivery and a second event for the same charge -> still one', async () => {
+    expect((await deliver(ev(EV1))).status).toBe(200);
+    await deliver(ev(EV1));
+    await deliver(ev(EV1, 'evt_3932_same_charge_other_event'));
+    expect(pfRows()).toHaveLength(1);
+    expect(pfRows()[0]).toMatchObject({
+      organization_id: PF_ORG,
+      stripe_mode: 'test',
+      dedupe_key: `notify_payment_failed:test:${PF_ORG}:${INV1.id}:${PI1.latest_charge}`,
+      payload: { organization_id: PF_ORG, invoice_id: INV1.id, charge_id: PI1.latest_charge },
+      run_after: new Date(WALL_NOW_MS + 60 * 60 * 1000).toISOString(),
+    });
+    // The account-manager alert is unchanged: one per invoice.
+    expect(amRows('payment_failed')).toHaveLength(1);
+  });
+
+  it('C10 (webhook side): the retry fails with a new charge -> a second row; the AM alert stays one', async () => {
+    await deliver(ev(EV1));
+    serve(INV2, PI2);
+    await deliver(ev(EV2));
+    expect(pfRows().map((r) => (r.payload as Obj).charge_id)).toEqual([PI1.latest_charge, PI2.latest_charge]);
+    expect(amRows('payment_failed')).toHaveLength(1);
+  });
+
+  it('C2: PaymentIntent requires_action (ACH verification) -> no customer row and no AM row', async () => {
+    serveAs(PI1.id, { ...clone(PI_ACTION), id: PI1.id }); // p3853 capture of a requires_action ACH PI [EDITED id]
+    await deliver(ev(EV1));
+    expect(pfRows()).toEqual([]);
+    expect(amRows()).toEqual([]);
+  });
+
+  it('C11: payment_intent.payment_failed for a brokerage invoice PI -> no outbox row (the paired invoice event carries it)', async () => {
+    const res = await deliver(envelope('payment_intent.payment_failed', PI1.id, EV1.created, 'evt_3932_pi_failed'));
+    expect(res.status).toBe(200);
+    expect(outbox()).toEqual([]);
+  });
+
+  it('C12: an orphan brokerage invoice (no stored customer row) -> alert only, no row', async () => {
+    fake.db.rows('org_billing_stripe').length = 0;
+    const res = await deliver(ev(EV1));
+    expect(res.status).toBe(200);
+    expect(alerts('brokerage_orphan_object')).toHaveLength(1);
+    expect(outbox()).toEqual([]);
+  });
+
+  it('C9 (webhook side): the hosted invoice link never enters the row', async () => {
+    await deliver(ev(EV1));
+    expect(JSON.stringify(pfRows())).not.toContain('stripe.test');
+  });
+});
+
 describe('auto-reinstate (non-payment suspensions only, after a payment)', () => {
   const SUSPENDED_AT = new Date((EV_PASTDUE.created - 3600) * 1000).toISOString();
   const suspended = (reason: 'non_payment' | 'other') => seed({ deal: { status: 'suspended', suspended_reason: reason, suspended_at: SUSPENDED_AT } });
@@ -283,6 +388,15 @@ describe('auto-reinstate (non-payment suspensions only, after a payment)', () =>
     await deliver(activeEnvelope());
     expect(mirror().status).toBe('active');
     expect(deal().status).toBe('active');
+  });
+
+  it('C-12e (BACKLOG-4209): the reinstate is one rpc and the webhook sends no email itself', async () => {
+    suspended('non_payment');
+    serve(INV_PAID, SUB_ACTIVE);
+    await deliver(paidEnvelope());
+    expect(deal().status).toBe('active');
+    expect(fake.callsTo('_billing_auto_reinstate')).toHaveLength(1);
+    expect(mockReinstatedEmail).not.toHaveBeenCalled();
   });
 
   it('C-12: an open invoice still past due -> not reinstated', async () => {

@@ -35,6 +35,16 @@ export interface PlanSummary {
   cancel_at_period_end: boolean;
   paymentIncomplete: boolean;
   supportGrantEffective: boolean;
+  /**
+   * BACKLOG-4088: the end of a live solo free trial (ISO), sent with state
+   * "support_grant"; null otherwise, or when the portal sent none or a non-date.
+   */
+  trialEndsOn: string | null;
+  /**
+   * BACKLOG-4088: while the Agent subscription is in its Stripe trial, when billing
+   * starts (ISO); null otherwise, or when the portal sent none or a non-date.
+   */
+  subscriptionTrialEndsOn: string | null;
 }
 
 /**

@@ -83,11 +83,12 @@ BEGIN
     WHEN 'no_storage_clause' THEN RETURN pg_temp.mut_pol('storage', 'objects', 'Members can upload submission attachments', 'check',
       __STORAGE_FROM__, '');
     -- G3 / G4
+    -- BACKLOG-4178: since 4019 the CRS and policy predicate is org_billing_service_off (suspended or canceled).
     WHEN 'no_crs_gate' THEN RETURN pg_temp.mut_fn('public.can_review_submission(uuid)',
-      'AND NOT public.org_billing_suspended(p_org_id)', '');
+      'AND NOT public.org_billing_service_off(p_org_id)', '');
     WHEN 'sr_crs_caller_org' THEN RETURN pg_temp.mut_fn('public.can_review_submission(uuid)',
-      'AND NOT public.org_billing_suspended(p_org_id)',
-      'AND NOT public.org_billing_suspended(public.billing_deciding_org((SELECT auth.uid())))');
+      'AND NOT public.org_billing_service_off(p_org_id)',
+      'AND NOT public.org_billing_service_off(public.billing_deciding_org((SELECT auth.uid())))');
     WHEN 'sr_reviewer_check_only' THEN RETURN pg_temp.mut_pol('public', 'transaction_submissions', 'transaction_submissions_update_public', 'check',
       __REVIEWER_CHECK_FROM__, '');
     WHEN 'no_reviewer_clause' THEN RETURN pg_temp.mut_pol('public', 'transaction_submissions', 'transaction_submissions_update_public', 'qual',
@@ -131,7 +132,7 @@ BEGIN
       $q$IF v_mode = 'live' AND NOT public._billing_brokerage_live() THEN$q$, 'IF false THEN');
     WHEN 'r14_suspend_unguarded' THEN RETURN pg_temp.mut_fn('public._billing_suspend_org(uuid,text,text,uuid)',
       $q$IF v_deal.stripe_mode = 'live' AND NOT public._billing_brokerage_live() THEN$q$, 'IF false THEN');
-    WHEN 'sr_reinstate_no_perm' THEN RETURN pg_temp.mut_fn('public.admin_reinstate_org(uuid,text)',
+    WHEN 'sr_reinstate_no_perm' THEN RETURN pg_temp.mut_fn('public.admin_reinstate_org(uuid,text,boolean)',
       $q$IF NOT public.has_permission(v_uid, 'billing.suspend') THEN$q$, 'IF false THEN');
     WHEN 'sr_no_move_branch' THEN RETURN pg_temp.mut_fn('public._billing_guard_member_while_suspended()',
       $q$
@@ -231,6 +232,22 @@ BEGIN
     -- ===== deal saved (producer, not hand-written) =====
     v := public._billing_save_deal(o_b, '{"stripe_mode":"test","seats":10}'::jsonb, u_staff, 'p3853', NULL);
     r := r || jsonb_build_object('P0_save', CASE WHEN v->>'success' = 'true' THEN 'PASS' ELSE 'FAIL ' || v::text END);
+    -- BACKLOG-4178: since 4007 (20261020180000) a saved deal starts as 'draft' and only the broker's
+    -- setup makes it 'active' (admin_suspend_org refuses a draft deal). Complete setup through the real
+    -- producers, as the org admin: broker_accept_terms, then broker_complete_billing_setup.
+    SELECT version INTO n FROM public.org_deals WHERE organization_id = o_b;
+    PERFORM pg_temp.as_user(u_adm, 'p3853-adm@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
+    v := public.broker_accept_terms(o_b, n, 'p3853', 'https://example.test/terms');
+    EXECUTE 'RESET ROLE';
+    r := r || jsonb_build_object('P0_terms', CASE WHEN v->>'success' = 'true' THEN 'PASS' ELSE 'FAIL ' || v::text END);
+    PERFORM pg_temp.as_user(u_adm, 'p3853-adm@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
+    v := public.broker_complete_billing_setup(o_b, n,
+      '{"who":"other","name":"P3853 Billing","email":"p3853-bill@example.test","phone":"2065550100"}'::jsonb,
+      '{"legal_name":"P3853 B LLC","address_line1":"1 Test St","city":"Testville","region":"WA","postal_code":"98000","country":"US"}'::jsonb,
+      false);
+    EXECUTE 'RESET ROLE';
+    r := r || jsonb_build_object('P0_setup_active', CASE WHEN v->>'success' = 'true'
+      AND (SELECT status FROM public.org_deals WHERE organization_id = o_b) = 'active' THEN 'PASS' ELSE 'FAIL ' || v::text END);
 
     -- ===== pre-suspension probes (prove each later refusal is not vacuous) =====
     PERFORM pg_temp.as_user(u_adm, 'p3853-adm@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
@@ -483,7 +500,9 @@ BEGIN
     v := public.admin_suspend_org(o_l2, 'other', 'p3853');
     EXECUTE 'RESET ROLE';
     r := r || jsonb_build_object('C13_suspend_live_refused', CASE WHEN v->>'error' = 'billing_not_live' THEN 'PASS' ELSE 'FAIL ' || v::text END);
-    UPDATE public.org_deals SET status = 'suspended', suspended_reason = 'other' WHERE organization_id = o_l2;
+    -- BACKLOG-4178: set suspended_at as _billing_suspend_org does; the 3853 PR-2 enqueue trigger builds the
+    -- notify_org_suspended dedupe_key from it, and a NULL there fails billing_outbox.dedupe_key NOT NULL (23502).
+    UPDATE public.org_deals SET status = 'suspended', suspended_reason = 'other', suspended_at = now() WHERE organization_id = o_l2;
     PERFORM pg_temp.as_user(u_staff, 'p3853-staff@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';
     v := public.admin_reinstate_org(o_l2, 'p3853');
     EXECUTE 'RESET ROLE';
@@ -528,7 +547,7 @@ BEGIN
      WHERE has_table_privilege('anon', t, 'SELECT') OR has_table_privilege('authenticated', t, 'SELECT')
         OR has_table_privilege('anon', t, 'INSERT') OR has_table_privilege('authenticated', t, 'INSERT');
     SELECT count(*) INTO n2 FROM unnest(ARRAY['public._billing_save_deal(uuid,jsonb,uuid,text,integer)', 'public._billing_suspend_org(uuid,text,text,uuid)',
-                                              'public._billing_reinstate_org(uuid,text,uuid)', 'public._billing_auto_reinstate(uuid,text)',
+                                              'public._billing_reinstate_org(uuid,text,uuid,boolean)', 'public._billing_auto_reinstate(uuid,text)',
                                               'public._billing_apply_org_entitlement(uuid)', 'public._billing_change_seats(uuid,integer,uuid)',
                                               'public._billing_apply_org_subscription(uuid,text,jsonb,bigint)', 'public.billing_deciding_org(uuid)',
                                               'public.billing_purchase_blocked(uuid)', 'public._billing_brokerage_live()']) fn
@@ -538,7 +557,7 @@ BEGIN
        AND NOT has_function_privilege('anon', 'public.org_billing_suspended(uuid)', 'EXECUTE')
        AND has_function_privilege('authenticated', 'public.org_billing_suspended(uuid)', 'EXECUTE')
        AND NOT has_function_privilege('anon', 'public.admin_suspend_org(uuid,text,text)', 'EXECUTE')
-       AND NOT has_function_privilege('anon', 'public.admin_reinstate_org(uuid,text)', 'EXECUTE') THEN 'PASS'
+       AND NOT has_function_privilege('anon', 'public.admin_reinstate_org(uuid,text,boolean)', 'EXECUTE') THEN 'PASS'
       ELSE 'FAIL tables=' || n || ' fns=' || n2 END);
 
     -- ===== engine rules: A12 (R8), C-12 db half, C-9 db half, A11 + C-7 =====
@@ -547,6 +566,9 @@ BEGIN
     v := public.admin_suspend_org(o_b, 'other', 'p3853');
     EXECUTE 'RESET ROLE';
     PERFORM public._billing_apply_org_subscription(o_b, 'test', '{"status":"active","stripe_customer_id":"cus_p3853","stripe_subscription_id":"sub_p3853"}'::jsonb, 100);
+    -- BACKLOG-4178: paid evidence present, so the reason check is the only refusal left (A12 not vacuous).
+    PERFORM public._billing_record_invoice_paid(o_b, 'test',
+      (SELECT floor(extract(epoch FROM suspended_at))::bigint + 1 FROM public.org_deals WHERE organization_id = o_b));
     v := public._billing_auto_reinstate(o_b, 'test');
     r := r || jsonb_build_object('A12_payment_never_lifts_other', CASE WHEN public.org_billing_suspended(o_b) THEN 'PASS' ELSE 'FAIL ' || v::text END);
 
@@ -555,12 +577,19 @@ BEGIN
     PERFORM public.admin_suspend_org(o_b, 'non_payment', 'p3853');
     EXECUTE 'RESET ROLE';
     PERFORM public._billing_apply_org_subscription(o_b, 'test', '{"status":"past_due"}'::jsonb, 200);
+    -- BACKLOG-4178: paid evidence present, so the subscription-status check is the only refusal left.
+    PERFORM public._billing_record_invoice_paid(o_b, 'test',
+      (SELECT floor(extract(epoch FROM suspended_at))::bigint + 1 FROM public.org_deals WHERE organization_id = o_b));
     v := public._billing_auto_reinstate(o_b, 'test');
     r := r || jsonb_build_object('C12db_reinstate_needs_active_subscription', CASE WHEN public.org_billing_suspended(o_b) THEN 'PASS' ELSE 'FAIL ' || v::text END);
     v := public._billing_apply_org_subscription(o_b, 'test', '{"status":"active"}'::jsonb, 150);
     r := r || jsonb_build_object('C9db_older_event_ignored', CASE WHEN v->>'applied' = 'false'
       AND (SELECT status FROM public.org_billing_stripe WHERE organization_id = o_b AND stripe_mode = 'test') = 'past_due' THEN 'PASS' ELSE 'FAIL ' || v::text END);
     PERFORM public._billing_apply_org_subscription(o_b, 'test', '{"status":"active"}'::jsonb, 300);
+    -- BACKLOG-4178: since 3853 PR-2 (20261019090000) auto-reinstate also needs an invoice.paid event
+    -- created after the suspension; record one through its writer, as the webhook does.
+    PERFORM public._billing_record_invoice_paid(o_b, 'test',
+      (SELECT floor(extract(epoch FROM suspended_at))::bigint + 1 FROM public.org_deals WHERE organization_id = o_b));
     v := public._billing_auto_reinstate(o_b, 'test');
 
     PERFORM pg_temp.as_user(u_adm, 'p3853-adm@example.test'); EXECUTE 'SET LOCAL ROLE authenticated';

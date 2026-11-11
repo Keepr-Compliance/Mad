@@ -1,14 +1,9 @@
 /**
  * Microsoft Authentication Handlers
- * Handles Microsoft OAuth login and Outlook mailbox connection flows
+ * Handles Outlook mailbox connection flows (sign-in is the browser deep link)
  */
 
-import { devToolsPreference } from "../bootstrap/appMenu";
-import { ipcMain, BrowserWindow, Event as ElectronEvent } from "electron";
-import type {
-  OnHeadersReceivedListenerDetails,
-  HeadersReceivedResponse,
-} from "electron";
+import { ipcMain } from "electron";
 
 // Import services
 import databaseService from "../services/databaseService";
@@ -24,6 +19,7 @@ import { getValidUserId } from "../utils/userIdHelper";
 import { bringAppToFront } from "../utils/bringAppToFront";
 
 import { sendToMainWindow, getMainWindow } from "../windowRegistry";
+import { isAuthAttemptSuperseded } from "../services/authAttemptSuperseded";
 
 // Type definitions
 interface AuthResponse {
@@ -40,7 +36,6 @@ interface LoginStartResponse extends AuthResponse {
  * Microsoft Auth: Connect mailbox (Outlook/Mail access)
  */
 export async function handleMicrosoftConnectMailbox(
-  _mainWindow: BrowserWindow | null,
   userId: string
 ): Promise<LoginStartResponse> {
   try {
@@ -201,6 +196,12 @@ export async function handleMicrosoftConnectMailbox(
             );
           });
       } catch (error) {
+        // BACKLOG-3283 Path 3: a newer connect replaced this one. Say nothing to
+        // the renderer — its listener belongs to the newer attempt now.
+        if (isAuthAttemptSuperseded(error)) {
+          await logService.info("Microsoft mailbox connect superseded by a newer attempt", "AuthHandlers");
+          return;
+        }
         // BACKLOG-2007: An org tenant admin-consent block arrives here as an
         // AADSTS error (the OAuth redirect's error_description rejects the code
         // promise in microsoftAuthService's local server). Classify it so the
@@ -254,199 +255,10 @@ export async function handleMicrosoftConnectMailbox(
 }
 
 /**
- * Pre-DB Microsoft mailbox connection (returns tokens instead of saving to DB)
- */
-export async function handleMicrosoftConnectMailboxPending(
-  _mainWindow: BrowserWindow | null,
-  emailHint?: string
-): Promise<LoginStartResponse> {
-  try {
-    await logService.info(
-      "Starting Microsoft mailbox connection (pre-DB mode)",
-      "AuthHandlers"
-    );
-
-    const { authUrl, codePromise, codeVerifier, scopes: _scopes } =
-      await microsoftAuthService.authenticateForMailbox(emailHint);
-
-    const authWindow = new BrowserWindow({
-      width: 500,
-      height: 700,
-      show: true,
-      webPreferences: {
-        devTools: devToolsPreference(), // BACKLOG-3830
-        nodeIntegration: false,
-        contextIsolation: true,
-        // webSecurity defaults to true - do not disable
-      },
-      autoHideMenuBar: true,
-      title: "Connect Microsoft Mailbox",
-    });
-
-    authWindow.show();
-    authWindow.focus();
-
-    const filter = {
-      urls: [
-        "*://*.microsoftonline.com/*",
-        "*://*.msauth.net/*",
-        "*://*.msftauth.net/*",
-      ],
-    };
-    authWindow.webContents.session.webRequest.onHeadersReceived(
-      filter,
-      (
-        details: OnHeadersReceivedListenerDetails,
-        callback: (response: HeadersReceivedResponse) => void
-      ) => {
-        const responseHeaders = details.responseHeaders || {};
-        delete responseHeaders["content-security-policy"];
-        delete responseHeaders["content-security-policy-report-only"];
-        delete responseHeaders["x-content-security-policy"];
-        callback({ responseHeaders });
-      }
-    );
-
-    authWindow.loadURL(authUrl);
-
-    let authCompleted = false;
-
-    authWindow.on("closed", () => {
-      if (!authCompleted) {
-        microsoftAuthService.stopLocalServer();
-        sendToMainWindow("microsoft:mailbox-pending-cancelled");
-      }
-    });
-
-    const handleCallbackUrl = (callbackUrl: string) => {
-      const parsedUrl = new URL(callbackUrl);
-      const code = parsedUrl.searchParams.get("code");
-      const error = parsedUrl.searchParams.get("error");
-      const errorDescription = parsedUrl.searchParams.get("error_description");
-
-      if (error) {
-        microsoftAuthService.rejectCodeDirectly(errorDescription || error);
-        authCompleted = true;
-        if (authWindow && !authWindow.isDestroyed()) {
-          authWindow.close();
-        }
-      } else if (code) {
-        microsoftAuthService.resolveCodeDirectly(code);
-        authCompleted = true;
-        if (authWindow && !authWindow.isDestroyed()) {
-          authWindow.close();
-        }
-      }
-    };
-
-    authWindow.webContents.on(
-      "will-navigate",
-      (event: ElectronEvent, url: string) => {
-        if (url.startsWith("http://localhost:3000/callback")) {
-          event.preventDefault();
-          handleCallbackUrl(url);
-        }
-      }
-    );
-
-    authWindow.webContents.on(
-      "will-redirect",
-      (event: ElectronEvent, url: string) => {
-        if (url.startsWith("http://localhost:3000/callback")) {
-          event.preventDefault();
-          handleCallbackUrl(url);
-        }
-      }
-    );
-
-    const processAuthInBackground = async () => {
-      try {
-        const timeoutMs = 120000;
-        const codeWithTimeout = Promise.race([
-          codePromise,
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new Error("Authentication timed out")),
-              timeoutMs
-            )
-          ),
-        ]);
-
-        const code = await codeWithTimeout;
-
-        const tokens = await microsoftAuthService.exchangeCodeForTokens(
-          code,
-          codeVerifier
-        );
-
-        const userInfo = await microsoftAuthService.getUserInfo(
-          tokens.access_token
-        );
-
-        const expiresAt = new Date(
-          Date.now() + tokens.expires_in * 1000
-        ).toISOString();
-
-        await logService.info(
-          "Microsoft mailbox connection completed (pre-DB mode)",
-          "AuthHandlers",
-          { email: userInfo.email }
-        );
-
-        sendToMainWindow("microsoft:mailbox-pending-connected", {
-          success: true,
-          email: userInfo.email,
-          tokens: {
-            access_token: tokens.access_token,
-            refresh_token: tokens.refresh_token || null,
-            expires_at: expiresAt,
-            scopes: tokens.scope,
-          },
-        });
-      } catch (error) {
-        await logService.error(
-          "Microsoft mailbox connection failed (pre-DB mode)",
-          "AuthHandlers",
-          { error: error instanceof Error ? error.message : "Unknown error" }
-        );
-
-        sendToMainWindow("microsoft:mailbox-pending-connected", {
-          success: false,
-          error: error instanceof Error ? error.message : "Unknown error",
-        });
-      }
-    };
-    setTimeout(() => {
-      void processAuthInBackground();
-    }, 0);
-
-    return { success: true };
-  } catch (error) {
-    await logService.error(
-      "Microsoft mailbox connection failed (pre-DB mode)",
-      "AuthHandlers",
-      { error: error instanceof Error ? error.message : "Unknown error" }
-    );
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    };
-  }
-}
-
-/**
  * Register all Microsoft auth handlers
  */
-export function registerMicrosoftAuthHandlers(
-  _mainWindow: BrowserWindow | null
-): void {
+export function registerMicrosoftAuthHandlers(): void {
   ipcMain.handle("auth:microsoft:connect-mailbox", (event, userId: string) =>
-    handleMicrosoftConnectMailbox(_mainWindow, userId)
-  );
-
-  ipcMain.handle(
-    "auth:microsoft:connect-mailbox-pending",
-    (event, emailHint?: string) =>
-      handleMicrosoftConnectMailboxPending(_mainWindow, emailHint)
+    handleMicrosoftConnectMailbox(userId)
   );
 }

@@ -90,9 +90,13 @@ jest.mock("../services/db/emailDerivedContactDbService", () => ({
 
 let mockShadowRows: any[] = [];
 
+// BACKLOG-4188: the Outlook/Gmail switches are read by the REAL
+// `isInferredEmailSourceEnabled`, so the stored-preferences bag is the fixture
+// (see `gate`) and the unset → ON rule runs for real.
+const mockGetPreferences = jest.fn((_userId: string): Promise<unknown> => Promise.resolve({}));
 jest.mock("../services/supabaseService", () => ({
   __esModule: true,
-  default: { getPreferences: jest.fn(() => Promise.resolve({})) },
+  default: { getPreferences: (u: string) => mockGetPreferences(u) },
 }));
 
 jest.mock("../services/databaseService", () => ({
@@ -209,21 +213,40 @@ async function getAvailable(): Promise<any> {
 const emailRows = (res: any): any[] =>
   (res.contacts ?? []).filter((c: any) => String(c.id).startsWith("email_"));
 
-/** plan state per provider, and Settings switch per provider. */
+/**
+ * plan state per provider, and Settings switch per provider.
+ *
+ * BACKLOG-4188: an omitted `outlookPref` / `gmailPref` means NOTHING STORED for
+ * that key — the real rule then answers ON. `prefsRead: "fail"` makes the
+ * preferences read reject.
+ */
 function gate(opts: {
   plan?: "allowed" | "blocked" | "unknown" | Error;
   outlookPref?: boolean;
   gmailPref?: boolean;
+  prefsRead?: "ok" | "fail";
 }): void {
+  const inferred: Record<string, boolean> = {};
+  if (opts.outlookPref !== undefined) inferred.outlookEmails = opts.outlookPref;
+  if (opts.gmailPref !== undefined) inferred.gmailEmails = opts.gmailPref;
+  mockGetPreferences.mockImplementation(() =>
+    opts.prefsRead === "fail"
+      ? Promise.reject(new Error("preferences unreachable"))
+      : Promise.resolve(
+          Object.keys(inferred).length > 0 ? { contactSources: { inferred } } : {},
+        ),
+  );
   mockResolveState.mockImplementation(() => {
     if (opts.plan instanceof Error) return Promise.reject(opts.plan);
     return Promise.resolve(opts.plan ?? "allowed");
   });
   mockSourceEnabled.mockImplementation(
     (_u: string, category: string, key: string, fallback: boolean) => {
-      if (category !== "inferred") return Promise.resolve(fallback);
-      if (key === "outlookEmails") return Promise.resolve(opts.outlookPref ?? true);
-      if (key === "gmailEmails") return Promise.resolve(opts.gmailPref ?? true);
+      // Direct sources only. If the handler ever routed an inferred email key
+      // back through here, it would get `fallback` — and the 4188 tests below
+      // would see the old default.
+      void category;
+      void key;
       return Promise.resolve(fallback);
     },
   );
@@ -238,7 +261,7 @@ describe("BACKLOG-1717 — the gate in front of people found in email", () => {
     jest.clearAllMocks();
     mockProducer.mockResolvedValue([EMAIL_PERSON, GMAIL_PERSON]);
     gate({});
-    registerContactHandlers({} as any);
+    registerContactHandlers();
   });
 
   afterEach(() => {
@@ -321,6 +344,45 @@ describe("BACKLOG-1717 — the gate in front of people found in email", () => {
     await getAvailable();
     expect(mockProducer).toHaveBeenCalledTimes(1);
     expect(mockProducer).toHaveBeenCalledWith(USER, ["gmail"]);
+  });
+
+  /**
+   * BACKLOG-4188 — the switches with NOTHING stored are ON; a stored value
+   * wins; a preference read that fails turns discovery OFF.
+   */
+  it("4188: nothing stored for either switch → both mailboxes offered", async () => {
+    gate({});
+    expect(emailRows(await getAvailable()).map((c) => c.email)).toEqual([
+      "avery@example.com",
+      "gina@example.com",
+    ]);
+    expect(mockProducer).toHaveBeenCalledWith(USER, ["outlook", "gmail"]);
+  });
+
+  it("4188: nothing stored for Outlook, Gmail explicitly off → Outlook only", async () => {
+    gate({ gmailPref: false });
+    await getAvailable();
+    expect(mockProducer).toHaveBeenCalledWith(USER, ["outlook"]);
+  });
+
+  it("4188: nothing stored for Gmail, Outlook explicitly off → Gmail only", async () => {
+    gate({ outlookPref: false });
+    await getAvailable();
+    expect(mockProducer).toHaveBeenCalledWith(USER, ["gmail"]);
+  });
+
+  it("4188: both explicitly on → both offered", async () => {
+    gate({ outlookPref: true, gmailPref: true });
+    await getAvailable();
+    expect(mockProducer).toHaveBeenCalledWith(USER, ["outlook", "gmail"]);
+  });
+
+  it("4188: preferences cannot be read → nobody offered, picker still succeeds", async () => {
+    gate({ prefsRead: "fail" });
+    const res = await getAvailable();
+    expect(emailRows(res)).toEqual([]);
+    expect(mockProducer).not.toHaveBeenCalled();
+    expect(res.contacts.some((c: any) => c.id === "ext-1")).toBe(true);
   });
 
   it("G1b-g: calls the read ONCE for both mailboxes, not once per mailbox", async () => {
@@ -456,7 +518,7 @@ describe("people found in texts are offered in the address-book half", () => {
     mockProducer.mockResolvedValue([]);
     gate({});
     mockTextPeople.mockReturnValue([TEXT_PERSON]);
-    registerContactHandlers({} as any);
+    registerContactHandlers();
   });
   afterEach(() => {
     mockDb?.close();

@@ -154,17 +154,6 @@ const mockLogService = {
   warn: jest.fn().mockResolvedValue(undefined),
 };
 
-// BACKLOG-2546: the login write chain is one transaction behind
-// `provisionLogin`. These flows assert the handler's end-to-end response and
-// what it sends; the transaction's own behaviour is covered against the real
-// driver in `services/db/__tests__/loginProvisioningAtomicity-2546.test.ts`.
-const mockProvisionLogin = jest.fn();
-
-jest.mock("../services/loginProvisioningService", () => ({
-  __esModule: true,
-  provisionLogin: (...args: unknown[]) => mockProvisionLogin(...args),
-}));
-
 jest.mock("../services/databaseService", () => ({
   __esModule: true,
   default: mockDatabaseService,
@@ -250,11 +239,6 @@ const TEST_SESSION_TOKEN = "test-session-token-" + Date.now();
 describe("Auth Handlers Integration Tests", () => {
   let registeredHandlers: IpcHandlerRegistry;
   const mockEvent = {} as IpcMainInvokeEvent;
-  const mockMainWindow = {
-    webContents: {
-      send: mockWebContentsSend,
-    },
-  };
 
   beforeAll(() => {
     // Capture registered handlers
@@ -265,7 +249,7 @@ describe("Auth Handlers Integration Tests", () => {
 
     // Register all handlers
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    registerAuthHandlers(mockMainWindow as any);
+    registerAuthHandlers();
   });
 
   beforeEach(() => {

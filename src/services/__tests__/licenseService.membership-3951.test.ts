@@ -14,10 +14,18 @@ describe("renderer licenseService maps main's membership field", () => {
       success: true,
       sessionBacked: true,
       license: { license_type: "individual", ai_detection_enabled: false },
-      membership: { standing: "left_brokerage", organization_name: "Fixture Brokerage" },
+      membership: {
+        standing: "left_brokerage",
+        organization_name: "Fixture Brokerage",
+        organization_id: "fixture-org-a",
+      },
     });
     const withField = await licenseService[fn]();
-    expect(withField.data).toMatchObject({ membershipStanding: "left_brokerage", membershipOrgName: "Fixture Brokerage" });
+    expect(withField.data).toMatchObject({
+      membershipStanding: "left_brokerage",
+      membershipOrgName: "Fixture Brokerage",
+      membershipOrgId: "fixture-org-a",
+    });
 
     mainAnswer.mockResolvedValueOnce({
       success: true,
@@ -26,5 +34,6 @@ describe("renderer licenseService maps main's membership field", () => {
     });
     const without = await licenseService[fn]();
     expect(without.data?.membershipStanding).toBeUndefined();
+    expect(without.data?.membershipOrgId).toBeUndefined();
   });
 });

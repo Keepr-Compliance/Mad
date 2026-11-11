@@ -11,6 +11,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { TOUCH_BUTTON } from '@/components/billing/touch';
 
 export interface BrowserDiagnosticsData {
   user_agent: string;
@@ -74,9 +75,9 @@ export function BrowserDiagnostics({ diagnostics }: { diagnostics: BrowserDiagno
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-sm text-gray-600 w-full text-left"
+        className={`flex items-center gap-2 text-sm text-gray-600 w-full text-left ${TOUCH_BUTTON}`}
       >
-        <span className="text-xs">{expanded ? '\u25BC' : '\u25B6'}</span>
+        <span className="text-xs max-lg:text-sm" aria-hidden="true">{expanded ? '\u25BC' : '\u25B6'}</span>
         Diagnostics (attached automatically)
       </button>
       {expanded && (

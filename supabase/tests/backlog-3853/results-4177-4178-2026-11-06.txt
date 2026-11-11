@@ -1,0 +1,71 @@
+BACKLOG-4177 / BACKLOG-4178, keepr-test, 2026-11-06 (run 2026-11-07 UTC). Every call one transaction ending in RAISE (rolled back).
+
+== BACKLOG-4178: controls.sql repair ==
+Before (develop 59f8575a5 fixture): base -> ERROR 23502 null value in billing_outbox.dedupe_key, before any check.
+Root cause, three fixture drifts, all later migrations the 10-18 fixture predates:
+ 1. 3853 PR-2 (20261019090000) _billing_enqueue_org_work builds the notify_org_suspended dedupe_key from
+    org_deals.suspended_at. The fixture suspended o_l2 with a hand UPDATE that never set suspended_at -> NULL key -> 23502.
+    Fix: set suspended_at = now(), as _billing_suspend_org does.
+ 2. 4007 (20261020180000) _billing_save_deal inserts status 'draft'; admin_suspend_org refuses a draft deal
+    (deal_not_active), which reddened 31 checks once (1) was fixed. Fix: complete setup through the real producers
+    as the org admin (broker_accept_terms, broker_complete_billing_setup); new checks P0_terms, P0_setup_active.
+ 3. 3853 PR-2 _billing_auto_reinstate needs an invoice.paid event after suspended_at. Fix: _billing_record_invoice_paid
+    before each auto-reinstate (A12, C12db, A11), so A12 and C12db each fail on the one rule they test.
+ Mutant from-strings: 4019 renamed the policy/CRS predicate org_billing_suspended -> org_billing_service_off;
+ placeholders.json and the no_crs_gate / sr_crs_caller_org strings updated (7 mutants were MUTATION NOT APPLIED).
+ Without (3), paid_lifts_any and paid_ignores_stripe applied but reddened nothing (vacuous).
+
+unlock_transaction at run time: md5(prosrc) c044fab7e359a66ab472d61d69037f87 (3853 body).
+Composed: compose.py base,<all 29 modes> --placeholders placeholders.json; one call.
+
+base                             none                                                                             pass=54 fail=0 reds=
+no_crs_gate                      MUTATION APPLIED public.can_review_submission(uuid) 551ff42a->6587f0dd           pass=52 fail=2 reds=A6_reviewer_sees_nothing:FAIL subs=3 comments=1,CG3r_checklist_review_rpc_refused:FAIL ok
+writer_split                     MUTATION APPLIED public._billing_save_deal(uuid,jsonb,uuid,text,integer) 580aebf pass=53 fail=1 reds=A1_unlimited_off_after_resave
+seats_no_gate                    MUTATION APPLIED public._billing_change_seats(uuid,integer,uuid) aa54324c->6de29 pass=53 fail=1 reds=C_seats_refused
+trigger_inert                    MUTATION APPLIED public._billing_guard_member_while_suspended() cbbb7229->f43992 pass=45 fail=9 reds=A10b_reactivate_refused:FAIL ok,A8_unassign_refused,A9_new_invite_refused:FAIL inserted,A9s_insert_suspended_row_refused:FAIL inserted,CG5r_resend_refused:FAIL rows=1,Xm_member_row_move_into_suspended_refused:FAIL moved,Xp_pending_invite_accept_refused_Q8,Xu2_unassigned_claim_without_token_change_refused:FAIL claimed,Xu_unassigned_invite_claim_refused
+no_unlock_gate                   MUTATION APPLIED public.unlock_transaction(text) b312f686->c0d7fb13              pass=53 fail=1 reds=A3_credit_unlock_refused:FAIL unlocked=true debits 0->1
+paid_lifts_any                   MUTATION APPLIED public._billing_auto_reinstate(uuid,text) ea14b070->a342815b    pass=53 fail=1 reds=A12_payment_never_lifts_other:FAIL {"success": true}
+no_finalize_gate                 MUTATION APPLIED public.finalize_submission(uuid,jsonb) 9871f157->62becbde       pass=53 fail=1 reds=A5_finalize_refused
+no_insert_clause                 MUTATION APPLIED agents_can_create_submissions.check 5bd4fca4->174667e5          pass=52 fail=2 reds=A4a_new_submission_refused:FAIL inserted,Q7_member_keeps_own_read_only:FAIL subs=4 comments=1
+purchase_any_org                 MUTATION APPLIED public.billing_purchase_blocked(uuid) 37caa1b3->fe223a66        pass=53 fail=1 reds=C11_deactivated_member_personal_rules
+v2_self_carveout                 MUTATION APPLIED transaction_submissions_update_public.qual 4ff376e6->344c6fa4 + pass=52 fail=2 reds=A7self_admin_approves_own_refused:FAIL rows=1,A7up_admin_approves_own_uploading_refused:FAIL rows=1
+no_comment_clause                MUTATION APPLIED users_can_create_comments.check ef7eb183->5654bfea              pass=53 fail=1 reds=Q7_member_comment_refused:FAIL inserted
+no_storage_clause                MUTATION APPLIED Members can upload submission attachments.check 7077bb05->d1d5a pass=53 fail=1 reds=CG2s_storage_upload_refused:FAIL inserted
+sr_crs_caller_org                MUTATION APPLIED public.can_review_submission(uuid) 551ff42a->c3aa5a80           pass=52 fail=2 reds=A6_reviewer_sees_nothing:FAIL subs=3 comments=1,CG3r_checklist_review_rpc_refused:FAIL ok
+sr_no_move_branch                MUTATION APPLIED public._billing_guard_member_while_suspended() cbbb7229->45ab7e pass=53 fail=1 reds=Xm_member_row_move_into_suspended_refused:FAIL moved
+no_reviewer_clause               MUTATION APPLIED transaction_submissions_update_public.qual 4ff376e6->d78b7f69 + pass=52 fail=2 reds=A7b_filterless_patch_refused:FAIL rows=2,A7up_admin_approves_own_uploading_refused:FAIL rows=1
+r4_no_status_check               MUTATION APPLIED public._billing_suspend_org(uuid,text,text,uuid) 493a5805->599a pass=53 fail=1 reds=C13_R4_needs_active_deal
+paid_ignores_stripe              MUTATION APPLIED public._billing_auto_reinstate(uuid,text) ea14b070->188370cd    pass=52 fail=2 reds=A11_paid_non_payment_reinstates,C12db_reinstate_needs_active_subscription:FAIL {"success": true}
+writer_skips_signal              MUTATION APPLIED public._billing_apply_org_entitlement(uuid) 79893162->6c5be95a  pass=53 fail=1 reds=CS2_account_suspended_signal_on
+sr_reinstate_no_perm             MUTATION APPLIED public.admin_reinstate_org(uuid,text) 2ed6e29d->6ba81c2c        pass=53 fail=1 reds=C13_reinstate_needs_billing_suspend:FAIL {"success": true} suspended=false
+r14_suspend_unguarded            MUTATION APPLIED public._billing_suspend_org(uuid,text,text,uuid) 493a5805->cbf2 pass=53 fail=1 reds=C13_suspend_live_refused:FAIL {"success": true}
+reinstate_drops_prior            MUTATION APPLIED public._billing_apply_org_entitlement(uuid) 79893162->42d0c0b4  pass=53 fail=1 reds=C7_prior_support_grant_restored
+sr_reviewer_check_only           MUTATION APPLIED transaction_submissions_update_public.check fbf8c788->05b392bc  pass=53 fail=1 reds=A7up_admin_approves_own_uploading_refused:FAIL rows=1
+admin_rpc_no_permission          MUTATION APPLIED public.admin_suspend_org(uuid,text,text) 7e29986a->b394284f     pass=53 fail=1 reds=C13_suspend_needs_billing_suspend
+trigger_no_claim_branch          MUTATION APPLIED public._billing_guard_member_while_suspended() cbbb7229->81d831 pass=53 fail=1 reds=Xu2_unassigned_claim_without_token_change_refused:FAIL claimed
+trigger_no_resend_branch         MUTATION APPLIED public._billing_guard_member_while_suspended() cbbb7229->f904b3 pass=53 fail=1 reds=CG5r_resend_refused:FAIL rows=1
+r14_guard_on_suspend_only        MUTATION APPLIED public._billing_save_deal(uuid,jsonb,uuid,text,integer) 580aebf pass=51 fail=3 reds=C13_save_live_refused,C13_switch_is_the_gate,C13_test_deal_needs_is_test_org
+sr_mutant_b_submitter_check      MUTATION APPLIED transaction_submissions_update_public.check fbf8c788->9ab1be26  pass=52 fail=2 reds=A4b_plain_update_to_submitted_refused:FAIL rows=1,A5_finalize_refused
+trigger_no_claim_and_resend      MUTATION APPLIED public._billing_guard_member_while_suspended() cbbb7229->529f50 pass=51 fail=3 reds=CG5r_resend_refused:FAIL rows=1,Xu2_unassigned_claim_without_token_change_refused:FAIL claimed,Xu_unassigned_invite_claim_refused
+sr_mutant_a_no_insert_branch     MUTATION APPLIED public._billing_guard_member_while_suspended() cbbb7229->a1b3f3 pass=53 fail=1 reds=A9s_insert_suspended_row_refused:FAIL inserted
+
+Diffs from results-2026-10-18.txt: base 54 checks (was 47); v2_self_carveout also reds A7up; no_reviewer_clause also reds A7up;
+no_insert_clause reds A4a + Q7_member_keeps_own_read_only (was A4a + Q7_keeps_own); sr_mutant_b also reds A5 (as before).
+
+Over the 4153 body (migration 20261106120000 prepended in the same rolled-back call):
+base                             none                                                                             pass=54 fail=0 reds=
+no_unlock_gate                   MUTATION APPLIED public.unlock_transaction(text) 338e5700->4a0d919e              pass=53 fail=1 reds=A3_credit_unlock_refused:FAIL unlocked=true debits 0->1
+(no_unlock_gate's from-string occurs once in both bodies; functiondef md5 3853 b312f686, 4153 338e5700.)
+
+== BACKLOG-4177: rollback-3853-m1.sql md5 pin ==
+Pin placed before the org_deals check. keepr-test has 3 org_deals rows; "nodeals" cases rename org_deals inside the
+rolled-back call so the script runs to its end; a final RAISE reports unlock_transaction md5(prosrc).
+ c1  4153 body (migration prepended)          -> refused: md5 be681af7... is not the 3853 body (run rollback-4153.sql first)
+ c2  3853 body                                -> pin passes; refused later: 3 org_deals row(s) exist
+ c2b 3853 body, org_deals hidden              -> runs to end; unlock md5 now 08862c690aada387edbae6e09a7b4f70 (pre-3853)
+ c3  pin removed (MUTATION APPLIED: IF false THEN), 4153 body -> pin skipped; refused only by org_deals count
+ c3b pin removed, 4153 body, org_deals hidden -> runs to end; 4153 body overwritten, md5 08862c69... (the defect)
+
+== keepr-test after all runs ==
+unlock_transaction md5(prosrc) c044fab7e359a66ab472d61d69037f87, ACL {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres};
+org_deals present, 3 rows; org_deals_p4177 absent; 0 p3853-* auth users; 0 P3853 orgs; 0 p3853 outbox rows; 0 p3853 terms rows.

@@ -29,6 +29,7 @@ import {
   restartPoolAfterExclusiveAccess,
 } from "../workers/contactWorkerPool";
 import { BACKUP_TABLE_COUNT_SQL } from "./db/backupVerificationSql";
+import { pickAsidePath, pruneAsideCopies } from "./db/asideName";
 
 /** Result of a backup operation */
 export interface BackupResult {
@@ -54,6 +55,33 @@ export interface RestoreResult {
   success: boolean;
   error?: string;
   requiresRestart?: boolean;
+  /** BACKLOG-3298: where the pre-restore data was kept (success only). */
+  keptPreviousAs?: string;
+}
+
+export const BEFORE_RESTORE_LABEL = "before-restore";
+
+/**
+ * BACKLOG-3298 — success path only. Rename the safety copy to the kept name,
+ * then prune older kept copies. Never throws: a failure here leaves the copy at
+ * the safety path (overwritten by the next restore) and the restore stands.
+ */
+function keepSafetyCopy(dbPath: string, safetyPath: string, restoredFrom: string): string | undefined {
+  // The restore has already succeeded: a throw here would reach restoreDatabase's
+  // catch, which copies the safety copy BACK over the restored file.
+  try {
+    const keptPath = pickAsidePath(dbPath, BEFORE_RESTORE_LABEL);
+    if (keptPath === null) return undefined;
+    try {
+      fs.renameSync(safetyPath, keptPath);
+    } catch {
+      return undefined;
+    }
+    pruneAsideCopies(dbPath, BEFORE_RESTORE_LABEL, new Set([keptPath, restoredFrom]));
+    return keptPath;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Database info for display in settings */
@@ -372,18 +400,24 @@ export async function restoreDatabase(
 
     // Step 6: Migrations run automatically during initialize()
 
-    // Clean up safety copy on success
+    // BACKLOG-3298 (founder decision 2026-11-09): keep the safety copy so a
+    // restore of the wrong backup can be undone. Exactly one is kept: it is
+    // renamed to mad-before-restore-<time>.db, and only AFTER that rename are
+    // older ones deleted. The file just restored from is never deleted.
+    let keptPreviousAs: string | undefined;
     if (safetyCreated && fs.existsSync(safetyPath)) {
-      fs.unlinkSync(safetyPath);
+      keptPreviousAs = keepSafetyCopy(dbPath, safetyPath, backupPath);
     }
 
     await logService.info(
       "Database restore completed successfully",
-      "SqliteBackupService"
+      "SqliteBackupService",
+      { keptPreviousAs: keptPreviousAs ? path.basename(keptPreviousAs) : undefined }
     );
 
     return {
       success: true,
+      keptPreviousAs,
     };
   } catch (error) {
     const errorMessage =

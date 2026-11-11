@@ -14,14 +14,12 @@ export { registerUpdaterHandlers } from "./updaterHandlers";
 export {
   registerGoogleAuthHandlers,
   handleGoogleConnectMailbox,
-  handleGoogleConnectMailboxPending,
 } from "./googleAuthHandlers";
 
 // Microsoft OAuth handlers
 export {
   registerMicrosoftAuthHandlers,
   handleMicrosoftConnectMailbox,
-  handleMicrosoftConnectMailboxPending,
 } from "./microsoftAuthHandlers";
 
 // Session handlers
@@ -47,8 +45,6 @@ export { registerFailureLogHandlers } from "./failureLogHandlers";
 // Shared auth handlers
 export {
   registerSharedAuthHandlers,
-  handleCompletePendingLogin,
-  handleSavePendingMailboxTokens,
   handleDisconnectMailbox,
 } from "./sharedAuthHandlers";
 

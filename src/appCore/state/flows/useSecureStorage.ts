@@ -32,7 +32,6 @@
 import { useCallback } from "react";
 import { systemService, settingsService } from "@/services";
 import type { PendingOnboardingData } from "../types";
-import type { PendingOAuthData } from "../../../components/Login";
 import type { Subscription } from "../../../../electron/types/models";
 import {
   useOptionalMachineState,
@@ -47,7 +46,6 @@ import logger from '../../../utils/logger';
 interface UseSecureStorageOptions {
   isWindows: boolean;
   isMacOS: boolean;
-  pendingOAuthData: PendingOAuthData | null;
   pendingOnboardingData: PendingOnboardingData;
   isAuthenticated: boolean;
   login: (
@@ -62,7 +60,6 @@ interface UseSecureStorageOptions {
     subscription: Subscription | undefined,
     isNewUser: boolean
   ) => void;
-  onPendingOAuthClear: () => void;
   onPendingOnboardingClear: () => void;
   onPhoneTypeSet: (hasSelected: boolean) => void;
   onEmailOnboardingComplete: (completed: boolean, connected: boolean) => void;

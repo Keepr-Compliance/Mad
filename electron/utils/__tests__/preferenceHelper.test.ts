@@ -28,6 +28,7 @@ import {
   getEmailCacheDurationMonths,
   computeEmailCacheSinceDate,
   isShadowDeltaSyncEnabled,
+  isInferredEmailSourceEnabled,
 } from "../preferenceHelper";
 import logService from "../../services/logService";
 
@@ -401,6 +402,61 @@ describe("preferenceHelper", () => {
       const result = await isContactSourceEnabled("user-1", "direct", "outlookContacts", true);
       expect(result).toBe(true); // undefined is not boolean, uses default
     });
+  });
+
+  /**
+   * BACKLOG-4188: "Auto-discover from conversations" for Outlook and Gmail.
+   * Unset → ON, a stored boolean wins, a failed read → OFF.
+   */
+  describe("isInferredEmailSourceEnabled (BACKLOG-4188)", () => {
+    for (const key of ["outlookEmails", "gmailEmails"] as const) {
+      describe(key, () => {
+        it("no stored preferences at all → ON", async () => {
+          mockGetPreferences.mockResolvedValue({});
+          expect(await isInferredEmailSourceEnabled("user-1", key)).toBe(true);
+        });
+
+        it("contactSources present, key absent → ON", async () => {
+          mockGetPreferences.mockResolvedValue({
+            contactSources: { inferred: { messages: false }, direct: { outlookContacts: false } },
+          });
+          expect(await isInferredEmailSourceEnabled("user-1", key)).toBe(true);
+        });
+
+        it("preferences read returns null → ON", async () => {
+          mockGetPreferences.mockResolvedValue(null);
+          expect(await isInferredEmailSourceEnabled("user-1", key)).toBe(true);
+        });
+
+        it("explicit false → OFF", async () => {
+          mockGetPreferences.mockResolvedValue({
+            contactSources: { inferred: { [key]: false } },
+          });
+          expect(await isInferredEmailSourceEnabled("user-1", key)).toBe(false);
+        });
+
+        it("explicit true → ON", async () => {
+          mockGetPreferences.mockResolvedValue({
+            contactSources: { inferred: { [key]: true } },
+          });
+          expect(await isInferredEmailSourceEnabled("user-1", key)).toBe(true);
+        });
+
+        it("reads only its own key: the other mailbox's false does not turn it off", async () => {
+          const other = key === "outlookEmails" ? "gmailEmails" : "outlookEmails";
+          mockGetPreferences.mockResolvedValue({
+            contactSources: { inferred: { [other]: false } },
+          });
+          expect(await isInferredEmailSourceEnabled("user-1", key)).toBe(true);
+        });
+
+        it("failed read → OFF (an explicit off cannot be seen, so fail closed)", async () => {
+          mockGetPreferences.mockRejectedValue(new Error("Network error"));
+          expect(await isInferredEmailSourceEnabled("user-1", key)).toBe(false);
+          expect(logService.warn).toHaveBeenCalled();
+        });
+      });
+    }
   });
 
   describe("getEmailCacheDurationMonths", () => {

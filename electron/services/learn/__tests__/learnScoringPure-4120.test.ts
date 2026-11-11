@@ -6,7 +6,9 @@
  * scoring arithmetic, Copy block aggregates only, analyzeEmail timing guard.
  *
  * Every address is synthetic (street "Canarytest", city "Testville", state
- * "ZZ", ZIP 00000/99999). Detection keys are NOT written by hand: they are
+ * "ZZ", ZIP 00000/99999). Text fed to the real extractor uses state "WA": since
+ * BACKLOG-4225 the extractor only reads a real US state code, so "ZZ" there
+ * would come out as the street alone. Detection keys are NOT written by hand: they are
  * produced by running the real `analyzeEmail` on synthetic text (C3), and the
  * test asserts each shape it relies on actually came out of the extractor.
  */
@@ -15,8 +17,10 @@ import { wilsonInterval } from "../wilson";
 import { addressKey, isSameDeal, sameStreet, streetKey } from "../dealMatcher";
 import { AUTO_DETECT_PROVENANCE_CUTOFF_MS, buildAnswerKey, bucketOf, createdAtMs, outcomeOf, sideOf } from "../answerKey";
 import { cleanupCandidates, formatCopyBlock, scoreRun } from "../scoring";
+import { EMPTY_CENSUS } from "../../__tests__/helpers/emptyCensus-4175";
 import type { AnswerKeyRow } from "../../db/learnModeDbService";
 import type { LearnRunResult } from "../baselineRunner";
+import { BUNDLED_SENDER_RULES } from "../../../utils/senderFilter/bundledRules";
 
 const DAY = 24 * 60 * 60 * 1000;
 const T0 = Date.UTC(2026, 2, 1, 12); // 2026-03-01
@@ -99,15 +103,16 @@ describe("C2 answer key = hand-entered deals only", () => {
 describe("C3 match rule on real analyzeEmail output", () => {
   const TX = "4120 Canarytest Lane, Testville, ZZ 00000";
   const shapes = {
-    withCommas: "Offer accepted on 4120 Canarytest Lane, Testville, ZZ 00000. Escrow closing, buyer inspection done.",
-    commaLess: "Offer accepted on 4120 Canarytest Lane Testville ZZ 00000 closing escrow buyer inspection",
-    lineBreak: "Offer accepted for\n4120 Canarytest Lane\nTestville, ZZ 00000\nclosing escrow buyer inspection",
-    stAbbrev: "Listing agreement for 4120 Canarytest St, Testville, ZZ 00000 seller closing escrow",
+    withCommas: "Offer accepted on 4120 Canarytest Lane, Testville, WA 00000. Escrow closing, buyer inspection done.",
+    commaLess: "Offer accepted on 4120 Canarytest Lane Testville WA 00000 closing escrow buyer inspection",
+    lineBreak: "Offer accepted for\n4120 Canarytest Lane\nTestville, WA 00000\nclosing escrow buyer inspection",
+    stAbbrev: "Listing agreement for 4120 Canarytest St, Testville, WA 00000 seller closing escrow",
   };
 
-  it("the extractor really emits a comma-less key and a line-break key (fixture shapes are not invented)", () => {
-    expect(extracted(shapes.commaLess)).toBe("4120 canarytest lane testville zz 00000");
-    expect(extracted(shapes.lineBreak)).toBe("4120 canarytest lane\ntestville, zz 00000");
+  it("the extractor really emits a comma-less key and a city-line-below key (fixture shapes are not invented)", () => {
+    expect(extracted(shapes.commaLess)).toBe("4120 canarytest lane testville wa 00000");
+    // BACKLOG-4225: a city line under the street comes out on one line, after ", ".
+    expect(extracted(shapes.lineBreak)).toBe("4120 canarytest lane, testville, wa 00000");
   });
 
   it.each(Object.entries(shapes))("%s matches the hand-entered address", (_name, body) => {
@@ -115,7 +120,7 @@ describe("C3 match rule on real analyzeEmail output", () => {
   });
 
   it("Rd / Road Southwest: same street", () => {
-    const det = extracted("Escrow closing for 3414 Examplecanary Rd, Testville, ZZ 00000 buyer offer");
+    const det = extracted("Escrow closing for 3414 Examplecanary Rd, Testville, WA 00000 buyer offer");
     expect(sameStreet(det, "3414 Examplecanary Road Southwest", "00000")).toBe(true);
   });
 
@@ -199,6 +204,8 @@ describe("C2b manual rows created before 2.33.0 are reported separately", () => 
       rows,
       [],
       [],
+      0,
+      EMPTY_CENSUS,
     );
     expect([s4.positives, s4.legacyManualPositives]).toEqual([3, 1]);
     expect([s4.recall.k, s4.recall.n]).toEqual([2, 3]);
@@ -224,6 +231,8 @@ describe("C2b manual rows created before 2.33.0 are reported separately", () => 
       rows,
       [{ address_key: addressKey(addr40) as string, answer: "yes" as const, rule_version: 1 }],
       [],
+      0,
+      EMPTY_CENSUS,
     );
     expect(s.cleanupYes).toBe(1);
     // full key: (2 + 1) / (3 + 1); without legacy: (1 + 1) / (2 + 1)
@@ -248,7 +257,7 @@ describe("C2b manual rows created before 2.33.0 are reported separately", () => 
     expect(k.legacyManualPositives).toBe(1);
     expect(iso(k.legacyCutoffMs)).toBe("2026-09-15T10:00:00.000Z");
     expect(k.legacyCutoffIsMinimum).toBe(false);
-    const s = scoreRun(run([det("d1", "11 canarytest way, testville, zz 00000")]), rows, [], []);
+    const s = scoreRun(run([det("d1", "11 canarytest way, testville, zz 00000")]), rows, [], [], 0, EMPTY_CENSUS);
     const text = formatCopyBlock(s);
     expect(text).toContain("created before 2026-09-15, possibly auto-detected: 1 in the mail window)");
     expect(text).not.toContain("minimum");
@@ -296,7 +305,7 @@ describe("C2b manual rows created before 2.33.0 are reported separately", () => 
     expect(k.legacyCutoffMs).toBe(CUT);
     expect(k.legacyCutoffIsMinimum).toBe(true);
     expect(k.positives.map((p) => p.legacyManual)).toEqual([false]);
-    const s = scoreRun(run([]), rows, [], []);
+    const s = scoreRun(run([]), rows, [], [], 0, EMPTY_CENSUS);
     expect(formatCopyBlock(s)).toContain("created before 2026-08-31, possibly auto-detected: 0 in the mail window, minimum)");
   });
 
@@ -331,6 +340,8 @@ describe("C2b manual rows created before 2.33.0 are reported separately", () => 
       rows,
       [{ address_key: addressKey(addr70) as string, answer: "no" as const, rule_version: 1 }],
       [],
+      0,
+      EMPTY_CENSUS,
     );
     expect([s.positives, s.found]).toEqual([1, 1]);
     expect([s.trueDetections, s.knownWrong]).toEqual([1, 0]);
@@ -368,11 +379,26 @@ function run(detections: LearnRunResult["detections"]): LearnRunResult {
     firstMs: T0,
     lastMs: T0 + 30 * DAY,
     detections,
+    senderRulesVersion: 1,
+    senderRules: BUNDLED_SENDER_RULES,
+    senderRulesProvenance: { version: 1, source: "bundled", downloadRejected: false },
+    seedHidesQuestions: true,
+    // No sender filter loss: the filtered runs hold the same detections.
+    filtered: { full: detections, minusContactKeeps: detections },
+    senderStats: {
+      keptBy: { K1: 0, K2: 0, K3: 0 },
+      keepConflicts: 0,
+      coverage: {
+        gmail: { rows: 0, headers: 0, labels: 0 },
+        outlook: { rows: 0, headers: 0, labels: 0 },
+        unknown: { rows: 0, headers: 0, labels: 0 },
+      },
+    },
   };
 }
 
 function det(id: string, address: string, side: "buyer" | "seller" | null = "buyer") {
-  return { id, address, addressKey: addressKey(address), firstMs: T0, lastMs: T0 + DAY, emailCount: 2, emailIds: [], side };
+  return { id, address, addressKey: addressKey(address), firstMs: T0, lastMs: T0 + DAY, emailCount: 2, emailIds: [], seedEmailIds: [], hiddenEmailIds: [], side };
 }
 
 describe("scoring arithmetic", () => {
@@ -394,7 +420,7 @@ describe("scoring arithmetic", () => {
     { address_key: "40 canarytest|00000", answer: "yes" as const, rule_version: 1 },
     { address_key: "50 canarytest|00000", answer: "no" as const, rule_version: 1 },
   ];
-  const s = scoreRun(r, keyRows, answers, []);
+  const s = scoreRun(r, keyRows, answers, [], 0, EMPTY_CENSUS);
 
   it("counts", () => {
     expect({
@@ -436,10 +462,10 @@ describe("scoring arithmetic", () => {
 
   it("two detections of ONE deal (groupByProperty keys by exact string) count one deal found", () => {
     // Both keys are real analyzeEmail output for the same street (C3 shapes).
-    const withCommas = extracted("Offer accepted on 4120 Canarytest Lane, Testville, ZZ 00000. Escrow closing, buyer.");
-    const commaLess = extracted("Offer accepted on 4120 Canarytest Lane Testville ZZ 00000 closing escrow buyer");
+    const withCommas = extracted("Offer accepted on 4120 Canarytest Lane, Testville, WA 00000. Escrow closing, buyer.");
+    const commaLess = extracted("Offer accepted on 4120 Canarytest Lane Testville WA 00000 closing escrow buyer");
     expect(withCommas).not.toBe(commaLess);
-    const dup = scoreRun(run([det("d1", withCommas), det("d2", commaLess)]), [keyRow()], [], []);
+    const dup = scoreRun(run([det("d1", withCommas), det("d2", commaLess)]), [keyRow()], [], [], 0, EMPTY_CENSUS);
     expect([dup.trueDetections, dup.found, dup.missed]).toEqual([2, 1, 0]);
     expect([dup.recall.k, dup.recall.n]).toEqual([1, 1]);
     expect([dup.precisionBeforeCleanup.k, dup.precisionBeforeCleanup.n]).toEqual([2, 2]);
@@ -447,11 +473,11 @@ describe("scoring arithmetic", () => {
 
   it("one deal split into two detections, one cleanup Yes: counts ONE deal in recall, per-detection in precision", () => {
     // Both addresses are real analyzeEmail output (C3 shapes) and share one addressKey.
-    const withCommas = extracted("Offer accepted on 4120 Canarytest Lane, Testville, ZZ 00000. Escrow closing, buyer.");
-    const commaLess = extracted("Offer accepted on 4120 Canarytest Lane Testville ZZ 00000 closing escrow buyer");
+    const withCommas = extracted("Offer accepted on 4120 Canarytest Lane, Testville, WA 00000. Escrow closing, buyer.");
+    const commaLess = extracted("Offer accepted on 4120 Canarytest Lane Testville WA 00000 closing escrow buyer");
     expect(addressKey(withCommas)).toBe(addressKey(commaLess));
     const yes = [{ address_key: addressKey(withCommas) as string, answer: "yes" as const, rule_version: 1 }];
-    const s2 = scoreRun(run([det("d1", withCommas), det("d2", commaLess)]), [], yes, []);
+    const s2 = scoreRun(run([det("d1", withCommas), det("d2", commaLess)]), [], yes, [], 0, EMPTY_CENSUS);
     expect([s2.unmatched, s2.unmatchedDeals, s2.unaskable]).toEqual([2, 1, 0]);
     expect([s2.cleanupYes, s2.cleanupNo, s2.cleanupUnanswered]).toEqual([1, 0, 0]);
     expect([s2.recallWithCleanupYes.k, s2.recallWithCleanupYes.n]).toEqual([1, 1]);
@@ -460,7 +486,7 @@ describe("scoring arithmetic", () => {
 
   it("an unmatched detection with no addressKey is its own count, not 'unanswered'", () => {
     const noKey = { ...det("d1", "x"), addressKey: null };
-    const s3 = scoreRun(run([noKey]), [], [], []);
+    const s3 = scoreRun(run([noKey]), [], [], [], 0, EMPTY_CENSUS);
     expect([s3.unmatched, s3.unmatchedDeals, s3.unaskable, s3.cleanupUnanswered]).toEqual([1, 0, 1, 0]);
   });
 

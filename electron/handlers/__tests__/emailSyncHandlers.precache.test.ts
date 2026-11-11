@@ -63,7 +63,7 @@ describe("emails:precache handler (BACKLOG-2127)", () => {
   let precache: IpcHandler;
 
   beforeAll(() => {
-    registerEmailSyncHandlers({} as never);
+    registerEmailSyncHandlers();
     precache = handlers.get("emails:precache")!;
     expect(precache).toBeDefined();
   });

@@ -17,7 +17,6 @@
 
 import { useState, useCallback } from "react";
 import type { AppStep, PendingOnboardingData } from "../types";
-import type { PendingOAuthData } from "../../../components/Login";
 import {
   useOptionalMachineState,
   deriveAppStep,
@@ -35,7 +34,6 @@ export interface UseNavigationFlowOptions {
   isWindows: boolean;
 
   // Pending data
-  pendingOAuthData: PendingOAuthData | null;
   pendingOnboardingData: PendingOnboardingData;
 
   // Storage state

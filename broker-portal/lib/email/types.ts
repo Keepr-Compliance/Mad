@@ -356,6 +356,39 @@ export interface SeatsAddedParams {
   organizationId: string;
 }
 
+/** BACKLOG-4045: auto-renew turned back on by Keepr staff, to the billing contact. */
+export interface AutoRenewOnParams {
+  recipientEmail: string;
+  brokerageName: string;
+  outboxKey: string;
+  organizationId: string;
+}
+
+/** BACKLOG-4200: auto-renew turned off by Keepr staff, to the billing contact. */
+export interface AutoRenewOffParams {
+  recipientEmail: string;
+  brokerageName: string;
+  /** The plan's end date ("Nov 27, 2026"), or null when unknown or past (fallback wording). */
+  endsOn: string | null;
+  outboxKey: string;
+  organizationId: string;
+}
+
+/**
+ * BACKLOG-4209: the billing line of the reinstated emails (lib/email/templates/billing-line.ts).
+ * endsOn null = unknown or already past (fallback wording); 'none' = no live subscription, line left out.
+ */
+export type BillingLine = { kind: 'renews' } | { kind: 'ends'; endsOn: string | null } | { kind: 'none' };
+
+/** BACKLOG-4209: the brokerage was reinstated (by staff or automatically), to the billing contact. */
+export interface OrgReinstatedParams {
+  recipientEmail: string;
+  brokerageName: string;
+  billing: BillingLine;
+  outboxKey: string;
+  organizationId: string;
+}
+
 /** BACKLOG-4007 People v2: "You are now the billing contact" (founder R9 refinement). */
 export interface BillingContactReassignedParams {
   recipientEmail: string;
@@ -386,4 +419,31 @@ export interface LastAdminKeptParams {
   brokerageName: string;
   kind: 'deactivate' | 'demote';
   source: 'scim' | 'directory_sync';
+}
+
+/**
+ * BACKLOG-3932: a payment on a brokerage invoice failed, to the deal's billing contact.
+ * `payUrl` is Stripe's hosted invoice page (a bearer link) or, without one, the Keepr Billing
+ * page. It goes into the email body only, never into the delivery log.
+ */
+export interface PaymentFailedParams {
+  recipientEmail: string;
+  brokerageName: string;
+  /** "$24.97", or null when the currency cannot be formatted safely (the sentence then omits it). */
+  amountLabel: string | null;
+  payUrl: string;
+  outboxKey: string;
+  organizationId: string;
+}
+
+/** BACKLOG-3850: the personal Agent plan was ended because the member joined a brokerage. */
+export interface AgentPlanEndedParams {
+  recipientEmail: string;
+  brokerageName: string;
+  /** license_status 'active' at send time: the brokerage covers the account. Otherwise the unlicensed copy. */
+  licensed: boolean;
+  /** Absolute URL of the public support ticket form (<portal base>/support/new). */
+  supportUrl: string;
+  outboxKey: string;
+  userId: string;
 }
