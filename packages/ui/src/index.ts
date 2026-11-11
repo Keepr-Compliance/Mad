@@ -45,6 +45,7 @@ export {
   DialogClose,
   DialogOverlay,
   DialogContent,
+  DialogLayerContent,
   DialogHeader,
   DialogFooter,
   DialogTitle,
