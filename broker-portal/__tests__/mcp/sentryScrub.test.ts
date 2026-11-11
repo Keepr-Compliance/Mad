@@ -127,7 +127,30 @@ describe('A7: the MCP route logs no token', () => {
     // A malformed body reaches the SDK, which reports through onerror.
     await POST(mk(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${SECRET}"`));
     await POST(mk(`not json ${SECRET}`));
+    // A 2026-07-28 request whose Mcp-Name header disagrees with the body is
+    // rejected by the SDK, which reports it through onerror with a message that
+    // quotes params.name (measured with SDK 2.4.0).
+    const meta = {
+      'io.modelcontextprotocol/protocolVersion': '2026-07-28',
+      'io.modelcontextprotocol/clientInfo': { name: 't', version: '1' },
+      'io.modelcontextprotocol/clientCapabilities': {},
+    };
+    const mismatch = new Request('https://portal.test/api/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${SECRET}`,
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-protocol-version': '2026-07-28',
+        'mcp-method': 'tools/call',
+        'mcp-name': 'other',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/call', params: { name: SECRET, arguments: {}, _meta: meta } }),
+    });
+    expect((await POST(mismatch)).status).toBe(400);
     const written = spies.flatMap((s) => s.mock.calls).map((c) => c.map(String).join(' '));
+    // Positive control: the SDK's rejection was reported, so a log line exists to inspect.
+    expect(written.some((l) => l.startsWith('[mcp] handler error:'))).toBe(true);
     for (const line of written) expect(line).not.toContain(SECRET);
     spies.forEach((s) => s.mockRestore());
   });
