@@ -1,0 +1,453 @@
+{
+ "_source": "BACKLOG-4225: addresses/isRealEstateRelated from the UNMODIFIED extractor at develop d079d6433 (electron/services/transactionExtractorService.ts), run on every row of addressFilter-4225.holdout.json as analyzeEmail({ subject, bodyPlain: body }). Generated, never hand-edited.",
+ "rows": [
+  {
+   "id": "h001",
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "8 oak hill, testville, wa 00000"
+   ]
+  },
+  {
+   "id": "h002",
+   "oldRealEstate": true,
+   "oldAddresses": []
+  },
+  {
+   "id": "h003",
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "5 lake view, sampleton, or 00000"
+   ]
+  },
+  {
+   "id": "h004",
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "17 fox ridge, exampleburg, co 00000"
+   ]
+  },
+  {
+   "id": "h005",
+   "oldRealEstate": true,
+   "oldAddresses": []
+  },
+  {
+   "id": "h006",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "64 pine wood, testville, mi 00000"
+   ]
+  },
+  {
+   "id": "h007",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "910 sunset vista"
+   ]
+  },
+  {
+   "id": "h008",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h009",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "7 cedar path"
+   ]
+  },
+  {
+   "id": "h010",
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "330 old route, sampleton, me 00000"
+   ]
+  },
+  {
+   "id": "h011",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h012",
+   "oldRealEstate": true,
+   "oldAddresses": []
+  },
+  {
+   "id": "h013",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h014",
+   "oldRealEstate": true,
+   "oldAddresses": []
+  },
+  {
+   "id": "h015",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "1200 martin luther king jr way, sampleton, ga 00000"
+   ]
+  },
+  {
+   "id": "h016",
+   "oldRealEstate": true,
+   "oldAddresses": []
+  },
+  {
+   "id": "h017",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h018",
+   "oldRealEstate": true,
+   "oldAddresses": []
+  },
+  {
+   "id": "h019",
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "305 north birch street, testville, tx 00000"
+   ]
+  },
+  {
+   "id": "h020",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h021",
+   "oldRealEstate": true,
+   "oldAddresses": []
+  },
+  {
+   "id": "h022",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "200 main street, testville, il 00000"
+   ]
+  },
+  {
+   "id": "h023",
+   "oldRealEstate": true,
+   "oldAddresses": []
+  },
+  {
+   "id": "h024",
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "8 sea view road, some town, wa 00000"
+   ]
+  },
+  {
+   "id": "h025",
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "41 eagle hill, testville, ca 00000"
+   ]
+  },
+  {
+   "id": "h026",
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "309 forest wood, exampleburg, oh 00000"
+   ]
+  },
+  {
+   "id": "h027",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "6 mountain view, sampleton, pa 00000"
+   ]
+  },
+  {
+   "id": "h028",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "2 ridge dale, testville, va 00000"
+   ]
+  },
+  {
+   "id": "h029",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h030",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h031",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h032",
+   "oldRealEstate": true,
+   "oldAddresses": []
+  },
+  {
+   "id": "h033",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "44 elm st, testville, wa 00000"
+   ]
+  },
+  {
+   "id": "h034",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h035",
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "25 canyon road, the dalles, or 00000"
+   ]
+  },
+  {
+   "id": "h036",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "780 pecan grove lane, the woodlands, tx 00000"
+   ]
+  },
+  {
+   "id": "h037",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "14 willow ct, lake in the hills, il 00000"
+   ]
+  },
+  {
+   "id": "h038",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "9 palm hill road, isle of palms, sc 00000"
+   ]
+  },
+  {
+   "id": "h039",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h040",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h041",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h042",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h043",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h044",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h045",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h046",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h047",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h048",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h049",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h050",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h051",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h052",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h053",
+   "oldRealEstate": true,
+   "oldAddresses": []
+  },
+  {
+   "id": "h054",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h055",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h056",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "2 nights with a lake view tonight or"
+   ]
+  },
+  {
+   "id": "h057",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "3 peaks on sample ridge, stay in"
+   ]
+  },
+  {
+   "id": "h058",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "2 nights at a cabin with a mountain view and never look back or"
+   ]
+  },
+  {
+   "id": "h059",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "5 free drinks at the corner cafe walk right in"
+   ]
+  },
+  {
+   "id": "h060",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "10 gifts with a garden view"
+   ]
+  },
+  {
+   "id": "h061",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "7 days of hill"
+   ]
+  },
+  {
+   "id": "h062",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "3 year wood"
+   ]
+  },
+  {
+   "id": "h063",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "1 free night when you book a park view suite pa"
+   ]
+  },
+  {
+   "id": "h064",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "2 hours to explore sample hill trails ma"
+   ]
+  },
+  {
+   "id": "h065",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h066",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "3 days of ridge views and stay mi"
+   ]
+  },
+  {
+   "id": "h067",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "2 short videos about wood floors and enjoy de"
+   ]
+  },
+  {
+   "id": "h068",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "9 park treats at our walk up window oh"
+   ]
+  },
+  {
+   "id": "h069",
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "2 course dinner with a hill"
+   ]
+  },
+  {
+   "id": "h070",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h071",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h072",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "id": "h073",
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "2026 sample home inspections. all rights reserved. view"
+   ]
+  },
+  {
+   "id": "h074",
+   "oldRealEstate": true,
+   "oldAddresses": []
+  },
+  {
+   "id": "h075",
+   "oldRealEstate": true,
+   "oldAddresses": []
+  },
+  {
+   "id": "h076",
+   "oldRealEstate": false,
+   "oldAddresses": []
+  }
+ ]
+}
