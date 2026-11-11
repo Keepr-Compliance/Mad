@@ -1,0 +1,36 @@
+# portal mutations (python3 ts_mutations_pr3.py)
+T_cron_no_auth: MUTATION APPLIED [1	1	broker-portal/app/api/cron/domain-capture-switch/route.ts] -> if (false && !isAuthorizedCronRequest(req.headers.get('authorization'))) {
+  5 failed, 21 passed, 26 total | red (5):
+    - GET /api/cron/domain-capture-switch authorization › secret not configured › refuses a request with no header
+    - GET /api/cron/domain-capture-switch authorization › secret not configured › refuses when the cron secret is not configured
+    - GET /api/cron/domain-capture-switch authorization › secret not configured › refuses an empty secret with an empty bearer
+    - GET /api/cron/domain-capture-switch authorization › secret configured › refuses a request with no header
+    - GET /api/cron/domain-capture-switch authorization › secret configured › refuses a wrong secret (same length and different length)
+T_posted_org: MUTATION APPLIED [1	1	broker-portal/lib/actions/domainCapture.ts] -> p_org: (input as unknown as { organizationId?: string }).organizationId ?? access.organiza
+  1 failed, 9 passed, 10 total | red (1):
+    - startCapture › uses the session organization, never a posted one
+T_payer_gets_switched_email: MUTATION APPLIED [1	1	broker-portal/lib/domain/captureSwitch.ts] -> if (email) {
+  1 failed, 8 passed, 9 total | red (1):
+    - runCaptureSwitch › sends one switched email to a non-payer and none to a payer
+T_seat_alert_per_person: MUTATION APPLIED [2	1	broker-portal/lib/domain/captureSwitch.ts] -> const entry = { emails: [] as string[], userIds: [] as string[] };
+        unassignedByOrg
+  1 failed, 8 passed, 9 total | red (1):
+    - runCaptureSwitch › sends one seat alert per brokerage per run when people joined without a license
+T_dns_after_switch: MUTATION APPLIED [1	1	broker-portal/lib/domain/captureSwitch.ts] -> for (const r of [] as DueSwitch[]) {
+  1 failed, 8 passed, 9 total | red (1):
+    - runCaptureSwitch › reads DNS once per claim and records it as a re-check
+T_opt_out_no_confirm: MUTATION APPLIED [0	1	broker-portal/lib/actions/domainCapture.ts] -> 
+  1 failed, 9 passed, 10 total | red (1):
+    - optOutSelf › changes nothing without confirm
+T_notice_payer_not_passed: MUTATION APPLIED [0	1	broker-portal/lib/domain/captureNotice.ts] -> 
+  1 failed, 9 passed, 10 total | red (1):
+    - startCapture › sends one notice per scheduled switch and records each outcome
+T_notice_always_payer_copy: MUTATION APPLIED [1	1	broker-portal/lib/email/templates/domain-capture-notice.ts] -> and stays on your own paid plan
+  1 failed, 7 passed, 8 total | red (1):
+    - capture emails › notice for a non-payer does not mention a paid plan
+T_setup_message_unmapped: MUTATION APPLIED [0	2	broker-portal/lib/actions/domainCapture.ts] -> 
+  1 failed, 9 passed, 10 total | red (1):
+    - startCapture › says to finish the Billing step when the database reports it pending
+T_route_accepts_capture_kind: MUTATION APPLIED [1	1	broker-portal/app/api/email/seat-limit-reached/route.ts] -> (kind !== 'add' && kind !== 'reactivate' && kind !== 'domain_capture')
+  1 failed, 7 passed, 8 total | red (1):
+    - seat-limit HTTP route stays SCIM-only › rejects kind domain_capture
