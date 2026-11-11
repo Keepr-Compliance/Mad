@@ -131,7 +131,7 @@ BEGIN
   EXECUTE $s$CREATE FUNCTION public.get_my_cloud_autosave_state() RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY INVOKER SET search_path = '' AS $g$
     DECLARE x public.cloud_p4238_state%ROWTYPE;
     BEGIN
-      SELECT * INTO x FROM public.cloud_p4238_state WHERE owner = auth.uid();
+      SELECT * INTO x FROM public.cloud_p4238_state ORDER BY entitled DESC LIMIT 1;  -- ownership from row rules only
       IF x.mode = 'write' THEN PERFORM public.p4238_writer(); END IF;
       IF x.mode = 'ro_off' THEN PERFORM set_config('transaction_read_only', 'off', true); INSERT INTO public.p4238_written VALUES ('ro_off'); END IF;
       IF x.mode = 'nextval' THEN PERFORM nextval('public.p4238_seq'); END IF;
@@ -186,8 +186,8 @@ BEGIN
     BEGIN
       DELETE FROM public.mcp_settings;
       n0 := pg_temp.nlog(); k0 := pg_temp.nctr();
-      t := pg_temp.st('at-d1');
-      ok := pg_temp.j(t) = '{"ok": false, "error": "not_connected"}'::jsonb AND pg_temp.nlog() = n0 AND pg_temp.nctr() = k0;
+      t := pg_temp.st('at-d1') || pg_temp.reg('d1s', ARRAY[pg_temp.claude()], 'ip-d1s');
+      ok := t = '{"ok": false, "error": "not_connected"}{"ok": false, "error": "invalid_client_metadata"}' AND pg_temp.nlog() = n0 AND pg_temp.nctr() = k0;
       RAISE EXCEPTION USING ERRCODE = 'T4239';
     EXCEPTION WHEN SQLSTATE 'T4239' THEN NULL;
     END;
