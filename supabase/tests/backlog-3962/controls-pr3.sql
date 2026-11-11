@@ -160,6 +160,10 @@ INSERT INTO public.billing_subscriptions (stripe_mode, user_id, stripe_customer_
   VALUES ('test', pg_temp.id('p_mail'), 'cus_3962c_mail', 'sub_3962c_mail', 'active'),
          ('test', pg_temp.id('p_i'), 'cus_3962c_i', 'sub_3962c_i', 'incomplete');
 
+-- PR3b: one person with a display name, one with a blank one (falls back to the email)
+UPDATE public.users SET display_name = 'Mail Person 3962' WHERE id = pg_temp.id('p_mail');
+UPDATE public.users SET display_name = '  ' WHERE id = pg_temp.id('p_g');
+
 -- __MODE__
 
 DO $drv$
@@ -184,6 +188,11 @@ BEGIN
     left(g, 600));
   INSERT INTO r3962 VALUES ('K02_foreign_tenant_not_listed', position('azf@' IN g) = 0, left(g, 200));
   INSERT INTO r3962 VALUES ('K03_deactivated_elsewhere_not_listed', position('deact@' IN g) = 0, left(g, 200));
+  INSERT INTO r3962 VALUES ('K07_candidate_name_or_email',
+    (SELECT string_agg(x ->> 'email' || '=' || coalesce(x ->> 'name', 'NULL'), ',' ORDER BY x ->> 'email')
+       FROM jsonb_array_elements(coalesce(j -> 'candidates', '[]'::jsonb)) x
+      WHERE x ->> 'email' IN ('mail@cap-3962.test', 'g@cap-3962.test')) = 'g@cap-3962.test=g@cap-3962.test,mail@cap-3962.test=Mail Person 3962',
+    left(g, 300));
   g := pg_temp.q(uAgA, 'authenticated', format('SELECT public.domain_capture_candidates(%L::uuid, %L::uuid)::text', oA, cA));
   INSERT INTO r3962 VALUES ('K04_agent_refused', g LIKE '%not_authorized%', g);
   g := pg_temp.q(uAdmB, 'authenticated', format('SELECT public.domain_capture_candidates(%L::uuid, %L::uuid)::text', oB, cA));
@@ -239,6 +248,20 @@ BEGIN
     g LIKE '%switch_not_found%' AND pg_temp.sst(pMail) = 'scheduled:-', g);
   g := pg_temp.q(pOpt, 'authenticated', format('SELECT public.domain_capture_opt_out_self(%L::uuid)::text', pg_temp.sid(pOpt)));
   INSERT INTO r3962 VALUES ('O03_opt_out_own_row', pg_temp.sst(pOpt) = 'opted_out:opted_out', g);
+  -- PR3b: an opt-out is final in the database
+  g := pg_temp.q(uAdmA, 'authenticated', format('SELECT public.domain_capture_candidates(%L::uuid, %L::uuid)::text', oA, cA));
+  j := CASE WHEN g LIKE '{%' THEN g::jsonb ELSE '{}'::jsonb END;
+  INSERT INTO r3962 VALUES ('Q01_opted_out_listed_not_convertible',
+    (SELECT x ->> 'convertible' || '/' || coalesce(x ->> 'reason', '-') FROM jsonb_array_elements(coalesce(j -> 'candidates', '[]'::jsonb)) x
+      WHERE x ->> 'email' = 'opt@cap-3962.test') = 'false/opted_out', left(g, 600));
+  n := (SELECT count(*) FROM public.domain_capture_switches WHERE user_id = pOpt);
+  g := pg_temp.start(uAdmA, oA, cA, ARRAY[pOpt]);
+  j := CASE WHEN g LIKE '{%' THEN g::jsonb ELSE '{}'::jsonb END;
+  INSERT INTO r3962 VALUES ('Q02_start_skips_opted_out_no_notice',
+    jsonb_array_length(coalesce(j -> 'scheduled', '[]'::jsonb)) = 0
+      AND j -> 'skipped' -> 0 ->> 'reason' = 'opted_out'
+      AND (SELECT count(*) FROM public.domain_capture_switches WHERE user_id = pOpt) = n
+      AND pg_temp.sst(pOpt) = 'opted_out:opted_out', left(g, 300));
   g := pg_temp.q(uAdmB, 'authenticated', format('SELECT public.domain_capture_cancel(%L::uuid)::text', pg_temp.sid(pAz)));
   INSERT INTO r3962 VALUES ('O04_cancel_by_other_org_refused', g LIKE '%switch_not_found%' AND pg_temp.sst(pAz) = 'scheduled:-', g);
   g := pg_temp.q(NULL, 'anon', format('SELECT public.domain_capture_opt_out_self(%L::uuid)::text', pg_temp.sid(pAz)));
@@ -258,6 +281,8 @@ BEGIN
   g := pg_temp.sw(pg_temp.sid(pMail));
   INSERT INTO r3962 VALUES ('W02_stale_dns_no_switch', g LIKE '%dns_not_fresh%' AND pg_temp.sst(pMail) = 'scheduled:-'
     AND pg_temp.members(oA, pMail) = 0, g);
+  INSERT INTO r3962 VALUES ('W10_dns_deferral_recorded',
+    (SELECT last_defer_reason FROM public.domain_capture_switches WHERE id = pg_temp.sid(pMail)) = 'dns_not_fresh', g);
   UPDATE public.domain_claims SET last_checked_at = now() WHERE id = cA;
 
   -- undelivered (queued, never sent) at switch time
@@ -288,6 +313,9 @@ BEGIN
     g || ' outbox ' || n2 || '->' || pg_temp.outbox(pMail));
   -- switch twice
   g := pg_temp.sw(pg_temp.sid(pMail));
+  INSERT INTO r3962 VALUES ('W11_switched_row_defer_cleared',
+    (SELECT status || ':' || coalesce(last_defer_reason, '-') FROM public.domain_capture_switches
+      WHERE user_id = pMail AND organization_id = oA AND status = 'switched') = 'switched:-', '');
   INSERT INTO r3962 VALUES ('W07_switch_twice_one_membership', g LIKE '%not_scheduled%' AND pg_temp.members(oA, pMail) = 1, g);
 
   -- zero seats left -> unassigned, count unchanged
@@ -357,6 +385,8 @@ BEGIN
   ALTER FUNCTION public._bl3962_tmp(uuid, uuid, uuid) RENAME TO _billing_enqueue_agent_cancel_on_join;
   INSERT INTO r3962 VALUES ('B02_switch_deferred_without_3850',
     g LIKE '%billing_not_ready%' AND pg_temp.sst(pg_temp.id('p_d')) = 'scheduled:-' AND pg_temp.members(pg_temp.id('oD'), pg_temp.id('p_d')) = 0, g);
+  INSERT INTO r3962 VALUES ('B06_billing_not_ready_recorded',
+    (SELECT last_defer_reason FROM public.domain_capture_switches WHERE id = pg_temp.sid(pg_temp.id('p_d'))) = 'billing_not_ready', g);
 
   -- ---- the brokerage's Billing step not done ---------------------------------------------------
   INSERT INTO public.org_deals (organization_id, stripe_mode, seats, status) VALUES (pg_temp.id('oD'), 'test', 5, 'draft');
@@ -368,10 +398,17 @@ BEGIN
   g := pg_temp.sw(pg_temp.sid(pg_temp.id('p_d')));
   INSERT INTO r3962 VALUES ('B04_switch_deferred_billing_setup_pending',
     g LIKE '%billing_setup_incomplete%' AND pg_temp.sst(pg_temp.id('p_d')) = 'scheduled:-' AND pg_temp.members(pg_temp.id('oD'), pg_temp.id('p_d')) = 0, g);
+  g2 := pg_temp.q(pg_temp.id('u_admD'), 'authenticated', format('SELECT public.domain_capture_candidates(%L::uuid, %L::uuid)::text', pg_temp.id('oD'), pg_temp.id('cD')));
+  INSERT INTO r3962 VALUES ('B07_setup_deferral_recorded_and_listed',
+    (SELECT last_defer_reason FROM public.domain_capture_switches WHERE id = pg_temp.sid(pg_temp.id('p_d'))) = 'billing_setup_incomplete'
+      AND (SELECT x ->> 'last_defer_reason' FROM jsonb_array_elements(coalesce((g2::jsonb) -> 'candidates', '[]'::jsonb)) x
+            WHERE x ->> 'email' = 'd@d-3962.test') = 'billing_setup_incomplete', left(g2, 300));
   DELETE FROM public.org_deals WHERE organization_id = pg_temp.id('oD');
   g := pg_temp.sw(pg_temp.sid(pg_temp.id('p_d')));
   INSERT INTO r3962 VALUES ('B05_same_switch_goes_through_once_setup_done',
     g LIKE '%switched%' AND pg_temp.members(pg_temp.id('oD'), pg_temp.id('p_d')) = 1, g);
+  INSERT INTO r3962 VALUES ('B08_defer_cleared_on_switch',
+    (SELECT last_defer_reason FROM public.domain_capture_switches WHERE user_id = pg_temp.id('p_d') AND status = 'switched') IS NULL, '');
 
   -- ---- suspended brokerage: cancelled, no membership, no outbox row ------------------------------
   PERFORM pg_temp.start(pg_temp.id('u_admS'), pg_temp.id('oS'), pg_temp.id('cS'), ARRAY[pg_temp.id('p_s')]);
@@ -426,6 +463,23 @@ BEGIN
   INSERT INTO r3962 VALUES ('H02_other_p0001_reraised_switch_stays_scheduled',
     g LIKE 'ERR P0001%bl3962_other_refusal%' AND pg_temp.sst(pg_temp.id('p_h')) = 'scheduled:-'
       AND pg_temp.members(pg_temp.id('oK'), pg_temp.id('p_h')) = 0, g);
+
+  -- ---- PR3b: history -------------------------------------------------------------------------
+  g := pg_temp.q(uAdmA, 'authenticated', format('SELECT public.domain_capture_history(%L::uuid)::text', oA));
+  j := CASE WHEN g LIKE '{%' THEN g::jsonb ELSE '{}'::jsonb END;
+  INSERT INTO r3962 VALUES ('Y01_history_admin_sees_org_rows',
+    j ->> 'success' = 'true'
+      AND jsonb_array_length(j -> 'switches') = (SELECT count(*) FROM public.domain_capture_switches WHERE organization_id = oA)
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(j -> 'switches') x WHERE x ->> 'email' = 'opt@cap-3962.test' AND x ->> 'status' = 'opted_out')
+      AND EXISTS (SELECT 1 FROM jsonb_array_elements(j -> 'switches') x WHERE x ->> 'email' = 'mail@cap-3962.test' AND x ->> 'name' = 'Mail Person 3962' AND x ->> 'status' = 'switched')
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(j -> 'switches') x WHERE x ->> 'email' LIKE '%@d-3962.test'),
+    left(g, 400));
+  g := pg_temp.q(uAgA, 'authenticated', format('SELECT public.domain_capture_history(%L::uuid)::text', oA));
+  INSERT INTO r3962 VALUES ('Y02_history_agent_refused', g LIKE '%not_authorized%', g);
+  g := pg_temp.q(uAdmB, 'authenticated', format('SELECT public.domain_capture_history(%L::uuid)::text', oA));
+  INSERT INTO r3962 VALUES ('Y03_history_other_org_admin_refused', g LIKE '%not_authorized%', g);
+  g := pg_temp.q(NULL, 'anon', format('SELECT public.domain_capture_history(%L::uuid)::text', oA));
+  INSERT INTO r3962 VALUES ('Y04_history_anon_no_execute', g LIKE 'ERR 42501%', g);
 
   FOR k IN SELECT * FROM r3962 ORDER BY 1 LOOP
     IF k.ok IS TRUE THEN v_pass := v_pass + 1;

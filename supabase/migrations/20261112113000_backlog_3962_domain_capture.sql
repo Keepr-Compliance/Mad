@@ -21,6 +21,8 @@
 --   domain_capture_cancel(uuid)                     authenticated; admin of the row's org
 --   domain_capture_opt_out_self(uuid)               authenticated; the row's own person
 --   caller_capture_notice()                         authenticated; the caller's own rows
+--   domain_capture_history(uuid)                    authenticated; admin of the org (PR3b)
+--   _domain_capture_switches_clear_defer()          trigger: last_defer_reason cleared once a row ends (PR3b)
 --   _domain_capture_mark_notice(uuid, text)         server role only (checked inside)
 --   _domain_capture_due(integer)                    server role only (checked inside)
 --   _domain_capture_switch(uuid)                    server role only (checked inside)
@@ -119,6 +121,8 @@ CREATE TABLE public.domain_capture_switches (
   switched_at timestamptz,
   cancelled_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   ended_at timestamptz,
+  -- PR3b: why the hourly job last put this switch off (cleared when the row ends).
+  last_defer_reason text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   CONSTRAINT domain_capture_switches_status_check
@@ -129,7 +133,9 @@ CREATE TABLE public.domain_capture_switches (
     'opted_out', 'admin_cancelled', 'notice_undelivered', 'claim_withdrawn', 'claim_revoked',
     'claim_lapsed', 'claim_not_verified', 'not_eligible', 'switch_error', 'brokerage_suspended')),
   CONSTRAINT domain_capture_switches_license_check
-    CHECK (license_status IS NULL OR license_status IN ('active', 'unassigned'))
+    CHECK (license_status IS NULL OR license_status IN ('active', 'unassigned')),
+  CONSTRAINT domain_capture_switches_defer_check CHECK (last_defer_reason IS NULL OR last_defer_reason IN (
+    'dns_not_fresh', 'billing_not_ready', 'billing_setup_incomplete'))
 );
 
 -- One scheduled switch per person (hence per organization and person).
@@ -141,6 +147,23 @@ CREATE INDEX domain_capture_switches_due
   ON public.domain_capture_switches (switch_at) WHERE status = 'scheduled';
 CREATE INDEX domain_capture_switches_claim
   ON public.domain_capture_switches (claim_id, status);
+
+-- PR3b: a row that is no longer scheduled carries no deferral reason.
+CREATE FUNCTION public._domain_capture_switches_clear_defer()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path TO ''
+AS $function$
+BEGIN
+  IF NEW.status <> 'scheduled' THEN
+    NEW.last_defer_reason := NULL;
+  END IF;
+  RETURN NEW;
+END;
+$function$;
+CREATE TRIGGER domain_capture_switches_clear_defer
+  BEFORE UPDATE ON public.domain_capture_switches
+  FOR EACH ROW EXECUTE FUNCTION public._domain_capture_switches_clear_defer();
 
 ALTER TABLE public.domain_capture_switches ENABLE ROW LEVEL SECURITY;
 -- No policy: no client role reads or writes rows directly.
@@ -188,6 +211,7 @@ $function$;
 --   no:no_tenant         a Microsoft sign-in, but the organization has no Microsoft tenant recorded
 --   no:foreign_tenant    a Microsoft sign-in from a tenant that is not the organization's
 --   no:no_attestation    email match only: listed, never converted automatically
+--   no:opted_out         the person opted out of a move into THIS organization (PR3b): listed, never scheduled again
 CREATE FUNCTION public._domain_capture_eval(p_user uuid, p_org uuid, p_domain text)
 RETURNS text
 LANGUAGE plpgsql
@@ -215,6 +239,11 @@ BEGIN
                JOIN public.organizations o ON o.id = m.organization_id
               WHERE m.user_id = p_user AND o.personal_owner_user_id IS NULL) THEN
     RETURN 'no:brokerage_member';
+  END IF;
+  -- PR3b: an opt-out from this organization is final; it is never scheduled again.
+  IF EXISTS (SELECT 1 FROM public.domain_capture_switches s
+              WHERE s.user_id = p_user AND s.organization_id = p_org AND s.status = 'opted_out') THEN
+    RETURN 'no:opted_out';
   END IF;
 
   SELECT nullif(btrim(o.microsoft_tenant_id), '') INTO v_tenant FROM public.organizations o WHERE o.id = p_org;
@@ -255,8 +284,9 @@ $function$;
 -- Org admin functions
 -- ---------------------------------------------------------------------------
 
--- People on the claim's domain who could be moved. Refusals other than no_attestation and no_tenant
--- are left out; those two are listed with convertible false and a reason.
+-- People on the claim's domain who could be moved. Refusals other than no_attestation, no_tenant and
+-- opted_out are left out; those are listed with convertible false and a reason. `name` is the
+-- display name, else the email (PR3b).
 CREATE FUNCTION public.domain_capture_candidates(p_org uuid, p_claim uuid)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -284,17 +314,48 @@ BEGIN
   RETURN jsonb_build_object('success', true, 'domain', v_claim.domain, 'candidates', coalesce((
     SELECT jsonb_agg(jsonb_build_object(
              'user_id', x.id, 'email', x.email,
+             'name', coalesce(nullif(btrim(pu.display_name), ''), x.email),
              'attestation', CASE WHEN x.ev LIKE 'no:%' THEN NULL ELSE x.ev END,
              'convertible', x.ev NOT LIKE 'no:%',
              'reason', CASE WHEN x.ev LIKE 'no:%' THEN substr(x.ev, 4) END,
-             'switch_id', s.id, 'switch_at', s.switch_at, 'notice_delivered', s.notice_delivered)
+             'switch_id', s.id, 'switch_at', s.switch_at, 'notice_delivered', s.notice_delivered,
+             'last_defer_reason', s.last_defer_reason)
            ORDER BY x.email)
       FROM (SELECT u.id, u.email, public._domain_capture_eval(u.id, p_org, v_claim.domain) AS ev
               FROM auth.users u
              WHERE lower(split_part(btrim(u.email), '@', 2)) = v_claim.domain) x
       LEFT JOIN public.domain_capture_switches s
              ON s.user_id = x.id AND s.organization_id = p_org AND s.status = 'scheduled'
-     WHERE x.ev IN ('azure_tid', 'google_hd', 'email_confirmed', 'no:no_attestation', 'no:no_tenant')), '[]'::jsonb));
+      LEFT JOIN public.users pu ON pu.id = x.id
+     WHERE x.ev IN ('azure_tid', 'google_hd', 'email_confirmed', 'no:no_attestation', 'no:no_tenant', 'no:opted_out')), '[]'::jsonb));
+END;
+$function$;
+
+-- PR3b: the organization's moves, newest first (200). Admin of the organization only.
+CREATE FUNCTION public.domain_capture_history(p_org uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+DECLARE
+  v_uid uuid := auth.uid();
+BEGIN
+  IF v_uid IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authenticated');
+  END IF;
+  IF p_org IS NULL OR NOT public.is_org_admin(v_uid, p_org) THEN
+    RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
+  END IF;
+  RETURN jsonb_build_object('success', true, 'switches', coalesce((
+    SELECT jsonb_agg(jsonb_build_object(
+             'switch_id', h.id, 'claim_id', h.claim_id, 'user_id', h.user_id, 'status', h.status,
+             'reason', h.reason, 'switch_at', h.switch_at, 'email', h.email_at_start,
+             'name', coalesce(nullif(btrim(pu.display_name), ''), h.email_at_start),
+             'last_defer_reason', h.last_defer_reason) ORDER BY h.created_at DESC, h.id)
+      FROM (SELECT * FROM public.domain_capture_switches s WHERE s.organization_id = p_org
+             ORDER BY s.created_at DESC, s.id LIMIT 200) h
+      LEFT JOIN public.users pu ON pu.id = h.user_id), '[]'::jsonb));
 END;
 $function$;
 
@@ -601,6 +662,7 @@ BEGIN
   END IF;
   IF v_claim.last_check_result IS DISTINCT FROM 'verified'
      OR v_claim.last_checked_at IS NULL OR v_claim.last_checked_at < now() - interval '1 hour' THEN
+    UPDATE public.domain_capture_switches SET last_defer_reason = 'dns_not_fresh', updated_at = now() WHERE id = v_row.id;
     RETURN jsonb_build_object('success', false, 'error', 'dns_not_fresh');
   END IF;
 
@@ -614,9 +676,11 @@ BEGIN
   END IF;
 
   IF NOT public._domain_capture_billing_ready() THEN
+    UPDATE public.domain_capture_switches SET last_defer_reason = 'billing_not_ready', updated_at = now() WHERE id = v_row.id;
     RETURN jsonb_build_object('success', false, 'error', 'billing_not_ready');
   END IF;
   IF public._billing_org_join_blocked(v_row.organization_id) THEN
+    UPDATE public.domain_capture_switches SET last_defer_reason = 'billing_setup_incomplete', updated_at = now() WHERE id = v_row.id;
     RETURN jsonb_build_object('success', false, 'error', 'billing_setup_incomplete');
   END IF;
 
@@ -906,6 +970,9 @@ REVOKE ALL ON FUNCTION public.domain_capture_opt_out_self(uuid) FROM PUBLIC, ano
 GRANT EXECUTE ON FUNCTION public.domain_capture_opt_out_self(uuid) TO authenticated;
 REVOKE ALL ON FUNCTION public.caller_capture_notice() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.caller_capture_notice() TO authenticated;
+REVOKE ALL ON FUNCTION public.domain_capture_history(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.domain_capture_history(uuid) TO authenticated;
+REVOKE ALL ON FUNCTION public._domain_capture_switches_clear_defer() FROM PUBLIC, anon, authenticated;
 
 REVOKE ALL ON FUNCTION public._domain_capture_mark_notice(uuid, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public._domain_capture_mark_notice(uuid, text) TO service_role;
@@ -934,12 +1001,14 @@ DECLARE
     'public.domain_capture_cancel(uuid)',
     'public.domain_capture_opt_out_self(uuid)',
     'public.caller_capture_notice()',
+    'public.domain_capture_history(uuid)',
     'public.domain_claim_withdraw(uuid)',
     'public.admin_revoke_domain_claim(uuid, text)'];
   v_closed text[] := ARRAY[
     'public._domain_capture_billing_ready()',
     'public._domain_capture_eval(uuid, uuid, text)',
     'public._domain_capture_is_payer(uuid)',
+    'public._domain_capture_switches_clear_defer()',
     'public._domain_capture_mark_notice(uuid, text)',
     'public._domain_capture_due(integer)',
     'public._domain_capture_switch(uuid)',
@@ -955,6 +1024,7 @@ DECLARE
     'public.domain_capture_cancel(uuid)',
     'public.domain_capture_opt_out_self(uuid)',
     'public.caller_capture_notice()',
+    'public.domain_capture_history(uuid)',
     'public._domain_capture_mark_notice(uuid, text)',
     'public._domain_capture_due(integer)',
     'public._domain_capture_switch(uuid)',

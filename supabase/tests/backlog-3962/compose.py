@@ -93,8 +93,8 @@ MUTANTS3 = {
     'C_no_billing_ready_gate': [
         ("  IF NOT public._domain_capture_billing_ready() THEN\n    RETURN jsonb_build_object('success', false, 'error', 'billing_not_ready');\n  END IF;\n  -- The brokerage's Billing step",
          "  IF false THEN\n    RETURN jsonb_build_object('success', false, 'error', 'billing_not_ready');\n  END IF;\n  -- The brokerage's Billing step"),
-        ("  IF NOT public._domain_capture_billing_ready() THEN\n    RETURN jsonb_build_object('success', false, 'error', 'billing_not_ready');\n  END IF;\n  IF public._billing_org_join_blocked(v_row",
-         "  IF false THEN\n    RETURN jsonb_build_object('success', false, 'error', 'billing_not_ready');\n  END IF;\n  IF public._billing_org_join_blocked(v_row")],
+        ("  IF NOT public._domain_capture_billing_ready() THEN\n    UPDATE public.domain_capture_switches SET last_defer_reason = 'billing_not_ready'",
+         "  IF false THEN\n    UPDATE public.domain_capture_switches SET last_defer_reason = 'billing_not_ready'")],
     # M-d: account_suspended no longer caught (re-raised)
     'C_no_suspended_catch': [("    IF SQLERRM = 'account_suspended' THEN\n      v_suspended := true;\n    ELSIF",
                               "    IF false THEN\n      v_suspended := true;\n    ELSIF")],
@@ -109,6 +109,18 @@ MUTANTS3 = {
     'C_no_tenant_as_foreign': [("    RETURN 'no:no_tenant';\n", "    RETURN 'no:foreign_tenant';\n")],
     # M-g2: the no_tenant branch dropped altogether
     'C_no_tenant_branch_dropped': [("  IF v_tenant IS NULL AND EXISTS (SELECT 1 FROM auth.identities i\n", "  IF false AND EXISTS (SELECT 1 FROM auth.identities i\n")],
+    # PR3b: opt-out no longer final (eval skip removed)
+    'C_no_opt_out_skip': [("              WHERE s.user_id = p_user AND s.organization_id = p_org AND s.status = 'opted_out') THEN\n    RETURN 'no:opted_out';\n",
+                           "              WHERE false) THEN\n    RETURN 'no:opted_out';\n")],
+    # PR3b: deferral reasons not recorded
+    'C_no_defer_reason': [("    UPDATE public.domain_capture_switches SET last_defer_reason = 'billing_setup_incomplete', updated_at = now() WHERE id = v_row.id;\n", "")],
+    # PR3b: deferral reason not cleared when a row ends (trigger body neutered)
+    'C_defer_not_cleared': [("  IF NEW.status <> 'scheduled' THEN\n    NEW.last_defer_reason := NULL;\n", "  IF false THEN\n    NEW.last_defer_reason := NULL;\n")],
+    # PR3b: history without the admin check
+    'C_history_no_admin_check': [("  IF p_org IS NULL OR NOT public.is_org_admin(v_uid, p_org) THEN\n    RETURN jsonb_build_object('success', false, 'error', 'not_authorized');\n  END IF;\n  RETURN jsonb_build_object('success', true, 'switches'",
+                                  "  IF p_org IS NULL THEN\n    RETURN jsonb_build_object('success', false, 'error', 'not_authorized');\n  END IF;\n  RETURN jsonb_build_object('success', true, 'switches'")],
+    # PR3b: history granted to anon; the POSTCHECK must raise
+    'C_history_grant_anon': [("-- POSTCHECK BEGIN\n", "GRANT EXECUTE ON FUNCTION public.domain_capture_history(uuid) TO anon;\n-- POSTCHECK BEGIN\n")],
 }
 
 MUTANTS = {
