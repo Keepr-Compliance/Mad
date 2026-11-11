@@ -12,7 +12,8 @@
  * P6 the picker options are report_share_candidates output and nothing else
  */
 
-import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { SharingDialog } from '@keepr/ui';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createShareApi, isMissingFunctionError, type ShareApi } from '../report-share-api';
@@ -205,30 +206,131 @@ describe('P5 sharing is offered only when the database has the share functions',
   });
 });
 
-describe('P6 the ShareDialog picker is fed by candidates only', () => {
-  it('P6b Share opens the dialog with the candidates for THAT view', async () => {
+const person = (id: string, name: string) => ({ id, kind: 'person' as const, name });
+const entry = (id: string, name: string, level: 'viewer' | 'editor') => ({ ...person(id, name), level });
+
+describe('P6 the SharingDialog picker is fed by candidates only', () => {
+  it('P6b Share opens the dialog with the candidates for THAT view, as people', async () => {
     const { hook, shareApi } = mount([OWN]);
     expect(hook.result.current.shareDialog.open).toBe(false);
     act(() => hook.result.current.sharing!.onShare!(OWN));
-    expect(hook.result.current.shareDialog).toMatchObject({ open: true, viewName: 'Mine' });
-    await waitFor(() => expect(hook.result.current.shareDialog.candidates).toEqual([{ id: vid(101), name: 'Avery Example' }]));
+    expect(hook.result.current.shareDialog).toMatchObject({ open: true, name: 'Mine' });
+    await waitFor(() => expect(hook.result.current.shareDialog.candidates).toEqual([person(vid(101), 'Avery Example')]));
     expect(shareApi!.candidates).toHaveBeenCalledWith(vid(1));
-    expect(hook.result.current.shareDialog.grants).toEqual([]);
+    expect(hook.result.current.shareDialog.entries).toEqual([]);
+    // People only: no roles, no general access, no extra section, no Make owner.
+    expect(hook.result.current.shareDialog.onTransferOwnership).toBeUndefined();
+    expect(hook.result.current.shareDialog.generalAccess).toBeUndefined();
+    expect(hook.result.current.shareDialog.extraSection).toBeUndefined();
   });
 
-  it('grant and remove write, then re-read the grants; a refusal shows', async () => {
+  it('grant (one upsert per person picked) and remove write, then re-read the grants once; a refusal shows', async () => {
     const { hook, shareApi } = mount([OWN]);
     const api = shareApi as ReturnType<typeof fakeShareApi>;
     act(() => hook.result.current.sharing!.onShare!(OWN));
     await waitFor(() => expect(hook.result.current.shareDialog.candidates).not.toBeNull());
-    act(() => hook.result.current.shareDialog.onGrant(vid(101), 'editor'));
+    act(() =>
+      hook.result.current.shareDialog.onGrant([person(vid(101), 'Avery Example'), person(vid(102), 'Blake Builder')], 'editor')
+    );
     await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(2));
-    expect(api.share).toHaveBeenCalledWith(vid(1), vid(101), 'editor');
+    expect(api.share.mock.calls).toEqual([
+      [vid(1), vid(101), 'editor'],
+      [vid(1), vid(102), 'editor'],
+    ]);
     api.removeGrant.mockRejectedValueOnce({ message: 'Saved view not found' });
-    act(() => hook.result.current.shareDialog.onRemove({ userId: vid(101), name: 'Avery Example', role: 'editor' }));
+    act(() => hook.result.current.shareDialog.onRemove(entry(vid(101), 'Avery Example', 'editor')));
     await waitFor(() => expect(hook.result.current.shareDialog.error).toBe('Saved view not found'));
     act(() => hook.result.current.shareDialog.onOpenChange(false));
     expect(hook.result.current.shareDialog.open).toBe(false);
+  });
+});
+
+// BACKLOG-3513 PR-4 controls A1 / A2 (plan pm_comments f24fdbc7 §5).
+describe('A1 a level change is ONE report_share_set upsert, never remove + grant', () => {
+  it('A1 onChangeLevel: exactly one share call with the new level; no removeGrant; then one re-read', async () => {
+    const { hook, shareApi } = mount([OWN]);
+    const api = shareApi as ReturnType<typeof fakeShareApi>;
+    api.grants.mockResolvedValue([{ userId: vid(101), name: 'Avery Example', role: 'editor' }]);
+    act(() => hook.result.current.sharing!.onShare!(OWN));
+    await waitFor(() => expect(hook.result.current.shareDialog.entries).toHaveLength(1));
+    act(() => hook.result.current.shareDialog.onChangeLevel(hook.result.current.shareDialog.entries![0], 'viewer'));
+    await waitFor(() => expect(api.grants).toHaveBeenCalledTimes(2));
+    expect(api.share.mock.calls).toEqual([[vid(1), vid(101), 'viewer']]);
+    expect(api.removeGrant).not.toHaveBeenCalled();
+  });
+
+  it('A1 through the rendered dialog: Can view on a Can edit row is one report_share_set with p_role viewer', async () => {
+    const { rpc, client } = fakeClient();
+    const shareApi = createShareApi(() => client);
+    function Harness() {
+      const { sharing, shareDialog } = useReportViewSharing(
+        shareApi,
+        { views: [OWN], write: vi.fn() },
+        'user-activity',
+        () => ({ filters: {}, metric: null })
+      );
+      return (
+        <>
+          <button type="button" onClick={() => sharing?.onShare?.(OWN)}>
+            open
+          </button>
+          <SharingDialog {...shareDialog} />
+        </>
+      );
+    }
+    render(
+      <ReportAccessProvider reportKey="user-activity" title="User Activity" access="owner">
+        <Harness />
+      </ReportAccessProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'open' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Share “Mine”' });
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Access for Avery Example: Can edit' }));
+    fireEvent.click(within(screen.getByRole('menu')).getByRole('menuitemradio', { name: /^Can view/ }));
+    await waitFor(() => expect(rpc.mock.calls.filter((c) => c[0] === 'report_share_list')).toHaveLength(2));
+    const writes = rpc.mock.calls.filter((c) => c[0] === 'report_share_set' || c[0] === 'report_share_remove');
+    expect(writes).toEqual([['report_share_set', { p_view_id: vid(1), p_user_id: vid(101), p_role: 'viewer' }]]);
+  });
+});
+
+describe('A2 the saved-view dialog: owner row is You, and there is no Make owner', () => {
+  it('A2 renders You as the owner row first, people rows after, and the row menu has no Make owner', async () => {
+    const api = fakeShareApi();
+    api.grants.mockResolvedValue([{ userId: vid(101), name: 'Avery Example', role: 'editor' }]);
+    function Harness() {
+      const { sharing, shareDialog } = useReportViewSharing(api, { views: [OWN], write: vi.fn() }, 'user-activity', () => ({
+        filters: {},
+        metric: null,
+      }));
+      return (
+        <>
+          <button type="button" onClick={() => sharing?.onShare?.(OWN)}>
+            open
+          </button>
+          <SharingDialog {...shareDialog} />
+        </>
+      );
+    }
+    render(
+      <ReportAccessProvider reportKey="user-activity" title="User Activity" access="owner">
+        <Harness />
+      </ReportAccessProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'open' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Share “Mine”' });
+    const list = await within(dialog).findByRole('list', { name: 'People with access' });
+    await within(list).findByText('Avery Example');
+    const rows = within(list).getAllByRole('listitem');
+    expect(rows[0].getAttribute('data-slot')).toBe('sharing-owner');
+    expect(rows[0].textContent).toMatch(/^.*You.*Owner$/);
+    expect(within(rows[0]).queryByRole('button')).toBeNull();
+    expect(within(dialog).getByText('People you add see this view under “Shared with you”.')).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Access for Avery Example: Can edit' }));
+    const menu = screen.getByRole('menu');
+    expect(within(menu).queryByRole('menuitem', { name: /Make owner/ })).toBeNull();
+    expect(within(menu).getByRole('menuitem', { name: /^Remove access$/ })).toBeTruthy();
+    // People only in the picker: no roles are offered.
+    expect(within(dialog).queryByText(/^Role:/)).toBeNull();
   });
 });
 
@@ -249,16 +351,16 @@ describe('R1 a late reply for another view is discarded', () => {
     const { hook } = mount([OWN, OTHER], api);
     act(() => hook.result.current.sharing!.onShare!(OWN));
     act(() => hook.result.current.sharing!.onShare!(OTHER));
-    await waitFor(() => expect(hook.result.current.shareDialog.grants).toEqual(B_GRANTS));
+    await waitFor(() => expect(hook.result.current.shareDialog.entries).toEqual([entry(vid(202), 'Robin Marsh', 'editor')]));
     await act(async () => {
       resolveA(A_GRANTS);
       resolveACand([{ id: vid(101), name: 'Avery Example' }]);
       await Promise.resolve();
     });
-    expect(hook.result.current.shareDialog).toMatchObject({ viewName: 'Mine too', grants: B_GRANTS });
-    expect(hook.result.current.shareDialog.candidates).toEqual([{ id: vid(102), name: 'Blake Builder' }]);
-    act(() => hook.result.current.shareDialog.onRemove(B_GRANTS[0] as never));
-    act(() => hook.result.current.shareDialog.onGrant(vid(102), 'viewer'));
+    expect(hook.result.current.shareDialog).toMatchObject({ name: 'Mine too', entries: [entry(vid(202), 'Robin Marsh', 'editor')] });
+    expect(hook.result.current.shareDialog.candidates).toEqual([person(vid(102), 'Blake Builder')]);
+    act(() => hook.result.current.shareDialog.onRemove(hook.result.current.shareDialog.entries![0]));
+    act(() => hook.result.current.shareDialog.onGrant([person(vid(102), 'Blake Builder')], 'viewer'));
     expect(api.removeGrant).toHaveBeenCalledWith(vid(5), vid(202));
     expect(api.share).toHaveBeenCalledWith(vid(5), vid(102), 'viewer');
   });

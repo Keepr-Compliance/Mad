@@ -3,8 +3,13 @@
 /**
  * Sharing for one report's saved views (BACKLOG-4087)
  *
- * Returns the kit `SavedViews` `sharing` prop and the kit `ShareDialog` props. A report passes the
- * first to SavedViews and renders `<ShareDialog {...shareDialog} />` once.
+ * Returns the kit `SavedViews` `sharing` prop and the kit `SharingDialog` props. A report passes the
+ * first to SavedViews and renders `<SharingDialog {...shareDialog} />` once.
+ *
+ * BACKLOG-3513 PR-4: the dialog is the kit SharingDialog. The owner row is the caller ("You": Share
+ * is offered on own rows only); people only (no roles, no general access, no Make owner). A level
+ * change is ONE `report_share_set` (an upsert), never remove + grant; Share loops the same upsert
+ * once per person picked, then re-reads once.
  *
  * OFFERED ONLY WHEN THE DATABASE HAS THE SHARE FUNCTIONS. The list function that ships with them
  * always sends `access` on every row; an older one never does. So `sharing` is undefined (no Share,
@@ -31,10 +36,10 @@
  */
 
 import { useCallback, useRef, useState, type ReactNode } from 'react';
-import type { SavedViewItem, SavedViewsSharing, SavedViewUpdate, ShareDialogProps } from '@keepr/ui';
+import type { SavedViewItem, SavedViewsSharing, SavedViewUpdate, SharingDialogProps, SharingEntry, SharingPrincipal } from '@keepr/ui';
 import { canShareViews } from './report-access';
 import { useOpenReport } from './report-access-context';
-import { isMissingFunctionError, type ShareApi } from './report-share-api';
+import { isMissingFunctionError, type ShareApi, type ShareCandidate, type ShareGrant } from './report-share-api';
 import { writeFailureMessage } from './report-views';
 import type { SharedViewFields } from './saved-view-access';
 import type { UseReportSavedViews } from './use-report-saved-views';
@@ -46,8 +51,34 @@ export interface UseReportViewSharing<V extends SavedViewItem> {
    * `SavedViewUpdate` (filters + metric), and it is whatever `current()` returned.
    */
   sharing: SavedViewsSharing<V> | undefined;
-  /** Spread onto one ShareDialog. */
-  shareDialog: ShareDialogProps;
+  /** Spread onto one SharingDialog. */
+  shareDialog: SharingDialogProps;
+}
+
+/** The saved-view copy under the title (unchanged from the v1 dialog). */
+export const VIEW_SHARE_DESCRIPTION = 'People you add see this view under “Shared with you”.';
+
+/** The saved-view level lines (unchanged from the v1 dialog). */
+export const VIEW_SHARE_LEVELS: SharingDialogProps['levels'] = [
+  { value: 'viewer', label: 'Can view', description: 'Opens the view' },
+  { value: 'editor', label: 'Can edit', description: 'Also updates its filters and metric' },
+];
+
+/**
+ * The owner row. Share is offered on the caller's own rows only, so the owner is always the caller.
+ * The id is a placeholder: the kit uses it only to keep the owner out of the picker, and
+ * `report_share_candidates` already leaves the caller out on the server.
+ */
+export const VIEW_SHARE_OWNER: NonNullable<SharingDialogProps['owner']> = { id: 'view-owner', name: 'You', isYou: true };
+
+/** Picker rows: people only. */
+export function toPrincipals(rows: readonly ShareCandidate[] | null): SharingPrincipal[] | null {
+  return rows ? rows.map((c) => ({ id: c.id, kind: 'person' as const, name: c.name })) : null;
+}
+
+/** Access rows: people only, the grant's role as the level. */
+export function toEntries(rows: readonly ShareGrant[] | null): SharingEntry[] | null {
+  return rows ? rows.map((g) => ({ id: g.userId, kind: 'person' as const, name: g.name, level: g.role })) : null;
 }
 
 /** True when the server's list function is the one that ships with the share functions. */
@@ -76,8 +107,8 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
   const mayShare = canShareViews(useOpenReport()?.access ?? null);
   const [missing, setMissing] = useState(false);
   const [target, setTarget] = useState<V | null>(null);
-  const [candidates, setCandidates] = useState<ShareDialogProps['candidates']>(null);
-  const [grants, setGrants] = useState<ShareDialogProps['grants']>(null);
+  const [candidates, setCandidates] = useState<ShareCandidate[] | null>(null);
+  const [grants, setGrants] = useState<ShareGrant[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const noteFailure = useCallback((err: unknown) => {
@@ -194,7 +225,7 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
     );
   }
 
-  const shareDialog: ShareDialogProps = {
+  const shareDialog: SharingDialogProps = {
     open: target !== null,
     onOpenChange: (open) => {
       if (!open) {
@@ -202,17 +233,28 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
         setTarget(null);
       }
     },
-    viewName: target?.name ?? '',
-    candidates,
-    grants,
+    name: target?.name ?? '',
+    description: VIEW_SHARE_DESCRIPTION,
+    levels: VIEW_SHARE_LEVELS,
+    owner: VIEW_SHARE_OWNER,
+    candidates: toPrincipals(candidates),
+    entries: toEntries(grants),
     error,
-    onGrant: (userId, role) => {
+    onGrant: (principals, level) => {
       if (!shareApi || !target) return;
-      afterWrite(shareApi.share(target.id, userId, role), target.id);
+      const viewId = target.id;
+      // One upsert per person picked (people only); one re-read after they all settle.
+      const people = principals.filter((p) => p.kind === 'person');
+      afterWrite(Promise.all(people.map((p) => shareApi.share(viewId, p.id, level))), viewId);
     },
-    onRemove: (grant) => {
+    onChangeLevel: (entry, level) => {
       if (!shareApi || !target) return;
-      afterWrite(shareApi.removeGrant(target.id, grant.userId), target.id);
+      // In place: report_share_set upserts, so one call changes the level.
+      afterWrite(shareApi.share(target.id, entry.id, level), target.id);
+    },
+    onRemove: (entry) => {
+      if (!shareApi || !target) return;
+      afterWrite(shareApi.removeGrant(target.id, entry.id), target.id);
     },
   };
 

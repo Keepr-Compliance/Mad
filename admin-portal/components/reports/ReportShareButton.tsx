@@ -3,9 +3,13 @@
 /**
  * Share a report (BACKLOG-4144): an owner (Super Admin) grants or removes access to the open report.
  *
- * Reuses the kit ShareDialog with report copy. The picker is `report_access_candidates` output and
- * nothing else; grants come from `report_access_list`; writes are `report_access_set` /
- * `report_access_remove`, always with the open report's key.
+ * Uses the kit SharingDialog with report copy (BACKLOG-3513 PR-4). The picker is
+ * `report_access_candidates` output and nothing else; grants come from `report_access_list`; writes
+ * are `report_access_set` / `report_access_remove`, always with the open report's key.
+ *
+ * No owner row (every owner is a Super Admin) and no Make owner. People only. A level change is ONE
+ * `report_access_set` (an upsert), never remove + grant; Share loops the same upsert once per person
+ * picked, then re-reads once.
  *
  * Shown only to owners, and hidden for good once any of the functions answers "no such function"
  * (a database without them). Presentation only: the server functions are the access guard.
@@ -13,12 +17,19 @@
 
 import { useCallback, useRef, useState } from 'react';
 import { Share2 } from 'lucide-react';
-import { Button, ShareDialog, type ShareDialogProps, type ShareRoleDescriptions } from '@keepr/ui';
+import { Button, SharingDialog, type SharingLevelOption } from '@keepr/ui';
 import { canGrantReportAccess } from '@/lib/reports/report-access';
 import { useOpenReport } from '@/lib/reports/report-access-context';
 import { reportAccessApi, type ReportAccessApi } from '@/lib/reports/report-access-api';
-import { isMissingFunctionError } from '@/lib/reports/report-share-api';
+import { isMissingFunctionError, type ShareCandidate, type ShareGrant } from '@/lib/reports/report-share-api';
+import { toEntries, toPrincipals } from '@/lib/reports/use-report-view-sharing';
 import { writeFailureMessage } from '@/lib/reports/report-views';
+
+/** The line under each level. */
+export interface ShareRoleDescriptions {
+  viewer: string;
+  editor: string;
+}
 
 export const REPORT_SHARE_DESCRIPTION = 'People you add can open this report.';
 export const REPORT_SHARE_ROLE_DESCRIPTIONS: ShareRoleDescriptions = {
@@ -37,8 +48,8 @@ export function ReportShareButton({
   const report = useOpenReport();
   const [missing, setMissing] = useState(false);
   const [open, setOpen] = useState(false);
-  const [candidates, setCandidates] = useState<ShareDialogProps['candidates']>(null);
-  const [grants, setGrants] = useState<ShareDialogProps['grants']>(null);
+  const [candidates, setCandidates] = useState<ShareCandidate[] | null>(null);
+  const [grants, setGrants] = useState<ShareGrant[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // One number per opening. A reply from an earlier opening (closed, or closed and opened again
@@ -77,6 +88,11 @@ export function ReportShareButton({
 
   if (!report || !canGrantReportAccess(report.access) || missing) return null;
 
+  const levels: SharingLevelOption[] = [
+    { value: 'viewer', label: 'Can view', description: roleDescriptions.viewer },
+    { value: 'editor', label: 'Can edit', description: roleDescriptions.editor },
+  ];
+
   function afterWrite(op: Promise<unknown>) {
     const id = session.current;
     setError(null);
@@ -108,7 +124,7 @@ export function ReportShareButton({
         <Share2 className="h-4 w-4" aria-hidden="true" />
         Share
       </Button>
-      <ShareDialog
+      <SharingDialog
         open={open}
         onOpenChange={(next) => {
           if (!next) {
@@ -116,14 +132,18 @@ export function ReportShareButton({
             setOpen(false);
           }
         }}
-        viewName={report.title}
+        name={report.title}
         description={REPORT_SHARE_DESCRIPTION}
-        roleDescriptions={roleDescriptions}
-        candidates={candidates}
-        grants={grants}
+        levels={levels}
+        candidates={toPrincipals(candidates)}
+        entries={toEntries(grants)}
         error={error}
-        onGrant={(userId, role) => afterWrite(api.set(reportKey, userId, role))}
-        onRemove={(grant) => afterWrite(api.remove(reportKey, grant.userId))}
+        onGrant={(principals, level) =>
+          // One upsert per person picked (people only); one re-read after they all settle.
+          afterWrite(Promise.all(principals.filter((p) => p.kind === 'person').map((p) => api.set(reportKey, p.id, level))))
+        }
+        onChangeLevel={(entry, level) => afterWrite(api.set(reportKey, entry.id, level))}
+        onRemove={(entry) => afterWrite(api.remove(reportKey, entry.id))}
       />
     </>
   );
