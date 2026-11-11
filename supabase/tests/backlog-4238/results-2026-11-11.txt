@@ -1,14 +1,14 @@
 BACKLOG-4238 PR-1 harness results, 2026-11-11 (a test project; each run is one rolled-back transaction)
-commit 27c0d7dd4
+commit 3127cd33f
 
 == baseline: run.sh
 {
  "fail": 0,
- "pass": 48,
+ "pass": 50,
  "reds": {},
- "total": 48
+ "total": 50
 }
-wall_s=9
+wall_s=12
 
 == C8: run.sh controls-timeout.sql
 {
@@ -36,7 +36,7 @@ MUTATION APPLIED numstat=10/14
   - AND sha256(convert_to(p_secret, 'UTF8')) = s.portal_secret_prev_sha256))
   - FROM public.mcp_settings s
   - WHERE s.id), false)
-RESULT total=48 pass=46 fail=2 reds=D1_settings_row_missing,D1_wrong_secret_prev_null
+RESULT total=50 pass=48 fail=2 reds=D1_settings_row_missing,D1_wrong_secret_prev_null
 TRIPWIRE RED (Tests:       3 failed, 14 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -50,7 +50,7 @@ MUTATION APPLIED numstat=6/6
   + IF NOT public._mcp_secret_ok(p_secret) THEN
   - IF public._mcp_secret_ok(p_secret) IS NOT TRUE THEN
   + IF NOT public._mcp_secret_ok(p_secret) THEN
-RESULT total=48 pass=48 fail=0 reds=none
+RESULT total=50 pass=50 fail=0 reds=none
 TRIPWIRE RED (Tests:       2 failed, 15 passed, 17 total)
 VERDICT as expected (equivalent)
 RESTORED clean=True
@@ -64,7 +64,7 @@ MUTATION APPLIED numstat=4/8
   - AND sha256(convert_to(p_secret, 'UTF8')) = s.portal_secret_prev_sha256))
   - FROM public.mcp_settings s
   - WHERE s.id), false)
-RESULT total=48 pass=48 fail=0 reds=none
+RESULT total=50 pass=50 fail=0 reds=none
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected (equivalent)
 RESTORED clean=True
@@ -76,7 +76,7 @@ MUTATION APPLIED numstat=2/4
   - OR (s.portal_secret_prev_sha256 IS NOT NULL
   - AND sha256(convert_to(p_secret, 'UTF8')) = s.portal_secret_prev_sha256))
   + OR sha256(convert_to(p_secret, 'UTF8')) IS NOT DISTINCT FROM s.portal_secret_prev_sha256)
-RESULT total=48 pass=47 fail=1 reds=D1_null_secret
+RESULT total=50 pass=49 fail=1 reds=D1_null_secret
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -85,7 +85,7 @@ MUTATION APPLIED numstat=0/3
   - IF public._mcp_secret_ok(p_secret) IS NOT TRUE THEN
   - RETURN public._mcp_refuse('invalid_grant');
   - END IF;
-RESULT total=48 pass=47 fail=1 reds=D1_wrong_secret_prev_null
+RESULT total=50 pass=49 fail=1 reds=D1_wrong_secret_prev_null
 TRIPWIRE RED (Tests:       2 failed, 15 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -93,14 +93,14 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - REVOKE ALL ON FUNCTION public.mcp_get_status(text, bytea, text) FROM PUBLIC, anon, authenticated, service_role;
   + REVOKE ALL ON FUNCTION public.mcp_get_status(text, bytea, text) FROM PUBLIC, anon;
-RESULT total=48 pass=47 fail=1 reds=D2_function_grants
+RESULT total=50 pass=49 fail=1 reds=D2_function_grants
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M06_create_on_public_kept (want red) temporary CREATE on schema public not revoked
 MUTATION APPLIED numstat=0/1
   - REVOKE CREATE ON SCHEMA public FROM mcp_reader;
-RESULT total=48 pass=47 fail=1 reds=D2_reader_role
+RESULT total=50 pass=49 fail=1 reds=D2_reader_role
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -108,7 +108,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - ALTER ROLE mcp_reader NOLOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT;
   + ALTER ROLE mcp_reader NOLOGIN BYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT;
-RESULT total=48 pass=45 fail=3 reds=D15_entitlement,D2_reader_role,D5_owner_only
+RESULT total=50 pass=47 fail=3 reds=D15_entitlement,D2_reader_role,D5_owner_only
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -116,14 +116,14 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - GRANT mcp_reader TO postgres WITH INHERIT FALSE, SET TRUE;
   + GRANT mcp_reader TO postgres WITH SET TRUE;
-RESULT total=48 pass=47 fail=1 reds=D2_reader_role
+RESULT total=50 pass=49 fail=1 reds=D2_reader_role
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M09_no_read_only (want red) read block without transaction_read_only (still rolled back)
 MUTATION APPLIED numstat=0/1
   - PERFORM set_config('transaction_read_only', 'on', true);
-RESULT total=48 pass=47 fail=1 reds=D3_writes_refused
+RESULT total=50 pass=49 fail=1 reds=D3_writes_refused
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -131,7 +131,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=0/2
   - RAISE EXCEPTION USING ERRCODE = 'MC000', MESSAGE = 'mcp read block done';
   - WHEN SQLSTATE 'MC000' THEN NULL;
-RESULT total=48 pass=47 fail=1 reds=CL_claims_and_read_only_restored
+RESULT total=50 pass=49 fail=1 reds=CL_claims_and_read_only_restored
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -140,7 +140,7 @@ MUTATION APPLIED numstat=0/3
   - PERFORM set_config('transaction_read_only', 'on', true);
   - RAISE EXCEPTION USING ERRCODE = 'MC000', MESSAGE = 'mcp read block done';
   - WHEN SQLSTATE 'MC000' THEN NULL;
-RESULT total=48 pass=46 fail=2 reds=CL_claims_and_read_only_restored,D3_writes_refused
+RESULT total=50 pass=48 fail=2 reds=CL_claims_and_read_only_restored,D3_writes_refused
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -148,7 +148,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - IF public._mcp_reader_ok('public._mcp_r_entitlement()'::regprocedure) IS NOT TRUE THEN
   + IF false THEN
-RESULT total=48 pass=47 fail=1 reds=D4_dispatch_check
+RESULT total=50 pass=49 fail=1 reds=D4_dispatch_check
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -158,14 +158,14 @@ MUTATION APPLIED numstat=2/2
   - PERFORM set_config('request.jwt.claim.sub', g.user_id::text, true);
   + PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', g.connection_id, 'role', 'authenticated')::text, true);
   + PERFORM set_config('request.jwt.claim.sub', g.connection_id::text, true);
-RESULT total=48 pass=44 fail=4 reds=D15_entitlement,D3_positive_clean_reader,D3_writes_refused,D5_owner_only
+RESULT total=50 pass=46 fail=4 reds=D15_entitlement,D3_positive_clean_reader,D3_writes_refused,D5_owner_only
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M13_no_legacy_claim_sub (want green) legacy request.jwt.claim.sub not set (the harness clears it, so auth.uid() falls back to the claims)
 MUTATION APPLIED numstat=0/1
   - PERFORM set_config('request.jwt.claim.sub', g.user_id::text, true);
-RESULT total=48 pass=48 fail=0 reds=none
+RESULT total=50 pass=50 fail=0 reds=none
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected (equivalent)
 RESTORED clean=True
@@ -173,35 +173,35 @@ RESTORED clean=True
 MUTATION APPLIED numstat=0/2
   - SET ROLE mcp_reader;
   - RESET ROLE;
-RESULT total=48 pass=29 fail=19 reds=B2_per_user_cap,B3_lockout_failures_only,C9_shapes,CL_claims_and_read_only_restored,D10_refresh_reuse_revokes,D12_kill_switch,D13_rate_limited_logged,D15_entitlement,D15a_cloud_not_built,D17_disconnect_all,D1_positive_correct_secret,D1_prev_secret_accepted,D2_reader_role,D3_positive_clean_reader,D3_writes_refused,D4_crash,D5_owner_only,D6_token_resolution,G1_crash
+RESULT total=50 pass=29 fail=21 reds=B2_per_user_cap,B3_lockout_failures_only,C9_shapes,CL_claims_and_read_only_restored,D10_refresh_reuse_revokes,D12_kill_switch,D13_rate_limited_logged,D15_entitlement,D15a_cloud_not_built,D17_disconnect_all,D1_positive_correct_secret,D1_prev_secret_accepted,D2_reader_role,D3_positive_clean_reader,D3_writes_refused,D4_crash,D5_owner_only,D6_token_resolution,G1_crash,N1_wrong_verifier_uses_up_code,W3_exchange_insert_failure_rolls_back
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M15_enter_ignores_expiry (want red) gate without the access-token expiry
 MUTATION APPLIED numstat=0/1
   - AND t.expires_at > now()
-RESULT total=48 pass=47 fail=1 reds=D6_token_resolution
+RESULT total=50 pass=49 fail=1 reds=D6_token_resolution
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M16_enter_ignores_pepper (want red) gate without the pepper version
 MUTATION APPLIED numstat=0/1
   - AND t.pepper_version = s.pepper_version
-RESULT total=48 pass=47 fail=1 reds=D6_token_resolution
+RESULT total=50 pass=49 fail=1 reds=D6_token_resolution
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M17_enter_ignores_kind (want red) gate accepts a refresh token as access
 MUTATION APPLIED numstat=0/1
   - AND t.kind = 'access'
-RESULT total=48 pass=47 fail=1 reds=D6_token_resolution
+RESULT total=50 pass=49 fail=1 reds=D6_token_resolution
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M18_code_reusable (want red) code redemption without used_at IS NULL
 MUTATION APPLIED numstat=0/1
   - AND k.used_at IS NULL
-RESULT total=48 pass=47 fail=1 reds=D7_code_single_use
+RESULT total=50 pass=49 fail=1 reds=D7_code_single_use
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -209,7 +209,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=0/2
   - DELETE FROM public.mcp_connections c
   - WHERE c.id = (SELECT k.connection_id FROM public.mcp_authorization_codes k WHERE k.code_sha256 = sha256(p_code_digest));
-RESULT total=48 pass=47 fail=1 reds=D7_code_single_use
+RESULT total=50 pass=49 fail=1 reds=D7_code_single_use
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -217,14 +217,14 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - AND public._mcp_b64url(sha256(convert_to(p_code_verifier, 'UTF8'))) = v_code.code_challenge) IS NOT TRUE THEN
   + AND p_code_verifier = v_code.code_challenge) IS NOT TRUE THEN
-RESULT total=48 pass=23 fail=25 reds=B2_per_user_cap,B2_refresh_client_resource_bound,B2_refresh_expiry_pepper_kind,B3_lockout_failures_only,C9_shapes,CL_claims_and_read_only_restored,D10_refresh_reuse_revokes,D11_cross_user_and_impersonation,D12_kill_switch,D13_rate_limited_logged,D15_entitlement,D15a_cloud_not_built,D17_disconnect_all,D18_reconnect_replaces,D1_positive_correct_secret,D1_prev_secret_accepted,D3_positive_clean_reader,D3_writes_refused,D4_dispatch_check,D5_owner_only,D6_crash,D7_code_single_use,D8_pkce_and_bindings,N3_crash,N5_check_access_kill_switch
+RESULT total=50 pass=22 fail=28 reds=B2_per_user_cap,B2_refresh_client_resource_bound,B2_refresh_expiry_pepper_kind,B3_lockout_failures_only,C9_shapes,CL_claims_and_read_only_restored,D10_refresh_reuse_revokes,D11_cross_user_and_impersonation,D12_kill_switch,D13_rate_limited_logged,D15_entitlement,D15a_cloud_not_built,D17_disconnect_all,D18_reconnect_replaces,D1_positive_correct_secret,D1_prev_secret_accepted,D3_positive_clean_reader,D3_writes_refused,D4_dispatch_check,D5_owner_only,D6_crash,D7_code_single_use,D8_pkce_and_bindings,N1_wrong_verifier_uses_up_code,N3_crash,N3b_crash,N5_check_access_kill_switch,W3_exchange_insert_failure_rolls_back
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M21_exchange_ignores_redirect (want red) exchange without the redirect comparison
 MUTATION APPLIED numstat=0/1
   - AND v_code.redirect_uri = p_redirect_uri
-RESULT total=48 pass=47 fail=1 reds=D8_pkce_and_bindings
+RESULT total=50 pass=49 fail=1 reds=D8_pkce_and_bindings
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -232,14 +232,14 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - IF (v_code.client_id = p_client_id
   + IF (true
-RESULT total=48 pass=47 fail=1 reds=D8_pkce_and_bindings
+RESULT total=50 pass=49 fail=1 reds=D8_pkce_and_bindings
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M23_exchange_ignores_resource (want red) exchange without the resource comparison
 MUTATION APPLIED numstat=0/1
   - AND v_code.resource = p_resource
-RESULT total=48 pass=47 fail=1 reds=D8_pkce_and_bindings
+RESULT total=50 pass=49 fail=1 reds=D8_pkce_and_bindings
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -247,21 +247,21 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - WHERE NOT EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = u.uri))) IS NOT TRUE THEN
   + WHERE NOT EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE u.uri LIKE a.redirect_uri || '%'))) IS NOT TRUE THEN
-RESULT total=48 pass=47 fail=1 reds=D9_allowlist_exact
+RESULT total=50 pass=49 fail=1 reds=D9_allowlist_exact
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M25_refresh_reusable (want red) refresh without used_at IS NULL
 MUTATION APPLIED numstat=0/1
   - AND t.used_at IS NULL
-RESULT total=48 pass=46 fail=2 reds=D10_refresh_reuse_revokes,N3_inline_pruning
+RESULT total=50 pass=48 fail=2 reds=D10_refresh_reuse_revokes,N3_inline_pruning
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M26_reuse_keeps_connection (want red) refresh reuse does not disconnect
 MUTATION APPLIED numstat=0/1
   - DELETE FROM public.mcp_connections c WHERE c.id = v_conn;
-RESULT total=48 pass=46 fail=2 reds=D10_refresh_reuse_revokes,N3_inline_pruning
+RESULT total=50 pass=48 fail=2 reds=D10_refresh_reuse_revokes,N3_inline_pruning
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -269,7 +269,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - WHERE c.id = p_connection_id AND c.user_id = v_uid
   + WHERE c.id = p_connection_id
-RESULT total=48 pass=47 fail=1 reds=D11_cross_user_and_impersonation
+RESULT total=50 pass=49 fail=1 reds=D11_cross_user_and_impersonation
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -277,7 +277,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - AND i.status IN ('active', 'validated')
   + AND i.status = 'active'
-RESULT total=48 pass=47 fail=1 reds=D11_cross_user_and_impersonation
+RESULT total=50 pass=49 fail=1 reds=D11_cross_user_and_impersonation
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -291,14 +291,14 @@ MUTATION APPLIED numstat=5/5
   + IF false THEN
   - IF public._mcp_impersonating(v_uid) IS NOT FALSE THEN
   + IF false THEN
-RESULT total=48 pass=47 fail=1 reds=D11_cross_user_and_impersonation
+RESULT total=50 pass=49 fail=1 reds=D11_cross_user_and_impersonation
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M30_view_ignores_claim (want red) view without the claimed_by term
 MUTATION APPLIED numstat=0/1
   - AND (r.claimed_by IS NULL OR r.claimed_by = v_uid)
-RESULT total=48 pass=47 fail=1 reds=D11_cross_user_and_impersonation
+RESULT total=50 pass=49 fail=1 reds=D11_cross_user_and_impersonation
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -306,7 +306,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - enabled                   boolean NOT NULL DEFAULT false,
   + enabled                   boolean NOT NULL DEFAULT true,
-RESULT total=48 pass=47 fail=1 reds=D12_fresh_apply_disabled_no_secret
+RESULT total=50 pass=49 fail=1 reds=D12_fresh_apply_disabled_no_secret
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -314,7 +314,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - IF (SELECT s.enabled FROM public.mcp_settings s WHERE s.id) IS NOT TRUE THEN
   + IF false THEN
-RESULT total=48 pass=47 fail=1 reds=D12_kill_switch
+RESULT total=50 pass=49 fail=1 reds=D12_kill_switch
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -322,7 +322,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - RETURN public._mcp_refuse(g.outcome);
   + RAISE EXCEPTION 'refused %', g.outcome;
-RESULT total=48 pass=42 fail=6 reds=B2_per_user_cap,D10_refresh_reuse_revokes,D12_kill_switch,D13_rate_limited_logged,D6_token_resolution,D7_code_single_use
+RESULT total=50 pass=44 fail=6 reds=B2_per_user_cap,D10_refresh_reuse_revokes,D12_kill_switch,D13_rate_limited_logged,D6_token_resolution,D7_code_single_use
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -330,7 +330,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - IF g.outcome IS DISTINCT FROM 'ok' THEN
   + IF g.outcome <> 'ok' THEN
-RESULT total=48 pass=48 fail=0 reds=none
+RESULT total=50 pass=50 fail=0 reds=none
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected (equivalent)
 RESTORED clean=True
@@ -338,7 +338,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - RETURN jsonb_build_object('entitled', false, 'reason', 'cloud_not_built');
   + RETURN jsonb_build_object('entitled', true, 'reason', 'cloud_not_built');
-RESULT total=48 pass=47 fail=1 reds=D15a_cloud_not_built
+RESULT total=50 pass=49 fail=1 reds=D15a_cloud_not_built
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -347,7 +347,7 @@ MUTATION APPLIED numstat=0/3
   - IF (v_state -> 'schema_version') IS DISTINCT FROM to_jsonb(1) THEN
   - RETURN jsonb_build_object('entitled', false, 'reason', 'state_unavailable');
   - END IF;
-RESULT total=48 pass=47 fail=1 reds=D15_entitlement
+RESULT total=50 pass=49 fail=1 reds=D15_entitlement
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -355,21 +355,21 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - IF (SELECT s.connect_requires_cloud FROM public.mcp_settings s WHERE s.id) IS NOT FALSE
   + IF false
-RESULT total=48 pass=47 fail=1 reds=D15_entitlement
+RESULT total=50 pass=49 fail=1 reds=D15_entitlement
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M38_view_ignores_binding (want red) view without the browser binding
 MUTATION APPLIED numstat=0/1
   - AND r.browser_binding_sha256 = p_browser_binding_sha256
-RESULT total=48 pass=47 fail=1 reds=D16_consent_binding
+RESULT total=50 pass=49 fail=1 reds=D16_consent_binding
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M39_approve_ignores_nonce (want red) approve without the nonce
 MUTATION APPLIED numstat=0/1
   - AND r.consent_nonce_sha256 = sha256(convert_to(p_nonce, 'UTF8'))
-RESULT total=48 pass=47 fail=1 reds=D16_consent_binding
+RESULT total=50 pass=49 fail=1 reds=D16_consent_binding
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -377,7 +377,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - DELETE FROM public.mcp_connections c WHERE c.user_id = p_user_id;
   + DELETE FROM public.mcp_connections c WHERE c.user_id IS NOT NULL;
-RESULT total=48 pass=47 fail=1 reds=D17_disconnect_all
+RESULT total=50 pass=49 fail=1 reds=D17_disconnect_all
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -385,7 +385,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - WHERE c.user_id = v_user AND c.redirect_uri = v_redir AND c.id <> v_code.connection_id AND c.status = 'active';
   + WHERE c.user_id = v_user AND c.id <> v_code.connection_id AND c.status = 'active';
-RESULT total=48 pass=45 fail=3 reds=B2_per_user_cap,D17_disconnect_all,D18_reconnect_replaces
+RESULT total=50 pass=46 fail=4 reds=B2_per_user_cap,D17_disconnect_all,D18_reconnect_replaces,N3b_crash
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -393,7 +393,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   + PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', g.user_id, 'role', 'authenticated')::text, true);
   - PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', g.user_id, 'role', 'authenticated')::text, true);
-RESULT total=48 pass=47 fail=1 reds=CL_claims_and_read_only_restored
+RESULT total=50 pass=49 fail=1 reds=CL_claims_and_read_only_restored
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -407,70 +407,70 @@ RESTORED clean=True
 == M44_rollback_leaves_log (want red) rollback leaves mcp_call_log
 MUTATION APPLIED numstat=0/1
   - DROP TABLE IF EXISTS public.mcp_call_log;
-RESULT total=48 pass=47 fail=1 reds=G1_rollback_then_apply
+RESULT total=50 pass=49 fail=1 reds=G1_rollback_then_apply
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == M45_register_ignores_null_element (want green) no array_position NULL term: a NULL element already fails the allowlist subquery
 MUTATION APPLIED numstat=0/1
   - AND array_position(p_redirect_uris, NULL) IS NULL
-RESULT total=48 pass=48 fail=0 reds=none
+RESULT total=50 pass=50 fail=0 reds=none
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected (equivalent)
 RESTORED clean=True
 == B1_sequence_revoke_removed (want red) call-log sequence REVOKE line removed
 MUTATION APPLIED numstat=0/1
   - REVOKE ALL ON SEQUENCE public.mcp_call_log_id_seq FROM PUBLIC, anon, authenticated;
-RESULT total=48 pass=47 fail=1 reds=D2_sequences_and_type_closed
+RESULT total=50 pass=49 fail=1 reds=D2_sequences_and_type_closed
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == B1_type_revoke_removed (want red) mcp_gate type REVOKE line removed
 MUTATION APPLIED numstat=0/1
   - REVOKE ALL ON TYPE public.mcp_gate FROM PUBLIC, anon, authenticated;
-RESULT total=48 pass=47 fail=1 reds=D2_sequences_and_type_closed
+RESULT total=50 pass=49 fail=1 reds=D2_sequences_and_type_closed
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == X1_refresh_ignores_client (want red) refresh UPDATE without the client term
 MUTATION APPLIED numstat=0/1
   - AND c.client_id = p_client_id
-RESULT total=48 pass=47 fail=1 reds=B2_refresh_client_resource_bound
+RESULT total=50 pass=49 fail=1 reds=B2_refresh_client_resource_bound
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == X2_refresh_ignores_resource (want red) refresh UPDATE without the resource term
 MUTATION APPLIED numstat=0/1
   - AND c.resource = p_resource
-RESULT total=48 pass=47 fail=1 reds=B2_refresh_client_resource_bound
+RESULT total=50 pass=49 fail=1 reds=B2_refresh_client_resource_bound
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == X3_code_never_expires (want red) code redemption without the expiry term
 MUTATION APPLIED numstat=0/1
   - AND k.expires_at > now()
-RESULT total=48 pass=47 fail=1 reds=B2_code_expiry
+RESULT total=50 pass=49 fail=1 reds=B2_code_expiry
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == X4_refresh_never_expires (want red) refresh UPDATE without the expiry term
 MUTATION APPLIED numstat=0/1
   - AND t.expires_at > now()
-RESULT total=48 pass=47 fail=1 reds=B2_refresh_expiry_pepper_kind
+RESULT total=50 pass=49 fail=1 reds=B2_refresh_expiry_pepper_kind
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == X5_refresh_ignores_pepper (want red) refresh UPDATE without the pepper term
 MUTATION APPLIED numstat=0/1
   - AND t.pepper_version = s.pepper_version
-RESULT total=48 pass=47 fail=1 reds=B2_refresh_expiry_pepper_kind
+RESULT total=50 pass=49 fail=1 reds=B2_refresh_expiry_pepper_kind
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == X6_refresh_accepts_access_kind (want red) refresh UPDATE without the kind term (the table CHECK then raises)
 MUTATION APPLIED numstat=0/1
   - AND t.kind = 'refresh'
-RESULT total=48 pass=47 fail=1 reds=B2_refresh_expiry_pepper_kind
+RESULT total=50 pass=49 fail=1 reds=B2_refresh_expiry_pepper_kind
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -481,7 +481,7 @@ MUTATION APPLIED numstat=1/4
   - END IF;
   - RETURN public._mcp_refuse('rate_limited');
   + RETURN public._mcp_refuse(p_code);
-RESULT total=48 pass=47 fail=1 reds=B3_lockout_failures_only
+RESULT total=50 pass=49 fail=1 reds=B3_lockout_failures_only
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -491,7 +491,7 @@ MUTATION APPLIED numstat=4/0
   + AND rc.window_start = public._mcp_window(interval '1 minute')), 0) >= 20 THEN
   + RETURN public._mcp_refuse('rate_limited');
   + END IF;
-RESULT total=48 pass=47 fail=1 reds=B3_lockout_failures_only
+RESULT total=50 pass=49 fail=1 reds=B3_lockout_failures_only
 TRIPWIRE RED (Tests:       1 failed, 16 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -500,14 +500,14 @@ MUTATION APPLIED numstat=0/3
   - IF (SELECT s.enabled FROM public.mcp_settings s WHERE s.id) IS NOT TRUE THEN
   - RETURN public._mcp_refuse('disabled');
   - END IF;
-RESULT total=48 pass=47 fail=1 reds=B2_view_kill_switch
+RESULT total=50 pass=49 fail=1 reds=B2_view_kill_switch
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == X9_approve_skips_client_redirect (want red) approve INSERT without the client redirect-list term
 MUTATION APPLIED numstat=0/1
   - AND v_req.redirect_uri = ANY (c.redirect_uris)
-RESULT total=48 pass=47 fail=1 reds=B2_approve_client_redirects
+RESULT total=50 pass=49 fail=1 reds=B2_approve_client_redirects
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -515,7 +515,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - v_b := public._mcp_bump('call_user:' || g.user_id::text, interval '1 minute', 60);
   + v_b := public._mcp_bump('call_user:' || g.user_id::text, interval '1 minute', 100000);
-RESULT total=48 pass=47 fail=1 reds=B2_per_user_cap
+RESULT total=50 pass=49 fail=1 reds=B2_per_user_cap
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -523,7 +523,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - v_b := public._mcp_bump('reg_ip:' || encode(p_ip_sha256, 'hex'), interval '1 hour', 10);
   + v_b := public._mcp_bump('reg_ip:' || encode(p_ip_sha256, 'hex'), interval '1 hour', 100000);
-RESULT total=48 pass=47 fail=1 reds=B2_registration_ip_limit
+RESULT total=50 pass=49 fail=1 reds=B2_registration_ip_limit
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -534,14 +534,14 @@ MUTATION APPLIED numstat=0/5
   - RETURNING c.user_id INTO v_user;
   - INSERT INTO public.mcp_call_log (user_id, connection_id, event, outcome, ended_at)
   - VALUES (v_user, v_code.connection_id, 'code_rejected', 'ok', now());
-RESULT total=48 pass=47 fail=1 reds=N1_wrong_verifier_uses_up_code
+RESULT total=50 pass=49 fail=1 reds=N1_wrong_verifier_uses_up_code
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == N2_exchange_skips_allowlist (want red) exchange without the allowlist term
 MUTATION APPLIED numstat=0/1
   - AND EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = p_redirect_uri)
-RESULT total=48 pass=47 fail=1 reds=N2_exchange_rechecks_allowlist
+RESULT total=50 pass=49 fail=1 reds=N2_exchange_rechecks_allowlist
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -549,7 +549,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=0/2
   - DELETE FROM public.mcp_rate_counters o
   - WHERE o.bucket = p_bucket AND o.window_start < now() - interval '1 day';
-RESULT total=48 pass=47 fail=1 reds=N3_inline_pruning
+RESULT total=50 pass=49 fail=1 reds=N3_inline_pruning
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -557,7 +557,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - WHERE o.bucket = p_bucket AND o.window_start < now() - interval '1 day';
   + WHERE o.window_start < now() - interval '1 day';
-RESULT total=48 pass=47 fail=1 reds=N3_inline_pruning
+RESULT total=50 pass=49 fail=1 reds=N3_inline_pruning
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -565,7 +565,7 @@ RESTORED clean=True
 MUTATION APPLIED numstat=0/2
   - DELETE FROM public.mcp_tokens o
   - WHERE o.connection_id = v_conn AND o.expires_at < now() - interval '1 day';
-RESULT total=48 pass=47 fail=1 reds=N3_inline_pruning
+RESULT total=50 pass=48 fail=2 reds=N3_inline_pruning,N3b_token_prune_scope
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
@@ -573,18 +573,42 @@ RESTORED clean=True
 MUTATION APPLIED numstat=1/1
   - WHERE o.connection_id = v_conn AND o.expires_at < now() - interval '1 day';
   + WHERE o.connection_id = v_conn AND (o.expires_at < now() - interval '1 day' OR o.used_at IS NOT NULL);
-RESULT total=48 pass=46 fail=2 reds=D10_refresh_reuse_revokes,N3_inline_pruning
+RESULT total=50 pass=48 fail=2 reds=D10_refresh_reuse_revokes,N3_inline_pruning
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
 == N5_check_access_ignores_kill_switch (want red) check_access without the enabled term
 MUTATION APPLIED numstat=0/1
   - AND s.enabled
-RESULT total=48 pass=46 fail=2 reds=D12_kill_switch,N5_check_access_kill_switch
+RESULT total=50 pass=48 fail=2 reds=D12_kill_switch,N5_check_access_kill_switch
 TRIPWIRE green (Tests:       17 passed, 17 total)
 VERDICT as expected
 RESTORED clean=True
-mutants: 68 run, 0 not as expected
+== W4_rejection_deletes_all_user_connections (want red) rejected-redemption DELETE keyed on the user instead of the connection
+MUTATION APPLIED numstat=1/1
+  - WHERE c.id = v_code.connection_id AND c.status = 'pending'
+  + WHERE c.user_id = (SELECT x.user_id FROM public.mcp_connections x WHERE x.id = v_code.connection_id)
+RESULT total=50 pass=49 fail=1 reds=N1_wrong_verifier_uses_up_code
+TRIPWIRE green (Tests:       17 passed, 17 total)
+VERDICT as expected
+RESTORED clean=True
+== W2_token_prune_all_connections (want red) token prune without the connection term
+MUTATION APPLIED numstat=1/1
+  - WHERE o.connection_id = v_conn AND o.expires_at < now() - interval '1 day';
+  + WHERE o.expires_at < now() - interval '1 day';
+RESULT total=50 pass=49 fail=1 reds=N3b_token_prune_scope
+TRIPWIRE green (Tests:       17 passed, 17 total)
+VERDICT as expected
+RESTORED clean=True
+== W3_insert_failure_returns_in_handler (want red) token insert failure returns from the inner handler (previous shape)
+MUTATION APPLIED numstat=1/1
+  - RAISE EXCEPTION USING ERRCODE = 'MC001', MESSAGE = 'mcp token insert failed';
+  + RETURN public._mcp_refuse('invalid_request');
+RESULT total=50 pass=49 fail=1 reds=W3_exchange_insert_failure_rolls_back
+TRIPWIRE green (Tests:       17 passed, 17 total)
+VERDICT as expected
+RESTORED clean=True
+mutants: 71 run, 0 not as expected
 
 == concurrency/run-concurrency.sh: NOT RUN (needs the migration applied and committed)
 
