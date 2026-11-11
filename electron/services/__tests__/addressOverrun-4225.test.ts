@@ -115,6 +115,25 @@ describe("BACKLOG-4225 the address ends at the address", () => {
     );
   });
 
+  it("C3 a real state code on the next line does not join it (before: '1234 sample river lane\\nbuyers move in')", () => {
+    expect(extract("Inspection booked at 1234 Sample River Lane\nBuyers move in\nThanks")).toEqual(["1234 sample river lane"]);
+  });
+
+  it("C3 the kept tail is never longer than what was detected (before: '1234 sample river lane bob is')", () => {
+    expect(extract("Offer for 1234 Sample River Lane Bob is in. Thanks")).toEqual(["1234 sample river lane"]);
+  });
+
+  it("C3 a 5-word 'city' before a state code is not a city (before: '... ann and bob were excited in')", () => {
+    expect(extract("Offer for 1234 Sample River Lane Ann and Bob were excited in. Thanks")).toEqual(["1234 sample river lane"]);
+  });
+
+  it("C11 two detected matches that trim to one street still count as two (before: 2 addresses)", () => {
+    expect(extract("Offer for 1234 Sample River Lane Bob lives in Ohio. Again 1234 Sample River Lane Ann is ok")).toEqual([
+      "1234 sample river lane",
+      "1234 sample river lane",
+    ]);
+  });
+
   it("C9 corpus: every email gets the same NUMBER of addresses as before, and the same real-estate flag", () => {
     // Inputs: everything the extractor and Learn suites pass to the real
     // analyzeEmail, the same with state ZZ, and the synthetic cases above.

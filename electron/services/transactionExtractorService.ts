@@ -591,12 +591,10 @@ class TransactionExtractorService {
     // BACKLOG-4225 changes only the string kept for each match: its
     // city/state tail is kept when it is a real one-line tail (strict
     // pattern), otherwise the match is cut at the street suffix.
-    // Fresh copies: `patterns.address` is a shared /g regex, and its
-    // `.test()` calls elsewhere leave lastIndex where a match ended.
-    let found = [...text.matchAll(new RegExp(DETECT_WITH_ZIP))];
+    let found = [...text.matchAll(DETECT_WITH_ZIP)];
     let strict = ADDRESS_WITH_ZIP;
     if (found.length === 0) {
-      found = [...text.matchAll(new RegExp(DETECT_NO_ZIP))];
+      found = [...text.matchAll(DETECT_NO_ZIP)];
       strict = ADDRESS_NO_ZIP;
     }
     // Duplicates are removed on the matched text, as before, so each email
