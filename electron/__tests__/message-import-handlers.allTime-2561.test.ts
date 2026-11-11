@@ -204,11 +204,7 @@ beforeAll(() => {
   mockIpcHandle.mockImplementation((channel: string, handler: RegisteredIpcHandler) => {
     handlers.set(channel, handler);
   });
-  registerMessageImportHandlers({
-    isDestroyed: () => true,
-    webContents: { send: jest.fn() },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any);
+  registerMessageImportHandlers();
 });
 
 describe("BACKLOG-2561 · messages:import-macos honours an explicit All time", () => {

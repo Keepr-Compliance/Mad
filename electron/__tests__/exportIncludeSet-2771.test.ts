@@ -205,7 +205,7 @@ describe("BACKLOG-2771: every export entry point resolves its include set once",
       handlers.set(channel, handler as never);
     });
     mockGetTransactionDetails.mockResolvedValue(details());
-    registerTransactionExportHandlers(null);
+    registerTransactionExportHandlers({ startSubmissionSync: false });
   });
 
   /** The plan `transactions:export-folder` handed folderExportService. */

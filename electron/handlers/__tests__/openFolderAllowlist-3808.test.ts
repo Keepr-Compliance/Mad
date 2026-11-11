@@ -72,7 +72,7 @@ function openFolder(p: unknown): Promise<OpenResult> {
 }
 
 beforeAll(() => {
-  registerConversationHandlers({} as never);
+  registerConversationHandlers();
 });
 
 beforeEach(async () => {

@@ -4,7 +4,6 @@
 // ============================================
 
 import { ipcMain } from "electron";
-import type { BrowserWindow } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import transactionService from "../services/transactionService";
 import { getEarliestCommunicationDate } from "../services/transactionService";
@@ -122,11 +121,8 @@ import { sendToMainWindow } from "../windowRegistry";
 
 /**
  * Register transaction CRUD IPC handlers
- * @param _mainWindow - Main window instance (used to push auto-sync events to renderer, BACKLOG-1832) (BACKLOG-3454: IGNORED — pushes resolve the live window via sendToMainWindow; kept so existing call sites and suites compile)
  */
-export function registerTransactionCrudHandlers(
-  _mainWindow: BrowserWindow | null,
-): void {
+export function registerTransactionCrudHandlers(): void {
   /**
    * BACKLOG-1832: returns onStart/onComplete callbacks that push IPC events to
    * the renderer so the UI can show a syncing indicator and auto-refresh emails.

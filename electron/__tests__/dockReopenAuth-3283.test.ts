@@ -269,7 +269,7 @@ describe("BACKLOG-3283", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     setMainWindow(windowA as any);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    registerAuthHandlers(windowA as any);
+    registerAuthHandlers();
   });
 
   beforeEach(() => {

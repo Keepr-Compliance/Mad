@@ -303,7 +303,7 @@ beforeEach(() => {
   mockDb = openTestDb();
   mockDb.exec(CONTACT_IDENTITY_SCHEMA);
   registeredHandlers.clear();
-  registerContactHandlers({} as any);
+  registerContactHandlers();
   seed();
 });
 

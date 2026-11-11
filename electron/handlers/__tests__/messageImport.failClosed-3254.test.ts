@@ -121,10 +121,7 @@ function handlerFor(channel: string): Handler {
 const EVENT = {} as IpcMainInvokeEvent;
 
 beforeAll(() => {
-  registerMessageImportHandlers({
-    isDestroyed: () => false,
-    webContents: { send: jest.fn() },
-  } as never);
+  registerMessageImportHandlers();
   for (const [channel, handler] of mockIpcHandle.mock.calls as Array<[string, Handler]>) {
     registered.set(channel, handler);
   }

@@ -124,7 +124,7 @@ const invoke = (channel: string, ...args: unknown[]): Promise<any> => {
 };
 
 beforeAll(() => {
-  registerTransactionCrudHandlers(null);
+  registerTransactionCrudHandlers();
 });
 
 beforeEach(() => {

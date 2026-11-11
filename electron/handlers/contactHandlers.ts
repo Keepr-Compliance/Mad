@@ -3,7 +3,7 @@
 // This file contains contact handlers to be registered in main.js
 // ============================================
 
-import { ipcMain, BrowserWindow, app } from "electron";
+import { ipcMain, app } from "electron";
 import type { IpcMainInvokeEvent } from "electron";
 import { randomUUID } from "crypto";
 import * as Sentry from "@sentry/electron/main";
@@ -1226,9 +1226,8 @@ async function backfillImportedContactsFromExternal(userId: string): Promise<{ u
 
 /**
  * Register all contact-related IPC handlers
- * @param _mainWindow - The main browser window for emitting progress events (BACKLOG-3454: IGNORED — pushes resolve the live window via sendToMainWindow; kept so existing call sites and suites compile)
  */
-export function registerContactHandlers(_mainWindow: BrowserWindow): void {
+export function registerContactHandlers(): void {
 
   // TASK-2300: Register contact sync providers
   // TASK-2301: Both providers registered here (not at module load) to avoid side effects during import

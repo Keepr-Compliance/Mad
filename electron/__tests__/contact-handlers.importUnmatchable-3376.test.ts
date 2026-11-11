@@ -329,7 +329,7 @@ beforeEach(() => {
   (SentryMock as any).addBreadcrumb.mockClear();
   batchSpy.mockClear();
   (logServiceMock.error as jest.Mock).mockClear();
-  registerContactHandlers({ isDestroyed: () => false, webContents: { send: jest.fn() } } as any);
+  registerContactHandlers();
 });
 
 afterEach(() => {

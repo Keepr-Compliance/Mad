@@ -155,7 +155,7 @@ beforeEach(() => {
   insertContact.run(CONTACT_A, USER_A, "Ada Example");
   insertContact.run(CONTACT_B, USER_B, "Bo Example");
 
-  registerContactHandlers({} as never);
+  registerContactHandlers();
 });
 
 afterEach(() => {

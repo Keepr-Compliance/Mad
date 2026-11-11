@@ -93,7 +93,7 @@ describe("emails:precache handler — a force run that changed nothing (BACKLOG-
   let precache: IpcHandler;
 
   beforeAll(() => {
-    registerEmailSyncHandlers({} as never);
+    registerEmailSyncHandlers();
     precache = handlers.get("emails:precache")!;
     expect(precache).toBeDefined();
   });

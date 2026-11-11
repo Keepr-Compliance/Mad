@@ -69,7 +69,7 @@ describe("BACKLOG-3816: sync:cancel names its trigger", () => {
     handlers.clear();
     const win = { isDestroyed: () => false, webContents: { id: MAIN_ID, send: jest.fn() } };
     setMainWindow(win as never);
-    registerSyncHandlers(win as never);
+    registerSyncHandlers();
   });
 
   afterEach(() => {

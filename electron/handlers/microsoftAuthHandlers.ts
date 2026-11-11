@@ -3,7 +3,7 @@
  * Handles Outlook mailbox connection flows (sign-in is the browser deep link)
  */
 
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain } from "electron";
 
 // Import services
 import databaseService from "../services/databaseService";
@@ -36,7 +36,6 @@ interface LoginStartResponse extends AuthResponse {
  * Microsoft Auth: Connect mailbox (Outlook/Mail access)
  */
 export async function handleMicrosoftConnectMailbox(
-  _mainWindow: BrowserWindow | null,
   userId: string
 ): Promise<LoginStartResponse> {
   try {
@@ -258,10 +257,8 @@ export async function handleMicrosoftConnectMailbox(
 /**
  * Register all Microsoft auth handlers
  */
-export function registerMicrosoftAuthHandlers(
-  _mainWindow: BrowserWindow | null
-): void {
+export function registerMicrosoftAuthHandlers(): void {
   ipcMain.handle("auth:microsoft:connect-mailbox", (event, userId: string) =>
-    handleMicrosoftConnectMailbox(_mainWindow, userId)
+    handleMicrosoftConnectMailbox(userId)
   );
 }

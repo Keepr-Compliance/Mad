@@ -3,7 +3,7 @@
  * Handles Gmail mailbox connection flows (sign-in is the browser deep link)
  */
 
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain } from "electron";
 
 // Import services
 import databaseService from "../services/databaseService";
@@ -40,7 +40,6 @@ interface MailboxConnectionResponse extends AuthResponse {
  * Google Auth: Connect mailbox (Gmail access)
  */
 export async function handleGoogleConnectMailbox(
-  _mainWindow: BrowserWindow | null,
   userId: string
 ): Promise<MailboxConnectionResponse> {
   try {
@@ -291,11 +290,9 @@ export async function handleGoogleConnectMailbox(
 /**
  * Register all Google authentication handlers
  */
-export function registerGoogleAuthHandlers(
-  _mainWindow: BrowserWindow | null
-): void {
+export function registerGoogleAuthHandlers(): void {
   // Google Auth - Mailbox Connection
   ipcMain.handle("auth:google:connect-mailbox", (_event, userId: string) =>
-    handleGoogleConnectMailbox(_mainWindow, userId)
+    handleGoogleConnectMailbox(userId)
   );
 }
