@@ -481,6 +481,26 @@ BEGIN
   g := pg_temp.q(NULL, 'anon', format('SELECT public.domain_capture_history(%L::uuid)::text', oA));
   INSERT INTO r3962 VALUES ('Y04_history_anon_no_execute', g LIKE 'ERR 42501%', g);
 
+  -- ---- PR3b: an opt-out belongs to one organization -----------------------------------------
+  -- p_opt opted out of A. A withdraws its claim, B verifies the same domain: in B the person is
+  -- convertible and start schedules them (the opt-out check is scoped to the organization).
+  g := pg_temp.q(uAdmA, 'authenticated', format('SELECT public.domain_claim_withdraw(%L::uuid)::text', cA));
+  INSERT INTO public.domain_claims (id, organization_id, domain, token, status, verified_at, last_checked_at, last_check_result)
+    VALUES (pg_temp.id('cB'), oB, 'cap-3962.test',
+            'keepr-domain-verification=' || substr(md5('t3962cB') || md5('u3962cB'), 1, 48),
+            'verified', now() - interval '20 days', now(), 'verified');
+  g := pg_temp.q(uAdmB, 'authenticated', format('SELECT public.domain_capture_candidates(%L::uuid, %L::uuid)::text', oB, pg_temp.id('cB')));
+  j := CASE WHEN g LIKE '{%' THEN g::jsonb ELSE '{}'::jsonb END;
+  INSERT INTO r3962 VALUES ('Q03_opt_out_of_one_org_is_convertible_in_another',
+    (SELECT x ->> 'convertible' FROM jsonb_array_elements(coalesce(j -> 'candidates', '[]'::jsonb)) x
+      WHERE x ->> 'email' = 'opt@cap-3962.test') = 'true', left(g, 400));
+  g := pg_temp.start(uAdmB, oB, pg_temp.id('cB'), ARRAY[pOpt]);
+  j := CASE WHEN g LIKE '{%' THEN g::jsonb ELSE '{}'::jsonb END;
+  INSERT INTO r3962 VALUES ('Q04_start_schedules_person_opted_out_elsewhere',
+    jsonb_array_length(coalesce(j -> 'scheduled', '[]'::jsonb)) = 1
+      AND (SELECT count(*) FROM public.domain_capture_switches WHERE user_id = pOpt AND organization_id = oB AND status = 'scheduled') = 1
+      AND (SELECT count(*) FROM public.domain_capture_switches WHERE user_id = pOpt AND organization_id = oA AND status = 'opted_out') = 1, left(g, 400));
+
   FOR k IN SELECT * FROM r3962 ORDER BY 1 LOOP
     IF k.ok IS TRUE THEN v_pass := v_pass + 1;
     ELSE v_fail := v_fail + 1; reds := reds || jsonb_build_object(k.k, left(coalesce(k.got, 'null'), 300));

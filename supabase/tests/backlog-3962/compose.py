@@ -112,6 +112,9 @@ MUTANTS3 = {
     # PR3b: opt-out no longer final (eval skip removed)
     'C_no_opt_out_skip': [("              WHERE s.user_id = p_user AND s.organization_id = p_org AND s.status = 'opted_out') THEN\n    RETURN 'no:opted_out';\n",
                            "              WHERE false) THEN\n    RETURN 'no:opted_out';\n")],
+    # PR3b: the opt-out check not scoped to the organization (an opt-out anywhere blocks everywhere)
+    'C_opt_out_any_org': [("              WHERE s.user_id = p_user AND s.organization_id = p_org AND s.status = 'opted_out') THEN\n    RETURN 'no:opted_out';\n",
+                           "              WHERE s.user_id = p_user AND s.status = 'opted_out') THEN\n    RETURN 'no:opted_out';\n")],
     # PR3b: deferral reasons not recorded
     'C_no_defer_reason': [("    UPDATE public.domain_capture_switches SET last_defer_reason = 'billing_setup_incomplete', updated_at = now() WHERE id = v_row.id;\n", "")],
     # PR3b: deferral reason not cleared when a row ends (trigger body neutered)

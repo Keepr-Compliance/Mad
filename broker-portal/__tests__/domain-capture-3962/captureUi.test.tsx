@@ -26,6 +26,7 @@ import {
   CAPTURE_REASON_COPY,
   CAPTURE_EMPTY_TITLE,
   captureStartConfirmText,
+  formatCaptureDate,
 } from '@/lib/domain/captureCopy';
 import { loadCaptureNotice, loadCaptureSection, type CaptureDomainView } from '@/lib/domain/captureView';
 import CaptureSection from '@/app/dashboard/settings/domain/CaptureSection';
@@ -149,7 +150,7 @@ describe('capture table', () => {
     expect(row('u-tenant').getByText("Can't move automatically")).toBeTruthy();
     expect(row('u-tenant').getByText(CAPTURE_REASON_COPY.no_tenant)).toBeTruthy();
     expect(row('u-attest').getByText(CAPTURE_REASON_COPY.no_attestation)).toBeTruthy();
-    expect(row('u-sched').getByText(`Scheduled for ${new Date(FUTURE).toLocaleDateString()}`)).toBeTruthy();
+    expect(row('u-sched').getByText(`Scheduled for ${formatCaptureDate(FUTURE)}`)).toBeTruthy();
     expect(row('u-retry').getByText('The notice email is being retried.')).toBeTruthy();
     expect(row('u-wait').getByText('Waiting to move')).toBeTruthy();
     expect(row('u-bill').getByText('Waiting on billing setup')).toBeTruthy();
@@ -195,7 +196,7 @@ describe('capture table', () => {
     fireEvent.click(row('u-can').getByRole('checkbox'));
     fireEvent.click(row('u-can2').getByRole('checkbox'));
     fireEvent.click(screen.getByRole('button', { name: 'Start' }));
-    const date = new Date(Date.now() + 14 * 86_400_000).toLocaleDateString();
+    const date = formatCaptureDate(new Date(Date.now() + 14 * 86_400_000).toISOString());
     expect(screen.getByTestId('capture-start-confirm-text').textContent).toBe(captureStartConfirmText(2, date));
     expect(screen.getByTestId('capture-start-confirm-text').textContent).toBe(
       `These 2 people get an email today and move on ${date}. Each can opt out until then.`,
@@ -263,7 +264,7 @@ describe('personal-owner banner', () => {
   it('shows the brokerage and date; opting out needs the confirm step', async () => {
     optOut.mockResolvedValue({ success: true, message: 'ok' });
     render(<CaptureNoticeBanner notice={NOTICE} />);
-    expect(screen.getByText(`A Brokerage will move your Keepr account on ${new Date(FUTURE).toLocaleDateString()}.`)).toBeTruthy();
+    expect(screen.getByText(`A Brokerage will move your Keepr account on ${formatCaptureDate(FUTURE)}.`)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: CAPTURE_KEEP_BUTTON }));
     expect(optOut).not.toHaveBeenCalled();
     const dialog = screen.getByRole('dialog');

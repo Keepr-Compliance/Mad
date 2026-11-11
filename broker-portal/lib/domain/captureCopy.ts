@@ -100,7 +100,16 @@ export function captureKeepConfirmText(brokerageName: string): string {
 }
 export const CAPTURE_KEEP_DONE = "You'll keep your personal account.";
 
+// switch_at is a UTC instant. Dates are shown in UTC with a fixed locale so the server render and
+// the browser render of the same instant are identical (toLocaleDateString() uses each side's own
+// time zone and locale, which breaks hydration near midnight).
+const CAPTURE_DATE_FORMAT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'UTC',
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+});
 export function formatCaptureDate(iso: string): string {
   const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString();
+  return Number.isNaN(d.getTime()) ? iso : CAPTURE_DATE_FORMAT.format(d);
 }
