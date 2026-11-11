@@ -9,7 +9,7 @@
  * and the database re-evaluates every person.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Badge,
@@ -90,6 +90,24 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const now = Date.now();
+  const selectAllRef = useRef<HTMLInputElement>(null);
+  const selectableIds = view.rows.filter(isSelectable).map((r) => r.userId);
+  const selectedCount = selectableIds.filter((id) => selected.has(id)).length;
+  const allSelected = selectableIds.length > 0 && selectedCount === selectableIds.length;
+  const someSelected = selectedCount > 0 && !allSelected;
+
+  useEffect(() => {
+    if (selectAllRef.current) selectAllRef.current.indeterminate = someSelected;
+  }, [someSelected]);
+
+  const toggleAll = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) selectableIds.forEach((id) => next.delete(id));
+      else selectableIds.forEach((id) => next.add(id));
+      return next;
+    });
+  };
 
   const toggle = (userId: string) => {
     setSelected((prev) => {
@@ -166,6 +184,14 @@ function DomainCapture({ view }: { view: CaptureDomainView }) {
               <tr>
                 <Th>
                   <span className="sr-only">Select</span>
+                  <input
+                    ref={selectAllRef}
+                    type="checkbox"
+                    aria-label="Select everyone who can move"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    disabled={busy || selectableIds.length === 0}
+                  />
                 </Th>
                 <Th>Name</Th>
                 <Th>Status</Th>

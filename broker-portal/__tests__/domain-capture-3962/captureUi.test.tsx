@@ -180,6 +180,44 @@ describe('capture table', () => {
     }
   });
 
+  describe('select all', () => {
+    const all = () => screen.getByRole('checkbox', { name: 'Select everyone who can move' }) as HTMLInputElement;
+    const SELECTABLE = ['u-can', 'u-can2', 'u-undeliv'];
+    const NOT = ['u-tenant', 'u-attest', 'u-sched', 'u-wait', 'u-bill', 'u-opted', 'u-moved', 'u-susp'];
+
+    it('ticks every selectable row and none of the others, and enables Start', async () => {
+      render(<CaptureSection domains={await loadView()} />);
+      fireEvent.click(all());
+      for (const id of SELECTABLE) expect((row(id).getByRole('checkbox') as HTMLInputElement).checked).toBe(true);
+      for (const id of NOT) expect(row(id).queryAllByRole('checkbox')).toHaveLength(0);
+      expect(screen.getAllByRole('checkbox').filter((c) => (c as HTMLInputElement).checked)).toHaveLength(SELECTABLE.length + 1);
+      expect(all().checked).toBe(true);
+      expect((screen.getByRole('button', { name: 'Start' }) as HTMLButtonElement).disabled).toBe(false);
+    });
+
+    it('a second click clears everything', async () => {
+      render(<CaptureSection domains={await loadView()} />);
+      fireEvent.click(all());
+      fireEvent.click(all());
+      for (const id of SELECTABLE) expect((row(id).getByRole('checkbox') as HTMLInputElement).checked).toBe(false);
+      expect(all().checked).toBe(false);
+      expect((screen.getByRole('button', { name: 'Start' }) as HTMLButtonElement).disabled).toBe(true);
+    });
+
+    it('is indeterminate, not checked, when only some rows are ticked', async () => {
+      render(<CaptureSection domains={await loadView()} />);
+      fireEvent.click(row('u-can').getByRole('checkbox'));
+      expect(all().indeterminate).toBe(true);
+      expect(all().checked).toBe(false);
+    });
+
+    it('is disabled when no row can be selected', async () => {
+      const only = [candidate({ user_id: 'u-tenant', email: 'ms@a-brokerage.example', attestation: null, convertible: false, reason: 'no_tenant' })];
+      render(<CaptureSection domains={await loadView(only, [])} />);
+      expect(all().disabled).toBe(true);
+    });
+  });
+
   it('Start is disabled until someone is selected', async () => {
     render(<CaptureSection domains={await loadView()} />);
     const btn = screen.getByRole('button', { name: 'Start' }) as HTMLButtonElement;
