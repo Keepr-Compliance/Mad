@@ -51,3 +51,11 @@ bash concurrency-pr3.sh [base|C_no_lock|C_no_lock_no_fallback]
 runs two overlapping switch calls, prints the result, and deletes the fixture. A mutant mode installs
 the mutated `_domain_capture_switch` for the run and restores the migration's body (md5 printed).
 Results: `results-pr3-2026-11-10.txt`.
+
+## PR3b additions (same migration, 20261112113000)
+
+`domain_capture_history(uuid)`, the final opt-out (`no:opted_out` in `_domain_capture_eval`), the
+`name` and `last_defer_reason` fields, and the `last_defer_reason` column with its clearing trigger.
+New cases: K07, Q01-Q02, W10-W11, B06-B08, Y01-Y04. New mutants: `C_no_opt_out_skip`,
+`C_no_defer_reason`, `C_defer_not_cleared`, `C_history_no_admin_check`, `C_history_grant_anon`.
+Results: `results-pr3b-2026-11-11.txt`.
