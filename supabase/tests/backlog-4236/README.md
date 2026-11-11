@@ -22,6 +22,7 @@ REPLACE` keeps an existing function's ACL, which would hide a dropped REVOKE.
 The one mutant marked `want green`, `S03_upload_without_path_pin`, is measured equivalent in this
 venue and kept so the claim stays checked: the blob row's path CHECK (`<owner>/<id>`) plus the
 policy's owner term make the path pin redundant.
+`F02_blobs_locked_per_row` is listed but not run in a single session; the two-session case C4 covers it.
 
 Results: `results-2026-11-11.txt` (ends with a catalog query showing no residue).
 
