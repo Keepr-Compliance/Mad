@@ -1,0 +1,9 @@
+BACKLOG-3962 PR2 SQL controls, keepr-test, 2026-11-10 (commit 6349ca14f; PR2 applied to keepr-test, body md5 4bd4ec9ec24d0bf54590822052bb52ea)
+pr2_live                   pass 12 fail 0
+pr2                        pass 12 fail 0
+P2_cutoff_any_status       pass 10 fail 2  reds P01_verified_due_with_its_org, P04_verified_31d_counted_miss_still_due
+P2_cutoff_on_last_checked  pass 9  fail 3  reds P03_lapsed_30d1h_not_due, P03b_not_due_row_not_stamped, P09_manual_begin_on_old_lapsed_ok
+P2_no_cutoff               pass 9  fail 3  reds P03_lapsed_30d1h_not_due, P03b_not_due_row_not_stamped, P09_manual_begin_on_old_lapsed_ok
+P2_pin_wrong_md5           raised: _domain_claims_due_for_recheck md5 dc93015cbbcc7f6a77bcd8325f3a02d9 is not the PR1 body
+PR1 base (KEEPR_3962_APPLIED=1) pass 64 fail 0
+obs lapsed_null_counted_is_due: false under the PR2 body (no function writes a lapsed row with a NULL last_miss_counted_at)
