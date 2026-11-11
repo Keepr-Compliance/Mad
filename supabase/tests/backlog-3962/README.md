@@ -36,3 +36,18 @@ bash run.sh pr2_live        # controls-pr2.sql against the body applied on the v
 `pr2` modes need the PR1 table on the venue. Each composes `rollback-3962-pr2.sql` (the PR1 body),
 the PR2 migration or a mutant of it, and `controls-pr2.sql`, in one transaction that ends in RAISE.
 Results: `results-pr2-2026-11-10.txt`.
+
+## PR3a (`20261112113000_backlog_3962_domain_capture.sql`)
+
+```
+bash run.sh pr3 C_always_unassigned C_always_active C_ignore_notice ...   # see MUTANTS3 in compose.py
+bash run.sh pr3_rollback
+KEEPR_3962_APPLIED=1 bash run.sh pr3     # once applied: the composed text runs rollback-3962-pr3.sql first
+bash run.sh pr3_live                     # controls-pr3.sql against the objects applied on the venue
+bash concurrency-pr3.sh [base|C_no_lock|C_no_lock_no_fallback]
+```
+
+`concurrency-pr3.sh` COMMITS a small fixture (two sessions cannot see each other's uncommitted rows),
+runs two overlapping switch calls, prints the result, and deletes the fixture. A mutant mode installs
+the mutated `_domain_capture_switch` for the run and restores the migration's body (md5 printed).
+Results: `results-pr3-2026-11-10.txt`.
