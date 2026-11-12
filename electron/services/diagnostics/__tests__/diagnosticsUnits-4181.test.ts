@@ -342,31 +342,44 @@ describe("transport filter, each check on its own", () => {
 
 describe("static checks: device id never on scope, never the hardware id (C7, C10)", () => {
   const root = path.resolve(__dirname, "../../../..");
+  // BACKLOG-4185: the device-profile collector and EVERY file in
+  // electron/services/deviceProfile/ (a directory listing, not a name list).
+  const profileDir = path.join(root, "electron/services/deviceProfile");
+  const profileFiles = fs
+    .readdirSync(profileDir)
+    .filter((f) => f.endsWith(".ts"))
+    .map((f) => path.join(profileDir, f));
   const files = [
     ...fs
       .readdirSync(path.join(root, "electron/services/diagnostics"))
-      .filter((f) => /^(perf|fields|diagnosticsLogTransport)\.ts$/.test(f))
+      .filter((f) => /^(perf|fields|diagnosticsLogTransport|deviceProfileCollector)\.ts$/.test(f))
       .map((f) => path.join(root, "electron/services/diagnostics", f)),
     path.join(root, "electron/services/diagnosticsSharingPreference.ts"),
+    ...profileFiles,
   ];
   const SCOPE_CALL = /\b(setTag|setTags|setUser|setContext|setAttribute|setAttributes|setExtra|setExtras)\s*\(/;
   const DEVICE_SERVICE = /from\s+["'][^"']*deviceService["']|require\(\s*["'][^"']*deviceService["']\s*\)|machineIdSync|node-machine-id/;
+  const SYNC_CHILD = /\b(execSync|execFileSync|spawnSync)\b/;
 
-  it("scans the four diagnostics files (positive control: the list is complete)", () => {
-    expect(files).toHaveLength(4);
+  it("scans the five diagnostics files plus every deviceProfile file (positive control: the list is complete)", () => {
+    expect(profileFiles.length).toBeGreaterThanOrEqual(3);
+    expect(files).toHaveLength(5 + profileFiles.length);
     for (const f of files) expect(fs.existsSync(f)).toBe(true);
   });
 
   it("the patterns match the shapes they forbid (positive control)", () => {
     expect(SCOPE_CALL.test('Sentry.getCurrentScope().setTag("keepr.deviceId", id)')).toBe(true);
     expect(DEVICE_SERVICE.test('import { getDeviceId } from "../services/deviceService";')).toBe(true);
+    expect(SYNC_CHILD.test('const out = execSync("ioreg -rd1");')).toBe(true);
+    expect(SYNC_CHILD.test('execFile("/usr/sbin/diskutil", args, cb)')).toBe(false);
   });
 
-  it("no scope setter and no hardware id in diagnostics code", () => {
+  it("no scope setter, no hardware id and no sync child process in diagnostics code", () => {
     for (const f of files) {
       const code = fs.readFileSync(f, "utf8").replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
       expect({ f, scope: SCOPE_CALL.test(code) }).toEqual({ f, scope: false });
       expect({ f, device: DEVICE_SERVICE.test(code) }).toEqual({ f, device: false });
+      expect({ f, syncChild: SYNC_CHILD.test(code) }).toEqual({ f, syncChild: false });
     }
   });
 });
