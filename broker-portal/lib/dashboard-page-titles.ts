@@ -19,7 +19,6 @@ export const PAGE_TITLES = {
   billing: 'Billing',
   reports: 'Reports',
   setup: 'Account Setup',
-  aiApps: 'AI apps',
 } as const;
 
 /** Exact-path titles, relative to /dashboard. */
@@ -29,7 +28,6 @@ const EXACT: Record<string, string> = {
   '/settings': PAGE_TITLES.settings,
   '/settings/scim': PAGE_TITLES.scim,
   '/account': PAGE_TITLES.account,
-  '/account/ai-apps': PAGE_TITLES.aiApps,
   '/support': PAGE_TITLES.support,
   '/support/new': PAGE_TITLES.supportNew,
   '/checklists': PAGE_TITLES.checklists,

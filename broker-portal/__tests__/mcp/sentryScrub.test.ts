@@ -56,10 +56,10 @@ function plantedEvent(url: string, extra: Record<string, unknown> = {}) {
 const SCRUBBED_URLS = [
   'https://portal.test/api/mcp',
   'https://portal.test/api/mcp/resource-metadata',
-  'https://portal.test/oauth/consent?authorization_id=x',
-  'https://portal.test/oauth/consent/start',
+  'https://portal.test/oauth/authorize?x=1',
+  'https://portal.test/oauth/a/b',
   '/api/mcp',
-  '/oauth/consent',
+  '/oauth',
   'https://portal.test/API/MCP',
 ];
 

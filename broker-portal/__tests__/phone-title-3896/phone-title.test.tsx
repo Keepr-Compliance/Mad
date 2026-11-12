@@ -56,7 +56,6 @@ const EXPECTED: Record<string, string> = {
   '/dashboard/settings': 'Settings',
   '/dashboard/settings/scim': 'SCIM Provisioning',
   '/dashboard/account': 'My Account',
-  '/dashboard/account/ai-apps': 'AI apps',
   '/dashboard/support': 'Support',
   '/dashboard/support/new': 'Submit a Support Request',
   '/dashboard/support/t-1': 'Ticket',

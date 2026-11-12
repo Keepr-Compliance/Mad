@@ -1,5 +1,5 @@
 /**
- * Sentry scrub for the MCP endpoint and the consent pages (BACKLOG-4237).
+ * Sentry scrub for the MCP endpoint and /oauth paths (BACKLOG-4237).
  *
  * For an event or transaction whose request is under /api/mcp or /oauth, the
  * request headers, cookies, body and query string are removed. Other events

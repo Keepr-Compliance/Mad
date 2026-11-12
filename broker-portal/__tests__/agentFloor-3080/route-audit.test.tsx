@@ -389,8 +389,6 @@ const REFUSED_PAGES: Record<string, PageEntry> = {
 /** The floor: open to every portal user. Scoping of their data is covered elsewhere. */
 const FLOOR_PAGES = [
   'app/dashboard/account/page.tsx',
-  // BACKLOG-4237: a resume link to /oauth/consent; reads nothing.
-  'app/dashboard/account/ai-apps/page.tsx',
   'app/dashboard/support/page.tsx',
   'app/dashboard/support/new/page.tsx',
   'app/dashboard/support/[id]/page.tsx',
@@ -762,9 +760,6 @@ const FLOOR_ACTIONS = [
   // Broker/Admin). An agent is refused before any Stripe call (__tests__/seats-3854).
   'lib/actions/seats.ts#addSeats',
   'lib/actions/billingPortal.ts#openBrokerageBillingPortal',
-  // BACKLOG-4237: approve/deny the signed-in user's own pending AI-app authorization
-  // with their own session; no service role.
-  'app/oauth/consent/actions.ts#decideConsent',
 ];
 
 /**
@@ -862,8 +857,6 @@ const KNOWN_ROUTE_HANDLERS = [
   'app/auth/logout/route.ts',
   'app/auth/setup/callback/route.ts',
   'app/setup/consent/callback/route.ts',
-  // BACKLOG-4237: GET only; sets the pending-authorization cookie and redirects to /login.
-  'app/oauth/consent/start/route.ts',
 ];
 
 // ---------------------------------------------------------------------------
@@ -1013,7 +1006,7 @@ describe('discovery can see what it claims to see', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
     expect(pages).toContain('app/dashboard/users/[id]/page.tsx');
-    expect(pages.length).toBe(20); // BACKLOG-4237: + account/ai-apps; BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
+    expect(pages.length).toBe(19); // BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
   });
 
   it('finds route handlers, keyed POSIX on any OS (R8)', () => {
@@ -1032,7 +1025,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(31); // BACKLOG-4237: + mcp, mcp/resource-metadata, oauth/consent/start; BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session
+    expect(handlers.length).toBe(30); // BACKLOG-4237: + mcp, mcp/resource-metadata; BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {
@@ -1052,7 +1045,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(59); // BACKLOG-4237: + decideConsent; BACKLOG-3854: + addSeats, openBrokerageBillingPortal; BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
+    expect(actions.length).toBe(58); // BACKLOG-3854: + addSeats, openBrokerageBillingPortal; BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
   });
 });
 

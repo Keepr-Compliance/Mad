@@ -1,6 +1,6 @@
 /**
  * BACKLOG-4237 — the middleware matcher skips /api/mcp and its sub-paths, and
- * still runs on the consent page and on look-alike paths.
+ * still runs on /oauth paths and on look-alike paths.
  *
  * Runs Next's own matcher logic against the REAL exported `config`.
  *
@@ -20,14 +20,13 @@ describe('BACKLOG-4237 middleware matcher', () => {
   });
 
   it.each([
-    '/oauth/consent',
-    '/oauth/consent?authorization_id=abc',
-    '/oauth/consent/start',
-    '/oauth/consent/resume',
+    '/oauth',
+    '/oauth/authorize',
+    '/oauth/authorize?x=1',
+    '/oauth/a/b',
     '/api/mcpx',
     '/api/mcp-admin',
     '/api/billing/plan-summary',
-    '/dashboard/account/ai-apps',
     '/dashboard/api/mcp',
   ])('still runs middleware for %s', (url) => {
     expect(runs(url)).toBe(true);
