@@ -135,14 +135,16 @@ describe('H11: request hygiene, no database call', () => {
 
   it('an Authorization header → 401 invalid_client with a Basic challenge', async () => {
     const res = await post(form(CODE_GRANT), { headers: { authorization: `Basic ${PLANTED_PLAIN}` } });
-    expect(res.headers.get('www-authenticate')).toBe('Basic realm="keepr"');
     await expectError(res, 401, 'invalid_client');
+    expect(res.headers.get('www-authenticate')).toBe('Basic realm="keepr"');
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
   it.each([
     ['grant_type sent twice', `${form(CODE_GRANT)}&grant_type=authorization_code`, 'invalid_request'],
     ['code sent twice', `${form(CODE_GRANT)}&code=${CODE}`, 'invalid_request'],
+    ['redirect_uri sent twice', `${form(CODE_GRANT)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`, 'invalid_request'],
+    ['client_secret sent twice', `${form(CODE_GRANT)}&client_secret=a&client_secret=b`, 'invalid_request'],
     ['resource sent twice', `${form({ ...CODE_GRANT, resource: RESOURCE })}&resource=${encodeURIComponent(RESOURCE)}`, 'invalid_target'],
     ['client_secret', form({ ...CODE_GRANT, client_secret: PLANTED_PLAIN }), 'invalid_client'],
     ['client_assertion', form({ ...CODE_GRANT, client_assertion: PLANTED_PLAIN }), 'invalid_client'],
@@ -212,6 +214,11 @@ describe('H13: authorization_code exchange', () => {
     expect(args.p_at_digest).not.toBe(args.p_rt_digest);
   });
 
+  it('the access and refresh tokens come from separate random values', async () => {
+    const body = await (await post(form(CODE_GRANT))).json();
+    expect(body.access_token.slice('kpr_at_'.length)).not.toBe(body.refresh_token.slice('kpr_rt_'.length));
+  });
+
   it('answers 200 with the issued tokens and the database values', async () => {
     mockRpc.mockResolvedValue({ data: { ...tokenOk(), expires_in: 1234 }, error: null });
     const res = await post(form(CODE_GRANT));
@@ -258,9 +265,9 @@ describe('H14: refresh', () => {
   it('a transport error → 503 and the database is called once', async () => {
     mockRpc.mockResolvedValue({ data: null, error: postgrestFetchError(PLANTED_PLAIN).error });
     const res = await post(form(REFRESH_GRANT));
-    expect(res.headers.get('retry-after')).toBe('2');
     await expectError(res, 503, 'temporarily_unavailable');
     expect(mockRpc).toHaveBeenCalledTimes(1);
+    expect(res.headers.get('retry-after')).toBe('2');
   });
 
   it('a database invalid_request (token insert failure) → 400 invalid_request', async () => {
@@ -291,8 +298,8 @@ describe('H15b: result mapping', () => {
   it('database rate_limited → 429 invalid_request with Retry-After 60', async () => {
     mockRpc.mockResolvedValue({ data: refusal('rate_limited'), error: null });
     const res = await post(form(CODE_GRANT));
-    expect(res.headers.get('retry-after')).toBe('60');
     await expectError(res, 429, 'invalid_request');
+    expect(res.headers.get('retry-after')).toBe('60');
   });
 
   it.each([
@@ -311,8 +318,8 @@ describe('H15b: result mapping', () => {
   ])('%s → 503 temporarily_unavailable, never invalid_grant', async (_l, reply) => {
     mockRpc.mockResolvedValue(reply);
     const res = await post(form(CODE_GRANT));
-    expect(res.headers.get('retry-after')).toBe('2');
     await expectError(res, 503, 'temporarily_unavailable');
+    expect(res.headers.get('retry-after')).toBe('2');
   });
 
   it('a thrown database call → 503 temporarily_unavailable', async () => {

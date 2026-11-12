@@ -226,6 +226,14 @@ describe('H7: never redirects to the client for a request it cannot trust', () =
     expect(mockRpc).not.toHaveBeenCalled();
   });
 
+  it('a query of 4097 bytes → 400 page, no database call', async () => {
+    const base = query({ ...GOOD, pad: '' });
+    const search = query({ ...GOOD, pad: 'x'.repeat(4098 - base.length) });
+    expect(search.length - 1).toBe(4097);
+    await expectPage(await get(search), 400);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
   it('positive: a query of exactly 4096 bytes passes the size check', async () => {
     const base = query({ ...GOOD, pad: '' });
     const search = query({ ...GOOD, pad: 'x'.repeat(4097 - base.length) });
