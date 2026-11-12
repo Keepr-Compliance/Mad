@@ -92,7 +92,7 @@ function allowLearn(state: "allowed" | "blocked" | "unknown" | "pending" = "allo
         : Promise.resolve(state)
       : Promise.resolve("blocked")) as typeof window.api.featureGate.strictState);
   (window.api as unknown as { learn: unknown }).learn = {
-    getState: jest.fn().mockResolvedValue({ success: true, available: state === "allowed", enabled: false, answers: { deal: 0, bulk: 0 } }),
+    getState: jest.fn().mockResolvedValue({ success: true, available: state === "allowed", enabled: false, answers: { deal: 0, bulk: 0 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null }),
   };
 }
 

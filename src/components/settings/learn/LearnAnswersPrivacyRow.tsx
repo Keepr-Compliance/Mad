@@ -14,9 +14,12 @@
 import React, { useCallback, useEffect, useState } from "react";
 import learnModeService from "@/services/learnModeService";
 import { LearnAnswersList } from "./LearnAnswersList";
+import { PILOT_PRIVACY_DELETE_TOO, PILOT_PRIVACY_SHARED } from "./learnPilotCopy";
 
 export function LearnAnswersPrivacyRow(): React.ReactElement | null {
   const [count, setCount] = useState(0);
+  // BACKLOG-4219: "Help improve Keepr" is ON.
+  const [sharing, setSharing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -24,7 +27,10 @@ export function LearnAnswersPrivacyRow(): React.ReactElement | null {
 
   const loadCount = useCallback(async (isCancelled: () => boolean = () => false) => {
     const st = await learnModeService.getState();
-    if (!isCancelled() && st.success) setCount(st.answers.deal + st.answers.bulk);
+    if (!isCancelled() && st.success) {
+      setCount(st.answers.deal + st.answers.bulk);
+      setSharing(st.pilotReport);
+    }
   }, []);
 
   useEffect(() => {
@@ -42,6 +48,7 @@ export function LearnAnswersPrivacyRow(): React.ReactElement | null {
     setConfirming(false);
     if (r.success) {
       setCount(0);
+      setSharing(false); // Delete all also turns sharing off and deletes the shared numbers (main).
       setReviewing(false);
       setMessage("Your Learn mode answers were deleted.");
     } else {
@@ -58,7 +65,7 @@ export function LearnAnswersPrivacyRow(): React.ReactElement | null {
           <h4 className="text-sm font-medium text-gray-900">Learn mode answers</h4>
           <p className="text-xs text-gray-600 mt-1">
             {count > 0
-              ? `${count} ${count === 1 ? "answer" : "answers"} saved on this computer. Deleting them does not change your transactions.`
+              ? `${count} ${count === 1 ? "answer" : "answers"} saved on this computer. Deleting them does not change your transactions.${sharing ? ` ${PILOT_PRIVACY_SHARED}` : ""}`
               : message}
           </p>
         </div>
@@ -88,7 +95,9 @@ export function LearnAnswersPrivacyRow(): React.ReactElement | null {
           className="mt-3 flex items-center justify-between gap-4 rounded border border-red-200 bg-white px-3 py-2"
           data-testid="learn-delete-all-confirm"
         >
-          <span className="text-sm text-gray-900">Delete all answers? Your transactions don&apos;t change.</span>
+          <span className="text-sm text-gray-900">
+            Delete all answers? Your transactions don&apos;t change.{sharing ? ` ${PILOT_PRIVACY_DELETE_TOO}` : ""}
+          </span>
           <span className="flex flex-none items-center gap-2">
             <button
               type="button"
