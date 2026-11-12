@@ -50,3 +50,11 @@ MUTATION APPLIED M_gate_in_for_active_only: -              WHERE m.user_id = p_u
 RUNTIME MUTATION M_gate_in_for_active_only: public._ensure_personal_organization_for(uuid): + IF public._solo_signup_block_org(p_user_id) IS NOT NULL THEN RETURN jsonb_build_object('status', 'domain_managed'); END IF;
 P3962_RESULT {"fail": 3, "mode": "M_gate_in_for_active_only", "pass": 41, "reds": {"E2_licence_holder_attached": "{\"status\": \"domain_managed\"}", "S1b_suspended_row_elsewhere_exempt": "ERR P0001 domain_managed", "S3_deactivated_member_gets_personal_org": "0"}}
 P3962_RESULT {"epo": "d3440c655d21cecd796854f162954a7c", "lic": "444a6fb65e16149252aa5aae5abb7dfb", "jit1": "ff35f6a623f3f2206615fd4f48f999a3", "jit2": "b8823ca1ec3a9d31daa353ad5116b611", "mode": "rollback", "column": false, "lic_acl": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}", "new_fns": 0, "jit1_acl": "{postgres=X/postgres,service_role=X/postgres}"}
+
+== Fix-up S1: personal-org owner exemption in caller_domain_managed + create_active_individual_license ==
+base (applied venue, rollback first): P3962_RESULT {"fail": 0, "mode": "base", "pass": 46, "reds": {}}   (44 + S1j + C6)
+MUTATION APPLIED M_lic_no_personal_exempt: -     AND NOT EXISTS (SELECT 1 FROM public.organizations o WHERE o.personal_owner_user_id = p_user_id) THEN | + THEN
+P3962_RESULT {"fail": 1, "mode": "M_lic_no_personal_exempt", "pass": 45, "reds": {"S1j_personal_org_owner_creates": "ERR P0001 domain_managed"}}
+MUTATION APPLIED M_managed_no_personal_exempt: -     OR EXISTS (SELECT 1 FROM public.organizations o WHERE o.personal_owner_user_id = v_uid) THEN | + THEN
+P3962_RESULT {"fail": 1, "mode": "M_managed_no_personal_exempt", "pass": 45, "reds": {"C6_personal_org_owner_not_blocked": "{\"domain\": \"a-3962p4.test\", \"blocked\": true, \"organization_name\": \"PR4a Brokerage A\"}"}}
+rollback (pre-migration bodies unchanged): P3962_RESULT {"epo": "d3440c655d21cecd796854f162954a7c", "lic": "444a6fb65e16149252aa5aae5abb7dfb", "jit1": "ff35f6a623f3f2206615fd4f48f999a3", "jit2": "b8823ca1ec3a9d31daa353ad5116b611", "mode": "rollback", "column": false, "new_fns": 0}

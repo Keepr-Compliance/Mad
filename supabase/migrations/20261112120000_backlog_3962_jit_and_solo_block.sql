@@ -156,7 +156,10 @@ DECLARE
   v_name text;
   v_domain text;
 BEGIN
-  IF v_uid IS NULL OR EXISTS (SELECT 1 FROM public.licenses l WHERE l.user_id = v_uid) THEN
+  -- A licence holder, or the owner of a personal organization (the same exemption as
+  -- ensure_personal_organization), is never blocked.
+  IF v_uid IS NULL OR EXISTS (SELECT 1 FROM public.licenses l WHERE l.user_id = v_uid)
+     OR EXISTS (SELECT 1 FROM public.organizations o WHERE o.personal_owner_user_id = v_uid) THEN
     RETURN jsonb_build_object('blocked', false);
   END IF;
   v_name := public._solo_signup_block_org(v_uid);
@@ -225,7 +228,8 @@ BEGIN
   -- sign-ups is refused. Keyed on p_user_id (staff call this for other people); only the server
   -- role is exempt.
   IF COALESCE(auth.role(), '') <> 'service_role'
-     AND NOT EXISTS (SELECT 1 FROM public.licenses l WHERE l.user_id = p_user_id) THEN
+     AND NOT EXISTS (SELECT 1 FROM public.licenses l WHERE l.user_id = p_user_id)
+     AND NOT EXISTS (SELECT 1 FROM public.organizations o WHERE o.personal_owner_user_id = p_user_id) THEN
     v_block := public._solo_signup_block_org(p_user_id);
     IF v_block IS NOT NULL THEN
       RAISE EXCEPTION 'domain_managed' USING ERRCODE = 'P0001', DETAIL = v_block;

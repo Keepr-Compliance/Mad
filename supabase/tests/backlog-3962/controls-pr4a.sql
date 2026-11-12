@@ -89,6 +89,7 @@ INSERT INTO fx VALUES
   ('s_svc',    's.svc@a-3962p4.test',  'email', NULL),
   ('s_staff',  's.staff@a-3962p4.test','email', NULL),
   ('s_has',    's.has@a-3962p4.test',  'email', NULL),  -- licence already
+  ('s_po',     's.po@a-3962p4.test',   'email', NULL),  -- personal org owner, no licence
   ('s_rev',    's.rev@a-3962p4.test',  'email', NULL),  -- active row in A + licence, deactivated later
   ('e_new',    'e.new@a-3962p4.test',  'email', NULL),
   ('e_lic',    'e.lic@a-3962p4.test',  'email', NULL),  -- licence, no personal org
@@ -98,7 +99,7 @@ INSERT INTO auth.users (id, email, instance_id, aud, role, email_confirmed_at, r
   SELECT pg_temp.id(k), e, '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', now(),
          jsonb_build_object('provider', prov), '{}'::jsonb, now(), now() FROM fx;
 INSERT INTO public.users (id, email, oauth_provider, oauth_id)
-  SELECT pg_temp.id(k), e, prov, k || '-3962p4' FROM fx WHERE k IN ('u_admA', 'u_agA', 'u_admX', 'u_staff', 'j_owner', 'j_lic', 'j_porg', 'j_mem', 'j_plcd', 's_susp', 's_has', 's_rev', 'e_lic')
+  SELECT pg_temp.id(k), e, prov, k || '-3962p4' FROM fx WHERE k IN ('u_admA', 'u_agA', 'u_admX', 'u_staff', 'j_owner', 'j_lic', 'j_porg', 'j_mem', 'j_plcd', 's_susp', 's_has', 's_po', 's_rev', 'e_lic')
   ON CONFLICT DO NOTHING;
 INSERT INTO auth.identities (provider_id, user_id, identity_data, provider, created_at, updated_at)
   SELECT k || '-pid-3962p4', pg_temp.id(k),
@@ -137,9 +138,9 @@ INSERT INTO public.organization_members (organization_id, user_id, role, license
 -- personal organizations: j_owner (with licence), j_porg (org + membership, no licence)
 INSERT INTO public.organizations (id, name, slug, is_test, max_seats, personal_owner_user_id)
   SELECT pg_temp.id('po_' || k), 'Personal', 'po-' || replace(k, '_', '-') || '-3962p4', true, 1, pg_temp.id(k)
-    FROM unnest(ARRAY['j_owner', 'j_porg']) k;
+    FROM unnest(ARRAY['j_owner', 'j_porg', 's_po']) k;
 INSERT INTO public.organization_members (organization_id, user_id, role, license_status)
-  SELECT pg_temp.id('po_' || k), pg_temp.id(k), 'agent', 'active' FROM unnest(ARRAY['j_owner', 'j_porg']) k;
+  SELECT pg_temp.id('po_' || k), pg_temp.id(k), 'agent', 'active' FROM unnest(ARRAY['j_owner', 'j_porg', 's_po']) k;
 INSERT INTO public.licenses (user_id, license_key, license_type, status, max_devices, transaction_limit)
   SELECT pg_temp.id(k), 'IND-bl3962p4-' || k, 'individual', 'active', 2, 99999
     FROM unnest(ARRAY['j_owner', 'j_lic', 's_has', 's_rev', 'e_lic']) k;
@@ -247,6 +248,9 @@ BEGIN
   INSERT INTO r4 VALUES ('S1g_server_role_exempt', g = 'individual', g);
   g := pg_temp.lic(pg_temp.id('s_has'), 'authenticated', pg_temp.id('s_has'));
   INSERT INTO r4 VALUES ('S1h_existing_licence_returned', g = 'individual' AND pg_temp.nlic(pg_temp.id('s_has')) = 1, g);
+  g := pg_temp.lic(pg_temp.id('s_po'), 'authenticated', pg_temp.id('s_po'));
+  INSERT INTO r4 VALUES ('S1j_personal_org_owner_creates', g = 'individual' AND pg_temp.nlic(pg_temp.id('s_po')) = 1, g);
+  DELETE FROM public.licenses WHERE user_id = pg_temp.id('s_po');
   g := pg_temp.lic(pg_temp.id('e_free'), 'authenticated', pg_temp.id('e_free'));
   INSERT INTO r4 VALUES ('S1i_unclaimed_domain_creates', g = 'individual', g);
   DELETE FROM public.licenses WHERE user_id = pg_temp.id('e_free');
@@ -279,6 +283,8 @@ BEGIN
   INSERT INTO r4 VALUES ('C2_licence_holder_not_blocked', g = '{"blocked": false}', g);
   g := pg_temp.q(pg_temp.id('e_free'), 'authenticated', 'SELECT public.caller_domain_managed()::text');
   INSERT INTO r4 VALUES ('C3_unclaimed_domain_not_blocked', g = '{"blocked": false}', g);
+  g := pg_temp.q(pg_temp.id('s_po'), 'authenticated', 'SELECT public.caller_domain_managed()::text');
+  INSERT INTO r4 VALUES ('C6_personal_org_owner_not_blocked', g = '{"blocked": false}' AND pg_temp.nlic(pg_temp.id('s_po')) = 0, g);
   g := pg_temp.q(NULL, 'anon', 'SELECT public.caller_domain_managed()::text');
   INSERT INTO r4 VALUES ('C4_anon_refused', g LIKE 'ERR 42501%', g);
   g := pg_temp.q(pg_temp.id('e_new'), 'authenticated', format('SELECT public._solo_signup_block_org(%L::uuid)', pg_temp.id('e_new')));

@@ -73,6 +73,10 @@ MUTANTS = {
                               "  IF NOT EXISTS (SELECT 1 FROM public.organizations o WHERE o.personal_owner_user_id = v_uid) THEN\n")],
     # C2 (v2 item 4): caller_domain_managed ignores the licence
     'M_managed_any_licence': [("  IF v_uid IS NULL OR EXISTS (SELECT 1 FROM public.licenses l WHERE l.user_id = v_uid) THEN\n", "  IF v_uid IS NULL THEN\n")],
+    # S1j: the personal-org exemption dropped from the licence gate
+    'M_lic_no_personal_exempt': [("     AND NOT EXISTS (SELECT 1 FROM public.organizations o WHERE o.personal_owner_user_id = p_user_id) THEN\n    v_block", " THEN\n    v_block")],
+    # C6: the personal-org exemption dropped from caller_domain_managed
+    'M_managed_no_personal_exempt': [("     OR EXISTS (SELECT 1 FROM public.organizations o WHERE o.personal_owner_user_id = v_uid) THEN\n    RETURN jsonb_build_object('blocked', false);", " THEN\n    RETURN jsonb_build_object('blocked', false);")],
     # T1: the toggle without the organization check
     'M_toggle_no_org_check': [("  IF NOT FOUND OR NOT public.is_org_admin(v_uid, v_row.organization_id) THEN\n", "  IF NOT FOUND THEN\n")],
     # T1c: the toggle turns on for any status
