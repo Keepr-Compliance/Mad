@@ -478,10 +478,7 @@ beforeEach(() => {
   mockDb.exec(CONTACT_IDENTITY_SCHEMA);
   sweep = "off";
   registeredHandlers.clear();
-  registerContactHandlers({
-    isDestroyed: () => false,
-    webContents: { send: jest.fn() },
-  } as any);
+  registerContactHandlers();
 
   seedRecord({
     recordId: DANA_RECORD,

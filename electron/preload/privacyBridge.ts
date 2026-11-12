@@ -41,6 +41,14 @@ export interface CrashReportingResult {
   error?: string;
 }
 
+/** BACKLOG-4181: "Share diagnostics with Keepr" switch state. */
+export interface DiagnosticsSharingResult {
+  success: boolean;
+  /** The saved choice. */
+  enabled?: boolean;
+  error?: string;
+}
+
 /**
  * Privacy bridge for renderer process
  */
@@ -65,6 +73,14 @@ export const privacyBridge = {
   /** BACKLOG-3801: turn crash reporting on or off. */
   setCrashReporting: (enabled: boolean): Promise<CrashReportingResult> =>
     ipcRenderer.invoke("privacy:set-crash-reporting", enabled),
+
+  /** BACKLOG-4181: read the "Share diagnostics with Keepr" switch. */
+  getDiagnosticsSharing: (): Promise<DiagnosticsSharingResult> =>
+    ipcRenderer.invoke("privacy:get-diagnostics-sharing"),
+
+  /** BACKLOG-4181: turn diagnostics sharing on or off. */
+  setDiagnosticsSharing: (enabled: boolean): Promise<DiagnosticsSharingResult> =>
+    ipcRenderer.invoke("privacy:set-diagnostics-sharing", enabled),
 
   /**
    * Listen for export progress updates.

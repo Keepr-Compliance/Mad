@@ -311,10 +311,7 @@ beforeEach(() => {
   fullSync.mockClear();
   registeredHandlers.clear();
   __resetContactLinkingScheduler();
-  registerContactHandlers({
-    isDestroyed: () => false,
-    webContents: { send: jest.fn() },
-  } as any);
+  registerContactHandlers();
 });
 
 afterEach(() => {

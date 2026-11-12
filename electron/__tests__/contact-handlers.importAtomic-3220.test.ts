@@ -625,7 +625,7 @@ async function runImport(sc: Scenario): Promise<ImportResult> {
 beforeAll(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "keepr-3220-"));
   process.on("unhandledRejection", keepWorkerAlive);
-  registerContactHandlers(null as any);
+  registerContactHandlers();
 });
 
 afterAll(() => {

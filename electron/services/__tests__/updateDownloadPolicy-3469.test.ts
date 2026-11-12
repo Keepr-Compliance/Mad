@@ -120,7 +120,7 @@ function sessionWith(prefs: Record<string, unknown> | null, opts: { userId?: str
 
 beforeAll(() => {
   registerPreferenceHandlers();
-  registerUpdaterHandlers({} as never);
+  registerUpdaterHandlers();
 });
 
 beforeEach(() => {

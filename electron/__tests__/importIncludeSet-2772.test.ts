@@ -189,7 +189,7 @@ beforeAll(() => {
   mockIpcHandle.mockImplementation((channel: string, handler: unknown) => {
     handlers.set(channel, handler as never);
   });
-  registerMessageImportHandlers(null as never);
+  registerMessageImportHandlers();
 });
 
 beforeEach(() => {

@@ -323,7 +323,7 @@ beforeEach(() => {
   // there rather than only handed to the register call.
   const stubWindow = { isDestroyed: () => false, webContents: { send } };
   setMainWindow(stubWindow as never);
-  registerContactHandlers(stubWindow as never);
+  registerContactHandlers();
 });
 
 afterEach(() => {

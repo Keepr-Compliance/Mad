@@ -197,7 +197,7 @@ async function invokeLinkSource(sourceRecordId: unknown): Promise<LinkResponse> 
 
 describe("requireSourceRecordIdArg — a refusal must name its own cause (M1)", () => {
   beforeAll(() => {
-    registerContactHandlers({} as never);
+    registerContactHandlers();
   });
 
   beforeEach(() => {

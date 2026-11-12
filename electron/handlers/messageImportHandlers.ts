@@ -3,7 +3,7 @@
 // Handles: messages:import-macos, messages:get-import-count, messages:get-attachments
 // ============================================
 
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain } from "electron";
 import { MESSAGE_IMPORT_SUMMARY_SQL } from "../services/db/messageImportStatsSql";
 import type { MessageSourceStats } from "../services/db/messageSourceStatsDb";
 import { queryContacts, DedicatedWorkerError } from "../workers/contactWorkerPool";
@@ -133,7 +133,7 @@ async function resolveRecommendedRange(
   return null;
 }
 
-export function registerMessageImportHandlers(_mainWindow: BrowserWindow): void {
+export function registerMessageImportHandlers(): void {
   // Prevent double registration
   if (handlersRegistered) {
     logService.warn(

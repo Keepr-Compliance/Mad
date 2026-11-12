@@ -277,10 +277,7 @@ beforeEach(() => {
   mockImportedContacts = [];
   mockShadowRows = [];
   registeredHandlers.clear();
-  registerContactHandlers({
-    isDestroyed: () => false,
-    webContents: { send: jest.fn() },
-  } as any);
+  registerContactHandlers();
 });
 
 afterEach(() => {

@@ -11,10 +11,12 @@
  * When unauthenticated, shows name/email input fields in the dialog.
  */
 
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import { SupportTicketDialog } from "./SupportTicketDialog";
 import { usePlatform } from "../../contexts";
 import { Z_CLASS } from "../../constants/zLayers";
+import { Dialog, DialogLayerContent, DialogTitle } from "@keepr/ui";
+import { isRadixModalLayerActive } from "./isRadixModalLayerActive";
 
 /** Detail payload for the 'open-support-widget' custom event (TASK-2319) */
 export interface OpenSupportWidgetDetail {
@@ -48,6 +50,12 @@ export function SupportWidget({
 }: SupportWidgetProps = {}): React.ReactElement {
   const { isWindows } = usePlatform();
   const [isOpen, setIsOpen] = useState(false);
+  // BACKLOG-4226: a Radix modal (e.g. Learn mode) was open when "?" was clicked,
+  // so the form opens in its own modal layer on top of it.
+  const [overModal, setOverModal] = useState(false);
+  // BACKLOG-4226: what had focus (inside that modal) when "?" was pressed, so
+  // closing the form hands focus back to it rather than to <body>.
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const [preCapturedScreenshot, setPreCapturedScreenshot] = useState<string | null>(null);
   const [detectedEmail, setDetectedEmail] = useState<string>("");
   const [detectedName, setDetectedName] = useState<string>("");
@@ -80,6 +88,9 @@ export function SupportWidget({
   const userName = propName || detectedName;
 
   const handleOpen = useCallback(async () => {
+    // BACKLOG-4226: decide before the capture await, so the form's own state
+    // cannot affect the answer.
+    setOverModal(isRadixModalLayerActive());
     // BACKLOG-1607: Detect user AND capture screenshot BEFORE opening dialog.
     // Run both IPC calls in parallel so user info is available when the dialog
     // mounts, avoiding the race condition where the dialog renders with empty
@@ -111,6 +122,7 @@ export function SupportWidget({
 
   const handleClose = useCallback(() => {
     setIsOpen(false);
+    setOverModal(false);
     setPreCapturedScreenshot(null);
     setPrefilledSubject("");
     setPrefilledDescription("");
@@ -147,6 +159,18 @@ export function SupportWidget({
     return () => window.removeEventListener("open-support-widget", handler);
   }, [detectedEmail, detectedName]);
 
+  const form = (
+    <SupportTicketDialog
+      onClose={handleClose}
+      userEmail={userEmail}
+      userName={userName}
+      autoCaptureScreenshot={false}
+      initialScreenshot={preCapturedScreenshot}
+      prefilledSubject={prefilledSubject}
+      prefilledDescription={prefilledDescription}
+    />
+  );
+
   return (
     <>
       {/* Floating "?" button - bottom-left, blue circle
@@ -156,10 +180,20 @@ export function SupportWidget({
            that intercept clicks. Use bottom-8 left-8 (32px) on Windows to clear the
            resize zone; keep bottom-4 left-4 (16px) on macOS/Linux.
            BACKLOG-4112: the account panel opens on the right, so the "?" stays in
-           this corner, above the scrim and clear of the panel. */}
+           this corner, above the scrim and clear of the panel.
+           BACKLOG-4226: data-modal-exempt + inline pointer-events:auto keep it
+           clickable while a Radix modal (Learn mode) is open, without
+           dismissing that modal. Inline, not a class: the modal's lock is an
+           inline style on <body>. */}
       <button
+        onPointerDown={() => {
+          returnFocusRef.current =
+            document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        }}
         onClick={handleOpen}
         data-support-widget
+        data-modal-exempt
+        style={{ pointerEvents: "auto" }}
         className={`fixed ${Z_CLASS.support} w-10 h-10 rounded-full bg-primary-600 hover:bg-primary-700 text-white font-bold text-lg shadow-lg hover:shadow-xl transition-all flex items-center justify-center no-drag-region ${
           isWindows ? "bottom-8 left-8" : "bottom-4 left-4"
         }`}
@@ -170,16 +204,28 @@ export function SupportWidget({
       </button>
 
       {/* Support Ticket Dialog */}
-      {isOpen && (
-        <SupportTicketDialog
-          onClose={handleClose}
-          userEmail={userEmail}
-          userName={userName}
-          autoCaptureScreenshot={false}
-          initialScreenshot={preCapturedScreenshot}
-          prefilledSubject={prefilledSubject}
-          prefilledDescription={prefilledDescription}
-        />
+      {isOpen && !overModal && form}
+      {/* BACKLOG-4226: over an open modal, the same form in a modal layer on top.
+           Radix's layer and focus stacks give it clicks and focus and pause the
+           modal underneath (not dismiss it); closing resumes it. */}
+      {isOpen && overModal && (
+        <Dialog open onOpenChange={(open) => (open ? undefined : handleClose())}>
+          <DialogLayerContent
+            aria-describedby={undefined}
+            className={`fixed inset-0 ${Z_CLASS.supportDialog}`}
+            onCloseAutoFocus={(e) => {
+              const el = returnFocusRef.current;
+              returnFocusRef.current = null;
+              if (el && el.isConnected) {
+                e.preventDefault();
+                el.focus();
+              }
+            }}
+          >
+            <DialogTitle className="sr-only">Contact Support</DialogTitle>
+            {form}
+          </DialogLayerContent>
+        </Dialog>
       )}
     </>
   );

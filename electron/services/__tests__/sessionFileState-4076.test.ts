@@ -277,7 +277,7 @@ function startSignIn(): void {
 
 beforeAll(() => {
   require("../../../tests/helpers/installTestSecretStore").installTestSecretStore();
-  registerSyncHandlers({ isDestroyed: () => false, webContents: { send: jest.fn() } } as never);
+  registerSyncHandlers();
 });
 beforeEach(() => {
   jest.clearAllMocks();

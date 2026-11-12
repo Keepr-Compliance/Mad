@@ -52,9 +52,16 @@ export interface DashboardPanels {
   tickError: TickError | null;
 }
 
-export function useDashboardPanels(userId: string | undefined): DashboardPanels {
+/**
+ * `todoEnabled` (BACKLOG-4220): true reads Todo as before; false never reads it
+ * (the panel is hidden, or the preference is not read yet).
+ */
+export function useDashboardPanels(
+  userId: string | undefined,
+  todoEnabled = true,
+): DashboardPanels {
   const [recent, setRecent] = useState<RecentState>({ status: "loading" });
-  const [todo, setTodo] = useState<TodoState>({ status: userId ? "loading" : "off" });
+  const [todo, setTodo] = useState<TodoState>({ status: userId && todoEnabled ? "loading" : "off" });
   const [reloadKey, setReloadKey] = useState(0);
   const [tickingItemId, setTickingItemId] = useState<string | null>(null);
   const [tickError, setTickError] = useState<TickError | null>(null);
@@ -78,7 +85,7 @@ export function useDashboardPanels(userId: string | undefined): DashboardPanels 
 
   useEffect(() => {
     const id = ++todoReadId.current;
-    if (!userId) {
+    if (!userId || !todoEnabled) {
       setTodo({ status: "off" });
       return;
     }
@@ -88,7 +95,7 @@ export function useDashboardPanels(userId: string | undefined): DashboardPanels 
       if (todoReadId.current !== id) return;
       setTodo(result.success && result.data ? { status: "ready", data: result.data } : { status: "error" });
     });
-  }, [userId, reloadKey]);
+  }, [userId, reloadKey, todoEnabled]);
 
   const tickItem = useCallback(
     async (itemId: string) => {

@@ -6,7 +6,7 @@
  * Includes encrypted backup support (TASK-007).
  */
 
-import { ipcMain, BrowserWindow, app } from "electron";
+import { ipcMain, app } from "electron";
 import log from "electron-log";
 import { backupService } from "../services/backupService";
 import { backupDecryptionService } from "../services/backupDecryptionService";
@@ -18,9 +18,8 @@ import { sendToMainWindow } from "../windowRegistry";
 
 /**
  * Register all backup-related IPC handlers
- * @param _mainWindow The main BrowserWindow instance for sending events (BACKLOG-3454: IGNORED — pushes resolve the live window via sendToMainWindow; kept so existing call sites and suites compile)
  */
-export function registerBackupHandlers(_mainWindow: BrowserWindow): void {
+export function registerBackupHandlers(): void {
   log.info("[BackupHandlers] Registering backup handlers");
 
   // Forward progress events to renderer
