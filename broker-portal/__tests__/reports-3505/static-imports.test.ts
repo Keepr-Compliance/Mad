@@ -39,6 +39,8 @@ const FILES = ROOTS.flatMap(walk);
 function specifiers(source: string): string[] {
   const out: string[] = [];
   for (const m of source.matchAll(/(?:import|export)[\s\S]*?from\s*['"]([^'"]+)['"]/g)) out.push(m[1]);
+  // A bare side-effect import (`import '@/lib/supabase/service';`) has no `from` (BACKLOG-3513 SR N4/J16).
+  for (const m of source.matchAll(/(?:^|[;\n])\s*import\s*['"]([^'"]+)['"]/g)) out.push(m[1]);
   for (const m of source.matchAll(/import\(\s*['"]([^'"]+)['"]\s*\)/g)) out.push(m[1]);
   for (const m of source.matchAll(/require\(\s*['"]([^'"]+)['"]\s*\)/g)) out.push(m[1]);
   return out;

@@ -439,3 +439,19 @@ MUTATION APPLIED numstat=1/1
   + IF d.id IS NULL OR v_level IS NULL THEN
 RESULT total=102 pass=100 fail=2 reds=RS_editor_changes_scope,RS_viewer_refused
 RESTORED clean=True
+
+== BACKLOG-3513 PR-3a (SR N1), 2026-11-12, migration byte-identical to ab19c8cc9
+Baseline: total 103, pass 103, fail 0 (run.sh)
+== M35_OWNER_ACTIVE_SKIPPED_FOR_IT_ADMIN
+MUTATION APPLIED numstat=1/0
+  + AND public._broker_report_member_role(d.organization_id, v_uid) IS DISTINCT FROM 'it_admin'
+RESULT total=103 pass=102 fail=1 reds=SR_D13_it_admin_owner_active_refused
+RESTORED clean=True
+== M23_TAKEOVER_OWNER_ACTIVE
+MUTATION APPLIED numstat=1/2
+  - OR (d.owner_user_id IS NOT NULL
+  - AND public._broker_report_member_role(d.organization_id, d.owner_user_id) IS NOT NULL) THEN
+  + THEN
+RESULT total=103 pass=101 fail=2 reds=D13_owner_active_refused,SR_D13_it_admin_owner_active_refused
+RESTORED clean=True
+After the loop: pg_stat_statements_reset() run; public.broker_report_definitions absent on keepr-test (nothing persisted).
