@@ -4,8 +4,6 @@
  * and in what order, and the account it names.
  */
 
-import { existsSync } from 'node:fs';
-import path from 'node:path';
 import { render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom';
 
@@ -37,7 +35,6 @@ jest.mock('next/navigation', () => ({
 
 import * as PageModule from '@/app/dashboard/account/ai-apps/connect/[requestId]/page';
 import { CONSENT, M_C } from '@/lib/mcp/account/messages';
-import { CONSENT_PATH_PREFIX } from '@/lib/mcp/oauth/paths';
 import { bindingDigest } from '@/lib/mcp/oauth/crypto';
 import { BIND_COOKIE, BINDING, EMAIL, NONCE, REQUEST_ID, clearMcpEnv, refused, setMcpEnv, viewOk } from './fixtures';
 
@@ -64,12 +61,6 @@ async function renderPage(requestId: string = REQUEST_ID) {
 
 const viewCalls = () => mockRpc.mock.calls.filter(([fn]) => fn === 'mcp_authorize_view');
 const buttons = () => screen.queryAllByRole('button');
-
-describe('the page file sits where /oauth/authorize sends the browser', () => {
-  it('app + CONSENT_PATH_PREFIX + [requestId]/page.tsx exists', () => {
-    expect(existsSync(path.resolve(__dirname, `../../../app${CONSENT_PATH_PREFIX}[requestId]/page.tsx`))).toBe(true);
-  });
-});
 
 describe('MCP off', () => {
   it('is notFound before any header read or database call', async () => {

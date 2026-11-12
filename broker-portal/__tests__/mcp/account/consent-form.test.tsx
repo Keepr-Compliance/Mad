@@ -45,7 +45,7 @@ describe('server render', () => {
     const tags = html.match(/<button[^>]*>/g) ?? [];
     expect(tags).toHaveLength(2);
     for (const t of tags) {
-      expect(t).toContain('disabled');
+      expect(t).toMatch(/\sdisabled=""/);
       expect(t).toContain('type="button"');
     }
   });
