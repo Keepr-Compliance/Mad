@@ -1,0 +1,199 @@
+# BACKLOG-3513 PR-2 harness, keepr-test, 2026-11-12, migration at commit 53131bc1f, controls at 4bd78ab00
+## run.sh (baseline)
+{
+ "fail": 0,
+ "pass": 97,
+ "reds": {},
+ "total": 97
+}
+
+## mutate.py all
+== M01_D1_DEFINER_PLUS_ROWSCOPE
+MUTATION APPLIED numstat=3/2
+  - SECURITY INVOKER
+  + SECURITY DEFINER
+  - v_eff := public.broker_report_scope(p_org, p_def) ->> 'effective_scope';
+  + PERFORM public.broker_report_scope(p_org, p_def);
+  + v_eff := coalesce((SELECT d.row_scope FROM public.broker_report_definitions d WHERE d.id = p_def), 'all');
+RESULT total=97 pass=87 fail=10 reds=D16_parity_sweep,D1_agent_owner_own_rows,D1_agent_viewer_own_rows,D1_catalog_invoker,D3_own_editor_A1_all,D3_own_owner_B1_all,D4_agent_positive,D4_code_report_own_rows,D4_def_rows_own,D7_role_viewer_own_rows
+RESTORED clean=True
+== M02_DEFINER_ALONE
+MUTATION APPLIED numstat=1/1
+  - SECURITY INVOKER
+  + SECURITY DEFINER
+RESULT total=97 pass=96 fail=1 reds=D1_catalog_invoker
+RESTORED clean=True
+== M03_SCOPE_FROM_OWNER
+MUTATION APPLIED numstat=1/0
+  + WHEN (SELECT public._broker_report_member_role(p_org, d2.owner_user_id) FROM public.broker_report_definitions d2 WHERE d2.id = p_def) = 'agent' THEN '
+RESULT total=97 pass=96 fail=1 reds=D2_broker_views_agent_report_all
+RESTORED clean=True
+== M04_OWN_APPLIES_TO_EDITORS
+MUTATION APPLIED numstat=1/1
+  - WHEN v_level = 'viewer' AND v_row_scope = 'own' THEN 'own'
+  + WHEN v_level IN ('viewer', 'editor') AND v_row_scope = 'own' THEN 'own'
+RESULT total=97 pass=96 fail=1 reds=D3_own_editor_A1_all
+RESTORED clean=True
+== M05_OWN_IGNORED
+MUTATION APPLIED numstat=0/1
+  - WHEN v_level = 'viewer' AND v_row_scope = 'own' THEN 'own'
+RESULT total=97 pass=95 fail=2 reds=D16_parity_sweep,D3_own_viewer_B2
+RESTORED clean=True
+== M06_NO_SERVICE_OFF
+MUTATION APPLIED numstat=0/1
+  - WHEN v_off THEN 'own'
+RESULT total=97 pass=95 fail=2 reds=D4_def_all_scope_own,D4_scope_service_off
+RESTORED clean=True
+== M07_EDITOR_TRANSFERS
+MUTATION APPLIED numstat=1/1
+  - IF d.id IS NULL OR public._broker_report_level(p_def) IS DISTINCT FROM 'owner'
+  + IF d.id IS NULL OR public._broker_report_level(p_def) NOT IN ('owner', 'editor')
+RESULT total=97 pass=96 fail=1 reds=D5_editor_refused
+RESTORED clean=True
+== M08_AGENT_CAP_ON_TRANSFER
+MUTATION APPLIED numstat=1/1
+  - OR public._broker_report_member_role(d.organization_id, p_new_owner) IS NULL THEN
+  + OR coalesce(public._broker_report_member_role(d.organization_id, p_new_owner), 'agent') = 'agent' THEN
+RESULT total=97 pass=95 fail=2 reds=D5_after_state,D5_owner_to_agent
+RESTORED clean=True
+== M09_EDITOR_DELETES
+MUTATION APPLIED numstat=1/1
+  - IF d.id IS NULL OR public._broker_report_level(p_def) IS DISTINCT FROM 'owner' THEN
+  + IF d.id IS NULL OR public._broker_report_level(p_def) NOT IN ('owner', 'editor') THEN
+RESULT total=97 pass=91 fail=6 reds=D12_general_access,D12_general_unchanged_no_row,D12_remove,D12_self_remove,D6_editor_delete_refused,D6_whole_call_left_G3
+RESTORED clean=True
+== M10_SHARE_ANY_LEVEL
+MUTATION APPLIED numstat=1/1
+  - IF d.id IS NULL OR v_level IS NULL OR v_level NOT IN ('owner', 'editor') THEN
+  + IF d.id IS NULL OR v_level IS NULL THEN
+RESULT total=97 pass=95 fail=2 reds=D12_remove,D6_viewer_share_refused
+RESTORED clean=True
+== M11_ROLE_ANY
+MUTATION APPLIED numstat=1/1
+  - OR (g.principal_type = 'role' AND g.principal_role = v_role))
+  + OR (g.principal_type = 'role'))
+RESULT total=97 pass=92 fail=5 reds=D7_admin_grant_admin,D7_admin_grant_not_it_admin,D7_agent_role_admits_G3,D7_broker_grant_not_agent,RA_agent_not
+RESTORED clean=True
+== M12_CANDIDATE_EMAIL
+MUTATION APPLIED numstat=1/1
+  - 'kind', 'person', 'id', m.user_id,
+  + 'kind', 'person', 'id', m.user_id, 'email', (SELECT u.email FROM public.users u WHERE u.id = m.user_id),
+RESULT total=97 pass=95 fail=2 reds=D9_agent_editor_sees_people,D9_no_email
+RESTORED clean=True
+== M13_CANDIDATES_ALL_ORGS
+MUTATION APPLIED numstat=1/2
+  - WHERE m.organization_id = v_org
+  - AND m.license_status = 'active'
+  + WHERE m.license_status = 'active'
+RESULT total=97 pass=95 fail=2 reds=D9_agent_editor_sees_people,D9_people_active_same_org
+RESTORED clean=True
+== M14_TEXT_GREATEST
+MUTATION APPLIED numstat=4/4
+  - v_rank int;
+  + v_rank text;
+  - SELECT CASE g.level WHEN 'editor' THEN 2 WHEN 'viewer' THEN 1 END AS r
+  + SELECT g.level AS r
+  - SELECT 1 WHERE v_def.general_access = 'organization'
+  + SELECT 'viewer' WHERE v_def.general_access = 'organization'
+  - RETURN CASE v_rank WHEN 2 THEN 'editor' WHEN 1 THEN 'viewer' END;
+  + RETURN v_rank;
+RESULT total=97 pass=95 fail=2 reds=D10_editor_beats_org_viewer,D12_general_unchanged_no_row
+RESTORED clean=True
+== M15_AUDIT_NO_FROM
+MUTATION APPLIED numstat=1/1
+  - jsonb_build_object('member_id', v_member, 'from', v_old, 'to', p_level));
+  + jsonb_build_object('member_id', v_member, 'to', p_level));
+RESULT total=97 pass=93 fail=4 reds=D12_reader_output,D6_agent_editor_shares,D6_editor_changes_level,D6_editor_grants_can_edit
+RESTORED clean=True
+== M16_AUDIT_UNCHANGED
+MUTATION APPLIED numstat=1/1
+  - IF v_old IS DISTINCT FROM p_level THEN
+  + IF true THEN
+RESULT total=97 pass=96 fail=1 reds=D12_unchanged_no_row
+RESTORED clean=True
+== M17_READER_NO_REPORT_NAME
+MUTATION APPLIED numstat=2/2
+  - WHERE k.key IN ('from', 'to', 'role', 'via', 'cleared', 'seats', 'reason', 'note', 'ends_on', 'plan', 'notified', 'report_name')))
+  + WHERE k.key IN ('from', 'to', 'role', 'via', 'cleared', 'seats', 'reason', 'note', 'ends_on', 'plan', 'notified')))
+RESULT total=97 pass=96 fail=1 reds=D12_reader_output
+RESTORED clean=True
+== M18_CHILD_UPLOADING
+MUTATION APPLIED numstat=0/1
+  - AND c.status <> 'uploading'
+RESULT total=97 pass=91 fail=6 reds=D16_parity_sweep,D16_total_count,D1_agent_owner_own_rows,D2_broker_views_agent_report_all,D3_own_editor_A1_all,D3_own_owner_B1_all
+RESTORED clean=True
+== M19_CHILD_SCOPE
+MUTATION APPLIED numstat=1/1
+  - AND (v_eff = 'all' OR c.submitted_by = v_uid))
+  + )
+RESULT total=97 pass=95 fail=2 reds=D16_parity_sweep,D3_own_viewer_B2
+RESTORED clean=True
+== M20_F5_NONMEMBER
+MUTATION APPLIED numstat=1/1
+  - IF p_org IS NULL OR v_base IS NULL
+  + IF p_org IS NULL
+RESULT total=97 pass=96 fail=1 reds=D18_nonmember_refused
+RESTORED clean=True
+== M21_F5_NO_PORTAL_CHECK
+MUTATION APPLIED numstat=0/3
+  - RAISE EXCEPTION 'Report not found';
+  - END IF;
+  - IF v_base = 'all' AND NOT coalesce(public._org_feature_allowed(p_org, 'broker_portal_access'), false) THEN
+RESULT total=97 pass=95 fail=2 reds=D18_portal_access_off_refused,D18_portal_access_off_rows_refused
+RESTORED clean=True
+== M22_DELETE_KEEPS_VIEWS
+MUTATION APPLIED numstat=0/2
+  - DELETE FROM public.broker_report_saved_views
+  - WHERE organization_id = d.organization_id AND report_key = lower('d-' || p_def::text);
+RESULT total=97 pass=96 fail=1 reds=D14_views_gone
+RESTORED clean=True
+== M23_TAKEOVER_OWNER_ACTIVE
+MUTATION APPLIED numstat=1/2
+  - OR (d.owner_user_id IS NOT NULL
+  - AND public._broker_report_member_role(d.organization_id, d.owner_user_id) IS NOT NULL) THEN
+  + THEN
+RESULT total=97 pass=96 fail=1 reds=D13_owner_active_refused
+RESTORED clean=True
+== M24_TAKEOVER_ANY_ROLE
+MUTATION APPLIED numstat=1/1
+  - OR coalesce(public._broker_report_member_role(d.organization_id, v_uid), '') NOT IN ('broker', 'admin')
+  + OR coalesce(public._broker_report_member_role(d.organization_id, v_uid), '') = ''
+RESULT total=97 pass=95 fail=2 reds=D13_agent_refused,D13_broker_owner_gone
+RESTORED clean=True
+== M25_ADMINS_ADMIN_ONLY
+MUTATION APPLIED numstat=1/1
+  - v_roles := v_roles || ARRAY['admin', 'it_admin'];
+  + v_roles := v_roles || ARRAY['admin'];
+RESULT total=97 pass=95 fail=2 reds=RA_it_admin_sees,RA_share_admins
+RESTORED clean=True
+== M26_NO_STALE_CHECK
+MUTATION APPLIED numstat=1/1
+  - IF p_expected_updated_at IS DISTINCT FROM d.updated_at THEN
+  + IF false THEN
+RESULT total=97 pass=96 fail=1 reds=D15_stale_refused
+RESTORED clean=True
+== M27_REVOKE_DROPPED
+MUTATION APPLIED numstat=1/1
+  - REVOKE ALL ON FUNCTION public._broker_report_level(uuid) FROM PUBLIC, anon, authenticated;
+  + REVOKE ALL ON FUNCTION public._broker_report_level(uuid) FROM PUBLIC, anon;
+RESULT total=97 pass=95 fail=2 reds=C5_level_private,D8_private_revoked
+RESTORED clean=True
+== M28_ROWSCOPE_OWNER_ONLY
+MUTATION APPLIED numstat=3/0
+  + IF v_scope IS DISTINCT FROM d.row_scope AND v_level <> 'owner' THEN
+  + RAISE EXCEPTION 'Report not found';
+  + END IF;
+RESULT total=97 pass=95 fail=2 reds=D15_stale_refused,RS_editor_changes_scope
+RESTORED clean=True
+== M29_REMOVE_ANYONE
+MUTATION APPLIED numstat=1/1
+  - IF v_level NOT IN ('owner', 'editor') AND v_user IS DISTINCT FROM v_uid THEN
+  + IF false THEN
+RESULT total=97 pass=96 fail=1 reds=D6_viewer_remove_refused
+RESTORED clean=True
+== M30_VIEWER_UPDATES
+MUTATION APPLIED numstat=1/1
+  - IF d.id IS NULL OR v_level IS NULL OR v_level NOT IN ('owner', 'editor') THEN
+  + IF d.id IS NULL OR v_level IS NULL THEN
+RESULT total=97 pass=95 fail=2 reds=RS_editor_changes_scope,RS_viewer_refused
+RESTORED clean=True
