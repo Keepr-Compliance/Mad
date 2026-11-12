@@ -24,6 +24,17 @@ describe("main.ts hide-on-close wiring (BACKLOG-3283)", () => {
     expect(MAIN.match(/attachHideOnClose\(/g)).toHaveLength(1);
   });
 
+  it("hide-on-close is registered BEFORE the submission guard (the guard clears the quit flag during the same dispatch)", () => {
+    const c = createWindowBody();
+    const attach = c.indexOf("attachHideOnClose(mainWindow, process.platform);");
+    const guard = c.indexOf("// Prevent closing while a submission is uploading");
+    expect(attach).toBeGreaterThanOrEqual(0);
+    expect(guard).toBeGreaterThanOrEqual(0);
+    // Listeners run in registration order. Attached after the guard, the hide
+    // listener sees isQuitting() already cleared and hides the window the sheet is on.
+    expect(attach).toBeLessThan(guard);
+  });
+
   it("activate shows the existing (hidden) main window and creates one only when there is none", () => {
     const a = activateBody();
     expect(a).not.toMatch(/getAllWindows/);
@@ -55,6 +66,10 @@ describe("main.ts hide-on-close wiring (BACKLOG-3283)", () => {
     expect(prevent).toBeGreaterThanOrEqual(0);
     expect(read).toBeGreaterThan(prevent);
     expect(clear).toBeGreaterThan(read);
+    // The window may be hidden (Dock Quit): show it before the sheet attaches to it.
+    expect(g).toMatch(
+      /e\.preventDefault\(\);[\s\S]*?if \(mainWindow && !mainWindow\.isVisible\(\)\) mainWindow\.show\(\);[\s\S]*?\.showMessageBox\(/,
+    );
     expect(g).toMatch(/mainWindow\?\.destroy\(\);\s*if \(wasQuitting\) app\.quit\(\);/);
   });
 

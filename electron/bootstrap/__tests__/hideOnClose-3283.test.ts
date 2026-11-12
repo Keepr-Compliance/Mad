@@ -34,6 +34,17 @@ describe("hide on close (BACKLOG-3283)", () => {
     expect({ hidden: win.hidden, destroyed: win.destroyed }).toEqual({ hidden: true, destroyed: false });
   });
 
+  it("macOS, not quitting: every close hides, not only the first (close, Dock, close again)", () => {
+    const win = new FakeWindow();
+    attachHideOnClose(win, "darwin");
+    for (const round of [1, 2, 3]) {
+      win.hidden = false; // a Dock click shows the window again
+      win.close();
+      expect({ round, hidden: win.hidden, destroyed: win.destroyed }).toEqual({ round, hidden: true, destroyed: false });
+    }
+    expect(win.listenerCount("close")).toBe(1);
+  });
+
   it("macOS, quitting: close goes through (Cmd+Q, menu Quit, update install)", () => {
     const win = new FakeWindow();
     attachHideOnClose(win, "darwin");
