@@ -125,7 +125,8 @@ const ADDRESS_NO_ZIP = new RegExp(
  * BACKLOG-4225: the detection patterns, exactly as before the fix (the ZIP one
  * is `patterns.address`; the no-ZIP one was the inline fallback), with the
  * street captured as group 1. A capture group does not change what matches,
- * so these still decide WHICH emails get an address.
+ * so these still decide which text MAY hold an address; the filter
+ * (rejectedCandidate) can only drop a candidate, never add one.
  */
 const DETECT_WITH_ZIP =
   /\b(\d+\s+[A-Za-z\s\-\.]+?\s+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Way|Court|Ct|Boulevard|Blvd|Place|Pl|Circle|Cir|Parkway|Pkwy|Trail|Ter|Crescent|Hill|Freeway|Path|Route|Rte|Square|Turnpike|Vista|Viaduct|Cove|Dale|Ridge|View|Walk|Wood|Drive|Court))[,\s]+[A-Za-z\s]+?[,\s]+[A-Z]{2}[\s,]+\d{5}(?:-\d{4})?\b/gi;
@@ -138,17 +139,105 @@ function collapseWs(s: string): string {
 }
 
 /**
+ * The strict pattern's match at the detection match's position, when it is
+ * no longer than the detection match (a real one-line city/state tail);
+ * otherwise null. When this is non-null it is what the address shows.
+ */
+function strictAt(text: string, m: RegExpMatchArray, strict: RegExp): RegExpExecArray | null {
+  const sticky = new RegExp(strict.source, "iy");
+  sticky.lastIndex = m.index ?? 0;
+  const s = sticky.exec(text);
+  return s && s[0].length <= m[0].length ? s : null;
+}
+
+/**
  * The address shown for one detection match: the strict pattern's match at
  * the same position when it is no longer than the detection match (a real
  * one-line city/state tail), otherwise the street alone, cut at its suffix.
  */
 function shownAddress(text: string, m: RegExpMatchArray, strict: RegExp): string {
-  const at = m.index ?? 0;
-  const sticky = new RegExp(strict.source, "iy");
-  sticky.lastIndex = at;
-  const s = sticky.exec(text);
-  if (s && s[0].length <= m[0].length) return cleanAddressMatch(s);
+  const s = strictAt(text, m, strict);
+  if (s) return cleanAddressMatch(s);
   return collapseWs(m[1]);
+}
+
+/**
+ * BACKLOG-4225 filter: street suffixes that are also ordinary words
+ * ("ocean view", "every hill"). A street ending in one is kept only with a
+ * real city/state tail. All are in STREET_SUFFIX.
+ */
+const WEAK_SUFFIXES = new Set([
+  "view", "hill", "dale", "ridge", "walk", "wood", "vista", "viaduct", "cove", "path", "route", "rte", "square",
+]);
+
+/** A leading direction word does not count toward the street name length. */
+const STREET_DIRECTIONS = new Set(["n", "s", "e", "w", "ne", "nw", "se", "sw", "north", "south", "east", "west"]);
+
+/**
+ * Words that start prose, not a city ("..., in the park wa"). Only the FIRST
+ * city word is checked, and "the" is not here: The Dalles, The Woodlands,
+ * Lake In The Hills and Isle Of Palms are real cities.
+ */
+const CITY_STOPWORDS = new Set([
+  "in", "to", "on", "at", "and", "or", "now", "for", "of", "is", "it", "be", "me", "my", "we", "us", "our", "you", "your",
+]);
+
+/** Most words a street name may have between the number and the suffix. */
+const MAX_STREET_NAME_WORDS = 4;
+
+/** Why a detected candidate is not an address. */
+export type AddressRejectReason = "C1" | "C2" | "C4" | "C4stop";
+
+/**
+ * BACKLOG-4225: whether a detected candidate is a sentence, not an address.
+ * The checks read the street that is SHOWN: the strict match's street when
+ * the strict match is shown, otherwise the detection match's street.
+ *   C1      more than MAX_STREET_NAME_WORDS name words (a leading direction
+ *           word not counted).
+ *   C2      a sentence break inside the name: a word of 3+ letters followed
+ *           by ". " ("st. james" and "n. maple" are not breaks).
+ *   C4      a weak suffix with no real city/state tail.
+ *   C4stop  a weak suffix whose first city word starts prose.
+ * Never changes a shown string; only decides whether it is kept.
+ */
+function rejectedCandidate(text: string, m: RegExpMatchArray, strict: RegExp): AddressRejectReason | null {
+  const s = strictAt(text, m, strict);
+  const street = s ? s[1] : m[1];
+  const toks = collapseWs(street).split(" ");
+  let name = toks.slice(1, -1);
+  if (name.length > 0 && STREET_DIRECTIONS.has(name[0].replace(/\.$/, ""))) name = name.slice(1);
+  if (name.length > MAX_STREET_NAME_WORDS) return "C1";
+  const rawName = street.replace(/^\d+\s+/, "").replace(/\s+[a-z]+$/, "");
+  if (/[a-z]{3,}\.\s/.test(rawName)) return "C2";
+  if (WEAK_SUFFIXES.has(toks[toks.length - 1])) {
+    if (!s || s[3] === undefined) return "C4";
+    const cityWords = s[3].split(/[^a-z]+/).filter(Boolean).slice(0, -1);
+    if (cityWords.length > 0 && CITY_STOPWORDS.has(cityWords[0])) return "C4stop";
+  }
+  return null;
+}
+
+/**
+ * Every detected candidate in order, after the ZIP / no-ZIP decision and the
+ * de-duplication on matched text: the string it shows and, if it is not an
+ * address, why. `text` is lowercased email text, as `_getEmailText` makes it.
+ */
+export function addressCandidates(text: string): Array<{ shown: string; reason: AddressRejectReason | null }> {
+  let found = [...text.matchAll(DETECT_WITH_ZIP)];
+  let strict = ADDRESS_WITH_ZIP;
+  if (found.length === 0) {
+    found = [...text.matchAll(DETECT_NO_ZIP)];
+    strict = ADDRESS_NO_ZIP;
+  }
+  // Duplicates are removed on the matched text, as before.
+  const seen = new Set<string>();
+  const out: Array<{ shown: string; reason: AddressRejectReason | null }> = [];
+  for (const m of found) {
+    if (seen.has(m[0])) continue;
+    seen.add(m[0]);
+    out.push({ shown: shownAddress(text, m, strict), reason: rejectedCandidate(text, m, strict) });
+  }
+  return out;
 }
 
 /**
@@ -257,8 +346,9 @@ class TransactionExtractorService {
     // Address patterns - Multiple patterns for flexibility
     // Pattern 1: Full address with ZIP (most confident)
     // Format: 123 Main Street, San Francisco, CA 94102
-    // BACKLOG-4225: unchanged — it decides WHAT is detected. Only the address
-    // string shown for a match is trimmed (see _extractAddresses).
+    // BACKLOG-4225: unchanged — it still feeds the confidence score. The
+    // address list comes from _extractAddresses, which trims each shown
+    // string and drops candidates that are sentences, not addresses.
     address:
       /\b\d+\s+[A-Za-z\s\-\.]+?\s+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Way|Court|Ct|Boulevard|Blvd|Place|Pl|Circle|Cir|Parkway|Pkwy|Trail|Ter|Crescent|Hill|Freeway|Path|Route|Rte|Square|Turnpike|Vista|Viaduct|Cove|Dale|Ridge|View|Walk|Wood|Drive|Court)[,\s]+[A-Za-z\s]+?[,\s]+[A-Z]{2}[\s,]+\d{5}(?:-\d{4})?\b/gi,
 
@@ -586,25 +676,22 @@ class TransactionExtractorService {
    * @private
    */
   private _extractAddresses(text: string): string[] {
-    // WHICH text holds an address is decided by the original two patterns
-    // (ZIP first; the no-ZIP fallback only when nothing had a ZIP).
-    // BACKLOG-4225 changes only the string kept for each match: its
-    // city/state tail is kept when it is a real one-line tail (strict
-    // pattern), otherwise the match is cut at the street suffix.
-    let found = [...text.matchAll(DETECT_WITH_ZIP)];
-    let strict = ADDRESS_WITH_ZIP;
-    if (found.length === 0) {
-      found = [...text.matchAll(DETECT_NO_ZIP)];
-      strict = ADDRESS_NO_ZIP;
-    }
-    // Duplicates are removed on the matched text, as before, so each email
-    // keeps the same number of addresses.
-    const seen = new Set<string>();
+    // WHICH text may hold an address is decided by the original two patterns
+    // (ZIP first; the no-ZIP fallback only when nothing had a ZIP). Each
+    // match's string keeps its city/state tail when that is a real one-line
+    // tail (strict pattern), otherwise it is cut at the street suffix.
+    // BACKLOG-4225 filter: a candidate that is a sentence, not an address,
+    // is dropped. The filter only removes: when the FIRST candidate is
+    // rejected the email gets no address at all (a later one is not
+    // promoted to first, so no new group key appears); a later rejected
+    // candidate is skipped. The kept strings are unchanged.
     const out: string[] = [];
-    for (const m of found) {
-      if (seen.has(m[0])) continue;
-      seen.add(m[0]);
-      out.push(shownAddress(text, m, strict));
+    for (const c of addressCandidates(text)) {
+      if (c.reason !== null) {
+        if (out.length === 0) return [];
+        continue;
+      }
+      out.push(c.shown);
     }
     return out;
   }

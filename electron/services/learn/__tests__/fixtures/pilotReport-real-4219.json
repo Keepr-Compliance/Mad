@@ -3,7 +3,7 @@
   "report": {
     "schema": 1,
     "app_version": "2.46.2",
-    "learn_rules_version": 3,
+    "learn_rules_version": 4,
     "sender_rules_version": 1,
     "sender_rules_source": "bundled",
     "sender_rules_download_rejected": false,
@@ -91,7 +91,7 @@
     },
     "answers_by_rule_version": [
       {
-        "rule_version": 3,
+        "rule_version": 4,
         "deal": 1,
         "bulk": 0
       }

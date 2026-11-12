@@ -12,7 +12,7 @@
  */
 
 import { useMemo } from 'react';
-import type { SavedViewsSharing, ShareDialogProps } from '@keepr/ui';
+import type { SavedViewsSharing, SharingDialogProps } from '@keepr/ui';
 import type { PeriodOnlyViewsApi } from './period-only-views-api';
 import {
   PERIOD_ONLY_SAVE_HINT,
@@ -41,9 +41,9 @@ export interface PeriodOnlySavedViewsProps {
   sharing: SavedViewsSharing<PeriodOnlySavedView> | undefined;
 }
 
-/** The SavedViews props plus the one ShareDialog the report renders (BACKLOG-4087). */
+/** The SavedViews props plus the one SharingDialog the report renders (BACKLOG-4087, 3513). */
 export interface PeriodOnlySavedViewsResult extends PeriodOnlySavedViewsProps {
-  shareDialog: ShareDialogProps;
+  shareDialog: SharingDialogProps;
 }
 
 export function usePeriodOnlySavedViews(

@@ -10,7 +10,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { SavedViews, ShareDialog, type SaveViewOptions } from '@keepr/ui';
+import { SavedViews, SharingDialog, type SaveViewOptions } from '@keepr/ui';
 import { DEFAULT_PERIOD, type PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
 import type { ReportViewsApi } from '@/lib/reports/report-views-api';
@@ -324,7 +324,7 @@ export function ExportsReport({
                 />
               }
             />
-            <ShareDialog {...shareDialog} />
+            <SharingDialog {...shareDialog} />
           </>
         }
       />
