@@ -589,6 +589,8 @@ const REFUSED_ACTIONS: Record<string, ActionEntry> = {
   'lib/actions/domainClaim.ts#createDomainClaim': act(() => import('@/lib/actions/domainClaim'), 'createDomainClaim', 'brokerage-audit.example'),
   'lib/actions/domainClaim.ts#checkDomainClaim': act(() => import('@/lib/actions/domainClaim'), 'checkDomainClaim', '00000000-0000-4000-8000-000000003962'), // pii-allow-uuid: invented fixture id
   'lib/actions/domainClaim.ts#withdrawDomainClaim': act(() => import('@/lib/actions/domainClaim'), 'withdrawDomainClaim', '00000000-0000-4000-8000-000000003962'), // pii-allow-uuid: invented fixture id
+  // BACKLOG-3962 PR4a: the personal-accounts switch, same gate.
+  'lib/actions/domainClaim.ts#setBlockSoloSignups': act(() => import('@/lib/actions/domainClaim'), 'setBlockSoloSignups', '00000000-0000-4000-8000-000000003962', true), // pii-allow-uuid: invented fixture id
   // BACKLOG-3962 PR3a: requireDomainClaimAccess (admin / it_admin of the session's organization).
   'lib/actions/domainCapture.ts#startCapture': act(() => import('@/lib/actions/domainCapture'), 'startCapture', {
     claimId: '00000000-0000-4000-8000-000000003962', // pii-allow-uuid: invented fixture id
@@ -704,6 +706,7 @@ const REFUSALS: Record<string, Outcome | Record<Persona, Outcome>> = {
   'lib/actions/domainClaim.ts#createDomainClaim': DOMAIN_CLAIM_REFUSED,
   'lib/actions/domainClaim.ts#checkDomainClaim': DOMAIN_CLAIM_REFUSED,
   'lib/actions/domainClaim.ts#withdrawDomainClaim': DOMAIN_CLAIM_REFUSED,
+  'lib/actions/domainClaim.ts#setBlockSoloSignups': DOMAIN_CLAIM_REFUSED,
   'lib/actions/domainCapture.ts#startCapture': DOMAIN_CAPTURE_REFUSED,
   'lib/actions/domainCapture.ts#cancelCapture': DOMAIN_CAPTURE_REFUSED,
   'lib/actions/billingSetup.ts#completeBillingSetup': {
@@ -775,6 +778,8 @@ const FLOOR_ACTIONS = [
   'lib/actions/createTokenClaim.ts#createTokenClaim',
   // BACKLOG-3991: verifies the access token and writes only that user's own names.
   'lib/actions/syncDesktopIdpNames.ts#syncDesktopIdpNames',
+  // BACKLOG-3962 PR4a: verifies the access token; JIT and caller_domain_managed decide on auth.uid().
+  'lib/actions/desktopJitJoin.ts#desktopJitJoin',
   // BACKLOG-4007 People v2: My Account phone; my_phone_get / my_phone_set touch only auth.uid()'s row.
   'lib/actions/myPhone.ts#getMyPhone',
   'lib/actions/myPhone.ts#setMyPhone',
@@ -1079,7 +1084,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(65); // BACKLOG-3962 join now: + joinNowSelf; BACKLOG-3962 PR3a: + startCapture, cancelCapture, optOutSelf; BACKLOG-3962: + createDomainClaim, checkDomainClaim, withdrawDomainClaim; BACKLOG-3854: + addSeats, openBrokerageBillingPortal; BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
+    expect(actions.length).toBe(67); // BACKLOG-3962 PR4a: + setBlockSoloSignups, desktopJitJoin; BACKLOG-3962 join now: + joinNowSelf; BACKLOG-3962 PR3a: + startCapture, cancelCapture, optOutSelf; BACKLOG-3962: + createDomainClaim, checkDomainClaim, withdrawDomainClaim; BACKLOG-3854: + addSeats, openBrokerageBillingPortal; BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
   });
 });
 
