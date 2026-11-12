@@ -63,13 +63,13 @@ describe('H1: authorization server metadata', () => {
 
   it('the issuer is MCP_PUBLIC_ORIGIN, whatever the request Host', async () => {
     const res = await metadata.GET(
-      new Request('https://attacker-host.test/.well-known/oauth-authorization-server', {
-        headers: { host: 'attacker-host.test', 'x-forwarded-host': 'attacker-host.test' },
+      new Request('https://other-host.test/.well-known/oauth-authorization-server', {
+        headers: { host: 'other-host.test', 'x-forwarded-host': 'other-host.test' },
       })
     );
     const body = await res.json();
     expect(body.issuer).toBe(ORIGIN);
-    expect(JSON.stringify(body)).not.toContain('attacker-host');
+    expect(JSON.stringify(body)).not.toContain('other-host');
   });
 
   it('a trailing slash on MCP_PUBLIC_ORIGIN still gives the bare origin', async () => {

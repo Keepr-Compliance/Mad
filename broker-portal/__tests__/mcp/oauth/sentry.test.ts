@@ -111,6 +111,8 @@ describe.each(['server', 'edge'] as const)('sentry.%s.config', (file) => {
       });
       const out = hooks.beforeSend({ request: { url: 'https://portal.test/dashboard' }, message: 'x', extra });
       expect(out).not.toBeNull();
+      expect((out!.extra as Rec).self).toBe('[circular]');
+      expect((out!.extra as Rec).bad).toBe('[unreadable]');
       const text = JSON.stringify(out);
       expect(text).not.toContain(PLANTED_KPR);
       expect(text).not.toContain(PLANTED_PLAIN);
@@ -151,6 +153,7 @@ describe.each(['server', 'edge'] as const)('sentry.%s.config', (file) => {
       });
       const out = hooks.beforeBreadcrumb({ data });
       expect(out).not.toBeNull();
+      expect((out!.data as Rec).self).toBe('[circular]');
       expect(JSON.stringify(out)).not.toContain(PLANTED_PLAIN);
       expect(JSON.stringify(out)).not.toContain(PLANTED_KPR);
     });

@@ -56,7 +56,23 @@ export function postgrestFetchError(planted: string) {
   };
 }
 
-/** postgrest-js 2.110.2 timeout (AbortError) branch. */
+/**
+ * postgrest-js 2.110.2 with an AbortSignal.timeout() signal: Node 22 rejects
+ * with name 'TimeoutError' (measured), which takes postgrest-js's generic
+ * branch (empty hint), not its AbortError branch.
+ */
+export function postgrestTimeoutError(planted: string) {
+  return {
+    success: false,
+    error: { message: `TimeoutError: The operation was aborted due to timeout ${planted}`, details: '', hint: '', code: '' },
+    data: null,
+    count: null,
+    status: 0,
+    statusText: '',
+  };
+}
+
+/** postgrest-js 2.110.2 AbortError branch (a caller-aborted signal). */
 export function postgrestAbortError(planted: string) {
   return {
     success: false,

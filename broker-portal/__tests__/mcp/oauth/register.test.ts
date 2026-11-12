@@ -32,6 +32,7 @@ import {
   PORTAL_SECRET,
   postgrestAbortError,
   postgrestFetchError,
+  postgrestTimeoutError,
   REDIRECT_URI,
   refusal,
   registerOk,
@@ -297,7 +298,8 @@ describe('H15a: database result mapping', () => {
 
   it.each([
     ['fetch failure (returned)', () => Promise.resolve(postgrestFetchError(PLANTED_PLAIN))],
-    ['timeout (returned)', () => Promise.resolve(postgrestAbortError(PLANTED_PLAIN))],
+    ['timeout (returned)', () => Promise.resolve(postgrestTimeoutError(PLANTED_PLAIN))],
+    ['caller abort (returned)', () => Promise.resolve(postgrestAbortError(PLANTED_PLAIN))],
     ['thrown TypeError', () => Promise.reject(new TypeError(`fetch failed ${PLANTED_PLAIN}`))],
     ['thrown AbortError', () => Promise.reject(Object.assign(new Error(`aborted ${PLANTED_PLAIN}`), { name: 'AbortError' }))],
     ['{ok:"true"}', () => Promise.resolve({ data: { ok: 'true', client_id: 'x', client_name: 'x', redirect_uris: [] }, error: null })],
