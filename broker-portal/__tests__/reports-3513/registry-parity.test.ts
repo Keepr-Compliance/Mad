@@ -26,9 +26,10 @@ jest.mock('@/lib/supabase/server', () => ({ createClient: jest.fn() }));
 jest.mock('next/navigation', () => ({ notFound: jest.fn() }));
 
 const PORTAL = join(__dirname, '..', '..');
-const MIGRATION = readFileSync(
-  join(PORTAL, '..', 'supabase', 'migrations', '20261112200000_backlog_3513_broker_report_definitions.sql'),
-  'utf8'
+/** Windows checkouts have CRLF line endings; every regex below expects LF. */
+const readLf = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
+const MIGRATION = readLf(
+  join(PORTAL, '..', 'supabase', 'migrations', '20261112200000_backlog_3513_broker_report_definitions.sql')
 );
 
 function quoted(list: string): string[] {
@@ -74,7 +75,7 @@ describe('B4: registry and database agree', () => {
     expect(sig).not.toBeNull();
     const params = Array.from(sig![1].matchAll(/\b(p_[a-z_]+)\b/g), (m) => m[1]);
     expect(params.length).toBeGreaterThan(0);
-    const loader = readFileSync(join(PORTAL, 'lib/reports/datasets/submissions.ts'), 'utf8');
+    const loader = readLf(join(PORTAL, 'lib/reports/datasets/submissions.ts'));
     const body = /function rowArgs[\s\S]*?return \{([\s\S]*?)\};/.exec(loader);
     expect(body).not.toBeNull();
     const sent = Array.from(body![1].matchAll(/\b(p_[a-z_]+):/g), (m) => m[1]);
