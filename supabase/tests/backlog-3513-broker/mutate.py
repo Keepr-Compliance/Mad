@@ -76,6 +76,9 @@ MUT = {
   # C6: take-over while the owner is active / by an agent
   'M23_TAKEOVER_OWNER_ACTIVE': [("     OR (d.owner_user_id IS NOT NULL\n         AND public._broker_report_member_role(d.organization_id, d.owner_user_id) IS NOT NULL) THEN",
                                  "     THEN")],
+  # SR N1: the owner-active check skipped for an it_admin caller only
+  'M35_OWNER_ACTIVE_SKIPPED_FOR_IT_ADMIN': [("     OR (d.owner_user_id IS NOT NULL\n         AND public._broker_report_member_role(d.organization_id, d.owner_user_id) IS NOT NULL) THEN",
+      "     OR (d.owner_user_id IS NOT NULL\n         AND public._broker_report_member_role(d.organization_id, v_uid) IS DISTINCT FROM 'it_admin'\n         AND public._broker_report_member_role(d.organization_id, d.owner_user_id) IS NOT NULL) THEN")],
   'M24_TAKEOVER_ANY_ROLE': [("'') NOT IN ('broker', 'admin', 'it_admin')", "'') = ''")],
   'M34_TAKEOVER_NO_IT_ADMIN': [("'') NOT IN ('broker', 'admin', 'it_admin')", "'') NOT IN ('broker', 'admin')")],
   # R2: take-over without the broker_reports check

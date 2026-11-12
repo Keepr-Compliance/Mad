@@ -1,7 +1,6 @@
 /**
- * ReportSavedViews (BACKLOG-3514) against a FIXTURE registry entry; no
- * production report is registered. The api is a fake with the real method
- * names.
+ * ReportSavedViews (BACKLOG-3514) against a FIXTURE registry entry. The api is
+ * a fake with the real method names.
  */
 
 jest.mock('@/lib/supabase/client', () => ({
@@ -52,8 +51,11 @@ beforeEach(() => {
   jest.spyOn(console, 'error').mockImplementation(() => {});
 });
 
-it('no production report is registered (fixture-only until BACKLOG-3507)', () => {
-  expect(REPORT_REGISTRY).toEqual([]);
+// BACKLOG-3513 PR-3a registered the first production report. The tests below
+// still run against FIXTURE_REPORT.
+it('the one production report is Submissions, with saved views and no pinned cards', () => {
+  expect(REPORT_REGISTRY.map((r) => r.slug)).toEqual(['submissions']);
+  expect(REPORT_REGISTRY[0].savedView?.metricColumns).toEqual([]);
 });
 
 it('renders nothing for a report without a savedView spec', () => {

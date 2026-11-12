@@ -11,9 +11,9 @@
  * opens it to every active brokerage agent of the organization as well,
  * limited to the agent's own rows (scope 'own').
  *
- * PR-1 registers NO report: the section ships invisible. The first report is
- * registered by a later PR, together with the database policy that bounds its
- * rows.
+ * The first report, Submissions (BACKLOG-3513 PR-3a), reads its rows through
+ * public.broker_report_submissions_rows (migration 20261112200000), a SECURITY
+ * INVOKER function: transaction_submissions RLS bounds every row it returns.
  *
  * Report authors (BACKLOG-3511): bound every report source's rows with the
  * helper public.org_report_scope(org) from migration 20261108190000 and these
@@ -68,4 +68,20 @@ export interface ReportDefinition {
   savedView?: ReportSavedViewSpec;
 }
 
-export const REPORT_REGISTRY: readonly ReportDefinition[] = [];
+/** Sort keys a Submissions saved view may hold: the row function's sort whitelist. */
+export const SUBMISSIONS_SORT_KEYS = ['newest', 'oldest', 'status', 'price_desc', 'price_asc'] as const;
+
+export const SUBMISSIONS_REPORT: ReportDefinition = {
+  slug: 'submissions',
+  title: 'Submissions',
+  description: 'Every deal sent for review, one row per deal, with filters for status, agent and date.',
+  source: 'rpc broker_report_submissions_rows (migration 20261112200000)',
+  access: { roles: ['broker', 'admin', 'it_admin'], agentScoped: true },
+  savedView: {
+    filterKeys: ['status', 'agent', 'from', 'to'],
+    sortKeys: SUBMISSIONS_SORT_KEYS,
+    metricColumns: [],
+  },
+};
+
+export const REPORT_REGISTRY: readonly ReportDefinition[] = [SUBMISSIONS_REPORT];

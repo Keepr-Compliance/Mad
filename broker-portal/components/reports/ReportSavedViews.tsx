@@ -14,8 +14,8 @@
  * report still offers (degrade.ts strips the rest before the page queries).
  * When anything was stripped, a notice names it.
  *
- * Not mounted by any page yet: the first report that uses it arrives with
- * BACKLOG-3507.
+ * Mounted by the Submissions report (BACKLOG-3513 PR-3a,
+ * components/reports/submissions/SubmissionsReportFilters.tsx).
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
