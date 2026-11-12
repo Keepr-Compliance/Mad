@@ -53,14 +53,17 @@ for n in names:
     open(p, 'w').write(s.replace(old, new))
     ns = subprocess.check_output(['git', 'diff', '--numstat', '--', rel], cwd=ROOT, text=True).strip()
     print(f'{n}: MUTATION APPLIED [{ns}] -> {(new.strip() or "(line removed)")[:90]}')
-    out = subprocess.run(['npx', 'jest', *TESTS], cwd=BP, capture_output=True, text=True)
+    # --bail=0: the root jest config sets bail: 1, which stops after the first failing suite and
+    # would hide the other suites a mutation turns red.
+    out = subprocess.run(['npx', 'jest', '--bail=0', *TESTS], cwd=BP, capture_output=True, text=True)
     txt = out.stderr + out.stdout
     t = re.search(r'Tests:\s+(.*)', txt)
+    su = re.search(r'Test Suites:\s+(.*)', txt)
     fails = list(dict.fromkeys(re.findall(r'^\s*● (.+?)\s*$', txt, re.M)))
     fails = [f for f in fails if not f.startswith('Console')]
-    print(f'  {t.group(1) if t else "NO TEST COUNT"} | red ({len(fails)}):')
+    print(f'  suites {su.group(1) if su else "?"} | tests {t.group(1) if t else "NO TEST COUNT"} | red ({len(fails)}):')
     for f in fails:
         print(f'    - {f}')
-    if t is None or ' 0 total' in t.group(1):
-        print('  WARNING: no test count / zero tests')
+    if t is None or ' 0 total' in t.group(1) or (su and ' of ' in su.group(1)):
+        print('  WARNING: no test count / zero tests / not every suite ran')
     subprocess.run(['git', 'checkout', '--', rel], cwd=ROOT, check=True)
