@@ -275,6 +275,11 @@ describe('H14: refresh', () => {
     await expectError(await post(form(REFRESH_GRANT)), 400, 'invalid_request');
   });
 
+  it('an uppercase resource is accepted and sent canonical (H28)', async () => {
+    await post(form({ ...REFRESH_GRANT, resource: 'HTTPS://PORTAL.TEST/api/mcp' }));
+    expect(wireArgs('mcp_refresh').p_resource).toBe(RESOURCE);
+  });
+
   it.each([
     ['refresh_token missing', { refresh_token: undefined }, 'invalid_request'],
     ['refresh_token malformed', { refresh_token: `kpr_rt_${'R'.repeat(44)}` }, 'invalid_grant'],

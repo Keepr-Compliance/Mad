@@ -207,7 +207,7 @@ describe('H10: scope', () => {
   });
 });
 
-describe('H7: never redirects to the client for a request it cannot trust', () => {
+describe('H7: request and database failures show a page, not a redirect', () => {
   it.each([
     ['client_id sent twice', `${query(GOOD)}&client_id=${CLIENT_ID}`],
     ['redirect_uri sent twice', `${query(GOOD)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`],

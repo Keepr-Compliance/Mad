@@ -26,6 +26,11 @@ describe('redactDeep', () => {
     ]);
   });
 
+  it('an array shared by two siblings is copied into both', () => {
+    const shared = ['x', PLANTED_KPR];
+    expect(redactDeep({ a: shared, b: [shared] })).toEqual({ a: ['x', '[redacted]'], b: [['x', '[redacted]']] });
+  });
+
   it('a reference back to an ancestor is still a cycle', () => {
     const root: Rec = { k: PLANTED_KPR };
     root.child = { up: root };

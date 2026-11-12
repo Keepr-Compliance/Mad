@@ -55,7 +55,7 @@ export function isSubsetOf(value: unknown, allowed: readonly string[]): boolean 
 }
 
 /** Parameters of a query string or form body, with duplicate detection. */
-export interface ParsedForm {
+interface ParsedForm {
   /** Defined parameters that appear exactly once with a non-empty value. An empty value counts as absent. */
   values: Map<string, string>;
   /** Defined parameters that appear more than once. */

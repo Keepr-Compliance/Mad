@@ -120,13 +120,13 @@ export async function registerClient(cfg: ClientConfig, a: RegisterArgs): Promis
 const AUTHORIZE_PAGE_ERRORS = ['invalid_client', 'temporarily_unavailable'] as const;
 const AUTHORIZE_REDIRECT_ERRORS = ['invalid_request', 'invalid_scope'] as const;
 
-export type AuthorizeResult =
+type AuthorizeResult =
   | { kind: 'ok'; requestId: string }
   | { kind: 'page'; error: (typeof AUTHORIZE_PAGE_ERRORS)[number] }
   | { kind: 'redirect'; error: (typeof AUTHORIZE_REDIRECT_ERRORS)[number]; redirectUri: string }
   | Transport;
 
-export interface AuthorizeArgs {
+interface AuthorizeArgs {
   secret: string;
   clientId: string;
   redirectUri: string;
@@ -209,7 +209,7 @@ function checkTokenEnvelope(v: unknown): TokenResult {
   return code ? { kind: 'error', error: code } : transport(null);
 }
 
-export interface ExchangeArgs {
+interface ExchangeArgs {
   secret: string;
   codeDigest: string;
   codeVerifier: string;
@@ -236,7 +236,7 @@ export async function exchangeCode(cfg: ClientConfig, a: ExchangeArgs): Promise<
   return checkTokenEnvelope(res.data);
 }
 
-export interface RefreshArgs {
+interface RefreshArgs {
   secret: string;
   rtDigest: string;
   clientId: string;

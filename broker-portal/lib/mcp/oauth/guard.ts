@@ -29,7 +29,7 @@ export type RouteHandlers = Record<HttpMethod, (_req: Request) => Promise<Respon
 
 export const ROUTE_ERROR_MESSAGE = 'mcp-oauth route error';
 
-export interface RouteOptions {
+interface RouteOptions {
   /** The answer when the handler throws; a JSON 503 when not given. */
   onError?: () => Response;
 }
