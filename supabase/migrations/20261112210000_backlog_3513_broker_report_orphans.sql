@@ -40,7 +40,8 @@ BEGIN
         ('public._broker_report_member_role(uuid,uuid)', ARRAY['efe997c5ed850264d7080c9292fe6f55']),
         ('public._broker_report_level(uuid)', ARRAY['c1d596814954e58c1b4fe6ae10b03823']),
         ('public._broker_report_person_name(uuid)', ARRAY['7b82b4b6c1d64915e2e6e87685352401']),
-        ('public.broker_report_take_over(uuid)', ARRAY['b6b0d7843e1f1308f24c5cdd1af19406'])
+        ('public.broker_report_take_over(uuid)', ARRAY['b6b0d7843e1f1308f24c5cdd1af19406']),
+        ('public._org_feature_allowed(uuid,text)', ARRAY['fc1007396cdff5e197012dd542888a6a'])
       ) AS v(sig, ok)
       LEFT JOIN pg_proc p ON p.oid = to_regprocedure(v.sig)
   LOOP

@@ -129,6 +129,14 @@ BEGIN
   END;
   r := r || jsonb_build_object('K2_pin_refuses_changed_body', pg_temp.pass(s LIKE '%_broker_report_person_name(uuid) body changed%', s));
   BEGIN
+    EXECUTE 'CREATE OR REPLACE FUNCTION public._org_feature_allowed(p_org uuid, p_key text) RETURNS boolean LANGUAGE sql STABLE AS $f$ SELECT true $f$';
+    EXECUTE $mg$__MIGRATION__$mg$;
+    s := 'APPLIED';
+  EXCEPTION WHEN OTHERS THEN
+    s := SQLERRM;
+  END;
+  r := r || jsonb_build_object('K4_pin_refuses_changed_feature_check', pg_temp.pass(s LIKE '%_org_feature_allowed(uuid,text) body changed%', s));
+  BEGIN
     EXECUTE $rb$__ROLLBACK__$rb$;
     s := (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.broker_report_def_get(uuid)'))
          || '/' || (to_regprocedure('public.broker_report_orphans(uuid)') IS NULL)::text

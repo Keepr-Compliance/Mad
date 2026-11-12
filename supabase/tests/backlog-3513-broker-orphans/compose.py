@@ -29,7 +29,7 @@ if '--regression' in sys.argv:
 else:
     ctl = open(os.path.join(here, 'controls.sql')).read()
     rb = open(os.path.join(here, 'rollback.sql')).read()
-    assert ctl.count('__ROLLBACK__') == 1 and ctl.count('__MIGRATION__') == 2
+    assert ctl.count('__ROLLBACK__') == 1 and ctl.count('__MIGRATION__') == 3
     for tag in ('$rb$', '$mg$', '$b$', '$q$', '$drv$'):
         assert tag not in rb and tag not in m210, tag
     ctl = ctl.replace('__ROLLBACK__', rb).replace('__MIGRATION__', m210)
