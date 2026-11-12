@@ -76,7 +76,14 @@ MUT = {
   # C6: take-over while the owner is active / by an agent
   'M23_TAKEOVER_OWNER_ACTIVE': [("     OR (d.owner_user_id IS NOT NULL\n         AND public._broker_report_member_role(d.organization_id, d.owner_user_id) IS NOT NULL) THEN",
                                  "     THEN")],
-  'M24_TAKEOVER_ANY_ROLE': [("'') NOT IN ('broker', 'admin')", "'') = ''")],
+  'M24_TAKEOVER_ANY_ROLE': [("'') NOT IN ('broker', 'admin', 'it_admin')", "'') = ''")],
+  'M34_TAKEOVER_NO_IT_ADMIN': [("'') NOT IN ('broker', 'admin', 'it_admin')", "'') NOT IN ('broker', 'admin')")],
+  # R2: take-over without the broker_reports check
+  'M33_TAKEOVER_NO_FEATURE': [("     OR NOT coalesce(public._org_feature_allowed(d.organization_id, 'broker_reports'), false)\n     OR (d.owner_user_id",
+                               "     OR (d.owner_user_id")],
+  # R1: removing 'admins' deletes the admin row only
+  'M32_REMOVE_ADMINS_PARTIAL': [("    v_roles := CASE WHEN p_id = 'admins' THEN ARRAY['admin', 'it_admin'] ELSE ARRAY[p_id] END;",
+                                 "    v_roles := CASE WHEN p_id = 'admins' THEN ARRAY['admin'] ELSE ARRAY[p_id] END;")],
   # founder ruling: 'admins' writes admin only
   'M25_ADMINS_ADMIN_ONLY': [("      v_roles := v_roles || ARRAY['admin', 'it_admin'];", "      v_roles := v_roles || ARRAY['admin'];")],
   # 'admins' not collapsed on read

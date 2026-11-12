@@ -33,6 +33,8 @@
 --         412 X12 O1 B1, no grants                                            ('admins' target)
 --         413 X13 T  user 13                                                  (feature off)
 --         414 X14 O1 B1, A1 editor                                            (update / stale)
+--         415 X15 O1 user 8 (suspended)                                       (take-over by a broker)
+--         416 X16 T  owner NULL                                               (take-over, feature off)
 
 CREATE FUNCTION pg_temp.fx(n int) RETURNS uuid LANGUAGE sql IMMUTABLE AS $b$
   SELECT ('00000000-0000-3513-8200-' || lpad(n::text, 12, '0'))::uuid
@@ -201,7 +203,8 @@ BEGIN
       (407, 101, 'Report seven', 1, 'all', 'organization'), (408, 101, 'Report eight', 5, 'all', 'restricted'),
       (409, 101, 'Report nine', 8, 'all', 'restricted'), (410, 101, 'Report ten', NULL, 'all', 'restricted'),
       (411, 101, 'Report eleven', 1, 'all', 'restricted'), (412, 101, 'Report twelve', 1, 'all', 'restricted'),
-      (413, 105, 'Report thirteen', 13, 'all', 'restricted'), (414, 101, 'Report fourteen', 1, 'all', 'restricted')
+      (413, 105, 'Report thirteen', 13, 'all', 'restricted'), (414, 101, 'Report fourteen', 1, 'all', 'restricted'),
+      (415, 101, 'Report fifteen', 8, 'all', 'restricted'), (416, 105, 'Report sixteen', NULL, 'all', 'restricted')
     ) AS v(i, o, nm, ow, rs, ga);
 
   INSERT INTO public.broker_report_definition_grants (definition_id, principal_type, principal_user_id, principal_role, level)

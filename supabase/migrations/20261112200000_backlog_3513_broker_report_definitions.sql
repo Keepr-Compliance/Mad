@@ -918,7 +918,7 @@ $function$;
 
 -- ---------------------------------------------------------------------------
 -- F18: take over a report whose owner is gone (owner NULL or no longer an active member).
--- Caller: an active broker or admin of the definition's organization, broker_reports on.
+-- Caller: an active broker, admin or IT admin of the definition's organization, broker_reports on.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.broker_report_take_over(p_def uuid)
 RETURNS jsonb
@@ -936,7 +936,7 @@ BEGIN
   END IF;
   SELECT * INTO d FROM public.broker_report_definitions WHERE id = p_def FOR UPDATE;
   IF NOT FOUND
-     OR coalesce(public._broker_report_member_role(d.organization_id, v_uid), '') NOT IN ('broker', 'admin')
+     OR coalesce(public._broker_report_member_role(d.organization_id, v_uid), '') NOT IN ('broker', 'admin', 'it_admin')
      OR NOT coalesce(public._org_feature_allowed(d.organization_id, 'broker_reports'), false)
      OR (d.owner_user_id IS NOT NULL
          AND public._broker_report_member_role(d.organization_id, d.owner_user_id) IS NOT NULL) THEN

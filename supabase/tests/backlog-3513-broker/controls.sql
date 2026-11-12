@@ -200,6 +200,15 @@ BEGIN
     s NOT LIKE 'ERR%' AND (SELECT jsonb_agg(e ->> 'id') FROM jsonb_array_elements(s::jsonb) e) = '["agent", "broker", "admins"]'
     AND (SELECT e ->> 'detail' FROM jsonb_array_elements(s::jsonb) e WHERE e ->> 'id' = 'admins') = '2 people', s));
 
+  -- R1: removing "All admins" removes both stored roles
+  r := r || jsonb_build_object('RA_remove_admins', pg_temp.ctl(1, format(srem, pg_temp.fx(412), 'role', 'admins'), OK,
+    jsonb_build_array(pg_temp.ar(1, 'report_unshared', 412, 'Report twelve', '{"role":"admin","from":"viewer","to":null}'),
+                      pg_temp.ar(1, 'report_unshared', 412, 'Report twelve', '{"role":"it_admin","from":"viewer","to":null}'))));
+  s := pg_temp.call_as(1, format('SELECT public.broker_report_share_list(%L::uuid) -> ''entries''', pg_temp.fx(412)));
+  r := r || jsonb_build_object('RA_remove_admins_state', pg_temp.pass(
+    NOT EXISTS (SELECT 1 FROM public.broker_report_definition_grants WHERE definition_id = pg_temp.fx(412) AND principal_type = 'role')
+    AND pg_temp.lvl(4, 412) = NF AND pg_temp.lvl(3, 412) = NF AND s = '[]', 'entries=' || s || ' it_admin=' || pg_temp.lvl(4, 412)));
+
   -- ===== D9 (V5): candidates =====
   s := pg_temp.call_as(3, format('SELECT public.broker_report_share_candidates(%L::uuid)', pg_temp.fx(405)));
   r := r || jsonb_build_object('D9_people_active_same_org', pg_temp.pass(s NOT LIKE 'ERR%' AND
@@ -296,9 +305,12 @@ BEGIN
   -- ===== D13: take-over =====
   r := r || jsonb_build_object('D13_owner_active_refused', pg_temp.ctl(2, format(stake, pg_temp.fx(408)), NF, '[]'));
   r := r || jsonb_build_object('D13_agent_refused', pg_temp.ctl(6, format(stake, pg_temp.fx(409)), NF, '[]'));
-  r := r || jsonb_build_object('D13_it_admin_refused', pg_temp.ctl(4, format(stake, pg_temp.fx(409)), NF, '[]'));
-  r := r || jsonb_build_object('D13_broker_owner_gone', pg_temp.ctl(2, format(stake, pg_temp.fx(409)), OK,
-    jsonb_build_array(pg_temp.ar(2, 'report_owner_changed', 409, 'Report nine', '{"via":"take_over","member":2}'))));
+  r := r || jsonb_build_object('D13_it_admin_owner_gone', pg_temp.ctl(4, format(stake, pg_temp.fx(409)), OK,
+    jsonb_build_array(pg_temp.ar(4, 'report_owner_changed', 409, 'Report nine', '{"via":"take_over","member":4}'))));
+  r := r || jsonb_build_object('D13_broker_owner_gone', pg_temp.ctl(2, format(stake, pg_temp.fx(415)), OK,
+    jsonb_build_array(pg_temp.ar(2, 'report_owner_changed', 415, 'Report fifteen', '{"via":"take_over","member":2}'))));
+  -- owner gone, caller an active broker of the org: refused only because broker_reports is off there
+  r := r || jsonb_build_object('D13_feature_off_refused', pg_temp.ctl(13, format(stake, pg_temp.fx(416)), NF, '[]'));
   r := r || jsonb_build_object('D13_admin_owner_null', pg_temp.ctl(3, format(stake, pg_temp.fx(410)), OK,
     jsonb_build_array(pg_temp.ar(3, 'report_owner_changed', 410, 'Report ten', '{"via":"take_over","member":3}'))));
 
