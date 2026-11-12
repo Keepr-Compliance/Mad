@@ -8,7 +8,10 @@ import { isQuitting } from "./quitState";
 
 export interface HideOnCloseWindow {
   on(event: "close", listener: (e: { preventDefault(): void }) => void): unknown;
+  once(event: "leave-full-screen", listener: () => void): unknown;
   hide(): void;
+  isFullScreen(): boolean;
+  setFullScreen(flag: boolean): void;
 }
 
 export function attachHideOnClose(win: HideOnCloseWindow, platform: NodeJS.Platform): void {
@@ -16,6 +19,12 @@ export function attachHideOnClose(win: HideOnCloseWindow, platform: NodeJS.Platf
   win.on("close", (e) => {
     if (isQuitting()) return;
     e.preventDefault();
-    win.hide();
+    // Hiding a fullscreen window leaves an empty black Space: leave fullscreen first.
+    if (win.isFullScreen()) {
+      win.once("leave-full-screen", () => win.hide());
+      win.setFullScreen(false);
+    } else {
+      win.hide();
+    }
   });
 }

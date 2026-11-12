@@ -14,6 +14,8 @@ class FakeWindow extends EventEmitter {
   hidden = false;
   destroyed = false;
   hide() { this.hidden = true; }
+  isFullScreen() { return false; }
+  setFullScreen() {}
   isDestroyed() { return this.destroyed; }
   close() {
     let prevented = false;

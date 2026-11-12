@@ -10,7 +10,12 @@ import { clearQuitting, markQuitting } from "../quitState";
 class FakeWindow extends EventEmitter {
   hidden = false;
   destroyed = false;
+  fullScreen = false;
   hide() { this.hidden = true; }
+  isFullScreen() { return this.fullScreen; }
+  /** Electron leaves fullscreen asynchronously; the test emits leave-full-screen. */
+  setFullScreen(flag: boolean) { this.fullScreenRequest = flag; }
+  fullScreenRequest: boolean | undefined;
   /** Electron: the close proceeds (window destroyed) unless a listener prevents it. */
   close() {
     let prevented = false;
@@ -35,6 +40,18 @@ describe("hide on close (BACKLOG-3283)", () => {
     markQuitting();
     win.close();
     expect({ hidden: win.hidden, destroyed: win.destroyed }).toEqual({ hidden: false, destroyed: true });
+  });
+
+  it("macOS, fullscreen: close leaves fullscreen, then hides once it has left", () => {
+    const win = new FakeWindow();
+    win.fullScreen = true;
+    attachHideOnClose(win, "darwin");
+    win.close();
+    expect(win.fullScreenRequest).toBe(false);
+    expect({ hidden: win.hidden, destroyed: win.destroyed }).toEqual({ hidden: false, destroyed: false });
+    win.fullScreen = false;
+    win.emit("leave-full-screen");
+    expect({ hidden: win.hidden, destroyed: win.destroyed }).toEqual({ hidden: true, destroyed: false });
   });
 
   it.each(["win32", "linux"] as const)("%s: nothing is attached, close destroys the window", (platform) => {
