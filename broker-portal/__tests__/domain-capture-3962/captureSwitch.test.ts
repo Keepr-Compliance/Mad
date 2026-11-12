@@ -95,6 +95,7 @@ describe('runCaptureSwitch', () => {
     const h = harness({ due: [sw(1)], switchReply: (id) => switched(id) });
     await h.run();
     const order = h.rpc.mock.calls.map((c) => c[0]);
+    expect(order).toContain('_domain_claim_record_check');
     expect(order.indexOf('_domain_claim_record_check')).toBeLessThan(order.indexOf('_domain_capture_switch'));
   });
 
