@@ -86,6 +86,7 @@ const DROPPED: Array<[string, string]> = [
   ["n18", "C4"],
   ["x-C1", "C1"],
   ["x-C1cap5", "C1"],
+  ["x-C1shown", "C1"],
   ["x-C2", "C2"],
   ["x-C4stop", "C4stop"],
   ["x-P3", "C1"],
@@ -94,7 +95,7 @@ const DROPPED: Array<[string, string]> = [
 
 describe("BACKLOG-4225 address filter: invariant I (the filter only removes)", () => {
   it("I holds on every filter-corpus row", () => {
-    expect(rows.length).toBe(71);
+    expect(rows.length).toBe(73);
     const bad = rows.filter((r) => !invariantI(r.oldAddresses, addresses(r.email))).map((r) => r.id);
     expect(bad).toEqual([]);
   });
@@ -170,6 +171,8 @@ describe("BACKLOG-4225 address filter: what is dropped, and why", () => {
   it("C1 name length: 5 name words is a sentence (x-C1cap5), 4 is a street (k-mlk, k-4w)", () => {
     expect(reasons(row("x-C1cap5").email)).toEqual(["C1"]);
     expect(addresses(row("k-mlk").email)).toEqual(["1200 martin luther king jr way, testville, wa 00000"]);
+    // A leading direction word is not counted: 5 words before the suffix, 4 after it is dropped.
+    expect(addresses(row("k-mlk-dir").email)).toEqual(["500 n martin luther king jr way, testville, wa 00000"]);
     expect(addresses(row("k-4w").email)).toEqual(["55 old mill pond road, testville, wa 00000"]);
   });
 
@@ -241,6 +244,13 @@ describe("BACKLOG-4225 address filter: real addresses are kept as 2.47 shows the
   it("the two-line weak-word street is checked on the street that is SHOWN", () => {
     // DETECT alone ends this street at "view"; the shown (strict) street is "8 sea view road".
     expect(reasons(row("k-splitA").email)).toEqual([null]);
+    // x-C1shown: detection ends at the first suffix word ("... gamma view", 3 name words);
+    // the shown street runs on to "road" (5 name words) and is the one checked -> C1.
+    // Checking the detection street would pass it.
+    const shownStreet = row("x-C1shown").oldAddresses[0].split(",")[0];
+    expect(shownStreet).toBe("9 alpha beta gamma view delta epsilon road");
+    expect(reasons(row("x-C1shown").email)).toEqual(["C1"]);
+    expect(addresses(row("x-C1shown").email)).toEqual([]);
   });
 });
 

@@ -570,6 +570,28 @@
    ]
   },
   {
+   "id": "k-mlk-dir",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 500 N Martin Luther King Jr Way, Testville, WA 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "500 n martin luther king jr way, testville, wa 00000"
+   ]
+  },
+  {
+   "id": "x-C1shown",
+   "kind": "neg",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 9 Alpha Beta Gamma View Delta Epsilon Road\nTestville, WA 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "9 alpha beta gamma view delta epsilon road, testville, wa 00000"
+   ]
+  },
+  {
    "id": "k-hill",
    "kind": "pos",
    "email": {
