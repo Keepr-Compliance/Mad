@@ -186,6 +186,12 @@ BEGIN
   r := r || jsonb_build_object('RA_share_admins', pg_temp.ctl(1, format(sset, pg_temp.fx(412), '[{"kind":"role","id":"admins"}]', 'viewer'), OK,
     jsonb_build_array(pg_temp.ar(1, 'report_shared', 412, 'Report twelve', '{"role":"admin","from":null,"to":"viewer"}'),
                       pg_temp.ar(1, 'report_shared', 412, 'Report twelve', '{"role":"it_admin","from":null,"to":"viewer"}'))));
+  s := pg_temp.call_as(1, format('SELECT public.broker_report_share_list(%L::uuid) -> ''entries''', pg_temp.fx(412)));
+  r := r || jsonb_build_object('RA_share_list_one_admins_entry', pg_temp.pass(s = '[{"id": "admins", "kind": "role", "name": "All admins", "level": "viewer", "detail": null}]', s));
+  s := pg_temp.call_as(1, format('SELECT public.broker_report_share_list(%L::uuid) -> ''entries''', pg_temp.fx(406)));
+  r := r || jsonb_build_object('RA_share_list_admin_only_label', pg_temp.pass(
+    (SELECT e ->> 'name' FROM jsonb_array_elements(s::jsonb) e WHERE e ->> 'id' = 'admin') = 'Admins only'
+    AND (SELECT count(*) FROM jsonb_array_elements(s::jsonb) e WHERE e ->> 'kind' = 'role') = 3, s));
   r := r || jsonb_build_object('RA_it_admin_sees', pg_temp.pass(pg_temp.lvl(4, 412) = 'viewer', pg_temp.lvl(4, 412)));
   r := r || jsonb_build_object('RA_admin_sees', pg_temp.pass(pg_temp.lvl(3, 412) = 'viewer', pg_temp.lvl(3, 412)));
   r := r || jsonb_build_object('RA_agent_not', pg_temp.pass(pg_temp.lvl(5, 412) = NF, pg_temp.lvl(5, 412)));

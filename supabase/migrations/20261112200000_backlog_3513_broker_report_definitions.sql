@@ -622,12 +622,20 @@ BEGIN
           FROM public.broker_report_definition_grants g
          WHERE g.definition_id = p_def AND g.principal_type = 'user'
         UNION ALL
-        SELECT jsonb_build_object('kind', 'role', 'id', g.principal_role,
-                 'name', CASE g.principal_role WHEN 'agent' THEN 'All agents' WHEN 'broker' THEN 'All brokers'
-                                               WHEN 'admin' THEN 'All admins' ELSE 'All IT admins' END,
-                 'detail', NULL, 'level', g.level)
-          FROM public.broker_report_definition_grants g
-         WHERE g.definition_id = p_def AND g.principal_type = 'role'
+        -- admin + it_admin at the same level read back as the one 'admins' target ("All admins")
+        SELECT DISTINCT jsonb_build_object('kind', 'role', 'id', y.rid,
+                 'name', CASE y.rid WHEN 'agent' THEN 'All agents' WHEN 'broker' THEN 'All brokers'
+                                    WHEN 'admins' THEN 'All admins' WHEN 'admin' THEN 'Admins only'
+                                    ELSE 'IT admins only' END,
+                 'detail', NULL, 'level', y.level)
+          FROM (SELECT CASE WHEN g.principal_role IN ('admin', 'it_admin')
+                             AND (SELECT count(*) FROM public.broker_report_definition_grants g2
+                                   WHERE g2.definition_id = p_def AND g2.principal_type = 'role'
+                                     AND g2.principal_role IN ('admin', 'it_admin') AND g2.level = g.level) = 2
+                            THEN 'admins' ELSE g.principal_role END AS rid,
+                       g.level
+                  FROM public.broker_report_definition_grants g
+                 WHERE g.definition_id = p_def AND g.principal_type = 'role') y
       ) x(e)));
 END
 $function$;

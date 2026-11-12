@@ -1,8 +1,9 @@
 /**
- * BACKLOG-3513 PR-2: the shared broker report rows in the organization Activity list. Rows are
- * shaped as admin_get_org_activity returns them (detail allow-list: from, to, role, via, report_name;
- * subject_name resolved from detail.member_id), transcribed from the keepr-test harness run of
- * supabase/tests/backlog-3513-broker (control D12_reader_output), names replaced.
+ * BACKLOG-3513 PR-2: the shared broker report rows in the organization Activity list. Detail key
+ * sets per action are the ones admin_get_org_activity returned on keepr-test (2026-11-12, after the
+ * supabase/tests/backlog-3513-broker controls ran): created/deleted {report_name}; owner_changed
+ * {report_name} or {report_name, via}; general_access/row_scope/share_changed/shared/unshared
+ * {from, report_name, to}; a role grant adds {role} and has no subject_name. Values and names invented.
  */
 import { describe, expect, it } from 'vitest';
 import { describeActivity, type ActivityRow } from '@/lib/activity/describeActivity';

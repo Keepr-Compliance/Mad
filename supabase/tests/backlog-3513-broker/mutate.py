@@ -79,6 +79,8 @@ MUT = {
   'M24_TAKEOVER_ANY_ROLE': [("'') NOT IN ('broker', 'admin')", "'') = ''")],
   # founder ruling: 'admins' writes admin only
   'M25_ADMINS_ADMIN_ONLY': [("      v_roles := v_roles || ARRAY['admin', 'it_admin'];", "      v_roles := v_roles || ARRAY['admin'];")],
+  # 'admins' not collapsed on read
+  'M31_SHARE_LIST_NO_COLLAPSE': [("            THEN 'admins' ELSE g.principal_role END AS rid,", "            THEN g.principal_role ELSE g.principal_role END AS rid,")],
   # D15: no stale check
   'M26_NO_STALE_CHECK': [("  IF p_expected_updated_at IS DISTINCT FROM d.updated_at THEN", "  IF false THEN")],
   # D8: a REVOKE dropped
