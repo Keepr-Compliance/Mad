@@ -27,7 +27,7 @@ import { clearInviteCookie, readInviteToken } from '@/lib/auth/inviteCookie';
 import { DEFAULT_NEXT_PATH, clearNextPathCookie, readNextPathCookie } from '@/lib/auth/safeNextPath';
 import { syncIdpNames } from '@/lib/auth/idpNames';
 import { isBrokerageSuspendedError } from '@/lib/auth/orgSuspension';
-import { isBillingSetupIncompleteError, jitTargetFor } from '@/lib/auth/jitIdentity';
+import { domainManagedFor, domainManagedMayReplace, runJitJoin } from '@/lib/auth/jitJoin';
 import { setupLanding } from '@/lib/billing/setupState';
 import {
   PORTAL_MEMBERSHIP_SELECT,
@@ -221,43 +221,15 @@ export async function GET(request: Request) {
         }
       }
 
-      // No membership and no pending invite - check if user can JIT-join an existing org:
-      // Microsoft by tenant, Google Workspace by domain, from the identity THIS sign-in used
-      // (BACKLOG-4012; lib/auth/jitIdentity.ts). Consumer Google accounts never JIT-join.
-      const jitTarget = jitTargetFor(user);
-
-      // A failed JIT join does not sign out yet: the owner of a personal
-      // organization still gets the floor below. Its error code is kept for
-      // everyone else.
-      let jitErrorCode: string | null = null;
-
-      if (jitTarget) {
-        const { data: jitResult, error: jitError } = await supabase.rpc('jit_join_organization', {
-          p_provider_type: jitTarget.providerType,
-          p_identifier: jitTarget.identifier,
-        });
-        if (jitResult?.success) {
-          if (process.env.NODE_ENV === 'development') {
-            console.log(`JIT joined org ${jitResult.organization_id} with role ${jitResult.role}`);
-          }
-          return finish(`${origin}${next}`);
-        }
-        if (jitError) {
-          console.error('JIT join RPC failed:', jitError);
-        }
-        // Determine appropriate error for user. BACKLOG-3853 PR-2B: the member
-        // trigger refuses a join into a suspended brokerage. BACKLOG-4012: the
-        // brokerage has not finished billing setup (the function's answer, or the
-        // member trigger's refusal). Anything else, reauth_required included, is
-        // org_not_setup.
-        jitErrorCode = isBrokerageSuspendedError(jitError)
-          ? 'brokerage_suspended'
-          : jitResult?.error === 'billing_setup_pending' || isBillingSetupIncompleteError(jitError)
-            ? 'billing_setup_pending'
-            : jitResult?.error === 'jit_disabled'
-              ? 'jit_disabled'
-              : 'org_not_setup';
+      // No membership and no pending invite - JIT (lib/auth/jitJoin.ts). BACKLOG-3962 PR4a: the
+      // database joins only a brand-new person on a brokerage's verified email domain. A failed
+      // JIT join does not sign out yet: the owner of a personal organization still gets the floor
+      // below. Its error code is kept for everyone else.
+      const jit = await runJitJoin(supabase, user);
+      if (jit.joined) {
+        return finish(`${origin}${next}`);
       }
+      let jitErrorCode = jit.errorCode;
 
       // BACKLOG-3080: the owner of a personal organization gets the floor.
       // `floor` here can only come from a personal organization this user
@@ -265,6 +237,12 @@ export async function GET(request: Request) {
       // `unknown`, not `floor`, and is signed out below as before.
       if (access.kind === 'floor') {
         return finish(`${origin}${next}`);
+      }
+
+      // BACKLOG-3962 PR4a: the brokerage that verified this account's email domain has turned off
+      // personal accounts for it. Replaces only the generic outcomes (jitJoin.ts).
+      if (domainManagedMayReplace(jitErrorCode) && (await domainManagedFor(supabase))) {
+        jitErrorCode = 'domain_managed';
       }
 
       // User not authorized - sign this browser out. `local` ends only the
