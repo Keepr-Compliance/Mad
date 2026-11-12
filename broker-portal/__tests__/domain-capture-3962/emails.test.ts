@@ -77,7 +77,10 @@ describe('capture emails', () => {
     expect(early.text).toContain('moved into A today, as you asked.');
     expect(early.text).not.toContain('14 days ago');
     const due = buildDomainCaptureSwitchedEmail({ recipientEmail: 'x@a.example', brokerageName: 'A', licensed: true, switchId: 's' });
-    expect(due.text).toContain('as the notice 14 days ago said.');
+    expect(due.text).toContain('as our earlier notice said.');
+    expect(due.text).not.toContain('14 days');
+    expect(due.html).toContain('as our earlier notice said.');
+    expect(due.html).not.toContain('14 days');
   });
 
   it('domain_capture seat alert never says the person was not added', () => {

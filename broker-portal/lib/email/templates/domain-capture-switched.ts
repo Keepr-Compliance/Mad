@@ -14,7 +14,7 @@ export function buildDomainCaptureSwitchedEmail(params: DomainCaptureSwitchedPar
   return buildSimpleNotice(subject, [
     joinedEarly === true
       ? `Your Keepr account (${recipientEmail}) moved into ${brokerageName} today, as you asked.`
-      : `Your Keepr account (${recipientEmail}) moved into ${brokerageName} today, as the notice 14 days ago said.`,
+      : `Your Keepr account (${recipientEmail}) moved into ${brokerageName} today, as our earlier notice said.`,
     licensed
       ? `${brokerageName} gave you a Keepr license, so you can keep working as before.`
       : `${brokerageName} has no free license yet. An admin there can assign you one on the Users page.`,
