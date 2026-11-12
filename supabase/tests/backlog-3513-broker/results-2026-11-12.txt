@@ -197,3 +197,24 @@ MUTATION APPLIED numstat=1/1
   + IF d.id IS NULL OR v_level IS NULL THEN
 RESULT total=97 pass=95 fail=2 reds=RS_editor_changes_scope,RS_viewer_refused
 RESTORED clean=True
+
+## after the share_list 'admins' collapse (commit d31efa038): run.sh
+{
+ "fail": 0,
+ "pass": 99,
+ "reds": {},
+ "total": 99
+}
+## mutate.py M31_SHARE_LIST_NO_COLLAPSE,M25_ADMINS_ADMIN_ONLY
+== M31_SHARE_LIST_NO_COLLAPSE
+MUTATION APPLIED numstat=1/1
+  - THEN 'admins' ELSE g.principal_role END AS rid,
+  + THEN g.principal_role ELSE g.principal_role END AS rid,
+RESULT total=99 pass=98 fail=1 reds=RA_share_list_one_admins_entry
+RESTORED clean=True
+== M25_ADMINS_ADMIN_ONLY
+MUTATION APPLIED numstat=1/1
+  - v_roles := v_roles || ARRAY['admin', 'it_admin'];
+  + v_roles := v_roles || ARRAY['admin'];
+RESULT total=99 pass=96 fail=3 reds=RA_it_admin_sees,RA_share_admins,RA_share_list_one_admins_entry
+RESTORED clean=True
