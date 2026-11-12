@@ -41,15 +41,6 @@ export function publicOrigin(_req: Request): string {
 export const MCP_PATH = '/api/mcp';
 export const MCP_RESOURCE_METADATA_PATH = '/api/mcp/resource-metadata';
 
-export function resourceUrl(req: Request): string {
-  return `${publicOrigin(req)}${MCP_PATH}`;
-}
-
 export function resourceMetadataUrl(req: Request): string {
   return `${publicOrigin(req)}${MCP_RESOURCE_METADATA_PATH}`;
-}
-
-/** The authorization server issuer: this portal's public origin. */
-export function authorizationServerIssuer(): string | null {
-  return configuredOrigin();
 }

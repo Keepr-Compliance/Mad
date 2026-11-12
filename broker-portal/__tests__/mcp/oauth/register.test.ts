@@ -174,6 +174,23 @@ describe('H6: request checks', () => {
     expect(res.status).toBe(201);
   });
 
+  it('a missing client_name with a 100-character host becomes that host', async () => {
+    const host = `${'a'.repeat(63)}.${'b'.repeat(28)}.example`;
+    expect(host).toHaveLength(100);
+    const res = await post({ redirect_uris: [`https://${host}/cb`] });
+    expect(res.status).toBe(201);
+    expect(mockRpc.mock.calls[0][1].p_client_name).toBe(host);
+  });
+
+  it('a missing client_name with a 101-character host is refused', async () => {
+    const host = `${'a'.repeat(63)}.${'b'.repeat(29)}.example`;
+    expect(host).toHaveLength(101);
+    const res = await post({ redirect_uris: [`https://${host}/cb`] });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'invalid_client_metadata' });
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+
   it('a missing client_name becomes the host of the first redirect URI', async () => {
     await post({ redirect_uris: ['https://cb.example:8443/x', REDIRECT_URI] });
     expect(mockRpc.mock.calls[0][1].p_client_name).toBe('cb.example:8443');

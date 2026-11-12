@@ -202,6 +202,19 @@ describe.each(['server', 'edge'] as const)('sentry.%s.config', (file) => {
       expect((((out.contexts as Rec).trace as Rec).data as Rec)['url.full']).toBe('https://portal.test/dashboard?page=2');
     });
 
+    it('a child span of an MCP transaction loses the query in its data even when the span does not name an MCP path', () => {
+      const ev = tx('POST /oauth/token', 'https://portal.test/oauth/token');
+      (ev.spans as Rec[]).push({
+        description: 'GET cache lookup',
+        data: { 'http.url': `https://cache.example/lookup?k=${PLANTED_PLAIN}`, 'url.query': `k=${PLANTED_PLAIN}` },
+      });
+      const out = hooks.beforeSendTransaction(ev)!;
+      const child = (out.spans as Rec[])[2];
+      expect(JSON.stringify(child)).not.toContain(PLANTED_PLAIN);
+      expect((child.data as Rec)['http.url']).toBe('https://cache.example/lookup');
+      expect((child.data as Rec)['url.query']).toBeUndefined();
+    });
+
     it('beforeSendSpan strips an MCP span and leaves a non-MCP span unchanged', () => {
       const mcp = hooks.beforeSendSpan({
         description: `GET /oauth/authorize?state=${PLANTED_PLAIN}`,
@@ -272,14 +285,70 @@ describe.each(['server', 'edge'] as const)('sentry.%s.config', (file) => {
       });
       expect(hooks.beforeSend(ev)).toBeNull();
     });
-    it('positive: another event whose processing throws is returned', () => {
+    it(file === 'server' ? 'another event whose processing throws is dropped' : 'positive: another event whose processing throws is returned', () => {
       const ev: Rec = { request: { url: 'https://portal.test/dashboard' } };
       Object.defineProperty(ev, 'message', {
         get() {
           throw new Error('getter');
         },
       });
+      if (file === 'server') {
+        expect(hooks.beforeSend(ev)).toBeNull();
+      } else {
+        expect(hooks.beforeSend(ev)).toBe(ev);
+      }
+    });
+
+    it('positive: another event that does not throw is returned', () => {
+      const ev: Rec = { request: { url: 'https://portal.test/dashboard' }, message: 'plain' };
       expect(hooks.beforeSend(ev)).toBe(ev);
     });
+  });
+
+  describe('events that cannot be classified', () => {
+    function unreadableRequest(ev: Rec): Rec {
+      Object.defineProperty(ev, 'request', {
+        get() {
+          throw new Error('getter');
+        },
+      });
+      return ev;
+    }
+
+    it('a transaction whose request cannot be read is dropped', () => {
+      expect(hooks.beforeSendTransaction(unreadableRequest({ type: 'transaction', transaction: 'GET /dashboard' }))).toBeNull();
+    });
+
+    it('an event whose request cannot be read is dropped', () => {
+      expect(hooks.beforeSend(unreadableRequest({ message: 'x' }))).toBeNull();
+    });
+  });
+});
+
+describe('sentry.server.config breadcrumbs on an event', () => {
+  let hooks: Hooks;
+  beforeEach(() => {
+    hooks = loadConfig('server');
+  });
+
+  it('a breadcrumb that the breadcrumb scrub drops is removed from the event; others are kept', () => {
+    const dropped: Rec = { category: 'fetch', data: { url: `https://portal.test/oauth/token?x=${PLANTED_PLAIN}` } };
+    let reads = 0;
+    Object.defineProperty(dropped, 'message', {
+      enumerable: true,
+      get() {
+        reads += 1;
+        if (reads === 1) throw new Error('getter');
+        return 'GET';
+      },
+    });
+    const kept: Rec = { category: 'fetch', message: 'GET', data: { url: 'https://api.example/x?page=2' } };
+    const out = hooks.beforeSend({ request: { url: 'https://portal.test/dashboard' }, breadcrumbs: [dropped, kept] });
+    expect(out).not.toBeNull();
+    const crumbs = out!.breadcrumbs as Rec[];
+    expect(crumbs).toHaveLength(1);
+    expect(crumbs[0]).toBe(kept);
+    expect((crumbs[0].data as Rec).url).toBe('https://api.example/x?page=2');
+    expect(JSON.stringify(out)).not.toContain(PLANTED_PLAIN);
   });
 });

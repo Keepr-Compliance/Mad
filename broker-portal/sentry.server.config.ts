@@ -67,8 +67,8 @@ Sentry.init({
       }
 
       if (e.breadcrumbs) {
+        e.breadcrumbs = e.breadcrumbs.filter((crumb) => scrubBreadcrumb(crumb) !== null);
         for (const crumb of e.breadcrumbs) {
-          scrubBreadcrumb(crumb);
           if (crumb.message) {
             crumb.message = scrubEmails(crumb.message) as string;
           }
@@ -92,7 +92,7 @@ Sentry.init({
       }
 
       return e;
-    });
+    }, { dropOnFailure: true });
   },
 
   beforeSendTransaction(event) {

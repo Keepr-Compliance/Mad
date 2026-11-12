@@ -10,7 +10,8 @@
  *   redacted everywhere.
  * - Each hook catches its own failure. On an MCP event it fails closed (the
  *   event or breadcrumb is dropped, a span's data is cleared); otherwise the
- *   input is returned unchanged.
+ *   input is returned unchanged, except that scrubEvent with
+ *   `dropOnFailure` drops every event whose processing throws.
  *
  * Loaded by the edge config too: no Node APIs.
  */
@@ -182,13 +183,22 @@ function mcpEventOrUnknown(event: unknown): boolean {
   }
 }
 
-/** beforeSend body: request scrub plus credential redaction. Fails closed on an MCP event. */
-export function scrubEvent<E>(event: E, more?: (_e: E) => E | null): E | null {
+export interface ScrubEventOptions {
+  /** Drop the event when processing throws, MCP or not. */
+  dropOnFailure?: boolean;
+}
+
+/**
+ * beforeSend body: request scrub plus credential redaction. Fails closed on an
+ * MCP event; with `dropOnFailure`, on every event.
+ */
+export function scrubEvent<E>(event: E, more?: (_e: E) => E | null, options: ScrubEventOptions = {}): E | null {
   try {
     scrubMcpRequest(event as ScrubbableEvent);
     redactEventFields(event as Rec);
     return more ? more(event) : event;
   } catch {
+    if (options.dropOnFailure) return null;
     return mcpEventOrUnknown(event) ? null : event;
   }
 }
