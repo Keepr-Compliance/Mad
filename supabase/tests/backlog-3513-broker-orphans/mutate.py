@@ -29,6 +29,8 @@ M = {
   'OM6_NO_ANON_REVOKE': (
     "REVOKE ALL ON FUNCTION public.broker_report_orphans(uuid) FROM PUBLIC, anon;",
     "REVOKE ALL ON FUNCTION public.broker_report_orphans(uuid) FROM PUBLIC;"),
+  'OM8_PIN_NO_FEATURE_CHECK': (
+    ",\n        ('public._org_feature_allowed(uuid,text)', ARRAY['fc1007396cdff5e197012dd542888a6a'])\n", "\n"),
   'OM7_FLAG_ANY_ROLE': (
     "      coalesce(public._broker_report_member_role(d.organization_id, v_uid), '') IN ('broker', 'admin', 'it_admin')\n      AND ",
     "      "),
