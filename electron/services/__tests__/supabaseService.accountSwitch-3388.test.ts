@@ -255,13 +255,17 @@ describe("BACKLOG-3388: auth cache follows the signed-in user", () => {
     // reason while the one call is the dangerous one, so the identity of the
     // persisted pair is asserted too.
     expect(mockUpdateSession).toHaveBeenCalledTimes(1);
-    expect(mockUpdateSession).toHaveBeenCalledWith({
-      supabaseTokens: {
-        access_token: issuedAccessTokens[USER_A],
-        refresh_token: refreshTokenFor(USER_A),
+    // BACKLOG-4075: arg 2 is the same-account guard; the token identity is still pinned on arg 1.
+    expect(mockUpdateSession).toHaveBeenCalledWith(
+      {
+        supabaseTokens: {
+          access_token: issuedAccessTokens[USER_A],
+          refresh_token: refreshTokenFor(USER_A),
+        },
       },
-    });
-    expect(mockUpdateSession).not.toHaveBeenCalledWith({
+      { proceed: expect.any(Function) },
+    );
+    expect(mockUpdateSession.mock.calls.map((c) => c[0])).not.toContainEqual({
       supabaseTokens: {
         access_token: issuedAccessTokens[USER_B],
         refresh_token: refreshTokenFor(USER_B),
@@ -345,12 +349,15 @@ describe("BACKLOG-3388: auth cache follows the signed-in user", () => {
     expect(session?.accessToken).toBe(rotated);
     expect(session?.expiresAt).toBeInstanceOf(Date);
 
-    expect(mockUpdateSession).toHaveBeenCalledWith({
-      supabaseTokens: {
-        access_token: rotated,
-        refresh_token: refreshTokenFor(USER_A),
+    expect(mockUpdateSession).toHaveBeenCalledWith(
+      {
+        supabaseTokens: {
+          access_token: rotated,
+          refresh_token: refreshTokenFor(USER_A),
+        },
       },
-    });
+      { proceed: expect.any(Function) },
+    );
   });
 
   /**

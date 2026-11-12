@@ -6,6 +6,7 @@
 import { ipcMain, IpcMainInvokeEvent, shell } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import type { User } from "../types/models";
+import { isSameAccount, type AccountIdentity } from "../services/accountIdentity";
 import { getSignInGeneration, isSignInAwaitingSessionWrite } from "../services/signInState";
 
 // Import services
@@ -590,12 +591,6 @@ async function handleValidateSession(
   }
 }
 
-interface AccountIdentity {
-  id: string;
-  email?: string | null;
-  oauthId?: string | null;
-}
-
 /** BACKLOG-4075: the SDK's current user, read from its in-memory session (no network unless expired). */
 async function readSdkIdentity(sdkUserId: string): Promise<AccountIdentity | null> {
   try {
@@ -609,18 +604,8 @@ async function readSdkIdentity(sdkUserId: string): Promise<AccountIdentity | nul
   }
 }
 
-const normEmail = (e?: string | null): string => (e || "").trim().toLowerCase();
-
-/**
- * BACKLOG-4075: same person = same email (case-insensitive), or — for the
- * session-file target only — the same OAuth id (getUserByOAuthId found it).
- */
-export function isSameAccount(local: User, target: AccountIdentity): boolean {
-  const le = normEmail(local.email);
-  if (le && le === normEmail(target.email)) return true;
-  if (local.oauth_id && target.oauthId && local.oauth_id === target.oauthId) return true;
-  return false;
-}
+// BACKLOG-4075: the rule lives in a leaf module so the token write-back uses it too.
+export { isSameAccount };
 
 /** BACKLOG-4038: the support form's prefill. Name and email only, never tokens. */
 export interface UserContactResponse {
@@ -801,12 +786,20 @@ async function handleGetCurrentUser(): Promise<CurrentUserResponse> {
     // back to the file's account. Touch nothing: no setSession, no clear.
     const heldSdkUserId = supabaseService.getAuthUserId();
     if (heldSdkUserId && heldSdkUserId !== session.user.id) {
-      const held = await readSdkIdentity(heldSdkUserId);
-      if (held && !isSameAccount(session.user, held)) {
+      let held = await readSdkIdentity(heldSdkUserId);
+      if (!held) {
+        // The SDK session cannot be read (e.g. expired while offline). The local
+        // row for the held id is the next record of who that is. Its OAuth id is
+        // not used: that match is for the session-file target only.
+        const local = await databaseService.getUserById(heldSdkUserId);
+        if (local) held = { id: local.id, email: local.email, oauthId: null };
+      }
+      // Fail closed: an identity that cannot be read is not proof of the same account.
+      if (!held || !isSameAccount(session.user, held)) {
         await logService.warn(
           "SDK holds a different account than the saved session; not restoring it",
           "SessionHandlers",
-          { fileId: session.user.id.substring(0, 8) + "...", sdkId: heldSdkUserId.substring(0, 8) + "..." }
+          { fileId: session.user.id.substring(0, 8) + "...", sdkId: heldSdkUserId.substring(0, 8) + "...", sdkIdentityKnown: !!held }
         );
         Sentry.captureMessage("Session restore: SDK holds a different account", {
           level: "warning",

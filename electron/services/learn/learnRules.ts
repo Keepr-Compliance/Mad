@@ -6,8 +6,9 @@
  * set of rules can be told apart from answers given under the next.
  *
  * Baseline 0's own literals (the keyword lists and address pattern inside
- * `transactionExtractorService.analyzeEmail`) are NOT here and are not
- * touched: changing them would change the thing being measured.
+ * `transactionExtractorService.analyzeEmail`) are NOT here. Changing them
+ * changes the thing being measured, so a change to them bumps the version
+ * (v3, BACKLOG-4225: the address string kept for each match).
  *
  * Pure data. No imports, no I/O.
  */
@@ -15,9 +16,12 @@
 /**
  * Bump when any rule below changes meaning, or when question generation
  * changes. v2 (BACKLOG-4175): cleanup questions leave out detections whose
- * every message is from an exact sender seed.
+ * every message is from an exact sender seed. v3 (BACKLOG-4225): which
+ * emails get an address is unchanged, but the address kept for each one ends
+ * at the address (a tail that crosses a line or has no real US state code is
+ * cut at the street suffix), so detection titles and some keys change.
  */
-export const LEARN_RULE_VERSION = 2;
+export const LEARN_RULE_VERSION = 3;
 
 export const LEARN_RULES = {
   version: LEARN_RULE_VERSION,
