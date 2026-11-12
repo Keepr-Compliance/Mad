@@ -30,6 +30,17 @@ export function buildSimpleNotice(subject: string, lines: string[], buttons: rea
         </tr>
       </table>`;
   };
+  // One button renders exactly as before. Several share ONE table row (a <td> per button, a small
+  // gap between them) so they sit side by side; inline styles only, since Outlook and Gmail
+  // ignore flexbox. They may wrap when the screen is narrow.
+  const buttonsHtml =
+    buttons.length > 1
+      ? `<table cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          ${buttons.map((b, i) => `<td style="padding-right:${i < buttons.length - 1 ? 12 : 0}px;">${button(b, i)}</td>`).join('\n          ')}
+        </tr>
+      </table>`
+      : buttons.map(button).join('\n      ');
   const html = baseLayout({
     preheader: subject,
     body: `
@@ -37,7 +48,7 @@ export function buildSimpleNotice(subject: string, lines: string[], buttons: rea
         ${escapeHtml(subject)}
       </h1>
       ${lines.map(p).join('\n      ')}
-      ${buttons.map(button).join('\n      ')}
+      ${buttonsHtml}
     `,
   });
   const text = [subject, '', ...lines.flatMap((l) => [l, '']), ...buttons.flatMap((b) => [`${b.label}: ${b.url}`, ''])].join('\n');
