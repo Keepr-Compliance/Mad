@@ -12,7 +12,7 @@
  *    broker, admins). Never an email.
  *  - broker_report_def_get(p_def) -> {id, organization_id, dataset_key, name,
  *    description, definition, row_scope, general_access, level, owner {name,
- *    is_you}, updated_at}
+ *    is_you}, updated_at, take_over_available} (take_over_available: 20261112210000)
  *
  * Mappers keep only the kit's keys, so nothing else a reply might carry
  * reaches the page.
@@ -57,6 +57,8 @@ export interface DefinitionRecord {
   generalAccess: GeneralAccess;
   level: ReportLevel | null;
   updatedAt: string;
+  /** def_get (migration 20261112210000): this caller may take the report over (its owner is gone). */
+  takeOverAvailable: boolean;
 }
 
 const obj = (v: unknown): Record<string, unknown> =>
@@ -122,6 +124,38 @@ export function parseDefinition(raw: unknown): DefinitionRecord | null {
     generalAccess: r.general_access === 'organization' ? 'organization' : 'restricted',
     level: parseLevel(r.level),
     updatedAt: str(r.updated_at),
+    takeOverAvailable: r.take_over_available === true,
   };
+}
+
+/** A report whose owner is gone or deactivated (broker_report_orphans, migration 20261112210000). */
+export interface OrphanReport {
+  id: string;
+  name: string;
+  ownerName: string;
+  ownerState: 'gone' | 'deactivated';
+  /** The caller's own level; null when the report is not shared with them. */
+  level: ReportLevel | null;
+}
+
+/**
+ * broker_report_orphans -> [{id, name, dataset_key, owner_name, owner_state, level}].
+ * Only Submissions reports; anything malformed is skipped.
+ */
+export function parseOrphans(raw: unknown): OrphanReport[] {
+  if (!Array.isArray(raw)) return [];
+  const out: OrphanReport[] = [];
+  for (const item of raw) {
+    const r = obj(item);
+    if (!str(r.id) || r.dataset_key !== 'submissions') continue;
+    out.push({
+      id: str(r.id),
+      name: str(r.name),
+      ownerName: str(r.owner_name),
+      ownerState: r.owner_state === 'gone' ? 'gone' : 'deactivated',
+      level: parseLevel(r.level),
+    });
+  }
+  return out;
 }
 

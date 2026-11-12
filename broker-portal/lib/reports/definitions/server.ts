@@ -1,23 +1,31 @@
 /**
  * Broker shared reports: the server reads — BACKLOG-3513 PR-3b.
  *
- * Session client only (the gate's caller.supabase). Functions in migration
- * 20261112200000 decide who sees what:
+ * Session client only (the gate's caller.supabase). Functions in migrations
+ * 20261112200000 and 20261112210000 decide who sees what:
  *  - broker_report_def_list(p_org): the shared reports the caller has a level on;
- *  - broker_report_def_get(p_def): one of them, or "Report not found";
- *  - broker_report_share_list(p_def): owner / editor only; read here only to
- *    learn whether the owner is still an active member (owner.role is null when
- *    they are not, owner.id null when their account is gone).
+ *  - broker_report_orphans(p_org): reports whose owner is gone or deactivated,
+ *    for an active broker / admin / IT admin (founder: any of them may take one
+ *    over, shared with them or not). No definition, no rows;
+ *  - broker_report_def_get(p_def): one report the caller has a level on, with
+ *    take_over_available, or "Report not found".
  */
 
 import { notFound } from 'next/navigation';
 import { getReportsCaller, type ReportCaller } from '@/lib/reports/report-gate';
 import { SUBMISSIONS_REPORT } from '@/lib/reports/registry';
-import { parseDefinition, parseLevel, parseShareState, type DefinitionRecord, type ReportLevel } from '@/lib/reports/definitions/parse';
+import {
+  parseDefinition,
+  parseLevel,
+  parseOrphans,
+  type DefinitionRecord,
+  type OrphanReport,
+  type ReportLevel,
+} from '@/lib/reports/definitions/parse';
 
 export const DEF_LIST_RPC = 'broker_report_def_list';
 export const DEF_GET_RPC = 'broker_report_def_get';
-export const SHARE_LIST_RPC = 'broker_report_share_list';
+export const ORPHANS_RPC = 'broker_report_orphans';
 
 /** Used when the brokerage's name cannot be read. */
 export const ORG_NAME_FALLBACK = 'your brokerage';
@@ -27,35 +35,65 @@ export interface SharedReportListItem {
   name: string;
   level: ReportLevel | null;
   ownerName: string;
+  /** Set when the owner is gone or deactivated and the caller may take it over. */
+  ownerState: OrphanReport['ownerState'] | null;
 }
 
-/** The shared reports for the index. Any failure (e.g. the functions are not deployed yet) is an empty list. */
-export async function listSharedReports(caller: ReportCaller): Promise<SharedReportListItem[]> {
+export interface SharedReportLists {
+  /** Reports the caller can open (has a level on). */
+  shared: SharedReportListItem[];
+  /** Reports whose owner is gone, NOT shared with the caller: Take over only, no link. */
+  needsOwner: OrphanReport[];
+}
+
+async function readList(caller: ReportCaller, fn: string): Promise<unknown> {
   try {
-    const { data, error } = await caller.supabase.rpc(DEF_LIST_RPC, { p_org: caller.organizationId });
-    if (error || !Array.isArray(data)) {
-      if (error) console.error('[reports] shared reports unavailable:', error.message);
-      return [];
+    const { data, error } = await caller.supabase.rpc(fn, { p_org: caller.organizationId });
+    if (error) {
+      console.error(`[reports] ${fn} unavailable:`, error.message);
+      return null;
     }
-    return (data as Record<string, unknown>[])
-      .filter((r) => typeof r?.id === 'string' && r.dataset_key === 'submissions')
-      .map((r) => ({
-        id: r.id as string,
-        name: typeof r.name === 'string' ? r.name : '',
-        level: parseLevel(r.level),
-        ownerName: typeof r.owner_name === 'string' ? r.owner_name : '',
-      }));
+    return data;
   } catch (err) {
-    console.error('[reports] shared reports unavailable:', err);
-    return [];
+    console.error(`[reports] ${fn} unavailable:`, err);
+    return null;
   }
+}
+
+/**
+ * The index lists. Any failure (e.g. the functions are not deployed yet) is an
+ * empty list. Orphans are asked for full roles only (the database refuses
+ * everyone else anyway) and merged into the shared list by id.
+ */
+export async function listSharedReports(caller: ReportCaller): Promise<SharedReportLists> {
+  const [rawList, rawOrphans] = await Promise.all([
+    readList(caller, DEF_LIST_RPC),
+    caller.kind === 'full' ? readList(caller, ORPHANS_RPC) : Promise.resolve(null),
+  ]);
+  const orphans = parseOrphans(rawOrphans);
+  const orphanById = new Map(orphans.map((o) => [o.id, o]));
+  const shared: SharedReportListItem[] = (Array.isArray(rawList) ? (rawList as Record<string, unknown>[]) : [])
+    .filter((r) => typeof r?.id === 'string' && r.dataset_key === 'submissions')
+    .map((r) => ({
+      id: r.id as string,
+      name: typeof r.name === 'string' ? r.name : '',
+      level: parseLevel(r.level),
+      ownerName: typeof r.owner_name === 'string' ? r.owner_name : '',
+      ownerState: orphanById.get(r.id as string)?.ownerState ?? null,
+    }));
+  const listed = new Set(shared.map((s) => s.id));
+  const needsOwner: OrphanReport[] = [];
+  for (const o of orphans) {
+    if (listed.has(o.id)) continue;
+    if (o.level) shared.push({ id: o.id, name: o.name, level: o.level, ownerName: o.ownerName, ownerState: o.ownerState });
+    else needsOwner.push(o);
+  }
+  return { shared, needsOwner };
 }
 
 export interface DefinitionAccess {
   caller: ReportCaller;
   definition: DefinitionRecord;
-  /** The owner is gone or no longer an active member. Known only to owners and editors (share_list). */
-  ownerInactive: boolean;
   orgName: string;
 }
 
@@ -67,19 +105,6 @@ async function readOrgName(caller: ReportCaller): Promise<string> {
     return name.trim();
   } catch {
     return ORG_NAME_FALLBACK;
-  }
-}
-
-async function readOwnerInactive(caller: ReportCaller, def: DefinitionRecord): Promise<boolean> {
-  // The caller IS the owner: active by definition. A viewer cannot read share_list: unknown, not offered.
-  if (def.level !== 'editor') return false;
-  try {
-    const { data, error } = await caller.supabase.rpc(SHARE_LIST_RPC, { p_def: def.id });
-    if (error || data === null || typeof data !== 'object') return false;
-    const { owner } = parseShareState(data);
-    return owner.id === null || owner.role === null;
-  } catch {
-    return false;
   }
 }
 
@@ -97,8 +122,8 @@ export async function requireDefinitionAccess(id: string): Promise<DefinitionAcc
   const definition = parseDefinition(raw);
   if (!definition || !definition.level) notFound();
   if (raw.organization_id !== caller.organizationId || raw.dataset_key !== 'submissions') notFound();
-  const [ownerInactive, orgName] = await Promise.all([readOwnerInactive(caller, definition), readOrgName(caller)]);
-  return { caller, definition, ownerInactive, orgName };
+  const orgName = await readOrgName(caller);
+  return { caller, definition, orgName };
 }
 
 /** The dataset a definition reads: today only Submissions. */

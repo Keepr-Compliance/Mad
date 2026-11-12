@@ -8,7 +8,8 @@
  *
  * The filters are the report's own unless the person changed them on this page
  * (the URL then carries them). Share, Save filters and Delete are offered by
- * level; Take over only to a broker, admin or IT admin when the owner is gone.
+ * level; Take over when broker_report_def_get says take_over_available (a
+ * broker, admin or IT admin, at any level, when the owner is gone).
  */
 
 import { requireDefinitionAccess, DEFINITION_DATASET } from '@/lib/reports/definitions/server';
@@ -33,7 +34,7 @@ interface PageProps {
 
 export default async function SharedReportPage({ params, searchParams }: PageProps) {
   const { id } = await params;
-  const { caller, definition, ownerInactive, orgName } = await requireDefinitionAccess(id);
+  const { caller, definition, orgName } = await requireDefinitionAccess(id);
   const filters = resolveDefinitionFilters(await searchParams, definition.definition);
   const data = await loadSubmissionsReport(caller, filters, definition.id);
   const current = filtersToViewState(filters);
@@ -48,7 +49,7 @@ export default async function SharedReportPage({ params, searchParams }: PagePro
       basePath={definitionReportPath(definition.id)}
       explicit
       viewsKey={definitionViewsKey(definition.id)}
-      notice={<TakeOverNotice defId={definition.id} kind={caller.kind} level={definition.level} ownerInactive={ownerInactive} />}
+      notice={<TakeOverNotice defId={definition.id} kind={caller.kind} takeOverAvailable={definition.takeOverAvailable} />}
       actions={
         <>
           <UpdateReportButton
