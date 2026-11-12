@@ -22,3 +22,8 @@ OM5_DEF_GET_OPEN_FOR_ORPHANS: MUTATION APPLIED numstat 2/2
   total 29 fail 3: C_def_get_body, O2_def_get_refused_without_level, O3_no_level_no_flag
 OM7_FLAG_ANY_ROLE: MUTATION APPLIED numstat 2/3
   total 29 fail 2: C_def_get_body, O3_agent_editor_false
+
+2026-11-12 SR N1: _org_feature_allowed(uuid,text) added to the pin (fc1007396cdff5e197012dd542888a6a: same on keepr-test, prod, and the 20261112200000 pin). Control K4_pin_refuses_changed_feature_check added.
+  baseline run.sh -> total 30, pass 30, fail 0; run.sh --regression -> total 103, pass 103, fail 0
+OM8_PIN_NO_FEATURE_CHECK: MUTATION APPLIED numstat 1/2
+  total 30 fail 1: K4_pin_refuses_changed_feature_check
