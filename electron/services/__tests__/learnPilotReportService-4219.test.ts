@@ -106,6 +106,8 @@ function scoreFromFixture(version = 1): { score: LearnScore; detector: SenderCen
     unmatchedDeals: r.unmatched_deals,
     unaskable: r.unaskable,
     cleanupYes: r.cleanup.yes,
+    // Not in the report; the fixture's one Yes is on a street with no deal in the key.
+    cleanupYesNotCounted: 0,
     cleanupNo: r.cleanup.no,
     cleanupUnanswered: r.cleanup.unanswered,
     hiddenBySeed: r.hidden_by_seed,

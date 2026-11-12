@@ -17,7 +17,7 @@ import type {
   LearnRunResult,
   ProviderBucket,
 } from "./baselineRunner";
-import { isSameDeal, sameStreet } from "./dealMatcher";
+import { isSameDeal, sameStreet, streetKey } from "./dealMatcher";
 import { wilsonInterval, type WilsonInterval } from "./wilson";
 import type { SenderRuleSet, SenderRuleSignal } from "../../utils/senderFilter/bundledRules";
 import type { SenderRulesSource } from "../../utils/senderFilter/ruleSetSource";
@@ -65,6 +65,13 @@ export interface LearnScore {
   unaskable: number;
   /** Cleanup answers, per distinct deal key (not per detection). */
   cleanupYes: number;
+  /**
+   * BACKLOG-4219: Yes answers (per deal key) on a street that already holds a
+   * hand-entered deal in the key (found or missed, legacy or not). They stay in
+   * cleanupYes but are not added to the Yes-inclusive recalls: that deal is
+   * already counted there. Copy block only (not in the pilot report).
+   */
+  cleanupYesNotCounted: number;
   cleanupNo: number;
   cleanupUnanswered: number;
 
@@ -326,6 +333,16 @@ export function scoreRunWithDetector(
   const unmatchedKeys = new Set<string>();
   const yesKeys = new Set<string>();
   const noKeys = new Set<string>();
+  // BACKLOG-4219: a Yes on the street of a deal already in the key (found or
+  // missed, legacy or not) is that deal, so the Yes-inclusive recalls count
+  // it once. Recall counts new streets; Yes keys on known streets are counted
+  // on their own. streetKey, not addressKey: the ZIP guard and the date
+  // window are what made isSameDeal fail in the first place.
+  const knownStreets = new Set(
+    key.positives.map((p) => streetKey(p.property_address)).filter((s): s is string => s !== null),
+  );
+  const yesNewStreets = new Set<string>();
+  const yesKnownKeys = new Set<string>();
   const side = { correct: 0, wrong: 0, notPredicted: 0, skipped: 0 };
   const outcome = { scorable: 0, skipped: 0, predicted: 0 };
 
@@ -352,6 +369,9 @@ export function scoreRunWithDetector(
       if (answer === "yes") {
         yesDetections += 1;
         yesKeys.add(k as string);
+        const sk = streetKey(c.detection.address);
+        if (sk && knownStreets.has(sk)) yesKnownKeys.add(k as string);
+        else yesNewStreets.add(sk ?? (k as string));
       } else if (answer === "no") {
         noDetections += 1;
         noKeys.add(k as string);
@@ -367,6 +387,8 @@ export function scoreRunWithDetector(
   const positives = key.positives.length;
   // Recall counts deals: one deal split into two keys by groupByProperty is one Yes.
   const cleanupYes = yesKeys.size;
+  // BACKLOG-4219: Yes answers that add a deal to the Yes-inclusive recalls (one per new street).
+  const cleanupYesCounted = yesNewStreets.size;
   const cleanupNo = noKeys.size;
   const detections = run.detections.length;
 
@@ -459,6 +481,7 @@ export function scoreRunWithDetector(
     unmatchedDeals: unmatchedKeys.size,
     unaskable,
     cleanupYes,
+    cleanupYesNotCounted: yesKnownKeys.size,
     cleanupNo,
     cleanupUnanswered: unmatchedKeys.size - cleanupYes - cleanupNo - hiddenBySeed.keys,
     hiddenBySeed,
@@ -491,9 +514,9 @@ export function scoreRunWithDetector(
     found,
     missed: positives - found,
     recall: rate(found, positives),
-    recallWithCleanupYes: rate(found + cleanupYes, positives + cleanupYes),
+    recallWithCleanupYes: rate(found + cleanupYesCounted, positives + cleanupYesCounted),
     recallExcludingLegacy: rate(foundNonLegacy, nonLegacy.length),
-    recallWithCleanupYesExcludingLegacy: rate(foundNonLegacy + cleanupYes, nonLegacy.length + cleanupYes),
+    recallWithCleanupYesExcludingLegacy: rate(foundNonLegacy + cleanupYesCounted, nonLegacy.length + cleanupYesCounted),
     precisionBeforeCleanup: rate(trueDetections, detections),
     precisionAfterCleanup: rate(
       trueDetections + yesDetections,
@@ -601,6 +624,7 @@ export function formatCopyBlock(s: LearnScore): string {
     `Emails scanned: ${s.rowsScanned}; without a sent date: ${s.nullSentAt}`,
     `Deals in key: manual ${s.buckets.manual} (of which created before ${s.legacyCutoffDay}, possibly auto-detected: ${s.legacyManualPositives} in the mail window${s.legacyCutoffIsMinimum ? ", minimum" : ""}), auto ${s.buckets.auto}, hybrid ${s.buckets.hybrid}, rejected ${s.buckets.rejected}; outside the mail window: ${s.labelsWithoutLocalMail}`,
     `Detections: ${s.detections}; true ${s.trueDetections}; known wrong ${s.knownWrong}; unmatched ${s.unmatched} = ${s.unmatchedDeals} deals + ${s.unaskable} without a key (cleanup yes ${s.cleanupYes}, no ${s.cleanupNo}, unanswered ${s.cleanupUnanswered})`,
+    `Cleanup Yes on the street of a deal in the key (not added to recall again): ${s.cleanupYesNotCounted}`,
     `Hidden by live sender rules (sender rules v${s.senderRulesVersion}): ${s.hiddenBySeed.keys} deals, ${s.hiddenBySeed.detections} detections, ${s.hiddenBySeed.emails} emails; seed emails linked to deals: ${s.seedLinkedToDeals}`,
     ...senderCensusLines(s.senderCensus),
     `Answers by rules version: ${s.answersByRuleVersion.length ? s.answersByRuleVersion.map((v) => `v${v.ruleVersion} deal ${v.deal} / bulk ${v.bulk}`).join(", ") : "none"}`,
