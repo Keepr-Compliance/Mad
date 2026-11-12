@@ -44,8 +44,9 @@ function harness(w: World = {}) {
     f.maybeSingle = async () => {
       log.push(`read:${table}`);
       if (table === 'domain_capture_switches') {
-        // the real filter: id AND user_id AND status scheduled
-        const hit = row && eqs.id === row.id && eqs.user_id === row.user_id && eqs.status === 'scheduled';
+        // as the database: only the filters the code actually sent narrow the read
+        const hit = row && (!('id' in eqs) || eqs.id === row.id) && (!('user_id' in eqs) || eqs.user_id === row.user_id)
+          && (!('status' in eqs) || eqs.status === 'scheduled');
         return { data: hit ? row : null, error: null };
       }
       if (table === 'domain_claims') return { data: claim, error: null };
