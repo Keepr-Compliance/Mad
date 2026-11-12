@@ -1,0 +1,991 @@
+{
+ "_source": "BACKLOG-4225 address filter corpus. All text synthetic (cities Testville/Sampleton/Exampleburg, ZIP 00000; the four real city names in k-city* are public place names). n*/p* = the spike's synthetic rows (n01-n04 are the founder's shapes, reworded); x-* = isolating rows for the checks and the two wrong builds; k-* = addresses that must be kept; r-* = known residual (junk whose tail ends in a state-code word). oldAddresses and overrunFixtureOld = output of the UNMODIFIED extractor at develop d079d6433, generated, never hand-edited. overrunFixtureOld[i] is row i of addressOverrun-4225.corpus.json (whose own oldAddresses predate PR #3489).",
+ "rows": [
+  {
+   "id": "n01",
+   "kind": "neg",
+   "email": {
+    "subject": "Bring the flock home",
+    "bodyPlain": "Our holiday offer is here.\n5 Players. Each Bird Sings A Different Song. Collect Them All Before They Fly Away. View\nShop the collection and give a home to a new friend in time for the holidays."
+   },
+   "oldAddresses": [
+    "5 players. each bird sings a different song. collect them all before they fly away. view"
+   ]
+  },
+  {
+   "id": "n02",
+   "kind": "neg",
+   "email": {
+    "subject": "Savings for your home",
+    "bodyPlain": "3 Ways To Save. Every Order Ships Free. Tap Here To View\nOffer ends Sunday. Bring home savings today."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "n03",
+   "kind": "neg",
+   "email": {
+    "subject": "Order 00000 confirmed",
+    "bodyPlain": "Billed to: Exampleburg, IL 00000 United States. Thanks for shopping with us. Your receipt is ready to View\nTrack your home delivery and see our latest offer in the app."
+   },
+   "oldAddresses": [
+    "00000 united states. thanks for shopping with us. your receipt is ready to view"
+   ]
+  },
+  {
+   "id": "n04",
+   "kind": "neg",
+   "email": {
+    "subject": "Your order has shipped",
+    "bodyPlain": "Ship to: Sampleton, OR 00000, USA. Your package left our warehouse and arrives in 3 days. Track it or View\nHome decor offer inside."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "n05",
+   "kind": "neg",
+   "email": {
+    "subject": "Boots for every trail",
+    "bodyPlain": "Save 20% On 2 Pairs Of Hiking Boots Built For Every Hill\nOffer valid in stores. Find your home store."
+   },
+   "oldAddresses": [
+    "2 pairs of hiking boots built for every hill"
+   ]
+  },
+  {
+   "id": "n06",
+   "kind": "neg",
+   "email": {
+    "subject": "Members only",
+    "bodyPlain": "Join 10 Neighbors At The Park This Saturday\nFree home inspection offer for members."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "n07",
+   "kind": "neg",
+   "email": {
+    "subject": "Patio season",
+    "bodyPlain": "Our 12 Piece Patio Set In Solid Teak Wood\nMake your home an oasis. This offer ends soon."
+   },
+   "oldAddresses": [
+    "12 piece patio set in solid teak wood"
+   ]
+  },
+  {
+   "id": "n08",
+   "kind": "neg",
+   "email": {
+    "subject": "Get moving",
+    "bodyPlain": "Take The 30 Minute Morning Walk Challenge\nHome workout plans and a free trial offer."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "n09",
+   "kind": "neg",
+   "email": {
+    "subject": "Now streaming",
+    "bodyPlain": "Meet 4 Chipmunks From Chip And Dale\nStream at home. Special offer for members."
+   },
+   "oldAddresses": [
+    "4 chipmunks from chip and dale"
+   ]
+  },
+  {
+   "id": "n10",
+   "kind": "neg",
+   "email": {
+    "subject": "Thank you",
+    "bodyPlain": "There Are 100 Ways To Say Thanks. Here Is One More Way\nHome delivery offer for loyal customers."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "n11",
+   "kind": "neg",
+   "email": {
+    "subject": "Adventure awaits",
+    "bodyPlain": "Climb 14 Peaks Along The Ridge\nYour home for adventure gear. Offer ends Friday."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "n12",
+   "kind": "neg",
+   "email": {
+    "subject": "Book your getaway",
+    "bodyPlain": "Rooms With 2 Queen Beds And An Ocean View, Book Now In FL\nVacation home offer for members."
+   },
+   "oldAddresses": [
+    "2 queen beds and an ocean view"
+   ]
+  },
+  {
+   "id": "n13",
+   "kind": "neg",
+   "email": {
+    "subject": "Weekly deals",
+    "bodyPlain": "This week's offer: 30% off home textiles.\nAcme Home Goods | PO Box 1234 | Exampleburg, IL 00000\nYou received this because you subscribed. Unsubscribe."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "n14",
+   "kind": "neg",
+   "email": {
+    "subject": "Spring sale",
+    "bodyPlain": "Spring offer on home furniture starts today.\nSample Outfitters Inc., 500 Commerce Drive, Suite 100, Exampleburg, IL 00000\nThis offer is not valid on gift cards."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "n15",
+   "kind": "neg",
+   "email": {
+    "subject": "Your statement is ready",
+    "bodyPlain": "Your loan statement is ready to view online. Ask about our mortgage refinance offer.\n1st Sample Bank, 200 Main Street, Exampleburg, IL 00000. Member FDIC."
+   },
+   "oldAddresses": [
+    "200 main street, exampleburg, il 00000"
+   ]
+  },
+  {
+   "id": "n16",
+   "kind": "neg",
+   "email": {
+    "subject": "Trends",
+    "bodyPlain": "Top 5 Kitchen Trends For Your Home. Number 3 Will Surprise You. Read The Full Story And View\nSpecial offer inside."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "n17",
+   "kind": "neg",
+   "email": {
+    "subject": "One day only",
+    "bodyPlain": "1 Day Only: Up To 50% Off Everything In The Vista Collection\nOffer valid online. Free shipping to your home."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "n18",
+   "kind": "neg",
+   "email": {
+    "subject": "Shipping update",
+    "bodyPlain": "Order 4471 Shipped Via Ground Route\nYour home order is on its way. See today's offer."
+   },
+   "oldAddresses": [
+    "4471 shipped via ground route"
+   ]
+  },
+  {
+   "id": "n19",
+   "kind": "neg",
+   "email": {
+    "subject": "Check in now",
+    "bodyPlain": "Flight 228 Departs From Gate 12 Terminal Drive\nCheck in now. Home and travel loan offer for cardholders."
+   },
+   "oldAddresses": [
+    "12 terminal drive"
+   ]
+  },
+  {
+   "id": "n20",
+   "kind": "neg",
+   "email": {
+    "subject": "Visit us",
+    "bodyPlain": "Call 1 800 555 0100 or visit our showroom on Main St\nHome theater offer this weekend."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "n21",
+   "kind": "neg",
+   "email": {
+    "subject": "Game night",
+    "bodyPlain": "Doors Open At 7 Pm On The Square, Testville WA\nHome team ticket offer for members."
+   },
+   "oldAddresses": [
+    "7 pm on the square, testville wa"
+   ]
+  },
+  {
+   "id": "n22",
+   "kind": "neg",
+   "email": {
+    "subject": "Readers love it",
+    "bodyPlain": "Rated 4 Stars By Readers. Learn More On The Trail\nHome edition offer."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "n23",
+   "kind": "neg",
+   "email": {
+    "subject": "Your receipt",
+    "bodyPlain": "Thanks for your order. Home goods offer inside.\n(c) 2026 Sample Retail LLC, 88 Harbor Blvd, Sample Bay, CA 00000, United States. View in browser."
+   },
+   "oldAddresses": [
+    "88 harbor blvd, sample bay, ca 00000"
+   ]
+  },
+  {
+   "id": "n24",
+   "kind": "neg",
+   "email": {
+    "subject": "New arrivals",
+    "bodyPlain": "We have 2 new arrivals in the Court Collection. See them at the mall in CA\nHome offer this week."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "n25",
+   "kind": "neg",
+   "email": {
+    "subject": "Weekend plans",
+    "bodyPlain": "Take a walk in the park and view the homes on the hill later? Offer stands."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "n26",
+   "kind": "neg",
+   "email": {
+    "subject": "Receipt",
+    "bodyPlain": "Payment received. 2 items shipped to your home. Tracking 9400 1000 Sample Way. Offer code inside."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "p01",
+   "kind": "pos",
+   "email": {
+    "subject": "Re: 1234 Maple Ave - inspection",
+    "bodyPlain": "Inspector confirmed for Thursday at 10. Buyer will attend. Escrow says title is clear."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "p02",
+   "kind": "pos",
+   "email": {
+    "subject": "Closing docs",
+    "bodyPlain": "Property: 2215 Larkspur Lane, Testville, WA 00000\nListing brokerage: Sample Realty, 00000 NE 8th Street, Suite 1200, Testville, WA 00000\nTitle: Sample Title Co, 1420 Sample Avenue, Testville, WA 00000\nPlease confirm the closing date with escrow."
+   },
+   "oldAddresses": [
+    "2215 larkspur lane, testville, wa 00000",
+    "1420 sample avenue, testville, wa 00000"
+   ]
+  },
+  {
+   "id": "p03",
+   "kind": "pos",
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Sample Realty | 00000 NE 8th Street, Testville, WA 00000\n\nHi, the offer on 318 Birchwood Court, Sampleton, WA 00000 was accepted. Escrow opens Monday."
+   },
+   "oldAddresses": [
+    "318 birchwood court, sampleton, wa 00000"
+   ]
+  },
+  {
+   "id": "p04",
+   "kind": "pos",
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Offer accepted for\n742 Evergreen Terrace\nExampleburg, OR 00000\nClosing and escrow next month, buyer happy."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "p05",
+   "kind": "pos",
+   "email": {
+    "subject": "Inspection",
+    "bodyPlain": "Inspection for 55 Harbor View Drive Unit 4B, Sampleton, WA 00000 is set. Buyer and escrow notified."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "p06",
+   "kind": "pos",
+   "email": {
+    "subject": "Lease addendum",
+    "bodyPlain": "Lease addendum for 900 Pine St Apt 12, Testville, WA 00000 attached. Property manager and buyer signed the offer."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "p07",
+   "kind": "pos",
+   "email": {
+    "subject": "PSA attached",
+    "bodyPlain": "PURCHASE AND SALE AGREEMENT\nProperty Address: 4410 Willow Creek Rd, Exampleburg, WA 00000\nBuyer: A. Sample\nSeller: B. Sample\nEarnest money due at escrow."
+   },
+   "oldAddresses": [
+    "4410 willow creek rd, exampleburg, wa 00000"
+   ]
+  },
+  {
+   "id": "p08",
+   "kind": "pos",
+   "email": {
+    "subject": "Signed PSA",
+    "bodyPlain": "RESIDENTIAL PURCHASE AND SALE AGREEMENT\nPROPERTY: 1607 N MAPLE ST, EXAMPLEBURG, WA 00000\nEarnest money: $5,000. Closing at escrow."
+   },
+   "oldAddresses": [
+    "1607 n maple st, exampleburg, wa 00000"
+   ]
+  },
+  {
+   "id": "p09",
+   "kind": "pos",
+   "email": {
+    "subject": "1802 Cedar Ridge - offer",
+    "bodyPlain": "Seller countered. Buyer reviewing. Escrow pending."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "p10",
+   "kind": "pos",
+   "email": {
+    "subject": "Showing",
+    "bodyPlain": "Showing scheduled at 12 W Elm Ave, Testville, ID 00000 tomorrow. Buyer agent confirmed the listing."
+   },
+   "oldAddresses": [
+    "12 w elm ave, testville, id 00000"
+   ]
+  },
+  {
+   "id": "p11",
+   "kind": "pos",
+   "email": {
+    "subject": "Listing appointment",
+    "bodyPlain": "Listing appointment at 300 Ocean Blvd, Sample Bay, CA. The seller wants an offer review."
+   },
+   "oldAddresses": [
+    "300 ocean blvd, sample bay, ca"
+   ]
+  },
+  {
+   "id": "p12",
+   "kind": "pos",
+   "email": {
+    "subject": "Report",
+    "bodyPlain": "Can you send the inspection report for 66 Hillcrest Dr? Buyer and escrow are waiting."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "p13",
+   "kind": "pos",
+   "email": {
+    "subject": "Accepted",
+    "bodyPlain": "Offer on 145 Saint-Laurent Ave, Testville, VT 00000 accepted. Escrow opening."
+   },
+   "oldAddresses": [
+    "145 saint-laurent ave, testville, vt 00000"
+   ]
+  },
+  {
+   "id": "p14",
+   "kind": "pos",
+   "email": {
+    "subject": "Closing",
+    "bodyPlain": "Closing for 77 Lake St. Sampleton, OR 00000 confirmed. Title and escrow are ready."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "p15",
+   "kind": "pos",
+   "email": {
+    "subject": "Accepted",
+    "bodyPlain": "Offer accepted on 2600 Juniper Way, Testville, WA 00000-1234. Escrow opens Monday.\n--\nJ. Sample, Broker | Sample Realty | 00000 Testville Way Suite 100, Testville, WA 00000"
+   },
+   "oldAddresses": [
+    "2600 juniper way, testville, wa 00000-1234"
+   ]
+  },
+  {
+   "id": "p16",
+   "kind": "pos",
+   "email": {
+    "subject": "Re: 515 Spruce Street inspection",
+    "bodyPlain": "Sample Realty, 2000 Office Park Drive, Testville, TX 00000\nThe inspector found minor issues; the buyer wants a credit at closing."
+   },
+   "oldAddresses": [
+    "2000 office park drive, testville, tx 00000"
+   ]
+  },
+  {
+   "id": "p17",
+   "kind": "pos",
+   "email": {
+    "subject": "Accepted",
+    "bodyPlain": "Offer on 10 5th Avenue, New Sample, NY 00000 accepted. Escrow and buyer are set."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "p18",
+   "kind": "pos",
+   "email": {
+    "subject": "Listing signed",
+    "bodyPlain": "Listing for 00000 County Road 7, Fort Sample, CO 00000 signed by the seller. Offer review Friday."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "p19",
+   "kind": "pos",
+   "email": {
+    "subject": "Accepted",
+    "bodyPlain": "Offer of $650,000 on 8 Oak Hill, Testville, NC 00000 accepted. Escrow opens."
+   },
+   "oldAddresses": [
+    "8 oak hill, testville, nc 00000"
+   ]
+  },
+  {
+   "id": "p20",
+   "kind": "pos",
+   "email": {
+    "subject": "Property",
+    "bodyPlain": "Property:\n4021 Fairview Ave N,\nTestville, WA 00000\nBuyer offer in, escrow next."
+   },
+   "oldAddresses": []
+  },
+  {
+   "id": "x-C1",
+   "kind": "neg",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Join 10 Of Your Neighbors For Our Block Party On Main Street, Exampleburg, IL escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "10 of your neighbors for our block party on main street"
+   ]
+  },
+  {
+   "id": "x-C1cap5",
+   "kind": "neg",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Enter 3 Lucky Winners Get Free Pizza Court, Testville, WA escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "3 lucky winners get free pizza court"
+   ]
+  },
+  {
+   "id": "x-C2",
+   "kind": "neg",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Get 2 Tickets. Free Parking Court, Testville WA escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "2 tickets. free parking court"
+   ]
+  },
+  {
+   "id": "x-C4stop",
+   "kind": "neg",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Escrow closing buyer offer. Climb 3 Peaks On Sample Ridge, In The Park WA"
+   },
+   "oldAddresses": [
+    "3 peaks on sample ridge, in the park wa"
+   ]
+  },
+  {
+   "id": "x-P3",
+   "kind": "neg",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Rooms With 2 Queen Beds And An Ocean View, book now in\nOffer for 1234 Sample River Lane, Testville, WA. escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "2 queen beds and an ocean view, book now in",
+    "1234 sample river lane, testville, wa"
+   ]
+  },
+  {
+   "id": "x-W1v2",
+   "kind": "neg",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer for 1234 Sample River Lane, Testville, WA. escrow closing buyer\nRooms With 2 Queen Beds And An Ocean View, Testville, WA 00000"
+   },
+   "oldAddresses": [
+    "2 queen beds and an ocean view, testville, wa 00000"
+   ]
+  },
+  {
+   "id": "k-abbr",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 100 St. James Pl, Testville, WA 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "100 st. james pl, testville, wa 00000"
+   ]
+  },
+  {
+   "id": "k-dirdot",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 1607 N. Maple St, Testville, WA 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "1607 n. maple st, testville, wa 00000"
+   ]
+  },
+  {
+   "id": "k-4w",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 55 Old Mill Pond Road, Testville, WA 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "55 old mill pond road, testville, wa 00000"
+   ]
+  },
+  {
+   "id": "k-mlk",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 1200 Martin Luther King Jr Way, Testville, WA 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "1200 martin luther king jr way, testville, wa 00000"
+   ]
+  },
+  {
+   "id": "k-mlk-dir",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 500 N Martin Luther King Jr Way, Testville, WA 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "500 n martin luther king jr way, testville, wa 00000"
+   ]
+  },
+  {
+   "id": "x-C1shown",
+   "kind": "neg",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 9 Alpha Beta Gamma View Delta Epsilon Road\nTestville, WA 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "9 alpha beta gamma view delta epsilon road, testville, wa 00000"
+   ]
+  },
+  {
+   "id": "k-hill",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 8 Oak Hill, Testville, WA 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "8 oak hill, testville, wa 00000"
+   ]
+  },
+  {
+   "id": "k-hill-nozip",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 8 Oak Hill, Testville, WA. escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "8 oak hill, testville, wa"
+   ]
+  },
+  {
+   "id": "k-price",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer $650,000 on 8 Oak Hill, Testville, WA 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "8 oak hill, testville, wa 00000"
+   ]
+  },
+  {
+   "id": "k-suite",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Suite 100, 200 Main Street, Testville, WA 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "200 main street, testville, wa 00000"
+   ]
+  },
+  {
+   "id": "k-splitA",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 8 Sea View Road\nSome Town, WA 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "8 sea view road, some town, wa 00000"
+   ]
+  },
+  {
+   "id": "k-splitB",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 8 Sea View Road, Some Town, WA 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "8 sea view road, some town, wa 00000"
+   ]
+  },
+  {
+   "id": "k-cityA",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 15 Mill Creek Path, The Dalles, OR 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "15 mill creek path, the dalles, or 00000"
+   ]
+  },
+  {
+   "id": "k-cityB",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 25 Timber Ridge, The Woodlands, TX 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "25 timber ridge, the woodlands, tx 00000"
+   ]
+  },
+  {
+   "id": "k-cityC",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 12 Sunset Ridge, Lake In The Hills, IL 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "12 sunset ridge, lake in the hills, il 00000"
+   ]
+  },
+  {
+   "id": "k-cityD",
+   "kind": "pos",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer on 9 Harbor View, Isle Of Palms, SC 00000 escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "9 harbor view, isle of palms, sc 00000"
+   ]
+  },
+  {
+   "id": "r-stA",
+   "kind": "residual",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Book 2 Nights With A Lake View Tonight Or. Free breakfast. escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "2 nights with a lake view tonight or"
+   ]
+  },
+  {
+   "id": "r-stB",
+   "kind": "residual",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Get 3 Free Drinks Ridge Bar Hi, see you soon. escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "3 free drinks ridge bar hi"
+   ]
+  },
+  {
+   "id": "r-stC",
+   "kind": "residual",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Only 5 Spots Left On The Walk Saturday Ok. Reserve now. escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "5 spots left on the walk saturday ok"
+   ]
+  },
+  {
+   "id": "r-stD",
+   "kind": "residual",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Save 20 Percent On Patio Wood Today Pa, thanks. escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "20 percent on patio wood today pa"
+   ]
+  },
+  {
+   "id": "r-stE",
+   "kind": "residual",
+   "email": {
+    "subject": "",
+    "bodyPlain": "Win 4 Passes Square Dance Night Me. Enter today. escrow closing buyer offer"
+   },
+   "oldAddresses": [
+    "4 passes square dance night me"
+   ]
+  }
+ ],
+ "overrunFixtureOld": [
+  [
+   "3414 examplecanary rd, testville, wa 00000"
+  ],
+  [
+   "4120 canarytest st, testville, wa 00000"
+  ],
+  [
+   "4120 canarytest lane, testville, wa 00000"
+  ],
+  [
+   "4120 canarytest lane testville wa 00000"
+  ],
+  [
+   "4120 canarytest lane testville wa 00000"
+  ],
+  [
+   "4120 canarytest lane, testville, wa 00000"
+  ],
+  [
+   "4120 canarytest lane, testville, wa 00000"
+  ],
+  [
+   "4120 canarytest lane, testville, wa 00000"
+  ],
+  [
+   "1234 west sample drive"
+  ],
+  [
+   "901 canarytest court, testville, wa 00000"
+  ],
+  [
+   "4120 canarytest lane, testville, wa 00000"
+  ],
+  [
+   "900 canarytest court, testville, wa 00000"
+  ],
+  [],
+  [],
+  [
+   "1234 sample river lane, testville, wa 00000"
+  ],
+  [
+   "4175 canarytest way, testville, wa 00000"
+  ],
+  [
+   "4175 canarytest way, testville, wa 00000"
+  ],
+  [
+   "4176 canarytest way, testville, wa 00000"
+  ],
+  [
+   "4180 canarytest way"
+  ],
+  [
+   "4191 canarytest way"
+  ],
+  [
+   "4192 canarytest way"
+  ],
+  [
+   "4193 canarytest way"
+  ],
+  [
+   "4194 canarytest way"
+  ],
+  [
+   "4175 canarytest way testville wa 00000"
+  ],
+  [
+   "4175 canarytest way, testville, wa 00000"
+  ],
+  [
+   "4176 canarytest way, testville, wa 00000"
+  ],
+  [
+   "4177 canarytest way, testville, wa 00000"
+  ],
+  [
+   "4120 canarytest lane"
+  ],
+  [],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "1234 sample river lane testville wa 00000"
+  ],
+  [
+   "1234 sample river lane, testville, wa 00000"
+  ],
+  [
+   "1234 sample river lane, testville, wa 00000-1234"
+  ],
+  [
+   "1234 sample river lane, testville, wa"
+  ],
+  [
+   "1234 sample river lane, testville, wa 00000"
+  ],
+  [],
+  [
+   "1234 west sample drive"
+  ],
+  [
+   "1234 west sample drive"
+  ],
+  [
+   "3414 examplecanary rd"
+  ],
+  [
+   "4120 canarytest st"
+  ],
+  [
+   "4120 canarytest lane"
+  ],
+  [
+   "4120 canarytest lane"
+  ],
+  [
+   "4120 canarytest lane"
+  ],
+  [
+   "4120 canarytest lane"
+  ],
+  [
+   "4120 canarytest lane"
+  ],
+  [
+   "4120 canarytest lane"
+  ],
+  [
+   "901 canarytest court"
+  ],
+  [
+   "4120 canarytest lane"
+  ],
+  [
+   "900 canarytest court"
+  ],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "4175 canarytest way"
+  ],
+  [
+   "4175 canarytest way"
+  ],
+  [
+   "4176 canarytest way"
+  ],
+  [
+   "4175 canarytest way"
+  ],
+  [
+   "4175 canarytest way"
+  ],
+  [
+   "4176 canarytest way"
+  ],
+  [
+   "4177 canarytest way"
+  ],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "1234 sample river lane"
+  ],
+  [],
+  [
+   "1234 west sample drive"
+  ],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "1234 sample river lane, testville, wa 00000"
+  ],
+  [
+   "1234 sample river lane testville wa 00000"
+  ],
+  [
+   "1234 sample river lane, testville, wa 00000-1234"
+  ],
+  [
+   "1234 sample river lane, testville, wa"
+  ],
+  [
+   "1234 sample river lane, testville, wa 00000"
+  ],
+  [],
+  [
+   "1234 sample river lane"
+  ],
+  [
+   "1234 sample lane",
+   "55 other road, testville, wa 98101"
+  ]
+ ]
+}
