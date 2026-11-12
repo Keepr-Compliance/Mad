@@ -1,0 +1,534 @@
+[
+ {
+  "id": "h001",
+  "category": "suffix_view_hill",
+  "subject": "Inspection scheduled",
+  "body": "Hi Pat,\nThe inspector is booked for Thursday at 9am for 8 Oak Hill, Testville, WA 00000. Buyer will attend.\nThanks,\nSam",
+  "expected": "8 Oak Hill"
+ },
+ {
+  "id": "h002",
+  "category": "suffix_view_hill",
+  "subject": "Appraisal access",
+  "body": "Appraiser needs lockbox code for 22 Harbor View Dr this week. Seller is traveling, please coordinate with Lee.",
+  "expected": "22 Harbor View Dr"
+ },
+ {
+  "id": "h003",
+  "category": "suffix_view_hill",
+  "subject": "New listing going live",
+  "body": "Just listed! 5 Lake View, Sampleton, OR 00000. 3 bed, 2 bath, big deck. MLS# 000123. Open house Saturday 1-3.",
+  "expected": "5 Lake View"
+ },
+ {
+  "id": "h004",
+  "category": "suffix_view_hill",
+  "subject": "Earnest money received",
+  "body": "Escrow confirms receipt of earnest money for the purchase of 17 Fox Ridge, Exampleburg, CO 00000. Escrow no. 0000-TEST.",
+  "expected": "17 Fox Ridge"
+ },
+ {
+  "id": "h005",
+  "category": "suffix_view_hill",
+  "subject": "Showing feedback",
+  "body": "Buyers toured 301 Maple Walk this afternoon and liked the kitchen but found the lot small. They may come back.",
+  "expected": "301 Maple Walk"
+ },
+ {
+  "id": "h006",
+  "category": "suffix_view_hill",
+  "subject": "Repair request",
+  "body": "Attached is the repair request for 64 Pine Wood, Testville, MI 00000. Items 3 and 7 are the priorities.",
+  "expected": "64 Pine Wood"
+ },
+ {
+  "id": "h007",
+  "category": "suffix_view_hill",
+  "subject": "Closing date moved",
+  "body": "Heads up, closing for 910 Sunset Vista has moved to the 28th. Lender needs two more days.",
+  "expected": "910 Sunset Vista"
+ },
+ {
+  "id": "h008",
+  "category": "suffix_view_hill",
+  "subject": "Dock permit question",
+  "body": "Does the dock at 12 Heron Cove convey with the sale? Buyer asking before the HOA review.",
+  "expected": "12 Heron Cove"
+ },
+ {
+  "id": "h009",
+  "category": "suffix_view_hill",
+  "subject": "Walkthrough",
+  "body": "Final walkthrough at 7 Cedar Path tomorrow at noon. Please make sure utilities are on.",
+  "expected": "7 Cedar Path"
+ },
+ {
+  "id": "h010",
+  "category": "suffix_view_hill",
+  "subject": "Counter received",
+  "body": "We got the counter from the sellers on 330 Old Route, Sampleton, ME 00000. Reviewing tonight.",
+  "expected": "330 Old Route"
+ },
+ {
+  "id": "h011",
+  "category": "suffix_view_hill",
+  "subject": "HOA docs",
+  "body": "The HOA packet for 18 Market Square is attached. Reserves look healthy, special assessment none.",
+  "expected": "18 Market Square"
+ },
+ {
+  "id": "h012",
+  "category": "abbrev_periods",
+  "subject": "Showing request",
+  "body": "Can we see 440 St. James Pl on Sunday? Buyers prefer afternoon.",
+  "expected": "440 St. James Pl"
+ },
+ {
+  "id": "h013",
+  "category": "abbrev_periods",
+  "subject": "Disclosure update",
+  "body": "Updated seller disclosure for 77 Mt. Pleasant Rd., Testville, NH 00000 is attached. Roof section revised.",
+  "expected": "77 Mt. Pleasant Rd."
+ },
+ {
+  "id": "h014",
+  "category": "abbrev_periods",
+  "subject": "Open house recap",
+  "body": "Open house at 2150 N. Willow St. drew 14 groups. Two asked about the school district.",
+  "expected": "2150 N. Willow St."
+ },
+ {
+  "id": "h015",
+  "category": "long_names",
+  "subject": "Title commitment",
+  "body": "Title commitment is ready for 1200 Martin Luther King Jr Way, Sampleton, GA 00000. Two exceptions to review.",
+  "expected": "1200 Martin Luther King Jr Way"
+ },
+ {
+  "id": "h016",
+  "category": "long_names",
+  "subject": "Septic inspection",
+  "body": "Septic company can come out to 55 Old Mill Pond Road on Monday. Need the tank location from the seller.",
+  "expected": "55 Old Mill Pond Road"
+ },
+ {
+  "id": "h017",
+  "category": "long_names",
+  "subject": "Well test results",
+  "body": "Results for County Road 7 are in. Nitrates normal. I will send the PDF once the lab releases it.",
+  "expected": "County Road 7"
+ },
+ {
+  "id": "h018",
+  "category": "directionals",
+  "subject": "Listing agreement signed",
+  "body": "Listing agreement signed for 1450 SE Maple Ave. Photos on Friday.",
+  "expected": "1450 SE Maple Ave"
+ },
+ {
+  "id": "h019",
+  "category": "directionals",
+  "subject": "Possession date",
+  "body": "Buyers request possession at closing for 305 North Birch Street, Testville, TX 00000.",
+  "expected": "305 North Birch Street"
+ },
+ {
+  "id": "h020",
+  "category": "directionals",
+  "subject": "Survey ordered",
+  "body": "Survey ordered for 9021 NW Quarry Ln. Expect it in 10 days.",
+  "expected": "9021 NW Quarry Ln"
+ },
+ {
+  "id": "h021",
+  "category": "units_suites",
+  "subject": "Condo showing",
+  "body": "Unit 4B at 88 Harbor Street is available Saturday. Doorman has the key. Address: 88 Harbor Street, Unit 4B, Exampleburg, FL 00000.",
+  "expected": "88 Harbor Street"
+ },
+ {
+  "id": "h022",
+  "category": "units_suites",
+  "subject": "Office lease",
+  "body": "Lease for the retail space at Suite 100, 200 Main Street, Testville, IL 00000 is ready to sign.",
+  "expected": "200 Main Street"
+ },
+ {
+  "id": "h023",
+  "category": "units_suites",
+  "subject": "Condo offer",
+  "body": "Offer submitted on 15 Bay Road #12, Sampleton, MA 00000. Waiting on response.",
+  "expected": "15 Bay Road #12"
+ },
+ {
+  "id": "h024",
+  "category": "two_line",
+  "subject": "Offer deadline",
+  "body": "Offer deadline for the following property is 5pm Friday:\n8 Sea View Road\nSome Town, WA 00000\nPlease have your best and final in by then.",
+  "expected": "8 Sea View Road"
+ },
+ {
+  "id": "h025",
+  "category": "two_line",
+  "subject": "Listing flyer",
+  "body": "Property:\n41 Eagle Hill\nTestville, CA 00000\nPrice reduced by $10,000.",
+  "expected": "41 Eagle Hill"
+ },
+ {
+  "id": "h026",
+  "category": "two_line",
+  "subject": "Closing documents",
+  "body": "Closing will take place at our office. Subject property:\n309 Forest Wood\nExampleburg, OH 00000\nBring photo ID.",
+  "expected": "309 Forest Wood"
+ },
+ {
+  "id": "h027",
+  "category": "two_line",
+  "subject": "Lender request",
+  "body": "Please send the insurance binder for:\n6 Mountain View\nSampleton, PA 00000\nLoan no. 000000.",
+  "expected": "6 Mountain View"
+ },
+ {
+  "id": "h028",
+  "category": "two_line",
+  "subject": "Lockbox",
+  "body": "Lockbox installed at 2 Ridge Dale\nTestville, VA 00000\nCode will follow by text.",
+  "expected": "2 Ridge Dale"
+ },
+ {
+  "id": "h029",
+  "category": "subject_only",
+  "subject": "Fwd: 73 Cranberry Cove - contract attached",
+  "body": "Please see attached. Let me know if you have questions.",
+  "expected": "73 Cranberry Cove"
+ },
+ {
+  "id": "h030",
+  "category": "subject_only",
+  "subject": "Showing at 1620 Spruce Hill Dr tomorrow",
+  "body": "Confirming 10am. Thanks!",
+  "expected": "1620 Spruce Hill Dr"
+ },
+ {
+  "id": "h031",
+  "category": "subject_only",
+  "subject": "Price change: 505 Quail Run",
+  "body": "Reduced to a new number, see MLS.",
+  "expected": "505 Quail Run"
+ },
+ {
+  "id": "h032",
+  "category": "price_before",
+  "subject": "Offer received",
+  "body": "We have a full price offer of $650,000 on 8 Oak Hill. Seller wants to respond by Tuesday.",
+  "expected": "8 Oak Hill"
+ },
+ {
+  "id": "h033",
+  "category": "price_before",
+  "subject": "Offer",
+  "body": "Our client is making an offer of $1,234,000, 44 Elm St, Testville, WA 00000, with 30 day close.",
+  "expected": "44 Elm St"
+ },
+ {
+  "id": "h034",
+  "category": "price_before",
+  "subject": "Sold",
+  "body": "Congrats, closed at $412,500 for 19 Birch Walk this morning!",
+  "expected": "19 Birch Walk"
+ },
+ {
+  "id": "h035",
+  "category": "the_cities",
+  "subject": "Closing at title company",
+  "body": "Closing for 25 Canyon Road, The Dalles, OR 00000 is set for the 3rd.",
+  "expected": "25 Canyon Road"
+ },
+ {
+  "id": "h036",
+  "category": "the_cities",
+  "subject": "Inspection report",
+  "body": "Inspection report for 780 Pecan Grove Lane, The Woodlands, TX 00000 attached. Foundation looks fine.",
+  "expected": "780 Pecan Grove Lane"
+ },
+ {
+  "id": "h037",
+  "category": "the_cities",
+  "subject": "New buyer lead",
+  "body": "Buyer is interested in 14 Willow Ct, Lake In The Hills, IL 00000. Pre-approved, wants to see it this weekend.",
+  "expected": "14 Willow Ct"
+ },
+ {
+  "id": "h038",
+  "category": "the_cities",
+  "subject": "Vacation rental comp",
+  "body": "Comp sale: 9 Palm Hill Road, Isle Of Palms, SC 00000, sold in 12 days.",
+  "expected": "9 Palm Hill Road"
+ },
+ {
+  "id": "h039",
+  "category": "promo_number_word",
+  "subject": "Get 2 Nights With An Ocean View",
+  "body": "Book now and save. Get 2 Nights With An Ocean View when you stay 3. Offer ends Sunday.",
+  "expected": null
+ },
+ {
+  "id": "h040",
+  "category": "promo_number_word",
+  "subject": "Weekend deal",
+  "body": "Escape to Sample Mountain Resort. 3 Nights Hill Country Getaway from $199. Book today.",
+  "expected": null
+ },
+ {
+  "id": "h041",
+  "category": "promo_number_word",
+  "subject": "Spring sale",
+  "body": "Save 20% on 4 Outdoor Walk Essentials. Free shipping over $50.",
+  "expected": null
+ },
+ {
+  "id": "h042",
+  "category": "promo_number_word",
+  "subject": "Your garden",
+  "body": "Top 5 Wood Stains For Your Deck This Season. Read more on our blog.",
+  "expected": null
+ },
+ {
+  "id": "h043",
+  "category": "promo_number_word",
+  "subject": "Park deal",
+  "body": "Family Day Pass: 2 Tickets To Sample Park For The Price Of 1. Limited time.",
+  "expected": null
+ },
+ {
+  "id": "h044",
+  "category": "promo_number_word",
+  "subject": "Square discount",
+  "body": "Save 15% On 3 Square Foot Garden Kits. Use the code at checkout.",
+  "expected": null
+ },
+ {
+  "id": "h045",
+  "category": "promo_number_word",
+  "subject": "New route",
+  "body": "Our 6 Route Express Service Now Delivers To More Towns. Learn more.",
+  "expected": null
+ },
+ {
+  "id": "h046",
+  "category": "receipt_shipping",
+  "subject": "Your order has shipped",
+  "body": "Order 4471 Shipped Via Ground Route. Estimated delivery Thursday. Order total $48.20. Thank you for shopping with us.",
+  "expected": null
+ },
+ {
+  "id": "h047",
+  "category": "receipt_shipping",
+  "subject": "Receipt for your payment",
+  "body": "Receipt\nSubtotal $120.00\nTax $9.60\nTotal $129.60\nBilling ZIP 00000 United States\nThis is an automated message. Do not reply.",
+  "expected": null
+ },
+ {
+  "id": "h048",
+  "category": "receipt_shipping",
+  "subject": "Subscription renewed",
+  "body": "Your annual plan renewed for $199.00. Invoice INV-000123. Billing ZIP 00000 United States. Questions? Visit our help center.",
+  "expected": null
+ },
+ {
+  "id": "h049",
+  "category": "receipt_shipping",
+  "subject": "Tracking update",
+  "body": "Package 000000 arrived at the local facility on Route 9 hub. It will be out for delivery soon.",
+  "expected": null
+ },
+ {
+  "id": "h050",
+  "category": "receipt_shipping",
+  "subject": "Photo order",
+  "body": "Your 12 prints are ready for pickup. Order #00000. Total $18.40. Thank you!",
+  "expected": null
+ },
+ {
+  "id": "h051",
+  "category": "receipt_shipping",
+  "subject": "Payment received",
+  "body": "We received your payment of $350.00 for the MLS dues. Reference 00000. Thank you for being a member.",
+  "expected": null
+ },
+ {
+  "id": "h052",
+  "category": "long_titlecase",
+  "subject": "Weekly digest",
+  "body": "3 Reasons Your Home Needs A Fresh Look. Discover Trends On Sample Ridge. See How Neighbors Are Updating Their Spaces.\nRead More Below.",
+  "expected": null
+ },
+ {
+  "id": "h053",
+  "category": "long_titlecase",
+  "subject": "Newsletter",
+  "body": "2 Easy Ways To Stage Your Home For Spring. Learn What Buyers Notice First. Get The Free Guide Now.\nOpen In Your Browser.",
+  "expected": null
+ },
+ {
+  "id": "h054",
+  "category": "long_titlecase",
+  "subject": "Market trends",
+  "body": "5 Tips To Win A Bidding War. Make Your Offer Stand Out. Work With A Local Expert Who Knows The Market.",
+  "expected": null
+ },
+ {
+  "id": "h055",
+  "category": "long_titlecase",
+  "subject": "Webinar",
+  "body": "4 Ways To Grow Your Referral Business. Join Our Live Session. Space Is Limited. Reserve Your Seat Today.",
+  "expected": null
+ },
+ {
+  "id": "h056",
+  "category": "state_code_tail",
+  "subject": "Tonight only",
+  "body": "2 Nights With A Lake View Tonight Or.",
+  "expected": null
+ },
+ {
+  "id": "h057",
+  "category": "state_code_tail",
+  "subject": "Hiking sale",
+  "body": "Climb 3 Peaks On Sample Ridge, Stay In.",
+  "expected": null
+ },
+ {
+  "id": "h058",
+  "category": "state_code_tail",
+  "subject": "Cabin deal",
+  "body": "Book 2 Nights At A Cabin With A Mountain View And Never Look Back Or\nUnsubscribe at any time.",
+  "expected": null
+ },
+ {
+  "id": "h059",
+  "category": "state_code_tail",
+  "subject": "Coffee promo",
+  "body": "Get 5 Free Drinks At The Corner Cafe Walk Right In.",
+  "expected": null
+ },
+ {
+  "id": "h060",
+  "category": "state_code_tail",
+  "subject": "Gift guide",
+  "body": "10 Gifts With A Garden View For The One You Love Co.",
+  "expected": null
+ },
+ {
+  "id": "h061",
+  "category": "state_code_tail",
+  "subject": "Weekend",
+  "body": "7 Days Of Hill Country Fun Plan Your Trip Today Hi.",
+  "expected": null
+ },
+ {
+  "id": "h062",
+  "category": "state_code_tail",
+  "subject": "Closing soon",
+  "body": "Our 3 Year Wood Floor Warranty Ends Soon Act Now Ok.",
+  "expected": null
+ },
+ {
+  "id": "h063",
+  "category": "state_code_tail",
+  "subject": "Open now",
+  "body": "Enjoy 1 Free Night When You Book A Park View Suite Pa.",
+  "expected": null
+ },
+ {
+  "id": "h064",
+  "category": "state_code_tail",
+  "subject": "Deal",
+  "body": "Take 2 Hours To Explore Sample Hill Trails Ma.",
+  "expected": null
+ },
+ {
+  "id": "h065",
+  "category": "state_code_tail",
+  "subject": "Flash",
+  "body": "Save On 6 Square Meals For Two Id.",
+  "expected": null
+ },
+ {
+  "id": "h066",
+  "category": "state_code_tail",
+  "subject": "Hurry",
+  "body": "Enjoy 3 Days Of Ridge Views And Stay Mi.",
+  "expected": null
+ },
+ {
+  "id": "h067",
+  "category": "state_code_tail",
+  "subject": "Heads up",
+  "body": "Watch 2 Short Videos About Wood Floors And Enjoy De.",
+  "expected": null
+ },
+ {
+  "id": "h068",
+  "category": "state_code_tail",
+  "subject": "Order",
+  "body": "Pick Up 9 Park Treats At Our Walk Up Window Oh.",
+  "expected": null
+ },
+ {
+  "id": "h069",
+  "category": "state_code_tail",
+  "subject": "Dinner",
+  "body": "2 Course Dinner With A Hill View Is Back La.",
+  "expected": null
+ },
+ {
+  "id": "h070",
+  "category": "footer_pobox",
+  "subject": "Monthly newsletter",
+  "body": "Thanks for reading!\n\nSample Realty Partners\nPO Box 1234\nTestville, WA 00000\nYou are receiving this because you subscribed. Unsubscribe.",
+  "expected": null
+ },
+ {
+  "id": "h071",
+  "category": "footer_pobox",
+  "subject": "Association dues",
+  "body": "Please remit payment to Sample Association, P.O. Box 55, Sampleton, OR 00000. Dues of $250 are due on the 1st.",
+  "expected": null
+ },
+ {
+  "id": "h072",
+  "category": "footer_nostreet",
+  "subject": "Vendor update",
+  "body": "Exampleburg Title Co. serving the greater Exampleburg area. Call our office for details. (000) 000-0000. All rights reserved.",
+  "expected": null
+ },
+ {
+  "id": "h073",
+  "category": "footer_nostreet",
+  "subject": "Thanks for visiting",
+  "body": "Copyright 2026 Sample Home Inspections. All rights reserved. View this email in your browser. Privacy policy.",
+  "expected": null
+ },
+ {
+  "id": "h074",
+  "category": "no_address_misc",
+  "subject": "Quick question",
+  "body": "Hi, are you free for a call Thursday about the 3 offers we got? Also the buyer wants to know about the HOA. Thanks!",
+  "expected": null
+ },
+ {
+  "id": "h075",
+  "category": "no_address_misc",
+  "subject": "Contract timeline",
+  "body": "Reminder: inspection contingency ends in 7 days, appraisal in 14, closing in 30. Please keep these dates handy.",
+  "expected": null
+ },
+ {
+  "id": "h076",
+  "category": "no_address_misc",
+  "subject": "Commission statement",
+  "body": "Your commission for the transaction closed last week has been deposited. Amount $6,240.00.",
+  "expected": null
+ }
+]

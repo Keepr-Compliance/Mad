@@ -108,6 +108,17 @@ export interface LearnRunResult {
   filtered: { full: FilteredDetection[]; minusContactKeeps: FilteredDetection[] };
   /** BACKLOG-4175: per-row sender filter counts over the scanned rows (aggregates only). */
   senderStats: SenderRunStats;
+  /**
+   * BACKLOG-4219: the same two filtered runs and per-row counts, decided on the
+   * `detector` surface instead of `learnQuestions` (what the detector WOULD
+   * drop under this rule set). Same rows, same keep sets. Coverage does not
+   * depend on the surface and is the same object as `senderStats.coverage`.
+   * Feeds the pilot report's `census.detector` block only.
+   */
+  detector: {
+    filtered: { full: FilteredDetection[]; minusContactKeeps: FilteredDetection[] };
+    senderStats: SenderRunStats;
+  };
 }
 
 /** A detection of a filtered run: what the loss metrics compare on. */
@@ -240,6 +251,8 @@ export async function runBaseline0(
   const hiddenIds = new Set<string>();
   const suppressedFull = new Set<string>();
   const suppressedMinus = new Set<string>();
+  const detSuppressedFull = new Set<string>();
+  const detSuppressedMinus = new Set<string>();
   const stats: SenderRunStats = {
     keptBy: { K1: 0, K2: 0, K3: 0 },
     keepConflicts: 0,
@@ -249,6 +262,8 @@ export async function runBaseline0(
       unknown: { rows: 0, headers: 0, labels: 0 },
     },
   };
+  // BACKLOG-4219: the detector surface. Coverage is surface-independent: shared.
+  const detStats: SenderRunStats = { keptBy: { K1: 0, K2: 0, K3: 0 }, keepConflicts: 0, coverage: stats.coverage };
 
   let cursor = { sentAt: "", id: "" };
   let rowsScanned = 0;
@@ -285,6 +300,16 @@ export async function runBaseline0(
       }
       if (decide(fr, senderRules, "learnQuestions", keep, { withoutContactKeeps: true }).outcome === "suppress") {
         suppressedMinus.add(row.id);
+      }
+      const det = decide(fr, senderRules, "detector", keep);
+      if (det.outcome === "suppress") {
+        detSuppressedFull.add(row.id);
+        if (det.keepConflict) detStats.keepConflicts += 1;
+      } else if (det.outcome === "keep") {
+        detStats.keptBy[det.rule as KeepRuleId] += 1;
+      }
+      if (decide(fr, senderRules, "detector", keep, { withoutContactKeeps: true }).outcome === "suppress") {
+        detSuppressedMinus.add(row.id);
       }
       const cov = stats.coverage[providerOf(row.source)];
       cov.rows += 1;
@@ -347,6 +372,13 @@ export async function runBaseline0(
       minusContactKeeps: filteredDetections(realEstate.filter((a) => !suppressedMinus.has(emailIdOf.get(a) ?? ""))),
     },
     senderStats: stats,
+    detector: {
+      filtered: {
+        full: filteredDetections(realEstate.filter((a) => !detSuppressedFull.has(emailIdOf.get(a) ?? ""))),
+        minusContactKeeps: filteredDetections(realEstate.filter((a) => !detSuppressedMinus.has(emailIdOf.get(a) ?? ""))),
+      },
+      senderStats: detStats,
+    },
   };
 }
 
