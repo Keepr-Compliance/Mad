@@ -32,11 +32,11 @@ PY
 }
 md5() { $KT -c "select md5(prosrc) m from pg_proc where oid='public._one_brokerage_per_member()'::regprocedure"; }
 
-if [ "$MODE" != base ]; then
-  python3 "$HERE/compose.py" "$TMP/mut.sql" "$MODE" --mig-only || exit 2
-  fn_only "$TMP/mut.sql" > "$TMP/fn.sql"
-  echo "md5 before: $(md5)"; $KT "$TMP/fn.sql" >/dev/null; echo "md5 mutant: $(md5)"
-fi
+restore() {  # always runs on exit once a mutant was installed: the migration's body back, md5 checked
+  python3 "$HERE/compose.py" "$TMP/base.sql" base --mig-only >/dev/null; fn_only "$TMP/base.sql" > "$TMP/fn0.sql"
+  $KT "$TMP/fn0.sql" >/dev/null; local now; now="$(md5)"; echo "md5 restored: $now"
+  [ "$now" = "$MD5_BEFORE" ] || echo "RESTORE FAILED: md5 differs from before"
+}
 
 cat > "$TMP/prelude.sql" <<'SQL'
 CREATE FUNCTION pg_temp.id(x text) RETURNS uuid LANGUAGE sql IMMUTABLE AS $b$ SELECT md5('bl4179c:' || x)::uuid $b$;
@@ -151,6 +151,15 @@ run_pair() {  # $1 label, $2 user key, $3 S1 file, $4 S2 file
 $KT "$TMP/cleanup.sql" >/dev/null 2>&1   # leftovers from an aborted run
 echo "setup: $($KT "$TMP/setup.sql")"
 
+# The mutant is installed only for the two races (shortest window); restore() runs on any exit.
+if [ "$MODE" != base ]; then
+  python3 "$HERE/compose.py" "$TMP/mut.sql" "$MODE" --mig-only || exit 2
+  fn_only "$TMP/mut.sql" > "$TMP/fn.sql"
+  MD5_BEFORE="$(md5)"; echo "md5 before: $MD5_BEFORE"
+  trap 'restore; rm -rf "$TMP"' EXIT INT TERM
+  $KT "$TMP/fn.sql" >/dev/null; echo "md5 mutant: $(md5)"
+fi
+
 # ---- G3: accept at A (held) vs accept at B --------------------------------------------------------
 session 0 authenticated g3 "SELECT public.accept_invitation('tok4179c-g3-a')::text" 8 > "$TMP/g3a.sql"
 session 3 authenticated g3 "SELECT public.accept_invitation('tok4179c-g3-b')::text" 0 > "$TMP/g3b.sql"
@@ -167,9 +176,6 @@ echo "G5 next run: $($KT "$TMP/g5c.sql")"
 echo "G5 switch after next run: $($KT -c "select status, reason from public.domain_capture_switches where id = md5('bl4179c:sK')::uuid")"
 echo "G5 rows: $($KT -c "select o.slug, m.license_status from public.organization_members m join public.organizations o on o.id = m.organization_id where m.user_id = md5('bl4179c:g5')::uuid order by 1")"
 
+if [ "$MODE" != base ]; then restore; trap 'rm -rf "$TMP"' EXIT INT TERM; fi
 echo "cleanup: $($KT "$TMP/cleanup.sql")"
-if [ "$MODE" != base ]; then
-  python3 "$HERE/compose.py" "$TMP/base.sql" base --mig-only >/dev/null; fn_only "$TMP/base.sql" > "$TMP/fn0.sql"
-  $KT "$TMP/fn0.sql" >/dev/null; echo "md5 restored: $(md5)"
-fi
 $KT -c "select extensions.pg_stat_statements_reset()" >/dev/null 2>&1 || echo "pg_stat_statements_reset failed"
