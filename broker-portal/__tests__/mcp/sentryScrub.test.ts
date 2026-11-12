@@ -61,6 +61,9 @@ const SCRUBBED_URLS = [
   '/api/mcp',
   '/oauth',
   'https://portal.test/API/MCP',
+  `https://portal.test/api/mcp?token=${SECRET}`,
+  `/api/mcp/resource-metadata?token=${SECRET}`,
+  `https://portal.test/oauth/authorize?code=${SECRET}`,
 ];
 
 const KEPT_URLS = ['https://portal.test/dashboard', 'https://portal.test/api/mcpx', 'https://portal.test/oauthx', '/api/billing/plan-summary'];
@@ -77,6 +80,7 @@ describe.each(['server', 'edge'] as const)('A7: sentry.%s.config', (file) => {
       expect(req.cookies).toBeUndefined();
       expect(req.data).toBeUndefined();
       expect(req.query_string).toBeUndefined();
+      expect(req.url).toBe(new URL(url, 'https://portal.test').pathname);
       expect(req.method).toBe('POST');
     });
 
