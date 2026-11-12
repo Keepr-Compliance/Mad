@@ -18,6 +18,7 @@ import {
 } from "../services/updaterAssetUrl";
 
 import { getMainWindow } from "../windowRegistry";
+import { markQuitting } from "../bootstrap/quitState";
 import { stopBackupForQuit } from "./syncHandlers";
 import { getBackupAtRest } from "../services/atRest/backupAtRest";
 import { waitForLinksToFinish } from "../utils/linkInFlight";
@@ -232,6 +233,8 @@ export function registerUpdaterHandlers(): void {
     // Parameters: isSilent, isForceRunAfter
     // false = show installer, true = force run after install
     void waitForQuitBlockers().then(() => setImmediate(() => {
+      // BACKLOG-3283: native quitAndInstall closes windows before before-quit.
+      markQuitting();
       app.removeAllListeners("window-all-closed");
       // BACKLOG-3454: the live window. The captured one may be destroyed after a
       // macOS Dock reopen, and `close()` on a destroyed window throws.
