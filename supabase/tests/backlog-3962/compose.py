@@ -133,8 +133,12 @@ JN_RESTORE = "  IF (v_reply ->> 'success') IS DISTINCT FROM 'true' THEN\n"
 MUTANTSJ = {
     # J2: the owner check dropped (any switch id joins its person)
     'J_no_owner_check': [("  IF NOT FOUND OR p_user IS NULL OR v_row.user_id IS DISTINCT FROM p_user THEN\n", "  IF NOT FOUND THEN\n")],
-    # J3: no restore after a deferral (the row is left due; the hourly job would move the person)
+    # J3: the deferral restore skipped. Only last_defer_reason is lost: the success-path UPDATE below still
+    # restores switch_at, so the row is not left due by this mutant (see J_due_after_defer for that)
     'J_no_restore': [(JN_RESTORE, "  IF false THEN\n")],
+    # J3: a deferral leaves switch_at at now() (row left due; the hourly job would move the person)
+    'J_due_after_defer': [("SET switch_at = v_row.switch_at, last_defer_reason = v_row.last_defer_reason, updated_at = now()",
+                           "SET last_defer_reason = v_row.last_defer_reason, updated_at = now()")],
     # J4: the restore covers the DNS deferral only, not the billing deferrals
     'J_restore_dns_only': [(JN_RESTORE, "  IF v_reply ->> 'error' = 'dns_not_fresh' THEN\n")],
     # J4: the inner switch skipped (moves without its checks)

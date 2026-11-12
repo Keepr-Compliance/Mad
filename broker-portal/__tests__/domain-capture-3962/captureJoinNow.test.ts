@@ -12,7 +12,10 @@
 
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join } from 'path';
+import * as Sentry from '@sentry/nextjs';
 import { runCaptureJoinNow, JOIN_DNS_FRESH_MS } from '@/lib/domain/captureJoinNow';
+
+jest.mock('@sentry/nextjs', () => ({ captureMessage: jest.fn(), captureException: jest.fn() }));
 
 const NOW = Date.parse('2026-11-12T12:00:00Z');
 const ORG = '00000000-0000-4000-8000-00000000000a'; // pii-allow-uuid: invented fixture id
@@ -139,6 +142,14 @@ describe('runCaptureJoinNow', () => {
     const p = harness({ join: { data: { success: true, outcome: 'switched', license_status: 'active', payer: true, email: 'me@a-brokerage.example', joined_early: true }, error: null } });
     await p.run();
     expect(p.sendSwitched).not.toHaveBeenCalled();
+  });
+
+  it('a throw from the notifications after the move still returns switched and warns in Sentry', async () => {
+    const h = harness({ join: { data: { success: true, outcome: 'switched', license_status: 'unassigned', payer: false, email: 'me@a-brokerage.example', brokerage_name: 'A Brokerage', joined_early: true }, error: null } });
+    h.sendSeatAlert.mockRejectedValueOnce(new Error('smtp down'));
+    const r = await h.run();
+    expect(r).toEqual({ status: 'switched', brokerageName: 'A Brokerage', licensed: false });
+    expect(Sentry.captureMessage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ level: 'warning' }));
   });
 
   it('joined without a license: the brokerage admins get the seat alert', async () => {

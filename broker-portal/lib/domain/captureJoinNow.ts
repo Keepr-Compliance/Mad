@@ -13,6 +13,7 @@
  * 4. On 'switched': the same notifications as the hourly job (notifySwitched), one-person list.
  */
 
+import * as Sentry from '@sentry/nextjs';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { TxtLookup } from '@/lib/domain/doh';
 import { isNotDeployedError } from '@/lib/domain/claims';
@@ -101,7 +102,17 @@ export async function runCaptureJoinNow(deps: JoinNowDeps, userId: string, switc
   if (r.outcome !== 'switched') return { status: 'error', code: 'failed', brokerageName, switchAt };
 
   // 4. notifications, as the hourly job
-  await notifySwitched(service, [{ switchId, userId, organizationId: sw.organization_id, reply: r }], deps);
+  // The person has moved; a throw from the notifications (the seat-alert stage can throw) must not turn
+  // that into an error result.
+  try {
+    await notifySwitched(service, [{ switchId, userId, organizationId: sw.organization_id, reply: r }], deps);
+  } catch (notifyError) {
+    Sentry.captureMessage('Join now: notifications failed after the move', {
+      level: 'warning',
+      tags: { action: 'domain_capture_join_now' },
+      extra: { switchId, error: notifyError instanceof Error ? notifyError.message : String(notifyError) },
+    });
+  }
   const replyName = typeof r.brokerage_name === 'string' && r.brokerage_name.trim() ? r.brokerage_name : brokerageName;
   return { status: 'switched', brokerageName: replyName, licensed: r.license_status === 'active' };
 }

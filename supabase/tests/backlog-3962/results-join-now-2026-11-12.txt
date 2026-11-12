@@ -26,3 +26,7 @@ J_no_role_check (after J6d added): fail 1 reds J6d_role_check_inside
 # after apply (md5 d444b378a15c3cb9fb8393782da55936, ledger row 20261112114500):
 join_live: pass 16 fail 0
 join --applied: pass 16 fail 0; J_no_restore --applied: fail 3
+# fix-up round (applied mode, KEEPR_3962_APPLIED=1 bash run.sh J_due_after_defer):
+J_no_restore note: it drops only the last_defer_reason restore; the success-path UPDATE still restores switch_at, so it does not leave the row due.
+MUTATION APPLIED J_due_after_defer: -       SET switch_at = v_row.switch_at, last_defer_reason = v_row.last_defer_reason, updated_at = now() | +       SET last_defer_reason = v_row.last_defer_reason, updated_at = now()
+P3962_RESULT {"fail": 5, "mode": "J_due_after_defer", "pass": 11, "reds": J3a_stale_dns_deferred_unchanged, J3b_not_due_for_hourly_job, J3c_opt_out_still_succeeds, J4a_billing_not_ready_unchanged, J4b_billing_setup_incomplete_unchanged}
