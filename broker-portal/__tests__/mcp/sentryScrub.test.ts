@@ -114,7 +114,7 @@ describe('A7: the MCP route logs no token', () => {
   });
 
   it('a token check that throws with the token in its message writes nothing containing it', async () => {
-    process.env = { ...ENV, MCP_ENABLED: 'true', NEXT_PUBLIC_SUPABASE_URL: 'https://project-ref.supabase.co', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon' };
+    process.env = { ...ENV, MCP_ENABLED: 'true', MCP_PUBLIC_ORIGIN: 'https://portal.test', NEXT_PUBLIC_SUPABASE_URL: 'https://project-ref.supabase.co', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon' };
     const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => jest.spyOn(console, m).mockImplementation(() => {}));
     mockGetClaims.mockImplementationOnce(async (t: string) => {
       throw new Error(`bad token ${t}`);

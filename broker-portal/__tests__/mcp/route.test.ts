@@ -20,7 +20,10 @@ jest.mock('@supabase/supabase-js', () => ({
 }));
 
 import * as route from '@/app/api/mcp/route';
-import { GET as metadataGET } from '@/app/api/mcp/resource-metadata/route';
+import * as prm from '@/app/api/mcp/resource-metadata/route';
+import { OAUTH_ENV } from './oauth/fixtures';
+
+const metadataGET = prm.GET;
 
 const BASE = 'https://portal.test';
 const MCP_URL = `${BASE}/api/mcp`;
@@ -45,12 +48,12 @@ afterAll(() => {
 beforeEach(() => {
   process.env = {
     ...ENV,
-    MCP_ENABLED: 'true',
-    NEXT_PUBLIC_SUPABASE_URL: 'https://project-ref.supabase.co',
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon-fixture',
+    // BACKLOG-4238: OAUTH_ENV sets MCP_ENABLED=true, the Supabase URL and anon key (as before),
+    // plus the public origin the endpoint needs and the OAuth config the metadata route needs.
+    ...OAUTH_ENV,
+    MCP_PUBLIC_ORIGIN: BASE,
   };
   delete process.env.MCP_ALLOWED_ORIGINS;
-  delete process.env.MCP_PUBLIC_ORIGIN;
   mockGetClaims.mockReset();
   mockGetClaims.mockImplementation(async (token: string) => {
     const claims = claimsByToken[token];
@@ -134,12 +137,13 @@ describe('A1: no Authorization header', () => {
     await client.close();
   });
 
-  it('the resource metadata names this resource and the Supabase issuer', async () => {
+  it('the resource metadata names this resource and this portal as the issuer', async () => {
     const res = await metadataGET(new Request(`${BASE}/api/mcp/resource-metadata`));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       resource: MCP_URL,
-      authorization_servers: ['https://project-ref.supabase.co/auth/v1'],
+      authorization_servers: [BASE],
+      scopes_supported: ['mcp:read'],
       bearer_methods_supported: ['header'],
       resource_name: 'Keepr',
     });
@@ -291,6 +295,31 @@ describe('A8: MCP_ENABLED kill switch', () => {
     expect(mockGetClaims).not.toHaveBeenCalled();
   });
 
+  it.each([undefined, '', 'http://portal.test', 'https://portal.test/path', 'not a url'])(
+    'MCP_ENABLED=true with MCP_PUBLIC_ORIGIN=%p: every method and the metadata route are 404',
+    async (value) => {
+      if (value === undefined) delete process.env.MCP_PUBLIC_ORIGIN;
+      else process.env.MCP_PUBLIC_ORIGIN = value;
+      expect((await post({ authorization: `Bearer ${CONNECTED_APP_TOKEN}` })).status).toBe(404);
+      expect((await post()).status).toBe(404);
+      expect((await route.GET(new Request(MCP_URL))).status).toBe(404);
+      expect((await metadataGET(new Request(`${BASE}/api/mcp/resource-metadata`))).status).toBe(404);
+      expect(mockGetClaims).not.toHaveBeenCalled();
+    }
+  );
+
+  it('the 401 names MCP_PUBLIC_ORIGIN, not the request Host', async () => {
+    const res = await route.POST(
+      new Request('https://other-host.test/api/mcp', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+        body: initializeBody(),
+      })
+    );
+    expect(res.status).toBe(401);
+    expect(res.headers.get('www-authenticate')).toBe(`Bearer resource_metadata="${BASE}/api/mcp/resource-metadata"`);
+  });
+
   it('positive: MCP_ENABLED=true gives 401 without a token and 200 with one', async () => {
     expect((await post()).status).toBe(401);
     expect((await post({ authorization: `Bearer ${CONNECTED_APP_TOKEN}` })).status).toBe(200);
@@ -308,13 +337,20 @@ const SURFACES: Array<[string, number, () => Promise<Response> | Response]> = [
   ['DELETE /api/mcp', 405, () => route.DELETE(new Request(MCP_URL, { method: 'DELETE' }))],
   ['OPTIONS /api/mcp', 405, () => route.OPTIONS(new Request(MCP_URL, { method: 'OPTIONS' }))],
   ['GET /api/mcp/resource-metadata', 200, () => metadataGET(new Request(METADATA_URL))],
+  ['HEAD /api/mcp/resource-metadata', 200, () => prm.HEAD(new Request(METADATA_URL, { method: 'HEAD' }))],
+  ['POST /api/mcp/resource-metadata', 405, () => prm.POST(new Request(METADATA_URL, { method: 'POST' }))],
+  ['PUT /api/mcp/resource-metadata', 405, () => prm.PUT(new Request(METADATA_URL, { method: 'PUT' }))],
+  ['PATCH /api/mcp/resource-metadata', 405, () => prm.PATCH(new Request(METADATA_URL, { method: 'PATCH' }))],
+  ['DELETE /api/mcp/resource-metadata', 405, () => prm.DELETE(new Request(METADATA_URL, { method: 'DELETE' }))],
+  ['OPTIONS /api/mcp/resource-metadata', 405, () => prm.OPTIONS(new Request(METADATA_URL, { method: 'OPTIONS' }))],
 ];
 
 describe('A8: each surface with MCP_ENABLED unset', () => {
   it('lists every exported handler of both routes', () => {
+    const methods = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
     const exported = [
-      ...['POST', 'GET', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].filter((m) => typeof (route as Record<string, unknown>)[m] === 'function').map((m) => `${m} /api/mcp`),
-      'GET /api/mcp/resource-metadata',
+      ...methods.filter((m) => typeof (route as Record<string, unknown>)[m] === 'function').map((m) => `${m} /api/mcp`),
+      ...methods.filter((m) => typeof (prm as Record<string, unknown>)[m] === 'function').map((m) => `${m} /api/mcp/resource-metadata`),
     ];
     expect(SURFACES.map(([name]) => name).sort()).toEqual(exported.sort());
   });

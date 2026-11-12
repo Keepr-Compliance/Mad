@@ -1,5 +1,5 @@
 import * as Sentry from '@sentry/nextjs';
-import { scrubMcpRequest } from './lib/mcp/sentryScrub';
+import { scrubBreadcrumb, scrubEvent, scrubSpan, scrubTransaction } from './lib/mcp/sentryScrub';
 
 /**
  * Sentry edge-runtime SDK initialization for broker-portal.
@@ -17,11 +17,18 @@ Sentry.init({
 
   tracesSampleRate: 0.1,
 
-  // BACKLOG-4237: middleware runs on /oauth; drop request headers, cookies and body there.
+  // BACKLOG-4237/4238: middleware runs on /oauth; drop request headers, cookies,
+  // body, query and env there, and redact Keepr OAuth credentials everywhere.
   beforeSend(event) {
-    return scrubMcpRequest(event);
+    return scrubEvent(event);
   },
   beforeSendTransaction(event) {
-    return scrubMcpRequest(event);
+    return scrubTransaction(event);
+  },
+  beforeSendSpan(span) {
+    return scrubSpan(span);
+  },
+  beforeBreadcrumb(breadcrumb) {
+    return scrubBreadcrumb(breadcrumb);
   },
 });
