@@ -112,3 +112,40 @@ export function captureConsole(): { lines: () => string[]; restore: () => void }
     restore: () => spies.forEach((s) => s.mockRestore()),
   };
 }
+
+// ---------------------------------------------------------------------------
+// PR-2b envelopes, transcribed from the same migration.
+// ---------------------------------------------------------------------------
+
+/** A client id of the registered shape (all zeros). */
+export const CLIENT_ID = `kpr_c_${'A'.repeat(22)}`;
+export const RESOURCE = `${ORIGIN}/api/mcp`;
+/** A code verifier of the minimum length (RFC 7636 section 4.1) and a challenge of the S256 shape. */
+export const VERIFIER = 'v'.repeat(43);
+export const CHALLENGE = 'c'.repeat(43);
+/** kpr_-shaped fixture credentials (repeated characters). */
+export const CODE = `kpr_ac_${'C'.repeat(43)}`;
+export const REFRESH = `kpr_rt_${'R'.repeat(43)}`;
+export const BINDING = `kpr_bd_${'B'.repeat(43)}`;
+/** request id shape of _mcp_b64url(uuid_send(gen_random_uuid())): 22 characters. */
+export const REQUEST_ID = 'AAAAAAAAAAAAAAAAAAAAAA';
+
+/** mcp_authorize_begin success, :524. */
+export function authorizeOk(requestId: string = REQUEST_ID) {
+  return { ok: true, request_id: requestId, expires_in: 600 };
+}
+
+/** mcp_authorize_begin page refusal, :489/:495 (invalid_client), :499/:503 (temporarily_unavailable). */
+export function authorizePage(code: string) {
+  return { ok: false, error: code, show: 'page' };
+}
+
+/** mcp_authorize_begin redirect refusal, :510-511 (invalid_request), :514-515 (invalid_scope). */
+export function authorizeRedirect(code: string, redirectUri: string, state: string | null) {
+  return { ok: false, error: code, show: 'redirect', redirect_uri: redirectUri, state };
+}
+
+/** mcp_exchange_code success :626; mcp_refresh success :693. */
+export function tokenOk() {
+  return { ok: true, token_type: 'Bearer', expires_in: 3600, scope: 'mcp:read' };
+}

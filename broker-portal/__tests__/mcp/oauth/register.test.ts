@@ -79,13 +79,12 @@ describe('H6: request checks', () => {
     expect(mockRpc).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['?x=1', `?refresh_token=${PLANTED_PLAIN}`, '?'])('a query string %p is refused with no database call', async (q) => {
+  it('a bare ? is an empty query and is accepted', async () => {
+    expect((await post(GOOD, { url: `${URL_}?` })).status).toBe(201);
+  });
+
+  it.each(['?x=1', `?refresh_token=${PLANTED_PLAIN}`])('a query string %p is refused with no database call', async (q) => {
     const res = await post(GOOD, { url: `${URL_}${q}` });
-    if (q === '?') {
-      // a bare '?' is an empty query
-      expect(res.status).toBe(201);
-      return;
-    }
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'invalid_request' });
     expect(mockRpc).not.toHaveBeenCalled();
