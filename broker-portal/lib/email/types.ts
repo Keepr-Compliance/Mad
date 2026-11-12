@@ -298,8 +298,10 @@ export interface DomainCaptureNoticeParams {
   domain: string;
   /** ISO time of the switch (start + 14 days) */
   switchAt: string;
-  /** Tokenless link to the portal, where the signed-in person can opt out */
-  optOutUrl: string;
+  /** Tokenless link to the portal banner, "Join now" focused (GET changes nothing) */
+  joinUrl: string;
+  /** Tokenless link to the portal banner, "Keep my personal account" focused (GET changes nothing) */
+  keepUrl: string;
   /** domain_capture_switches.id, kept in the delivery log so a queued retry can be matched */
   switchId: string;
   /** True when the person pays for their own Keepr plan (a live subscription of their own) */
@@ -312,6 +314,8 @@ export interface DomainCaptureSwitchedParams {
   /** True when the person was given a license (a free seat existed) */
   licensed: boolean;
   switchId: string;
+  /** True when the person chose "Join now" before the scheduled date */
+  joinedEarly?: boolean;
 }
 
 // ---------------------------------------------------------------------------

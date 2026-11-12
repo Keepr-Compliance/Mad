@@ -9,10 +9,12 @@ import { buildSimpleNotice } from './simple-notice';
 import type { DomainCaptureSwitchedParams, EmailContent } from '../types';
 
 export function buildDomainCaptureSwitchedEmail(params: DomainCaptureSwitchedParams): EmailContent {
-  const { recipientEmail, brokerageName, licensed } = params;
+  const { recipientEmail, brokerageName, licensed, joinedEarly } = params;
   const subject = `Your Keepr account is now part of ${brokerageName}`;
   return buildSimpleNotice(subject, [
-    `Your Keepr account (${recipientEmail}) moved into ${brokerageName} today, as the notice 14 days ago said.`,
+    joinedEarly === true
+      ? `Your Keepr account (${recipientEmail}) moved into ${brokerageName} today, as you asked.`
+      : `Your Keepr account (${recipientEmail}) moved into ${brokerageName} today, as the notice 14 days ago said.`,
     licensed
       ? `${brokerageName} gave you a Keepr license, so you can keep working as before.`
       : `${brokerageName} has no free license yet. An admin there can assign you one on the Users page.`,

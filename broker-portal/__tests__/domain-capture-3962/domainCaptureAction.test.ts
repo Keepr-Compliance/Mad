@@ -81,7 +81,8 @@ describe('startCapture', () => {
     expect(mockSendNotice).toHaveBeenCalledTimes(2);
     expect(mockSendNotice.mock.calls[0][0]).toMatchObject({
       recipientEmail: 'one@a-brokerage.example', brokerageName: 'A Brokerage', domain: 'a-brokerage.example',
-      switchId: S1, optOutUrl: expect.stringMatching(/\/dashboard\?capture=notice$/), payer: true,
+      switchId: S1, joinUrl: expect.stringMatching(/\/dashboard\?capture=join$/),
+      keepUrl: expect.stringMatching(/\/dashboard\?capture=keep$/), payer: true,
     });
     expect(mockSendNotice.mock.calls[1][0]).toMatchObject({ switchId: S2, payer: false });
     expect(mockServiceRpc.mock.calls).toEqual([

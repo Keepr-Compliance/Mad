@@ -160,6 +160,7 @@ export async function notifySwitched(
           brokerageName: typeof r.brokerage_name === 'string' && r.brokerage_name.trim() ? r.brokerage_name : 'your brokerage',
           licensed,
           switchId: p.switchId,
+          joinedEarly: r.joined_early === true,
         });
         if (sent.outcome === 'sent' || sent.outcome === 'queued') out.switchedEmails += 1;
       }
