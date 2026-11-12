@@ -19,10 +19,13 @@ import { PROVISIONING_SOURCE_LABELS } from '@/lib/types/users';
 import { POST } from '@/app/api/email/seat-limit-reached/route';
 
 describe('capture emails', () => {
-  it('notice names the date, the account, the trade-off and the portal link', () => {
+  const JOIN = 'https://portal.example/dashboard?capture=join';
+  const KEEP = 'https://portal.example/dashboard?capture=keep';
+
+  it('notice names the date, the account, the trade-off and both portal links', () => {
     const e = buildDomainCaptureNoticeEmail({
       recipientEmail: 'one@a-brokerage.example', brokerageName: 'A Brokerage', domain: 'a-brokerage.example',
-      switchAt: '2026-11-24T10:00:00Z', optOutUrl: 'https://portal.example/dashboard?capture=notice', switchId: 's1',
+      switchAt: '2026-11-24T10:00:00Z', joinUrl: JOIN, keepUrl: KEEP, switchId: 's1',
       payer: true,
     });
     expect(e.subject).toBe('A Brokerage will move your Keepr account on November 24, 2026');
@@ -30,13 +33,28 @@ describe('capture emails', () => {
     expect(e.text).toContain('On November 24, 2026, your Keepr account (one@a-brokerage.example) will move into A Brokerage, and any personal Keepr plan on it will end.');
     expect(e.text).toContain('After the move, A Brokerage will manage this account and can end your access to it.');
     expect(e.text).toContain('If you opt out, your account stays separate and stays on your own paid plan.');
-    expect(e.text).toContain('https://portal.example/dashboard?capture=notice');
+    expect(e.text).toContain(`Join now: ${JOIN}`);
+    expect(e.text).toContain(`Keep my personal account: ${KEEP}`);
+    expect(e.text).toContain('To join now, or to keep your personal account, sign in before November 24, 2026.');
+    // two plain links (GET only), join first
+    const hrefs = Array.from(e.html.matchAll(/href="([^"]+)"/g)).map((m) => m[1]);
+    expect(hrefs.filter((h) => h.includes('capture='))).toEqual([JOIN, KEEP]);
+    expect(e.html).toContain('>\n              Join now\n');
+    expect(e.html).toContain('>\n              Keep my personal account\n');
+  });
+
+  it('notice link values are escaped in the html', () => {
+    const e = buildDomainCaptureNoticeEmail({
+      recipientEmail: 'one@a-brokerage.example', brokerageName: 'A', domain: 'a.example',
+      switchAt: '2026-11-24T10:00:00Z', joinUrl: 'https://p.example/x?a=1&b="2"', keepUrl: KEEP, switchId: 's1',
+    });
+    expect(e.html).toContain('href="https://p.example/x?a=1&amp;b=&quot;2&quot;"');
   });
 
   it('notice for a non-payer does not mention a paid plan', () => {
     const base = {
       recipientEmail: 'one@a-brokerage.example', brokerageName: 'A Brokerage', domain: 'a-brokerage.example',
-      switchAt: '2026-11-24T10:00:00Z', optOutUrl: 'https://portal.example/dashboard?capture=notice', switchId: 's1',
+      switchAt: '2026-11-24T10:00:00Z', joinUrl: JOIN, keepUrl: KEEP, switchId: 's1',
     };
     for (const payer of [false, undefined]) {
       const e = buildDomainCaptureNoticeEmail({ ...base, payer });
@@ -52,6 +70,14 @@ describe('capture emails', () => {
     const off = buildDomainCaptureSwitchedEmail({ recipientEmail: 'x@a.example', brokerageName: 'A', licensed: false, switchId: 's' });
     expect(on.text).toContain('gave you a Keepr license');
     expect(off.text).toContain('no free license');
+  });
+
+  it('switched email after "Join now" says the person asked for it', () => {
+    const early = buildDomainCaptureSwitchedEmail({ recipientEmail: 'x@a.example', brokerageName: 'A', licensed: true, switchId: 's', joinedEarly: true });
+    expect(early.text).toContain('moved into A today, as you asked.');
+    expect(early.text).not.toContain('14 days ago');
+    const due = buildDomainCaptureSwitchedEmail({ recipientEmail: 'x@a.example', brokerageName: 'A', licensed: true, switchId: 's' });
+    expect(due.text).toContain('as the notice 14 days ago said.');
   });
 
   it('domain_capture seat alert never says the person was not added', () => {

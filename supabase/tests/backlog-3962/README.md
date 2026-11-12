@@ -59,3 +59,16 @@ Results: `results-pr3-2026-11-10.txt`.
 New cases: K07, Q01-Q02, W10-W11, B06-B08, Y01-Y04. New mutants: `C_no_opt_out_skip`,
 `C_no_defer_reason`, `C_defer_not_cleared`, `C_history_no_admin_check`, `C_history_grant_anon`.
 Results: `results-pr3b-2026-11-11.txt`.
+
+## Join now (`20261112114500_backlog_3962_capture_join_now.sql`)
+
+```
+bash run.sh join J_no_owner_check J_no_restore J_restore_dns_only ...   # see MUTANTSJ in compose.py
+bash run.sh join_rollback
+KEEPR_3962_APPLIED=1 bash run.sh join    # once applied: rollback-3962-join-now.sql runs first, in the same transaction
+bash run.sh join_live                    # controls-join-now.sql against the function applied on the venue
+python3 supabase/tests/backlog-3962/ts_mutations_join_now.py [name ...]   # portal controls (committed tree)
+```
+
+Own fixtures (keys `bl3962j:`, domain `j-3962j.test`); every mode ends in RAISE. Cases J1-J7.
+Results: `results-join-now-2026-11-12.txt`, `ts-mutations-join-now-2026-11-12.txt`.

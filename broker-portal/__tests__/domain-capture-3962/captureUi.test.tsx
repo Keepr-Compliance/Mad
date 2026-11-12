@@ -16,13 +16,18 @@ jest.mock('@/lib/actions/domainCapture', () => ({
   startCapture: jest.fn(),
   cancelCapture: jest.fn(),
   optOutSelf: jest.fn(),
+  joinNowSelf: jest.fn(),
 }));
 
-import { cancelCapture, optOutSelf, startCapture } from '@/lib/actions/domainCapture';
+import { cancelCapture, joinNowSelf, optOutSelf, startCapture } from '@/lib/actions/domainCapture';
 import { DOMAIN_CAPTURE_BILLING_SETUP } from '@/lib/domain/captureMessages';
 import {
+  CAPTURE_JOIN_BUTTON,
+  CAPTURE_JOIN_CONTINUE,
   CAPTURE_KEEP_BUTTON,
   CAPTURE_KEEP_DONE,
+  captureJoinConfirmText,
+  captureJoinNoSeatText,
   CAPTURE_REASON_COPY,
   CAPTURE_EMPTY_TITLE,
   captureStartConfirmText,
@@ -37,6 +42,7 @@ import type { DomainClaimView } from '@/lib/domain/claims';
 const start = startCapture as jest.Mock;
 const cancel = cancelCapture as jest.Mock;
 const optOut = optOutSelf as jest.Mock;
+const joinNow = joinNowSelf as jest.Mock;
 
 const FUTURE = new Date(Date.now() + 10 * 86_400_000).toISOString();
 const PAST = new Date(Date.now() - 86_400_000).toISOString();
@@ -361,7 +367,7 @@ describe('personal-owner banner', () => {
   it('shows the brokerage and date; opting out needs the confirm step', async () => {
     optOut.mockResolvedValue({ success: true, message: 'ok' });
     render(<CaptureNoticeBanner notice={NOTICE} />);
-    expect(screen.getByText(`A Brokerage will move your Keepr account on ${formatCaptureDate(FUTURE)}.`)).toBeTruthy();
+    expect(screen.getByText(`A Brokerage will move your Keepr account on ${formatCaptureDate(FUTURE)}, or sooner if you join now.`)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: CAPTURE_KEEP_BUTTON }));
     expect(optOut).not.toHaveBeenCalled();
     const dialog = screen.getByRole('dialog');
@@ -379,8 +385,64 @@ describe('personal-owner banner', () => {
     await waitFor(() => expect(document.activeElement?.textContent).toBe(CAPTURE_KEEP_BUTTON));
     expect(screen.getByTestId('capture-notice-banner').getAttribute('data-from-email')).toBe('true');
     expect(optOut).not.toHaveBeenCalled();
+    expect(joinNow).not.toHaveBeenCalled();
     expect(start).not.toHaveBeenCalled();
     expect(cancel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['join', CAPTURE_JOIN_BUTTON],
+    ['keep', CAPTURE_KEEP_BUTTON],
+  ])('?capture=%s only displays: highlights and focuses its button, calls nothing', async (q, label) => {
+    mockParams = new URLSearchParams(`capture=${q}`);
+    render(<CaptureNoticeBanner notice={NOTICE} />);
+    await waitFor(() => expect(document.activeElement?.textContent).toBe(label));
+    expect(screen.getByTestId('capture-notice-banner').getAttribute('data-from-email')).toBe('true');
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(joinNow).not.toHaveBeenCalled();
+    expect(optOut).not.toHaveBeenCalled();
+  });
+
+  it('joining needs the confirm step', async () => {
+    mockParams = new URLSearchParams();
+    joinNow.mockResolvedValue({ success: true, joined: true, licensed: true, brokerageName: 'A Brokerage', message: 'ok' });
+    render(<CaptureNoticeBanner notice={NOTICE} />);
+    fireEvent.click(screen.getByRole('button', { name: CAPTURE_JOIN_BUTTON }));
+    expect(joinNow).not.toHaveBeenCalled();
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText(captureJoinConfirmText('A Brokerage'))).toBeTruthy();
+    await act(async () => {
+      fireEvent.click(within(dialog).getByRole('button', { name: CAPTURE_JOIN_BUTTON }));
+    });
+    expect(joinNow).toHaveBeenCalledTimes(1);
+    expect(joinNow).toHaveBeenCalledWith({ switchId: 's-me', confirm: true });
+    expect(await screen.findByText('Your account is now part of A Brokerage.')).toBeTruthy();
+    expect(screen.queryByText(captureJoinNoSeatText('A Brokerage'))).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: CAPTURE_JOIN_CONTINUE }));
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('joined without a license: says an admin can assign one', async () => {
+    mockParams = new URLSearchParams();
+    joinNow.mockResolvedValue({ success: true, joined: true, licensed: false, brokerageName: 'A Brokerage', message: 'ok' });
+    render(<CaptureNoticeBanner notice={NOTICE} />);
+    fireEvent.click(screen.getByRole('button', { name: CAPTURE_JOIN_BUTTON }));
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: CAPTURE_JOIN_BUTTON }));
+    });
+    expect(await screen.findByText(captureJoinNoSeatText('A Brokerage'))).toBeTruthy();
+  });
+
+  it('a refused join shows the reason in the dialog and keeps the banner', async () => {
+    mockParams = new URLSearchParams();
+    joinNow.mockResolvedValue({ success: false, message: 'Nothing changed.' });
+    render(<CaptureNoticeBanner notice={NOTICE} />);
+    fireEvent.click(screen.getByRole('button', { name: CAPTURE_JOIN_BUTTON }));
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: CAPTURE_JOIN_BUTTON }));
+    });
+    expect(within(screen.getByRole('dialog')).getByRole('alert').textContent).toBe('Nothing changed.');
+    expect(screen.getByRole('button', { name: CAPTURE_KEEP_BUTTON })).toBeTruthy();
   });
 });
 

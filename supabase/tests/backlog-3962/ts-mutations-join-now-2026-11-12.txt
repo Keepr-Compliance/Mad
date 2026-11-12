@@ -1,0 +1,93 @@
+# BACKLOG-3962 join now portal controls, 2026-11-12 (ts_mutations_join_now.py, --bail=0, 13 suites / 176 tests per run)
+T_join_posted_user: MUTATION APPLIED [2	1	broker-portal/lib/actions/domainCapture.ts] -> const posted = (input as unknown as { userId?: string }).userId ?? userId;
+    result = aw
+  suites 1 failed, 12 passed, 13 total | tests 1 failed, 175 passed, 176 total | red (1):
+    - joinNowSelf › joins as the session user; a posted user id is never read
+T_join_no_confirm: MUTATION APPLIED [0	1	broker-portal/lib/actions/domainCapture.ts] -> (line removed)
+  suites 1 failed, 12 passed, 13 total | tests 1 failed, 175 passed, 176 total | red (1):
+    - joinNowSelf › changes nothing without confirm
+T_join_no_impersonation_guard: MUTATION APPLIED [0	2	broker-portal/lib/actions/domainCapture.ts] -> const switchId = input?.switchId;
+  if (typeof switchId !== 'string' || !UUID.test(switchI
+  suites 1 failed, 12 passed, 13 total | tests 1 failed, 175 passed, 176 total | red (1):
+    - joinNowSelf › refuses during impersonation and calls nothing
+T_join_copy_dns_unmapped: MUTATION APPLIED [1	1	broker-portal/lib/domain/captureMessages.ts] -> case 'dns_not_fresh_x':
+      return `Keepr couldn't confirm
+  suites 1 failed, 12 passed, 13 total | tests 1 failed, 175 passed, 176 total | red (1):
+    - joinNowErrorMessage › dns_not_fresh (undefined)
+T_join_no_recheck: MUTATION APPLIED [0	1	broker-portal/lib/domain/captureJoinNow.ts] -> (line removed)
+  suites 1 failed, 12 passed, 13 total | tests 4 failed, 172 passed, 176 total | red (4):
+    - runCaptureJoinNow › reads the own switch, re-checks DNS, then joins, in that order
+    - runCaptureJoinNow › re-checks DNS when the answer is older than 50 minutes
+    - runCaptureJoinNow › re-checks DNS when the answer is last answer not verified
+    - runCaptureJoinNow › re-checks DNS when the answer is never checked
+T_join_no_owner_filter: MUTATION APPLIED [0	1	broker-portal/lib/domain/captureJoinNow.ts] -> (line removed)
+  suites 1 failed, 12 passed, 13 total | tests 12 failed, 164 passed, 176 total | red (12):
+    - runCaptureJoinNow › reads the own switch, re-checks DNS, then joins, in that order
+    - runCaptureJoinNow › skips the DNS read when a verified answer is under 50 minutes old
+    - runCaptureJoinNow › re-checks DNS when the answer is older than 50 minutes
+    - runCaptureJoinNow › re-checks DNS when the answer is last answer not verified
+    - runCaptureJoinNow › re-checks DNS when the answer is never checked
+    - runCaptureJoinNow › a lookup that throws records nothing, and the join still asks the database
+    - runCaptureJoinNow › sends the switched email (joined early) to a non-payer and none to a payer
+    - runCaptureJoinNow › joined without a license: the brokerage admins get the seat alert
+    - runCaptureJoinNow › maps a database answer to a code and sends nothing (0)
+    - runCaptureJoinNow › maps a database answer to a code and sends nothing (1)
+    - runCaptureJoinNow › maps a database answer to a code and sends nothing (2)
+    - runCaptureJoinNow › maps a database answer to a code and sends nothing (3)
+T_join_dns_never_fresh: MUTATION APPLIED [1	1	broker-portal/lib/domain/captureJoinNow.ts] -> const fresh = false && c.last_check_result === 'verified' &&
+  suites 1 failed, 12 passed, 13 total | tests 1 failed, 175 passed, 176 total | red (1):
+    - runCaptureJoinNow › skips the DNS read when a verified answer is under 50 minutes old
+T_join_dns_always_fresh: MUTATION APPLIED [1	1	broker-portal/lib/domain/captureJoinNow.ts] -> const fresh = true || c.last_check_result === 'verified' &&
+  suites 1 failed, 12 passed, 13 total | tests 4 failed, 172 passed, 176 total | red (4):
+    - runCaptureJoinNow › reads the own switch, re-checks DNS, then joins, in that order
+    - runCaptureJoinNow › re-checks DNS when the answer is older than 50 minutes
+    - runCaptureJoinNow › re-checks DNS when the answer is last answer not verified
+    - runCaptureJoinNow › re-checks DNS when the answer is never checked
+T_join_no_notify: MUTATION APPLIED [0	1	broker-portal/lib/domain/captureJoinNow.ts] -> (line removed)
+  suites 1 failed, 12 passed, 13 total | tests 2 failed, 174 passed, 176 total | red (2):
+    - runCaptureJoinNow › sends the switched email (joined early) to a non-payer and none to a payer
+    - runCaptureJoinNow › joined without a license: the brokerage admins get the seat alert
+T_seat_alert_dropped: MUTATION APPLIED [1	1	broker-portal/lib/domain/captureSwitch.ts] -> if (false) {
+        out.unassigned += 1;
+  suites 2 failed, 11 passed, 13 total | tests 2 failed, 174 passed, 176 total | red (2):
+    - runCaptureSwitch › sends one seat alert per brokerage per run when people joined without a license
+    - runCaptureJoinNow › joined without a license: the brokerage admins get the seat alert
+T_payer_gets_switched_email: MUTATION APPLIED [1	1	broker-portal/lib/domain/captureSwitch.ts] -> if (email) {
+  suites 2 failed, 11 passed, 13 total | tests 2 failed, 174 passed, 176 total | red (2):
+    - runCaptureJoinNow › sends the switched email (joined early) to a non-payer and none to a payer
+    - runCaptureSwitch › sends one switched email to a non-payer and none to a payer
+T_recheck_records_nothing: MUTATION APPLIED [1	1	broker-portal/lib/domain/captureSwitch.ts] -> void ({
+  suites 2 failed, 11 passed, 13 total | tests 2 failed, 174 passed, 176 total | red (2):
+    - runCaptureSwitch › reads DNS once per claim and records it as a re-check
+    - runCaptureJoinNow › reads the own switch, re-checks DNS, then joins, in that order
+T_joined_early_not_passed: MUTATION APPLIED [0	1	broker-portal/lib/domain/captureSwitch.ts] -> (line removed)
+  suites 1 failed, 12 passed, 13 total | tests 1 failed, 175 passed, 176 total | red (1):
+    - runCaptureJoinNow › sends the switched email (joined early) to a non-payer and none to a payer
+T_banner_join_no_modal: MUTATION APPLIED [1	1	broker-portal/components/CaptureNoticeBanner.tsx] -> onClick={() => { void handleJoin(); }}
+  suites 1 failed, 12 passed, 13 total | tests 3 failed, 173 passed, 176 total | red (3):
+    - personal-owner banner › joining needs the confirm step
+    - personal-owner banner › joined without a license: says an admin can assign one
+    - personal-owner banner › a refused join shows the reason in the dialog and keeps the banner
+T_banner_join_link_acts: MUTATION APPLIED [1	1	broker-portal/components/CaptureNoticeBanner.tsx] -> if (focus === 'join') { joinRef.current?.focus(); void joinNowSelf({ switchId: notice.swit
+  suites 1 failed, 12 passed, 13 total | tests 1 failed, 175 passed, 176 total | red (1):
+    - personal-owner banner › ?capture=join only displays: highlights and focuses its button, calls nothing
+T_banner_notice_link_dropped: MUTATION APPLIED [1	1	broker-portal/components/CaptureNoticeBanner.tsx] -> capture === 'keep' ? 'keep'
+  suites 1 failed, 12 passed, 13 total | tests 1 failed, 175 passed, 176 total | red (1):
+    - personal-owner banner › ?capture=notice only displays: highlights and focuses, calls nothing
+T_mw_path_only: MUTATION APPLIED [1	1	broker-portal/middleware.ts] -> loginUrl.searchParams.set('redirectTo', pathname);
+  suites 1 failed, 12 passed, 13 total | tests 3 failed, 173 passed, 176 total | red (3):
+    - signed out: the query survives the sign-in bounce › /dashboard?capture=join
+    - signed out: the query survives the sign-in bounce › /dashboard?capture=keep
+    - signed out: the query survives the sign-in bounce › /dashboard/billing?tab=plan
+T_mw_no_fallback: MUTATION APPLIED [1	1	broker-portal/middleware.ts] -> const nextPath = withQuery;
+  suites 1 failed, 12 passed, 13 total | tests 1 failed, 175 passed, 176 total | red (1):
+    - signed out: the query survives the sign-in bounce › a query safeNextPath refuses falls back to the path alone
+T_email_keep_link_dropped: MUTATION APPLIED [0	1	broker-portal/lib/email/templates/domain-capture-notice.ts] -> (line removed)
+  suites 1 failed, 12 passed, 13 total | tests 1 failed, 175 passed, 176 total | red (1):
+    - capture emails › notice names the date, the account, the trade-off and both portal links
+T_get_route_joins: MUTATION APPLIED [2	0	broker-portal/app/api/cron/domain-capture-switch/route.ts] -> import { runCaptureSwitch } from '@/lib/domain/captureSwitch';
+import { runCaptureJoinNow 
+  suites 1 failed, 12 passed, 13 total | tests 1 failed, 175 passed, 176 total | red (1):
+    - no GET path joins › no route under app/ calls the join (only the server action does)
+# re-run after the fake read was fixed to apply only the filters sent (it had enforced the owner filter itself):
+T_join_no_owner_filter: tests 2 failed, 174 passed, 176 total | red: 'reads the own switch, re-checks DNS, then joins, in that order', 'a switch that is not the caller's: no DNS read, no write, not found'

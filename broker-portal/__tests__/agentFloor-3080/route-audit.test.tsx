@@ -789,6 +789,10 @@ const FLOOR_ACTIONS = [
   // BACKLOG-3962 PR3a: the signed-in person opts out of their OWN scheduled move;
   // domain_capture_opt_out_self refuses any row whose user_id is not auth.uid().
   'lib/actions/domainCapture.ts#optOutSelf',
+  // BACKLOG-3962 "Join now": the signed-in person joins from their OWN scheduled move; the user is
+  // the session's (auth.getUser()), the server-role read is filtered to it, and
+  // _domain_capture_join_now refuses any row whose user_id is not that user.
+  'lib/actions/domainCapture.ts#joinNowSelf',
 ];
 
 /**
@@ -1075,7 +1079,7 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(64); // BACKLOG-3962 PR3a: + startCapture, cancelCapture, optOutSelf; BACKLOG-3962: + createDomainClaim, checkDomainClaim, withdrawDomainClaim; BACKLOG-3854: + addSeats, openBrokerageBillingPortal; BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
+    expect(actions.length).toBe(65); // BACKLOG-3962 join now: + joinNowSelf; BACKLOG-3962 PR3a: + startCapture, cancelCapture, optOutSelf; BACKLOG-3962: + createDomainClaim, checkDomainClaim, withdrawDomainClaim; BACKLOG-3854: + addSeats, openBrokerageBillingPortal; BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
   });
 });
 

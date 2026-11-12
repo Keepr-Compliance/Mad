@@ -10,6 +10,9 @@
  * optOutSelf: the signed-in person, for their own scheduled switch, after a confirm step. The email
  * link only opens the portal (GET changes nothing); only this action, with confirm === true, opts out.
  *
+ * joinNowSelf: the signed-in person joins the brokerage now, after a confirm step (same rules as
+ * optOutSelf). The person is always the session's user; a posted id is never read.
+ *
  * Portal code ships before the migration: a missing function (PGRST202 etc.) answers
  * DOMAIN_CAPTURE_UNAVAILABLE.
  */
@@ -21,6 +24,8 @@ import { createServiceClient } from '@/lib/supabase/service';
 import { requireDomainClaimAccess } from '@/lib/domain/access';
 import { isNotDeployedError } from '@/lib/domain/claims';
 import { isScheduledSwitch, sendCaptureNotices } from '@/lib/domain/captureNotice';
+import { runCaptureJoinNow } from '@/lib/domain/captureJoinNow';
+import { formatCaptureDate } from '@/lib/domain/captureCopy';
 import {
   DOMAIN_CAPTURE_UNAVAILABLE,
   DOMAIN_CAPTURE_FAILED,
@@ -33,6 +38,9 @@ import {
   DOMAIN_CAPTURE_CONFIRM,
   DOMAIN_CAPTURE_TOO_LATE,
   DOMAIN_CAPTURE_SIGNED_OUT,
+  DOMAIN_CAPTURE_JOIN_CONFIRM,
+  DOMAIN_CAPTURE_JOIN_SIGNED_OUT,
+  joinNowErrorMessage,
   type DomainCaptureActionResult,
 } from '@/lib/domain/captureMessages';
 
@@ -160,4 +168,40 @@ export async function optOutSelf(input: { switchId: string; confirm: boolean }):
   const reply = replyObject(data);
   if (reply.success !== true) return stateError(reply.error);
   return { success: true, message: 'Your account stays separate. It will not be moved.' };
+}
+
+/** The signed-in person joins the brokerage now, from their own scheduled move. Requires confirm === true. */
+export async function joinNowSelf(input: { switchId: string; confirm: boolean }): Promise<DomainCaptureActionResult> {
+  const blocked = await blockWriteDuringImpersonation();
+  if (blocked) return fail(blocked.error);
+  const switchId = input?.switchId;
+  if (typeof switchId !== 'string' || !UUID.test(switchId)) return fail(DOMAIN_CAPTURE_NOT_FOUND);
+  if (input?.confirm !== true) return fail(DOMAIN_CAPTURE_JOIN_CONFIRM);
+
+  const supabase = await createClient();
+  const { data: auth } = await supabase.auth.getUser();
+  const userId = auth?.user?.id;
+  if (!userId) return fail(DOMAIN_CAPTURE_JOIN_SIGNED_OUT);
+
+  let result: Awaited<ReturnType<typeof runCaptureJoinNow>>;
+  try {
+    result = await runCaptureJoinNow({ service: createServiceClient({ actorId: userId }) }, userId, switchId);
+  } catch {
+    Sentry.captureMessage('domain capture join now failed', { level: 'warning' });
+    return fail(DOMAIN_CAPTURE_FAILED);
+  }
+  if (result.status === 'switched') {
+    return {
+      success: true,
+      joined: true,
+      licensed: result.licensed,
+      brokerageName: result.brokerageName,
+      message: `Your account is now part of ${result.brokerageName}.`,
+    };
+  }
+  if (result.code === 'failed') {
+    Sentry.captureMessage('domain capture rpc failed', { level: 'warning', extra: { where: 'join_now' } });
+  }
+  const dateText = result.switchAt ? formatCaptureDate(result.switchAt) : 'the scheduled date';
+  return fail(joinNowErrorMessage(result.code, result.brokerageName, dateText, result.rowStatus));
 }

@@ -14,11 +14,24 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import * as Sentry from '@sentry/nextjs';
 import { sendDomainCaptureNoticeEmail } from '@/lib/email';
 
-/** Tokenless: the portal page reads the signed-in person's own scheduled switch. */
-export const CAPTURE_OPT_OUT_PATH = '/dashboard?capture=notice';
+/**
+ * Tokenless: the portal page reads the signed-in person's own scheduled switch. Each link only
+ * focuses one button on the banner; the choice is made there, after a confirm step. Emails sent
+ * before "Join now" carry /dashboard?capture=notice, which still focuses "Keep".
+ */
+export const CAPTURE_JOIN_PATH = '/dashboard?capture=join';
+export const CAPTURE_KEEP_PATH = '/dashboard?capture=keep';
 
-export function captureOptOutUrl(): string {
-  return `${process.env.NEXT_PUBLIC_APP_URL || 'https://app.keeprcompliance.com'}${CAPTURE_OPT_OUT_PATH}`;
+function portalBase(): string {
+  return process.env.NEXT_PUBLIC_APP_URL || 'https://app.keeprcompliance.com';
+}
+
+export function captureJoinUrl(): string {
+  return `${portalBase()}${CAPTURE_JOIN_PATH}`;
+}
+
+export function captureKeepUrl(): string {
+  return `${portalBase()}${CAPTURE_KEEP_PATH}`;
 }
 
 export interface ScheduledSwitch {
@@ -49,7 +62,8 @@ export async function sendCaptureNotices(
   ctx: { brokerageName: string; domain: string },
 ): Promise<NoticeSummary> {
   const summary: NoticeSummary = { sent: 0, queued: 0, undelivered: 0 };
-  const optOutUrl = captureOptOutUrl();
+  const joinUrl = captureJoinUrl();
+  const keepUrl = captureKeepUrl();
   for (const row of rows) {
     let outcome: 'sent' | 'queued' | 'failed' | 'skipped' = 'failed';
     try {
@@ -58,7 +72,8 @@ export async function sendCaptureNotices(
         brokerageName: ctx.brokerageName,
         domain: ctx.domain,
         switchAt: row.switch_at,
-        optOutUrl,
+        joinUrl,
+        keepUrl,
         switchId: row.switch_id,
         payer: row.payer === true,
       });

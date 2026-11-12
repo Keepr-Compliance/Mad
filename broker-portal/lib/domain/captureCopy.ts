@@ -89,8 +89,22 @@ export const CAPTURE_CANCEL_CONFIRM = 'Cancel this move? The person stays on the
 
 /** The personal-owner banner. */
 export function captureBannerText(brokerageName: string, dateText: string): string {
-  return `${brokerageName} will move your Keepr account on ${dateText}.`;
+  return `${brokerageName} will move your Keepr account on ${dateText}, or sooner if you join now.`;
 }
+export const CAPTURE_JOIN_BUTTON = 'Join now';
+export function captureJoinConfirmTitle(brokerageName: string): string {
+  return `Join ${brokerageName} now?`;
+}
+export function captureJoinConfirmText(brokerageName: string): string {
+  return `Your account moves into ${brokerageName} now, and any personal Keepr plan on it ends. ${brokerageName} will manage this account. ${brokerageName} may need to assign you a license.`;
+}
+export function captureJoinDoneText(brokerageName: string): string {
+  return `Your account is now part of ${brokerageName}.`;
+}
+export function captureJoinNoSeatText(brokerageName: string): string {
+  return `${brokerageName} has no free license yet. An admin there can assign you one.`;
+}
+export const CAPTURE_JOIN_CONTINUE = 'Continue';
 export const CAPTURE_BANNER_DETAIL =
   'After the move, the brokerage will manage this account and can end your access to it. If you keep your personal account, it stays separate and stays on your own plan.';
 export const CAPTURE_KEEP_BUTTON = 'Keep my personal account';
