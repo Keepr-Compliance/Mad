@@ -31,4 +31,37 @@ describe('BACKLOG-4237 middleware matcher', () => {
   ])('still runs middleware for %s', (url) => {
     expect(runs(url)).toBe(true);
   });
+
+  // BACKLOG-4238 (H4): the OAuth register, token and metadata routes (exact
+  // paths) and both discovery documents skip middleware; /oauth/authorize and
+  // every look-alike still run it.
+  it.each([
+    '/oauth/register',
+    '/oauth/token',
+    '/oauth/metadata',
+    '/oauth/token?x=1',
+    '/.well-known/oauth-authorization-server',
+    '/.well-known/oauth-protected-resource',
+    '/.well-known/oauth-protected-resource/api/mcp',
+  ])('BACKLOG-4238: skips %s', (url) => {
+    expect(runs(url)).toBe(false);
+  });
+
+  it.each([
+    '/oauth/authorize',
+    '/oauth/authorize?client_id=x',
+    '/oauth/registerx',
+    '/oauth/tokens',
+    '/oauth/token/x',
+    '/oauth/metadata/x',
+    '/oauth/consent',
+    '/x/oauth/token',
+    '/.well-known/oauth-authorization-serverx',
+    '/.well-known/oauth-protected-resourcex',
+    '/.well-known/openid-configuration',
+    '/.well-known/apple-app-site-association',
+    '/dashboard',
+  ])('BACKLOG-4238: still runs middleware for %s', (url) => {
+    expect(runs(url)).toBe(true);
+  });
 });

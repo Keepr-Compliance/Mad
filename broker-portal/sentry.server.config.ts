@@ -1,5 +1,5 @@
 import * as Sentry from '@sentry/nextjs';
-import { scrubMcpRequest } from './lib/mcp/sentryScrub';
+import { scrubBreadcrumb, scrubEvent, scrubSpan, scrubTransaction } from './lib/mcp/sentryScrub';
 
 /**
  * Sentry server-side SDK initialization for broker-portal.
@@ -49,50 +49,61 @@ Sentry.init({
 
   tracesSampleRate: 0.1,
 
+  // BACKLOG-4237/4238: no request headers, cookies, body, query or env for
+  // /api/mcp and /oauth; Keepr OAuth credentials redacted everywhere. Each hook
+  // fails closed on an MCP event (lib/mcp/sentryScrub.ts).
   beforeSend(event) {
-    // BACKLOG-4237: no request headers, cookies or body for /api/mcp and /oauth.
-    scrubMcpRequest(event);
+    return scrubEvent(event, (e) => {
+      if (e.message) {
+        e.message = scrubEmails(e.message) as string;
+      }
 
-    if (event.message) {
-      event.message = scrubEmails(event.message) as string;
-    }
-
-    if (event.exception?.values) {
-      for (const ex of event.exception.values) {
-        if (ex.value) {
-          ex.value = scrubEmails(ex.value) as string;
+      if (e.exception?.values) {
+        for (const ex of e.exception.values) {
+          if (ex.value) {
+            ex.value = scrubEmails(ex.value) as string;
+          }
         }
       }
-    }
 
-    if (event.breadcrumbs) {
-      for (const crumb of event.breadcrumbs) {
-        if (crumb.message) {
-          crumb.message = scrubEmails(crumb.message) as string;
-        }
-        if (crumb.data) {
-          crumb.data = scrubObject(crumb.data as Record<string, unknown>);
+      if (e.breadcrumbs) {
+        e.breadcrumbs = e.breadcrumbs.filter((crumb) => scrubBreadcrumb(crumb) !== null);
+        for (const crumb of e.breadcrumbs) {
+          if (crumb.message) {
+            crumb.message = scrubEmails(crumb.message) as string;
+          }
+          if (crumb.data) {
+            crumb.data = scrubObject(crumb.data as Record<string, unknown>);
+          }
         }
       }
-    }
 
-    if (event.user) {
-      if (event.user.email) {
-        event.user.email = '[email]';
+      if (e.user) {
+        if (e.user.email) {
+          e.user.email = '[email]';
+        }
       }
-    }
 
-    if (event.extra) {
-      event.extra = scrubObject(event.extra as Record<string, unknown>);
-    }
-    if (event.tags) {
-      event.tags = scrubObject(event.tags as Record<string, unknown>) as Record<string, string>;
-    }
+      if (e.extra) {
+        e.extra = scrubObject(e.extra as Record<string, unknown>);
+      }
+      if (e.tags) {
+        e.tags = scrubObject(e.tags as Record<string, unknown>) as Record<string, string>;
+      }
 
-    return event;
+      return e;
+    }, { dropOnFailure: true });
   },
 
   beforeSendTransaction(event) {
-    return scrubMcpRequest(event);
+    return scrubTransaction(event);
+  },
+
+  beforeSendSpan(span) {
+    return scrubSpan(span);
+  },
+
+  beforeBreadcrumb(breadcrumb) {
+    return scrubBreadcrumb(breadcrumb);
   },
 });

@@ -255,7 +255,9 @@ export const config = {
     // Skip the PWA service worker script and manifest too (BACKLOG-3796),
     // anchored with $ so /sw.js.map and nested paths still run middleware.
     // BACKLOG-4237: skip /api/mcp and its sub-paths (no cookie session work for
-    // AI-app calls).
-    '/((?!_next/static|_next/image|favicon.ico|sw\\.js$|manifest\\.webmanifest$|api/mcp(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    // AI-app calls). BACKLOG-4238: also skip the OAuth register, token and
+    // metadata routes (exact paths) and both OAuth discovery documents.
+    // /oauth/authorize stays inside: its consent step needs the session.
+    '/((?!_next/static|_next/image|favicon.ico|sw\\.js$|manifest\\.webmanifest$|api/mcp(?:/|$)|oauth/(?:register|token|metadata)$|\\.well-known/oauth-(?:authorization-server|protected-resource)(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 };

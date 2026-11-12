@@ -856,6 +856,12 @@ const KNOWN_ROUTE_HANDLERS = [
   'app/auth/impersonate/route.ts',
   'app/auth/logout/route.ts',
   'app/auth/setup/callback/route.ts',
+  // BACKLOG-4238: GET/HEAD only; static authorization server metadata from
+  // MCP_PUBLIC_ORIGIN, no session, no database call.
+  'app/oauth/metadata/route.ts',
+  // BACKLOG-4238: POST only; JSON client registration, no session; one anon
+  // RPC (mcp_register_client) that checks the portal secret inside.
+  'app/oauth/register/route.ts',
   'app/setup/consent/callback/route.ts',
 ];
 
@@ -1025,7 +1031,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(30); // BACKLOG-4237: + mcp, mcp/resource-metadata; BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session
+    expect(handlers.length).toBe(32); // BACKLOG-4238: + oauth/metadata, oauth/register; BACKLOG-4237: + mcp, mcp/resource-metadata; BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {
