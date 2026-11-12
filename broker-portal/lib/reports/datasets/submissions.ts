@@ -148,16 +148,18 @@ export async function loadSubmissionsReport(
   const serviceOff = await readServiceOff(caller.supabase, caller.organizationId);
   if (serviceOff === null) return { ok: false };
 
+  // An agent's rows are their own: an agent filter from the URL or a saved view is never sent for them.
+  const agentFilter = caller.kind === 'full' ? filters.agent : null;
   let page = filters.page;
-  let read = await readRows(caller.supabase, rowArgs(caller, filters, filters.agent, pageSize, (page - 1) * pageSize));
+  let read = await readRows(caller.supabase, rowArgs(caller, filters, agentFilter, pageSize, (page - 1) * pageSize));
   if (!read) return { ok: false };
 
   // total_count rides on each row, so a page past the end carries no total: read the first page for it.
   if (read.rows.length === 0 && page > 1) {
-    const first = await readRows(caller.supabase, rowArgs(caller, filters, filters.agent, pageSize, 0));
+    const first = await readRows(caller.supabase, rowArgs(caller, filters, agentFilter, pageSize, 0));
     if (!first) return { ok: false };
     page = Math.max(1, Math.ceil(first.total / pageSize));
-    read = page === 1 ? first : await readRows(caller.supabase, rowArgs(caller, filters, filters.agent, pageSize, (page - 1) * pageSize));
+    read = page === 1 ? first : await readRows(caller.supabase, rowArgs(caller, filters, agentFilter, pageSize, (page - 1) * pageSize));
     if (!read) return { ok: false };
   }
 

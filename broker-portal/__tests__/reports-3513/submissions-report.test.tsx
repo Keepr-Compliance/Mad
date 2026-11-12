@@ -226,6 +226,36 @@ describe('loader: rows only through the row function, for the gate-admitted orga
     ]);
   });
 
+  it('N2: an agent caller with an agent filter in the URL sends no agent filter', async () => {
+    given({ deals: [row(1, AGENT_A, 0)] });
+    await loadSubmissionsReport(caller('agent'), { ...DEFAULT_SUBMISSIONS_FILTERS, agent: AGENT_B, page: 3 });
+    expect(rowCalls().length).toBeGreaterThan(0);
+    for (const args of rowCalls()) expect(args.p_agent).toBeNull();
+  });
+
+  it('N2: a full role keeps the agent filter (positive control)', async () => {
+    given({ deals: [row(1, AGENT_A, 0), row(2, AGENT_B, 0)] });
+    await loadSubmissionsReport(caller('full'), { ...DEFAULT_SUBMISSIONS_FILTERS, agent: AGENT_B });
+    expect(rowCalls()[0].p_agent).toBe(AGENT_B);
+  });
+
+  it('N3: the agent options follow the status and date filters, not the agent filter', async () => {
+    given({ deals: [row(1, AGENT_A, 0), row(2, AGENT_B, 0)] });
+    await loadSubmissionsReport(caller('full'), {
+      ...DEFAULT_SUBMISSIONS_FILTERS,
+      status: 'approved',
+      agent: AGENT_A,
+      from: '2026-11-01',
+      to: '2026-11-03',
+    });
+    const optionCalls = rowCalls().filter((a) => a.p_limit === 200);
+    expect(optionCalls.length).toBeGreaterThan(0);
+    for (const args of optionCalls) {
+      expect(args).toMatchObject({ p_status: 'approved', p_agent: null, p_from: '2026-11-01T00:00:00Z' });
+      expect(args.p_to).toBe('2026-11-04T00:00:00.000Z');
+    }
+  });
+
   it('an agent gets no agent list and no name lookup', async () => {
     given({ deals: [row(1, AGENT_A, 0)] });
     const data = await loadSubmissionsReport(caller('agent'), DEFAULT_SUBMISSIONS_FILTERS);
