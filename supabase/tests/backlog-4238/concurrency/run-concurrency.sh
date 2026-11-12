@@ -7,7 +7,9 @@
 #
 # D7c  two redemptions of one code, the second started 1 s into the first's 3 s transaction.
 #      expected: responses ok=1 invalid_grant=1; events code_replay=1 reconnect_replaced=1;
-#      no connection of the run's client left.
+#      no connection of the run's client left. The second request carries the same client, verifier
+#      and redirect address, so it is a valid replay of the used code: the connection is removed
+#      and code_replay (not code_replay_refused) is written.
 #      mutant M18_code_reusable (no "AND k.used_at IS NULL"): the second redemption re-reads the
 #      code row, the activation finds the connection already active and returns invalid_grant
 #      without a delete -> responses ok=1 invalid_grant=1, events reconnect_replaced=1 only,

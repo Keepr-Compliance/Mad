@@ -6,7 +6,7 @@ one rolled-back transaction: the call ends in RAISE, so nothing persists.
 | Script | What it does |
 |---|---|
 | `run.sh [controls file]` | Composes rollback + migration twice + `lib/helpers.sql` + the controls (`compose.py`), runs it as one call, prints `P4238_RESULT` and the wall time. |
-| `controls.sql` | 50 single-session controls (D1–D18, B2, B3, N1–N3, N5, W3, CL, C9, LOG, G1, seed and fresh-apply checks). |
+| `controls.sql` | 55 single-session controls (D1–D18, B2, B3, N1–N3, N5, R1–R4, W3, CL, C9, LOG, G1, seed and fresh-apply checks). |
 | `mutate.py <mode>\|all` | Exact-string mutation of the migration (or rollback) file; each fragment must match the stated number of times. Prints `MUTATION APPLIED` and the changed lines, runs the controls and the migration-text test, restores with `git checkout --`. Commit first. |
 | `concurrency/mutants.py list\|emit <dir>` | The two-session mutants, one function each (D7c `M18_code_reusable` on `mcp_exchange_code`, D13b and D14 on `_mcp_bump`). `emit` writes per mode a mutant and a pristine `CREATE OR REPLACE` of that one function with its REVOKE line and a check that rolls the call back unless the catalog `md5(prosrc)` is the expected value, plus `md5.sql` and `expected.json`. Each fragment must match the migration at HEAD and the function exactly once. |
 | `rollback-4238.sql` | Drops every object, the role and the ledger row. |
@@ -27,7 +27,7 @@ is RFC 7636 Appendix B. The state-function stub returns the BACKLOG-4236 state v
 its table through row rules only (no owner filter), so the owner-only control depends on row rules.
 
 Mutants marked `want green` are measured equivalent in this venue and kept so the claim stays
-checked. Results: `results-2026-11-11.txt` (ends with a catalog query showing no residue).
+checked. Results: `results-2026-11-11.txt` (full mutant run) and `results-2026-11-12-round.txt` (this round: full controls, the new and changed mutants); each ends with a catalog query showing no residue.
 
 Every composed call starts with `SET LOCAL pg_stat_statements.track = 'none';` so a run adds no statement entries
 (measured 2026-11-12: one migration send added 110 entries without it, 2 with it). The two-session scripts do

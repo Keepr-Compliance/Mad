@@ -1,0 +1,240 @@
+BACKLOG-4238 PR-1 harness results, round of 2026-11-12 (a test project; each run is one rolled-back transaction)
+commit a2c6ae16d (migration and controls as committed)
+Budget: full controls run twice in this round, the timeout control once, 24 mutants (the new ones and those whose target lines changed). The full mutant set was NOT re-run; results-2026-11-11.txt is its last full record.
+
+== reproduction before the counter fix (migration at d6bafdef5, scratch controls file, not committed)
+REPRO_rows_added_by_25_exchanges=25 REPRO_rows_added_by_25_refreshes=25 (25 random well-formed client ids each)
+
+== baseline: run.sh
+{
+ "fail": 0,
+ "pass": 55,
+ "reds": {},
+ "total": 55
+}
+wall_s=2
+
+== C8: run.sh controls-timeout.sql
+{
+ "fail": 0,
+ "pass": 2,
+ "reds": {},
+ "total": 2
+}
+wall_s=5
+
+== tripwire
+Tests:       19 passed, 19 total
+
+== grant checker
+check-migration-grants: 1 file(s), 0 failure(s), 7 warning(s).
+
+== mutate.py (24 modes)
+== R1_null_redirect_refused (want red) exchange redirect term without the IS NULL arm
+MUTATION APPLIED numstat=1/1
+  - AND (p_redirect_uri IS NULL OR v_code.redirect_uri = p_redirect_uri)
+  + AND v_code.redirect_uri = p_redirect_uri
+RESULT total=55 pass=54 fail=1 reds=R1_exchange_null_redirect
+TRIPWIRE green (Tests:       19 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== R1_any_redirect_accepted (want red) exchange accepts NULL and also any other redirect address
+MUTATION APPLIED numstat=1/1
+  - AND (p_redirect_uri IS NULL OR v_code.redirect_uri = p_redirect_uri)
+  + AND (p_redirect_uri IS NULL OR true)
+RESULT total=55 pass=54 fail=1 reds=D8_pkce_and_bindings
+TRIPWIRE green (Tests:       19 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== R1_allowlist_on_parameter (want red) allowlist checked on the parameter, skipped when it is NULL
+MUTATION APPLIED numstat=1/1
+  - AND EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = v_code.redirect_uri)
+  + AND (p_redirect_uri IS NULL OR EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = p_redirect_uri))
+RESULT total=55 pass=54 fail=1 reds=R1_exchange_null_redirect
+TRIPWIRE green (Tests:       19 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== R2_replay_ignores_verifier (want red) replay check without the verifier terms
+MUTATION APPLIED numstat=1/3
+  - AND (p_redirect_uri IS NULL OR v_used.redirect_uri = p_redirect_uri)
+  - AND p_code_verifier ~ '^[A-Za-z0-9._~-]{43,128}$'
+  - AND public._mcp_b64url(sha256(convert_to(p_code_verifier, 'UTF8'))) = v_used.code_challenge) IS TRUE THEN
+  + AND (p_redirect_uri IS NULL OR v_used.redirect_uri = p_redirect_uri)) IS TRUE THEN
+RESULT total=55 pass=54 fail=1 reds=R2_replay_invalid_keeps_connection
+TRIPWIRE green (Tests:       19 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== R2_replay_ignores_client (want red) replay check without the client term
+MUTATION APPLIED numstat=1/1
+  - IF (v_used.client_id = p_client_id
+  + IF (true
+RESULT total=55 pass=54 fail=1 reds=R2_replay_invalid_keeps_connection
+TRIPWIRE green (Tests:       19 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== R2_replay_ignores_redirect (want red) replay check without the redirect term
+MUTATION APPLIED numstat=0/1
+  - AND (p_redirect_uri IS NULL OR v_used.redirect_uri = p_redirect_uri)
+RESULT total=55 pass=54 fail=1 reds=R2_replay_invalid_keeps_connection
+TRIPWIRE green (Tests:       19 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== R2_replay_always_removes (want red) replay removes the connection for any presenter (previous behaviour)
+MUTATION APPLIED numstat=1/4
+  - IF (v_used.client_id = p_client_id
+  - AND (p_redirect_uri IS NULL OR v_used.redirect_uri = p_redirect_uri)
+  - AND p_code_verifier ~ '^[A-Za-z0-9._~-]{43,128}$'
+  - AND public._mcp_b64url(sha256(convert_to(p_code_verifier, 'UTF8'))) = v_used.code_challenge) IS TRUE THEN
+  + IF true THEN
+RESULT total=55 pass=54 fail=1 reds=R2_replay_invalid_keeps_connection
+TRIPWIRE green (Tests:       19 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== R3_unknown_client_counted (want red) failure counter created for any client id (previous shape)
+MUTATION APPLIED numstat=0/3
+  - IF NOT EXISTS (SELECT 1 FROM public.mcp_oauth_clients c WHERE c.client_id = p_client_id) THEN
+  - RETURN public._mcp_refuse(p_code);
+  - END IF;
+RESULT total=55 pass=54 fail=1 reds=R3_unknown_client_no_counter_rows
+TRIPWIRE RED (Tests:       1 failed, 18 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== R3_known_client_not_counted (want red) existence check never true: registered clients not counted
+MUTATION APPLIED numstat=1/1
+  - IF NOT EXISTS (SELECT 1 FROM public.mcp_oauth_clients c WHERE c.client_id = p_client_id) THEN
+  + IF NOT EXISTS (SELECT 1 FROM public.mcp_oauth_clients c WHERE c.client_id = p_client_id AND false) THEN
+RESULT total=55 pass=54 fail=1 reds=B3_lockout_failures_only
+TRIPWIRE RED (Tests:       1 failed, 18 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== R3_prune_own_bucket_only (want red) counter prune limited to the bumped bucket (previous shape)
+MUTATION APPLIED numstat=1/1
+  - WHERE x.window_start < now() - interval '1 day'
+  + WHERE x.bucket = p_bucket AND x.window_start < now() - interval '1 day'
+RESULT total=55 pass=54 fail=1 reds=N3_inline_pruning
+TRIPWIRE RED (Tests:       1 failed, 18 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== R3_prune_live_windows (want red) counter prune without the one-day age term
+MUTATION APPLIED numstat=1/1
+  - WHERE x.window_start < now() - interval '1 day'
+  + WHERE x.window_start < now()
+RESULT total=55 pass=50 fail=5 reds=B2_per_user_cap,B2_registration_ip_limit,B3_lockout_failures_only,D13_rate_limited_logged,N3_inline_pruning
+TRIPWIRE RED (Tests:       1 failed, 18 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== R4_refresh_insert_failure_returns_in_handler (want red) refresh token insert failure returns from the inner handler (previous shape)
+MUTATION APPLIED numstat=1/1
+  - RAISE EXCEPTION USING ERRCODE = 'MC001', MESSAGE = 'mcp token insert failed';
+  + RETURN public._mcp_refuse('invalid_request');
+RESULT total=55 pass=54 fail=1 reds=R4_refresh_insert_failure_rolls_back
+TRIPWIRE RED (Tests:       1 failed, 18 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== R5_registration_limit_59 (want red) registration limit 59 (the 60th refused)
+MUTATION APPLIED numstat=1/1
+  - v_b := public._mcp_bump('reg_ip:' || encode(p_ip_sha256, 'hex'), interval '1 hour', 60);
+  + v_b := public._mcp_bump('reg_ip:' || encode(p_ip_sha256, 'hex'), interval '1 hour', 59);
+RESULT total=55 pass=54 fail=1 reds=B2_registration_ip_limit
+TRIPWIRE RED (Tests:       1 failed, 18 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== R5_registration_limit_61 (want red) registration limit 61 (the 61st allowed)
+MUTATION APPLIED numstat=1/1
+  - v_b := public._mcp_bump('reg_ip:' || encode(p_ip_sha256, 'hex'), interval '1 hour', 60);
+  + v_b := public._mcp_bump('reg_ip:' || encode(p_ip_sha256, 'hex'), interval '1 hour', 61);
+RESULT total=55 pass=54 fail=1 reds=B2_registration_ip_limit
+TRIPWIRE RED (Tests:       1 failed, 18 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== M19_replay_keeps_connection (want red) code replay does not disconnect
+MUTATION APPLIED numstat=0/1
+  - DELETE FROM public.mcp_connections c WHERE c.id = v_used.connection_id;
+RESULT total=55 pass=53 fail=2 reds=D7_code_single_use,R2_replay_valid_removes_connection
+TRIPWIRE green (Tests:       19 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== M21_exchange_ignores_redirect (want red) exchange without the redirect comparison
+MUTATION APPLIED numstat=0/1
+  - AND (p_redirect_uri IS NULL OR v_code.redirect_uri = p_redirect_uri)
+RESULT total=55 pass=54 fail=1 reds=D8_pkce_and_bindings
+TRIPWIRE green (Tests:       19 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== M22_exchange_ignores_client (want red) exchange without the client comparison
+MUTATION APPLIED numstat=1/1
+  - IF (v_code.client_id = p_client_id
+  + IF (true
+RESULT total=55 pass=54 fail=1 reds=D8_pkce_and_bindings
+TRIPWIRE green (Tests:       19 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== N2_exchange_skips_allowlist (want red) exchange without the allowlist term
+MUTATION APPLIED numstat=0/1
+  - AND EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = v_code.redirect_uri)
+RESULT total=55 pass=53 fail=2 reds=N2_exchange_rechecks_allowlist,R1_exchange_null_redirect
+TRIPWIRE green (Tests:       19 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== X11_no_registration_limit (want red) per-IP registration limit raised to 100000
+MUTATION APPLIED numstat=1/1
+  - v_b := public._mcp_bump('reg_ip:' || encode(p_ip_sha256, 'hex'), interval '1 hour', 60);
+  + v_b := public._mcp_bump('reg_ip:' || encode(p_ip_sha256, 'hex'), interval '1 hour', 100000);
+RESULT total=55 pass=54 fail=1 reds=B2_registration_ip_limit
+TRIPWIRE RED (Tests:       1 failed, 18 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== N3_no_counter_prune (want red) counter prune removed
+MUTATION APPLIED numstat=0/7
+  - DELETE FROM public.mcp_rate_counters o
+  - WHERE (o.bucket, o.window_start) IN (
+  - SELECT x.bucket, x.window_start FROM public.mcp_rate_counters x
+  - WHERE x.window_start < now() - interval '1 day'
+  - ORDER BY x.bucket, x.window_start
+  - LIMIT 200
+  - FOR UPDATE SKIP LOCKED);
+RESULT total=55 pass=54 fail=1 reds=N3_inline_pruning
+TRIPWIRE RED (Tests:       1 failed, 18 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== W3_insert_failure_returns_in_handler (want red) token insert failure returns from the inner handler (previous shape)
+MUTATION APPLIED numstat=1/1
+  - RAISE EXCEPTION USING ERRCODE = 'MC001', MESSAGE = 'mcp token insert failed';
+  + RETURN public._mcp_refuse('invalid_request');
+RESULT total=55 pass=54 fail=1 reds=W3_exchange_insert_failure_rolls_back
+TRIPWIRE RED (Tests:       1 failed, 18 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== X7_no_token_failure_lockout (want red) failure counter not consulted
+MUTATION APPLIED numstat=1/4
+  - IF public._mcp_bump('tok_fail:' || coalesce(p_client_id, ''), interval '1 minute', 20) IS NOT DISTINCT FROM 'ok' THEN
+  - RETURN public._mcp_refuse(p_code);
+  - END IF;
+  - RETURN public._mcp_refuse('rate_limited');
+  + RETURN public._mcp_refuse(p_code);
+RESULT total=55 pass=54 fail=1 reds=B3_lockout_failures_only
+TRIPWIRE green (Tests:       19 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== M04_exchange_without_secret (want red) mcp_exchange_code with the secret check line removed
+MUTATION APPLIED numstat=0/3
+  - IF public._mcp_secret_ok(p_secret) IS NOT TRUE THEN
+  - RETURN public._mcp_refuse('invalid_grant');
+  - END IF;
+RESULT total=55 pass=54 fail=1 reds=D1_wrong_secret_prev_null
+TRIPWIRE RED (Tests:       2 failed, 17 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+== M18_code_reusable (want red) code redemption without used_at IS NULL
+MUTATION APPLIED numstat=0/1
+  - AND k.used_at IS NULL
+RESULT total=55 pass=52 fail=3 reds=D7_code_single_use,R2_replay_invalid_keeps_connection,R2_replay_valid_removes_connection
+TRIPWIRE green (Tests:       19 passed, 19 total)
+VERDICT as expected
+RESTORED clean=True
+mutants: 24 run, 0 not as expected
+
+== concurrency/run-concurrency.sh: NOT RUN (needs the migration applied and committed)
+
+== residue after all runs (residue.sql)
+[{"j":{"mcp_tables":0,"mcp_sequences":0,"mcp_other_relations":0,"mcp_types":0,"mcp_functions":0,"mcp_reader_role":0,"fixture_users":0,"fixture_public_users":0,"ledger_row":0}}]
