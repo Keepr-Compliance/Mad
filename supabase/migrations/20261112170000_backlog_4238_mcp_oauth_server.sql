@@ -148,6 +148,7 @@ CREATE TABLE IF NOT EXISTS public.mcp_rate_counters (
   count        integer NOT NULL CHECK (count > 0),
   PRIMARY KEY (bucket, window_start)
 );
+CREATE INDEX IF NOT EXISTS mcp_rate_counters_window_idx ON public.mcp_rate_counters (window_start);
 ALTER TABLE public.mcp_rate_counters ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON TABLE public.mcp_rate_counters FROM PUBLIC, anon, authenticated;
 
@@ -227,7 +228,7 @@ BEGIN
      WHERE (o.bucket, o.window_start) IN (
        SELECT x.bucket, x.window_start FROM public.mcp_rate_counters x
         WHERE x.window_start < now() - interval '1 day'
-        ORDER BY x.bucket, x.window_start
+        ORDER BY x.window_start
         LIMIT 200
         FOR UPDATE SKIP LOCKED);
     INSERT INTO public.mcp_rate_counters AS rc (bucket, window_start, count)
@@ -573,7 +574,8 @@ BEGIN
         DELETE FROM public.mcp_connections c WHERE c.id = v_used.connection_id;
         INSERT INTO public.mcp_call_log (user_id, connection_id, event, outcome, ended_at)
         VALUES (v_user, v_used.connection_id, 'code_replay', 'ok', now());
-      ELSE
+      ELSIF public._mcp_bump('replay_refused:' || v_used.connection_id::text, interval '1 hour', 5) IS NOT DISTINCT FROM 'ok' THEN
+        -- at most 5 refused-replay events per connection per hour; the response is the same either way
         INSERT INTO public.mcp_call_log (user_id, connection_id, event, outcome, ended_at)
         VALUES (v_user, v_used.connection_id, 'code_replay_refused', 'ok', now());
       END IF;

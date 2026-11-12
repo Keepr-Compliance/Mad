@@ -26,6 +26,10 @@ Fixtures are invented and listed at the top of `controls.sql` and `lib/helpers.s
 is RFC 7636 Appendix B. The state-function stub returns the BACKLOG-4236 state v1 shape and reads
 its table through row rules only (no owner filter), so the owner-only control depends on row rules.
 
+NOT RUN / not covered:
+- The two-session cases in `concurrency/` (D7c, D13b, D14) until the migration is applied.
+- Prune without SKIP LOCKED: not covered by any control.
+
 Mutants marked `want green` are measured equivalent in this venue and kept so the claim stays
 checked. Results: `results-2026-11-11.txt` (full mutant run) and `results-2026-11-12-round.txt` (this round: full controls, the new and changed mutants); each ends with a catalog query showing no residue.
 

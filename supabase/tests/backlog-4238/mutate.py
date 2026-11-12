@@ -57,7 +57,7 @@ REJECT = ("    DELETE FROM public.mcp_connections c\n     WHERE c.id = v_code.co
           "    INSERT INTO public.mcp_call_log (user_id, connection_id, event, outcome, ended_at)\n    VALUES (v_user, v_code.connection_id, 'code_rejected', 'ok', now());\n")
 PRUNE_ALL = ("    DELETE FROM public.mcp_rate_counters o\n     WHERE (o.bucket, o.window_start) IN (\n"
              "       SELECT x.bucket, x.window_start FROM public.mcp_rate_counters x\n"
-             "        WHERE x.window_start < now() - interval '1 day'\n        ORDER BY x.bucket, x.window_start\n"
+             "        WHERE x.window_start < now() - interval '1 day'\n        ORDER BY x.window_start\n"
              "        LIMIT 200\n        FOR UPDATE SKIP LOCKED);\n")
 EXCH_INS_FAIL = ("      (sha256(p_rt_digest), v_code.connection_id, 'refresh', v_pepper, now() + interval '30 days');\n"
                  "  EXCEPTION WHEN unique_violation OR not_null_violation THEN\n"
@@ -256,6 +256,12 @@ MUT = {
       'B2_registration_ip_limit', 'red', 'registration limit 59 (the 60th refused)'),
   'R5_registration_limit_61': ('controls.sql', [(MIG, "interval '1 hour', 60);", "interval '1 hour', 61);", 1)],
       'B2_registration_ip_limit', 'red', 'registration limit 61 (the 61st allowed)'),
+  'C1_refused_replay_unconditional_log': ('controls.sql', [(MIG, "      ELSIF public._mcp_bump('replay_refused:' || v_used.connection_id::text, interval '1 hour', 5) IS NOT DISTINCT FROM 'ok' THEN\n", "      ELSE\n", 1)],
+      'C1_refused_replay_events_bounded', 'red', 'refused-replay event written without the per-connection limit'),
+  'SR1_replay_is_not_false': ('controls.sql', [(MIG, REPLAY_CHECK, REPLAY_CHECK.replace(") IS TRUE THEN", ") IS NOT FALSE THEN"), 1)],
+      'R2_replay_invalid_keeps_connection', 'red', 'replay check IS NOT FALSE instead of IS TRUE'),
+  'SR2_prune_23_hours': ('controls.sql', [(MIG, "        WHERE x.window_start < now() - interval '1 day'\n", "        WHERE x.window_start < now() - interval '23 hours'\n", 1)],
+      'N3_inline_pruning', 'red', 'prune age 23 hours instead of 1 day'),
 }
 
 

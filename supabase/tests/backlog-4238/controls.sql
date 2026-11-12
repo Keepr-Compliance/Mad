@@ -14,7 +14,7 @@ DECLARE
   ADM uuid := pg_temp.fx(3);
   P  uuid := pg_temp.fx(4);
   ORG uuid := pg_temp.fx(100);
-  s  text; t text; t2 text; t3 text; c jsonb; c2 jsonb; c3 jsonb;
+  s  text; t text; t2 text; t3 text; t4 text; t5 text; c jsonb; c2 jsonb; c3 jsonb;
   n0 bigint; n1 bigint; k0 bigint; k1 bigint; n int; ok boolean;
   ANON_FNS text[] := ARRAY['public.mcp_register_client(text,text,text,text[],bytea)',
     'public.mcp_authorize_begin(text,text,text,text,text,text,text,text,bytea,bytea)',
@@ -769,13 +769,15 @@ BEGIN
       ('reg_ip:' || encode(pg_temp.dg('ip-n3'), 'hex'), now() - interval '20 hours', 2),
       ('reg_ip:' || encode(pg_temp.dg('ip-n3other'), 'hex'), now() - interval '3 days', 5),
       ('reg_ip:' || encode(pg_temp.dg('ip-n3other'), 'hex'), now() - interval '23 hours', 1),
-      ('call_conn:p4238-n3live', public._mcp_window(interval '1 minute'), 3);
+      ('call_conn:p4238-n3live', public._mcp_window(interval '1 minute'), 3),
+      ('reg_all_p4238_n3day', now() - interval '23 hours 30 minutes', 7);
     PERFORM pg_temp.reg('n3', ARRAY[pg_temp.claude()], 'ip-n3');
     ok := NOT EXISTS (SELECT 1 FROM public.mcp_rate_counters WHERE window_start < now() - interval '1 day'
                        AND bucket IN ('reg_ip:' || encode(pg_temp.dg('ip-n3'), 'hex'), 'reg_ip:' || encode(pg_temp.dg('ip-n3other'), 'hex')))
       AND (SELECT count(*) FROM public.mcp_rate_counters WHERE bucket = 'reg_ip:' || encode(pg_temp.dg('ip-n3'), 'hex') AND window_start = now() - interval '20 hours') = 1
       AND (SELECT count(*) FROM public.mcp_rate_counters WHERE bucket = 'reg_ip:' || encode(pg_temp.dg('ip-n3other'), 'hex') AND window_start = now() - interval '23 hours') = 1
-      AND (SELECT count FROM public.mcp_rate_counters WHERE bucket = 'call_conn:p4238-n3live') = 3;
+      AND (SELECT count FROM public.mcp_rate_counters WHERE bucket = 'call_conn:p4238-n3live') = 3
+      AND (SELECT count FROM public.mcp_rate_counters WHERE bucket = 'reg_all_p4238_n3day') = 7;
     s := 'counters_ok=' || ok || ' stale_left=' || (SELECT count(*) FROM public.mcp_rate_counters WHERE window_start < now() - interval '1 day'
                        AND bucket IN ('reg_ip:' || encode(pg_temp.dg('ip-n3'), 'hex'), 'reg_ip:' || encode(pg_temp.dg('ip-n3other'), 'hex')))
          || ' live_left=' || (SELECT count(*) FROM public.mcp_rate_counters WHERE window_start >= now() - interval '1 day'
@@ -889,13 +891,18 @@ BEGIN
     t := pg_temp.exch('c-r2', 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXl', 'r2', pg_temp.claude(), 'at-r2x', 'rt-r2x');
     t2 := pg_temp.exch('c-r2', pg_temp.ver(), 'r2z', pg_temp.claude(), 'at-r2y', 'rt-r2y');
     t3 := pg_temp.exch('c-r2', pg_temp.ver(), 'r2', pg_temp.gpt(), 'at-r2w', 'rt-r2w');
+    t4 := pg_temp.exch('c-r2', NULL, 'r2', pg_temp.claude(), 'at-r2n', 'rt-r2n');                       -- NULL verifier
+    t5 := pg_temp.call_as(NULL, format('SELECT public.mcp_exchange_code(%L, %s, %L, NULL, %L, %L, %s, %s)', pg_temp.sec(),
+           pg_temp.hx(pg_temp.dg('c-r2')), pg_temp.ver(), pg_temp.claude(), pg_temp.res(), pg_temp.hx(pg_temp.dg('at-r2m')), pg_temp.hx(pg_temp.dg('rt-r2m'))), 'anon');  -- NULL client id
     ok := pg_temp.j(t) = '{"ok": false, "error": "invalid_grant"}'::jsonb AND pg_temp.j(t2) = '{"ok": false, "error": "invalid_grant"}'::jsonb
       AND pg_temp.j(t3) = '{"ok": false, "error": "invalid_grant"}'::jsonb
+      AND pg_temp.j(t4) = '{"ok": false, "error": "invalid_grant"}'::jsonb AND pg_temp.j(t5) = '{"ok": false, "error": "invalid_grant"}'::jsonb
       AND EXISTS (SELECT 1 FROM public.mcp_connections WHERE id = (c ->> 'conn')::uuid AND status = 'active')
       AND pg_temp.err(pg_temp.st('at-r2')) = 'OK'
-      AND (SELECT count(*) FROM public.mcp_call_log WHERE user_id = A AND event = 'code_replay_refused' AND connection_id = (c ->> 'conn')::uuid) = 3
+      AND (SELECT count(*) FROM public.mcp_call_log WHERE user_id = A AND event = 'code_replay_refused' AND connection_id = (c ->> 'conn')::uuid) = 5
       AND (SELECT count(*) FROM public.mcp_call_log WHERE user_id = A AND event = 'code_replay') = 0;
     s := 'wrong_verifier=' || pg_temp.err(t) || ' other_client=' || pg_temp.err(t2) || ' other_redirect=' || pg_temp.err(t3)
+      || ' null_verifier=' || pg_temp.err(t4) || ' null_client=' || pg_temp.err(t5)
       || ' kept=' || (EXISTS (SELECT 1 FROM public.mcp_connections WHERE id = (c ->> 'conn')::uuid))::text;
     r := r || jsonb_build_object('R2_replay_invalid_keeps_connection', pg_temp.pass((c ->> 'ok')::boolean AND ok, s));
     t := pg_temp.exch('c-r2', pg_temp.ver(), 'r2', NULL, 'at-r2v', 'rt-r2v');
@@ -907,6 +914,33 @@ BEGIN
       'valid_replay=' || t || ' kept=' || (EXISTS (SELECT 1 FROM public.mcp_connections WHERE id = (c ->> 'conn')::uuid))::text));
     RAISE EXCEPTION USING ERRCODE = 'T4238';
   EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('R2_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  -- ===== C1: refused replays write at most 5 events per connection per hour =====
+  BEGIN
+    c := pg_temp.connect(A, 'c1r');
+    k0 := (SELECT count(*) FROM public.mcp_rate_counters);
+    FOR n IN 1..12 LOOP
+      IF n % 2 = 0 THEN
+        t := pg_temp.exch('c-c1r', 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXl', 'c1r', pg_temp.claude(), 'at-c1x' || n, 'rt-c1x' || n);
+      ELSE
+        s := 'kpr_c_' || substr(replace(replace(encode(gen_random_bytes(18), 'base64'), '+', '-'), '/', '_'), 1, 22);
+        t := pg_temp.call_as(NULL, format('SELECT public.mcp_exchange_code(%L, %s, %L, %L, NULL, %L, %s, %s)', pg_temp.sec(),
+               pg_temp.hx(pg_temp.dg('c-c1r')), pg_temp.ver(), s, pg_temp.res(), pg_temp.hx(pg_temp.dg('at-c1y' || n)), pg_temp.hx(pg_temp.dg('rt-c1y' || n))), 'anon');
+      END IF;
+    END LOOP;
+    k1 := (SELECT count(*) FROM public.mcp_rate_counters);
+    r := r || jsonb_build_object('C1_refused_replay_events_bounded', pg_temp.pass(
+      (c ->> 'ok')::boolean AND pg_temp.j(t) = '{"ok": false, "error": "invalid_grant"}'::jsonb
+      AND (SELECT count(*) FROM public.mcp_call_log WHERE event = 'code_replay_refused' AND connection_id = (c ->> 'conn')::uuid) = 5
+      AND (SELECT count(*) FROM public.mcp_rate_counters WHERE bucket = 'replay_refused:' || (c ->> 'conn')) = 1
+      AND k1 - k0 <= 2
+      AND EXISTS (SELECT 1 FROM public.mcp_connections WHERE id = (c ->> 'conn')::uuid AND status = 'active'),
+      'events=' || (SELECT count(*) FROM public.mcp_call_log WHERE event = 'code_replay_refused' AND connection_id = (c ->> 'conn')::uuid)
+      || ' replay_buckets=' || (SELECT count(*) FROM public.mcp_rate_counters WHERE bucket = 'replay_refused:' || (c ->> 'conn'))
+      || ' counter_rows_added=' || (k1 - k0) || ' last=' || t));
+    RAISE EXCEPTION USING ERRCODE = 'T4238';
+  EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('C1_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
 
   -- ===== R4: a token insert failure in refresh leaves the presented token unused =====

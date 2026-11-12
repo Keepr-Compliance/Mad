@@ -146,7 +146,16 @@ describe('BACKLOG-4238 migration file', () => {
     expect(bump).toContain("WHERE x.window_start < now() - interval '1 day'");
     expect(bump).toContain('LIMIT 200');
     expect(bump).toContain('FOR UPDATE SKIP LOCKED');
+    expect(bump).toContain('ORDER BY x.window_start LIMIT 200');
+    expect(SQL).toContain('CREATE INDEX IF NOT EXISTS mcp_rate_counters_window_idx ON public.mcp_rate_counters (window_start);');
     expect(bump).not.toMatch(/o\.bucket = p_bucket/);
+  });
+
+  it('limits refused-replay events per connection', () => {
+    const b = fn('mcp_exchange_code').body;
+    expect(b).toContain("ELSIF public._mcp_bump('replay_refused:' || v_used.connection_id::text, interval '1 hour', 5) IS NOT DISTINCT FROM 'ok' THEN");
+    expect(b.match(/'code_replay_refused'/g)).toHaveLength(1);
+    expect(b).toContain('= v_used.code_challenge) IS TRUE THEN');
   });
 
   it('rolls back exchange and refresh on a token insert failure', () => {
