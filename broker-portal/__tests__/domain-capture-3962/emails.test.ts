@@ -11,6 +11,7 @@ const mockSeat = jest.fn();
 jest.mock('@/lib/email', () => ({ sendSeatLimitReachedEmail: (...a: unknown[]) => mockSeat(...a) }));
 
 import { buildDomainCaptureNoticeEmail } from '@/lib/email/templates/domain-capture-notice';
+import { buildSimpleNotice } from '@/lib/email/templates/simple-notice';
 import { buildDomainCaptureSwitchedEmail } from '@/lib/email/templates/domain-capture-switched';
 import { buildSeatLimitReachedEmail } from '@/lib/email/templates/seat-limit-reached';
 import { pickSeatRecipientIds, SEAT_EMAIL_ROLE_ORDER } from '@/lib/users/seatRecipients';
@@ -41,6 +42,20 @@ describe('capture emails', () => {
     expect(hrefs.filter((h) => h.includes('capture='))).toEqual([JOIN, KEEP]);
     expect(e.html).toContain('>\n              Join now\n');
     expect(e.html).toContain('>\n              Keep my personal account\n');
+  });
+
+  it('notice buttons sit side by side in ONE table row; a single button is unchanged', () => {
+    const e = buildDomainCaptureNoticeEmail({
+      recipientEmail: 'one@a-brokerage.example', brokerageName: 'A', domain: 'a.example',
+      switchAt: '2026-11-24T10:00:00Z', joinUrl: JOIN, keepUrl: KEEP, switchId: 's1',
+    });
+    const between = e.html.slice(e.html.indexOf(`href="${JOIN}"`), e.html.indexOf(`href="${KEEP}"`));
+    // the join button's cell closes and the keep button's cell opens in the same row
+    expect(between).toMatch(/<\/table>\s*<\/td>\s*<td /);
+    expect(between).not.toMatch(/<\/tr>\s*<tr>\s*<td style="padding-right/);
+    const one = buildSimpleNotice('S', ['l'], [{ label: 'Go', url: 'https://x.example' }]);
+    expect(one.html).toContain('<table cellpadding="0" cellspacing="0" border="0" style="margin:8px 0 12px 0;">');
+    expect(one.html).not.toContain('padding-right:');
   });
 
   it('notice link values are escaped in the html', () => {
@@ -77,7 +92,10 @@ describe('capture emails', () => {
     expect(early.text).toContain('moved into A today, as you asked.');
     expect(early.text).not.toContain('14 days ago');
     const due = buildDomainCaptureSwitchedEmail({ recipientEmail: 'x@a.example', brokerageName: 'A', licensed: true, switchId: 's' });
-    expect(due.text).toContain('as the notice 14 days ago said.');
+    expect(due.text).toContain('as our earlier notice said.');
+    expect(due.text).not.toContain('14 days');
+    expect(due.html).toContain('as our earlier notice said.');
+    expect(due.html).not.toContain('14 days');
   });
 
   it('domain_capture seat alert never says the person was not added', () => {
