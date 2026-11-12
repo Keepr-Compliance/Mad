@@ -222,7 +222,7 @@ export default function AccountClient({ account, mcpOn = false }: AccountClientP
               <SignOutAllButton />
               {mcpOn && (
                 <p className="mt-3 text-sm text-gray-600" data-testid="sign-out-ai-apps-note">
-                  {AI_APPS.signOutNote}{' '}
+                  {AI_APPS.allDevicesNote}{' '}
                   <Link href={AI_APPS_PATH} className="text-primary-600 hover:underline">
                     {AI_APPS.accountLink}
                   </Link>

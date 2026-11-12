@@ -24,7 +24,7 @@ describe('AccountClient', () => {
     render(<AccountClient account={null} mcpOn />);
     expect(screen.getByTestId('account-ai-apps-link')).toHaveAttribute('href', '/dashboard/account/ai-apps');
     const note = screen.getByTestId('sign-out-ai-apps-note');
-    expect(note).toHaveTextContent(AI_APPS.signOutNote);
+    expect(note).toHaveTextContent(AI_APPS.allDevicesNote);
     expect(note.querySelector('a')).toHaveAttribute('href', '/dashboard/account/ai-apps');
   });
 
@@ -32,7 +32,7 @@ describe('AccountClient', () => {
     render(<AccountClient account={null} mcpOn={false} />);
     expect(screen.queryByTestId('account-ai-apps-link')).toBeNull();
     expect(screen.queryByTestId('sign-out-ai-apps-note')).toBeNull();
-    expect(screen.queryByText(AI_APPS.signOutNote)).toBeNull();
+    expect(screen.queryByText(AI_APPS.allDevicesNote)).toBeNull();
   });
 
   it('no flag: neither is shown', () => {

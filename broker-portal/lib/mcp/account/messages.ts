@@ -26,7 +26,7 @@ export const CONSENT = {
     `What ${provider} does with what it reads is covered by your agreement with ${provider}.`,
   disconnect:
     'You can disconnect it any time in Account > AI apps. Disconnecting does not delete what the app already received.',
-  signOut: 'Turning Keepr Cloud off also disconnects every AI app. Signing out does not, including "Sign out all devices".',
+  whatDisconnects: 'Turning Keepr Cloud off also disconnects every AI app. Signing out does not, including "Sign out all devices".',
   signedInAs: (email: string) => `Signed in as ${email}`,
   allow: 'Allow',
   deny: 'Deny',
@@ -62,7 +62,7 @@ export const AI_APPS = {
   disconnectAll: 'Disconnect all AI apps',
   confirmAll: 'Disconnect every AI app? They lose access right away. What they already received is not deleted.',
   accountLink: 'AI apps',
-  signOutNote: 'This does not disconnect AI apps.',
+  allDevicesNote: 'This does not disconnect AI apps.',
 } as const;
 
 /** AI apps page and disconnect action messages. */

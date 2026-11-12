@@ -141,7 +141,7 @@ describe('the consent text', () => {
       CONSENT.scope,
       CONSENT.agreement('Claude (Anthropic)'),
       CONSENT.disconnect,
-      CONSENT.signOut,
+      CONSENT.whatDisconnects,
     ]) {
       expect(text).toContain(line);
     }

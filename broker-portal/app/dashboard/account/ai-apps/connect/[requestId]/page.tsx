@@ -92,7 +92,7 @@ export default async function ConnectAiAppPage({ params }: { params: Promise<{ r
       <p>{CONSENT.scope}</p>
       <p>{CONSENT.agreement(provider)}</p>
       <p>{CONSENT.disconnect}</p>
-      <p>{CONSENT.signOut}</p>
+      <p>{CONSENT.whatDisconnects}</p>
       <p className="pt-2 text-gray-600">{CONSENT.signedInAs(email)}</p>
       <ConsentForm requestId={requestId} nonce={view.nonce} />
     </Shell>
