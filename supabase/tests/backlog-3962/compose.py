@@ -126,6 +126,37 @@ MUTANTS3 = {
     'C_history_grant_anon': [("-- POSTCHECK BEGIN\n", "GRANT EXECUTE ON FUNCTION public.domain_capture_history(uuid) TO anon;\n-- POSTCHECK BEGIN\n")],
 }
 
+MIGJ = os.path.join(here, '..', '..', 'migrations', '20261112114500_backlog_3962_capture_join_now.sql')
+RBJ = os.path.join(here, 'rollback-3962-join-now.sql')
+CTLJ = os.path.join(here, 'controls-join-now.sql')
+JN_RESTORE = "  IF (v_reply ->> 'success') IS DISTINCT FROM 'true' THEN\n"
+MUTANTSJ = {
+    # J2: the owner check dropped (any switch id joins its person)
+    'J_no_owner_check': [("  IF NOT FOUND OR p_user IS NULL OR v_row.user_id IS DISTINCT FROM p_user THEN\n", "  IF NOT FOUND THEN\n")],
+    # J3: no restore after a deferral (the row is left due; the hourly job would move the person)
+    'J_no_restore': [(JN_RESTORE, "  IF false THEN\n")],
+    # J4: the restore covers the DNS deferral only, not the billing deferrals
+    'J_restore_dns_only': [(JN_RESTORE, "  IF v_reply ->> 'error' = 'dns_not_fresh' THEN\n")],
+    # J4: the inner switch skipped (moves without its checks)
+    'J_skip_inner_switch': [("  v_reply := public._domain_capture_switch(v_row.id);\n",
+        "  INSERT INTO public.organization_members (organization_id, user_id, role, license_status, joined_at, provisioned_by)\n"
+        "    VALUES (v_row.organization_id, v_row.user_id, 'agent', 'active', now(), 'domain_capture');\n"
+        "  UPDATE public.domain_capture_switches SET status = 'switched', switched_at = now(), ended_at = now() WHERE id = v_row.id;\n"
+        "  v_reply := jsonb_build_object('success', true, 'outcome', 'switched');\n")],
+    # J1/J5: switch_at left at now() after the move (not put back)
+    'J_switch_at_not_kept': [("     SET switch_at = v_row.switch_at,\n         joined_early_at", "     SET joined_early_at")],
+    # J1: joined_early_at not recorded
+    'J_no_joined_early_at': [("         joined_early_at = CASE WHEN v_reply ->> 'outcome' = 'switched' THEN now() ELSE joined_early_at END,\n", "")],
+    # J7: a queued notice not marked delivered (the switch cancels it notice_undelivered)
+    'J_queued_not_marked': [("  IF v_row.notice_delivered IS NULL THEN\n    UPDATE", "  IF false THEN\n    UPDATE")],
+    # J6: the role check inside dropped
+    'J_no_role_check': [("    RAISE EXCEPTION 'Not allowed' USING ERRCODE = '42501';\n", "    NULL;\n")],
+    # J6: granted to authenticated; the POSTCHECK must raise
+    'J_grant_authenticated': [("-- POSTCHECK BEGIN\n", "GRANT EXECUTE ON FUNCTION public._domain_capture_join_now(uuid, uuid) TO authenticated;\n-- POSTCHECK BEGIN\n")],
+    # pre-check: the not-due pin looks for text the switch does not have; it must raise
+    'J_pin_wrong_text': [("AND prosrc LIKE '%now() < v_row.switch_at%') THEN", "AND prosrc LIKE '%now() <= v_row.switch_at%') THEN")],
+}
+
 MUTANTS = {
     # S2: the has_internal_role pin names a wrong md5; the pre-check must raise
     'M_pin_wrong_md5': [("IS DISTINCT FROM '221786001ca8ce4767112e1175cc6ece' THEN\n",
@@ -195,6 +226,34 @@ def mutate(src, mode, table):
 
 
 out, mode = sys.argv[1], sys.argv[2]
+if mode in ('join', 'join_live', 'join_rollback') or mode in MUTANTSJ:
+    ENDJ = "\nDO $end$ BEGIN RAISE EXCEPTION 'P3962_END_NO_RESULT'; END $end$;\n"
+    head = f"SELECT set_config('p3962.mode', '{mode}', true);\n"
+    if '--applied' in sys.argv[3:] and mode != 'join_live':
+        head += open(RBJ).read() + '\n'
+    migj = open(MIGJ).read()
+    if mode in MUTANTSJ:
+        migj = mutate(migj, mode, MUTANTSJ)
+    if mode == 'join_live':
+        text = head + open(CTLJ).read()
+    elif mode == 'join_rollback':
+        probe = """
+DO $rb$
+BEGIN
+  RAISE EXCEPTION 'P3962_RESULT %', jsonb_build_object('mode', 'join_rollback',
+    'function', to_regprocedure('public._domain_capture_join_now(uuid, uuid)') IS NOT NULL,
+    'column', EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = 'public.domain_capture_switches'::regclass
+                        AND attname = 'joined_early_at' AND NOT attisdropped));
+END
+$rb$;
+"""
+        text = head + migj + '\n' + open(RBJ).read() + '\n' + probe
+    else:
+        text = head + migj + '\n' + open(CTLJ).read()
+    text += ENDJ
+    assert not re.search(r'^\s*COMMIT\b', text, re.I | re.M), 'COMMIT statement in composed text'
+    open(out, 'w').write(text)
+    sys.exit(0)
 if mode == 'pr3' or mode == 'pr3_live' or mode in MUTANTS3 or mode == 'pr3_rollback':
     END3 = "\nDO $end$ BEGIN RAISE EXCEPTION 'P3962_END_NO_RESULT'; END $end$;\n"
     head = f"SELECT set_config('p3962.mode', '{mode}', true);\n"
