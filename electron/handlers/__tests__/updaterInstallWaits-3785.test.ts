@@ -43,7 +43,7 @@ const flush = async () => {
   await new Promise((r) => setImmediate(r));
 };
 
-beforeAll(() => registerUpdaterHandlers({} as never));
+beforeAll(() => registerUpdaterHandlers());
 beforeEach(() => {
   quitAndInstall.mockClear();
   stopBackupForQuit.mockReset().mockReturnValue(null);

@@ -255,7 +255,7 @@ function failPhoneInsertsFor(contactId: string): void {
 function register(): void {
   const stubWindow = { isDestroyed: () => false, webContents: { send } };
   setMainWindow(stubWindow as never);
-  registerContactHandlers(stubWindow as never);
+  registerContactHandlers();
 }
 
 /** What a restart leaves: no in-memory state, the database intact. */

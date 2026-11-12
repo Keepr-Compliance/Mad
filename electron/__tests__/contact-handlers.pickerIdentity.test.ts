@@ -252,7 +252,7 @@ beforeEach(() => {
   mockImportedContacts = [];
   mockShadowRows = [];
   registeredHandlers.clear();
-  registerContactHandlers({} as any);
+  registerContactHandlers();
 });
 
 afterEach(() => {

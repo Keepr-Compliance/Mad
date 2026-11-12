@@ -109,7 +109,7 @@ describe("transactions:get-all-attachments — window read through auditPeriodFr
       jest.requireActual("../services/submissionAuditPeriod").auditPeriodFromRow,
     );
     registeredHandlers.clear();
-    registerAttachmentHandlers(null);
+    registerAttachmentHandlers();
   });
 
   it("C1: hands the query exactly what auditPeriodFromRow returns for the raw dates", async () => {

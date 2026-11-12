@@ -326,10 +326,7 @@ beforeEach(() => {
   registeredHandlers.clear();
   // A real-enough window: the import emits `contacts:import-progress` on the
   // existing-DB path and calls `isDestroyed()` before every send.
-  registerContactHandlers({
-    isDestroyed: () => false,
-    webContents: { send: jest.fn() },
-  } as any);
+  registerContactHandlers();
 });
 
 afterEach(() => {

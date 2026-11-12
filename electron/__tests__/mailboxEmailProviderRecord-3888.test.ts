@@ -237,7 +237,7 @@ describe("BACKLOG-3888: recording the connected email provider", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     setMainWindow(mockMainWindow as any);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    registerAuthHandlers(mockMainWindow as any);
+    registerAuthHandlers();
   });
 
   beforeEach(() => {

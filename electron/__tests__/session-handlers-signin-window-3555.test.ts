@@ -474,28 +474,10 @@ describe("BACKLOG-3555: get-current-user vs a sign-in whose session is not writt
     expect(migrationSql()).toEqual([]);
   });
 
-  it("KEEP-2: a call in flight during a normal open, TASK-1507G legacy local id -> the migration still runs", async () => {
-    const LEGACY = createMockSession({ user: { ...createMockSession().user, id: "legacy-local-id", email: "same@example.com" } });
-    oldFile("supa-uuid");
-    mockLoadSession.mockResolvedValue(LEGACY);
-    mockDbValidateSession.mockResolvedValue(createMockDbUser({ id: "legacy-local-id" }));
-    // stateful: the Supabase-id row exists only after the migration INSERT ran (sessionHandlers.ts migrateUserToSupabaseId)
-    mockDbGetUserById.mockImplementation(async (id: string) => {
-      if (id === "legacy-local-id") return createMockDbUser({ id: "legacy-local-id", email: "same@example.com" });
-      if (id === "supa-uuid" && migrationSql().length > 0) return createMockDbUser({ id: "supa-uuid", email: "same@example.com" });
-      return null;
-    });
-    mockCheckSessionValidity.mockResolvedValue({ valid: true });
-    mockSetSession.mockResolvedValue({ data: { session: {}, user: {} }, error: null });
-    mockGetUser.mockResolvedValue({ data: { user: { id: "supa-uuid" } }, error: null });
-    b.broadcast({ stage: "starting" });
-    const h = await parkedCall();
-    dbReady();
-    const r = await h.p;
-    expect(r.success).toBe(true);
-    expect(r.user?.id).toBe("supa-uuid");
-    expect(migrationSql().length).toBeGreaterThan(0);
-  });
+  // KEEP-2 (parked call, TASK-1507G legacy local id -> the unification runs) moved to
+  // session-restore-identity-4075.test.ts for BACKLOG-4075: it needs the real
+  // driver. Its fake-DB fixture here described a state the shipped schema cannot
+  // produce (the old copy-then-delete migration always failed on UNIQUE).
 
   it("KEEP-3: DB already open at entry, no sign-in pending -> today's path, flag false on a normal launch", async () => {
     oldFile("old-user");

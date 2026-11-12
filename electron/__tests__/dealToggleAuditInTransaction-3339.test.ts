@@ -183,7 +183,7 @@ function resetAuditService(): void {
 beforeAll(() => {
   registerHiddenTextHandlers();
   registerChecklistHandlers();
-  registerTransactionCrudHandlers(null as never);
+  registerTransactionCrudHandlers();
 });
 
 beforeEach(() => {

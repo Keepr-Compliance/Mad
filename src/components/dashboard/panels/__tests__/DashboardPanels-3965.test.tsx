@@ -54,6 +54,8 @@ beforeEach(() => {
     result: { totalCount: 1, items: [TODO_ITEM] },
   });
   api().checklists.setItemChecked.mockResolvedValue({ success: true, changed: true });
+  // BACKLOG-4220: Todo is off by default; these tests are about Todo shown.
+  api().preferences.get.mockResolvedValue({ success: true, preferences: { dashboard: { showTodo: true } }, source: "cloud" });
 });
 
 function renderPanels() {

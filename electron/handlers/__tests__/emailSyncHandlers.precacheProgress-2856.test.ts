@@ -116,7 +116,7 @@ describe("emails:precache — progress reaches the renderer (BACKLOG-2856)", () 
     // resolves the live one through the registry, so the stand-in is registered
     // there rather than handed to the register call.
     setMainWindow(harness.win as never);
-    registerEmailSyncHandlers(harness.win as never);
+    registerEmailSyncHandlers();
     precache = handlers.get("emails:precache")!;
     mockCanExecute.mockReturnValue({ allowed: true });
   });
@@ -207,7 +207,7 @@ describe("emails:precache — progress reaches the renderer (BACKLOG-2856)", () 
     };
     handlers.clear();
     setMainWindow(destroyed as never);
-    registerEmailSyncHandlers(destroyed as never);
+    registerEmailSyncHandlers();
     const handler = handlers.get("emails:precache")!;
     mockPrecacheEmails.mockImplementation(async (_u: string, onProgress: (p: unknown) => void) => {
       onProgress({ phase: "fetching", current: 1, total: 1, percent: 10 });
@@ -225,7 +225,7 @@ describe("emails:cancel-precache handler (BACKLOG-2856)", () => {
     jest.clearAllMocks();
     handlers.clear();
     setMainWindow(null);
-    registerEmailSyncHandlers({} as never);
+    registerEmailSyncHandlers();
     cancel = handlers.get("emails:cancel-precache")!;
   });
 

@@ -4,7 +4,7 @@
  * dev-only token and onboarding helpers
  */
 
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain } from "electron";
 import * as Sentry from "@sentry/electron/main";
 import type {
   DisconnectMailboxResult,
@@ -49,7 +49,6 @@ import { invalidateMailboxFetches } from "../services/mailboxFetchGeneration";
  * is a separate fact, reported separately as `revokeOutcome`.
  */
 export async function handleDisconnectMailbox(
-  _mainWindow: BrowserWindow | null,
   userId: string,
   provider: "google" | "microsoft"
 ): Promise<DisconnectMailboxResult> {
@@ -207,15 +206,13 @@ export async function handleDisconnectMailbox(
 /**
  * Register shared auth handlers
  */
-export function registerSharedAuthHandlers(
-  _mainWindow: BrowserWindow | null
-): void {
+export function registerSharedAuthHandlers(): void {
   ipcMain.handle("auth:google:disconnect-mailbox", (event, userId: string) =>
-    handleDisconnectMailbox(_mainWindow, userId, "google")
+    handleDisconnectMailbox(userId, "google")
   );
 
   ipcMain.handle("auth:microsoft:disconnect-mailbox", (event, userId: string) =>
-    handleDisconnectMailbox(_mainWindow, userId, "microsoft")
+    handleDisconnectMailbox(userId, "microsoft")
   );
 
   // DEV ONLY: Expire a mailbox token for testing Connection Issue state

@@ -11,7 +11,11 @@
  * a sync phase NAME. No paths, no message content, no identifiers.
  */
 
+import { event, track } from "./diagnostics/perf";
+
 export const SENTRY_THRESHOLD_MS = 5_000;
+/** BACKLOG-4181: a closed freeze this long or longer goes to Sentry Logs. */
+export const DIAG_FREEZE_MIN_MS = 1_000;
 export const SENTRY_THROTTLE_MS = 10 * 60_000;
 
 export type ResponsivenessCapture = (
@@ -64,6 +68,9 @@ export class WindowResponsivenessTracker {
     } catch {
       this.screenAtStart = this.deps.getScreen ? "unknown" : null;
     }
+    // BACKLOG-4181: main is not blocked at this moment, so a freeze that is
+    // later ended by force-quit is still visible.
+    event("window.unresponsive.start", { syncPhase: this.phaseAtStart });
   }
 
   /** Returns the freeze duration in ms, or null when there was no freeze to close. */
@@ -115,6 +122,9 @@ export class WindowResponsivenessTracker {
       } catch {
         // Telemetry must never break the window's event handling.
       }
+    }
+    if (durationMs >= DIAG_FREEZE_MIN_MS) {
+      track("window.unresponsive", durationMs, { endedBy, syncPhase: phaseAtStart });
     }
     try {
       this.deps.onFreeze?.(durationMs, phaseAtStart);

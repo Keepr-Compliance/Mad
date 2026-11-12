@@ -27,7 +27,6 @@ import {
   createIpcHandlerRegistry,
   type IpcHandlerRegistry,
 } from "../../tests/support/ipcHandlerRegistry";
-import type { BrowserWindow } from "electron";
 
 /** Channel -> listener, for the one-way `ipcMain.on` registrations. */
 let registeredListeners: IpcHandlerRegistry;
@@ -102,7 +101,7 @@ beforeAll(() => {
   sentChannels = [];
   // The handler module guards against double registration, so this runs once
   // for the whole suite — as it does in the app.
-  registerMessageImportHandlers({} as BrowserWindow);
+  registerMessageImportHandlers();
 });
 
 beforeEach(() => {

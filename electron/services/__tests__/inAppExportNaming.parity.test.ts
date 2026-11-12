@@ -400,7 +400,7 @@ beforeAll(async () => {
   });
 
   mockGetValidUserId.mockResolvedValue(USER_ID);
-  registerContactHandlers({} as never);
+  registerContactHandlers();
 
   const details = await transactionService.getTransactionDetails(TX);
   if (!details) throw new Error("fixture transaction not found");

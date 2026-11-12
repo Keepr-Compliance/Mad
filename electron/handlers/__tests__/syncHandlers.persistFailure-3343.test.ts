@@ -73,7 +73,7 @@ describe("iPhone sync: a failed save is reported as a failure (BACKLOG-3343)", (
     orchestratorEvents.removeAllListeners();
     send = jest.fn();
     setMainWindow({ isDestroyed: () => false, webContents: { send } } as never);
-    registerSyncHandlers({ isDestroyed: () => false, webContents: { send } } as never);
+    registerSyncHandlers();
     setSyncUserId("user-1");
   });
 

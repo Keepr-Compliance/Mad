@@ -1,12 +1,12 @@
 -- BACKLOG-4168 post-fix controls. Run with compose.py controls --with-migration (migration applied
--- TWICE in front), or after 20261107100000 is applied. Fixtures: see prelude.sql. Every state-changing
+-- TWICE in front, then 20261111120000), or after 20261107100000 and 20261111120000 are applied. Fixtures: see prelude.sql. Every state-changing
 -- call runs through call_rb / sole_sa, so each control starts from the same fixture state.
 -- Output: RAISE 'P4168_RESULT {total, pass, fail, reds}'.
 
 CREATE FUNCTION pg_temp.run() RETURNS jsonb LANGUAGE plpgsql AS $f$
 DECLARE
   r jsonb := '{}'::jsonb;
-  s text; s2 text; n int; ok boolean; d0 text; a0 text; p0 text;
+  s text; s2 text; s3 text; n int; ok boolean; d0 text; a0 text; p0 text;
   uA uuid := pg_temp.fx(1); uD uuid := pg_temp.fx(2); uM uuid := pg_temp.fx(3); uP uuid := pg_temp.fx(4);
   uL uuid := pg_temp.fx(5); uG uuid := pg_temp.fx(6); uN uuid := pg_temp.fx(7); uX uuid := pg_temp.fx(8);
   uE uuid := pg_temp.fx(9); uQ uuid := pg_temp.fx(10);
@@ -151,9 +151,11 @@ BEGIN
   s := pg_temp.call_rb(uG, format('WITH i AS (DELETE FROM public.pending_internal_invitations WHERE id = %L RETURNING 1) SELECT to_jsonb(count(*)) FROM i', pg_temp.fx(201)));
   s2 := pg_temp.call_rb(uM, format('WITH i AS (DELETE FROM public.pending_internal_invitations WHERE id = %L RETURNING 1) SELECT to_jsonb(count(*)) FROM i', pg_temp.fx(201)));
   r := r || jsonb_build_object('I10_cancel_needs_manage', pg_temp.pass(s = '0' AND s2 = '1', s || ' / ' || s2));
+  -- BACKLOG-4170 PR3 (20261111120000) keys this SELECT on internal_users.view|internal_users.manage
+  s3 := pg_temp.call_rb(uM, 'SELECT to_jsonb(count(*)) FROM public.pending_internal_invitations WHERE email LIKE ''p4168-%''');
   s := pg_temp.call_rb(uL, 'SELECT to_jsonb(count(*)) FROM public.pending_internal_invitations WHERE email LIKE ''p4168-%''');
   s2 := pg_temp.call_rb(uQ, 'SELECT to_jsonb(count(*)) FROM public.pending_internal_invitations WHERE email LIKE ''p4168-%''');
-  r := r || jsonb_build_object('I11_internal_reads_outsider_does_not', pg_temp.pass(s = '2' AND s2 = '0', s || ' / ' || s2));
+  r := r || jsonb_build_object('I11_key_holder_reads_outsider_does_not', pg_temp.pass(s3 = '2' AND s = '0' AND s2 = '0', s3 || ' / ' || s || ' / ' || s2));
 
   -- ================= ACCEPT (admin_accept_internal_invitation, service role) =================
   -- each case inserts its invitation for N (p4168-7) as postgres inside the rolled-back call
@@ -300,6 +302,8 @@ BEGIN
   p0 := (SELECT string_agg(policyname || cmd || coalesce(qual, '') || coalesce(with_check, ''), ',' ORDER BY policyname) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'pending_internal_invitations');
   BEGIN
     EXECUTE $mg$__MIGRATION__$mg$;
+    -- version-order replay: 20261111120000 (BACKLOG-4170 PR3) re-keys internal_users_read_invitations after 4168
+    EXECUTE $p3$__PR3__$p3$;
     s := CASE WHEN (SELECT string_agg(md5(p.prosrc), ',' ORDER BY f) FROM unnest(allf) f JOIN pg_proc p ON p.oid = f::regprocedure) = d0
                AND (SELECT string_agg(coalesce(p.proacl::text, 'null'), ',' ORDER BY f) FROM unnest(allf) f JOIN pg_proc p ON p.oid = f::regprocedure) = a0
                AND (SELECT string_agg(policyname || cmd || coalesce(qual, '') || coalesce(with_check, ''), ',' ORDER BY policyname) FROM pg_policies WHERE schemaname = 'public' AND tablename = 'pending_internal_invitations') = p0

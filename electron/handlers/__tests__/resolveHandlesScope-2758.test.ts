@@ -224,7 +224,7 @@ function scopeSentToResolver(): { userId?: unknown; transactionId?: unknown } {
 
 describe("BACKLOG-2758 — contacts:resolve-handles carries a transaction scope", () => {
   beforeAll(() => {
-    registerContactHandlers({} as never);
+    registerContactHandlers();
   });
 
   beforeEach(() => {

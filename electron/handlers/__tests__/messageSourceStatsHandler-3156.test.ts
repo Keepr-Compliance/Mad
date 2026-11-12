@@ -65,7 +65,7 @@ const STATS = {
 };
 
 beforeAll(() => {
-  registerMessageImportHandlers({ isDestroyed: () => false, webContents: { send: jest.fn() } } as never);
+  registerMessageImportHandlers();
   const entry = (mockIpcHandle.mock.calls as Array<[string, Handler]>).find(([c]) => c === "messages:get-source-stats");
   if (!entry) throw new Error("messages:get-source-stats not registered");
   handler = entry[1];
