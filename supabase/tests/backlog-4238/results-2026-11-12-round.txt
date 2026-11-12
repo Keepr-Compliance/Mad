@@ -238,3 +238,113 @@ mutants: 24 run, 0 not as expected
 
 == residue after all runs (residue.sql)
 [{"j":{"mcp_tables":0,"mcp_sequences":0,"mcp_other_relations":0,"mcp_types":0,"mcp_functions":0,"mcp_reader_role":0,"fixture_users":0,"fixture_public_users":0,"ledger_row":0}}]
+
+== SR delta round (C1-C3), commit 54f0b0456
+Budget: full controls twice (this run is the second), 7 mutants (new or with changed target lines).
+
+== baseline: run.sh
+{
+ "fail": 0,
+ "pass": 56,
+ "reds": {},
+ "total": 56
+}
+wall_s=2
+
+== tripwire
+Tests:       20 passed, 20 total
+
+== grant checker
+check-migration-grants: 1 file(s), 0 failure(s), 7 warning(s).
+
+== mutate.py (7 modes)
+== C1_refused_replay_unconditional_log (want red) refused-replay event written without the per-connection limit
+MUTATION APPLIED numstat=1/1
+  - ELSIF public._mcp_bump('replay_refused:' || v_used.connection_id::text, interval '1 hour', 5) IS NOT DISTINCT FROM 'ok' THEN
+  + ELSE
+RESULT total=56 pass=55 fail=1 reds=C1_refused_replay_events_bounded
+TRIPWIRE RED (Tests:       1 failed, 19 passed, 20 total)
+VERDICT as expected
+RESTORED clean=True
+== SR1_replay_is_not_false (want red) replay check IS NOT FALSE instead of IS TRUE
+MUTATION APPLIED numstat=1/1
+  - AND public._mcp_b64url(sha256(convert_to(p_code_verifier, 'UTF8'))) = v_used.code_challenge) IS TRUE THEN
+  + AND public._mcp_b64url(sha256(convert_to(p_code_verifier, 'UTF8'))) = v_used.code_challenge) IS NOT FALSE THEN
+RESULT total=56 pass=55 fail=1 reds=R2_replay_invalid_keeps_connection
+TRIPWIRE RED (Tests:       1 failed, 19 passed, 20 total)
+VERDICT as expected
+RESTORED clean=True
+== SR2_prune_23_hours (want red) prune age 23 hours instead of 1 day
+MUTATION APPLIED numstat=1/1
+  - WHERE x.window_start < now() - interval '1 day'
+  + WHERE x.window_start < now() - interval '23 hours'
+RESULT total=56 pass=55 fail=1 reds=N3_inline_pruning
+TRIPWIRE RED (Tests:       1 failed, 19 passed, 20 total)
+VERDICT as expected
+RESTORED clean=True
+== N3_no_counter_prune (want red) counter prune removed
+MUTATION APPLIED numstat=0/7
+  - DELETE FROM public.mcp_rate_counters o
+  - WHERE (o.bucket, o.window_start) IN (
+  - SELECT x.bucket, x.window_start FROM public.mcp_rate_counters x
+  - WHERE x.window_start < now() - interval '1 day'
+  - ORDER BY x.window_start
+  - LIMIT 200
+  - FOR UPDATE SKIP LOCKED);
+RESULT total=56 pass=55 fail=1 reds=N3_inline_pruning
+TRIPWIRE RED (Tests:       1 failed, 19 passed, 20 total)
+VERDICT as expected
+RESTORED clean=True
+== R3_prune_own_bucket_only (want red) counter prune limited to the bumped bucket (previous shape)
+MUTATION APPLIED numstat=1/1
+  - WHERE x.window_start < now() - interval '1 day'
+  + WHERE x.bucket = p_bucket AND x.window_start < now() - interval '1 day'
+RESULT total=56 pass=55 fail=1 reds=N3_inline_pruning
+TRIPWIRE RED (Tests:       1 failed, 19 passed, 20 total)
+VERDICT as expected
+RESTORED clean=True
+== R3_prune_live_windows (want red) counter prune without the one-day age term
+MUTATION APPLIED numstat=1/1
+  - WHERE x.window_start < now() - interval '1 day'
+  + WHERE x.window_start < now()
+RESULT total=56 pass=50 fail=6 reds=B2_per_user_cap,B2_registration_ip_limit,B3_lockout_failures_only,C1_refused_replay_events_bounded,D13_rate_limited_logged,N3_inline_pruning
+TRIPWIRE RED (Tests:       1 failed, 19 passed, 20 total)
+VERDICT as expected
+RESTORED clean=True
+== R2_replay_always_removes (want red) replay removes the connection for any presenter (previous behaviour)
+MUTATION APPLIED numstat=1/4
+  - IF (v_used.client_id = p_client_id
+  - AND (p_redirect_uri IS NULL OR v_used.redirect_uri = p_redirect_uri)
+  - AND p_code_verifier ~ '^[A-Za-z0-9._~-]{43,128}$'
+  - AND public._mcp_b64url(sha256(convert_to(p_code_verifier, 'UTF8'))) = v_used.code_challenge) IS TRUE THEN
+  + IF true THEN
+RESULT total=56 pass=54 fail=2 reds=C1_refused_replay_events_bounded,R2_replay_invalid_keeps_connection
+TRIPWIRE RED (Tests:       1 failed, 19 passed, 20 total)
+VERDICT as expected
+RESTORED clean=True
+mutants: 7 run, 0 not as expected
+
+== concurrency/mutants.py emit (md5 of prosrc)
+{
+ "M18_code_reusable": {
+  "case": "D7c",
+  "mutant_md5": "3010117f5dafc9654ac1447955130300",
+  "pristine_md5": "cfb0787d8601435bbe47a575155866b8",
+  "sig": "public.mcp_exchange_code(text, bytea, text, text, text, text, bytea, bytea)"
+ },
+ "S_D13b_bump_no_lock_timeout": {
+  "case": "D13b",
+  "mutant_md5": "7fab0b8979e0261fa6f5acdd9c3611e8",
+  "pristine_md5": "9a8047a8d2fdf6b0599afd58fdb20ecc",
+  "sig": "public._mcp_bump(text, interval, integer)"
+ },
+ "S_D14_bump_limit_plus_10": {
+  "case": "D14",
+  "mutant_md5": "33007594c32fc319d93b506e2c474a08",
+  "pristine_md5": "9a8047a8d2fdf6b0599afd58fdb20ecc",
+  "sig": "public._mcp_bump(text, interval, integer)"
+ }
+}
+
+== residue after all runs (residue.sql)
+[{"j":{"mcp_tables":0,"mcp_sequences":0,"mcp_other_relations":0,"mcp_types":0,"mcp_functions":0,"mcp_reader_role":0,"fixture_users":0,"fixture_public_users":0,"ledger_row":0}}]
