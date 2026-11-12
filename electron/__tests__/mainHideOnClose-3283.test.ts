@@ -26,14 +26,15 @@ describe("main.ts hide-on-close wiring (BACKLOG-3283)", () => {
   it("activate shows the existing (hidden) main window and creates one only when there is none", () => {
     const a = activateBody();
     expect(a).not.toMatch(/getAllWindows/);
-    const get = a.indexOf("const existing = getMainWindow();");
-    const show = a.indexOf("bringAppToFront(existing);");
-    const ret = a.indexOf("return;", show);
-    const create = a.indexOf("createWindow();");
-    expect(get).toBeGreaterThan(a.indexOf("if (getStartupFailure()) return;"));
-    expect(show).toBeGreaterThan(get);
-    expect(ret).toBeGreaterThan(show);
-    expect(create).toBeGreaterThan(ret);
+    // Exact shape: any extra condition on `existing` (e.g. isVisible) builds a
+    // second window on a Dock click and leaks the hidden one.
+    expect(a).toMatch(
+      /const existing = getMainWindow\(\);\s*if \(existing\) \{\s*bringAppToFront\(existing\);\s*return;\s*\}\s*createWindow\(\);/,
+    );
+    expect(a).not.toMatch(/isVisible|isDestroyed/);
+    expect(a.indexOf("const existing = getMainWindow();")).toBeGreaterThan(
+      a.indexOf("if (getStartupFailure()) return;"),
+    );
   });
 
   it("before-quit marks the quit AFTER every check that can hold it", () => {
@@ -47,13 +48,24 @@ describe("main.ts hide-on-close wiring (BACKLOG-3283)", () => {
     const g = submissionGuard();
     expect(g.indexOf('if (process.platform === "darwin" && !isQuitting()) return;')).toBeGreaterThanOrEqual(0);
     const prevent = g.indexOf("e.preventDefault();");
-    expect(g.indexOf("clearQuitting();")).toBeGreaterThan(prevent);
+    const read = g.indexOf("const wasQuitting = isQuitting();");
+    const clear = g.indexOf("clearQuitting();");
+    // wasQuitting must be read before the clear, or "Quit Anyway" never quits.
+    expect(prevent).toBeGreaterThanOrEqual(0);
+    expect(read).toBeGreaterThan(prevent);
+    expect(clear).toBeGreaterThan(read);
     expect(g).toMatch(/mainWindow\?\.destroy\(\);\s*if \(wasQuitting\) app\.quit\(\);/);
   });
 
   it("deep-link focus shows a hidden window", () => {
     expect(body(/function focusMainWindow\(\): void \{([\s\S]*?)\n\}/)).toMatch(
       /if \(!mainWindow\.isVisible\(\)\) mainWindow\.show\(\);/,
+    );
+  });
+
+  it("closing the last window still quits on Windows and Linux", () => {
+    expect(body(/app\.on\("window-all-closed", \(\) => \{([\s\S]*?)\n\}\);/)).toMatch(
+      /if \(process\.platform !== "darwin"\) \{\s*app\.quit\(\);\s*\}/,
     );
   });
 

@@ -54,12 +54,24 @@ const flush = async () => {
   await new Promise((r) => setImmediate(r));
 };
 
+/** A second hide-on-close window that install-update does not touch (removeAllListeners
+ * only reaches the main window). Squirrel closes it from inside quitAndInstall. */
+let other: FakeWindow;
+let quittingAtCall: boolean | undefined;
+
 beforeAll(() => registerUpdaterHandlers());
 beforeEach(() => {
   clearQuitting();
-  quitAndInstall.mockClear();
+  quittingAtCall = undefined;
+  quitAndInstall.mockReset();
+  quitAndInstall.mockImplementation(() => {
+    quittingAtCall = isQuitting();
+    other.close();
+  });
   win = new FakeWindow();
   attachHideOnClose(win, "darwin");
+  other = new FakeWindow();
+  attachHideOnClose(other, "darwin");
 });
 
 describe("install-update closes a hide-on-close window (BACKLOG-3283)", () => {
@@ -67,12 +79,16 @@ describe("install-update closes a hide-on-close window (BACKLOG-3283)", () => {
     handlers["install-update"]();
     await flush();
     expect({ hidden: win.hidden, destroyed: win.destroyed }).toEqual({ hidden: false, destroyed: true });
+    // First guard: the main window's close listeners (the hide one included) are stripped.
+    expect(win.listenerCount("close")).toBe(0);
     expect(quitAndInstall).toHaveBeenCalledTimes(1);
   });
 
-  it("the quit is marked before quitAndInstall (a hidden window closed by Squirrel goes through)", async () => {
+  it("the quit is marked before quitAndInstall (a window Squirrel closes goes through)", async () => {
     handlers["install-update"]();
     await flush();
-    expect(isQuitting()).toBe(true);
+    expect(quitAndInstall).toHaveBeenCalledTimes(1);
+    expect(quittingAtCall).toBe(true);
+    expect({ hidden: other.hidden, destroyed: other.destroyed }).toEqual({ hidden: false, destroyed: true });
   });
 });
