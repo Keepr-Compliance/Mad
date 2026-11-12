@@ -72,3 +72,18 @@ python3 supabase/tests/backlog-3962/ts_mutations_join_now.py [name ...]   # port
 
 Own fixtures (keys `bl3962j:`, domain `j-3962j.test`); every mode ends in RAISE. Cases J1-J7.
 Results: `results-join-now-2026-11-12.txt`, `ts-mutations-join-now-2026-11-12.txt`.
+
+## PR4a (`20261112120000_backlog_3962_jit_and_solo_block.sql`)
+
+```
+bash run-pr4a.sh                         # base, every mutant (MUTANTS in compose-pr4a.py), rollback
+bash run-pr4a.sh base M_gate_on_caller   # chosen modes
+KEEPR_3962_APPLIED=1 bash run-pr4a.sh    # once applied: rollback-3962-pr4a.sql runs first, same transaction
+bash run-pr4a.sh live                    # controls-pr4a.sql against the objects applied on the venue
+python3 supabase/tests/backlog-3962/ts_mutations_pr4a.py [name ...]   # portal controls (committed tree)
+```
+
+Own fixtures (keys `bl3962p4:`, domains `*-3962p4.test`); every mode ends in RAISE. Cases O1, J1-J4,
+JG1-JG5, T1a-T1g, S1a-S1i, S2, S3, E1-E3, C1-C5. `M_gate_in_for*` patch
+`_ensure_personal_organization_for` at run time (pg_get_functiondef + exact replace, raises when it
+matches nothing). Results: `results-pr4a-2026-11-12.txt`.

@@ -1,0 +1,52 @@
+BACKLOG-3962 PR4a harness results, keepr-test, 2026-11-12 (uncommitted: every mode ends in RAISE). pg_stat_statements_reset ran after the loop.
+Expected green: M_google_lookup_any_status (the email-domain check requires a VERIFIED claim by itself); M_gate_in_for alone keeps S3 green (vacuous, SR 193b87d8) but reds E2; with the active-only exemption S3 reds.
+
+P3962_RESULT {"fail": 0, "mode": "base", "pass": 44, "reds": {}}
+MUTATION APPLIED M_brand_new_is_no_personal_org: -  IF EXISTS (SELECT 1 FROM public.licenses l WHERE l.user_id = v_uid) | -     OR EXISTS (SELECT 1 FROM public.organization_members m WHERE m.user_id = v_uid) THEN | +  IF EXISTS (SELECT 1 FROM public.organizations o WHERE o.personal_owner_user_id = v_uid AND false) THEN
+P3962_RESULT {"fail": 3, "mode": "M_brand_new_is_no_personal_org", "pass": 41, "reds": {"J1b_licence_only_existing_account": "{\"role\": \"agent\", \"success\": true, \"already_member\": false, \"organization_id\": \"<fixture-id>\"}", "J1a_personal_owner_existing_account": "{\"role\": \"agent\", \"success\": true, \"already_member\": false, \"organization_id\": \"<fixture-id>\"}", "J1c_personal_org_row_existing_account": "{\"role\": \"agent\", \"success\": true, \"already_member\": false, \"organization_id\": \"<fixture-id>\"}"}}
+MUTATION APPLIED M_no_existing_account: -  IF EXISTS (SELECT 1 FROM public.licenses l WHERE l.user_id = v_uid) | +  IF false AND EXISTS (SELECT 1 FROM public.licenses l WHERE l.user_id = v_uid)
+P3962_RESULT {"fail": 1, "mode": "M_no_existing_account", "pass": 43, "reds": {"J1b_licence_only_existing_account": "{\"role\": \"agent\", \"success\": true, \"already_member\": false, \"organization_id\": \"<fixture-id>\"}"}}
+MUTATION APPLIED M_claim_any_status: -                       AND c.status = 'verified'
+P3962_RESULT {"fail": 1, "mode": "M_claim_any_status", "pass": 43, "reds": {"J3a_lapsed_claim_refused": "{\"role\": \"agent\", \"success\": true, \"already_member\": false, \"organization_id\": \"<fixture-id>\"}"}}
+MUTATION APPLIED M_claim_suffix_match: -                       AND c.domain = v_email_domain) THEN | +                       AND v_email_domain LIKE '%' || c.domain) THEN
+P3962_RESULT {"fail": 2, "mode": "M_claim_suffix_match", "pass": 42, "reds": {"J3c_suffix_email_refused": "{\"role\": \"agent\", \"success\": true, \"already_member\": false, \"organization_id\": \"<fixture-id>\"}", "J3b_subdomain_email_refused": "{\"role\": \"agent\", \"success\": true, \"already_member\": false, \"organization_id\": \"<fixture-id>\"}"}}
+MUTATION APPLIED M_claim_any_org: -                     WHERE c.organization_id = v_org.id | +                     WHERE true
+P3962_RESULT {"fail": 1, "mode": "M_claim_any_org", "pass": 43, "reds": {"J3d_other_brokerages_domain_refused": "{\"role\": \"agent\", \"success\": true, \"already_member\": false, \"organization_id\": \"<fixture-id>\"}"}}
+MUTATION APPLIED M_no_identity_tid: -     AND lower(i.identity_data -> 'custom_claims' ->> v_claim) = v_ident
+P3962_RESULT {"fail": 2, "mode": "M_no_identity_tid", "pass": 42, "reds": {"J4b_foreign_tenant_own_tid_refused": "{\"error\": \"already_placed\", \"success\": false}", "J4a_foreign_tenant_asking_for_A_refused": "{\"role\": \"agent\", \"success\": true, \"already_member\": false, \"organization_id\": \"<fixture-id>\"}"}}
+MUTATION APPLIED M_google_hd_not_email: -     OR (v_provider = 'google' AND v_email_domain IS DISTINCT FROM v_ident)
+P3962_RESULT {"fail": 1, "mode": "M_google_hd_not_email", "pass": 43, "reds": {"JG2_hd_not_email_domain_refused": "{\"role\": \"agent\", \"success\": true, \"already_member\": false, \"organization_id\": \"<fixture-id>\"}"}}
+MUTATION APPLIED M_google_lookup_any_status: -       AND c.status = 'verified'
+P3962_RESULT {"fail": 0, "mode": "M_google_lookup_any_status", "pass": 44, "reds": {}}
+MUTATION APPLIED M_placed_active_only: -              WHERE m.user_id = v_uid AND o.personal_owner_user_id IS NULL) THEN | +              WHERE m.user_id = v_uid AND o.personal_owner_user_id IS NULL AND m.license_status = 'active') THEN
+P3962_RESULT {"fail": 1, "mode": "M_placed_active_only", "pass": 43, "reds": {"J2c_expired_row_elsewhere_already_placed": "{\"error\": \"existing_account\", \"success\": false}"}}
+MUTATION APPLIED M_exempt_active_only: -              WHERE m.user_id = p_user AND o.personal_owner_user_id IS NULL) THEN | +              WHERE m.user_id = p_user AND o.personal_owner_user_id IS NULL | +                AND m.license_status = 'active') THEN
+P3962_RESULT {"fail": 1, "mode": "M_exempt_active_only", "pass": 43, "reds": {"S1b_suspended_row_elsewhere_exempt": "ERR P0001 domain_managed"}}
+MUTATION APPLIED M_block_suffix_match: -   WHERE c.domain = v_domain | +   WHERE v_domain LIKE '%' || c.domain
+P3962_RESULT {"fail": 1, "mode": "M_block_suffix_match", "pass": 43, "reds": {"S1e_subdomain_not_blocked": "ERR P0001 domain_managed"}}
+MUTATION APPLIED M_block_any_status: -     AND c.status = 'verified'
+P3962_RESULT {"fail": 1, "mode": "M_block_any_status", "pass": 43, "reds": {"S1f_lapsed_claim_not_blocking": "ERR P0001 domain_managed"}}
+MUTATION APPLIED M_invite_no_expiry: -                AND (invitation_expires_at IS NULL OR invitation_expires_at >= now())) THEN | +) THEN
+P3962_RESULT {"fail": 1, "mode": "M_invite_no_expiry", "pass": 43, "reds": {"S1d_expired_invite_not_exempt": "individual"}}
+MUTATION APPLIED M_gate_on_caller: -    v_block := public._solo_signup_block_org(p_user_id); | +    v_block := public._solo_signup_block_org(auth.uid());
+P3962_RESULT {"fail": 1, "mode": "M_gate_on_caller", "pass": 43, "reds": {"S2_staff_for_blocked_user_refused": "individual"}}
+MUTATION APPLIED M_ensure_any_licence: -  IF NOT EXISTS (SELECT 1 FROM public.licenses l WHERE l.user_id = v_uid) | -     AND NOT EXISTS (SELECT 1 FROM public.organizations o WHERE o.personal_owner_user_id = v_uid) THEN | +  IF NOT EXISTS (SELECT 1 FROM public.organizations o WHERE o.personal_owner_user_id = v_uid) THEN
+P3962_RESULT {"fail": 1, "mode": "M_ensure_any_licence", "pass": 43, "reds": {"E2_licence_holder_attached": "{\"status\": \"domain_managed\", \"organization_name\": \"PR4a Brokerage A\"}"}}
+MUTATION APPLIED M_managed_any_licence: -  IF v_uid IS NULL OR EXISTS (SELECT 1 FROM public.licenses l WHERE l.user_id = v_uid) THEN | +  IF v_uid IS NULL THEN
+P3962_RESULT {"fail": 1, "mode": "M_managed_any_licence", "pass": 43, "reds": {"C2_licence_holder_not_blocked": "{\"domain\": \"a-3962p4.test\", \"blocked\": true, \"organization_name\": \"PR4a Brokerage A\"}"}}
+MUTATION APPLIED M_toggle_no_org_check: -  IF NOT FOUND OR NOT public.is_org_admin(v_uid, v_row.organization_id) THEN | +  IF NOT FOUND THEN
+P3962_RESULT {"fail": 2, "mode": "M_toggle_no_org_check", "pass": 42, "reds": {"T1a_agent_cannot_toggle": "{\"success\": true, \"claim_id\": \"<fixture-id>\", \"block_solo_signups\": true}", "T1b_other_orgs_admin_cannot_toggle": "{\"success\": true, \"claim_id\": \"<fixture-id>\", \"block_solo_signups\": true}"}}
+MUTATION APPLIED M_toggle_any_status: -  IF p_on AND v_row.status <> 'verified' THEN | +  IF false THEN
+P3962_RESULT {"fail": 1, "mode": "M_toggle_any_status", "pass": 43, "reds": {"T1c_pending_claim_cannot_turn_on": "{\"success\": true, \"claim_id\": \"<fixture-id>\", \"block_solo_signups\": true}"}}
+MUTATION APPLIED M_grant_internal: +GRANT EXECUTE ON FUNCTION public._solo_signup_block_org(uuid) TO authenticated;
+BACKLOG-3962 PR4a: a client role can execute public._solo_signup_block_org(uuid)
+MUTATION APPLIED M_keep_overload: -DROP FUNCTION IF EXISTS public.jit_join_organization(text);
+BACKLOG-3962 PR4a: jit_join_organization(text) still exists
+MUTATION APPLIED M_pin_wrong_md5: -     IS DISTINCT FROM 'b8823ca1ec3a9d31daa353ad5116b611' THEN | +     IS DISTINCT FROM '00000000000000000000000000000000' THEN
+BACKLOG-3962 PR4a: jit_join_organization(text, text) is not the body this replaces
+RUNTIME MUTATION M_gate_in_for: public._ensure_personal_organization_for(uuid): + IF public._solo_signup_block_org(p_user_id) IS NOT NULL THEN RETURN jsonb_build_object('status', 'domain_managed'); END IF;
+P3962_RESULT {"fail": 1, "mode": "M_gate_in_for", "pass": 43, "reds": {"E2_licence_holder_attached": "{\"status\": \"domain_managed\"}"}}
+MUTATION APPLIED M_gate_in_for_active_only: -              WHERE m.user_id = p_user AND o.personal_owner_user_id IS NULL) THEN | +              WHERE m.user_id = p_user AND o.personal_owner_user_id IS NULL | +                AND m.license_status = 'active') THEN
+RUNTIME MUTATION M_gate_in_for_active_only: public._ensure_personal_organization_for(uuid): + IF public._solo_signup_block_org(p_user_id) IS NOT NULL THEN RETURN jsonb_build_object('status', 'domain_managed'); END IF;
+P3962_RESULT {"fail": 3, "mode": "M_gate_in_for_active_only", "pass": 41, "reds": {"E2_licence_holder_attached": "{\"status\": \"domain_managed\"}", "S1b_suspended_row_elsewhere_exempt": "ERR P0001 domain_managed", "S3_deactivated_member_gets_personal_org": "0"}}
+P3962_RESULT {"epo": "d3440c655d21cecd796854f162954a7c", "lic": "444a6fb65e16149252aa5aae5abb7dfb", "jit1": "ff35f6a623f3f2206615fd4f48f999a3", "jit2": "b8823ca1ec3a9d31daa353ad5116b611", "mode": "rollback", "column": false, "lic_acl": "{postgres=X/postgres,authenticated=X/postgres,service_role=X/postgres}", "new_fns": 0, "jit1_acl": "{postgres=X/postgres,service_role=X/postgres}"}
