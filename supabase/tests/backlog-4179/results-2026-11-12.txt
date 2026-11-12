@@ -1,0 +1,50 @@
+BACKLOG-4179 results, keepr-test, 2026-11-12 (UTC). Base 8f6f5eb60.
+
+== Rolled back (before apply): run.sh base M_active_only M_insert_only M_org_exclusion M_no_retire G7
+base: pass 17 fail 0
+M_active_only (+ AND m.license_status = 'active'): pass 13 fail 4 -> RED G1_pending/unassigned/suspended/expired (allowed rows=2)
+M_insert_only (BEFORE INSERT only): pass 16 fail 1 -> RED G2_service_update_user_id (allowed rows=2)
+M_org_exclusion (m.organization_id <> NEW.organization_id): pass 16 fail 1 -> RED G4a_move_only_row (ERR P0001 already_placed)
+M_no_retire (DISABLE TRIGGER retire_personal_membership): pass 10 fail 7 -> RED all six G6 paths (personal=1 outbox=0) + G4c
+G7 (seeded duplicate): BACKLOG-4179 pre-check: users with 2+ brokerage rows: 1
+
+== Committed apply 2026-11-12 22:18:00.749884+00; ledger 20261112121000 backlog_4179_one_brokerage_guard
+md5(prosrc) dd446803df524b614a7d4b7f92241994 (= file body); provolatile v; tgenabled O
+run.sh live: pass 17 fail 0
+
+== concurrency.sh base
+setup: [{"r":"setup ok"}]
+G3 S1: [{"pid":3272777,"called_at":"2026-11-12 22:18:21.496651+00","r":{"ok":"{\"role\": \"agent\", \"success\": true, \"user_id": "<id>", \"tenant_linked\": false, \"license_status\": \"active\", \"organization_id": "<id>"}"},"returned_at":"2026-11-12 22:18:21.512318+00","held":"","committed_at":"2026-11-12 22:18:29.520341+00"}]
+G3 S2: [{"pid":3272778,"called_at":"2026-11-12 22:18:24.520034+00","r":{"code":"P0001","hint":null,"details":"BACKLOG-4179: this person already has a membership in another brokerage","message":"already_placed"},"returned_at":"2026-11-12 22:18:29.52375+00","held":"","committed_at":"2026-11-12 22:18:29.523754+00"}]
+G3 observer: [{"at":"2026-11-12 22:18:26.504227+00","person_lock":[{"pid":3272778,"granted":false},{"pid":3272777,"granted":true}]}]
+G3 rows: [{"slug":"race-a-4179c","license_status":"active"}]
+G5 S1: [{"pid":3272798,"called_at":"2026-11-12 22:18:30.582231+00","r":{"ok":"{\"role\": \"agent\", \"success\": true, \"user_id": "<id>", \"tenant_linked\": false, \"license_status\": \"active\", \"organization_id": "<id>"}"},"returned_at":"2026-11-12 22:18:30.604021+00","held":"","committed_at":"2026-11-12 22:18:38.612069+00"}]
+G5 S2: [{"pid":3272799,"called_at":"2026-11-12 22:18:33.61584+00","r":{"code":"P0001","hint":null,"details":"BACKLOG-4179: this person already has a membership in another brokerage","message":"already_placed"},"returned_at":"2026-11-12 22:18:38.614653+00","held":"","committed_at":"2026-11-12 22:18:38.614656+00"}]
+G5 observer: [{"at":"2026-11-12 22:18:35.619053+00","person_lock":[{"pid":3272799,"granted":false},{"pid":3272798,"granted":true}]}]
+G5 switch after race: [{"status":"scheduled","reason":null}]
+G5 next run: [{"pid":3272804,"called_at":"2026-11-12 22:18:39.833399+00","r":{"ok":"{\"detail\": \"brokerage_member\", \"reason\": \"not_eligible\", \"outcome\": \"cancelled\", \"success\": true}"},"returned_at":"2026-11-12 22:18:39.841168+00","held":"","committed_at":"2026-11-12 22:18:39.841172+00"}]
+G5 switch after next run: [{"status":"cancelled","reason":"not_eligible"}]
+G5 rows: [{"slug":"race-b5-4179c","license_status":"active"}]
+cleanup: [{"users_left":0,"orgs_left":0}]
+
+== concurrency.sh M_no_lock (mutant window ~22:18:51-22:19:13)
+setup: [{"r":"setup ok"}]
+MUTATION APPLIED M_no_lock: -  PERFORM pg_advisory_xact_lock(hashtextextended(NEW.user_id::text, 3364));
+md5 before: [{"m":"dd446803df524b614a7d4b7f92241994"}]
+md5 mutant: [{"m":"95b1ea9a24d59aadb7dd3c16c27a335c"}]
+G3 S1: [{"pid":3272817,"called_at":"2026-11-12 22:18:53.160511+00","r":{"ok":"{\"role\": \"agent\", \"success\": true, \"user_id": "<id>", \"tenant_linked\": false, \"license_status\": \"active\", \"organization_id": "<id>"}"},"returned_at":"2026-11-12 22:18:53.17549+00","held":"","committed_at":"2026-11-12 22:19:01.180456+00"}]
+G3 S2: [{"pid":3272816,"called_at":"2026-11-12 22:18:56.162762+00","r":{"ok":"{\"role\": \"agent\", \"success\": true, \"user_id": "<id>", \"tenant_linked\": false, \"license_status\": \"active\", \"organization_id": "<id>"}"},"returned_at":"2026-11-12 22:19:01.18359+00","held":"","committed_at":"2026-11-12 22:19:01.183593+00"}]
+G3 observer: [{"at":"2026-11-12 22:18:58.185103+00","person_lock":[{"pid":3272816,"granted":false},{"pid":3272817,"granted":true}]}]
+G3 rows: [{"slug":"race-a-4179c","license_status":"active"},{"slug":"race-b-4179c","license_status":"active"}]
+G5 S1: [{"pid":3272822,"called_at":"2026-11-12 22:19:02.250122+00","r":{"ok":"{\"role\": \"agent\", \"success\": true, \"user_id": "<id>", \"tenant_linked\": false, \"license_status\": \"active\", \"organization_id": "<id>"}"},"returned_at":"2026-11-12 22:19:02.269328+00","held":"","committed_at":"2026-11-12 22:19:10.278328+00"}]
+G5 S2: [{"pid":3272823,"called_at":"2026-11-12 22:19:05.259571+00","r":{"ok":"{\"email\": \"g5@c-4179.test\", \"payer\": false, \"outcome\": \"switched\", \"success\": true, \"user_id": "<id>", \"member_id": "<id>", \"switch_id": "<id>", \"seat_fallback\": false, \"brokerage_name\": \"Race K 4179\", \"license_status\": \"active\", \"organization_id": "<id>"}"},"returned_at":"2026-11-12 22:19:10.306777+00","held":"","committed_at":"2026-11-12 22:19:10.306786+00"}]
+G5 observer: [{"at":"2026-11-12 22:19:07.255694+00","person_lock":[{"pid":3272823,"granted":false},{"pid":3272822,"granted":true}]}]
+G5 switch after race: [{"status":"switched","reason":null}]
+G5 next run: [{"pid":3272829,"called_at":"2026-11-12 22:19:11.531976+00","r":{"ok":"{\"error\": \"not_scheduled\", \"status\": \"switched\", \"success\": false}"},"returned_at":"2026-11-12 22:19:11.53544+00","held":"","committed_at":"2026-11-12 22:19:11.535444+00"}]
+G5 switch after next run: [{"status":"switched","reason":null}]
+G5 rows: [{"slug":"race-b5-4179c","license_status":"active"},{"slug":"race-k-4179c","license_status":"active"}]
+md5 restored: [{"m":"dd446803df524b614a7d4b7f92241994"}]
+cleanup: [{"users_left":0,"orgs_left":0}]
+Note: under M_no_lock the observer still sees S2 waiting: that is the retire trigger's lock (AFTER, same key), taken after the guard's read already passed.
+
+After both runs, a wider count found 19 billing_change_log audit rows for the fixture orgs (no FK). Deleted (6 member_invited, 6 member_removed, 5 invite_accepted, 1 member_added, 1 invite_cancelled); recount 0. cleanup now deletes and counts them.
