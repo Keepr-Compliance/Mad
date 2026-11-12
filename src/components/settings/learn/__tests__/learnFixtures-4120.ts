@@ -78,6 +78,7 @@ export const SCORE: LearnScoreResult = {
     unmatchedDeals: 1,
     unaskable: 0,
     cleanupYes: 0,
+    cleanupYesNotCounted: 0,
     cleanupNo: 0,
     cleanupUnanswered: 1,
     hiddenBySeed: { keys: 0, detections: 0, emails: 0 },
