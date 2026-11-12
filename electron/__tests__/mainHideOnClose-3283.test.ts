@@ -27,7 +27,10 @@ describe("main.ts hide-on-close wiring (BACKLOG-3283)", () => {
   it("hide-on-close is registered BEFORE the submission guard (the guard clears the quit flag during the same dispatch)", () => {
     const c = createWindowBody();
     const attach = c.indexOf("attachHideOnClose(mainWindow, process.platform);");
-    const guard = c.indexOf("// Prevent closing while a submission is uploading");
+    // The guard LISTENER itself (not its comment): a move to anywhere below the comment must fail.
+    const guard = c.indexOf(
+      'mainWindow.on("close", (e) => {\n    // BACKLOG-3283: on macOS a close that is not a quit only hides',
+    );
     expect(attach).toBeGreaterThanOrEqual(0);
     expect(guard).toBeGreaterThanOrEqual(0);
     // Listeners run in registration order. Attached after the guard, the hide
