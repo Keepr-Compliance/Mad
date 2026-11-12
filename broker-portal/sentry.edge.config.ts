@@ -20,7 +20,7 @@ Sentry.init({
   // BACKLOG-4237/4238: middleware runs on /oauth; drop request headers, cookies,
   // body, query and env there, and redact Keepr OAuth credentials everywhere.
   beforeSend(event) {
-    return scrubEvent(event);
+    return scrubEvent(event, undefined, { dropOnFailure: true });
   },
   beforeSendTransaction(event) {
     return scrubTransaction(event);

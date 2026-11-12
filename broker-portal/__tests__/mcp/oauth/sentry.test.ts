@@ -285,18 +285,14 @@ describe.each(['server', 'edge'] as const)('sentry.%s.config', (file) => {
       });
       expect(hooks.beforeSend(ev)).toBeNull();
     });
-    it(file === 'server' ? 'another event whose processing throws is dropped' : 'positive: another event whose processing throws is returned', () => {
+    it('another event whose processing throws is dropped', () => {
       const ev: Rec = { request: { url: 'https://portal.test/dashboard' } };
       Object.defineProperty(ev, 'message', {
         get() {
           throw new Error('getter');
         },
       });
-      if (file === 'server') {
-        expect(hooks.beforeSend(ev)).toBeNull();
-      } else {
-        expect(hooks.beforeSend(ev)).toBe(ev);
-      }
+      expect(hooks.beforeSend(ev)).toBeNull();
     });
 
     it('positive: another event that does not throw is returned', () => {
@@ -334,12 +330,16 @@ describe('sentry.server.config breadcrumbs on an event', () => {
   it('a breadcrumb that the breadcrumb scrub drops is removed from the event; others are kept', () => {
     const dropped: Rec = { category: 'fetch', data: { url: `https://portal.test/oauth/token?x=${PLANTED_PLAIN}` } };
     let reads = 0;
+    let message = 'GET';
     Object.defineProperty(dropped, 'message', {
       enumerable: true,
       get() {
         reads += 1;
         if (reads === 1) throw new Error('getter');
-        return 'GET';
+        return message;
+      },
+      set(v: string) {
+        message = v;
       },
     });
     const kept: Rec = { category: 'fetch', message: 'GET', data: { url: 'https://api.example/x?page=2' } };
