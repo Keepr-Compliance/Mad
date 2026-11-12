@@ -15,6 +15,7 @@
     "@keepr/shared": "file:../packages/shared",
     "@keepr/ui": "file:../packages/ui",
     "@microsoft/microsoft-graph-client": "^3.0.7",
+    "@modelcontextprotocol/server": "2.4.0",
     "@sentry/nextjs": "^10.76.2",
     "@supabase/ssr": "^0.10.2",
     "@supabase/supabase-js": "^2.104.0",
@@ -28,6 +29,7 @@
     "stripe": "^17.7.0"
   },
   "devDependencies": {
+    "@modelcontextprotocol/client": "2.4.0",
     "@testing-library/jest-dom": "^6.1.5",
     "@testing-library/react": "^14.1.2",
     "@types/cookie": "^0.6.0",

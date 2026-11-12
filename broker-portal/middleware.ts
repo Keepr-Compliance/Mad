@@ -254,6 +254,8 @@ export const config = {
     // Skip Next.js internals and static files
     // Skip the PWA service worker script and manifest too (BACKLOG-3796),
     // anchored with $ so /sw.js.map and nested paths still run middleware.
-    '/((?!_next/static|_next/image|favicon.ico|sw\\.js$|manifest\\.webmanifest$|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
+    // BACKLOG-4237: skip /api/mcp and its sub-paths (no cookie session work for
+    // AI-app calls).
+    '/((?!_next/static|_next/image|favicon.ico|sw\\.js$|manifest\\.webmanifest$|api/mcp(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)',
   ],
 };

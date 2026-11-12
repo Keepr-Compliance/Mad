@@ -817,6 +817,11 @@ const KNOWN_ROUTE_HANDLERS = [
   // verified caller's own plan, no request-supplied ids. Display only.
   'app/api/billing/plan-summary/route.ts',
   'app/api/cron/email-retry/route.ts',
+  // BACKLOG-4237: POST only; MCP_ENABLED, Origin and a Bearer token with a client_id
+  // claim are checked first; one tool that reads no user data.
+  'app/api/mcp/route.ts',
+  // BACKLOG-4237: GET only; static protected-resource metadata, no session.
+  'app/api/mcp/resource-metadata/route.ts',
   'app/api/cron/payment-reconcile/route.ts',
   'app/api/download/route.ts',
   'app/api/email/internal-invite/route.ts',
@@ -1020,7 +1025,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(28); // BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session
+    expect(handlers.length).toBe(30); // BACKLOG-4237: + mcp, mcp/resource-metadata; BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {
