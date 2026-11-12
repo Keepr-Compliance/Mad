@@ -218,8 +218,9 @@ BEGIN
   r := r || jsonb_build_object('D6_agent_editor_shares', pg_temp.ctl(6,
     format(sset, pg_temp.fx(405), format('[{"kind":"person","id":"%s"}]', pg_temp.fx(5)), 'viewer'), OK,
     jsonb_build_array(pg_temp.ar(6, 'report_shared', 405, 'Pipeline five', '{"from":null,"to":"viewer","member":5}'))));
+  -- a grantee valid in every other respect (G1, an active member holding viewer), so only the level gate refuses
   r := r || jsonb_build_object('D6_viewer_share_refused', pg_temp.ctl(4,
-    format(sset, pg_temp.fx(405), format('[{"kind":"person","id":"%s"}]', pg_temp.fx(1)), 'viewer'), NF, '[]'));
+    format(sset, pg_temp.fx(405), format('[{"kind":"person","id":"%s"}]', pg_temp.fx(5)), 'editor'), NF, '[]'));
   r := r || jsonb_build_object('D6_viewer_remove_refused', pg_temp.ctl(4, format(srem, pg_temp.fx(405), 'person', pg_temp.fx(2)), NF, '[]'));
   r := r || jsonb_build_object('D6_viewer_general_refused', pg_temp.ctl(4, format(sgen, pg_temp.fx(405), 'organization'), NF, '[]'));
   r := r || jsonb_build_object('D6_editor_delete_refused', pg_temp.ctl(3, format(sdel, pg_temp.fx(405)), NF, '[]'));
