@@ -69,6 +69,9 @@ DELETE FROM public.domain_capture_switches WHERE organization_id = pg_temp.id('o
 DELETE FROM public.organization_members WHERE organization_id IN
   (pg_temp.id('oA'), pg_temp.id('oB'), pg_temp.id('oB5'), pg_temp.id('oK'), pg_temp.id('po_g5'));
 DELETE FROM public.domain_claims WHERE id = pg_temp.id('cK');
+-- The member change-log trigger's audit rows (no foreign key, so the deletes above leave them).
+DELETE FROM public.billing_change_log WHERE organization_id IN
+  (pg_temp.id('oA'), pg_temp.id('oB'), pg_temp.id('oB5'), pg_temp.id('oK'), pg_temp.id('po_g5'));
 DELETE FROM public.organizations WHERE id IN
   (pg_temp.id('oA'), pg_temp.id('oB'), pg_temp.id('oB5'), pg_temp.id('oK'), pg_temp.id('po_g5'));
 DELETE FROM public.licenses WHERE user_id IN (pg_temp.id('g3'), pg_temp.id('g5'));
@@ -76,7 +79,9 @@ DELETE FROM auth.identities WHERE user_id IN (pg_temp.id('g3'), pg_temp.id('g5')
 DELETE FROM public.users WHERE id IN (pg_temp.id('g3'), pg_temp.id('g5'));
 DELETE FROM auth.users WHERE id IN (pg_temp.id('g3'), pg_temp.id('g5'));
 SELECT (SELECT count(*) FROM auth.users WHERE email LIKE '%@c-4179.test') AS users_left,
-       (SELECT count(*) FROM public.organizations WHERE slug LIKE '%-4179c') AS orgs_left;
+       (SELECT count(*) FROM public.organizations WHERE slug LIKE '%-4179c') AS orgs_left,
+       (SELECT count(*) FROM public.billing_change_log WHERE organization_id IN
+          (pg_temp.id('oA'), pg_temp.id('oB'), pg_temp.id('oB5'), pg_temp.id('oK'), pg_temp.id('po_g5'))) AS change_log_left;
 SQL
 
 cat > "$TMP/setup.sql" <<SQL

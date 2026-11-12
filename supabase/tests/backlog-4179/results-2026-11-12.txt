@@ -46,3 +46,5 @@ G5 rows: [{"slug":"race-b5-4179c","license_status":"active"},{"slug":"race-k-417
 md5 restored: [{"m":"dd446803df524b614a7d4b7f92241994"}]
 cleanup: [{"users_left":0,"orgs_left":0}]
 Note: under M_no_lock the observer still sees S2 waiting: that is the retire trigger's lock (AFTER, same key), taken after the guard's read already passed.
+
+After both runs, a wider count found 19 billing_change_log audit rows for the fixture orgs (no FK). Deleted (6 member_invited, 6 member_removed, 5 invite_accepted, 1 member_added, 1 invite_cancelled); recount 0. cleanup now deletes and counts them.
