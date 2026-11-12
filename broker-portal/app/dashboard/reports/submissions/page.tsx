@@ -37,6 +37,7 @@ export default async function SubmissionsReportPage({ searchParams }: PageProps)
   return (
     <div className="mx-auto max-w-7xl space-y-6">
       <PageHeader
+        phoneHideTitle
         title={report.title}
         subtitle={
           data.ok ? (

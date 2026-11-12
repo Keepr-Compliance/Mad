@@ -472,17 +472,31 @@ const BILLING_PAGES: Record<string, PageEntry> = {
 };
 
 /**
- * BACKLOG-3505: the Reports index, gated by lib/reports/report-gate.ts. PR-1
- * registers no report, so it refuses EVERY persona (feature forced on in this
- * file), full roles included. The per-role rule is covered in
- * __tests__/reports-3505 against an injected registry.
+ * BACKLOG-3505: the Reports pages, gated by lib/reports/report-gate.ts.
+ * BACKLOG-3513 PR-3a registers Submissions (agent-scoped), so with the feature
+ * forced on in this file the index and the report open for a brokerage agent
+ * and every full role, and refuse a personal-org owner. The per-role rule is
+ * covered in __tests__/reports-3505 and __tests__/reports-3513.
  */
 const REPORTS_PAGES: Record<string, PageEntry> = {
   'app/dashboard/reports/page.tsx': {
     invoke: async () => (await import('@/app/dashboard/reports/page')).default(),
     refused: { notFound: true },
   },
+  'app/dashboard/reports/submissions/page.tsx': {
+    invoke: async () =>
+      (await import('@/app/dashboard/reports/submissions/page')).default({ searchParams: Promise.resolve({}) }),
+    refused: { notFound: true },
+  },
 };
+const REPORTS_REFUSED = { 'personal-org owner': [personalMembership()] } as const;
+const REPORTS_ADMITTED = {
+  'brokerage agent': [brokerageMembership('agent')],
+  '[agent, broker] (two brokerage rows)': [brokerageMembership('agent'), second(brokerageMembership('broker'))],
+  'brokerage broker': [brokerageMembership('broker')],
+  'brokerage admin': ADMIN,
+  'brokerage it_admin': [brokerageMembership('it_admin')],
+} as const;
 
 const PLAN_GATED_ADMITTED = {
   'brokerage agent': [brokerageMembership('agent')],
@@ -1001,7 +1015,7 @@ describe('discovery can see what it claims to see', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
     expect(pages).toContain('app/dashboard/users/[id]/page.tsx');
-    expect(pages.length).toBe(19); // BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
+    expect(pages.length).toBe(20); // BACKLOG-3513 PR-3a: + reports/submissions; BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
   });
 
   it('finds route handlers, keyed POSIX on any OS (R8)', () => {
@@ -1044,17 +1058,21 @@ describe('discovery can see what it claims to see', () => {
   });
 });
 
-describe('reports index with the shipped registry (BACKLOG-3505)', () => {
-  const page = REPORTS_PAGES['app/dashboard/reports/page.tsx'];
-  it.each([
-    ...Object.entries(PERSONAS),
-    ['brokerage broker', [brokerageMembership('broker')]],
-    ['brokerage admin', ADMIN],
-    ['brokerage it_admin', [brokerageMembership('it_admin')]],
-  ] as [string, readonly Row[]][])('refuses the %s and writes nothing', async (_n, rows) => {
-    given(rows);
-    expect(await run(page.invoke)).toEqual(page.refused);
+describe('reports pages with the shipped registry (BACKLOG-3505, BACKLOG-3513 PR-3a)', () => {
+  const cases = Object.keys(REPORTS_PAGES).flatMap((file) => [
+    ...Object.entries(REPORTS_REFUSED).map(([n, rows]) => [file, n, rows, 'refused'] as const),
+    ...Object.entries(REPORTS_ADMITTED).map(([n, rows]) => [file, n, rows, 'admitted'] as const),
+  ]);
+  it.each(cases)('%s: the %s is %s, writes nothing, and never reads transaction_submissions', async (file, _n, rows, verdict) => {
+    given(rows as readonly Row[]);
+    const from = jest.spyOn(mockEmulator, 'from');
+    const page = REPORTS_PAGES[file];
+    const outcome = await run(page.invoke);
+    if (verdict === 'refused') expect(outcome).toEqual(page.refused);
+    else expect(outcome).toEqual({ element: 'div' });
     expect(mockEmulator.state.writes).toEqual([]);
+    expect(from.mock.calls.map((c) => c[0])).not.toContain('transaction_submissions');
+    from.mockRestore();
   });
 });
 
