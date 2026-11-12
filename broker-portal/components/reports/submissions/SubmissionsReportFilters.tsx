@@ -32,13 +32,28 @@ export interface SubmissionsReportFiltersProps {
   /** Shown only to a full role; an agent's report is their own rows. */
   showAgent: boolean;
   agents: AgentOption[];
+  /** Where the controls push to. Default: the Submissions report. A shared report passes its own page. */
+  basePath?: string;
+  /** Keep `status` in the URL (a shared report: see buildSubmissionsReportUrl). */
+  explicit?: boolean;
+  /** The saved-views key. Default: the report's slug. */
+  viewsKey?: string;
 }
 
 const FIELD = 'rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900';
 
-export function SubmissionsReportFilters({ orgId, report, filters, showAgent, agents }: SubmissionsReportFiltersProps) {
+export function SubmissionsReportFilters({
+  orgId,
+  report,
+  filters,
+  showAgent,
+  agents,
+  basePath,
+  explicit = false,
+  viewsKey,
+}: SubmissionsReportFiltersProps) {
   const router = useRouter();
-  const go = (next: Filters) => router.push(buildSubmissionsReportUrl({ ...next, page: 1 }));
+  const go = (next: Filters) => router.push(buildSubmissionsReportUrl({ ...next, page: 1 }, basePath, explicit));
   const set = (patch: Partial<Filters>) => go({ ...filters, ...patch });
 
   return (
@@ -119,6 +134,7 @@ export function SubmissionsReportFilters({ orgId, report, filters, showAgent, ag
         current={filtersToViewState(filters)}
         onApply={(view) => go(viewStateToFilters(view))}
         onClear={() => go(DEFAULT_SUBMISSIONS_FILTERS)}
+        reportKey={viewsKey}
       />
     </div>
   );

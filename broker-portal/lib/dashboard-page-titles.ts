@@ -58,5 +58,7 @@ export function getPhoneTitle(pathname: string | null | undefined): string | und
   if (rest in EXACT) return EXACT[rest];
   const seg = rest.split('/').filter(Boolean);
   if (seg.length === 2 && seg[0] in DETAIL) return DETAIL[seg[0]];
+  // BACKLOG-3513 PR-3b: one shared report, /dashboard/reports/d/<id>.
+  if (seg.length === 3 && seg[0] === 'reports' && seg[1] === 'd') return DETAIL.reports;
   return undefined;
 }

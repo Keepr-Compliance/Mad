@@ -72,11 +72,18 @@ export type SubmissionsReportData =
 
 type Rpc = ReportCaller['supabase'];
 
-function rowArgs(caller: ReportCaller, filters: SubmissionsReportFilters, agent: string | null, limit: number, offset: number) {
+function rowArgs(
+  caller: ReportCaller,
+  filters: SubmissionsReportFilters,
+  agent: string | null,
+  limit: number,
+  offset: number,
+  defId: string | null = null
+) {
   const { from, to } = dateBounds(filters);
   return {
     p_org: caller.organizationId,
-    p_def: null,
+    p_def: defId,
     p_status: filters.status === 'all' ? null : filters.status,
     p_agent: agent,
     p_from: from,
@@ -100,8 +107,8 @@ async function readRows(
   return { rows, total: rows.length > 0 ? Number(rows[0].total_count) : 0 };
 }
 
-async function readServiceOff(supabase: Rpc, orgId: string): Promise<boolean | null> {
-  const { data, error } = await supabase.rpc(REPORT_SCOPE_RPC, { p_org: orgId, p_def: null });
+async function readServiceOff(supabase: Rpc, orgId: string, defId: string | null): Promise<boolean | null> {
+  const { data, error } = await supabase.rpc(REPORT_SCOPE_RPC, { p_org: orgId, p_def: defId });
   if (error || data === null || typeof data !== 'object') {
     console.error('[reports] report scope unavailable:', error?.message);
     return null;
@@ -110,12 +117,16 @@ async function readServiceOff(supabase: Rpc, orgId: string): Promise<boolean | n
 }
 
 /** Every submitter with a deal under the status and date filters (the agent filter ignored). */
-async function readAgentOptions(caller: ReportCaller, filters: SubmissionsReportFilters): Promise<AgentOption[]> {
+async function readAgentOptions(
+  caller: ReportCaller,
+  filters: SubmissionsReportFilters,
+  defId: string | null
+): Promise<AgentOption[]> {
   const ids = new Set<string>();
   for (let page = 0; page < AGENT_OPTION_PAGES; page += 1) {
     const read = await readRows(
       caller.supabase,
-      rowArgs(caller, { ...filters, sort: 'newest' }, null, AGENT_OPTION_PAGE_SIZE, page * AGENT_OPTION_PAGE_SIZE)
+      rowArgs(caller, { ...filters, sort: 'newest' }, null, AGENT_OPTION_PAGE_SIZE, page * AGENT_OPTION_PAGE_SIZE, defId)
     );
     if (!read) return [];
     for (const r of read.rows) if (r.submitted_by) ids.add(r.submitted_by);
@@ -139,34 +150,38 @@ function strip(row: RpcRow): SubmissionsReportRow {
  * One page of the report. A page past the end shows the last page. Any failed
  * read returns { ok: false }: the page says the report could not load, never
  * "no submissions".
+ *
+ * `defId` (BACKLOG-3513 PR-3b): a shared report. The database then applies that
+ * report's row scope for the caller; null is the code report.
  */
 export async function loadSubmissionsReport(
   caller: ReportCaller,
-  filters: SubmissionsReportFilters
+  filters: SubmissionsReportFilters,
+  defId: string | null = null
 ): Promise<SubmissionsReportData> {
   const pageSize = SUBMISSIONS_REPORT_PAGE_SIZE;
-  const serviceOff = await readServiceOff(caller.supabase, caller.organizationId);
+  const serviceOff = await readServiceOff(caller.supabase, caller.organizationId, defId);
   if (serviceOff === null) return { ok: false };
 
   // An agent's rows are their own: an agent filter from the URL or a saved view is never sent for them.
   const agentFilter = caller.kind === 'full' ? filters.agent : null;
   let page = filters.page;
-  let read = await readRows(caller.supabase, rowArgs(caller, filters, agentFilter, pageSize, (page - 1) * pageSize));
+  let read = await readRows(caller.supabase, rowArgs(caller, filters, agentFilter, pageSize, (page - 1) * pageSize, defId));
   if (!read) return { ok: false };
 
   // total_count rides on each row, so a page past the end carries no total: read the first page for it.
   if (read.rows.length === 0 && page > 1) {
-    const first = await readRows(caller.supabase, rowArgs(caller, filters, agentFilter, pageSize, 0));
+    const first = await readRows(caller.supabase, rowArgs(caller, filters, agentFilter, pageSize, 0, defId));
     if (!first) return { ok: false };
     page = Math.max(1, Math.ceil(first.total / pageSize));
-    read = page === 1 ? first : await readRows(caller.supabase, rowArgs(caller, filters, agentFilter, pageSize, (page - 1) * pageSize));
+    read = page === 1 ? first : await readRows(caller.supabase, rowArgs(caller, filters, agentFilter, pageSize, (page - 1) * pageSize, defId));
     if (!read) return { ok: false };
   }
 
   const rows = read.rows.map(strip);
   const full = caller.kind === 'full';
   const names = full ? await resolveUserNames(caller.supabase, rows.map((r) => r.submitted_by)) : null;
-  const agents = full ? await readAgentOptions(caller, filters) : [];
+  const agents = full ? await readAgentOptions(caller, filters, defId) : [];
 
   return {
     ok: true,

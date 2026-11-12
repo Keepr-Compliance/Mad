@@ -105,17 +105,25 @@ export function parseSubmissionsReportParams(params: SubmissionsSearchParams): S
   };
 }
 
-/** The report URL for these filters. Defaults are left out. */
-export function buildSubmissionsReportUrl(filters: SubmissionsReportFilters): string {
+/**
+ * The report URL for these filters. Defaults are left out, except on a shared
+ * report (BACKLOG-3513 PR-3b): there `explicit` keeps `status` in the URL so
+ * the page can tell "the person changed the filters" from "use the saved ones".
+ */
+export function buildSubmissionsReportUrl(
+  filters: SubmissionsReportFilters,
+  path: string = SUBMISSIONS_REPORT_PATH,
+  explicit = false
+): string {
   const q = new URLSearchParams();
-  if (filters.status !== 'all') q.set('status', filters.status);
+  if (explicit || filters.status !== 'all') q.set('status', filters.status);
   if (filters.agent) q.set('agent', filters.agent);
   if (filters.from) q.set('from', filters.from);
   if (filters.to) q.set('to', filters.to);
   if (filters.sort !== 'newest') q.set('sort', filters.sort);
   if (filters.page > 1) q.set('page', String(filters.page));
   const s = q.toString();
-  return s ? `${SUBMISSIONS_REPORT_PATH}?${s}` : SUBMISSIONS_REPORT_PATH;
+  return s ? `${path}?${s}` : path;
 }
 
 /**
@@ -156,4 +164,42 @@ export function viewStateToFilters(view: ViewState): SubmissionsReportFilters {
     sort: parseSubmissionsSort(view.sort?.key),
     page: 1,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Shared reports (BACKLOG-3513 PR-3b): a definition stores filtersToViewState().
+// ---------------------------------------------------------------------------
+
+/** The page of one shared report. */
+export function definitionReportPath(id: string): string {
+  return `/dashboard/reports/d/${encodeURIComponent(id)}`;
+}
+
+/** The saved-views key of one shared report: 'd-' + id, lower-cased (migration 20261112200000 C8). */
+export function definitionViewsKey(id: string): string {
+  return `d-${id}`.toLowerCase();
+}
+
+/** A stored definition back to filters. Anything malformed falls back to the defaults. */
+export function definitionToFilters(definition: unknown): SubmissionsReportFilters {
+  const obj = definition !== null && typeof definition === 'object' && !Array.isArray(definition) ? (definition as Record<string, unknown>) : {};
+  const rawFilters = obj.filters;
+  const filters =
+    rawFilters !== null && typeof rawFilters === 'object' && !Array.isArray(rawFilters) ? (rawFilters as Record<string, FilterValue>) : {};
+  const rawSort = obj.sort;
+  const sort =
+    rawSort !== null && typeof rawSort === 'object' && typeof (rawSort as { key?: unknown }).key === 'string'
+      ? { key: (rawSort as { key: string }).key, direction: 'asc' as const }
+      : null;
+  return viewStateToFilters({ filters, sort });
+}
+
+/**
+ * The filters a shared report opens with: the URL's when the person changed
+ * them on this page (the URL carries `status`), else the saved ones.
+ */
+export function resolveDefinitionFilters(params: SubmissionsSearchParams, definition: unknown): SubmissionsReportFilters {
+  if (typeof params.status === 'string') return parseSubmissionsReportParams(params);
+  const page = parseSubmissionsReportParams(params).page;
+  return { ...definitionToFilters(definition), page };
 }

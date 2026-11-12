@@ -23,7 +23,12 @@ const ROOTS = [
   join(PORTAL, 'components', 'reports'),
 ];
 
-const BROWSER_DIR = 'lib/reports/saved-views/';
+/** Directories whose files run in the browser and may use the browser session client. */
+const BROWSER_DIRS = [
+  'lib/reports/saved-views/',
+  // BACKLOG-3513 PR-3b (SR C11): the shared-report sharing and definition RPCs.
+  'lib/reports/sharing/',
+];
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -65,10 +70,28 @@ describe('reports files never reach the service client', () => {
     );
   });
 
+  it('C11 (BACKLOG-3513 PR-3b) the sharing adapters are scanned and use the browser session client', () => {
+    const names = FILES.map((f) => relative(PORTAL, f).split('\\').join('/'));
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'lib/reports/sharing/sharing-api.ts',
+        'lib/reports/sharing/definitions-api.ts',
+        'lib/reports/definitions/server.ts',
+        'components/reports/BrokerReportShareButton.tsx',
+      ])
+    );
+    for (const f of ['lib/reports/sharing/sharing-api.ts', 'lib/reports/sharing/definitions-api.ts']) {
+      expect(specifiers(readFileSync(join(PORTAL, f), 'utf8'))).toContain('@/lib/supabase/client');
+    }
+    // Outside the browser directories the browser client is still refused.
+    expect(BROWSER_DIRS.some((d) => 'lib/reports/definitions/server.ts'.startsWith(d))).toBe(false);
+    expect(BROWSER_DIRS.some((d) => 'components/reports/BrokerReportShareButton.tsx'.startsWith(d))).toBe(false);
+  });
+
   it.each(FILES.map((f) => [relative(PORTAL, f), f]))('%s imports only the allowed session client', (name, file) => {
     const source = readFileSync(file, 'utf8');
     const rel = String(name).split('\\').join('/');
-    const allowed = rel.startsWith(BROWSER_DIR) ? ['@/lib/supabase/server', '@/lib/supabase/client'] : ['@/lib/supabase/server'];
+    const allowed = BROWSER_DIRS.some((d) => rel.startsWith(d)) ? ['@/lib/supabase/server', '@/lib/supabase/client'] : ['@/lib/supabase/server'];
     const supabaseImports = specifiers(source).filter((s) => /(^|\/)lib\/supabase\//.test(s) || /^\.\.?\/.*supabase/.test(s));
     for (const s of supabaseImports) expect(allowed).toContain(s);
     expect(source).not.toMatch(/createServiceClient|SUPABASE_SERVICE_ROLE/);

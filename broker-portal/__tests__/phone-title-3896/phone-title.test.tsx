@@ -70,6 +70,7 @@ const EXPECTED: Record<string, string> = {
   '/dashboard/reports': 'Reports', // BACKLOG-3505
   '/dashboard/reports/r-1': 'Report',
   '/dashboard/reports/submissions': 'Report', // BACKLOG-3513 PR-3a
+  '/dashboard/reports/d/s-1': 'Report', // BACKLOG-3513 PR-3b
   '/dashboard/setup': 'Account Setup',
 };
 
@@ -172,6 +173,7 @@ describe('page headings below md (BACKLOG-3896)', () => {
       path.join(DASH, 'account/AccountClient.tsx'),
       path.join(DASH, 'components/FloorDashboard.tsx'),
       path.join(ROOT, 'components/my-transactions/UpsellPanel.tsx'),
+      path.join(ROOT, 'components/reports/submissions/SubmissionsReportBody.tsx'), // BACKLOG-3513 PR-3b
     ];
     let headers = 0;
     for (const f of files) {

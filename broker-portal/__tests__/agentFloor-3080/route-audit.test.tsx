@@ -478,7 +478,7 @@ const BILLING_PAGES: Record<string, PageEntry> = {
  * and every full role, and refuse a personal-org owner. The per-role rule is
  * covered in __tests__/reports-3505 and __tests__/reports-3513.
  */
-const REPORTS_PAGES: Record<string, PageEntry> = {
+const REPORTS_PAGES: Record<string, PageEntry & { admitted?: Outcome }> = {
   'app/dashboard/reports/page.tsx': {
     invoke: async () => (await import('@/app/dashboard/reports/page')).default(),
     refused: { notFound: true },
@@ -487,6 +487,19 @@ const REPORTS_PAGES: Record<string, PageEntry> = {
     invoke: async () =>
       (await import('@/app/dashboard/reports/submissions/page')).default({ searchParams: Promise.resolve({}) }),
     refused: { notFound: true },
+    // BACKLOG-3513 PR-3b: the page returns the shared report body.
+    admitted: { element: 'SubmissionsReportBody' },
+  },
+  // BACKLOG-3513 PR-3b: one shared report. This emulator holds no definition (broker_report_def_get
+  // answers null), so every persona gets notFound; the admitted case is in __tests__/reports-3513.
+  'app/dashboard/reports/d/[id]/page.tsx': {
+    invoke: async () =>
+      (await import('@/app/dashboard/reports/d/[id]/page')).default({
+        params: Promise.resolve({ id: '00000000-0000-4000-8000-000000000001' }), // pii-allow-uuid: invented fixture id
+        searchParams: Promise.resolve({}),
+      }),
+    refused: { notFound: true },
+    admitted: { notFound: true },
   },
 };
 const REPORTS_REFUSED = { 'personal-org owner': [personalMembership()] } as const;
@@ -1015,7 +1028,7 @@ describe('discovery can see what it claims to see', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
     expect(pages).toContain('app/dashboard/users/[id]/page.tsx');
-    expect(pages.length).toBe(20); // BACKLOG-3513 PR-3a: + reports/submissions; BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
+    expect(pages.length).toBe(21); // BACKLOG-3513 PR-3b: + reports/d/[id]; BACKLOG-3513 PR-3a: + reports/submissions; BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
   });
 
   it('finds route handlers, keyed POSIX on any OS (R8)', () => {
@@ -1069,7 +1082,7 @@ describe('reports pages with the shipped registry (BACKLOG-3505, BACKLOG-3513 PR
     const page = REPORTS_PAGES[file];
     const outcome = await run(page.invoke);
     if (verdict === 'refused') expect(outcome).toEqual(page.refused);
-    else expect(outcome).toEqual({ element: 'div' });
+    else expect(outcome).toEqual(page.admitted ?? { element: 'div' });
     expect(mockEmulator.state.writes).toEqual([]);
     expect(from.mock.calls.map((c) => c[0])).not.toContain('transaction_submissions');
     from.mockRestore();
