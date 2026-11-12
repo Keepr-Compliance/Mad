@@ -17,7 +17,7 @@
  * session therefore reads 0 rows of another user.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeClient, type CallLog } from './emulator';
 import {
   ALL_USERS,
@@ -86,6 +86,17 @@ vi.mock('@/lib/supabase/server', () => ({
 
 import { getPlanLines } from '@/lib/actions/planLines';
 import { readPlanLines } from '@/lib/planLines';
+
+// getPlanLines reads with its default `now = new Date()`; pin it to the
+// fixtures' NOW so the paid_through dates in fixtures.ts do not expire. Only
+// Date is faked, so the action's promises and timers run normally.
+beforeEach(() => {
+  vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 beforeEach(() => {
   state.user = { id: STAFF };
