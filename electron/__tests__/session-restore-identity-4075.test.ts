@@ -457,6 +457,82 @@ describe("BACKLOG-4075: SR review controls", () => {
   });
 });
 
+describe("BACKLOG-4075 residual: in-process pre-check when the SDK identity cannot be read", () => {
+  /** In-process: the cache says B, the SDK's session cannot confirm who that is; A's own tokens would switch it to A. */
+  function heldButUnreadable(getSession: () => Promise<unknown>) {
+    mockGetAuthUserId.mockReturnValue(B);
+    mockGetSession.mockImplementation(getSession);
+    mockSetSession.mockImplementation(async () => {
+      sdkHolds(sdkUser(A, A_EMAIL));
+      return { data: { session: {}, user: {} }, error: null };
+    });
+  }
+
+  it("P1 cache = B, SDK session gone, file = A with A's tokens: SDK not switched to A, A not returned, nothing cleared or moved", async () => {
+    const tok = provision(A, A_EMAIL);
+    seedRows(A);
+    mockLoadSession.mockResolvedValue(await sessionFile(A, tok));
+    heldButUnreadable(async () => ({ data: { session: null }, error: null }));
+    const r = await run();
+    expect(mockSetSession).not.toHaveBeenCalled();
+    expect(r.success).toBe(false);
+    expect(r.user?.id).toBeUndefined();
+    expect(mockClearSession).not.toHaveBeenCalled();
+    expect(ownedBy(A)).toEqual([1, 1, 1]);
+    expect(usersIds()).toEqual([A]);
+  });
+
+  it("P2 cache = B, getSession rejects, file = A with A's tokens: same refusal, nothing touched", async () => {
+    const tok = provision(A, A_EMAIL);
+    seedRows(A);
+    mockLoadSession.mockResolvedValue(await sessionFile(A, tok));
+    heldButUnreadable(async () => { throw new Error("getSession failed"); });
+    const r = await run();
+    expect(mockSetSession).not.toHaveBeenCalled();
+    expect(r.success).toBe(false);
+    expect(mockClearSession).not.toHaveBeenCalled();
+    expect(ownedBy(A)).toEqual([1, 1, 1]);
+  });
+
+  it("SRP1 legacy-unified user, SECOND in-process call, SDK session unreadable (expired+offline): same person, restored", async () => {
+    // First call: cold restore of a pre-1507G file unifies the local rows to A.
+    const tok = provision(LEGACY, A_EMAIL, "google-sub-legacy");
+    seedRows(LEGACY);
+    const file = await sessionFile(LEGACY, tok);
+    mockLoadSession.mockResolvedValue(file);
+    coldStartRestoresTo(sdkUser(A, A_EMAIL));
+    const r1 = await run();
+    expect(r1.success).toBe(true);
+    expect(usersIds()).toEqual([A]);
+    // The file's user block keeps the legacy id; the cache now says A, but the
+    // SDK's session cannot be read. The local row for A says who that is.
+    expect((file.user as { id: string }).id).toBe(LEGACY);
+    mockGetAuthUserId.mockReturnValue(A);
+    mockGetSession.mockResolvedValue({ data: { session: null }, error: null });
+    mockSetSession.mockClear();
+    const r2 = await run();
+    expect(r2.success).toBe(true);
+    expect(r2.user?.id).toBe(A);
+    expect(mockClearSession).not.toHaveBeenCalled();
+    expect(ownedBy(A)).toEqual([1, 1, 1]);
+  });
+
+  it("SRP2 cache = B WITH a local B row, SDK unreadable, file = A: still refused, nothing touched", async () => {
+    const tok = provision(A, A_EMAIL);
+    seedRows(A);
+    provision(B, B_EMAIL);
+    mockLoadSession.mockResolvedValue(await sessionFile(A, tok));
+    heldButUnreadable(async () => ({ data: { session: null }, error: null }));
+    const r = await run();
+    expect(mockSetSession).not.toHaveBeenCalled();
+    expect(r.success).toBe(false);
+    expect(r.user?.id).toBeUndefined();
+    expect(mockClearSession).not.toHaveBeenCalled();
+    expect(ownedBy(A)).toEqual([1, 1, 1]);
+    expect(usersIds()).toEqual([A, B]);
+  });
+});
+
 describe("BACKLOG-3555 KEEP-2 (rebuilt on the real driver for BACKLOG-4075)", () => {
   it("KEEP-2: a call parked during a normal open, TASK-1507G legacy local id -> the unification runs once the DB is ready", async () => {
     const tok = provision(LEGACY, A_EMAIL, "google-sub-legacy");

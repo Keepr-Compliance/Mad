@@ -7,6 +7,7 @@ import { DATA_EXPORT_NOT_RECORDED_MESSAGE } from '../../utils/exportAuditCopy';
 import { OPERATION_LABELS } from './types';
 import { LearnAnswersPrivacyRow } from './learn/LearnAnswersPrivacyRow';
 import { getDiagnosticsSharing, setDiagnosticsSharing } from '../../services/diagnosticsSharingService';
+import { openExternalUrl, PRIVACY_POLICY_URL } from '../../services/externalLinkService';
 
 interface FailureLogEntry {
   id: number;
@@ -321,6 +322,18 @@ export function DataPrivacySettings({ userId }: DataPrivacySettingsProps) {
               <p className="text-xs text-gray-600 mt-1">
                 Sends app speed and error details, never your messages, contacts or files.
               </p>
+              <button
+                type="button"
+                onClick={() => {
+                  openExternalUrl(PRIVACY_POLICY_URL).catch((err) =>
+                    logger.error("Failed to open privacy policy:", err),
+                  );
+                }}
+                className="text-xs text-blue-600 hover:text-blue-800 hover:underline mt-1"
+                data-testid="diagnostics-privacy-policy-link"
+              >
+                Privacy policy
+              </button>
               {crashReporting && !crashReporting.enabled && (
                 <p className="text-xs text-gray-600 mt-2" data-testid="diagnostics-needs-crash-reports">
                   Needs Send crash reports.

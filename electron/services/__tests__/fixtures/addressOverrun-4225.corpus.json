@@ -1,0 +1,794 @@
+{
+ "_source": "BACKLOG-4225. Every input the extractor/Learn test suites passed to the real analyzeEmail (recorded at b1f9d6ae4 + this branch's fixtures), the same inputs with state ZZ (the pre-fix fixtures), and the synthetic BACKLOG-4225 cases. oldRealEstate/oldAddresses were produced by running the pre-fix extractor (b1f9d6ae4) on each input. Synthetic addresses only. The last row (two addresses, junk before a ZIP) is SR's half-revert input (pm_comments 9de117e6), old output from the pre-fix extractor at int-portal/release-2.47.",
+ "rows": [
+  {
+   "email": {
+    "subject": "",
+    "bodyPlain": "Escrow closing for 3414 Examplecanary Rd, Testville, WA 00000 buyer offer"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "3414 examplecanary rd, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "",
+    "bodyPlain": "Listing agreement for 4120 Canarytest St, Testville, WA 00000 seller closing escrow"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest st, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer accepted for\n4120 Canarytest Lane\nTestville, WA 00000\nclosing escrow buyer inspection"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane\ntestville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer accepted on 4120 Canarytest Lane Testville WA 00000 closing escrow buyer inspection"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane testville wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer accepted on 4120 Canarytest Lane Testville WA 00000 closing escrow buyer"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane testville wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer accepted on 4120 Canarytest Lane, Testville, WA 00000. Escrow closing, buyer inspection done."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer accepted on 4120 Canarytest Lane, Testville, WA 00000. Escrow closing, buyer."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Canarysubject offer accepted",
+    "bodyPlain": "Offer accepted on 4120 Canarytest Lane, Testville, WA 00000. Escrow closing, buyer inspection next week."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Contract 1234 West Sample Drive",
+    "bodyPlain": "West Sample Yards Is ready for signature"
+   },
+   "oldRealEstate": false,
+   "oldAddresses": [
+    "1234 west sample drive west sample yards is"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Escrow",
+    "bodyPlain": "Listing agreement for 901 Canarytest Court, Testville, WA 00000, escrow closing, seller offer."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "901 canarytest court, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Escrow",
+    "bodyPlain": "Offer accepted on 4120 Canarytest Lane, Testville, WA 00000. Escrow closing, buyer inspection."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Escrow",
+    "bodyPlain": "Purchase agreement for 900 Canarytest Court, Testville, WA 00000, escrow closing, buyer offer."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "900 canarytest court, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Hello",
+    "bodyPlain": "Lunch on Friday?"
+   },
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "email": {
+    "subject": "Hello",
+    "bodyPlain": "Lunch on Thursday?"
+   },
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "email": {
+    "subject": "Offer 1234 Sample River Lane, Testville, WA 00000",
+    "bodyPlain": "Escrow closing next week, buyer offer"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "---------- Forwarded message ---------\nFrom: Zillow <my-saved-home@mail.zillow.com>\nPrice cut on 4175 Canarytest Way, Testville, WA 00000. Offer accepted, escrow closing, buyer inspection."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4175 canarytest way, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Offer accepted on 4175 Canarytest Way, Testville, WA 00000. Escrow closing, buyer inspection."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4175 canarytest way, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Offer accepted on 4176 Canarytest Way, Testville, WA 00000. Escrow closing, buyer inspection."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4176 canarytest way, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Offer accepted on 4180 Canarytest Way, Testville, ZZ 00000. Escrow closing, buyer inspection."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4180 canarytest way, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Offer accepted on 4191 Canarytest Way, Testville, ZZ 00000. Escrow closing, buyer inspection."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4191 canarytest way, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Offer accepted on 4192 Canarytest Way, Testville, ZZ 00000. Escrow closing, buyer inspection."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4192 canarytest way, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Offer accepted on 4193 Canarytest Way, Testville, ZZ 00000. Escrow closing, buyer inspection."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4193 canarytest way, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Offer accepted on 4194 Canarytest Way, Testville, ZZ 00000. Escrow closing, buyer inspection."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4194 canarytest way, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Price cut on 4175 Canarytest Way Testville WA 00000 offer escrow buyer closing"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4175 canarytest way testville wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Price cut on 4175 Canarytest Way, Testville, WA 00000. New listing for sale, offer deadline Friday, escrow ready, buyer showing."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4175 canarytest way, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Price cut on 4176 Canarytest Way, Testville, WA 00000. New listing for sale, offer deadline Friday, escrow ready, buyer showing."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4176 canarytest way, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Price cut on 4177 Canarytest Way, Testville, WA 00000. New listing for sale, offer deadline Friday, escrow ready, buyer showing."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4177 canarytest way, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer",
+    "bodyPlain": "Offer accepted on 4120 Canarytest Lane, Testville, ZZ 00000. Escrow closing, buyer inspection."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "2 of the 3 offers came in. We can meet at the court tomorrow, escrow closing buyer"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": []
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Could we get a pre-approval letter for 1234 Sample\nRiver Lane\nAnn and Bob are excited to proceed with an offer at $500,000 - see you on the way"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample\nriver lane\nann and bob are excited to"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Could we get a pre-approval letter for 1234 Sample\nRiver Lane\nAnn and Bob are excited to proceed with an offer at $500,000 - thank you!"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample\nriver lane\nann and bob are excited to"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Inspection booked at 1234 Sample River Lane\nBuyers ready to move in\nThanks"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane\nbuyers ready to"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane ann and bob are excited to move in. Thanks"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane ann and bob are excited to"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane Bob lives in Ohio escrow"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane bob lives in"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane Testville WA 00000 escrow"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane testville wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane, Testville, WA 00000 escrow closing"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane, Testville, WA 00000-1234. escrow"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane, testville, wa 00000-1234"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane, Testville, WA. escrow"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane, testville, wa"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane\nTestville, WA 00000\nescrow closing"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane\ntestville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Pre-approval for 1234 Sample\nRiver Lane.\nAnn and Bob are excited"
+   },
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Signed 1234 West Sample Drive West Sample Yards Is\nescrow closing"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 west sample drive west sample yards is"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Signed 1234 West Sample Drive West Sample Yards Is\nescrow"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 west sample drive west sample yards is"
+   ]
+  },
+  {
+   "email": {
+    "subject": "",
+    "bodyPlain": "Escrow closing for 3414 Examplecanary Rd, Testville, ZZ 00000 buyer offer"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "3414 examplecanary rd, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "",
+    "bodyPlain": "Listing agreement for 4120 Canarytest St, Testville, ZZ 00000 seller closing escrow"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest st, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer accepted for\n4120 Canarytest Lane\nTestville, ZZ 00000\nclosing escrow buyer inspection"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane\ntestville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer accepted on 4120 Canarytest Lane Testville ZZ 00000 closing escrow buyer inspection"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane testville zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer accepted on 4120 Canarytest Lane Testville ZZ 00000 closing escrow buyer"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane testville zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer accepted on 4120 Canarytest Lane, Testville, ZZ 00000. Escrow closing, buyer inspection done."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "",
+    "bodyPlain": "Offer accepted on 4120 Canarytest Lane, Testville, ZZ 00000. Escrow closing, buyer."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Canarysubject offer accepted",
+    "bodyPlain": "Offer accepted on 4120 Canarytest Lane, Testville, ZZ 00000. Escrow closing, buyer inspection next week."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Escrow",
+    "bodyPlain": "Listing agreement for 901 Canarytest Court, Testville, ZZ 00000, escrow closing, seller offer."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "901 canarytest court, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Escrow",
+    "bodyPlain": "Offer accepted on 4120 Canarytest Lane, Testville, ZZ 00000. Escrow closing, buyer inspection."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4120 canarytest lane, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Escrow",
+    "bodyPlain": "Purchase agreement for 900 Canarytest Court, Testville, ZZ 00000, escrow closing, buyer offer."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "900 canarytest court, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer 1234 Sample River Lane, Testville, ZZ 00000",
+    "bodyPlain": "Escrow closing next week, buyer offer"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "---------- Forwarded message ---------\nFrom: Zillow <my-saved-home@mail.zillow.com>\nPrice cut on 4175 Canarytest Way, Testville, ZZ 00000. Offer accepted, escrow closing, buyer inspection."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4175 canarytest way, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Offer accepted on 4175 Canarytest Way, Testville, ZZ 00000. Escrow closing, buyer inspection."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4175 canarytest way, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Offer accepted on 4176 Canarytest Way, Testville, ZZ 00000. Escrow closing, buyer inspection."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4176 canarytest way, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Price cut on 4175 Canarytest Way Testville ZZ 00000 offer escrow buyer closing"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4175 canarytest way testville zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Price cut on 4175 Canarytest Way, Testville, ZZ 00000. New listing for sale, offer deadline Friday, escrow ready, buyer showing."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4175 canarytest way, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Price cut on 4176 Canarytest Way, Testville, ZZ 00000. New listing for sale, offer deadline Friday, escrow ready, buyer showing."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4176 canarytest way, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Offer accepted",
+    "bodyPlain": "Price cut on 4177 Canarytest Way, Testville, ZZ 00000. New listing for sale, offer deadline Friday, escrow ready, buyer showing."
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "4177 canarytest way, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane Testville ZZ 00000 escrow"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane testville zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane, Testville, ZZ 00000 escrow closing"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane, testville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane, Testville, ZZ 00000-1234. escrow"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane, testville, zz 00000-1234"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane\nTestville, ZZ 00000\nescrow closing"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane\ntestville, zz 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Could we get a pre-approval letter for 1234 Sample\nRiver Lane\nAnn and Bob are excited to proceed with an offer at $500,000 - thank you!"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample\nriver lane\nann and bob are excited to"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Could we get a pre-approval letter for 1234 Sample River Lane Ann and Bob are excited to proceed with an offer at $500,000 - thank you!"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane ann and bob are excited to"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Pre-approval for 1234 Sample\nRiver Lane.\nAnn and Bob are excited"
+   },
+   "oldRealEstate": false,
+   "oldAddresses": []
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Signed 1234 West Sample Drive West Sample Yards Is\nescrow closing"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 west sample drive west sample yards is"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Inspection booked at 1234 Sample River Lane\nBuyers ready to move in\nThanks"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane\nbuyers ready to"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane ann and bob are excited to move in. Thanks"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane ann and bob are excited to"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane Bob lives in Ohio escrow"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane bob lives in"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane, Testville, WA 00000 escrow closing"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane, testville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane Testville WA 00000 escrow"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane testville wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane, Testville, WA 00000-1234. escrow"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane, testville, wa 00000-1234"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane, Testville, WA. escrow"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane, testville, wa"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Offer for 1234 Sample River Lane\nTestville, WA 00000\nescrow closing"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample river lane\ntestville, wa 00000"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "2 of the 3 offers came in. We can meet at the court tomorrow, escrow closing buyer"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": []
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Could we get a pre-approval letter for 1234 Sample\nRiver Lane\nAnn and Bob are excited to proceed with an offer at $500,000 - see you on the way"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample\nriver lane\nann and bob are excited to"
+   ]
+  },
+  {
+   "email": {
+    "subject": "Pre-approval",
+    "bodyPlain": "Purchase agreement 1234 Sample Lane\nann and bob are excited to 98101. Also 55 Other Road, Testville, WA 98101"
+   },
+   "oldRealEstate": true,
+   "oldAddresses": [
+    "1234 sample lane\nann and bob are excited to 98101",
+    "55 other road, testville, wa 98101"
+   ]
+  }
+ ]
+}

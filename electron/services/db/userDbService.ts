@@ -12,6 +12,7 @@ import { validateFields, type ColumnOf } from "../../utils/sqlFieldWhitelist";
 import { UserSchema, validateResponse } from "../../schemas";
 import logService from "../logService";
 import { assignmentList } from "./core/columnSql";
+import { rekeyUnsyncedAuditLogsSync } from "./auditLogDbService";
 
 /**
  * Create a new user
@@ -354,10 +355,13 @@ export function listUserIdColumns(
 }
 
 /**
- * BACKLOG-4075: user-owned tables a unification must NOT rewrite. `audit_logs`
- * is append-only: its `prevent_audit_update` trigger refuses every UPDATE
- * (BACKLOG-3023 restores it if weakened), so rewriting its `user_id` would
- * abort the whole unification. Its rows keep the id that acted.
+ * BACKLOG-4075: user-owned tables a unification must NOT rewrite with a plain
+ * UPDATE. `audit_logs` is append-only: its `prevent_audit_update` trigger
+ * refuses every UPDATE (BACKLOG-3023 restores it if weakened), so a plain
+ * rewrite of its `user_id` would abort the whole unification. Its rows that
+ * were already uploaded keep the id that acted, matching their cloud copy.
+ * Its not-yet-uploaded rows move to the new id through
+ * `rekeyUnsyncedAuditLogsSync`, which restores the trigger.
  */
 export const APPEND_ONLY_USER_TABLES: ReadonlySet<string> = new Set(["audit_logs"]);
 
@@ -390,6 +394,14 @@ export async function migrateUserIdForUnification(oldUserId: string, newUserId: 
 
       // BACKLOG-4075: derived from the schema (listUserIdColumns), not hand-listed.
       for (const { table, column } of listUserIdColumns(db)) {
+        if (table === "audit_logs") {
+          // BACKLOG-4075: only this user's unsynced rows, through the trigger-restoring writer.
+          const moved = rekeyUnsyncedAuditLogsSync(db, oldUserId, newUserId);
+          if (moved > 0) {
+            void logService.info(`[DB Migration] Updated ${moved} unsynced rows in ${table}`, "userDbService");
+          }
+          continue;
+        }
         if (APPEND_ONLY_USER_TABLES.has(table)) continue;
         const result = db
           .prepare(`UPDATE "${table}" SET "${column}" = ? WHERE "${column}" = ?`)
