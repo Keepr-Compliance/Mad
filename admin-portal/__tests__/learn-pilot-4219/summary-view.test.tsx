@@ -109,6 +109,31 @@ describe('search', () => {
   });
 });
 
+describe('table semantics and filter bar', () => {
+  it('the table has an accessible name (sr-only caption)', () => {
+    render(<LearnPilotView model={fromRows(baseRows())} />);
+    expect(screen.getByRole('table', { name: 'Pilot users, one row each' })).toBeTruthy();
+  });
+
+  it('each name cell is a row header', () => {
+    render(<LearnPilotView model={fromRows(baseRows())} />);
+    const headers = screen.getAllByRole('rowheader');
+    expect(headers).toHaveLength(3);
+    for (const tr of summaryRows()) {
+      expect(within(tr).getByRole('rowheader').textContent).toBe(cell(tr, 'name'));
+    }
+  });
+
+  it('a whitespace-only search is not a filter: no Clear search button, every row shown', () => {
+    render(<LearnPilotView model={fromRows(baseRows())} />);
+    search('   ');
+    expect(screen.queryAllByRole('button', { name: 'Clear search' })).toHaveLength(0);
+    expect(summaryRows()).toHaveLength(3);
+    search('p4219 z');
+    expect(screen.getAllByRole('button', { name: 'Clear search' })).toHaveLength(1);
+  });
+});
+
 describe('the details dialog', () => {
   it('opens the row it was clicked on after sorting and filtering, by key not position (A3)', () => {
     render(<LearnPilotView model={fromRows(baseRows())} />);
