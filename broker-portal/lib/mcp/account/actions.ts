@@ -23,7 +23,7 @@ import { approveRequest, denyRequest, disconnectAllMine, disconnectConnection } 
 const AI_APPS_PATH = '/dashboard/account/ai-apps';
 
 export type ConsentActionResult = { kind: 'redirect'; location: string } | { kind: 'refused'; message: string };
-export type DisconnectActionResult = { ok: true } | { ok: false; message: string };
+type DisconnectActionResult = { ok: true } | { ok: false; message: string };
 
 function log(route: 'consent' | 'ai-apps', outcome: string, status: number, started: number): void {
   logOutcome({ route, outcome, status, ms: Date.now() - started });

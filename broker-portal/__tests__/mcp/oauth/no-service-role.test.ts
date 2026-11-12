@@ -189,6 +189,11 @@ describe('BACKLOG-4238 Rule V: vendor path', () => {
     expect(hits.some((h) => h.startsWith(`${file}:`) && h.includes(needle))).toBe(true);
   });
 
+  it('positive control: an account module imported from lib/mcp/sentryScrub.ts (no route imports it) is walked', () => {
+    const hits = findForbidden(ruleVEntries(), plantedIn('lib/mcp/sentryScrub.ts', "import '@/lib/mcp/account/rpc';"), RULE_V);
+    expect(hits).toContain('lib/mcp/account/rpc.ts: imports lib/supabase/server');
+  });
+
   it('positive control: an account module imported from lib/mcp/server.ts is walked', () => {
     const hits = findForbidden(ruleVEntries(), plantedIn('lib/mcp/server.ts', "import '@/lib/mcp/account/rpc';"), RULE_V);
     expect(hits).toContain('lib/mcp/account/rpc.ts: imports lib/supabase/server');

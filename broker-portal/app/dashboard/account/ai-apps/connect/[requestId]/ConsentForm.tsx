@@ -16,7 +16,7 @@ import { approveAiApp, denyAiApp, type ConsentActionResult } from '@/lib/mcp/acc
 import { CONSENT, M_C } from '@/lib/mcp/account/messages';
 import { leaveTo } from '@/lib/mcp/account/navigate';
 
-export interface ConsentFormProps {
+interface ConsentFormProps {
   requestId: string;
   nonce: string;
 }

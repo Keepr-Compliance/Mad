@@ -11,7 +11,7 @@ import { createClient } from '@/lib/supabase/server';
 import { isProvider, type Provider } from './messages';
 import { isConnectionId, isNonce, isRedirectUriShape } from '@/lib/mcp/oauth/validate';
 
-export interface Transport {
+interface Transport {
   kind: 'transport';
   name: unknown;
   code: unknown;
@@ -64,18 +64,18 @@ function isTimestamp(v: unknown): v is string {
   return typeof v === 'string' && Number.isFinite(Date.parse(v));
 }
 
-export type Refused<C extends string> = { kind: 'refused'; error: C };
+type Refused<C extends string> = { kind: 'refused'; error: C };
 
 // ---------------------------------------------------------------------------
 // mcp_authorize_view(p_request_id text, p_browser_binding_sha256 bytea)
 // ---------------------------------------------------------------------------
 
 const VIEW_ERRORS = ['not_signed_in', 'impersonating', 'disabled', 'request_invalid'] as const;
-export type ViewError = (typeof VIEW_ERRORS)[number];
+type ViewError = (typeof VIEW_ERRORS)[number];
 
 const VIEW_KEYS = ['ok', 'request_id', 'client_name', 'provider', 'redirect_host', 'scope', 'notice_version', 'nonce'];
 
-export interface ConsentView {
+interface ConsentView {
   kind: 'ok';
   clientName: string;
   provider: Provider;
@@ -84,7 +84,7 @@ export interface ConsentView {
   nonce: string;
 }
 
-export type ViewResult = ConsentView | Refused<ViewError> | Transport;
+type ViewResult = ConsentView | Refused<ViewError> | Transport;
 
 function checkView(v: unknown, requestId: string): ViewResult {
   if (!isObject(v)) return transport(null);
@@ -138,12 +138,12 @@ const APPROVE_ERRORS = [
   'invalid_request',
   'request_invalid',
 ] as const;
-export type ApproveError = (typeof APPROVE_ERRORS)[number];
+type ApproveError = (typeof APPROVE_ERRORS)[number];
 
 const DENY_ERRORS = ['not_signed_in', 'impersonating', 'request_invalid'] as const;
-export type DenyError = (typeof DENY_ERRORS)[number];
+type DenyError = (typeof DENY_ERRORS)[number];
 
-export interface Decided {
+interface Decided {
   kind: 'ok';
   redirectUri: string;
   state: string | null;
@@ -201,7 +201,7 @@ export async function denyRequest(
 
 const CONNECTION_KEYS = ['id', 'client_name', 'provider', 'redirect_host', 'consented_at', 'last_used_at'];
 
-export interface Connection {
+interface Connection {
   id: string;
   clientName: string;
   provider: Provider;
@@ -210,7 +210,7 @@ export interface Connection {
   lastUsedAt: string | null;
 }
 
-export type ListResult = { kind: 'ok'; connections: Connection[] } | Refused<'not_signed_in'> | Transport;
+type ListResult = { kind: 'ok'; connections: Connection[] } | Refused<'not_signed_in'> | Transport;
 
 function checkConnection(v: unknown): Connection | null {
   if (!isObject(v) || !hasExactKeys(v, CONNECTION_KEYS)) return null;
@@ -262,9 +262,9 @@ export async function listMyConnections(): Promise<ListResult> {
 // ---------------------------------------------------------------------------
 
 const DISCONNECT_ERRORS = ['not_signed_in', 'impersonating'] as const;
-export type DisconnectError = (typeof DISCONNECT_ERRORS)[number];
+type DisconnectError = (typeof DISCONNECT_ERRORS)[number];
 
-export type DisconnectResult = { kind: 'ok' } | Refused<DisconnectError> | Transport;
+type DisconnectResult = { kind: 'ok' } | Refused<DisconnectError> | Transport;
 
 export async function disconnectConnection(connectionId: string): Promise<DisconnectResult> {
   const res = await call('mcp_disconnect', { p_connection_id: connectionId });

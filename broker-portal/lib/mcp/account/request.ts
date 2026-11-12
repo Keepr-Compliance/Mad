@@ -9,7 +9,7 @@ import { headers } from 'next/headers';
 import { IMPERSONATION_COOKIE_NAME } from '@/lib/constants';
 import { bindingFromCookieHeader } from '@/lib/mcp/oauth/binding';
 
-export interface AccountRequest {
+interface AccountRequest {
   /** A support-session cookie is present, whatever its value. */
   impersonating: boolean;
   /** The binding cookie value when exactly one well-formed one is present. */
