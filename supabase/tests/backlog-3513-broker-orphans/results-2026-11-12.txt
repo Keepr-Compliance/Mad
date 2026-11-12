@@ -1,0 +1,24 @@
+BACKLOG-3513 orphans harness results (keepr-test, every call one rolled-back transaction, pg_stat_statements.track 'none' first line; pg_stat_statements_reset() run after the loops).
+Migration 20261112200000 md5 (file) e7d955035dfd58b08712a658dad2fd8b, unchanged from origin/int-portal/release-2.48.
+
+2026-11-12 baseline: run.sh -> total 29, pass 29, fail 0
+2026-11-12 regression: run.sh --regression (PR-2 harness with 20261112210000 applied on top) -> total 103, pass 103, fail 0
+
+Mutations (mutate.py; def_get mutations let the pin accept the mutated body, so C_def_get_body reds with them):
+OM1_ORPHANS_NO_ROLE_CHECK: MUTATION APPLIED numstat 0/1
+  total 29 fail 3: O1_agent_refused, O1_nonmember_refused, O1_other_org_broker_refused
+OM2_ORPHANS_ANY_ORG: MUTATION APPLIED numstat 1/2
+  total 29 fail 5: O1_admin_sees, O1_broker_sees_all_three, O1_it_admin_sees, O1_own_org_only, O3_after_take_over
+OM3_ORPHANS_NO_OWNER_TERM: MUTATION APPLIED numstat 1/3
+  total 29 fail 4: O1_admin_sees, O1_broker_sees_all_three, O1_it_admin_sees, O3_after_take_over
+OM4_FLAG_IGNORES_OWNER: first run refused by the pin (the mutated def_get body is not an accepted md5); re-run below with the pin accepting it
+OM5_DEF_GET_OPEN_FOR_ORPHANS: first run refused by the pin (the mutated def_get body is not an accepted md5); re-run below with the pin accepting it
+OM6_NO_ANON_REVOKE: MUTATION APPLIED numstat 1/1
+  total 29 fail 2: C_anon_refused, C_grants
+OM7_FLAG_ANY_ROLE: first run refused by the pin (the mutated def_get body is not an accepted md5); re-run below with the pin accepting it
+OM4_FLAG_IGNORES_OWNER: MUTATION APPLIED numstat 2/4
+  total 29 fail 3: C_def_get_body, O3_admin_editor_owner_active_false, O3_owner_active_false
+OM5_DEF_GET_OPEN_FOR_ORPHANS: MUTATION APPLIED numstat 2/2
+  total 29 fail 3: C_def_get_body, O2_def_get_refused_without_level, O3_no_level_no_flag
+OM7_FLAG_ANY_ROLE: MUTATION APPLIED numstat 2/3
+  total 29 fail 2: C_def_get_body, O3_agent_editor_false
