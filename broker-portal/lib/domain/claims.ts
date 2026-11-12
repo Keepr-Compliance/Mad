@@ -31,6 +31,8 @@ export interface DomainClaimView {
   lastCheckResult: DomainCheckResult | null;
   /** Who added the domain: display name, else email, else null. Resolved server-side. */
   addedBy: string | null;
+  /** BACKLOG-3962 PR4a: people on this domain cannot start a personal account (verified claims only). */
+  blockSoloSignups: boolean;
 }
 
 export interface DomainClaimActionResult {
@@ -100,3 +102,9 @@ export const CLAIM_STATUSES: readonly DomainClaimStatus[] = [
 export function isNotDeployedError(error: { code?: string } | null | undefined): boolean {
   return !!error && (error.code === 'PGRST202' || error.code === 'PGRST205' || error.code === '42P01' || error.code === '42883');
 }
+
+// BACKLOG-3962 PR4a: the personal-accounts switch on a verified domain.
+export const BLOCK_SOLO_ON_MESSAGE =
+  'New personal accounts are now turned off for this domain. People with this email must be invited to your brokerage.';
+export const BLOCK_SOLO_OFF_MESSAGE = 'People with this email can start their own Keepr account again.';
+export const BLOCK_SOLO_NOT_VERIFIED = 'Verify the domain first, then turn off personal accounts.';

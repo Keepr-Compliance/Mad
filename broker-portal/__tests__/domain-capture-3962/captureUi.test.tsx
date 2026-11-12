@@ -83,7 +83,7 @@ const ENDED = [
 const claim = (over: Partial<DomainClaimView>): DomainClaimView => ({
   id: 'c1', domain: 'a-brokerage.example', unicodeDomain: 'a-brokerage.example', isInternationalized: false,
   status: 'verified', recordName: '_keepr.a-brokerage.example', recordValue: 'v', verifiedAt: null,
-  lastCheckedAt: null, lastCheckResult: null, addedBy: null, ...over,
+  lastCheckedAt: null, lastCheckResult: null, addedBy: null, blockSoloSignups: false, ...over,
 });
 
 function rpcFor(candidates: unknown[], history: unknown[]) {
