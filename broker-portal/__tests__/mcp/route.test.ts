@@ -300,14 +300,14 @@ describe('A8: MCP_ENABLED kill switch', () => {
 const METADATA_URL = `${BASE}/api/mcp/resource-metadata`;
 
 /** Every route handler this endpoint exports, with the status it gives when MCP_ENABLED=true. */
-const SURFACES: Array<[string, () => Promise<Response> | Response, number]> = [
-  ['POST /api/mcp', () => post({ authorization: `Bearer ${CONNECTED_APP_TOKEN}` }), 200],
-  ['GET /api/mcp', () => route.GET(new Request(MCP_URL)), 405],
-  ['PUT /api/mcp', () => route.PUT(new Request(MCP_URL, { method: 'PUT' })), 405],
-  ['PATCH /api/mcp', () => route.PATCH(new Request(MCP_URL, { method: 'PATCH' })), 405],
-  ['DELETE /api/mcp', () => route.DELETE(new Request(MCP_URL, { method: 'DELETE' })), 405],
-  ['OPTIONS /api/mcp', () => route.OPTIONS(new Request(MCP_URL, { method: 'OPTIONS' })), 405],
-  ['GET /api/mcp/resource-metadata', () => metadataGET(new Request(METADATA_URL)), 200],
+const SURFACES: Array<[string, number, () => Promise<Response> | Response]> = [
+  ['POST /api/mcp', 200, () => post({ authorization: `Bearer ${CONNECTED_APP_TOKEN}` })],
+  ['GET /api/mcp', 405, () => route.GET(new Request(MCP_URL))],
+  ['PUT /api/mcp', 405, () => route.PUT(new Request(MCP_URL, { method: 'PUT' }))],
+  ['PATCH /api/mcp', 405, () => route.PATCH(new Request(MCP_URL, { method: 'PATCH' }))],
+  ['DELETE /api/mcp', 405, () => route.DELETE(new Request(MCP_URL, { method: 'DELETE' }))],
+  ['OPTIONS /api/mcp', 405, () => route.OPTIONS(new Request(MCP_URL, { method: 'OPTIONS' }))],
+  ['GET /api/mcp/resource-metadata', 200, () => metadataGET(new Request(METADATA_URL))],
 ];
 
 describe('A8: each surface with MCP_ENABLED unset', () => {
@@ -319,13 +319,13 @@ describe('A8: each surface with MCP_ENABLED unset', () => {
     expect(SURFACES.map(([name]) => name).sort()).toEqual(exported.sort());
   });
 
-  it.each(SURFACES)('%s is 404 and checks no token', async (_name, call) => {
+  it.each(SURFACES)('%s is 404 and checks no token', async (_name, _status, call) => {
     delete process.env.MCP_ENABLED;
     expect((await call()).status).toBe(404);
     expect(mockGetClaims).not.toHaveBeenCalled();
   });
 
-  it.each(SURFACES)('positive: %s with MCP_ENABLED=true is %p', async (_name, call, status) => {
+  it.each(SURFACES)('positive: %s with MCP_ENABLED=true is %p', async (_name, status, call) => {
     expect((await call()).status).toBe(status);
   });
 });
