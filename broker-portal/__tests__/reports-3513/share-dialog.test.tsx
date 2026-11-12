@@ -43,7 +43,7 @@ import {
   SHARE_DESCRIPTION,
   generalAccessOptions,
 } from '@/components/reports/BrokerReportShareButton';
-import { reportSharingApi, type ReportLevel, type ReportSharingApi, type ShareState } from '@/lib/reports/sharing/sharing-api';
+import { parseCandidates, parseShareState, reportSharingApi, type ReportLevel, type ReportSharingApi, type ShareState } from '@/lib/reports/sharing/sharing-api';
 
 function shareList(level: ReportLevel, over: Record<string, unknown> = {}) {
   return {
@@ -257,6 +257,18 @@ describe('no emails anywhere', () => {
     const text = `${dialog.textContent ?? ''} ${screen.getAllByRole('option').map((o) => o.textContent).join(' ')}`;
     expect(text).not.toMatch(/@/);
     expect(text).not.toMatch(/e-?mail/i);
+  });
+
+  // Not a producer shape: the migration never sends an email. This pins that the mapper passes only the
+  // kit's keys, so an address added to a reply later could not reach the dialog.
+  it('the parsers keep only the kit keys: an email key in a reply never reaches a row', () => {
+    const withEmail = (r: Record<string, unknown>) => ({ ...r, email: 'bo@example.test' });
+    const picked = parseCandidates({ people: CANDIDATES.people.map(withEmail), roles: CANDIDATES.roles });
+    const listed = parseShareState({ ...shareList('owner'), entries: shareList('owner').entries.map(withEmail) }).entries;
+    for (const row of [...picked, ...listed]) {
+      expect(Object.keys(row).every((k) => ['id', 'kind', 'name', 'detail', 'level'].includes(k))).toBe(true);
+      expect(JSON.stringify(row)).not.toMatch(/@/);
+    }
   });
 
   it('person rows read the role label, not the raw role', async () => {
