@@ -143,6 +143,7 @@ describe('H11: request hygiene, no database call', () => {
   it.each([
     ['grant_type sent twice', `${form(CODE_GRANT)}&grant_type=authorization_code`, 'invalid_request'],
     ['code sent twice', `${form(CODE_GRANT)}&code=${CODE}`, 'invalid_request'],
+    ['code sent twice, one copy empty', `${form({ ...CODE_GRANT, code: '' })}&code=${CODE}`, 'invalid_request'],
     ['redirect_uri sent twice', `${form(CODE_GRANT)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`, 'invalid_request'],
     ['client_secret sent twice', `${form(CODE_GRANT)}&client_secret=a&client_secret=b`, 'invalid_request'],
     ['resource sent twice', `${form({ ...CODE_GRANT, resource: RESOURCE })}&resource=${encodeURIComponent(RESOURCE)}`, 'invalid_target'],
@@ -330,6 +331,25 @@ describe('H15b: result mapping', () => {
   it('a thrown database call → 503 temporarily_unavailable', async () => {
     mockRpc.mockRejectedValue(new TypeError(PLANTED_PLAIN));
     await expectError(await post(form(CODE_GRANT)), 503, 'temporarily_unavailable');
+  });
+});
+
+describe('a request on a host other than MCP_PUBLIC_ORIGIN', () => {
+  const OTHER_HOST = 'https://other-host.test';
+
+  it.each([
+    ['authorization_code', CODE_GRANT, 'mcp_exchange_code'],
+    ['refresh_token', REFRESH_GRANT, 'mcp_refresh'],
+  ])('%s: the configured resource is accepted and sent', async (_l, grant, fn) => {
+    const res = await post(form({ ...grant, resource: RESOURCE }), { url: `${OTHER_HOST}/oauth/token` });
+    expect(wireArgs(fn).p_resource).toBe(RESOURCE);
+    expect(res.status).toBe(200);
+  });
+
+  it('a resource on the request host → 400 invalid_target, no database call', async () => {
+    const res = await post(form({ ...CODE_GRANT, resource: `${OTHER_HOST}/api/mcp` }), { url: `${OTHER_HOST}/oauth/token` });
+    await expectError(res, 400, 'invalid_target');
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 });
 

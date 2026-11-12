@@ -73,9 +73,17 @@ function query(params: Record<string, string | undefined>): string {
   return `?${q.toString()}`;
 }
 
-function get(search: string, headers: Record<string, string> = {}, method: 'GET' | 'HEAD' | 'POST' = 'GET') {
-  return authorize[method](new Request(`${ORIGIN}/oauth/authorize${search}`, { method, headers }));
+function get(
+  search: string,
+  headers: Record<string, string> = {},
+  method: 'GET' | 'HEAD' | 'POST' = 'GET',
+  origin: string = ORIGIN
+) {
+  return authorize[method](new Request(`${origin}/oauth/authorize${search}`, { method, headers }));
 }
+
+/** A host other than MCP_PUBLIC_ORIGIN, as a request may arrive on a deployment or preview alias. */
+const OTHER_HOST = 'https://other-host.test';
 
 /** The arguments as PostgREST receives them (after JSON encoding). */
 function wireArgs(): Record<string, unknown> {
@@ -212,6 +220,7 @@ describe('H7: request and database failures show a page, not a redirect', () => 
     ['client_id sent twice', `${query(GOOD)}&client_id=${CLIENT_ID}`],
     ['redirect_uri sent twice', `${query(GOOD)}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`],
     ['state sent twice', `${query(GOOD)}&state=x`],
+    ['state sent twice, one copy empty', `${query({ ...GOOD, state: '' })}&state=x`],
     ['client_id missing', query({ ...GOOD, client_id: undefined })],
     ['client_id malformed', query({ ...GOOD, client_id: `kpr_c_${PLANTED_PLAIN}` })],
     ['redirect_uri missing', query({ ...GOOD, redirect_uri: undefined })],
@@ -330,6 +339,32 @@ describe('H28: resource', () => {
     'http://portal.test/api/mcp',
   ])('%p → 400 page, no database call', async (r) => {
     await expectPage(await get(query({ ...GOOD, resource: r })), 400);
+    expect(mockRpc).not.toHaveBeenCalled();
+  });
+});
+
+describe('a request on a host other than MCP_PUBLIC_ORIGIN', () => {
+  it('the consent Location uses the configured origin', async () => {
+    const res = await get(query(GOOD), {}, 'GET', OTHER_HOST);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe(`${ORIGIN}/dashboard/account/ai-apps/connect/${REQUEST_ID}`);
+  });
+
+  it('iss on an error redirect is the configured origin', async () => {
+    mockRpc.mockResolvedValue({ data: authorizeRedirect('invalid_scope', REDIRECT_URI, PLANTED_PLAIN), error: null });
+    const res = await get(query(GOOD), {}, 'GET', OTHER_HOST);
+    expect(res.status).toBe(302);
+    expect(new URL(res.headers.get('location')!).searchParams.get('iss')).toBe(ORIGIN);
+  });
+
+  it('the configured resource is accepted', async () => {
+    const res = await get(query(GOOD), {}, 'GET', OTHER_HOST);
+    expect(res.status).toBe(302);
+    expect(wireArgs().p_resource).toBe(RESOURCE);
+  });
+
+  it('a resource on the request host → 400 page, no database call', async () => {
+    await expectPage(await get(query({ ...GOOD, resource: `${OTHER_HOST}/api/mcp` }), {}, 'GET', OTHER_HOST), 400);
     expect(mockRpc).not.toHaveBeenCalled();
   });
 });
