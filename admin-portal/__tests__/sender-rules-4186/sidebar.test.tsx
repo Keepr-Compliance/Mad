@@ -44,7 +44,11 @@ vi.mock('@/lib/supabase/client', () => ({
   createClient: () => ({
     rpc: async (fn: string, args?: unknown) => {
       state.calls.push({ fn, args });
-      if (fn === 'report_my_access') return { data: state.access, error: state.error };
+      // Keyed on p_key (BACKLOG-4219): the sidebar also asks for 'learn-pilot', which has no grant here.
+      if (fn === 'report_my_access') {
+        if ((args as { p_key?: string } | undefined)?.p_key !== 'sender-rules') return { data: null, error: null };
+        return { data: state.access, error: state.error };
+      }
       if (fn === 'report_list_my_reports') return { data: state.list, error: null };
       return { data: [], error: null };
     },
@@ -66,7 +70,9 @@ afterEach(cleanup);
 
 const aside = () => document.querySelector('[data-testid="desktop-sidebar"]') as HTMLElement;
 const drawer = () => document.getElementById('mobile-nav') as HTMLElement;
-const accessCalls = () => state.calls.filter((c) => c.fn === 'report_my_access');
+// The sender-rules reads only: the sidebar asks once per AI key (BACKLOG-4219).
+const accessCalls = () =>
+  state.calls.filter((c) => c.fn === 'report_my_access' && (c.args as { p_key?: string } | undefined)?.p_key === 'sender-rules');
 const aiButton = (scope: HTMLElement) => within(scope).queryAllByRole('button', { name: 'AI' });
 const links = (scope: HTMLElement) => within(scope).queryAllByRole('link').filter((a) => a.getAttribute('href') === HREF);
 

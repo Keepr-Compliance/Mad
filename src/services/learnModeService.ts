@@ -31,6 +31,7 @@ import type {
   LearnSampleNextResult,
   LearnScoreResult,
   LearnSetEnabledResult,
+  LearnSetPilotReportResult,
   LearnStateResult,
 } from "../../electron/types/ipc/window-api-learn";
 
@@ -49,6 +50,10 @@ export const learnModeService = {
 
   setEnabled: (enabled: boolean): Promise<LearnSetEnabledResult> =>
     call(() => window.api.learn.setEnabled({ enabled })),
+
+  /** BACKLOG-4219: "Help improve Keepr". */
+  setPilotReport: (enabled: boolean): Promise<LearnSetPilotReportResult> =>
+    call(() => window.api.learn.setPilotReport({ enabled })),
 
   run: (windowMonths: number): Promise<LearnRunResultResponse> =>
     call(() => window.api.learn.run({ windowMonths })),
