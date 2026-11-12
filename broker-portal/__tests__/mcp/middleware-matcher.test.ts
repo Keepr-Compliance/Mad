@@ -61,6 +61,8 @@ describe('BACKLOG-4237 middleware matcher', () => {
     '/.well-known/openid-configuration',
     '/.well-known/apple-app-site-association',
     '/dashboard',
+    '/dashboard/account/ai-apps',
+    '/dashboard/account/ai-apps/connect/AAAAAAAAAAAAAAAAAAAAAA',
   ])('BACKLOG-4238: still runs middleware for %s', (url) => {
     expect(runs(url)).toBe(true);
   });

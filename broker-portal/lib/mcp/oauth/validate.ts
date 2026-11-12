@@ -115,6 +115,9 @@ const CREDENTIAL: Record<'ac' | 'rt' | 'bd', RegExp> = {
 // RFC 7636 section 4.1
 const VERIFIER = /^[A-Za-z0-9._~-]{43,128}$/;
 const REQUEST_ID = /^[A-Za-z0-9_-]{22}$/;
+/** The consent nonce: base64url of 32 bytes (mcp_authorize_view). */
+const NONCE = /^[A-Za-z0-9_-]{43}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export function isClientId(v: unknown): v is string {
   return typeof v === 'string' && CLIENT_ID.test(v);
@@ -130,4 +133,13 @@ export function isCodeVerifier(v: unknown): v is string {
 
 export function isRequestId(v: unknown): v is string {
   return typeof v === 'string' && REQUEST_ID.test(v);
+}
+
+export function isNonce(v: unknown): v is string {
+  return typeof v === 'string' && NONCE.test(v);
+}
+
+/** A connection id: a lowercase uuid, as Postgres prints it. */
+export function isConnectionId(v: unknown): v is string {
+  return typeof v === 'string' && UUID.test(v);
 }

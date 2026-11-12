@@ -26,8 +26,8 @@ export function ipDigest(pepper: Buffer, ip: string): Buffer {
   return hmac(pepper, `ip:${ip}`);
 }
 
-/** A new access or refresh token: 'kpr_at_' / 'kpr_rt_' + base64url of 32 random bytes (43 characters). */
-export function newToken(kind: 'at' | 'rt'): string {
+/** A new access token, refresh token or authorization code: 'kpr_at_' / 'kpr_rt_' / 'kpr_ac_' + base64url of 32 random bytes (43 characters). */
+export function newToken(kind: 'at' | 'rt' | 'ac'): string {
   return `kpr_${kind}_${randomBytes(32).toString('base64url')}`;
 }
 

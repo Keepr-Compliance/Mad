@@ -19,6 +19,8 @@ export const PAGE_TITLES = {
   billing: 'Billing',
   reports: 'Reports',
   setup: 'Account Setup',
+  aiApps: 'AI apps',
+  connectAiApp: 'Connect an AI app',
 } as const;
 
 /** Exact-path titles, relative to /dashboard. */
@@ -37,6 +39,7 @@ const EXACT: Record<string, string> = {
   '/billing': PAGE_TITLES.billing,
   '/reports': PAGE_TITLES.reports,
   '/setup': PAGE_TITLES.setup,
+  '/account/ai-apps': PAGE_TITLES.aiApps,
 };
 
 /** One-segment detail routes: /dashboard/<section>/<id>. */
@@ -58,5 +61,9 @@ export function getPhoneTitle(pathname: string | null | undefined): string | und
   if (rest in EXACT) return EXACT[rest];
   const seg = rest.split('/').filter(Boolean);
   if (seg.length === 2 && seg[0] in DETAIL) return DETAIL[seg[0]];
+  // BACKLOG-4238: the consent page, /dashboard/account/ai-apps/connect/<request id>.
+  if (seg.length === 4 && seg[0] === 'account' && seg[1] === 'ai-apps' && seg[2] === 'connect') {
+    return PAGE_TITLES.connectAiApp;
+  }
   return undefined;
 }

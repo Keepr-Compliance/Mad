@@ -9,6 +9,7 @@
  */
 
 import { bindingDigest, ipDigest, newBinding, toBytea } from '@/lib/mcp/oauth/crypto';
+import { bindingFromCookieHeader } from '@/lib/mcp/oauth/binding';
 import { clientIp } from '@/lib/mcp/oauth/clientIp';
 import { withOAuthRoute, type LogFields } from '@/lib/mcp/oauth/guard';
 import { errorPage, found } from '@/lib/mcp/oauth/http';
@@ -19,7 +20,6 @@ import { authorizeBegin } from '@/lib/mcp/oauth/rpc';
 import {
   canonicalResource,
   isClientId,
-  isCredential,
   isRedirectUriShape,
   isRequestId,
   normaliseScope,
@@ -50,15 +50,7 @@ function page(log: LogFields, outcome: string, status: 400 | 503): Response {
 
 /** The binding cookie's value when the request carries exactly one well-formed one. */
 function existingBinding(req: Request): string | null {
-  const header = req.headers.get('cookie');
-  if (!header) return null;
-  const values: string[] = [];
-  for (const part of header.split(';')) {
-    const eq = part.indexOf('=');
-    if (eq < 0) continue;
-    if (part.slice(0, eq).trim() === BINDING_COOKIE) values.push(part.slice(eq + 1).trim());
-  }
-  return values.length === 1 && isCredential('bd', values[0]) ? values[0] : null;
+  return bindingFromCookieHeader(req.headers.get('cookie'));
 }
 
 function bindingCookie(value: string): string {

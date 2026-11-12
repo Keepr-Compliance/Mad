@@ -70,6 +70,8 @@ const EXPECTED: Record<string, string> = {
   '/dashboard/reports': 'Reports', // BACKLOG-3505
   '/dashboard/reports/r-1': 'Report',
   '/dashboard/setup': 'Account Setup',
+  '/dashboard/account/ai-apps': 'AI apps', // BACKLOG-4238
+  '/dashboard/account/ai-apps/connect/x-1': 'Connect an AI app', // BACKLOG-4238
 };
 
 function pageRoutes(dir = DASH, rel = ''): string[] {

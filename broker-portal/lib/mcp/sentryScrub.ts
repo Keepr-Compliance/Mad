@@ -8,6 +8,9 @@
  *   message, logentry, extra and tags.
  * - Breadcrumbs and spans: an MCP URL loses its query; credentials are
  *   redacted everywhere.
+ * - The consent page (BACKLOG-4238): /dashboard/account/ai-apps is scrubbed
+ *   like the OAuth routes, and the path segment after /connect/ is replaced by
+ *   [id] in request URLs, transaction names, breadcrumbs and spans.
  * - Each hook catches its own failure. On an MCP event it fails closed (the
  *   event or breadcrumb is dropped, a span's data is cleared); otherwise the
  *   input is returned unchanged, except that scrubEvent with
@@ -30,7 +33,8 @@ interface ScrubbableEvent {
   transaction?: string;
 }
 
-const SCRUBBED_PREFIXES = ['/api/mcp', '/oauth'];
+const SCRUBBED_PREFIXES = ['/api/mcp', '/oauth', '/dashboard/account/ai-apps'];
+const CONSENT_SEGMENT = /(\/dashboard\/account\/ai-apps\/connect\/)[^/?#\s]+/gi;
 const WELL_KNOWN_OAUTH_PREFIX = '/.well-known/oauth-';
 const RPC_PATH_MARKER = '/rest/v1/rpc/mcp_';
 
@@ -42,6 +46,11 @@ function pathOf(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** Replaces the request id in a consent page path or URL with [id]. */
+function maskConsentId(value: string): string {
+  return value.replace(CONSENT_SEGMENT, '$1[id]');
 }
 
 function underScrubbedPath(path: string): boolean {
@@ -79,6 +88,7 @@ export function isScrubbedRequestEvent(event: ScrubbableEvent): boolean {
 }
 
 export function scrubMcpRequest<E extends ScrubbableEvent>(event: E): E {
+  if (typeof event.transaction === 'string') event.transaction = maskConsentId(event.transaction);
   if (!isScrubbedRequestEvent(event) || !event.request) return event;
   delete event.request.headers;
   delete event.request.cookies;
@@ -87,7 +97,7 @@ export function scrubMcpRequest<E extends ScrubbableEvent>(event: E): E {
   delete event.request.env;
   if (event.request.url) {
     const path = pathOf(event.request.url);
-    event.request.url = path ?? '[scrubbed]';
+    event.request.url = path === null ? '[scrubbed]' : maskConsentId(path);
   }
   return event;
 }
@@ -161,7 +171,9 @@ function stripMcpQueries(data: Record<string, unknown>): Record<string, unknown>
     const k = key.toLowerCase();
     if (k === 'url.query' || k === 'http.query') continue;
     if (typeof v === 'string' && v.includes('?') && (v.startsWith('/') || /^[a-z][a-z0-9+.-]*:\/\//i.test(v))) {
-      out[key] = stripQuery(v);
+      out[key] = maskConsentId(stripQuery(v));
+    } else if (typeof v === 'string') {
+      out[key] = maskConsentId(v);
     } else {
       out[key] = v;
     }
@@ -183,7 +195,7 @@ function dataHasMcpUrl(data: unknown): boolean {
 function stripDescriptionQueries(description: string): string {
   return description
     .split(/(\s+)/)
-    .map((t) => (isMcpPath(t) ? stripQuery(t) : t))
+    .map((t) => (isMcpPath(t) ? maskConsentId(stripQuery(t)) : t))
     .join('');
 }
 
@@ -299,12 +311,12 @@ export function scrubBreadcrumb<B>(crumb: B): B | null {
   let mcp = true;
   try {
     mcp = breadcrumbIsMcp(c);
-    if (typeof c.message === 'string') c.message = redactKpr(c.message);
+    if (typeof c.message === 'string') c.message = maskConsentId(redactKpr(c.message));
     if (c.data && typeof c.data === 'object') {
       const data = c.data as Rec;
       if (mcp) {
         for (const k of ['url', 'to', 'from']) {
-          if (typeof data[k] === 'string') data[k] = stripQuery(data[k] as string);
+          if (typeof data[k] === 'string') data[k] = maskConsentId(stripQuery(data[k] as string));
         }
       }
       c.data = redactDeep(data);
