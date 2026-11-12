@@ -304,6 +304,8 @@ BEGIN
 
   -- ===== D13: take-over =====
   r := r || jsonb_build_object('D13_owner_active_refused', pg_temp.ctl(2, format(stake, pg_temp.fx(408)), NF, '[]'));
+  -- SR N1 (c1803808): an it_admin is refused too while the owner is an active member, with no audit row
+  r := r || jsonb_build_object('SR_D13_it_admin_owner_active_refused', pg_temp.ctl(4, format(stake, pg_temp.fx(408)), NF, '[]'));
   r := r || jsonb_build_object('D13_agent_refused', pg_temp.ctl(6, format(stake, pg_temp.fx(409)), NF, '[]'));
   r := r || jsonb_build_object('D13_it_admin_owner_gone', pg_temp.ctl(4, format(stake, pg_temp.fx(409)), OK,
     jsonb_build_array(pg_temp.ar(4, 'report_owner_changed', 409, 'Report nine', '{"via":"take_over","member":4}'))));
