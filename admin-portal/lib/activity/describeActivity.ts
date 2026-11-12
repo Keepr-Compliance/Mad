@@ -67,6 +67,32 @@ function emailed(row: ActivityRow): string {
   return row.detail.notified === true ? '. Billing contact emailed.' : row.detail.notified === false ? '. Billing contact not emailed.' : '';
 }
 
+/** BACKLOG-3513: shared broker reports. */
+const LEVEL_LABEL: Record<string, string> = { viewer: 'Can view', editor: 'Can edit' };
+
+const ROLE_TARGET: Record<string, string> = {
+  agent: 'all agents',
+  broker: 'all brokers',
+  admin: 'all admins',
+  it_admin: 'all IT admins',
+};
+
+function level(v: unknown): string {
+  const s = str(v);
+  return s ? LEVEL_LABEL[s] ?? humanise(s) : 'no access';
+}
+
+function reportName(row: ActivityRow): string {
+  const s = str(row.detail.report_name);
+  return s ? `the report "${s}"` : 'a report';
+}
+
+/** A role grant names the role ("all agents"); a person grant names the person. */
+function grantee(subject: string, row: ActivityRow): string {
+  const r = str(row.detail.role);
+  return r ? ROLE_TARGET[r] ?? `all ${humanise(r).toLowerCase()}s` : subject;
+}
+
 export const ACTIVITY_TEMPLATES: Record<string, Template> = {
   // member and phone changes (database triggers)
   member_invited: (who, subject) => `${who} invited ${subject}`,
@@ -99,6 +125,29 @@ export const ACTIVITY_TEMPLATES: Record<string, Template> = {
   auto_renew_on: (who, _subject, row) => `${who} turned auto-renew back on${emailed(row)}`,
   deal_ended: () => 'The deal ended',
   setup_completed: (who) => `${who} finished billing setup`,
+  // shared broker reports (BACKLOG-3513)
+  report_created: (who, _subject, row) => `${who} created ${reportName(row)}`,
+  report_deleted: (who, _subject, row) => `${who} deleted ${reportName(row)}`,
+  report_shared: (who, subject, row) =>
+    `${who} shared ${reportName(row)} with ${grantee(subject, row)} (${level(row.detail.to)})`,
+  report_share_changed: (who, subject, row) =>
+    `${who} changed ${grantee(subject, row)}'s access to ${reportName(row)} from ${level(row.detail.from)} to ${level(row.detail.to)}`,
+  report_unshared: (who, subject, row) =>
+    !str(row.detail.role) && row.actor_is_subject
+      ? `${subject} left ${reportName(row)} (was ${level(row.detail.from)})`
+      : `${who} removed ${grantee(subject, row)} from ${reportName(row)} (was ${level(row.detail.from)})`,
+  report_general_access_changed: (who, _subject, row) =>
+    str(row.detail.to) === 'organization'
+      ? `${who} shared ${reportName(row)} with everyone in the organization`
+      : `${who} limited ${reportName(row)} to the people added`,
+  report_row_scope_changed: (who, _subject, row) =>
+    str(row.detail.to) === 'own'
+      ? `${who} set ${reportName(row)} to show each person only their own rows`
+      : `${who} set ${reportName(row)} to show all rows each person can already see`,
+  report_owner_changed: (who, subject, row) =>
+    row.detail.via === 'take_over'
+      ? `${who} took over ${reportName(row)}`
+      : `${who} made ${subject} the owner of ${reportName(row)}`,
   // staff rows (admin_audit_logs)
   'organization.created': (who) => `${who} created the organization`,
   'org_plan.assigned': (who, _subject, row) => `${who} set the plan${str(row.detail.plan) ? ` to ${row.detail.plan}` : ''}`,
