@@ -48,6 +48,7 @@ jest.mock("../../databaseEncryptionService", () => {
 import { setDb, setDbPath, setEncryptionKey } from "../core/dbConnection";
 import { APPEND_ONLY_USER_TABLES, createUserSync, listUserIdColumns, migrateUserIdForUnification } from "../userDbService";
 import { createSessionSync } from "../sessionDbService";
+import { insertAuditLogSync, markAuditLogsSynced, repairAuditUpdateTrigger } from "../auditLogDbService";
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const RealDatabase = require(
@@ -58,6 +59,7 @@ const RealDatabase = require(
 const LEGACY = "40750000-0000-4000-8000-0000000000c9"; // pii-allow-uuid: invented fixture id
 const SUPA = "40750000-0000-4000-8000-0000000000a1"; // pii-allow-uuid: invented fixture id
 const EMAIL = "agent-4075@example.test";
+const OTHER = "40750000-0000-4000-8000-0000000000b1"; // pii-allow-uuid: invented fixture id (an unrelated account on the same Mac)
 
 /** The 8 tables that store the owner's local id in `user_id` with no FK (decided in listUserIdColumns). */
 const USER_ID_WITHOUT_FK = [
@@ -160,13 +162,79 @@ describe("BACKLOG-4075: migrateUserIdForUnification on the migrated schema", () 
     expect(derived.map((d) => d.table).sort()).toEqual([...fkTables, ...USER_ID_WITHOUT_FK].sort());
   });
 
-  it("U4 a legacy user with audit history: unification still commits; audit rows keep the acting id (append-only)", async () => {
+  /**
+   * One unsynced and one already-synced audit row for the legacy id (by the real
+   * producer, then marked synced by the real writer), plus one unsynced row of an
+   * unrelated account on the same Mac, which a unification must not touch.
+   */
+  async function seedAudit(): Promise<void> {
+    createUserSync({
+      id: OTHER,
+      email: "agent-other-4075@example.test",
+      display_name: "other",
+      oauth_provider: "google",
+      oauth_id: "google-sub-other",
+      subscription_tier: "free",
+      subscription_status: "trial",
+      is_active: true,
+    } as never);
+    for (const id of ["al-unsynced", "al-synced"]) {
+      insertAuditLogSync({ id, timestamp: new Date("2026-01-10T00:00:00Z"), userId: LEGACY, action: "LOGIN", resourceType: "SESSION", success: true } as never);
+    }
+    insertAuditLogSync({ id: "al-other", timestamp: new Date("2026-01-10T00:00:00Z"), userId: OTHER, action: "LOGIN", resourceType: "SESSION", success: true } as never);
+    await markAuditLogsSynced(["al-synced"]);
+  }
+  const auditOwner = () =>
+    Object.fromEntries((db.prepare("SELECT id, user_id FROM audit_logs ORDER BY id").all() as Array<{ id: string; user_id: string }>).map((r) => [r.id, r.user_id]));
+  const triggerSql = () =>
+    (db.prepare("SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'prevent_audit_update'").get() as { sql: string } | undefined)?.sql ?? null;
+  const tamper = (): string => {
+    try {
+      db.prepare("UPDATE audit_logs SET resource_id = 'tampered', synced_at = 'x' WHERE id = 'al-unsynced'").run();
+      return "allowed";
+    } catch (e) {
+      return String(e);
+    }
+  };
+
+  it("U4 a legacy user with audit history: unification commits; UNSYNCED audit rows move to the new id, SYNCED rows keep the old id (as their cloud copy)", async () => {
     seedLegacy();
-    db.prepare("INSERT INTO audit_logs (id, user_id, action, resource_type) VALUES ('al-1', ?, 'LOGIN', 'SESSION')").run(LEGACY);
+    await seedAudit();
+    const strictBefore = triggerSql();
     await migrateUserIdForUnification(LEGACY, SUPA);
     expect(owned(SUPA)).toEqual([1, 1, 1, 1, 1]);
-    expect((db.prepare("SELECT user_id FROM audit_logs").all() as Array<{ user_id: string }>).map((r) => r.user_id)).toEqual([LEGACY]);
+    expect(auditOwner()).toEqual({ "al-other": OTHER, "al-synced": LEGACY, "al-unsynced": SUPA });
     expect(fkViolations()).toEqual(["audit_logs"]);
+    // A1: the strict trigger is back, byte-for-byte, and still refuses a tamper.
+    expect(triggerSql()).toBe(strictBefore);
+    expect(tamper()).toMatch(/Audit logs cannot be modified/);
+  });
+
+  it("A1 after unification BACKLOG-3023's launch check finds the trigger strict (no false repair, no report)", async () => {
+    seedLegacy();
+    await seedAudit();
+    await migrateUserIdForUnification(LEGACY, SUPA);
+    const seen: Array<string | null> = [];
+    expect(repairAuditUpdateTrigger(db, (prev) => seen.push(prev))).toBe("strict");
+    expect(seen).toEqual([]);
+  });
+
+  it("A2 a mid-loop failure after the audit re-key rolls the re-key back too; trigger strict", async () => {
+    seedLegacy();
+    await seedAudit();
+    const order = listUserIdColumns(db).map((d) => d.table);
+    expect(order.indexOf("audit_logs")).toBeLessThan(order.indexOf("llm_settings"));
+    db.exec("CREATE TRIGGER t4075_fail_a2 BEFORE UPDATE OF user_id ON llm_settings BEGIN SELECT RAISE(ABORT, 'injected-4075-a2'); END");
+    let err: unknown = null;
+    try {
+      await migrateUserIdForUnification(LEGACY, SUPA);
+    } catch (e) {
+      err = e;
+    }
+    expect(String(err)).toMatch(/injected-4075-a2/);
+    expect(auditOwner()).toEqual({ "al-other": OTHER, "al-synced": LEGACY, "al-unsynced": LEGACY });
+    expect(repairAuditUpdateTrigger(db)).toBe("strict");
+    expect(tamper()).toMatch(/Audit logs cannot be modified/);
   });
 
   it("U5 the only user-owned table with an update-refusing trigger is the append-only list", () => {

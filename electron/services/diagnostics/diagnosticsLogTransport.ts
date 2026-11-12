@@ -29,6 +29,7 @@
  * wrapper does not queue it. The envelope handed in is never mutated.
  */
 
+import crypto from "crypto";
 import { DIAG_BASE_FORMATS, DIAG_STRING_FIELDS, allowedAttributeKeys } from "./fields";
 import { getDiagnosticsDeviceId, isDiagnosticsSharingEnabled } from "../diagnosticsSharingPreference";
 
@@ -85,7 +86,11 @@ function rebuildLog(raw: unknown, deviceId: string): SerializedLog | null {
     body: op,
     attributes: out,
   };
-  if (typeof log.trace_id === "string") rebuilt.trace_id = log.trace_id;
+  // trace_id: a FRESH random id per log item, never the SDK's (BACKLOG-4181).
+  // The SDK stamps the scope's trace id, which a crash event (carrying the
+  // account id) shares; copying it would join the two. Sentry stores log
+  // items keyed by a 32-hex trace_id, so the field cannot simply be dropped.
+  rebuilt.trace_id = crypto.randomBytes(16).toString("hex");
   if (typeof log.severity_number === "number") rebuilt.severity_number = log.severity_number;
   return rebuilt;
 }

@@ -27,7 +27,7 @@ function collectCalls(): { file: string; arg: string }[] {
     const abs = path.join(REPO_ROOT, file);
     if (!fs.existsSync(abs)) continue;
     const text = fs.readFileSync(abs, "utf8");
-    for (const m of text.matchAll(/\bregisterSyncHandlers\(([^)]*)\)/g)) {
+    for (const m of text.matchAll(/\bregisterSyncHandlers\s*\(([^)]*)\)/g)) {
       calls.push({ file, arg: m[1].trim() });
     }
   }
