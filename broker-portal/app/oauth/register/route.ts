@@ -10,7 +10,7 @@
 import { ipDigest, newClientId, toBytea } from '@/lib/mcp/oauth/crypto';
 import { clientIp } from '@/lib/mcp/oauth/clientIp';
 import { withOAuthRoute, type LogFields } from '@/lib/mcp/oauth/guard';
-import { oauthError, oauthJson } from '@/lib/mcp/oauth/http';
+import { mediaType, oauthError, oauthJson, readBodyText } from '@/lib/mcp/oauth/http';
 import { dbCode, errorNameTag, filterKeys, REGISTER_LOG_KEYS } from '@/lib/mcp/oauth/log';
 import { registerClient } from '@/lib/mcp/oauth/rpc';
 import { clientNameFor, isRedirectUriShape, isSubsetOf } from '@/lib/mcp/oauth/validate';
@@ -23,42 +23,6 @@ const MAX_REGISTER_BODY_BYTES = 16 * 1024;
 const GRANT_TYPES = ['authorization_code', 'refresh_token'] as const;
 const RESPONSE_TYPES = ['code'] as const;
 
-/** The body as text, or null when it is longer than `limit` bytes or is not valid UTF-8. */
-async function readBody(req: Request, limit: number): Promise<string | null> {
-  const declared = req.headers.get('content-length');
-  if (declared !== null && Number(declared) > limit) return null;
-  if (!req.body) return '';
-  const reader = req.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > limit) {
-      await reader.cancel().catch(() => {});
-      return null;
-    }
-    chunks.push(value);
-  }
-  const bytes = new Uint8Array(total);
-  let offset = 0;
-  for (const c of chunks) {
-    bytes.set(c, offset);
-    offset += c.byteLength;
-  }
-  try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-  } catch {
-    return null;
-  }
-}
-
-function isJsonContentType(value: string | null): boolean {
-  if (!value) return false;
-  return value.split(';')[0].trim().toLowerCase() === 'application/json';
-}
-
 function refuse(log: LogFields, outcome: string, error: string): Response {
   log.outcome = outcome;
   return oauthError(400, error);
@@ -69,10 +33,10 @@ const route = withOAuthRoute('register', ['POST'], async (req, cfg, log) => {
   if (new URL(req.url).search !== '') return refuse(log, 'query_refused', 'invalid_request');
 
   // 2. JSON object of at most 16 KiB
-  if (!isJsonContentType(req.headers.get('content-type'))) {
+  if (mediaType(req.headers.get('content-type')) !== 'application/json') {
     return refuse(log, 'bad_content_type', 'invalid_client_metadata');
   }
-  const text = await readBody(req, MAX_REGISTER_BODY_BYTES);
+  const text = await readBodyText(req, MAX_REGISTER_BODY_BYTES);
   if (text === null) return refuse(log, 'bad_body', 'invalid_client_metadata');
   let body: unknown;
   try {

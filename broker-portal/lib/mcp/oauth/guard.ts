@@ -19,17 +19,27 @@ import { errorNameTag, logOutcome, type Outcome } from './log';
 export type OkConfig = Extract<OAuthConfig, { state: 'ok' }>;
 
 /** Filled in by a handler; the guard writes it as the request's single log line. */
-export type LogFields = Partial<Pick<Outcome, 'outcome' | 'keys' | 'otherKeys' | 'error'>>;
+export type LogFields = Partial<Pick<Outcome, 'outcome' | 'keys' | 'otherKeys' | 'error' | 'grant'>>;
 
 export type OAuthHandler = (_req: Request, _cfg: OkConfig, _log: LogFields) => Promise<Response>;
 
-export type RouteName = 'metadata' | 'resource-metadata' | 'register';
+export type RouteName = 'metadata' | 'resource-metadata' | 'register' | 'authorize' | 'token';
 
 export type RouteHandlers = Record<HttpMethod, (_req: Request) => Promise<Response>>;
 
 export const ROUTE_ERROR_MESSAGE = 'mcp-oauth route error';
 
-export function withOAuthRoute(route: RouteName, allowed: readonly HttpMethod[], handler: OAuthHandler): RouteHandlers {
+interface RouteOptions {
+  /** The answer when the handler throws; a JSON 503 when not given. */
+  onError?: () => Response;
+}
+
+export function withOAuthRoute(
+  route: RouteName,
+  allowed: readonly HttpMethod[],
+  handler: OAuthHandler,
+  options: RouteOptions = {}
+): RouteHandlers {
   const run = async (method: HttpMethod, req: Request): Promise<Response> => {
     const started = Date.now();
     const finish = (res: Response, fields: LogFields & Pick<Outcome, 'outcome'> & { missing?: string[] }): Response => {
@@ -55,7 +65,8 @@ export function withOAuthRoute(route: RouteName, allowed: readonly HttpMethod[],
       } catch {
         // reporting must never change the response
       }
-      return finish(oauthError(503, 'temporarily_unavailable'), { outcome: 'error', error: name });
+      const failed = options.onError ? options.onError() : oauthError(503, 'temporarily_unavailable');
+      return finish(failed, { outcome: 'error', error: name });
     }
   };
 

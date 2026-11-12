@@ -28,6 +28,20 @@ export const REGISTER_LOG_KEYS: readonly string[] = [
   'software_statement',
 ];
 
+export const TOKEN_LOG_KEYS: readonly string[] = [
+  'grant_type',
+  'code',
+  'redirect_uri',
+  'client_id',
+  'code_verifier',
+  'refresh_token',
+  'resource',
+  'scope',
+  'client_secret',
+  'client_assertion',
+  'client_assertion_type',
+];
+
 export interface LoggedKeys {
   keys: string[];
   otherKeys: number;
@@ -55,6 +69,8 @@ export interface Outcome {
   /** error.name after errorNameTag(), or a database error code checked by dbCode(). */
   error?: string;
   missing?: string[];
+  /** Token route only: 'authorization_code', 'refresh_token' or 'other'. */
+  grant?: string;
 }
 
 const ERROR_NAMES = new Set(['TypeError', 'SyntaxError', 'RangeError', 'AbortError', 'TimeoutError']);

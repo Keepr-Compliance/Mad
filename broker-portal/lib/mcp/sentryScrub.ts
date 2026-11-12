@@ -92,31 +92,61 @@ export function scrubMcpRequest<E extends ScrubbableEvent>(event: E): E {
   return event;
 }
 
+/** Entries copied per object or array; Sentry's own normalisation keeps 1000 by default. */
+const MAX_BREADTH = 1000;
+/** Objects and arrays copied per redactDeep call, so shared references cannot multiply the work. */
+const MAX_NODES = 5000;
+
+const TRUNCATED = '[truncated]';
+
 /**
- * Copy of `value` with every string passed through redactKpr. Depth-limited,
- * cycle-safe, and a property whose read throws becomes '[unreadable]'.
+ * Copy of `value` with every string passed through redactKpr. Depth-, breadth-
+ * and size-limited; only a reference back to an ancestor is a cycle
+ * ('[circular]'), so a value shared by two siblings is copied twice; a
+ * property whose read throws becomes '[unreadable]'.
  */
-export function redactDeep(value: unknown, depth = 0, seen: WeakSet<object> = new WeakSet()): unknown {
+export function redactDeep(value: unknown): unknown {
+  return redactNode(value, 0, new WeakSet(), { nodes: 0 });
+}
+
+function redactNode(value: unknown, depth: number, ancestors: WeakSet<object>, budget: { nodes: number }): unknown {
   if (typeof value === 'string') return redactKpr(value);
   if (value === null || typeof value !== 'object') return value;
-  if (depth >= MAX_DEPTH) return '[truncated]';
-  if (seen.has(value)) return '[circular]';
-  seen.add(value);
-  if (Array.isArray(value)) return value.map((v) => redactDeep(v, depth + 1, seen));
+  if (depth >= MAX_DEPTH) return TRUNCATED;
+  if (ancestors.has(value)) return '[circular]';
+  budget.nodes += 1;
+  if (budget.nodes > MAX_NODES) return TRUNCATED;
+  if (Array.isArray(value)) {
+    ancestors.add(value);
+    try {
+      const out = value.slice(0, MAX_BREADTH).map((v) => redactNode(v, depth + 1, ancestors, budget));
+      if (value.length > MAX_BREADTH) out.push(TRUNCATED);
+      return out;
+    } finally {
+      ancestors.delete(value);
+    }
+  }
   const proto = Object.getPrototypeOf(value);
   if (proto !== Object.prototype && proto !== null) return value;
-  const out: Record<string, unknown> = {};
-  for (const key of Object.keys(value)) {
-    let v: unknown;
-    try {
-      v = (value as Record<string, unknown>)[key];
-    } catch {
-      out[redactKpr(key)] = '[unreadable]';
-      continue;
+  ancestors.add(value);
+  try {
+    const out: Record<string, unknown> = {};
+    const keys = Object.keys(value);
+    for (const key of keys.slice(0, MAX_BREADTH)) {
+      let v: unknown;
+      try {
+        v = (value as Record<string, unknown>)[key];
+      } catch {
+        out[redactKpr(key)] = '[unreadable]';
+        continue;
+      }
+      out[redactKpr(key)] = redactNode(v, depth + 1, ancestors, budget);
     }
-    out[redactKpr(key)] = redactDeep(v, depth + 1, seen);
+    if (keys.length > MAX_BREADTH) out[TRUNCATED] = keys.length - MAX_BREADTH;
+    return out;
+  } finally {
+    ancestors.delete(value);
   }
-  return out;
 }
 
 function stripQuery(value: string): string {

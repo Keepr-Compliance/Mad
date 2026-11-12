@@ -14,6 +14,8 @@ jest.mock('@sentry/nextjs', () => ({ captureMessage: jest.fn() }));
 import * as metadata from '@/app/oauth/metadata/route';
 import * as prm from '@/app/api/mcp/resource-metadata/route';
 import * as register from '@/app/oauth/register/route';
+import * as authorize from '@/app/oauth/authorize/route';
+import * as token from '@/app/oauth/token/route';
 import { oauthConfig } from '@/lib/mcp/oauth/config';
 import { blockNetwork, captureConsole, OAUTH_ENV, ORIGIN, PLANTED_PLAIN, REDIRECT_URI } from './fixtures';
 
@@ -37,6 +39,8 @@ const ROUTES = [
   ['metadata', metadata, `${ORIGIN}/oauth/metadata`],
   ['resource-metadata', prm, `${ORIGIN}/api/mcp/resource-metadata`],
   ['register', register, `${ORIGIN}/oauth/register`],
+  ['authorize', authorize, `${ORIGIN}/oauth/authorize`],
+  ['token', token, `${ORIGIN}/oauth/token`],
 ] as const;
 
 function call(mod: (typeof ROUTES)[number][1], m: (typeof METHODS)[number], url: string) {
@@ -75,6 +79,22 @@ describe('H5: off', () => {
       }
     }
     expect(mockRpc).not.toHaveBeenCalled();
+  });
+
+  it.each(offEnvs)('%s: no route writes a log line', async (_label, env) => {
+    for (const [k, v] of Object.entries(env)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    for (const [, mod, url] of ROUTES) {
+      for (const m of METHODS) await call(mod, m, url);
+    }
+    expect(cap.lines()).toEqual([]);
+  });
+
+  it('positive: the same calls with the configuration on write log lines', async () => {
+    for (const [, mod, url] of ROUTES) await call(mod, 'GET', url);
+    expect(cap.lines().filter((l) => l.startsWith('[mcp-oauth] ')).length).toBeGreaterThan(0);
   });
 
   it('positive: the full configuration is ok', () => {
@@ -124,14 +144,14 @@ describe('H5: misconfigured', () => {
     const cfg = oauthConfig();
     expect(cfg).toEqual({ state: 'misconfigured', missing: names });
     for (const [route, mod, url] of ROUTES) {
-      const m = route === 'register' ? 'POST' : 'GET';
+      const m = route === 'register' || route === 'token' ? 'POST' : 'GET';
       const res = await call(mod, m, url);
       expect(res.status).toBe(503);
       expect(await res.json()).toEqual({ error: 'temporarily_unavailable' });
     }
     expect(mockRpc).not.toHaveBeenCalled();
     const lines = cap.lines().filter((l) => l.startsWith('[mcp-oauth] '));
-    expect(lines).toHaveLength(3);
+    expect(lines).toHaveLength(ROUTES.length);
     for (const l of lines) {
       const o = JSON.parse(l.slice('[mcp-oauth] '.length));
       expect(o.outcome).toBe('misconfigured');

@@ -80,6 +80,9 @@ describe('H21: no service role and no cookie client', () => {
       expect.arrayContaining([
         'app/oauth/metadata/route.ts',
         'app/oauth/register/route.ts',
+        'app/oauth/authorize/route.ts',
+        'app/oauth/token/route.ts',
+        'lib/mcp/oauth/redirect.ts',
         'app/api/mcp/resource-metadata/route.ts',
         'lib/mcp/oauth/rpc.ts',
         'lib/mcp/oauth/guard.ts',
