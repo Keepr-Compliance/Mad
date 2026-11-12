@@ -26,6 +26,7 @@ import { promises as fsp } from "fs";
 import path from "path";
 import { buildDeviceProfile, type CollectedProfile, type CountsState, type DeviceProfileRow, type MachineClass } from "./buildDeviceProfile";
 import { DEVICE_PROFILE_STATE_FILE, setDeviceRowId } from "./deviceRowId";
+import type { DiagFields } from "../diagnostics/fields";
 
 export type RegistrationReason = "login" | "restore";
 
@@ -88,7 +89,12 @@ export interface ServiceDeps {
   now: () => number;
   setTimeout: (fn: () => void, ms: number) => Timer;
   warn: (msg: string, meta?: Record<string, unknown>) => void;
+  /** BACKLOG-4181 PR 3: perf.event("env.health", fields). Typed by the env.health route. */
+  emitHealth?: (fields: DiagFields<"env.health">) => void;
 }
+
+/** How often the worker pool's up/down state is re-read for env.health. */
+export const POOL_HEALTH_CHECK_MS = 10 * 60_000;
 
 // ---- pure -------------------------------------------------------------------
 
@@ -140,6 +146,40 @@ export function createDeviceProfileService(deps: ServiceDeps): DeviceProfileServ
   let machineClass: MachineClass | null = null;
   let countsState: CountsState | null = null;
   const clearing = new Map<string, Promise<void>>();
+  let healthSent = false;
+  let lastPoolState: "ready" | "down" | null = null;
+
+  /**
+   * env.health, ONCE per process (BACKLOG-4181 PR 3), whether or not the row is
+   * written. The flag is set SYNCHRONOUSLY before anything else, so concurrent
+   * registrations cannot both emit. The gate is read live: OFF while the run
+   * waited means nothing is sent.
+   */
+  function emitHealthOnce(hw: CollectedProfile): void {
+    if (healthSent || !deps.isGateOn() || !deps.emitHealth) return;
+    healthSent = true;
+    const fields = buildDeviceProfile(hw, "health");
+    lastPoolState = fields.poolState === "ready" || fields.poolState === "down" ? fields.poolState : null;
+    deps.emitHealth(fields);
+    schedulePoolCheck();
+  }
+  /**
+   * After the first env.health: re-read the pool every POOL_HEALTH_CHECK_MS and
+   * send {poolState} only when it changed and the gate is ON. Unref'd, so it
+   * never keeps the process alive. ready|down only: "never started" and
+   * "crashed" cannot be told apart without editing contactWorkerPool.ts.
+   */
+  function schedulePoolCheck(): void {
+    const t = deps.setTimeout(() => {
+      const now: "ready" | "down" = deps.isPoolReady() ? "ready" : "down";
+      if (now !== lastPoolState && deps.isGateOn() && deps.emitHealth) {
+        lastPoolState = now;
+        deps.emitHealth({ poolState: now });
+      }
+      schedulePoolCheck();
+    }, POOL_HEALTH_CHECK_MS);
+    t.unref?.();
+  }
 
   const sleep = (ms: number): Promise<void> =>
     new Promise((resolve) => {
@@ -239,6 +279,8 @@ export function createDeviceProfileService(deps: ServiceDeps): DeviceProfileServ
     hw.countsState = state;
     if (counts) Object.assign(hw, counts);
     hw.dbBytes = await deps.dbBytes().catch(() => undefined);
+    // Exact counts are still in `hw` here: env.health buckets them directly.
+    emitHealthOnce(hw);
 
     const row = buildDeviceProfile(hw, "row");
     const key = deviceKeyOf(userId, deviceId);
@@ -327,6 +369,7 @@ function productionService(): DeviceProfileService {
   const { isDiagnosticsSharingEnabled } = require("../diagnosticsSharingPreference") as typeof import("../diagnosticsSharingPreference");
   const { isCrashReportingEnabled } = require("../crashReportingPreference") as typeof import("../crashReportingPreference");
   const collector = require("../diagnostics/deviceProfileCollector") as typeof import("../diagnostics/deviceProfileCollector");
+  const perf = require("../diagnostics/perf") as typeof import("../diagnostics/perf");
   /* eslint-enable @typescript-eslint/no-require-imports */
   const userData = app.getPath("userData");
   const statePath = path.join(userData, DEVICE_PROFILE_STATE_FILE);
@@ -387,6 +430,7 @@ function productionService(): DeviceProfileService {
     warn: (msg, meta) => {
       void logService.warn(msg, "DeviceProfile", meta);
     },
+    emitHealth: (fields) => perf.event("env.health", fields),
   });
   return instance;
 }
@@ -409,7 +453,7 @@ export function onPrivacyGateChanged(): void {
   }
 }
 
-/** PR C reads these for the machine-class log keys and the env.health marker. */
+/** installSentry passes getMachineClass to configureDiagnostics (machine-class log keys). */
 export function getMachineClass(): MachineClass | null {
   return instance?.getMachineClass() ?? null;
 }

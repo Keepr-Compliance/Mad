@@ -28,12 +28,14 @@ import { configureDiagnostics, __resetDiagnosticsForTests } from "../perf";
 import * as perf from "../perf";
 import {
   getDiagnosticsDeviceId,
+  isDiagnosticsSharingEnabled,
   loadDiagnosticsSharingPreference,
   setDiagnosticsSharingEnabled,
   __resetDiagnosticsSharingPreferenceForTests,
 } from "../../diagnosticsSharingPreference";
 import {
   gateBaseTransport,
+  isCrashReportingEnabled,
   loadCrashReportingPreference,
   setCrashReportingEnabled,
   __resetCrashReportingPreferenceForTests,
@@ -41,6 +43,7 @@ import {
 import { wrapHandleForReplySize, type HandleTarget } from "../../ipcReplySize";
 import { createMainLagMonitor } from "../../mainLagMonitor";
 import { WindowResponsivenessTracker } from "../../windowResponsivenessTracker";
+import { createDeviceProfileService, POOL_HEALTH_CHECK_MS } from "../../deviceProfile/deviceProfileService";
 
 const APP_VERSION = "2.47.0";
 const OS_VALUE = `${process.platform}-${os.release()}`;
@@ -481,5 +484,86 @@ describe("C10 the device id is never on the scope", () => {
     const events = s.split("\n").filter((x) => x.includes('"exception"'));
     expect(events.length).toBeGreaterThan(0); // positive control: the event exists
     for (const e of events) expect(e).not.toContain(getDiagnosticsDeviceId());
+  });
+});
+
+describe("BACKLOG-4181 PR 3: machine class and env.health, end to end", () => {
+  const MACHINE = ["keepr.ramGB", "keepr.cpuCores", "keepr.diskType", "keepr.softwareRendering"];
+  function withMachineClass(mc: Record<string, unknown> | null): void {
+    configureDiagnostics({
+      sink: (level, body, attributes) => Sentry.logger[level](body, attributes),
+      appVersion: APP_VERSION,
+      os: OS_VALUE,
+      machineClass: () => mc,
+    });
+  }
+  afterEach(() => withMachineClass(null));
+
+  it("C1 with machine class: the log's key set EQUALS the allowlist plus the 4 machine keys", async () => {
+    withMachineClass({ ramGB: 16, cpuCores: 10, diskType: "ssd", softwareRendering: false });
+    perf.track("ipc.slow", 1200, { channel: "transactions:batchUpdateContacts", approxBytes: 2048 });
+    const l = await one("ipc.slow");
+    expect(new Set(Object.keys(l.attributes))).toEqual(
+      new Set([...BASE, "keepr.durationMs", "keepr.channel", "keepr.approxBytes", ...MACHINE]),
+    );
+    expect(l.attributes["keepr.ramGB"].value).toBe(16);
+    expect(l.attributes["keepr.diskType"].value).toBe("ssd");
+  });
+
+  it("C1 with the getter returning null: no machine key", async () => {
+    withMachineClass(null);
+    perf.track("ipc.slow", 1200, { channel: "transactions:batchUpdateContacts", approxBytes: 2048 });
+    const l = await one("ipc.slow");
+    for (const k of MACHINE) expect(Object.keys(l.attributes)).not.toContain(k);
+  });
+
+  /** The real service with production-shaped emitHealth; a stepping clock instead of fake timers. */
+  async function runService(): Promise<void> {
+    let clock = 0;
+    const svc = createDeviceProfileService({
+      isGateOn: () => isDiagnosticsSharingEnabled() && isCrashReportingEnabled(),
+      isPoolReady: () => true,
+      getPoolQueryCount: () => 0,
+      queryCounts: async () => ({ contacts: 2040, addressBook: 512, mailAccounts: 2 }),
+      dbBytes: async () => 1_500 * 1024 ** 2,
+      collectHardware: async () => ({ platform: "darwin", cpuCores: 10, ramBytes: 32 * 1024 ** 3, diskType: "ssd", av: ["defender"] }),
+      updateRow: async () => ({ ok: true, rows: 1 }),
+      readState: async () => null,
+      writeState: async () => undefined,
+      removeState: async () => undefined,
+      now: () => clock,
+      // Steps the clock instead of waiting; the 10-minute pool check never runs here.
+      setTimeout: (fn, ms) => {
+        if (ms !== POOL_HEALTH_CHECK_MS) {
+          clock += ms;
+          setImmediate(fn);
+        }
+        return {};
+      },
+      warn: () => undefined,
+      emitHealth: (fields) => perf.event("env.health", fields),
+    });
+    await svc.onDeviceRegistered("u", "d", "restore", "r");
+  }
+
+  it("C9 env.health from the real service: all 6 fields arrive, buckets only", async () => {
+    await runService();
+    const l = await one("env.health");
+    const v = (k: string) => l.attributes[`keepr.${k}`]?.value;
+    expect([v("poolState"), v("countsState"), v("contactsBucket"), v("addressBookBucket"), v("dbSizeBucketMB"), v("mailAccounts")]).toEqual([
+      "ready",
+      "ok",
+      1000,
+      1,
+      1000,
+      2,
+    ]);
+    expect(JSON.stringify(l)).not.toMatch(/defender|2040|512|1500/);
+  });
+
+  it("C9 env.health while sharing is OFF: nothing sent", async () => {
+    setDiagnosticsSharingEnabled(false);
+    await runService();
+    expect(await drain()).not.toContain("env.health");
   });
 });
