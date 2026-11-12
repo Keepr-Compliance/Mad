@@ -16,6 +16,7 @@ import { oauthConfig } from '@/lib/mcp/oauth/config';
 import { bindingDigest } from '@/lib/mcp/oauth/crypto';
 import { isRequestId } from '@/lib/mcp/oauth/validate';
 import { CONSENT, M_C, PROVIDER_LABELS } from '@/lib/mcp/account/messages';
+import { logAccount } from '@/lib/mcp/account/logging';
 import { readAccountRequest } from '@/lib/mcp/account/request';
 import { viewRequest } from '@/lib/mcp/account/rpc';
 import { ConsentForm } from './ConsentForm';
@@ -45,6 +46,7 @@ function Notice({ message }: { message: string }) {
 
 export default async function ConnectAiAppPage({ params }: { params: Promise<{ requestId: string }> }) {
   if (!mcpEnabled()) notFound();
+  const started = Date.now();
 
   const { requestId } = await params;
   if (!isRequestId(requestId)) return <Notice message={M_C.badId} />;
@@ -63,8 +65,12 @@ export default async function ConnectAiAppPage({ params }: { params: Promise<{ r
   if (req.binding === null) return <Notice message={M_C.noBinding} />;
 
   const view = await viewRequest(requestId, bindingDigest(req.binding));
-  if (view.kind === 'transport') return <Notice message={M_C.failed} />;
+  if (view.kind === 'transport') {
+    logAccount('consent', 'view_transport', 503, started, view);
+    return <Notice message={M_C.failed} />;
+  }
   if (view.kind === 'refused') {
+    logAccount('consent', `view_${view.error}`, 200, started);
     switch (view.error) {
       case 'not_signed_in':
         return redirect('/login');

@@ -13,10 +13,10 @@ import { revalidatePath } from 'next/cache';
 import { mcpEnabled } from '@/lib/mcp/config';
 import { oauthConfig } from '@/lib/mcp/oauth/config';
 import { bindingDigest, digest, newToken } from '@/lib/mcp/oauth/crypto';
-import { logOutcome } from '@/lib/mcp/oauth/log';
 import { clientRedirect } from '@/lib/mcp/oauth/redirect';
 import { isConnectionId, isNonce, isRequestId } from '@/lib/mcp/oauth/validate';
 import { M_A, M_C } from './messages';
+import { logAccount } from './logging';
 import { readAccountRequest } from './request';
 import { approveRequest, denyRequest, disconnectAllMine, disconnectConnection } from './rpc';
 
@@ -25,9 +25,7 @@ const AI_APPS_PATH = '/dashboard/account/ai-apps';
 export type ConsentActionResult = { kind: 'redirect'; location: string } | { kind: 'refused'; message: string };
 type DisconnectActionResult = { ok: true } | { ok: false; message: string };
 
-function log(route: 'consent' | 'ai-apps', outcome: string, status: number, started: number): void {
-  logOutcome({ route, outcome, status, ms: Date.now() - started });
-}
+const log = logAccount;
 
 function refused(message: string): ConsentActionResult {
   return { kind: 'refused', message };
@@ -76,7 +74,7 @@ async function decide(which: Decision, argc: number, requestId: unknown, nonce: 
       : await denyRequest(requestId, bindingDigest(req.binding), nonce);
 
   if (result.kind === 'transport') {
-    log('consent', `${which}_transport`, 503, started);
+    log('consent', `${which}_transport`, 503, started, result);
     return refused(M_C.failed);
   }
   if (result.kind === 'refused') {
@@ -137,7 +135,8 @@ export async function disconnectAiApp(...args: unknown[]): Promise<DisconnectAct
   }
   const result = await disconnectConnection(connectionId);
   if (result.kind !== 'ok') {
-    log('ai-apps', result.kind === 'refused' ? `disconnect_${result.error}` : 'disconnect_transport', 503, started);
+    if (result.kind === 'refused') log('ai-apps', `disconnect_${result.error}`, 503, started);
+    else log('ai-apps', 'disconnect_transport', 503, started, result);
     return disconnectRefused(
       result.kind === 'refused' && result.error === 'impersonating' ? M_A.supportSession : M_A.disconnectFailed
     );
@@ -166,12 +165,8 @@ export async function disconnectAllAiApps(...args: unknown[]): Promise<Disconnec
   }
   const result = await disconnectAllMine();
   if (result.kind !== 'ok') {
-    log(
-      'ai-apps',
-      result.kind === 'refused' ? `disconnect_all_${result.error}` : 'disconnect_all_transport',
-      503,
-      started
-    );
+    if (result.kind === 'refused') log('ai-apps', `disconnect_all_${result.error}`, 503, started);
+    else log('ai-apps', 'disconnect_all_transport', 503, started, result);
     return disconnectRefused(
       result.kind === 'refused' && result.error === 'impersonating' ? M_A.supportSession : M_A.disconnectFailed
     );

@@ -41,6 +41,7 @@ jest.mock('next/navigation', () => ({
 import AiAppsPage from '@/app/dashboard/account/ai-apps/page';
 import { AI_APPS, CONSENT, M_A } from '@/lib/mcp/account/messages';
 import { CONNECTION_ID, CONNECTION_ID_2, EMAIL, clearMcpEnv, connectionRow, refused, setMcpEnv } from './fixtures';
+import { captureConsole } from '../oauth/fixtures';
 
 let restoreEnv: () => void;
 beforeEach(() => {
@@ -190,6 +191,36 @@ describe('the list', () => {
   });
 });
 
+describe('log lines', () => {
+  it('a transport failure logs list_transport with the error code only', async () => {
+    const logs = captureConsole();
+    try {
+      mockRpc.mockResolvedValue({ data: null, error: { name: 'PostgrestError', code: 'PGRST202', message: 'raw database text 4238' } });
+      await renderPage();
+      const lines = logs.lines();
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('"route":"ai-apps"');
+      expect(lines[0]).toContain('"outcome":"list_transport"');
+      expect(lines[0]).toContain('"error":"PGRST202"');
+      for (const needle of ['raw database text', EMAIL]) expect(lines[0]).not.toContain(needle);
+    } finally {
+      logs.restore();
+    }
+  });
+
+  it('a not_signed_in refusal logs list_not_signed_in', async () => {
+    const logs = captureConsole();
+    try {
+      mockRpc.mockResolvedValue({ data: refused('not_signed_in'), error: null });
+      await expect(AiAppsPage()).rejects.toMatchObject({ to: '/login' });
+      expect(logs.lines()).toHaveLength(1);
+      expect(logs.lines()[0]).toContain('"outcome":"list_not_signed_in"');
+    } finally {
+      logs.restore();
+    }
+  });
+});
+
 describe('Disconnect', () => {
   beforeEach(() => mockRpc.mockResolvedValue(listOk([connectionRow()])));
 
@@ -200,6 +231,17 @@ describe('Disconnect', () => {
       fireEvent.click(screen.getByRole('button', { name: AI_APPS.disconnect }));
     });
     expect(mockDisconnect.mock.calls).toEqual([[CONNECTION_ID]]);
+  });
+
+  it('with two rows, the second Disconnect sends the second row id', async () => {
+    mockRpc.mockResolvedValue(listOk([connectionRow(), connectionRow({ id: CONNECTION_ID_2, client_name: 'Second' })]));
+    mockDisconnect.mockResolvedValue({ ok: true });
+    await renderPage();
+    const second = rows()[1];
+    await act(async () => {
+      fireEvent.click(within(second).getByRole('button', { name: AI_APPS.disconnect }));
+    });
+    expect(mockDisconnect.mock.calls).toEqual([[CONNECTION_ID_2]]);
   });
 
   it('a failed Disconnect shows the returned message', async () => {

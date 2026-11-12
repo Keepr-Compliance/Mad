@@ -37,6 +37,7 @@ import * as PageModule from '@/app/dashboard/account/ai-apps/connect/[requestId]
 import { CONSENT, M_C } from '@/lib/mcp/account/messages';
 import { bindingDigest } from '@/lib/mcp/oauth/crypto';
 import { BIND_COOKIE, BINDING, EMAIL, NONCE, REQUEST_ID, clearMcpEnv, refused, setMcpEnv, viewOk } from './fixtures';
+import { captureConsole } from '../oauth/fixtures';
 
 const Page = PageModule.default;
 
@@ -248,6 +249,38 @@ describe('view refusals and malformed answers', () => {
     const { container } = await renderPage();
     expect(screen.getByRole('alert')).toHaveTextContent(M_C.failed);
     expect(container.textContent).not.toContain('raw database text');
+  });
+});
+
+describe('log lines', () => {
+  it('a transport failure logs view_transport with the error code only', async () => {
+    const logs = captureConsole();
+    try {
+      mockRpc.mockResolvedValue({ data: null, error: { name: 'PostgrestError', code: '57014', message: 'raw database text 4238' } });
+      await renderPage();
+      const lines = logs.lines();
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('"route":"consent"');
+      expect(lines[0]).toContain('"outcome":"view_transport"');
+      expect(lines[0]).toContain('"error":"57014"');
+      for (const needle of ['raw database text', REQUEST_ID, BINDING, EMAIL]) expect(lines[0]).not.toContain(needle);
+    } finally {
+      logs.restore();
+    }
+  });
+
+  it('a refusal logs view_<code> and nothing else', async () => {
+    const logs = captureConsole();
+    try {
+      mockRpc.mockResolvedValue({ data: refused('request_invalid'), error: null });
+      await renderPage();
+      const lines = logs.lines();
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('"outcome":"view_request_invalid"');
+      expect(lines[0]).not.toContain(REQUEST_ID);
+    } finally {
+      logs.restore();
+    }
   });
 });
 

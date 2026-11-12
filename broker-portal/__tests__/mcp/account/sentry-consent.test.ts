@@ -38,7 +38,9 @@ function loadConfig(file: keyof typeof CONFIGS): Hooks {
   return mockInit.mock.calls[0][0] as Hooks;
 }
 
-const REQUEST_ID = 'Rq4238Rq4238Rq4238Rq42';
+/** 22 base64url characters, including '-' and '_'. */
+const REQUEST_ID = 'Rq4238Rq4238Rq-238_q42';
+const ID_TAIL = '-238_q42';
 const CONSENT_URL = `https://portal.test/dashboard/account/ai-apps/connect/${REQUEST_ID}`;
 const CODE = `kpr_ac_${'K'.repeat(43)}`;
 const NONCE_VALUE = 'nonce-value-4238-planted';
@@ -72,6 +74,7 @@ describe.each(['server', 'edge', 'client'] as const)('sentry.%s.config on the co
       expect(s).not.toContain(PLANTED_PLAIN);
       expect(s).not.toContain(NONCE_VALUE);
       expect(s).not.toContain(REQUEST_ID);
+      expect(s).not.toContain(ID_TAIL);
       expect(s).not.toContain('x=1');
     }
   );
@@ -92,6 +95,7 @@ describe.each(['server', 'edge', 'client'] as const)('sentry.%s.config on the co
     })!;
     expect((out.data as Rec).to).toBe('/dashboard/account/ai-apps/connect/[id]');
     expect(JSON.stringify(out)).not.toContain(REQUEST_ID);
+    expect(JSON.stringify(out)).not.toContain(ID_TAIL);
   });
 
   it('a breadcrumb carrying an authorization code has it redacted', () => {
@@ -111,6 +115,7 @@ describe.each(['server', 'edge', 'client'] as const)('sentry.%s.config on the co
       spans: [{ description: `GET /dashboard/account/ai-apps/connect/${REQUEST_ID}?x=1`, data: {} }],
     })!;
     expect(JSON.stringify(out)).not.toContain(REQUEST_ID);
+    expect(JSON.stringify(out)).not.toContain(ID_TAIL);
     expect(out.transaction).toBe('/dashboard/account/ai-apps/connect/[id]');
   });
 });

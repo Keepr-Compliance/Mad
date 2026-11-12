@@ -37,8 +37,7 @@ export const CONSENT = {
 /** Consent page and consent action messages. */
 export const M_C = {
   badId: 'This connection request is not valid. Go back to the app you came from and start again.',
-  supportSession:
-    'Connecting an AI app is not available during a support session. End your support session, or sign out and sign in again.',
+  supportSession: 'Connecting an AI app is not available during a support session. End the support session, then try again.',
   misconfigured: 'AI app connections are not available right now.',
   noBinding:
     'This request was started in a different browser, or it has expired. Go back to the app and connect again.',
@@ -69,6 +68,6 @@ export const AI_APPS = {
 export const M_A = {
   empty: 'No AI apps are connected. To connect one, add Keepr as a connector in Claude or ChatGPT and sign in.',
   loadFailed: 'Keepr could not load your AI apps. Try again in a minute.',
-  supportSession: 'Not available during a support session. End your support session, or sign out and sign in again.',
+  supportSession: 'Not available during a support session. End the support session, then try again.',
   disconnectFailed: 'Keepr could not disconnect this app. Try again.',
 } as const;

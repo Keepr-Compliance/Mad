@@ -271,6 +271,33 @@ describe('log lines', () => {
   });
 });
 
+describe('transport failures log the fixed outcome and the error code only', () => {
+  const PG_ERROR = { name: 'PostgrestError', code: 'PGRST202', message: 'raw database text 4238', details: REQUEST_ID };
+  it.each([
+    ['approveAiApp', () => approveAiApp(REQUEST_ID, NONCE), 'approve_transport'],
+    ['denyAiApp', () => denyAiApp(REQUEST_ID, NONCE), 'deny_transport'],
+    ['disconnectAiApp', () => disconnectAiApp(CONNECTION_ID), 'disconnect_transport'],
+    ['disconnectAllAiApps', () => disconnectAllAiApps(), 'disconnect_all_transport'],
+  ] as const)('%s', async (_name, invoke, outcome) => {
+    mockRpc.mockResolvedValue({ data: null, error: PG_ERROR });
+    await invoke();
+    const lines = logs.lines();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain(`"outcome":"${outcome}"`);
+    expect(lines[0]).toContain('"error":"PGRST202"');
+    for (const needle of ['raw database text', REQUEST_ID, NONCE, CONNECTION_ID, BINDING]) {
+      expect(lines[0]).not.toContain(needle);
+    }
+  });
+
+  it('a code of an unknown shape is logged as none', async () => {
+    mockRpc.mockResolvedValue({ data: null, error: { name: 'Error', code: 'free text code', message: 'm' } });
+    await approveAiApp(REQUEST_ID, NONCE);
+    expect(logs.lines()[0]).toContain('"error":"none"');
+    expect(logs.lines()[0]).not.toContain('free text code');
+  });
+});
+
 describe('the consent actions write no cookie and revalidate nothing', () => {
   const src = readFileSync(path.resolve(__dirname, '../../../lib/mcp/account/actions.ts'), 'utf8');
   const decide = src.slice(src.indexOf('async function decide('), src.indexOf('export async function approveAiApp'));

@@ -140,7 +140,7 @@ const RULE_V: Rule = {
     'lib/impersonation-guards',
     'lib/scoped-client',
   ],
-  packages: ['@supabase/ssr'],
+  packages: ['@supabase/ssr', 'next/headers'],
   text: ['SUPABASE_SERVICE_ROLE_KEY', 'cookies()', "from 'next/headers'"],
 };
 const RULE_V_DIRS = ['app/api/mcp', 'app/oauth', 'lib/mcp'];
@@ -184,6 +184,8 @@ describe('BACKLOG-4238 Rule V: vendor path', () => {
     ['lib/mcp/oauth/rpc.ts', "import { createServiceClient } from '@/lib/supabase/service';", 'lib/supabase/service'],
     ['lib/mcp/server.ts', "import { getImpersonationSession } from '@/lib/impersonation';", 'lib/impersonation'],
     ['lib/mcp/server.ts', "import { cookies } from 'next/headers';", "from 'next/headers'"],
+    ['lib/mcp/server.ts', 'import { headers } from "next/headers";', 'imports next/headers'],
+    ['lib/mcp/server.ts', "const nh = require('next/headers');", 'imports next/headers'],
   ])('positive control: a line planted in %s is found (%s)', (file, line, needle) => {
     const hits = findForbidden(ruleVEntries(), plantedIn(file, line), RULE_V);
     expect(hits.some((h) => h.startsWith(`${file}:`) && h.includes(needle))).toBe(true);
