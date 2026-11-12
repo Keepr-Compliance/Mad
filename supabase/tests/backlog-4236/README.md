@@ -31,3 +31,7 @@ is per-row blob locking in payload order, `S_C4_blobs_locked_per_row_payload_ord
 Results: `results-2026-11-11.txt` (ends with a catalog query showing no residue).
 
 Deferred items: see the tracker item.
+
+Every composed call starts with `SET LOCAL pg_stat_statements.track = 'none';` so a run adds no statement entries
+(measured 2026-11-12: one migration send added 110 entries without it, 2 with it). The two-session scripts do
+not read pg_stat_statements.

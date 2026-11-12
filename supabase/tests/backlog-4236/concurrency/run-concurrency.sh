@@ -107,7 +107,7 @@ case "$CASE" in
   C1a) fill a.sql as-user.sql c1-newwrite-hold.sql; fill b.sql gate.sql as-user.sql c1-off.sql; pair a.sql b.sql ;;
   C1b) fill a.sql as-user.sql c1-off-hold.sql; fill b.sql gate.sql as-user.sql c1-newwrite.sql; pair a.sql b.sql ;;
   C2)  fill a.sql c2-deal-hold.sql as-user.sql c2-upsert.sql; fill b.sql gate.sql as-user.sql c2-tombstone.sql; pair a.sql b.sql ;;
-  C3)  fill a.sql as-user.sql c3-register-hold.sql; fill b.sql gate.sql as-user.sql c3-register.sql; pair a.sql b.sql ;;
+  C3)  fill a.sql as-user.sql c3-register-hold.sql; fill b.sql c3-marker.sql gate.sql as-user.sql c3-register.sql; pair a.sql b.sql ;;
   C4)  fill a.sql c4-lowlock-then-files.sql as-user.sql c4-files-a.sql; fill b.sql gate.sql as-user.sql c4-files-b.sql; pair a.sql b.sql ;;
 esac
 fill assert.filled.sql assert.sql

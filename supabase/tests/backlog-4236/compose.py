@@ -20,7 +20,8 @@ fx = open(os.path.join(here, 'lib', 'fixtures.sql')).read()
 for tag in ('$rbx$', '$mg1$', '$mg2$', '$run$', '$drv4236$', '$h$'):
     assert tag not in rb and tag not in M1 and tag not in M2, tag
 assert ctl.count('__ROLLBACK__') <= 1 and ctl.count('__M1__') <= 1 and ctl.count('__M2__') <= 1
-text = ("SET LOCAL lock_timeout = '10s';\n" + rb + '\n' + M1 + '\n' + M1 + '\n' + M2 + '\n' + M2 + '\n' + hl + '\n' + fx + '\n'
+# first statement of the transaction: keep this call's statements out of pg_stat_statements
+text = ("SET LOCAL pg_stat_statements.track = 'none';\nSET LOCAL lock_timeout = '10s';\n" + rb + '\n' + M1 + '\n' + M1 + '\n' + M2 + '\n' + M2 + '\n' + hl + '\n' + fx + '\n'
         + ctl.replace('__ROLLBACK__', rb).replace('__M1__', M1).replace('__M2__', M2))
 text = text.replace('__RUN__', secrets.token_hex(12))
 assert '__RUN__' not in text
