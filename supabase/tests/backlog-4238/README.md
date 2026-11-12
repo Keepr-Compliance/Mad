@@ -28,3 +28,7 @@ its table through row rules only (no owner filter), so the owner-only control de
 
 Mutants marked `want green` are measured equivalent in this venue and kept so the claim stays
 checked. Results: `results-2026-11-11.txt` (ends with a catalog query showing no residue).
+
+Every composed call starts with `SET LOCAL pg_stat_statements.track = 'none';` so a run adds no statement entries
+(measured 2026-11-12: one migration send added 110 entries without it, 2 with it). The two-session scripts do
+not read pg_stat_statements.

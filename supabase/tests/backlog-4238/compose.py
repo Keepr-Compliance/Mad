@@ -20,7 +20,8 @@ for tag in ('$rbx4238$', '$mg4238$', '$run$', '$drv4238$', '$h$', '$s$'):
     assert tag not in rb and tag not in m, tag
 assert ctl.count('__ROLLBACK__') <= 1 and ctl.count('__MIGRATION__') <= 1
 pre = open(os.path.join(here, 'lib', 'pre-' + ctl_name)).read() if os.path.exists(os.path.join(here, 'lib', 'pre-' + ctl_name)) else ''
-text = pre + rb + '\n' + m + '\n' + m + '\n' + hl + '\n' + ctl.replace('__ROLLBACK__', rb).replace('__MIGRATION__', m)
+# first statement of the transaction: keep this call's statements out of pg_stat_statements
+text = "SET LOCAL pg_stat_statements.track = 'none';\n" + pre + rb + '\n' + m + '\n' + m + '\n' + hl + '\n' + ctl.replace('__ROLLBACK__', rb).replace('__MIGRATION__', m)
 # portal secrets for this run only: random, never in the repository
 assert '__SECRET__' not in m and '__SECRET__' not in rb
 text = text.replace('__SECRET__', secrets.token_hex(32)).replace('__PREV_SECRET__', secrets.token_hex(32))
