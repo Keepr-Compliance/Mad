@@ -558,7 +558,12 @@ describe("BACKLOG-4181 PR 3: machine class and env.health, end to end", () => {
       1000,
       2,
     ]);
-    expect(JSON.stringify(l)).not.toMatch(/defender|2040|512|1500/);
+    // Field values only: the random trace id and device id can contain any digit run.
+    const values = Object.entries(l.attributes)
+      .filter(([k]) => k !== "keepr.deviceId")
+      .map(([, a]) => a.value);
+    for (const bad of ["defender", 2040, 512, 1500]) expect(values).not.toContain(bad);
+    expect(values.filter((v) => typeof v === "string").join(" ")).not.toMatch(/defender/);
   });
 
   it("C9 env.health while sharing is OFF: nothing sent", async () => {
