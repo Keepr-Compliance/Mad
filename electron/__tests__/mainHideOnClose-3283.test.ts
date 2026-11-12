@@ -5,7 +5,8 @@
 import * as fs from "fs";
 import * as path from "path";
 
-const MAIN = fs.readFileSync(path.resolve(__dirname, "../main.ts"), "utf8");
+// Windows CI checks out CRLF; the patterns below are written with \n.
+const MAIN = fs.readFileSync(path.resolve(__dirname, "../main.ts"), "utf8").replace(/\r\n/g, "\n");
 const body = (re: RegExp) => {
   const m = MAIN.match(re);
   expect(m).not.toBeNull();
