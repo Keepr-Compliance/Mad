@@ -103,6 +103,17 @@ describe('H5: misconfigured', () => {
       { NEXT_PUBLIC_SUPABASE_ANON_KEY: undefined, SUPABASE_SERVICE_ROLE_KEY: `service-${PLANTED_PLAIN}` },
       ['NEXT_PUBLIC_SUPABASE_ANON_KEY'],
     ],
+    [
+      // the service key is shaped like a valid pepper, so a fallback to it would succeed
+      'pepper unset, service role key set to a 32-byte base64url value',
+      { MCP_TOKEN_PEPPER: undefined, SUPABASE_SERVICE_ROLE_KEY: Buffer.alloc(32, 7).toString('base64url') },
+      ['MCP_TOKEN_PEPPER'],
+    ],
+    [
+      'secret unset, service role key set',
+      { MCP_PORTAL_SECRET: undefined, SUPABASE_SERVICE_ROLE_KEY: Buffer.alloc(32, 7).toString('base64url') },
+      ['MCP_PORTAL_SECRET'],
+    ],
   ];
 
   it.each(cases)('%s: every route is 503 with no database call; the log names the variable only', async (_l, env, names) => {
@@ -131,6 +142,7 @@ describe('H5: misconfigured', () => {
       expect(l).not.toContain(OAUTH_ENV.MCP_PORTAL_SECRET);
       expect(l).not.toContain(OAUTH_ENV.MCP_TOKEN_PEPPER);
       expect(l).not.toContain(OAUTH_ENV.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+      if (process.env.SUPABASE_SERVICE_ROLE_KEY) expect(l).not.toContain(process.env.SUPABASE_SERVICE_ROLE_KEY);
     }
   });
 });
