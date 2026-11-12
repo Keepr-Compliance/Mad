@@ -22,6 +22,9 @@ import { requireDomainClaimAccess } from '@/lib/domain/access';
 import { normalizeClaimDomain } from '@/lib/domain/normalize';
 import { lookupClaimTxt } from '@/lib/domain/doh';
 import {
+  BLOCK_SOLO_NOT_VERIFIED,
+  BLOCK_SOLO_OFF_MESSAGE,
+  BLOCK_SOLO_ON_MESSAGE,
   CHECK_RESULTS,
   DOMAIN_CLAIM_CONSUMER,
   DOMAIN_CLAIM_FAILED,
@@ -197,5 +200,35 @@ export async function withdrawDomainClaim(claimId: string): Promise<DomainClaimA
   if (error) return rpcFailure(error, 'withdraw');
   const reply = replyObject(data);
   if (reply.success === true) return { success: true, message: 'Domain removed.', status: 'withdrawn' };
+  return fail(DOMAIN_CLAIM_NOT_FOUND);
+}
+
+/**
+ * BACKLOG-3962 PR4a: turn "personal accounts" on or off for one verified domain. Runs on the
+ * caller's session client: domain_claim_set_block_solo decides on auth.uid() (an admin of the
+ * claim's organization; turning it on needs a verified claim).
+ */
+export async function setBlockSoloSignups(claimId: string, on: boolean): Promise<DomainClaimActionResult> {
+  const blocked = await blockWriteDuringImpersonation();
+  if (blocked) return fail(blocked.error);
+  if (typeof claimId !== 'string' || !UUID.test(claimId) || typeof on !== 'boolean') return fail(DOMAIN_CLAIM_NOT_FOUND);
+
+  const access = await requireDomainClaimAccess();
+  if (!access.ok) return fail(DOMAIN_CLAIM_NOT_AUTHORIZED);
+
+  const { data, error } = (await access.supabase.rpc('domain_claim_set_block_solo', {
+    p_claim: claimId,
+    p_on: on,
+  })) as RpcReply;
+  if (error) return rpcFailure(error, 'set_block_solo');
+  const reply = replyObject(data);
+  if (reply.success === true) {
+    return {
+      success: true,
+      message: on ? BLOCK_SOLO_ON_MESSAGE : BLOCK_SOLO_OFF_MESSAGE,
+      status: 'verified',
+    };
+  }
+  if (reply.error === 'not_verified') return fail(BLOCK_SOLO_NOT_VERIFIED);
   return fail(DOMAIN_CLAIM_NOT_FOUND);
 }

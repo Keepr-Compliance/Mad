@@ -29,7 +29,7 @@ import {
 } from '@keepr/design-system';
 import { AlertBanner, Button } from '@keepr/ui';
 import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
-import { checkDomainClaim, createDomainClaim, withdrawDomainClaim } from '@/lib/actions/domainClaim';
+import { checkDomainClaim, createDomainClaim, setBlockSoloSignups, withdrawDomainClaim } from '@/lib/actions/domainClaim';
 import {
   DOMAIN_CLAIM_FAILED,
   DOMAIN_CLAIM_UNAVAILABLE,
@@ -188,6 +188,23 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
       setBusy(null);
     }
   };
+
+  // BACKLOG-3962 PR4a: the personal-accounts switch on a verified domain.
+  const handleBlockSolo = async (claimId: string, on: boolean) => {
+    setBusy(`solo:${claimId}`);
+    setNotice(null);
+    try {
+      const res = await setBlockSoloSignups(claimId, on);
+      setNotice({ claimId: null, tone: res.success ? 'info' : 'destructive', text: res.message });
+      if (res.success) refresh();
+    } catch {
+      setNotice({ claimId: null, tone: 'destructive', text: DOMAIN_CLAIM_FAILED });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const verifiedClaims = claims.filter((c) => c.status === 'verified');
 
   const handleRemove = async (claimId: string) => {
     if (confirmRemove !== claimId) {
@@ -420,6 +437,48 @@ export default function DomainSettingsClient({ claims, loadState }: DomainSettin
             </TableBody>
           </Table>
         </TableContainer>
+      )}
+
+      {verifiedClaims.length > 0 && (
+        <section aria-labelledby="personal-accounts-title" className="rounded-lg border border-gray-200 bg-white p-6 space-y-4">
+          <div>
+            <h2 id="personal-accounts-title" className="text-base font-semibold text-gray-900">
+              Personal accounts
+            </h2>
+            <p className="mt-1 text-sm text-gray-500">
+              Stop people with an email on your domain from starting their own Keepr account. They can still join
+              your brokerage through an invitation. People who already have an account are not affected.
+            </p>
+          </div>
+          <ul className="divide-y divide-gray-100">
+            {verifiedClaims.map((claim) => (
+              <li
+                key={claim.id}
+                data-testid={`block-solo-${claim.id}`}
+                className="flex flex-wrap items-center justify-between gap-3 py-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-900">@{claim.unicodeDomain}</p>
+                  <p className="text-sm text-gray-500">
+                    {claim.blockSoloSignups ? 'New personal accounts are off: people must be invited.' : 'People can start their own account.'}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => handleBlockSolo(claim.id, !claim.blockSoloSignups)}
+                  disabled={busy !== null}
+                >
+                  {busy === `solo:${claim.id}`
+                    ? 'Saving...'
+                    : claim.blockSoloSignups
+                      ? 'Allow personal accounts'
+                      : 'Turn off personal accounts'}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
     </div>
   );

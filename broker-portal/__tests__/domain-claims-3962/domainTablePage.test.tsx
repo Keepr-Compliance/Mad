@@ -41,6 +41,7 @@ const mk = (over: Partial<DomainClaimView>): DomainClaimView => ({
   lastCheckedAt: null,
   lastCheckResult: null,
   addedBy: null,
+  blockSoloSignups: false,
   ...over,
 });
 

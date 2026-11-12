@@ -27,6 +27,7 @@ const base: DomainClaimView = {
   lastCheckedAt: null,
   lastCheckResult: null,
   addedBy: null,
+  blockSoloSignups: false,
 };
 
 describe('DomainName', () => {

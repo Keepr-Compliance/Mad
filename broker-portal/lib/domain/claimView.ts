@@ -27,9 +27,11 @@ export interface DomainClaimRow {
   last_checked_at: string | null;
   last_check_result: string | null;
   created_by?: string | null;
+  block_solo_signups?: boolean | null;
 }
 
-export const DOMAIN_CLAIM_SELECT = 'id, domain, token, status, verified_at, last_checked_at, last_check_result, created_by';
+export const DOMAIN_CLAIM_SELECT =
+  'id, domain, token, status, verified_at, last_checked_at, last_check_result, created_by, block_solo_signups';
 
 /** Statuses the page lists. Withdrawn rows are history; a revoked row tells the admin why it stopped. */
 export const LISTED_STATUSES = ['pending', 'verified', 'lapsed', 'revoked'] as const;
@@ -53,6 +55,7 @@ export function toDomainClaimView(row: DomainClaimRow, addedBy: string | null = 
     lastCheckedAt: row.last_checked_at,
     lastCheckResult: result,
     addedBy,
+    blockSoloSignups: row.block_solo_signups === true,
   };
 }
 
