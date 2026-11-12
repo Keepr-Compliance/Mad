@@ -72,7 +72,7 @@ MUTANTS = {
     'M_ensure_any_licence': [("  IF NOT EXISTS (SELECT 1 FROM public.licenses l WHERE l.user_id = v_uid)\n     AND NOT EXISTS (SELECT 1 FROM public.organizations o WHERE o.personal_owner_user_id = v_uid) THEN\n",
                               "  IF NOT EXISTS (SELECT 1 FROM public.organizations o WHERE o.personal_owner_user_id = v_uid) THEN\n")],
     # C2 (v2 item 4): caller_domain_managed ignores the licence
-    'M_managed_any_licence': [("  IF v_uid IS NULL OR EXISTS (SELECT 1 FROM public.licenses l WHERE l.user_id = v_uid) THEN\n", "  IF v_uid IS NULL THEN\n")],
+    'M_managed_any_licence': [("  IF v_uid IS NULL OR EXISTS (SELECT 1 FROM public.licenses l WHERE l.user_id = v_uid)\n     OR EXISTS", "  IF v_uid IS NULL\n     OR EXISTS")],
     # S1j: the personal-org exemption dropped from the licence gate
     'M_lic_no_personal_exempt': [("     AND NOT EXISTS (SELECT 1 FROM public.organizations o WHERE o.personal_owner_user_id = p_user_id) THEN\n    v_block", " THEN\n    v_block")],
     # C6: the personal-org exemption dropped from caller_domain_managed
