@@ -33,7 +33,7 @@ import {
   type StringListPath,
 } from '@/lib/sender-rules/edit';
 import { TIPS, type TipKey } from '@/lib/sender-rules/tips';
-import { InfoTip } from './InfoTip';
+import { InfoTip } from '@/components/shared/InfoTip';
 import { ListEditor } from './ListEditor';
 
 const BULK_KEY_LABELS: Record<(typeof BULK_KEYS)[number], string> = {
