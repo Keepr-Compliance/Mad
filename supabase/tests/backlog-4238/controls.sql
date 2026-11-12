@@ -717,12 +717,13 @@ BEGIN
 
   -- ===== B2: per-IP registration limit (10/hour) =====
   BEGIN
-    FOR n IN 1..10 LOOP t := pg_temp.reg('ri' || n, ARRAY[pg_temp.claude()], 'ip-same'); END LOOP;
-    t2 := pg_temp.reg('ri11', ARRAY[pg_temp.claude()], 'ip-same');
-    t3 := pg_temp.reg('ri12', ARRAY[pg_temp.claude()], 'ip-other');
+    FOR n IN 1..60 LOOP t := pg_temp.reg('ri' || n, ARRAY[pg_temp.claude()], 'ip-same'); END LOOP;
+    t2 := pg_temp.reg('ri61', ARRAY[pg_temp.claude()], 'ip-same');
+    t3 := pg_temp.reg('ri62', ARRAY[pg_temp.claude()], 'ip-other');
     r := r || jsonb_build_object('B2_registration_ip_limit', pg_temp.pass(
-      pg_temp.err(t) = 'OK' AND pg_temp.j(t2) = '{"ok": false, "error": "rate_limited"}'::jsonb AND pg_temp.err(t3) = 'OK',
-      '10th=' || pg_temp.err(t) || ' 11th=' || t2 || ' other_ip=' || pg_temp.err(t3)));
+      pg_temp.err(t) = 'OK' AND pg_temp.j(t2) = '{"ok": false, "error": "rate_limited"}'::jsonb AND pg_temp.err(t3) = 'OK'
+      AND (SELECT count(*) FROM public.mcp_oauth_clients WHERE client_id LIKE 'kpr\_c\_ri%') = 61,
+      '60th=' || pg_temp.err(t) || ' 61st=' || t2 || ' other_ip=' || pg_temp.err(t3)));
     RAISE EXCEPTION USING ERRCODE = 'T4238';
   EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('B2g_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
@@ -766,12 +767,19 @@ BEGIN
     INSERT INTO public.mcp_rate_counters (bucket, window_start, count) VALUES
       ('reg_ip:' || encode(pg_temp.dg('ip-n3'), 'hex'), now() - interval '3 days', 5),
       ('reg_ip:' || encode(pg_temp.dg('ip-n3'), 'hex'), now() - interval '20 hours', 2),
-      ('reg_ip:' || encode(pg_temp.dg('ip-n3other'), 'hex'), now() - interval '3 days', 5);
+      ('reg_ip:' || encode(pg_temp.dg('ip-n3other'), 'hex'), now() - interval '3 days', 5),
+      ('reg_ip:' || encode(pg_temp.dg('ip-n3other'), 'hex'), now() - interval '23 hours', 1),
+      ('call_conn:p4238-n3live', public._mcp_window(interval '1 minute'), 3);
     PERFORM pg_temp.reg('n3', ARRAY[pg_temp.claude()], 'ip-n3');
-    ok := (SELECT count(*) FROM public.mcp_rate_counters WHERE bucket = 'reg_ip:' || encode(pg_temp.dg('ip-n3'), 'hex') AND window_start < now() - interval '1 day') = 0
+    ok := NOT EXISTS (SELECT 1 FROM public.mcp_rate_counters WHERE window_start < now() - interval '1 day'
+                       AND bucket IN ('reg_ip:' || encode(pg_temp.dg('ip-n3'), 'hex'), 'reg_ip:' || encode(pg_temp.dg('ip-n3other'), 'hex')))
       AND (SELECT count(*) FROM public.mcp_rate_counters WHERE bucket = 'reg_ip:' || encode(pg_temp.dg('ip-n3'), 'hex') AND window_start = now() - interval '20 hours') = 1
-      AND (SELECT count(*) FROM public.mcp_rate_counters WHERE bucket = 'reg_ip:' || encode(pg_temp.dg('ip-n3other'), 'hex')) = 1;
-    s := 'counters_ok=' || ok;
+      AND (SELECT count(*) FROM public.mcp_rate_counters WHERE bucket = 'reg_ip:' || encode(pg_temp.dg('ip-n3other'), 'hex') AND window_start = now() - interval '23 hours') = 1
+      AND (SELECT count FROM public.mcp_rate_counters WHERE bucket = 'call_conn:p4238-n3live') = 3;
+    s := 'counters_ok=' || ok || ' stale_left=' || (SELECT count(*) FROM public.mcp_rate_counters WHERE window_start < now() - interval '1 day'
+                       AND bucket IN ('reg_ip:' || encode(pg_temp.dg('ip-n3'), 'hex'), 'reg_ip:' || encode(pg_temp.dg('ip-n3other'), 'hex')))
+         || ' live_left=' || (SELECT count(*) FROM public.mcp_rate_counters WHERE window_start >= now() - interval '1 day'
+                       AND bucket IN ('reg_ip:' || encode(pg_temp.dg('ip-n3'), 'hex'), 'reg_ip:' || encode(pg_temp.dg('ip-n3other'), 'hex'), 'call_conn:p4238-n3live'));
     c := pg_temp.connect(A, 'n3t');
     INSERT INTO public.mcp_tokens (token_sha256, connection_id, kind, pepper_version, issued_at, expires_at)
     VALUES (sha256(pg_temp.dg('old-n3')), (c ->> 'conn')::uuid, 'access', 1, now() - interval '3 days', now() - interval '2 days');
@@ -837,6 +845,87 @@ BEGIN
     r := r || jsonb_build_object('W3_exchange_insert_failure_rolls_back', pg_temp.pass((c ->> 'ok')::boolean AND (c3 ->> 'ok')::boolean AND pg_temp.err(c2 ->> 'appr') = 'OK' AND ok, s));
     RAISE EXCEPTION USING ERRCODE = 'T4238';
   EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('W3_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  -- ===== R3: failing token requests naming unregistered client ids add no counter rows =====
+  BEGIN
+    k0 := (SELECT count(*) FROM public.mcp_rate_counters);
+    FOR n IN 1..25 LOOP
+      s := 'kpr_c_' || substr(replace(replace(encode(gen_random_bytes(18), 'base64'), '+', '-'), '/', '_'), 1, 22);
+      t := pg_temp.call_as(NULL, format('SELECT public.mcp_exchange_code(%L, %s, %L, %L, NULL, %L, %s, %s)', pg_temp.sec(),
+             pg_temp.hx(gen_random_bytes(32)), pg_temp.ver(), s, pg_temp.res(), pg_temp.hx(gen_random_bytes(32)), pg_temp.hx(gen_random_bytes(32))), 'anon');
+      t2 := pg_temp.call_as(NULL, format('SELECT public.mcp_refresh(%L, %s, %L, %L, %s, %s)', pg_temp.sec(),
+             pg_temp.hx(gen_random_bytes(32)), s, pg_temp.res(), pg_temp.hx(gen_random_bytes(32)), pg_temp.hx(gen_random_bytes(32))), 'anon');
+    END LOOP;
+    k1 := (SELECT count(*) FROM public.mcp_rate_counters);
+    r := r || jsonb_build_object('R3_unknown_client_no_counter_rows', pg_temp.pass(
+      k1 = k0 AND pg_temp.j(t) = '{"ok": false, "error": "invalid_grant"}'::jsonb AND pg_temp.j(t2) = '{"ok": false, "error": "invalid_grant"}'::jsonb,
+      'rows_added=' || (k1 - k0) || ' exchange=' || t || ' refresh=' || t2));
+    RAISE EXCEPTION USING ERRCODE = 'T4238';
+  EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('R3_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  -- ===== R1: exchange without a redirect address binds to the stored one =====
+  BEGIN
+    c := pg_temp.to_code(A, 'r1');
+    t := pg_temp.exch('c-r1', pg_temp.ver(), 'r1', NULL, 'at-r1', 'rt-r1');
+    c2 := pg_temp.to_code(A, 'r1b', pg_temp.gpt());
+    DELETE FROM public.mcp_redirect_allowlist WHERE redirect_uri = pg_temp.gpt();
+    t2 := pg_temp.exch('c-r1b', pg_temp.ver(), 'r1b', NULL, 'at-r1b', 'rt-r1b');
+    r := r || jsonb_build_object('R1_exchange_null_redirect', pg_temp.pass(
+      pg_temp.err(c ->> 'appr') = 'OK' AND pg_temp.err(t) = 'OK' AND pg_temp.err(pg_temp.st('at-r1')) = 'OK'
+      AND pg_temp.err(c2 ->> 'appr') = 'OK' AND pg_temp.err(t2) = 'invalid_grant'
+      AND NOT EXISTS (SELECT 1 FROM public.mcp_tokens WHERE token_sha256 = sha256(pg_temp.dg('at-r1b'))),
+      'null_redirect=' || t || ' null_redirect_allowlist_removed=' || t2));
+    RAISE EXCEPTION USING ERRCODE = 'T4238';
+  EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('R1_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  -- ===== R2: a used code presented again removes the connection only when the request is valid =====
+  BEGIN
+    s := '';
+    c := pg_temp.connect(A, 'r2');
+    PERFORM pg_temp.reg('r2z', ARRAY[pg_temp.claude()], 'ipr-r2z');
+    t := pg_temp.exch('c-r2', 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXl', 'r2', pg_temp.claude(), 'at-r2x', 'rt-r2x');
+    t2 := pg_temp.exch('c-r2', pg_temp.ver(), 'r2z', pg_temp.claude(), 'at-r2y', 'rt-r2y');
+    t3 := pg_temp.exch('c-r2', pg_temp.ver(), 'r2', pg_temp.gpt(), 'at-r2w', 'rt-r2w');
+    ok := pg_temp.j(t) = '{"ok": false, "error": "invalid_grant"}'::jsonb AND pg_temp.j(t2) = '{"ok": false, "error": "invalid_grant"}'::jsonb
+      AND pg_temp.j(t3) = '{"ok": false, "error": "invalid_grant"}'::jsonb
+      AND EXISTS (SELECT 1 FROM public.mcp_connections WHERE id = (c ->> 'conn')::uuid AND status = 'active')
+      AND pg_temp.err(pg_temp.st('at-r2')) = 'OK'
+      AND (SELECT count(*) FROM public.mcp_call_log WHERE user_id = A AND event = 'code_replay_refused' AND connection_id = (c ->> 'conn')::uuid) = 3
+      AND (SELECT count(*) FROM public.mcp_call_log WHERE user_id = A AND event = 'code_replay') = 0;
+    s := 'wrong_verifier=' || pg_temp.err(t) || ' other_client=' || pg_temp.err(t2) || ' other_redirect=' || pg_temp.err(t3)
+      || ' kept=' || (EXISTS (SELECT 1 FROM public.mcp_connections WHERE id = (c ->> 'conn')::uuid))::text;
+    r := r || jsonb_build_object('R2_replay_invalid_keeps_connection', pg_temp.pass((c ->> 'ok')::boolean AND ok, s));
+    t := pg_temp.exch('c-r2', pg_temp.ver(), 'r2', NULL, 'at-r2v', 'rt-r2v');
+    r := r || jsonb_build_object('R2_replay_valid_removes_connection', pg_temp.pass(
+      pg_temp.j(t) = '{"ok": false, "error": "invalid_grant"}'::jsonb
+      AND NOT EXISTS (SELECT 1 FROM public.mcp_connections WHERE id = (c ->> 'conn')::uuid)
+      AND (SELECT count(*) FROM public.mcp_call_log WHERE user_id = A AND event = 'code_replay' AND connection_id = (c ->> 'conn')::uuid) = 1
+      AND pg_temp.err(pg_temp.st('at-r2')) = 'not_connected',
+      'valid_replay=' || t || ' kept=' || (EXISTS (SELECT 1 FROM public.mcp_connections WHERE id = (c ->> 'conn')::uuid))::text));
+    RAISE EXCEPTION USING ERRCODE = 'T4238';
+  EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('R2_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  -- ===== R4: a token insert failure in refresh leaves the presented token unused =====
+  BEGIN
+    c := pg_temp.connect(A, 'r4');
+    c2 := pg_temp.connect(B, 'r4x');
+    t := pg_temp.refr('rt-r4', 'r4', 'at-r4x', 'rt-r4b');           -- new access digest already exists (B's)
+    ok := pg_temp.j(t) = '{"ok": false, "error": "invalid_request"}'::jsonb
+      AND EXISTS (SELECT 1 FROM public.mcp_tokens WHERE token_sha256 = sha256(pg_temp.dg('rt-r4')) AND used_at IS NULL)
+      AND EXISTS (SELECT 1 FROM public.mcp_connections WHERE id = (c ->> 'conn')::uuid AND status = 'active')
+      AND NOT EXISTS (SELECT 1 FROM public.mcp_tokens WHERE token_sha256 = sha256(pg_temp.dg('rt-r4b')))
+      AND (SELECT count(*) FROM public.mcp_tokens WHERE connection_id = (c2 ->> 'conn')::uuid) = 2;
+    s := t || ' old_unused=' || (EXISTS (SELECT 1 FROM public.mcp_tokens WHERE token_sha256 = sha256(pg_temp.dg('rt-r4')) AND used_at IS NULL))::text;
+    t2 := pg_temp.refr('rt-r4', 'r4', 'at-r4c', 'rt-r4c');
+    ok := ok AND pg_temp.err(t2) = 'OK' AND EXISTS (SELECT 1 FROM public.mcp_connections WHERE id = (c ->> 'conn')::uuid);
+    s := s || ' retry=' || pg_temp.err(t2);
+    r := r || jsonb_build_object('R4_refresh_insert_failure_rolls_back', pg_temp.pass((c ->> 'ok')::boolean AND (c2 ->> 'ok')::boolean AND ok, s));
+    RAISE EXCEPTION USING ERRCODE = 'T4238';
+  EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('R4_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
 
   -- ===== N5: check_access is not_connected while the kill switch is off =====

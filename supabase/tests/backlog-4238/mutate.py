@@ -55,6 +55,21 @@ TOKEN_FAIL = ("  IF public._mcp_bump('tok_fail:' || coalesce(p_client_id, ''), i
               "    RETURN public._mcp_refuse(p_code);\n  END IF;\n  RETURN public._mcp_refuse('rate_limited');")
 REJECT = ("    DELETE FROM public.mcp_connections c\n     WHERE c.id = v_code.connection_id AND c.status = 'pending'\n    RETURNING c.user_id INTO v_user;\n"
           "    INSERT INTO public.mcp_call_log (user_id, connection_id, event, outcome, ended_at)\n    VALUES (v_user, v_code.connection_id, 'code_rejected', 'ok', now());\n")
+PRUNE_ALL = ("    DELETE FROM public.mcp_rate_counters o\n     WHERE (o.bucket, o.window_start) IN (\n"
+             "       SELECT x.bucket, x.window_start FROM public.mcp_rate_counters x\n"
+             "        WHERE x.window_start < now() - interval '1 day'\n        ORDER BY x.bucket, x.window_start\n"
+             "        LIMIT 200\n        FOR UPDATE SKIP LOCKED);\n")
+EXCH_INS_FAIL = ("      (sha256(p_rt_digest), v_code.connection_id, 'refresh', v_pepper, now() + interval '30 days');\n"
+                 "  EXCEPTION WHEN unique_violation OR not_null_violation THEN\n"
+                 "    RAISE EXCEPTION USING ERRCODE = 'MC001', MESSAGE = 'mcp token insert failed';")
+REFR_INS_FAIL = ("      (sha256(p_new_rt_digest), v_conn, 'refresh', v_pepper, now() + interval '30 days');\n"
+                 "  EXCEPTION WHEN unique_violation OR not_null_violation THEN\n"
+                 "    RAISE EXCEPTION USING ERRCODE = 'MC001', MESSAGE = 'mcp token insert failed';")
+REPLAY_CHECK = ("      IF (v_used.client_id = p_client_id\n          AND (p_redirect_uri IS NULL OR v_used.redirect_uri = p_redirect_uri)\n"
+                "          AND p_code_verifier ~ '^[A-Za-z0-9._~-]{43,128}$'\n"
+                "          AND public._mcp_b64url(sha256(convert_to(p_code_verifier, 'UTF8'))) = v_used.code_challenge) IS TRUE THEN")
+UNKNOWN_CLIENT = ("  IF NOT EXISTS (SELECT 1 FROM public.mcp_oauth_clients c WHERE c.client_id = p_client_id) THEN\n"
+                  "    RETURN public._mcp_refuse(p_code);\n  END IF;\n")
 TOKEN_PRUNE = "  DELETE FROM public.mcp_tokens o\n   WHERE o.connection_id = v_conn AND o.expires_at < now() - interval '1 day';\n"
 RO_LINE = "      PERFORM set_config('transaction_read_only', 'on', true);\n      PERFORM set_config('request.jwt.claims'"
 RO_LINE_NEW = "      PERFORM set_config('request.jwt.claims'"
@@ -110,13 +125,13 @@ MUT = {
       'D6_token_resolution', 'red', 'gate accepts a refresh token as access'),
   'M18_code_reusable': ('controls.sql', [(MIG, "     AND k.used_at IS NULL\n     AND k.expires_at > now()\n  RETURNING k.* INTO v_code;", "     AND k.expires_at > now()\n  RETURNING k.* INTO v_code;", 1)],
       'D7_code_single_use', 'red', 'code redemption without used_at IS NULL'),
-  'M19_replay_keeps_connection': ('controls.sql', [(MIG, "      DELETE FROM public.mcp_connections c\n       WHERE c.id = (SELECT k.connection_id FROM public.mcp_authorization_codes k WHERE k.code_sha256 = sha256(p_code_digest));\n", '', 1)],
-      'D7_code_single_use', 'red', 'code replay does not disconnect'),
+  'M19_replay_keeps_connection': ('controls.sql', [(MIG, "        DELETE FROM public.mcp_connections c WHERE c.id = v_used.connection_id;\n", '', 1)],
+      'D7_code_single_use R2_replay_valid_removes_connection', 'red', 'code replay does not disconnect'),
   'M20_pkce_unhashed': ('controls.sql', [(MIG, "public._mcp_b64url(sha256(convert_to(p_code_verifier, 'UTF8'))) = v_code.code_challenge", 'p_code_verifier = v_code.code_challenge', 1)],
       'D8_pkce_and_bindings', 'red', 'verifier compared to the challenge without hashing (plain method)'),
-  'M21_exchange_ignores_redirect': ('controls.sql', [(MIG, '      AND v_code.redirect_uri = p_redirect_uri\n', '', 1)],
+  'M21_exchange_ignores_redirect': ('controls.sql', [(MIG, '      AND (p_redirect_uri IS NULL OR v_code.redirect_uri = p_redirect_uri)\n      AND v_code.resource', '      AND v_code.resource', 1)],
       'D8_pkce_and_bindings', 'red', 'exchange without the redirect comparison'),
-  'M22_exchange_ignores_client': ('controls.sql', [(MIG, '  IF (v_code.client_id = p_client_id\n      AND v_code.redirect_uri', '  IF (true\n      AND v_code.redirect_uri', 1)],
+  'M22_exchange_ignores_client': ('controls.sql', [(MIG, '  IF (v_code.client_id = p_client_id\n      AND (p_redirect_uri IS NULL', '  IF (true\n      AND (p_redirect_uri IS NULL', 1)],
       'D8_pkce_and_bindings', 'red', 'exchange without the client comparison'),
   'M23_exchange_ignores_resource': ('controls.sql', [(MIG, '      AND v_code.resource = p_resource\n', '', 1)],
       'D8_pkce_and_bindings', 'red', 'exchange without the resource comparison'),
@@ -191,16 +206,18 @@ MUT = {
       'B2_approve_client_redirects', 'red', 'approve INSERT without the client redirect-list term'),
   'X10_no_user_cap': ('controls.sql', [(MIG, "interval '1 minute', 60);", "interval '1 minute', 100000);", 1)],
       'B2_per_user_cap', 'red', 'per-user limit raised to 100000'),
-  'X11_no_registration_limit': ('controls.sql', [(MIG, "interval '1 hour', 10);", "interval '1 hour', 100000);", 1)],
+  'X11_no_registration_limit': ('controls.sql', [(MIG, "interval '1 hour', 60);", "interval '1 hour', 100000);", 1)],
       'B2_registration_ip_limit', 'red', 'per-IP registration limit raised to 100000'),
   'N1_rejection_keeps_connection': ('controls.sql', [(MIG, REJECT, '', 1)],
       'N1_wrong_verifier_uses_up_code', 'red', 'rejected redemption leaves the pending connection and writes no event'),
-  'N2_exchange_skips_allowlist': ('controls.sql', [(MIG, "      AND EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = p_redirect_uri)\n", '', 1)],
-      'N2_exchange_rechecks_allowlist', 'red', 'exchange without the allowlist term'),
-  'N3_no_counter_prune': ('controls.sql', [(MIG, "    DELETE FROM public.mcp_rate_counters o\n     WHERE o.bucket = p_bucket AND o.window_start < now() - interval '1 day';\n", '', 1)],
+  'N2_exchange_skips_allowlist': ('controls.sql', [(MIG, "      AND EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = v_code.redirect_uri)\n", '', 1)],
+      'N2_exchange_rechecks_allowlist R1_exchange_null_redirect', 'red', 'exchange without the allowlist term'),
+  'N3_no_counter_prune': ('controls.sql', [(MIG, PRUNE_ALL, '', 1)],
       'N3_inline_pruning', 'red', 'counter prune removed'),
-  'N3_counter_prune_all_buckets': ('controls.sql', [(MIG, "     WHERE o.bucket = p_bucket AND o.window_start < now() - interval '1 day';", "     WHERE o.window_start < now() - interval '1 day';", 1)],
-      'N3_inline_pruning', 'red', 'counter prune not limited to the bucket'),
+  'R3_prune_own_bucket_only': ('controls.sql', [(MIG, "        WHERE x.window_start < now() - interval '1 day'\n", "        WHERE x.bucket = p_bucket AND x.window_start < now() - interval '1 day'\n", 1)],
+      'N3_inline_pruning', 'red', 'counter prune limited to the bumped bucket (previous shape)'),
+  'R3_prune_live_windows': ('controls.sql', [(MIG, "        WHERE x.window_start < now() - interval '1 day'\n", "        WHERE x.window_start < now()\n", 1)],
+      'N3_inline_pruning', 'red', 'counter prune without the one-day age term'),
   'N3_no_token_prune': ('controls.sql', [(MIG, TOKEN_PRUNE, '', 1)],
       'N3_inline_pruning', 'red', 'token prune removed'),
   'N3_prune_used_refresh': ('controls.sql', [(MIG, "   WHERE o.connection_id = v_conn AND o.expires_at < now() - interval '1 day';", "   WHERE o.connection_id = v_conn AND (o.expires_at < now() - interval '1 day' OR o.used_at IS NOT NULL);", 1)],
@@ -212,8 +229,33 @@ MUT = {
       'N1_wrong_verifier_uses_up_code', 'red', 'rejected-redemption DELETE keyed on the user instead of the connection'),
   'W2_token_prune_all_connections': ('controls.sql', [(MIG, "   WHERE o.connection_id = v_conn AND o.expires_at < now() - interval '1 day';", "   WHERE o.expires_at < now() - interval '1 day';", 1)],
       'N3b_token_prune_scope', 'red', 'token prune without the connection term'),
-  'W3_insert_failure_returns_in_handler': ('controls.sql', [(MIG, "    RAISE EXCEPTION USING ERRCODE = 'MC001', MESSAGE = 'mcp token insert failed';", "    RETURN public._mcp_refuse('invalid_request');", 1)],
+  'W3_insert_failure_returns_in_handler': ('controls.sql', [(MIG, EXCH_INS_FAIL, EXCH_INS_FAIL.replace("    RAISE EXCEPTION USING ERRCODE = 'MC001', MESSAGE = 'mcp token insert failed';", "    RETURN public._mcp_refuse('invalid_request');"), 1)],
       'W3_exchange_insert_failure_rolls_back', 'red', 'token insert failure returns from the inner handler (previous shape)'),
+  'R1_null_redirect_refused': ('controls.sql', [(MIG, '      AND (p_redirect_uri IS NULL OR v_code.redirect_uri = p_redirect_uri)\n      AND v_code.resource', '      AND v_code.redirect_uri = p_redirect_uri\n      AND v_code.resource', 1)],
+      'R1_exchange_null_redirect', 'red', 'exchange redirect term without the IS NULL arm'),
+  'R1_any_redirect_accepted': ('controls.sql', [(MIG, '      AND (p_redirect_uri IS NULL OR v_code.redirect_uri = p_redirect_uri)\n      AND v_code.resource', '      AND (p_redirect_uri IS NULL OR true)\n      AND v_code.resource', 1)],
+      'D8_pkce_and_bindings', 'red', 'exchange accepts NULL and also any other redirect address'),
+  'R1_allowlist_on_parameter': ('controls.sql', [(MIG, "      AND EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = v_code.redirect_uri)\n",
+      "      AND (p_redirect_uri IS NULL OR EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = p_redirect_uri))\n", 1)],
+      'R1_exchange_null_redirect', 'red', 'allowlist checked on the parameter, skipped when it is NULL'),
+  'R2_replay_ignores_verifier': ('controls.sql', [(MIG, REPLAY_CHECK, REPLAY_CHECK.replace("\n          AND p_code_verifier ~ '^[A-Za-z0-9._~-]{43,128}$'\n          AND public._mcp_b64url(sha256(convert_to(p_code_verifier, 'UTF8'))) = v_used.code_challenge) IS TRUE THEN", ") IS TRUE THEN"), 1)],
+      'R2_replay_invalid_keeps_connection', 'red', 'replay check without the verifier terms'),
+  'R2_replay_ignores_client': ('controls.sql', [(MIG, REPLAY_CHECK, REPLAY_CHECK.replace("      IF (v_used.client_id = p_client_id\n", "      IF (true\n"), 1)],
+      'R2_replay_invalid_keeps_connection', 'red', 'replay check without the client term'),
+  'R2_replay_ignores_redirect': ('controls.sql', [(MIG, REPLAY_CHECK, REPLAY_CHECK.replace("          AND (p_redirect_uri IS NULL OR v_used.redirect_uri = p_redirect_uri)\n", ""), 1)],
+      'R2_replay_invalid_keeps_connection', 'red', 'replay check without the redirect term'),
+  'R2_replay_always_removes': ('controls.sql', [(MIG, REPLAY_CHECK, "      IF true THEN", 1)],
+      'R2_replay_invalid_keeps_connection', 'red', 'replay removes the connection for any presenter (previous behaviour)'),
+  'R3_unknown_client_counted': ('controls.sql', [(MIG, UNKNOWN_CLIENT, '', 1)],
+      'R3_unknown_client_no_counter_rows', 'red', 'failure counter created for any client id (previous shape)'),
+  'R3_known_client_not_counted': ('controls.sql', [(MIG, "WHERE c.client_id = p_client_id) THEN\n    RETURN public._mcp_refuse(p_code);", "WHERE c.client_id = p_client_id AND false) THEN\n    RETURN public._mcp_refuse(p_code);", 1)],
+      'B3_lockout_failures_only', 'red', 'existence check never true: registered clients not counted'),
+  'R4_refresh_insert_failure_returns_in_handler': ('controls.sql', [(MIG, REFR_INS_FAIL, REFR_INS_FAIL.replace("    RAISE EXCEPTION USING ERRCODE = 'MC001', MESSAGE = 'mcp token insert failed';", "    RETURN public._mcp_refuse('invalid_request');"), 1)],
+      'R4_refresh_insert_failure_rolls_back', 'red', 'refresh token insert failure returns from the inner handler (previous shape)'),
+  'R5_registration_limit_59': ('controls.sql', [(MIG, "interval '1 hour', 60);", "interval '1 hour', 59);", 1)],
+      'B2_registration_ip_limit', 'red', 'registration limit 59 (the 60th refused)'),
+  'R5_registration_limit_61': ('controls.sql', [(MIG, "interval '1 hour', 60);", "interval '1 hour', 61);", 1)],
+      'B2_registration_ip_limit', 'red', 'registration limit 61 (the 61st allowed)'),
 }
 
 

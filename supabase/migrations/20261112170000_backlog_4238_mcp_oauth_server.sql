@@ -156,7 +156,7 @@ CREATE TABLE IF NOT EXISTS public.mcp_call_log (
   user_id       uuid NULL REFERENCES auth.users (id) ON DELETE CASCADE,
   connection_id uuid NULL,
   provider      text NULL,
-  event         text NOT NULL CHECK (event IN ('call', 'refresh_reuse', 'code_replay', 'code_rejected', 'disconnect', 'disconnect_all', 'cloud_off', 'reconnect_replaced')),
+  event         text NOT NULL CHECK (event IN ('call', 'refresh_reuse', 'code_replay', 'code_replay_refused', 'code_rejected', 'disconnect', 'disconnect_all', 'cloud_off', 'reconnect_replaced')),
   tool          text NULL CHECK (tool IS NULL OR tool IN ('get_status')),
   outcome       text NOT NULL CHECK (outcome IN ('pending', 'ok', 'not_connected', 'disabled', 'rate_limited', 'busy', 'not_entitled', 'timeout', 'error')),
   started_at    timestamptz NOT NULL DEFAULT now(),
@@ -221,8 +221,15 @@ DECLARE
 BEGIN
   PERFORM set_config('lock_timeout', '1000ms', true);
   BEGIN
+    -- windows older than a day, any bucket, at most 200 per call; rows locked by another
+    -- session are skipped, so pruners never wait on each other
     DELETE FROM public.mcp_rate_counters o
-     WHERE o.bucket = p_bucket AND o.window_start < now() - interval '1 day';
+     WHERE (o.bucket, o.window_start) IN (
+       SELECT x.bucket, x.window_start FROM public.mcp_rate_counters x
+        WHERE x.window_start < now() - interval '1 day'
+        ORDER BY x.bucket, x.window_start
+        LIMIT 200
+        FOR UPDATE SKIP LOCKED);
     INSERT INTO public.mcp_rate_counters AS rc (bucket, window_start, count)
     VALUES (p_bucket, public._mcp_window(p_window), 1)
     ON CONFLICT (bucket, window_start) DO UPDATE SET count = rc.count + 1
@@ -240,11 +247,15 @@ END
 $fn$;
 REVOKE ALL ON FUNCTION public._mcp_bump(text, interval, integer) FROM PUBLIC, anon, authenticated, service_role;
 
--- Token endpoint failure: counts it for the client id; returns the refusal, or 'rate_limited'
--- after more than 20 failures in the current minute. Called on failure paths only.
+-- Token endpoint failure: counts it for a registered client id; returns the refusal, or
+-- 'rate_limited' after more than 20 failures in the current minute. A client id that is not
+-- registered gets the refusal and no counter row. Called on failure paths only.
 CREATE OR REPLACE FUNCTION public._mcp_token_fail(p_client_id text, p_code text)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY INVOKER SET search_path = '' AS $fn$
 BEGIN
+  IF NOT EXISTS (SELECT 1 FROM public.mcp_oauth_clients c WHERE c.client_id = p_client_id) THEN
+    RETURN public._mcp_refuse(p_code);
+  END IF;
   IF public._mcp_bump('tok_fail:' || coalesce(p_client_id, ''), interval '1 minute', 20) IS NOT DISTINCT FROM 'ok' THEN
     RETURN public._mcp_refuse(p_code);
   END IF;
@@ -432,7 +443,7 @@ BEGIN
   IF (octet_length(p_ip_sha256) = 32) IS NOT TRUE THEN
     RETURN public._mcp_refuse('invalid_client_metadata');
   END IF;
-  v_b := public._mcp_bump('reg_ip:' || encode(p_ip_sha256, 'hex'), interval '1 hour', 10);
+  v_b := public._mcp_bump('reg_ip:' || encode(p_ip_sha256, 'hex'), interval '1 hour', 60);
   IF v_b IS NOT DISTINCT FROM 'ok' THEN
     v_b := public._mcp_bump('reg_all', interval '1 day', 500);
   END IF;
@@ -523,6 +534,7 @@ CREATE OR REPLACE FUNCTION public.mcp_exchange_code(p_secret text, p_code_digest
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $fn$
 DECLARE
   v_code   public.mcp_authorization_codes%ROWTYPE;
+  v_used   public.mcp_authorization_codes%ROWTYPE;
   v_user   uuid;
   v_redir  text;
   v_pepper smallint;
@@ -546,24 +558,34 @@ BEGIN
   RETURNING k.* INTO v_code;
 
   IF v_code.code_sha256 IS NULL THEN
-    SELECT c.user_id INTO v_user
+    -- a used code presented again: the connection is removed only when the request is otherwise
+    -- valid for that code (client, verifier, and redirect address when sent)
+    SELECT k.* INTO v_used
       FROM public.mcp_authorization_codes k
-      JOIN public.mcp_connections c ON c.id = k.connection_id
      WHERE k.code_sha256 = sha256(p_code_digest)
        AND k.used_at IS NOT NULL;
-    IF FOUND THEN
-      DELETE FROM public.mcp_connections c
-       WHERE c.id = (SELECT k.connection_id FROM public.mcp_authorization_codes k WHERE k.code_sha256 = sha256(p_code_digest));
-      INSERT INTO public.mcp_call_log (user_id, event, outcome, ended_at) VALUES (v_user, 'code_replay', 'ok', now());
+    IF v_used.code_sha256 IS NOT NULL THEN
+      SELECT c.user_id INTO v_user FROM public.mcp_connections c WHERE c.id = v_used.connection_id;
+      IF (v_used.client_id = p_client_id
+          AND (p_redirect_uri IS NULL OR v_used.redirect_uri = p_redirect_uri)
+          AND p_code_verifier ~ '^[A-Za-z0-9._~-]{43,128}$'
+          AND public._mcp_b64url(sha256(convert_to(p_code_verifier, 'UTF8'))) = v_used.code_challenge) IS TRUE THEN
+        DELETE FROM public.mcp_connections c WHERE c.id = v_used.connection_id;
+        INSERT INTO public.mcp_call_log (user_id, connection_id, event, outcome, ended_at)
+        VALUES (v_user, v_used.connection_id, 'code_replay', 'ok', now());
+      ELSE
+        INSERT INTO public.mcp_call_log (user_id, connection_id, event, outcome, ended_at)
+        VALUES (v_user, v_used.connection_id, 'code_replay_refused', 'ok', now());
+      END IF;
     END IF;
     RETURN public._mcp_token_fail(p_client_id, 'invalid_grant');
   END IF;
 
   -- a rejected redemption uses up the code and removes its pending connection
   IF (v_code.client_id = p_client_id
-      AND v_code.redirect_uri = p_redirect_uri
+      AND (p_redirect_uri IS NULL OR v_code.redirect_uri = p_redirect_uri)
       AND v_code.resource = p_resource
-      AND EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = p_redirect_uri)
+      AND EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = v_code.redirect_uri)
       AND p_code_verifier ~ '^[A-Za-z0-9._~-]{43,128}$'
       AND public._mcp_b64url(sha256(convert_to(p_code_verifier, 'UTF8'))) = v_code.code_challenge) IS NOT TRUE THEN
     DELETE FROM public.mcp_connections c
@@ -626,6 +648,8 @@ BEGIN
     RETURN public._mcp_token_fail(p_client_id, 'invalid_request');
   END IF;
 
+  -- token insert failure: everything in this block is rolled back (the presented token stays unused)
+  BEGIN
   UPDATE public.mcp_tokens t
      SET used_at = now()
     FROM public.mcp_connections c, public.mcp_settings s
@@ -660,11 +684,14 @@ BEGIN
       (sha256(p_new_at_digest), v_conn, 'access', v_pepper, now() + interval '1 hour'),
       (sha256(p_new_rt_digest), v_conn, 'refresh', v_pepper, now() + interval '30 days');
   EXCEPTION WHEN unique_violation OR not_null_violation THEN
-    RETURN public._mcp_refuse('invalid_request');
+    RAISE EXCEPTION USING ERRCODE = 'MC001', MESSAGE = 'mcp token insert failed';
   END;
   DELETE FROM public.mcp_tokens o
    WHERE o.connection_id = v_conn AND o.expires_at < now() - interval '1 day';
   RETURN jsonb_build_object('ok', true, 'token_type', 'Bearer', 'expires_in', 3600, 'scope', 'mcp:read');
+  EXCEPTION WHEN SQLSTATE 'MC001' THEN
+    RETURN public._mcp_token_fail(p_client_id, 'invalid_request');
+  END;
 END
 $fn$;
 REVOKE ALL ON FUNCTION public.mcp_refresh(text, bytea, text, text, bytea, bytea) FROM PUBLIC, anon, authenticated, service_role;

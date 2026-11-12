@@ -139,6 +139,25 @@ describe('BACKLOG-4238 migration file', () => {
     }
   });
 
+  it('limits registrations per hashed address to 60 per hour and failure counters to registered clients', () => {
+    expect(fn('mcp_register_client').body).toContain("public._mcp_bump('reg_ip:' || encode(p_ip_sha256, 'hex'), interval '1 hour', 60)");
+    expect(fn('_mcp_token_fail').body).toContain('IF NOT EXISTS (SELECT 1 FROM public.mcp_oauth_clients c WHERE c.client_id = p_client_id) THEN');
+    const bump = fn('_mcp_bump').body;
+    expect(bump).toContain("WHERE x.window_start < now() - interval '1 day'");
+    expect(bump).toContain('LIMIT 200');
+    expect(bump).toContain('FOR UPDATE SKIP LOCKED');
+    expect(bump).not.toMatch(/o\.bucket = p_bucket/);
+  });
+
+  it('rolls back exchange and refresh on a token insert failure', () => {
+    for (const name of ['mcp_exchange_code', 'mcp_refresh']) {
+      const b = fn(name).body;
+      expect(b).toContain("RAISE EXCEPTION USING ERRCODE = 'MC001'");
+      expect(b).toContain("EXCEPTION WHEN SQLSTATE 'MC001' THEN RETURN public._mcp_token_fail(p_client_id, 'invalid_request');");
+      expect(b).not.toContain("WHEN unique_violation OR not_null_violation THEN RETURN");
+    }
+  });
+
   it('keeps the call log content-free', () => {
     const block = SQL.slice(SQL.indexOf('CREATE TABLE IF NOT EXISTS public.mcp_call_log ('), SQL.indexOf('CREATE INDEX IF NOT EXISTS mcp_call_log_user_idx'));
     const cols = [...block.matchAll(/[(,] (\w+) (?:bigint|uuid|text|timestamptz|integer)\b/g)].map((m) => m[1]);
