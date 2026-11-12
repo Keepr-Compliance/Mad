@@ -27,6 +27,7 @@ import { clearInviteCookie, readInviteToken } from '@/lib/auth/inviteCookie';
 import { DEFAULT_NEXT_PATH, clearNextPathCookie, readNextPathCookie } from '@/lib/auth/safeNextPath';
 import { syncIdpNames } from '@/lib/auth/idpNames';
 import { isBrokerageSuspendedError } from '@/lib/auth/orgSuspension';
+import { isAlreadyPlacedError } from '@/lib/auth/alreadyPlaced';
 import { domainManagedFor, domainManagedMayReplace, runJitJoin } from '@/lib/auth/jitJoin';
 import { setupLanding } from '@/lib/billing/setupState';
 import {
@@ -167,6 +168,10 @@ export async function GET(request: Request) {
           // BACKLOG-3853 PR-2B: the brokerage is suspended; the member trigger refused.
           if (isBrokerageSuspendedError(acceptError)) {
             return refuse(request, supabase, origin, 'brokerage_suspended');
+          }
+          // BACKLOG-4179: the one-brokerage guard refused (a join elsewhere committed first).
+          if (isAlreadyPlacedError(acceptError)) {
+            return refuse(request, supabase, origin, 'already_placed');
           }
           console.error('accept_invitation RPC failed:', acceptError.message);
           return refuse(request, supabase, origin, 'invite_failed');
