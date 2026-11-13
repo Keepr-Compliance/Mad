@@ -3,15 +3,21 @@
  *
  * Cron route authorization (BACKLOG-3928).
  *
- * Both scheduled routes must refuse every request when CRON_SECRET is not
+ * Every scheduled route must refuse every request when CRON_SECRET is not
  * configured, and otherwise accept only `Bearer <CRON_SECRET>`.
  */
 
 const mockDrain = jest.fn();
 const mockLimit = jest.fn();
+const mockRpc = jest.fn();
+const mockLookup = jest.fn();
 
 jest.mock('@/lib/email/queue', () => ({
   drainEmailQueue: (...args: unknown[]) => mockDrain(...args),
+}));
+
+jest.mock('@/lib/domain/doh', () => ({
+  lookupClaimTxt: (...args: unknown[]) => mockLookup(...args),
 }));
 
 jest.mock('@/lib/supabase/service', () => {
@@ -26,6 +32,8 @@ jest.mock('@/lib/supabase/service', () => {
       from: () => ({
         select: () => filter,
       }),
+      // BACKLOG-3962: domain-recheck and domain-capture-switch start with rpc.
+      rpc: (...args: unknown[]) => mockRpc(...args),
     }),
   };
 });
@@ -45,6 +53,8 @@ jest.mock('@/lib/payments/fulfillment', () => ({
 
 import { GET as emailRetry } from '../../../../app/api/cron/email-retry/route';
 import { GET as paymentReconcile } from '../../../../app/api/cron/payment-reconcile/route';
+import { GET as domainRecheck } from '../../../../app/api/cron/domain-recheck/route';
+import { GET as domainCaptureSwitch } from '../../../../app/api/cron/domain-capture-switch/route';
 import { isAuthorizedCronRequest } from '../../../../lib/auth/cronAuth';
 
 const ORIGINAL = process.env.CRON_SECRET;
@@ -60,6 +70,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockDrain.mockResolvedValue({ scanned: 0, sent: 0, retryScheduled: 0, deadLettered: 0 });
   mockLimit.mockResolvedValue({ data: [], error: null });
+  mockRpc.mockResolvedValue({ data: [], error: null });
+  mockLookup.mockResolvedValue({ resolverOk: true, answers: [] });
 });
 
 afterAll(() => {
@@ -70,6 +82,8 @@ afterAll(() => {
 const routes: Array<[string, (r: Request) => Promise<Response>, () => jest.Mock]> = [
   ['email-retry', emailRetry, () => mockDrain],
   ['payment-reconcile', paymentReconcile, () => mockLimit],
+  ['domain-recheck', domainRecheck, () => mockRpc],
+  ['domain-capture-switch', domainCaptureSwitch, () => mockRpc],
 ];
 
 describe.each(routes)('GET /api/cron/%s authorization', (_name, GET, work) => {

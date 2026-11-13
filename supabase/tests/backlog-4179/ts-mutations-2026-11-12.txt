@@ -1,0 +1,10 @@
+T1_route_mapping_dropped: MUTATION APPLIED broker-portal/app/auth/callback/route.ts: if (false) {
+T1_route_mapping_dropped: exit=1 1 failed, 25 passed, 26 total -> RED
+T2_scim_mapping_dropped: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: if (false) {
+T2_scim_mapping_dropped: exit=1 2 failed, 38 passed, 40 total -> RED
+T3_portal_helper_code_dropped: MUTATION APPLIED broker-portal/lib/auth/alreadyPlaced.ts: return !!error && error.message === ALREADY_PLACED_ERROR;
+T3_portal_helper_code_dropped: exit=1 1 failed, 25 passed, 26 total -> RED
+T4_scim_helper_code_dropped: MUTATION APPLIED supabase/functions/scim/shared/alreadyPlaced.ts: return !!err && err.message === ALREADY_PLACED_ERROR;
+T4_scim_helper_code_dropped: exit=1 1 failed, 39 passed, 40 total -> RED
+restored route suite: exit=0 26 passed, 26 total
+restored scim suite: exit=0 40 passed, 40 total
