@@ -31,7 +31,6 @@ jest.mock('@supabase/supabase-js', () => ({
 import * as route from '@/app/api/mcp/route';
 import * as prm from '@/app/api/mcp/resource-metadata/route';
 import * as serverModule from '@/lib/mcp/server';
-import { STATUS_MESSAGES } from '@/lib/mcp/tools/status';
 import {
   OAUTH_ENV,
   PORTAL_SECRET,
@@ -53,6 +52,19 @@ const CHALLENGE_NO_TOKEN = `Bearer resource_metadata="${METADATA}", scope="mcp:r
 const CHALLENGE_INVALID = `Bearer error="invalid_token", resource_metadata="${METADATA}", scope="mcp:read"`;
 
 const KNOWN_DIGEST = expectedDigest(ACCESS_TOKEN);
+
+/** The tool error texts an AI app is shown (plan section m, M-S1..M-S4), written out here on purpose. */
+const STATUS_MESSAGES = {
+  not_connected: 'This connection was removed. Reconnect Keepr in your AI app.',
+  disabled: 'Keepr AI access is turned off right now.',
+  rate_limited: 'Too many requests. Try again in a minute.',
+  unavailable: 'Keepr could not answer. Try again.',
+};
+
+/** A database that answers ok to any arguments, so an argument assertion is what fails. */
+function acceptAnything() {
+  mockRpc.mockImplementation(async (fn: string) => ({ data: fn === 'mcp_check_access' ? checkAccessOk() : getStatusOk(), error: null }));
+}
 
 /** The database: answers for the known token digest, with the portal secret and this resource. */
 function dbAnswer(fn: string, args: Record<string, unknown>) {
@@ -202,6 +214,7 @@ describe('C28: only kpr_at_ tokens reach the database', () => {
 
 describe('C29: the digest of the whole token, with the pepper, reaches both database functions', () => {
   it('mcp_check_access gets exactly the portal secret, the digest and the configured resource', async () => {
+    acceptAnything();
     expect((await post(bearer(ACCESS_TOKEN))).status).toBe(200);
     const [[fn, args]] = mockRpc.mock.calls;
     expect(fn).toBe('mcp_check_access');
@@ -398,9 +411,11 @@ describe('C32: get_status answers from the database', () => {
 
 describe('C33: resource, authInfo and order', () => {
   it('a request on another host still checks access for the configured resource', async () => {
+    acceptAnything();
     const client = await connect('legacy', ACCESS_TOKEN, 'https://other-host.test/api/mcp');
     await client.callTool({ name: 'get_status', arguments: {} });
     await client.close();
+    expect(rpcCalls('mcp_check_access').length).toBeGreaterThan(0);
     expect(rpcCalls('mcp_check_access').every(([, a]) => a.p_resource === RESOURCE)).toBe(true);
     expect(rpcCalls('mcp_get_status')).toHaveLength(1);
     expect(rpcCalls('mcp_get_status')[0][1].p_resource).toBe(RESOURCE);

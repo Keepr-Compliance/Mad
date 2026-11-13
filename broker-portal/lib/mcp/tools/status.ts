@@ -26,7 +26,7 @@ export const STATUS_TOOL: Tool = {
 };
 
 /** Tool error texts (plan section m, M-S1..M-S4). */
-export const STATUS_MESSAGES = {
+const STATUS_MESSAGES = {
   not_connected: 'This connection was removed. Reconnect Keepr in your AI app.',
   disabled: 'Keepr AI access is turned off right now.',
   rate_limited: 'Too many requests. Try again in a minute.',
