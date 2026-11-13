@@ -516,6 +516,15 @@ describe('A5: both protocol eras, stateless', () => {
     await client.close();
   });
 
+  it('tools/list returns the get_status description text exactly', async () => {
+    const client = await connect('legacy');
+    const tools = await client.listTools();
+    await client.close();
+    expect(tools.tools[0].description).toBe(
+      'Checks that the Keepr connection works and whether this account has Keepr Cloud. Returns no deals, contacts, texts or emails.'
+    );
+  });
+
   it('a 2026-07-28 client lists get_status with no initialize', async () => {
     const client = await connect({ pin: '2026-07-28' });
     const tools = await client.listTools();

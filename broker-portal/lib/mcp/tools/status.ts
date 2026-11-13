@@ -15,7 +15,8 @@ export const STATUS_TOOL_NAME = 'get_status';
 export const STATUS_TOOL: Tool = {
   name: STATUS_TOOL_NAME,
   title: 'Keepr connection status',
-  description: 'Confirms the Keepr connection works. Returns no account data.',
+  description:
+    'Checks that the Keepr connection works and whether this account has Keepr Cloud. Returns no deals, contacts, texts or emails.',
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   annotations: {
     readOnlyHint: true,
