@@ -596,7 +596,7 @@ describe('SharingDialog (BACKLOG-3513)', () => {
   });
 
   // BACKLOG-3513 PR-3d (founder QA, broker test 6): a visible Cancel, and a menu that floats.
-  it('Q1 Cancel in both confirms is a bordered button, never ghost', () => {
+  it('Q1 Cancel in both confirms and the row access trigger are bordered, never ghost or transparent', () => {
     setup({ onTransferOwnership: jest.fn() });
     fireEvent.click(trigger(/^Access for Priya Raman/));
     fireEvent.click(item(/^Remove access$/));
