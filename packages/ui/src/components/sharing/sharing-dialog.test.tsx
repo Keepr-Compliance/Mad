@@ -1,8 +1,8 @@
 import * as React from 'react';
 import * as fs from 'fs';
 import * as path from 'path';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
-import { SharingDialog } from './sharing-dialog';
+import { act, createEvent, fireEvent, render, screen, within } from '@testing-library/react';
+import { SharingDialog, accessMenuPosition } from './sharing-dialog';
 import type { SharingDialogProps, SharingEntry, SharingPrincipal } from './types';
 import { SharingDialog as SharingDialogFromIndex } from '../../index';
 
@@ -593,6 +593,150 @@ describe('SharingDialog (BACKLOG-3513)', () => {
     setup({ onRemove: jest.fn() });
     confirmRemove('Jordan Lee');
     expect(rowTrigger('Jordan Lee')).toHaveAccessibleName('Access for Jordan Lee: Can edit');
+  });
+
+  // BACKLOG-3513 PR-3d (founder QA, broker test 6): a visible Cancel, and a menu that floats.
+  it('Q1 Cancel in both confirms and the row access trigger are bordered, never ghost or transparent', () => {
+    setup({ onTransferOwnership: jest.fn() });
+    fireEvent.click(trigger(/^Access for Priya Raman/));
+    fireEvent.click(item(/^Remove access$/));
+    const removeCancel = within(screen.getByRole('group', { name: 'Remove access for Priya Raman' })).getByRole('button', {
+      name: 'Cancel',
+    });
+    fireEvent.click(removeCancel);
+    fireEvent.click(trigger(/^Access for Jordan Lee/));
+    fireEvent.click(item(/^Make owner…$/));
+    const ownerCancel = within(screen.getByRole('group', { name: 'Make Jordan Lee the owner' })).getByRole('button', {
+      name: 'Cancel',
+    });
+    // `secondary` is the kit's bordered white button (button.tsx); `ghost` has no border or fill.
+    for (const cancel of [removeCancel, ownerCancel]) {
+      expect(cancel).toHaveClass('border', 'border-input', 'bg-background', 'hover:bg-muted');
+      expect(cancel).not.toHaveClass('hover:bg-accent');
+    }
+    // The row's access trigger has a visible border before it is opened, too.
+    expect(trigger(/^Access for Priya Raman/)).toHaveClass('border-gray-200', 'bg-white');
+    expect(trigger(/^Access for Priya Raman/)).not.toHaveClass('border-transparent');
+  });
+
+  it('Q2 the access menu opens in the overlay layer, outside the list, and moves no row', () => {
+    setup();
+    const list = screen.getByRole('list', { name: 'People with access' });
+    const before = within(list).getAllByRole('listitem');
+    fireEvent.click(trigger(/^Access for Jordan Lee/));
+    const m = menu();
+    expect(list.contains(m)).toBe(false);
+    expect(m.closest('li')).toBeNull();
+    const layer = m.closest('[data-slot="sharing-access-layer"]');
+    expect(layer).not.toBeNull();
+    expect(layer).toHaveClass('absolute', 'z-50');
+    // The layer is a direct child of the dialog, outside the scrolling body, so the body cannot clip it.
+    expect(layer?.parentElement).toBe(dialog());
+    const body = dialog().querySelector('[data-slot="sharing-body"]');
+    expect(body).toHaveClass('overflow-y-auto');
+    expect(body?.contains(m)).toBe(false);
+    expect(dialog()).not.toHaveClass('overflow-y-auto');
+    // Same rows, same order, nothing added while the menu is open.
+    expect(within(list).getAllByRole('listitem')).toEqual(before);
+    expect(trigger(/^Access for Jordan Lee/)).toHaveAttribute('aria-controls', m.id);
+  });
+
+  it('Q3 scrolling the dialog body closes the menu', () => {
+    setup();
+    fireEvent.click(trigger(/^Access for Jordan Lee/));
+    expect(menu()).toBeInTheDocument();
+    fireEvent.scroll(dialog().querySelector('[data-slot="sharing-body"]') as Element);
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  it('Q4 Tab out of the menu continues from the trigger; Shift+Tab lands on the trigger', async () => {
+    setup();
+    fireEvent.click(trigger(/^Access for Jordan Lee/));
+    await settle();
+    fireEvent.keyDown(radio(/^Can edit/), { key: 'Tab' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(trigger(/^Access for Jordan Lee/)).toHaveFocus();
+
+    fireEvent.click(trigger(/^Access for Jordan Lee/));
+    await settle();
+    const shiftTab = createEvent.keyDown(radio(/^Can edit/), { key: 'Tab', shiftKey: true });
+    fireEvent(radio(/^Can edit/), shiftTab);
+    expect(shiftTab.defaultPrevented).toBe(true);
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(trigger(/^Access for Jordan Lee/)).toHaveFocus();
+  });
+
+  it('Q5 the menu sits under its trigger, right edges aligned, and flips above near the screen bottom', () => {
+    const content = { top: 100, bottom: 700, right: 660, clientTop: 1, clientLeft: 1 };
+    expect(accessMenuPosition({ top: 200, bottom: 232, right: 620 }, content, 1000)).toEqual({ top: 135, right: 39 });
+    expect(accessMenuPosition({ top: 640, bottom: 672, right: 620 }, content, 800)).toEqual({ bottom: 63, right: 39 });
+    expect(accessMenuPosition({ top: NaN, bottom: NaN, right: NaN }, content, 0)).toEqual({ top: 0, right: 0 });
+  });
+
+  // SR R1 (#3545): rows that move under the open menu would leave it beside the wrong person.
+  it('Q6 an earlier remove that settles while another row\'s menu is open closes that menu; focus returns to its trigger', async () => {
+    const d = deferred();
+    const onRemove = jest.fn(() => d.promise);
+    setup({ onRemove });
+    confirmRemove('Jordan Lee');
+    fireEvent.click(rowTrigger('Priya Raman')!);
+    await settle();
+    expect(radio(/^Can view/)).toHaveFocus();
+    await act(async () => d.resolve());
+    expect(rowTrigger('Jordan Lee')).toBeNull();
+    expect(screen.queryByRole('menu')).toBeNull();
+    await settle();
+    expect(rowTrigger('Priya Raman')).toHaveFocus();
+  });
+
+  it('Q7 an earlier write that fails and adds the error line closes the open menu; focus returns to its trigger', async () => {
+    const d = deferred();
+    const onChangeLevel = jest.fn(() => d.promise);
+    const { rerender, props } = setup({ onChangeLevel });
+    fireEvent.click(rowTrigger('Jordan Lee')!);
+    fireEvent.click(radio(/^Can view/));
+    fireEvent.click(rowTrigger('Priya Raman')!);
+    await settle();
+    expect(menu()).toBeInTheDocument();
+    await act(async () => d.reject(new Error('refused')));
+    rerender(<SharingDialog {...props} onChangeLevel={onChangeLevel} error="That change did not save." />);
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.queryByRole('menu')).toBeNull();
+    await settle();
+    expect(rowTrigger('Priya Raman')).toHaveFocus();
+  });
+
+  it('Q8 a window resize closes the open menu; focus returns to its trigger', async () => {
+    setup();
+    fireEvent.click(rowTrigger('Priya Raman')!);
+    await settle();
+    expect(menu()).toBeInTheDocument();
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    expect(screen.queryByRole('menu')).toBeNull();
+    await settle();
+    expect(rowTrigger('Priya Raman')).toHaveFocus();
+  });
+
+  it('Q9 a read that drops the open menu\'s own row closes it and puts focus in the add field, never on the page', async () => {
+    const { rerender, props } = setup();
+    fireEvent.click(rowTrigger('Priya Raman')!);
+    await settle();
+    expect(menu()).toBeInTheDocument();
+    rerender(<SharingDialog {...props} entries={[JORDAN, AGENTS_ROLE]} />);
+    expect(screen.queryByRole('menu')).toBeNull();
+    await settle();
+    expect(input()).toHaveFocus();
+  });
+
+  it('Q10 a re-render with the same rows (a new but equal entries array) keeps the menu open', async () => {
+    const { rerender, props } = setup();
+    fireEvent.click(rowTrigger('Priya Raman')!);
+    await settle();
+    rerender(<SharingDialog {...props} entries={[...ENTRIES]} />);
+    expect(menu()).toBeInTheDocument();
+    expect(radio(/^Can view/)).toHaveFocus();
   });
 
   it('K10 SharingDialog is exported from the package index', () => {

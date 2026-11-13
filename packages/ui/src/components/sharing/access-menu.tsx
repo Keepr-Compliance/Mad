@@ -3,7 +3,6 @@
 import * as React from 'react';
 import { Check } from 'lucide-react';
 import { cn } from '../../lib/cn';
-import { useClickOutside } from '../../lib/use-click-outside';
 
 /**
  * The row's access menu (BACKLOG-3513): role="menu" with menuitemradio rows
@@ -16,8 +15,12 @@ import { useClickOutside } from '../../lib/use-click-outside';
  * capture phase while open, the same way Dropdown does it, so the enclosing
  * Radix Dialog does not also close.
  *
- * A pointer-down outside `containerRef` (the row holding the trigger and the
- * menu) closes it without moving focus; a click on the trigger toggles.
+ * A pointer-down outside both the menu and `containerRef` (the row holding the
+ * trigger) closes it without moving focus; a click on the trigger toggles.
+ *
+ * The menu itself takes no layout space: the caller renders it in an overlay
+ * layer (SharingDialog: an absolute layer above the dialog body), never in
+ * the flow of the list, so opening it moves nothing.
  *
  * Disabled items stay in the menu with aria-disabled (so a screen reader
  * hears they exist), are skipped by the arrow keys and do nothing on click.
@@ -51,11 +54,17 @@ export interface AccessMenuProps {
   /** Close the menu. `restoreFocus`: put focus back on the trigger. */
   onClose: (restoreFocus: boolean) => void;
   id?: string;
-  /** The element holding the trigger and the menu. Pointer-down outside it closes the menu. Default: the menu. */
+  /** The element holding the trigger. A pointer-down outside it AND outside the menu closes the menu. */
   containerRef?: React.RefObject<HTMLElement | null>;
+  /**
+   * Tab or Shift+Tab inside the menu. Default: close without moving focus. A caller that renders
+   * the menu away from its trigger uses this to send focus on from the trigger, as if the menu
+   * sat right after it.
+   */
+  onTabOut?: (e: React.KeyboardEvent<HTMLDivElement>) => void;
 }
 
-export function AccessMenu({ ariaLabel, items, onClose, id, containerRef }: AccessMenuProps) {
+export function AccessMenu({ ariaLabel, items, onClose, id, containerRef, onTabOut }: AccessMenuProps) {
   const menuRef = React.useRef<HTMLDivElement>(null);
 
   const enabledButtons = React.useCallback((): HTMLButtonElement[] => {
@@ -84,8 +93,17 @@ export function AccessMenu({ ariaLabel, items, onClose, id, containerRef }: Acce
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
+  // Inside = the menu or the container (the trigger's row). The menu is not inside the row.
   const closeFromOutside = React.useCallback(() => onCloseRef.current(false), []);
-  useClickOutside(containerRef ?? menuRef, closeFromOutside, true);
+  React.useEffect(() => {
+    function handle(e: Event) {
+      const t = e.target as Node;
+      if (menuRef.current?.contains(t) || containerRef?.current?.contains(t)) return;
+      closeFromOutside();
+    }
+    document.addEventListener('pointerdown', handle);
+    return () => document.removeEventListener('pointerdown', handle);
+  }, [containerRef, closeFromOutside]);
 
   function onKeyDown(e: React.KeyboardEvent<HTMLDivElement>) {
     const buttons = enabledButtons();
@@ -97,7 +115,8 @@ export function AccessMenu({ ariaLabel, items, onClose, id, containerRef }: Acce
     else if (e.key === 'Home') next = 0;
     else if (e.key === 'End') next = buttons.length - 1;
     else if (e.key === 'Tab') {
-      onClose(false);
+      if (onTabOut) onTabOut(e);
+      else onClose(false);
       return;
     }
     if (next !== null) {
@@ -114,7 +133,7 @@ export function AccessMenu({ ariaLabel, items, onClose, id, containerRef }: Acce
       aria-label={ariaLabel}
       data-slot="sharing-access-menu"
       onKeyDown={onKeyDown}
-      className="flex w-full flex-col rounded-lg border border-gray-200 bg-white p-1 shadow-lg sm:w-72"
+      className="flex w-72 max-w-[calc(100vw-2rem)] flex-col rounded-lg border border-gray-200 bg-white p-1 shadow-lg"
     >
       {items.map((item) => {
         if (item.kind === 'separator') {

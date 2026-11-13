@@ -6,6 +6,7 @@ import { cn } from '../../lib/cn';
 import { Button } from '../button';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../dialog';
 import { Dropdown } from '../dropdown';
+import { dropdownSide } from '../dropdown/dropdown';
 import type { DropdownOption } from '../dropdown/types';
 import { AccessMenu, type AccessMenuItem } from './access-menu';
 import { PrincipalPicker } from './principal-picker';
@@ -33,13 +34,21 @@ import type { SharingDialogProps, SharingEntry, SharingLevel, SharingLevelOption
  *   calls the callback.
  * - Escape closes the innermost thing first: an open menu or list, then a
  *   confirm, then the dialog.
+ * - A row's access menu opens in a layer above the dialog (absolute, a direct
+ *   child of DialogContent, outside the scrolling body), so it never pushes
+ *   the rows below it and the scroll area never clips it. Scrolling the body
+ *   closes it.
  * - Hiding or disabling controls is presentation only. The server functions
  *   decide who may share, and refuse everyone else.
  */
 
 export const DEFAULT_SHARING_LEVELS: readonly SharingLevelOption[] = [
   { value: 'viewer', label: 'Can view', description: 'Opens it' },
-  { value: 'editor', label: 'Can edit', description: 'Also changes it for everyone' },
+  {
+    value: 'editor',
+    label: 'Can edit',
+    description: 'Also changes it for everyone',
+  },
 ];
 
 const DEFAULT_DESCRIPTION = 'People you add can open it. Edits show for everyone.';
@@ -64,7 +73,48 @@ export function ownerLabel(owner: { name: string; isYou?: boolean }): string {
 
 const ADD_FIELD = '#add';
 
+function menuIdFor(key: string): string {
+  return `sharing-menu-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+}
+
 type Confirm = { kind: 'remove' | 'owner'; key: string } | null;
+
+/** Where the open access menu sits, in DialogContent's padding box. */
+type MenuAt = { top?: number; bottom?: number; right: number };
+
+/** Space between the trigger and the menu. */
+const MENU_GAP = 4;
+/** The tallest the access menu gets (levels, separator, two actions, hints). */
+const MENU_MAX = 260;
+
+function finite(n: number): number {
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Place the menu under the trigger, right edges aligned; above it when the screen has no room below. */
+export function accessMenuPosition(
+  trigger: { top: number; bottom: number; right: number },
+  content: {
+    top: number;
+    bottom: number;
+    right: number;
+    clientTop: number;
+    clientLeft: number;
+  },
+  viewportHeight: number
+): MenuAt {
+  const right = finite(content.right - content.clientLeft - trigger.right);
+  if (dropdownSide(trigger, viewportHeight, MENU_MAX) === 'top') {
+    return {
+      bottom: finite(content.bottom - content.clientTop - trigger.top + MENU_GAP),
+      right,
+    };
+  }
+  return {
+    top: finite(trigger.bottom - content.top - content.clientTop + MENU_GAP),
+    right,
+  };
+}
 
 export function SharingDialog({
   open,
@@ -89,6 +139,8 @@ export function SharingDialog({
   const [chips, setChips] = React.useState<SharingPrincipal[]>([]);
   const [level, setLevel] = React.useState<SharingLevel>(firstLevel);
   const [menuFor, setMenuFor] = React.useState<string | null>(null);
+  const [menuAt, setMenuAt] = React.useState<MenuAt | null>(null);
+  const contentRef = React.useRef<HTMLDivElement>(null);
   const [confirm, setConfirm] = React.useState<Confirm>(null);
   const listRef = React.useRef<HTMLUListElement>(null);
   const confirmCancelRef = React.useRef<HTMLButtonElement>(null);
@@ -148,6 +200,7 @@ export function SharingDialog({
     setChips([]);
     setLevel(firstLevel);
     setMenuFor(null);
+    setMenuAt(null);
     setConfirm(null);
     setGone(new Set());
     setLevelNow(new Map());
@@ -183,6 +236,37 @@ export function SharingDialog({
             }),
     [entries, gone, levelNow]
   );
+
+  // The open menu is placed once, from its trigger. Anything that moves the rows (a row hidden
+  // or added, the list loading, the error line) or the window would leave it beside the wrong
+  // person, so it closes instead (safer than moving it in a permissions dialog). Focus that was
+  // in the menu goes back to its trigger, or to the add field when that row is gone.
+  const layoutKey = `${visible === null ? 'loading' : visible.map(principalKey).join('\u0000')}|${error ? 'error' : ''}`;
+  const layoutKeyRef = React.useRef(layoutKey);
+  const layerRef = React.useRef<HTMLDivElement>(null);
+  const closeMenuMovedRef = React.useRef<() => void>(() => {});
+  closeMenuMovedRef.current = () => {
+    const key = menuFor;
+    if (key === null) return;
+    const active = typeof document !== 'undefined' ? document.activeElement : null;
+    const focusWasInMenu = active === null || active === document.body || (layerRef.current?.contains(active) ?? false);
+    setMenuFor(null);
+    setMenuAt(null);
+    if (!focusWasInMenu) return;
+    const stillThere = (visible ?? []).some((e) => principalKey(e) === key);
+    setRefocus(stillThere ? key : ADD_FIELD);
+  };
+  React.useLayoutEffect(() => {
+    if (layoutKeyRef.current === layoutKey) return;
+    layoutKeyRef.current = layoutKey;
+    closeMenuMovedRef.current();
+  }, [layoutKey]);
+  React.useEffect(() => {
+    if (menuFor === null) return;
+    const onResize = () => closeMenuMovedRef.current();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [menuFor]);
 
   const levelLabel = (value: SharingLevel) => levels.find((l) => l.value === value)?.label ?? value;
   const editorLabel = levelLabel('editor');
@@ -220,10 +304,43 @@ export function SharingDialog({
     setLevel(firstLevel);
   }
 
+  function triggerFor(key: string): HTMLButtonElement | undefined {
+    const triggers = listRef.current?.querySelectorAll<HTMLButtonElement>('[data-menu-for]') ?? [];
+    return Array.from(triggers).find((b) => b.dataset.menuFor === key);
+  }
+
+  function openMenu(key: string, trigger: HTMLElement) {
+    const content = contentRef.current;
+    const t = trigger.getBoundingClientRect();
+    const viewport = typeof window !== 'undefined' ? window.innerHeight : 0;
+    if (content) {
+      const c = content.getBoundingClientRect();
+      const box = { top: c.top, bottom: c.bottom, right: c.right, clientTop: content.clientTop, clientLeft: content.clientLeft };
+      setMenuAt(accessMenuPosition(t, box, viewport));
+    } else {
+      setMenuAt({ top: 0, right: 0 });
+    }
+    setMenuFor(key);
+  }
+
   function closeMenu(restoreFocus: boolean) {
     const key = menuFor;
     setMenuFor(null);
+    setMenuAt(null);
     if (restoreFocus && key !== null) setRefocus(key);
+  }
+
+  /**
+   * Tab out of the menu continues from the trigger, as if the menu still sat right after it:
+   * Tab goes on to whatever follows the trigger, Shift+Tab lands on the trigger itself.
+   */
+  function tabOutOfMenu(e: React.KeyboardEvent<HTMLDivElement>) {
+    const key = menuFor;
+    const t = key !== null ? triggerFor(key) : undefined;
+    if (e.shiftKey) e.preventDefault();
+    t?.focus();
+    setMenuFor(null);
+    setMenuAt(null);
   }
 
   function cancelConfirm() {
@@ -259,6 +376,7 @@ export function SharingDialog({
         hint: `Not available for ${displayName(entry)}`,
         onSelect: () => {
           setMenuFor(null);
+          setMenuAt(null);
           setConfirm({ kind: 'owner', key });
         },
       });
@@ -270,6 +388,7 @@ export function SharingDialog({
       tone: 'danger',
       onSelect: () => {
         setMenuFor(null);
+        setMenuAt(null);
         setConfirm({ kind: 'remove', key });
       },
     });
@@ -290,7 +409,7 @@ export function SharingDialog({
           className="flex flex-wrap items-center gap-2 rounded-md bg-danger-50 px-2.5 py-2"
         >
           <span className="min-w-0 flex-1 text-sm text-danger-700">Remove access for {shown}?</span>
-          <Button ref={confirmCancelRef} type="button" variant="ghost" size="sm" onClick={cancelConfirm}>
+          <Button ref={confirmCancelRef} type="button" variant="secondary" size="sm" onClick={cancelConfirm}>
             Cancel
           </Button>
           <Button
@@ -325,7 +444,7 @@ export function SharingDialog({
             Make {shown} the owner? {stayCopy} on the list with {editorLabel}.
           </span>
           <div className="flex justify-end gap-2">
-            <Button ref={confirmCancelRef} type="button" variant="ghost" size="sm" onClick={cancelConfirm}>
+            <Button ref={confirmCancelRef} type="button" variant="secondary" size="sm" onClick={cancelConfirm}>
               Cancel
             </Button>
             <Button
@@ -344,7 +463,7 @@ export function SharingDialog({
     }
     const pending = busy.get(key);
     const menuOpen = menuFor === key && !pending;
-    const menuId = `sharing-menu-${key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+    const menuId = menuIdFor(key);
     const pendingLabel = pending === 'remove' ? 'Removing…' : pending === 'level' ? 'Saving…' : null;
     return (
       <div ref={menuOpen ? openRowRef : undefined} aria-busy={pending ? true : undefined}>
@@ -364,20 +483,21 @@ export function SharingDialog({
             aria-controls={menuOpen ? menuId : undefined}
             aria-label={`Access for ${forWhom}: ${pendingLabel ?? levelLabel(entry.level)}`}
             aria-disabled={pending ? true : undefined}
-            onClick={() => {
+            onClick={(e) => {
               if (pending) return;
-              setMenuFor(menuOpen ? null : key);
+              if (menuOpen) closeMenu(false);
+              else openMenu(key, e.currentTarget);
             }}
             onKeyDown={(e) => {
               if (pending) return;
               if (!menuOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
                 e.preventDefault();
-                setMenuFor(key);
+                openMenu(key, e.currentTarget);
               }
             }}
             className={cn(
               'flex h-8 flex-shrink-0 items-center gap-1 rounded-md border pl-2.5 pr-2 text-sm text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500',
-              menuOpen ? 'border-gray-300 bg-gray-100' : 'border-transparent hover:bg-gray-100',
+              menuOpen ? 'border-gray-300 bg-gray-100' : 'border-gray-200 bg-white hover:bg-gray-100',
               pending && 'cursor-wait text-gray-500 hover:bg-transparent'
             )}
           >
@@ -385,20 +505,31 @@ export function SharingDialog({
             <ChevronDown className={cn('h-4 w-4 text-gray-500', menuOpen && 'rotate-180')} aria-hidden="true" />
           </button>
         </div>
-        {menuOpen ? (
-          <div className="flex justify-end pb-2">
-            <AccessMenu
-              id={menuId}
-              ariaLabel={`Access for ${forWhom}`}
-              items={menuItems(entry)}
-              onClose={closeMenu}
-              containerRef={openRowRef}
-            />
-          </div>
-        ) : null}
       </div>
     );
   }
+
+  // The one open menu, rendered in the overlay layer (see the header comment).
+  const menuEntry =
+    menuFor !== null && !busy.has(menuFor) ? (visible ?? []).find((e) => principalKey(e) === menuFor) : undefined;
+  const menuLayer =
+    menuEntry && menuAt ? (
+      <div
+        ref={layerRef}
+        data-slot="sharing-access-layer"
+        className="absolute z-50"
+        style={{ top: menuAt.top, bottom: menuAt.bottom, right: menuAt.right }}
+      >
+        <AccessMenu
+          id={menuIdFor(principalKey(menuEntry))}
+          ariaLabel={`Access for ${menuEntry.kind === 'role' ? `role ${menuEntry.name}` : menuEntry.name}`}
+          items={menuItems(menuEntry)}
+          onClose={closeMenu}
+          containerRef={openRowRef}
+          onTabOut={tabOutOfMenu}
+        />
+      </div>
+    ) : null;
 
   const selectedGeneral = generalAccess?.options.find((o) => o.value === generalAccess.value);
   const generalLabel = generalAccess?.label ?? 'Who can open it';
@@ -406,8 +537,9 @@ export function SharingDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        ref={contentRef}
         data-slot="sharing-dialog"
-        className="max-h-[90vh] gap-5 overflow-y-auto sm:max-w-[560px]"
+        className="flex max-h-[90vh] flex-col sm:max-w-[560px]"
         onEscapeKeyDown={(e) => {
           if (confirm !== null) {
             e.preventDefault();
@@ -415,123 +547,132 @@ export function SharingDialog({
           }
         }}
       >
-        <DialogHeader>
-          <DialogTitle className="truncate pr-6">Share “{name}”</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
+        <div
+          data-slot="sharing-body"
+          className="-m-1 flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-1"
+          onScroll={() => {
+            if (menuFor !== null) closeMenu(false);
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle className="truncate pr-6">Share “{name}”</DialogTitle>
+            <DialogDescription>{description}</DialogDescription>
+          </DialogHeader>
 
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-          <PrincipalPicker
-            label="Add people or roles"
-            placeholder={searchPlaceholder}
-            candidates={candidates}
-            exclude={exclude}
-            chips={chips}
-            onAdd={addChip}
-            inputId={addInputId}
-            onRemoveChip={(p) => setChips((prev) => prev.filter((c) => principalKey(c) !== principalKey(p)))}
-          />
-          <div className="sm:w-32">
-            <Dropdown<SharingLevel>
-              label="Access"
-              options={levelOptions}
-              value={level}
-              onChange={setLevel}
-              searchable={false}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+            <PrincipalPicker
+              label="Add people or roles"
+              placeholder={searchPlaceholder}
+              candidates={candidates}
+              exclude={exclude}
+              chips={chips}
+              onAdd={addChip}
+              inputId={addInputId}
+              onRemoveChip={(p) => setChips((prev) => prev.filter((c) => principalKey(c) !== principalKey(p)))}
             />
+            <div className="sm:w-32">
+              <Dropdown<SharingLevel>
+                label="Access"
+                options={levelOptions}
+                value={level}
+                onChange={setLevel}
+                searchable={false}
+              />
+            </div>
+            <Button type="button" onClick={share} disabled={chips.length === 0}>
+              Share
+            </Button>
           </div>
-          <Button type="button" onClick={share} disabled={chips.length === 0}>
-            Share
-          </Button>
-        </div>
 
-        {error ? (
-          <p role="alert" className="text-sm text-danger-600">
-            {error}
-          </p>
-        ) : null}
+          {error ? (
+            <p role="alert" className="text-sm text-danger-600">
+              {error}
+            </p>
+          ) : null}
 
-        <div className="flex flex-col gap-1">
-          <p className="mb-1 text-xs font-medium uppercase tracking-wider text-gray-500">People with access</p>
-          {visible === null ? (
-            <p className="text-sm text-gray-500">Loading…</p>
-          ) : visible.length === 0 && !owner ? (
-            <p className="text-sm text-gray-500">Only you</p>
-          ) : (
-            <ul ref={listRef} aria-label="People with access" className="flex flex-col divide-y divide-gray-100">
-              {owner ? (
-                <li data-slot="sharing-owner" className="flex items-center gap-3 py-2">
-                  <SharingAvatar kind="person" name={owner.name} tone="owner" />
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate text-sm font-medium text-gray-900" title={ownerLabel(owner)}>
-                      {ownerLabel(owner)}
+          <div className="flex flex-col gap-1">
+            <p className="mb-1 text-xs font-medium uppercase tracking-wider text-gray-500">People with access</p>
+            {visible === null ? (
+              <p className="text-sm text-gray-500">Loading…</p>
+            ) : visible.length === 0 && !owner ? (
+              <p className="text-sm text-gray-500">Only you</p>
+            ) : (
+              <ul ref={listRef} aria-label="People with access" className="flex flex-col divide-y divide-gray-100">
+                {owner ? (
+                  <li data-slot="sharing-owner" className="flex items-center gap-3 py-2">
+                    <SharingAvatar kind="person" name={owner.name} tone="owner" />
+                    <span className="flex min-w-0 flex-1 flex-col">
+                      <span className="truncate text-sm font-medium text-gray-900" title={ownerLabel(owner)}>
+                        {ownerLabel(owner)}
+                      </span>
+                      {owner.detail ? <span className="truncate text-xs text-gray-500">{owner.detail}</span> : null}
                     </span>
-                    {owner.detail ? <span className="truncate text-xs text-gray-500">{owner.detail}</span> : null}
-                  </span>
-                  <span className="px-2.5 text-sm text-gray-600">Owner</span>
-                </li>
-              ) : null}
-              {visible.map((entry) => (
-                <li key={principalKey(entry)} data-slot="sharing-entry">
-                  {renderEntry(entry)}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {generalAccess ? (
-          <div data-slot="sharing-general" className="flex flex-col gap-2 border-t border-gray-200 pt-4">
-            <p className="text-xs font-medium uppercase tracking-wider text-gray-500">General access</p>
-            <div className="flex items-center gap-3">
-              <span
-                aria-hidden="true"
-                className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-700"
-              >
-                <Lock className="h-4 w-4" />
-              </span>
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="text-sm font-medium text-gray-900">{generalLabel}</span>
-                {selectedGeneral?.description ? (
-                  <span className="text-xs text-gray-500">{selectedGeneral.description}</span>
+                    <span className="px-2.5 text-sm text-gray-600">Owner</span>
+                  </li>
                 ) : null}
-              </div>
-              <div className="w-48 flex-shrink-0">
-                <Dropdown
-                  ariaLabel={generalLabel}
-                  options={generalAccess.options}
-                  value={generalAccess.value}
-                  onChange={(v) => {
-                    if (v !== generalAccess.value) generalAccess.onChange(v);
-                  }}
-                  disabled={generalAccess.disabled}
-                  searchable={false}
-                />
+                {visible.map((entry) => (
+                  <li key={principalKey(entry)} data-slot="sharing-entry">
+                    {renderEntry(entry)}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {generalAccess ? (
+            <div data-slot="sharing-general" className="flex flex-col gap-2 border-t border-gray-200 pt-4">
+              <p className="text-xs font-medium uppercase tracking-wider text-gray-500">General access</p>
+              <div className="flex items-center gap-3">
+                <span
+                  aria-hidden="true"
+                  className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-700"
+                >
+                  <Lock className="h-4 w-4" />
+                </span>
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="text-sm font-medium text-gray-900">{generalLabel}</span>
+                  {selectedGeneral?.description ? (
+                    <span className="text-xs text-gray-500">{selectedGeneral.description}</span>
+                  ) : null}
+                </div>
+                <div className="w-48 flex-shrink-0">
+                  <Dropdown
+                    ariaLabel={generalLabel}
+                    options={generalAccess.options}
+                    value={generalAccess.value}
+                    onChange={(v) => {
+                      if (v !== generalAccess.value) generalAccess.onChange(v);
+                    }}
+                    disabled={generalAccess.disabled}
+                    searchable={false}
+                  />
+                </div>
               </div>
             </div>
-          </div>
-        ) : null}
+          ) : null}
 
-        {extraSection ? (
-          <div data-slot="sharing-extra" className="flex flex-col gap-2 border-t border-gray-200 pt-4">
-            <p className="text-xs font-medium uppercase tracking-wider text-gray-500">{extraSection.title}</p>
-            {extraSection.content}
-          </div>
-        ) : null}
+          {extraSection ? (
+            <div data-slot="sharing-extra" className="flex flex-col gap-2 border-t border-gray-200 pt-4">
+              <p className="text-xs font-medium uppercase tracking-wider text-gray-500">{extraSection.title}</p>
+              {extraSection.content}
+            </div>
+          ) : null}
 
-        <div className="flex items-center justify-between gap-3 border-t border-gray-200 pt-4">
-          {onCopyLink ? (
-            <Button type="button" variant="secondary" onClick={onCopyLink}>
-              <LinkIcon className="h-4 w-4" aria-hidden="true" />
-              Copy link
+          <div className="flex items-center justify-between gap-3 border-t border-gray-200 pt-4">
+            {onCopyLink ? (
+              <Button type="button" variant="secondary" onClick={onCopyLink}>
+                <LinkIcon className="h-4 w-4" aria-hidden="true" />
+                Copy link
+              </Button>
+            ) : (
+              <span />
+            )}
+            <Button type="button" onClick={() => onOpenChange(false)}>
+              Done
             </Button>
-          ) : (
-            <span />
-          )}
-          <Button type="button" onClick={() => onOpenChange(false)}>
-            Done
-          </Button>
+          </div>
         </div>
+        {menuLayer}
       </DialogContent>
     </Dialog>
   );
