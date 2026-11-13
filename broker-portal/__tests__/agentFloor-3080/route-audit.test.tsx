@@ -74,13 +74,13 @@ function mockSharedReportDefinition(defId: unknown) {
     level: 'viewer',
     owner: { name: 'Fixture Owner', is_you: false },
     updated_at: '2026-11-12T10:00:00+00:00',
-    take_over_available: false,
+    reassign_available: false,
   };
 }
-/** The shared-report write functions (migrations 20261112200000 + 20261112210000). No page may call one. */
+/** The shared-report write functions (migrations 20261112200000 + 20261112220000). No page may call one. */
 const REPORT_WRITE_RPCS = [
   'broker_report_def_create', 'broker_report_def_update', 'broker_report_def_delete', 'broker_report_share_set',
-  'broker_report_share_remove', 'broker_report_set_general_access', 'broker_report_transfer', 'broker_report_take_over',
+  'broker_report_share_remove', 'broker_report_set_general_access', 'broker_report_transfer', 'broker_report_reassign',
 ];
 const CHECKLIST_EDITOR_ROLES = ['broker', 'admin', 'it_admin'];
 function canEditChecklistTemplates(orgId: unknown): boolean {

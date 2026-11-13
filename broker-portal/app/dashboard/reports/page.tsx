@@ -10,10 +10,9 @@
  * a level on (broker_report_def_list, session client). A failed read shows no
  * section; it never hides the built-in reports.
  *
- * "Needs an owner" (a broker, admin or IT admin only): reports whose owner is
- * gone or deactivated and that are NOT shared with the caller
- * (broker_report_orphans). Take over, no link: without a level the report
- * cannot be opened. Orphans the caller can open are marked in Shared reports.
+ * A shared report whose owner is gone or deactivated is marked in Shared
+ * reports. Reassigning it happens on the report's own page (BACKLOG-3513
+ * PR-3f; founder ruling A removed the "Needs an owner" group).
  */
 
 import Link from 'next/link';
@@ -22,14 +21,13 @@ import { requireMyReports } from '@/lib/reports/report-gate';
 import { listSharedReports } from '@/lib/reports/definitions/server';
 import { definitionReportPath } from '@/lib/reports/datasets/submissions-filters';
 import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
-import { TakeOverButton } from '@/components/reports/ReportDefinitionActions';
 
 const LEVEL_LABEL = { owner: 'Owner', editor: 'Can edit', viewer: 'Can view' } as const;
 const OWNER_STATE_LABEL = { gone: "Owner's account removed", deactivated: 'Owner deactivated' } as const;
 
 export default async function ReportsPage() {
   const { caller, reports } = await requireMyReports();
-  const { shared, needsOwner } = await listSharedReports(caller);
+  const { shared } = await listSharedReports(caller);
 
   return (
     <div className="space-y-6">
@@ -71,30 +69,6 @@ export default async function ReportsPage() {
                     </CardHeader>
                   </Card>
                 </Link>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-      {needsOwner.length > 0 ? (
-        <section className="space-y-3" aria-labelledby="needs-owner-heading">
-          <h2 id="needs-owner-heading" className="text-lg font-semibold text-gray-900">
-            Needs an owner
-          </h2>
-          <ul className="grid gap-4 sm:grid-cols-2" data-testid="needs-owner-index">
-            {needsOwner.map((o) => (
-              <li key={o.id}>
-                <Card className="h-full">
-                  <CardHeader>
-                    <CardTitle>{o.name}</CardTitle>
-                    <CardDescription>
-                      {[OWNER_STATE_LABEL[o.ownerState], o.ownerName || null].filter(Boolean).join(' · ')}
-                    </CardDescription>
-                    <div className="pt-2">
-                      <TakeOverButton defId={o.id} name={o.name} />
-                    </div>
-                  </CardHeader>
-                </Card>
               </li>
             ))}
           </ul>

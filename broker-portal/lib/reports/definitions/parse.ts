@@ -12,7 +12,9 @@
  *    broker, admins). Never an email.
  *  - broker_report_def_get(p_def) -> {id, organization_id, dataset_key, name,
  *    description, definition, row_scope, general_access, level, owner {name,
- *    is_you}, updated_at, take_over_available} (take_over_available: 20261112210000)
+ *    is_you}, updated_at, reassign_available} (reassign_available: 20261112220000)
+ *  - broker_report_reassign_candidates(p_def) -> [{kind 'person', id, name, detail}]
+ *    (20261112220000; active members of the report's organization, never an email)
  *
  * Mappers keep only the kit's keys, so nothing else a reply might carry
  * reaches the page.
@@ -57,8 +59,8 @@ export interface DefinitionRecord {
   generalAccess: GeneralAccess;
   level: ReportLevel | null;
   updatedAt: string;
-  /** def_get (migration 20261112210000): this caller may take the report over (its owner is gone). */
-  takeOverAvailable: boolean;
+  /** def_get (migration 20261112220000): this caller may reassign the report (its owner is gone or deactivated). */
+  reassignAvailable: boolean;
 }
 
 const obj = (v: unknown): Record<string, unknown> =>
@@ -86,6 +88,13 @@ export function parseCandidates(raw: unknown): SharingPrincipal[] {
   const people = Array.isArray(r.people) ? r.people : [];
   const roles = Array.isArray(r.roles) ? r.roles : [];
   return [...people, ...roles].map(principal).filter((p): p is SharingPrincipal => p !== null);
+}
+
+/** reassign_candidates -> the people the report can be given to (a top-level array; roles are dropped). */
+export function parseReassignCandidates(raw: unknown): SharingPrincipal[] {
+  return (Array.isArray(raw) ? raw : [])
+    .map(principal)
+    .filter((p): p is SharingPrincipal => p !== null && p.kind === 'person');
 }
 
 /** share_list -> owner, general access, row scope, the caller's level and the entries. */
@@ -124,7 +133,7 @@ export function parseDefinition(raw: unknown): DefinitionRecord | null {
     generalAccess: r.general_access === 'organization' ? 'organization' : 'restricted',
     level: parseLevel(r.level),
     updatedAt: str(r.updated_at),
-    takeOverAvailable: r.take_over_available === true,
+    reassignAvailable: r.reassign_available === true,
   };
 }
 

@@ -33,7 +33,8 @@ export const SHARE_RPC = {
   update: 'broker_report_def_update',
   create: 'broker_report_def_create',
   remove_def: 'broker_report_def_delete',
-  takeOver: 'broker_report_take_over',
+  reassign: 'broker_report_reassign',
+  reassignCandidates: 'broker_report_reassign_candidates',
 } as const;
 
 export interface ReportSharingApi {

@@ -1,17 +1,13 @@
 'use client';
 
 /**
- * Update, Delete and Take over on a shared report — BACKLOG-3513 PR-3b.
+ * Update and Delete on a shared report — BACKLOG-3513 PR-3b.
  *
  * - UpdateReportButton: owner or editor. Saves the page's current filters and
  *   sort into the report, refused when someone else changed it first.
  * - DeleteReportButton: owner only (founder ruling Q5).
- * - TakeOverNotice / TakeOverButton: an active broker, admin or IT admin, only
- *   when the owner is gone or deactivated (ruling Q6: a deactivated owner stays
- *   owner until someone takes over), shared with them or not. The database says
- *   so: broker_report_def_get.take_over_available on the report page,
- *   broker_report_orphans on the index (migration 20261112210000).
- * Presentation only: broker_report_def_update / _def_delete / _take_over decide.
+ * Reassign (PR-3f) lives in ReassignReport.tsx.
+ * Presentation only: broker_report_def_update / _def_delete decide.
  */
 
 import { useState } from 'react';
@@ -21,7 +17,6 @@ import { reportDefinitionsApi, type ReportDefinitionsApi } from '@/lib/reports/s
 import type { ReportLevel, RowScope } from '@/lib/reports/sharing/sharing-api';
 import { writeFailureMessage } from '@/lib/reports/sharing/write-failure';
 import type { ViewState } from '@/lib/reports/datasets/view-state';
-import type { ReportCallerKind } from '@/lib/reports/report-gate';
 
 export const REPORTS_INDEX_PATH = '/dashboard/reports';
 
@@ -33,14 +28,6 @@ export function canUpdate(level: ReportLevel | null | undefined): boolean {
 /** Delete: owner only. */
 export function canDelete(level: ReportLevel | null | undefined): boolean {
   return level === 'owner';
-}
-
-/**
- * Take over: a full role (broker, admin, IT admin) the database says may take
- * this report over (its owner is gone or deactivated). Any level, none included.
- */
-export function canTakeOver(input: { kind: ReportCallerKind; takeOverAvailable: boolean }): boolean {
-  return input.kind === 'full' && input.takeOverAvailable;
 }
 
 function useWrite() {
@@ -138,49 +125,5 @@ export function DeleteReportButton({ defId, name, level, api = reportDefinitions
         }
       />
     </>
-  );
-}
-
-/** Take over one report, then refresh: the caller is its owner from the next read. */
-export function TakeOverButton({ defId, name, api = reportDefinitionsApi }: { defId: string; name?: string; api?: ReportDefinitionsApi }) {
-  const { router, busy, error, run } = useWrite();
-  return (
-    <span className="flex flex-wrap items-center gap-2">
-      <Button
-        type="button"
-        variant="secondary"
-        disabled={busy}
-        aria-label={name ? `Take over ${name}` : undefined}
-        onClick={() => void run(() => api.takeOver(defId), () => router.refresh())}
-      >
-        Take over
-      </Button>
-      {error ? (
-        <span role="alert" className="text-sm text-danger-600">
-          {error}
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
-export interface TakeOverNoticeProps {
-  defId: string;
-  kind: ReportCallerKind;
-  takeOverAvailable: boolean;
-  api?: ReportDefinitionsApi;
-}
-
-export function TakeOverNotice({ defId, kind, takeOverAvailable, api = reportDefinitionsApi }: TakeOverNoticeProps) {
-  if (!canTakeOver({ kind, takeOverAvailable })) return null;
-  return (
-    <div
-      role="status"
-      data-testid="report-take-over"
-      className="flex flex-wrap items-center gap-3 rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-800"
-    >
-      <span>The owner of this report is no longer active.</span>
-      <TakeOverButton defId={defId} api={api} />
-    </div>
   );
 }
