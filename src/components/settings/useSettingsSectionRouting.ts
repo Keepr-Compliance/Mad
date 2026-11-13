@@ -13,11 +13,48 @@
  * element such as the texts look-back picker) is waited for with a
  * MutationObserver, never a timer; after GIVE_UP_MS without it the request is
  * dropped.
+ *
+ * BACKLOG-4174: sections above the landed one can still grow after landing
+ * (device list, diagnostics, support-access snapshot), pushing it down. For
+ * SECTION_SETTLE_MS after landing, a resize of the content column or the bottom
+ * spacer scrolls the landed element back to the top, instantly and without a
+ * second ring. Any user input ends that window; scroll events do not, because
+ * the page's own scrolling fires them. The window outlives the target, which
+ * the caller clears as soon as the section is reached.
  */
-import { useEffect, type RefObject } from "react";
+import { useEffect, useRef, type RefObject } from "react";
 import { highlightSettingsTarget } from "@/utils/highlightSettingsTarget";
 
 export const SECTION_ROUTING_GIVE_UP_MS = 5000;
+export const SECTION_SETTLE_MS = 3000;
+const USER_INPUT = ["wheel", "touchmove", "keydown", "pointerdown"] as const;
+
+/** Keeps `el` at the top of `root` while the page settles; returns the stop function. */
+function startSettle(root: HTMLElement, el: HTMLElement): () => void {
+  if (typeof ResizeObserver === "undefined") return () => {};
+  // The first report for each element is its starting size, not growth.
+  const heights = new Map<Element, number>();
+  const observer = new ResizeObserver((entries) => {
+    let grew = false;
+    for (const entry of entries) {
+      const h = entry.contentRect.height;
+      const before = heights.get(entry.target);
+      heights.set(entry.target, h);
+      if (before !== undefined && before !== h) grew = true;
+    }
+    if (grew) el.scrollIntoView({ behavior: "instant" as ScrollBehavior, block: "start" });
+  });
+  // The content column and the bottom spacer after it.
+  for (const child of Array.from(root.children)) observer.observe(child);
+  const stop = () => {
+    observer.disconnect();
+    clearTimeout(timer);
+    for (const e of USER_INPUT) document.removeEventListener(e, stop, { capture: true });
+  };
+  const timer = setTimeout(stop, SECTION_SETTLE_MS);
+  for (const e of USER_INPUT) document.addEventListener(e, stop, { capture: true, passive: true });
+  return stop;
+}
 
 function findTarget(root: HTMLElement, target: string): HTMLElement | null {
   const byId = document.getElementById(target);
@@ -32,12 +69,16 @@ export function useSettingsSectionRouting(
   /** Called with the element landed on, or with nothing when the target never appeared. */
   onReached?: (landed?: HTMLElement) => void,
 ): void {
+  const stopSettleRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => stopSettleRef.current?.(), []);
   useEffect(() => {
     const root = containerRef.current;
     if (!ready || !target || !root) return;
 
     const land = (el: HTMLElement) => {
       highlightSettingsTarget(el);
+      stopSettleRef.current?.();
+      stopSettleRef.current = startSettle(root, el);
       onReached?.(el);
     };
     const found = findTarget(root, target);
