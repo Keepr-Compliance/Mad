@@ -48,6 +48,11 @@ MUT = {
   # def_get answers true for everyone
   'R13_DEF_GET_ALWAYS_TRUE': [("    'reassign_available', coalesce(public._broker_report_reassign_eligible(p_def), false));",
                                "    'reassign_available', true);")],
+  # SR C1 (SR's own mutation): both null-role guards removed (helper + candidates)
+  'SR_CANDIDATES_NULL_ROLE': [("  v_role := coalesce(public._broker_report_member_role(d.organization_id, v_uid), '');",
+                               "  v_role := public._broker_report_member_role(d.organization_id, v_uid);"),
+                              ("  IF NOT coalesce(public._broker_report_reassign_eligible(p_def), false) THEN",
+                               "  IF NOT public._broker_report_reassign_eligible(p_def) THEN")],
   # the private helper callable by authenticated
   'R14_HELPER_GRANTED': [("REVOKE ALL ON FUNCTION public._broker_report_reassign_eligible(uuid) FROM PUBLIC, anon, authenticated;",
                           "REVOKE ALL ON FUNCTION public._broker_report_reassign_eligible(uuid) FROM PUBLIC, anon;")],

@@ -117,6 +117,12 @@ BEGIN
   r := r || jsonb_build_object('K_candidates_broker_refused', pg_temp.pass(s = NF, s));
   s := pg_temp.call_as(4, format('SELECT public.broker_report_reassign_candidates(%L::uuid)', pg_temp.fx(401)));
   r := r || jsonb_build_object('K_candidates_owner_active_refused', pg_temp.pass(s = NF, s));
+  -- SR C1: a caller from ANOTHER organization (the O1 IT admin on O5's orphaned 420; O5 has no active
+  -- IT admin, so only the caller's own membership refuses) and a non-member (user 14 on O1's 409)
+  s := pg_temp.call_as(4, format('SELECT public.broker_report_reassign_candidates(%L::uuid)', pg_temp.fx(420)));
+  r := r || jsonb_build_object('K_candidates_other_org_refused', pg_temp.pass(s = NF, s));
+  s := pg_temp.call_as(14, format('SELECT public.broker_report_reassign_candidates(%L::uuid)', pg_temp.fx(409)));
+  r := r || jsonb_build_object('K_candidates_nonmember_refused', pg_temp.pass(s = NF, s));
 
   -- ===== refusals (nothing changes, no audit row) =====
   r := r || jsonb_build_object('X_admin_when_it_admin_exists', pg_temp.ctl(3, pg_temp.q_re(409, 5), NF, '[]'));
