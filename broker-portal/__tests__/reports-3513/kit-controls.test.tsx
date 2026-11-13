@@ -1,9 +1,9 @@
 /**
  * Report controls are the design-system ones, not native form controls — BACKLOG-3513 PR-3c.
  *
- * The REAL SubmissionsReportFilters, ReportSavedViews and ReportBackLink. Status, Agent and Sort are
+ * The REAL SubmissionsReportFilters and ReportBackLink. Status, Agent and Sort are
  * the kit Dropdown (filter variant, as the admin report filter bars use it), the dates are the kit
- * DateRangePicker, the card column picker is the kit Dropdown. Picking must push exactly the URL
+ * DateRangePicker. (ReportSavedViews is on hold: coordinator, pending a founder ruling.) Picking must push exactly the URL
  * the native controls pushed before: same values and params, "all" and "All agents" left out.
  *
  * Pointer-capture / scrollIntoView stubs copied from __tests__/people-sheet-4032/peopleSheet.test.tsx:25-29.
@@ -33,11 +33,9 @@ jest.mock('next/navigation', () => ({
 }));
 
 import { SubmissionsReportFilters } from '@/components/reports/submissions/SubmissionsReportFilters';
-import { ReportSavedViews } from '@/components/reports/ReportSavedViews';
 import { ReportBackLink, canGoBackInApp } from '@/components/reports/ReportBackLink';
-import { SUBMISSIONS_REPORT, type ReportDefinition } from '@/lib/reports/registry';
+import { SUBMISSIONS_REPORT } from '@/lib/reports/registry';
 import { DEFAULT_SUBMISSIONS_FILTERS, type SubmissionsReportFilters as Filters } from '@/lib/reports/datasets/submissions-filters';
-import type { BrokerViewsApi } from '@/lib/reports/saved-views/broker-views-api';
 
 // pii-allow-uuid: invented fixture ids below (whole block)
 const AGENT_A = '00000000-0000-4000-8000-0000003513f1'; // pii-allow-uuid: invented fixture id
@@ -206,43 +204,5 @@ describe('Back (founder: the previous page in this tab, else the Reports index)'
     expect(canGoBackInApp({ historyLength: 1, referrer: 'https://app.example.test/dashboard', origin: 'https://app.example.test' })).toBe(false);
     expect(canGoBackInApp({ historyLength: 4, referrer: 'https://mail.example.test/inbox', origin: 'https://app.example.test' })).toBe(false);
     expect(canGoBackInApp({ historyLength: 4, referrer: '', origin: 'https://app.example.test' })).toBe(false);
-  });
-});
-
-describe('saved views: the card column picker is the kit Dropdown (inside the Views panel)', () => {
-  const REPORT: ReportDefinition = {
-    slug: 'fixture-pipeline',
-    title: 'Fixture pipeline',
-    description: 'Test-only report',
-    source: 'fixture',
-    access: { roles: ['broker'], agentScoped: true },
-    savedView: { filterKeys: ['status'], sortKeys: ['price'], metricColumns: ['deals', 'price'] },
-  };
-
-  it('is the kit Dropdown, the panel stays open while picking, and the picked column is the one saved', async () => {
-    const api = {
-      list: jest.fn().mockResolvedValue([]),
-      save: jest.fn().mockResolvedValue({ id: 'new' }),
-      remove: jest.fn().mockResolvedValue(undefined),
-      setDefault: jest.fn().mockResolvedValue(undefined),
-    } satisfies BrokerViewsApi;
-    const user = userEvent.setup();
-    const { container } = render(
-      <ReportSavedViews orgId="org-fixture-1" report={REPORT} current={{ filters: {}, sort: null }} onApply={jest.fn()} api={api} />
-    );
-    await waitFor(() => expect(api.list).toHaveBeenCalled());
-    await user.click(screen.getByRole('button', { name: /^Views/ }));
-    await user.click(await screen.findByText('Save current view as a card'));
-    const trigger = screen.getByRole('button', { name: /^Card counts/ });
-    expect(trigger).toHaveAttribute('aria-haspopup', 'listbox');
-    expect(container.ownerDocument.querySelector('select')).toBeNull();
-    expect(trigger).toHaveTextContent('deals');
-    await user.click(trigger);
-    await user.click(await screen.findByRole('option', { name: 'price' }));
-    expect(screen.getByRole('button', { name: /^Card counts/ })).toHaveTextContent('price');
-    await user.type(screen.getByLabelText('View name'), 'Mine');
-    await user.click(screen.getByRole('button', { name: /Save and pin/ }));
-    await waitFor(() => expect(api.save).toHaveBeenCalled());
-    expect(api.save.mock.calls[0][0]).toMatchObject({ pinned: true, metric: { col: 'price', fn: 'count' } });
   });
 });
