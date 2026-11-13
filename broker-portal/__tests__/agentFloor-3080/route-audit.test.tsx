@@ -53,6 +53,35 @@ const mockGetUser = jest.fn();
  * refuses a deactivated member on its own, which is only observable while the
  * emulated database would still have said yes.
  */
+/**
+ * BACKLOG-3513 PR-3b: ONE shared report in the brokerage, so /dashboard/reports/d/[id] renders for the
+ * admitted personas and its no-write / no-table-read checks run on a real page, not only on notFound.
+ * Shape transcribed from broker_report_def_get (migrations 20261112200000 + 20261112210000). Every
+ * caller is a viewer: the emulation decides nothing, the report gate decides who reaches it.
+ */
+const SHARED_REPORT_DEF_ID = '00000000-0000-4000-8000-0000003513e1'; // pii-allow-uuid: invented fixture id
+function mockSharedReportDefinition(defId: unknown) {
+  if (defId !== SHARED_REPORT_DEF_ID) return null;
+  return {
+    id: SHARED_REPORT_DEF_ID,
+    organization_id: FIXTURE_BROKERAGE_ORG_ID,
+    dataset_key: 'submissions',
+    name: 'Shared fixture report',
+    description: null,
+    definition: { filters: {}, sort: null },
+    row_scope: 'all',
+    general_access: 'organization',
+    level: 'viewer',
+    owner: { name: 'Fixture Owner', is_you: false },
+    updated_at: '2026-11-12T10:00:00+00:00',
+    take_over_available: false,
+  };
+}
+/** The shared-report write functions (migrations 20261112200000 + 20261112210000). No page may call one. */
+const REPORT_WRITE_RPCS = [
+  'broker_report_def_create', 'broker_report_def_update', 'broker_report_def_delete', 'broker_report_share_set',
+  'broker_report_share_remove', 'broker_report_set_general_access', 'broker_report_transfer', 'broker_report_take_over',
+];
 const CHECKLIST_EDITOR_ROLES = ['broker', 'admin', 'it_admin'];
 function canEditChecklistTemplates(orgId: unknown): boolean {
   return (mockEmulator.state.rows.organization_members ?? []).some((m) => {
@@ -101,6 +130,8 @@ const mockRpc = jest.fn(async (name: string, args?: Record<string, unknown>) =>
       ? { data: canCreateOwnChecklistTemplates(args?.p_org_id), error: null }
     : name === 'can_review_submission'
       ? { data: canReviewSubmission(args?.p_org_id), error: null }
+    : name === 'broker_report_def_get'
+      ? { data: mockSharedReportDefinition(args?.p_def), error: null }
       : { data: null, error: null }
 );
 
@@ -483,7 +514,7 @@ const BILLING_PAGES: Record<string, PageEntry> = {
  * and every full role, and refuse a personal-org owner. The per-role rule is
  * covered in __tests__/reports-3505 and __tests__/reports-3513.
  */
-const REPORTS_PAGES: Record<string, PageEntry> = {
+const REPORTS_PAGES: Record<string, PageEntry & { admitted?: Outcome }> = {
   'app/dashboard/reports/page.tsx': {
     invoke: async () => (await import('@/app/dashboard/reports/page')).default(),
     refused: { notFound: true },
@@ -492,6 +523,19 @@ const REPORTS_PAGES: Record<string, PageEntry> = {
     invoke: async () =>
       (await import('@/app/dashboard/reports/submissions/page')).default({ searchParams: Promise.resolve({}) }),
     refused: { notFound: true },
+    // BACKLOG-3513 PR-3b: the page returns the shared report body.
+    admitted: { element: 'SubmissionsReportBody' },
+  },
+  // BACKLOG-3513 PR-3b: one shared report (the emulator holds one definition, see
+  // mockSharedReportDefinition): admitted personas get the report body.
+  'app/dashboard/reports/d/[id]/page.tsx': {
+    invoke: async () =>
+      (await import('@/app/dashboard/reports/d/[id]/page')).default({
+        params: Promise.resolve({ id: SHARED_REPORT_DEF_ID }),
+        searchParams: Promise.resolve({}),
+      }),
+    refused: { notFound: true },
+    admitted: { element: 'SubmissionsReportBody' },
   },
 };
 const REPORTS_REFUSED = { 'personal-org owner': [personalMembership()] } as const;
@@ -1059,7 +1103,7 @@ describe('discovery can see what it claims to see', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
     expect(pages).toContain('app/dashboard/users/[id]/page.tsx');
-    expect(pages.length).toBe(21); // BACKLOG-3962: + settings/domain; BACKLOG-3513 PR-3a: + reports/submissions; BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
+    expect(pages.length).toBe(22); // BACKLOG-3513 PR-3b: + reports/d/[id]; BACKLOG-3962: + settings/domain; BACKLOG-3513 PR-3a: + reports/submissions; BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
   });
 
   it('finds route handlers, keyed POSIX on any OS (R8)', () => {
@@ -1111,11 +1155,14 @@ describe('reports pages with the shipped registry (BACKLOG-3505, BACKLOG-3513 PR
     given(rows as readonly Row[]);
     const from = jest.spyOn(mockEmulator, 'from');
     const page = REPORTS_PAGES[file];
+    const rpcBefore = mockRpc.mock.calls.length;
     const outcome = await run(page.invoke);
     if (verdict === 'refused') expect(outcome).toEqual(page.refused);
-    else expect(outcome).toEqual({ element: 'div' });
+    else expect(outcome).toEqual(page.admitted ?? { element: 'div' });
     expect(mockEmulator.state.writes).toEqual([]);
     expect(from.mock.calls.map((c) => c[0])).not.toContain('transaction_submissions');
+    // BACKLOG-3513 PR-3b: no shared-report write either.
+    expect(mockRpc.mock.calls.slice(rpcBefore).map((c) => c[0]).filter((n) => REPORT_WRITE_RPCS.includes(n))).toEqual([]);
     from.mockRestore();
   });
 });
