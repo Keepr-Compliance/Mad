@@ -15,8 +15,8 @@ import { useRouter } from 'next/navigation';
 import { Button, ConfirmationDialog } from '@keepr/ui';
 import { reportDefinitionsApi, type ReportDefinitionsApi } from '@/lib/reports/sharing/definitions-api';
 import type { ReportLevel, RowScope } from '@/lib/reports/sharing/sharing-api';
-import { writeFailureMessage } from '@/lib/reports/saved-views/write-failure';
-import type { ViewState } from '@/lib/reports/saved-views/degrade';
+import { writeFailureMessage } from '@/lib/reports/sharing/write-failure';
+import type { ViewState } from '@/lib/reports/datasets/view-state';
 
 export const REPORTS_INDEX_PATH = '/dashboard/reports';
 

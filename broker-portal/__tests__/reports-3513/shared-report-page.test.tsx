@@ -65,7 +65,7 @@ import ReportsPage from '@/app/dashboard/reports/page';
 import { SaveAsSharedReport } from '@/components/reports/SaveAsSharedReport';
 import { DeleteReportButton } from '@/components/reports/ReportDefinitionActions';
 import { canReassign } from '@/components/reports/ReassignReport';
-import { definitionViewsKey, resolveDefinitionFilters } from '@/lib/reports/datasets/submissions-filters';
+import { resolveDefinitionFilters } from '@/lib/reports/datasets/submissions-filters';
 
 type Level = 'owner' | 'editor' | 'viewer';
 
@@ -217,6 +217,18 @@ describe('Reassign (founder ruling 2026-11-13: IT admin, or admin when the broke
 });
 
 describe('rows and filters', () => {
+  it('PR-3c: the page has a Back link to the Reports index', async () => {
+    await renderPage('agent', { level: 'viewer' });
+    expect(screen.getByRole('link', { name: 'Back' })).toHaveAttribute('href', '/dashboard/reports');
+  });
+
+  it('PR-3c (founder ruling A): no personal saved-views panel on a shared report', async () => {
+    await renderPage('full', { level: 'owner' });
+    expect(document.querySelector('[data-slot="saved-views"]')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Views/ })).toBeNull();
+    expect(mockClientRpc.mock.calls.map(([n]) => n)).not.toContain('broker_report_list_views');
+  });
+
   it('U6 every request reads the definition, then rows with p_def = this report and its saved filters', async () => {
     await renderPage('full', { level: 'viewer' });
     const names = mockRpc.mock.calls.map(([n]) => n);
@@ -241,10 +253,6 @@ describe('rows and filters', () => {
     });
   });
 
-  it("U9 the saved-views key is 'd-' + id in lower case", () => {
-    expect(definitionViewsKey(DEF)).toBe(`d-${DEF.toLowerCase()}`);
-    expect(definitionViewsKey(DEF)).toMatch(/^[a-z0-9][a-z0-9-]{0,62}$/);
-  });
 });
 
 describe('refusals are notFound', () => {

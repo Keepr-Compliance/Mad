@@ -28,7 +28,7 @@ import {
   type SharingPrincipal,
 } from '@keepr/ui';
 import { reportDefinitionsApi, type ReportDefinitionsApi } from '@/lib/reports/sharing/definitions-api';
-import { writeFailureMessage } from '@/lib/reports/saved-views/write-failure';
+import { writeFailureMessage } from '@/lib/reports/sharing/write-failure';
 import type { ReportCallerKind } from '@/lib/reports/report-gate';
 
 /** Reassign is offered only to a full-portal caller the database says may reassign this report. */

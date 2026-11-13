@@ -21,6 +21,7 @@ import {
 } from '@/lib/reports/datasets/submissions-filters';
 import { SubmissionsReportFilters } from '@/components/reports/submissions/SubmissionsReportFilters';
 import { SubmissionsReportTable } from '@/components/reports/submissions/SubmissionsReportTable';
+import { ReportBackLink } from '@/components/reports/ReportBackLink';
 
 export interface SubmissionsReportBodyProps {
   caller: ReportCaller;
@@ -28,13 +29,12 @@ export interface SubmissionsReportBodyProps {
   filters: Filters;
   data: SubmissionsReportData;
   title: string;
-  /** Buttons beside the title (Share, Update, Delete, Save as shared report). */
+  /** Buttons beside the title (Share, Save filters, Delete, Save as shared report). */
   actions?: ReactNode;
   /** Shown above the controls (e.g. the take-over notice). */
   notice?: ReactNode;
   basePath?: string;
   explicit?: boolean;
-  viewsKey?: string;
 }
 
 export function SubmissionsReportBody({
@@ -47,13 +47,13 @@ export function SubmissionsReportBody({
   notice,
   basePath = SUBMISSIONS_REPORT_PATH,
   explicit = false,
-  viewsKey,
 }: SubmissionsReportBodyProps) {
   const full = caller.kind === 'full';
   const pageUrl = (page: number) => buildSubmissionsReportUrl({ ...filters, page }, basePath, explicit);
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
+      <ReportBackLink />
       <PageHeader
         phoneHideTitle
         title={title}
@@ -76,14 +76,11 @@ export function SubmissionsReportBody({
       ) : null}
 
       <SubmissionsReportFilters
-        orgId={caller.organizationId}
-        report={report}
         filters={filters}
         showAgent={full}
         agents={data.ok ? data.agents : []}
         basePath={basePath}
         explicit={explicit}
-        viewsKey={viewsKey}
       />
 
       {!data.ok ? (
