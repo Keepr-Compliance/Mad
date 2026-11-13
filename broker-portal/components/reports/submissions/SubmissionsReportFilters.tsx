@@ -84,7 +84,7 @@ export function SubmissionsReportFilters({ filters, showAgent, agents, basePath,
           onChange={({ from, to }) => set({ from: parseDateParam(from), to: parseDateParam(to) })}
         />
         {hasDates ? (
-          <Button type="button" variant="ghost" size="sm" onClick={() => set({ from: null, to: null })}>
+          <Button type="button" variant="secondary" size="sm" onClick={() => set({ from: null, to: null })}>
             Clear dates
           </Button>
         ) : null}

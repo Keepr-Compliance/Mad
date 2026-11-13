@@ -147,6 +147,27 @@ describe('picking pushes the same URL as before', () => {
     expect(mockPush).toHaveBeenCalledWith('/dashboard/reports/submissions?from=2026-10-01&to=2026-10-20');
   });
 
+  // SR R1 (pm_comments 01d1cf6b): a button must not blend into the background (founder rule, PR-3d README).
+  it('Clear dates is a bordered secondary button, not ghost', () => {
+    mount({ from: '2026-10-05', to: '2026-10-15' });
+    const cls = screen.getByRole('button', { name: 'Clear dates' }).className;
+    expect(cls).toMatch(/\bborder\b/);
+    expect(cls).toMatch(/\bborder-input\b/);
+    expect(cls).toMatch(/\bbg-background\b/);
+  });
+
+  it('no ghost, link or transparent button anywhere in the broker reports UI', () => {
+    const { readdirSync, readFileSync, statSync } = jest.requireActual<typeof import('fs')>('fs');
+    const { join } = jest.requireActual<typeof import('path')>('path');
+    const portal = join(__dirname, '..', '..');
+    const walk = (dir: string): string[] =>
+      readdirSync(dir).flatMap((n) => (statSync(join(dir, n)).isDirectory() ? walk(join(dir, n)) : /\.tsx$/.test(n) ? [join(dir, n)] : []));
+    const files = [...walk(join(portal, 'components', 'reports')), ...walk(join(portal, 'app', 'dashboard', 'reports'))];
+    expect(files.length).toBeGreaterThan(5);
+    const offenders = files.filter((f) => /variant=["'{]+(ghost|link)\b|bg-transparent/.test(readFileSync(f, 'utf8')));
+    expect(offenders).toEqual([]);
+  });
+
   it('Clear dates removes both dates and keeps the rest', () => {
     mount({ from: '2026-10-05', to: '2026-10-15', status: 'approved' });
     fireEvent.click(screen.getByRole('button', { name: 'Clear dates' }));
