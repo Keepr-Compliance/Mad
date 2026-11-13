@@ -16,7 +16,6 @@ import { requireDefinitionAccess, DEFINITION_DATASET } from '@/lib/reports/defin
 import { loadSubmissionsReport } from '@/lib/reports/datasets/submissions';
 import {
   definitionReportPath,
-  definitionViewsKey,
   filtersToViewState,
   resolveDefinitionFilters,
   type SubmissionsSearchParams,
@@ -48,7 +47,6 @@ export default async function SharedReportPage({ params, searchParams }: PagePro
       title={definition.name}
       basePath={definitionReportPath(definition.id)}
       explicit
-      viewsKey={definitionViewsKey(definition.id)}
       notice={<TakeOverNotice defId={definition.id} kind={caller.kind} takeOverAvailable={definition.takeOverAvailable} />}
       actions={
         <>

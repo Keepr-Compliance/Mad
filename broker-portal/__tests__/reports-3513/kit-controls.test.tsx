@@ -3,7 +3,7 @@
  *
  * The REAL SubmissionsReportFilters and ReportBackLink. Status, Agent and Sort are
  * the kit Dropdown (filter variant, as the admin report filter bars use it), the dates are the kit
- * DateRangePicker. (ReportSavedViews is on hold: coordinator, pending a founder ruling.) Picking must push exactly the URL
+ * DateRangePicker. Picking must push exactly the URL
  * the native controls pushed before: same values and params, "all" and "All agents" left out.
  *
  * Pointer-capture / scrollIntoView stubs copied from __tests__/people-sheet-4032/peopleSheet.test.tsx:25-29.
@@ -34,7 +34,6 @@ jest.mock('next/navigation', () => ({
 
 import { SubmissionsReportFilters } from '@/components/reports/submissions/SubmissionsReportFilters';
 import { ReportBackLink, canGoBackInApp } from '@/components/reports/ReportBackLink';
-import { SUBMISSIONS_REPORT } from '@/lib/reports/registry';
 import { DEFAULT_SUBMISSIONS_FILTERS, type SubmissionsReportFilters as Filters } from '@/lib/reports/datasets/submissions-filters';
 
 // pii-allow-uuid: invented fixture ids below (whole block)
@@ -48,8 +47,6 @@ const AGENTS = [
 function mount(filters: Partial<Filters> = {}, extra: Partial<React.ComponentProps<typeof SubmissionsReportFilters>> = {}) {
   return render(
     <SubmissionsReportFilters
-      orgId="org-fixture-1"
-      report={SUBMISSIONS_REPORT}
       filters={{ ...DEFAULT_SUBMISSIONS_FILTERS, ...filters }}
       showAgent
       agents={AGENTS}

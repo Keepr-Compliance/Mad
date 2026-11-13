@@ -3,9 +3,13 @@
 /**
  * Submissions report controls — BACKLOG-3513 PR-3a.
  *
- * Status, agent (full roles only), date range and sort, plus the Views panel
- * (ReportSavedViews, BACKLOG-3514). Every change pushes a new URL; the server
- * page reads the URL and asks the database again. Nothing is filtered here.
+ * Status, agent (full roles only), date range and sort. Every change pushes a
+ * new URL; the server page reads the URL and asks the database again. Nothing
+ * is filtered here.
+ *
+ * Founder ruling "A" (BACKLOG-3513 PR-3c): one concept, views (the shared
+ * report definitions). The personal saved-views panel (ReportSavedViews,
+ * BACKLOG-3514) is no longer mounted here; its database side is unchanged.
  *
  * BACKLOG-3513 PR-3c (founder QA): the design-system controls, as the admin
  * report filter bars use them: the kit Dropdown in its 'filter' variant
@@ -18,25 +22,18 @@
 
 import { useRouter } from 'next/navigation';
 import { Button, DateRangePicker, Dropdown } from '@keepr/ui';
-import { ReportSavedViews } from '@/components/reports/ReportSavedViews';
-import type { ReportDefinition } from '@/lib/reports/registry';
 import type { AgentOption } from '@/lib/reports/datasets/submissions';
 import {
-  DEFAULT_SUBMISSIONS_FILTERS,
   SUBMISSIONS_SORT_OPTIONS,
   SUBMISSIONS_STATUS_OPTIONS,
   buildSubmissionsReportUrl,
-  filtersToViewState,
   parseDateParam,
   parseStatusParam,
   parseSubmissionsSort,
-  viewStateToFilters,
   type SubmissionsReportFilters as Filters,
 } from '@/lib/reports/datasets/submissions-filters';
 
 export interface SubmissionsReportFiltersProps {
-  orgId: string;
-  report: ReportDefinition;
   filters: Filters;
   /** Shown only to a full role; an agent's report is their own rows. */
   showAgent: boolean;
@@ -45,8 +42,6 @@ export interface SubmissionsReportFiltersProps {
   basePath?: string;
   /** Keep `status` in the URL (a shared report: see buildSubmissionsReportUrl). */
   explicit?: boolean;
-  /** The saved-views key. Default: the report's slug. */
-  viewsKey?: string;
 }
 
 /**
@@ -55,16 +50,7 @@ export interface SubmissionsReportFiltersProps {
  */
 export const ALL_AGENTS = '__all__';
 
-export function SubmissionsReportFilters({
-  orgId,
-  report,
-  filters,
-  showAgent,
-  agents,
-  basePath,
-  explicit = false,
-  viewsKey,
-}: SubmissionsReportFiltersProps) {
+export function SubmissionsReportFilters({ filters, showAgent, agents, basePath, explicit = false }: SubmissionsReportFiltersProps) {
   const router = useRouter();
   const go = (next: Filters) => router.push(buildSubmissionsReportUrl({ ...next, page: 1 }, basePath, explicit));
   const set = (patch: Partial<Filters>) => go({ ...filters, ...patch });
@@ -111,14 +97,6 @@ export function SubmissionsReportFilters({
           onChange={(v) => set({ sort: parseSubmissionsSort(v) })}
         />
       </div>
-      <ReportSavedViews
-        orgId={orgId}
-        report={report}
-        current={filtersToViewState(filters)}
-        onApply={(view) => go(viewStateToFilters(view))}
-        onClear={() => go(DEFAULT_SUBMISSIONS_FILTERS)}
-        reportKey={viewsKey}
-      />
     </div>
   );
 }

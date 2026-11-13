@@ -274,6 +274,13 @@ describe('page', () => {
     expect(screen.getByRole('link', { name: 'Back' })).toHaveAttribute('href', '/dashboard/reports');
   });
 
+  it('PR-3c (founder ruling A): no personal saved-views panel on the Submissions report', async () => {
+    given({ deals: [row(1, AGENT_A, 0)] });
+    await renderPage('full');
+    expect(document.querySelector('[data-slot="saved-views"]')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Views/ })).toBeNull();
+  });
+
   it('B3: the service-off line shows when broker_report_scope says service_off', async () => {
     given({ serviceOff: true, deals: [row(1, BROKER, 0)] });
     await renderPage('full');

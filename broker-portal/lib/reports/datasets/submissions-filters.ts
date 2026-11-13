@@ -175,11 +175,6 @@ export function definitionReportPath(id: string): string {
   return `/dashboard/reports/d/${encodeURIComponent(id)}`;
 }
 
-/** The saved-views key of one shared report: 'd-' + id, lower-cased (migration 20261112200000 C8). */
-export function definitionViewsKey(id: string): string {
-  return `d-${id}`.toLowerCase();
-}
-
 /** A stored definition back to filters. Anything malformed falls back to the defaults. */
 export function definitionToFilters(definition: unknown): SubmissionsReportFilters {
   const obj = definition !== null && typeof definition === 'object' && !Array.isArray(definition) ? (definition as Record<string, unknown>) : {};
