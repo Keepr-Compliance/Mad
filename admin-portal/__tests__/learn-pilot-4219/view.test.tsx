@@ -14,11 +14,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/link', () => ({
   __esModule: true,
-  default: ({ children, href, ...rest }: { children: React.ReactNode; href: string }) => (
-    <a href={href} {...rest}>
+  // forwardRef: @keepr/ui Button asChild (Radix Slot) passes a ref to the link (SR A5).
+  default: React.forwardRef<HTMLAnchorElement, { children: React.ReactNode; href: string }>(({ children, href, ...rest }, ref) => (
+    <a ref={ref} href={href} {...rest}>
       {children}
     </a>
-  ),
+  )),
 }));
 
 import { LearnPilotView, cellText, changeText, EMPTY_TEXT, TRUNCATED_TEXT } from '@/app/dashboard/ai/learn-pilot/LearnPilotView';
@@ -32,19 +33,21 @@ const fromList = (list: unknown, error: unknown = null) => buildViewModel(parseA
 const IDS = [USER_6, USER_10, USER_13];
 /** Opens the user's details dialog from the summary table and returns their full table. */
 const userById = (id: string) => {
-  fireEvent.click(screen.getByRole('button', { name: new RegExp(`^Details for .*${id}$`) }));
+  fireEvent.click(document.querySelector(`[data-testid="pilot-summary-row"][data-user-id="${id}"]`)!);
   return within(screen.getByRole('dialog')).getByTestId('pilot-user');
 };
 const closeDialog = () => fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }));
 
 describe('pilot users: name and Keepr user id, never an email', () => {
-  it('each user heading shows the id as a link to the admin user page', () => {
+  it('each user heading shows the id as plain text; "View user" is the dialog\'s one link, to the admin user page', () => {
     render(<LearnPilotView model={fromList(clone(ADMIN_LIST))} />);
     expect(screen.getAllByTestId('pilot-summary-row')).toHaveLength(3);
     for (const id of IDS) {
-      const link = within(userById(id)).getByTestId('pilot-user-id');
-      expect(link.tagName).toBe('A');
-      expect(link.getAttribute('href')).toBe(`/dashboard/users/${id}`);
+      const idText = within(userById(id)).getByTestId('pilot-user-id');
+      expect(idText.tagName).toBe('SPAN');
+      expect(idText.textContent).toBe(id);
+      const links = within(screen.getByRole('dialog')).getAllByRole('link');
+      expect(links.map((l) => [l.textContent, l.getAttribute('href')])).toEqual([['View user', `/dashboard/users/${id}`]]);
       closeDialog();
     }
     expect(within(userById(USER_6)).getByTestId('pilot-user-name').textContent).toBe('P4219 user 6');

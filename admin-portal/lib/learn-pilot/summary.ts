@@ -11,7 +11,7 @@ import { MARK_LABELS } from './group';
 import type { Cell, OrgGroup, UserGroup, VersionColumn } from './types';
 import { wilsonInterval } from './wilson';
 
-export type SummaryKey = 'name' | 'userId' | 'org' | 'version' | 'recall' | 'recallYes' | 'precision' | 'knownWrong' | 'lastReport';
+export type SummaryKey = 'name' | 'org' | 'version' | 'recall' | 'recallYes' | 'precision' | 'knownWrong' | 'lastReport';
 
 export type SortDirection = 'asc' | 'desc';
 
@@ -30,7 +30,7 @@ export interface SummaryRow {
   knownWrong: Cell;
 }
 
-const TEXT_KEYS: readonly SummaryKey[] = ['name', 'userId', 'org'];
+const TEXT_KEYS: readonly SummaryKey[] = ['name', 'org'];
 
 /** Numbers open descending, text ascending (the report kit's rule). */
 export function defaultDirectionFor(key: SummaryKey): SortDirection {
@@ -111,8 +111,6 @@ function value(row: SummaryRow, key: SummaryKey): number | string | null {
   switch (key) {
     case 'name':
       return row.user.userName && row.user.userName.length > 0 ? row.user.userName : null;
-    case 'userId':
-      return row.user.userId;
     case 'org':
       return row.orgName;
     case 'version':

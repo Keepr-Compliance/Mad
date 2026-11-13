@@ -4,19 +4,22 @@
  * BACKLOG-4219: the Learn pilot summary table, rendered in jsdom from the transcribed capture
  * (fixtures.ts) through the page's buildViewModel. Headers, cells, search, sorting, the details
  * dialog (opened by row KEY, never by array index: SR A3), and the same user in two orgs (A9).
+ * Rows-fix (founder ruling pm_comments e78e0311): the whole row opens the dialog by mouse, Enter or
+ * Space; focus returns to the row on close; "View user" is the only link in the dialog.
  */
 
 import React from 'react';
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('next/link', () => ({
   __esModule: true,
-  default: ({ children, href, ...rest }: { children: React.ReactNode; href: string }) => (
-    <a href={href} {...rest}>
+  // forwardRef: @keepr/ui Button asChild (Radix Slot) passes a ref to the link (SR A5).
+  default: React.forwardRef<HTMLAnchorElement, { children: React.ReactNode; href: string }>(({ children, href, ...rest }, ref) => (
+    <a ref={ref} href={href} {...rest}>
       {children}
     </a>
-  ),
+  )),
 }));
 
 import { LearnPilotView, NO_MATCH_TEXT, SEARCH_LABEL } from '@/app/dashboard/ai/learn-pilot/LearnPilotView';
@@ -31,11 +34,15 @@ const fromRows = (rows: Row[]) => buildViewModel(parseAdminList({ rows, truncate
 const baseRows = (): Row[] => clone(ADMIN_LIST).rows as Row[];
 const summaryRows = () => screen.getAllByTestId('pilot-summary-row');
 const cell = (tr: HTMLElement, name: string) => tr.querySelector(`[data-cell="${name}"]`)!.textContent;
-const rowIds = () => summaryRows().map((tr) => cell(tr, 'user-id'));
+const rowIds = () => summaryRows().map((tr) => tr.dataset.userId);
+const rowOf = (id: string) => summaryRows().find((tr) => tr.dataset.userId === id)!;
+const dialogUserId = () => within(screen.getByRole('dialog')).getByTestId('pilot-dialog-title').getAttribute('data-user-id');
+const escape = () => fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 20)); });
 const search = (q: string) => fireEvent.change(screen.getByLabelText(SEARCH_LABEL), { target: { value: q } });
 const sortBy = (label: string) => fireEvent.click(within(screen.getByRole('columnheader', { name: new RegExp(`^${label}`) })).getByRole('button'));
 const openRow = (tr: HTMLElement) => {
-  fireEvent.click(within(tr).getByRole('button', { name: /^Details for / }));
+  fireEvent.click(tr.querySelector('[data-cell="org"]')!);
   return screen.getByRole('dialog');
 };
 
@@ -45,7 +52,6 @@ describe('the table', () => {
     const headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
     expect(headers).toEqual([
       'Name',
-      'Keepr user id',
       'Org',
       'Rules version',
       'Deals found',
@@ -53,7 +59,6 @@ describe('the table', () => {
       'Shown deals that are real',
       'Known wrong',
       'Last report',
-      'Details',
     ]);
     expect(screen.queryByText(/Wrong finds/)).toBeNull();
   });
@@ -72,21 +77,35 @@ describe('the table', () => {
     v1.report = { ...v1.report, recall: { k: 2, n: 3 }, known_wrong: 3 };
     v2.report = { ...v2.report, recall: { k: 1, n: 4 }, known_wrong: 8 };
     render(<LearnPilotView model={fromRows(rows)} />);
-    const tr = summaryRows().find((r) => cell(r, 'user-id') === USER_10)!;
+    const tr = rowOf(USER_10);
     expect(cell(tr, 'name')).toBe('Pat Ten');
     expect(cell(tr, 'org')).toBe('P4219 X');
     expect(cell(tr, 'version')).toBe('v1Released, bundled');
     expect(cell(tr, 'recall')).toBe('66.7% · 2/3');
     expect(cell(tr, 'known-wrong')).toBe('3');
     expect(cell(tr, 'last-report')).toBe('Nov 11, 2026');
-    expect(tr.querySelector('[data-cell="user-id"] a')!.getAttribute('href')).toBe(`/dashboard/users/${USER_10}`);
   });
 
-  it('a user with no name: blank name cell, id still shown', () => {
+  it('a user with no name: "Unnamed user" plus the short id, never blank', () => {
     render(<LearnPilotView model={fromRows(baseRows())} />);
-    const tr = summaryRows().find((r) => cell(r, 'user-id') === USER_13)!;
-    expect(cell(tr, 'name')).toBe('');
-    expect(within(tr).getByRole('button', { name: `Details for ${USER_13}` })).toBeTruthy();
+    const tr = rowOf(USER_13);
+    expect(cell(tr, 'name')).toBe(`Unnamed user · ${USER_13.slice(0, 8)}`);
+    expect(tr.getAttribute('aria-label')).toBe(`Open report for Unnamed user ${USER_13.slice(0, 8)}`);
+  });
+
+  it('no Keepr user id column and no Details column (founder ruling)', () => {
+    render(<LearnPilotView model={fromRows(baseRows())} />);
+    expect(document.querySelector('[data-cell="user-id"]')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Details/ })).toBeNull();
+  });
+
+  it('every row is focusable and holds no interactive element (A4)', () => {
+    render(<LearnPilotView model={fromRows(baseRows())} />);
+    expect(summaryRows()).toHaveLength(3);
+    for (const tr of summaryRows()) {
+      expect(tr.tabIndex).toBe(0);
+      expect(tr.querySelectorAll('a, button, input, select, textarea, [tabindex]')).toHaveLength(0);
+    }
   });
 });
 
@@ -106,6 +125,13 @@ describe('search', () => {
     expect(screen.getByRole('columnheader', { name: /^Name/ })).toBeTruthy();
     fireEvent.click(within(screen.getByTestId('pilot-summary-no-match')).getByRole('button', { name: 'Clear search' }));
     expect(summaryRows()).toHaveLength(3);
+  });
+
+  it('Clear search is not the ghost variant: it sets its own text colour (A4)', () => {
+    render(<LearnPilotView model={fromRows(baseRows())} />);
+    search('nobody here');
+    const b = within(screen.getByTestId('pilot-summary-no-match')).getByRole('button', { name: 'Clear search' });
+    expect(b.className.split(/\s+/)).toContain('text-foreground');
   });
 });
 
@@ -155,7 +181,7 @@ describe('the details dialog', () => {
     copy.org_current_pin_version = 5;
     copy.org_current_pin_at = '2026-11-11T18:50:02.172359+00:00';
     render(<LearnPilotView model={fromRows([...rows, copy])} />);
-    const u13 = summaryRows().filter((tr) => cell(tr, 'user-id') === USER_13);
+    const u13 = summaryRows().filter((tr) => tr.dataset.userId === USER_13);
     expect(u13).toHaveLength(2);
     for (const org of ['P4219 Z', 'P4219 X']) {
       const tr = u13.find((r) => cell(r, 'org') === org)!;
@@ -168,8 +194,56 @@ describe('the details dialog', () => {
 
   it('Escape closes it', () => {
     render(<LearnPilotView model={fromRows(baseRows())} />);
-    const dialog = openRow(summaryRows().find((r) => cell(r, 'user-id') === USER_6)!);
+    const dialog = openRow(rowOf(USER_6));
     fireEvent.keyDown(dialog, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('"View user" is the only link, to /dashboard/users/<id>, for every user (A3)', () => {
+    render(<LearnPilotView model={fromRows(baseRows())} />);
+    for (const id of [USER_6, USER_10, USER_13]) {
+      openRow(rowOf(id));
+      const links = within(screen.getByRole('dialog')).getAllByRole('link');
+      expect(links.map((l) => [l.textContent, l.getAttribute('href')])).toEqual([['View user', `/dashboard/users/${id}`]]);
+      escape();
+    }
+  });
+});
+
+describe('keyboard', () => {
+  it('Enter on a focused row opens that row', () => {
+    render(<LearnPilotView model={fromRows(baseRows())} />);
+    for (const id of [USER_6, USER_10, USER_13]) {
+      fireEvent.keyDown(rowOf(id), { key: 'Enter' });
+      expect(dialogUserId()).toBe(id);
+      escape();
+    }
+  });
+
+  it('Space on a focused row opens that row and prevents page scroll (A2)', () => {
+    render(<LearnPilotView model={fromRows(baseRows())} />);
+    for (const id of [USER_6, USER_10, USER_13]) {
+      expect(fireEvent.keyDown(rowOf(id), { key: ' ' })).toBe(false);
+      expect(dialogUserId()).toBe(id);
+      escape();
+    }
+  });
+
+  it('other keys do nothing', () => {
+    render(<LearnPilotView model={fromRows(baseRows())} />);
+    fireEvent.keyDown(rowOf(USER_6), { key: 'a' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('focus returns to the row when the dialog closes (A1)', async () => {
+    render(<LearnPilotView model={fromRows(baseRows())} />);
+    const tr = rowOf(USER_10);
+    tr.focus();
+    fireEvent.keyDown(tr, { key: 'Enter' });
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    escape();
+    await flush();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(rowOf(USER_10));
   });
 });

@@ -3,11 +3,12 @@
 /**
  * Learn pilot — the page body (BACKLOG-4219). Read-only; renders the model page.tsx built on the
  * server (lib/learn-pilot/group.ts). One summary table, one row per pilot user per org, showing
- * that user's newest-submitted report; "Details" opens the user's full table (one column per
- * sender-rules version, ascending, with the change from the column to its left) in a dialog.
+ * that user's newest-submitted report. The whole row (click, Enter or Space) opens the user's full
+ * table (one column per sender-rules version, ascending, with the change from the column to its
+ * left) in a dialog, whose "View user" button links to the admin user page.
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   AlertBanner,
@@ -17,6 +18,7 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
   EmptyState,
@@ -112,9 +114,9 @@ function UserTable({ user }: { user: UserGroup }) {
             {' · '}
           </>
         )}
-        <Link href={`/dashboard/users/${user.userId}`} className="font-mono text-xs text-primary-700 hover:underline" data-testid="pilot-user-id">
+        <span className="font-mono text-xs text-gray-600" data-testid="pilot-user-id">
           {user.userId}
-        </Link>
+        </span>
       </h3>
       <div className="overflow-x-auto rounded-md border border-gray-200">
         <table className="min-w-full text-sm">
@@ -152,7 +154,6 @@ function pinText(pin: OrgGroup['pin']): string {
 
 const COLUMNS: { key: SummaryKey; label: string; align: 'left' | 'right' }[] = [
   { key: 'name', label: 'Name', align: 'left' },
-  { key: 'userId', label: 'Keepr user id', align: 'left' },
   { key: 'org', label: 'Org', align: 'left' },
   { key: 'version', label: 'Rules version', align: 'left' },
   { key: 'recall', label: 'Deals found', align: 'right' },
@@ -164,18 +165,31 @@ const COLUMNS: { key: SummaryKey; label: string; align: 'left' | 'right' }[] = [
 
 const NUM_CELL = 'whitespace-nowrap py-2 px-3 text-right tabular-nums text-gray-700';
 
-function SummaryTableRow({ row, onOpen }: { row: SummaryRow; onOpen: (key: string) => void }) {
+function SummaryTableRow({ row, onOpen }: { row: SummaryRow; onOpen: (key: string, el: HTMLElement) => void }) {
   const { user, column } = row;
   return (
-    <tr className="border-b border-gray-100 last:border-0 hover:bg-gray-50" data-testid="pilot-summary-row" data-row-key={row.key}>
+    <tr
+      className="cursor-pointer border-b border-gray-100 last:border-0 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      data-testid="pilot-summary-row"
+      data-row-key={row.key}
+      data-user-id={user.userId}
+      tabIndex={0}
+      aria-label={`Open report for ${user.userName ?? `Unnamed user ${user.userId.slice(0, 8)}`}`}
+      onClick={(e) => onOpen(row.key, e.currentTarget)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen(row.key, e.currentTarget);
+        }
+      }}
+    >
       <th scope="row" className="py-2 px-3 text-left font-normal text-gray-900" data-cell="name">
-        {user.userName ?? ''}
+        {user.userName ?? (
+          <>
+            Unnamed user · <span className="font-mono text-xs">{user.userId.slice(0, 8)}</span>
+          </>
+        )}
       </th>
-      <td className="whitespace-nowrap py-2 px-3" data-cell="user-id">
-        <Link href={`/dashboard/users/${user.userId}`} className="font-mono text-xs text-primary-700 hover:underline">
-          {user.userId}
-        </Link>
-      </td>
       <td className="py-2 px-3 text-gray-700" data-cell="org">
         {row.orgName}
       </td>
@@ -198,11 +212,6 @@ function SummaryTableRow({ row, onOpen }: { row: SummaryRow; onOpen: (key: strin
       <td className="whitespace-nowrap py-2 px-3 text-gray-700" data-cell="last-report">
         {formatDate(column.submittedAt)}
       </td>
-      <td className="whitespace-nowrap py-2 px-3 text-right">
-        <Button size="sm" variant="ghost" aria-haspopup="dialog" aria-label={`Details for ${user.userName ? `${user.userName}, ` : ''}${user.userId}`} onClick={() => onOpen(row.key)}>
-          Details
-        </Button>
-      </td>
     </tr>
   );
 }
@@ -211,6 +220,11 @@ function PilotSummaryTable({ orgs }: { orgs: OrgGroup[] }) {
   const all = useMemo(() => summaryRows(orgs), [orgs]);
   const [query, setQuery] = useState('');
   const [openKey, setOpenKey] = useState<string | null>(null);
+  const openerRef = useRef<HTMLElement | null>(null);
+  const openFrom = (key: string, el: HTMLElement) => {
+    openerRef.current = el;
+    setOpenKey(key);
+  };
   const { sortKey, sortDirection, onSort } = useSortState<SummaryKey>({ initialKey: 'lastReport', defaultDirectionFor });
   const visible = useMemo(() => sortSummary(all.filter((r) => matchesQuery(r, query)), sortKey, sortDirection), [all, query, sortKey, sortDirection]);
   const open = openKey === null ? undefined : all.find((r) => r.key === openKey);
@@ -237,14 +251,11 @@ function PilotSummaryTable({ orgs }: { orgs: OrgGroup[] }) {
                   {c.label}
                 </SortableTh>
               ))}
-              <th scope="col" className="py-2 px-3">
-                <span className="sr-only">Details</span>
-              </th>
             </tr>
           </thead>
           <tbody>
             {visible.map((r) => (
-              <SummaryTableRow key={r.key} row={r} onOpen={setOpenKey} />
+              <SummaryTableRow key={r.key} row={r} onOpen={openFrom} />
             ))}
           </tbody>
         </table>
@@ -254,7 +265,7 @@ function PilotSummaryTable({ orgs }: { orgs: OrgGroup[] }) {
             data-testid="pilot-summary-no-match"
             title={NO_MATCH_TEXT}
             action={
-              <Button variant="ghost" size="sm" onClick={clear}>
+              <Button variant="secondary" size="sm" onClick={clear}>
                 Clear search
               </Button>
             }
@@ -263,7 +274,13 @@ function PilotSummaryTable({ orgs }: { orgs: OrgGroup[] }) {
       </div>
       {open && (
         <Dialog open onOpenChange={(o) => !o && setOpenKey(null)}>
-          <DialogContent className="max-w-6xl max-h-[85vh] overflow-auto">
+          <DialogContent
+            className="max-w-6xl max-h-[85vh] overflow-auto"
+            onCloseAutoFocus={(e) => {
+              e.preventDefault();
+              openerRef.current?.focus();
+            }}
+          >
             <DialogHeader>
               <DialogTitle data-testid="pilot-dialog-title" data-user-id={open.user.userId}>
                 {open.user.userName ? `${open.user.userName} · ${open.user.userId}` : open.user.userId}
@@ -273,6 +290,11 @@ function PilotSummaryTable({ orgs }: { orgs: OrgGroup[] }) {
               </DialogDescription>
             </DialogHeader>
             <UserTable user={open.user} />
+            <DialogFooter>
+              <Button variant="secondary" size="sm" asChild>
+                <Link href={`/dashboard/users/${open.user.userId}`}>View user</Link>
+              </Button>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       )}
