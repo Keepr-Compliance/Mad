@@ -118,7 +118,7 @@ export function RulesCard({
                 : `Editing from everyone's rules (v${releasedVersion}).`}
           </CardDescription>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => setShowJson((v) => !v)}>
+        <Button variant="secondary" size="sm" onClick={() => setShowJson((v) => !v)}>
           {showJson ? 'Hide JSON' : 'View JSON'}
         </Button>
       </CardHeader>
