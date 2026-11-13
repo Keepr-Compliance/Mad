@@ -246,3 +246,19 @@ describe("RS20 (4175 PR4) the rule-set store and download stay outside Learn's s
     expect(relOf(closure(LEARN_ENTRIES)).filter((f) => f.includes("senderRuleSetRefresher"))).toEqual([]);
   });
 });
+
+// BACKLOG-4219 PR2 (P10): the pilot report's network path is INJECTED into the
+// Learn handlers by main.ts; no Learn entry imports it.
+describe("P10 (4219) the pilot send / withdraw service stays outside the Learn closure", () => {
+  const relOf = (s: Set<string>) => [...s].map((f) => path.relative(REPO, f).split(path.sep).join("/"));
+
+  it("positive control: from main.ts the walk reaches the service", () => {
+    expect(relOf(closure([path.join(ELECTRON, "main.ts")]))).toContain("electron/services/learnPilotReportService.ts");
+  });
+
+  it("no Learn entry (handlers included) reaches it; the builder is in the closure", () => {
+    const reached = relOf(closure(LEARN_ENTRIES));
+    expect(reached).toContain("electron/services/learn/pilotReport.ts");
+    expect(reached.filter((f) => f.includes("learnPilotReportService"))).toEqual([]);
+  });
+});

@@ -21,6 +21,7 @@ import {
   SCIM_LIST_SCHEMA,
 } from "../shared/types.ts";
 import { scimError } from "../shared/errors.ts";
+import { isAlreadyPlacedError } from "../shared/alreadyPlaced.ts";
 import { logScimOperation } from "../shared/auth.ts";
 import {
   defaultSeatNotifyDeps,
@@ -649,6 +650,26 @@ export async function handleCreateUser(
       groups: created.groups,
     });
     if (memberError) {
+      // BACKLOG-4179: the one-brokerage guard refused (a join elsewhere committed after the
+      // membership read above): the same answer as that read gives.
+      if (isAlreadyPlacedError(memberError)) {
+        await logScimOperation(supabaseAdmin, {
+          organizationId: auth.orgId,
+          operation: "CREATE",
+          resourceType: "User",
+          resourceId: existingByEmail.id,
+          externalId: externalId,
+          requestPayload: body,
+          responseStatus: 409,
+          errorMessage: "already_placed",
+          scimTokenId: auth.tokenId,
+        });
+        return scimError(
+          409,
+          "already_placed: this person already belongs to another brokerage in Keepr.",
+          "uniqueness",
+        );
+      }
       if (isBillingSetupIncompleteError(memberError)) {
         return refuseForBillingSetup(supabaseAdmin, auth, {
           operation: "CREATE",

@@ -24,7 +24,7 @@ import {
   FilterCaption,
   PeriodPicker,
   SavedViews,
-  ShareDialog,
+  SharingDialog,
   SortableTh,
   StatCard,
   TruncationNotice,
@@ -162,7 +162,7 @@ export function SupportSlaReport({
         trailing={
           <>
             <SavedViews<PeriodOnlySavedView> {...savedViews} />
-            <ShareDialog {...shareDialog} />
+            <SharingDialog {...shareDialog} />
           </>
         }
       >

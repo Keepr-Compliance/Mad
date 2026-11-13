@@ -48,7 +48,7 @@ import {
 import path from "path";
 import log from "electron-log";
 import { isRcsLinkDeepLink, isRcsOpenDeepLink } from "./utils/rcsLinkDeepLink";
-import { bringAppToFrontOrFlash } from "./utils/bringAppToFront";
+import { bringAppToFront, bringAppToFrontOrFlash } from "./utils/bringAppToFront";
 import {
   buildFirstRunNotice,
   getAppliedAppDataPaths,
@@ -56,6 +56,8 @@ import {
 import { getStartupFailure } from "./bootstrap/startupFailure";
 import { getMainWindow, setMainWindow } from "./windowRegistry";
 import { attachWindowRecovery, type WindowRecoveryDeps } from "./bootstrap/attachWindowRecovery";
+import { attachHideOnClose } from "./bootstrap/hideOnClose";
+import { clearQuitting, isQuitting, markQuitting } from "./bootstrap/quitState";
 import {
   createSealQuitPrompt,
   installSealQuitPrompt,
@@ -230,6 +232,10 @@ import { registerLearnModeHandlers } from "./handlers/learnModeHandlers";
 import { openQuestionAttachment } from "./services/learnAttachmentDownload";
 import { registerEntitlementHandlers } from "./handlers/entitlementHandlers";
 import { startSenderRuleSetRefresher } from "./services/senderRuleSetRefresher";
+import {
+  createLearnPilotReportService,
+  startLearnPilotReportService,
+} from "./services/learnPilotReportService";
 import { registerPaymentHandlers } from "./handlers/paymentHandlers";
 import { registerBillingHandlers } from "./handlers/billingHandlers";
 import { sanitizeSessionId } from "./services/paymentService";
@@ -696,7 +702,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
 
       // TASK-1507: Step 5 - Register device
       log.info("[DeepLink] Registering device for user:", redactId(user.id));
-      const deviceResult = await registerDevice(user.id);
+      const deviceResult = await registerDevice(user.id, "login");
 
       if (!deviceResult.success && deviceResult.error === "device_limit_reached") {
         log.warn("[DeepLink] Device limit reached for user:", redactId(user.id));
@@ -937,8 +943,9 @@ function sendToRenderer(channel: string, data: unknown): void {
  * Helper: Focus the main window (brings app to foreground)
  */
 function focusMainWindow(): void {
-  if (mainWindow) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
     mainWindow.focus();
   }
 }
@@ -1160,7 +1167,7 @@ const sealQuitPrompt = installSealQuitPrompt(
       };
       const parent = getMainWindow();
       const { response } =
-        parent && !parent.isDestroyed()
+        parent && !parent.isDestroyed() && parent.isVisible()
           ? await dialog.showMessageBox(parent, options)
           : await dialog.showMessageBox(options);
       return response === 1 ? "quit" : "keep";
@@ -1266,6 +1273,9 @@ function createWindow(): void {
   // gets it too.
   attachWindowRecovery(mainWindow, windowRecoveryDeps);
 
+  // BACKLOG-3283: on macOS closing the window hides it (a quit lets it close).
+  attachHideOnClose(mainWindow, process.platform);
+
   // BACKLOG-3816: Windows ends the session through the window; not the user's quit.
   mainWindow.on("query-session-end", () => noteSystemQuit("os-shutdown"));
   mainWindow.on("session-end", () => noteSystemQuit("os-shutdown"));
@@ -1280,8 +1290,14 @@ function createWindow(): void {
 
   // Prevent closing while a submission is uploading
   mainWindow.on("close", (e) => {
+    // BACKLOG-3283: on macOS a close that is not a quit only hides; the upload goes on.
+    if (process.platform === "darwin" && !isQuitting()) return;
     if (submissionService.isSubmitting) {
       e.preventDefault();
+      // The quit this close belonged to is cancelled; no Electron event says so.
+      const wasQuitting = isQuitting();
+      clearQuitting();
+      if (mainWindow && !mainWindow.isVisible()) mainWindow.show();
       dialog
         .showMessageBox(mainWindow!, {
           type: "warning",
@@ -1297,6 +1313,7 @@ function createWindow(): void {
           if (response === 1) {
             // User chose "Quit Anyway" — force close
             mainWindow?.destroy();
+            if (wasQuitting) app.quit();
           }
         });
     }
@@ -1932,7 +1949,11 @@ app.whenReady().then(async () => {
   registerFeatureGateHandlers();
   // BACKLOG-4120 PR3: the one-attachment downloader is injected, so the Learn
   // handlers keep no static edge to the mail provider services.
-  registerLearnModeHandlers({ openQuestionAttachment });
+  // BACKLOG-4219: the pilot report send / withdraw is injected, so the Learn
+  // handlers keep no static edge to it; its startup and sign-in check starts here.
+  const learnPilotReport = createLearnPilotReportService();
+  registerLearnModeHandlers({ openQuestionAttachment, pilotReport: learnPilotReport });
+  startLearnPilotReportService(learnPilotReport);
 
   // Register per-transaction paywall entitlement handlers (BACKLOG-2006a)
   registerEntitlementHandlers();
@@ -2097,6 +2118,8 @@ app.on("before-quit", (event) => {
   if (deferQuitForBackupStop(event)) return;
   if (deferQuitForLink(event)) return;
   if (deferQuitForBackupSeal(event)) return;
+  // BACKLOG-3283: set only once nothing above held the quit.
+  markQuitting();
   // BACKLOG-3943: clear the OCR queue and stop the running OCR child; the job in
   // flight writes nothing, so its row is picked up again after the next sync.
   stopAttachmentOcr();
@@ -2131,7 +2154,11 @@ app.on("activate", () => {
   // BACKLOG-2962: see the guard at the top of `whenReady` — `activate` fires
   // on first launch on macOS and would open a window during the fatal path.
   if (getStartupFailure()) return;
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
+  // BACKLOG-3283: closing the window on macOS hides it; show that window.
+  const existing = getMainWindow();
+  if (existing) {
+    bringAppToFront(existing);
+    return;
   }
+  createWindow();
 });

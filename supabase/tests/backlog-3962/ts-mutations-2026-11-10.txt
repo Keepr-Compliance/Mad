@@ -1,0 +1,37 @@
+BACKLOG-3962 PR1 portal mutation controls, 2026-11-10, at commit ccdc2eba2, rewritten as 5a280765a with only same-line fixture-id waiver comments added (83 tests in __tests__/domain-claims-3962)
+MUTATION APPLIED TM1_R2_begin_refusal_ignored: 'if (false) {'  numstat: 1	1	broker-portal/lib/actions/domainClaim.ts
+  => total 83 passed 81 failed 2 suites-errored 0  RED
+MUTATION APPLIED TM2_b_role_gate_dropped: "if (access.kind !== 'full') return { ok: false };"  numstat: 1	1	broker-portal/lib/domain/access.ts
+  => total 83 passed 83 failed 0 suites-errored 0  GREEN
+MUTATION APPLIED TM3_b_row_recheck_dropped: 'void membership;'  numstat: 1	1	broker-portal/lib/domain/access.ts
+  => total 83 passed 81 failed 2 suites-errored 0  RED
+MUTATION APPLIED TM4_C1_apex_name: 'return domain;'  numstat: 1	1	broker-portal/lib/domain/doh.ts
+  => total 83 passed 80 failed 3 suites-errored 0  RED
+MUTATION APPLIED TM5_R3_google_quote_parse: 'const j = joinQuotedTxt(a.data);\n    if (j !== null) values.push(j);'  numstat: 2	1	broker-portal/lib/domain/doh.ts
+  => total 83 passed 79 failed 4 suites-errored 0  RED
+MUTATION APPLIED TM6_R3_nodata_is_error: 'if (body.Status === 3) return { ok: true, answers: [] };\n  if (body.Answer === undefined) '  numstat: 2	1	broker-portal/lib/domain/doh.ts
+  => total 83 passed 80 failed 3 suites-errored 0  RED
+MUTATION APPLIED TM7_R4_cache_dropped: ''  numstat: 0	1	broker-portal/lib/domain/doh.ts
+  => total 83 passed 82 failed 1 suites-errored 0  RED
+MUTATION APPLIED TM8_R3_cname_not_filtered: "if (typeof a.data !== 'string') continue;\n    values.push(a.data);"  numstat: 1	1	broker-portal/lib/domain/doh.ts
+  => total 83 passed 82 failed 1 suites-errored 0  RED
+MUTATION APPLIED TM9_C5_parity_comcast: "'fastmail.com',"  numstat: 1	1	supabase/migrations/20261112100000_backlog_3962_domain_claims.sql
+  => total 83 passed 80 failed 3 suites-errored 0  RED
+MUTATION APPLIED TM10_R10_alabel_hidden: ''  numstat: 1	1	broker-portal/app/dashboard/settings/domain/DomainSettingsClient.tsx
+  => total 83 passed 82 failed 1 suites-errored 0  RED
+MUTATION APPLIED TM11_C7_refused_chars: 'const REFUSED_CHARACTERS = /[\\s]/;'  numstat: 1	1	broker-portal/lib/domain/normalize.ts
+  => total 83 passed 80 failed 3 suites-errored 0  RED
+MUTATION APPLIED TM12_C7_no_idn: 'const ascii = value.toLowerCase();'  numstat: 1	1	broker-portal/lib/domain/normalize.ts
+  => total 83 passed 82 failed 1 suites-errored 0  RED
+MUTATION APPLIED TM13_C8_too_soon_ignored: "if (started.error !== 'too_soon') return fail(DOMAIN_CLAIM_NOT_FOUND);"  numstat: 1	2	broker-portal/lib/actions/domainClaim.ts
+  => total 83 passed 82 failed 1 suites-errored 0  RED
+RESTORED BASELINE: total 83 passed 83 failed 0
+MUTATION APPLIED TM2b_b_both_role_checks_dropped: "if (access.kind !== 'full') return { ok: false };\n  if (portal.suspended === true || porta"  numstat: 2	2	broker-portal/lib/domain/access.ts
+  => total 83 passed 78 failed 5 suites-errored 0  RED
+     red: checkDomainClaim (b) agent is refused before the server-role client exists
+     red: checkDomainClaim (b) broker is refused before the server-role client exists
+     red: createDomainClaim (b) agent is refused
+     red: createDomainClaim (b) broker is refused
+NOTE TM2: GREEN by design. access.ts checks the role twice in series: seesOrgPolicy on the session
+classifier, then requireActiveOrgRole(..., ORG_SETTINGS_ROLES) on a fresh read of the row. Either
+alone refuses agent and broker. TM2b drops both and turns 5 tests red, so the pair is guarded.

@@ -13,12 +13,13 @@ const MIGRATIONS_DIR = path.resolve(__dirname, '../../../supabase/migrations');
 const M1 = '20261105100000_backlog_4144_report_access.sql';
 
 /**
- * Catalog keys whose admin page has not landed yet. The key exists so the server can check
- * report_my_access(key) = 'owner' (BACKLOG-4175 sender rule sets, 20261107235503); the page
- * lands in BACKLOG-4186, which deletes this entry. The reports index lists only registry
- * reports, so a pending key shows no dead link.
+ * Catalog keys whose page lives outside the Reports registry: the sidebar's AI section
+ * (founder ruling 2026-11-10). 'sender-rules' (BACKLOG-4175 key, 20261107235503; page
+ * BACKLOG-4186) and 'learn-pilot' (BACKLOG-4219 key, 20261112130000; page BACKLOG-4219 PR3).
+ * Their pages gate on report_my_access(key) like any report, but they are never registry slugs,
+ * so these entries stay. The reports index lists only registry reports.
  */
-const SERVER_ONLY_PENDING = ['sender-rules'];
+const SERVER_ONLY_PENDING = ['sender-rules', 'learn-pilot'];
 
 /**
  * Every key any migration inserts into public.reports. M1 seeds the first eight; a report added later
@@ -38,9 +39,9 @@ function catalogKeys(): string[] {
 }
 
 describe('registry == reports catalog (M1 + later report migrations)', () => {
-  it('the catalog seeds 10 distinct keys', () => {
+  it('the catalog seeds 11 distinct keys', () => {
     const keys = catalogKeys();
-    expect(keys).toHaveLength(10);
+    expect(keys).toHaveLength(11);
     expect(new Set(keys).size).toBe(keys.length);
   });
 

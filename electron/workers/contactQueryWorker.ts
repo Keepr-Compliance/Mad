@@ -48,6 +48,7 @@ import { FOLDER_MATCH_CANDIDATE_PARAM_COUNT, readFolderMatchCandidatesOn } from 
 import type { NormalizedAddress } from "../utils/addressNormalization";
 import { runMessageRosterOn } from "../services/db/messageRosterDb";
 import { readMessageSourceStatsOn } from "../services/db/messageSourceStatsDb";
+import { readDeviceDataSizeOn } from "../services/db/deviceDataSizeDb";
 import {
   planCommunicationDatesOn,
   runMessageDerivedQueryOn,
@@ -76,7 +77,9 @@ type QueryType =
   // BACKLOG-3925: the address-only Needs Review candidates (bodies scanned with instr).
   | "addressMatchCandidates"
   // BACKLOG-3926: the folder / label match candidates (index-driven).
-  | "folderMatchCandidates";
+  | "folderMatchCandidates"
+  // BACKLOG-4185: the device profile's data-size counts (deviceDataSizeDb.ts).
+  | "deviceDataSize";
 
 interface InitMessage {
   type: "init";
@@ -344,6 +347,10 @@ parentPort?.on("message", (msg: WorkerMessage) => {
       // BACKLOG-3156 stage G: ~250 ms at 100k texts on main, measured — so here.
       if (!db) throw new Error("Database not initialized");
       rows = [readMessageSourceStatsOn(db, queryMsg.userId)];
+    } else if (queryMsg.type === "deviceDataSize") {
+      // BACKLOG-4185: the device profile's data-size counts; never on main.
+      if (!db) throw new Error("Database not initialized");
+      rows = [readDeviceDataSizeOn(db, queryMsg.userId)];
     } else if (queryMsg.type === "candidateEmails") {
       // BACKLOG-3883: the auto-link candidate-email read (every email of the user in the
       // deal's window, joined to its participants, bodies included); off the main thread.

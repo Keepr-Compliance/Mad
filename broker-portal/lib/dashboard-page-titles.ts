@@ -10,6 +10,7 @@ export const PAGE_TITLES = {
   users: 'Users Management',
   settings: 'Settings',
   scim: 'SCIM Provisioning',
+  domain: 'Domain Verification',
   account: 'My Account',
   support: 'Support',
   supportNew: 'Submit a Support Request',
@@ -27,6 +28,7 @@ const EXACT: Record<string, string> = {
   '/users': PAGE_TITLES.users,
   '/settings': PAGE_TITLES.settings,
   '/settings/scim': PAGE_TITLES.scim,
+  '/settings/domain': PAGE_TITLES.domain,
   '/account': PAGE_TITLES.account,
   '/support': PAGE_TITLES.support,
   '/support/new': PAGE_TITLES.supportNew,
@@ -58,5 +60,7 @@ export function getPhoneTitle(pathname: string | null | undefined): string | und
   if (rest in EXACT) return EXACT[rest];
   const seg = rest.split('/').filter(Boolean);
   if (seg.length === 2 && seg[0] in DETAIL) return DETAIL[seg[0]];
+  // BACKLOG-3513 PR-3b: one shared report, /dashboard/reports/d/<id>.
+  if (seg.length === 3 && seg[0] === 'reports' && seg[1] === 'd') return DETAIL.reports;
   return undefined;
 }

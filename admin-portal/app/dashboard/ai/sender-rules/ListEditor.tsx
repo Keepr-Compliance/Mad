@@ -8,7 +8,7 @@
 import { useState } from 'react';
 import { X } from 'lucide-react';
 import { Button, Input } from '@keepr/ui';
-import { InfoTip } from './InfoTip';
+import { InfoTip } from '@/components/shared/InfoTip';
 
 export interface ListEditorProps {
   id: string;

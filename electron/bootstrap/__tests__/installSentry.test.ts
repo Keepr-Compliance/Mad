@@ -18,6 +18,7 @@
  * with the depth wrong.
  */
 
+import { randomUUID } from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -74,6 +75,8 @@ function load(options: {
   homeDir?: string;
   /** BACKLOG-4050 M-1: a concrete app.getPath("userData") (no temp dir is created). */
   userDataPath?: string;
+  /** BACKLOG-4185: contents of userData/device-profile-state.json; undefined = no file. */
+  deviceProfileStateFile?: string;
 }): Loaded {
   const init = jest.fn();
   const dotenvConfig = jest.fn();
@@ -110,6 +113,9 @@ function load(options: {
   const homedirSpy = options.homeDir === undefined ? undefined : jest.spyOn(os, "homedir").mockReturnValue(options.homeDir);
   if (options.crashReportingFile !== undefined) {
     fs.writeFileSync(path.join(userData, "crash-reporting.json"), options.crashReportingFile);
+  }
+  if (options.deviceProfileStateFile !== undefined) {
+    fs.writeFileSync(path.join(userData, "device-profile-state.json"), options.deviceProfileStateFile);
   }
   let pref!: Loaded["pref"];
   let diagPref!: Loaded["diagPref"];
@@ -666,5 +672,50 @@ describe("BACKLOG-4050 M-1: host inputs reach beforeBreadcrumb and beforeSend", 
     const want = "open '/Users/[user]/Library/Application Support/keepr/mad.db' log '/Users/[user]/Library/Application Support/keepr/logs/main.log'";
     expect((beforeSend({ message: text }) as { message: string }).message).toBe(want);
     expect((beforeBreadcrumb({ category: "console", message: text }) as { message: string }).message).toBe(want);
+  });
+});
+
+// BACKLOG-4185 B4: crash / error events carry the devices row id (never the
+// machine id, never a hardware field), loaded from the state file at boot,
+// only while diagnostics sharing AND crash reports are ON; a replay after OFF
+// loses it. Mutations: no attach call; attach ignoring the switch; no boot
+// load; no replay strip.
+describe("BACKLOG-4185 devices row id on events", () => {
+  type Net = { send: (env: unknown) => Promise<unknown> };
+  const ROW = randomUUID();
+  const stateFile = JSON.stringify({ v: 2, entries: [{ deviceKey: "k0", rowId: randomUUID(), fp: {}, writtenAt: "2026-01-01T00:00:00.000Z" }, { deviceKey: "k", rowId: ROW, fp: {}, writtenAt: "2026-02-01T00:00:00.000Z" }] });
+
+  it("loaded at boot (the most recently written entry) and added as one tag while both switches are ON", () => {
+    const loaded = load({ isPackaged: true, scrubPassThrough: true, deviceProfileStateFile: stateFile });
+    const out = initOptions(loaded).beforeSend({ message: "boom", tags: { component: "x" } }) as { tags: Record<string, unknown> };
+    expect(out.tags).toEqual({ component: "x", "keepr.device_row": ROW });
+  });
+
+  it("absent while diagnostics sharing is OFF", () => {
+    const loaded = load({ isPackaged: true, scrubPassThrough: true, deviceProfileStateFile: stateFile });
+    loaded.diagPref.setDiagnosticsSharingEnabled(false);
+    const out = initOptions(loaded).beforeSend({ message: "boom" }) as { tags?: Record<string, unknown> };
+    expect(out.tags?.["keepr.device_row"]).toBeUndefined();
+  });
+
+  it("absent without a state file; a malformed row id is never sent", () => {
+    const none = load({ isPackaged: true, scrubPassThrough: true });
+    expect((initOptions(none).beforeSend({ message: "boom" }) as { tags?: unknown }).tags).toBeUndefined();
+    const bad = load({ isPackaged: true, scrubPassThrough: true, deviceProfileStateFile: JSON.stringify({ v: 2, entries: [{ rowId: "machine-id-a", writtenAt: "x" }] }) });
+    expect((initOptions(bad).beforeSend({ message: "boom" }) as { tags?: unknown }).tags).toBeUndefined();
+  });
+
+  it("replay after OFF: the INNER transport strips the tag from event items; the rest is untouched", async () => {
+    const loaded = load({ isPackaged: true });
+    initOptions(loaded);
+    const inner = (loaded.makeOffline.mock.calls[0][0] as unknown as (o: unknown) => Net)({});
+    const envelope = () => [{}, [[{ type: "event" }, { message: "boom", tags: { component: "x", "keepr.device_row": ROW } }]]];
+    await inner.send(envelope());
+    expect(JSON.stringify(loaded.networkSend.mock.calls[0])).toContain(ROW); // positive control: ON keeps it
+    loaded.diagPref.setDiagnosticsSharingEnabled(false);
+    await inner.send(envelope());
+    const sent = JSON.stringify(loaded.networkSend.mock.calls[1]);
+    expect(sent).not.toContain(ROW);
+    expect(sent).toContain('"component":"x"');
   });
 });

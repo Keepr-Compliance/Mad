@@ -29,6 +29,8 @@ export { buildSeatLimitReachedEmail } from './templates/seat-limit-reached';
 export { buildLastAdminKeptEmail } from './templates/last-admin-kept';
 export { buildAccountSuspendedEmail } from './templates/account-suspended';
 export { buildAccountManagerAlertEmail } from './templates/account-manager-alert';
+export { buildDomainCaptureNoticeEmail } from './templates/domain-capture-notice';
+export { buildDomainCaptureSwitchedEmail } from './templates/domain-capture-switched';
 
 // Types
 export type {
@@ -56,6 +58,8 @@ export type {
   OrgReinstatedParams,
   PaymentFailedParams,
   AgentPlanEndedParams,
+  DomainCaptureNoticeParams,
+  DomainCaptureSwitchedParams,
 } from './types';
 
 // Queue (BACKLOG-2009)
@@ -88,6 +92,8 @@ import { buildOrgReinstatedEmail } from './templates/org-reinstated';
 import { buildOrgAutoReinstatedEmail } from './templates/org-auto-reinstated';
 import { buildPaymentFailedEmail } from './templates/payment-failed';
 import { buildAgentPlanEndedEmail } from './templates/agent-plan-ended';
+import { buildDomainCaptureNoticeEmail } from './templates/domain-capture-notice';
+import { buildDomainCaptureSwitchedEmail } from './templates/domain-capture-switched';
 import type {
   InviteEmailParams,
   DownloadInviteEmailParams,
@@ -109,6 +115,8 @@ import type {
   OrgReinstatedParams,
   PaymentFailedParams,
   AgentPlanEndedParams,
+  DomainCaptureNoticeParams,
+  DomainCaptureSwitchedParams,
   SendEmailResult,
 } from './types';
 
@@ -512,5 +520,38 @@ export async function sendAgentPlanEndedEmail(params: AgentPlanEndedParams): Pro
       userId: params.userId,
       licensed: params.licensed,
     },
+  });
+}
+
+/** Delivery-log kind of the day-0 capture notice; the switch job reads it back (BACKLOG-3962). */
+export const DOMAIN_CAPTURE_NOTICE_LOG_KIND = 'domain_capture_notice';
+
+/**
+ * BACKLOG-3962 PR3a: the day-0 domain capture notice. Log type 'other', kind
+ * domain_capture_notice, switchId: a send queued for retry is matched to its switch row later by
+ * the 'sent' row the retry drain writes with the same metadata.
+ */
+export async function sendDomainCaptureNoticeEmail(params: DomainCaptureNoticeParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildDomainCaptureNoticeEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: { kind: DOMAIN_CAPTURE_NOTICE_LOG_KIND, switchId: params.switchId },
+  });
+}
+
+/** BACKLOG-3962 PR3a: the person was moved into the brokerage (non-payers only). */
+export async function sendDomainCaptureSwitchedEmail(params: DomainCaptureSwitchedParams): Promise<SendEmailResult> {
+  const { subject, html, text } = buildDomainCaptureSwitchedEmail(params);
+  return sendEmail({
+    to: params.recipientEmail,
+    subject,
+    html,
+    text,
+    emailType: 'other',
+    logMetadata: { kind: 'domain_capture_switched', switchId: params.switchId, licensed: params.licensed },
   });
 }
