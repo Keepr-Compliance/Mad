@@ -118,6 +118,7 @@ import {
   LearnSampleDrawArgsSchema,
   LearnSetEnabledArgsSchema,
   LearnSetPilotReportArgsSchema,
+  LearnGetStateArgsSchema,
 } from "../schemas/learnMode";
 import type {
   LearnAnswerResult,
@@ -193,6 +194,28 @@ export interface LearnModeHandlerDeps {
 
 /** Messages per preview: newest first. */
 export const LEARN_PREVIEW_MAX_EMAILS = 5;
+
+/**
+ * BACKLOG-4219: the longest learn:get-state `{ settle: true }` waits for a
+ * queued pilot job (a submit's RPC is capped at 10 s) before answering anyway.
+ */
+export const LEARN_SETTLE_CAP_MS = 15_000;
+
+/** Wait for this user's queued pilot jobs, or the cap, whichever is first. */
+async function settlePilot(pilot: LearnPilotReportDeps | undefined, userId: string): Promise<void> {
+  const idle = pilot?.idle?.(userId);
+  if (!idle) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cap = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, LEARN_SETTLE_CAP_MS);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  try {
+    await Promise.race([idle.catch(() => undefined), cap]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 const MODULE = "LearnMode";
 
@@ -334,9 +357,13 @@ function isPreviewFailure(
 export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void {
   ipcMain.handle(
     "learn:get-state",
-    guarded("learn:get-state", async (): Promise<LearnStateResult> => {
+    guarded("learn:get-state", async (_e, payload?: unknown): Promise<LearnStateResult> => {
+      const args = payload === undefined ? {} : parse(LearnGetStateArgsSchema, payload);
+      if (!args) return fail(LEARN_INVALID_ERROR);
       const userId = await sessionUserId();
       if (!userId) return fail(LEARN_NO_SESSION_ERROR);
+      // BACKLOG-4219: Settings asks after a score / switch so the line is current.
+      if (args.settle) await settlePilot(deps.pilotReport, userId);
       const available = (await isAutodetectEvalAllowed()) === true;
       const pilot = getPilotState(userId);
       return {

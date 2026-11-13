@@ -146,7 +146,8 @@ export type LearnPreviewArgs =
   | { kind: "bulk"; rowId: string };
 
 export interface WindowApiLearn {
-  getState: () => Promise<LearnStateResult>;
+  /** BACKLOG-4219: `settle: true` first waits (capped) for this user's queued pilot send / withdraw. */
+  getState: (args?: { settle?: boolean }) => Promise<LearnStateResult>;
   setEnabled: (args: { enabled: boolean }) => Promise<LearnSetEnabledResult>;
   /** BACKLOG-4219: turn "Help improve Keepr" on or off. */
   setPilotReport: (args: { enabled: boolean }) => Promise<LearnSetPilotReportResult>;

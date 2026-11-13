@@ -66,10 +66,16 @@ export const WITHDRAW_RPC = "learn_pilot_report_withdraw";
 
 const MODULE = "LearnPilot";
 
-/** What the Learn handlers see (injected). Both are fire-and-forget. */
+/**
+ * What the Learn handlers see (injected). maybeSend and queueWithdraw are
+ * fire-and-forget. idle is awaited only by learn:get-state `{ settle: true }`
+ * (capped there), so Settings can show a send or withdraw on the same visit.
+ */
 export interface LearnPilotReportDeps {
   maybeSend: (userId: string, score: LearnScore, detector: SenderCensus) => void;
   queueWithdraw: (userId: string) => void;
+  /** Resolves when every job queued for this user so far has run. */
+  idle?: (userId: string) => Promise<void>;
 }
 
 type RpcResult = { error: { code?: string } | null };
@@ -272,7 +278,10 @@ export class LearnPilotReportService {
     }
   }
 
-  /** Resolves when every queued job of this user has run (tests). */
+  /**
+   * Resolves when every queued job of this user has run. Used by
+   * learn:get-state `{ settle: true }` (capped there) and by tests.
+   */
   idle(userId: string): Promise<void> {
     return this.queues.get(userId) ?? Promise.resolve();
   }

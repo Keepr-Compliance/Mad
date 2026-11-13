@@ -67,6 +67,11 @@ export function useLearnSettings(): UseLearnSettings {
   const [state, setState] = useState<LearnSettingsState>(INITIAL);
   const mounted = useRef(true);
   const sampleSize = useRef(0);
+  /**
+   * BACKLOG-4219: bumped by every pilot write and every pilot re-read; a
+   * re-read that returns after a newer one of either is dropped.
+   */
+  const pilotSeq = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -79,6 +84,18 @@ export function useLearnSettings(): UseLearnSettings {
     if (mounted.current) setState((s) => ({ ...s, ...p }));
   }, []);
 
+  /**
+   * BACKLOG-4219: re-read only the pilot fields once main's queued send /
+   * withdraw has run (`settle`, capped in main), so "Last shared:" and
+   * "Deleting…" are current on the same visit.
+   */
+  const reloadPilot = useCallback(async () => {
+    const seq = ++pilotSeq.current;
+    const st = await learnModeService.getState({ settle: true });
+    if (!st.success || seq !== pilotSeq.current) return;
+    patch({ pilotReport: st.pilotReport, pilotPending: st.pilotPending, pilotLastSentAt: st.pilotLastSentAt });
+  }, [patch]);
+
   const loadScore = useCallback(async (): Promise<boolean> => {
     const r = await learnModeService.score();
     if (!r.success) return false;
@@ -89,8 +106,10 @@ export function useLearnSettings(): UseLearnSettings {
       questionsReady: Math.max(0, r.score.cleanupUnanswered) + bulkLeft,
       phase: "ready",
     });
+    // The score may have queued a send in main (fire and forget there).
+    void reloadPilot();
     return true;
-  }, [patch]);
+  }, [patch, reloadPilot]);
 
   const loadCounts = useCallback(async () => {
     const st = await learnModeService.getState();
@@ -174,9 +193,17 @@ export function useLearnSettings(): UseLearnSettings {
         patch({ pilotSaving: false, error: r.error });
         return;
       }
+      pilotSeq.current++;
       patch({ pilotSaving: false, pilotReport: r.pilotReport, pilotPending: r.pilotPending });
+      if (r.pilotReport) {
+        // ON shares right away: the score queues the send, then loadScore re-reads.
+        await loadScore();
+      } else if (r.pilotPending) {
+        // OFF queued a withdraw: re-read once it has run.
+        void reloadPilot();
+      }
     },
-    [patch],
+    [patch, loadScore, reloadPilot],
   );
 
   const refresh = useCallback(async () => {

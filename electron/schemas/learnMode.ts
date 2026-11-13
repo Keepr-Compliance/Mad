@@ -23,6 +23,13 @@ const WindowMonthsSchema = z
 
 export const LearnSetEnabledArgsSchema = z.strictObject({ enabled: z.boolean() });
 
+/**
+ * BACKLOG-4219: learn:get-state's optional payload. `settle: true` waits
+ * (capped in the handler) for this user's queued pilot send / withdraw first,
+ * so the status line it returns reflects that job.
+ */
+export const LearnGetStateArgsSchema = z.strictObject({ settle: z.boolean().optional() });
+
 /** BACKLOG-4219: "Help improve Keepr". */
 export const LearnSetPilotReportArgsSchema = z.strictObject({ enabled: z.boolean() });
 
