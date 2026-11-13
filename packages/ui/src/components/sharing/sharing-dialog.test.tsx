@@ -673,6 +673,72 @@ describe('SharingDialog (BACKLOG-3513)', () => {
     expect(accessMenuPosition({ top: NaN, bottom: NaN, right: NaN }, content, 0)).toEqual({ top: 0, right: 0 });
   });
 
+  // SR R1 (#3545): rows that move under the open menu would leave it beside the wrong person.
+  it('Q6 an earlier remove that settles while another row\'s menu is open closes that menu; focus returns to its trigger', async () => {
+    const d = deferred();
+    const onRemove = jest.fn(() => d.promise);
+    setup({ onRemove });
+    confirmRemove('Jordan Lee');
+    fireEvent.click(rowTrigger('Priya Raman')!);
+    await settle();
+    expect(radio(/^Can view/)).toHaveFocus();
+    await act(async () => d.resolve());
+    expect(rowTrigger('Jordan Lee')).toBeNull();
+    expect(screen.queryByRole('menu')).toBeNull();
+    await settle();
+    expect(rowTrigger('Priya Raman')).toHaveFocus();
+  });
+
+  it('Q7 an earlier write that fails and adds the error line closes the open menu; focus returns to its trigger', async () => {
+    const d = deferred();
+    const onChangeLevel = jest.fn(() => d.promise);
+    const { rerender, props } = setup({ onChangeLevel });
+    fireEvent.click(rowTrigger('Jordan Lee')!);
+    fireEvent.click(radio(/^Can view/));
+    fireEvent.click(rowTrigger('Priya Raman')!);
+    await settle();
+    expect(menu()).toBeInTheDocument();
+    await act(async () => d.reject(new Error('refused')));
+    rerender(<SharingDialog {...props} onChangeLevel={onChangeLevel} error="That change did not save." />);
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    expect(screen.queryByRole('menu')).toBeNull();
+    await settle();
+    expect(rowTrigger('Priya Raman')).toHaveFocus();
+  });
+
+  it('Q8 a window resize closes the open menu; focus returns to its trigger', async () => {
+    setup();
+    fireEvent.click(rowTrigger('Priya Raman')!);
+    await settle();
+    expect(menu()).toBeInTheDocument();
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    expect(screen.queryByRole('menu')).toBeNull();
+    await settle();
+    expect(rowTrigger('Priya Raman')).toHaveFocus();
+  });
+
+  it('Q9 a read that drops the open menu\'s own row closes it and puts focus in the add field, never on the page', async () => {
+    const { rerender, props } = setup();
+    fireEvent.click(rowTrigger('Priya Raman')!);
+    await settle();
+    expect(menu()).toBeInTheDocument();
+    rerender(<SharingDialog {...props} entries={[JORDAN, AGENTS_ROLE]} />);
+    expect(screen.queryByRole('menu')).toBeNull();
+    await settle();
+    expect(input()).toHaveFocus();
+  });
+
+  it('Q10 a re-render with the same rows (a new but equal entries array) keeps the menu open', async () => {
+    const { rerender, props } = setup();
+    fireEvent.click(rowTrigger('Priya Raman')!);
+    await settle();
+    rerender(<SharingDialog {...props} entries={[...ENTRIES]} />);
+    expect(menu()).toBeInTheDocument();
+    expect(radio(/^Can view/)).toHaveFocus();
+  });
+
   it('K10 SharingDialog is exported from the package index', () => {
     expect(SharingDialogFromIndex).toBe(SharingDialog);
   });

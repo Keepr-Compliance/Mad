@@ -237,6 +237,37 @@ export function SharingDialog({
     [entries, gone, levelNow]
   );
 
+  // The open menu is placed once, from its trigger. Anything that moves the rows (a row hidden
+  // or added, the list loading, the error line) or the window would leave it beside the wrong
+  // person, so it closes instead (safer than moving it in a permissions dialog). Focus that was
+  // in the menu goes back to its trigger, or to the add field when that row is gone.
+  const layoutKey = `${visible === null ? 'loading' : visible.map(principalKey).join('\u0000')}|${error ? 'error' : ''}`;
+  const layoutKeyRef = React.useRef(layoutKey);
+  const layerRef = React.useRef<HTMLDivElement>(null);
+  const closeMenuMovedRef = React.useRef<() => void>(() => {});
+  closeMenuMovedRef.current = () => {
+    const key = menuFor;
+    if (key === null) return;
+    const active = typeof document !== 'undefined' ? document.activeElement : null;
+    const focusWasInMenu = active === null || active === document.body || (layerRef.current?.contains(active) ?? false);
+    setMenuFor(null);
+    setMenuAt(null);
+    if (!focusWasInMenu) return;
+    const stillThere = (visible ?? []).some((e) => principalKey(e) === key);
+    setRefocus(stillThere ? key : ADD_FIELD);
+  };
+  React.useLayoutEffect(() => {
+    if (layoutKeyRef.current === layoutKey) return;
+    layoutKeyRef.current = layoutKey;
+    closeMenuMovedRef.current();
+  }, [layoutKey]);
+  React.useEffect(() => {
+    if (menuFor === null) return;
+    const onResize = () => closeMenuMovedRef.current();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [menuFor]);
+
   const levelLabel = (value: SharingLevel) => levels.find((l) => l.value === value)?.label ?? value;
   const editorLabel = levelLabel('editor');
 
@@ -484,6 +515,7 @@ export function SharingDialog({
   const menuLayer =
     menuEntry && menuAt ? (
       <div
+        ref={layerRef}
         data-slot="sharing-access-layer"
         className="absolute z-50"
         style={{ top: menuAt.top, bottom: menuAt.bottom, right: menuAt.right }}
