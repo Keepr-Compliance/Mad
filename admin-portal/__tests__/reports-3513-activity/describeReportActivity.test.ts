@@ -60,6 +60,14 @@ describe('shared broker report activity (BACKLOG-3513)', () => {
       'Pat Doe set the report "Q4" to show each person only their own rows',
     );
     expect(describeActivity(row('report_owner_changed', { report_name: 'Q4' }))).toBe('Pat Doe made Sam Roe the owner of the report "Q4"');
+    // BACKLOG-3513 PR-3f: detail as broker_report_reassign writes it (20261112220000), read back by
+    // admin_get_org_activity on keepr-test (control S_reader_output): {via, from, to, report_name}.
+    expect(describeActivity(row('report_owner_changed', { via: 'reassign', from: 'Dana Pike', to: 'Sam Roe', report_name: 'Q4' }))).toBe(
+      'Pat Doe reassigned the report "Q4" from Dana Pike to Sam Roe',
+    );
+    expect(describeActivity(row('report_owner_changed', { via: 'reassign', from: null, to: 'Sam Roe', report_name: 'Q4' }))).toBe(
+      'Pat Doe reassigned the report "Q4" from a removed account to Sam Roe',
+    );
     expect(describeActivity(row('report_owner_changed', { via: 'take_over', report_name: 'Q4' }))).toBe('Pat Doe took over the report "Q4"');
     expect(describeActivity(row('report_created', { report_name: 'Q4' }))).toBe('Pat Doe created the report "Q4"');
     expect(describeActivity(row('report_deleted', { report_name: 'Q4' }))).toBe('Pat Doe deleted the report "Q4"');

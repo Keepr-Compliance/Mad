@@ -8,8 +8,8 @@
  *
  * The filters are the report's own unless the person changed them on this page
  * (the URL then carries them). Share, Save filters and Delete are offered by
- * level; Take over when broker_report_def_get says take_over_available (a
- * broker, admin or IT admin, at any level, when the owner is gone).
+ * level; Reassign when broker_report_def_get says reassign_available (an IT
+ * admin, or an admin when the brokerage has no IT admin, when the owner is gone).
  */
 
 import { requireDefinitionAccess, DEFINITION_DATASET } from '@/lib/reports/definitions/server';
@@ -23,7 +23,8 @@ import {
 } from '@/lib/reports/datasets/submissions-filters';
 import { SubmissionsReportBody } from '@/components/reports/submissions/SubmissionsReportBody';
 import { BrokerReportShareButton } from '@/components/reports/BrokerReportShareButton';
-import { DeleteReportButton, TakeOverNotice, UpdateReportButton } from '@/components/reports/ReportDefinitionActions';
+import { DeleteReportButton, UpdateReportButton } from '@/components/reports/ReportDefinitionActions';
+import { ReassignReport } from '@/components/reports/ReassignReport';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,7 +50,9 @@ export default async function SharedReportPage({ params, searchParams }: PagePro
       basePath={definitionReportPath(definition.id)}
       explicit
       viewsKey={definitionViewsKey(definition.id)}
-      notice={<TakeOverNotice defId={definition.id} kind={caller.kind} takeOverAvailable={definition.takeOverAvailable} />}
+      notice={
+        <ReassignReport defId={definition.id} name={definition.name} kind={caller.kind} reassignAvailable={definition.reassignAvailable} />
+      }
       actions={
         <>
           <UpdateReportButton

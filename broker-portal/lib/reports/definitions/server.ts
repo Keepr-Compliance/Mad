@@ -5,10 +5,11 @@
  * 20261112200000 and 20261112210000 decide who sees what:
  *  - broker_report_def_list(p_org): the shared reports the caller has a level on;
  *  - broker_report_orphans(p_org): reports whose owner is gone or deactivated,
- *    for an active broker / admin / IT admin (founder: any of them may take one
- *    over, shared with them or not). No definition, no rows;
+ *    for an active broker / admin / IT admin; used only to mark those reports
+ *    in Shared reports (the "Needs an owner" group was removed, ruling A).
+ *    No definition, no rows;
  *  - broker_report_def_get(p_def): one report the caller has a level on, with
- *    take_over_available, or "Report not found".
+ *    reassign_available, or "Report not found".
  */
 
 import { notFound } from 'next/navigation';

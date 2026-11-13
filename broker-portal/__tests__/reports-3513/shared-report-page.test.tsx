@@ -8,8 +8,8 @@
  *
  * Reply shapes transcribed from migration 20261112200000: broker_report_def_get
  * {id, organization_id, dataset_key, name, description, definition, row_scope,
- * general_access, level, owner {name, is_you}, updated_at, take_over_available}
- * (take_over_available: 20261112210000); broker_report_orphans [{id, name,
+ * general_access, level, owner {name, is_you}, updated_at, reassign_available}
+ * (reassign_available: 20261112220000); broker_report_orphans [{id, name,
  * dataset_key, owner_name, owner_state 'gone'|'deactivated', level}] (20261112210000);
  * broker_report_share_list
  * {owner {id, name, role, is_you}, ...} (owner.role NULL when the owner is not an
@@ -63,7 +63,8 @@ jest.mock('next/navigation', () => ({
 import SharedReportPage from '@/app/dashboard/reports/d/[id]/page';
 import ReportsPage from '@/app/dashboard/reports/page';
 import { SaveAsSharedReport } from '@/components/reports/SaveAsSharedReport';
-import { DeleteReportButton, canTakeOver } from '@/components/reports/ReportDefinitionActions';
+import { DeleteReportButton } from '@/components/reports/ReportDefinitionActions';
+import { canReassign } from '@/components/reports/ReassignReport';
 import { definitionViewsKey, resolveDefinitionFilters } from '@/lib/reports/datasets/submissions-filters';
 
 type Level = 'owner' | 'editor' | 'viewer';
@@ -92,8 +93,8 @@ interface World {
   level: Level;
   org?: string;
   getError?: boolean;
-  /** def_get take_over_available (the database's take-over test for this caller). */
-  takeOver?: boolean;
+  /** def_get reassign_available (the database's reassign test for this caller). */
+  reassign?: boolean;
   definition?: unknown;
 }
 
@@ -114,12 +115,12 @@ function given(w: World) {
           level: w.level,
           owner: { name: 'Avery Quinn', is_you: w.level === 'owner' },
           updated_at: '2026-11-12T10:00:00.123456+00:00',
-          take_over_available: w.takeOver === true,
+          reassign_available: w.reassign === true,
         },
         error: null,
       };
     }
-    // The page never reads share_list (owner state comes from def_get.take_over_available).
+    // The page never reads share_list (owner state comes from def_get.reassign_available).
     if (name === 'broker_report_scope') return { data: { level: w.level, row_scope: 'all', service_off: false, effective_scope: 'all' }, error: null };
     if (name === 'broker_report_submissions_rows') return { data: [], error: null };
     return { data: null, error: { message: `unexpected rpc ${name}` } };
@@ -137,7 +138,8 @@ const q = {
   share: () => screen.queryByRole('button', { name: 'Share Q4 deals' }),
   update: () => screen.queryByRole('button', { name: 'Save filters' }),
   del: () => screen.queryByRole('button', { name: 'Delete' }),
-  takeOver: () => screen.queryByRole('button', { name: 'Take over' }),
+  reassign: () => screen.queryByRole('button', { name: 'Reassign' }),
+  takeOver: () => screen.queryByRole('button', { name: /take over/i }),
 };
 
 beforeEach(() => {
@@ -181,46 +183,36 @@ describe('who gets which action', () => {
   });
 });
 
-describe('Take over (founder: any active broker, admin or IT admin, shared with them or not)', () => {
-  it('take_over_available false (owner active): no Take over', async () => {
-    await renderPage('full', { level: 'editor', takeOver: false });
+describe('Reassign (founder ruling 2026-11-13: IT admin, or admin when the brokerage has no IT admin)', () => {
+  it('reassign_available false: no Reassign, and never a Take over', async () => {
+    await renderPage('full', { level: 'editor', reassign: false }, {}, 'it_admin');
+    expect(q.reassign()).toBeNull();
+    expect(screen.queryByTestId('report-reassign')).toBeNull();
     expect(q.takeOver()).toBeNull();
   });
 
-  it.each([['broker'], ['admin'], ['it_admin']])('a %s VIEWER with take_over_available: Take over', async (role) => {
-    await renderPage('full', { level: 'viewer', takeOver: true }, {}, role);
-    expect(screen.getByTestId('report-take-over')).toHaveTextContent('The owner of this report is no longer active.');
-    expect(q.takeOver()).toBeInTheDocument();
+  it.each([['it_admin'], ['admin']])('a %s VIEWER with reassign_available: Reassign, no Take over', async (role) => {
+    await renderPage('full', { level: 'viewer', reassign: true }, {}, role);
+    expect(screen.getByTestId('report-reassign')).toHaveTextContent('The owner of this report is no longer active.');
+    expect(q.reassign()).toBeInTheDocument();
+    expect(q.takeOver()).toBeNull();
     expect(q.share()).toBeNull();
   });
 
-  it('a broker editor with take_over_available: Take over', async () => {
-    await renderPage('full', { level: 'editor', takeOver: true });
-    expect(q.takeOver()).toBeInTheDocument();
-  });
-
-  it('an agent, even if the flag were set: no Take over', async () => {
-    await renderPage('agent', { level: 'editor', takeOver: true });
-    expect(q.takeOver()).toBeNull();
+  it('an agent, even if the flag were set: no Reassign', async () => {
+    await renderPage('agent', { level: 'editor', reassign: true });
+    expect(q.reassign()).toBeNull();
   });
 
   it('the page never reads share_list for the owner state', async () => {
-    await renderPage('full', { level: 'viewer', takeOver: true });
+    await renderPage('full', { level: 'viewer', reassign: true }, {}, 'it_admin');
     expect(mockRpc.mock.calls.map(([n]) => n)).not.toContain('broker_report_share_list');
   });
 
-  it('Take over calls broker_report_take_over and refreshes', async () => {
-    await renderPage('full', { level: 'viewer', takeOver: true });
-    mockClientRpc.mockResolvedValueOnce({ data: { success: true }, error: null });
-    fireEvent.click(q.takeOver()!);
-    await waitFor(() => expect(mockClientRpc).toHaveBeenCalledWith('broker_report_take_over', { p_def: DEF }));
-    await waitFor(() => expect(mockRefresh).toHaveBeenCalled());
-  });
-
   it('the rule itself', () => {
-    expect(canTakeOver({ kind: 'full', takeOverAvailable: true })).toBe(true);
-    expect(canTakeOver({ kind: 'full', takeOverAvailable: false })).toBe(false);
-    expect(canTakeOver({ kind: 'agent', takeOverAvailable: true })).toBe(false);
+    expect(canReassign({ kind: 'full', reassignAvailable: true })).toBe(true);
+    expect(canReassign({ kind: 'full', reassignAvailable: false })).toBe(false);
+    expect(canReassign({ kind: 'agent', reassignAvailable: true })).toBe(false);
   });
 });
 
@@ -311,28 +303,16 @@ describe('index: Shared reports', () => {
   });
 });
 
-describe('index: Needs an owner (broker_report_orphans)', () => {
+describe('index: no "Needs an owner" group (founder ruling A), no Take over', () => {
   const orphanNotShared = { id: ORPHAN_A, name: 'Old pipeline', dataset_key: 'submissions', owner_name: 'Dana Pike', owner_state: 'deactivated', level: null };
   const orphanShared = { id: ORPHAN_B, name: 'Closings', dataset_key: 'submissions', owner_name: null, owner_state: 'gone', level: 'viewer' };
 
-  it('a broker with no grant sees the orphan with Take over and no link', async () => {
+  it('an orphan the caller cannot open is not listed, and nothing offers Take over', async () => {
     givenIndex({ orphans: [orphanNotShared] });
     await renderIndex('full');
-    const group = screen.getByTestId('needs-owner-index');
-    expect(group).toHaveTextContent('Old pipeline');
-    expect(group).toHaveTextContent('Owner deactivated · Dana Pike');
-    expect(within(group).queryByRole('link')).toBeNull();
-    expect(within(group).getByRole('button', { name: 'Take over Old pipeline' })).toBeInTheDocument();
-    expect(mockRpc).toHaveBeenCalledWith('broker_report_orphans', { p_org: ORG });
-  });
-
-  it('Take over from the index calls broker_report_take_over with that report and refreshes', async () => {
-    givenIndex({ orphans: [orphanNotShared] });
-    await renderIndex('full');
-    mockClientRpc.mockResolvedValueOnce({ data: { success: true }, error: null });
-    fireEvent.click(screen.getByRole('button', { name: 'Take over Old pipeline' }));
-    await waitFor(() => expect(mockClientRpc).toHaveBeenCalledWith('broker_report_take_over', { p_def: ORPHAN_A }));
-    await waitFor(() => expect(mockRefresh).toHaveBeenCalled());
+    expect(screen.queryByText('Old pipeline')).toBeNull();
+    expect(screen.queryByTestId('needs-owner-index')).toBeNull();
+    expect(screen.queryByRole('button', { name: /take over/i })).toBeNull();
   });
 
   it('an orphan the caller can already open is listed once, under Shared reports, marked', async () => {
@@ -344,20 +324,11 @@ describe('index: Needs an owner (broker_report_orphans)', () => {
     expect(screen.getAllByText('Closings')).toHaveLength(1);
     const list = screen.getByTestId('shared-reports-index');
     expect(list).toHaveTextContent("Can view · Owner's account removed");
-    expect(screen.queryByTestId('needs-owner-index')).toBeNull();
   });
 
-  it('an agent never asks for orphans and sees no group', async () => {
-    givenIndex({ orphans: [orphanNotShared] });
-    await renderIndex('agent');
-    expect(mockRpc.mock.calls.map(([n]) => n)).not.toContain('broker_report_orphans');
-    expect(screen.queryByTestId('needs-owner-index')).toBeNull();
-  });
-
-  it('a refused orphans read shows no group and keeps the rest', async () => {
+  it('a refused orphans read keeps the rest', async () => {
     givenIndex({ orphansError: true });
     await renderIndex('full');
-    expect(screen.queryByTestId('needs-owner-index')).toBeNull();
     expect(within(screen.getByTestId('reports-index')).getByText('Submissions')).toBeInTheDocument();
   });
 });

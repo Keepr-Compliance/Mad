@@ -145,9 +145,11 @@ export const ACTIVITY_TEMPLATES: Record<string, Template> = {
       ? `${who} set ${reportName(row)} to show each person only their own rows`
       : `${who} set ${reportName(row)} to show all rows each person can already see`,
   report_owner_changed: (who, subject, row) =>
-    row.detail.via === 'take_over'
-      ? `${who} took over ${reportName(row)}`
-      : `${who} made ${subject} the owner of ${reportName(row)}`,
+    row.detail.via === 'reassign'
+      ? `${who} reassigned ${reportName(row)} from ${str(row.detail.from) ?? 'a removed account'} to ${str(row.detail.to) ?? subject}`
+      : row.detail.via === 'take_over'
+        ? `${who} took over ${reportName(row)}`
+        : `${who} made ${subject} the owner of ${reportName(row)}`,
   // staff rows (admin_audit_logs)
   'organization.created': (who) => `${who} created the organization`,
   'org_plan.assigned': (who, _subject, row) => `${who} set the plan${str(row.detail.plan) ? ` to ${row.detail.plan}` : ''}`,

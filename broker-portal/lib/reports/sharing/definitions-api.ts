@@ -1,5 +1,5 @@
 /**
- * Broker shared reports: create, update, delete, take over — BACKLOG-3513 PR-3b.
+ * Broker shared reports: create, update, delete, reassign — BACKLOG-3513 PR-3b, PR-3f.
  *
  * Browser session client only. Migration 20261112200000:
  *  - broker_report_def_create(p_org, p_dataset, p_name, p_description, p_definition, p_row_scope) -> uuid
@@ -7,11 +7,14 @@
  *  - broker_report_def_update(p_def, p_name, p_description, p_definition, p_row_scope, p_expected_updated_at)
  *    (owner or editor; "Report changed" when updated_at moved on)
  *  - broker_report_def_delete(p_def) (owner only)
- *  - broker_report_take_over(p_def) (an active broker / admin / IT admin, only when the owner is gone)
+ *  - broker_report_reassign(p_def, p_new_owner) and broker_report_reassign_candidates(p_def)
+ *    (migration 20261112220000: an active IT admin, or an active admin when the brokerage has no
+ *    active IT admin, only when the owner is gone or deactivated; the new owner is any active member)
  */
 
 import { createClient } from '@/lib/supabase/client';
-import { SHARE_RPC, type RowScope } from './sharing-api';
+import type { SharingPrincipal } from '@keepr/ui';
+import { SHARE_RPC, parseReassignCandidates, type RowScope } from './sharing-api';
 
 export interface ReportDefinitionsApi {
   create(input: { orgId: string; name: string; definition: unknown }): Promise<string>;
@@ -24,7 +27,8 @@ export interface ReportDefinitionsApi {
     expectedUpdatedAt: string;
   }): Promise<void>;
   remove(id: string): Promise<void>;
-  takeOver(id: string): Promise<void>;
+  reassign(id: string, newOwner: string): Promise<void>;
+  reassignCandidates(id: string): Promise<SharingPrincipal[]>;
 }
 
 async function call(fn: string, args: Record<string, unknown>): Promise<unknown> {
@@ -59,7 +63,10 @@ export const reportDefinitionsApi: ReportDefinitionsApi = {
   async remove(id) {
     await call(SHARE_RPC.remove_def, { p_def: id });
   },
-  async takeOver(id) {
-    await call(SHARE_RPC.takeOver, { p_def: id });
+  async reassign(id, newOwner) {
+    await call(SHARE_RPC.reassign, { p_def: id, p_new_owner: newOwner });
+  },
+  async reassignCandidates(id) {
+    return parseReassignCandidates(await call(SHARE_RPC.reassignCandidates, { p_def: id }));
   },
 };
