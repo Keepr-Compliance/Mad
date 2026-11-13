@@ -8,6 +8,13 @@ tokens.
 This is **wave A** (BACKLOG-1750, epic BACKLOG-1747): it *seeds* the package.
 No app consumes it yet — adoption is wave B.
 
+## Design rules
+
+1. **No button may blend into its background. Never use a ghost or transparent button on a tinted panel, confirm bar or dialog.**
+   Why: people cannot find a button they cannot see. Use `secondary` (bordered) instead.
+2. **Menus and dropdowns open in a layer above the page and never move the content around them.**
+   Why: content that jumps when a menu opens makes people lose their place.
+
 ## Why this exists (and how it relates to @keepr/design-system)
 
 | Package | Role |
