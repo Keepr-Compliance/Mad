@@ -232,6 +232,7 @@ BEGIN
       (oX, u8, 'agent', 'active', now()),
       (oX, u9, 'agent', 'suspended', now()),
       (oZ, u13, 'agent', 'active', now()),
+      -- u14 in two brokerages: removing the replica line above fails setup here (4179 single_brokerage_guard, 20261112121000, raises already_placed)
       (oX, u14, 'agent', 'suspended', now() - interval '1 day'),
       (oZ, u14, 'agent', 'active', now());
     INSERT INTO public.organization_plans (organization_id, plan_id, feature_overrides) VALUES

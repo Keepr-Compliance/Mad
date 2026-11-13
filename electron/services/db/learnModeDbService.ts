@@ -189,6 +189,14 @@ function stopPilotSharingIfOn(userId: string): boolean {
 }
 
 /**
+ * The pilot sharing switch OFF: sharing OFF + withdraw owed, only when the user
+ * shares or already owes one (one transaction). Returns whether a withdraw is owed.
+ */
+export function turnPilotSharingOff(userId: string): { pilotWithdrawOwed: boolean } {
+  return dbTransaction(() => ({ pilotWithdrawOwed: stopPilotSharingIfOn(userId) }));
+}
+
+/**
  * Learn mode OFF and, in the same transaction, sharing OFF + withdraw owed
  * (when the user shares). Returns whether a withdraw is owed.
  */
