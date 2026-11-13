@@ -14,8 +14,8 @@
  * report still offers (degrade.ts strips the rest before the page queries).
  * When anything was stripped, a notice names it.
  *
- * Not mounted by any page yet: the first report that uses it arrives with
- * BACKLOG-3507.
+ * Mounted by the Submissions report (BACKLOG-3513 PR-3a,
+ * components/reports/submissions/SubmissionsReportFilters.tsx).
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -47,6 +47,8 @@ export interface ReportSavedViewsProps {
   onClear?: () => void;
   /** Tests inject a fake; the page leaves it out and gets the RPC adapter. */
   api?: BrokerViewsApi;
+  /** The saved-views key. Default: the report's slug. A shared report passes 'd-<id>' (BACKLOG-3513 PR-3b). */
+  reportKey?: string;
 }
 
 export function droppedNotice(dropped: string[]): string | null {
@@ -54,13 +56,13 @@ export function droppedNotice(dropped: string[]): string | null {
   return `Parts of this view no longer exist in the report and were skipped: ${dropped.join(', ')}.`;
 }
 
-export function ReportSavedViews({ orgId, report, current, onApply, onClear, api }: ReportSavedViewsProps) {
+export function ReportSavedViews({ orgId, report, current, onApply, onClear, api, reportKey }: ReportSavedViewsProps) {
   const spec = report.savedView;
   const viewsApi = useMemo<BrokerViewsApi | undefined>(
     () => (spec ? (api ?? createBrokerViewsApi(orgId, spec)) : undefined),
     [api, orgId, spec]
   );
-  const saved = useReportSavedViews<BrokerSavedView, ViewState, ViewMetric | null>(viewsApi, report.slug);
+  const saved = useReportSavedViews<BrokerSavedView, ViewState, ViewMetric | null>(viewsApi, reportKey ?? report.slug);
   const [notice, setNotice] = useState<string | null>(null);
   const firstColumn = spec?.metricColumns[0];
   const [metricCol, setMetricCol] = useState<string | undefined>(firstColumn);

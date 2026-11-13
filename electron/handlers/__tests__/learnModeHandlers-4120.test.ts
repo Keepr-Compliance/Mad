@@ -307,6 +307,8 @@ const VALID: Record<string, unknown> = {
   "learn:set-enabled": { enabled: true },
   "learn:list-answers": undefined,
   "learn:delete-answer": { kind: "deal", id: "dla-4120-x" },
+  // BACKLOG-4219
+  "learn:set-pilot-report": { enabled: false },
 };
 
 function signedIn(on = true): void {
@@ -417,7 +419,7 @@ describe("SETS gated and ungated channels, by execution", () => {
     const registered = [...ipcHandlers.keys()].filter((c) => c.startsWith("learn:")).sort();
     const listed = [...handlers.LEARN_GATED_CHANNELS, ...handlers.LEARN_UNGATED_CHANNELS].sort();
     expect(registered).toEqual(listed);
-    expect(registered).toHaveLength(14);
+    expect(registered).toHaveLength(15);
     expect(Object.keys(VALID).sort()).toEqual(listed);
   });
 
@@ -481,7 +483,7 @@ describe("C9 switch matrix", () => {
         success: true,
         available: evalState === "allowed",
         enabled: expectAllowed,
-        answers: { deal: 0, bulk: 0 },
+        answers: { deal: 0, bulk: 0 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null,
       });
     },
   );
@@ -506,7 +508,7 @@ describe("C9 switch matrix", () => {
       success: true,
       available: true,
       enabled: true,
-      answers: { deal: 0, bulk: 0 },
+      answers: { deal: 0, bulk: 0 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null,
     });
   });
 
@@ -791,14 +793,14 @@ describe("DEL delete answers is ungated (founder, 2026-11-04)", () => {
       success: true,
       available: false,
       enabled: false,
-      answers: { deal: 1, bulk: 1 },
+      answers: { deal: 1, bulk: 1 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null,
     });
     await invoke("learn:delete-answers");
     expect(await invoke("learn:get-state")).toEqual({
       success: true,
       available: false,
       enabled: false,
-      answers: { deal: 0, bulk: 0 },
+      answers: { deal: 0, bulk: 0 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null,
     });
   });
 });
@@ -1421,7 +1423,7 @@ describe("PR4 (4175) Learn mode reads the active sender rule set", () => {
     expect(score.seedLinkedToDeals).toBe(1);
     expect(score.senderCensus.minCensusLinkedEmails).toBe(3);
     expect(score.senderCensus.dealLinkedSuppressed.map((m) => [m.full.k, m.n])).toEqual([[2, 2]]);
-    expect(String(r.copyBlock).split("\n")[0]).toBe("Keepr Learn mode score (rules v3; sender rules v7, source: download)");
+    expect(String(r.copyBlock).split("\n")[0]).toBe("Keepr Learn mode score (rules v4; sender rules v7, source: download)");
   });
 
   it("RS18a a refused download over a newer cache: source: cache (download rejected)", async () => {
@@ -1437,5 +1439,113 @@ describe("PR4 (4175) Learn mode reads the active sender rule set", () => {
     expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
     const r = await invoke("learn:score");
     expect(String(r.copyBlock).split("\n")[0]).toContain(`sender rules v${bundled.version}, source: bundled (download rejected))`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4219 PR2: the pilot report switch, with the REAL send / withdraw
+// service injected (its default RPC path: supabaseService -> this file's
+// Supabase client). Every pilot RPC is recorded in cloudCalls.
+// ---------------------------------------------------------------------------
+describe("4219 the pilot report switch through the handlers", () => {
+  let svc: import("../../services/learnPilotReportService").LearnPilotReportService;
+  const pilotCalls = () => cloudCalls.filter((c) => c.startsWith("rpc:learn_pilot_report_"));
+  const pilotRow = () =>
+    db.prepare(`SELECT pilot_report, pilot_pending_withdraw FROM learn_mode_settings WHERE user_id = ?`).get(USER);
+
+  beforeEach(async () => {
+    // The supabase-js builder: an awaited rpc() also offers .abortSignal().
+    const base = mockSupabaseClient.rpc.getMockImplementation() as (fn: string, args?: { p_org_id?: string }) => Promise<unknown>;
+    mockSupabaseClient.rpc.mockImplementation(((fn: string, args?: { p_org_id?: string }) => {
+      const p = base(fn, args);
+      return Object.assign(p, { abortSignal: () => p });
+    }) as never);
+    const mod = await import("../../services/learnPilotReportService");
+    svc = mod.createLearnPilotReportService({ appVersion: () => "2.46.2" });
+    ipcHandlers.clear();
+    featureGateHandlers.registerFeatureGateHandlers();
+    handlers.registerLearnModeHandlers({ pilotReport: svc });
+    setToggle(true);
+    seedEmail({ sentAt: "2026-10-01T10:00:00.000Z", subject: "Offer accepted", body: CANARY_BODY });
+  });
+
+  afterEach(() => {
+    mockSupabaseClient.rpc.mockImplementation((async (fn: string, args?: { p_org_id?: string }) => {
+      cloudCalls.push(`rpc:${fn}`);
+      return rpcAnswer(args?.p_org_id ?? "");
+    }) as never);
+  });
+
+  it("P3 switch OFF: run + score + 3 Settings refreshes make 0 pilot calls; ON: exactly 1 submit", async () => {
+    expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
+    expect((await invoke("learn:score")).success).toBe(true);
+    for (let i = 0; i < 3; i++) {
+      expect((await invoke("learn:get-state")).pilotReport).toBe(false);
+      await invoke("learn:score");
+    }
+    await svc.idle(USER);
+    expect(pilotCalls()).toEqual([]);
+
+    expect(await invoke("learn:set-pilot-report", { enabled: true })).toEqual({
+      success: true,
+      pilotReport: true,
+      pilotPending: false,
+    });
+    await invoke("learn:score");
+    await svc.idle(USER);
+    for (let i = 0; i < 3; i++) await invoke("learn:score");
+    await svc.idle(USER);
+    expect(pilotCalls()).toEqual(["rpc:learn_pilot_report_submit"]);
+    const st = await invoke("learn:get-state");
+    expect(st).toMatchObject({ pilotReport: true, pilotPending: false });
+    expect(typeof st.pilotLastSentAt).toBe("string");
+  });
+
+  it("P7 Learn mode OFF and Delete all each withdraw when sharing; a user who never shared causes no call", async () => {
+    // never shared
+    await invoke("learn:set-enabled", { enabled: false });
+    await invoke("learn:delete-answers");
+    await svc.idle(USER);
+    expect(pilotCalls()).toEqual([]);
+    expect(pilotRow()).toEqual({ pilot_report: 0, pilot_pending_withdraw: 0 });
+
+    await invoke("learn:set-enabled", { enabled: true });
+    await invoke("learn:set-pilot-report", { enabled: true });
+    await invoke("learn:set-enabled", { enabled: false });
+    expect(pilotRow()).toEqual({ pilot_report: 0, pilot_pending_withdraw: 1 }); // local first
+    await svc.idle(USER);
+    expect(pilotCalls()).toEqual(["rpc:learn_pilot_report_withdraw"]);
+    expect(pilotRow()).toEqual({ pilot_report: 0, pilot_pending_withdraw: 0 });
+
+    await invoke("learn:set-enabled", { enabled: true });
+    await invoke("learn:set-pilot-report", { enabled: true });
+    await invoke("learn:delete-answers");
+    await svc.idle(USER);
+    expect(pilotCalls()).toEqual(["rpc:learn_pilot_report_withdraw", "rpc:learn_pilot_report_withdraw"]);
+    expect(pilotRow()).toEqual({ pilot_report: 0, pilot_pending_withdraw: 0 });
+  });
+
+  it("P8 turning sharing OFF works with autodetect_eval blocked; turning it ON is refused", async () => {
+    await invoke("learn:set-pilot-report", { enabled: true });
+    planMap("disabled", false);
+    jest.resetModules(); // drop the strict reader's cached plan
+    const fg = await import("../featureGateHandlers");
+    const h = await import("../learnModeHandlers");
+    const mod = await import("../../services/learnPilotReportService");
+    svc = mod.createLearnPilotReportService({ appVersion: () => "2.46.2" });
+    ipcHandlers.clear();
+    fg.registerFeatureGateHandlers();
+    h.registerLearnModeHandlers({ pilotReport: svc });
+    expect((await invoke("learn:get-state")).available).toBe(false);
+    expect(await invoke("learn:set-pilot-report", { enabled: false })).toEqual({
+      success: true,
+      pilotReport: false,
+      pilotPending: true,
+    });
+    await svc.idle(USER);
+    expect(pilotCalls()).toEqual(["rpc:learn_pilot_report_withdraw"]);
+    expect(pilotRow()).toEqual({ pilot_report: 0, pilot_pending_withdraw: 0 });
+    expect((await invoke("learn:set-pilot-report", { enabled: true })).success).toBe(false);
+    expect(pilotRow()).toEqual({ pilot_report: 0, pilot_pending_withdraw: 0 });
   });
 });

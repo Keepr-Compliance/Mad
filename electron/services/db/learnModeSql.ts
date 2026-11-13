@@ -35,6 +35,80 @@ export const UPSERT_LEARN_MODE_ENABLED_SQL = sql`
 `;
 
 // ---------------------------------------------------------------------------
+// Pilot report switch (BACKLOG-4219). Local state only: whether the user shares
+// the numbers, a withdraw still owed to the server, the per-version send
+// throttle, and an unsettled submit. Nothing here is sent anywhere.
+// ---------------------------------------------------------------------------
+
+/** v79: the learn_mode_settings columns, to guard the ALTERs. */
+export const V79_LEARN_SETTINGS_TABLE_INFO_SQL = sql`PRAGMA table_info(learn_mode_settings)`;
+
+/** v79: an upgraded row gets pilot_report = 0 (OFF) and nothing pending. */
+export const V79_ADD_PILOT_COLUMNS_SQL = sql`
+  ALTER TABLE learn_mode_settings
+    ADD COLUMN pilot_report INTEGER NOT NULL DEFAULT 0 CHECK (pilot_report IN (0, 1));
+  ALTER TABLE learn_mode_settings
+    ADD COLUMN pilot_pending_withdraw INTEGER NOT NULL DEFAULT 0 CHECK (pilot_pending_withdraw IN (0, 1));
+  ALTER TABLE learn_mode_settings ADD COLUMN pilot_sent_versions TEXT;
+  ALTER TABLE learn_mode_settings ADD COLUMN pilot_unsettled_at TEXT;
+`;
+
+/** One bound parameter: user id. Missing row = OFF, nothing pending. */
+export const GET_PILOT_STATE_SQL = sql`
+  SELECT pilot_report, pilot_pending_withdraw, pilot_sent_versions, pilot_unsettled_at
+  FROM learn_mode_settings
+  WHERE user_id = ? AND deleted_at IS NULL
+`;
+
+/** Turn sharing ON (the live row exists: Learn mode is on). Bound: updated_at, user id. */
+export const PILOT_TURN_ON_SQL = sql`
+  UPDATE learn_mode_settings SET pilot_report = 1, updated_at = ?
+  WHERE user_id = ? AND deleted_at IS NULL
+`;
+
+/**
+ * Turn sharing OFF and owe the server a withdraw, in one write (before the
+ * withdraw is queued). Bound: updated_at, user id.
+ */
+export const PILOT_TURN_OFF_SQL = sql`
+  UPDATE learn_mode_settings SET pilot_report = 0, pilot_pending_withdraw = 1, updated_at = ?
+  WHERE user_id = ? AND deleted_at IS NULL
+`;
+
+/**
+ * A withdraw succeeded: nothing owed, nothing on the server, and any unsettled
+ * submit is now covered (the caller schedules its one extra withdraw). One
+ * statement. Bound: updated_at, user id.
+ */
+export const PILOT_WITHDRAW_DONE_SQL = sql`
+  UPDATE learn_mode_settings
+  SET pilot_pending_withdraw = 0, pilot_sent_versions = NULL, pilot_unsettled_at = NULL, updated_at = ?
+  WHERE user_id = ? AND deleted_at IS NULL
+`;
+
+/** Bound: the JSON map, updated_at, user id. */
+export const PILOT_SET_SENT_VERSIONS_SQL = sql`
+  UPDATE learn_mode_settings SET pilot_sent_versions = ?, updated_at = ?
+  WHERE user_id = ? AND deleted_at IS NULL
+`;
+
+/** Bound: the time (or NULL), updated_at, user id. */
+export const PILOT_SET_UNSETTLED_SQL = sql`
+  UPDATE learn_mode_settings SET pilot_unsettled_at = ?, updated_at = ?
+  WHERE user_id = ? AND deleted_at IS NULL
+`;
+
+/** Newest live answer time of either kind. Bound: user id, user id. */
+export const LATEST_ANSWER_AT_SQL = sql`
+  SELECT MAX(t) AS latest FROM (
+    SELECT MAX(answered_at) AS t FROM learn_deal_answers WHERE user_id = ? AND deleted_at IS NULL
+    UNION ALL
+    SELECT MAX(answered_at) AS t FROM learn_bulk_answers
+    WHERE user_id = ? AND deleted_at IS NULL AND answered_at IS NOT NULL
+  )
+`;
+
+// ---------------------------------------------------------------------------
 // Cleanup pass answers
 // ---------------------------------------------------------------------------
 
