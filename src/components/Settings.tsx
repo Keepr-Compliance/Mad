@@ -10,6 +10,7 @@ import { IphoneSyncSettings } from "./settings/IphoneSyncSettings";
 import { FeatureGate } from "./common/FeatureGate";
 import { SettingsPageHeader } from "./settings/SettingsPageHeader";
 import { useVisibleSettingsTabs } from "./settings/useVisibleSettingsTabs";
+import { SETTINGS_TABS } from "./settings/settingsTabs";
 import { useSettingsSectionRouting } from "./settings/useSettingsSectionRouting";
 import { useLastSectionSpacer } from "./settings/useLastSectionSpacer";
 import { AccountSettings, type AccountSettingsProps } from "./settings/account/AccountSettings";
@@ -131,15 +132,20 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
   }, [loadingPreferences]);
   // BACKLOG-4174: the tab list can start empty and fill in later, which leaves
   // the scroll-spy on "" until the user scrolls; fall back to the first tab.
-  const activeTabId = pinnedTabId ?? (spyTabId || visibleTabIds[0] || "");
+  // A pin only counts once its tab is in the list (a section reached before the
+  // plan/strict reads settle pins early; a tab that never appears falls through).
+  const activeTabId =
+    (pinnedTabId && visibleTabIds.includes(pinnedTabId) ? pinnedTabId : null) ?? (spyTabId || visibleTabIds[0] || "");
 
   const handleSectionReached = useCallback(
     (landed?: HTMLElement) => {
-      const tab = landed && visibleTabIds.find((id) => document.getElementById(id)?.contains(landed));
-      if (tab) pinTab(tab);
+      // Look in every tab, not just the visible ones: the section can be reached
+      // before the tab list has settled.
+      const tab = landed && SETTINGS_TABS.find((t) => document.getElementById(t.id)?.contains(landed));
+      if (tab) pinTab(tab.id);
       onSectionReached?.();
     },
-    [visibleTabIds, pinTab, onSectionReached],
+    [pinTab, onSectionReached],
   );
   useSettingsSectionRouting(initialSection, !loadingPreferences, scrollContainerRef, handleSectionReached);
   // BACKLOG-3964: room below the last section so every entry, About included,

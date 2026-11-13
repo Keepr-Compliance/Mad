@@ -12,6 +12,9 @@
  *   C-A1b  Settings page: strict read settles first, then the plan read.
  *   C-A2   Account panel rows, both orders.
  *   C-A3   plan read rejects: the tabs still appear, AI included (fail-open).
+ *   C-A4   opened at a section, with the target cleared on arrival like
+ *          SettingsLayer: the selected tab is that section's, whether the reads
+ *          settle before or after the section is reached.
  */
 
 import React from "react";
@@ -297,4 +300,68 @@ describe("BACKLOG-4174 C-A2 account panel rows wait for both reads", () => {
       assertSettledOnce(snaps);
     },
   );
+});
+
+/** Clears the target when the section is reached, exactly like SettingsLayer.tsx:98-99. */
+function SettingsHost({ target }: { target: string }) {
+  const [section, setSection] = React.useState<string | null>(target);
+  return (
+    <Settings
+      account={ACCOUNT}
+      userId="user-123"
+      initialSection={section}
+      onSectionReached={() => setSection(null)}
+      onClose={jest.fn()}
+      onStartLearn={jest.fn()}
+      onSeeLearnScore={jest.fn()}
+    />
+  );
+}
+
+const selectedTabIds = (): string[] =>
+  Array.from(document.querySelectorAll('[data-testid^="settings-tab-"]'))
+    .filter((e) => e.getAttribute("aria-selected") === "true" || e.getAttribute("aria-current") === "true" || e.getAttribute("aria-current") === "page")
+    .map((e) => e.getAttribute("data-testid") ?? "");
+
+describe("BACKLOG-4174 C-A4 opened at a section, target cleared on arrival", () => {
+  it.each([
+    ["settings-security", "settings-tab-security"],
+    ["settings-about", "settings-tab-about"],
+  ])("%s: selected tab is %s, reads settling after the section is reached", async (section, tabId) => {
+    const { plan, strict } = mockReads();
+    render(
+      <NotificationProvider>
+        <PlatformProvider>
+          <SettingsHost target={section} />
+        </PlatformProvider>
+      </NotificationProvider>,
+    );
+    await tick();
+    expect(document.getElementById(section)).not.toBeNull();
+    expect(settingsTabIds()).toEqual([]);
+    await act(async () => plan.resolve({ ai_detection: { allowed: false } }));
+    await act(async () => strict.resolve("allowed"));
+    await tick();
+    expect(settingsTabIds()).toContain(tabId);
+    expect(selectedTabIds()).toEqual([tabId]);
+  });
+
+  it.each([
+    ["settings-security", "settings-tab-security"],
+    ["settings-about", "settings-tab-about"],
+  ])("%s: positive control, reads settled before the section is reached", async (section, tabId) => {
+    const { plan, strict } = mockReads();
+    plan.resolve({ ai_detection: { allowed: false } });
+    strict.resolve("allowed");
+    render(
+      <NotificationProvider>
+        <PlatformProvider>
+          <SettingsHost target={section} />
+        </PlatformProvider>
+      </NotificationProvider>,
+    );
+    await tick();
+    await tick();
+    expect(selectedTabIds()).toEqual([tabId]);
+  });
 });
