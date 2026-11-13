@@ -13,7 +13,7 @@ import path from 'node:path';
 const mockRpc = jest.fn();
 jest.mock('@supabase/supabase-js', () => ({ createClient: () => ({ rpc: (...a: unknown[]) => mockRpc(...a) }) }));
 
-import { authorizeBegin, exchangeCode, refreshTokens, registerClient } from '@/lib/mcp/oauth/rpc';
+import { authorizeBegin, checkAccess, exchangeCode, getStatusFor, refreshTokens, registerClient } from '@/lib/mcp/oauth/rpc';
 
 const MIGRATION = path.resolve(
   __dirname,
@@ -102,6 +102,8 @@ describe('H20a: rpc parity with the migration', () => {
         }),
       6,
     ],
+    ['mcp_check_access', () => checkAccess(CFG, { secret: 's', atDigest: '\\x00', resource: 'r' }), 3],
+    ['mcp_get_status', () => getStatusFor(CFG, { secret: 's', atDigest: '\\x00', resource: 'r' }), 3],
   ];
 
   it.each(CALLS)('H20b: %s gets exactly the migration parameter names on the wire', async (fn, invoke, n) => {

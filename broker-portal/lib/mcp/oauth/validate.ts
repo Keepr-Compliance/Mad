@@ -107,7 +107,8 @@ export function normaliseScope(raw: string | null | undefined): string {
 }
 
 const CLIENT_ID = /^kpr_c_[A-Za-z0-9_-]{22}$/;
-const CREDENTIAL: Record<'ac' | 'rt' | 'bd', RegExp> = {
+const CREDENTIAL: Record<'at' | 'ac' | 'rt' | 'bd', RegExp> = {
+  at: /^kpr_at_[A-Za-z0-9_-]{43}$/,
   ac: /^kpr_ac_[A-Za-z0-9_-]{43}$/,
   rt: /^kpr_rt_[A-Za-z0-9_-]{43}$/,
   bd: /^kpr_bd_[A-Za-z0-9_-]{43}$/,
@@ -123,7 +124,7 @@ export function isClientId(v: unknown): v is string {
   return typeof v === 'string' && CLIENT_ID.test(v);
 }
 
-export function isCredential(kind: 'ac' | 'rt' | 'bd', v: unknown): v is string {
+export function isCredential(kind: 'at' | 'ac' | 'rt' | 'bd', v: unknown): v is string {
   return typeof v === 'string' && CREDENTIAL[kind].test(v);
 }
 

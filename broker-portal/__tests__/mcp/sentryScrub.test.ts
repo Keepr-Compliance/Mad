@@ -13,12 +13,13 @@
 const mockInit = jest.fn();
 jest.mock('@sentry/nextjs', () => ({ init: (...a: unknown[]) => mockInit(...a) }));
 
-const mockGetClaims = jest.fn();
+const mockRpc = jest.fn();
 jest.mock('@supabase/supabase-js', () => ({
-  createClient: () => ({ auth: { getClaims: (t: string) => mockGetClaims(t) } }),
+  createClient: () => ({ rpc: (...a: unknown[]) => mockRpc(...a) }),
 }));
 
-import { CONNECTED_APP_CLAIMS } from './fixtures';
+import { ACCESS_TOKEN, checkAccessOk } from './fixtures';
+import { OAUTH_ENV } from './oauth/fixtures';
 
 const SECRET = 'planted-secret-token-value';
 
@@ -113,21 +114,23 @@ describe('A7: the MCP route logs no token', () => {
     process.env = ENV;
   });
 
-  it('a token check that throws with the token in its message writes nothing containing it', async () => {
-    process.env = { ...ENV, MCP_ENABLED: 'true', MCP_PUBLIC_ORIGIN: 'https://portal.test', NEXT_PUBLIC_SUPABASE_URL: 'https://project-ref.supabase.co', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon' };
+  it('an access check that throws with the token in its message writes nothing containing it', async () => {
+    process.env = { ...ENV, ...OAUTH_ENV, MCP_PUBLIC_ORIGIN: 'https://portal.test' };
     const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) => jest.spyOn(console, m).mockImplementation(() => {}));
-    mockGetClaims.mockImplementationOnce(async (t: string) => {
-      throw new Error(`bad token ${t}`);
+    mockRpc.mockImplementationOnce(async () => {
+      throw new Error(`bad token ${ACCESS_TOKEN}`);
     });
-    mockGetClaims.mockImplementation(async () => ({ data: { claims: CONNECTED_APP_CLAIMS }, error: null }));
+    mockRpc.mockImplementation(async () => ({ data: checkAccessOk(), error: null }));
     const { POST } = await import('@/app/api/mcp/route');
-    const mk = (body: string) =>
+    const mk = (body: string, token = ACCESS_TOKEN) =>
       new Request('https://portal.test/api/mcp', {
         method: 'POST',
-        headers: { authorization: `Bearer ${SECRET}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
         body,
       });
-    expect((await POST(mk('{}'))).status).toBe(401);
+    expect((await POST(mk('{}'))).status).toBe(503);
+    // A token of the wrong shape is refused before any database call.
+    expect((await POST(mk('{}', SECRET))).status).toBe(401);
     // A malformed body reaches the SDK, which reports through onerror.
     await POST(mk(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"${SECRET}"`));
     await POST(mk(`not json ${SECRET}`));
@@ -142,7 +145,7 @@ describe('A7: the MCP route logs no token', () => {
     const mismatch = new Request('https://portal.test/api/mcp', {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${SECRET}`,
+        authorization: `Bearer ${ACCESS_TOKEN}`,
         'content-type': 'application/json',
         accept: 'application/json, text/event-stream',
         'mcp-protocol-version': '2026-07-28',
@@ -165,7 +168,12 @@ describe('A7: the MCP route logs no token', () => {
     // Positive control: the SDK's rejection was reported, so a log line exists to inspect.
     expect(written.some((l) => l.startsWith('[mcp] handler error:'))).toBe(true);
     expect(written.some((l) => l.startsWith('[mcp] request failed:'))).toBe(true);
-    for (const line of written) expect(line).not.toContain(SECRET);
+    // Positive control: the route wrote its own outcome lines.
+    expect(written.some((l) => l.startsWith('[mcp-oauth] ') && l.includes('"route":"mcp"'))).toBe(true);
+    for (const line of written) {
+      expect(line).not.toContain(SECRET);
+      expect(line).not.toContain(ACCESS_TOKEN);
+    }
     spies.forEach((s) => s.mockRestore());
   });
 });
