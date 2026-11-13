@@ -1548,4 +1548,48 @@ describe("4219 the pilot report switch through the handlers", () => {
     expect((await invoke("learn:set-pilot-report", { enabled: true })).success).toBe(false);
     expect(pilotRow()).toEqual({ pilot_report: 0, pilot_pending_withdraw: 0 });
   });
+
+  it("P14 the sharing switch OFF withdraws only when one is owed", async () => {
+    // never shared: OFF writes nothing owed and makes no call
+    expect(await invoke("learn:set-pilot-report", { enabled: false })).toEqual({
+      success: true,
+      pilotReport: false,
+      pilotPending: false,
+    });
+    await svc.idle(USER);
+    expect(pilotCalls()).toEqual([]);
+    expect(pilotRow()).toEqual({ pilot_report: 0, pilot_pending_withdraw: 0 });
+
+    // shared, a report submitted, then OFF while offline: the withdraw stays owed
+    await invoke("learn:set-pilot-report", { enabled: true });
+    expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
+    await invoke("learn:score");
+    await svc.idle(USER);
+    expect(pilotCalls()).toEqual(["rpc:learn_pilot_report_submit"]);
+    const online = rpcAnswer;
+    rpcAnswer = () => ({ data: null, error: { code: "PGRST000" } });
+    await invoke("learn:set-pilot-report", { enabled: false });
+    await svc.idle(USER);
+    expect(pilotRow()).toEqual({ pilot_report: 0, pilot_pending_withdraw: 1 });
+    rpcAnswer = online;
+
+    // OFF again with the switch already off: the owed withdraw is still queued and paid
+    expect(await invoke("learn:set-pilot-report", { enabled: false })).toEqual({
+      success: true,
+      pilotReport: false,
+      pilotPending: true,
+    });
+    await svc.idle(USER);
+    expect(pilotCalls()).toEqual([
+      "rpc:learn_pilot_report_submit",
+      "rpc:learn_pilot_report_withdraw",
+      "rpc:learn_pilot_report_withdraw",
+    ]);
+    expect(pilotRow()).toEqual({ pilot_report: 0, pilot_pending_withdraw: 0 });
+
+    // paid: a further OFF owes nothing and makes no call
+    await invoke("learn:set-pilot-report", { enabled: false });
+    await svc.idle(USER);
+    expect(pilotCalls()).toHaveLength(3);
+  });
 });

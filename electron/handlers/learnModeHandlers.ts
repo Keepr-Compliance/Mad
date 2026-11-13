@@ -77,10 +77,10 @@ import {
   previewEmailsByIds,
   getPilotState,
   setLearnModeEnabled,
-  setPilotOffPending,
   setPilotOn,
   softClearAnswersAndStopSharing,
   turnLearnModeOff,
+  turnPilotSharingOff,
   softDeleteAnswer,
   type PreviewAttachmentRow,
   type PreviewEmailRow,
@@ -387,8 +387,9 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
         setPilotOn(userId);
       } else {
         // OFF: never refused (session only). Local first, then the withdraw.
-        setPilotOffPending(userId);
-        deps.pilotReport?.queueWithdraw(userId);
+        // A user who never shared owes nothing: no write, no call.
+        const { pilotWithdrawOwed } = turnPilotSharingOff(userId);
+        if (pilotWithdrawOwed) deps.pilotReport?.queueWithdraw(userId);
       }
       logService.info("Learn pilot sharing toggled", MODULE, { enabled: args.enabled });
       const st = getPilotState(userId);
