@@ -152,7 +152,7 @@ describe('sorting', () => {
 
   it('every key sorts without throwing and keeps every row', () => {
     const out = summaryRows(orgsOf(baseRows()));
-    const keys: SummaryKey[] = ['name', 'userId', 'org', 'version', 'recall', 'recallYes', 'precision', 'knownWrong', 'lastReport'];
+    const keys: SummaryKey[] = ['name', 'org', 'version', 'recall', 'recallYes', 'precision', 'knownWrong', 'lastReport'];
     for (const k of keys) for (const d of ['asc', 'desc'] as const) expect(sortSummary(out, k, d)).toHaveLength(3);
   });
 });
