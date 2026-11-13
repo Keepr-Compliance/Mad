@@ -1,0 +1,56 @@
+R1_existing_unmapped: MUTATION APPLIED [1	1	broker-portal/lib/auth/jitJoin.ts] -> const OWN_MESSAGE = ['jit_disabled', 'billing_setup_pending', 'already_placed'] as const;
+  suites 1 failed, 50 passed, 51 total | tests 2 failed, 1476 passed, 1478 total | red (2):
+    - R1 own /login codes › existing_account -> signed out, /login?error=existing_account (not org_not_setup)
+    - precedence › existing_account keeps its own code over domain_managed
+R1_managed_to_org_not_setup: MUTATION APPLIED [1	1	broker-portal/app/auth/callback/route.ts] -> jitErrorCode = 'org_not_setup';
+  suites 1 failed, 50 passed, 51 total | tests 3 failed, 1475 passed, 1478 total | red (3):
+    - R1 own /login codes › blocked domain, JIT generic refusal -> /login?error=domain_managed
+    - R1 own /login codes › blocked domain, email sign-in (no JIT target) -> domain_managed instead of not_authorized
+    - precedence › jit_disabled on a blocked domain -> domain_managed
+R1_managed_overrides_all: MUTATION APPLIED [1	1	broker-portal/lib/auth/jitJoin.ts] -> return errorCode !== undefined;
+  suites 1 failed, 50 passed, 51 total | tests 3 failed, 1475 passed, 1478 total | red (3):
+    - precedence › existing_account keeps its own code over domain_managed
+    - precedence › already_placed keeps its own code over domain_managed
+    - precedence › billing_setup_pending keeps its own code over domain_managed
+R1_managed_before_floor: MUTATION APPLIED [1	1	broker-portal/app/auth/callback/route.ts] -> if (access.kind === 'floor' && !(await domainManagedFor(supabase))) {
+        return finis
+  suites 2 failed, 49 passed, 51 total | tests 2 failed, 1476 passed, 1478 total | red (2):
+    - precedence › personal-organization owner keeps the floor and is never asked
+    - (a) personal-org owner whose JIT join fails › no JIT identifier (email sign-in) -> /dashboard, no sign-out
+R1_login_copy_missing: MUTATION APPLIED [1	1	broker-portal/app/login/page.tsx] -> existing_account_x:
+  suites 1 failed, 50 passed, 51 total | tests 1 failed, 1477 passed, 1478 total | red (1):
+    - ?error=existing_account shows its own message
+D1a_not_awaited: MUTATION APPLIED [2	3	broker-portal/app/auth/desktop/callback/page.tsx] -> void desktopJitJoin(session.access_token).catch(() => undefined);
+      const placement = 
+  suites 1 failed, 50 passed, 51 total | tests 2 failed, 1476 passed, 1478 total | red (2):
+    - D1a the JIT step is awaited before the deep link › nothing is minted or opened until the join answers, then the app opens
+    - D1b domain_managed never deep-links › shows the message, signs the browser out, mints nothing, opens nothing
+D1b_managed_still_links: MUTATION APPLIED [0	1	broker-portal/app/auth/desktop/callback/page.tsx] -> setStatus('domain_managed');
+  suites 1 failed, 50 passed, 51 total | tests 1 failed, 1477 passed, 1478 total | red (1):
+    - D1b domain_managed never deep-links › shows the message, signs the browser out, mints nothing, opens nothing
+D1_no_bearer: MUTATION APPLIED [0	1	broker-portal/lib/actions/desktopJitJoin.ts] -> (line removed)
+  suites 1 failed, 50 passed, 51 total | tests 1 failed, 1477 passed, 1478 total | red (1):
+    - uses a bearer client with the person token, verifies it, never the server role
+D1_no_pending_invite_check: MUTATION APPLIED [0	1	broker-portal/lib/actions/desktopJitJoin.ts] -> (line removed)
+  suites 1 failed, 50 passed, 51 total | tests 1 failed, 1477 passed, 1478 total | red (1):
+    - a pending invitation: no JIT, no block
+T1_ui_not_flipped: MUTATION APPLIED [1	1	broker-portal/app/dashboard/settings/domain/DomainSettingsClient.tsx] -> onClick={() => handleBlockSolo(claim.id, true)}
+  suites 1 failed, 50 passed, 51 total | tests 1 failed, 1477 passed, 1478 total | red (1):
+    - stored true -> button "Allow personal accounts" sends false
+T1_ui_any_status: MUTATION APPLIED [1	1	broker-portal/app/dashboard/settings/domain/DomainSettingsClient.tsx] -> const verifiedClaims = claims;
+  suites 1 failed, 50 passed, 51 total | tests 2 failed, 1476 passed, 1478 total | red (2):
+    - only verified domains get the switch
+    - no verified domain: no section
+T1_action_service_client: MUTATION APPLIED [1	1	broker-portal/lib/actions/domainClaim.ts] -> const { data, error } = (await createServiceClient({ actorId: access.userId }).rpc('domain
+  suites 1 failed, 50 passed, 51 total | tests 4 failed, 1474 passed, 1478 total | red (4):
+    - on=true -> session-client rpc with the claim and flag
+    - on=false -> session-client rpc with the claim and flag
+    - not_verified -> its own message
+    - not_found -> not found
+T1_action_no_impersonation_guard: MUTATION APPLIED [0	2	broker-portal/lib/actions/domainClaim.ts] -> export async function setBlockSoloSignups(claimId: string, on: boolean): Promise<DomainCla
+  suites 1 failed, 50 passed, 51 total | tests 1 failed, 1477 passed, 1478 total | red (1):
+    - support session -> refused
+N1_valign_removed: MUTATION APPLIED [1	1	broker-portal/lib/email/templates/simple-notice.ts] -> `<td style="padding-right:
+  suites 1 failed, 50 passed, 51 total | tests 2 failed, 1476 passed, 1478 total | red (2):
+    - 2 buttons: every button cell is valign="top"
+    - 3 buttons: every button cell is valign="top"

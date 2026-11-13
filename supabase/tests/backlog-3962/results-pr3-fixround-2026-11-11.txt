@@ -1,0 +1,27 @@
+# BACKLOG-3962 PR3a fix round: base 48/48, pr3_live 48/48 x2, pr2_live 13/13, PR1 live 64/64 on keepr-test
+# SQL mutants (KEEPR_3962_APPLIED=1 bash run.sh <mutant>)
+C_always_unassigned pass 47 fail 1 red: W05_free_seat_active_plus_one
+C_always_active pass 47 fail 1 red: W08_no_seat_unassigned_count_unchanged
+C_ignore_notice pass 46 fail 2 red: W05_free_seat_active_plus_one, W03_undelivered_cancels_no_member_no_outbox
+C_ignore_opt_out pass 46 fail 2 red: W04_opted_out_nothing, W05_free_seat_active_plus_one
+C_no_status_guard pass 45 fail 3 red: W04_opted_out_nothing, W05_free_seat_active_plus_one, W07_switch_twice_one_membership
+C_opt_out_no_uid pass 41 fail 7 red: W02_stale_dns_no_switch, W01_not_due_before_day_14, O02_opt_out_other_row_refused, W05_free_seat_active_plus_one, W06_payer_flag_and_3850_outbox, W07_switch_twice_one_membership, W08_no_seat_unassigned_count_unchanged
+C_cancel_only_revoke pass 46 fail 2 red: X03_lapse_cancels, X01_withdraw_cancels
+C_no_tid_term pass 42 fail 6 red: S02_scheduled_set, K01_candidates_listed, S08_start_reports_payer, D01_due_returns_then_stamps, K02_foreign_tenant_not_listed, S03_foreign_tenant_never_scheduled
+C_active_rows_only pass 42 fail 6 red: S02_scheduled_set, K01_candidates_listed, S08_start_reports_payer, D01_due_returns_then_stamps, K03_deactivated_elsewhere_not_listed, S04_deactivated_elsewhere_never_scheduled
+BACKLOG-3962: authenticated can execute public._domain_capture_switch(uuid)
+BACKLOG-3962: a client role has a grant on domain_capture_switches
+C_no_fresh_dns pass 45 fail 3 red: W02_stale_dns_no_switch, W05_free_seat_active_plus_one, W06_payer_flag_and_3850_outbox
+BACKLOG-3962: domain_claim_withdraw md5 74760b7c6272d9e29d23f26b785cdbd2 is not the PR1 body
+C_no_lock pass 48 fail 0 red: 
+C_no_lock_no_fallback pass 46 fail 2 red: D01_due_returns_then_stamps, H01_suspended_brokerage_cancels_no_member_no_outbox
+C_no_setup_gate_switch pass 47 fail 1 red: B04_switch_deferred_billing_setup_pending
+C_no_setup_gate_start pass 47 fail 1 red: B03_start_refused_billing_setup_pending
+C_no_billing_ready_gate pass 45 fail 3 red: D01_due_returns_then_stamps, B01_start_refused_without_3850, B02_switch_deferred_without_3850
+C_no_suspended_catch pass 46 fail 2 red: D01_due_returns_then_stamps, H01_suspended_brokerage_cancels_no_member_no_outbox
+C_incomplete_is_payer pass 47 fail 1 red: P01_incomplete_subscription_is_not_a_payer
+C_role_hardcoded pass 47 fail 1 red: R01_role_is_org_default_member_role
+C_no_tenant_as_foreign pass 47 fail 1 red: K06_no_tenant_listed_not_convertible_never_scheduled
+C_no_tenant_branch_dropped pass 47 fail 1 red: K06_no_tenant_listed_not_convertible_never_scheduled
+
+# C_no_lock / C_no_lock_no_fallback: concurrency-pr3.sh (C_no_lock passes the single-session suite by design)
