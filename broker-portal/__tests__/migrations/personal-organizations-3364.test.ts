@@ -151,6 +151,7 @@ describe(MIGRATION_NAME, () => {
 const BACKFILL_3858_SUFFIX = '_backlog_3858_personal_orgs_for_licensed_users.sql';
 const PAYGO_REVERT_3851_SUFFIX = '_backlog_3851_paygo_revert.sql';
 const SOLO_TRIAL_3860_SUFFIX = '_backlog_3860_solo_trial.sql';
+const SOLO_BLOCK_3962_SUFFIX = '_backlog_3962_jit_and_solo_block.sql';
 
 describe('BACKLOG-3364 backfill stays parked', () => {
   it('exists under supabase/parked/backlog-3364/', () => {
@@ -186,6 +187,14 @@ describe('BACKLOG-3364 backfill stays parked', () => {
         expect(sql).not.toMatch(/\bFOR\s+\w+\s+IN\b/i);
         // Exactly two mentions: the pin read and the wrapper's single call.
         expect(sql.match(/_ensure_personal_organization_for\(/g)).toHaveLength(2);
+        expect(sql).toContain('v_res := public._ensure_personal_organization_for(v_uid);');
+        continue;
+      }
+      // BACKLOG-3962 PR4a: re-creates the per-user wrapper (one call, unchanged) behind the
+      // solo sign-up gate. It must not loop over users. Tested by supabase/tests/backlog-3962/.
+      if (f.endsWith(SOLO_BLOCK_3962_SUFFIX)) {
+        expect(sql).not.toMatch(/\bFOR\s+\w+\s+IN\b/i);
+        expect(sql.match(/_ensure_personal_organization_for\(/g)).toHaveLength(1);
         expect(sql).toContain('v_res := public._ensure_personal_organization_for(v_uid);');
         continue;
       }

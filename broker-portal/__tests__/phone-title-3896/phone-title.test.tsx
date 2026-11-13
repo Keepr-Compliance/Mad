@@ -55,6 +55,7 @@ const EXPECTED: Record<string, string> = {
   '/dashboard/users/u-1': 'User',
   '/dashboard/settings': 'Settings',
   '/dashboard/settings/scim': 'SCIM Provisioning',
+  '/dashboard/settings/domain': 'Domain Verification',
   '/dashboard/account': 'My Account',
   '/dashboard/support': 'Support',
   '/dashboard/support/new': 'Submit a Support Request',
@@ -69,6 +70,8 @@ const EXPECTED: Record<string, string> = {
   '/dashboard/billing': 'Billing',
   '/dashboard/reports': 'Reports', // BACKLOG-3505
   '/dashboard/reports/r-1': 'Report',
+  '/dashboard/reports/submissions': 'Report', // BACKLOG-3513 PR-3a
+  '/dashboard/reports/d/s-1': 'Report', // BACKLOG-3513 PR-3b
   '/dashboard/setup': 'Account Setup',
 };
 
@@ -168,9 +171,11 @@ describe('page headings below md (BACKLOG-3896)', () => {
       ...pageRoutes().map((r) => path.join(DASH, r, 'page.tsx')),
       path.join(DASH, 'settings/OrgSettingsClient.tsx'),
       path.join(DASH, 'settings/scim/ScimSettingsClient.tsx'),
+      path.join(DASH, 'settings/domain/DomainSettingsClient.tsx'),
       path.join(DASH, 'account/AccountClient.tsx'),
       path.join(DASH, 'components/FloorDashboard.tsx'),
       path.join(ROOT, 'components/my-transactions/UpsellPanel.tsx'),
+      path.join(ROOT, 'components/reports/submissions/SubmissionsReportBody.tsx'), // BACKLOG-3513 PR-3b
     ];
     let headers = 0;
     for (const f of files) {

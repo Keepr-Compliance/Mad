@@ -53,6 +53,35 @@ const mockGetUser = jest.fn();
  * refuses a deactivated member on its own, which is only observable while the
  * emulated database would still have said yes.
  */
+/**
+ * BACKLOG-3513 PR-3b: ONE shared report in the brokerage, so /dashboard/reports/d/[id] renders for the
+ * admitted personas and its no-write / no-table-read checks run on a real page, not only on notFound.
+ * Shape transcribed from broker_report_def_get (migrations 20261112200000 + 20261112210000). Every
+ * caller is a viewer: the emulation decides nothing, the report gate decides who reaches it.
+ */
+const SHARED_REPORT_DEF_ID = '00000000-0000-4000-8000-0000003513e1'; // pii-allow-uuid: invented fixture id
+function mockSharedReportDefinition(defId: unknown) {
+  if (defId !== SHARED_REPORT_DEF_ID) return null;
+  return {
+    id: SHARED_REPORT_DEF_ID,
+    organization_id: FIXTURE_BROKERAGE_ORG_ID,
+    dataset_key: 'submissions',
+    name: 'Shared fixture report',
+    description: null,
+    definition: { filters: {}, sort: null },
+    row_scope: 'all',
+    general_access: 'organization',
+    level: 'viewer',
+    owner: { name: 'Fixture Owner', is_you: false },
+    updated_at: '2026-11-12T10:00:00+00:00',
+    reassign_available: false,
+  };
+}
+/** The shared-report write functions (migrations 20261112200000 + 20261112220000). No page may call one. */
+const REPORT_WRITE_RPCS = [
+  'broker_report_def_create', 'broker_report_def_update', 'broker_report_def_delete', 'broker_report_share_set',
+  'broker_report_share_remove', 'broker_report_set_general_access', 'broker_report_transfer', 'broker_report_reassign',
+];
 const CHECKLIST_EDITOR_ROLES = ['broker', 'admin', 'it_admin'];
 function canEditChecklistTemplates(orgId: unknown): boolean {
   return (mockEmulator.state.rows.organization_members ?? []).some((m) => {
@@ -101,6 +130,8 @@ const mockRpc = jest.fn(async (name: string, args?: Record<string, unknown>) =>
       ? { data: canCreateOwnChecklistTemplates(args?.p_org_id), error: null }
     : name === 'can_review_submission'
       ? { data: canReviewSubmission(args?.p_org_id), error: null }
+    : name === 'broker_report_def_get'
+      ? { data: mockSharedReportDefinition(args?.p_def), error: null }
       : { data: null, error: null }
 );
 
@@ -379,6 +410,11 @@ const REFUSED_PAGES: Record<string, PageEntry> = {
     invoke: async () => (await import('@/app/dashboard/settings/scim/page')).default(),
     refused: { notFound: true },
   },
+  // BACKLOG-3962: domain verification; admin / IT admin of the brokerage only.
+  'app/dashboard/settings/domain/page.tsx': {
+    invoke: async () => (await import('@/app/dashboard/settings/domain/page')).default(),
+    refused: { redirect: '/dashboard' },
+  },
   // BACKLOG-4007 PR-3: the setup guide is for a brokerage's broker/admin only.
   'app/dashboard/setup/page.tsx': {
     invoke: async () => (await import('@/app/dashboard/setup/page')).default({ searchParams: Promise.resolve({}) }),
@@ -472,17 +508,44 @@ const BILLING_PAGES: Record<string, PageEntry> = {
 };
 
 /**
- * BACKLOG-3505: the Reports index, gated by lib/reports/report-gate.ts. PR-1
- * registers no report, so it refuses EVERY persona (feature forced on in this
- * file), full roles included. The per-role rule is covered in
- * __tests__/reports-3505 against an injected registry.
+ * BACKLOG-3505: the Reports pages, gated by lib/reports/report-gate.ts.
+ * BACKLOG-3513 PR-3a registers Submissions (agent-scoped), so with the feature
+ * forced on in this file the index and the report open for a brokerage agent
+ * and every full role, and refuse a personal-org owner. The per-role rule is
+ * covered in __tests__/reports-3505 and __tests__/reports-3513.
  */
-const REPORTS_PAGES: Record<string, PageEntry> = {
+const REPORTS_PAGES: Record<string, PageEntry & { admitted?: Outcome }> = {
   'app/dashboard/reports/page.tsx': {
     invoke: async () => (await import('@/app/dashboard/reports/page')).default(),
     refused: { notFound: true },
   },
+  'app/dashboard/reports/submissions/page.tsx': {
+    invoke: async () =>
+      (await import('@/app/dashboard/reports/submissions/page')).default({ searchParams: Promise.resolve({}) }),
+    refused: { notFound: true },
+    // BACKLOG-3513 PR-3b: the page returns the shared report body.
+    admitted: { element: 'SubmissionsReportBody' },
+  },
+  // BACKLOG-3513 PR-3b: one shared report (the emulator holds one definition, see
+  // mockSharedReportDefinition): admitted personas get the report body.
+  'app/dashboard/reports/d/[id]/page.tsx': {
+    invoke: async () =>
+      (await import('@/app/dashboard/reports/d/[id]/page')).default({
+        params: Promise.resolve({ id: SHARED_REPORT_DEF_ID }),
+        searchParams: Promise.resolve({}),
+      }),
+    refused: { notFound: true },
+    admitted: { element: 'SubmissionsReportBody' },
+  },
 };
+const REPORTS_REFUSED = { 'personal-org owner': [personalMembership()] } as const;
+const REPORTS_ADMITTED = {
+  'brokerage agent': [brokerageMembership('agent')],
+  '[agent, broker] (two brokerage rows)': [brokerageMembership('agent'), second(brokerageMembership('broker'))],
+  'brokerage broker': [brokerageMembership('broker')],
+  'brokerage admin': ADMIN,
+  'brokerage it_admin': [brokerageMembership('it_admin')],
+} as const;
 
 const PLAN_GATED_ADMITTED = {
   'brokerage agent': [brokerageMembership('agent')],
@@ -580,6 +643,18 @@ const REFUSED_ACTIONS: Record<string, ActionEntry> = {
     lastName: '',
     phone: '',
   }),
+  // BACKLOG-3962: domain verification; admin / IT admin of the brokerage only.
+  'lib/actions/domainClaim.ts#createDomainClaim': act(() => import('@/lib/actions/domainClaim'), 'createDomainClaim', 'brokerage-audit.example'),
+  'lib/actions/domainClaim.ts#checkDomainClaim': act(() => import('@/lib/actions/domainClaim'), 'checkDomainClaim', '00000000-0000-4000-8000-000000003962'), // pii-allow-uuid: invented fixture id
+  'lib/actions/domainClaim.ts#withdrawDomainClaim': act(() => import('@/lib/actions/domainClaim'), 'withdrawDomainClaim', '00000000-0000-4000-8000-000000003962'), // pii-allow-uuid: invented fixture id
+  // BACKLOG-3962 PR4a: the personal-accounts switch, same gate.
+  'lib/actions/domainClaim.ts#setBlockSoloSignups': act(() => import('@/lib/actions/domainClaim'), 'setBlockSoloSignups', '00000000-0000-4000-8000-000000003962', true), // pii-allow-uuid: invented fixture id
+  // BACKLOG-3962 PR3a: requireDomainClaimAccess (admin / it_admin of the session's organization).
+  'lib/actions/domainCapture.ts#startCapture': act(() => import('@/lib/actions/domainCapture'), 'startCapture', {
+    claimId: '00000000-0000-4000-8000-000000003962', // pii-allow-uuid: invented fixture id
+    userIds: ['00000000-0000-4000-8000-000000003963'], // pii-allow-uuid: invented fixture id
+  }),
+  'lib/actions/domainCapture.ts#cancelCapture': act(() => import('@/lib/actions/domainCapture'), 'cancelCapture', '00000000-0000-4000-8000-000000003962'), // pii-allow-uuid: invented fixture id
 };
 
 /**
@@ -656,6 +731,12 @@ const REVIEWER_REFUSED_PERSONAS = {
  */
 type Persona = keyof typeof PERSONAS;
 const NOT_AUTHORIZED_THROW: Outcome = { threw: 'Not authorized' };
+const DOMAIN_CLAIM_REFUSED: Outcome = {
+  returned: { success: false, message: 'Only an admin or IT admin of this brokerage can verify a domain.' },
+};
+const DOMAIN_CAPTURE_REFUSED: Outcome = {
+  returned: { success: false, message: 'Only an admin of this brokerage can do this.' },
+};
 const byPersona = (agent: Outcome, others: Outcome): Record<Persona, Outcome> => ({
   'brokerage agent': agent,
   'personal-org owner': others,
@@ -680,6 +761,12 @@ const REFUSALS: Record<string, Outcome | Record<Persona, Outcome>> = {
   'lib/actions/resendInvite.ts#resendInvite': { returned: { success: false, error: 'Not authorized' } },
   'lib/actions/memberLicense.ts#setMemberLicense': failed('Not authorized'),
   'lib/actions/memberName.ts#setMemberName': failed('Not authorized'),
+  'lib/actions/domainClaim.ts#createDomainClaim': DOMAIN_CLAIM_REFUSED,
+  'lib/actions/domainClaim.ts#checkDomainClaim': DOMAIN_CLAIM_REFUSED,
+  'lib/actions/domainClaim.ts#withdrawDomainClaim': DOMAIN_CLAIM_REFUSED,
+  'lib/actions/domainClaim.ts#setBlockSoloSignups': DOMAIN_CLAIM_REFUSED,
+  'lib/actions/domainCapture.ts#startCapture': DOMAIN_CAPTURE_REFUSED,
+  'lib/actions/domainCapture.ts#cancelCapture': DOMAIN_CAPTURE_REFUSED,
   'lib/actions/billingSetup.ts#completeBillingSetup': {
     returned: {
       success: false,
@@ -749,6 +836,8 @@ const FLOOR_ACTIONS = [
   'lib/actions/createTokenClaim.ts#createTokenClaim',
   // BACKLOG-3991: verifies the access token and writes only that user's own names.
   'lib/actions/syncDesktopIdpNames.ts#syncDesktopIdpNames',
+  // BACKLOG-3962 PR4a: verifies the access token; JIT and caller_domain_managed decide on auth.uid().
+  'lib/actions/desktopJitJoin.ts#desktopJitJoin',
   // BACKLOG-4007 People v2: My Account phone; my_phone_get / my_phone_set touch only auth.uid()'s row.
   'lib/actions/myPhone.ts#getMyPhone',
   'lib/actions/myPhone.ts#setMyPhone',
@@ -760,6 +849,13 @@ const FLOOR_ACTIONS = [
   // Broker/Admin). An agent is refused before any Stripe call (__tests__/seats-3854).
   'lib/actions/seats.ts#addSeats',
   'lib/actions/billingPortal.ts#openBrokerageBillingPortal',
+  // BACKLOG-3962 PR3a: the signed-in person opts out of their OWN scheduled move;
+  // domain_capture_opt_out_self refuses any row whose user_id is not auth.uid().
+  'lib/actions/domainCapture.ts#optOutSelf',
+  // BACKLOG-3962 "Join now": the signed-in person joins from their OWN scheduled move; the user is
+  // the session's (auth.getUser()), the server-role read is filtered to it, and
+  // _domain_capture_join_now refuses any row whose user_id is not that user.
+  'lib/actions/domainCapture.ts#joinNowSelf',
 ];
 
 /**
@@ -816,6 +912,12 @@ const KNOWN_ROUTE_HANDLERS = [
   // BACKLOG-3863 PR-2: GET only, Bearer JWT (verifyBearerUser); reads the
   // verified caller's own plan, no request-supplied ids. Display only.
   'app/api/billing/plan-summary/route.ts',
+  // BACKLOG-3962 PR3a: GET only, CRON_SECRET bearer (isAuthorizedCronRequest); no session, no
+  // request-supplied ids. Switch rows, claims and organizations come from the due query.
+  'app/api/cron/domain-capture-switch/route.ts',
+  // BACKLOG-3962 PR2: GET only, CRON_SECRET bearer (isAuthorizedCronRequest); no session, no
+  // request-supplied ids. Claims and their organizations come from the due query.
+  'app/api/cron/domain-recheck/route.ts',
   'app/api/cron/email-retry/route.ts',
   'app/api/cron/payment-reconcile/route.ts',
   'app/api/download/route.ts',
@@ -1001,7 +1103,7 @@ describe('discovery can see what it claims to see', () => {
     const pages = discoverDashboardPages();
     expect(pages).toContain('app/dashboard/page.tsx');
     expect(pages).toContain('app/dashboard/users/[id]/page.tsx');
-    expect(pages.length).toBe(19); // BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
+    expect(pages.length).toBe(22); // BACKLOG-3513 PR-3b: + reports/d/[id]; BACKLOG-3962: + settings/domain; BACKLOG-3513 PR-3a: + reports/submissions; BACKLOG-3505: + reports; BACKLOG-4007: - people (now a card on settings, /dashboard/people redirects in next.config.mjs); BACKLOG-4007 PR-3: + setup
   });
 
   it('finds route handlers, keyed POSIX on any OS (R8)', () => {
@@ -1020,7 +1122,7 @@ describe('discovery can see what it claims to see', () => {
     ).toEqual(['app/api/download/route.ts', 'app/auth/callback/route.tsx']);
     const handlers = discoverRouteHandlers();
     expect(handlers).toContain('app/setup/consent/callback/route.ts');
-    expect(handlers.length).toBe(28); // BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session
+    expect(handlers.length).toBe(30); // BACKLOG-3851 PR-2c: + email/seat-limit-reached; BACKLOG-4027: + email/last-admin-kept; BACKLOG-3863: + billing/plan-summary; BACKLOG-3676: + billing/agent-prices, payments/subscription-session; BACKLOG-3962: + cron/domain-recheck, cron/domain-capture-switch
   });
 
   it('recognises both directive quote styles, every export form, and function-level directives', () => {
@@ -1040,21 +1142,28 @@ describe('discovery can see what it claims to see', () => {
     const actions = discoverServerActions();
     expect(actions).toContain('lib/actions/bulkUpdateRole.ts#bulkUpdateRole');
     expect(actions).toContain('lib/actions/scim.ts#listScimSyncLogs');
-    expect(actions.length).toBe(58); // BACKLOG-3854: + addSeats, openBrokerageBillingPortal; BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
+    expect(actions.length).toBe(67); // BACKLOG-3962 PR4a: + setBlockSoloSignups, desktopJitJoin; BACKLOG-3962 join now: + joinNowSelf; BACKLOG-3962 PR3a: + startCapture, cancelCapture, optOutSelf; BACKLOG-3962: + createDomainClaim, checkDomainClaim, withdrawDomainClaim; BACKLOG-3854: + addSeats, openBrokerageBillingPortal; BACKLOG-4019: + setAutoRenew; BACKLOG-4007 People v2: + invitePerson, getMyPhone, setMyPhone, - setOrgBillingLogin; BACKLOG-4007 PR-4: + 4 People actions; BACKLOG-4007 PR-3: + completeBillingSetup, askAboutPrice; BACKLOG-3991: + setMemberName, syncDesktopIdpNames; BACKLOG-3851: + setMemberLicense; BACKLOG-3607: + removeChecklistAtReview, restoreChecklistAtReview; BACKLOG-3847: + 4 Agent plan actions; BACKLOG-3848: + endAgentPlanNow, startCardUpdate, confirmCardUpdate, updateBillingContact
   });
 });
 
-describe('reports index with the shipped registry (BACKLOG-3505)', () => {
-  const page = REPORTS_PAGES['app/dashboard/reports/page.tsx'];
-  it.each([
-    ...Object.entries(PERSONAS),
-    ['brokerage broker', [brokerageMembership('broker')]],
-    ['brokerage admin', ADMIN],
-    ['brokerage it_admin', [brokerageMembership('it_admin')]],
-  ] as [string, readonly Row[]][])('refuses the %s and writes nothing', async (_n, rows) => {
-    given(rows);
-    expect(await run(page.invoke)).toEqual(page.refused);
+describe('reports pages with the shipped registry (BACKLOG-3505, BACKLOG-3513 PR-3a)', () => {
+  const cases = Object.keys(REPORTS_PAGES).flatMap((file) => [
+    ...Object.entries(REPORTS_REFUSED).map(([n, rows]) => [file, n, rows, 'refused'] as const),
+    ...Object.entries(REPORTS_ADMITTED).map(([n, rows]) => [file, n, rows, 'admitted'] as const),
+  ]);
+  it.each(cases)('%s: the %s is %s, writes nothing, and never reads transaction_submissions', async (file, _n, rows, verdict) => {
+    given(rows as readonly Row[]);
+    const from = jest.spyOn(mockEmulator, 'from');
+    const page = REPORTS_PAGES[file];
+    const rpcBefore = mockRpc.mock.calls.length;
+    const outcome = await run(page.invoke);
+    if (verdict === 'refused') expect(outcome).toEqual(page.refused);
+    else expect(outcome).toEqual(page.admitted ?? { element: 'div' });
     expect(mockEmulator.state.writes).toEqual([]);
+    expect(from.mock.calls.map((c) => c[0])).not.toContain('transaction_submissions');
+    // BACKLOG-3513 PR-3b: no shared-report write either.
+    expect(mockRpc.mock.calls.slice(rpcBefore).map((c) => c[0]).filter((n) => REPORT_WRITE_RPCS.includes(n))).toEqual([]);
+    from.mockRestore();
   });
 });
 

@@ -15,26 +15,50 @@ describe("tiles", () => {
       found: 18,
       positives: 20,
       missed: 2,
-      recallExcludingLegacy: { k: 18, n: 20, interval: { rate: 90, low: 69.9, high: 97.2 } },
+      recallExcludingLegacy: { k: 17, n: 19, interval: { rate: 89.5, low: 68.6, high: 97.1 } },
+      recallWithCleanupYesExcludingLegacy: { k: 18, n: 20, interval: { rate: 90, low: 69.9, high: 97.2 } },
       knownWrong: 1,
       precisionAfterCleanup: { k: 7, n: 10, interval: { rate: 70, low: 39.7, high: 89.2 } },
     };
     expect(learnTiles(s)).toEqual({ found: 18, of: 20, wrongFinds: 3, missed: 2, empty: false });
   });
 
-  it("found and missed use the base without pre-cutoff manual deals", () => {
+  it("found and missed use the base counting Yes answers, without pre-cutoff manual deals", () => {
     const s = {
       ...base,
       found: 5,
       positives: 8,
       missed: 3,
-      recallExcludingLegacy: { k: 4, n: 5, interval: { rate: 80, low: 37.6, high: 96.4 } },
+      recallWithCleanupYes: { k: 7, n: 10, interval: { rate: 70, low: 39.7, high: 89.2 } },
+      recallExcludingLegacy: { k: 3, n: 4, interval: { rate: 75, low: 30.1, high: 95.4 } },
+      recallWithCleanupYesExcludingLegacy: { k: 4, n: 5, interval: { rate: 80, low: 37.6, high: 96.4 } },
     };
     expect(learnTiles(s)).toMatchObject({ found: 4, of: 5, missed: 1, empty: false });
   });
 
+  it("missed is unchanged by the Yes answers: the hand-entered deals Keepr did not find (BACKLOG-4219)", () => {
+    // Producer arithmetic: 3 of 5 hand-entered found, 2 Yes on new streets -> 5 of 7.
+    const s = {
+      ...base,
+      recallExcludingLegacy: { k: 3, n: 5, interval: { rate: 60, low: 23.1, high: 88.2 } },
+      recallWithCleanupYesExcludingLegacy: { k: 5, n: 7, interval: { rate: 71.4, low: 35.9, high: 91.8 } },
+    };
+    const t = learnTiles(s);
+    expect([t.found, t.of, t.missed]).toEqual([5, 7, 2]);
+    expect(t.missed).toBe(s.recallExcludingLegacy.n - s.recallExcludingLegacy.k);
+  });
+
   it("empty when every manual deal predates the cutoff", () => {
     expect(learnTiles(base)).toMatchObject({ found: 0, of: 0, missed: 0, empty: true });
+  });
+
+  it("B2 empty on the strict count: Yes answers alone (3 of 3) are not a score (BACKLOG-4219)", () => {
+    const s = {
+      ...base,
+      recallExcludingLegacy: { k: 0, n: 0, interval: null },
+      recallWithCleanupYesExcludingLegacy: { k: 3, n: 3, interval: { rate: 100, low: 43.9, high: 100 } },
+    };
+    expect(learnTiles(s)).toMatchObject({ found: 3, of: 3, missed: 0, empty: true });
   });
 });
 
@@ -67,6 +91,12 @@ describe("detail lines", () => {
       "Buyer or seller: 1 right, 0 wrong, 1 not predicted; 2 skipped (deal type not buyer or seller)",
     );
     expect(lines).toContain("Outcome: 3 deals could be scored; 1 skipped (status not closed, active or pending)");
+  });
+
+  it("names the Yes answers not counted again (BACKLOG-4219)", () => {
+    expect(learnDetailLines({ ...base, cleanupYesNotCounted: 2 })).toContain(
+      "Yes answers not counted again (same street as a deal in Keepr): 2",
+    );
   });
 });
 

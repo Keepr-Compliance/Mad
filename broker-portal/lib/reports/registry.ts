@@ -11,9 +11,9 @@
  * opens it to every active brokerage agent of the organization as well,
  * limited to the agent's own rows (scope 'own').
  *
- * PR-1 registers NO report: the section ships invisible. The first report is
- * registered by a later PR, together with the database policy that bounds its
- * rows.
+ * The first report, Submissions (BACKLOG-3513 PR-3a), reads its rows through
+ * public.broker_report_submissions_rows (migration 20261112200000), a SECURITY
+ * INVOKER function: transaction_submissions RLS bounds every row it returns.
  *
  * Report authors (BACKLOG-3511): bound every report source's rows with the
  * helper public.org_report_scope(org) from migration 20261108190000 and these
@@ -40,22 +40,6 @@ export interface ReportAccess {
   agentScoped: boolean;
 }
 
-/**
- * What a saved view of a report may hold (BACKLOG-3514). The adapter strips
- * every stored key that is not listed here BEFORE the report queries
- * (lib/reports/saved-views/degrade.ts), so renaming or removing a filter,
- * sort or metric column never turns an old saved view into a failed query.
- * Absent: the report offers no saved views.
- */
-export interface ReportSavedViewSpec {
-  /** Filter keys a saved view may restore. */
-  filterKeys: readonly string[];
-  /** Columns a saved view may sort by. */
-  sortKeys: readonly string[];
-  /** Columns a pinned card may measure. Empty: no pinned cards. */
-  metricColumns: readonly string[];
-}
-
 export interface ReportDefinition {
   /** URL segment: /dashboard/reports/<slug>. Unique. */
   slug: string;
@@ -64,8 +48,17 @@ export interface ReportDefinition {
   /** Where the rows come from (table, view or RPC), named for review. */
   source: string;
   access: ReportAccess;
-  /** Saved views (BACKLOG-3514). Absent: no Views panel. */
-  savedView?: ReportSavedViewSpec;
 }
 
-export const REPORT_REGISTRY: readonly ReportDefinition[] = [];
+/** The Submissions report's sorts: the row function's sort whitelist. */
+export const SUBMISSIONS_SORT_KEYS = ['newest', 'oldest', 'status', 'price_desc', 'price_asc'] as const;
+
+export const SUBMISSIONS_REPORT: ReportDefinition = {
+  slug: 'submissions',
+  title: 'Submissions',
+  description: 'Every deal sent for review, one row per deal, with filters for status, agent and date.',
+  source: 'rpc broker_report_submissions_rows (migration 20261112200000)',
+  access: { roles: ['broker', 'admin', 'it_admin'], agentScoped: true },
+};
+
+export const REPORT_REGISTRY: readonly ReportDefinition[] = [SUBMISSIONS_REPORT];

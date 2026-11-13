@@ -98,9 +98,10 @@ describe('W2 the picker is fed by report_share_candidates only', () => {
     mount([OWN, VIEWER]);
     await openViews('Mine');
     fireEvent.click(within(panel()).getByRole('button', { name: 'Share Mine' }));
-    const dialog = await screen.findByRole('dialog', { name: 'Share Mine' });
-    await waitFor(() => expect(within(dialog).queryByText('Loading people…')).toBeNull());
-    fireEvent.click(within(dialog).getByRole('button', { name: /^Person/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Share “Mine”' });
+    const field = within(dialog).getByRole('combobox', { name: 'Add people or roles' }) as HTMLInputElement;
+    await waitFor(() => expect(field.disabled).toBe(false));
+    fireEvent.keyDown(field, { key: 'ArrowDown' });
     const options = screen.getAllByRole('option').map((o) => o.textContent);
     expect(options).toEqual(['Avery Analyst', 'Blake Builder']);
     expect(options).not.toContain(NOT_A_CANDIDATE);

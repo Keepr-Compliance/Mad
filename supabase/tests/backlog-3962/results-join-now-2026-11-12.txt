@@ -1,0 +1,32 @@
+# BACKLOG-3962 join now (20261112114500) on keepr-test, 2026-11-12
+# before apply:
+join: P3962_RESULT pass 16 fail 0 (base re-run after J6d added)
+MUTATION APPLIED J_no_owner_check: -  IF NOT FOUND OR p_user IS NULL OR v_row.user_id IS DISTINCT FROM p_user THEN | +  IF NOT FOUND THEN
+P3962_RESULT {"fail": 2, "mode": "J_no_owner_check", "pass": 13, "reds": {"J2b_null_user_not_found": "{\"error\": \"not_scheduled\", \"status\": \"switched\", \"success\": false}", "J2_other_users_switch_not_found": "{\"email\": \"j2@j-3962j.test\", \"payer\": false, \"outcome\": \"switched\", \"success\": true, \"user_id\": \"<id>\", \"member_id\": \"<id>\", \"switch_id\": \"<id>\", \"joined_early\": true, \"seat_fallback\": false, \"brokerage_n"}}
+MUTATION APPLIED J_no_restore: -  IF (v_reply ->> 'success') IS DISTINCT FROM 'true' THEN | +  IF false THEN
+P3962_RESULT {"fail": 3, "mode": "J_no_restore", "pass": 12, "reds": {"J4a_billing_not_ready_unchanged": "{\"error\": \"billing_not_ready\", \"success\": false} | scheduled:-:10:billing_not_ready", "J3a_stale_dns_deferred_unchanged": "{\"error\": \"dns_not_fresh\", \"success\": false} | scheduled:-:10:dns_not_fresh", "J4b_billing_setup_incomplete_unchanged": "{\"error\": \"billing_setup_incomplete\", \"success\": false} | scheduled:-:10:billing_setup_incomplete"}}
+MUTATION APPLIED J_restore_dns_only: -  IF (v_reply ->> 'success') IS DISTINCT FROM 'true' THEN | +  IF v_reply ->> 'error' = 'dns_not_fresh' THEN
+P3962_RESULT {"fail": 2, "mode": "J_restore_dns_only", "pass": 13, "reds": {"J4a_billing_not_ready_unchanged": "{\"error\": \"billing_not_ready\", \"success\": false} | scheduled:-:10:billing_not_ready", "J4b_billing_setup_incomplete_unchanged": "{\"error\": \"billing_setup_incomplete\", \"success\": false} | scheduled:-:10:billing_setup_incomplete"}}
+MUTATION APPLIED J_skip_inner_switch: -  v_reply := public._domain_capture_switch(v_row.id); | +  INSERT INTO public.organization_members (organization_id, user_id, role, license_status, joined_at, provisioned_by) | +    VALUES (v_row.organization_id, v_row.user_id, 'agent', 'active', now(), 'domain_capture'); | +  UPDATE public.domain_capture_switches SET status = 'switched', switched_at = now(), ended_at = now() WHERE id = v_row.id;
+P3962_RESULT {"fail": 5, "mode": "J_skip_inner_switch", "pass": 10, "reds": {"J3c_opt_out_still_succeeds": "{\"error\": \"not_scheduled\", \"status\": \"switched\", \"success\": false}", "J4a_billing_not_ready_unchanged": "ERR 42883 function public._billing_enqueue_agent_cancel_on_join(uuid, uuid, uuid) does not exist | scheduled:-:10:-", "J3a_stale_dns_deferred_unchanged": "{\"outcome\": \"switched\", \"success\": true, \"joined_early\": true} | switched:-:10:-", "J4b_billing_setup_incomplete_unchanged": "{\"outcome\": \"switched\", \"success\": true, \"joined_early\": true} | switched:-:10:-", "J5_ineligible_cancelled_switch_at_original": "{\"outcome\": \"switched\", \"success\": true, \"joined_early\": true} | switched:-:10:-"}}
+MUTATION APPLIED J_switch_at_not_kept: -     SET switch_at = v_row.switch_at, | -         joined_early_at = CASE WHEN v_reply ->> 'outcome' = 'switched' THEN now() ELSE joined_early_at END, | +     SET joined_early_at = CASE WHEN v_reply ->> 'outcome' = 'switched' THEN now() ELSE joined_early_at END,
+P3962_RESULT {"fail": 2, "mode": "J_switch_at_not_kept", "pass": 13, "reds": {"J1b_joined_early_recorded_switch_at_kept": "switched:-:0:-", "J5_ineligible_cancelled_switch_at_original": "{\"detail\": \"email_domain\", \"reason\": \"not_eligible\", \"outcome\": \"cancelled\", \"success\": true} | cancelled:not_eligible:0:-"}}
+MUTATION APPLIED J_no_joined_early_at: -         joined_early_at = CASE WHEN v_reply ->> 'outcome' = 'switched' THEN now() ELSE joined_early_at END,
+P3962_RESULT {"fail": 1, "mode": "J_no_joined_early_at", "pass": 14, "reds": {"J1b_joined_early_recorded_switch_at_kept": "switched:-:10:-"}}
+MUTATION APPLIED J_queued_not_marked: -  IF v_row.notice_delivered IS NULL THEN | +  IF false THEN
+P3962_RESULT {"fail": 1, "mode": "J_queued_not_marked", "pass": 14, "reds": {"J7_queued_notice_joins_not_cancelled": "{\"reason\": \"notice_undelivered\", \"outcome\": \"cancelled\", \"success\": true} | cancelled:notice_undelivered:10:-"}}
+MUTATION APPLIED J_no_role_check: -    RAISE EXCEPTION 'Not allowed' USING ERRCODE = '42501'; | +    NULL;
+P3962_RESULT {"fail": 0, "mode": "J_no_role_check", "pass": 15, "reds": {}}
+MUTATION APPLIED J_grant_authenticated: +GRANT EXECUTE ON FUNCTION public._domain_capture_join_now(uuid, uuid) TO authenticated;
+BACKLOG-3962 join now: authenticated can execute public._domain_capture_join_now(uuid, uuid)
+MUTATION APPLIED J_pin_wrong_text: -                    AND prosrc LIKE '%now() < v_row.switch_at%') THEN | +                    AND prosrc LIKE '%now() <= v_row.switch_at%') THEN
+BACKLOG-3962 join now: _domain_capture_switch has no not-due check
+P3962_RESULT {"mode": "join_rollback", "column": false, "function": false}
+J_no_role_check (after J6d added): fail 1 reds J6d_role_check_inside
+# after apply (md5 d444b378a15c3cb9fb8393782da55936, ledger row 20261112114500):
+join_live: pass 16 fail 0
+join --applied: pass 16 fail 0; J_no_restore --applied: fail 3
+# fix-up round (applied mode, KEEPR_3962_APPLIED=1 bash run.sh J_due_after_defer):
+J_no_restore note: it drops only the last_defer_reason restore; the success-path UPDATE still restores switch_at, so it does not leave the row due.
+MUTATION APPLIED J_due_after_defer: -       SET switch_at = v_row.switch_at, last_defer_reason = v_row.last_defer_reason, updated_at = now() | +       SET last_defer_reason = v_row.last_defer_reason, updated_at = now()
+P3962_RESULT {"fail": 5, "mode": "J_due_after_defer", "pass": 11, "reds": J3a_stale_dns_deferred_unchanged, J3b_not_due_for_hourly_job, J3c_opt_out_still_succeeds, J4a_billing_not_ready_unchanged, J4b_billing_setup_incomplete_unchanged}

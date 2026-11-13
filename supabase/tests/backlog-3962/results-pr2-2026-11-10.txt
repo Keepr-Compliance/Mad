@@ -1,0 +1,10 @@
+BACKLOG-3962 PR2 SQL controls, keepr-test, 2026-11-10 (NULL guard added; PR2 re-applied to keepr-test after rollback-3962-pr2.sql, body md5 e67abd9b87a4017235601d59e45d831c = the local file body; grants anon false, authenticated false, service_role true)
+pr2_live                   pass 13 fail 0
+pr2                        pass 13 fail 0
+P2_no_null_guard           pass 12 fail 1  reds P12_lapsed_null_counted_miss_is_due
+P2_cutoff_any_status       pass 10 fail 3  reds P01_verified_due_with_its_org, P04_verified_31d_counted_miss_still_due, P12_lapsed_null_counted_miss_is_due
+P2_cutoff_on_last_checked  pass 10 fail 3  reds P03_lapsed_30d1h_not_due, P03b_not_due_row_not_stamped, P09_manual_begin_on_old_lapsed_ok
+P2_no_cutoff               pass 10 fail 3  reds P03_lapsed_30d1h_not_due, P03b_not_due_row_not_stamped, P09_manual_begin_on_old_lapsed_ok
+P2_pin_wrong_md5           raised: _domain_claims_due_for_recheck md5 dc93015cbbcc7f6a77bcd8325f3a02d9 is not the PR1 body
+PR1 base (KEEPR_3962_APPLIED=1) pass 64 fail 0
+P12: a lapsed row with a NULL last_miss_counted_at is due (no function writes that shape; the clause keeps PR1's behaviour for it)

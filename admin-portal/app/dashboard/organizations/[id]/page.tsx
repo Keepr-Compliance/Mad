@@ -10,6 +10,8 @@ import { BrokerageBillingCard } from './components/BrokerageBillingCard';
 import { OrgInviteButton } from './components/OrgInviteButton';
 import { OrgPeopleCard } from './components/OrgPeopleCard';
 import { OrgActivityCard } from './components/OrgActivityCard';
+import { DomainClaimsCard } from './components/DomainClaimsCard';
+import type { AdminDomainClaim } from '@/lib/domainClaimRules';
 import type { ActivityRow } from '@/lib/activity/describeActivity';
 import { shouldShowBillingCard, type OrgBilling } from '@/lib/billing/dealRules';
 import { formatDate } from '@/lib/format';
@@ -67,6 +69,13 @@ export default async function OrganizationDetailPage({
     required_permission: 'users.edit',
   });
 
+  // BACKLOG-3962 PR2: Revoke on the Domains card needs organizations.edit (the action and
+  // admin_revoke_domain_claim check it again).
+  const { data: canEditOrgs } = await supabase.rpc('has_permission', {
+    check_user_id: adminUser.id,
+    required_permission: 'organizations.edit',
+  });
+
   // BACKLOG-4170: member Suspend / Unsuspend needs the key admin_suspend_user checks.
   const { data: canSuspend } = await supabase.rpc('has_permission', {
     check_user_id: adminUser.id,
@@ -87,7 +96,7 @@ export default async function OrganizationDetailPage({
   }
 
   // Fetch org details, members, pending invitations and activity (BACKLOG-4036) in parallel
-  const [orgResult, membersResult, pendingResult, activityResult] = await Promise.all([
+  const [orgResult, membersResult, pendingResult, activityResult, domainResult] = await Promise.all([
     supabase
       .from('organizations')
       .select('id, name, slug, max_seats, created_at, organization_plans(plan_id, plans(id, name, tier))')
@@ -107,7 +116,13 @@ export default async function OrganizationDetailPage({
       .not('invited_email', 'is', null)
       .order('invited_at', { ascending: false }),
     supabase.rpc('admin_get_org_activity', { p_org: id }),
+    supabase.rpc('admin_list_domain_claims', { p_org: id }),
   ]);
+  // BACKLOG-3962 PR2: admin_list_domain_claims returns { success, claims } or { success: false, error }.
+  const domainReply = (domainResult.data ?? null) as { success?: boolean; claims?: unknown } | null;
+  const domainFailed = Boolean(domainResult.error) || domainReply?.success !== true || !Array.isArray(domainReply?.claims);
+  if (domainFailed) console.error('admin_list_domain_claims failed:', domainResult.error?.message ?? 'not a claims list');
+  const domainClaims: AdminDomainClaim[] = domainFailed ? [] : (domainReply!.claims as AdminDomainClaim[]);
   const activityFailed = Boolean(activityResult.error) || !Array.isArray(activityResult.data);
   if (activityFailed) console.error('admin_get_org_activity failed:', activityResult.error?.message ?? 'no rows array');
   const activity: ActivityRow[] = Array.isArray(activityResult.data) ? (activityResult.data as ActivityRow[]) : [];
@@ -224,6 +239,9 @@ export default async function OrganizationDetailPage({
 
       {/* Brokerage people (BACKLOG-4007 PR-4): next to the Billing card, same gate */}
       {shouldShowBillingCard(billing) && <OrgPeopleCard organizationId={org.id} />}
+
+      {/* Domains (BACKLOG-3962): every organization, organizations.view; Revoke needs organizations.edit */}
+      <DomainClaimsCard organizationId={org.id} claims={domainClaims} canRevoke={!!canEditOrgs} failed={domainFailed} />
 
       {/* Activity (BACKLOG-4036): every organization, organizations.view */}
       <OrgActivityCard rows={activity} failed={activityFailed} />

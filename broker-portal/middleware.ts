@@ -26,7 +26,7 @@ import { LICENCE_READ_FAILED, readOwnLicenceSuspended } from '@/lib/auth/suspens
 import { billingEnabled } from '@/lib/billing/flag';
 import { ORG_SUSPENSION_READ_FAILED, readOrgBillingSuspended } from '@/lib/auth/orgSuspension';
 import { readBillingContactLogin } from '@/lib/auth/billingContact';
-import { safeNextPath, setNextPathCookie } from '@/lib/auth/safeNextPath';
+import { isSafeNextPath, safeNextPath, setNextPathCookie } from '@/lib/auth/safeNextPath';
 
 export async function middleware(request: NextRequest) {
   let response = NextResponse.next({
@@ -125,12 +125,16 @@ export async function middleware(request: NextRequest) {
 
     // Redirect unauthenticated users from protected routes
     if (isProtectedRoute && !user) {
+      // BACKLOG-3962: the query survives sign-in (an email's ?capture=join).
+      // A path + query that safeNextPath() refuses falls back to the path alone.
+      const withQuery = pathname + request.nextUrl.search;
+      const nextPath = isSafeNextPath(withQuery) ? withQuery : pathname;
       const loginUrl = new URL('/login', request.url);
-      loginUrl.searchParams.set('redirectTo', pathname);
+      loginUrl.searchParams.set('redirectTo', nextPath);
       const bounce = NextResponse.redirect(loginUrl);
       // BACKLOG-3863 R7: /auth/callback reads this to land on the same page
       // after OAuth. Only a path safeNextPath() accepts is stored.
-      setNextPathCookie(bounce, pathname);
+      setNextPathCookie(bounce, nextPath);
       return bounce;
     }
 

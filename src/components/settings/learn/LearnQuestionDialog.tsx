@@ -61,7 +61,7 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
         <h2 className="m-0 text-xl font-semibold leading-7">Is this one of your deals?</h2>
         <div className="flex flex-col items-center gap-1">
           <span className="text-lg font-semibold leading-[26px]">{displayAddress(current.question.address)}</span>
-          <span className="text-sm text-gray-500">Not in Keepr yet · {n === 1 ? "1 email" : `${n} emails`}</span>
+          <span className="text-sm text-gray-500">Not matched to a deal in Keepr · {n === 1 ? "1 email" : `${n} emails`}</span>
         </div>
         <div className="grid grid-cols-2 gap-3">
           <button type="button" className={NO_BUTTON} disabled={busy} onClick={() => void session.answerDeal("no")}>

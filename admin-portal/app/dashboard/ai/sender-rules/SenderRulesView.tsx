@@ -422,7 +422,7 @@ function Loaded({
                   {v.bundled ? ' · Default (bundled)' : ''} · {formatDate(v.published_at)}
                 </span>
                 <span className="flex gap-2">
-                  <Button size="sm" variant="ghost" onClick={() => openView(v.version)}>
+                  <Button size="sm" variant="secondary" onClick={() => openView(v.version)}>
                     View
                   </Button>
                   {canEdit && (

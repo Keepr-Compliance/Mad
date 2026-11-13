@@ -33,7 +33,7 @@ import {
   type StringListPath,
 } from '@/lib/sender-rules/edit';
 import { TIPS, type TipKey } from '@/lib/sender-rules/tips';
-import { InfoTip } from './InfoTip';
+import { InfoTip } from '@/components/shared/InfoTip';
 import { ListEditor } from './ListEditor';
 
 const BULK_KEY_LABELS: Record<(typeof BULK_KEYS)[number], string> = {
@@ -118,7 +118,7 @@ export function RulesCard({
                 : `Editing from everyone's rules (v${releasedVersion}).`}
           </CardDescription>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => setShowJson((v) => !v)}>
+        <Button variant="secondary" size="sm" onClick={() => setShowJson((v) => !v)}>
           {showJson ? 'Hide JSON' : 'View JSON'}
         </Button>
       </CardHeader>

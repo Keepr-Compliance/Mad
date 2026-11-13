@@ -1,0 +1,6 @@
+{
+  "status": "PENDING-TRANSCRIPTION",
+  "note": "Replace with ONE line printed by scripts/qa/win-device-profile-probe.ps1 on a Windows client PC, pasted verbatim into `line`, and set status to TRANSCRIBED with the date in `source`. Until then the fixture-driven tests in deviceProfileCollector-4185.test.ts are todo.",
+  "source": null,
+  "line": null
+}
