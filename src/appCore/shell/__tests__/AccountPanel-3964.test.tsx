@@ -134,6 +134,14 @@ function zOf(el: HTMLElement): number {
 
 const help = () => screen.getByRole("button", { name: "Open support dialog" });
 
+/**
+ * BACKLOG-4174: the rows render once the plan and strict reads have settled,
+ * a microtask after the panel opens. Wait for the first row before reading them.
+ */
+async function rowsSettled(): Promise<void> {
+  await screen.findByTestId("nav-settings");
+}
+
 /** Click the initials the way a user does: focus lands on them first. */
 function openFromInitials(): HTMLElement {
   const btn = screen.getByTestId("nav-profile");
@@ -311,10 +319,11 @@ describe("C5 rows = visibleSettingsTabs()", () => {
       .getAllByRole("button")
       .map((b) => b.getAttribute("data-testid") ?? "");
 
-  it.each([true, false])("one row per visible tab, in order, Account first (AI add-on: %s)", (hasAI) => {
+  it.each([true, false])("one row per visible tab, in order, Account first (AI add-on: %s)", async (hasAI) => {
     mockHasAI = hasAI;
     render(<Harness />);
     openFromInitials();
+    await rowsSettled();
     const expected = visibleSettingsTabs(hasAI);
     const nav = screen.getByRole("navigation", { name: "Settings" });
     const rows = within(nav).getAllByRole("button");
@@ -328,9 +337,10 @@ describe("C5 rows = visibleSettingsTabs()", () => {
     expect(rowIds().slice(1).every((id) => id.startsWith("account-panel-row-settings-"))).toBe(true);
   });
 
-  it("no row looks selected: the panel only opens with Settings closed (slice 3b)", () => {
+  it("no row looks selected: the panel only opens with Settings closed (slice 3b)", async () => {
     render(<Harness />);
     openFromInitials();
+    await rowsSettled();
     expect(screen.queryByTestId("settings-page")).toBeNull();
     const rows = within(screen.getByRole("navigation", { name: "Settings" })).getAllByRole("button");
     for (const row of rows) {
@@ -341,10 +351,11 @@ describe("C5 rows = visibleSettingsTabs()", () => {
     }
   });
 
-  it("C5b every Settings tab has an icon, and every row draws it", () => {
+  it("C5b every Settings tab has an icon, and every row draws it", async () => {
     for (const tab of SETTINGS_TABS) expect(SETTINGS_TAB_ICONS[tab.id]).toBeDefined();
     render(<Harness />);
     openFromInitials();
+    await rowsSettled();
     const nav = screen.getByRole("navigation", { name: "Settings" });
     for (const row of within(nav).getAllByRole("button")) expect(row.querySelector("svg")).not.toBeNull();
   });
@@ -436,18 +447,20 @@ describe("C7 focus", () => {
     expect(document.activeElement).toBe(secondInitials);
   });
 
-  it("a row puts focus on the Settings Back button", () => {
+  it("a row puts focus on the Settings Back button", async () => {
     render(<Harness />);
     openFromInitials();
+    await rowsSettled();
     fireEvent.click(screen.getByTestId("account-panel-row-settings-security"));
     expect(document.activeElement).toBe(screen.getByTestId("settings-close"));
   });
 });
 
 describe("C13 a row opens Settings at that tab", () => {
-  it("Security: the panel closes, the Settings layer shows with the Security target", () => {
+  it("Security: the panel closes, the Settings layer shows with the Security target", async () => {
     render(<Harness />);
     openFromInitials();
+    await rowsSettled();
     fireEvent.click(screen.getByTestId("account-panel-row-settings-security"));
     expect(screen.queryByTestId("account-panel")).toBeNull();
     expect(screen.getByTestId("settings-layer")).toBeInTheDocument();
@@ -455,9 +468,10 @@ describe("C13 a row opens Settings at that tab", () => {
     expect(modal.modalState.showProfile).toBe(false);
   });
 
-  it("Account (nav-settings) opens Settings at the Account tab", () => {
+  it("Account (nav-settings) opens Settings at the Account tab", async () => {
     render(<Harness />);
     openFromInitials();
+    await rowsSettled();
     fireEvent.click(screen.getByTestId("nav-settings"));
     expect(screen.getByTestId("settings-target")).toHaveTextContent("settings-account");
   });
@@ -475,9 +489,10 @@ describe("C14 Sign out", () => {
     expect(screen.queryByRole("button", { name: /confirm/i })).toBeNull();
   });
 
-  it("is pinned below the scrolling rows, separated by a divider, and never scrolls away (BACKLOG-3964 founder note)", () => {
+  it("is pinned below the scrolling rows, separated by a divider, and never scrolls away (BACKLOG-3964 founder note)", async () => {
     render(<Harness />);
     openFromInitials();
+    await rowsSettled();
     const panel = screen.getByTestId("account-panel");
     const scroll = screen.getByTestId("account-panel-scroll");
     const footer = screen.getByTestId("account-panel-footer");
@@ -576,14 +591,31 @@ describe("P5 Help Keepr learn row (BACKLOG-4120)", () => {
     expect(labels.indexOf("Help Keepr learn")).toBe(labels.indexOf("Contacts") + 1);
   });
 
-  it.each(["blocked", "unknown", "pending"] as const)("hidden when the strict read is %s (AI allowed)", async (state) => {
+  it.each(["blocked", "unknown"] as const)("hidden when the strict read is %s (AI allowed)", async (state) => {
     mockHasAI = true;
     strict(state);
     render(<Harness />);
     openFromInitials();
     await waitFor(() => expect(window.api.featureGate.strictState).toHaveBeenCalledWith("autodetect_eval"));
+    await rowsSettled();
     const nav = screen.getByRole("navigation", { name: "Settings" });
     expect(within(nav).queryByTestId(accountPanelRowTestId("settings-learn"))).toBeNull();
     expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toContain("AI");
+  });
+
+  // BACKLOG-4174: while the strict read is pending the rows are held, so no
+  // row (Learn included) shows and then vanishes. Was: AI rows shown, Learn hidden.
+  it("hidden when the strict read is pending (AI allowed): no rows are shown until it settles", async () => {
+    mockHasAI = true;
+    strict("pending");
+    render(<Harness />);
+    openFromInitials();
+    await waitFor(() => expect(window.api.featureGate.strictState).toHaveBeenCalledWith("autodetect_eval"));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    const nav = screen.getByRole("navigation", { name: "Settings" });
+    expect(within(nav).queryByTestId(accountPanelRowTestId("settings-learn"))).toBeNull();
+    expect(within(nav).queryAllByRole("button")).toHaveLength(0);
   });
 });
