@@ -19,7 +19,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { SavedViews, type SaveViewOptions } from '@keepr/ui';
+import { Dropdown, SavedViews, type SaveViewOptions } from '@keepr/ui';
 import type { ReportDefinition } from '@/lib/reports/registry';
 import { createBrokerViewsApi, type BrokerSavedView, type BrokerViewsApi } from '@/lib/reports/saved-views/broker-views-api';
 import {
@@ -127,21 +127,20 @@ export function ReportSavedViews({ orgId, report, current, onApply, onClear, api
         pinning={pinningAvailable ? { max: MAX_PINNED, onTogglePin: togglePin } : undefined}
         saveFields={
           pinningAvailable ? (
-            <label className="flex items-center gap-2 text-xs text-gray-600">
-              Card counts
-              <select
-                aria-label="Card column"
-                value={metricCol}
-                onChange={(e) => setMetricCol(e.target.value)}
-                className="rounded border border-gray-300 bg-white px-1 py-0.5 text-xs text-gray-900"
-              >
-                {spec.metricColumns.map((col) => (
-                  <option key={col} value={col}>
-                    {col}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="w-48">
+              {/*
+               * The kit Dropdown, not the kit Select (BACKLOG-3513 PR-3c): the Select's list renders in a
+               * portal outside this panel, and the panel closes when focus leaves it, so a Select here would
+               * close the save form on open. The Dropdown's list stays inside the panel.
+               */}
+              <Dropdown
+                label="Card counts"
+                options={spec.metricColumns.map((col) => ({ value: col, label: col }))}
+                value={metricCol ?? null}
+                onChange={setMetricCol}
+                searchable={false}
+              />
+            </div>
           ) : undefined
         }
       />
