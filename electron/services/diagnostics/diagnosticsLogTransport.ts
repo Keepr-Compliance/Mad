@@ -33,7 +33,7 @@
  */
 
 import crypto from "crypto";
-import { DIAG_BASE_FORMATS, DIAG_STRING_FIELDS, allowedAttributeKeys } from "./fields";
+import { DIAG_BASE_FORMATS, DIAG_MACHINE_STRING_FORMATS, DIAG_STRING_FIELDS, allowedAttributeKeys, nonStringFieldAllowed } from "./fields";
 import { getDiagnosticsDeviceId, isDiagnosticsSharingEnabled } from "../diagnosticsSharingPreference";
 import { stripDeviceRowId } from "../deviceProfile/deviceRowId";
 
@@ -63,9 +63,9 @@ function valueAllowed(key: string, value: unknown): boolean {
   const base = BASE_FORMATS[key];
   if (base) return typeof value === "string" && base.test(value);
   const field = key.startsWith("keepr.") ? key.slice("keepr.".length) : key;
-  const format = DIAG_STRING_FIELDS[field];
+  const format = DIAG_STRING_FIELDS[field] ?? DIAG_MACHINE_STRING_FORMATS[field];
   if (format) return typeof value === "string" && format.test(value);
-  return (typeof value === "number" && Number.isFinite(value)) || typeof value === "boolean";
+  return nonStringFieldAllowed(field, value);
 }
 
 function rebuildLog(raw: unknown, deviceId: string): SerializedLog | null {

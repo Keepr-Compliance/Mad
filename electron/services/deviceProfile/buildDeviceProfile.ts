@@ -1,13 +1,16 @@
 /**
  * BACKLOG-4185: one builder for every place the device profile goes.
  *
- * Two targets, each an EXACT key list:
+ * Three targets, each an EXACT key list:
  *   - "row": the devices row's `hardware_profile` jsonb (Supabase, which already
  *     holds the account). Full profile, counts to 2 significant figures.
  *     No message count: COUNT(messages) failed the PR B measurement gate,
  *     so data size is dbMB plus the smaller tables' counts.
  *   - "log": the machine class every diagnostics log may carry (PR C wires it):
  *     ramGB (bucketed), cpuCores, diskType, softwareRendering. Nothing else.
+ *   - "health": the env.health log (BACKLOG-4181 PR 3): pool state, counts
+ *     state and size BUCKETS, taken from the exact in-process values (never
+ *     from the row's 2-significant-figure output).
  *
  * Sentry error / crash EVENTS carry no profile at all: only the devices row id
  * (deviceRowId.ts). There is deliberately no "event" target.
@@ -16,6 +19,16 @@
  * is sent as absent. The builder picks keys one by one and never spreads its
  * input, so a field added to the collected shape cannot ride along.
  */
+
+import {
+  COUNT_BUCKETS,
+  DB_MB_BUCKETS,
+  MAX_CPU_CORES,
+  MAX_MAIL_ACCOUNTS,
+  RAM_BUCKETS_GB,
+  lowerBucket,
+  type DiagFieldKey,
+} from "../diagnostics/fields";
 
 export type DiskType = "ssd" | "hdd" | "unknown";
 export type DiskBus = "nvme" | "sata" | "usb" | "raid" | "other" | "unknown";
@@ -91,6 +104,16 @@ export const ROW_KEYS = [
 ] as const;
 
 export const LOG_KEYS = ["ramGB", "cpuCores", "diskType", "softwareRendering"] as const;
+/** Typed against the env.health route: a key the allowlist lacks does not compile. */
+export const HEALTH_KEYS = [
+  "poolState",
+  "countsState",
+  "contactsBucket",
+  "addressBookBucket",
+  "dbSizeBucketMB",
+  "mailAccounts",
+] as const satisfies readonly DiagFieldKey<"env.health">[];
+export type HealthFields = Partial<Record<(typeof HEALTH_KEYS)[number], string | number>>;
 
 export type DeviceProfileRow = Partial<Record<(typeof ROW_KEYS)[number], unknown>>;
 export type MachineClass = Partial<Record<(typeof LOG_KEYS)[number], unknown>>;
@@ -130,8 +153,6 @@ export const AV_PRODUCTS: readonly AvProduct[] = [
 ];
 const AV_MARKERS = ["notApplicable", "unavailable", "unknown"] as const;
 
-/** Lower bounds for the log-target RAM class. */
-const RAM_BUCKETS_GB = [2, 4, 8, 16, 32, 64, 128] as const;
 
 function strOk(v: unknown, re: RegExp): v is string {
   return typeof v === "string" && re.test(v);
@@ -198,16 +219,28 @@ function prune<T extends Record<string, unknown>>(o: T): T {
   return o;
 }
 
-type BuiltFor<T extends "row" | "log"> = T extends "row" ? DeviceProfileRow : MachineClass;
+type BuiltFor<T extends "row" | "log" | "health"> = T extends "row" ? DeviceProfileRow : T extends "health" ? HealthFields : MachineClass;
 
 // One declaration, no overloads: the write-atomicity guard keys units by name.
-export function buildDeviceProfile<T extends "row" | "log">(c: CollectedProfile, target: T): BuiltFor<T> {
-  return (target === "log" ? buildMachineClass(c) : buildRow(c)) as BuiltFor<T>;
+export function buildDeviceProfile<T extends "row" | "log" | "health">(c: CollectedProfile, target: T): BuiltFor<T> {
+  return (target === "log" ? buildMachineClass(c) : target === "health" ? buildHealth(c) : buildRow(c)) as BuiltFor<T>;
+}
+
+/** env.health: buckets from the EXACT in-process values (never from the row's 2-sig-fig output). */
+function buildHealth(c: CollectedProfile): HealthFields {
+  return prune({
+    poolState: c.poolReady === true ? "ready" : c.poolReady === false ? "down" : undefined,
+    countsState: oneOf(c.countsState, COUNTS_STATES) ? c.countsState : undefined,
+    contactsBucket: typeof c.contacts === "number" ? lowerBucket(c.contacts, COUNT_BUCKETS) : undefined,
+    addressBookBucket: typeof c.addressBook === "number" ? lowerBucket(c.addressBook, COUNT_BUCKETS) : undefined,
+    dbSizeBucketMB: typeof c.dbBytes === "number" ? lowerBucket(c.dbBytes / 1024 ** 2, DB_MB_BUCKETS) : undefined,
+    mailAccounts: intOk(c.mailAccounts, 1000) ? Math.min(c.mailAccounts, MAX_MAIL_ACCOUNTS) : undefined,
+  }) as HealthFields;
 }
 
 function buildMachineClass(c: CollectedProfile): MachineClass {
   const ramGB = ramGBOf(c.ramBytes);
-  const cpuCores = intOk(c.cpuCores, 1024) && c.cpuCores > 0 ? c.cpuCores : undefined;
+  const cpuCores = intOk(c.cpuCores, MAX_CPU_CORES) && c.cpuCores > 0 ? c.cpuCores : undefined;
   const diskType = oneOf(c.diskType, DISK_TYPES) ? c.diskType : undefined;
   const softwareRendering = typeof c.softwareRendering === "boolean" ? c.softwareRendering : undefined;
 
@@ -221,7 +254,7 @@ function buildMachineClass(c: CollectedProfile): MachineClass {
 
 function buildRow(c: CollectedProfile): DeviceProfileRow {
   const ramGB = ramGBOf(c.ramBytes);
-  const cpuCores = intOk(c.cpuCores, 1024) && c.cpuCores > 0 ? c.cpuCores : undefined;
+  const cpuCores = intOk(c.cpuCores, MAX_CPU_CORES) && c.cpuCores > 0 ? c.cpuCores : undefined;
   const diskType = oneOf(c.diskType, DISK_TYPES) ? c.diskType : undefined;
   const softwareRendering = typeof c.softwareRendering === "boolean" ? c.softwareRendering : undefined;
   const cpuModel = typeof c.cpuModel === "string" ? c.cpuModel.replace(/\s+/g, " ").trim() : undefined;
@@ -247,7 +280,7 @@ function buildRow(c: CollectedProfile): DeviceProfileRow {
     contacts: count(c.contacts),
     addressBook: count(c.addressBook),
     dbMB,
-    mailAccounts: intOk(c.mailAccounts, 1000) ? Math.min(c.mailAccounts, 10) : undefined,
+    mailAccounts: intOk(c.mailAccounts, 1000) ? Math.min(c.mailAccounts, MAX_MAIL_ACCOUNTS) : undefined,
     countsState: oneOf(c.countsState, COUNTS_STATES) ? c.countsState : undefined,
   });
 }

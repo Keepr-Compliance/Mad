@@ -111,6 +111,7 @@ import {
 import { nodeCaDenylistFailure } from "./nodeCaDenylist";
 import { isDiagnosticsSharingEnabled, loadDiagnosticsSharingPreference } from "../services/diagnosticsSharingPreference";
 import { attachDeviceRowId, loadDeviceRowIdAtBoot } from "../services/deviceProfile/deviceRowId";
+import { getMachineClass } from "../services/deviceProfile/deviceProfileService";
 import {
   composeDiagnosticsTransport,
   diagnosticsBeforeSendLog,
@@ -257,6 +258,9 @@ configureDiagnostics({
   },
   appVersion: app.getVersion(),
   os: `${process.platform}-${readRoot(() => os.release()) ?? "unknown"}`,
+  // BACKLOG-4185: machine class (ramGB, cpuCores, diskType, softwareRendering)
+  // on every diagnostics log once the profile run has collected it.
+  machineClass: getMachineClass,
 });
 
 // BACKLOG-4052: installNodeCaDenylist runs before Sentry exists and fails open;

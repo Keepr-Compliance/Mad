@@ -8,7 +8,8 @@
  */
 import fs from "fs";
 import path from "path";
-import { LOG_KEYS, ROW_KEYS, buildDeviceProfile, ramBucketGB, twoSigFigs, type CollectedProfile } from "../buildDeviceProfile";
+import { HEALTH_KEYS, LOG_KEYS, ROW_KEYS, buildDeviceProfile, ramBucketGB, twoSigFigs, type CollectedProfile } from "../buildDeviceProfile";
+import { COUNT_BUCKETS, DB_MB_BUCKETS } from "../../diagnostics/fields";
 
 const FULL_MAC: CollectedProfile = {
   platform: "darwin",
@@ -119,5 +120,48 @@ describe("rounding", () => {
   });
   it("ramBucketGB uses lower bounds with 10% slack (a 15.9 GB Mac is 16)", () => {
     expect([2, 4, 7, 8, 15, 16, 24, 36, 64, 192].map(ramBucketGB)).toEqual([2, 4, 4, 8, 16, 16, 16, 32, 64, 128]);
+  });
+});
+
+describe("BACKLOG-4181 PR 3: the env.health target", () => {
+  const health = (c: Partial<CollectedProfile>) => buildDeviceProfile({ platform: "darwin", ...c }, "health");
+
+  it("exactly HEALTH_KEYS, buckets only; no hardware, AV or exact size rides along", () => {
+    const dirty = { ...FULL_MAC, av: ["defender"], hostname: "jane-mbp" } as CollectedProfile;
+    const h = buildDeviceProfile(dirty, "health");
+    expect(Object.keys(h).sort()).toEqual([...HEALTH_KEYS].sort());
+    expect(h).toEqual({ poolState: "ready", countsState: "ok", contactsBucket: 1_000, addressBookBucket: 1, dbSizeBucketMB: 1_000, mailAccounts: 2 });
+    const s = JSON.stringify(h);
+    for (const bad of ["defender", "M1", "24G419", "2040", "512", "1500", "jane", "nvme", "apple"]) expect({ bad, hit: s.includes(bad) }).toEqual({ bad, hit: false });
+  });
+
+  it("poolReady false -> down; absent inputs are absent, not zero", () => {
+    expect(health({ poolReady: false })).toEqual({ poolState: "down" });
+    expect(health({})).toEqual({});
+  });
+
+  it("buckets come from the EXACT value: 999 -> 1, never 1000 via 2-sig-fig rounding", () => {
+    expect(twoSigFigs(999)).toBe(1000); // the trap the row target would set
+    expect(health({ contacts: 999 }).contactsBucket).toBe(1);
+    expect(health({ addressBook: 9_960 }).addressBookBucket).toBe(1_000);
+  });
+
+  const sweep = (bounds: readonly number[]) =>
+    bounds
+      .filter((b) => b > 0)
+      .flatMap((b) => {
+        const below = bounds[bounds.indexOf(b) - 1];
+        return [
+          [b - 1, below],
+          [b, b],
+          [b + 1, b],
+        ];
+      });
+  it.each(sweep(COUNT_BUCKETS))("contacts %d -> %d (addressBook the same)", (n, want) => {
+    expect(health({ contacts: n }).contactsBucket).toBe(want);
+    expect(health({ addressBook: n }).addressBookBucket).toBe(want);
+  });
+  it.each(sweep(DB_MB_BUCKETS))("db %d MB -> %d", (mb, want) => {
+    expect(health({ dbBytes: mb * 1024 ** 2 }).dbSizeBucketMB).toBe(want);
   });
 });

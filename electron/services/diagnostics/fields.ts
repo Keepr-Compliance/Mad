@@ -30,7 +30,54 @@ export const DIAG_STRING_FIELDS: Readonly<Record<string, RegExp>> = {
   syncPhase: DIAG_TOKEN,
   endedBy: DIAG_TOKEN,
   caller: DIAG_TOKEN,
+  poolState: /^(ready|down)$/,
+  countsState: /^(ok|skippedBusy|poolDown)$/,
 };
+
+/*
+ * BACKLOG-4181 PR 3 / BACKLOG-4185: the ONE declaration of every value table
+ * the device profile and the diagnostics logs share. buildDeviceProfile.ts
+ * imports these; it never declares its own copy.
+ */
+/** Lower bounds for contact / address-book counts on env.health. */
+export const COUNT_BUCKETS = [0, 1, 1_000, 10_000, 50_000, 100_000, 250_000, 500_000, 1_000_000] as const;
+/** Lower bounds for the database size (MB) on env.health. */
+export const DB_MB_BUCKETS = [0, 10, 100, 500, 1_000, 2_000, 5_000, 10_000, 20_000] as const;
+/** Lower bounds for the machine-class RAM (GB). */
+export const RAM_BUCKETS_GB = [2, 4, 8, 16, 32, 64, 128] as const;
+/** Highest logical core count accepted anywhere (row, machine class, log). */
+export const MAX_CPU_CORES = 1024;
+/** Connected mail accounts are reported capped at this value. */
+export const MAX_MAIL_ACCOUNTS = 10;
+
+const range = (from: number, to: number): number[] => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+
+/** Numeric fields that may take only these values, at capture AND at send. */
+export const DIAG_NUMBER_SETS: Readonly<Record<string, readonly number[]>> = {
+  ramGB: RAM_BUCKETS_GB,
+  cpuCores: range(1, MAX_CPU_CORES),
+  contactsBucket: COUNT_BUCKETS,
+  addressBookBucket: COUNT_BUCKETS,
+  dbSizeBucketMB: DB_MB_BUCKETS,
+  mailAccounts: range(0, MAX_MAIL_ACCOUNTS),
+};
+/** Fields that must be booleans (a number is not accepted). */
+export const DIAG_BOOLEAN_FIELDS: ReadonlySet<string> = new Set(["softwareRendering"]);
+
+/** Largest lower bound <= n. Exact values never leave the caller. */
+export function lowerBucket(n: number, bounds: readonly number[]): number | undefined {
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  let out: number | undefined;
+  for (const b of bounds) if (n >= b) out = b;
+  return out;
+}
+
+/**
+ * Machine class (BACKLOG-4185, founder be38b405): optional keys on EVERY
+ * diagnostics log once the profile is known. Not required base keys.
+ */
+export const DIAG_MACHINE_KEYS = ["keepr.ramGB", "keepr.cpuCores", "keepr.diskType", "keepr.softwareRendering"] as const;
+export const DIAG_MACHINE_STRING_FORMATS: Readonly<Record<string, RegExp>> = { diskType: /^(ssd|hdd|unknown)$/ };
 
 /** Base attributes every diagnostics log carries, with their formats. */
 export const DIAG_BASE_FORMATS = {
@@ -75,6 +122,7 @@ export const DIAG_ROUTE_KEYS = {
   ],
   "window.unresponsive": ["durationMs", "endedBy", "syncPhase"],
   "window.unresponsive.start": ["syncPhase"],
+  "env.health": ["poolState", "countsState", "contactsBucket", "addressBookBucket", "dbSizeBucketMB", "mailAccounts"],
 } as const satisfies Record<string, readonly string[]>;
 
 export type DiagOp = keyof typeof DIAG_ROUTE_KEYS;
@@ -82,6 +130,8 @@ export type DiagValue = string | number | boolean;
 type RouteKey<Op extends DiagOp> = (typeof DIAG_ROUTE_KEYS)[Op][number];
 /** The fields a route may pass (durationMs is the helper's own argument). */
 export type DiagFields<Op extends DiagOp> = Partial<Record<Exclude<RouteKey<Op>, "durationMs">, DiagValue | null | undefined>>;
+/** A route's field names (durationMs excluded), for exact key lists that must match the route. */
+export type DiagFieldKey<Op extends DiagOp> = Exclude<RouteKey<Op>, "durationMs">;
 
 export function isDiagOp(op: unknown): op is DiagOp {
   return typeof op === "string" && Object.prototype.hasOwnProperty.call(DIAG_ROUTE_KEYS, op) && DIAG_OP.test(op);
@@ -90,7 +140,7 @@ export function isDiagOp(op: unknown): op is DiagOp {
 /** The full attribute key set allowed for `op`, or null for an unknown op. */
 export function allowedAttributeKeys(op: string): Set<string> | null {
   if (!isDiagOp(op)) return null;
-  return new Set<string>([...DIAG_BASE_KEYS, ...DIAG_ROUTE_KEYS[op].map((k) => `keepr.${k}`)]);
+  return new Set<string>([...DIAG_BASE_KEYS, ...DIAG_MACHINE_KEYS, ...DIAG_ROUTE_KEYS[op].map((k) => `keepr.${k}`)]);
 }
 
 /**
@@ -111,4 +161,12 @@ export function joinWholeNames(
     kept += 1;
   }
   return { value: kept > 0 ? value : null, truncated: kept < names.length };
+}
+
+/** A non-string field value: number sets, boolean-only fields, else any finite number / boolean. */
+export function nonStringFieldAllowed(field: string, value: unknown): boolean {
+  if (DIAG_BOOLEAN_FIELDS.has(field)) return typeof value === "boolean";
+  const set = DIAG_NUMBER_SETS[field];
+  if (set) return typeof value === "number" && set.includes(value);
+  return (typeof value === "number" && Number.isFinite(value)) || typeof value === "boolean";
 }
