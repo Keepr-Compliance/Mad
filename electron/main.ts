@@ -702,7 +702,7 @@ async function handleDeepLinkCallback(url: string): Promise<void> {
 
       // TASK-1507: Step 5 - Register device
       log.info("[DeepLink] Registering device for user:", redactId(user.id));
-      const deviceResult = await registerDevice(user.id);
+      const deviceResult = await registerDevice(user.id, "login");
 
       if (!deviceResult.success && deviceResult.error === "device_limit_reached") {
         log.warn("[DeepLink] Device limit reached for user:", redactId(user.id));

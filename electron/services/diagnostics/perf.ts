@@ -13,6 +13,12 @@
  * never a message, never `logger.fmt`. At most `DIAG_RATE_CAP_PER_MINUTE`
  * lines per op per minute.
  *
+ * Numbers in `DIAG_NUMBER_SETS` must be one of the listed values, and
+ * `DIAG_BOOLEAN_FIELDS` must be booleans (BACKLOG-4181 PR 3). Once the device
+ * profile is known, the four machine-class keys (`DIAG_MACHINE_KEYS`) are added
+ * to every log from the `machineClass` getter, each re-validated here. This is
+ * the capture-time check; the transport filter repeats it at send time.
+ *
  * The device id is sent as an attribute on each log ONLY. Never put it on the
  * Sentry scope (setTag / setUser / setContext / setAttribute(s)): crash events
  * carry the user id, and that would join the two.
@@ -20,6 +26,10 @@
 
 import {
   DIAG_BASE_FORMATS,
+  DIAG_BOOLEAN_FIELDS,
+  DIAG_MACHINE_KEYS,
+  DIAG_MACHINE_STRING_FORMATS,
+  DIAG_NUMBER_SETS,
   DIAG_ROUTE_KEYS,
   DIAG_STRING_FIELDS,
   isDiagOp,
@@ -39,6 +49,15 @@ interface DiagnosticsConfig {
   appVersion: string;
   os: string;
   now?: () => number;
+  /** BACKLOG-4185 machine class getter (installSentry passes deviceProfileService.getMachineClass). */
+  machineClass?: () => Record<string, unknown> | null;
+}
+
+function capturedOk(field: string, value: unknown): value is number | boolean {
+  if (DIAG_BOOLEAN_FIELDS.has(field)) return typeof value === "boolean";
+  const set = DIAG_NUMBER_SETS[field];
+  if (set) return typeof value === "number" && set.includes(value);
+  return (typeof value === "number" && Number.isFinite(value)) || typeof value === "boolean";
 }
 
 let config: DiagnosticsConfig | null = null;
@@ -96,10 +115,21 @@ function send(level: DiagLevel, op: DiagOp, durationMs: number | null, fields: R
       if (format) {
         if (typeof value === "string" && format.test(value)) attributes[`keepr.${key}`] = value;
         else droppedCount += 1;
-      } else if ((typeof value === "number" && Number.isFinite(value)) || typeof value === "boolean") {
+      } else if (capturedOk(key, value)) {
         attributes[`keepr.${key}`] = value;
       } else {
         droppedCount += 1;
+      }
+    }
+    const mc = config.machineClass?.() ?? null;
+    if (mc) {
+      for (const full of DIAG_MACHINE_KEYS) {
+        const field = full.slice("keepr.".length);
+        const value = mc[field];
+        if (value === undefined || value === null) continue;
+        const fmt = DIAG_MACHINE_STRING_FORMATS[field];
+        if (fmt ? typeof value === "string" && fmt.test(value) : capturedOk(field, value)) attributes[full] = value as DiagValue;
+        else droppedCount += 1;
       }
     }
     const now = (config.now ?? Date.now)();

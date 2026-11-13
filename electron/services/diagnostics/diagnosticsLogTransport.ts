@@ -24,14 +24,18 @@
  *   - each kept log is rebuilt: body := op; attributes := only the keys
  *     allowed for that op, each value re-validated;
  *   - an item left with no logs is removed.
- * Non-log items (events, sessions, client reports) pass through untouched. An
+ * Non-log items (events, sessions, client reports) pass through untouched,
+ * except one field: while sharing is OFF an event item loses the devices row id
+ * tag (BACKLOG-4185), so an event queued while ON and replayed after OFF does
+ * not carry it. An
  * envelope left with no items answers 200 without a request, so the offline
  * wrapper does not queue it. The envelope handed in is never mutated.
  */
 
 import crypto from "crypto";
-import { DIAG_BASE_FORMATS, DIAG_STRING_FIELDS, allowedAttributeKeys } from "./fields";
+import { DIAG_BASE_FORMATS, DIAG_MACHINE_STRING_FORMATS, DIAG_STRING_FIELDS, allowedAttributeKeys, nonStringFieldAllowed } from "./fields";
 import { getDiagnosticsDeviceId, isDiagnosticsSharingEnabled } from "../diagnosticsSharingPreference";
+import { stripDeviceRowId } from "../deviceProfile/deviceRowId";
 
 type ItemHeader = { type?: unknown; item_count?: unknown; [key: string]: unknown };
 type EnvelopeItem = [ItemHeader, unknown];
@@ -59,9 +63,9 @@ function valueAllowed(key: string, value: unknown): boolean {
   const base = BASE_FORMATS[key];
   if (base) return typeof value === "string" && base.test(value);
   const field = key.startsWith("keepr.") ? key.slice("keepr.".length) : key;
-  const format = DIAG_STRING_FIELDS[field];
+  const format = DIAG_STRING_FIELDS[field] ?? DIAG_MACHINE_STRING_FORMATS[field];
   if (format) return typeof value === "string" && format.test(value);
-  return (typeof value === "number" && Number.isFinite(value)) || typeof value === "boolean";
+  return nonStringFieldAllowed(field, value);
 }
 
 function rebuildLog(raw: unknown, deviceId: string): SerializedLog | null {
@@ -117,7 +121,7 @@ export function filterEnvelopeLogs(envelope: Envelope): Envelope | null {
   for (const item of items) {
     const [header, payload] = item;
     if (header?.type !== "log") {
-      kept.push(item);
+      kept.push(header?.type === "event" && !enabled ? [header, stripDeviceRowId(payload)] : item);
       continue;
     }
     if (!enabled) continue;
