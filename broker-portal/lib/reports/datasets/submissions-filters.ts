@@ -10,7 +10,7 @@
 
 import { parseAgentParam } from '@/lib/submissions/listUrl';
 import { SUBMISSIONS_SORT_KEYS } from '@/lib/reports/registry';
-import type { FilterValue, ViewState } from '@/lib/reports/saved-views/degrade';
+import type { FilterValue, ViewState } from '@/lib/reports/datasets/view-state';
 
 export const SUBMISSIONS_REPORT_PATH = '/dashboard/reports/submissions';
 
@@ -173,11 +173,6 @@ export function viewStateToFilters(view: ViewState): SubmissionsReportFilters {
 /** The page of one shared report. */
 export function definitionReportPath(id: string): string {
   return `/dashboard/reports/d/${encodeURIComponent(id)}`;
-}
-
-/** The saved-views key of one shared report: 'd-' + id, lower-cased (migration 20261112200000 C8). */
-export function definitionViewsKey(id: string): string {
-  return `d-${id}`.toLowerCase();
 }
 
 /** A stored definition back to filters. Anything malformed falls back to the defaults. */

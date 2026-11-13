@@ -16,7 +16,7 @@
 
 import { readdirSync, readFileSync, statSync } from 'fs';
 import { join, relative } from 'path';
-import { REPORT_REGISTRY, SUBMISSIONS_REPORT } from '@/lib/reports/registry';
+import { REPORT_REGISTRY, SUBMISSIONS_REPORT, SUBMISSIONS_SORT_KEYS } from '@/lib/reports/registry';
 import { reportScopeFor } from '@/lib/reports/report-gate';
 import { SUBMISSIONS_ROWS_RPC } from '@/lib/reports/datasets/submissions';
 
@@ -62,12 +62,12 @@ describe('B4: registry and database agree', () => {
     for (const key of keys) expect(slugs).toContain(key);
   });
 
-  it("the saved-view sort keys are exactly the row function's sort whitelist", () => {
+  it("the report's sort keys are exactly the row function's sort whitelist", () => {
     const sorts = /CASE WHEN p_sort IN \(([^)]*)\) THEN p_sort/.exec(MIGRATION);
     expect(sorts).not.toBeNull();
     const whitelist = quoted(sorts![1]);
     expect(whitelist.length).toBeGreaterThan(0);
-    expect([...SUBMISSIONS_REPORT.savedView!.sortKeys].sort()).toEqual([...whitelist].sort());
+    expect([...SUBMISSIONS_SORT_KEYS].sort()).toEqual([...whitelist].sort());
   });
 
   it('every argument the loader sends is a parameter of the row function', () => {

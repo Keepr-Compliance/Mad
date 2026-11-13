@@ -13,9 +13,9 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Button, Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, Input, Label } from '@keepr/ui';
 import { reportDefinitionsApi, type ReportDefinitionsApi } from '@/lib/reports/sharing/definitions-api';
-import { writeFailureMessage } from '@/lib/reports/saved-views/write-failure';
+import { writeFailureMessage } from '@/lib/reports/sharing/write-failure';
 import { definitionReportPath } from '@/lib/reports/datasets/submissions-filters';
-import type { ViewState } from '@/lib/reports/saved-views/degrade';
+import type { ViewState } from '@/lib/reports/datasets/view-state';
 
 export interface SaveAsSharedReportProps {
   orgId: string;

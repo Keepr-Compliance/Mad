@@ -45,7 +45,7 @@ import {
   type RowScope,
   type ShareState,
 } from '@/lib/reports/sharing/sharing-api';
-import { writeFailureMessage } from '@/lib/reports/saved-views/write-failure';
+import { writeFailureMessage } from '@/lib/reports/sharing/write-failure';
 
 export const SHARE_DESCRIPTION = 'People you add can open this report.';
 
