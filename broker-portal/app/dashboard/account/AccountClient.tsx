@@ -23,9 +23,15 @@ import { Badge, Card, CardContent, CardHeader, PageHeader } from '@keepr/design-
 import { AlertBanner } from '@keepr/ui';
 import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
 import { MyPhoneCard } from '@/components/account/MyPhoneCard';
+import Link from 'next/link';
+import { AI_APPS } from '@/lib/mcp/account/messages';
+
+const AI_APPS_PATH = '/dashboard/account/ai-apps';
 
 export interface AccountClientProps {
   account: AccountView | null;
+  /** BACKLOG-4238: MCP is on (passed from the server); the AI apps entries render only then. */
+  mcpOn?: boolean;
 }
 
 function formatRole(role: string | null): string | null {
@@ -45,7 +51,7 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-export default function AccountClient({ account }: AccountClientProps) {
+export default function AccountClient({ account, mcpOn = false }: AccountClientProps) {
   const { isImpersonating } = useImpersonation();
 
   const identity = account?.identity ?? null;
@@ -214,10 +220,32 @@ export default function AccountClient({ account }: AccountClientProps) {
                 Sign out of all devices, including desktop apps and other browser sessions.
               </p>
               <SignOutAllButton />
+              {mcpOn && (
+                <p className="mt-3 text-sm text-gray-600" data-testid="sign-out-ai-apps-note">
+                  {AI_APPS.allDevicesNote}{' '}
+                  <Link href={AI_APPS_PATH} className="text-primary-600 hover:underline">
+                    {AI_APPS.accountLink}
+                  </Link>
+                </p>
+              )}
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* BACKLOG-4238: AI apps — rendered only while MCP is on. */}
+      {mcpOn && (
+        <Card padding="none">
+          <CardHeader>
+            <h2 className="text-lg font-semibold text-gray-900">
+              <Link href={AI_APPS_PATH} className="hover:underline" data-testid="account-ai-apps-link">
+                {AI_APPS.accountLink}
+              </Link>
+            </h2>
+            <p className="mt-1 text-sm text-gray-500">{AI_APPS.intro}</p>
+          </CardHeader>
+        </Card>
+      )}
     </div>
   );
 }

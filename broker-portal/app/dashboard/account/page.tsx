@@ -22,6 +22,7 @@ import { redirect } from 'next/navigation';
 import { createClient } from '@/lib/supabase/server';
 import { getImpersonationSession } from '@/lib/impersonation';
 import { getAccountView } from '@/lib/account/getAccountView';
+import { mcpEnabled } from '@/lib/mcp/config';
 import AccountClient from './AccountClient';
 
 export default async function AccountPage() {
@@ -42,5 +43,6 @@ export default async function AccountPage() {
 
   const account = await getAccountView();
 
-  return <AccountClient account={account} />;
+  // BACKLOG-4238: the AI apps entry exists only while MCP is on.
+  return <AccountClient account={account} mcpOn={mcpEnabled()} />;
 }

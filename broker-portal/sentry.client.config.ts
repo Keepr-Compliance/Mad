@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/nextjs';
+import { scrubBreadcrumb, scrubEvent, scrubSpan, scrubTransaction } from './lib/mcp/sentryScrub';
 
 /**
  * Sentry client-side SDK initialization for broker-portal.
@@ -60,49 +61,68 @@ Sentry.init({
     Sentry.replayIntegration(),
   ],
 
-  // Strip emails from event payloads before they leave the browser
+  // Strip emails from event payloads before they leave the browser.
+  // BACKLOG-4238: the MCP / OAuth / consent-page scrub runs first; an event
+  // whose processing throws is dropped (lib/mcp/sentryScrub.ts).
   beforeSend(event) {
-    // Scrub message
-    if (event.message) {
-      event.message = scrubEmails(event.message) as string;
-    }
+    return scrubEvent(event, scrubEmailsFromEvent, { dropOnFailure: true });
+  },
 
-    // Scrub exception values
-    if (event.exception?.values) {
-      for (const ex of event.exception.values) {
-        if (ex.value) {
-          ex.value = scrubEmails(ex.value) as string;
-        }
-      }
-    }
+  beforeSendTransaction(event) {
+    return scrubTransaction(event);
+  },
 
-    // Scrub breadcrumb messages
-    if (event.breadcrumbs) {
-      for (const crumb of event.breadcrumbs) {
-        if (crumb.message) {
-          crumb.message = scrubEmails(crumb.message) as string;
-        }
-        if (crumb.data) {
-          crumb.data = scrubObject(crumb.data as Record<string, unknown>);
-        }
-      }
-    }
+  beforeSendSpan(span) {
+    return scrubSpan(span);
+  },
 
-    // Scrub user context
-    if (event.user) {
-      if (event.user.email) {
-        event.user.email = '[email]';
-      }
-    }
-
-    // Scrub extra and tags
-    if (event.extra) {
-      event.extra = scrubObject(event.extra as Record<string, unknown>);
-    }
-    if (event.tags) {
-      event.tags = scrubObject(event.tags as Record<string, unknown>) as Record<string, string>;
-    }
-
-    return event;
+  beforeBreadcrumb(breadcrumb) {
+    return scrubBreadcrumb(breadcrumb);
   },
 });
+
+function scrubEmailsFromEvent<E extends Sentry.ErrorEvent>(event: E): E {
+  // Scrub message
+  if (event.message) {
+    event.message = scrubEmails(event.message) as string;
+  }
+
+  // Scrub exception values
+  if (event.exception?.values) {
+    for (const ex of event.exception.values) {
+      if (ex.value) {
+        ex.value = scrubEmails(ex.value) as string;
+      }
+    }
+  }
+
+  // Scrub breadcrumb messages
+  if (event.breadcrumbs) {
+    event.breadcrumbs = event.breadcrumbs.filter((crumb) => scrubBreadcrumb(crumb) !== null);
+    for (const crumb of event.breadcrumbs) {
+      if (crumb.message) {
+        crumb.message = scrubEmails(crumb.message) as string;
+      }
+      if (crumb.data) {
+        crumb.data = scrubObject(crumb.data as Record<string, unknown>);
+      }
+    }
+  }
+
+  // Scrub user context
+  if (event.user) {
+    if (event.user.email) {
+      event.user.email = '[email]';
+    }
+  }
+
+  // Scrub extra and tags
+  if (event.extra) {
+    event.extra = scrubObject(event.extra as Record<string, unknown>);
+  }
+  if (event.tags) {
+    event.tags = scrubObject(event.tags as Record<string, unknown>) as Record<string, string>;
+  }
+
+  return event;
+}

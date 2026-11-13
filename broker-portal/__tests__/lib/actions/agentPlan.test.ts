@@ -718,9 +718,9 @@ describe('Cancel plan and Keep my plan', () => {
     expect(calls('subscriptions.update')).toEqual([]);
   });
 
-  it('Keep my plan: pending + period running -> update(cancel_at_period_end:false), mirror back to active', async () => {
+  it('Keep my plan: pending + period running -> update(cancel_at_period_end:false), mirror back to active [EDITED: current_period_end moved into the future]', async () => {
     seed({ billing_subscriptions: [mirrorRow(C_PENDING)] });
-    serve(C_PENDING.id, C_PENDING);
+    serve(C_PENDING.id, { ...C_PENDING, current_period_end: Math.floor(Date.now() / 1000) + 86400 });
     mockStripeImpl['subscriptions.update'] = async () => clone(C_KEEP);
     expect(await keepAgentPlan()).toEqual({ ok: true });
     expect(calls('subscriptions.update')).toEqual([[C_PENDING.id, { cancel_at_period_end: false }]]);
