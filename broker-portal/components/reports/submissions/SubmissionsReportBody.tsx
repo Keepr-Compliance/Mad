@@ -21,6 +21,7 @@ import {
 } from '@/lib/reports/datasets/submissions-filters';
 import { SubmissionsReportFilters } from '@/components/reports/submissions/SubmissionsReportFilters';
 import { SubmissionsReportTable } from '@/components/reports/submissions/SubmissionsReportTable';
+import { ReportBackLink } from '@/components/reports/ReportBackLink';
 
 export interface SubmissionsReportBodyProps {
   caller: ReportCaller;
@@ -54,6 +55,7 @@ export function SubmissionsReportBody({
 
   return (
     <div className="mx-auto max-w-7xl space-y-6">
+      <ReportBackLink />
       <PageHeader
         phoneHideTitle
         title={title}

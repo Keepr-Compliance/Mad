@@ -6,10 +6,18 @@
  * Status, agent (full roles only), date range and sort, plus the Views panel
  * (ReportSavedViews, BACKLOG-3514). Every change pushes a new URL; the server
  * page reads the URL and asks the database again. Nothing is filtered here.
+ *
+ * BACKLOG-3513 PR-3c (founder QA): the design-system controls, as the admin
+ * report filter bars use them: the kit Dropdown in its 'filter' variant
+ * (admin-portal/app/dashboard/organizations/components/OrganizationsTable.tsx:146,
+ * single choice; admin-portal/app/dashboard/reports/submissions/SubmissionFilterBar.tsx:71)
+ * and the kit DateRangePicker (the range pill of the kit PeriodPicker,
+ * packages/ui/src/components/report/period-picker.tsx:107). Values, URL params
+ * and the "all" handling are unchanged.
  */
 
 import { useRouter } from 'next/navigation';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@keepr/ui';
+import { Button, DateRangePicker, Dropdown } from '@keepr/ui';
 import { ReportSavedViews } from '@/components/reports/ReportSavedViews';
 import type { ReportDefinition } from '@/lib/reports/registry';
 import type { AgentOption } from '@/lib/reports/datasets/submissions';
@@ -41,12 +49,9 @@ export interface SubmissionsReportFiltersProps {
   viewsKey?: string;
 }
 
-const FIELD = 'rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm text-gray-900';
-/** The kit Select trigger, sized for a filter row (BACKLOG-3513 PR-3c). */
-const TRIGGER = 'h-8 min-w-[10rem] text-sm';
 /**
- * The "All agents" choice. A kit (Radix) SelectItem cannot carry an empty value, so this stands in
- * for "no agent filter" and is mapped back to null before anything is sent or put in the URL.
+ * The "All agents" choice. It stands for "no agent filter" and is mapped back to null before
+ * anything is sent or put in the URL.
  */
 export const ALL_AGENTS = '__all__';
 
@@ -63,81 +68,48 @@ export function SubmissionsReportFilters({
   const router = useRouter();
   const go = (next: Filters) => router.push(buildSubmissionsReportUrl({ ...next, page: 1 }, basePath, explicit));
   const set = (patch: Partial<Filters>) => go({ ...filters, ...patch });
+  const agentOptions = [{ value: ALL_AGENTS, label: 'All agents' }, ...agents.map((a) => ({ value: a.id, label: a.label }))];
+  const hasDates = Boolean(filters.from || filters.to);
 
   return (
     <div className="flex flex-col gap-3" data-testid="submissions-report-filters">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="flex flex-col gap-1 text-xs text-gray-600">
-          <span aria-hidden="true">Status</span>
-          <Select value={filters.status} onValueChange={(v) => set({ status: parseStatusParam(v) })}>
-            <SelectTrigger aria-label="Status" className={TRIGGER}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SUBMISSIONS_STATUS_OPTIONS.map((o) => (
-                <SelectItem key={o.value} value={o.value}>
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Dropdown
+          variant="filter"
+          ariaLabel="Status"
+          searchable={false}
+          options={SUBMISSIONS_STATUS_OPTIONS}
+          value={filters.status}
+          onChange={(v) => set({ status: parseStatusParam(v) })}
+        />
         {showAgent ? (
-          <div className="flex flex-col gap-1 text-xs text-gray-600">
-            <span aria-hidden="true">Agent</span>
-            <Select
-              value={filters.agent ?? ALL_AGENTS}
-              onValueChange={(v) => set({ agent: v === ALL_AGENTS ? null : v })}
-            >
-              <SelectTrigger aria-label="Agent" className={TRIGGER}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_AGENTS}>All agents</SelectItem>
-                {agents.map((a) => (
-                  <SelectItem key={a.id} value={a.id}>
-                    {a.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <Dropdown
+            variant="filter"
+            ariaLabel="Agent"
+            searchable={agentOptions.length > 8}
+            options={agentOptions}
+            value={filters.agent ?? ALL_AGENTS}
+            onChange={(v) => set({ agent: v === ALL_AGENTS ? null : v })}
+          />
         ) : null}
-        <label className="flex flex-col gap-1 text-xs text-gray-600">
-          From
-          <input
-            type="date"
-            aria-label="From"
-            className={FIELD}
-            value={filters.from ?? ''}
-            onChange={(e) => set({ from: parseDateParam(e.target.value) })}
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-gray-600">
-          To
-          <input
-            type="date"
-            aria-label="To"
-            className={FIELD}
-            value={filters.to ?? ''}
-            onChange={(e) => set({ to: parseDateParam(e.target.value) })}
-          />
-        </label>
-        <div className="flex flex-col gap-1 text-xs text-gray-600">
-          <span aria-hidden="true">Sort</span>
-          <Select value={filters.sort} onValueChange={(v) => set({ sort: parseSubmissionsSort(v) })}>
-            <SelectTrigger aria-label="Sort" className={TRIGGER}>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {SUBMISSIONS_SORT_OPTIONS.map((o) => (
-                <SelectItem key={o.value} value={o.value}>
-                  {o.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <DateRangePicker
+          ariaLabel="Date range"
+          value={{ from: filters.from ?? undefined, to: filters.to ?? undefined }}
+          onChange={({ from, to }) => set({ from: parseDateParam(from), to: parseDateParam(to) })}
+        />
+        {hasDates ? (
+          <Button type="button" variant="ghost" size="sm" onClick={() => set({ from: null, to: null })}>
+            Clear dates
+          </Button>
+        ) : null}
+        <Dropdown
+          variant="filter"
+          ariaLabel="Sort"
+          searchable={false}
+          options={SUBMISSIONS_SORT_OPTIONS}
+          value={filters.sort}
+          onChange={(v) => set({ sort: parseSubmissionsSort(v) })}
+        />
       </div>
       <ReportSavedViews
         orgId={orgId}

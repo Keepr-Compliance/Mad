@@ -1,19 +1,18 @@
 /**
- * Report filters use the kit Select, not a native <select> — BACKLOG-3513 PR-3c.
+ * Report controls are the design-system ones, not native form controls — BACKLOG-3513 PR-3c.
  *
- * The REAL SubmissionsReportFilters and ReportSavedViews. Each filter must render the @keepr/ui
- * Select (Radix: a <button role="combobox"> with a listbox popup), and picking an option must push
- * exactly the URL the native select pushed before: same values, same params, "all" and "All
- * agents" left out of the URL.
+ * The REAL SubmissionsReportFilters, ReportSavedViews and ReportBackLink. Status, Agent and Sort are
+ * the kit Dropdown (filter variant, as the admin report filter bars use it), the dates are the kit
+ * DateRangePicker, the card column picker is the kit Dropdown. Picking must push exactly the URL
+ * the native controls pushed before: same values and params, "all" and "All agents" left out.
  *
- * Radix needs pointer-capture and scrollIntoView under jsdom; the stubs are copied from
- * __tests__/people-sheet-4032/peopleSheet.test.tsx:25-29 (this portal's jest setup has none).
+ * Pointer-capture / scrollIntoView stubs copied from __tests__/people-sheet-4032/peopleSheet.test.tsx:25-29.
  * Agent ids and names are invented.
  */
 
 import '@testing-library/jest-dom';
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 Object.assign(window.HTMLElement.prototype, {
@@ -26,14 +25,16 @@ jest.mock('@/lib/supabase/client', () => ({
   createClient: () => ({ rpc: async () => ({ data: [], error: null }) }),
 }));
 const mockPush = jest.fn();
+const mockBack = jest.fn();
 jest.mock('next/navigation', () => ({
-  useRouter: () => ({ push: mockPush, replace: jest.fn(), refresh: jest.fn() }),
+  useRouter: () => ({ push: mockPush, back: mockBack, replace: jest.fn(), refresh: jest.fn() }),
   usePathname: () => '/dashboard/reports/submissions',
   useSearchParams: () => new URLSearchParams(),
 }));
 
 import { SubmissionsReportFilters } from '@/components/reports/submissions/SubmissionsReportFilters';
 import { ReportSavedViews } from '@/components/reports/ReportSavedViews';
+import { ReportBackLink, canGoBackInApp } from '@/components/reports/ReportBackLink';
 import { SUBMISSIONS_REPORT, type ReportDefinition } from '@/lib/reports/registry';
 import { DEFAULT_SUBMISSIONS_FILTERS, type SubmissionsReportFilters as Filters } from '@/lib/reports/datasets/submissions-filters';
 import type { BrokerViewsApi } from '@/lib/reports/saved-views/broker-views-api';
@@ -59,16 +60,17 @@ function mount(filters: Partial<Filters> = {}, extra: Partial<React.ComponentPro
   );
 }
 
-/** A kit (Radix) Select trigger: a button with role combobox that opens a listbox. */
-function expectKitSelect(trigger: HTMLElement) {
+/** The kit Dropdown trigger: a button opening an inline listbox, inside data-slot="dropdown". */
+const control = (name: string) => screen.getByRole('button', { name: new RegExp(`^${name}\\b`) });
+function expectKitDropdown(trigger: HTMLElement) {
   expect(trigger.tagName).toBe('BUTTON');
-  expect(trigger).toHaveAttribute('role', 'combobox');
-  expect(trigger).toHaveAttribute('aria-autocomplete', 'none');
+  expect(trigger).toHaveAttribute('aria-haspopup', 'listbox');
+  expect(trigger.closest('[data-slot="dropdown"]')).not.toBeNull();
 }
 
 async function pick(name: string, option: string | RegExp) {
   const user = userEvent.setup();
-  await user.click(screen.getByRole('combobox', { name }));
+  await user.click(control(name));
   await user.click(await screen.findByRole('option', { name: option }));
 }
 
@@ -77,31 +79,35 @@ beforeEach(() => {
   jest.spyOn(console, 'error').mockImplementation(() => {});
 });
 
-describe('the report filters render the kit Select', () => {
-  it.each([['Status'], ['Agent'], ['Sort']])('%s is a kit Select (role combobox, not a native select)', (name) => {
+describe('the report filters render the kit controls', () => {
+  it.each([['Status'], ['Agent'], ['Sort']])('%s is the kit Dropdown, not a native select', (name) => {
     const { container } = mount();
-    expectKitSelect(screen.getByRole('combobox', { name }));
+    expectKitDropdown(control(name));
     expect(container.querySelector('select')).toBeNull();
   });
 
-  it('the date filters stay date inputs (no kit single-date control)', () => {
-    mount();
-    expect(screen.getByLabelText('From')).toHaveAttribute('type', 'date');
-    expect(screen.getByLabelText('To')).toHaveAttribute('type', 'date');
+  it('the dates are the kit DateRangePicker, not native date inputs', () => {
+    const { container } = mount();
+    expect(screen.getByRole('button', { name: /^Date range/ })).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(container.querySelector('input[type="date"]')).toBeNull();
+    expect(container.querySelector('input, select')).toBeNull();
   });
 
   it('the triggers show the current values', () => {
-    mount({ status: 'approved', agent: AGENT_B, sort: 'oldest' });
-    expect(screen.getByRole('combobox', { name: 'Status' })).toHaveTextContent('Approved');
-    expect(screen.getByRole('combobox', { name: 'Agent' })).toHaveTextContent('Agent Bravo');
-    expect(screen.getByRole('combobox', { name: 'Sort' })).toHaveTextContent('Oldest first');
+    mount({ status: 'approved', agent: AGENT_B, sort: 'oldest', from: '2026-10-05', to: '2026-10-15' });
+    expect(control('Status')).toHaveTextContent('Approved');
+    expect(control('Agent')).toHaveTextContent('Agent Bravo');
+    expect(control('Sort')).toHaveTextContent('Oldest first');
+    expect(screen.getByRole('button', { name: /^Date range/ })).not.toHaveTextContent('Pick dates');
   });
 
-  it('defaults read All, All agents and Newest first', () => {
+  it('defaults read All, All agents and Newest first, and no dates', () => {
     mount();
-    expect(screen.getByRole('combobox', { name: 'Status' })).toHaveTextContent('All');
-    expect(screen.getByRole('combobox', { name: 'Agent' })).toHaveTextContent('All agents');
-    expect(screen.getByRole('combobox', { name: 'Sort' })).toHaveTextContent('Newest first');
+    expect(control('Status')).toHaveTextContent('All');
+    expect(control('Agent')).toHaveTextContent('All agents');
+    expect(control('Sort')).toHaveTextContent('Newest first');
+    expect(screen.getByRole('button', { name: /^Date range/ })).toHaveTextContent('Pick dates');
+    expect(screen.queryByRole('button', { name: 'Clear dates' })).toBeNull();
   });
 });
 
@@ -137,6 +143,21 @@ describe('picking pushes the same URL as before', () => {
     expect(mockPush).toHaveBeenCalledWith('/dashboard/reports/submissions?sort=price_asc');
   });
 
+  it('a date range applied in the calendar -> ?from=&to=', () => {
+    mount({ from: '2026-10-05', to: '2026-10-15' });
+    fireEvent.click(screen.getByRole('button', { name: /^Date range/ }));
+    fireEvent.click(screen.getByRole('gridcell', { name: 'Thursday, October 1, 2026' }));
+    fireEvent.click(screen.getByRole('gridcell', { name: 'Tuesday, October 20, 2026' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    expect(mockPush).toHaveBeenCalledWith('/dashboard/reports/submissions?from=2026-10-01&to=2026-10-20');
+  });
+
+  it('Clear dates removes both dates and keeps the rest', () => {
+    mount({ from: '2026-10-05', to: '2026-10-15', status: 'approved' });
+    fireEvent.click(screen.getByRole('button', { name: 'Clear dates' }));
+    expect(mockPush).toHaveBeenCalledWith('/dashboard/reports/submissions?status=approved');
+  });
+
   it('on a shared report the URL keeps its path and status (explicit)', async () => {
     mount({}, { basePath: '/dashboard/reports/d/abc', explicit: true });
     await pick('Sort', 'Oldest first');
@@ -145,8 +166,46 @@ describe('picking pushes the same URL as before', () => {
 
   it('an agent caller has no Agent control', () => {
     mount({}, { showAgent: false });
-    expect(screen.queryByRole('combobox', { name: 'Agent' })).toBeNull();
-    expect(screen.getAllByRole('combobox').map((c) => c.getAttribute('aria-label'))).toEqual(['Status', 'Sort']);
+    expect(screen.queryByRole('button', { name: /^Agent\b/ })).toBeNull();
+    expect(control('Status')).toBeInTheDocument();
+    expect(control('Sort')).toBeInTheDocument();
+  });
+});
+
+describe('Back (founder: the previous page in this tab, else the Reports index)', () => {
+  const ORIGIN = window.location.origin;
+  function setHistory(length: number, referrer: string) {
+    Object.defineProperty(window.history, 'length', { configurable: true, get: () => length });
+    Object.defineProperty(document, 'referrer', { configurable: true, get: () => referrer });
+  }
+
+  it('reads "Back" and links to the Reports index', () => {
+    render(<ReportBackLink />);
+    const link = screen.getByRole('link', { name: 'Back' });
+    expect(link).toHaveAttribute('href', '/dashboard/reports');
+  });
+
+  it('came from a portal page in this tab: goes back in history', () => {
+    setHistory(3, `${ORIGIN}/dashboard/reports`);
+    render(<ReportBackLink />);
+    const notPrevented = fireEvent.click(screen.getByRole('link', { name: 'Back' }));
+    expect(mockBack).toHaveBeenCalledTimes(1);
+    expect(notPrevented).toBe(false);
+  });
+
+  it('a new tab or a direct link: no history back, the link goes to the Reports index', () => {
+    setHistory(1, '');
+    render(<ReportBackLink />);
+    const notPrevented = fireEvent.click(screen.getByRole('link', { name: 'Back' }));
+    expect(mockBack).not.toHaveBeenCalled();
+    expect(notPrevented).toBe(true);
+  });
+
+  it('the rule itself', () => {
+    expect(canGoBackInApp({ historyLength: 2, referrer: 'https://app.example.test/dashboard', origin: 'https://app.example.test' })).toBe(true);
+    expect(canGoBackInApp({ historyLength: 1, referrer: 'https://app.example.test/dashboard', origin: 'https://app.example.test' })).toBe(false);
+    expect(canGoBackInApp({ historyLength: 4, referrer: 'https://mail.example.test/inbox', origin: 'https://app.example.test' })).toBe(false);
+    expect(canGoBackInApp({ historyLength: 4, referrer: '', origin: 'https://app.example.test' })).toBe(false);
   });
 });
 

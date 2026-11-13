@@ -225,6 +225,11 @@ describe('Take over (founder: any active broker, admin or IT admin, shared with 
 });
 
 describe('rows and filters', () => {
+  it('PR-3c: the page has a Back link to the Reports index', async () => {
+    await renderPage('agent', { level: 'viewer' });
+    expect(screen.getByRole('link', { name: 'Back' })).toHaveAttribute('href', '/dashboard/reports');
+  });
+
   it('U6 every request reads the definition, then rows with p_def = this report and its saved filters', async () => {
     await renderPage('full', { level: 'viewer' });
     const names = mockRpc.mock.calls.map(([n]) => n);

@@ -268,6 +268,12 @@ describe('loader: rows only through the row function, for the gate-admitted orga
 });
 
 describe('page', () => {
+  it('PR-3c: the page has a Back link to the Reports index', async () => {
+    given({ deals: [row(1, AGENT_A, 0)] });
+    await renderPage('full');
+    expect(screen.getByRole('link', { name: 'Back' })).toHaveAttribute('href', '/dashboard/reports');
+  });
+
   it('B3: the service-off line shows when broker_report_scope says service_off', async () => {
     given({ serviceOff: true, deals: [row(1, BROKER, 0)] });
     await renderPage('full');
