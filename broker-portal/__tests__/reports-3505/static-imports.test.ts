@@ -6,9 +6,10 @@
  * service client (lib/supabase/service, createServiceClient) bypasses RLS,
  * which is the outer bound on every report row.
  *
- * BACKLOG-3514: files under lib/reports/saved-views/ run in the browser and
- * may import the BROWSER session client (lib/supabase/client) instead. Never
- * the service client, anywhere.
+ * Files under lib/reports/sharing/ (BACKLOG-3513) run in the browser and may
+ * import the BROWSER session client (lib/supabase/client) instead. Never the
+ * service client, anywhere. (lib/reports/saved-views/, BACKLOG-3514, was
+ * removed with the personal saved-views panel, BACKLOG-3513 PR-3c.)
  *
  * @jest-environment node
  */
@@ -25,7 +26,6 @@ const ROOTS = [
 
 /** Directories whose files run in the browser and may use the browser session client. */
 const BROWSER_DIRS = [
-  'lib/reports/saved-views/',
   // BACKLOG-3513 PR-3b (SR C11): the shared-report sharing and definition RPCs.
   'lib/reports/sharing/',
 ];
@@ -58,16 +58,6 @@ describe('reports files never reach the service client', () => {
       expect.arrayContaining(['app/dashboard/reports/page.tsx', 'lib/reports/registry.ts', 'lib/reports/report-gate.ts'])
     );
     expect(specifiers(readFileSync(join(PORTAL, 'lib/reports/report-gate.ts'), 'utf8'))).toContain('@/lib/supabase/server');
-  });
-
-  it('C8 (BACKLOG-3514) the saved-views adapter is scanned and uses the browser session client', () => {
-    const names = FILES.map((f) => relative(PORTAL, f).split('\\').join('/'));
-    expect(names).toEqual(
-      expect.arrayContaining(['lib/reports/saved-views/broker-views-api.ts', 'components/reports/ReportSavedViews.tsx'])
-    );
-    expect(specifiers(readFileSync(join(PORTAL, 'lib/reports/saved-views/broker-views-api.ts'), 'utf8'))).toContain(
-      '@/lib/supabase/client'
-    );
   });
 
   it('C11 (BACKLOG-3513 PR-3b) the sharing adapters are scanned and use the browser session client', () => {

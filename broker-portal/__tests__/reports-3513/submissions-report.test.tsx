@@ -3,7 +3,7 @@
  *
  * The REAL loader (lib/reports/datasets/submissions.ts) and the REAL page run.
  * Mocked: the gate's answer (requireReportAccess), the session client's rpc and
- * users read, the browser client the Views panel uses, and next/navigation.
+ * users read, the browser client, and next/navigation.
  *
  * Fixture shapes are transcribed from migration 20261112200000:
  *  - broker_report_submissions_rows RETURNS TABLE (id, submitted_by,

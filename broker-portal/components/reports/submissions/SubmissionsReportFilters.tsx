@@ -8,8 +8,8 @@
  * is filtered here.
  *
  * Founder ruling "A" (BACKLOG-3513 PR-3c): one concept, views (the shared
- * report definitions). The personal saved-views panel (ReportSavedViews,
- * BACKLOG-3514) is no longer mounted here; its database side is unchanged.
+ * report definitions). The personal saved-views panel (BACKLOG-3514) was
+ * removed from the broker portal; its database side is unchanged.
  *
  * BACKLOG-3513 PR-3c (founder QA): the design-system controls, as the admin
  * report filter bars use them: the kit Dropdown in its 'filter' variant

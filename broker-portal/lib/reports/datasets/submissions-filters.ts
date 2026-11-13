@@ -10,7 +10,7 @@
 
 import { parseAgentParam } from '@/lib/submissions/listUrl';
 import { SUBMISSIONS_SORT_KEYS } from '@/lib/reports/registry';
-import type { FilterValue, ViewState } from '@/lib/reports/saved-views/degrade';
+import type { FilterValue, ViewState } from '@/lib/reports/datasets/view-state';
 
 export const SUBMISSIONS_REPORT_PATH = '/dashboard/reports/submissions';
 
