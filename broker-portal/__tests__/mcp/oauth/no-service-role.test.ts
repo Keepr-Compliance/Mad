@@ -15,7 +15,7 @@ const ENTRY_DIRS = ['app/oauth', 'app/api/mcp/resource-metadata', 'lib/mcp/oauth
 /** Module specifiers that must never be reached. */
 const FORBIDDEN_LOCAL = ['lib/supabase/server', 'lib/supabase/service', 'lib/supabase/client'];
 const FORBIDDEN_PACKAGES = ['@supabase/ssr'];
-const FORBIDDEN_TEXT = ['SUPABASE_SERVICE_ROLE_KEY', 'cookies()', "from 'next/headers'"];
+const FORBIDDEN_TEXT = ['SUPABASE_SERVICE_ROLE_KEY', 'cookies()', "from 'next/headers'", 'getClaims'];
 
 interface Rule {
   local: readonly string[];
@@ -141,7 +141,7 @@ const RULE_V: Rule = {
     'lib/scoped-client',
   ],
   packages: ['@supabase/ssr', 'next/headers'],
-  text: ['SUPABASE_SERVICE_ROLE_KEY', 'cookies()', "from 'next/headers'"],
+  text: ['SUPABASE_SERVICE_ROLE_KEY', 'cookies()', "from 'next/headers'", 'getClaims'],
 };
 const RULE_V_DIRS = ['app/api/mcp', 'app/oauth', 'lib/mcp'];
 const ruleVEntries = () => RULE_V_DIRS.flatMap(listTs).filter((abs) => !relOf(abs).startsWith('lib/mcp/account/'));
@@ -189,6 +189,30 @@ describe('BACKLOG-4238 Rule V: vendor path', () => {
   ])('positive control: a line planted in %s is found (%s)', (file, line, needle) => {
     const hits = findForbidden(ruleVEntries(), plantedIn(file, line), RULE_V);
     expect(hits.some((h) => h.startsWith(`${file}:`) && h.includes(needle))).toBe(true);
+  });
+
+  // BACKLOG-4238 PR-3b: each forbidden form planted in each MCP endpoint file is found.
+  const ENDPOINT_FILES = ['app/api/mcp/route.ts', 'lib/mcp/server.ts', 'lib/mcp/tools/status.ts'];
+  const PLANTS: Array<[string, string]> = [
+    ["import { createServiceClient } from '@/lib/supabase/service';", 'imports lib/supabase/service'],
+    ["import { createClient } from '@/lib/supabase/server';", 'imports lib/supabase/server'],
+    ["import { createServerClient } from '@supabase/ssr';", 'imports @supabase/ssr'],
+    ["import { headers } from 'next/headers';", 'imports next/headers'],
+    ['import { headers } from "next/headers";', 'imports next/headers'],
+    ["const nh = require('next/headers');", 'imports next/headers'],
+    ['const c = await client.auth.getClaims(token);', 'text getClaims'],
+  ];
+  it.each(ENDPOINT_FILES.flatMap((f) => PLANTS.map(([line, needle]) => [f, line, needle] as const)))(
+    'positive control: in %s, %s is found',
+    (file, line, needle) => {
+      const hits = findForbidden(ruleVEntries(), plantedIn(file, line), RULE_V);
+      expect(hits).toContain(`${file}: ${needle}`);
+    }
+  );
+
+  it('positive control: getClaims planted in an H21 entry is found by H21', () => {
+    const hits = findForbidden(ENTRY_DIRS.flatMap(listTs), plantedIn('lib/mcp/oauth/rpc.ts', 'auth.getClaims(t);'));
+    expect(hits).toContain('lib/mcp/oauth/rpc.ts: text getClaims');
   });
 
   it('positive control: an account module imported from lib/mcp/sentryScrub.ts (no route imports it) is walked', () => {

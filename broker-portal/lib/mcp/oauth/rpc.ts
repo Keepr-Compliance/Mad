@@ -257,3 +257,91 @@ export async function refreshTokens(cfg: ClientConfig, a: RefreshArgs): Promise<
   if ('kind' in res) return res;
   return checkTokenEnvelope(res.data);
 }
+
+// ---------------------------------------------------------------------------
+// mcp_check_access(p_secret text, p_at_digest bytea, p_resource text)
+// Returns {ok:true} | {ok:false, error:'not_connected'} (migration :704-725).
+// mcp_get_status(p_secret text, p_at_digest bytea, p_resource text)
+// Returns {ok:true, result:{connected:true, provider, entitled, reason}}
+//       | {ok:false, error: not_connected|disabled|rate_limited|busy|timeout|error}
+// (migration :734-775).
+// ---------------------------------------------------------------------------
+
+/** Arguments of the per-request MCP functions. `atDigest` is the access token digest in bytea text form. */
+interface AccessArgs {
+  secret: string;
+  atDigest: string;
+  resource: string;
+}
+
+type AccessResult = { kind: 'ok' } | { kind: 'not_connected' } | Transport;
+
+function hasExactKeys(v: Record<string, unknown>, keys: readonly string[]): boolean {
+  const own = Object.keys(v);
+  return own.length === keys.length && keys.every((k) => Object.prototype.hasOwnProperty.call(v, k));
+}
+
+/** Success only for exactly {ok: true}; not_connected only for exactly {ok: false, error: 'not_connected'}. */
+function checkAccessEnvelope(v: unknown): AccessResult {
+  if (!isObject(v)) return transport(null);
+  if (v.ok === true && hasExactKeys(v, ['ok'])) return { kind: 'ok' };
+  if (hasExactKeys(v, ['ok', 'error']) && refusal(v, ['not_connected'] as const)) return { kind: 'not_connected' };
+  return transport(null);
+}
+
+export async function checkAccess(cfg: ClientConfig, a: AccessArgs): Promise<AccessResult> {
+  const res = await call(cfg, 'mcp_check_access', {
+    p_secret: a.secret,
+    p_at_digest: a.atDigest,
+    p_resource: a.resource,
+  });
+  if ('kind' in res) return res;
+  return checkAccessEnvelope(res.data);
+}
+
+const GET_STATUS_ERRORS = ['not_connected', 'disabled', 'rate_limited', 'busy', 'timeout', 'error'] as const;
+type GetStatusError = (typeof GET_STATUS_ERRORS)[number];
+
+interface StatusFromDb {
+  connected: true;
+  provider: 'anthropic' | 'openai';
+  entitled: boolean;
+  /** null when entitled; otherwise a short lowercase code from the database. */
+  reason: string | null;
+}
+
+type GetStatusResult = { kind: 'ok'; result: StatusFromDb } | { kind: 'error'; error: GetStatusError } | Transport;
+
+const STATUS_REASON = /^[a-z0-9_]{1,64}$/;
+
+function checkGetStatusEnvelope(v: unknown): GetStatusResult {
+  if (!isObject(v)) return transport(null);
+  if (v.ok === true) {
+    const r = v.result;
+    if (
+      hasExactKeys(v, ['ok', 'result']) &&
+      isObject(r) &&
+      hasExactKeys(r, ['connected', 'provider', 'entitled', 'reason']) &&
+      r.connected === true &&
+      (r.provider === 'anthropic' || r.provider === 'openai') &&
+      typeof r.entitled === 'boolean' &&
+      (r.reason === null || (typeof r.reason === 'string' && STATUS_REASON.test(r.reason)))
+    ) {
+      return { kind: 'ok', result: { connected: true, provider: r.provider, entitled: r.entitled, reason: r.reason } };
+    }
+    return transport(null);
+  }
+  if (!hasExactKeys(v, ['ok', 'error'])) return transport(null);
+  const code = refusal(v, GET_STATUS_ERRORS);
+  return code ? { kind: 'error', error: code } : transport(null);
+}
+
+export async function getStatusFor(cfg: ClientConfig, a: AccessArgs): Promise<GetStatusResult> {
+  const res = await call(cfg, 'mcp_get_status', {
+    p_secret: a.secret,
+    p_at_digest: a.atDigest,
+    p_resource: a.resource,
+  });
+  if ('kind' in res) return res;
+  return checkGetStatusEnvelope(res.data);
+}

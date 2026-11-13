@@ -1,8 +1,11 @@
 /**
- * MCP server for the portal (BACKLOG-4237).
+ * MCP server for the portal (BACKLOG-4237, BACKLOG-4238).
  *
  * One fresh low-level Server per HTTP request (stateless). 2025-era clients are
  * served by the SDK's stateless legacy leg; 2026-07-28 clients by the modern leg.
+ * The route passes the access token digest in authInfo.extra.atDigest; the SDK
+ * hands authInfo to this factory unchanged. Tools send the digest to the
+ * database, which resolves the owner.
  */
 
 import {
@@ -42,11 +45,7 @@ export function createMcpServer(ctx: McpRequestContext): Server {
     if (request.params.name !== STATUS_TOOL_NAME) {
       return { content: [{ type: 'text', text: 'Unknown tool.' }], isError: true };
     }
-    const status = getStatus(protocolVersionFor(ctx), MCP_SERVER_VERSION);
-    return {
-      content: [{ type: 'text', text: JSON.stringify(status) }],
-      structuredContent: { ...status },
-    };
+    return getStatus(ctx.authInfo?.extra?.atDigest, protocolVersionFor(ctx), MCP_SERVER_VERSION);
   });
 
   return server;

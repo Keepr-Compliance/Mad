@@ -1,35 +1,47 @@
 /**
- * Shared fixtures for the MCP tests (BACKLOG-4237).
+ * Shared fixtures for the MCP endpoint tests (BACKLOG-4237, BACKLOG-4238).
  *
- * Claims: the field set is the getClaims() example response in the installed
- * @supabase/auth-js (dist/module/GoTrueClient.d.ts, getClaims JSDoc), with
- * all-zero ids and a placeholder project host. `client_id` is NOT in that
- * example or in the JwtPayload type; its name comes from the Supabase OAuth
- * server docs, so the connected-app fixture is doc-sourced, not transcribed.
+ * Tokens are built from repeated characters. Database envelopes are
+ * transcribed from supabase/migrations/20261112170000_backlog_4238_mcp_oauth_server.sql:
+ * - mcp_check_access: `jsonb_build_object('ok', true)` (:722) or
+ *   `_mcp_refuse('not_connected')` (:708, :724), which is
+ *   `jsonb_build_object('ok', false, 'error', code)` (:198-201).
+ * - mcp_get_status: `jsonb_build_object('ok', true, 'result',
+ *   jsonb_build_object('connected', true, 'provider', g.provider, 'entitled', …,
+ *   'reason', v_ent -> 'reason'))` (:769-773); reason is JSON null when
+ *   entitled (_mcp_r_entitlement :313) and a short code otherwise (:302-311).
+ *   Refusals via _mcp_refuse with not_connected | disabled | rate_limited |
+ *   busy (_mcp_enter :344-362) and timeout | error (:764-767).
  */
 
-export const ZERO_UUID = '00000000-0000-0000-0000-000000000000';
+import { createHmac } from 'node:crypto';
+import { PEPPER_BYTES } from './oauth/fixtures';
 
-/** A first-party portal/desktop session token's claims (no client_id). */
-export const FIRST_PARTY_CLAIMS = {
-  aal: 'aal1',
-  amr: [{ method: 'email', timestamp: 1715766000 }],
-  app_metadata: {},
-  aud: 'authenticated',
-  email: 'person@example.com',
-  exp: 4102444800,
-  iat: 1715766000,
-  is_anonymous: false,
-  iss: 'https://project-ref.supabase.co/auth/v1',
-  phone: '',
-  role: 'authenticated',
-  session_id: ZERO_UUID,
-  sub: ZERO_UUID,
-  user_metadata: {},
-};
+/** An access token of the issued shape (kpr_at_ + 43 base64url characters). */
+export const ACCESS_TOKEN = `kpr_at_${'T'.repeat(43)}`;
+/** A second well-formed access token the database does not know. */
+export const UNKNOWN_ACCESS_TOKEN = `kpr_at_${'U'.repeat(43)}`;
 
-/** A connected-app token's claims: first-party claims plus client_id. */
-export const CONNECTED_APP_CLAIMS = { ...FIRST_PARTY_CLAIMS, client_id: ZERO_UUID };
+/** HMAC-SHA256(pepper, whole token), computed here independently of lib/mcp/oauth/crypto.ts. */
+export function expectedDigestBytes(token: string): Buffer {
+  return createHmac('sha256', PEPPER_BYTES).update(token, 'utf8').digest();
+}
 
-export const CONNECTED_APP_TOKEN = 'connected-app-token-fixture';
-export const FIRST_PARTY_TOKEN = 'first-party-token-fixture';
+/** The digest in the bytea text form the portal sends to PostgREST ('\x' + lowercase hex). */
+export function expectedDigest(token: string): string {
+  return `\\x${expectedDigestBytes(token).toString('hex')}`;
+}
+
+/** Every text form of a digest that could appear in a log line or a Sentry payload. */
+export function digestForms(token: string): string[] {
+  const b = expectedDigestBytes(token);
+  return [`\\x${b.toString('hex')}`, b.toString('hex'), b.toString('hex').toUpperCase(), b.toString('base64'), b.toString('base64url')];
+}
+
+export function checkAccessOk() {
+  return { ok: true };
+}
+
+export function getStatusOk(entitled = true, reason: string | null = null) {
+  return { ok: true, result: { connected: true, provider: 'anthropic', entitled, reason } };
+}
