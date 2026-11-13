@@ -12,8 +12,13 @@
  *   C2   a wheel before the growth: no re-scroll.
  *   C3   growth after SECTION_SETTLE_MS: no re-scroll.
  *   C5   a tab is clicked after landing, then growth: no re-scroll to About.
- *   C6   the observer's first report (each element's starting size): no
- *        re-scroll, so the smooth landing is left alone.
+ *   C6   the observer's first report equals each element's height at landing:
+ *        no re-scroll, so the smooth landing is left alone.
+ *   C7   the spacer is 0 at landing and its FIRST report is already grown:
+ *        About is re-scrolled.
+ *
+ * getBoundingClientRect is mocked so the content column and the spacer lay out
+ * at the heights the observer later reports as their starting sizes.
  */
 
 import React from "react";
@@ -162,6 +167,10 @@ let observers: FakeObserver[] = [];
 let calls: Array<{ id: string; behavior?: string }> = [];
 let originalRO: typeof ResizeObserver | undefined;
 let originalScrollIntoView: typeof Element.prototype.scrollIntoView;
+let originalRect: typeof Element.prototype.getBoundingClientRect;
+/** Laid-out heights at landing; C7 lowers the spacer's to 0. */
+let contentStart = 100;
+let spacerStart = 100;
 
 beforeEach(() => {
   mockSettingsApi();
@@ -169,6 +178,20 @@ beforeEach(() => {
   calls = [];
   originalRO = (globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver;
   originalScrollIntoView = Element.prototype.scrollIntoView;
+  originalRect = Element.prototype.getBoundingClientRect;
+  contentStart = 100;
+  spacerStart = 100;
+  Element.prototype.getBoundingClientRect = function (this: Element) {
+    const rect = originalRect.call(this);
+    const height =
+      this.getAttribute("data-testid") === "settings-bottom-spacer"
+        ? spacerStart
+        : this.parentElement?.classList.contains("overflow-y-auto") && this === this.parentElement.firstElementChild
+          ? contentStart
+          : null;
+    if (height === null) return rect;
+    return { x: rect.x, y: rect.y, top: rect.top, left: rect.left, right: rect.right, width: rect.width, bottom: rect.top + height, height, toJSON: () => ({}) } as DOMRect;
+  };
   (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
     private o: FakeObserver;
     constructor(cb: ResizeObserverCallback) {
@@ -190,6 +213,7 @@ beforeEach(() => {
 afterEach(() => {
   (globalThis as { ResizeObserver?: unknown }).ResizeObserver = originalRO;
   Element.prototype.scrollIntoView = originalScrollIntoView;
+  Element.prototype.getBoundingClientRect = originalRect;
   jest.useRealTimers();
 });
 
@@ -202,9 +226,9 @@ function report(el: Element, height: number): void {
     }
   });
 }
-/** The observer's first report: every watched element at its starting size. */
+/** The observer's first report: every watched element at its landed height. */
 function reportStartingSizes(): void {
-  for (const o of observers) for (const el of o.els) report(el, 100);
+  for (const o of observers) for (const el of o.els) report(el, el === spacer() ? spacerStart : contentStart);
 }
 
 const scroller = (): HTMLElement => document.querySelector(".overflow-y-auto") as HTMLElement;
@@ -293,5 +317,21 @@ describe("BACKLOG-4174 the landed section stays at the top while Settings settle
     expect(observers.some((o) => !o.off && o.els.length > 0)).toBe(true);
     reportStartingSizes();
     expect(calls).toEqual([{ id: "settings-about", behavior: "smooth" }]);
+  });
+
+  it("C7 the spacer is 0 at landing and its first report is grown: About is re-scrolled", async () => {
+    spacerStart = 0;
+    const { plan, strict } = mockReads();
+    plan.resolve({});
+    strict.resolve("blocked");
+    render(<Host section="settings-about" />);
+    await tick();
+    await tick();
+    await tick();
+    expect(calls).toEqual([{ id: "settings-about", behavior: "smooth" }]);
+    expect(spacer().getBoundingClientRect().height).toBe(0);
+    report(content(), contentStart);
+    report(spacer(), 520);
+    expect(calls.slice(1)).toEqual([{ id: "settings-about", behavior: "instant" }]);
   });
 });

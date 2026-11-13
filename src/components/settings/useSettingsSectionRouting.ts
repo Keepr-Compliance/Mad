@@ -32,7 +32,9 @@ const USER_INPUT = ["wheel", "touchmove", "keydown", "pointerdown"] as const;
 /** Keeps `el` at the top of `root` while the page settles; returns the stop function. */
 function startSettle(root: HTMLElement, el: HTMLElement): () => void {
   if (typeof ResizeObserver === "undefined") return () => {};
-  // The first report for each element is its starting size, not growth.
+  // Each element's height when the window opens; a report that differs is growth.
+  // Seeded here, not from the first report: the spacer can reach its full
+  // height in the same task as the landing, so its first report is already grown.
   const heights = new Map<Element, number>();
   const observer = new ResizeObserver((entries) => {
     let grew = false;
@@ -40,12 +42,15 @@ function startSettle(root: HTMLElement, el: HTMLElement): () => void {
       const h = entry.contentRect.height;
       const before = heights.get(entry.target);
       heights.set(entry.target, h);
-      if (before !== undefined && before !== h) grew = true;
+      if (before !== h) grew = true;
     }
     if (grew) el.scrollIntoView({ behavior: "instant" as ScrollBehavior, block: "start" });
   });
   // The content column and the bottom spacer after it.
-  for (const child of Array.from(root.children)) observer.observe(child);
+  for (const child of Array.from(root.children)) {
+    heights.set(child, child.getBoundingClientRect().height);
+    observer.observe(child);
+  }
   const stop = () => {
     observer.disconnect();
     clearTimeout(timer);
