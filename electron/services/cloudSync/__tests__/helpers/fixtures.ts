@@ -87,3 +87,56 @@ export function dirtyCount(db: TestDb): number {
 export function triggerNames(db: TestDb): string[] {
   return (db.prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'trg_cloud_sync_%' ORDER BY name").all() as Array<{ name: string }>).map((r) => r.name);
 }
+
+// ---------------------------------------------------------------- PR-3 child fixtures (invented)
+
+export function insertContact(
+  db: TestDb,
+  id: string,
+  userId: string = USER_A,
+  extra: Record<string, unknown> = {},
+): void {
+  const cols: Record<string, unknown> = { id, user_id: userId, display_name: `Person ${id}`, source: "manual", ...extra };
+  const keys = Object.keys(cols);
+  db.prepare(`INSERT INTO contacts (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`).run(...keys.map((k) => cols[k]));
+}
+
+export function insertParty(db: TestDb, id: string, dealIdValue: string, contactId: string, extra: Record<string, unknown> = {}): void {
+  const cols: Record<string, unknown> = { id, transaction_id: dealIdValue, contact_id: contactId, role: "buyer", role_category: "client", ...extra };
+  const keys = Object.keys(cols);
+  db.prepare(`INSERT INTO transaction_contacts (${keys.join(", ")}) VALUES (${keys.map(() => "?").join(", ")})`).run(
+    ...keys.map((k) => cols[k]),
+  );
+}
+
+export function insertEmail(db: TestDb, id: string, contactId: string, email: string, primary = 0): void {
+  db.prepare("INSERT INTO contact_emails (id, contact_id, email, is_primary) VALUES (?, ?, ?, ?)").run(id, contactId, email, primary);
+}
+
+export function insertPhone(db: TestDb, id: string, contactId: string, e164: string, primary = 0): void {
+  db.prepare("INSERT INTO contact_phones (id, contact_id, phone_e164, phone_display, is_primary) VALUES (?, ?, ?, ?, ?)").run(
+    id,
+    contactId,
+    e164,
+    e164,
+    primary,
+  );
+}
+
+export function insertSourceLink(db: TestDb, id: string, contactId: string, sourceType: string, userId: string = USER_A): void {
+  db.prepare(
+    "INSERT INTO contact_source_links (id, user_id, contact_id, source_type, source_record_id, match_method) VALUES (?, ?, ?, ?, ?, 'source_id')",
+  ).run(id, userId, contactId, sourceType, `rec-${id}`);
+}
+
+export function insertChecklist(db: TestDb, id: string, dealIdValue: string, templateId = "tpl-1"): void {
+  db.prepare("INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name) VALUES (?, ?, ?, 'List')").run(
+    id,
+    dealIdValue,
+    templateId,
+  );
+}
+
+export function insertItem(db: TestDb, id: string, checklistId: string, title = "Task"): void {
+  db.prepare("INSERT INTO transaction_checklist_items (id, checklist_id, title) VALUES (?, ?, ?)").run(id, checklistId, title);
+}

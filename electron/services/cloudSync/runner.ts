@@ -627,7 +627,7 @@ export class CloudSyncRunner {
     let allAccepted = true;
 
     const tombstone = async (list: ChildTombstone[]): Promise<"ok" | DealResult> => {
-      for (const kind of CHILD_KINDS) {
+      for (const kind of [...new Set(list.map((t) => t.kind))]) {
         const ofKind = list.filter((t) => t.kind === kind);
         for (let i = 0; i < ofKind.length; i += MAX_TOMBSTONES_PER_CALL) {
           const chunk = ofKind.slice(i, i + MAX_TOMBSTONES_PER_CALL);
