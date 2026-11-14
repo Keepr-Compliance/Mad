@@ -507,3 +507,59 @@ MUTATION APPLIED C24_phone_key_renamed broker-portal/lib/mcp/tools/shapes.ts
 restored: yes, tree clean
 after restore: failed=0 total=217
 MUTANTS red=16 stayed_green=0
+
+# harness.py run --no-mutants --timeout --fixtures, test project, 2026-11-14 (call 5 of 6). The fixture it wrote is identical to the committed one.
+TIMEOUT CONTROL reader sleeps 10 s, statement_timeout 4 s
+composed: 227266 bytes, mutants 0
+wall_s=6
+BASE                                                           {"D1": "applied", "D2": "applied", "D3": "applied", "D4": "applied", "D5": "applied", "D6": "applied", "D7": "applied", "DB1": "applied", "DC1": "applied", "DD1": "applied", "del_D7": "OK", "D5_list": "applied", "mark_D1": "OK", "mark_D2": "OK", "D1_items": "applied,applied,applied,applied,applied,applied,applied", "D2_party": "applied", "DC1_list": "applied", "revoke_C": "OK", "DB1_party": "applied", "tomb_item": "OK", "tomb_list": "OK", "D1_parties": "appliedappliedappliedapplied", "E61_people": "applied", "tomb_party": "OK", "D1_checklists": "appliedappliedapplied", "on_267fa8a6-363a-adc3-8
+C_p_checklists                                                 PASS
+C_p_checks                                                     PASS
+C_p_dates                                                      PASS
+C_p_disabled                                                   PASS
+C_p_ent                                                        PASS
+C_p_fresh                                                      PASS
+C_p_grants                                                     PASS
+C_p_iso                                                        PASS
+C_p_limits                                                     PASS
+C_p_list_a                                                     PASS
+C_p_log                                                        PASS
+C_p_masking                                                    PASS
+C_p_no_claims                                                  PASS
+C_p_notice                                                     PASS
+C_p_null_install                                               PASS
+C_p_order_a                                                    PASS
+C_p_paging                                                     PASS
+C_p_people_cap                                                 PASS
+C_p_removed                                                    PASS
+C_p_rollback                                                   PASS
+C_p_saved_from                                                 PASS
+C_p_timeout                                                    PASS
+C_p_tokens                                                     PASS
+C_p_unconfirmed                                                PASS
+C_p_withheld                                                   PASS
+FX_cl_d1                                                       2187 bytes {"ok": true, "result": {"v": 1, "kind": "keepr.get_deal_checklists", "more": false, "about": "Record
+FX_cl_d1_open                                                  1969 bytes {"ok": true, "result": {"v": 1, "kind": "keepr.get_deal_checklists", "more": false, "about": "Record
+FX_cl_d4                                                       779 bytes {"ok": true, "result": {"v": 1, "kind": "keepr.get_deal_checklists", "more": false, "about": "Record
+FX_get_d1                                                      3832 bytes {"ok": true, "result": {"v": 1, "deal": {"zip": "98999", "city": "Fernhollow", "state": "WA", "locke
+FX_get_d2                                                      1809 bytes {"ok": true, "result": {"v": 1, "deal": {"zip": null, "city": null, "state": null, "locked": null, "
+FX_get_d4                                                      1525 bytes {"ok": true, "result": {"v": 1, "deal": {"zip": null, "city": null, "state": null, "locked": null, "
+FX_get_null_install                                            1511 bytes {"ok": true, "result": {"v": 1, "deal": {"zip": null, "city": null, "state": null, "locked": null, "
+FX_list_a                                                      2767 bytes {"ok": true, "result": {"v": 1, "copy": {"computers": 2, "deals_saved": 4, "newest_saved_at": "2026-
+FX_list_b                                                      1262 bytes {"ok": true, "result": {"v": 1, "copy": {"computers": 1, "deals_saved": 1, "newest_saved_at": "2026-
+FX_list_e_page1                                                1779 bytes {"ok": true, "result": {"v": 1, "copy": {"computers": 1, "deals_saved": 61, "newest_saved_at": "2026
+FX_list_null_install                                           3229 bytes {"ok": true, "result": {"v": 1, "copy": {"computers": 2, "deals_saved": 5, "newest_saved_at": "2026-
+PRE_4244_objects                                               0
+PRE_call_log_checks                                            mcp_call_log_event_check=CHECK ((event = ANY (ARRAY['call'::text, 'refresh_reuse'::text, 'code_replay'::text, 'code_replay_refused'::text, 'code_rejected'::text, 'disconnect'::text, 'disconnect_all'::text, 'cloud_off'::text, 'reconnect_replaced'::text]))); mcp_call_log_outcome_check=CHECK ((outcome = ANY (ARRAY['pending'::text, 'ok'::text, 'not_connected'::text, 'disabled'::text, 'rate_limited'::text, 'busy'::text, 'not_entitled'::text, 'timeout'::text, 'error'::text]))); mcp_call_log_tool_check=CHECK (((tool IS NULL) OR (tool = 'get_status'::text)))
+PRE_cloud_writes_new_signature                                 13
+PRE_cloud_writes_old_signature                                 0
+PRE_ledger_4244                                                0
+PRE_mcp_function_count                                         25
+PRE_mcp_functions_md5                                          48126d28553c04acf8d40f3bca8cf095
+PRE_server_version                                             17.11
+fp_after_apply                                                 7e487cc5b99f001e551766cc18d6f22e
+CONTROLS pass=25 fail=0 total=25
+MUTANTS as_expected=0 unexpected=0 total=0
+fixtures written: /private/tmp/claude-501/-Users-daniel-Developer-Mad/<id:1>/scratchpad/fx5.json
+
+# read-only catalog after the runs (call 6 of 6): 4244 objects 0, ledger row 0, mcp_* functions 25 with md5 48126d28553c04acf8d40f3bca8cf095 (same as PRE_mcp_functions_md5 in call 5), call log CHECKs as before, no fixture user left, mcp_reader without BYPASSRLS, row level security on the four tables.
