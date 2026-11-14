@@ -15,7 +15,8 @@ import type {
 
 export const learnModeBridge: WindowApiLearn = {
   /** Available (strict autodetect_eval read) and the user's own toggle. */
-  getState: () => ipcRenderer.invoke("learn:get-state"),
+  getState: (args?: { settle?: boolean }) =>
+    args === undefined ? ipcRenderer.invoke("learn:get-state") : ipcRenderer.invoke("learn:get-state", args),
 
   /** Turn Learn mode on or off for this user. Refused when not available. */
   setEnabled: (args: { enabled: boolean }) => ipcRenderer.invoke("learn:set-enabled", args),
