@@ -125,6 +125,47 @@ export function scimEmailCandidates(body: Record<string, unknown>): string[] {
 }
 
 /**
+ * BACKLOG-3986: the address a brand-new person's Keepr account is created with. The person's
+ * own address from emails[] (primary first, then type "work", then the first), because that is
+ * the address Microsoft presents at sign-in; userName only when emails[] names none. Lower-cased.
+ */
+export function scimAccountEmail(body: Record<string, unknown>): string | null {
+  const emails = Array.isArray(body.emails)
+    ? (body.emails as Array<{ value?: unknown; primary?: unknown; type?: unknown }>)
+      .filter((e) => e && typeof e === "object")
+    : [];
+  const rank = (e: { primary?: unknown; type?: unknown }) =>
+    (e.primary === true || e.primary === "true") ? 0
+    : String(e.type ?? "").toLowerCase() === "work" ? 1
+    : 2;
+  for (const e of [...emails].sort((a, b) => rank(a) - rank(b))) {
+    if (typeof e.value !== "string") continue;
+    const v = e.value.trim().toLowerCase();
+    if (v.includes("@")) return v;
+  }
+  if (typeof body.userName !== "string") return null;
+  const u = body.userName.trim().toLowerCase();
+  return u.includes("@") ? u : null;
+}
+
+/** BACKLOG-3986: the part after the last "@", as the JIT domain rule reads it. */
+function emailDomainOf(email: string): string | null {
+  const at = email.lastIndexOf("@");
+  const d = at >= 0 ? email.slice(at + 1) : "";
+  return d.length > 0 ? d : null;
+}
+
+/** BACKLOG-3986: GoTrue's answer when an account with this address already exists. */
+function isEmailExistsError(err: { code?: string; message?: string } | null): boolean {
+  if (!err) return false;
+  return err.code === "email_exists" || /already been registered/i.test(err.message ?? "");
+}
+
+export const DOMAIN_NOT_VERIFIED = "domain_not_verified";
+export const DOMAIN_NOT_VERIFIED_DETAIL =
+  "domain_not_verified: Keepr adds a new person only at a domain this brokerage has verified in Keepr. Verify the domain, or invite the person.";
+
+/**
  * Fetch the IdP config's attribute_mapping for an organization and resolve
  * the user's role from their groups. If group sync is disabled or no IdP
  * config exists, returns null (caller should use default role).
@@ -446,11 +487,26 @@ export async function handleCreateUser(
 
   // Check if user already exists by scim_external_id or email
   if (externalId) {
-    const { data: existingByExtId } = await supabaseAdmin
+    const { data: existingByExtId, error: extIdError } = await supabaseAdmin
       .from("users")
       .select("id")
       .eq("scim_external_id", externalId)
       .maybeSingle();
+
+    // BACKLOG-4138: a failed read is a 500, never read as "no such person".
+    if (extIdError) {
+      await logScimOperation(supabaseAdmin, {
+        organizationId: auth.orgId,
+        operation: "CREATE",
+        resourceType: "User",
+        externalId: externalId,
+        requestPayload: body,
+        responseStatus: 500,
+        errorMessage: "Failed to look up the person by externalId",
+        scimTokenId: auth.tokenId,
+      });
+      return scimError(500, "Failed to create user");
+    }
 
     if (existingByExtId) {
       await logScimOperation(supabaseAdmin, {
@@ -762,29 +818,65 @@ export async function handleCreateUser(
     );
   }
 
-  // New email: no Keepr account. Provisioning a brand-new person is BACKLOG-3986; today
-  // the membership write fails (the seat rule in a full brokerage, otherwise the
-  // auth.users key), so the users row created here is removed and the answer is 403 or
-  // 500, never 201 over a person with no membership.
-  const { data: newUser, error: createError } = await supabaseAdmin
-    .from("users")
-    .insert({
-      email,
-      first_name: nameObj?.givenName || null,
-      last_name: nameObj?.familyName || null,
-      display_name: displayName || null,
-      oauth_provider: "azure",
-      oauth_id: externalId || email,
-      scim_external_id: externalId || null,
-      provisioning_source: "scim",
-      is_managed: true,
-      status: "active",
-      is_active: true,
-    })
-    .select("*")
-    .single();
+  // BACKLOG-3986: no Keepr account names any of the payload's addresses. Keepr creates the
+  // person, only at a domain this brokerage has verified (the JIT rule: this organization,
+  // status verified, the exact domain, no subdomains), checked on exactly the address the
+  // account is created with.
+  const accountEmail = scimAccountEmail(body) ?? email;
+  const accountDomain = emailDomainOf(accountEmail);
+  let claimed = false;
+  if (accountDomain) {
+    const { data: claim, error: claimError } = await supabaseAdmin
+      .from("domain_claims")
+      .select("id")
+      .eq("organization_id", auth.orgId)
+      .eq("status", "verified")
+      .eq("domain", accountDomain)
+      .maybeSingle();
+    if (claimError) {
+      await logScimOperation(supabaseAdmin, {
+        organizationId: auth.orgId,
+        operation: "CREATE",
+        resourceType: "User",
+        externalId: externalId,
+        requestPayload: body,
+        responseStatus: 500,
+        errorMessage: "Failed to read the brokerage's verified domains",
+        scimTokenId: auth.tokenId,
+      });
+      return scimError(500, "Failed to create user");
+    }
+    claimed = !!claim;
+  }
+  if (!claimed) {
+    await logScimOperation(supabaseAdmin, {
+      organizationId: auth.orgId,
+      operation: "CREATE",
+      resourceType: "User",
+      externalId: externalId,
+      requestPayload: body,
+      responseStatus: 403,
+      errorMessage: DOMAIN_NOT_VERIFIED,
+      scimTokenId: auth.tokenId,
+    });
+    return scimError(403, DOMAIN_NOT_VERIFIED_DETAIL);
+  }
 
-  if (createError || !newUser) {
+  const createdNew = await resolveCreateRole(supabaseAdmin, auth.orgId, body, accountEmail);
+
+  // The sign-in account. The auth.users trigger (handle_new_user) writes the public.users row
+  // with the same id. No email is sent (email_confirm, no invite).
+  const fullName = [nameObj?.givenName, nameObj?.familyName].filter(Boolean).join(" ").trim()
+    || (displayName ?? "").trim();
+  const { data: createdAuth, error: authCreateError } = await supabaseAdmin.auth.admin.createUser({
+    email: accountEmail,
+    email_confirm: true,
+    user_metadata: fullName ? { full_name: fullName } : {},
+  });
+  const newUserId = createdAuth?.user?.id;
+  if (authCreateError || !newUserId) {
+    // An account with this address appeared after the lookup above. Nothing is written; the
+    // identity provider's retry finds it by sign-in email and takes the existing-person path.
     await logScimOperation(supabaseAdmin, {
       organizationId: auth.orgId,
       operation: "CREATE",
@@ -792,18 +884,36 @@ export async function handleCreateUser(
       externalId: externalId,
       requestPayload: body,
       responseStatus: 500,
-      errorMessage: createError?.message || "Failed to create user",
+      errorMessage: isEmailExistsError(authCreateError)
+        ? "email_exists_retry"
+        : authCreateError?.message || "Failed to create the sign-in account",
       scimTokenId: auth.tokenId,
     });
     return scimError(500, "Failed to create user");
   }
 
-  const createdNew = await resolveCreateRole(supabaseAdmin, auth.orgId, body, email);
+  // Undo the person this request created: the sign-in account first (its membership goes with
+  // it), then the users row. If the account cannot be removed, the users row is kept, so the
+  // next retry finds the account by sign-in email and continues on the existing-person path.
+  const removeNewPerson = async () => {
+    const { error: deleteError } = await supabaseAdmin.auth.admin.deleteUser(newUserId);
+    if (deleteError) {
+      console.error(`[scim] orphan auth user ${newUserId}: could not remove it:`, deleteError.message);
+      return;
+    }
+    const { error: removeError } = await supabaseAdmin
+      .from("users")
+      .delete()
+      .eq("id", newUserId);
+    if (removeError) {
+      console.error(`[scim] could not remove users row ${newUserId}:`, removeError.message);
+    }
+  };
 
   const { error: newMemberError } = await writeScimMembership(supabaseAdmin, {
     orgId: auth.orgId,
-    userId: newUser.id,
-    email,
+    userId: newUserId,
+    email: accountEmail,
     emailCandidates,
     role: createdNew.role,
     roleFromGroups: createdNew.fromGroups,
@@ -811,13 +921,23 @@ export async function handleCreateUser(
   });
 
   if (newMemberError) {
-    // Remove the fresh users row first, so Entra's retry is a clean new-email POST again.
-    const { error: removeError } = await supabaseAdmin
-      .from("users")
-      .delete()
-      .eq("id", newUser.id);
-    if (removeError) {
-      console.error(`[scim] could not remove users row ${newUser.id}:`, removeError.message);
+    await removeNewPerson();
+    if (isAlreadyPlacedError(newMemberError)) {
+      await logScimOperation(supabaseAdmin, {
+        organizationId: auth.orgId,
+        operation: "CREATE",
+        resourceType: "User",
+        externalId: externalId,
+        requestPayload: body,
+        responseStatus: 409,
+        errorMessage: "already_placed",
+        scimTokenId: auth.tokenId,
+      });
+      return scimError(
+        409,
+        "already_placed: this person already belongs to another brokerage in Keepr.",
+        "uniqueness",
+      );
     }
     if (isBillingSetupIncompleteError(newMemberError)) {
       return refuseForBillingSetup(supabaseAdmin, auth, { operation: "CREATE", externalId, body });
@@ -844,11 +964,41 @@ export async function handleCreateUser(
     return scimError(500, "Failed to create user");
   }
 
+  const { data: newUser, error: newUserError } = await supabaseAdmin
+    .from("users")
+    .update({
+      scim_external_id: externalId || newUserId,
+      provisioning_source: "scim",
+      is_managed: true,
+      first_name: nameObj?.givenName || undefined,
+      last_name: nameObj?.familyName || undefined,
+      display_name: displayName || undefined,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", newUserId)
+    .select("*")
+    .single();
+
+  if (newUserError || !newUser) {
+    await removeNewPerson();
+    await logScimOperation(supabaseAdmin, {
+      organizationId: auth.orgId,
+      operation: "CREATE",
+      resourceType: "User",
+      externalId: externalId,
+      requestPayload: body,
+      responseStatus: 500,
+      errorMessage: newUserError?.message || "Failed to update the new person",
+      scimTokenId: auth.tokenId,
+    });
+    return scimError(500, "Failed to create user");
+  }
+
   await logScimOperation(supabaseAdmin, {
     organizationId: auth.orgId,
     operation: "CREATE",
     resourceType: "User",
-    resourceId: newUser.id,
+    resourceId: newUserId,
     externalId: externalId,
     requestPayload: body,
     responseStatus: 201,
@@ -860,7 +1010,7 @@ export async function handleCreateUser(
     headers: {
       ...CORS_HEADERS,
       "Content-Type": SCIM_CONTENT_TYPE,
-      Location: `${baseUrl}/scim/v2/Users/${newUser.id}`,
+      Location: `${baseUrl}/scim/v2/Users/${newUserId}`,
     },
   });
 }

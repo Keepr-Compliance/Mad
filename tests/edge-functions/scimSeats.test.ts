@@ -9,8 +9,8 @@
  * and returns the seat trigger's refusal (P0001 seat_limit_reached) or the auth.users
  * foreign-key error (23503) where the real database does. Shapes transcribed from the
  * NAS venue (supabase/tests/backlog-3851, control c19): an existing Keepr person has an
- * auth.users row; a brand-new email gets a public.users row whose membership the
- * auth.users key refuses. fetch is injected: no network.
+ * auth.users row. BACKLOG-3986: a brand-new person is created through auth.admin.createUser,
+ * whose fake emulates the handle_new_user trigger (see makeDb). fetch is injected: no network.
  */
 
 jest.mock('jsr:@supabase/supabase-js@2', () => ({}), { virtual: true });
@@ -70,7 +70,21 @@ interface FakeOpts {
   failOidLookup?: Err;
   /** BACKLOG-4034: fail the next read of this table. */
   failSelect?: { table: string; error: Err };
+  /** BACKLOG-3986: auth.admin.createUser answers with this error. */
+  failCreateUser?: AuthErr;
+  /** BACKLOG-3986: auth.admin.deleteUser answers with this error. */
+  failDeleteUser?: AuthErr;
+  /**
+   * BACKLOG-3986: addresses GoTrue already holds that user_id_for_auth_email did not see (an
+   * account created between the lookup and createUser). createUser answers email_exists.
+   */
+  authTakenEmails?: string[];
 }
+
+/** supabase-js AuthApiError fields (node_modules/@supabase/auth-js/dist/main/lib/errors.js). */
+type AuthErr = { status: number; code: string; message: string };
+/** GoTrue's answer to createUser for a taken address (auth-js ErrorCode 'email_exists', HTTP 422). */
+const EMAIL_EXISTS: AuthErr = { status: 422, code: 'email_exists', message: 'A user with this email address has already been registered' };
 
 const IDP_ORIGINS = ['jit', 'scim', 'directory_sync'];
 const BILLING_REFUSAL = { code: 'P0001', message: 'billing_setup_incomplete', details: null, hint: 'This brokerage has not finished billing setup in Keepr. People can join once it is done.' };
@@ -89,6 +103,8 @@ function holdsSeat(r: Row): boolean {
 function makeDb(tables: Tables, opts: FakeOpts = {}) {
   const writes: Write[] = [];
   let seq = 0;
+  // One array for the whole fake: createUser adds to it, deleteUser removes from it.
+  const authIds = (opts.authIds ??= []);
 
   function from(table: string) {
     let op: 'select' | 'insert' | 'update' | 'delete' = 'select';
@@ -254,7 +270,51 @@ function makeDb(tables: Tables, opts: FakeOpts = {}) {
     return { data: rows.length === 1 ? rows[0].id : null, error: null };
   }
 
-  return { client: { from, rpc }, writes, tables, rpcCalls };
+  // BACKLOG-3986: the GoTrue admin API, as supabase-js returns it: { data: { user }, error }.
+  // createUser runs the on_auth_user_created trigger, handle_new_user (migration
+  // 20261016070000), transcribed: remove users rows with this email and no auth.users row, then
+  // insert users (id = the auth id, email lower(btrim), display_name = full_name / name / the
+  // local part, oauth_provider 'email', oauth_id = the id). deleteUser removes the auth.users row;
+  // organization_members.user_id references auth.users ON DELETE CASCADE, so the person's
+  // memberships go with it. public.users has NO foreign key to auth.users: its row STAYS.
+  const authCalls: Array<{ fn: 'createUser' | 'deleteUser'; args: Row; result?: string }> = [];
+  let authSeq = 0;
+  const lc = (v: unknown) => String(v ?? '').trim().toLowerCase();
+  const auth = {
+    admin: {
+      createUser: async (attrs: { email?: string; email_confirm?: boolean; user_metadata?: Row }) => {
+        const call: (typeof authCalls)[number] = { fn: 'createUser', args: attrs as Row };
+        authCalls.push(call);
+        if (opts.failCreateUser) return { data: { user: null }, error: opts.failCreateUser };
+        const e = lc(attrs.email);
+        const users = (tables.users ??= []);
+        const taken = (opts.authTakenEmails ?? []).map(lc).includes(e)
+          || authIds.some((id) => lc(opts.authEmails?.[id] ?? users.find((u) => u.id === id)?.email) === e);
+        if (taken) return { data: { user: null }, error: EMAIL_EXISTS };
+        const id = `00000000-0000-0000-0000-${String(++authSeq).padStart(12, '0')}`;
+        authIds.push(id);
+        tables.users = users.filter((u) => !(lc(u.email) === e && !authIds.includes(String(u.id))));
+        const meta = attrs.user_metadata ?? {};
+        tables.users.push({
+          id, email: e, display_name: meta.full_name ?? meta.name ?? e.split('@')[0],
+          oauth_provider: 'email', oauth_id: id, is_active: true, status: 'active',
+        });
+        call.result = id;
+        return { data: { user: { id, email: e, user_metadata: meta } }, error: null };
+      },
+      deleteUser: async (id: string) => {
+        authCalls.push({ fn: 'deleteUser', args: { id } });
+        if (opts.failDeleteUser) return { data: { user: null }, error: opts.failDeleteUser };
+        const i = authIds.indexOf(id);
+        if (i < 0) return { data: { user: null }, error: { status: 404, code: 'user_not_found', message: 'User not found' } };
+        authIds.splice(i, 1);
+        tables.organization_members = (tables.organization_members ?? []).filter((m) => m.user_id !== id);
+        return { data: { user: { id } }, error: null };
+      },
+    },
+  };
+
+  return { client: { from, rpc, auth }, writes, tables, rpcCalls, authCalls, authIds };
 }
 
 // ---------------------------------------------------------------------------
@@ -287,6 +347,7 @@ function baseTables(extra: Partial<Tables> = {}): Tables {
     ],
     scim_sync_log: [],
     organization_identity_providers: [],
+    domain_claims: [],
     ...extra,
   };
 }
@@ -541,30 +602,241 @@ describe('POST existing person', () => {
 });
 
 // ---------------------------------------------------------------------------
-// POST, brand-new email (S2; provisioning a new person is BACKLOG-3986)
+// POST, brand-new person (BACKLOG-3986): no Keepr account names any of the payload's
+// addresses. Keepr creates the sign-in account, only at a domain this brokerage has verified.
 // ---------------------------------------------------------------------------
 
-describe('POST brand-new email', () => {
-  it('free org: the auth.users key refuses the membership -> 500, the fresh users row is removed, never 201', async () => {
-    const t = baseTables();
-    const db = makeDb(t, { authIds: [] });
+describe('POST brand-new person (BACKLOG-3986)', () => {
+  const CLAIM = { id: 'dc-1', organization_id: ORG, domain: 'brokerage.test', status: 'verified' };
+  const NAME = { givenName: 'Nia', familyName: 'New' };
+  /** Entra shape: userName = UPN, emails[] = mail (primary, type work). */
+  const newReq = (userName = 'nia.upn@brokerage.test', emails: unknown = [{ value: 'Nia.New@brokerage.test', type: 'work', primary: true }]) =>
+    postReq(userName, { name: NAME, emails });
+  const claimTables = (claims: Row[] = [CLAIM]) => baseTables({ domain_claims: claims.map((c) => ({ ...c })) });
+  const nonLog = (w: Write[]) => w.filter((x) => x.table !== 'scim_sync_log');
+  const newIds = (db: ReturnType<typeof makeDb>) => db.authCalls.filter((c) => c.fn === 'createUser').map((c) => c.result as string | undefined);
+
+  it('C1 verified domain, free seat: one confirmed sign-in account, membership + users row on its id, 201 at that id', async () => {
+    const t = claimTables();
+    const db = makeDb(t);
     const { d, fetch } = deps();
-    const res = await handleCreateUser(postReq('new@example.test'), AUTH as never, db.client as never, BASE, d);
-    expect(res.status).toBe(500);
-    expect(t.users.some((u) => u.email === 'new@example.test')).toBe(false);
-    expect(userWrites(db.writes).map((w) => w.op)).toEqual(['insert', 'delete']);
+    const res = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, d);
+    expect(res.status).toBe(201);
+    expect(db.authCalls.map((c) => c.fn)).toEqual(['createUser']);
+    const fullName = [NAME.givenName, NAME.familyName].join(' ');
+    expect(db.authCalls[0].args).toEqual({
+      email: 'nia.new@brokerage.test',
+      email_confirm: true,
+      user_metadata: { full_name: fullName },
+    });
+    const id = newIds(db)[0] as string;
+    expect(id).toMatch(/^00000000-/);
+    expect(memberWrites(db.writes).map((w) => w.op)).toEqual(['insert']);
+    expect(memberWrites(db.writes)[0].payload).toMatchObject({ organization_id: ORG, user_id: id, license_status: 'active', provisioned_by: 'scim' });
+    expect(userWrites(db.writes).map((w) => w.op)).toEqual(['update']);
+    expect(t.users.filter((u) => u.email === 'nia.new@brokerage.test')).toEqual([
+      expect.objectContaining({ id, scim_external_id: 'ext-nia.upn@brokerage.test', provisioning_source: 'scim', is_managed: true,
+        first_name: 'Nia', last_name: 'New' }),
+    ]);
+    expect(res.headers.get('Location')).toBe(`${BASE}/scim/v2/Users/${id}`);
+    expect((await res.json()).id).toBe(id);
+    expect(t.scim_sync_log).toEqual([expect.objectContaining({ response_status: 201, resource_id: id })]);
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('full org: the seat rule refuses first -> 403 + email, the fresh users row is removed', async () => {
-    const t = baseTables();
-    const db = makeDb(t, { full: true, authIds: [] });
+  it('C2 no claim for the domain: 403 domain_not_verified, no account created, nothing written, one log row', async () => {
+    const t = claimTables([]);
+    const db = makeDb(t);
     const { d, fetch } = deps();
-    const res = await handleCreateUser(postReq('new@example.test', { name: { givenName: 'Nia', familyName: 'New' } }), AUTH as never, db.client as never, BASE, d);
+    const res = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, d);
     expect(res.status).toBe(403);
-    expect(t.users.some((u) => u.email === 'new@example.test')).toBe(false);
+    const body = await res.json();
+    expect(body.detail).toMatch(/^domain_not_verified: /);
+    expect('scimType' in body).toBe(false);
+    expect(db.authCalls).toEqual([]);
+    expect(nonLog(db.writes)).toEqual([]);
+    expect(t.scim_sync_log).toEqual([expect.objectContaining({ response_status: 403, error_message: 'domain_not_verified' })]);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each(['pending', 'lapsed', 'withdrawn', 'revoked'])('C3 a %s claim is not verified: 403, no account', async (status) => {
+    const db = makeDb(claimTables([{ ...CLAIM, status }]));
+    const res = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(403);
+    expect(db.authCalls).toEqual([]);
+  });
+
+  it('C4 the domain is verified by another brokerage: 403, no account', async () => {
+    const db = makeDb(claimTables([{ ...CLAIM, organization_id: 'org-other' }]));
+    const res = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(403);
+    expect(db.authCalls).toEqual([]);
+  });
+
+  it.each([
+    ['a subdomain of the verified domain', 'brokerage.test', 'nia@sub.brokerage.test'],
+    ['the parent of the verified domain', 'sub.brokerage.test', 'nia@brokerage.test'],
+    ['a domain ending in the verified one', 'brokerage.test', 'nia@otherbrokerage.test'],
+  ])('C5 %s is not that domain: 403, no account', async (_label, domain, address) => {
+    const db = makeDb(claimTables([{ ...CLAIM, domain }]));
+    const res = await handleCreateUser(newReq(address, [{ value: address, primary: true }]), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(403);
+    expect(db.authCalls).toEqual([]);
+  });
+
+  it('C6 full org: 403 seat_limit_reached + one IT email; the account and its users row are removed, no membership', async () => {
+    const t = claimTables();
+    const db = makeDb(t, { full: true });
+    const { d, fetch } = deps();
+    const res = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, d);
+    expect(res.status).toBe(403);
+    expect((await res.json()).detail.startsWith('seat_limit_reached')).toBe(true);
+    const id = newIds(db)[0] as string;
+    expect(db.authCalls.map((c) => c.fn)).toEqual(['createUser', 'deleteUser']);
+    expect(db.authIds).not.toContain(id);
+    expect(t.users.some((u) => u.id === id || u.email === 'nia.new@brokerage.test')).toBe(false);
+    expect(t.organization_members.some((m) => m.user_id === id)).toBe(false);
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(JSON.parse(String((fetch.mock.calls[0] as unknown as [string, RequestInit])[1].body)).personLabel).toBe('Nia New');
+    expect(t.scim_sync_log.filter((r) => r.response_status === 403)).toEqual([expect.objectContaining({ error_message: SEAT_LIMIT_ERROR })]);
+  });
+
+  it('C7 billing setup pending: 403 with the setup detail; the account and its users row are removed', async () => {
+    const t = claimTables();
+    const db = makeDb(t, { billingPending: true });
+    const { d, fetch } = deps();
+    const res = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, d);
+    expect(res.status).toBe(403);
+    expect((await res.json()).detail).toBe(BILLING_SETUP_DETAIL);
+    const id = newIds(db)[0] as string;
+    expect(db.authCalls.map((c) => c.fn)).toEqual(['createUser', 'deleteUser']);
+    expect(db.authIds).not.toContain(id);
+    expect(t.users.some((u) => u.id === id)).toBe(false);
+    expect(t.scim_sync_log.filter((r) => r.error_message === 'billing_setup_incomplete')).toHaveLength(1);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('C8 the one-brokerage guard refuses the membership: 409 already_placed; the account and its users row are removed', async () => {
+    const t = claimTables();
+    const db = makeDb(t, { failWrite: { table: 'organization_members', op: 'insert', error: { code: 'P0001', message: 'already_placed' } } });
+    const res = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.scimType).toBe('uniqueness');
+    expect(body.detail).toMatch(/^already_placed/);
+    const id = newIds(db)[0] as string;
+    expect(db.authIds).not.toContain(id);
+    expect(t.users.some((u) => u.id === id)).toBe(false);
+    expect(t.scim_sync_log).toEqual([expect.objectContaining({ response_status: 409, error_message: 'already_placed' })]);
+  });
+
+  it('C9 the users update fails after the membership: 500; account, membership and users row are all gone', async () => {
+    const t = claimTables();
+    const db = makeDb(t, { failWrite: { table: 'users', op: 'update', error: { code: '57014', message: 'canceling statement due to statement timeout' } } });
+    const res = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(500);
+    const id = newIds(db)[0] as string;
+    expect(memberWrites(db.writes).map((w) => w.op)).toEqual(['insert']);
+    expect(db.authIds).not.toContain(id);
+    expect(t.organization_members.some((m) => m.user_id === id)).toBe(false);
+    expect(t.users.some((u) => u.id === id)).toBe(false);
+    expect(t.scim_sync_log).toEqual([expect.objectContaining({ response_status: 500 })]);
+  });
+
+  it('C10 an account with the address appears after the lookup: 500 email_exists_retry, nothing written, nothing removed', async () => {
+    const t = claimTables();
+    const db = makeDb(t, { authTakenEmails: ['nia.new@brokerage.test'] });
+    const res = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(500);
+    expect(db.authCalls.map((c) => c.fn)).toEqual(['createUser']);
+    expect(nonLog(db.writes)).toEqual([]);
+    expect(t.scim_sync_log).toEqual([expect.objectContaining({ response_status: 500, error_message: 'email_exists_retry' })]);
+  });
+
+  it('C11 the account cannot be removed: users row kept, orphan logged; the next POST adds that person (201, existing path)', async () => {
+    const t = claimTables();
+    const opts: FakeOpts = { full: true, failDeleteUser: { status: 500, code: 'unexpected_failure', message: 'Database error deleting user' } };
+    const db = makeDb(t, opts);
+    const first = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(first.status).toBe(403);
+    const id = newIds(db)[0] as string;
+    expect(db.authIds).toContain(id);
+    expect(t.users.filter((u) => u.id === id)).toHaveLength(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining(`orphan auth user ${id}`), expect.anything());
+    // A seat frees up; Entra retries.
+    opts.full = false;
+    opts.failDeleteUser = undefined;
+    const second = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(second.status).toBe(201);
+    expect(newIds(db)).toHaveLength(1);
+    expect(second.headers.get('Location')).toBe(`${BASE}/scim/v2/Users/${id}`);
+    expect(t.organization_members.filter((m) => m.user_id === id)).toEqual([expect.objectContaining({ organization_id: ORG, license_status: 'active' })]);
+  });
+
+  it('C12 an EXISTING Keepr person at an unverified domain is still added (201): the domain rule is for new people only', async () => {
+    const t = claimTables([]);
+    t.users.push({ id: 'u-q', email: 'q@unverified.test' });
+    const db = makeDb(t, { authIds: ['u-q'] });
+    const res = await handleCreateUser(postReq('q@unverified.test'), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(201);
+    expect(db.authCalls).toEqual([]);
+    expect(memberWrites(db.writes)[0].payload).toMatchObject({ user_id: 'u-q' });
+  });
+
+  it('C13 creating the account fails otherwise: 500, nothing written, nothing to remove', async () => {
+    const t = claimTables();
+    const db = makeDb(t, { failCreateUser: { status: 500, code: 'unexpected_failure', message: 'Database error creating new user' } });
+    const res = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(500);
+    expect(db.authCalls.map((c) => c.fn)).toEqual(['createUser']);
+    expect(nonLog(db.writes)).toEqual([]);
+    expect(t.scim_sync_log).toEqual([expect.objectContaining({ response_status: 500, error_message: 'Database error creating new user' })]);
+  });
+
+  it('C14 (BACKLOG-4138) the externalId read fails: 500, no lookup, no account, nothing written', async () => {
+    const t = claimTables();
+    const db = makeDb(t, { failSelect: { table: 'users', error: { code: '57014', message: 'canceling statement due to statement timeout' } } });
+    const res = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(500);
+    expect(db.rpcCalls).toEqual([]);
+    expect(db.authCalls).toEqual([]);
+    expect(nonLog(db.writes)).toEqual([]);
+    expect(t.scim_sync_log).toEqual([expect.objectContaining({ response_status: 500, error_message: 'Failed to look up the person by externalId' })]);
+  });
+
+  it('C15(a) userName at an unverified domain, emails[] primary at the verified one: created with the emails[] address', async () => {
+    const t = claimTables();
+    const db = makeDb(t);
+    const res = await handleCreateUser(newReq('nia@upn-tenant.test', [{ value: 'nia.new@brokerage.test', type: 'work', primary: true }]),
+      AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(201);
+    expect(db.authCalls[0].args).toMatchObject({ email: 'nia.new@brokerage.test' });
+  });
+
+  it('C15(b) emails[] primary at an unverified domain, userName at the verified one: 403, no account', async () => {
+    const t = claimTables();
+    const db = makeDb(t);
+    const res = await handleCreateUser(newReq('nia@brokerage.test', [{ value: 'nia@personal-mail.test', primary: true }, { value: 'nia@brokerage.test', type: 'work' }]),
+      AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(403);
+    expect(db.authCalls).toEqual([]);
+  });
+
+  it('C15(c) emails[] names no address: created with userName', async () => {
+    const t = claimTables();
+    const db = makeDb(t);
+    const res = await handleCreateUser(newReq('Nia@Brokerage.test', [{ type: 'work' }]), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(201);
+    expect(db.authCalls[0].args).toMatchObject({ email: 'nia@brokerage.test' });
+  });
+
+  it('C16 the verified-domain read fails: 500, no account, nothing written', async () => {
+    const t = claimTables();
+    const db = makeDb(t, { failSelect: { table: 'domain_claims', error: { code: '57014', message: 'canceling statement due to statement timeout' } } });
+    const res = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(500);
+    expect(db.authCalls).toEqual([]);
+    expect(nonLog(db.writes)).toEqual([]);
   });
 });
 
@@ -713,18 +985,7 @@ describe('billing setup pending (BACKLOG-4012)', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('POST brand-new email: 403 with the setup detail and the fresh users row is removed', async () => {
-    const t = baseTables();
-    const db = makeDb(t, { billingPending: true, authIds: [] });
-    const { d, fetch } = deps();
-    const res = await handleCreateUser(postReq('new@example.test'), AUTH as never, db.client as never, BASE, d);
-    expect(res.status).toBe(403);
-    expect((await res.json()).detail).toBe(BILLING_SETUP_DETAIL);
-    expect(t.users.some((u) => u.email === 'new@example.test')).toBe(false);
-    expect(userWrites(db.writes).map((w) => w.op)).toEqual(['insert', 'delete']);
-    expect(billingLog(t)).toHaveLength(1);
-    expect(fetch).not.toHaveBeenCalled();
-  });
+  // POST brand-new person while billing setup is pending: C7 in 'POST brand-new person (BACKLOG-3986)'.
 
   it('PATCH active:true on a suspended SCIM member: 403, still suspended, users row not written', async () => {
     const t = baseTables();
