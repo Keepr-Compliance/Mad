@@ -34,6 +34,10 @@ export interface CloudSyncView {
   pendingDeals: number;
   /** Deals that could not be saved and will not be retried until they change. */
   notSavedDeals: number;
+  /** Online deals saved from this install that this computer has no record of (never deleted automatically). */
+  onlineNotHereDeals: number;
+  /** Other installs of this account idle for 30+ days, summed; null when none or unknown. */
+  otherInstalls: { deals: number; lastSavedAt: string } | null;
   /** ISO time of the last pass that finished with work done, or null. */
   lastSavedAt: string | null;
   /** True when "Manage AI apps" can open the portal page. */
@@ -56,4 +60,6 @@ export interface WindowApiCloudSync {
   forgetOtherProject: () => Promise<CloudSyncResult>;
   retry: () => Promise<CloudSyncResult>;
   openAiApps: () => Promise<CloudSyncResult>;
+  deleteOnlineNotHere: () => Promise<CloudSyncResult>;
+  deleteOldInstalls: () => Promise<CloudSyncResult>;
 }

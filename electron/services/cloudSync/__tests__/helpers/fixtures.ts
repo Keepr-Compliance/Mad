@@ -62,11 +62,19 @@ export function insertDeal(
   );
 }
 
-export function enableUser(db: TestDb, userId: string = USER_A, project: string = PROJECT): void {
+export function enableUser(
+  db: TestDb,
+  userId: string = USER_A,
+  project: string = PROJECT,
+  opts: { reconciledAt?: string | null } = {},
+): void {
   db.prepare(
-    "INSERT INTO cloud_sync_settings (project_ref, user_id, enabled, local_confirmed_at, notice_version, accepted_at) VALUES (?, ?, 1, '2026-11-01T00:00:00.000Z', 1, '2026-11-01T00:00:00.000Z') ON CONFLICT (project_ref, user_id) DO UPDATE SET enabled = 1, local_confirmed_at = excluded.local_confirmed_at",
-  ).run(project, userId);
+    "INSERT INTO cloud_sync_settings (project_ref, user_id, enabled, local_confirmed_at, notice_version, accepted_at, last_state_at) VALUES (?, ?, 1, '2026-11-01T00:00:00.000Z', 1, '2026-11-01T00:00:00.000Z', ?) ON CONFLICT (project_ref, user_id) DO UPDATE SET enabled = 1, local_confirmed_at = excluded.local_confirmed_at",
+  ).run(project, userId, opts.reconciledAt === undefined ? RECONCILED_AT : opts.reconciledAt);
 }
+
+/** The harness clock's "now": a reconcile recorded then is not due again in these suites. */
+export const RECONCILED_AT = "2026-11-14T12:00:00.000Z";
 
 export function dirty(db: TestDb): Array<{ transaction_id: string; generation: number; attempts: number; next_attempt_at: string | null; last_error_code: string | null }> {
   return db.prepare("SELECT transaction_id, generation, attempts, next_attempt_at, last_error_code FROM cloud_sync_dirty ORDER BY transaction_id").all() as never;

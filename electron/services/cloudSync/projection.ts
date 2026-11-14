@@ -210,3 +210,214 @@ export function projectDeal(row: DealRow, installId: string): ProjectedDeal {
     },
   };
 }
+
+// ================================================================ children (PR-3)
+//
+// Frozen hashed field lists (scratchpad/4236/prebuild.md §(b)), plus the party
+// `details_withheld` flag (cloud-deal-shape-v1.json party.details_withheld,
+// in_content_hash: true). Each projection reads only the columns named in its
+// *_SOURCE_COLUMNS lists; the dirty-mark triggers watch exactly those.
+
+/** transaction_contacts columns the party projection reads. */
+export const PARTY_ROW_COLUMNS = [
+  "id",
+  "transaction_id",
+  "contact_id",
+  "role",
+  "role_category",
+  "specific_role",
+  "is_primary",
+  "notes",
+  "removed_at",
+] as const;
+/** contacts columns the party projection reads. */
+export const PARTY_CONTACT_COLUMNS = ["display_name", "company", "source", "removed_at", "removed_reason"] as const;
+export const PARTY_EMAIL_COLUMNS = ["contact_id", "email", "is_primary", "label"] as const;
+export const PARTY_PHONE_COLUMNS = ["contact_id", "phone_e164", "phone_display", "is_primary", "label"] as const;
+export const PARTY_SOURCE_LINK_COLUMNS = ["contact_id", "source_type"] as const;
+
+export const PARTY_HASHED_FIELDS = [
+  "local_contact_id",
+  "role",
+  "role_category",
+  "specific_role",
+  "is_primary",
+  "notes",
+  "display_name",
+  "company",
+  "emails",
+  "phones",
+  "contact_source",
+  "contact_deleted",
+  "removed_reason",
+  "details_withheld",
+] as const;
+
+/** transaction_checklists columns the checklist projection reads. */
+export const CHECKLIST_SOURCE_COLUMNS = ["id", "transaction_id", "template_id", "template_name", "sort_order", "selected_at"] as const;
+export const CHECKLIST_HASHED_FIELDS = ["template_id", "template_name", "sort_order", "selected_at", "is_private"] as const;
+
+/** transaction_checklist_items columns the item projection reads. */
+export const ITEM_SOURCE_COLUMNS = [
+  "id",
+  "checklist_id",
+  "title",
+  "description",
+  "is_required",
+  "expected_document_type",
+  "is_checked",
+  "checked_at",
+  "note",
+  "sort_order",
+  "created_at",
+] as const;
+export const ITEM_HASHED_FIELDS = [
+  "local_checklist_id",
+  "title",
+  "description",
+  "is_required",
+  "expected_document_type",
+  "is_checked",
+  "checked_at",
+  "note",
+  "sort_order",
+  "local_created_at",
+  "links",
+] as const;
+
+/** The reserved private checklist (electron/services/db/checklistPrivacy.ts). */
+export const PRIVATE_TEMPLATE_ID = "keepr:my-items";
+export const GOOGLE_CONTACTS_SOURCE = "google_contacts";
+
+function cleanBool(value: unknown): boolean | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "boolean") return value;
+  const n = Number(value);
+  return Number.isFinite(n) ? n !== 0 : null;
+}
+
+function cleanInt(value: unknown): number | null {
+  const n = cleanNumber(value);
+  return n === null ? null : Math.trunc(n);
+}
+
+export interface PartySource {
+  row: Record<string, unknown>;
+  /** The contacts row, or null when the contact no longer exists. */
+  contact: Record<string, unknown> | null;
+  emails: Array<Record<string, unknown>>;
+  phones: Array<Record<string, unknown>>;
+  /** source_type values of the contact's contact_source_links rows. */
+  sourceTypes: string[];
+}
+
+/** The Google predicate (P3-4): contact source google_contacts OR any google_contacts link. */
+export function isWithheld(source: PartySource): boolean {
+  return (
+    source.contact?.source === GOOGLE_CONTACTS_SOURCE ||
+    source.sourceTypes.includes(GOOGLE_CONTACTS_SOURCE)
+  );
+}
+
+function byPrimaryThen<T>(rows: T[], key: (r: T) => string, id: (r: T) => string, primary: (r: T) => boolean): T[] {
+  return [...rows].sort((a, b) => {
+    const p = Number(primary(b)) - Number(primary(a));
+    if (p !== 0) return p;
+    const k = key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0;
+    if (k !== 0) return k;
+    return id(a) < id(b) ? -1 : id(a) > id(b) ? 1 : 0;
+  });
+}
+
+/** §3.2 order: is_primary DESC, lower(email) ASC, id ASC. */
+export function partyEmails(rows: Array<Record<string, unknown>>): JsonValue[] {
+  return byPrimaryThen(
+    rows,
+    (r) => String(r.email ?? "").toLowerCase(),
+    (r) => String(r.id ?? ""),
+    (r) => cleanBool(r.is_primary) === true,
+  ).map((r) => ({ email: cleanText(r.email) ?? "", is_primary: cleanBool(r.is_primary) === true, label: cleanText(r.label) }));
+}
+
+/** §3.2 order: is_primary DESC, phone_e164 ASC, id ASC. */
+export function partyPhones(rows: Array<Record<string, unknown>>): JsonValue[] {
+  return byPrimaryThen(
+    rows,
+    (r) => String(r.phone_e164 ?? ""),
+    (r) => String(r.id ?? ""),
+    (r) => cleanBool(r.is_primary) === true,
+  ).map((r) => ({
+    e164: cleanText(r.phone_e164) ?? "",
+    display: cleanText(r.phone_display),
+    is_primary: cleanBool(r.is_primary) === true,
+    label: cleanText(r.label),
+  }));
+}
+
+/**
+ * The hashed party DTO. When withheld, name, company, emails and phones are
+ * blanked BEFORE hashing, so the hash covers exactly what is sent (P3-2).
+ */
+export function buildPartyDto(source: PartySource): { [key: string]: JsonValue } {
+  const c = source.contact;
+  const withheld = isWithheld(source);
+  const contactDeleted = c === null || (c.removed_at !== null && c.removed_at !== undefined);
+  return {
+    local_contact_id: cleanText(source.row.contact_id),
+    role: cleanText(source.row.role),
+    role_category: cleanText(source.row.role_category),
+    specific_role: cleanText(source.row.specific_role),
+    is_primary: cleanBool(source.row.is_primary),
+    notes: cleanText(source.row.notes),
+    display_name: withheld ? null : cleanText(c?.display_name),
+    company: withheld ? null : cleanText(c?.company),
+    emails: withheld ? [] : partyEmails(source.emails),
+    phones: withheld ? [] : partyPhones(source.phones),
+    contact_source: cleanText(c?.source),
+    contact_deleted: contactDeleted,
+    removed_reason: contactDeleted ? cleanText(c?.removed_reason) : null,
+    details_withheld: withheld,
+  };
+}
+
+export function buildChecklistDto(row: Record<string, unknown>): { [key: string]: JsonValue } {
+  return {
+    template_id: cleanText(row.template_id),
+    template_name: cleanText(row.template_name),
+    sort_order: cleanInt(row.sort_order),
+    selected_at: instant(row.selected_at),
+    is_private: row.template_id === PRIVATE_TEMPLATE_ID,
+  };
+}
+
+/** `links` is null in Checkpoint 1 (plan §2.3). */
+export function buildItemDto(row: Record<string, unknown>): { [key: string]: JsonValue } {
+  return {
+    local_checklist_id: cleanText(row.checklist_id),
+    title: cleanText(row.title),
+    description: cleanText(row.description),
+    is_required: cleanBool(row.is_required),
+    expected_document_type: cleanText(row.expected_document_type),
+    is_checked: cleanBool(row.is_checked),
+    checked_at: instant(row.checked_at),
+    note: cleanText(row.note),
+    sort_order: cleanInt(row.sort_order),
+    local_created_at: instant(row.created_at),
+    links: null,
+  };
+}
+
+export type ChildKind = "party" | "checklist" | "checklist_item";
+
+export interface ProjectedChild {
+  kind: ChildKind;
+  localId: string;
+  hash: string;
+  /** The row sent: the hashed DTO plus local_id and content_hash (not hashed). */
+  payload: { [key: string]: JsonValue };
+}
+
+export function projectChild(kind: ChildKind, localId: string, dto: { [key: string]: JsonValue }): ProjectedChild {
+  const hash = contentHash(dto);
+  return { kind, localId, hash, payload: { ...dto, local_id: localId, content_hash: hash } };
+}

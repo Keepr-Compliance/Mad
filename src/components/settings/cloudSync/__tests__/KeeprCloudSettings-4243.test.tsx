@@ -19,6 +19,8 @@ const VIEW: CloudSyncView = {
   noticeVersion: 1,
   pendingDeals: 0,
   notSavedDeals: 0,
+  onlineNotHereDeals: 0,
+  otherInstalls: null,
   lastSavedAt: null,
   aiAppsAvailable: true,
 };
@@ -35,6 +37,8 @@ function fakeCloud(view: CloudSyncView | null): UseKeeprCloudSettings {
     forgetOtherProject: jest.fn().mockResolvedValue(true),
     retry: jest.fn().mockResolvedValue(true),
     openAiApps: jest.fn().mockResolvedValue(true),
+    deleteOnlineNotHere: jest.fn().mockResolvedValue(true),
+    deleteOldInstalls: jest.fn().mockResolvedValue(true),
   };
 }
 
@@ -93,7 +97,7 @@ describe("KeeprCloudSettings", () => {
 
   it("deals that could not be saved get their own status line, not 'Saving'", () => {
     render(<KeeprCloudSettings cloud={fakeCloud({ ...VIEW, status: "on", pendingDeals: 0, notSavedDeals: 2 })} />);
-    expect(screen.getByTestId("cloud-status")).toHaveTextContent(C.statusNotSaved(2));
+    expect(screen.getByTestId("cloud-not-saved")).toHaveTextContent(C.statusNotSaved(2));
     expect(screen.queryByText(/Saving/)).toBeNull();
   });
 

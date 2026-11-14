@@ -45,6 +45,13 @@ export const KEEPR_CLOUD_COPY = {
   turnOffConfirmButton: "Turn off and delete",
   turnOffDone: "Keepr Cloud is off. Your online copy was deleted and AI apps were disconnected.",
   turnOffOffline: "Turning off. Your online copy will be deleted when Keepr can reach the internet.",
+  onlineNotHere: (n: number) => `Saved online but not on this computer: ${n === 1 ? "1 deal" : `${n} deals`}.`,
+  otherInstalls: (n: number, when: string) =>
+    `Deals saved from another computer or an earlier install: ${n}, last saved ${when}.`,
+  deleteThem: "Delete them",
+  deleteOnlineConfirmTitle: "Delete these online deals?",
+  deleteOnlineConfirm: "They are deleted from Keepr Cloud. Your deals on this computer are not changed.",
+  deleteButton: "Delete",
   forget: "Forget saving on this computer for the other Keepr Cloud",
   forgetConfirm: "This computer stops tracking what it saved to the other Keepr Cloud. Nothing online is deleted.",
   forgetButton: "Forget",

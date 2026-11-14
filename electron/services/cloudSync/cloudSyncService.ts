@@ -13,6 +13,7 @@ import type { CloudClient } from "./cloudClient";
 import { CloudSyncRunner, type PassSummary, type RunnerLog } from "./runner";
 import { isNoticeSupported } from "./notice";
 import { parseState, type ServerState } from "./stateReader";
+import { restoreEpoch } from "../db/cloudSyncTriggers";
 import type { SessionIdentity } from "./session";
 import type { SqlDb } from "../db/cloudSyncSqlDb";
 import * as store from "../db/cloudSyncDbService";
@@ -21,6 +22,9 @@ import type {
   CloudSyncResult,
   CloudSyncView,
 } from "../../types/ipc/window-api-cloud-sync";
+
+/** Another install counts as old after this long without saving (plan §8.9). */
+export const OTHER_INSTALL_IDLE_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** How often a pass runs while Keepr Cloud is on here. */
 export const PASS_INTERVAL_MS = 60_000;
@@ -69,6 +73,10 @@ export class CloudSyncService {
           now: deps.now,
           log: deps.log,
           reportFailure: deps.reportFailure,
+          launchFacts: () => ({
+            installCreatedThisLaunch: this.installCreatedThisLaunch,
+            restoredThisLaunch: restoreEpoch() > 0,
+          }),
         })
       : null;
   }
@@ -77,9 +85,16 @@ export class CloudSyncService {
     return this.deps.now ? this.deps.now() : new Date();
   }
 
+  private installCreatedThisLaunch = false;
+  private installEpoch = -1;
+
+  /** The install id; re-read after a restore replaced the database (D2). */
   private ensureInstallId(): string {
-    if (!this.installId) {
-      this.installId = store.ensureInstall(this.deps.db(), this.deps.projectRef as string, this.deps.deviceId(), this.now()).installId;
+    if (!this.installId || this.installEpoch !== restoreEpoch()) {
+      const r = store.ensureInstall(this.deps.db(), this.deps.projectRef as string, this.deps.deviceId(), this.now());
+      this.installId = r.installId;
+      this.installEpoch = restoreEpoch();
+      if (r.created) this.installCreatedThisLaunch = true;
     }
     return this.installId;
   }
@@ -149,6 +164,8 @@ export class CloudSyncService {
       pendingDeals: 0,
       notSavedDeals: 0,
       lastSavedAt: null,
+      onlineNotHereDeals: 0,
+      otherInstalls: null,
       aiAppsAvailable: this.deps.aiAppsAvailable(),
     };
     const ref = this.deps.projectRef;
@@ -175,7 +192,49 @@ export class CloudSyncService {
     const read = parseState(await this.deps.client.getState());
     if (read.kind !== "state" || read.state.userId !== session.userId) return locallyOn ? paused("unknown") : base;
     const state = read.state;
-    return this.viewFor(base, state, locallyOn, !!settings?.local_confirmed_at);
+    const view = this.viewFor(base, state, locallyOn, !!settings?.local_confirmed_at);
+    if (view.status === "on" || view.status === "error") {
+      view.onlineNotHereDeals = this.onlineNotHere(db, ref, session.userId);
+      view.otherInstalls = await this.oldInstalls(session.userId);
+    }
+    return view;
+  }
+
+  /** From the last reconcile: online deals of this install with no local record (N2). */
+  private onlineNotHere(db: SqlDb, ref: string, userId: string): number {
+    try {
+      const j = store.lastReconcile(db, ref, userId).summaryJson;
+      const n = j ? (JSON.parse(j) as { orphanDeals?: unknown }).orphanDeals : 0;
+      return typeof n === "number" && n > 0 ? n : 0;
+    } catch {
+      return 0;
+    }
+  }
+
+  /** Other installs of this account idle for 30+ days (plan §8.9); null when unknown or none. */
+  private async oldInstalls(userId: string): Promise<{ deals: number; lastSavedAt: string } | null> {
+    const list = await this.listOldInstalls(userId);
+    if (!list || list.length === 0) return null;
+    return {
+      deals: list.reduce((n, i) => n + i.deals, 0),
+      lastSavedAt: list.map((i) => i.lastSyncedAt).sort().at(-1) as string,
+    };
+  }
+
+  private async listOldInstalls(userId: string): Promise<Array<{ installId: string; deals: number; lastSyncedAt: string }> | null> {
+    const res = await this.deps.client.listInstalls();
+    if (res.kind !== "ok") return null;
+    const mine = this.ensureInstallId();
+    const cutoff = this.now().getTime() - OTHER_INSTALL_IDLE_MS;
+    const out: Array<{ installId: string; deals: number; lastSyncedAt: string }> = [];
+    for (const i of Array.isArray(res.body.installs) ? (res.body.installs as Array<Record<string, unknown>>) : []) {
+      if (!i || typeof i.source_install_id !== "string" || i.source_install_id === mine) continue;
+      const at = typeof i.last_synced_at === "string" ? Date.parse(i.last_synced_at) : NaN;
+      const deals = typeof i.deals === "number" ? i.deals : 0;
+      if (Number.isFinite(at) && at < cutoff) out.push({ installId: i.source_install_id, deals, lastSyncedAt: new Date(at).toISOString() });
+    }
+    void userId;
+    return out;
   }
 
   private viewFor(base: CloudSyncView, state: ServerState, locallyOn: boolean, confirmed: boolean): CloudSyncView {
@@ -236,6 +295,7 @@ export class CloudSyncService {
   async turnOn(noticeVersion: number): Promise<CloudSyncResult> {
     const userId = await this.actingUser();
     if (!userId) return { success: false, error: "signed_out" };
+    if (this.turnOffOwed(userId)) return { success: false, error: "turn_off_pending" };
     if (this.deps.blockedReason()) return { success: false, error: "blocked" };
     if (!isNoticeSupported(noticeVersion)) return { success: false, error: "update_needed" };
     const read = parseState(await this.deps.client.getState());
@@ -257,6 +317,7 @@ export class CloudSyncService {
   async confirmComputer(): Promise<CloudSyncResult> {
     const userId = await this.actingUser();
     if (!userId) return { success: false, error: "signed_out" };
+    if (this.turnOffOwed(userId)) return { success: false, error: "turn_off_pending" };
     if (this.deps.blockedReason()) return { success: false, error: "blocked" };
     const read = parseState(await this.deps.client.getState());
     if (read.kind !== "state" || read.state.userId !== userId) return { success: false, error: "unknown" };
@@ -307,6 +368,36 @@ export class CloudSyncService {
       this.runner.requestStop();
       await this.runner.whenIdle();
     }
+  }
+
+  /** D1: no turn-on while the online copy of a turn-off is still to be deleted. */
+  private turnOffOwed(userId: string): boolean {
+    return !!store.getSettings(this.deps.db(), this.deps.projectRef as string, userId)?.turn_off_owed_at;
+  }
+
+  /**
+   * "Saved online but not on this computer": deletes this install's online deals
+   * that this database has no record of uploading. Main lists them again here;
+   * the renderer sends no ids. Runs inside the pass lock.
+   */
+  async deleteOnlineNotHere(): Promise<CloudSyncResult> {
+    const userId = await this.actingUser();
+    if (!userId || !this.runner) return { success: false, error: "signed_out" };
+    const r = await this.runner.deleteOrphans(userId, this.ensureInstallId());
+    return r.ok ? { success: true } : { success: false, error: r.code };
+  }
+
+  /** Deletes the online copies of other installs idle for 30+ days. Main lists them again here. */
+  async deleteOldInstalls(): Promise<CloudSyncResult> {
+    const userId = await this.actingUser();
+    if (!userId) return { success: false, error: "signed_out" };
+    const list = await this.listOldInstalls(userId);
+    if (!list) return { success: false, error: "unknown" };
+    for (const i of list) {
+      const res = await this.deps.client.deleteInstall(userId, i.installId);
+      if (res.kind !== "ok") return { success: false, error: res.code };
+    }
+    return { success: true };
   }
 
   /** Forgets the other Keepr Cloud's local rows. No call to either cloud. */

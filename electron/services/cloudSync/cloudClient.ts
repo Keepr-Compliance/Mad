@@ -99,12 +99,17 @@ export class CloudClient {
 
   /** The state read. Not a write: no expected-user argument. */
   async getState(): Promise<CallResult> {
+    return this.bare("get_my_cloud_autosave_state", {});
+  }
+
+  /** A read that returns a bare object (no ok flag). */
+  private async bare(fn: string, args: Record<string, JsonValue>): Promise<CallResult> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
-      const res = await this.transport("get_my_cloud_autosave_state", {}, controller.signal);
+      const res = await this.transport(fn, args, controller.signal);
       if (res.error) return classifyResponse(res);
-      // The state function returns a bare object (no ok flag), shape v1.
+      // These functions return a bare object (no ok flag).
       const body = res.data;
       if (body && typeof body === "object" && !Array.isArray(body)) {
         return { kind: "ok", body: body as Record<string, unknown> };
@@ -131,6 +136,53 @@ export class CloudClient {
 
   deleteDeal(expectedUserId: string, cloudDealId: string): Promise<CallResult> {
     return this.call("cloud_delete_deal", { p_expected_user_id: expectedUserId, p_cloud_deal_id: cloudDealId });
+  }
+
+  /** cloud_upsert_parties / cloud_upsert_checklists / cloud_upsert_checklist_items. */
+  upsertChildren(
+    kind: "party" | "checklist" | "checklist_item",
+    expectedUserId: string,
+    installId: string,
+    cloudDealId: string,
+    rows: JsonValue[],
+  ): Promise<CallResult> {
+    const fn =
+      kind === "party" ? "cloud_upsert_parties" : kind === "checklist" ? "cloud_upsert_checklists" : "cloud_upsert_checklist_items";
+    return this.call(fn, {
+      p_expected_user_id: expectedUserId,
+      p_source_install_id: installId,
+      p_cloud_deal_id: cloudDealId,
+      p_rows: rows,
+    });
+  }
+
+  tombstone(expectedUserId: string, installId: string, kind: string, cloudIds: string[]): Promise<CallResult> {
+    return this.call("cloud_tombstone", {
+      p_expected_user_id: expectedUserId,
+      p_source_install_id: installId,
+      p_kind: kind,
+      p_cloud_ids: cloudIds,
+    });
+  }
+
+  /** One page of this install's online rows of one kind (migration 20261114130000). */
+  listInstallRows(expectedUserId: string, installId: string, kind: string, after: string | null, limit: number): Promise<CallResult> {
+    return this.call("cloud_list_install_rows", {
+      p_expected_user_id: expectedUserId,
+      p_source_install_id: installId,
+      p_kind: kind,
+      p_after: after,
+      p_limit: limit,
+    });
+  }
+
+  /** The user's installs with deal counts (a read; bare object, no ok flag). */
+  async listInstalls(): Promise<CallResult> {
+    return this.bare("cloud_list_installs", {});
+  }
+
+  deleteInstall(expectedUserId: string, installId: string): Promise<CallResult> {
+    return this.call("cloud_delete_install", { p_expected_user_id: expectedUserId, p_source_install_id: installId });
   }
 
   markDealSynced(expectedUserId: string, installId: string, cloudDealId: string): Promise<CallResult> {
