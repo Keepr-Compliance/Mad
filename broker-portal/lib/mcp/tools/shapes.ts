@@ -1,6 +1,12 @@
 /**
  * Result shapes of the Keepr MCP data tools (BACKLOG-4244), version 1.
  *
+ * Deal shape source: supabase/contracts/cloud-deal-shape-v1.json. Identity follows its identity.rule:
+ * a deal is found by deal_id (cloud_deals.id) only; source_install_id only labels a deal (saved_from)
+ * and a deal without one is returned with saved_from null. deal.details, the email and phone elements
+ * and details_withheld follow its deal.details and party sections (parity test:
+ * __tests__/mcp/data-tools-parity.test.ts).
+ *
  * One description per shape gives both:
  * - the strict check of what the database returns (`checkShape`): exactly these keys, these types;
  *   anything else is treated as a failed call. A change of keys or types in the readers changes `v`

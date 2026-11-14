@@ -314,6 +314,27 @@ def mutants():
     return b
 
 
+TIMEOUT = '--timeout' in sys.argv
+
+
+def timeout_control():
+    """C28: a statement timeout that fires inside the read block is returned as timeout and logged; the
+    reader is replaced (as mcp_reader, inside the transaction) by one that sleeps first. statement_timeout
+    is set for this one driver statement (PostgreSQL applies it per statement)."""
+    u, _, sig = unit(MIG, '_mcp_r_list_deals')
+    old = "  IF v_uid IS NULL THEN\n    RETURN '{\"not_entitled\":true}'::jsonb;\n  END IF;\n"
+    assert u.count(old) == 1
+    slow = u.replace(old, "  PERFORM pg_sleep(10);\n" + old)
+    print('TIMEOUT CONTROL reader sleeps 10 s, statement_timeout 4 s')
+    return ("SET LOCAL statement_timeout = '4s';\n"
+            "DO $tmo4244$\nDECLARE t text; t0 timestamptz;\nBEGIN\n" + create('_mcp_r_list_deals', slow)
+            + "  t0 := clock_timestamp();\n  t := pg_temp.ld('a1');\n"
+            "  INSERT INTO pg_temp.p4244_out VALUES ('C_p_timeout', pg_temp.pass(pg_temp.j(t) = '{\"ok\": false, \"error\": \"timeout\"}'::jsonb\n"
+            "    AND (SELECT l.outcome FROM public.mcp_call_log l WHERE l.tool = 'list_deals' AND l.user_id = pg_temp.fx(1) ORDER BY l.id DESC LIMIT 1) = 'timeout'\n"
+            "    AND clock_timestamp() - t0 < interval '9 seconds', t || ' elapsed=' || (clock_timestamp() - t0)::text));\n"
+            "END\n$tmo4244$;\nSET LOCAL statement_timeout = 0;\n")
+
+
 def compose(with_mutants=True, only=None):
     head = ("SET LOCAL pg_stat_statements.track = 'none';\nSET LOCAL lock_timeout = '10s';\n"
             "CREATE TEMP TABLE p4244_out (k text, v text);\n"
@@ -327,6 +348,9 @@ def compose(with_mutants=True, only=None):
             "INSERT INTO pg_temp.p4244_out SELECT 'PRE_call_log_checks', string_agg(c.conname || '=' || pg_get_constraintdef(c.oid), '; ' ORDER BY c.conname) FROM pg_constraint c\n"
             "  WHERE c.conrelid = 'public.mcp_call_log'::regclass AND c.contype = 'c';\n"
             "INSERT INTO pg_temp.p4244_out SELECT 'PRE_ledger_4244', count(*)::text FROM supabase_migrations.schema_migrations WHERE version = '20261114110000';\n"
+            "INSERT INTO pg_temp.p4244_out SELECT 'PRE_mcp_functions_md5', md5((SELECT string_agg(p.oid::regprocedure::text || ':' || md5(p.prosrc) || ':' || coalesce(p.proacl::text,'-'), ',' ORDER BY p.oid::regprocedure::text)\n"
+            "  FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^_?mcp_'));\n"
+            "INSERT INTO pg_temp.p4244_out SELECT 'PRE_mcp_function_count', count(*)::text FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^_?mcp_';\n"
             ) % (lit('{' + ','.join(WRITES) + '}'), lit('{' + ','.join(WRITES) + '}'))
     # the test project holds the edited cloud migration (committed): stop unless all 13 writes have the new signature
     guard = ("DO $grd4244$ BEGIN IF (SELECT v FROM pg_temp.p4244_out WHERE k = 'PRE_cloud_writes_new_signature') IS DISTINCT FROM '13'\n"
@@ -353,6 +377,8 @@ def compose(with_mutants=True, only=None):
             ms = [m for m in ms if any(("'M_" + o) in m for o in only)]
         b += ms
     text += "DO $sw4244$\nDECLARE v text; t0 text;\nBEGIN\n" + ''.join(b) + "END\n$sw4244$;\n"
+    if TIMEOUT:
+        text += timeout_control()
     text += "SELECT extensions.pg_stat_statements_reset();\n"
     text += "DO $fin4244$ BEGIN RAISE EXCEPTION 'P4244_RESULT %', (SELECT jsonb_object_agg(k, v) FROM pg_temp.p4244_out); END $fin4244$;\n"
     text = text.replace('__RUN__', secrets.token_hex(12)).replace('__SECRET__', secrets.token_hex(32))

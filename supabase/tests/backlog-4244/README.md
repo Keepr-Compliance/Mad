@@ -28,7 +28,13 @@ again); they are kept so the claim stays checked.
 Every composed call starts with `SET LOCAL pg_stat_statements.track = 'none';` and ends with
 `select extensions.pg_stat_statements_reset()`.
 
-Results: `results-2026-11-14.txt` (ids replaced by fixed values).
+Deal shape and identity: `supabase/contracts/cloud-deal-shape-v1.json` (`identity.rule`: a deal is found
+by `cloud_deals.id` only; `source_install_id` may label a row, as `saved_from`, and a row with a NULL
+install is still returned). `p_null_install` drops NOT NULL on `source_install_id` inside the
+transaction, inserts one confirmed deal with no install, and checks both tools return it with
+`saved_from` null; the output is one of the portal schema fixtures.
+
+Results: `results-2026-11-14.txt` (ids replaced by `<id:n>`).
 
 NOT RUN: two-session timing (a reader under a concurrent write). The single-snapshot property rests on
 the readers being STABLE (checked in the catalog by `p_grants`), not on a two-session run.
