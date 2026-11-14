@@ -3,7 +3,7 @@
 
 -- the key sets the readers emit (v 1)
 CREATE FUNCTION pg_temp.k_list_deal() RETURNS text[] LANGUAGE sql IMMUTABLE AS $h$
-  SELECT ARRAY['address','city','closed_on','copy_state','deal_id','deadlines','found_by','fully_saved_at','locked','people','saved_at','saved_from',
+  SELECT ARRAY['address','city','closed_on','copy_state','deadlines','deal_id','found_by','fully_saved_at','locked','people','saved_at','saved_from',
                'started_on','state','status','street','todos_open_required','todos_total','transaction_type','zip']
 $h$;
 CREATE FUNCTION pg_temp.k_get_deal() RETURNS text[] LANGUAGE sql IMMUTABLE AS $h$
