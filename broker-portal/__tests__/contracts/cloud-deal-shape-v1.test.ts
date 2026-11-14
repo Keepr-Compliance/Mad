@@ -145,7 +145,8 @@ describe('BACKLOG-4243 cloud deal shape contract v1', () => {
     expect(w.meaning).toBe('A person with details_withheld has name, company, emails and phones blank.');
     expect(w.true_when).toBe("contact_source = 'google_contacts'");
     expect(w.blank_when_true).toEqual({ display_name: null, company: null, emails: [], phones: [] });
-    expect(w.kept_when_true).not.toEqual(expect.arrayContaining(['display_name']));
+    // the role row, including the note typed on the deal, is still sent
+    expect(w.kept_when_true).toEqual(['role', 'role_category', 'specific_role', 'is_primary', 'notes', 'contact_deleted']);
     // every column named here exists on cloud_deal_parties
     const parties = table('cloud_deal_parties');
     for (const col of [...Object.keys(w.blank_when_true), ...w.kept_when_true, 'contact_source']) {
