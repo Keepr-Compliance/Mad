@@ -5,8 +5,9 @@
  * Mocked: the gate's answer (requireReportAccess), the session client's rpc and
  * users read, the browser client, and next/navigation.
  *
- * Fixture shapes are transcribed from migration 20261112200000:
- *  - broker_report_submissions_rows RETURNS TABLE (id, submitted_by,
+ * Fixture shapes are transcribed from migrations 20261112200000 / 20261114100000:
+ *  - broker_report_submissions_rows_multi (the same RETURNS TABLE as
+ *    broker_report_submissions_rows, with p_statuses text[] and p_agents uuid[]) RETURNS TABLE (id, submitted_by,
  *    property_address, property_city, property_state, transaction_type, status,
  *    listing_price, sale_price, created_at, closed_at, total_count);
  *  - broker_report_scope returns jsonb {level, row_scope, service_off,
@@ -129,9 +130,10 @@ function given(world: World) {
             error: null,
           };
     }
-    if (name === 'broker_report_submissions_rows') {
+    if (name === 'broker_report_submissions_rows_multi') {
       if (world.rowsError) return { data: null, error: { message: 'fixture: rows failed' } };
-      const matching = deals.filter((d) => !args.p_agent || d.submitted_by === args.p_agent);
+      const agents = args.p_agents as string[] | null;
+      const matching = deals.filter((d) => !agents || agents.includes(d.submitted_by));
       const page = matching
         .slice(Number(args.p_offset), Number(args.p_offset) + Number(args.p_limit))
         .map((d) => ({ ...d, total_count: matching.length }));
@@ -141,7 +143,7 @@ function given(world: World) {
   });
 }
 
-const rowCalls = () => mockRpc.mock.calls.filter(([n]) => n === 'broker_report_submissions_rows').map(([, a]) => a);
+const rowCalls = () => mockRpc.mock.calls.filter(([n]) => n === 'broker_report_submissions_rows_multi').map(([, a]) => a);
 
 async function renderPage(kind: 'full' | 'agent', params: Record<string, string> = {}) {
   const c = caller(kind);
@@ -161,7 +163,7 @@ describe('loader: rows only through the row function, for the gate-admitted orga
     given({ deals: [row(1, AGENT_A, 0)] });
     const data = await loadSubmissionsReport(caller('full'), {
       ...DEFAULT_SUBMISSIONS_FILTERS,
-      status: 'pending',
+      statuses: ['pending'],
       from: '2026-11-01',
       to: '2026-11-03',
       sort: 'price_desc',
@@ -170,8 +172,8 @@ describe('loader: rows only through the row function, for the gate-admitted orga
     expect(rowCalls()[0]).toEqual({
       p_org: ORG,
       p_def: null,
-      p_status: 'pending',
-      p_agent: null,
+      p_statuses: ['pending'],
+      p_agents: null,
       p_from: '2026-11-01T00:00:00Z',
       p_to: '2026-11-04T00:00:00.000Z',
       p_sort: 'price_desc',
@@ -183,10 +185,20 @@ describe('loader: rows only through the row function, for the gate-admitted orga
     expect(mockFromTables.every((t) => t === 'users')).toBe(true);
   });
 
-  it("status 'all' is sent as null (no filter)", async () => {
+  // i. Not load-bearing: the function treats '{}' as no filter too (DB control A_empty_all_rows).
+  it('i. no status and no agent picked are sent as null (no filter)', async () => {
     given({ deals: [] });
     await loadSubmissionsReport(caller('full'), DEFAULT_SUBMISSIONS_FILTERS);
-    expect(rowCalls()[0].p_status).toBeNull();
+    expect(rowCalls()[0]).toMatchObject({ p_statuses: null, p_agents: null });
+  });
+
+  // g. Mutation (run): send [list[0]] -> red.
+  it('g. two statuses and two agents from the URL are sent as lists', async () => {
+    given({ deals: [row(1, AGENT_A, 0), row(2, AGENT_B, 0)] });
+    await renderPage('full', { status: 'approved,rejected', agent: `${AGENT_B},${AGENT_A}` });
+    const main = rowCalls().filter((a) => a.p_limit === 25);
+    expect(main.length).toBeGreaterThan(0);
+    for (const a of main) expect(a).toMatchObject({ p_statuses: ['approved', 'rejected'], p_agents: [AGENT_A, AGENT_B] });
   });
 
   it("V1: the count is the row function's total_count, not the rows on this page", async () => {
@@ -226,34 +238,43 @@ describe('loader: rows only through the row function, for the gate-admitted orga
     ]);
   });
 
-  it('N2: an agent caller with an agent filter in the URL sends no agent filter', async () => {
+  // h. Mutation (run): remove the kind === 'full' gate -> red.
+  it('h / N2: an agent caller with an agent filter in the URL sends no agent filter', async () => {
     given({ deals: [row(1, AGENT_A, 0)] });
-    await loadSubmissionsReport(caller('agent'), { ...DEFAULT_SUBMISSIONS_FILTERS, agent: AGENT_B, page: 3 });
+    await loadSubmissionsReport(caller('agent'), { ...DEFAULT_SUBMISSIONS_FILTERS, agents: [AGENT_B], page: 3 });
     expect(rowCalls().length).toBeGreaterThan(0);
-    for (const args of rowCalls()) expect(args.p_agent).toBeNull();
+    for (const args of rowCalls()) expect(args.p_agents).toBeNull();
   });
 
   it('N2: a full role keeps the agent filter (positive control)', async () => {
     given({ deals: [row(1, AGENT_A, 0), row(2, AGENT_B, 0)] });
-    await loadSubmissionsReport(caller('full'), { ...DEFAULT_SUBMISSIONS_FILTERS, agent: AGENT_B });
-    expect(rowCalls()[0].p_agent).toBe(AGENT_B);
+    await loadSubmissionsReport(caller('full'), { ...DEFAULT_SUBMISSIONS_FILTERS, agents: [AGENT_B] });
+    expect(rowCalls()[0].p_agents).toEqual([AGENT_B]);
   });
 
-  it('N3: the agent options follow the status and date filters, not the agent filter', async () => {
+  // SR-2. Mutation (run): forward filters.agents to the options read -> red.
+  it('N3 / SR-2: the agent options follow the status and date filters, not the agent filter', async () => {
     given({ deals: [row(1, AGENT_A, 0), row(2, AGENT_B, 0)] });
     await loadSubmissionsReport(caller('full'), {
       ...DEFAULT_SUBMISSIONS_FILTERS,
-      status: 'approved',
-      agent: AGENT_A,
+      statuses: ['approved', 'rejected'],
+      agents: [AGENT_A],
       from: '2026-11-01',
       to: '2026-11-03',
     });
     const optionCalls = rowCalls().filter((a) => a.p_limit === 200);
     expect(optionCalls.length).toBeGreaterThan(0);
     for (const args of optionCalls) {
-      expect(args).toMatchObject({ p_status: 'approved', p_agent: null, p_from: '2026-11-01T00:00:00Z' });
+      expect(args).toMatchObject({ p_statuses: ['approved', 'rejected'], p_agents: null, p_from: '2026-11-01T00:00:00Z' });
       expect(args.p_to).toBe('2026-11-04T00:00:00.000Z');
     }
+  });
+
+  it('every selected agent stays an option, even with no deal under the other filters', async () => {
+    given({ deals: [row(1, AGENT_A, 0)] });
+    const data = await loadSubmissionsReport(caller('full'), { ...DEFAULT_SUBMISSIONS_FILTERS, agents: [AGENT_A, AGENT_B] });
+    if (!data.ok) throw new Error('expected ok');
+    expect(data.agents.map((a) => a.id)).toEqual([AGENT_A, AGENT_B]);
   });
 
   it('an agent gets no agent list and no name lookup', async () => {
@@ -320,7 +341,7 @@ describe('page', () => {
     const table = screen.getByTestId('submissions-report-table');
     expect(within(table).getByText('Agent')).toBeInTheDocument();
     expect(within(table).getByText('Agent Alpha')).toBeInTheDocument();
-    expect(screen.getByLabelText('Agent')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All agents' })).toBeInTheDocument();
   });
 
   it('an agent sees no Agent column and no agent filter, and rows link to My Transactions', async () => {
@@ -328,7 +349,7 @@ describe('page', () => {
     await renderPage('agent');
     const table = screen.getByTestId('submissions-report-table');
     expect(within(table).queryByText('Agent')).toBeNull();
-    expect(screen.queryByLabelText('Agent')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(Agent\b|All agents$)/ })).toBeNull();
     expect(within(table).getByRole('link')).toHaveAttribute('href', expect.stringMatching(/^\/dashboard\/my-transactions\//));
   });
 
@@ -349,6 +370,6 @@ describe('page', () => {
   it('reads the URL filters through the parser (unknown values fall back)', async () => {
     given({ deals: [] });
     await renderPage('full', { status: 'approved', sort: 'address', agent: 'not-a-uuid', from: '2026-02-30' });
-    expect(rowCalls()[0]).toMatchObject({ p_status: 'approved', p_sort: 'newest', p_agent: null, p_from: null });
+    expect(rowCalls()[0]).toMatchObject({ p_statuses: ['approved'], p_sort: 'newest', p_agents: null, p_from: null });
   });
 });

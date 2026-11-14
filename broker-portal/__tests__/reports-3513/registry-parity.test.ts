@@ -7,9 +7,10 @@
  *    migration 20261112200000) is a registered report.
  *  - The sort keys a saved view may hold are exactly the row function's sort
  *    whitelist, and every argument the loader sends is a parameter of the
- *    row function (both parsed from the same migration).
+ *    row function (both parsed from the row function's migration: since
+ *    BACKLOG-3513 PR-3h, broker_report_submissions_rows_multi in 20261114100000).
  *  - B6: no reports file reads transaction_submissions itself; the dataset
- *    calls broker_report_submissions_rows.
+ *    calls broker_report_submissions_rows_multi.
  *
  * @jest-environment node
  */
@@ -30,6 +31,10 @@ const PORTAL = join(__dirname, '..', '..');
 const readLf = (path: string) => readFileSync(path, 'utf8').replace(/\r\n/g, '\n');
 const MIGRATION = readLf(
   join(PORTAL, '..', 'supabase', 'migrations', '20261112200000_backlog_3513_broker_report_definitions.sql')
+);
+/** The migration that creates the row function the loader calls (PR-3h). */
+const ROWS_MIGRATION = readLf(
+  join(PORTAL, '..', 'supabase', 'migrations', '20261114100000_backlog_3513_submissions_rows_multi.sql')
 );
 
 function quoted(list: string): string[] {
@@ -63,7 +68,7 @@ describe('B4: registry and database agree', () => {
   });
 
   it("the report's sort keys are exactly the row function's sort whitelist", () => {
-    const sorts = /CASE WHEN p_sort IN \(([^)]*)\) THEN p_sort/.exec(MIGRATION);
+    const sorts = /CASE WHEN p_sort IN \(([^)]*)\) THEN p_sort/.exec(ROWS_MIGRATION);
     expect(sorts).not.toBeNull();
     const whitelist = quoted(sorts![1]);
     expect(whitelist.length).toBeGreaterThan(0);
@@ -71,7 +76,7 @@ describe('B4: registry and database agree', () => {
   });
 
   it('every argument the loader sends is a parameter of the row function', () => {
-    const sig = new RegExp(`FUNCTION public\\.${SUBMISSIONS_ROWS_RPC}\\(([\\s\\S]*?)\\)\\nRETURNS`).exec(MIGRATION);
+    const sig = new RegExp(`FUNCTION public\\.${SUBMISSIONS_ROWS_RPC}\\(([\\s\\S]*?)\\)\\nRETURNS`).exec(ROWS_MIGRATION);
     expect(sig).not.toBeNull();
     const params = Array.from(sig![1].matchAll(/\b(p_[a-z_]+)\b/g), (m) => m[1]);
     expect(params.length).toBeGreaterThan(0);
@@ -111,8 +116,8 @@ describe('B6: the report never reads transaction_submissions itself', () => {
     expect(source).not.toMatch(/['"`]transaction_submissions['"`]/);
   });
 
-  it('the dataset reads its rows through broker_report_submissions_rows', () => {
-    expect(SUBMISSIONS_ROWS_RPC).toBe('broker_report_submissions_rows');
+  it('the dataset reads its rows through broker_report_submissions_rows_multi', () => {
+    expect(SUBMISSIONS_ROWS_RPC).toBe('broker_report_submissions_rows_multi');
     const loader = readFileSync(join(PORTAL, 'lib/reports/datasets/submissions.ts'), 'utf8');
     expect(loader).toMatch(/\.rpc\(SUBMISSIONS_ROWS_RPC,/);
   });

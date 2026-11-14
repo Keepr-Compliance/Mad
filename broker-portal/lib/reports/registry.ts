@@ -57,7 +57,7 @@ export const SUBMISSIONS_REPORT: ReportDefinition = {
   slug: 'submissions',
   title: 'Submissions',
   description: 'Every deal sent for review, one row per deal, with filters for status, agent and date.',
-  source: 'rpc broker_report_submissions_rows (migration 20261112200000)',
+  source: 'rpc broker_report_submissions_rows_multi (migration 20261114100000)',
   access: { roles: ['broker', 'admin', 'it_admin'], agentScoped: true },
 };
 

@@ -1,8 +1,9 @@
 /**
  * Submissions report: the server read — BACKLOG-3513 PR-3a.
  *
- * Rows come from ONE place: public.broker_report_submissions_rows (migration
- * 20261112200000). That function is SECURITY INVOKER, so transaction_submissions
+ * Rows come from ONE place: public.broker_report_submissions_rows_multi (migration
+ * 20261114100000; the single-value broker_report_submissions_rows of 20261112200000
+ * with status and agent lists, BACKLOG-3513 PR-3h). That function is SECURITY INVOKER, so transaction_submissions
  * RLS bounds every row, and it applies the Submissions page's list rules (no
  * 'uploading' rows, one row per deal) and the caller's scope in the database.
  * This module never reads transaction_submissions itself and never decides
@@ -23,7 +24,7 @@ import {
   type SubmissionsReportFilters,
 } from '@/lib/reports/datasets/submissions-filters';
 
-export const SUBMISSIONS_ROWS_RPC = 'broker_report_submissions_rows';
+export const SUBMISSIONS_ROWS_RPC = 'broker_report_submissions_rows_multi';
 export const REPORT_SCOPE_RPC = 'broker_report_scope';
 
 /** At most this many row-function pages are read to list the agents in scope. */
@@ -75,7 +76,7 @@ type Rpc = ReportCaller['supabase'];
 function rowArgs(
   caller: ReportCaller,
   filters: SubmissionsReportFilters,
-  agent: string | null,
+  agents: string[],
   limit: number,
   offset: number,
   defId: string | null = null
@@ -84,8 +85,8 @@ function rowArgs(
   return {
     p_org: caller.organizationId,
     p_def: defId,
-    p_status: filters.status === 'all' ? null : filters.status,
-    p_agent: agent,
+    p_statuses: filters.statuses.length > 0 ? filters.statuses : null,
+    p_agents: agents.length > 0 ? agents : null,
     p_from: from,
     p_to: to,
     p_sort: filters.sort,
@@ -126,13 +127,14 @@ async function readAgentOptions(
   for (let page = 0; page < AGENT_OPTION_PAGES; page += 1) {
     const read = await readRows(
       caller.supabase,
-      rowArgs(caller, { ...filters, sort: 'newest' }, null, AGENT_OPTION_PAGE_SIZE, page * AGENT_OPTION_PAGE_SIZE, defId)
+      rowArgs(caller, { ...filters, sort: 'newest' }, [], AGENT_OPTION_PAGE_SIZE, page * AGENT_OPTION_PAGE_SIZE, defId)
     );
     if (!read) return [];
     for (const r of read.rows) if (r.submitted_by) ids.add(r.submitted_by);
     if ((page + 1) * AGENT_OPTION_PAGE_SIZE >= read.total) break;
   }
-  if (filters.agent) ids.add(filters.agent);
+  // Every selected agent stays a choice, even with no deal under the other filters.
+  for (const id of filters.agents) ids.add(id);
   const names = await resolveUserNames(caller.supabase, ids);
   const sorted = Array.from(ids).sort();
   if (names === null) return sorted.map((id, i) => ({ id, label: `Agent ${i + 1}` }));
@@ -164,7 +166,7 @@ export async function loadSubmissionsReport(
   if (serviceOff === null) return { ok: false };
 
   // An agent's rows are their own: an agent filter from the URL or a saved view is never sent for them.
-  const agentFilter = caller.kind === 'full' ? filters.agent : null;
+  const agentFilter = caller.kind === 'full' ? filters.agents : [];
   let page = filters.page;
   let read = await readRows(caller.supabase, rowArgs(caller, filters, agentFilter, pageSize, (page - 1) * pageSize, defId));
   if (!read) return { ok: false };
