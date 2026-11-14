@@ -12,6 +12,7 @@
  *   · C6 inside vs scrim click · C7 focus · C13 row -> Settings · C14 Sign out
  *   · geometry (phone width, scrim, Electron top).
  */
+import type { FeatureAccess } from "../../../../electron/types/featureGate";
 import React, { useEffect, useState } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
@@ -42,10 +43,9 @@ jest.mock("../../../contexts/PlatformContext", () => ({
 jest.mock("../../../contexts/LicenseContext", () => ({
   useLicense: () => ({ licenseType: "individual" }),
 }));
+// BACKLOG-4174: the rows read the plan through the bridge (`feature-gate:get-all`),
+// so the AI add-on is driven there (see beforeEach), not by mocking useFeatureGate.
 let mockHasAI = true;
-jest.mock("../../../hooks/useFeatureGate", () => ({
-  useFeatureGate: () => ({ isAllowed: (key: string) => (key === "ai_detection" ? mockHasAI : true) }),
-}));
 jest.mock("../../hooks/useEmailSettingsCallbacks", () => ({
   useEmailSettingsCallbacks: () => ({
     handleEmailConnectedFromSettings: jest.fn(),
@@ -165,6 +165,10 @@ function mockSupportApi(): void {
 beforeEach(() => {
   mockElectron = true;
   mockHasAI = true;
+  jest.mocked(window.api.featureGate.getAll).mockImplementation(
+    async (): Promise<Record<string, FeatureAccess>> =>
+      mockHasAI ? {} : { ai_detection: { allowed: false, value: "", source: "plan" } },
+  );
   handleLogout.mockReset();
   Object.values(popupEsc).forEach((f) => f.mockReset());
   mockSupportApi();

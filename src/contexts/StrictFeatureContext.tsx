@@ -41,14 +41,26 @@
  * (BACKLOG-3965, `dashboard/panels/DashboardPanels.tsx`) read this
  * (`useSessionStrictFeatureState`). The other strict consumers keep
  * `useStrictFeatureState`, unchanged.
+ *
+ * ## BACKLOG-4174: the Settings reads
+ *
+ * The same rules hold two more answers, each in its own slot: the strict
+ * `autodetect_eval` read (Learn, fail-closed) and the plan read
+ * (`feature-gate:get-all`, for the AI tab, fail-open). The account panel and
+ * the Settings page (`useVisibleSettingsTabs`) read them through
+ * `useSessionSettingsReads`, so reopening the panel shows its rows on the
+ * first frame instead of waiting for both IPC round trips. Each slot re-asks
+ * only itself: a transaction open asks `transaction_checklists` alone, and a
+ * Settings mount asks the plan and `autodetect_eval` alone.
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type {
+  FeatureAccess,
   StrictFeatureState,
   StrictFeatureStateOrPending,
 } from "../../electron/types/featureGate";
 
-/** The one key this store holds. */
+/** The checklist key (BACKLOG-3476); the Settings slots are below. */
 export const SESSION_STRICT_FEATURE_KEY = "transaction_checklists" as const;
 export type SessionStrictFeatureKey = typeof SESSION_STRICT_FEATURE_KEY;
 
@@ -57,33 +69,40 @@ export const STRICT_ANSWER_TTL_MS = 5 * 60 * 1000;
 /** The LicenseContext focus throttle. */
 export const STRICT_FOCUS_THROTTLE_MS = 60 * 1000;
 
-interface StoredAnswer {
+interface StoredAnswer<T> {
   /** The user the question was sent for. */
   forUserId: string;
-  state: StrictFeatureState;
+  value: T;
 }
 
-interface StrictFeatureContextValue {
-  /** The answer for the current user, or `pending`. */
-  state: StrictFeatureStateOrPending;
+interface Slot<T> {
+  /** The answer for the current user, or null (pending). */
+  value: T | null;
   /** Ask main again in the background; the stored answer keeps showing. */
   reask: () => void;
 }
 
-const StrictFeatureContext = createContext<StrictFeatureContextValue | null>(null);
-
-export function StrictFeatureProvider({
-  userId,
-  organizationId,
-  children,
-}: {
-  userId: string | null;
-  organizationId: string | null;
-  children: React.ReactNode;
-}): React.ReactElement {
-  const [answer, setAnswer] = useState<StoredAnswer | null>(null);
+/**
+ * One session answer (BACKLOG-4174 generalises the BACKLOG-3476 store).
+ *
+ * Each slot has its own user key, its own sequence and its own re-ask, so a
+ * consumer re-asks only the question it reads: opening a transaction must not
+ * also fire the plan read (one uncached membership query in main) or the
+ * Learn read.
+ */
+function useSessionSlot<T>(
+  userId: string | null,
+  organizationId: string | null,
+  question: () => Promise<T>,
+  onFailure: T,
+): Slot<T> {
+  const [answer, setAnswer] = useState<StoredAnswer<T> | null>(null);
   const userIdRef = useRef(userId);
   userIdRef.current = userId;
+  const questionRef = useRef(question);
+  questionRef.current = question;
+  const onFailureRef = useRef(onFailure);
+  onFailureRef.current = onFailure;
   const sentSeqRef = useRef(0);
   const appliedSeqRef = useRef(0);
   const lastAskAtRef = useRef(0);
@@ -102,21 +121,22 @@ export function StrictFeatureProvider({
     if (!forUserId) return;
     lastAskAtRef.current = Date.now();
     const seq = ++sentSeqRef.current;
-    const land = (state: StrictFeatureState) => {
+    const land = (value: T) => {
       if (!mountedRef.current) return;
       // Dropped when the user changed while it was in flight, or when a newer
-      // question has already been answered.
+      // question has already been answered. (The read-time `forUserId` check
+      // below already hides another user's answer; this keeps it out of state.)
       if (userIdRef.current !== forUserId || seq < appliedSeqRef.current) return;
       appliedSeqRef.current = seq;
-      setAnswer({ forUserId, state });
+      setAnswer({ forUserId, value });
     };
     // Awaited inside the try: a bridge without the method throws synchronously,
     // and the honest answer then is that the plan could not be read.
     void (async () => {
       try {
-        land(await window.api.featureGate.strictState(SESSION_STRICT_FEATURE_KEY));
+        land(await questionRef.current());
       } catch {
-        land("unknown");
+        land(onFailureRef.current);
       }
     })();
   }, []);
@@ -157,15 +177,72 @@ export function StrictFeatureProvider({
     return () => clearTimeout(timer);
   }, [answer, ask]);
 
-  const state: StrictFeatureStateOrPending =
-    answer && userId && answer.forUserId === userId ? answer.state : "pending";
+  const value = answer && userId && answer.forUserId === userId ? answer.value : null;
+  return useMemo(() => ({ value, reask: ask }), [value, ask]);
+}
 
+/**
+ * BACKLOG-4174: the plan read (`feature-gate:get-all`), or "failed" when the
+ * invoke rejected. `{}` (no organization resolved, nothing cached) is an
+ * ANSWER, not pending: the fail-open keys read allowed from it.
+ */
+export type SessionPlanFeatures = Record<string, FeatureAccess> | "failed";
+
+interface StrictFeatureContextValue {
+  checklists: Slot<StrictFeatureState>;
+  learn: Slot<StrictFeatureState>;
+  plan: Slot<SessionPlanFeatures>;
+}
+
+const StrictFeatureContext = createContext<StrictFeatureContextValue | null>(null);
+
+const askChecklists = () => window.api.featureGate.strictState(SESSION_STRICT_FEATURE_KEY);
+const askLearn = () => window.api.featureGate.strictState("autodetect_eval");
+const askPlan = async (): Promise<SessionPlanFeatures> => {
+  const result = await window.api.featureGate.getAll();
+  // A bridge that answers with no map at all has not answered the question.
+  return result && typeof result === "object" ? result : "failed";
+};
+
+export function StrictFeatureProvider({
+  userId,
+  organizationId,
+  children,
+}: {
+  userId: string | null;
+  organizationId: string | null;
+  children: React.ReactNode;
+}): React.ReactElement {
+  // All three are asked at sign-in, so the first open usually has its answer.
+  const checklists = useSessionSlot<StrictFeatureState>(userId, organizationId, askChecklists, "unknown");
+  const learn = useSessionSlot<StrictFeatureState>(userId, organizationId, askLearn, "unknown");
+  const plan = useSessionSlot<SessionPlanFeatures>(userId, organizationId, askPlan, "failed");
   const value = useMemo<StrictFeatureContextValue>(
-    () => ({ state, reask: ask }),
-    [state, ask],
+    () => ({ checklists, learn, plan }),
+    [checklists, learn, plan],
   );
-
   return <StrictFeatureContext.Provider value={value}>{children}</StrictFeatureContext.Provider>;
+}
+
+/**
+ * BACKLOG-4174: the session's two Settings reads (the plan, for the AI tab, and
+ * `autodetect_eval`, for Learn), with one background re-ask of each per mount.
+ * Null outside a provider; the caller then reads per mount as before.
+ */
+export function useSessionSettingsReads(): {
+  plan: SessionPlanFeatures | null;
+  learn: StrictFeatureStateOrPending;
+} | null {
+  const context = useContext(StrictFeatureContext);
+  const learnReask = context?.learn.reask;
+  const planReask = context?.plan.reask;
+  useEffect(() => {
+    learnReask?.();
+    planReask?.();
+    // Both are stable for the provider's life: one re-ask of each per mount.
+  }, [learnReask, planReask]);
+  if (!context) return null;
+  return { plan: context.plan.value, learn: context.learn.value ?? "pending" };
 }
 
 /**
@@ -181,7 +258,7 @@ export function useSessionStrictFeatureState(
 ): StrictFeatureStateOrPending {
   const context = useContext(StrictFeatureContext);
   const hasProvider = context !== null;
-  const reask = context?.reask;
+  const reask = context?.checklists.reask;
   const [local, setLocal] = useState<StrictFeatureStateOrPending>("pending");
 
   useEffect(() => {
@@ -204,5 +281,5 @@ export function useSessionStrictFeatureState(
     // `reask` is stable for the provider's life, so this is one re-ask per mount.
   }, [hasProvider, reask, featureKey]);
 
-  return context ? context.state : local;
+  return context ? context.checklists.value ?? "pending" : local;
 }

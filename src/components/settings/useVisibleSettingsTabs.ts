@@ -5,22 +5,27 @@
  * tab strip and the account side panel's rows), held until both reads that
  * decide it have settled:
  *
- *   - the plan read (`useFeatureGate`). `ai_detection` is not a strict key, so
- *     `isAllowed` answers true while the features map is still empty; showing
- *     the list then would show the AI tab and remove it a moment later.
- *     "Settled" is the same expression `FeatureGate` uses for its body:
- *     `!(loading && !hasInitialized)`. Both flags settle in `finally`, so a
- *     rejected read still settles (features stay empty → AI fail-open).
- *   - the strict `autodetect_eval` read (`useStrictFeatureState`), which is
- *     "pending" before its first answer and "unknown" if it fails.
+ *   - the plan read (`feature-gate:get-all`). `ai_detection` is not a strict
+ *     key, so it reads allowed from an empty map; showing the list before the
+ *     read settles would show the AI tab and remove it a moment later. `{}` is
+ *     a settled answer; a rejected read is settled too ("failed" → AI
+ *     fail-open, the rule in `isFeatureAllowed`).
+ *   - the strict `autodetect_eval` read, "pending" before its first answer
+ *     and "unknown" if it fails. Learn shows only on "allowed" (fail-closed).
  *
  * `tabs` is null until both have settled, then the visible list. The list is
  * never shown with an entry that a pending read would later remove.
+ *
+ * FIX A4: under a `StrictFeatureProvider` both answers come from the signed-in
+ * session (`useSessionSettingsReads`), so a reopen shows its rows on the first
+ * frame and corrects them one background IPC later. Outside a provider each
+ * mount reads both once, as before.
  */
 
-import { useMemo } from "react";
-import { useFeatureGate } from "@/hooks/useFeatureGate";
-import { useStrictFeatureState } from "@/hooks/useStrictFeatureState";
+import { useEffect, useMemo, useState } from "react";
+import type { StrictFeatureStateOrPending } from "../../../electron/types/featureGate";
+import { useSessionSettingsReads, type SessionPlanFeatures } from "@/contexts/StrictFeatureContext";
+import { isFeatureAllowed } from "@/hooks/featureAccess";
 import { visibleSettingsTabs, type SettingsTab } from "./settingsTabs";
 
 export interface VisibleSettingsTabs {
@@ -31,12 +36,41 @@ export interface VisibleSettingsTabs {
 }
 
 export function useVisibleSettingsTabs(): VisibleSettingsTabs {
-  const { isAllowed, loading, hasInitialized } = useFeatureGate();
-  const strictState = useStrictFeatureState("autodetect_eval");
-  const planSettled = !(loading && !hasInitialized);
-  const ready = planSettled && strictState !== "pending";
-  const hasAIAddon = isAllowed("ai_detection");
-  const learnAvailable = strictState === "allowed";
+  const session = useSessionSettingsReads();
+  const hasProvider = session !== null;
+  const [localPlan, setLocalPlan] = useState<SessionPlanFeatures | null>(null);
+  const [localLearn, setLocalLearn] = useState<StrictFeatureStateOrPending>("pending");
+
+  // No provider: one plan read and one strict read per mount.
+  useEffect(() => {
+    if (hasProvider) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await window.api.featureGate.getAll();
+        if (!cancelled) setLocalPlan(result && typeof result === "object" ? result : "failed");
+      } catch {
+        if (!cancelled) setLocalPlan("failed");
+      }
+    })();
+    void (async () => {
+      try {
+        const result = await window.api.featureGate.strictState("autodetect_eval");
+        if (!cancelled) setLocalLearn(result);
+      } catch {
+        if (!cancelled) setLocalLearn("unknown");
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasProvider]);
+
+  const plan = session ? session.plan : localPlan;
+  const learn = session ? session.learn : localLearn;
+  const ready = plan !== null && learn !== "pending";
+  const hasAIAddon = isFeatureAllowed(plan === null || plan === "failed" ? {} : plan, "ai_detection");
+  const learnAvailable = learn === "allowed";
 
   const tabs = useMemo(
     () => (ready ? visibleSettingsTabs(hasAIAddon, learnAvailable) : null),
