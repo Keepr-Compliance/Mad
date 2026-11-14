@@ -96,12 +96,29 @@ function allowLearn(state: "allowed" | "blocked" | "unknown" | "pending" = "allo
   };
 }
 
+/** BACKLOG-4243: main reports the Keepr Cloud section visible (off, engine installed). */
+function allowCloud(): void {
+  (window.api as unknown as { cloudSync: unknown }).cloudSync = {
+    getView: jest.fn().mockResolvedValue({
+      engineInstalled: true,
+      status: "off",
+      pausedReason: null,
+      noticeVersion: 1,
+      pendingDeals: 0,
+      lastSavedAt: null,
+      aiAppsAvailable: true,
+    }),
+  };
+}
+
 describe("Settings", () => {
   const mockUserId = "user-123";
   const mockOnClose = jest.fn();
 
   beforeEach(() => {
     jest.clearAllMocks();
+    // BACKLOG-4243: Keepr Cloud hidden unless a test calls allowCloud().
+    delete (window.api as unknown as { cloudSync?: unknown }).cloudSync;
 
     // Default mocks
     jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
@@ -2056,6 +2073,7 @@ describe("Settings", () => {
       async (label, id) => {
         mockIsAllowed.mockReturnValue(true); // AI included: all entries
         allowLearn(); // BACKLOG-4120: "Help Keepr learn" included too
+        allowCloud(); // BACKLOG-4243: "Keepr Cloud" included too
         await renderSettings({ userId: mockUserId, onClose: mockOnClose });
         await userEvent.click(screen.getByRole("tab", { name: label }));
         expect(scrolledIds()).toEqual([id]);
