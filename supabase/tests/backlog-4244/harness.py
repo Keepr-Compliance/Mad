@@ -325,6 +325,11 @@ def mutants():
                        "    v_g := ARRAY[regexp_replace(v_m, '[^0-9]', '', 'g')];                                         /*MASK:groups*/", 'pg_temp.p_mask_sweep()'))
     b.append(fn_mutant('MASK_old_expression', '_mcp_mask', "regexp_matches(v_x, '(\\d+(?:[ -]\\d+)*)', 'g')", "regexp_matches(v_x, '(\\d(?:[ -]?\\d){12,18})', 'g')",
                        'pg_temp.p_mask_sweep()'))
+    # the whole earlier rule: the earlier run pattern and Luhn on the whole run
+    b.append(fn_mutant('MASK_old_algorithm', '_mcp_mask',
+                       "regexp_matches(v_x, '(\\d+(?:[ -]\\d+)*)', 'g') AS r LOOP\n    IF char_length(regexp_replace(v_m, '[^0-9]', '', 'g')) < 13 THEN\n      CONTINUE;\n    END IF;\n    v_g := regexp_split_to_array(v_m, '[ -]');",
+                       "regexp_matches(v_x, '(\\d(?:[ -]?\\d){12,18})', 'g') AS r LOOP\n    IF char_length(regexp_replace(v_m, '[^0-9]', '', 'g')) < 13 THEN\n      CONTINUE;\n    END IF;\n    v_g := ARRAY[regexp_replace(v_m, '[^0-9]', '', 'g')];",
+                       'pg_temp.p_mask_sweep()'))
     b.append(fn_mutant('MASK_luhn_dropped', '_mcp_mask', "IF v_sum % 10 = 0 THEN                                                         /*MASK:luhn*/",
                        "IF true THEN                                                         /*MASK:luhn*/", 'pg_temp.p_mask_sweep()'))
     # F-1, F-2, strip class
