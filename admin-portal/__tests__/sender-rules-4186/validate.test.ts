@@ -2,10 +2,12 @@
  * BACKLOG-4186 PR B — the client validator against the SQL validator (control A7) and threshold
  * input (control A14, library half).
  *
- * Corpus: supabase/tests/backlog-4175/corpus.json, 285 cases; `sql` is the SQL validator's answer
+ * Corpus: supabase/tests/backlog-4175/corpus.json, 296 cases; `sql` is the SQL validator's answer
  * recorded by the 4175 keepr-test harness. corpus-sql-reasons.json is the SQL validator's REASON
  * for every case, captured 2026-11-09 by supabase/tests/backlog-4186/capture-corpus-reasons.py
- * (kt-sql on keepr-test, public._sender_rule_set_invalid over the same corpus).
+ * (kt-sql on keepr-test, public._sender_rule_set_invalid over the same corpus). The 11
+ * userSuppressMinAnswers rows were added by BACKLOG-4212 and checked against migration
+ * 20261116100000 by supabase/tests/backlog-4212/ (keepr-test, one transaction, rolled back).
  */
 import fs from 'fs';
 import path from 'path';
@@ -28,10 +30,10 @@ const sqlReasons = JSON.parse(
 ) as { name: string; reason: string | null }[];
 
 describe('A7: invalidReason agrees with the SQL validator on the 4175 corpus', () => {
-  it('reads the whole corpus (285 cases, 4 where Zod and SQL disagree)', () => {
-    expect(corpus).toHaveLength(285);
+  it('reads the whole corpus (296 cases, 4 where Zod and SQL disagree)', () => {
+    expect(corpus).toHaveLength(296);
     expect(corpus.filter((c) => c.zod !== c.sql)).toHaveLength(4);
-    expect(sqlReasons).toHaveLength(285);
+    expect(sqlReasons).toHaveLength(296);
     expect(sqlReasons.map((r) => r.name)).toEqual(corpus.map((c) => c.name));
   });
 

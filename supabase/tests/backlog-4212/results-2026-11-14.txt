@@ -1,0 +1,45 @@
+BACKLOG-4212 PR1 controls, 2026-11-14. keepr-test via kt-sql, ONE transaction ending in RAISE (nothing persisted).
+Run 1 aborted at harness setup (42725: "char" || unknown in pg_temp.attrs, before any migration statement); fixed in 9064f6538.
+Run 2 below, at 9064f6538. pg_stat_statements reset afterwards.
+
+== M9_sql_refuses_key
+MUTATION APPLIED (text) numstat=1/2
+  - IF NOT (public._sender_rule_set_keys_exact(p->'thresholds', ARRAY['minCensusLinkedEmails', 'reportSendIntervalHours', 'reportMaxRows'])
+  - OR public._sender_rule_set_keys_exact(p->'thresholds', ARRAY['minCensusLinkedEmails', 'reportSendIntervalHours', 'reportMaxRows', 'userSuppressMinAnswers'])) TH
+  + IF NOT (public._sender_rule_set_keys_exact(p->'thresholds', ARRAY['minCensusLinkedEmails', 'reportSendIntervalHours', 'reportMaxRows'])) THEN
+== MR_sql_no_upper_bound
+MUTATION APPLIED (text) numstat=1/1
+  - AND NOT public._sender_rule_set_int_ok(p #> '{thresholds,userSuppressMinAnswers}', 0, 20) THEN
+  + AND NOT public._sender_rule_set_int_ok(p #> '{thresholds,userSuppressMinAnswers}', 0, 9007199254740991) THEN
+== MQ_sql_key_required
+MUTATION APPLIED (text) numstat=1/2
+  - IF NOT (public._sender_rule_set_keys_exact(p->'thresholds', ARRAY['minCensusLinkedEmails', 'reportSendIntervalHours', 'reportMaxRows'])
+  - OR public._sender_rule_set_keys_exact(p->'thresholds', ARRAY['minCensusLinkedEmails', 'reportSendIntervalHours', 'reportMaxRows', 'userSuppressMinAnswers'])) TH
+  + IF NOT (public._sender_rule_set_keys_exact(p->'thresholds', ARRAY['minCensusLinkedEmails', 'reportSendIntervalHours', 'reportMaxRows', 'userSuppressMinAnswers']
+A_acl_unchanged              PASS {postgres=X/postgres,service_role=X/postgres}
+A_attrs                      PASS i|false|{"search_path=\"\""}|plpgsql
+A_check_calls_validator      PASS
+A_check_refuses_21           PASS
+A_corpus_sql_side            PASS
+A_insert_with_key            PASS
+A_md5_changed                PASS
+A_no_client_execute          PASS
+A_reasons_match_admin_json   PASS
+A_stored_rows_valid          PASS rows=4
+M9_sql_refuses_key           applied n=3 reds=[userSuppressMinAnswers: 0; userSuppressMinAnswers: 2; userSuppressMinAnswers: 20]
+MQ_sql_key_required          applied n=69 reds=[bundled; suppress.exactAddresses: 500 items (cap); suppress.hosts: 2000 items (cap); suppress.localParts: 50 items (cap); suppress.bulkHeaders.anyKeyPresent: 4 items (cap); suppress.bulkHeaders.precedenceValues: 10 items (cap); keep.platformHosts: 200 items (cap); keep.platformAddresses: 200 items (cap); freeMailDomains: 500 items (cap); localParts item: valid exact; localParts item: valid prefix;]
+MR_sql_no_upper_bound        applied n=1 reds=[userSuppressMinAnswers: 21]
+P_acl                        {postgres=X/postgres,service_role=X/postgres}
+P_attrs                      i|false|{"search_path=\"\""}|plpgsql
+P_corpus_n                   296
+P_md5                        3ceed5c742a50b398d935cd8227414c2
+P_wrong                      userSuppressMinAnswers: 0; userSuppressMinAnswers: 2; userSuppressMinAnswers: 20
+R_rollback_restores_4175     PASS
+
+MQ red set = all 69 rows the SQL accepts that carry no userSuppressMinAnswers (72 sql-true rows minus 0/2/20), userSuppressMinAnswers: absent among them.
+
+== App side (jest / vitest), exact-string replace, restored with git checkout --
+Z_key_removed     (Zod drops the key)          parity (b) red: userSuppressMinAnswers 0, 2, 20 (3)
+Z_no_upper_bound  (Zod .max(20) dropped)       parity (b) red: userSuppressMinAnswers 21 (1)
+Z_key_required    (Zod .optional() dropped)    parity (b) red on 73 rows (every zod-true row without the key) + (d) bundled seed refused
+A_no_upper_bound  (admin range 0-21)           validate.test A7 red: 'userSuppressMinAnswers: 21' + word-for-word reasons (2 tests)
