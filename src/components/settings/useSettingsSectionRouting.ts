@@ -17,8 +17,9 @@
  * BACKLOG-4174: sections above the landed one can still grow after landing
  * (device list, diagnostics, support-access snapshot), pushing it down. For
  * SECTION_SETTLE_MS after landing, a resize of the content column or the bottom
- * spacer scrolls the landed element back to the top, instantly and without a
- * second ring. Any user input ends that window; scroll events do not, because
+ * spacer scrolls the landed element back to the top, smoothly (an instant jump
+ * would cancel the landing slide still in flight) and without a second ring; a
+ * burst of resizes in one frame is one scroll. Any user input ends that window; scroll events do not, because
  * the page's own scrolling fires them. The window outlives the target, which
  * the caller clears as soon as the section is reached.
  */
@@ -36,6 +37,7 @@ function startSettle(root: HTMLElement, el: HTMLElement): () => void {
   // Seeded here, not from the first report: the spacer can reach its full
   // height in the same task as the landing, so its first report is already grown.
   const heights = new Map<Element, number>();
+  let frame = 0;
   const observer = new ResizeObserver((entries) => {
     let grew = false;
     for (const entry of entries) {
@@ -44,7 +46,12 @@ function startSettle(root: HTMLElement, el: HTMLElement): () => void {
       heights.set(entry.target, h);
       if (before !== h) grew = true;
     }
-    if (grew) el.scrollIntoView({ behavior: "instant" as ScrollBehavior, block: "start" });
+    if (grew && !frame) {
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
   });
   // The content column and the bottom spacer after it.
   for (const child of Array.from(root.children)) {
@@ -53,6 +60,7 @@ function startSettle(root: HTMLElement, el: HTMLElement): () => void {
   }
   const stop = () => {
     observer.disconnect();
+    if (frame) cancelAnimationFrame(frame);
     clearTimeout(timer);
     for (const e of USER_INPUT) document.removeEventListener(e, stop, { capture: true });
   };

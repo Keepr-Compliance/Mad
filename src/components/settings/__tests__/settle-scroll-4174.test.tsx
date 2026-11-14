@@ -7,13 +7,15 @@
  * resize report carries the observed element and its height.
  *
  *   C1   a scroll event, then the content column grows: About is re-scrolled
- *        once, with behavior "instant".
+ *        once, with behavior "smooth".
  *   C1s  the bottom spacer grows: same re-scroll.
  *   C2   a wheel before the growth: no re-scroll.
  *   C3   growth after SECTION_SETTLE_MS: no re-scroll.
  *   C5   a tab is clicked after landing, then growth: no re-scroll to About.
  *   C6   the observer's first report equals each element's height at landing:
  *        no re-scroll, so the smooth landing is left alone.
+ *   C8   a burst of resize reports in one frame: one re-scroll.
+ *   C9   the window ends (wheel) before the frame runs: no re-scroll.
  *   C7   the spacer is 0 at landing and its FIRST report is already grown:
  *        About is re-scrolled.
  *
@@ -171,11 +173,28 @@ let originalRect: typeof Element.prototype.getBoundingClientRect;
 /** Laid-out heights at landing; C7 lowers the spacer's to 0. */
 let contentStart = 100;
 let spacerStart = 100;
+/** Manual animation frames: the correction runs when a test calls frame(). */
+let frames: Array<FrameRequestCallback | null> = [];
+function installRaf(): void {
+  window.requestAnimationFrame = (cb: FrameRequestCallback) => frames.push(cb);
+  window.cancelAnimationFrame = (id: number) => {
+    frames[id - 1] = null;
+  };
+}
+function frame(): void {
+  const run = frames;
+  frames = [];
+  act(() => {
+    run.forEach((cb) => cb?.(0));
+  });
+}
 
 beforeEach(() => {
   mockSettingsApi();
   observers = [];
   calls = [];
+  frames = [];
+  installRaf();
   originalRO = (globalThis as { ResizeObserver?: typeof ResizeObserver }).ResizeObserver;
   originalScrollIntoView = Element.prototype.scrollIntoView;
   originalRect = Element.prototype.getBoundingClientRect;
@@ -249,19 +268,41 @@ async function landAtAbout(): Promise<number> {
 }
 
 describe("BACKLOG-4174 the landed section stays at the top while Settings settles", () => {
-  it("C1 the content column grows after a scroll event: About is re-scrolled instantly", async () => {
+  it("C1 the content column grows after a scroll event: About is re-scrolled smoothly", async () => {
     const n = await landAtAbout();
     act(() => {
       scroller().dispatchEvent(new Event("scroll"));
     });
     report(content(), 400);
-    expect(calls.slice(n)).toEqual([{ id: "settings-about", behavior: "instant" }]);
+    frame();
+    expect(calls.slice(n)).toEqual([{ id: "settings-about", behavior: "smooth" }]);
   });
 
-  it("C1s the bottom spacer grows: About is re-scrolled instantly", async () => {
+  it("C1s the bottom spacer grows: About is re-scrolled smoothly", async () => {
     const n = await landAtAbout();
     report(spacer(), 520);
-    expect(calls.slice(n)).toEqual([{ id: "settings-about", behavior: "instant" }]);
+    frame();
+    expect(calls.slice(n)).toEqual([{ id: "settings-about", behavior: "smooth" }]);
+  });
+
+  it("C8 a burst of resize reports in one frame is one re-scroll", async () => {
+    const n = await landAtAbout();
+    report(content(), 300);
+    report(content(), 400);
+    report(spacer(), 520);
+    report(content(), 500);
+    frame();
+    expect(calls.slice(n)).toEqual([{ id: "settings-about", behavior: "smooth" }]);
+  });
+
+  it("C9 a wheel between the growth and the frame cancels the pending re-scroll", async () => {
+    const n = await landAtAbout();
+    report(content(), 400);
+    act(() => {
+      scroller().dispatchEvent(new Event("wheel"));
+    });
+    frame();
+    expect(calls.slice(n)).toEqual([]);
   });
 
   it("C2 a wheel before the growth ends the window", async () => {
@@ -270,11 +311,13 @@ describe("BACKLOG-4174 the landed section stays at the top while Settings settle
       scroller().dispatchEvent(new Event("wheel"));
     });
     report(content(), 400);
+    frame();
     expect(calls.slice(n)).toEqual([]);
   });
 
   it("C3 growth after the settle window is left alone", async () => {
     jest.useFakeTimers();
+    installRaf();
     const { plan, strict } = mockReads();
     plan.resolve({});
     strict.resolve("blocked");
@@ -291,6 +334,7 @@ describe("BACKLOG-4174 the landed section stays at the top while Settings settle
     });
     const n = calls.length;
     report(content(), 400);
+    frame();
     expect(calls.slice(n)).toEqual([]);
   });
 
@@ -303,6 +347,7 @@ describe("BACKLOG-4174 the landed section stays at the top while Settings settle
     });
     const n = calls.length;
     report(content(), 400);
+    frame();
     expect(calls.slice(n).filter((c) => c.id === "settings-about")).toEqual([]);
   });
 
@@ -332,6 +377,7 @@ describe("BACKLOG-4174 the landed section stays at the top while Settings settle
     expect(spacer().getBoundingClientRect().height).toBe(0);
     report(content(), contentStart);
     report(spacer(), 520);
-    expect(calls.slice(1)).toEqual([{ id: "settings-about", behavior: "instant" }]);
+    frame();
+    expect(calls.slice(1)).toEqual([{ id: "settings-about", behavior: "smooth" }]);
   });
 });
