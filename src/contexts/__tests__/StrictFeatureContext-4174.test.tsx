@@ -12,6 +12,7 @@
  *   C5   one user's plan answer shown for the next; sign-out still showing.
  *   C6   an org change resetting the answer to pending instead of re-asking.
  *   R1   a checklist consumer re-asking the plan or the Learn read.
+ *   X1   the Settings re-ask keyed on the context value (each answer re-asks).
  * Every list recorded is a list a consumer RENDERED, so "never on any frame"
  * is a claim about frames, not about the final state.
  */
@@ -206,4 +207,14 @@ it("R1 — a checklist consumer mount re-asks only its own key (no get-all, no a
   expect(getAll().mock.calls.length).toBe(g);
   expect(learnCalls()).toBe(l);
   expect(strictState().mock.calls.filter((x) => x[0] === "transaction_checklists").length - c).toBe(1);
+});
+
+it("X1 — an open panel whose reads answer does not re-ask again: one sign-in read plus one mount re-ask of each", async () => {
+  byKey({ autodetect_eval: async () => "allowed", transaction_checklists: async () => "allowed" });
+  getAll().mockResolvedValue({});
+  render(<App userId="u-a" open />);
+  for (let i = 0; i < 5; i++) await flush();
+  expect(screen.getByTestId("settings-learn")).toBeInTheDocument();
+  expect(getAll().mock.calls.length).toBe(2);
+  expect(learnCalls()).toBe(2);
 });
