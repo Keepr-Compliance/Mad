@@ -1593,3 +1593,91 @@ describe("4219 the pilot report switch through the handlers", () => {
     expect(pilotCalls()).toHaveLength(3);
   });
 });
+
+// ---------------------------------------------------------------------------
+// BACKLOG-4219 follow-up: learn:get-state { settle: true } waits for the user's
+// queued pilot job (capped) so Settings shows a send / withdraw on the same visit.
+// ---------------------------------------------------------------------------
+describe("C-B3 (main) get-state { settle: true } waits for the queued pilot job", () => {
+  function heldIdle() {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const idle = jest.fn((_userId: string) => held);
+    ipcHandlers.clear();
+    featureGateHandlers.registerFeatureGateHandlers();
+    handlers.registerLearnModeHandlers({ pilotReport: { maybeSend: jest.fn(), queueWithdraw: jest.fn(), idle } });
+    return { idle, release };
+  }
+
+  it("C-B3 with idle held, a settled read is still pending while a plain read resolves", async () => {
+    const { idle, release } = heldIdle();
+    let settledDone = false;
+    const settled = invoke("learn:get-state", { settle: true }).then((r) => {
+      settledDone = true;
+      return r;
+    });
+    const plainRead = await invoke("learn:get-state");
+    expect(plainRead.success).toBe(true);
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    expect(idle).toHaveBeenCalledWith(USER);
+    expect(settledDone).toBe(false);
+    release();
+    expect(await settled).toMatchObject({ success: true, pilotReport: false, pilotPending: false });
+  });
+
+  it("C-B3 a plain read never waits on idle; a bad payload is refused", async () => {
+    const { idle } = heldIdle();
+    expect((await invoke("learn:get-state")).success).toBe(true);
+    expect((await invoke("learn:get-state", { settle: false })).success).toBe(true);
+    expect(idle).not.toHaveBeenCalled();
+    expect(await invoke("learn:get-state", { settle: "yes" })).toEqual({ success: false, error: handlers.LEARN_INVALID_ERROR });
+    expect(await invoke("learn:get-state", { settle: true, extra: 1 })).toEqual({ success: false, error: handlers.LEARN_INVALID_ERROR });
+  });
+
+  it("C-B3 the wait is capped: a job that never finishes still gets an answer", async () => {
+    jest.useFakeTimers({ doNotFake: ["nextTick", "setImmediate", "queueMicrotask"] });
+    try {
+      heldIdle(); // never released
+      let done = false;
+      const settled = invoke("learn:get-state", { settle: true }).then((r) => {
+        done = true;
+        return r;
+      });
+      await jest.advanceTimersByTimeAsync(handlers.LEARN_SETTLE_CAP_MS - 1);
+      expect(done).toBe(false);
+      await jest.advanceTimersByTimeAsync(1);
+      expect((await settled).success).toBe(true);
+      expect(jest.getTimerCount()).toBe(0);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it("C-B3 real service: after ON + score, a settled read already carries the send", async () => {
+    const base = mockSupabaseClient.rpc.getMockImplementation() as (fn: string, args?: { p_org_id?: string }) => Promise<unknown>;
+    mockSupabaseClient.rpc.mockImplementation(((fn: string, args?: { p_org_id?: string }) => {
+      const p = base(fn, args);
+      return Object.assign(p, { abortSignal: () => p });
+    }) as never);
+    try {
+      const mod = await import("../../services/learnPilotReportService");
+      const svc = mod.createLearnPilotReportService({ appVersion: () => "2.46.2" });
+      ipcHandlers.clear();
+      featureGateHandlers.registerFeatureGateHandlers();
+      handlers.registerLearnModeHandlers({ pilotReport: svc });
+      setToggle(true);
+      seedEmail({ sentAt: "2026-10-01T10:00:00.000Z", subject: "Offer accepted", body: CANARY_BODY });
+      await invoke("learn:run", { windowMonths: 12 });
+      await invoke("learn:set-pilot-report", { enabled: true });
+      expect((await invoke("learn:score")).success).toBe(true);
+      const st = await invoke("learn:get-state", { settle: true }); // no svc.idle() here
+      expect(st).toMatchObject({ success: true, pilotReport: true, pilotPending: false });
+      expect(typeof st.pilotLastSentAt).toBe("string");
+    } finally {
+      mockSupabaseClient.rpc.mockImplementation((async (fn: string, args?: { p_org_id?: string }) => {
+        cloudCalls.push(`rpc:${fn}`);
+        return rpcAnswer(args?.p_org_id ?? "");
+      }) as never);
+    }
+  });
+});
