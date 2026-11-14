@@ -242,8 +242,49 @@
      "emails": [],
      "is_primary": null,
      "name": null,
-     "notes": "Typed note about the lender on this deal.",
+     "notes": "Appraiser.",
      "person_id": "<id:11>",
+     "phones": [],
+     "role": "appraiser",
+     "role_category": null,
+     "specific_role": null
+    },
+    {
+     "company": "Fairweather Title Test",
+     "contact_deleted": false,
+     "details_withheld": false,
+     "emails": [
+      {
+       "email": "owen@example.test",
+       "is_primary": true,
+       "label": "work"
+      }
+     ],
+     "is_primary": null,
+     "name": "Owen Fairweather",
+     "notes": "Escrow officer.",
+     "person_id": "<id:12>",
+     "phones": [
+      {
+       "display": "(206) 555-0106",
+       "e164": "+12065550106",
+       "is_primary": true,
+       "label": "work"
+      }
+     ],
+     "role": "escrow",
+     "role_category": null,
+     "specific_role": null
+    },
+    {
+     "company": null,
+     "contact_deleted": false,
+     "details_withheld": true,
+     "emails": [],
+     "is_primary": null,
+     "name": null,
+     "notes": "Typed note about the lender on this deal.",
+     "person_id": "<id:13>",
      "phones": [],
      "role": "lender",
      "role_category": null,
@@ -257,15 +298,15 @@
      "is_primary": null,
      "name": "Tobin Ashgrove",
      "notes": "nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn…",
-     "person_id": "<id:12>",
+     "person_id": "<id:14>",
      "phones": [],
      "role": "seller_agent",
      "role_category": null,
      "specific_role": null
     }
    ],
-   "people_returned": 3,
-   "people_total": 3,
+   "people_returned": 5,
+   "people_total": 5,
    "v": 1
   }
  },
@@ -278,7 +319,7 @@
     "city": null,
     "closed_on": null,
     "copy_state": "fully_saved",
-    "deal_id": "<id:13>",
+    "deal_id": "<id:15>",
     "details": {
      "closing_deadline": null,
      "commission_actual_rate": null,
@@ -318,7 +359,7 @@
      "is_primary": null,
      "name": "Desmond Pell",
      "notes": null,
-     "person_id": "<id:14>",
+     "person_id": "<id:16>",
      "phones": [],
      "role": "seller",
      "role_category": null,
@@ -385,7 +426,7 @@
     "city": null,
     "closed_on": null,
     "copy_state": "never_fully_saved",
-    "deal_id": "<id:15>",
+    "deal_id": "<id:17>",
     "details": {
      "closing_deadline": null,
      "commission_actual_rate": null,
@@ -473,7 +514,7 @@
       "mutual_acceptance_date": null,
       "representation_start_date": null
      },
-     "deal_id": "<id:16>",
+     "deal_id": "<id:18>",
      "found_by": "keepr",
      "fully_saved_at": null,
      "locked": "submitted",
@@ -501,7 +542,7 @@
       "mutual_acceptance_date": null,
       "representation_start_date": null
      },
-     "deal_id": "<id:13>",
+     "deal_id": "<id:15>",
      "found_by": "person",
      "fully_saved_at": "2026-11-01T00:00:02.000000Z",
      "locked": null,
@@ -533,7 +574,7 @@
      "found_by": "person",
      "fully_saved_at": "2026-11-01T00:00:01.000000Z",
      "locked": null,
-     "people": 3,
+     "people": 5,
      "saved_at": "2026-11-01T00:00:01.000000Z",
      "saved_from": 1,
      "started_on": "2026-10-02",
@@ -577,7 +618,7 @@
       "mutual_acceptance_date": null,
       "representation_start_date": null
      },
-     "deal_id": "<id:17>",
+     "deal_id": "<id:19>",
      "found_by": "person",
      "fully_saved_at": null,
      "locked": null,
@@ -625,7 +666,7 @@
       "mutual_acceptance_date": null,
       "representation_start_date": null
      },
-     "deal_id": "<id:19>",
+     "deal_id": "<id:21>",
      "found_by": "person",
      "fully_saved_at": null,
      "locked": null,
@@ -653,7 +694,7 @@
       "mutual_acceptance_date": null,
       "representation_start_date": null
      },
-     "deal_id": "<id:18>",
+     "deal_id": "<id:20>",
      "found_by": "person",
      "fully_saved_at": null,
      "locked": null,
@@ -673,7 +714,7 @@
    "kind": "keepr.list_deals",
    "page": {
     "limit": 2,
-    "next_cursor": "2026-11-01T00:00:08.000000Z|<id:18>"
+    "next_cursor": "2026-11-01T00:00:08.000000Z|<id:20>"
    },
    "v": 1
   }
@@ -701,7 +742,7 @@
       "mutual_acceptance_date": null,
       "representation_start_date": null
      },
-     "deal_id": "<id:20>",
+     "deal_id": "<id:22>",
      "found_by": null,
      "fully_saved_at": null,
      "locked": null,
@@ -757,7 +798,7 @@
       "mutual_acceptance_date": null,
       "representation_start_date": null
      },
-     "deal_id": "<id:16>",
+     "deal_id": "<id:18>",
      "found_by": "keepr",
      "fully_saved_at": null,
      "locked": "submitted",
@@ -785,7 +826,7 @@
       "mutual_acceptance_date": null,
       "representation_start_date": null
      },
-     "deal_id": "<id:13>",
+     "deal_id": "<id:15>",
      "found_by": "person",
      "fully_saved_at": "2026-11-01T00:00:02.000000Z",
      "locked": null,
@@ -817,7 +858,7 @@
      "found_by": "person",
      "fully_saved_at": "2026-11-01T00:00:01.000000Z",
      "locked": null,
-     "people": 3,
+     "people": 5,
      "saved_at": "2026-11-01T00:00:01.000000Z",
      "saved_from": 1,
      "started_on": "2026-10-02",
