@@ -193,14 +193,14 @@ describe("PR2 gate and renderer boundaries", () => {
 });
 
 describe("P4 learn tables appear in no sync / export / upload path", () => {
-  const TABLES = /\blearn_(mode_settings|deal_answers|bulk_answers)\b/;
+  const TABLES = /\blearn_(mode_settings|deal_answers|bulk_answers|sender_overrides)\b/;
   const ALLOWED = new Set([
     "electron/database/schema.sql",
     "electron/services/db/learnModeSql.ts",
   ]);
 
   function filesNamingTables(): string[] {
-    const out = execFileSync("git", ["grep", "-lE", "learn_(mode_settings|deal_answers|bulk_answers)", "--", "electron", "src", "supabase", "broker-portal", "admin-portal", "scripts"], {
+    const out = execFileSync("git", ["grep", "-lE", "learn_(mode_settings|deal_answers|bulk_answers|sender_overrides)", "--", "electron", "src", "supabase", "broker-portal", "admin-portal", "scripts"], {
       cwd: REPO,
       encoding: "utf8",
     });
