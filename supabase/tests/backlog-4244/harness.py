@@ -565,7 +565,7 @@ def main():
         with open(fx_path, 'w') as fh:
             json.dump(normalise(res), fh, indent=1, sort_keys=True, ensure_ascii=False)
             fh.write('\n')
-        print('fixtures written: ' + fx_path)
+        print('fixtures written: ' + os.path.basename(fx_path))
     sys.exit(1 if cf or missed or cp == 0 else 0)
 
 
