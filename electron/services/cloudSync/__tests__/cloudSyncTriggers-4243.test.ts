@@ -36,8 +36,9 @@ function rebuildSql(db: ReturnType<typeof freshDb>, table: string): string {
 
 describe(`Keepr Cloud triggers [${DRIVER}]`, () => {
   it("schema.sql declares the five cloud_sync tables exactly as cloudSyncSql mirrors them, and no cloud trigger", () => {
+    const schema = SCHEMA_SQL.replace(/\r\n/g, "\n");
     for (const stmt of CLOUD_SYNC_TABLES_DDL.split(";").map((s) => s.trim()).filter(Boolean)) {
-      expect(SCHEMA_SQL).toContain(stmt);
+      expect(schema).toContain(stmt);
     }
     expect(SCHEMA_SQL).not.toMatch(/trg_cloud_sync_/);
   });
@@ -243,7 +244,10 @@ describe(`Keepr Cloud triggers [${DRIVER}]`, () => {
   it("C2.15: drop and create steps never throw; a broken handle gives one warning each", () => {
     const warns: string[] = [];
     const log = { warn: (m: string) => warns.push(m) };
-    const broken = { exec: () => { throw Object.assign(new Error("x"), { code: "SQLITE_ERROR" }); }, prepare: () => { throw new Error("x"); } };
+    const fail = () => {
+      throw Object.assign(new Error("x"), { code: "SQLITE_ERROR" });
+    };
+    const broken = { exec: fail, prepare: fail, transaction: () => fail };
     expect(dropCloudSyncTriggers(broken, log)).toBe(false);
     expect(ensureCloudSyncTriggers(broken, log).ok).toBe(false);
     expect(markAllEligibleAfterMigration(broken, log)).toBe(false);

@@ -1916,12 +1916,14 @@ class DatabaseService implements IDatabaseService {
       }
     }
 
-    // BACKLOG-4243: the Keepr Cloud dirty-mark triggers are dropped before
-    // schema.sql and the chain and re-created after them, even when a
-    // migration throws. Neither step throws. A migration that ran while the
-    // triggers were absent marks every eligible deal of every enabled user.
+    // BACKLOG-4243: when a versioned migration will run, the Keepr Cloud
+    // dirty-mark triggers are dropped before schema.sql and the chain; after
+    // them (also when a migration throws) the create step makes them exact,
+    // touching nothing when they already are. Neither step throws. A migration
+    // that ran while the triggers were absent marks every eligible deal of
+    // every enabled user.
     const versionBefore = this._readSchemaVersionOrNull(currentDb);
-    dropCloudSyncTriggers(currentDb, this._cloudSyncLog());
+    if (willRunMigration) dropCloudSyncTriggers(currentDb, this._cloudSyncLog());
     try {
       currentDb.exec(schemaSql);
       await this._runVersionedMigrations(false, currentDb);

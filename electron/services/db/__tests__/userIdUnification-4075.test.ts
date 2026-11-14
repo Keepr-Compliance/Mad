@@ -63,6 +63,8 @@ const OTHER = "40750000-0000-4000-8000-0000000000b1"; // pii-allow-uuid: invente
 
 /** The 8 tables that store the owner's local id in `user_id` with no FK (decided in listUserIdColumns). */
 const USER_ID_WITHOUT_FK = [
+  // BACKLOG-4243: Keepr Cloud on/off per user on this computer (rows only for session users).
+  "cloud_sync_settings",
   "contact_link_proposals",
   "contact_link_verdicts",
   "contact_source_links",
@@ -152,7 +154,7 @@ describe("BACKLOG-4075: migrateUserIdForUnification on the migrated schema", () 
     expect(db.pragma("foreign_keys", { simple: true })).toBe(1);
   });
 
-  it("U2 the derived list is every FK to users_local plus exactly the 8 user_id tables without one", () => {
+  it("U2 the derived list is every FK to users_local plus exactly the 9 user_id tables without one", () => {
     const fkTables = (db.prepare(
       "SELECT DISTINCT m.name AS t FROM sqlite_master m, pragma_foreign_key_list(m.name) f WHERE m.type = 'table' AND f.\"table\" = 'users_local' ORDER BY 1",
     ).all() as Array<{ t: string }>).map((r) => r.t);

@@ -17,7 +17,7 @@ import {
   UPDATE_DIRTY_FAILURE_SQL,
   UPSERT_DEAL_STATE_SQL,
 } from "./cloudSyncSql";
-import { withSavepoint, type SqlDb } from "./cloudSyncSqlDb";
+import type { SqlDb } from "./cloudSyncSqlDb";
 
 export interface SettingsRow {
   project_ref: string;
@@ -71,7 +71,7 @@ export interface InstallResult {
  */
 export function ensureInstall(db: SqlDb, projectRef: string, deviceId: string, now: Date = new Date()): InstallResult {
   const hash = machineHash(deviceId);
-  return withSavepoint(db, () => {
+  return db.transaction(() => {
     const row = db
       .prepare("SELECT install_id, machine_hash FROM cloud_sync_install WHERE project_ref = ?")
       .get(projectRef) as { install_id: string; machine_hash: string | null } | undefined;
@@ -117,7 +117,7 @@ export function ensureInstall(db: SqlDb, projectRef: string, deviceId: string, n
       db.prepare("UPDATE cloud_sync_install SET machine_hash = ? WHERE project_ref = ?").run(hash, projectRef);
     }
     return { installId: row.install_id, rebound: false };
-  });
+  })();
 }
 
 // ---------------------------------------------------------------- project guard (R10b, N4)
@@ -133,13 +133,13 @@ export function otherProjectInUse(db: SqlDb, projectRef: string): boolean {
 
 /** Forgets every other project's local rows. No network call. */
 export function forgetOtherProjects(db: SqlDb, projectRef: string): void {
-  withSavepoint(db, () => {
+  db.transaction(() => {
     db.prepare("DELETE FROM cloud_sync_install WHERE project_ref <> ?").run(projectRef);
     db.prepare("DELETE FROM cloud_sync_settings WHERE project_ref <> ?").run(projectRef);
     db.prepare("DELETE FROM cloud_sync_state WHERE project_ref <> ?").run(projectRef);
     const anyEnabled = db.prepare("SELECT 1 FROM cloud_sync_settings WHERE enabled = 1 LIMIT 1").get();
     if (!anyEnabled) db.exec("DELETE FROM cloud_sync_dirty");
-  });
+  })();
 }
 
 // ---------------------------------------------------------------- settings
@@ -177,7 +177,7 @@ export function enableForUser(
   fields: { noticeVersion: number | null; acceptedAt: string | null },
   now: Date = new Date(),
 ): void {
-  withSavepoint(db, () => {
+  db.transaction(() => {
     ensureSettingsRow(db, projectRef, userId);
     const before = getSettings(db, projectRef, userId);
     db.prepare(
@@ -185,19 +185,19 @@ export function enableForUser(
          turn_off_owed_at = NULL WHERE project_ref = ? AND user_id = ?`,
     ).run(nowIso(now), fields.noticeVersion, fields.acceptedAt, projectRef, userId);
     if (!before || before.enabled !== 1) db.prepare(MARK_ALL_ELIGIBLE_FOR_USER_SQL).run(userId);
-  });
+  })();
 }
 
 /** Local turn-off, at once and even offline. `owed`: the server call is still to be made. */
 export function disableForUser(db: SqlDb, projectRef: string, userId: string, owed: boolean, now: Date = new Date()): void {
-  withSavepoint(db, () => {
+  db.transaction(() => {
     ensureSettingsRow(db, projectRef, userId);
     db.prepare(
       `UPDATE cloud_sync_settings SET enabled = 0, local_confirmed_at = NULL, accepted_at = NULL,
          turn_off_owed_at = ? WHERE project_ref = ? AND user_id = ?`,
     ).run(owed ? nowIso(now) : null, projectRef, userId);
     clearUserSyncState(db, projectRef, userId);
-  });
+  })();
 }
 
 export function clearTurnOffOwed(db: SqlDb, projectRef: string, userId: string): void {
@@ -209,15 +209,17 @@ export function clearTurnOffOwed(db: SqlDb, projectRef: string, userId: string):
 
 /** Drops this user's sync state and the marks of this user's deals. */
 export function clearUserSyncState(db: SqlDb, projectRef: string, userId: string): void {
-  db.prepare(DELETE_STATE_FOR_USER_SQL).run(projectRef, userId);
-  db.prepare("DELETE FROM cloud_sync_dirty WHERE transaction_id IN (SELECT id FROM transactions WHERE user_id = ?)").run(
-    userId,
-  );
+  db.transaction(() => {
+    db.prepare(DELETE_STATE_FOR_USER_SQL).run(projectRef, userId);
+    db.prepare("DELETE FROM cloud_sync_dirty WHERE transaction_id IN (SELECT id FROM transactions WHERE user_id = ?)").run(
+      userId,
+    );
+  })();
 }
 
 /** Server `accepted_at` differs from the stored one: drop state, mark every eligible deal (R3a). */
 export function applyAcceptedAt(db: SqlDb, projectRef: string, userId: string, acceptedAt: string | null): boolean {
-  return withSavepoint(db, () => {
+  return db.transaction(() => {
     const s = getSettings(db, projectRef, userId);
     if (!s || s.accepted_at === acceptedAt) return false;
     db.prepare(DELETE_STATE_FOR_USER_SQL).run(projectRef, userId);
@@ -228,17 +230,7 @@ export function applyAcceptedAt(db: SqlDb, projectRef: string, userId: string, a
       userId,
     );
     return true;
-  });
-}
-
-export function saveLastState(db: SqlDb, projectRef: string, userId: string, json: string, now: Date = new Date()): void {
-  ensureSettingsRow(db, projectRef, userId);
-  db.prepare("UPDATE cloud_sync_settings SET last_state_json = ?, last_state_at = ? WHERE project_ref = ? AND user_id = ?").run(
-    json,
-    nowIso(now),
-    projectRef,
-    userId,
-  );
+  })();
 }
 
 // ---------------------------------------------------------------- dirty marks (R4)
@@ -248,10 +240,12 @@ export function selectDueDirty(db: SqlDb, now: Date, limit: number): DirtyRow[] 
 }
 
 export function clearMarkIfGeneration(db: SqlDb, transactionId: string, generation: number): boolean {
-  const r = db.prepare(DELETE_DIRTY_IF_GENERATION_SQL).run(transactionId, generation) as { changes?: number };
-  if ((r?.changes ?? 0) > 0) return true;
-  db.prepare(RESET_DIRTY_FAILURE_SQL).run(transactionId);
-  return false;
+  return db.transaction(() => {
+    const r = db.prepare(DELETE_DIRTY_IF_GENERATION_SQL).run(transactionId, generation) as { changes?: number };
+    if ((r?.changes ?? 0) > 0) return true;
+    db.prepare(RESET_DIRTY_FAILURE_SQL).run(transactionId);
+    return false;
+  })();
 }
 
 /** Back-off schedule (minutes) for retryable failures; capped at the last value. */
@@ -358,4 +352,34 @@ export function recordRun(
   now: Date,
 ): void {
   finishRun(db, startRun(db, projectRef, now), v, now);
+}
+
+/** The online copy is gone: drop this deal's state and its mark (this generation), together. */
+export function forgetDealDeletedOnline(
+  db: SqlDb,
+  projectRef: string,
+  userId: string,
+  transactionId: string,
+  generation: number,
+): void {
+  db.transaction(() => {
+    deleteDealState(db, projectRef, userId, transactionId);
+    clearMarkIfGeneration(db, transactionId, generation);
+  })();
+}
+
+/** The server confirmed the full save: record "synced" and clear the mark (this generation), together. */
+export function recordDealSynced(
+  db: SqlDb,
+  projectRef: string,
+  userId: string,
+  transactionId: string,
+  generation: number,
+  v: { cloudId: string; hash: string; hashVersion: number; cloudVersion: number | null },
+  now: Date,
+): void {
+  db.transaction(() => {
+    writeDealState(db, projectRef, userId, transactionId, { ...v, status: "synced" }, now);
+    clearMarkIfGeneration(db, transactionId, generation);
+  })();
 }

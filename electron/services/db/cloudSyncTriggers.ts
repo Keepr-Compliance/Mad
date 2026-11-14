@@ -24,10 +24,27 @@ function errorCode(error: unknown): string {
   return typeof code === "string" ? code : error instanceof Error ? error.name : "unknown";
 }
 
-/** Drops every Keepr Cloud trigger. Returns false (and warns) on failure. */
+const EXISTING_TRIGGERS_SQL = "SELECT name, sql FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'trg_cloud_sync_%'";
+
+function existingTriggers(db: SqlDb): Map<string, string> {
+  const rows = db.prepare(EXISTING_TRIGGERS_SQL).all() as Array<{ name: string; sql: string | null }>;
+  return new Map(rows.map((r) => [r.name, r.sql ?? ""]));
+}
+
+function sameBody(stored: string, wanted: string): boolean {
+  const norm = (x: string) => x.trim().replace(/;\s*$/, "");
+  return norm(stored) === norm(wanted);
+}
+
+/**
+ * Drops every Keepr Cloud trigger. Called before schema.sql and the chain only
+ * when a versioned migration is about to run (a migration may rebuild a table
+ * a trigger reads; schema.sql alone never rebuilds a table). Returns false
+ * (and warns) on failure.
+ */
 export function dropCloudSyncTriggers(db: SqlDb, log: TriggerLog = silentLog): boolean {
   try {
-    for (const t of CLOUD_SYNC_TRIGGERS) db.exec(`DROP TRIGGER IF EXISTS ${t.name}`);
+    for (const name of existingTriggers(db).keys()) db.prepare(`DROP TRIGGER IF EXISTS ${name}`).run();
     return true;
   } catch (error) {
     log.warn("[CloudSync] Could not drop triggers", { code: errorCode(error) });
@@ -37,11 +54,17 @@ export function dropCloudSyncTriggers(db: SqlDb, log: TriggerLog = silentLog): b
 
 export interface EnsureResult {
   ok: boolean;
+  /** Triggers created or replaced by this call. */
   created: number;
   skipped: string[];
 }
 
-/** Drops and re-creates every Keepr Cloud trigger whose tables and columns exist. */
+/**
+ * Makes the Keepr Cloud triggers exactly CLOUD_SYNC_TRIGGERS: a missing or
+ * changed trigger is (re)created, an unknown one dropped, an identical one left
+ * alone (no DDL on a normal launch). A trigger whose tables or columns are
+ * missing is dropped and not created.
+ */
 export function ensureCloudSyncTriggers(db: SqlDb, log: TriggerLog = silentLog): EnsureResult {
   const skipped: string[] = [];
   let created = 0;
@@ -55,17 +78,25 @@ export function ensureCloudSyncTriggers(db: SqlDb, log: TriggerLog = silentLog):
       }
       return c;
     };
+    const existing = existingTriggers(db);
+    const wanted = new Set(CLOUD_SYNC_TRIGGERS.map((t) => t.name));
+    for (const name of existing.keys()) {
+      if (!wanted.has(name)) db.prepare(`DROP TRIGGER IF EXISTS ${name}`).run();
+    }
     for (const t of CLOUD_SYNC_TRIGGERS) {
-      db.exec(`DROP TRIGGER IF EXISTS ${t.name}`);
       const ready = Object.entries(t.requires).every(([table, needed]) => {
         const have = cols(table);
         return have.size > 0 && needed.every((c) => have.has(c));
       });
+      const stored = existing.get(t.name);
       if (!ready) {
+        if (stored !== undefined) db.prepare(`DROP TRIGGER IF EXISTS ${t.name}`).run();
         skipped.push(t.name);
         continue;
       }
-      db.exec(t.sql);
+      if (stored !== undefined && sameBody(stored, t.sql)) continue;
+      if (stored !== undefined) db.prepare(`DROP TRIGGER IF EXISTS ${t.name}`).run();
+      db.prepare(t.sql).run();
       created++;
     }
     if (skipped.length > 0) log.warn("[CloudSync] Some triggers not created", { skipped: skipped.length });

@@ -20,7 +20,7 @@ import type { CallResult, CloudClient } from "./cloudClient";
 import { HASH_VERSION, projectDeal, type DealRow } from "./projection";
 import { parseState, type ServerState } from "./stateReader";
 import type { SessionIdentity, SessionUser } from "./session";
-import { withSavepoint, type SqlDb } from "../db/cloudSyncSqlDb";
+import type { SqlDb } from "../db/cloudSyncSqlDb";
 import * as store from "../db/cloudSyncDbService";
 
 export const SAVED_ROW_STATUSES = ["applied", "unchanged"] as const;
@@ -170,15 +170,13 @@ export class CloudSyncRunner {
     if (read.kind !== "state") return this.finish({ outcome: "unknown_state", done: 0, failed: 0 });
     const state = read.state;
     if (state.userId !== session.userId) return this.finish({ outcome: "identity_mismatch", done: 0, failed: 0, state });
-    store.saveLastState(db, deps.projectRef, session.userId, JSON.stringify(state), this.now());
 
     const pinned: SessionUser = { userId: session.userId, epoch: session.epoch };
 
     // A turn-off made offline is still owed (plan §8.8).
     if (fresh.turn_off_owed_at) {
       this.guard(pinned);
-      const res = await deps.client.setAutosave(pinned.userId, false, null);
-      if (res.kind === "ok") store.clearTurnOffOwed(db, deps.projectRef, pinned.userId);
+      const res = await this.settleOwedTurnOff(pinned.userId);
       if (res.kind === "refused" && res.code === "wrong_account") return this.wrongAccount(state);
       return this.finish({ outcome: "not_enabled", done: 0, failed: 0, state });
     }
@@ -188,7 +186,7 @@ export class CloudSyncRunner {
         break;
       case "not_enabled":
         // Turned off for the account elsewhere: local off, this user's state and marks cleared.
-        store.disableForUser(db, deps.projectRef, pinned.userId, false, this.now());
+        this.applyTurnedOffElsewhere(db, pinned.userId);
         return this.finish({ outcome: "not_enabled", done: 0, failed: 0, state });
       default:
         // notice_outdated, a licence reason, or an unknown reason: paused. Nothing cleared.
@@ -223,6 +221,21 @@ export class CloudSyncRunner {
     this.log.warn("[CloudSync] Pass stopped: account changed", {});
     this.deps.reportFailure?.("wrong_account");
     return this.finish({ outcome: "wrong_account", done, failed, state });
+  }
+
+  /**
+   * The server half of a turn-off: `set_my_cloud_autosave(false)`; the owed
+   * marker is cleared only when the server confirmed. Safe to repeat.
+   */
+  async settleOwedTurnOff(userId: string): Promise<CallResult> {
+    const res = await this.deps.client.setAutosave(userId, false, null);
+    if (res.kind === "ok") store.clearTurnOffOwed(this.deps.db(), this.deps.projectRef, userId);
+    return res;
+  }
+
+  /** Turned off for the account on another computer: off here, this user's state and marks cleared. */
+  private applyTurnedOffElsewhere(db: SqlDb, userId: string): void {
+    store.disableForUser(db, this.deps.projectRef, userId, false, this.now());
   }
 
   /** §5.3: synchronously, before every call. */
@@ -294,10 +307,7 @@ export class CloudSyncRunner {
         this.stopOn(res);
         const gone = res.kind === "ok" || (res.kind === "refused" && res.code === "not_found");
         if (!gone) return this.recordFailure(db, row, res);
-        withSavepoint(db, () => {
-          store.deleteDealState(db, projectRef, pinned.userId, row.transaction_id);
-          store.clearMarkIfGeneration(db, row.transaction_id, row.generation);
-        });
+        store.forgetDealDeletedOnline(db, projectRef, pinned.userId, row.transaction_id, row.generation);
         return "done";
       }
       if (deal === null && store.anyDealStateForOtherOwner(db, projectRef, pinned.userId, row.transaction_id)) return "kept";
@@ -333,17 +343,15 @@ export class CloudSyncRunner {
       const res = await this.deps.client.markDealSynced(pinned.userId, installId, cloudId as string);
       this.stopOn(res);
       if (res.kind === "ok") {
-        withSavepoint(db, () => {
-          store.writeDealState(
-            db,
-            projectRef,
-            pinned.userId,
-            row.transaction_id,
-            { cloudId: cloudId as string, hash: projected.hash, hashVersion: HASH_VERSION, cloudVersion, status: "synced" },
-            this.now(),
-          );
-          store.clearMarkIfGeneration(db, row.transaction_id, row.generation);
-        });
+        store.recordDealSynced(
+          db,
+          projectRef,
+          pinned.userId,
+          row.transaction_id,
+          row.generation,
+          { cloudId: cloudId as string, hash: projected.hash, hashVersion: HASH_VERSION, cloudVersion },
+          this.now(),
+        );
         return "done";
       }
       if (res.kind === "refused" && res.code === "not_found" && attempt === 0) {

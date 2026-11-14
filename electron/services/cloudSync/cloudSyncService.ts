@@ -162,7 +162,6 @@ export class CloudSyncService {
     const read = parseState(await this.deps.client.getState());
     if (read.kind !== "state" || read.state.userId !== session.userId) return locallyOn ? paused("unknown") : base;
     const state = read.state;
-    store.saveLastState(db, ref, session.userId, JSON.stringify(state), this.now());
     return this.viewFor(base, state, locallyOn, !!settings?.local_confirmed_at);
   }
 
@@ -262,9 +261,8 @@ export class CloudSyncService {
     const ref = this.deps.projectRef as string;
     store.disableForUser(db, ref, userId, true, this.now());
     await this.waitForPass();
-    const res = await this.deps.client.setAutosave(userId, false, null);
+    const res = await (this.runner as CloudSyncRunner).settleOwedTurnOff(userId);
     if (res.kind === "ok") {
-      store.clearTurnOffOwed(db, ref, userId);
       this.refreshSchedule();
       return { success: true };
     }

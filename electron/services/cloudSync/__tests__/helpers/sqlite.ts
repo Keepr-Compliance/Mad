@@ -25,6 +25,7 @@ function tryBundled(): (() => TestDb) | null {
       return {
         exec: (sql: string) => db.exec(sql),
         prepare: (sql: string) => db.prepare(sql) as SqlStatement,
+        transaction: <T>(fn: () => T) => db.transaction(fn) as () => T,
         pragma: (sql: string) => void db.pragma(sql),
         close: () => db.close(),
       };
@@ -40,7 +41,22 @@ function nodeSqlite(): () => TestDb {
   const norm = (params: unknown[]) => params.map((p) => (p === undefined ? null : typeof p === "boolean" ? (p ? 1 : 0) : p));
   return () => {
     const db = new DatabaseSync(":memory:");
+    let seq = 0;
     return {
+      // better-sqlite3 semantics: a SAVEPOINT nests inside an open transaction or starts one.
+      transaction: <T>(fn: () => T) => () => {
+        const name = `t_sp_${++seq}`;
+        db.exec(`SAVEPOINT ${name}`);
+        try {
+          const out = fn();
+          db.exec(`RELEASE ${name}`);
+          return out;
+        } catch (error) {
+          db.exec(`ROLLBACK TO ${name}`);
+          db.exec(`RELEASE ${name}`);
+          throw error;
+        }
+      },
       exec: (sql: string) => db.exec(sql),
       prepare: (sql: string) => {
         const st = db.prepare(sql);
