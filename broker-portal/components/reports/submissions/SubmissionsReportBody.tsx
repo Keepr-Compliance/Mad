@@ -29,7 +29,9 @@ export interface SubmissionsReportBodyProps {
   filters: Filters;
   data: SubmissionsReportData;
   title: string;
-  /** Buttons beside the title (Share, Save filters, Delete, Save as shared report). */
+  /** A line under the title, before the deal count (New report: where the rows come from). */
+  description?: ReactNode;
+  /** Buttons beside the title (Save changes, Share, Delete on a saved report; Save as report on New report). */
   actions?: ReactNode;
   /** Shown above the controls (e.g. the take-over notice). */
   notice?: ReactNode;
@@ -43,6 +45,7 @@ export function SubmissionsReportBody({
   filters,
   data,
   title,
+  description,
   actions,
   notice,
   basePath = SUBMISSIONS_REPORT_PATH,
@@ -58,10 +61,16 @@ export function SubmissionsReportBody({
         phoneHideTitle
         title={title}
         subtitle={
-          data.ok ? (
-            <span data-testid="submissions-report-count">
-              {data.total} deal{data.total !== 1 ? 's' : ''}
-            </span>
+          description || data.ok ? (
+            <>
+              {description ? <span data-testid="submissions-report-description">{description}</span> : null}
+              {description && data.ok ? ' · ' : null}
+              {data.ok ? (
+                <span data-testid="submissions-report-count">
+                  {data.total} deal{data.total !== 1 ? 's' : ''}
+                </span>
+              ) : null}
+            </>
           ) : undefined
         }
         actions={actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : undefined}

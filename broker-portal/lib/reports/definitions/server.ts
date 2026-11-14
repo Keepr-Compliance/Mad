@@ -9,7 +9,10 @@
  *    in Shared reports (the "Needs an owner" group was removed, ruling A).
  *    No definition, no rows;
  *  - broker_report_def_get(p_def): one report the caller has a level on, with
- *    reassign_available, or "Report not found".
+ *    reassign_available, or "Report not found";
+ *  - broker_report_share_list(p_def): who a report is shared with. The index asks
+ *    it only for the caller's own reports (the function refuses anyone below
+ *    editor), for the row summary (PR-3g).
  */
 
 import { notFound } from 'next/navigation';
@@ -19,14 +22,17 @@ import {
   parseDefinition,
   parseLevel,
   parseOrphans,
+  parseShareState,
   type DefinitionRecord,
   type OrphanReport,
   type ReportLevel,
+  type ShareState,
 } from '@/lib/reports/definitions/parse';
 
 export const DEF_LIST_RPC = 'broker_report_def_list';
 export const DEF_GET_RPC = 'broker_report_def_get';
 export const ORPHANS_RPC = 'broker_report_orphans';
+export const SHARE_LIST_RPC = 'broker_report_share_list';
 
 /** Used when the brokerage's name cannot be read. */
 export const ORG_NAME_FALLBACK = 'your brokerage';
@@ -38,40 +44,46 @@ export interface SharedReportListItem {
   ownerName: string;
   /** Set when the owner is gone or deactivated and the caller may take it over. */
   ownerState: OrphanReport['ownerState'] | null;
+  /** def_list updated_at. Absent for a report only broker_report_orphans returned. */
+  updatedAt?: string;
 }
 
 export interface SharedReportLists {
+  /** false when broker_report_def_list failed or returned no list: the index then says so. */
+  ok: boolean;
   /** Reports the caller can open (has a level on). */
   shared: SharedReportListItem[];
   /** Reports whose owner is gone, NOT shared with the caller: Take over only, no link. */
   needsOwner: OrphanReport[];
 }
 
-async function readList(caller: ReportCaller, fn: string): Promise<unknown> {
+async function readList(caller: ReportCaller, fn: string): Promise<{ data: unknown; ok: boolean }> {
   try {
     const { data, error } = await caller.supabase.rpc(fn, { p_org: caller.organizationId });
     if (error) {
       console.error(`[reports] ${fn} unavailable:`, error.message);
-      return null;
+      return { data: null, ok: false };
     }
-    return data;
+    // The list functions coalesce to '[]': no array is never a real answer.
+    return { data, ok: Array.isArray(data) };
   } catch (err) {
     console.error(`[reports] ${fn} unavailable:`, err);
-    return null;
+    return { data: null, ok: false };
   }
 }
 
 /**
- * The index lists. Any failure (e.g. the functions are not deployed yet) is an
- * empty list. Orphans are asked for full roles only (the database refuses
- * everyone else anyway) and merged into the shared list by id.
+ * The index lists. A failed list is empty with ok false (only def_list decides
+ * ok; orphans can still add rows). Orphans are asked for full roles only (the
+ * database refuses everyone else anyway) and merged into the shared list by id.
  */
 export async function listSharedReports(caller: ReportCaller): Promise<SharedReportLists> {
-  const [rawList, rawOrphans] = await Promise.all([
+  const [list, rawOrphans] = await Promise.all([
     readList(caller, DEF_LIST_RPC),
-    caller.kind === 'full' ? readList(caller, ORPHANS_RPC) : Promise.resolve(null),
+    caller.kind === 'full' ? readList(caller, ORPHANS_RPC) : Promise.resolve({ data: null, ok: false }),
   ]);
-  const orphans = parseOrphans(rawOrphans);
+  const rawList = list.data;
+  const orphans = parseOrphans(rawOrphans.data);
   const orphanById = new Map(orphans.map((o) => [o.id, o]));
   const shared: SharedReportListItem[] = (Array.isArray(rawList) ? (rawList as Record<string, unknown>[]) : [])
     .filter((r) => typeof r?.id === 'string' && r.dataset_key === 'submissions')
@@ -81,6 +93,7 @@ export async function listSharedReports(caller: ReportCaller): Promise<SharedRep
       level: parseLevel(r.level),
       ownerName: typeof r.owner_name === 'string' ? r.owner_name : '',
       ownerState: orphanById.get(r.id as string)?.ownerState ?? null,
+      ...(typeof r.updated_at === 'string' ? { updatedAt: r.updated_at } : {}),
     }));
   const listed = new Set(shared.map((s) => s.id));
   const needsOwner: OrphanReport[] = [];
@@ -89,7 +102,31 @@ export async function listSharedReports(caller: ReportCaller): Promise<SharedRep
     if (o.level) shared.push({ id: o.id, name: o.name, level: o.level, ownerName: o.ownerName, ownerState: o.ownerState });
     else needsOwner.push(o);
   }
-  return { shared, needsOwner };
+  return { ok: list.ok, shared, needsOwner };
+}
+
+/**
+ * Who each of the caller's own reports is shared with (broker_report_share_list,
+ * one call per report). Pass only reports the caller owns. A failed or empty
+ * reply maps to null: the row then shows no summary rather than a wrong one.
+ */
+export async function listMyReportSharing(caller: ReportCaller, ids: readonly string[]): Promise<Map<string, ShareState | null>> {
+  const results = await Promise.all(
+    ids.map(async (id): Promise<[string, ShareState | null]> => {
+      try {
+        const { data, error } = await caller.supabase.rpc(SHARE_LIST_RPC, { p_def: id });
+        if (error || data === null || typeof data !== 'object' || Array.isArray(data)) {
+          if (error) console.error(`[reports] ${SHARE_LIST_RPC} unavailable:`, error.message);
+          return [id, null];
+        }
+        return [id, parseShareState(data)];
+      } catch (err) {
+        console.error(`[reports] ${SHARE_LIST_RPC} unavailable:`, err);
+        return [id, null];
+      }
+    })
+  );
+  return new Map(results);
 }
 
 export interface DefinitionAccess {
@@ -98,7 +135,7 @@ export interface DefinitionAccess {
   orgName: string;
 }
 
-async function readOrgName(caller: ReportCaller): Promise<string> {
+export async function readOrgName(caller: ReportCaller): Promise<string> {
   try {
     const { data, error } = await caller.supabase.from('organizations').select('name').eq('id', caller.organizationId).maybeSingle();
     const name = (data as { name?: unknown } | null)?.name;
