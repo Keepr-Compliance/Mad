@@ -15,7 +15,14 @@ import {
   type McpHttpHandler,
   type McpRequestContext,
 } from '@modelcontextprotocol/server';
+import type { CallToolResult } from '@modelcontextprotocol/server';
+import { getDealChecklists, GET_DEAL_CHECKLISTS_TOOL } from './tools/checklists';
+import { getDeal, GET_DEAL_TOOL, listDeals, LIST_DEALS_TOOL } from './tools/deals';
 import { getStatus, STATUS_TOOL, STATUS_TOOL_NAME } from './tools/status';
+import { TOOL_MESSAGES } from './tools/text';
+
+/** The tools, in the order tools/list returns them. */
+export const TOOLS = [STATUS_TOOL, LIST_DEALS_TOOL, GET_DEAL_TOOL, GET_DEAL_CHECKLISTS_TOOL];
 
 export const MCP_SERVER_NAME = 'keepr';
 export const MCP_SERVER_VERSION = '0.1.0';
@@ -39,13 +46,22 @@ export function createMcpServer(ctx: McpRequestContext): Server {
     { capabilities: { tools: {} } }
   );
 
-  server.setRequestHandler('tools/list', async () => ({ tools: [STATUS_TOOL] }));
+  server.setRequestHandler('tools/list', async () => ({ tools: TOOLS }));
+
+  const atDigest = () => ctx.authInfo?.extra?.atDigest;
+  const calls = new Map<string, (_args: unknown) => Promise<CallToolResult>>([
+    [STATUS_TOOL_NAME, () => getStatus(atDigest(), protocolVersionFor(ctx), MCP_SERVER_VERSION)],
+    [LIST_DEALS_TOOL.name, (args) => listDeals(atDigest(), args)],
+    [GET_DEAL_TOOL.name, (args) => getDeal(atDigest(), args)],
+    [GET_DEAL_CHECKLISTS_TOOL.name, (args) => getDealChecklists(atDigest(), args)],
+  ]);
 
   server.setRequestHandler('tools/call', async (request) => {
-    if (request.params.name !== STATUS_TOOL_NAME) {
-      return { content: [{ type: 'text', text: 'Unknown tool.' }], isError: true };
+    const run = calls.get(request.params.name);
+    if (!run) {
+      return { content: [{ type: 'text', text: TOOL_MESSAGES.unknown_tool }], isError: true };
     }
-    return getStatus(ctx.authInfo?.extra?.atDigest, protocolVersionFor(ctx), MCP_SERVER_VERSION);
+    return run(request.params.arguments);
   });
 
   return server;

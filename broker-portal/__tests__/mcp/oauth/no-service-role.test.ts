@@ -166,6 +166,8 @@ describe('BACKLOG-4238 Rule V: vendor path', () => {
         'app/api/mcp/route.ts',
         'lib/mcp/server.ts',
         'lib/mcp/tools/status.ts',
+        'lib/mcp/tools/deals.ts',
+        'lib/mcp/tools/checklists.ts',
         'app/oauth/authorize/route.ts',
         'lib/mcp/oauth/rpc.ts',
         'lib/mcp/oauth/binding.ts',
@@ -192,7 +194,17 @@ describe('BACKLOG-4238 Rule V: vendor path', () => {
   });
 
   // BACKLOG-4238 PR-3b: each forbidden form planted in each MCP endpoint file is found.
-  const ENDPOINT_FILES = ['app/api/mcp/route.ts', 'lib/mcp/server.ts', 'lib/mcp/tools/status.ts'];
+  // BACKLOG-4244: and in each data tool module.
+  const ENDPOINT_FILES = [
+    'app/api/mcp/route.ts',
+    'lib/mcp/server.ts',
+    'lib/mcp/tools/status.ts',
+    'lib/mcp/tools/deals.ts',
+    'lib/mcp/tools/checklists.ts',
+    'lib/mcp/tools/result.ts',
+    'lib/mcp/tools/shapes.ts',
+    'lib/mcp/tools/text.ts',
+  ];
   const PLANTS: Array<[string, string]> = [
     ["import { createServiceClient } from '@/lib/supabase/service';", 'imports lib/supabase/service'],
     ["import { createClient } from '@/lib/supabase/server';", 'imports lib/supabase/server'],
