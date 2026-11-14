@@ -10,6 +10,7 @@
  */
 import { parseDbTimestamp } from "../../utils/dbTimestamp";
 import { dealLockReason } from "../transactionEligibility";
+import { isPrivateChecklist } from "../db/checklistPrivacy";
 import { contentHash, type JsonValue } from "./jcs";
 
 /** Bumped when a normalisation rule changes (stored per state row). */
@@ -285,8 +286,6 @@ export const ITEM_HASHED_FIELDS = [
   "links",
 ] as const;
 
-/** The reserved private checklist (electron/services/db/checklistPrivacy.ts). */
-export const PRIVATE_TEMPLATE_ID = "keepr:my-items";
 export const GOOGLE_CONTACTS_SOURCE = "google_contacts";
 
 function cleanBool(value: unknown): boolean | null {
@@ -386,7 +385,7 @@ export function buildChecklistDto(row: Record<string, unknown>): { [key: string]
     template_name: cleanText(row.template_name),
     sort_order: cleanInt(row.sort_order),
     selected_at: instant(row.selected_at),
-    is_private: row.template_id === PRIVATE_TEMPLATE_ID,
+    is_private: isPrivateChecklist(typeof row.template_id === "string" ? row.template_id : null),
   };
 }
 
