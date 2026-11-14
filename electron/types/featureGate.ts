@@ -28,7 +28,7 @@ export interface FeatureAccess {
  *
  * **This union is the single list.** Both runtime records — the main-process
  * one in `electron/handlers/featureGateHandlers.ts` and the renderer one in
- * `src/hooks/useFeatureGate.ts` — are declared `Record<StrictFeatureKey, true>`,
+ * `src/hooks/featureAccess.ts` — are declared `Record<StrictFeatureKey, true>`,
  * so adding a member here fails `npm run type-check` until both records name
  * it, and an entry in either record that is not a member fails too. That is the
  * parity guard: a compile error, not a test that has to remember.
