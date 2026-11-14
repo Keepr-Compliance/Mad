@@ -101,7 +101,27 @@ describe("KeeprCloudSettings", () => {
     expect(screen.queryByText(/Saving/)).toBeNull();
   });
 
-    it("AI apps row opens through the service", () => {
+    it("D3: deals that could not be saved stay visible while others are still saving", () => {
+    render(<KeeprCloudSettings cloud={fakeCloud({ ...VIEW, status: "on", pendingDeals: 3, notSavedDeals: 2 })} />);
+    expect(screen.getByTestId("cloud-status")).toHaveTextContent(C.statusSaving(3));
+    expect(screen.getByTestId("cloud-not-saved")).toHaveTextContent(C.statusNotSaved(2));
+  });
+
+  it("online-copy lines: 'saved online but not on this computer' and old installs, each with a solid Delete button", async () => {
+    const cloud = fakeCloud({ ...VIEW, status: "on", onlineNotHereDeals: 3, otherInstalls: { deals: 214, lastSavedAt: "2026-11-03T10:00:00.000Z" } });
+    render(<KeeprCloudSettings cloud={cloud} />);
+    expect(screen.getByTestId("cloud-online-not-here")).toHaveTextContent(C.onlineNotHere(3));
+    expect(screen.getByTestId("cloud-other-installs")).toHaveTextContent("Deals saved from another computer or an earlier install: 214");
+    const buttons = screen.getAllByRole("button", { name: C.deleteThem });
+    expect(buttons).toHaveLength(2);
+    for (const b of buttons) expect(b.className).toContain("bg-sky-700");
+    fireEvent.click(buttons[0]);
+    fireEvent.click(await screen.findByRole("button", { name: C.deleteButton }));
+    await waitFor(() => expect(cloud.deleteOnlineNotHere).toHaveBeenCalled());
+    expect(cloud.deleteOldInstalls).not.toHaveBeenCalled();
+  });
+
+  it("AI apps row opens through the service", () => {
     const cloud = fakeCloud(VIEW);
     render(<KeeprCloudSettings cloud={cloud} />);
     fireEvent.click(screen.getByRole("button", { name: C.manageAiApps }));

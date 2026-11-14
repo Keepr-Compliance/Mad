@@ -237,6 +237,21 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
       expect((await e.service.getView()).notSavedDeals).toBe(1);
     });
 
+    it("R2 for children: a child answer with a different hash is not saved and no mark call is made", async () => {
+      const { db, e } = dealWithChildren();
+      const real = e.server.transport;
+      setTransport(e, async (f, a, s) => {
+        const r = await real(f, a, s);
+        if (f !== "cloud_upsert_checklists") return r;
+        const body = r.data as { results: Array<Record<string, unknown>> };
+        body.results = body.results.map((x) => ({ ...x, content_hash: "0".repeat(64) }));
+        return r;
+      });
+      await startAndPass(e);
+      expect(states(db, "checklist")).toHaveLength(0);
+      expect(e.server.callsTo("cloud_mark_deal_synced")).toHaveLength(0);
+    });
+
     it("§8.4b: an item whose checklist is missing online is repaired by sending the checklist again", async () => {
       const { db, e } = dealWithChildren();
       await startAndPass(e);

@@ -375,6 +375,33 @@ export class CloudSyncRunner {
     return "failed";
   }
 
+  // One local write each: the pass records every server answer in its own
+  // transaction, and these are separated by awaited calls by design.
+  private clearMark(db: SqlDb, row: store.DirtyRow): void {
+    store.clearMarkIfGeneration(db, row.transaction_id, row.generation);
+  }
+  private park(db: SqlDb, row: store.DirtyRow, code: string): void {
+    store.recordNonRetryableFailure(db, row, code);
+  }
+  private forgetDeal(db: SqlDb, userId: string, transactionId: string): void {
+    store.deleteDealState(db, this.deps.projectRef, userId, transactionId);
+  }
+  private recordSynced(...a: Parameters<typeof store.recordDealSynced>): void {
+    store.recordDealSynced(...a);
+  }
+  private forgetDeleted(...a: Parameters<typeof store.forgetDealDeletedOnline>): void {
+    store.forgetDealDeletedOnline(...a);
+  }
+  private recordRemoved(...a: Parameters<typeof store.recordChildrenRemoved>): void {
+    store.recordChildrenRemoved(...a);
+  }
+  private recordSaved(...a: Parameters<typeof store.recordChildrenSaved>): void {
+    store.recordChildrenSaved(...a);
+  }
+  private forgetHashes(...a: Parameters<typeof store.forgetChildHashes>): void {
+    store.forgetChildHashes(...a);
+  }
+
   private async processDeal(db: SqlDb, pinned: SessionUser, installId: string, row: store.DirtyRow): Promise<DealResult> {
     const { projectRef } = this.deps;
     const deal = store.readDealRow(db, row.transaction_id);
@@ -399,12 +426,12 @@ export class CloudSyncRunner {
         this.stopOn(res);
         const gone = res.kind === "ok" || (res.kind === "refused" && res.code === "not_found");
         if (!gone) return this.recordFailure(db, row, res);
-        store.forgetDealDeletedOnline(db, projectRef, pinned.userId, row.transaction_id, row.generation);
+        this.forgetDeleted(db, projectRef, pinned.userId, row.transaction_id, row.generation);
         if (res.kind === "ok") this.sentThisPass++;
         return "done";
       }
       if (deal === null && store.anyDealStateForOtherOwner(db, projectRef, pinned.userId, row.transaction_id)) return "kept";
-      store.clearMarkIfGeneration(db, row.transaction_id, row.generation);
+      this.clearMark(db, row);
       return "done";
     }
 
@@ -421,7 +448,7 @@ export class CloudSyncRunner {
 
     // The shortcut: nothing to send for the header or any child, and the server confirmed it all.
     if (state?.last_status === "synced" && unchanged && !hasChildWork(plan)) {
-      store.clearMarkIfGeneration(db, row.transaction_id, row.generation);
+      this.clearMark(db, row);
       return "done";
     }
 
@@ -444,7 +471,7 @@ export class CloudSyncRunner {
         this.stopOn(res);
         if (res.kind === "ok") {
           this.sentThisPass++;
-          store.recordDealSynced(
+          this.recordSynced(
             db,
             projectRef,
             pinned.userId,
@@ -460,14 +487,14 @@ export class CloudSyncRunner {
       }
       if (attempt > 0) break;
       // R3b: deleted online by another computer: forget this deal's records, save the header and children again.
-      store.deleteDealState(db, projectRef, pinned.userId, row.transaction_id);
+      this.forgetDeal(db, pinned.userId, row.transaction_id);
       const again = await this.upsertHeader(db, pinned, row, projected);
       if (again.kind !== "saved") return again.result;
       cloudId = again.cloudId;
       cloudVersion = again.version;
       currentPlan = this.planDealChildren(db, pinned.userId, row.transaction_id);
     }
-    store.recordNonRetryableFailure(db, row, "not_found");
+    this.park(db, row, "not_found");
     return "failed";
   }
 
@@ -646,7 +673,7 @@ export class CloudSyncRunner {
             else allAccepted = false;
           }
           if (gone.length > 0) {
-            store.recordChildrenRemoved(db, projectRef, pinned.userId, kind, gone, this.now());
+            this.recordRemoved(db, projectRef, pinned.userId, kind, gone, this.now());
             this.sentThisPass++;
           }
         }
@@ -685,7 +712,7 @@ export class CloudSyncRunner {
           }
         }
         if (accepted.length > 0) {
-          store.recordChildrenSaved(db, projectRef, pinned.userId, kind, row.transaction_id, cloudDealId, accepted, HASH_VERSION, this.now());
+          this.recordSaved(db, projectRef, pinned.userId, kind, row.transaction_id, cloudDealId, accepted, HASH_VERSION, this.now());
           this.sentThisPass++;
         }
       }
@@ -701,7 +728,7 @@ export class CloudSyncRunner {
       if (kind === "checklist_item" && r.parentMissing.length > 0) {
         // §8.4b: a missing parent is repaired once by sending the parent checklist again.
         const parentIds = [...new Set(r.parentMissing.map((p) => String(p.payload.local_checklist_id)))];
-        store.forgetChildHashes(db, projectRef, pinned.userId, "checklist", parentIds);
+        this.forgetHashes(db, projectRef, pinned.userId, "checklist", parentIds);
         const parents = this.planDealChildren(db, pinned.userId, row.transaction_id).send.checklist.filter((c) =>
           parentIds.includes(c.localId),
         );
@@ -719,7 +746,7 @@ export class CloudSyncRunner {
     if (removed !== "ok") return { kind: "failed", result: removed };
 
     if (!allAccepted) {
-      store.recordNonRetryableFailure(db, row, "row_not_saved");
+      this.park(db, row, "row_not_saved");
       return { kind: "failed", result: "failed" };
     }
     return { kind: "ok" };
