@@ -51,6 +51,18 @@ describe(`Keepr Cloud triggers [${DRIVER}]`, () => {
     expect(dirtyCount(db)).toBe(0);
   });
 
+  it("C2.13b: a user who turned Keepr Cloud off (row present, enabled = 0): no write marks", () => {
+    const db = freshDb();
+    enableUser(db);
+    db.prepare("UPDATE cloud_sync_settings SET enabled = 0").run();
+    const id = dealId();
+    insertDeal(db, id);
+    db.prepare("INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name) VALUES ('c1', ?, 't1', 'List')").run(id);
+    db.prepare("UPDATE transactions SET property_city = 'X' WHERE id = ?").run(id);
+    db.prepare("DELETE FROM transactions WHERE id = ?").run(id);
+    expect(dirtyCount(db)).toBe(0);
+  });
+
   it("C2.13 positive: with an enabled row, insert, update and delete each mark", () => {
     const db = freshDb();
     enableUser(db);
