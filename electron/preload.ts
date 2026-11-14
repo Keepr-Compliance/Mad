@@ -60,6 +60,7 @@ import {
   featureGateBridge,
   checklistBridge,
   learnModeBridge,
+  cloudSyncBridge,
   rcsImportBridge,
   entitlementBridge,
   paymentBridge,
@@ -162,6 +163,9 @@ contextBridge.exposeInMainWorld("api", {
 
   // Learn mode, "Help Keepr learn" (BACKLOG-4120)
   learn: learnModeBridge,
+
+  // Keepr Cloud (BACKLOG-4243)
+  cloudSync: cloudSyncBridge,
 
   // RCS import from the Chrome extension (BACKLOG-3619)
   rcsImport: rcsImportBridge,

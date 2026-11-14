@@ -856,6 +856,60 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     why: "BACKLOG-4120: produced by the id PRIMARY KEY; not declared separately.",
     ref: "BACKLOG-4120",
   },
+  {
+    key: "TABLE:cloud_sync_install",
+    what: "New table: the install id per Keepr Cloud project and the hash of the machine it is bound to.",
+    why: "BACKLOG-4243: Keepr Cloud local sync state. Declared in schema.sql with no version bump; the dirty-mark triggers are created in code after the chain, never here.",
+    ref: "BACKLOG-4243",
+  },
+  {
+    key: "TABLE:cloud_sync_settings",
+    what: "New table: Keepr Cloud on/off and confirmation per project and user on this computer.",
+    why: "BACKLOG-4243: Keepr Cloud local sync state. Declared in schema.sql with no version bump; the dirty-mark triggers are created in code after the chain, never here.",
+    ref: "BACKLOG-4243",
+  },
+  {
+    key: "TABLE:cloud_sync_state",
+    what: "New table: what this database uploaded: per project, owner and row, the cloud id and content hash.",
+    why: "BACKLOG-4243: Keepr Cloud local sync state. Declared in schema.sql with no version bump; the dirty-mark triggers are created in code after the chain, never here.",
+    ref: "BACKLOG-4243",
+  },
+  {
+    key: "TABLE:cloud_sync_dirty",
+    what: "New table: deals waiting to be uploaded, with a generation per mark and back-off columns.",
+    why: "BACKLOG-4243: Keepr Cloud local sync state. Declared in schema.sql with no version bump; the dirty-mark triggers are created in code after the chain, never here.",
+    ref: "BACKLOG-4243",
+  },
+  {
+    key: "TABLE:cloud_sync_runs",
+    what: "New table: counters of the last upload passes (no content).",
+    why: "BACKLOG-4243: Keepr Cloud local sync state. Declared in schema.sql with no version bump; the dirty-mark triggers are created in code after the chain, never here.",
+    ref: "BACKLOG-4243",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_cloud_sync_install_1",
+    what: "SQLite's automatic index for cloud_sync_install' primary key.",
+    why: "BACKLOG-4243: produced by the PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4243",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_cloud_sync_settings_1",
+    what: "SQLite's automatic index for cloud_sync_settings' primary key.",
+    why: "BACKLOG-4243: produced by the PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4243",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_cloud_sync_state_1",
+    what: "SQLite's automatic index for cloud_sync_state' primary key.",
+    why: "BACKLOG-4243: produced by the PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4243",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_cloud_sync_dirty_1",
+    what: "SQLite's automatic index for cloud_sync_dirty' primary key.",
+    why: "BACKLOG-4243: produced by the PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4243",
+  },
 ];
 
 const ALLOWED_KEYS = new Set(ALLOWED_EVOLUTION.map((d) => d.key));

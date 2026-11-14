@@ -26,6 +26,8 @@ export const SETTINGS_TABS: readonly SettingsTab[] = [
   { id: "settings-contacts", label: "Contacts" },
   // BACKLOG-4120: shown only when the strict autodetect_eval read is "allowed".
   { id: "settings-learn", label: "Help Keepr learn" },
+  // BACKLOG-4243: shown only when main reports the Keepr Cloud section visible.
+  { id: "settings-cloud", label: "Keepr Cloud" },
   { id: "settings-ai", label: "AI" },
   { id: "settings-security", label: "Security" },
   { id: "settings-data", label: "Data & Privacy" },
@@ -41,8 +43,15 @@ export const SETTINGS_TABS: readonly SettingsTab[] = [
  * Keepr learn" only when the strict autodetect_eval read is "allowed"
  * (BACKLOG-4120). The two are independent: Learn mode never needs AI.
  */
-export function visibleSettingsTabs(hasAIAddon: boolean, learnAvailable: boolean = false): SettingsTab[] {
+export function visibleSettingsTabs(
+  hasAIAddon: boolean,
+  learnAvailable: boolean = false,
+  cloudVisible: boolean = false,
+): SettingsTab[] {
   return SETTINGS_TABS.filter(
-    (t) => (t.id !== "settings-ai" || hasAIAddon) && (t.id !== "settings-learn" || learnAvailable),
+    (t) =>
+      (t.id !== "settings-ai" || hasAIAddon) &&
+      (t.id !== "settings-learn" || learnAvailable) &&
+      (t.id !== "settings-cloud" || cloudVisible),
   );
 }

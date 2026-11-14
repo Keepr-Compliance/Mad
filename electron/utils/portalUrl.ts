@@ -16,12 +16,14 @@
  * an allowed origin.
  */
 
-export type PortalPage = "checklists" | "billing";
+export type PortalPage = "checklists" | "billing" | "aiApps";
 
 /** The portal page behind each key. Constant: no caller can choose a path. */
 export const PORTAL_PATHS: Readonly<Record<PortalPage, string>> = Object.freeze({
   checklists: "/dashboard/checklists",
   billing: "/dashboard/billing",
+  // BACKLOG-4242: where AI app connections are managed.
+  aiApps: "/dashboard/account/ai-apps",
 });
 
 const DEFAULT_BROKER_PORTAL_URL = "https://app.keeprcompliance.com";

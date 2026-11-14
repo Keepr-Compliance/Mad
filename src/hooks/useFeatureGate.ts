@@ -43,6 +43,8 @@ const STRICT_FEATURE_KEYS: Record<StrictFeatureKey, true> = {
   desktop_hide_from_export: true,
   transaction_checklists: true,
   autodetect_eval: true,
+  cloud_autosave: true,
+  cloud_autosave_assignable: true,
 };
 
 interface UseFeatureGateReturn {
