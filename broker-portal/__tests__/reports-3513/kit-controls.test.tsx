@@ -196,12 +196,68 @@ describe('picking pushes the same URL as before', () => {
   });
 
   // SR-4. Select all = no filter (statuses and agents), so the 50-agent URL cap never cuts a selection of everyone.
-  it('SR-4: Select all agents pushes no agent param', async () => {
+  // Past the 50-agent URL cap, Select all is no agent filter (else the URL would cut the list).
+  it('SR-4: Select all of more than 50 agents pushes no agent param', async () => {
     const user = userEvent.setup();
-    mount({ statuses: ['approved'] });
+    const many = Array.from({ length: 60 }, (_, i) => ({
+      id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`, // pii-allow-uuid: invented fixture ids
+      label: `Agent ${String(i).padStart(2, '0')}`,
+    }));
+    mount({ statuses: ['approved'] }, { agents: many });
     await user.click(control('Agent'));
     await user.click(screen.getByRole('button', { name: 'Select all' }));
     expect(mockPush.mock.calls[0][0]).toBe('/dashboard/reports/submissions?status=approved');
+  });
+
+  // SR fix-up 1 (founder QA: the tick looked dead). Mutation (run): the unconditional
+  // "every agent -> []" rule -> red.
+  it('a small org: Select all keeps both agents ticked and pushes both', async () => {
+    const user = userEvent.setup();
+    mount();
+    await user.click(control('Agent'));
+    await user.click(screen.getByRole('button', { name: 'Select all' }));
+    expect(mockPush.mock.calls[0][0]).toBe(`/dashboard/reports/submissions?agent=${AGENT_A}%2C${AGENT_B}`);
+    expect(control('Agent')).toHaveTextContent('Agent (2)');
+    for (const name of ['Agent Alpha', 'Agent Bravo']) expect(screen.getByRole('option', { name })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('a one-agent org: ticking the only agent keeps it ticked', async () => {
+    const user = userEvent.setup();
+    mount({}, { agents: [AGENTS[0]] });
+    await user.click(control('Agent'));
+    await user.click(screen.getByRole('option', { name: 'Agent Alpha' }));
+    expect(mockPush.mock.calls[0][0]).toBe(`/dashboard/reports/submissions?agent=${AGENT_A}`);
+    expect(control('Agent')).toHaveTextContent('Agent (1)');
+    expect(screen.getByRole('option', { name: 'Agent Alpha' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  // SR fix-up 2. Toggle A, toggle B, then A's server response arrives (the only re-render), then a
+  // third toggle: B must survive. Mutation (run): reset the local value on any prop change -> red.
+  it('A, B, then A response, then a third toggle: nothing is dropped', async () => {
+    const user = userEvent.setup();
+    const { rerender } = mount();
+    await user.click(control('Status'));
+    await user.click(screen.getByRole('option', { name: 'Approved' }));
+    await user.click(screen.getByRole('option', { name: 'Rejected' }));
+    rerender(<SubmissionsReportFilters filters={{ ...DEFAULT_SUBMISSIONS_FILTERS, statuses: ['approved'] }} showAgent agents={AGENTS} />);
+    expect(control('Status')).toHaveTextContent('Status (2)');
+    expect(screen.getByRole('option', { name: 'Rejected' })).toHaveAttribute('aria-selected', 'true');
+    await user.click(screen.getByRole('option', { name: 'New' }));
+    expect(mockPush).toHaveBeenCalledTimes(3);
+    expect(mockPush.mock.calls[2][0]).toBe('/dashboard/reports/submissions?status=new%2Capproved%2Crejected');
+  });
+
+  it('once the server catches up, a later server change (back, another control) shows', async () => {
+    const user = userEvent.setup();
+    const { rerender } = mount();
+    const props = (statuses: string[]) => (
+      <SubmissionsReportFilters filters={{ ...DEFAULT_SUBMISSIONS_FILTERS, statuses }} showAgent agents={AGENTS} />
+    );
+    await user.click(control('Status'));
+    await user.click(screen.getByRole('option', { name: 'Approved' }));
+    rerender(props(['approved']));
+    rerender(props([]));
+    expect(control('Status')).toHaveTextContent('All statuses');
   });
 
   it('SR-4: Select all statuses pushes no status param', async () => {

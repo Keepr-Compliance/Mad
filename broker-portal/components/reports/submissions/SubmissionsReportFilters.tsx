@@ -29,6 +29,7 @@ import { Button, DateRangePicker, Dropdown } from '@keepr/ui';
 import type { AgentOption } from '@/lib/reports/datasets/submissions';
 import {
   SUBMISSIONS_SORT_OPTIONS,
+  MAX_AGENT_FILTERS,
   SUBMISSIONS_STATUS_OPTIONS,
   buildSubmissionsReportUrl,
   parseAgentsParam,
@@ -49,16 +50,32 @@ export interface SubmissionsReportFiltersProps {
   explicit?: boolean;
 }
 
+interface Pending {
+  /** The server value when the first local change was made. */
+  base: string;
+  /** Every value pushed since then, oldest first; the last is the one shown. */
+  sent: string[];
+  value: string[];
+}
+
 /**
  * A multi-select value that follows each toggle at once. `filters` is a server prop that stays
  * stale until the new URL's server response arrives, so two quick toggles read from it would
- * drop the first. The local copy starts from the prop and starts over whenever the prop changes.
+ * drop the first. The local value is kept while the server prop is still the starting value or
+ * the answer to an earlier push of ours (toggle A, toggle B, then A's response arrives: B stays).
+ * It is dropped when the server catches up with it, or moves somewhere we never pushed (another
+ * control, back / forward).
  */
 function usePendingList(server: string[]): [string[], (_next: string[]) => void] {
   const key = server.join(',');
-  const [pending, setPending] = useState<{ key: string; value: string[] }>({ key, value: server });
-  const value = pending.key === key ? pending.value : server;
-  return [value, (next) => setPending({ key, value: next })];
+  const [pending, setPending] = useState<Pending | null>(null);
+  const keep =
+    pending !== null && key !== pending.value.join(',') && (key === pending.base || pending.sent.includes(key));
+  if (pending !== null && !keep) setPending(null);
+  const live = keep ? pending : null;
+  const set = (next: string[]) =>
+    setPending({ base: live ? live.base : key, sent: [...(live ? live.sent : []), next.join(',')], value: next });
+  return [live ? live.value : server, set];
 }
 
 export function SubmissionsReportFilters({ filters, showAgent, agents, basePath, explicit = false }: SubmissionsReportFiltersProps) {
@@ -79,8 +96,9 @@ export function SubmissionsReportFilters({ filters, showAgent, agents, basePath,
     go({ ...current, statuses: value }, false);
   };
   const setAgentList = (next: string[]) => {
-    // Every agent picked is no agent filter (Select all, and the URL's agent cap).
-    const value = agents.length > 0 && agents.every((a) => next.includes(a.id)) ? [] : parseAgentsParam(next);
+    // Every agent picked is no agent filter only past the URL's agent cap; below it the ticks stay.
+    const everyone = next.length > MAX_AGENT_FILTERS && agents.every((a) => next.includes(a.id));
+    const value = everyone ? [] : parseAgentsParam(next);
     setAgentIds(value);
     go({ ...current, agents: value }, false);
   };
