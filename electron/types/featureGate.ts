@@ -52,7 +52,11 @@ export type StrictFeatureKey =
   | "transaction_checklists"
   // BACKLOG-4120: makes the Learn mode ("Help Keepr learn") switch available.
   // Separate from AI detection: Learn mode never reads ai_detection.
-  | "autodetect_eval";
+  | "autodetect_eval"
+  // BACKLOG-4243: Keepr Cloud. Read only to decide whether Settings may ask the
+  // server for the per-user state; the per-user answer is the server's.
+  | "cloud_autosave"
+  | "cloud_autosave_assignable";
 
 /**
  * What a strict read concluded.
