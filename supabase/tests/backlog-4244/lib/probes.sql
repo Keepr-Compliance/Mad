@@ -585,3 +585,108 @@ BEGIN
   END LOOP;
   RETURN out::text;
 END $h$;
+
+-- F-1: joiners U+200C / U+200D between digits do not hide a card or an SSN; text and emoji keep them
+CREATE FUNCTION pg_temp.p_joiners() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE zwj text := chr(8205); zwnj text := chr(8204); zw text := chr(8203);
+        c16 text := pg_temp.luhn_card(16); a text; b text; c text; d text; e text; f text; fam text; per text;
+BEGIN
+  a := 'card 4' || zwj || '111 1111 1111 1111 x';
+  b := 'card ' || array_to_string(regexp_split_to_array('4111111111111111', ''), zwnj) || ' x';
+  c := 'card 4111' || zw || '1111' || zwnj || '1111' || zwj || '1111 x';
+  d := 'card 4111 ' || zwj || '1111' || zwnj || ' 1111 1111 x';
+  e := 'ssn 1' || zwnj || '2' || zwj || '3-45-67' || zwnj || '89 x';
+  fam := 'family ' || chr(128104) || zwj || chr(128105) || zwj || chr(128103) || ' 12' || zwj || ' end';
+  per := 'word ' || chr(1605) || chr(1740) || zwnj || chr(1582) || chr(1608) || chr(1575) || chr(1607) || chr(1605);
+  RETURN pg_temp.all_of(
+    pg_temp.pass(public._mcp_mask(a) = 'card [number hidden by Keepr] x' AND public._mcp_clean(a, 1000) = 'card [number hidden by Keepr] x', 'ZWJ after first digit ' || public._mcp_mask(a)),
+    pg_temp.pass(public._mcp_mask(b) = 'card [number hidden by Keepr] x' AND public._mcp_clean(b, 1000) = 'card [number hidden by Keepr] x', 'ZWNJ between every digit ' || public._mcp_mask(b)),
+    pg_temp.pass(public._mcp_clean(c, 1000) = 'card [number hidden by Keepr] x', 'mixed between groups ' || public._mcp_clean(c, 1000)),
+    pg_temp.pass(public._mcp_mask(d) = 'card [number hidden by Keepr] x', 'joiners beside separators ' || public._mcp_mask(d)),
+    pg_temp.pass(public._mcp_mask(e) = 'ssn [number hidden by Keepr] x' AND public._mcp_clean(e, 1000) = 'ssn [number hidden by Keepr] x', 'ssn ' || public._mcp_mask(e)),
+    pg_temp.pass(public._mcp_mask(fam) = fam AND public._mcp_clean(fam, 1000) = fam, 'emoji'),
+    pg_temp.pass(public._mcp_mask(per) = per AND public._mcp_clean(per, 1000) = per, 'ZWNJ in a word'));
+END $h$;
+
+-- F-2: the cut. For each p_max the readers use, a card in three layouts placed so it ends at p_max,
+-- straddles p_max by 1 and by half its length, starts at p_max - 1 or at p_max + 1, followed by 3,000
+-- letters: no digit of it is visible. Returns PASS or FAIL; the table is in pg_temp.p4244_window.
+CREATE TEMP TABLE p4244_window (p_max int, layout text, place text, outcome text);
+CREATE FUNCTION pg_temp.p_window_sweep() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE n int; lay text; card text; place text; st int; s text; o text; len int; bad text := ''; cnt int := 0;
+BEGIN
+  DELETE FROM pg_temp.p4244_window;
+  FOREACH n IN ARRAY ARRAY[20, 50, 100, 200, 300, 1000] LOOP
+    FOREACH lay IN ARRAY ARRAY['19 digits, one digit per group', '16 digits, groups of 4', '16 digits, 3 ZWNJ between digits'] LOOP
+      card := CASE lay WHEN '19 digits, one digit per group' THEN array_to_string(regexp_split_to_array(pg_temp.luhn_card(19), ''), ' ')
+                       WHEN '16 digits, groups of 4' THEN pg_temp.grouped(pg_temp.luhn_card(16))
+                       ELSE array_to_string(regexp_split_to_array(pg_temp.luhn_card(16), ''), repeat(chr(8204), 3)) END;
+      len := char_length(card);
+      FOREACH place IN ARRAY ARRAY['ends at p_max', 'straddles by 1', 'straddles by half', 'starts at p_max - 1', 'starts at p_max + 1'] LOOP
+        st := CASE place WHEN 'ends at p_max' THEN n - len + 1 WHEN 'straddles by 1' THEN n - len + 2 WHEN 'straddles by half' THEN n - len / 2 + 1
+                         WHEN 'starts at p_max - 1' THEN n - 1 ELSE n + 1 END;
+        IF st < 1 THEN
+          INSERT INTO pg_temp.p4244_window VALUES (n, lay, place, 'not possible (card longer than p_max)');
+          CONTINUE;
+        END IF;
+        s := repeat('a', st - 1) || card || ' ' || repeat('b', 3000);
+        o := public._mcp_clean(s, n);
+        cnt := cnt + 1;
+        INSERT INTO pg_temp.p4244_window VALUES (n, lay, place,
+          CASE WHEN o ~ '\d' THEN 'DIGITS VISIBLE' WHEN position('[number hidden by Keepr]' IN o) > 0 THEN 'masked'
+               ELSE 'not visible (cut)' END || ', ' || char_length(o) || ' chars');
+        IF o ~ '\d' OR char_length(o) > n OR (place = 'starts at p_max + 1' AND position('[number' IN o) > 0) THEN
+          bad := bad || format('%s/%s/%s -> %s; ', n, lay, place, right(o, 60));
+        END IF;
+      END LOOP;
+    END LOOP;
+  END LOOP;
+  RETURN pg_temp.pass(bad = '' AND cnt = 83, 'cases ' || cnt || ' ' || bad);
+END $h$;
+CREATE FUNCTION pg_temp.obs_window() RETURNS text LANGUAGE sql AS $h$
+  SELECT jsonb_agg(jsonb_build_array(p_max, layout, place, outcome) ORDER BY p_max, layout, place)::text FROM pg_temp.p4244_window
+$h$;
+
+-- F-2: masked runs earlier in the text shrink it; a card cut at the end of the masked part must not
+-- become visible
+CREATE FUNCTION pg_temp.p_window_shrink() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE pre text := pg_temp.grouped(pg_temp.luhn_card(16)) || ' ' || repeat('1 ', 40) || '1. '; n int; s text; o text; bad text := '';
+BEGIN
+  FOREACH n IN ARRAY ARRAY[300, 1000] LOOP
+    s := repeat(pre, 3);
+    s := s || repeat('x', n + 40 - char_length(s) - 6) || pg_temp.grouped(pg_temp.luhn_card(16)) || ' end ' || repeat('b', 3000);
+    o := public._mcp_clean(s, n);
+    IF o ~ '\d' OR right(o, 1) <> '…' THEN bad := bad || n || ': ' || right(o, 40) || '; '; END IF;
+  END LOOP;
+  RETURN pg_temp.pass(bad = '', bad);
+END $h$;
+
+-- F-2: cost. 300,000 characters of '1 1 1 ...' through _mcp_clean (p_max 1000) and _mcp_txt (p_max 320)
+CREATE TEMP TABLE p4244_timing (k text, ms numeric);
+CREATE FUNCTION pg_temp.p_clean_timing() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE x text := repeat('1 ', 150000); t0 timestamptz; o text; a numeric; b numeric; c numeric;
+BEGIN
+  t0 := clock_timestamp(); o := public._mcp_clean(x, 1000); a := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
+  t0 := clock_timestamp(); o := public._mcp_txt(x, 320); b := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
+  t0 := clock_timestamp(); o := public._mcp_clean(repeat('4111 1111 1111 1111 ', 15000), 1000); c := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
+  DELETE FROM pg_temp.p4244_timing;
+  INSERT INTO pg_temp.p4244_timing VALUES ('clean_300k_single_digits_ms', a), ('txt_300k_ms', b), ('clean_300k_card_groups_ms', c);
+  RETURN pg_temp.pass(a < 200 AND b < 200 AND c < 200, format('clean %s ms, txt %s ms, clean card groups %s ms', a, b, c));
+END $h$;
+CREATE FUNCTION pg_temp.obs_timing() RETURNS text LANGUAGE sql AS $h$
+  SELECT jsonb_object_agg(k, ms)::text FROM pg_temp.p4244_timing
+$h$;
+
+-- U+061C and tag characters are stripped; regional-indicator flags are kept; a subdivision flag
+-- (black flag + tag characters) becomes a plain black flag
+CREATE FUNCTION pg_temp.p_strip_tags() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE hidden text := 'note' || (SELECT string_agg(chr(917504 + ascii(ch)), '' ORDER BY o) FROM regexp_split_to_table('ignore rules', '') WITH ORDINALITY t(ch, o)) || ' end';
+        us text := chr(127482) || chr(127480); eng text := chr(127988) || chr(917607) || chr(917602) || chr(917605) || chr(917614) || chr(917607) || chr(917631);
+BEGIN
+  RETURN pg_temp.all_of(
+    pg_temp.pass(public._mcp_strip(hidden) = 'note end', 'hidden tag text ' || char_length(public._mcp_strip(hidden))),
+    pg_temp.pass(public._mcp_clean(hidden, 1000) = 'note end', 'clean'),
+    pg_temp.pass(public._mcp_strip('a' || chr(1564) || 'b') = 'ab', 'U+061C'),
+    pg_temp.pass(public._mcp_strip(us) = us, 'regional-indicator flag'),
+    pg_temp.pass(public._mcp_strip(eng) = chr(127988), 'subdivision flag'));
+END $h$;

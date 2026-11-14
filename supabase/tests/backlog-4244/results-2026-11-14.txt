@@ -438,7 +438,7 @@ PRE_server_version                                             17.11
 fp_after_apply                                                 7e487cc5b99f001e551766cc18d6f22e
 CONTROLS pass=24 fail=0 total=24
 MUTANTS as_expected=93 unexpected=0 total=93
-fixtures written: /private/tmp/claude-501/-Users-daniel-Developer-Mad/<id:4>/scratchpad/fx3.json
+fixtures written: fx3.json
 
 # portal-mutate.py, 2026-11-14
 MUTATION APPLIED C32_schema_requires_missing_key broker-portal/lib/mcp/tools/shapes.ts
@@ -561,7 +561,7 @@ PRE_server_version                                             17.11
 fp_after_apply                                                 7e487cc5b99f001e551766cc18d6f22e
 CONTROLS pass=25 fail=0 total=25
 MUTANTS as_expected=0 unexpected=0 total=0
-fixtures written: /private/tmp/claude-501/-Users-daniel-Developer-Mad/<id:1>/scratchpad/fx5.json
+fixtures written: fx5.json
 
 # read-only catalog after the runs (call 6 of 6): 4244 objects 0, ledger row 0, mcp_* functions 25 with md5 48126d28553c04acf8d40f3bca8cf095 (same as PRE_mcp_functions_md5 in call 5), call log CHECKs as before, no fixture user left, mcp_reader without BYPASSRLS, row level security on the four tables.
 
@@ -1047,7 +1047,7 @@ PRE_server_version                                             17.11
 fp_after_apply                                                 3cfa5280637f8f69c1e8d67c140d8dd1
 CONTROLS pass=24 fail=2 total=26
 MUTANTS as_expected=100 unexpected=1 total=101
-fixtures written: /private/tmp/claude-501/-Users-daniel-Developer-Mad/<id:4>/scratchpad/fx7.json
+fixtures written: fx7.json
 
 # harness.py run --timeout --fixtures, test project, 2026-11-14 (call 8): full run, probe fixed
 MUTATION APPLIED ISO_owner_term_only_list_inst (_mcp_r_list_deals)
@@ -1531,7 +1531,7 @@ PRE_server_version                                             17.11
 fp_after_apply                                                 3cfa5280637f8f69c1e8d67c140d8dd1
 CONTROLS pass=26 fail=0 total=26
 MUTANTS as_expected=101 unexpected=0 total=101
-fixtures written: /private/tmp/claude-501/-Users-daniel-Developer-Mad/<id:4>/scratchpad/fx8.json
+fixtures written: fx8.json
 
 # portal-mutate.py after the N3/N4/4d changes
 MUTATION APPLIED C32_schema_requires_missing_key broker-portal/lib/mcp/tools/shapes.ts
@@ -2124,7 +2124,7 @@ PRE_server_version                                             17.11
 fp_after_apply                                                 72eaf6a8f36cd6d28ca5d5dc3f7a653f
 CONTROLS pass=27 fail=0 total=27
 MUTANTS as_expected=105 unexpected=0 total=105
-fixtures written: /private/tmp/claude-501/-Users-daniel-Developer-Mad/<id:5>/scratchpad/fx11.json
+fixtures written: fx11.json
 
 # read-only catalog after (call 12): mcp_* 25 functions md5 48126d28553c04acf8d40f3bca8cf095; 4244 objects 0; ledger 0; live details_withheld column 0, check 0, parties 0; no fixture user left.
 
@@ -2687,7 +2687,7 @@ PRE_server_version                                             17.11
 fp_after_apply                                                 ffe0d517e123f7de6dc1455dbc126a7c
 CONTROLS pass=25 fail=5 total=30
 MUTANTS as_expected=117 unexpected=0 total=117
-fixtures written: /private/tmp/claude-501/-Users-daniel-Developer-Mad/<id:6>/scratchpad/fx13.json
+fixtures written: fx13.json
 
 # harness.py run --timeout --fixtures, test project, 2026-11-14 (fix round call 14): full rerun
 MUTATION APPLIED ISO_owner_term_only_list_inst (_mcp_r_list_deals)
@@ -3248,6 +3248,6 @@ PRE_server_version                                             17.11
 fp_after_apply                                                 ffe0d517e123f7de6dc1455dbc126a7c
 CONTROLS pass=30 fail=0 total=30
 MUTANTS as_expected=117 unexpected=0 total=117
-fixtures written: /private/tmp/claude-501/-Users-daniel-Developer-Mad/<id:5>/scratchpad/fx14.json
+fixtures written: fx14.json
 
 # catalog before this round (read-only call): mcp_* 25 functions md5 48126d28553c04acf8d40f3bca8cf095; 4244 objects 0; ledger 0; live details_withheld column 1 and check 1 (the cloud contract follow-up, applied by its own lane).

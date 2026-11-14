@@ -46,12 +46,13 @@ ALTER TABLE public.mcp_call_log ADD CONSTRAINT mcp_call_log_outcome_check
 -- ---------------------------------------------------------------------------
 -- invisible characters removed: control characters (U+0001-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F),
 -- zero-width space U+200B, direction marks U+200E and U+200F, direction embeddings and overrides
--- U+202A-U+202E, word joiner U+2060, direction isolates U+2066-U+2069, zero-width no-break space U+FEFF.
+-- U+202A-U+202E, word joiner U+2060, direction isolates U+2066-U+2069, zero-width no-break space U+FEFF,
+-- Arabic letter mark U+061C, tag characters U+E0000-U+E007F.
 -- Kept: tab, line feed, carriage return, and the joiners U+200C and U+200D (used inside words of some
 -- scripts and inside emoji sequences).
 CREATE OR REPLACE FUNCTION public._mcp_strip(p text)
 RETURNS text LANGUAGE sql IMMUTABLE SECURITY INVOKER SET search_path = '' AS $fn$
-  SELECT regexp_replace(p, '[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B\u200E\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]', '', 'g')
+  SELECT regexp_replace(p, '[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B\u200E\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF\u061C\U000E0000-\U000E007F]', '', 'g')
 $fn$;
 REVOKE ALL ON FUNCTION public._mcp_strip(text) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._mcp_strip(text) TO mcp_reader;
@@ -65,7 +66,8 @@ $fn$;
 REVOKE ALL ON FUNCTION public._mcp_txt(text, integer) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._mcp_txt(text, integer) TO mcp_reader;
 
--- Replaced by '[number hidden by Keepr]':
+-- Replaced by '[number hidden by Keepr]', after removing the joiners U+200C and U+200D that stand
+-- between two digits:
 -- - dashed SSN-shaped numbers (ddd-dd-dddd);
 -- - a run of digit groups (groups joined by one space or one dash) when any run of consecutive
 --   groups inside it holds 13 to 19 digits and passes the Luhn check; the whole run is replaced.
@@ -86,7 +88,9 @@ BEGIN
   IF p IS NULL THEN
     RETURN NULL;
   END IF;
-  v_x := regexp_replace(p, '\m\d{3}-\d{2}-\d{4}\M', '[number hidden by Keepr]', 'g');
+  -- joiners U+200C and U+200D between two digits (a separator may stand on either side) are removed
+  v_x := regexp_replace(p, '(\d[ -]?)[\u200C\u200D]+(?=[ -]?\d)', '\1', 'g');                       /*MASK:unjoin*/
+  v_x := regexp_replace(v_x, '\m\d{3}-\d{2}-\d{4}\M', '[number hidden by Keepr]', 'g');
   FOR v_m IN SELECT r[1] FROM regexp_matches(v_x, '(\d+(?:[ -]\d+)*)', 'g') AS r LOOP
     IF char_length(regexp_replace(v_m, '[^0-9]', '', 'g')) < 13 THEN
       CONTINUE;
@@ -127,10 +131,19 @@ $fn$;
 REVOKE ALL ON FUNCTION public._mcp_mask(text) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._mcp_mask(text) TO mcp_reader;
 
--- typed text: invisible characters removed, then masked, then cut
+-- typed text: invisible characters removed, joiners between digits removed, then the first p_max + 40
+-- characters masked and cut to p_max. When the text is longer than that, a run of digit groups that
+-- reaches the end of those characters is removed before masking and the result ends in '…'. A card
+-- number of 19 digits with separators spans at most 37 characters, so one that starts before p_max is
+-- masked whole.
 CREATE OR REPLACE FUNCTION public._mcp_clean(p text, p_max integer)
 RETURNS text LANGUAGE sql IMMUTABLE SECURITY INVOKER SET search_path = '' AS $fn$
-  SELECT public._mcp_txt(public._mcp_mask(public._mcp_strip(p)), p_max)
+  SELECT public._mcp_txt(
+           public._mcp_mask(CASE WHEN char_length(s.x) > p_max + 40
+                                 THEN regexp_replace(left(s.x, p_max + 40), '\d+(?:[ -]\d+)*[ -]?$', '')   /*CLEAN:window*/
+                                 ELSE s.x END)
+           || CASE WHEN char_length(s.x) > p_max + 40 THEN '…' ELSE '' END, p_max)
+    FROM (SELECT regexp_replace(public._mcp_strip(p), '(\d[ -]?)[\u200C\u200D]+(?=[ -]?\d)', '\1', 'g') AS x) s   /*CLEAN:unjoin*/
 $fn$;
 REVOKE ALL ON FUNCTION public._mcp_clean(text, integer) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._mcp_clean(text, integer) TO mcp_reader;

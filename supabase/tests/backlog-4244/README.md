@@ -50,6 +50,21 @@ Named controls:
 - `OBS_cursors` (C27): what `list_deals` returns for special and impossible cursor values. An
   observation, not pass/fail.
 
+Masking (`_mcp_mask`, `_mcp_clean`):
+- Joiners U+200C and U+200D that stand between two digits are removed before masking; elsewhere
+  (inside words, inside emoji sequences) they are kept.
+- A run of digit groups joined by single spaces or dashes is replaced whole when any run of
+  consecutive groups in it holds 13 to 19 digits and passes the Luhn check. Measured share of random
+  digit runs replaced (`OBS_false_positives`): about 10% for 13-16 digits plain or grouped by 4, and for
+  17-19 digits plain; about 27% for 17-19 digits grouped by 4.
+- Not replaced: groups joined by dots, by two spaces or by " - ", and a card with more digits glued on
+  without a separator (one unbroken run of 20 or more digits).
+- `_mcp_clean` masks only the first p_max + 40 characters (after removing invisible characters and
+  joiners between digits) and cuts to p_max. When the text is longer, a run of digit groups reaching the
+  end of those characters is dropped and the result ends in "…".
+- Tag characters U+E0000-U+E007F are removed, so a subdivision flag (black flag with tag characters)
+  shows as a plain black flag; regional-indicator country flags are unchanged.
+
 Known behaviour: `address_contains` searches the stored address, while the address in the output is
 masked, so a search can match digits that the output shows as `[number hidden by Keepr]` (the person's
 own data only).
