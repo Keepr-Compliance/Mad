@@ -35,6 +35,8 @@ export const cloudSyncService = {
   forgetOtherProject: () => call(() => window.api.cloudSync.forgetOtherProject()),
   retry: () => call(() => window.api.cloudSync.retry()),
   openAiApps: () => call(() => window.api.cloudSync.openAiApps()),
+  deleteOnlineNotHere: () => call(() => window.api.cloudSync.deleteOnlineNotHere()),
+  deleteOldInstalls: () => call(() => window.api.cloudSync.deleteOldInstalls()),
 };
 
 export default cloudSyncService;

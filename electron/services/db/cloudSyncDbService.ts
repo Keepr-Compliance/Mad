@@ -6,7 +6,26 @@
  */
 import { randomUUID, createHash } from "crypto";
 import {
+  ADOPT_DEAL_STATE_SQL,
   COUNT_PARKED_FOR_USER_SQL,
+  MARK_CHILD_REMOVED_SQL,
+  MARK_DEAL_SQL,
+  NULL_CHILD_HASH_SQL,
+  NULL_STATE_HASH_BY_CLOUD_ID_SQL,
+  SELECT_CHECKLIST_ROWS_SQL,
+  SELECT_CHILD_STATE_BY_LOCAL_SQL,
+  SELECT_CHILD_STATE_SQL,
+  SELECT_DEALS_WITH_UNSENT_CHILDREN_SQL,
+  SELECT_ELIGIBLE_DEAL_IDS_SQL,
+  SELECT_ITEM_ROWS_SQL,
+  SELECT_PARTY_CONTACTS_SQL,
+  SELECT_PARTY_EMAILS_SQL,
+  SELECT_PARTY_PHONES_SQL,
+  SELECT_PARTY_ROWS_SQL,
+  SELECT_PARTY_SOURCE_LINKS_SQL,
+  SELECT_USER_STATE_SQL,
+  UNPARK_USER_MARKS_SQL,
+  UPSERT_CHILD_STATE_SQL,
   COUNT_PENDING_FOR_USER_SQL,
   DELETE_DIRTY_IF_GENERATION_SQL,
   MARK_ALL_ELIGIBLE_ENABLED_SQL,
@@ -64,6 +83,8 @@ export function machineHash(deviceId: string): string | null {
 
 export interface InstallResult {
   installId: string;
+  /** True when this call created the install row. */
+  created?: boolean;
   /** True when this database moved to a different computer and was reset. */
   rebound: boolean;
 }
@@ -116,7 +137,7 @@ export function ensureInstall(db: SqlDb, projectRef: string, deviceId: string, n
       const created = db
         .prepare("SELECT install_id FROM cloud_sync_install WHERE project_ref = ?")
         .get(projectRef) as { install_id: string };
-      return { installId: created.install_id, rebound: false };
+      return { installId: created.install_id, rebound: false, created: true };
     }
     if (hash !== null && row.machine_hash === null) {
       db.prepare("UPDATE cloud_sync_install SET machine_hash = ? WHERE project_ref = ?").run(hash, projectRef);
@@ -410,4 +431,184 @@ export function resetSyncStateAfterRestore(db: SqlDb): boolean {
     db.prepare(MARK_ALL_ELIGIBLE_ENABLED_SQL).run();
   })();
   return true;
+}
+
+// ================================================================ children (PR-3)
+
+export type ChildEntity = "party" | "checklist" | "checklist_item";
+
+export interface ChildStateRow {
+  entity: ChildEntity;
+  local_id: string;
+  transaction_id: string;
+  cloud_id: string | null;
+  content_hash: string | null;
+  hash_version: number | null;
+  removed: number;
+  last_status: string | null;
+}
+
+export interface DealChildRows {
+  parties: Array<Record<string, unknown>>;
+  contacts: Array<Record<string, unknown>>;
+  emails: Array<Record<string, unknown>>;
+  phones: Array<Record<string, unknown>>;
+  sourceLinks: Array<Record<string, unknown>>;
+  checklists: Array<Record<string, unknown>>;
+  items: Array<Record<string, unknown>>;
+}
+
+/** Every local row the child projections of one deal read. */
+export function readDealChildren(db: SqlDb, transactionId: string): DealChildRows {
+  const all = (q: string) => db.prepare(q).all(transactionId) as Array<Record<string, unknown>>;
+  return {
+    parties: all(SELECT_PARTY_ROWS_SQL),
+    contacts: all(SELECT_PARTY_CONTACTS_SQL),
+    emails: all(SELECT_PARTY_EMAILS_SQL),
+    phones: all(SELECT_PARTY_PHONES_SQL),
+    sourceLinks: all(SELECT_PARTY_SOURCE_LINKS_SQL),
+    checklists: all(SELECT_CHECKLIST_ROWS_SQL),
+    items: all(SELECT_ITEM_ROWS_SQL),
+  };
+}
+
+export function getChildStatesOfDeal(db: SqlDb, projectRef: string, userId: string, transactionId: string): ChildStateRow[] {
+  return db.prepare(SELECT_CHILD_STATE_SQL).all(projectRef, userId, transactionId) as ChildStateRow[];
+}
+
+export function getChildState(db: SqlDb, projectRef: string, userId: string, entity: ChildEntity, localId: string): ChildStateRow | null {
+  return (db.prepare(SELECT_CHILD_STATE_BY_LOCAL_SQL).get(projectRef, userId, entity, localId) as ChildStateRow | undefined) ?? null;
+}
+
+export interface AcceptedChild {
+  localId: string;
+  cloudId: string;
+  hash: string;
+  version: number | null;
+}
+
+/** The rows of one upsert response the server accepted, recorded together. */
+export function recordChildrenSaved(
+  db: SqlDb,
+  projectRef: string,
+  userId: string,
+  entity: ChildEntity,
+  transactionId: string,
+  cloudDealId: string,
+  rows: AcceptedChild[],
+  hashVersion: number,
+  now: Date,
+): void {
+  db.transaction(() => {
+    const st = db.prepare(UPSERT_CHILD_STATE_SQL);
+    for (const r of rows) {
+      st.run(projectRef, userId, entity, r.localId, transactionId, r.cloudId, cloudDealId, r.hash, hashVersion, r.version, nowIso(now));
+    }
+  })();
+}
+
+/** The rows of one tombstone response that are gone online, recorded together. */
+export function recordChildrenRemoved(
+  db: SqlDb,
+  projectRef: string,
+  userId: string,
+  entity: ChildEntity,
+  localIds: string[],
+  now: Date,
+): void {
+  db.transaction(() => {
+    const st = db.prepare(MARK_CHILD_REMOVED_SQL);
+    for (const id of localIds) st.run(nowIso(now), projectRef, userId, entity, id);
+  })();
+}
+
+/** Forget the recorded hash of these children so they are sent again. */
+export function forgetChildHashes(db: SqlDb, projectRef: string, userId: string, entity: ChildEntity, localIds: string[]): void {
+  db.transaction(() => {
+    const st = db.prepare(NULL_CHILD_HASH_SQL);
+    for (const id of localIds) st.run(projectRef, userId, entity, id);
+  })();
+}
+
+// ================================================================ reconcile (PR-3)
+
+export interface UserStateRow {
+  entity: string;
+  local_id: string;
+  transaction_id: string;
+  cloud_id: string | null;
+  content_hash: string | null;
+  removed: number;
+}
+
+export function readEligibleDealIds(db: SqlDb, userId: string): Set<string> {
+  return new Set((db.prepare(SELECT_ELIGIBLE_DEAL_IDS_SQL).all(userId) as Array<{ id: string }>).map((r) => r.id));
+}
+
+export function readUserState(db: SqlDb, projectRef: string, userId: string): UserStateRow[] {
+  return db.prepare(SELECT_USER_STATE_SQL).all(projectRef, userId) as UserStateRow[];
+}
+
+/** Deals of the user with a live local child that has no sync record yet (e.g. uploaded header-only). */
+export function readDealsWithUnsentChildren(db: SqlDb, projectRef: string, userId: string): string[] {
+  return (db.prepare(SELECT_DEALS_WITH_UNSENT_CHILDREN_SQL).all(userId, projectRef, userId, userId, projectRef, userId, userId, projectRef, userId) as Array<{
+    id: string;
+  }>).map((r) => r.id);
+}
+
+export interface ReconcileWrites {
+  nullHashes: Array<{ entity: string; localId: string }>;
+  markDeals: string[];
+  /** Online deals of this install whose local deal exists with no record: record the cloud id, no hash. */
+  adoptDeals?: Array<{ localId: string; cloudId: string }>;
+  summaryJson: string;
+}
+
+/**
+ * The reconcile's local writes, all in one transaction: forget recorded hashes
+ * that no longer match what is online, mark the deals to revisit, un-park the
+ * user's parked marks, and record when this reconcile ran.
+ */
+export function applyReconcile(db: SqlDb, projectRef: string, userId: string, w: ReconcileWrites, now: Date): void {
+  db.transaction(() => {
+    const nul = db.prepare(NULL_STATE_HASH_BY_CLOUD_ID_SQL);
+    for (const n of w.nullHashes) nul.run(projectRef, userId, n.entity, n.localId);
+    const adopt = db.prepare(ADOPT_DEAL_STATE_SQL);
+    for (const a of w.adoptDeals ?? []) adopt.run(projectRef, userId, a.localId, a.localId, a.cloudId, a.cloudId, nowIso(now));
+    const mark = db.prepare(MARK_DEAL_SQL);
+    for (const id of w.markDeals) mark.run(id);
+    db.prepare(UNPARK_USER_MARKS_SQL).run(userId);
+    db.prepare("UPDATE cloud_sync_settings SET last_state_json = ?, last_state_at = ? WHERE project_ref = ? AND user_id = ?").run(
+      w.summaryJson,
+      nowIso(now),
+      projectRef,
+      userId,
+    );
+  })();
+}
+
+/** When this user's last reconcile ran here, and what it found (null when never). */
+export function lastReconcile(db: SqlDb, projectRef: string, userId: string): { at: string | null; summaryJson: string | null } {
+  const r = db.prepare("SELECT last_state_at AS at, last_state_json AS j FROM cloud_sync_settings WHERE project_ref = ? AND user_id = ?").get(
+    projectRef,
+    userId,
+  ) as { at: string | null; j: string | null } | undefined;
+  return { at: r?.at ?? null, summaryJson: r?.j ?? null };
+}
+
+/** After the user deleted them: no online deals without a local record remain in the last summary. */
+export function setOrphanCount(db: SqlDb, projectRef: string, userId: string, n: number): void {
+  const cur = lastReconcile(db, projectRef, userId);
+  let summary: Record<string, unknown> = {};
+  try {
+    summary = cur.summaryJson ? (JSON.parse(cur.summaryJson) as Record<string, unknown>) : {};
+  } catch {
+    summary = {};
+  }
+  summary.orphanDeals = n;
+  db.prepare("UPDATE cloud_sync_settings SET last_state_json = ? WHERE project_ref = ? AND user_id = ?").run(
+    JSON.stringify(summary),
+    projectRef,
+    userId,
+  );
 }

@@ -131,6 +131,7 @@ export function markAllEligibleAfterMigration(db: SqlDb, log: TriggerLog = silen
  * reset (resetSyncStateAfterRestore). Never throws.
  */
 export function prepareRestoredFile(db: SqlDb, log: TriggerLog = silentLog): boolean {
+  restoreEpochValue++;
   ensureCloudSyncTriggers(db, log);
   try {
     return resetSyncStateAfterRestore(db);
@@ -138,4 +139,11 @@ export function prepareRestoredFile(db: SqlDb, log: TriggerLog = silentLog): boo
     log.warn("[CloudSync] Could not reset state after a restore", { code: errorCode(error) });
     return false;
   }
+}
+
+let restoreEpochValue = 0;
+
+/** Increments on every restore of this database in this launch (0 = none). */
+export function restoreEpoch(): number {
+  return restoreEpochValue;
 }

@@ -23,6 +23,8 @@ export interface UseKeeprCloudSettings extends KeeprCloudSettingsState {
   forgetOtherProject: () => Promise<boolean>;
   retry: () => Promise<boolean>;
   openAiApps: () => Promise<boolean>;
+  deleteOnlineNotHere: () => Promise<boolean>;
+  deleteOldInstalls: () => Promise<boolean>;
 }
 
 export function useKeeprCloudSettings(): UseKeeprCloudSettings {
@@ -63,5 +65,7 @@ export function useKeeprCloudSettings(): UseKeeprCloudSettings {
     forgetOtherProject: () => act(() => cloudSyncService.forgetOtherProject()),
     retry: () => act(() => cloudSyncService.retry()),
     openAiApps: async () => (await cloudSyncService.openAiApps()).success,
+    deleteOnlineNotHere: () => act(() => cloudSyncService.deleteOnlineNotHere()),
+    deleteOldInstalls: () => act(() => cloudSyncService.deleteOldInstalls()),
   };
 }

@@ -106,6 +106,8 @@ function allowCloud(): void {
       noticeVersion: 1,
       pendingDeals: 0,
       notSavedDeals: 0,
+      onlineNotHereDeals: 0,
+      otherInstalls: null,
       lastSavedAt: null,
       aiAppsAvailable: true,
     }),
