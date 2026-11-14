@@ -167,7 +167,9 @@ jest.mock("../services/llm/llmConfigService", () => ({
 jest.mock("../services/featureGateService", () => ({
   __esModule: true,
   default: {
-    checkFeature: jest.fn().mockResolvedValue({ allowed: true, value: "", source: "plan" }),
+    getAllFeaturesOrNull: jest.fn().mockResolvedValue({
+      ai_detection: { allowed: true, value: "", source: "plan" },
+    }),
   },
 }));
 
