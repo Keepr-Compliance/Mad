@@ -323,10 +323,10 @@ def sweep_withheld():
     col = "(SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cloud_deal_parties' AND column_name = 'details_withheld')"
     # the probe library names the new column; on the committed state it does not exist until the re-run below
     pre = HEAD + "SET LOCAL check_function_bodies = off;\n" + HL + '\n' + FX + '\n' + K6 + '\n' + RB_CLEAN + MCP_PROBE + OUT_TABLE
-    b = [DECL]
+    b = [None]
     # rehearsal over the committed state of the test project (the migration as at WITHHELD_FROM)
     b.append("  INSERT INTO pg_temp.p4243_out VALUES ('R0_live_column', %s::text);\n" % col)
-    b.append('  EXECUTE %s;\n' % q(M2))
+    b.append('  EXECUTE %s;\n' % 'm2')
     b.append("  INSERT INTO pg_temp.p4243_out VALUES ('R1_rerun_column', %s::text);\n" % col)
     b.append("  INSERT INTO pg_temp.p4243_out VALUES ('R1_rerun_catalog', pg_temp.k6_catalog());\n")
     b.append("  INSERT INTO pg_temp.p4243_out VALUES ('R1_rerun_mcp_status', pg_temp.mcp_status_probe());\n")
@@ -341,25 +341,27 @@ def sweep_withheld():
              "    ELSIF (SELECT count(*) FROM public.cloud_deal_parties WHERE details_withheld OR display_name IS NULL) <> 0 THEN\n"
              "      v := 'FAIL: an existing party row did not default to false with its details';\n"
              "    ELSE\n      v := pg_temp.w_probe();\n    END IF;")
-    b.append(block('P_F_rerun_over_earlier_file', fbody % (q(RB), q(M1), q(prev), col, q(M2), q(M2), col, col)))
+    b.append(block('P_F_rerun_over_earlier_file', fbody % ('rb', 'm1', 'prev', col, 'm2', 'm2', col, col)))
     no_alter = apply(M2, 'ALTER TABLE public.cloud_deal_parties ADD COLUMN IF NOT EXISTS details_withheld boolean NOT NULL DEFAULT false;\n', '', 1, 'F_no_add_column')
-    b.append(block('M_F_no_add_column', fbody % (q(RB), q(M1), q(prev), col, q(no_alter), q('SELECT 1'), col, col)))
+    b.append(block('M_F_no_add_column', fbody % ('rb', 'm1', 'prev', col, 'no_alter', q('SELECT 1'), col, col)))
     # mutant: the CHECK removed -> a direct UPDATE planting a name on a flagged row is accepted
     CK = ('ALTER TABLE public.cloud_deal_parties DROP CONSTRAINT IF EXISTS cloud_deal_parties_withheld_ck;\n'
           'ALTER TABLE public.cloud_deal_parties ADD CONSTRAINT cloud_deal_parties_withheld_ck\n'
           '  CHECK (NOT details_withheld OR (display_name IS NULL AND company IS NULL AND emails IS NULL AND phones IS NULL));\n')
     no_ck = apply(M2, CK, '', 1, 'F_no_withheld_check')
-    b.append(block('M_F_no_withheld_check', '    EXECUTE ' + q(RB) + ';\n    EXECUTE ' + q(M1) + ';\n    EXECUTE ' + q(no_ck)
+    b.append(block('M_F_no_withheld_check', '    EXECUTE ' + 'rb' + ';\n    EXECUTE ' + 'm1' + ';\n    EXECUTE ' + 'no_ck'
                    + ';\n    base := pg_temp.base();\n    v := pg_temp.w_probe();'))
     # (g) rollback then the earlier file: the column is gone and the earlier parties body is back
     _, prev_src, _ = unit(prev, 'cloud_upsert_parties')
     gbody = ('    EXECUTE %s;\n    EXECUTE %s;\n    EXECUTE %s;\n    EXECUTE %s;\n'
              "    IF %s <> 0 OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.cloud_upsert_parties(uuid,uuid,uuid,jsonb)')) IS DISTINCT FROM %s THEN\n"
              "      v := 'FAIL: column=' || %s;\n    ELSE\n      v := 'PASS';\n    END IF;")
-    b.append(block('P_G_rollback_then_earlier_file', gbody % (q(RB), q(M1), q(M2), q(RB) + ';\n    EXECUTE ' + q(M1) + ';\n    EXECUTE ' + q(prev), col, lit(md5(prev_src)), col)))
+    b.append(block('P_G_rollback_then_earlier_file', gbody % ('rb', 'm1', 'm2', 'rb' + ';\n    EXECUTE ' + 'm1' + ';\n    EXECUTE ' + 'prev', col, lit(md5(prev_src)), col)))
     # mutant: the earlier file re-run without the rollback first (the column stays)
     print('MUTATION APPLIED G_earlier_file_without_rollback (sequence: the rollback step before the earlier file removed)')
-    b.append(block('M_G_earlier_file_without_rollback', gbody % (q(RB), q(M1), q(M2), q(M1) + ';\n    EXECUTE ' + q(prev), col, lit(md5(prev_src)), col)))
+    b.append(block('M_G_earlier_file_without_rollback', gbody % ('rb', 'm1', 'm2', 'm1' + ';\n    EXECUTE ' + 'prev', col, lit(md5(prev_src)), col)))
+    b[0] = ('DO $sw4243$\nDECLARE v text; t0 text; base jsonb;\n  m2 text := %s;\n  prev text := %s;\n  rb text := %s;\n  m1 text := %s;\n'
+            '  no_alter text := %s;\n  no_ck text := %s;\nBEGIN\n') % (q(M2), q(prev), q(RB), q(M1), q(no_alter), q(no_ck))
     b.append('END\n$sw4243$;\n')
     return pre + ''.join(b) + FINAL
 
