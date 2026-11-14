@@ -7,8 +7,8 @@
  */
 import { CLOUD_SYNC_TABLES_DDL, CLOUD_SYNC_TRIGGERS, DEAL_TRIGGER_COLUMNS } from "../../db/cloudSyncSql";
 import { projectDeal, type DealRow } from "../projection";
-import { readDealRow, clearMarkIfGeneration, recordRetryableFailure, selectDueDirty } from "../store";
-import { dropCloudSyncTriggers, ensureCloudSyncTriggers, markAllEligibleAfterMigration } from "../triggers";
+import { readDealRow, clearMarkIfGeneration, recordRetryableFailure, selectDueDirty } from "../../db/cloudSyncDbService";
+import { dropCloudSyncTriggers, ensureCloudSyncTriggers, markAllEligibleAfterMigration } from "../../db/cloudSyncTriggers";
 import { DRIVER } from "./helpers/sqlite";
 import {
   dealId,

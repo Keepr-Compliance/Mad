@@ -194,7 +194,7 @@ import {
   dropCloudSyncTriggers,
   ensureCloudSyncTriggers,
   markAllEligibleAfterMigration,
-} from "./cloudSync/triggers";
+} from "./db/cloudSyncTriggers";
 
 // Re-export types for backward compatibility
 export type { ContactAssignmentOperation } from "./db/transactionContactDbService";

@@ -7,7 +7,7 @@
  * (NOT the bundled driver; the suite title says which ran). Never skips.
  */
 import path from "path";
-import type { SqlDb, SqlStatement } from "../../sqlDb";
+import type { SqlDb, SqlStatement } from "../../../db/cloudSyncSqlDb";
 
 export interface TestDb extends SqlDb {
   pragma(sql: string): void;

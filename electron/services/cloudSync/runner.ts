@@ -20,8 +20,8 @@ import type { CallResult, CloudClient } from "./cloudClient";
 import { HASH_VERSION, projectDeal, type DealRow } from "./projection";
 import { parseState, type ServerState } from "./stateReader";
 import type { SessionIdentity, SessionUser } from "./session";
-import { withSavepoint, type SqlDb } from "./sqlDb";
-import * as store from "./store";
+import { withSavepoint, type SqlDb } from "../db/cloudSyncSqlDb";
+import * as store from "../db/cloudSyncDbService";
 
 export const SAVED_ROW_STATUSES = ["applied", "unchanged"] as const;
 export const DEALS_PER_PASS = 200;
@@ -234,6 +234,18 @@ export class CloudSyncRunner {
 
   private finish(summary: PassSummary): PassSummary {
     this.lastSummary = summary;
+    if (summary.done + summary.failed > 0) {
+      try {
+        store.recordRun(
+          this.deps.db(),
+          this.deps.projectRef,
+          { outcome: summary.outcome, done: summary.done, failed: summary.failed, rejected: 0, errorCode: null },
+          this.now(),
+        );
+      } catch {
+        /* counters only */
+      }
+    }
     if (summary.outcome === "done" || summary.failed > 0) {
       this.log.info("[CloudSync] Pass finished", { outcome: summary.outcome, done: summary.done, failed: summary.failed });
     }

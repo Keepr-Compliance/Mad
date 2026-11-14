@@ -14,8 +14,8 @@ import { CloudSyncRunner, type PassSummary, type RunnerLog } from "./runner";
 import { isNoticeSupported } from "./notice";
 import { parseState, type ServerState } from "./stateReader";
 import type { SessionIdentity } from "./session";
-import type { SqlDb } from "./sqlDb";
-import * as store from "./store";
+import type { SqlDb } from "../db/cloudSyncSqlDb";
+import * as store from "../db/cloudSyncDbService";
 import type {
   CloudSyncPausedReason,
   CloudSyncResult,
@@ -188,10 +188,7 @@ export class CloudSyncService {
 
   private pendingDeals(db: SqlDb, userId: string): number {
     try {
-      const r = db
-        .prepare("SELECT COUNT(*) AS n FROM cloud_sync_dirty d JOIN transactions t ON t.id = d.transaction_id WHERE t.user_id = ?")
-        .get(userId) as { n: number } | undefined;
-      return r?.n ?? 0;
+      return store.countPendingDeals(db, userId);
     } catch {
       return 0;
     }
@@ -199,10 +196,7 @@ export class CloudSyncService {
 
   private lastSavedAt(db: SqlDb, ref: string): string | null {
     try {
-      const r = db
-        .prepare("SELECT MAX(finished_at) AS at FROM cloud_sync_runs WHERE project_ref = ? AND outcome = 'done' AND deals_done > 0")
-        .get(ref) as { at: string | null } | undefined;
-      return r?.at ?? null;
+      return store.lastSavedAt(db, ref);
     } catch {
       return null;
     }

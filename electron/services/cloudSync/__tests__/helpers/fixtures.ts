@@ -5,7 +5,7 @@
  */
 import fs from "fs";
 import path from "path";
-import { ensureCloudSyncTriggers } from "../../triggers";
+import { ensureCloudSyncTriggers } from "../../../db/cloudSyncTriggers";
 import { openTestDb, type TestDb } from "./sqlite";
 
 export const SCHEMA_SQL = fs.readFileSync(

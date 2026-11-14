@@ -18,7 +18,7 @@ import { CloudClient, type RpcTransport } from "../services/cloudSync/cloudClien
 import { CloudSyncService } from "../services/cloudSync/cloudSyncService";
 import { devGuardReason, DEV_OVERRIDE_ENV, projectRefFromUrl } from "../services/cloudSync/environment";
 import { SessionIdentity } from "../services/cloudSync/session";
-import type { SqlDb } from "../services/cloudSync/sqlDb";
+import type { SqlDb } from "../services/db/cloudSyncSqlDb";
 import { getRawDatabase } from "../services/db/core/dbConnection";
 import databaseService from "../services/databaseService";
 import { initializationBroadcaster } from "../services/initializationBroadcaster";

@@ -9,7 +9,7 @@ import { DRIVER } from "./helpers/sqlite";
 import { dealId, dirty, dirtyCount, enableUser, freshDb, insertDeal, OTHER_PROJECT, PROJECT, USER_A, USER_B } from "./helpers/fixtures";
 import { DEVICE_1, DEVICE_2, makeEngine, pass, startAndPass, type Engine } from "./helpers/engine";
 import { FakeServer } from "./helpers/fakeServer";
-import { machineHash, PARKED_UNTIL } from "../store";
+import { machineHash, PARKED_UNTIL } from "../../db/cloudSyncDbService";
 import { devGuardReason } from "../environment";
 import { portalUrl, portalOrigin } from "../../../utils/portalUrl";
 import type { TestDb } from "./helpers/sqlite";
@@ -420,6 +420,7 @@ describe(`Keepr Cloud engine [${DRIVER}]`, () => {
       const [st] = stateRows(db);
       expect(st).toMatchObject({ local_id: id, cloud_id: e.server.deals[0].id, content_hash: e.server.deals[0].hash, last_status: "synced" });
       expect(dirtyCount(db)).toBe(0);
+      expect(await e.service.getView()).toMatchObject({ status: "on", pendingDeals: 0, lastSavedAt: "2026-11-14T12:00:00.000Z" });
     });
 
     it("R2: a returned hash that differs from the sent hash is not saved and no mark-synced is sent", async () => {

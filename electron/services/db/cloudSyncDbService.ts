@@ -16,8 +16,8 @@ import {
   RESET_DIRTY_FAILURE_SQL,
   UPDATE_DIRTY_FAILURE_SQL,
   UPSERT_DEAL_STATE_SQL,
-} from "../db/cloudSyncSql";
-import { withSavepoint, type SqlDb } from "./sqlDb";
+} from "./cloudSyncSql";
+import { withSavepoint, type SqlDb } from "./cloudSyncSqlDb";
 
 export interface SettingsRow {
   project_ref: string;
@@ -332,4 +332,30 @@ export function finishRun(
     "UPDATE cloud_sync_runs SET finished_at = ?, outcome = ?, deals_done = ?, deals_failed = ?, rows_rejected = ?, error_code = ? WHERE id = ?",
   ).run(nowIso(now), v.outcome, v.done, v.failed, v.rejected, v.errorCode, id);
   db.prepare("DELETE FROM cloud_sync_runs WHERE id NOT IN (SELECT id FROM cloud_sync_runs ORDER BY id DESC LIMIT 50)").run();
+}
+
+// ---------------------------------------------------------------- status (Settings)
+
+export function countPendingDeals(db: SqlDb, userId: string): number {
+  const r = db
+    .prepare("SELECT COUNT(*) AS n FROM cloud_sync_dirty d JOIN transactions t ON t.id = d.transaction_id WHERE t.user_id = ?")
+    .get(userId) as { n: number } | undefined;
+  return r?.n ?? 0;
+}
+
+export function lastSavedAt(db: SqlDb, projectRef: string): string | null {
+  const r = db
+    .prepare("SELECT MAX(finished_at) AS at FROM cloud_sync_runs WHERE project_ref = ? AND outcome = 'done' AND deals_done > 0")
+    .get(projectRef) as { at: string | null } | undefined;
+  return r?.at ?? null;
+}
+
+/** One counters row per pass that did work; keeps the last 50. */
+export function recordRun(
+  db: SqlDb,
+  projectRef: string,
+  v: { outcome: string; done: number; failed: number; rejected: number; errorCode: string | null },
+  now: Date,
+): void {
+  finishRun(db, startRun(db, projectRef, now), v, now);
 }

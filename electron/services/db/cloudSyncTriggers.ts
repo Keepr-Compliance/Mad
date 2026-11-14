@@ -10,8 +10,8 @@
  * trigger naming a missing column would make every write to its table fail
  * (plan fact 7), whether or not Keepr Cloud is on.
  */
-import { CLOUD_SYNC_TRIGGERS, MARK_ALL_ELIGIBLE_ENABLED_SQL } from "../db/cloudSyncSql";
-import { tableColumns, type SqlDb } from "./sqlDb";
+import { CLOUD_SYNC_TRIGGERS, MARK_ALL_ELIGIBLE_ENABLED_SQL } from "./cloudSyncSql";
+import { tableColumns, type SqlDb } from "./cloudSyncSqlDb";
 
 export interface TriggerLog {
   warn(message: string, meta?: Record<string, unknown>): void;
