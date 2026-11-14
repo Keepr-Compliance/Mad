@@ -1,0 +1,146 @@
+{
+  "name": "keepr.cloud_deal_shape",
+  "version": 1,
+  "about": "The shape of the online copy of a deal (cloud_deals and its child tables, supabase/migrations/20261112190000_backlog_4236_cloud_autosave_schema.sql), shared by the desktop uploader (BACKLOG-4243) and the AI-app readers (BACKLOG-4244). Asserted by broker-portal/__tests__/contracts/cloud-deal-shape-v1.test.ts. A change to any value here changes content_hash for every row and the readers, so both items change together.",
+
+  "identity": {
+    "rule": "A deal's identity and every lookup key is cloud_deals.id (exposed as deal_id); a child's identity is its id. source_install_id and local_*_id are origin metadata: they may label or group rows (for example saved_from), but no reader resolves a deal or person by them, and no reader drops or errors on a row because they are NULL.",
+    "deal_key": "cloud_deals.id",
+    "deal_key_exposed_as": "deal_id",
+    "child_key": "id",
+    "origin_metadata": [
+      "source_install_id",
+      "local_transaction_id",
+      "local_party_id",
+      "local_contact_id",
+      "local_checklist_id",
+      "local_item_id",
+      "local_message_id",
+      "local_link_id",
+      "local_attachment_id"
+    ],
+    "origin_metadata_may": ["label", "group"],
+    "origin_metadata_must_not": ["resolve_a_deal_or_person", "drop_a_row_when_null", "error_when_null"]
+  },
+
+  "tolerance": {
+    "rule": "Clients MUST treat an unknown envelope error as a non-retryable failure of that call (record the code, skip the deal until its next change or the next reconcile); an unknown row status as not saved for that row; an unknown state reason as paused; and MUST ignore unknown keys in any result.",
+    "unknown_envelope_error": "non_retryable_call_failure",
+    "unknown_row_status": "not_saved",
+    "unknown_state_reason": "paused",
+    "unknown_keys": "ignore",
+    "known": {
+      "client_envelope_errors": [
+        "not_authorized",
+        "not_entitled",
+        "wrong_account",
+        "invalid_input",
+        "batch_too_large",
+        "invalid_organization",
+        "not_found",
+        "not_licensed",
+        "notice_outdated",
+        "turn_off_failed",
+        "delete_failed",
+        "too_large",
+        "object_missing",
+        "size_mismatch"
+      ],
+      "service_role_envelope_errors_note": "Emitted only by assign_member_addon, which only the service role can call; no desktop or reader client receives them.",
+      "service_role_envelope_errors": ["invalid_addon", "not_member", "personal_org", "plan_disallows"],
+      "row_statuses": ["applied", "unchanged", "conflict", "rejected", "removed", "not_found"],
+      "row_reject_reasons": ["invalid_value", "parent_missing", "thread_key_required", "blob_unavailable"],
+      "state_reasons": [
+        "no_license",
+        "assignment_lapsed",
+        "member_inactive",
+        "billing_off",
+        "plan_disallows",
+        "not_enabled",
+        "notice_outdated"
+      ],
+      "blob_states": ["new", "pending", "uploaded"]
+    }
+  },
+
+  "writes": {
+    "expected_user_argument": "p_expected_user_id",
+    "expected_user_argument_position": 1,
+    "mismatch_error": "wrong_account",
+    "functions": [
+      "set_my_cloud_autosave",
+      "cloud_delete_install",
+      "cloud_upsert_deal",
+      "cloud_upsert_parties",
+      "cloud_upsert_checklists",
+      "cloud_upsert_checklist_items",
+      "cloud_upsert_messages",
+      "cloud_upsert_files",
+      "cloud_tombstone",
+      "cloud_delete_deal",
+      "cloud_mark_deal_synced",
+      "cloud_register_blob",
+      "cloud_confirm_blob"
+    ],
+    "blob_order": "register; on state pending confirm first and upload only when confirm returns object_missing; on size_mismatch the blob is fenced and the next register returns a new blob id"
+  },
+
+  "deal": {
+    "calendar_dates": {
+      "fields": ["started_at", "closed_at"],
+      "sent_as": "YYYY-MM-DDT00:00:00.000Z (the first 10 characters of the local value when they match YYYY-MM-DD, else null)",
+      "read_as": "a calendar date in UTC"
+    },
+    "details": {
+      "every_key_always_present": true,
+      "absent_value": null,
+      "keys": {
+        "v": "number",
+        "listing_price": "number",
+        "sale_price": "number",
+        "earnest_money_amount": "number",
+        "commission_offered_rate": "number",
+        "commission_actual_rate": "number",
+        "commission_gross_amount": "number",
+        "mutual_acceptance_date": "date",
+        "inspection_deadline": "date",
+        "financing_deadline": "date",
+        "closing_deadline": "date",
+        "representation_start_date": "date",
+        "stage": "string",
+        "submission_status": "string",
+        "export_status": "string"
+      },
+      "v": 1,
+      "date_format": "YYYY-MM-DD"
+    }
+  },
+
+  "party": {
+    "emails": {
+      "element": { "email": "string", "is_primary": "boolean", "label": "string|null" },
+      "order": ["is_primary DESC", "lower(email) ASC", "id ASC"],
+      "empty": []
+    },
+    "phones": {
+      "element": { "e164": "string", "display": "string|null", "is_primary": "boolean", "label": "string|null" },
+      "order": ["is_primary DESC", "phone_e164 ASC", "id ASC"],
+      "empty": []
+    },
+    "details_withheld": {
+      "type": "boolean",
+      "derived_by_reader": true,
+      "derived_from": "contact_source",
+      "true_when": "contact_source = 'google_contacts'",
+      "meaning": "A person with details_withheld has name, company, emails and phones blank.",
+      "blank_when_true": { "display_name": null, "company": null, "emails": [], "phones": [] },
+      "kept_when_true": ["role", "role_category", "specific_role", "is_primary", "notes", "contact_deleted"]
+    }
+  },
+
+  "instants": {
+    "format": "YYYY-MM-DDTHH:MM:SS.sssZ",
+    "zone_less_local_value": "read as UTC",
+    "date_only_value": "midnight UTC"
+  }
+}

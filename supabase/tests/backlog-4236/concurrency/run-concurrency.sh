@@ -26,6 +26,12 @@
 #        Expect: no 40P01; both results ok with every row applied.
 #        Mutant S_C4_blobs_locked_per_row_payload_order: drop /*FILE:lockblobs*/ and lock each blob FOR
 #        UPDATE at its per-row lookup (payload order) -> 40P01. (F02, no blob lock at all, stays green.)
+#   C5   a child upsert whose transaction starts first and waits 4 s; a mark-synced on the same deal
+#        starts later and commits during the wait; then the upsert commits.
+#        Expect: upsert applied, mark ok, and last_synced_at > last_full_sync_at afterwards (the deal reads
+#        as changed since its full save).
+#        Mutant S_C5_child_touch_transaction_start: in cloud_upsert_parties set last_synced_at = now()
+#        (transaction start) -> last_synced_at < last_full_sync_at -> FAIL.
 # Mutant names are the modes of concurrency/mutants.py (C1a S_C1a_turnoff_unlocked_update_late, C2
 # S_C2_tombstone_no_deal_lock, C3 S_C3_register_no_on_conflict). `mutants.py emit <dir>` writes, per
 # mode, a one-function CREATE OR REPLACE for the mutant and for the pristine text; apply the mutant,
@@ -33,7 +39,7 @@
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
 K=~/.claude/bin/kt-sql
-case "${1:-}" in C1a|C1b|C2|C3|C4) ;; *) sed -n '2,31p' "$0"; exit 2 ;; esac
+case "${1:-}" in C1a|C1b|C2|C3|C4|C5) ;; *) sed -n '2,37p' "$0"; exit 2 ;; esac
 CASE="$1"
 
 umask 077
@@ -109,6 +115,7 @@ case "$CASE" in
   C2)  fill a.sql c2-deal-hold.sql as-user.sql c2-upsert.sql; fill b.sql gate.sql as-user.sql c2-tombstone.sql; pair a.sql b.sql ;;
   C3)  fill a.sql as-user.sql c3-register-hold.sql; fill b.sql c3-marker.sql gate.sql as-user.sql c3-register.sql; pair a.sql b.sql ;;
   C4)  fill a.sql c4-lowlock-then-files.sql as-user.sql c4-files-a.sql; fill b.sql gate.sql as-user.sql c4-files-b.sql; pair a.sql b.sql ;;
+  C5)  fill a.sql as-user.sql c5-child-late.sql; fill b.sql gate.sql as-user.sql c5-mark.sql; pair a.sql b.sql ;;
 esac
 fill assert.filled.sql assert.sql
 $K "$tmp/assert.filled.sql" > "$tmp/state.out"
@@ -144,6 +151,9 @@ elif case == 'C3':
         and a['r'].get('blob_id') == b['r'].get('blob_id') and st.get('live_cc_blob') == 1
 elif case == 'C4':
     ok = ok and all(x.get('r', {}).get('ok') is True and [e.get('status') for e in x['r'].get('results', [])] == ['applied', 'applied'] for x in (a, b))
+elif case == 'C5':
+    ok = ok and a.get('r', {}).get('results', [{}])[0].get('status') == 'applied' and b.get('r', {}).get('ok') is True \
+        and st.get('synced_after_full') is True
 print('NO_OVERLAP' if case == 'C3' and a.get('waiters') != 1 else 'PASS' if ok else 'FAIL')
 PY
 )"

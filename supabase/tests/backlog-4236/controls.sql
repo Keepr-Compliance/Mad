@@ -17,11 +17,11 @@ DECLARE
   TABLES text[] := ARRAY['cloud_autosave_settings', 'member_addons', 'cloud_deals', 'cloud_deal_parties', 'cloud_deal_checklists',
                          'cloud_deal_checklist_items', 'cloud_deal_messages', 'cloud_blobs', 'cloud_deal_files'];
   AUTH_FNS text[] := ARRAY['public.cloud_autosave_entitled()', 'public.get_my_cloud_autosave_state()',
-    'public.set_my_cloud_autosave(boolean,integer)', 'public.cloud_list_installs()', 'public.cloud_delete_install(uuid)',
-    'public.cloud_upsert_deal(jsonb)', 'public.cloud_upsert_parties(uuid,uuid,jsonb)', 'public.cloud_upsert_checklists(uuid,uuid,jsonb)',
-    'public.cloud_upsert_checklist_items(uuid,uuid,jsonb)', 'public.cloud_upsert_messages(uuid,uuid,jsonb)',
-    'public.cloud_upsert_files(uuid,uuid,jsonb)', 'public.cloud_register_blob(text,bigint,text)', 'public.cloud_confirm_blob(uuid)',
-    'public.cloud_tombstone(uuid,text,uuid[])', 'public.cloud_delete_deal(uuid)', 'public.cloud_mark_deal_synced(uuid,uuid)'];
+    'public.set_my_cloud_autosave(uuid,boolean,integer)', 'public.cloud_list_installs()', 'public.cloud_delete_install(uuid,uuid)',
+    'public.cloud_upsert_deal(uuid,jsonb)', 'public.cloud_upsert_parties(uuid,uuid,uuid,jsonb)', 'public.cloud_upsert_checklists(uuid,uuid,uuid,jsonb)',
+    'public.cloud_upsert_checklist_items(uuid,uuid,uuid,jsonb)', 'public.cloud_upsert_messages(uuid,uuid,uuid,jsonb)',
+    'public.cloud_upsert_files(uuid,uuid,uuid,jsonb)', 'public.cloud_register_blob(uuid,text,bigint,text)', 'public.cloud_confirm_blob(uuid,uuid)',
+    'public.cloud_tombstone(uuid,uuid,text,uuid[])', 'public.cloud_delete_deal(uuid,uuid)', 'public.cloud_mark_deal_synced(uuid,uuid,uuid)'];
   SVC_FNS text[] := ARRAY['public.assign_member_addon(uuid,uuid,text,boolean,timestamp with time zone)'];
   NONE_FNS text[] := ARRAY['public._cloud_autosave_license(uuid)', 'public._cloud_autosave_current_notice_version()',
     'public._cloud_bad_field(jsonb,text[],text[],text[],text[])', 'public._cloud_row_status(bigint,timestamp with time zone,text,text,bigint)',
@@ -481,9 +481,9 @@ BEGIN
       t := pg_temp.up(A, fn, I1, D1, jsonb_build_array(pg_temp.row_of(fn, 'e-1')));
       IF pg_temp.err(t) <> 'not_entitled' THEN acc := acc || ' ' || fn || '=' || t; END IF;
     END LOOP;
-    t := pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L, 5, NULL)', pg_temp.h('e-blob')));
+    t := pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L::uuid, %L, 5, NULL)', A, pg_temp.h('e-blob')));
     IF pg_temp.err(t) <> 'not_entitled' THEN acc := acc || ' register=' || t; END IF;
-    t := pg_temp.call_as(A, format('SELECT public.cloud_mark_deal_synced(%L::uuid, %L::uuid)', I1, D1));
+    t := pg_temp.call_as(A, format('SELECT public.cloud_mark_deal_synced(%L::uuid, %L::uuid, %L::uuid)', A, I1, D1));
     IF pg_temp.err(t) <> 'not_entitled' THEN acc := acc || ' mark=' || t; END IF;
     UPDATE public.cloud_autosave_settings SET notice_version = 1 WHERE user_id = A;
     -- positive: the same calls succeed once the notice is current
@@ -491,8 +491,8 @@ BEGIN
     FOREACH fn IN ARRAY CHILD_FNS LOOP
       t2 := t2 || ',' || pg_temp.st(pg_temp.up(A, fn, I1, D1, jsonb_build_array(pg_temp.row_of(fn, 'e-1'))));
     END LOOP;
-    t2 := t2 || ',' || pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L, 5, NULL)', pg_temp.h('e-blob'))))
-               || ',' || pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_mark_deal_synced(%L::uuid, %L::uuid)', I1, D1)));
+    t2 := t2 || ',' || pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L::uuid, %L, 5, NULL)', A, pg_temp.h('e-blob'))))
+               || ',' || pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_mark_deal_synced(%L::uuid, %L::uuid, %L::uuid)', A, I1, D1)));
     r := r || jsonb_build_object('U1_entitlement_every_write', pg_temp.pass(acc = '' AND t2 = 'applied,applied,applied,applied,applied,applied,OK,OK', acc || ' / ' || t2));
     RAISE EXCEPTION USING ERRCODE = 'T4236';
   EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('U1_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
@@ -508,28 +508,28 @@ BEGIN
       t := pg_temp.up(S, fn, I1, D1, '[]'::jsonb);
       IF pg_temp.err(t) <> 'not_found' THEN acc := acc || ' ' || fn || '[]=' || t; END IF;
     END LOOP;
-    t := pg_temp.call_as(S, format('SELECT public.cloud_mark_deal_synced(%L::uuid, %L::uuid)', I1, D1));
+    t := pg_temp.call_as(S, format('SELECT public.cloud_mark_deal_synced(%L::uuid, %L::uuid, %L::uuid)', S, I1, D1));
     IF pg_temp.err(t) <> 'not_found' THEN acc := acc || ' mark=' || t; END IF;
-    t := pg_temp.call_as(S, format('SELECT public.cloud_delete_deal(%L::uuid)', D1));
+    t := pg_temp.call_as(S, format('SELECT public.cloud_delete_deal(%L::uuid, %L::uuid)', S, D1));
     IF pg_temp.err(t) <> 'not_found' THEN acc := acc || ' delete=' || t; END IF;
-    t := pg_temp.call_as(S, format('SELECT public.cloud_confirm_blob(%L::uuid)', BL));
+    t := pg_temp.call_as(S, format('SELECT public.cloud_confirm_blob(%L::uuid, %L::uuid)', S, BL));
     IF pg_temp.err(t) <> 'not_found' THEN acc := acc || ' confirm=' || t; END IF;
     FOREACH t2 IN ARRAY ARRAY['party:' || P1, 'checklist:' || C1, 'checklist_item:' || IT1, 'message:' || M1, 'file:' || F1] LOOP
       t := pg_temp.tomb(S, I1, split_part(t2, ':', 1), ARRAY[split_part(t2, ':', 2)::uuid]);
       IF pg_temp.st(t) <> 'not_found' THEN acc := acc || ' tomb_' || t2 || '=' || t; END IF;
     END LOOP;
     -- S has its own live blob for A'acc file content: S'acc file row must not take A'acc blob
-    PERFORM pg_temp.call_as(S, format('SELECT public.cloud_register_blob(%L, 10, NULL)', pg_temp.h('blob-other')));
+    PERFORM pg_temp.call_as(S, format('SELECT public.cloud_register_blob(%L::uuid, %L, 10, NULL)', S, pg_temp.h('blob-other')));
     t := pg_temp.up(S, 'cloud_upsert_files', I1, SD, jsonb_build_array(jsonb_build_object('local_id', 'sf-1', 'content_hash', pg_temp.h('sf'),
            'filename', 'acc.pdf', 'blob_sha256', pg_temp.h('blob-a'))));
     IF pg_temp.st(t) <> 'rejected:blob_unavailable' THEN acc := acc || ' file_blob=' || t; END IF;
     js := pg_temp.j(pg_temp.call_as(S, 'SELECT public.cloud_list_installs()'));
-    t := pg_temp.call_as(S, format('SELECT public.cloud_delete_install(%L::uuid)', I1));
+    t := pg_temp.call_as(S, format('SELECT public.cloud_delete_install(%L::uuid, %L::uuid)', S, I1));
     IF (SELECT count(*) FROM public.cloud_deals WHERE owner_user_id = A) <> 1 OR pg_temp.err(t) <> 'OK' THEN acc := acc || ' delete_install=' || t; END IF;
     r := r || jsonb_build_object('O1_owner_binding', pg_temp.pass(acc = ''
       AND jsonb_array_length(js -> 'installs') = 1 AND (js -> 'installs' -> 0 ->> 'deals')::int = 1
       AND (SELECT count(*) FROM public.cloud_deal_messages WHERE id = M1 AND removed_at IS NULL) = 1
-      AND pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_mark_deal_synced(%L::uuid, %L::uuid)', I1, D1))) = 'OK', acc || ' ' || js::text));
+      AND pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_mark_deal_synced(%L::uuid, %L::uuid, %L::uuid)', A, I1, D1))) = 'OK', acc || ' ' || js::text));
     RAISE EXCEPTION USING ERRCODE = 'T4236';
   EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('O1_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
@@ -541,13 +541,13 @@ BEGIN
       t := pg_temp.up(A, fn, I2, D1, jsonb_build_array(pg_temp.row_of(fn, 'i-1')));
       IF pg_temp.err(t) <> 'not_found' THEN acc := acc || ' ' || fn || '=' || t; END IF;
     END LOOP;
-    t := pg_temp.call_as(A, format('SELECT public.cloud_mark_deal_synced(%L::uuid, %L::uuid)', I2, D1));
+    t := pg_temp.call_as(A, format('SELECT public.cloud_mark_deal_synced(%L::uuid, %L::uuid, %L::uuid)', A, I2, D1));
     IF pg_temp.err(t) <> 'not_found' THEN acc := acc || ' mark=' || t; END IF;
     FOREACH t2 IN ARRAY ARRAY['party:' || P1, 'checklist:' || C1, 'checklist_item:' || IT1, 'message:' || M1, 'file:' || F1] LOOP
       t := pg_temp.tomb(A, I2, split_part(t2, ':', 1), ARRAY[split_part(t2, ':', 2)::uuid]);
       IF pg_temp.st(t) <> 'not_found' THEN acc := acc || ' tomb_' || t2 || '=' || t; END IF;
     END LOOP;
-    t := pg_temp.call_as(A, format('SELECT public.cloud_delete_install(%L::uuid)', I2));
+    t := pg_temp.call_as(A, format('SELECT public.cloud_delete_install(%L::uuid, %L::uuid)', A, I2));
     IF (SELECT count(*) FROM public.cloud_deals WHERE owner_user_id = A) <> 1 THEN acc := acc || ' delete_install=' || t; END IF;
     -- the same local id under a second install is a second deal
     t := pg_temp.deal(A, jsonb_build_object('source_install_id', I2, 'local_id', 't-1', 'content_hash', pg_temp.h('t-1')));
@@ -555,7 +555,7 @@ BEGIN
       AND pg_temp.st(t) = 'applied' AND pg_temp.cid(t) IS DISTINCT FROM D1
       AND (SELECT count(*) FROM public.cloud_deals WHERE owner_user_id = A AND local_transaction_id = 't-1') = 2
       AND pg_temp.st(pg_temp.up(A, 'cloud_upsert_messages', I1, D1, jsonb_build_array(pg_temp.row_of('cloud_upsert_messages', 'i-1')))) = 'applied'
-      AND pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_delete_deal(%L::uuid)', pg_temp.cid(t)))) = 'OK', acc || ' ' || t));
+      AND pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_delete_deal(%L::uuid, %L::uuid)', A, pg_temp.cid(t)))) = 'OK', acc || ' ' || t));
     RAISE EXCEPTION USING ERRCODE = 'T4236';
   EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('I1_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
@@ -567,9 +567,9 @@ BEGIN
     t2 := pg_temp.st(pg_temp.up(A, 'cloud_upsert_files', I2, u, jsonb_build_array(jsonb_build_object('local_id', 'f-2',
             'content_hash', pg_temp.h('f-2'), 'filename', 'b.pdf', 'blob_sha256', pg_temp.h('blob-a')))));
     js := pg_temp.j(pg_temp.call_as(A, 'SELECT public.cloud_list_installs()'));
-    t3 := pg_temp.call_as(A, format('SELECT public.cloud_delete_install(%L::uuid)', I1));
+    t3 := pg_temp.call_as(A, format('SELECT public.cloud_delete_install(%L::uuid, %L::uuid)', A, I1));
     ok := (SELECT purge_requested_at IS NULL FROM public.cloud_blobs WHERE id = BL);
-    js2 := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_delete_install(%L::uuid)', I2)));
+    js2 := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_delete_install(%L::uuid, %L::uuid)', A, I2)));
     r := r || jsonb_build_object('I2_list_and_delete_install', pg_temp.pass(
       t2 = 'applied' AND jsonb_array_length(js -> 'installs') = 2
       AND (SELECT sum((e ->> 'deals')::int) FROM jsonb_array_elements(js -> 'installs') e) = 2
@@ -577,7 +577,7 @@ BEGIN
       AND (js2 ->> 'blobs_fenced')::int = 1 AND (SELECT purge_requested_at IS NOT NULL FROM public.cloud_blobs WHERE id = BL)
       AND (SELECT count(*) FROM public.cloud_deals WHERE owner_user_id = A) = 0
       AND (SELECT count(*) FROM public.cloud_deals WHERE owner_user_id = S) = 1
-      AND pg_temp.err(pg_temp.call_as(A, 'SELECT public.cloud_delete_install(NULL::uuid)')) = 'invalid_input',
+      AND pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_delete_install(%L::uuid, NULL::uuid)', A))) = 'invalid_input',
       t2 || ' ' || js::text || ' ' || t3 || ' ' || js2::text));
     RAISE EXCEPTION USING ERRCODE = 'T4236';
   EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('I2_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
@@ -701,8 +701,8 @@ BEGIN
   END;
 
   BEGIN
-    t := pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L, 52428801, NULL)', pg_temp.h('big')));
-    t2 := pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L, 52428800, NULL)', pg_temp.h('big')));
+    t := pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L::uuid, %L, 52428801, NULL)', A, pg_temp.h('big')));
+    t2 := pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L::uuid, %L, 52428800, NULL)', A, pg_temp.h('big')));
     t3 := pg_temp.tomb(A, I1, 'message', (SELECT array_agg(gen_random_uuid()) FROM generate_series(1, 1001)));
     r := r || jsonb_build_object('B3_blob_and_tombstone_caps', pg_temp.pass(pg_temp.err(t) = 'too_large' AND pg_temp.err(t2) = 'OK'
       AND pg_temp.err(t3) = 'invalid_input'
@@ -848,33 +848,35 @@ BEGIN
     t := pg_temp.tomb(A, I1, 'file', ARRAY[F1]);
     ok := (SELECT purge_requested_at IS NULL FROM public.cloud_blobs WHERE id = BL);
     UPDATE public.cloud_autosave_settings SET notice_version = 0 WHERE user_id = A;  -- unentitled
-    t2 := pg_temp.call_as(A, format('SELECT public.cloud_delete_deal(%L::uuid)', u));
+    t2 := pg_temp.call_as(A, format('SELECT public.cloud_delete_deal(%L::uuid, %L::uuid)', A, u));
     r := r || jsonb_build_object('T3_shared_blob_fencing', pg_temp.pass(pg_temp.st(t) = 'removed' AND ok
       AND pg_temp.err(t2) = 'OK' AND (pg_temp.j(t2) ->> 'blobs_fenced')::int = 1
       AND (SELECT purge_requested_at IS NOT NULL FROM public.cloud_blobs WHERE id = BL)
       AND (SELECT count(*) FROM public.cloud_deals WHERE id = u) = 0
-      AND pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_delete_deal(%L::uuid)', u))) = 'not_found', t || ' ' || t2));
+      AND pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_delete_deal(%L::uuid, %L::uuid)', A, u))) = 'not_found', t || ' ' || t2));
     RAISE EXCEPTION USING ERRCODE = 'T4236';
   EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('T3_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
 
   BEGIN
     -- replacing a file'acc blob fences the old one when nothing else uses it
-    PERFORM pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L, 5, NULL)', pg_temp.h('blob-b')));
+    js := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L::uuid, %L, 5, NULL)', A, pg_temp.h('blob-b'))));
+    PERFORM pg_temp.call_as(A, format('INSERT INTO storage.objects (bucket_id, name, metadata) VALUES (%L, %L, %L::jsonb)', 'cloud-deal-files', js ->> 'storage_path', '{"size":"5"}'));
+    t2 := pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_confirm_blob(%L::uuid, %L::uuid)', A, js ->> 'blob_id')));
     t := pg_temp.up(A, 'cloud_upsert_files', I1, D1, jsonb_build_array(jsonb_build_object('local_id', 'f-1', 'content_hash', pg_temp.h('f-1b'),
            'filename', 'a.pdf', 'blob_sha256', pg_temp.h('blob-b'))));
-    r := r || jsonb_build_object('T4_replaced_blob_fenced', pg_temp.pass(pg_temp.st(t) = 'applied'
-      AND (SELECT purge_requested_at IS NOT NULL FROM public.cloud_blobs WHERE id = BL), t));
+    r := r || jsonb_build_object('T4_replaced_blob_fenced', pg_temp.pass(t2 = 'OK' AND pg_temp.st(t) = 'applied'
+      AND (SELECT purge_requested_at IS NOT NULL FROM public.cloud_blobs WHERE id = BL), t2 || ' ' || t));
     RAISE EXCEPTION USING ERRCODE = 'T4236';
   EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('T4_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
 
   -- ===================================================================== blobs and storage
   BEGIN
-    t := pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L, 10, NULL)', pg_temp.h('blob-a')));
+    t := pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L::uuid, %L, 10, NULL)', A, pg_temp.h('blob-a')));
     PERFORM pg_temp.onoff(A, false);
     PERFORM pg_temp.onoff(A, true);
-    t2 := pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L, 10, NULL)', pg_temp.h('blob-a')));
+    t2 := pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L::uuid, %L, 10, NULL)', A, pg_temp.h('blob-a')));
     r := r || jsonb_build_object('B1_register_dedupe_and_refence', pg_temp.pass(
       pg_temp.j(t) ->> 'state' = 'uploaded' AND (pg_temp.j(t) ->> 'blob_id')::uuid = BL
       AND pg_temp.j(t2) ->> 'state' = 'new' AND (pg_temp.j(t2) ->> 'blob_id')::uuid <> BL
@@ -891,7 +893,7 @@ BEGIN
   END;
 
   BEGIN
-    js := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L, 7, NULL)', pg_temp.h('blob-p'))));
+    js := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L::uuid, %L, 7, NULL)', A, pg_temp.h('blob-p'))));
     acc := js ->> 'storage_path';
     t := pg_temp.call_as(A, format('INSERT INTO storage.objects (bucket_id, name, metadata) VALUES (%L, %L, %L::jsonb)', 'cloud-deal-files', B::text || '/' || (js ->> 'blob_id'), '{"size":"7"}'));
     t2 := pg_temp.call_as(A, format('INSERT INTO storage.objects (bucket_id, name, metadata) VALUES (%L, %L, %L::jsonb)', 'cloud-deal-files', A::text || '/' || gen_random_uuid(), '{"size":"7"}'));
@@ -922,13 +924,14 @@ BEGIN
   END;
 
   BEGIN
-    js := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L, 9, NULL)', pg_temp.h('blob-c'))));
-    t := pg_temp.call_as(A, format('SELECT public.cloud_confirm_blob(%L::uuid)', js ->> 'blob_id'));
+    js := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L::uuid, %L, 9, NULL)', A, pg_temp.h('blob-c'))));
+    t := pg_temp.call_as(A, format('SELECT public.cloud_confirm_blob(%L::uuid, %L::uuid)', A, js ->> 'blob_id'));
     PERFORM pg_temp.call_as(A, format('INSERT INTO storage.objects (bucket_id, name, metadata) VALUES (%L, %L, %L::jsonb)', 'cloud-deal-files', js ->> 'storage_path', '{"size":"8"}'));
-    t2 := pg_temp.call_as(A, format('SELECT public.cloud_confirm_blob(%L::uuid)', js ->> 'blob_id'));
-    UPDATE storage.objects SET metadata = '{"size":"9"}' WHERE bucket_id = 'cloud-deal-files' AND name = js ->> 'storage_path';
+    t2 := pg_temp.call_as(A, format('SELECT public.cloud_confirm_blob(%L::uuid, %L::uuid)', A, js ->> 'blob_id'));
+    js2 := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L::uuid, %L, 9, NULL)', A, pg_temp.h('blob-c'))));
+    PERFORM pg_temp.call_as(A, format('INSERT INTO storage.objects (bucket_id, name, metadata) VALUES (%L, %L, %L::jsonb)', 'cloud-deal-files', js2 ->> 'storage_path', '{"size":"9"}'));
     r := r || jsonb_build_object('P3_confirm_states', pg_temp.pass(pg_temp.err(t) = 'object_missing' AND pg_temp.err(t2) = 'size_mismatch'
-      AND pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_confirm_blob(%L::uuid)', js ->> 'blob_id'))) = 'OK', t || t2));
+      AND pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_confirm_blob(%L::uuid, %L::uuid)', A, js2 ->> 'blob_id'))) = 'OK', t || t2 || coalesce(js2::text, 'null')));
     RAISE EXCEPTION USING ERRCODE = 'T4236';
   EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('P3_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
@@ -1100,13 +1103,26 @@ BEGIN
 
   BEGIN
     -- a registered, not uploaded blob that is fenced: only the fence term can refuse the upload
-    js := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L, 6, NULL)', pg_temp.h('blob-q'))));
+    js := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L::uuid, %L, 6, NULL)', A, pg_temp.h('blob-q'))));
     UPDATE public.cloud_blobs SET purge_requested_at = now() WHERE id = (js ->> 'blob_id')::uuid;
     t := pg_temp.call_as(A, format('INSERT INTO storage.objects (bucket_id, name, metadata) VALUES (%L, %L, %L::jsonb)', 'cloud-deal-files', js ->> 'storage_path', '{"size":"6"}'));
     r := r || jsonb_build_object('P4_no_upload_to_fenced_blob', pg_temp.pass(t LIKE 'ERR 42501%' AND pg_temp.err(pg_temp.call_as(A, 'SELECT to_jsonb(public.cloud_autosave_entitled())')) = 'true', t));
     RAISE EXCEPTION USING ERRCODE = 'T4236';
   EXCEPTION WHEN SQLSTATE 'T4236' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('P4_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
+
+  -- ===================================================================== BACKLOG-4243 PR-0 (lib/contract-4243.sql)
+  FOREACH fn IN ARRAY ARRAY['set_my_cloud_autosave', 'cloud_delete_install', 'cloud_upsert_deal', 'cloud_upsert_parties', 'cloud_upsert_checklists',
+                            'cloud_upsert_checklist_items', 'cloud_upsert_messages', 'cloud_upsert_files', 'cloud_tombstone', 'cloud_delete_deal',
+                            'cloud_mark_deal_synced', 'cloud_register_blob', 'cloud_confirm_blob'] LOOP
+    r := r || jsonb_build_object('K6_' || fn, pg_temp.k6_probe(fn));
+  END LOOP;
+  r := r || jsonb_build_object('K6_catalog', pg_temp.k6_catalog());
+  r := r || jsonb_build_object('K1_file_needs_uploaded_blob', pg_temp.k1_probe());
+  r := r || jsonb_build_object('K2_file_needs_live_message', pg_temp.k2_probe());
+  r := r || jsonb_build_object('K4_size_mismatch_fences_blob', pg_temp.k4_probe());
+  r := r || jsonb_build_object('N1_freshness_clock', pg_temp.n1_probe());
+  r := r || jsonb_build_object('N2_uploaded_blob_not_fenced', pg_temp.n2_probe());
 
   -- a deliberate red that the driver must count (proves the parser counts failures)
   r := r || jsonb_build_object('Z0_parser_counts_a_fail', pg_temp.pass(false, 'expected'));

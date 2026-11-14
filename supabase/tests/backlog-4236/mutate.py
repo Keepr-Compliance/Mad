@@ -5,7 +5,9 @@ counts as a failure), print MUTATION APPLIED + `git diff --numstat` + the change
 controls (one call, one transaction ending in RAISE) and the migration-text test, print the reds,
 then restore with `git checkout --` and assert the file is clean. Commit before running this.
 
-Usage: mutate.py <mode>[,<mode>...] | all
+Usage: mutate.py <mode>[,<mode>...] | all | round2 | check
+check: offline, no database. Counts every mode's fragments against the working tree and exits non-zero
+       when any fragment does not match its stated count.
 want 'red'   -> every listed control must turn red (others may too)
 want 'green' -> measured equivalent in this venue; kept so the claim stays checked
 """
@@ -140,8 +142,8 @@ MUT = {
   'W03_no_compare_and_set': (sub("""    WHEN p_version > 0 AND p_removed_at IS NULL AND p_base IS NOT NULL
          AND p_base IS DISTINCT FROM p_version THEN 'conflict'                                    /*ROW:cas*/""", "    WHEN false THEN 'conflict'"),
       'U3_versions_and_ids U3_child_versions', 'red'),
-  'W04_child_write_bumps_deal': (sub('  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;                     /*MSG:touch*/',
-      '  UPDATE public.cloud_deals SET last_synced_at = now(), version = version + 1 WHERE id = v_deal;'), 'U4_child_write_keeps_deal_version', 'red'),
+  'W04_child_write_bumps_deal': (sub('  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*MSG:touch*/',
+      '  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()), version = version + 1 WHERE id = v_deal;'), 'U4_child_write_keeps_deal_version', 'red'),
   'W05_row_values_unchecked': (sub("""    IF v_bad IS NOT NULL THEN                                                                /*MSG:values*/""",
       "    IF false THEN"), 'U7_row_rejects', 'red'),
   'W06_hidden_optional': (sub("       OR jsonb_typeof(r -> 'hidden_from_export') IS DISTINCT FROM 'boolean'\n", ''), 'U7_structural_refusals', 'red'),
@@ -187,7 +189,7 @@ MUT = {
       '   WHERE x.id = p_blob_id                                        /*OWNER:confirm*/'), 'O1_owner_binding', 'red'),
   'B03_confirm_no_object_check': (sub("  IF v_found IS NOT TRUE THEN RETURN jsonb_build_object('ok', false, 'error', 'object_missing'); END IF;   /*CONFIRM:exists*/\n", ''),
       'P3_confirm_states', 'red'),
-  'B04_confirm_no_size_check': (sub("  IF v_size IS DISTINCT FROM b.size_bytes::text THEN RETURN jsonb_build_object('ok', false, 'error', 'size_mismatch'); END IF;   /*CONFIRM:size*/\n", ''),
+  'B04_confirm_no_size_check': (sub("  IF v_size IS DISTINCT FROM b.size_bytes::text THEN                                          /*CONFIRM:size*/\n    UPDATE public.cloud_blobs SET purge_requested_at = now() WHERE id = b.id;                 /*CONFIRM:fence*/\n    RETURN jsonb_build_object('ok', false, 'error', 'size_mismatch');\n  END IF;\n", ''),
       'P3_confirm_states', 'red'),
   # ---------------------------------------------------------------- assignment
   'M01_assign_any_caller': (sub("  IF auth.role() IS DISTINCT FROM 'service_role' THEN                                      /*ASSIGN:role*/",
@@ -230,8 +232,8 @@ MUT.update({
       'B1_child_rows_stay_in_their_deal', 'red'),
   'MY08_upload_to_fenced_blob': (sub("                 AND b.purge_requested_at IS NULL)                                 /*STO:ins:blob*/",
       ")                                 /*STO:ins:blob*/"), 'P4_no_upload_to_fenced_blob', 'red'),
-  'MY09_party_revive_keeps_removed': (sub("        content_hash = r ->> 'content_hash', version = cur.version + 1, updated_at = now(), removed_at = NULL\n       WHERE id = cur.id RETURNING * INTO cur;\n    END IF;\n    out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,\n                                     'content_hash', cur.content_hash, 'status', v_status);\n  END LOOP;\n  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;\n  RETURN jsonb_build_object('ok', true, 'results', out);\nEND $f$;\nREVOKE ALL ON FUNCTION public.cloud_upsert_parties",
-      "        content_hash = r ->> 'content_hash', version = cur.version + 1, updated_at = now()\n       WHERE id = cur.id RETURNING * INTO cur;\n    END IF;\n    out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,\n                                     'content_hash', cur.content_hash, 'status', v_status);\n  END LOOP;\n  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;\n  RETURN jsonb_build_object('ok', true, 'results', out);\nEND $f$;\nREVOKE ALL ON FUNCTION public.cloud_upsert_parties"),
+  'MY09_party_revive_keeps_removed': (sub("        content_hash = r ->> 'content_hash', version = cur.version + 1, updated_at = now(), removed_at = NULL\n       WHERE id = cur.id RETURNING * INTO cur;\n    END IF;\n    out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,\n                                     'content_hash', cur.content_hash, 'status', v_status);\n  END LOOP;\n  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:parties*/\n  RETURN jsonb_build_object('ok', true, 'results', out);\nEND $f$;\nREVOKE ALL ON FUNCTION public.cloud_upsert_parties",
+      "        content_hash = r ->> 'content_hash', version = cur.version + 1, updated_at = now()\n       WHERE id = cur.id RETURNING * INTO cur;\n    END IF;\n    out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,\n                                     'content_hash', cur.content_hash, 'status', v_status);\n  END LOOP;\n  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:parties*/\n  RETURN jsonb_build_object('ok', true, 'results', out);\nEND $f$;\nREVOKE ALL ON FUNCTION public.cloud_upsert_parties"),
       'T7_party_revives', 'red'),
   'F01_replaced_blob_not_fenced': (sub('  PERFORM public._cloud_fence_unreferenced(v_uid, v_old_blobs);                              /*FILE:fence*/\n', ''), 'T4_replaced_blob_fenced', 'red'),
   'F02_blobs_locked_per_row': (sub("   ORDER BY b.id FOR UPDATE;                                                                 /*FILE:lockblobs*/", "   ORDER BY b.id;"), '', 'green'),
@@ -269,6 +271,17 @@ def run_trip():
     tail = [l for l in (out.stdout + out.stderr).splitlines() if l.startswith('Tests:')]
     return out.returncode, (tail[-1] if tail else 'Tests: ?')
 
+
+if sys.argv[1] == 'check':
+    bad = 0
+    for mode, (edits, targets, want) in MUT.items():
+        for fn, old, new, cnt in edits:
+            n = open(os.path.join(root, fn)).read().count(old)
+            if n != cnt:
+                bad += 1
+                print('FRAGMENT %s matched %d (want %d): %r' % (mode, n, cnt, old[:90]))
+    print('CHECK modes=%d fragments_off=%d' % (len(MUT), bad))
+    sys.exit(1 if bad else 0)
 
 if sh('git', 'status', '--porcelain', '--', M1, M2, RB).stdout.strip():
     sys.exit('migration/rollback have uncommitted changes; commit before mutating')

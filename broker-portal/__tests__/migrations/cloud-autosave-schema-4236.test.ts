@@ -72,6 +72,25 @@ const WRITE_FNS = [
 ];
 const CHILD_FNS = WRITE_FNS.filter((n) => n.startsWith('cloud_upsert_') && n !== 'cloud_upsert_deal');
 
+/** BACKLOG-4243 K6: the 13 client writes, with the argument types before and after p_expected_user_id. */
+const EXPECTED_USER_FNS: { name: string; old: string; key: 'ok' | 'success' }[] = [
+  { name: 'set_my_cloud_autosave', old: 'boolean, integer', key: 'success' },
+  { name: 'cloud_delete_install', old: 'uuid', key: 'success' },
+  { name: 'cloud_upsert_deal', old: 'jsonb', key: 'ok' },
+  { name: 'cloud_upsert_parties', old: 'uuid, uuid, jsonb', key: 'ok' },
+  { name: 'cloud_upsert_checklists', old: 'uuid, uuid, jsonb', key: 'ok' },
+  { name: 'cloud_upsert_checklist_items', old: 'uuid, uuid, jsonb', key: 'ok' },
+  { name: 'cloud_upsert_messages', old: 'uuid, uuid, jsonb', key: 'ok' },
+  { name: 'cloud_upsert_files', old: 'uuid, uuid, jsonb', key: 'ok' },
+  { name: 'cloud_tombstone', old: 'uuid, text, uuid[]', key: 'ok' },
+  { name: 'cloud_delete_deal', old: 'uuid', key: 'ok' },
+  { name: 'cloud_mark_deal_synced', old: 'uuid, uuid', key: 'ok' },
+  { name: 'cloud_register_blob', old: 'text, bigint, text', key: 'ok' },
+  { name: 'cloud_confirm_blob', old: 'uuid', key: 'ok' },
+];
+/** the first lock or write statement in a body */
+const FIRST_LOCK_OR_WRITE = /FOR (SHARE|UPDATE|NO KEY UPDATE)|\bINSERT INTO\b|\bUPDATE public\.|\bDELETE FROM\b|\bEXECUTE format\(/;
+
 describe('BACKLOG-4236 cloud auto-save migrations', () => {
   it('both files exist, M1 sorts before M2, both after 20261112170000', () => {
     const files = readdirSync(MIGRATIONS_DIR).filter((f) => f.includes('_backlog_4236_'));
@@ -164,11 +183,77 @@ describe('BACKLOG-4236 cloud auto-save migrations', () => {
     expect(M2).toContain('source_install_id uuid NOT NULL,');
     for (const name of [...CHILD_FNS, 'cloud_tombstone', 'cloud_mark_deal_synced']) {
       const f = fn(name);
-      expect(f.params.startsWith('p_source_install_id uuid,')).toBe(true);
+      expect(f.params.startsWith('p_expected_user_id uuid, p_source_install_id uuid,')).toBe(true);
       expect(f.body).toMatch(/source_install_id = (p_source_install_id|\$3)/);
       expect(f.body).toMatch(/owner_user_id = (v_uid|\$2)/);
     }
     expect(fn('cloud_delete_deal').body).not.toContain('source_install_id');
+  });
+
+  it('BACKLOG-4243 K6: each of the 13 writes takes p_expected_user_id first and refuses a different user before any lock or write', () => {
+    expect(EXPECTED_USER_FNS).toHaveLength(13);
+    for (const w of EXPECTED_USER_FNS) {
+      const f = fn(w.name);
+      expect(f.params.startsWith('p_expected_user_id uuid, ')).toBe(true);
+      const nullCheck = f.body.search(/IF v_uid IS NULL THEN RETURN jsonb_build_object\(/);
+      const check = f.body.indexOf(
+        `IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('${w.key}', false, 'error', 'wrong_account'); END IF;`,
+      );
+      expect(nullCheck).toBeGreaterThan(0);
+      expect(check).toBeGreaterThan(nullCheck);
+      expect(f.body.match(/p_expected_user_id/g)).toHaveLength(1);
+      const firstWrite = f.body.search(FIRST_LOCK_OR_WRITE);
+      expect(firstWrite).toBeGreaterThan(check);
+      // the earlier signature is dropped right before the new one is created; grants name the new one
+      const drop = `DROP FUNCTION IF EXISTS public.${w.name}(${w.old}); CREATE OR REPLACE FUNCTION public.${w.name}(p_expected_user_id uuid, `;
+      expect(M2.split(drop)).toHaveLength(2);
+      expect(M2).toContain(`REVOKE ALL ON FUNCTION public.${w.name}(uuid, ${w.old}) FROM PUBLIC, anon, authenticated, service_role;`);
+      expect(M2).toContain(`GRANT EXECUTE ON FUNCTION public.${w.name}(uuid, ${w.old}) TO authenticated;`);
+      expect(M2).not.toContain(`ON FUNCTION public.${w.name}(${w.old})`);
+    }
+    // every client write is in the list (positive: the list is not a subset of what the file defines)
+    const writes = FNS.filter((f) => /^(cloud_upsert_|cloud_tombstone|cloud_delete_|cloud_mark_|cloud_register_|cloud_confirm_|set_my_)/.test(f.name));
+    expect(writes.map((f) => f.name).sort()).toEqual(EXPECTED_USER_FNS.map((w) => w.name).sort());
+    // reads keep their signatures
+    for (const name of ['get_my_cloud_autosave_state', 'cloud_list_installs', 'cloud_autosave_entitled']) {
+      expect(fn(name).params).toBe('');
+    }
+  });
+
+  it('BACKLOG-4243 K1, K2, K4: a file attaches only an uploaded blob and a live message; a size mismatch fences the blob', () => {
+    const files = fn('cloud_upsert_files').body;
+    expect(files).toMatch(/AND b\.sha256 = r ->> 'blob_sha256' AND b\.uploaded_at IS NOT NULL \/\*FILE:uploaded\*\/ AND b\.purge_requested_at IS NULL;/);
+    expect(files).toMatch(/AND m\.local_message_id = r ->> 'message_local_id' AND m\.removed_at IS NULL; \/\*FILE:livemessage\*\//);
+    const confirm = fn('cloud_confirm_blob').body;
+    expect(confirm).toContain(
+      "IF v_size IS DISTINCT FROM b.size_bytes::text THEN /*CONFIRM:size*/ UPDATE public.cloud_blobs SET purge_requested_at = now() WHERE id = b.id; /*CONFIRM:fence*/ RETURN jsonb_build_object('ok', false, 'error', 'size_mismatch'); END IF;",
+    );
+  });
+
+  it('freshness: each deal touch reads the clock once after its lock and never moves last_synced_at back; mark sets both from one value', () => {
+    expect(M2).not.toMatch(/last_synced_at = now\(\)|last_full_sync_at = now\(\)/);
+    for (const w of EXPECTED_USER_FNS) {
+      expect((fn(w.name).body.match(/clock_timestamp\(\)/g) ?? []).length).toBeLessThanOrEqual(1);
+    }
+    for (const name of [...CHILD_FNS, 'cloud_upsert_deal', 'cloud_tombstone']) {
+      const b = fn(name).body;
+      expect(b).toMatch(/last_synced_at = greatest\(last_synced_at, (clock_timestamp\(\)|v_now)\)/);
+      expect(b.match(/clock_timestamp\(\)/g) ?? []).toHaveLength(1);
+      expect(b.search(/clock_timestamp\(\)/)).toBeGreaterThan(b.search(/FOR (UPDATE|NO KEY UPDATE)/));
+    }
+    const mark = fn('cloud_mark_deal_synced').body;
+    const lock = mark.indexOf('FOR NO KEY UPDATE;');
+    const clock = mark.indexOf('v_at := clock_timestamp();');
+    expect(lock).toBeGreaterThan(0);
+    expect(clock).toBeGreaterThan(lock);
+    expect(mark).toContain('UPDATE public.cloud_deals SET last_full_sync_at = v_at, last_synced_at = v_at WHERE id = v_deal;');
+  });
+
+  it('confirm returns uploaded for an uploaded blob before reading storage', () => {
+    const b = fn('cloud_confirm_blob').body;
+    const early = b.indexOf("IF b.uploaded_at IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'state', 'uploaded'); END IF;");
+    expect(early).toBeGreaterThan(0);
+    expect(early).toBeLessThan(b.indexOf('FROM storage.objects'));
   });
 
   it('the state, entitlement, licence and install-list functions are STABLE and neither lock nor write', () => {
@@ -204,6 +289,10 @@ describe('BACKLOG-4236 cloud auto-save migrations', () => {
 
   it('the rollback removes every function, table, policy, bucket, key row and ledger row', () => {
     for (const f of FNS) expect(RB).toContain(`DROP FUNCTION IF EXISTS public.${f.name}(`);
+    for (const w of EXPECTED_USER_FNS) {
+      expect(RB).toContain(`DROP FUNCTION IF EXISTS public.${w.name}(uuid, ${w.old});`);
+      expect(RB).toContain(`DROP FUNCTION IF EXISTS public.${w.name}(${w.old});`);
+    }
     for (const t of TABLES) expect(RB).toContain(`DROP TABLE IF EXISTS public.${t};`);
     expect(RB).toContain("DELETE FROM storage.buckets WHERE id = 'cloud-deal-files';");
     expect(RB).toContain("DELETE FROM public.feature_definitions WHERE key IN ('cloud_autosave', 'cloud_autosave_assignable');");

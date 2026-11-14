@@ -20,6 +20,16 @@
 --   service_role: assign_member_addon
 --   no API role: _cloud_autosave_license, _cloud_autosave_current_notice_version,
 --     _cloud_bad_field, _cloud_row_status, _cloud_fence_unreferenced
+-- Every client write takes p_expected_user_id uuid as its first argument and returns error
+--   'wrong_account', with no write, when it differs from auth.uid(): set_my_cloud_autosave,
+--   cloud_delete_install, cloud_upsert_deal, cloud_upsert_parties, cloud_upsert_checklists,
+--   cloud_upsert_checklist_items, cloud_upsert_messages, cloud_upsert_files, cloud_tombstone,
+--   cloud_delete_deal, cloud_mark_deal_synced, cloud_register_blob, cloud_confirm_blob. Each one's
+--   earlier signature (without that argument) is dropped right before the new one is created.
+-- A file row attaches only an uploaded, unfenced blob of the caller and only a live message.
+-- Freshness: each write reads clock_timestamp() once, after its deal row lock, and sets
+--   last_synced_at = greatest(last_synced_at, <that value>); cloud_mark_deal_synced sets
+--   last_full_sync_at and last_synced_at to one such value.
 -- Lock order in every write: the caller's settings row, then deals (id order), then blobs (id order,
 --   all of a call's blobs in one statement), then child rows of the locked deals. Tombstones and
 --   deletes fence blobs once, after their rows, through _cloud_fence_unreferenced (id order).
@@ -512,13 +522,16 @@ REVOKE ALL ON FUNCTION public.get_my_cloud_autosave_state() FROM PUBLIC, anon, a
 GRANT EXECUTE ON FUNCTION public.get_my_cloud_autosave_state() TO authenticated;
 
 -- ============================================================================ on / off and installs
-CREATE OR REPLACE FUNCTION public.set_my_cloud_autosave(p_enabled boolean, p_notice_version integer DEFAULT NULL) RETURNS jsonb
+DROP FUNCTION IF EXISTS public.set_my_cloud_autosave(boolean, integer);
+CREATE OR REPLACE FUNCTION public.set_my_cloud_autosave(p_expected_user_id uuid, p_enabled boolean, p_notice_version integer DEFAULT NULL) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_cur integer := public._cloud_autosave_current_notice_version();
         v_d jsonb; v_fenced integer; v_ai integer;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('success', false, 'error', 'not_authorized'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('success', false, 'error', 'wrong_account'); END IF;   /*WHO:set*/
   IF p_enabled IS NULL THEN RETURN jsonb_build_object('success', false, 'error', 'invalid_input'); END IF;
+  -- Default settings row (enabled = false), locked FOR UPDATE below; a refused call can leave it in place.
   INSERT INTO public.cloud_autosave_settings (user_id) VALUES (v_uid) ON CONFLICT (user_id) DO NOTHING;
   PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR UPDATE;
   IF p_enabled THEN
@@ -556,8 +569,8 @@ BEGIN
   RETURN jsonb_build_object('success', true, 'enabled', false, 'deleted', v_d, 'blobs_fenced', v_fenced,
                             'ai_apps_disconnected', v_ai);
 END $f$;
-REVOKE ALL ON FUNCTION public.set_my_cloud_autosave(boolean, integer) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.set_my_cloud_autosave(boolean, integer) TO authenticated;
+REVOKE ALL ON FUNCTION public.set_my_cloud_autosave(uuid, boolean, integer) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.set_my_cloud_autosave(uuid, boolean, integer) TO authenticated;
 
 CREATE OR REPLACE FUNCTION public.cloud_list_installs() RETURNS jsonb
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = '' AS $f$
@@ -576,12 +589,15 @@ GRANT EXECUTE ON FUNCTION public.cloud_list_installs() TO authenticated;
 
 -- Deletes one install's deals. Owner only, no entitlement. A blob is fenced only when no file row
 -- (of any install) still references it.
-CREATE OR REPLACE FUNCTION public.cloud_delete_install(p_source_install_id uuid) RETURNS jsonb
+DROP FUNCTION IF EXISTS public.cloud_delete_install(uuid);
+CREATE OR REPLACE FUNCTION public.cloud_delete_install(p_expected_user_id uuid, p_source_install_id uuid) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_blobs uuid[]; v_n integer; v_fenced integer;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('success', false, 'error', 'not_authorized'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('success', false, 'error', 'wrong_account'); END IF;   /*WHO:delete_install*/
   IF p_source_install_id IS NULL THEN RETURN jsonb_build_object('success', false, 'error', 'invalid_input'); END IF;
+  -- Default settings row (enabled = false), locked FOR UPDATE below; a refused call can leave it in place.
   INSERT INTO public.cloud_autosave_settings (user_id) VALUES (v_uid) ON CONFLICT (user_id) DO NOTHING;
   PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR UPDATE;
   BEGIN
@@ -598,8 +614,8 @@ BEGIN
   END;
   RETURN jsonb_build_object('success', true, 'deleted_deals', v_n, 'blobs_fenced', v_fenced);
 END $f$;
-REVOKE ALL ON FUNCTION public.cloud_delete_install(uuid) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.cloud_delete_install(uuid) TO authenticated;
+REVOKE ALL ON FUNCTION public.cloud_delete_install(uuid, uuid) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_delete_install(uuid, uuid) TO authenticated;
 
 -- ============================================================================ assignment (service role)
 CREATE OR REPLACE FUNCTION public.assign_member_addon(p_organization_id uuid, p_user_id uuid, p_addon_key text,
@@ -650,12 +666,14 @@ REVOKE ALL ON FUNCTION public.assign_member_addon(uuid, uuid, text, boolean, tim
 GRANT EXECUTE ON FUNCTION public.assign_member_addon(uuid, uuid, text, boolean, timestamptz) TO service_role;
 
 -- ============================================================================ deal upsert
-CREATE OR REPLACE FUNCTION public.cloud_upsert_deal(p_deal jsonb) RETURNS jsonb
+DROP FUNCTION IF EXISTS public.cloud_upsert_deal(jsonb);
+CREATE OR REPLACE FUNCTION public.cloud_upsert_deal(p_expected_user_id uuid, p_deal jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_local text; v_hash text; v_base bigint; v_inst uuid; v_org uuid;
-        d record; v_status text; v_det text; v_st text; v_bad text;
+        d record; v_status text; v_det text; v_st text; v_bad text; v_now timestamptz;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:deal*/
   PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
   IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:deal*/
     RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
@@ -702,6 +720,7 @@ BEGIN
    WHERE x.owner_user_id = v_uid AND x.source_install_id = v_inst AND x.local_transaction_id = v_local FOR UPDATE;
   v_status := public._cloud_row_status(d.version, NULL, d.content_hash, v_hash, v_base);
   IF v_status = 'applied' THEN
+    v_now := clock_timestamp();                                                              /*CLOCK:deal*/
     UPDATE public.cloud_deals SET
       organization_id = v_org,
       property_address = p_deal ->> 'property_address', property_street = p_deal ->> 'property_street',
@@ -718,26 +737,28 @@ BEGIN
       is_confirmed = (v_st IS NULL OR v_st <> 'rejected')
                      AND (v_det IS NULL OR v_det NOT IN ('pending', 'rejected')),               /*DEAL:confirmed*/
       source_updated_at = (p_deal ->> 'source_updated_at')::timestamptz,
-      content_hash = v_hash, version = d.version + 1, updated_at = now(), last_synced_at = now()
+      content_hash = v_hash, version = d.version + 1, updated_at = now(), last_synced_at = greatest(last_synced_at, v_now)
      WHERE id = d.id RETURNING * INTO d;
   END IF;
   RETURN jsonb_build_object('ok', true, 'results', jsonb_build_array(jsonb_build_object(
     'local_id', v_local, 'cloud_id', d.id, 'version', d.version, 'content_hash', d.content_hash, 'status', v_status)));
 END $f$;
-REVOKE ALL ON FUNCTION public.cloud_upsert_deal(jsonb) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.cloud_upsert_deal(jsonb) TO authenticated;
+REVOKE ALL ON FUNCTION public.cloud_upsert_deal(uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_upsert_deal(uuid, jsonb) TO authenticated;
 
 -- ============================================================================ child upserts
 -- Shared rules: settings FOR SHARE, entitlement, the deal must be the caller's and this install's
 -- (else not_found), at most 500 rows and 16 MB per batch, structural errors refuse the batch,
 -- value errors reject the row.
 
-CREATE OR REPLACE FUNCTION public.cloud_upsert_parties(p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
+DROP FUNCTION IF EXISTS public.cloud_upsert_parties(uuid, uuid, jsonb);
+CREATE OR REPLACE FUNCTION public.cloud_upsert_parties(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_deal uuid; r jsonb; i integer := 0; out jsonb := '[]'::jsonb;
         cur record; v_status text; v_bad text;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:parties*/
   PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
   IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:parties*/
     RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
@@ -788,18 +809,20 @@ BEGIN
     out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
                                      'content_hash', cur.content_hash, 'status', v_status);
   END LOOP;
-  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:parties*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
-REVOKE ALL ON FUNCTION public.cloud_upsert_parties(uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.cloud_upsert_parties(uuid, uuid, jsonb) TO authenticated;
+REVOKE ALL ON FUNCTION public.cloud_upsert_parties(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_upsert_parties(uuid, uuid, uuid, jsonb) TO authenticated;
 
-CREATE OR REPLACE FUNCTION public.cloud_upsert_checklists(p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
+DROP FUNCTION IF EXISTS public.cloud_upsert_checklists(uuid, uuid, jsonb);
+CREATE OR REPLACE FUNCTION public.cloud_upsert_checklists(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_deal uuid; r jsonb; i integer := 0; out jsonb := '[]'::jsonb;
         cur record; v_status text; v_bad text; v_private boolean;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:checklists*/
   PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
   IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:checklists*/
     RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
@@ -848,18 +871,20 @@ BEGIN
     out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
                                      'content_hash', cur.content_hash, 'status', v_status);
   END LOOP;
-  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:checklists*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
-REVOKE ALL ON FUNCTION public.cloud_upsert_checklists(uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.cloud_upsert_checklists(uuid, uuid, jsonb) TO authenticated;
+REVOKE ALL ON FUNCTION public.cloud_upsert_checklists(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_upsert_checklists(uuid, uuid, uuid, jsonb) TO authenticated;
 
-CREATE OR REPLACE FUNCTION public.cloud_upsert_checklist_items(p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
+DROP FUNCTION IF EXISTS public.cloud_upsert_checklist_items(uuid, uuid, jsonb);
+CREATE OR REPLACE FUNCTION public.cloud_upsert_checklist_items(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_deal uuid; r jsonb; i integer := 0; out jsonb := '[]'::jsonb;
         cur record; v_status text; v_bad text; p record;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:items*/
   PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
   IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:items*/
     RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
@@ -917,18 +942,20 @@ BEGIN
     out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
                                      'content_hash', cur.content_hash, 'status', v_status);
   END LOOP;
-  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:items*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
-REVOKE ALL ON FUNCTION public.cloud_upsert_checklist_items(uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.cloud_upsert_checklist_items(uuid, uuid, jsonb) TO authenticated;
+REVOKE ALL ON FUNCTION public.cloud_upsert_checklist_items(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_upsert_checklist_items(uuid, uuid, uuid, jsonb) TO authenticated;
 
-CREATE OR REPLACE FUNCTION public.cloud_upsert_messages(p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
+DROP FUNCTION IF EXISTS public.cloud_upsert_messages(uuid, uuid, jsonb);
+CREATE OR REPLACE FUNCTION public.cloud_upsert_messages(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_deal uuid; r jsonb; i integer := 0; out jsonb := '[]'::jsonb;
         cur record; v_status text; v_body text; v_trunc boolean; v_kind text; v_state text; v_bad text;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:messages*/
   PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
   IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:messages*/
     RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
@@ -996,18 +1023,20 @@ BEGIN
     out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
                                      'content_hash', cur.content_hash, 'status', v_status, 'body_truncated', cur.body_truncated);
   END LOOP;
-  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;                     /*MSG:touch*/
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*MSG:touch*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
-REVOKE ALL ON FUNCTION public.cloud_upsert_messages(uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.cloud_upsert_messages(uuid, uuid, jsonb) TO authenticated;
+REVOKE ALL ON FUNCTION public.cloud_upsert_messages(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_upsert_messages(uuid, uuid, uuid, jsonb) TO authenticated;
 
-CREATE OR REPLACE FUNCTION public.cloud_upsert_files(p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
+DROP FUNCTION IF EXISTS public.cloud_upsert_files(uuid, uuid, jsonb);
+CREATE OR REPLACE FUNCTION public.cloud_upsert_files(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_deal uuid; r jsonb; i integer := 0; out jsonb := '[]'::jsonb;
         cur record; v_status text; v_bad text; v_msg uuid; v_blob uuid; v_old_blob uuid; v_old_blobs uuid[] := '{}';
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:files*/
   PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
   IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:files*/
     RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
@@ -1056,7 +1085,8 @@ BEGIN
     IF r ->> 'message_local_id' IS NOT NULL THEN
       SELECT m.id INTO v_msg FROM public.cloud_deal_messages m
        WHERE m.cloud_deal_id = v_deal AND m.channel_kind = r ->> 'message_channel_kind'
-         AND m.local_message_id = r ->> 'message_local_id';                                   /*FILE:message*/
+         AND m.local_message_id = r ->> 'message_local_id'
+         AND m.removed_at IS NULL;                                                            /*FILE:livemessage*/
       IF v_msg IS NULL THEN
         out := out || jsonb_build_object('local_id', r ->> 'local_id', 'status', 'rejected', 'reason', 'parent_missing');
         CONTINUE;
@@ -1066,6 +1096,7 @@ BEGIN
       SELECT b.id INTO v_blob FROM public.cloud_blobs b
        WHERE b.owner_user_id = v_uid                                                          /*OWNER:fileblob*/
          AND b.sha256 = r ->> 'blob_sha256'
+         AND b.uploaded_at IS NOT NULL                                                        /*FILE:uploaded*/
          AND b.purge_requested_at IS NULL;                                                    /*FILE:unfenced*/
       IF v_blob IS NULL THEN
         out := out || jsonb_build_object('local_id', r ->> 'local_id', 'status', 'rejected', 'reason', 'blob_unavailable');
@@ -1093,22 +1124,24 @@ BEGIN
                                      'content_hash', cur.content_hash, 'status', v_status);
   END LOOP;
   PERFORM public._cloud_fence_unreferenced(v_uid, v_old_blobs);                              /*FILE:fence*/
-  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:files*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
-REVOKE ALL ON FUNCTION public.cloud_upsert_files(uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.cloud_upsert_files(uuid, uuid, jsonb) TO authenticated;
+REVOKE ALL ON FUNCTION public.cloud_upsert_files(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_upsert_files(uuid, uuid, uuid, jsonb) TO authenticated;
 
 -- ============================================================================ tombstone, delete, mark synced
 -- Owner and install only; no entitlement. Locks the caller's own deals that hold the named rows
 -- (id order) before the rows.
-CREATE OR REPLACE FUNCTION public.cloud_tombstone(p_source_install_id uuid, p_kind text, p_cloud_ids uuid[]) RETURNS jsonb
+DROP FUNCTION IF EXISTS public.cloud_tombstone(uuid, text, uuid[]);
+CREATE OR REPLACE FUNCTION public.cloud_tombstone(p_expected_user_id uuid, p_source_install_id uuid, p_kind text, p_cloud_ids uuid[]) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_tab text; v_id uuid; out jsonb := '[]'::jsonb;
         v_row_id uuid; v_row_deal uuid; v_row_removed timestamptz; v_row_version bigint; v_blob uuid; v_deals uuid[];
-        v_fence uuid[] := '{}';
+        v_fence uuid[] := '{}'; v_now timestamptz;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_authorized'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:tombstone*/
   v_tab := CASE p_kind WHEN 'party' THEN 'cloud_deal_parties' WHEN 'checklist' THEN 'cloud_deal_checklists'
                        WHEN 'checklist_item' THEN 'cloud_deal_checklist_items' WHEN 'message' THEN 'cloud_deal_messages'
                        WHEN 'file' THEN 'cloud_deal_files' END;
@@ -1122,6 +1155,7 @@ BEGIN
          AND d.id IN (SELECT t.cloud_deal_id FROM public.%I t WHERE t.id = ANY ($3) AND t.owner_user_id = $1)
        ORDER BY d.id FOR NO KEY UPDATE) x', v_tab)
     INTO v_deals USING v_uid, p_source_install_id, p_cloud_ids;                              /*TOMB:lockdeals*/
+  v_now := clock_timestamp();                                                                /*CLOCK:tombstone*/
   FOREACH v_id IN ARRAY p_cloud_ids LOOP
     v_row_id := NULL;
     EXECUTE format(
@@ -1164,21 +1198,23 @@ BEGIN
        WHERE f.id = v_row_id RETURNING f.version INTO v_row_version;
       v_fence := v_fence || v_blob;
     END IF;
-    UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_row_deal;
+    UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, v_now) WHERE id = v_row_deal;
     out := out || jsonb_build_object('cloud_id', v_id, 'status', 'removed', 'version', v_row_version);
   END LOOP;
   PERFORM public._cloud_fence_unreferenced(v_uid, v_fence);                                  /*TOMB:fence*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
-REVOKE ALL ON FUNCTION public.cloud_tombstone(uuid, text, uuid[]) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.cloud_tombstone(uuid, text, uuid[]) TO authenticated;
+REVOKE ALL ON FUNCTION public.cloud_tombstone(uuid, uuid, text, uuid[]) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_tombstone(uuid, uuid, text, uuid[]) TO authenticated;
 
 -- Owner only, any install, no entitlement.
-CREATE OR REPLACE FUNCTION public.cloud_delete_deal(p_cloud_deal_id uuid) RETURNS jsonb
+DROP FUNCTION IF EXISTS public.cloud_delete_deal(uuid);
+CREATE OR REPLACE FUNCTION public.cloud_delete_deal(p_expected_user_id uuid, p_cloud_deal_id uuid) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_deal uuid; v_d jsonb; v_blobs uuid[]; v_fenced integer;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_authorized'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:delete_deal*/
   IF p_cloud_deal_id IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'invalid_input'); END IF;
   PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
   SELECT d.id INTO v_deal FROM public.cloud_deals d
@@ -1197,34 +1233,42 @@ BEGIN
   v_fenced := public._cloud_fence_unreferenced(v_uid, v_blobs);
   RETURN jsonb_build_object('ok', true, 'deleted', v_d, 'blobs_fenced', v_fenced);
 END $f$;
-REVOKE ALL ON FUNCTION public.cloud_delete_deal(uuid) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.cloud_delete_deal(uuid) TO authenticated;
+REVOKE ALL ON FUNCTION public.cloud_delete_deal(uuid, uuid) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_delete_deal(uuid, uuid) TO authenticated;
 
-CREATE OR REPLACE FUNCTION public.cloud_mark_deal_synced(p_source_install_id uuid, p_cloud_deal_id uuid) RETURNS jsonb
+DROP FUNCTION IF EXISTS public.cloud_mark_deal_synced(uuid, uuid);
+CREATE OR REPLACE FUNCTION public.cloud_mark_deal_synced(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
-DECLARE v_uid uuid := auth.uid(); v_at timestamptz;
+DECLARE v_uid uuid := auth.uid(); v_at timestamptz; v_deal uuid;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:mark_synced*/
   PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
   IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:mark_synced*/
     RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
   END IF;
-  UPDATE public.cloud_deals d SET last_full_sync_at = now(), last_synced_at = now()
+  SELECT d.id INTO v_deal FROM public.cloud_deals d
    WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:mark_synced*/
      AND d.source_install_id = p_source_install_id                                           /*INSTALL:mark_synced*/
-  RETURNING d.last_full_sync_at INTO v_at;
-  IF v_at IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_found'); END IF;
+   FOR NO KEY UPDATE;
+  IF v_deal IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_found'); END IF;
+  v_at := clock_timestamp();                                                                 /*CLOCK:mark*/
+  UPDATE public.cloud_deals SET last_full_sync_at = v_at, last_synced_at = v_at WHERE id = v_deal;
   RETURN jsonb_build_object('ok', true, 'last_full_sync_at', v_at);
 END $f$;
-REVOKE ALL ON FUNCTION public.cloud_mark_deal_synced(uuid, uuid) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.cloud_mark_deal_synced(uuid, uuid) TO authenticated;
+REVOKE ALL ON FUNCTION public.cloud_mark_deal_synced(uuid, uuid, uuid) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_mark_deal_synced(uuid, uuid, uuid) TO authenticated;
 
 -- ============================================================================ blobs
-CREATE OR REPLACE FUNCTION public.cloud_register_blob(p_sha256 text, p_size_bytes bigint, p_mime_type text) RETURNS jsonb
+-- Client order for a blob: register; on state 'pending' confirm first and upload only when confirm
+-- returns object_missing; on size_mismatch the blob is fenced and the next register returns a new id.
+DROP FUNCTION IF EXISTS public.cloud_register_blob(text, bigint, text);
+CREATE OR REPLACE FUNCTION public.cloud_register_blob(p_expected_user_id uuid, p_sha256 text, p_size_bytes bigint, p_mime_type text) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); b record; v_id uuid := gen_random_uuid();
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:register*/
   PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR SHARE;
   IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:register*/
     RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
@@ -1241,27 +1285,33 @@ BEGIN
   RETURN jsonb_build_object('ok', true, 'blob_id', b.id, 'storage_path', b.storage_path,
     'state', CASE WHEN b.id = v_id THEN 'new' WHEN b.uploaded_at IS NULL THEN 'pending' ELSE 'uploaded' END);
 END $f$;
-REVOKE ALL ON FUNCTION public.cloud_register_blob(text, bigint, text) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.cloud_register_blob(text, bigint, text) TO authenticated;
+REVOKE ALL ON FUNCTION public.cloud_register_blob(uuid, text, bigint, text) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_register_blob(uuid, text, bigint, text) TO authenticated;
 
-CREATE OR REPLACE FUNCTION public.cloud_confirm_blob(p_blob_id uuid) RETURNS jsonb
+DROP FUNCTION IF EXISTS public.cloud_confirm_blob(uuid);
+CREATE OR REPLACE FUNCTION public.cloud_confirm_blob(p_expected_user_id uuid, p_blob_id uuid) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); b record; v_size text; v_found boolean;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_found'); END IF;
+  IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:confirm*/
   SELECT * INTO b FROM public.cloud_blobs x
    WHERE x.id = p_blob_id AND x.owner_user_id = v_uid                                        /*OWNER:confirm*/
      AND x.purge_requested_at IS NULL FOR UPDATE;
   IF b.id IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_found'); END IF;
+  IF b.uploaded_at IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'state', 'uploaded'); END IF;   /*CONFIRM:already*/
   SELECT true, o.metadata ->> 'size' INTO v_found, v_size FROM storage.objects o
    WHERE o.bucket_id = 'cloud-deal-files' AND o.name = b.storage_path;
   IF v_found IS NOT TRUE THEN RETURN jsonb_build_object('ok', false, 'error', 'object_missing'); END IF;   /*CONFIRM:exists*/
-  IF v_size IS DISTINCT FROM b.size_bytes::text THEN RETURN jsonb_build_object('ok', false, 'error', 'size_mismatch'); END IF;   /*CONFIRM:size*/
+  IF v_size IS DISTINCT FROM b.size_bytes::text THEN                                          /*CONFIRM:size*/
+    UPDATE public.cloud_blobs SET purge_requested_at = now() WHERE id = b.id;                 /*CONFIRM:fence*/
+    RETURN jsonb_build_object('ok', false, 'error', 'size_mismatch');
+  END IF;
   UPDATE public.cloud_blobs SET uploaded_at = coalesce(uploaded_at, now()) WHERE id = b.id;
   RETURN jsonb_build_object('ok', true, 'state', 'uploaded');
 END $f$;
-REVOKE ALL ON FUNCTION public.cloud_confirm_blob(uuid) FROM PUBLIC, anon, authenticated, service_role;
-GRANT EXECUTE ON FUNCTION public.cloud_confirm_blob(uuid) TO authenticated;
+REVOKE ALL ON FUNCTION public.cloud_confirm_blob(uuid, uuid) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public.cloud_confirm_blob(uuid, uuid) TO authenticated;
 
 -- ============================================================================ storage policies
 DROP POLICY IF EXISTS "Cloud deal files: owner uploads registered blob" ON storage.objects;
