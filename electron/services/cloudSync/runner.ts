@@ -159,11 +159,18 @@ export class CloudSyncRunner {
     while (this.running) await this.whenIdle();
     let release: () => void = () => undefined;
     this.running = new Promise<PassSummary>((r) => (release = () => r({ outcome: "done", done: 0, failed: 0 })));
+    // A stop meant for an earlier pass does not apply to this action.
+    this.stopRequested = false;
     try {
       return await fn();
     } finally {
       this.running = null;
       release();
+      // A pass that was triggered while the lock was held runs now.
+      if (this.queued) {
+        this.queued = false;
+        void this.runPass().catch(() => undefined);
+      }
     }
   }
 
@@ -184,8 +191,10 @@ export class CloudSyncRunner {
         const recorded = new Set(
           store.readUserState(db, this.deps.projectRef, userId).filter((s) => s.entity === "deal" && s.cloud_id).map((s) => s.cloud_id),
         );
-        for (const on of deals.values()) {
-          if (recorded.has(on.cloudId)) continue;
+        // Read again at click time: a deal on this computer is never deleted from here.
+        const here = store.readEligibleDealIds(db, userId);
+        for (const [localId, on] of deals) {
+          if (recorded.has(on.cloudId) || here.has(localId)) continue;
           this.guard(pinned);
           const res = await this.deps.client.deleteDeal(userId, on.cloudId);
           this.stopOn(res);
@@ -524,6 +533,8 @@ export class CloudSyncRunner {
       }
       for (const r of Array.isArray(res.body.rows) ? (res.body.rows as Array<Record<string, unknown>>) : []) {
         if (!r || typeof r !== "object" || typeof r.cloud_id !== "string" || typeof r.local_id !== "string") continue;
+        // A moved child has a removed row on the old deal and a live one on the new: keep the live one.
+        if (r.removed === true && out.get(r.local_id)?.removed === false) continue;
         out.set(r.local_id, {
           cloudId: r.cloud_id,
           cloudDealId: typeof r.cloud_deal_id === "string" ? r.cloud_deal_id : null,
@@ -613,14 +624,36 @@ export class CloudSyncRunner {
     }
 
     let orphanDeals = 0;
-    for (const on of onlineDeals.values()) if (!recordedDealCloudIds.has(on.cloudId)) orphanDeals++;
+    // An online deal of this install with no local record:
+    // - its deal is on this computer and eligible (a first upload that crashed before the local
+    //   record): ADOPT it. The server keys a deal by (owner, install, local id), so the next
+    //   upsert returns this same cloud id.
+    // - otherwise: counted for Settings, never deleted here.
+    const adopt: Array<{ localId: string; cloudId: string }> = [];
+    for (const [localId, on] of onlineDeals) {
+      if (recordedDealCloudIds.has(on.cloudId)) continue;
+      if (eligible.has(localId)) {
+        if (!dealsWithState.has(localId)) {
+          adopt.push({ localId, cloudId: on.cloudId });
+          mark.add(localId);
+        }
+        continue;
+      }
+      orphanDeals++;
+    }
 
     const summary: ReconcileSummary = {
       orphanDeals,
       deletesDeferred: deleteCandidates.length - toDelete.length,
       marked: mark.size,
     };
-    store.applyReconcile(db, projectRef, pinned.userId, { nullHashes, markDeals: [...mark], summaryJson: JSON.stringify(summary) }, this.now());
+    store.applyReconcile(
+      db,
+      projectRef,
+      pinned.userId,
+      { nullHashes, markDeals: [...mark], adoptDeals: adopt, summaryJson: JSON.stringify(summary) },
+      this.now(),
+    );
     return summary;
   }
 

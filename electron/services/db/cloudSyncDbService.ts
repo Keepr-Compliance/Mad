@@ -6,6 +6,7 @@
  */
 import { randomUUID, createHash } from "crypto";
 import {
+  ADOPT_DEAL_STATE_SQL,
   COUNT_PARKED_FOR_USER_SQL,
   MARK_CHILD_REMOVED_SQL,
   MARK_DEAL_SQL,
@@ -558,6 +559,8 @@ export function readDealsWithUnsentChildren(db: SqlDb, projectRef: string, userI
 export interface ReconcileWrites {
   nullHashes: Array<{ entity: string; localId: string }>;
   markDeals: string[];
+  /** Online deals of this install whose local deal exists with no record: record the cloud id, no hash. */
+  adoptDeals?: Array<{ localId: string; cloudId: string }>;
   summaryJson: string;
 }
 
@@ -570,6 +573,8 @@ export function applyReconcile(db: SqlDb, projectRef: string, userId: string, w:
   db.transaction(() => {
     const nul = db.prepare(NULL_STATE_HASH_BY_CLOUD_ID_SQL);
     for (const n of w.nullHashes) nul.run(projectRef, userId, n.entity, n.localId);
+    const adopt = db.prepare(ADOPT_DEAL_STATE_SQL);
+    for (const a of w.adoptDeals ?? []) adopt.run(projectRef, userId, a.localId, a.localId, a.cloudId, a.cloudId, nowIso(now));
     const mark = db.prepare(MARK_DEAL_SQL);
     for (const id of w.markDeals) mark.run(id);
     db.prepare(UNPARK_USER_MARKS_SQL).run(userId);

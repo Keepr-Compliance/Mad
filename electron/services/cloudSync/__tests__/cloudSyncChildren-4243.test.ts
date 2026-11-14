@@ -598,3 +598,145 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
     });
   });
 });
+
+// ================================================================ review round (PR-3)
+import fs from "fs";
+import path from "path";
+import { CHECKLIST_HASHED_FIELDS, ITEM_HASHED_FIELDS, PARTY_HASHED_FIELDS } from "../projection";
+
+describe(`Keepr Cloud PR-3 review fixes [${DRIVER}]`, () => {
+  /** First upload of a deal: the server commits the header, the process dies before the local record. */
+  async function firstUploadCrash() {
+    const db = freshDb();
+    enableUser(db);
+    const id = dealId();
+    insertDeal(db, id);
+    const e = makeEngine(db);
+    const real = e.server.transport;
+    let died = false;
+    setTransport(e, async (f, a, s) => {
+      if (f === "cloud_upsert_deal" && !died) {
+        died = true;
+        await real(f, a, s);
+        throw new Error("process died");
+      }
+      return real(f, a, s);
+    });
+    await startAndPass(e);
+    expect(e.server.deals).toHaveLength(1);
+    expect(states(db, "deal")).toHaveLength(0);
+    return { db, id, e, real };
+  }
+
+  it("B1 (1): after a first-upload crash the deal on this computer is not counted as 'not on this computer'", async () => {
+    const { db, e } = await firstUploadCrash();
+    db.prepare("UPDATE cloud_sync_settings SET last_state_at = NULL").run();
+    db.prepare("UPDATE cloud_sync_dirty SET next_attempt_at = NULL").run();
+    await pass(e);
+    expect((await e.service.getView()).onlineNotHereDeals).toBe(0);
+  });
+
+  it("B1 (2): 'Delete them' in that state deletes nothing (the local deal is read again at click time)", async () => {
+    const { db, e } = await firstUploadCrash();
+    expect(states(db, "deal")).toHaveLength(0);
+    expect(await e.service.deleteOnlineNotHere()).toEqual({ success: true });
+    expect(e.server.callsTo("cloud_delete_deal")).toHaveLength(0);
+    expect(e.server.deals).toHaveLength(1);
+  });
+
+  it("B1 (3): adoption records the online cloud id in the reconcile's transaction; the next pass keeps the same id, one online row, synced", async () => {
+    const { db, e, real } = await firstUploadCrash();
+    const onlineId = e.server.deals[0].id;
+    db.prepare("UPDATE cloud_sync_settings SET last_state_at = NULL").run();
+    db.prepare("UPDATE cloud_sync_dirty SET next_attempt_at = NULL").run();
+    // The pass after the reconcile cannot reach the server for the upsert.
+    setTransport(e, async (f, a, s) => (f === "cloud_upsert_deal" ? Promise.reject(new Error("offline")) : real(f, a, s)));
+    await pass(e);
+    expect(states(db, "deal")).toEqual([
+      expect.objectContaining({ cloud_id: onlineId, content_hash: null, last_status: null }),
+    ]);
+    setTransport(e, real);
+    db.prepare("UPDATE cloud_sync_dirty SET next_attempt_at = NULL").run();
+    await pass(e);
+    expect(e.server.deals).toHaveLength(1);
+    expect(e.server.deals[0].id).toBe(onlineId);
+    expect(states(db, "deal")).toEqual([expect.objectContaining({ cloud_id: onlineId, last_status: "synced" })]);
+  });
+
+  it("B1 (4): a true orphan (no local deal) is still counted, never deleted by a pass, deleted on the click", async () => {
+    const { db, e } = await firstUploadCrash();
+    const install = e.server.deals[0].install;
+    e.server.deals.push({ id: "cloud-orphan-9", owner: USER_A, install, localId: "no-such-local-deal", hash: "h", version: 1, fullSyncAt: null });
+    db.prepare("UPDATE cloud_sync_settings SET last_state_at = NULL").run();
+    db.prepare("UPDATE cloud_sync_dirty SET next_attempt_at = NULL").run();
+    await pass(e);
+    expect((await e.service.getView()).onlineNotHereDeals).toBe(1);
+    expect(e.server.callsTo("cloud_delete_deal")).toHaveLength(0);
+    await e.service.deleteOnlineNotHere();
+    expect(e.server.callsTo("cloud_delete_deal").map((c) => c.args.p_cloud_deal_id)).toEqual(["cloud-orphan-9"]);
+    expect(e.server.deals).toHaveLength(1);
+  });
+
+  it("N1: an ineligible local deal with an online row and no record stays counted and shown, not deleted automatically", async () => {
+    const { db, id, e } = await firstUploadCrash();
+    db.prepare("UPDATE transactions SET status = 'rejected' WHERE id = ?").run(id);
+    db.prepare("UPDATE cloud_sync_settings SET last_state_at = NULL").run();
+    db.prepare("UPDATE cloud_sync_dirty SET next_attempt_at = NULL").run();
+    await pass(e);
+    expect(e.server.callsTo("cloud_delete_deal")).toHaveLength(0);
+    expect((await e.service.getView()).onlineNotHereDeals).toBe(1);
+  });
+
+  it("N2/N4: a moved person's removed old row does not make the reconcile send it again every day", async () => {
+    const { db, e } = dealWithChildren();
+    const other = dealId();
+    insertDeal(db, other);
+    await startAndPass(e);
+    db.prepare("UPDATE transaction_contacts SET transaction_id = ? WHERE id = 'pt-1'").run(other);
+    await pass(e);
+    // Make the removed old row list after the live one.
+    const old = e.server.children.find((c) => c.localId === "pt-1" && c.removed)!;
+    old.id = "zzzz-old-row";
+    db.prepare("UPDATE cloud_sync_settings SET last_state_at = NULL").run();
+    const before = e.server.callsTo("cloud_upsert_parties").length;
+    await pass(e);
+    expect(e.server.callsTo("cloud_upsert_parties").length).toBe(before);
+  });
+
+  it("N3: DTO keys are the frozen field lists, and the party DTO carries every contract key", () => {
+    const shape = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "..", "..", "..", "supabase", "contracts", "cloud-deal-shape-v1.json"), "utf8"));
+    const party = buildPartyDto({ row: {}, contact: null, emails: [], phones: [], sourceTypes: [] });
+    expect(Object.keys(party).sort()).toEqual([...PARTY_HASHED_FIELDS].sort());
+    for (const k of [...shape.party.reader_keys, ...shape.party.stored_only_keys]) expect(Object.keys(party)).toContain(k);
+    expect(typeof party.details_withheld).toBe("boolean");
+    expect(shape.party.details_withheld).toMatchObject({ always_present: true, in_content_hash: true, default: false });
+    expect(Object.keys(buildChecklistDto({})).sort()).toEqual([...CHECKLIST_HASHED_FIELDS].sort());
+    expect(Object.keys(buildItemDto({})).sort()).toEqual([...ITEM_HASHED_FIELDS].sort());
+  });
+
+  it("N5: a stop meant for an earlier pass does not fail the user's Delete; a pass triggered meanwhile runs after it", async () => {
+    const { e } = await firstUploadCrash();
+    e.emit("cleared", null);
+    e.emit("saved", USER_A);
+    const real = e.server.transport;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => (release = r));
+    let held = false;
+    setTransport(e, async (f, a, s) => {
+      if (f === "cloud_list_install_rows" && !held) {
+        held = true;
+        await gate;
+      }
+      return real(f, a, s);
+    });
+    const del = e.service.deleteOnlineNotHere();
+    for (let i = 0; i < 50 && !held; i++) await new Promise((r) => setImmediate(r));
+    expect((await e.service.runner!.runPass()).outcome).toBe("queued");
+    const states0 = e.server.callsTo("get_my_cloud_autosave_state").length;
+    release();
+    expect(await del).toEqual({ success: true });
+    for (let i = 0; i < 50 && e.server.callsTo("get_my_cloud_autosave_state").length === states0; i++) await new Promise((r) => setImmediate(r));
+    await e.service.runner!.whenIdle();
+    expect(e.server.callsTo("get_my_cloud_autosave_state").length).toBeGreaterThan(states0);
+  });
+});

@@ -51,6 +51,8 @@ export const KEEPR_CLOUD_COPY = {
   deleteThem: "Delete them",
   deleteOnlineConfirmTitle: "Delete these online deals?",
   deleteOnlineConfirm: "They are deleted from Keepr Cloud. Your deals on this computer are not changed.",
+  deleteInstallsConfirm:
+    "The online copies saved from your other computers or an earlier install are deleted. Your deals on this computer are not changed.",
   deleteButton: "Delete",
   forget: "Forget saving on this computer for the other Keepr Cloud",
   forgetConfirm: "This computer stops tracking what it saved to the other Keepr Cloud. Nothing online is deleted.",

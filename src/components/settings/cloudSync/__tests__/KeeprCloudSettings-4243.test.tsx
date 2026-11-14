@@ -121,6 +121,15 @@ describe("KeeprCloudSettings", () => {
     expect(cloud.deleteOldInstalls).not.toHaveBeenCalled();
   });
 
+  it("N6: the old-installs Delete says the other computers' online copies are deleted", async () => {
+    const cloud = fakeCloud({ ...VIEW, status: "on", otherInstalls: { deals: 5, lastSavedAt: "2026-09-03T10:00:00.000Z" } });
+    render(<KeeprCloudSettings cloud={cloud} />);
+    fireEvent.click(screen.getByRole("button", { name: C.deleteThem }));
+    expect(await screen.findByText(C.deleteInstallsConfirm)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: C.deleteButton }));
+    await waitFor(() => expect(cloud.deleteOldInstalls).toHaveBeenCalled());
+  });
+
   it("AI apps row opens through the service", () => {
     const cloud = fakeCloud(VIEW);
     render(<KeeprCloudSettings cloud={cloud} />);

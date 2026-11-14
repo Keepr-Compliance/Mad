@@ -228,7 +228,7 @@ export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }):
       <ConfirmationDialog
         open={dialog === "delete-online" || dialog === "delete-installs"}
         title={C.deleteOnlineConfirmTitle}
-        description={C.deleteOnlineConfirm}
+        description={dialog === "delete-installs" ? C.deleteInstallsConfirm : C.deleteOnlineConfirm}
         confirmLabel={C.deleteButton}
         cancelLabel={C.cancel}
         isDestructive

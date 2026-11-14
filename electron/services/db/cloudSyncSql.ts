@@ -414,3 +414,10 @@ export const SELECT_DEALS_WITH_UNSENT_CHILDREN_SQL = `SELECT id FROM (
   UNION ${UNSENT("transaction_checklists", "checklist", "1 = 1", "x.transaction_id", "")}
   UNION ${UNSENT("transaction_checklist_items", "checklist_item", "1 = 1", "c.transaction_id", "JOIN transaction_checklists c ON c.id = x.checklist_id")}
 ) u WHERE u.id IN (SELECT t.id FROM transactions t WHERE ${ELIGIBLE_DEAL_WHERE})`;
+
+/** Reconcile adoption: record an online deal's cloud id for a local deal with no record (hash unknown). */
+export const ADOPT_DEAL_STATE_SQL = `INSERT INTO cloud_sync_state
+  (project_ref, owner_user_id, entity, local_id, transaction_id, cloud_id, cloud_deal_id, content_hash,
+   hash_version, cloud_version, removed, last_status, last_error_code, updated_at)
+VALUES (?, ?, 'deal', ?, ?, ?, ?, NULL, NULL, NULL, 0, NULL, NULL, ?)
+ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO NOTHING`;
