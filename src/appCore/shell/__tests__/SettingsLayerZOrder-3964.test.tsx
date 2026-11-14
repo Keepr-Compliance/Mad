@@ -225,6 +225,11 @@ describe("title-bar initials while Settings shows", () => {
     for (const cls of ["hidden", "invisible", "opacity-0"]) expect(el).not.toHaveClass(cls);
     expect(el).not.toHaveAttribute("hidden");
     expect(el).not.toHaveAttribute("aria-hidden");
+    // The same hiding written as an inline style (jsdom computes inline style).
+    const cs = getComputedStyle(el);
+    expect(cs.display).not.toBe("none");
+    expect(cs.visibility).not.toBe("hidden");
+    expect(cs.opacity).not.toBe("0");
   }
 
   // BACKLOG-4174 (founder, 2026-11-13): the panel opens OVER Settings and closes nothing.

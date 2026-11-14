@@ -119,7 +119,7 @@ test.describe('Settings page stacking (BACKLOG-3964 S2 fix-up)', () => {
     // Z2: the panel is topmost at its centre.
     expect(await isTopmostAtCentre(page, '[data-testid="account-panel"]'), 'panel must be topmost').toBe(true);
     // Settings is what shows left of the panel: the scrim there is see-through, Settings is drawn
-    // (not hidden, invisible or transparent), and it is the first thing under the scrim. Inert and
+    // (not hidden, invisible or transparent), and it is the first thing under the scrim at one of three heights. Inert and
     // the scrim are lifted for the one hit-test only, then put back in the same task.
     const left = await page.evaluate(() => {
       const panel = document.querySelector('[data-testid="account-panel"]')!.getBoundingClientRect();
@@ -127,20 +127,22 @@ test.describe('Settings page stacking (BACKLOG-3964 S2 fix-up)', () => {
       const layer = document.querySelector<HTMLElement>('[data-testid="settings-layer"]')!;
       const settingsPage = document.querySelector('[data-testid="settings-page"]')!;
       const x = Math.max(20, panel.left - 200);
-      const y = Math.round(panel.top + panel.height / 2);
+      // Three heights, so a strip drawn over Settings (e.g. the support-access banner, z-106)
+      // cannot fail the check on its own.
+      const ys = [0.25, 0.5, 0.75].map((f) => Math.round(panel.top + panel.height * f));
       const wasInert = layer.hasAttribute('inert');
       const scrimBg = getComputedStyle(scrim).backgroundColor;
       const ls = getComputedStyle(layer);
       scrim.style.pointerEvents = 'none';
       layer.removeAttribute('inert');
-      const hit = document.elementFromPoint(x, y);
+      const hits = ys.map((y) => document.elementFromPoint(x, y));
       scrim.style.pointerEvents = '';
       if (wasInert) layer.setAttribute('inert', '');
       return {
         wasInert,
         scrimBg,
         layerShown: ls.display !== 'none' && ls.visibility === 'visible' && ls.opacity !== '0',
-        settingsUnderScrim: !!hit && settingsPage.contains(hit),
+        settingsUnderScrim: hits.some((hit) => !!hit && settingsPage.contains(hit)),
       };
     });
     expect(left.wasInert, 'Settings must be inert under the panel').toBe(true);
