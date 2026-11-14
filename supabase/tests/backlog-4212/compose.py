@@ -78,7 +78,7 @@ CREATE FUNCTION pg_temp.acl() RETURNS TEXT LANGUAGE sql AS $b$
   SELECT coalesce(proacl::text, '<null>') FROM pg_proc WHERE oid = 'public._sender_rule_set_invalid(jsonb)'::regprocedure
 $b$;
 CREATE FUNCTION pg_temp.attrs() RETURNS TEXT LANGUAGE sql AS $b$
-  SELECT provolatile || '|' || prosecdef || '|' || coalesce(proconfig::text, '<null>') || '|' || l.lanname
+  SELECT provolatile::text || '|' || prosecdef::text || '|' || coalesce(proconfig::text, '<null>') || '|' || l.lanname
   FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang WHERE p.oid = 'public._sender_rule_set_invalid(jsonb)'::regprocedure
 $b$;
 INSERT INTO pg_temp.p4212 VALUES
