@@ -207,6 +207,22 @@ export function buildCorpus(): CorpusCase[] {
   add("reportMaxRows: 501", T("reportMaxRows", 501), false);
   add("reportMaxRows: 0", T("reportMaxRows", 0), false);
   add("reportMaxRows: null", T("reportMaxRows", null), false);
+  // BACKLOG-4212: userSuppressMinAnswers is optional, an integer 0-20
+  const U = "userSuppressMinAnswers";
+  add("userSuppressMinAnswers: absent", base(), true);
+  add("userSuppressMinAnswers: 0", T(U, 0), true);
+  add("userSuppressMinAnswers: 2", T(U, 2), true);
+  add("userSuppressMinAnswers: 20", T(U, 20), true);
+  add("userSuppressMinAnswers: -1", T(U, -1), false);
+  add("userSuppressMinAnswers: 21", T(U, 21), false);
+  add("userSuppressMinAnswers: 2.5", T(U, 2.5), false);
+  add("userSuppressMinAnswers: string", T(U, "2"), false);
+  add("userSuppressMinAnswers: null", T(U, null), false);
+  const withSibling = base();
+  (withSibling.thresholds as { [k: string]: Json })[U] = 2;
+  (withSibling.thresholds as { [k: string]: Json }).extra = 1;
+  add("userSuppressMinAnswers: 2 plus an unknown key", withSibling, false);
+  add("userSuppressMinAnswers: wrong case", T("usersuppressminanswers", 2), false);
 
   // ---- modes: every cell, every value ----
   for (const s of SIGNALS) {

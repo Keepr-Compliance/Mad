@@ -800,6 +800,50 @@
   "reason": "thresholds.reportMaxRows: not an integer 1-500"
  },
  {
+  "name": "userSuppressMinAnswers: absent",
+  "reason": null
+ },
+ {
+  "name": "userSuppressMinAnswers: 0",
+  "reason": null
+ },
+ {
+  "name": "userSuppressMinAnswers: 2",
+  "reason": null
+ },
+ {
+  "name": "userSuppressMinAnswers: 20",
+  "reason": null
+ },
+ {
+  "name": "userSuppressMinAnswers: -1",
+  "reason": "thresholds.userSuppressMinAnswers: not an integer 0-20"
+ },
+ {
+  "name": "userSuppressMinAnswers: 21",
+  "reason": "thresholds.userSuppressMinAnswers: not an integer 0-20"
+ },
+ {
+  "name": "userSuppressMinAnswers: 2.5",
+  "reason": "thresholds.userSuppressMinAnswers: not an integer 0-20"
+ },
+ {
+  "name": "userSuppressMinAnswers: string",
+  "reason": "thresholds.userSuppressMinAnswers: not an integer 0-20"
+ },
+ {
+  "name": "userSuppressMinAnswers: null",
+  "reason": "thresholds.userSuppressMinAnswers: not an integer 0-20"
+ },
+ {
+  "name": "userSuppressMinAnswers: 2 plus an unknown key",
+  "reason": "thresholds: keys"
+ },
+ {
+  "name": "userSuppressMinAnswers: wrong case",
+  "reason": "thresholds: keys"
+ },
+ {
   "name": "modes.seedAddress.learnQuestions: live",
   "reason": null
  },
