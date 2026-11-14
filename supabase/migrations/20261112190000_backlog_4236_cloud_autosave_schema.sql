@@ -27,6 +27,9 @@
 --   cloud_delete_deal, cloud_mark_deal_synced, cloud_register_blob, cloud_confirm_blob. Each one's
 --   earlier signature (without that argument) is dropped right before the new one is created.
 -- A file row attaches only an uploaded, unfenced blob of the caller and only a live message.
+-- Freshness: each write reads clock_timestamp() once, after its deal row lock, and sets
+--   last_synced_at = greatest(last_synced_at, <that value>); cloud_mark_deal_synced sets
+--   last_full_sync_at and last_synced_at to one such value.
 -- Lock order in every write: the caller's settings row, then deals (id order), then blobs (id order,
 --   all of a call's blobs in one statement), then child rows of the locked deals. Tombstones and
 --   deletes fence blobs once, after their rows, through _cloud_fence_unreferenced (id order).
@@ -528,6 +531,7 @@ BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('success', false, 'error', 'not_authorized'); END IF;
   IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('success', false, 'error', 'wrong_account'); END IF;   /*WHO:set*/
   IF p_enabled IS NULL THEN RETURN jsonb_build_object('success', false, 'error', 'invalid_input'); END IF;
+  -- Default settings row (enabled = false), locked FOR UPDATE below; a refused call can leave it in place.
   INSERT INTO public.cloud_autosave_settings (user_id) VALUES (v_uid) ON CONFLICT (user_id) DO NOTHING;
   PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR UPDATE;
   IF p_enabled THEN
@@ -593,6 +597,7 @@ BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('success', false, 'error', 'not_authorized'); END IF;
   IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('success', false, 'error', 'wrong_account'); END IF;   /*WHO:delete_install*/
   IF p_source_install_id IS NULL THEN RETURN jsonb_build_object('success', false, 'error', 'invalid_input'); END IF;
+  -- Default settings row (enabled = false), locked FOR UPDATE below; a refused call can leave it in place.
   INSERT INTO public.cloud_autosave_settings (user_id) VALUES (v_uid) ON CONFLICT (user_id) DO NOTHING;
   PERFORM 1 FROM public.cloud_autosave_settings WHERE user_id = v_uid FOR UPDATE;
   BEGIN
@@ -665,7 +670,7 @@ DROP FUNCTION IF EXISTS public.cloud_upsert_deal(jsonb);
 CREATE OR REPLACE FUNCTION public.cloud_upsert_deal(p_expected_user_id uuid, p_deal jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_local text; v_hash text; v_base bigint; v_inst uuid; v_org uuid;
-        d record; v_status text; v_det text; v_st text; v_bad text;
+        d record; v_status text; v_det text; v_st text; v_bad text; v_now timestamptz;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
   IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:deal*/
@@ -715,6 +720,7 @@ BEGIN
    WHERE x.owner_user_id = v_uid AND x.source_install_id = v_inst AND x.local_transaction_id = v_local FOR UPDATE;
   v_status := public._cloud_row_status(d.version, NULL, d.content_hash, v_hash, v_base);
   IF v_status = 'applied' THEN
+    v_now := clock_timestamp();                                                              /*CLOCK:deal*/
     UPDATE public.cloud_deals SET
       organization_id = v_org,
       property_address = p_deal ->> 'property_address', property_street = p_deal ->> 'property_street',
@@ -731,7 +737,7 @@ BEGIN
       is_confirmed = (v_st IS NULL OR v_st <> 'rejected')
                      AND (v_det IS NULL OR v_det NOT IN ('pending', 'rejected')),               /*DEAL:confirmed*/
       source_updated_at = (p_deal ->> 'source_updated_at')::timestamptz,
-      content_hash = v_hash, version = d.version + 1, updated_at = now(), last_synced_at = now()
+      content_hash = v_hash, version = d.version + 1, updated_at = now(), last_synced_at = greatest(last_synced_at, v_now)
      WHERE id = d.id RETURNING * INTO d;
   END IF;
   RETURN jsonb_build_object('ok', true, 'results', jsonb_build_array(jsonb_build_object(
@@ -803,7 +809,7 @@ BEGIN
     out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
                                      'content_hash', cur.content_hash, 'status', v_status);
   END LOOP;
-  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:child*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
 REVOKE ALL ON FUNCTION public.cloud_upsert_parties(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
@@ -865,7 +871,7 @@ BEGIN
     out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
                                      'content_hash', cur.content_hash, 'status', v_status);
   END LOOP;
-  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:child*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
 REVOKE ALL ON FUNCTION public.cloud_upsert_checklists(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
@@ -936,7 +942,7 @@ BEGIN
     out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
                                      'content_hash', cur.content_hash, 'status', v_status);
   END LOOP;
-  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:child*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
 REVOKE ALL ON FUNCTION public.cloud_upsert_checklist_items(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
@@ -1017,7 +1023,7 @@ BEGIN
     out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
                                      'content_hash', cur.content_hash, 'status', v_status, 'body_truncated', cur.body_truncated);
   END LOOP;
-  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;                     /*MSG:touch*/
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*MSG:touch*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
 REVOKE ALL ON FUNCTION public.cloud_upsert_messages(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
@@ -1118,7 +1124,7 @@ BEGIN
                                      'content_hash', cur.content_hash, 'status', v_status);
   END LOOP;
   PERFORM public._cloud_fence_unreferenced(v_uid, v_old_blobs);                              /*FILE:fence*/
-  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:files*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
 REVOKE ALL ON FUNCTION public.cloud_upsert_files(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
@@ -1132,7 +1138,7 @@ CREATE OR REPLACE FUNCTION public.cloud_tombstone(p_expected_user_id uuid, p_sou
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_tab text; v_id uuid; out jsonb := '[]'::jsonb;
         v_row_id uuid; v_row_deal uuid; v_row_removed timestamptz; v_row_version bigint; v_blob uuid; v_deals uuid[];
-        v_fence uuid[] := '{}';
+        v_fence uuid[] := '{}'; v_now timestamptz;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_authorized'); END IF;
   IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:tombstone*/
@@ -1149,6 +1155,7 @@ BEGIN
          AND d.id IN (SELECT t.cloud_deal_id FROM public.%I t WHERE t.id = ANY ($3) AND t.owner_user_id = $1)
        ORDER BY d.id FOR NO KEY UPDATE) x', v_tab)
     INTO v_deals USING v_uid, p_source_install_id, p_cloud_ids;                              /*TOMB:lockdeals*/
+  v_now := clock_timestamp();                                                                /*CLOCK:tombstone*/
   FOREACH v_id IN ARRAY p_cloud_ids LOOP
     v_row_id := NULL;
     EXECUTE format(
@@ -1191,7 +1198,7 @@ BEGIN
        WHERE f.id = v_row_id RETURNING f.version INTO v_row_version;
       v_fence := v_fence || v_blob;
     END IF;
-    UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_row_deal;
+    UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, v_now) WHERE id = v_row_deal;
     out := out || jsonb_build_object('cloud_id', v_id, 'status', 'removed', 'version', v_row_version);
   END LOOP;
   PERFORM public._cloud_fence_unreferenced(v_uid, v_fence);                                  /*TOMB:fence*/
@@ -1232,7 +1239,7 @@ GRANT EXECUTE ON FUNCTION public.cloud_delete_deal(uuid, uuid) TO authenticated;
 DROP FUNCTION IF EXISTS public.cloud_mark_deal_synced(uuid, uuid);
 CREATE OR REPLACE FUNCTION public.cloud_mark_deal_synced(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
-DECLARE v_uid uuid := auth.uid(); v_at timestamptz;
+DECLARE v_uid uuid := auth.uid(); v_at timestamptz; v_deal uuid;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
   IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:mark_synced*/
@@ -1240,11 +1247,13 @@ BEGIN
   IF public.cloud_autosave_entitled() IS NOT TRUE THEN                                       /*ENTITLED:mark_synced*/
     RETURN jsonb_build_object('ok', false, 'error', 'not_entitled');
   END IF;
-  UPDATE public.cloud_deals d SET last_full_sync_at = now(), last_synced_at = now()
+  SELECT d.id INTO v_deal FROM public.cloud_deals d
    WHERE d.id = p_cloud_deal_id AND d.owner_user_id = v_uid                                  /*OWNER:mark_synced*/
      AND d.source_install_id = p_source_install_id                                           /*INSTALL:mark_synced*/
-  RETURNING d.last_full_sync_at INTO v_at;
-  IF v_at IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_found'); END IF;
+   FOR NO KEY UPDATE;
+  IF v_deal IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_found'); END IF;
+  v_at := clock_timestamp();                                                                 /*CLOCK:mark*/
+  UPDATE public.cloud_deals SET last_full_sync_at = v_at, last_synced_at = v_at WHERE id = v_deal;
   RETURN jsonb_build_object('ok', true, 'last_full_sync_at', v_at);
 END $f$;
 REVOKE ALL ON FUNCTION public.cloud_mark_deal_synced(uuid, uuid, uuid) FROM PUBLIC, anon, authenticated, service_role;
@@ -1290,6 +1299,7 @@ BEGIN
    WHERE x.id = p_blob_id AND x.owner_user_id = v_uid                                        /*OWNER:confirm*/
      AND x.purge_requested_at IS NULL FOR UPDATE;
   IF b.id IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_found'); END IF;
+  IF b.uploaded_at IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'state', 'uploaded'); END IF;   /*CONFIRM:already*/
   SELECT true, o.metadata ->> 'size' INTO v_found, v_size FROM storage.objects o
    WHERE o.bucket_id = 'cloud-deal-files' AND o.name = b.storage_path;
   IF v_found IS NOT TRUE THEN RETURN jsonb_build_object('ok', false, 'error', 'object_missing'); END IF;   /*CONFIRM:exists*/

@@ -78,7 +78,14 @@ describe('BACKLOG-4243 cloud deal shape contract v1', () => {
   it('the known codes are exactly the ones the migration emits', () => {
     const errors = all(/'error', '([a-z_]+)'/g, M2);
     expect(errors).toContain('wrong_account');
-    expect(sorted(C.tolerance.known.envelope_errors)).toEqual(sorted(errors));
+    // codes emitted only by the service-role function are listed apart from the client codes
+    const assign = all(/'error', '([a-z_]+)'/g, body('assign_member_addon'));
+    const others = all(/'error', '([a-z_]+)'/g, M2.replace(body('assign_member_addon'), ''));
+    const serviceOnly = assign.filter((e) => !others.includes(e));
+    expect(serviceOnly.length).toBeGreaterThan(0);
+    expect(sorted(C.tolerance.known.service_role_envelope_errors)).toEqual(sorted(serviceOnly));
+    expect(sorted(C.tolerance.known.client_envelope_errors)).toEqual(sorted(others));
+    expect(sorted([...C.tolerance.known.client_envelope_errors, ...C.tolerance.known.service_role_envelope_errors])).toEqual(sorted(errors));
 
     const rowStatus = body('_cloud_row_status');
     const statuses = [...all(/'status', '([a-z_]+)'/g, M2), ...all(/THEN '([a-z_]+)'/g, rowStatus), ...all(/ELSE '([a-z_]+)'/g, rowStatus)];
@@ -142,6 +149,8 @@ describe('BACKLOG-4243 cloud deal shape contract v1', () => {
     expect(C.party.phones.empty).toEqual([]);
     const w = C.party.details_withheld;
     expect(w.type).toBe('boolean');
+    expect(w.derived_by_reader).toBe(true);
+    expect(w.derived_from).toBe('contact_source');
     expect(w.meaning).toBe('A person with details_withheld has name, company, emails and phones blank.');
     expect(w.true_when).toBe("contact_source = 'google_contacts'");
     expect(w.blank_when_true).toEqual({ display_name: null, company: null, emails: [], phones: [] });

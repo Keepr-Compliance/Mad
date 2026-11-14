@@ -230,6 +230,32 @@ describe('BACKLOG-4236 cloud auto-save migrations', () => {
     );
   });
 
+  it('freshness: each deal touch reads the clock once after its lock and never moves last_synced_at back; mark sets both from one value', () => {
+    expect(M2).not.toMatch(/last_synced_at = now\(\)|last_full_sync_at = now\(\)/);
+    for (const w of EXPECTED_USER_FNS) {
+      expect((fn(w.name).body.match(/clock_timestamp\(\)/g) ?? []).length).toBeLessThanOrEqual(1);
+    }
+    for (const name of [...CHILD_FNS, 'cloud_upsert_deal', 'cloud_tombstone']) {
+      const b = fn(name).body;
+      expect(b).toMatch(/last_synced_at = greatest\(last_synced_at, (clock_timestamp\(\)|v_now)\)/);
+      expect(b.match(/clock_timestamp\(\)/g) ?? []).toHaveLength(1);
+      expect(b.search(/clock_timestamp\(\)/)).toBeGreaterThan(b.search(/FOR (UPDATE|NO KEY UPDATE)/));
+    }
+    const mark = fn('cloud_mark_deal_synced').body;
+    const lock = mark.indexOf('FOR NO KEY UPDATE;');
+    const clock = mark.indexOf('v_at := clock_timestamp();');
+    expect(lock).toBeGreaterThan(0);
+    expect(clock).toBeGreaterThan(lock);
+    expect(mark).toContain('UPDATE public.cloud_deals SET last_full_sync_at = v_at, last_synced_at = v_at WHERE id = v_deal;');
+  });
+
+  it('confirm returns uploaded for an uploaded blob before reading storage', () => {
+    const b = fn('cloud_confirm_blob').body;
+    const early = b.indexOf("IF b.uploaded_at IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'state', 'uploaded'); END IF;");
+    expect(early).toBeGreaterThan(0);
+    expect(early).toBeLessThan(b.indexOf('FROM storage.objects'));
+  });
+
   it('the state, entitlement, licence and install-list functions are STABLE and neither lock nor write', () => {
     for (const name of ['get_my_cloud_autosave_state', 'cloud_autosave_entitled', '_cloud_autosave_license', 'cloud_list_installs']) {
       const f = fn(name);

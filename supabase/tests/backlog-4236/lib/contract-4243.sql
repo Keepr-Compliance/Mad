@@ -176,3 +176,72 @@ BEGIN
   END;
   RETURN res;
 END $h$;
+
+-- N1 (single session): every write that touches a deal sets last_synced_at to a clock read after the
+-- call started (strictly later than now(), the transaction start) and never earlier than before;
+-- cloud_mark_deal_synced sets last_full_sync_at and last_synced_at to one value, later than every
+-- write before it. Short sleeps separate the clock reads. This does NOT reproduce two overlapping
+-- calls (an older call committing after a newer mark); that is concurrency case C5.
+CREATE FUNCTION pg_temp.n1_probe() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE A uuid := pg_temp.fx(1); I1 uuid := pg_temp.fx(301); D1 uuid; P1 uuid; t text; acc text := '';
+        prev timestamptz; cur timestamptz; f timestamptz; fut timestamptz; fn text; res text;
+BEGIN
+  BEGIN
+    SELECT id INTO D1 FROM public.cloud_deals WHERE owner_user_id = A AND source_install_id = I1 AND local_transaction_id = 't-1';
+    SELECT id INTO P1 FROM public.cloud_deal_parties WHERE cloud_deal_id = D1 AND local_party_id = 'p-1';
+    prev := (SELECT last_synced_at FROM public.cloud_deals WHERE id = D1);
+    FOREACH fn IN ARRAY ARRAY['cloud_upsert_deal', 'cloud_upsert_parties', 'cloud_upsert_checklists', 'cloud_upsert_checklist_items',
+                              'cloud_upsert_messages', 'cloud_upsert_files', 'cloud_tombstone'] LOOP
+      PERFORM pg_sleep(0.02);
+      t := CASE fn
+        WHEN 'cloud_upsert_deal' THEN pg_temp.deal(A, jsonb_build_object('source_install_id', I1, 'local_id', 't-1', 'content_hash', pg_temp.h('n1-t-1')))
+        WHEN 'cloud_tombstone' THEN pg_temp.tomb(A, I1, 'party', ARRAY[P1])
+        ELSE pg_temp.up(A, fn, I1, D1, jsonb_build_array(pg_temp.row_of(fn, 'n1-' || fn))) END;
+      cur := (SELECT last_synced_at FROM public.cloud_deals WHERE id = D1);
+      IF pg_temp.err(t) <> 'OK' OR NOT (cur > now() AND cur > prev) THEN
+        acc := acc || ' ' || fn || ':' || left(t, 60) || ' last_synced_at=' || coalesce(cur::text, 'null') || ' prev=' || coalesce(prev::text, 'null');
+      END IF;
+      prev := cur;
+    END LOOP;
+    PERFORM pg_sleep(0.02);
+    t := pg_temp.call_as(A, format('SELECT public.cloud_mark_deal_synced(%L::uuid, %L::uuid, %L::uuid)', A, I1, D1));
+    SELECT last_full_sync_at, last_synced_at INTO f, cur FROM public.cloud_deals WHERE id = D1;
+    IF pg_temp.err(t) <> 'OK' OR NOT (f = cur AND f > prev AND f > now()) THEN
+      acc := acc || ' mark:' || left(t, 60) || ' full=' || coalesce(f::text, 'null') || ' synced=' || coalesce(cur::text, 'null') || ' prev=' || coalesce(prev::text, 'null');
+    END IF;
+    -- never backwards: a later value already stored is kept by a child write
+    fut := clock_timestamp() + interval '1 hour';
+    UPDATE public.cloud_deals SET last_synced_at = fut WHERE id = D1;
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.row_of('cloud_upsert_parties', 'n1-back')));
+    IF pg_temp.err(t) <> 'OK' OR (SELECT last_synced_at FROM public.cloud_deals WHERE id = D1) IS DISTINCT FROM fut THEN
+      acc := acc || ' backwards:' || coalesce((SELECT last_synced_at::text FROM public.cloud_deals WHERE id = D1), 'null');
+    END IF;
+    res := pg_temp.pass(acc = '', acc);
+    RAISE EXCEPTION USING ERRCODE = 'T4243';
+  EXCEPTION WHEN SQLSTATE 'T4243' THEN NULL;
+            WHEN OTHERS THEN EXECUTE 'RESET ROLE'; res := 'FAIL: crash ' || SQLSTATE || ' ' || SQLERRM;
+  END;
+  RETURN res;
+END $h$;
+
+-- N2: confirming an uploaded blob again returns uploaded and does not fence it, even when the stored
+-- object's size no longer matches.
+CREATE FUNCTION pg_temp.n2_probe() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE A uuid := pg_temp.fx(1); js jsonb; c1 text; c2 text; res text;
+BEGIN
+  BEGIN
+    js := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L::uuid, %L, 4, NULL)', A, pg_temp.h('n2-blob'))));
+    PERFORM pg_temp.call_as(A, format('INSERT INTO storage.objects (bucket_id, name, metadata) VALUES (%L, %L, %L::jsonb)',
+                                      'cloud-deal-files', js ->> 'storage_path', '{"size":"4"}'));
+    c1 := pg_temp.call_as(A, format('SELECT public.cloud_confirm_blob(%L::uuid, %L::uuid)', A, js ->> 'blob_id'));
+    UPDATE storage.objects SET metadata = '{"size":"9"}' WHERE bucket_id = 'cloud-deal-files' AND name = js ->> 'storage_path';
+    c2 := pg_temp.call_as(A, format('SELECT public.cloud_confirm_blob(%L::uuid, %L::uuid)', A, js ->> 'blob_id'));
+    res := pg_temp.pass(pg_temp.j(c1) ->> 'state' = 'uploaded' AND pg_temp.j(c2) ->> 'state' = 'uploaded'
+      AND (SELECT purge_requested_at IS NULL AND uploaded_at IS NOT NULL FROM public.cloud_blobs WHERE id = (js ->> 'blob_id')::uuid),
+      'first=' || c1 || ' again=' || c2);
+    RAISE EXCEPTION USING ERRCODE = 'T4243';
+  EXCEPTION WHEN SQLSTATE 'T4243' THEN NULL;
+            WHEN OTHERS THEN EXECUTE 'RESET ROLE'; res := 'FAIL: crash ' || SQLSTATE || ' ' || SQLERRM;
+  END;
+  RETURN res;
+END $h$;

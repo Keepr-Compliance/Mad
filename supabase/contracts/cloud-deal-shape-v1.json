@@ -30,7 +30,7 @@
     "unknown_state_reason": "paused",
     "unknown_keys": "ignore",
     "known": {
-      "envelope_errors": [
+      "client_envelope_errors": [
         "not_authorized",
         "not_entitled",
         "wrong_account",
@@ -44,12 +44,10 @@
         "delete_failed",
         "too_large",
         "object_missing",
-        "size_mismatch",
-        "invalid_addon",
-        "not_member",
-        "personal_org",
-        "plan_disallows"
+        "size_mismatch"
       ],
+      "service_role_envelope_errors_note": "Emitted only by assign_member_addon, which only the service role can call; no desktop or reader client receives them.",
+      "service_role_envelope_errors": ["invalid_addon", "not_member", "personal_org", "plan_disallows"],
       "row_statuses": ["applied", "unchanged", "conflict", "rejected", "removed", "not_found"],
       "row_reject_reasons": ["invalid_value", "parent_missing", "thread_key_required", "blob_unavailable"],
       "state_reasons": [
@@ -131,6 +129,8 @@
     },
     "details_withheld": {
       "type": "boolean",
+      "derived_by_reader": true,
+      "derived_from": "contact_source",
       "true_when": "contact_source = 'google_contacts'",
       "meaning": "A person with details_withheld has name, company, emails and phones blank.",
       "blank_when_true": { "display_name": null, "company": null, "emails": [], "phones": [] },
