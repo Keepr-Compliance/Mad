@@ -6,6 +6,9 @@ Usage: sweep-4243.py fn       function and grant mutants (C0.1, C0.3, C0.5-C0.7)
                               the rollback, rehearsed (C0.2 live, C0.9, C0.10); then the upgrade fixture
                               (C0.2: migration as at UPGRADE_FROM, then the edited one) and the rollback
                               (C0.4) with their mutants
+       sweep-4243.py withheld   details_withheld: the edited migration rehearsed over the committed state; the
+                              re-run over the migration as at WITHHELD_FROM with a stored party row; the rollback
+                              then that earlier file; with their mutants
        sweep-4243.py <mode> --print   compose only, print the SQL size, run nothing
        sweep-4243.py ddl --c02=set,files,confirm   only these C0.2 drop mutants (payload size)
 
@@ -135,7 +138,7 @@ def sweep_fn():
     for name, _, tag in WRITES:
         b.append(block('P_K6_' + name, '    v := pg_temp.k6_probe(%s);' % lit(name)))
     b.append(block('P_catalog', '    v := pg_temp.k6_catalog();'))
-    for k in ('k1', 'k2', 'k4', 'n1', 'n2'):
+    for k in ('k1', 'k2', 'k4', 'n1', 'n2', 'w'):
         b.append(block('P_' + k, '    v := pg_temp.%s_probe();' % k))
     # C0.1: drop the check in each function
     for name, _, tag in WRITES:
@@ -190,6 +193,28 @@ def sweep_fn():
     b.append(fn_mutant('N2_no_early_return', 'cloud_confirm_blob',
                        "  IF b.uploaded_at IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'state', 'uploaded'); END IF;   /*CONFIRM:already*/\n",
                        '', 'pg_temp.n2_probe()'))
+    # details_withheld (BACKLOG-4243 PR-0b)
+    W = 'pg_temp.w_probe()'
+    b.append(fn_mutant('W_name_not_nulled', 'cloud_upsert_parties',
+                       "display_name = CASE WHEN v_withheld THEN NULL ELSE r ->> 'display_name' END,", "display_name = r ->> 'display_name',", W))
+    b.append(fn_mutant('W_company_not_nulled', 'cloud_upsert_parties',
+                       "company = CASE WHEN v_withheld THEN NULL ELSE r ->> 'company' END,", "company = r ->> 'company',", W))
+    b.append(fn_mutant('W_emails_not_nulled', 'cloud_upsert_parties',
+                       "emails = CASE WHEN v_withheld THEN NULL WHEN jsonb_typeof", "emails = CASE WHEN jsonb_typeof", W))
+    b.append(fn_mutant('W_phones_not_nulled', 'cloud_upsert_parties',
+                       "phones = CASE WHEN v_withheld THEN NULL WHEN jsonb_typeof", "phones = CASE WHEN jsonb_typeof", W))
+    b.append(fn_mutant('W_nulling_unconditional', 'cloud_upsert_parties', "CASE WHEN v_withheld THEN NULL", "CASE WHEN true THEN NULL", W, cnt=4))
+    b.append(fn_mutant('W_nulling_new_rows_only', 'cloud_upsert_parties', "CASE WHEN v_withheld THEN NULL", "CASE WHEN v_withheld AND cur.version = 0 THEN NULL", W, cnt=4))
+    b.append(fn_mutant('W_keyed_on_contact_source', 'cloud_upsert_parties',
+                       "v_withheld := coalesce((r ->> 'details_withheld')::boolean, false);",
+                       "v_withheld := (r ->> 'contact_source') IS NOT DISTINCT FROM 'google_contacts';", W))
+    b.append(fn_mutant('W_absent_means_true', 'cloud_upsert_parties',
+                       "v_withheld := coalesce((r ->> 'details_withheld')::boolean, false);", "v_withheld := coalesce((r ->> 'details_withheld')::boolean, true);", W))
+    b.append(fn_mutant('W_flag_not_validated', 'cloud_upsert_parties',
+                       "ARRAY['is_primary', 'contact_deleted', 'details_withheld']", "ARRAY['is_primary', 'contact_deleted']", W))
+    b.append(fn_mutant('W_flag_not_stored', 'cloud_upsert_parties', "        details_withheld = v_withheld,\n", "", W))
+    b.append(fn_mutant('W_equal_hash_flip_not_applied', 'cloud_upsert_parties',
+                       "    IF v_status = 'unchanged' AND v_withheld AND NOT cur.details_withheld THEN v_status := 'applied'; END IF;   /*PTY:flip*/\n", '', W))
     # C0.3 grants
     b.append(acl_mutant('G_no_revoke_deal', 'cloud_upsert_deal',
                         'REVOKE ALL ON FUNCTION public.cloud_upsert_deal(uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;\n', ''))
@@ -289,6 +314,58 @@ def sweep_ddl():
     return pre + ''.join(r) + ''.join(b) + FINAL
 
 
+WITHHELD_FROM = 'd170183aa'   # the migration as applied before details_withheld existed
+
+
+def sweep_withheld():
+    prev = subprocess.check_output(['git', '-C', root, 'show', '%s:%s' % (WITHHELD_FROM, M2P)], text=True)
+    assert TAG not in prev
+    col = "(SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cloud_deal_parties' AND column_name = 'details_withheld')"
+    # the probe library names the new column; on the committed state it does not exist until the re-run below
+    pre = HEAD + "SET LOCAL check_function_bodies = off;\n" + HL + '\n' + FX + '\n' + K6 + '\n' + RB_CLEAN + MCP_PROBE + OUT_TABLE
+    b = [None]
+    # rehearsal over the committed state of the test project (the migration as at WITHHELD_FROM)
+    b.append("  INSERT INTO pg_temp.p4243_out VALUES ('R0_live_column', %s::text);\n" % col)
+    b.append('  EXECUTE %s;\n' % 'm2')
+    b.append("  INSERT INTO pg_temp.p4243_out VALUES ('R1_rerun_column', %s::text);\n" % col)
+    b.append("  INSERT INTO pg_temp.p4243_out VALUES ('R1_rerun_catalog', pg_temp.k6_catalog());\n")
+    b.append("  INSERT INTO pg_temp.p4243_out VALUES ('R1_rerun_mcp_status', pg_temp.mcp_status_probe());\n")
+    b.append("  INSERT INTO pg_temp.p4243_out VALUES ('R1_rerun_ledger_rows', (SELECT count(*)::text FROM supabase_migrations.schema_migrations WHERE version = '20261112190000'));\n")
+    # (f) in-place re-run over the earlier file with a party row stored under the old shape
+    fbody = ('    EXECUTE %s;\n    EXECUTE %s;\n    EXECUTE %s;\n    base := pg_temp.base();\n'
+             "    t0 := %s::text || '/' || (SELECT count(*) FROM public.cloud_deal_parties)::text;\n"
+             '    EXECUTE %s;\n    EXECUTE %s;\n'
+             "    IF t0 <> '0/1' OR %s <> 1\n"
+             "       OR (SELECT count(*) FROM pg_constraint WHERE conname = 'cloud_deal_parties_withheld_ck') <> 1 THEN\n"
+             "      v := 'FAIL: before=' || t0 || ' after_column=' || %s;\n"
+             "    ELSIF (SELECT count(*) FROM public.cloud_deal_parties WHERE details_withheld OR display_name IS NULL) <> 0 THEN\n"
+             "      v := 'FAIL: an existing party row did not default to false with its details';\n"
+             "    ELSE\n      v := pg_temp.w_probe();\n    END IF;")
+    b.append(block('P_F_rerun_over_earlier_file', fbody % ('rb', 'm1', 'prev', col, 'm2', 'm2', col, col)))
+    no_alter = apply(M2, 'ALTER TABLE public.cloud_deal_parties ADD COLUMN IF NOT EXISTS details_withheld boolean NOT NULL DEFAULT false;\n', '', 1, 'F_no_add_column')
+    b.append(block('M_F_no_add_column', fbody % ('rb', 'm1', 'prev', col, 'no_alter', q('SELECT 1'), col, col)))
+    # mutant: the CHECK removed -> a direct UPDATE planting a name on a flagged row is accepted
+    CK = ('ALTER TABLE public.cloud_deal_parties DROP CONSTRAINT IF EXISTS cloud_deal_parties_withheld_ck;\n'
+          'ALTER TABLE public.cloud_deal_parties ADD CONSTRAINT cloud_deal_parties_withheld_ck\n'
+          '  CHECK (NOT details_withheld OR (display_name IS NULL AND company IS NULL AND emails IS NULL AND phones IS NULL));\n')
+    no_ck = apply(M2, CK, '', 1, 'F_no_withheld_check')
+    b.append(block('M_F_no_withheld_check', '    EXECUTE ' + 'rb' + ';\n    EXECUTE ' + 'm1' + ';\n    EXECUTE ' + 'no_ck'
+                   + ';\n    base := pg_temp.base();\n    v := pg_temp.w_probe();'))
+    # (g) rollback then the earlier file: the column is gone and the earlier parties body is back
+    _, prev_src, _ = unit(prev, 'cloud_upsert_parties')
+    gbody = ('    EXECUTE %s;\n    EXECUTE %s;\n    EXECUTE %s;\n    EXECUTE %s;\n'
+             "    IF %s <> 0 OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.cloud_upsert_parties(uuid,uuid,uuid,jsonb)')) IS DISTINCT FROM %s THEN\n"
+             "      v := 'FAIL: column=' || %s;\n    ELSE\n      v := 'PASS';\n    END IF;")
+    b.append(block('P_G_rollback_then_earlier_file', gbody % ('rb', 'm1', 'm2', 'rb' + ';\n    EXECUTE ' + 'm1' + ';\n    EXECUTE ' + 'prev', col, lit(md5(prev_src)), col)))
+    # mutant: the earlier file re-run without the rollback first (the column stays)
+    print('MUTATION APPLIED G_earlier_file_without_rollback (sequence: the rollback step before the earlier file removed)')
+    b.append(block('M_G_earlier_file_without_rollback', gbody % ('rb', 'm1', 'm2', 'm1' + ';\n    EXECUTE ' + 'prev', col, lit(md5(prev_src)), col)))
+    b[0] = ('DO $sw4243$\nDECLARE v text; t0 text; base jsonb;\n  m2 text := %s;\n  prev text := %s;\n  rb text := %s;\n  m1 text := %s;\n'
+            '  no_alter text := %s;\n  no_ck text := %s;\nBEGIN\n') % (q(M2), q(prev), q(RB), q(M1), q(no_alter), q(no_ck))
+    b.append('END\n$sw4243$;\n')
+    return pre + ''.join(b) + FINAL
+
+
 def main():
     global C02_ONLY, C02_SOLO
     mode = sys.argv[1]
@@ -297,7 +374,7 @@ def main():
             C02_SOLO = True
         if a.startswith('--c02='):
             C02_ONLY = a.split('=', 1)[1].split(',')
-    sql = {'fn': sweep_fn, 'ddl': sweep_ddl}[mode]().replace('__RUN__', secrets.token_hex(12))
+    sql = {'fn': sweep_fn, 'ddl': sweep_ddl, 'withheld': sweep_withheld}[mode]().replace('__RUN__', secrets.token_hex(12))
     assert '__RUN__' not in sql
     print('composed %s: %d bytes' % (mode, len(sql)))
     if '--print' in sys.argv:
