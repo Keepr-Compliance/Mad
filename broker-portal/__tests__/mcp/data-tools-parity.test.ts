@@ -17,7 +17,8 @@ import { getDealChecklistsFor, getDealFor, listDealsFor } from '@/lib/mcp/oauth/
 import { DEADLINE_PROPS, DETAILS_PROPS, EMAIL_PROPS, LIST_DEALS_SHAPE, PERSON_PROPS, PHONE_PROPS } from '@/lib/mcp/tools/shapes';
 
 const REPO = path.resolve(__dirname, '../../..');
-const MIGRATION = readFileSync(path.join(REPO, 'supabase/migrations/20261114110000_backlog_4244_mcp_data_tools.sql'), 'utf8');
+/** line endings normalised: a Windows checkout has CRLF */
+const MIGRATION = readFileSync(path.join(REPO, 'supabase/migrations/20261114110000_backlog_4244_mcp_data_tools.sql'), 'utf8').replace(/\r\n?/g, '\n');
 const CONTRACT = JSON.parse(readFileSync(path.join(REPO, 'supabase/contracts/cloud-deal-shape-v1.json'), 'utf8'));
 
 function parameterNames(sql: string, fn: string): string[] {
