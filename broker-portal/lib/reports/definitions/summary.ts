@@ -15,6 +15,11 @@ export const AGENT_SUBTITLE = 'You see only your own deals in every report.';
 export const EACH_SEES_OWN = 'Each sees their own';
 const SEP = ' · ';
 
+/** "A", "A and B", "A, B and C". */
+function joinParts(parts: readonly string[]): string {
+  return parts.length <= 2 ? parts.join(' and ') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
+}
+
 /**
  * A report the caller owns. null when its sharing could not be read: the row
  * then shows no summary, never "Only you".
@@ -36,7 +41,7 @@ export function myReportSummary(
     const roles = sharing.entries.filter((e) => e.kind === 'role').map((e) => e.name);
     const people = sharing.entries.filter((e) => e.kind === 'person').length;
     const parts = people > 0 ? [...roles, people === 1 ? '1 person' : `${people} people`] : roles;
-    text = `Shared with ${parts.join(' and ')}`;
+    text = `Shared with ${joinParts(parts)}`;
   }
   return sharing.rowScope === 'own' ? `${text}${SEP}${EACH_SEES_OWN}` : text;
 }

@@ -25,8 +25,20 @@ describe('myReportSummary', () => {
   });
   it('roles in reply order, then the people count', () => {
     expect(myReportSummary(s('restricted', 'all', [role('agent', 'All agents'), role('broker', 'All brokers'), person('a'), person('b'), person('c')]), 'X')).toBe(
-      'Shared with All agents and All brokers and 3 people'
+      'Shared with All agents, All brokers and 3 people'
     );
+    expect(myReportSummary(s('restricted', 'all', [role('agent', 'All agents'), role('broker', 'All brokers'), role('admins', 'All admins')]), 'X')).toBe(
+      'Shared with All agents, All brokers and All admins'
+    );
+  });
+  it('two parts join with " and "; one part stands alone', () => {
+    expect(myReportSummary(s('restricted', 'all', [role('agent', 'All agents'), person('a'), person('b')]), 'X')).toBe(
+      'Shared with All agents and 2 people'
+    );
+    expect(myReportSummary(s('restricted', 'all', [role('agent', 'All agents'), role('broker', 'All brokers')]), 'X')).toBe(
+      'Shared with All agents and All brokers'
+    );
+    expect(myReportSummary(s('restricted', 'all', [role('agent', 'All agents')]), 'X')).toBe('Shared with All agents');
   });
   it('row scope own is appended only when shared', () => {
     expect(myReportSummary(s('restricted', 'own', [person('a')]), 'X')).toBe('Shared with 1 person · Each sees their own');
