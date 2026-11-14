@@ -14,7 +14,7 @@ any change when the 13 writes are not at the new signature.
 | `lib/helpers.sql` | Calls as a role, the cloud writes as the user, AI-app connections written as the database owner, the three tools called as anon. Rate counters for calls are cleared before each tool call inside the transaction. |
 | `lib/fixtures.sql` | Five users in one brokerage, their deals, people, checklists and items, written through the real cloud write functions; see the header for who holds what. |
 | `lib/probes.sql` | One probe per control; each returns `PASS` or `FAIL: <detail>`. |
-| `rollback-4244.sql` | Deletes the log rows the earlier CHECKs would refuse, restores both `mcp_call_log` CHECKs, drops the eleven functions and the ledger row. |
+| `rollback-4244.sql` | Deletes the log rows the earlier CHECKs would refuse, restores both `mcp_call_log` CHECKs, drops the twelve functions and the ledger row. It also deletes every `mcp_call_log` row of the three tools and of the outcomes `invalid_input`, `not_found` and `too_large`. |
 | `portal-mutate.py [mode ...]` | Mutants of the portal code, each run against the jest suites that should catch it; restores each file from the text it read. Commit first. |
 
 Mutants: each is an exact-string replace on one function's text from the working tree (the script stops
@@ -49,6 +49,10 @@ Named controls:
   `get_deal`, no price). Mutants `M_DEADLINES_*`.
 - `OBS_cursors` (C27): what `list_deals` returns for special and impossible cursor values. An
   observation, not pass/fail.
+
+Known behaviour: `address_contains` searches the stored address, while the address in the output is
+masked, so a search can match digits that the output shows as `[number hidden by Keepr]` (the person's
+own data only).
 
 Results: `results-2026-11-14.txt` (ids replaced by `<id:n>`).
 

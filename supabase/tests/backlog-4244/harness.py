@@ -186,7 +186,8 @@ def rls_off(table):
 
 PROBES = ['p_list_a', 'p_order_a', 'p_iso', 'p_ent', 'p_c7b_outdated_notice', 'p_deadlines', 'p_disabled', 'p_tokens', 'p_no_claims', 'p_withheld', 'p_removed',
           'p_unconfirmed', 'p_limits', 'p_paging', 'p_people_cap', 'p_masking', 'p_dates', 'p_fresh', 'p_saved_from', 'p_null_install',
-          'p_checklists', 'p_log', 'p_grants', 'p_checks', 'p_rollback', 'p_withheld_planted']
+          'p_checklists', 'p_log', 'p_grants', 'p_checks', 'p_rollback', 'p_withheld_planted', 'p_people_cap_100', 'p_strip',
+          'p_mask_sweep']
 
 ROLLBACK_PROBE = ("CREATE FUNCTION pg_temp.p_rollback(rb text) RETURNS text LANGUAGE plpgsql AS $rbp$\n"
                   "DECLARE f0 text := (SELECT v FROM pg_temp.p4244_out WHERE k = 'fp_after_apply'); r text; gone boolean; chk text; e text := '';\n"
@@ -210,9 +211,10 @@ def mutants():
     # ---- (1) isolation: the owner term, row level security, and both
     own = {'list_inst': 'cloud_deals', 'list_deals': 'cloud_deals', 'list_people': 'cloud_deal_parties', 'list_todos': 'cloud_deal_checklist_items',
            'list_copy': 'cloud_deals', 'get_deal': 'cloud_deals', 'get_inst': 'cloud_deals', 'get_people': 'cloud_deal_parties',
-           'cl_deal': 'cloud_deals', 'cl_lists': 'cloud_deal_checklists', 'cl_items': 'cloud_deal_checklist_items', 'cl_total': 'cloud_deal_checklist_items'}
+           'cl_deal': 'cloud_deals', 'cl_lists': 'cloud_deal_checklists', 'cl_items': 'cloud_deal_checklist_items', 'cl_total': 'cloud_deal_checklist_items',
+           'list_open': 'cloud_deal_checklist_items', 'cl_check': 'cloud_deal_checklists', 'cl_open': 'cloud_deal_checklist_items'}
     # child reads under an owned deal: the composite key (cloud_deal_id, owner_user_id) makes the owner term redundant
-    equivalent_even_without_rls = {'list_people', 'list_todos', 'get_people', 'cl_lists', 'cl_items', 'cl_total'}
+    equivalent_even_without_rls = {'list_people', 'list_todos', 'get_people', 'cl_lists', 'cl_items', 'cl_total', 'list_open', 'cl_check', 'cl_open'}
     for tag, table in own.items():
         site = own_site(tag)
         name = fn_of_tag('OWN:' + tag)
@@ -313,10 +315,20 @@ def mutants():
     b.append(fn_mutant('MASK_item_description_plain', '_mcp_r_deal_checklists', "'description', public._mcp_clean(i.description, 1000),",
                        "'description', i.description,", 'pg_temp.p_masking()'))
     b.append(fn_mutant('MASK_phone_masked', '_mcp_r_get_deal', "public._mcp_txt(el ->> 'e164', 40)", "public._mcp_clean(el ->> 'e164', 40)", 'pg_temp.p_masking()'))
-    b.append(fn_mutant('MASK_no_luhn', '_mcp_mask', '    IF v_sum % 10 = 0 THEN', '    IF true THEN', 'pg_temp.p_masking()'))
+    b.append(fn_mutant('MASK_no_luhn', '_mcp_mask', 'IF v_sum % 10 = 0 THEN', 'IF true THEN', 'pg_temp.p_masking()'))
     b.append(fn_mutant('MASK_no_cut', '_mcp_txt', 'CASE WHEN char_length(s.x) > p_max THEN', 'CASE WHEN false THEN', 'pg_temp.p_masking()'))
-    b.append(fn_mutant('MASK_no_strip', '_mcp_clean', "public._mcp_mask(regexp_replace(p, '[\\u0001-\\u0008\\u000B\\u000C\\u000E-\\u001F\\u007F]', '', 'g'))",
-                       'public._mcp_mask(p)', 'pg_temp.p_masking()', want='green'))
+    b.append(fn_mutant('MASK_no_strip_before_mask', '_mcp_clean', 'public._mcp_mask(public._mcp_strip(p))', 'public._mcp_mask(p)', 'pg_temp.p_strip()'))
+    b.append(fn_mutant('STRIP_old_class', '_mcp_strip', '\\u007F\\u200B\\u200E\\u200F\\u202A-\\u202E\\u2060\\u2066-\\u2069\\uFEFF]', '\\u007F]', 'pg_temp.p_strip()'))
+    b.append(fn_mutant('STRIP_joiners_stripped', '_mcp_strip', '\\u200B\\u200E', '\\u200B-\\u200E', 'pg_temp.p_strip()'))
+    b.append(fn_mutant('MASK_whole_run_luhn_only', '_mcp_mask',
+                       "    v_g := regexp_split_to_array(v_m, '[ -]');                                         /*MASK:groups*/",
+                       "    v_g := ARRAY[regexp_replace(v_m, '[^0-9]', '', 'g')];                                         /*MASK:groups*/", 'pg_temp.p_mask_sweep()'))
+    b.append(fn_mutant('MASK_old_expression', '_mcp_mask', "regexp_matches(v_x, '(\\d+(?:[ -]\\d+)*)', 'g')", "regexp_matches(v_x, '(\\d(?:[ -]?\\d){12,18})', 'g')",
+                       'pg_temp.p_mask_sweep()'))
+    b.append(fn_mutant('MASK_luhn_dropped', '_mcp_mask', "IF v_sum % 10 = 0 THEN                                                         /*MASK:luhn*/",
+                       "IF true THEN                                                         /*MASK:luhn*/", 'pg_temp.p_mask_sweep()'))
+    b.append(fn_mutant('CAP_people_100_removed', '_mcp_r_get_deal', 'FROM p WHERE p.rn <= 100 /*CAP:people*/', 'FROM p /*CAP:people*/',
+                       'pg_temp.p_people_cap_100()'))
     b.append(fn_mutant('DATE_local_zone', '_mcp_day', "to_char(p AT TIME ZONE 'UTC', 'YYYY-MM-DD')", "to_char(p, 'YYYY-MM-DD')", 'pg_temp.p_dates()'))
     # ---- (7) freshness
     for tag, name, a in (('list', '_mcp_r_list_deals', 'pr'), ('get', '_mcp_r_get_deal', 'v_deal')):
@@ -386,7 +398,7 @@ def compose(with_mutants=True, only=None):
             "INSERT INTO pg_temp.p4244_out SELECT 'PRE_cloud_writes_old_signature', count(*)::text FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace\n"
             "  AND p.proname = ANY (%s::text[]) AND p.proargnames[1] IS DISTINCT FROM 'p_expected_user_id';\n"
             "INSERT INTO pg_temp.p4244_out SELECT 'PRE_4244_objects', count(*)::text FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace\n"
-            "  AND p.proname IN ('mcp_list_deals','mcp_get_deal','mcp_get_deal_checklists','_mcp_r_list_deals','_mcp_r_get_deal','_mcp_r_deal_checklists','_mcp_txt','_mcp_mask','_mcp_clean','_mcp_ts','_mcp_day');\n"
+            "  AND p.proname IN ('mcp_list_deals','mcp_get_deal','mcp_get_deal_checklists','_mcp_r_list_deals','_mcp_r_get_deal','_mcp_r_deal_checklists','_mcp_strip','_mcp_txt','_mcp_mask','_mcp_clean','_mcp_ts','_mcp_day');\n"
             "INSERT INTO pg_temp.p4244_out SELECT 'PRE_call_log_checks', string_agg(c.conname || '=' || pg_get_constraintdef(c.oid), '; ' ORDER BY c.conname) FROM pg_constraint c\n"
             "  WHERE c.conrelid = 'public.mcp_call_log'::regclass AND c.contype = 'c';\n"
             "INSERT INTO pg_temp.p4244_out SELECT 'PRE_ledger_4244', count(*)::text FROM supabase_migrations.schema_migrations WHERE version = '20261114110000';\n"
@@ -423,6 +435,7 @@ def compose(with_mutants=True, only=None):
         b.append(block(k, '    v := %s;' % e))
     b.append(block('FX_list_null_install', "    PERFORM pg_temp.null_install_deal();\n    v := pg_temp.ld('a1');"))
     b.append(block('OBS_cursors', '    v := pg_temp.obs_cursors();'))
+    b.append(block('OBS_false_positives', '    v := pg_temp.obs_false_positives();'))
     b.append(block('FX_get_null_install', "    v := pg_temp.gd('a1', pg_temp.null_install_deal()::text);"))
     if with_mutants:
         ms = mutants()

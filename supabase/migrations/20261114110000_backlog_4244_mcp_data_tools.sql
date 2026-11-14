@@ -2,7 +2,7 @@
 --
 -- Objects:
 --   checks    mcp_call_log tool and outcome CHECKs widened (no column added)
---   helpers   _mcp_txt, _mcp_mask, _mcp_clean, _mcp_ts, _mcp_day (owner postgres, EXECUTE mcp_reader only)
+--   helpers   _mcp_strip, _mcp_txt, _mcp_mask, _mcp_clean, _mcp_ts, _mcp_day (owner postgres, EXECUTE mcp_reader only)
 --   readers   _mcp_r_list_deals, _mcp_r_get_deal, _mcp_r_deal_checklists
 --             (owner mcp_reader, STABLE, SECURITY DEFINER, EXECUTE postgres only)
 --   anon      mcp_list_deals, mcp_get_deal, mcp_get_deal_checklists (each takes the portal secret)
@@ -44,45 +44,80 @@ ALTER TABLE public.mcp_call_log ADD CONSTRAINT mcp_call_log_outcome_check
 -- ---------------------------------------------------------------------------
 -- Text and time helpers (owner postgres; EXECUTE mcp_reader only)
 -- ---------------------------------------------------------------------------
--- control characters removed; longer than p_max characters -> first p_max - 1 characters and '…'
+-- invisible characters removed: control characters (U+0001-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F),
+-- zero-width space U+200B, direction marks U+200E and U+200F, direction embeddings and overrides
+-- U+202A-U+202E, word joiner U+2060, direction isolates U+2066-U+2069, zero-width no-break space U+FEFF.
+-- Kept: tab, line feed, carriage return, and the joiners U+200C and U+200D (used inside words of some
+-- scripts and inside emoji sequences).
+CREATE OR REPLACE FUNCTION public._mcp_strip(p text)
+RETURNS text LANGUAGE sql IMMUTABLE SECURITY INVOKER SET search_path = '' AS $fn$
+  SELECT regexp_replace(p, '[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B\u200E\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]', '', 'g')
+$fn$;
+REVOKE ALL ON FUNCTION public._mcp_strip(text) FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._mcp_strip(text) TO mcp_reader;
+
+-- invisible characters removed (_mcp_strip); longer than p_max characters -> first p_max - 1 characters and '…'
 CREATE OR REPLACE FUNCTION public._mcp_txt(p text, p_max integer)
 RETURNS text LANGUAGE sql IMMUTABLE SECURITY INVOKER SET search_path = '' AS $fn$
   SELECT CASE WHEN char_length(s.x) > p_max THEN left(s.x, p_max - 1) || '…' ELSE s.x END
-    FROM (SELECT regexp_replace(p, '[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F]', '', 'g') AS x) s
+    FROM (SELECT public._mcp_strip(p) AS x) s
 $fn$;
 REVOKE ALL ON FUNCTION public._mcp_txt(text, integer) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._mcp_txt(text, integer) TO mcp_reader;
 
--- dashed SSN-shaped numbers, and 13-19 digit runs (spaces or dashes allowed) that pass the Luhn
--- check, are replaced by '[number hidden by Keepr]'
+-- Replaced by '[number hidden by Keepr]':
+-- - dashed SSN-shaped numbers (ddd-dd-dddd);
+-- - a run of digit groups (groups joined by one space or one dash) when any run of consecutive
+--   groups inside it holds 13 to 19 digits and passes the Luhn check; the whole run is replaced.
 CREATE OR REPLACE FUNCTION public._mcp_mask(p text)
 RETURNS text LANGUAGE plpgsql IMMUTABLE SECURITY INVOKER SET search_path = '' AS $fn$
 DECLARE
   v_x   text;
   v_m   text;
+  v_g   text[];
   v_dg  text;
+  v_a   integer;
+  v_b   integer;
   v_sum integer;
   v_i   integer;
   v_d   integer;
+  v_hit boolean;
 BEGIN
   IF p IS NULL THEN
     RETURN NULL;
   END IF;
   v_x := regexp_replace(p, '\m\d{3}-\d{2}-\d{4}\M', '[number hidden by Keepr]', 'g');
-  FOR v_m IN SELECT r[1] FROM regexp_matches(v_x, '(\d(?:[ -]?\d){12,18})', 'g') AS r LOOP
-    v_dg := regexp_replace(v_m, '[^0-9]', '', 'g');
-    v_sum := 0;
-    FOR v_i IN 1 .. char_length(v_dg) LOOP
-      v_d := substr(v_dg, char_length(v_dg) - v_i + 1, 1)::integer;
-      IF v_i % 2 = 0 THEN
-        v_d := v_d * 2;
-        IF v_d > 9 THEN
-          v_d := v_d - 9;
+  FOR v_m IN SELECT r[1] FROM regexp_matches(v_x, '(\d+(?:[ -]\d+)*)', 'g') AS r LOOP
+    IF char_length(regexp_replace(v_m, '[^0-9]', '', 'g')) < 13 THEN
+      CONTINUE;
+    END IF;
+    v_g := regexp_split_to_array(v_m, '[ -]');                                         /*MASK:groups*/
+    v_hit := false;
+    FOR v_a IN 1 .. cardinality(v_g) LOOP
+      v_dg := '';
+      FOR v_b IN v_a .. cardinality(v_g) LOOP
+        v_dg := v_dg || v_g[v_b];
+        EXIT WHEN char_length(v_dg) > 19;
+        CONTINUE WHEN char_length(v_dg) < 13;
+        v_sum := 0;
+        FOR v_i IN 1 .. char_length(v_dg) LOOP
+          v_d := substr(v_dg, char_length(v_dg) - v_i + 1, 1)::integer;
+          IF v_i % 2 = 0 THEN
+            v_d := v_d * 2;
+            IF v_d > 9 THEN
+              v_d := v_d - 9;
+            END IF;
+          END IF;
+          v_sum := v_sum + v_d;
+        END LOOP;
+        IF v_sum % 10 = 0 THEN                                                         /*MASK:luhn*/
+          v_hit := true;
+          EXIT;
         END IF;
-      END IF;
-      v_sum := v_sum + v_d;
+      END LOOP;
+      EXIT WHEN v_hit;
     END LOOP;
-    IF v_sum % 10 = 0 THEN
+    IF v_hit THEN
       v_x := replace(v_x, v_m, '[number hidden by Keepr]');
     END IF;
   END LOOP;
@@ -92,10 +127,10 @@ $fn$;
 REVOKE ALL ON FUNCTION public._mcp_mask(text) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._mcp_mask(text) TO mcp_reader;
 
--- typed text: control characters removed, then masked, then cut
+-- typed text: invisible characters removed, then masked, then cut
 CREATE OR REPLACE FUNCTION public._mcp_clean(p text, p_max integer)
 RETURNS text LANGUAGE sql IMMUTABLE SECURITY INVOKER SET search_path = '' AS $fn$
-  SELECT public._mcp_txt(public._mcp_mask(regexp_replace(p, '[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F]', '', 'g')), p_max)
+  SELECT public._mcp_txt(public._mcp_mask(public._mcp_strip(p)), p_max)
 $fn$;
 REVOKE ALL ON FUNCTION public._mcp_clean(text, integer) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._mcp_clean(text, integer) TO mcp_reader;
@@ -185,7 +220,7 @@ BEGIN
           'todos_total', (SELECT count(*) FROM public.cloud_deal_checklist_items t
                            WHERE t.cloud_deal_id = pr.id AND t.owner_user_id = v_uid /*OWN:list_todos*/ AND t.removed_at IS NULL /*LIVE:list_todos*/),
           'todos_open_required', (SELECT count(*) FROM public.cloud_deal_checklist_items t
-                                   WHERE t.cloud_deal_id = pr.id AND t.owner_user_id = v_uid AND t.removed_at IS NULL
+                                   WHERE t.cloud_deal_id = pr.id AND t.owner_user_id = v_uid /*OWN:list_open*/ AND t.removed_at IS NULL
                                      AND t.is_required IS TRUE AND t.is_checked IS NOT TRUE)) AS j
         FROM pr LEFT JOIN inst i ON i.source_install_id IS NOT DISTINCT FROM pr.source_install_id /*JOIN:list*/
        WHERE pr.rk <= p_limit)
@@ -271,7 +306,7 @@ BEGIN
                WHERE o <= 10 AND jsonb_typeof(el) = 'object'), '[]'::jsonb) END,
           'notes', public._mcp_clean(p.notes, 1000),
           'contact_deleted', p.contact_deleted) AS j
-        FROM p WHERE p.rn <= 100),
+        FROM p WHERE p.rn <= 100 /*CAP:people*/),
     s AS (
       SELECT e.rn, e.j, sum(octet_length(e.j::text)) OVER (ORDER BY e.rn) AS cum FROM e)
     SELECT jsonb_build_object(
@@ -342,7 +377,7 @@ BEGIN
      OR (p_checklist_id IS NOT NULL AND NOT EXISTS (
            SELECT 1 FROM public.cloud_deal_checklists c
             WHERE c.id = p_checklist_id AND c.cloud_deal_id = p_deal_id /*CL:on_deal*/
-              AND c.owner_user_id = v_uid AND c.removed_at IS NULL)) THEN
+              AND c.owner_user_id = v_uid /*OWN:cl_check*/ AND c.removed_at IS NULL)) THEN
     RETURN '{"not_found":true}'::jsonb;
   END IF;
   RETURN (
@@ -386,7 +421,7 @@ BEGIN
       'items_total', (SELECT count(*) FROM public.cloud_deal_checklist_items t
                        WHERE t.cloud_deal_id = p_deal_id AND t.owner_user_id = v_uid /*OWN:cl_total*/ AND t.removed_at IS NULL /*LIVE:cl_total*/),
       'items_open_required', (SELECT count(*) FROM public.cloud_deal_checklist_items t
-                               WHERE t.cloud_deal_id = p_deal_id AND t.owner_user_id = v_uid AND t.removed_at IS NULL
+                               WHERE t.cloud_deal_id = p_deal_id AND t.owner_user_id = v_uid /*OWN:cl_open*/ AND t.removed_at IS NULL
                                  AND t.is_required IS TRUE AND t.is_checked IS NOT TRUE),
       'items_returned', (SELECT count(*) FROM s WHERE s.cum <= 60000),
       'more', (SELECT count(*) FROM i) > (SELECT count(*) FROM s WHERE s.cum <= 60000)));

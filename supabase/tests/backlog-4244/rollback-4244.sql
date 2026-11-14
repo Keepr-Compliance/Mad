@@ -2,6 +2,8 @@
 -- restores the mcp_call_log CHECKs of 20261112170000_backlog_4238_mcp_oauth_server.sql.
 -- Order: log rows the old CHECKs would refuse, the CHECKs, reader functions (as their owner), the
 -- tool functions, the helpers, the ledger row.
+-- It deletes every mcp_call_log row of the three tools (list_deals, get_deal, get_deal_checklists) and
+-- of the outcomes invalid_input, not_found and too_large.
 DELETE FROM public.mcp_call_log
  WHERE tool IN ('list_deals', 'get_deal', 'get_deal_checklists') OR outcome IN ('invalid_input', 'not_found', 'too_large');
 DO $rb4244$
@@ -41,4 +43,5 @@ DROP FUNCTION IF EXISTS public._mcp_ts(timestamptz);
 DROP FUNCTION IF EXISTS public._mcp_clean(text, integer);
 DROP FUNCTION IF EXISTS public._mcp_mask(text);
 DROP FUNCTION IF EXISTS public._mcp_txt(text, integer);
+DROP FUNCTION IF EXISTS public._mcp_strip(text);
 DELETE FROM supabase_migrations.schema_migrations WHERE version = '20261114110000';

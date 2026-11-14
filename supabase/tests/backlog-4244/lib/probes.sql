@@ -391,7 +391,7 @@ DECLARE readers regprocedure[] := ARRAY['public._mcp_r_list_deals(text,text,inte
           'public._mcp_r_deal_checklists(uuid,boolean,uuid)']::regprocedure[];
         tools regprocedure[] := ARRAY['public.mcp_list_deals(text,bytea,text,text,text,integer,text)', 'public.mcp_get_deal(text,bytea,text,text)',
           'public.mcp_get_deal_checklists(text,bytea,text,text,boolean,text)']::regprocedure[];
-        helpers regprocedure[] := ARRAY['public._mcp_txt(text,integer)', 'public._mcp_mask(text)', 'public._mcp_clean(text,integer)',
+        helpers regprocedure[] := ARRAY['public._mcp_strip(text)', 'public._mcp_txt(text,integer)', 'public._mcp_mask(text)', 'public._mcp_clean(text,integer)',
           'public._mcp_ts(timestamptz)', 'public._mcp_day(timestamptz)']::regprocedure[];
         f regprocedure; bad text := '';
 BEGIN
@@ -489,4 +489,99 @@ BEGIN
     pg_temp.pass(p7 -> 'emails' = '[]'::jsonb, 'emails ' || coalesce((p7 -> 'emails')::text, '-')),
     pg_temp.pass(p7 -> 'phones' = '[]'::jsonb, 'phones ' || coalesce((p7 -> 'phones')::text, '-')),
     pg_temp.pass(p7 -> 'details_withheld' = 'true'::jsonb AND position('Planted' IN p7::text) = 0 AND position('planted@' IN p7::text) = 0, coalesce(p7::text, '-')));
+END $h$;
+
+-- N-5: a deal with 101 people returns 100
+CREATE FUNCTION pg_temp.p_people_cap_100() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE r jsonb := pg_temp.res_of(pg_temp.gd('e1', pg_temp.id('E62')::text));
+BEGIN
+  RETURN pg_temp.pass(r -> 'people_total' = '101'::jsonb AND r -> 'people_returned' = '100'::jsonb AND jsonb_array_length(r -> 'people') = 100,
+                      coalesce((r -> 'people_total')::text, '-') || '/' || coalesce((r -> 'people_returned')::text, '-'));
+END $h$;
+
+-- N-7: direction controls and zero-width characters stripped (also before masking); Hebrew, Arabic and
+-- an emoji sequence with zero-width joiners kept
+CREATE FUNCTION pg_temp.p_strip() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE c jsonb := pg_temp.res_of(pg_temp.gc('a1', pg_temp.id('D1')::text)); i8 jsonb;
+BEGIN
+  SELECT it INTO i8 FROM jsonb_array_elements(c -> 'checklists') cl, jsonb_array_elements(cl -> 'items') it WHERE (it ->> 'item_id')::uuid = pg_temp.id('IT8');
+  RETURN pg_temp.all_of(
+    pg_temp.pass(i8 ->> 'title' = 'Visibletxt', 'title ' || coalesce(i8 ->> 'title', '-')),
+    pg_temp.pass(i8 ->> 'note' = 'Pay [number hidden by Keepr]; ' || 'שלום מרחבא مرحبا ' || chr(128104) || chr(8205) || chr(128105) || chr(8205) || chr(128103) || ' ok.',
+                 'note ' || coalesce(i8 ->> 'note', '-')),
+    pg_temp.pass(public._mcp_strip(chr(8203) || chr(8206) || chr(8207) || chr(8234) || chr(8235) || chr(8236) || chr(8237) || chr(8238)
+                                   || chr(8288) || chr(8294) || chr(8295) || chr(8296) || chr(8297) || chr(65279) || chr(1) || chr(127)) = '', 'class'),
+    pg_temp.pass(public._mcp_strip(E'a\tb\nc\rd' || chr(8204) || chr(8205)) = E'a\tb\nc\rd' || chr(8204) || chr(8205), 'kept'));
+END $h$;
+
+-- N-1: a Luhn-valid card body of length n (prefix 4, digits from a fixed pattern, check digit computed)
+CREATE FUNCTION pg_temp.luhn_card(n int, valid boolean DEFAULT true) RETURNS text LANGUAGE plpgsql IMMUTABLE AS $h$
+DECLARE b text := left('412345678901234777', n - 1); s int := 0; i int; d int; c int;
+BEGIN
+  WHILE char_length(b) < n - 1 LOOP b := b || '7'; END LOOP;
+  FOR i IN 1 .. char_length(b) LOOP
+    d := substr(b, char_length(b) - i + 1, 1)::int;
+    IF i % 2 = 1 THEN d := d * 2; IF d > 9 THEN d := d - 9; END IF; END IF;
+    s := s + d;
+  END LOOP;
+  c := (10 - s % 10) % 10;
+  IF NOT valid THEN c := (c + 1) % 10; END IF;
+  RETURN b || c::text;
+END $h$;
+CREATE FUNCTION pg_temp.grouped(d text) RETURNS text LANGUAGE sql IMMUTABLE AS $h$
+  SELECT string_agg(substr(d, g, 4), ' ' ORDER BY g) FROM generate_series(1, char_length(d), 4) g
+$h$;
+-- N-1 sweep: card lengths 13-19, plain and grouped by 4, followed by nothing, 3 digits, 4 digits or MM/YY,
+-- and preceded by 3 digits: every valid card masked; every invalid card with nothing after it kept.
+CREATE FUNCTION pg_temp.p_mask_sweep() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE n int; fmt text; suf text; card text; s text; o text; bad text := ''; cnt int := 0;
+BEGIN
+  FOR n IN 13 .. 19 LOOP
+    FOREACH fmt IN ARRAY ARRAY['plain', 'grouped', 'dashed'] LOOP
+      card := pg_temp.luhn_card(n);
+      card := CASE fmt WHEN 'plain' THEN card WHEN 'grouped' THEN pg_temp.grouped(card) ELSE replace(pg_temp.grouped(card), ' ', '-') END;
+      FOREACH suf IN ARRAY ARRAY['', ' 123', ' 1234', ' 12/27', 'pre:123 '] LOOP
+        s := CASE WHEN suf = 'pre:123 ' THEN 'note 123 ' || card || ' end' ELSE 'note ' || card || suf || ' end' END;
+        o := public._mcp_mask(s);
+        cnt := cnt + 1;
+        IF position('[number hidden by Keepr]' IN o) = 0 OR position(card IN o) > 0 THEN
+          bad := bad || format('valid n=%s %s %L -> %L; ', n, fmt, suf, o);
+        END IF;
+      END LOOP;
+      card := pg_temp.luhn_card(n, false);
+      card := CASE fmt WHEN 'plain' THEN card WHEN 'grouped' THEN pg_temp.grouped(card) ELSE replace(pg_temp.grouped(card), ' ', '-') END;
+      s := 'note ' || card || ' end';
+      o := public._mcp_mask(s);
+      cnt := cnt + 1;
+      IF o IS DISTINCT FROM s THEN
+        bad := bad || format('invalid n=%s %s -> %L; ', n, fmt, o);
+      END IF;
+    END LOOP;
+  END LOOP;
+  RETURN pg_temp.all_of(
+    pg_temp.pass(bad = '' AND cnt = 126, 'cases ' || cnt || ' ' || bad),
+    pg_temp.pass(public._mcp_mask('card 4111 1111 1111 1111 12/27') = 'card [number hidden by Keepr]/27', public._mcp_mask('card 4111 1111 1111 1111 12/27')),
+    pg_temp.pass(public._mcp_mask('4111111111111111 123') = '[number hidden by Keepr]', public._mcp_mask('4111111111111111 123')),
+    pg_temp.pass(public._mcp_mask('ref 98 4111 1111 1111 1111') = 'ref [number hidden by Keepr]', public._mcp_mask('ref 98 4111 1111 1111 1111')),
+    pg_temp.pass(public._mcp_mask('ref 1234 5678 9012 3456') = 'ref 1234 5678 9012 3456', 'non-Luhn ref'),
+    pg_temp.pass(public._mcp_mask('call (206) 555-0101 or +1 206 555 0102') = 'call (206) 555-0101 or +1 206 555 0102', 'phones'),
+    pg_temp.pass(public._mcp_mask('SSN 123-45-6789.') = 'SSN [number hidden by Keepr].', 'ssn'));
+END $h$;
+
+-- N-1 false positives: share of random digit runs that are masked, by length and layout (observation).
+-- Digits from random() after setseed(0.4244), 2,000 runs per length and layout.
+CREATE FUNCTION pg_temp.obs_false_positives() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE n int; k int; d text; out jsonb := '{}'; hp int; hg int; tot int := 2000;
+BEGIN
+  PERFORM setseed(0.4244);
+  FOR n IN 13 .. 19 LOOP
+    hp := 0; hg := 0;
+    FOR k IN 1 .. tot LOOP
+      SELECT string_agg(floor(random() * 10)::int::text, '') INTO d FROM generate_series(1, n);
+      IF position('[number' IN public._mcp_mask('x ' || d || ' y')) > 0 THEN hp := hp + 1; END IF;
+      IF position('[number' IN public._mcp_mask('x ' || pg_temp.grouped(d) || ' y')) > 0 THEN hg := hg + 1; END IF;
+    END LOOP;
+    out := out || jsonb_build_object(n::text, jsonb_build_object('plain_pct', round(100.0 * hp / tot, 1), 'grouped4_pct', round(100.0 * hg / tot, 1)));
+  END LOOP;
+  RETURN out::text;
 END $h$;

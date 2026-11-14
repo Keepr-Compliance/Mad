@@ -61,7 +61,7 @@ const fn = (name: string): Fn => {
 
 const READERS = ['_mcp_r_list_deals', '_mcp_r_get_deal', '_mcp_r_deal_checklists'];
 const TOOLS = ['mcp_list_deals', 'mcp_get_deal', 'mcp_get_deal_checklists'];
-const HELPERS = ['_mcp_txt', '_mcp_mask', '_mcp_clean', '_mcp_ts', '_mcp_day'];
+const HELPERS = ['_mcp_strip', '_mcp_txt', '_mcp_mask', '_mcp_clean', '_mcp_ts', '_mcp_day'];
 
 /** Functions a reader body may call (C30). */
 const READER_CALLS = new Set([
@@ -124,7 +124,7 @@ function freeTextGaps(sql: string): string[] {
 }
 
 describe('BACKLOG-4244 migration 20261114110000', () => {
-  it('positive: the parser finds the eleven functions', () => {
+  it('positive: the parser finds the twelve functions', () => {
     expect(FNS.map((f) => f.name).sort()).toEqual([...READERS, ...TOOLS, ...HELPERS].sort());
   });
 
