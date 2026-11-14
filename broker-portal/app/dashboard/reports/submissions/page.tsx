@@ -8,8 +8,9 @@
  * When the brokerage's service is off, the database limits every reader to the
  * submissions they sent themselves, and this page says so in one line.
  *
- * PR-3b: the body is shared with every shared report (SubmissionsReportBody),
- * and "Save as shared report" saves the current filters as a new one.
+ * PR-3b: the body is shared with every shared report (SubmissionsReportBody).
+ * PR-3g: this page is "New report" (the index's New report button opens it);
+ * "Save as report" saves the current filters as a new, private report.
  */
 
 import { requireReportAccess } from '@/lib/reports/report-gate';
@@ -20,7 +21,7 @@ import {
   type SubmissionsSearchParams,
 } from '@/lib/reports/datasets/submissions-filters';
 import { SubmissionsReportBody } from '@/components/reports/submissions/SubmissionsReportBody';
-import { SaveAsSharedReport } from '@/components/reports/SaveAsSharedReport';
+import { SaveAsReport } from '@/components/reports/SaveAsReport';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,8 +40,9 @@ export default async function SubmissionsReportPage({ searchParams }: PageProps)
       report={report}
       filters={filters}
       data={data}
-      title={report.title}
-      actions={<SaveAsSharedReport orgId={caller.organizationId} current={filtersToViewState(filters)} />}
+      title="New report"
+      description="From Submissions: every deal sent for review."
+      actions={<SaveAsReport orgId={caller.organizationId} current={filtersToViewState(filters)} />}
     />
   );
 }

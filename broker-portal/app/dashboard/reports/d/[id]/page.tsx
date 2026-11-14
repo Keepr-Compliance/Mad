@@ -7,7 +7,7 @@
  * calls notFound() on any refusal.
  *
  * The filters are the report's own unless the person changed them on this page
- * (the URL then carries them). Share, Save filters and Delete are offered by
+ * (the URL then carries them). Save changes, Share and Delete are offered by
  * level; Reassign when broker_report_def_get says reassign_available (an IT
  * admin, or an admin when the brokerage has no IT admin, when the owner is gone).
  */

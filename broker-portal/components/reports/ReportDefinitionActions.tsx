@@ -3,8 +3,9 @@
 /**
  * Update and Delete on a shared report — BACKLOG-3513 PR-3b.
  *
- * - UpdateReportButton: owner or editor. Saves the page's current filters and
- *   sort into the report, refused when someone else changed it first.
+ * - UpdateReportButton ("Save changes", PR-3g): owner or editor. Saves the
+ *   page's current filters and sort into the report, refused when someone else
+ *   changed it first.
  * - DeleteReportButton: owner only (founder ruling Q5).
  * Reassign (PR-3f) lives in ReassignReport.tsx.
  * Presentation only: broker_report_def_update / _def_delete decide.
@@ -79,7 +80,7 @@ export function UpdateReportButton({ defId, name, description, rowScope, updated
           )
         }
       >
-        Save filters
+        Save changes
       </Button>
       {error ? (
         <span role="alert" className="text-sm text-danger-600">

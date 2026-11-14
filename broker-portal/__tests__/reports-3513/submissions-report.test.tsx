@@ -329,6 +329,16 @@ describe('page', () => {
     expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
   });
 
+  it('PR-3g: the page is "New report", says where its rows come from, keeps the count and offers Save as report', async () => {
+    given({ deals: [row(1, AGENT_A, 0), row(2, AGENT_A, 0)] });
+    await renderPage('agent');
+    expect(screen.getByRole('heading', { level: 1, name: 'New report' })).toBeInTheDocument();
+    expect(screen.getByTestId('submissions-report-description')).toHaveTextContent('From Submissions: every deal sent for review.');
+    expect(screen.getByTestId('submissions-report-count')).toHaveTextContent('2 deals');
+    expect(screen.getByRole('button', { name: 'Save as report' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /shared report/i })).toBeNull();
+  });
+
   it('ignores an organization in the URL: the gate-admitted organization is the one read', async () => {
     given({ deals: [row(1, AGENT_A, 0)] });
     await renderPage('full', { org: OTHER_ORG, p_org: OTHER_ORG } as Record<string, string>);

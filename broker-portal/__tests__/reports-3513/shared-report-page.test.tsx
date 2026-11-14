@@ -1,5 +1,6 @@
 /**
- * Shared report page, index, Save as shared report, Delete — BACKLOG-3513 PR-3b.
+ * Shared report page, Save as report, Delete — BACKLOG-3513 PR-3b.
+ * The index moved to reports-index.test.tsx in PR-3g.
  *
  * The REAL page (app/dashboard/reports/d/[id]/page.tsx), the REAL server reads
  * (lib/reports/definitions/server.ts) and the REAL loader run. Mocked: the gate's
@@ -22,7 +23,6 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import '@testing-library/jest-dom';
 import React from 'react';
 import type { ReportCaller } from '@/lib/reports/report-gate';
-import { SUBMISSIONS_REPORT } from '@/lib/reports/registry';
 
 // pii-allow-uuid: invented fixture ids below (whole block)
 const ORG = '00000000-0000-4000-8000-0000003513c0'; // pii-allow-uuid: invented fixture id
@@ -34,13 +34,11 @@ type Rpc = (name: string, args: Record<string, unknown>) => Promise<{ data: unkn
 const mockRpc = jest.fn<ReturnType<Rpc>, Parameters<Rpc>>();
 const mockClientRpc = jest.fn<ReturnType<Rpc>, Parameters<Rpc>>(async () => ({ data: [], error: null }));
 const mockCaller = jest.fn();
-const mockMine = jest.fn();
 const mockPush = jest.fn();
 const mockRefresh = jest.fn();
 
 jest.mock('@/lib/reports/report-gate', () => ({
   getReportsCaller: (...a: unknown[]) => mockCaller(...a),
-  requireMyReports: (...a: unknown[]) => mockMine(...a),
 }));
 jest.mock('@/lib/supabase/client', () => ({ createClient: () => ({ rpc: mockClientRpc }) }));
 jest.mock('next/link', () => ({
@@ -61,8 +59,7 @@ jest.mock('next/navigation', () => ({
 }));
 
 import SharedReportPage from '@/app/dashboard/reports/d/[id]/page';
-import ReportsPage from '@/app/dashboard/reports/page';
-import { SaveAsSharedReport } from '@/components/reports/SaveAsSharedReport';
+import { SaveAsReport } from '@/components/reports/SaveAsReport';
 import { DeleteReportButton } from '@/components/reports/ReportDefinitionActions';
 import { canReassign } from '@/components/reports/ReassignReport';
 import { resolveDefinitionFilters } from '@/lib/reports/datasets/submissions-filters';
@@ -136,7 +133,7 @@ async function renderPage(kind: 'full' | 'agent', w: World, search: Record<strin
 
 const q = {
   share: () => screen.queryByRole('button', { name: 'Share Q4 deals' }),
-  update: () => screen.queryByRole('button', { name: 'Save filters' }),
+  update: () => screen.queryByRole('button', { name: 'Save changes' }),
   del: () => screen.queryByRole('button', { name: 'Delete' }),
   reassign: () => screen.queryByRole('button', { name: 'Reassign' }),
   takeOver: () => screen.queryByRole('button', { name: /take over/i }),
@@ -148,7 +145,7 @@ beforeEach(() => {
 });
 
 describe('who gets which action', () => {
-  it('an agent viewer: no Share, no Save filters, no Delete', async () => {
+  it('an agent viewer: no Share, no Save changes, no Delete', async () => {
     await renderPage('agent', { level: 'viewer' });
     expect(screen.getByRole('heading', { name: 'Q4 deals' })).toBeInTheDocument();
     expect(q.share()).toBeNull();
@@ -162,7 +159,7 @@ describe('who gets which action', () => {
     expect(q.del()).toBeNull();
   });
 
-  it('an agent editor: Share and Save filters, no Delete (V5, Q5)', async () => {
+  it('an agent editor: Share and Save changes, no Delete (V5, Q5)', async () => {
     await renderPage('agent', { level: 'editor' });
     expect(q.share()).toBeInTheDocument();
     expect(q.update()).toBeInTheDocument();
@@ -175,7 +172,7 @@ describe('who gets which action', () => {
     expect(q.del()).toBeNull();
   });
 
-  it('the owner (an agent): Share, Save filters and Delete', async () => {
+  it('the owner (an agent): Share, Save changes and Delete', async () => {
     await renderPage('agent', { level: 'owner' });
     expect(q.share()).toBeInTheDocument();
     expect(q.update()).toBeInTheDocument();
@@ -285,78 +282,13 @@ describe('refusals are notFound', () => {
   });
 });
 
-const ORPHAN_A = '00000000-0000-4000-8000-0000003513d1'; // pii-allow-uuid: invented fixture id
-const ORPHAN_B = '00000000-0000-4000-8000-0000003513d2'; // pii-allow-uuid: invented fixture id
-
-function givenIndex(lists: { defList?: unknown; orphans?: unknown; orphansError?: boolean }) {
-  mockRpc.mockImplementation(async (name) => {
-    if (name === 'broker_report_def_list') return { data: lists.defList ?? [], error: null };
-    if (name === 'broker_report_orphans') {
-      return lists.orphansError ? { data: null, error: { message: 'Report not found' } } : { data: lists.orphans ?? [], error: null };
-    }
-    return { data: null, error: { message: 'unexpected' } };
-  });
-}
-async function renderIndex(kind: 'full' | 'agent') {
-  mockMine.mockResolvedValue({ caller: caller(kind), reports: [{ report: SUBMISSIONS_REPORT, scope: kind === 'full' ? 'all' : 'own' }] });
-  return render(await ReportsPage());
-}
-
-describe('index: Shared reports', () => {
-  it('lists the shared reports from broker_report_def_list, linking to their pages', async () => {
-    givenIndex({ defList: [{ id: DEF, name: 'Q4 deals', dataset_key: 'submissions', level: 'viewer', owner_name: 'Avery Quinn', updated_at: 'x' }] });
-    await renderIndex('agent');
-    const list = screen.getByTestId('shared-reports-index');
-    expect(within(list).getByRole('link', { name: /Q4 deals/ })).toHaveAttribute('href', `/dashboard/reports/d/${encodeURIComponent(DEF)}`);
-    expect(list).toHaveTextContent('Can view · Owner: Avery Quinn');
-    expect(mockRpc).toHaveBeenCalledWith('broker_report_def_list', { p_org: ORG });
-  });
-
-  it('a failed list keeps the built-in reports and shows no section', async () => {
-    mockMine.mockResolvedValue({ caller: caller('full'), reports: [{ report: SUBMISSIONS_REPORT, scope: 'all' }] });
-    mockRpc.mockResolvedValue({ data: null, error: { message: 'Could not find the function', code: 'PGRST202' } });
-    render(await ReportsPage());
-    expect(within(screen.getByTestId('reports-index')).getByText('Submissions')).toBeInTheDocument();
-    expect(screen.queryByTestId('shared-reports-index')).toBeNull();
-    expect(screen.queryByTestId('needs-owner-index')).toBeNull();
-  });
-});
-
-describe('index: no "Needs an owner" group (founder ruling A), no Take over', () => {
-  const orphanNotShared = { id: ORPHAN_A, name: 'Old pipeline', dataset_key: 'submissions', owner_name: 'Dana Pike', owner_state: 'deactivated', level: null };
-  const orphanShared = { id: ORPHAN_B, name: 'Closings', dataset_key: 'submissions', owner_name: null, owner_state: 'gone', level: 'viewer' };
-
-  it('an orphan the caller cannot open is not listed, and nothing offers Take over', async () => {
-    givenIndex({ orphans: [orphanNotShared] });
-    await renderIndex('full');
-    expect(screen.queryByText('Old pipeline')).toBeNull();
-    expect(screen.queryByTestId('needs-owner-index')).toBeNull();
-    expect(screen.queryByRole('button', { name: /take over/i })).toBeNull();
-  });
-
-  it('an orphan the caller can already open is listed once, under Shared reports, marked', async () => {
-    givenIndex({
-      defList: [{ id: ORPHAN_B, name: 'Closings', dataset_key: 'submissions', level: 'viewer', owner_name: null, updated_at: 'x' }],
-      orphans: [orphanShared],
-    });
-    await renderIndex('full');
-    expect(screen.getAllByText('Closings')).toHaveLength(1);
-    const list = screen.getByTestId('shared-reports-index');
-    expect(list).toHaveTextContent("Can view · Owner's account removed");
-  });
-
-  it('a refused orphans read keeps the rest', async () => {
-    givenIndex({ orphansError: true });
-    await renderIndex('full');
-    expect(within(screen.getByTestId('reports-index')).getByText('Submissions')).toBeInTheDocument();
-  });
-});
-
-describe('Save as shared report and Delete', () => {
+describe('Save as report and Delete', () => {
   it('saves the current filters as a new report and opens it (agents too)', async () => {
     mockClientRpc.mockResolvedValueOnce({ data: DEF, error: null });
-    render(<SaveAsSharedReport orgId={ORG} current={{ filters: { status: 'approved' }, sort: null }} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Save as shared report' }));
+    render(<SaveAsReport orgId={ORG} current={{ filters: { status: 'approved' }, sort: null }} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Save as report' }));
+    // PR-3g C10: the dialog says the new report is private, and def_create gets no general-access argument.
+    expect(await screen.findByRole('dialog', { name: 'Save as report' })).toHaveTextContent('Only you can see it until you share it.');
     fireEvent.change(await screen.findByLabelText('Name'), { target: { value: '  Q4 deals ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(mockPush).toHaveBeenCalledWith(`/dashboard/reports/d/${encodeURIComponent(DEF)}`));
@@ -368,6 +300,8 @@ describe('Save as shared report and Delete', () => {
       p_definition: { filters: { status: 'approved' }, sort: null },
       p_row_scope: 'all',
     });
+    const createArgs = mockClientRpc.mock.calls.find(([n]) => n === 'broker_report_def_create')![1];
+    expect(Object.keys(createArgs).filter((k) => /general|access/i.test(k))).toEqual([]);
   });
 
   it('Delete asks first, then calls broker_report_def_delete and goes to the index', async () => {
