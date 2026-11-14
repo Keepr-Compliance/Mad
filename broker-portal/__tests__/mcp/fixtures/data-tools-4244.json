@@ -287,7 +287,7 @@
      "earnest_money_amount": null,
      "export_status": null,
      "financing_deadline": null,
-     "inspection_deadline": null,
+     "inspection_deadline": "2026-12-01",
      "listing_price": null,
      "mutual_acceptance_date": null,
      "representation_start_date": null,
@@ -438,6 +438,13 @@
      "city": null,
      "closed_on": null,
      "copy_state": "never_fully_saved",
+     "deadlines": {
+      "closing_deadline": null,
+      "financing_deadline": null,
+      "inspection_deadline": null,
+      "mutual_acceptance_date": null,
+      "representation_start_date": null
+     },
      "deal_id": "<id:9>",
      "found_by": "person",
      "fully_saved_at": null,
@@ -459,6 +466,13 @@
      "city": null,
      "closed_on": "2026-09-30",
      "copy_state": "never_fully_saved",
+     "deadlines": {
+      "closing_deadline": null,
+      "financing_deadline": null,
+      "inspection_deadline": null,
+      "mutual_acceptance_date": null,
+      "representation_start_date": null
+     },
      "deal_id": "<id:16>",
      "found_by": "keepr",
      "fully_saved_at": null,
@@ -480,6 +494,13 @@
      "city": null,
      "closed_on": null,
      "copy_state": "fully_saved",
+     "deadlines": {
+      "closing_deadline": null,
+      "financing_deadline": null,
+      "inspection_deadline": "2026-12-01",
+      "mutual_acceptance_date": null,
+      "representation_start_date": null
+     },
      "deal_id": "<id:13>",
      "found_by": "person",
      "fully_saved_at": "2026-11-01T00:00:02.000000Z",
@@ -501,6 +522,13 @@
      "city": "Fernhollow",
      "closed_on": null,
      "copy_state": "fully_saved",
+     "deadlines": {
+      "closing_deadline": "2026-12-18",
+      "financing_deadline": "2026-11-20",
+      "inspection_deadline": "2026-10-15",
+      "mutual_acceptance_date": "2026-10-05",
+      "representation_start_date": "2026-09-01"
+     },
      "deal_id": "<id:1>",
      "found_by": "person",
      "fully_saved_at": "2026-11-01T00:00:01.000000Z",
@@ -542,6 +570,13 @@
      "city": null,
      "closed_on": null,
      "copy_state": "never_fully_saved",
+     "deadlines": {
+      "closing_deadline": null,
+      "financing_deadline": null,
+      "inspection_deadline": null,
+      "mutual_acceptance_date": null,
+      "representation_start_date": null
+     },
      "deal_id": "<id:17>",
      "found_by": "person",
      "fully_saved_at": null,
@@ -583,6 +618,13 @@
      "city": null,
      "closed_on": null,
      "copy_state": "never_fully_saved",
+     "deadlines": {
+      "closing_deadline": null,
+      "financing_deadline": null,
+      "inspection_deadline": null,
+      "mutual_acceptance_date": null,
+      "representation_start_date": null
+     },
      "deal_id": "<id:19>",
      "found_by": "person",
      "fully_saved_at": null,
@@ -604,6 +646,13 @@
      "city": null,
      "closed_on": null,
      "copy_state": "never_fully_saved",
+     "deadlines": {
+      "closing_deadline": null,
+      "financing_deadline": null,
+      "inspection_deadline": null,
+      "mutual_acceptance_date": null,
+      "representation_start_date": null
+     },
      "deal_id": "<id:18>",
      "found_by": "person",
      "fully_saved_at": null,
@@ -645,6 +694,13 @@
      "city": null,
      "closed_on": null,
      "copy_state": "never_fully_saved",
+     "deadlines": {
+      "closing_deadline": null,
+      "financing_deadline": null,
+      "inspection_deadline": null,
+      "mutual_acceptance_date": null,
+      "representation_start_date": null
+     },
      "deal_id": "<id:20>",
      "found_by": null,
      "fully_saved_at": null,
@@ -666,6 +722,13 @@
      "city": null,
      "closed_on": null,
      "copy_state": "never_fully_saved",
+     "deadlines": {
+      "closing_deadline": null,
+      "financing_deadline": null,
+      "inspection_deadline": null,
+      "mutual_acceptance_date": null,
+      "representation_start_date": null
+     },
      "deal_id": "<id:9>",
      "found_by": "person",
      "fully_saved_at": null,
@@ -687,6 +750,13 @@
      "city": null,
      "closed_on": "2026-09-30",
      "copy_state": "never_fully_saved",
+     "deadlines": {
+      "closing_deadline": null,
+      "financing_deadline": null,
+      "inspection_deadline": null,
+      "mutual_acceptance_date": null,
+      "representation_start_date": null
+     },
      "deal_id": "<id:16>",
      "found_by": "keepr",
      "fully_saved_at": null,
@@ -708,6 +778,13 @@
      "city": null,
      "closed_on": null,
      "copy_state": "fully_saved",
+     "deadlines": {
+      "closing_deadline": null,
+      "financing_deadline": null,
+      "inspection_deadline": "2026-12-01",
+      "mutual_acceptance_date": null,
+      "representation_start_date": null
+     },
      "deal_id": "<id:13>",
      "found_by": "person",
      "fully_saved_at": "2026-11-01T00:00:02.000000Z",
@@ -729,6 +806,13 @@
      "city": "Fernhollow",
      "closed_on": null,
      "copy_state": "fully_saved",
+     "deadlines": {
+      "closing_deadline": "2026-12-18",
+      "financing_deadline": "2026-11-20",
+      "inspection_deadline": "2026-10-15",
+      "mutual_acceptance_date": "2026-10-05",
+      "representation_start_date": "2026-09-01"
+     },
      "deal_id": "<id:1>",
      "found_by": "person",
      "fully_saved_at": "2026-11-01T00:00:01.000000Z",

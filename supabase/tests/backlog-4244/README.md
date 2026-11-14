@@ -34,6 +34,22 @@ install is still returned). `p_null_install` drops NOT NULL on `source_install_i
 transaction, inserts one confirmed deal with no install, and checks both tools return it with
 `saved_from` null; the output is one of the portal schema fixtures.
 
+Result shape version (`v`): the portal accepts only the `v` values it knows; an unknown `v`, or an
+unknown key inside a known `v`, is a failed call ("Keepr could not answer"). Any change to a result
+shape changes `v`. Deploy order for a shape change: (1) the portal accepting v and v+1, (2) the migration
+emitting v+1, (3) the portal without v. For this migration: apply it to the database first, then merge
+the portal change. `v` is 1 and stays 1 through the pre-release changes in this branch (nothing has
+shipped).
+
+Named controls:
+- `C_p_c7b_outdated_notice` (C7b): with the notice version outdated (state `entitled` false) every tool
+  still returns rows; with the licence revoked every tool returns `not_entitled`. Mutants
+  `M_C7b_entitled_instead_of_licensed_*` (one per reader) and `M_C7b_licensed_term_dropped_get_deal`.
+- `C_p_deadlines` (list rows carry the five date keys of `deal.details`, the same date rule as
+  `get_deal`, no price). Mutants `M_DEADLINES_*`.
+- `OBS_cursors` (C27): what `list_deals` returns for special and impossible cursor values. An
+  observation, not pass/fail.
+
 Results: `results-2026-11-14.txt` (ids replaced by `<id:n>`).
 
 NOT RUN: two-session timing (a reader under a concurrent write). The single-snapshot property rests on
