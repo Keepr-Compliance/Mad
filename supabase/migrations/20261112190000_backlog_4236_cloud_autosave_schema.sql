@@ -27,6 +27,8 @@
 --   cloud_delete_deal, cloud_mark_deal_synced, cloud_register_blob, cloud_confirm_blob. Each one's
 --   earlier signature (without that argument) is dropped right before the new one is created.
 -- A file row attaches only an uploaded, unfenced blob of the caller and only a live message.
+-- cloud_deal_parties.details_withheld (from the row, default false): when true, cloud_upsert_parties stores
+--   display_name, company, emails and phones as NULL. contact_source is stored as sent.
 -- Freshness: each write reads clock_timestamp() once, after its deal row lock, and sets
 --   last_synced_at = greatest(last_synced_at, <that value>); cloud_mark_deal_synced sets
 --   last_full_sync_at and last_synced_at to one such value.
@@ -123,6 +125,7 @@ CREATE TABLE IF NOT EXISTS public.cloud_deal_parties (
   emails                 jsonb NULL CHECK (emails IS NULL OR jsonb_typeof(emails) = 'array'),
   phones                 jsonb NULL CHECK (phones IS NULL OR jsonb_typeof(phones) = 'array'),
   contact_source         text NULL,
+  details_withheld       boolean NOT NULL DEFAULT false,
   contact_deleted        boolean NOT NULL DEFAULT false,
   removed_reason         text NULL,
   content_hash           text NOT NULL CHECK (content_hash ~ '^[0-9a-f]{64}$'),
@@ -137,6 +140,13 @@ CREATE TABLE IF NOT EXISTS public.cloud_deal_parties (
     REFERENCES public.cloud_deals(id, owner_user_id) ON DELETE CASCADE,
   CONSTRAINT cloud_deal_parties_local_uq UNIQUE (cloud_deal_id, local_party_id)
 );
+-- Added after the first apply of this file: a re-run over an existing table gets the column (existing rows false).
+ALTER TABLE public.cloud_deal_parties ADD COLUMN IF NOT EXISTS details_withheld boolean NOT NULL DEFAULT false;
+-- A withheld person has no name, company, emails or phones stored. Dropped and added on every run, so a
+-- fresh database and a re-run end with the same constraint.
+ALTER TABLE public.cloud_deal_parties DROP CONSTRAINT IF EXISTS cloud_deal_parties_withheld_ck;
+ALTER TABLE public.cloud_deal_parties ADD CONSTRAINT cloud_deal_parties_withheld_ck
+  CHECK (NOT details_withheld OR (display_name IS NULL AND company IS NULL AND emails IS NULL AND phones IS NULL));
 CREATE INDEX IF NOT EXISTS cloud_deal_parties_owner_idx ON public.cloud_deal_parties (owner_user_id);
 
 CREATE TABLE IF NOT EXISTS public.cloud_deal_checklists (
@@ -755,7 +765,7 @@ DROP FUNCTION IF EXISTS public.cloud_upsert_parties(uuid, uuid, jsonb);
 CREATE OR REPLACE FUNCTION public.cloud_upsert_parties(p_expected_user_id uuid, p_source_install_id uuid, p_cloud_deal_id uuid, p_rows jsonb) RETURNS jsonb
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $f$
 DECLARE v_uid uuid := auth.uid(); v_deal uuid; r jsonb; i integer := 0; out jsonb := '[]'::jsonb;
-        cur record; v_status text; v_bad text;
+        cur record; v_status text; v_bad text; v_withheld boolean;
 BEGIN
   IF v_uid IS NULL THEN RETURN jsonb_build_object('ok', false, 'error', 'not_entitled'); END IF;
   IF p_expected_user_id IS DISTINCT FROM v_uid THEN RETURN jsonb_build_object('ok', false, 'error', 'wrong_account'); END IF;   /*WHO:parties*/
@@ -782,25 +792,30 @@ BEGIN
     i := i + 1;
   END LOOP;
   FOR r IN SELECT value FROM jsonb_array_elements(p_rows) LOOP
-    v_bad := public._cloud_bad_field(r, ARRAY['source_updated_at'], ARRAY[]::text[], ARRAY[]::text[], ARRAY['is_primary', 'contact_deleted']);
+    v_bad := public._cloud_bad_field(r, ARRAY['source_updated_at'], ARRAY[]::text[], ARRAY[]::text[], ARRAY['is_primary', 'contact_deleted', 'details_withheld']);
     IF v_bad IS NULL AND jsonb_typeof(r -> 'emails') NOT IN ('null', 'array') THEN v_bad := 'emails'; END IF;
     IF v_bad IS NULL AND jsonb_typeof(r -> 'phones') NOT IN ('null', 'array') THEN v_bad := 'phones'; END IF;
     IF v_bad IS NOT NULL THEN
       out := out || jsonb_build_object('local_id', r ->> 'local_id', 'status', 'rejected', 'reason', 'invalid_value', 'field', v_bad);
       CONTINUE;
     END IF;
+    v_withheld := coalesce((r ->> 'details_withheld')::boolean, false);                         /*PTY:withheld*/
     INSERT INTO public.cloud_deal_parties (owner_user_id, cloud_deal_id, local_party_id, content_hash, version)
     VALUES (v_uid, v_deal, r ->> 'local_id', r ->> 'content_hash', 0)
     ON CONFLICT (cloud_deal_id, local_party_id) DO NOTHING;
     SELECT * INTO cur FROM public.cloud_deal_parties WHERE cloud_deal_id = v_deal AND local_party_id = r ->> 'local_id' FOR UPDATE;
     v_status := public._cloud_row_status(cur.version, cur.removed_at, cur.content_hash, r ->> 'content_hash', (r ->> 'base_version')::bigint);
+    IF v_status = 'unchanged' AND v_withheld AND NOT cur.details_withheld THEN v_status := 'applied'; END IF;   /*PTY:flip*/
     IF v_status = 'applied' THEN
       UPDATE public.cloud_deal_parties SET
         local_contact_id = r ->> 'local_contact_id', role = r ->> 'role', role_category = r ->> 'role_category',
         specific_role = r ->> 'specific_role', is_primary = (r ->> 'is_primary')::boolean, notes = r ->> 'notes',
-        display_name = r ->> 'display_name', company = r ->> 'company',
-        emails = CASE WHEN jsonb_typeof(r -> 'emails') = 'array' THEN r -> 'emails' END,
-        phones = CASE WHEN jsonb_typeof(r -> 'phones') = 'array' THEN r -> 'phones' END,
+        -- a withheld person is stored with name, company, emails and phones NULL, whatever the row sent
+        display_name = CASE WHEN v_withheld THEN NULL ELSE r ->> 'display_name' END,                           /*PTY:name*/
+        company = CASE WHEN v_withheld THEN NULL ELSE r ->> 'company' END,                                     /*PTY:company*/
+        emails = CASE WHEN v_withheld THEN NULL WHEN jsonb_typeof(r -> 'emails') = 'array' THEN r -> 'emails' END,   /*PTY:emails*/
+        phones = CASE WHEN v_withheld THEN NULL WHEN jsonb_typeof(r -> 'phones') = 'array' THEN r -> 'phones' END,   /*PTY:phones*/
+        details_withheld = v_withheld,
         contact_source = r ->> 'contact_source', contact_deleted = coalesce((r ->> 'contact_deleted')::boolean, false),
         removed_reason = r ->> 'removed_reason', source_updated_at = (r ->> 'source_updated_at')::timestamptz,
         content_hash = r ->> 'content_hash', version = cur.version + 1, updated_at = now(), removed_at = NULL

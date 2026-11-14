@@ -1123,6 +1123,7 @@ BEGIN
   r := r || jsonb_build_object('K4_size_mismatch_fences_blob', pg_temp.k4_probe());
   r := r || jsonb_build_object('N1_freshness_clock', pg_temp.n1_probe());
   r := r || jsonb_build_object('N2_uploaded_blob_not_fenced', pg_temp.n2_probe());
+  r := r || jsonb_build_object('W1_details_withheld', pg_temp.w_probe());
 
   -- a deliberate red that the driver must count (proves the parser counts failures)
   r := r || jsonb_build_object('Z0_parser_counts_a_fail', pg_temp.pass(false, 'expected'));
