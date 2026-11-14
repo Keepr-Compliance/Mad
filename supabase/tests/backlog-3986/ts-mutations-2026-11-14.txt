@@ -1,0 +1,97 @@
+M1_no_domain_check: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: if (false) {  [no domain check]
+  exit=1 10 failed, 50 passed, 60 total -> RED; expected red: C2 C3 C4 C5 C15(b)
+    red: POST brand-new person (BACKLOG-3986) › C15(b) emails[] primary at an unverified domain, userName at the verified one: 403, no account
+    red: POST brand-new person (BACKLOG-3986) › C2 no claim for the domain: 403 domain_not_verified, no account created, nothing written, one log row
+    red: POST brand-new person (BACKLOG-3986) › C3 a lapsed claim is not verified: 403, no account
+    red: POST brand-new person (BACKLOG-3986) › C3 a pending claim is not verified: 403, no account
+    red: POST brand-new person (BACKLOG-3986) › C3 a revoked claim is not verified: 403, no account
+    red: POST brand-new person (BACKLOG-3986) › C3 a withdrawn claim is not verified: 403, no account
+    red: POST brand-new person (BACKLOG-3986) › C4 the domain is verified by another brokerage: 403, no account
+    red: POST brand-new person (BACKLOG-3986) › C5 a domain ending in the verified one is not that domain: 403, no account
+    red: POST brand-new person (BACKLOG-3986) › C5 a subdomain of the verified domain is not that domain: 403, no account
+    red: POST brand-new person (BACKLOG-3986) › C5 the parent of the verified domain is not that domain: 403, no account
+M2_domain_on_userName: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: const accountDomain = emailDomainOf(email);  [domain checked on userName, account created on the emails[] address]
+  exit=1 2 failed, 58 passed, 60 total -> RED; expected red: C15(a) C15(b)
+    red: POST brand-new person (BACKLOG-3986) › C15(a) userName at an unverified domain, emails[] primary at the verified one: created with the emails[] address
+    red: POST brand-new person (BACKLOG-3986) › C15(b) emails[] primary at an unverified domain, userName at the verified one: 403, no account
+M3_account_on_userName: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: email: email,  [account created with userName instead of emails[]]
+  exit=1 3 failed, 57 passed, 60 total -> RED; expected red: C1 C15(a)
+    red: POST brand-new person (BACKLOG-3986) › C1 verified domain, free seat: one confirmed sign-in account, membership + users row on its id, 201 at that id
+    red: POST brand-new person (BACKLOG-3986) › C10 an account with the address appears after the lookup: 500 email_exists_retry, nothing written, nothing removed
+    red: POST brand-new person (BACKLOG-3986) › C15(a) userName at an unverified domain, emails[] primary at the verified one: created with the emails[] address
+M4_email_unconfirmed: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: email_confirm: false,  [email_confirm false]
+  exit=1 1 failed, 59 passed, 60 total -> RED; expected red: C1
+    red: POST brand-new person (BACKLOG-3986) › C1 verified domain, free seat: one confirmed sign-in account, membership + users row on its id, 201 at that id
+M5_no_deleteUser: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: const deleteError = null as { message: string } | null;  [orphaned auth user (cleanup never removes the account)]
+  exit=1 5 failed, 55 passed, 60 total -> RED; expected red: C6 C7 C8 C9
+    red: POST brand-new person (BACKLOG-3986) › C11 the account cannot be removed: users row kept, orphan logged; the next POST adds that person (201, existing path)
+    red: POST brand-new person (BACKLOG-3986) › C6 full org: 403 seat_limit_reached + one IT email; the account and its users row are removed, no membership
+    red: POST brand-new person (BACKLOG-3986) › C7 billing setup pending: 403 with the setup detail; the account and its users row are removed
+    red: POST brand-new person (BACKLOG-3986) › C8 the one-brokerage guard refuses the membership: 409 already_placed; the account and its users row are removed
+    red: POST brand-new person (BACKLOG-3986) › C9 the users update fails after the membership: 500; account, membership and users row are all gone
+M6_row_removed_when_delete_fails: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: REMOVED return;  [users row removed although the account stays (R1)]
+  exit=1 1 failed, 59 passed, 60 total -> RED; expected red: C11
+    red: POST brand-new person (BACKLOG-3986) › C11 the account cannot be removed: users row kept, orphan logged; the next POST adds that person (201, existing path)
+M7_users_row_not_removed: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: .eq("id", "not-this-row");  [cleanup removes the account but leaves the users row]
+  exit=1 4 failed, 56 passed, 60 total -> RED; expected red: C6 C7 C8 C9
+    red: POST brand-new person (BACKLOG-3986) › C6 full org: 403 seat_limit_reached + one IT email; the account and its users row are removed, no membership
+    red: POST brand-new person (BACKLOG-3986) › C7 billing setup pending: 403 with the setup detail; the account and its users row are removed
+    red: POST brand-new person (BACKLOG-3986) › C8 the one-brokerage guard refuses the membership: 409 already_placed; the account and its users row are removed
+    red: POST brand-new person (BACKLOG-3986) › C9 the users update fails after the membership: 500; account, membership and users row are all gone
+M8_domain_check_hoisted: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: {  [domain rule applied to existing people too]
+  exit=1 23 failed, 37 passed, 60 total -> RED; expected red: C12 (+ existing-person tests)
+    red: POST brand-new person (BACKLOG-3986) › C12 an EXISTING Keepr person at an unverified domain is still added (201): the domain rule is for new people only
+    red: POST brand-new person (BACKLOG-3986) › C16 the verified-domain read fails: 500, no account, nothing written
+    red: POST brand-new person (BACKLOG-3986) › C2 no claim for the domain: 403 domain_not_verified, no account created, nothing written, one log row
+    red: POST existing person › C13(i) free seat: claims the unlicensed invite itself, which becomes active; exactly one row for the email
+    red: POST existing person › C13(ii) full org: 403 + one notice, the unlicensed invite stays unassigned and unclaimed, no new row
+    red: POST existing person › C13(iii) a licensed pending invite is claimed as before (active)
+    red: POST existing person › F2 free seat: the billing-only invitation is not claimed, it stays unassigned and unclaimed
+    red: POST existing person › Q-F4 (b): only their own personal account: 409, "must accept an invitation from the brokerage", nothing written
+    red: POST existing person › a non-seat membership error is a 500, and the users row is untouched
+    red: POST existing person › already in another brokerage: 409 uniqueness, nothing written, no email
+    red: POST existing person › already_placed under another code is still a 500
+    red: POST existing person › claims the person's unclaimed invite in this org instead of inserting beside it
+    red: POST existing person › free seat: inserts an active scim membership, then updates the users row; 201
+    red: POST existing person › full org: 403 seat_limit_reached, no membership, users row untouched, one email to the IT admin
+    red: POST existing person › the guard refuses the membership insert: 409 already_placed (as the read gives), users row untouched, one log row
+    red: POST existing person › the guard refuses the membership update: 409 already_placed (as the read gives), users row untouched, one log row
+    red: POST existing person: lookup by sign-in email (BACKLOG-3998) › asks user_id_for_auth_email with the userName and never filters users by email
+    red: POST existing person: lookup by tenant + object id (BACKLOG-4034) › C4 externalId = the object id: links that account, membership written, scim_external_id = object id, no new users row
+    red: billing setup pending (BACKLOG-4012) › POST existing person: 403 with the setup detail, no membership, users row untouched, one log row, no email
+    red: billing setup pending (BACKLOG-4012) › POST that claims the person's staff invite still works (invite-based, not blocked)
+    red: seat email › a refusal older than 24 h does not suppress the email
+    red: seat email › no active IT admin: falls back to the active admins
+    red: seat email › portal call fails, hangs past the timeout, or is not configured: still 403
+M9_email_exists_generic: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: errorMessage: false  [email_exists not told apart]
+  exit=1 1 failed, 59 passed, 60 total -> RED; expected red: C10
+    red: POST brand-new person (BACKLOG-3986) › C10 an account with the address appears after the lookup: 500 email_exists_retry, nothing written, nothing removed
+M10_no_already_placed_mapping: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: if (false) {  [guard refusal in the new-person branch read as a 500]
+  exit=1 1 failed, 59 passed, 60 total -> RED; expected red: C8
+    red: POST brand-new person (BACKLOG-3986) › C8 the one-brokerage guard refuses the membership: 409 already_placed; the account and its users row are removed
+M11_externalId_error_ignored: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: if (false) {  [BACKLOG-4138: failed externalId read read as no such person]
+  exit=1 1 failed, 59 passed, 60 total -> RED; expected red: C14
+    red: POST brand-new person (BACKLOG-3986) › C14 (BACKLOG-4138) the externalId read fails: 500, no lookup, no account, nothing written
+M12_cleanup_only_on_seat: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: if (isSeatLimitError(newMemberError)) await removeNewPerson();  [cleanup only in the seat branch]
+  exit=1 2 failed, 58 passed, 60 total -> RED; expected red: C7 C8
+    red: POST brand-new person (BACKLOG-3986) › C7 billing setup pending: 403 with the setup detail; the account and its users row are removed
+    red: POST brand-new person (BACKLOG-3986) › C8 the one-brokerage guard refuses the membership: 409 already_placed; the account and its users row are removed
+M13_no_cleanup_after_users_update: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: REMOVED await removeNewPerson();  [no cleanup when the users update fails]
+  exit=1 1 failed, 59 passed, 60 total -> RED; expected red: C9
+    red: POST brand-new person (BACKLOG-3986) › C9 the users update fails after the membership: 500; account, membership and users row are all gone
+M14_status_filter_dropped: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: REMOVED .eq("status", "verified")  [any claim status counts]
+  exit=1 4 failed, 56 passed, 60 total -> RED; expected red: C3
+    red: POST brand-new person (BACKLOG-3986) › C3 a lapsed claim is not verified: 403, no account
+    red: POST brand-new person (BACKLOG-3986) › C3 a pending claim is not verified: 403, no account
+    red: POST brand-new person (BACKLOG-3986) › C3 a revoked claim is not verified: 403, no account
+    red: POST brand-new person (BACKLOG-3986) › C3 a withdrawn claim is not verified: 403, no account
+M15_org_filter_dropped: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: REMOVED .eq("organization_id", auth.orgId)  [another brokerage's claim counts]
+  exit=1 1 failed, 59 passed, 60 total -> RED; expected red: C4
+    red: POST brand-new person (BACKLOG-3986) › C4 the domain is verified by another brokerage: 403, no account
+M16_parent_domain_match: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: const accountDomain = emailDomainOf(accountEmail)?.split(".").slice(-2).join(".") ?? null;  [subdomain matched to its parent domain]
+  exit=1 1 failed, 59 passed, 60 total -> RED; expected red: C5
+    red: POST brand-new person (BACKLOG-3986) › C5 a subdomain of the verified domain is not that domain: 403, no account
+M17_claim_read_error_ignored: MUTATION APPLIED supabase/functions/scim/handlers/users.ts: if (false) {  [failed domain read read as no claim / claim]
+  exit=1 1 failed, 59 passed, 60 total -> RED; expected red: C16
+    red: POST brand-new person (BACKLOG-3986) › C16 the verified-domain read fails: 500, no account, nothing written
+restored scim suite: exit=0 60 passed, 60 total
