@@ -299,7 +299,9 @@ describe('BACKLOG-4236 cloud auto-save migrations', () => {
     expect(RB).toContain("DELETE FROM supabase_migrations.schema_migrations WHERE version IN ('20261112180000', '20261112190000');");
   });
 
-  it('no client code reads either key yet (positive control: autodetect_eval is found)', () => {
+  // BACKLOG-4243: the desktop reads the two keys only to decide whether Settings
+  // may ask the server for the per-user Keepr Cloud state. Any other reader turns this red.
+  it('only the Keepr Cloud strict-key reads name either key (positive control: autodetect_eval is found)', () => {
     const scan = (dir: string, out: string[]): void => {
       for (const e of readdirSync(join(REPO, dir), { withFileTypes: true })) {
         const p = `${dir}/${e.name}`;
@@ -314,7 +316,7 @@ describe('BACKLOG-4236 cloud auto-save migrations', () => {
     };
     const hits: string[] = [];
     for (const d of ['electron', 'src', 'broker-portal']) scan(d, hits);
-    expect(hits).toEqual([]);
+    expect(hits.sort()).toEqual(['electron/handlers/cloudSyncHandlers.ts', 'electron/types/featureGate.ts']);
     expect(readFileSync(join(REPO, 'electron/handlers/featureGateHandlers.ts'), 'utf8')).toContain('autodetect_eval');
   });
 });
