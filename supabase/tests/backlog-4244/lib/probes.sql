@@ -33,7 +33,7 @@ BEGIN
                  AND r -> 'copy' ->> 'newest_saved_at' ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$', (r -> 'copy')::text),
     pg_temp.pass(NOT EXISTS (SELECT 1 FROM jsonb_array_elements(r -> 'deals') x WHERE pg_temp.keys(x) IS DISTINCT FROM pg_temp.k_list_deal()),
                  'deal keys ' || (SELECT pg_temp.keys(x)::text FROM jsonb_array_elements(r -> 'deals') x LIMIT 1)),
-    pg_temp.pass(d1 -> 'people' = '5'::jsonb AND d1 -> 'todos_total' = '5'::jsonb AND d1 -> 'todos_open_required' = '2'::jsonb, d1::text),
+    pg_temp.pass(d1 -> 'people' = '5'::jsonb AND d1 -> 'todos_total' = '6'::jsonb AND d1 -> 'todos_open_required' = '2'::jsonb, d1::text),
     pg_temp.pass(d1 ->> 'found_by' = 'person' AND pg_temp.deal_of(t, pg_temp.id('D3')) ->> 'found_by' = 'keepr'
                  AND pg_temp.deal_of(t, pg_temp.id('D3')) ->> 'locked' = 'submitted' AND d1 ->> 'started_on' = '2026-10-02',
                  pg_temp.deal_of(t, pg_temp.id('D3'))::text),
@@ -183,8 +183,8 @@ DECLARE g jsonb := pg_temp.res_of(pg_temp.gd('a1', pg_temp.id('D1')::text)); c j
 BEGIN
   RETURN pg_temp.all_of(
     pg_temp.pass(g -> 'people_total' = '5'::jsonb AND NOT (g::text LIKE '%' || pg_temp.id('P4')::text || '%'), 'people ' || (g -> 'people_total')::text),
-    pg_temp.pass(l -> 'people' = '5'::jsonb AND l -> 'todos_total' = '5'::jsonb, 'list counts ' || l::text),
-    pg_temp.pass(c -> 'items_total' = '5'::jsonb AND c -> 'items_returned' = '5'::jsonb, 'items ' || (c -> 'items_total')::text || '/' || (c -> 'items_returned')::text),
+    pg_temp.pass(l -> 'people' = '5'::jsonb AND l -> 'todos_total' = '6'::jsonb, 'list counts ' || l::text),
+    pg_temp.pass(c -> 'items_total' = '6'::jsonb AND c -> 'items_returned' = '6'::jsonb, 'items ' || (c -> 'items_total')::text || '/' || (c -> 'items_returned')::text),
     pg_temp.pass(NOT (c::text LIKE '%' || pg_temp.id('CL3')::text || '%') AND NOT (c::text LIKE '%' || pg_temp.id('IT6')::text || '%')
                  AND NOT (c::text LIKE '%' || pg_temp.id('IT7')::text || '%'), 'removed checklist or item shown'),
     pg_temp.pass(position('[removed]' IN c::text) = 0, 'removed title'),
@@ -234,10 +234,10 @@ BEGIN
     FROM jsonb_array_elements(coalesce(r1 -> 'deals', '[]') || coalesce(r2 -> 'deals', '[]')) WITH ORDINALITY y(x, o);
   RETURN pg_temp.all_of(
     pg_temp.pass(cardinality(pg_temp.ids(t1)) = 50 AND r1 -> 'page' ->> 'next_cursor' IS NOT NULL, left(t1, 200)),
-    pg_temp.pass(cardinality(pg_temp.ids(t2)) = 11 AND r2 -> 'page' -> 'next_cursor' = 'null'::jsonb, left(t2, 300)),
-    pg_temp.pass((SELECT count(DISTINCT x) FROM unnest(all_ids) x) = 61, 'distinct ' || cardinality(all_ids)),
-    pg_temp.pass(s = (SELECT array_agg(v ORDER BY v DESC) FROM unnest(s) v) AND s[1] > s[61], 'order'),
-    pg_temp.pass((r1 -> 'copy' ->> 'deals_saved') = '61', 'copy'));
+    pg_temp.pass(cardinality(pg_temp.ids(t2)) = 12 AND r2 -> 'page' -> 'next_cursor' = 'null'::jsonb, left(t2, 300)),
+    pg_temp.pass((SELECT count(DISTINCT x) FROM unnest(all_ids) x) = 62, 'distinct ' || cardinality(all_ids)),
+    pg_temp.pass(s = (SELECT array_agg(v ORDER BY v DESC) FROM unnest(s) v) AND s[1] > s[62], 'order'),
+    pg_temp.pass((r1 -> 'copy' ->> 'deals_saved') = '62', 'copy'));
 END $h$;
 
 CREATE FUNCTION pg_temp.p_people_cap() RETURNS text LANGUAGE plpgsql AS $h$
@@ -366,7 +366,7 @@ BEGIN
     pg_temp.pass(pg_temp.keys(c #> '{checklists,0}') = ARRAY['checklist_id','items','name','private']
                  AND pg_temp.keys(c #> '{checklists,0,items,0}') = ARRAY['description','done','done_at','expected_document','item_id','note','required','title'], 'keys'),
     pg_temp.pass(c -> 'items_open_required' = '2'::jsonb AND c -> 'more' = 'false'::jsonb, 'counts'),
-    pg_temp.pass(o -> 'items_returned' = '4'::jsonb AND position(pg_temp.id('IT1')::text IN o::text) > 0, 'only_open ' || (o -> 'items_returned')::text),
+    pg_temp.pass(o -> 'items_returned' = '5'::jsonb AND position(pg_temp.id('IT1')::text IN o::text) > 0, 'only_open ' || (o -> 'items_returned')::text),
     pg_temp.pass(jsonb_array_length(one -> 'checklists') = 1 AND one #>> '{checklists,0,checklist_id}' = pg_temp.id('CL2')::text, 'one'),
     pg_temp.pass(pg_temp.err(pg_temp.gc('a1', pg_temp.id('D2')::text, NULL, pg_temp.id('CL1')::text)) = 'not_found', 'checklist of another deal'),
     pg_temp.pass(c #>> '{checklists,0,items,2,done_at}' = '2026-10-06T15:30:00.000000Z', 'done_at ' || coalesce(c #>> '{checklists,0,items,2,done_at}', '-')));
@@ -381,7 +381,7 @@ BEGIN
     pg_temp.pass(pg_temp.err(a) = 'OK' AND pg_temp.err(b) = 'OK' AND pg_temp.err(c) = 'OK', left(a, 120) || ' ' || left(b, 120) || ' ' || left(c, 120)),
     pg_temp.pass((SELECT l.rows_returned FROM public.mcp_call_log l WHERE l.tool = 'list_deals' AND l.user_id = pg_temp.fx(1) ORDER BY l.id DESC LIMIT 1) = 4, 'list rows'),
     pg_temp.pass((SELECT l.rows_returned FROM public.mcp_call_log l WHERE l.tool = 'get_deal' AND l.user_id = pg_temp.fx(1) ORDER BY l.id DESC LIMIT 1) = 5, 'get rows'),
-    pg_temp.pass((SELECT l.rows_returned FROM public.mcp_call_log l WHERE l.tool = 'get_deal_checklists' AND l.user_id = pg_temp.fx(1) ORDER BY l.id DESC LIMIT 1) = 5, 'checklist rows'),
+    pg_temp.pass((SELECT l.rows_returned FROM public.mcp_call_log l WHERE l.tool = 'get_deal_checklists' AND l.user_id = pg_temp.fx(1) ORDER BY l.id DESC LIMIT 1) = 6, 'checklist rows'),
     pg_temp.pass(pg_temp.nlog('get_deal', 'ok') >= 1 AND pg_temp.nlog('get_deal_checklists', 'ok') >= 1, 'outcomes'));
 END $h$;
 

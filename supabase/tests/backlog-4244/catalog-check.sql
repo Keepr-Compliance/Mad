@@ -1,5 +1,5 @@
 SELECT jsonb_build_object(
- '4244_objects', (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('mcp_list_deals','mcp_get_deal','mcp_get_deal_checklists','_mcp_r_list_deals','_mcp_r_get_deal','_mcp_r_deal_checklists','_mcp_txt','_mcp_mask','_mcp_clean','_mcp_ts','_mcp_day')),
+ '4244_objects', (SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname IN ('mcp_list_deals','mcp_get_deal','mcp_get_deal_checklists','_mcp_r_list_deals','_mcp_r_get_deal','_mcp_r_deal_checklists','_mcp_strip','_mcp_txt','_mcp_mask','_mcp_clean','_mcp_ts','_mcp_day')),
  'ledger_4244', (SELECT count(*) FROM supabase_migrations.schema_migrations WHERE version = '20261114110000'),
  'call_log_checks', (SELECT string_agg(c.conname || '=' || pg_get_constraintdef(c.oid), '; ' ORDER BY c.conname) FROM pg_constraint c WHERE c.conrelid = 'public.mcp_call_log'::regclass AND c.contype = 'c'),
  'call_log_new_tools', (SELECT count(*) FROM public.mcp_call_log WHERE tool IN ('list_deals','get_deal','get_deal_checklists')),
