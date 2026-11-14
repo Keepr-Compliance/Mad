@@ -1,7 +1,8 @@
 /**
  * Learn mode storage — BACKLOG-4120.
  *
- * Writes only the three learn_ tables; reads `emails` and `transactions`.
+ * Writes only the learn tables (since BACKLOG-4212 also the sender overrides);
+ * reads `emails` and `transactions`.
  * See learnModeSql.ts. Nothing here creates, changes or removes a
  * transaction, and nothing here removes a learn row (soft removal only).
  */
@@ -10,6 +11,7 @@ import { dbAll, dbGet, dbRun, dbTransaction } from "./core/dbConnection";
 import {
   ANSWERED_BULK_WITH_TEXT_SQL,
   ANSWER_BULK_SQL,
+  BULK_ROW_SENDER_SQL,
   ANSWER_KEY_TRANSACTIONS_SQL,
   COUNT_LIVE_ANSWERS_SQL,
   COUNT_LIVE_BULK_SAMPLE_SQL,
@@ -40,10 +42,12 @@ import {
   SOFT_DELETE_DEAL_ANSWER_SQL,
   SOFT_CLEAR_BULK_SQL,
   SOFT_CLEAR_DEAL_ANSWERS_SQL,
+  SOFT_CLEAR_SENDER_OVERRIDES_SQL,
   UPSERT_DEAL_ANSWER_SQL,
   UPSERT_LEARN_MODE_ENABLED_SQL,
 } from "./learnModeSql";
 import type { BulkAnswer, DealAnswer } from "../learn/learnRules";
+import { fromAddress } from "../../utils/senderFilter/senderFilter";
 
 export interface LearnEmailRow {
   id: string;
@@ -306,10 +310,23 @@ export function nextUnansweredBulk(userId: string): BulkSampleRow | null {
   return dbGet<BulkSampleRow>(NEXT_UNANSWERED_BULK_SQL, [userId]) ?? null;
 }
 
-/** Returns false when the row is not the user's live sample row. */
+/**
+ * Returns false when the row is not the user's live sample row.
+ *
+ * BACKLOG-4212: one transaction reads the message's cached From header,
+ * normalises it, and sets the answer and `sender_key` in ONE UPDATE, so an
+ * answer never exists without the sender it was given for. `sender_key` is
+ * NULL when the message is not cached (that answer then never counts toward
+ * hiding). A re-answer re-snapshots.
+ */
 export function answerBulk(userId: string, rowId: string, answer: BulkAnswer): boolean {
   const now = nowIso();
-  return dbRun(ANSWER_BULK_SQL, [answer, now, now, userId, rowId]).changes > 0;
+  return dbTransaction(() => {
+    const row = dbGet<{ sender: string | null }>(BULK_ROW_SENDER_SQL, [userId, rowId]);
+    if (!row) return false;
+    const senderKey = fromAddress(row.sender);
+    return dbRun(ANSWER_BULK_SQL, [answer, now, now, senderKey, userId, rowId]).changes > 0;
+  });
 }
 
 export function listAnsweredBulkWithText(userId: string): AnsweredBulkRow[] {
@@ -318,13 +335,20 @@ export function listAnsweredBulkWithText(userId: string): AnsweredBulkRow[] {
 
 // ---- delete my answers ----------------------------------------------------
 
-/** Soft-removes every live cleanup answer and sample row. Rows stay on disk. */
+/**
+ * Soft-removes every live cleanup answer and sample row and (BACKLOG-4212)
+ * every live "Stop hiding" row, in one transaction. Rows stay on disk.
+ */
 export function softClearAnswers(userId: string): { deal: number; bulk: number } {
   const now = nowIso();
-  return dbTransaction(() => ({
-    deal: dbRun(SOFT_CLEAR_DEAL_ANSWERS_SQL, [now, now, userId]).changes,
-    bulk: dbRun(SOFT_CLEAR_BULK_SQL, [now, now, userId]).changes,
-  }));
+  return dbTransaction(() => {
+    const removed = {
+      deal: dbRun(SOFT_CLEAR_DEAL_ANSWERS_SQL, [now, now, userId]).changes,
+      bulk: dbRun(SOFT_CLEAR_BULK_SQL, [now, now, userId]).changes,
+    };
+    dbRun(SOFT_CLEAR_SENDER_OVERRIDES_SQL, [now, now, userId]);
+    return removed;
+  });
 }
 
 // ---- "Your answers" (2.46.2) ---------------------------------------------
