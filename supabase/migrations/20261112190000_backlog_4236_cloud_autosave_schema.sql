@@ -809,7 +809,7 @@ BEGIN
     out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
                                      'content_hash', cur.content_hash, 'status', v_status);
   END LOOP;
-  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:child*/
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:parties*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
 REVOKE ALL ON FUNCTION public.cloud_upsert_parties(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
@@ -871,7 +871,7 @@ BEGIN
     out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
                                      'content_hash', cur.content_hash, 'status', v_status);
   END LOOP;
-  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:child*/
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:checklists*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
 REVOKE ALL ON FUNCTION public.cloud_upsert_checklists(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;
@@ -942,7 +942,7 @@ BEGIN
     out := out || jsonb_build_object('local_id', r ->> 'local_id', 'cloud_id', cur.id, 'version', cur.version,
                                      'content_hash', cur.content_hash, 'status', v_status);
   END LOOP;
-  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:child*/
+  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:items*/
   RETURN jsonb_build_object('ok', true, 'results', out);
 END $f$;
 REVOKE ALL ON FUNCTION public.cloud_upsert_checklist_items(uuid, uuid, uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;

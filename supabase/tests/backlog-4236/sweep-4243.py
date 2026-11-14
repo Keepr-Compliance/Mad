@@ -175,9 +175,9 @@ def sweep_fn():
     b.append(fn_mutant('N1_deal_transaction_start', 'cloud_upsert_deal',
                        '    v_now := clock_timestamp();                                                              /*CLOCK:deal*/',
                        '    v_now := now();                                                              /*CLOCK:deal*/', N1))
-    CHILD = 'greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:child*/'
+    CHILD = 'greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:%s*/'
     for fn_name, tag in [('cloud_upsert_parties', 'parties'), ('cloud_upsert_checklists', 'checklists'), ('cloud_upsert_checklist_items', 'items')]:
-        b.append(fn_mutant('N1_%s_transaction_start' % tag, fn_name, CHILD, 'now() WHERE id = v_deal;   /*CLOCK:child*/', N1, cnt=3))
+        b.append(fn_mutant('N1_%s_transaction_start' % tag, fn_name, CHILD % tag, 'now() WHERE id = v_deal;   /*CLOCK:%s*/' % tag, N1))
     b.append(fn_mutant('N1_messages_transaction_start', 'cloud_upsert_messages',
                        'greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*MSG:touch*/', 'now() WHERE id = v_deal;   /*MSG:touch*/', N1))
     b.append(fn_mutant('N1_files_transaction_start', 'cloud_upsert_files',
@@ -185,7 +185,7 @@ def sweep_fn():
     b.append(fn_mutant('N1_tombstone_transaction_start', 'cloud_tombstone',
                        '  v_now := clock_timestamp();                                                                /*CLOCK:tombstone*/',
                        '  v_now := now();                                                                /*CLOCK:tombstone*/', N1))
-    b.append(fn_mutant('N1_parties_no_greatest', 'cloud_upsert_parties', CHILD, 'clock_timestamp() WHERE id = v_deal;   /*CLOCK:child*/', N1, cnt=3))
+    b.append(fn_mutant('N1_parties_no_greatest', 'cloud_upsert_parties', CHILD % 'parties', 'clock_timestamp() WHERE id = v_deal;   /*CLOCK:parties*/', N1))
     # N2: an uploaded blob is confirmed again without a storage read
     b.append(fn_mutant('N2_no_early_return', 'cloud_confirm_blob',
                        "  IF b.uploaded_at IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'state', 'uploaded'); END IF;   /*CONFIRM:already*/\n",

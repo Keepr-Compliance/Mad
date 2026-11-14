@@ -67,8 +67,8 @@ MODES = {
     'no 40P01; both results ok with [applied, applied] -> PASS',
     'session 2 locks the high blob, waits on low; session 1 then waits on high: 40P01 in one session -> FAIL'),
   'S_C5_child_touch_transaction_start': ('C5', 'cloud_upsert_parties', [
-      ("  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:child*/\n  RETURN jsonb_build_object('ok', true, 'results', out);\nEND $f$;\nREVOKE ALL ON FUNCTION public.cloud_upsert_parties",
-       "  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;   /*CLOCK:child*/\n  RETURN jsonb_build_object('ok', true, 'results', out);\nEND $f$;\nREVOKE ALL ON FUNCTION public.cloud_upsert_parties")],
+      ("  UPDATE public.cloud_deals SET last_synced_at = greatest(last_synced_at, clock_timestamp()) WHERE id = v_deal;   /*CLOCK:parties*/\n",
+       "  UPDATE public.cloud_deals SET last_synced_at = now() WHERE id = v_deal;   /*CLOCK:parties*/\n")],
     'upsert applied, mark ok; synced_after_full=true -> PASS',
     'the upsert stamps its transaction start, earlier than the mark: synced_after_full=false -> FAIL'),
 }
