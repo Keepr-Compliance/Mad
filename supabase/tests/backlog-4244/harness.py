@@ -543,13 +543,15 @@ def main():
             red = v.startswith('FAIL')
             ok = red if want == 'red' else (v == 'PASS')
             caught += ok; missed += (not ok)
-            print('%-62s want=%-5s %s  %s' % (k, want, ('RED' if red else ('GREEN' if v == 'PASS' else 'OTHER')) + (' ok' if ok else ' UNEXPECTED'), v[:240]))
+            print('%-62s want=%-5s %s  %s' % (k, want, ('RED' if red else ('GREEN' if v == 'PASS' else 'OTHER')) + (' ok' if ok else ' UNEXPECTED'), v[:2000]))
         elif k.startswith('C_'):
             ok = v == 'PASS'
             cp += ok; cf += (not ok)
             print('%-62s %s' % (k, v[:600]))
         elif k.startswith('FX_'):
             print('%-62s %d bytes %s' % (k, len(v), v[:100]))
+        elif k.startswith('OBS_'):
+            print('%-62s %s' % (k, v))
         else:
             print('%-62s %s' % (k, v[:600]))
     print('CONTROLS pass=%d fail=%d total=%d' % (cp, cf, cp + cf))
