@@ -84,6 +84,11 @@ export interface SenderRuleSet {
     minCensusLinkedEmails: number;
     reportSendIntervalHours: number;
     reportMaxRows: number;
+    /**
+     * BACKLOG-4212. Optional: newsletter answers needed before a sender is hidden for the user
+     * who gave them (integer 0-20; 0 = off). Absent from the bundled set.
+     */
+    userSuppressMinAnswers?: number;
   };
   modes: Readonly<Record<SenderRuleSignal, SenderRuleModes>>;
 }
