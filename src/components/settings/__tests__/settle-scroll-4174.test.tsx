@@ -16,6 +16,7 @@
  *        no re-scroll, so the smooth landing is left alone.
  *   C8   a burst of resize reports in one frame: one re-scroll.
  *   C9   the window ends (wheel) before the frame runs: no re-scroll.
+ *   C10  growth in two separate frames: two re-scrolls (the latch re-arms).
  *   C7   the spacer is 0 at landing and its FIRST report is already grown:
  *        About is re-scrolled.
  *
@@ -303,6 +304,18 @@ describe("BACKLOG-4174 the landed section stays at the top while Settings settle
     });
     frame();
     expect(calls.slice(n)).toEqual([]);
+  });
+
+  it("C10 growth in two separate frames is two re-scrolls", async () => {
+    const n = await landAtAbout();
+    report(content(), 400);
+    frame();
+    report(content(), 600);
+    frame();
+    expect(calls.slice(n)).toEqual([
+      { id: "settings-about", behavior: "smooth" },
+      { id: "settings-about", behavior: "smooth" },
+    ]);
   });
 
   it("C2 a wheel before the growth ends the window", async () => {
