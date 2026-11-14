@@ -21,12 +21,18 @@ export const CONSENT = {
   onlyIf: (provider: string) =>
     `Only continue if you just started connecting Keepr from ${provider}. Otherwise choose Deny.`,
   scope:
-    'It can read the deals saved to Keepr Cloud, including hidden texts and emails waiting for review. It cannot change, send or delete anything.',
+    'It can read the deals you saved to Keepr Cloud: details, prices, commission, checklists and todos. ' +
+    'It can also read the people on each deal, with their names, companies, email addresses, phone numbers and notes. ' +
+    'It cannot read your emails, texts, files or contact list. ' +
+    'It cannot change, send or delete anything.',
   agreement: (provider: string) =>
-    `What ${provider} does with what it reads is covered by your agreement with ${provider}.`,
+    `What it reads, including other people's contact details, is sent to ${provider}. ` +
+    `What ${provider} does with it is covered by your agreement with ${provider}.`,
   disconnect:
     'You can disconnect it any time in Account > AI apps. Disconnecting does not delete what the app already received.',
-  whatDisconnects: 'Turning Keepr Cloud off also disconnects every AI app. Signing out does not, including "Sign out all devices".',
+  whatDisconnects:
+    'Turning Keepr Cloud off deletes your online copy and disconnects every AI app. ' +
+    'Signing out does not disconnect them, including "Sign out all devices".',
   signedInAs: (email: string) => `Signed in as ${email}`,
   allow: 'Allow',
   deny: 'Deny',
