@@ -3,9 +3,14 @@
  *
  * PURE. No Supabase, no React. The server page and the client controls share it.
  *
- * The values here are exactly the ones public.broker_report_submissions_rows
- * accepts (migration 20261112200000): one status filter value with the
- * Submissions page's meanings, five sorts. Anything else in the URL is ignored.
+ * The values here are exactly the ones public.broker_report_submissions_rows_multi
+ * accepts (migration 20261114100000): a list of status filter values with the
+ * Submissions page's meanings, a list of agents, five sorts. Anything else in
+ * the URL is ignored.
+ *
+ * BACKLOG-3513 PR-3h: Status and Agent are multi-select. The URL carries each as
+ * a comma list (`?status=approved,rejected&agent=<uuid>,<uuid>`); an old
+ * single-value URL or stored definition reads as a one-item list.
  */
 
 import { parseAgentParam } from '@/lib/submissions/listUrl';
@@ -19,9 +24,8 @@ export const SUBMISSIONS_REPORT_PAGE_SIZE = 25;
 /** Shown when the brokerage's service is off (broker_report_scope.service_off). */
 export const SERVICE_OFF_LINE = "While the brokerage's service is off, reports show only submissions you sent yourself.";
 
-/** Status filter values, labelled as on the Submissions page. */
+/** Status filter values, labelled as on the Submissions page. None selected = every status. */
 export const SUBMISSIONS_STATUS_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
-  { value: 'all', label: 'All' },
   { value: 'submitted', label: 'Pending' },
   { value: 'pending', label: 'Pending Review' },
   { value: 'new', label: 'New' },
@@ -50,9 +54,14 @@ const SORT_DIRECTION: Record<SubmissionsSort, 'asc' | 'desc'> = {
   price_asc: 'asc',
 };
 
+/** At most this many agents are kept from a URL or a stored definition. */
+export const MAX_AGENT_FILTERS = 50;
+
 export interface SubmissionsReportFilters {
-  status: string;
-  agent: string | null;
+  /** Status filter values in SUBMISSIONS_STATUS_OPTIONS order. Empty = every status. */
+  statuses: string[];
+  /** Agent ids, lower case, sorted. Empty = every agent. */
+  agents: string[];
   /** YYYY-MM-DD, inclusive. */
   from: string | null;
   /** YYYY-MM-DD, inclusive. */
@@ -62,8 +71,8 @@ export interface SubmissionsReportFilters {
 }
 
 export const DEFAULT_SUBMISSIONS_FILTERS: SubmissionsReportFilters = {
-  status: 'all',
-  agent: null,
+  statuses: [],
+  agents: [],
   from: null,
   to: null,
   sort: 'newest',
@@ -85,8 +94,31 @@ export function parseDateParam(value: string | undefined | null): string | null 
   return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value ? value : null;
 }
 
-export function parseStatusParam(value: string | undefined | null): string {
-  return SUBMISSIONS_STATUS_OPTIONS.some((o) => o.value === value) ? (value as string) : 'all';
+/** The comma-separated items of a URL value (a repeated param is read the same way). */
+function items(value: string | string[] | undefined | null): string[] {
+  const raw = Array.isArray(value) ? value : value ? [value] : [];
+  return raw.flatMap((v) => v.split(',')).map((v) => v.trim()).filter((v) => v !== '');
+}
+
+/**
+ * Status filter values from a URL value or a stored definition. Unknown items are dropped;
+ * 'all' anywhere, or every status picked, is no filter ([]). Deduped, in option order.
+ */
+export function parseStatusesParam(value: string | string[] | undefined | null): string[] {
+  const picked = items(value);
+  if (picked.includes('all')) return [];
+  const kept = SUBMISSIONS_STATUS_OPTIONS.map((o) => o.value).filter((v) => picked.includes(v));
+  return kept.length === SUBMISSIONS_STATUS_OPTIONS.length ? [] : kept;
+}
+
+/** Agent ids from a URL value or a stored definition: uuids only, lower case, deduped, sorted, at most MAX_AGENT_FILTERS. */
+export function parseAgentsParam(value: string | string[] | undefined | null): string[] {
+  const ids = new Set<string>();
+  for (const item of items(value)) {
+    const id = parseAgentParam(item);
+    if (id) ids.add(id);
+  }
+  return Array.from(ids).sort().slice(0, MAX_AGENT_FILTERS);
 }
 
 export function parseSubmissionsSort(value: string | undefined | null): SubmissionsSort {
@@ -96,8 +128,8 @@ export function parseSubmissionsSort(value: string | undefined | null): Submissi
 /** The report's filters from the URL. Unknown or malformed values fall back to the defaults. */
 export function parseSubmissionsReportParams(params: SubmissionsSearchParams): SubmissionsReportFilters {
   return {
-    status: parseStatusParam(one(params.status)),
-    agent: parseAgentParam(one(params.agent)),
+    statuses: parseStatusesParam(params.status),
+    agents: parseAgentsParam(params.agent),
     from: parseDateParam(one(params.from)),
     to: parseDateParam(one(params.to)),
     sort: parseSubmissionsSort(one(params.sort)),
@@ -107,8 +139,9 @@ export function parseSubmissionsReportParams(params: SubmissionsSearchParams): S
 
 /**
  * The report URL for these filters. Defaults are left out, except on a shared
- * report (BACKLOG-3513 PR-3b): there `explicit` keeps `status` in the URL so
- * the page can tell "the person changed the filters" from "use the saved ones".
+ * report (BACKLOG-3513 PR-3b): there `explicit` keeps `status` in the URL
+ * (`status=all` when no status is picked) so the page can tell "the person
+ * changed the filters" from "use the saved ones".
  */
 export function buildSubmissionsReportUrl(
   filters: SubmissionsReportFilters,
@@ -116,8 +149,11 @@ export function buildSubmissionsReportUrl(
   explicit = false
 ): string {
   const q = new URLSearchParams();
-  if (explicit || filters.status !== 'all') q.set('status', filters.status);
-  if (filters.agent) q.set('agent', filters.agent);
+  const statuses = parseStatusesParam(filters.statuses);
+  const agents = parseAgentsParam(filters.agents);
+  if (statuses.length > 0) q.set('status', statuses.join(','));
+  else if (explicit) q.set('status', 'all');
+  if (agents.length > 0) q.set('agent', agents.join(','));
   if (filters.from) q.set('from', filters.from);
   if (filters.to) q.set('to', filters.to);
   if (filters.sort !== 'newest') q.set('sort', filters.sort);
@@ -142,11 +178,19 @@ export function dateBounds(filters: Pick<SubmissionsReportFilters, 'from' | 'to'
   return { from, to };
 }
 
+/** None: left out. One: the plain value, exactly as a single-select definition stored it. More: the list. */
+function listValue(list: string[]): FilterValue | undefined {
+  if (list.length === 0) return undefined;
+  return list.length === 1 ? list[0] : [...list];
+}
+
 /** The page state a saved view stores. */
 export function filtersToViewState(filters: SubmissionsReportFilters): ViewState {
   const f: Record<string, FilterValue> = {};
-  if (filters.status !== 'all') f.status = filters.status;
-  if (filters.agent) f.agent = filters.agent;
+  const status = listValue(filters.statuses);
+  const agent = listValue(filters.agents);
+  if (status !== undefined) f.status = status;
+  if (agent !== undefined) f.agent = agent;
   if (filters.from) f.from = filters.from;
   if (filters.to) f.to = filters.to;
   const sort = filters.sort === 'newest' ? null : { key: filters.sort, direction: SORT_DIRECTION[filters.sort] };
@@ -156,9 +200,12 @@ export function filtersToViewState(filters: SubmissionsReportFilters): ViewState
 /** A saved view's state back to report filters, through the same parsers as the URL. */
 export function viewStateToFilters(view: ViewState): SubmissionsReportFilters {
   const str = (v: FilterValue | undefined) => (typeof v === 'string' ? v : undefined);
+  // A single-select definition stored a string; a multi-select one stores a string, or a list for 2+.
+  const list = (v: FilterValue | undefined) =>
+    typeof v === 'string' ? v : Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : undefined;
   return {
-    status: parseStatusParam(str(view.filters.status)),
-    agent: parseAgentParam(str(view.filters.agent)),
+    statuses: parseStatusesParam(list(view.filters.status)),
+    agents: parseAgentsParam(list(view.filters.agent)),
     from: parseDateParam(str(view.filters.from)),
     to: parseDateParam(str(view.filters.to)),
     sort: parseSubmissionsSort(view.sort?.key),
@@ -194,7 +241,7 @@ export function definitionToFilters(definition: unknown): SubmissionsReportFilte
  * them on this page (the URL carries `status`), else the saved ones.
  */
 export function resolveDefinitionFilters(params: SubmissionsSearchParams, definition: unknown): SubmissionsReportFilters {
-  if (typeof params.status === 'string') return parseSubmissionsReportParams(params);
+  if (typeof params.status === 'string' || Array.isArray(params.status)) return parseSubmissionsReportParams(params);
   const page = parseSubmissionsReportParams(params).page;
   return { ...definitionToFilters(definition), page };
 }

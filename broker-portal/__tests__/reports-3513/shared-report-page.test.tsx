@@ -122,7 +122,7 @@ function given(w: World) {
     }
     // The page never reads share_list (owner state comes from def_get.reassign_available).
     if (name === 'broker_report_scope') return { data: { level: w.level, row_scope: 'all', service_off: false, effective_scope: 'all' }, error: null };
-    if (name === 'broker_report_submissions_rows') return { data: [], error: null };
+    if (name === 'broker_report_submissions_rows_multi') return { data: [], error: null };
     return { data: null, error: { message: `unexpected rpc ${name}` } };
   });
 }
@@ -229,25 +229,36 @@ describe('rows and filters', () => {
     expect(mockClientRpc.mock.calls.map(([n]) => n)).not.toContain('broker_report_list_views');
   });
 
+  // The default definition is the 2.48 shape: {filters: {status: 'approved'}} (one string).
+  // Mutation (run): the reader takes lists only -> red.
   it('U6 every request reads the definition, then rows with p_def = this report and its saved filters', async () => {
     await renderPage('full', { level: 'viewer' });
     const names = mockRpc.mock.calls.map(([n]) => n);
     expect(names[0]).toBe('broker_report_def_get');
-    const rows = mockRpc.mock.calls.filter(([n]) => n === 'broker_report_submissions_rows').map(([, a]) => a);
+    const rows = mockRpc.mock.calls.filter(([n]) => n === 'broker_report_submissions_rows_multi').map(([, a]) => a);
     expect(rows.length).toBeGreaterThan(0);
-    for (const a of rows) expect(a).toMatchObject({ p_org: ORG, p_def: DEF, p_status: 'approved' });
+    for (const a of rows) expect(a).toMatchObject({ p_org: ORG, p_def: DEF, p_statuses: ['approved'] });
     expect(mockRpc.mock.calls.find(([n]) => n === 'broker_report_scope')![1]).toEqual({ p_org: ORG, p_def: DEF });
   });
 
   it('filters the person changed on the page (status in the URL) win over the saved ones', async () => {
     await renderPage('full', { level: 'viewer' }, { status: 'all' });
-    const rows = mockRpc.mock.calls.filter(([n]) => n === 'broker_report_submissions_rows').map(([, a]) => a);
-    for (const a of rows) expect(a.p_status).toBeNull();
+    const rows = mockRpc.mock.calls.filter(([n]) => n === 'broker_report_submissions_rows_multi').map(([, a]) => a);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const a of rows) expect(a.p_statuses).toBeNull();
+  });
+
+  it('a definition saved with lists sends the lists', async () => {
+    const agentA = '00000000-0000-4000-8000-0000003513c5'; // pii-allow-uuid: invented fixture id
+    await renderPage('full', { level: 'viewer', definition: { filters: { status: ['approved', 'rejected'], agent: agentA }, sort: null } });
+    const rows = mockRpc.mock.calls.filter(([n]) => n === 'broker_report_submissions_rows_multi').map(([, a]) => a);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]).toMatchObject({ p_statuses: ['approved', 'rejected'], p_agents: [agentA] });
   });
 
   it('a page link alone keeps the saved filters', () => {
     expect(resolveDefinitionFilters({ page: '2' }, { filters: { status: 'approved' }, sort: { key: 'oldest' } })).toMatchObject({
-      status: 'approved',
+      statuses: ['approved'],
       sort: 'oldest',
       page: 2,
     });
