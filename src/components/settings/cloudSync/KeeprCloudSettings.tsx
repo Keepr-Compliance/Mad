@@ -25,11 +25,15 @@ function minutesAgo(iso: string | null): string | null {
   return h === 1 ? "1 hour ago" : `${h} hours ago`;
 }
 
+function shortDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+}
+
 function statusLine(view: CloudSyncView): string | null {
   switch (view.status) {
     case "on": {
       if (view.pendingDeals > 0) return C.statusSaving(view.pendingDeals);
-      if (view.notSavedDeals > 0) return C.statusNotSaved(view.notSavedDeals);
       const ago = minutesAgo(view.lastSavedAt);
       return ago ? C.statusSaved(ago) : C.statusOn;
     }
@@ -59,7 +63,7 @@ const SOLID_BUTTON =
   "inline-flex h-9 flex-none items-center rounded-md bg-sky-700 px-4 text-sm font-semibold text-white hover:bg-sky-800 disabled:opacity-50";
 
 export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }): React.ReactElement | null {
-  const [dialog, setDialog] = useState<"notice" | "off" | "forget" | null>(null);
+  const [dialog, setDialog] = useState<"notice" | "off" | "forget" | "delete-online" | "delete-installs" | null>(null);
   const view = cloud.view;
   if (!view || view.status === "hidden") return null;
 
@@ -117,6 +121,32 @@ export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }):
             <span className="text-[13px] text-gray-700">{C.thisComputer}</span>
             <button type="button" className={SOLID_BUTTON} disabled={cloud.busy} onClick={() => void cloud.confirmComputer()}>
               {C.saveThisComputer}
+            </button>
+          </div>
+        )}
+
+        {view.notSavedDeals > 0 && (view.status === "on" || view.status === "error") && (
+          <p className="m-0 text-[13px] text-red-700" data-testid="cloud-not-saved">
+            {C.statusNotSaved(view.notSavedDeals)}
+          </p>
+        )}
+
+        {view.onlineNotHereDeals > 0 && (
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-[#E6E4DF] bg-white px-5 py-4" data-testid="cloud-online-not-here">
+            <span className="text-[13px] text-gray-700">{C.onlineNotHere(view.onlineNotHereDeals)}</span>
+            <button type="button" className={SOLID_BUTTON} disabled={cloud.busy} onClick={() => setDialog("delete-online")}>
+              {C.deleteThem}
+            </button>
+          </div>
+        )}
+
+        {view.otherInstalls && (
+          <div className="flex items-center justify-between gap-4 rounded-lg border border-[#E6E4DF] bg-white px-5 py-4" data-testid="cloud-other-installs">
+            <span className="text-[13px] text-gray-700">
+              {C.otherInstalls(view.otherInstalls.deals, shortDate(view.otherInstalls.lastSavedAt))}
+            </span>
+            <button type="button" className={SOLID_BUTTON} disabled={cloud.busy} onClick={() => setDialog("delete-installs")}>
+              {C.deleteThem}
             </button>
           </div>
         )}
@@ -194,6 +224,19 @@ export function KeeprCloudSettings({ cloud }: { cloud: UseKeeprCloudSettings }):
         loading={cloud.busy}
         onCancel={() => setDialog(null)}
         onConfirm={() => void cloud.turnOff().finally(() => setDialog(null))}
+      />
+      <ConfirmationDialog
+        open={dialog === "delete-online" || dialog === "delete-installs"}
+        title={C.deleteOnlineConfirmTitle}
+        description={dialog === "delete-installs" ? C.deleteInstallsConfirm : C.deleteOnlineConfirm}
+        confirmLabel={C.deleteButton}
+        cancelLabel={C.cancel}
+        isDestructive
+        loading={cloud.busy}
+        onCancel={() => setDialog(null)}
+        onConfirm={() =>
+          void (dialog === "delete-online" ? cloud.deleteOnlineNotHere() : cloud.deleteOldInstalls()).finally(() => setDialog(null))
+        }
       />
       <ConfirmationDialog
         open={dialog === "forget"}

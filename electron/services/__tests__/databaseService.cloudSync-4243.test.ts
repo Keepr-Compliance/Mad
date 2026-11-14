@@ -187,6 +187,40 @@ describe("Keepr Cloud on the real open path (bundled driver)", () => {
     await svc.close();
   });
 
+  it("PR-3: a migration that rebuilds contacts (and the views that read it) succeeds and ends with the contact triggers", async () => {
+    const svc = loadService();
+    await expect(svc.initialize()).resolves.toBe(true);
+    const db = svc.db as DatabaseType;
+    seed(db);
+    db.prepare("INSERT INTO cloud_sync_settings (project_ref, user_id, enabled) VALUES ('p', ?, 1)").run(USER);
+    db.prepare("INSERT INTO contacts (id, user_id, display_name) VALUES ('ct-4243', ?, 'Person')").run(USER);
+    db.prepare("INSERT INTO transaction_contacts (id, transaction_id, contact_id) VALUES ('pt-4243', 'd-1', 'ct-4243')").run();
+    const migrations = (svc.constructor as { MIGRATIONS: Array<{ version: number; description: string; migrate: (d: DatabaseType) => void }> }).MIGRATIONS;
+    const head = migrations[migrations.length - 1].version;
+    migrations.push({
+      version: head + 1,
+      description: "test: rebuilds contacts the repo way",
+      migrate: (d) => {
+        const views = d.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'view' AND sql LIKE '%contacts%'").all() as Array<{ name: string; sql: string }>;
+        const ddl = (d.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'contacts'").get() as { sql: string }).sql;
+        for (const v of views) d.exec(`DROP VIEW ${v.name}`);
+        d.exec(`${ddl.replace(/^CREATE TABLE\s+("?)[A-Za-z_]+\1/, "CREATE TABLE contacts_new")};
+          INSERT INTO contacts_new SELECT * FROM contacts; DROP TABLE contacts; ALTER TABLE contacts_new RENAME TO contacts;`);
+        for (const v of views) d.exec(v.sql);
+      },
+    });
+    try {
+      await expect(svc.runMigrations(db)).resolves.toBeUndefined();
+    } finally {
+      migrations.pop();
+    }
+    expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual(CLOUD_SYNC_TRIGGERS.map((t) => t.name).sort());
+    db.exec("DELETE FROM cloud_sync_dirty");
+    db.prepare("UPDATE contacts SET display_name = 'Renamed' WHERE id = 'ct-4243'").run();
+    expect(dirtyIds(db)).toEqual(["d-1"]);
+    await svc.close();
+  });
+
   it("a migration that ran marks every eligible deal of every enabled user (triggers were absent during it)", async () => {
     const svc = loadService();
     await expect(svc.initialize()).resolves.toBe(true);
