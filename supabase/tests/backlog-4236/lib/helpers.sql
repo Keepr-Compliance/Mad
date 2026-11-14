@@ -59,21 +59,21 @@ CREATE FUNCTION pg_temp.pass(c boolean, detail text) RETURNS text LANGUAGE sql I
   SELECT CASE WHEN coalesce(c, false) THEN 'PASS' ELSE 'FAIL: ' || coalesce(left(detail, 500), '-') END
 $h$;
 
--- API calls
+-- API calls. Every client write passes the calling user as p_expected_user_id.
 CREATE FUNCTION pg_temp.state(u uuid) RETURNS jsonb LANGUAGE sql AS $h$
   SELECT pg_temp.j(pg_temp.call_as(u, 'SELECT public.get_my_cloud_autosave_state()'))
 $h$;
 CREATE FUNCTION pg_temp.onoff(u uuid, en boolean, nv integer DEFAULT 1) RETURNS text LANGUAGE sql AS $h$
-  SELECT pg_temp.call_as(u, format('SELECT public.set_my_cloud_autosave(%L::boolean, %L::integer)', en, nv))
+  SELECT pg_temp.call_as(u, format('SELECT public.set_my_cloud_autosave(%L::uuid, %L::boolean, %L::integer)', u, en, nv))
 $h$;
 CREATE FUNCTION pg_temp.deal(u uuid, payload jsonb) RETURNS text LANGUAGE sql AS $h$
-  SELECT pg_temp.call_as(u, format('SELECT public.cloud_upsert_deal(%L::jsonb)', payload))
+  SELECT pg_temp.call_as(u, format('SELECT public.cloud_upsert_deal(%L::uuid, %L::jsonb)', u, payload))
 $h$;
 CREATE FUNCTION pg_temp.up(u uuid, fn text, inst uuid, deal uuid, rows jsonb) RETURNS text LANGUAGE sql AS $h$
-  SELECT pg_temp.call_as(u, format('SELECT public.%I(%L::uuid, %L::uuid, %L::jsonb)', fn, inst, deal, rows))
+  SELECT pg_temp.call_as(u, format('SELECT public.%I(%L::uuid, %L::uuid, %L::uuid, %L::jsonb)', fn, u, inst, deal, rows))
 $h$;
 CREATE FUNCTION pg_temp.tomb(u uuid, inst uuid, kind text, ids uuid[]) RETURNS text LANGUAGE sql AS $h$
-  SELECT pg_temp.call_as(u, format('SELECT public.cloud_tombstone(%L::uuid, %L, %L::uuid[])', inst, kind, ids))
+  SELECT pg_temp.call_as(u, format('SELECT public.cloud_tombstone(%L::uuid, %L::uuid, %L, %L::uuid[])', u, inst, kind, ids))
 $h$;
 CREATE FUNCTION pg_temp.assign(org uuid, u uuid, on_ boolean, ends timestamptz DEFAULT NULL) RETURNS text LANGUAGE sql AS $h$
   SELECT pg_temp.call_as(NULL, format('SELECT public.assign_member_addon(%L::uuid, %L::uuid, %L, %L::boolean, %L::timestamptz)',

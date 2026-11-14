@@ -55,11 +55,11 @@ BEGIN
   out := out || jsonb_build_object('msg_A', pg_temp.st(pg_temp.up(A, 'cloud_upsert_messages', I1, d,
                  jsonb_build_array(jsonb_build_object('local_id', 'm-1', 'content_hash', pg_temp.h('m-1'), 'channel_kind', 'email',
                                                       'hidden_from_export', false, 'subject', 'hello', 'body_text', 'body')))));
-  reg := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L, 10, %L)', pg_temp.h('blob-a'), 'application/pdf')));
+  reg := pg_temp.j(pg_temp.call_as(A, format('SELECT public.cloud_register_blob(%L::uuid, %L, 10, %L)', A, pg_temp.h('blob-a'), 'application/pdf')));
   out := out || jsonb_build_object('blob_A', reg ->> 'state');
   out := out || jsonb_build_object('obj_A', pg_temp.call_as(A, format(
     'INSERT INTO storage.objects (bucket_id, name, metadata) VALUES (%L, %L, %L::jsonb)', 'cloud-deal-files', reg ->> 'storage_path', '{"size":"10"}')));
-  out := out || jsonb_build_object('confirm_A', pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_confirm_blob(%L::uuid)', reg ->> 'blob_id'))));
+  out := out || jsonb_build_object('confirm_A', pg_temp.err(pg_temp.call_as(A, format('SELECT public.cloud_confirm_blob(%L::uuid, %L::uuid)', A, reg ->> 'blob_id'))));
   out := out || jsonb_build_object('file_A', pg_temp.st(pg_temp.up(A, 'cloud_upsert_files', I1, d,
                  jsonb_build_array(jsonb_build_object('local_id', 'f-1', 'content_hash', pg_temp.h('f-1'), 'filename', 'a.pdf',
                                                       'message_channel_kind', 'email', 'message_local_id', 'm-1', 'blob_sha256', pg_temp.h('blob-a'))))));

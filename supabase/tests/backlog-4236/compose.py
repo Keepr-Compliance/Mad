@@ -3,8 +3,8 @@
 
 Usage: compose.py <out.sql> [controls file, default controls.sql]
 Order: the rollback (every object is created fresh: CREATE OR REPLACE keeps an existing ACL), M1 twice,
-M2 twice (the second apply proves each re-runs cleanly), lib/helpers.sql, lib/fixtures.sql, the
-controls. The controls embed the rollback and both migrations for G1. Files are read from the working
+M2 twice (the second apply proves each re-runs cleanly), lib/helpers.sql, lib/fixtures.sql,
+lib/contract-4243.sql, the controls. The controls embed the rollback and both migrations for G1. Files are read from the working
 tree, so a mutation applied by mutate.py is what runs. __RUN__ is a random value per run.
 """
 import os, secrets, sys
@@ -17,11 +17,12 @@ ctl = open(os.path.join(here, sys.argv[2] if len(sys.argv) > 2 else 'controls.sq
 rb = open(os.path.join(here, 'rollback-4236.sql')).read()
 hl = open(os.path.join(here, 'lib', 'helpers.sql')).read()
 fx = open(os.path.join(here, 'lib', 'fixtures.sql')).read()
+k6 = open(os.path.join(here, 'lib', 'contract-4243.sql')).read()
 for tag in ('$rbx$', '$mg1$', '$mg2$', '$run$', '$drv4236$', '$h$'):
     assert tag not in rb and tag not in M1 and tag not in M2, tag
 assert ctl.count('__ROLLBACK__') <= 1 and ctl.count('__M1__') <= 1 and ctl.count('__M2__') <= 1
 # first statement of the transaction: keep this call's statements out of pg_stat_statements
-text = ("SET LOCAL pg_stat_statements.track = 'none';\nSET LOCAL lock_timeout = '10s';\n" + rb + '\n' + M1 + '\n' + M1 + '\n' + M2 + '\n' + M2 + '\n' + hl + '\n' + fx + '\n'
+text = ("SET LOCAL pg_stat_statements.track = 'none';\nSET LOCAL lock_timeout = '10s';\n" + rb + '\n' + M1 + '\n' + M1 + '\n' + M2 + '\n' + M2 + '\n' + hl + '\n' + fx + '\n' + k6 + '\n'
         + ctl.replace('__ROLLBACK__', rb).replace('__M1__', M1).replace('__M2__', M2))
 text = text.replace('__RUN__', secrets.token_hex(12))
 assert '__RUN__' not in text

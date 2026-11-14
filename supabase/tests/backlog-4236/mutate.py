@@ -5,7 +5,9 @@ counts as a failure), print MUTATION APPLIED + `git diff --numstat` + the change
 controls (one call, one transaction ending in RAISE) and the migration-text test, print the reds,
 then restore with `git checkout --` and assert the file is clean. Commit before running this.
 
-Usage: mutate.py <mode>[,<mode>...] | all
+Usage: mutate.py <mode>[,<mode>...] | all | round2 | check
+check: offline, no database. Counts every mode's fragments against the working tree and exits non-zero
+       when any fragment does not match its stated count.
 want 'red'   -> every listed control must turn red (others may too)
 want 'green' -> measured equivalent in this venue; kept so the claim stays checked
 """
@@ -187,7 +189,7 @@ MUT = {
       '   WHERE x.id = p_blob_id                                        /*OWNER:confirm*/'), 'O1_owner_binding', 'red'),
   'B03_confirm_no_object_check': (sub("  IF v_found IS NOT TRUE THEN RETURN jsonb_build_object('ok', false, 'error', 'object_missing'); END IF;   /*CONFIRM:exists*/\n", ''),
       'P3_confirm_states', 'red'),
-  'B04_confirm_no_size_check': (sub("  IF v_size IS DISTINCT FROM b.size_bytes::text THEN RETURN jsonb_build_object('ok', false, 'error', 'size_mismatch'); END IF;   /*CONFIRM:size*/\n", ''),
+  'B04_confirm_no_size_check': (sub("  IF v_size IS DISTINCT FROM b.size_bytes::text THEN                                          /*CONFIRM:size*/\n    UPDATE public.cloud_blobs SET purge_requested_at = now() WHERE id = b.id;                 /*CONFIRM:fence*/\n    RETURN jsonb_build_object('ok', false, 'error', 'size_mismatch');\n  END IF;\n", ''),
       'P3_confirm_states', 'red'),
   # ---------------------------------------------------------------- assignment
   'M01_assign_any_caller': (sub("  IF auth.role() IS DISTINCT FROM 'service_role' THEN                                      /*ASSIGN:role*/",
@@ -269,6 +271,17 @@ def run_trip():
     tail = [l for l in (out.stdout + out.stderr).splitlines() if l.startswith('Tests:')]
     return out.returncode, (tail[-1] if tail else 'Tests: ?')
 
+
+if sys.argv[1] == 'check':
+    bad = 0
+    for mode, (edits, targets, want) in MUT.items():
+        for fn, old, new, cnt in edits:
+            n = open(os.path.join(root, fn)).read().count(old)
+            if n != cnt:
+                bad += 1
+                print('FRAGMENT %s matched %d (want %d): %r' % (mode, n, cnt, old[:90]))
+    print('CHECK modes=%d fragments_off=%d' % (len(MUT), bad))
+    sys.exit(1 if bad else 0)
 
 if sh('git', 'status', '--porcelain', '--', M1, M2, RB).stdout.strip():
     sys.exit('migration/rollback have uncommitted changes; commit before mutating')

@@ -23,17 +23,19 @@ BEGIN
   PERFORM set_config('request.jwt.claims', json_build_object('sub', A, 'role', 'authenticated')::text, true);
   PERFORM set_config('request.jwt.claim.sub', A::text, true);
   PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
-  r := public.set_my_cloud_autosave(true, 1);
+  r := public.set_my_cloud_autosave('__A__'::uuid, true, 1);
   IF r ->> 'success' IS DISTINCT FROM 'true' THEN RAISE EXCEPTION 'enable failed: %', r; END IF;
-  r := public.cloud_upsert_deal(jsonb_build_object('source_install_id', '__I__', 'local_id', 'cc-1', 'content_hash', encode(sha256('cc-1'::bytea), 'hex')));
+  r := public.cloud_upsert_deal('__A__'::uuid, jsonb_build_object('source_install_id', '__I__', 'local_id', 'cc-1', 'content_hash', encode(sha256('cc-1'::bytea), 'hex')));
   d := (r -> 'results' -> 0 ->> 'cloud_id')::uuid;
-  r := public.cloud_upsert_messages('__I__'::uuid, d, jsonb_build_array(jsonb_build_object('local_id', 'cc-m1',
+  r := public.cloud_upsert_messages('__A__'::uuid, '__I__'::uuid, d, jsonb_build_array(jsonb_build_object('local_id', 'cc-m1',
          'content_hash', encode(sha256('cc-m1'::bytea), 'hex'), 'channel_kind', 'email', 'hidden_from_export', false)));
   IF r -> 'results' -> 0 ->> 'status' IS DISTINCT FROM 'applied' THEN RAISE EXCEPTION 'message failed: %', r; END IF;
-  PERFORM public.cloud_upsert_deal(jsonb_build_object('source_install_id', '__I__', 'local_id', 'cc-4a', 'content_hash', encode(sha256('cc-4a'::bytea), 'hex')));
-  PERFORM public.cloud_upsert_deal(jsonb_build_object('source_install_id', '__I__', 'local_id', 'cc-4b', 'content_hash', encode(sha256('cc-4b'::bytea), 'hex')));
-  PERFORM public.cloud_register_blob(encode(sha256('cc-b1-__RUN__'::bytea), 'hex'), 10, NULL);
-  PERFORM public.cloud_register_blob(encode(sha256('cc-b2-__RUN__'::bytea), 'hex'), 10, NULL);
+  PERFORM public.cloud_upsert_deal('__A__'::uuid, jsonb_build_object('source_install_id', '__I__', 'local_id', 'cc-4a', 'content_hash', encode(sha256('cc-4a'::bytea), 'hex')));
+  PERFORM public.cloud_upsert_deal('__A__'::uuid, jsonb_build_object('source_install_id', '__I__', 'local_id', 'cc-4b', 'content_hash', encode(sha256('cc-4b'::bytea), 'hex')));
+  PERFORM public.cloud_register_blob('__A__'::uuid, encode(sha256('cc-b1-__RUN__'::bytea), 'hex'), 10, NULL);
+  PERFORM public.cloud_register_blob('__A__'::uuid, encode(sha256('cc-b2-__RUN__'::bytea), 'hex'), 10, NULL);
+  -- C4 attaches both blobs: a file row takes only an uploaded blob, so both are marked uploaded here.
+  UPDATE public.cloud_blobs SET uploaded_at = now() WHERE owner_user_id = A AND uploaded_at IS NULL;
 END
 $cc$;
 SELECT (SELECT id FROM public.cloud_deals WHERE owner_user_id = '__A__'::uuid AND local_transaction_id = 'cc-1') AS deal,
