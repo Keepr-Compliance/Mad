@@ -220,14 +220,38 @@ describe("Esc with the support form over Settings (BACKLOG-3964 slice 2 fix-up 3
 });
 
 describe("title-bar initials while Settings shows", () => {
-  it("opens the account panel and closes Settings, so the two never stack (C2)", () => {
+  /** Settings must stay SHOWN under the panel, not merely mounted (BACKLOG-4174 SR change 1). */
+  function expectShown(el: HTMLElement): void {
+    for (const cls of ["hidden", "invisible", "opacity-0"]) expect(el).not.toHaveClass(cls);
+    expect(el).not.toHaveAttribute("hidden");
+    expect(el).not.toHaveAttribute("aria-hidden");
+    // The same hiding written as an inline style (jsdom computes inline style).
+    const cs = getComputedStyle(el);
+    expect(cs.display).not.toBe("none");
+    expect(cs.visibility).not.toBe("hidden");
+    expect(cs.opacity).not.toBe("0");
+  }
+
+  // BACKLOG-4174 (founder, 2026-11-13): the panel opens OVER Settings and closes nothing.
+  it("C2/M1/T1/Z1: opens the account panel over Settings; Settings keeps its node, its target and stays shown", () => {
     render(<Harness />);
     act(() => modal.openSettings("settings-security"));
-    expect(screen.getByTestId("settings-page")).toBeInTheDocument();
+    const layer = screen.getByTestId("settings-layer");
+    const page = screen.getByTestId("settings-page");
     fireEvent.click(screen.getByTestId("nav-profile"));
-    expect(screen.queryByTestId("settings-page")).toBeNull();
-    expect(screen.queryByTestId("settings-layer")).toBeNull();
     expect(screen.getByTestId("account-panel")).toBeInTheDocument();
-    expect(modal.modalState.settingsTarget).toBeNull();
+    // M1: the same nodes, so Settings' scroll and tab state survive.
+    expect(screen.getByTestId("settings-layer")).toBe(layer);
+    expect(screen.getByTestId("settings-page")).toBe(page);
+    // T1: the target is kept.
+    expect(modal.modalState.showSettings).toBe(true);
+    expect(modal.modalState.settingsTarget).toBe("settings-security");
+    // Shown, not hidden under the panel.
+    expectShown(layer);
+    expectShown(page);
+    // Z1: panel above its scrim, scrim above the Settings layer.
+    const scrim = screen.getByTestId("account-panel-scrim");
+    expect(zOf(scrim)).toBeGreaterThan(zOf(layer));
+    expect(zOf(screen.getByTestId("account-panel"))).toBeGreaterThan(zOf(scrim));
   });
 });

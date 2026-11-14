@@ -21,29 +21,17 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import type { FeatureAccess, StrictFeatureKey } from "../../electron/types/featureGate";
+import type { FeatureAccess } from "../../electron/types/featureGate";
+import { isFeatureAllowed } from "./featureAccess";
 
 export type { FeatureAccess } from "../../electron/types/featureGate";
 
-/**
- * The renderer half of the strict key list — BACKLOG-3349.
- *
- * Typed `Record<StrictFeatureKey, true>`, so it cannot drift from the union in
- * `electron/types/featureGate.ts` or from the main-process record in
- * `electron/handlers/featureGateHandlers.ts` without failing
- * `npm run type-check`.
- *
- * Strictness is PER KEY, and that is measured rather than preferred: making
- * `isAllowed` fail closed for every key turns 7 of the 19 export-gate tests
- * red, because `text_export`, `desktop_email_attachments` and the rest depend
- * on the `?? true` below to keep working when the plan cannot be read.
- */
-const STRICT_FEATURE_KEYS: Record<StrictFeatureKey, true> = {
-  email_contact_inference: true,
-  desktop_hide_from_export: true,
-  transaction_checklists: true,
-  autodetect_eval: true,
-};
+// BACKLOG-4174: the evaluation, and the renderer's strict key record
+// (`STRICT_FEATURE_KEYS`, `Record<StrictFeatureKey, true>`), now live in the
+// pure module `./featureAccess` (no hook, never mocked with this one), so the
+// Settings session reads share the exact same rule. Comments elsewhere that
+// point at this file for the record mean that module.
+export { isFeatureAllowed } from "./featureAccess";
 
 interface UseFeatureGateReturn {
   /** Check if a feature is allowed. Returns true for unknown features (fail-open). */
@@ -91,24 +79,7 @@ export function useFeatureGate(): UseFeatureGateReturn {
   }, [loadFeatures]);
 
   const isAllowed = useCallback(
-    (featureKey: string): boolean => {
-      const feature = features[featureKey];
-
-      // A strict key needs a POSITIVE read. `?? true` below would grant it on
-      // an empty map — which is exactly what `feature-gate:get-all` returns for
-      // a user whose organization could not be resolved, and what `loadFeatures`
-      // leaves behind when the invoke rejects.
-      //
-      // `hasOwnProperty`, not `in`: `featureKey` reaches here from callers all
-      // over the renderer, and `"constructor"` is truthy through the prototype
-      // chain.
-      if (Object.prototype.hasOwnProperty.call(STRICT_FEATURE_KEYS, featureKey)) {
-        return feature?.allowed === true;
-      }
-
-      // Default to allowed if feature is unknown (fail-open)
-      return feature?.allowed ?? true;
-    },
+    (featureKey: string): boolean => isFeatureAllowed(features, featureKey),
     [features]
   );
 

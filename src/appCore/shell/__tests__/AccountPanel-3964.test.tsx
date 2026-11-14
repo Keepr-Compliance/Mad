@@ -12,6 +12,7 @@
  *   · C6 inside vs scrim click · C7 focus · C13 row -> Settings · C14 Sign out
  *   · geometry (phone width, scrim, Electron top).
  */
+import type { FeatureAccess } from "../../../../electron/types/featureGate";
 import React, { useEffect, useState } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
@@ -42,10 +43,9 @@ jest.mock("../../../contexts/PlatformContext", () => ({
 jest.mock("../../../contexts/LicenseContext", () => ({
   useLicense: () => ({ licenseType: "individual" }),
 }));
+// BACKLOG-4174: the rows read the plan through the bridge (`feature-gate:get-all`),
+// so the AI add-on is driven there (see beforeEach), not by mocking useFeatureGate.
 let mockHasAI = true;
-jest.mock("../../../hooks/useFeatureGate", () => ({
-  useFeatureGate: () => ({ isAllowed: (key: string) => (key === "ai_detection" ? mockHasAI : true) }),
-}));
 jest.mock("../../hooks/useEmailSettingsCallbacks", () => ({
   useEmailSettingsCallbacks: () => ({
     handleEmailConnectedFromSettings: jest.fn(),
@@ -134,6 +134,14 @@ function zOf(el: HTMLElement): number {
 
 const help = () => screen.getByRole("button", { name: "Open support dialog" });
 
+/**
+ * BACKLOG-4174: the rows render once the plan and strict reads have settled,
+ * a microtask after the panel opens. Wait for the first row before reading them.
+ */
+async function rowsSettled(): Promise<void> {
+  await screen.findByTestId("nav-settings");
+}
+
 /** Click the initials the way a user does: focus lands on them first. */
 function openFromInitials(): HTMLElement {
   const btn = screen.getByTestId("nav-profile");
@@ -157,6 +165,10 @@ function mockSupportApi(): void {
 beforeEach(() => {
   mockElectron = true;
   mockHasAI = true;
+  jest.mocked(window.api.featureGate.getAll).mockImplementation(
+    async (): Promise<Record<string, FeatureAccess>> =>
+      mockHasAI ? {} : { ai_detection: { allowed: false, value: "", source: "plan" } },
+  );
   handleLogout.mockReset();
   Object.values(popupEsc).forEach((f) => f.mockReset());
   mockSupportApi();
@@ -311,10 +323,11 @@ describe("C5 rows = visibleSettingsTabs()", () => {
       .getAllByRole("button")
       .map((b) => b.getAttribute("data-testid") ?? "");
 
-  it.each([true, false])("one row per visible tab, in order, Account first (AI add-on: %s)", (hasAI) => {
+  it.each([true, false])("one row per visible tab, in order, Account first (AI add-on: %s)", async (hasAI) => {
     mockHasAI = hasAI;
     render(<Harness />);
     openFromInitials();
+    await rowsSettled();
     const expected = visibleSettingsTabs(hasAI);
     const nav = screen.getByRole("navigation", { name: "Settings" });
     const rows = within(nav).getAllByRole("button");
@@ -328,10 +341,7 @@ describe("C5 rows = visibleSettingsTabs()", () => {
     expect(rowIds().slice(1).every((id) => id.startsWith("account-panel-row-settings-"))).toBe(true);
   });
 
-  it("no row looks selected: the panel only opens with Settings closed (slice 3b)", () => {
-    render(<Harness />);
-    openFromInitials();
-    expect(screen.queryByTestId("settings-page")).toBeNull();
+  function expectNoRowSelected(): void {
     const rows = within(screen.getByRole("navigation", { name: "Settings" })).getAllByRole("button");
     for (const row of rows) {
       expect(row).not.toHaveClass("bg-gray-800");
@@ -339,12 +349,30 @@ describe("C5 rows = visibleSettingsTabs()", () => {
       expect(row).not.toHaveAttribute("aria-current");
       expect(row).toHaveClass("text-gray-300");
     }
+  }
+
+  it("no row looks selected with Settings closed (slice 3b)", async () => {
+    render(<Harness />);
+    openFromInitials();
+    await rowsSettled();
+    expect(screen.queryByTestId("settings-page")).toBeNull();
+    expectNoRowSelected();
   });
 
-  it("C5b every Settings tab has an icon, and every row draws it", () => {
+  it("no row looks selected when the panel opens over Settings (BACKLOG-4174)", async () => {
+    render(<Harness />);
+    act(() => modal.openSettings("settings-security"));
+    openFromInitials();
+    await rowsSettled();
+    expect(screen.getByTestId("settings-page")).toBeInTheDocument();
+    expectNoRowSelected();
+  });
+
+  it("C5b every Settings tab has an icon, and every row draws it", async () => {
     for (const tab of SETTINGS_TABS) expect(SETTINGS_TAB_ICONS[tab.id]).toBeDefined();
     render(<Harness />);
     openFromInitials();
+    await rowsSettled();
     const nav = screen.getByRole("navigation", { name: "Settings" });
     for (const row of within(nav).getAllByRole("button")) expect(row.querySelector("svg")).not.toBeNull();
   });
@@ -436,18 +464,20 @@ describe("C7 focus", () => {
     expect(document.activeElement).toBe(secondInitials);
   });
 
-  it("a row puts focus on the Settings Back button", () => {
+  it("a row puts focus on the Settings Back button", async () => {
     render(<Harness />);
     openFromInitials();
+    await rowsSettled();
     fireEvent.click(screen.getByTestId("account-panel-row-settings-security"));
     expect(document.activeElement).toBe(screen.getByTestId("settings-close"));
   });
 });
 
 describe("C13 a row opens Settings at that tab", () => {
-  it("Security: the panel closes, the Settings layer shows with the Security target", () => {
+  it("Security: the panel closes, the Settings layer shows with the Security target", async () => {
     render(<Harness />);
     openFromInitials();
+    await rowsSettled();
     fireEvent.click(screen.getByTestId("account-panel-row-settings-security"));
     expect(screen.queryByTestId("account-panel")).toBeNull();
     expect(screen.getByTestId("settings-layer")).toBeInTheDocument();
@@ -455,9 +485,10 @@ describe("C13 a row opens Settings at that tab", () => {
     expect(modal.modalState.showProfile).toBe(false);
   });
 
-  it("Account (nav-settings) opens Settings at the Account tab", () => {
+  it("Account (nav-settings) opens Settings at the Account tab", async () => {
     render(<Harness />);
     openFromInitials();
+    await rowsSettled();
     fireEvent.click(screen.getByTestId("nav-settings"));
     expect(screen.getByTestId("settings-target")).toHaveTextContent("settings-account");
   });
@@ -475,9 +506,10 @@ describe("C14 Sign out", () => {
     expect(screen.queryByRole("button", { name: /confirm/i })).toBeNull();
   });
 
-  it("is pinned below the scrolling rows, separated by a divider, and never scrolls away (BACKLOG-3964 founder note)", () => {
+  it("is pinned below the scrolling rows, separated by a divider, and never scrolls away (BACKLOG-3964 founder note)", async () => {
     render(<Harness />);
     openFromInitials();
+    await rowsSettled();
     const panel = screen.getByTestId("account-panel");
     const scroll = screen.getByTestId("account-panel-scroll");
     const footer = screen.getByTestId("account-panel-footer");
@@ -576,14 +608,140 @@ describe("P5 Help Keepr learn row (BACKLOG-4120)", () => {
     expect(labels.indexOf("Help Keepr learn")).toBe(labels.indexOf("Contacts") + 1);
   });
 
-  it.each(["blocked", "unknown", "pending"] as const)("hidden when the strict read is %s (AI allowed)", async (state) => {
+  it.each(["blocked", "unknown"] as const)("hidden when the strict read is %s (AI allowed)", async (state) => {
     mockHasAI = true;
     strict(state);
     render(<Harness />);
     openFromInitials();
     await waitFor(() => expect(window.api.featureGate.strictState).toHaveBeenCalledWith("autodetect_eval"));
+    await rowsSettled();
     const nav = screen.getByRole("navigation", { name: "Settings" });
     expect(within(nav).queryByTestId(accountPanelRowTestId("settings-learn"))).toBeNull();
     expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toContain("AI");
+  });
+
+  // BACKLOG-4174: while the strict read is pending the rows are held, so no
+  // row (Learn included) shows and then vanishes. Was: AI rows shown, Learn hidden.
+  it("hidden when the strict read is pending (AI allowed): no rows are shown until it settles", async () => {
+    mockHasAI = true;
+    strict("pending");
+    render(<Harness />);
+    openFromInitials();
+    await waitFor(() => expect(window.api.featureGate.strictState).toHaveBeenCalledWith("autodetect_eval"));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    const nav = screen.getByRole("navigation", { name: "Settings" });
+    expect(within(nav).queryByTestId(accountPanelRowTestId("settings-learn"))).toBeNull();
+    expect(within(nav).queryAllByRole("button")).toHaveLength(0);
+  });
+});
+
+/**
+ * BACKLOG-4174 FIX A3 (founder, 2026-11-13): the initials open the panel OVER
+ * Settings; closing the panel returns to Settings unchanged.
+ * Controls (mutation -> red, see the IMPL comment): E1, E2, I1, F1, F2, G1.
+ */
+describe("A3 the panel opens over Settings", () => {
+  const page = () => screen.queryByTestId("settings-page");
+  const panel = () => screen.queryByTestId("account-panel");
+  const esc = async () => {
+    await act(async () => {
+      fireEvent.keyDown(window, { key: "Escape" });
+    });
+  };
+
+  it("I1: the Settings layer is inert while the panel is open, and not after", () => {
+    render(<Harness />);
+    act(() => modal.openSettings());
+    expect(screen.getByTestId("settings-layer")).not.toHaveAttribute("inert");
+    openFromInitials();
+    expect(screen.getByTestId("settings-layer")).toHaveAttribute("inert");
+    fireEvent.click(screen.getByTestId("account-panel-scrim"));
+    expect(screen.getByTestId("settings-layer")).not.toHaveAttribute("inert");
+  });
+
+  it("E1: Esc closes only the panel; the next Esc closes Settings", async () => {
+    render(<Harness />);
+    act(() => modal.openSettings());
+    openFromInitials();
+    await esc();
+    expect(panel()).toBeNull();
+    expect(page()).toBeInTheDocument();
+    await esc();
+    expect(page()).toBeNull();
+  });
+
+  it("E2: support form over the panel over Settings: three Escs close them top-down", async () => {
+    render(<Harness />);
+    act(() => modal.openSettings());
+    openFromInitials();
+    await act(async () => {
+      fireEvent.click(help());
+    });
+    expect(document.querySelector(SUPPORT_DIALOG_SELECTOR)).not.toBeNull();
+    await esc();
+    expect(document.querySelector(SUPPORT_DIALOG_SELECTOR)).toBeNull();
+    expect(panel()).toBeInTheDocument();
+    expect(page()).toBeInTheDocument();
+    await esc();
+    expect(panel()).toBeNull();
+    expect(page()).toBeInTheDocument();
+    await esc();
+    expect(page()).toBeNull();
+  });
+
+  it.each(["scrim", "x", "esc"])(
+    "F1: %s closes the panel, Settings is kept and focus returns to the initials",
+    async (how) => {
+      render(<Harness />);
+      act(() => modal.openSettings("settings-security"));
+      const btn = openFromInitials();
+      // The trap moved focus off the initials into the panel; without this the return is vacuous.
+      expect(document.activeElement).not.toBe(btn);
+      expect(screen.getByTestId("account-panel")).toContainElement(document.activeElement as HTMLElement);
+      if (how === "scrim") fireEvent.click(screen.getByTestId("account-panel-scrim"));
+      if (how === "x") fireEvent.click(screen.getByRole("button", { name: "Close menu" }));
+      if (how === "esc") await esc();
+      expect(panel()).toBeNull();
+      expect(page()).toBeInTheDocument();
+      expect(screen.getByTestId("settings-target")).toHaveTextContent("settings-security");
+      expect(document.activeElement).toBe(btn);
+    },
+  );
+
+  // jsdom does not implement `inert`; the real-browser order (inert lifted before
+  // the trap returns focus) is the e2e cell in settings-stacking.spec.ts.
+  it("F2 (inert not modelled in jsdom): a row over Settings opens that tab, same page, focus on Back", async () => {
+    render(<Harness />);
+    act(() => modal.openSettings("settings-about"));
+    const before = page();
+    openFromInitials();
+    await rowsSettled();
+    fireEvent.click(screen.getByTestId("account-panel-row-settings-security"));
+    expect(panel()).toBeNull();
+    expect(page()).toBe(before);
+    expect(screen.getByTestId("settings-target")).toHaveTextContent("settings-security");
+    expect(screen.getByTestId("settings-layer")).not.toHaveAttribute("inert");
+    expect(document.activeElement).toBe(screen.getByTestId("settings-close"));
+  });
+
+  it("G1: openProfile changes nothing but showProfile", () => {
+    render(<Harness />);
+    act(() => {
+      modal.openSettings("settings-security");
+      modal.openIPhoneSync();
+      modal.openLearnSession(3);
+    });
+    const { showProfile: before, ...restBefore } = modal.modalState;
+    expect(before).toBe(false);
+    act(() => modal.openProfile());
+    const { showProfile, ...rest } = modal.modalState;
+    expect(showProfile).toBe(true);
+    expect(rest).toEqual(restBefore);
+    expect(rest.showSettings).toBe(true);
+    expect(rest.settingsTarget).toBe("settings-security");
+    expect(rest.showIPhoneSync).toBe(true);
+    expect(rest.learnOverlay).not.toBeNull();
   });
 });

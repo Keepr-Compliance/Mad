@@ -9,7 +9,8 @@ import { TextsLookbackProvider } from "./settings/textsLookback";
 import { IphoneSyncSettings } from "./settings/IphoneSyncSettings";
 import { FeatureGate } from "./common/FeatureGate";
 import { SettingsPageHeader } from "./settings/SettingsPageHeader";
-import { visibleSettingsTabs } from "./settings/settingsTabs";
+import { useVisibleSettingsTabs } from "./settings/useVisibleSettingsTabs";
+import { SETTINGS_TABS } from "./settings/settingsTabs";
 import { useSettingsSectionRouting } from "./settings/useSettingsSectionRouting";
 import { useLastSectionSpacer } from "./settings/useLastSectionSpacer";
 import { AccountSettings, type AccountSettingsProps } from "./settings/account/AccountSettings";
@@ -23,8 +24,6 @@ import { SupportAccessSettings } from "./settings/SupportAccessSettings";
 import { AboutSettings } from "./settings/AboutSettings";
 import { SyncToolsSettings } from "./settings/SyncToolsSettings";
 import { useScrollSpy } from "@/hooks/useScrollSpy";
-import { useFeatureGate } from "@/hooks/useFeatureGate";
-import { useStrictFeatureState } from "@/hooks/useStrictFeatureState";
 import { LearnSettings } from "./settings/learn/LearnSettings";
 import { usePlatform } from "@/contexts/PlatformContext";
 import { useIPhoneSyncEnabled } from "@/contexts/IPhoneSyncContext";
@@ -64,10 +63,10 @@ interface SettingsComponentProps {
  * header row (Back + tabs), one column of section cards.
  */
 function Settings({ onClose, userId, account, initialSection, onSectionReached, onLogout, onEmailConnected, onEmailDisconnected, onLinkGoogleMessages, onImportIphone, onStartLearn, onSeeLearnScore }: SettingsComponentProps) {
-  const { isAllowed } = useFeatureGate();
-  const hasAIAddon = isAllowed("ai_detection");
-  // BACKLOG-4120: strict (fail-closed) read; pending/blocked/unknown = hidden.
-  const learnAvailable = useStrictFeatureState("autodetect_eval") === "allowed";
+  // BACKLOG-4174: the tab list is null until the plan read and the strict
+  // autodetect_eval read have both settled, so no tab shows and then vanishes.
+  // BACKLOG-4120: learnAvailable is the strict (fail-closed) read.
+  const { tabs: settledTabs, learnAvailable } = useVisibleSettingsTabs();
   // BACKLOG-3423: lets a source change re-gate iPhone USB detection live.
   const { applyImportSource } = useIPhoneSyncEnabled();
   // BACKLOG-1937: renderer-safe platform detection (contextIsolation=true → no process.platform)
@@ -75,7 +74,7 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // BACKLOG-3964: one tab list, shared with the account side panel.
-  const visibleTabs = useMemo(() => visibleSettingsTabs(hasAIAddon, learnAvailable), [hasAIAddon, learnAvailable]);
+  const visibleTabs = useMemo(() => settledTabs ?? [], [settledTabs]);
   const visibleTabIds = useMemo(() => visibleTabs.map((t) => t.id), [visibleTabs]);
 
   // Preferences loaded once and distributed to sub-components as initial values
@@ -131,15 +130,22 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
       for (const e of events) container.removeEventListener(e, byHand);
     };
   }, [loadingPreferences]);
-  const activeTabId = pinnedTabId ?? spyTabId;
+  // BACKLOG-4174: the tab list can start empty and fill in later, which leaves
+  // the scroll-spy on "" until the user scrolls; fall back to the first tab.
+  // A pin only counts once its tab is in the list (a section reached before the
+  // plan/strict reads settle pins early; a tab that never appears falls through).
+  const activeTabId =
+    (pinnedTabId && visibleTabIds.includes(pinnedTabId) ? pinnedTabId : null) ?? (spyTabId || visibleTabIds[0] || "");
 
   const handleSectionReached = useCallback(
     (landed?: HTMLElement) => {
-      const tab = landed && visibleTabIds.find((id) => document.getElementById(id)?.contains(landed));
-      if (tab) pinTab(tab);
+      // Look in every tab, not just the visible ones: the section can be reached
+      // before the tab list has settled.
+      const tab = landed && SETTINGS_TABS.find((t) => document.getElementById(t.id)?.contains(landed));
+      if (tab) pinTab(tab.id);
       onSectionReached?.();
     },
-    [visibleTabIds, pinTab, onSectionReached],
+    [pinTab, onSectionReached],
   );
   useSettingsSectionRouting(initialSection, !loadingPreferences, scrollContainerRef, handleSectionReached);
   // BACKLOG-3964: room below the last section so every entry, About included,

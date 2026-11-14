@@ -5,7 +5,7 @@
  *
  *   popups / modals ........ z-50 .. z-[100]   (ResponsiveModal callers)
  *   Settings page layer .... z-[105]
- *   account panel scrim .... z-[110]   (shell/AccountPanel; never open with Settings)
+ *   account panel scrim .... z-[110]   (shell/AccountPanel; opens over Settings)
  *   account side panel ..... z-[111]
  *   support "?" button ..... z-[115]   above Settings, the scrim and the panel
  *   support-access banner .. z-[106]   visible over Settings (z-[105]); under scrim and dialogs

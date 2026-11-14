@@ -47,11 +47,9 @@ import {
 } from "lucide-react";
 import type { AppStateMachine } from "../state/types";
 import { AccountAvatar } from "./AccountAvatar";
-import { visibleSettingsTabs } from "../../components/settings/settingsTabs";
+import { useVisibleSettingsTabs } from "../../components/settings/useVisibleSettingsTabs";
 import { formatPlanLabel } from "../../components/settings/account/formatPlanLabel";
 import { useLicense } from "../../contexts/LicenseContext";
-import { useFeatureGate } from "../../hooks/useFeatureGate";
-import { useStrictFeatureState } from "../../hooks/useStrictFeatureState";
 import { useEscapeToClose } from "../../hooks/useEscapeToClose";
 import { useFocusTrap } from "../../hooks/useFocusTrap";
 import { useCopyText } from "../../hooks/useCopyText";
@@ -90,7 +88,7 @@ function shortId(id: string): string {
 
 const ROW =
   "flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500";
-// No row looks selected: the panel only opens with Settings closed (useModalFlow openProfile).
+// No row looks selected, even when the panel opens over Settings (BACKLOG-4174): the active tab is Settings' own state.
 const ROW_IDLE = "text-gray-300 hover:bg-gray-800 hover:text-white";
 
 interface AccountPanelProps {
@@ -194,10 +192,9 @@ const OpenAccountPanel = React.forwardRef<HTMLDivElement, OpenAccountPanelProps>
   ref,
 ) {
   const { licenseType } = useLicense();
-  const { isAllowed } = useFeatureGate();
-  // BACKLOG-4120: "Help Keepr learn" on the strict autodetect_eval read only.
-  const learnAvailable = useStrictFeatureState("autodetect_eval") === "allowed";
-  const tabs = visibleSettingsTabs(isAllowed("ai_detection"), learnAvailable);
+  // BACKLOG-4174: no rows until the plan and strict reads have both settled,
+  // so no row shows and then vanishes (same list as the Settings tab strip).
+  const tabs = useVisibleSettingsTabs().tabs ?? [];
   const { copied, copy } = useCopyText("AccountPanel");
   const planLabel = licenseType ? formatPlanLabel(licenseType) : "";
   const appVersion = useAppVersion();

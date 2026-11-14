@@ -35,6 +35,8 @@ jest.mock("@/contexts/LicenseContext", () => ({
 
 // TASK-2159: Mock the useFeatureGate hook (Settings + FeatureGate now use this)
 const mockIsAllowed = jest.fn().mockReturnValue(true); // Default: all features allowed
+// BACKLOG-4174: a plan read with the AI add-on blocked, for the tab list.
+const PLAN_NO_AI = { ai_detection: { allowed: false, value: "", source: "plan" as const } };
 jest.mock("@/hooks/useFeatureGate", () => ({
   useFeatureGate: () => ({
     isAllowed: mockIsAllowed,
@@ -102,6 +104,11 @@ describe("Settings", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+
+    // BACKLOG-4174: the tab list reads the plan through the bridge
+    // (`feature-gate:get-all`), not through `useFeatureGate`. Default: no map
+    // entries, so ai_detection reads allowed (fail-open).
+    jest.mocked(window.api.featureGate.getAll).mockResolvedValue({});
 
     // Default mocks
     jest.mocked(window.api.system.checkAllConnections).mockResolvedValue({
@@ -2034,6 +2041,7 @@ describe("Settings", () => {
 
     it("tabs: Account first and selected on open; AI only with the add-on", async () => {
       mockIsAllowed.mockReturnValue(false);
+      jest.mocked(window.api.featureGate.getAll).mockResolvedValue(PLAN_NO_AI);
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
       expect(tabLabels()).toEqual([
         "Account", "General", "Email", "Messages", "Contacts", "Security",
@@ -2360,6 +2368,7 @@ describe("Settings", () => {
 
     it("visible with AI blocked and autodetect_eval allowed: tab after Contacts, section rendered", async () => {
       mockIsAllowed.mockImplementation(noAI);
+      jest.mocked(window.api.featureGate.getAll).mockResolvedValue(PLAN_NO_AI);
       allowLearn("allowed");
       await renderSettings({ userId: mockUserId, onClose: mockOnClose });
       const tab = await screen.findByRole("tab", { name: "Help Keepr learn" });
