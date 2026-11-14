@@ -118,6 +118,8 @@ def acl_mutant(mode, fn_name, old, new, cnt=1):
     return block('M_' + mode, body)
 
 
+C02_SOLO = False  # --c02-solo: only the upgrade fixture and its drop mutants
+STOP_AFTER_C02 = ''
 C02_ONLY = None   # --c02=<tag,...> limits the C0.2 drop mutants to these writes
 WRITES_SECTION = '-- ============================================================================ on / off and installs\n'
 assert M2.count(WRITES_SECTION) == 1
@@ -239,6 +241,7 @@ def sweep_ddl():
         sect = mut[mut.index(WRITES_SECTION):]
         assert 'CREATE OR REPLACE FUNCTION public.%s(p_expected_user_id uuid, ' % name in sect
         b.append(block('M_C02_no_drop_' + tag, '    EXECUTE %s;\n    v := pg_temp.k6_catalog();' % q(sect)))
+    b.append(STOP_AFTER_C02)
     # rollback over the old state (an install that never got the edited migration)
     b.append(block('P_C04_rollback_on_old_state', '    EXECUTE %s;\n    v := pg_temp.rb_clean();' % q(RB)))
     rb_mut = apply(RB, 'DROP FUNCTION IF EXISTS public.cloud_upsert_deal(jsonb);\n', '', 1, 'C04_rollback_keeps_old_deal')
@@ -254,13 +257,17 @@ def sweep_ddl():
     # the earlier signatures and grants come back with the rollback and the earlier file
     b.append(block('P_C04_rollback_then_old_file', '    EXECUTE %s;\n    EXECUTE %s;\n    EXECUTE %s;\n    v := pg_temp.old_catalog();' % (q(RB), q(M1), q(M2_OLD))))
     b.append('END\n$sw4243$;\n')
+    if C02_SOLO:
+        return pre + ''.join(b[:b.index(STOP_AFTER_C02)]) + 'END\n$sw4243$;\n' + FINAL
     return pre + ''.join(r) + ''.join(b) + FINAL
 
 
 def main():
-    global C02_ONLY
+    global C02_ONLY, C02_SOLO
     mode = sys.argv[1]
     for a in sys.argv[2:]:
+        if a == '--c02-solo':
+            C02_SOLO = True
         if a.startswith('--c02='):
             C02_ONLY = a.split('=', 1)[1].split(',')
     sql = {'fn': sweep_fn, 'ddl': sweep_ddl}[mode]().replace('__RUN__', secrets.token_hex(12))
