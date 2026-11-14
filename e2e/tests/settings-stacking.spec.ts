@@ -13,7 +13,8 @@ import { isTopmostAtCentre, runAccountPanelCells } from './accountPanelCells';
  * real pixels: with Settings open, Settings › General › "Test Notification" must put a toast on
  * screen that is the topmost element at its own centre, the "?" support button must be the
  * topmost element at ITS centre (and clickable), and the title-bar initials must bring up
- * the account side panel (Settings closes) instead of opening it hidden underneath.
+ * the account side panel OVER Settings (BACKLOG-4174, founder 2026-11-13): Settings stays shown,
+ * and closing the panel returns to it with the same scroll and tab.
  *
  * Slice 3a extends it with the account side panel cells H1-H8 (./accountPanelCells, shared with
  * the safeguarded walkthrough runner).
@@ -51,7 +52,7 @@ test.describe('Settings page stacking (BACKLOG-3964 S2 fix-up)', () => {
     await driver?.close().catch(() => undefined);
   });
 
-  test('toast and "?" are above Settings; initials close Settings and open the account panel', async () => {
+  test('toast and "?" are above Settings; initials open the account panel over Settings', async () => {
     driver = await KeeprAppDriver.launch(REPO_ROOT, {
       strategy: 'unpackaged',
       reuseProfile: false,
@@ -98,13 +99,76 @@ test.describe('Settings page stacking (BACKLOG-3964 S2 fix-up)', () => {
     // Esc closed only the form: Settings must still be open, or the check below proves nothing.
     await expect(page.getByTestId('settings-page')).toBeVisible();
 
-    // Title-bar initials while Settings shows: Settings closes, the account panel is what shows.
+    // BACKLOG-4174 S1: put Settings somewhere other than the top, and note where it is.
+    const SCROLLER = '[data-testid="settings-page"] .overflow-y-auto';
+    await page.evaluate((sel) => document.querySelector(sel)?.scrollTo({ top: 400, behavior: 'instant' }), SCROLLER);
+    await page.waitForTimeout(500); // let the scroll spy settle on a tab
+    const settingsAt = () =>
+      page.evaluate((sel) => ({
+        scrollTop: Math.round(document.querySelector(sel)?.scrollTop ?? -1),
+        tab: document.querySelector('[data-testid="settings-tabs"] [aria-selected="true"]')?.getAttribute('data-testid') ?? 'none',
+      }), SCROLLER);
+    const before = await settingsAt();
+    expect(before.scrollTop, 'Settings must have scrolled, or S1 proves nothing').toBeGreaterThan(0);
+
+    // Title-bar initials while Settings shows: the account panel opens OVER Settings.
     await page.getByTestId('nav-profile').click();
-    await expect(page.getByTestId('settings-page')).toBeHidden();
     await expect(page.getByTestId('account-panel')).toBeVisible();
     await expect(page.getByTestId('nav-settings')).toBeVisible(); // the panel's Account row
+    await expect(page.getByTestId('settings-page')).toBeVisible();
+    // Z2: the panel is topmost at its centre.
+    expect(await isTopmostAtCentre(page, '[data-testid="account-panel"]'), 'panel must be topmost').toBe(true);
+    // Settings is what shows left of the panel: the scrim there is see-through, Settings is drawn
+    // (not hidden, invisible or transparent), and it is the first thing under the scrim. Inert and
+    // the scrim are lifted for the one hit-test only, then put back in the same task.
+    const left = await page.evaluate(() => {
+      const panel = document.querySelector('[data-testid="account-panel"]')!.getBoundingClientRect();
+      const scrim = document.querySelector<HTMLElement>('[data-testid="account-panel-scrim"]')!;
+      const layer = document.querySelector<HTMLElement>('[data-testid="settings-layer"]')!;
+      const settingsPage = document.querySelector('[data-testid="settings-page"]')!;
+      const x = Math.max(20, panel.left - 200);
+      const y = Math.round(panel.top + panel.height / 2);
+      const wasInert = layer.hasAttribute('inert');
+      const scrimBg = getComputedStyle(scrim).backgroundColor;
+      const ls = getComputedStyle(layer);
+      scrim.style.pointerEvents = 'none';
+      layer.removeAttribute('inert');
+      const hit = document.elementFromPoint(x, y);
+      scrim.style.pointerEvents = '';
+      if (wasInert) layer.setAttribute('inert', '');
+      return {
+        wasInert,
+        scrimBg,
+        layerShown: ls.display !== 'none' && ls.visibility === 'visible' && ls.opacity !== '0',
+        settingsUnderScrim: !!hit && settingsPage.contains(hit),
+      };
+    });
+    expect(left.wasInert, 'Settings must be inert under the panel').toBe(true);
+    expect(left.scrimBg, 'the scrim must be see-through').toBe('rgba(0, 0, 0, 0)');
+    expect(left.layerShown, 'Settings must be drawn under the panel').toBe(true);
+    expect(left.settingsUnderScrim, 'Settings must be what shows left of the panel').toBe(true);
+    await driver.screenshot('panel-over-settings');
+
+    // S1: closing the panel returns to Settings unchanged (same scroll, same tab).
     await page.keyboard.press('Escape');
     await expect(page.getByTestId('account-panel')).toBeHidden();
+    await expect(page.getByTestId('settings-page')).toBeVisible();
+    expect(await settingsAt(), 'Settings must keep its scroll and tab').toEqual(before);
+
+    // A panel row over Settings: the panel closes, Settings goes to that tab, focus lands on Back
+    // (real inert is lifted before the focus trap returns focus; jsdom cannot model this).
+    await page.getByTestId('nav-profile').click();
+    await expect(page.getByTestId('nav-settings')).toBeVisible();
+    await page.getByTestId('account-panel-row-settings-security').click();
+    await expect(page.getByTestId('account-panel')).toBeHidden();
+    await expect(page.getByTestId('settings-page')).toBeVisible();
+    await expect
+      .poll(() => page.evaluate(() => (document.activeElement as HTMLElement | null)?.dataset.testid ?? 'none'))
+      .toBe('settings-close');
+
+    // The panel cells below assume Settings is closed.
+    await page.getByTestId('settings-close').click();
+    await expect(page.getByTestId('settings-page')).toBeHidden();
 
     // BACKLOG-3964 slice 3a: the account side panel cells.
     const results = await runAccountPanelCells(page, {

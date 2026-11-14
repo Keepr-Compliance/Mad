@@ -23,6 +23,7 @@ import { useEscapeToClose } from "../../hooks/useEscapeToClose";
 import { Z_CLASS } from "../../constants/zLayers";
 // The support form is mounted at the app root, above this layer (Z_CLASS.supportDialog). Esc belongs to it.
 import { isSupportFormOpen } from "../../components/support/supportDialogSelector";
+import { INERT } from "./inert";
 
 /** Something open inside the page that should take Escape for itself. */
 const NESTED_OVERLAY =
@@ -53,8 +54,11 @@ function OpenSettingsLayer({ app, user }: SettingsLayerProps & { user: NonNullab
   } = app;
   const rootRef = useRef<HTMLDivElement>(null);
 
+  // BACKLOG-4174: the account panel can open over Settings. Its Esc listener
+  // registers after this one on the same window target, so without the
+  // showProfile gate one Esc would close Settings and then the panel.
   useEscapeToClose(true, closeSettings, () =>
-    !!rootRef.current?.querySelector(NESTED_OVERLAY) || isSupportFormOpen(),
+    modalState.showProfile || !!rootRef.current?.querySelector(NESTED_OVERLAY) || isSupportFormOpen(),
   );
 
   const { handleEmailConnectedFromSettings, handleEmailDisconnectedFromSettings } =
@@ -90,8 +94,15 @@ function OpenSettingsLayer({ app, user }: SettingsLayerProps & { user: NonNullab
     openLearnScore();
   }, [closeSettings, openLearnScore]);
 
+  // BACKLOG-4174: under the account panel, Settings stays shown (same scroll,
+  // same tab) but takes no focus, click or screen-reader read.
   return (
-    <div ref={rootRef} className={`absolute inset-0 ${Z_CLASS.settings} bg-gray-50`} data-testid="settings-layer">
+    <div
+      ref={rootRef}
+      className={`absolute inset-0 ${Z_CLASS.settings} bg-gray-50`}
+      data-testid="settings-layer"
+      {...(modalState.showProfile ? INERT : {})}
+    >
       <Settings
         userId={user.id}
         account={{ user, provider: authProvider }}
