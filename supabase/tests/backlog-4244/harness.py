@@ -92,11 +92,28 @@ def apply_in(name, old, new, cnt, mode):
     return mu, msrc, sig
 
 
-def create(name, text):
+def create(name, text=None, expr=None):
+    """EXECUTE the CREATE text of one function (as mcp_reader for a reader). `expr` is an SQL expression
+    giving that text (used for mutants: the original unit declared once, with one replace applied)."""
+    e = expr if expr is not None else q(text)
     if name in READERS:
         return ("    EXECUTE 'GRANT CREATE ON SCHEMA public TO mcp_reader';\n    EXECUTE 'SET ROLE mcp_reader';\n"
-                "    EXECUTE %s;\n    EXECUTE 'RESET ROLE';\n    EXECUTE 'REVOKE CREATE ON SCHEMA public FROM mcp_reader';\n") % q(text)
-    return '    EXECUTE %s;\n' % q(text)
+                "    EXECUTE %s;\n    EXECUTE 'RESET ROLE';\n    EXECUTE 'REVOKE CREATE ON SCHEMA public FROM mcp_reader';\n") % e
+    return '    EXECUTE %s;\n' % e
+
+
+UNITS = {}
+
+
+def unit_expr(name, old, new):
+    """replace(<original unit of name, declared once>, old, new); the md5 check after it proves the result"""
+    UNITS[name] = unit(MIG, name)[0]
+    return 'replace(pg_temp.u_%s(), %s, %s)' % (name.lstrip('_'), q(old), q(new))
+
+
+def unit_decls():
+    return ''.join("CREATE FUNCTION pg_temp.u_%s() RETURNS text LANGUAGE sql IMMUTABLE AS $ud4244$ SELECT %s::text $ud4244$;\n"
+                   % (n.lstrip('_'), q2(u)) for n, u in sorted(UNITS.items()))
 
 
 def block(key, body):
@@ -114,7 +131,7 @@ MUTATED = []
 def fn_mutant(mode, name, old, new, probe, cnt=1, want='red', pre=''):
     mu, msrc, sig = apply_in(name, old, new, cnt, mode)
     WANT['M_' + mode] = want
-    body = pre + create(name, mu) + (
+    body = pre + create(name, expr=unit_expr(name, old, new)) + (
         "    IF (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure(%s)) IS DISTINCT FROM %s THEN\n"
         "      v := 'NOT APPLIED IN DB';\n    ELSE\n      v := %s;\n    END IF;") % (lit(sig), lit(md5(msrc)), probe)
     return block('M_' + mode, body)
@@ -133,7 +150,7 @@ def combo_mutant(mode, sql, verify, name, old, new, probe, want='red', cnt=1):
     mu, msrc, sig = apply_in(name, old, new, cnt, mode)
     print('  + ddl: ' + sql.strip()[:200])
     WANT['M_' + mode] = want
-    body = '    EXECUTE %s;\n' % q(sql) + create(name, mu) + (
+    body = '    EXECUTE %s;\n' % q(sql) + create(name, expr=unit_expr(name, old, new)) + (
         "    IF (%s) IS NOT TRUE OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure(%s)) IS DISTINCT FROM %s THEN\n"
         "      v := 'NOT APPLIED IN DB';\n    ELSE\n      v := %s;\n    END IF;") % (verify, lit(sig), lit(md5(msrc)), probe)
     return block('M_' + mode, body)
@@ -169,18 +186,18 @@ def rls_off(table):
 
 PROBES = ['p_list_a', 'p_order_a', 'p_iso', 'p_ent', 'p_c7b_outdated_notice', 'p_deadlines', 'p_disabled', 'p_tokens', 'p_no_claims', 'p_withheld', 'p_removed',
           'p_unconfirmed', 'p_limits', 'p_paging', 'p_people_cap', 'p_masking', 'p_dates', 'p_fresh', 'p_saved_from', 'p_null_install',
-          'p_checklists', 'p_log', 'p_grants', 'p_checks', 'p_rollback']
+          'p_checklists', 'p_log', 'p_grants', 'p_checks', 'p_rollback', 'p_withheld_planted']
 
-ROLLBACK_PROBE = ("CREATE FUNCTION pg_temp.p_rollback() RETURNS text LANGUAGE plpgsql AS $rbp$\n"
+ROLLBACK_PROBE = ("CREATE FUNCTION pg_temp.p_rollback(rb text) RETURNS text LANGUAGE plpgsql AS $rbp$\n"
                   "DECLARE f0 text := (SELECT v FROM pg_temp.p4244_out WHERE k = 'fp_after_apply'); r text; gone boolean; chk text; e text := '';\n"
                   "BEGIN\n"
                   "  r := pg_temp.ld('a1');\n"
-                  "  BEGIN\n    EXECUTE %s;\n  EXCEPTION WHEN OTHERS THEN e := 'rollback failed: ' || SQLERRM;\n  END;\n"
+                  "  BEGIN\n    EXECUTE rb;\n  EXCEPTION WHEN OTHERS THEN e := 'rollback failed: ' || SQLERRM;\n  END;\n"
                   "  IF e <> '' THEN RETURN pg_temp.pass(false, e); END IF;\n"
                   "  gone := to_regprocedure('public.mcp_list_deals(text,bytea,text,text,text,integer,text)') IS NULL\n"
                   "          AND to_regprocedure('public._mcp_r_get_deal(uuid)') IS NULL AND to_regprocedure('public._mcp_clean(text,integer)') IS NULL;\n"
                   "  chk := (SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c WHERE c.conrelid = 'public.mcp_call_log'::regclass AND c.conname = 'mcp_call_log_tool_check');\n"
-                  "  EXECUTE %s;\n  EXECUTE %s;\n"
+                  "  EXECUTE pg_temp.t_mig();\n  EXECUTE pg_temp.t_mig();\n"
                   "  RETURN pg_temp.all_of(pg_temp.pass(pg_temp.err(r) = 'OK', left(r, 100)), pg_temp.pass(gone, 'objects left'),\n"
                   "    pg_temp.pass(chk NOT LIKE '%%list_deals%%' AND chk LIKE '%%get_status%%', chk),\n"
                   "    pg_temp.pass(pg_temp.fp() = f0, 'catalog after rollback, apply, apply differs'));\n"
@@ -256,7 +273,16 @@ def mutants():
                         ('company', "CASE WHEN p.w THEN NULL ELSE public._mcp_clean(p.company, 200) END /*WITHHELD:company*/", "public._mcp_clean(p.company, 200)"),
                         ('emails', "CASE WHEN p.w THEN '[]'::jsonb /*WITHHELD:emails*/ ELSE coalesce", "CASE WHEN false THEN '[]'::jsonb ELSE coalesce"),
                         ('phones', "CASE WHEN p.w THEN '[]'::jsonb /*WITHHELD:phones*/ ELSE coalesce", "CASE WHEN false THEN '[]'::jsonb ELSE coalesce")]:
-        b.append(fn_mutant('WITHHELD_not_blanked_' + f, '_mcp_r_get_deal', old, new, 'pg_temp.p_withheld()'))
+        b.append(fn_mutant('WITHHELD_not_blanked_' + f, '_mcp_r_get_deal', old, new, 'pg_temp.p_withheld_planted()'))
+    b.append(fn_mutant('WITHHELD_keyed_on_contact_source', '_mcp_r_get_deal', 'x.details_withheld AS w /*WITHHELD:flag*/',
+                       "(x.contact_source IS NOT DISTINCT FROM 'google_contacts') AS w /*WITHHELD:flag*/", 'pg_temp.p_withheld()'))
+    b.append(fn_mutant('WITHHELD_keyed_on_contact_source_planted', '_mcp_r_get_deal', 'x.details_withheld AS w /*WITHHELD:flag*/',
+                       "(x.contact_source IS NOT DISTINCT FROM 'google_contacts') AS w /*WITHHELD:flag*/", 'pg_temp.p_withheld_planted()'))
+    b.append(fn_mutant('WITHHELD_never', '_mcp_r_get_deal', 'x.details_withheld AS w /*WITHHELD:flag*/', 'false AS w /*WITHHELD:flag*/',
+                       'pg_temp.p_withheld_planted()'))
+    b.append(fn_mutant('NULLARRAYS_emails_not_coalesced', '_mcp_r_get_deal',
+                       "WHERE o <= 10 AND jsonb_typeof(el) = 'object'), '[]'::jsonb) END,\n          'phones'",
+                       "WHERE o <= 10 AND jsonb_typeof(el) = 'object')) END,\n          'phones'", 'pg_temp.p_withheld()'))
     b.append(fn_mutant('WITHHELD_notes_blanked_too', '_mcp_r_get_deal', "'notes', public._mcp_clean(p.notes, 1000),",
                        "'notes', CASE WHEN p.w THEN NULL ELSE public._mcp_clean(p.notes, 1000) END,", 'pg_temp.p_withheld()'))
     # ---- (4) removed and unconfirmed rows
@@ -326,7 +352,7 @@ def mutants():
     assert rb_bad != RB
     print('MUTATION APPLIED ROLLBACK_no_delete (rollback text)\n  - DELETE FROM public.mcp_call_log WHERE tool IN (...) OR outcome IN (...);')
     WANT['M_ROLLBACK_no_delete'] = 'red'
-    b.append(block('M_ROLLBACK_no_delete', '    EXECUTE %s;\n    v := pg_temp.p_rollback();' % q(ROLLBACK_PROBE.replace('CREATE FUNCTION pg_temp.p_rollback()', 'CREATE OR REPLACE FUNCTION pg_temp.p_rollback()') % (q2(rb_bad), q2(MIG), q2(MIG)))))
+    b.append(block('M_ROLLBACK_no_delete', '    v := pg_temp.p_rollback(%s);' % q(rb_bad)))
     return b
 
 
@@ -367,18 +393,28 @@ def compose(with_mutants=True, only=None):
             "INSERT INTO pg_temp.p4244_out SELECT 'PRE_mcp_functions_md5', md5((SELECT string_agg(p.oid::regprocedure::text || ':' || md5(p.prosrc) || ':' || coalesce(p.proacl::text,'-'), ',' ORDER BY p.oid::regprocedure::text)\n"
             "  FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^_?mcp_'));\n"
             "INSERT INTO pg_temp.p4244_out SELECT 'PRE_mcp_function_count', count(*)::text FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname ~ '^_?mcp_';\n"
+            "INSERT INTO pg_temp.p4244_out SELECT 'PRE_live_withheld_column', count(*)::text FROM pg_attribute WHERE attrelid = 'public.cloud_deal_parties'::regclass\n"
+            "  AND attname = 'details_withheld' AND NOT attisdropped;\n"
+            "INSERT INTO pg_temp.p4244_out SELECT 'PRE_live_withheld_check', count(*)::text FROM pg_constraint WHERE conname = 'cloud_deal_parties_withheld_ck';\n"
             ) % (lit('{' + ','.join(WRITES) + '}'), lit('{' + ','.join(WRITES) + '}'))
     # the test project holds the edited cloud migration (committed): stop unless all 13 writes have the new signature
     guard = ("DO $grd4244$ BEGIN IF (SELECT v FROM pg_temp.p4244_out WHERE k = 'PRE_cloud_writes_new_signature') IS DISTINCT FROM '13'\n"
              "  OR (SELECT v FROM pg_temp.p4244_out WHERE k = 'PRE_cloud_writes_old_signature') IS DISTINCT FROM '0' THEN\n"
              "  RAISE EXCEPTION 'P4244_STOP cloud writes not at the new signatures: %', (SELECT jsonb_object_agg(k, v) FROM pg_temp.p4244_out); END IF; END $grd4244$;\n")
-    text = head + guard + RB + '\n' + MIG + '\n' + MIG + '\n' + HL + '\n' + FX + '\n' + PR + '\n'
+    # the edited cloud migration (20261112190000, as in this tree) over the committed state, inside the
+    # transaction: the test project's live party table has no details_withheld column yet
+    text = head + guard + M2 + '\n' + RB + '\n' + MIG + '\n' + MIG + '\n' + HL + '\n' + FX + '\n' + PR + '\n'
+    text += ("INSERT INTO pg_temp.p4244_out SELECT 'IN_TXN_withheld_column', count(*)::text FROM pg_attribute WHERE attrelid = 'public.cloud_deal_parties'::regclass\n"
+             "  AND attname = 'details_withheld' AND NOT attisdropped;\n")
     text += ("INSERT INTO pg_temp.p4244_out SELECT 'fp_after_apply', pg_temp.fp();\n"
              "INSERT INTO pg_temp.p4244_out SELECT 'BASE', pg_temp.base4244()::text;\n")
-    text += ROLLBACK_PROBE % (q2(RB), q2(MIG), q2(MIG))
+    # file texts declared once, read by the rollback probe
+    text += ("CREATE FUNCTION pg_temp.t_mig() RETURNS text LANGUAGE sql IMMUTABLE AS $tm4244$ SELECT %s::text $tm4244$;\n"
+             "CREATE FUNCTION pg_temp.t_rb() RETURNS text LANGUAGE sql IMMUTABLE AS $tr4244$ SELECT %s::text $tr4244$;\n") % (q2(MIG), q2(RB))
+    text += ROLLBACK_PROBE
     b = []
     for p in PROBES:
-        b.append(block('C_' + p, '    v := pg_temp.%s();' % p))
+        b.append(block('C_' + p, '    v := pg_temp.%s(%s);' % (p, 'pg_temp.t_rb()' if p == 'p_rollback' else '')))
     caps = {'FX_list_a': "pg_temp.ld('a1')", 'FX_list_b': "pg_temp.ld('b1')", 'FX_list_e_page1': "pg_temp.ld('e1', NULL, NULL, 2)",
             'FX_get_d1': "pg_temp.gd('a1', pg_temp.id('D1')::text)", 'FX_get_d2': "pg_temp.gd('a1', pg_temp.id('D2')::text)",
             'FX_get_d4': "pg_temp.gd('a1', pg_temp.id('D4')::text)", 'FX_cl_d1': "pg_temp.gc('a1', pg_temp.id('D1')::text)",
@@ -393,6 +429,7 @@ def compose(with_mutants=True, only=None):
         if only:
             ms = [m for m in ms if any(("'M_" + o) in m for o in only)]
         b += ms
+    text += unit_decls()
     text += "DO $sw4244$\nDECLARE v text; t0 text;\nBEGIN\n" + ''.join(b) + "END\n$sw4244$;\n"
     if TIMEOUT:
         text += timeout_control()

@@ -33,7 +33,7 @@ BEGIN
                  AND r -> 'copy' ->> 'newest_saved_at' ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$', (r -> 'copy')::text),
     pg_temp.pass(NOT EXISTS (SELECT 1 FROM jsonb_array_elements(r -> 'deals') x WHERE pg_temp.keys(x) IS DISTINCT FROM pg_temp.k_list_deal()),
                  'deal keys ' || (SELECT pg_temp.keys(x)::text FROM jsonb_array_elements(r -> 'deals') x LIMIT 1)),
-    pg_temp.pass(d1 -> 'people' = '3'::jsonb AND d1 -> 'todos_total' = '5'::jsonb AND d1 -> 'todos_open_required' = '2'::jsonb, d1::text),
+    pg_temp.pass(d1 -> 'people' = '5'::jsonb AND d1 -> 'todos_total' = '5'::jsonb AND d1 -> 'todos_open_required' = '2'::jsonb, d1::text),
     pg_temp.pass(d1 ->> 'found_by' = 'person' AND pg_temp.deal_of(t, pg_temp.id('D3')) ->> 'found_by' = 'keepr'
                  AND pg_temp.deal_of(t, pg_temp.id('D3')) ->> 'locked' = 'submitted' AND d1 ->> 'started_on' = '2026-10-02',
                  pg_temp.deal_of(t, pg_temp.id('D3'))::text),
@@ -137,12 +137,26 @@ BEGIN
 END $h$;
 
 -- ===== people =====
+CREATE FUNCTION pg_temp.person(r jsonb, k text) RETURNS jsonb LANGUAGE sql STABLE AS $h$
+  SELECT x FROM jsonb_array_elements(r -> 'people') x WHERE (x ->> 'person_id')::uuid = pg_temp.id(k)
+$h$;
+-- withheld keyed on the stored flag: P3 (flagged, Google) and P7 (flagged, not Google) blank; P6 (Google,
+-- not flagged) in full; P2 (not flagged, no arrays stored) emails and phones []
 CREATE FUNCTION pg_temp.p_withheld() RETURNS text LANGUAGE plpgsql AS $h$
-DECLARE r jsonb := pg_temp.res_of(pg_temp.gd('a1', pg_temp.id('D1')::text)); p3 jsonb; p1 jsonb;
+DECLARE r jsonb := pg_temp.res_of(pg_temp.gd('a1', pg_temp.id('D1')::text)); p3 jsonb; p1 jsonb; p6 jsonb; p7 jsonb; p2 jsonb;
 BEGIN
-  SELECT x INTO p3 FROM jsonb_array_elements(r -> 'people') x WHERE (x ->> 'person_id')::uuid = pg_temp.id('P3');
-  SELECT x INTO p1 FROM jsonb_array_elements(r -> 'people') x WHERE (x ->> 'person_id')::uuid = pg_temp.id('P1');
+  p3 := pg_temp.person(r, 'P3'); p1 := pg_temp.person(r, 'P1'); p6 := pg_temp.person(r, 'P6'); p7 := pg_temp.person(r, 'P7'); p2 := pg_temp.person(r, 'P2');
   RETURN pg_temp.all_of(
+    pg_temp.pass(p6 -> 'details_withheld' = 'false'::jsonb AND p6 ->> 'name' = 'Owen Fairweather' AND p6 ->> 'company' = 'Fairweather Title Test'
+                 AND p6 -> 'emails' = '[{"email":"owen@example.test","is_primary":true,"label":"work"}]'::jsonb
+                 AND p6 -> 'phones' = '[{"e164":"+12065550106","display":"(206) 555-0106","is_primary":true,"label":"work"}]'::jsonb,
+                 'Google, not withheld ' || coalesce(p6::text, '-')),
+    pg_temp.pass(p7 -> 'details_withheld' = 'true'::jsonb AND p7 -> 'name' = 'null'::jsonb AND p7 -> 'company' = 'null'::jsonb
+                 AND p7 -> 'emails' = '[]'::jsonb AND p7 -> 'phones' = '[]'::jsonb AND p7 ->> 'notes' = 'Appraiser.' AND p7 ->> 'role' = 'appraiser',
+                 'withheld, not Google ' || coalesce(p7::text, '-')),
+    pg_temp.pass(p2 -> 'details_withheld' = 'false'::jsonb AND p2 -> 'emails' = '[]'::jsonb AND p2 -> 'phones' = '[]'::jsonb
+                 AND (SELECT emails IS NULL AND phones IS NULL FROM public.cloud_deal_parties WHERE id = pg_temp.id('P2')),
+                 'NULL arrays ' || coalesce(p2::text, '-')),
     pg_temp.pass(p3 IS NOT NULL, left(r::text, 300)),
     pg_temp.pass(p3 -> 'details_withheld' = 'true'::jsonb, p3::text),
     pg_temp.pass(p3 -> 'name' = 'null'::jsonb, 'name ' || (p3 -> 'name')::text),
@@ -168,8 +182,8 @@ DECLARE g jsonb := pg_temp.res_of(pg_temp.gd('a1', pg_temp.id('D1')::text)); c j
         l jsonb := pg_temp.deal_of(pg_temp.ld('a1'), pg_temp.id('D1'));
 BEGIN
   RETURN pg_temp.all_of(
-    pg_temp.pass(g -> 'people_total' = '3'::jsonb AND NOT (g::text LIKE '%' || pg_temp.id('P4')::text || '%'), 'people ' || (g -> 'people_total')::text),
-    pg_temp.pass(l -> 'people' = '3'::jsonb AND l -> 'todos_total' = '5'::jsonb, 'list counts ' || l::text),
+    pg_temp.pass(g -> 'people_total' = '5'::jsonb AND NOT (g::text LIKE '%' || pg_temp.id('P4')::text || '%'), 'people ' || (g -> 'people_total')::text),
+    pg_temp.pass(l -> 'people' = '5'::jsonb AND l -> 'todos_total' = '5'::jsonb, 'list counts ' || l::text),
     pg_temp.pass(c -> 'items_total' = '5'::jsonb AND c -> 'items_returned' = '5'::jsonb, 'items ' || (c -> 'items_total')::text || '/' || (c -> 'items_returned')::text),
     pg_temp.pass(NOT (c::text LIKE '%' || pg_temp.id('CL3')::text || '%') AND NOT (c::text LIKE '%' || pg_temp.id('IT6')::text || '%')
                  AND NOT (c::text LIKE '%' || pg_temp.id('IT7')::text || '%'), 'removed checklist or item shown'),
@@ -366,7 +380,7 @@ BEGIN
   RETURN pg_temp.all_of(
     pg_temp.pass(pg_temp.err(a) = 'OK' AND pg_temp.err(b) = 'OK' AND pg_temp.err(c) = 'OK', left(a, 120) || ' ' || left(b, 120) || ' ' || left(c, 120)),
     pg_temp.pass((SELECT l.rows_returned FROM public.mcp_call_log l WHERE l.tool = 'list_deals' AND l.user_id = pg_temp.fx(1) ORDER BY l.id DESC LIMIT 1) = 4, 'list rows'),
-    pg_temp.pass((SELECT l.rows_returned FROM public.mcp_call_log l WHERE l.tool = 'get_deal' AND l.user_id = pg_temp.fx(1) ORDER BY l.id DESC LIMIT 1) = 3, 'get rows'),
+    pg_temp.pass((SELECT l.rows_returned FROM public.mcp_call_log l WHERE l.tool = 'get_deal' AND l.user_id = pg_temp.fx(1) ORDER BY l.id DESC LIMIT 1) = 5, 'get rows'),
     pg_temp.pass((SELECT l.rows_returned FROM public.mcp_call_log l WHERE l.tool = 'get_deal_checklists' AND l.user_id = pg_temp.fx(1) ORDER BY l.id DESC LIMIT 1) = 5, 'checklist rows'),
     pg_temp.pass(pg_temp.nlog('get_deal', 'ok') >= 1 AND pg_temp.nlog('get_deal_checklists', 'ok') >= 1, 'outcomes'));
 END $h$;
@@ -453,4 +467,26 @@ BEGIN
   END LOOP;
   out := out || jsonb_build_object('now (no id)', pg_temp.err(pg_temp.ld('a1', NULL, NULL, NULL, 'now')));
   RETURN out::text;
+END $h$;
+
+-- N1 planted row: a flagged row given a name, company, an email and a phone by a direct UPDATE as the
+-- database owner, after dropping cloud_deal_parties_withheld_ck inside this transaction, comes back blank
+CREATE FUNCTION pg_temp.p_withheld_planted() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE p7 jsonb; planted boolean;
+BEGIN
+  ALTER TABLE public.cloud_deal_parties DROP CONSTRAINT cloud_deal_parties_withheld_ck;
+  UPDATE public.cloud_deal_parties SET display_name = 'Planted Name', company = 'Planted Co',
+         emails = '[{"email":"planted@example.test","is_primary":true,"label":"work"}]'::jsonb,
+         phones = '[{"e164":"+12065550199","display":"(206) 555-0199","is_primary":true,"label":"work"}]'::jsonb
+   WHERE id = pg_temp.id('P7') AND details_withheld;
+  planted := (SELECT display_name = 'Planted Name' AND company IS NOT NULL AND emails IS NOT NULL AND phones IS NOT NULL AND details_withheld
+                FROM public.cloud_deal_parties WHERE id = pg_temp.id('P7'));
+  p7 := pg_temp.person(pg_temp.res_of(pg_temp.gd('a1', pg_temp.id('D1')::text)), 'P7');
+  RETURN pg_temp.all_of(
+    pg_temp.pass(planted, 'row not planted'),
+    pg_temp.pass(p7 -> 'name' = 'null'::jsonb, 'name ' || coalesce((p7 -> 'name')::text, '-')),
+    pg_temp.pass(p7 -> 'company' = 'null'::jsonb, 'company ' || coalesce((p7 -> 'company')::text, '-')),
+    pg_temp.pass(p7 -> 'emails' = '[]'::jsonb, 'emails ' || coalesce((p7 -> 'emails')::text, '-')),
+    pg_temp.pass(p7 -> 'phones' = '[]'::jsonb, 'phones ' || coalesce((p7 -> 'phones')::text, '-')),
+    pg_temp.pass(p7 -> 'details_withheld' = 'true'::jsonb AND position('Planted' IN p7::text) = 0 AND position('planted@' IN p7::text) = 0, coalesce(p7::text, '-')));
 END $h$;

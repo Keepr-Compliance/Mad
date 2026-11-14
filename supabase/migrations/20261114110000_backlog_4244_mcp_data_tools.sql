@@ -240,7 +240,7 @@ BEGIN
    WHERE i.source_install_id IS NOT DISTINCT FROM v_deal.source_install_id;
   RETURN (
     WITH p AS (
-      SELECT x.*, (x.contact_source IS NOT DISTINCT FROM 'google_contacts') AS w,
+      SELECT x.*, x.details_withheld AS w /*WITHHELD:flag*/,
              row_number() OVER (ORDER BY x.is_primary DESC NULLS LAST, x.role NULLS LAST, x.id) AS rn
         FROM public.cloud_deal_parties x
        WHERE x.cloud_deal_id = v_deal.id AND x.owner_user_id = v_uid /*OWN:get_people*/ AND x.removed_at IS NULL /*LIVE:get_people*/),

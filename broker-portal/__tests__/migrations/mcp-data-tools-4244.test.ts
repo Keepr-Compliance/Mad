@@ -249,7 +249,9 @@ describe('BACKLOG-4244 migration 20261114110000', () => {
 
   it('withheld people: name, company, emails and phones blanked; notes kept', () => {
     const b = fn('_mcp_r_get_deal').body;
-    expect(b).toContain("(x.contact_source IS NOT DISTINCT FROM 'google_contacts') AS w");
+    expect(b).toContain('x.details_withheld AS w /*WITHHELD:flag*/,');
+    expect(b).not.toContain('contact_source');
+    expect([...b.matchAll(/\bAS w\b/g)]).toHaveLength(1);
     expect(b).toContain("'name', CASE WHEN p.w THEN NULL ELSE public._mcp_clean(p.display_name, 200) END");
     expect(b).toContain("'company', CASE WHEN p.w THEN NULL ELSE public._mcp_clean(p.company, 200) END");
     expect(b).toContain("'emails', CASE WHEN p.w THEN '[]'::jsonb");

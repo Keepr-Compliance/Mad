@@ -69,11 +69,22 @@ BEGIN
     pg_temp.rw('p2', jsonb_build_object('display_name', 'Tobin Ashgrove', 'company', 'Ashgrove Realty Test', 'role', 'seller_agent',
       'notes', repeat('n', 5000))),
     pg_temp.rw('p3', jsonb_build_object('display_name', 'Lena Brightwater', 'company', 'Brightwater Lending Test', 'role', 'lender',
-      'contact_source', 'google_contacts', 'notes', 'Typed note about the lender on this deal.',
+      'contact_source', 'google_contacts', 'details_withheld', true, 'notes', 'Typed note about the lender on this deal.',
       'emails', jsonb_build_array(jsonb_build_object('email', 'lena@example.test', 'is_primary', true, 'label', 'work')),
       'phones', jsonb_build_array(jsonb_build_object('e164', '+12065550103', 'display', '(206) 555-0103', 'is_primary', true, 'label', 'work')))),
-    pg_temp.rw('p4', jsonb_build_object('display_name', 'Gone Person', 'role', 'inspector'))));
-  out := out || jsonb_build_object('D1_parties', pg_temp.st(t, 0) || pg_temp.st(t, 1) || pg_temp.st(t, 2) || pg_temp.st(t, 3));
+    pg_temp.rw('p4', jsonb_build_object('display_name', 'Gone Person', 'role', 'inspector')),
+    -- Google-sourced, not withheld: comes back in full
+    pg_temp.rw('p6', jsonb_build_object('display_name', 'Owen Fairweather', 'company', 'Fairweather Title Test', 'role', 'escrow',
+      'contact_source', 'google_contacts', 'details_withheld', false, 'notes', 'Escrow officer.',
+      'emails', jsonb_build_array(jsonb_build_object('email', 'owen@example.test', 'is_primary', true, 'label', 'work')),
+      'phones', jsonb_build_array(jsonb_build_object('e164', '+12065550106', 'display', '(206) 555-0106', 'is_primary', true, 'label', 'work')))),
+    -- withheld, not Google-sourced: comes back blank (the details sent are not stored)
+    pg_temp.rw('p7', jsonb_build_object('display_name', 'Rhea Stonebrook', 'company', 'Stonebrook Appraisal Test', 'role', 'appraiser',
+      'contact_source', 'manual', 'details_withheld', true, 'notes', 'Appraiser.',
+      'emails', jsonb_build_array(jsonb_build_object('email', 'rhea@example.test', 'is_primary', true, 'label', 'work')),
+      'phones', jsonb_build_array(jsonb_build_object('e164', '+12065550107', 'display', '(206) 555-0107', 'is_primary', true, 'label', 'work'))))));
+  out := out || jsonb_build_object('D1_parties', pg_temp.st(t, 0) || pg_temp.st(t, 1) || pg_temp.st(t, 2) || pg_temp.st(t, 3) || pg_temp.st(t, 4) || pg_temp.st(t, 5));
+  PERFORM pg_temp.put('P6', pg_temp.cid(t, 4)::text); PERFORM pg_temp.put('P7', pg_temp.cid(t, 5)::text);
   PERFORM pg_temp.put('P1', pg_temp.cid(t, 0)::text); PERFORM pg_temp.put('P2', pg_temp.cid(t, 1)::text);
   PERFORM pg_temp.put('P3', pg_temp.cid(t, 2)::text); PERFORM pg_temp.put('P4', pg_temp.cid(t, 3)::text);
   t := pg_temp.up(A, 'cloud_upsert_checklists', I1, d1, jsonb_build_array(

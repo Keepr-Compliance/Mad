@@ -133,10 +133,35 @@ describe('BACKLOG-4244 C24: reader keys = shared deal shape = portal shapes', ()
     expect(Object.keys(PHONE_PROPS).sort()).toEqual(Object.keys(CONTRACT.party.phones.element).sort());
   });
 
-  it('people: the reader keys equal the portal shape; withheld blanks and keeps what the contract says', () => {
-    expect([...person].sort()).toEqual(Object.keys(PERSON_PROPS).sort());
+  it('people: the contract reader_keys (display_name is output as name) plus person_id equal the reader keys and the portal shape', () => {
+    const asOutput: Record<string, string> = { display_name: 'name' };
+    const fromContract = (CONTRACT.party.reader_keys as string[]).map((k) => asOutput[k] ?? k);
+    expect([...person].sort()).toEqual(['person_id', ...fromContract].sort());
+    expect(Object.keys(PERSON_PROPS).sort()).toEqual(['person_id', ...fromContract].sort());
+  });
+
+  it('people: stored-only keys are never read or projected; the flag is read from its stored column', () => {
+    expect(CONTRACT.party.stored_only_keys).toEqual(['contact_source']);
+    for (const f of ['_mcp_r_list_deals', '_mcp_r_get_deal', '_mcp_r_deal_checklists']) {
+      for (const k of CONTRACT.party.stored_only_keys as string[]) expect(body(MIGRATION, f)).not.toContain(k);
+    }
     const w = CONTRACT.party.details_withheld;
-    expect(w.true_when).toBe("contact_source = 'google_contacts'");
+    expect(w.stored_column).toBe('cloud_deal_parties.details_withheld');
+    expect(GET).toContain('x.details_withheld AS w');
+    expect(w.reader_enforced).toBe('when true, the reader returns name and company null and emails and phones []');
+  });
+
+  it('people: NULL stored arrays come back as [] (stored_arrays)', () => {
+    expect(CONTRACT.party.details_withheld.stored_arrays).toBe(
+      'emails and phones are stored NULL when details_withheld is true, or when the row sent null; readers return []'
+    );
+    expect(GET).toContain("CASE WHEN jsonb_typeof(p.emails) = 'array' THEN p.emails ELSE '[]'::jsonb END");
+    expect(GET).toContain("CASE WHEN jsonb_typeof(p.phones) = 'array' THEN p.phones ELSE '[]'::jsonb END");
+    expect(GET.match(/WHERE o <= 10 AND jsonb_typeof\(el\) = 'object'\), '\[\]'::jsonb\) END/g)).toHaveLength(2);
+  });
+
+  it('people: withheld blanks and keeps what the contract says', () => {
+    const w = CONTRACT.party.details_withheld;
     const asOutput: Record<string, string> = { display_name: 'name' };
     for (const col of Object.keys(w.blank_when_true)) expect(Object.keys(PERSON_PROPS)).toContain(asOutput[col] ?? col);
     for (const col of w.kept_when_true as string[]) expect(Object.keys(PERSON_PROPS)).toContain(col);
