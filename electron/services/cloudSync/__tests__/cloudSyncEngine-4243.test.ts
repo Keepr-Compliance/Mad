@@ -50,6 +50,9 @@ describe(`Keepr Cloud engine [${DRIVER}]`, () => {
       e.service.refreshSchedule();
       for (let i = 0; i < 3; i++) insertDeal(db, dealId());
       db.prepare("UPDATE transactions SET property_city = 'Q'").run();
+      const any = (db.prepare("SELECT id FROM transactions LIMIT 1").get() as { id: string }).id;
+      db.prepare("INSERT INTO transaction_checklists (id, transaction_id, template_id, template_name) VALUES ('iso-c', ?, 't', 'List')").run(any);
+      db.prepare("INSERT INTO transaction_checklist_items (id, checklist_id, title) VALUES ('iso-i', 'iso-c', 'One')").run();
       expect(e.timers).toHaveLength(0);
       expect(await e.service.kick()).toBeNull();
       const view = await e.service.getView();
