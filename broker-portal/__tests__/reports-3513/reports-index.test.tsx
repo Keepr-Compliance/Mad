@@ -32,6 +32,9 @@ const R_ORPHAN = '00000000-0000-4000-8000-0000003513e6'; // pii-allow-uuid: inve
 const R_ORPHAN_HIDDEN = '00000000-0000-4000-8000-0000003513e7'; // pii-allow-uuid: invented fixture id
 const P1 = '00000000-0000-4000-8000-0000003513f1'; // pii-allow-uuid: invented fixture id
 const P2 = '00000000-0000-4000-8000-0000003513f2'; // pii-allow-uuid: invented fixture id
+// Invented names, kept off the lines that carry dates.
+const SELF = 'Me Myself';
+const DANA = 'Dana Pike';
 
 type Rpc = (name: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
 const mockRpc = jest.fn<ReturnType<Rpc>, Parameters<Rpc>>();
@@ -199,7 +202,7 @@ describe('C5: the two lists partition on the caller level', () => {
   it('owner rows only in My reports; editor and viewer rows only in Shared with me', async () => {
     await renderIndex('full', {
       defList: ok([
-        listRow(R_MINE_A, 'Mine', 'owner', '2026-11-14T10:00:00Z', 'Me Myself'),
+        listRow(R_MINE_A, 'Mine', 'owner', '2026-11-14T10:00:00Z', SELF),
         listRow(R_EDIT, 'Office pipeline', 'editor', '2026-11-12T10:00:00Z'),
         listRow(R_VIEW, 'Closings this month', 'viewer', '2026-11-01T10:00:00Z', 'Priya Raman'),
       ]),
@@ -310,7 +313,7 @@ describe('Shared with me summary', () => {
 
   it('C7: deactivated owner, editor', async () => {
     await renderIndex('full', {
-      defList: ok([listRow(R_EDIT, 'Office pipeline', 'editor', '2026-11-10T10:00:00Z', 'Dana Pike')]),
+      defList: ok([listRow(R_EDIT, 'Office pipeline', 'editor', '2026-11-10T10:00:00Z', DANA)]),
       orphans: [{ id: R_EDIT, name: 'Office pipeline', dataset_key: 'submissions', owner_name: 'Dana Pike', owner_state: 'deactivated', level: 'editor' }],
     });
     expect(summaryOf('Office pipeline')).toBe('From Dana Pike · Can edit · Owner deactivated');
