@@ -26,6 +26,7 @@ import type {
 } from "./window-api-services";
 import type { WindowApiChecklists } from "./window-api-checklists";
 import type { WindowApiLearn } from "./window-api-learn";
+import type { WindowApiCloudSync } from "./window-api-cloud-sync";
 import type { WindowApiRcsImport } from "./window-api-rcs-import";
 import type { WindowApiAtRest } from "./window-api-at-rest";
 import type { WindowApiEntitlement } from "./window-api-entitlement";
@@ -91,6 +92,8 @@ export interface WindowApi extends WindowApiEvents {
   checklists: WindowApiChecklists;
   /** Learn mode, "Help Keepr learn" (BACKLOG-4120). */
   learn: WindowApiLearn;
+  /** Keepr Cloud (BACKLOG-4243). */
+  cloudSync: WindowApiCloudSync;
   rcsImport: WindowApiRcsImport;
   entitlement: WindowApiEntitlement;
   payment: WindowApiPayment;

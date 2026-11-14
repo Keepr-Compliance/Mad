@@ -26,6 +26,8 @@ import { useScrollSpy } from "@/hooks/useScrollSpy";
 import { useFeatureGate } from "@/hooks/useFeatureGate";
 import { useStrictFeatureState } from "@/hooks/useStrictFeatureState";
 import { LearnSettings } from "./settings/learn/LearnSettings";
+import { KeeprCloudSettings } from "./settings/cloudSync/KeeprCloudSettings";
+import { useKeeprCloudSettings } from "./settings/cloudSync/useKeeprCloudSettings";
 import { usePlatform } from "@/contexts/PlatformContext";
 import { useIPhoneSyncEnabled } from "@/contexts/IPhoneSyncContext";
 import { OfflineNotice } from './common/OfflineNotice';
@@ -75,7 +77,13 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   // BACKLOG-3964: one tab list, shared with the account side panel.
-  const visibleTabs = useMemo(() => visibleSettingsTabs(hasAIAddon, learnAvailable), [hasAIAddon, learnAvailable]);
+  // BACKLOG-4243: main decides whether the Keepr Cloud section is shown.
+  const cloud = useKeeprCloudSettings();
+  const cloudVisible = !!cloud.view && cloud.view.status !== "hidden";
+  const visibleTabs = useMemo(
+    () => visibleSettingsTabs(hasAIAddon, learnAvailable, cloudVisible),
+    [hasAIAddon, learnAvailable, cloudVisible],
+  );
   const visibleTabIds = useMemo(() => visibleTabs.map((t) => t.id), [visibleTabs]);
 
   // Preferences loaded once and distributed to sub-components as initial values
@@ -337,6 +345,9 @@ function Settings({ onClose, userId, account, initialSection, onSectionReached, 
             {/* BACKLOG-4120: "Help Keepr learn". Outside the AI add-on gate on
                 purpose: Learn mode never uses AI. */}
             {learnAvailable && <LearnSettings onStart={onStartLearn} onSeeScore={onSeeLearnScore} />}
+
+            {/* BACKLOG-4243: Keepr Cloud and the AI apps row. Hidden unless main says otherwise. */}
+            <KeeprCloudSettings cloud={cloud} />
 
             {/* AI Settings - Only visible with AI add-on (BACKLOG-462) */}
             <FeatureGate requires="ai_addon">

@@ -190,6 +190,12 @@ import * as submissionDb from "./db/submissionDbService";
 import * as syncDb from "./db/syncDbService";
 import * as rcsChatPeopleDb from "./db/rcsChatPeopleDbService";
 import * as maintenanceDb from "./db/maintenanceDbService";
+import {
+  dropCloudSyncTriggers,
+  ensureCloudSyncTriggers,
+  markAllEligibleAfterMigration,
+  prepareRestoredFile,
+} from "./db/cloudSyncTriggers";
 
 // Re-export types for backward compatibility
 export type { ContactAssignmentOperation } from "./db/transactionContactDbService";
@@ -439,6 +445,9 @@ class DatabaseService implements IDatabaseService {
           });
 
           const restoreResult = await this._attemptAutoRestore(migrationError, openedDb);
+          // BACKLOG-4243: the restored file ends with the Keepr Cloud triggers
+          // in place (each only where its tables and columns exist).
+          if (restoreResult.handle) prepareRestoredFile(restoreResult.handle, this._cloudSyncLog());
 
           // Report to Sentry with migration failure tags
           hostErrorReporter.captureException(migrationError, {
@@ -1756,6 +1765,25 @@ class DatabaseService implements IDatabaseService {
   // MIGRATIONS (Version-based runner)
   // ============================================
 
+  /** BACKLOG-4243: schema_version, or null when the table or row is absent. */
+  private _readSchemaVersionOrNull(db: DatabaseType): number | null {
+    try {
+      const row = db.prepare(SCHEMA_VERSION_SQL).get() as { version: number } | undefined;
+      return row?.version ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** BACKLOG-4243: the Keepr Cloud trigger steps log one WARN with a code only. */
+  private _cloudSyncLog(): { warn: (message: string, meta?: Record<string, unknown>) => void } {
+    return {
+      warn: (message, meta) => {
+        void logService.warn(message, "DatabaseService", meta);
+      },
+    };
+  }
+
   async runMigrations(db?: DatabaseType): Promise<void> {
     // BACKLOG-2836: initialize() passes its unpublished handle.
     const currentDb = db ?? this._ensureDb();
@@ -1889,10 +1917,19 @@ class DatabaseService implements IDatabaseService {
       }
     }
 
+    // BACKLOG-4243: when a versioned migration will run, the Keepr Cloud
+    // dirty-mark triggers are dropped before schema.sql and the chain; after
+    // them (also when a migration throws) the create step makes them exact,
+    // touching nothing when they already are. Neither step throws. A migration
+    // that ran while the triggers were absent marks every eligible deal of
+    // every enabled user.
+    const versionBefore = this._readSchemaVersionOrNull(currentDb);
+    if (willRunMigration) dropCloudSyncTriggers(currentDb, this._cloudSyncLog());
     try {
       currentDb.exec(schemaSql);
       await this._runVersionedMigrations(false, currentDb);
     } catch (error) {
+      ensureCloudSyncTriggers(currentDb, this._cloudSyncLog());
       await logService.error("Failed to run migrations", "DatabaseService", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -1909,6 +1946,10 @@ class DatabaseService implements IDatabaseService {
       // process exits quickly after the auto-restore flow.
       await hostErrorReporter.flush(2000);
       throw error;
+    }
+    ensureCloudSyncTriggers(currentDb, this._cloudSyncLog());
+    if (this._readSchemaVersionOrNull(currentDb) !== versionBefore) {
+      markAllEligibleAfterMigration(currentDb, this._cloudSyncLog());
     }
 
     // BACKLOG-3023: schema.sql's CREATE TRIGGER IF NOT EXISTS cannot replace a
