@@ -245,3 +245,84 @@ BEGIN
   END;
   RETURN res;
 END $h$;
+
+-- details_withheld: (a) a flagged row sent with a name, company, email and phone is stored with all four NULL,
+-- whatever its contact_source; role, notes and contact_source are stored as sent; (b) an unflagged row,
+-- even with contact_source google_contacts, is stored as sent; (c) no flag key -> false; (d) a non-boolean
+-- flag rejects that row and the other row of the call is applied; (e) one party flipped withheld -> not
+-- withheld -> withheld, and a hash-equal resend, ends each step with the right stored values; (f) an unflagged
+-- row resent flagged with the SAME hash is applied and blanked, then an identical resend is unchanged;
+-- (g) a direct UPDATE (table owner) that puts a name on a flagged row is refused by the CHECK (23514).
+CREATE FUNCTION pg_temp.w_row(lid text, k text, flag jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $h$
+  SELECT jsonb_build_object('local_id', lid, 'content_hash', pg_temp.h(lid || k), 'display_name', 'Name ' || k, 'company', 'Co ' || k,
+           'emails', jsonb_build_array(jsonb_build_object('email', 'w-' || k || '@example.test', 'is_primary', true, 'label', NULL)),
+           'phones', jsonb_build_array(jsonb_build_object('e164', '+12065550111', 'display', NULL, 'is_primary', true, 'label', NULL)),
+           'role', 'buyer_agent', 'notes', 'note ' || k, 'contact_source', 'contacts_app')
+         || CASE WHEN flag IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('details_withheld', flag) END
+$h$;
+CREATE FUNCTION pg_temp.w_state(D uuid, lid text) RETURNS text LANGUAGE sql AS $h$
+  SELECT concat_ws(',', 'w=' || details_withheld, 'name=' || coalesce(display_name, '∅'), 'co=' || coalesce(company, '∅'),
+                   'em=' || coalesce(emails::text, '∅'), 'ph=' || coalesce(phones::text, '∅'),
+                   'role=' || coalesce(role, '∅'), 'notes=' || coalesce(notes, '∅'), 'src=' || coalesce(contact_source, '∅'), 'v=' || version)
+    FROM public.cloud_deal_parties WHERE cloud_deal_id = D AND local_party_id = lid
+$h$;
+CREATE FUNCTION pg_temp.w_probe() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE A uuid := pg_temp.fx(1); I1 uuid := pg_temp.fx(301); D1 uuid; t text; acc text := ''; s text; res text;
+  NULLED text := 'name=∅,co=∅,em=∅,ph=∅';
+BEGIN
+  BEGIN
+    SELECT id INTO D1 FROM public.cloud_deals WHERE owner_user_id = A AND source_install_id = I1 AND local_transaction_id = 't-1';
+    -- (a) flagged, contact_source not google
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-a', 'a', 'true'::jsonb)));
+    s := pg_temp.w_state(D1, 'w-a');
+    IF pg_temp.st(t) <> 'applied' OR s NOT LIKE 'w=true,' || NULLED || ',role=buyer_agent,notes=note a,src=contacts_app,%' THEN acc := acc || ' a:' || s; END IF;
+    -- (b) unflagged, contact_source google_contacts
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-b', 'b', 'false'::jsonb) || '{"contact_source":"google_contacts"}'));
+    s := pg_temp.w_state(D1, 'w-b');
+    IF pg_temp.st(t) <> 'applied' OR s NOT LIKE 'w=false,name=Name b,co=Co b,em=[{%w-b@example.test%}],ph=[{%+12065550111%}],role=buyer_agent,notes=note b,src=google_contacts,%' THEN acc := acc || ' b:' || s; END IF;
+    -- (c) no flag key
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-c', 'c', NULL)));
+    s := pg_temp.w_state(D1, 'w-c');
+    IF pg_temp.st(t) <> 'applied' OR s NOT LIKE 'w=false,name=Name c,%' THEN acc := acc || ' c:' || s; END IF;
+    -- (d) non-boolean flag rejected, other row applied
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-d1', 'd1', '"yes"'::jsonb), pg_temp.w_row('w-d2', 'd2', 'true'::jsonb)));
+    IF pg_temp.st(t, 0) <> 'rejected:invalid_value' OR pg_temp.j(t) -> 'results' -> 0 ->> 'field' IS DISTINCT FROM 'details_withheld'
+       OR pg_temp.st(t, 1) <> 'applied' OR pg_temp.w_state(D1, 'w-d1') IS NOT NULL OR pg_temp.w_state(D1, 'w-d2') NOT LIKE 'w=true,' || NULLED || ',%' THEN
+      acc := acc || ' d:' || left(t, 160);
+    END IF;
+    -- (e) one party: withheld -> not withheld -> withheld, then a hash-equal resend
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-e', 'e1', 'true'::jsonb)));
+    s := pg_temp.w_state(D1, 'w-e');
+    IF s NOT LIKE 'w=true,' || NULLED || ',%,v=1' THEN acc := acc || ' e1:' || s; END IF;
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-e', 'e2', 'false'::jsonb)));
+    s := pg_temp.w_state(D1, 'w-e');
+    IF s NOT LIKE 'w=false,name=Name e2,co=Co e2,em=[{%w-e2@example.test%}],ph=[{%}],%,v=2' THEN acc := acc || ' e2:' || s; END IF;
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-e', 'e3', 'true'::jsonb)));
+    s := pg_temp.w_state(D1, 'w-e');
+    IF s NOT LIKE 'w=true,' || NULLED || ',%,notes=note e3,%,v=3' THEN acc := acc || ' e3:' || s; END IF;
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-e', 'e3', 'true'::jsonb)));
+    s := pg_temp.w_state(D1, 'w-e');
+    IF pg_temp.st(t) <> 'unchanged' OR s NOT LIKE 'w=true,' || NULLED || ',%,v=3' THEN acc := acc || ' e4:' || pg_temp.st(t) || ' ' || s; END IF;
+    -- (f) same hash, flag turned on
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-f', 'f', 'false'::jsonb)));
+    s := pg_temp.w_state(D1, 'w-f');
+    IF pg_temp.st(t) <> 'applied' OR s NOT LIKE 'w=false,name=Name f,%,v=1' THEN acc := acc || ' f1:' || s; END IF;
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-f', 'f', 'true'::jsonb)));
+    s := pg_temp.w_state(D1, 'w-f');
+    IF pg_temp.st(t) <> 'applied' OR s NOT LIKE 'w=true,' || NULLED || ',%,v=2' THEN acc := acc || ' f2:' || pg_temp.st(t) || ' ' || s; END IF;
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-f', 'f', 'true'::jsonb)));
+    s := pg_temp.w_state(D1, 'w-f');
+    IF pg_temp.st(t) <> 'unchanged' OR s NOT LIKE 'w=true,' || NULLED || ',%,v=2' THEN acc := acc || ' f3:' || pg_temp.st(t) || ' ' || s; END IF;
+    -- (g) the stored invariant refuses a direct write
+    BEGIN
+      UPDATE public.cloud_deal_parties SET display_name = 'planted' WHERE cloud_deal_id = D1 AND local_party_id = 'w-a';
+      acc := acc || ' g:direct UPDATE of a flagged row was accepted';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+    res := pg_temp.pass(acc = '', acc);
+    RAISE EXCEPTION USING ERRCODE = 'T4243';
+  EXCEPTION WHEN SQLSTATE 'T4243' THEN NULL;
+            WHEN OTHERS THEN EXECUTE 'RESET ROLE'; res := 'FAIL: crash ' || SQLSTATE || ' ' || SQLERRM;
+  END;
+  RETURN res;
+END $h$;
