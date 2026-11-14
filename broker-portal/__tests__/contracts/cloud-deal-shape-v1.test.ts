@@ -142,23 +142,39 @@ describe('BACKLOG-4243 cloud deal shape contract v1', () => {
     expect(table('cloud_deals')).toContain("details jsonb NOT NULL DEFAULT '{}'::jsonb");
   });
 
-  it('person: email and phone element shapes, and details_withheld blanks name, company, emails and phones', () => {
+  it('person: email and phone element shapes, and details_withheld is a stored flag that blanks name, company, emails and phones', () => {
     expect(C.party.emails.element).toEqual({ email: 'string', is_primary: 'boolean', label: 'string|null' });
     expect(C.party.phones.element).toEqual({ e164: 'string', display: 'string|null', is_primary: 'boolean', label: 'string|null' });
     expect(C.party.emails.empty).toEqual([]);
     expect(C.party.phones.empty).toEqual([]);
     const w = C.party.details_withheld;
     expect(w.type).toBe('boolean');
-    expect(w.derived_by_reader).toBe(true);
-    expect(w.derived_from).toBe('contact_source');
+    expect(w.always_present).toBe(true);
+    expect(w.default).toBe(false);
+    expect(w.in_content_hash).toBe(true);
+    expect(w).not.toHaveProperty('derived_by_reader');
+    expect(w).not.toHaveProperty('derived_from');
     expect(w.meaning).toBe('A person with details_withheld has name, company, emails and phones blank.');
-    expect(w.true_when).toBe("contact_source = 'google_contacts'");
+    // a real column, stored by the party upsert, which blanks the four fields when the flag is set
+    expect(w.stored_column).toBe('cloud_deal_parties.details_withheld');
+    expect(table('cloud_deal_parties')).toContain('details_withheld boolean NOT NULL DEFAULT false,');
+    expect(M2).toContain('ALTER TABLE public.cloud_deal_parties ADD COLUMN IF NOT EXISTS details_withheld boolean NOT NULL DEFAULT false;');
+    const up = body('cloud_upsert_parties');
+    expect(up).toContain("v_withheld := coalesce((r ->> 'details_withheld')::boolean, false);");
+    for (const col of Object.keys(w.blank_when_true)) {
+      expect(up).toMatch(new RegExp(`${col} = CASE WHEN v_withheld THEN NULL (ELSE|WHEN)`));
+    }
+    expect(up).toContain('details_withheld = v_withheld,');
+    // reader keys: exactly these, each a party column; contact_source is stored only
+    expect(C.party.reader_keys).toEqual(['display_name', 'company', 'role', 'role_category', 'specific_role', 'is_primary', 'emails', 'phones', 'notes', 'contact_deleted', 'details_withheld']);
+    expect(C.party.stored_only_keys).toEqual(['contact_source']);
+    expect(C.party.reader_keys).not.toContain('contact_source');
     expect(w.blank_when_true).toEqual({ display_name: null, company: null, emails: [], phones: [] });
     // the role row, including the note typed on the deal, is still sent
     expect(w.kept_when_true).toEqual(['role', 'role_category', 'specific_role', 'is_primary', 'notes', 'contact_deleted']);
     // every column named here exists on cloud_deal_parties
     const parties = table('cloud_deal_parties');
-    for (const col of [...Object.keys(w.blank_when_true), ...w.kept_when_true, 'contact_source']) {
+    for (const col of [...Object.keys(w.blank_when_true), ...w.kept_when_true, ...C.party.reader_keys, 'contact_source']) {
       expect(parties).toMatch(new RegExp(`(^|, )${col} `));
     }
     for (const k of Object.keys(w.blank_when_true)) expect(w.kept_when_true).not.toContain(k);

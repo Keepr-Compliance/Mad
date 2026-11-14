@@ -249,6 +249,23 @@ describe('BACKLOG-4236 cloud auto-save migrations', () => {
     expect(mark).toContain('UPDATE public.cloud_deals SET last_full_sync_at = v_at, last_synced_at = v_at WHERE id = v_deal;');
   });
 
+  it('parties: details_withheld is validated as a boolean, stored, and forces the four detail columns to NULL in the row write', () => {
+    const b = fn('cloud_upsert_parties').body;
+    expect(b).toContain("ARRAY['is_primary', 'contact_deleted', 'details_withheld']");
+    const flag = b.indexOf("v_withheld := coalesce((r ->> 'details_withheld')::boolean, false);");
+    const write = b.indexOf('UPDATE public.cloud_deal_parties SET');
+    expect(flag).toBeGreaterThan(0);
+    expect(write).toBeGreaterThan(flag);
+    const set = b.slice(write, b.indexOf('RETURNING * INTO cur;', write));
+    expect(set).toContain("display_name = CASE WHEN v_withheld THEN NULL ELSE r ->> 'display_name' END,");
+    expect(set).toContain("company = CASE WHEN v_withheld THEN NULL ELSE r ->> 'company' END,");
+    expect(set).toContain("emails = CASE WHEN v_withheld THEN NULL WHEN jsonb_typeof(r -> 'emails') = 'array' THEN r -> 'emails' END,");
+    expect(set).toContain("phones = CASE WHEN v_withheld THEN NULL WHEN jsonb_typeof(r -> 'phones') = 'array' THEN r -> 'phones' END,");
+    expect(set).toContain('details_withheld = v_withheld,');
+    expect(set).toContain("contact_source = r ->> 'contact_source'");
+    expect(b).not.toMatch(/v_withheld := [^;]*contact_source/);
+  });
+
   it('confirm returns uploaded for an uploaded blob before reading storage', () => {
     const b = fn('cloud_confirm_blob').body;
     const early = b.indexOf("IF b.uploaded_at IS NOT NULL THEN RETURN jsonb_build_object('ok', true, 'state', 'uploaded'); END IF;");
