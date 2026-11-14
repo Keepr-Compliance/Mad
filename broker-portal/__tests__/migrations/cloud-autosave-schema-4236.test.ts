@@ -264,6 +264,19 @@ describe('BACKLOG-4236 cloud auto-save migrations', () => {
     expect(set).toContain('details_withheld = v_withheld,');
     expect(set).toContain("contact_source = r ->> 'contact_source'");
     expect(b).not.toMatch(/v_withheld := [^;]*contact_source/);
+    // one assignment of the flag, and contact_source only in its own stored column
+    expect(b.match(/v_withheld\s*:=/g)).toHaveLength(1);
+    expect(b.match(/contact_source/g)).toHaveLength(2);
+    // an equal-hash resend that turns the flag on is applied
+    const status = b.indexOf('v_status := public._cloud_row_status(');
+    const flip = b.indexOf("IF v_status = 'unchanged' AND v_withheld AND NOT cur.details_withheld THEN v_status := 'applied'; END IF;");
+    expect(status).toBeGreaterThan(0);
+    expect(flip).toBeGreaterThan(status);
+    expect(flip).toBeLessThan(b.indexOf("IF v_status = 'applied' THEN"));
+    // the stored invariant, dropped and added on every run
+    expect(M2).toContain(
+      'ALTER TABLE public.cloud_deal_parties DROP CONSTRAINT IF EXISTS cloud_deal_parties_withheld_ck; ALTER TABLE public.cloud_deal_parties ADD CONSTRAINT cloud_deal_parties_withheld_ck CHECK (NOT details_withheld OR (display_name IS NULL AND company IS NULL AND emails IS NULL AND phones IS NULL));',
+    );
   });
 
   it('confirm returns uploaded for an uploaded blob before reading storage', () => {

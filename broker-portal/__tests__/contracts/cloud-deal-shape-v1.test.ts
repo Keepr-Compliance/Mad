@@ -157,6 +157,9 @@ describe('BACKLOG-4243 cloud deal shape contract v1', () => {
     expect(w.meaning).toBe('A person with details_withheld has name, company, emails and phones blank.');
     // a real column, stored by the party upsert, which blanks the four fields when the flag is set
     expect(w.stored_column).toBe('cloud_deal_parties.details_withheld');
+    expect(w.stored_arrays).toBe('emails and phones are stored NULL when details_withheld is true, or when the row sent null; readers return []');
+    expect(w.stored_check).toContain('cloud_deal_parties_withheld_ck');
+    expect(M2).toContain('ADD CONSTRAINT cloud_deal_parties_withheld_ck CHECK (NOT details_withheld OR (display_name IS NULL AND company IS NULL AND emails IS NULL AND phones IS NULL));');
     expect(table('cloud_deal_parties')).toContain('details_withheld boolean NOT NULL DEFAULT false,');
     expect(M2).toContain('ALTER TABLE public.cloud_deal_parties ADD COLUMN IF NOT EXISTS details_withheld boolean NOT NULL DEFAULT false;');
     const up = body('cloud_upsert_parties');

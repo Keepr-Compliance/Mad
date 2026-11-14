@@ -138,6 +138,8 @@
       "set_by": "the uploader, per person; independent of contact_source",
       "server_enforced": "when true, cloud_upsert_parties stores display_name, company, emails and phones as NULL whatever the row sent",
       "reader_enforced": "when true, the reader returns name and company null and emails and phones []",
+      "stored_arrays": "emails and phones are stored NULL when details_withheld is true, or when the row sent null; readers return []",
+      "stored_check": "cloud_deal_parties_withheld_ck: details_withheld implies display_name, company, emails and phones NULL",
       "meaning": "A person with details_withheld has name, company, emails and phones blank.",
       "blank_when_true": { "display_name": null, "company": null, "emails": [], "phones": [] },
       "kept_when_true": ["role", "role_category", "specific_role", "is_primary", "notes", "contact_deleted"]

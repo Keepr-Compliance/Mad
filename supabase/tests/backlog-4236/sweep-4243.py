@@ -213,6 +213,8 @@ def sweep_fn():
     b.append(fn_mutant('W_flag_not_validated', 'cloud_upsert_parties',
                        "ARRAY['is_primary', 'contact_deleted', 'details_withheld']", "ARRAY['is_primary', 'contact_deleted']", W))
     b.append(fn_mutant('W_flag_not_stored', 'cloud_upsert_parties', "        details_withheld = v_withheld,\n", "", W))
+    b.append(fn_mutant('W_equal_hash_flip_not_applied', 'cloud_upsert_parties',
+                       "    IF v_status = 'unchanged' AND v_withheld AND NOT cur.details_withheld THEN v_status := 'applied'; END IF;   /*PTY:flip*/\n", '', W))
     # C0.3 grants
     b.append(acl_mutant('G_no_revoke_deal', 'cloud_upsert_deal',
                         'REVOKE ALL ON FUNCTION public.cloud_upsert_deal(uuid, jsonb) FROM PUBLIC, anon, authenticated, service_role;\n', ''))
@@ -332,15 +334,23 @@ def sweep_withheld():
     # (f) in-place re-run over the earlier file with a party row stored under the old shape
     fbody = ('    EXECUTE %s;\n    EXECUTE %s;\n    EXECUTE %s;\n    base := pg_temp.base();\n'
              "    t0 := %s::text || '/' || (SELECT count(*) FROM public.cloud_deal_parties)::text;\n"
-             '    EXECUTE %s;\n'
-             "    IF t0 <> '0/1' OR %s <> 1 THEN\n"
+             '    EXECUTE %s;\n    EXECUTE %s;\n'
+             "    IF t0 <> '0/1' OR %s <> 1\n"
+             "       OR (SELECT count(*) FROM pg_constraint WHERE conname = 'cloud_deal_parties_withheld_ck') <> 1 THEN\n"
              "      v := 'FAIL: before=' || t0 || ' after_column=' || %s;\n"
              "    ELSIF (SELECT count(*) FROM public.cloud_deal_parties WHERE details_withheld OR display_name IS NULL) <> 0 THEN\n"
              "      v := 'FAIL: an existing party row did not default to false with its details';\n"
              "    ELSE\n      v := pg_temp.w_probe();\n    END IF;")
-    b.append(block('P_F_rerun_over_earlier_file', fbody % (q(RB), q(M1), q(prev), col, q(M2), col, col)))
+    b.append(block('P_F_rerun_over_earlier_file', fbody % (q(RB), q(M1), q(prev), col, q(M2), q(M2), col, col)))
     no_alter = apply(M2, 'ALTER TABLE public.cloud_deal_parties ADD COLUMN IF NOT EXISTS details_withheld boolean NOT NULL DEFAULT false;\n', '', 1, 'F_no_add_column')
-    b.append(block('M_F_no_add_column', fbody % (q(RB), q(M1), q(prev), col, q(no_alter), col, col)))
+    b.append(block('M_F_no_add_column', fbody % (q(RB), q(M1), q(prev), col, q(no_alter), q('SELECT 1'), col, col)))
+    # mutant: the CHECK removed -> a direct UPDATE planting a name on a flagged row is accepted
+    CK = ('ALTER TABLE public.cloud_deal_parties DROP CONSTRAINT IF EXISTS cloud_deal_parties_withheld_ck;\n'
+          'ALTER TABLE public.cloud_deal_parties ADD CONSTRAINT cloud_deal_parties_withheld_ck\n'
+          '  CHECK (NOT details_withheld OR (display_name IS NULL AND company IS NULL AND emails IS NULL AND phones IS NULL));\n')
+    no_ck = apply(M2, CK, '', 1, 'F_no_withheld_check')
+    b.append(block('M_F_no_withheld_check', '    EXECUTE ' + q(RB) + ';\n    EXECUTE ' + q(M1) + ';\n    EXECUTE ' + q(no_ck)
+                   + ';\n    base := pg_temp.base();\n    v := pg_temp.w_probe();'))
     # (g) rollback then the earlier file: the column is gone and the earlier parties body is back
     _, prev_src, _ = unit(prev, 'cloud_upsert_parties')
     gbody = ('    EXECUTE %s;\n    EXECUTE %s;\n    EXECUTE %s;\n    EXECUTE %s;\n'

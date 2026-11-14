@@ -250,7 +250,9 @@ END $h$;
 -- whatever its contact_source; role, notes and contact_source are stored as sent; (b) an unflagged row,
 -- even with contact_source google_contacts, is stored as sent; (c) no flag key -> false; (d) a non-boolean
 -- flag rejects that row and the other row of the call is applied; (e) one party flipped withheld -> not
--- withheld -> withheld, and a hash-equal resend, ends each step with the right stored values.
+-- withheld -> withheld, and a hash-equal resend, ends each step with the right stored values; (f) an unflagged
+-- row resent flagged with the SAME hash is applied and blanked, then an identical resend is unchanged;
+-- (g) a direct UPDATE (table owner) that puts a name on a flagged row is refused by the CHECK (23514).
 CREATE FUNCTION pg_temp.w_row(lid text, k text, flag jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $h$
   SELECT jsonb_build_object('local_id', lid, 'content_hash', pg_temp.h(lid || k), 'display_name', 'Name ' || k, 'company', 'Co ' || k,
            'emails', jsonb_build_array(jsonb_build_object('email', 'w-' || k || '@example.test', 'is_primary', true, 'label', NULL)),
@@ -301,6 +303,22 @@ BEGIN
     t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-e', 'e3', 'true'::jsonb)));
     s := pg_temp.w_state(D1, 'w-e');
     IF pg_temp.st(t) <> 'unchanged' OR s NOT LIKE 'w=true,' || NULLED || ',%,v=3' THEN acc := acc || ' e4:' || pg_temp.st(t) || ' ' || s; END IF;
+    -- (f) same hash, flag turned on
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-f', 'f', 'false'::jsonb)));
+    s := pg_temp.w_state(D1, 'w-f');
+    IF pg_temp.st(t) <> 'applied' OR s NOT LIKE 'w=false,name=Name f,%,v=1' THEN acc := acc || ' f1:' || s; END IF;
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-f', 'f', 'true'::jsonb)));
+    s := pg_temp.w_state(D1, 'w-f');
+    IF pg_temp.st(t) <> 'applied' OR s NOT LIKE 'w=true,' || NULLED || ',%,v=2' THEN acc := acc || ' f2:' || pg_temp.st(t) || ' ' || s; END IF;
+    t := pg_temp.up(A, 'cloud_upsert_parties', I1, D1, jsonb_build_array(pg_temp.w_row('w-f', 'f', 'true'::jsonb)));
+    s := pg_temp.w_state(D1, 'w-f');
+    IF pg_temp.st(t) <> 'unchanged' OR s NOT LIKE 'w=true,' || NULLED || ',%,v=2' THEN acc := acc || ' f3:' || pg_temp.st(t) || ' ' || s; END IF;
+    -- (g) the stored invariant refuses a direct write
+    BEGIN
+      UPDATE public.cloud_deal_parties SET display_name = 'planted' WHERE cloud_deal_id = D1 AND local_party_id = 'w-a';
+      acc := acc || ' g:direct UPDATE of a flagged row was accepted';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
     res := pg_temp.pass(acc = '', acc);
     RAISE EXCEPTION USING ERRCODE = 'T4243';
   EXCEPTION WHEN SQLSTATE 'T4243' THEN NULL;

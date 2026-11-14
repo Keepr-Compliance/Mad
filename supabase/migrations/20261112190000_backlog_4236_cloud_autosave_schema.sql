@@ -142,6 +142,11 @@ CREATE TABLE IF NOT EXISTS public.cloud_deal_parties (
 );
 -- Added after the first apply of this file: a re-run over an existing table gets the column (existing rows false).
 ALTER TABLE public.cloud_deal_parties ADD COLUMN IF NOT EXISTS details_withheld boolean NOT NULL DEFAULT false;
+-- A withheld person has no name, company, emails or phones stored. Dropped and added on every run, so a
+-- fresh database and a re-run end with the same constraint.
+ALTER TABLE public.cloud_deal_parties DROP CONSTRAINT IF EXISTS cloud_deal_parties_withheld_ck;
+ALTER TABLE public.cloud_deal_parties ADD CONSTRAINT cloud_deal_parties_withheld_ck
+  CHECK (NOT details_withheld OR (display_name IS NULL AND company IS NULL AND emails IS NULL AND phones IS NULL));
 CREATE INDEX IF NOT EXISTS cloud_deal_parties_owner_idx ON public.cloud_deal_parties (owner_user_id);
 
 CREATE TABLE IF NOT EXISTS public.cloud_deal_checklists (
@@ -800,6 +805,7 @@ BEGIN
     ON CONFLICT (cloud_deal_id, local_party_id) DO NOTHING;
     SELECT * INTO cur FROM public.cloud_deal_parties WHERE cloud_deal_id = v_deal AND local_party_id = r ->> 'local_id' FOR UPDATE;
     v_status := public._cloud_row_status(cur.version, cur.removed_at, cur.content_hash, r ->> 'content_hash', (r ->> 'base_version')::bigint);
+    IF v_status = 'unchanged' AND v_withheld AND NOT cur.details_withheld THEN v_status := 'applied'; END IF;   /*PTY:flip*/
     IF v_status = 'applied' THEN
       UPDATE public.cloud_deal_parties SET
         local_contact_id = r ->> 'local_contact_id', role = r ->> 'role', role_category = r ->> 'role_category',
