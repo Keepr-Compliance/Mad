@@ -14,7 +14,7 @@ const mockRpc = jest.fn();
 jest.mock('@supabase/supabase-js', () => ({ createClient: () => ({ rpc: (...a: unknown[]) => mockRpc(...a) }) }));
 
 import { getDealChecklistsFor, getDealFor, listDealsFor } from '@/lib/mcp/oauth/rpc';
-import { DETAILS_PROPS, EMAIL_PROPS, PERSON_PROPS, PHONE_PROPS } from '@/lib/mcp/tools/shapes';
+import { DEADLINE_PROPS, DETAILS_PROPS, EMAIL_PROPS, LIST_DEALS_SHAPE, PERSON_PROPS, PHONE_PROPS } from '@/lib/mcp/tools/shapes';
 
 const REPO = path.resolve(__dirname, '../../..');
 const MIGRATION = readFileSync(path.join(REPO, 'supabase/migrations/20261114110000_backlog_4244_mcp_data_tools.sql'), 'utf8');
@@ -71,6 +71,7 @@ function pairKeys(text: string, anchor: string): string[] {
 }
 
 const GET = body(MIGRATION, '_mcp_r_get_deal');
+const LIST = body(MIGRATION, '_mcp_r_list_deals');
 
 describe('BACKLOG-4244 C15: rpc parity with the migration', () => {
   const CFG = { supabaseUrl: 'https://project-ref.supabase.co', supabaseAnonKey: 'anon' };
@@ -147,6 +148,19 @@ describe('BACKLOG-4244 C24: reader keys = shared deal shape = portal shapes', ()
       const b = body(MIGRATION, f);
       for (const k of CONTRACT.identity.origin_metadata as string[]) expect(b).not.toContain(`'${k}'`);
     }
+  });
+
+  it('list_deals deadlines: the contract date keys, read with the same date rule as get_deal, and no price', () => {
+    const contractDates = Object.entries(CONTRACT.deal.details.keys as Record<string, string>).filter(([, t]) => t === 'date').map(([k]) => k);
+    const deadlines = pairKeys(LIST, "'deadlines', jsonb_build_object(");
+    expect([...deadlines].sort()).toEqual([...contractDates].sort());
+    expect(Object.keys(DEADLINE_PROPS).sort()).toEqual([...contractDates].sort());
+    const item = (LIST_DEALS_SHAPE as any).props.deals.items.props;
+    expect(Object.keys(item.deadlines.props).sort()).toEqual([...contractDates].sort());
+    for (const k of contractDates) {
+      expect(LIST).toContain(`'${k}', CASE WHEN jsonb_typeof(pr.details -> '${k}') = 'string' AND pr.details ->> '${k}' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN pr.details -> '${k}' END`);
+    }
+    for (const k of Object.keys(DETAILS_PROPS).filter((x) => !contractDates.includes(x))) expect(LIST).not.toContain(`'${k}'`);
   });
 
   it('positive control: a planted extra key in a copy of the reader text is found', () => {

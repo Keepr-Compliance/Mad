@@ -13,6 +13,12 @@
  *   (supabase/migrations/20261114110000_backlog_4244_mcp_data_tools.sql), and this file with it.
  * - the declared `outputSchema` (`toJsonSchema`): every key required; objects do not forbid extra keys,
  *   so a key added in a later version does not fail a client that validates against a cached schema.
+ *
+ * Version rule: the portal accepts only the `v` values listed here (an unknown `v` is a failed call), and
+ * never an unknown key inside a known `v`. Any change to a result shape changes `v`. Deploy order for a
+ * shape change: (1) the portal accepting v and v+1, (2) the migration emitting v+1, (3) the portal
+ * without v. For this first version: the migration is applied to the database first, then the portal
+ * change is merged.
  */
 
 export type Shape =
@@ -60,9 +66,18 @@ const DEAL_BASE = {
 const frame = (kind: string, props: Record<string, Shape>): Shape =>
   obj({ kind: oneOf([kind]), v: { t: 'integer', values: [1] }, about: str(), ...props });
 
+/** the date keys of deal.details, also returned on each list_deals row as deadlines */
+export const DEADLINE_PROPS = {
+  mutual_acceptance_date: day(),
+  inspection_deadline: day(),
+  financing_deadline: day(),
+  closing_deadline: day(),
+  representation_start_date: day(),
+};
+
 export const LIST_DEALS_SHAPE = frame('keepr.list_deals', {
   copy: obj({ deals_saved: int(), not_shown_unconfirmed: int(), newest_saved_at: instant(true), computers: int() }),
-  deals: arr(obj({ ...DEAL_BASE, people: int(), todos_open_required: int(), todos_total: int() })),
+  deals: arr(obj({ ...DEAL_BASE, deadlines: obj(DEADLINE_PROPS), people: int(), todos_open_required: int(), todos_total: int() })),
   page: obj({ limit: int(), next_cursor: str(true) }),
 });
 
@@ -74,11 +89,7 @@ export const DETAILS_PROPS = {
   commission_offered_rate: num(),
   commission_actual_rate: num(),
   commission_gross_amount: num(),
-  mutual_acceptance_date: day(),
-  inspection_deadline: day(),
-  financing_deadline: day(),
-  closing_deadline: day(),
-  representation_start_date: day(),
+  ...DEADLINE_PROPS,
   stage: str(true),
   submission_status: str(true),
   export_status: str(true),

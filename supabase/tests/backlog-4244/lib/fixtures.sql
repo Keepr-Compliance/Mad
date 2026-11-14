@@ -104,7 +104,8 @@ BEGIN
 
   -- A: D2 on I2 (second computer), marked
   t := pg_temp.deal(A, pg_temp.dp(I2, 'd2', jsonb_build_object('property_address', '52 Cobble Wren Ct, Larchmont Bay, WA 98998',
-         'transaction_type', 'sale', 'status', 'pending', 'details', jsonb_build_object('v', 1, 'sale_price', 'not a number'))));
+         'transaction_type', 'sale', 'status', 'pending', 'details', jsonb_build_object('v', 1, 'sale_price', 'not a number',
+         'closing_deadline', 'soon', 'inspection_deadline', '2026-12-01', 'financing_deadline', 20261201))));
   dd := pg_temp.cid(t); PERFORM pg_temp.put('D2', dd::text); out := out || jsonb_build_object('D2', pg_temp.st(t));
   out := out || jsonb_build_object('D2_party', pg_temp.st(pg_temp.up(A, 'cloud_upsert_parties', I2, dd,
            jsonb_build_array(pg_temp.rw('q1', jsonb_build_object('display_name', 'Desmond Pell', 'role', 'seller'))))));

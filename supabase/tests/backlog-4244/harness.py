@@ -167,7 +167,7 @@ def rls_off(table):
             "(SELECT NOT relrowsecurity FROM pg_class WHERE oid = 'public.%s'::regclass)" % table)
 
 
-PROBES = ['p_list_a', 'p_order_a', 'p_iso', 'p_ent', 'p_notice', 'p_disabled', 'p_tokens', 'p_no_claims', 'p_withheld', 'p_removed',
+PROBES = ['p_list_a', 'p_order_a', 'p_iso', 'p_ent', 'p_c7b_outdated_notice', 'p_deadlines', 'p_disabled', 'p_tokens', 'p_no_claims', 'p_withheld', 'p_removed',
           'p_unconfirmed', 'p_limits', 'p_paging', 'p_people_cap', 'p_masking', 'p_dates', 'p_fresh', 'p_saved_from', 'p_null_install',
           'p_checklists', 'p_log', 'p_grants', 'p_checks', 'p_rollback']
 
@@ -225,7 +225,23 @@ def mutants():
         b.append(fn_mutant('ENT_no_check_' + r, r, whole, '', 'pg_temp.p_ent()'))
     b.append(fn_mutant('ENT_no_licensed_term_list', '_mcp_r_list_deals', lic, '', 'pg_temp.p_ent()'))
     b.append(fn_mutant('ENT_no_enabled_term_list', '_mcp_r_list_deals', ena, '', 'pg_temp.p_ent()'))
-    b.append(fn_mutant('ENT_entitled_instead_of_licensed_list', '_mcp_r_list_deals', lic, "\n     OR (v_st -> 'entitled') IS DISTINCT FROM to_jsonb(true)", 'pg_temp.p_notice()'))
+    for r in READERS:
+        b.append(fn_mutant('C7b_entitled_instead_of_licensed_' + r, r, lic, "\n     OR (v_st -> 'entitled') IS DISTINCT FROM to_jsonb(true)",
+                           'pg_temp.p_c7b_outdated_notice()'))
+    b.append(fn_mutant('C7b_licensed_term_dropped_get_deal', '_mcp_r_get_deal', lic, '', 'pg_temp.p_c7b_outdated_notice()'))
+    # ---- N3 deadlines on list rows
+    b.append(fn_mutant('DEADLINES_key_renamed', '_mcp_r_list_deals', "            'closing_deadline', CASE", "            'closing_date', CASE", 'pg_temp.p_deadlines()'))
+    b.append(fn_mutant('DEADLINES_key_missing', '_mcp_r_list_deals',
+                       ",\n            'representation_start_date', CASE WHEN jsonb_typeof(pr.details -> 'representation_start_date') = 'string' AND pr.details ->> 'representation_start_date' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN pr.details -> 'representation_start_date' END) /*DEADLINES:list*/",
+                       ") /*DEADLINES:list*/", 'pg_temp.p_deadlines()'))
+    b.append(fn_mutant('DEADLINES_no_date_rule', '_mcp_r_list_deals',
+                       "CASE WHEN jsonb_typeof(pr.details -> 'closing_deadline') = 'string' AND pr.details ->> 'closing_deadline' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN",
+                       "CASE WHEN jsonb_typeof(pr.details -> 'closing_deadline') = 'string' THEN", 'pg_temp.p_deadlines()'))
+    b.append(fn_mutant('DEADLINES_type_not_checked', '_mcp_r_list_deals',
+                       "CASE WHEN jsonb_typeof(pr.details -> 'financing_deadline') = 'string' AND pr.details ->> 'financing_deadline' ~ '^\\d{4}-\\d{2}-\\d{2}$' THEN",
+                       "CASE WHEN pr.details ->> 'financing_deadline' ~ '^\\d{4}' THEN", 'pg_temp.p_deadlines()'))
+    b.append(fn_mutant('DEADLINES_price_in_list', '_mcp_r_list_deals', ") /*DEADLINES:list*/,",
+                       ", 'sale_price', pr.details -> 'sale_price') /*DEADLINES:list*/,", 'pg_temp.p_deadlines()'))
     nul = "  IF v_uid IS NULL THEN\n    RETURN '{\"not_entitled\":true}'::jsonb;\n  END IF;\n"
     for r in READERS:
         b.append(fn_mutant('NOCLAIMS_no_null_check_' + r, r, nul, '', 'pg_temp.p_no_claims()'))
@@ -370,6 +386,7 @@ def compose(with_mutants=True, only=None):
     for k, e in caps.items():
         b.append(block(k, '    v := %s;' % e))
     b.append(block('FX_list_null_install', "    PERFORM pg_temp.null_install_deal();\n    v := pg_temp.ld('a1');"))
+    b.append(block('OBS_cursors', '    v := pg_temp.obs_cursors();'))
     b.append(block('FX_get_null_install', "    v := pg_temp.gd('a1', pg_temp.null_install_deal()::text);"))
     if with_mutants:
         ms = mutants()

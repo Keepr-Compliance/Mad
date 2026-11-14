@@ -13,6 +13,8 @@
 -- deal and its children are read from one snapshot. Readers project named keys only.
 -- Result frame: {kind, v, about, ...}. v is 1. Adding, removing or renaming a key, or changing a
 -- type, changes v; the portal accepts only the keys and types of the v it knows.
+-- Deploy order for a shape change: portal accepting v and v+1, then the migration emitting v+1, then
+-- the portal without v. For this migration: apply it to the database first, then merge the portal.
 -- Every function returns jsonb; a refusal is {"ok": false, "error": <code>}.
 -- Rollback: supabase/tests/backlog-4244/rollback-4244.sql
 
@@ -172,6 +174,12 @@ BEGIN
                              WHEN pr.last_synced_at IS DISTINCT FROM pr.last_full_sync_at THEN 'changed_since_full_save' /*FRESH:list*/
                              ELSE 'fully_saved' END,
           'saved_from', i.n,
+          'deadlines', jsonb_build_object(
+            'mutual_acceptance_date', CASE WHEN jsonb_typeof(pr.details -> 'mutual_acceptance_date') = 'string' AND pr.details ->> 'mutual_acceptance_date' ~ '^\d{4}-\d{2}-\d{2}$' THEN pr.details -> 'mutual_acceptance_date' END,
+            'inspection_deadline', CASE WHEN jsonb_typeof(pr.details -> 'inspection_deadline') = 'string' AND pr.details ->> 'inspection_deadline' ~ '^\d{4}-\d{2}-\d{2}$' THEN pr.details -> 'inspection_deadline' END,
+            'financing_deadline', CASE WHEN jsonb_typeof(pr.details -> 'financing_deadline') = 'string' AND pr.details ->> 'financing_deadline' ~ '^\d{4}-\d{2}-\d{2}$' THEN pr.details -> 'financing_deadline' END,
+            'closing_deadline', CASE WHEN jsonb_typeof(pr.details -> 'closing_deadline') = 'string' AND pr.details ->> 'closing_deadline' ~ '^\d{4}-\d{2}-\d{2}$' THEN pr.details -> 'closing_deadline' END,
+            'representation_start_date', CASE WHEN jsonb_typeof(pr.details -> 'representation_start_date') = 'string' AND pr.details ->> 'representation_start_date' ~ '^\d{4}-\d{2}-\d{2}$' THEN pr.details -> 'representation_start_date' END) /*DEADLINES:list*/,
           'people', (SELECT count(*) FROM public.cloud_deal_parties p
                       WHERE p.cloud_deal_id = pr.id AND p.owner_user_id = v_uid /*OWN:list_people*/ AND p.removed_at IS NULL /*LIVE:list_people*/),
           'todos_total', (SELECT count(*) FROM public.cloud_deal_checklist_items t

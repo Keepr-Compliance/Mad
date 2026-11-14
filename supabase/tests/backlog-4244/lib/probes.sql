@@ -3,7 +3,7 @@
 
 -- the key sets the readers emit (v 1)
 CREATE FUNCTION pg_temp.k_list_deal() RETURNS text[] LANGUAGE sql IMMUTABLE AS $h$
-  SELECT ARRAY['address','city','closed_on','copy_state','deal_id','found_by','fully_saved_at','locked','people','saved_at','saved_from',
+  SELECT ARRAY['address','city','closed_on','copy_state','deal_id','deadlines','found_by','fully_saved_at','locked','people','saved_at','saved_from',
                'started_on','state','status','street','todos_open_required','todos_total','transaction_type','zip']
 $h$;
 CREATE FUNCTION pg_temp.k_get_deal() RETURNS text[] LANGUAGE sql IMMUTABLE AS $h$
@@ -80,13 +80,22 @@ BEGIN
     pg_temp.pass(pg_temp.nlog('list_deals', 'not_entitled') >= 2, 'log'));
 END $h$;
 
--- the notice version is outdated: licensed and on, so the tools still read
-CREATE FUNCTION pg_temp.p_notice() RETURNS text LANGUAGE plpgsql AS $h$
+-- C7b: the notice version is outdated (state entitled false): licensed and on, so every tool still reads;
+-- the licence revoked gives not_entitled from every tool
+CREATE FUNCTION pg_temp.p_c7b_outdated_notice() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE l text; g text; c text; l2 text; g2 text; c2 text;
 BEGIN
   UPDATE public.cloud_autosave_settings SET notice_version = 0 WHERE user_id = pg_temp.fx(1);
+  l := pg_temp.ld('a1'); g := pg_temp.gd('a1', pg_temp.id('D1')::text); c := pg_temp.gc('a1', pg_temp.id('D1')::text);
+  PERFORM pg_temp.assign(pg_temp.fx(101), pg_temp.fx(1), false);
+  l2 := pg_temp.ld('a1'); g2 := pg_temp.gd('a1', pg_temp.id('D1')::text); c2 := pg_temp.gc('a1', pg_temp.id('D1')::text);
   RETURN pg_temp.all_of(
     pg_temp.pass(pg_temp.state_entitled(pg_temp.fx(1)) = 'false', 'state still entitled'),
-    pg_temp.pass(cardinality(pg_temp.ids(pg_temp.ld('a1'))) = 4, left(pg_temp.ld('a1'), 200)));
+    pg_temp.pass(cardinality(pg_temp.ids(l)) = 4, 'list ' || left(l, 200)),
+    pg_temp.pass(pg_temp.err(g) = 'OK', 'get ' || left(g, 200)),
+    pg_temp.pass(pg_temp.err(c) = 'OK', 'checklists ' || left(c, 200)),
+    pg_temp.pass(pg_temp.err(l2) = 'not_entitled' AND pg_temp.err(g2) = 'not_entitled' AND pg_temp.err(c2) = 'not_entitled',
+                 'revoked ' || left(l2, 80) || left(g2, 80) || left(c2, 80)));
 END $h$;
 CREATE FUNCTION pg_temp.state_entitled(u uuid) RETURNS text LANGUAGE sql AS $h$
   SELECT pg_temp.j(pg_temp.call_as(u, 'SELECT public.get_my_cloud_autosave_state()')) ->> 'entitled'
@@ -416,3 +425,32 @@ CREATE FUNCTION pg_temp.fp() RETURNS text LANGUAGE sql AS $h$
              || coalesce((SELECT string_agg(c.conname || '=' || pg_get_constraintdef(c.oid), ';' ORDER BY c.conname) FROM pg_constraint c
                            WHERE c.conrelid = 'public.mcp_call_log'::regclass), ''))
 $h$;
+
+-- N3: deadlines on each list row, read with the same date rule as get_deal
+CREATE FUNCTION pg_temp.p_deadlines() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE t text := pg_temp.ld('a1'); d1 jsonb := pg_temp.deal_of(t, pg_temp.id('D1')) -> 'deadlines';
+        d2 jsonb := pg_temp.deal_of(t, pg_temp.id('D2')) -> 'deadlines'; d4 jsonb := pg_temp.deal_of(t, pg_temp.id('D4')) -> 'deadlines';
+        g1 jsonb := pg_temp.res_of(pg_temp.gd('a1', pg_temp.id('D1')::text)) -> 'deal' -> 'details';
+        g2 jsonb := pg_temp.res_of(pg_temp.gd('a1', pg_temp.id('D2')::text)) -> 'deal' -> 'details';
+        k text[] := ARRAY['closing_deadline','financing_deadline','inspection_deadline','mutual_acceptance_date','representation_start_date'];
+BEGIN
+  RETURN pg_temp.all_of(
+    pg_temp.pass(pg_temp.keys(d1) = k AND pg_temp.keys(d2) = k AND pg_temp.keys(d4) = k, 'keys ' || coalesce(pg_temp.keys(d1)::text, '-')),
+    pg_temp.pass(d1 = '{"mutual_acceptance_date":"2026-10-05","inspection_deadline":"2026-10-15","financing_deadline":"2026-11-20","closing_deadline":"2026-12-18","representation_start_date":"2026-09-01"}'::jsonb, 'D1 ' || coalesce(d1::text, '-')),
+    pg_temp.pass(d2 = '{"mutual_acceptance_date":null,"inspection_deadline":"2026-12-01","financing_deadline":null,"closing_deadline":null,"representation_start_date":null}'::jsonb, 'D2 ' || coalesce(d2::text, '-')),
+    pg_temp.pass(d4 = '{"mutual_acceptance_date":null,"inspection_deadline":null,"financing_deadline":null,"closing_deadline":null,"representation_start_date":null}'::jsonb, 'D4 ' || coalesce(d4::text, '-')),
+    pg_temp.pass((SELECT bool_and(g1 -> x = d1 -> x AND g2 -> x = d2 -> x) FROM unnest(k) x), 'list and get differ'),
+    pg_temp.pass(position('price' IN (pg_temp.deal_of(t, pg_temp.id('D1')))::text) = 0 AND position('commission' IN (pg_temp.deal_of(t, pg_temp.id('D1')))::text) = 0, 'price in a list row'));
+END $h$;
+
+-- N5 / C27: what list_deals returns for special and impossible cursor values (observations, not pass/fail)
+CREATE FUNCTION pg_temp.obs_cursors() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE u text := pg_temp.id('D1')::text; x text; out jsonb := '{}';
+BEGIN
+  FOREACH x IN ARRAY ARRAY['now', 'infinity', '99999-01-01', '2026-02-30', '2026-02-30T00:00:00.000000Z', 'infinityT00:00:00.000000Z',
+                           '9999-12-31T23:59:59.999999Z'] LOOP
+    out := out || jsonb_build_object(x || '|<deal id>', pg_temp.err(pg_temp.ld('a1', NULL, NULL, NULL, x || '|' || u)));
+  END LOOP;
+  out := out || jsonb_build_object('now (no id)', pg_temp.err(pg_temp.ld('a1', NULL, NULL, NULL, 'now')));
+  RETURN out::text;
+END $h$;

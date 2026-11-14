@@ -7,7 +7,7 @@ import type { CallToolResult, Tool } from '@modelcontextprotocol/server';
 import { getDealChecklistsFor } from '@/lib/mcp/oauth/rpc';
 import { accessFor, argsObject, fromDatabase, InvalidInput, optBoolean, optString, TOOL_ANNOTATIONS, toolError } from './result';
 import { CHECKLISTS_SHAPE, toJsonSchema, UUID } from './shapes';
-import { ARG_TEXT, TOOL_MESSAGES, TOOL_TEXT } from './text';
+import { ARG_TEXT, RESULT_TEXT, TOOL_MESSAGES, TOOL_TEXT } from './text';
 
 export const GET_DEAL_CHECKLISTS_TOOL: Tool = {
   name: TOOL_TEXT.get_deal_checklists.name,
@@ -23,11 +23,18 @@ export const GET_DEAL_CHECKLISTS_TOOL: Tool = {
     required: ['deal_id'],
     additionalProperties: false,
   },
-  outputSchema: toJsonSchema(CHECKLISTS_SHAPE) as Tool['outputSchema'],
+  outputSchema: withDescriptions(toJsonSchema(CHECKLISTS_SHAPE)) as Tool['outputSchema'],
   annotations: TOOL_ANNOTATIONS,
 };
 
 const isUuid = (s: string) => UUID.test(s.toLowerCase());
+
+function withDescriptions(schema: Record<string, unknown>): Record<string, unknown> {
+  const props = schema.properties as Record<string, Record<string, unknown>>;
+  props.checklists = { ...props.checklists, description: RESULT_TEXT.checklists };
+  props.items_total = { ...props.items_total, description: RESULT_TEXT.items_total };
+  return schema;
+}
 
 export async function getDealChecklists(atDigest: unknown, rawArgs: unknown): Promise<CallToolResult> {
   let dealId: string | null, onlyOpen: boolean | null, checklistId: string | null;
