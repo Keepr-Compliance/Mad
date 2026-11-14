@@ -1936,7 +1936,13 @@ app.whenReady().then(async () => {
   registerLearnModeHandlers({ openQuestionAttachment });
   // BACKLOG-4243: Keepr Cloud channels and engine root. Makes no network call
   // and starts no timer unless Keepr Cloud is on for a user of this computer.
-  installCloudSync();
+  // installCloudSync never throws (it logs and returns null); guarded here too
+  // so nothing in it can stop the registrations below.
+  try {
+    installCloudSync();
+  } catch {
+    log.warn("[CloudSync] install threw");
+  }
 
   // Register per-transaction paywall entitlement handlers (BACKLOG-2006a)
   registerEntitlementHandlers();

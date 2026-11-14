@@ -68,7 +68,7 @@ describe(`Keepr Cloud triggers [${DRIVER}]`, () => {
     enableUser(db);
     const id = dealId();
     insertDeal(db, id);
-    const [read] = selectDueDirty(db, new Date(), 10);
+    const [read] = selectDueDirty(db, USER_A, new Date(), 10);
     db.prepare("UPDATE transactions SET property_city = 'Y' WHERE id = ?").run(id);
     expect(clearMarkIfGeneration(db, id, read.generation)).toBe(false);
     expect(dirty(db)).toMatchObject([{ transaction_id: id, generation: 2 }]);
@@ -81,7 +81,7 @@ describe(`Keepr Cloud triggers [${DRIVER}]`, () => {
     enableUser(db);
     const id = dealId();
     insertDeal(db, id);
-    const [row] = selectDueDirty(db, new Date(), 10);
+    const [row] = selectDueDirty(db, USER_A, new Date(), 10);
     recordRetryableFailure(db, row, "network", new Date("2026-11-14T00:00:00.000Z"));
     const before = dirty(db)[0];
     db.prepare("UPDATE transactions SET property_city = 'Z' WHERE id = ?").run(id);

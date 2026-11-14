@@ -29,6 +29,7 @@ export const KEEPR_CLOUD_COPY = {
   statusSaved: (ago: string) => `Saved online · last saved ${ago}`,
   statusSaving: (n: number) => (n === 1 ? "Saving 1 deal" : `Saving ${n} deals`),
   statusOn: "Saved online",
+  statusNotSaved: (n: number) => (n === 1 ? "1 deal could not be saved online." : `${n} deals could not be saved online.`),
   pausedSignedOut: "Paused — sign in to continue saving",
   pausedOffline: "Paused — no internet connection",
   pausedNotActive: "Paused — your Keepr Cloud add-on is not active",

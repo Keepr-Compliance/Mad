@@ -32,6 +32,8 @@ export interface CloudSyncView {
   noticeVersion: number | null;
   /** Deals waiting to be saved on this computer. */
   pendingDeals: number;
+  /** Deals that could not be saved and will not be retried until they change. */
+  notSavedDeals: number;
   /** ISO time of the last pass that finished with work done, or null. */
   lastSavedAt: string | null;
   /** True when "Manage AI apps" can open the portal page. */

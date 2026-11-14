@@ -90,6 +90,8 @@ export class CloudSyncRunner {
   private queued = false;
   private stopRequested = false;
   lastSummary: PassSummary | null = null;
+  /** Server writes this pass that the server accepted (upsert saved, delete, mark synced). */
+  private sentThisPass = 0;
 
   constructor(private readonly deps: RunnerDeps) {
     deps.identity.onCleared(() => {
@@ -131,6 +133,7 @@ export class CloudSyncRunner {
       do {
         this.queued = false;
         this.stopRequested = false;
+        this.sentThisPass = 0;
         summary = await this.passOnce();
       } while (this.queued && summary.outcome === "done");
       return summary;
@@ -199,7 +202,7 @@ export class CloudSyncRunner {
     let done = 0;
     let failed = 0;
     try {
-      const due = store.selectDueDirty(db, this.now(), DEALS_PER_PASS);
+      const due = store.selectDueDirty(db, pinned.userId, this.now(), DEALS_PER_PASS);
       for (const row of due) {
         this.guard(pinned);
         const r = await this.processDeal(db, pinned, installId, row);
@@ -247,12 +250,13 @@ export class CloudSyncRunner {
 
   private finish(summary: PassSummary): PassSummary {
     this.lastSummary = summary;
-    if (summary.done + summary.failed > 0) {
+    // "Last saved" moves only when the server accepted a write in this pass.
+    if (this.sentThisPass > 0 || summary.failed > 0) {
       try {
         store.recordRun(
           this.deps.db(),
           this.deps.projectRef,
-          { outcome: summary.outcome, done: summary.done, failed: summary.failed, rejected: 0, errorCode: null },
+          { outcome: summary.outcome, done: this.sentThisPass, failed: summary.failed, rejected: 0, errorCode: null },
           this.now(),
         );
       } catch {
@@ -308,6 +312,7 @@ export class CloudSyncRunner {
         const gone = res.kind === "ok" || (res.kind === "refused" && res.code === "not_found");
         if (!gone) return this.recordFailure(db, row, res);
         store.forgetDealDeletedOnline(db, projectRef, pinned.userId, row.transaction_id, row.generation);
+        if (res.kind === "ok") this.sentThisPass++;
         return "done";
       }
       if (deal === null && store.anyDealStateForOtherOwner(db, projectRef, pinned.userId, row.transaction_id)) return "kept";
@@ -343,6 +348,7 @@ export class CloudSyncRunner {
       const res = await this.deps.client.markDealSynced(pinned.userId, installId, cloudId as string);
       this.stopOn(res);
       if (res.kind === "ok") {
+        this.sentThisPass++;
         store.recordDealSynced(
           db,
           projectRef,

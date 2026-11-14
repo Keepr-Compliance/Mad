@@ -12,6 +12,7 @@
  */
 import { CLOUD_SYNC_TRIGGERS, MARK_ALL_ELIGIBLE_ENABLED_SQL } from "./cloudSyncSql";
 import { tableColumns, type SqlDb } from "./cloudSyncSqlDb";
+import { resetSyncStateAfterRestore } from "./cloudSyncDbService";
 
 export interface TriggerLog {
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -120,6 +121,21 @@ export function markAllEligibleAfterMigration(db: SqlDb, log: TriggerLog = silen
     return true;
   } catch (error) {
     log.warn("[CloudSync] Could not mark deals after a migration", { code: errorCode(error) });
+    return false;
+  }
+}
+
+/**
+ * Every path that replaces this database with a restored copy ends here: the
+ * triggers are made exact, then the restored file's Keepr Cloud records are
+ * reset (resetSyncStateAfterRestore). Never throws.
+ */
+export function prepareRestoredFile(db: SqlDb, log: TriggerLog = silentLog): boolean {
+  ensureCloudSyncTriggers(db, log);
+  try {
+    return resetSyncStateAfterRestore(db);
+  } catch (error) {
+    log.warn("[CloudSync] Could not reset state after a restore", { code: errorCode(error) });
     return false;
   }
 }

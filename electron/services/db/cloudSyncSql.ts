@@ -82,7 +82,11 @@ export const CLOUD_SYNC_TABLES = [
 
 // ---------------------------------------------------------------- triggers
 
-const GATE = "WHEN EXISTS (SELECT 1 FROM cloud_sync_settings WHERE enabled = 1)";
+const ENABLED_ROW = "SELECT 1 FROM cloud_sync_settings WHERE enabled = 1";
+/** Child tables: any user with Keepr Cloud on (the pass filters by owner). */
+const GATE = `WHEN EXISTS (${ENABLED_ROW})`;
+/** transactions: only when the deal's owner has Keepr Cloud on. */
+const OWNER_GATE = (owner: string) => `WHEN EXISTS (${ENABLED_ROW} AND user_id IN (${owner}))`;
 
 function markBody(idExpr: string): string {
   return `INSERT INTO cloud_sync_dirty (transaction_id, generation, marked_at)
@@ -111,16 +115,17 @@ function spec(
   event: string,
   body: string,
   requires: Record<string, readonly string[]>,
+  gate: string = GATE,
 ): CloudSyncTriggerSpec {
   return {
     name,
     table,
     requires: {
-      cloud_sync_settings: ["enabled"],
+      cloud_sync_settings: ["enabled", "user_id"],
       cloud_sync_dirty: ["transaction_id", "generation", "marked_at"],
       ...requires,
     },
-    sql: `CREATE TRIGGER ${name}\nAFTER ${event} ON ${table}\n${GATE}\nBEGIN\n  ${body}\nEND;`,
+    sql: `CREATE TRIGGER ${name}\nAFTER ${event} ON ${table}\n${gate}\nBEGIN\n  ${body}\nEND;`,
   };
 }
 
@@ -128,15 +133,16 @@ const ITEM_PARENT = (ref: "NEW" | "OLD") =>
   `(SELECT c.transaction_id FROM transaction_checklists c WHERE c.id = ${ref}.checklist_id)`;
 
 export const CLOUD_SYNC_TRIGGERS: readonly CloudSyncTriggerSpec[] = [
-  spec("trg_cloud_sync_tx_insert", "transactions", "INSERT", markBody("NEW.id"), { transactions: ["id"] }),
+  spec("trg_cloud_sync_tx_insert", "transactions", "INSERT", markBody("NEW.id"), { transactions: ["id", "user_id"] }, OWNER_GATE("NEW.user_id")),
   spec(
     "trg_cloud_sync_tx_update",
     "transactions",
     `UPDATE OF ${DEAL_TRIGGER_COLUMNS.join(", ")}`,
     markBody("NEW.id"),
     { transactions: ["id", ...DEAL_TRIGGER_COLUMNS] },
+    OWNER_GATE("NEW.user_id, OLD.user_id"),
   ),
-  spec("trg_cloud_sync_tx_delete", "transactions", "DELETE", markBody("OLD.id"), { transactions: ["id"] }),
+  spec("trg_cloud_sync_tx_delete", "transactions", "DELETE", markBody("OLD.id"), { transactions: ["id", "user_id"] }, OWNER_GATE("OLD.user_id")),
   spec("trg_cloud_sync_party_insert", "transaction_contacts", "INSERT", markBody("NEW.transaction_id"), {
     transaction_contacts: ["transaction_id"],
   }),
@@ -189,17 +195,24 @@ SELECT t.id, 1, CURRENT_TIMESTAMP FROM transactions t
 ON CONFLICT (transaction_id) DO UPDATE SET generation = generation + 1, marked_at = excluded.marked_at`;
 
 /**
- * Dirty rows due now, oldest mark first. A row parked by a non-retryable
+ * Dirty rows due now for one user, oldest mark first: that user's deals, and
+ * deleted deals no other user has a sync record for. Another user's marks are
+ * never selected (they wait for that user's own pass). A row parked by a non-retryable
  * failure (`<far future>#<generation>`) is due again once a new write bumped
  * its generation.
  */
-export const SELECT_DUE_DIRTY_SQL = `SELECT transaction_id, generation, attempts
-  FROM cloud_sync_dirty
- WHERE next_attempt_at IS NULL
-    OR next_attempt_at <= ?
-    OR (next_attempt_at LIKE '9999-12-31T00:00:00.000Z#%'
-        AND next_attempt_at <> '9999-12-31T00:00:00.000Z#' || generation)
- ORDER BY marked_at ASC, rowid ASC
+export const SELECT_DUE_DIRTY_SQL = `SELECT d.transaction_id, d.generation, d.attempts
+  FROM cloud_sync_dirty d
+  LEFT JOIN transactions t ON t.id = d.transaction_id
+ WHERE (t.user_id = ?
+        OR (t.id IS NULL AND NOT EXISTS (
+              SELECT 1 FROM cloud_sync_state s
+               WHERE s.transaction_id = d.transaction_id AND s.owner_user_id <> ?)))
+   AND (d.next_attempt_at IS NULL
+        OR d.next_attempt_at <= ?
+        OR (d.next_attempt_at LIKE '9999-12-31T00:00:00.000Z#%'
+            AND d.next_attempt_at <> '9999-12-31T00:00:00.000Z#' || d.generation))
+ ORDER BY d.marked_at ASC, d.rowid ASC
  LIMIT ?`;
 
 export const SELECT_DEAL_FOR_PASS_SQL = `SELECT t.user_id AS user_id, t.updated_at AS updated_at, ${DEAL_SOURCE_COLUMNS.map((c) => `t.${c}`).join(", ")}
@@ -234,3 +247,16 @@ export const DELETE_STATE_FOR_DEAL_SQL = `DELETE FROM cloud_sync_state
  WHERE project_ref = ? AND owner_user_id = ? AND transaction_id = ?`;
 
 export const DELETE_STATE_FOR_USER_SQL = `DELETE FROM cloud_sync_state WHERE project_ref = ? AND owner_user_id = ?`;
+
+/** After a restore: nothing recorded as saved is trusted; cloud ids are kept for deletes. */
+export const RESET_STATE_AFTER_RESTORE_SQL = `UPDATE cloud_sync_state SET content_hash = NULL, last_status = NULL`;
+
+/** Marks of one user's deals that will not be retried until the deal changes (parked). */
+export const COUNT_PARKED_FOR_USER_SQL = `SELECT COUNT(*) AS n FROM cloud_sync_dirty d JOIN transactions t ON t.id = d.transaction_id
+ WHERE t.user_id = ? AND d.next_attempt_at LIKE '9999-12-31T00:00:00.000Z#%'
+   AND d.next_attempt_at = '9999-12-31T00:00:00.000Z#' || d.generation`;
+
+/** Marks of one user's deals still to be sent (not parked). */
+export const COUNT_PENDING_FOR_USER_SQL = `SELECT COUNT(*) AS n FROM cloud_sync_dirty d JOIN transactions t ON t.id = d.transaction_id
+ WHERE t.user_id = ? AND NOT (d.next_attempt_at IS NOT NULL AND d.next_attempt_at LIKE '9999-12-31T00:00:00.000Z#%'
+   AND d.next_attempt_at = '9999-12-31T00:00:00.000Z#' || d.generation)`;

@@ -77,9 +77,23 @@ function readProductionEnv(): string | null {
 
 let installed: CloudSyncService | null = null;
 
-/** The engine root. Idempotent. */
-export function installCloudSync(): CloudSyncService {
+/**
+ * The engine root. Idempotent. Never throws: a failure here logs one WARN and
+ * leaves Keepr Cloud off for this launch; the rest of startup continues.
+ */
+export function installCloudSync(): CloudSyncService | null {
   if (installed) return installed;
+  try {
+    return installCloudSyncUnguarded();
+  } catch (error) {
+    void logService.warn("[CloudSync] Not installed this launch", MODULE, {
+      code: error instanceof Error ? error.name : "unknown",
+    });
+    return null;
+  }
+}
+
+function installCloudSyncUnguarded(): CloudSyncService {
   const identity = new SessionIdentity({
     loadSession: () => sessionService.loadSession(),
     getLastActivity: (token) => sessionSecurityService.getLastActivity(token),

@@ -21,11 +21,12 @@ export interface Engine {
   emit: (kind: "saved" | "cleared", userId: string | null) => void;
   logs: Array<{ level: string; message: string; meta?: Record<string, unknown> }>;
   reports: string[];
-  timers: Array<{ fn: () => void; ms: number }>;
+  timers: Array<{ fn: () => void; ms: number; cleared: boolean }>;
   online: { value: boolean };
   device: { id: string };
   feature: { allowed: boolean; reads: number };
   blocked: { reason: string | null };
+  clock: { now: Date };
 }
 
 export function makeEngine(db: TestDb, opts: { user?: string; projectRef?: string | null; server?: FakeServer } = {}): Engine {
@@ -50,6 +51,7 @@ export function makeEngine(db: TestDb, opts: { user?: string; projectRef?: strin
   const device = { id: DEVICE_1 };
   const feature = { allowed: true, reads: 0 };
   const blocked = { reason: null as string | null };
+  const clock = { now: new Date("2026-11-14T12:00:00.000Z") };
   const service = new CloudSyncService({
     db: () => db,
     dbReady: () => true,
@@ -71,11 +73,14 @@ export function makeEngine(db: TestDb, opts: { user?: string; projectRef?: strin
     openAiApps: async () => true,
     aiAppsAvailable: () => true,
     setInterval: (fn, ms) => {
-      timers.push({ fn, ms });
+      timers.push({ fn, ms, cleared: false });
       return timers.length;
     },
-    clearInterval: () => undefined,
-    now: () => new Date("2026-11-14T12:00:00.000Z"),
+    clearInterval: (handle) => {
+      const t = timers[(handle as number) - 1];
+      if (t) t.cleared = true;
+    },
+    now: () => clock.now,
     log: {
       info: (message, meta) => logs.push({ level: "info", message, meta }),
       warn: (message, meta) => logs.push({ level: "warn", message, meta }),
@@ -96,6 +101,7 @@ export function makeEngine(db: TestDb, opts: { user?: string; projectRef?: strin
     device,
     feature,
     blocked,
+    clock,
   };
 }
 

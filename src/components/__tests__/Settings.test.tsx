@@ -105,6 +105,7 @@ function allowCloud(): void {
       pausedReason: null,
       noticeVersion: 1,
       pendingDeals: 0,
+      notSavedDeals: 0,
       lastSavedAt: null,
       aiAppsAvailable: true,
     }),

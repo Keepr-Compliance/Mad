@@ -29,6 +29,7 @@ function statusLine(view: CloudSyncView): string | null {
   switch (view.status) {
     case "on": {
       if (view.pendingDeals > 0) return C.statusSaving(view.pendingDeals);
+      if (view.notSavedDeals > 0) return C.statusNotSaved(view.notSavedDeals);
       const ago = minutesAgo(view.lastSavedAt);
       return ago ? C.statusSaved(ago) : C.statusOn;
     }

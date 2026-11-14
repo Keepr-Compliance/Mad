@@ -18,6 +18,7 @@ const VIEW: CloudSyncView = {
   pausedReason: null,
   noticeVersion: 1,
   pendingDeals: 0,
+  notSavedDeals: 0,
   lastSavedAt: null,
   aiAppsAvailable: true,
 };
@@ -90,7 +91,13 @@ describe("KeeprCloudSettings", () => {
     expect(cloud.confirmComputer).toHaveBeenCalled();
   });
 
-  it("AI apps row opens through the service", () => {
+  it("deals that could not be saved get their own status line, not 'Saving'", () => {
+    render(<KeeprCloudSettings cloud={fakeCloud({ ...VIEW, status: "on", pendingDeals: 0, notSavedDeals: 2 })} />);
+    expect(screen.getByTestId("cloud-status")).toHaveTextContent(C.statusNotSaved(2));
+    expect(screen.queryByText(/Saving/)).toBeNull();
+  });
+
+    it("AI apps row opens through the service", () => {
     const cloud = fakeCloud(VIEW);
     render(<KeeprCloudSettings cloud={cloud} />);
     fireEvent.click(screen.getByRole("button", { name: C.manageAiApps }));

@@ -99,7 +99,11 @@ export class CloudSyncService {
     let active = isActive();
     if (active) {
       // Bind the machine first (N1): a cloned database resets before any upload.
-      this.ensureInstallId();
+      try {
+        this.ensureInstallId();
+      } catch {
+        return;
+      }
       active = isActive();
     }
     if (active && this.timer === null) {
@@ -114,7 +118,14 @@ export class CloudSyncService {
   /** Runs a pass when Keepr Cloud is on here; otherwise nothing. */
   async kick(): Promise<PassSummary | null> {
     if (!this.runner || this.timer === null) return null;
-    const summary = await this.runner.runPass();
+    let summary: PassSummary;
+    try {
+      summary = await this.runner.runPass();
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      this.deps.log?.warn("[CloudSync] Pass failed", { code: typeof code === "string" ? code : error instanceof Error ? error.name : "unknown" });
+      return null;
+    }
     if (summary.outcome !== "queued") {
       this.failedPasses = summary.failed > 0 ? this.failedPasses + 1 : summary.outcome === "done" ? 0 : this.failedPasses;
     }
@@ -136,6 +147,7 @@ export class CloudSyncService {
       pausedReason: null,
       noticeVersion: null,
       pendingDeals: 0,
+      notSavedDeals: 0,
       lastSavedAt: null,
       aiAppsAvailable: this.deps.aiAppsAvailable(),
     };
@@ -150,6 +162,7 @@ export class CloudSyncService {
     const locallyOn = settings?.enabled === 1;
     const owed = !!settings?.turn_off_owed_at;
     base.pendingDeals = this.pendingDeals(db, session.userId);
+    base.notSavedDeals = this.notSavedDeals(db, session.userId);
     base.lastSavedAt = this.lastSavedAt(db, ref);
 
     if (store.otherProjectInUse(db, ref)) return paused("other_project");
@@ -188,6 +201,14 @@ export class CloudSyncService {
   private pendingDeals(db: SqlDb, userId: string): number {
     try {
       return store.countPendingDeals(db, userId);
+    } catch {
+      return 0;
+    }
+  }
+
+  private notSavedDeals(db: SqlDb, userId: string): number {
+    try {
+      return store.countParkedDeals(db, userId);
     } catch {
       return 0;
     }
@@ -260,7 +281,7 @@ export class CloudSyncService {
     const db = this.deps.db();
     const ref = this.deps.projectRef as string;
     store.disableForUser(db, ref, userId, true, this.now());
-    await this.waitForPass();
+    await this.stopPassAndForget(userId);
     const res = await (this.runner as CloudSyncRunner).settleOwedTurnOff(userId);
     if (res.kind === "ok") {
       this.refreshSchedule();
@@ -269,6 +290,15 @@ export class CloudSyncService {
     this.refreshSchedule();
     if (res.kind === "transport") return { success: true, pendingOnline: true };
     return { success: false, error: res.code, pendingOnline: true };
+  }
+
+  /**
+   * Stops the running pass, waits for its in-flight call, then forgets any sync
+   * record that call wrote after the local turn-off cleared them.
+   */
+  private async stopPassAndForget(userId: string): Promise<void> {
+    await this.waitForPass();
+    store.clearUserSyncState(this.deps.db(), this.deps.projectRef as string, userId);
   }
 
   private async waitForPass(): Promise<void> {

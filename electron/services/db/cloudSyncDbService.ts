@@ -6,7 +6,11 @@
  */
 import { randomUUID, createHash } from "crypto";
 import {
+  COUNT_PARKED_FOR_USER_SQL,
+  COUNT_PENDING_FOR_USER_SQL,
   DELETE_DIRTY_IF_GENERATION_SQL,
+  MARK_ALL_ELIGIBLE_ENABLED_SQL,
+  RESET_STATE_AFTER_RESTORE_SQL,
   DELETE_STATE_FOR_DEAL_SQL,
   DELETE_STATE_FOR_USER_SQL,
   MARK_ALL_ELIGIBLE_FOR_USER_SQL,
@@ -18,6 +22,7 @@ import {
   UPSERT_DEAL_STATE_SQL,
 } from "./cloudSyncSql";
 import type { SqlDb } from "./cloudSyncSqlDb";
+import { tableColumns } from "./cloudSyncSqlDb";
 
 export interface SettingsRow {
   project_ref: string;
@@ -184,7 +189,11 @@ export function enableForUser(
       `UPDATE cloud_sync_settings SET enabled = 1, local_confirmed_at = ?, notice_version = ?, accepted_at = ?,
          turn_off_owed_at = NULL WHERE project_ref = ? AND user_id = ?`,
     ).run(nowIso(now), fields.noticeVersion, fields.acceptedAt, projectRef, userId);
-    if (!before || before.enabled !== 1) db.prepare(MARK_ALL_ELIGIBLE_FOR_USER_SQL).run(userId);
+    if (!before || before.enabled !== 1) {
+      // A fresh enable trusts no earlier record of what was saved online.
+      db.prepare(DELETE_STATE_FOR_USER_SQL).run(projectRef, userId);
+      db.prepare(MARK_ALL_ELIGIBLE_FOR_USER_SQL).run(userId);
+    }
   })();
 }
 
@@ -235,8 +244,8 @@ export function applyAcceptedAt(db: SqlDb, projectRef: string, userId: string, a
 
 // ---------------------------------------------------------------- dirty marks (R4)
 
-export function selectDueDirty(db: SqlDb, now: Date, limit: number): DirtyRow[] {
-  return db.prepare(SELECT_DUE_DIRTY_SQL).all(nowIso(now), limit) as DirtyRow[];
+export function selectDueDirty(db: SqlDb, userId: string, now: Date, limit: number): DirtyRow[] {
+  return db.prepare(SELECT_DUE_DIRTY_SQL).all(userId, userId, nowIso(now), limit) as DirtyRow[];
 }
 
 export function clearMarkIfGeneration(db: SqlDb, transactionId: string, generation: number): boolean {
@@ -331,9 +340,12 @@ export function finishRun(
 // ---------------------------------------------------------------- status (Settings)
 
 export function countPendingDeals(db: SqlDb, userId: string): number {
-  const r = db
-    .prepare("SELECT COUNT(*) AS n FROM cloud_sync_dirty d JOIN transactions t ON t.id = d.transaction_id WHERE t.user_id = ?")
-    .get(userId) as { n: number } | undefined;
+  const r = db.prepare(COUNT_PENDING_FOR_USER_SQL).get(userId) as { n: number } | undefined;
+  return r?.n ?? 0;
+}
+
+export function countParkedDeals(db: SqlDb, userId: string): number {
+  const r = db.prepare(COUNT_PARKED_FOR_USER_SQL).get(userId) as { n: number } | undefined;
   return r?.n ?? 0;
 }
 
@@ -382,4 +394,20 @@ export function recordDealSynced(
     writeDealState(db, projectRef, userId, transactionId, { ...v, status: "synced" }, now);
     clearMarkIfGeneration(db, transactionId, generation);
   })();
+}
+
+/**
+ * After this database was replaced by a restored copy: forget every recorded
+ * content hash (the online copy may hold content this file no longer has) and
+ * mark every eligible deal of every enabled user, in one transaction. Cloud ids
+ * are kept so the delete direction still works. No-op on a file without the
+ * Keepr Cloud tables. Returns false when it could not run.
+ */
+export function resetSyncStateAfterRestore(db: SqlDb): boolean {
+  if (tableColumns(db, "cloud_sync_state").size === 0 || tableColumns(db, "cloud_sync_dirty").size === 0) return false;
+  db.transaction(() => {
+    db.prepare(RESET_STATE_AFTER_RESTORE_SQL).run();
+    db.prepare(MARK_ALL_ELIGIBLE_ENABLED_SQL).run();
+  })();
+  return true;
 }

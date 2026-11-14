@@ -194,6 +194,7 @@ import {
   dropCloudSyncTriggers,
   ensureCloudSyncTriggers,
   markAllEligibleAfterMigration,
+  prepareRestoredFile,
 } from "./db/cloudSyncTriggers";
 
 // Re-export types for backward compatibility
@@ -446,7 +447,7 @@ class DatabaseService implements IDatabaseService {
           const restoreResult = await this._attemptAutoRestore(migrationError, openedDb);
           // BACKLOG-4243: the restored file ends with the Keepr Cloud triggers
           // in place (each only where its tables and columns exist).
-          if (restoreResult.handle) ensureCloudSyncTriggers(restoreResult.handle, this._cloudSyncLog());
+          if (restoreResult.handle) prepareRestoredFile(restoreResult.handle, this._cloudSyncLog());
 
           // Report to Sentry with migration failure tags
           hostErrorReporter.captureException(migrationError, {

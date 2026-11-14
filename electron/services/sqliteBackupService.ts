@@ -20,6 +20,7 @@ import logService from "./logService";
 import databaseService from "./databaseService";
 import { databaseEncryptionService } from "./databaseEncryptionService";
 import { ensureDb } from "./db/core/dbConnection";
+import { prepareRestoredFile } from "./db/cloudSyncTriggers";
 // BACKLOG-2553. NOTE: this module has its own `getDbPath()` below, so the
 // pool is restarted from the credentials it was OPENED with (passing null
 // lets the pool use its stored `lastDbPath`/`lastEncryptionKey`) rather than
@@ -293,6 +294,20 @@ export async function verifyBackup(backupPath: string): Promise<boolean> {
  * @param backupPath - Path to the backup file to restore from
  * @returns RestoreResult with success status
  */
+/**
+ * BACKLOG-4243: a restored file's Keepr Cloud records describe content that may
+ * no longer be what is online. Never throws: the restore has already succeeded.
+ */
+function resetCloudSyncAfterRestore(): void {
+  try {
+    prepareRestoredFile(ensureDb(), {
+      warn: (message, meta) => void logService.warn(message, "SqliteBackupService", meta),
+    });
+  } catch {
+    /* prepareRestoredFile never throws; ensureDb can when the file did not reopen */
+  }
+}
+
 export async function restoreDatabase(
   backupPath: string
 ): Promise<RestoreResult> {
@@ -397,6 +412,7 @@ export async function restoreDatabase(
 
     // Step 5: Reinitialize the database
     await databaseService.initialize();
+    resetCloudSyncAfterRestore();
 
     // Step 6: Migrations run automatically during initialize()
 
@@ -439,6 +455,7 @@ export async function restoreDatabase(
         fs.copyFileSync(safetyPath, dbPath);
         // Try to reinitialize with original database
         await databaseService.initialize();
+        resetCloudSyncAfterRestore();
         fs.unlinkSync(safetyPath);
         await logService.info(
           "Safety copy restored successfully",
