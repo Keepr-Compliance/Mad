@@ -736,11 +736,33 @@ describe('POST brand-new person (BACKLOG-3986)', () => {
     const res = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, deps().d);
     expect(res.status).toBe(500);
     const id = newIds(db)[0] as string;
-    expect(memberWrites(db.writes).map((w) => w.op)).toEqual(['insert']);
+    expect(memberWrites(db.writes).map((w) => w.op)).toEqual(['insert', 'delete']);
     expect(db.authIds).not.toContain(id);
     expect(t.organization_members.some((m) => m.user_id === id)).toBe(false);
     expect(t.users.some((u) => u.id === id)).toBe(false);
     expect(t.scim_sync_log).toEqual([expect.objectContaining({ response_status: 500 })]);
+  });
+
+  it('C9b the users update fails and the account cannot be removed: 500, orphan logged, no membership; the next POST adds that person (201, one active membership)', async () => {
+    const t = claimTables();
+    const opts: FakeOpts = {
+      failWrite: { table: 'users', op: 'update', error: { code: '57014', message: 'canceling statement due to statement timeout' } },
+      failDeleteUser: { status: 500, code: 'unexpected_failure', message: 'Database error deleting user' },
+    };
+    const db = makeDb(t, opts);
+    const first = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(first.status).toBe(500);
+    const id = newIds(db)[0] as string;
+    expect(db.authIds).toContain(id);
+    expect(t.users.filter((u) => u.id === id)).toHaveLength(1);
+    expect(t.organization_members.filter((m) => m.user_id === id)).toEqual([]);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining(`orphan auth user ${id}`), expect.anything());
+    opts.failDeleteUser = undefined;
+    const second = await handleCreateUser(newReq(), AUTH as never, db.client as never, BASE, deps().d);
+    expect(second.status).toBe(201);
+    expect(newIds(db)).toHaveLength(1);
+    expect(second.headers.get('Location')).toBe(`${BASE}/scim/v2/Users/${id}`);
+    expect(t.organization_members.filter((m) => m.user_id === id)).toEqual([expect.objectContaining({ organization_id: ORG, license_status: 'active' })]);
   });
 
   it('C10 an account with the address appears after the lookup: 500 email_exists_retry, nothing written, nothing removed', async () => {

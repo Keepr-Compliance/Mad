@@ -980,6 +980,17 @@ export async function handleCreateUser(
     .single();
 
   if (newUserError || !newUser) {
+    // The membership was written before this update. If the account cannot be removed, its
+    // membership would stay and a retry would answer 409 on the existing-person path, so it is
+    // removed explicitly here.
+    const { error: memberRemoveError } = await supabaseAdmin
+      .from("organization_members")
+      .delete()
+      .eq("organization_id", auth.orgId)
+      .eq("user_id", newUserId);
+    if (memberRemoveError) {
+      console.error(`[scim] could not remove membership of ${newUserId}:`, memberRemoveError.message);
+    }
     await removeNewPerson();
     await logScimOperation(supabaseAdmin, {
       organizationId: auth.orgId,

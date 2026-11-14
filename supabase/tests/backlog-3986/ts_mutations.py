@@ -62,6 +62,9 @@ CASES = [
      '  const accountDomain = emailDomainOf(accountEmail)?.split(".").slice(-2).join(".") ?? null;\n', 'C5'),
     ('M17_claim_read_error_ignored', 'failed domain read read as no claim / claim',
      '    if (claimError) {\n', '    if (false) {\n', 'C16'),
+    ('M18_no_explicit_membership_removal', 'users update fails and the account stays: its membership is left behind (retry 409)',
+     '    const { error: memberRemoveError } = await supabaseAdmin\n      .from("organization_members")\n      .delete()\n      .eq("organization_id", auth.orgId)\n      .eq("user_id", newUserId);\n',
+     '    const memberRemoveError = null as { message: string } | null;\n', 'C9 C9b'),
 ]
 
 
