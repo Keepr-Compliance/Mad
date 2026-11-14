@@ -188,6 +188,18 @@ describe('C8 / SR 1: a failed list says so, never "No reports yet"', () => {
     expect(screen.queryByTestId('my-reports-empty')).toBeNull();
   });
 
+  it.each([['full'], ['agent']] as const)('a %s caller with a good def_list and a refused orphans read: no error line, rows listed', async (kind) => {
+    mockRpc.mockImplementation(async (name) => {
+      if (name === 'broker_report_def_list') return ok([listRow(R_VIEW, 'Closings', 'viewer', '2026-11-10T10:00:00Z')]);
+      if (name === 'broker_report_orphans') return { data: null, error: { message: 'Report not found' } };
+      return { data: null, error: { message: `unexpected rpc ${name}` } };
+    });
+    mockMine.mockResolvedValue({ caller: caller(kind), reports: [{ report: SUBMISSIONS_REPORT, scope: kind === 'full' ? 'all' : 'own' }] });
+    render(await ReportsPage());
+    expect(screen.queryByTestId('reports-index-error')).toBeNull();
+    expect(summaryOf('Closings')).toBe('From Jordan Lee · Can view');
+  });
+
   it('a failed list still lists an orphan the caller can open (ok comes from def_list alone)', async () => {
     await renderIndex('full', {
       defList: { data: null, error: { message: 'boom' } },
