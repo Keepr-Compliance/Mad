@@ -319,7 +319,8 @@ def sweep_withheld():
     prev = subprocess.check_output(['git', '-C', root, 'show', '%s:%s' % (WITHHELD_FROM, M2P)], text=True)
     assert TAG not in prev
     col = "(SELECT count(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'cloud_deal_parties' AND column_name = 'details_withheld')"
-    pre = HEAD + HL + '\n' + FX + '\n' + K6 + '\n' + RB_CLEAN + MCP_PROBE + OUT_TABLE
+    # the probe library names the new column; on the committed state it does not exist until the re-run below
+    pre = HEAD + "SET LOCAL check_function_bodies = off;\n" + HL + '\n' + FX + '\n' + K6 + '\n' + RB_CLEAN + MCP_PROBE + OUT_TABLE
     b = [DECL]
     # rehearsal over the committed state of the test project (the migration as at WITHHELD_FROM)
     b.append("  INSERT INTO pg_temp.p4243_out VALUES ('R0_live_column', %s::text);\n" % col)
@@ -332,8 +333,10 @@ def sweep_withheld():
     fbody = ('    EXECUTE %s;\n    EXECUTE %s;\n    EXECUTE %s;\n    base := pg_temp.base();\n'
              "    t0 := %s::text || '/' || (SELECT count(*) FROM public.cloud_deal_parties)::text;\n"
              '    EXECUTE %s;\n'
-             "    IF t0 <> '0/1' OR %s <> 1 OR (SELECT count(*) FROM public.cloud_deal_parties WHERE details_withheld OR display_name IS NULL) <> 0 THEN\n"
-             "      v := 'FAIL: before=' || t0 || ' after_column=' || %s || ' parties=' || (SELECT count(*) FROM public.cloud_deal_parties);\n"
+             "    IF t0 <> '0/1' OR %s <> 1 THEN\n"
+             "      v := 'FAIL: before=' || t0 || ' after_column=' || %s;\n"
+             "    ELSIF (SELECT count(*) FROM public.cloud_deal_parties WHERE details_withheld OR display_name IS NULL) <> 0 THEN\n"
+             "      v := 'FAIL: an existing party row did not default to false with its details';\n"
              "    ELSE\n      v := pg_temp.w_probe();\n    END IF;")
     b.append(block('P_F_rerun_over_earlier_file', fbody % (q(RB), q(M1), q(prev), col, q(M2), col, col)))
     no_alter = apply(M2, 'ALTER TABLE public.cloud_deal_parties ADD COLUMN IF NOT EXISTS details_withheld boolean NOT NULL DEFAULT false;\n', '', 1, 'F_no_add_column')
@@ -344,8 +347,9 @@ def sweep_withheld():
              "    IF %s <> 0 OR (SELECT md5(prosrc) FROM pg_proc WHERE oid = to_regprocedure('public.cloud_upsert_parties(uuid,uuid,uuid,jsonb)')) IS DISTINCT FROM %s THEN\n"
              "      v := 'FAIL: column=' || %s;\n    ELSE\n      v := 'PASS';\n    END IF;")
     b.append(block('P_G_rollback_then_earlier_file', gbody % (q(RB), q(M1), q(M2), q(RB) + ';\n    EXECUTE ' + q(M1) + ';\n    EXECUTE ' + q(prev), col, lit(md5(prev_src)), col)))
-    rb_keep = apply(RB, 'DROP TABLE IF EXISTS public.cloud_deal_parties;\n', '', 1, 'G_rollback_keeps_parties_table')
-    b.append(block('M_G_rollback_keeps_parties_table', gbody % (q(RB), q(M1), q(M2), q(rb_keep) + ';\n    EXECUTE ' + q(M1) + ';\n    EXECUTE ' + q(prev), col, lit(md5(prev_src)), col)))
+    # mutant: the earlier file re-run without the rollback first (the column stays)
+    print('MUTATION APPLIED G_earlier_file_without_rollback (sequence: the rollback step before the earlier file removed)')
+    b.append(block('M_G_earlier_file_without_rollback', gbody % (q(RB), q(M1), q(M2), q(M1) + ';\n    EXECUTE ' + q(prev), col, lit(md5(prev_src)), col)))
     b.append('END\n$sw4243$;\n')
     return pre + ''.join(b) + FINAL
 
