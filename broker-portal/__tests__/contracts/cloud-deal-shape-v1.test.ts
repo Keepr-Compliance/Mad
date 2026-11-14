@@ -154,4 +154,15 @@ describe('BACKLOG-4243 cloud deal shape contract v1', () => {
     }
     for (const k of Object.keys(w.blank_when_true)) expect(w.kept_when_true).not.toContain(k);
   });
+
+  it('the 4236 harness party fixture uses exactly the contract email and phone keys', () => {
+    const controls = read(join(REPO, 'supabase/tests/backlog-4236/controls.sql'));
+    const m = /'(\{"company":"Co"[^']*\})'/.exec(controls);
+    expect(m).not.toBeNull();
+    const party = JSON.parse((m as RegExpExecArray)[1]);
+    expect(party.emails.length).toBeGreaterThan(0);
+    expect(party.phones.length).toBeGreaterThan(0);
+    for (const e of party.emails) expect(Object.keys(e).sort()).toEqual(Object.keys(C.party.emails.element).sort());
+    for (const p of party.phones) expect(Object.keys(p).sort()).toEqual(Object.keys(C.party.phones.element).sort());
+  });
 });
