@@ -110,6 +110,23 @@ describe(`Keepr Cloud children [${DRIVER}]`, () => {
       expect(jcs(sent)).toBe(jcs(viaLink));
     });
 
+    it("§3.2 order: emails by primary, then lower(email), then id; phones by primary, then e164, then id", () => {
+      const dto = buildPartyDto({
+        ...base,
+        emails: [
+          { id: "e-a", contact_id: "ct", email: "zed@example.test", is_primary: 0, label: null },
+          { id: "e-b", contact_id: "ct", email: "Amy@example.test", is_primary: 0, label: null },
+          { id: "e-c", contact_id: "ct", email: "amy@example.test", is_primary: 0, label: null },
+        ],
+        phones: [
+          { id: "p-a", contact_id: "ct", phone_e164: "+15555550199", phone_display: null, is_primary: 0, label: null },
+          { id: "p-b", contact_id: "ct", phone_e164: "+15555550100", phone_display: null, is_primary: 0, label: null },
+        ],
+      });
+      expect((dto.emails as Array<{ email: string }>).map((e) => e.email)).toEqual(["Amy@example.test", "amy@example.test", "zed@example.test"]);
+      expect((dto.phones as Array<{ e164: string }>).map((p) => p.e164)).toEqual(["+15555550100", "+15555550199"]);
+    });
+
     it("a deleted contact: contact_deleted true, local_contact_id still sent", () => {
       const dto = buildPartyDto({ ...base, contact: null, emails: [], phones: [] });
       expect(dto).toMatchObject({ contact_deleted: true, local_contact_id: "ct", display_name: null });
