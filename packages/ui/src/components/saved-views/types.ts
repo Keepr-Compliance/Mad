@@ -46,7 +46,7 @@ export interface SavedViewUpdate<F = unknown, M = unknown> {
 /** Sharing support (BACKLOG-4087). Absent: no Share, Update or Leave buttons. */
 export interface SavedViewsSharing<V extends SavedViewItem, F = unknown, M = unknown> {
   /**
-   * Open the adopter's ShareDialog for `view`. Offered on the user's own rows only. The panel closes first.
+   * Open the adopter's SharingDialog for `view`. Offered on the user's own rows only. The panel closes first.
    * Optional (BACKLOG-4144): absent, own rows get no Share while shared rows keep Update and Leave.
    */
   onShare?: (view: V) => void;
@@ -163,7 +163,7 @@ export interface SavedViewsProps<V extends SavedViewItem, F = unknown, M = unkno
 /**
  * RESERVED — deliberately NOT in SavedViewsProps. Each needs a caller first.
  *
- * - Sharing: BUILT in BACKLOG-4087 (`access`, `ownerName`, `sharing`, ShareDialog).
+ * - Sharing: BUILT in BACKLOG-4087 (`access`, `ownerName`, `sharing`; the dialog is SharingDialog since BACKLOG-3513).
  *   An editor changing the metric: BUILT in BACKLOG-4142 (`sharing.updateMetric`).
  *   Still reserved: renaming a shared view, an editor changing the pin or the
  *   default of a shared view, and re-sharing by a non-owner.

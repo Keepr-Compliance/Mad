@@ -13,7 +13,7 @@
  * failed tile shows an em dash, never a 0.
  */
 
-import { FilterBar, FilterCaption, PeriodPicker, SavedViews, ShareDialog, StatCard, TruncationNotice } from '@keepr/ui';
+import { FilterBar, FilterCaption, PeriodPicker, SavedViews, SharingDialog, StatCard, TruncationNotice } from '@keepr/ui';
 import { Building2, Clock, Monitor, UserCheck, Users } from 'lucide-react';
 import { Card } from '@keepr/design-system';
 import type { AnalyticsData, CountResult } from '@/lib/reports/analytics-queries';
@@ -91,7 +91,7 @@ export function AnalyticsReport({ data, period, rowCap, onNavigate, viewsApi, sh
           trailing={
             <>
               <SavedViews<PeriodOnlySavedView> {...savedViews} />
-              <ShareDialog {...shareDialog} />
+              <SharingDialog {...shareDialog} />
             </>
           }
         >

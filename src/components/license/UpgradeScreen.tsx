@@ -10,7 +10,7 @@
  *
  * Kit components (@keepr/ui), no hand-styled controls:
  *   Card/CardHeader/CardTitle/CardDescription/CardContent  packages/ui/src/components/card.tsx:13,28,40,55,67
- *   Button variant="primary" | "secondary" | "ghost"       packages/ui/src/components/button.tsx:22-27
+ *   Button variant="primary" | "secondary"                packages/ui/src/components/button.tsx:22-27
  *   AppMark                                                packages/ui/src/components/app-mark.tsx:24
  *
  * BACKLOG-4038 follow-up: "Contact support" opens the in-app SupportTicketDialog
@@ -148,7 +148,7 @@ export function UpgradeScreen({ reason, userId, onLogout }: UpgradeScreenProps):
           <Button variant="secondary" onClick={handleContactSupport}>
             Contact support
           </Button>
-          <Button variant="ghost" onClick={handleLogout}>
+          <Button variant="secondary" onClick={handleLogout}>
             Sign out
           </Button>
           <p className="text-sm text-muted-foreground select-text">

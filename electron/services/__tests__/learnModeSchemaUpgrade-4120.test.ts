@@ -158,6 +158,7 @@ describe("BACKLOG-4120 — an existing install gains the learn tables on next la
       "idx_learn_bulk_answers_user_msg_live",
       "idx_learn_deal_answers_user_key_live",
       "idx_learn_mode_settings_user_live",
+      "idx_learn_sender_overrides_user_sender_live",
     ]);
     expect(db.prepare("SELECT id FROM transactions WHERE id='t-4120'").get()).toBeTruthy();
     expect(

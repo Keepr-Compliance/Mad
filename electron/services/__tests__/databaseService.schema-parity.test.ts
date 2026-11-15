@@ -910,6 +910,30 @@ const ALLOWED_EVOLUTION: AllowedEvolution[] = [
     why: "BACKLOG-4243: produced by the PRIMARY KEY; not declared separately.",
     ref: "BACKLOG-4243",
   },
+  // BACKLOG-4212: learn_bulk_answers.sender_key produces no key here (the whole
+  // table is already new against the frozen transcript); migration v80 adds it
+  // to existing databases and databaseService.migration-v80.test.ts guards it.
+  {
+    key: "TABLE:learn_sender_overrides",
+    what: "New table: \"Stop hiding\" rows for senders the user marked as newsletters in Learn.",
+    why:
+      "BACKLOG-4212: the per-user suppress list is derived from Learn answers; this table records the user's " +
+      "undo without touching the answers. Soft removal via deleted_at; local only. Fully IF NOT EXISTS, and " +
+      "migration v80 creates it too.",
+    ref: "BACKLOG-4212",
+  },
+  {
+    key: "INDEX:idx_learn_sender_overrides_user_sender_live",
+    what: "Partial unique index on learn_sender_overrides(user_id, sender_key) WHERE deleted_at IS NULL.",
+    why: "BACKLOG-4212: one live override per sender; a soft-removed row does not block a new one.",
+    ref: "BACKLOG-4212",
+  },
+  {
+    key: "INDEX:sqlite_autoindex_learn_sender_overrides_1",
+    what: "SQLite's automatic index for learn_sender_overrides' primary key.",
+    why: "BACKLOG-4212: produced by the id PRIMARY KEY; not declared separately.",
+    ref: "BACKLOG-4212",
+  },
 ];
 
 const ALLOWED_KEYS = new Set(ALLOWED_EVOLUTION.map((d) => d.key));

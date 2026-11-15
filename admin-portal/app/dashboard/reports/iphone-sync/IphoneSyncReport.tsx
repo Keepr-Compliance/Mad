@@ -18,7 +18,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { SavedViews, ShareDialog, type SaveViewOptions } from '@keepr/ui';
+import { SavedViews, SharingDialog, type SaveViewOptions } from '@keepr/ui';
 import type { IphoneSyncReportModel } from '@/lib/reports/iphone-sync';
 import { DEFAULT_PERIOD, type PeriodRange } from '@/lib/reports/period';
 import {
@@ -417,7 +417,7 @@ export function IphoneSyncReport({
                 />
               }
             />
-            <ShareDialog {...shareDialog} />
+            <SharingDialog {...shareDialog} />
           </>
         }
       />

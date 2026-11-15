@@ -84,8 +84,25 @@ export interface SenderRuleSet {
     minCensusLinkedEmails: number;
     reportSendIntervalHours: number;
     reportMaxRows: number;
+    /**
+     * BACKLOG-4212. Optional: newsletter answers needed before a sender is hidden for the user
+     * who gave them (integer 0-20; 0 = off). Absent from the bundled set.
+     */
+    userSuppressMinAnswers?: number;
   };
   modes: Readonly<Record<SenderRuleSignal, SenderRuleModes>>;
+}
+
+/**
+ * BACKLOG-4212: newsletter answers needed before a sender is hidden for the user who gave them,
+ * used when the active set has no `thresholds.userSuppressMinAnswers`. Kept OUTSIDE the set
+ * object so the bundled set's content (and its version) does not change. 0 would mean off.
+ */
+export const USER_SUPPRESS_MIN_ANSWERS_DEFAULT = 2;
+
+/** The threshold in force for a set: the set's own value when present, else the fallback. */
+export function userSuppressMinAnswers(rules: SenderRuleSet): number {
+  return rules.thresholds.userSuppressMinAnswers ?? USER_SUPPRESS_MIN_ANSWERS_DEFAULT;
 }
 
 const MEASURE_ONLY: SenderRuleModes = { learnQuestions: "measure", addressPass: "off", detector: "measure" };

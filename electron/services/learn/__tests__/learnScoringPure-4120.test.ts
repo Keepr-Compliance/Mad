@@ -17,6 +17,7 @@ import { wilsonInterval } from "../wilson";
 import { addressKey, isSameDeal, sameStreet, streetKey } from "../dealMatcher";
 import { AUTO_DETECT_PROVENANCE_CUTOFF_MS, buildAnswerKey, bucketOf, createdAtMs, outcomeOf, sideOf } from "../answerKey";
 import { cleanupCandidates, formatCopyBlock, scoreRun } from "../scoring";
+import { buildPilotReport } from "../pilotReport";
 import { EMPTY_CENSUS } from "../../__tests__/helpers/emptyCensus-4175";
 import type { AnswerKeyRow } from "../../db/learnModeDbService";
 import type { LearnRunResult } from "../baselineRunner";
@@ -394,6 +395,19 @@ function run(detections: LearnRunResult["detections"]): LearnRunResult {
         unknown: { rows: 0, headers: 0, labels: 0 },
       },
     },
+    // BACKLOG-4219: the detector-surface pass, same shape (no loss, no keeps).
+    detector: {
+      filtered: { full: detections, minusContactKeeps: detections },
+      senderStats: {
+        keptBy: { K1: 0, K2: 0, K3: 0 },
+        keepConflicts: 0,
+        coverage: {
+          gmail: { rows: 0, headers: 0, labels: 0 },
+          outlook: { rows: 0, headers: 0, labels: 0 },
+          unknown: { rows: 0, headers: 0, labels: 0 },
+        },
+      },
+    },
   };
 }
 
@@ -500,6 +514,113 @@ describe("scoring arithmetic", () => {
     expect(text).not.toMatch(/\bd\d+\b/);
     expect(text).not.toContain(r.runId);
     expect(text).toContain("Recall: 2/3");
+  });
+});
+
+// ---------------------------------------------------------------------------
+describe("BACKLOG-4219 a Yes on the street of a deal in the key is not counted twice", () => {
+  const yes = (address: string) => ({ address_key: addressKey(address) as string, answer: "yes" as const, rule_version: 1 });
+  const kn = (r: { k: number; n: number }) => [r.k, r.n];
+  const both = (s: ReturnType<typeof scoreRun>) => [kn(s.recallWithCleanupYes), kn(s.recallWithCleanupYesExcludingLegacy)];
+
+  it("T1 same street, ZIP differs (isSameDeal fails on the ZIP guard): the missed deal is not credited again", () => {
+    const addr = "4120 canarytest lane, testville, zz 99999";
+    const s = scoreRun(run([det("d1", addr)]), [keyRow()], [yes(addr)], [], 0, EMPTY_CENSUS);
+    expect([s.positives, s.found, s.unmatched]).toEqual([1, 0, 1]);
+    expect(both(s)).toEqual([[0, 1], [0, 1]]);
+    expect([s.cleanupYes, s.cleanupYesNotCounted, s.cleanupUnanswered]).toEqual([1, 1, 0]);
+    expect(formatCopyBlock(s)).toContain("Cleanup Yes on the street of a deal in the key (not added to recall again): 1");
+  });
+
+  it("T1b same street and ZIP, mail outside the deal's dates (isSameDeal fails on the window)", () => {
+    const addr = "4120 canarytest lane, testville, zz 00000";
+    const rows = [keyRow({ started_at: new Date(T0 + 10 * DAY).toISOString(), closed_at: new Date(T0 + 30 * DAY).toISOString() })];
+    const s = scoreRun(run([det("d1", addr)]), rows, [yes(addr)], [], 0, EMPTY_CENSUS);
+    expect([s.positives, s.found, s.unmatched]).toEqual([1, 0, 1]);
+    expect(both(s)).toEqual([[0, 1], [0, 1]]);
+    expect([s.cleanupYes, s.cleanupYesNotCounted]).toEqual([1, 1]);
+  });
+
+  it("T2 a Yes on the street of a FOUND deal adds nothing", () => {
+    const other = "4120 canarytest lane, testville, zz 99999";
+    const s = scoreRun(
+      run([det("d1", "4120 canarytest lane, testville, zz 00000"), det("d2", other)]),
+      [keyRow()],
+      [yes(other)],
+      [],
+      0,
+      EMPTY_CENSUS,
+    );
+    expect([s.positives, s.found]).toEqual([1, 1]);
+    expect(both(s)).toEqual([[1, 1], [1, 1]]);
+    expect([s.cleanupYes, s.cleanupYesNotCounted]).toEqual([1, 1]);
+  });
+
+  it("T4 one new street under two keys (two ZIPs) counts once; none is 'not counted'", () => {
+    const a = "40 canarytest way, testville, zz 00000";
+    const b = "40 canarytest way, testville, zz 99999";
+    expect(addressKey(a)).not.toBe(addressKey(b));
+    const rows = [keyRow({ property_address: "20 Canarytest Way, Testville, ZZ 00000" })]; // missed
+    const s = scoreRun(run([det("d1", a), det("d2", b)]), rows, [yes(a), yes(b)], [], 0, EMPTY_CENSUS);
+    expect([s.positives, s.found]).toEqual([1, 0]);
+    expect(both(s)).toEqual([[1, 2], [1, 2]]);
+    expect([s.cleanupYes, s.cleanupYesNotCounted, s.cleanupUnanswered]).toEqual([2, 0, 0]);
+  });
+
+  it("T5 a Yes on a legacy deal's street: not counted with legacy, and not counted without it either", () => {
+    const rows = [
+      keyRow({ property_address: "10 Canarytest Way, Testville, ZZ 00000", created_at: "2026-08-01 10:00:00" }), // legacy, missed
+      keyRow({ property_address: "20 Canarytest Way, Testville, ZZ 00000", created_at: "2026-10-01 10:00:00" }), // found
+    ];
+    const addr = "10 canarytest way, testville, zz 99999";
+    const s = scoreRun(
+      run([det("d1", "20 canarytest way, testville, zz 00000"), det("d2", addr)]),
+      rows,
+      [yes(addr)],
+      [],
+      0,
+      EMPTY_CENSUS,
+    );
+    expect([s.positives, s.legacyManualPositives, s.found]).toEqual([2, 1, 1]);
+    expect(both(s)).toEqual([[1, 2], [1, 1]]);
+    expect(s.cleanupYesNotCounted).toBe(1);
+  });
+
+  it("T6 another street number on the same street name is a new deal and counts", () => {
+    const addr = "21 canarytest way, testville, zz 00000";
+    const rows = [keyRow({ property_address: "20 Canarytest Way, Testville, ZZ 00000" })]; // missed
+    const s = scoreRun(run([det("d1", addr)]), rows, [yes(addr)], [], 0, EMPTY_CENSUS);
+    expect(both(s)).toEqual([[1, 2], [1, 2]]);
+    expect([s.cleanupYes, s.cleanupYesNotCounted]).toEqual([1, 0]);
+  });
+
+  it("M6 the pilot report carries each Yes-inclusive recall in its own field (legacy > 0, so they differ)", () => {
+    const rows = [
+      keyRow({ property_address: "10 Canarytest Way, Testville, ZZ 00000", created_at: "2026-08-01 10:00:00" }), // legacy, found
+      keyRow({ property_address: "20 Canarytest Way, Testville, ZZ 00000", created_at: "2026-10-01 10:00:00" }), // found
+      keyRow({ property_address: "30 Canarytest Way, Testville, ZZ 00000", created_at: "2026-10-02 10:00:00" }), // missed
+    ];
+    const addr40 = "40 canarytest way, testville, zz 00000";
+    const s = scoreRun(
+      run([
+        det("d1", "10 canarytest way, testville, zz 00000"),
+        det("d2", "20 canarytest way, testville, zz 00000"),
+        det("d3", addr40),
+      ]),
+      rows,
+      [yes(addr40)],
+      [],
+      0,
+      EMPTY_CENSUS,
+    );
+    const built = buildPilotReport(s, s.senderCensus, "2.47.0");
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    expect(built.report.recall_with_cleanup_yes).toEqual({ k: 3, n: 4 });
+    expect(built.report.recall_with_cleanup_yes_excluding_legacy).toEqual({ k: 2, n: 3 });
+    expect(built.report.recall).toEqual({ k: 2, n: 3 });
+    expect(built.report.recall_excluding_legacy).toEqual({ k: 1, n: 2 });
+    expect(built.report.cleanup).toEqual({ yes: 1, no: 0, unanswered: 0 });
   });
 });
 

@@ -12,6 +12,9 @@
  *   K1  the sender is a contact on one of the user's non-rejected deals
  *   K2  deal-platform host or address (`keep.platformHosts/platformAddresses`)
  *   K3  the sender's host is a non-free-mail domain of a K1 contact
+ *   U1  the sender is on THIS user's own suppress list (`DecideOptions.userSuppress`,
+ *       BACKLOG-4212): always live on the detector and the address pass, never
+ *       evaluated on learnQuestions. Not a rule-set signal; `signal` stays null.
  *   S1  approved host (`suppress.hosts`): the host or a true subdomain
  *   S2  local part (`suppress.localParts`), exact or prefix, literal strings
  *   S3  bulk headers (`suppress.bulkHeaders`)
@@ -57,6 +60,8 @@ export function isSignalLive(rules: SenderRuleSet, signal: SenderRuleSignal, sur
 
 export type SuppressRuleId = "S0" | "S1" | "S2" | "S3" | "S4" | "S5" | "S6";
 export type KeepRuleId = "K1" | "K2" | "K3";
+/** BACKLOG-4212: the per-user suppress list. Its own id, not a SuppressRuleId: it has no rule-set signal. */
+export type UserRuleId = "U1";
 
 export const SIGNAL_OF_RULE: Readonly<Record<SuppressRuleId, SenderRuleSignal>> = {
   S0: "seedAddress",
@@ -122,13 +127,13 @@ export function storedFilterRow(row: {
 export interface SenderDecision {
   outcome: "suppress" | "keep" | "pass";
   /** The suppress rule that matched (outcome suppress), or the keep rule that won (outcome keep). */
-  rule: SuppressRuleId | KeepRuleId | null;
+  rule: SuppressRuleId | KeepRuleId | UserRuleId | null;
   /** The suppress signal: the first that matched, or the one a keep rule overrode. */
   signal: SenderRuleSignal | null;
   /** Outcome suppress AND some matching signal is live on this surface (`liveRule` is set). */
   live: boolean;
   /** The first matching suppress rule whose signal is live on this surface: the rule that drops the message. */
-  liveRule: SuppressRuleId | null;
+  liveRule: SuppressRuleId | UserRuleId | null;
   /** S0 suppressed a sender that this keep rule would otherwise have kept. */
   keepConflict: KeepRuleId | null;
 }
@@ -136,6 +141,11 @@ export interface SenderDecision {
 export interface DecideOptions {
   /** Leave out the contact-derived keep rules K1 and K3 (the census's "minus-K1"). */
   withoutContactKeeps?: boolean;
+  /**
+   * BACKLOG-4212 (U1): exact From addresses (lowercased, as `fromAddress` returns them) this
+   * user marked as newsletters. Default empty. Ignored on learnQuestions.
+   */
+  userSuppress?: ReadonlySet<string>;
 }
 
 function parseJson(v: unknown): unknown {
@@ -232,10 +242,16 @@ export function decide(
   const liveOn = (signal: SenderRuleSignal) => rules.modes[signal][surface] === "live";
   const from = fromAddress(row.sender);
   const keepRule = keepRuleOf(from, rules, keep, opts);
+  // U1: the user's own list, after K1-K3 and before S1-S6; off on learnQuestions.
+  const userList = surface === "learnQuestions" ? undefined : opts.userSuppress;
+  const userListed = from !== null && userList !== undefined && userList.has(from);
+  const u1 = keepRule === null && userListed;
 
-  // A keep rule beats S1-S6, so with one there is no live S1-S6 drop.
-  const liveAfterKeep = (): SuppressRuleId | null =>
-    keepRule === null ? firstSuppressAfterKeep(from, row, rules, liveOn) : null;
+  // A keep rule beats U1 and S1-S6, so with one there is no live drop after it.
+  const liveAfterKeep = (): SuppressRuleId | UserRuleId | null => {
+    if (keepRule !== null) return null;
+    return u1 ? "U1" : firstSuppressAfterKeep(from, row, rules, liveOn);
+  };
 
   if (on("seedAddress") && from !== null && rules.suppress.exactAddresses.includes(from)) {
     const liveRule = liveOn("seedAddress") ? "S0" : liveAfterKeep();
@@ -248,12 +264,20 @@ export function decide(
       keepConflict: keepRule,
     };
   }
+  if (u1) return { outcome: "suppress", rule: "U1", signal: null, live: true, liveRule: "U1", keepConflict: null };
   const rule = firstSuppressAfterKeep(from, row, rules, on);
+  if (keepRule !== null && (rule !== null || userListed)) {
+    return {
+      outcome: "keep",
+      rule: keepRule,
+      signal: rule === null ? null : SIGNAL_OF_RULE[rule],
+      live: false,
+      liveRule: null,
+      keepConflict: null,
+    };
+  }
   if (rule === null) return { outcome: "pass", rule: null, signal: null, live: false, liveRule: null, keepConflict: null };
   const signal = SIGNAL_OF_RULE[rule];
-  if (keepRule !== null) {
-    return { outcome: "keep", rule: keepRule, signal, live: false, liveRule: null, keepConflict: null };
-  }
   const liveRule = liveOn(signal) ? rule : liveAfterKeep();
   return { outcome: "suppress", rule, signal, live: liveRule !== null, liveRule, keepConflict: null };
 }

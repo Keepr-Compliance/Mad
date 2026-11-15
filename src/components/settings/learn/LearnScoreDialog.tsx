@@ -13,6 +13,7 @@ import { useCopyText } from "@/hooks/useCopyText";
 import type { LearnScore } from "../../../../electron/types/ipc/window-api-learn";
 import { LearnStatTiles } from "./LearnStatTiles";
 import { learnDetailLines, learnTiles } from "./learnScoreView";
+import { scoreDialogPrivacyText } from "./learnPilotCopy";
 
 export function LearnScoreDialog({
   open,
@@ -22,7 +23,10 @@ export function LearnScoreDialog({
   more = null,
   onMore,
   onClose,
+  sharing = null,
 }: {
+  /** BACKLOG-4219: "Help improve Keepr" is ON / OFF; null = not known (neutral line). */
+  sharing?: boolean | null;
   open: boolean;
   /** Answers saved in the sitting just finished; null when opened from "See score". */
   answered: number | null;
@@ -50,7 +54,7 @@ export function LearnScoreDialog({
         <div className="flex flex-col gap-1.5">
           <DialogTitle className="m-0 text-xl font-semibold leading-7">{title}</DialogTitle>
           <DialogDescription className="text-[15px] text-gray-500">
-            Your answers are kept on this computer and are never sent anywhere.
+            {scoreDialogPrivacyText(sharing)}
           </DialogDescription>
         </div>
         {score ? (

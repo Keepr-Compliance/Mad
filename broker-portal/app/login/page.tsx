@@ -44,6 +44,13 @@ const ERROR_MESSAGES: Record<string, string> = {
   // BACKLOG-4012: auto-join waits until the brokerage has finished billing setup.
   billing_setup_pending:
     'Your brokerage is still finishing its Keepr setup. Try signing in again once your brokerage admin has completed it.',
+  // BACKLOG-3962 PR4a: an existing Keepr account is never added to a brokerage at sign-in.
+  existing_account:
+    "You already have a Keepr account, so you weren't added to a brokerage automatically. If your brokerage moves your account, you'll get an email first.",
+  // BACKLOG-3962 PR4a: the brokerage that verified this email domain has turned off personal accounts.
+  // The desktop sign-in page names the brokerage; this page has only the code to go on.
+  domain_managed:
+    'Your brokerage manages Keepr accounts for your email domain. Ask your brokerage to invite you, then open the invitation email.',
 };
 
 // Option A brand palette (matches the app mark + landing; not in the sky-blue

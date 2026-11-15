@@ -3,8 +3,13 @@
 /**
  * Sharing for one report's saved views (BACKLOG-4087)
  *
- * Returns the kit `SavedViews` `sharing` prop and the kit `ShareDialog` props. A report passes the
- * first to SavedViews and renders `<ShareDialog {...shareDialog} />` once.
+ * Returns the kit `SavedViews` `sharing` prop and the kit `SharingDialog` props. A report passes the
+ * first to SavedViews and renders `<SharingDialog {...shareDialog} />` once.
+ *
+ * BACKLOG-3513 PR-4: the dialog is the kit SharingDialog. The owner row is the caller ("You": Share
+ * is offered on own rows only); people only (no roles, no general access, no Make owner). A level
+ * change is ONE `report_share_set` (an upsert), never remove + grant; Share loops the same upsert
+ * once per person picked, then re-reads once.
  *
  * OFFERED ONLY WHEN THE DATABASE HAS THE SHARE FUNCTIONS. The list function that ships with them
  * always sends `access` on every row; an older one never does. So `sharing` is undefined (no Share,
@@ -30,11 +35,12 @@
  * Hiding these is presentation only. The server functions are the access guard.
  */
 
-import { useCallback, useRef, useState, type ReactNode } from 'react';
-import type { SavedViewItem, SavedViewsSharing, SavedViewUpdate, ShareDialogProps } from '@keepr/ui';
+import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { SavedViewItem, SavedViewsSharing, SavedViewUpdate, SharingDialogProps, SharingEntry, SharingPrincipal } from '@keepr/ui';
+import { useAuth } from '@/components/providers/AuthProvider';
 import { canShareViews } from './report-access';
 import { useOpenReport } from './report-access-context';
-import { isMissingFunctionError, type ShareApi } from './report-share-api';
+import { isMissingFunctionError, type ShareApi, type ShareCandidate, type ShareGrant } from './report-share-api';
 import { writeFailureMessage } from './report-views';
 import type { SharedViewFields } from './saved-view-access';
 import type { UseReportSavedViews } from './use-report-saved-views';
@@ -46,8 +52,55 @@ export interface UseReportViewSharing<V extends SavedViewItem> {
    * `SavedViewUpdate` (filters + metric), and it is whatever `current()` returned.
    */
   sharing: SavedViewsSharing<V> | undefined;
-  /** Spread onto one ShareDialog. */
-  shareDialog: ShareDialogProps;
+  /** Spread onto one SharingDialog. */
+  shareDialog: SharingDialogProps;
+}
+
+/** The saved-view copy under the title (unchanged from the v1 dialog). */
+export const VIEW_SHARE_DESCRIPTION = 'People you add see this view under “Shared with you”.';
+
+/** The saved-view level lines (unchanged from the v1 dialog). */
+export const VIEW_SHARE_LEVELS: SharingDialogProps['levels'] = [
+  { value: 'viewer', label: 'Can view', description: 'Opens the view' },
+  { value: 'editor', label: 'Can edit', description: 'Also updates its filters and metric' },
+];
+
+/** The signed-in user, as `useAuth()` gives it: only the fields the owner row reads. */
+interface SignedInUser {
+  id: string;
+  user_metadata?: { full_name?: unknown; name?: unknown } | null;
+}
+
+/**
+ * The owner row (BACKLOG-3513 PR-6). Share is offered on the caller's own rows only (kit
+ * SavedViews own-row gate; every report_share_* function checks the view's owner is the caller), so
+ * the owner is always the signed-in user: `isYou` is always true. The name is the one the header
+ * and sidebar show, without their email fallback: `full_name`, else `name`, else empty, which the
+ * kit reads as "You". The id is the user's own; the kit uses it to keep the owner out of the picker.
+ */
+export function viewShareOwner(user: SignedInUser | null | undefined): NonNullable<SharingDialogProps['owner']> {
+  const meta = user?.user_metadata ?? {};
+  const pick = (v: unknown) => (typeof v === 'string' && v.trim().length > 0 ? v.trim() : '');
+  return { id: user?.id ?? '', name: pick(meta.full_name) || pick(meta.name), isYou: true };
+}
+
+/**
+ * After `Promise.allSettled` over a batch of writes: throws the first refusal, so the caller shows it.
+ * Runs only once every write has settled, so a re-read after it sees all of them.
+ */
+export function throwFirstRejection(results: readonly PromiseSettledResult<unknown>[]): void {
+  const refused = results.find((r): r is PromiseRejectedResult => r?.status === 'rejected');
+  if (refused) throw refused.reason;
+}
+
+/** Picker rows: people only. */
+export function toPrincipals(rows: readonly ShareCandidate[] | null): SharingPrincipal[] | null {
+  return rows ? rows.map((c) => ({ id: c.id, kind: 'person' as const, name: c.name })) : null;
+}
+
+/** Access rows: people only, the grant's role as the level. */
+export function toEntries(rows: readonly ShareGrant[] | null): SharingEntry[] | null {
+  return rows ? rows.map((g) => ({ id: g.userId, kind: 'person' as const, name: g.name, level: g.role })) : null;
 }
 
 /** True when the server's list function is the one that ships with the share functions. */
@@ -74,10 +127,11 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
 ): UseReportViewSharing<V> {
   const normalize = (raw: unknown): unknown => (normalizeMetric ? normalizeMetric(raw) : raw);
   const mayShare = canShareViews(useOpenReport()?.access ?? null);
+  const { user } = useAuth();
   const [missing, setMissing] = useState(false);
   const [target, setTarget] = useState<V | null>(null);
-  const [candidates, setCandidates] = useState<ShareDialogProps['candidates']>(null);
-  const [grants, setGrants] = useState<ShareDialogProps['grants']>(null);
+  const [candidates, setCandidates] = useState<ShareCandidate[] | null>(null);
+  const [grants, setGrants] = useState<ShareGrant[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const noteFailure = useCallback((err: unknown) => {
@@ -91,24 +145,30 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
   const openViewId = useRef<string | null>(null);
   const isOpenFor = (viewId: string) => openViewId.current === viewId;
 
+  // Latest read wins (BACKLOG-3513 PR-6): a reply from a read older than the newest one sent is
+  // dropped, so a slow earlier re-read can never bring back a row a later write removed.
+  const readSeq = useRef(0);
+
   const readDialog = useCallback(
     (api: ShareApi, viewId: string) => {
+      const seq = ++readSeq.current;
+      const current = () => isOpenFor(viewId) && readSeq.current === seq;
       api.candidates(viewId).then(
         (rows) => {
-          if (isOpenFor(viewId)) setCandidates(rows);
+          if (current()) setCandidates(rows);
         },
         (err) => {
-          if (!isOpenFor(viewId)) return;
+          if (!current()) return;
           setCandidates(null);
           noteFailure(err);
         }
       );
       api.grants(viewId).then(
         (rows) => {
-          if (isOpenFor(viewId)) setGrants(rows);
+          if (current()) setGrants(rows);
         },
         (err) => {
-          if (!isOpenFor(viewId)) return;
+          if (!current()) return;
           setGrants(null);
           noteFailure(err);
         }
@@ -116,6 +176,11 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
     },
     [noteFailure]
   );
+
+  // The kit confirms a remove or level change by content, not by array identity; keeping the
+  // same arrays between reads only saves re-renders.
+  const principals = useMemo(() => toPrincipals(candidates), [candidates]);
+  const entries = useMemo(() => toEntries(grants), [grants]);
 
   const available = Boolean(shareApi) && !missing && serverSupportsSharing(saved.views);
 
@@ -182,8 +247,12 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
         }
       : undefined;
 
-  function afterWrite(op: Promise<unknown>, viewId: string) {
-    if (!shareApi) return;
+  /**
+   * Re-read after a write, show a refusal. Returns `op` itself so the dialog can show the row as in
+   * flight and apply a success at once (BACKLOG-3513 PR-6); the re-read stays the source of truth.
+   */
+  function afterWrite(op: Promise<unknown>, viewId: string): Promise<unknown> | undefined {
+    if (!shareApi) return undefined;
     setError(null);
     op.then(
       () => readDialog(shareApi, viewId),
@@ -192,9 +261,10 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
         readDialog(shareApi, viewId);
       }
     );
+    return op;
   }
 
-  const shareDialog: ShareDialogProps = {
+  const shareDialog: SharingDialogProps = {
     open: target !== null,
     onOpenChange: (open) => {
       if (!open) {
@@ -202,17 +272,30 @@ export function useReportViewSharing<V extends SavedViewItem & SharedViewFields,
         setTarget(null);
       }
     },
-    viewName: target?.name ?? '',
-    candidates,
-    grants,
+    name: target?.name ?? '',
+    description: VIEW_SHARE_DESCRIPTION,
+    levels: VIEW_SHARE_LEVELS,
+    owner: viewShareOwner(user),
+    candidates: principals,
+    entries,
     error,
-    onGrant: (userId, role) => {
+    onGrant: (principals, level) => {
       if (!shareApi || !target) return;
-      afterWrite(shareApi.share(target.id, userId, role), target.id);
+      const viewId = target.id;
+      // One upsert per person picked (people only), all started now. The re-read waits for every
+      // one to settle (allSettled, not all: all would reject on the first refusal while others are
+      // still being written); then the first refusal, if any, is shown.
+      const people = principals.filter((p) => p.kind === 'person');
+      afterWrite(Promise.allSettled(people.map((p) => shareApi.share(viewId, p.id, level))).then(throwFirstRejection), viewId);
     },
-    onRemove: (grant) => {
+    onChangeLevel: (entry, level) => {
       if (!shareApi || !target) return;
-      afterWrite(shareApi.removeGrant(target.id, grant.userId), target.id);
+      // In place: report_share_set upserts, so one call changes the level.
+      return afterWrite(shareApi.share(target.id, entry.id, level), target.id);
+    },
+    onRemove: (entry) => {
+      if (!shareApi || !target) return;
+      return afterWrite(shareApi.removeGrant(target.id, entry.id), target.id);
     },
   };
 

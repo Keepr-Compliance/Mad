@@ -1,0 +1,77 @@
+BACKLOG-3513 PR-3h harness, keepr-test, 2026-11-14T02:12Z, migration at commit 3e9273bcc
+== baseline
+{
+ "fail": 0,
+ "pass": 36,
+ "reds": {},
+ "total": 36
+}
+
+== M01_FIRST_STATUS_ONLY
+MUTATION APPLIED numstat=2/2
+  - AND (v_statuses IS NULL OR s.status::text = ANY (v_statuses))
+  + AND (v_statuses IS NULL OR s.status::text = v_statuses[1])
+RESULT total=36 pass=27 fail=9 reds=A_with_statuses,A_with_statuses_oracle,P_paging,S_group_pending_plus_approved,S_groups_new_resubmitted,S_overlap_deduped,S_single_value_parity,S_two_exact,S_two_exact_oracle
+RESTORED clean=True
+== M02_NO_AGENT_FILTER
+MUTATION APPLIED numstat=1/2
+  - AND (v_agents IS NULL OR s.submitted_by = ANY (v_agents))
+RESULT total=36 pass=29 fail=7 reds=A_two_agents,A_two_agents_oracle,A_with_statuses,A_with_statuses_oracle,O_agent_other_agent,O_own_viewer_oracle,O_own_viewer_other_agent
+RESTORED clean=True
+== M03_SCOPE_TRUE
+MUTATION APPLIED numstat=2/2
+  - AND (v_eff = 'all' OR s.submitted_by = v_uid)
+  + AND (true OR s.submitted_by = v_uid)
+RESULT total=36 pass=32 fail=4 reds=O_own_viewer_no_filter,O_own_viewer_oracle,O_own_viewer_other_agent,O_own_viewer_others_and_self
+RESTORED clean=True
+== M04_DEFINER
+MUTATION APPLIED numstat=1/1
+  - SECURITY INVOKER
+  + SECURITY DEFINER
+RESULT total=36 pass=35 fail=1 reds=C_invoker_stable_search_path
+RESTORED clean=True
+== M05_NO_REVOKE
+MUTATION APPLIED numstat=0/1
+  - REVOKE EXECUTE ON FUNCTION public.broker_report_submissions_rows_multi(uuid, uuid, text[], uuid[], timestamptz, timestamptz, text, integer, integer) F
+RESULT total=36 pass=35 fail=1 reds=C_grants
+RESTORED clean=True
+== M06_GROUP_MAP
+MUTATION APPLIED numstat=2/2
+  - WHEN 'pending' THEN ARRAY['submitted', 'resubmitted', 'under_review']
+  + WHEN 'pending' THEN ARRAY['submitted', 'resubmitted']
+RESULT total=36 pass=33 fail=3 reds=S_group_pending_plus_approved,S_overlap_deduped,S_single_value_parity
+RESTORED clean=True
+== M07_ALL_NOT_HANDLED
+MUTATION APPLIED numstat=2/2
+  - IF p_statuses IS NOT NULL AND cardinality(p_statuses) > 0 AND NOT coalesce('all' = ANY (p_statuses), false) THEN
+  + IF p_statuses IS NOT NULL AND cardinality(p_statuses) > 0 THEN
+RESULT total=36 pass=34 fail=2 reds=S_all_all_rows,S_all_plus_value_all_rows
+RESTORED clean=True
+== M08_NULL_ELEMENT
+MUTATION APPLIED numstat=2/2
+  - IF p_statuses IS NOT NULL AND cardinality(p_statuses) > 0 AND NOT coalesce('all' = ANY (p_statuses), false) THEN
+  + IF p_statuses IS NOT NULL AND cardinality(p_statuses) > 0 AND NOT ('all' = ANY (p_statuses)) THEN
+RESULT total=36 pass=35 fail=1 reds=S_null_element_ignored
+RESTORED clean=True
+== M09_EMPTY_AGENTS
+MUTATION APPLIED numstat=2/2
+  - IF p_agents IS NOT NULL AND cardinality(p_agents) > 0 THEN
+  + IF p_agents IS NOT NULL THEN
+RESULT total=36 pass=35 fail=1 reds=A_empty_all_rows
+RESTORED clean=True
+== M10_PIN_NO_SCOPE
+MUTATION APPLIED numstat=0/1
+  - ('public.broker_report_scope(uuid,uuid)', ARRAY['86899bd79510d5c29d6f33374e1040ff'], false),
+RESULT total=36 pass=35 fail=1 reds=K2_pin_refuses_unknown_scope
+RESTORED clean=True
+== M11_NO_SEARCH_PATH
+MUTATION APPLIED numstat=0/1
+  - SET search_path = public
+RESULT total=36 pass=35 fail=1 reds=C_invoker_stable_search_path
+RESTORED clean=True
+== M12_PIN_NEW_ANY
+MUTATION APPLIED numstat=1/1
+  - IF r.cur IS NULL AND r.may_be_absent THEN
+  + IF r.may_be_absent THEN
+RESULT total=36 pass=35 fail=1 reds=K3_pin_refuses_foreign_new_body
+RESTORED clean=True

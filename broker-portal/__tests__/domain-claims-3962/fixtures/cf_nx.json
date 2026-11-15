@@ -1,0 +1,1 @@
+{"Status":3,"TC":false,"RD":true,"RA":true,"AD":true,"CD":false,"Question":[{"name":"nonexistent-zzq.invalid","type":16}],"Authority":[{"name":"","type":6,"TTL":86400,"data":"a.root-servers.net. nstld.verisign-grs.com. 2026111001 1800 900 604800 86400"}]}

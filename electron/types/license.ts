@@ -87,6 +87,10 @@ export interface Device {
   // Timestamps
   last_seen_at: string;
   activated_at: string;
+
+  // BACKLOG-4185: hardware profile (jsonb, nulled when diagnostics sharing is off)
+  hardware_profile?: Record<string, unknown> | null;
+  profile_updated_at?: string | null;
 }
 
 // =============================================================================

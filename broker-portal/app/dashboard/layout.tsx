@@ -1,3 +1,4 @@
+import { Suspense } from 'react';
 import { redirect } from 'next/navigation';
 import { getImpersonationSession } from '@/lib/impersonation';
 import { DashboardShell } from '@/components/layout/DashboardShell';
@@ -10,6 +11,8 @@ import { getMyTransactionsGate } from '@/lib/my-transactions-access';
 import { billingEnabled } from '@/lib/billing/flag';
 import { billingNavVisible } from '@/lib/billing/capabilities';
 import { listMyReports } from '@/lib/reports/report-gate';
+import { loadCaptureNotice } from '@/lib/domain/captureView';
+import CaptureNoticeBanner from '@/components/CaptureNoticeBanner';
 
 export default async function DashboardLayout({
   children,
@@ -82,6 +85,9 @@ export default async function DashboardLayout({
   // keeps the floor (Checklists is already hidden by the checklist gate). A
   // failed read (null) shows the normal navigation; the pages refuse on their own.
   const orgSuspended = !suspended && portal?.orgSuspended === true && access?.kind === 'full';
+  // BACKLOG-3962 PR3b: a personal owner whose account a brokerage has scheduled to move sees a
+  // banner with the opt-out. Read only (caller_capture_notice); never while impersonating.
+  const captureNotice = personalOwner && !isImpersonating && portal ? await loadCaptureNotice(portal.supabase) : null;
 
   return (
     <DashboardShell
@@ -99,6 +105,11 @@ export default async function DashboardLayout({
       suspended={suspended}
       orgSuspended={orgSuspended}
     >
+      {captureNotice && (
+        <Suspense fallback={null}>
+          <CaptureNoticeBanner notice={captureNotice} />
+        </Suspense>
+      )}
       {children}
     </DashboardShell>
   );

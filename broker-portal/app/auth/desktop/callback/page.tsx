@@ -17,16 +17,19 @@ import { createTokenClaim } from '@/lib/actions/createTokenClaim';
 import { enforceSingleDesktopSession } from '@/lib/actions/enforceSingleDesktopSession';
 import { mintDesktopSession } from '@/lib/actions/mintDesktopSession';
 import { syncDesktopIdpNames } from '@/lib/actions/syncDesktopIdpNames';
+import { desktopJitJoin, type DesktopJitResult } from '@/lib/actions/desktopJitJoin';
+import { domainManagedMessage } from '@/lib/auth/jitJoin';
 import { Spinner } from '@keepr/design-system';
-import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
+import { CheckCircle2, Info, Loader2, XCircle } from 'lucide-react';
 import { arrivedFromDesktop } from '@/lib/desktop-handoff';
 import { signOutLocal } from '@/lib/auth/signOutLocal';
 
-type Status = 'loading' | 'redirecting' | 'success' | 'error';
+type Status = 'loading' | 'redirecting' | 'success' | 'error' | 'domain_managed';
 
 function DesktopCallbackContent() {
   const [status, setStatus] = useState<Status>('loading');
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [managedMessage, setManagedMessage] = useState<string>('');
   const [deepLinkUrl, setDeepLinkUrl] = useState<string>('');
   const [hasDesktopApp, setHasDesktopApp] = useState<boolean | null>(null);
   // BACKLOG-3394: the desktop app opened this tab, so it is installed — we do
@@ -106,6 +109,20 @@ function DesktopCallbackContent() {
       // desktop session is minted. The server action verifies the token itself and
       // never throws; the catch is a second belt so a sign-in can never stop here.
       await syncDesktopIdpNames(session.access_token, session.provider_token ?? null).catch(() => undefined);
+
+      // BACKLOG-3962 PR4a: the JIT step, same rules as the portal, AWAITED before anything is
+      // handed to the desktop app (the app creates its licence as soon as it has a session). When
+      // the brokerage that verified this email domain has turned off personal accounts, the
+      // person is told here and the app is never opened: no session is minted, no deep link.
+      const placement: DesktopJitResult = await desktopJitJoin(session.access_token).catch(
+        (): DesktopJitResult => ({ status: 'ok' })
+      );
+      if (placement.status === 'domain_managed') {
+        await signOutLocal(supabase);
+        setManagedMessage(domainManagedMessage(placement));
+        setStatus('domain_managed');
+        return;
+      }
 
       // SESSION-FIX #2 (BACKLOG-2332): mint a FRESH, independent session for the desktop instead
       // of handing it the browser tab's tokens. Sharing the browser's refresh-token family made
@@ -303,6 +320,17 @@ function DesktopCallbackContent() {
                 </p>
               </>
             )}
+          </>
+        )}
+
+        {status === 'domain_managed' && (
+          <>
+            <div className="text-primary-600">
+              <Info className="w-12 h-12 mx-auto" />
+            </div>
+            <p className="text-gray-900 font-medium">Your brokerage manages your Keepr account</p>
+            <p className="text-gray-600 text-sm" data-testid="domain-managed-message">{managedMessage}</p>
+            <p className="text-gray-400 text-xs mt-4">You can close this browser tab.</p>
           </>
         )}
 

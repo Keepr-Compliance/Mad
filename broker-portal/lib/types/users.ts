@@ -27,7 +27,7 @@ export type MemberLicenseStatus = 'pending' | 'active' | 'suspended' | 'expired'
  * How a user/member was provisioned
  * Maps to: users.provisioning_source and organization_members.provisioned_by CHECK constraints
  */
-export type ProvisioningSource = 'manual' | 'scim' | 'jit' | 'invite';
+export type ProvisioningSource = 'manual' | 'scim' | 'jit' | 'invite' | 'domain_capture';
 
 /**
  * OAuth provider types
@@ -226,4 +226,5 @@ export const PROVISIONING_SOURCE_LABELS: Record<ProvisioningSource, string> = {
   scim: 'SCIM',
   jit: 'Just-in-Time',
   invite: 'Invited',
+  domain_capture: 'Domain',
 };

@@ -85,8 +85,12 @@ export async function isAutoDetectAllowed(userId: string): Promise<boolean> {
       return false;
     }
 
-    const access = await featureGateService.checkFeature(orgId, "ai_detection");
-    return access.allowed === true;
+    // BACKLOG-3350: read the plan through the fail-closed reader. checkFeature
+    // answers "allowed" when the plan cannot be fetched and nothing is cached;
+    // getAllFeaturesOrNull answers null there, which denies the scan. A key
+    // missing from a real answer also denies.
+    const features = await featureGateService.getAllFeaturesOrNull(orgId);
+    return features?.["ai_detection"]?.allowed === true;
   } catch (error) {
     logService.warn(
       "[BACKLOG-2313] Auto-detect gate check failed — denying scan (fail-closed)",

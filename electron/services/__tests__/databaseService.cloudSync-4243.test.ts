@@ -221,6 +221,100 @@ describe("Keepr Cloud on the real open path (bundled driver)", () => {
     await svc.close();
   });
 
+  /**
+   * Opens a fresh profile, then turns it into a v78 file with Keepr Cloud on: an enabled user, a
+   * deal with a person, every cloud trigger, and the Learn objects v79 and v80 add removed.
+   * Returns the open service; the caller runs the chain with runMigrations, as the next open would.
+   */
+  async function v78ProfileWithCloud(): Promise<{ svc: AnyService; db: DatabaseType }> {
+    const svc = loadService();
+    await expect(svc.initialize()).resolves.toBe(true);
+    const d = svc.db as DatabaseType;
+    seed(d);
+    d.prepare("INSERT INTO cloud_sync_settings (project_ref, user_id, enabled) VALUES ('p', ?, 1)").run(USER);
+    d.prepare("INSERT INTO contacts (id, user_id, display_name) VALUES ('ct-v78', ?, 'Person')").run(USER);
+    d.prepare("INSERT INTO transaction_contacts (id, transaction_id, contact_id) VALUES ('pt-v78', 'd-1', 'ct-v78')").run();
+    expect(names(d, "trigger", "trg_cloud_sync_%")).toEqual(CLOUD_SYNC_TRIGGERS.map((t) => t.name).sort());
+    d.pragma("foreign_keys = OFF");
+    for (const c of ["pilot_report", "pilot_pending_withdraw", "pilot_sent_versions", "pilot_unsettled_at"]) {
+      d.exec(`ALTER TABLE learn_mode_settings DROP COLUMN ${c}`);
+    }
+    d.exec("DROP TABLE IF EXISTS learn_sender_overrides");
+    d.exec("ALTER TABLE learn_bulk_answers DROP COLUMN sender_key");
+    d.pragma("foreign_keys = ON");
+    d.prepare("UPDATE schema_version SET version = 78 WHERE id = 1").run();
+    d.exec("DELETE FROM cloud_sync_dirty");
+    return { svc, db: d };
+  }
+
+  type Chain = Array<{ version: number; description: string; migrate: (d: DatabaseType) => void }>;
+  const chainOf = (svc: AnyService) => (svc.constructor as { MIGRATIONS: Chain }).MIGRATIONS;
+  const versionOf = (db: DatabaseType) => (db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }).version;
+
+  it("RELEASE 2.49: a v78 profile with Keepr Cloud on runs v79 and v80, ends at v80 with every cloud trigger, v80's objects, and its deal marked", async () => {
+    const { svc, db } = await v78ProfileWithCloud();
+    expect(versionOf(db)).toBe(78);
+    await expect(svc.runMigrations(db)).resolves.toBeUndefined();
+    const head = chainOf(svc).at(-1)!.version;
+    expect(head).toBeGreaterThanOrEqual(80);
+    expect(versionOf(db)).toBe(head);
+    expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual(CLOUD_SYNC_TRIGGERS.map((t) => t.name).sort());
+    expect(dirtyIds(db)).toEqual(["d-1"]);
+    expect(names(db, "table", "learn_sender_overrides")).toEqual(["learn_sender_overrides"]);
+    expect((db.prepare("PRAGMA table_info(learn_bulk_answers)").all() as Array<{ name: string }>).map((c) => c.name)).toContain("sender_key");
+    expect((db.prepare("PRAGMA table_info(learn_mode_settings)").all() as Array<{ name: string }>).map((c) => c.name)).toContain("pilot_report");
+    db.exec("DELETE FROM cloud_sync_dirty");
+    db.prepare("UPDATE contacts SET display_name = 'Renamed' WHERE id = 'ct-v78'").run();
+    expect(dirtyIds(db)).toEqual(["d-1"]);
+    await svc.close();
+  });
+
+  it("RELEASE 2.49: the same v78 profile with v80 made to throw (after v79 ran) ends with every cloud trigger present", async () => {
+    const { svc, db } = await v78ProfileWithCloud();
+    const v80 = chainOf(svc).find((m) => m.version === 80)!;
+    const real = v80.migrate;
+    v80.migrate = () => {
+      throw new Error("test: v80 fails");
+    };
+    try {
+      await expect(svc.runMigrations(db)).rejects.toThrow();
+    } finally {
+      v80.migrate = real;
+    }
+    expect(versionOf(db)).toBe(79);
+    expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual(CLOUD_SYNC_TRIGGERS.map((t) => t.name).sort());
+    db.exec("DELETE FROM cloud_sync_dirty");
+    expect(() => db.prepare("UPDATE transactions SET property_city = 'C' WHERE id = 'd-1'").run()).not.toThrow();
+    expect(dirtyIds(db)).toEqual(["d-1"]);
+    await svc.close();
+  });
+
+  it("RELEASE 2.49 control: a migration in this chain that rebuilds transaction_contacts succeeds because the triggers are dropped first", async () => {
+    const { svc, db } = await v78ProfileWithCloud();
+    const v80 = chainOf(svc).find((m) => m.version === 80)!;
+    const real = v80.migrate;
+    v80.migrate = (d) => {
+      real(d);
+      const views = d.prepare("SELECT name, sql FROM sqlite_master WHERE type = 'view' AND sql LIKE '%transaction_contacts%'").all() as Array<{ name: string; sql: string }>;
+      const ddl = (d.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'transaction_contacts'").get() as { sql: string }).sql;
+      for (const v of views) d.exec(`DROP VIEW ${v.name}`);
+      d.exec(`${ddl.replace(/^CREATE TABLE\s+("?)[A-Za-z_]+\1/, "CREATE TABLE transaction_contacts_new")};
+        INSERT INTO transaction_contacts_new SELECT * FROM transaction_contacts; DROP TABLE transaction_contacts;
+        ALTER TABLE transaction_contacts_new RENAME TO transaction_contacts;`);
+      for (const v of views) d.exec(v.sql);
+    };
+    try {
+      await expect(svc.runMigrations(db)).resolves.toBeUndefined();
+    } finally {
+      v80.migrate = real;
+    }
+    expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual(CLOUD_SYNC_TRIGGERS.map((t) => t.name).sort());
+    db.exec("DELETE FROM cloud_sync_dirty");
+    db.prepare("UPDATE transaction_contacts SET notes = 'x' WHERE id = 'pt-v78'").run();
+    expect(dirtyIds(db)).toEqual(["d-1"]);
+    await svc.close();
+  });
+
   it("a migration that ran marks every eligible deal of every enabled user (triggers were absent during it)", async () => {
     const svc = loadService();
     await expect(svc.initialize()).resolves.toBe(true);

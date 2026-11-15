@@ -302,6 +302,10 @@ const IDENTITY_CONTEXT_RE = /@[A-Za-z0-9.-]+\.[A-Za-z]{2,}|\+?\d[\d ().-]{8,}\d/
  * a human's confirmation.
  */
 const FICTIONAL_NAMES = new Set([
+  // BACKLOG-3962 PR3b — the domain capture table test (captureUi.test.tsx): invented display
+  // names for a candidate and a moved person, to show a name beside its email.
+  "casey can",
+  "morgan moved",
   // BACKLOG-1717 — the people-found-in-email suites
   // (services/db/__tests__/emailDerivedContacts-1717.test.ts and its
   // siblings). Every one is invented for a specific rule under test and none

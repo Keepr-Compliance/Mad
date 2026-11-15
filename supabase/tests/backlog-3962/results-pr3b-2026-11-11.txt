@@ -1,0 +1,68 @@
+# BACKLOG-3962 PR3b on keepr-test (re-applied 2026-11-11 after #3490 merged): pr3 62/62, pr3_live 62/62 x2, pr2_live 13/13, PR1 live 64/64, grants 0/0
+# md5 (prosrc): _eval 95fb385c, _switch f028c335, candidates 696d9ae9, history f7e818dc, clear_defer 75d88abc; unchanged: start 1b7be2cd, is_payer 0d228992, withdraw 741c6b96, revoke 0f3bbb8c, record_check 31226654
+# SQL mutants (KEEPR_3962_APPLIED=1 bash run.sh <mutant>), measured before re-apply
+C_always_unassigned fail=1 pass=61 ['W05_free_seat_active_plus_one']
+C_always_active fail=1 pass=61 ['W08_no_seat_unassigned_count_unchanged']
+C_ignore_notice fail=2 pass=60 ['W03_undelivered_cancels_no_member_no_outbox', 'W05_free_seat_active_plus_one']
+C_ignore_opt_out fail=2 pass=60 ['W04_opted_out_nothing', 'Y01_history_admin_sees_org_rows']
+C_no_status_guard fail=4 pass=58 ['W04_opted_out_nothing', 'W07_switch_twice_one_membership', 'W11_switched_row_defer_cleared', 'Y01_history_admin_sees_org_rows']
+C_opt_out_no_uid fail=10 pass=52 ['O02_opt_out_other_row_refused', 'W01_not_due_before_day_14', 'W02_stale_dns_no_switch', 'W05_free_seat_active_plus_one', 'W06_payer_flag_and_3850_outbox', 'W07_switch_twice_one_membership', 'W08_no_seat_unassigned_count_unchanged', 'W10_dns_deferral_recorded', 'W11_switched_row_defer_cleared', 'Y01_history_admin_sees_org_rows']
+C_cancel_only_revoke fail=2 pass=60 ['X01_withdraw_cancels', 'X03_lapse_cancels']
+C_no_tid_term fail=6 pass=56 ['D01_due_returns_then_stamps', 'K01_candidates_listed', 'K02_foreign_tenant_not_listed', 'S02_scheduled_set', 'S03_foreign_tenant_never_scheduled', 'S08_start_reports_payer']
+C_active_rows_only fail=6 pass=56 ['D01_due_returns_then_stamps', 'K01_candidates_listed', 'K03_deactivated_elsewhere_not_listed', 'S02_scheduled_set', 'S04_deactivated_elsewhere_never_scheduled', 'S08_start_reports_payer']
+C_grant_authenticated MUTATION APPLIED C_grant_authenticated: +GRANT EXECUTE ON FUNCTION public._domain_capture_switch(uuid) TO authenticated; BACKLOG-3962: authenticated can execute public._domain_capture_switch(uuid)
+C_table_select MUTATION APPLIED C_table_select: +GRANT SELECT ON TABLE public.domain_capture_switches TO authenticated; BACKLOG-3962: a client role has a grant on domain_capture_switches
+C_no_fresh_dns fail=4 pass=58 ['W02_stale_dns_no_switch', 'W05_free_seat_active_plus_one', 'W06_payer_flag_and_3850_outbox', 'W10_dns_deferral_recorded']
+C_pin_wrong_md5 MUTATION APPLIED C_pin_wrong_md5: -  IF v IS DISTINCT FROM '74760b7c6272d9e29d23f26b785cdbd2' THEN | +  IF v IS DISTINCT FROM '00000000000000000000000000000000' THEN BACKLOG-3962: domain_claim_withdraw md5 74760b7c6272d9e29d23f26b785cdbd2 is not the PR1 body
+C_no_setup_gate_switch fail=2 pass=60 ['B04_switch_deferred_billing_setup_pending', 'B07_setup_deferral_recorded_and_listed']
+C_no_setup_gate_start fail=1 pass=61 ['B03_start_refused_billing_setup_pending']
+C_no_billing_ready_gate fail=4 pass=60 ['B01_start_refused_without_3850', 'B02_switch_deferred_without_3850', 'B06_billing_not_ready_recorded', 'D01_due_returns_then_stamps']  (re-run 2026-11-11 after the control additions; MUTATION APPLIED both IF NOT _domain_capture_billing_ready() -> IF false)
+C_no_suspended_catch fail=2 pass=60 ['D01_due_returns_then_stamps', 'H01_suspended_brokerage_cancels_no_member_no_outbox']
+C_incomplete_is_payer fail=1 pass=61 ['P01_incomplete_subscription_is_not_a_payer']
+C_role_plain_coalesce fail=1 pass=61 ['R02_org_default_admin_clamped_to_agent']
+C_suspended_catch_any_p0001 fail=1 pass=61 ['H02_other_p0001_reraised_switch_stays_scheduled']
+C_role_hardcoded fail=1 pass=61 ['R01_role_is_org_default_member_role']
+C_no_tenant_as_foreign fail=1 pass=61 ['K06_no_tenant_listed_not_convertible_never_scheduled']
+C_no_tenant_branch_dropped fail=1 pass=61 ['K06_no_tenant_listed_not_convertible_never_scheduled']
+C_no_opt_out_skip fail=3 pass=59 ['Q01_opted_out_listed_not_convertible', 'Q02_start_skips_opted_out_no_notice', 'W04_opted_out_nothing']
+C_no_defer_reason fail=1 pass=61 ['B07_setup_deferral_recorded_and_listed']
+C_defer_not_cleared fail=2 pass=60 ['B08_defer_cleared_on_switch', 'W11_switched_row_defer_cleared']
+C_history_no_admin_check fail=2 pass=60 ['Y02_history_agent_refused', 'Y03_history_other_org_admin_refused']
+C_history_grant_anon MUTATION APPLIED C_history_grant_anon: +GRANT EXECUTE ON FUNCTION public.domain_capture_history(uuid) TO anon; BACKLOG-3962: anon can execute public.domain_capture_history(uuid)
+C_opt_out_any_org fail=2 pass=62 ['Q03_opt_out_of_one_org_is_convertible_in_another', 'Q04_start_schedules_person_opted_out_elsewhere']  (MUTATION APPLIED: dropped `AND s.organization_id = p_org` from the opt-out check in _domain_capture_eval)
+C_no_opt_out_skip (re-run with Q03/Q04 present) fail=3 pass=61 ['Q01_opted_out_listed_not_convertible', 'Q02_start_skips_opted_out_no_notice', 'W04_opted_out_nothing']
+# after fix-up: pr3 64/64, pr3_live 64/64 (62 + Q03, Q04)
+# portal mutants
+== M1 MUTATION APPLIED broker-portal/lib/domain/captureView.ts:152: if (!access.ok && false) return null;
+   ['Tests:       1 failed, 48 passed, 49 total'] exit 1
+     ● loadCaptureSection gate › a caller without domain access gets no section and nothing is read
+== M2 MUTATION APPLIED broker-portal/components/CaptureNoticeBanner.tsx:44: if (fromEmail) { buttonRef.current?.focus(); void optOutSelf({ switchId: notice.switchId, confirm: true }); }
+   ['Tests:       1 failed, 48 passed, 49 total'] exit 1
+     ● personal-owner banner › ?capture=notice only displays: highlights and focuses, calls nothing
+== M3 MUTATION APPLIED broker-portal/app/dashboard/settings/domain/CaptureSection.tsx:148: onClick={openConfirm} disabled={busy}>
+   ['Tests:       1 failed, 48 passed, 49 total'] exit 1
+     ● capture table › Start is disabled until someone is selected
+== M4 MUTATION APPLIED broker-portal/lib/domain/captureCopy.ts:15: no_tenant_dropped:
+   ['Tests:       2 failed, 47 passed, 49 total'] exit 1
+     ● capture table › renders every row with its status and reason in plain words
+     ● reason copy › no_tenant has its own copy
+== M5 MUTATION APPLIED broker-portal/app/dashboard/settings/domain/CaptureSection.tsx:112: startCapture({ claimId: view.claimId, userIds: Array.from(selected), organizationId: 'org-from-client' } as ne
+   ['Tests:       1 failed, 48 passed, 49 total'] exit 1
+     ● capture table › confirm text names the count and the move date; Start sends only the claim and the people
+== T1_defer_label MUTATION APPLIED broker-portal/lib/domain/captureCopy.ts:(line removed): 
+   ['Tests:       1 failed, 48 passed, 49 total'] exit 1
+     ● capture table › renders every row with its status and reason in plain words
+== T2_name_column MUTATION APPLIED broker-portal/app/dashboard/settings/domain/CaptureSection.tsx:193: <div className="text-sm text-gray-900">{row.email}</div>
+   ['Tests:       1 failed, 48 passed, 49 total'] exit 1
+     ● capture table › shows the name with the email under it, or the email alone
+== T3_layout_any_floor MUTATION APPLIED broker-portal/app/dashboard/layout.tsx:90: const captureNotice = (personalOwner || true) && !isImpersonating
+   ['Tests:       2 failed, 47 passed, 49 total'] exit 1
+== T4_layout_no_impersonation_term MUTATION APPLIED broker-portal/app/dashboard/layout.tsx:90: const captureNotice = personalOwner && portal
+   ['Tests:       49 passed, 49 total'] exit 0
+== T5_history_dropped MUTATION APPLIED broker-portal/lib/domain/captureView.ts:156: const ended: EndedRow[] = [];
+   ['Tests:       4 failed, 45 passed, 49 total'] exit 1
+     ● capture table › only convertible rows without a live or final move have a checkbox
+     ● capture table › renders every row with its status and reason in plain words
+     ● capture table › shows the name with the email under it, or the email alone
+     ● loadCaptureSection gate › reads candidates and history on the session client with the session organization
+BASELINE AFTER: ['Tests:       49 passed, 49 total']

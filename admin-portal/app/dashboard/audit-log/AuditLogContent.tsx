@@ -49,6 +49,10 @@ const ACTION_LABELS: Record<string, { label: string; color: string }> = {
   'role.delete': { label: 'Role Deleted', color: 'bg-red-100 text-red-700' },
   'impersonation.start': { label: 'Impersonation Started', color: 'bg-purple-100 text-purple-700' },
   'impersonation.end': { label: 'Impersonation Ended', color: 'bg-purple-100 text-purple-700' },
+  'report_access.set': { label: 'Report Access Changed', color: 'bg-blue-100 text-blue-700' },
+  'report_access.remove': { label: 'Report Access Removed', color: 'bg-orange-100 text-orange-700' },
+  'report_share.set': { label: 'View Share Changed', color: 'bg-blue-100 text-blue-700' },
+  'report_share.remove': { label: 'View Share Removed', color: 'bg-orange-100 text-orange-700' },
 };
 
 // Column definitions

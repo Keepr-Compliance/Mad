@@ -37,10 +37,28 @@ jest.mock("../../services/llm/llmConfigService", () => ({
   default: { getUserConfig: (...a: unknown[]) => mockGetUserConfig(...a) },
 }));
 
-const mockCheckFeature = jest.fn();
+// BACKLOG-3350: one model of the plan drives BOTH readers, so the mock answers
+// the way the real featureGateService does for the same state:
+//   - planAnswer === null  -> plan unreachable AND no cache (in-memory or
+//     persisted). getAllFeaturesOrNull -> null; checkFeature -> allowed
+//     (its documented fail-open default).
+//   - planAnswer is a map  -> the plan answered. getAllFeaturesOrNull -> a copy
+//     of the map; checkFeature -> map[key], or allowed when the key is absent.
+type Access = { allowed: boolean; value: string; source: "plan" | "override" | "default" };
+let planAnswer: Record<string, Access> | null = null;
+const FAIL_OPEN_DEFAULT: Access = { allowed: true, value: "", source: "default" };
+const mockGetAllFeaturesOrNull = jest.fn(async (_orgId: string) =>
+  planAnswer === null ? null : { ...planAnswer },
+);
+const mockCheckFeature = jest.fn(async (_orgId: string, key: string) =>
+  planAnswer === null ? FAIL_OPEN_DEFAULT : (planAnswer[key] ?? FAIL_OPEN_DEFAULT),
+);
 jest.mock("../../services/featureGateService", () => ({
   __esModule: true,
-  default: { checkFeature: (...a: unknown[]) => mockCheckFeature(...a) },
+  default: {
+    checkFeature: (orgId: string, key: string) => mockCheckFeature(orgId, key),
+    getAllFeaturesOrNull: (orgId: string) => mockGetAllFeaturesOrNull(orgId),
+  },
 }));
 
 const mockResolveOrgId = jest.fn();
@@ -119,7 +137,7 @@ describe("transactions:scan auto-detect gate (BACKLOG-2313)", () => {
     // Default happy path: opted in + entitled. Individual tests override.
     mockGetUserConfig.mockResolvedValue({ autoDetectEnabled: true });
     mockResolveOrgId.mockResolvedValue("org-1");
-    mockCheckFeature.mockResolvedValue({ allowed: true, value: "", source: "plan" });
+    planAnswer = { ai_detection: { allowed: true, value: "", source: "plan" } };
     mockScan.mockResolvedValue({
       success: true,
       transactionsFound: 2,
@@ -131,6 +149,7 @@ describe("transactions:scan auto-detect gate (BACKLOG-2313)", () => {
   it("runs the scan when the user is opted in AND entitled", async () => {
     const result = (await scan({}, "user-1")) as ScanResult;
 
+    expect(mockGetAllFeaturesOrNull).toHaveBeenCalledWith("org-1");
     expect(mockScan).toHaveBeenCalledTimes(1);
     expect(result.success).toBe(true);
     expect(result.transactionsFound).toBe(2);
@@ -138,7 +157,7 @@ describe("transactions:scan auto-detect gate (BACKLOG-2313)", () => {
   });
 
   it("does NOT run the scan (creates 0 transactions) when NOT entitled", async () => {
-    mockCheckFeature.mockResolvedValue({ allowed: false, value: "", source: "plan" });
+    planAnswer = { ai_detection: { allowed: false, value: "", source: "plan" } };
 
     const result = (await scan({}, "user-1")) as ScanResult;
 
@@ -158,6 +177,7 @@ describe("transactions:scan auto-detect gate (BACKLOG-2313)", () => {
     // Toggle is checked FIRST — no entitlement round-trip when opted out.
     expect(mockResolveOrgId).not.toHaveBeenCalled();
     expect(mockCheckFeature).not.toHaveBeenCalled();
+    expect(mockGetAllFeaturesOrNull).not.toHaveBeenCalled();
   });
 
   it("denies no-org (individual) users even when opted in", async () => {
@@ -167,6 +187,29 @@ describe("transactions:scan auto-detect gate (BACKLOG-2313)", () => {
 
     expect(mockScan).not.toHaveBeenCalled();
     expect(mockCheckFeature).not.toHaveBeenCalled();
+    expect(mockGetAllFeaturesOrNull).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: true, transactionsFound: 0, emailsScanned: 0 });
+  });
+
+  // BACKLOG-3350: the plan cannot be reached and nothing is cached. The real
+  // checkFeature answers "allowed" here (fail-open); the gate must not.
+  it("fails CLOSED (no scan) when the plan is unreachable and nothing is cached", async () => {
+    planAnswer = null;
+
+    const result = (await scan({}, "user-1")) as ScanResult;
+
+    expect(mockGetAllFeaturesOrNull).toHaveBeenCalledWith("org-1");
+    expect(mockScan).not.toHaveBeenCalled();
+    expect(result).toEqual({ success: true, transactionsFound: 0, emailsScanned: 0 });
+  });
+
+  it("does NOT run the scan when the plan answers without ai_detection", async () => {
+    planAnswer = {};
+
+    const result = (await scan({}, "user-1")) as ScanResult;
+
+    expect(mockGetAllFeaturesOrNull).toHaveBeenCalledWith("org-1");
+    expect(mockScan).not.toHaveBeenCalled();
     expect(result).toEqual({ success: true, transactionsFound: 0, emailsScanned: 0 });
   });
 

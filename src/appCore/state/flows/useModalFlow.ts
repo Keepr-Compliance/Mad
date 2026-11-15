@@ -84,15 +84,11 @@ export function useModalFlow(): UseModalFlowReturn {
 
   // Semantic modal methods
   // BACKLOG-3964: showProfile = the account side panel (shell/AccountPanel).
-  // The title-bar initials stay live while the Settings page shows, so close
-  // Settings first: the panel and Settings never show together, and Settings'
-  // Esc listener can never fire under the panel. A panel row does the reverse
-  // (closeProfile, then openSettings at that tab).
-  const openProfile = useCallback(() => {
-    setShowSettings(false);
-    setSettingsTarget(null);
-    setShowProfile(true);
-  }, []);
+  // BACKLOG-4174 (founder, 2026-11-13): the initials open the panel OVER
+  // whatever is showing and close nothing, so closing the panel returns to that
+  // screen unchanged. Layers under the panel defer Esc to it and are inert
+  // (SettingsLayer). A panel row closes the panel and opens Settings at that tab.
+  const openProfile = useCallback(() => setShowProfile(true), []);
   const closeProfile = useCallback(() => setShowProfile(false), []);
 
   // BACKLOG-3964: the target used to be dropped here, and every "open Settings

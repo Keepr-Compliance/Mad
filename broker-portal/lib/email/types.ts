@@ -270,14 +270,52 @@ export interface TicketResolvedParams {
 export interface SeatLimitReachedParams {
   /** Recipient (an IT admin, admin or broker of the brokerage) */
   recipientEmail: string;
-  /** Name or email of the person who was not added / re-activated */
+  /**
+   * Name or email of the person who was not added / re-activated. For 'domain_capture', the
+   * people who joined without a license (a short list).
+   */
   personLabel: string;
   brokerageName: string;
   /** Seats in use */
   used: number;
   /** The brokerage's seat count; null when unknown */
   maxSeats: number | null;
-  kind: 'add' | 'reactivate';
+  /**
+   * 'add' | 'reactivate': a SCIM write was refused (the HTTP route accepts only these two).
+   * 'domain_capture' (BACKLOG-3962): people moved in by domain capture joined without a license.
+   */
+  kind: 'add' | 'reactivate' | 'domain_capture';
+}
+
+// ---------------------------------------------------------------------------
+// Domain capture emails (BACKLOG-3962 PR3a)
+// ---------------------------------------------------------------------------
+
+export interface DomainCaptureNoticeParams {
+  /** The person's sign-in email at the start of the capture */
+  recipientEmail: string;
+  brokerageName: string;
+  domain: string;
+  /** ISO time of the switch (start + 14 days) */
+  switchAt: string;
+  /** Tokenless link to the portal banner, "Join now" focused (GET changes nothing) */
+  joinUrl: string;
+  /** Tokenless link to the portal banner, "Keep my personal account" focused (GET changes nothing) */
+  keepUrl: string;
+  /** domain_capture_switches.id, kept in the delivery log so a queued retry can be matched */
+  switchId: string;
+  /** True when the person pays for their own Keepr plan (a live subscription of their own) */
+  payer?: boolean;
+}
+
+export interface DomainCaptureSwitchedParams {
+  recipientEmail: string;
+  brokerageName: string;
+  /** True when the person was given a license (a free seat existed) */
+  licensed: boolean;
+  switchId: string;
+  /** True when the person chose "Join now" before the scheduled date */
+  joinedEarly?: boolean;
 }
 
 // ---------------------------------------------------------------------------

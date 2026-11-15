@@ -28,6 +28,8 @@ vi.mock('@/app/dashboard/organizations/[id]/components/BrokerageBillingCard', ()
 vi.mock('@/app/dashboard/organizations/[id]/components/OrgPeopleCard', () => ({ OrgPeopleCard: () => <div>PEOPLE-CARD</div> }));
 // BACKLOG-4036: the Activity card has its own tests (activity-4036)
 vi.mock('@/app/dashboard/organizations/[id]/components/OrgActivityCard', () => ({ OrgActivityCard: () => null }));
+// BACKLOG-3962: the Domains card has its own tests (domain-claims-3962)
+vi.mock('@/app/dashboard/organizations/[id]/components/DomainClaimsCard', () => ({ DomainClaimsCard: () => null }));
 
 const state: { perms: Record<string, boolean>; isTest: boolean; live: boolean } = { perms: {}, isTest: true, live: false };
 const mockRpc = vi.fn();
@@ -61,6 +63,7 @@ vi.mock('@/lib/supabase/server', () => ({
           };
         }
         if (fn === 'admin_get_org_activity') return { data: [], error: null }; // BACKLOG-4036
+        if (fn === 'admin_list_domain_claims') return { data: { success: true, claims: [] }, error: null }; // BACKLOG-3962
         return mockRpc(fn, args);
       },
     },

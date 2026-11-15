@@ -7,7 +7,8 @@
  * packages/shared/src/billing/planRule.ts) and the session client's rpc, so the
  * feature read's every failure mode is reachable.
  *
- * The registry is a TEST-ONLY fixture passed in: PR-1 ships an empty registry.
+ * The registry is a TEST-ONLY fixture passed in, except where a test names the
+ * shipped registry (BACKLOG-3513 PR-3a registers Submissions).
  *
  * @jest-environment node
  */
@@ -222,8 +223,11 @@ describe('the index', () => {
     expect(await outcome(() => requireMyReports([BROKER_ONLY]))).toBe('notFound');
   });
 
-  it('the shipped registry is empty: notFound for a broker with the feature on', async () => {
+  // BACKLOG-3513 PR-3a registers the first report (Submissions, agent-scoped).
+  it('the shipped registry lists Submissions: scope all for a broker, own for an agent', async () => {
     given(full('broker'));
-    expect(await outcome(() => requireMyReports())).toBe('notFound');
+    expect((await requireMyReports()).reports.map((r) => [r.report.slug, r.scope])).toEqual([['submissions', 'all']]);
+    given(floor('brokerage'));
+    expect((await requireMyReports()).reports.map((r) => [r.report.slug, r.scope])).toEqual([['submissions', 'own']]);
   });
 });

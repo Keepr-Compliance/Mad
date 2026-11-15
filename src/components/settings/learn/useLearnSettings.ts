@@ -29,6 +29,12 @@ export interface LearnSettingsState {
   copyBlock: string | null;
   saving: boolean;
   error: string | null;
+  /** BACKLOG-4219: "Help improve Keepr" is ON. */
+  pilotReport: boolean;
+  /** BACKLOG-4219: a withdraw is still owed (it finishes when the computer is online). */
+  pilotPending: boolean;
+  pilotLastSentAt: string | null;
+  pilotSaving: boolean;
 }
 
 const INITIAL: LearnSettingsState = {
@@ -43,10 +49,16 @@ const INITIAL: LearnSettingsState = {
   copyBlock: null,
   saving: false,
   error: null,
+  pilotReport: false,
+  pilotPending: false,
+  pilotLastSentAt: null,
+  pilotSaving: false,
 };
 
 export interface UseLearnSettings extends LearnSettingsState {
   setEnabled: (enabled: boolean) => Promise<void>;
+  /** BACKLOG-4219: turn "Help improve Keepr" on or off. */
+  setPilotReport: (enabled: boolean) => Promise<void>;
   /** Re-read the score and the question count (after a session). */
   refresh: () => Promise<void>;
 }
@@ -55,6 +67,11 @@ export function useLearnSettings(): UseLearnSettings {
   const [state, setState] = useState<LearnSettingsState>(INITIAL);
   const mounted = useRef(true);
   const sampleSize = useRef(0);
+  /**
+   * BACKLOG-4219: bumped by every pilot write and every pilot re-read; a
+   * re-read that returns after a newer one of either is dropped.
+   */
+  const pilotSeq = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -67,6 +84,18 @@ export function useLearnSettings(): UseLearnSettings {
     if (mounted.current) setState((s) => ({ ...s, ...p }));
   }, []);
 
+  /**
+   * BACKLOG-4219: re-read only the pilot fields once main's queued send /
+   * withdraw has run (`settle`, capped in main), so "Last shared:" and
+   * "Deleting…" are current on the same visit.
+   */
+  const reloadPilot = useCallback(async () => {
+    const seq = ++pilotSeq.current;
+    const st = await learnModeService.getState({ settle: true });
+    if (!st.success || seq !== pilotSeq.current) return;
+    patch({ pilotReport: st.pilotReport, pilotPending: st.pilotPending, pilotLastSentAt: st.pilotLastSentAt });
+  }, [patch]);
+
   const loadScore = useCallback(async (): Promise<boolean> => {
     const r = await learnModeService.score();
     if (!r.success) return false;
@@ -77,13 +106,22 @@ export function useLearnSettings(): UseLearnSettings {
       questionsReady: Math.max(0, r.score.cleanupUnanswered) + bulkLeft,
       phase: "ready",
     });
+    // The score may have queued a send in main (fire and forget there).
+    void reloadPilot();
     return true;
-  }, [patch]);
+  }, [patch, reloadPilot]);
 
   const loadCounts = useCallback(async () => {
     const st = await learnModeService.getState();
     if (st.success) {
-      patch({ available: st.available, enabled: st.enabled, answerCount: st.answers.deal + st.answers.bulk });
+      patch({
+        available: st.available,
+        enabled: st.enabled,
+        answerCount: st.answers.deal + st.answers.bulk,
+        pilotReport: st.pilotReport,
+        pilotPending: st.pilotPending,
+        pilotLastSentAt: st.pilotLastSentAt,
+      });
     }
   }, [patch]);
 
@@ -120,6 +158,9 @@ export function useLearnSettings(): UseLearnSettings {
         available: st.available,
         enabled: st.enabled,
         answerCount: st.answers.deal + st.answers.bulk,
+        pilotReport: st.pilotReport,
+        pilotPending: st.pilotPending,
+        pilotLastSentAt: st.pilotLastSentAt,
       });
       if (st.enabled) await prepare();
     })();
@@ -137,9 +178,32 @@ export function useLearnSettings(): UseLearnSettings {
         return;
       }
       patch({ saving: false, enabled: r.enabled, phase: "idle", score: null, copyBlock: null, questionsReady: 0 });
+      // Learn mode off also turns sharing off (main): re-read it.
+      if (!r.enabled) await loadCounts();
       if (r.enabled) await prepare();
     },
-    [patch, prepare],
+    [patch, prepare, loadCounts],
+  );
+
+  const setPilotReport = useCallback(
+    async (enabled: boolean) => {
+      patch({ pilotSaving: true, error: null });
+      const r = await learnModeService.setPilotReport(enabled);
+      if (!r.success) {
+        patch({ pilotSaving: false, error: r.error });
+        return;
+      }
+      pilotSeq.current++;
+      patch({ pilotSaving: false, pilotReport: r.pilotReport, pilotPending: r.pilotPending });
+      if (r.pilotReport) {
+        // ON shares right away: the score queues the send, then loadScore re-reads.
+        await loadScore();
+      } else if (r.pilotPending) {
+        // OFF queued a withdraw: re-read once it has run.
+        void reloadPilot();
+      }
+    },
+    [patch, loadScore, reloadPilot],
   );
 
   const refresh = useCallback(async () => {
@@ -149,5 +213,5 @@ export function useLearnSettings(): UseLearnSettings {
     await loadScore();
   }, [loadCounts, loadScore]);
 
-  return { ...state, setEnabled, refresh };
+  return { ...state, setEnabled, setPilotReport, refresh };
 }

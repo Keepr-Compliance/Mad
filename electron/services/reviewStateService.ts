@@ -136,6 +136,7 @@ import type { SenderRuleSet } from "../utils/senderFilter/bundledRules";
 import { getActiveSenderRules } from "./senderRuleSetStore";
 import { buildKeepSets, storedFilterRow } from "../utils/senderFilter/senderFilter";
 import { anySignalLive, filterForSurface } from "../utils/senderFilter/siteFilter";
+import { buildUserSuppress } from "./userSuppressService";
 import { listDealContactEmails } from "./db/dealContactEmailsDb";
 import {
   FOLDER_MATCH_CANDIDATE_EMAILS_SQL,
@@ -888,8 +889,9 @@ export interface AddressMatchPassResult {
 
 /**
  * BACKLOG-4175: the matched ids minus those a LIVE sender signal suppresses on
- * the address pass (exact seeds first; then keep rules K1-K3; then the other
- * signals). Nothing is unlinked or removed: a dropped email is simply not
+ * the address pass (exact seeds first; then keep rules K1-K3; then the user's
+ * own list U1, BACKLOG-4212; then the other signals). U1 drops count in
+ * ruleSkipped, never seedSkipped. Nothing is unlinked or removed: a dropped email is simply not
  * queued. Deal-contact mail of THIS deal never reaches here (the candidate SQL
  * excludes it); K1 keeps contacts of the user's other non-rejected deals.
  */
@@ -898,7 +900,11 @@ function dropLiveSenders(
   matchedIds: string[],
   rules: SenderRuleSet,
 ): { toQueue: string[]; seedSkipped: number; ruleSkipped: number } {
-  if (matchedIds.length === 0 || !anySignalLive(rules, "addressPass")) {
+  if (matchedIds.length === 0) return { toQueue: matchedIds, seedSkipped: 0, ruleSkipped: 0 };
+  // BACKLOG-4212 (U1): the user's own list is live on the address pass even when
+  // no central signal is, so the early return needs both to be empty.
+  const userSuppress = buildUserSuppress(userId, rules);
+  if (!anySignalLive(rules, "addressPass") && userSuppress.size === 0) {
     return { toQueue: matchedIds, seedSkipped: 0, ruleSkipped: 0 };
   }
   const keep = buildKeepSets(listDealContactEmails(userId), rules);
@@ -908,6 +914,7 @@ function dropLiveSenders(
     rules,
     "addressPass",
     keep,
+    { userSuppress },
   );
   if (dropped.length === 0) return { toQueue: matchedIds, seedSkipped: 0, ruleSkipped: 0 };
   const drop = new Set(dropped.map((d) => d.item.id));

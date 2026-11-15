@@ -1,8 +1,8 @@
 import * as React from 'react';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { SavedViews } from './saved-views';
-import { ShareDialog as ShareDialogFromIndex, SavedViews as SavedViewsFromIndex } from '../../index';
-import { ShareDialog } from './share-dialog';
+import * as kitIndex from '../../index';
+import { SavedViews as SavedViewsFromIndex } from '../../index';
 import type { SavedViewItem, SavedViewsProps, SavedViewsSharing, SavedViewUpdate } from './types';
 
 /**
@@ -326,9 +326,9 @@ describe('SavedViews sharing (BACKLOG-4087)', () => {
     expect(rows().length).toBe(4);
   });
 
-  it('E2 ShareDialog is exported from the package index', () => {
-    expect(ShareDialogFromIndex).toBe(ShareDialog);
+  it('E2 SavedViews is exported from the package index; the v1 ShareDialog is gone (BACKLOG-3513 PR-4)', () => {
     expect(SavedViewsFromIndex).toBe(SavedViews);
+    expect((kitIndex as Record<string, unknown>).ShareDialog).toBeUndefined();
   });
 });
 

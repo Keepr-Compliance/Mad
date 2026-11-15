@@ -181,7 +181,7 @@ export async function resolveOrgIdOrRefusal(): Promise<OrgLookupOutcome> {
  *
  * Typed `Record<StrictFeatureKey, true>`, so it cannot drift from the union in
  * `electron/types/featureGate.ts` or from the renderer's copy in
- * `src/hooks/useFeatureGate.ts` without failing `npm run type-check`.
+ * `src/hooks/featureAccess.ts` without failing `npm run type-check`.
  */
 const STRICT_FEATURE_KEYS: Record<StrictFeatureKey, true> = {
   email_contact_inference: true,

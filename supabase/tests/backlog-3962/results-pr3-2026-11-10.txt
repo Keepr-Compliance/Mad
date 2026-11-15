@@ -1,0 +1,34 @@
+BACKLOG-3962 PR3a SQL harness, keepr-test, 2026-11-10 (branch feature-portal/BACKLOG-3962-pr3a-capture)
+bash run.sh pr3                      -> pass 38 fail 0
+mutants (each MUTATION APPLIED printed by compose.py):
+  C_always_unassigned     -> red W05_free_seat_active_plus_one
+  C_always_active         -> red W08_no_seat_unassigned_count_unchanged (seat_fallback true)
+  C_ignore_notice         -> red W03_undelivered_cancels_no_member_no_outbox (+W05, W09)
+  C_ignore_opt_out        -> red W04_opted_out_nothing (+W05)
+  C_no_status_guard       -> red W07_switch_twice_one_membership (+W04, W05)
+  C_opt_out_no_uid        -> red O02_opt_out_other_row_refused (+6 downstream)
+  C_cancel_only_revoke    -> red X01_withdraw_cancels, X03_lapse_cancels (X02 revoke stays green) (+W09)
+  C_no_tid_term           -> red K02, S03 foreign tenant (+K01, S02, D01)
+  C_active_rows_only      -> red K03, S04 deactivated elsewhere (+K01, S02, D01, W09)
+  C_grant_authenticated   -> POSTCHECK raises: authenticated can execute _domain_capture_switch
+  C_table_select          -> POSTCHECK raises: a client role has a grant on domain_capture_switches
+  C_no_fresh_dns          -> red W02_stale_dns_no_switch (+W05, W06)
+  C_pin_wrong_md5         -> pre-check raises
+  C_no_lock               -> green 38/38 (single session cannot see the lock; see concurrency)
+  C_no_lock_no_fallback   -> green 38/38 (same)
+pr3_rollback              -> table gone, 0 functions, PR1 md5s restored (74760b7c, 8886ba2c, 25199279), old CHECK
+applied to keepr-test, then: pr3_live 38/38, pr2_live 13/13, live (PR1) 64/64
+
+concurrency-pr3.sh (committed fixture, two sessions, A holds 6 s, B starts at +2 s; max_seats 2, 1 held):
+  base                    A active (count). B called +2.0 s, returned +6.1 s: unassigned, seat_fallback false.
+  C_no_lock               B unassigned only through the trigger fallback (seat_fallback true) -> red on the
+                          "count decides" assertion; still exactly one active.
+  C_no_lock_no_fallback   B fails seat_limit_reached (row stays scheduled); still exactly one active.
+  Finding: "exactly one active" is held by the seat trigger's own lock in every mode; this migration's lock makes
+  its own count the decider and keeps the switch from failing.
+
+Re-run after the pii-allow comment on the consumer-tenant line (_domain_capture_eval re-applied on keepr-test,
+md5 b38b1b959bd961c9b23fa1f01e29ef6b) and the W09 fix (it read "latest row" for a person with two rows that share
+one fixed now(), so it was order-dependent: that is what made W09 red in some mutants above):
+  pr3_live x3 -> 38/38; KEEPR_3962_APPLIED=1 pr3 -> 38/38; C_ignore_notice red W03,W05; C_cancel_only_revoke red X01,X03;
+  C_active_rows_only red K01,K03,S02,S04,D01.

@@ -9,12 +9,14 @@
 import type { SenderRuleMode, SenderRuleSet, SenderRuleSignal } from "./bundledRules";
 import {
   decide,
+  type DecideOptions,
   type FilterRow,
   type KeepRuleId,
   type KeepSets,
   type SenderDecision,
   type SenderFilterSurface,
   type SuppressRuleId,
+  type UserRuleId,
 } from "./senderFilter";
 
 /** Is any signal live on this surface? (When none is, nothing can be dropped.) */
@@ -32,14 +34,16 @@ export interface SiteFilterCounts {
    * in precedence order (live or measure), so each message counts once.
    */
   bySignal: Record<SenderRuleSignal, { mode: SenderRuleMode; matched: number }>;
-  /** Messages a keep rule saved from a suppress signal. */
+  /** Messages a keep rule saved from a suppress signal (or from the user's own list). */
   keptBy: Record<KeepRuleId, number>;
+  /** BACKLOG-4212: dropped because the sender is on the user's own suppress list (U1). */
+  userDropped: number;
 }
 
 export interface SiteFilterResult<T> {
   passed: T[];
   /** `rule` is the live rule that dropped the item (`SenderDecision.liveRule`). */
-  dropped: Array<{ item: T; rule: SuppressRuleId }>;
+  dropped: Array<{ item: T; rule: SuppressRuleId | UserRuleId }>;
   counts: SiteFilterCounts;
 }
 
@@ -49,6 +53,7 @@ export function filterForSurface<T>(
   rules: SenderRuleSet,
   surface: SenderFilterSurface,
   keep: KeepSets,
+  opts: DecideOptions = {},
 ): SiteFilterResult<T> {
   const bySignal = {} as SiteFilterCounts["bySignal"];
   for (const s of Object.keys(rules.modes) as SenderRuleSignal[]) {
@@ -59,16 +64,18 @@ export function filterForSurface<T>(
     liveDropped: 0,
     bySignal,
     keptBy: { K1: 0, K2: 0, K3: 0 },
+    userDropped: 0,
   };
   const passed: T[] = [];
   const dropped: SiteFilterResult<T>["dropped"] = [];
   for (const item of items) {
-    const d: SenderDecision = decide(toRow(item), rules, surface, keep);
+    const d: SenderDecision = decide(toRow(item), rules, surface, keep, opts);
     counts.evaluated++;
     if (d.outcome === "keep") counts.keptBy[d.rule as KeepRuleId]++;
     if (d.outcome === "suppress" && d.signal) counts.bySignal[d.signal].matched++;
     if (d.outcome === "suppress" && d.liveRule !== null) {
       counts.liveDropped++;
+      if (d.liveRule === "U1") counts.userDropped++;
       dropped.push({ item, rule: d.liveRule });
     } else {
       passed.push(item);

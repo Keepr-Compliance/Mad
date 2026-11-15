@@ -1314,3 +1314,50 @@ describe('BACKLOG-3951 C10: purchase routes refuse a brokerage member without a 
     });
   }
 });
+
+describe('GET /api/payments/status — refunded per-transaction unlock', () => {
+  function statusReq(): Request {
+    return new Request('https://app.keeprcompliance.com/api/payments/status?session=cs_FX4218', {
+      method: 'GET',
+      headers: { authorization: 'Bearer valid' },
+    });
+  }
+
+  function seedStatus(unlockRefundedAt: string | null) {
+    signedIn();
+    useDb({
+      organizations: [personalOrg(true)],
+      payment_intents: [
+        {
+          user_id: 'USER-1',
+          local_transaction_id: 'TX-1',
+          status: 'fulfilled',
+          quoted_unit_price_cents: 1499,
+          pricing_tier_id: 'TIER-1',
+          stripe_payment_intent_id: 'pi_FX4218',
+          stripe_checkout_session_id: 'cs_FX4218',
+        },
+      ],
+      transaction_unlocks: [
+        { id: 'UNLOCK-1', user_id: 'USER-1', local_transaction_id: 'TX-1', refunded_at: unlockRefundedAt },
+      ],
+    });
+  }
+
+  it('a live (non-refunded) unlock reports unlocked', async () => {
+    seedStatus(null);
+    const { GET } = await import('@/app/api/payments/status/route');
+    const res = await GET(statusReq());
+    expect(res.status).toBe(200);
+    expect(await (res as NextResponse).json()).toEqual({ status: 'fulfilled', unlocked: true });
+  });
+
+  it('a refunded unlock reports locked', async () => {
+    seedStatus('2026-11-01T00:00:00+00:00');
+    const { GET } = await import('@/app/api/payments/status/route');
+    const res = await GET(statusReq());
+    expect(res.status).toBe(200);
+    const body = await (res as NextResponse).json();
+    expect(body.unlocked).toBe(false);
+  });
+});

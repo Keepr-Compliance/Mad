@@ -111,6 +111,7 @@ import { beginLink } from "../../utils/linkInFlight";
 import { getActiveSenderRules } from "../senderRuleSetStore";
 import { buildKeepSets } from "../../utils/senderFilter/senderFilter";
 import { filterForSurface } from "../../utils/senderFilter/siteFilter";
+import { buildUserSuppress } from "../userSuppressService";
 import { listDealContactEmails } from "../db/dealContactEmailsDb";
 import type { PickerMessage } from "../db/messageDbService";
 
@@ -572,16 +573,20 @@ class TransactionService {
     const active = getActiveSenderRules();
     const rules = active.rules;
     const keep = buildKeepSets(listDealContactEmails(userId), rules);
+    // BACKLOG-4212 (U1): this user's own newsletter senders. Logged as a size only.
+    const userSuppress = buildUserSuppress(userId, rules);
     const { passed, counts } = filterForSurface(
       emails,
       (e) => ({ sender: e.from, source: e.source, labels: e.labels, bulkMailHeaders: e.bulkMailHeaders }),
       rules,
       "detector",
       keep,
+      { userSuppress },
     );
     await logService.info("[BACKLOG-4175] detector sender filter", "TransactionService.scanAndExtractTransactions", {
       senderRulesVersion: rules.version,
       senderRulesSource: active.source,
+      userSuppressSize: userSuppress.size,
       ...counts,
     });
     return passed;
