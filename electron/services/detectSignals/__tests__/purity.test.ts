@@ -58,6 +58,11 @@ function runtimeSpecifiers(file: string, src: string): string[] {
   return out;
 }
 
+/** Forward-slash path, so the expected lists hold on Windows too. */
+function toPosix(p: string): string {
+  return p.split(path.sep).join("/");
+}
+
 function resolveRelative(from: string, spec: string): string {
   const base = path.resolve(path.dirname(from), spec);
   for (const cand of [`${base}.ts`, `${base}.tsx`, path.join(base, "index.ts"), base]) {
@@ -87,7 +92,7 @@ describe("C7 — purity of detectSignals and quoteStripping", () => {
   const { files, bare } = walk();
 
   it("walked the graph (anti-vacuity)", () => {
-    const rel = [...files].map((f) => path.relative(ELECTRON_DIR, f));
+    const rel = [...files].map((f) => toPosix(path.relative(ELECTRON_DIR, f)));
     expect(rel).toEqual(
       expect.arrayContaining([
         "services/detectSignals/extractSignals.ts",
@@ -100,7 +105,7 @@ describe("C7 — purity of detectSignals and quoteStripping", () => {
   });
 
   it("reaches no database, logger or handler module", () => {
-    const bad = [...files].map((f) => path.relative(ELECTRON_DIR, f)).filter((f) => FORBIDDEN_PATH.test(f));
+    const bad = [...files].map((f) => toPosix(path.relative(ELECTRON_DIR, f))).filter((f) => FORBIDDEN_PATH.test(f));
     expect(bad).toEqual([]);
   });
 
