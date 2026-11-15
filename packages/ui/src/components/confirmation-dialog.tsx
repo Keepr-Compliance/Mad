@@ -25,6 +25,8 @@ export interface ConfirmationDialogProps {
   isDestructive?: boolean;
   /** Disables both buttons and blocks dismissal while the action runs. */
   loading?: boolean;
+  /** Disables the confirm button only, e.g. until a required box is ticked. Cancel still works. */
+  confirmDisabled?: boolean;
 }
 
 /**
@@ -46,6 +48,7 @@ export function ConfirmationDialog({
   onCancel,
   isDestructive = false,
   loading = false,
+  confirmDisabled = false,
 }: ConfirmationDialogProps) {
   return (
     <AlertDialog
@@ -90,7 +93,7 @@ export function ConfirmationDialog({
             {cancelLabel}
           </AlertDialogCancel>
           <AlertDialogAction
-            disabled={loading}
+            disabled={loading || confirmDisabled}
             onClick={(e) => {
               // Keep the dialog controlled by the parent's `open`; don't let the
               // default close race the async action.
