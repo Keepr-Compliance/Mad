@@ -10,6 +10,7 @@
  * Presentational: every action goes through the session hook.
  */
 import React from "react";
+import { createPortal } from "react-dom";
 import { Check, Info, SkipForward, Sparkle, Undo2, X } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@keepr/ui";
 import type { UseLearnSession } from "./useLearnSession";
@@ -33,9 +34,21 @@ export const MAIL_ANSWER_HELP: ReadonlyArray<{ heading: string; body: string }> 
 /** Info tip beside the mail question: click toggles, keyboard focus opens, blur closes. */
 function MailAnswerHelp(): React.ReactElement {
   const [open, setOpen] = React.useState(false);
+  const [pos, setPos] = React.useState<{ left: number; top: number } | null>(null);
+  const btnRef = React.useRef<HTMLButtonElement>(null);
+  // The dialog and its answer panel clip their children (overflow), so the tip is
+  // portalled to <body> and placed from the button's rect, clamped inside the window.
+  React.useLayoutEffect(() => {
+    if (!open || !btnRef.current) return;
+    const r = btnRef.current.getBoundingClientRect();
+    const W = 288;
+    const left = Math.max(8, Math.min(r.left + r.width / 2 - W / 2, window.innerWidth - W - 8));
+    setPos({ left, top: r.bottom + 8 });
+  }, [open]);
   return (
-    <span className="relative inline-flex">
+    <span className="inline-flex">
       <button
+        ref={btnRef}
         type="button"
         aria-label="What do these answers mean?"
         aria-expanded={open}
@@ -47,18 +60,20 @@ function MailAnswerHelp(): React.ReactElement {
       >
         <Info className="h-4 w-4" aria-hidden="true" />
       </button>
-      {open && (
+      {open && createPortal(
         <span
           role="tooltip"
           data-testid="learn-answer-help-panel"
-          className="absolute left-1/2 top-full z-10 mt-2 w-72 -translate-x-1/2 rounded-lg border border-gray-200 bg-white p-3 text-left text-xs text-gray-600 shadow-lg"
+          style={{ left: pos?.left ?? 0, top: pos?.top ?? 0 }}
+          className="pointer-events-none fixed z-[100] w-72 max-w-[calc(100vw-16px)] rounded-lg border border-gray-200 bg-white p-3 text-left text-xs text-gray-600 shadow-lg"
         >
           {MAIL_ANSWER_HELP.map((h) => (
             <span key={h.heading} className="mb-1 block last:mb-0">
               <strong className="font-medium text-gray-900">{h.heading}:</strong> {h.body}
             </span>
           ))}
-        </span>
+        </span>,
+        document.body,
       )}
     </span>
   );

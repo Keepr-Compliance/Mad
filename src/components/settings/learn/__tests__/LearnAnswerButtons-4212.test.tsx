@@ -73,6 +73,10 @@ describe("Learn mail question: info tip and Skip placement (BACKLOG-4212)", () =
     expect(panel).toHaveTextContent("Real estate business: work mail about real estate, even when it isn't one of your deals.");
     expect(panel).toHaveTextContent("Newsletter or spam: marketing, promotions and mass mailings.");
     expect(panel).toHaveTextContent("Other business: any other work or personal mail, like software notices.");
+    // Not inside the clipping dialog / answer panel: portalled, fixed, above the dialog.
+    expect(screen.getByTestId("learn-answer-panel")).not.toContainElement(panel);
+    expect(screen.getByRole("dialog")).not.toContainElement(panel);
+    expect(classes(panel)).toEqual(expect.arrayContaining(["fixed", "z-[100]"]));
     fireEvent.blur(tip);
     expect(screen.queryByTestId("learn-answer-help-panel")).toBeNull();
     fireEvent.click(tip);
