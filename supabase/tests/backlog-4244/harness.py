@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """BACKLOG-4244: controls and mutants for the MCP data tools in ONE kt-sql call (one transaction ending in RAISE).
 
-Usage: harness.py run [--print] [--only=<mutant prefix,...>] [--no-mutants] [--fixtures=<path>]
+Usage: harness.py run [--print] [--only=<mutant prefix,...>] [--no-mutants | --mutants-only] [--fixtures=<path>] [--timeout]
+       --no-mutants: controls, fixtures and observations only; --mutants-only: the mutants only (one call each
+       keeps a run under the database call time limit)
 
 Order in the call: a read-only catalog record (signatures of the 13 cloud writes, this migration's objects),
 a stop unless all 13 cloud writes have the p_expected_user_id signature (the test project must already hold
@@ -449,6 +451,9 @@ def before_copies():
     return out
 
 
+MUTANTS_ONLY = '--mutants-only' in sys.argv
+
+
 def compose(with_mutants=True, only=None):
     head = ("SET LOCAL pg_stat_statements.track = 'none';\nSET LOCAL lock_timeout = '10s';\n"
             "CREATE TEMP TABLE p4244_out (k text, v text);\n"
@@ -485,14 +490,15 @@ def compose(with_mutants=True, only=None):
              "CREATE FUNCTION pg_temp.t_rb() RETURNS text LANGUAGE sql IMMUTABLE AS $tr4244$ SELECT %s::text $tr4244$;\n") % (q2(MIG), q2(RB))
     text += ROLLBACK_PROBE
     b = []
-    for p in PROBES:
+    for p in ([] if MUTANTS_ONLY else PROBES):
         b.append(block('C_' + p, '    v := pg_temp.%s(%s);' % (p, 'pg_temp.t_rb()' if p == 'p_rollback' else '')))
     caps = {'FX_list_a': "pg_temp.ld('a1')", 'FX_list_b': "pg_temp.ld('b1')", 'FX_list_e_page1': "pg_temp.ld('e1', NULL, NULL, 2)",
             'FX_get_d1': "pg_temp.gd('a1', pg_temp.id('D1')::text)", 'FX_get_d2': "pg_temp.gd('a1', pg_temp.id('D2')::text)",
             'FX_get_d4': "pg_temp.gd('a1', pg_temp.id('D4')::text)", 'FX_cl_d1': "pg_temp.gc('a1', pg_temp.id('D1')::text)",
             'FX_cl_d4': "pg_temp.gc('a1', pg_temp.id('D4')::text)", 'FX_cl_d1_open': "pg_temp.gc('a1', pg_temp.id('D1')::text, true)"}
-    for k, e in caps.items():
+    for k, e in ({} if MUTANTS_ONLY else caps).items():
         b.append(block(k, '    v := %s;' % e))
+    obs_start = len(b)
     b.append(block('FX_list_null_install', "    PERFORM pg_temp.null_install_deal();\n    v := pg_temp.ld('a1');"))
     b.append(block('OBS_cursors', '    v := pg_temp.obs_cursors();'))
     b.append(block('OBS_false_positives', '    v := pg_temp.obs_false_positives();'))
@@ -502,6 +508,8 @@ def compose(with_mutants=True, only=None):
     b.append(block('OBS_ign', '    PERFORM pg_temp.p_digits();\n    v := pg_temp.obs_ign();'))
     b.append(block('OBS_window_joiners', '    PERFORM pg_temp.p_window_joiners();\n    v := pg_temp.obs_window_joiners();'))
     b.append(block('FX_get_null_install', "    v := pg_temp.gd('a1', pg_temp.null_install_deal()::text);"))
+    if MUTANTS_ONLY:
+        del b[obs_start:]
     if with_mutants:
         ms = mutants()
         if only:
@@ -612,7 +620,7 @@ def main():
             json.dump(normalise(res), fh, indent=1, sort_keys=True, ensure_ascii=False)
             fh.write('\n')
         print('fixtures written: ' + os.path.basename(fx_path))
-    sys.exit(1 if cf or missed or cp == 0 else 0)
+    sys.exit(1 if cf or missed or (cp == 0 and not MUTANTS_ONLY) or (MUTANTS_ONLY and caught == 0) else 0)
 
 
 main()
