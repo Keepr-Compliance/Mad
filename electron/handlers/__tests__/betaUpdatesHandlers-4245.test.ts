@@ -431,6 +431,70 @@ describe("E8 E9 E15 E10 E11 E12 users, sessions, writes", () => {
   });
 });
 
+describe("B1 an off write and failed saves", () => {
+  it("B1 off at write start, then eligibility 'allowed' before the save resolves -> stays off, no extra check, no timer", async () => {
+    resolveState.mockResolvedValue("unknown");
+    await turnOn();
+    expect(mockUpdater.allowPrerelease).toBe(false);
+    expect(extraCheck).not.toHaveBeenCalled();
+    cloud.getPreferences.mockResolvedValueOnce({ updates: { betaUpdates: true } });
+    let releaseSave!: () => void;
+    cloud.syncPreferences.mockImplementationOnce(() => new Promise<void>((r) => { releaseSave = () => r(); }));
+    const off = mockHandles["preferences:update"](event, USER, { updates: { betaUpdates: false } }) as Promise<unknown>;
+    resolveState.mockResolvedValue("allowed");
+    await refreshBetaEligibility(5_000);
+    expect(mockUpdater.allowPrerelease).toBe(false);
+    expect(extraCheck).not.toHaveBeenCalled();
+    expect(activeIntervals()).toHaveLength(0);
+    await flush();
+    releaseSave();
+    await off;
+    await refreshBetaEligibility(5_000);
+    expect(mockUpdater.allowPrerelease).toBe(false);
+    expect(extraCheck).not.toHaveBeenCalled();
+  });
+
+  it("failed off save: stays off, the switch shows off (what main holds)", async () => {
+    await turnOn();
+    expect(mockUpdater.allowPrerelease).toBe(true);
+    cloud.getPreferences.mockResolvedValueOnce({ updates: { betaUpdates: true } });
+    cloud.syncPreferences.mockRejectedValueOnce(new Error("offline"));
+    const r = (await mockHandles["preferences:update"](event, USER, { updates: { betaUpdates: false } })) as { success: boolean };
+    expect(r.success).toBe(false);
+    await refreshBetaEligibility(5_000);
+    expect(mockUpdater.allowPrerelease).toBe(false);
+    const state = await getBetaUpdatesState();
+    expect(state).toEqual({ visible: true, stored: false, applied: false, eligibility: "allowed", note: null });
+  });
+
+  it("failed on save: never on, the switch shows off", async () => {
+    cloud.getPreferences.mockResolvedValueOnce({});
+    cloud.syncPreferences.mockRejectedValueOnce(new Error("offline"));
+    const r = (await mockHandles["preferences:update"](event, USER, { updates: { betaUpdates: true } })) as { success: boolean };
+    expect(r.success).toBe(false);
+    await refreshBetaEligibility(5_000);
+    expect(mockUpdater.allowPrerelease).toBe(false);
+    expect(extraCheck).not.toHaveBeenCalled();
+    expect((await getBetaUpdatesState()).stored).toBe(false);
+  });
+
+  it("Settings state after a sign-in ignores a read in flight for the previous user", async () => {
+    let releaseRead!: (v: BetaEligibilityState) => void;
+    resolveState.mockImplementation(() => new Promise((r) => { releaseRead = r; }));
+    recordStoredBetaUpdates(USER, true, mockUpdater);
+    await flush();
+    emitSessionChanged({ kind: "saved", userId: OTHER });
+    mockStored = sessionFor(OTHER);
+    memoryUser = OTHER;
+    const statePromise = getBetaUpdatesState();
+    await flush();
+    releaseRead("allowed");
+    const state = await statePromise;
+    expect(state.eligibility).toBe("unknown");
+    expect(state.visible).toBe(false);
+  });
+});
+
 describe("E17 one extra update check per session", () => {
   it("beta user: exactly one, the first time eligibility is confirmed", async () => {
     await turnOn();

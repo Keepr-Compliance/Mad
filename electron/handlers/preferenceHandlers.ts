@@ -21,6 +21,7 @@ import {
   applyBetaUpdatesOff,
   betaUpdatesSessionEpoch,
   clearStoredBetaUpdates,
+  getBetaUpdatesInputs,
   isLatestBetaUpdatesWrite,
   noteBetaUpdatesChange,
   noteBetaUpdatesWriteStart,
@@ -230,12 +231,20 @@ export function registerPreferenceHandlers(): void {
         if (autoDownload !== null) {
           applyAutoDownload(autoDownload);
         }
-        // BACKLOG-4245: turning beta updates off takes effect at once; turning
-        // them on takes effect only once the cloud save has succeeded.
+        // BACKLOG-4245: turning beta updates off takes effect at once, and the
+        // recorded value becomes false at once (an eligibility answer during
+        // the save then cannot turn betas back on). Turning them on takes
+        // effect only once the cloud save has succeeded. A failed save leaves
+        // betas off either way; the next good read restores the stored value.
         const betaUpdates = betaUpdatesInPartial(sanitizedPartialPreferences);
         const betaUpdatesWrite = betaUpdates === null ? null : noteBetaUpdatesWriteStart();
         if (betaUpdates === false) {
-          applyBetaUpdatesOff();
+          if (getBetaUpdatesInputs().stored?.userId === validatedUserId) {
+            // Recorded only ever for the session user, so no session check is needed.
+            recordStoredBetaUpdates(validatedUserId, false);
+          } else {
+            applyBetaUpdatesOff();
+          }
         }
         try {
           const betaForSessionUser =

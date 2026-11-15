@@ -265,7 +265,12 @@ export async function getBetaUpdatesState(): Promise<BetaUpdatesState> {
     const { stored: recorded } = getBetaUpdatesInputs();
     const stored =
       recorded && recorded.userId === userId ? recorded.value : await d.readStoredForUser(userId);
-    const eligibility = await refreshBetaEligibility(BETA_ELIGIBILITY_QUICK_TIMEOUT_MS);
+    await refreshBetaEligibility(BETA_ELIGIBILITY_QUICK_TIMEOUT_MS);
+    // Only an answer recorded for this user counts (a read in flight across a
+    // sign-in is dropped, and then this is "unknown").
+    const recordedEligibility = getBetaUpdatesInputs().eligibility;
+    const eligibility: BetaEligibilityState =
+      recordedEligibility && recordedEligibility.userId === userId ? recordedEligibility.state : "unknown";
     const nowApplied = target?.allowPrerelease === true;
     let note: BetaUpdatesState["note"] = null;
     if (stored && !nowApplied) {

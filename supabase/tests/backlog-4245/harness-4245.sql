@@ -46,7 +46,7 @@ BEGIN
   -- P1: the migration's pre-check, inlined.
   SELECT md5(p.prosrc) INTO v_md5
     FROM pg_proc p
-   WHERE p.proname = 'get_org_features' AND p.pronamespace = 'public'::regnamespace;
+   WHERE p.oid = to_regprocedure('public.get_org_features(uuid)');
   IF v_md5 IS DISTINCT FROM 'ab7769fae1a97e4865a3522014b115b3' THEN
     RAISE EXCEPTION 'BACKLOG-4245 HARNESS STOP: get_org_features md5 %', coalesce(v_md5, 'missing');
   END IF;

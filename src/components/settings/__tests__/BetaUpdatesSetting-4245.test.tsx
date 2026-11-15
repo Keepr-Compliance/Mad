@@ -99,17 +99,21 @@ describe("V3 the switch shows the stored value and a note", () => {
 });
 
 describe("V4 failure", () => {
+  // After a failed save in either direction the main process holds "off"
+  // (betaUpdatesHandlers-4245 "failed off save" / "failed on save").
+  const offAfterFailure: BetaUpdatesState = { visible: true, stored: false, applied: false, eligibility: "allowed", note: null };
   it.each<[string, boolean]>([
     ["turning on", true],
     ["turning off", false],
-  ])("%s fails: message shown, switch returns to main's state", async (_l, next) => {
+  ])("%s fails: message shown, switch shows what main holds (off)", async (_l, next) => {
     const before: BetaUpdatesState = { visible: true, stored: !next, applied: !next, eligibility: "allowed", note: null };
-    getState.mockResolvedValue(before);
+    getState.mockResolvedValueOnce(before).mockResolvedValueOnce(offAfterFailure);
     setBeta.mockResolvedValue({ success: false, error: "offline" });
     render(<GeneralSettings userId="u1" initialPreferences={{}} />);
     fireEvent.click(await screen.findByRole("switch", { name: BETA_UPDATES_TITLE }));
     expect(await screen.findByRole("alert")).toHaveTextContent(BETA_UPDATES_SAVE_FAILED);
-    await waitFor(() => expect(switchEl()).toHaveAttribute("aria-checked", String(!next)));
+    await waitFor(() => expect(switchEl()).toHaveAttribute("aria-checked", "false"));
+    expect(getState).toHaveBeenCalledTimes(2);
   });
 });
 
