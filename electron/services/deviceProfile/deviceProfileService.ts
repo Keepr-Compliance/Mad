@@ -476,6 +476,7 @@ export function getCountsState(): CountsState | null {
 
 export function __resetDeviceProfileServiceForTests(): void {
   instance = null;
+  inFlight.clear();
 }
 
 /**
