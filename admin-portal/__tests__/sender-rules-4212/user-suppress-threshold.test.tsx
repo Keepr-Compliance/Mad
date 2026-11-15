@@ -42,7 +42,7 @@ import { ORG_A } from '../sender-rules-4186/fixtures';
 import { CONTENT_V3, CONTENT_V4, ORG_LIST, STATE_MIXED } from '../sender-rules-4186/fixtures-pr-c';
 import { bundled, clone, fakeClient, type RpcCall } from '../sender-rules-4186/helpers';
 
-const LABEL = 'Newsletter answers to skip a sender';
+const LABEL = 'Automated answers to skip a sender';
 const NOT_SET = 'Not set (app default 2)';
 
 function withKey(c: SenderRuleSet, n: number): SenderRuleSet {
@@ -92,7 +92,7 @@ describe('the field', () => {
     expect(field().placeholder).toBe(NOT_SET);
     expect(screen.getByRole('button', { name: `About ${LABEL}` })).toBeTruthy();
     expect(TIPS.userSuppressMinAnswers).toBe(
-      'How many times a user marks a sender as newsletter in Learn before Keepr skips that sender for them. 0 turns it off.',
+      'How many times a user marks a sender as automated or mass mail in Learn before Keepr skips that sender for them. 0 turns it off.',
     );
   });
 
