@@ -150,6 +150,29 @@ describe('the consent text', () => {
     expect(screen.getByRole('button', { name: CONSENT.deny })).toBeInTheDocument();
   });
 
+  it('states what the app reads, where it goes and what disconnects it, as approved (BACKLOG-4245)', async () => {
+    const { container } = await renderPage();
+    const text = container.textContent ?? '';
+    expect(text).toContain(
+      'It can read the deals you saved to Keepr Cloud: details, prices, commission, checklists (including private ones) and todos. ' +
+        'It can also read the people on each deal, with their names, companies, email addresses, phone numbers and notes. ' +
+        'It cannot read your emails, texts, files or contact list. ' +
+        'It cannot change, send or delete anything.',
+    );
+    expect(text).toContain(
+      "What it reads, including other people's contact details, is sent to Claude (Anthropic). " +
+        'What Claude (Anthropic) does with it is covered by your agreement with Claude (Anthropic).',
+    );
+    expect(text).toContain(
+      'Turning Keepr Cloud off deletes your online copy and disconnects every AI app. ' +
+        'Signing out does not disconnect them, including "Sign out all devices".',
+    );
+    expect(text).toContain("other people's contact details");
+    expect(text).toContain('including private ones');
+    expect(text).not.toContain('texts and emails waiting');
+    expect(text).not.toContain('{provider}');
+  });
+
   it('names the signed-in account directly above the buttons', async () => {
     const { container } = await renderPage();
     const line = screen.getByText(CONSENT.signedInAs(EMAIL));
