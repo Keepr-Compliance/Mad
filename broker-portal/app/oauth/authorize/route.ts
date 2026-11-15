@@ -30,7 +30,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const MAX_QUERY_BYTES = 4096;
-const BINDING_MAX_AGE_S = 600;
+/** Equal to the request lifetime set by mcp_authorize_begin (180 seconds). */
+const BINDING_MAX_AGE_S = 180;
 
 const AUTHORIZE_PARAMS = [
   'client_id',

@@ -16,7 +16,8 @@ export const ORIGIN = 'https://portal.test';
 export const PEPPER_B64URL = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8';
 export const PEPPER_BYTES = Buffer.from([...Array(32).keys()]);
 
-export const PORTAL_SECRET = 'portal-secret-fixture';
+/** 64 hex characters (32 bytes): meets the strength rule in lib/mcp/secretStrength.ts. */
+export const PORTAL_SECRET = '61fa7e492cb247ea2570fbee8eb5c539fe2e579b68bf3820fde9487332871c68';
 
 export const OAUTH_ENV = {
   MCP_ENABLED: 'true',
@@ -130,9 +131,9 @@ export const BINDING = `kpr_bd_${'B'.repeat(43)}`;
 /** request id shape of _mcp_b64url(uuid_send(gen_random_uuid())): 22 characters. */
 export const REQUEST_ID = 'AAAAAAAAAAAAAAAAAAAAAA';
 
-/** mcp_authorize_begin success, :524. */
+/** mcp_authorize_begin success, :530. */
 export function authorizeOk(requestId: string = REQUEST_ID) {
-  return { ok: true, request_id: requestId, expires_in: 600 };
+  return { ok: true, request_id: requestId, expires_in: 180 };
 }
 
 /** mcp_authorize_begin page refusal, :489/:495 (invalid_client), :499/:503 (temporarily_unavailable). */

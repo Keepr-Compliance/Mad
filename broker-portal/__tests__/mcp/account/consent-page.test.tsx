@@ -24,6 +24,10 @@ class Redirect extends Error {
   }
 }
 class NotFound extends Error {}
+jest.mock('@/components/sentry/ReplayOff', () => ({
+  // BACKLOG-4259: marks where the page mounts the replay stop (tested in replay-routes-4259.test.tsx)
+  ReplayOff: () => require('react').createElement('span', { 'data-testid': 'replay-off' }),
+}));
 jest.mock('next/navigation', () => ({
   redirect: (to: string) => {
     throw new Redirect(to);
@@ -136,8 +140,7 @@ describe('the consent text', () => {
     const text = container.textContent ?? '';
     for (const line of [
       CONSENT.lead('Claude (Anthropic)'),
-      CONSENT.returnTo('claude.ai'),
-      `${CONSENT.nameLabel}Claude`,
+      `${CONSENT.nameLabel}“Claude”${CONSENT.nameHost('claude.ai')}`,
       CONSENT.onlyIf('Claude (Anthropic)'),
       CONSENT.scope,
       CONSENT.agreement('Claude (Anthropic)'),
@@ -198,7 +201,7 @@ describe('the consent text', () => {
     expect(buttons()).toEqual([]);
   });
 
-  it('the app name is literal text inside <bdi>, after the provider and the return host', async () => {
+  it('the app name is literal text inside <bdi>, after the provider, with the return host after it on the same line', async () => {
     const name = '‮ppa <script>x</script>';
     mockRpc.mockResolvedValue({ data: viewOk({ client_name: name }), error: null });
     const { container } = await renderPage();
@@ -208,11 +211,35 @@ describe('the consent text', () => {
     expect(container.querySelector('script')).toBeNull();
     const text = container.textContent ?? '';
     const lead = text.indexOf(CONSENT.lead('Claude (Anthropic)'));
-    const host = text.indexOf(CONSENT.returnTo('claude.ai'));
+    const host = text.indexOf(CONSENT.nameHost('claude.ai'));
     const at = text.indexOf(name);
     expect(lead).toBeGreaterThanOrEqual(0);
-    expect(host).toBeGreaterThan(lead);
-    expect(at).toBeGreaterThan(host);
+    expect(at).toBeGreaterThan(lead);
+    expect(host).toBeGreaterThan(at);
+    const line = screen.getByTestId('consent-name-host');
+    expect(line).toContainElement(bdi as HTMLElement);
+    expect(line.textContent).toBe(`${CONSENT.nameLabel}“${name}”${CONSENT.nameHost('claude.ai')}`);
+  });
+
+  it('replaces_existing true → the replacement sentence, before the buttons', async () => {
+    mockRpc.mockResolvedValue({ data: viewOk({ replaces_existing: true }), error: null });
+    const { container } = await renderPage();
+    const note = screen.getByRole('note');
+    expect(note).toHaveTextContent(CONSENT.replaces('Claude (Anthropic)'));
+    const allow = screen.getByRole('button', { name: CONSENT.allow });
+    expect(note.compareDocumentPosition(allow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.textContent).toContain('You already connected Claude (Anthropic). Allowing this replaces that connection.');
+  });
+
+  it('mounts the replay stop once', async () => {
+    await renderPage();
+    expect(screen.getAllByTestId('replay-off')).toHaveLength(1);
+  });
+
+  it('replaces_existing false → no replacement sentence', async () => {
+    const { container } = await renderPage();
+    expect(screen.queryByRole('note')).toBeNull();
+    expect(container.textContent).not.toContain(CONSENT.replaces('Claude (Anthropic)'));
   });
 
   it('openai is labelled ChatGPT (OpenAI)', async () => {
@@ -243,6 +270,7 @@ describe('view refusals and malformed answers', () => {
   it('notice_version 2 → update message, no buttons', async () => {
     mockRpc.mockResolvedValue({ data: viewOk({ notice_version: 2 }), error: null });
     await renderPage();
+    expect(screen.getAllByTestId('replay-off')).toHaveLength(1);
     expect(screen.getByRole('alert')).toHaveTextContent(M_C.noticeVersion);
     expect(buttons()).toEqual([]);
   });
@@ -254,6 +282,8 @@ describe('view refusals and malformed answers', () => {
     ['another request id', viewOk({ request_id: 'B'.repeat(22) })],
     ['a wider scope', viewOk({ scope: 'mcp:read mcp:write' })],
     ['a short nonce', viewOk({ nonce: 'N'.repeat(42) })],
+    ['replaces_existing missing', (() => { const v: Record<string, unknown> = viewOk(); delete v.replaces_existing; return v; })()],
+    ['replaces_existing as a string', viewOk({ replaces_existing: 'true' })],
     ['an empty app name', viewOk({ client_name: '' })],
     ['an app name of 101 characters', viewOk({ client_name: 'x'.repeat(101) })],
     ['ok as a string', viewOk({ ok: 'true' })],

@@ -73,7 +73,17 @@ type Refused<C extends string> = { kind: 'refused'; error: C };
 const VIEW_ERRORS = ['not_signed_in', 'impersonating', 'disabled', 'request_invalid'] as const;
 type ViewError = (typeof VIEW_ERRORS)[number];
 
-const VIEW_KEYS = ['ok', 'request_id', 'client_name', 'provider', 'redirect_host', 'scope', 'notice_version', 'nonce'];
+const VIEW_KEYS = [
+  'ok',
+  'request_id',
+  'client_name',
+  'provider',
+  'redirect_host',
+  'scope',
+  'notice_version',
+  'nonce',
+  'replaces_existing',
+];
 
 interface ConsentView {
   kind: 'ok';
@@ -82,6 +92,8 @@ interface ConsentView {
   redirectHost: string;
   noticeVersion: number;
   nonce: string;
+  /** An active connection with the same redirect address is replaced when this request completes. */
+  replacesExisting: boolean;
 }
 
 type ViewResult = ConsentView | Refused<ViewError> | Transport;
@@ -98,7 +110,8 @@ function checkView(v: unknown, requestId: string): ViewResult {
       v.scope === 'mcp:read' &&
       typeof v.notice_version === 'number' &&
       Number.isInteger(v.notice_version) &&
-      isNonce(v.nonce)
+      isNonce(v.nonce) &&
+      typeof v.replaces_existing === 'boolean'
     ) {
       return {
         kind: 'ok',
@@ -107,6 +120,7 @@ function checkView(v: unknown, requestId: string): ViewResult {
         redirectHost: v.redirect_host,
         noticeVersion: v.notice_version,
         nonce: v.nonce,
+        replacesExisting: v.replaces_existing,
       };
     }
     return transport(null);
