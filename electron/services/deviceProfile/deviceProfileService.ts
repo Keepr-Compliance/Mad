@@ -358,6 +358,18 @@ export function createDeviceProfileService(deps: ServiceDeps): DeviceProfileServ
 
 let instance: DeviceProfileService | null = null;
 
+/**
+ * Runs started through the two hooks below that have not finished yet. Read
+ * only by __whenIdleForTests. Tracking adds no await and no branch to a run,
+ * and the derived promise from finally() is discarded, so a rejecting run
+ * still surfaces exactly as before.
+ */
+const inFlight = new Set<Promise<void>>();
+function track(run: Promise<void>): void {
+  inFlight.add(run);
+  void run.finally(() => inFlight.delete(run));
+}
+
 /** Lazily built so importing this module (from deviceService) loads nothing heavy. */
 function productionService(): DeviceProfileService {
   if (instance) return instance;
@@ -438,7 +450,7 @@ function productionService(): DeviceProfileService {
 /** registerDevice's hook. Fire-and-forget; never throws into registration. */
 export function onDeviceRegistered(userId: string, deviceId: string, reason: RegistrationReason, rowId: unknown): void {
   try {
-    void productionService().onDeviceRegistered(userId, deviceId, reason, rowId);
+    track(productionService().onDeviceRegistered(userId, deviceId, reason, rowId));
   } catch {
     // wiring failed (tests, early shutdown): registration is unaffected
   }
@@ -447,7 +459,7 @@ export function onDeviceRegistered(userId: string, deviceId: string, reason: Reg
 /** The privacy switches' hook (ccpaHandlers). */
 export function onPrivacyGateChanged(): void {
   try {
-    void productionService().onPrivacyGateChanged();
+    track(productionService().onPrivacyGateChanged());
   } catch {
     // never affects saving the setting
   }
@@ -464,4 +476,13 @@ export function getCountsState(): CountsState | null {
 
 export function __resetDeviceProfileServiceForTests(): void {
   instance = null;
+}
+
+/**
+ * Resolves once every run started through onDeviceRegistered /
+ * onPrivacyGateChanged has finished, including the state-file work each run
+ * awaits. Tests only: replaces fixed real-time sleeps around fs.promises work.
+ */
+export async function __whenIdleForTests(): Promise<void> {
+  while (inFlight.size > 0) await Promise.allSettled([...inFlight]);
 }
