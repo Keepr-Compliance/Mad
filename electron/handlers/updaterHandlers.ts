@@ -6,6 +6,7 @@
 
 import { ipcMain, app, shell } from "electron";
 import { autoUpdater } from "electron-updater";
+import { runAfterBetaEligibility } from "./betaUpdatesHandlers";
 import * as Sentry from "@sentry/electron/main";
 import * as path from "path";
 import * as fs from "fs";
@@ -144,7 +145,9 @@ export function registerUpdaterHandlers(): void {
       // Race the update check against a 15-second timeout
       const timeoutMs = 15000;
       const result = await Promise.race([
-        autoUpdater.checkForUpdates(),
+        // BACKLOG-4245: a stored-on beta user's eligibility is re-read first,
+        // inside this race; everyone else checks at once.
+        runAfterBetaEligibility(() => autoUpdater.checkForUpdates()),
         new Promise<null>((_, reject) =>
           setTimeout(() => reject(new Error(`Update check timed out after ${timeoutMs / 1000}s`)), timeoutMs)
         ),

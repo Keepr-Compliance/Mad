@@ -15,13 +15,34 @@ import {
   autoDownloadInPartial,
 } from "../services/updateDownloadPolicy";
 import {
-  applyBetaUpdates,
-  applyBetaUpdatesFor,
   betaUpdatesChangeCount,
   betaUpdatesFromPreferences,
   betaUpdatesInPartial,
+  applyBetaUpdatesOff,
+  betaUpdatesSessionEpoch,
+  clearStoredBetaUpdates,
+  isLatestBetaUpdatesWrite,
   noteBetaUpdatesChange,
+  noteBetaUpdatesWriteStart,
+  recordStoredBetaUpdates,
 } from "../services/updateChannelPolicy";
+import sessionService from "../services/sessionService";
+
+/**
+ * BACKLOG-4245: whether `userId` is the user the session file names. The
+ * beta-updates value is recorded only for that user. Never throws.
+ */
+async function isSessionUser(userId: string): Promise<boolean> {
+  try {
+    const peek = await sessionService.peekSession();
+    if (peek.status !== "ok") return false;
+    const session = peek.session;
+    if (session.expiresAt && Date.now() > session.expiresAt) return false;
+    return session.user?.id === userId;
+  } catch {
+    return false;
+  }
+}
 
 // Import validation utilities
 import {
@@ -71,9 +92,12 @@ export function registerPreferenceHandlers(): void {
 
         // BACKLOG-3469: the read value drives the updater (default on).
         applyAutoDownload(autoDownloadFromPreferences(preferences));
-        // BACKLOG-4245: the read value drives prereleases (default off).
-        if (betaUpdatesChangeCount() === betaChangesAtRead) {
-          applyBetaUpdatesFor(validatedUserId, betaUpdatesFromPreferences(preferences));
+        // BACKLOG-4245: the read value is recorded for the session user only.
+        if (
+          (await isSessionUser(validatedUserId)) &&
+          betaUpdatesChangeCount() === betaChangesAtRead
+        ) {
+          recordStoredBetaUpdates(validatedUserId, betaUpdatesFromPreferences(preferences));
         }
 
         return {
@@ -101,8 +125,11 @@ export function registerPreferenceHandlers(): void {
               { copiedAt: copy.copiedAt },
             );
             applyAutoDownload(autoDownloadFromPreferences(copy.preferences));
-            if (betaUpdatesChangeCount() === betaChangesAtRead) {
-              applyBetaUpdatesFor(validatedUserId, betaUpdatesFromPreferences(copy.preferences));
+            if (
+              (await isSessionUser(validatedUserId)) &&
+              betaUpdatesChangeCount() === betaChangesAtRead
+            ) {
+              recordStoredBetaUpdates(validatedUserId, betaUpdatesFromPreferences(copy.preferences));
             }
             return {
               success: true,
@@ -113,7 +140,7 @@ export function registerPreferenceHandlers(): void {
           }
         }
         // BACKLOG-4245: no value could be read: prereleases off.
-        applyBetaUpdates(false);
+        clearStoredBetaUpdates();
         return {
           success: false,
           error: error instanceof Error ? error.message : "Unknown error",
@@ -206,11 +233,22 @@ export function registerPreferenceHandlers(): void {
         // BACKLOG-4245: turning beta updates off takes effect at once; turning
         // them on takes effect only once the cloud save has succeeded.
         const betaUpdates = betaUpdatesInPartial(sanitizedPartialPreferences);
-        const betaUpdatesWrite = betaUpdates === null ? 0 : noteBetaUpdatesChange();
+        const betaUpdatesWrite = betaUpdates === null ? null : noteBetaUpdatesWriteStart();
         if (betaUpdates === false) {
-          applyBetaUpdatesFor(validatedUserId, false);
+          applyBetaUpdatesOff();
         }
         try {
+          const betaForSessionUser =
+            betaUpdatesWrite !== null && (await isSessionUser(validatedUserId));
+          if (
+            betaUpdates === false &&
+            betaForSessionUser &&
+            betaUpdatesWrite !== null &&
+            betaUpdatesWrite.epoch === betaUpdatesSessionEpoch()
+          ) {
+            recordStoredBetaUpdates(validatedUserId, false);
+          }
+
           // Get existing preferences
           const existingPreferences =
             (await supabaseService.getPreferences(validatedUserId)) ?? {};
@@ -229,8 +267,13 @@ export function registerPreferenceHandlers(): void {
 
           // Applied only if nothing named the preference, and no session
           // change happened, since this call started.
-          if (betaUpdates === true && betaUpdatesWrite === betaUpdatesChangeCount()) {
-            applyBetaUpdatesFor(validatedUserId, true);
+          if (
+            betaUpdates === true &&
+            betaForSessionUser &&
+            betaUpdatesWrite !== null &&
+            isLatestBetaUpdatesWrite(betaUpdatesWrite)
+          ) {
+            recordStoredBetaUpdates(validatedUserId, true);
           }
 
           return {
