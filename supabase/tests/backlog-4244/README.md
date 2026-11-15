@@ -51,17 +51,26 @@ Named controls:
   observation, not pass/fail.
 
 Masking (`_mcp_mask`, `_mcp_clean`):
-- Joiners U+200C and U+200D that stand between two digits are removed before masking; elsewhere
-  (inside words, inside emoji sequences) they are kept.
+- Soft hyphen U+00AD, combining grapheme joiner U+034F, joiners U+200C and U+200D and variation
+  selectors U+FE00-U+FE0F that stand between two digits are removed before masking; elsewhere (inside
+  words, inside emoji sequences, a keycap such as 1 + U+FE0F + U+20E3) they are kept. Digits written as
+  keycap emoji are not masked.
 - A run of digit groups joined by single spaces or dashes is replaced whole when any run of
   consecutive groups in it holds 13 to 19 digits and passes the Luhn check. Measured share of random
   digit runs replaced (`OBS_false_positives`): about 10% for 13-16 digits plain or grouped by 4, and for
   17-19 digits plain; about 27% for 17-19 digits grouped by 4.
 - Not replaced: groups joined by dots, by two spaces or by " - ", and a card with more digits glued on
   without a separator (one unbroken run of 20 or more digits).
-- `_mcp_clean` masks only the first p_max + 40 characters (after removing invisible characters and
-  joiners between digits) and cuts to p_max. When the text is longer, a run of digit groups reaching the
-  end of those characters is dropped and the result ends in "…".
+- `_mcp_clean` removes invisible characters from the whole field, then works on its first
+  8 * (p_max + 40) characters: removes the characters above where they stand between digits, masks the
+  first p_max + 40 characters and cuts to p_max.
+- A field longer than its limit (more than p_max + 40 characters after that removal, or more than
+  8 * (p_max + 40) characters before it) loses the run of digits, spaces, dashes and those characters
+  that reaches the end of its first p_max + 40 characters, and ends in "…". Digits that would have been
+  visible can be dropped with it (for example a list of phone numbers cut at the limit).
+- Cost limits: removal of invisible characters runs on the whole field (about 20 ms per million
+  characters, measured); everything else runs on at most 8 * (p_max + 40) characters. Up to 100 people
+  and 500 items are cleaned per call before the 60 KB budget is applied (`OBS_timing` in the results).
 - Tag characters U+E0000-U+E007F are removed, so a subdivision flag (black flag with tag characters)
   shows as a plain black flag; regional-indicator country flags are unchanged.
 

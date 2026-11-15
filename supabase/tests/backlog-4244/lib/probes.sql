@@ -599,6 +599,7 @@ BEGIN
   fam := 'family ' || chr(128104) || zwj || chr(128105) || zwj || chr(128103) || ' 12' || zwj || ' end';
   per := 'word ' || chr(1605) || chr(1740) || zwnj || chr(1582) || chr(1608) || chr(1575) || chr(1607) || chr(1605);
   RETURN pg_temp.all_of(
+    pg_temp.p_joiners_more(),
     pg_temp.pass(public._mcp_mask(a) = 'card [number hidden by Keepr] x' AND public._mcp_clean(a, 1000) = 'card [number hidden by Keepr] x', 'ZWJ after first digit ' || public._mcp_mask(a)),
     pg_temp.pass(public._mcp_mask(b) = 'card [number hidden by Keepr] x' AND public._mcp_clean(b, 1000) = 'card [number hidden by Keepr] x', 'ZWNJ between every digit ' || public._mcp_mask(b)),
     pg_temp.pass(public._mcp_clean(c, 1000) = 'card [number hidden by Keepr] x', 'mixed between groups ' || public._mcp_clean(c, 1000)),
@@ -664,14 +665,17 @@ END $h$;
 -- F-2: cost. 300,000 characters of '1 1 1 ...' through _mcp_clean (p_max 1000) and _mcp_txt (p_max 320)
 CREATE TEMP TABLE p4244_timing (k text, ms numeric);
 CREATE FUNCTION pg_temp.p_clean_timing() RETURNS text LANGUAGE plpgsql AS $h$
-DECLARE x text := repeat('1 ', 150000); t0 timestamptz; o text; a numeric; b numeric; c numeric;
+DECLARE x text := repeat('1 ', 150000); t0 timestamptz; o text; a numeric; b numeric; c numeric; j numeric;
 BEGIN
   t0 := clock_timestamp(); o := public._mcp_clean(x, 1000); a := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
   t0 := clock_timestamp(); o := public._mcp_txt(x, 320); b := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
   t0 := clock_timestamp(); o := public._mcp_clean(repeat('4111 1111 1111 1111 ', 15000), 1000); c := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
+  t0 := clock_timestamp(); o := public._mcp_clean(repeat('1' || chr(8205), 500000), 1000); j := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
   DELETE FROM pg_temp.p4244_timing;
-  INSERT INTO pg_temp.p4244_timing VALUES ('clean_300k_single_digits_ms', a), ('txt_300k_ms', b), ('clean_300k_card_groups_ms', c);
-  RETURN pg_temp.pass(a < 200 AND b < 200 AND c < 200, format('clean %s ms, txt %s ms, clean card groups %s ms', a, b, c));
+  INSERT INTO pg_temp.p4244_timing VALUES ('clean_300k_single_digits_ms', a), ('txt_300k_ms', b), ('clean_300k_card_groups_ms', c),
+    ('clean_1m_digit_joiner_ms', j);
+  RETURN pg_temp.pass(a < 200 AND b < 200 AND c < 200 AND j < 300 AND o = '…',
+                      format('clean %s ms, txt %s ms, clean card groups %s ms, clean 1M digit+joiner %s ms (%s)', a, b, c, j, left(o, 20)));
 END $h$;
 CREATE FUNCTION pg_temp.obs_timing() RETURNS text LANGUAGE sql AS $h$
   SELECT jsonb_object_agg(k, ms)::text FROM pg_temp.p4244_timing
@@ -690,3 +694,70 @@ BEGIN
     pg_temp.pass(public._mcp_strip(us) = us, 'regional-indicator flag'),
     pg_temp.pass(public._mcp_strip(eng) = chr(127988), 'subdivision flag'));
 END $h$;
+
+-- G-2: soft hyphen, combining grapheme joiner and variation selectors between digits do not hide a
+-- card or an SSN; text and emoji that use them keep them; keycap digits stay as they are
+CREATE FUNCTION pg_temp.p_joiners_more() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE shy text := chr(173); cgj text := chr(847); vs16 text := chr(65039); vs1 text := chr(65024); zwj text := chr(8205); zwnj text := chr(8204);
+        a text; b text; c text; d text; e text; f text; g text; heart text; keys text; one_key text;
+BEGIN
+  a := 'card 4111' || shy || '1111' || shy || '1111' || shy || '1111 x';
+  b := 'card ' || array_to_string(regexp_split_to_array('4111111111111111', ''), cgj) || ' x';
+  c := 'card 4' || vs16 || '111 1111 1111 111' || vs1 || '1 x';
+  d := 'card 4' || zwj || vs16 || '111' || shy || ' 1111 ' || cgj || zwnj || '1111 1111 x';
+  e := 'ssn 123' || shy || '-45-6' || vs16 || '789 x';
+  f := 'co' || shy || 'operate';
+  heart := 'love ' || chr(10084) || vs16 || ' 2 ' || chr(10084) || vs16;
+  one_key := 'press 1' || vs16 || chr(8419) || ' now';
+  keys := 'code ' || (SELECT string_agg(ch || vs16 || chr(8419), '' ORDER BY o) FROM regexp_split_to_table('4111111111111111', '') WITH ORDINALITY t(ch, o));
+  RETURN pg_temp.all_of(
+    pg_temp.pass(public._mcp_clean(a, 1000) = 'card [number hidden by Keepr] x', 'soft hyphens ' || public._mcp_clean(a, 1000)),
+    pg_temp.pass(public._mcp_clean(b, 1000) = 'card [number hidden by Keepr] x', 'CGJ between every digit ' || public._mcp_clean(b, 1000)),
+    pg_temp.pass(public._mcp_clean(c, 1000) = 'card [number hidden by Keepr] x', 'variation selectors ' || public._mcp_clean(c, 1000)),
+    pg_temp.pass(public._mcp_clean(d, 1000) = 'card [number hidden by Keepr] x', 'mixed ' || public._mcp_clean(d, 1000)),
+    pg_temp.pass(public._mcp_clean(e, 1000) = 'ssn [number hidden by Keepr] x', 'ssn ' || public._mcp_clean(e, 1000)),
+    pg_temp.pass(public._mcp_clean(f, 1000) = f, 'soft hyphen in a word'),
+    pg_temp.pass(public._mcp_clean(heart, 1000) = heart, 'emoji with a variation selector'),
+    pg_temp.pass(public._mcp_clean(one_key, 1000) = one_key, 'one keycap'),
+    pg_temp.pass(public._mcp_clean(keys, 1000) = keys, 'keycap digits kept as written'));
+END $h$;
+
+-- G-1: joiner-heavy layouts at the cut. Families: A a card with n joiners between its first two digits;
+-- B an SSN with n joiners after its first digit, then a card (the card starts far beyond p_max + 40 in
+-- the stored text and near the start after un-joining); C a card with n joiners between every digit.
+-- Joiners: U+200D, U+200C, U+FE0F, U+00AD, U+034F, and the mix U+200D U+FE0F U+00AD. Starts 1,
+-- p_max - 10, p_max - 1, p_max + 1, then 3,000 letters. No digit may be visible; output at most p_max.
+CREATE TEMP TABLE p4244_wj (outcome text, n int);
+CREATE FUNCTION pg_temp.p_window_joiners() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE pm int; fam text; jn int; jj text; st int; card text; s text; o text; c16 text := pg_temp.luhn_card(16); bad text := ''; cnt int := 0;
+BEGIN
+  DELETE FROM pg_temp.p4244_wj;
+  FOREACH pm IN ARRAY ARRAY[20, 50, 100, 200, 300, 1000] LOOP
+    FOREACH fam IN ARRAY ARRAY['A', 'B', 'C'] LOOP
+      FOREACH jn IN ARRAY ARRAY[1, 60, 1000, 5000] LOOP
+        CONTINUE WHEN fam = 'C' AND jn > 60;
+        FOREACH jj IN ARRAY ARRAY[chr(8205), chr(8204), chr(65039), chr(173), chr(847), chr(8205) || chr(65039) || chr(173)] LOOP
+          card := CASE fam WHEN 'A' THEN left(c16, 1) || repeat(jj, jn) || substr(c16, 2)
+                           WHEN 'B' THEN '1' || repeat(jj, jn) || '23-45-6789 ' || pg_temp.grouped(c16)
+                           ELSE array_to_string(regexp_split_to_array(c16, ''), repeat(jj, jn)) END;
+          FOREACH st IN ARRAY ARRAY[1, pm - 10, pm - 1, pm + 1] LOOP
+            CONTINUE WHEN st < 1;
+            s := repeat('a', st - 1) || card || ' ' || repeat('b', 3000);
+            o := public._mcp_clean(s, pm);
+            cnt := cnt + 1;
+            IF o ~ '\d' OR char_length(o) > pm THEN
+              bad := bad || format('%s/%s/%s/%s/%s -> %s; ', pm, fam, jn, ascii(jj), st, right(o, 40));
+              INSERT INTO pg_temp.p4244_wj VALUES ('DIGITS VISIBLE', 1);
+            ELSE
+              INSERT INTO pg_temp.p4244_wj VALUES (CASE WHEN position('[number hidden by Keepr]' IN o) > 0 THEN 'masked' ELSE 'not visible (cut)' END, 1);
+            END IF;
+          END LOOP;
+        END LOOP;
+      END LOOP;
+    END LOOP;
+  END LOOP;
+  RETURN pg_temp.pass(bad = '' AND cnt = 1440, 'cases ' || cnt || ' ' || left(bad, 1500));
+END $h$;
+CREATE FUNCTION pg_temp.obs_window_joiners() RETURNS text LANGUAGE sql AS $h$
+  SELECT jsonb_object_agg(outcome, c)::text FROM (SELECT outcome, sum(n) AS c FROM pg_temp.p4244_wj GROUP BY outcome) x
+$h$;
