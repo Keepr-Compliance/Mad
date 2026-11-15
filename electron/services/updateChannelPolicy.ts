@@ -14,10 +14,18 @@
  * - main.ts applies the off value when the updater is configured, before any
  *   update check can run; the startup read then applies the stored value
  *   before the startup check (updateDownloadPolicy.runStartupUpdateCheck).
+ * - A sign-out, or a session for a different user, applies off at once
+ *   (installBetaUpdatesSessionReset). A session re-saved for the user whose
+ *   value is applied (token refresh) changes nothing. The next good read for
+ *   the new user applies that user's value.
+ * - Every write naming the preference (start and finish) and every session
+ *   change advances one counter. A read applies its value only if the counter
+ *   did not move while it ran.
  */
 
 import { autoUpdater } from "electron-updater";
 import logService from "./logService";
+import { onSessionChanged, type SessionChange } from "./authEvents";
 
 const MODULE = "UpdateChannelPolicy";
 
@@ -88,4 +96,66 @@ export function applyBetaUpdates(
       error: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+let changeCounter = 0;
+/** The user whose value was last applied (null: none, or signed out). */
+let appliedForUser: string | null = null;
+
+/** The current value of the change counter (capture before a read). */
+export function betaUpdatesChangeCount(): number {
+  return changeCounter;
+}
+
+/** Advance the change counter; returns the new value. */
+export function noteBetaUpdatesChange(): number {
+  changeCounter += 1;
+  return changeCounter;
+}
+
+/**
+ * Apply a value read or written for `userId`, and remember whose it is.
+ * Never throws.
+ */
+export function applyBetaUpdatesFor(
+  userId: string | null,
+  value: boolean,
+  updater: PrereleaseTarget = autoUpdater,
+): void {
+  appliedForUser = userId;
+  applyBetaUpdates(value, updater);
+}
+
+/**
+ * A session change: off at once unless it is the same user's session saved
+ * again. Never throws.
+ */
+export function handleSessionChangeForBetaUpdates(
+  change: SessionChange,
+  updater: PrereleaseTarget = autoUpdater,
+): void {
+  try {
+    const sameUser =
+      change.kind === "saved" &&
+      typeof change.userId === "string" &&
+      change.userId.length > 0 &&
+      change.userId === appliedForUser;
+    if (sameUser) return;
+    noteBetaUpdatesChange();
+    appliedForUser = null;
+    applyBetaUpdates(false, updater);
+  } catch {
+    // applyBetaUpdates never throws; nothing else here can.
+  }
+}
+
+/** Subscribe the reset to session changes. Returns an unsubscribe. */
+export function installBetaUpdatesSessionReset(updater?: PrereleaseTarget): () => void {
+  return onSessionChanged((change) => handleSessionChangeForBetaUpdates(change, updater));
+}
+
+/** Tests only. */
+export function resetBetaUpdatesStateForTests(): void {
+  changeCounter = 0;
+  appliedForUser = null;
 }

@@ -177,7 +177,10 @@ import {
   runStartupUpdateCheck,
 } from "./services/updateDownloadPolicy";
 // BACKLOG-4245: the beta-updates preference drives autoUpdater.allowPrerelease.
-import { applyBetaUpdates } from "./services/updateChannelPolicy";
+import {
+  applyBetaUpdates,
+  installBetaUpdatesSessionReset,
+} from "./services/updateChannelPolicy";
 // Import constants
 import {
   WINDOW_CONFIG,
@@ -1686,6 +1689,8 @@ app.whenReady().then(async () => {
   // (startup, periodic or manual) can run. The stored beta-updates preference
   // is applied later by the startup read and by preferences:get / :update.
   applyBetaUpdates(false, autoUpdater);
+  // BACKLOG-4245: sign-out or a different user's session turns prereleases off.
+  installBetaUpdatesSessionReset(autoUpdater);
 
   // Auto-updater event handlers (TASK-2330: comprehensive Sentry monitoring)
   autoUpdater.on("checking-for-update", () => {

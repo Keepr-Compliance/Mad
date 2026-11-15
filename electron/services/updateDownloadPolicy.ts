@@ -21,7 +21,8 @@ import logService from "./logService";
 import sessionService from "./sessionService";
 import { readPreferencesCopy } from "./preferencesMirror";
 import {
-  applyBetaUpdates,
+  applyBetaUpdatesFor,
+  betaUpdatesChangeCount,
   betaUpdatesFromPreferences,
   type PrereleaseTarget,
 } from "./updateChannelPolicy";
@@ -82,6 +83,8 @@ export function applyAutoDownload(
 export interface StoredUpdatePreferences {
   autoDownload: boolean;
   betaUpdates: boolean;
+  /** The user whose copy was read; null when none was. */
+  userId?: string | null;
 }
 
 /** Used for every missing leg, a slow read and an error. */
@@ -103,6 +106,7 @@ async function readStoredValues(): Promise<StoredUpdatePreferences> {
   return {
     autoDownload: autoDownloadFromPreferences(copy.preferences),
     betaUpdates: betaUpdatesFromPreferences(copy.preferences),
+    userId,
   };
 }
 
@@ -164,13 +168,18 @@ export async function runStartupUpdateCheck<T>(
   timeoutMs: number = STORED_AUTO_DOWNLOAD_TIMEOUT_MS,
 ): Promise<T> {
   let stored: StoredUpdatePreferences = { ...STORED_UPDATE_DEFAULTS };
+  const betaChangesAtRead = betaUpdatesChangeCount();
   try {
     stored = await readStoredUpdatePreferences(timeoutMs);
   } catch {
     stored = { ...STORED_UPDATE_DEFAULTS };
   }
   applyAutoDownload(stored.autoDownload, updater);
-  applyBetaUpdates(stored.betaUpdates, updater as PrereleaseTarget);
+  // A write or a session change during the read makes the stored value
+  // stale: keep what they applied (a session change applies off).
+  if (betaUpdatesChangeCount() === betaChangesAtRead) {
+    applyBetaUpdatesFor(stored.userId ?? null, stored.betaUpdates, updater as PrereleaseTarget);
+  }
   return runCheck();
 }
 

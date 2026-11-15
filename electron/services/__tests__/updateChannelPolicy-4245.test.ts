@@ -16,6 +16,10 @@
  * B6  runtime change: preferences:update / preferences:get re-apply it
  * B7  main.ts wiring (text): the off value is applied when the updater is
  *     configured, before the first check entry point; channel never assigned
+ * B8  session change: sign-out or another user's session applies off at once;
+ *     the same user's session saved again (token refresh) changes nothing
+ * B9  a read that ran while a write or a session change happened does not
+ *     apply its (stale) value
  *
  * Updater stand-ins are seeded from electron-updater 6.8.9's constructor
  * defaults (AppUpdater.js:109 autoDownload true, :125/:218 allowPrerelease =
@@ -133,7 +137,10 @@ import {
   applyBetaUpdates,
   betaUpdatesFromPreferences,
   betaUpdatesInPartial,
+  installBetaUpdatesSessionReset,
+  resetBetaUpdatesStateForTests,
 } from "../updateChannelPolicy";
+import { emitSessionChanged } from "../authEvents";
 import { applyAutoDownload, runStartupUpdateCheck } from "../updateDownloadPolicy";
 import { registerPreferenceHandlers } from "../../handlers/preferenceHandlers";
 import supabaseService from "../supabaseService";
@@ -173,10 +180,12 @@ async function baseStartup(updater: ReturnType<typeof makeUpdater>, storedAutoDo
 
 beforeAll(() => {
   registerPreferenceHandlers();
+  installBetaUpdatesSessionReset();
 });
 
 beforeEach(() => {
   jest.clearAllMocks();
+  resetBetaUpdatesStateForTests();
   mockStored = null;
   mockPeekImpl = null;
   mockUpdater = makeUpdater("2.49.0");
@@ -486,6 +495,10 @@ function productionSources(dir: string): string[] {
 }
 
 describe("B7 main.ts wiring (text)", () => {
+  it("the session reset is installed next to the off value", () => {
+    expect(MAIN).toMatch(/applyBetaUpdates\(false, autoUpdater\);[\s\S]{0,200}?installBetaUpdatesSessionReset\(autoUpdater\);/);
+  });
+
   it("the off value is applied right after the updater is configured", () => {
     expect(MAIN).toMatch(/autoUpdater\.logger = log;[\s\S]{0,400}?applyBetaUpdates\(false, autoUpdater\);/);
   });
@@ -514,5 +527,175 @@ describe("B7 main.ts wiring (text)", () => {
     expect(assigns.test("autoUpdater.channel === null")).toBe(false);
     const hits = files.filter((f) => assigns.test(fs.readFileSync(f, "utf8")));
     expect(hits).toEqual([]);
+  });
+});
+
+/** A promise the test resolves later. */
+function held<T>() {
+  let resolve!: (v: T) => void;
+  const promise = new Promise<T>((r) => { resolve = r; });
+  return { promise, resolve };
+}
+
+async function flush() {
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+}
+
+async function turnOn(userId: string) {
+  cloud.getPreferences.mockResolvedValueOnce({});
+  cloud.syncPreferences.mockResolvedValueOnce(undefined);
+  await mockHandles["preferences:update"](event, userId, { updates: { betaUpdates: true } });
+  expect(mockUpdater.allowPrerelease).toBe(true);
+}
+
+describe("B8 session change", () => {
+  it("on, then signed out -> off", async () => {
+    await turnOn(USER);
+    emitSessionChanged({ kind: "cleared", userId: null });
+    expect(mockUpdater.allowPrerelease).toBe(false);
+    expect(mockUpdater.allowDowngrade).toBe(false);
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ["absent", {}],
+    ["false", { updates: { betaUpdates: false } }],
+  ])("A on, then B signs in with the preference %s -> off, and off after B's read", async (_l, bBag) => {
+    await turnOn(USER);
+    emitSessionChanged({ kind: "saved", userId: OTHER_USER });
+    expect(mockUpdater.allowPrerelease).toBe(false);
+    cloud.getPreferences.mockResolvedValueOnce(bBag);
+    await mockHandles["preferences:get"](event, OTHER_USER);
+    expect(mockUpdater.allowPrerelease).toBe(false);
+  });
+
+  it("A on, then B signs in with B's preference on -> off until B's read, then on", async () => {
+    await turnOn(USER);
+    emitSessionChanged({ kind: "saved", userId: OTHER_USER });
+    expect(mockUpdater.allowPrerelease).toBe(false);
+    cloud.getPreferences.mockResolvedValueOnce({ updates: { betaUpdates: true } });
+    await mockHandles["preferences:get"](event, OTHER_USER);
+    expect(mockUpdater.allowPrerelease).toBe(true);
+  });
+
+  it("a session saved with no user -> off", async () => {
+    await turnOn(USER);
+    emitSessionChanged({ kind: "saved", userId: null });
+    expect(mockUpdater.allowPrerelease).toBe(false);
+  });
+
+  it("same-user refresh after an update turned it on -> unchanged", async () => {
+    await turnOn(USER);
+    emitSessionChanged({ kind: "saved", userId: USER });
+    expect(mockUpdater.allowPrerelease).toBe(true);
+  });
+
+  it("same-user refresh after a read turned it on -> unchanged", async () => {
+    cloud.getPreferences.mockResolvedValueOnce({ updates: { betaUpdates: true } });
+    await mockHandles["preferences:get"](event, USER);
+    expect(mockUpdater.allowPrerelease).toBe(true);
+    emitSessionChanged({ kind: "saved", userId: USER });
+    expect(mockUpdater.allowPrerelease).toBe(true);
+  });
+
+  it("same-user refresh after the startup read turned it on -> unchanged", async () => {
+    mockStored = sessionWith({ updates: { betaUpdates: true } });
+    await startup(mockUpdater, true);
+    expect(mockUpdater.allowPrerelease).toBe(true);
+    emitSessionChanged({ kind: "saved", userId: USER });
+    expect(mockUpdater.allowPrerelease).toBe(true);
+  });
+
+  it("A's read still running when A signs out -> stays off when it returns on", async () => {
+    const read = held<Record<string, unknown>>();
+    cloud.getPreferences.mockImplementationOnce(() => read.promise);
+    const get = mockHandles["preferences:get"](event, USER) as Promise<unknown>;
+    await flush();
+    emitSessionChanged({ kind: "cleared", userId: null });
+    read.resolve({ updates: { betaUpdates: true } });
+    await get;
+    expect(mockUpdater.allowPrerelease).toBe(false);
+  });
+
+  it("A's turn-on save still running when A signs out -> stays off", async () => {
+    cloud.getPreferences.mockResolvedValueOnce({});
+    const save = held<void>();
+    cloud.syncPreferences.mockImplementationOnce(() => save.promise);
+    const update = mockHandles["preferences:update"](event, USER, { updates: { betaUpdates: true } }) as Promise<unknown>;
+    await flush();
+    emitSessionChanged({ kind: "cleared", userId: null });
+    save.resolve(undefined);
+    await update;
+    expect(mockUpdater.allowPrerelease).toBe(false);
+  });
+});
+
+describe("B9 a read racing a write", () => {
+  it("get reads on, an off update completes, the get returns -> off", async () => {
+    applyBetaUpdates(true, mockUpdater);
+    const read = held<Record<string, unknown>>();
+    cloud.getPreferences.mockImplementationOnce(() => read.promise);
+    const get = mockHandles["preferences:get"](event, USER) as Promise<unknown>;
+    await flush();
+    cloud.getPreferences.mockResolvedValueOnce({ updates: { betaUpdates: true } });
+    cloud.syncPreferences.mockResolvedValueOnce(undefined);
+    await mockHandles["preferences:update"](event, USER, { updates: { betaUpdates: false } });
+    expect(mockUpdater.allowPrerelease).toBe(false);
+    read.resolve({ updates: { betaUpdates: true } });
+    await get;
+    expect(mockUpdater.allowPrerelease).toBe(false);
+  });
+
+  it("get started before an on update; on saved; the get returns off -> stays on", async () => {
+    const read = held<Record<string, unknown>>();
+    cloud.getPreferences.mockImplementationOnce(() => read.promise);
+    const get = mockHandles["preferences:get"](event, USER) as Promise<unknown>;
+    await flush();
+    await turnOn(USER);
+    read.resolve({});
+    await get;
+    expect(mockUpdater.allowPrerelease).toBe(true);
+  });
+
+  it("get started during an on update (before its save finished) and returns off -> stays on", async () => {
+    cloud.getPreferences.mockResolvedValueOnce({});
+    const save = held<void>();
+    cloud.syncPreferences.mockImplementationOnce(() => save.promise);
+    const update = mockHandles["preferences:update"](event, USER, { updates: { betaUpdates: true } }) as Promise<unknown>;
+    await flush();
+    const read = held<Record<string, unknown>>();
+    cloud.getPreferences.mockImplementationOnce(() => read.promise);
+    const get = mockHandles["preferences:get"](event, USER) as Promise<unknown>;
+    await flush();
+    save.resolve(undefined);
+    await update;
+    expect(mockUpdater.allowPrerelease).toBe(true);
+    read.resolve({});
+    await get;
+    expect(mockUpdater.allowPrerelease).toBe(true);
+  });
+
+  it("startup read of a stored on, an off update completes meanwhile -> off at the check", async () => {
+    let release!: (v: unknown) => void;
+    mockPeekImpl = () => new Promise((r) => { release = r; });
+    const done = runStartupUpdateCheck(mockUpdater, () => mockUpdater.checkForUpdates(), 5_000);
+    await flush();
+    cloud.getPreferences.mockResolvedValueOnce({ updates: { betaUpdates: true } });
+    cloud.syncPreferences.mockResolvedValueOnce(undefined);
+    await mockHandles["preferences:update"](event, USER, { updates: { betaUpdates: false } });
+    mockStored = sessionWith({ updates: { betaUpdates: true } });
+    release({ status: "ok", session: mockStored });
+    await done;
+    const atCheck = mockUpdater.log.filter(([k]) => k === "checkForUpdates").map(([, st]) => st);
+    expect(atCheck).toEqual([expect.objectContaining({ allowPrerelease: false })]);
+  });
+
+  it("a read with no write or session change during it still applies", async () => {
+    const read = held<Record<string, unknown>>();
+    cloud.getPreferences.mockImplementationOnce(() => read.promise);
+    const get = mockHandles["preferences:get"](event, USER) as Promise<unknown>;
+    await flush();
+    read.resolve({ updates: { betaUpdates: true } });
+    await get;
+    expect(mockUpdater.allowPrerelease).toBe(true);
   });
 });
