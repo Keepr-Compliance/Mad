@@ -14,6 +14,14 @@ import {
   autoDownloadFromPreferences,
   autoDownloadInPartial,
 } from "../services/updateDownloadPolicy";
+import {
+  applyBetaUpdates,
+  applyBetaUpdatesFor,
+  betaUpdatesChangeCount,
+  betaUpdatesFromPreferences,
+  betaUpdatesInPartial,
+  noteBetaUpdatesChange,
+} from "../services/updateChannelPolicy";
 
 // Import validation utilities
 import {
@@ -48,17 +56,25 @@ export function registerPreferenceHandlers(): void {
       userId: string,
     ): Promise<PreferenceResponse> => {
       let validatedUserId: string | null = null;
+      let betaChangesAtRead = -1;
       try {
         logService.debug("[Preferences] Getting preferences", "Preferences", { userId });
 
         // Validate input
         validatedUserId = validateUserId(userId)!;
+        // BACKLOG-4245: a write naming the preference, or a session change,
+        // while this read runs makes its beta value stale.
+        betaChangesAtRead = betaUpdatesChangeCount();
 
         const preferences =
           (await supabaseService.getPreferences(validatedUserId)) ?? {};
 
         // BACKLOG-3469: the read value drives the updater (default on).
         applyAutoDownload(autoDownloadFromPreferences(preferences));
+        // BACKLOG-4245: the read value drives prereleases (default off).
+        if (betaUpdatesChangeCount() === betaChangesAtRead) {
+          applyBetaUpdatesFor(validatedUserId, betaUpdatesFromPreferences(preferences));
+        }
 
         return {
           success: true,
@@ -85,6 +101,9 @@ export function registerPreferenceHandlers(): void {
               { copiedAt: copy.copiedAt },
             );
             applyAutoDownload(autoDownloadFromPreferences(copy.preferences));
+            if (betaUpdatesChangeCount() === betaChangesAtRead) {
+              applyBetaUpdatesFor(validatedUserId, betaUpdatesFromPreferences(copy.preferences));
+            }
             return {
               success: true,
               preferences: copy.preferences,
@@ -93,6 +112,8 @@ export function registerPreferenceHandlers(): void {
             };
           }
         }
+        // BACKLOG-4245: no value could be read: prereleases off.
+        applyBetaUpdates(false);
         return {
           success: false,
           error: error instanceof Error ? error.message : "Unknown error",
@@ -182,27 +203,44 @@ export function registerPreferenceHandlers(): void {
         if (autoDownload !== null) {
           applyAutoDownload(autoDownload);
         }
+        // BACKLOG-4245: turning beta updates off takes effect at once; turning
+        // them on takes effect only once the cloud save has succeeded.
+        const betaUpdates = betaUpdatesInPartial(sanitizedPartialPreferences);
+        const betaUpdatesWrite = betaUpdates === null ? 0 : noteBetaUpdatesChange();
+        if (betaUpdates === false) {
+          applyBetaUpdatesFor(validatedUserId, false);
+        }
+        try {
+          // Get existing preferences
+          const existingPreferences =
+            (await supabaseService.getPreferences(validatedUserId)) ?? {};
 
-        // Get existing preferences
-        const existingPreferences =
-          (await supabaseService.getPreferences(validatedUserId)) ?? {};
+          // Merge with new preferences (deep merge for nested objects)
+          const updatedPreferences = deepMerge(
+            existingPreferences,
+            sanitizedPartialPreferences,
+          );
 
-        // Merge with new preferences (deep merge for nested objects)
-        const updatedPreferences = deepMerge(
-          existingPreferences,
-          sanitizedPartialPreferences,
-        );
+          // Save merged preferences
+          await supabaseService.syncPreferences(
+            validatedUserId,
+            updatedPreferences,
+          );
 
-        // Save merged preferences
-        await supabaseService.syncPreferences(
-          validatedUserId,
-          updatedPreferences,
-        );
+          // Applied only if nothing named the preference, and no session
+          // change happened, since this call started.
+          if (betaUpdates === true && betaUpdatesWrite === betaUpdatesChangeCount()) {
+            applyBetaUpdatesFor(validatedUserId, true);
+          }
 
-        return {
-          success: true,
-          preferences: updatedPreferences,
-        };
+          return {
+            success: true,
+            preferences: updatedPreferences,
+          };
+        } finally {
+          // The write has finished (saved or failed): a read that ran during it is stale.
+          if (betaUpdates !== null) noteBetaUpdatesChange();
+        }
       } catch (error) {
         logService.error("[Preferences] Failed to update preferences:", "Preferences", { error });
         // TASK-2058: Log failure for offline diagnostics (skip validation errors)
