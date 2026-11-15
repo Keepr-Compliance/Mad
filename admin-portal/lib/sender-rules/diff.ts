@@ -124,6 +124,9 @@ export function formatItem(item: unknown): string {
 
 const modeText = (m: unknown) => labelOf(MODE_LABELS, m);
 
+/** An optional threshold that is absent reads as "not set" (BACKLOG-4212). */
+const thresholdText = (v: unknown) => (v === undefined ? 'not set' : canonical(v));
+
 /** One diff line in words. */
 export function diffLineText(line: DiffLine): string {
   switch (line.kind) {
@@ -139,7 +142,7 @@ export function diffLineText(line: DiffLine): string {
     case 'flag':
       return line.to === true ? 'Counts auto-submitted mail as bulk' : 'Stops counting auto-submitted mail as bulk';
     case 'threshold':
-      return labelOf(THRESHOLD_LABELS, line.key) + ': ' + canonical(line.from) + ' to ' + canonical(line.to);
+      return labelOf(THRESHOLD_LABELS, line.key) + ': ' + thresholdText(line.from) + ' to ' + thresholdText(line.to);
     case 'field':
       return line.path + ': ' + canonical(line.from) + ' to ' + canonical(line.to);
   }

@@ -40,11 +40,13 @@ export const TIPS = {
   detector:
     'The scan that finds new deals, for agents with auto-detect on. Mail hidden by a Live rule is not used to find deals.',
   thresholds:
-    'Numbers for our own sender-filter checks. None of them changes what the agent sees.',
+    'Numbers for our own sender-filter checks. Only Newsletter answers to skip a sender changes what the agent sees.',
   minCensusLinkedEmails:
     'A mailbox needs at least this many deal-linked emails before the Learn mode score can call deal detection ready. Changes nothing the agent sees.',
   reportSendIntervalHours: 'Not used yet. Planned for a domain report.',
   reportMaxRows: 'Not used yet. Planned for a domain report.',
+  userSuppressMinAnswers:
+    'How many times a user marks a sender as newsletter in Learn before Keepr skips that sender for them. 0 turns it off.',
 } as const;
 
 export type TipKey = keyof typeof TIPS;

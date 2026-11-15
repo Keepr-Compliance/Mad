@@ -39,12 +39,36 @@ export const BULK_KEYS = [
 ] as const;
 export type BulkHeaderKey = (typeof BULK_KEYS)[number];
 
-export const THRESHOLD_KEYS = [
+export const REQUIRED_THRESHOLD_KEYS = [
   'minCensusLinkedEmails',
   'reportSendIntervalHours',
   'reportMaxRows',
 ] as const;
+export type RequiredThresholdKey = (typeof REQUIRED_THRESHOLD_KEYS)[number];
+
+/**
+ * BACKLOG-4212: optional in the stored set (SQL migration 20261116100000, desktop Zod). Absent =
+ * the app's own default. Apps older than 2.49 refuse a set that carries it.
+ */
+export const OPTIONAL_THRESHOLD_KEYS = ['userSuppressMinAnswers'] as const;
+export type OptionalThresholdKey = (typeof OPTIONAL_THRESHOLD_KEYS)[number];
+
+export const THRESHOLD_KEYS = [...REQUIRED_THRESHOLD_KEYS, ...OPTIONAL_THRESHOLD_KEYS] as const;
 export type ThresholdKey = (typeof THRESHOLD_KEYS)[number];
+
+/** The desktop default for userSuppressMinAnswers when the set does not carry it. */
+export const USER_SUPPRESS_APP_DEFAULT = 2;
+
+export function isOptionalThreshold(key: ThresholdKey): key is OptionalThresholdKey {
+  return (OPTIONAL_THRESHOLD_KEYS as readonly string[]).includes(key);
+}
+
+/** True when a rule set carries a key apps older than 2.49 cannot read. */
+export function hasNewAppOnlyKey(content: unknown): boolean {
+  if (content === null || typeof content !== 'object') return false;
+  const t = (content as { thresholds?: unknown }).thresholds;
+  return t !== null && typeof t === 'object' && Object.prototype.hasOwnProperty.call(t, 'userSuppressMinAnswers');
+}
 
 export interface LocalPartRule {
   value: string;
@@ -69,7 +93,7 @@ export interface SenderRuleSet {
     platformAddresses: string[];
   };
   freeMailDomains: string[];
-  thresholds: Record<ThresholdKey, number>;
+  thresholds: Record<RequiredThresholdKey, number> & Partial<Record<OptionalThresholdKey, number>>;
   modes: Record<SenderRuleSignal, Record<SenderRuleSurface, SenderRuleMode>>;
 }
 
