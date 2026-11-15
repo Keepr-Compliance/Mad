@@ -53,7 +53,7 @@ function SenderRow({
             type="button"
             disabled={saving}
             onClick={() => void onConfirm()}
-            className="rounded border border-sky-700 bg-sky-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-sky-800 disabled:opacity-50"
+            className="whitespace-nowrap rounded border border-sky-700 bg-sky-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-sky-800 disabled:opacity-50"
           >
             {action}
           </button>
@@ -61,7 +61,7 @@ function SenderRow({
             type="button"
             disabled={saving}
             onClick={() => setConfirming(false)}
-            className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            className="whitespace-nowrap rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
             Cancel
           </button>
@@ -73,7 +73,7 @@ function SenderRow({
             setError(null);
             setConfirming(true);
           }}
-          className="flex-none rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+          className="whitespace-nowrap flex-none rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
         >
           {action}
         </button>

@@ -19,10 +19,12 @@ import { displayAddress } from "./learnEmailHtml";
 
 const TOP_BUTTON =
   "inline-flex h-[30px] items-center gap-1.5 rounded-md bg-[#F6F5F2] px-2.5 text-[13px] font-medium text-gray-500 hover:bg-gray-200 disabled:opacity-40";
+/** Answers sit side by side when they fit (flex-wrap); otherwise each wraps to its own full-width row (grow). A label never wraps inside its button. */
+const ANSWER_ROW = "flex flex-wrap gap-3";
 const NO_BUTTON =
-  "inline-flex h-14 items-center justify-center gap-2 rounded-[10px] border border-red-200 bg-red-50 text-base font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50";
+  "inline-flex h-14 grow basis-[200px] px-4 items-center justify-center gap-2 whitespace-nowrap rounded-[10px] border border-red-200 bg-red-50 text-base font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50";
 const YES_BUTTON =
-  "inline-flex h-14 items-center justify-center gap-2 rounded-[10px] bg-green-700 text-base font-semibold text-white hover:bg-green-800 disabled:opacity-50";
+  "inline-flex h-14 grow basis-[200px] px-4 items-center justify-center gap-2 whitespace-nowrap rounded-[10px] bg-green-700 text-base font-semibold text-white hover:bg-green-800 disabled:opacity-50";
 
 function LeftPane({ session }: { session: UseLearnSession }): React.ReactElement {
   const { current, emails, attachment } = session;
@@ -63,13 +65,13 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
           <span className="text-lg font-semibold leading-[26px]">{displayAddress(current.question.address)}</span>
           <span className="text-sm text-gray-500">Not matched to a deal in Keepr · {n === 1 ? "1 email" : `${n} emails`}</span>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className={ANSWER_ROW} data-testid="learn-answer-row">
           <button type="button" className={NO_BUTTON} disabled={busy} onClick={() => void session.answerDeal("no")}>
-            <X className="h-[18px] w-[18px]" strokeWidth={2.5} aria-hidden="true" />
+            <X className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
             No
           </button>
           <button type="button" className={YES_BUTTON} disabled={busy} onClick={() => void session.answerDeal("yes")}>
-            <Check className="h-[18px] w-[18px]" strokeWidth={2.5} aria-hidden="true" />
+            <Check className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
             Yes, my deal
           </button>
         </div>
@@ -89,18 +91,18 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
           {email?.sentAt ? ` · ${formatLearnDate(email.sentAt, false)}` : ""}
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-3">
+      <div className={ANSWER_ROW} data-testid="learn-answer-row">
         <button
           type="button"
           className={NO_BUTTON}
           disabled={busy}
           onClick={() => void session.answerMail("newsletter_spam")}
         >
-          <X className="h-[18px] w-[18px]" strokeWidth={2.5} aria-hidden="true" />
+          <X className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
           Newsletter or spam
         </button>
         <button type="button" className={YES_BUTTON} disabled={busy} onClick={() => void session.answerMail("real_estate")}>
-          <Check className="h-[18px] w-[18px]" strokeWidth={2.5} aria-hidden="true" />
+          <Check className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
           Real estate business
         </button>
       </div>
