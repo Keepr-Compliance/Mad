@@ -26,9 +26,18 @@ const ANSWER_ROW = "flex flex-wrap gap-3";
 const SKIP_BUTTON =
   "inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-[10px] border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50";
 export const MAIL_ANSWER_HELP: ReadonlyArray<{ heading: string; body: string }> = [
-  { heading: "Real estate business", body: "work mail about real estate, even when it isn't one of your deals." },
-  { heading: "Newsletter or spam", body: "marketing, promotions and mass mailings." },
-  { heading: "Other business", body: "any other work or personal mail, like software notices." },
+  {
+    heading: "Newsletter or spam",
+    body: "sent to many people, such as marketing, promotions and mass mailings, even when it's about real estate.",
+  },
+  {
+    heading: "Real estate business",
+    body: "written to you about real estate work, such as clients, deals, lenders, title and other agents.",
+  },
+  {
+    heading: "Other business",
+    body: "written to you but not about real estate, such as personal mail, software notices or bills.",
+  },
 ];
 
 /** Info tip beside the mail question: click toggles, keyboard focus opens, blur closes. */
@@ -104,14 +113,14 @@ function useLearnShortcuts(session: UseLearnSession, active: boolean): void {
       if (e.defaultPrevented || e.repeat || isTypingTarget(e)) return;
       const s = ref.current;
       if (s.phase !== "question" || !s.current || s.busy) return;
-      const key = e.key.toLowerCase();
       const deal = s.current.kind === "cleanup";
-      if ((deal && key === "s") || (!deal && key === "o")) void s.skip();
-      else if (key === "u" && s.canUndo) void s.undo();
-      else if (deal && key === "y") void s.answerDeal("yes");
-      else if (deal && key === "n") void s.answerDeal("no");
-      else if (!deal && key === "r") void s.answerMail("real_estate");
-      else if (!deal && key === "n") void s.answerMail("newsletter_spam");
+      // Left = the red answer, right = the green one, down = skip. U = undo.
+      if (e.key === "ArrowDown") void s.skip();
+      else if (e.key === "u" || e.key === "U") {
+        if (!s.canUndo) return;
+        void s.undo();
+      } else if (e.key === "ArrowLeft") void (deal ? s.answerDeal("no") : s.answerMail("newsletter_spam"));
+      else if (e.key === "ArrowRight") void (deal ? s.answerDeal("yes") : s.answerMail("real_estate"));
       else return;
       e.preventDefault();
     };
@@ -121,13 +130,13 @@ function useLearnShortcuts(session: UseLearnSession, active: boolean): void {
 }
 
 function SkipButton({ session, mail }: { session: UseLearnSession; mail: boolean }): React.ReactElement {
-  const hint = mail ? "O" : "S";
+  const hint = "↓";
   return (
     <button
       type="button"
       className={SKIP_BUTTON}
       disabled={session.busy || !session.current}
-      aria-keyshortcuts={hint}
+      aria-keyshortcuts="ArrowDown"
       onClick={() => void session.skip()}
     >
       <SkipForward className="h-4 w-4 shrink-0" aria-hidden="true" />
@@ -181,13 +190,13 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
           <span className="text-sm text-gray-500">Not matched to a deal in Keepr · {n === 1 ? "1 email" : `${n} emails`}</span>
         </div>
         <div className={ANSWER_ROW} data-testid="learn-answer-row">
-          <button type="button" className={NO_BUTTON} aria-keyshortcuts="N" disabled={busy} onClick={() => void session.answerDeal("no")}>
+          <button type="button" className={NO_BUTTON} aria-keyshortcuts="ArrowLeft" disabled={busy} onClick={() => void session.answerDeal("no")}>
             <X className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
-            No <Hint k="N" />
+            No <Hint k="←" />
           </button>
-          <button type="button" className={YES_BUTTON} aria-keyshortcuts="Y" disabled={busy} onClick={() => void session.answerDeal("yes")}>
+          <button type="button" className={YES_BUTTON} aria-keyshortcuts="ArrowRight" disabled={busy} onClick={() => void session.answerDeal("yes")}>
             <Check className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
-            Yes, my deal <Hint k="Y" />
+            Yes, my deal <Hint k="→" />
           </button>
         </div>
         <SkipButton session={session} mail={false} />
@@ -214,16 +223,16 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
         <button
           type="button"
           className={NO_BUTTON}
-          aria-keyshortcuts="N"
+          aria-keyshortcuts="ArrowLeft"
           disabled={busy}
           onClick={() => void session.answerMail("newsletter_spam")}
         >
           <X className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
-          Newsletter or spam <Hint k="N" />
+          Newsletter or spam <Hint k="←" />
         </button>
-        <button type="button" className={YES_BUTTON} aria-keyshortcuts="R" disabled={busy} onClick={() => void session.answerMail("real_estate")}>
+        <button type="button" className={YES_BUTTON} aria-keyshortcuts="ArrowRight" disabled={busy} onClick={() => void session.answerMail("real_estate")}>
           <Check className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
-          Real estate business <Hint k="R" />
+          Real estate business <Hint k="→" />
         </button>
       </div>
       <SkipButton session={session} mail />

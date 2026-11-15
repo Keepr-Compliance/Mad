@@ -70,9 +70,9 @@ describe("Learn mail question: info tip and Skip placement (BACKLOG-4212)", () =
     expect(screen.queryByTestId("learn-answer-help-panel")).toBeNull();
     fireEvent.focus(tip);
     const panel = screen.getByTestId("learn-answer-help-panel");
-    expect(panel).toHaveTextContent("Real estate business: work mail about real estate, even when it isn't one of your deals.");
-    expect(panel).toHaveTextContent("Newsletter or spam: marketing, promotions and mass mailings.");
-    expect(panel).toHaveTextContent("Other business: any other work or personal mail, like software notices.");
+    expect(panel).toHaveTextContent("Real estate business: written to you about real estate work, such as clients, deals, lenders, title and other agents.");
+    expect(panel).toHaveTextContent("Newsletter or spam: sent to many people, such as marketing, promotions and mass mailings, even when it's about real estate.");
+    expect(panel).toHaveTextContent("Other business: written to you but not about real estate, such as personal mail, software notices or bills.");
     // Not inside the clipping dialog / answer panel: portalled, fixed, above the dialog.
     expect(screen.getByTestId("learn-answer-panel")).not.toContainElement(panel);
     expect(screen.getByRole("dialog")).not.toContainElement(panel);
@@ -104,53 +104,64 @@ function learnApi(): { sampleAnswer: jest.Mock; cleanupAnswer: jest.Mock } {
 }
 
 describe("Learn shortcuts, wide layout and score container (BACKLOG-4212)", () => {
-  it("labels carry the shortcut hint on the same one-line button", async () => {
+  it("labels carry the arrow hint on the same one-line button; red is left of green in DOM order", async () => {
     const [no, yes] = await openDialog("mail", [/newsletter or spam/i, /real estate business/i]);
-    expect(no).toHaveTextContent("Newsletter or spam (N)");
-    expect(yes).toHaveTextContent("Real estate business (R)");
-    expect(screen.getByRole("button", { name: /other business/i })).toHaveTextContent("Other business (O)");
+    expect(no).toHaveTextContent("Newsletter or spam (\u2190)");
+    expect(yes).toHaveTextContent("Real estate business (\u2192)");
+    expect(no.compareDocumentPosition(yes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const other = screen.getByRole("button", { name: /other business/i });
+    expect(other).toHaveTextContent("Other business (\u2193)");
+    expect(no).toHaveAttribute("aria-keyshortcuts", "ArrowLeft");
+    expect(yes).toHaveAttribute("aria-keyshortcuts", "ArrowRight");
+    expect(other).toHaveAttribute("aria-keyshortcuts", "ArrowDown");
   });
 
-  it("mail: R stores real_estate", async () => {
+  it.each([
+    ["ArrowLeft", { rowId: "row-1", answer: "newsletter_spam" }],
+    ["ArrowRight", { rowId: "row-1", answer: "real_estate" }],
+    ["ArrowDown", { rowId: "row-1", answer: "skip" }],
+  ])("mail: %s fires the right answer and is preventDefault-ed", async (key, expected) => {
     await openDialog("mail", [/newsletter or spam/i]);
-    fireEvent.keyDown(document.body, { key: "r" });
-    await waitFor(() => expect(learnApi().sampleAnswer).toHaveBeenCalledWith({ rowId: "row-1", answer: "real_estate" }));
+    const ev = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+    document.body.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
+    await waitFor(() => expect(learnApi().sampleAnswer).toHaveBeenCalledWith(expected));
   });
 
-  it("mail: N stores newsletter_spam", async () => {
-    await openDialog("mail", [/newsletter or spam/i]);
-    fireEvent.keyDown(document.body, { key: "N" });
-    await waitFor(() => expect(learnApi().sampleAnswer).toHaveBeenCalledWith({ rowId: "row-1", answer: "newsletter_spam" }));
-  });
-
-  it("mail: O skips (stored as skip); S does nothing on mail", async () => {
-    await openDialog("mail", [/newsletter or spam/i]);
-    fireEvent.keyDown(document.body, { key: "s" });
-    await new Promise((r) => setTimeout(r, 20));
-    expect(learnApi().sampleAnswer).not.toHaveBeenCalled();
-    fireEvent.keyDown(document.body, { key: "o" });
-    await waitFor(() => expect(learnApi().sampleAnswer).toHaveBeenCalledWith({ rowId: "row-1", answer: "skip" }));
-  });
-
-  it("deal keeps Skip for now (S); mail shows Other business", async () => {
+  it("deal: ArrowLeft = no, ArrowRight = yes", async () => {
     await openDialog("deal", [/yes, my deal/i]);
-    expect(screen.getByRole("button", { name: /skip for now/i })).toHaveTextContent("Skip for now (S)");
-    expect(screen.queryByRole("button", { name: /other business/i })).toBeNull();
-  });
-
-  it("deal: Y answers yes", async () => {
-    await openDialog("deal", [/yes, my deal/i]);
-    fireEvent.keyDown(document.body, { key: "y" });
+    fireEvent.keyDown(document.body, { key: "ArrowRight" });
     await waitFor(() => expect(learnApi().cleanupAnswer).toHaveBeenCalledWith({ detectionId: expect.anything(), answer: "yes" }));
   });
 
-  it("shortcuts are ignored while typing in an input, and with Ctrl/Cmd held", async () => {
+  it("deal: ArrowLeft answers no", async () => {
+    await openDialog("deal", [/yes, my deal/i]);
+    fireEvent.keyDown(document.body, { key: "ArrowLeft" });
+    await waitFor(() => expect(learnApi().cleanupAnswer).toHaveBeenCalledWith({ detectionId: expect.anything(), answer: "no" }));
+  });
+
+  it("deal keeps Skip for now (\u2193); mail shows Other business", async () => {
+    await openDialog("deal", [/yes, my deal/i]);
+    expect(screen.getByRole("button", { name: /skip for now/i })).toHaveTextContent("Skip for now (\u2193)");
+    expect(screen.queryByRole("button", { name: /other business/i })).toBeNull();
+  });
+
+  it("old letter keys no longer fire", async () => {
+    await openDialog("mail", [/newsletter or spam/i]);
+    for (const key of ["n", "r", "o", "s", "y"]) fireEvent.keyDown(document.body, { key });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(learnApi().sampleAnswer).not.toHaveBeenCalled();
+  });
+
+  it("arrows are ignored while typing in an input, and with Ctrl/Cmd held", async () => {
     await openDialog("mail", [/newsletter or spam/i]);
     const input = document.createElement("input");
     document.body.appendChild(input);
     input.focus();
-    fireEvent.keyDown(input, { key: "r" });
-    fireEvent.keyDown(document.body, { key: "r", metaKey: true });
+    const ev = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+    input.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(false);
+    fireEvent.keyDown(document.body, { key: "ArrowRight", metaKey: true });
     await new Promise((r) => setTimeout(r, 20));
     expect(learnApi().sampleAnswer).not.toHaveBeenCalled();
     input.remove();
