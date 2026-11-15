@@ -2,9 +2,10 @@
  * Per-email deal signals, measured in Learn — BACKLOG-4257 (M3) PR2.
  *
  * SHADOW ONLY. Nothing here changes what the detector keeps or drops, what
- * Learn asks, or what the pilot report sends. `scoreSignals` runs once per
- * learn:score and returns its own record (`SignalScore`), returned next to the
- * score and never inside it (SR R8). The pilot report never sees it (D3).
+ * Learn asks, or what the pilot report sends. `scoreSignals` runs in its own
+ * channel (learn:signals), never inside learn:score, and returns its own
+ * record (`SignalScore`), never part of the score (SR R8). The pilot report
+ * never sees it (D3).
  *
  * For every signal value (SIGNAL_VALUES), on the email sets below:
  *   newsletter   fires on answered newsletter/spam sample mail (k/n, Wilson)
@@ -26,8 +27,11 @@
  * on the same emails, a minimum fire rate on deal mail, and at most one true
  * detection lost in twenty. Otherwise "not enough data" or "fails".
  *
- * Cost (SR R4): one pass per learn:score, in memory, pages of at most 200 with
- * a yield between pages, capped emails, and a time limit; a stop is reported.
+ * Cost (SR R4): one pass per learn:signals call (after the score is shown), in
+ * memory, pages of at most 200 with a yield between pages, capped emails, and
+ * a time limit. An email cap makes the pass a SAMPLE: verdicts are computed
+ * over the sampled mail and the cap is reported. Only the time stop makes the
+ * pass incomplete (every verdict "not enough data").
  *
  * Privacy: the record holds counts, rates and closed ids only. Address keys
  * the extractor returns are dropped here. The caller's context carries the
@@ -185,10 +189,12 @@ export interface TextCoverage {
 export interface SignalScore {
   signalsVersion: number;
   termsVersion: number;
-  /** False when the pass stopped at the time limit or an email cap. */
+  /** False only when the pass stopped at the time limit. */
   complete: boolean;
-  stoppedBy: "time" | "cap" | null;
+  stoppedBy: "time" | null;
   timeLimitMs: number;
+  /** An email cap was reached and more mail exists: the counts are a sample. */
+  sampled: { dealLinkedCapped: boolean; detectionCapped: boolean; dealLinkedCap: number; detectionCap: number };
   emails: {
     newsletter: number;
     realEstateSample: number;
@@ -260,7 +266,9 @@ export async function scoreSignals(input: ScoreSignalsInput): Promise<SignalScor
   const yieldFn = input.yieldFn ?? defaultYield;
   const timeLimitMs = input.timeLimitMs ?? SIGNAL_SCORE_TIME_LIMIT_MS;
   const started = nowMs();
-  let stoppedBy: "time" | "cap" | null = null;
+  let stoppedBy: "time" | null = null;
+  let dealLinkedCapped = false;
+  let detectionCapped = false;
   const outOfTime = () => {
     if (stoppedBy === null && nowMs() - started > timeLimitMs) stoppedBy = "time";
     return stoppedBy !== null;
@@ -334,7 +342,7 @@ export async function scoreSignals(input: ScoreSignalsInput): Promise<SignalScor
   let detectionBudget = detectionIds;
   if (detectionIds.length > MAX_DETECTION_SIGNAL_EMAILS) {
     detectionBudget = detectionIds.slice(0, MAX_DETECTION_SIGNAL_EMAILS);
-    stoppedBy = stoppedBy ?? "cap";
+    detectionCapped = true;
   }
   for (let i = 0; i < detectionBudget.length; i += SIGNAL_PASS_PAGE) {
     if (outOfTime()) break;
@@ -346,11 +354,13 @@ export async function scoreSignals(input: ScoreSignalsInput): Promise<SignalScor
   const dealLinkedIds = new Set<string>();
   let cursor = "";
   while (!outOfTime()) {
-    if (dealLinkedIds.size >= MAX_DEAL_LINKED_SIGNAL_EMAILS) {
-      stoppedBy = stoppedBy ?? "cap";
+    const room = MAX_DEAL_LINKED_SIGNAL_EMAILS - dealLinkedIds.size;
+    if (room <= 0) {
+      // Capped only if a row exists past the cap (exactly the cap = all of it).
+      dealLinkedCapped = loaders.dealLinkedPage(cursor, 1).length > 0;
       break;
     }
-    const limit = Math.min(SIGNAL_PASS_PAGE, MAX_DEAL_LINKED_SIGNAL_EMAILS - dealLinkedIds.size);
+    const limit = Math.min(SIGNAL_PASS_PAGE, room);
     const page = loaders.dealLinkedPage(cursor, limit);
     if (page.length === 0) break;
     measure(page);
@@ -395,6 +405,12 @@ export async function scoreSignals(input: ScoreSignalsInput): Promise<SignalScor
     complete,
     stoppedBy,
     timeLimitMs,
+    sampled: {
+      dealLinkedCapped,
+      detectionCapped,
+      dealLinkedCap: MAX_DEAL_LINKED_SIGNAL_EMAILS,
+      detectionCap: MAX_DETECTION_SIGNAL_EMAILS,
+    },
     emails: {
       newsletter: newsletter.length,
       realEstateSample: list(realEstateIds).length,
@@ -519,9 +535,14 @@ const VERDICT_TEXT: Readonly<Record<KeepVerdict, string>> = {
 /** Copy-block lines: counts and closed ids only (no addresses, subjects, senders or file names). */
 export function formatSignalLines(s: SignalScore | null): string[] {
   if (!s) return ["Signals (measured only): not available"];
-  const stop = s.complete ? "complete" : `stopped early (${s.stoppedBy === "time" ? `time limit ${s.timeLimitMs} ms` : "email cap"})`;
+  const stop = s.complete ? "complete" : `stopped early (time limit ${s.timeLimitMs} ms)`;
+  const caps = [
+    s.sampled.dealLinkedCapped ? `deal-linked mail capped at ${s.sampled.dealLinkedCap}` : null,
+    s.sampled.detectionCapped ? `detection mail capped at ${s.sampled.detectionCap}` : null,
+  ].filter((x): x is string => x !== null);
+  const sample = caps.length ? `; sample: ${caps.join(", ")}` : "";
   return [
-    `Signals (measured only; signals v${s.signalsVersion}, terms v${s.termsVersion}; ${stop})`,
+    `Signals (measured only; signals v${s.signalsVersion}, terms v${s.termsVersion}; ${stop}${sample})`,
     `Signal emails: newsletter/spam ${s.emails.newsletter}; deal mail ${s.emails.contentPositives} (real estate sample ${s.emails.realEstateSample}, deal-linked ${s.emails.dealLinked}); true-detection mail ${s.emails.trueDetection}; gate mail ${s.emails.gate}; bodies cut ${s.emails.bodyTruncated}`,
     `Signal text coverage: newsletter/spam ${fmtCoverage(s.textCoverage.newsletter)}; deal mail ${fmtCoverage(s.textCoverage.contentPositives)}; true-detection mail ${fmtCoverage(s.textCoverage.trueDetection)}`,
     ...s.values.map((v) => {

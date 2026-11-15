@@ -30,6 +30,9 @@ export const LearnSetEnabledArgsSchema = z.strictObject({ enabled: z.boolean() }
  */
 export const LearnGetStateArgsSchema = z.strictObject({ settle: z.boolean().optional() });
 
+/** BACKLOG-4257: learn:signals takes no payload; anything sent is refused. */
+export const LearnSignalsArgsSchema = z.undefined();
+
 /** BACKLOG-4219: "Help improve Keepr". */
 export const LearnSetPilotReportArgsSchema = z.strictObject({ enabled: z.boolean() });
 

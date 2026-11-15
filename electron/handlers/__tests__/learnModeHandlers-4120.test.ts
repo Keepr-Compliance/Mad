@@ -300,6 +300,7 @@ const VALID: Record<string, unknown> = {
   "learn:sample-next": undefined,
   "learn:sample-answer": { rowId: "row-4120-x", answer: "skip" },
   "learn:score": undefined,
+  "learn:signals": undefined,
   "learn:delete-answers": undefined,
   "learn:preview": { kind: "bulk", rowId: "row-4120-x" },
   "learn:attachment-open": { detectionId: "d1", attachmentId: "att-4120-x" },
@@ -419,7 +420,7 @@ describe("SETS gated and ungated channels, by execution", () => {
     const registered = [...ipcHandlers.keys()].filter((c) => c.startsWith("learn:")).sort();
     const listed = [...handlers.LEARN_GATED_CHANNELS, ...handlers.LEARN_UNGATED_CHANNELS].sort();
     expect(registered).toEqual(listed);
-    expect(registered).toHaveLength(15);
+    expect(registered).toHaveLength(16); // BACKLOG-4257: + learn:signals
     expect(Object.keys(VALID).sort()).toEqual(listed);
   });
 
@@ -1683,12 +1684,12 @@ describe("C-B3 (main) get-state { settle: true } waits for the queued pilot job"
 });
 
 // ---------------------------------------------------------------------------
-// BACKLOG-4257 (M3) PR2, SR R8: the per-email signals are returned as their own
-// field next to the score, never inside it, and the pilot report is unchanged.
+// BACKLOG-4257 (M3) PR2, SR R8: learn:score is unchanged and never runs the
+// signal pass; learn:signals returns the signals on their own. The pilot
+// report is byte-identical.
 // ---------------------------------------------------------------------------
-describe("R8 (4257) signals are a separate field; the pilot payload is byte-identical", () => {
-  it("learn:score returns signals beside the score; maybeSend gets the score as scoreRunWithDetector makes it", async () => {
-    const maybeSend = jest.fn();
+describe("R8 (4257) learn:score never runs the signal pass; learn:signals returns them", () => {
+  async function seedLinked(maybeSend: jest.Mock): Promise<void> {
     ipcHandlers.clear();
     featureGateHandlers.registerFeatureGateHandlers();
     handlers.registerLearnModeHandlers({ pilotReport: { maybeSend, queueWithdraw: jest.fn() } });
@@ -1697,14 +1698,19 @@ describe("R8 (4257) signals are a separate field; the pilot payload is byte-iden
     run(`INSERT INTO transactions (id, user_id, property_address, status) VALUES ('t-4257-r8', ?, ?, 'active')`, USER, CANARY_ADDRESS);
     run(`INSERT INTO communications (id, user_id, transaction_id, email_id, thread_id) VALUES ('c-4257-r8', ?, 't-4257-r8', ?, 'th-4257-r8')`, USER, e1);
     expect((await invoke("learn:run", { windowMonths: 12 })).success).toBe(true);
+  }
+
+  it("learn:score returns the score as before, without invoking the signal pass; the pilot payload is byte-identical", async () => {
+    const maybeSend = jest.fn();
+    await seedLinked(maybeSend);
+    const signalScoring = await import("../../services/learn/signalScoring");
+    const pass = jest.spyOn(signalScoring, "scoreSignals");
 
     const r = await invoke("learn:score");
     expect(r.success).toBe(true);
+    expect(pass).not.toHaveBeenCalled();
+    expect(Object.keys(r).sort()).toEqual(["copyBlock", "score", "success"]);
     const score = r.score as Record<string, unknown>;
-    const signals = r.signals as { complete: boolean; values: unknown[]; emails: { dealLinked: number } };
-    expect(signals.complete).toBe(true);
-    expect(signals.emails.dealLinked).toBe(1);
-    expect(signals.values.length).toBeGreaterThan(30);
     expect("signals" in score).toBe(false);
 
     // The same score, built directly, as before this item.
@@ -1731,6 +1737,7 @@ describe("R8 (4257) signals are a separate field; the pilot payload is byte-iden
       },
     );
     expect(maybeSend).toHaveBeenCalledTimes(1);
+    expect(maybeSend.mock.calls[0]).toHaveLength(3);
     const [uid, sentScore, sentDetector] = maybeSend.mock.calls[0];
     expect(uid).toBe(USER);
     expect(sentScore).toBe(r.score);
@@ -1738,13 +1745,28 @@ describe("R8 (4257) signals are a separate field; the pilot payload is byte-iden
     expect(JSON.stringify(buildPilotReport(sentScore, sentDetector, "2.49.0"))).toBe(
       JSON.stringify(buildPilotReport(direct.score, direct.detector, "2.49.0")),
     );
+    expect(r.copyBlock).toBe(scoring.formatCopyBlock(direct.score));
+  });
 
-    // Copy block: the score's lines unchanged, then the signal lines (counts only).
-    const copy = String(r.copyBlock);
-    const base = scoring.formatCopyBlock(direct.score);
-    expect(copy.startsWith(`${base}\nSignals (measured only; signals v1, terms v1; complete)`)).toBe(true);
-    const signalLines = copy.slice(base.length);
-    expect(signalLines).toContain("Signal anchor.subject:");
-    for (const needle of ["@", "Canarytest", "Canarybody", "Testville"]) expect(signalLines).not.toContain(needle);
+  it("learn:signals returns the signals and their count-only Copy lines; the pilot is not called", async () => {
+    const maybeSend = jest.fn();
+    await seedLinked(maybeSend);
+    const r = await invoke("learn:signals");
+    expect(r.success).toBe(true);
+    const signals = r.signals as { complete: boolean; values: unknown[]; emails: { dealLinked: number } };
+    expect(signals.complete).toBe(true);
+    expect(signals.emails.dealLinked).toBe(1);
+    expect(signals.values.length).toBeGreaterThan(30);
+    const lines = String(r.copyLines);
+    expect(lines.startsWith("Signals (measured only; signals v1, terms v1; complete)")).toBe(true);
+    expect(lines).toContain("Signal anchor.subject:");
+    for (const needle of ["@", "Canarytest", "Canarybody", "Testville"]) expect(lines).not.toContain(needle);
+    expect(maybeSend).not.toHaveBeenCalled();
+  });
+
+  it("learn:signals refuses a payload and needs a run", async () => {
+    setToggle(true);
+    expect(await invoke("learn:signals")).toEqual({ success: false, error: handlers.LEARN_NO_RUN_ERROR });
+    expect(await invoke("learn:signals", { any: 1 })).toEqual({ success: false, error: handlers.LEARN_INVALID_ERROR });
   });
 });

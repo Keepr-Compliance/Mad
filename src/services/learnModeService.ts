@@ -30,6 +30,7 @@ import type {
   LearnSampleDrawResponse,
   LearnSampleNextResult,
   LearnScoreResult,
+  LearnSignalsResult,
   LearnSetEnabledResult,
   LearnSetPilotReportResult,
   LearnStateResult,
@@ -80,6 +81,9 @@ export const learnModeService = {
     call(() => window.api.learn.sampleAnswer({ rowId, answer })),
 
   score: (): Promise<LearnScoreResult> => call(() => window.api.learn.score()),
+
+  /** BACKLOG-4257: per-email signals (shadow) and their Copy lines; asked for after the score is shown. */
+  signals: (): Promise<LearnSignalsResult> => call(() => window.api.learn.signals()),
 
   deleteAnswers: (): Promise<LearnDeleteAnswersResult> => call(() => window.api.learn.deleteAnswers()),
 

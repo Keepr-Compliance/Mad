@@ -72,13 +72,16 @@ export type LearnSampleNextResult =
   | LearnFailure;
 
 export type LearnScoreResult =
-  | {
-      success: true;
-      score: LearnScore;
-      copyBlock: string;
-      /** BACKLOG-4257: per-email signals measured in shadow; null when the pass failed. Never inside `score`. */
-      signals: SignalScore | null;
-    }
+  | { success: true; score: LearnScore; copyBlock: string }
+  | LearnFailure;
+
+/**
+ * BACKLOG-4257: per-email signals measured in shadow (learn:signals), asked
+ * for after the score is shown. `signals` is null when the pass failed;
+ * `copyLines` are the count-only lines appended to the Copy block.
+ */
+export type LearnSignalsResult =
+  | { success: true; signals: SignalScore | null; copyLines: string }
   | LearnFailure;
 
 export type LearnDeleteAnswersResult =
@@ -166,6 +169,8 @@ export interface WindowApiLearn {
   sampleNext: () => Promise<LearnSampleNextResult>;
   sampleAnswer: (args: { rowId: string; answer: BulkAnswer }) => Promise<LearnAnswerResult>;
   score: () => Promise<LearnScoreResult>;
+  /** BACKLOG-4257: per-email signals (shadow); call after the score is shown. */
+  signals: () => Promise<LearnSignalsResult>;
   deleteAnswers: () => Promise<LearnDeleteAnswersResult>;
   listAnswers: () => Promise<LearnListAnswersResult>;
   deleteAnswer: (args: { kind: "deal" | "bulk"; id: string }) => Promise<LearnDeleteAnswerResult>;

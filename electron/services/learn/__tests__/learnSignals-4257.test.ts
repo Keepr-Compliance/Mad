@@ -53,6 +53,7 @@ import {
   formatSignalLines,
   keepBar,
   KEEP_BAR,
+  MAX_DEAL_LINKED_SIGNAL_EMAILS,
   scoreSignals,
   vendorRoleDomains,
   type SignalScore,
@@ -369,6 +370,8 @@ describe("S3 keep bar", () => {
     expect(keepBar(r(0, 40), r(40, 40), r(30, 60), gate(20, 0), true)).toEqual({ verdict: "passes", reasons: [] });
     expect(keepBar(r(0, 40), r(40, 40), r(30, 60), gate(19, 2), true).reasons).toEqual(["true_lost"]);
     expect(keepBar(r(20, 40), r(20, 40), r(30, 60), gate(20, 0), true).reasons).toEqual(["newsletter_rate"]);
+    // SR: point 20% < baseline 30%, but the Wilson upper bound (34.8%) is not: it must fail.
+    expect(keepBar(r(8, 40), r(12, 40), r(30, 60), gate(20, 0), true).reasons).toEqual(["newsletter_rate"]);
   });
 
   it("minimum n: too few emails or detections is 'not enough data', never a pass", () => {
@@ -405,6 +408,55 @@ describe("S4 (R4) time limit", () => {
       expect(v.reasons).toContain("incomplete");
     }
     expect(formatSignalLines(s)[0]).toContain("stopped early (time limit 2500 ms)");
+  });
+});
+
+describe("S6 (SR fix 1) the deal-linked email cap is a sample, not a partial pass", () => {
+  async function passOver(rows: number): Promise<SignalScore> {
+    const rules = BUNDLED_SENDER_RULES;
+    const r = await runBaseline0(USER, 12, { nowMs: NOW, yieldFn: noYield, senderRules: rules });
+    const all = Array.from({ length: rows }, (_, i) => ({
+      id: `e-cap-${String(i).padStart(6, "0")}`,
+      subject: "Offer accepted",
+      sender: "agent@brokerage.example",
+      recipients: "me@example.test",
+      body_plain: "Offer accepted. Escrow closing next week.",
+      body_html: null,
+      bulk_mail_headers: null,
+    }));
+    return scoreSignals({
+      run: r,
+      keyRows: [],
+      dealAnswers: [],
+      ctx: { rules, keep: buildKeepSets([], rules), vendorRoleDomains: new Set() },
+      loaders: {
+        bulkRows: () => [],
+        dealLinkedPage: (afterId, limit) => all.filter((x) => x.id > afterId).slice(0, limit),
+        emailsByIds: () => [],
+        attachmentsByEmailIds: () => new Map(),
+      },
+      yieldFn: noYield,
+    });
+  }
+
+  it("exactly the cap: every row read, not capped", async () => {
+    const s = await passOver(MAX_DEAL_LINKED_SIGNAL_EMAILS);
+    expect(s.complete).toBe(true);
+    expect(s.sampled.dealLinkedCapped).toBe(false);
+    expect(s.emails.dealLinked).toBe(MAX_DEAL_LINKED_SIGNAL_EMAILS);
+    expect(formatSignalLines(s)[0]).not.toContain("sample:");
+  });
+
+  it("one row past the cap: a sample of the cap, verdicts still computed, cap noted", async () => {
+    const s = await passOver(MAX_DEAL_LINKED_SIGNAL_EMAILS + 1);
+    expect(s.complete).toBe(true);
+    expect(s.stoppedBy).toBeNull();
+    expect(s.sampled.dealLinkedCapped).toBe(true);
+    expect(s.emails.dealLinked).toBe(MAX_DEAL_LINKED_SIGNAL_EMAILS);
+    for (const v of s.values) expect(v.reasons).not.toContain("incomplete");
+    const stage = value(s, "stage.underContract");
+    expect(stage.positives).toMatchObject({ k: MAX_DEAL_LINKED_SIGNAL_EMAILS, n: MAX_DEAL_LINKED_SIGNAL_EMAILS });
+    expect(formatSignalLines(s)[0]).toContain(`sample: deal-linked mail capped at ${MAX_DEAL_LINKED_SIGNAL_EMAILS}`);
   });
 });
 
