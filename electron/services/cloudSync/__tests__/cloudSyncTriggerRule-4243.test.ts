@@ -9,14 +9,15 @@
 import { DRIVER, type TestDb } from "./helpers/sqlite";
 import { dealId, dirty, dirtyCount, enableUser, freshDb, insertDeal, OTHER_PROJECT, PROJECT, USER_A, USER_B } from "./helpers/fixtures";
 import { makeEngine, pass, startAndPass, DEVICE_1, DEVICE_2 } from "./helpers/engine";
-import { CLOUD_SYNC_TRIGGERS } from "../../db/cloudSyncSql";
+import { CLOUD_SYNC_TRIGGERS, MARK_ALL_ELIGIBLE_ENABLED_SQL } from "../../db/cloudSyncSql";
 import {
   applyCloudSyncTriggerRule,
+  cloudSyncTriggersUnavailable,
   cloudSyncTriggersWanted,
   ensureCloudSyncTriggers,
   prepareRestoredFile,
 } from "../../db/cloudSyncTriggers";
-import { disableForUser, enableForUser, ensureInstall, forgetOtherProjects } from "../../db/cloudSyncDbService";
+import { disableForUser, enableForUser, ensureInstall, forgetOtherProjects, preparePass } from "../../db/cloudSyncDbService";
 
 const ALL = CLOUD_SYNC_TRIGGERS.map((t) => t.name).sort();
 
@@ -228,6 +229,46 @@ describe(`Keepr Cloud trigger rule R1 [${DRIVER}]`, () => {
     const cookie = schemaCookie(db);
     await pass(e);
     expect(schemaCookie(db)).toBe(cookie);
+  });
+
+  it("self-check: a trigger that cannot be created on this schema is reported once and does not re-mark every deal on each pass", () => {
+    const db = freshDb();
+    enableUser(db);
+    insertDeal(db, dealId());
+    // The schema loses a column three triggers name (dropping the table drops its triggers too).
+    db.exec("DROP TABLE contact_source_links");
+    db.exec("CREATE TABLE contact_source_links (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, contact_id TEXT NOT NULL)");
+    const unavailable = ALL.filter((n) => n.startsWith("trg_cloud_sync_contact_source_links_"));
+    expect(unavailable).toHaveLength(3);
+    expect(triggers(db)).toEqual(ALL.filter((n) => !unavailable.includes(n)));
+
+    let markAll = 0;
+    const prepare = db.prepare.bind(db);
+    (db as { prepare: typeof db.prepare }).prepare = ((sql: string) => {
+      if (sql === MARK_ALL_ELIGIBLE_ENABLED_SQL) markAll++;
+      return prepare(sql);
+    }) as typeof db.prepare;
+    const logs: Array<{ message: string; meta?: Record<string, unknown> }> = [];
+    const log = { warn: (message: string, meta?: Record<string, unknown>) => logs.push({ message, meta }) };
+    const acceptedAt = (db.prepare("SELECT accepted_at FROM cloud_sync_settings").get() as { accepted_at: string | null }).accepted_at;
+
+    for (let i = 0; i < 3; i++) preparePass(db, PROJECT, USER_A, acceptedAt, log);
+
+    // Nothing to repair that a pass could repair: zero mark-alls across three passes.
+    expect(markAll).toBe(0);
+    const reports = logs.filter((l) => l.message.includes("cannot be created on this schema"));
+    expect(reports).toHaveLength(1);
+    expect(reports[0].meta).toEqual({ code: "CLOUD_SYNC_TRIGGER_PREREQUISITE", triggers: unavailable });
+    expect(logs.some((l) => l.message.includes("every deal marked"))).toBe(false);
+    expect(triggers(db)).toEqual(ALL.filter((n) => !unavailable.includes(n)));
+    expect(cloudSyncTriggersUnavailable()).toEqual(unavailable);
+
+    // A repairable trigger alongside them is still recreated, with exactly one mark-all.
+    db.exec("DROP TRIGGER trg_cloud_sync_tx_update");
+    for (let i = 0; i < 3; i++) preparePass(db, PROJECT, USER_A, acceptedAt, log);
+    expect(markAll).toBe(1);
+    expect(triggers(db)).toEqual(ALL.filter((n) => !unavailable.includes(n)));
+    expect(logs.filter((l) => l.message.includes("cannot be created on this schema"))).toHaveLength(1);
   });
 
   it("disableForUser keeps the rule: owed keeps, not owed drops", () => {

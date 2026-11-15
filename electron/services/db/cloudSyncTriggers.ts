@@ -66,6 +66,14 @@ export function dropCloudSyncTriggers(db: SqlDb, log: TriggerLog = silentLog): b
   }
 }
 
+/** Every table and column the trigger names exists on this schema. */
+function triggerCanBeCreated(t: (typeof CLOUD_SYNC_TRIGGERS)[number], cols: (table: string) => Set<string>): boolean {
+  return Object.entries(t.requires).every(([table, needed]) => {
+    const have = cols(table);
+    return have.size > 0 && needed.every((c) => have.has(c));
+  });
+}
+
 export interface EnsureResult {
   ok: boolean;
   /** Triggers created or replaced by this call. */
@@ -98,10 +106,7 @@ export function ensureCloudSyncTriggers(db: SqlDb, log: TriggerLog = silentLog):
       if (!wanted.has(name)) db.prepare(`DROP TRIGGER IF EXISTS ${name}`).run();
     }
     for (const t of CLOUD_SYNC_TRIGGERS) {
-      const ready = Object.entries(t.requires).every(([table, needed]) => {
-        const have = cols(table);
-        return have.size > 0 && needed.every((c) => have.has(c));
-      });
+      const ready = triggerCanBeCreated(t, cols);
       const stored = existing.get(t.name);
       if (!ready) {
         if (stored !== undefined) db.prepare(`DROP TRIGGER IF EXISTS ${t.name}`).run();
@@ -166,22 +171,59 @@ export function requireCloudSyncTriggers(db: SqlDb): void {
   }
 }
 
+/** Triggers already reported as "cannot be created on this schema" (one warning per process). */
+const reportedUnavailable = new Set<string>();
+
+/** Names the self-check has found it cannot create on this schema, this process. Read-only copy. */
+export function cloudSyncTriggersUnavailable(): string[] {
+  return [...reportedUnavailable].sort();
+}
+
 /**
  * Pass-time self-check: Keepr Cloud is on, so every trigger must exist. A
- * missing or changed one means deal changes may have gone unmarked: recreate
- * them and mark every eligible deal of every enabled user, in one transaction.
- * Returns the number of triggers recreated (0 on a healthy profile: one
- * sqlite_master read, no DDL).
+ * trigger that is missing or changed but CAN be created means deal changes may
+ * have gone unmarked: recreate it and mark every eligible deal of every enabled
+ * user, in one transaction. A trigger that CANNOT be created on this schema (a
+ * table or column it names is missing) is not repairable by a pass: it is
+ * reported once per process (names and a code only) and nothing is marked, so
+ * passes do not re-mark every deal each time. Returns the number of triggers
+ * recreated. A healthy profile costs three small reads (the table_info PRAGMA
+ * and the active-row select of cloudSyncTriggersWanted, one sqlite_master read)
+ * and no DDL.
  */
 export function repairCloudSyncTriggersIfMissing(db: SqlDb, log: TriggerLog = silentLog): number {
   try {
     if (!cloudSyncTriggersWanted(db)) return 0;
     const existing = existingTriggers(db);
-    const healthy = CLOUD_SYNC_TRIGGERS.every((t) => {
+    const notExact = CLOUD_SYNC_TRIGGERS.filter((t) => {
       const stored = existing.get(t.name);
-      return stored !== undefined && sameBody(stored, t.sql);
+      return stored === undefined || !sameBody(stored, t.sql);
     });
-    if (healthy) return 0;
+    if (notExact.length === 0) return 0;
+    const cache = new Map<string, Set<string>>();
+    const cols = (table: string) => {
+      let c = cache.get(table);
+      if (!c) {
+        c = tableColumns(db, table);
+        cache.set(table, c);
+      }
+      return c;
+    };
+    const repairable = notExact.filter((t) => triggerCanBeCreated(t, cols));
+    const unavailable = notExact.filter((t) => !triggerCanBeCreated(t, cols));
+    const newlyUnavailable = unavailable.map((t) => t.name).filter((n) => !reportedUnavailable.has(n));
+    if (newlyUnavailable.length > 0) {
+      for (const n of newlyUnavailable) reportedUnavailable.add(n);
+      log.warn("[CloudSync] Triggers cannot be created on this schema", {
+        code: "CLOUD_SYNC_TRIGGER_PREREQUISITE",
+        triggers: [...newlyUnavailable].sort(),
+      });
+    }
+    if (repairable.length === 0) {
+      // Only an unavailable trigger left behind (stored, prerequisites gone) needs DDL: ensure drops it.
+      if (unavailable.some((t) => existing.has(t.name))) ensureCloudSyncTriggers(db, log);
+      return 0;
+    }
     return db.transaction(() => {
       const r = ensureCloudSyncTriggers(db, log);
       db.prepare(MARK_ALL_ELIGIBLE_ENABLED_SQL).run();
