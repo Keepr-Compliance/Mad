@@ -127,16 +127,57 @@ it.each(OFF_CASES)("%s: no collection; the earlier profile is cleared and the fi
   await offClearsTheProfile(sw);
 });
 
-describe("state-file write delayed 30 ms (slow disk)", () => {
-  beforeEach(() => {
-    jest.spyOn(fs.promises, "rename").mockImplementation(async (from, to) => {
-      await new Promise((r) => realSetTimeout(r, 30));
-      return realRename(from, to);
-    });
-  });
+/**
+ * Holds the next fs.promises[method] call until release(). Later calls pass
+ * straight through.
+ */
+function holdNext(method: "rename" | "rm"): { reached: Promise<void>; release: () => void } {
+  let entered!: () => void;
+  const reached = new Promise<void>((r) => (entered = r));
+  let release!: () => void;
+  const released = new Promise<void>((r) => (release = r));
+  let held = false;
+  const real = (fs.promises[method] as (...a: unknown[]) => Promise<void>).bind(fs.promises);
+  jest.spyOn(fs.promises, method).mockImplementation((async (...a: unknown[]) => {
+    if (!held) {
+      held = true;
+      entered();
+      await released;
+    }
+    return real(...a);
+  }) as never);
+  return { reached, release };
+}
 
+/**
+ * settle() must still be waiting while the held write is out, longer than any
+ * plausible fixed sleep, and must finish once it is released.
+ */
+async function settleAcross(hold: { reached: Promise<void>; release: () => void }): Promise<void> {
+  let resolved = false;
+  const settled = settle().then(() => {
+    resolved = true;
+  });
+  await hold.reached;
+  await new Promise((r) => realSetTimeout(r, 300));
+  expect(resolved).toBe(false);
+  hold.release();
+  await settled;
+}
+
+describe("state-file write held until released (slow disk)", () => {
   it.each(OFF_CASES)("%s: no collection; the earlier profile is cleared and the file removed", async (_n, sw) => {
-    await offClearsTheProfile(sw);
+    const onWrite = holdNext("rename");
+    svc.onDeviceRegistered("u1", "machine-a", "login", ROW);
+    await settleAcross(onWrite);
+    expect(fs.existsSync(stateFile)).toBe(true);
+    Object.assign(switches, sw);
+    const offRemove = holdNext("rm");
+    svc.onPrivacyGateChanged();
+    await settleAcross(offRemove);
+    expect(calls).toHaveLength(2);
+    expect(calls[1].update).toMatchObject({ hardware_profile: null });
+    expect(fs.existsSync(stateFile)).toBe(false);
   });
 });
 
