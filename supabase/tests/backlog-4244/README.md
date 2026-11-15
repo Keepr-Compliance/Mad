@@ -50,34 +50,52 @@ Named controls:
 - `OBS_cursors` (C27): what `list_deals` returns for special and impossible cursor values. An
   observation, not pass/fail.
 
-Masking (`_mcp_mask`, `_mcp_clean`) guards against a card or Social Security number being shown by
-accident. It is not a guard against a person who hides a number on purpose.
-- Digit-context ignorables: U+00AD, U+034F, U+115F, U+1160, U+180E, U+200C, U+200D, U+2061-U+2064,
-  U+3164, U+FE00-U+FE0F, U+FFA0, U+E0100-U+E01EF. A run of them is removed when it has a digit, a space
-  or a dash on both sides, so none of them stands inside a run of digits joined by spaces and dashes
-  when the masker reads it. Elsewhere they are kept: inside words (soft hyphen, ZWNJ), inside emoji
-  sequences (ZWJ), after an emoji or a keycap digit (variation selectors), in Hangul text.
-  Digits written as keycap emoji (digit + U+FE0F + U+20E3) are not masked.
-- A run of digit groups joined by single spaces or dashes is replaced whole when any run of
+Masking (`_mcp_mask`, `_mcp_clean`) guards against accidental exposure of card and Social Security
+numbers in the owner's own notes. It is not a guard against a person who hides a number on purpose.
+
+Invisible characters:
+- The class is the Unicode Default_Ignorable_Code_Point set, defined once in `_mcp_ign()`: U+00AD,
+  U+034F, U+061C, U+115F-U+1160, U+17B4-U+17B5, U+180B-U+180F, U+200B-U+200F, U+202A-U+202E,
+  U+2060-U+206F, U+3164, U+FE00-U+FE0F, U+FEFF, U+FFA0, U+FFF0-U+FFF8, U+1BCA0-U+1BCA3,
+  U+1D173-U+1D17A, U+E0000-U+E0FFF (4,174 code points). Checked against the property as Node 22 /
+  ICU 78.3 (Unicode 17.0) reports it.
+- `_mcp_strip` removes them from all shown text, and control characters, except U+200C, U+200D and
+  U+FE00-U+FE0F (`_mcp_ign_kept()`): those stay in words, emoji sequences and keycaps. So soft hyphens,
+  Hangul fillers and ideographic variation selectors are removed everywhere, and a subdivision flag
+  (black flag with tag characters) shows as a plain black flag.
+- Before masking, a run of characters of the class with an ASCII digit, a space or a dash on both sides
+  is removed, wherever it stands relative to the separators. After this no character of the class
+  stands inside a run of digits joined by spaces and dashes. A run of them between two spaces is
+  removed too.
+- A keycap (digit + U+FE0F + U+20E3) is kept; digits written as keycaps are not masked.
+
+What is masked:
+- a dashed SSN shape (ddd-dd-dddd);
+- a run of ASCII digit groups joined by single spaces or dashes, replaced whole when any run of
   consecutive groups in it holds 13 to 19 digits and passes the Luhn check. Measured share of random
   digit runs replaced (`OBS_false_positives`): about 10% for 13-16 digits plain or grouped by 4, and for
   17-19 digits plain; about 27% for 17-19 digits grouped by 4.
-- Not replaced (measured): groups joined by dots, by two spaces or by " - " (also when an ignorable
-  stands between two separators, which leaves two spaces); a card with more digits glued on without a
-  separator (one unbroken run of 20 or more digits); digits written as keycap emoji; digits separated by
-  any other visible character.
+
+What is not masked (measured):
+- groups joined by anything other than one space or one dash: dots, two spaces, " - ", other visible
+  characters;
+- a card with more digits glued on without a separator (one unbroken run of 20 or more digits);
+- digits in other scripts or full-width forms (only ASCII 0-9 count; `OBS_ign` records what `\d`
+  matches in the test database);
+- digits written as keycap emoji, or letters that look like digits;
+- a number split across fields.
+
+Limits:
 - `_mcp_clean` removes invisible characters from the whole field, then works on its first
-  8 * (p_max + 40) characters: removes the characters above where they stand between digits, masks the
-  first p_max + 40 characters and cuts to p_max.
+  8 * (p_max + 40) characters (characters, not bytes; a supplementary-plane character counts as one):
+  removes the class runs above, masks the first p_max + 40 characters and cuts to p_max.
 - A field longer than its limit (more than p_max + 40 characters after that removal, or more than
-  8 * (p_max + 40) characters before it) loses the run of digits, spaces, dashes and those characters
-  that reaches the end of its first p_max + 40 characters, and ends in "…". Digits that would have been
-  visible can be dropped with it (for example a list of phone numbers cut at the limit).
-- Cost limits: removal of invisible characters runs on the whole field (about 20 ms per million
-  characters, measured); everything else runs on at most 8 * (p_max + 40) characters. Up to 100 people
-  and 500 items are cleaned per call before the 60 KB budget is applied (`OBS_timing` in the results).
-- Tag characters U+E0000-U+E007F are removed, so a subdivision flag (black flag with tag characters)
-  shows as a plain black flag; regional-indicator country flags are unchanged.
+  8 * (p_max + 40) before it) loses the run of digits, spaces, dashes and class characters that reaches
+  the end of its first p_max + 40 characters, and ends in "…". Digits that would have been visible can
+  be dropped with it (for example a list of phone numbers cut at the limit).
+- Cost: the whole-field removal is linear; everything else runs on at most 8 * (p_max + 40)
+  characters (`OBS_timing`). Up to 100 people and 500 items are cleaned per call before the 60 KB
+  budget is applied.
 
 Known behaviour: `address_contains` searches the stored address, while the address in the output is
 masked, so a search can match digits that the output shows as `[number hidden by Keepr]` (the person's

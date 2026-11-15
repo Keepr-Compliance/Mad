@@ -391,7 +391,7 @@ DECLARE readers regprocedure[] := ARRAY['public._mcp_r_list_deals(text,text,inte
           'public._mcp_r_deal_checklists(uuid,boolean,uuid)']::regprocedure[];
         tools regprocedure[] := ARRAY['public.mcp_list_deals(text,bytea,text,text,text,integer,text)', 'public.mcp_get_deal(text,bytea,text,text)',
           'public.mcp_get_deal_checklists(text,bytea,text,text,boolean,text)']::regprocedure[];
-        helpers regprocedure[] := ARRAY['public._mcp_strip(text)', 'public._mcp_txt(text,integer)', 'public._mcp_mask(text)', 'public._mcp_clean(text,integer)',
+        helpers regprocedure[] := ARRAY['public._mcp_ign()', 'public._mcp_ign_kept()', 'public._mcp_strip(text)', 'public._mcp_txt(text,integer)', 'public._mcp_mask(text)', 'public._mcp_clean(text,integer)',
           'public._mcp_ts(timestamptz)', 'public._mcp_day(timestamptz)']::regprocedure[];
         f regprocedure; bad text := '';
 BEGIN
@@ -509,8 +509,10 @@ BEGIN
     pg_temp.pass(i8 ->> 'title' = 'Visibletxt', 'title ' || coalesce(i8 ->> 'title', '-')),
     pg_temp.pass(i8 ->> 'note' = 'Pay [number hidden by Keepr]; ' || 'שלום מרחבא مرحبا ' || chr(128104) || chr(8205) || chr(128105) || chr(8205) || chr(128103) || ' ok.',
                  'note ' || coalesce(i8 ->> 'note', '-')),
-    pg_temp.pass(public._mcp_strip(chr(8203) || chr(8206) || chr(8207) || chr(8234) || chr(8235) || chr(8236) || chr(8237) || chr(8238)
-                                   || chr(8288) || chr(8294) || chr(8295) || chr(8296) || chr(8297) || chr(65279) || chr(1) || chr(127)) = '', 'class'),
+    pg_temp.pass(public._mcp_strip((SELECT string_agg(chr(c), '') FROM unnest(pg_temp.ign_codepoints()) c
+                                     WHERE NOT (c IN (8204, 8205) OR c BETWEEN 65024 AND 65039)) || chr(1) || chr(127)) = '', 'class'),
+    pg_temp.pass(char_length(public._mcp_strip((SELECT string_agg(chr(c), '') FROM unnest(pg_temp.ign_codepoints()) c
+                                                WHERE c IN (8204, 8205) OR c BETWEEN 65024 AND 65039))) = 18, 'kept count'),
     pg_temp.pass(public._mcp_strip(E'a\tb\nc\rd' || chr(8204) || chr(8205)) = E'a\tb\nc\rd' || chr(8204) || chr(8205), 'kept'));
 END $h$;
 
@@ -721,7 +723,7 @@ BEGIN
     pg_temp.pass(public._mcp_clean(c, 1000) = 'card [number hidden by Keepr] x', 'variation selectors ' || public._mcp_clean(c, 1000)),
     pg_temp.pass(public._mcp_clean(d, 1000) = 'card [number hidden by Keepr] x', 'mixed ' || public._mcp_clean(d, 1000)),
     pg_temp.pass(public._mcp_clean(e, 1000) = 'ssn [number hidden by Keepr] x', 'ssn ' || public._mcp_clean(e, 1000)),
-    pg_temp.pass(public._mcp_clean(f, 1000) = f, 'soft hyphen in a word'),
+    pg_temp.pass(public._mcp_clean(f, 1000) = 'cooperate', 'soft hyphen removed from a word'),
     pg_temp.pass(public._mcp_clean(heart, 1000) = heart, 'emoji with a variation selector'),
     pg_temp.pass(public._mcp_clean(one_key, 1000) = one_key, 'one keycap'),
     pg_temp.pass(public._mcp_clean(keys, 1000) = keys, 'keycap digits kept as written'));
@@ -778,8 +780,13 @@ $h$;
 -- first digit, (ii) between every digit, (iii) on both sides of each separator, (iv) 50 of it in place of
 -- the first separator: through _mcp_clean (what the tools show) and through _mcp_mask alone.
 -- Returns one string per character: 8 marks per function, M masked, . not masked.
-CREATE FUNCTION pg_temp.ign_chars() RETURNS int[] LANGUAGE sql IMMUTABLE AS $h$
-  SELECT ARRAY[173, 847, 4447, 4448, 6158, 8204, 8205, 8289, 8290, 8291, 8292, 12644, 65024, 65039, 65440, 917760, 917999]
+-- every code point of _mcp_ign(), parsed from its text (the one definition of the class)
+CREATE FUNCTION pg_temp.ign_codepoints() RETURNS int[] LANGUAGE sql AS $h$
+  SELECT array_agg(g ORDER BY g)
+    FROM (SELECT ('x' || lpad(m[2], 8, '0'))::bit(32)::int AS lo, ('x' || lpad(coalesce(m[4], m[2]), 8, '0'))::bit(32)::int AS hi
+            FROM regexp_matches(public._mcp_ign(), '\\(?:u|U)([0-9A-F]{4,8})(-\\(?:u|U)([0-9A-F]{4,8}))?', 'g') AS m0(m0),
+                 LATERAL (SELECT ARRAY[NULL, m0[1], m0[2], m0[3]]) AS mm(m)) r,
+         generate_series(r.lo, r.hi) g
 $h$;
 CREATE FUNCTION pg_temp.ign_shapes(c text) RETURNS text[] LANGUAGE sql IMMUTABLE AS $h$
   SELECT ARRAY[
@@ -809,14 +816,30 @@ BEGIN
   END IF;
   RETURN out;
 END $h$;
-CREATE FUNCTION pg_temp.p_ignorables() RETURNS text LANGUAGE plpgsql AS $h$
-DECLARE cp int; bad text := ''; cnt int := 0; m text; z text := chr(8205); legit text[]; l text;
+-- every code point of the class in [lo, hi]: 9 shapes through _mcp_clean and 8 through _mcp_mask, all
+-- masked. Stops after 5 failures.
+CREATE TEMP TABLE p4244_ign (k text, v int);
+CREATE FUNCTION pg_temp.p_ignorables_range(lo int, hi int) RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE cp int; bad text := ''; nbad int := 0; cnt int := 0; m text;
 BEGIN
-  FOREACH cp IN ARRAY pg_temp.ign_chars() LOOP
+  FOREACH cp IN ARRAY pg_temp.ign_codepoints() LOOP
+    CONTINUE WHEN cp < lo OR cp > hi;
     m := pg_temp.ign_marks(chr(cp), true) || '/' || pg_temp.ign_marks(chr(cp), false);
     cnt := cnt + 1;
-    IF m <> 'MMMMMMMMM/MMMMMMMM' THEN bad := bad || format('U+%s %s; ', upper(to_hex(cp)), m); END IF;
+    IF m <> 'MMMMMMMMM/MMMMMMMM' THEN
+      nbad := nbad + 1; bad := bad || format('U+%s %s; ', upper(to_hex(cp)), m);
+      EXIT WHEN nbad >= 5;
+    END IF;
   END LOOP;
+  DELETE FROM pg_temp.p4244_ign WHERE k IN ('code points', 'cases', 'failing code points');
+  INSERT INTO pg_temp.p4244_ign VALUES ('code points', cnt), ('cases', cnt * 17), ('failing code points', nbad);
+  RETURN pg_temp.pass(nbad = 0 AND cnt > 0, 'code points ' || cnt || ' failing ' || nbad || ' ' || bad);
+END $h$;
+CREATE FUNCTION pg_temp.p_ignorables() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE r text; bad text := ''; n int := cardinality(pg_temp.ign_codepoints());
+BEGIN
+  r := pg_temp.p_ignorables_range(0, 1114111);
+  IF r <> 'PASS' THEN bad := bad || r || '; '; END IF;
   -- mixed characters
   IF position('[number' IN public._mcp_clean('x 4' || chr(173) || chr(8205) || '111' || chr(12644) || ' ' || chr(8291) || '1111 ' || chr(917760) || chr(6158) || '1111' || chr(65039) || ' ' || chr(847) || '1111 y', 1000)) = 0 THEN
     bad := bad || 'mixed card; ';
@@ -824,34 +847,66 @@ BEGIN
   IF position('[number' IN public._mcp_clean('x 1' || chr(65440) || '23' || chr(4447) || '-' || chr(8290) || '45-' || chr(8204) || '6789 y', 1000)) = 0 THEN
     bad := bad || 'mixed ssn; ';
   END IF;
-  legit := ARRAY[
+  RETURN pg_temp.pass(bad = '' AND n = 4174, 'class size ' || n || ' ' || bad);
+END $h$;
+-- legitimate text: kept as written where it uses only kept characters; the rest of the class removed
+CREATE FUNCTION pg_temp.p_ign_legit() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE z text := chr(8205); bad text := ''; l text; keep text[]; changed text[];
+BEGIN
+  keep := ARRAY[
     'family ' || chr(128104) || z || chr(128105) || z || chr(128103),
-    'keys ' || '1' || chr(65039) || chr(8419) || '2' || chr(65039) || chr(8419) || '3' || chr(65039) || chr(8419),
+    'keys 1' || chr(65039) || chr(8419) || '2' || chr(65039) || chr(8419) || '3' || chr(65039) || chr(8419),
     'word ' || chr(1605) || chr(1740) || chr(8204) || chr(1582) || chr(1608) || chr(1575) || chr(1607) || chr(1605),
-    'co' || chr(173) || 'operate',
-    'name ' || chr(44032) || chr(12644) || chr(45208) || ' ' || chr(4447) || chr(4449) || ' end',
     'love ' || chr(10084) || chr(65039) || ' 2 ' || chr(10084) || chr(65039),
-    'kanji ' || chr(33883) || chr(917760)];
-  FOREACH l IN ARRAY legit LOOP
+    'flag ' || chr(127482) || chr(127480)];
+  FOREACH l IN ARRAY keep LOOP
     IF public._mcp_clean(l, 1000) IS DISTINCT FROM l THEN bad := bad || 'changed: ' || l || '; '; END IF;
   END LOOP;
-  -- a run between two spaces is removed even with no digit near (invisible characters only)
-  IF public._mcp_clean('a ' || chr(12644) || ' b', 1000) IS DISTINCT FROM 'a  b' THEN bad := bad || 'between spaces; '; END IF;
-  RETURN pg_temp.pass(bad = '' AND cnt = 17, 'characters ' || cnt || ' ' || bad);
+  -- removed everywhere: soft hyphen, Hangul fillers, ideographic variation selectors
+  IF public._mcp_clean('co' || chr(173) || 'operate', 1000) IS DISTINCT FROM 'cooperate' THEN bad := bad || 'soft hyphen; '; END IF;
+  IF public._mcp_clean('name ' || chr(44032) || chr(12644) || chr(45208) || ' ' || chr(4447) || chr(4449), 1000) IS DISTINCT FROM 'name ' || chr(44032) || chr(45208) || ' ' || chr(4449) THEN
+    bad := bad || 'Hangul fillers; ';
+  END IF;
+  IF public._mcp_clean('kanji ' || chr(33883) || chr(917760), 1000) IS DISTINCT FROM 'kanji ' || chr(33883) THEN bad := bad || 'ideographic selector; '; END IF;
+  -- a keycap sequence of 16 digits is not masked (documented)
+  l := 'code ' || (SELECT string_agg(ch || chr(65039) || chr(8419), '' ORDER BY o) FROM regexp_split_to_table('4111111111111111', '') WITH ORDINALITY t(ch, o));
+  IF public._mcp_clean(l, 1000) IS DISTINCT FROM l THEN bad := bad || 'keycap sequence changed; '; END IF;
+  RETURN pg_temp.pass(bad = '', bad);
 END $h$;
--- the same matrix through the functions as they were before this change (pg_temp.o_mcp_*), and after
-CREATE FUNCTION pg_temp.obs_ignorables() RETURNS text LANGUAGE plpgsql AS $h$
-DECLARE cp int; out jsonb := '{}'; s text; b text; a text; o text;
+-- what \d and [0-9] match in this database, and what the tools do with non-ASCII digits
+CREATE FUNCTION pg_temp.p_digits() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE ar text := (SELECT string_agg(chr(1632 + d::int), '') FROM regexp_split_to_table('4111111111111111', '') d);
+        fw text := (SELECT string_agg(chr(65296 + d::int), '') FROM regexp_split_to_table('4111111111111111', '') d);
+        o1 text; o2 text; e text := '';
 BEGIN
-  FOREACH cp IN ARRAY pg_temp.ign_chars() LOOP
-    b := ''; a := '';
+  BEGIN o1 := public._mcp_clean('card ' || ar || ' x', 1000); o2 := public._mcp_clean('card ' || fw || ' x', 1000);
+  EXCEPTION WHEN OTHERS THEN e := SQLERRM; END;
+  DELETE FROM pg_temp.p4244_ign WHERE k LIKE 'digit %';
+  INSERT INTO pg_temp.p4244_ign VALUES ('digit arabic-indic matches \d', (chr(1635) ~ '\d')::int), ('digit full-width matches \d', (chr(65299) ~ '\d')::int),
+    ('digit arabic-indic matches [0-9]', (chr(1635) ~ '[0-9]')::int), ('digit full-width matches [0-9]', (chr(65299) ~ '[0-9]')::int);
+  RETURN pg_temp.pass(e = '' AND o1 = 'card ' || ar || ' x' AND o2 = 'card ' || fw || ' x', 'error ' || e || ' / ' || coalesce(o1, '-') || ' / ' || coalesce(o2, '-'));
+END $h$;
+CREATE FUNCTION pg_temp.obs_ign() RETURNS text LANGUAGE sql AS $h$
+  SELECT jsonb_object_agg(k, v)::text FROM pg_temp.p4244_ign
+$h$;
+-- the same 8 shapes for every code point of the class, through pg_temp.o_mcp_clean (the helpers before
+-- this change) and public._mcp_clean: number of code points with all 8 masked, and failing per shape
+CREATE FUNCTION pg_temp.obs_ignorables() RETURNS text LANGUAGE plpgsql AS $h$
+DECLARE cp int; s text; i int; o text; bf int[] := ARRAY[0,0,0,0,0,0,0,0]; af int[] := ARRAY[0,0,0,0,0,0,0,0]; ball int := 0; aall int := 0; okb boolean; oka boolean;
+BEGIN
+  FOREACH cp IN ARRAY pg_temp.ign_codepoints() LOOP
+    okb := true; oka := true; i := 0;
     FOREACH s IN ARRAY pg_temp.ign_shapes(chr(cp)) LOOP
+      i := i + 1;
       o := pg_temp.o_mcp_clean(s, 1000);
-      b := b || CASE WHEN position('[number hidden by Keepr]' IN o) > 0 AND o !~ '\d' THEN 'M' ELSE '.' END;
+      IF NOT (position('[number hidden by Keepr]' IN o) > 0 AND o !~ '\d') THEN bf[i] := bf[i] + 1; okb := false; END IF;
       o := public._mcp_clean(s, 1000);
-      a := a || CASE WHEN position('[number hidden by Keepr]' IN o) > 0 AND o !~ '\d' THEN 'M' ELSE '.' END;
+      IF NOT (position('[number hidden by Keepr]' IN o) > 0 AND o !~ '\d') THEN af[i] := af[i] + 1; oka := false; END IF;
     END LOOP;
-    out := out || jsonb_build_object('U+' || upper(CASE WHEN cp < 65536 THEN lpad(to_hex(cp), 4, '0') ELSE to_hex(cp) END), jsonb_build_object('before', b, 'after', a));
+    IF okb THEN ball := ball + 1; END IF;
+    IF oka THEN aall := aall + 1; END IF;
   END LOOP;
-  RETURN out::text;
+  RETURN jsonb_build_object('code_points', cardinality(pg_temp.ign_codepoints()), 'before_all_masked', ball, 'before_failing_per_shape', to_jsonb(bf),
+                            'after_all_masked', aall, 'after_failing_per_shape', to_jsonb(af),
+                            'shapes', 'card: after first digit, between every digit, both sides of each separator, 50 in place of a separator; ssn: the same')::text;
 END $h$;

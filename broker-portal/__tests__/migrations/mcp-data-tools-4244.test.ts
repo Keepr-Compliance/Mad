@@ -61,7 +61,7 @@ const fn = (name: string): Fn => {
 
 const READERS = ['_mcp_r_list_deals', '_mcp_r_get_deal', '_mcp_r_deal_checklists'];
 const TOOLS = ['mcp_list_deals', 'mcp_get_deal', 'mcp_get_deal_checklists'];
-const HELPERS = ['_mcp_strip', '_mcp_txt', '_mcp_mask', '_mcp_clean', '_mcp_ts', '_mcp_day'];
+const HELPERS = ['_mcp_ign', '_mcp_ign_kept', '_mcp_strip', '_mcp_txt', '_mcp_mask', '_mcp_clean', '_mcp_ts', '_mcp_day'];
 
 /** Functions a reader body may call (C30). */
 const READER_CALLS = new Set([
@@ -123,8 +123,33 @@ function freeTextGaps(sql: string): string[] {
   return gaps;
 }
 
+/** The class body returned by _mcp_ign(): the Default_Ignorable_Code_Point ranges, verified against ICU 78.3. */
+const IGN_TEXT =
+  '\\u00AD\\u034F\\u061C\\u115F-\\u1160\\u17B4-\\u17B5\\u180B-\\u180F\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u206F\\u3164\\uFE00-\\uFE0F\\uFEFF\\uFFA0\\uFFF0-\\uFFF8\\U0001BCA0-\\U0001BCA3\\U0001D173-\\U0001D17A\\U000E0000-\\U000E0FFF';
+
+/** problems with the single definition of the ignorable class, as text */
+function ignorableSourceProblems(raw: string): string[] {
+  const out: string[] = [];
+  const n = raw.split(IGN_TEXT).length - 1;
+  if (n !== 1) out.push(`class text appears ${n} times`);
+  const fns = functionsOf(statements(raw));
+  const uses: Record<string, number> = { _mcp_strip: 1, _mcp_mask: 1, _mcp_clean: 2 };
+  for (const [name, want] of Object.entries(uses)) {
+    const f = fns.find((x) => x.name === name);
+    const got = f ? f.body.split('public._mcp_ign()').length - 1 : -1;
+    if (got !== want) out.push(`${name}: ${got} uses of _mcp_ign()`);
+  }
+  const ign = fns.find((x) => x.name === '_mcp_ign');
+  if (!ign || !ign.body.includes(`'${IGN_TEXT}'::text`)) out.push('_mcp_ign does not return the class');
+  // no other site may name a code point of the class in a pattern
+  for (const f of fns.filter((x) => ['_mcp_strip', '_mcp_mask', '_mcp_clean'].includes(x.name))) {
+    if (/\\u(00AD|034F|200C|200D|FE0F|2060)|\\U000E/.test(f.body)) out.push(`${f.name}: names a class code point`);
+  }
+  return out;
+}
+
 describe('BACKLOG-4244 migration 20261114110000', () => {
-  it('positive: the parser finds the twelve functions', () => {
+  it('positive: the parser finds the fourteen functions', () => {
     expect(FNS.map((f) => f.name).sort()).toEqual([...READERS, ...TOOLS, ...HELPERS].sort());
   });
 
@@ -295,6 +320,19 @@ describe('BACKLOG-4244 migration 20261114110000', () => {
 
   it('no table, policy, table grant or role change', () => {
     expect(SQL).not.toMatch(/CREATE TABLE|CREATE POLICY|DROP POLICY|ALTER POLICY|GRANT (SELECT|INSERT|UPDATE|DELETE|ALL) ON TABLE|ALTER ROLE|CREATE ROLE|BYPASSRLS|DISABLE ROW LEVEL/i);
+  });
+
+  it('the ignorable class has one definition, used by strip, mask, clean un-join and the window drop', () => {
+    expect(ignorableSourceProblems(RAW)).toEqual([]);
+  });
+
+  it('positive control: a site given its own copy of the class is found', () => {
+    const copy = RAW.replace(
+      "  v_x := regexp_replace(p, '([0-9 -])[' || public._mcp_ign() || ']+(?=[0-9 -])', '\\1', 'g');",
+      `  v_x := regexp_replace(p, '([0-9 -])[${IGN_TEXT}]+(?=[0-9 -])', '\\1', 'g');`
+    );
+    expect(copy).not.toBe(RAW);
+    expect(ignorableSourceProblems(copy)).toEqual(['class text appears 2 times', '_mcp_mask: 0 uses of _mcp_ign()', '_mcp_mask: names a class code point']);
   });
 
   it('rollback: deletes the new log rows, restores the CHECKs, drops every function and the ledger row', () => {

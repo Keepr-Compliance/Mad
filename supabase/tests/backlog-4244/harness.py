@@ -188,7 +188,7 @@ PROBES = ['p_list_a', 'p_order_a', 'p_iso', 'p_ent', 'p_c7b_outdated_notice', 'p
           'p_unconfirmed', 'p_limits', 'p_paging', 'p_people_cap', 'p_masking', 'p_dates', 'p_fresh', 'p_saved_from', 'p_null_install',
           'p_checklists', 'p_log', 'p_grants', 'p_checks', 'p_rollback', 'p_withheld_planted', 'p_people_cap_100', 'p_strip',
           'p_mask_sweep', 'p_joiners', 'p_window_sweep', 'p_window_shrink', 'p_clean_timing', 'p_strip_tags', 'p_window_joiners',
-          'p_ignorables']
+          'p_ignorables', 'p_ign_legit', 'p_digits']
 
 ROLLBACK_PROBE = ("CREATE FUNCTION pg_temp.p_rollback(rb text) RETURNS text LANGUAGE plpgsql AS $rbp$\n"
                   "DECLARE f0 text := (SELECT v FROM pg_temp.p4244_out WHERE k = 'fp_after_apply'); r text; gone boolean; chk text; e text := '';\n"
@@ -319,30 +319,31 @@ def mutants():
     b.append(fn_mutant('MASK_no_luhn', '_mcp_mask', 'IF v_sum % 10 = 0 THEN', 'IF true THEN', 'pg_temp.p_masking()'))
     b.append(fn_mutant('MASK_no_cut', '_mcp_txt', 'CASE WHEN char_length(s.x) > p_max THEN', 'CASE WHEN false THEN', 'pg_temp.p_masking()'))
     b.append(fn_mutant('MASK_no_strip_before_mask', '_mcp_clean', '(SELECT public._mcp_strip(p) AS y) t', '(SELECT p AS y) t', 'pg_temp.p_strip()'))
-    b.append(fn_mutant('STRIP_old_class', '_mcp_strip', '\\u007F\\u200B\\u200E\\u200F\\u202A-\\u202E\\u2060\\u2066-\\u2069\\uFEFF', '\\u007F', 'pg_temp.p_strip()'))
-    b.append(fn_mutant('STRIP_joiners_stripped', '_mcp_strip', '\\u200B\\u200E', '\\u200B-\\u200E', 'pg_temp.p_strip()'))
+    b.append(fn_mutant('STRIP_controls_only', '_mcp_strip', "|(?![' || public._mcp_ign_kept() || '])[' || public._mcp_ign() || ']'", "", 'pg_temp.p_strip()'))
+    b.append(fn_mutant('STRIP_kept_not_excluded', '_mcp_strip', "|(?![' || public._mcp_ign_kept() || '])[' || public._mcp_ign() || ']'",
+                       "|[' || public._mcp_ign() || ']'", 'pg_temp.p_ign_legit()'))
     b.append(fn_mutant('MASK_whole_run_luhn_only', '_mcp_mask',
                        "    v_g := regexp_split_to_array(v_m, '[ -]');                                         /*MASK:groups*/",
                        "    v_g := ARRAY[regexp_replace(v_m, '[^0-9]', '', 'g')];                                         /*MASK:groups*/", 'pg_temp.p_mask_sweep()'))
-    b.append(fn_mutant('MASK_old_expression', '_mcp_mask', "regexp_matches(v_x, '(\\d+(?:[ -]\\d+)*)', 'g')", "regexp_matches(v_x, '(\\d(?:[ -]?\\d){12,18})', 'g')",
+    b.append(fn_mutant('MASK_old_expression', '_mcp_mask', "regexp_matches(v_x, '([0-9]+(?:[ -][0-9]+)*)', 'g')", "regexp_matches(v_x, '(\\d(?:[ -]?\\d){12,18})', 'g')",
                        'pg_temp.p_mask_sweep()'))
     # the whole earlier rule: the earlier run pattern and Luhn on the whole run
     b.append(fn_mutant('MASK_old_algorithm', '_mcp_mask',
-                       "regexp_matches(v_x, '(\\d+(?:[ -]\\d+)*)', 'g') AS r LOOP\n    IF char_length(regexp_replace(v_m, '[^0-9]', '', 'g')) < 13 THEN\n      CONTINUE;\n    END IF;\n    v_g := regexp_split_to_array(v_m, '[ -]');",
+                       "regexp_matches(v_x, '([0-9]+(?:[ -][0-9]+)*)', 'g') AS r LOOP\n    IF char_length(regexp_replace(v_m, '[^0-9]', '', 'g')) < 13 THEN\n      CONTINUE;\n    END IF;\n    v_g := regexp_split_to_array(v_m, '[ -]');",
                        "regexp_matches(v_x, '(\\d(?:[ -]?\\d){12,18})', 'g') AS r LOOP\n    IF char_length(regexp_replace(v_m, '[^0-9]', '', 'g')) < 13 THEN\n      CONTINUE;\n    END IF;\n    v_g := ARRAY[regexp_replace(v_m, '[^0-9]', '', 'g')];",
                        'pg_temp.p_mask_sweep()'))
     b.append(fn_mutant('MASK_luhn_dropped', '_mcp_mask', "IF v_sum % 10 = 0 THEN                                                         /*MASK:luhn*/",
                        "IF true THEN                                                         /*MASK:luhn*/", 'pg_temp.p_mask_sweep()'))
-    # F-1, F-2, G-1, G-2, strip class
-    IGN = "\\u00AD\\u034F\\u115F\\u1160\\u180E\\u200C\\u200D\\u2061-\\u2064\\u3164\\uFE00-\\uFE0F\\uFFA0\\U000E0100-\\U000E01EF"
-    UNJ = "'([\\d -])[" + IGN + "]+(?=[\\d -])'"
-    UNJ_OLD = "'([\\d -])[\\u200C\\u200D]+(?=[\\d -])'"
-    RUN = "'\\d[\\d " + IGN + "-]*$'"
+    # F-1, F-2, G-1, G-2, the ignorable class (one definition: _mcp_ign)
+    UNJ = "'([0-9 -])[' || public._mcp_ign() || ']+(?=[0-9 -])'"
+    UNJ_NONE = "'([0-9 -])[\\u200C]+(?=[0-9 -])'"
+    UNJ_DIGITS_ONLY = "'([0-9])[' || public._mcp_ign() || ']+(?=[0-9])'"
+    RUN = "'[0-9][0-9 ' || public._mcp_ign() || '-]*$'"
     b.append(fn_mutant('MASK_unjoin_removed', '_mcp_mask', "  v_x := regexp_replace(p, " + UNJ + ", '\\1', 'g');", "  v_x := p;", 'pg_temp.p_joiners()'))
-    b.append(fn_mutant('MASK_unjoin_class_narrowed', '_mcp_mask', "  v_x := regexp_replace(p, " + UNJ + ",", "  v_x := regexp_replace(p, " + UNJ_OLD + ",",
+    b.append(fn_mutant('MASK_unjoin_class_narrowed', '_mcp_mask', "  v_x := regexp_replace(p, " + UNJ + ",", "  v_x := regexp_replace(p, " + UNJ_NONE + ",",
                        'pg_temp.p_joiners_more()'))
     b.append(fn_mutant('CLEAN_unjoin_class_narrowed', '_mcp_clean', "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ + ",",
-                       "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ_OLD + ",", 'pg_temp.p_window_joiners()'))
+                       "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ_NONE + ",", 'pg_temp.p_window_joiners()'))
     b.append(fn_mutant('CLEAN_unjoin_removed', '_mcp_clean', "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ + ", '\\1', 'g') AS x,",
                        "left(t.y, 8 * (p_max + 40)) AS x,", 'pg_temp.p_window_joiners()'))
     b.append(fn_mutant('CLEAN_bound_removed', '_mcp_clean',
@@ -355,20 +356,21 @@ def mutants():
                        "public._mcp_mask(u.x)", 'pg_temp.p_clean_timing()'))
     b.append(fn_mutant('CLEAN_trailing_run_kept', '_mcp_clean', "regexp_replace(left(u.x, p_max + 40), " + RUN + ", '')", "left(u.x, p_max + 40)",
                        'pg_temp.p_window_shrink()'))
-    for tag, part in [('U3164', '\\u3164'), ('U2061_2064', '\\u2061-\\u2064'), ('UE0100_E01EF', '\\U000E0100-\\U000E01EF'), ('UFFA0', '\\uFFA0')]:
-        b.append(fn_mutant('MASK_ignorable_narrowed_' + tag, '_mcp_mask', "  v_x := regexp_replace(p, " + UNJ + ",",
-                           "  v_x := regexp_replace(p, " + UNJ.replace(part, '') + ",", 'pg_temp.p_ignorables()'))
-    for tag, part in [('U180E', '\\u180E'), ('UFE00_FE0F', '\\uFE00-\\uFE0F')]:
-        b.append(fn_mutant('CLEAN_ignorable_narrowed_' + tag, '_mcp_clean', "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ + ",",
-                           "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ.replace(part, '') + ",", 'pg_temp.p_ignorables()'))
-    b.append(fn_mutant('MASK_joiner_separator_joiner_dropped', '_mcp_mask', "  v_x := regexp_replace(p, " + UNJ + ",",
-                       "  v_x := regexp_replace(p, " + UNJ.replace("'([\\d -])[", "'(\\d)[").replace("(?=[\\d -])'", "(?=\\d)'") + ",", 'pg_temp.p_ignorables()'))
-    b.append(fn_mutant('CLEAN_joiner_separator_joiner_dropped', '_mcp_clean', "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ + ",",
-                       "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ.replace("'([\\d -])[", "'(\\d)[").replace("(?=[\\d -])'", "(?=\\d)'") + ",",
-                       'pg_temp.p_ignorables()'))
     b.append(fn_mutant('CLEAN_drop_class_old', '_mcp_clean', "regexp_replace(left(u.x, p_max + 40), " + RUN + ", '')",
-                       "regexp_replace(left(u.x, p_max + 40), '\\d+(?:[ -]\\d+)*[ -]?$', '')", 'pg_temp.p_window_joiners()'))
-    b.append(fn_mutant('STRIP_tags_kept', '_mcp_strip', '\\u061C\\U000E0000-\\U000E007F]', ']', 'pg_temp.p_strip_tags()'))
+                       "regexp_replace(left(u.x, p_max + 40), '[0-9]+(?:[ -][0-9]+)*[ -]?$', '')", 'pg_temp.p_window_joiners()'))
+    # one sub-range dropped from the single definition: that range's cases red (strip and un-join both)
+    for tag, part, lo, hi in [('E0000_E0FFF', '-\\U000E0000-\\U000E0FFF', 917504, 921599), ('2060_206F', '\\u2060-\\u206F', 8288, 8303),
+                              ('1D173_1D17A', '\\U0001D173-\\U0001D17A', 119155, 119162), ('FFF0_FFF8', '\\uFFF0-\\uFFF8', 65520, 65528),
+                              ('FE00_FE0F', '\\uFE00-\\uFE0F', 65024, 65039)]:
+        old = part.lstrip('-')
+        b.append(fn_mutant('IGN_range_dropped_' + tag, '_mcp_ign', old, '', 'pg_temp.p_ignorables_range(%d, %d)' % (lo, hi)))
+    b.append(fn_mutant('IGN_kept_zwj_dropped', '_mcp_ign_kept', "\\u200C\\u200D", "\\u200C", 'pg_temp.p_ign_legit()'))
+    b.append(fn_mutant('MASK_joiner_separator_joiner_dropped', '_mcp_mask', "  v_x := regexp_replace(p, " + UNJ + ",",
+                       "  v_x := regexp_replace(p, " + UNJ_DIGITS_ONLY + ",", 'pg_temp.p_ignorables_range(8204, 8205)'))
+    b.append(fn_mutant('CLEAN_joiner_separator_joiner_dropped', '_mcp_clean', "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ + ",",
+                       "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ_DIGITS_ONLY + ",", 'pg_temp.p_ignorables_range(65024, 65039)'))
+    b.append(fn_mutant('MASK_non_ascii_digits', '_mcp_mask', "regexp_matches(v_x, '([0-9]+(?:[ -][0-9]+)*)', 'g')",
+                       "regexp_matches(v_x, '(\\d+(?:[ -]\\d+)*)', 'g')", 'pg_temp.p_digits()'))
     b.append(fn_mutant('CAP_people_100_removed', '_mcp_r_get_deal', 'FROM p WHERE p.rn <= 100 /*CAP:people*/', 'FROM p /*CAP:people*/',
                        'pg_temp.p_people_cap_100()'))
     b.append(fn_mutant('DATE_local_zone', '_mcp_day', "to_char(p AT TIME ZONE 'UTC', 'YYYY-MM-DD')", "to_char(p, 'YYYY-MM-DD')", 'pg_temp.p_dates()'))
@@ -456,7 +458,7 @@ def compose(with_mutants=True, only=None):
             "INSERT INTO pg_temp.p4244_out SELECT 'PRE_cloud_writes_old_signature', count(*)::text FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace\n"
             "  AND p.proname = ANY (%s::text[]) AND p.proargnames[1] IS DISTINCT FROM 'p_expected_user_id';\n"
             "INSERT INTO pg_temp.p4244_out SELECT 'PRE_4244_objects', count(*)::text FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace\n"
-            "  AND p.proname IN ('mcp_list_deals','mcp_get_deal','mcp_get_deal_checklists','_mcp_r_list_deals','_mcp_r_get_deal','_mcp_r_deal_checklists','_mcp_strip','_mcp_txt','_mcp_mask','_mcp_clean','_mcp_ts','_mcp_day');\n"
+            "  AND p.proname IN ('mcp_list_deals','mcp_get_deal','mcp_get_deal_checklists','_mcp_r_list_deals','_mcp_r_get_deal','_mcp_r_deal_checklists','_mcp_ign','_mcp_ign_kept','_mcp_strip','_mcp_txt','_mcp_mask','_mcp_clean','_mcp_ts','_mcp_day');\n"
             "INSERT INTO pg_temp.p4244_out SELECT 'PRE_call_log_checks', string_agg(c.conname || '=' || pg_get_constraintdef(c.oid), '; ' ORDER BY c.conname) FROM pg_constraint c\n"
             "  WHERE c.conrelid = 'public.mcp_call_log'::regclass AND c.contype = 'c';\n"
             "INSERT INTO pg_temp.p4244_out SELECT 'PRE_ledger_4244', count(*)::text FROM supabase_migrations.schema_migrations WHERE version = '20261114110000';\n"
@@ -497,6 +499,7 @@ def compose(with_mutants=True, only=None):
     b.append(block('OBS_window', '    PERFORM pg_temp.p_window_sweep();\n    v := pg_temp.obs_window();'))
     b.append(block('OBS_timing', '    PERFORM pg_temp.p_clean_timing();\n    v := pg_temp.obs_timing();'))
     b.append(block('OBS_ignorables', '    v := pg_temp.obs_ignorables();'))
+    b.append(block('OBS_ign', '    PERFORM pg_temp.p_ignorables();\n    PERFORM pg_temp.p_digits();\n    v := pg_temp.obs_ign();'))
     b.append(block('OBS_window_joiners', '    PERFORM pg_temp.p_window_joiners();\n    v := pg_temp.obs_window_joiners();'))
     b.append(block('FX_get_null_install', "    v := pg_temp.gd('a1', pg_temp.null_install_deal()::text);"))
     if with_mutants:

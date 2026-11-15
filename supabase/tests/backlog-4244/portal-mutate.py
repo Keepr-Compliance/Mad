@@ -59,6 +59,9 @@ MUTANTS = [
      "deals: arr(obj({ ...DEAL_BASE, deadlines: obj(DEADLINE_PROPS), people: int(),", "deals: arr(obj({ ...DEAL_BASE, people: int(),", [PAR, DT]),
     ('D4_cap_text_dropped', BP + 'lib/mcp/tools/checklists.ts',
      "  props.items_total = { ...props.items_total, description: RESULT_TEXT.items_total };\n", "", [DT]),
+    ('IGN_copy_in_clean', 'supabase/migrations/20261114110000_backlog_4244_mcp_data_tools.sql',
+     "'([0-9 -])[' || public._mcp_ign() || ']+(?=[0-9 -])', '\\1', 'g') AS x,",
+     "'([0-9 -])[\\u00AD\\u034F\\u200C\\u200D\\uFE00-\\uFE0F]+(?=[0-9 -])', '\\1', 'g') AS x,", [BP + '__tests__/migrations/mcp-data-tools-4244.test.ts']),
     ('C24_phone_key_renamed', BP + 'lib/mcp/tools/shapes.ts',
      "export const PHONE_PROPS = { e164: str(true),", "export const PHONE_PROPS = { phone: str(true),", [PAR, DT]),
 ]
@@ -78,7 +81,7 @@ def run_jest(files):
 
 def main():
     want = set(sys.argv[1:])
-    if subprocess.run(['git', '-C', root, 'status', '--porcelain', '--', 'broker-portal/lib', 'broker-portal/__tests__'],
+    if subprocess.run(['git', '-C', root, 'status', '--porcelain', '--', 'broker-portal/lib', 'broker-portal/__tests__', 'supabase/migrations'],
                       capture_output=True, text=True).stdout.strip():
         raise SystemExit('commit first: broker-portal has uncommitted changes')
     rows = []
@@ -98,7 +101,7 @@ def main():
             open(p, 'w').write(text)
         print('  -> failed=%d total=%d %s' % (failed, total, 'RED' if failed and total else 'STAYED GREEN'))
         rows.append((mode, failed, total))
-    dirty = subprocess.run(['git', '-C', root, 'status', '--porcelain', '--', 'broker-portal/lib', 'broker-portal/__tests__'],
+    dirty = subprocess.run(['git', '-C', root, 'status', '--porcelain', '--', 'broker-portal/lib', 'broker-portal/__tests__', 'supabase/migrations'],
                            capture_output=True, text=True).stdout.strip()
     print('restored: ' + ('NO, tree dirty:\n' + dirty if dirty else 'yes, tree clean'))
     base = run_jest([DT, PAR, ROUTE])

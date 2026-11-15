@@ -44,4 +44,6 @@ DROP FUNCTION IF EXISTS public._mcp_clean(text, integer);
 DROP FUNCTION IF EXISTS public._mcp_mask(text);
 DROP FUNCTION IF EXISTS public._mcp_txt(text, integer);
 DROP FUNCTION IF EXISTS public._mcp_strip(text);
+DROP FUNCTION IF EXISTS public._mcp_ign_kept();
+DROP FUNCTION IF EXISTS public._mcp_ign();
 DELETE FROM supabase_migrations.schema_migrations WHERE version = '20261114110000';

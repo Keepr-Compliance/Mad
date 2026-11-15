@@ -2,7 +2,7 @@
 --
 -- Objects:
 --   checks    mcp_call_log tool and outcome CHECKs widened (no column added)
---   helpers   _mcp_strip, _mcp_txt, _mcp_mask, _mcp_clean, _mcp_ts, _mcp_day (owner postgres, EXECUTE mcp_reader only)
+--   helpers   _mcp_ign, _mcp_ign_kept, _mcp_strip, _mcp_txt, _mcp_mask, _mcp_clean, _mcp_ts, _mcp_day (owner postgres, EXECUTE mcp_reader only)
 --   readers   _mcp_r_list_deals, _mcp_r_get_deal, _mcp_r_deal_checklists
 --             (owner mcp_reader, STABLE, SECURITY DEFINER, EXECUTE postgres only)
 --   anon      mcp_list_deals, mcp_get_deal, mcp_get_deal_checklists (each takes the portal secret)
@@ -44,15 +44,33 @@ ALTER TABLE public.mcp_call_log ADD CONSTRAINT mcp_call_log_outcome_check
 -- ---------------------------------------------------------------------------
 -- Text and time helpers (owner postgres; EXECUTE mcp_reader only)
 -- ---------------------------------------------------------------------------
--- invisible characters removed: control characters (U+0001-U+0008, U+000B, U+000C, U+000E-U+001F, U+007F),
--- zero-width space U+200B, direction marks U+200E and U+200F, direction embeddings and overrides
--- U+202A-U+202E, word joiner U+2060, direction isolates U+2066-U+2069, zero-width no-break space U+FEFF,
--- Arabic letter mark U+061C, tag characters U+E0000-U+E007F.
--- Kept: tab, line feed, carriage return, and the joiners U+200C and U+200D (used inside words of some
--- scripts and inside emoji sequences).
+-- The Unicode Default_Ignorable_Code_Point set (DerivedCoreProperties), as the body of a regular
+-- expression bracket: U+00AD, U+034F, U+061C, U+115F-U+1160, U+17B4-U+17B5, U+180B-U+180F,
+-- U+200B-U+200F, U+202A-U+202E, U+2060-U+206F, U+3164, U+FE00-U+FE0F, U+FEFF, U+FFA0, U+FFF0-U+FFF8,
+-- U+1BCA0-U+1BCA3, U+1D173-U+1D17A, U+E0000-U+E0FFF. The only definition of the set; _mcp_strip,
+-- _mcp_mask and _mcp_clean build their patterns from it.
+CREATE OR REPLACE FUNCTION public._mcp_ign()
+RETURNS text LANGUAGE sql IMMUTABLE SECURITY INVOKER SET search_path = '' AS $fn$
+  SELECT '\u00AD\u034F\u061C\u115F-\u1160\u17B4-\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\uFFF0-\uFFF8\U0001BCA0-\U0001BCA3\U0001D173-\U0001D17A\U000E0000-\U000E0FFF'::text
+$fn$;
+REVOKE ALL ON FUNCTION public._mcp_ign() FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._mcp_ign() TO mcp_reader;
+
+-- The part of _mcp_ign() kept in shown text: the joiners U+200C and U+200D (between letters of some
+-- scripts, inside emoji sequences) and the variation selectors U+FE00-U+FE0F (after emoji and keycaps).
+CREATE OR REPLACE FUNCTION public._mcp_ign_kept()
+RETURNS text LANGUAGE sql IMMUTABLE SECURITY INVOKER SET search_path = '' AS $fn$
+  SELECT '\u200C\u200D\uFE00-\uFE0F'::text
+$fn$;
+REVOKE ALL ON FUNCTION public._mcp_ign_kept() FROM PUBLIC, anon, authenticated, service_role;
+GRANT EXECUTE ON FUNCTION public._mcp_ign_kept() TO mcp_reader;
+
+-- invisible characters removed: control characters (U+0001-U+0008, U+000B, U+000C, U+000E-U+001F,
+-- U+007F) and every character of _mcp_ign() except those of _mcp_ign_kept().
+-- Kept: tab, line feed, carriage return, and the characters of _mcp_ign_kept().
 CREATE OR REPLACE FUNCTION public._mcp_strip(p text)
 RETURNS text LANGUAGE sql IMMUTABLE SECURITY INVOKER SET search_path = '' AS $fn$
-  SELECT regexp_replace(p, '[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F\u200B\u200E\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF\u061C\U000E0000-\U000E007F]', '', 'g')
+  SELECT regexp_replace(p, '[\u0001-\u0008\u000B\u000C\u000E-\u001F\u007F]|(?![' || public._mcp_ign_kept() || '])[' || public._mcp_ign() || ']', '', 'g')
 $fn$;
 REVOKE ALL ON FUNCTION public._mcp_strip(text) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._mcp_strip(text) TO mcp_reader;
@@ -66,8 +84,8 @@ $fn$;
 REVOKE ALL ON FUNCTION public._mcp_txt(text, integer) FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION public._mcp_txt(text, integer) TO mcp_reader;
 
--- Replaced by '[number hidden by Keepr]', after removing digit-context ignorables (see below) that have
--- a digit, a space or a dash on both sides:
+-- Replaced by '[number hidden by Keepr]' (digits are ASCII 0-9), after removing characters of
+-- _mcp_ign() that have a digit, a space or a dash on both sides:
 -- - dashed SSN-shaped numbers (ddd-dd-dddd);
 -- - a run of digit groups (groups joined by one space or one dash) when any run of consecutive
 --   groups inside it holds 13 to 19 digits and passes the Luhn check; the whole run is replaced.
@@ -88,13 +106,11 @@ BEGIN
   IF p IS NULL THEN
     RETURN NULL;
   END IF;
-  -- digit-context ignorables (U+00AD, U+034F, U+115F, U+1160, U+180E, U+200C, U+200D, U+2061-U+2064,
-  -- U+3164, U+FE00-U+FE0F, U+FFA0, U+E0100-U+E01EF) are removed wherever a run of them has a digit,
-  -- a space or a dash on both sides. After this no such character stands inside a run of digits joined
-  -- by spaces and dashes.
-  v_x := regexp_replace(p, '([\d -])[\u00AD\u034F\u115F\u1160\u180E\u200C\u200D\u2061-\u2064\u3164\uFE00-\uFE0F\uFFA0\U000E0100-\U000E01EF]+(?=[\d -])', '\1', 'g');                       /*MASK:unjoin*/
-  v_x := regexp_replace(v_x, '\m\d{3}-\d{2}-\d{4}\M', '[number hidden by Keepr]', 'g');
-  FOR v_m IN SELECT r[1] FROM regexp_matches(v_x, '(\d+(?:[ -]\d+)*)', 'g') AS r LOOP
+  -- characters of _mcp_ign() are removed wherever a run of them has an ASCII digit, a space or a dash on
+  -- both sides; after this none of them stands inside a run of digits joined by spaces and dashes
+  v_x := regexp_replace(p, '([0-9 -])[' || public._mcp_ign() || ']+(?=[0-9 -])', '\1', 'g');                       /*MASK:unjoin*/
+  v_x := regexp_replace(v_x, '\m[0-9]{3}-[0-9]{2}-[0-9]{4}\M', '[number hidden by Keepr]', 'g');
+  FOR v_m IN SELECT r[1] FROM regexp_matches(v_x, '([0-9]+(?:[ -][0-9]+)*)', 'g') AS r LOOP
     IF char_length(regexp_replace(v_m, '[^0-9]', '', 'g')) < 13 THEN
       CONTINUE;
     END IF;
@@ -136,23 +152,22 @@ GRANT EXECUTE ON FUNCTION public._mcp_mask(text) TO mcp_reader;
 
 -- typed text, shown in at most p_max characters:
 -- 1. invisible characters removed (_mcp_strip);
--- 2. the first 8 * (p_max + 40) characters kept; in them every run of digit-context ignorables
---    (U+00AD, U+034F, U+115F, U+1160, U+180E, U+200C, U+200D, U+2061-U+2064, U+3164, U+FE00-U+FE0F,
---    U+FFA0, U+E0100-U+E01EF) with a digit, a space or a dash on both sides removed;
+-- 2. the first 8 * (p_max + 40) characters kept (characters, not bytes); in them every run of
+--    characters of _mcp_ign() with an ASCII digit, a space or a dash on both sides removed;
 -- 3. when the text is longer than p_max + 40 characters after step 2, or was longer than
 --    8 * (p_max + 40) in step 2: the first p_max + 40 characters kept, a trailing run of digits,
---    spaces, dashes and digit-context ignorables that starts with a digit removed, and '…' added;
+--    spaces, dashes and characters of _mcp_ign() that starts with a digit removed, and '…' added;
 -- 4. masked (_mcp_mask) and cut to p_max (_mcp_txt).
 -- A card number of 19 digits with separators spans at most 37 characters after step 2, so one that
 -- starts before p_max is either inside the masked text or removed in step 3.
 CREATE OR REPLACE FUNCTION public._mcp_clean(p text, p_max integer)
 RETURNS text LANGUAGE sql IMMUTABLE SECURITY INVOKER SET search_path = '' AS $fn$
   SELECT public._mcp_txt(
-           public._mcp_mask(CASE WHEN u.long THEN regexp_replace(left(u.x, p_max + 40), '\d[\d \u00AD\u034F\u115F\u1160\u180E\u200C\u200D\u2061-\u2064\u3164\uFE00-\uFE0F\uFFA0\U000E0100-\U000E01EF-]*$', '')   /*CLEAN:window*/
+           public._mcp_mask(CASE WHEN u.long THEN regexp_replace(left(u.x, p_max + 40), '[0-9][0-9 ' || public._mcp_ign() || '-]*$', '')   /*CLEAN:window*/
                                  ELSE u.x END)
            || CASE WHEN u.long THEN '…' ELSE '' END, p_max)
     FROM (SELECT v.x, v.cut OR char_length(v.x) > p_max + 40 AS long
-            FROM (SELECT regexp_replace(left(t.y, 8 * (p_max + 40)), '([\d -])[\u00AD\u034F\u115F\u1160\u180E\u200C\u200D\u2061-\u2064\u3164\uFE00-\uFE0F\uFFA0\U000E0100-\U000E01EF]+(?=[\d -])', '\1', 'g') AS x,   /*CLEAN:unjoin*/
+            FROM (SELECT regexp_replace(left(t.y, 8 * (p_max + 40)), '([0-9 -])[' || public._mcp_ign() || ']+(?=[0-9 -])', '\1', 'g') AS x,   /*CLEAN:unjoin*/
                          char_length(t.y) > 8 * (p_max + 40) AS cut                                                  /*CLEAN:bound*/
                     FROM (SELECT public._mcp_strip(p) AS y) t) v) u
 $fn$;
