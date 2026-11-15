@@ -25,11 +25,17 @@ const ANSWER_ROW = "flex flex-wrap gap-3";
 /** Secondary, bordered, neutral: visible on the white panel, never ghost. */
 const SKIP_BUTTON =
   "inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-[10px] border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50";
-export const MAIL_TIP_INTRO = "Check in order and stop at the first match:";
-export const MAIL_TIP_STEPS: readonly string[] = [
-  "A person wrote to you about real estate (a client, lead, agent, lender, title or escrow), or a deal service (e-sign, showing, title portal) wrote about one of your deals \u2192 Real estate work.",
-  "Otherwise, if a machine or a list sent it (newsletter, listing alert, promotion, receipt, bank or app alert) \u2192 Automated or mass mail, even when it's about real estate.",
-  "Otherwise \u2192 Other: a person wrote to you about something else, or you can't tell.",
+export const MAIL_TIP_INTRO = "Check in this order and pick the first that fits:";
+export const MAIL_TIP_STEPS: ReadonlyArray<{ label: string; body: string }> = [
+  {
+    label: "Real estate work",
+    body: "a person wrote to you about real estate (a client, lead, agent, lender, title or escrow), or a deal service (e-sign, showing, title portal) wrote about one of your deals.",
+  },
+  {
+    label: "Automated or mass mail",
+    body: "an automated email or newsletter, like a listing alert, promotion, receipt, or bank or app alert, even when it's about real estate.",
+  },
+  { label: "Other", body: "a person wrote to you about something else, or you can't tell." },
 ];
 export const MAIL_KEYS_TIP = "Tip: \u2190 automated \u00b7 \u2192 real estate \u00b7 \u2193 other \u00b7 U undoes.";
 
@@ -70,13 +76,13 @@ function MailAnswerHelp(): React.ReactElement {
           className="pointer-events-none fixed z-[100] w-72 max-w-[calc(100vw-16px)] rounded-lg border border-gray-200 bg-white p-3 text-left text-xs text-gray-600 shadow-lg"
         >
           <span className="mb-1 block font-medium text-gray-900">{MAIL_TIP_INTRO}</span>
-          <ol className="m-0 list-none space-y-1 p-0">
-            {MAIL_TIP_STEPS.map((t, n) => (
-              <li key={t}>
-                {n + 1}. {t}
+          <ul className="m-0 list-none space-y-1 p-0">
+            {MAIL_TIP_STEPS.map((t) => (
+              <li key={t.label}>
+                <strong className="font-medium text-gray-900">{t.label}:</strong> {t.body}
               </li>
             ))}
-          </ol>
+          </ul>
           <span className="mt-2 block text-gray-500" data-testid="learn-answer-help-keys">
             {MAIL_KEYS_TIP}
           </span>

@@ -71,13 +71,14 @@ describe("Learn mail question: info tip and Skip placement (BACKLOG-4212)", () =
     fireEvent.focus(tip);
     const panel = screen.getByTestId("learn-answer-help-panel");
     // Exact copy, in order: intro, then the three rules, matched top-down.
-    expect(panel.children[0]).toHaveTextContent("Check in order and stop at the first match:");
+    expect(panel.children[0]).toHaveTextContent("Check in this order and pick the first that fits:");
     const steps = Array.from(panel.querySelectorAll("li")).map((li) => li.textContent);
     expect(steps).toEqual([
-      "1. A person wrote to you about real estate (a client, lead, agent, lender, title or escrow), or a deal service (e-sign, showing, title portal) wrote about one of your deals \u2192 Real estate work.",
-      "2. Otherwise, if a machine or a list sent it (newsletter, listing alert, promotion, receipt, bank or app alert) \u2192 Automated or mass mail, even when it's about real estate.",
-      "3. Otherwise \u2192 Other: a person wrote to you about something else, or you can't tell.",
+      "Real estate work: a person wrote to you about real estate (a client, lead, agent, lender, title or escrow), or a deal service (e-sign, showing, title portal) wrote about one of your deals.",
+      "Automated or mass mail: an automated email or newsletter, like a listing alert, promotion, receipt, or bank or app alert, even when it's about real estate.",
+      "Other: a person wrote to you about something else, or you can't tell.",
     ]);
+    expect(panel.querySelectorAll("li strong")).toHaveLength(3);
     // Not inside the clipping dialog / answer panel: portalled, fixed, above the dialog.
     expect(screen.getByTestId("learn-answer-panel")).not.toContainElement(panel);
     expect(screen.getByRole("dialog")).not.toContainElement(panel);
