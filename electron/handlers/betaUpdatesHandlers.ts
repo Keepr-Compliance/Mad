@@ -245,8 +245,6 @@ export function betaEligibilityBeforeCheck(): Promise<void> | null {
 }
 
 /** Run `check` after the pre-check eligibility read, or at once when none is needed. */
-export function runAfterBetaEligibility<T>(check: () => Promise<T>): Promise<T>;
-export function runAfterBetaEligibility<T>(check: () => Promise<T> | null): Promise<T | null> | null;
 export function runAfterBetaEligibility<T>(check: () => Promise<T> | null): Promise<T | null> | null {
   const pre = betaEligibilityBeforeCheck();
   if (!pre) return check();

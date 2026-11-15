@@ -122,7 +122,7 @@ describe("V5 no feature logic in the renderer", () => {
         if (e.name === "__tests__" || e.name === "node_modules") continue;
         const full = path.join(dir, e.name);
         if (e.isDirectory()) walk(full);
-        else if (/\.tsx?$/.test(e.name) && fs.readFileSync(full, "utf8").includes("beta_updates")) hits.push(path.relative(root, full));
+        else if (/\.tsx?$/.test(e.name) && fs.readFileSync(full, "utf8").includes("beta_updates")) hits.push(path.relative(root, full).split(path.sep).join("/"));
       }
     };
     walk(root);

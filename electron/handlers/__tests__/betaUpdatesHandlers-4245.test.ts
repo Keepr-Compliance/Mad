@@ -563,7 +563,9 @@ describe("E13 only recompute writes allowPrerelease = true", () => {
     const assigns = /allowPrerelease\s*=[^=]|\[\s*["'`]allowPrerelease["'`]\s*\]\s*=[^=]|Object\.assign\([^)]*allowPrerelease/;
     expect(assigns.test("updater.allowPrerelease = true")).toBe(true);
     expect(assigns.test('u["allowPrerelease"] = x')).toBe(true);
-    const hits = files.filter((f) => assigns.test(fs.readFileSync(f, "utf8"))).map((f) => path.relative(root, f));
+    const hits = files
+      .filter((f) => assigns.test(fs.readFileSync(f, "utf8")))
+      .map((f) => path.relative(root, f).split(path.sep).join("/"));
     expect(hits).toEqual(["services/updateChannelPolicy.ts"]);
     const src = fs.readFileSync(path.join(root, "services/updateChannelPolicy.ts"), "utf8");
     const trueWrites = src.match(/allowPrerelease = true;/g) ?? [];

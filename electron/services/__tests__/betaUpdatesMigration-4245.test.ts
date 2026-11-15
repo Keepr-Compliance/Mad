@@ -28,7 +28,8 @@ const sql = fs.readFileSync(FILE, "utf8");
 const code = sql.replace(/^\s*--.*$/gm, "");
 
 function tracedBodyMd5(): string {
-  const src = fs.readFileSync(TRACED, "utf8");
+  // LF, as applied from the repository (a Windows checkout may hold CRLF).
+  const src = fs.readFileSync(TRACED, "utf8").replace(/\r\n/g, "\n");
   const i = src.indexOf("CREATE OR REPLACE FUNCTION public.get_org_features(p_org_id uuid)");
   expect(i).toBeGreaterThan(-1);
   const j = src.indexOf("AS $function$", i) + "AS $function$".length;
