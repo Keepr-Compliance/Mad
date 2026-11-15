@@ -509,10 +509,10 @@ BEGIN
     pg_temp.pass(i8 ->> 'title' = 'Visibletxt', 'title ' || coalesce(i8 ->> 'title', '-')),
     pg_temp.pass(i8 ->> 'note' = 'Pay [number hidden by Keepr]; ' || 'שלום מרחבא مرحبا ' || chr(128104) || chr(8205) || chr(128105) || chr(8205) || chr(128103) || ' ok.',
                  'note ' || coalesce(i8 ->> 'note', '-')),
-    pg_temp.pass(public._mcp_strip((SELECT string_agg(chr(c), '') FROM unnest(pg_temp.ign_codepoints()) c
-                                     WHERE NOT (c IN (8204, 8205) OR c BETWEEN 65024 AND 65039)) || chr(1) || chr(127)) = '', 'class'),
-    pg_temp.pass(char_length(public._mcp_strip((SELECT string_agg(chr(c), '') FROM unnest(pg_temp.ign_codepoints()) c
-                                                WHERE c IN (8204, 8205) OR c BETWEEN 65024 AND 65039))) = 18, 'kept count'),
+    pg_temp.pass(public._mcp_strip((SELECT string_agg(chr(k.cp), '') FROM unnest(pg_temp.ign_codepoints()) AS k(cp)
+                                     WHERE NOT (k.cp IN (8204, 8205) OR k.cp BETWEEN 65024 AND 65039)) || chr(1) || chr(127)) = '', 'class'),
+    pg_temp.pass(char_length(public._mcp_strip((SELECT string_agg(chr(k.cp), '') FROM unnest(pg_temp.ign_codepoints()) AS k(cp)
+                                                WHERE k.cp IN (8204, 8205) OR k.cp BETWEEN 65024 AND 65039))) = 18, 'kept count'),
     pg_temp.pass(public._mcp_strip(E'a\tb\nc\rd' || chr(8204) || chr(8205)) = E'a\tb\nc\rd' || chr(8204) || chr(8205), 'kept'));
 END $h$;
 

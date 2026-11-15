@@ -6977,3 +6977,537 @@ fixtures written: fx25.json
 
 # read-only catalog before and after this round: mcp_* 25 functions md5 48126d28553c04acf8d40f3bca8cf095 both times; 4244 objects 0; ledger 0; no fixture user left.
 # Correction: timing values of 0.0 ms reported in earlier sections for constant inputs were a cached constant (an IMMUTABLE call on constant arguments), not a measurement; from call 20 on the inputs are not constants.
+
+# harness.py run, test project, 2026-11-15 (call 27): call time limit reached (57014) after 125 s; rolled back; no result
+MUTATION APPLIED ISO_owner_term_only_list_inst (_mcp_r_list_deals)
+  - x.owner_user_id = v_uid /*OWN:list_inst*/
+  + true /*OWN:list_inst*/
+MUTATION APPLIED ISO_owner_term_and_rls_list_inst (_mcp_r_list_deals)
+  - x.owner_user_id = v_uid /*OWN:list_inst*/
+  + true /*OWN:list_inst*/
+  + ddl: ALTER TABLE public.cloud_deals DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_only_list_deals (_mcp_r_list_deals)
+  - dl.owner_user_id = v_uid /*OWN:list_deals*/
+  + true /*OWN:list_deals*/
+MUTATION APPLIED ISO_owner_term_and_rls_list_deals (_mcp_r_list_deals)
+  - dl.owner_user_id = v_uid /*OWN:list_deals*/
+  + true /*OWN:list_deals*/
+  + ddl: ALTER TABLE public.cloud_deals DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_only_list_people (_mcp_r_list_deals)
+  - p.owner_user_id = v_uid /*OWN:list_people*/
+  + true /*OWN:list_people*/
+MUTATION APPLIED ISO_owner_term_and_rls_list_people (_mcp_r_list_deals)
+  - p.owner_user_id = v_uid /*OWN:list_people*/
+  + true /*OWN:list_people*/
+  + ddl: ALTER TABLE public.cloud_deal_parties DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_only_list_todos (_mcp_r_list_deals)
+  - t.owner_user_id = v_uid /*OWN:list_todos*/
+  + true /*OWN:list_todos*/
+MUTATION APPLIED ISO_owner_term_and_rls_list_todos (_mcp_r_list_deals)
+  - t.owner_user_id = v_uid /*OWN:list_todos*/
+  + true /*OWN:list_todos*/
+  + ddl: ALTER TABLE public.cloud_deal_checklist_items DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_only_list_copy (_mcp_r_list_deals)
+  - c.owner_user_id = v_uid /*OWN:list_copy*/
+  + true /*OWN:list_copy*/
+MUTATION APPLIED ISO_owner_term_and_rls_list_copy (_mcp_r_list_deals)
+  - c.owner_user_id = v_uid /*OWN:list_copy*/
+  + true /*OWN:list_copy*/
+  + ddl: ALTER TABLE public.cloud_deals DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_only_get_deal (_mcp_r_get_deal)
+  - x.owner_user_id = v_uid /*OWN:get_deal*/
+  + true /*OWN:get_deal*/
+MUTATION APPLIED ISO_owner_term_and_rls_get_deal (_mcp_r_get_deal)
+  - x.owner_user_id = v_uid /*OWN:get_deal*/
+  + true /*OWN:get_deal*/
+  + ddl: ALTER TABLE public.cloud_deals DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_only_get_inst (_mcp_r_get_deal)
+  - x.owner_user_id = v_uid /*OWN:get_inst*/
+  + true /*OWN:get_inst*/
+MUTATION APPLIED ISO_owner_term_and_rls_get_inst (_mcp_r_get_deal)
+  - x.owner_user_id = v_uid /*OWN:get_inst*/
+  + true /*OWN:get_inst*/
+  + ddl: ALTER TABLE public.cloud_deals DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_only_get_people (_mcp_r_get_deal)
+  - x.owner_user_id = v_uid /*OWN:get_people*/
+  + true /*OWN:get_people*/
+MUTATION APPLIED ISO_owner_term_and_rls_get_people (_mcp_r_get_deal)
+  - x.owner_user_id = v_uid /*OWN:get_people*/
+  + true /*OWN:get_people*/
+  + ddl: ALTER TABLE public.cloud_deal_parties DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_only_cl_deal (_mcp_r_deal_checklists)
+  - x.owner_user_id = v_uid /*OWN:cl_deal*/
+  + true /*OWN:cl_deal*/
+MUTATION APPLIED ISO_owner_term_and_rls_cl_deal (_mcp_r_deal_checklists)
+  - x.owner_user_id = v_uid /*OWN:cl_deal*/
+  + true /*OWN:cl_deal*/
+  + ddl: ALTER TABLE public.cloud_deals DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_only_cl_lists (_mcp_r_deal_checklists)
+  - x.owner_user_id = v_uid /*OWN:cl_lists*/
+  + true /*OWN:cl_lists*/
+MUTATION APPLIED ISO_owner_term_and_rls_cl_lists (_mcp_r_deal_checklists)
+  - x.owner_user_id = v_uid /*OWN:cl_lists*/
+  + true /*OWN:cl_lists*/
+  + ddl: ALTER TABLE public.cloud_deal_checklists DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_only_cl_items (_mcp_r_deal_checklists)
+  - t.owner_user_id = v_uid /*OWN:cl_items*/
+  + true /*OWN:cl_items*/
+MUTATION APPLIED ISO_owner_term_and_rls_cl_items (_mcp_r_deal_checklists)
+  - t.owner_user_id = v_uid /*OWN:cl_items*/
+  + true /*OWN:cl_items*/
+  + ddl: ALTER TABLE public.cloud_deal_checklist_items DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_only_cl_total (_mcp_r_deal_checklists)
+  - t.owner_user_id = v_uid /*OWN:cl_total*/
+  + true /*OWN:cl_total*/
+MUTATION APPLIED ISO_owner_term_and_rls_cl_total (_mcp_r_deal_checklists)
+  - t.owner_user_id = v_uid /*OWN:cl_total*/
+  + true /*OWN:cl_total*/
+  + ddl: ALTER TABLE public.cloud_deal_checklist_items DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_only_list_open (_mcp_r_list_deals)
+  - t.owner_user_id = v_uid /*OWN:list_open*/
+  + true /*OWN:list_open*/
+MUTATION APPLIED ISO_owner_term_and_rls_list_open (_mcp_r_list_deals)
+  - t.owner_user_id = v_uid /*OWN:list_open*/
+  + true /*OWN:list_open*/
+  + ddl: ALTER TABLE public.cloud_deal_checklist_items DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_only_cl_check (_mcp_r_deal_checklists)
+  - c.owner_user_id = v_uid /*OWN:cl_check*/
+  + true /*OWN:cl_check*/
+MUTATION APPLIED ISO_owner_term_and_rls_cl_check (_mcp_r_deal_checklists)
+  - c.owner_user_id = v_uid /*OWN:cl_check*/
+  + true /*OWN:cl_check*/
+  + ddl: ALTER TABLE public.cloud_deal_checklists DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_owner_term_only_cl_open (_mcp_r_deal_checklists)
+  - t.owner_user_id = v_uid /*OWN:cl_open*/
+  + true /*OWN:cl_open*/
+MUTATION APPLIED ISO_owner_term_and_rls_cl_open (_mcp_r_deal_checklists)
+  - t.owner_user_id = v_uid /*OWN:cl_open*/
+  + true /*OWN:cl_open*/
+  + ddl: ALTER TABLE public.cloud_deal_checklist_items DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_rls_only_cloud_deals (ddl)
+  + ALTER TABLE public.cloud_deals DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_rls_only_cloud_deal_parties (ddl)
+  + ALTER TABLE public.cloud_deal_parties DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_rls_only_cloud_deal_checklists (ddl)
+  + ALTER TABLE public.cloud_deal_checklists DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_rls_only_cloud_deal_checklist_items (ddl)
+  + ALTER TABLE public.cloud_deal_checklist_items DISABLE ROW LEVEL SECURITY
+MUTATION APPLIED ISO_allow_all_policy_deals (ddl)
+  + CREATE POLICY p4244_all ON public.cloud_deals FOR SELECT TO authenticated USING (true)
+MUTATION APPLIED ISO_bypassrls_and_owner_term_list_deals (_mcp_r_list_deals)
+  - dl.owner_user_id = v_uid /*OWN:list_deals*/
+  + true /*OWN:list_deals*/
+  + ddl: ALTER ROLE mcp_reader BYPASSRLS
+MUTATION APPLIED ISO_inst_not_grouped (_mcp_r_list_deals)
+  - SELECT x.source_install_id, row_number() OVER (ORDER BY min(x.created_at), x.source_install_id) AS n
+  - FROM public.cloud_deals x
+  - WHERE x.owner_user_id = v_uid /*OWN:list_inst*/ AND x.source_install_id IS NOT NULL
+  - GROUP BY x.source_install_id),
+  + SELECT x.source_install_id, row_number() OVER (ORDER BY x.created_at, x.source_install_id) AS n
+  + FROM public.cloud_deals x
+  + WHERE x.owner_user_id = v_uid /*OWN:list_inst*/ AND x.source_install_id IS NOT NULL),
+MUTATION APPLIED ENT_no_check__mcp_r_list_deals (_mcp_r_list_deals)
+  - IF (v_st -> 'schema_version') IS DISTINCT FROM to_jsonb(1)
+  - OR (v_st -> 'licensed') IS DISTINCT FROM to_jsonb(true)
+  - OR (v_st -> 'settings' -> 'enabled') IS DISTINCT FROM to_jsonb(true) THEN
+  - RETURN '{"not_entitled":true}'::jsonb;
+  - END IF;
+MUTATION APPLIED ENT_no_check__mcp_r_get_deal (_mcp_r_get_deal)
+  - IF (v_st -> 'schema_version') IS DISTINCT FROM to_jsonb(1)
+  - OR (v_st -> 'licensed') IS DISTINCT FROM to_jsonb(true)
+  - OR (v_st -> 'settings' -> 'enabled') IS DISTINCT FROM to_jsonb(true) THEN
+  - RETURN '{"not_entitled":true}'::jsonb;
+  - END IF;
+MUTATION APPLIED ENT_no_check__mcp_r_deal_checklists (_mcp_r_deal_checklists)
+  - IF (v_st -> 'schema_version') IS DISTINCT FROM to_jsonb(1)
+  - OR (v_st -> 'licensed') IS DISTINCT FROM to_jsonb(true)
+  - OR (v_st -> 'settings' -> 'enabled') IS DISTINCT FROM to_jsonb(true) THEN
+  - RETURN '{"not_entitled":true}'::jsonb;
+  - END IF;
+MUTATION APPLIED ENT_no_licensed_term_list (_mcp_r_list_deals)
+  - 
+  - OR (v_st -> 'licensed') IS DISTINCT FROM to_jsonb(true)
+MUTATION APPLIED ENT_no_enabled_term_list (_mcp_r_list_deals)
+  - 
+  - OR (v_st -> 'settings' -> 'enabled') IS DISTINCT FROM to_jsonb(true)
+MUTATION APPLIED C7b_entitled_instead_of_licensed__mcp_r_list_deals (_mcp_r_list_deals)
+  - 
+  - OR (v_st -> 'licensed') IS DISTINCT FROM to_jsonb(true)
+  + 
+  + OR (v_st -> 'entitled') IS DISTINCT FROM to_jsonb(true)
+MUTATION APPLIED C7b_entitled_instead_of_licensed__mcp_r_get_deal (_mcp_r_get_deal)
+  - 
+  - OR (v_st -> 'licensed') IS DISTINCT FROM to_jsonb(true)
+  + 
+  + OR (v_st -> 'entitled') IS DISTINCT FROM to_jsonb(true)
+MUTATION APPLIED C7b_entitled_instead_of_licensed__mcp_r_deal_checklists (_mcp_r_deal_checklists)
+  - 
+  - OR (v_st -> 'licensed') IS DISTINCT FROM to_jsonb(true)
+  + 
+  + OR (v_st -> 'entitled') IS DISTINCT FROM to_jsonb(true)
+MUTATION APPLIED C7b_licensed_term_dropped_get_deal (_mcp_r_get_deal)
+  - 
+  - OR (v_st -> 'licensed') IS DISTINCT FROM to_jsonb(true)
+MUTATION APPLIED DEADLINES_key_renamed (_mcp_r_list_deals)
+  - 'closing_deadline', CASE
+  + 'closing_date', CASE
+MUTATION APPLIED DEADLINES_key_missing (_mcp_r_list_deals)
+  - ,
+  - 'representation_start_date', CASE WHEN jsonb_typeof(pr.details -> 'representation_start_date') = 'string' AND pr.details ->> 'representation_start_date' ~ '^\d{
+  + ) /*DEADLINES:list*/
+MUTATION APPLIED DEADLINES_no_date_rule (_mcp_r_list_deals)
+  - CASE WHEN jsonb_typeof(pr.details -> 'closing_deadline') = 'string' AND pr.details ->> 'closing_deadline' ~ '^\d{4}-\d{2}-\d{2}$' THEN
+  + CASE WHEN jsonb_typeof(pr.details -> 'closing_deadline') = 'string' THEN
+MUTATION APPLIED DEADLINES_type_not_checked (_mcp_r_list_deals)
+  - CASE WHEN jsonb_typeof(pr.details -> 'financing_deadline') = 'string' AND pr.details ->> 'financing_deadline' ~ '^\d{4}-\d{2}-\d{2}$' THEN
+  + CASE WHEN pr.details ->> 'financing_deadline' ~ '^\d{4}' THEN
+MUTATION APPLIED DEADLINES_price_in_list (_mcp_r_list_deals)
+  - ) /*DEADLINES:list*/,
+  + , 'sale_price', pr.details -> 'sale_price') /*DEADLINES:list*/,
+MUTATION APPLIED NOCLAIMS_no_null_check__mcp_r_list_deals (_mcp_r_list_deals)
+  - IF v_uid IS NULL THEN
+  - RETURN '{"not_entitled":true}'::jsonb;
+  - END IF;
+MUTATION APPLIED NOCLAIMS_no_null_check__mcp_r_get_deal (_mcp_r_get_deal)
+  - IF v_uid IS NULL THEN
+  - RETURN '{"not_entitled":true}'::jsonb;
+  - END IF;
+MUTATION APPLIED NOCLAIMS_no_null_check__mcp_r_deal_checklists (_mcp_r_deal_checklists)
+  - IF v_uid IS NULL THEN
+  - RETURN '{"not_entitled":true}'::jsonb;
+  - END IF;
+MUTATION APPLIED GATE_no_secret_check_get_deal (mcp_get_deal)
+  - IF public._mcp_secret_ok(p_secret) IS NOT TRUE THEN
+  - RETURN public._mcp_refuse('not_connected');
+  - END IF;
+MUTATION APPLIED GATE_outcome_ignored_list (mcp_list_deals)
+  - IF g.outcome IS DISTINCT FROM 'ok' THEN
+  - RETURN public._mcp_refuse(g.outcome);
+  - END IF;
+MUTATION APPLIED GATE_outcome_ignored_checklists_disabled (mcp_get_deal_checklists)
+  - IF g.outcome IS DISTINCT FROM 'ok' THEN
+  - RETURN public._mcp_refuse(g.outcome);
+  - END IF;
+MUTATION APPLIED WITHHELD_not_blanked_name (_mcp_r_get_deal)
+  - CASE WHEN p.w THEN NULL ELSE public._mcp_clean(p.display_name, 200) END /*WITHHELD:name*/
+  + public._mcp_clean(p.display_name, 200)
+MUTATION APPLIED WITHHELD_not_blanked_company (_mcp_r_get_deal)
+  - CASE WHEN p.w THEN NULL ELSE public._mcp_clean(p.company, 200) END /*WITHHELD:company*/
+  + public._mcp_clean(p.company, 200)
+MUTATION APPLIED WITHHELD_not_blanked_emails (_mcp_r_get_deal)
+  - CASE WHEN p.w THEN '[]'::jsonb /*WITHHELD:emails*/ ELSE coalesce
+  + CASE WHEN false THEN '[]'::jsonb ELSE coalesce
+MUTATION APPLIED WITHHELD_not_blanked_phones (_mcp_r_get_deal)
+  - CASE WHEN p.w THEN '[]'::jsonb /*WITHHELD:phones*/ ELSE coalesce
+  + CASE WHEN false THEN '[]'::jsonb ELSE coalesce
+MUTATION APPLIED WITHHELD_keyed_on_contact_source (_mcp_r_get_deal)
+  - x.details_withheld AS w /*WITHHELD:flag*/
+  + (x.contact_source IS NOT DISTINCT FROM 'google_contacts') AS w /*WITHHELD:flag*/
+MUTATION APPLIED WITHHELD_keyed_on_contact_source_planted (_mcp_r_get_deal)
+  - x.details_withheld AS w /*WITHHELD:flag*/
+  + (x.contact_source IS NOT DISTINCT FROM 'google_contacts') AS w /*WITHHELD:flag*/
+MUTATION APPLIED WITHHELD_never (_mcp_r_get_deal)
+  - x.details_withheld AS w /*WITHHELD:flag*/
+  + false AS w /*WITHHELD:flag*/
+MUTATION APPLIED NULLARRAYS_emails_not_coalesced (_mcp_r_get_deal)
+  - WHERE o <= 10 AND jsonb_typeof(el) = 'object'), '[]'::jsonb) END,
+  - 'phones'
+  + WHERE o <= 10 AND jsonb_typeof(el) = 'object')) END,
+  + 'phones'
+MUTATION APPLIED WITHHELD_notes_blanked_too (_mcp_r_get_deal)
+  - 'notes', public._mcp_clean(p.notes, 1000),
+  + 'notes', CASE WHEN p.w THEN NULL ELSE public._mcp_clean(p.notes, 1000) END,
+MUTATION APPLIED LIVE_dropped_list_people (_mcp_r_list_deals)
+  - AND p.removed_at IS NULL /*LIVE:list_people*/
+MUTATION APPLIED LIVE_dropped_list_todos (_mcp_r_list_deals)
+  - AND t.removed_at IS NULL /*LIVE:list_todos*/
+MUTATION APPLIED LIVE_dropped_get_people (_mcp_r_get_deal)
+  - AND x.removed_at IS NULL /*LIVE:get_people*/
+MUTATION APPLIED LIVE_dropped_cl_lists (_mcp_r_deal_checklists)
+  - AND x.removed_at IS NULL /*LIVE:cl_lists*/
+MUTATION APPLIED LIVE_dropped_cl_items (_mcp_r_deal_checklists)
+  - AND t.removed_at IS NULL /*LIVE:cl_items*/
+MUTATION APPLIED LIVE_dropped_cl_total (_mcp_r_deal_checklists)
+  - AND t.removed_at IS NULL /*LIVE:cl_total*/
+MUTATION APPLIED CONF_dropped_list (_mcp_r_list_deals)
+  - AND dl.is_confirmed /*CONF:list*/
+MUTATION APPLIED CONF_dropped_get_deal (_mcp_r_get_deal)
+  - AND x.is_confirmed /*CONF:get_deal*/
+MUTATION APPLIED CONF_dropped_cl (_mcp_r_deal_checklists)
+  - AND x.is_confirmed /*CONF:cl*/
+MUTATION APPLIED ARG_dropped_limit (mcp_list_deals)
+  - OR (v_lim BETWEEN 1 AND 50) IS NOT TRUE /*ARG:limit*/
+MUTATION APPLIED ARG_dropped_status (mcp_list_deals)
+  - (p_status IS NULL OR p_status IN ('active', 'pending', 'closed')) IS NOT TRUE /*ARG:status*/
+  - OR
+MUTATION APPLIED ARG_dropped_address (mcp_list_deals)
+  - OR (p_address_contains IS NULL OR char_length(p_address_contains) BETWEEN 2 AND 100) IS NOT TRUE /*ARG:address*/
+MUTATION APPLIED ARG_dropped_cursor_shape (mcp_list_deals)
+  - 
+  - AND p_cursor ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z\|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+MUTATION APPLIED ARG_dropped_deal_id (mcp_get_deal)
+  - IF (p_deal_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') IS NOT TRUE /*ARG:deal_id*/ THEN
+  - PERFORM public._mcp_finish(g.call_id, 'invalid_input', 0, v_t0);
+  - RETURN public._mcp_refuse('invalid_input');
+  - END IF;
+MUTATION APPLIED ARG_dropped_checklist_id (mcp_get_deal_checklists)
+  - 
+  - OR (p_checklist_id IS NULL
+  - OR p_checklist_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$') IS NOT TRUE /*ARG:checklist_id*/
+MUTATION APPLIED PAGE_order_ascending (_mcp_r_list_deals)
+  - ORDER BY dl.last_synced_at DESC, dl.id DESC /*ORDER:list*/
+  + ORDER BY dl.last_synced_at ASC, dl.id ASC /*ORDER:list*/
+MUTATION APPLIED PAGE_no_people_byte_budget (_mcp_r_get_deal)
+  - SELECT jsonb_agg(s.j ORDER BY s.rn) FROM s WHERE s.cum <= 60000
+  + SELECT jsonb_agg(s.j ORDER BY s.rn) FROM s
+MUTATION APPLIED MASK_person_notes_plain (_mcp_r_get_deal)
+  - 'notes', public._mcp_clean(p.notes, 1000),
+  + 'notes', p.notes,
+MUTATION APPLIED MASK_item_note_plain (_mcp_r_deal_checklists)
+  - 'note', public._mcp_clean(i.note, 1000),
+  + 'note', i.note,
+MUTATION APPLIED MASK_item_title_plain (_mcp_r_deal_checklists)
+  - 'title', public._mcp_clean(i.title, 300),
+  + 'title', i.title,
+MUTATION APPLIED MASK_item_description_plain (_mcp_r_deal_checklists)
+  - 'description', public._mcp_clean(i.description, 1000),
+  + 'description', i.description,
+MUTATION APPLIED MASK_phone_masked (_mcp_r_get_deal)
+  - public._mcp_txt(el ->> 'e164', 40)
+  + public._mcp_clean(el ->> 'e164', 40)
+MUTATION APPLIED MASK_no_luhn (_mcp_mask)
+  - IF v_sum % 10 = 0 THEN
+  + IF true THEN
+MUTATION APPLIED MASK_no_cut (_mcp_txt)
+  - CASE WHEN char_length(s.x) > p_max THEN
+  + CASE WHEN false THEN
+MUTATION APPLIED MASK_no_strip_before_mask (_mcp_clean)
+  - (SELECT public._mcp_strip(p) AS y) t
+  + (SELECT p AS y) t
+MUTATION APPLIED STRIP_controls_only (_mcp_strip)
+  - |(?![' || public._mcp_ign_kept() || '])[' || public._mcp_ign() || ']'
+MUTATION APPLIED STRIP_kept_not_excluded (_mcp_strip)
+  - |(?![' || public._mcp_ign_kept() || '])[' || public._mcp_ign() || ']'
+  + |[' || public._mcp_ign() || ']'
+MUTATION APPLIED MASK_whole_run_luhn_only (_mcp_mask)
+  - v_g := regexp_split_to_array(v_m, '[ -]');                                         /*MASK:groups*/
+  + v_g := ARRAY[regexp_replace(v_m, '[^0-9]', '', 'g')];                                         /*MASK:groups*/
+MUTATION APPLIED MASK_old_expression (_mcp_mask)
+  - regexp_matches(v_x, '([0-9]+(?:[ -][0-9]+)*)', 'g')
+  + regexp_matches(v_x, '(\d(?:[ -]?\d){12,18})', 'g')
+MUTATION APPLIED MASK_old_algorithm (_mcp_mask)
+  - regexp_matches(v_x, '([0-9]+(?:[ -][0-9]+)*)', 'g') AS r LOOP
+  - IF char_length(regexp_replace(v_m, '[^0-9]', '', 'g')) < 13 THEN
+  - CONTINUE;
+  - END IF;
+  - v_g := regexp_split_to_array(v_m, '[ -]');
+  + regexp_matches(v_x, '(\d(?:[ -]?\d){12,18})', 'g') AS r LOOP
+  + IF char_length(regexp_replace(v_m, '[^0-9]', '', 'g')) < 13 THEN
+  + CONTINUE;
+  + END IF;
+  + v_g := ARRAY[regexp_replace(v_m, '[^0-9]', '', 'g')];
+MUTATION APPLIED MASK_luhn_dropped (_mcp_mask)
+  - IF v_sum % 10 = 0 THEN                                                         /*MASK:luhn*/
+  + IF true THEN                                                         /*MASK:luhn*/
+MUTATION APPLIED MASK_unjoin_removed (_mcp_mask)
+  - v_x := regexp_replace(p, '([0-9 -])[' || public._mcp_ign() || ']+(?=[0-9 -])', '\1', 'g');
+  + v_x := p;
+MUTATION APPLIED MASK_unjoin_class_narrowed (_mcp_mask)
+  - v_x := regexp_replace(p, '([0-9 -])[' || public._mcp_ign() || ']+(?=[0-9 -])',
+  + v_x := regexp_replace(p, '([0-9 -])[\u200C]+(?=[0-9 -])',
+MUTATION APPLIED CLEAN_unjoin_class_narrowed (_mcp_clean)
+  - regexp_replace(left(t.y, 8 * (p_max + 40)), '([0-9 -])[' || public._mcp_ign() || ']+(?=[0-9 -])',
+  + regexp_replace(left(t.y, 8 * (p_max + 40)), '([0-9 -])[\u200C]+(?=[0-9 -])',
+MUTATION APPLIED CLEAN_unjoin_removed (_mcp_clean)
+  - regexp_replace(left(t.y, 8 * (p_max + 40)), '([0-9 -])[' || public._mcp_ign() || ']+(?=[0-9 -])', '\1', 'g') AS x,
+  + left(t.y, 8 * (p_max + 40)) AS x,
+MUTATION APPLIED CLEAN_bound_removed (_mcp_clean)
+  - regexp_replace(left(t.y, 8 * (p_max + 40)), '([0-9 -])[' || public._mcp_ign() || ']+(?=[0-9 -])', '\1', 'g') AS x,   /*CLEAN:unjoin*/
+  - char_length(t.y) > 8 * (p_max + 40) AS cut
+  + regexp_replace(t.y, '([0-9 -])[' || public._mcp_ign() || ']+(?=[0-9 -])', '\1', 'g') AS x,   /*CLEAN:unjoin*/
+  + false AS cut
+MUTATION APPLIED CLEAN_bound_not_long (_mcp_clean)
+  - SELECT v.x, v.cut OR char_length(v.x) > p_max + 40 AS long
+  + SELECT v.x, char_length(v.x) > p_max + 40 AS long
+MUTATION APPLIED CLEAN_window_removed (_mcp_clean)
+  - public._mcp_mask(CASE WHEN u.long THEN regexp_replace(left(u.x, p_max + 40), '[0-9][0-9 ' || public._mcp_ign() || '-]*$', '')   /*CLEAN:window*/
+  - ELSE u.x END)
+  + public._mcp_mask(u.x)
+MUTATION APPLIED CLEAN_trailing_run_kept (_mcp_clean)
+  - regexp_replace(left(u.x, p_max + 40), '[0-9][0-9 ' || public._mcp_ign() || '-]*$', '')
+  + left(u.x, p_max + 40)
+MUTATION APPLIED CLEAN_drop_class_old (_mcp_clean)
+  - regexp_replace(left(u.x, p_max + 40), '[0-9][0-9 ' || public._mcp_ign() || '-]*$', '')
+  + regexp_replace(left(u.x, p_max + 40), '[0-9]+(?:[ -][0-9]+)*[ -]?$', '')
+MUTATION APPLIED IGN_range_dropped_E0000_E0FFF (_mcp_ign)
+  - \U000E0000-\U000E0FFF
+MUTATION APPLIED IGN_range_dropped_2060_206F (_mcp_ign)
+  - \u2060-\u206F
+MUTATION APPLIED IGN_range_dropped_1D173_1D17A (_mcp_ign)
+  - \U0001D173-\U0001D17A
+MUTATION APPLIED IGN_range_dropped_FFF0_FFF8 (_mcp_ign)
+  - \uFFF0-\uFFF8
+MUTATION APPLIED IGN_range_dropped_FE00_FE0F (_mcp_ign)
+  - \uFE00-\uFE0F
+MUTATION APPLIED IGN_kept_zwj_dropped (_mcp_ign_kept)
+  - \u200C\u200D
+  + \u200C
+MUTATION APPLIED MASK_joiner_separator_joiner_dropped (_mcp_mask)
+  - v_x := regexp_replace(p, '([0-9 -])[' || public._mcp_ign() || ']+(?=[0-9 -])',
+  + v_x := regexp_replace(p, '([0-9])[' || public._mcp_ign() || ']+(?=[0-9])',
+MUTATION APPLIED CLEAN_joiner_separator_joiner_dropped (_mcp_clean)
+  - regexp_replace(left(t.y, 8 * (p_max + 40)), '([0-9 -])[' || public._mcp_ign() || ']+(?=[0-9 -])',
+  + regexp_replace(left(t.y, 8 * (p_max + 40)), '([0-9])[' || public._mcp_ign() || ']+(?=[0-9])',
+MUTATION APPLIED MASK_non_ascii_digits (_mcp_mask)
+  - regexp_matches(v_x, '([0-9]+(?:[ -][0-9]+)*)', 'g')
+  + regexp_matches(v_x, '(\d+(?:[ -]\d+)*)', 'g')
+MUTATION APPLIED CAP_people_100_removed (_mcp_r_get_deal)
+  - FROM p WHERE p.rn <= 100 /*CAP:people*/
+  + FROM p /*CAP:people*/
+MUTATION APPLIED DATE_local_zone (_mcp_day)
+  - to_char(p AT TIME ZONE 'UTC', 'YYYY-MM-DD')
+  + to_char(p, 'YYYY-MM-DD')
+MUTATION APPLIED FRESH_inverted_list (_mcp_r_list_deals)
+  - WHEN pr.last_synced_at IS DISTINCT FROM pr.last_full_sync_at THEN
+  + WHEN pr.last_synced_at < pr.last_full_sync_at THEN
+MUTATION APPLIED FRESH_greater_than_list (_mcp_r_list_deals)
+  - WHEN pr.last_synced_at IS DISTINCT FROM pr.last_full_sync_at THEN
+  + WHEN pr.last_synced_at > pr.last_full_sync_at THEN
+MUTATION APPLIED FRESH_updated_at_list (_mcp_r_list_deals)
+  - WHEN pr.last_synced_at IS DISTINCT FROM pr.last_full_sync_at THEN
+  + WHEN pr.updated_at > pr.last_full_sync_at THEN
+MUTATION APPLIED FRESH_marked_means_full_list (_mcp_r_list_deals)
+  - WHEN pr.last_synced_at IS DISTINCT FROM pr.last_full_sync_at THEN
+  + WHEN false THEN
+MUTATION APPLIED FRESH_inverted_get (_mcp_r_get_deal)
+  - WHEN v_deal.last_synced_at IS DISTINCT FROM v_deal.last_full_sync_at THEN
+  + WHEN v_deal.last_synced_at < v_deal.last_full_sync_at THEN
+MUTATION APPLIED FRESH_greater_than_get (_mcp_r_get_deal)
+  - WHEN v_deal.last_synced_at IS DISTINCT FROM v_deal.last_full_sync_at THEN
+  + WHEN v_deal.last_synced_at > v_deal.last_full_sync_at THEN
+MUTATION APPLIED FRESH_updated_at_get (_mcp_r_get_deal)
+  - WHEN v_deal.last_synced_at IS DISTINCT FROM v_deal.last_full_sync_at THEN
+  + WHEN v_deal.updated_at > v_deal.last_full_sync_at THEN
+MUTATION APPLIED FRESH_marked_means_full_get (_mcp_r_get_deal)
+  - WHEN v_deal.last_synced_at IS DISTINCT FROM v_deal.last_full_sync_at THEN
+  + WHEN false THEN
+MUTATION APPLIED NULLINST_inner_join_list (_mcp_r_list_deals)
+  - FROM pr LEFT JOIN inst i ON
+  + FROM pr JOIN inst i ON
+MUTATION APPLIED NULLINST_null_group_numbered_list (_mcp_r_list_deals)
+  - /*OWN:list_inst*/ AND x.source_install_id IS NOT NULL
+  + /*OWN:list_inst*/
+MUTATION APPLIED NULLINST_equality_get (_mcp_r_get_deal)
+  - WHERE i.source_install_id IS NOT DISTINCT FROM v_deal.source_install_id;
+  + WHERE i.source_install_id = v_deal.source_install_id;
+MUTATION APPLIED CL_checklist_not_on_deal (_mcp_r_deal_checklists)
+  - AND c.cloud_deal_id = p_deal_id /*CL:on_deal*/
+MUTATION APPLIED READER_volatile (_mcp_r_list_deals)
+  - RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+  + RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+MUTATION APPLIED READER_writes (_mcp_r_list_deals)
+  - RETURN (
+  - WITH inst AS (
+  + INSERT INTO public.mcp_call_log (event, outcome) VALUES ('call', 'ok');
+  + RETURN (
+  + WITH inst AS (
+MUTATION APPLIED LOG_tool_check_not_widened (ddl)
+  + ALTER TABLE public.mcp_call_log DROP CONSTRAINT mcp_call_log_tool_check; ALTER TABLE public.mcp_call_log ADD CONSTRAINT mcp_call_log_tool_check CHECK (tool IS NULL OR tool IN ('get_status'))
+MUTATION APPLIED ACL_tool_to_authenticated (acl)
+  + GRANT EXECUTE ON FUNCTION public.mcp_list_deals(text, bytea, text, text, text, integer, text) TO authenticated
+MUTATION APPLIED ACL_reader_to_anon (acl)
+  + SET ROLE mcp_reader; GRANT EXECUTE ON FUNCTION public._mcp_r_get_deal(uuid) TO anon; RESET ROLE
+MUTATION APPLIED ACL_helper_to_public (acl)
+  + GRANT EXECUTE ON FUNCTION public._mcp_clean(text, integer) TO PUBLIC
+MUTATION APPLIED ROLLBACK_no_delete (rollback text)
+  - DELETE FROM public.mcp_call_log WHERE tool IN (...) OR outcome IN (...);
+TIMEOUT CONTROL reader sleeps 10 s, statement_timeout 4 s
+composed: 520748 bytes, mutants 136
+wall_s=125
+NO RESULT: Failed to run sql query: ERROR:  57014: canceling statement due to statement timeout
+CONTEXT:  SQL function "_mcp_strip" during startup
+SQL function "_mcp_txt" statement 1
+SQL function "_mcp_clean" statement 1
+PL/pgSQL function pg_temp_22.p_window_joiners() line 17 at assignment
+PL/pgSQL function inline_code_block line 2212 at assignment
+
+
+# harness.py run, test project, 2026-11-15 (call A): controls, per-code-point sweep and observations (--no-mutants --timeout); C_p_strip crashed on an ambiguous name in the probe (fixed in the probe after this call, not re-run)
+TIMEOUT CONTROL reader sleeps 10 s, statement_timeout 4 s
+composed: 358880 bytes, mutants 0
+wall_s=53
+BASE                                                           {"D1": "applied", "D2": "applied", "D3": "applied", "D4": "applied", "D5": "applied", "D6": "applied", "D7": "applied", "DB1": "applied", "DC1": "applied", "DD1": "applied", "del_D7": "OK", "D5_list": "applied", "mark_D1": "OK", "mark_D2": "OK", "D1_items": "applied,applied,applied,applied,applied,applied,applied,applied", "D2_party": "applied", "DC1_list": "applied", "revoke_C": "OK", "DB1_party": "applied", "tomb_item": "OK", "tomb_list": "OK", "D1_parties": "appliedappliedappliedappliedappliedapplied", "E61_people": "applied", "E62_people": "applied", "tomb_party": "OK", "D1_checklists": "a
+C_p_c7b_outdated_notice                                        PASS
+C_p_checklists                                                 PASS
+C_p_checks                                                     PASS
+C_p_clean_timing                                               PASS
+C_p_dates                                                      PASS
+C_p_deadlines                                                  PASS
+C_p_digits                                                     PASS
+C_p_disabled                                                   PASS
+C_p_ent                                                        PASS
+C_p_fresh                                                      PASS
+C_p_grants                                                     PASS
+C_p_ign_legit                                                  PASS
+C_p_ignorables                                                 PASS
+C_p_iso                                                        PASS
+C_p_joiners                                                    PASS
+C_p_limits                                                     PASS
+C_p_list_a                                                     PASS
+C_p_log                                                        PASS
+C_p_mask_sweep                                                 PASS
+C_p_masking                                                    PASS
+C_p_no_claims                                                  PASS
+C_p_null_install                                               PASS
+C_p_order_a                                                    PASS
+C_p_paging                                                     PASS
+C_p_people_cap                                                 PASS
+C_p_people_cap_100                                             PASS
+C_p_removed                                                    PASS
+C_p_rollback                                                   PASS
+C_p_saved_from                                                 PASS
+C_p_strip                                                      CRASH 42702 column reference "c" is ambiguous
+C_p_strip_tags                                                 PASS
+C_p_timeout                                                    PASS
+C_p_tokens                                                     PASS
+C_p_unconfirmed                                                PASS
+C_p_window_joiners                                             PASS
+C_p_window_shrink                                              PASS
+C_p_window_sweep                                               PASS
+C_p_withheld                                                   PASS
+C_p_withheld_planted                                           PASS
+FX_cl_d1                                                       2430 bytes {"ok": true, "result": {"v": 1, "kind": "keepr.get_deal_checklists", "more": false, "about": "Record
+FX_cl_d1_open                                                  2212 bytes {"ok": true, "result": {"v": 1, "kind": "keepr.get_deal_checklists", "more": false, "about": "Record
+FX_cl_d4                                                       779 bytes {"ok": true, "result": {"v": 1, "kind": "keepr.get_deal_checklists", "more": false, "about": "Record
+FX_get_d1                                                      4578 bytes {"ok": true, "result": {"v": 1, "deal": {"zip": "98999", "city": "Fernhollow", "state": "WA", "locke
+FX_get_d2                                                      1817 bytes {"ok": true, "result": {"v": 1, "deal": {"zip": null, "city": null, "state": null, "locked": null, "
+FX_get_d4                                                      1525 bytes {"ok": true, "result": {"v": 1, "deal": {"zip": null, "city": null, "state": null, "locked": null, "
+FX_get_null_install                                            1511 bytes {"ok": true, "result": {"v": 1, "deal": {"zip": null, "city": null, "state": null, "locked": null, "
+FX_list_a                                                      3475 bytes {"ok": true, "result": {"v": 1, "copy": {"computers": 2, "deals_saved": 4, "newest_saved_at": "2026-
+FX_list_b                                                      1427 bytes {"ok": true, "result": {"v": 1, "copy": {"computers": 1, "deals_saved": 1, "newest_saved_at": "2026-
+FX_list_e_page1                                                2111 bytes {"ok": true, "result": {"v": 1, "copy": {"computers": 1, "deals_saved": 62, "newest_saved_at": "2026
+FX_list_null_install                                           4102 bytes {"ok": true, "result": {"v": 1, "copy": {"computers": 2, "deals_saved": 5, "newest_saved_at": "2026-
+IN_TXN_withheld_column                                         1
+OBS_cursors                                                    {"now (no id)": "invalid_input", "now|<deal id>": "invalid_input", "infinity|<deal id>": "invalid_input", "2026-02-30|<deal id>": "invalid_input", "99999-01-01|<deal id>": "invalid_input", "infinityT00:00:00.000000Z|<deal id>": "invalid_input", "2026-02-30T00:00:00.000000Z|<deal id>": "invalid_input", "9999-12-31T23:59:59.999999Z|<deal id>": "OK"}
+OBS_false_positives                                            {"13": {"plain_pct": 11.1, "grouped4_pct": 11.1}, "14": {"plain_pct": 10.6, "grouped4_pct": 10.6}, "15": {"plain_pct": 8.6, "grouped4_pct": 8.6}, "16": {"plain_pct": 10.5, "grouped4_pct": 10.5}, "17": {"plain_pct": 10.2, "grouped4_pct": 26.8}, "18": {"plain_pct": 10.4, "grouped4_pct": 28.5}, "19": {"plain_pct": 9.8, "grouped4_pct": 27.1}}
+OBS_ign                                                        {"digit full-width matches \\d": 1, "digit arabic-indic matches \\d": 1, "digit full-width matches [0-9]": 0, "digit arabic-indic matches [0-9]": 0}
+OBS_ignorables                                                 {"after": "C_p_ignorables (all 17 checks per code point)", "shapes": "card: after first digit, between every digit, both sides of each separator, 50 in place of a separator; ssn: the same", "code_points": 4174, "before_all_masked": 412, "before_failing_per_shape": [3762, 3762, 3762, 3762, 3762, 3762, 3762, 3762]}
+OBS_timing                                                     {"txt_300k_ms": 5.9, "clean_1m_digit_joiner_ms": 81.0, "clean_300k_card_groups_ms": 10.2, "clean_300k_single_digits_ms": 12.3}
+OBS_window                                                     [[20, "16 digits, 3 ZWNJ between digits", "ends at p_max", "not possible (card longer than p_max)"], [20, "16 digits, 3 ZWNJ between digits", "starts at p_max - 1", "not visible (cut), 20 chars"], [20, "16 digits, 3 ZWNJ between digits", "starts at p_max + 1", "not visible (cut), 20 chars"], [20, "16 digits, 3 ZWNJ between digits", "straddles by 1", "not possible (card longer than p_max)"], [20, "16 digits, 3 ZWNJ between digits", "straddles by half", "not possible (card longer than p_max)"], [20, "16 digits, groups of 4", "ends at p_max", "not visible (cut), 20 chars"], [20, "16 digits, groups of 4", "starts at p_max - 1", "not visible (cut), 20 chars"], [20, "16 digits, groups of 4", "starts at p_max + 1", "not visible (cut), 20 chars"], [20, "16 digits, groups of 4", "straddles by 1", "not visible (cut), 20 chars"], [20, "16 digits, groups of 4", "straddles by half", "not visible (cut), 20 chars"], [20, "19 digits, one digit per group", "ends at p_max", "not possible (card longer than p_max)"], [20, "19 digits, one digit per group", "starts at p_max - 1", "not visible (cut), 20 chars"], [20, "19 digits, one digit per group", "starts at p_max + 1", "not visible (cut), 20 chars"], [20, "19 digits, one digit per group", "straddles by 1", "not possible (card longer than p_max)"], [20, "19 digits, one digit per group", "straddles by half", "not visible (cut), 20 chars"], [50, "16 digits, 3 ZWNJ between digits", "ends at p_max", "not possible (card longer than p_max)"], [50, "16 digits, 3 ZWNJ between digits", "starts at p_max - 1", "not visible (cut), 50 chars"], [50, "16 digits, 3 ZWNJ between digits", "starts at p_max + 1", "not visible (cut), 50 chars"], [50, "16 digits, 3 ZWNJ between digits", "straddles by 1", "not possible (card longer than p_max)"], [50, "16 digits, 3 ZWNJ between digits", "straddles by half", "masked, 50 chars"], [50, "16 digits, groups of 4", "ends at p_max", "not visible (cut), 50 chars"], [50, "16 digits, groups of 4", "starts at p_max - 1", "not visible (cut), 50 chars"], [50, "16 digits, groups of 4", "starts at p_max + 1", "not visible (cut), 50 chars"], [50, "16 digits, groups of 4", "straddles by 1", "not visible (cut), 50 chars"], [50, "16 digits, groups of 4", "straddles by half", "not visible (cut), 50 chars"], [50, "19 digits, one digit per group", "ends at p_max", "masked, 50 chars"], [50, "19 digits, one digit per group", "starts at p_max - 1", "not visible (cut), 50 chars"], [50, "19 digits, one digit per group", "starts at p_max + 1", "not visible (cut), 50 chars"], [50, "19 digits, one digit per group", "straddles by 1", "masked, 50 chars"], [50, "19 digits, one digit per group", "straddles by half", "not visible (cut), 50 chars"], [100, "16 digits, 3 ZWNJ between digits", "ends at p_max", "masked, 100 chars"], [100, "16 digits, 3 ZWNJ between digits", "starts at p_max - 1", "not visible (cut), 100 chars"], [100, "16 digits, 3 ZWNJ between digits", "starts at p_max + 1", "not visible (cut), 100 chars"], [100, "16 digits, 3 ZWNJ between digits", "straddles by 1", "masked, 100 chars"], [100, "16 digits, 3 ZWNJ between digits", "straddles by half", "masked, 100 chars"], [100, "16 digits, groups of 4", "ends at p_max", "not visible (cut), 100 chars"], [100, "16 digits, groups of 4", "starts at p_max - 1", "not visible (cut), 100 chars"], [100, "16 digits, groups of 4", "starts at p_max + 1", "not visible (cut), 100 chars"], [100, "16 digits, groups of 4", "straddles by 1", "not visible (cut), 100 chars"], [100, "16 digits, groups of 4", "straddles by half", "not visible (cut), 100 chars"], [100, "19 digits, one digit per group", "ends at p_max", "masked, 100 chars"], [100, "19 digits, one digit per group", "starts at p_max - 1", "not visible (cut), 100 chars"], [100, "19 digits, one digit per group", "starts at p_max + 1", "not visible (cut), 100 chars"], [100, "19 digits, one digit per group", "straddles by 1", "masked, 100 chars"], [100, "19 digits, one digit per group", "straddles by half", "not visible (cut), 100 chars"], [200, "16 digits, 3 ZWNJ between digits", "ends at p_max", "masked, 200 chars"], [200, "16 digits, 3 ZWNJ between digits", "starts at p_max - 1", "not visible (cut), 200 chars"], [200, "16 digits, 3 ZWNJ between digits", "starts at p_max + 1", "not visible (cut), 200 chars"], [200, "16 digits, 3 ZWNJ between digits", "straddles by 1", "masked, 200 chars"], [200, "16 digits, 3 ZWNJ between digits", "straddles by half", "masked, 200 chars"], [200, "16 digits, groups of 4", "ends at p_max", "not visible (cut), 200 chars"], [200, "16 digits, groups of 4", "starts at p_max - 1", "not visible (cut), 200 chars"], [200, "16 digits, groups of 4", "starts at p_max + 1", "not visible (cut), 200 chars"], [200, "16 digits, groups of 4", "straddles by 1", "not visible (cut), 200 chars"], [200, "16 digits, groups of 4", "straddles by half", "not visible (cut), 200 chars"], [200, "19 digits, one digit per group", "ends at p_max", "masked, 200 chars"], [200, "19 digits, one digit per group", "starts at p_max - 1", "not visible (cut), 200 chars"], [200, "19 digits, one digit per group", "starts at p_max + 1", "not visible (cut), 200 chars"], [200, "19 digits, one digit per group", "straddles by 1", "masked, 200 chars"], [200, "19 digits, one digit per group", "straddles by half", "not visible (cut), 200 chars"], [300, "16 digits, 3 ZWNJ between digits", "ends at p_max", "masked, 300 chars"], [300, "16 digits, 3 ZWNJ between digits", "starts at p_max - 1", "not visible (cut), 300 chars"], [300, "16 digits, 3 ZWNJ between digits", "starts at p_max + 1", "not visible (cut), 300 chars"], [300, "16 digits, 3 ZWNJ between digits", "straddles by 1", "masked, 300 chars"], [300, "16 digits, 3 ZWNJ between digits", "straddles by half", "masked, 300 chars"], [300, "16 digits, groups of 4", "ends at p_max", "not visible (cut), 300 chars"], [300, "16 digits, groups of 4", "starts at p_max - 1", "not visible (cut), 300 chars"], [300, "16 digits, groups of 4", "starts at p_max + 1", "not visible (cut), 300 chars"], [300, "16 digits, groups of 4", "straddles by 1", "not visible (cut), 300 chars"], [300, "16 digits, groups of 4", "straddles by half", "not visible (cut), 300 chars"], [300, "19 digits, one digit per group", "ends at p_max", "masked, 300 chars"], [300, "19 digits, one digit per group", "starts at p_max - 1", "not visible (cut), 300 chars"], [300, "19 digits, one digit per group", "starts at p_max + 1", "not visible (cut), 300 chars"], [300, "19 digits, one digit per group", "straddles by 1", "masked, 300 chars"], [300, "19 digits, one digit per group", "straddles by half", "not visible (cut), 300 chars"], [1000, "16 digits, 3 ZWNJ between digits", "ends at p_max", "masked, 1000 chars"], [1000, "16 digits, 3 ZWNJ between digits", "starts at p_max - 1", "not visible (cut), 1000 chars"], [1000, "16 digits, 3 ZWNJ between digits", "starts at p_max + 1", "not visible (cut), 1000 chars"], [1000, "16 digits, 3 ZWNJ between digits", "straddles by 1", "masked, 1000 chars"], [1000, "16 digits, 3 ZWNJ between digits", "straddles by half", "masked, 1000 chars"], [1000, "16 digits, groups of 4", "ends at p_max", "not visible (cut), 1000 chars"], [1000, "16 digits, groups of 4", "starts at p_max - 1", "not visible (cut), 1000 chars"], [1000, "16 digits, groups of 4", "starts at p_max + 1", "not visible (cut), 1000 chars"], [1000, "16 digits, groups of 4", "straddles by 1", "not visible (cut), 1000 chars"], [1000, "16 digits, groups of 4", "straddles by half", "not visible (cut), 1000 chars"], [1000, "19 digits, one digit per group", "ends at p_max", "masked, 1000 chars"], [1000, "19 digits, one digit per group", "starts at p_max - 1", "not visible (cut), 1000 chars"], [1000, "19 digits, one digit per group", "starts at p_max + 1", "not visible (cut), 1000 chars"], [1000, "19 digits, one digit per group", "straddles by 1", "masked, 1000 chars"], [1000, "19 digits, one digit per group", "straddles by half", "not visible (cut), 1000 chars"]]
+OBS_window_joiners                                             {"masked": 249, "not visible (cut)": 1191}
+PRE_4244_objects                                               0
+PRE_call_log_checks                                            mcp_call_log_event_check=CHECK ((event = ANY (ARRAY['call'::text, 'refresh_reuse'::text, 'code_replay'::text, 'code_replay_refused'::text, 'code_rejected'::text, 'disconnect'::text, 'disconnect_all'::text, 'cloud_off'::text, 'reconnect_replaced'::text]))); mcp_call_log_outcome_check=CHECK ((outcome = ANY (ARRAY['pending'::text, 'ok'::text, 'not_connected'::text, 'disabled'::text, 'rate_limited'::text, 'busy'::text, 'not_entitled'::text, 'timeout'::text, 'error'::text]))); mcp_call_log_tool_check=CHECK (((tool IS NULL) OR (tool = 'get_status'::text)))
+PRE_cloud_writes_new_signature                                 13
+PRE_cloud_writes_old_signature                                 0
+PRE_ledger_4244                                                0
+PRE_live_withheld_check                                        1
+PRE_live_withheld_column                                       1
+PRE_mcp_function_count                                         25
+PRE_mcp_functions_md5                                          48126d28553c04acf8d40f3bca8cf095
+PRE_server_version                                             17.11
+fp_after_apply                                                 5527c7dbddccc8ac3938ab26dc71b9d6
+CONTROLS pass=38 fail=1 total=39
+MUTANTS as_expected=0 unexpected=0 total=0
+fixtures written: fxA.json
+
+# read-only catalog before call 27, before call A and after call A: mcp_* 25 functions md5 48126d28553c04acf8d40f3bca8cf095; 4244 objects 0; ledger 0; no fixture user left.
