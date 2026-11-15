@@ -358,13 +358,14 @@ def mutants():
     for tag, part in [('U3164', '\\u3164'), ('U2061_2064', '\\u2061-\\u2064'), ('UE0100_E01EF', '\\U000E0100-\\U000E01EF'), ('UFFA0', '\\uFFA0')]:
         b.append(fn_mutant('MASK_ignorable_narrowed_' + tag, '_mcp_mask', "  v_x := regexp_replace(p, " + UNJ + ",",
                            "  v_x := regexp_replace(p, " + UNJ.replace(part, '') + ",", 'pg_temp.p_ignorables()'))
-    b.append(fn_mutant('CLEAN_ignorable_narrowed_U180E', '_mcp_clean', "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ + ",",
-                       "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ.replace('\\u180E', '') + ",", 'pg_temp.p_ignorables()'))
+    for tag, part in [('U180E', '\\u180E'), ('UFE00_FE0F', '\\uFE00-\\uFE0F')]:
+        b.append(fn_mutant('CLEAN_ignorable_narrowed_' + tag, '_mcp_clean', "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ + ",",
+                           "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ.replace(part, '') + ",", 'pg_temp.p_ignorables()'))
     b.append(fn_mutant('MASK_joiner_separator_joiner_dropped', '_mcp_mask', "  v_x := regexp_replace(p, " + UNJ + ",",
                        "  v_x := regexp_replace(p, " + UNJ.replace("'([\\d -])[", "'(\\d)[").replace("(?=[\\d -])'", "(?=\\d)'") + ",", 'pg_temp.p_ignorables()'))
     b.append(fn_mutant('CLEAN_joiner_separator_joiner_dropped', '_mcp_clean', "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ + ",",
                        "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ.replace("'([\\d -])[", "'(\\d)[").replace("(?=[\\d -])'", "(?=\\d)'") + ",",
-                       'pg_temp.p_window_joiners()'))
+                       'pg_temp.p_ignorables()'))
     b.append(fn_mutant('CLEAN_drop_class_old', '_mcp_clean', "regexp_replace(left(u.x, p_max + 40), " + RUN + ", '')",
                        "regexp_replace(left(u.x, p_max + 40), '\\d+(?:[ -]\\d+)*[ -]?$', '')", 'pg_temp.p_window_joiners()'))
     b.append(fn_mutant('STRIP_tags_kept', '_mcp_strip', '\\u061C\\U000E0000-\\U000E007F]', ']', 'pg_temp.p_strip_tags()'))

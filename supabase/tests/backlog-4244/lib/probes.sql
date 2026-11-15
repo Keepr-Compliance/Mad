@@ -605,7 +605,8 @@ BEGIN
     pg_temp.pass(public._mcp_clean(c, 1000) = 'card [number hidden by Keepr] x', 'mixed between groups ' || public._mcp_clean(c, 1000)),
     pg_temp.pass(public._mcp_mask(d) = 'card [number hidden by Keepr] x', 'joiners beside separators ' || public._mcp_mask(d)),
     pg_temp.pass(public._mcp_mask(e) = 'ssn [number hidden by Keepr] x' AND public._mcp_clean(e, 1000) = 'ssn [number hidden by Keepr] x', 'ssn ' || public._mcp_mask(e)),
-    pg_temp.pass(public._mcp_mask(fam) = fam AND public._mcp_clean(fam, 1000) = fam, 'emoji'),
+    pg_temp.pass(public._mcp_mask(fam) = replace(fam, '12' || zwj || ' ', '12 ') AND public._mcp_clean(fam, 1000) = replace(fam, '12' || zwj || ' ', '12 '),
+                 'emoji kept; the joiner between 2 and a space removed'),
     pg_temp.pass(public._mcp_mask(per) = per AND public._mcp_clean(per, 1000) = per, 'ZWNJ in a word'));
 END $h$;
 
@@ -767,7 +768,7 @@ BEGIN
       END LOOP;
     END LOOP;
   END LOOP;
-  RETURN pg_temp.pass(bad = '' AND cnt = 1440 AND exp_n = 64, 'cases ' || cnt || ' masked-expected ' || exp_n || ' missed ' || exp_bad || ' ' || left(bad, 1500));
+  RETURN pg_temp.pass(bad = '' AND cnt = 1440 AND exp_n = 122, 'cases ' || cnt || ' masked-expected ' || exp_n || ' missed ' || exp_bad || ' ' || left(bad, 1500));
 END $h$;
 CREATE FUNCTION pg_temp.obs_window_joiners() RETURNS text LANGUAGE sql AS $h$
   SELECT jsonb_object_agg(outcome, c)::text FROM (SELECT outcome, sum(n) AS c FROM pg_temp.p4244_wj GROUP BY outcome) x
@@ -778,7 +779,7 @@ $h$;
 -- the first separator: through _mcp_clean (what the tools show) and through _mcp_mask alone.
 -- Returns one string per character: 8 marks per function, M masked, . not masked.
 CREATE FUNCTION pg_temp.ign_chars() RETURNS int[] LANGUAGE sql IMMUTABLE AS $h$
-  SELECT ARRAY[173, 847, 4447, 4448, 6158, 8204, 8205, 8289, 8290, 8291, 8292, 12644, 65024, 65039, 65440, 917760, 918000]
+  SELECT ARRAY[173, 847, 4447, 4448, 6158, 8204, 8205, 8289, 8290, 8291, 8292, 12644, 65024, 65039, 65440, 917760, 917999]
 $h$;
 CREATE FUNCTION pg_temp.ign_shapes(c text) RETURNS text[] LANGUAGE sql IMMUTABLE AS $h$
   SELECT ARRAY[
@@ -798,6 +799,14 @@ BEGIN
     o := CASE WHEN use_clean THEN public._mcp_clean(s, 1000) ELSE public._mcp_mask(s) END;
     out := out || CASE WHEN position('[number hidden by Keepr]' IN o) > 0 AND o !~ '\d' THEN 'M' ELSE '.' END;
   END LOOP;
+  IF use_clean THEN
+    -- a ninth shape for the shown text: 50 of the character on both sides of each separator, in a field
+    -- longer than its limit (p_max 100): shown masked, not cut out
+    s := 'x 4111' || repeat(c, 50) || ' ' || repeat(c, 50) || '1111' || repeat(c, 50) || ' ' || repeat(c, 50) || '1111'
+         || repeat(c, 50) || ' ' || repeat(c, 50) || '1111 ' || repeat('b', 3000);
+    o := public._mcp_clean(s, 100);
+    out := out || CASE WHEN position('[number hidden by Keepr]' IN o) > 0 AND o !~ '\d' THEN 'M' ELSE '.' END;
+  END IF;
   RETURN out;
 END $h$;
 CREATE FUNCTION pg_temp.p_ignorables() RETURNS text LANGUAGE plpgsql AS $h$
@@ -806,7 +815,7 @@ BEGIN
   FOREACH cp IN ARRAY pg_temp.ign_chars() LOOP
     m := pg_temp.ign_marks(chr(cp), true) || '/' || pg_temp.ign_marks(chr(cp), false);
     cnt := cnt + 1;
-    IF m <> 'MMMMMMMM/MMMMMMMM' THEN bad := bad || format('U+%s %s; ', upper(to_hex(cp)), m); END IF;
+    IF m <> 'MMMMMMMMM/MMMMMMMM' THEN bad := bad || format('U+%s %s; ', upper(to_hex(cp)), m); END IF;
   END LOOP;
   -- mixed characters
   IF position('[number' IN public._mcp_clean('x 4' || chr(173) || chr(8205) || '111' || chr(12644) || ' ' || chr(8291) || '1111 ' || chr(917760) || chr(6158) || '1111' || chr(65039) || ' ' || chr(847) || '1111 y', 1000)) = 0 THEN
@@ -820,12 +829,14 @@ BEGIN
     'keys ' || '1' || chr(65039) || chr(8419) || '2' || chr(65039) || chr(8419) || '3' || chr(65039) || chr(8419),
     'word ' || chr(1605) || chr(1740) || chr(8204) || chr(1582) || chr(1608) || chr(1575) || chr(1607) || chr(1605),
     'co' || chr(173) || 'operate',
-    chr(12644) || chr(4352) || chr(4449) || ' ' || chr(4447) || chr(4448) || ' end',
+    'name ' || chr(44032) || chr(12644) || chr(45208) || ' ' || chr(4447) || chr(4449) || ' end',
     'love ' || chr(10084) || chr(65039) || ' 2 ' || chr(10084) || chr(65039),
     'kanji ' || chr(33883) || chr(917760)];
   FOREACH l IN ARRAY legit LOOP
     IF public._mcp_clean(l, 1000) IS DISTINCT FROM l THEN bad := bad || 'changed: ' || l || '; '; END IF;
   END LOOP;
+  -- a run between two spaces is removed even with no digit near (invisible characters only)
+  IF public._mcp_clean('a ' || chr(12644) || ' b', 1000) IS DISTINCT FROM 'a  b' THEN bad := bad || 'between spaces; '; END IF;
   RETURN pg_temp.pass(bad = '' AND cnt = 17, 'characters ' || cnt || ' ' || bad);
 END $h$;
 -- the same matrix through the functions as they were before this change (pg_temp.o_mcp_*), and after
@@ -840,7 +851,7 @@ BEGIN
       o := public._mcp_clean(s, 1000);
       a := a || CASE WHEN position('[number hidden by Keepr]' IN o) > 0 AND o !~ '\d' THEN 'M' ELSE '.' END;
     END LOOP;
-    out := out || jsonb_build_object('U+' || upper(lpad(to_hex(cp), 4, '0')), jsonb_build_object('before', b, 'after', a));
+    out := out || jsonb_build_object('U+' || upper(CASE WHEN cp < 65536 THEN lpad(to_hex(cp), 4, '0') ELSE to_hex(cp) END), jsonb_build_object('before', b, 'after', a));
   END LOOP;
   RETURN out::text;
 END $h$;
