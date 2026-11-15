@@ -211,7 +211,16 @@ describe("shipped modes: the detector drops ONLY the exact seeds", () => {
         gmailPromotions: { mode: "measure", matched: 1 },
       }),
     });
-    expect(Object.keys(log).sort()).toEqual(["bySignal", "evaluated", "keptBy", "liveDropped", "senderRulesSource", "senderRulesVersion"]);
+    expect(Object.keys(log).sort()).toEqual([
+      "bySignal",
+      "evaluated",
+      "keptBy",
+      "liveDropped",
+      "senderRulesSource",
+      "senderRulesVersion",
+      "userDropped",
+      "userSuppressSize",
+    ]);
     const serialized = JSON.stringify(log);
     expect(serialized).not.toContain("@");
     for (const forbidden of ["list.example", "shop.example", SEED().split("@")[1], USER]) {

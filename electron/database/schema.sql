@@ -2120,10 +2120,29 @@ CREATE TABLE IF NOT EXISTS learn_bulk_answers (
   created_at   TEXT NOT NULL,
   updated_at   TEXT NOT NULL,
   deleted_at   TEXT,
+  -- BACKLOG-4212 (v80): the answered message's From address, normalised, taken
+  -- when the answer is saved; NULL when the message was not cached. No index
+  -- here: schema.sql runs on every open, and an index naming this column would
+  -- abort it on a pre-v80 database.
+  sender_key   TEXT,
   FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_learn_bulk_answers_user_msg_live
   ON learn_bulk_answers(user_id, source, external_id) WHERE deleted_at IS NULL;
+
+-- BACKLOG-4212: "Stop hiding" for a sender this user marked as a newsletter.
+-- One live row per (user, sender); never touches the answers. Local only.
+CREATE TABLE IF NOT EXISTS learn_sender_overrides (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL,
+  sender_key TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  deleted_at TEXT,
+  FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_learn_sender_overrides_user_sender_live
+  ON learn_sender_overrides(user_id, sender_key) WHERE deleted_at IS NULL;
 -- ===========================================================================
 -- BACKLOG-4120 END
 -- ===========================================================================
