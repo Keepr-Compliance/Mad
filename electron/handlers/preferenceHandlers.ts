@@ -14,6 +14,11 @@ import {
   autoDownloadFromPreferences,
   autoDownloadInPartial,
 } from "../services/updateDownloadPolicy";
+import {
+  applyBetaUpdates,
+  betaUpdatesFromPreferences,
+  betaUpdatesInPartial,
+} from "../services/updateChannelPolicy";
 
 // Import validation utilities
 import {
@@ -59,6 +64,8 @@ export function registerPreferenceHandlers(): void {
 
         // BACKLOG-3469: the read value drives the updater (default on).
         applyAutoDownload(autoDownloadFromPreferences(preferences));
+        // BACKLOG-4245: the read value drives prereleases (default off).
+        applyBetaUpdates(betaUpdatesFromPreferences(preferences));
 
         return {
           success: true,
@@ -85,6 +92,7 @@ export function registerPreferenceHandlers(): void {
               { copiedAt: copy.copiedAt },
             );
             applyAutoDownload(autoDownloadFromPreferences(copy.preferences));
+            applyBetaUpdates(betaUpdatesFromPreferences(copy.preferences));
             return {
               success: true,
               preferences: copy.preferences,
@@ -93,6 +101,8 @@ export function registerPreferenceHandlers(): void {
             };
           }
         }
+        // BACKLOG-4245: no value could be read: prereleases off.
+        applyBetaUpdates(false);
         return {
           success: false,
           error: error instanceof Error ? error.message : "Unknown error",
@@ -182,6 +192,12 @@ export function registerPreferenceHandlers(): void {
         if (autoDownload !== null) {
           applyAutoDownload(autoDownload);
         }
+        // BACKLOG-4245: turning beta updates off takes effect at once; turning
+        // them on takes effect only once the cloud save has succeeded.
+        const betaUpdates = betaUpdatesInPartial(sanitizedPartialPreferences);
+        if (betaUpdates === false) {
+          applyBetaUpdates(false);
+        }
 
         // Get existing preferences
         const existingPreferences =
@@ -198,6 +214,10 @@ export function registerPreferenceHandlers(): void {
           validatedUserId,
           updatedPreferences,
         );
+
+        if (betaUpdates === true) {
+          applyBetaUpdates(true);
+        }
 
         return {
           success: true,

@@ -10,12 +10,21 @@
  *   expired, there is no copy, the copy has no value, the read is slow, or it
  *   fails.
  * - `autoInstallOnAppQuit` is never touched: the switch is about downloading.
+ *
+ * BACKLOG-4245: the same startup read also yields the beta-updates
+ * preference (updateChannelPolicy). On every missing leg, slow read or error
+ * it is OFF, while auto-download stays ON.
  */
 
 import { autoUpdater } from "electron-updater";
 import logService from "./logService";
 import sessionService from "./sessionService";
 import { readPreferencesCopy } from "./preferencesMirror";
+import {
+  applyBetaUpdates,
+  betaUpdatesFromPreferences,
+  type PrereleaseTarget,
+} from "./updateChannelPolicy";
 
 const MODULE = "UpdateDownloadPolicy";
 
@@ -69,17 +78,67 @@ export function applyAutoDownload(
   }
 }
 
-async function readStoredValue(): Promise<boolean> {
+/** The updater preferences read at startup. */
+export interface StoredUpdatePreferences {
+  autoDownload: boolean;
+  betaUpdates: boolean;
+}
+
+/** Used for every missing leg, a slow read and an error. */
+export const STORED_UPDATE_DEFAULTS: Readonly<StoredUpdatePreferences> = Object.freeze({
+  autoDownload: true,
+  betaUpdates: false,
+});
+
+async function readStoredValues(): Promise<StoredUpdatePreferences> {
   // Read-only peek for the user id: never removes or rewrites the session file.
   const peek = await sessionService.peekSession();
-  if (peek.status !== "ok") return true;
+  if (peek.status !== "ok") return { ...STORED_UPDATE_DEFAULTS };
   const session = peek.session;
-  if (session.expiresAt && Date.now() > session.expiresAt) return true;
+  if (session.expiresAt && Date.now() > session.expiresAt) return { ...STORED_UPDATE_DEFAULTS };
   const userId = session.user?.id;
-  if (typeof userId !== "string" || !userId) return true;
+  if (typeof userId !== "string" || !userId) return { ...STORED_UPDATE_DEFAULTS };
   const copy = await readPreferencesCopy(userId);
-  if (!copy) return true;
-  return autoDownloadFromPreferences(copy.preferences);
+  if (!copy) return { ...STORED_UPDATE_DEFAULTS };
+  return {
+    autoDownload: autoDownloadFromPreferences(copy.preferences),
+    betaUpdates: betaUpdatesFromPreferences(copy.preferences),
+  };
+}
+
+/**
+ * The last-known updater preferences from the local preferences copy.
+ * Resolves the defaults (auto-download on, beta updates off) on any missing
+ * leg, on a read slower than `timeoutMs`, or on an error. Never rejects.
+ */
+export function readStoredUpdatePreferences(
+  timeoutMs: number = STORED_AUTO_DOWNLOAD_TIMEOUT_MS,
+): Promise<StoredUpdatePreferences> {
+  return new Promise<StoredUpdatePreferences>((resolve) => {
+    let settled = false;
+    const finish = (value: StoredUpdatePreferences): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      logService.warn("[Updates] Stored update preferences read timed out; using defaults", MODULE);
+      finish({ ...STORED_UPDATE_DEFAULTS });
+    }, timeoutMs);
+    let pending: Promise<StoredUpdatePreferences>;
+    try {
+      pending = readStoredValues();
+    } catch (error) {
+      pending = Promise.reject(error);
+    }
+    pending.then(finish, (error: unknown) => {
+      logService.warn("[Updates] Stored update preferences read failed; using defaults", MODULE, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      finish({ ...STORED_UPDATE_DEFAULTS });
+    });
+  });
 }
 
 /**
@@ -87,42 +146,31 @@ async function readStoredValue(): Promise<boolean> {
  * on any missing leg, on a read slower than `timeoutMs`, or on an error.
  * Never rejects.
  */
-export function readStoredAutoDownload(
+export async function readStoredAutoDownload(
   timeoutMs: number = STORED_AUTO_DOWNLOAD_TIMEOUT_MS,
 ): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    let settled = false;
-    const finish = (value: boolean): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      resolve(value);
-    };
-    const timer = setTimeout(() => {
-      logService.warn("[Updates] Stored auto-download read timed out; using on", MODULE);
-      finish(true);
-    }, timeoutMs);
-    readStoredValue().then(finish, (error: unknown) => {
-      logService.warn("[Updates] Stored auto-download read failed; using on", MODULE, {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      finish(true);
-    });
-  });
+  return (await readStoredUpdatePreferences(timeoutMs)).autoDownload;
 }
 
 /**
- * Startup: read the stored value, apply it, and only THEN run the check.
- * electron-updater reads `autoDownload` inside checkForUpdates, so the flag
- * must be set before `runCheck` is called.
+ * Startup: read the stored values, apply them, and only THEN run the check.
+ * electron-updater reads `autoDownload` and `allowPrerelease` inside
+ * checkForUpdates, so both must be set before `runCheck` is called. A failure
+ * here never stops the check from running.
  */
 export async function runStartupUpdateCheck<T>(
-  updater: AutoDownloadTarget,
+  updater: AutoDownloadTarget & Partial<PrereleaseTarget>,
   runCheck: () => T,
   timeoutMs: number = STORED_AUTO_DOWNLOAD_TIMEOUT_MS,
 ): Promise<T> {
-  const value = await readStoredAutoDownload(timeoutMs);
-  applyAutoDownload(value, updater);
+  let stored: StoredUpdatePreferences = { ...STORED_UPDATE_DEFAULTS };
+  try {
+    stored = await readStoredUpdatePreferences(timeoutMs);
+  } catch {
+    stored = { ...STORED_UPDATE_DEFAULTS };
+  }
+  applyAutoDownload(stored.autoDownload, updater);
+  applyBetaUpdates(stored.betaUpdates, updater as PrereleaseTarget);
   return runCheck();
 }
 
