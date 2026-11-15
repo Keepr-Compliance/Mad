@@ -452,6 +452,8 @@ def before_copies():
 
 
 MUTANTS_ONLY = '--mutants-only' in sys.argv
+# with --mutants-only, --probes=<a,b> also runs these controls
+ONLY_PROBES = next((a.split('=', 1)[1].split(',') for a in sys.argv if a.startswith('--probes=')), [])
 
 
 def compose(with_mutants=True, only=None):
@@ -490,7 +492,7 @@ def compose(with_mutants=True, only=None):
              "CREATE FUNCTION pg_temp.t_rb() RETURNS text LANGUAGE sql IMMUTABLE AS $tr4244$ SELECT %s::text $tr4244$;\n") % (q2(MIG), q2(RB))
     text += ROLLBACK_PROBE
     b = []
-    for p in ([] if MUTANTS_ONLY else PROBES):
+    for p in ([x for x in PROBES if x in ONLY_PROBES] if MUTANTS_ONLY else PROBES):
         b.append(block('C_' + p, '    v := pg_temp.%s(%s);' % (p, 'pg_temp.t_rb()' if p == 'p_rollback' else '')))
     caps = {'FX_list_a': "pg_temp.ld('a1')", 'FX_list_b': "pg_temp.ld('b1')", 'FX_list_e_page1': "pg_temp.ld('e1', NULL, NULL, 2)",
             'FX_get_d1': "pg_temp.gd('a1', pg_temp.id('D1')::text)", 'FX_get_d2': "pg_temp.gd('a1', pg_temp.id('D2')::text)",
@@ -620,7 +622,7 @@ def main():
             json.dump(normalise(res), fh, indent=1, sort_keys=True, ensure_ascii=False)
             fh.write('\n')
         print('fixtures written: ' + os.path.basename(fx_path))
-    sys.exit(1 if cf or missed or (cp == 0 and not MUTANTS_ONLY) or (MUTANTS_ONLY and caught == 0) else 0)
+    sys.exit(1 if cf or missed or (cp == 0 and not MUTANTS_ONLY) or (MUTANTS_ONLY and caught == 0) or (cp < len(ONLY_PROBES)) else 0)
 
 
 main()
