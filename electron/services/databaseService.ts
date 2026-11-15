@@ -202,8 +202,8 @@ import * as syncDb from "./db/syncDbService";
 import * as rcsChatPeopleDb from "./db/rcsChatPeopleDbService";
 import * as maintenanceDb from "./db/maintenanceDbService";
 import {
+  applyCloudSyncTriggerRule,
   dropCloudSyncTriggers,
-  ensureCloudSyncTriggers,
   markAllEligibleAfterMigration,
   prepareRestoredFile,
 } from "./db/cloudSyncTriggers";
@@ -1929,18 +1929,19 @@ class DatabaseService implements IDatabaseService {
     }
 
     // BACKLOG-4243: when a versioned migration will run, the Keepr Cloud
-    // dirty-mark triggers are dropped before schema.sql and the chain; after
-    // them (also when a migration throws) the create step makes them exact,
-    // touching nothing when they already are. Neither step throws. A migration
-    // that ran while the triggers were absent marks every eligible deal of
-    // every enabled user.
+    // dirty-mark triggers are dropped before schema.sql and the chain (a no-op
+    // when none exist); after them (also when a migration throws) the trigger
+    // rule is applied: exact triggers while Keepr Cloud is on in this profile,
+    // none otherwise, and no DDL when that already holds. Neither step throws.
+    // A migration that ran while the triggers were absent marks every eligible
+    // deal of every enabled user.
     const versionBefore = this._readSchemaVersionOrNull(currentDb);
     if (willRunMigration) dropCloudSyncTriggers(currentDb, this._cloudSyncLog());
     try {
       currentDb.exec(schemaSql);
       await this._runVersionedMigrations(false, currentDb);
     } catch (error) {
-      ensureCloudSyncTriggers(currentDb, this._cloudSyncLog());
+      applyCloudSyncTriggerRule(currentDb, this._cloudSyncLog());
       await logService.error("Failed to run migrations", "DatabaseService", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -1958,7 +1959,7 @@ class DatabaseService implements IDatabaseService {
       await hostErrorReporter.flush(2000);
       throw error;
     }
-    ensureCloudSyncTriggers(currentDb, this._cloudSyncLog());
+    applyCloudSyncTriggerRule(currentDb, this._cloudSyncLog());
     if (this._readSchemaVersionOrNull(currentDb) !== versionBefore) {
       markAllEligibleAfterMigration(currentDb, this._cloudSyncLog());
     }
