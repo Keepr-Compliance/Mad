@@ -326,3 +326,43 @@ describe('brokerage suspended (BACKLOG-3853)', () => {
     errorSpy.mockRestore();
   });
 });
+
+// BACKLOG-4179 G8: the one-brokerage guard refuses the claim UPDATE inside accept_invitation
+// when another join for the same person committed first (accept_invitation's own check ran
+// before it). Error as PostgREST relays it, transcribed from concurrency.sh G3 S2 on keepr-test
+// (supabase/tests/backlog-4179/results-2026-11-12.txt):
+//   RAISE EXCEPTION 'already_placed' USING ERRCODE = 'P0001', DETAIL = 'BACKLOG-4179: ...'
+describe('one-brokerage guard (BACKLOG-4179)', () => {
+  const GUARD = {
+    code: 'P0001',
+    message: 'already_placed',
+    details: 'BACKLOG-4179: this person already has a membership in another brokerage',
+    hint: null,
+  };
+
+  it('accept_invitation raises already_placed -> signed out, already_placed', async () => {
+    signedIn();
+    given([pendingInvite(EMAIL, 'agent')]);
+    rpcs({ accept_invitation: { data: null, error: GUARD } });
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const { location, deleted } = await run(WITH_INVITE);
+    expect(location).toBe(`${ORIGIN}/login?error=already_placed`);
+    expect(mockSignOut.mock.calls).toEqual([[{ scope: 'local' }]]);
+    expect(deleted).toContain('keepr_invite');
+    expect(rpcNames()).toEqual(['accept_invitation']);
+    expect(mockEmulator.state.writes).toEqual([]);
+    errorSpy.mockRestore();
+  });
+
+  it.each([
+    ['another code', { ...GUARD, code: '23505' }],
+    ['another message', { ...GUARD, message: 'already_placed_elsewhere' }],
+  ])('same shape, %s -> invite_failed as before', async (_label, error) => {
+    signedIn();
+    given([]);
+    rpcs({ accept_invitation: { data: null, error } });
+    const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    expect((await run(WITH_INVITE)).location).toBe(`${ORIGIN}/login?error=invite_failed`);
+    errorSpy.mockRestore();
+  });
+});

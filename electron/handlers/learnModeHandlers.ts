@@ -23,6 +23,15 @@
 //                          chosen for deletion (2.46.2). Same basis as above.
 //   `learn:delete-answer`  soft-removes ONE of the caller's own answers; the
 //                          item can be asked again (2.46.2). Same basis.
+//   `learn:set-pilot-report` (BACKLOG-4219) "Help improve Keepr":
+//                          turning ON needs the full gate (Learn mode on AND
+//                          the strict key); turning OFF is never refused.
+//
+// PILOT REPORT (BACKLOG-4219). With sharing ON, `learn:score` hands the score
+// to the INJECTED `deps.pilotReport` (learnPilotReportService, wired by
+// main.ts), which may send a numbers-only snapshot; this file imports no part
+// of that send path. Every OFF path (the switch, Learn mode off, Delete all)
+// writes sharing OFF + withdraw owed locally FIRST, then queues the withdraw.
 //
 // What this file deliberately does NOT import: emailSyncHandlers
 // (isAutoDetectAllowed), llmConfigService, transactionService,
@@ -66,8 +75,12 @@ import {
   previewAttachments,
   previewEmailForBulkRow,
   previewEmailsByIds,
+  getPilotState,
   setLearnModeEnabled,
-  softClearAnswers,
+  setPilotOn,
+  softClearAnswersAndStopSharing,
+  turnLearnModeOff,
+  turnPilotSharingOff,
   softDeleteAnswer,
   type PreviewAttachmentRow,
   type PreviewEmailRow,
@@ -87,9 +100,10 @@ import {
   countSeedLinkedToDeals,
   formatCopyBlock,
   isHiddenBySenderRules,
-  scoreRun,
+  scoreRunWithDetector,
   visibleEmailIds,
 } from "../services/learn/scoring";
+import type { LearnPilotReportDeps } from "../services/learnPilotReportService";
 import { getActiveSenderRules } from "../services/senderRuleSetStore";
 import { buildKeepSets } from "../utils/senderFilter/senderFilter";
 import { LEARN_RULES } from "../services/learn/learnRules";
@@ -103,6 +117,8 @@ import {
   LearnSampleAnswerArgsSchema,
   LearnSampleDrawArgsSchema,
   LearnSetEnabledArgsSchema,
+  LearnSetPilotReportArgsSchema,
+  LearnGetStateArgsSchema,
 } from "../schemas/learnMode";
 import type {
   LearnAnswerResult,
@@ -120,6 +136,7 @@ import type {
   LearnSampleNextResult,
   LearnScoreResult,
   LearnSetEnabledResult,
+  LearnSetPilotReportResult,
   LearnStateResult,
 } from "../types/ipc/window-api-learn";
 import { isAutodetectEvalAllowed } from "./featureGateHandlers";
@@ -146,6 +163,7 @@ export const LEARN_UNGATED_CHANNELS = [
   "learn:delete-answers",
   "learn:list-answers",
   "learn:delete-answer",
+  "learn:set-pilot-report",
 ] as const;
 
 export const LEARN_NOT_AVAILABLE_ERROR = "Learn mode is not available.";
@@ -170,10 +188,34 @@ export interface LearnModeHandlerDeps {
     | { ok: true; dataUrl: string; downloadedNow: boolean }
     | { ok: false; reason: "too_large" | "not_available" | "failed" }
   >;
+  /** BACKLOG-4219: the pilot report send / withdraw (type-only import here). */
+  pilotReport?: LearnPilotReportDeps;
 }
 
 /** Messages per preview: newest first. */
 export const LEARN_PREVIEW_MAX_EMAILS = 5;
+
+/**
+ * BACKLOG-4219: the longest learn:get-state `{ settle: true }` waits for a
+ * queued pilot job (a submit's RPC is capped at 10 s) before answering anyway.
+ */
+export const LEARN_SETTLE_CAP_MS = 15_000;
+
+/** Wait for this user's queued pilot jobs, or the cap, whichever is first. */
+async function settlePilot(pilot: LearnPilotReportDeps | undefined, userId: string): Promise<void> {
+  const idle = pilot?.idle?.(userId);
+  if (!idle) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cap = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, LEARN_SETTLE_CAP_MS);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  try {
+    await Promise.race([idle.catch(() => undefined), cap]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 const MODULE = "LearnMode";
 
@@ -301,6 +343,11 @@ function cleanupPreview(
   return { rows, attachments, total: ids.length, address: detection.address };
 }
 
+function lastSentAt(sentVersions: Record<string, string>): string | null {
+  const times = Object.values(sentVersions).sort();
+  return times.length ? times[times.length - 1] : null;
+}
+
 function isPreviewFailure(
   x: { rows: PreviewEmailRow[] } | LearnFailure,
 ): x is LearnFailure {
@@ -310,15 +357,23 @@ function isPreviewFailure(
 export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void {
   ipcMain.handle(
     "learn:get-state",
-    guarded("learn:get-state", async (): Promise<LearnStateResult> => {
+    guarded("learn:get-state", async (_e, payload?: unknown): Promise<LearnStateResult> => {
+      const args = payload === undefined ? {} : parse(LearnGetStateArgsSchema, payload);
+      if (!args) return fail(LEARN_INVALID_ERROR);
       const userId = await sessionUserId();
       if (!userId) return fail(LEARN_NO_SESSION_ERROR);
+      // BACKLOG-4219: Settings asks after a score / switch so the line is current.
+      if (args.settle) await settlePilot(deps.pilotReport, userId);
       const available = (await isAutodetectEvalAllowed()) === true;
+      const pilot = getPilotState(userId);
       return {
         success: true,
         available,
         enabled: available && getLearnModeEnabled(userId),
         answers: countLiveAnswers(userId),
+        pilotReport: pilot.enabled,
+        pilotPending: pilot.pendingWithdraw,
+        pilotLastSentAt: lastSentAt(pilot.sentVersions),
       };
     }),
   );
@@ -332,10 +387,40 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
       if (!userId) return fail(LEARN_NO_SESSION_ERROR);
       // Turning OFF is never refused (session only); only turning ON needs the key.
       if (args.enabled && !((await isAutodetectEvalAllowed()) === true)) return fail(LEARN_NOT_AVAILABLE_ERROR);
-      setLearnModeEnabled(userId, args.enabled);
-      if (!args.enabled) clearLastRun(userId);
+      // BACKLOG-4219: OFF also turns sharing off (same transaction), then withdraws.
+      // A user who never shared owes nothing: no write, no call.
+      if (args.enabled) {
+        setLearnModeEnabled(userId, true);
+      } else {
+        const { pilotWithdrawOwed } = turnLearnModeOff(userId);
+        clearLastRun(userId);
+        if (pilotWithdrawOwed) deps.pilotReport?.queueWithdraw(userId);
+      }
       logService.info("Learn mode toggled", MODULE, { enabled: args.enabled });
       return { success: true, enabled: getLearnModeEnabled(userId) };
+    }),
+  );
+
+  ipcMain.handle(
+    "learn:set-pilot-report",
+    guarded("learn:set-pilot-report", async (_e, payload: unknown): Promise<LearnSetPilotReportResult> => {
+      const args = parse(LearnSetPilotReportArgsSchema, payload);
+      if (!args) return fail(LEARN_INVALID_ERROR);
+      const userId = await sessionUserId();
+      if (!userId) return fail(LEARN_NO_SESSION_ERROR);
+      if (args.enabled) {
+        // ON: the full Learn gate (the switch lives inside Learn mode).
+        if (!(await isLearnModeAllowed(userId))) return fail(LEARN_NOT_AVAILABLE_ERROR);
+        setPilotOn(userId);
+      } else {
+        // OFF: never refused (session only). Local first, then the withdraw.
+        // A user who never shared owes nothing: no write, no call.
+        const { pilotWithdrawOwed } = turnPilotSharingOff(userId);
+        if (pilotWithdrawOwed) deps.pilotReport?.queueWithdraw(userId);
+      }
+      logService.info("Learn pilot sharing toggled", MODULE, { enabled: args.enabled });
+      const st = getPilotState(userId);
+      return { success: true, pilotReport: st.enabled, pilotPending: st.pendingWithdraw };
     }),
   );
 
@@ -467,7 +552,7 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
       if (isFailure(g)) return g;
       const run = getLastRun(g.userId);
       if (!run) return fail(LEARN_NO_RUN_ERROR);
-      const score = scoreRun(
+      const { score, detector } = scoreRunWithDetector(
         run,
         listAnswerKeyTransactions(g.userId),
         listDealAnswers(g.userId),
@@ -482,6 +567,12 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
           linked: listDealLinkedEmails(g.userId),
         },
       );
+      // BACKLOG-4219: fire and forget; the service re-reads the switch itself.
+      try {
+        deps.pilotReport?.maybeSend(g.userId, score, detector);
+      } catch {
+        // never fails the score
+      }
       return { success: true, score, copyBlock: formatCopyBlock(score) };
     }),
   );
@@ -492,7 +583,9 @@ export function registerLearnModeHandlers(deps: LearnModeHandlerDeps = {}): void
       // UNGATED (founder, 2026-11-04): session only. Own rows only, soft.
       const userId = await sessionUserId();
       if (!userId) return fail(LEARN_NO_SESSION_ERROR);
-      const removed = softClearAnswers(userId);
+      // BACKLOG-4219: Delete all also turns sharing off (same transaction), then withdraws.
+      const { removed, pilotWithdrawOwed } = softClearAnswersAndStopSharing(userId);
+      if (pilotWithdrawOwed) deps.pilotReport?.queueWithdraw(userId);
       logService.info("Learn mode answers cleared", MODULE, removed);
       return { success: true, removed };
     }),

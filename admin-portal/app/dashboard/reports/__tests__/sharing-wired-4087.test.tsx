@@ -138,7 +138,7 @@ describe('every report offers Share and Leave once the database has sharing', ()
       await waitFor(() => expect(within(panel).getByRole('button', { name: 'Share Mine' })).toBeTruthy());
       expect(within(panel).getByRole('button', { name: 'Leave Quinn view' })).toBeTruthy();
       fireEvent.click(within(panel).getByRole('button', { name: 'Share Mine' }));
-      expect(await screen.findByRole('dialog', { name: 'Share Mine' })).toBeTruthy();
+      expect(await screen.findByRole('dialog', { name: 'Share “Mine”' })).toBeTruthy();
       await waitFor(() => expect(stub.current!.calls('report_share_candidates')).toHaveLength(1));
     });
   }

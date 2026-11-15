@@ -5,15 +5,14 @@
  * set and candidates) and answers every refusal with the same "Report not found".
  *
  * - `candidates`: who an owner may grant access to (`report_access_candidates`, id + display name
- *   only). The ONLY source of the report ShareDialog picker.
+ *   only). The ONLY source of the report share dialog picker.
  * - `grants`: who has access now (`report_access_list`).
  * - `set` / `remove`: `report_access_set` / `report_access_remove`, always with the open report's key.
  */
 
-import type { ShareCandidate, ShareGrant, ShareRole } from '@keepr/ui';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { createClient } from '@/lib/supabase/client';
-import { parseShareCandidates, parseShareGrants } from './report-share-api';
+import { parseShareCandidates, parseShareGrants, type ShareCandidate, type ShareGrant, type ShareRole } from './report-share-api';
 
 export interface ReportAccessApi {
   candidates(reportKey: string): Promise<ShareCandidate[]>;

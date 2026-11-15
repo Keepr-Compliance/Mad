@@ -9,9 +9,7 @@
 import React from "react";
 import type { AppStateMachine } from "../state/types";
 import { SettingsLayer } from "./SettingsLayer";
-
-// React 18 drops a boolean `inert`; the attribute must be the empty string.
-const INERT = { inert: "" } as unknown as React.HTMLAttributes<HTMLDivElement>;
+import { INERT } from "./inert";
 
 interface ShellContentProps {
   app: AppStateMachine;

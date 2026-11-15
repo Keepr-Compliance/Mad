@@ -14,7 +14,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { SavedViews, ShareDialog } from '@keepr/ui';
+import { SavedViews, SharingDialog } from '@keepr/ui';
 import { DEFAULT_PERIOD, type PeriodRange } from '@/lib/reports/period';
 import { bucketByDay } from '@/lib/reports/iphone-sync-charts';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
@@ -303,7 +303,7 @@ export function GoogleMessagesSyncReport({
               onClear={clearView}
               sharing={sharing}
             />
-            <ShareDialog {...shareDialog} />
+            <SharingDialog {...shareDialog} />
           </>
         }
       />

@@ -1,0 +1,74 @@
+BACKLOG-4185 PR A controls on keepr-test, 2026-11-10, at 2a8c32243
+
+Baseline (run.sh, before the live apply and again after it): total=28 pass=28 fail=0
+
+Mutations (mutate.py all):
+== P1_extra_open_update_policy
+MUTATION APPLIED numstat=1/1
+RESULT total=28 pass=24 fail=4 reds=B2_admin_cross_user_update,B4_victim_row_untouched,B8_admin_move_row_to_b,S7_only_one_update_policy
+RESTORED clean=True
+== P1b_extra_open_all_policy
+MUTATION APPLIED numstat=1/1
+RESULT total=28 pass=16 fail=12 reds=B10_8192_bytes_accepted,B11_8193_bytes_refused,B12_100kb_refused,B13_array_refused,B14_scalar_refused,B1_plain_cross_user_update,B2_admin_cross_user_update,B4_victim_row_untouched,B7_plain_move_row_to_b,B8_admin_move_row_to_b,F3_plain_cannot_select_b,S7_only_one_update_policy
+RESTORED clean=True
+== P2_widened_own_row_using
+MUTATION APPLIED numstat=1/1
+RESULT total=28 pass=24 fail=4 reds=B2_admin_cross_user_update,B4_victim_row_untouched,B8_admin_move_row_to_b,S5_update_policy_qual_pin
+RESTORED clean=True
+== P3_with_check_true
+MUTATION APPLIED numstat=1/1
+RESULT total=28 pass=26 fail=2 reds=B8_admin_move_row_to_b,S6_update_policy_with_check_implicit
+RESTORED clean=True
+== P4_rls_disabled
+MUTATION APPLIED numstat=1/1
+RESULT total=28 pass=15 fail=13 reds=B10_8192_bytes_accepted,B11_8193_bytes_refused,B12_100kb_refused,B13_array_refused,B14_scalar_refused,B1_plain_cross_user_update,B2_admin_cross_user_update,B3_anon_update,B4_victim_row_untouched,B7_plain_move_row_to_b,B8_admin_move_row_to_b,F3_plain_cannot_select_b,S9_rls_enabled
+RESTORED clean=True
+== P5_definer_writer_rpc
+MUTATION APPLIED numstat=1/1
+RESULT total=28 pass=27 fail=1 reds=S10_no_function_writes_profile
+RESTORED clean=True
+== P6_truncate_granted
+MUTATION APPLIED numstat=1/1
+RESULT total=28 pass=27 fail=1 reds=S8_no_truncate_for_clients
+RESTORED clean=True
+== M1_no_shape_check
+MUTATION APPLIED numstat=1/6
+RESULT total=28 pass=23 fail=5 reds=B11_8193_bytes_refused,B12_100kb_refused,B13_array_refused,B14_scalar_refused,S3_shape_check_present
+RESTORED clean=True
+== M2_pg_column_size
+MUTATION APPLIED numstat=1/1
+RESULT total=28 pass=27 fail=1 reds=B10_8192_bytes_accepted
+RESTORED clean=True
+== M3_strict_lt
+MUTATION APPLIED numstat=1/1
+RESULT total=28 pass=27 fail=1 reds=B10_8192_bytes_accepted
+RESTORED clean=True
+== M4_bound_off_by_one
+MUTATION APPLIED numstat=1/1
+RESULT total=28 pass=27 fail=1 reds=B11_8193_bytes_refused
+RESTORED clean=True
+== M5_arrays_allowed
+MUTATION APPLIED numstat=1/2
+RESULT total=28 pass=26 fail=2 reds=B13_array_refused,B14_scalar_refused
+RESTORED clean=True
+== M6_default_empty_object
+MUTATION APPLIED numstat=1/1
+RESULT total=28 pass=25 fail=3 reds=B4_victim_row_untouched,S1_hardware_profile_jsonb_nullable_no_default,S4_no_backfill_nonnull_rows
+RESTORED clean=True
+== M7_not_idempotent_constraint
+MUTATION APPLIED numstat=1/5
+NO RESULT NO RESULT: Failed to run sql query: ERROR:  42710: constraint "devices_hardware_profile_shape" for relation "devices" already exists CONTEXT:  SQL statement "ALTER TABLE public.devices       ADD CONSTRAINT devices_hardware_profile_shape CHECK (         hardware_profile IS NULL         OR (jsonb_typeof(hardware_profile) = 'object'             AND octet_length(hardware_profile::text) <= 8192)       
+RESTORED clean=True
+== M8_no_profile_updated_at
+MUTATION APPLIED numstat=1/2
+NO RESULT NO RESULT: Failed to run sql query: ERROR:  42703: column "profile_updated_at" of relation "public.devices" does not exist  
+RESTORED clean=True
+== RB_misses_columns
+MUTATION APPLIED numstat=0/1
+RESULT total=28 pass=27 fail=1 reds=R1_rollback_drops_columns
+RESTORED clean=True
+
+M7 and M8 red by aborting the run: M7 fails the second apply with 42710 (constraint exists); M8 fails the migration's COMMENT ON COLUMN with 42703.
+P3 (WITH CHECK (true)): B7, the plain user moving a row, stays 42501 because devices_select_public also checks the new row. Caught by S6 (with_check IS NULL pin) and B8 (admin actor).
+
+Live apply: kt-sql, migration + schema_migrations row 20261112150000. Second live apply: exit 0, 1 constraint. Rows with a non-null profile after apply: 0.

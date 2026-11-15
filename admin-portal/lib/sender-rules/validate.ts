@@ -163,10 +163,19 @@ export function invalidReason(p: unknown): string | null {
 
   // thresholds
   const t = p.thresholds;
-  if (!keysExact(t, ['minCensusLinkedEmails', 'reportSendIntervalHours', 'reportMaxRows'])) return 'thresholds: keys';
+  // BACKLOG-4212: userSuppressMinAnswers is optional (as the SQL, migration 20261116100000)
+  if (
+    !keysExact(t, ['minCensusLinkedEmails', 'reportSendIntervalHours', 'reportMaxRows']) &&
+    !keysExact(t, ['minCensusLinkedEmails', 'reportSendIntervalHours', 'reportMaxRows', 'userSuppressMinAnswers'])
+  ) {
+    return 'thresholds: keys';
+  }
   if (!intOk(t.minCensusLinkedEmails, 0, MAX_SAFE)) return 'thresholds.minCensusLinkedEmails: not an integer >= 0';
   if (!intOk(t.reportSendIntervalHours, 1, MAX_SAFE)) return 'thresholds.reportSendIntervalHours: not a positive integer';
   if (!intOk(t.reportMaxRows, 1, 500)) return 'thresholds.reportMaxRows: not an integer 1-500';
+  if ('userSuppressMinAnswers' in t && !intOk(t.userSuppressMinAnswers, 0, 20)) {
+    return 'thresholds.userSuppressMinAnswers: not an integer 0-20';
+  }
 
   // modes: 7 signals x 3 surfaces; gmailUpdates is measure-only
   const modes = p.modes;

@@ -506,6 +506,38 @@ describe('POST existing person', () => {
     expect(res.status).toBe(500);
     expect(userWrites(db.writes)).toEqual([]);
   });
+
+  // BACKLOG-4179 G8 (SCIM): the one-brokerage guard refuses the membership write when another
+  // join for the same person committed after the membership read. Error transcribed from
+  // supabase/tests/backlog-4179 (concurrency.sh G3 S2 on keepr-test).
+  const GUARD = { code: 'P0001', message: 'already_placed' };
+  it.each(['insert', 'update'] as const)(
+    'the guard refuses the membership %s: 409 already_placed (as the read gives), users row untouched, one log row',
+    async (op) => {
+      const t = baseTables({ users: [...baseTables().users.filter((u) => u.id !== 'u-p'), { id: 'u-q', email: 'q@example.test' }] });
+      if (op === 'update') {
+        t.organization_members.push({ id: 'm-inv', organization_id: ORG, user_id: null, role: 'agent', license_status: 'pending',
+          invited_email: 'q@example.test', invitation_token: 'tok', invitation_expires_at: '2026-10-20T00:00:00Z' });
+      }
+      const db = makeDb(t, { authIds: ['u-q'], failWrite: { table: 'organization_members', op, error: GUARD } });
+      const { d, fetch } = deps();
+      const res = await handleCreateUser(postReq('q@example.test'), AUTH as never, db.client as never, BASE, d);
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.scimType).toBe('uniqueness');
+      expect(body.detail).toMatch(/^already_placed/);
+      expect(userWrites(db.writes)).toEqual([]);
+      expect(t.scim_sync_log).toEqual([expect.objectContaining({ response_status: 409, error_message: 'already_placed' })]);
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it('already_placed under another code is still a 500', async () => {
+    const t = baseTables({ users: [...baseTables().users.filter((u) => u.id !== 'u-p'), { id: 'u-q', email: 'q@example.test' }] });
+    const db = makeDb(t, { authIds: ['u-q'], failWrite: { table: 'organization_members', op: 'insert', error: { ...GUARD, code: '23505' } } });
+    const res = await handleCreateUser(postReq('q@example.test'), AUTH as never, db.client as never, BASE, deps().d);
+    expect(res.status).toBe(500);
+  });
 });
 
 // ---------------------------------------------------------------------------

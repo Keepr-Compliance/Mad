@@ -73,9 +73,11 @@ export interface OrgSettingsClientProps {
   features: OrgSettingsFeatureView;
   /** BACKLOG-4007: renders the People card at the bottom. Absent for a support session. */
   peopleOrganizationId?: string;
+  /** BACKLOG-3962: this organization's verified domains, resolved server-side. */
+  verifiedDomains?: string[];
 }
 
-export default function OrgSettingsClient({ features, peopleOrganizationId }: OrgSettingsClientProps) {
+export default function OrgSettingsClient({ features, peopleOrganizationId, verifiedDomains = [] }: OrgSettingsClientProps) {
   const { isImpersonating } = useImpersonation();
   const [consent, setConsent] = useState<ConsentInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -400,6 +402,33 @@ export default function OrgSettingsClient({ features, peopleOrganizationId }: Or
               <p className="mt-1 text-sm text-gray-500">
                 Configure SCIM to automatically sync users from your identity provider
               </p>
+            </div>
+            <ChevronRight className="h-5 w-5 text-gray-400" />
+          </div>
+        </Link>
+      )}
+
+      {/* Domain verification — BACKLOG-3962. The route refuses non-admins server-side; a support
+          session cannot read the claims, so the link is not offered there. */}
+      {!isImpersonating && (
+        <Link
+          href="/dashboard/settings/domain"
+          className="block bg-white rounded-lg shadow-sm border border-gray-200 hover:shadow-md hover:border-gray-300 transition-all"
+        >
+          <div className="px-6 py-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">
+                Domain Verification
+              </h2>
+              <p className="mt-1 text-sm text-gray-500">
+                Prove your brokerage owns its email domain by adding a DNS record
+              </p>
+              {verifiedDomains.length > 0 && (
+                <p className="mt-1 text-sm text-gray-700" data-testid="verified-domains">
+                  Verified: {verifiedDomains.slice(0, 3).join(', ')}
+                  {verifiedDomains.length > 3 ? ` +${verifiedDomains.length - 3} more` : ''}
+                </p>
+              )}
             </div>
             <ChevronRight className="h-5 w-5 text-gray-400" />
           </div>

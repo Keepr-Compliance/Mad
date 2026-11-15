@@ -8,7 +8,8 @@
  * Baseline 0's own literals (the keyword lists and address pattern inside
  * `transactionExtractorService.analyzeEmail`) are NOT here. Changing them
  * changes the thing being measured, so a change to them bumps the version
- * (v3, BACKLOG-4225: the address string kept for each match).
+ * (v3, BACKLOG-4225: the address string kept for each match; v4,
+ * BACKLOG-4225: candidates that are sentences, not addresses, are dropped).
  *
  * Pure data. No imports, no I/O.
  */
@@ -20,8 +21,14 @@
  * emails get an address is unchanged, but the address kept for each one ends
  * at the address (a tail that crosses a line or has no real US state code is
  * cut at the street suffix), so detection titles and some keys change.
+ * v4 (BACKLOG-4225 filter): a detected candidate that is a sentence, not an
+ * address (too many name words, a sentence break in the name, or a weak
+ * suffix such as "view" without a real city/state tail), is dropped. The
+ * filter only removes: kept strings are unchanged and no email gets a new
+ * first address, so every key existed under v3 and no stored answer is
+ * asked again.
  */
-export const LEARN_RULE_VERSION = 3;
+export const LEARN_RULE_VERSION = 4;
 
 export const LEARN_RULES = {
   version: LEARN_RULE_VERSION,

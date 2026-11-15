@@ -102,6 +102,10 @@ function createMockChain(): MockChain {
 
 let mockClient: ReturnType<typeof createMockChain>;
 
+// BACKLOG-4185: registerDevice success calls the device-profile hook; keep it
+// inert here (its own suites cover it), so no collector runs in the background.
+jest.mock("../deviceProfile/deviceProfileService", () => ({ onDeviceRegistered: jest.fn() }));
+
 jest.mock("../supabaseService", () => ({
   __esModule: true,
   default: {

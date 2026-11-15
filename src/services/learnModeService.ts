@@ -31,6 +31,7 @@ import type {
   LearnSampleNextResult,
   LearnScoreResult,
   LearnSetEnabledResult,
+  LearnSetPilotReportResult,
   LearnStateResult,
 } from "../../electron/types/ipc/window-api-learn";
 
@@ -45,10 +46,16 @@ async function call<R>(fn: () => Promise<R>): Promise<R | LearnFailure> {
 }
 
 export const learnModeService = {
-  getState: (): Promise<LearnStateResult> => call(() => window.api.learn.getState()),
+  /** BACKLOG-4219: `settle: true` waits (capped in main) for a queued pilot send / withdraw first. */
+  getState: (args?: { settle?: boolean }): Promise<LearnStateResult> =>
+    call(() => (args === undefined ? window.api.learn.getState() : window.api.learn.getState(args))),
 
   setEnabled: (enabled: boolean): Promise<LearnSetEnabledResult> =>
     call(() => window.api.learn.setEnabled({ enabled })),
+
+  /** BACKLOG-4219: "Help improve Keepr". */
+  setPilotReport: (enabled: boolean): Promise<LearnSetPilotReportResult> =>
+    call(() => window.api.learn.setPilotReport({ enabled })),
 
   run: (windowMonths: number): Promise<LearnRunResultResponse> =>
     call(() => window.api.learn.run({ windowMonths })),

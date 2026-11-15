@@ -1,0 +1,222 @@
+# BACKLOG-3513 PR-3f harness, keepr-test (20261112200000 + 20261112210000 committed), 2026-11-13, migration at eab1e9095
+## run.sh (baseline)
+{
+ "fail": 0,
+ "pass": 38,
+ "reds": {},
+ "total": 38
+}
+
+## mutate.py all
+== R01_ADMIN_ALWAYS
+MUTATION APPLIED numstat=1/1
+  - RETURN v_role = 'it_admin'
+  + RETURN v_role IN ('it_admin', 'admin')
+RESULT total=38 pass=32 fail=6 reds=RA_admin_when_it_admin_exists,S_it_admin_after_state,S_it_admin_reassigns,S_reader_output,X_admin_when_it_admin_exists,X_state_unchanged
+RESTORED clean=True
+== R02_OWNER_ACTIVE_OK
+MUTATION APPLIED numstat=1/2
+  - OR (d.owner_user_id IS NOT NULL
+  - AND public._broker_report_member_role(d.organization_id, d.owner_user_id) IS NOT NULL) THEN
+  + THEN
+RESULT total=38 pass=32 fail=6 reds=K_candidates_owner_active_refused,RA_admin_no_it_admin_owner_active,RA_it_admin_owner_active,S_it_admin_after_state,X_owner_active,X_state_unchanged
+RESTORED clean=True
+== R03_TAKE_OVER_KEPT
+MUTATION APPLIED numstat=0/1
+  - DROP FUNCTION IF EXISTS public.broker_report_take_over(uuid);
+RESULT total=38 pass=33 fail=5 reds=C_take_over_gone,C_take_over_not_callable,RA_it_admin_owner_null,S_it_admin_owner_null,X_state_unchanged
+RESTORED clean=True
+== R04_BROKER_ALLOWED
+MUTATION APPLIED numstat=1/1
+  - RETURN v_role = 'it_admin'
+  + RETURN v_role IN ('it_admin', 'broker')
+RESULT total=38 pass=28 fail=10 reds=K_candidates_broker_refused,RA_broker,RA_broker_no_it_admin,S_admin_no_active_it_admin,S_it_admin_after_state,S_it_admin_reassigns,S_reader_output,X_broker,X_broker_no_it_admin,X_state_unchanged
+RESTORED clean=True
+== R05_NO_NEW_OWNER_CHECK
+MUTATION APPLIED numstat=1/2
+  - OR p_new_owner IS NOT DISTINCT FROM d.owner_user_id
+  - OR public._broker_report_member_role(d.organization_id, p_new_owner) IS NULL THEN
+  + OR p_new_owner IS NOT DISTINCT FROM d.owner_user_id THEN
+RESULT total=38 pass=32 fail=6 reds=S_it_admin_owner_null,X_new_owner_inactive,X_new_owner_is_current,X_new_owner_nonmember,X_new_owner_other_org,X_state_unchanged
+RESTORED clean=True
+== R06_SAME_OWNER_OK
+MUTATION APPLIED numstat=0/1
+  - OR p_new_owner IS NOT DISTINCT FROM d.owner_user_id
+RESULT total=38 pass=38 fail=0 reds=
+RESTORED clean=True
+== R07_NO_FEATURE
+MUTATION APPLIED numstat=0/1
+  - OR NOT coalesce(public._org_feature_allowed(d.organization_id, 'broker_reports'), false)
+RESULT total=38 pass=37 fail=1 reds=X_feature_off
+RESTORED clean=True
+== R08_NULL_ROLE
+MUTATION APPLIED numstat=2/2
+  - v_role := coalesce(public._broker_report_member_role(d.organization_id, v_uid), '');
+  + v_role := public._broker_report_member_role(d.organization_id, v_uid);
+  - OR NOT coalesce(public._broker_report_reassign_eligible(p_def), false)
+  + OR NOT public._broker_report_reassign_eligible(p_def)
+RESULT total=38 pass=35 fail=3 reds=S_admin_no_active_it_admin,X_other_org_caller,X_state_unchanged
+RESTORED clean=True
+== R09_GRANT_KEPT
+MUTATION APPLIED numstat=0/2
+  - DELETE FROM public.broker_report_definition_grants
+  - WHERE definition_id = p_def AND principal_type = 'user' AND principal_user_id = p_new_owner;
+RESULT total=38 pass=37 fail=1 reds=S_it_admin_after_state
+RESTORED clean=True
+== R10_AUDIT_NO_FROM
+MUTATION APPLIED numstat=0/1
+  - 'from', public._broker_report_person_name(d.owner_user_id),
+RESULT total=38 pass=34 fail=4 reds=S_admin_no_active_it_admin,S_it_admin_owner_null,S_it_admin_reassigns,S_reader_output
+RESTORED clean=True
+== R11_INACTIVE_IT_ADMIN_COUNTS
+MUTATION APPLIED numstat=0/1
+  - AND m.license_status = 'active'
+RESULT total=38 pass=36 fail=2 reds=RA_admin_no_active_it_admin,S_admin_no_active_it_admin
+RESTORED clean=True
+== R12_CANDIDATES_UNGATED
+MUTATION APPLIED numstat=0/3
+  - IF NOT coalesce(public._broker_report_reassign_eligible(p_def), false) THEN
+  - RAISE EXCEPTION 'Report not found';
+  - END IF;
+RESULT total=38 pass=36 fail=2 reds=K_candidates_broker_refused,K_candidates_owner_active_refused
+RESTORED clean=True
+== R13_DEF_GET_ALWAYS_TRUE
+MUTATION APPLIED numstat=2/2
+  - 'reassign_available', coalesce(public._broker_report_reassign_eligible(p_def), false));
+  + 'reassign_available', true);
+RESULT total=38 pass=31 fail=7 reds=RA_admin_no_it_admin_owner_active,RA_admin_when_it_admin_exists,RA_agent,RA_broker,RA_broker_no_it_admin,RA_it_admin_owner_active,S_it_admin_after_state
+RESTORED clean=True
+== R14_HELPER_GRANTED
+MUTATION APPLIED numstat=1/1
+  - REVOKE ALL ON FUNCTION public._broker_report_reassign_eligible(uuid) FROM PUBLIC, anon, authenticated;
+  + REVOKE ALL ON FUNCTION public._broker_report_reassign_eligible(uuid) FROM PUBLIC, anon;
+RESULT total=38 pass=36 fail=2 reds=C_eligible_private,C_grants
+RESTORED clean=True
+
+## UI mutations (broker-portal jest / admin-portal vitest)
+== U1_SHOWN_FOR_ALL_FULL MUTATION APPLIED numstat ['1', '1']
+   Tests:       1 failed, 6 passed, 7 total
+   red: ✕ hidden for an ineligible caller (the database said no) (50 ms)
+  RESTORED clean= True
+== U2_CANCEL_GHOST MUTATION APPLIED numstat ['1', '1']
+   Tests:       1 failed, 6 passed, 7 total
+   red: ✕ the dialog has a visible secondary Cancel and a primary Reassign that waits for a pick (68 ms)
+  RESTORED clean= True
+== U3_NO_PICK_REQUIRED MUTATION APPLIED numstat ['1', '1']
+   Tests:       1 failed, 6 passed, 7 total
+   red: ✕ the dialog has a visible secondary Cancel and a primary Reassign that waits for a pick (76 ms)
+  RESTORED clean= True
+== U4_CALLS_TAKE_OVER MUTATION APPLIED numstat ['1', '1']
+   Tests:       2 failed, 5 passed, 7 total
+   red: ✕ pick a person, confirm: one broker_report_reassign call with that person, then refresh (1050 ms)
+   red: ✕ never calls the removed take-over function (1037 ms)
+  RESTORED clean= True
+== U5_REFRESH_ON_ERROR MUTATION APPLIED numstat ['1', '0']
+   Tests:       1 failed, 6 passed, 7 total
+   red: ✕ a refusal shows an error, keeps the dialog open and does not refresh (41 ms)
+  RESTORED clean= True
+== U6_PARSE_IGNORES_FLAG MUTATION APPLIED numstat ['1', '1']
+   Tests:       1 failed, 26 passed, 27 total
+   red: ✕ reassign_available false: no Reassign, and never a Take over (9 ms)
+  RESTORED clean= True
+
+## FIX-UP (SR b9d8f4da C1), controls at 7dbd55c61: run.sh
+{
+ "fail": 0,
+ "pass": 40,
+ "reds": {},
+ "total": 40
+}
+## mutate.py all
+== R01_ADMIN_ALWAYS
+MUTATION APPLIED numstat=1/1
+  - RETURN v_role = 'it_admin'
+  + RETURN v_role IN ('it_admin', 'admin')
+RESULT total=40 pass=34 fail=6 reds=RA_admin_when_it_admin_exists,S_it_admin_after_state,S_it_admin_reassigns,S_reader_output,X_admin_when_it_admin_exists,X_state_unchanged
+RESTORED clean=True
+== R02_OWNER_ACTIVE_OK
+MUTATION APPLIED numstat=1/2
+  - OR (d.owner_user_id IS NOT NULL
+  - AND public._broker_report_member_role(d.organization_id, d.owner_user_id) IS NOT NULL) THEN
+  + THEN
+RESULT total=40 pass=34 fail=6 reds=K_candidates_owner_active_refused,RA_admin_no_it_admin_owner_active,RA_it_admin_owner_active,S_it_admin_after_state,X_owner_active,X_state_unchanged
+RESTORED clean=True
+== R03_TAKE_OVER_KEPT
+MUTATION APPLIED numstat=0/1
+  - DROP FUNCTION IF EXISTS public.broker_report_take_over(uuid);
+RESULT total=40 pass=35 fail=5 reds=C_take_over_gone,C_take_over_not_callable,RA_it_admin_owner_null,S_it_admin_owner_null,X_state_unchanged
+RESTORED clean=True
+== R04_BROKER_ALLOWED
+MUTATION APPLIED numstat=1/1
+  - RETURN v_role = 'it_admin'
+  + RETURN v_role IN ('it_admin', 'broker')
+RESULT total=40 pass=30 fail=10 reds=K_candidates_broker_refused,RA_broker,RA_broker_no_it_admin,S_admin_no_active_it_admin,S_it_admin_after_state,S_it_admin_reassigns,S_reader_output,X_broker,X_broker_no_it_admin,X_state_unchanged
+RESTORED clean=True
+== R05_NO_NEW_OWNER_CHECK
+MUTATION APPLIED numstat=1/2
+  - OR p_new_owner IS NOT DISTINCT FROM d.owner_user_id
+  - OR public._broker_report_member_role(d.organization_id, p_new_owner) IS NULL THEN
+  + OR p_new_owner IS NOT DISTINCT FROM d.owner_user_id THEN
+RESULT total=40 pass=34 fail=6 reds=S_it_admin_owner_null,X_new_owner_inactive,X_new_owner_is_current,X_new_owner_nonmember,X_new_owner_other_org,X_state_unchanged
+RESTORED clean=True
+== R06_SAME_OWNER_OK
+MUTATION APPLIED numstat=0/1
+  - OR p_new_owner IS NOT DISTINCT FROM d.owner_user_id
+RESULT total=40 pass=40 fail=0 reds=
+RESTORED clean=True
+== R07_NO_FEATURE
+MUTATION APPLIED numstat=0/1
+  - OR NOT coalesce(public._org_feature_allowed(d.organization_id, 'broker_reports'), false)
+RESULT total=40 pass=39 fail=1 reds=X_feature_off
+RESTORED clean=True
+== R08_NULL_ROLE
+MUTATION APPLIED numstat=2/2
+  - v_role := coalesce(public._broker_report_member_role(d.organization_id, v_uid), '');
+  + v_role := public._broker_report_member_role(d.organization_id, v_uid);
+  - OR NOT coalesce(public._broker_report_reassign_eligible(p_def), false)
+  + OR NOT public._broker_report_reassign_eligible(p_def)
+RESULT total=40 pass=37 fail=3 reds=S_admin_no_active_it_admin,X_other_org_caller,X_state_unchanged
+RESTORED clean=True
+== R09_GRANT_KEPT
+MUTATION APPLIED numstat=0/2
+  - DELETE FROM public.broker_report_definition_grants
+  - WHERE definition_id = p_def AND principal_type = 'user' AND principal_user_id = p_new_owner;
+RESULT total=40 pass=39 fail=1 reds=S_it_admin_after_state
+RESTORED clean=True
+== R10_AUDIT_NO_FROM
+MUTATION APPLIED numstat=0/1
+  - 'from', public._broker_report_person_name(d.owner_user_id),
+RESULT total=40 pass=36 fail=4 reds=S_admin_no_active_it_admin,S_it_admin_owner_null,S_it_admin_reassigns,S_reader_output
+RESTORED clean=True
+== R11_INACTIVE_IT_ADMIN_COUNTS
+MUTATION APPLIED numstat=0/1
+  - AND m.license_status = 'active'
+RESULT total=40 pass=38 fail=2 reds=RA_admin_no_active_it_admin,S_admin_no_active_it_admin
+RESTORED clean=True
+== R12_CANDIDATES_UNGATED
+MUTATION APPLIED numstat=0/3
+  - IF NOT coalesce(public._broker_report_reassign_eligible(p_def), false) THEN
+  - RAISE EXCEPTION 'Report not found';
+  - END IF;
+RESULT total=40 pass=36 fail=4 reds=K_candidates_broker_refused,K_candidates_nonmember_refused,K_candidates_other_org_refused,K_candidates_owner_active_refused
+RESTORED clean=True
+== R13_DEF_GET_ALWAYS_TRUE
+MUTATION APPLIED numstat=2/2
+  - 'reassign_available', coalesce(public._broker_report_reassign_eligible(p_def), false));
+  + 'reassign_available', true);
+RESULT total=40 pass=33 fail=7 reds=RA_admin_no_it_admin_owner_active,RA_admin_when_it_admin_exists,RA_agent,RA_broker,RA_broker_no_it_admin,RA_it_admin_owner_active,S_it_admin_after_state
+RESTORED clean=True
+== SR_CANDIDATES_NULL_ROLE
+MUTATION APPLIED numstat=2/2
+  - v_role := coalesce(public._broker_report_member_role(d.organization_id, v_uid), '');
+  + v_role := public._broker_report_member_role(d.organization_id, v_uid);
+  - IF NOT coalesce(public._broker_report_reassign_eligible(p_def), false) THEN
+  + IF NOT public._broker_report_reassign_eligible(p_def) THEN
+RESULT total=40 pass=38 fail=2 reds=K_candidates_nonmember_refused,K_candidates_other_org_refused
+RESTORED clean=True
+== R14_HELPER_GRANTED
+MUTATION APPLIED numstat=1/1
+  - REVOKE ALL ON FUNCTION public._broker_report_reassign_eligible(uuid) FROM PUBLIC, anon, authenticated;
+  + REVOKE ALL ON FUNCTION public._broker_report_reassign_eligible(uuid) FROM PUBLIC, anon;
+RESULT total=40 pass=38 fail=2 reds=C_eligible_private,C_grants
+RESTORED clean=True

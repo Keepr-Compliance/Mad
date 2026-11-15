@@ -11,7 +11,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Dropdown, FilterBar, FilterCaption, PeriodPicker, SavedViews, ShareDialog, StatCard, useSortState } from '@keepr/ui';
+import { Dropdown, FilterBar, FilterCaption, PeriodPicker, SavedViews, SharingDialog, StatCard, useSortState } from '@keepr/ui';
 import { Search } from 'lucide-react';
 import { DEFAULT_PERIOD, PERIOD_OPTIONS, type PeriodKey, type PeriodRange } from '@/lib/reports/period';
 import { buildPeriodUrl } from '@/lib/reports/report-url';
@@ -198,7 +198,7 @@ export function UserActivityReport({
               onClear={clearView}
               sharing={sharing}
             />
-            <ShareDialog {...shareDialog} />
+            <SharingDialog {...shareDialog} />
           </>
         }
       >

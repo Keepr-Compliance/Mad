@@ -3,8 +3,9 @@
 /**
  * BACKLOG-4186 PR C (coordinator ruling 2026-11-10): on the sender-rules page an editor has no extra
  * power, so the share dialog describes "Can edit" as the same as "Can view". Other reports keep the
- * report copy (the prop defaults to it). The role labels themselves live in the shared @keepr/ui
- * ShareDialog and are not changed here.
+ * report copy (the prop defaults to it). The level labels themselves live in the shared @keepr/ui
+ * SharingDialog and are not changed here. BACKLOG-3513 PR-4: the lines reach the dialog as
+ * `levels[].description`, so both the Access select and a row's access menu show them.
  */
 
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -22,9 +23,9 @@ const api = createReportAccessApi(() => ({ rpc: async () => ({ data: [], error: 
 
 async function accessOptions(title: string): Promise<string[]> {
   fireEvent.click(screen.getByRole('button', { name: `Share ${title}` }));
-  const dialog = await screen.findByRole('dialog', { name: `Share ${title}` });
-  await waitFor(() => expect(within(dialog).getByRole('button', { name: /^Access/ })).toBeTruthy());
-  fireEvent.click(within(dialog).getByRole('button', { name: /^Access/ }));
+  const dialog = await screen.findByRole('dialog', { name: `Share “${title}”` });
+  await waitFor(() => expect(within(dialog).getByRole('button', { name: /^Access Can/ })).toBeTruthy());
+  fireEvent.click(within(dialog).getByRole('button', { name: /^Access Can/ }));
   return screen.getAllByRole('option').map((o) => o.textContent ?? '');
 }
 

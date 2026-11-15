@@ -180,7 +180,7 @@ beforeEach(() => {
 
 describe("OFF toggle OFF: nothing below the switch", () => {
   it("renders only the header and the switch, and asks main for nothing else", async () => {
-    install({ state: { success: true, available: true, enabled: false, answers: { deal: 0, bulk: 0 } } });
+    install({ state: { success: true, available: true, enabled: false, answers: { deal: 0, bulk: 0 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null } });
     renderSection();
     const sw = await screen.findByRole("switch", { name: "Learn mode" });
     await waitFor(() => expect(sw).not.toBeDisabled());
@@ -195,7 +195,7 @@ describe("OFF toggle OFF: nothing below the switch", () => {
   });
 
   it("turning it ON asks main, then prepares the questions", async () => {
-    install({ state: { success: true, available: true, enabled: false, answers: { deal: 0, bulk: 0 } } });
+    install({ state: { success: true, available: true, enabled: false, answers: { deal: 0, bulk: 0 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null } });
     renderSection();
     const sw = await screen.findByRole("switch", { name: "Learn mode" });
     await waitFor(() => expect(sw).not.toBeDisabled());
@@ -425,7 +425,7 @@ describe("P6 the canary stays out of attributes and the console", () => {
 
 describe("DEL Data & Privacy: delete Learn mode answers", () => {
   it("shown with saved answers even when Learn mode is off and unavailable; deletes through main", async () => {
-    install({ state: { success: true, available: false, enabled: false, answers: { deal: 2, bulk: 3 } } });
+    install({ state: { success: true, available: false, enabled: false, answers: { deal: 2, bulk: 3 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null } });
     render(<LearnAnswersPrivacyRow />);
     const row = await screen.findByTestId("learn-answers-privacy");
     expect(row).toHaveTextContent("5 answers saved on this computer");
@@ -439,7 +439,7 @@ describe("DEL Data & Privacy: delete Learn mode answers", () => {
   });
 
   it("hidden when there is nothing saved", async () => {
-    install({ state: { success: true, available: true, enabled: true, answers: { deal: 0, bulk: 0 } } });
+    install({ state: { success: true, available: true, enabled: true, answers: { deal: 0, bulk: 0 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null } });
     const { container } = render(<LearnAnswersPrivacyRow />);
     await waitFor(() => expect(api.getState).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
@@ -588,7 +588,7 @@ describe("C4 Done for now", () => {
 describe("C8 Your answers in Help Keepr learn", () => {
   it("lists answers newest first; Delete asks inline; a delete re-reads the count and the score", async () => {
     const list = (LIST_ANSWERS as Extract<typeof LIST_ANSWERS, { success: true }>).answers;
-    install({ list: [...list], state: { success: true, available: true, enabled: true, answers: { deal: 1, bulk: 2 } } });
+    install({ list: [...list], state: { success: true, available: true, enabled: true, answers: { deal: 1, bulk: 2 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null } });
     renderSection();
     const box = await screen.findByTestId("learn-answers-list");
     expect(screen.getByTestId("learn-footer")).toHaveTextContent("3 answers so far.");
@@ -614,7 +614,7 @@ describe("C8 Your answers in Help Keepr learn", () => {
 
   it("is shown with Learn mode off", async () => {
     const list = (LIST_ANSWERS as Extract<typeof LIST_ANSWERS, { success: true }>).answers;
-    install({ list: [...list], state: { success: true, available: true, enabled: false, answers: { deal: 1, bulk: 2 } } });
+    install({ list: [...list], state: { success: true, available: true, enabled: false, answers: { deal: 1, bulk: 2 }, pilotReport: false, pilotPending: false, pilotLastSentAt: null } });
     renderSection();
     expect(await screen.findByTestId("learn-answers-list")).toBeInTheDocument();
     expect(screen.queryByTestId("learn-start")).toBeNull();

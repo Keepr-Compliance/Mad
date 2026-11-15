@@ -30,6 +30,8 @@ import {
   seesOrgPolicy,
 } from '@/lib/org-settings-access';
 import { PAGE_TITLES } from '@/lib/dashboard-page-titles';
+import { createClient } from '@/lib/supabase/server';
+import { loadVerifiedDomains } from '@/lib/domain/claimView';
 import { PeopleCard } from '@/components/settings/PeopleCard';
 import OrgSettingsClient from './OrgSettingsClient';
 
@@ -66,5 +68,20 @@ export default async function SettingsPage() {
 
   const features = await resolveOrgSettingsFeatures(access.organizationId);
 
-  return <OrgSettingsClient features={features} peopleOrganizationId={access.organizationId} />;
+  // Same source as the Domain page: the caller's session client, this organization only.
+  // A convenience line on a link card: it must never take Settings down with it.
+  let verifiedDomains: string[] = [];
+  try {
+    verifiedDomains = await loadVerifiedDomains(await createClient(), access.organizationId);
+  } catch {
+    verifiedDomains = [];
+  }
+
+  return (
+    <OrgSettingsClient
+      features={features}
+      peopleOrganizationId={access.organizationId}
+      verifiedDomains={verifiedDomains}
+    />
+  );
 }

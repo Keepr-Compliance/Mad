@@ -11,6 +11,7 @@ import * as Sentry from "@sentry/electron/main";
 import { machineIdSync } from "node-machine-id";
 import { hostname, platform, release } from "os";
 import logService from "./logService";
+import { onDeviceRegistered, type RegistrationReason } from "./deviceProfile/deviceProfileService";
 import type {
   Device,
   DevicePlatform,
@@ -66,7 +67,8 @@ export function getOsString(): string {
  * Uses upsert to handle both new and existing devices
  */
 export async function registerDevice(
-  userId: string
+  userId: string,
+  reason: RegistrationReason = "restore"
 ): Promise<DeviceRegistrationResult> {
   const deviceId = getDeviceId();
   const deviceName = getDeviceName();
@@ -122,6 +124,10 @@ export async function registerDevice(
       userId,
       deviceId: deviceId.substring(0, 8) + "...",
     });
+
+    // BACKLOG-4185: hand the id this call already holds to the device-profile
+    // service (it never reads the machine id itself). Fire-and-forget.
+    onDeviceRegistered(userId, deviceId, reason, (data as Device | null)?.id);
 
     return {
       success: true,

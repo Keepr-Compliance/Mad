@@ -25,6 +25,8 @@ vi.mock('@/app/dashboard/organizations/[id]/components/PlanAssignment', () => ({
 vi.mock('@/app/dashboard/organizations/[id]/components/BrokerageBillingCard', () => ({ BrokerageBillingCard: () => null }));
 // BACKLOG-4036: the Activity card has its own tests (activity-4036)
 vi.mock('@/app/dashboard/organizations/[id]/components/OrgActivityCard', () => ({ OrgActivityCard: () => null }));
+// BACKLOG-3962: the Domains card has its own tests (domain-claims-3962)
+vi.mock('@/app/dashboard/organizations/[id]/components/DomainClaimsCard', () => ({ DomainClaimsCard: () => null }));
 
 const DEAL = { id: 'd1' };
 const state: {

@@ -109,7 +109,9 @@ import {
   loadCrashReportingPreference,
 } from "../services/crashReportingPreference";
 import { nodeCaDenylistFailure } from "./nodeCaDenylist";
-import { loadDiagnosticsSharingPreference } from "../services/diagnosticsSharingPreference";
+import { isDiagnosticsSharingEnabled, loadDiagnosticsSharingPreference } from "../services/diagnosticsSharingPreference";
+import { attachDeviceRowId, loadDeviceRowIdAtBoot } from "../services/deviceProfile/deviceRowId";
+import { getMachineClass } from "../services/deviceProfile/deviceProfileService";
 import {
   composeDiagnosticsTransport,
   diagnosticsBeforeSendLog,
@@ -139,6 +141,9 @@ const crashReportingAtLaunch = loadCrashReportingPreference(app.getPath("userDat
 // device id, read the same way. Checked LIVE afterwards (helper, beforeSendLog,
 // transport filter); this load only sets the starting value.
 loadDiagnosticsSharingPreference(app.getPath("userData"));
+// BACKLOG-4185: the devices row id for crash events, from the device-profile
+// state file, so a main-process crash sent on the next launch carries it.
+loadDeviceRowIdAtBoot(app.getPath("userData"));
 
 // BACKLOG-4040 S3: the stock offline queue that 2.41 / 2.42 wrote in plaintext is
 // deleted, whatever the crash-reporting choice; new reports queue sealed. Once the
@@ -229,7 +234,9 @@ Sentry.init({
       return null;
     }
     try {
-      return scrubMainEvent(scrubbed, crashReportScrubOptions);
+      // BACKLOG-4185: the devices row id (never the machine id, no hardware
+      // field), only while diagnostics sharing is also ON.
+      return attachDeviceRowId(scrubMainEvent(scrubbed, crashReportScrubOptions), isDiagnosticsSharingEnabled());
     } catch (scrubError) {
       log.error("[Sentry] beforeSend main scrub failed, event dropped:", scrubError);
       return null;
@@ -251,6 +258,9 @@ configureDiagnostics({
   },
   appVersion: app.getVersion(),
   os: `${process.platform}-${readRoot(() => os.release()) ?? "unknown"}`,
+  // BACKLOG-4185: machine class (ramGB, cpuCores, diskType, softwareRendering)
+  // on every diagnostics log once the profile run has collected it.
+  machineClass: getMachineClass,
 });
 
 // BACKLOG-4052: installNodeCaDenylist runs before Sentry exists and fails open;

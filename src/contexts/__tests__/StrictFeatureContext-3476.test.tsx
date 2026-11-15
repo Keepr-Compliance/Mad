@@ -36,6 +36,7 @@ function deferred() {
 const strictState = () => window.api.featureGate.strictState as jest.Mock;
 
 let frames: string[] = [];
+const ckCalls = () => strictState().mock.calls.filter((c) => c[0] === "transaction_checklists").length;
 
 /** A transaction open: one mount of the consumer. */
 function Open() {
@@ -100,7 +101,7 @@ describe("C-5 — an open does not wait when the session already knows", () => {
     expect(frames[0]).toBe("allowed");
     expect(screen.getByTestId("tab-checklist")).toBeInTheDocument();
     // The session's first question, then the open's background re-ask.
-    expect(strictState()).toHaveBeenCalledTimes(2);
+    expect(ckCalls()).toBe(2);
   });
 });
 
@@ -148,11 +149,11 @@ describe("C-2 — no answer survives a user change; an org change re-asks", () =
     strictState().mockResolvedValue("allowed");
     const { rerender } = render(<App userId="user-a" organizationId="org-1" />);
     await flush();
-    const before = strictState().mock.calls.length;
+    const before = ckCalls();
     strictState().mockResolvedValue("blocked");
     rerender(<App userId="user-a" organizationId="org-2" />);
     await flush();
-    expect(strictState().mock.calls.length - before).toBe(1);
+    expect(ckCalls() - before).toBe(1);
     expect(screen.queryByTestId("tab-checklist")).not.toBeInTheDocument();
   });
 });
@@ -177,18 +178,18 @@ describe("C-3 — past main's TTL the answer is re-asked in the background", () 
     render(<App userId="user-a" />);
     await flush();
     expect(screen.getByTestId("tab-checklist")).toBeInTheDocument();
-    const before = strictState().mock.calls.length;
+    const before = ckCalls();
     const reask = deferred();
     strictState().mockReturnValue(reask.promise);
     frames = [];
     await act(async () => {
       jest.advanceTimersByTime(STRICT_ANSWER_TTL_MS);
     });
-    expect(strictState().mock.calls.length - before).toBe(0);
+    expect(ckCalls() - before).toBe(0);
     await act(async () => {
       jest.advanceTimersByTime(1);
     });
-    expect(strictState().mock.calls.length - before).toBe(1);
+    expect(ckCalls() - before).toBe(1);
     // In flight: still the stored answer, no pending frame.
     expect(screen.getByTestId("tab-checklist")).toBeInTheDocument();
     expect(frames).not.toContain("pending");
@@ -202,15 +203,15 @@ describe("C-3 — past main's TTL the answer is re-asked in the background", () 
     strictState().mockResolvedValue("allowed");
     render(<App userId="user-a" />);
     await flush();
-    const before = strictState().mock.calls.length;
+    const before = ckCalls();
     await act(async () => {
       jest.advanceTimersByTime(STRICT_ANSWER_TTL_MS + 1);
     });
-    expect(strictState().mock.calls.length - before).toBe(1);
+    expect(ckCalls() - before).toBe(1);
     await act(async () => {
       jest.advanceTimersByTime(STRICT_ANSWER_TTL_MS + 1);
     });
-    expect(strictState().mock.calls.length - before).toBe(2);
+    expect(ckCalls() - before).toBe(2);
     expect(screen.getByTestId("tab-checklist")).toBeInTheDocument();
   });
 });
@@ -221,17 +222,17 @@ describe("C-4 — focus re-asks at most once a minute", () => {
     strictState().mockResolvedValue("allowed");
     render(<App userId="user-a" open={false} />);
     await flush();
-    const before = strictState().mock.calls.length;
+    const before = ckCalls();
     await act(async () => {
       jest.advanceTimersByTime(30_000);
       window.dispatchEvent(new Event("focus"));
     });
-    expect(strictState().mock.calls.length - before).toBe(0);
+    expect(ckCalls() - before).toBe(0);
     await act(async () => {
       jest.advanceTimersByTime(31_000);
       window.dispatchEvent(new Event("focus"));
     });
-    expect(strictState().mock.calls.length - before).toBe(1);
+    expect(ckCalls() - before).toBe(1);
   });
 });
 

@@ -16,7 +16,7 @@
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { LayoutDashboard, Users, Building2, CreditCard, Headphones, Inbox, UserCheck, Settings, LogOut, ChevronLeft, FileText, ChevronDown, ChevronRight, Shield, KanbanSquare, ListChecks, FolderKanban, Calendar, FileBarChart2, X, Sparkles, MailX } from 'lucide-react';
+import { LayoutDashboard, Users, Building2, CreditCard, Headphones, Inbox, UserCheck, Settings, LogOut, ChevronLeft, FileText, ChevronDown, ChevronRight, Shield, KanbanSquare, ListChecks, FolderKanban, Calendar, FileBarChart2, X, Sparkles, MailX, FlaskConical } from 'lucide-react';
 import { AppMark, Wordmark } from '@keepr/ui';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { usePermissions } from '@/components/providers/PermissionsProvider';
@@ -24,8 +24,10 @@ import type { PermissionKey } from '@/lib/permissions';
 import { PERMISSIONS } from '@/lib/permissions';
 import { useFocusTrap } from '@/hooks/useFocusTrap';
 import { useHasReports } from '@/lib/reports/use-my-reports';
+import { useReportAccess } from '@/lib/reports/use-report-access';
 import { useSenderRulesAccess } from '@/lib/sender-rules/use-sender-rules-access';
-import { SENDER_RULES_PATH } from '@/lib/sender-rules/access';
+import { SENDER_RULES_PATH, SENDER_RULES_REPORT_KEY } from '@/lib/sender-rules/access';
+import { LEARN_PILOT_PATH, LEARN_PILOT_REPORT_KEY } from '@/lib/learn-pilot/access';
 
 interface NavItem {
   label: string;
@@ -34,6 +36,8 @@ interface NavItem {
   permission: PermissionKey;
   /** BACKLOG-4144: shown only when the user has at least one report (`report_list_my_reports`). */
   needsReports?: true;
+  /** AI section: shown only when report_my_access(reportKey) is non-null (BACKLOG-4186, 4219). */
+  reportKey?: string;
 }
 
 /** Top-level nav items (not grouped) */
@@ -48,11 +52,13 @@ const mainNavItems: NavItem[] = [
 ];
 
 /**
- * Sub-items under the collapsible "AI" section (BACKLOG-4186). The section shows only when
- * report_my_access('sender-rules') is non-null (useSenderRulesAccess); the page gates again.
+ * Sub-items under the collapsible "AI" section (BACKLOG-4186, 4219). Each item shows only when
+ * report_my_access(<its key>) is non-null; the section shows when at least one does. Each page
+ * gates again.
  */
 const aiSubItems: NavItem[] = [
-  { label: 'Sender rules', href: SENDER_RULES_PATH, icon: MailX, permission: PERMISSIONS.ANALYTICS_VIEW },
+  { label: 'Sender rules', href: SENDER_RULES_PATH, icon: MailX, permission: PERMISSIONS.ANALYTICS_VIEW, reportKey: SENDER_RULES_REPORT_KEY },
+  { label: 'Learn pilot', href: LEARN_PILOT_PATH, icon: FlaskConical, permission: PERMISSIONS.ANALYTICS_VIEW, reportKey: LEARN_PILOT_REPORT_KEY },
 ];
 
 /** Sub-items under the collapsible "Support" section */
@@ -119,6 +125,11 @@ export function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose
   const { hasPermission, roleName, loading } = usePermissions();
   const hasReports = useHasReports(user?.id);
   const senderRulesAccess = useSenderRulesAccess(user?.id);
+  const learnPilotAccess = useReportAccess(LEARN_PILOT_REPORT_KEY, user?.id);
+  const reportAccess: Record<string, unknown> = {
+    [SENDER_RULES_REPORT_KEY]: senderRulesAccess,
+    [LEARN_PILOT_REPORT_KEY]: learnPilotAccess,
+  };
 
   const displayName =
     user?.user_metadata?.full_name ||
@@ -174,8 +185,8 @@ export function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose
   const canSeeSettings = loading || settingsSectionPermissions.some((p) => hasPermission(p));
   const canSeeSupport = loading || supportSectionPermissions.some((p) => hasPermission(p));
   const canSeePm = loading || pmSectionPermissions.some((p) => hasPermission(p));
-  // Not while loading either: hidden until report_my_access('sender-rules') answers non-null.
-  const canSeeAi = senderRulesAccess !== null;
+  // Not while loading either: hidden until report_my_access answers non-null for one AI key.
+  const canSeeAi = senderRulesAccess !== null || learnPilotAccess !== null;
 
   // BACKLOG-3841: drawer behaviour while open. useFocusTrap moves focus to the
   // first control (Close menu), keeps Tab inside and restores focus on close.
@@ -225,6 +236,8 @@ export function Sidebar({ collapsed, onToggle, mobileOpen = false, onMobileClose
     if (!loading && !hasPermission(item.permission)) return null;
     // Not while loading either: the link stays hidden until the list says there is a report.
     if (item.needsReports && !hasReports) return null;
+    // Its own key's answer, never the section's: a grant on one AI page shows no link to the other.
+    if (item.reportKey && (reportAccess[item.reportKey] ?? null) === null) return null;
 
     const itemPath = item.href.split('?')[0];
     const itemQuery = item.href.includes('?') ? new URLSearchParams(item.href.split('?')[1]) : null;

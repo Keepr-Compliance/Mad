@@ -99,6 +99,7 @@ async function isUnlocked(
     .select('id')
     .eq('user_id', userId)
     .eq('local_transaction_id', localTransactionId)
+    .is('refunded_at', null)
     .maybeSingle();
   return Boolean(data);
 }

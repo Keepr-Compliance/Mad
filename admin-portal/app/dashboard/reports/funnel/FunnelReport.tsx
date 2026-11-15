@@ -12,7 +12,7 @@
  * the "No funnel events" text.
  */
 
-import { FilterBar, FilterCaption, PeriodPicker, SavedViews, ShareDialog, StatCard, TruncationNotice } from '@keepr/ui';
+import { FilterBar, FilterCaption, PeriodPicker, SavedViews, SharingDialog, StatCard, TruncationNotice } from '@keepr/ui';
 import { AlertTriangle } from 'lucide-react';
 import type { FunnelResult } from '@/lib/funnel-analytics';
 import {
@@ -88,7 +88,7 @@ export function FunnelReport({
         trailing={
           <>
             <SavedViews<PeriodOnlySavedView> {...savedViews} />
-            <ShareDialog {...shareDialog} />
+            <SharingDialog {...shareDialog} />
           </>
         }
       >

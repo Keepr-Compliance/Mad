@@ -1,0 +1,4 @@
+-- BACKLOG-4185 PR A: mutation slot. Empty on a normal run. mutate.py replaces the slot line
+-- below with one wrong-implementation DDL, run.sh applies it after the migration and before
+-- controls.sql (same transaction, rolled back), then mutate.py restores this file.
+-- MUTATION SLOT

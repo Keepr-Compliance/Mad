@@ -62,6 +62,9 @@ export const SenderRuleSetSchema = z.strictObject({
     minCensusLinkedEmails: z.number().int().min(0),
     reportSendIntervalHours: z.number().int().positive(),
     reportMaxRows: z.number().int().positive().max(500),
+    // BACKLOG-4212: optional. Answers needed before a sender the user marked as a newsletter is
+    // hidden for that user; 0 = off. Not in the bundled set; the server validator mirrors this.
+    userSuppressMinAnswers: z.number().int().min(0).max(20).optional(),
   }),
   modes: z.strictObject({
     seedAddress: Modes,

@@ -1,9 +1,10 @@
 /**
  * SQL for Learn mode ("Help Keepr learn") — BACKLOG-4120.
  *
- * Reads `emails` and `transactions`; writes ONLY the three learn_ tables
- * (`learn_mode_settings`, `learn_deal_answers`, `learn_bulk_answers`). No
- * statement here writes any other table. Local only: these tables are read by
+ * Reads `emails` and `transactions`; writes ONLY the learn_ tables
+ * (`learn_mode_settings`, `learn_deal_answers`, `learn_bulk_answers`, and,
+ * since BACKLOG-4212, `learn_sender_overrides`). No statement here writes any
+ * other table. Local only: these tables are read by
  * no sync and no export path.
  *
  * Soft removal: nothing here removes a learn row. "Delete my answers" sets
@@ -32,6 +33,158 @@ export const UPSERT_LEARN_MODE_ENABLED_SQL = sql`
   VALUES (?, ?, ?, ?, ?)
   ON CONFLICT(user_id) WHERE deleted_at IS NULL
   DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at
+`;
+
+// ---------------------------------------------------------------------------
+// Pilot report switch (BACKLOG-4219). Local state only: whether the user shares
+// the numbers, a withdraw still owed to the server, the per-version send
+// throttle, and an unsettled submit. Nothing here is sent anywhere.
+// ---------------------------------------------------------------------------
+
+/** v79: the learn_mode_settings columns, to guard the ALTERs. */
+export const V79_LEARN_SETTINGS_TABLE_INFO_SQL = sql`PRAGMA table_info(learn_mode_settings)`;
+
+// ---- per-user sender list U1 (BACKLOG-4212), read only ----------------------
+
+/**
+ * Senders with at least N live newsletter answers, no live real_estate answer,
+ * and no live "Stop hiding" row. Only answered, live rows with a sender
+ * snapshot count; "skip" answers never count. Bound: user id, N.
+ */
+export const USER_SUPPRESS_CANDIDATES_SQL = sql`
+  SELECT b.sender_key AS sender_key
+  FROM learn_bulk_answers b
+  WHERE b.user_id = ? AND b.deleted_at IS NULL AND b.answer IS NOT NULL AND b.sender_key IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM learn_sender_overrides o
+      WHERE o.user_id = b.user_id AND o.sender_key = b.sender_key AND o.deleted_at IS NULL
+    )
+  GROUP BY b.sender_key
+  HAVING SUM(CASE WHEN b.answer = 'newsletter_spam' THEN 1 ELSE 0 END) >= ?
+     AND SUM(CASE WHEN b.answer = 'real_estate' THEN 1 ELSE 0 END) = 0
+`;
+
+/**
+ * The user's own addresses: connected mailboxes and the sign-in address.
+ * Raw values; the caller normalises them. Bound: user id, user id.
+ */
+export const USER_OWN_ADDRESSES_SQL = sql`
+  SELECT connected_email_address AS address
+  FROM oauth_tokens
+  WHERE user_id = ? AND purpose = 'mailbox' AND connected_email_address IS NOT NULL
+  UNION
+  SELECT email AS address FROM users_local WHERE id = ? AND email IS NOT NULL
+`;
+
+// ---- v80 (BACKLOG-4212) ------------------------------------------------------
+
+export const V80_BULK_ANSWERS_TABLE_INFO_SQL = sql`PRAGMA table_info(learn_bulk_answers)`;
+
+/** v80: the sender snapshot column; NULL until backfilled or answered. */
+export const V80_ADD_SENDER_KEY_SQL = sql`
+  ALTER TABLE learn_bulk_answers ADD COLUMN sender_key TEXT;
+`;
+
+/** v80: the "Stop hiding" table, same DDL as schema.sql (a no-op where schema.sql made it). */
+export const V80_SENDER_OVERRIDES_DDL = sql`
+  CREATE TABLE IF NOT EXISTS learn_sender_overrides (
+    id         TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL,
+    sender_key TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    FOREIGN KEY (user_id) REFERENCES users_local(id) ON DELETE CASCADE
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_learn_sender_overrides_user_sender_live
+    ON learn_sender_overrides(user_id, sender_key) WHERE deleted_at IS NULL;
+`;
+
+/** v80 backfill: live answered rows with no sender snapshot yet. No bound parameters. */
+export const V80_BACKFILL_ROWS_SQL = sql`
+  SELECT id, user_id, source, external_id
+  FROM learn_bulk_answers
+  WHERE deleted_at IS NULL AND answer IS NOT NULL AND sender_key IS NULL
+`;
+
+/**
+ * v80 backfill: one cached From header per message (idx_emails_external_id).
+ * Bound: external id, user id, source.
+ */
+export const V80_CACHED_SENDER_SQL = sql`
+  SELECT sender FROM emails
+  WHERE external_id = ? AND user_id = ? AND source = ?
+  ORDER BY id LIMIT 1
+`;
+
+/** v80 backfill: set one row's snapshot. Bound: sender_key, row id. */
+export const V80_SET_SENDER_KEY_SQL = sql`
+  UPDATE learn_bulk_answers SET sender_key = ? WHERE id = ? AND sender_key IS NULL
+`;
+
+/** v79: an upgraded row gets pilot_report = 0 (OFF) and nothing pending. */
+export const V79_ADD_PILOT_COLUMNS_SQL = sql`
+  ALTER TABLE learn_mode_settings
+    ADD COLUMN pilot_report INTEGER NOT NULL DEFAULT 0 CHECK (pilot_report IN (0, 1));
+  ALTER TABLE learn_mode_settings
+    ADD COLUMN pilot_pending_withdraw INTEGER NOT NULL DEFAULT 0 CHECK (pilot_pending_withdraw IN (0, 1));
+  ALTER TABLE learn_mode_settings ADD COLUMN pilot_sent_versions TEXT;
+  ALTER TABLE learn_mode_settings ADD COLUMN pilot_unsettled_at TEXT;
+`;
+
+/** One bound parameter: user id. Missing row = OFF, nothing pending. */
+export const GET_PILOT_STATE_SQL = sql`
+  SELECT pilot_report, pilot_pending_withdraw, pilot_sent_versions, pilot_unsettled_at
+  FROM learn_mode_settings
+  WHERE user_id = ? AND deleted_at IS NULL
+`;
+
+/** Turn sharing ON (the live row exists: Learn mode is on). Bound: updated_at, user id. */
+export const PILOT_TURN_ON_SQL = sql`
+  UPDATE learn_mode_settings SET pilot_report = 1, updated_at = ?
+  WHERE user_id = ? AND deleted_at IS NULL
+`;
+
+/**
+ * Turn sharing OFF and owe the server a withdraw, in one write (before the
+ * withdraw is queued). Bound: updated_at, user id.
+ */
+export const PILOT_TURN_OFF_SQL = sql`
+  UPDATE learn_mode_settings SET pilot_report = 0, pilot_pending_withdraw = 1, updated_at = ?
+  WHERE user_id = ? AND deleted_at IS NULL
+`;
+
+/**
+ * A withdraw succeeded: nothing owed, nothing on the server, and any unsettled
+ * submit is now covered (the caller schedules its one extra withdraw). One
+ * statement. Bound: updated_at, user id.
+ */
+export const PILOT_WITHDRAW_DONE_SQL = sql`
+  UPDATE learn_mode_settings
+  SET pilot_pending_withdraw = 0, pilot_sent_versions = NULL, pilot_unsettled_at = NULL, updated_at = ?
+  WHERE user_id = ? AND deleted_at IS NULL
+`;
+
+/** Bound: the JSON map, updated_at, user id. */
+export const PILOT_SET_SENT_VERSIONS_SQL = sql`
+  UPDATE learn_mode_settings SET pilot_sent_versions = ?, updated_at = ?
+  WHERE user_id = ? AND deleted_at IS NULL
+`;
+
+/** Bound: the time (or NULL), updated_at, user id. */
+export const PILOT_SET_UNSETTLED_SQL = sql`
+  UPDATE learn_mode_settings SET pilot_unsettled_at = ?, updated_at = ?
+  WHERE user_id = ? AND deleted_at IS NULL
+`;
+
+/** Newest live answer time of either kind. Bound: user id, user id. */
+export const LATEST_ANSWER_AT_SQL = sql`
+  SELECT MAX(t) AS latest FROM (
+    SELECT MAX(answered_at) AS t FROM learn_deal_answers WHERE user_id = ? AND deleted_at IS NULL
+    UNION ALL
+    SELECT MAX(answered_at) AS t FROM learn_bulk_answers
+    WHERE user_id = ? AND deleted_at IS NULL AND answered_at IS NOT NULL
+  )
 `;
 
 // ---------------------------------------------------------------------------
@@ -117,10 +270,36 @@ export const NEXT_UNANSWERED_BULK_SQL = sql`
   LIMIT 1
 `;
 
-/** Answer one sample row. Bound: answer, answered_at, updated_at, user id, row id. */
+/**
+ * BACKLOG-4212: the cached From header of one live sample row, resolved through
+ * the provider key (never emails.id), one email row per message. No row = not
+ * the user's live sample row; `sender` NULL = the message is not cached.
+ * Bound: user id, row id.
+ */
+export const BULK_ROW_SENDER_SQL = sql`
+  SELECT e.sender AS sender
+  FROM learn_bulk_answers b
+  LEFT JOIN emails e ON e.id = (
+    SELECT e2.id FROM emails e2
+    WHERE e2.user_id = b.user_id AND e2.source = b.source AND e2.external_id = b.external_id
+    ORDER BY e2.id LIMIT 1
+  )
+  WHERE b.user_id = ? AND b.id = ? AND b.deleted_at IS NULL
+`;
+
+/**
+ * Answer one sample row and snapshot its sender in the same statement
+ * (BACKLOG-4212). Bound: answer, answered_at, updated_at, sender_key, user id, row id.
+ */
 export const ANSWER_BULK_SQL = sql`
-  UPDATE learn_bulk_answers SET answer = ?, answered_at = ?, updated_at = ?
+  UPDATE learn_bulk_answers SET answer = ?, answered_at = ?, updated_at = ?, sender_key = ?
   WHERE user_id = ? AND id = ? AND deleted_at IS NULL
+`;
+
+/** BACKLOG-4212: soft-remove every live "Stop hiding" row. Bound: deleted_at, updated_at, user id. */
+export const SOFT_CLEAR_SENDER_OVERRIDES_SQL = sql`
+  UPDATE learn_sender_overrides SET deleted_at = ?, updated_at = ?
+  WHERE user_id = ? AND deleted_at IS NULL
 `;
 
 /** Soft-remove the whole live sample. Bound: deleted_at, updated_at, user id. */

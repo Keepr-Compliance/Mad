@@ -100,8 +100,9 @@
  *   3. this column — which had NO live consumer before this file.
  *
  * They are not guaranteed to agree, and the disagreement is not symmetric:
- * `useFeatureGate.isAllowed` FAIL-OPENS (`useFeatureGate.ts:10,29` — "Defaults
- * to allowed for unknown features"), so the renderer can already show AI as
+ * `useFeatureGate.isAllowed` FAIL-OPENS (`useFeatureGate.ts:10` and
+ * `isFeatureAllowed` in `src/hooks/featureAccess.ts` — "Default to allowed if
+ * feature is unknown"), so the renderer can already show AI as
  * available while this gate reads `off`. That is the safe direction and the
  * reason the fail-open source was rejected above, but it is a divergence, not
  * an agreement. It is invisible today only because nobody is entitled: all 15

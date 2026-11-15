@@ -81,6 +81,17 @@ import {
   V75_CHECKLIST_LINKS_TABLE_INFO_SQL,
 } from "./db/migrationV75Sql";
 import {
+  V79_ADD_PILOT_COLUMNS_SQL,
+  V79_LEARN_SETTINGS_TABLE_INFO_SQL,
+  V80_ADD_SENDER_KEY_SQL,
+  V80_BACKFILL_ROWS_SQL,
+  V80_BULK_ANSWERS_TABLE_INFO_SQL,
+  V80_CACHED_SENDER_SQL,
+  V80_SENDER_OVERRIDES_DDL,
+  V80_SET_SENDER_KEY_SQL,
+} from "./db/learnModeSql";
+import { fromAddress } from "../utils/senderFilter/senderFilter";
+import {
   V76_BROKEN_TEXT_IDS_SQL,
   V76_CLEAR_DANGLING_SQL,
   V76_REPOINT_SQL,
@@ -2266,6 +2277,61 @@ class DatabaseService implements IDatabaseService {
           hostLogger.info(`[v78] rebuilt checklist links, copied ${links} link(s) and ${members} member(s)`);
         }
         d.exec(V78_INDEXES_AND_TRIGGER_SQL);
+      },
+    },
+    {
+      version: 79,
+      description:
+        "BACKLOG-4219 Learn pilot report: the Learn mode settings row gains pilot_report " +
+        "(default OFF), pilot_pending_withdraw, pilot_sent_versions, pilot_unsettled_at",
+      // Guarded like v75: a FRESH install already has the columns from schema.sql
+      // (schema_version seeds at BASELINE 70, then this migration still runs), so
+      // the ALTERs are skipped there and the migration is re-runnable. Upgraded
+      // rows get pilot_report = 0: nobody shares until they turn it on.
+      migrate: (d) => {
+        const hasCol = (
+          d.prepare(V79_LEARN_SETTINGS_TABLE_INFO_SQL).all() as Array<{ name: string }>
+        ).some((c) => c.name === "pilot_report");
+        if (!hasCol) {
+          d.exec(V79_ADD_PILOT_COLUMNS_SQL);
+        }
+      },
+    },
+    {
+      version: 80,
+      description:
+        "BACKLOG-4212 Learn newsletter answers: the bulk answer row gains sender_key " +
+        "(backfilled from the cached message), and the sender overrides table",
+      // Guarded like v79: a FRESH install already has the column and the table from
+      // schema.sql (schema_version seeds at BASELINE 70, then this migration still
+      // runs), so the ALTER is skipped there. The backfill reads only live answered
+      // rows still missing a key: one indexed lookup each (idx_emails_external_id),
+      // normalised with the sender filter's own fromAddress(). A message no longer
+      // cached stays NULL and never counts. Re-runnable: a filled row stops qualifying.
+      // Logs counts only, never an address.
+      migrate: (d) => {
+        const hasCol = (
+          d.prepare(V80_BULK_ANSWERS_TABLE_INFO_SQL).all() as Array<{ name: string }>
+        ).some((c) => c.name === "sender_key");
+        if (!hasCol) {
+          d.exec(V80_ADD_SENDER_KEY_SQL);
+        }
+        d.exec(V80_SENDER_OVERRIDES_DDL);
+        const rows = d.prepare(V80_BACKFILL_ROWS_SQL).all() as Array<{
+          id: string;
+          user_id: string;
+          source: string;
+          external_id: string;
+        }>;
+        const readSender = d.prepare(V80_CACHED_SENDER_SQL);
+        const setKey = d.prepare(V80_SET_SENDER_KEY_SQL);
+        let filled = 0;
+        for (const r of rows) {
+          const cached = readSender.get(r.external_id, r.user_id, r.source) as { sender: string | null } | undefined;
+          const key = fromAddress(cached?.sender ?? null);
+          if (key !== null) filled += setKey.run(key, r.id).changes;
+        }
+        hostLogger.info(`[v80] sender_key backfilled on ${filled} of ${rows.length} answered row(s)`);
       },
     },
   ];
