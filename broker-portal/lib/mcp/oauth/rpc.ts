@@ -7,6 +7,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { CHECKLISTS_SHAPE, checkShape, GET_DEAL_SHAPE, LIST_DEALS_SHAPE, type Shape } from '@/lib/mcp/tools/shapes';
 
 export const RPC_TIMEOUT_MS = 8000;
 
@@ -268,7 +269,7 @@ export async function refreshTokens(cfg: ClientConfig, a: RefreshArgs): Promise<
 // ---------------------------------------------------------------------------
 
 /** Arguments of the per-request MCP functions. `atDigest` is the access token digest in bytea text form. */
-interface AccessArgs {
+export interface AccessArgs {
   secret: string;
   atDigest: string;
   resource: string;
@@ -344,4 +345,102 @@ export async function getStatusFor(cfg: ClientConfig, a: AccessArgs): Promise<Ge
   });
   if ('kind' in res) return res;
   return checkGetStatusEnvelope(res.data);
+}
+
+// ---------------------------------------------------------------------------
+// Data tools (BACKLOG-4244), supabase/migrations/20261114110000_backlog_4244_mcp_data_tools.sql
+// mcp_list_deals(p_secret text, p_at_digest bytea, p_resource text, p_status text,
+//                p_address_contains text, p_limit integer, p_cursor text)
+// mcp_get_deal(p_secret text, p_at_digest bytea, p_resource text, p_deal_id text)
+// mcp_get_deal_checklists(p_secret text, p_at_digest bytea, p_resource text, p_deal_id text,
+//                         p_only_open boolean, p_checklist_id text)
+// Each returns {ok:true, result:<frame v1>} | {ok:false, error:<DATA_TOOL_ERRORS>}.
+// The result must match its shape exactly (lib/mcp/tools/shapes.ts); anything else is 'transport'.
+// ---------------------------------------------------------------------------
+
+export const DATA_TOOL_ERRORS = [
+  'not_connected',
+  'disabled',
+  'rate_limited',
+  'busy',
+  'not_entitled',
+  'invalid_input',
+  'not_found',
+  'too_large',
+  'timeout',
+  'error',
+] as const;
+export type DataToolError = (typeof DATA_TOOL_ERRORS)[number];
+
+export type DataToolResult =
+  | { kind: 'ok'; result: Record<string, unknown> }
+  | { kind: 'error'; error: DataToolError }
+  | Transport;
+
+export function checkDataToolEnvelope(v: unknown, shape: Shape): DataToolResult {
+  if (!isObject(v)) return transport(null);
+  if (v.ok === true) {
+    if (hasExactKeys(v, ['ok', 'result']) && isObject(v.result) && checkShape(v.result, shape)) {
+      return { kind: 'ok', result: v.result };
+    }
+    return transport(null);
+  }
+  if (!hasExactKeys(v, ['ok', 'error'])) return transport(null);
+  const code = refusal(v, DATA_TOOL_ERRORS);
+  return code ? { kind: 'error', error: code } : transport(null);
+}
+
+export interface ListDealsArgs extends AccessArgs {
+  status: string | null;
+  addressContains: string | null;
+  limit: number | null;
+  cursor: string | null;
+}
+
+export async function listDealsFor(cfg: ClientConfig, a: ListDealsArgs): Promise<DataToolResult> {
+  const res = await call(cfg, 'mcp_list_deals', {
+    p_secret: a.secret,
+    p_at_digest: a.atDigest,
+    p_resource: a.resource,
+    p_status: a.status,
+    p_address_contains: a.addressContains,
+    p_limit: a.limit,
+    p_cursor: a.cursor,
+  });
+  if ('kind' in res) return res;
+  return checkDataToolEnvelope(res.data, LIST_DEALS_SHAPE);
+}
+
+export interface GetDealArgs extends AccessArgs {
+  dealId: string;
+}
+
+export async function getDealFor(cfg: ClientConfig, a: GetDealArgs): Promise<DataToolResult> {
+  const res = await call(cfg, 'mcp_get_deal', {
+    p_secret: a.secret,
+    p_at_digest: a.atDigest,
+    p_resource: a.resource,
+    p_deal_id: a.dealId,
+  });
+  if ('kind' in res) return res;
+  return checkDataToolEnvelope(res.data, GET_DEAL_SHAPE);
+}
+
+export interface GetDealChecklistsArgs extends AccessArgs {
+  dealId: string;
+  onlyOpen: boolean | null;
+  checklistId: string | null;
+}
+
+export async function getDealChecklistsFor(cfg: ClientConfig, a: GetDealChecklistsArgs): Promise<DataToolResult> {
+  const res = await call(cfg, 'mcp_get_deal_checklists', {
+    p_secret: a.secret,
+    p_at_digest: a.atDigest,
+    p_resource: a.resource,
+    p_deal_id: a.dealId,
+    p_only_open: a.onlyOpen,
+    p_checklist_id: a.checklistId,
+  });
+  if ('kind' in res) return res;
+  return checkDataToolEnvelope(res.data, CHECKLISTS_SHAPE);
 }

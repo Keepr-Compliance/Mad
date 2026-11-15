@@ -169,7 +169,7 @@ describe('A1: no Authorization header', () => {
   it('positive: an access token the database accepts lists get_status', async () => {
     const client = await connect('legacy');
     const tools = await client.listTools();
-    expect(tools.tools.map((t) => t.name)).toEqual(['get_status']);
+    expect(tools.tools.map((t) => t.name)).toEqual(['get_status', 'list_deals', 'get_deal', 'get_deal_checklists']);
     await client.close();
   });
 
@@ -508,7 +508,7 @@ describe('A5: both protocol eras, stateless', () => {
   it('a 2025-era client initializes, then lists get_status with its annotations', async () => {
     const client = await connect('legacy');
     const tools = await client.listTools();
-    expect(tools.tools).toHaveLength(1);
+    expect(tools.tools).toHaveLength(4);
     expect(tools.tools[0]).toMatchObject({
       name: 'get_status',
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -528,7 +528,7 @@ describe('A5: both protocol eras, stateless', () => {
   it('a 2026-07-28 client lists get_status with no initialize', async () => {
     const client = await connect({ pin: '2026-07-28' });
     const tools = await client.listTools();
-    expect(tools.tools.map((t) => t.name)).toEqual(['get_status']);
+    expect(tools.tools.map((t) => t.name)).toEqual(['get_status', 'list_deals', 'get_deal', 'get_deal_checklists']);
     await client.close();
   });
 

@@ -1,5 +1,5 @@
 /**
- * get_status — the one MCP tool (BACKLOG-4237, BACKLOG-4238).
+ * get_status (BACKLOG-4237, BACKLOG-4238; outputSchema BACKLOG-4244).
  *
  * The answer comes from the database (mcp_get_status), keyed by the access
  * token digest the route computed. Node adds only the protocol and server
@@ -9,30 +9,23 @@
 import type { CallToolResult, Tool } from '@modelcontextprotocol/server';
 import { oauthConfig } from '@/lib/mcp/oauth/config';
 import { getStatusFor } from '@/lib/mcp/oauth/rpc';
+import { TOOL_ANNOTATIONS } from './result';
+import { STATUS_SHAPE, toJsonSchema } from './shapes';
+import { TOOL_MESSAGES, TOOL_TEXT } from './text';
 
-export const STATUS_TOOL_NAME = 'get_status';
+export const STATUS_TOOL_NAME = TOOL_TEXT.get_status.name;
 
 export const STATUS_TOOL: Tool = {
   name: STATUS_TOOL_NAME,
-  title: 'Keepr connection status',
-  description:
-    'Checks that the Keepr connection works and whether this account has Keepr Cloud. Returns no deals, contacts, texts or emails.',
+  title: TOOL_TEXT.get_status.title,
+  description: TOOL_TEXT.get_status.description,
   inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-  annotations: {
-    readOnlyHint: true,
-    destructiveHint: false,
-    idempotentHint: true,
-    openWorldHint: false,
-  },
+  outputSchema: toJsonSchema(STATUS_SHAPE) as Tool['outputSchema'],
+  annotations: TOOL_ANNOTATIONS,
 };
 
-/** Tool error texts (plan section m, M-S1..M-S4). */
-const STATUS_MESSAGES = {
-  not_connected: 'This connection was removed. Reconnect Keepr in your AI app.',
-  disabled: 'Keepr AI access is turned off right now.',
-  rate_limited: 'Too many requests. Try again in a minute.',
-  unavailable: 'Keepr could not answer. Try again.',
-} as const;
+/** Tool error texts (plan section m, M-S1..M-S4), from ./text. */
+const STATUS_MESSAGES = TOOL_MESSAGES;
 
 /** The digest the route puts in authInfo.extra: bytea text form of a 32-byte HMAC. */
 const AT_DIGEST = /^\\x[0-9a-f]{64}$/;
