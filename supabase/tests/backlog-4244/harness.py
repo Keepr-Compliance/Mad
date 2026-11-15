@@ -443,7 +443,8 @@ def before_copies():
     OBS_ignorables to measure the earlier rule); the current ones when it is not set"""
     src = open(BEFORE).read() if BEFORE else MIG
     out = ''
-    for name in ('_mcp_strip', '_mcp_txt', '_mcp_mask', '_mcp_clean'):
+    names = [n for n in ('_mcp_ign', '_mcp_ign_kept') if 'CREATE OR REPLACE FUNCTION public.%s(' % n in src]
+    for name in names + ['_mcp_strip', '_mcp_txt', '_mcp_mask', '_mcp_clean']:
         u = unit(src, name)[0]
         u = u.split('$fn$;')[0] + '$fn$;\n'
         u = u.replace('public._mcp_', 'pg_temp.o_mcp_').replace('pg_temp.o_mcp_' + name[5:], 'pg_temp.o_mcp_' + name[5:])
