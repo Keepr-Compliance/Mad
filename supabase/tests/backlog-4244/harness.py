@@ -342,7 +342,7 @@ def mutants():
     b.append(fn_mutant('CLEAN_unjoin_class_narrowed', '_mcp_clean', "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ + ",",
                        "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ_OLD + ",", 'pg_temp.p_window_joiners()'))
     b.append(fn_mutant('CLEAN_unjoin_removed', '_mcp_clean', "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ + ", '\\1', 'g') AS x,",
-                       "left(t.y, 8 * (p_max + 40)) AS x,", 'pg_temp.p_window_sweep()'))
+                       "left(t.y, 8 * (p_max + 40)) AS x,", 'pg_temp.p_window_joiners()'))
     b.append(fn_mutant('CLEAN_bound_removed', '_mcp_clean',
                        "regexp_replace(left(t.y, 8 * (p_max + 40)), " + UNJ + ", '\\1', 'g') AS x,   /*CLEAN:unjoin*/\n                         char_length(t.y) > 8 * (p_max + 40) AS cut",
                        "regexp_replace(t.y, " + UNJ + ", '\\1', 'g') AS x,   /*CLEAN:unjoin*/\n                         false AS cut", 'pg_temp.p_clean_timing()'))
@@ -350,7 +350,7 @@ def mutants():
                        "SELECT v.x, char_length(v.x) > p_max + 40 AS long", 'pg_temp.p_window_joiners()'))
     b.append(fn_mutant('CLEAN_window_removed', '_mcp_clean',
                        "public._mcp_mask(CASE WHEN u.long THEN regexp_replace(left(u.x, p_max + 40), " + RUN + ", '')   /*CLEAN:window*/\n                                 ELSE u.x END)",
-                       "public._mcp_mask(u.x)", 'pg_temp.p_window_shrink()'))
+                       "public._mcp_mask(u.x)", 'pg_temp.p_clean_timing()'))
     b.append(fn_mutant('CLEAN_trailing_run_kept', '_mcp_clean', "regexp_replace(left(u.x, p_max + 40), " + RUN + ", '')", "left(u.x, p_max + 40)",
                        'pg_temp.p_window_shrink()'))
     b.append(fn_mutant('CLEAN_drop_class_old', '_mcp_clean', "regexp_replace(left(u.x, p_max + 40), " + RUN + ", '')",

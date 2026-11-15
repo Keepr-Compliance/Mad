@@ -665,12 +665,13 @@ END $h$;
 -- F-2: cost. 300,000 characters of '1 1 1 ...' through _mcp_clean (p_max 1000) and _mcp_txt (p_max 320)
 CREATE TEMP TABLE p4244_timing (k text, ms numeric);
 CREATE FUNCTION pg_temp.p_clean_timing() RETURNS text LANGUAGE plpgsql AS $h$
-DECLARE x text := repeat('1 ', 150000); t0 timestamptz; o text; a numeric; b numeric; c numeric; j numeric;
+DECLARE x text := repeat('1 ', 150000) || left(random()::text, 0); x2 text := repeat('4111 1111 1111 1111 ', 15000) || left(random()::text, 0);
+        x3 text := repeat('1' || chr(8205), 500000) || left(random()::text, 0); t0 timestamptz; o text; a numeric; b numeric; c numeric; j numeric;
 BEGIN
   t0 := clock_timestamp(); o := public._mcp_clean(x, 1000); a := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
   t0 := clock_timestamp(); o := public._mcp_txt(x, 320); b := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
-  t0 := clock_timestamp(); o := public._mcp_clean(repeat('4111 1111 1111 1111 ', 15000), 1000); c := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
-  t0 := clock_timestamp(); o := public._mcp_clean(repeat('1' || chr(8205), 500000), 1000); j := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
+  t0 := clock_timestamp(); o := public._mcp_clean(x2, 1000); c := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
+  t0 := clock_timestamp(); o := public._mcp_clean(x3, 1000); j := round(extract(epoch FROM clock_timestamp() - t0) * 1000, 1);
   DELETE FROM pg_temp.p4244_timing;
   INSERT INTO pg_temp.p4244_timing VALUES ('clean_300k_single_digits_ms', a), ('txt_300k_ms', b), ('clean_300k_card_groups_ms', c),
     ('clean_1m_digit_joiner_ms', j);
@@ -711,6 +712,9 @@ BEGIN
   one_key := 'press 1' || vs16 || chr(8419) || ' now';
   keys := 'code ' || (SELECT string_agg(ch || vs16 || chr(8419), '' ORDER BY o) FROM regexp_split_to_table('4111111111111111', '') WITH ORDINALITY t(ch, o));
   RETURN pg_temp.all_of(
+    pg_temp.pass(public._mcp_mask(a) = 'card [number hidden by Keepr] x' AND public._mcp_mask(b) = 'card [number hidden by Keepr] x'
+                 AND public._mcp_mask(c) = 'card [number hidden by Keepr] x' AND public._mcp_mask(e) = 'ssn [number hidden by Keepr] x',
+                 'mask alone ' || public._mcp_mask(a) || ' / ' || public._mcp_mask(b) || ' / ' || public._mcp_mask(c) || ' / ' || public._mcp_mask(e)),
     pg_temp.pass(public._mcp_clean(a, 1000) = 'card [number hidden by Keepr] x', 'soft hyphens ' || public._mcp_clean(a, 1000)),
     pg_temp.pass(public._mcp_clean(b, 1000) = 'card [number hidden by Keepr] x', 'CGJ between every digit ' || public._mcp_clean(b, 1000)),
     pg_temp.pass(public._mcp_clean(c, 1000) = 'card [number hidden by Keepr] x', 'variation selectors ' || public._mcp_clean(c, 1000)),
@@ -730,6 +734,7 @@ END $h$;
 CREATE TEMP TABLE p4244_wj (outcome text, n int);
 CREATE FUNCTION pg_temp.p_window_joiners() RETURNS text LANGUAGE plpgsql AS $h$
 DECLARE pm int; fam text; jn int; jj text; st int; card text; s text; o text; c16 text := pg_temp.luhn_card(16); bad text := ''; cnt int := 0;
+        exp_n int := 0; exp_bad int := 0;
 BEGIN
   DELETE FROM pg_temp.p4244_wj;
   FOREACH pm IN ARRAY ARRAY[20, 50, 100, 200, 300, 1000] LOOP
@@ -745,6 +750,12 @@ BEGIN
             s := repeat('a', st - 1) || card || ' ' || repeat('b', 3000);
             o := public._mcp_clean(s, pm);
             cnt := cnt + 1;
+            -- a card at the start that fits in 8 * (p_max + 40) characters as stored is shown masked, not cut
+            IF st = 1 AND jn >= 60 AND pm >= 100 AND char_length(card) < 8 * (pm + 40) AND position('[number hidden by Keepr]' IN o) = 0 THEN
+              bad := bad || format('not masked %s/%s/%s/%s; ', pm, fam, jn, ascii(jj));
+              exp_bad := exp_bad + 1;
+            END IF;
+            IF st = 1 AND jn >= 60 AND pm >= 100 AND char_length(card) < 8 * (pm + 40) THEN exp_n := exp_n + 1; END IF;
             IF o ~ '\d' OR char_length(o) > pm THEN
               bad := bad || format('%s/%s/%s/%s/%s -> %s; ', pm, fam, jn, ascii(jj), st, right(o, 40));
               INSERT INTO pg_temp.p4244_wj VALUES ('DIGITS VISIBLE', 1);
@@ -756,7 +767,7 @@ BEGIN
       END LOOP;
     END LOOP;
   END LOOP;
-  RETURN pg_temp.pass(bad = '' AND cnt = 1440, 'cases ' || cnt || ' ' || left(bad, 1500));
+  RETURN pg_temp.pass(bad = '' AND cnt = 1440 AND exp_n = 64, 'cases ' || cnt || ' masked-expected ' || exp_n || ' missed ' || exp_bad || ' ' || left(bad, 1500));
 END $h$;
 CREATE FUNCTION pg_temp.obs_window_joiners() RETURNS text LANGUAGE sql AS $h$
   SELECT jsonb_object_agg(outcome, c)::text FROM (SELECT outcome, sum(n) AS c FROM pg_temp.p4244_wj GROUP BY outcome) x
