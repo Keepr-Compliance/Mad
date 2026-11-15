@@ -25,6 +25,7 @@ const ANSWER_ROW = "flex flex-wrap gap-3";
 /** Secondary, bordered, neutral: visible on the white panel, never ghost. */
 const SKIP_BUTTON =
   "inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-[10px] border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50";
+export const MAIL_KEYS_TIP = "Tip: use the arrow keys: \u2190 newsletter, \u2192 real estate, \u2193 other. U undoes.";
 export const MAIL_ANSWER_HELP: ReadonlyArray<{ heading: string; body: string }> = [
   {
     heading: "Newsletter or spam",
@@ -81,6 +82,9 @@ function MailAnswerHelp(): React.ReactElement {
               <strong className="font-medium text-gray-900">{h.heading}:</strong> {h.body}
             </span>
           ))}
+          <span className="mt-2 block text-gray-500" data-testid="learn-answer-help-keys">
+            {MAIL_KEYS_TIP}
+          </span>
         </span>,
         document.body,
       )}

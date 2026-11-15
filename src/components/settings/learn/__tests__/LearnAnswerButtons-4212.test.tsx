@@ -77,6 +77,9 @@ describe("Learn mail question: info tip and Skip placement (BACKLOG-4212)", () =
     expect(screen.getByTestId("learn-answer-panel")).not.toContainElement(panel);
     expect(screen.getByRole("dialog")).not.toContainElement(panel);
     expect(classes(panel)).toEqual(expect.arrayContaining(["fixed", "z-[100]"]));
+    expect(screen.getByTestId("learn-answer-help-keys")).toHaveTextContent(
+      "Tip: use the arrow keys: \u2190 newsletter, \u2192 real estate, \u2193 other. U undoes.",
+    );
     fireEvent.blur(tip);
     expect(screen.queryByTestId("learn-answer-help-panel")).toBeNull();
     fireEvent.click(tip);
