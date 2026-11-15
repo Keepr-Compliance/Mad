@@ -29,6 +29,10 @@ class Redirect extends Error {
   }
 }
 class NotFound extends Error {}
+jest.mock('@/components/sentry/ReplayOff', () => ({
+  // BACKLOG-4259: marks where the page mounts the replay stop (tested in replay-routes-4259.test.tsx)
+  ReplayOff: () => require('react').createElement('span', { 'data-testid': 'replay-off' }),
+}));
 jest.mock('next/navigation', () => ({
   redirect: (to: string) => {
     throw new Redirect(to);
@@ -103,6 +107,7 @@ describe('the list', () => {
     mockRpc.mockResolvedValue(listOk([]));
     await renderPage();
     expect(screen.getByText(M_A.empty)).toBeInTheDocument();
+    expect(screen.getAllByTestId('replay-off')).toHaveLength(1);
     expect(rows()).toEqual([]);
     expect(screen.queryByRole('button', { name: AI_APPS.disconnectAll })).toBeNull();
   });

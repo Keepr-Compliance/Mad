@@ -24,6 +24,10 @@ class Redirect extends Error {
   }
 }
 class NotFound extends Error {}
+jest.mock('@/components/sentry/ReplayOff', () => ({
+  // BACKLOG-4259: marks where the page mounts the replay stop (tested in replay-routes-4259.test.tsx)
+  ReplayOff: () => require('react').createElement('span', { 'data-testid': 'replay-off' }),
+}));
 jest.mock('next/navigation', () => ({
   redirect: (to: string) => {
     throw new Redirect(to);
@@ -227,6 +231,11 @@ describe('the consent text', () => {
     expect(container.textContent).toContain('You already connected Claude (Anthropic). Allowing this replaces that connection.');
   });
 
+  it('mounts the replay stop once', async () => {
+    await renderPage();
+    expect(screen.getAllByTestId('replay-off')).toHaveLength(1);
+  });
+
   it('replaces_existing false → no replacement sentence', async () => {
     const { container } = await renderPage();
     expect(screen.queryByRole('note')).toBeNull();
@@ -261,6 +270,7 @@ describe('view refusals and malformed answers', () => {
   it('notice_version 2 → update message, no buttons', async () => {
     mockRpc.mockResolvedValue({ data: viewOk({ notice_version: 2 }), error: null });
     await renderPage();
+    expect(screen.getAllByTestId('replay-off')).toHaveLength(1);
     expect(screen.getByRole('alert')).toHaveTextContent(M_C.noticeVersion);
     expect(buttons()).toEqual([]);
   });
