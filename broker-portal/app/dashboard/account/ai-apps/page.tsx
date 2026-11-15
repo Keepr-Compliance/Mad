@@ -13,19 +13,26 @@ import { AI_APPS, CONSENT, M_A, PROVIDER_LABELS } from '@/lib/mcp/account/messag
 import { logAccount } from '@/lib/mcp/account/logging';
 import { readAccountRequest } from '@/lib/mcp/account/request';
 import { listMyConnections } from '@/lib/mcp/account/rpc';
+import { ReplayOff } from '@/components/sentry/ReplayOff';
 import { AiAppsList, type AiAppRow } from './AiAppsList';
 
 export const dynamic = 'force-dynamic';
 
 const DATE_FORMAT = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeZone: 'UTC' });
+const DATE_TIME_FORMAT = new Intl.DateTimeFormat('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'UTC' });
 
 function formatDate(iso: string): string {
   return DATE_FORMAT.format(new Date(iso));
 }
 
+function formatDateTime(iso: string): string {
+  return DATE_TIME_FORMAT.format(new Date(iso));
+}
+
 function Shell({ email, children }: { email: string | null; children: React.ReactNode }) {
   return (
     <div className="max-w-3xl mx-auto space-y-6">
+      <ReplayOff />
       <PageHeader phoneHideTitle title={PAGE_TITLES.aiApps} subtitle={AI_APPS.intro} />
       {email !== null && <p className="text-sm text-gray-600">{CONSENT.signedInAs(email)}</p>}
       <Card>
@@ -81,7 +88,7 @@ export default async function AiAppsPage() {
     providerLabel: PROVIDER_LABELS[c.provider],
     clientName: c.clientName,
     sendsBackTo: AI_APPS.sendsBackTo(c.redirectHost),
-    connected: AI_APPS.connected(formatDate(c.consentedAt)),
+    connected: AI_APPS.connected(formatDateTime(c.consentedAt)),
     lastUsed: c.lastUsedAt === null ? AI_APPS.notUsed : AI_APPS.lastUsed(formatDate(c.lastUsedAt)),
   }));
   return (

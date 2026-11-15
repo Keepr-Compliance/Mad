@@ -534,7 +534,7 @@ BEGIN
     t2 := pg_temp.call_as(A, format('SELECT public.mcp_authorize_view(%L, NULL)', pg_temp.j(t) ->> 'request_id')); ok := ok AND pg_temp.err(t2) = 'request_invalid'; s := s || ' null_binding=' || pg_temp.err(t2);
     t2 := pg_temp.vw(A, pg_temp.j(t) ->> 'request_id', 'b-d16');
     ok := ok AND (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(pg_temp.j(t2)) k)
-                 = ARRAY['client_name', 'nonce', 'notice_version', 'ok', 'provider', 'redirect_host', 'request_id', 'scope']
+                 = ARRAY['client_name', 'nonce', 'notice_version', 'ok', 'provider', 'redirect_host', 'replaces_existing', 'request_id', 'scope']
           AND pg_temp.j(t2) ->> 'provider' = 'anthropic' AND pg_temp.j(t2) ->> 'redirect_host' = 'claude.ai';
     s := s || ' view=' || pg_temp.err(t2);
     t3 := pg_temp.call_as(A, format('SELECT public.mcp_authorize_approve(%L, %s, NULL, %s)', pg_temp.j(t) ->> 'request_id', pg_temp.hx(pg_temp.dg('b-d16')), pg_temp.hx(pg_temp.dg('c-d16'))));
@@ -983,7 +983,7 @@ BEGIN
     r := r || jsonb_build_object('C9_shapes', pg_temp.pass(
       pg_temp.j(t) = jsonb_build_object('ok', true, 'client_id', pg_temp.cid('c9b'), 'client_name', 'Fixture app c9b', 'redirect_uris', jsonb_build_array(pg_temp.claude()))
       AND (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(pg_temp.j(t2)) k) = ARRAY['expires_in', 'ok', 'request_id']
-      AND (pg_temp.j(t2) ->> 'request_id') ~ '^[A-Za-z0-9_-]{22}$' AND (pg_temp.j(t2) -> 'expires_in') = '600'::jsonb
+      AND (pg_temp.j(t2) ->> 'request_id') ~ '^[A-Za-z0-9_-]{22}$' AND (pg_temp.j(t2) -> 'expires_in') = '180'::jsonb
       AND pg_temp.j(c ->> 'exch') = '{"ok": true, "scope": "mcp:read", "expires_in": 3600, "token_type": "Bearer"}'::jsonb
       AND pg_temp.j(c ->> 'appr') = jsonb_build_object('ok', true, 'redirect_uri', pg_temp.claude(), 'state', 'state-c9x')
       AND pg_temp.j(pg_temp.chk('at-c9x')) = '{"ok": true}'::jsonb
@@ -991,6 +991,110 @@ BEGIN
       t || ' / ' || t2 || ' / ' || (c ->> 'exch')));
     RAISE EXCEPTION USING ERRCODE = 'T4238';
   EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('C9_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  -- ===== K1 (BACKLOG-4259): a refused registration adds to no counter =====
+  BEGIN
+    INSERT INTO public.mcp_rate_counters (bucket, window_start, count) VALUES ('reg_all', public._mcp_window(interval '1 day'), 7);
+    n0 := pg_temp.nctr();
+    t := pg_temp.reg('k1a', ARRAY['https://evil.example/cb'], 'ip-k1');
+    t2 := pg_temp.reg('k1b', ARRAY[pg_temp.claude()], 'ip-k1', pg_temp.sec(), 'not-a-client-id');
+    t3 := pg_temp.reg('k1c', ARRAY[pg_temp.claude(), NULL], 'ip-k1');
+    n1 := pg_temp.nctr();
+    r := r || jsonb_build_object('K1_refused_registration_counts_nothing', pg_temp.pass(
+      pg_temp.err(t) = 'invalid_redirect_uri' AND pg_temp.err(t2) = 'invalid_client_metadata' AND pg_temp.err(t3) = 'invalid_redirect_uri'
+      AND n1 = n0
+      AND (SELECT count FROM public.mcp_rate_counters WHERE bucket = 'reg_all') = 7
+      AND NOT EXISTS (SELECT 1 FROM public.mcp_rate_counters WHERE bucket = 'reg_ip:' || encode(pg_temp.dg('ip-k1'), 'hex')),
+      t || ' / ' || t2 || ' / ' || t3 || ' counters ' || n0 || '->' || n1));
+    RAISE EXCEPTION USING ERRCODE = 'T4238';
+  EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('K1_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  -- ===== K2 (BACKLOG-4259): 500 refused registrations from 10 addresses, then a valid one =====
+  BEGIN
+    ok := true;
+    FOR n IN 1..500 LOOP
+      t := pg_temp.reg('k2r' || n, ARRAY['https://evil.example/cb'], 'ip-k2-' || (n % 10));
+      ok := ok AND pg_temp.err(t) = 'invalid_redirect_uri';
+    END LOOP;
+    t2 := pg_temp.reg('k2ok', ARRAY[pg_temp.claude()], 'ip-k2-fresh');
+    r := r || jsonb_build_object('K2_refused_do_not_block_valid', pg_temp.pass(
+      ok AND pg_temp.err(t2) = 'OK'
+      AND (SELECT count FROM public.mcp_rate_counters WHERE bucket = 'reg_all') = 1,
+      'refused_all=' || ok || ' valid=' || t2 || ' reg_all=' || coalesce((SELECT count FROM public.mcp_rate_counters WHERE bucket = 'reg_all')::text, 'none')));
+    RAISE EXCEPTION USING ERRCODE = 'T4238';
+  EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('K2_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  -- ===== K3 (BACKLOG-4259): registration while mcp_settings.enabled is off =====
+  BEGIN
+    UPDATE public.mcp_settings SET enabled = false WHERE id;
+    n0 := pg_temp.nctr();
+    t := pg_temp.reg('k3', ARRAY[pg_temp.claude()], 'ip-k3');
+    t2 := pg_temp.reg('k3w', ARRAY[pg_temp.claude()], 'ip-k3', 'wrong-secret');
+    UPDATE public.mcp_settings SET enabled = true WHERE id;
+    t3 := pg_temp.reg('k3on', ARRAY[pg_temp.claude()], 'ip-k3');
+    r := r || jsonb_build_object('K3_disabled_refuses_registration', pg_temp.pass(
+      pg_temp.j(t) = '{"ok": false, "error": "busy"}'::jsonb
+      AND pg_temp.j(t2) = '{"ok": false, "error": "invalid_client_metadata"}'::jsonb
+      AND NOT EXISTS (SELECT 1 FROM public.mcp_oauth_clients WHERE client_id IN (pg_temp.cid('k3'), pg_temp.cid('k3w')))
+      AND pg_temp.err(t3) = 'OK' AND n0 = (SELECT pg_temp.nctr()) - 2,
+      t || ' / ' || t2 || ' / ' || t3));
+    RAISE EXCEPTION USING ERRCODE = 'T4238';
+  EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('K3_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  -- ===== K4 (BACKLOG-4259): authorization request lifetime 180 s =====
+  BEGIN
+    PERFORM pg_temp.reg('k4', ARRAY[pg_temp.claude()], 'ipr-k4');
+    t := pg_temp.beg('k4', pg_temp.claude(), 'b-k4o');
+    t2 := pg_temp.beg('k4', pg_temp.claude(), 'b-k4y');
+    ok := (pg_temp.j(t) -> 'expires_in') = '180'::jsonb
+      AND (SELECT expires_at - created_at FROM public.mcp_authorization_requests WHERE id = pg_temp.j(t) ->> 'request_id') = interval '180 seconds';
+    -- age each request relative to what begin stored: 181 s old and 179 s old
+    UPDATE public.mcp_authorization_requests SET created_at = created_at - interval '181 seconds', expires_at = expires_at - interval '181 seconds'
+     WHERE id = pg_temp.j(t) ->> 'request_id';
+    UPDATE public.mcp_authorization_requests SET created_at = created_at - interval '179 seconds', expires_at = expires_at - interval '179 seconds'
+     WHERE id = pg_temp.j(t2) ->> 'request_id';
+    t3 := pg_temp.vw(A, pg_temp.j(t) ->> 'request_id', 'b-k4o');
+    t4 := pg_temp.vw(A, pg_temp.j(t2) ->> 'request_id', 'b-k4y');
+    t5 := pg_temp.appr(A, pg_temp.j(t2) ->> 'request_id', 'b-k4y', pg_temp.j(t4) ->> 'nonce', 'c-k4y');
+    r := r || jsonb_build_object('K4_request_lifetime', pg_temp.pass(
+      ok AND pg_temp.err(t3) = 'request_invalid' AND pg_temp.err(t4) = 'OK' AND pg_temp.err(t5) = 'OK',
+      'begin=' || t || ' older=' || pg_temp.err(t3) || ' younger=' || pg_temp.err(t4) || ' approve_younger=' || pg_temp.err(t5)));
+    RAISE EXCEPTION USING ERRCODE = 'T4238';
+  EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('K4_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
+  END;
+
+  -- ===== K5 (BACKLOG-4259): the view says when completing the request replaces a connection =====
+  BEGIN
+    s := '';
+    PERFORM pg_temp.reg('k5n', ARRAY[pg_temp.claude()], 'ipr-k5n');
+    t := pg_temp.beg('k5n', pg_temp.claude(), 'b-k5n');
+    t2 := pg_temp.vw(A, pg_temp.j(t) ->> 'request_id', 'b-k5n');
+    ok := (pg_temp.j(t2) -> 'replaces_existing') = 'false'::jsonb; s := s || 'none=' || coalesce(pg_temp.j(t2) ->> 'replaces_existing', t2);
+    c := pg_temp.connect(A, 'k5a');
+    ok := ok AND (c ->> 'ok')::boolean;
+    -- a new registration of the same app (new client id), same redirect address
+    PERFORM pg_temp.reg('k5b', ARRAY[pg_temp.claude(), pg_temp.gpt()], 'ipr-k5b');
+    t := pg_temp.beg('k5b', pg_temp.claude(), 'b-k5b');
+    t2 := pg_temp.vw(A, pg_temp.j(t) ->> 'request_id', 'b-k5b');
+    ok := ok AND (pg_temp.j(t2) -> 'replaces_existing') = 'true'::jsonb; s := s || ' same_redirect=' || coalesce(pg_temp.j(t2) ->> 'replaces_existing', t2);
+    t := pg_temp.beg('k5b', pg_temp.gpt(), 'b-k5g');
+    t2 := pg_temp.vw(A, pg_temp.j(t) ->> 'request_id', 'b-k5g');
+    ok := ok AND (pg_temp.j(t2) -> 'replaces_existing') = 'false'::jsonb; s := s || ' other_redirect=' || coalesce(pg_temp.j(t2) ->> 'replaces_existing', t2);
+    t := pg_temp.beg('k5b', pg_temp.claude(), 'b-k5u');
+    t2 := pg_temp.vw(B, pg_temp.j(t) ->> 'request_id', 'b-k5u');
+    ok := ok AND (pg_temp.j(t2) -> 'replaces_existing') = 'false'::jsonb; s := s || ' other_user=' || coalesce(pg_temp.j(t2) ->> 'replaces_existing', t2);
+    -- a pending (not yet exchanged) connection is not replaced
+    UPDATE public.mcp_connections SET status = 'pending', activated_at = NULL WHERE client_id = pg_temp.cid('k5a');
+    t := pg_temp.beg('k5b', pg_temp.claude(), 'b-k5p');
+    t2 := pg_temp.vw(A, pg_temp.j(t) ->> 'request_id', 'b-k5p');
+    ok := ok AND (pg_temp.j(t2) -> 'replaces_existing') = 'false'::jsonb; s := s || ' pending=' || coalesce(pg_temp.j(t2) ->> 'replaces_existing', t2);
+    r := r || jsonb_build_object('K5_view_replaces_existing', pg_temp.pass(ok, s));
+    RAISE EXCEPTION USING ERRCODE = 'T4238';
+  EXCEPTION WHEN SQLSTATE 'T4238' THEN NULL; WHEN OTHERS THEN r := r || jsonb_build_object('K5_crash', 'ERR ' || SQLSTATE || ' ' || SQLERRM);
   END;
 
   -- ===== content-free log =====

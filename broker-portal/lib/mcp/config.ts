@@ -4,6 +4,8 @@
  * changes.
  */
 
+import { isStrongSecret } from './secretStrength';
+
 /**
  * MCP_PUBLIC_ORIGIN as an origin, or null when it is unset or is not an https
  * origin with no path, query, fragment or credentials.
@@ -23,9 +25,29 @@ export function configuredOrigin(): string | null {
   return url.origin;
 }
 
-/** The endpoint exists only when MCP_ENABLED is exactly "true" and MCP_PUBLIC_ORIGIN is an https origin. */
+let weakSecretLogged = false;
+
+/**
+ * True when MCP_PORTAL_SECRET is set but fails the strength rule
+ * (lib/mcp/secretStrength.ts). An unset secret is reported by oauthConfig()
+ * as missing instead.
+ */
+function portalSecretRefused(): boolean {
+  const raw = process.env.MCP_PORTAL_SECRET;
+  if (!raw || isStrongSecret(raw)) return false;
+  if (!weakSecretLogged) {
+    weakSecretLogged = true;
+    console.error('[mcp] MCP_PORTAL_SECRET does not meet the strength rule; MCP stays off');
+  }
+  return true;
+}
+
+/**
+ * The endpoint exists only when MCP_ENABLED is exactly "true", MCP_PUBLIC_ORIGIN
+ * is an https origin, and MCP_PORTAL_SECRET is not a set-but-weak value.
+ */
 export function mcpEnabled(): boolean {
-  return process.env.MCP_ENABLED === 'true' && configuredOrigin() !== null;
+  return process.env.MCP_ENABLED === 'true' && configuredOrigin() !== null && !portalSecretRefused();
 }
 
 /**

@@ -122,7 +122,7 @@ describe('H9: success', () => {
   it('sets the binding cookie with its flags', async () => {
     const res = await get(query(GOOD));
     expect(res.headers.get('set-cookie')).toMatch(
-      /^__Host-kpr_mcp_bind=kpr_bd_[A-Za-z0-9_-]{43}; HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=600$/
+      /^__Host-kpr_mcp_bind=kpr_bd_[A-Za-z0-9_-]{43}; HttpOnly; Secure; SameSite=Lax; Path=\/; Max-Age=180$/
     );
   });
 
@@ -261,7 +261,7 @@ describe('H7: request and database failures show a page, not a redirect', () => 
   it.each([
     ['a transport error', { data: null, error: postgrestFetchError(PLANTED_PLAIN).error }],
     ['a thrown error', null],
-    ['ok as a string', { data: { ok: 'true', request_id: REQUEST_ID, expires_in: 600 }, error: null }],
+    ['ok as a string', { data: { ok: 'true', request_id: REQUEST_ID, expires_in: 180 }, error: null }],
     ['ok without expires_in', { data: { ok: true, request_id: REQUEST_ID }, error: null }],
     ['an unknown page code', { data: authorizePage('access_denied'), error: null }],
     ['a page code as a redirect', { data: authorizeRedirect('invalid_client', REDIRECT_URI, null), error: null }],

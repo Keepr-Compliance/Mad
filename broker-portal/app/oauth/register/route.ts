@@ -8,7 +8,7 @@
  */
 
 import { ipDigest, newClientId, toBytea } from '@/lib/mcp/oauth/crypto';
-import { clientIp } from '@/lib/mcp/oauth/clientIp';
+import { clientIp, rateLimitAddress } from '@/lib/mcp/oauth/clientIp';
 import { withOAuthRoute, type LogFields } from '@/lib/mcp/oauth/guard';
 import { mediaType, oauthError, oauthJson, readBodyText } from '@/lib/mcp/oauth/http';
 import { dbCode, errorNameTag, filterKeys, REGISTER_LOG_KEYS } from '@/lib/mcp/oauth/log';
@@ -75,7 +75,7 @@ const route = withOAuthRoute('register', ['POST'], async (req, cfg, log) => {
     clientId: newClientId(),
     clientName,
     redirectUris,
-    ipSha256: toBytea(ipDigest(cfg.pepper, clientIp(req))),
+    ipSha256: toBytea(ipDigest(cfg.pepper, rateLimitAddress(clientIp(req)))),
   });
 
   switch (result.kind) {

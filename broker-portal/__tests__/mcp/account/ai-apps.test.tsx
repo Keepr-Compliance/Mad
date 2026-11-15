@@ -135,7 +135,8 @@ describe('the list', () => {
     const [a, b] = rows();
     expect(a).toHaveTextContent('Claude (Anthropic)');
     expect(a).toHaveTextContent(AI_APPS.sendsBackTo('claude.ai'));
-    expect(a).toHaveTextContent(AI_APPS.connected('Nov 10, 2026'));
+    expect(a).toHaveTextContent(AI_APPS.connected('Nov 10, 2026, 6:30 PM'));
+    expect(b).toHaveTextContent('Approved Nov 1, 2026, 9:00 AM UTC');
     expect(a).toHaveTextContent(AI_APPS.notUsed);
     expect(b).toHaveTextContent('ChatGPT (OpenAI)');
     expect(b).toHaveTextContent(AI_APPS.lastUsed('Nov 11, 2026'));

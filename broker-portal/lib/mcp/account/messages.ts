@@ -16,8 +16,9 @@ export function isProvider(v: unknown): v is Provider {
 
 export const CONSENT = {
   lead: (provider: string) => `${provider} wants to read your Keepr data.`,
-  nameLabel: 'The app calls itself: ',
-  returnTo: (host: string) => `When you choose, you go back to ${host}.`,
+  nameLabel: 'Name the app gave itself (not checked by Keepr): ',
+  nameHost: (host: string) => `. It sends you back to ${host}.`,
+  replaces: (provider: string) => `You already connected ${provider}. Allowing this replaces that connection.`,
   onlyIf: (provider: string) =>
     `Only continue if you just started connecting Keepr from ${provider}. Otherwise choose Deny.`,
   scope:
@@ -60,7 +61,7 @@ export const AI_APPS = {
   intro: 'AI apps you allowed to read your Keepr data.',
   nameLabel: 'The app calls itself: ',
   sendsBackTo: (host: string) => `Sends you back to ${host}`,
-  connected: (date: string) => `Connected ${date}`,
+  connected: (date: string) => `Approved ${date} UTC`,
   lastUsed: (date: string) => `Last used ${date}`,
   notUsed: 'Not used yet',
   disconnect: 'Disconnect',

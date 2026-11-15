@@ -1,5 +1,6 @@
 import * as Sentry from '@sentry/nextjs';
 import { scrubBreadcrumb, scrubEvent, scrubSpan, scrubTransaction } from './lib/mcp/sentryScrub';
+import { clientReplayIntegrations } from './lib/sentry/replayRoutes';
 
 /**
  * Sentry client-side SDK initialization for broker-portal.
@@ -57,9 +58,8 @@ Sentry.init({
   replaysSessionSampleRate: 0.01,
   replaysOnErrorSampleRate: 1.0,
 
-  integrations: [
-    Sentry.replayIntegration(),
-  ],
+  // BACKLOG-4259: no replay on the OAuth and AI apps pages (lib/sentry/replayRoutes.ts).
+  integrations: clientReplayIntegrations((opts) => Sentry.replayIntegration(opts)),
 
   // Strip emails from event payloads before they leave the browser.
   // BACKLOG-4238: the MCP / OAuth / consent-page scrub runs first; an event

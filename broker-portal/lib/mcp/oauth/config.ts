@@ -2,7 +2,8 @@
  * OAuth server configuration (BACKLOG-4238), read per request.
  *
  * Three states:
- * - 'off': MCP_ENABLED is not exactly "true", or MCP_PUBLIC_ORIGIN is not an https origin.
+ * - 'off': MCP_ENABLED is not exactly "true", MCP_PUBLIC_ORIGIN is not an https origin,
+ *   or MCP_PORTAL_SECRET is set but fails the strength rule (mcpEnabled()).
  * - 'misconfigured': a required variable is missing or malformed; `missing` lists names only.
  * - 'ok': everything the OAuth routes need.
  *
@@ -10,6 +11,7 @@
  */
 
 import { configuredOrigin, MCP_PATH, mcpEnabled } from '@/lib/mcp/config';
+import { isStrongBytes } from '@/lib/mcp/secretStrength';
 
 export type OAuthConfig =
   | { state: 'off' }
@@ -26,12 +28,16 @@ export type OAuthConfig =
 
 const BASE64URL = /^[A-Za-z0-9_-]+$/;
 
-/** MCP_TOKEN_PEPPER decoded from base64url; null unless it is exactly 32 bytes. */
+/**
+ * MCP_TOKEN_PEPPER decoded from base64url; null unless it is exactly 32 bytes
+ * and meets the strength rule (lib/mcp/secretStrength.ts).
+ */
 function decodePepper(raw: string | undefined): Buffer | null {
   if (!raw || !BASE64URL.test(raw)) return null;
   const buf = Buffer.from(raw, 'base64url');
   if (buf.length !== 32) return null;
   if (buf.toString('base64url') !== raw) return null;
+  if (!isStrongBytes(buf)) return null;
   return buf;
 }
 

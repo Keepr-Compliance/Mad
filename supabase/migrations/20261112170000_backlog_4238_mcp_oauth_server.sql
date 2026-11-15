@@ -432,6 +432,9 @@ REVOKE ALL ON FUNCTION public._mcp_disconnect_all_for(uuid, text) FROM PUBLIC, a
 -- ---------------------------------------------------------------------------
 -- Returns {ok, client_id, client_name, redirect_uris}
 -- errors: invalid_client_metadata | invalid_redirect_uri | rate_limited | busy
+-- busy is also the answer while mcp_settings.enabled is off.
+-- Order: secret, enabled, arguments, redirect allow-list, then the counters: a refused request
+-- adds to no counter.
 -- Intentionally callable by anon: OAuth dynamic client registration
 CREATE OR REPLACE FUNCTION public.mcp_register_client(p_secret text, p_client_id text, p_client_name text, p_redirect_uris text[], p_ip_sha256 bytea)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $fn$
@@ -441,15 +444,11 @@ BEGIN
   IF public._mcp_secret_ok(p_secret) IS NOT TRUE THEN
     RETURN public._mcp_refuse('invalid_client_metadata');
   END IF;
+  IF (SELECT s.enabled FROM public.mcp_settings s WHERE s.id) IS NOT TRUE THEN
+    RETURN public._mcp_refuse('busy');
+  END IF;
   IF (octet_length(p_ip_sha256) = 32) IS NOT TRUE THEN
     RETURN public._mcp_refuse('invalid_client_metadata');
-  END IF;
-  v_b := public._mcp_bump('reg_ip:' || encode(p_ip_sha256, 'hex'), interval '1 hour', 60);
-  IF v_b IS NOT DISTINCT FROM 'ok' THEN
-    v_b := public._mcp_bump('reg_all', interval '1 day', 500);
-  END IF;
-  IF v_b IS DISTINCT FROM 'ok' THEN
-    RETURN public._mcp_refuse(coalesce(v_b, 'busy'));
   END IF;
   IF (p_client_id ~ '^kpr_c_[A-Za-z0-9_-]{22}$'
       AND char_length(p_client_name) BETWEEN 1 AND 100) IS NOT TRUE THEN
@@ -460,6 +459,13 @@ BEGIN
       AND NOT EXISTS (SELECT 1 FROM unnest(p_redirect_uris) u(uri)
                        WHERE NOT EXISTS (SELECT 1 FROM public.mcp_redirect_allowlist a WHERE a.redirect_uri = u.uri))) IS NOT TRUE THEN
     RETURN public._mcp_refuse('invalid_redirect_uri');
+  END IF;
+  v_b := public._mcp_bump('reg_ip:' || encode(p_ip_sha256, 'hex'), interval '1 hour', 60);
+  IF v_b IS NOT DISTINCT FROM 'ok' THEN
+    v_b := public._mcp_bump('reg_all', interval '1 day', 500);
+  END IF;
+  IF v_b IS DISTINCT FROM 'ok' THEN
+    RETURN public._mcp_refuse(coalesce(v_b, 'busy'));
   END IF;
   INSERT INTO public.mcp_oauth_clients (client_id, client_name, redirect_uris, ip_sha256)
   VALUES (p_client_id, p_client_name, p_redirect_uris, p_ip_sha256)
@@ -520,8 +526,8 @@ BEGIN
   INSERT INTO public.mcp_authorization_requests (id, client_id, redirect_uri, code_challenge, resource, scope, state,
                                                  browser_binding_sha256, expires_at)
   VALUES (v_id, p_client_id, p_redirect_uri, p_code_challenge, p_resource, p_scope, p_state,
-          p_browser_binding_sha256, now() + interval '10 minutes');
-  RETURN jsonb_build_object('ok', true, 'request_id', v_id, 'expires_in', 600);
+          p_browser_binding_sha256, now() + interval '180 seconds');
+  RETURN jsonb_build_object('ok', true, 'request_id', v_id, 'expires_in', 180);
 END
 $fn$;
 REVOKE ALL ON FUNCTION public.mcp_authorize_begin(text, text, text, text, text, text, text, text, bytea, bytea) FROM PUBLIC, anon, authenticated, service_role;
@@ -779,7 +785,9 @@ GRANT EXECUTE ON FUNCTION public.mcp_get_status(text, bytea, text) TO anon;
 -- ---------------------------------------------------------------------------
 -- Signed-in functions (broker portal user)
 -- ---------------------------------------------------------------------------
--- Returns {ok, request_id, client_name, provider, redirect_host, scope, notice_version, nonce}
+-- Returns {ok, request_id, client_name, provider, redirect_host, scope, notice_version, nonce, replaces_existing}
+-- replaces_existing: this user has an active connection with the same redirect address, which
+-- mcp_exchange_code replaces when this request completes.
 -- errors: not_signed_in | impersonating | disabled | request_invalid
 CREATE OR REPLACE FUNCTION public.mcp_authorize_view(p_request_id text, p_browser_binding_sha256 bytea)
 RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = '' AS $fn$
@@ -819,7 +827,11 @@ BEGIN
            'redirect_host', substring(v_req.redirect_uri FROM '^https://([^/]+)'),
            'scope', v_req.scope,
            'notice_version', s.notice_version,
-           'nonce', v_nonce)
+           'nonce', v_nonce,
+           'replaces_existing', EXISTS (SELECT 1 FROM public.mcp_connections x
+                                         WHERE x.user_id = v_uid
+                                           AND x.redirect_uri = v_req.redirect_uri
+                                           AND x.status = 'active'))
     INTO v_r
     FROM public.mcp_oauth_clients c
     JOIN public.mcp_redirect_allowlist a ON a.redirect_uri = v_req.redirect_uri

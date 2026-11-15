@@ -19,6 +19,7 @@ import { CONSENT, M_C, PROVIDER_LABELS } from '@/lib/mcp/account/messages';
 import { logAccount } from '@/lib/mcp/account/logging';
 import { readAccountRequest } from '@/lib/mcp/account/request';
 import { viewRequest } from '@/lib/mcp/account/rpc';
+import { ReplayOff } from '@/components/sentry/ReplayOff';
 import { ConsentForm } from './ConsentForm';
 
 export const dynamic = 'force-dynamic';
@@ -28,6 +29,7 @@ const NOTICE_VERSION = 1;
 function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="max-w-2xl mx-auto space-y-6">
+      <ReplayOff />
       <PageHeader phoneHideTitle title={PAGE_TITLES.connectAiApp} />
       <Card>
         <CardContent className="space-y-3 text-sm text-gray-800">{children}</CardContent>
@@ -89,11 +91,15 @@ export default async function ConnectAiAppPage({ params }: { params: Promise<{ r
   return (
     <Shell>
       <p className="text-base font-semibold text-gray-900">{CONSENT.lead(provider)}</p>
-      <p>{CONSENT.returnTo(view.redirectHost)}</p>
-      <p>
+      <p data-testid="consent-name-host">
         {CONSENT.nameLabel}
-        <bdi>{view.clientName}</bdi>
+        &ldquo;<bdi>{view.clientName}</bdi>&rdquo;{CONSENT.nameHost(view.redirectHost)}
       </p>
+      {view.replacesExisting && (
+        <p role="note" className="font-semibold text-gray-900">
+          {CONSENT.replaces(provider)}
+        </p>
+      )}
       <p>{CONSENT.onlyIf(provider)}</p>
       <p>{CONSENT.scope}</p>
       <p>{CONSENT.agreement(provider)}</p>
