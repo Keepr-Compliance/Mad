@@ -8,11 +8,10 @@
  */
 export const NOTICE_TEXTS: Readonly<Record<number, string>> = Object.freeze({
   1:
-    "Keepr will upload your deal details, the people on each deal, your checklists and todos, and your contact list (names, companies, email addresses and phone numbers of the people you saved) to Keepr Cloud as you work, before you submit. " +
-    "Linked emails, texts and files are not uploaded yet. Your online copy belongs to your account. Your brokerage cannot see it. " +
-    "AI apps you connect, like Claude or ChatGPT, can read it, and what they read is sent to that app's company. " +
-    "When a later version also uploads linked emails, texts or files, or Gmail email, Keepr asks again. Saving pauses until you agree to the new notice. " +
-    "Turning this off deletes the online copy from all your computers.",
+    "Keepr Cloud keeps a copy of your deals online: details, prices, commission, checklists (including private ones), todos, and the people on each deal with their names, companies, email addresses, phone numbers and notes. " +
+    "Your emails, texts, files and contact list are not uploaded. " +
+    "AI apps you connect, like Claude or ChatGPT, can read this copy, including other people's contact details, and what they read is sent to that app's company. " +
+    "Turning Keepr Cloud off deletes the online copy and disconnects every AI app.",
 });
 
 export const KEEPR_CLOUD_COPY = {

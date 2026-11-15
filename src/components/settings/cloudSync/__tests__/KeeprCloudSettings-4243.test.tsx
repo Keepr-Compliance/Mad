@@ -69,8 +69,24 @@ describe("KeeprCloudSettings", () => {
     await waitFor(() => expect(cloud.turnOn).toHaveBeenCalledWith(1));
   });
 
-  it("the notice names the contact list (coordinator wording, v1)", () => {
-    expect(NOTICE_TEXTS[1]).toContain("your contact list (names, companies, email addresses and phone numbers of the people you saved)");
+  it("notice v1 is the approved wording, sentence for sentence (BACKLOG-4245)", () => {
+    expect(NOTICE_TEXTS[1]).toBe(
+      "Keepr Cloud keeps a copy of your deals online: details, prices, commission, checklists (including private ones), todos, and the people on each deal with their names, companies, email addresses, phone numbers and notes. " +
+        "Your emails, texts, files and contact list are not uploaded. " +
+        "AI apps you connect, like Claude or ChatGPT, can read this copy, including other people's contact details, and what they read is sent to that app's company. " +
+        "Turning Keepr Cloud off deletes the online copy and disconnects every AI app.",
+    );
+  });
+
+  it("notice v1 says the contact list is not uploaded and never that it is (BACKLOG-4245)", async () => {
+    expect(NOTICE_TEXTS[1]).toContain("contact list are not uploaded");
+    expect(NOTICE_TEXTS[1]).toContain("including private ones");
+    expect(NOTICE_TEXTS[1]).not.toMatch(/upload[a-z]* your [^.]*contact list/i);
+    expect(NOTICE_TEXTS[1]).not.toContain("your contact list (");
+    render(<KeeprCloudSettings cloud={fakeCloud(VIEW)} />);
+    fireEvent.click(screen.getByRole("switch"));
+    const shown = await screen.findByText(NOTICE_TEXTS[1]);
+    expect(shown.textContent).toContain("Your emails, texts, files and contact list are not uploaded.");
   });
 
   it("on: the switch asks to turn off; confirming calls turnOff", async () => {
