@@ -323,16 +323,29 @@ describe("C-DET the detector block is decided on the detector surface", () => {
 });
 
 describe("REFUSE a report the server would refuse is not built", () => {
-  it("a pre-release app version, and a negative count", async () => {
+  it("a malformed app version, and a negative count", async () => {
     deal("t1", A1);
     link("t1", dealMail("agent@client.example", A1, 1));
     const r = await baseline(BUNDLED_SENDER_RULES);
     const { score, detector } = scoreBoth(r, BUNDLED_SENDER_RULES);
     expect(buildPilotReport(score, detector, APP_VERSION).ok).toBe(true);
-    expect(buildPilotReport(score, detector, "2.47.0-beta.1")).toEqual({ ok: false, reason: "app_version" });
+    expect(buildPilotReport(score, detector, "v2.47.0")).toEqual({ ok: false, reason: "app_version" });
+    expect(buildPilotReport(score, detector, "2.47")).toEqual({ ok: false, reason: "app_version" });
     expect(buildPilotReport({ ...score, cleanupUnanswered: -1 }, detector, APP_VERSION)).toEqual({
       ok: false,
       reason: "cleanup.unanswered",
     });
+  });
+});
+
+describe("BACKLOG-4245 a prerelease app version is sent as its release part", () => {
+  it("a beta build's report is built, with the release version", async () => {
+    deal("t1", A1);
+    link("t1", dealMail("agent@client.example", A1, 1));
+    const r = await baseline(BUNDLED_SENDER_RULES);
+    const { score, detector } = scoreBoth(r, BUNDLED_SENDER_RULES);
+    const built = buildPilotReport(score, detector, "2.50.0-beta.1");
+    expect(built.ok).toBe(true);
+    if (built.ok) expect(built.report.app_version).toBe("2.50.0");
   });
 });

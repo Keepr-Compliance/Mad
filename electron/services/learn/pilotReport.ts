@@ -11,6 +11,8 @@
  * What is sent: integers, booleans, {k, n} pairs, and exactly three strings:
  * `app_version` (x.y.z), `sender_rules_source` (download | cache | bundled) and
  * each mailbox `provider` (gmail | outlook | unknown). Map keys are fixed names.
+ * A prerelease app version (`2.50.0-beta.1`) is sent as its release part
+ * (`2.50.0`), the only form the schema and the server accept (BACKLOG-4245).
  * Left out: dates (earliest / latest day, the legacy cutoff day), the Copy
  * block, Wilson intervals (the server recomputes from k / n), mailbox labels,
  * run / detection / account / user / org ids, addresses, rule content.
@@ -188,6 +190,15 @@ export type BuildPilotReportResult =
   | { ok: false; reason: string };
 
 /**
+ * BACKLOG-4245: `x.y.z-pre` / `x.y.z+build` -> `x.y.z`. Anything else is
+ * returned unchanged (and the schema decides).
+ */
+export function pilotAppVersion(appVersion: string): string {
+  const m = /^([0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,6})[-+][0-9A-Za-z.+-]+$/.exec(appVersion);
+  return m ? m[1] : appVersion;
+}
+
+/**
  * The report for one score. `detector` = the census on the detector surface
  * (scoreRunWithDetector). Returns ok:false (nothing to send) when the result
  * would not pass the server's schema.
@@ -195,7 +206,7 @@ export type BuildPilotReportResult =
 export function buildPilotReport(score: LearnScore, detector: SenderCensus, appVersion: string): BuildPilotReportResult {
   const candidate = {
     schema: PILOT_REPORT_SCHEMA_VERSION,
-    app_version: appVersion,
+    app_version: pilotAppVersion(appVersion),
     learn_rules_version: score.ruleVersion,
     sender_rules_version: score.senderRulesVersion,
     sender_rules_source: score.senderRulesSource,
