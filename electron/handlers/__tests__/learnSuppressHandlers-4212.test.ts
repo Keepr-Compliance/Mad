@@ -15,6 +15,7 @@
  *   H7  Stop hiding for a sender not on the list is refused
  *   H8  "Delete my answers" (PR2's clear) empties the list and clears overrides
  *   H9  no session: both channels refuse
+ *   H10 the real_estate veto and own-address exclusion hold in BOTH lists (SR R1)
  */
 import fs from "fs";
 import path from "path";
@@ -79,15 +80,17 @@ function mail(sender: string, user: string): string {
   return id;
 }
 
+function answerAs(sender: string, a: "newsletter_spam" | "real_estate", user = USER): void {
+  const emailId = mail(sender, user);
+  insertBulkSample(user, [{ source: "gmail", external_id: `ext-${emailId}` }], 1);
+  const r = db
+    .prepare(`SELECT id FROM learn_bulk_answers WHERE user_id = ? AND external_id = ? AND deleted_at IS NULL`)
+    .get(user, `ext-${emailId}`) as { id: string };
+  expect(answerBulk(user, r.id, a)).toBe(true);
+}
+
 function newsletters(sender: string, n: number, user = USER): void {
-  for (let i = 0; i < n; i++) {
-    const emailId = mail(sender, user);
-    insertBulkSample(user, [{ source: "gmail", external_id: `ext-${emailId}` }], 1);
-    const r = db
-      .prepare(`SELECT id FROM learn_bulk_answers WHERE user_id = ? AND external_id = ? AND deleted_at IS NULL`)
-      .get(user, `ext-${emailId}`) as { id: string };
-    expect(answerBulk(user, r.id, "newsletter_spam")).toBe(true);
-  }
+  for (let i = 0; i < n; i++) answerAs(sender, "newsletter_spam", user);
 }
 
 type Reply = { success: boolean; error?: string; senders?: Array<{ senderKey: string; newsletterCount: number; hidden: boolean }>; hidden?: boolean };
@@ -139,6 +142,20 @@ describe("H1 list", () => {
     await listOf();
     expect(JSON.stringify(logCalls)).not.toContain("mail.example");
     expect(logCalls.length).toBeGreaterThan(0);
+  });
+});
+
+describe("H10 Settings list and scan list agree on the exclusions (SR R1)", () => {
+  it("a vetoed sender and the user's own address are absent from both; a plain sender is in both", async () => {
+    const VETOED = "vetoed@list.example";
+    const OWN = "me@example.test"; // USER's users_local email (beforeEach)
+    newsletters(VETOED, 2);
+    answerAs(VETOED, "real_estate");
+    newsletters(OWN, 2);
+    newsletters(NEWS, 2);
+    const settings = (await listOf())?.map((r) => r.senderKey);
+    expect(settings).toEqual([NEWS]);
+    expect(scanList()).toEqual([NEWS]);
   });
 });
 
