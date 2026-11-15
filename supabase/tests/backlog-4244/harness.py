@@ -499,7 +499,7 @@ def compose(with_mutants=True, only=None):
     b.append(block('OBS_window', '    PERFORM pg_temp.p_window_sweep();\n    v := pg_temp.obs_window();'))
     b.append(block('OBS_timing', '    PERFORM pg_temp.p_clean_timing();\n    v := pg_temp.obs_timing();'))
     b.append(block('OBS_ignorables', '    v := pg_temp.obs_ignorables();'))
-    b.append(block('OBS_ign', '    PERFORM pg_temp.p_ignorables();\n    PERFORM pg_temp.p_digits();\n    v := pg_temp.obs_ign();'))
+    b.append(block('OBS_ign', '    PERFORM pg_temp.p_digits();\n    v := pg_temp.obs_ign();'))
     b.append(block('OBS_window_joiners', '    PERFORM pg_temp.p_window_joiners();\n    v := pg_temp.obs_window_joiners();'))
     b.append(block('FX_get_null_install', "    v := pg_temp.gd('a1', pg_temp.null_install_deal()::text);"))
     if with_mutants:

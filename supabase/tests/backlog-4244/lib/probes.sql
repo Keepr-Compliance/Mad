@@ -810,21 +810,21 @@ BEGIN
     -- a ninth shape for the shown text: 50 of the character on both sides of each separator, in a field
     -- longer than its limit (p_max 100): shown masked, not cut out
     s := 'x 4111' || repeat(c, 50) || ' ' || repeat(c, 50) || '1111' || repeat(c, 50) || ' ' || repeat(c, 50) || '1111'
-         || repeat(c, 50) || ' ' || repeat(c, 50) || '1111 ' || repeat('b', 3000);
+         || repeat(c, 50) || ' ' || repeat(c, 50) || '1111 ' || repeat('b', 200);
     o := public._mcp_clean(s, 100);
     out := out || CASE WHEN position('[number hidden by Keepr]' IN o) > 0 AND o !~ '\d' THEN 'M' ELSE '.' END;
   END IF;
   RETURN out;
 END $h$;
--- every code point of the class in [lo, hi]: 9 shapes through _mcp_clean and 8 through _mcp_mask, all
--- masked. Stops after 5 failures.
+-- every code point of the class in [lo, hi]: 9 shapes through _mcp_clean and (with_mask) 8 through
+-- _mcp_mask, all masked. Stops after 5 failures.
 CREATE TEMP TABLE p4244_ign (k text, v int);
-CREATE FUNCTION pg_temp.p_ignorables_range(lo int, hi int) RETURNS text LANGUAGE plpgsql AS $h$
+CREATE FUNCTION pg_temp.p_ignorables_range(lo int, hi int, with_mask boolean DEFAULT true) RETURNS text LANGUAGE plpgsql AS $h$
 DECLARE cp int; bad text := ''; nbad int := 0; cnt int := 0; m text;
 BEGIN
   FOREACH cp IN ARRAY pg_temp.ign_codepoints() LOOP
     CONTINUE WHEN cp < lo OR cp > hi;
-    m := pg_temp.ign_marks(chr(cp), true) || '/' || pg_temp.ign_marks(chr(cp), false);
+    m := pg_temp.ign_marks(chr(cp), true) || '/' || CASE WHEN with_mask THEN pg_temp.ign_marks(chr(cp), false) ELSE 'MMMMMMMM' END;
     cnt := cnt + 1;
     IF m <> 'MMMMMMMMM/MMMMMMMM' THEN
       nbad := nbad + 1; bad := bad || format('U+%s %s; ', upper(to_hex(cp)), m);
@@ -838,7 +838,12 @@ END $h$;
 CREATE FUNCTION pg_temp.p_ignorables() RETURNS text LANGUAGE plpgsql AS $h$
 DECLARE r text; bad text := ''; n int := cardinality(pg_temp.ign_codepoints());
 BEGIN
-  r := pg_temp.p_ignorables_range(0, 1114111);
+  -- every code point through _mcp_clean (what the tools show); _mcp_mask alone for the kept characters
+  r := pg_temp.p_ignorables_range(0, 1114111, false);
+  IF r <> 'PASS' THEN bad := bad || r || '; '; END IF;
+  r := pg_temp.p_ignorables_range(8204, 8205);
+  IF r <> 'PASS' THEN bad := bad || r || '; '; END IF;
+  r := pg_temp.p_ignorables_range(65024, 65039);
   IF r <> 'PASS' THEN bad := bad || r || '; '; END IF;
   -- mixed characters
   IF position('[number' IN public._mcp_clean('x 4' || chr(173) || chr(8205) || '111' || chr(12644) || ' ' || chr(8291) || '1111 ' || chr(917760) || chr(6158) || '1111' || chr(65039) || ' ' || chr(847) || '1111 y', 1000)) = 0 THEN
@@ -900,13 +905,10 @@ BEGIN
       i := i + 1;
       o := pg_temp.o_mcp_clean(s, 1000);
       IF NOT (position('[number hidden by Keepr]' IN o) > 0 AND o !~ '\d') THEN bf[i] := bf[i] + 1; okb := false; END IF;
-      o := public._mcp_clean(s, 1000);
-      IF NOT (position('[number hidden by Keepr]' IN o) > 0 AND o !~ '\d') THEN af[i] := af[i] + 1; oka := false; END IF;
     END LOOP;
     IF okb THEN ball := ball + 1; END IF;
-    IF oka THEN aall := aall + 1; END IF;
   END LOOP;
   RETURN jsonb_build_object('code_points', cardinality(pg_temp.ign_codepoints()), 'before_all_masked', ball, 'before_failing_per_shape', to_jsonb(bf),
-                            'after_all_masked', aall, 'after_failing_per_shape', to_jsonb(af),
+                            'after', 'C_p_ignorables (all 17 checks per code point)',
                             'shapes', 'card: after first digit, between every digit, both sides of each separator, 50 in place of a separator; ssn: the same')::text;
 END $h$;

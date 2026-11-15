@@ -101,8 +101,9 @@ Known behaviour: `address_contains` searches the stored address, while the addre
 masked, so a search can match digits that the output shows as `[number hidden by Keepr]` (the person's
 own data only).
 
-`OBS_ignorables` compares the helpers with those in the file named by the environment variable
-`P4244_BEFORE` (the migration as at an earlier commit); without it both columns show the current helpers.
+`OBS_ignorables` runs the 8 shapes for every code point of the class through the helpers in the file
+named by the environment variable `P4244_BEFORE` (the migration as at an earlier commit); without it, the
+current helpers. `C_p_ignorables` is the same check, with a ninth long-field shape, on the current helpers.
 
 Results: `results-2026-11-14.txt` (ids replaced by `<id:n>`).
 
