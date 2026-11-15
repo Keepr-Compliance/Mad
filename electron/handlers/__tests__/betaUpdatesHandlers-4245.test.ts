@@ -109,10 +109,17 @@ jest.mock("../featureGateHandlers", () => ({
 
 type Session = Record<string, unknown>;
 let mockStored: Session | null = null;
+/** When set, the next session peek waits for it (one call only). */
+let mockPeekGate: Promise<void> | null = null;
 jest.mock("../../services/sessionService", () => ({
   __esModule: true,
   default: {
-    peekSession: () => Promise.resolve(mockStored ? { status: "ok", session: mockStored } : { status: "none" }),
+    peekSession: () => {
+      const answer = () => (mockStored ? { status: "ok", session: mockStored } : { status: "none" });
+      const gate = mockPeekGate;
+      mockPeekGate = null;
+      return gate ? gate.then(answer) : Promise.resolve(answer());
+    },
     loadSession: jest.fn(async () => mockStored),
     updateSession: jest.fn(async () => true),
     getGeneration: () => 1,
@@ -198,6 +205,7 @@ afterEach(() => {
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockPeekGate = null;
   resetBetaUpdatesHandlersForTests();
   resetBetaUpdatesStateForTests();
   resetSessionListenersForTests();
@@ -437,13 +445,25 @@ describe("B1 an off write and failed saves", () => {
     await turnOn();
     expect(mockUpdater.allowPrerelease).toBe(false);
     expect(extraCheck).not.toHaveBeenCalled();
+    // An eligibility read already past its session peek, waiting on the plan.
+    let releaseRead!: (v: BetaEligibilityState) => void;
+    resolveState.mockImplementation(() => new Promise((r) => { releaseRead = r; }));
+    const read = refreshBetaEligibility(5_000);
+    await flush();
+    // The off write: its session peek and its save are both held open.
+    let openPeek!: () => void;
+    mockPeekGate = new Promise<void>((r) => { openPeek = r; });
     cloud.getPreferences.mockResolvedValueOnce({ updates: { betaUpdates: true } });
     let releaseSave!: () => void;
     cloud.syncPreferences.mockImplementationOnce(() => new Promise<void>((r) => { releaseSave = () => r(); }));
     const off = mockHandles["preferences:update"](event, USER, { updates: { betaUpdates: false } }) as Promise<unknown>;
-    resolveState.mockResolvedValue("allowed");
-    await refreshBetaEligibility(5_000);
     expect(mockUpdater.allowPrerelease).toBe(false);
+    // The eligibility answer lands inside the write.
+    releaseRead("allowed");
+    await read;
+    expect(mockUpdater.allowPrerelease).toBe(false);
+    expect(getBetaUpdatesInputs().stored).toEqual({ userId: USER, value: false });
+    openPeek();
     expect(extraCheck).not.toHaveBeenCalled();
     expect(activeIntervals()).toHaveLength(0);
     await flush();
