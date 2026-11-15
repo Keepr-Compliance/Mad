@@ -91,6 +91,14 @@ function seed(db: DatabaseType): void {
   db.prepare("INSERT INTO transactions (id, user_id, property_address, status, detection_status) VALUES ('d-2', ?, '2 Test Rd', 'active', 'pending')").run(USER);
 }
 
+/** The local half of turning Keepr Cloud on (the real writer: triggers, flag and marks in one transaction). */
+function turnOn(db: DatabaseType, userId: string = USER): void {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { enableForUser } = require("../db/cloudSyncDbService") as typeof import("../db/cloudSyncDbService");
+  enableForUser(db as never, "p", userId, { noticeVersion: 1, acceptedAt: null });
+  db.exec("DELETE FROM cloud_sync_dirty");
+}
+
 function dirtyIds(db: DatabaseType): string[] {
   return (db.prepare("SELECT transaction_id FROM cloud_sync_dirty ORDER BY transaction_id").all() as Array<{ transaction_id: string }>).map((r) => r.transaction_id);
 }
@@ -106,7 +114,7 @@ describe("Keepr Cloud on the real open path (bundled driver)", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("UPGRADE: a database at the current version without the cloud tables gains tables and triggers at the next open, with no version change and no marks", async () => {
+  it("UPGRADE: a database at the current version without the cloud tables gains the tables at the next open, no triggers until Keepr Cloud is turned on, no version change and no marks", async () => {
     const first = loadService();
     await expect(first.initialize()).resolves.toBe(true);
     const db1 = first.db as DatabaseType;
@@ -123,12 +131,13 @@ describe("Keepr Cloud on the real open path (bundled driver)", () => {
     const db = second.db as DatabaseType;
     expect((db.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }).version).toBe(version);
     expect(names(db, "table", "cloud_sync_%")).toEqual([...CLOUD_SYNC_TABLES].sort());
-    expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual(CLOUD_SYNC_TRIGGERS.map((t) => t.name).sort());
+    expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual([]);
     expect(dirtyIds(db)).toEqual([]);
-    // Never enabled: a write marks nothing. Enabled: a write marks.
+    // Never enabled: a write marks nothing. Turned on: the triggers exist and a write marks.
     db.prepare("UPDATE transactions SET property_city = 'A' WHERE id = 'd-1'").run();
     expect(dirtyIds(db)).toEqual([]);
-    db.prepare("INSERT INTO cloud_sync_settings (project_ref, user_id, enabled) VALUES ('p', ?, 1)").run(USER);
+    turnOn(db);
+    expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual(CLOUD_SYNC_TRIGGERS.map((t) => t.name).sort());
     db.prepare("UPDATE transactions SET property_city = 'B' WHERE id = 'd-1'").run();
     expect(dirtyIds(db)).toEqual(["d-1"]);
     await second.close();
@@ -139,7 +148,7 @@ describe("Keepr Cloud on the real open path (bundled driver)", () => {
     await expect(svc.initialize()).resolves.toBe(true);
     const db = svc.db as DatabaseType;
     seed(db);
-    db.prepare("INSERT INTO cloud_sync_settings (project_ref, user_id, enabled) VALUES ('p', ?, 1)").run(USER);
+    turnOn(db);
     const migrations = (svc.constructor as { MIGRATIONS: Array<{ version: number; description: string; migrate: (d: DatabaseType) => void }> }).MIGRATIONS;
     const head = migrations[migrations.length - 1].version;
     migrations.push({ version: head + 1, description: "test: throws", migrate: () => { throw new Error("test migration failure"); } });
@@ -160,7 +169,7 @@ describe("Keepr Cloud on the real open path (bundled driver)", () => {
     await expect(svc.initialize()).resolves.toBe(true);
     const db = svc.db as DatabaseType;
     seed(db);
-    db.prepare("INSERT INTO cloud_sync_settings (project_ref, user_id, enabled) VALUES ('p', ?, 1)").run(USER);
+    turnOn(db);
     expect(names(db, "trigger", "trg_cloud_sync_item_%").length).toBe(3);
     const rebuild = (d: DatabaseType, table: string) => {
       const ddl = (d.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as { sql: string }).sql;
@@ -192,7 +201,7 @@ describe("Keepr Cloud on the real open path (bundled driver)", () => {
     await expect(svc.initialize()).resolves.toBe(true);
     const db = svc.db as DatabaseType;
     seed(db);
-    db.prepare("INSERT INTO cloud_sync_settings (project_ref, user_id, enabled) VALUES ('p', ?, 1)").run(USER);
+    turnOn(db);
     db.prepare("INSERT INTO contacts (id, user_id, display_name) VALUES ('ct-4243', ?, 'Person')").run(USER);
     db.prepare("INSERT INTO transaction_contacts (id, transaction_id, contact_id) VALUES ('pt-4243', 'd-1', 'ct-4243')").run();
     const migrations = (svc.constructor as { MIGRATIONS: Array<{ version: number; description: string; migrate: (d: DatabaseType) => void }> }).MIGRATIONS;
@@ -231,7 +240,7 @@ describe("Keepr Cloud on the real open path (bundled driver)", () => {
     await expect(svc.initialize()).resolves.toBe(true);
     const d = svc.db as DatabaseType;
     seed(d);
-    d.prepare("INSERT INTO cloud_sync_settings (project_ref, user_id, enabled) VALUES ('p', ?, 1)").run(USER);
+    turnOn(d);
     d.prepare("INSERT INTO contacts (id, user_id, display_name) VALUES ('ct-v78', ?, 'Person')").run(USER);
     d.prepare("INSERT INTO transaction_contacts (id, transaction_id, contact_id) VALUES ('pt-v78', 'd-1', 'ct-v78')").run();
     expect(names(d, "trigger", "trg_cloud_sync_%")).toEqual(CLOUD_SYNC_TRIGGERS.map((t) => t.name).sort());
@@ -315,12 +324,79 @@ describe("Keepr Cloud on the real open path (bundled driver)", () => {
     await svc.close();
   });
 
+  it("REGULAR PROFILE (C-a): a fresh profile with Keepr Cloud never on opens, takes a bulk write, and opens again — no cloud trigger, no mark, the schema cookie unchanged", async () => {
+    const first = loadService();
+    await expect(first.initialize()).resolves.toBe(true);
+    const d1 = first.db as DatabaseType;
+    seed(d1);
+    d1.exec("BEGIN");
+    for (let i = 0; i < 300; i++) {
+      d1.prepare("INSERT INTO transactions (id, user_id, property_address, status, detection_status) VALUES (?, ?, 'x', 'active', 'confirmed')").run(`imp-${i}`, USER);
+      d1.prepare("INSERT INTO contacts (id, user_id, display_name) VALUES (?, ?, 'P')").run(`c-${i}`, USER);
+      d1.prepare("INSERT INTO transaction_contacts (id, transaction_id, contact_id) VALUES (?, ?, ?)").run(`p-${i}`, `imp-${i}`, `c-${i}`);
+    }
+    d1.exec("COMMIT");
+    expect(names(d1, "trigger", "trg_cloud_sync_%")).toEqual([]);
+    expect(dirtyIds(d1)).toEqual([]);
+    const cookie = d1.pragma("schema_version", { simple: true });
+    await first.close();
+    const second = loadService();
+    await expect(second.initialize()).resolves.toBe(true);
+    const db = second.db as DatabaseType;
+    expect(db.pragma("schema_version", { simple: true })).toBe(cookie);
+    expect(names(db, "trigger", "trg_cloud_sync_%")).toEqual([]);
+    expect(dirtyIds(db)).toEqual([]);
+    await second.close();
+  });
+
+  it("R1: an open of a profile carrying the triggers with no Keepr Cloud user drops them; with a user on, an open keeps them", async () => {
+    const first = loadService();
+    await expect(first.initialize()).resolves.toBe(true);
+    const d1 = first.db as DatabaseType;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { ensureCloudSyncTriggers } = require("../db/cloudSyncTriggers") as typeof import("../db/cloudSyncTriggers");
+    ensureCloudSyncTriggers(d1 as never);
+    expect(names(d1, "trigger", "trg_cloud_sync_%")).toHaveLength(CLOUD_SYNC_TRIGGERS.length);
+    await first.close();
+    const second = loadService();
+    await expect(second.initialize()).resolves.toBe(true);
+    const d2 = second.db as DatabaseType;
+    expect(names(d2, "trigger", "trg_cloud_sync_%")).toEqual([]);
+    seed(d2);
+    turnOn(d2);
+    await second.close();
+    const third = loadService();
+    await expect(third.initialize()).resolves.toBe(true);
+    expect(names(third.db as DatabaseType, "trigger", "trg_cloud_sync_%")).toEqual(CLOUD_SYNC_TRIGGERS.map((t) => t.name).sort());
+    await third.close();
+  });
+
+  it("RELEASE 2.49, Keepr Cloud off: a v78 profile runs v79 and v80 and ends with zero cloud triggers and no marks", async () => {
+    const svc = loadService();
+    await expect(svc.initialize()).resolves.toBe(true);
+    const d = svc.db as DatabaseType;
+    seed(d);
+    d.pragma("foreign_keys = OFF");
+    for (const c of ["pilot_report", "pilot_pending_withdraw", "pilot_sent_versions", "pilot_unsettled_at"]) {
+      d.exec(`ALTER TABLE learn_mode_settings DROP COLUMN ${c}`);
+    }
+    d.exec("DROP TABLE IF EXISTS learn_sender_overrides");
+    d.exec("ALTER TABLE learn_bulk_answers DROP COLUMN sender_key");
+    d.pragma("foreign_keys = ON");
+    d.prepare("UPDATE schema_version SET version = 78 WHERE id = 1").run();
+    await expect(svc.runMigrations(d)).resolves.toBeUndefined();
+    expect((d.prepare("SELECT version FROM schema_version WHERE id = 1").get() as { version: number }).version).toBeGreaterThanOrEqual(80);
+    expect(names(d, "trigger", "trg_cloud_sync_%")).toEqual([]);
+    expect(dirtyIds(d)).toEqual([]);
+    await svc.close();
+  });
+
   it("a migration that ran marks every eligible deal of every enabled user (triggers were absent during it)", async () => {
     const svc = loadService();
     await expect(svc.initialize()).resolves.toBe(true);
     const db = svc.db as DatabaseType;
     seed(db);
-    db.prepare("INSERT INTO cloud_sync_settings (project_ref, user_id, enabled) VALUES ('p', ?, 1)").run(USER);
+    turnOn(db);
     db.exec("DELETE FROM cloud_sync_dirty");
     const migrations = (svc.constructor as { MIGRATIONS: Array<{ version: number; description: string; migrate: (d: DatabaseType) => void }> }).MIGRATIONS;
     const head = migrations[migrations.length - 1].version;

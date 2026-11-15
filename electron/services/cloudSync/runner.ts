@@ -289,7 +289,7 @@ export class CloudSyncRunner {
     }
     if (!fresh.local_confirmed_at) return this.finish({ outcome: "needs_confirmation", done: 0, failed: 0, state });
 
-    store.applyAcceptedAt(db, deps.projectRef, pinned.userId, state.acceptedAt);
+    store.preparePass(db, deps.projectRef, pinned.userId, state.acceptedAt, this.log);
 
     let done = 0;
     let failed = 0;

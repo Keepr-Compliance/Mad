@@ -10,7 +10,12 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { CLOUD_SYNC_TRIGGERS } from "../../db/cloudSyncSql";
-import { dropCloudSyncTriggers, ensureCloudSyncTriggers, markAllEligibleAfterMigration } from "../../db/cloudSyncTriggers";
+import {
+  applyCloudSyncTriggerRule,
+  dropCloudSyncTriggers,
+  ensureCloudSyncTriggers,
+  markAllEligibleAfterMigration,
+} from "../../db/cloudSyncTriggers";
 import { DRIVER } from "./helpers/sqlite";
 import { dealId, dirty, dirtyCount, enableUser, freshDb, insertContact, insertDeal, insertParty, triggerNames, USER_A, USER_B } from "./helpers/fixtures";
 
@@ -65,7 +70,9 @@ describe(`Keepr Cloud PR-3 triggers [${DRIVER}]`, () => {
   it("cost: 5,000 contacts with an email, a phone and a source link each — triggers absent vs present with Cloud off vs present with Cloud on (no deals)", () => {
     const N = 5000;
     const run = (mode: "absent" | "off" | "on") => {
-      const db = freshDb({ triggers: mode !== "absent" });
+      // R1: "off" is a real never-on profile (the open's rule applied: no triggers); "on" has them.
+      const db = freshDb({ triggers: mode === "on" });
+      if (mode === "off") applyCloudSyncTriggerRule(db);
       if (mode === "on") enableUser(db, USER_B);
       const t0 = process.hrtime.bigint();
       db.exec("BEGIN");
@@ -85,9 +92,11 @@ describe(`Keepr Cloud PR-3 triggers [${DRIVER}]`, () => {
       db.prepare("UPDATE contacts SET display_name = display_name || '.' WHERE id LIKE 'imp-%'").run();
       db.exec("COMMIT");
       const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-      return { ms: Math.round(ms), marks: dirtyCount(db) };
+      const triggers = (db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'trg_cloud_sync_%'").get() as { n: number }).n;
+      return { ms: Math.round(ms), marks: dirtyCount(db), triggers };
     };
     const results = { driver: DRIVER, contacts: N, absent: run("absent"), off: run("off"), on: run("on") };
+    expect(results.off.triggers).toBe(0);
     fs.writeFileSync(path.join(os.tmpdir(), "keepr-4243-trigger-cost.json"), JSON.stringify(results, null, 2));
     expect(results.absent.marks).toBe(0);
     expect(results.off.marks).toBe(0);

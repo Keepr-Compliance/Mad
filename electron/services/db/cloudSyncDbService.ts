@@ -41,7 +41,12 @@ import {
   UPSERT_DEAL_STATE_SQL,
 } from "./cloudSyncSql";
 import type { SqlDb } from "./cloudSyncSqlDb";
-import { tableColumns } from "./cloudSyncSqlDb";
+import {
+  applyCloudSyncTriggerRule,
+  repairCloudSyncTriggersIfMissing,
+  requireCloudSyncTriggers,
+  type TriggerLog,
+} from "./cloudSyncTriggers";
 
 export interface SettingsRow {
   project_ref: string;
@@ -116,6 +121,8 @@ export function ensureInstall(db: SqlDb, projectRef: string, deviceId: string, n
       db.exec("DELETE FROM cloud_sync_state");
       db.exec("DELETE FROM cloud_sync_dirty");
       db.exec("UPDATE cloud_sync_settings SET enabled = 0, local_confirmed_at = NULL");
+      // R1: no user is enabled now; the triggers go unless a turn-off is still owed.
+      applyCloudSyncTriggerRule(db);
       const after = db
         .prepare("SELECT install_id FROM cloud_sync_install WHERE project_ref = ?")
         .get(projectRef) as { install_id: string } | undefined;
@@ -165,6 +172,7 @@ export function forgetOtherProjects(db: SqlDb, projectRef: string): void {
     db.prepare("DELETE FROM cloud_sync_state WHERE project_ref <> ?").run(projectRef);
     const anyEnabled = db.prepare("SELECT 1 FROM cloud_sync_settings WHERE enabled = 1 LIMIT 1").get();
     if (!anyEnabled) db.exec("DELETE FROM cloud_sync_dirty");
+    applyCloudSyncTriggerRule(db);
   })();
 }
 
@@ -210,6 +218,8 @@ export function enableForUser(
       `UPDATE cloud_sync_settings SET enabled = 1, local_confirmed_at = ?, notice_version = ?, accepted_at = ?,
          turn_off_owed_at = NULL WHERE project_ref = ? AND user_id = ?`,
     ).run(nowIso(now), fields.noticeVersion, fields.acceptedAt, projectRef, userId);
+    // R1: the triggers exist before any deal is marked, in this transaction.
+    requireCloudSyncTriggers(db);
     if (!before || before.enabled !== 1) {
       // A fresh enable trusts no earlier record of what was saved online.
       db.prepare(DELETE_STATE_FOR_USER_SQL).run(projectRef, userId);
@@ -227,14 +237,20 @@ export function disableForUser(db: SqlDb, projectRef: string, userId: string, ow
          turn_off_owed_at = ? WHERE project_ref = ? AND user_id = ?`,
     ).run(owed ? nowIso(now) : null, projectRef, userId);
     clearUserSyncState(db, projectRef, userId);
+    // R1: an owed turn-off keeps the triggers until the server step is settled.
+    applyCloudSyncTriggerRule(db);
   })();
 }
 
+/** The server confirmed the turn-off: clear the owed marker, then apply the trigger rule, together. */
 export function clearTurnOffOwed(db: SqlDb, projectRef: string, userId: string): void {
-  db.prepare("UPDATE cloud_sync_settings SET turn_off_owed_at = NULL WHERE project_ref = ? AND user_id = ?").run(
-    projectRef,
-    userId,
-  );
+  db.transaction(() => {
+    db.prepare("UPDATE cloud_sync_settings SET turn_off_owed_at = NULL WHERE project_ref = ? AND user_id = ?").run(
+      projectRef,
+      userId,
+    );
+    applyCloudSyncTriggerRule(db);
+  })();
 }
 
 /** Drops this user's sync state and the marks of this user's deals. */
@@ -244,6 +260,19 @@ export function clearUserSyncState(db: SqlDb, projectRef: string, userId: string
     db.prepare("DELETE FROM cloud_sync_dirty WHERE transaction_id IN (SELECT id FROM transactions WHERE user_id = ?)").run(
       userId,
     );
+  })();
+}
+
+/**
+ * Before a pass sends anything, in one transaction: apply a changed server
+ * `accepted_at` (R3a), and the R1 self-check: "no marks" means "nothing to
+ * upload" only while every trigger exists, so a missing one is recreated and
+ * every eligible deal marked.
+ */
+export function preparePass(db: SqlDb, projectRef: string, userId: string, acceptedAt: string | null, log?: TriggerLog): void {
+  db.transaction(() => {
+    applyAcceptedAt(db, projectRef, userId, acceptedAt);
+    repairCloudSyncTriggersIfMissing(db, log);
   })();
 }
 
@@ -415,22 +444,6 @@ export function recordDealSynced(
     writeDealState(db, projectRef, userId, transactionId, { ...v, status: "synced" }, now);
     clearMarkIfGeneration(db, transactionId, generation);
   })();
-}
-
-/**
- * After this database was replaced by a restored copy: forget every recorded
- * content hash (the online copy may hold content this file no longer has) and
- * mark every eligible deal of every enabled user, in one transaction. Cloud ids
- * are kept so the delete direction still works. No-op on a file without the
- * Keepr Cloud tables. Returns false when it could not run.
- */
-export function resetSyncStateAfterRestore(db: SqlDb): boolean {
-  if (tableColumns(db, "cloud_sync_state").size === 0 || tableColumns(db, "cloud_sync_dirty").size === 0) return false;
-  db.transaction(() => {
-    db.prepare(RESET_STATE_AFTER_RESTORE_SQL).run();
-    db.prepare(MARK_ALL_ELIGIBLE_ENABLED_SQL).run();
-  })();
-  return true;
 }
 
 // ================================================================ children (PR-3)

@@ -421,3 +421,6 @@ export const ADOPT_DEAL_STATE_SQL = `INSERT INTO cloud_sync_state
    hash_version, cloud_version, removed, last_status, last_error_code, updated_at)
 VALUES (?, ?, 'deal', ?, ?, ?, ?, NULL, NULL, NULL, 0, NULL, NULL, ?)
 ON CONFLICT (project_ref, owner_user_id, entity, local_id) DO NOTHING`;
+
+/** R1: a row that needs the dirty-mark triggers (Keepr Cloud on, or a turn-off still owed). */
+export const CLOUD_SYNC_ACTIVE_SQL = `SELECT 1 FROM cloud_sync_settings WHERE enabled = 1 OR turn_off_owed_at IS NOT NULL LIMIT 1`;
