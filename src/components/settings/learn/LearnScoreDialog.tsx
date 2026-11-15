@@ -8,7 +8,12 @@
  */
 import React, { useState } from "react";
 import { Check } from "lucide-react";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@keepr/ui";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from "@keepr/ui";
 import { useCopyText } from "@/hooks/useCopyText";
 import type { LearnScore } from "../../../../electron/types/ipc/window-api-learn";
 import { LearnStatTiles } from "./LearnStatTiles";
@@ -40,61 +45,73 @@ export function LearnScoreDialog({
   const [details, setDetails] = useState(false);
   const { copied, copy } = useCopyText("LearnScore");
   const title =
-    answered === null ? "How Keepr is doing" : `Thanks, ${answered} ${answered === 1 ? "answer" : "answers"} saved`;
+    answered === null
+      ? "How Keepr is doing"
+      : `Thanks, ${answered} ${answered === 1 ? "answer" : "answers"} saved`;
 
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? undefined : onClose())}>
       <DialogContent
         hideClose
-        className="flex w-[560px] max-w-[calc(100vw-32px)] flex-col items-center gap-6 rounded-xl border-0 bg-white px-12 py-8 text-center text-[15px] leading-normal text-[#1C2430]"
+        className="flex max-h-[calc(100vh-32px)] w-[560px] max-w-[calc(100vw-32px)] flex-col items-center gap-6 overflow-hidden rounded-xl border-0 bg-white px-12 py-8 text-center text-[15px] leading-normal text-[#1C2430]"
       >
-        <span className="inline-grid h-12 w-12 place-items-center rounded-full bg-green-100 text-green-700">
+        <span className="inline-grid h-12 w-12 flex-none place-items-center rounded-full bg-green-100 text-green-700">
           <Check className="h-6 w-6" strokeWidth={2.5} aria-hidden="true" />
         </span>
-        <div className="flex flex-col gap-1.5">
-          <DialogTitle className="m-0 text-xl font-semibold leading-7">{title}</DialogTitle>
+        <div className="flex flex-none flex-col gap-1.5">
+          <DialogTitle className="m-0 text-xl font-semibold leading-7">
+            {title}
+          </DialogTitle>
           <DialogDescription className="text-[15px] text-gray-500">
             {scoreDialogPrivacyText(sharing)}
           </DialogDescription>
         </div>
-        {score ? (
-          <div className="w-full rounded-[10px] border border-[#E6E4DF]">
-            <LearnStatTiles tiles={learnTiles(score)} />
-          </div>
-        ) : (
-          <p className="text-sm text-gray-500">The score is not ready yet.</p>
-        )}
-        {score && (
-          <div className="w-full text-left">
-            <button
-              type="button"
-              className="text-[13px] font-medium text-sky-700 hover:text-sky-800"
-              aria-expanded={details}
-              onClick={() => setDetails((d) => !d)}
-            >
-              {details ? "Hide details" : "Details"}
-            </button>
-            {details && (
-              <div className="mt-2 flex flex-col gap-2" data-testid="learn-score-details">
-                <ul className="m-0 list-none space-y-1 p-0 text-[13px] text-gray-600">
-                  {learnDetailLines(score).map((l) => (
-                    <li key={l}>{l}</li>
-                  ))}
-                </ul>
-                {copyBlock && (
-                  <button
-                    type="button"
-                    className="self-start rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                    onClick={() => copy(copyBlock)}
-                  >
-                    {copied ? "Copied" : "Copy score"}
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-        <div className="flex w-full gap-3">
+        <div
+          className="flex min-h-0 w-full flex-1 flex-col gap-6 overflow-y-auto"
+          data-testid="learn-score-scroll"
+        >
+          {score ? (
+            <div className="w-full flex-none rounded-[10px] border border-[#E6E4DF]">
+              <LearnStatTiles tiles={learnTiles(score)} />
+            </div>
+          ) : (
+            <p className="text-sm text-gray-500">The score is not ready yet.</p>
+          )}
+          {score && (
+            <div className="w-full text-left">
+              <button
+                type="button"
+                className="text-[13px] font-medium text-sky-700 hover:text-sky-800"
+                aria-expanded={details}
+                onClick={() => setDetails((d) => !d)}
+              >
+                {details ? "Hide details" : "Details"}
+              </button>
+              {details && (
+                <div
+                  className="mt-2 flex flex-col gap-2"
+                  data-testid="learn-score-details"
+                >
+                  <ul className="m-0 list-none space-y-1 p-0 text-[13px] text-gray-600">
+                    {learnDetailLines(score).map((l) => (
+                      <li key={l}>{l}</li>
+                    ))}
+                  </ul>
+                  {copyBlock && (
+                    <button
+                      type="button"
+                      className="self-start rounded-md border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      onClick={() => copy(copyBlock)}
+                    >
+                      {copied ? "Copied" : "Copy score"}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="flex w-full flex-none gap-3">
           {more !== null && onMore && (
             <button
               type="button"

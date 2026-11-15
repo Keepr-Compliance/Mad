@@ -27,7 +27,7 @@ const SKIP_BUTTON =
 export const MAIL_ANSWER_HELP: ReadonlyArray<{ heading: string; body: string }> = [
   { heading: "Real estate business", body: "work mail about real estate, even when it isn't one of your deals." },
   { heading: "Newsletter or spam", body: "marketing, promotions and mass mailings." },
-  { heading: "Skip for now", body: "anything else, like personal mail or software notices." },
+  { heading: "Other business", body: "any other work or personal mail, like software notices." },
 ];
 
 /** Info tip beside the mail question: click toggles, keyboard focus opens, blur closes. */
@@ -64,16 +64,59 @@ function MailAnswerHelp(): React.ReactElement {
   );
 }
 
-function SkipButton({ session }: { session: UseLearnSession }): React.ReactElement {
+/** Visible shortcut hint; aria-hidden so the button's name stays its label (aria-keyshortcuts carries it). */
+function Hint({ k }: { k: string }): React.ReactElement {
+  return (
+    <span aria-hidden="true" className="font-normal opacity-80">
+      ({k})
+    </span>
+  );
+}
+
+/** True when a key press belongs to a text field (or a modified shortcut), not to Learn. */
+function isTypingTarget(e: KeyboardEvent): boolean {
+  const t = e.target as HTMLElement | null;
+  if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable)) return true;
+  return e.ctrlKey || e.metaKey || e.altKey;
+}
+
+function useLearnShortcuts(session: UseLearnSession, active: boolean): void {
+  const ref = React.useRef(session);
+  ref.current = session;
+  React.useEffect(() => {
+    if (!active) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.defaultPrevented || e.repeat || isTypingTarget(e)) return;
+      const s = ref.current;
+      if (s.phase !== "question" || !s.current || s.busy) return;
+      const key = e.key.toLowerCase();
+      const deal = s.current.kind === "cleanup";
+      if ((deal && key === "s") || (!deal && key === "o")) void s.skip();
+      else if (key === "u" && s.canUndo) void s.undo();
+      else if (deal && key === "y") void s.answerDeal("yes");
+      else if (deal && key === "n") void s.answerDeal("no");
+      else if (!deal && key === "r") void s.answerMail("real_estate");
+      else if (!deal && key === "n") void s.answerMail("newsletter_spam");
+      else return;
+      e.preventDefault();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [active]);
+}
+
+function SkipButton({ session, mail }: { session: UseLearnSession; mail: boolean }): React.ReactElement {
+  const hint = mail ? "O" : "S";
   return (
     <button
       type="button"
       className={SKIP_BUTTON}
       disabled={session.busy || !session.current}
+      aria-keyshortcuts={hint}
       onClick={() => void session.skip()}
     >
       <SkipForward className="h-4 w-4 shrink-0" aria-hidden="true" />
-      Skip for now
+      {mail ? "Other business" : "Skip for now"} <Hint k={hint} />
     </button>
   );
 }
@@ -123,16 +166,16 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
           <span className="text-sm text-gray-500">Not matched to a deal in Keepr · {n === 1 ? "1 email" : `${n} emails`}</span>
         </div>
         <div className={ANSWER_ROW} data-testid="learn-answer-row">
-          <button type="button" className={NO_BUTTON} disabled={busy} onClick={() => void session.answerDeal("no")}>
+          <button type="button" className={NO_BUTTON} aria-keyshortcuts="N" disabled={busy} onClick={() => void session.answerDeal("no")}>
             <X className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
-            No
+            No <Hint k="N" />
           </button>
-          <button type="button" className={YES_BUTTON} disabled={busy} onClick={() => void session.answerDeal("yes")}>
+          <button type="button" className={YES_BUTTON} aria-keyshortcuts="Y" disabled={busy} onClick={() => void session.answerDeal("yes")}>
             <Check className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
-            Yes, my deal
+            Yes, my deal <Hint k="Y" />
           </button>
         </div>
-        <SkipButton session={session} />
+        <SkipButton session={session} mail={false} />
         <span className="text-[13px] text-gray-500">The highlighted parts are what Keepr read.</span>
       </>
     );
@@ -156,18 +199,19 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
         <button
           type="button"
           className={NO_BUTTON}
+          aria-keyshortcuts="N"
           disabled={busy}
           onClick={() => void session.answerMail("newsletter_spam")}
         >
           <X className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
-          Newsletter or spam
+          Newsletter or spam <Hint k="N" />
         </button>
-        <button type="button" className={YES_BUTTON} disabled={busy} onClick={() => void session.answerMail("real_estate")}>
+        <button type="button" className={YES_BUTTON} aria-keyshortcuts="R" disabled={busy} onClick={() => void session.answerMail("real_estate")}>
           <Check className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
-          Real estate business
+          Real estate business <Hint k="R" />
         </button>
       </div>
-      <SkipButton session={session} />
+      <SkipButton session={session} mail />
       <span className="text-[13px] text-gray-500">Listing alerts and marketing mail count as newsletters.</span>
     </>
   );
@@ -183,12 +227,13 @@ export function LearnQuestionDialog({
   const open = session.phase === "loading" || session.phase === "question" || session.phase === "error";
   const questionKey =
     session.current?.kind === "cleanup" ? session.current.question.detectionId : session.current?.rowId ?? "none";
+  useLearnShortcuts(session, open);
 
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? undefined : onClose())}>
       <DialogContent
         hideClose
-        className="flex h-[640px] max-h-[calc(100vh-32px)] w-[1120px] max-w-[calc(100vw-32px)] flex-col gap-0 overflow-hidden rounded-xl border-0 bg-white p-0 text-[15px] leading-normal text-[#1C2430]"
+        className="flex h-[640px] max-h-[calc(100vh-32px)] w-[1120px] max-w-[calc(100vw-32px)] xl:w-[1280px] flex-col gap-0 overflow-hidden rounded-xl border-0 bg-white p-0 text-[15px] leading-normal text-[#1C2430]"
       >
         <DialogTitle className="sr-only">Learn mode question</DialogTitle>
         <DialogDescription className="sr-only">Answer the question about the item on the left.</DialogDescription>
@@ -207,11 +252,12 @@ export function LearnQuestionDialog({
             <button
               type="button"
               className={TOP_BUTTON}
+              aria-keyshortcuts="U"
               disabled={session.busy || !session.canUndo}
               onClick={() => void session.undo()}
             >
               <Undo2 className="h-3.5 w-3.5" aria-hidden="true" />
-              Undo last
+              Undo last <Hint k="U" />
             </button>
             {/* Always shown and never disabled: keeps the answers and shows the score. */}
             <button type="button" className={TOP_BUTTON} onClick={onClose}>
@@ -223,7 +269,7 @@ export function LearnQuestionDialog({
             min-w-0 / min-h-0 down the chain. Without them a 1400px email table measured the
             column at 2737px and pushed the answer panel out of the dialog (BACKLOG-4120). */}
         <div
-          className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_420px] grid-rows-[minmax(0,1fr)]"
+          className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_420px] xl:grid-cols-[minmax(0,1fr)_600px] grid-rows-[minmax(0,1fr)]"
           data-testid="learn-question-body"
         >
           <div
@@ -234,7 +280,7 @@ export function LearnQuestionDialog({
             <LeftPane session={session} />
           </div>
           <div
-            className="flex min-h-0 min-w-0 flex-col justify-center gap-6 overflow-y-auto px-9 py-10 text-center"
+            className="flex min-h-0 min-w-0 flex-col justify-center gap-6 overflow-y-auto px-9 py-10 text-center xl:px-6"
             data-testid="learn-answer-panel"
           >
             {session.phase === "error" ? (

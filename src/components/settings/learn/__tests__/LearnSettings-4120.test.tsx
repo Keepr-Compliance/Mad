@@ -353,7 +353,7 @@ describe("SK/UN skip and undo", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: /Skip for now/ }));
     await within(dialog).findByText("Is this real estate business, or a newsletter / spam?");
-    fireEvent.click(within(dialog).getByRole("button", { name: /Skip for now/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: /Other business/ }));
     await waitFor(() => expect(api.sampleAnswer).toHaveBeenCalledWith({ rowId: SAMPLE_ROW_ID, answer: "skip" }));
   });
 
