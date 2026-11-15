@@ -45,6 +45,8 @@ export const learnModeBridge: WindowApiLearn = {
   sampleNext: () => ipcRenderer.invoke("learn:sample-next"),
   sampleAnswer: (args) => ipcRenderer.invoke("learn:sample-answer", args),
   score: () => ipcRenderer.invoke("learn:score"),
+  /** BACKLOG-4257: per-email signals (shadow), after the score is shown. */
+  signals: () => ipcRenderer.invoke("learn:signals"),
   deleteAnswers: () => ipcRenderer.invoke("learn:delete-answers"),
   /** The caller's saved answers, newest first (own rows only). */
   listAnswers: () => ipcRenderer.invoke("learn:list-answers"),

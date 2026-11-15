@@ -14,9 +14,10 @@
 import type { PublicRunSummary } from "../../services/learn/baselineRunner";
 import type { SampleDrawResult } from "../../services/learn/bulkSample";
 import type { LearnScore } from "../../services/learn/scoring";
+import type { SignalScore } from "../../services/learn/signalScoring";
 import type { BulkAnswer, DealAnswer } from "../../services/learn/learnRules";
 
-export type { PublicRunSummary, SampleDrawResult, LearnScore, BulkAnswer, DealAnswer };
+export type { PublicRunSummary, SampleDrawResult, LearnScore, SignalScore, BulkAnswer, DealAnswer };
 
 export type LearnFailure = { success: false; error: string };
 
@@ -72,6 +73,15 @@ export type LearnSampleNextResult =
 
 export type LearnScoreResult =
   | { success: true; score: LearnScore; copyBlock: string }
+  | LearnFailure;
+
+/**
+ * BACKLOG-4257: per-email signals measured in shadow (learn:signals), asked
+ * for after the score is shown. `signals` is null when the pass failed;
+ * `copyLines` are the count-only lines appended to the Copy block.
+ */
+export type LearnSignalsResult =
+  | { success: true; signals: SignalScore | null; copyLines: string }
   | LearnFailure;
 
 export type LearnDeleteAnswersResult =
@@ -159,6 +169,8 @@ export interface WindowApiLearn {
   sampleNext: () => Promise<LearnSampleNextResult>;
   sampleAnswer: (args: { rowId: string; answer: BulkAnswer }) => Promise<LearnAnswerResult>;
   score: () => Promise<LearnScoreResult>;
+  /** BACKLOG-4257: per-email signals (shadow); call after the score is shown. */
+  signals: () => Promise<LearnSignalsResult>;
   deleteAnswers: () => Promise<LearnDeleteAnswersResult>;
   listAnswers: () => Promise<LearnListAnswersResult>;
   deleteAnswer: (args: { kind: "deal" | "bulk"; id: string }) => Promise<LearnDeleteAnswerResult>;
