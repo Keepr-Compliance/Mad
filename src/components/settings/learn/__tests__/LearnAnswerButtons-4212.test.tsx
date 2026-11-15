@@ -10,6 +10,7 @@
 import React from "react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
+import userEvent from "@testing-library/user-event";
 import { LearnSessionHost } from "../LearnSessionHost";
 import { LearnScoreDialog } from "../LearnScoreDialog";
 import { CLEANUP_NEXT, PREVIEW_BULK, PREVIEW_CLEANUP } from "./learnFixtures-4120";
@@ -71,20 +72,26 @@ describe("Learn mail question: info tip and Skip placement (BACKLOG-4212)", () =
     fireEvent.focus(tip);
     const panel = screen.getByTestId("learn-answer-help-panel");
     // Exact copy, in order: intro, then the three rules, matched top-down.
-    expect(panel.children[0]).toHaveTextContent("Check in this order and pick the first that fits:");
-    const steps = Array.from(panel.querySelectorAll("li")).map((li) => li.textContent);
-    expect(steps).toEqual([
-      "Real estate work: a person wrote to you about real estate (a client, lead, agent, lender, title or escrow), or a deal service (e-sign, showing, title portal) wrote about one of your deals.",
-      "Automated or mass mail: an automated email or newsletter, like a listing alert, promotion, receipt, or bank or app alert, even when it's about real estate.",
-      "Other: a person wrote to you about something else, or you can't tell.",
+    expect(panel).not.toHaveTextContent(/check in this order/i);
+    expect(panel.children[0].tagName).toBe("UL");
+    const lis = Array.from(panel.querySelectorAll("li"));
+    expect(lis.map((li) => li.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "Real estate work (\u2190): a person wrote to you about real estate (a client, lead, agent, lender, title or escrow), or a deal service (e-sign, showing, title portal) wrote about one of your deals.",
+      "Automated or mass mail (\u2192): an automated email or newsletter, like a listing alert, promotion, receipt, or bank or app alert, even when it's about real estate.",
+      "Other (\u2193): a person wrote to you about something else, or you can't tell.",
     ]);
-    expect(panel.querySelectorAll("li strong")).toHaveLength(3);
+    // Label colours match the buttons: green, red, neutral gray.
+    expect(lis.map((li) => classes(li.querySelector("strong") as Element).find((c) => c.startsWith("text-")))).toEqual([
+      "text-green-800",
+      "text-red-700",
+      "text-gray-700",
+    ]);
     // Not inside the clipping dialog / answer panel: portalled, fixed, above the dialog.
     expect(screen.getByTestId("learn-answer-panel")).not.toContainElement(panel);
     expect(screen.getByRole("dialog")).not.toContainElement(panel);
     expect(classes(panel)).toEqual(expect.arrayContaining(["fixed", "z-[100]"]));
     expect(screen.getByTestId("learn-answer-help-keys")).toHaveTextContent(
-      "Tip: \u2190 automated \u00b7 \u2192 real estate \u00b7 \u2193 other \u00b7 U undoes.",
+      "U undoes your last answer.",
     );
     fireEvent.blur(tip);
     expect(screen.queryByTestId("learn-answer-help-panel")).toBeNull();
@@ -93,8 +100,8 @@ describe("Learn mail question: info tip and Skip placement (BACKLOG-4212)", () =
   });
 
   it.each([
-    ["mail", [/automated or mass mail/i, /real estate work/i]],
-    ["deal", [/^no$/i, /yes, my deal/i]],
+    ["mail", [/real estate work/i, /automated or mass mail/i]],
+    ["deal", [/yes, my deal/i, /^no$/i]],
   ] as const)("%s question: Skip for now sits in the answer panel after the answers, bordered", async (kind, names) => {
     const answers = await openDialog(kind, [...names]);
     const skip = screen.getByRole("button", { name: kind === "mail" ? /^other$/i : /skip for now/i });
@@ -113,21 +120,23 @@ function learnApi(): { sampleAnswer: jest.Mock; cleanupAnswer: jest.Mock } {
 }
 
 describe("Learn shortcuts, wide layout and score container (BACKLOG-4212)", () => {
-  it("labels carry the arrow hint on the same one-line button; red is left of green in DOM order", async () => {
+  it("labels carry the arrow hint on the same one-line button; green (real estate) is FIRST in DOM order", async () => {
     const [no, yes] = await openDialog("mail", [/automated or mass mail/i, /real estate work/i]);
-    expect(no).toHaveTextContent("Automated or mass mail (\u2190)");
-    expect(yes).toHaveTextContent("Real estate work (\u2192)");
-    expect(no.compareDocumentPosition(yes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(no).toHaveTextContent("Automated or mass mail (\u2192)");
+    expect(yes).toHaveTextContent("Real estate work (\u2190)");
+    const row = screen.getByTestId("learn-answer-row");
+    expect(row.children[0]).toBe(yes);
+    expect(row.children[1]).toBe(no);
     const other = screen.getByRole("button", { name: /^other$/i });
     expect(other).toHaveTextContent("Other (\u2193)");
-    expect(no).toHaveAttribute("aria-keyshortcuts", "ArrowLeft");
-    expect(yes).toHaveAttribute("aria-keyshortcuts", "ArrowRight");
+    expect(no).toHaveAttribute("aria-keyshortcuts", "ArrowRight");
+    expect(yes).toHaveAttribute("aria-keyshortcuts", "ArrowLeft");
     expect(other).toHaveAttribute("aria-keyshortcuts", "ArrowDown");
   });
 
   it.each([
-    ["ArrowLeft", { rowId: "row-1", answer: "newsletter_spam" }],
-    ["ArrowRight", { rowId: "row-1", answer: "real_estate" }],
+    ["ArrowLeft", { rowId: "row-1", answer: "real_estate" }],
+    ["ArrowRight", { rowId: "row-1", answer: "newsletter_spam" }],
     ["ArrowDown", { rowId: "row-1", answer: "skip" }],
   ])("mail: %s fires the right answer and is preventDefault-ed", async (key, expected) => {
     await openDialog("mail", [/automated or mass mail/i]);
@@ -137,15 +146,16 @@ describe("Learn shortcuts, wide layout and score container (BACKLOG-4212)", () =
     await waitFor(() => expect(learnApi().sampleAnswer).toHaveBeenCalledWith(expected));
   });
 
-  it("deal: ArrowLeft = no, ArrowRight = yes", async () => {
-    await openDialog("deal", [/yes, my deal/i]);
-    fireEvent.keyDown(document.body, { key: "ArrowRight" });
+  it("deal: ArrowLeft = yes (first button), and Yes is first in DOM order", async () => {
+    const [yes] = await openDialog("deal", [/yes, my deal/i]);
+    expect(screen.getByTestId("learn-answer-row").children[0]).toBe(yes);
+    fireEvent.keyDown(document.body, { key: "ArrowLeft" });
     await waitFor(() => expect(learnApi().cleanupAnswer).toHaveBeenCalledWith({ detectionId: expect.anything(), answer: "yes" }));
   });
 
-  it("deal: ArrowLeft answers no", async () => {
+  it("deal: ArrowRight answers no", async () => {
     await openDialog("deal", [/yes, my deal/i]);
-    fireEvent.keyDown(document.body, { key: "ArrowLeft" });
+    fireEvent.keyDown(document.body, { key: "ArrowRight" });
     await waitFor(() => expect(learnApi().cleanupAnswer).toHaveBeenCalledWith({ detectionId: expect.anything(), answer: "no" }));
   });
 
@@ -174,6 +184,25 @@ describe("Learn shortcuts, wide layout and score container (BACKLOG-4212)", () =
     await new Promise((r) => setTimeout(r, 20));
     expect(learnApi().sampleAnswer).not.toHaveBeenCalled();
     input.remove();
+  });
+
+  it("a real mouse click (focus then click) opens the info tip and a second click closes it", async () => {
+    await openDialog("mail", [/automated or mass mail/i]);
+    const tip = screen.getByRole("button", { name: "What do these answers mean?" });
+    await userEvent.click(tip);
+    expect(screen.getByTestId("learn-answer-help-panel")).toBeInTheDocument();
+    await userEvent.click(tip);
+    expect(screen.queryByTestId("learn-answer-help-panel")).toBeNull();
+  });
+
+  it("arrows do not answer while the reader is inside the email preview; they answer from elsewhere", async () => {
+    await openDialog("mail", [/automated or mass mail/i]);
+    const preview = screen.getByTestId("learn-preview-column");
+    fireEvent.keyDown(preview, { key: "ArrowDown" });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(learnApi().sampleAnswer).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByTestId("learn-answer-panel"), { key: "ArrowDown" });
+    await waitFor(() => expect(learnApi().sampleAnswer).toHaveBeenCalledWith({ rowId: "row-1", answer: "skip" }));
   });
 
   it("wide windows widen the answer panel; the row wraps so the pair sits side by side when it fits", async () => {

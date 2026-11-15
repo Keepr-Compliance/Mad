@@ -25,19 +25,22 @@ const ANSWER_ROW = "flex flex-wrap gap-3";
 /** Secondary, bordered, neutral: visible on the white panel, never ghost. */
 const SKIP_BUTTON =
   "inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-[10px] border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50";
-export const MAIL_TIP_INTRO = "Check in this order and pick the first that fits:";
-export const MAIL_TIP_STEPS: ReadonlyArray<{ label: string; body: string }> = [
+export const MAIL_TIP_STEPS: ReadonlyArray<{ label: string; hint: string; tone: string; body: string }> = [
   {
     label: "Real estate work",
+    hint: "\u2190",
+    tone: "text-green-800",
     body: "a person wrote to you about real estate (a client, lead, agent, lender, title or escrow), or a deal service (e-sign, showing, title portal) wrote about one of your deals.",
   },
   {
     label: "Automated or mass mail",
+    hint: "\u2192",
+    tone: "text-red-700",
     body: "an automated email or newsletter, like a listing alert, promotion, receipt, or bank or app alert, even when it's about real estate.",
   },
-  { label: "Other", body: "a person wrote to you about something else, or you can't tell." },
+  { label: "Other", hint: "\u2193", tone: "text-gray-700", body: "a person wrote to you about something else, or you can't tell." },
 ];
-export const MAIL_KEYS_TIP = "Tip: \u2190 automated \u00b7 \u2192 real estate \u00b7 \u2193 other \u00b7 U undoes.";
+export const MAIL_KEYS_TIP = "U undoes your last answer.";
 
 /** Info tip beside the mail question: click toggles, keyboard focus opens, blur closes. */
 function MailAnswerHelp(): React.ReactElement {
@@ -62,6 +65,9 @@ function MailAnswerHelp(): React.ReactElement {
         aria-expanded={open}
         data-testid="learn-answer-help-button"
         className="inline-flex text-gray-400 hover:text-gray-600"
+        // A mouse press must not focus the button: focus opens the tip, and the click that
+        // follows would toggle it shut again. Keyboard focus (Tab) still opens it.
+        onMouseDown={(e) => e.preventDefault()}
         onClick={() => setOpen((v) => !v)}
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
@@ -75,11 +81,13 @@ function MailAnswerHelp(): React.ReactElement {
           style={{ left: pos?.left ?? 0, top: pos?.top ?? 0 }}
           className="pointer-events-none fixed z-[100] w-72 max-w-[calc(100vw-16px)] rounded-lg border border-gray-200 bg-white p-3 text-left text-xs text-gray-600 shadow-lg"
         >
-          <span className="mb-1 block font-medium text-gray-900">{MAIL_TIP_INTRO}</span>
           <ul className="m-0 list-none space-y-1 p-0">
             {MAIL_TIP_STEPS.map((t) => (
               <li key={t.label}>
-                <strong className="font-medium text-gray-900">{t.label}:</strong> {t.body}
+                <strong className={`font-semibold ${t.tone}`}>
+                  {t.label} ({t.hint}):
+                </strong>{" "}
+                {t.body}
               </li>
             ))}
           </ul>
@@ -109,23 +117,31 @@ function isTypingTarget(e: KeyboardEvent): boolean {
   return e.ctrlKey || e.metaKey || e.altKey;
 }
 
+/** Arrows scroll the email preview while the reader is in it; they never answer from there. */
+function inPreview(e: KeyboardEvent): boolean {
+  const sel = '[data-testid="learn-preview-column"]';
+  const t = e.target as Element | null;
+  const a = document.activeElement;
+  return Boolean((t && t.closest?.(sel)) || (a && a.closest?.(sel)));
+}
+
 function useLearnShortcuts(session: UseLearnSession, active: boolean): void {
   const ref = React.useRef(session);
   ref.current = session;
   React.useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent): void => {
-      if (e.defaultPrevented || e.repeat || isTypingTarget(e)) return;
+      if (e.defaultPrevented || e.repeat || isTypingTarget(e) || inPreview(e)) return;
       const s = ref.current;
       if (s.phase !== "question" || !s.current || s.busy) return;
       const deal = s.current.kind === "cleanup";
-      // Left = the red answer, right = the green one, down = skip. U = undo.
+      // Keys follow screen order: left = first (green) answer, right = second (red), down = skip. U = undo.
       if (e.key === "ArrowDown") void s.skip();
       else if (e.key === "u" || e.key === "U") {
         if (!s.canUndo) return;
         void s.undo();
-      } else if (e.key === "ArrowLeft") void (deal ? s.answerDeal("no") : s.answerMail("newsletter_spam"));
-      else if (e.key === "ArrowRight") void (deal ? s.answerDeal("yes") : s.answerMail("real_estate"));
+      } else if (e.key === "ArrowLeft") void (deal ? s.answerDeal("yes") : s.answerMail("real_estate"));
+      else if (e.key === "ArrowRight") void (deal ? s.answerDeal("no") : s.answerMail("newsletter_spam"));
       else return;
       e.preventDefault();
     };
@@ -195,13 +211,13 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
           <span className="text-sm text-gray-500">Not matched to a deal in Keepr · {n === 1 ? "1 email" : `${n} emails`}</span>
         </div>
         <div className={ANSWER_ROW} data-testid="learn-answer-row">
-          <button type="button" className={NO_BUTTON} aria-keyshortcuts="ArrowLeft" disabled={busy} onClick={() => void session.answerDeal("no")}>
-            <X className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
-            No <Hint k="←" />
-          </button>
-          <button type="button" className={YES_BUTTON} aria-keyshortcuts="ArrowRight" disabled={busy} onClick={() => void session.answerDeal("yes")}>
+          <button type="button" className={YES_BUTTON} aria-keyshortcuts="ArrowLeft" disabled={busy} onClick={() => void session.answerDeal("yes")}>
             <Check className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
-            Yes, my deal <Hint k="→" />
+            Yes, my deal <Hint k="←" />
+          </button>
+          <button type="button" className={NO_BUTTON} aria-keyshortcuts="ArrowRight" disabled={busy} onClick={() => void session.answerDeal("no")}>
+            <X className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
+            No <Hint k="→" />
           </button>
         </div>
         <SkipButton session={session} mail={false} />
@@ -225,19 +241,19 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
         </span>
       </div>
       <div className={ANSWER_ROW} data-testid="learn-answer-row">
+        <button type="button" className={YES_BUTTON} aria-keyshortcuts="ArrowLeft" disabled={busy} onClick={() => void session.answerMail("real_estate")}>
+          <Check className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
+          Real estate work <Hint k="←" />
+        </button>
         <button
           type="button"
           className={NO_BUTTON}
-          aria-keyshortcuts="ArrowLeft"
+          aria-keyshortcuts="ArrowRight"
           disabled={busy}
           onClick={() => void session.answerMail("newsletter_spam")}
         >
           <X className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
-          Automated or mass mail <Hint k="←" />
-        </button>
-        <button type="button" className={YES_BUTTON} aria-keyshortcuts="ArrowRight" disabled={busy} onClick={() => void session.answerMail("real_estate")}>
-          <Check className="h-[18px] w-[18px] shrink-0" strokeWidth={2.5} aria-hidden="true" />
-          Real estate work <Hint k="→" />
+          Automated or mass mail <Hint k="→" />
         </button>
       </div>
       <SkipButton session={session} mail />
