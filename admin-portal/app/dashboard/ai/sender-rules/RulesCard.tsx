@@ -14,6 +14,8 @@ import {
   SIGNALS,
   SURFACES,
   THRESHOLD_KEYS,
+  USER_SUPPRESS_APP_DEFAULT,
+  isOptionalThreshold,
   type LocalPartRule,
   type SenderRuleSet,
   type ThresholdKey,
@@ -274,14 +276,15 @@ export function RulesCard({
                 </div>
                 {readOnly ? (
                   <p id={`threshold-${k}`} className="text-sm text-gray-700">
-                    {content.thresholds[k]}
+                    {content.thresholds[k] ?? `Not set (app default ${USER_SUPPRESS_APP_DEFAULT})`}
                   </p>
                 ) : (
                   <>
                     <Input
                       id={`threshold-${k}`}
                       inputMode="numeric"
-                      value={thresholdText?.[k] ?? String(content.thresholds[k])}
+                      value={thresholdText?.[k] ?? (content.thresholds[k] === undefined ? '' : String(content.thresholds[k]))}
+                      placeholder={isOptionalThreshold(k) ? `Not set (app default ${USER_SUPPRESS_APP_DEFAULT})` : undefined}
                       onChange={(e) => onThresholdText?.(k, e.target.value)}
                       className="h-8"
                     />

@@ -57,6 +57,16 @@ describe('ConfirmationDialog', () => {
     );
   });
 
+  it('confirmDisabled disables confirm only; cancel still works', async () => {
+    const { onConfirm, onCancel } = setup({ confirmDisabled: true });
+    expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeEnabled();
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    expect(onConfirm).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it('disables both buttons while loading', () => {
     setup({ loading: true });
     expect(screen.getByRole('button', { name: 'Confirm' })).toBeDisabled();
