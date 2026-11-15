@@ -21,7 +21,7 @@ export const CONSENT = {
   onlyIf: (provider: string) =>
     `Only continue if you just started connecting Keepr from ${provider}. Otherwise choose Deny.`,
   scope:
-    'It can read the deals you saved to Keepr Cloud: details, prices, commission, checklists and todos. ' +
+    'It can read the deals you saved to Keepr Cloud: details, prices, commission, checklists (including private ones) and todos. ' +
     'It can also read the people on each deal, with their names, companies, email addresses, phone numbers and notes. ' +
     'It cannot read your emails, texts, files or contact list. ' +
     'It cannot change, send or delete anything.',

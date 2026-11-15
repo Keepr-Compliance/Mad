@@ -8,7 +8,7 @@
  */
 export const NOTICE_TEXTS: Readonly<Record<number, string>> = Object.freeze({
   1:
-    "Keepr Cloud keeps a copy of your deals online: details, prices, commission, checklists, todos, and the people on each deal with their names, companies, email addresses, phone numbers and notes. " +
+    "Keepr Cloud keeps a copy of your deals online: details, prices, commission, checklists (including private ones), todos, and the people on each deal with their names, companies, email addresses, phone numbers and notes. " +
     "Your emails, texts, files and contact list are not uploaded. " +
     "AI apps you connect, like Claude or ChatGPT, can read this copy, including other people's contact details, and what they read is sent to that app's company. " +
     "Turning Keepr Cloud off deletes the online copy and disconnects every AI app.",
