@@ -10,7 +10,7 @@
  * Presentational: every action goes through the session hook.
  */
 import React from "react";
-import { Check, SkipForward, Sparkle, Undo2, X } from "lucide-react";
+import { Check, Info, SkipForward, Sparkle, Undo2, X } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@keepr/ui";
 import type { UseLearnSession } from "./useLearnSession";
 import { LearnEmailPane, formatLearnDate, splitSender } from "./LearnEmailPane";
@@ -21,6 +21,63 @@ const TOP_BUTTON =
   "inline-flex h-[30px] items-center gap-1.5 rounded-md bg-[#F6F5F2] px-2.5 text-[13px] font-medium text-gray-500 hover:bg-gray-200 disabled:opacity-40";
 /** Answers sit side by side when they fit (flex-wrap); otherwise each wraps to its own full-width row (grow). A label never wraps inside its button. */
 const ANSWER_ROW = "flex flex-wrap gap-3";
+/** Secondary, bordered, neutral: visible on the white panel, never ghost. */
+const SKIP_BUTTON =
+  "inline-flex h-10 w-full items-center justify-center gap-2 whitespace-nowrap rounded-[10px] border border-gray-300 bg-white text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50";
+export const MAIL_ANSWER_HELP: ReadonlyArray<{ heading: string; body: string }> = [
+  { heading: "Real estate business", body: "work mail about real estate, even when it isn't one of your deals." },
+  { heading: "Newsletter or spam", body: "marketing, promotions and mass mailings." },
+  { heading: "Skip for now", body: "anything else, like personal mail or software notices." },
+];
+
+/** Info tip beside the mail question: click toggles, keyboard focus opens, blur closes. */
+function MailAnswerHelp(): React.ReactElement {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <span className="relative inline-flex">
+      <button
+        type="button"
+        aria-label="What do these answers mean?"
+        aria-expanded={open}
+        data-testid="learn-answer-help-button"
+        className="inline-flex text-gray-400 hover:text-gray-600"
+        onClick={() => setOpen((v) => !v)}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
+      >
+        <Info className="h-4 w-4" aria-hidden="true" />
+      </button>
+      {open && (
+        <span
+          role="tooltip"
+          data-testid="learn-answer-help-panel"
+          className="absolute left-1/2 top-full z-10 mt-2 w-72 -translate-x-1/2 rounded-lg border border-gray-200 bg-white p-3 text-left text-xs text-gray-600 shadow-lg"
+        >
+          {MAIL_ANSWER_HELP.map((h) => (
+            <span key={h.heading} className="mb-1 block last:mb-0">
+              <strong className="font-medium text-gray-900">{h.heading}:</strong> {h.body}
+            </span>
+          ))}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function SkipButton({ session }: { session: UseLearnSession }): React.ReactElement {
+  return (
+    <button
+      type="button"
+      className={SKIP_BUTTON}
+      disabled={session.busy || !session.current}
+      onClick={() => void session.skip()}
+    >
+      <SkipForward className="h-4 w-4 shrink-0" aria-hidden="true" />
+      Skip for now
+    </button>
+  );
+}
+
 const NO_BUTTON =
   "inline-flex h-14 grow basis-[200px] px-4 items-center justify-center gap-2 whitespace-nowrap rounded-[10px] border border-red-200 bg-red-50 text-base font-semibold text-red-700 hover:bg-red-100 disabled:opacity-50";
 const YES_BUTTON =
@@ -75,6 +132,7 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
             Yes, my deal
           </button>
         </div>
+        <SkipButton session={session} />
         <span className="text-[13px] text-gray-500">The highlighted parts are what Keepr read.</span>
       </>
     );
@@ -83,7 +141,10 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
   const sender = splitSender(email?.sender ?? null);
   return (
     <>
-      <h2 className="m-0 text-xl font-semibold leading-7">Is this real estate business, or a newsletter / spam?</h2>
+      <h2 className="m-0 inline-flex items-center justify-center gap-2 text-xl font-semibold leading-7">
+        <span>Is this real estate business, or a newsletter / spam?</span>
+        <MailAnswerHelp />
+      </h2>
       <div className="flex flex-col items-center gap-1">
         <span className="text-lg font-semibold leading-[26px]">{email?.subject || "(no subject)"}</span>
         <span className="text-sm text-gray-500">
@@ -106,6 +167,7 @@ function RightCard({ session }: { session: UseLearnSession }): React.ReactElemen
           Real estate business
         </button>
       </div>
+      <SkipButton session={session} />
       <span className="text-[13px] text-gray-500">Listing alerts and marketing mail count as newsletters.</span>
     </>
   );
@@ -131,15 +193,7 @@ export function LearnQuestionDialog({
         <DialogTitle className="sr-only">Learn mode question</DialogTitle>
         <DialogDescription className="sr-only">Answer the question about the item on the left.</DialogDescription>
         <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-[#EEECE7] px-5 py-3.5">
-          <button
-            type="button"
-            className={`${TOP_BUTTON} justify-self-start`}
-            disabled={session.busy || !session.current}
-            onClick={() => void session.skip()}
-          >
-            <SkipForward className="h-3.5 w-3.5" aria-hidden="true" />
-            Skip for now
-          </button>
+          <span aria-hidden="true" />
           <span className="flex flex-col items-center gap-1">
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-sky-700">
               <Sparkle className="h-3 w-3" fill="currentColor" aria-hidden="true" />

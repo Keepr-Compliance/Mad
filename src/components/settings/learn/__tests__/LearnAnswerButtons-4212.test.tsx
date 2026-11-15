@@ -8,7 +8,7 @@
  * full width when they cannot sit side by side.
  */
 import React from "react";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import "@testing-library/jest-dom";
 import { LearnSessionHost } from "../LearnSessionHost";
 import { CLEANUP_NEXT, PREVIEW_BULK, PREVIEW_CLEANUP } from "./learnFixtures-4120";
@@ -56,5 +56,38 @@ describe("Learn answer buttons keep their label on one line (BACKLOG-4212)", () 
   });
   it("deal question: No / Yes, my deal", async () => {
     expectOneLine(await openDialog("deal", [/^no$/i, /yes, my deal/i]));
+  });
+});
+
+describe("Learn mail question: info tip and Skip placement (BACKLOG-4212)", () => {
+  it("info tip is a labelled keyboard-focusable button; focus and click show the three lines", async () => {
+    await openDialog("mail", [/newsletter or spam/i]);
+    const tip = screen.getByRole("button", { name: "What do these answers mean?" });
+    expect(tip.tagName).toBe("BUTTON");
+    expect(screen.queryByTestId("learn-answer-help-panel")).toBeNull();
+    fireEvent.focus(tip);
+    const panel = screen.getByTestId("learn-answer-help-panel");
+    expect(panel).toHaveTextContent("Real estate business: work mail about real estate, even when it isn't one of your deals.");
+    expect(panel).toHaveTextContent("Newsletter or spam: marketing, promotions and mass mailings.");
+    expect(panel).toHaveTextContent("Skip for now: anything else, like personal mail or software notices.");
+    fireEvent.blur(tip);
+    expect(screen.queryByTestId("learn-answer-help-panel")).toBeNull();
+    fireEvent.click(tip);
+    expect(screen.getByTestId("learn-answer-help-panel")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["mail", [/newsletter or spam/i, /real estate business/i]],
+    ["deal", [/^no$/i, /yes, my deal/i]],
+  ] as const)("%s question: Skip for now sits in the answer panel after the answers, bordered", async (kind, names) => {
+    const answers = await openDialog(kind, [...names]);
+    const skip = screen.getByRole("button", { name: /skip for now/i });
+    const panel = screen.getByTestId("learn-answer-panel");
+    expect(panel).toContainElement(skip);
+    for (const a of answers) {
+      expect(a.compareDocumentPosition(skip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    }
+    expect(classes(skip)).toEqual(expect.arrayContaining(["border", "whitespace-nowrap", "w-full"]));
+    expect(classes(skip)).not.toContain("bg-transparent");
   });
 });
